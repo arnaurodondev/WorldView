@@ -1,67 +1,131 @@
-# S5 · Content Store Service
+# Content Store Service (S5)
 
 > **Owner**: Content domain · **Database**: `content_store_db` · **Port**: 8005
-> **Status**: Hot path complete (Wave B-3)
+> **Status**: Feature-complete (waves A through B-3 + multi-tenant isolation)
 
 ---
 
-## Mission & Boundaries
+## Mission
 
-**Owns**: Consuming raw articles from S4, HTML cleaning (readability-lxml + bleach),
-three-stage deduplication (exact URL hash → normalized hash → Valkey LSH two-tier
-near-dup using MinHash signatures), canonical ID assignment (UUIDv7), clean text
-storage in MinIO silver, article query API.
+Content Store is the deduplication and canonicalization layer for all ingested news and documents. It consumes raw articles from S4 (Content Ingestion) via Kafka, runs a three-stage deduplication pipeline (SHA-256 exact → normalized hash → MinHash LSH near-duplicate detection), assigns a stable canonical document ID, stores the cleaned text in MinIO silver tier, and emits `content.article.stored.v1` events for downstream NLP and RAG Chat services.
 
-**MinHash note**: MinHash signatures and entity mention data are stored in
-`content_store_db`. They are **never** stored in `intelligence_db`.
-
-**Corroboration policy**: an article from a different source covering the same story
-is *not* a duplicate — corroborating evidence is preserved. Only near-identical text
-from the same or overlapping sources is suppressed.
-
-**Never does**: Poll external sources (S4 Content Ingestion), NLP/embedding
-generation (S6 NLP Pipeline), serve graphs (S7 Knowledge Graph).
+The service never polls external sources, performs NLP, or manages portfolios. Its single responsibility is: given a raw article blob, decide if it is new/unique and if so clean it, deduplicate it, store it canonically, and tell the world.
 
 ---
 
-## API Surface
+## Architecture
 
-| Method | Path | Description | Cache |
-|--------|------|-------------|-------|
-| GET | `/healthz` | Liveness | — |
-| GET | `/readyz` | Readiness (DB) | — |
-| GET | `/metrics` | Prometheus metrics | — |
-| GET | `/api/v1/articles` | List articles (query: entity, source, date_range) | fast |
-| GET | `/api/v1/articles/{id}` | Article detail (body + metadata) | fast |
+Content Store follows the hexagonal architecture. It runs as three independent processes:
+
+```
+┌────────────────────────────────────────────────────────────────┐
+│                     API Layer (FastAPI)                        │
+│  health · DLQ admin · GET /articles · POST /documents/batch   │
+└──────────────────────────┬─────────────────────────────────────┘
+                           │ (use cases only)
+┌──────────────────────────▼─────────────────────────────────────┐
+│                   Application Layer                            │
+│  ProcessArticleUseCase                                         │
+│  ─ TextCleaner (HTML/XML/JSON/plain text extraction)           │
+│  ─ StageARawDedup (SHA-256 raw bytes)                          │
+│  ─ StageBNormalizedDedup (normalized URL+text hash)            │
+│  ─ MinHashCompute (128 perms, word bigrams + char trigrams)    │
+│  BatchDocumentsUseCase · GetClusterArticlesUseCase             │
+│  DLQAdminUseCase                                               │
+└─────────┬──────────────────────────┬───────────────────────────┘
+          │                          │
+┌─────────▼────────────┐  ┌──────────▼──────────────────────────┐
+│       Domain         │  │         Infrastructure              │
+│  CanonicalDocument   │  │  Consumer: content.article.raw.v1   │
+│  MinHashSignature    │  │  Storage: MinIO silver tier          │
+│  EntityMention       │  │  Valkey: LSH index (4-band sorted   │
+│  DeduplicationDecision│  │    sets with time-window expiry)    │
+│  DedupOutcome (6)    │  │  DB: Postgres repos + UoW            │
+│  DocumentStatus (5)  │  │  Outbox: content.article.stored.v1  │
+└──────────────────────┘  │  Metrics: Prometheus s5_*            │
+                          └──────────────────────────────────────┘
+```
+
+### Three Independent Processes
+
+| Process | Entry Point | Description |
+|---------|-------------|-------------|
+| API | `uvicorn content_store.app:create_app --factory --port 8005` | HTTP endpoints — health, DLQ, articles |
+| Consumer | `python -m content_store.infrastructure.messaging.consumers.article_consumer_main` | Kafka consumer for content.article.raw.v1 |
+| Dispatcher | `python -m content_store.infrastructure.messaging.outbox.dispatcher_main` | Publishes content.article.stored.v1 events via outbox |
+
+---
+
+## API Endpoints
+
+All endpoints at port 8005.
+
+| Method | Path | Auth | Description |
+|--------|------|------|-------------|
+| GET | `/healthz` | — | Liveness — always 200 |
+| GET | `/readyz` | — | Readiness (DB + Valkey + consumer health); 503 on failure |
+| GET | `/metrics` | — | Prometheus metrics |
+| GET | `/api/v1/articles` | — | List articles (query params: `entity`, `source`, `date_range`) |
+| GET | `/api/v1/articles/{id}` | — | Article detail (body + metadata) |
+| GET | `/admin/dlq` | `X-Admin-Token` | List open DLQ entries |
+| GET | `/admin/dlq/{id}` | `X-Admin-Token` | Get single DLQ entry |
+| POST | `/admin/dlq/{id}/retry` | `X-Admin-Token` | Requeue DLQ entry to outbox |
+| POST | `/admin/dlq/{id}/resolve` | `X-Admin-Token` | Mark DLQ entry as resolved |
+| POST | `/api/v1/documents/batch` | — (internal) | Batch-fetch document metadata by `doc_ids` (1–50 UUIDs). Returns `title`, `url`, `source_type`, `published_at`, `word_count`. Uses read replica (R27). |
+
+**Example curl (batch metadata):**
+```bash
+curl -X POST http://localhost:8005/api/v1/documents/batch \
+  -H "Content-Type: application/json" \
+  -d '{"doc_ids": ["018f...", "018f..."]}'
+```
 
 ---
 
 ## Kafka Topics
 
-### Produced
-
-| Topic | Event Type | Key | Description |
-|-------|-----------|-----|-------------|
-| `content.article.stored.v1` | `ArticleStoredV1` | `article_id` | Article cleaned, deduped, canonical ID assigned |
-
 ### Consumed
 
 | Topic | Consumer Group | Purpose |
 |-------|---------------|---------|
-| `content.article.raw.v1` | `content-store` | Consume raw articles for cleaning/dedup |
+| `content.article.raw.v1` | `content-store-consumer` | Raw articles from S4 for cleaning and deduplication |
+
+### Produced
+
+| Topic | Schema File | Key | Description |
+|-------|-------------|-----|-------------|
+| `content.article.stored.v1` | `infra/kafka/schemas/content.article.stored.v1.avsc` | `article_id` | Article cleaned, deduped, canonical ID assigned |
+
+**`ContentArticleStored` Avro fields:**
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `event_id` | string | UUIDv7 event ID |
+| `event_type` | string | `"content.article.stored"` |
+| `schema_version` | int | Default `1` |
+| `occurred_at` | string | ISO-8601 UTC |
+| `doc_id` | string | UUIDv7 canonical document identifier |
+| `content_hash` | string | SHA-256 of raw content |
+| `normalized_hash` | string | SHA-256 of normalized text |
+| `dedup_result` | string | `unique` / `corroborating` / `semantic_near_duplicate` / `same_source_duplicate` / `duplicate_exact` / `duplicate_normalized` |
+| `minio_silver_key` | string | MinIO silver layer clean text key |
+| `source_type` | string | Originating source |
+| `title` | string? | Article title |
+| `word_count` | int? | Word count of cleaned text |
+| `published_at` | string? | ISO-8601 UTC publication date (copied from raw) |
+| `is_backfill` | boolean | Default false |
+| `tenant_id` | string? | Tenant UUID — null for public news |
 
 ---
 
-## Database Schema
+## Data Model
 
-Migrations:
-- `0001_create_content_store_schema.py` — 5 tables (documents, minhash_signatures, minhash_entity_mentions, outbox_events, dead_letter_queue)
-- `0002_add_dedup_and_corroboration.py` — adds dedup_hashes, duplicate_clusters tables; adds dedup_result, corroborates_doc_id, is_backfill columns to documents; fixes minio_silver_key nullability
+Database: `content_store_db` (PostgreSQL 16)
 
 ```sql
--- content_store_db (7 tables total)
-
 -- Canonical deduplicated document store.
+-- tenant_id=NULL means public news; non-NULL means tenant-private document.
+-- Dedup uniqueness is scoped per tenant via partial indexes (migration 0005).
 CREATE TABLE documents (
     doc_id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     source_type         VARCHAR(50)  NOT NULL,
@@ -69,21 +133,24 @@ CREATE TABLE documents (
     title               TEXT,
     published_at        TIMESTAMPTZ,
     ingested_at         TIMESTAMPTZ  NOT NULL DEFAULT now(),
-    content_hash        VARCHAR(64)  NOT NULL,          -- SHA-256 of raw content
-    normalized_hash     VARCHAR(64)  NOT NULL,          -- SHA-256 after normalization
+    content_hash        VARCHAR(64)  NOT NULL,
+    normalized_hash     VARCHAR(64)  NOT NULL,
     status              VARCHAR(20)  NOT NULL DEFAULT 'stored',
     dedup_result        VARCHAR(30)  NOT NULL DEFAULT 'unique',
-    minio_silver_key    TEXT,                           -- NULL if suppressed/duplicate
+    minio_silver_key    TEXT,                    -- NULL if suppressed/duplicate
     word_count          INT,
     language            VARCHAR(10)  DEFAULT 'en',
-    corroborates_doc_id UUID,                           -- set when dedup_result = 'corroborating'
+    corroborates_doc_id UUID,                    -- set when dedup_result = 'corroborating'
     is_backfill         BOOLEAN      NOT NULL DEFAULT FALSE,
-    UNIQUE (content_hash)
+    tenant_id           UUID                     -- NULL = global; non-NULL = tenant-private
 );
 CREATE INDEX idx_documents_normalized_hash ON documents (normalized_hash);
 CREATE INDEX idx_documents_source_published ON documents (source_type, published_at DESC);
-CREATE INDEX idx_documents_corroborates ON documents (corroborates_doc_id)
-    WHERE corroborates_doc_id IS NOT NULL;
+CREATE INDEX idx_documents_corroborates ON documents (corroborates_doc_id) WHERE corroborates_doc_id IS NOT NULL;
+CREATE INDEX idx_documents_tenant_id ON documents (tenant_id) WHERE tenant_id IS NOT NULL;
+-- Partial unique indexes (migration 0005): global dedup and per-tenant dedup coexist
+CREATE UNIQUE INDEX uq_documents_content_hash_global ON documents(content_hash) WHERE tenant_id IS NULL;
+CREATE UNIQUE INDEX uq_documents_content_hash_tenant ON documents(tenant_id, content_hash) WHERE tenant_id IS NOT NULL;
 
 -- Stage A/B dedup hash tracking.
 CREATE TABLE dedup_hashes (
@@ -91,12 +158,15 @@ CREATE TABLE dedup_hashes (
     doc_id      UUID        NOT NULL REFERENCES documents(doc_id) ON DELETE CASCADE,
     hash_type   VARCHAR(30) NOT NULL,  -- raw_sha256 | normalized_sha256
     hash_value  VARCHAR(64) NOT NULL,
-    created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
-    UNIQUE (hash_type, hash_value)
+    tenant_id   UUID,                  -- NULL = global; non-NULL = tenant-private
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+-- Partial unique indexes (migration 0005): global and per-tenant hash spaces
+CREATE UNIQUE INDEX uq_dedup_hashes_global ON dedup_hashes(hash_type, hash_value) WHERE tenant_id IS NULL;
+CREATE UNIQUE INDEX uq_dedup_hashes_tenant ON dedup_hashes(tenant_id, hash_type, hash_value) WHERE tenant_id IS NOT NULL;
 CREATE INDEX idx_dedup_hashes_lookup ON dedup_hashes (hash_type, hash_value);
 
--- Duplicate/corroboration pair tracking.
+-- Near-duplicate and corroboration cluster pairs.
 CREATE TABLE duplicate_clusters (
     cluster_id       UUID  PRIMARY KEY DEFAULT gen_random_uuid(),
     primary_doc_id   UUID  NOT NULL REFERENCES documents(doc_id),
@@ -107,34 +177,38 @@ CREATE TABLE duplicate_clusters (
 );
 
 -- 128-band MinHash vectors for near-duplicate detection.
--- signature MUST be INTEGER[] — BYTEA is not acceptable; band-by-band Jaccard
--- comparison requires integer arithmetic, not raw byte comparison.
+-- CRITICAL: signature must be INTEGER[] — never BYTEA.
+-- Band-by-band Jaccard comparison requires integer arithmetic.
 CREATE TABLE minhash_signatures (
     sig_id        UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     doc_id        UUID NOT NULL REFERENCES documents(doc_id) ON DELETE CASCADE,
-    signature     INTEGER[] NOT NULL,                -- 128-band MinHash vector, never BYTEA
+    signature     INTEGER[] NOT NULL,           -- 128-element array; never BYTEA
     shingle_type  VARCHAR(50) NOT NULL DEFAULT 'word_bigram_char3gram',
     created_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
     UNIQUE (doc_id)
 );
 CREATE INDEX idx_minhash_sig_created ON minhash_signatures (created_at DESC);
 
--- Entity mentions extracted from MinHash shingles.
--- entity_id is a LOGICAL FK to intelligence_db.canonical_entities.
--- There is NO Postgres-level FK constraint on entity_id — intelligence_db is a
--- separate database; cross-DB FK enforcement is handled at the application layer.
+-- Entity mentions from the NLP pipeline (written by S6, read by S7).
+-- entity_id is a LOGICAL FK to intelligence_db.canonical_entities — no PG FK constraint
+-- because intelligence_db is a separate PostgreSQL database.
 CREATE TABLE minhash_entity_mentions (
     sig_id              UUID   NOT NULL REFERENCES minhash_signatures(sig_id) ON DELETE CASCADE,
     mention_text_hash   BIGINT NOT NULL,
     mention_text        VARCHAR(300),
-    entity_id           UUID,                        -- logical FK only, no PG constraint
+    entity_id           UUID,             -- logical FK only
     resolution_status   VARCHAR(20) NOT NULL DEFAULT 'UNRESOLVED',
     resolved_at         TIMESTAMPTZ,
     PRIMARY KEY (sig_id, mention_text_hash)
 );
 CREATE INDEX idx_minhash_mentions_hash ON minhash_entity_mentions (mention_text_hash, sig_id);
-CREATE INDEX idx_minhash_mentions_entity ON minhash_entity_mentions (entity_id, sig_id)
-    WHERE entity_id IS NOT NULL;
+CREATE INDEX idx_minhash_mentions_entity ON minhash_entity_mentions (entity_id, sig_id) WHERE entity_id IS NOT NULL;
+
+-- Processed event dedup (migration 0003) — prevents reprocessing after consumer restart.
+CREATE TABLE processed_events (
+    event_id    UUID PRIMARY KEY,
+    processed_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
 
 -- Transactional outbox for content.article.stored.v1 events (Avro-encoded).
 CREATE TABLE outbox_events (
@@ -150,7 +224,7 @@ CREATE TABLE outbox_events (
 );
 CREATE INDEX idx_outbox_s5_pending ON outbox_events (created_at) WHERE status = 'pending';
 
--- Poison-pill events that exhausted retries.
+-- Poison-pill events that exhausted all retries.
 CREATE TABLE dead_letter_queue (
     dlq_id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     original_event_id UUID         NOT NULL,
@@ -164,181 +238,268 @@ CREATE TABLE dead_letter_queue (
 );
 ```
 
----
+### Migration History
 
-## Common Pitfalls
-
-1. **Using BYTEA for MinHash signatures**: `minhash_signatures.signature` must be
-   `INTEGER[]`. The 128-band MinHash comparison is performed band-by-band as integer
-   arithmetic; storing as `BYTEA` would require a custom Jaccard implementation and
-   break all existing band-lookup queries.
-
-2. **Adding a Postgres FK from `minhash_entity_mentions.entity_id` to `intelligence_db`**:
-   `entity_id` is a *logical* foreign key — `intelligence_db` is a separate Postgres
-   database and Postgres does not support cross-database FK constraints. Referential
-   integrity is enforced at the application level via idempotent upserts.
+| Revision | Description |
+|----------|-------------|
+| `0001_create_content_store_schema` | Initial 5 tables (documents, minhash_signatures, minhash_entity_mentions, outbox_events, dead_letter_queue) |
+| `0002_add_dedup_and_corroboration` | Add dedup_hashes, duplicate_clusters; add dedup_result, corroborates_doc_id, is_backfill; fix minio_silver_key nullability |
+| `0003_add_processed_events` | Add processed_events table for Kafka consumer idempotency |
+| `0004_rename_dedup_hashes_constraint` | Rename UNIQUE constraint to `uq_dedup_hashes_type_value` |
+| `0005_add_tenant_id_to_content_store` | Add tenant_id to documents and dedup_hashes; replace global UNIQUE with partial indexes for global + per-tenant dedup |
+| `0006_rename_duplicate_clusters_constraint` | Rename unique constraint on duplicate_clusters |
 
 ---
 
-## Internal Modules
+## Three-Stage Deduplication Pipeline
 
 ```
-services/content-store/src/content_store/
-├── app.py                              # FastAPI app factory
-├── config.py                           # Settings
-├── api/                                # Article query routes
-├── domain/                             # Entities, enums, errors, value objects
-├── application/
-│   ├── text_cleaning/cleaner.py        # extract/sanitize/normalize/clean pipeline
-│   ├── use_cases/process_article.py    # ProcessArticleUseCase (full hot path)
-│   └── deduplication/
-│       ├── stage_a_raw.py              # SHA-256 raw bytes hash
-│       ├── stage_b_normalized.py       # Normalized URL+text hash
-│       └── minhash_compute.py          # MinHash signature (datasketch)
-└── infrastructure/
-    ├── db/                             # SQLAlchemy models, repositories
-    ├── storage/minio_silver.py         # Silver-tier canonical document storage
-    ├── consumer/article_consumer.py    # Kafka consumer for content.article.raw.v1
-    ├── outbox/
-    │   ├── dispatcher.py              # Outbox dispatcher (content.article.stored.v1)
-    │   └── unit_of_work.py            # SQLAlchemy UoW for dispatcher
-    └── valkey/lsh_client.py            # 4-band LSH index over Valkey sorted sets
+Raw article bytes
+  │
+  ▼ Stage A: SHA-256 of raw bytes
+  ├── Found in dedup_hashes → DUPLICATE_EXACT (suppress)
+  │
+  ▼ Not found → Text Cleaning Pipeline
+  │   (HTML: readability-lxml → bleach strip)
+  │   (XML: bleach strip all tags)
+  │   (JSON: recursive string field extraction)
+  │   (Plain text: UTF-8 decode + replace errors)
+  │   Then: NFC Unicode → strip zero-width chars → collapse whitespace
+  │
+  ▼ Stage B: SHA-256 of (normalized_url + normalized_text)
+  ├── Found in dedup_hashes → DUPLICATE_NORMALIZED (suppress)
+  │
+  ▼ Not found → MinHash Computation
+  │   (normalize_financial_text: NFC, lowercase, strip punctuation, FINANCIAL_STOPWORDS)
+  │   (compute_shingles: word bigrams "w:t1_t2" + char trigrams "c:abc")
+  │   (compute_minhash: datasketch.MinHash, 128 permutations → list[int])
+  │
+  ▼ Stage C: Valkey LSH lookup (4 bands × 32 rows)
+  ├── No candidates → UNIQUE (store + index)
+  │
+  ▼ Candidates found → Exact Jaccard comparison
+  │   (band hash: MD5 of band slice integers)
+  │   (key format: lsh:band:{band_id}:{bucket_hash}:{source_type})
+  │
+  ├── Jaccard ≥ hard_threshold, same source_name → SAME_SOURCE_DUPLICATE (suppress)
+  ├── Jaccard ≥ hard_threshold, different source_name → CORROBORATING (retain both, link)
+  ├── soft ≤ Jaccard < hard → SEMANTIC_NEAR_DUPLICATE (store)
+  └── Jaccard < soft_threshold → UNIQUE (store + index)
 ```
 
----
+### Dedup Thresholds by Source Type
 
-## Three-Stage Deduplication
-
-```mermaid
-flowchart TD
-    A[Raw article bytes] --> B[Stage A: SHA-256 raw hash]
-    B -->|Found in dedup_hashes| C[DUPLICATE_EXACT → suppress]
-    B -->|Not found| D[Text Cleaning Pipeline]
-    D --> E[Stage B: Normalized hash]
-    E -->|Found| F[DUPLICATE_NORMALIZED → suppress]
-    E -->|Not found| G[Stage C: MinHash + LSH]
-    G --> H[compute_shingles: word bigrams + char trigrams]
-    H --> I[compute_minhash: 128 perms → list of int]
-    I --> J[Tier 1: Valkey band lookup across 4 bands]
-    J -->|No candidates| K[UNIQUE → store]
-    J -->|Candidates found| L[Tier 2: Exact Jaccard comparison]
-    L -->|J >= hard, same source| M[SAME_SOURCE_DUPLICATE → suppress]
-    L -->|J >= hard, diff source| N[CORROBORATING → retain both, link]
-    L -->|soft <= J < hard| O[SEMANTIC_NEAR_DUPLICATE → store]
-    L -->|J < soft| K
-```
-
-### Text Cleaning Pipeline
-
-| Content Type | Extraction Method | Library |
-|-------------|------------------|---------|
-| HTML | readability-lxml → bleach strip | `readability-lxml`, `bleach` |
-| XML | bleach strip all tags | `bleach` |
-| JSON | Recursive string field extraction | stdlib `json` |
-| Plain text | UTF-8 decode with error replacement | stdlib |
-
-Normalization: NFC Unicode → strip zero-width chars → collapse whitespace.
-
-### MinHash Computation
-
-- **Text normalization**: NFC, lowercase, strip punctuation, remove FINANCIAL_STOPWORDS + tokens ≤1 char
-- **Shingling**: union of word bigrams (`w:{t1}_{t2}`) + char trigrams (`c:{text[i:i+3]}`)
-- **Signature**: 128 permutations via `datasketch.MinHash` → `list[int]` (CRITICAL: never numpy)
-- **Storage**: PostgreSQL `INTEGER[]` column
-
-### Valkey LSH Index
-
-- **Configuration**: 4 bands × 32 rows per band
-- **Band hash**: MD5 of band slice integers
-- **Key format**: `lsh:band:{band_id}:{bucket_hash}:{source_type}`
-- **Score**: Unix timestamp (for time-window expiry via ZRANGEBYSCORE)
-- **Member format**: `{doc_id}:{source_name}` (enables same-source detection)
-
-### Dedup Thresholds (per source type)
-
-| Source Type | Hard Threshold | Soft Threshold | LSH Window |
-|-------------|---------------|----------------|------------|
+| Source Type | Hard Threshold | Soft Threshold | LSH Time Window |
+|-------------|---------------|----------------|----------------|
 | News (EODHD, NewsAPI) | 0.72 | 0.55 | 7 days |
 | Filings (SEC EDGAR) | 0.85 | 0.70 | 180 days |
 | Transcripts (Finnhub) | 0.75 | 0.60 | 60 days |
 | Research (Manual) | 0.70 | 0.55 | 30 days |
 | Press Release | — | — | 14 days |
 
-### Decision Matrix
+### Corroboration Policy
 
-| Jaccard | Source | Outcome |
-|---------|--------|---------|
-| ≥ hard_threshold | Same source_name | `SAME_SOURCE_DUPLICATE` — suppress |
-| ≥ hard_threshold | Different source_name | `CORROBORATING` — retain both, link |
-| soft ≤ J < hard | Any | `SEMANTIC_NEAR_DUPLICATE` — store |
-| < soft_threshold | Any | `UNIQUE` — store |
+An article from a **different source** covering the same story is **not** a duplicate — it is corroborating evidence and is retained. Only near-identical text from the **same source** is suppressed. This ensures multi-source coverage of market events is preserved for NLP quality.
+
+### MinHash Technical Details
+
+- **Permutations**: 128 (configurable via `CONTENT_STORE_MINHASH_NUM_PERM`)
+- **Shingling**: Union of word bigrams (`w:{t1}_{t2}`) + char trigrams (`c:{text[i:i+3]}`)
+- **Library**: `datasketch.MinHash` — signature is `list[int]`, **never numpy array**
+- **Storage**: PostgreSQL `INTEGER[]` column — **never `BYTEA`**
+- **LSH bands**: 4 bands × 32 rows (configurable)
+- **Valkey key**: `lsh:band:{band_id}:{bucket_hash}:{source_type}` (sorted set, score = Unix timestamp)
+- **Time expiry**: `ZRANGEBYSCORE` with `(now - window_days * 86400, +inf)` — old candidates are automatically excluded
 
 ---
 
-## Key ENV Vars
+## MinIO Object Structure
+
+| Path Pattern | Content | Description |
+|-------------|---------|-------------|
+| `worldview-silver/{doc_id}/clean.txt` | Plain UTF-8 text | Cleaned, normalized article text |
+| `worldview-bronze/{source_type}/{url_hash}/raw/v1.json` | JSON envelope | Raw bytes (read-only from S5's perspective, written by S4) |
+
+---
+
+## Configuration
+
+All environment variables are prefixed with `CONTENT_STORE_`.
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `MINHASH_NUM_PERM` | `128` | MinHash permutations |
-| `MINHASH_LSH_BANDS` | `4` | LSH bands (4 × 32 rows) |
-| `VALKEY_LSH_WINDOW_NEWS_DAYS` | `7` | LSH dedup window for news |
-| `VALKEY_LSH_WINDOW_FILINGS_DAYS` | `180` | LSH dedup window for filings |
-| `VALKEY_LSH_WINDOW_TRANSCRIPTS_DAYS` | `60` | LSH dedup window for transcripts |
-| `VALKEY_LSH_WINDOW_RESEARCH_DAYS` | `30` | LSH dedup window for research |
-| `DEDUP_HARD_THRESHOLD_NEWS` | `0.72` | Hard Jaccard threshold for news |
-| `DEDUP_SOFT_THRESHOLD_NEWS` | `0.55` | Soft threshold for news (Tier 2) |
-| `DEDUP_HARD_THRESHOLD_FILINGS` | `0.85` | Hard threshold for filings |
-| `DEDUP_HARD_THRESHOLD_TRANSCRIPTS` | `0.75` | Hard threshold for transcripts |
-| `OUTBOX_POLL_INTERVAL_SECONDS` | `2` | Dispatcher cadence |
+| `CONTENT_STORE_DATABASE_URL` | `postgresql+asyncpg://postgres:postgres@localhost:5432/content_store_db` | Primary (write) DB URL |
+| `CONTENT_STORE_DATABASE_URL_READ` | `""` | Optional read-replica URL |
+| `CONTENT_STORE_DB_POOL_SIZE` | `10` | Write pool size |
+| `CONTENT_STORE_DB_MAX_OVERFLOW` | `20` | Write pool overflow |
+| `CONTENT_STORE_DB_POOL_SIZE_READ` | `20` | Read pool size |
+| `CONTENT_STORE_DB_MAX_OVERFLOW_READ` | `30` | Read pool overflow |
+| `CONTENT_STORE_KAFKA_BOOTSTRAP_SERVERS` | `localhost:9092` | Kafka broker |
+| `CONTENT_STORE_SCHEMA_REGISTRY_URL` | `http://localhost:8081` | Confluent Schema Registry |
+| `CONTENT_STORE_KAFKA_INPUT_TOPIC` | `content.article.raw.v1` | Topic consumed |
+| `CONTENT_STORE_KAFKA_OUTPUT_TOPIC` | `content.article.stored.v1` | Topic produced via outbox |
+| `CONTENT_STORE_KAFKA_CONSUMER_GROUP` | `content-store-consumer` | Consumer group ID |
+| `CONTENT_STORE_MINIO_ENDPOINT` | `localhost:9000` | MinIO endpoint |
+| `CONTENT_STORE_MINIO_ACCESS_KEY` | `""` | MinIO access key |
+| `CONTENT_STORE_MINIO_SECRET_KEY` | `""` | MinIO secret key |
+| `CONTENT_STORE_MINIO_BRONZE_BUCKET` | `worldview-bronze` | Bronze bucket (read-only for S5) |
+| `CONTENT_STORE_MINIO_SILVER_BUCKET` | `worldview-silver` | Silver bucket (written by S5) |
+| `CONTENT_STORE_VALKEY_URL` | `redis://localhost:6379` | Valkey URL for LSH index |
+| `CONTENT_STORE_ADMIN_TOKEN` | `""` | Admin token for `X-Admin-Token` header (DLQ endpoints) |
+| `CONTENT_STORE_API_GATEWAY_URL` | `http://api-gateway:8000` | S9 URL for JWKS (internal JWT auth) |
+| `CONTENT_STORE_INTERNAL_JWT_SKIP_VERIFICATION` | `false` | **Never true in production** |
+| `CONTENT_STORE_OUTBOX_BATCH_SIZE` | `100` | Events dispatched per outbox poll |
+| `CONTENT_STORE_OUTBOX_POLL_INTERVAL_SECONDS` | `5.0` | Dispatcher poll cadence |
+| `CONTENT_STORE_OUTBOX_LEASE_SECONDS` | `30` | Outbox event lease duration |
+| `CONTENT_STORE_OUTBOX_MAX_ATTEMPTS` | `5` | Max dispatch attempts before DLQ |
+| `CONTENT_STORE_MINHASH_NUM_PERM` | `128` | MinHash permutation count |
+| `CONTENT_STORE_LSH_NUM_BANDS` | `4` | LSH bands |
+| `CONTENT_STORE_LSH_ROWS_PER_BAND` | `32` | LSH rows per band |
+| `CONTENT_STORE_LSH_WINDOW_NEWS_DAYS` | `7` | LSH dedup window for news |
+| `CONTENT_STORE_LSH_WINDOW_FILINGS_DAYS` | `180` | LSH dedup window for filings |
+| `CONTENT_STORE_LSH_WINDOW_TRANSCRIPTS_DAYS` | `60` | LSH dedup window for transcripts |
+| `CONTENT_STORE_LSH_WINDOW_RESEARCH_DAYS` | `30` | LSH dedup window for research |
+| `CONTENT_STORE_LSH_WINDOW_PRESS_RELEASE_DAYS` | `14` | LSH dedup window for press releases |
+| `CONTENT_STORE_LOG_LEVEL` | `INFO` | Structured log level |
+| `CONTENT_STORE_LOG_JSON` | `true` | JSON log format |
+| `CONTENT_STORE_OTLP_ENDPOINT` | `""` | OpenTelemetry OTLP endpoint |
 
 ---
 
 ## Observability
 
-- **Metrics**: `articles_stored_total`, `duplicates_detected_total`, `near_duplicates_detected_total`, `cleaning_duration_seconds`, `lsh_lookup_duration_seconds`
-- **Log fields**: `service=content-store`, `article_id`, `is_duplicate`, `dedup_stage`
+**Prometheus metrics** (prefix `s5_`):
+
+| Metric | Type | Labels | Description |
+|--------|------|--------|-------------|
+| `s5_articles_received_total` | Counter | — | Raw articles received from Kafka |
+| `s5_duplicates_suppressed_total` | Counter | `tier` | Articles suppressed by each dedup stage |
+| `s5_canonical_written_total` | Counter | — | Documents written to silver + DB |
+| `s5_documents_ingested_total` | Counter | `dedup_result` | By dedup outcome |
+| `s5_minhash_lsh_candidates_total` | Counter | — | LSH candidate lookups |
+| `s5_dedup_duration_seconds` | Histogram | `tier` | Dedup stage latency |
+| `s5_outbox_pending_total` | Gauge | — | Pending outbox events |
+| `s5_dlq_total` | Gauge | — | Open DLQ entries |
+
+**Structured log fields**: `service=content-store`, `article_id`, `is_duplicate`, `dedup_stage`
 
 ---
 
-## Testing Plan
+## Multi-Tenancy
 
-| Type | What | Command |
-|------|------|---------|
-| Unit | Dedup logic, HTML cleaning, canonical ID | `make test` |
-| Integration | Consumer + DB round-trip | `make test-integration` |
+Content Store has a **split model** since migration 0005:
 
----
+- **Public news** (`tenant_id=NULL`): globally shared across all tenants by design — news is public information.
+- **Tenant-uploaded documents** (`tenant_id=UUID`): strictly isolated — `documents.content_hash` uniqueness is enforced per-tenant via partial indexes. A document with the same content can exist for two different tenants.
 
-## Tenant Isolation
+The `dedup_hashes` table similarly has two partial unique indexes: one for global hashes, one for per-tenant hashes.
 
-Content Store has **no `tenant_id` column** in any table. Articles, sections,
-MinHash signatures, and dedup hashes are globally shared across all tenants by
-design — news content is not per-tenant.
-
-Multi-tenancy is enforced exclusively at upstream layers:
-
-- **API Gateway (S9)**: RS256 internal JWT validation gates all external access;
-  Content Store endpoints are only reachable via S9 proxy routes.
-- **RAG Chat (S8)**: Thread ownership checks (`thread.tenant_id`) ensure that
-  RAG retrieval results are served only within a tenant-scoped conversation context.
-- **Content Store API**: The `GET /api/v1/articles` and `GET /api/v1/articles/{id}`
-  endpoints are read-only and return globally available content — there is no
-  per-tenant filtering at this layer.
-
-**Security implication**: A bug in S9 auth or S8 thread ownership checks could
-expose article metadata to unauthorized callers. Content Store itself provides
-no defense-in-depth for tenant isolation because the data is architecturally
-global. This is a deliberate trade-off: news articles are public information
-and do not contain tenant-specific PII.
+Multi-tenancy enforcement for public content is at the API Gateway (S9) and RAG Chat (S8) layers — not in Content Store itself.
 
 ---
 
-## Local Run
+## How to Run Locally
+
+```bash
+# 1. Start platform infra
+make dev  # from repo root
+
+# 2. Set up the service
+cd services/content-store
+cp configs/dev.local.env.example .env
+# Edit .env — set MINIO access key/secret
+
+# 3. Install dependencies
+source ../../.venv312/bin/activate
+pip install -e ".[dev]"
+
+# 4. Run migrations
+alembic upgrade head
+
+# 5. Start the API server
+make run       # port 8005
+
+# 6. Verify health
+curl http://localhost:8005/healthz     # → {"status": "ok"}
+curl http://localhost:8005/readyz      # → {"status": "ready"}
+
+# 7. (Optional) Start the consumer in a separate terminal
+python -m content_store.infrastructure.messaging.consumers.article_consumer_main
+
+# 8. (Optional) Start the outbox dispatcher
+python -m content_store.infrastructure.messaging.outbox.dispatcher_main
+```
+
+---
+
+## How to Run Tests
 
 ```bash
 cd services/content-store
-cp configs/dev.local.env.example .env
-make run       # port 8005
-make test
+
+# Unit tests (no Docker needed)
+python -m pytest tests/unit -v
+
+# Integration tests (requires Docker)
+# Start standalone test infra:
+docker compose -f tests/docker-compose.test.yml up -d
+python -m pytest tests/integration -v -m integration
+
+# Contract tests
+python -m pytest tests/contract -v
+
+# E2E tests
+python -m pytest tests/e2e -v -m e2e
+
+# Full test suite via Makefile
+make test           # unit
+make test-integration  # integration (standalone compose)
 make lint
 ```
+
+---
+
+## Common Pitfalls
+
+1. **`minhash_signatures.signature` must be `INTEGER[]`, never `BYTEA`** — Band-by-band Jaccard comparison requires integer arithmetic. Storing as `BYTEA` breaks all LSH band-lookup queries and would require a completely different dedup implementation.
+
+2. **Cross-database FK constraint is impossible** — `minhash_entity_mentions.entity_id` is a logical FK to `intelligence_db.canonical_entities`. Postgres does not support cross-database FK constraints. Referential integrity is enforced at the application layer. Never add a `REFERENCES` clause on this column.
+
+3. **LSH `index()` must happen AFTER `session.commit()`** — Calling `lsh.index()` before commit creates phantom Valkey entries on rollback. The consumer calls `lsh.index()` only after `super()._handle_message()` completes successfully (CR-3).
+
+4. **MinIO compensating GC** — On commit failure, the consumer deletes any already-uploaded silver objects. `_current_summary.minio_silver_key` is checked in the exception handler. GC failures are logged as WARNING and do not mask the original exception. `_current_summary` is reset to `None` at the start of every `_handle_message` call.
+
+5. **`readability-lxml>=0.8.1`** — The package `==0.8` does not exist on PyPI. Pin to `>=0.8.1` to avoid installation failures.
+
+6. **ASGI transport does not trigger lifespan** — In unit tests, `app.state` must be set directly; `TestClient` or `AsyncClient` with ASGI transport does not fire `@asynccontextmanager lifespan` events.
+
+7. **`pytest-asyncio>=0.23.4` required** — Version `==0.23.0` crashes with a `Package` object bug under `asyncio_mode=auto`. Pin to at least `0.23.4`.
+
+8. **`move_to_dead_letter` must INSERT a DLQ row** — Not just update the outbox status. DLQ entries must be observable via `GET /admin/dlq` (BP-020).
+
+9. **`requeue()` must use `entry.payload_json or {}`** — Never a hardcoded empty dict (the original payload must be preserved for retry to be meaningful).
+
+10. **Same dedup_result for different scenarios**: `SAME_SOURCE_DUPLICATE` means suppressed (same story, same source). `CORROBORATING` means retained (same story, different source). Confusing them causes legitimate multi-source coverage to be silently dropped.
+
+---
+
+## Runbook
+
+**Articles not appearing in NLP pipeline (S6):**
+1. Check `GET /readyz` — 503 indicates consumer or Valkey issue.
+2. Check Kafka topic `content.article.raw.v1` for recent messages (kafka-ui at port 8080).
+3. Check `s5_duplicates_suppressed_total` — unusually high suppression? Check dedup thresholds.
+4. Check outbox: `s5_outbox_pending_total` — events stuck and not dispatched?
+5. Check DLQ: `GET /admin/dlq` (with admin token).
+6. Check MinIO `worldview-silver/` for recent objects.
+
+**High duplicate suppression rate:**
+- Check `s5_duplicates_suppressed_total` by `tier` label.
+- Stage A/B suppression (exact hash) is expected for re-deliveries after consumer restart.
+- Stage C (MinHash) suppression should match source-type thresholds. Unexpectedly high stage-C suppression may indicate LSH thresholds are too aggressive.
+- Check `lsh:band:*` Valkey keys for LSH index health.
+
+**Consumer stuck / not processing:**
+- Check consumer lag on Kafka topic `content.article.raw.v1` (kafka-ui).
+- Consumer restarts automatically in Docker Compose; check container logs.
+- Valkey LSH index is rebuilt automatically from `minhash_signatures` on consumer restart — no manual intervention needed.

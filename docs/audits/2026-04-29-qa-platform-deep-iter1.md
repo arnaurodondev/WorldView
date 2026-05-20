@@ -412,4 +412,4 @@ Recommended next iteration:
 4. Resolve F-DP1-08 schema-registry compatibility
 5. Documentation cleanup F-DP1-09/15/17/20
 
-**Report path**: `/Users/arnaurodon/Projects/University/final_thesis/worldview/docs/audits/2026-04-29-qa-platform-deep-iter1.md`
+**Report path**: `docs/audits/2026-04-29-qa-platform-deep-iter1.md`

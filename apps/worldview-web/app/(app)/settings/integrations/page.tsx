@@ -213,6 +213,15 @@ export default function SettingsIntegrationsPage() {
         </CardContent>
       </Card>
 
+      {/* ── Slack / Email / Webhooks — gated by NEXT_PUBLIC_ENABLE_INTEGRATIONS */}
+      {/* WHY gate: Slack OAuth flow, email-digest backend, and webhook management
+          all require backend endpoints (S10 outbound + S1 prefs) that are not
+          yet live. The brokerage card above links to /portfolio/connect which
+          IS live (PRD-0022 shipped). Hiding the unimplemented sections keeps
+          the page honest for IT-security reviewers while preserving the code
+          for when the backend ships. FR-6.6. */}
+      {process.env.NEXT_PUBLIC_ENABLE_INTEGRATIONS === "true" && (
+        <>
       {/* ── Slack ────────────────────────────────────────────────────── */}
       <Card className="border-border/60 bg-card">
         <CardHeader className="pb-3">
@@ -380,6 +389,8 @@ export default function SettingsIntegrationsPage() {
           )}
         </CardContent>
       </Card>
+        </>
+      )}
     </div>
   );
 }

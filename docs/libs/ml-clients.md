@@ -1,366 +1,441 @@
 # ML Clients Library
 
-> **Package**: `ml-clients` · **Path**: `libs/ml-clients/`
-> **Purpose**: Protocol interfaces and concrete adapters for embedding, NER, and structured
-> extraction. The **only** path through which S6 (NLP Pipeline) and S7 (Knowledge Graph) call ML models.
+> **Package**: `ml-clients` · **Path**: `libs/ml-clients/` · **Version**: 0.2.0
+> **Purpose**: Protocol interfaces and concrete adapters for embedding, NER, structured
+> extraction, entity description generation, cross-encoder reranking, and LLM cost
+> tracking. The **only** path through which S6 (NLP Pipeline) and S7 (Knowledge
+> Graph) call ML models.
 
 ---
 
-## Overview
+## Purpose
 
-`ml-clients` provides four structural Protocol interfaces and ten concrete adapter
-implementations. It deliberately uses `typing.Protocol` (structural subtyping) rather than
-`ABC`/`abstractmethod` so that services can swap adapters transparently — the service code
-never imports from a concrete adapter module directly.
+Without a shared ML client library, each service that needs embeddings or NER would
+implement its own HTTP client against Ollama, DeepInfra, or GLiNER — with
+duplicated error handling, semaphore management, and metric tracking. `ml-clients`
+provides:
 
-**Design rules enforced by this library**:
+- **Protocol interfaces** (structural typing, not ABC) so service code can be tested
+  with any compliant mock without importing concrete adapters.
+- **Concrete adapters** for every supported backend (Ollama, DeepInfra, Jina,
+  GLiNER local/HTTP/adaptive, Anthropic, Gemini, OpenAI/ChatGPT, DeepSeek, Cohere).
+- **Uniform error mapping** — every adapter converts backend errors to `RetryableError`
+  or `FatalError` so the Kafka consumer's retry/dead-letter logic works consistently.
+- **Semaphore injection** — all adapters require a semaphore to cap concurrent ML
+  calls. Unbounded concurrency OOMs GPU/CPU backends under load.
+- **Cost tracking** — `estimate_cost()`, `LlmCallUsage`, and `LlmUsageLogProtocol`
+  enable per-call cost attribution without coupling adapter code to service DB schemas.
 
-1. **No naked exceptions** — every adapter catches all exceptions and re-raises only as
-   `RetryableError` (transient, back off and retry) or `FatalError` (permanent, dead-letter).
-2. **Semaphore injection** — most adapters require an `asyncio.Semaphore` at construction to
-   bound concurrent ML calls. `AdaptiveGLiNERHTTPAdapter` is the exception: it manages its own
-   internal `ResizableSemaphore` that adjusts at runtime (see [Adaptive GLiNER](#adaptive-gliner-concurrency) below).
-3. **Executor for blocking calls** — `GLiNERLocalAdapter` wraps all synchronous GLiNER calls
-   in `loop.run_in_executor(None, ...)` to avoid blocking the event loop.
-4. **Optional extras** — `gliner`, `anthropic`, `google-genai`, and `openai` are optional
-   install extras; missing packages raise `FatalError` at call time.
+---
+
+## Installation
+
+```toml
+[project]
+dependencies = ["ml-clients"]
+
+# With optional ML backends:
+dependencies = [
+    "ml-clients[gliner]",     # local GLiNER model
+    "ml-clients[anthropic]",  # Anthropic Claude
+    "ml-clients[gemini]",     # Google Gemini
+    "ml-clients[openai]",     # OpenAI-compatible (ChatGPT, DeepSeek, DeepInfra)
+]
+```
+
+```bash
+pip install -e "libs/ml-clients"
+pip install -e "libs/ml-clients[gliner,openai]"
+```
+
+Core dependencies: `pydantic-settings>=2.0`, `structlog>=25.0`, `httpx>=0.27`,
+`messaging`. Optional: `gliner>=0.2`, `anthropic>=0.30`, `google-genai>=0.7`,
+`openai>=1.40`. Python 3.11–3.12.
 
 ---
 
 ## Protocols
 
-All services code against these interfaces, never against concrete adapter classes.
+All service code should depend on these interfaces — never on concrete adapter classes.
 
-| Protocol | Method | Signature | Used by |
+| Protocol | Import | Method(s) | Used by |
 |----------|--------|-----------|---------|
-| `EmbeddingClient` | `embed` | `async (inputs: list[EmbeddingInput]) -> list[EmbeddingOutput]` | S6 NLP Pipeline |
-| `NERClient` | `extract_entities` | `async (inp: NERInput) -> NEROutput` | S6 NLP Pipeline |
-| `ExtractionClient` | `extract` | `async (inp: ExtractionInput) -> ExtractionOutput` | S6 NLP Pipeline, S7 Knowledge Graph |
-| `EntityDescriptionClient` | `generate_description` | `async (entity_id, canonical_name, entity_type, context_hints) -> str \| None` | S7 Knowledge Graph (`DefinitionRefreshWorker`) |
+| `EmbeddingClient` | `from ml_clients import EmbeddingClient` | `embed(inputs: list[EmbeddingInput]) → list[EmbeddingOutput]` | S6 NLP Pipeline |
+| `NERClient` | `from ml_clients import NERClient` | `extract_entities(inp: NERInput) → NEROutput`; `batch_extract_entities(inputs) → list[NEROutput]` | S6 NLP Pipeline |
+| `ExtractionClient` | `from ml_clients import ExtractionClient` | `extract(inp: ExtractionInput) → ExtractionOutput` | S6, S7 |
+| `EntityDescriptionClient` | `from ml_clients.description_client import EntityDescriptionClient` | `generate_description(entity_id, canonical_name, entity_type, context_hints) → str | None` | S7 `DefinitionRefreshWorker` |
 
-All protocols are `@runtime_checkable`, so `isinstance(adapter, EmbeddingClient)` works at runtime.
+All protocols are `@runtime_checkable`: `isinstance(adapter, EmbeddingClient)` works.
 
-> **Limitation**: `runtime_checkable` only verifies method *presence*, not signature (sync vs async).
-> Type errors from sync implementations are caught by mypy, not by `isinstance`.
+> **Note**: `runtime_checkable` only verifies method *presence*, not async vs sync.
+> Type errors from sync implementations are caught by mypy, not at runtime.
 
 ---
 
 ## Dataclasses
 
-Seven `@dataclass(frozen=True)` types. All fields are immutable by assignment; mutable
-containers (lists, dicts) are frozen by reference.
+All are `@dataclass(frozen=True)` — immutable.
 
 | Dataclass | Fields |
 |-----------|--------|
-| `EmbeddingInput` | `text: str`, `model_id: str`, `instruction_prefix: str \| None = None` |
+| `EmbeddingInput` | `text: str`, `model_id: str`, `instruction_prefix: str | None = None` |
 | `EmbeddingOutput` | `embedding: list[float]`, `model_id: str`, `dimension: int` |
 | `NERInput` | `text: str`, `entity_classes: list[str]`, `threshold: float = 0.5` |
 | `EntityMention` | `text: str`, `label: str`, `start: int`, `end: int`, `score: float` |
 | `NEROutput` | `mentions: list[EntityMention]` |
-| `ExtractionInput` | `prompt: str`, `context: str`, `output_schema: dict`, `model_id: str`, `template_id: str \| None = None` |
-| `ExtractionOutput` | `result: dict`, `raw_response: str`, `model_id: str`, `extraction_confidence: float \| None = None` |
+| `ExtractionInput` | `prompt: str`, `context: str`, `output_schema: dict`, `model_id: str`, `template_id: str | None = None` |
+| `ExtractionOutput` | `result: dict`, `raw_response: str`, `model_id: str`, `extraction_confidence: float | None = None` |
 
 ---
 
 ## Adapters
 
-| Adapter | Protocol | Backend | Default model | Optional dep |
-|---------|----------|---------|---------------|--------------|
+| Adapter | Protocol | Backend | Default model | Optional install |
+|---------|----------|---------|---------------|-----------------|
 | `OllamaEmbeddingAdapter` | `EmbeddingClient` | Ollama REST `/api/embeddings` | `bge-large-en-v1.5` (1024-dim) | — |
-| `OllamaExtractionAdapter` | `ExtractionClient` | Ollama REST `/api/chat` | `qwen2.5:7b-instruct` | — |
-| `GLiNERLocalAdapter` | `NERClient` | Local GLiNER model (in-process) | `urchade/gliner_large-v2.1` | `ml-clients[gliner]` |
+| `DeepInfraEmbeddingAdapter` | `EmbeddingClient` | DeepInfra OpenAI-compat `/embeddings` | `BAAI/bge-large-en-v1.5` (1024-dim) | — |
+| `JinaEmbeddingAdapter` | `EmbeddingClient` | Jina AI REST `/v1/embeddings` | `jina-embeddings-v3` (1024-dim) | — |
+| `GLiNERLocalAdapter` | `NERClient` | GLiNER in-process (same container) | `urchade/gliner_large-v2.1` | `[gliner]` |
 | `GLiNERHTTPAdapter` | `NERClient` | GLiNER server REST `/ner/batch` (fixed concurrency) | — | — |
-| `AdaptiveGLiNERHTTPAdapter` | `NERClient` | GLiNER server REST `/ner/batch` (AIMD adaptive concurrency) | — | — |
-| `AnthropicExtractionAdapter` | `ExtractionClient` | Anthropic Messages API | `claude-sonnet-4-6` | `ml-clients[anthropic]` |
-| `GeminiExtractionAdapter` | `ExtractionClient` | Google GenAI API | `gemini-2.5-pro` | `ml-clients[gemini]` |
-| `GeminiDescriptionAdapter` | `EntityDescriptionClient` | Google GenAI API | `gemini-3.1-flash-lite` | `ml-clients[gemini]` |
-| `ChatGPTExtractionAdapter` | `ExtractionClient` | OpenAI Chat Completions API | `gpt-5-mini` | `ml-clients[openai]` |
-| `DeepSeekExtractionAdapter` | `ExtractionClient` | DeepSeek (OpenAI-compatible) | `DeepSeek R1 Distill 32B` | `ml-clients[openai]` |
+| `AdaptiveGLiNERHTTPAdapter` | `NERClient` | GLiNER server REST `/ner/batch` (AIMD adaptive) | — | — |
+| `OllamaExtractionAdapter` | `ExtractionClient` | Ollama REST `/api/chat` | `qwen2.5:7b-instruct` | — |
+| `AnthropicExtractionAdapter` | `ExtractionClient` | Anthropic Messages API | `claude-sonnet-4-6` | `[anthropic]` |
+| `GeminiExtractionAdapter` | `ExtractionClient` | Google GenAI API | `gemini-2.5-pro` | `[gemini]` |
+| `ChatGPTExtractionAdapter` | `ExtractionClient` | OpenAI Chat Completions | `gpt-5-mini` | `[openai]` |
+| `DeepSeekExtractionAdapter` | `ExtractionClient` | DeepSeek (OpenAI-compat) | DeepSeek R1 Distill 32B | `[openai]` |
+| `GeminiDescriptionAdapter` | `EntityDescriptionClient` | Google GenAI API | `gemini-3.1-flash-lite` | `[gemini]` |
+| `DeepInfraDescriptionAdapter` | `EntityDescriptionClient` | DeepInfra (OpenAI-compat) | `Qwen/Qwen3-235B-A22B-Instruct-2507` (primary), `Qwen/Qwen3-32B` (fallback) | `[openai]` |
+| `CohereRerankAdapter` | (custom) | Cohere Rerank API v2 | `rerank-english-v3.0` | — |
 | `NullDescriptionAdapter` | `EntityDescriptionClient` | No-op (always returns None) | — | — |
 
-All adapters implement the error mapping contract:
+**Error mapping contract** (all adapters):
 
 | Condition | Raised as |
 |-----------|-----------|
-| Timeout / network / 5xx / 429 | `RetryableError` |
-| 4xx / malformed JSON / bad input | `FatalError` |
+| Timeout / network error / 5xx / 429 | `RetryableError` |
+| 4xx / malformed JSON / bad input / wrong dimension | `FatalError` |
 | Missing optional package | `FatalError` |
 
 ---
 
 ## Adaptive GLiNER Concurrency
 
-`AdaptiveGLiNERHTTPAdapter` (in `gliner_adaptive.py`) solves the question:
-*"How many concurrent HTTP requests can the GLiNER server actually handle?"*
+`AdaptiveGLiNERHTTPAdapter` uses **AIMD (Additive-Increase / Multiplicative-Decrease)**
+— the same algorithm as TCP congestion control — to automatically discover and
+maintain the right concurrency level for the GLiNER server cluster.
 
-Rather than requiring manual tuning, it uses **Additive-Increase / Multiplicative-Decrease
-(AIMD)** — the same algorithm that underpins TCP congestion control — to discover and maintain
-the right concurrency level automatically.
+**How it works:**
 
-### How it works
-
-1. **One HTTP request per input text** — `batch_extract_entities` fans out N requests rather
-   than batching them. This allows individual texts to be served by different GLiNER replicas.
-
-2. **ResizableSemaphore** — a custom asyncio semaphore whose permit limit can be adjusted at
-   runtime. Unlike `asyncio.Semaphore` (fixed at construction), `set_limit(n)` can grow or
-   shrink the limit while requests are in-flight. Increasing the limit immediately wakes blocked
-   waiters; decreasing it takes effect on the next acquire.
-
-3. **AIMDController** — records request latency and adjusts the semaphore:
+1. Fans out one HTTP request per input text (not a single batch request), allowing
+   individual texts to be served by different GLiNER replicas.
+2. A `ResizableSemaphore` (custom asyncio semaphore with runtime-adjustable limit)
+   caps concurrent in-flight requests.
+3. An `AIMDController` monitors rolling average latency and adjusts the semaphore:
 
    | Condition | Action |
    |-----------|--------|
    | Rolling avg latency < `target_latency_ms` | `limit += 1` (additive increase) |
    | Rolling avg latency > `target_latency_ms * 1.5` | `limit -= 1` (soft decrease) |
-   | HTTP 5xx | `limit -= 1` (server error) |
+   | HTTP 5xx | `limit -= 1` (error signal) |
    | Timeout | `limit //= 2` (multiplicative decrease) |
 
-   The controller waits for `min_samples` observations (default: 3) before making any
-   adjustment, avoiding over-reaction to cold-start variance.
+4. Waits for `min_samples` observations (default 3) before adjusting, avoiding
+   over-reaction to cold-start variance.
+5. On rebalance / shutdown: all paused partitions are resumed and tracking cleared.
 
-### Steady-state behavior
-
-| Deployment | Expected steady-state limit |
-|------------|-----------------------------|
-| 1 CPU GLiNER replica | ~1 (CPU saturates per request; latency doubles at N=2) |
-| N CPU replicas | ~N (one active request per replica) |
-| N GPU replicas | N to 2N (GPU inference is faster; more overlap tolerated) |
-
-No configuration changes are required when scaling replicas — the adapter discovers N
-automatically within a few dozen requests.
-
-### Usage
+**Steady-state:** 1 CPU GLiNER replica → limit ~1; N CPU replicas → limit ~N;
+N GPU replicas → limit N–2N. No configuration changes needed when scaling.
 
 ```python
 from ml_clients.adapters import AdaptiveGLiNERHTTPAdapter
-from ml_clients.dataclasses import NERInput
 
 adapter = AdaptiveGLiNERHTTPAdapter(
     base_url="http://gliner-server:8080",
-    initial_concurrency=2,        # starting limit (adjusted quickly)
-    max_concurrency=30,           # hard upper bound
-    target_latency_ms=2000.0,     # CPU inference target; use ~200 for GPU
+    initial_concurrency=2,         # adjusted quickly by AIMD
+    max_concurrency=30,            # hard upper bound
+    target_latency_ms=2000.0,      # CPU inference target; ~200 for GPU
     timeout_seconds=60.0,
-    window_size=10,               # rolling average window
+    window_size=10,
 )
-
-inputs = [NERInput(text=section, entity_classes=["ORG", "PERSON"]) for section in sections]
-outputs = await adapter.batch_extract_entities(inputs)  # fan-out, order preserved
+outputs = await adapter.batch_extract_entities(inputs)   # order preserved
 ```
 
-### When to use which GLiNER adapter
+**When to use which GLiNER adapter:**
 
 | Adapter | Use when |
 |---------|----------|
-| `GLiNERLocalAdapter` | Model runs in-process (same container as service; no network hop) |
-| `GLiNERHTTPAdapter` | Fixed-concurrency; simpler when replica count is known and stable |
-| `AdaptiveGLiNERHTTPAdapter` | Replica count varies (scaling), GPU vs CPU unknown, or production use |
+| `GLiNERLocalAdapter` | Model runs in-process (same container; no network hop) |
+| `GLiNERHTTPAdapter` | Fixed concurrency; replica count known and stable |
+| `AdaptiveGLiNERHTTPAdapter` | Replica count varies, GPU vs CPU unknown, or production |
+
+---
+
+## Cost Tracking (`ml_clients.cost`, `ml_clients.usage_log`)
+
+### `estimate_cost(provider, model_id, tokens_in, tokens_out) → float`
+
+Returns estimated USD cost for one LLM call. Lookup order: exact provider+model
+match → wildcard `"*"` within provider (for Ollama, always `$0.00`) → `0.0`.
+
+```python
+from ml_clients.cost import estimate_cost, estimate_tokens_from_text, PRICING
+
+cost = estimate_cost("deepinfra", "Qwen/Qwen3-235B-A22B-Instruct-2507", 500, 100)
+# → 0.000071 * 0.5 + 0.000100 * 0.1 = ...
+
+tokens = estimate_tokens_from_text(long_text)   # word-count heuristic, min 1
+```
+
+**Current `PRICING` table** (USD per 1M tokens):
+
+| Provider | Model | Input | Output |
+|----------|-------|-------|--------|
+| `deepinfra` | `Qwen/Qwen3-235B-A22B-Instruct-2507` | $0.071 | $0.10 |
+| `deepinfra` | `Qwen/Qwen3-32B` | $0.08 | $0.28 |
+| `deepinfra` | `deepseek-ai/DeepSeek-V4-Flash` | $0.14 | $0.28 |
+| `openrouter` | `deepseek/deepseek-r1-distill-qwen-32b` | $0.69 | $2.19 |
+| `gemini` | `gemini-3.1-flash-lite` | $0.075 | $0.30 |
+| `ollama` | `*` (all models) | $0.00 | $0.00 |
+
+### `LlmUsageLogProtocol` (structural protocol)
+
+Service-side cost-log repositories implement this protocol. Adapters accept it
+as an optional `usage_logger` parameter and fire-and-forget log calls.
+
+```python
+from ml_clients.usage_log import LlmUsageLogProtocol
+
+# Your service implements:
+class LlmUsageLogRepository:
+    async def log(self, *, model_id, provider, capability,
+                  tokens_in, tokens_out, latency_ms,
+                  estimated_cost_usd=0.0, success=True,
+                  error_code=None, **context) -> None:
+        # Persist to llm_usage_log table
+        ...
+```
+
+### `LlmCallUsage` (value object)
+
+Frozen dataclass returned by cost-aware adapters:
+`model_id`, `provider`, `capability`, `tokens_in`, `tokens_out`,
+`estimated_cost_usd`, `latency_ms`, `success`, `error_code`.
+
+### `DeepInfraDescriptionAdapter` — Monthly Cost Cap
+
+Uses an atomic Valkey `INCRBYFLOAT`-then-check pattern:
+1. Reserve estimated cost before any API call.
+2. If reservation exceeds `max_monthly_usd * 0.95`: return `None` without calling.
+3. After the call: adjust reservation to actual token usage.
+4. If both primary and fallback fail: undo reservation.
+
+Strips Qwen3 `<think>...</think>` reasoning blocks before returning descriptions.
+Sanitizes `canonical_name` (strips control chars + angle brackets) before prompt
+insertion to prevent prompt injection (PRD-0073 §12).
 
 ---
 
 ## Configuration
 
-All settings are read from environment variables (no prefix). Consumed via `MLClientsSettings`.
+All settings read from environment variables. Consumed via `MLClientsSettings`
+(pydantic-settings).
 
 | ENV var | Default | Description |
 |---------|---------|-------------|
-| `OLLAMA_BASE_URL` | `http://ollama:11434` | Base URL for the Ollama server |
-| `EMBEDDING_MODEL_ID` | `bge-large-en-v1.5` | Embedding model loaded in Ollama |
-| `EXTRACTION_MODEL_ID` | `qwen2.5:7b-instruct` | Chat/extraction model loaded in Ollama |
-| `NER_MODEL_PATH` | `urchade/gliner_large-v2.1` | HuggingFace path for the GLiNER model |
-| `MAX_OLLAMA_CONCURRENT` | `4` | `asyncio.Semaphore` value for Ollama concurrency cap |
+| `OLLAMA_BASE_URL` | `http://ollama:11434` | Ollama server base URL |
+| `EMBEDDING_MODEL_ID` | `bge-large-en-v1.5` | Embedding model in Ollama |
+| `EXTRACTION_MODEL_ID` | `qwen2.5:7b-instruct` | Extraction model in Ollama |
+| `NER_MODEL_PATH` | `urchade/gliner_large-v2.1` | HuggingFace path for local GLiNER |
+| `MAX_OLLAMA_CONCURRENT` | `4` | Semaphore value for Ollama concurrency |
+
+Cloud adapter API keys are not part of `MLClientsSettings` — they are passed as
+constructor arguments from each service's own settings class.
 
 ---
 
-## Call Flow Diagram
+## Usage Examples
 
-```mermaid
-sequenceDiagram
-    participant S6 as S6 NLP Pipeline
-    participant ADP as OllamaEmbeddingAdapter
-    participant SEM as asyncio.Semaphore
-    participant OLL as Ollama Server
-
-    S6->>ADP: embed([EmbeddingInput(text=..., model_id=...)])
-    ADP->>SEM: async with semaphore (acquire slot)
-    SEM-->>ADP: slot acquired
-
-    ADP->>OLL: POST /api/embeddings {model, prompt}
-    OLL-->>ADP: {embedding: [float × 1024]}
-
-    ADP->>ADP: validate dimension == 1024
-    alt dimension mismatch
-        ADP-->>S6: raise FatalError("Unexpected dimension")
-    end
-
-    ADP->>SEM: release slot
-    ADP-->>S6: list[EmbeddingOutput(embedding, model_id, dimension=1024)]
-```
-
----
-
-## Code Example — FastAPI Lifespan Injection
+### Embedding in a FastAPI Service
 
 ```python
 from __future__ import annotations
-
 import asyncio
 from contextlib import asynccontextmanager
 from typing import AsyncIterator
-
 from fastapi import FastAPI, Depends
 from ml_clients import EmbeddingClient, MLClientsSettings
-from ml_clients.adapters.ollama_embedding import OllamaEmbeddingAdapter
+from ml_clients.adapters.deepinfra_embedding import DeepInfraEmbeddingAdapter
 from ml_clients.dataclasses import EmbeddingInput
 
 settings = MLClientsSettings()
-
-# Shared semaphore bounds concurrent Ollama calls across all requests
-_semaphore = asyncio.Semaphore(settings.max_ollama_concurrent)
 _embedding_client: EmbeddingClient | None = None
-
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     global _embedding_client
-    _embedding_client = OllamaEmbeddingAdapter(
-        base_url=settings.ollama_base_url,
-        model_id=settings.embedding_model_id,
-        semaphore=_semaphore,
+    _embedding_client = DeepInfraEmbeddingAdapter(
+        api_key=settings.embedding_api_key,  # from your service settings
+        model_id="BAAI/bge-large-en-v1.5",
     )
     yield
     _embedding_client = None
 
-
 app = FastAPI(lifespan=lifespan)
-
 
 def get_embedding_client() -> EmbeddingClient:
     assert _embedding_client is not None
     return _embedding_client
 
-
 @app.post("/embed")
-async def embed_text(
-    text: str,
-    client: EmbeddingClient = Depends(get_embedding_client),
-) -> dict:
-    results = await client.embed([EmbeddingInput(text=text, model_id="bge-large-en-v1.5")])
-    return {"dimension": results[0].dimension, "embedding": results[0].embedding[:5]}
+async def embed(text: str, client: EmbeddingClient = Depends(get_embedding_client)):
+    outputs = await client.embed([EmbeddingInput(text=text, model_id="BAAI/bge-large-en-v1.5")])
+    return {"dimension": outputs[0].dimension}
+```
+
+### NER with Valkey Dedup
+
+```python
+import asyncio
+from ml_clients.adapters.gliner_adaptive import AdaptiveGLiNERHTTPAdapter
+from ml_clients.dataclasses import NERInput
+
+semaphore = asyncio.Semaphore(4)
+adapter = AdaptiveGLiNERHTTPAdapter(
+    base_url="http://gliner:8080",
+    initial_concurrency=2,
+    max_concurrency=16,
+    target_latency_ms=3000.0,
+)
+
+inputs = [NERInput(text=section, entity_classes=["ORG", "PERSON", "GPE"])
+          for section in article_sections]
+outputs = await adapter.batch_extract_entities(inputs)  # order preserved
+all_mentions = [m for out in outputs for m in out.mentions]
+```
+
+### Cost-Tracked Description Generation
+
+```python
+from ml_clients.adapters.deepinfra_description import DeepInfraDescriptionAdapter
+
+adapter = DeepInfraDescriptionAdapter(
+    api_key=settings.deepinfra_api_key,
+    semaphore=asyncio.Semaphore(3),
+    cost_tracker=valkey_client,      # Valkey for monthly cap
+    max_monthly_usd=10.0,
+    usage_logger=llm_log_repo,       # optional: persists to llm_usage_log table
+)
+
+description = await adapter.generate_description(
+    entity_id=str(entity_id),
+    canonical_name="Apple Inc.",
+    entity_type="company",
+    context_hints={"ticker": "AAPL", "exchange": "NASDAQ"},
+)
+# Returns None if monthly cost cap exceeded
+```
+
+### Cross-Encoder Reranking
+
+```python
+from ml_clients.adapters.cohere_rerank import CohereRerankAdapter
+
+reranker = CohereRerankAdapter(api_key=settings.cohere_api_key)
+results = await reranker.rerank(
+    query="Apple quarterly earnings",
+    documents=["doc1 text...", "doc2 text..."],
+    top_n=12,
+)
+# [{"index": 0, "relevance_score": 0.92}, {"index": 1, "relevance_score": 0.74}, ...]
 ```
 
 ---
 
-## Common Pitfalls
+## Architecture Notes
 
-### 1. Calling GLiNER synchronously inside an async handler
+### Why `Protocol` instead of `ABC`?
 
-```python
-# WRONG — blocks the entire event loop while GLiNER runs inference
-async def process(text: str) -> NEROutput:
-    return gliner_model.predict_entities(text, ["ORG"])  # sync call in async context
+`Protocol` (structural subtyping) means service code can be tested with any mock
+object that has the right methods — no subclassing required. `isinstance(mock,
+EmbeddingClient)` returns `True` as long as the mock has an `embed` method. ABCs
+require explicit subclassing, which couples test code to the library.
 
-# CORRECT — GLiNERLocalAdapter wraps every call in run_in_executor automatically
-async def process(inp: NERInput) -> NEROutput:
-    return await gliner_adapter.extract_entities(inp)
-```
+### Why semaphore injection instead of a configured semaphore inside the adapter?
 
-**Consequence**: Blocking the event loop stalls all concurrent requests in the service,
-causing cascading latency spikes and timeouts under load.
+An adapter-internal semaphore would be per-instance. If a service creates multiple
+adapter instances (e.g., for different models), they would each have their own
+semaphore — effectively multiplying the concurrency cap. Injecting a shared
+`asyncio.Semaphore` at construction makes the total concurrency budget explicit and
+shared across all adapters that call the same backend.
 
-### 2. Constructing an adapter without a semaphore
+### `GLiNERLocalAdapter` and the event loop
 
-```python
-# WRONG — unbounded concurrency; Ollama OOMs under parallel load
-adapter = OllamaEmbeddingAdapter(
-    base_url="http://ollama:11434",
-    model_id="bge-large-en-v1.5",
-    semaphore=asyncio.Semaphore(9999),  # effectively unbounded
-)
+`GLiNERLocalAdapter` wraps all synchronous GLiNER inference calls in
+`loop.run_in_executor(None, ...)`. Without this, GLiNER's CPU inference would block
+the event loop, stalling all concurrent requests in the service.
 
-# CORRECT — semaphore value from config caps concurrent calls
-settings = MLClientsSettings()
-semaphore = asyncio.Semaphore(settings.max_ollama_concurrent)  # default: 4
-adapter = OllamaEmbeddingAdapter(..., semaphore=semaphore)
-```
+### `DeepInfraEmbeddingAdapter` — 1500-char truncation
 
-**Consequence**: With many concurrent requests, Ollama queues too many inference jobs,
-exhausts GPU/CPU memory, and crashes — returning 500s that retry, creating a feedback loop.
+BGE-large has a 512-token BERT context window. Texts exceeding ~512 tokens cause
+the GGML runner to abort (BP-121). Both `DeepInfraEmbeddingAdapter` and
+`OllamaEmbeddingAdapter` apply a 1500-character truncation limit so that ingestion
+embeddings and query embeddings remain in the same semantic space.
 
-### 3. Catching raw exceptions instead of re-raising as RetryableError / FatalError
+---
 
-```python
-# WRONG — naked exceptions bypass the consumer's retry/dead-letter logic
-try:
-    result = await adapter.embed(inputs)
-except httpx.TimeoutException:
-    logger.error("timeout")  # message lost — no retry, no dead-letter
+## Extension Points
 
-# CORRECT — adapters already wrap all errors; catch only at consumer boundary
-try:
-    result = await adapter.embed(inputs)
-except RetryableError:
-    # consumer will back off and retry
-    raise
-except FatalError:
-    # consumer will route to dead-letter queue
-    raise
-```
+To add a new adapter:
 
-**Consequence**: Swallowing `TimeoutException` or `HTTPStatusError` without re-raising means
-the Kafka consumer cannot apply back-off or dead-lettering, causing silent message loss.
-
-### 4. Importing from adapter modules instead of coding to the Protocol interface
-
-```python
-# WRONG — couples service code to a specific adapter implementation
-from ml_clients.adapters.ollama_embedding import OllamaEmbeddingAdapter
-
-async def enrich(adapter: OllamaEmbeddingAdapter, text: str) -> list[float]:
-    ...
-
-# CORRECT — code against the Protocol; any compliant adapter works
-from ml_clients import EmbeddingClient
-
-async def enrich(adapter: EmbeddingClient, text: str) -> list[float]:
-    ...
-```
-
-**Consequence**: Coupling to a concrete adapter makes it impossible to swap to a cloud
-provider (e.g., Anthropic embeddings) for testing or cost reasons without changing service code.
+1. Create `libs/ml-clients/src/ml_clients/adapters/<provider>_<capability>.py`.
+2. Implement the appropriate protocol (`EmbeddingClient`, `NERClient`, `ExtractionClient`,
+   or `EntityDescriptionClient`).
+3. Map all backend errors to `RetryableError` or `FatalError`.
+4. Add to `libs/ml-clients/src/ml_clients/adapters/__init__.py`.
+5. Add tests in `libs/ml-clients/tests/` (mock all HTTP calls).
+6. Add to the adapter table in this doc.
+7. If the adapter uses a new provider, add pricing to `cost.py`'s `PRICING` table.
 
 ---
 
 ## Testing
 
-### Unit tests (CI gate — no external services)
-
 ```bash
 cd libs/ml-clients
+
+# Unit tests (no external services):
 python -m pytest tests/ --ignore=tests/integration/ -v --tb=short
-```
 
-All external calls are mocked with `unittest.mock`. Tests cover the error mapping matrix for
-each adapter (timeout → `RetryableError`, 5xx → `RetryableError`, 4xx → `FatalError`,
-malformed output → `FatalError`, valid response → correct output type).
-
-### Integration tests (manual — requires Ollama)
-
-```bash
-# Start Ollama with required models:
+# Integration tests (requires Ollama with models pulled):
 ollama pull bge-large-en-v1.5
 ollama pull qwen2.5:7b-instruct
-
-# Run integration tests:
 OLLAMA_BASE_URL=http://localhost:11434 \
   python -m pytest tests/integration/ -v -m integration
-```
 
-### Type checking and lint
-
-```bash
-cd libs/ml-clients
+# Type checking and lint:
 mypy --strict src/
 ruff check src/ tests/
 ```
+
+Unit tests cover the error-mapping matrix for each adapter:
+timeout → `RetryableError`, 5xx → `RetryableError`, 4xx → `FatalError`,
+malformed output → `FatalError`, valid response → correct output type.
+
+---
+
+## Common Pitfalls
+
+1. **GLiNER synchronous call in async handler** — `gliner_model.predict_entities()`
+   blocks the event loop. Always use `GLiNERLocalAdapter` which wraps in executor.
+2. **Adapter without a semaphore (or effectively unbounded semaphore)** — Ollama,
+   GLiNER, and Cohere all OOM or rate-limit under unbounded concurrency. Use a sane
+   `asyncio.Semaphore` value from config.
+3. **Swallowing adapter exceptions** — adapters already wrap all errors. Catch only
+   `RetryableError` / `FatalError` at consumer boundaries — don't catch raw httpx
+   exceptions or you bypass the consumer's retry/dead-letter logic.
+4. **Importing concrete adapters in service business logic** — couple against the
+   Protocol instead. `from ml_clients import EmbeddingClient`, not
+   `from ml_clients.adapters.deepinfra_embedding import DeepInfraEmbeddingAdapter`.
+5. **Missing `[openai]` extra for DeepInfra** — `DeepInfraDescriptionAdapter`
+   requires `openai>=1.40` (uses `openai.AsyncOpenAI` against the DeepInfra base
+   URL). Missing package raises `FatalError` at call time with a clear message.

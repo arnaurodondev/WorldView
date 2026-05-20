@@ -412,7 +412,7 @@ The `_auth_headers()` helper in `routes/proxy.py` no longer forwards `X-Tenant-I
 
 ## Rate Limiting
 
-- **Authenticated**: 100 req/min per `user_id` (key: `rl:v1:user:{user_id}`)
+- **Authenticated**: 300 req/min per `user_id` (key: `rl:v1:user:{user_id}`) — raised from 100 to accommodate multi-panel workspace usage where a single page load may fire 4+ parallel OHLCV calls
 - **Unauthenticated**: 20 req/min per IP hash (key: `rl:v1:ip:{sha256(ip)[:16]}`)
 - **Fail-closed (D-001)**: If Valkey is unavailable, reject requests with 503 (previously fail-open; changed to fail-closed per security audit decision D-001 on 2026-04-18)
 - 429 responses include `Retry-After` header
@@ -470,10 +470,14 @@ All env vars are prefixed with `API_GATEWAY_`:
 | `NLP_PIPELINE_URL` | `http://localhost:8006` | No | S6 URL |
 | `KNOWLEDGE_GRAPH_URL` | `http://localhost:8007` | No | S7 URL |
 | `RAG_CHAT_URL` | `http://localhost:8008` | No | S8 URL |
-| `ALERT_URL` | `http://localhost:8010` | No | S10 URL |
-| `RATE_LIMIT_REQUESTS` | `100` | No | Auth rate limit per minute |
+| `ALERT_URL` | `http://localhost:8010` | No | S10 HTTP URL |
+| `ALERT_WS_URL` | `ws://localhost:8010` | No | S10 WebSocket base URL (separate from HTTP URL for WS routing) |
+| `RATE_LIMIT_REQUESTS` | `300` | No | Authenticated rate limit per minute (raised from 100 for multi-panel workspace) |
 | `RATE_LIMIT_WINDOW_SECONDS` | `60` | No | Rate limit window |
 | `CORS_ORIGINS` | `http://localhost:5173,http://localhost:3001` | No | Comma-separated allowed origins (SEC-008: port 3001 is worldview-web, not 3000) |
+| `APP_ENV` | `development` | No | Environment guard: `development`, `staging`, or `production`. When `production`, `POST /v1/auth/dev-login` returns 403 regardless of OIDC config. |
+| `DEV_ADMIN_EMAILS` | `""` | No | Comma-separated emails that receive `role=admin` in dev-login JWTs (dev/staging only; ignored when `APP_ENV=production`) |
+| `SERVICE_ACCOUNT_TOKEN` | `""` | No | Shared secret for `POST /internal/v1/service-token`. Must be set in production for background workers to mint RS256 JWTs. |
 | `SERVICE_NAME` | `api-gateway` | No | structlog service name |
 | `LOG_LEVEL` | `INFO` | No | Logging level |
 | `LOG_JSON` | `true` | No | JSON-formatted logs |
@@ -587,6 +591,70 @@ The `/v1/auth/callback` handler sanitizes `error` and `error_description` query 
 
 ---
 
+### Portfolio Risk Metrics (Composition — PLAN-0046)
+
+| Method | Path | Description | Auth |
+|--------|------|-------------|------|
+| GET | `/v1/portfolios/{id}/risk-metrics` | Drawdown, volatility, Sharpe, Sortino, beta vs SPY. Pure S9 composition over S1 value-history + S3 SPY OHLCV. Query param: `lookback_days` (10-3650, default 90). All metrics independently nullable. | Yes |
+
+**Response fields**: `drawdown_max`, `drawdown_current`, `volatility_annualized`, `sharpe`,
+`sortino`, `beta_vs_spy`, `n_returns`, `as_of`, `lookback_window`, `data_quality`.
+
+**`data_quality.status` values**:
+- `ok` — sufficient data and SPY available
+- `insufficient_data` — fewer than 10 daily returns
+- `benchmark_unavailable` — SPY OHLCV missing
+- `data_anomaly_detected` — contaminated-zero in value series (all metrics suppressed)
+
+### Additional Portfolio Endpoints (S9 → S1)
+
+| Method | Path | Description | Auth |
+|--------|------|-------------|------|
+| POST | `/v1/portfolios` | Create portfolio | Yes |
+| DELETE | `/v1/portfolios/{id}` | Archive portfolio | Yes |
+| GET | `/v1/portfolios/{id}/holding-lots` | FIFO lot breakdown per instrument | Yes |
+| GET | `/v1/portfolios/{id}/concentration` | Sector/asset class concentration | Yes |
+| GET | `/v1/portfolios/{id}/performance` | Performance metrics (Calmar, win-rate) | Yes |
+| GET | `/v1/portfolios/{id}/transactions` | Transactions nested under portfolio | Yes |
+
+**Transaction note**: `GET /v1/transactions` forwards `portfolio_id` as `X-Portfolio-ID`
+header (not query param) to S1 — this is by design (API-004).
+
+### Additional Brokerage Endpoints (S9 → S1)
+
+| Method | Path | Description | Auth |
+|--------|------|-------------|------|
+| GET | `/v1/brokerage-connections/{id}/balance` | Cash/buying-power (best-effort) | Yes |
+| POST | `/v1/brokerage-connections/{id}/sync` | Trigger immediate background sync (202 Accepted) | Yes |
+
+### Prediction Market Categories
+
+| Method | Path | Description | Auth |
+|--------|------|-------------|------|
+| GET | `/v1/signals/prediction-markets/categories` | Category counts for currently-open markets | Yes |
+
+### Additional Watchlist Endpoints
+
+| Method | Path | Description | Auth |
+|--------|------|-------------|------|
+| PATCH | `/v1/watchlists/{id}` | Rename watchlist | Yes |
+| GET | `/v1/watchlists/{id}/members` | List watchlist members | Yes |
+
+### Additional Intelligence/Knowledge Graph Endpoints
+
+| Method | Path | Description | Auth |
+|--------|------|-------------|------|
+| POST | `/v1/search/relations` | ANN search over relation summaries (proxy → S7) | Yes |
+| POST | `/v1/claims/search` | Search analyst claims by entity + filters (proxy → S7) | Yes |
+
+### Proposal Confirmation (PLAN-0082)
+
+| Method | Path | Description | Auth |
+|--------|------|-------------|------|
+| POST | `/v1/chat/proposals/{proposal_id}/confirm` | Confirm a pending LLM-proposed action (proxied to S8) | Yes |
+
+---
+
 ## Known Stubs & TODOs
 
 | Endpoint | Status | Reason |
@@ -594,6 +662,7 @@ The `/v1/auth/callback` handler sanitizes `error` and `error_description` query 
 | `GET /v1/briefings/morning` | Stub | S8 briefing feature not yet implemented |
 | `GET /v1/briefings/instrument/{id}` | Stub | S8 briefing feature not yet implemented |
 | `GET /v1/signals/ai` | Stub | Returns empty list — S6 signal API pending |
+| `GET /v1/quotes/stream` | Stub | Returns 501 — streaming quotes not yet implemented |
 | WebSocket proxy | N/A | S9 cannot transparently proxy WS; clients connect to S10 directly with 30s token from `GET /v1/auth/ws-token` |
 
 ---
@@ -618,24 +687,119 @@ The `/v1/auth/callback` handler sanitizes `error` and `error_description` query 
 
 ---
 
-## Local Run
+## How to Run Locally
+
+### Option A — Full Docker Compose (Recommended)
+
+```bash
+make dev       # launches full platform with MailHog, pgweb, kafka-ui
+make seed      # load sample data (seeds a demo user)
+make fetch-secrets   # pull API keys and OIDC credentials from worldview-config
+```
+
+### Option B — Dev Mode (No Zitadel)
+
+When `OIDC_DISCOVERY_OPTIONAL=true` and no Zitadel is configured, the gateway
+starts in **dev mode**:
+
+- `POST /v1/auth/dev-login` is enabled (returns JWT for the seed demo user)
+- The frontend's login page automatically shows a "Dev Login" button
+- `OIDCAuthMiddleware` passes through requests (no Zitadel validation)
 
 ```bash
 cd services/api-gateway
 
-# 1. Copy env and configure OIDC + RSA keys
-cp configs/dev.local.env.example configs/.env
-# Edit configs/.env — set OIDC_* and INTERNAL_JWT_* vars
-# Or generate keys: ./scripts/generate-internal-keypair.sh
+# Generate RSA keypair for internal JWT signing
+./scripts/generate-internal-keypair.sh
+# → writes INTERNAL_JWT_PRIVATE_KEY and INTERNAL_JWT_PUBLIC_KEY to stdout
 
-# 2. Start
-make run          # uvicorn on port 8000
+# Configure
+cat > configs/.env << 'EOF'
+API_GATEWAY_OIDC_DISCOVERY_OPTIONAL=true
+API_GATEWAY_INTERNAL_JWT_PRIVATE_KEY="<generate with: openssl genrsa 2048>"
+API_GATEWAY_INTERNAL_JWT_PUBLIC_KEY="<extract with: openssl rsa -pubout>"
+API_GATEWAY_VALKEY_URL=redis://localhost:6379/0
+API_GATEWAY_PORTFOLIO_URL=http://localhost:8001
+API_GATEWAY_COOKIE_SECURE=false
+EOF
 
-# 3. Validate
-make test         # unit tests
-make lint         # ruff + mypy
-make test-integration  # security integration tests (requires Valkey)
+make run    # uvicorn on port 8000
+
+# Test dev-login:
+curl -X POST http://localhost:8000/v1/auth/dev-login
+# → {"access_token": "...", "user": {...}}
 ```
+
+### Option C — Full Zitadel Integration
+
+1. Create a Zitadel Cloud project at https://zitadel.cloud
+2. Create a "Web App" application with PKCE (not client secret)
+3. Add redirect URI: `http://localhost:8000/v1/auth/callback`
+4. Set env vars:
+
+```bash
+API_GATEWAY_OIDC_ISSUER_URL=https://<your-domain>.zitadel.cloud
+API_GATEWAY_OIDC_CLIENT_ID=<your-client-id>
+API_GATEWAY_OIDC_CLIENT_SECRET=<your-client-secret>
+API_GATEWAY_OIDC_AUDIENCE=<your-audience>
+API_GATEWAY_OIDC_DISCOVERY_OPTIONAL=false
+```
+
+---
+
+## Runbook
+
+### JWKS Endpoint
+
+All backend services fetch S9's public key at startup:
+```
+GET /internal/jwks
+→ {"keys": [{"kty":"RSA","use":"sig","kid":"...","n":"...","e":"AQAB"}]}
+```
+
+If a backend cannot reach this endpoint at startup, it retries 3× with 3 s sleep.
+After 3 failures, `InternalJWTMiddleware._public_key` is `None` and the service
+**passes all requests through** (test-safe, not production-safe).
+
+### Service Token for Background Workers
+
+Workers that need to make authenticated calls to backend services use the service
+account token endpoint:
+
+```bash
+curl -X POST http://localhost:8000/internal/v1/service-token \
+  -H "Content-Type: application/json" \
+  -d '{"service_name": "my-worker", "secret": "<API_GATEWAY_SERVICE_ACCOUNT_TOKEN>"}'
+# → {"access_token": "...", "expires_in": 300}
+```
+
+To add a new worker:
+1. Add its name to `_ALLOWED_SERVICE_NAMES` in `routes/internal.py`
+2. Set `API_GATEWAY_SERVICE_ACCOUNT_TOKEN` on S9
+3. Set the same token value on the worker service
+
+### Registering New Backend Services
+
+Add the service URL to S9's config (e.g. `API_GATEWAY_NEW_SERVICE_URL=http://...`)
+and add a typed httpx client in `clients.py`.
+
+---
+
+## Testing
+
+| Type | What | Command |
+|------|------|---------|
+| Unit | Route logic, middleware, JWT utils, PKCE, config | `make test` |
+| Integration | Cross-cutting security (headers, CORS, rate limit, JWKS) | `make test-integration` |
+| Lint | Ruff + mypy | `make lint` |
+
+**Test suite**: 20 test files, ~3,700 lines of test code, 84+ tests passing.
+
+Integration tests validate:
+- Security headers on all responses
+- JWKS endpoint accessible without auth
+- Rate limit 429 after threshold
+- CORS preflight returns explicit methods (never `*`)
 
 ---
 
@@ -653,3 +817,26 @@ svc-api-gateway:
     svc-market-data: { condition: service_started }
     valkey: { condition: service_healthy }
 ```
+
+---
+
+## Common Pitfalls
+
+- **CORS port**: default `CORS_ORIGINS` uses port 3001 (worldview-web), not 3000. Frontend
+  on a non-standard port will get CORS errors. Set `API_GATEWAY_CORS_ORIGINS` accordingly.
+
+- **`X-Tenant-Id` / `X-User-Id` headers are dead** — removed after PRD-0025. All backends
+  extract identity from `X-Internal-JWT` only. Never forward raw header identity.
+
+- **Rate limiting is fail-closed**: if Valkey is unavailable, all requests are rejected
+  with 503 (D-001 security decision). Ensure Valkey is healthy before deploying S9.
+
+- **JTI replay detection**: each parallel fan-out call (e.g. dashboard snapshot) must
+  use `make_headers=lambda: _auth_headers(request)` to generate a fresh JWT with a unique
+  JTI per downstream call. Reusing the same JWT across parallel calls triggers replay detection.
+
+- **`dev-login` returns 403 in production**: the endpoint is gated behind
+  `oidc_config is None`. It is never available when `OIDC_DISCOVERY_OPTIONAL=false`.
+
+- **`COOKIE_SECURE=true` by default**: local dev without HTTPS requires
+  `API_GATEWAY_COOKIE_SECURE=false`; otherwise the refresh_token cookie is not sent by the browser.

@@ -318,9 +318,11 @@ describe("AskAiPanel — SSE streaming", () => {
     fireEvent.change(textarea, { target: { value: "Streaming test" } });
     fireEvent.click(screen.getByRole("button", { name: /send message/i }));
 
-    // WHY animate-pulse: the blinking cursor has this Tailwind class
+    // WHY static cursor (not animate-pulse): HIGH-015 removed animation per
+    // Bloomberg terminal mandate. The cursor is now a static vertical bar.
     await waitFor(() => {
-      expect(document.querySelector(".animate-pulse")).toBeInTheDocument();
+      // Static cursor: inline-block h-4 w-0.5 bg-primary span
+      expect(document.querySelector(".inline-block.h-4")).toBeInTheDocument();
     });
 
     // Clean up: close the stream so the component can finish

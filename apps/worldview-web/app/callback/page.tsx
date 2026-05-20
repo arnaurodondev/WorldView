@@ -166,9 +166,14 @@ function CallbackContent() {
     }
 
     void handleCallback();
-  }, [searchParams, router, setTokens]); // eslint-disable-line react-hooks/exhaustive-deps
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- setTokens is stable (AuthContext value, intentionally omitted to avoid re-running the one-shot exchange)
+  }, [searchParams, router]);
   // WHY these deps: searchParams contains the code/state from Zitadel.
-  // router and setTokens are stable (memo'd by Next.js and React respectively).
+  // router is stable (memoised by Next.js). setTokens is intentionally
+  // excluded — it is a stable AuthContext setter that never changes identity,
+  // and including it would retrigger the PKCE exchange on every silent
+  // token refresh (which updates the AuthContext value and invalidates
+  // all downstream memo comparisons). FR-7.1.
 
   // Error state — show user-friendly message with option to retry.
   // PLAN-0053 T-F-6-13: title + description from ERROR_COPY for distinct

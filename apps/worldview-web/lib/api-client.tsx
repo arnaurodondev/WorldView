@@ -266,6 +266,14 @@ export function useAuthedMutation<
   const { mutationFn, ...rest } = options;
 
   return useMutation<TData, TError, TVariables, TContext>({
+    // WHY default retry (CRIT-006 / FR-8.1): all mutations routed through
+    // useAuthedMutation are gateway calls. The backend confirms all write
+    // endpoints are idempotent (W1-Backend audit). Defaults here ensure any
+    // future caller automatically gets retry without having to opt in manually.
+    // Caller-supplied retry/retryDelay in `rest` take precedence via spread.
+    retry: 3,
+    retryDelay: (attemptIndex: number) =>
+      Math.min(1000 * 2 ** (attemptIndex - 1), 4000),
     ...rest,
     mutationFn: (variables: TVariables) => mutationFn(gateway, variables),
   });

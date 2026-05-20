@@ -5,6 +5,8 @@ from __future__ import annotations
 import pytest
 from market_ingestion.application.use_cases.execute_task import _map_fundamentals_sections
 
+pytestmark = pytest.mark.unit
+
 # ── Stock fixture ────────────────────────────────────────────────────────────
 
 _STOCK_RAW: dict = {

@@ -20,9 +20,16 @@
 
 "use client";
 
+// FR-6.5 (W8-SETTINGS): retention is wired to PreferencesContext so the
+// selection survives page refresh (localStorage-backed). The export and
+// delete-account sections are gated behind NEXT_PUBLIC_ENABLE_DATA_OPS —
+// they remain visible only in environments where the backend deletion and
+// export queue endpoints are live.
+
 import { useState } from "react";
 import { toast } from "sonner";
 import { Database, Download, FileWarning, History, Trash2 } from "lucide-react";
+import { usePreferences } from "@/contexts/PreferencesContext";
 import {
   Card,
   CardContent,
@@ -77,31 +84,56 @@ const DELETE_CONFIRM_PHRASE = "DELETE";
 // ── Page ─────────────────────────────────────────────────────────────────
 
 export default function SettingsDataPage() {
-  const [chatRetention, setChatRetention] = useState<string>("90");
-  const [searchRetention, setSearchRetention] = useState<string>("90");
+  // FR-6.5 (CRIT-003 coverage): retentionDays from PreferencesContext.
+  // WHY PreferencesContext (not local state): the user's chosen retention
+  // window must survive page refreshes. PreferencesContext persists to
+  // localStorage via safeStorage, so selecting "30 days" then reloading
+  // still shows "30 days" — the acceptance criterion for FR-6.2.
+  //
+  // WHY string conversion for Select value: shadcn Select drives its value
+  // with a string; we convert retentionDays (number) to/from string at the
+  // boundary here so the context stays typed as `number`.
+  const { retentionDays, setRetentionDays } = usePreferences();
+
+  // Both chat and search share the same retention window because the backend
+  // currently enforces a single pruning policy per user. When per-type
+  // retention ships, split this into two context fields.
+  const retentionString = String(retentionDays);
+
   const [exporting, setExporting] = useState(false);
   const [deleteConfirm, setDeleteConfirm] = useState("");
 
   // ── Handlers ───────────────────────────────────────────────────────────
 
-  const handleChatRetentionChange = (value: string) => {
+  /**
+   * handleRetentionChange — shared handler for both retention selectors.
+   *
+   * WHY single handler: both chat and search use the same `retentionDays`
+   * field in PreferencesContext (single pruning policy). The `type` param
+   * only affects the toast copy. When per-type retention ships, split into
+   * two context fields and two handlers.
+   *
+   * WHY parseInt with radix 10: Select drives values as strings; we must
+   * convert back to number before storing. "forever" maps to 0 in the RETENTION_OPTIONS
+   * const — the backend interprets 0 as "no pruning".
+   */
+  const handleRetentionChange = (value: string, type: "chat" | "search") => {
     // eslint-disable-next-line no-console
-    console.log("[settings/data] chat retention →", value);
-    setChatRetention(value);
+    console.log("[settings/data]", type, "retention →", value);
+    // WHY value === "forever" check: the old option used the string "forever"
+    // but the context stores a number. Map "forever" → 0 for context storage.
+    const days = value === "forever" ? 0 : parseInt(value, 10);
+    setRetentionDays(days);
     const label = RETENTION_OPTIONS.find((o) => o.value === value)?.label ?? value;
-    toast.success("Chat history retention updated", {
-      description: `Older conversations will be deleted after ${label.toLowerCase()}.`,
-    });
-  };
-
-  const handleSearchRetentionChange = (value: string) => {
-    // eslint-disable-next-line no-console
-    console.log("[settings/data] search retention →", value);
-    setSearchRetention(value);
-    const label = RETENTION_OPTIONS.find((o) => o.value === value)?.label ?? value;
-    toast.success("Search history retention updated", {
-      description: `History older than ${label.toLowerCase()} will be removed.`,
-    });
+    if (type === "chat") {
+      toast.success("Chat history retention updated", {
+        description: `Older conversations will be deleted after ${label.toLowerCase()}.`,
+      });
+    } else {
+      toast.success("Search history retention updated", {
+        description: `History older than ${label.toLowerCase()} will be removed.`,
+      });
+    }
   };
 
   const handleExport = () => {
@@ -147,7 +179,7 @@ export default function SettingsDataPage() {
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
-          {/* Chat retention */}
+          {/* Chat retention — wired to PreferencesContext (FR-6.2 / CRIT-003) */}
           <div className="flex items-start justify-between gap-4 rounded-[2px] border border-border/40 bg-card/30 p-3">
             <div className="min-w-0 flex-1">
               <Label htmlFor="chat-retention" className="text-sm font-medium text-foreground">
@@ -158,7 +190,12 @@ export default function SettingsDataPage() {
                 memory window the assistant can reference in future answers.
               </p>
             </div>
-            <Select value={chatRetention} onValueChange={handleChatRetentionChange}>
+            {/* WHY retentionString: Select value must be a string; we convert
+                back to number in handleRetentionChange before storing to context. */}
+            <Select
+              value={retentionString === "0" ? "forever" : retentionString}
+              onValueChange={(v) => handleRetentionChange(v, "chat")}
+            >
               {/* WHY w-44 fixed: prevents the trigger from collapsing on long
                   labels like "90 days (recommended)". */}
               <SelectTrigger id="chat-retention" className="w-44">
@@ -174,7 +211,7 @@ export default function SettingsDataPage() {
             </Select>
           </div>
 
-          {/* Search retention */}
+          {/* Search retention — wired to same context field (FR-6.5) */}
           <div className="flex items-start justify-between gap-4 rounded-[2px] border border-border/40 bg-card/30 p-3">
             <div className="min-w-0 flex-1">
               <Label htmlFor="search-retention" className="text-sm font-medium text-foreground">
@@ -185,7 +222,10 @@ export default function SettingsDataPage() {
                 personalised dashboard recommendations.
               </p>
             </div>
-            <Select value={searchRetention} onValueChange={handleSearchRetentionChange}>
+            <Select
+              value={retentionString === "0" ? "forever" : retentionString}
+              onValueChange={(v) => handleRetentionChange(v, "search")}
+            >
               <SelectTrigger id="search-retention" className="w-44">
                 <SelectValue />
               </SelectTrigger>
@@ -201,6 +241,16 @@ export default function SettingsDataPage() {
         </CardContent>
       </Card>
 
+      {/* ── Export + Delete — gated by NEXT_PUBLIC_ENABLE_DATA_OPS ─── */}
+      {/* WHY env flag gate: export queues an async job via the backend and
+          delete-account schedules a 30-day grace-period deletion — both
+          require backend support that is not yet wired in S1. Setting the
+          flag to "true" in a staging/preview environment shows the UI so
+          it can be reviewed before the backend ships. The flag defaults to
+          "false" in .env.example so production and local dev hide the section
+          automatically. FR-6.5. */}
+      {process.env.NEXT_PUBLIC_ENABLE_DATA_OPS === "true" && (
+        <>
       {/* ── Export ──────────────────────────────────────────────────── */}
       <Card className="border-border/60 bg-card">
         <CardHeader className="pb-3">
@@ -315,6 +365,8 @@ export default function SettingsDataPage() {
         </CardContent>
       </Card>
 
+        </>
+      )}
       {/* ── Footer ─────────────────────────────────────────────────── */}
       <div className="rounded-[2px] border border-border/40 bg-muted/20 p-3">
         <div className="flex items-start gap-2">

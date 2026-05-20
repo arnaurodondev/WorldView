@@ -95,13 +95,13 @@ class TestReadyz:
         assert body["status"] == "ok"
 
     @pytest.mark.unit
-    async def test_readyz_503_when_s1_unhealthy(self) -> None:
+    async def test_readyz_200_when_s1_degraded(self) -> None:
         app = _make_app(s1_healthy=False)
         async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
             resp = await client.get("/readyz")
-        assert resp.status_code == 503
+        assert resp.status_code == 200
         body = resp.json()
-        assert body["s1"] == "error"
+        assert body["s1"] == "degraded"
 
     @pytest.mark.unit
     async def test_readyz_503_when_db_fails(self) -> None:

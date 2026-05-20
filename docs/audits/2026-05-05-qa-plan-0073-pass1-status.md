@@ -46,7 +46,7 @@ Re-check these in source after resume:
 
 ```bash
 # 1. Audit current state — what edits the budget-exhausted agents managed to land
-cd /Users/arnaurodon/Projects/University/final_thesis/worldview
+cd <repo-root>
 git diff services/knowledge-graph/src/knowledge_graph/infrastructure/scheduler/scheduler.py
 git diff services/knowledge-graph/src/knowledge_graph/infrastructure/messaging/consumers/structured_enrichment_consumer.py
 git diff services/knowledge-graph/src/knowledge_graph/infrastructure/workers/structured_enrichment_worker.py
@@ -69,7 +69,7 @@ ruff format --check libs/ services/
 # per-service unit tests
 for svc in services/*/; do
   cd "$svc" && python -m pytest tests/ -m unit -v --tb=short
-  cd /Users/arnaurodon/Projects/University/final_thesis/worldview
+  cd <repo-root>
 done
 # frontend
 cd apps/worldview-web && pnpm test && pnpm typecheck

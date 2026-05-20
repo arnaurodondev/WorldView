@@ -197,6 +197,10 @@ def e2e_app(e2e_session_factory):
     app.state.scheduler = None
     # storage is optional — only used by /internal/v1/ingest/submit
     app.state.storage = None
+    # bronze_storage is used by /internal/v1/ingest/submit via BronzeStorageDep;
+    # stub with AsyncMock so route dependency resolution does not raise
+    # AttributeError('State' object has no attribute 'bronze_storage').
+    app.state.bronze_storage = AsyncMock()
     # valkey is used by /readyz — stub with an AsyncMock so the probe fails
     # gracefully rather than raising AttributeError on None
     app.state.valkey = AsyncMock()
@@ -226,7 +230,9 @@ def e2e_app(e2e_session_factory):
 async def e2e_client(e2e_app) -> AsyncGenerator[AsyncClient, None]:
     """Async HTTP test client using ASGI transport."""
     transport = ASGITransport(app=e2e_app)
-    async with AsyncClient(transport=transport, base_url="http://test") as ac:
+    async with AsyncClient(
+        transport=transport, base_url="http://test", headers={"X-Internal-JWT": _E2E_INTERNAL_JWT}
+    ) as ac:
         yield ac
 
 

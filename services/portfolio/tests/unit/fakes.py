@@ -21,6 +21,7 @@ from portfolio.application.ports.repositories import (
     HoldingRepository,
     IdempotencyRepository,
     InstrumentRepository,
+    NotificationPreferencesRepository,
     OutboxRecord,
     OutboxRepository,
     PortfolioRepository,
@@ -42,6 +43,7 @@ if TYPE_CHECKING:
     from portfolio.domain.entities.alert_preference import AlertPreference, EntitySuppression
     from portfolio.domain.entities.brokerage_connection import BrokerageConnection
     from portfolio.domain.entities.brokerage_sync_error import BrokerageTransactionSyncError
+    from portfolio.domain.entities.notification_preferences import NotificationPreferences
     from portfolio.domain.entities.portfolio_value_snapshot import PortfolioValueSnapshot
     from portfolio.domain.entities.watchlist import Watchlist
     from portfolio.domain.entities.watchlist_member import WatchlistMember
@@ -510,6 +512,19 @@ class FakeWatchlistMemberRepository(WatchlistMemberRepository):
         self._store.pop((watchlist_id, entity_id), None)
 
 
+class FakeNotificationPreferencesRepository(NotificationPreferencesRepository):
+    """In-memory notification preferences store keyed by tenant_id."""
+
+    def __init__(self) -> None:
+        self._store: dict[object, NotificationPreferences] = {}
+
+    async def get(self, tenant_id: object) -> NotificationPreferences | None:
+        return self._store.get(tenant_id)
+
+    async def upsert(self, prefs: NotificationPreferences) -> None:  # type: ignore[override]
+        self._store[prefs.tenant_id] = prefs
+
+
 class FakeAlertPreferenceRepository(AlertPreferenceRepository):
     """In-memory alert preference store keyed by (user_id, alert_type)."""
 
@@ -723,6 +738,7 @@ class FakeUnitOfWork(UnitOfWork):
         self._brokerage_sync_errors = FakeBrokerageTransactionSyncErrorRepository()
         self._auth_audit_log = FakeAuthAuditLogRepository()
         self._portfolio_value_snapshots = FakePortfolioValueSnapshotRepository()
+        self._notification_preferences = FakeNotificationPreferencesRepository()
         self.committed = False
         self.rolled_back = False
         self.commit_count = 0
@@ -790,6 +806,10 @@ class FakeUnitOfWork(UnitOfWork):
     @property
     def portfolio_value_snapshots(self) -> FakePortfolioValueSnapshotRepository:
         return self._portfolio_value_snapshots
+
+    @property
+    def notification_preferences(self) -> FakeNotificationPreferencesRepository:
+        return self._notification_preferences
 
     async def commit(self) -> None:
         self.committed = True

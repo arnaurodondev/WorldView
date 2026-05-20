@@ -12,11 +12,11 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime
-from enum import Enum
+from enum import StrEnum
 from uuid import UUID
 
 
-class UploadStatus(str, Enum):
+class UploadStatus(StrEnum):
     """Lifecycle states for a tenant-uploaded document."""
 
     PROCESSING = "processing"

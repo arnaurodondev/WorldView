@@ -229,6 +229,13 @@ export function useTriggerNarrativeGeneration(entityId: string) {
         },
       );
     },
+    // WHY retry (CRIT-006 / FR-8.1): POST /v1/entities/{id}/narratives/generate
+    // returns 202 Accepted (async job queue) — safe to retry on transient 5xx/
+    // network failures. 429 Too Many Requests is handled in NarrativeCard's
+    // onSuccess toast; retries won't fire on 4xx (TanStack default).
+    retry: 3,
+    retryDelay: (attemptIndex: number) =>
+      Math.min(1000 * 2 ** (attemptIndex - 1), 4000),
     onSuccess: () => {
       // WHY invalidate intelligence: current_narrative will update ~30s after
       // the generation completes. Invalidating now triggers a refetch that will

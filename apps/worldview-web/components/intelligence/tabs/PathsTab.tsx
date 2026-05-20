@@ -28,12 +28,15 @@
 
 "use client";
 
-import { useEffect } from "react";
+import { useEffect, useMemo } from "react";
+import { useQuery } from "@tanstack/react-query";
+import { useApiClient } from "@/lib/api-client";
 import { useEntityPaths } from "@/lib/api/intelligence";
 import { Skeleton } from "@/components/ui/skeleton";
 import { RefreshCw } from "lucide-react";
 import { cn } from "@/lib/utils";
 import type { PathInsightPublic, PathNodePublic, PathEdgePublic } from "@/types/intelligence";
+import type { EntityGraph } from "@/types/api";
 
 // ── Props ─────────────────────────────────────────────────────────────────────
 
@@ -205,7 +208,26 @@ function PathCard({
 // ── PathsTab component ────────────────────────────────────────────────────────
 
 export function PathsTab({ entityId, selectedEntityId }: PathsTabProps) {
+  const gw = useApiClient();
   const { data, isLoading, isError, refetch } = useEntityPaths(entityId);
+
+  // WHY read graph cache for node labels:
+  // The "Filtered to:" banner shows the selected entity's name, not its UUID.
+  // We read from the same queryKey as RelationsTab/EvidenceTab — guaranteed
+  // cache hit (no extra network fetch) when GraphPanel is mounted. FR-3.2 MED-009.
+  const { data: graphData } = useQuery<EntityGraph | null>({
+    queryKey: ["intelligence-graph", entityId, 2, false],
+    queryFn: () => gw.getEntityGraph(entityId, 2, "all"),
+    staleTime: 60_000,
+    enabled: !!entityId,
+  });
+
+  // Build node label lookup — same pattern as RelationsTab and EvidenceTab
+  const nodeLabelById = useMemo(() => {
+    const map = new Map<string, string>();
+    (graphData?.nodes ?? []).forEach((n) => map.set(n.id, n.label));
+    return map;
+  }, [graphData]);
 
   // WHY auto-refetch when any path has explanation_pending:
   // LLM explanation generation is async. After the user triggers a path
@@ -249,7 +271,20 @@ export function PathsTab({ entityId, selectedEntityId }: PathsTabProps) {
   }
 
   return (
-    <div className="h-full overflow-y-auto py-2">
+    <div className="h-full overflow-y-auto">
+      {/* WHY "Filtered to:" banner:
+          When a graph node is selected, cards highlight paths containing that entity.
+          This banner provides symmetric visual feedback (matching RelationsTab and
+          EvidenceTab) so the analyst knows the graph selection is active. FR-3.2 MED-009. */}
+      {selectedEntityId !== entityId && (
+        <div className="px-3 py-1.5 bg-primary/10 border-b border-border/50">
+          <p className="text-[10px] font-mono text-primary">
+            Filtered to: {nodeLabelById.get(selectedEntityId) ?? selectedEntityId}
+          </p>
+        </div>
+      )}
+
+      <div className="py-2">
       {/* Freshness indicator */}
       {data.freshness_ts && (
         <p className="px-3 pb-2 text-[10px] font-mono text-muted-foreground">
@@ -272,6 +307,7 @@ export function PathsTab({ entityId, selectedEntityId }: PathsTabProps) {
           selectedEntityId={selectedEntityId}
         />
       ))}
+      </div>
     </div>
   );
 }

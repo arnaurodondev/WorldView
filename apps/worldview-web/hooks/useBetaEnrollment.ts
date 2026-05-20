@@ -67,6 +67,11 @@ export function usePatchBetaEnrollment() {
 
   return useMutation<BetaEnrollment, Error, BetaEnrollmentPatch>({
     mutationFn: (payload) => createGateway(accessToken).patchBetaEnrollment(payload),
+    // WHY retry (CRIT-006 / FR-8.1): PATCH patchBetaEnrollment has upsert semantics
+    // (idempotent — applying the same enrollment payload twice is a no-op).
+    retry: 3,
+    retryDelay: (attemptIndex: number) =>
+      Math.min(1000 * 2 ** (attemptIndex - 1), 4000),
     onSuccess: (row) => {
       // WHY setQueryData over invalidateQueries: server returns the
       // canonical row in the PATCH response. Writing it directly avoids a

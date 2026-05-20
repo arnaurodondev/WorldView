@@ -91,3 +91,22 @@ out.txt
 # Non-project directories
 SF_trip/
 meshx-ai-engineers/
+resumes-*/
+/thesis/
+/tgf_memory/
+
+# Personal files (resume, cover letters) at repo root — not project artifacts
+arnau_*.typ
+arnau_*.pdf
+*.pdf
+
+# Claude Code local settings (machine-specific; each dev has their own)
+.claude/settings.local.json
+
+# Personal workflow skills (not project-agnostic; not for public repo)
+.claude/skills/resume-advisor/
+.claude/skills/mvp-advisor/
+.claude/skills/thesis-write/
+.claude/thesis/
+.claude/backend-audit/
+.claude/frontend-audit/

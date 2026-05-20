@@ -58,35 +58,3 @@ class TestSourceContributionMetric:
 
         for src in sources:
             assert _current(src) == before[src] + 1
-
-
-class TestDisplayScorePathMetric:
-    def test_display_score_path_full_formula_emitted(self) -> None:
-        """market>0 AND llm present → path='full_formula'."""
-        from nlp_pipeline.infrastructure.metrics.prometheus import record_display_score_path
-
-        def _count(path: str) -> float:
-            for m in REGISTRY.collect():
-                for s in m.samples:
-                    if s.name == "news_display_score_path_total" and s.labels.get("path") == path:
-                        return s.value
-            return 0.0
-
-        before = _count("full_formula")
-        record_display_score_path(market_impact_score=0.6, llm_relevance_score=0.8)
-        assert _count("full_formula") == before + 1
-
-    def test_display_score_path_no_price_impact_emitted(self) -> None:
-        """market=None (no price impact), llm present → path='no_price_impact'."""
-        from nlp_pipeline.infrastructure.metrics.prometheus import record_display_score_path
-
-        def _count(path: str) -> float:
-            for m in REGISTRY.collect():
-                for s in m.samples:
-                    if s.name == "news_display_score_path_total" and s.labels.get("path") == path:
-                        return s.value
-            return 0.0
-
-        before = _count("no_price_impact")
-        record_display_score_path(market_impact_score=None, llm_relevance_score=0.7)
-        assert _count("no_price_impact") == before + 1

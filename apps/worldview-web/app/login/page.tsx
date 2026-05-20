@@ -176,6 +176,18 @@ function LoginContent() {
   const handleDevLogin = useCallback(async () => {
     setIsDevLoggingIn(true);
     setError(null);
+
+    // FR-7.2: hard timeout guard — if the dev-login round-trip hangs (e.g.
+    // the API Gateway is slow to respond), the loading spinner would never
+    // clear without this. After 5 s we abort the in-progress visual state and
+    // show an error so the user can retry or diagnose the issue.
+    // WHY 5 s: long enough for a cold-start Docker container but short enough
+    // that a broken gateway doesn't leave the login button permanently disabled.
+    const hardTimeout = window.setTimeout(() => {
+      setIsDevLoggingIn(false);
+      setError("Dev login timed out after 5 s. Is the API Gateway running?");
+    }, 5000);
+
     try {
       const gw = createGateway();
       const response = await gw.devLogin();
@@ -184,7 +196,8 @@ function LoginContent() {
       // Navigate to the intended destination
       router.replace(redirectTo);
     } catch (err) {
-      setIsDevLoggingIn(false);
+      // eslint-disable-next-line no-console
+      console.error("[dev-login] failed:", err);
       if (err instanceof GatewayError && err.status === 403) {
         // 403 means OIDC is actually configured — shouldn't happen but handle gracefully
         setDevLoginAvailable(false);
@@ -192,6 +205,14 @@ function LoginContent() {
       } else {
         setError(err instanceof Error ? err.message : "Dev login failed. Is the API Gateway running?");
       }
+    } finally {
+      // WHY clearTimeout in finally: if the request succeeds (router.replace
+      // triggers navigation) or fails (catch block sets error), we must cancel
+      // the hard-timeout timer so it doesn't fire after the component has
+      // already cleaned up. finally guarantees this runs even if the try block
+      // throws synchronously.
+      clearTimeout(hardTimeout);
+      setIsDevLoggingIn(false);
     }
   }, [redirectTo, router, setTokens]);
 
@@ -282,20 +303,18 @@ function LoginContent() {
         )}
 
         {/* Dev Login — shown only when Zitadel OIDC is not configured.
-            WHY separate button: Makes it visually obvious that this is a dev-only
-            shortcut, not the real auth flow. The amber outline reinforces this. */}
+            FR-7.3: restyled to ghost/muted (was amber/warning) so it does not
+            read as a "warning" CTA in local dev — it is a neutral shortcut.
+            Amber was visually alarming; muted-foreground communicates "secondary
+            tool" without implying an error state. */}
         {devLoginAvailable && (
           <div className="space-y-3">
             <Button
               onClick={() => void handleDevLogin()}
               disabled={isDevLoggingIn}
-              variant="outline"
-              // WHY border-warning + text-warning (was off-palette amber-500):
-              // --warning is the Terminal Dark amber token; using it keeps the
-              // dev-login affordance aligned with the rest of the warning UI
-              // language (stale badges, attention chips). Same visual hue,
-              // managed via design token instead of a stale Tailwind shorthand.
-              className="w-full border-warning/50 text-warning hover:bg-warning/10"
+              // FR-7.3: ghost variant + muted text instead of amber/warning border.
+              variant="ghost"
+              className="w-full text-[11px] text-muted-foreground hover:text-foreground"
               size="lg"
             >
               {isDevLoggingIn ? "Signing in…" : "Dev Login (no Zitadel)"}

@@ -19,9 +19,15 @@ import sys
 from datetime import UTC, datetime
 from pathlib import Path
 
-MEMORY_DIR_DEFAULT = (
-    Path.home() / ".claude/projects/-Users-arnaurodon-Projects-University-final-thesis-worldview/memory"
-)
+
+def _default_memory_dir() -> Path:
+    """Derive the Claude memory dir from the current repo path (works for any checkout location)."""
+    repo_root = Path(__file__).parent.parent.resolve()
+    slug = str(repo_root).replace("/", "-").lstrip("-")
+    return Path.home() / ".claude/projects" / slug / "memory"
+
+
+MEMORY_DIR_DEFAULT = _default_memory_dir()
 DEFAULT_STALE_DAYS = 60
 ENTRYPOINT_MAX_LINES = 200
 ENTRYPOINT_MAX_BYTES = 25_000

@@ -43,7 +43,7 @@ services/nlp-pipeline  → 551 passed, 0 failed  (unit only)
 
 ### Container State
 
-Docker Desktop socket (`/Users/arnaurodon/.docker/run/docker.sock`) is absent at audit
+Docker Desktop socket (`/var/run/docker.sock`) is absent at audit
 time — Docker Desktop crashed or was stopped between the iter-1 and iter-2 sessions.
 The API gateway is unreachable (port 8000 connection refused). Containers cannot be
 rebuilt or re-hit. Endpoint validation is blocked until Docker is restarted.
@@ -81,7 +81,7 @@ rebuilt or re-hit. Endpoint validation is blocked until Docker is restarted.
 
 - **Severity**: BLOCKING
 - **Wave**: All (operational)
-- **File**: Host OS docker socket (`/Users/arnaurodon/.docker/run/docker.sock`)
+- **File**: Host OS docker socket (`/var/run/docker.sock`)
 - **Issue**: Docker Desktop socket is absent. All `docker inspect`, `docker compose build`, and `curl` calls to `localhost:8000` fail. Container creation timestamps (api-gateway `2026-04-29T09:13:37Z`, market-data `2026-04-29T09:13:38Z`, nlp-pipeline `2026-04-29T09:13:38Z`) predate all iter-1 fix commits by 38 minutes (commits at 09:51–10:01 UTC). Docker images similarly predate the commits (image build: 09:13 CEST, fix commit: 11:51 CEST). The F-Q1-01 ship checklist was added to the plan, but the containers were never rebuilt with iter-1 code.
 
   Live verification required for:
@@ -96,7 +96,7 @@ rebuilt or re-hit. Endpoint validation is blocked until Docker is restarted.
   docker images worldview-api-gateway --format "{{.CreatedAt}}"  → 2026-04-29 11:13:14 +0200 CEST
   git show --format="%ci" 03f6298                                → 2026-04-29 11:51:31 +0200 CEST
   curl http://localhost:8000/v1/auth/health                      → Connection refused
-  /Users/arnaurodon/.docker/run/docker.sock                      → No such file
+  /var/run/docker.sock                      → No such file
   ```
 - **Suggestion**: Restart Docker Desktop, then run:
   ```bash

@@ -33,10 +33,30 @@ _DB_URL = os.getenv(
 )
 
 
+def _make_e2e_system_jwt() -> str:
+    """Generate a HS256 JWT accepted by InternalJWTMiddleware in skip_verification mode."""
+    import time
+
+    import jwt as _jwt
+
+    payload = {
+        "iss": "worldview-gateway",
+        "sub": "e2e-system-user",
+        "tenant_id": "e2e-tenant",
+        "role": "system",
+        "iat": int(time.time()),
+        "exp": int(time.time()) + 3600,
+    }
+    return _jwt.encode(payload, "e2e-secret", algorithm="HS256")
+
+
+_INTERNAL_JWT = _make_e2e_system_jwt()
+
+
 @pytest.fixture
 async def e2e_client() -> AsyncGenerator[AsyncClient, None]:
     """HTTP client pointing at the live market-ingestion service on localhost:8002."""
-    async with AsyncClient(base_url=_BASE_URL, timeout=30.0) as ac:
+    async with AsyncClient(base_url=_BASE_URL, timeout=30.0, headers={"X-Internal-JWT": _INTERNAL_JWT}) as ac:
         yield ac
 
 

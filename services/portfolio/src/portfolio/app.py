@@ -218,7 +218,9 @@ def create_app() -> FastAPI:
         from sqlalchemy import text
 
         # F-003B: JWKS public key must be loaded before accepting traffic.
-        if getattr(app.state, "_internal_jwt_public_key", None) is None:
+        # Exception: when skip_verification=True the key is intentionally absent (test/dev profiles).
+        skip_jwt = getattr(app.state, "_internal_jwt_skip_verification", False)
+        if not skip_jwt and getattr(app.state, "_internal_jwt_public_key", None) is None:
             return FastAPIResponse(
                 content=_json.dumps({"status": "unavailable", "reason": "jwks_not_loaded"}),
                 status_code=503,

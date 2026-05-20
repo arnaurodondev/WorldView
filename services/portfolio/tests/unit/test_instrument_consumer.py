@@ -160,6 +160,12 @@ class FakeUoW(UnitOfWork):
     def beta_enrollments(self):
         return MagicMock()
 
+    # W1-BACKEND: notification preferences (MED-022) — unused in this consumer
+    # but required to satisfy the ReadOnlyUnitOfWork ABC.
+    @property
+    def notification_preferences(self):
+        return MagicMock()
+
     async def commit(self) -> None:
         self._committed = True
 

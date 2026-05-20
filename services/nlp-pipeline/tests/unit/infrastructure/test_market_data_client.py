@@ -245,6 +245,15 @@ class TestMarketDataClientInternalJWT:
     @pytest.mark.asyncio
     async def test_falls_back_to_no_header_when_gateway_unreachable(self, httpx_mock: pytest_httpx.HTTPXMock) -> None:
         """If dev-login fails, fall back to unauthenticated request (preserve 401-and-warn)."""
+        # Two 503 mocks: _get_internal_jwt is called once before ticker-resolve
+        # and once before OHLCV fetch; each failed mint leaves _token=None so the
+        # cache is not populated and both calls hit the endpoint.
+        httpx_mock.add_response(
+            method="POST",
+            url="http://api-gateway:8000/v1/auth/dev-login",
+            status_code=503,
+            text="gateway down",
+        )
         httpx_mock.add_response(
             method="POST",
             url="http://api-gateway:8000/v1/auth/dev-login",
@@ -420,6 +429,15 @@ class TestMarketDataClientServiceToken:
         401-and-warn fallback behaviour without leaking attempts to a
         secondary auth path that the operator deliberately disabled.
         """
+        # Two 401 mocks: _get_internal_jwt is called once before ticker-resolve and
+        # once before OHLCV fetch; failed service-token mints don't populate _token
+        # so each inner request retries the service-token endpoint independently.
+        httpx_mock.add_response(
+            method="POST",
+            url="http://api-gateway:8000/internal/v1/service-token",
+            status_code=401,
+            json={"error": "unauthorized"},
+        )
         httpx_mock.add_response(
             method="POST",
             url="http://api-gateway:8000/internal/v1/service-token",

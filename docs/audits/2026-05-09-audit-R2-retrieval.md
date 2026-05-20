@@ -330,16 +330,16 @@ The smoke probe (`scripts/eval_retrieval.py:945`) uses static `EVAL_INTERNAL_JWT
 
 ## 7. Evidence inventory (relevant absolute paths)
 
-- Eval result: `/Users/arnaurodon/Projects/University/final_thesis/worldview/results/eval_20260509T171834Z.json`
-- Prior baseline: `/Users/arnaurodon/Projects/University/final_thesis/worldview/results/eval_20260509T161035Z.json`
-- Golden set: `/Users/arnaurodon/Projects/University/final_thesis/worldview/tests/eval/golden/queries.jsonl`
-- Eval harness: `/Users/arnaurodon/Projects/University/final_thesis/worldview/scripts/eval_retrieval.py` (line 302 id-matching, line 945 smoke probe, line 555 timeout)
-- Orchestrator: `/Users/arnaurodon/Projects/University/final_thesis/worldview/services/rag-chat/src/rag_chat/application/pipeline/retrieval_orchestrator.py` (line 168-199 no dedup, line 268-269 date_from)
-- Plan builder: `/Users/arnaurodon/Projects/University/final_thesis/worldview/services/rag-chat/src/rag_chat/application/pipeline/retrieval_plan_builder.py` (line 115-126 GENERAL flags)
-- Eval use case: `/Users/arnaurodon/Projects/University/final_thesis/worldview/services/rag-chat/src/rag_chat/application/use_cases/retrieve_only.py` (line 85 date_range plumb-through, line 113 no fusion)
-- Internal route: `/Users/arnaurodon/Projects/University/final_thesis/worldview/services/rag-chat/src/rag_chat/api/routes/internal.py` (line 25 RetrieveRequest has no date_range)
-- Fusion: `/Users/arnaurodon/Projects/University/final_thesis/worldview/services/rag-chat/src/rag_chat/application/pipeline/fusion.py` (line 118-144 dedup by doc_id only)
-- FTS use case: `/Users/arnaurodon/Projects/University/final_thesis/worldview/services/nlp-pipeline/src/nlp_pipeline/application/use_cases/search_documents.py` (line 262 published_at via S5 only)
+- Eval result: `results/eval_20260509T171834Z.json`
+- Prior baseline: `results/eval_20260509T161035Z.json`
+- Golden set: `tests/eval/golden/queries.jsonl`
+- Eval harness: `scripts/eval_retrieval.py` (line 302 id-matching, line 945 smoke probe, line 555 timeout)
+- Orchestrator: `services/rag-chat/src/rag_chat/application/pipeline/retrieval_orchestrator.py` (line 168-199 no dedup, line 268-269 date_from)
+- Plan builder: `services/rag-chat/src/rag_chat/application/pipeline/retrieval_plan_builder.py` (line 115-126 GENERAL flags)
+- Eval use case: `services/rag-chat/src/rag_chat/application/use_cases/retrieve_only.py` (line 85 date_range plumb-through, line 113 no fusion)
+- Internal route: `services/rag-chat/src/rag_chat/api/routes/internal.py` (line 25 RetrieveRequest has no date_range)
+- Fusion: `services/rag-chat/src/rag_chat/application/pipeline/fusion.py` (line 118-144 dedup by doc_id only)
+- FTS use case: `services/nlp-pipeline/src/nlp_pipeline/application/use_cases/search_documents.py` (line 262 published_at via S5 only)
 
 ---
 

@@ -86,11 +86,10 @@ function Stat({
 }) {
   return (
     <span className="flex items-baseline gap-1 shrink-0">
-      {/* WHY text-[10px] for label: §0.1 label typography — same as ALL column headers */}
-      {/* WHY font-mono: ADR-F-15 — all data labels use IBM Plex Mono */}
-      <span className="text-[10px] text-muted-foreground font-mono">{label}</span>
-      {/* WHY font-mono tabular-nums: §0.1 data value typography — EVERY numeric value */}
-      <span className={`text-[10px] font-mono tabular-nums ${valueClass}`}>{value}</span>
+      {/* PLAN-0090 T-B-01 spec: 10px uppercase muted label, 11px mono tabular
+          value. Uppercase + 1px size gap mimics the Bloomberg O/H/L/V row. */}
+      <span className="text-[10px] uppercase text-muted-foreground font-mono">{label}</span>
+      <span className={`text-[11px] font-mono tabular-nums ${valueClass}`}>{value}</span>
     </span>
   );
 }
@@ -98,7 +97,7 @@ function Stat({
 // ── Component ─────────────────────────────────────────────────────────────────
 
 /**
- * SessionStatsStrip — 20px height bar showing O/H/L/V/VWAP.
+ * SessionStatsStrip — 22px height bar showing O/H/L/V/VWAP (T-B-01 density spec).
  *
  * Rendered as a pure display row — no interactive elements, no state,
  * no data fetching. The parent is responsible for providing last OHLCV bar data.
@@ -111,18 +110,13 @@ export function SessionStatsStrip({
   vwap,
 }: SessionStatsStripProps) {
   return (
-    // WHY h-5 (20px): §0.2 layout density — strip is intentionally thinner than
-    // a full data row (22px) because it is supplemental context, not primary data.
-    // WHY bg-background (was bg-card): using bg-card created a visible seam against
-    // the OHLCV chart which is bg-background. Unified to bg-background eliminates
-    // the Z-seam that traders reported as visual noise (T-B-2-01).
-    // WHY border-b: separates from the timeframe selector bar below.
+    // PLAN-0090 T-B-01 spec: strip is exactly 22px tall (h-[22px]) to match the
+    // standard data-row density used across the Quote tab. bg-background avoids
+    // the seam against the chart canvas (T-B-2-01). px-3 mirrors metrics rows.
+    // overflow-x-auto + min-w-0 retained from PLAN-0050 T-F-6-10 so the O/H/L/V
+    // cluster scrolls horizontally on tablet-width viewports rather than clipping.
     <div
-      // PLAN-0050 T-F-6-10 (closes F-I-022): added overflow-x-auto + min-w-0
-      // so the strip can scroll horizontally on tablet-width viewports (the
-      // O/H/L/V/VWAP cluster is ~280px and would clip on narrow shells).
-      // Children keep whitespace-nowrap via the inline Stat component.
-      className="flex h-5 min-w-0 items-center gap-3 overflow-x-auto border-b border-border bg-background px-3"
+      className="flex h-[22px] min-w-0 items-center gap-4 overflow-x-auto border-b border-border/50 bg-background px-3"
       aria-label="Session statistics"
     >
       <Stat label="O" value={fmtPrice(open)} />

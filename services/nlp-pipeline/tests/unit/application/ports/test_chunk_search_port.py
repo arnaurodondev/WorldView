@@ -194,7 +194,7 @@ class TestEnhancedChunkSearchWithStub:
             valkey=valkey,
         )
 
-        results, total, model = await uc.execute(
+        results, total, _model = await uc.execute(
             query_text=None,
             query_embedding=_DUMMY_VEC,
         )

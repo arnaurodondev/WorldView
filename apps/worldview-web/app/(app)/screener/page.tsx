@@ -238,9 +238,11 @@ export default function ScreenerPage() {
   });
 
   // ── AG Grid column definitions ────────────────────────────────────────────
+  // FR-4.5: pass sparklineSuppressed so the TREND column renders "—" (not an
+  // empty flat line) when >200 rows are loaded and sparkline fetch is skipped.
   const agColumns = useMemo(
-    () => createAgScreenerColumns(sparklines),
-    [sparklines],
+    () => createAgScreenerColumns(sparklines, sparklineSuppressed),
+    [sparklines, sparklineSuppressed],
   );
 
   // ── Export columns ────────────────────────────────────────────────────────
@@ -354,7 +356,11 @@ export default function ScreenerPage() {
           getRowId={(p) => p.data.instrument_id}
           onGridReady={handleGridReady}
           onRowClicked={(row) =>
-            router.push(`/instruments/${row.instrument_id ?? row.entity_id}`)
+            // FR-4.1: entity_id is always present and non-null (ScreenerResult guarantees
+            // both fields as string). Navigate via entity_id — the canonical KG identifier
+            // that the instrument detail page expects. instrument_id is the S3 data ID;
+            // entity_id is the stable cross-service bridge (ADR-F-12).
+            router.push(`/instruments/${row.entity_id}`)
           }
           className="flex-1"
         />

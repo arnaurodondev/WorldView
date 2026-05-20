@@ -6,7 +6,7 @@ A Python + TypeScript monorepo for financial intelligence — portfolio manageme
 
 ---
 
-## Quick Start (< 10 minutes)
+## Quick Start (no API keys required)
 
 ```bash
 # 1. Clone
@@ -15,10 +15,12 @@ git clone <repo-url> worldview && cd worldview
 # 2. Bootstrap (installs venvs, hooks, checks Docker)
 ./scripts/bootstrap.sh
 
-# 3. Fetch secrets (API keys, OIDC credentials)
-make fetch-secrets
+# 3. Create service env files from examples (all defaults — no keys needed for basic run)
+for svc in services/*/configs; do
+  [ -f "$svc/dev.local.env.example" ] && cp "$svc/dev.local.env.example" "$svc/docker.env"
+done
 
-# 4. Start full platform (infra + services + dev tools)
+# 4. Start full platform (infra + services + dev tools; ~5–10 min on first run)
 make dev
 
 # 5. Load sample data (first launch only)
@@ -26,6 +28,9 @@ make seed
 
 # 6. Open http://localhost:3001 → click "Dev Login"
 ```
+
+> **With API keys**: See [CONTRIBUTING.md](CONTRIBUTING.md) for optional configuration of
+> EODHD, DeepInfra, and Zitadel for live market data and full AI pipelines.
 
 Other useful Make targets: `make dev-down` (stop), `make dev-logs` (tail logs), `make dev-ps` (status), `make dev-reset` (clean slate), `make dev-rebuild` (rebuild images).
 
@@ -53,7 +58,8 @@ cd apps/worldview-web && pnpm dev    # → http://localhost:3001
 │  worldview-web    │   Next.js 15 (App Router)
 │    :3001          │   shadcn/ui + TanStack Query
 └────────┬──────────┘
-         │ /api/* rewrite
+         │ /api/* rewrite (HTTP)
+         │ ws://:8010 (WebSocket alerts — ADR-F-02 exception)
 ┌────────▼──────────┐
 │ S9 API Gateway    │   FastAPI BFF — auth, routing, caching
 │   :8000           │   OIDC/PKCE (Zitadel) + RS256 internal JWT
@@ -75,6 +81,7 @@ cd apps/worldview-web && pnpm dev    # → http://localhost:3001
 └───────────────┘  └──────────────────┘  └──────────────────┘
 
 Infrastructure: PostgreSQL 16 + TimescaleDB + pgvector + AGE │ Kafka │ MinIO │ Valkey │ Ollama
+LLM: DeepInfra (primary — embeddings, LLM, extraction) │ Ollama (local GLiNER only)
 ```
 
 ---
@@ -84,8 +91,7 @@ Infrastructure: PostgreSQL 16 + TimescaleDB + pgvector + AGE │ Kafka │ MinIO
 ```
 worldview/
 ├── apps/
-│   ├── worldview-web/       # Next.js 15 — canonical production frontend
-│   └── frontend/            # React + Vite — legacy (being phased out)
+│   └── worldview-web/       # Next.js 15 — canonical production frontend
 ├── services/                # 10 FastAPI microservices
 │   ├── portfolio/           # S1 — Multi-tenant portfolio management
 │   ├── market-ingestion/    # S2 — Market data ingestion & scheduling
@@ -97,13 +103,15 @@ worldview/
 │   ├── rag-chat/            # S8 — RAG-powered conversational AI
 │   ├── api-gateway/         # S9 — BFF API gateway (auth, routing, caching)
 │   └── alert-service/       # S10 — Alert fan-out, email, WebSocket
-├── libs/                    # 6 shared Python libraries
+├── libs/                    # 8 shared Python libraries
 │   ├── common/              # Time, IDs, type aliases
 │   ├── contracts/           # Canonical data models, event envelopes
 │   ├── messaging/           # Kafka, Avro, outbox, Valkey
 │   ├── storage/             # S3/MinIO abstraction
 │   ├── observability/       # structlog, Prometheus, OpenTelemetry
-│   └── ml-clients/          # LLM provider abstractions (Ollama, Groq, OpenRouter)
+│   ├── ml-clients/          # LLM provider abstractions (DeepInfra, Groq, OpenRouter, Ollama)
+│   ├── prompts/             # LLM prompt templates
+│   └── tools/               # LLM tool manifest + capability registry
 ├── infra/                   # Infrastructure configs
 │   ├── kafka/schemas/       # Avro schemas (.avsc)
 │   ├── postgres/init/       # DB init scripts (11 databases)
@@ -126,7 +134,6 @@ worldview/
 | `./scripts/bootstrap.sh` | One-time setup (venvs, hooks, Docker check) |
 | `make dev` | Start full platform with dev tools (MailHog, pgweb, kafka-ui) |
 | `make seed` | Load sample data for local development |
-| `make fetch-secrets` | Pull credentials from private `worldview-config` repo |
 | `make dev-down` / `make dev-reset` | Stop platform / stop + remove volumes |
 | `cd services/<name> && make run` | Run a single service locally (hot-reload) |
 | `cd apps/worldview-web && pnpm dev` | Frontend dev server (http://localhost:3001) |
@@ -171,11 +178,10 @@ See [Local Development Guide](docs/workflows/local-dev.md) for detailed setup an
 | S3 Market Data | 8003 | MinIO API / Console | 7480 / 7481 |
 | S4 Content Ingestion | 8004 | Valkey | 6379 |
 | S5 Content Store | 8005 | Ollama | 11434 |
-| S6 NLP Pipeline | 8006 | Kafka UI | 8090 |
-| S7 Knowledge Graph | 8007 | pgweb | 8091 |
+| S6 NLP Pipeline | 8006 | Kafka UI (dev) | 8092 |
+| S7 Knowledge Graph | 8007 | pgweb (dev) | 8091 |
 | S8 RAG / Chat | 8008 | Frontend (worldview-web) | 3001 |
-| S10 Alert | 8010 | Frontend (legacy Vite) | 5173 |
-| | | MailHog UI (dev) | 8025 |
+| S10 Alert | 8010 | MailHog UI (dev) | 8025 |
 
 ---
 
@@ -214,12 +220,30 @@ See [Local Development Guide](docs/workflows/local-dev.md) for detailed setup an
 | Object Storage | MinIO (S3-compatible) |
 | Cache | Valkey (Redis-compatible) |
 | Auth | Zitadel (OIDC/PKCE) + RS256 internal JWT |
-| LLM | Ollama (local) → Groq → OpenRouter |
+| LLM | DeepInfra (primary) → Groq → OpenRouter · Ollama (GLiNER NER only) |
 | Observability | structlog + Prometheus + OpenTelemetry + Grafana |
 | Linting | Ruff + mypy (Python) · ESLint (TypeScript) |
 | Testing | pytest (backend) · Vitest + Playwright (frontend) |
 | CI | GitHub Actions |
 | IaC | OpenTofu (Hetzner production) |
+
+---
+
+## External Dependencies
+
+Worldview uses several external APIs. The table below shows what is required and what is optional for local development:
+
+| Dependency | Required for dev? | Free tier? | Purpose |
+|------------|------------------|------------|---------|
+| **Docker Desktop** | Yes | Yes | Run the full stack |
+| **EODHD** | No (seed data included) | $0 / 20 req/day | Market data, news |
+| **DeepInfra** | No (Ollama fallback) | Free credits on sign-up | LLM, embeddings, NER |
+| **Zitadel** | No (Dev Login button) | Free self-hosted / cloud | OIDC authentication |
+| **TastyTrade** | No | Yes (paper account) | Brokerage sync |
+
+**Minimum viable local setup**: Docker Desktop only. Use `make dev` + `make seed` to load the bundled sample data, then click "Dev Login" — no API keys needed.
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for a step-by-step setup guide.
 
 ---
 

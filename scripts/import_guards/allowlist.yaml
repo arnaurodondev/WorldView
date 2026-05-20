@@ -147,6 +147,53 @@ allowlist:
       SSE stream lifetime.  Not a module-level import.  Same pattern as
       api/dependencies.py which is correctly not flagged.
 
+  # The documents router wires infrastructure adapters (OutboxRepository,
+  # TenantDocumentUploadRepository, TenantDedupHashRepository, UploadRateLimitAdapter)
+  # inside route-handler function bodies — not at module scope. Each handler opens
+  # a single shared session and passes the repos/adapters directly to the use case
+  # constructor, keeping the transaction atomic. Moving this wiring into separate
+  # Depends() factories would require exposing session-factory internals outside the
+  # route (disproportionate complexity for four handlers). All business logic remains
+  # in the use cases; the router contains only DI assembly code.
+  # Tracked in: PLAN-0086 Wave E-2 (content-ingestion tenant upload pipeline).
+  - rule_id: IG-LAYER-002
+    path: "services/content-ingestion/src/content_ingestion/api/routes/documents.py"
+    reason: >
+      All infrastructure imports are local (inside route handler bodies), used solely
+      for DI assembly within a shared SQLAlchemy session. No business logic lives in
+      the router — it delegates entirely to UploadTenantDocumentUseCase,
+      GetTenantDocumentUseCase, ListTenantDocumentsUseCase, and DeleteTenantDocumentUseCase.
+
+  # The search_documents route imports three Prometheus metric objects from
+  # infrastructure.metrics.prometheus inside the route handler body (not at module
+  # scope) to record latency and result counts. Prometheus metrics are cross-cutting
+  # observability concerns — they contain no business logic, no DB access, and no
+  # mutable state. Moving them to application/ would be architecturally misleading
+  # (observability infrastructure does not belong in the application layer).
+  # The handler comment explicitly documents WHY the import is inside the body.
+  # Tracked in: PLAN-0064 W6 (nlp-pipeline FTS search endpoint).
+  - rule_id: IG-LAYER-002
+    path: "services/nlp-pipeline/src/nlp_pipeline/api/routes/search_documents.py"
+    reason: >
+      Prometheus counter/histogram imports are local (inside handler body) and are
+      cross-cutting observability concerns — no business logic. Moving them to
+      application/ would misplace infrastructure telemetry. Pattern mirrors the
+      rag-chat/chat.py precedent already in this allowlist.
+
+  # The public_briefings router imports BriefFeedbackRepository inside two POST
+  # route handler bodies (submit_bullet_feedback and submit_brief_feedback) to
+  # wire it into BriefFeedbackUseCase. The use case owns all business logic; the
+  # router only assembles the dependency. The UoW session is provided via UoWDep
+  # (FastAPI dependency injection) and is passed through to the repository
+  # constructor so all writes share a single transaction (R5 outbox pattern).
+  # Tracked in: PLAN-0066 Wave C (rag-chat brief feedback endpoints).
+  - rule_id: IG-LAYER-002
+    path: "services/rag-chat/src/rag_chat/api/routes/public_briefings.py"
+    reason: >
+      BriefFeedbackRepository is imported locally inside two route handler bodies
+      for DI wiring only. Business logic lives in BriefFeedbackUseCase. The pattern
+      matches the existing chat.py allowlist entry in this file.
+
   # ─── Service-level utility scripts ─────────────────────────────────────
   # Standalone scripts in services/*/scripts/ are init-container or CLI
   # utilities — they may use stdlib patterns for minimal dependencies.

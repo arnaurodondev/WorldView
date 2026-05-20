@@ -6,7 +6,7 @@
  */
 
 import type { EntityGraph, ContradictionsResponse, EntityPublic } from "@/types/api";
-import { apiFetch } from "./_client";
+import { apiFetch, GatewayError } from "./_client";
 
 export function createKnowledgeGraphApi(t: string | undefined) {
   return {
@@ -35,7 +35,7 @@ export function createKnowledgeGraphApi(t: string | undefined) {
      * @param entityId - Entity UUID
      * @param depth - Traversal depth: 1 = compact sidebar (SQL), 2/3 = AGE Cypher
      */
-    getEntityGraph(
+    async getEntityGraph(
       entityId: string,
       depth = 2,
       // WHY timeWindow param: the Intelligence tab filter toolbar lets analysts select
@@ -44,7 +44,13 @@ export function createKnowledgeGraphApi(t: string | undefined) {
       // S9 may ignore unknown params gracefully — the query is additive and never breaks
       // the response shape. "all" is the default (no param sent).
       timeWindow = "all",
-    ): Promise<EntityGraph> {
+      // WHY signal param (T-D-01 BUG 2): callers can pass an AbortSignal so they
+      // can enforce a client-side timeout (e.g. depth=3 backend queries often
+      // exceed 5s — we abort at 3s and surface a friendly fallback instead of
+      // showing a generic 504 / spinner-of-death).  The fetch() call propagates
+      // the signal so the underlying HTTP connection is torn down on abort.
+      signal?: AbortSignal,
+    ): Promise<EntityGraph | null> {
       // WHY separate limits per depth level:
       // S7 returns 1-hop direct relations only (no true multi-hop traverse). The
       // depth slider controls how many relations are returned — more relations =
@@ -92,21 +98,42 @@ export function createKnowledgeGraphApi(t: string | undefined) {
         params.set("time_window", timeWindow);
       }
 
-      return apiFetch<EntityGraph>(
-        `/v1/entities/${encodeURIComponent(entityId)}/graph?${params.toString()}`,
-        { token: t },
-      );
+      // T-D-01 BUG 2: forward the optional AbortSignal so callers can enforce a
+      // 3s client-side timeout for depth=3 graphs.  apiFetch spreads the options
+      // into fetch(), which natively understands `signal`.
+      // HIGH-011 / INC-003: mirror getEntityDetail's 404→null pattern so the
+      // entire entity domain is consistent — 404 means the entity has no graph
+      // edges yet, not an error callers need to handle.
+      try {
+        return await apiFetch<EntityGraph>(
+          `/v1/entities/${encodeURIComponent(entityId)}/graph?${params.toString()}`,
+          { token: t, signal },
+        );
+      } catch (err) {
+        if (err instanceof GatewayError && err.status === 404) return null;
+        throw err;
+      }
     },
 
     /**
      * getContradictions — detected contradictory claims for an entity
      * Used by Instrument Detail → Intelligence tab
+     *
+     * Returns null when the entity has no contradiction data yet (404 from S7).
+     * Mirrors getEntityDetail's 404→null pattern (HIGH-011 / INC-003).
      */
-    getContradictions(entityId: string): Promise<ContradictionsResponse> {
-      return apiFetch<ContradictionsResponse>(
-        `/v1/entities/${encodeURIComponent(entityId)}/contradictions`,
-        { token: t },
-      );
+    async getContradictions(entityId: string): Promise<ContradictionsResponse | null> {
+      try {
+        return await apiFetch<ContradictionsResponse>(
+          `/v1/entities/${encodeURIComponent(entityId)}/contradictions`,
+          { token: t },
+        );
+      } catch (err) {
+        // WHY catch here: 404 means no contradictions computed yet — not an error.
+        // Consistent with getEntityDetail and getEntityGraph (all return null on 404).
+        if (err instanceof GatewayError && err.status === 404) return null;
+        throw err;
+      }
     },
 
     /**
@@ -130,7 +157,7 @@ export function createKnowledgeGraphApi(t: string | undefined) {
       } catch (err) {
         // WHY catch here: 404 means enrichment has not run yet — not an error the
         // caller needs to handle.  All other errors propagate normally.
-        if (err instanceof Error && err.message.includes("404")) return null;
+        if (err instanceof GatewayError && err.status === 404) return null;
         throw err;
       }
     },

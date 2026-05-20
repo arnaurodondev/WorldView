@@ -272,6 +272,9 @@ async def test_factual_query_calls_search_documents():
     retrieved_item = _make_retrieved_item("search_documents")
     llm_response = _make_tool_response_with_calls("search_documents", {"query": "Apple 10-K risk factors"})
     pipeline, _llm_chain = _build_pipeline_mock(llm_response)
+    # On the second call chat_with_tools must return a direct answer so the agent loop
+    # breaks after one tool round-trip (max_iterations=8 would otherwise run it 8 times).
+    _llm_chain.chat_with_tools = AsyncMock(side_effect=[llm_response, _make_tool_response_direct_answer()])
     factory, executor = _build_tool_executor_factory_mock("search_documents", [retrieved_item])
 
     request = _make_chat_request("What risks does Apple mention in their latest 10-K?")
@@ -333,6 +336,9 @@ async def test_temporal_query_calls_price_history():
         {"ticker": "AAPL", "from_date": "2025-02-01", "to_date": "2025-05-01"},
     )
     pipeline, _llm_chain = _build_pipeline_mock(llm_response)
+    # On the second call chat_with_tools must return a direct answer so the agent loop
+    # breaks after one tool round-trip (max_iterations=8 would otherwise run it 8 times).
+    _llm_chain.chat_with_tools = AsyncMock(side_effect=[llm_response, _make_tool_response_direct_answer()])
     # Return a single item (not list) — orchestrator must handle both variants
     factory, executor = _build_tool_executor_factory_mock("get_price_history", retrieved_item)
 

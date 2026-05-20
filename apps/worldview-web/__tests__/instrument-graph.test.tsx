@@ -194,15 +194,18 @@ describe("EntityGraph", () => {
     expect(screen.queryByText("default")).not.toBeInTheDocument();
   });
 
-  it("renders the graph container with correct height class", () => {
-    // WHY: the 460px height is specified in PRD-0028 §6.5. Verifying the class
-    // ensures the graph maintains its designed proportions in the Intelligence tab.
+  it("renders the graph container with the canvas-wrapper height classes", () => {
+    // WHY: PLAN-0090 T-D-01 BUG 1 (black void) changed the wrapper from a
+    // fixed `h-[460px]` to `h-full w-full min-h-[460px]` so the canvas grows
+    // with its column instead of leaving a black gap below. We pin the new
+    // canonical class set so a future refactor cannot silently regress.
     render(
       <EntityGraph data={MOCK_GRAPH_DATA} centerEntityId="ent-001" />,
     );
 
-    // WHY querySelector: the outer container div has the h-[460px] class.
-    const container = document.querySelector(".h-\\[460px\\]");
+    // WHY min-h-[460px]: of the three new classes, min-h-[460px] is the most
+    // specific and the one PRD-0088 still requires for narrow layouts.
+    const container = document.querySelector(".min-h-\\[460px\\]");
     expect(container).toBeInTheDocument();
   });
 

@@ -106,7 +106,8 @@ CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_relation_evidence_source_diversity
 
 
 def downgrade() -> None:
-    op.execute("DROP INDEX CONCURRENTLY IF EXISTS idx_relation_evidence_source_diversity")
+    with op.get_context().autocommit_block():
+        op.execute("DROP INDEX CONCURRENTLY IF EXISTS idx_relation_evidence_source_diversity")
     op.execute("""
 ALTER TABLE relation_evidence_raw
     DROP COLUMN IF EXISTS source_name,

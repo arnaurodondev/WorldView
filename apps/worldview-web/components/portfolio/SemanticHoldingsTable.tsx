@@ -211,12 +211,28 @@ export function SemanticHoldingsTable({
   );
 
   // P6-2: Persist full column state to localStorage on any column change.
+  // MED-023: wrap in QuotaExceededError guard — localStorage fill-up (common
+  // when many workspaces + workspace panels are persisted) must not crash the
+  // UI. Columns still sort/reorder in-session; the layout just won't survive
+  // a page refresh. We log a console.warn so devs can detect the condition.
   const handleColumnStateChanged = useCallback(() => {
     const api = gridApiRef.current;
     if (!api) return;
     try {
       localStorage.setItem(HOLDINGS_COLS_KEY, JSON.stringify(api.getColumnState()));
-    } catch { /* ignore quota errors */ }
+    } catch (e) {
+      if (e instanceof DOMException && e.name === "QuotaExceededError") {
+        // Storage full — layout works in-session but won't persist across
+        // page refreshes. Silent failure is acceptable for column layout;
+        // logging warns devs without interrupting the trader's workflow.
+        console.warn("[AG Grid] Column layout persistence failed: storage quota exceeded");
+      }
+      // Re-throw any non-quota error so it surfaces in the error boundary
+      // rather than being silently swallowed (unexpected errors should not be hidden).
+      else {
+        throw e;
+      }
+    }
   }, []);
 
   // Context menu: intercept right-click, store row + mouse position.

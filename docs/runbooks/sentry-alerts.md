@@ -8,7 +8,7 @@
 
 ## Overview
 
-Four Sentry issue-alert rules are configured to email `arnaurodondev@gmail.com`
+Four Sentry issue-alert rules are configured to email `ops-alerts@your-domain.com`
 when significant error events occur. These rules complement the Grafana
 error-observability dashboard by providing push notification without requiring
 active monitoring of dashboards.
@@ -19,9 +19,9 @@ active monitoring of dashboards.
 
 ### Rule 1 — New Issue Created
 
-- **Name**: `New issue — email arnaurodondev`
+- **Name**: `New issue — email ops-alerts`
 - **Trigger**: A new issue is created (fires once per new fingerprint)
-- **Action**: Send email to `arnaurodondev@gmail.com`
+- **Action**: Send email to `ops-alerts@your-domain.com`
 - **Environments**: All (including prod and staging)
 - **Frequency**: Maximum 1 email per issue (Sentry deduplicates by fingerprint)
 - **Why**: First time a new exception class appears, you want to know immediately.
@@ -30,16 +30,16 @@ active monitoring of dashboards.
 
 ### Rule 2 — Issue Regression
 
-- **Name**: `Regression — email arnaurodondev`
+- **Name**: `Regression — email ops-alerts`
 - **Trigger**: An issue that has been resolved is seen again
-- **Action**: Send email to `arnaurodondev@gmail.com`
+- **Action**: Send email to `ops-alerts@your-domain.com`
 - **Why**: A previously-fixed bug reappearing is high-signal and warrants immediate attention.
 
 ### Rule 3 — Error Spike
 
-- **Name**: `Error spike — email arnaurodondev`
+- **Name**: `Error spike — email ops-alerts`
 - **Trigger**: An issue occurs more than 50 times in 1 hour
-- **Action**: Send email to `arnaurodondev@gmail.com`
+- **Action**: Send email to `ops-alerts@your-domain.com`
 - **Why**: Complements Rule 1 for cases where a known error suddenly spikes
   (e.g. a config change makes an existing error much more frequent).
 
@@ -48,7 +48,7 @@ active monitoring of dashboards.
 - **Name**: `Sentry quota 80%`
 - **Trigger**: Monthly event usage > 80%
 - **Location**: Organisation settings → Subscription → Usage alerts (not in project alert rules)
-- **Action**: Email `arnaurodondev@gmail.com`
+- **Action**: Email `ops-alerts@your-domain.com`
 - **Why**: Worldview is on the free tier (5,000 events/month). At 80% usage,
   review whether the rate-limiter should be tightened or a paid plan is needed.
 

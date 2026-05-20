@@ -164,7 +164,7 @@ class TestUploadTenantDocumentUseCase:
 
     async def test_rate_limit_exceeded_raises(self) -> None:
         """Rate-limit block must raise UploadRateLimitError with resets_at."""
-        uc, _, _, rate_limit, _ = _make_use_case(rate_limit_allowed=False)
+        uc, _, _, _rate_limit, _ = _make_use_case(rate_limit_allowed=False)
         inp = _make_input()
 
         with pytest.raises(UploadRateLimitError) as exc_info:

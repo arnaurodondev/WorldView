@@ -98,7 +98,6 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         build_jwks_response,
         fetch_oidc_discovery,
         load_rsa_private_key,
-        rsa_key_id,
     )
 
     # F-025: 3-attempt exponential backoff (0.5s → 1.5s → —) so a transient
@@ -135,14 +134,25 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             raise RuntimeError(f"OIDC discovery failed at startup: {_oidc_last_exc}") from _oidc_last_exc
 
     # 5. RSA keypair for internal JWT signing
+    # W1-05 (BUG-005): kid is sourced from ``JWT_KEY_VERSION`` (default ``"v1"``)
+    # so operators can rotate the RSA key pair without backends getting stuck
+    # on the previous SHA-derived id. Backends use refresh-on-kid-miss to pick
+    # up the new key. ``previous_jwks`` is an operator-controlled list of
+    # outgoing JWK entries served for ``JWKS_GRACE_HOURS`` so backends with a
+    # cached old key keep verifying in-flight tokens during the rollover.
     private_key = load_rsa_private_key(settings.internal_jwt_private_key.get_secret_value())
     public_key = private_key.public_key()
-    kid = rsa_key_id(public_key)
+    kid = settings.jwt_key_version
     app.state.rsa_private_key = private_key
     app.state.rsa_public_key = public_key
     app.state.rsa_kid = kid
     app.state.internal_jwks = build_jwks_response(public_key, kid)
-    logger.info("rsa_keypair_loaded", kid=kid)
+    # Operator-controlled rotation hook. When rotating, append the outgoing
+    # JWK dict to this list (cap at 3). The /internal/jwks endpoint merges
+    # this list into its response so backends verifying tokens signed by the
+    # old key during the grace window still see a matching kid.
+    app.state.previous_jwks = []
+    logger.info("rsa_keypair_loaded", kid=kid, grace_hours=settings.jwks_grace_hours)
 
     # 6. Downstream service clients
     # Default timeout for fast services (DB-backed, no external LLM).

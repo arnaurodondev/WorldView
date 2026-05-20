@@ -26,7 +26,8 @@ export function SlashTurnBlock({ turn }: { turn: SlashTurn }) {
       {/* User echo of the typed input — matches the regular user-message style */}
       <div className="flex flex-col items-end gap-1">
         <div className="flex max-w-[70%] items-end gap-2 flex-row-reverse">
-          <div className="rounded-[2px] bg-primary/10 px-4 py-3 text-[11px]">
+          {/* px-4 py-3 → px-3 py-2: density alignment with rest of chat surface */}
+          <div className="rounded-[2px] bg-primary/10 px-3 py-2 text-[11px]">
             <pre className="whitespace-pre-wrap font-sans text-[11px]">{turn.input}</pre>
             <p className="mt-1 font-mono text-[10px] text-muted-foreground">
               {/* POLISH PASS 2026-05-09: safeFormatClockTime handles the

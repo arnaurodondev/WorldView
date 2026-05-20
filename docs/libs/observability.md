@@ -1,56 +1,46 @@
 # Observability Library
 
-> **Package**: `observability` · **Path**: `libs/observability/`
-> **Purpose**: Structured logging, Prometheus metrics, and OpenTelemetry
-> tracing helpers. Every service imports this for consistent telemetry.
+> **Package**: `observability` · **Path**: `libs/observability/` · **Version**: 2025.6.0
+> **Purpose**: Structured logging (structlog), Prometheus metrics, OpenTelemetry
+> tracing, and Sentry error tracking. Every backend service imports this for
+> consistent, correlated telemetry.
 
 ---
 
-## Four Pillars Overview
+## Purpose
 
-```mermaid
-flowchart LR
-    subgraph SERVICE["Service (FastAPI)"]direction TB
-        LOG["structlog\nJSON logs"]
-        MET["prometheus-client\nCounters / Histograms"]
-        TRC["opentelemetry-sdk\nSpans / Traces"]
-        SNT["sentry-sdk\nError tracking"]
-    end
+Without a shared observability library, each service would independently configure
+structlog, Prometheus, and OpenTelemetry — with subtle differences in output format,
+metric label names, and trace context propagation. `observability` provides one-call
+setup for all four pillars, ensuring:
 
-    subgraph INFRA["Observability Infrastructure"]
-        LO["Log aggregator\n(Loki / CloudWatch)"]
-        PR["Prometheus\nscrape /metrics"]
-        JG["Jaeger / Tempo\n(OTLP gRPC)"]
-        SD["Sentry\n(error events)"]
-    end
+- **Consistent JSON log format** across all services (same field names, same
+  timestamp format).
+- **Automatic trace context injection** into every log line (trace_id + span_id,
+  so Loki and Tempo queries can be correlated).
+- **Standard HTTP metrics** (request count + latency histograms) wired by a single
+  `add_prometheus_middleware()` call.
+- **Single `ServiceMetrics` instance** shared between messaging, route handlers, and
+  workers — no duplicate counter registrations.
 
-    LOG -->|stdout JSON| LO
-    MET -->|HTTP GET /metrics| PR
-    TRC -->|OTLP gRPC| JG
-    SNT -->|HTTPS| SD
+---
 
-    NOTE["trace_id + span_id\ninjected into every log line\nby OTel middleware"]
-    TRC -.->|context| LOG
-    NOTE -.-> TRC
+## Installation
+
+```toml
+[project]
+dependencies = ["observability"]
 ```
 
-**How trace context reaches log lines:**
-The OTel FastAPI middleware creates a span for each request. `configure_logging()`
-registers `_inject_otel_trace_context` as a structlog processor that calls
-`opentelemetry.trace.get_current_span()` on every log event and binds `trace_id`
-and `span_id` as structlog fields. This means every `logger.info(...)` call inside
-a request handler automatically carries the trace identifiers — no manual binding
-required.
+```bash
+pip install -e "libs/observability"
+```
 
-> **BP-269**: The OTel middleware alone does NOT inject trace_id into structlog.
-> The `_inject_otel_trace_context` processor in `configure_logging()` is required.
-> Verify after setup: make a request, find its trace in Tempo, search Loki for
-> `trace_id="<that id>"` — if no results, the processor is missing.
-
-When `otlp_endpoint` is `None` or blank, `configure_tracing()` installs a
-**no-op `TracerProvider`**. Span creation calls still succeed (they return
-no-op spans) but nothing is exported. This means tracing code is safe to
-call unconditionally; disable tracing by simply not setting the env var.
+Dependencies: `structlog>=25.0`, `prometheus-client>=0.21`,
+`opentelemetry-api>=1.24`, `opentelemetry-sdk>=1.24`,
+`opentelemetry-exporter-otlp-proto-grpc>=1.24`,
+`opentelemetry-instrumentation-fastapi>=0.45b0`,
+`sentry-sdk[fastapi]>=2.18,<3`. Python 3.11–3.12.
 
 ---
 
@@ -58,16 +48,16 @@ call unconditionally; disable tracing by simply not setting the env var.
 
 ### Structured Logging
 
-| Function | Purpose |
-|----------|---------|
-| `configure_logging(service_name, level="INFO", json=True)` | One-call setup: structlog + stdlib integration |
-| `get_logger(name)` | Returns a bound structlog logger |
+| Symbol | Signature | Description |
+|--------|-----------|-------------|
+| `configure_logging` | `(service_name: str, level: str = "INFO", json: bool = True)` → `None` | One-call structlog + stdlib logging integration. Call once at app startup before any `get_logger()` call. |
+| `get_logger` | `(name: str)` → structlog logger | Returns a bound structlog logger. Pass `__name__` as the convention. |
 
-Output format (JSON, one line per event):
+**Output format** (JSON, one line per event):
 
 ```json
 {
-  "timestamp": "2025-01-15T10:30:00.000Z",
+  "timestamp": "2026-05-17T10:30:00.000Z",
   "level": "info",
   "service": "market-data",
   "logger": "api.routes",
@@ -76,91 +66,186 @@ Output format (JSON, one line per event):
   "path": "/v1/ohlcv/AAPL",
   "status": 200,
   "duration_ms": 12.4,
-  "trace_id": "abc123",
-  "span_id": "def456"
+  "trace_id": "abc123def456",
+  "span_id": "789abc"
 }
 ```
 
+`trace_id` and `span_id` are injected automatically by the
+`_inject_otel_trace_context` structlog processor registered by `configure_logging()`.
+No manual binding is required in request handlers.
+
 ### Prometheus Metrics
 
-| Function / Object | Purpose |
-|--------------------|---------|
-| `create_metrics(service_name)` | Returns a `ServiceMetrics` dataclass with standard counters/histograms |
-| `ServiceMetrics.requests_total` | Counter with labels `method`, `path`, `status` |
-| `ServiceMetrics.request_duration_seconds` | Histogram with labels `method`, `path` |
-| `ServiceMetrics.kafka_messages_consumed_total` | Counter with labels `topic`, `consumer_group` — incremented by `BaseKafkaConsumer` on success |
-| `ServiceMetrics.kafka_messages_produced_total` | Counter with labels `topic` |
-| `ServiceMetrics.outbox_dispatched_total` | Counter (no labels) — incremented by `BaseOutboxDispatcher` on delivery ack |
-| `ServiceMetrics.outbox_dispatch_errors_total` | Counter (no labels) — incremented on failed dispatch or dead-letter |
-| `add_prometheus_middleware(app, metrics)` | FastAPI middleware that auto-records HTTP metrics and adds `/metrics` endpoint |
+| Symbol | Signature | Description |
+|--------|-----------|-------------|
+| `create_metrics` | `(service_name: str, registry?: CollectorRegistry)` → `ServiceMetrics` | Returns a `ServiceMetrics` dataclass with pre-registered counters and histograms. Caches by `service_name` when using the global registry (safe to call from multiple modules). |
+| `add_prometheus_middleware` | `(app: FastAPI, metrics: ServiceMetrics)` → `None` | Installs HTTP metrics middleware and registers `GET /metrics` Prometheus scrape endpoint. |
 
-> **Cross-library usage**: the `messaging` library receives a `ServiceMetrics`
-> instance at construction time and calls `.outbox_dispatched_total.inc()` and
-> `.kafka_messages_consumed_total.labels(...).inc()` on it. Always pass the same
-> `ServiceMetrics` instance to both `BaseOutboxDispatcher` and `BaseKafkaConsumer`
-> so all metrics live in the same Prometheus registry.
+**`ServiceMetrics` fields:**
 
-### OpenTelemetry
+| Field | Type | Labels | Description |
+|-------|------|--------|-------------|
+| `requests_total` | Counter | `method`, `path`, `status` | HTTP request count |
+| `request_duration_seconds` | Histogram | `method`, `path` | HTTP request latency |
+| `kafka_messages_consumed_total` | Counter | `topic`, `consumer_group` | Kafka consumer throughput |
+| `kafka_messages_produced_total` | Counter | `topic` | Kafka producer throughput |
+| `outbox_dispatched_total` | Counter | — | Successful outbox dispatches |
+| `outbox_dispatch_errors_total` | Counter | — | Failed dispatches / dead-letters |
 
-| Function | Purpose |
-|----------|---------|
-| `configure_tracing(service_name, otlp_endpoint=None)` | Sets up OTel TracerProvider + OTLP exporter |
-| `get_tracer(name)` | Returns an OTel tracer |
-| `add_otel_middleware(app)` | FastAPI middleware for automatic span creation |
+`BaseKafkaConsumer` and `BaseOutboxDispatcher` from `messaging` accept a
+`ServiceMetrics` instance and increment the Kafka/outbox counters automatically.
+Pass the **same instance** created at app startup to both.
 
-### Sentry (Error Tracking — PLAN-0065)
+### OpenTelemetry Tracing
+
+| Symbol | Signature | Description |
+|--------|-----------|-------------|
+| `configure_tracing` | `(service_name: str, otlp_endpoint: str | None = None)` → `None` | Sets up OTel `TracerProvider` + OTLP gRPC exporter. When `otlp_endpoint` is `None` or blank, installs a no-op provider (span creation still works, nothing is exported). |
+| `get_tracer` | `(name: str)` → `opentelemetry.trace.Tracer` | Returns an OTel tracer. |
+| `add_otel_middleware` | `(app: FastAPI)` → `None` | FastAPI middleware for automatic request span creation. Must be called **after** `configure_tracing()`. |
+
+**How trace context reaches log lines:**
+
+The OTel FastAPI middleware creates a span for each request. `configure_logging()`
+registers `_inject_otel_trace_context` as a structlog processor that reads
+`opentelemetry.trace.get_current_span()` on every log event and binds `trace_id`
+and `span_id`. This means every `logger.info(...)` inside a request handler
+automatically carries trace identifiers.
+
+> **BP-269**: The OTel middleware alone does NOT inject trace_id into structlog.
+> The `_inject_otel_trace_context` processor in `configure_logging()` is required.
+> Verify: make a request, find its trace in Tempo, search Loki for
+> `trace_id="<that id>"` — if no results, the processor is missing.
+
+### Sentry Error Tracking
 
 | Symbol | Purpose |
 |--------|---------|
-| `SentrySettings` | Pydantic-settings model (`SENTRY_` prefix env vars) |
-| `init_sentry(service_name, *, settings)` | Initialise sentry-sdk; returns `True` if enabled, `False` if disabled |
+| `SentrySettings` | Pydantic-settings model (`SENTRY_` env prefix). |
+| `init_sentry(service_name, *, settings)` | Initialise sentry-sdk. Returns `True` if enabled, `False` if disabled (master switch is off by default). |
+| `register_error_handlers(app)` | Registers FastAPI error handlers that call `sentry_sdk.capture_exception()` for unhandled exceptions. |
 
-`SentrySettings` fields:
+**`SentrySettings` fields:**
 
 | Field | Env var | Default | Description |
 |-------|---------|---------|-------------|
-| `enabled` | `SENTRY_ENABLED` | `False` | Master switch — off by default |
-| `dsn` | `SENTRY_DSN` | `None` | Required when enabled (SecretStr) |
+| `enabled` | `SENTRY_ENABLED` | `False` | Master switch |
+| `dsn` | `SENTRY_DSN` | `None` | Required when enabled (`SecretStr`) |
 | `environment` | `SENTRY_ENVIRONMENT` | `"development"` | Sentry environment tag |
 | `traces_sample_rate` | `SENTRY_TRACES_SAMPLE_RATE` | `0.1` | Fraction of transactions sampled |
-| `release` | `SENTRY_RELEASE` | `None` | App version string (optional) |
+| `release` | `SENTRY_RELEASE` | `None` | App version string (image tag / git SHA) |
 | `fingerprint_rate_limit` | `SENTRY_FINGERPRINT_RATE_LIMIT` | `10` | Max events per fingerprint per hour |
 
-**PII protection** — `_before_send` strips cookies, `Authorization` / `X-Internal-JWT` headers, redacts ticker symbols and entity UUIDs from URLs, and sha256-hashes `user.email` before any event leaves the process.
+**PII protection** — `_before_send` strips cookies, `Authorization` and
+`X-Internal-JWT` headers, redacts ticker symbols and entity UUIDs from URLs,
+and sha256-hashes `user.email` before any event leaves the process.
 
-**Error capture integration** — `register_error_handlers(app)` (via `error_capture.py`) automatically calls `sentry_sdk.capture_exception()` for unhandled exceptions when Sentry is initialised. No per-route instrumentation needed.
+---
 
-**Canonical lifespan wiring** (all 10 backend services):
+## Usage Examples
+
+### Standard FastAPI Service Setup
 
 ```python
-# Step 2b in lifespan — after configure_tracing, before DB
+# services/market-data/src/market_data/app.py
+from contextlib import asynccontextmanager
+from fastapi import FastAPI
+from observability import (
+    configure_logging, configure_tracing, get_logger,
+    create_metrics, add_prometheus_middleware, add_otel_middleware,
+)
 from observability.sentry import SentrySettings, init_sentry
+from observability.error_capture import register_error_handlers
 
-init_sentry(service_name=settings.service_name, settings=SentrySettings())
+configure_logging("market-data")        # must be first
+log = get_logger(__name__)
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    configure_tracing("market-data", otlp_endpoint=settings.otlp_endpoint)
+    init_sentry("market-data", settings=SentrySettings())
+    yield
+
+app = FastAPI(lifespan=lifespan)
+metrics = create_metrics("market-data")
+add_prometheus_middleware(app, metrics)
+add_otel_middleware(app)               # must be after configure_tracing()
+register_error_handlers(app)
+
+@app.get("/v1/ohlcv/{symbol}")
+async def get_ohlcv(symbol: str):
+    # trace_id and span_id injected automatically
+    log.info("fetching_ohlcv", symbol=symbol)
+    ...
+```
+
+### Passing Metrics to Messaging Layer
+
+```python
+# Create once in app factory, pass to messaging components:
+metrics = create_metrics("market-data")
+
+consumer = OHLCVConsumer(config=consumer_config, metrics=metrics)
+dispatcher = OutboxDispatcher(..., metrics=metrics)
+
+# Now kafka_messages_consumed_total and outbox_dispatched_total
+# are all in the same Prometheus registry and appear in /metrics.
+```
+
+### Manual Tracing
+
+```python
+from observability import get_tracer
+
+tracer = get_tracer(__name__)
+
+async def enrich_article(doc_id: str) -> None:
+    with tracer.start_as_current_span("enrich_article") as span:
+        span.set_attribute("doc_id", doc_id)
+        # trace_id from this span is now in all log lines inside this scope
+        result = await run_enrichment(doc_id)
+```
+
+### Kafka Consumer with Metrics
+
+```python
+# Kafka counters are incremented automatically when metrics is passed:
+consumer = MyConsumer(
+    config=ConsumerConfig(...),
+    metrics=metrics,   # optional but recommended
+)
+# On each successful process_message():
+#   metrics.kafka_messages_consumed_total.labels(topic=..., consumer_group=...).inc()
 ```
 
 ---
 
-## Usage
+## Architecture Notes
 
-```python
-# services/market-data/src/market_data/app.py
-from observability import configure_logging, get_logger, create_metrics
-from observability import add_prometheus_middleware, configure_tracing
+### Why `configure_logging` before first log?
 
-configure_logging("market-data")
-configure_tracing("market-data", otlp_endpoint="http://localhost:4317")
-metrics = create_metrics("market-data")
-log = get_logger(__name__)
+Structlog needs to be configured before any logger is bound. Without
+`configure_logging()`, log calls still work but produce unstructured stderr output
+— no JSON format, no trace context, no `service` field.
 
-app = FastAPI()
-add_prometheus_middleware(app, metrics)
+### Single `ServiceMetrics` instance per service
 
-@app.get("/v1/ohlcv/{symbol}")
-async def get_ohlcv(symbol: str):
-    log.info("fetching_ohlcv", symbol=symbol)
-    ...
-```
+`create_metrics()` caches the `ServiceMetrics` instance per `service_name` when
+using the global Prometheus `REGISTRY`. Calling it twice with the same name returns
+the same instance without re-registering counters. This means it is safe to call
+from multiple modules.
+
+**Warning**: if you pass an explicit `registry=` argument (for test isolation),
+the instance is not cached. Tests must manage lifecycle themselves and pass the
+same isolated registry to all components under test.
+
+### No-op tracing when `otlp_endpoint` is blank
+
+`configure_tracing(service_name, otlp_endpoint=None)` installs a no-op
+`TracerProvider`. Span creation calls still succeed (they return no-op spans) but
+nothing is exported. This means tracing code is unconditionally safe; disable
+tracing by simply not setting the env var.
 
 ---
 
@@ -168,95 +253,68 @@ async def get_ohlcv(symbol: str):
 
 ```bash
 # .env
-LOG_LEVEL=INFO              # DEBUG | INFO | WARNING | ERROR
-LOG_FORMAT=json             # json | console  (console = coloured dev output)
-OTEL_EXPORTER_ENDPOINT=     # blank = tracing disabled
-OTEL_SERVICE_NAME=          # auto-set by configure_tracing()
+LOG_LEVEL=INFO                  # DEBUG | INFO | WARNING | ERROR
+LOG_FORMAT=json                 # json | console (console = coloured dev output)
 
-# Sentry (fourth pillar — default-off)
-SENTRY_ENABLED=false        # set true in staging/production
-SENTRY_DSN=                 # required when SENTRY_ENABLED=true
-SENTRY_ENVIRONMENT=development
+# OpenTelemetry
+OTEL_EXPORTER_ENDPOINT=         # blank = tracing disabled; grpc:// for Tempo
+OTEL_SERVICE_NAME=market-data   # auto-set by configure_tracing()
+
+# Sentry (default-off)
+SENTRY_ENABLED=false            # set true in staging / production
+SENTRY_DSN=                     # required when SENTRY_ENABLED=true
+SENTRY_ENVIRONMENT=development  # development | staging | production
 SENTRY_TRACES_SAMPLE_RATE=0.1
-SENTRY_RELEASE=             # optional: image tag / git SHA
-SENTRY_FINGERPRINT_RATE_LIMIT=10   # max events per fingerprint per hour
+SENTRY_RELEASE=                 # optional: git SHA or image tag
+SENTRY_FINGERPRINT_RATE_LIMIT=10
 ```
 
 ---
 
-## Guidelines
+## Extension Points
 
-1. **Always use `get_logger(__name__)`** — never `print()` or stdlib
-   `logging.getLogger()` directly.
-2. **Metrics endpoint**: Every service exposes `GET /metrics` (Prometheus
-   scrape). The middleware handles this automatically.
-3. **Trace context propagation**: The OTel middleware injects `trace_id` and
-   `span_id` into structlog context automatically.
-4. **No business logic**: This library is purely cross-cutting concerns.
-5. **Single `ServiceMetrics` per service**: Create once in the app factory and
-   pass the instance to every component — `messaging`, route handlers, etc.
-   Creating multiple instances will double-count metrics.
-6. **`configure_logging` before first log**: Call `configure_logging()` in the
-   app factory before any `get_logger()` call. Logging before configuration
-   works but produces unstructured stderr output.
+- **New metric**: add to `ServiceMetrics` dataclass in `metrics.py`. Follow existing
+  label conventions (`method`, `path`, `status` for HTTP; `topic` for Kafka).
+- **New structlog processor**: register in `configure_logging()`. Follow the
+  `_inject_otel_trace_context` pattern — read context, bind fields, pass through.
+- **Alternative tracing exporter**: pass a custom `SpanExporter` to
+  `configure_tracing()` (used in tests with `InMemorySpanExporter`).
+
+---
+
+## Testing
+
+```bash
+cd libs/observability
+python -m pytest tests/ -v
+```
+
+Tests use an isolated `CollectorRegistry()` to avoid duplicate metric registration
+errors. Pass the same isolated registry to all components under test:
+
+```python
+from prometheus_client import CollectorRegistry
+registry = CollectorRegistry()
+metrics = create_metrics("test-service", registry=registry)
+# pass metrics to consumer, dispatcher, etc.
+```
 
 ---
 
 ## Common Pitfalls
 
-1. **`registry` argument — use `is not None` check, not truthiness** (BP-173) —
+1. **`registry or CollectorRegistry()` pattern (BP-173)** — `None` is falsy, so
    `registry or CollectorRegistry()` always creates an isolated registry when `None`
-   is passed (since `None` is falsy). This makes all metrics invisible to
-   `generate_latest()` which reads the global `REGISTRY` singleton. Fixed:
-   `registry if registry is not None else REGISTRY`. Tests must pass an explicit
-   isolated `CollectorRegistry()` to avoid duplicate-registration errors.
-2. **Idempotent global registry** — `create_metrics()` caches `ServiceMetrics` per
-   `service_name` when using the global `REGISTRY`. Calling `create_metrics("svc")`
-   twice with no registry argument returns the same instance and does NOT register
-   duplicate metrics. Isolated registries (explicit `registry=` argument) are NOT
-   cached — callers own lifecycle.
-3. **Creating metrics in wrong registry (pre-BP-173)** — calling `create_metrics("my-service")` in two
-   places with isolated registries registers duplicate counters but in separate
-   stores, so only one appears in `/metrics`. Create once in the app factory,
-   inject everywhere.
-2. **Not calling `configure_tracing` before middleware** — `add_otel_middleware(app)`
-   uses the active `TracerProvider`. If you call it before `configure_tracing`,
-   it may attach to the default no-op provider and span IDs will be all-zeros
-   even when the OTLP endpoint is configured.
-3. **Using `print()` instead of `get_logger()`** — `print()` output is not
-   captured by the OTEL log bridge and has no trace context.
-4. **Log levels in tests** — `configure_logging()` defaults to `INFO`. Tests
-   should call `configure_logging(level="DEBUG")` or mock the logger to avoid
-   noisy output.
-
----
-
-## Dependencies
-
-- `structlog >= 24.1`
-- `prometheus-client >= 0.21`
-- `opentelemetry-api >= 1.24`
-- `opentelemetry-sdk >= 1.24`
-- `opentelemetry-exporter-otlp-proto-grpc >= 1.24`
-- `opentelemetry-instrumentation-fastapi >= 0.45b0`
-- `sentry-sdk[fastapi] >= 2.18, < 3` (fourth pillar — PLAN-0065)
-
----
-
-## Testing Strategy
-
-- **Unit**: Logger output format assertions, metric label validation.
-- **Integration**: OTel span export to in-memory exporter, verify trace propagation.
-
----
-
-## Implementation Status
-
-**Wave-02 (2026-03-07)**: All modules implemented and tested.
-
-- `observability.logging` — complete (wave-01)
-- `observability.metrics` — complete (wave-02)
-- `observability.tracing` — complete (wave-02); uses `SimpleSpanProcessor` when a custom
-  exporter is injected (test-friendly), `BatchSpanProcessor` for OTLP production path.
-
-See `libs/observability/IMPLEMENTATION.md` and `docs/architecture/decisions/0003-observability-stack.md`.
+   is passed. Use `registry if registry is not None else REGISTRY`. The library
+   already handles this correctly; avoid reimplementing it in services.
+2. **`add_otel_middleware` before `configure_tracing`** — the middleware attaches to
+   the active `TracerProvider`. If called first, it may attach to the no-op provider
+   and all span IDs will be zeros even when OTLP is configured.
+3. **`print()` instead of `get_logger()`** — `print()` output is not captured by the
+   OTel log bridge and has no trace context.
+4. **Multiple `create_metrics` calls with isolated registries** — only one instance
+   appears in `/metrics`. Create once in the app factory; inject everywhere.
+5. **Log level in tests** — `configure_logging()` defaults to `INFO`. Tests should
+   use `configure_logging(level="DEBUG")` or mock the logger to control verbosity.
+6. **`get_logger()` before `configure_logging()`** — works but produces unstructured
+   output. Call `configure_logging()` as the very first thing in your app factory.

@@ -88,14 +88,26 @@ class OIDCAuthMiddleware(BaseHTTPMiddleware):
     """
 
     async def dispatch(self, request: Request, call_next: Callable) -> Response:
+        # BUG-004 / BP-480: defensively initialise ``request.state.user`` to
+        # ``None`` as the very first action of every dispatch, BUT only when
+        # the attribute has not already been set by an upstream middleware.
+        # This guarantees the attribute ALWAYS exists with a sentinel value
+        # for downstream middleware (notably ``RateLimitMiddleware``) even
+        # on error paths that exit before the regular assignments below —
+        # while still respecting any user dict that a test harness or
+        # alternate auth middleware may legitimately have injected ahead of
+        # us (e.g. ``TestAuthMiddleware`` in api-gateway's conftest). Without
+        # this guard the rate limiter could see a missing attribute and fall
+        # through to the IP bucket, allowing rate-limit-bypass over shared NAT.
+        if not hasattr(request.state, "user"):
+            request.state.user = None
+
         oidc_config: OIDCProviderConfig | None = getattr(request.app.state, "oidc_config", None)
 
         # When oidc_config is not yet loaded (dev / tests without Zitadel), try to
         # validate Bearer tokens as internal JWTs (issued by dev-login endpoint).
         # This allows the dev-login flow to work without a running Zitadel instance.
         if oidc_config is None:
-            if not hasattr(request.state, "user"):
-                request.state.user = None
             # Dev-login support: if a Bearer token is present and OIDC is unavailable,
             # try to validate it as a gateway-issued internal JWT.
             auth = request.headers.get("Authorization", "")
@@ -142,7 +154,12 @@ class OIDCAuthMiddleware(BaseHTTPMiddleware):
                         logger.debug("dev_login_jwt_validation_error", exc_info=True)
             return cast("Response", await call_next(request))
 
-        # Real OIDC validation path — reset user first
+        # Real OIDC validation path — this middleware is authoritative on
+        # this path, so always reset ``request.state.user`` to ``None`` (any
+        # successful validation below reassigns it to the claims dict).
+        # Note: this is intentionally unconditional (different from the
+        # dev-mode branch above) — in production no upstream middleware
+        # should be injecting user state.
         request.state.user = None
 
         # Skip auth entirely for public paths
@@ -374,6 +391,20 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
                 media_type="application/json",
             )
 
+        # BUG-004 / BP-480: defensively read ``request.state.user`` via
+        # ``getattr`` with a ``None`` default. ``OIDCAuthMiddleware.dispatch``
+        # now sets ``request.state.user = None`` as its first action, so the
+        # attribute should ALWAYS be present here. We still log a warning if
+        # the attribute is missing — that would indicate a regression in
+        # middleware ordering or a new code path that bypasses OIDCAuth,
+        # which would otherwise silently fall through to the IP bucket and
+        # share one shared-NAT counter across many users.
+        if not hasattr(request.state, "user"):
+            logger.warning(
+                "rate_limit_user_attr_missing",
+                path=str(request.url.path),
+                method=request.method,
+            )
         user = getattr(request.state, "user", None)
         path = str(request.url.path)
         method = request.method.upper()
@@ -398,7 +429,11 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
             path.startswith(pfx) for pfx in _FINANCIAL_MUTATION_PREFIXES
         )
 
-        if user and user.get("user_id"):
+        # BUG-004 / BP-480: require ``user`` to be a dict before calling
+        # ``.get("user_id")`` so a malformed value (e.g. a string slipped in
+        # by future code) cannot raise AttributeError mid-dispatch. The
+        # ``isinstance`` check makes the contract explicit at the call site.
+        if user and isinstance(user, dict) and user.get("user_id"):
             if is_financial_mutation:
                 # Separate Valkey key so the financial-mutation counter does
                 # not eat the general dashboard budget. A user can perform

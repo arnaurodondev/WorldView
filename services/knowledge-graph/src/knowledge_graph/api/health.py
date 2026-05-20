@@ -27,11 +27,13 @@ async def readyz(request: Request) -> Response:
     ok = True
 
     # F-003B: JWKS public key must be loaded before accepting traffic.
-    if getattr(request.app.state, "_internal_jwt_public_key", None) is None:
+    # Exception: when skip_verification=True the key is intentionally absent (E2E/dev profiles).
+    skip_jwt = getattr(request.app.state, "_internal_jwt_skip_verification", False)
+    if not skip_jwt and getattr(request.app.state, "_internal_jwt_public_key", None) is None:
         checks["jwks"] = "not_loaded"
         ok = False
     else:
-        checks["jwks"] = "ok"
+        checks["jwks"] = "ok" if not skip_jwt else "skipped"
 
     # intelligence_db check
     try:

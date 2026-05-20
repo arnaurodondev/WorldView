@@ -153,7 +153,9 @@ describe("SectorHeatmapWidget — overflow guard at trader viewports (B-2-03)", 
 
     await findAllByLabelText(/ sector,/i);
 
-    const tileContainer = container.querySelector(".flex-wrap");
+    // MED-005 changed the tile container from flex-wrap to CSS grid auto-fit
+    // (B-2-03 fix). The gap assertion still validates the tight 2px spacing.
+    const tileContainer = container.querySelector(".grid.gap-0\\.5");
     expect(tileContainer).not.toBeNull();
     const tileEl = tileContainer as HTMLElement;
     expect(tileEl.className).toMatch(/\bgap-0\.5\b/);

@@ -11,11 +11,11 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime
-from enum import Enum
+from enum import StrEnum
 from uuid import UUID
 
 
-class PathJobStatus(str, Enum):
+class PathJobStatus(StrEnum):
     """Status lifecycle for a PathInsightJob queue entry."""
 
     PENDING = "pending"

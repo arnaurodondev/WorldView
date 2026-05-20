@@ -732,3 +732,438 @@ def test_cors_accepts_explicit_origins() -> None:
     assert any(
         "CORS" in t for t in middleware_classes
     ), "CORSMiddleware was not added to the app after add_cors() with explicit origins."
+
+
+# ── BUG-004 / BP-480: rate-limit bypass via missing request.state.user ────────
+#
+# These regression tests verify that:
+#   1. OIDCAuthMiddleware.dispatch() sets request.state.user = None as its
+#      FIRST action, so the attribute is always present even on error paths.
+#   2. RateLimitMiddleware reads request.state.user via getattr(..., None)
+#      and only enters the per-user bucket when the value is a dict with a
+#      truthy user_id — otherwise it falls through to the IP bucket.
+#   3. The combination prevents the shared-NAT bypass described in the
+#      backend audit (BUG-004): unauthenticated / failed-auth requests can
+#      no longer accidentally share the rl:v1:user:* counter, and a missing
+#      attribute can no longer raise AttributeError mid-dispatch.
+
+
+@pytest.mark.asyncio
+async def test_oidc_dispatch_initialises_user_none_first(rsa_keypair) -> None:
+    """BUG-004 / BP-480: OIDCAuthMiddleware sets ``request.state.user = None``
+    as the FIRST action of dispatch, guaranteeing the attribute always exists.
+
+    We assert this by entering the dev-mode branch (``oidc_config=None``) with
+    NO Authorization header — the dispatch should still leave
+    ``request.state.user`` as ``None`` (sentinel value), never raise
+    AttributeError when downstream code reads it.
+    """
+    from api_gateway.middleware import OIDCAuthMiddleware
+
+    captured_attr_exists: list[bool] = []
+    captured_value: list = []
+
+    app = FastAPI()
+    app.state.oidc_config = None  # dev-mode path
+
+    app.add_middleware(OIDCAuthMiddleware)
+
+    @app.get("/probe")
+    async def probe(request: Request):
+        # Critical assertion: the attribute MUST exist, even before any
+        # successful auth path runs.
+        captured_attr_exists.append(hasattr(request.state, "user"))
+        captured_value.append(getattr(request.state, "user", "MISSING"))
+        return {"ok": True}
+
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        resp = await client.get("/probe")  # no Authorization header
+
+    assert resp.status_code == 200
+    assert captured_attr_exists[0] is True, (
+        "BUG-004 / BP-480: OIDCAuthMiddleware did not set request.state.user "
+        "before yielding to downstream middleware — attribute is missing."
+    )
+    assert captured_value[0] is None, f"Expected request.state.user to be sentinel None, got {captured_value[0]!r}"
+
+
+@pytest.mark.asyncio
+async def test_rate_limit_ip_bucket_no_auth_header() -> None:
+    """BUG-004 / BP-480 (scenario 1): request with no Authorization header
+    → user is None → IP bucket key applied (``rl:v1:ip:...``)."""
+    from api_gateway.middleware import OIDCAuthMiddleware, RateLimitMiddleware
+
+    captured_keys: list[str] = []
+    valkey = AsyncMock()
+
+    async def fake_incr(key: str) -> int:
+        captured_keys.append(key)
+        return 1
+
+    valkey.incr = fake_incr
+    valkey.expire = AsyncMock()
+
+    app = _make_minimal_app()
+    app.state.oidc_config = None
+    # Order: last-added = outermost. RateLimit must run AFTER OIDCAuth so it
+    # sees the initialised request.state.user.
+    app.add_middleware(RateLimitMiddleware, valkey_client=valkey, max_requests=100)
+    app.add_middleware(OIDCAuthMiddleware)
+
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        resp = await client.get("/test")  # no Authorization header
+
+    assert resp.status_code == 200
+    assert captured_keys, "RateLimitMiddleware never called valkey.incr"
+    assert captured_keys[0].startswith("rl:v1:ip:"), f"BUG-004: expected IP bucket, got key={captured_keys[0]!r}"
+    assert "rl:v1:user:" not in captured_keys[0]
+
+
+@pytest.mark.asyncio
+async def test_rate_limit_ip_bucket_malformed_jwt(rsa_keypair) -> None:
+    """BUG-004 / BP-480 (scenario 2): a malformed/bad-signature JWT must NOT
+    bypass to the user bucket. After OIDCAuthMiddleware fails validation it
+    sets user=None, and RateLimitMiddleware falls through to the IP bucket.
+    """
+    from datetime import datetime
+
+    import jwt as pyjwt
+    from api_gateway.domain import OIDCProviderConfig
+    from api_gateway.middleware import OIDCAuthMiddleware, RateLimitMiddleware
+    from api_gateway.oidc import rsa_key_id
+
+    private_key, public_key = rsa_keypair
+    kid = rsa_key_id(public_key)
+
+    # Forge a token signed with a DIFFERENT key (bad signature)
+    other_private = rsa.generate_private_key(public_exponent=65537, key_size=2048, backend=default_backend())
+    now = int(time.time())
+    bad_token = pyjwt.encode(
+        {
+            "iss": "https://example.zitadel.cloud",
+            "sub": "attacker",
+            "aud": "client-id",
+            "exp": now + 300,
+            "iat": now,
+        },
+        other_private,  # signed with the WRONG key
+        algorithm="RS256",
+        headers={"kid": kid},
+    )
+
+    class FakeSettings:
+        oidc_audience = "client-id"
+
+    oidc_config = OIDCProviderConfig(
+        issuer="https://example.zitadel.cloud",
+        authorization_endpoint="https://example.zitadel.cloud/oauth/v2/authorize",
+        token_endpoint="https://example.zitadel.cloud/oauth/v2/token",
+        end_session_endpoint="https://example.zitadel.cloud/oidc/v1/end_session",
+        jwks_uri="https://example.zitadel.cloud/oauth/v2/keys",
+        public_keys={kid: public_key},  # legitimate key — won't verify bad_token
+        last_refreshed_at=datetime.now(tz=UTC),
+    )
+
+    captured_keys: list[str] = []
+    valkey = AsyncMock()
+
+    async def fake_incr(key: str) -> int:
+        captured_keys.append(key)
+        return 1
+
+    valkey.incr = fake_incr
+    valkey.expire = AsyncMock()
+
+    app = _make_minimal_app()
+    app.state.settings = FakeSettings()
+    app.state.oidc_config = oidc_config
+    app.state.valkey = None
+
+    app.add_middleware(RateLimitMiddleware, valkey_client=valkey, max_requests=100)
+    app.add_middleware(OIDCAuthMiddleware)
+
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        resp = await client.get("/test", headers={"Authorization": f"Bearer {bad_token}"})
+
+    assert resp.status_code == 200
+    assert captured_keys, "RateLimitMiddleware never called valkey.incr"
+    assert captured_keys[0].startswith(
+        "rl:v1:ip:"
+    ), f"BUG-004: malformed-JWT request must use IP bucket, got {captured_keys[0]!r}"
+
+
+@pytest.mark.asyncio
+async def test_rate_limit_ip_bucket_expired_jwt(rsa_keypair) -> None:
+    """BUG-004 / BP-480 (scenario 3): an expired JWT must fall through to the
+    IP bucket — OIDCAuthMiddleware catches jwt.ExpiredSignatureError (subclass
+    of InvalidTokenError) and sets user=None.
+    """
+    from datetime import datetime
+
+    import jwt as pyjwt
+    from api_gateway.domain import OIDCProviderConfig
+    from api_gateway.middleware import OIDCAuthMiddleware, RateLimitMiddleware
+    from api_gateway.oidc import rsa_key_id
+
+    private_key, public_key = rsa_keypair
+    kid = rsa_key_id(public_key)
+
+    now = int(time.time())
+    expired_token = pyjwt.encode(
+        {
+            "iss": "https://example.zitadel.cloud",
+            "sub": "old-user",
+            "aud": "client-id",
+            "exp": now - 60,  # expired one minute ago
+            "iat": now - 3600,
+        },
+        private_key,
+        algorithm="RS256",
+        headers={"kid": kid},
+    )
+
+    class FakeSettings:
+        oidc_audience = "client-id"
+
+    oidc_config = OIDCProviderConfig(
+        issuer="https://example.zitadel.cloud",
+        authorization_endpoint="https://example.zitadel.cloud/oauth/v2/authorize",
+        token_endpoint="https://example.zitadel.cloud/oauth/v2/token",
+        end_session_endpoint="https://example.zitadel.cloud/oidc/v1/end_session",
+        jwks_uri="https://example.zitadel.cloud/oauth/v2/keys",
+        public_keys={kid: public_key},
+        last_refreshed_at=datetime.now(tz=UTC),
+    )
+
+    captured_keys: list[str] = []
+    valkey = AsyncMock()
+
+    async def fake_incr(key: str) -> int:
+        captured_keys.append(key)
+        return 1
+
+    valkey.incr = fake_incr
+    valkey.expire = AsyncMock()
+
+    app = _make_minimal_app()
+    app.state.settings = FakeSettings()
+    app.state.oidc_config = oidc_config
+    app.state.valkey = None
+
+    app.add_middleware(RateLimitMiddleware, valkey_client=valkey, max_requests=100)
+    app.add_middleware(OIDCAuthMiddleware)
+
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        resp = await client.get("/test", headers={"Authorization": f"Bearer {expired_token}"})
+
+    assert resp.status_code == 200
+    assert captured_keys, "RateLimitMiddleware never called valkey.incr"
+    assert captured_keys[0].startswith(
+        "rl:v1:ip:"
+    ), f"BUG-004: expired-JWT request must use IP bucket, got {captured_keys[0]!r}"
+
+
+@pytest.mark.asyncio
+async def test_rate_limit_user_bucket_valid_jwt(rsa_keypair) -> None:
+    """BUG-004 / BP-480 (scenario 4): a valid JWT → user bucket applied
+    (``rl:v1:user:...``).  Non-regression for the happy path."""
+    from datetime import datetime
+
+    import jwt as pyjwt
+    from api_gateway.domain import OIDCProviderConfig
+    from api_gateway.middleware import OIDCAuthMiddleware, RateLimitMiddleware
+    from api_gateway.oidc import rsa_key_id
+
+    private_key, public_key = rsa_keypair
+    kid = rsa_key_id(public_key)
+
+    now = int(time.time())
+    valid_token = pyjwt.encode(
+        {
+            "iss": "https://example.zitadel.cloud",
+            "sub": "zitadel-good-1",
+            "aud": "client-id",
+            "exp": now + 300,
+            "iat": now,
+            "email": "user@example.com",
+            "user_id": "u-good-1",
+            "tenant_id": "t-1",
+        },
+        private_key,
+        algorithm="RS256",
+        headers={"kid": kid},
+    )
+
+    class FakeSettings:
+        oidc_audience = "client-id"
+
+    oidc_config = OIDCProviderConfig(
+        issuer="https://example.zitadel.cloud",
+        authorization_endpoint="https://example.zitadel.cloud/oauth/v2/authorize",
+        token_endpoint="https://example.zitadel.cloud/oauth/v2/token",
+        end_session_endpoint="https://example.zitadel.cloud/oidc/v1/end_session",
+        jwks_uri="https://example.zitadel.cloud/oauth/v2/keys",
+        public_keys={kid: public_key},
+        last_refreshed_at=datetime.now(tz=UTC),
+    )
+
+    captured_keys: list[str] = []
+    valkey = AsyncMock()
+
+    async def fake_incr(key: str) -> int:
+        captured_keys.append(key)
+        return 1
+
+    valkey.incr = fake_incr
+    valkey.expire = AsyncMock()
+
+    app = _make_minimal_app()
+    app.state.settings = FakeSettings()
+    app.state.oidc_config = oidc_config
+    app.state.valkey = None
+
+    app.add_middleware(RateLimitMiddleware, valkey_client=valkey, max_requests=100)
+    app.add_middleware(OIDCAuthMiddleware)
+
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        resp = await client.get("/test", headers={"Authorization": f"Bearer {valid_token}"})
+
+    assert resp.status_code == 200
+    assert captured_keys, "RateLimitMiddleware never called valkey.incr"
+    assert captured_keys[0].startswith(
+        "rl:v1:user:u-good-1"
+    ), f"Valid-JWT happy path must use user bucket, got {captured_keys[0]!r}"
+
+
+@pytest.mark.asyncio
+async def test_rate_limit_missing_user_attr_no_attribute_error() -> None:
+    """BUG-004 / BP-480 (scenario 5): even if a future code path skips
+    OIDCAuthMiddleware entirely so ``request.state.user`` is never set,
+    ``RateLimitMiddleware`` must NOT raise AttributeError — it must fall
+    through to the IP bucket and log a warning. This is the defence-in-depth
+    behaviour required by the audit (``getattr(..., None)`` default + the
+    ``rate_limit_user_attr_missing`` warning).
+    """
+    from api_gateway.middleware import RateLimitMiddleware
+
+    captured_keys: list[str] = []
+    valkey = AsyncMock()
+
+    async def fake_incr(key: str) -> int:
+        captured_keys.append(key)
+        return 1
+
+    valkey.incr = fake_incr
+    valkey.expire = AsyncMock()
+
+    app = _make_minimal_app()
+    # IMPORTANT: do NOT add OIDCAuthMiddleware — simulates the regression case
+    # where some new code path bypasses it. RateLimitMiddleware must remain
+    # safe even in that scenario.
+    app.add_middleware(RateLimitMiddleware, valkey_client=valkey, max_requests=100)
+
+    import api_gateway.middleware as _mw
+
+    with patch.object(_mw, "logger") as mock_logger:
+        transport = ASGITransport(app=app)
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            resp = await client.get("/test")
+
+    # No AttributeError raised; request completes with 200 and uses IP bucket
+    assert resp.status_code == 200
+    assert captured_keys, "RateLimitMiddleware never called valkey.incr"
+    assert captured_keys[0].startswith(
+        "rl:v1:ip:"
+    ), f"Missing user attr must fall through to IP bucket, got {captured_keys[0]!r}"
+    # The defensive warning must fire so operators can spot the regression
+    warning_calls = [
+        c for c in mock_logger.warning.call_args_list if c.args and c.args[0] == "rate_limit_user_attr_missing"
+    ]
+    assert warning_calls, (
+        "BUG-004 / BP-480: RateLimitMiddleware must log "
+        "'rate_limit_user_attr_missing' when request.state.user is absent."
+    )
+
+
+@pytest.mark.asyncio
+async def test_rate_limit_two_unauth_requests_same_ip_share_bucket() -> None:
+    """BUG-004 / BP-480 (scenario 6, non-regression): two unauthenticated
+    requests from the same IP must hit the same Valkey key so the counter
+    increments — confirms that the IP hashing did not regress.
+    """
+    from api_gateway.middleware import RateLimitMiddleware
+
+    captured_keys: list[str] = []
+    counter = {"n": 0}
+    valkey = AsyncMock()
+
+    async def fake_incr(key: str) -> int:
+        captured_keys.append(key)
+        counter["n"] += 1
+        return counter["n"]
+
+    valkey.incr = fake_incr
+    valkey.expire = AsyncMock()
+
+    app = _make_minimal_app()
+    app.add_middleware(RateLimitMiddleware, valkey_client=valkey, max_requests=100)
+
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        r1 = await client.get("/test")
+        r2 = await client.get("/test")
+
+    assert r1.status_code == 200
+    assert r2.status_code == 200
+    assert len(captured_keys) == 2
+    assert captured_keys[0] == captured_keys[1], (
+        "Same-IP unauthenticated requests must share the same Valkey bucket — "
+        f"got {captured_keys[0]!r} vs {captured_keys[1]!r}"
+    )
+    assert captured_keys[0].startswith("rl:v1:ip:")
+
+
+@pytest.mark.asyncio
+async def test_rate_limit_user_non_dict_value_falls_through_to_ip() -> None:
+    """BUG-004 / BP-480: if ``request.state.user`` is somehow set to a
+    non-dict value (string, int, custom object), the strict ``isinstance``
+    check guarantees we fall through to the IP bucket instead of raising
+    AttributeError on ``.get(...)``.
+    """
+    from api_gateway.middleware import RateLimitMiddleware
+    from starlette.middleware.base import BaseHTTPMiddleware
+
+    captured_keys: list[str] = []
+    valkey = AsyncMock()
+
+    async def fake_incr(key: str) -> int:
+        captured_keys.append(key)
+        return 1
+
+    valkey.incr = fake_incr
+    valkey.expire = AsyncMock()
+
+    app = _make_minimal_app()
+
+    class InjectBogusUserMiddleware(BaseHTTPMiddleware):
+        async def dispatch(self, request, call_next):
+            # Simulate a regression where some middleware mis-types user
+            request.state.user = "not-a-dict"  # bogus
+            return await call_next(request)
+
+    app.add_middleware(RateLimitMiddleware, valkey_client=valkey, max_requests=100)
+    app.add_middleware(InjectBogusUserMiddleware)
+
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        resp = await client.get("/test")
+
+    assert resp.status_code == 200, "Non-dict user value must not crash the rate limiter."
+    assert captured_keys[0].startswith(
+        "rl:v1:ip:"
+    ), f"Non-dict user must fall through to IP bucket, got {captured_keys[0]!r}"

@@ -39,13 +39,15 @@ unfixable = ["F841"]  # don't auto-remove unused variables
 "**/tests/**/*.py" = ["S101", "S106", "S603", "S607", "T20", "N802", "N815", "N806", "B023", "SIM", "F821", "TCH003", "E402"]
 "services/*/src/*/config.py" = ["S104", "S105", "TCH002"]
 "libs/*/src/*/settings.py" = ["S105"]
-"**/alembic/**/*.py" = ["E501", "TCH003"]
+"**/alembic/**/*.py" = ["E501", "TCH003", "S608"]
 "scripts/**/*.py" = ["T20", "N802", "N815", "N806", "B023", "SIM", "DTZ", "S603", "S607", "E501"]
 # FastAPI, Pydantic, and SQLAlchemy call get_type_hints() at runtime, so
 # runtime-annotated imports cannot be moved into TYPE_CHECKING blocks.
 "services/*/src/*/app.py" = ["TCH001", "TCH002", "TCH003"]
 "services/*/src/*/api/*.py" = ["TCH001", "TCH002", "TCH003"]
 "services/*/src/*/api/**/*.py" = ["TCH001", "TCH002", "TCH003"]
+"services/*/src/*/schemas/*.py" = ["TCH001", "TCH002", "TCH003"]
+"services/*/src/*/schemas/**/*.py" = ["TCH001", "TCH002", "TCH003"]
 "services/*/src/*/infrastructure/db/models/*.py" = ["TCH003"]
 "services/*/src/*/infrastructure/*/models.py" = ["TCH003"]
 # Domain entity/enum files re-export shared enums (contracts.enums) at runtime;

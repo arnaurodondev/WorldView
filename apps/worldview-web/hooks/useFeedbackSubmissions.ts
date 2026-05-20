@@ -76,6 +76,11 @@ export function usePatchFeedbackSubmission() {
   return useMutation({
     mutationFn: ({ id, fields }: PatchArgs) =>
       createGateway(accessToken).patchFeedbackSubmission(id, fields),
+    // WHY retry (CRIT-006 / FR-8.1): PATCH patchFeedbackSubmission is idempotent
+    // (applying the same status/tags/assignee twice is a no-op server-side).
+    retry: 3,
+    retryDelay: (attemptIndex: number) =>
+      Math.min(1000 * 2 ** (attemptIndex - 1), 4000),
     onMutate: async ({ id, fields }) => {
       await queryClient.cancelQueries({ queryKey: [ROOT_KEY] });
       const snapshots = queryClient.getQueriesData<{

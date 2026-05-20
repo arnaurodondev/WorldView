@@ -30,7 +30,7 @@ name: worldview
 services:
   # ── MinIO (S3-compatible object storage) ────────────────────────────────────
   minio:
-    image: minio/minio:RELEASE.2024-01-16T16-07-38Z
+    image: minio/minio:RELEASE.2025-04-08T15-41-24Z
     command: server /data --console-address ":9001"
     profiles: [infra, lib-test, all]
     ports:
@@ -53,7 +53,7 @@ services:
   minio-init:
     # WHY pinned: mc client version should match the MinIO server version to avoid API
     # compatibility drift. :latest is a floating tag that can change silently.
-    image: minio/mc:RELEASE.2024-01-16T16-07-38Z
+    image: minio/mc:RELEASE.2025-04-08T15-39-49Z
     profiles: [infra, lib-test, all]
     depends_on:
       minio:
@@ -1155,12 +1155,16 @@ services:
       - "8090:8080"
     environment:
       GLINER_MODEL_PATH: "urchade/gliner_large-v2.1"
+      HF_HUB_ENABLE_HF_TRANSFER: "0"  # disable hf_transfer native lib
+      HF_HUB_DISABLE_XET: "1"        # use standard HTTPS; xet throttles to ~63 KB/s on some hosts
+    volumes:
+      - gliner_model_cache:/home/appuser/.cache/huggingface  # persist model across restarts
     healthcheck:
       test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8080/healthz')\""]
       interval: 30s
       timeout: 10s
       retries: 5
-      start_period: 120s  # model download on first boot can take several minutes
+      start_period: 600s  # allow 10 min for first-boot model download on slow connections
     # ── GPU passthrough (uncomment to enable NVIDIA GPU) ──────────────────────
     # deploy:
     #   resources:
@@ -2069,3 +2073,4 @@ volumes:
   alloy_data:
   alertmanager_data:
   ollama_data:
+  gliner_model_cache:

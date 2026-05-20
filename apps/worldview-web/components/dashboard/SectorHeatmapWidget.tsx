@@ -301,13 +301,21 @@ export function SectorHeatmapWidget() {
 
       {/* ── Treemap tile container ───────────────────────────────────────── */}
       {!isHeatmapLoading && sectorTiles.length > 0 && (
-        // WHY px-0.5 py-0 + gap-0.5: 2px gaps + 2px horizontal padding only
-        // (was p-1+gap-1). At 11 GICS sectors, the prior 4px gap+padding made
-        // the last column overflow at 1280px. Tighter gaps prevent this and
-        // also better fit the Bloomberg "dense grid" aesthetic.
-        // WHY flex-wrap: when the tile widths sum past 100% (which they always
-        // will after the floor), tiles wrap to new rows without overflowing.
-        <div className="flex flex-1 flex-wrap gap-0.5 px-0.5 py-0">
+        // FR-1.7 MED-005: replace flex-wrap with CSS grid auto-fit so tiles
+        // reflow cleanly at any viewport width without the sub-pixel overflow
+        // that occasionally pushed the last column past the container edge at
+        // 1280px (B-2-03). `auto-fit` + `minmax(120px, 1fr)` means:
+        //   - Each tile is at least 120px wide (enough for "HEALTH" + "+1.23%").
+        //   - Tiles grow to fill remaining space equally (1fr).
+        //   - The browser auto-computes the column count from the container
+        //     width — no hardcoded "11 columns" that breaks at non-standard
+        //     resolutions or when the number of GICS sectors changes.
+        // WHY gap-0.5 (2px): matches the previous flex gap; tight enough for
+        // the Bloomberg "dense grid" aesthetic without hairline-seam ambiguity.
+        <div
+          className="grid gap-0.5 flex-1 px-0.5 py-0"
+          style={{ gridTemplateColumns: "repeat(auto-fit, minmax(120px, 1fr))" }}
+        >
           {sectorTiles.map(({ sector, weight }) => (
             <SectorTile
               key={sector.name}
@@ -361,11 +369,13 @@ function SectorTile({
     <Popover>
       <PopoverTrigger asChild>
         <button
-          // WHY inline-style flex-basis: see SectorTile JSDoc above. We
-          // subtract GAP_PX so cumulative gaps don't push tiles past 100%
-          // and trigger an unwanted extra wrap row at boundary cases.
+          // WHY height only (no flex-basis): the parent container switched from
+          // flex-wrap to CSS grid (FR-1.7). In grid layout flex-basis is
+          // ignored — column widths are driven by auto-fit/minmax on the
+          // container. We keep height fixed so the treemap maintains a uniform
+          // row height; the proportional-weight variable (still computed in
+          // useMemo) is retained for future use if we switch back to flex.
           style={{
-            flexBasis: `calc(${weight * 100}% - ${GAP_PX}px)`,
             height: `${TILE_HEIGHT_PX}px`,
           }}
           className={cn(

@@ -46,6 +46,7 @@ import { createDashboardApi } from "./api/dashboard";
 import { createBrokerageApi } from "./api/brokerage";
 import { createSearchApi } from "./api/search";
 import { createFeedbackApi } from "./api/feedback";
+import { createNotificationPreferencesApi } from "./api/notification-preferences";
 
 // Re-export so consumers keep importing from "@/lib/gateway" — no churn at
 // the ~91 call sites. GatewayError is `instanceof`-checked in components.
@@ -93,6 +94,9 @@ export function createGateway(token?: string | null) {
     ...createBrokerageApi(t),
     ...createSearchApi(t),
     ...createFeedbackApi(t),
+    // WHY last: notification-preferences has no cross-domain deps; spreads
+    // after feedback which owns the beta-enrollment pattern it mirrors.
+    ...createNotificationPreferencesApi(t),
   };
 }
 

@@ -27,6 +27,7 @@ import { z } from "zod";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { useApiClient } from "@/lib/api-client";
+import { GatewayError } from "@/lib/gateway";
 import { qk } from "@/lib/query/keys";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -78,6 +79,16 @@ export function CreateWatchlistDialog({ open, onOpenChange, onCreated }: Props) 
 
   const createMut = useMutation({
     mutationFn: (n: string) => gateway.createWatchlist(n),
+    // WHY only retry GatewayError 5xx: non-GatewayErrors (plain Error, business
+    // logic) and 4xx (409 duplicate, 422 invalid) are deterministic — retrying
+    // re-surfaces the same user error and delays the onError UI feedback.
+    retry: (count: number, err: Error) => {
+      if (!(err instanceof GatewayError)) return false;
+      if (err.status < 500) return false;
+      return count < 3;
+    },
+    retryDelay: (attemptIndex: number) =>
+      Math.min(1000 * 2 ** (attemptIndex - 1), 4000),
     onSuccess: (wl) => {
       // Invalidate the list so the hub refreshes.
       void qc.invalidateQueries({ queryKey: qk.watchlists.list() });

@@ -54,9 +54,7 @@ def _check_pii(message: str) -> bool:
             return True
     # Card — checked against UUID-scrubbed text to prevent false positives
     scrubbed = _UUID_RE.sub("", message)
-    if _CARD_RE.search(scrubbed):
-        return True
-    return False
+    return bool(_CARD_RE.search(scrubbed))
 
 
 # Prompt injection heuristics — compiled once (case-insensitive)

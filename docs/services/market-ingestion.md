@@ -1,35 +1,104 @@
-# Market Ingestion Service
+# Market Ingestion Service (S2)
 
-> **Owner**: Ingestion domain · **Database**: `ingestion_db` · **Port**: 8002
-> **Status**: Migration complete (wave 03 — 2026-03)
-> **Runbook**: [docs/runbooks/market-ingestion-operations.md](../runbooks/market-ingestion-operations.md)
-
----
-
-## Mission & Boundaries
-
-**Owns**: Scheduled polling of upstream data providers (EODHD, Alpha Vantage, Polygon,
-Yahoo Finance), rate limiting, raw (bronze) + canonical (silver) storage to MinIO,
-backfill orchestration, provider budget tracking.
-
-**Never does**: Materialize data into query-optimized tables (Market Data's job),
-serve end-user queries, directly write to `market_data_db`.
+> **Owner**: Ingestion domain · **Database**: `ingestion_db` (PostgreSQL 16) · **Port**: 8002
+> **Status**: Production-ready (waves 01–13 shipped)
 
 ---
 
-## API Surface
+## Mission
 
-| Method | Path | Description | Auth | Cache |
-|--------|------|-------------|------|-------|
-| GET | `/healthz` | Liveness | — | — |
-| GET | `/readyz` | Readiness (DB + MinIO check) | — | — |
-| GET | `/metrics` | Prometheus metrics — requires `X-Internal-Token` header (M-004) | — | — |
-| POST | `/api/v1/ingest/trigger` | Manual trigger for a specific symbol/dataset | `X-Internal-Token` required | — |
-| POST | `/api/v1/ingest/backfill` | Backfill historical data for a symbol/date range | `X-Internal-Token` required | — |
-| GET | `/api/v1/ingest/status` | Current ingestion task status | — | — |
-| GET | `/api/v1/policies` | List polling policies | — | slow |
+Market Ingestion is the data acquisition workhorse of the platform. It runs scheduled polls against multiple external financial data providers (EODHD, Yahoo Finance, Finnhub, Polygon, Alpaca), stores raw responses verbatim in MinIO bronze tier, transforms them into provider-agnostic canonical NDJSON in MinIO silver tier, and emits lightweight `market.dataset.fetched` claim-check pointer events on Kafka. Downstream services (Market Data / S3) follow those pointers to materialize query-optimized tables.
 
-**Authentication**: Mutating endpoints (`POST /trigger`, `POST /backfill`) require `X-Internal-Token: <token>` header. Set `MARKET_INGESTION_INTERNAL_SERVICE_TOKEN` env var. Returns `401` if header is missing or does not match.
+This service never serves end-user queries. It has no knowledge of portfolios, articles, or NLP pipelines. Its only output is (MinIO object, Kafka event).
+
+---
+
+## Architecture
+
+Market Ingestion uses the hexagonal (ports-and-adapters) architecture mandated by `RULES.md`:
+
+```
+┌────────────────────────────────────────────────────────────────┐
+│                        API Layer (FastAPI)                      │
+│  health/readyz · trigger · backfill · status · policies        │
+└─────────────────────────────┬──────────────────────────────────┘
+                              │ (use cases only — never infra)
+┌─────────────────────────────▼──────────────────────────────────┐
+│                    Application Layer                            │
+│  ScheduleTasksUseCase · ClaimTasksUseCase · ExecuteTaskUseCase │
+│  TriggerIngestionUseCase · BackfillUseCase                     │
+│  RunStartupBackfillUseCase · UpdateSymbolTierUseCase           │
+└───────────┬──────────────────────┬─────────────────────────────┘
+            │                      │
+┌───────────▼──────────┐  ┌────────▼────────────────────────────┐
+│      Domain          │  │       Infrastructure                │
+│  IngestionTask       │  │  Providers: EODHD, Yahoo, Finnhub,  │
+│  PollingPolicy       │  │    Polygon, Alpaca, AlphaVantage     │
+│  ProviderBudget      │  │  DB: Postgres repos + UoW           │
+│  Watermark           │  │  Storage: MinIO (bronze + silver)   │
+│  SymbolTier          │  │  Messaging: outbox → Kafka          │
+│  MarketDatasetFetched│  │  Metrics: Prometheus s2_*           │
+└──────────────────────┘  └─────────────────────────────────────┘
+```
+
+### Four Independent Processes
+
+All four processes ship in the same Docker image with different `command` overrides:
+
+| Process | Entry Point | Purpose |
+|---------|-------------|---------|
+| API Server | `uvicorn market_ingestion.app:app` | Manual triggers, status, health |
+| Scheduler | `python -m market_ingestion.infrastructure.scheduler.scheduler_main` | Creates ingestion tasks from polling policies on each tick |
+| Worker | `python -m market_ingestion.infrastructure.workers.worker_main` | Claims tasks, fetches data, stores in MinIO, writes outbox |
+| Outbox Dispatcher | Part of worker or standalone | Publishes outbox events to Kafka |
+
+A fifth process, **Reclaim Worker** (`reclaim_worker_main.py`), periodically resets expired-lease tasks back to `RETRY` state to prevent crashed-worker deadlock.
+
+---
+
+## API Endpoints
+
+All endpoints are prefixed at port 8002. Authentication via `X-Internal-Token` header (mutating endpoints only).
+
+| Method | Path | Auth | Description |
+|--------|------|------|-------------|
+| GET | `/healthz` | — | Liveness probe — always 200 |
+| GET | `/readyz` | — | Readiness (DB + MinIO + Kafka check) |
+| GET | `/metrics` | `X-Internal-Token` | Prometheus metrics |
+| POST | `/api/v1/ingest/trigger` | `X-Internal-Token` | Manually enqueue an ingestion task for a specific symbol/dataset |
+| POST | `/api/v1/ingest/backfill` | `X-Internal-Token` | Backfill historical data for a symbol over a date range |
+| GET | `/api/v1/ingest/status` | — | Current task queue statistics |
+| GET | `/api/v1/policies` | — | List all polling policies |
+
+**Trigger request body example:**
+```json
+{
+  "symbol": "AAPL",
+  "exchange": "US",
+  "dataset_type": "ohlcv",
+  "timeframe": "1d",
+  "provider": "eodhd"
+}
+```
+
+**Backfill request body example:**
+```json
+{
+  "symbol": "MSFT",
+  "exchange": "US",
+  "dataset_type": "fundamentals",
+  "range_start": "2024-01-01",
+  "range_end": "2024-12-31"
+}
+```
+
+**Example curl (trigger):**
+```bash
+curl -X POST http://localhost:8002/api/v1/ingest/trigger \
+  -H "Content-Type: application/json" \
+  -H "X-Internal-Token: $INTERNAL_TOKEN" \
+  -d '{"symbol":"AAPL","exchange":"US","dataset_type":"ohlcv","timeframe":"1d"}'
+```
 
 ---
 
@@ -37,43 +106,67 @@ serve end-user queries, directly write to `market_data_db`.
 
 ### Produced
 
-| Topic | Event Type | Key | Schema |
-|-------|-----------|-----|--------|
-| `market.dataset.fetched` | `MarketDatasetFetchedV1` | `symbol` | Pointer event with MinIO refs |
+| Topic | Schema File | Key | Description |
+|-------|-------------|-----|-------------|
+| `market.dataset.fetched` | `infra/kafka/schemas/market.dataset.fetched.avsc` | `symbol` | Claim-check pointer emitted after each successful fetch |
 
-**Claim-check fields**: `bronze_bucket`, `bronze_key`, `bronze_etag`, `canonical_bucket`, `canonical_key`, `canonical_etag`, `canonical_content_type`, `canonical_schema_version`.
+**Avro schema summary** (`MarketDatasetFetched`):
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `event_id` | string | UUIDv7 unique event ID |
+| `event_type` | string | `"market.dataset.fetched"` |
+| `schema_version` | int | Schema version (bump on breaking change) |
+| `occurred_at` | string | ISO-8601 UTC |
+| `task_id` | string | Ingestion task ID |
+| `provider` | string | `eodhd`, `yahoo_finance`, `finnhub`, etc. |
+| `dataset_type` | string | `ohlcv`, `quotes`, `fundamentals`, `earnings_calendar`, etc. |
+| `symbol` | string | Instrument symbol (e.g. `AAPL`) |
+| `exchange` | string? | Exchange code (e.g. `US`, `CC`) |
+| `timeframe` | string? | OHLCV timeframe (e.g. `1d`, `1m`) |
+| `variant` | string? | Fundamentals variant (e.g. `annual`) |
+| `range_start` / `range_end` | string? | ISO-8601 date range |
+| `bronze_ref_bucket` / `_key` / `_sha256` / `_byte_length` / `_mime_type` | mixed | MinIO bronze object pointer |
+| `canonical_ref_bucket` / `_key` / `_sha256` / `_byte_length` / `_mime_type` | mixed | MinIO canonical object pointer |
+| `canonical_schema_version` | int | Default 1 |
+| `row_count` | long? | Number of records in the canonical dataset |
 
 ### Consumed
 
-None — this service is a producer-only service.
+None — Market Ingestion is a producer-only service.
 
 ---
 
-## Database Schema
+## Data Model
+
+Database: `ingestion_db` (PostgreSQL 16)
 
 ```sql
--- market_ingestion_db
-
+-- Task queue: unit of work for the scheduler-worker pipeline.
 CREATE TABLE ingestion_tasks (
-    id              UUID PRIMARY KEY,
+    id              UUID PRIMARY KEY,                -- UUIDv7
     provider        VARCHAR(20) NOT NULL,
-    dataset_type    VARCHAR(30) NOT NULL,  -- ohlcv, quotes, fundamentals, earnings_calendar, economic_events, macro_indicator, news_sentiment, insider_transactions, yield_curve, market_cap
+    dataset_type    VARCHAR(30) NOT NULL,
     symbol          VARCHAR(20) NOT NULL,
     exchange        VARCHAR(10),
     timeframe       VARCHAR(5),
     range_start     DATE,
     range_end       DATE,
-    status          VARCHAR(20) DEFAULT 'pending',
-    dedupe_key      TEXT UNIQUE,
-    lease_owner     TEXT,
+    status          VARCHAR(20) DEFAULT 'pending',   -- pending|claimed|running|succeeded|failed|retry
+    dedupe_key      TEXT UNIQUE,                     -- prevents duplicate task creation
+    lease_owner     TEXT,                            -- worker UUID that holds the lease
     lease_expires   TIMESTAMPTZ,
     attempt_count   INTEGER DEFAULT 0,
     max_attempts    INTEGER DEFAULT 5,
     error_message   TEXT,
+    fetched_by_provider VARCHAR(20),                 -- which provider actually succeeded
+    result_ref_bucket   TEXT,                        -- MinIO bucket for result
+    result_ref_key      TEXT,                        -- MinIO key for result
     created_at      TIMESTAMPTZ DEFAULT now(),
     completed_at    TIMESTAMPTZ
 );
 
+-- Transactional outbox for market.dataset.fetched events.
 CREATE TABLE outbox_events (
     id              UUID PRIMARY KEY,
     event_type      VARCHAR(100) NOT NULL,
@@ -81,12 +174,14 @@ CREATE TABLE outbox_events (
     status          VARCHAR(20) DEFAULT 'pending',
     created_at      TIMESTAMPTZ DEFAULT now(),
     published_at    TIMESTAMPTZ,
+    dispatched_at   TIMESTAMPTZ,
     lease_owner     TEXT,
     lease_expires   TIMESTAMPTZ,
     attempt_count   INTEGER DEFAULT 0,
     max_attempts    INTEGER DEFAULT 10
 );
 
+-- Cron-like schedule: when and how often to poll each symbol+dataset combo.
 CREATE TABLE polling_policies (
     id              UUID PRIMARY KEY,
     provider        VARCHAR(20) NOT NULL,
@@ -96,10 +191,14 @@ CREATE TABLE polling_policies (
     timeframe       VARCHAR(5),
     cron_expression TEXT NOT NULL,
     is_enabled      BOOLEAN DEFAULT true,
+    market_hours_only BOOLEAN DEFAULT false,  -- set true for quotes
+    post_market_only  BOOLEAN DEFAULT false,
+    tier            INTEGER DEFAULT 2,         -- 1=hot, 2=standard, 3=cold
     last_run_at     TIMESTAMPTZ,
     created_at      TIMESTAMPTZ DEFAULT now()
 );
 
+-- Per-provider daily budget tracking (EODHD credit system).
 CREATE TABLE provider_budgets (
     id              UUID PRIMARY KEY,
     provider        VARCHAR(20) NOT NULL UNIQUE,
@@ -109,287 +208,361 @@ CREATE TABLE provider_budgets (
     updated_at      TIMESTAMPTZ DEFAULT now()
 );
 
+-- Incremental polling watermarks — prevents re-fetching already-ingested data.
 CREATE TABLE watermarks (
     id              UUID PRIMARY KEY,
     symbol          VARCHAR(20) NOT NULL,
     dataset_type    VARCHAR(30) NOT NULL,
     provider        VARCHAR(20) NOT NULL,
     high_water_mark DATE NOT NULL,
+    last_success_at TIMESTAMPTZ,              -- used by freshness gate
     updated_at      TIMESTAMPTZ DEFAULT now(),
     UNIQUE (symbol, dataset_type, provider)
 );
+
+-- Symbol tier classification (tier 1 = high-frequency, 2 = standard, 3 = cold).
+CREATE TABLE symbol_tiers (
+    id              VARCHAR(26) PRIMARY KEY,  -- UUIDv7
+    symbol          VARCHAR(20) NOT NULL,
+    exchange        VARCHAR(20) NOT NULL,
+    tier            INTEGER NOT NULL DEFAULT 2,
+    tier_source     VARCHAR(32) NOT NULL DEFAULT 'default',
+    assigned_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
+    last_user_refresh_at TIMESTAMPTZ,
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+    UNIQUE (symbol, exchange)
+);
 ```
+
+### Migration History
+
+| Revision | Description |
+|----------|-------------|
+| `0001` | Initial schema (ingestion_tasks, outbox_events, polling_policies, provider_budgets, watermarks) |
+| `0002` | Seed 64 polling policies (US equities, ETFs, indices, crypto, forex) |
+| `0003` | Add `market_hours_only` column to polling_policies |
+| `0004` | Expand ticker coverage to 64 symbols (upsert for live systems) |
+| `0005` | API call optimization — fundamentals weekly, 1w/1mo OHLCV extended intervals, recalibrate budget |
+| `0006` | Change insider_transactions cadence from daily to weekly |
+| `0007` | Add economic event polling for JPN, CHN, EU (joins USA, EUR, GBR) |
+| `0008` | Add `symbol_tiers` table + `tier`, `post_market_only` columns to polling_policies |
+| `0009` | Cadence reduction seeds |
+| `0010` | Add `fetched_by_provider` column to ingestion_tasks |
+| `0011` | Alpaca 1m intraday polling policies |
+| `0012` | Economic events cadence restore |
+| `0013` | Add `dispatched_at` to outbox_events |
 
 ---
 
-## Internal Modules
+## Configuration
 
-```
-services/market-ingestion/src/market_ingestion/
-├── api/
-│   ├── main.py              # FastAPI app, health/ready, ingest routes
-│   ├── lifespan.py          # Startup/shutdown (dispatcher init)
-│   ├── dependencies.py
-│   ├── schemas.py
-│   └── routes/ingest.py
-├── application/
-│   ├── ports/               # Abstract repos, adapters, UoW, zero_bar_tracker
-│   └── use_cases/
-│       ├── trigger_ingestion.py
-│       ├── backfill.py
-│       ├── schedule_tasks.py
-│       ├── claim_tasks.py
-│       └── execute_task.py
-├── domain/
-│   ├── entities/            # ingestion_task, polling_policy, provider_budget, watermark
-│   ├── enums.py             # Provider, DatasetType, IngestionTaskStatus (re-export from contracts), etc.
-│   ├── events.py            # MarketDatasetFetched (pointer event)
-│   ├── errors.py
-│   ├── freshness.py         # FRESHNESS_TTL_SECONDS, EODHD_CREDIT_COST
-│   └── value_objects.py     # Timeframe, ObjectRef (claim-check pointer), InstrumentKey, DateRange
-├── infrastructure/
-│   ├── adapters/
-│   │   ├── providers/       # base.py, eodhd.py, finnhub.py, yahoo.py, registry.py
-│   │   ├── canonical.py     # Raw → canonical transformation
-│   │   ├── object_store.py  # MinIO adapter
-│   │   └── zero_bar_tracker.py  # ValkeyZeroBarTracker (Valkey-backed streak counter)
-│   ├── metrics/
-│   │   ├── eodhd.py         # EODHD-specific Prometheus metrics (s2_eodhd_*)
-│   │   └── providers.py     # Generic provider metrics (s2_mi_provider_*)
-│   ├── config/settings.py
-│   ├── db/                  # models, repos, session, UoW
-│   └── messaging/           # dispatcher, kafka/ (mapper, serialization, schemas/)
-├── scheduler/main.py        # Standalone scheduler process (APScheduler)
-├── worker/main.py           # Standalone worker process (claims + executes tasks)
-└── messaging/dispatcher_main.py  # Standalone outbox dispatcher
-```
+All environment variables are prefixed with `MARKET_INGESTION_`.
 
-### EODHD Adapter Methods (11 total)
+| Variable | Default | Required | Description |
+|----------|---------|----------|-------------|
+| `MARKET_INGESTION_DATABASE_URL` | `postgresql+asyncpg://postgres:postgres@localhost:5432/ingestion_db` | Yes | Primary (write) DB URL — use SecretStr in production |
+| `MARKET_INGESTION_DATABASE_URL_READ` | `""` | No | Optional read-replica URL; falls back to DATABASE_URL when empty |
+| `MARKET_INGESTION_KAFKA_BOOTSTRAP_SERVERS` | `localhost:9092` | Yes | Kafka broker address |
+| `MARKET_INGESTION_SCHEMA_REGISTRY_URL` | `http://localhost:8081` | Yes | Confluent Schema Registry URL |
+| `MARKET_INGESTION_STORAGE_ENDPOINT` | `http://localhost:7480` | Yes | MinIO / S3-compatible endpoint |
+| `MARKET_INGESTION_STORAGE_ACCESS_KEY` | — | **Required** | MinIO access key (no default — startup fails without it) |
+| `MARKET_INGESTION_STORAGE_SECRET_KEY` | — | **Required** | MinIO secret key (no default — startup fails without it) |
+| `MARKET_INGESTION_STORAGE_BUCKET` | `market-ingestion` | No | General MinIO bucket |
+| `MARKET_INGESTION_BRONZE_BUCKET` | `market-bronze` | No | Raw data (bronze tier) bucket |
+| `MARKET_INGESTION_CANONICAL_BUCKET` | `market-canonical` | No | Canonical NDJSON (silver tier) bucket |
+| `MARKET_INGESTION_VALKEY_URL` | `redis://localhost:6379/0` | No | Valkey (Redis-compatible) URL for zero-bar tracker and quota |
+| `MARKET_INGESTION_EODHD_API_KEY` | `demo` | Yes (prod) | EODHD API key. `demo` works for 3 endpoints; set a real key for production. Get at eodhd.com |
+| `MARKET_INGESTION_EODHD_BASE_URL` | `https://eodhd.com/api` | No | Override EODHD base URL without image rebuild (useful for staging) |
+| `MARKET_INGESTION_FINNHUB_API_KEY` | `""` | No | Finnhub API key — adapter disabled when empty. Free tier: 60 req/min. Get at finnhub.io |
+| `MARKET_INGESTION_POLYGON_API_KEY` | `""` | No | Polygon.io API key — adapter disabled when empty |
+| `MARKET_INGESTION_POLYGON_BASE_URL` | `https://api.polygon.io` | No | Polygon base URL |
+| `MARKET_INGESTION_ALPHA_VANTAGE_API_KEY` | `""` | No | Alpha Vantage API key — disabled when empty |
+| `MARKET_INGESTION_ALPACA_API_KEY` | `""` | No | Alpaca API key — adapter disabled when empty |
+| `MARKET_INGESTION_ALPACA_SECRET_KEY` | `""` | No | Alpaca secret key |
+| `MARKET_INGESTION_ALPACA_BASE_URL` | `https://data.alpaca.markets` | No | Alpaca data base URL |
+| `MARKET_INGESTION_ALPACA_FEED` | `iex` | No | `iex` (free, ~15min delayed) or `sip` (paid, real-time) |
+| `MARKET_INGESTION_INTERNAL_SERVICE_TOKEN` | `""` | Yes (prod) | Token for `X-Internal-Token` header — mutating API endpoints return 401 when empty |
+| `MARKET_INGESTION_API_GATEWAY_URL` | `http://api-gateway:8000` | No | S9 base URL for JWKS endpoint (internal JWT auth) |
+| `MARKET_INGESTION_INTERNAL_JWT_SKIP_VERIFICATION` | `false` | No | Set `true` only in E2E tests without S9. **NEVER enable in production** — rejected when `APP_ENV=production` |
+| `MARKET_INGESTION_SCHEDULER_TICK_INTERVAL_SECONDS` | `60.0` | No | How often the scheduler checks for due policies |
+| `MARKET_INGESTION_SCHEDULER_MAX_TASKS_PER_TICK` | `1000` | No | Max tasks enqueued per tick |
+| `MARKET_INGESTION_WORKER_BATCH_SIZE` | `10` | No | Tasks claimed per worker batch |
+| `MARKET_INGESTION_WORKER_LEASE_SECONDS` | `300` | No | Lease duration for claimed tasks |
+| `MARKET_INGESTION_WORKER_CONCURRENCY` | `4` | No | Concurrent task execution slots |
+| `MARKET_INGESTION_PROVIDER_HTTP_TIMEOUT_SECONDS` | `30.0` | No | HTTP timeout for provider API calls |
+| `MARKET_INGESTION_DISPATCHER_BATCH_SIZE` | `50` | No | Outbox events dispatched per batch |
+| `MARKET_INGESTION_DISPATCHER_POLL_INTERVAL_SECONDS` | `1.0` | No | Dispatcher poll cadence |
+| `MARKET_INGESTION_DISPATCHER_LEASE_SECONDS` | `60` | No | Dispatcher outbox event lease duration |
+| `MARKET_INGESTION_AUTO_BACKFILL_ON_STARTUP` | `false` | No | Enable startup auto-backfill (off by default; gitops flips it on) |
+| `MARKET_INGESTION_AUTO_BACKFILL_INITIAL_DAYS` | `14` | No | How many days back to auto-backfill on startup |
+| `MARKET_INGESTION_AUTO_BACKFILL_YEARS` | `10` | No | Hard cap on backfill horizon |
+| `MARKET_INGESTION_LOG_LEVEL` | `INFO` | No | Log level (`DEBUG`, `INFO`, `WARNING`, `ERROR`) |
+| `MARKET_INGESTION_LOG_JSON` | `true` | No | Structured JSON logs (set `false` for human-readable dev output) |
+| `MARKET_INGESTION_OTLP_ENDPOINT` | `""` | No | OpenTelemetry OTLP endpoint for tracing |
 
-The `EODHDProviderAdapter` implements 11 fetch methods covering all supported EODHD endpoints:
+**Provider routing env vars (comma-separated `provider:weight` pairs):**
 
-**Original endpoints (3):**
-- `fetch_ohlcv` — EOD daily bars (or intraday by minute)
-- `fetch_quotes` — 15-minute delayed quotes
-- `fetch_fundamentals` — All fundamentals sections (18 total)
-
-**Extended endpoints (8, added in waves 01–03):**
-- `fetch_earnings_calendar` — Upcoming earnings announcements (EXT-02)
-- `fetch_economic_events` — Economic calendar events (EXT-03)
-- `fetch_macro_indicator` — Macro indicators (GDP, inflation, etc.) (EXT-04)
-- `fetch_news_sentiment` — News article sentiment analysis (EXT-05)
-- `fetch_insider_transactions` — Insider trading activity (EXT-06)
-- `fetch_yield_curve` — Yield curve rates by maturity (EXT-07)
-- `fetch_historical_market_cap` — Market cap time series (EXT-08)
-
-All methods perform provider-level error mapping (auth errors, rate limits, transient failures)
-and raise `ProviderError` or `ProviderAuthError` subclasses. The demo API key (accessible by
-everyone) works for the original 3 endpoints + limited earnings calendar with symbol filter;
-the other 5 endpoints require a paid subscription.
-
-**Retry-After parsing (PLAN-0036 W0)**: `_parse_retry_after(header_value)` at module level
-handles RFC 7231 §7.1.3 format — integer/float seconds or HTTP-date. Returns `float | None`.
-`ProviderRateLimited` now carries a `retry_after: float | None` attribute set from this header.
-API keys are never exposed in error messages — `_endpoint_slug(url)` strips host + query params.
-
-**BaseProviderAdapter (PLAN-0038 W A-1)**: `EODHDProviderAdapter` now extends `BaseProviderAdapter`
-(`infrastructure/adapters/providers/base.py`) instead of `ProviderAdapter` directly. After each
-successful fetch, all 11 methods call `self._record_api_call()` which:
-- emits a `provider_api_call` structlog event with fields: `provider`, `dataset_type`, `symbol`,
-  `exchange`, `timeframe`, `bars_returned`, `latency_ms`, `credit_cost`, `status`
-- increments generic `s2_mi_provider_*` Prometheus metrics (see below)
-`ProviderFetchResult.bars_returned` (new field, default `0`) carries the count of records returned.
-
-**FinnhubProviderAdapter (PLAN-0038 W A-2)**: New `FinnhubProviderAdapter(BaseProviderAdapter)` at
-`infrastructure/adapters/providers/finnhub.py`. Implements 3 dataset types on Finnhub free tier
-(60 req/min, 1.1s rate-limit sleep after each call, `credit_cost=0`):
-- `fetch_news_sentiment(symbol, from_date, to_date)` — GET `/company-news`
-- `fetch_earnings_calendar(from_date, to_date)` — GET `/calendar/earnings` (no symbol on free tier)
-- `fetch_insider_transactions(ticker)` — GET `/stock/insider-transactions`
-
-OHLCV, quotes, fundamentals raise `ProviderUnavailable`. Registered in `build_provider_registry()`
-only when `finnhub_api_key` is non-empty (graceful degradation). Provider enum: `Provider.FINNHUB`.
-
-**Provider configuration (env vars):**
-
-| Env var | Default | Purpose |
-|---------|---------|---------|
-| `MARKET_INGESTION_EODHD_API_KEY` | `demo` | EODHD API key (set to live key in production) |
-| `MARKET_INGESTION_EODHD_BASE_URL` | `https://eodhd.com/api` | EODHD base URL (override for staging/mock without image rebuild) |
-| `MARKET_INGESTION_FINNHUB_API_KEY` | `""` | Finnhub API key — adapter not registered when empty |
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `MARKET_INGESTION_ROUTING_OHLCV_INTRADAY` | `alpaca:100,polygon:80` | Provider priority for 1m/5m/15m/1h/4h OHLCV |
+| `MARKET_INGESTION_ROUTING_OHLCV_EOD` | `yahoo_finance:100,eodhd:80` | Provider priority for 1d/1w/1M OHLCV |
+| `MARKET_INGESTION_ROUTING_QUOTES` | `eodhd:100` | Provider priority for real-time quotes |
+| `MARKET_INGESTION_ROUTING_FUNDAMENTALS` | `eodhd:100` | Provider priority for fundamentals |
+| `MARKET_INGESTION_ROUTING_NEWS_SENTIMENT` | `eodhd:100` | Provider priority for news sentiment |
+| `MARKET_INGESTION_ROUTING_EARNINGS_CALENDAR` | `eodhd:100` | Provider priority for earnings calendar |
+| `MARKET_INGESTION_ROUTING_INSIDER_TRANSACTIONS` | `eodhd:100` | Provider priority for insider transactions |
 
 ---
 
-## Provider Coverage
+## External Dependencies
 
-Routing is handled by `_preferred_provider()` in `execute_task.py`. The cheapest registered
-provider is selected at execution time — the stored `task.provider` is not changed.
+### EODHD (Primary Provider)
 
-| Dataset Type | Primary Provider | Fallback | Credit Cost | Notes |
-|---|---|---|---|---|
-| OHLCV (1d/1w/1M) | Yahoo Finance | EODHD | 0 / 1 | Preferred when `yfinance` registered |
-| OHLCV (intraday) | EODHD | — | 5 | Yahoo only supports EOD |
-| QUOTES | EODHD | — | 1 | |
-| FUNDAMENTALS | EODHD | — | 10 | Most expensive; no free alternative yet |
-| NEWS_SENTIMENT | Finnhub | EODHD | 0 / 5 | Preferred when `finnhub_api_key` set |
-| EARNINGS_CALENDAR | Finnhub | EODHD | 0 / 5 | |
-| INSIDER_TRANSACTIONS | Finnhub | EODHD | 0 / 5 | |
-| ECONOMIC_EVENTS | EODHD | — | 5 | |
-| MACRO_INDICATOR | EODHD | — | 5 | |
-| YIELD_CURVE | EODHD | — | 5 | |
-| MARKET_CAP | EODHD | — | 1 | |
+- **Purpose**: OHLCV bars (EOD), real-time quotes (15-min delayed), full fundamentals (18 sections), earnings calendar, economic events, macro indicators, insider transactions, news sentiment, yield curve, historical market cap.
+- **Auth**: `api_token` query parameter.
+- **Rate limits**: Demo key — limited to 3 endpoints; production key — 100,000 credits/month (hard cap). Credit cost: fundamentals=10, intraday=5, news/economic/macro/yield/insider=5, OHLCV EOD=1, quotes=1.
+- **Get your key**: [eodhd.com](https://eodhd.com) — free demo key works for local development.
+- **Quota enforcement**: `EodhdQuotaService` in `libs/messaging` enforces 100K/month via atomic Valkey INCRBY. Soft warning at 80%. Hard block retries the task (not fail) so it can run next month.
 
-**Zero-bar failover**: After 5 consecutive zero-bar responses from a free provider, the system
-falls back to EODHD. Streaks are tracked in Valkey (24h TTL auto-expiry). Controlled by
-`ValkeyZeroBarTracker` — disabled when Valkey is unavailable (graceful degradation).
+### Yahoo Finance (Free, OHLCV EOD/weekly/monthly)
+
+- **Purpose**: EOD OHLCV (1d/1w/1mo/1M timeframes only). Free, no API key needed.
+- **Implementation**: `yfinance` Python library (blocking — always wrapped in `asyncio.run_in_executor`).
+- **Limitation**: No intraday data. Falls back to EODHD after 5 consecutive zero-bar responses.
+
+### Finnhub (Free Tier)
+
+- **Purpose**: News sentiment, earnings calendar (global), insider transactions. Free tier: 60 req/min.
+- **Auth**: `token` query parameter (`MARKET_INGESTION_FINNHUB_API_KEY`).
+- **Rate limit**: 1.1s sleep enforced after each call to stay under free-tier limit.
+- **Activation**: Adapter only registered when `finnhub_api_key != ""`.
+- **Get your key**: [finnhub.io](https://finnhub.io) — free developer key.
+
+### Polygon.io (Paid)
+
+- **Purpose**: Multi-symbol batch intraday OHLCV. Free tier: 5 req/min.
+- **Auth**: API key in query params.
+- **Activation**: Disabled when `polygon_api_key = ""`.
+
+### Alpaca Markets (Data API)
+
+- **Purpose**: 1-minute intraday OHLCV bars (`fetch_ohlcv_batch` for multi-symbol batches).
+- **Auth**: `APCA-API-KEY-ID` + `APCA-API-SECRET-KEY` HTTP headers (never in URL).
+- **Feed**: `iex` (free, ~15-min delayed) or `sip` (paid, real-time).
+- **Activation**: Disabled when `alpaca_api_key = ""`.
 
 ---
 
-## Runtime Processes (4)
+## Covered Symbols (64 total)
 
-| Process | Entry Point | Purpose |
-|---------|-------------|---------|
-| API Server | `uvicorn app.api.main:app` | Manual triggers, status, health |
-| Scheduler | `python -m app.scheduler.main` | Creates ingestion tasks from policies |
-| Worker | `python -m app.worker.main` | Claims tasks, fetches data, stores in MinIO |
-| Outbox Dispatcher | `python -m app.messaging.dispatcher_main` | Publishes outbox events to Kafka |
+Polling policies are seeded for 64 symbols across 8 categories:
+
+| Category | Count | Examples |
+|----------|-------|---------|
+| US Large-Cap Equities | 30 | AAPL, MSFT, GOOGL, AMZN, NVDA, TSLA, META, JPM, V |
+| Sector ETFs | 9 | XLK, XLV, XLE, XLY, QQQ, IBIT |
+| Broad Market ETFs | 4 | SPY, IVV, VOO, VTI |
+| Fixed Income ETFs | 4 | IEF, TLT, AGG, SHY |
+| Commodity ETFs | 3 | GLD, SLV, USO (fundamentals disabled) |
+| Major Indices | 5 | GSPC, CCMP, INDU, RUT, VIX (fundamentals disabled) |
+| Crypto Top-10 | 10 | BTC-USD, ETH-USD, BNB-USD, SOL-USD (fundamentals disabled) |
+| Forex | 1 | EURUSD |
+
+**Per-symbol polling schedule** (5 policies each):
+
+| Policy | Interval | Notes |
+|--------|----------|-------|
+| `quotes` (1d) | 5 min | `market_hours_only=true` — only during 13:30–20:00 UTC Mon–Fri |
+| `ohlcv 1d` | 6 hours | Daily bars |
+| `ohlcv 1w` | 7 days | Weekly bars |
+| `ohlcv 1mo` | 30 days | Monthly bars |
+| `fundamentals` | 7 days | Disabled for crypto/indices/commodity ETFs |
+
+**Steady-state credit consumption**: ~6,300 EODHD credits/day (well under the 100K/month limit).
 
 ---
 
 ## Core Workflows
 
-### Scheduled Ingestion
+### Scheduled Ingestion Flow
 
-```mermaid
-sequenceDiagram
-    participant SCH as Scheduler
-    participant DB as market_ingestion_db
-    participant WRK as Worker
-    participant API as EODHD
-    participant MIO as MinIO
-    participant OBX as Outbox Dispatcher
-    participant KFK as Kafka
+```
+Scheduler tick
+  → evaluate polling_policies (cron + freshness gate)
+  → INSERT ingestion_task (ON CONFLICT DO NOTHING via dedupe_key)
 
-    SCH->>DB: check polling_policies (cron match)
-    SCH->>DB: INSERT ingestion_task (status=pending)
-    WRK->>DB: claim task (lease-based locking)
-    WRK->>DB: check provider_budget
-    WRK->>API: fetch data (OHLCV/quotes/fundamentals)
-    API-->>WRK: JSON response
-    WRK->>MIO: PUT raw (bronze)
-    WRK->>WRK: normalize → canonical (Parquet/JSONL)
-    WRK->>MIO: PUT canonical (silver)
-    WRK->>DB: INSERT outbox_event + UPDATE task status=completed
-    OBX->>KFK: publish market.dataset.fetched
+Worker loop
+  → claim_batch (FOR UPDATE SKIP LOCKED, lease-based)
+  → check provider_budget (SELECT FOR UPDATE, decrement credits)
+  → check watermark (skip if still fresh per FRESHNESS_TTL_SECONDS)
+  → _preferred_provider() → select cheapest available provider
+  → fetch from provider API
+  → PUT raw bytes → MinIO bronze bucket
+  → transform → canonical NDJSON
+  → PUT canonical → MinIO silver bucket
+  → INSERT outbox_event (atomic with task completion)
+  → UPDATE task.status = succeeded
+
+Outbox Dispatcher
+  → poll outbox_events WHERE status=pending
+  → claim + serialize to Avro
+  → produce to Kafka market.dataset.fetched
+  → UPDATE outbox_event.status = dispatched
+```
+
+### Zero-Bar Failover
+
+After 5 consecutive `bars_returned=0` responses from a free provider (tracked in Valkey with a 24h TTL streak counter), the system re-fetches using the fallback provider (Yahoo→EODHD, Finnhub→EODHD). Disabled gracefully when Valkey is unavailable.
+
+### Canonical Passthrough Serialization
+
+Seven dataset types use passthrough serialization (single NDJSON line wrapping raw payload):
+`economic_events`, `macro_indicator`, `insider_transactions`, `earnings_calendar`, `news_sentiment`, `yield_curve`, `market_cap`.
+
+Format: `{"dataset_type": "...", "symbol": "...", "source": "eodhd", "payload": <raw>, "fetched_at": "..."}`
+
+---
+
+## How to Run Locally
+
+**Prerequisites**: Docker, Python 3.12, `make`.
+
+```bash
+# 1. Start the full platform infra (Postgres, Kafka, MinIO, Valkey)
+make dev  # from repo root
+
+# 2. Create the ingestion_db database (if not using make dev)
+docker exec -it worldview-postgres psql -U postgres -c "CREATE DATABASE ingestion_db;"
+
+# 3. Set up service
+cd services/market-ingestion
+cp configs/dev.local.env.example .env
+# Edit .env — at minimum set MARKET_INGESTION_STORAGE_ACCESS_KEY and _SECRET_KEY
+
+# 4. Install dependencies
+source ../../.venv312/bin/activate
+pip install -e ".[dev]"
+
+# 5. Run database migrations
+alembic upgrade head
+
+# 6. Start the API server
+make run       # port 8002
+
+# 7. (Optional) Start the scheduler and worker in separate terminals
+python -m market_ingestion.infrastructure.scheduler.scheduler_main
+python -m market_ingestion.infrastructure.workers.worker_main
+
+# 8. Verify health
+curl http://localhost:8002/healthz     # → {"status": "ok"}
+curl http://localhost:8002/readyz      # → {"status": "ready"} (or 503 if infra missing)
+```
+
+**Manual trigger (requires infra running):**
+```bash
+curl -X POST http://localhost:8002/api/v1/ingest/trigger \
+  -H "Content-Type: application/json" \
+  -H "X-Internal-Token: dev-token" \
+  -d '{"symbol":"AAPL","exchange":"US","dataset_type":"ohlcv","timeframe":"1d"}'
 ```
 
 ---
 
-## Ticker Coverage (64 symbols — migration 0002 + 0004)
-
-Polling policies are seeded for **64 symbols** across 6 categories. Each symbol gets 5 policies: `quotes` (5 min, adaptive, `market_hours_only=true`), `ohlcv 1d` (6 h), `ohlcv 1w` (7 days after migration 0005), `ohlcv 1mo` (30 days after 0005), and `fundamentals` (7 days after 0005, disabled for crypto/indices/commodity ETFs). The `market_hours_only` flag is enforced in `PollingPolicy.is_due()` via `_is_market_hours_now()` (Mon-Fri 13:30-20:00 UTC).
-
-**EODHD credit costs per endpoint** (budget tokens are scaled accordingly — BP-183):
-
-| Endpoint | EODHD Credits | Used for |
-|----------|--------------|---------|
-| `/api/fundamentals/:ticker` | 10 | fundamentals dataset |
-| `/api/intraday/:ticker` | 5 | ohlcv with timeframe 1m/5m/1h |
-| `/api/news` | 5 | news_sentiment dataset |
-| `/api/eod/:ticker` | 1 | ohlcv 1d/1w/1mo |
-| `/api/real-time/:ticker` | 1 | quotes dataset |
-
-**Steady-state API budget (after migration 0005)**: ~6,300 credits/day vs. ~23,000 before optimisation.
-
-**Monthly quota enforcement (PLAN-0036 W0)**: `EodhdQuotaService` (in `libs/messaging/eodhd_quota`)
-enforces a shared 100,000-credit/month hard cap via Valkey INCRBY (atomic, multi-replica safe).
-Soft limit fires at 80% (warning only). Hard limit blocks the provider call and retries the task.
-`ExecuteTaskUseCase` checks quota before every provider fetch — cost derived from `domain/freshness.py`
-`EODHD_CREDIT_COST` + `EODHD_INTRADAY_COST`. Valkey keys: `eodhd:v1:quota:{YYYY-MM}:credits_used`,
-with service and per-symbol attribution sub-keys. 32-day TTL auto-resets each month.
-
-**Pre-fetch freshness gate (PLAN-0036 W0)**: `watermarks.last_success_at` is now written on every
-successful fetch. `domain/freshness.py` declares `FRESHNESS_TTL_SECONDS` per dataset type.
-The scheduler gate (Wire 1) uses these TTLs to skip enqueuing tasks whose watermarks are still fresh.
-
-**Observability (PLAN-0036 W0)**: `infrastructure/metrics/eodhd.py` exposes 12 Prometheus counters/
-gauges/histograms under the `s2_eodhd_*` namespace: `requests_total`, `credits_used_total`,
-`rate_limited_total`, `errors_total`, `cache_hits_total`, `cache_misses_total`, `quota_blocked_total`,
-`request_duration_seconds`, `circuit_breaker_state`, `monthly_credits_used`, `monthly_credits_limit`.
-
-**Generic provider metrics (PLAN-0038 W A-1)**: `infrastructure/metrics/providers.py` exposes 5 metrics
-under the `s2_mi_provider_*` namespace that work across ALL providers (EODHD, Finnhub, Yahoo Finance):
-- `s2_mi_provider_requests_total` — labels: `provider`, `dataset_type`, `timeframe`, `status_code`
-- `s2_mi_provider_credits_total` — labels: `provider`, `dataset_type` (skipped for free providers)
-- `s2_mi_provider_latency_seconds` — histogram, labels: `provider`, `dataset_type`
-- `s2_mi_provider_rate_limited_total` — labels: `provider`
-- `s2_mi_provider_errors_total` — labels: `provider`, `reason`
-
-Grafana dashboard `infra/grafana/dashboards/api-usage-analytics.json` (uid: `api-usage-analytics-v1`)
-provides 8 panels combining these Prometheus metrics with Loki `provider_api_call` log queries.
-
-| Category | Symbols | Exchange |
-|----------|---------|----------|
-| US Equities (30) | AAPL, MSFT, GOOGL, AMZN, NVDA, TSLA, META, BRK-B, JNJ, V, WMT, JPM, PG, XOM, MA, UNH, HD, COST, MRK, BA, PFE, LLY, AXP, MS, DIS, IBM, EXC, CAT, KO, CVX | US |
-| Sector ETFs (9) | XLK, XLV, XLE, XLY, VTV, QQQ, IBIT, MSTR, PPA | US |
-| Broad Market ETFs (4) | SPY, IVV, VOO, VTI | US |
-| Fixed Income ETFs (4) | IEF, TLT, AGG, SHY | US |
-| Commodity ETFs (3) | GLD, SLV, USO | US (fundamentals disabled — no fin. statements) |
-| Major Indices (5) | GSPC, CCMP, INDU, RUT, VIX | INDX (fundamentals disabled) |
-| Crypto Top-10 (10) | BTC-USD, ETH-USD, BNB-USD, SOL-USD, XRP-USD, ADA-USD, DOGE-USD, AVAX-USD, MATIC-USD, LTC-USD | CC (fundamentals disabled) |
-| Forex (1) | EURUSD | FOREX |
-
-**Migration history**:
-- `0002_initial_seeds.py` — seeds all 64 symbols on fresh databases.
-- `0003_add_market_hours_only.py` — adds `market_hours_only` column; sets `true` for all quote policies.
-- `0004_expand_ticker_coverage.py` — for live systems with original 6-symbol `0002`, adds 58 new symbols via `INSERT … ON CONFLICT DO NOTHING`.
-- `0005_api_call_optimization.py` — fundamentals weekly (not daily), disabled for crypto/indices/commodity ETFs; 1w/1mo OHLCV extended intervals; 5m/1h intraday gated to market hours; budget recalibrated to match EODHD 100K credits/day limit.
-- `0006_weekly_insider_transactions.py` — OPT-10: insider_transactions interval changed from daily (86400 s) to weekly (604800 s); SEC Form 4 is already delayed 2 business days so daily polling adds no value.
-- `0007_expand_economic_event_countries.py` — D-W2: adds economic event polling policies for JPN, CHN, EU (joins existing USA, EUR, GBR from 0002). S7 consumers read from `market.dataset.fetched` so new country events are immediately processed.
-
-Note: PLAN-0036 Wave 0 does NOT add a new migration. The `watermarks.last_success_at` column already exists in the schema; it was simply never written by `save()` — fixed in this wave.
-
-**Canonical passthrough serialization (D-W1)**: 7 dataset types now use `serialize_passthrough()` in `DefaultCanonicalSerializer` instead of bespoke canonical models. Each MinIO object is a single NDJSON line: `{"dataset_type": "...", "symbol": "...", "source": "eodhd", "payload": <raw>, "fetched_at": "..."}`. Types: `economic_events`, `macro_indicator`, `insider_transactions`, `earnings_calendar`, `news_sentiment`, `yield_curve`, `market_cap`.
-
----
-
-## Error Handling
-
-- **Rate limit exceeded (429)**: `ProviderRateLimited` raised with `retry_after` parsed from header. Task retried, budget decremented. `s2_eodhd_rate_limited_total` counter incremented.
-- **Quota exhausted (monthly hard limit)**: `ExecuteTaskUseCase` calls `EodhdQuotaService.try_consume()` before fetch. On `HARD_LIMIT_EXCEEDED`, task is retried (not failed) so it can run next month. Provider is never called.
-- **Provider 5xx**: retry up to max_attempts with backoff
-- **Malformed response**: mark task as `failed`, log error, no retry (FatalError)
-- **MinIO unavailable**: RetryableError, backoff
-
----
-
-## Caching Strategy
-
-- **Provider budget**: tracked in DB (not cache) for durability
-- **Negative cache**: Valkey `neg:ing:{provider}:{symbol}` with 120s TTL for failed fetches
-
----
-
-## Testing Plan
-
-| Type | What | Command |
-|------|------|---------|
-| Unit | Domain entities, canonical transformation | `make test` |
-| Unit | Use cases (mock repos + adapters) | `make test` |
-| Unit | EODHD adapter (mocked) | `make test` (24 tests) |
-| Live | EODHD adapter with real demo API calls | `make test -- tests/live/test_eodhd_live.py` (56 tests: 48 passed, 8 xfailed for paid-only) |
-| Integration | Worker → MinIO round-trip | `make test-integration` |
-| Contract | Avro event contract (market.dataset.fetched mapper/topic/schema alignment) | `make test-contract` |
-
----
-
-## Local Run
+## How to Run Tests
 
 ```bash
 cd services/market-ingestion
-cp configs/dev.local.env.example .env
-make run       # API on port 8002
+
+# Unit tests only (fast, no Docker needed)
 make test
+# or equivalently:
+python -m pytest tests/unit tests/domain tests/application tests/api -v -m unit
+
+# Contract tests (Avro schema alignment)
+make test-contract
+# or:
+python -m pytest tests/contract -v
+
+# Live tests against real EODHD demo API
+make test-live
+# or:
+python -m pytest tests/live/test_eodhd_live.py -v
+# Note: 48 pass, 8 xfail (paid-only endpoints expected to fail with demo key)
+
+# Integration tests (requires Docker)
+make test-integration
+# or:
+python -m pytest tests/integration -v -m integration
+
+# Full test suite
+make test-all
+
+# Lint and type checks
 make lint
-make migrate
+python -m mypy src/ --config-file mypy.ini
 ```
+
+**Test categories:**
+
+| Category | Location | What is tested | Needs Docker? |
+|----------|----------|----------------|---------------|
+| Unit | `tests/unit/`, `tests/domain/`, `tests/application/` | Domain entities, use cases with mocked repos, provider adapters with mocked HTTP | No |
+| API | `tests/api/` | FastAPI route responses with mocked use cases | No |
+| Contract | `tests/contract/` | Avro schema ↔ Python mapper alignment | No |
+| Live | `tests/live/` | Real EODHD demo API calls | No (network) |
+| Integration | `tests/integration/` | Worker ↔ MinIO round-trip with real containers | Yes |
+| E2E | `tests/e2e/` | Full pipeline end-to-end | Yes |
+
+---
+
+## Common Pitfalls
+
+1. **`yfinance` is synchronous** — never call `yf.Ticker.history()` directly in async code. Always wrap in `asyncio.get_running_loop().run_in_executor(None, lambda: ...)`.
+
+2. **EODHD demo key limitations** — The demo key only works for `fetch_ohlcv`, `fetch_quotes`, and `fetch_fundamentals` plus limited `fetch_earnings_calendar`. All other endpoints require a paid subscription. Set `MARKET_INGESTION_EODHD_API_KEY` to a real key in production.
+
+3. **Watermark race condition** — Two workers racing on the same symbol can both try to update the watermark. The loser raises `WatermarkViolation` → `ExecuteTaskUseCase` calls `task.retry()` (not `task.fail()`). The task is re-queued and the worker loop picks it up again.
+
+4. **Token bucket (ProviderBudget) requires SELECT FOR UPDATE** — Load the budget with `get_for_update()` inside a transaction to prevent double-consume by concurrent workers. See BP-036.
+
+5. **Provider routing is config-driven** — The `routing_*` env vars define provider priority. A registered provider with weight 0 is effectively disabled. The `_preferred_provider()` function selects the highest-weight registered provider for the dataset+timeframe combination.
+
+6. **Finnhub earnings calendar has no symbol filter on the free tier** — `fetch_earnings_calendar` returns all upcoming global earnings in the date window. The call site in `execute_task._fetch()` passes only `from_date`/`to_date`, not `symbol`.
+
+7. **Bronze object store uses skip-if-exists on retry** — `put()` is a no-op if the key already exists (idempotent retry path, D-008). This prevents duplicate bronze objects from accumulating on retry storms.
+
+8. **`httpx` stubs return `Any` for `response.content`** — Always use `cast("bytes", response.content)` in provider adapter `_get()` methods or `mypy` will fail with `no-any-return`.
+
+9. **Startup warns on demo EODHD key and default DB credentials** — Both trigger a `structlog` WARNING at startup. This is intentional and not an error; it is a reminder to configure production secrets.
+
+---
+
+## Runbook
+
+**Service is not ingesting data:**
+1. Check `GET /readyz` — if 503, check DB/MinIO/Kafka connectivity.
+2. Check `GET /api/v1/ingest/status` — are tasks stuck in `running` (expired leases)?
+3. Run `GET /api/v1/policies` — are policies enabled (`is_enabled=true`)?
+4. Check Prometheus `s2_eodhd_quota_blocked_total` — monthly quota exhausted?
+5. Check `s2_eodhd_rate_limited_total` — burst rate limiting?
+6. Manually trigger: `POST /api/v1/ingest/trigger`.
+7. Check MinIO buckets `market-bronze` and `market-canonical` for recent objects.
+
+**Tasks stuck in RUNNING state:**
+- Reclaim worker (`reclaim_worker_main.py`) resets expired-lease tasks to RETRY every N seconds.
+- Check `worker_claim_error` log events for DB claim failures.
+- If worker crashed, tasks will auto-recover when lease expires.
+
+**EODHD quota exhausted:**
+- Check Valkey key `eodhd:v1:quota:{YYYY-MM}:credits_used`.
+- Tasks with hard-limit exceeded are retried (not failed) — they will process next month.
+- To reset in dev: `DEL eodhd:v1:quota:*` in Valkey.
+
+**MinIO unavailable:**
+- Tasks raise `RetryableError` and are re-queued with exponential backoff.
+- Check `storage_endpoint` env var and MinIO container health.
+
+**Observability:**
+- Metrics: `s2_eodhd_*` (EODHD-specific) and `s2_mi_provider_*` (all providers)
+- Grafana dashboard: `infra/grafana/dashboards/api-usage-analytics.json`
+- Key log events: `provider_api_call`, `task_claimed`, `task_succeeded`, `task_failed`, `backoff_seconds`

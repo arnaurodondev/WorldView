@@ -37,8 +37,8 @@
 "use client";
 // WHY "use client": uses useState for expand/collapse toggle, useQuery for data fetching.
 
-import { useState } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useState, useEffect } from "react";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import Link from "next/link";
 // PLAN-0059 G-2: dashboard is the home route, so its initial bundle is the
 // most cost-sensitive in the app. react-markdown + remark-gfm + the GFM
@@ -138,6 +138,11 @@ export function MorningBriefCard() {
   // The hook returns a `discuss` callback + loading/error state.
   const { discuss, loading: discussLoading, error: discussError } = useBriefChatSeed(accessToken ?? undefined);
 
+  // FR-1.4: useQueryClient for midnight UTC invalidation scheduling.
+  // WHY useQueryClient here (not at module level): hooks must be called inside
+  // a component function — useQueryClient grabs the client from React context.
+  const queryClient = useQueryClient();
+
   // WHY useQuery: TanStack Query handles caching, refetching, error retries,
   // and deduplication automatically. The queryKey ensures the cache is keyed
   // per endpoint (not per component instance).
@@ -152,12 +157,39 @@ export function MorningBriefCard() {
     queryKey: ["morning-brief"],
     queryFn: () => createGateway(accessToken).getMorningBrief(),
     enabled: !!accessToken,
-    // WHY staleTime 30min: briefs are generated once per morning; no need to refetch constantly
-    staleTime: 30 * 60 * 1000,
+    // WHY staleTime 12h (was 30min): morning briefs are generated once per day.
+    // A 30-minute window caused unnecessary refetches during a single session;
+    // 12 hours matches the generation cadence and prevents redundant round-trips
+    // while still refreshing when the user returns for an afternoon session.
+    staleTime: 12 * 60 * 60 * 1000,
     // WHY retry: S8 briefing may be generating; retry up to 2x with 10s delay
     retry: 2,
     retryDelay: 10_000,
   });
+
+  // FR-1.4: Schedule a one-shot cache invalidation at the next 00:00 UTC so
+  // the brief refreshes automatically when a new one is generated at midnight.
+  // WHY setTimeout (not setInterval): we only need a single invalidation; the
+  // subsequent render after invalidation will re-enter this effect and schedule
+  // the next night's timer. WHY 00:00 UTC specifically: S8 generates briefs at
+  // midnight UTC — invalidating at that moment ensures the next query hits the
+  // fresh brief rather than serving the previous day's cached response.
+  useEffect(() => {
+    const now = new Date();
+    const nextMidnightUTC = new Date();
+    // setUTCHours(24, 0, 0, 0) rolls over to the next day's midnight
+    nextMidnightUTC.setUTCHours(24, 0, 0, 0);
+    const msUntilMidnight = nextMidnightUTC.getTime() - now.getTime();
+
+    const timer = setTimeout(() => {
+      void queryClient.invalidateQueries({ queryKey: ["morning-brief"] });
+    }, msUntilMidnight);
+
+    // WHY cleanup: if the component unmounts before midnight (e.g. the user
+    // navigates away), cancel the timer so we don't call invalidateQueries
+    // on an unmounted component's stale queryClient reference.
+    return () => clearTimeout(timer);
+  }, [queryClient]);
 
   // ── Loading state ──────────────────────────────────────────────────────────
   if (isLoading) {
@@ -566,7 +598,7 @@ export function MorningBriefCard() {
                   // visible while the trader reads the full story.
                   target="_blank"
                   rel="noopener noreferrer"
-                  className="inline-flex max-w-[260px] items-center gap-1 rounded border border-border bg-muted px-2 py-1 text-[11px] text-muted-foreground hover:bg-muted/70 hover:text-foreground"
+                  className="inline-flex max-w-[260px] items-center gap-1 rounded-[2px] border border-border bg-muted px-2 py-1 text-[11px] text-muted-foreground hover:bg-muted/70 hover:text-foreground"
                   title={story.title}
                 >
                   {/* Source domain — small uppercase label so the user can
