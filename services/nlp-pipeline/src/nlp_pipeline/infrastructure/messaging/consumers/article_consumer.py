@@ -51,6 +51,7 @@ from nlp_pipeline.application.blocks.suppression import (
     should_generate_chunk_embeddings,
     should_run_deep_extraction,
 )
+from nlp_pipeline.domain.enums import ProcessingPath
 from nlp_pipeline.infrastructure.intelligence_db.repositories.canonical_entity import (
     CanonicalEntityRepository,
 )
@@ -646,40 +647,63 @@ class ArticleProcessingConsumer(ValkeyDedupMixin, BaseKafkaConsumer[None]):
             )
 
             # ── Outbox event emission (all within the open nlp_s transaction) ──
-            await _enqueue_enriched(
-                outbox_repo=outbox_repo,
-                settings=self._settings,
-                doc_id=doc_id,
-                source_type=source_type,
-                source_name=source_name,
-                published_at=published_at,
-                is_backfill=is_backfill,
-                routing_decision=routing_decision,
-                sections=sections,
-                chunks=chunks,
-                mentions=final_mentions,
-                extraction_result=ml.extraction_result,
-                correlation_id=correlation_id,
-                extraction_model_id=(
-                    self._settings.extraction_model_id if should_run_deep_extraction(ml.final_path) else None
-                ),
-            )
-            if ml.signals:
-                await _enqueue_signal_events(
+            # W1-01 (BUG-001): SUPPRESS-tier articles (ProcessingPath.HALT) must NOT
+            # emit nlp.article.enriched.v1 — S7 would consume an empty document and
+            # pollute the knowledge graph with dead-weight relations from zero-
+            # extraction documents.  We also skip signal events and temporal events
+            # because both require extraction output that does not exist on HALT
+            # (deep extraction is gated by should_run_deep_extraction(HALT)==False
+            # so ml.extraction_result["events"] is empty and ml.signals is empty).
+            # Block 8 (price-impact labelling) is a SEPARATE worker (see
+            # workers/price_impact_labelling_worker.py) and still runs against the
+            # routing_decisions row written by persist_artifacts above — this gate
+            # only affects the three outbox emissions below.
+            if ml.final_path == ProcessingPath.HALT:
+                tier_value = (
+                    routing_decision.routing_tier.value
+                    if hasattr(routing_decision.routing_tier, "value")
+                    else routing_decision.routing_tier
+                )
+                logger.info(  # type: ignore[no-any-return]
+                    "article_suppressed_skipping_enriched_event",
+                    doc_id=str(doc_id),
+                    routing_tier=tier_value,
+                )
+            else:
+                await _enqueue_enriched(
                     outbox_repo=outbox_repo,
                     settings=self._settings,
-                    signals=ml.signals,
                     doc_id=doc_id,
+                    source_type=source_type,
+                    source_name=source_name,
+                    published_at=published_at,
                     is_backfill=is_backfill,
+                    routing_decision=routing_decision,
+                    sections=sections,
+                    chunks=chunks,
+                    mentions=final_mentions,
+                    extraction_result=ml.extraction_result,
                     correlation_id=correlation_id,
+                    extraction_model_id=(
+                        self._settings.extraction_model_id if should_run_deep_extraction(ml.final_path) else None
+                    ),
                 )
-            await _maybe_emit_temporal_events(
-                outbox_repo=outbox_repo,
-                settings=self._settings,
-                doc_id=doc_id,
-                published_at=published_at,
-                ml=ml,
-            )
+                if ml.signals:
+                    await _enqueue_signal_events(
+                        outbox_repo=outbox_repo,
+                        settings=self._settings,
+                        signals=ml.signals,
+                        doc_id=doc_id,
+                        is_backfill=is_backfill,
+                        correlation_id=correlation_id,
+                    )
+                await _maybe_emit_temporal_events(
+                    outbox_repo=outbox_repo,
+                    settings=self._settings,
+                    doc_id=doc_id,
+                    published_at=published_at,
+                    ml=ml,
+                )
             if tenant_id is not None:
                 await _enqueue_document_ready(
                     outbox_repo=outbox_repo,
