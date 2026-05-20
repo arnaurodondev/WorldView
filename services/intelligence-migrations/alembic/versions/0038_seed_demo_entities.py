@@ -9,7 +9,7 @@ WHY THIS MIGRATION EXISTS:
   instrument deep-dive surface (B5).  Audit R3 / R4 / F2 found a series of
   demo-critical canonicals MISSING from intelligence_db.canonical_entities:
 
-    - OpenAI, Anthropic       (organisations, no ticker)
+    - OpenAI, Anthropic       (private AI labs, no public ticker)
     - COIN (Coinbase)         (financial_instrument)
     - NFLX (Netflix)          (financial_instrument)
     - INTC (Intel)            (financial_instrument)
@@ -31,6 +31,30 @@ WHAT THIS MIGRATION DOES:
   Post-demo: revert via ``downgrade()`` which DELETEs the seeded rows by id
   prefix.  The IDs use ``0195daad-d001-...`` (prefix 'd001' for "demo seed
   Wave 0") so they are trivially identifiable in queries.
+
+ENTITY_TYPE MAPPING (PLAN-0089 F2 Step 1 follow-up):
+  Migration 0039 (added after this migration in the same wave) installs a
+  CHECK constraint that restricts ``entity_type`` to 11 canonical values:
+    'financial_instrument', 'person', 'event', 'sector', 'industry',
+    'macro_indicator', 'place', 'product', 'index', 'currency', 'unknown'
+
+  This migration originally inserted OpenAI and Anthropic with the legacy
+  value ``'organization'`` — NOT in the canonical set, so a fresh
+  ``alembic upgrade head`` would fail at 0039 with a check-constraint
+  violation. Mapping decisions:
+
+    - OpenAI    : 'organization' → 'unknown'
+        (private AI lab; no ticker; not tradable; doesn't fit
+        'financial_instrument', 'person', 'event', 'sector', 'industry',
+        'macro_indicator', 'place', 'product', 'index', or 'currency'.
+        Falls into the 'unknown' catch-all per migration 0039 comment.)
+    - Anthropic : 'organization' → 'unknown'
+        (same reasoning as OpenAI: private PBC, no ticker, no other
+        canonical bucket fits.)
+
+  Per-row decisions are inline-commented in _DEMO_SEEDS below. All other
+  rows are already ``'financial_instrument'`` (public-equity tickers) and
+  require no change.
 """
 
 from __future__ import annotations
@@ -49,17 +73,22 @@ depends_on = None
 
 # (canonical_name, entity_type, ticker, exchange, description, aliases[])
 _DEMO_SEEDS: list[tuple[str, str, str | None, str | None, str, list[str]]] = [
+    # OpenAI: private AI lab; no public ticker; no other canonical bucket fits.
+    # Mapped 'organization' → 'unknown' (PLAN-0089 F2 Step 1 follow-up, see file
+    # docstring for the full mapping rationale).
     (
         "OpenAI",
-        "organization",
+        "unknown",
         None,
         None,
         "American AI research and deployment organization, creator of GPT family models, ChatGPT, and DALL·E. Founded 2015.",
         ["OpenAI", "Open AI", "OAI"],
     ),
+    # Anthropic: private PBC; no public ticker; same reasoning as OpenAI.
+    # Mapped 'organization' → 'unknown'.
     (
         "Anthropic",
-        "organization",
+        "unknown",
         None,
         None,
         "American AI safety and research company, creator of the Claude family of large language models. Founded 2021.",

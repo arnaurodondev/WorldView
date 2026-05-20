@@ -17,7 +17,10 @@ qa-beta-test-engineer (2026-05-09) flagged this CRITICAL:
     `ticker NOT NULL` tightening would fail the migration on apply, and a
     test catches it before deployment.
   * data shape — spot-check that COIN is `financial_instrument` with
-    `ticker='COIN'`, OpenAI is `organization` with no ticker, etc.
+    `ticker='COIN'`, OpenAI is `unknown` with no ticker, etc.
+    (NOTE: PLAN-0089 F2 Step 1 follow-up remapped OpenAI/Anthropic from
+    `'organization'` → `'unknown'` so they pass migration 0039's CHECK
+    constraint — see 0038 docstring for the full mapping table.)
 
 Mark: integration (requires running Postgres with pgvector).
 The session-scoped `run_migrations` fixture in conftest.py runs upgrade head,
@@ -43,8 +46,10 @@ _SEED_SOURCE = "PLAN-0087"
 # as the migration body declares them; a drift in the migration that drops a
 # row, renames an entity, or flips a ticker fails the matching test below.
 _EXPECTED_CANONICALS: dict[str, tuple[str, str | None]] = {
-    "OpenAI": ("organization", None),
-    "Anthropic": ("organization", None),
+    # OpenAI / Anthropic remapped 'organization' → 'unknown' so the rows
+    # satisfy migration 0039's CHECK constraint (PLAN-0089 F2 Step 1 f/u).
+    "OpenAI": ("unknown", None),
+    "Anthropic": ("unknown", None),
     "Coinbase Global Inc.": ("financial_instrument", "COIN"),
     "Netflix, Inc.": ("financial_instrument", "NFLX"),
     "Intel Corporation": ("financial_instrument", "INTC"),
@@ -111,8 +116,15 @@ def test_upgrade_seeds_aliases_for_each_canonical(conn: sa.engine.Connection) ->
     assert bare_canonicals == [], f"PLAN-0087 canonicals missing aliases: {[r[0] for r in bare_canonicals]}"
 
 
-def test_openai_is_organization_with_no_ticker(conn: sa.engine.Connection) -> None:
-    """OpenAI is the lead audit-target — pin its shape explicitly."""
+def test_openai_is_unknown_with_no_ticker(conn: sa.engine.Connection) -> None:
+    """OpenAI is the lead audit-target — pin its shape explicitly.
+
+    Migration 0038 originally inserted OpenAI as ``entity_type = 'organization'``,
+    but PLAN-0089 F2 Step 1's follow-up remapped it to ``'unknown'`` so the
+    row passes migration 0039's CHECK constraint. OpenAI has no public ticker
+    and doesn't fit any other canonical bucket (not a financial_instrument,
+    person, event, sector, etc.), so ``'unknown'`` is the correct catch-all.
+    """
     row = conn.execute(
         text(
             "SELECT entity_type, ticker, exchange "
@@ -123,7 +135,7 @@ def test_openai_is_organization_with_no_ticker(conn: sa.engine.Connection) -> No
         {"ss": _SEED_SOURCE},
     ).fetchone()
     assert row is not None, "OpenAI canonical missing — D-R3-007 regression"
-    assert row[0] == "organization"
+    assert row[0] == "unknown"
     assert row[1] is None  # ticker
     assert row[2] is None  # exchange
 

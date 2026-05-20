@@ -21,26 +21,35 @@ WHY THIS MIGRATION EXISTS:
   match this enum before the constraint is enforced on real data.
 
 WHAT THIS MIGRATION DOES:
-  1. Adds ``ck_canonical_entities_entity_type`` CHECK constraint on the
+  1. Defensively REWRITES any rows whose ``entity_type`` is NOT in the
+     11-value canonical enum to ``'unknown'``. RAISES a NOTICE with the
+     row count so operators see if anything was rewritten. This makes the
+     migration idempotent under any pre-existing data — including the
+     legacy seeds from 0009 (``'organization'``, ``'location'``,
+     ``'macroeconomic_indicator'``, etc.) and migration 0038's earlier
+     ``'organization'`` rows on stale DBs.
+  2. Adds ``ck_canonical_entities_entity_type`` CHECK constraint on the
      pre-existing ``canonical_entities.entity_type`` column. The 11
      canonical values are:
        'financial_instrument', 'person', 'event', 'sector', 'industry',
        'macro_indicator', 'place', 'product', 'index', 'currency', 'unknown'
-  2. Does NOT add a new index — migration 0001 already created
+  3. Does NOT add a new index — migration 0001 already created
      ``idx_entities_type ON canonical_entities (entity_type)`` (line 138).
      A second index on the same column would be redundant.
 
-NO-BACKFILL NOTE (per platform_state: pre-production):
-  No production data exists. Any existing seed rows with legacy
-  ``entity_type`` values (e.g. ``'organization'``, ``'company'``) MUST be
-  rewritten by F2 Step 8 BEFORE this CHECK is added in any real environment.
-  In CI the migration test suite runs against an empty schema, so the
-  constraint passes trivially.
+BELT-AND-SUSPENDERS NOTE:
+  Migration 0038 was also patched (PLAN-0089 F2 Step 1 follow-up) to insert
+  OpenAI / Anthropic with ``entity_type = 'unknown'`` directly, so on a
+  fresh ``alembic upgrade head`` the Phase 1 UPDATE here rewrites zero rows
+  and emits no NOTICE. The defensive UPDATE remains in place for any
+  environment with stale data from prior 0038 applies or legacy 0009 seeds.
 
 DOWNGRADE:
-  Drops the CHECK constraint. The pre-existing ``idx_entities_type`` index
-  is untouched (it was created by migration 0001 and is not owned by this
-  migration).
+  Drops the CHECK constraint. The Phase 1 UPDATE is NOT reverted — those
+  legacy values are not reachable through the new application code anyway,
+  and re-introducing them would break the invariant this migration enforces.
+  The pre-existing ``idx_entities_type`` index is untouched (it was created
+  by migration 0001 and is not owned by this migration).
 """
 
 from __future__ import annotations
@@ -73,10 +82,54 @@ _CANONICAL_KINDS: tuple[str, ...] = (
 
 
 def upgrade() -> None:
-    """Add the CHECK constraint on canonical_entities.entity_type."""
+    """Add the CHECK constraint on canonical_entities.entity_type.
+
+    Two-phase upgrade (PLAN-0089 F2 Step 1 follow-up):
+      1. DEFENSIVE REWRITE — UPDATE any row whose entity_type is NOT in the
+         11-value canonical enum to ``'unknown'``. This makes the migration
+         idempotent under any pre-existing data (legacy seeds from 0009,
+         migration 0038's original ``'organization'`` rows on a stale DB,
+         or any future migration we haven't yet audited).
+      2. ADD CONSTRAINT — once the data is known-clean, install the CHECK.
+
+    The defensive rewrite is a one-time cleanup; the downgrade() does NOT
+    undo it (the legacy values are not reachable through the new application
+    code anyway, and re-introducing them would break the very invariant this
+    migration enforces).
+    """
     # Render the SQL VALUES list once so the migration body is auditable in
-    # one glance. Each value is single-quoted and comma-separated.
+    # one glance. Each value is single-quoted and comma-separated. Reused by
+    # both the defensive UPDATE and the CHECK constraint body.
     values_sql = ", ".join(f"'{kind}'" for kind in _CANONICAL_KINDS)
+
+    # ── Phase 1: defensive rewrite of any legacy / non-canonical values ──
+    # Wrapped in a DO block so we can RAISE NOTICE with the rewritten count.
+    # GET DIAGNOSTICS captures the row count from the just-executed UPDATE.
+    # Operators on real DBs (if any future env has them) get a heads-up if
+    # this UPDATE actually touched rows — silent rewrites are dangerous.
+    op.execute(
+        f"""
+        DO $$
+        DECLARE
+            rewritten_count INTEGER;
+        BEGIN
+            UPDATE canonical_entities
+               SET entity_type = 'unknown'
+             WHERE entity_type NOT IN ({values_sql});
+            GET DIAGNOSTICS rewritten_count = ROW_COUNT;
+            IF rewritten_count > 0 THEN
+                RAISE NOTICE
+                  '[migration 0039] rewrote % canonical_entities rows from '
+                  'legacy entity_type values to ''unknown'' before adding '
+                  'CHECK constraint',
+                  rewritten_count;
+            END IF;
+        END
+        $$
+        """
+    )
+
+    # ── Phase 2: install the CHECK constraint on now-clean data ──
     op.execute(
         f"""
         ALTER TABLE canonical_entities
