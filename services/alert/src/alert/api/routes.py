@@ -12,6 +12,8 @@ Endpoints:
 
 from __future__ import annotations
 
+import contextlib
+import time
 from datetime import datetime
 from uuid import UUID
 
@@ -486,6 +488,14 @@ async def alerts_stream(
             )
             await websocket.close(code=4401, reason="missing scope")
             return
+
+        # BUG-007 (TASK-W2-02): Capture the token expiry now so the dispatch loop
+        # can detect mid-session expiry. PyJWT already validated ``exp`` against
+        # the current time at decode (raising ``ExpiredSignatureError`` if past),
+        # but a long-lived WS connection can outlive its token. We snapshot the
+        # Unix timestamp here and re-check before every send below.
+        # The ``require=["...exp..."]`` option above guarantees ``exp`` is present.
+        token_exp: int = int(payload["exp"])
     except jwt.InvalidAudienceError:
         # Surface this as its own log so the P0-1 regression is visible if
         # the token issuer ever changes audience again.
@@ -510,6 +520,30 @@ async def alerts_stream(
         async with valkey.subscribe(channel) as pubsub:
             while True:
                 message = await pubsub.get_message(ignore_subscribe_messages=True, timeout=30.0)
+
+                # BUG-007 (TASK-W2-02): mid-stream token-expiry check.
+                # PyJWT only validates ``exp`` at handshake. A WS connection can
+                # easily outlive a short-lived ws-token (default 60-300 s). If
+                # the token has expired since handshake, push an ``auth_expired``
+                # notification and close with 4401 so the client can re-auth.
+                # We check here — after the pubsub wake — so the next send below
+                # never goes out under an expired token.
+                if time.time() >= token_exp:
+                    # Best-effort notify — peer may already be gone. ``suppress``
+                    # matches the convention used by
+                    # ``alert/infrastructure/websocket/manager.py`` for peer-side
+                    # send failures and lets the unconditional ``close()`` below
+                    # always terminate the loop.
+                    with contextlib.suppress(Exception):
+                        await websocket.send_json(
+                            {
+                                "type": "auth_expired",
+                                "message": "Session token expired",
+                            },
+                        )
+                    await websocket.close(code=4401)
+                    return
+
                 if message is None:
                     # 30 s elapsed with no alert — send a ping to detect stale connections.
                     # If the client has disconnected, send_text raises and we exit cleanly.
@@ -534,7 +568,18 @@ async def alerts_stream(
         try:
             await websocket.send_json({"error": "service_unavailable", "code": 1011})
             await websocket.close(code=1011)
-        except Exception:  # noqa: S110
-            pass
+        except Exception as exc:
+            # BUG-007 (TASK-W2-02): replaced bare ``except Exception: pass`` with
+            # a structured warning. Disconnect errors during loop teardown are
+            # expected (the peer is often already gone by the time we try to
+            # notify them) so we still swallow — we just want them observable.
+            # exc_info=False keeps the log line concise; the message is enough
+            # to spot trends without polluting logs on every disconnect.
+            logger.warning(  # type: ignore[no-any-return]
+                "websocket_dispatch_error",
+                user_id=str(user_id),
+                error=str(exc),
+                exc_info=False,
+            )
     finally:
         manager.disconnect(user_id)

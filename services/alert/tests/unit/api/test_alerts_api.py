@@ -708,3 +708,143 @@ class TestWebSocketAudienceAndScope:
                     pass
             except Exception:  # noqa: S110
                 pass  # mock valkey loop terminator — auth passed
+
+
+# ── BUG-007 (TASK-W2-02): WebSocket mid-stream token expiry ──────────────────
+#
+# Before the fix, the alerts_stream handler validated the JWT only at handshake.
+# A connection that lived past ``exp`` would keep dispatching alerts with a
+# stale token. The handler now re-checks ``exp`` on every pub/sub wake before
+# sending; on expiry it pushes ``{"type":"auth_expired"}`` and closes 4401.
+#
+# Additionally, the bare ``except Exception: pass`` in the cleanup branch (the
+# ``send_json`` + ``close`` after a subscribe failure) was replaced with a
+# structlog ``websocket_dispatch_error`` warning so silent disconnects are
+# observable. The swallow itself is intentional — peers commonly disappear
+# during teardown — we just want the event in logs.
+
+
+def _build_ws_app_with_pubsub(public_key: Any, get_message_side_effect: Any) -> Any:
+    """Variant of ``_build_ws_app`` that lets the caller drive the pubsub loop.
+
+    The shared ``_build_ws_app`` short-circuits the loop on the first wake by
+    raising ``Exception("stop")``. For the mid-stream expiry test we need the
+    loop to actually iterate once with a real ``get_message`` result so the
+    expiry branch fires. The caller passes any ``side_effect`` accepted by
+    ``AsyncMock`` (single value, list, or callable).
+    """
+    from alert.api.routes import router
+    from alert.infrastructure.websocket.manager import ConnectionManager
+    from fastapi import FastAPI
+
+    app = FastAPI()
+    app.include_router(router)
+    app.state.ws_manager = ConnectionManager()
+    app.state._internal_jwt_skip_verification = False
+    app.state._internal_jwt_public_key = public_key
+
+    mock_pubsub = MagicMock()
+    mock_pubsub.__aenter__ = AsyncMock(return_value=mock_pubsub)
+    mock_pubsub.__aexit__ = AsyncMock(return_value=None)
+    mock_pubsub.get_message = AsyncMock(side_effect=get_message_side_effect)
+    mock_valkey = MagicMock()
+    mock_valkey.subscribe = MagicMock(return_value=mock_pubsub)
+    app.state.valkey = mock_valkey
+    return app
+
+
+class TestWebSocketMidStreamExpiry:
+    """BUG-007 (TASK-W2-02): dispatch loop must re-check token expiry."""
+
+    @pytest.mark.unit
+    def test_ws_emits_auth_expired_and_closes_4401_when_token_expires_mid_stream(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Mid-session ``exp`` rollover → push ``auth_expired`` + close 4401.
+
+        We mint a token whose ``exp`` is in the comfortable future (so handshake
+        passes), then monkeypatch ``alert.api.routes.time.time`` to a value past
+        ``exp`` before the dispatch loop's first wake. The first iteration must
+        detect the rollover, send the ``auth_expired`` JSON frame, and close
+        with the application-level 4401 close code.
+        """
+        from starlette.testclient import TestClient
+        from starlette.websockets import WebSocketDisconnect
+
+        private_key, public_key = _build_rs256_keypair()
+        # exp = a fixed timestamp; well in the future so PyJWT happily decodes
+        # at handshake (current wall clock is < exp).
+        token_exp = 2_000_000_000  # 2033-05-18 — safely > current epoch
+        # Loop side effect: one None wake (drives the expiry check), then stop.
+        # If the expiry branch fails to fire, the loop would loop forever; the
+        # second item terminates it so the test can't hang.
+        app = _build_ws_app_with_pubsub(public_key, [None, Exception("stop")])
+
+        token = _encode_ws_token(private_key, exp=token_exp)
+
+        # Force the dispatch-loop ``time.time()`` check to return a value past
+        # the token's exp. PyJWT internally uses ``datetime.now(tz=UTC)``, not
+        # ``time.time``, so handshake decoding still sees a valid token.
+        monkeypatch.setattr("alert.api.routes.time.time", lambda: token_exp + 1)
+
+        with TestClient(app, raise_server_exceptions=False) as client:
+            with pytest.raises(WebSocketDisconnect) as excinfo:
+                with client.websocket_connect(f"/api/v1/alerts/stream?token={token}") as ws:
+                    # First server frame must be the auth_expired notification
+                    # the dispatch loop pushed before closing the socket.
+                    msg = ws.receive_json()
+                    assert msg["type"] == "auth_expired"
+                    assert "expired" in msg["message"].lower()
+                    # Continuing to receive triggers the close handshake which
+                    # raises WebSocketDisconnect with code 4401.
+                    ws.receive_json()  # pragma: no cover
+            assert excinfo.value.code == 4401
+
+    @pytest.mark.unit
+    def test_ws_dispatch_error_is_logged_not_silently_swallowed(self) -> None:
+        """Replaced bare ``except Exception: pass`` with structlog warning.
+
+        We drive the handler into the cleanup branch by raising ``RuntimeError``
+        from ``get_message``, and we make the cleanup ``send_json`` also raise
+        so the inner ``except Exception`` is hit. Pre-fix this swallowed silently
+        (``# noqa: S110``); post-fix it emits ``websocket_dispatch_error``.
+        """
+        from unittest.mock import patch
+
+        from starlette.testclient import TestClient
+        from structlog.testing import capture_logs
+
+        private_key, public_key = _build_rs256_keypair()
+        # get_message raises → handler enters the ``except Exception`` branch
+        # that tries to notify the client via send_json before closing.
+        app = _build_ws_app_with_pubsub(public_key, RuntimeError("subscribe_broke"))
+        token = _encode_ws_token(private_key)
+
+        # Make the cleanup-branch ``send_json`` raise so the inner except fires.
+        # ``starlette.websockets.WebSocket.send_json`` is the bound method the
+        # route calls; patching the class attribute reroutes both the cleanup
+        # send_json and (if hit) the expiry-branch send_json — for this test we
+        # only exercise the cleanup branch because get_message raised first.
+        from starlette.websockets import WebSocket as StarletteWebSocket
+
+        async def _boom(*_args: Any, **_kwargs: Any) -> None:
+            raise RuntimeError("send_failed")
+
+        with (
+            capture_logs() as logs,
+            patch.object(StarletteWebSocket, "send_json", _boom),
+            TestClient(app, raise_server_exceptions=False) as client,
+        ):
+            try:
+                with client.websocket_connect(f"/api/v1/alerts/stream?token={token}"):
+                    pass
+            except Exception:  # noqa: S110
+                # The server closes the connection; client raises on receive.
+                pass
+
+        # The cleanup swallow must now leave a trace: ``websocket_dispatch_error``
+        # with the underlying exception message attached.
+        dispatch_errors = [entry for entry in logs if entry.get("event") == "websocket_dispatch_error"]
+        assert dispatch_errors, f"expected websocket_dispatch_error log entry, got: {logs}"
+        assert "send_failed" in dispatch_errors[0].get("error", "")
