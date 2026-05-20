@@ -205,6 +205,41 @@ dev-clean:
 seed:
 	@./scripts/seed-dev-data.sh
 	@.venv312/bin/python scripts/seed_demo_data.py
+	@$(MAKE) --no-print-directory seed-verify-m017
+
+## PLAN-0089 F2 Step 8: M-017 invariant check.
+## Asserts every canonical_entities row with entity_type='financial_instrument'
+## has a matching market_data_db.instruments.id (one canonical UUID per
+## tradable security). Run automatically by ``make seed`` but exposed as a
+## separate target so CI / debug scripts can invoke it standalone.
+##
+## Implementation note: ``dblink`` is not installed on the dev Postgres image
+## by default. We avoid it here by issuing two separate psql queries against
+## the same Postgres container (intelligence_db + market_data_db live in the
+## same instance) and diffing the UUID sets in shell. Per R7 ``dblink`` is
+## banned at runtime anyway, but the alternative shell-diff is simpler and
+## doesn't require an extension.
+##
+## Expected output: ``M-017 OK: <N> financial_instrument entities — 0 missing.``
+## Non-zero exit if any tradable canonical lacks a matching instrument row.
+.PHONY: seed-verify-m017
+seed-verify-m017:
+	@echo "[seed-verify-m017] Checking M-017 invariant (entity_id == instruments.id for tradables)..."
+	@CONTAINER="$${SEED_CONTAINER:-worldview-postgres-1}" ; \
+	  ENTITIES=$$(docker exec -i $$CONTAINER psql -U postgres -d intelligence_db -tA -c \
+	    "SELECT entity_id FROM canonical_entities WHERE entity_type = 'financial_instrument' ORDER BY entity_id" \
+	    | sort) ; \
+	  INSTRUMENTS=$$(docker exec -i $$CONTAINER psql -U postgres -d market_data_db -tA -c \
+	    "SELECT id FROM instruments ORDER BY id" | sort) ; \
+	  MISSING=$$(comm -23 <(echo "$$ENTITIES") <(echo "$$INSTRUMENTS")) ; \
+	  N_ENT=$$(echo "$$ENTITIES" | grep -c -E '^[0-9a-f-]+$$' || true) ; \
+	  N_MISS=$$(echo "$$MISSING" | grep -c -E '^[0-9a-f-]+$$' || true) ; \
+	  if [ "$$N_MISS" -gt 0 ]; then \
+	    echo "M-017 FAIL: $$N_MISS financial_instrument entity_id(s) have no matching instruments.id:" ; \
+	    echo "$$MISSING" ; \
+	    exit 1 ; \
+	  fi ; \
+	  echo "M-017 OK: $$N_ENT financial_instrument entities — 0 missing."
 
 # ── Retrieval eval stack (isolated — no ingestion workers) ──────────────────
 #

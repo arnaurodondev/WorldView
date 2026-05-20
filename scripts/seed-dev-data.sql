@@ -39,16 +39,21 @@ ON CONFLICT (id) DO NOTHING;
 -- Portfolio instruments — UUIDs MUST match market_data_db.instruments below
 -- so that quote/OHLCV/news lookups for a given UUID return the same security
 -- in both databases (F-403, QA iter-4 2026-04-28).
+--
+-- PLAN-0089 F2 Step 8 (M-017): the OLD parallel ``11111111-...`` entity_id
+-- namespace has been DROPPED. The portfolio_db.instruments.entity_id column
+-- now equals the row PK (instruments.id) which in turn equals the
+-- intelligence_db.canonical_entities.entity_id for the same security. One
+-- canonical UUID per tradable security across all three DBs.
+--
 -- source_event_id is a dummy UUIDv4 used only for audit; it is NOT a FK.
--- entity_id links to intelligence_db.canonical_entities (seeded separately via
--- infra/postgres/init/seed_intelligence.sql or intelligence-migrations).
 INSERT INTO instruments (id, symbol, exchange, name, currency, asset_class, entity_id, source_event_id) VALUES
-    ('01900000-0000-7000-8000-000000001001', 'AAPL',  'US', 'Apple Inc.',                 'USD', 'equity', '11111111-0001-7000-8000-000000000001', '23f6eeba-0cd6-4e4f-8824-db0a1b3b4257'),
-    ('01900000-0000-7000-8000-000000001002', 'MSFT',  'US', 'Microsoft Corporation',      'USD', 'equity', '11111111-0002-7000-8000-000000000001', 'c77268c3-bbff-4b99-971d-c8cc7f43ab28'),
-    ('01900000-0000-7000-8000-000000001003', 'GOOGL', 'US', 'Alphabet Inc.',              'USD', 'equity', '11111111-0003-7000-8000-000000000001', '69722c9f-13bd-4c55-91e0-776661e7789e'),
-    ('01900000-0000-7000-8000-000000001004', 'TSLA',  'US', 'Tesla, Inc.',                'USD', 'equity', '11111111-0005-7000-8000-000000000001', 'f8e652de-e7ca-4576-b270-6a7a701bb8de'),
-    ('01900000-0000-7000-8000-000000001005', 'AMZN',  'US', 'Amazon.com, Inc.',           'USD', 'equity', '11111111-0004-7000-8000-000000000001', '030536a9-444f-49a6-9987-73baa7cef7e9'),
-    ('01900000-0000-7000-8000-000000001006', 'NVDA',  'US', 'NVIDIA Corporation',         'USD', 'equity', '11111111-0006-7000-8000-000000000001', 'a1b2c3d4-0006-4000-8000-000000000006')
+    ('01900000-0000-7000-8000-000000001001', 'AAPL',  'US', 'Apple Inc.',                 'USD', 'equity', '01900000-0000-7000-8000-000000001001', '23f6eeba-0cd6-4e4f-8824-db0a1b3b4257'),
+    ('01900000-0000-7000-8000-000000001002', 'MSFT',  'US', 'Microsoft Corporation',      'USD', 'equity', '01900000-0000-7000-8000-000000001002', 'c77268c3-bbff-4b99-971d-c8cc7f43ab28'),
+    ('01900000-0000-7000-8000-000000001003', 'GOOGL', 'US', 'Alphabet Inc.',              'USD', 'equity', '01900000-0000-7000-8000-000000001003', '69722c9f-13bd-4c55-91e0-776661e7789e'),
+    ('01900000-0000-7000-8000-000000001004', 'TSLA',  'US', 'Tesla, Inc.',                'USD', 'equity', '01900000-0000-7000-8000-000000001004', 'f8e652de-e7ca-4576-b270-6a7a701bb8de'),
+    ('01900000-0000-7000-8000-000000001005', 'AMZN',  'US', 'Amazon.com, Inc.',           'USD', 'equity', '01900000-0000-7000-8000-000000001005', '030536a9-444f-49a6-9987-73baa7cef7e9'),
+    ('01900000-0000-7000-8000-000000001006', 'NVDA',  'US', 'NVIDIA Corporation',         'USD', 'equity', '01900000-0000-7000-8000-000000001006', 'a1b2c3d4-0006-4000-8000-000000000006')
 ON CONFLICT (id) DO NOTHING;
 
 -- Holdings for the demo portfolio — 5 positions across AAPL/MSFT/NVDA/TSLA/AMZN.
