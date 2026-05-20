@@ -1,6 +1,7 @@
 """observability — Structured logging, metrics, tracing, and Sentry error capture for worldview."""
 
 from observability.error_capture import register_error_handlers
+from observability.internal_jwt import InternalJWTMiddleware
 from observability.logging import configure_logging, get_logger
 from observability.metrics import (
     MLMetrics,
@@ -13,6 +14,7 @@ from observability.sentry import SentrySettings, init_sentry
 from observability.tracing import add_otel_middleware, configure_tracing, get_tracer
 
 __all__ = [
+    "InternalJWTMiddleware",
     "MLMetrics",
     "SentrySettings",
     "ServiceMetrics",

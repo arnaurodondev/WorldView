@@ -118,6 +118,46 @@ automatically carries trace identifiers.
 > Verify: make a request, find its trace in Tempo, search Loki for
 > `trace_id="<that id>"` — if no results, the processor is missing.
 
+### Internal JWT Middleware (REF-001 / W2-05)
+
+| Symbol | Purpose |
+|--------|---------|
+| `InternalJWTMiddleware` | Shared RS256 internal-JWT verifier for backend services (S1–S8, S10). Extracted from 9 per-service copies. |
+
+Validates the `X-Internal-JWT` header issued by S9 (api-gateway) on every
+proxied request and sets `request.state.tenant_id`, `request.state.user_id`,
+`request.state.role` for downstream handlers. Health/metrics paths skip
+validation. JWKS is fetched once at startup, refreshed hourly, AND refreshed
+on kid-miss with a 60-second module-level cooldown (W1-05).
+
+**Constructor kwargs** (subset — see source for full list):
+
+| Kwarg | Default | When to override |
+|-------|---------|------------------|
+| `issuer` | `"worldview-gateway"` | n/a — gateway is the only issuer |
+| `audience` | `"worldview-internal"` | n/a — all internal JWTs share this aud |
+| `service_name` | `"unknown"` | Pass `settings.service_name` for log + JTI-key context |
+| `skip_verification` | `False` | dev/E2E only — never production (config gate enforced) |
+| `jti_replay_check_enabled` | `True` | `False` for internal-only services (S6, S7) where S8 forwards the same JWT multiple times per request |
+| `skip_paths` / `skip_prefixes` | `("/health", "/metrics", "/readyz")` | Add `/admin` (S10), service-specific prefixes |
+| `valkey_attr` | `"valkey"` | `"valkey_client"` for S3, S5 |
+| `jti_key_includes_service_name` | `False` | `True` to isolate replay checks per service |
+| `skip_verification_takes_precedence` | `False` | `True` for S3, S8 — accept HS256 dev tokens even when RS256 key is loaded |
+
+**Per-service customisation** — subclass and override:
+* `_load_token(request)` — extract token (S10 reads `?token=` on WebSocket upgrades).
+* `_unverified_decode(request, token)` — implement skip_verification path (S8 enforces minimum claims).
+* `_post_validate(request, token, payload)` — runs after successful decode (S8 sets ContextVar; S6 stores `request.state.internal_jwt`).
+* `_jti_replay_check(request, jti, exp)` — full JTI logic.
+* `_invalid_token_response()` / `_expired_token_response()` — response shape (S8 returns opaque `"Unauthorized"`).
+
+**Lifecycle**: `await middleware.startup()` in the lifespan before `yield`.
+Startup retries the JWKS fetch up to 3 times (3-second back-off) and raises
+`RuntimeError` if all attempts fail — the service refuses to start without a
+public key (fail-closed).
+
+---
+
 ### Sentry Error Tracking
 
 | Symbol | Purpose |
