@@ -337,7 +337,7 @@ export function FlatMetricsGrid({
   // grid does not float without visual containment.
   return (
     <div
-      className="grid grid-cols-3 gap-x-4 gap-y-1 border border-border rounded-sm bg-card"
+      className="grid grid-cols-3 gap-x-4 gap-y-1 border border-border bg-card"
       data-testid="flat-metrics-grid"
     >
       {/* ────────────────────────────────────────────────────────────────────

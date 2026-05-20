@@ -68,7 +68,7 @@ export function NewsColumn({ entityId }: NewsColumnProps) {
         {filterStrip}
         <div className="flex-1 overflow-y-auto">
           {Array.from({ length: 5 }).map((_, i) => (
-            <div key={i} className="h-7 mx-3 my-1 rounded-sm bg-muted/20 animate-pulse" />
+            <div key={i} className="h-7 mx-3 my-1 bg-muted/20 animate-pulse" />
           ))}
         </div>
       </div>
