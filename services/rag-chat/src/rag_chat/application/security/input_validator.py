@@ -23,7 +23,7 @@ _PHONE_RE = re.compile(r"\b(\+?1[-.\s])?\(?\d{3}\)?[-.\s]\d{3}[-.\s]\d{4}\b")
 _EMAIL_RE = re.compile(r"\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b")
 _SSN_RE = re.compile(r"\b\d{3}[-\s]\d{2}[-\s]\d{4}\b")
 # WHY UUID exclusion: UUIDs contain digit groups separated by hyphens which
-# can match the card pattern (e.g. "11111111-0001-7000-" matches 13 digits
+# can match the card pattern (e.g. "01900000-0000-7000-" matches 13 digits
 # with optional hyphens). We use a negative lookahead/lookbehind to exclude
 # the UUID format (8-4-4-4-12 hex chars) and require the digit run to be
 # surrounded by non-UUID context (no hex letters or extra hyphen-digit groups).
