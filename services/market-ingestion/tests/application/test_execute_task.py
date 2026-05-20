@@ -619,6 +619,56 @@ async def test_execute_task_only_market_dataset_fetched_in_outbox() -> None:
 
 
 # ---------------------------------------------------------------------------
+# BUG-009 / BP-492: is_backfill propagated from task to emitted event
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.unit
+async def test_execute_task_emits_is_backfill_false_for_live_task() -> None:
+    """A live (non-backfill) task has range_start=None → event.is_backfill is False.
+
+    `_make_task` sets `task.range_start = None` to model the live-tick path:
+    the worker only fills range_end at execution time, and the scheduler does
+    NOT mark such tasks as backfill in the DB (see task_repository.py:83).
+    """
+    task = _make_task(dataset_type=DatasetType.OHLCV)
+    assert task.range_start is None
+    wm = _make_watermark(changed=True)
+    uow = _make_uow(watermark=wm)
+    uc, uow, _, _, _ = _make_use_case(uow=uow)
+
+    await uc.execute(task)
+
+    uow.outbox.add.assert_awaited_once()
+    events = uow.outbox.add.call_args.kwargs["events"]
+    assert events[0].is_backfill is False
+
+
+@pytest.mark.unit
+async def test_execute_task_emits_is_backfill_true_for_backfill_task() -> None:
+    """A backfill task carries an explicit range_start → event.is_backfill is True.
+
+    Mirrors the canonical "is this a backfill?" check used by task_repository:
+    a non-None range_start is the signal that the task was scheduled as part
+    of a historical replay window.
+    """
+    task = _make_task(dataset_type=DatasetType.OHLCV)
+    # Backfill window: explicit range_start in the past (matches the producer
+    # contract used by the scheduler / backfill use case).
+    task.range_start = datetime(2024, 1, 1, tzinfo=UTC)
+    task.range_end = datetime(2024, 1, 31, tzinfo=UTC)
+    wm = _make_watermark(changed=True)
+    uow = _make_uow(watermark=wm)
+    uc, uow, _, _, _ = _make_use_case(uow=uow)
+
+    await uc.execute(task)
+
+    uow.outbox.add.assert_awaited_once()
+    events = uow.outbox.add.call_args.kwargs["events"]
+    assert events[0].is_backfill is True
+
+
+# ---------------------------------------------------------------------------
 # T-E1-4-02: State-consistency error path tests (M-020)
 # ---------------------------------------------------------------------------
 

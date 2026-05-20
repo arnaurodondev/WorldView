@@ -35,6 +35,8 @@
     { "name": "canonical_ref_mime_type",   "type": "string", "doc": "MIME type of the canonical object (application/x-ndjson)" },
 
     { "name": "canonical_schema_version", "type": "int",           "default": 1,    "doc": "Version of the canonical data schema" },
-    { "name": "row_count",                "type": ["null", "long"], "default": null, "doc": "Number of records in the canonical dataset" }
+    { "name": "row_count",                "type": ["null", "long"], "default": null, "doc": "Number of records in the canonical dataset" },
+
+    { "name": "is_backfill",              "type": "boolean",        "default": false, "doc": "True when this dataset was fetched as part of a historical backfill (range_start set). Consumers SHOULD suppress alert fan-out / cache hot-paths when true (BP-492)." }
   ]
 }

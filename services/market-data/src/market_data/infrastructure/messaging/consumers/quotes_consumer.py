@@ -282,36 +282,55 @@ class QuotesConsumer(BaseKafkaConsumer[dict]):
         # Upsert into DB
         await uow.quotes.upsert(quote)
 
-        # Schedule cache invalidation to run AFTER the transaction commits (M-005).
-        # Invalidating before commit risks a read between invalidation and commit
-        # caching stale data into Valkey until TTL expiry.
-        if self._quote_cache is not None:
-            uow.schedule_post_commit(self._quote_cache.invalidate(instrument.id))
-
-        # After DB commit: resolve a PriceSnapshot from the fresh quote and write
-        # it to Valkey.  This hot-caches the snapshot so the first API read is
-        # served from cache (O(1)) rather than triggering a full DB resolution.
-        # We pass ohlcv_bars=[] here because OHLCV bars arrive via a separate
-        # consumer topic — the quote is the only source available at this stage.
-        # The full fallback chain (including OHLCV) is exercised in the API router.
-        if self._price_snapshot_cache is not None:
-            from market_data.domain.price_snapshot import PriceSnapshotResolver
-
-            resolved_at = datetime.now(tz=UTC)
-            resolver = PriceSnapshotResolver()
-            snapshot = resolver.resolve(
-                instrument_id=instrument.id,
+        # BUG-009 / BP-492: gate the live-cache hot-paths on the backfill flag.
+        # A backfill replay produces historical quotes whose `last` price MUST
+        # NOT overwrite the live snapshot used by alert evaluation and the
+        # frontend ticker. DB write above still happens so the historical row
+        # is durably stored, but cache invalidation / snapshot warming are
+        # skipped to keep the live signal clean.
+        # The default is False on older payloads (forward-compat per R11), so
+        # any producer that has not yet been upgraded keeps current behaviour.
+        is_backfill = bool(value.get("is_backfill", False))
+        if is_backfill:
+            logger.info(
+                "quotes_consumer.skip_live_cache_fanout_backfill",
                 symbol=symbol,
                 exchange=exchange,
-                quote=quote,
-                ohlcv_bars=[],  # OHLCV not available at consumer stage (see above)
-                resolved_at=resolved_at,
+                instrument_id=instrument.id,
+                event_id=str(event_id)[:8],
             )
-            uow.schedule_post_commit(self._price_snapshot_cache.set(instrument.id, snapshot))
+        else:
+            # Schedule cache invalidation to run AFTER the transaction commits (M-005).
+            # Invalidating before commit risks a read between invalidation and commit
+            # caching stale data into Valkey until TTL expiry.
+            if self._quote_cache is not None:
+                uow.schedule_post_commit(self._quote_cache.invalidate(instrument.id))
+
+            # After DB commit: resolve a PriceSnapshot from the fresh quote and write
+            # it to Valkey.  This hot-caches the snapshot so the first API read is
+            # served from cache (O(1)) rather than triggering a full DB resolution.
+            # We pass ohlcv_bars=[] here because OHLCV bars arrive via a separate
+            # consumer topic — the quote is the only source available at this stage.
+            # The full fallback chain (including OHLCV) is exercised in the API router.
+            if self._price_snapshot_cache is not None:
+                from market_data.domain.price_snapshot import PriceSnapshotResolver
+
+                resolved_at = datetime.now(tz=UTC)
+                resolver = PriceSnapshotResolver()
+                snapshot = resolver.resolve(
+                    instrument_id=instrument.id,
+                    symbol=symbol,
+                    exchange=exchange,
+                    quote=quote,
+                    ohlcv_bars=[],  # OHLCV not available at consumer stage (see above)
+                    resolved_at=resolved_at,
+                )
+                uow.schedule_post_commit(self._price_snapshot_cache.set(instrument.id, snapshot))
 
         logger.info(
             "quotes_consumer.materialized",
             symbol=symbol,
             exchange=exchange,
             instrument_id=instrument.id,
+            is_backfill=is_backfill,
         )

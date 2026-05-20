@@ -80,11 +80,12 @@ def test_mapper_produces_correct_envelope_fields() -> None:
 
 
 @pytest.mark.unit
-def test_mapper_produces_all_27_fields() -> None:
+def test_mapper_produces_all_28_fields() -> None:
+    # BP-492: schema grew by 1 (is_backfill) — mapper now emits 28 fields.
     event = _make_event()
     d = MarketDatasetFetchedMapper.to_avro_dict(event)
 
-    assert len(d) == 27, f"Expected 27 fields, got {len(d)}: {list(d.keys())}"
+    assert len(d) == 28, f"Expected 28 fields, got {len(d)}: {list(d.keys())}"
 
 
 @pytest.mark.unit
@@ -155,9 +156,10 @@ def test_avro_schema_file_exists() -> None:
 
 
 @pytest.mark.unit
-def test_avro_schema_has_27_fields() -> None:
+def test_avro_schema_has_28_fields() -> None:
+    # BP-492: is_backfill appended with default false (R11 forward-compat).
     schema = json.loads(_SCHEMA_PATH.read_text())
-    assert len(schema["fields"]) == 27
+    assert len(schema["fields"]) == 28
 
 
 # ---------------------------------------------------------------------------

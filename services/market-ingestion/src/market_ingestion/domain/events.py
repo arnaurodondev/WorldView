@@ -87,6 +87,12 @@ class MarketDatasetFetched(DomainEvent):
     row_count: int | None = None  # None = "not counted"; 0 = "zero rows fetched" (M-024)
     task_id: str = ""
 
+    # BUG-009 / BP-492: distinguishes live vs backfill datasets.
+    # Forward-compat default `False` preserves all existing consumers (R11).
+    # Downstream consumers (S3 market-data quotes_consumer) SHOULD skip cache
+    # hot-paths / alert-adjacent fan-out when this flag is True.
+    is_backfill: bool = False
+
     def to_dict(self) -> dict[str, object]:
         """Serialize to a flat dict with all 27 Avro-compatible fields."""
         return {
@@ -120,9 +126,11 @@ class MarketDatasetFetched(DomainEvent):
             "canonical_ref_sha256": self.canonical_ref.sha256,
             "canonical_ref_byte_length": self.canonical_ref.byte_length,
             "canonical_ref_mime_type": self.canonical_ref.mime_type,
-            # Metadata (2)
+            # Metadata (3 — includes BP-492 is_backfill flag)
             "canonical_schema_version": self.canonical_schema_version,
             "row_count": self.row_count,  # None stays None, 0 stays 0 (M-024)
+            # BP-492: gate-flag for consumers to suppress alert fan-out on backfills.
+            "is_backfill": self.is_backfill,
         }
 
     @classmethod
@@ -160,6 +168,8 @@ class MarketDatasetFetched(DomainEvent):
             canonical_schema_version=cast("int", d.get("canonical_schema_version", 1)),
             row_count=cast("int | None", d.get("row_count")),  # None = not counted
             task_id=str(d.get("task_id", "")),
+            # BP-492: forward-compat — older payloads without the key default to False.
+            is_backfill=bool(d.get("is_backfill", False)),
         )
 
 
