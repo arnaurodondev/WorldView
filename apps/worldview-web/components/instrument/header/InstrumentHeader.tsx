@@ -62,7 +62,14 @@ export function InstrumentHeader({ instrument, quote, fundamentals }: Instrument
     // WHY sticky top-0 z-30: the header must stay pinned during scroll.
     // z-30 sits above tab content (z-10) but below modal overlays (z-50).
     // h-[36px] = 36px exactly (Tailwind: 9 × 4px = 36px) per spec §6.4.
-    <header className="sticky top-0 z-30 flex h-[36px] items-center gap-4 border-b border-border bg-background px-3">
+    /* WHY data-testid (PRD-0089 F2 step 9): Playwright e2e specs assert on a
+       single selector that targets either the header or the InstrumentNotFound
+       primitive — "page rendered successfully" without coupling the test to
+       the internal DOM structure. See e2e/instrument-url-special-chars.spec.ts. */
+    <header
+      data-testid="instrument-header"
+      className="sticky top-0 z-30 flex h-[36px] items-center gap-4 border-b border-border bg-background px-3"
+    >
       {/* ── Left cluster: back button + ticker + exchange + company name ── */}
       <button
         type="button"

@@ -84,7 +84,10 @@ export function InstrumentNotFound({
     // terminal palette; the boundary affordance is a 1px hairline border.
     // WHY p-3 (12px): F1 §2.4 — panel inner padding.
     // WHY bg-card: surface elevation 1 — same as the panels the user is used to.
-    <div className="flex flex-col items-start gap-2 border border-border-strong bg-card p-3">
+    <div
+      data-testid="instrument-not-found"
+      className="flex flex-col items-start gap-2 border border-border-strong bg-card p-3"
+    >
       {/* ── Error label ─────────────────────────────────────────────────────
           WHY text-[10px] uppercase tracking-wide: F1 §2.3 typography token
           for column / group headers. Matches MetricLabel sizing so visual
