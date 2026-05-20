@@ -23,8 +23,8 @@ from typing import TYPE_CHECKING, Literal
 
 import structlog
 
+from market_data.domain._ticker_normalize import _normalize_ticker
 from market_data.domain.errors import EodhRateLimitError, InstrumentNotFoundError  # noqa: F401
-from market_data.infrastructure._ticker_normalize import _normalize_ticker
 
 if TYPE_CHECKING:
     from collections.abc import Callable

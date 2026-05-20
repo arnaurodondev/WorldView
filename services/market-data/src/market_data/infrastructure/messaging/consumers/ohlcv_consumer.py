@@ -8,11 +8,11 @@ from decimal import Decimal
 from typing import TYPE_CHECKING, Any, cast
 
 from contracts.canonical.ohlcv import CanonicalOHLCVBar  # type: ignore[import-untyped]
+from market_data.domain._ticker_normalize import _normalize_ticker
 from market_data.domain.entities import Instrument, OHLCVBar, Security
 from market_data.domain.enums import Provider, Timeframe
 from market_data.domain.events import InstrumentDiscovered, InstrumentUpdated
 from market_data.domain.value_objects import InstrumentFlags, ProviderPriority
-from market_data.infrastructure._ticker_normalize import _normalize_ticker
 from market_data.infrastructure.messaging.outbox.dispatcher import EVENT_TOPIC_MAP, event_to_outbox_payload
 from messaging.kafka.consumer.base import BaseKafkaConsumer, ConsumerConfig, FailureInfo  # type: ignore[import-untyped]
 from messaging.kafka.consumer.dedup import ValkeyDedupMixin  # type: ignore[import-untyped]

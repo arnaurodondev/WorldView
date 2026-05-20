@@ -107,21 +107,14 @@ export function WorkspacePortfolioPanel() {
               ? "text-negative"
               : "text-muted-foreground";
 
-        return (
-          // WHY Link (not div): clicking a holding row should navigate to the instrument
-          // detail page. A real <a> element gives keyboard navigation, screen-reader
-          // semantics, and middle-click / open-in-new-tab for free.
-          // WHY h-[22px]: §0.2 row height mandate. py-0: row height controls vertical
-          // spacing entirely. px-2: 8px horizontal gutter per §0.2 cell padding spec.
-          <Link
-            key={h.holding_id}
-            // PRD-0089 F2 step 11 (§6.6): ticker-first URL — h.ticker is
-            // already displayed in the row, so reusing it for the href keeps
-            // the URL and visible label in sync. Falls back to UUID if ticker
-            // is somehow empty; middleware resolves either form.
-            href={`/instruments/${h.ticker || h.entity_id}`}
-            className="flex items-center gap-2 px-2 h-[22px] hover:bg-muted/40 text-foreground"
-          >
+        // PRD-0089 F2 §6.6: post-F2 URL slug is the ticker only. A bare UUID
+        // slug would 404 (the middleware case-canonicalises + alias-redirects
+        // but does NOT resolve UUIDs). Holdings on a real portfolio always
+        // carry a ticker; if for some reason ticker is empty, render a
+        // non-link row so we never serve a guaranteed-404 URL.
+        const rowClass = "flex items-center gap-2 px-2 h-[22px] hover:bg-muted/40 text-foreground";
+        const rowContent = (
+          <>
             {/* Ticker — monospace, left-aligned */}
             <span className="w-14 shrink-0 font-mono text-[11px] tabular-nums font-medium text-foreground">
               {h.ticker}
@@ -142,6 +135,27 @@ export function WorkspacePortfolioPanel() {
                 ? `${unrealizedPnl >= 0 ? "+" : ""}${unrealizedPnl.toFixed(0)}`
                 : "—"}
             </span>
+          </>
+        );
+        if (!h.ticker) {
+          return (
+            <div key={h.holding_id} className={rowClass}>
+              {rowContent}
+            </div>
+          );
+        }
+        return (
+          // WHY Link (not div): clicking a holding row should navigate to the instrument
+          // detail page. A real <a> element gives keyboard navigation, screen-reader
+          // semantics, and middle-click / open-in-new-tab for free.
+          // WHY h-[22px]: §0.2 row height mandate. py-0: row height controls vertical
+          // spacing entirely. px-2: 8px horizontal gutter per §0.2 cell padding spec.
+          <Link
+            key={h.holding_id}
+            href={`/instruments/${h.ticker}`}
+            className={rowClass}
+          >
+            {rowContent}
           </Link>
         );
       })}

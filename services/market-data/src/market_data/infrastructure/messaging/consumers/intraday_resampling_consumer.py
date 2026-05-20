@@ -19,10 +19,10 @@ from typing import TYPE_CHECKING, Any, cast
 
 from contracts.canonical.ohlcv import CanonicalOHLCVBar  # type: ignore[import-untyped]
 from market_data.application.use_cases.resample_ohlcv import ResampledOHLCVUseCase
+from market_data.domain._ticker_normalize import _normalize_ticker
 from market_data.domain.entities import OHLCVBar
 from market_data.domain.enums import Timeframe
 from market_data.domain.value_objects import ProviderPriority
-from market_data.infrastructure._ticker_normalize import _normalize_ticker
 from messaging.kafka.consumer.base import BaseKafkaConsumer, ConsumerConfig, FailureInfo  # type: ignore[import-untyped]
 from messaging.kafka.consumer.dedup import ValkeyDedupMixin  # type: ignore[import-untyped]
 from messaging.kafka.consumer.errors import MalformedDataError, StorageUnavailableError  # type: ignore[import-untyped]

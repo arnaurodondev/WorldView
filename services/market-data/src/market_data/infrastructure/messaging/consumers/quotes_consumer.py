@@ -8,10 +8,10 @@ from decimal import Decimal
 from typing import TYPE_CHECKING, Any, cast
 
 from contracts.canonical.quotes import CanonicalQuote  # type: ignore[import-untyped]
+from market_data.domain._ticker_normalize import _normalize_ticker
 from market_data.domain.entities import Instrument, Quote, Security
 from market_data.domain.events import InstrumentDiscovered, InstrumentUpdated
 from market_data.domain.value_objects import InstrumentFlags
-from market_data.infrastructure._ticker_normalize import _normalize_ticker
 from market_data.infrastructure.messaging.outbox.dispatcher import EVENT_TOPIC_MAP, event_to_outbox_payload
 from messaging.kafka.consumer.base import BaseKafkaConsumer, ConsumerConfig, FailureInfo  # type: ignore[import-untyped]
 from messaging.kafka.consumer.errors import MalformedDataError, StorageUnavailableError  # type: ignore[import-untyped]
@@ -191,7 +191,7 @@ class QuotesConsumer(BaseKafkaConsumer[dict]):
         bucket = value["canonical_ref_bucket"]
         object_key = value["canonical_ref_key"]
         # PLAN-0089 F2 step 7: canonicalise ticker at the ingestion boundary.
-        # See market_data.infrastructure._ticker_normalize for rationale.
+        # See market_data.domain._ticker_normalize for rationale.
         symbol = _normalize_ticker(value["symbol"])
         exchange = value.get("exchange") or ""
 

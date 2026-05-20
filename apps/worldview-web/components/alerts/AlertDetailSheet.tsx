@@ -154,19 +154,21 @@ export function AlertDetailSheet({ alert, open, onClose, onAck, onSnooze }: Aler
                 />
               )}
 
-              {alert.entity_id && (
+              {alert.ticker && (
                 <DetailRow
                   label="Related"
                   value={
                     // WHY <Link> (not <a>): Next.js client-side nav avoids a
                     // full page reload — keeps Sheet animation snappy on close.
+                    // WHY guarded on `alert.ticker` (not `alert.entity_id`):
+                    // PRD-0089 F2 §6.6 — post-F2 the URL slug is the ticker
+                    // only. A bare UUID would hit a guaranteed 404. Alerts on
+                    // non-tradable entities (macro events, sectors) lack a
+                    // ticker, so we simply omit the row instead of serving a
+                    // dead link. encodeURIComponent guards multi-class tickers
+                    // (BRK.B, BF/B, …).
                     <Link
-                      // PRD-0089 F2 step 11 (§6.6): ticker-first URL — alerts
-                      // can target non-tradable entities (macro events, sectors)
-                      // in which case ticker is null and we fall back to the
-                      // UUID. encodeURIComponent guards against unusual chars
-                      // in either form. Middleware resolves both.
-                      href={`/instruments/${encodeURIComponent(alert.ticker || alert.entity_id)}`}
+                      href={`/instruments/${encodeURIComponent(alert.ticker)}`}
                       className="text-primary underline-offset-2 hover:underline"
                     >
                       View instrument →

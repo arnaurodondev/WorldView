@@ -13,7 +13,7 @@ from __future__ import annotations
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-from market_data.infrastructure._ticker_normalize import _normalize_ticker
+from market_data.domain._ticker_normalize import _normalize_ticker
 
 pytestmark = pytest.mark.unit
 

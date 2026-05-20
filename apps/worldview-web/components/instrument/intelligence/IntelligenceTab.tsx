@@ -71,7 +71,7 @@ export function IntelligenceTab({ entityId }: IntelligenceTabProps) {
           overflow-y-auto so the article list scrolls inside this column
           without lifting the whole tab. border-r separates from the graph. */}
       <div className="col-span-3 overflow-y-auto border-r border-border">
-        <NewsColumn entityId={entityId} />
+        <NewsColumn instrumentId={entityId} />
       </div>
 
       {/* ── CENTER: graph + brief (6/12) ────────────────────────────────────

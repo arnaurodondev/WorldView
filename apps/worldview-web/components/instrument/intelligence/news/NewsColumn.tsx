@@ -17,16 +17,20 @@ import { CompactArticleRow } from "./CompactArticleRow";
 import { NewsFilters, type NewsSentiment, type NewsTimeRange } from "./NewsFilters";
 
 interface NewsColumnProps {
-  entityId: string;
+  // PRD-0089 F2 §6.5: this rail is tradable-only, so the canonical id name
+  // is `instrumentId`. Post-F2 `instrument_id === entity_id` for tradable
+  // kinds, so the parent (cross-kind IntelligenceTab) can hand its
+  // `entityId` value straight in.
+  instrumentId: string;
 }
 
-export function NewsColumn({ entityId }: NewsColumnProps) {
+export function NewsColumn({ instrumentId }: NewsColumnProps) {
   const [timeRange, setTimeRange] = useState<NewsTimeRange>("all");
   const [sentiment, setSentiment] = useState<NewsSentiment>(null);
 
   // Filters flow into the hook so the query key changes when they do.
   const { data, fetchNextPage, hasNextPage, isFetchingNextPage, isLoading } =
-    useEntityNewsInfinite(entityId, {
+    useEntityNewsInfinite(instrumentId, {
       sentiment: sentiment ?? undefined,
       timeRange,
     });
