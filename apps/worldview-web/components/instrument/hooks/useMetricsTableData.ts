@@ -18,6 +18,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { createGateway } from "@/lib/gateway";
 import { useAccessToken } from "@/lib/api-client";
+import { DEFAULT_STALE } from "@/lib/api/_client";
 import { qk } from "@/lib/query/keys";
 import type { Fundamentals, FundamentalsSnapshot, FundamentalsSectionResponse } from "@/types/api";
 
@@ -48,15 +49,15 @@ export function useMetricsTableData(instrumentId: string): MetricsTableData {
   const token = useAccessToken();
   const enabled = !!instrumentId;
 
-  // 5min: full Fundamentals (highlights + valuation_ratios + analyst_consensus +
-  // technicals_snapshot merged into the flat Fundamentals shape). This shares
-  // the same queryKey as useFinancialsTabData so the Financials tab and the
-  // Quote-tab MetricsTable both warm the same cache entry — switching tabs is
-  // free after the first fetch.
+  // DEFAULT_STALE.fundamentals (1hr): full Fundamentals (highlights + valuation_ratios +
+  // analyst_consensus + technicals_snapshot merged into the flat Fundamentals shape).
+  // Quarterly cadence — HIGH-018 / FR-8.4. Shares the same queryKey as
+  // useFinancialsTabData so the Financials tab and the Quote-tab MetricsTable both
+  // warm the same cache entry — switching tabs is free after the first fetch.
   const fundamentalsQuery = useQuery({
     queryKey: qk.instruments.fundamentals(instrumentId),
     queryFn: () => createGateway(token).getFundamentals(instrumentId),
-    staleTime: 5 * 60 * 1000,
+    staleTime: DEFAULT_STALE.fundamentals,
     enabled,
   });
 

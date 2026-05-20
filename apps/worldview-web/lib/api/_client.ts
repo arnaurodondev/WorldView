@@ -150,3 +150,48 @@ export async function apiFetch<T>(
 
   return response.json() as Promise<T>;
 }
+
+// ── Canonical staleTime constants (FR-8.4 / W0) ───────────────────────────────
+
+/**
+ * DEFAULT_STALE — single source of truth for per-domain staleTime values.
+ *
+ * WHY THIS EXISTS (HIGH-018, FR-8.4):
+ * Before this constant, staleTime was specified inline at each useQuery call site,
+ * resulting in the same endpoint being hit with different stale windows by different
+ * components. For example, TopNews was fetched with staleTime: 30s in one widget
+ * and staleTime: 60s in another — the shorter window "won" on any page that mounted
+ * both, causing unnecessary refetches.
+ *
+ * This map is the canonical definition. API methods (getTopNews, getFundamentals,
+ * etc.) should use `DEFAULT_STALE.news` as their default staleTime so every consumer
+ * gets a consistent cache policy without having to know the domain rules.
+ *
+ * WHY `as const`: makes the values literal number types (not just `number`), so
+ * TypeScript can catch accidental mutations and callers get auto-complete in
+ * object destructuring.
+ *
+ * USAGE:
+ *   import { DEFAULT_STALE } from "@/lib/api/_client";
+ *   useQuery({ ..., staleTime: DEFAULT_STALE.news });
+ *
+ * Values (in milliseconds):
+ *   news          — 5 min: news articles update frequently but not per-second
+ *   fundamentals  — 1 hr:  quarterly data; rarely changes intra-day
+ *   entityGraph   — 1 min: KG enrichment runs continuously; relatively fresh
+ *   quotes        — 15 sec: matches S3 Valkey quote cache TTL
+ *   screener      — 30 sec: filter results shift as prices move
+ *   screenerFields — 6 hr: field definitions almost never change intra-day
+ *   portfolio     — 1 min: holdings + valuation updated on every transaction
+ *   alerts        — 15 sec: alert status must be nearly real-time
+ */
+export const DEFAULT_STALE = {
+  news: 300_000,           // 5 minutes
+  fundamentals: 3_600_000, // 1 hour
+  entityGraph: 60_000,     // 1 minute
+  quotes: 15_000,          // 15 seconds
+  screener: 30_000,        // 30 seconds
+  screenerFields: 21_600_000, // 6 hours
+  portfolio: 60_000,       // 1 minute
+  alerts: 15_000,          // 15 seconds
+} as const;

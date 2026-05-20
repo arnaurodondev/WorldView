@@ -23,6 +23,7 @@ from portfolio.infrastructure.db.models.idempotency import IdempotencyModel  # n
 from portfolio.infrastructure.db.models.instrument import InstrumentModel  # noqa: E402
 from portfolio.infrastructure.db.models.invitation import InvitationModel  # noqa: E402
 from portfolio.infrastructure.db.models.micro_survey_response import MicroSurveyResponseModel  # noqa: E402
+from portfolio.infrastructure.db.models.notification_preferences import NotificationPreferencesModel  # noqa: E402
 from portfolio.infrastructure.db.models.nps_score import NPSScoreModel  # noqa: E402
 from portfolio.infrastructure.db.models.outbox import OutboxEventModel  # noqa: E402
 from portfolio.infrastructure.db.models.portfolio import PortfolioModel  # noqa: E402
@@ -49,6 +50,7 @@ __all__ = [
     "InstrumentModel",
     "InvitationModel",
     "MicroSurveyResponseModel",
+    "NotificationPreferencesModel",
     "NPSScoreModel",
     "OutboxEventModel",
     "PortfolioModel",

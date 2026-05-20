@@ -51,7 +51,7 @@ export function GraphColumn({ entityId, selectedNodeId, onNodeSelect }: GraphCol
 
   // WHY AbortController inside queryFn: chain TanStack's unmount signal and add
   // our 3 s deadline. Abort is translated to a typed Error for the UI.
-  const { data: graphData, isLoading: graphLoading, isError, error: graphErr } = useQuery<EntityGraphData>({
+  const { data: graphData, isLoading: graphLoading, isError, error: graphErr } = useQuery<EntityGraphData | null>({
     queryKey: qk.instruments.entityGraph(entityId, depth),
     queryFn: async ({ signal }) => {
       const ctrl = new AbortController();

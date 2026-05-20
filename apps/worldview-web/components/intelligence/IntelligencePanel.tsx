@@ -125,7 +125,10 @@ export function IntelligencePanel({ entityId }: IntelligencePanelProps) {
           id="tab-narratives"
           className="flex-1 overflow-hidden mt-0"
         >
-          <NarrativeHistoryTab entityId={entityId} />
+          {/* WHY selectedEntityId passed here: NarrativeHistoryTab now shows the
+              "Filtered to:" banner for graph selection parity with the other tabs.
+              FR-3.2 MED-009. */}
+          <NarrativeHistoryTab entityId={entityId} selectedEntityId={selectedEntityId} />
         </TabsContent>
       </Tabs>
     </div>

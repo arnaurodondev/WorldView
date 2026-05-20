@@ -22,6 +22,7 @@
 "use client";
 // WHY "use client": cn() is fine server-side, but this file is always rendered
 // inside a "use client" page (portfolio/page.tsx), so it inherits that boundary.
+// Also: useQueryClient (TanStack) is a client-only hook.
 
 import { cn } from "@/lib/utils";
 import { formatPrice, formatPercent } from "@/lib/utils";
@@ -29,10 +30,21 @@ import { formatPrice, formatPercent } from "@/lib/utils";
 // genuinely unknown (no quote yet) so users don't read "$0.00" as "market
 // is flat" when in fact we just haven't received data yet.
 import { Skeleton } from "@/components/ui/skeleton";
+// HIGH-016: RefreshCw button on the (approx) badge lets traders force a
+// holdings recalculation when the FIFO endpoint was unavailable at page load.
+import { RefreshCw } from "lucide-react";
+import { useQueryClient } from "@tanstack/react-query";
+import { qk } from "@/lib/query/keys";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
 export interface PortfolioKPIStripProps {
+  /**
+   * Portfolio ID used to invalidate the holdings query when the trader clicks
+   * the refresh button on the (approx) badge (HIGH-016). Optional: when omitted
+   * the refresh button is not rendered even if realizedPnlApprox is true.
+   */
+  portfolioId?: string | null;
   /** Total market value of all holdings (qty × live price) */
   totalValue: number;
   /** Absolute day P&L across all positions; null when quotes not yet loaded */
@@ -109,6 +121,13 @@ interface KPITileProps {
    * smaller and in muted-foreground so it doesn't dominate the tile.
    */
   suffix?: string;
+  /**
+   * Optional React node rendered inline after the suffix text.
+   * HIGH-016: used by the Realized P&L tile to append a RefreshCw icon
+   * button when showing the (approx) fallback value, without requiring
+   * a structural change to the tile layout.
+   */
+  suffixAction?: React.ReactNode;
   /** Test id passthrough so unit tests can target individual tiles. */
   dataTestId?: string;
 }
@@ -121,6 +140,7 @@ function KPITile({
   negative,
   hoverTitle,
   suffix,
+  suffixAction,
   dataTestId,
 }: KPITileProps) {
   return (
@@ -162,6 +182,9 @@ function KPITile({
             {suffix}
           </span>
         )}
+        {/* suffixAction renders immediately after the suffix text — e.g. the
+            HIGH-016 RefreshCw icon button on the (approx) P&L badge. */}
+        {suffixAction}
       </span>
     </div>
   );
@@ -170,6 +193,7 @@ function KPITile({
 // ── PortfolioKPIStrip ─────────────────────────────────────────────────────────
 
 export function PortfolioKPIStrip({
+  portfolioId,
   totalValue,
   dayPnl,
   unrealisedPnl,
@@ -187,6 +211,13 @@ export function PortfolioKPIStrip({
   // produced "++30.92%" in the UNREALISED P&L tile. Just call formatPercent
   // directly — its sign output is already correct for traders' expectations.
   const pnlPctFormatted = formatPercent(unrealisedPnlPct);
+
+  // HIGH-016: queryClient.invalidateQueries forces a re-fetch of the holdings
+  // query. WHY holdings (not realizedPnL): the realizedPnL endpoint failure
+  // is usually transient — invalidating holdings causes the portfolio data
+  // hook to retry both the holdings fetch and the downstream realizedPnL
+  // query, clearing the (approx) badge when the FIFO endpoint recovers.
+  const queryClient = useQueryClient();
 
   return (
     // WHY border-b: the KPI strip sits between the page header and the tab bar.
@@ -288,6 +319,35 @@ export function PortfolioKPIStrip({
             negative={realizedPnl != null && realizedPnl < 0}
             hoverTitle={tooltip}
             suffix={realizedPnlApprox ? "(approx)" : undefined}
+            suffixAction={
+              // HIGH-016: show refresh button when approximation is active AND
+              // a portfolioId is available to scope the invalidation.
+              // WHY guard on portfolioId: without it we'd have to invalidate
+              // qk.portfolios.all (too broad — refreshes every portfolio in the
+              // list) or skip the button entirely. The caller is responsible for
+              // passing the active portfolio's ID.
+              realizedPnlApprox && portfolioId ? (
+                <button
+                  type="button"
+                  onClick={() => {
+                    // Invalidate the holdings query to trigger a re-fetch of
+                    // both holdings AND the downstream realizedPnL endpoint.
+                    // WHY holdings (not realizedPnL key directly): the FIFO
+                    // endpoint is downstream of holdings; invalidating holdings
+                    // ensures the whole data chain reruns.
+                    void queryClient.invalidateQueries({
+                      queryKey: qk.portfolios.holdings(portfolioId),
+                    });
+                  }}
+                  className="ml-1 inline-flex items-center text-muted-foreground hover:text-foreground"
+                  title="Refresh P&L calculation"
+                  aria-label="Refresh P&L calculation"
+                  data-testid="kpi-realized-pnl-refresh"
+                >
+                  <RefreshCw className="size-2.5" strokeWidth={1.5} />
+                </button>
+              ) : undefined
+            }
             dataTestId="kpi-realized-pnl"
           />
         );

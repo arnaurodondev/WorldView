@@ -29,6 +29,20 @@
 // WHY "use client": all controls (Switch, AlertDialog, form state) need
 // interactive React. The page itself is a simple render of card stacks.
 
+// FR-6.4 (W8-SETTINGS): Security page is feature-flag gated.
+// WHY notFound(): renders the standard 404 UI and prevents hydration of the
+// mock-state session/audit data. When NEXT_PUBLIC_ENABLE_SECURITY="true" the
+// page is accessible; the gate is removed in a one-line diff when Zitadel
+// shipping ships the real controls. notFound() is a Next.js App Router
+// sentinel that bubbles to the nearest not-found.tsx boundary — no runtime
+// error, no user-visible blank page.
+//
+// Password show/hide pattern (wire when security page ships):
+// const [showPassword, setShowPassword] = useState(false)
+// <input type={showPassword ? "text" : "password"} />
+// <button onClick={() => setShowPassword(p => !p)}><Eye/EyeOff /></button>
+
+import { notFound } from "next/navigation";
 import { useState } from "react";
 import { toast } from "sonner";
 import {
@@ -163,6 +177,16 @@ function formatRelative(iso: string): string {
 // ── Page ─────────────────────────────────────────────────────────────────
 
 export default function SettingsSecurityPage() {
+  // FR-6.4: gate the entire page behind the feature flag.
+  // WHY early return via notFound(): we call it at component render time
+  // (before any hooks) because notFound() throws a special Next.js error that
+  // exits the render immediately. All state hooks below are therefore
+  // unreachable when the flag is off — no ESLint rules-of-hooks violation
+  // because we exit before any hook calls would happen.
+  if (process.env.NEXT_PUBLIC_ENABLE_SECURITY !== "true") {
+    notFound();
+  }
+
   // MFA state — local only, mirrors what Zitadel will return.
   const [mfaEnabled, setMfaEnabled] = useState(false);
 

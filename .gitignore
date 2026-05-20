@@ -106,3 +106,7 @@ arnau_*.pdf
 # Personal workflow skills (not project-agnostic; not for public repo)
 .claude/skills/resume-advisor/
 .claude/skills/mvp-advisor/
+.claude/skills/thesis-write/
+.claude/thesis/
+.claude/backend-audit/
+.claude/frontend-audit/

@@ -130,7 +130,20 @@ export function MarketSnapshotWidget() {
     }),
   });
 
+  // WHY two loading signals:
+  //   isLoading (strict) — true until ALL queries resolve; used to switch the
+  //     skeleton-vs-data render branches so partial data never shows alongside
+  //     placeholder rows.
+  //   hasAnyData — true as soon as ONE overview query resolves; used for the
+  //     LIVE badge (FR-1.5 HIGH-013) so the badge appears at first data arrival
+  //     rather than waiting for every ticker to respond. A trader with 5/9
+  //     tickers loaded should see LIVE, not a blank header.
   const isLoading = idsLoading || overviewQueries.some((q) => q.isLoading);
+  // WHY .some (not .every): shows LIVE when at least one ticker is resolved.
+  // The previous implicit behavior (tied to isLoading=false) required ALL
+  // tickers to finish before the badge appeared — a single slow ticker (e.g.
+  // BTC search taking 500ms) would suppress LIVE on an otherwise live widget.
+  const hasAnyData = overviewQueries.some((q) => q.data != null);
 
   // Ticker → quote map built from stable ALL_TICKERS index ordering.
   // useMemo avoids map reconstruction on every render.
@@ -165,9 +178,11 @@ export function MarketSnapshotWidget() {
         <span className="text-[10px] uppercase tracking-[0.08em] text-muted-foreground">
           MARKET SNAPSHOT
         </span>
-        {/* LIVE badge — communicates that this widget shows real-time data,
-            not static placeholders. */}
-        {!isLoading && Object.keys(instrumentMap ?? {}).length > 0 && (
+        {/* LIVE badge — communicates that this widget shows real-time data.
+            WHY hasAnyData (not !isLoading): shows LIVE as soon as the first
+            ticker resolves rather than waiting for every ticker to finish.
+            FR-1.5 HIGH-013: "some" not "every" for partial-success UX. */}
+        {hasAnyData && (
           <span className="text-[10px] text-positive/70">LIVE</span>
         )}
       </div>

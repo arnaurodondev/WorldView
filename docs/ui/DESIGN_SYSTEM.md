@@ -1277,6 +1277,7 @@ Default kept on `default` to preserve all existing call sites; new code opts int
 
 ---
 
+
 ## 13. Tailwind Config Reference
 
 The Tailwind configuration (`tailwind.config.ts`) maps the CSS variables from `app/globals.css`
@@ -1345,3 +1346,232 @@ an ADR and `pnpm audit` showing 0 CVEs:
 | `any` TypeScript type | Loses type safety | Proper interface/type |
 | `useState+useEffect` for API calls | Bypasses TanStack Query | `useQuery` / `useMutation` |
 | Importing `infrastructure/` in domain | Architecture violation | Use cases / ports |
+
+## 15. Shared Primitives (W0 — Frontend Platform Hardening)
+
+> Added: 2026-05-19 (W0 of frontend platform hardening PRD).
+> These primitives are the single canonical implementation for concerns
+> that were previously scattered across 3–20+ ad-hoc call sites.
+
+### 15.1 `<FormattedNumber>` — universal numeric display
+
+**Path**: `components/ui/FormattedNumber.tsx`
+
+**Purpose**: Enforces `font-mono tabular-nums slashed-zero` on every number rendered
+to the user. Replaces 20+ inline numeric renders that forgot these classes.
+
+**Props**:
+| Prop | Type | Description |
+|------|------|-------------|
+| `value` | `number \| null \| undefined` | The value to render |
+| `format` | `"currency" \| "percent" \| "ratio" \| "volume" \| "compact" \| "integer"` | Formatting mode |
+| `decimals?` | `number` | Override decimal places (percent/ratio only) |
+| `color?` | `"positive" \| "negative" \| "amber" \| "muted" \| "default"` | Semantic color |
+
+**Null/undefined behaviour**: renders `—` in `text-muted-foreground/50` so missing values
+are visually distinct from zero without breaking column alignment.
+
+**Usage**:
+```tsx
+// Always font-mono + tabular-nums — ADR-F-15 enforced
+<FormattedNumber value={price} format="currency" />
+<FormattedNumber value={change} format="percent" color="positive" />
+<FormattedNumber value={null} format="volume" />   {/* → "—" */}
+```
+
+**When to use vs raw number**: always use `<FormattedNumber>` for values
+rendered to the user in table cells, card metrics, and badges. Raw format
+functions from `lib/format.ts` are appropriate when you need a string for
+an `aria-label` or `title` attribute.
+
+### 15.2 `<SignalBadge>` — market sentiment indicator
+
+**Path**: `components/ui/SignalBadge.tsx`
+
+**Purpose**: Renders icon + text label for sentiment signals. Replaces icon-only
+renders that failed color-blind accessibility (WCAG 1.4.1).
+
+**Props**:
+| Prop | Type | Description |
+|------|------|-------------|
+| `sentiment` | `"bullish" \| "bearish" \| "neutral" \| null \| undefined` | Signal direction |
+| `className?` | `string` | Extra classes on the container |
+
+**Sentiment values and rendering**:
+| Sentiment | Icon | Label | Color |
+|-----------|------|-------|-------|
+| `bullish` | `TrendingUp` | `BULLISH` | `text-positive` |
+| `bearish` | `TrendingDown` | `BEARISH` | `text-negative` |
+| `neutral` | `Minus` | `NEUTRAL` | `text-muted-foreground` |
+| `null` | — | nothing | — |
+
+**Usage**:
+```tsx
+<SignalBadge sentiment="bullish" />   // → green TrendingUp + "BULLISH"
+<SignalBadge sentiment={null} />      // → renders nothing (no DOM node)
+```
+
+**Used by**: `ArticleCard`, news page article rows, S6 signals panel.
+**Replaces**: inline icon renders at `news/page.tsx:256-263` and `ArticleCard.tsx:102-110`.
+
+### 15.3 Hooks
+
+#### `useCopyToClipboard`
+
+**Path**: `lib/hooks/useCopyToClipboard.ts`
+
+Returns `{ copy: (text: string) => Promise<void>; copied: boolean }`.
+
+Prefers the Clipboard API; falls back to `execCommand("copy")` for older WebKit
+and in-app browsers. `copied` stays `true` for 2000ms after a successful write.
+
+**Replaces**: duplicate clipboard logic in `AliasPill`, `MarkdownContent`, `DataTable`.
+
+#### `useKeyboardShortcuts`
+
+**Path**: `lib/hooks/useKeyboardShortcuts.ts`
+
+```ts
+useKeyboardShortcuts({
+  "ctrl+k": () => openSearch(),
+  "cmd+k":  () => openSearch(),  // both platform variants
+  "escape": () => closeModal(),
+});
+```
+
+Key format: `"modifier+key"` (lowercase). Modifiers: `ctrl`, `cmd`, `shift`, `alt`.
+Does NOT fire inside `input`, `textarea`, `select`, or `contenteditable` elements.
+Does NOT handle sequence chords (g+d) — use `react-hotkeys-hook` for those.
+
+**Replaces**: inline `keydown` listeners in `GlobalSearch`, `QuickEditPopover`, `FlashOverlay`.
+
+#### `useFormattedTimestamp`
+
+**Path**: `lib/hooks/useFormattedTimestamp.ts`
+
+```ts
+const label = useFormattedTimestamp("2026-05-19T14:32:00Z", "relative"); // "2h ago"
+const label = useFormattedTimestamp(someDate, "absolute"); // "May 19, 2026, 14:32"
+const label = useFormattedTimestamp(null, "short"); // "—"
+```
+
+Format modes (per DESIGN_SYSTEM §6.4):
+- `"relative"` — "just now", "Nm ago", "Nh ago", "Nd ago", "Mon DD" (default)
+- `"absolute"` — "May 19, 2026, 14:32" (detail view headers)
+- `"short"` — "May 19, 2026" (table rows)
+
+Returns `"—"` for null/undefined/invalid input.
+
+### 15.4 `lib/sse-parser.ts` — SSE line parser
+
+**Path**: `lib/sse-parser.ts`
+
+Shared parser for `text/event-stream` line-by-line parsing. Extracted to prevent
+protocol drift between `useChatStream` and `ActionConfirmModal` (MED-013).
+
+```ts
+import { parseSSELine } from "@/lib/sse-parser";
+import type { SSEEvent } from "@/lib/sse-parser";
+
+const event = parseSSELine("event: tool_call");
+// → { type: "tool_call", data: "tool_call" }
+
+const event = parseSSELine("data: {\"text\": \"hello\"}");
+// → { type: "message", data: "{\"text\": \"hello\"}" }
+
+parseSSELine("")          // → null (blank line — event block terminator)
+parseSSELine(": ping")    // → null (keep-alive comment)
+parseSSELine("no-colon")  // → null (bare field name, ignored)
+```
+
+### 15.5 `DEFAULT_STALE` — canonical staleTime map
+
+**Path**: `lib/api/_client.ts` (exported alongside `apiFetch`)
+
+Single source of truth for per-domain TanStack Query staleTime values (HIGH-018, FR-8.4).
+Import from `@/lib/api/_client` and use in `useQuery` calls.
+
+| Key | Value (ms) | Rationale |
+|-----|-----------|-----------|
+| `news` | 300,000 (5 min) | Articles update frequently, not per-second |
+| `fundamentals` | 3,600,000 (1 hr) | Quarterly data; rarely changes intra-day |
+| `entityGraph` | 60,000 (1 min) | KG enrichment runs continuously |
+| `quotes` | 15,000 (15 sec) | Matches S3 Valkey quote cache TTL |
+| `screener` | 30,000 (30 sec) | Filter results shift as prices move |
+| `screenerFields` | 21,600,000 (6 hr) | Field definitions almost never change |
+| `portfolio` | 60,000 (1 min) | Updated on every transaction |
+| `alerts` | 15,000 (15 sec) | Alert status must be nearly real-time |
+
+```ts
+import { DEFAULT_STALE } from "@/lib/api/_client";
+useQuery({ queryKey: qk.news.top(), queryFn: ..., staleTime: DEFAULT_STALE.news });
+```
+
+### 15.6 `--topbar-height` CSS variable
+
+Defined in `app/globals.css` as `--topbar-height: 44px` (`:root` and `.dark`).
+
+Reference via Tailwind arbitrary value: `h-[var(--topbar-height)]` or in plain CSS:
+```css
+height: var(--topbar-height);
+```
+
+Used by the `(app)/layout.tsx` shell to size the top chrome. Components that
+position content relative to the topbar (e.g. `calc(100vh - 36px)` in dashboard
+page) should use this variable instead of a hardcoded pixel value (MED-002).
+
+### 15.7 Entity-graph node type tokens
+
+Defined in `app/globals.css` (`:root` and `.dark`). Reference as:
+```js
+`hsl(var(--entity-type-person-fill))`   // deep teal — person nodes
+`hsl(var(--entity-type-event-fill))`    // deep amber — event nodes
+`hsl(var(--entity-type-topic-fill))`    // deep blue — topic nodes
+`hsl(var(--entity-type-default-fill))`  // neutral grey — unknown/default
+// Stroke variants: --entity-type-{person,event,topic,default}-stroke
+```
+
+Replaces hardcoded hex constants in `EntityGraphPanel.tsx:11-14` (MED-018, DS-004).
+
+### 15.8 `DENSITY_CLASSES` — visual density reference
+
+**Path**: `lib/ui-constants.ts`
+
+Canonical Tailwind class strings for every UI surface density level (DS-012, FR-10.6).
+
+| Surface | Class string | Height |
+|---------|-------------|--------|
+| `tableRow` | `h-[22px] px-2 py-0.5 text-[11px]` | 22px |
+| `articleRow` | `px-3 py-1.5 text-[11px]` | 28px (py-1.5) |
+| `tabBar` | `h-8 px-3 text-[11px]` | 32px |
+| `headerTopbar` | `px-3 text-[12px]` | via `--topbar-height` |
+| `banner` | `h-6 px-2 text-[10px] rounded-[2px]` | 24px |
+| `sidebarItem` | `px-2 py-1.5 text-[11px] rounded-[2px]` | 28px |
+| `cardDefault` | `p-3 text-[12px] rounded-[2px]` | n/a |
+| `buttonDefault` | `h-9 px-3 text-[12px] rounded-[2px]` | 36px |
+| `buttonCompact` | `h-7 px-2 text-[11px] rounded-[2px]` | 28px |
+| `badge` | `px-1.5 py-0.5 text-[10px] rounded-full` | n/a |
+
+### 15.9 Typography exception: `text-[9px]`
+
+> **Amended ADR-F-15** (OQ-003 resolution, 2026-05-19):
+
+`text-[9px]` is permitted **ONLY** for non-data secondary metadata labels such as:
+- Timestamps in ultra-compact list items
+- Counts (e.g. "3 results")
+- Category labels in chart legends and graph control hints
+
+**Financial data values** (prices, percentages, ratios, volumes) **MUST** use
+`text-[10px]` minimum. Using 9px for a price or P&L percentage is a typography
+error — even in the most compact contexts.
+
+Chart axis tick labels (x/y) were already permitted at 9px (§3.2 exception table
+added 2026-04-23). This amendment extends the exception to the categories listed
+above while reaffirming that financial data values are excluded.
+
+> **Note on `--topbar-height` in globals.css vs DESIGN_SYSTEM.md §2.1**:
+> The CSS file currently has `44px` (from an earlier wave) while DESIGN_SYSTEM.md §2.1
+> states `36px` (PRD-0031). This discrepancy should be resolved in W3 (Dashboard fixes).
+> W0 adds the chart/entity tokens without touching the topbar value to avoid
+> unintended layout breakage.
+

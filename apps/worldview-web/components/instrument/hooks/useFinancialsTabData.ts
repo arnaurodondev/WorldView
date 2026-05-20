@@ -15,6 +15,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { createGateway } from "@/lib/gateway";
 import { useAccessToken } from "@/lib/api-client";
+import { DEFAULT_STALE } from "@/lib/api/_client";
 import { qk } from "@/lib/query/keys";
 import type {
   Fundamentals,
@@ -33,7 +34,8 @@ export interface FinancialsTabData {
 }
 
 // staleTime rationale per query (annotated inline):
-//   fundamentals 5m, snapshot 10m, income/earnings 24h (filing cadence),
+//   fundamentals DEFAULT_STALE.fundamentals (1hr — quarterly data, HIGH-018/FR-8.4),
+//   snapshot 10m, income/earnings 24h (filing cadence),
 //   technicals 5m + shareStats 60m (shared keys → dedupe with MetricsTable).
 // isLoading only ORs the four NEW queries — technicals/shareStats refresh
 // in place once their shared cache resolves.
@@ -45,7 +47,7 @@ export function useFinancialsTabData(instrumentId: string): FinancialsTabData {
   const fundamentalsQuery = useQuery({
     queryKey: qk.instruments.fundamentals(instrumentId),
     queryFn: () => gw().getFundamentals(instrumentId),
-    staleTime: 5 * 60 * 1000,
+    staleTime: DEFAULT_STALE.fundamentals,
     enabled,
   });
   const snapshotQuery = useQuery({

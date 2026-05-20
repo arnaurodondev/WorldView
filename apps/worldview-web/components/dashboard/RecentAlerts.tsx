@@ -29,6 +29,27 @@ import { formatAlertTitle } from "@/lib/alerts/format";
 import { Skeleton } from "@/components/ui/skeleton";
 import type { AlertPayload } from "@/types/alerts";
 
+// ── Severity sort order ───────────────────────────────────────────────────────
+
+/**
+ * SEVERITY_ORDER — numeric rank for each severity level.
+ *
+ * WHY DESC (3 = highest): the sort below subtracts a.rank from b.rank to
+ * produce descending order, matching the idiom `(b.rank - a.rank)` used
+ * everywhere in the codebase.
+ *
+ * WHY 4 tiers: AlertSeverity in S10 has 4 levels. CRITICAL alerts must always
+ * appear first so traders never miss an urgent notification scrolled below
+ * LOW-priority noise. Any unknown severity (e.g. a future tier) maps to 0 and
+ * sorts to the bottom rather than throwing an error.
+ */
+const SEVERITY_ORDER: Record<string, number> = {
+  CRITICAL: 4,
+  HIGH: 3,
+  MEDIUM: 2,
+  LOW: 1,
+};
+
 // ── Component ─────────────────────────────────────────────────────────────────
 
 export function RecentAlerts() {
@@ -80,9 +101,20 @@ export function RecentAlerts() {
       }
     }
 
-    // Sort newest first, limit to 8 rows
+    // FR-1.6 MED-003: sort by severity DESC then created_at DESC, limit to 8.
+    // WHY severity first: a CRITICAL alert from an hour ago is more actionable
+    // than a LOW alert from 5 minutes ago. Traders must never have to scroll
+    // past noise to find the most urgent signal.
+    // WHY created_at as tiebreaker: when two alerts share the same severity
+    // (common for consecutive LOW signals), show the most recent one first
+    // so the feed still reads as a chronological alert log within each tier.
     return combined
-      .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())
+      .sort((a, b) => {
+        const severityDiff =
+          (SEVERITY_ORDER[b.severity] ?? 0) - (SEVERITY_ORDER[a.severity] ?? 0);
+        if (severityDiff !== 0) return severityDiff;
+        return new Date(b.created_at).getTime() - new Date(a.created_at).getTime();
+      })
       .slice(0, 8);
   }, [recentAlerts, alertsResp?.alerts]);
 

@@ -173,9 +173,11 @@ export function EntityChatPanel({ entityId: _entityId }: EntityChatPanelProps) {
             Chat
           </span>
           {/* WHY entity name in header: confirms which entity the chat is scoped to.
-              Analysts need to know if they're chatting about Apple vs Tim Cook. */}
+              Analysts need to know if they're chatting about Apple vs Tim Cook.
+              UUID truncated to 8 chars + ellipsis — full UUID is illegible in
+              the 200px-wide span and adds no value as a human-readable label. */}
           <span className="text-[11px] font-mono text-muted-foreground/60 truncate max-w-[200px]">
-            · {anchorEntityId}
+            · {anchorEntityId ? `${anchorEntityId.slice(0, 8)}…` : "—"}
           </span>
         </div>
 
@@ -199,7 +201,8 @@ export function EntityChatPanel({ entityId: _entityId }: EntityChatPanelProps) {
       <ScrollArea className="flex-1 px-3 py-2">
         {localMessages.length === 0 && !streaming && (
           <p className="text-[11px] text-muted-foreground font-mono text-center py-4">
-            Ask about {anchorEntityId}…
+            {/* UUID truncated to 8 chars — full UUID is not human-readable in an empty-state prompt. */}
+            Ask about {anchorEntityId ? `${anchorEntityId.slice(0, 8)}…` : "this entity"}…
           </p>
         )}
 
@@ -256,9 +259,9 @@ export function EntityChatPanel({ entityId: _entityId }: EntityChatPanelProps) {
           <div className="flex justify-start mb-2">
             <div className="rounded-[2px] px-2.5 py-1.5 text-[11px] font-sans max-w-[85%] bg-muted/60 text-foreground/90 leading-relaxed">
               {streaming.text || (
-                // WHY animate-pulse + empty text: shows "thinking" state while
-                // the first token hasn't arrived yet (LLM is still processing).
-                <span className="inline-block w-3 h-3 rounded-full bg-muted-foreground animate-pulse" />
+                // HIGH-015: animate-pulse removed — Bloomberg terminal mandate.
+                // Static dot still reads as "thinking" without animating.
+                <span className="inline-block w-3 h-3 rounded-full bg-muted-foreground" />
               )}
             </div>
           </div>

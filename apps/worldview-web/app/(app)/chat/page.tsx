@@ -254,11 +254,17 @@ export default function ChatPage() {
   // STAYS AT PAGE LEVEL: this depends on TanStack Query data (`activeThread`)
   // which is owned by the page. The hook only manages transient streaming
   // state — historical messages come from the server cache.
+  // FR-5.1 (HIGH-010): removed `&& !streaming` guard.
+  // The original guard prevented history from syncing when a stream just
+  // completed — exactly when the authoritative server messages should land.
+  // The ref-based `isStreamingRef` in `useChatStream` already blocks concurrent
+  // `send()` calls; this effect only replaces the optimistic log with the
+  // settled server state, which is always safe to do.
   useEffect(() => {
-    if (activeThread && activeThread.thread_id === activeThreadId && !streaming) {
+    if (activeThread && activeThread.thread_id === activeThreadId) {
       setLocalMessages(activeThread.messages);
     }
-  }, [activeThread, activeThreadId, streaming, setLocalMessages]);
+  }, [activeThread, activeThreadId, setLocalMessages]);
 
   // Auto-scroll to bottom on new tokens / messages.
   useEffect(() => {
@@ -864,13 +870,16 @@ export default function ChatPage() {
                 })}
 
                 {/* In-flight SSE stream */}
-                {streaming && streaming.text ? (
+                {/* FR-5.5 (MED-012): always render StreamingBubble when streaming is
+                    non-null. StreamingBubble already handles the "no text yet" case
+                    internally via ToolCallIndicator (shows tool spinners while
+                    streaming.text === ""). The TypingIndicator fallback was redundant
+                    and caused a brief flash between tool events and text arrival. */}
+                {streaming ? (
                   // Pass activeTools so ToolCallIndicator renders above the streaming text.
                   // WHY: during multi-tool responses the tool indicators appear first,
                   // then text flows in below them once S8 starts generating.
                   <StreamingBubble streaming={streaming} activeTools={activeTools} />
-                ) : streaming ? (
-                  <TypingIndicator />
                 ) : null}
 
                 {chatError && (

@@ -51,12 +51,30 @@ export interface Preferences {
   currency: CurrencyCode;
   /** IANA timezone string. "auto" means use the browser's resolved timezone. */
   timezone: string;
+  /**
+   * Chat / search history retention in days.
+   * 30 | 90 | 365 | 0 (keep forever).
+   * WHY 0-as-forever: avoids "Infinity" in JSON serialisation; the UI maps 0
+   * to the "Keep forever" label and the backend interprets 0 as no pruning.
+   * FR-6.2 / CRIT-003.
+   */
+  retentionDays: number;
+  /**
+   * Whether the destructive data-ops section (export / delete) is enabled
+   * in the UI. Separate from the NEXT_PUBLIC_ENABLE_DATA_OPS flag so a
+   * per-user toggle can be layered on top when the backend is ready.
+   * Defaults false — the env flag is the primary gate.
+   * FR-6.5.
+   */
+  dataOpsEnabled: boolean;
 }
 
 const DEFAULTS: Preferences = {
   density: "compact",
   currency: "USD",
   timezone: "auto",
+  retentionDays: 90,
+  dataOpsEnabled: false,
 };
 
 // Validation
@@ -95,12 +113,33 @@ const validatePreferences: Validator<Preferences> = (raw) => {
     !VALID_CURRENCIES.includes(obj.currency as CurrencyCode)
   ) return null;
   if (typeof obj.timezone !== "string" || !isValidIanaTimezone(obj.timezone)) return null;
+
+  // FR-6.2 (CRIT-003): validate retentionDays.
+  // WHY coerce-missing-to-default: this field was added after the initial
+  // storage schema. Existing stored objects won't have it — treat missing
+  // as the 90-day default so we don't null-out an otherwise valid prefs
+  // object and lose the user's density/currency/timezone settings.
+  const retentionRaw = obj.retentionDays;
+  const retentionDays =
+    typeof retentionRaw === "number" &&
+    [0, 30, 90, 365].includes(retentionRaw)
+      ? retentionRaw
+      : DEFAULTS.retentionDays;
+
+  // Same additive-default strategy for dataOpsEnabled.
+  const dataOpsEnabled =
+    typeof obj.dataOpsEnabled === "boolean"
+      ? obj.dataOpsEnabled
+      : DEFAULTS.dataOpsEnabled;
+
   // QA-iter1: project to ONLY the known fields so future schema additions
   // in another tab/version don't silently leak through.
   return {
     density: obj.density as Density,
     currency: obj.currency as CurrencyCode,
     timezone: obj.timezone,
+    retentionDays,
+    dataOpsEnabled,
   };
 };
 
@@ -112,6 +151,10 @@ interface PreferencesContextValue extends Preferences {
   setDensity: (density: Density) => void;
   setCurrency: (currency: CurrencyCode) => void;
   setTimezone: (timezone: string) => void;
+  /** FR-6.2 (CRIT-003): update history retention window. */
+  setRetentionDays: (days: number) => void;
+  /** FR-6.5: toggle user-level data-ops access (UI layer gate). */
+  setDataOpsEnabled: (enabled: boolean) => void;
   reset: () => void;
   /**
    * Resolved IANA timezone — when `timezone === "auto"` returns the browser's
@@ -194,6 +237,14 @@ export function PreferencesProvider({ children }: { children: React.ReactNode })
       setDensity: (density) => setPrefs((p) => ({ ...p, density })),
       setCurrency: (currency) => setPrefs((p) => ({ ...p, currency })),
       setTimezone: (timezone) => setPrefs((p) => ({ ...p, timezone })),
+      // FR-6.2 (CRIT-003): persists to localStorage via the existing setPrefs
+      // pathway — retentionDays survives page refresh because safeStorage writes
+      // on every state change (see the useEffect above).
+      setRetentionDays: (retentionDays) =>
+        setPrefs((p) => ({ ...p, retentionDays })),
+      // FR-6.5: separate toggle so the env flag and user flag can be ANDed.
+      setDataOpsEnabled: (dataOpsEnabled) =>
+        setPrefs((p) => ({ ...p, dataOpsEnabled })),
       reset: () => {
         // QA-iter1: actually wipe the storage key (not rewrite defaults) so
         // a future "factory reset" feature has nothing to find.

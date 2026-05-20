@@ -134,7 +134,7 @@ export function ContextPanel({
   // Decoupling — the parent IntelligenceTab can also fetch the graph for the
   // visualisation, but TanStack Query de-dupes by key so only ONE network
   // request fires. Both consumers see the same cached data.
-  const graphQuery = useQuery<EntityGraph>({
+  const graphQuery = useQuery<EntityGraph | null>({
     queryKey: ["entity-graph", entityId, 1, null],
     queryFn: () => createGateway(accessToken).getEntityGraph(entityId, 1),
     enabled: !!accessToken && !!entityId,

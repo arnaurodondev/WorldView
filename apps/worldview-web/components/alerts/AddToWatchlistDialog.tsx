@@ -75,6 +75,12 @@ export function AddToWatchlistDialog({
       const gw = createGateway(accessToken);
       return gw.addWatchlistMember(watchlistId, entId);
     },
+    // WHY retry (CRIT-006 / FR-8.1): addWatchlistMember is idempotent —
+    // app-layer dedup returns 409 on duplicate (not 5xx); retry only fires
+    // on transient network / 5xx failures.
+    retry: 3,
+    retryDelay: (attemptIndex: number) =>
+      Math.min(1000 * 2 ** (attemptIndex - 1), 4000),
     onSuccess: async (_, vars) => {
       // Invalidate the watchlist queries that will now show the new member.
       await queryClient.invalidateQueries({ queryKey: ["watchlist", vars.watchlistId] });

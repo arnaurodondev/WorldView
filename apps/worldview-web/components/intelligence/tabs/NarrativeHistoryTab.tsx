@@ -31,18 +31,27 @@
 
 "use client";
 
-import { useState } from "react";
+import { useState, useMemo } from "react";
+import { useQuery } from "@tanstack/react-query";
+import { useApiClient } from "@/lib/api-client";
 import { useEntityNarrativeHistory } from "@/lib/api/intelligence";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Button } from "@/components/ui/button";
 import { ChevronDown, ChevronUp } from "lucide-react";
 import { cn } from "@/lib/utils";
 import type { NarrativeVersionPublic } from "@/types/intelligence";
+import type { EntityGraph } from "@/types/api";
 
 // ── Props ─────────────────────────────────────────────────────────────────────
 
 interface NarrativeHistoryTabProps {
   entityId: string;
+  /**
+   * The entity the user last clicked in the graph (or anchor if no node clicked).
+   * Used for the "Filtered to:" banner — matches the pattern in RelationsTab and
+   * EvidenceTab so all four tabs have symmetric filter feedback (FR-3.2 MED-009).
+   */
+  selectedEntityId: string;
 }
 
 // ── Generation reason styling ─────────────────────────────────────────────────
@@ -152,7 +161,9 @@ function NarrativeCard({ version }: { version: NarrativeVersionPublic }) {
 
 // ── Main component ────────────────────────────────────────────────────────────
 
-export function NarrativeHistoryTab({ entityId }: NarrativeHistoryTabProps) {
+export function NarrativeHistoryTab({ entityId, selectedEntityId }: NarrativeHistoryTabProps) {
+  const gw = useApiClient();
+
   const {
     data,
     isLoading,
@@ -161,6 +172,24 @@ export function NarrativeHistoryTab({ entityId }: NarrativeHistoryTabProps) {
     hasNextPage,
     isFetchingNextPage,
   } = useEntityNarrativeHistory(entityId);
+
+  // WHY read the graph cache for node labels:
+  // The "Filtered to:" banner shows the selected entity's name, not its raw UUID.
+  // We read from the same query key as RelationsTab/EvidenceTab so this is a
+  // cache hit (no extra network fetch) when the graph is already loaded.
+  const { data: graphData } = useQuery<EntityGraph | null>({
+    queryKey: ["intelligence-graph", entityId, 2, false],
+    queryFn: () => gw.getEntityGraph(entityId, 2, "all"),
+    staleTime: 60_000,
+    enabled: !!entityId,
+  });
+
+  // Build node label lookup from graph nodes — same pattern as RelationsTab
+  const nodeLabelById = useMemo(() => {
+    const map = new Map<string, string>();
+    (graphData?.nodes ?? []).forEach((n) => map.set(n.id, n.label));
+    return map;
+  }, [graphData]);
 
   if (isLoading) {
     return (
@@ -196,7 +225,22 @@ export function NarrativeHistoryTab({ entityId }: NarrativeHistoryTabProps) {
   }
 
   return (
-    <div className="h-full overflow-y-auto p-3">
+    <div className="h-full overflow-y-auto">
+      {/* WHY "Filtered to:" banner:
+          When the analyst clicks a graph node, other tabs filter to that entity.
+          This banner provides symmetric visual feedback here (matching RelationsTab
+          and EvidenceTab) so the analyst knows the graph selection is active —
+          even though narrative history always shows the anchor entity's history
+          (not the selected node's). FR-3.2 MED-009. */}
+      {selectedEntityId !== entityId && (
+        <div className="px-3 py-1.5 bg-primary/10 border-b border-border/50">
+          <p className="text-[10px] font-mono text-primary">
+            Filtered to: {nodeLabelById.get(selectedEntityId) ?? selectedEntityId}
+          </p>
+        </div>
+      )}
+
+      <div className="p-3">
       {/* Backend does not return a total (cursor pagination on a growing list);
           show count loaded so far + a hint that more may exist. */}
       <p className="text-[10px] font-mono text-muted-foreground mb-3">
@@ -224,6 +268,7 @@ export function NarrativeHistoryTab({ entityId }: NarrativeHistoryTabProps) {
           </Button>
         </div>
       )}
+      </div>
     </div>
   );
 }

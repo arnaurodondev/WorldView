@@ -34,6 +34,9 @@
 
 import { useMemo } from "react";
 import { useSelectedEntity } from "@/contexts/SelectedEntityContext";
+// WHY useGraphDepth: EntitySidebar's graph query uses the same depth the
+// analyst selected in GraphPanel, ensuring cache hits + data consistency.
+import { useGraphDepth } from "@/contexts/GraphDepthContext";
 import { useEntityIntelligence } from "@/lib/api/intelligence";
 import { useApiClient } from "@/lib/api-client";
 import { useQuery } from "@tanstack/react-query";
@@ -117,6 +120,10 @@ function SidebarSkeleton() {
 export function EntitySidebar({ entityId }: EntitySidebarProps) {
   const { selectedEntityId, setSelectedEntityId, anchorEntityId } = useSelectedEntity();
   const isShowingSelected = selectedEntityId !== anchorEntityId;
+  // WHY useGraphDepth: use the analyst's current depth selection (from GraphPanel's
+  // slider) so the graph query key matches the cache primed by GraphPanel.
+  // Previously hardcoded to depth=2, causing cache misses when depth>2.
+  const { depth: graphDepth } = useGraphDepth();
   const gw = useApiClient();
 
   // Always fetch the anchor entity's intelligence (for fallback + quick "back")
@@ -151,11 +158,13 @@ export function EntitySidebar({ entityId }: EntitySidebarProps) {
 
   // ── Top-3 relations with summaries ─────────────────────────────────────────
   // Read from the graph query cache — GraphPanel already fetched this data.
-  // WHY depth=2 in queryKey: matches GraphPanel's default, so the cache hit is
-  // guaranteed when GraphPanel is mounted (which it always is on the intelligence page).
-  const { data: graphData } = useQuery<EntityGraph>({
-    queryKey: ["intelligence-graph", displayEntityId, 2, false],
-    queryFn: () => gw.getEntityGraph(displayEntityId, 2, "all"),
+  // WHY graphDepth in queryKey: we use the depth from GraphDepthContext (which
+  // GraphPanel writes on slider change) so the key matches the cache primed by
+  // GraphPanel. Previously hardcoded to 2 — this was a cache miss whenever the
+  // analyst used depth 3+ (FR-3.3 fix).
+  const { data: graphData } = useQuery<EntityGraph | null>({
+    queryKey: ["intelligence-graph", displayEntityId, graphDepth, false],
+    queryFn: () => gw.getEntityGraph(displayEntityId, graphDepth as 1 | 2 | 3 | 4 | 5, "all"),
     // WHY staleTime 60_000: matches GraphPanel's staleTime so both components
     // share the same cache entry without any re-fetch.
     staleTime: 60_000,

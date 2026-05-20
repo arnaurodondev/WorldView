@@ -23,6 +23,9 @@ from portfolio.infrastructure.db.repositories.holding import SqlAlchemyHoldingRe
 from portfolio.infrastructure.db.repositories.idempotency import SqlAlchemyIdempotencyRepository
 from portfolio.infrastructure.db.repositories.instrument import SqlAlchemyInstrumentRepository
 from portfolio.infrastructure.db.repositories.micro_survey_response import SqlAlchemyMicroSurveyRepo
+from portfolio.infrastructure.db.repositories.notification_preferences import (
+    SqlAlchemyNotificationPreferencesRepository,
+)
 from portfolio.infrastructure.db.repositories.nps_score import SqlAlchemyNPSScoreRepo
 from portfolio.infrastructure.db.repositories.outbox import SqlAlchemyOutboxRepository
 from portfolio.infrastructure.db.repositories.portfolio import SqlAlchemyPortfolioRepository
@@ -60,6 +63,7 @@ if TYPE_CHECKING:
         HoldingRepository,
         IdempotencyRepository,
         InstrumentRepository,
+        NotificationPreferencesRepository,
         OutboxRepository,
         PortfolioRepository,
         PortfolioValueSnapshotRepository,
@@ -110,6 +114,7 @@ class SqlAlchemyReadOnlyUnitOfWork(ReadOnlyUnitOfWork):
         self._feature_votes: SqlAlchemyFeatureVoteRepo | None = None
         self._micro_surveys: SqlAlchemyMicroSurveyRepo | None = None
         self._beta_enrollments: SqlAlchemyBetaEnrollmentRepo | None = None
+        self._notification_preferences: SqlAlchemyNotificationPreferencesRepository | None = None
 
     # ── Repository properties ─────────────────────────────────────────────────
 
@@ -225,6 +230,11 @@ class SqlAlchemyReadOnlyUnitOfWork(ReadOnlyUnitOfWork):
         assert self._beta_enrollments is not None, "ReadOnlyUnitOfWork not entered"
         return self._beta_enrollments
 
+    @property
+    def notification_preferences(self) -> NotificationPreferencesRepository:
+        assert self._notification_preferences is not None, "ReadOnlyUnitOfWork not entered"
+        return self._notification_preferences
+
     # ── Context manager ───────────────────────────────────────────────────────
 
     async def __aenter__(self) -> SqlAlchemyReadOnlyUnitOfWork:
@@ -256,6 +266,7 @@ class SqlAlchemyReadOnlyUnitOfWork(ReadOnlyUnitOfWork):
         self._feature_votes = SqlAlchemyFeatureVoteRepo(self._session)
         self._micro_surveys = SqlAlchemyMicroSurveyRepo(self._session)
         self._beta_enrollments = SqlAlchemyBetaEnrollmentRepo(self._session)
+        self._notification_preferences = SqlAlchemyNotificationPreferencesRepository(self._session)
         return self
 
     async def __aexit__(
@@ -312,6 +323,7 @@ class SqlAlchemyUnitOfWork(UnitOfWork):
         self._feature_votes: SqlAlchemyFeatureVoteRepo | None = None
         self._micro_surveys: SqlAlchemyMicroSurveyRepo | None = None
         self._beta_enrollments: SqlAlchemyBetaEnrollmentRepo | None = None
+        self._notification_preferences: SqlAlchemyNotificationPreferencesRepository | None = None
 
     async def __aenter__(self) -> SqlAlchemyUnitOfWork:
         self._session = self._session_factory()
@@ -341,6 +353,7 @@ class SqlAlchemyUnitOfWork(UnitOfWork):
         self._feature_votes = SqlAlchemyFeatureVoteRepo(self._session)
         self._micro_surveys = SqlAlchemyMicroSurveyRepo(self._session)
         self._beta_enrollments = SqlAlchemyBetaEnrollmentRepo(self._session)
+        self._notification_preferences = SqlAlchemyNotificationPreferencesRepository(self._session)
         return self
 
     async def __aexit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
@@ -476,6 +489,11 @@ class SqlAlchemyUnitOfWork(UnitOfWork):
     def beta_enrollments(self) -> BetaEnrollmentRepo:
         assert self._beta_enrollments is not None, "UnitOfWork not entered"
         return self._beta_enrollments
+
+    @property
+    def notification_preferences(self) -> NotificationPreferencesRepository:
+        assert self._notification_preferences is not None, "UnitOfWork not entered"
+        return self._notification_preferences
 
     async def commit(self) -> None:
         assert self._session is not None, "UnitOfWork not entered"

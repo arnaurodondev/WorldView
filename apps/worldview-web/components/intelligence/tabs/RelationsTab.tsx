@@ -57,7 +57,9 @@ export function RelationsTab({ entityId, selectedEntityId }: RelationsTabProps) 
   // GraphPanel already fetched this data. Reading from the same queryKey reuses
   // the cached result — no extra network round-trip. depth=2 matches GraphPanel
   // default; the tab always reflects what the graph shows.
-  const { data: graphData, isLoading, isError } = useQuery<EntityGraph>({
+  // WHY EntityGraph | null: getEntityGraph returns null on 404 (entity not yet enriched).
+  // All consumers below are already null-guarded (graphData?.nodes, if (!graphData) return []).
+  const { data: graphData, isLoading, isError } = useQuery<EntityGraph | null>({
     queryKey: ["intelligence-graph", entityId, 2, false],
     queryFn: () => gw.getEntityGraph(entityId, 2, "all"),
     staleTime: 60_000,

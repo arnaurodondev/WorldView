@@ -62,7 +62,8 @@ export default function InstrumentsPage() {
 
   // ── Debounce timer ref ────────────────────────────────────────────────────
   // WHY useRef (not state): debounce timer ID doesn't need to trigger re-renders.
-  // WHY 400ms: long enough to avoid mid-word queries; short enough to feel responsive.
+  // WHY 300ms: aligns with the platform search debounce standard (FR-4.2 / INC-002).
+  // 300ms is responsive for live-typing without hammering S9 on every keystroke.
   const debounceTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // ── Column definitions — stable across renders ────────────────────────────
@@ -79,7 +80,7 @@ export default function InstrumentsPage() {
     if (debounceTimer.current) clearTimeout(debounceTimer.current);
     debounceTimer.current = setTimeout(() => {
       setSearchQuery(val.trim());
-    }, 400);
+    }, 300);
   }
 
   // ── Enter key: commit search immediately (skip debounce wait) ─────────────

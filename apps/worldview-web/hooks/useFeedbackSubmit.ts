@@ -126,6 +126,17 @@ export function useFeedbackSubmit() {
       validate(payload, isAuthenticated);
       return createGateway(accessToken).postFeedbackSubmission(payload);
     },
+    // WHY retry only on 5xx/network (not validation): FeedbackValidationError is
+    // thrown before the network call and will never resolve on retry. GatewayError
+    // with status < 500 (4xx) is a deterministic rejection — no point retrying.
+    // Only transient 5xx/network failures benefit from exponential backoff.
+    retry: (count: number, err: Error) => {
+      if (err instanceof FeedbackValidationError) return false;
+      if (err instanceof GatewayError && err.status < 500) return false;
+      return count < 3;
+    },
+    retryDelay: (attemptIndex: number) =>
+      Math.min(1000 * 2 ** (attemptIndex - 1), 4000),
     onSuccess: () => {
       // Invalidate the user's own list so a "My submissions" surface
       // (future) refreshes. Use a broad key prefix to catch any active
