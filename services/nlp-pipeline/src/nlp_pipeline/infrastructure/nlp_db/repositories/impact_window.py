@@ -105,6 +105,9 @@ class ArticleImpactWindowRepository(ArticleImpactWindowRepositoryPort):
           - Must have a resolved financial_instrument mention
           - Must be missing at least one day_t0 row in article_impact_windows
             (day_t0 is required for ALL labelled articles; t1/t2/t5 are added later)
+          - Must NOT be SUPPRESS-tier (W1-02, BUG-002): joined against
+            ``routing_decisions`` and filtered to ``processing_path != 'halt'``.
+            See inline comment in the SQL below for the NULL-fallback rationale.
         """
         stmt = text(
             """
@@ -112,10 +115,27 @@ class ArticleImpactWindowRepository(ArticleImpactWindowRepositoryPort):
                 SELECT DISTINCT em.doc_id
                 FROM entity_mentions em
                 JOIN document_source_metadata dsm ON dsm.doc_id = em.doc_id
+                -- W1-02 (BUG-002): JOIN routing_decisions so we can filter out
+                -- SUPPRESS-tier articles. Without this join, the price-impact
+                -- labelling worker was happily computing windows for HALT-path
+                -- documents and the resulting impact scores fed back into the
+                -- composite routing score for any future article citing the
+                -- same instrument — a noise-amplifying feedback loop.
+                JOIN routing_decisions rd ON rd.doc_id = em.doc_id
                 WHERE em.resolved_entity_id IS NOT NULL
                   AND em.mention_class = 'financial_instrument'
                   AND dsm.published_at IS NOT NULL
                   AND dsm.published_at < now() - make_interval(hours => :min_age_hours)
+                  -- W1-02 (BUG-002): exclude SUPPRESS-tier articles. The
+                  -- ``processing_path`` column (added in migration 0015) is
+                  -- the canonical suppression-gate output and is set to
+                  -- 'halt' for any article whose final path is
+                  -- ``ProcessingPath.HALT``. Legacy rows written before the
+                  -- migration have NULL here; we treat NULL as "non-suppress"
+                  -- so we do not accidentally exclude valid pre-migration
+                  -- articles (defensive fallback — those rows pre-date the
+                  -- bug anyway and will age out via the multi-window TTL).
+                  AND (rd.processing_path IS NULL OR rd.processing_path != 'halt')
                   AND NOT EXISTS (
                       SELECT 1 FROM article_impact_windows aiw
                       WHERE aiw.article_id = em.doc_id
