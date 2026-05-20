@@ -266,7 +266,7 @@ These exist in backend services but the gateway lacks proxy routes:
 - `GET /v1/signals` (+ add pagination to S6 first)
 
 ### 4.2 Missing Composed Endpoints (S9 BFF work)
-- `GET /v1/instruments/{id}/context` (ADR-F-12) — single call returning instrument + entity_id + sector/industry/exchange
+- `GET /v1/instruments/{id}/context` (originally ADR-F-12; post-F2 see [ADR-F-16](../architecture/decisions/ADR-F-16-instrument-entity-id-unification.md)) — single call returning instrument + entity_id + sector/industry/exchange. Post-F2: `entity_id == instrument_id` for tradable kinds; the endpoint still returns both for backwards compatibility (v1.1 drops the redundant field).
 - `GET /v1/companies/{id}/overview` — partially implemented, needs expansion
 
 ### 4.3 Missing Backend Features

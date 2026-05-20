@@ -617,7 +617,7 @@ are auto-populated at construction time.
 |-------|-------------|-----------------|----------------|---------|
 | `InstrumentCreated` | `market.instrument.created` | 3 | `instrument_id`, `security_id`, `symbol`, `exchange`, `name`, `description`, `isin`, `cusip`, `figi`, `lei`, `primary_ticker` | Fundamentals materialised — first time `has_fundamentals` flips True with a real EODHD `Name`. v3 adds the four EODHD identifier fields (PLAN-0057 Wave C-1). |
 | `InstrumentUpdated` | `market.instrument.updated` | 1 | `instrument_id`, `symbol`, `exchange`, `has_ohlcv`, `has_quotes`, `has_fundamentals` | Capability flag transitions OTHER than first-fundamentals. |
-| `InstrumentDiscovered` | `market.instrument.discovered.v1` | 1 | `instrument_id`, `symbol`, `exchange`, `entity_id` (= instrument_id) | OHLCV / Quotes saw a previously-unknown symbol; KG seeds a lightweight placeholder canonical from this event (PLAN-0057 Wave D-2). |
+| `InstrumentDiscovered` | `market.instrument.discovered.v1` | 1 | `instrument_id`, `symbol`, `exchange`, `entity_id` (≡ `instrument_id` per M-017 / [ADR-F-16](../architecture/decisions/ADR-F-16-instrument-entity-id-unification.md)) | OHLCV / Quotes saw a previously-unknown symbol; KG seeds a lightweight placeholder canonical from this event (PLAN-0057 Wave D-2). Post-F2: the KG consumer inserts `canonical_entities.entity_id = event.instrument_id` directly (no fresh UUID minted). |
 
 ### Usage Example
 

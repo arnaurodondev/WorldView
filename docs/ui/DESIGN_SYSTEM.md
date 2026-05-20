@@ -1112,7 +1112,7 @@ For full implementation from a design, use `/scaffold-frontend`.
 | OQ-6 | LIGHT tier articles | Resolved | Show with opacity 0.6, italic source |
 | OQ-7 | ImpactSparkline threshold | Resolved | ≥2 windows |
 | OQ-8 | Professional table density | Resolved | `CompactTable` (text-xs, h-8 rows) for Holdings, Fundamentals, Screener; standard table for non-financial pages |
-| OQ-9 | entity_id vs instrument_id | Resolved | Distinct UUIDs. `GET /v1/instruments/{id}/context` S9 composition resolves both. See ADR-F-12 in PRD-0027. |
+| OQ-9 | entity_id vs instrument_id | **Re-resolved 2026-05-20 (F2 / PRD-0089)** | Unified per [ADR-F-16](../architecture/decisions/ADR-F-16-instrument-entity-id-unification.md): for `entity_type = 'financial_instrument'`, `entity_id == instrument_id` (M-017 enforced). Non-tradable kinds (persons, events, sectors) keep an independent `entity_id`. URLs use tickers (`/instruments/${TICKER}`), not UUIDs. ADR-F-12 (PRD-0027 §1367) is superseded. |
 | OQ-10 | Portfolio chart library | Resolved | recharts (donut + horizontal bar); code-split to `/portfolio` route only |
 | OQ-11 | Sector heat map data | Resolved | Batch quotes for 11 SPDR sector ETFs (XLK…XLC) via `POST /v1/quotes/batch` |
 | OQ-12 | Landing page hero copy | Resolved | "Bloomberg-Grade Research. Without the Bloomberg Bill." (see PRD-0027 §3 F-01) |

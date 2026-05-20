@@ -318,7 +318,8 @@ S7 uses **two session factories** (R23 dual-factory pattern, R27 read/write spli
 
 | Table | Partitioning | Purpose |
 |-------|-------------|---------|
-| `canonical_entities` | — | Resolved entity registry (shared with S6) |
+| `canonical_entities` | — | Resolved entity registry (shared with S6). `entity_type` is the kind discriminator with an 11-value CHECK constraint (`financial_instrument, person, event, sector, industry, macro_indicator, place, product, index, currency, unknown`). For `entity_type = 'financial_instrument'`, `entity_id` equals `market_data.instruments.id` (M-017, enforced by integration test). See [ADR-F-16](../architecture/decisions/ADR-F-16-instrument-entity-id-unification.md). |
+| `ticker_aliases` | — | Historical-ticker → current-canonical-entity map. Populated by ops on ticker change events (e.g. FB → META). Used by the S9 alias-resolution path; empty at v1 per `no_backfill`. Forever retention. |
 | `entity_aliases` | — | Alias index with `alias_type` (EXACT, TICKER, ISIN, CUSIP, FIGI, LEI, NAME) |
 | `entity_embedding_state` | — | Multi-view 1024-dim embeddings; 3 rows per entity (definition, narrative, fundamentals_ohlcv) |
 | `entity_narrative_versions` | — | Version-controlled LLM-generated entity narratives |

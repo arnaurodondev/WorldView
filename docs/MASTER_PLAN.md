@@ -1,6 +1,6 @@
 # Worldview -- Master Plan
 
-> **Version**: 2.3 | **Date**: 2026-05-17
+> **Version**: 2.4 | **Date**: 2026-05-20
 > **Status**: Active | **Owner**: Arnau Rodon
 > **Single source of truth** for the entire platform architecture.
 
@@ -242,6 +242,7 @@ All Kafka events carry: `event_id` (UUIDv7), `event_type` (`domain.entity.verb_p
 - **Claim-Check**: Large payloads in MinIO; events carry `(bucket, key, content_type, etag)` pointers.
 - **Idempotent Consumers**: Check `event_id` against processed-events table. Use `INSERT ON CONFLICT DO NOTHING`.
 - **Dead-Letter via Status Column**: Failed events stay in `outbox_events` with `status='dead_letter'`.
+- **Unified Identity for Tradable Securities (M-017)**: For every Kafka payload referencing a tradable security, `entity_id == instrument_id`. The same UUID is `market_data.instruments.id`, `intelligence_db.canonical_entities.entity_id` (where `entity_type = 'financial_instrument'`), and the value carried on every event. Non-tradable kinds (`person`, `event`, `sector`, `industry`, `macro_indicator`, `place`, `product`, `index`, `currency`, `unknown`) keep an independent `entity_id` with no market-data counterpart. CI enforces the invariant via `services/knowledge-graph/tests/integration/test_m017_invariant.py`. See [ADR-F-16](architecture/decisions/ADR-F-16-instrument-entity-id-unification.md) (supersedes ADR-F-12).
 
 ### 7.4 Avro Schema Policy
 
