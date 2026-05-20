@@ -427,7 +427,7 @@ export function AlertsList({ selectedId = null }: AlertsListProps = {}) {
     return (
       <div className="divide-y divide-border/30" aria-busy="true" aria-label="Loading alerts">
         {Array.from({ length: 5 }).map((_, i) => (
-          <div key={i} className="flex h-[22px] items-center gap-3 px-2">
+          <div key={i} className="flex h-[20px] items-center gap-3 px-2">
             <Skeleton className="h-4 w-10" />
             <Skeleton className="h-3 w-12" />
             <Skeleton className="h-3 flex-1" />
@@ -709,12 +709,12 @@ export function AlertRow({
   const severityKey = ((alert.severity ?? "").toUpperCase() || "LOW") as AlertSeverity;
   return (
     <li>
-      {/* WHY flex h-[22px]: terminal 22px row per §0 quality rules.
+      {/* WHY flex h-[20px]: terminal 22px row per §0 quality rules.
           dimmed=true (snoozed / acked) drops opacity to 60% so the row
           remains scannable but visibly de-emphasised. */}
       <div
         className={cn(
-          "flex h-[22px] w-full items-center gap-1.5 border-b border-border/30 px-2 hover:bg-muted/40",
+          "flex h-[20px] w-full items-center gap-1.5 border-b border-border/30 px-2 hover:bg-muted/40",
           dimmed && "opacity-60",
           // PLAN-0053 T-F-6-03: tint selected rows so the bulk set is visible
           // even when the checkbox column scrolls out of view (rare in this

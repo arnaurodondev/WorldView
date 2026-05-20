@@ -104,7 +104,7 @@ export function HoldingLotsPanel({
             line of code, fully accessible, and matches the dense terminal
             aesthetic. */}
         <select
-          className="bg-card border border-border rounded-sm px-2 py-px text-[11px] font-mono text-foreground focus:outline-none focus:ring-1 focus:ring-primary"
+          className="bg-card border border-border px-2 py-px text-[11px] font-mono text-foreground focus:outline-none focus:ring-1 focus:ring-primary"
           value={selectedInstrumentId ?? ""}
           onChange={(e) => setSelectedInstrumentId(e.target.value || null)}
         >
@@ -148,7 +148,7 @@ export function HoldingLotsPanel({
         {isLoading ? (
           <div className="p-2 space-y-px">
             {Array.from({ length: 4 }).map((_, i) => (
-              <Skeleton key={i} className="h-[22px] w-full" />
+              <Skeleton key={i} className="h-[20px] w-full" />
             ))}
           </div>
         ) : !data || data.lots.length === 0 ? (
@@ -176,7 +176,7 @@ export function HoldingLotsPanel({
             {data.lots.map((lot, i) => (
               <div
                 key={`${lot.open_date}-${i}`}
-                className="grid grid-cols-[100px_70px_90px_70px_70px_110px] gap-2 px-3 h-[22px] items-center hover:bg-muted/20 border-b border-border/50"
+                className="grid grid-cols-[100px_70px_90px_70px_70px_110px] gap-2 px-3 h-[20px] items-center hover:bg-muted/20 border-b border-border/50"
               >
                 <div className="tabular-nums text-foreground">{lot.open_date}</div>
                 <div className="text-right tabular-nums text-foreground">
@@ -194,7 +194,7 @@ export function HoldingLotsPanel({
                       green-leaning because long-term gains are tax-favoured). */}
                   <span
                     className={cn(
-                      "px-1 py-px rounded-sm text-[9px] uppercase tracking-[0.06em] border",
+                      "px-1 py-px text-[9px] uppercase tracking-[0.06em] border",
                       lot.is_long_term
                         ? "bg-positive/10 text-positive border-positive/30"
                         : "bg-warning/10 text-warning border-warning/30",

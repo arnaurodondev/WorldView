@@ -98,7 +98,7 @@ function BarChart({
       ) : (
         // F-P-005 (PLAN-0051 W6): row height now matches the holdings
         // table exactly (22px). Pre-fix the allocation rows were h-[18px]
-        // while the holdings table used h-[22px], producing a subtle
+        // while the holdings table used h-[20px], producing a subtle
         // misalignment when the user scrolled from one panel to the next.
         // Picking 22px keeps the visual rhythm consistent across the
         // whole Holdings tab — same 22px row everywhere is the easier
@@ -107,7 +107,7 @@ function BarChart({
         // gap so 12 sectors still fit in roughly the same footprint.
         <div className="space-y-px">
           {items.map((item) => (
-            // F-P-005: h-[22px] matches the holdings table row height so
+            // F-P-005: h-[20px] matches the holdings table row height so
             // panels read as one unified rhythm. The 4px bar still
             // centers cleanly inside the taller row.
             //
@@ -118,7 +118,7 @@ function BarChart({
             // the bars would briefly flicker as their widths re-animate.
             // Label is the natural stable identifier — a sector either
             // exists in the bucket list or it doesn't; its slot is fixed.
-            <div key={item.label} className="flex items-center gap-1.5 h-[22px]">
+            <div key={item.label} className="flex items-center gap-1.5 h-[20px]">
               {/* Label — truncated to prevent overflow.
                   WHY w-28 (was w-32): saves 16px on the left so the bar
                   stretches further. Sector names like "Information

@@ -147,7 +147,7 @@ function makeVirtualRowRenderer(rows: Transaction[]) {
             ))}
           </colgroup>
           <tbody>
-            <tr className="h-[22px]">
+            <tr className="h-[20px]">
               <td className="px-2 font-mono text-[11px] tabular-nums text-muted-foreground whitespace-nowrap">
                 {formatDateTime(tx.executed_at)}
               </td>
@@ -549,7 +549,7 @@ export function TransactionsTable({
               ))}
             </colgroup>
             <thead>
-              <tr className="h-[22px]">
+              <tr className="h-[20px]">
                 {["DATE", "TYPE", "CLASS", "TICKER", "QTY", "PRICE", "TOTAL", "FEE"].map((h) => (
                   <th
                     key={h}
@@ -604,7 +604,7 @@ export function TransactionsTable({
               ))}
             </colgroup>
             <thead>
-              <tr className="h-[22px] border-b border-border bg-card sticky top-0 z-10">
+              <tr className="h-[20px] border-b border-border bg-card sticky top-0 z-10">
                 {["DATE", "TYPE", "CLASS", "TICKER", "QTY", "PRICE", "TOTAL", "FEE"].map((h) => (
                   <th
                     key={h}
@@ -633,7 +633,7 @@ export function TransactionsTable({
                     <tr
                       key={tx.transaction_id}
                       className={cn(
-                        "h-[22px] border-b border-white/[0.06]",
+                        "h-[20px] border-b border-white/[0.06]",
                         isPlaceholder && "text-muted-foreground/50",
                       )}
                     >
