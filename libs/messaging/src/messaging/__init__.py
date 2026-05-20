@@ -38,8 +38,10 @@ Topics:
 
 from messaging.enums import OutboxStatus
 from messaging.kafka.consumer.base import (
+    DLQ_TOPIC_SUFFIX,
     BaseKafkaConsumer,
     ConsumerConfig,
+    DLQEmitterProtocol,
     FailureInfo,
     UnitOfWorkProtocol,
 )
@@ -111,6 +113,8 @@ __all__ = [
     "BusinessRuleViolationError",
     "ConsumerConfig",
     "ConsumerError",
+    "DLQ_TOPIC_SUFFIX",
+    "DLQEmitterProtocol",
     "DatabaseConnectionError",
     "DeliveryResult",
     "DispatcherConfig",

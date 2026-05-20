@@ -148,6 +148,7 @@ from messaging import OutboxStatus
 | `store_failure(failure)` | First failure | Persist `FailureInfo` to retry table. Return saved record. |
 | `update_failure(failure)` | Subsequent retries | Update attempt count and last error. |
 | `dead_letter(failure)` | Fatal error or max retries exceeded | Move to dead-letter store; alert. |
+| `_dead_letter_impl(failure)` | Called by `dead_letter()` after cap check | **Default**: publish to `<topic>.dead-letter.v1` via `dlq_emitter` (LIB-002). Override to add DB persistence; call `await super()._dead_letter_impl(failure)` to keep topic emission. |
 | `get_pending_retries()` | Background retry loop | Return all `FailureInfo` records eligible for retry. |
 | `process_message_from_failure(failure)` | Retry | Re-run business logic from `failure.record` (stored payload). |
 | `get_unit_of_work()` | Each message | Return a fresh async UoW context manager. |
@@ -208,6 +209,65 @@ Opt-in AIMD-style per-partition pause/resume. Reads four settings attributes:
 | `BusinessRuleViolationError` | Permanent | ↑ |
 
 When `max_retries` is exceeded for a `RetryableError`, the message is dead-lettered.
+
+### Dead-letter topic emission (LIB-002 / TASK-W2-06)
+
+`BaseKafkaConsumer._dead_letter_impl` ships a **concrete default** that
+publishes a JSON failure envelope to `<original_topic>.dead-letter.v1` via
+an optional `DLQEmitterProtocol` passed at construction time. This makes
+dead-lettered messages observable from kafka-ui and external DLQ consumers
+without each subclass having to wire its own topic publishing.
+
+```python
+from messaging import BaseKafkaConsumer, ConsumerConfig, DLQEmitterProtocol
+
+class MyEmitter:
+    async def emit(self, topic, payload, headers=None, key=None):
+        # Use the service's outbox repo or a direct Kafka producer here.
+        await self._outbox_repo.add(topic=topic, payload=payload, headers=headers)
+
+consumer = MyConsumer(
+    config=ConsumerConfig(...),
+    dlq_emitter=MyEmitter(),  # NEW — opt-in for topic publishing
+)
+```
+
+**Behaviour matrix:**
+
+| `dlq_emitter` | Subclass overrides `_dead_letter_impl`? | Result |
+|---------------|-----------------------------------------|--------|
+| `None`        | No                                      | Logs `dead_letter_no_emitter_configured` warning, returns. (back-compat default) |
+| `None`        | Yes (no `super()` call)                 | Subclass behaviour only (e.g. DB write). |
+| Set           | No                                      | Publishes envelope to `<topic>.dead-letter.v1`. |
+| Set           | Yes + calls `super()._dead_letter_impl` | Subclass behaviour **and** topic publishing. |
+
+**Envelope payload** (JSON, UTF-8):
+
+```json
+{
+  "event_id": "01HXYZ...",
+  "original_topic": "content.article.raw.v1",
+  "partition": 3,
+  "offset": 42,
+  "attempt": 5,
+  "error": "<exception repr>",
+  "error_type": "RetryableError",
+  "dead_lettered_at": "2026-05-20T13:47:25.123456+00:00",
+  "consumer_group": "content-store-group-article"
+}
+```
+
+**Headers** emitted on every DLQ message:
+
+- `X-Dead-Letter-Error` — truncated stringified exception (≤1024 chars)
+- `X-Dead-Letter-Original-Topic` — source topic name
+- `X-Dead-Letter-Timestamp` — ISO-8601 UTC at dead-letter time
+- `X-Dead-Letter-Event-Id` — original `event_id` (also used as Kafka key)
+
+Emitter failures inside `_dead_letter_impl` are **logged and swallowed**
+(`dead_letter_emit_failed`) — by the time we reach this code the message
+has already been retried and counted against the cap, so re-raising would
+just churn the consumer loop. Wire an alert on the log event instead.
 
 ### Kafka Producer (`messaging.kafka.producer`)
 

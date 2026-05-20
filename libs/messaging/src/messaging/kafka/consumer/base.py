@@ -16,11 +16,13 @@ from __future__ import annotations
 
 import asyncio
 import dataclasses
+import json
 import random
 import sys
 import time
 from abc import ABC, abstractmethod
-from typing import TYPE_CHECKING, Any, Generic, TypeVar
+from datetime import UTC, datetime
+from typing import TYPE_CHECKING, Any, Generic, Protocol, TypeVar, runtime_checkable
 
 from messaging.kafka.consumer.backpressure import BackpressurePolicy, LagCalculator
 from messaging.kafka.consumer.errors import ConsumerError, FatalError, RetryableError
@@ -31,6 +33,47 @@ if TYPE_CHECKING:
     from confluent_kafka import TopicPartition
 
 logger = get_logger(__name__)
+
+
+# ── LIB-002 / TASK-W2-06: dead-letter topic emission ──────────────────────────
+#
+# Suffix appended to the original topic name to derive the canonical DLQ
+# topic.  Centralised here so subclasses and operators have a single source
+# of truth.  Following the worldview ``<domain>.<entity>.<verb>.v<version>``
+# convention, ``.dead-letter.v1`` is appended verbatim.
+DLQ_TOPIC_SUFFIX: str = ".dead-letter.v1"
+
+
+@runtime_checkable
+class DLQEmitterProtocol(Protocol):
+    """Port for publishing a single dead-letter envelope to a Kafka topic.
+
+    The base consumer uses this protocol so subclasses can wire either an
+    outbox repository (transactional, exactly-once-ish) or a direct Kafka
+    producer (best-effort) without the base class caring which.
+
+    Implementations must be safe to call from an asyncio context.  Failures
+    inside ``emit`` should raise — the base consumer logs and swallows so
+    a DLQ emission failure never blocks the consumer loop.
+    """
+
+    async def emit(
+        self,
+        topic: str,
+        payload: dict[str, Any],
+        headers: dict[str, str] | None = None,
+        key: str | None = None,
+    ) -> None:
+        """Publish a single DLQ envelope.
+
+        Args:
+            topic: Target Kafka topic (already suffixed with ``.dead-letter.v1``).
+            payload: JSON-serialisable envelope describing the failure.
+            headers: Optional Kafka headers (string-string).
+            key: Optional Kafka partition key (typically the original event_id).
+        """
+        ...
+
 
 # Generic type for the failure record stored by the consuming service
 TFailure = TypeVar("TFailure")
@@ -192,6 +235,7 @@ class BaseKafkaConsumer(ABC, Generic[TFailure]):
         config: ConsumerConfig,
         metrics: ServiceMetrics | None = None,
         backpressure_policy: BackpressurePolicy | None = None,
+        dlq_emitter: DLQEmitterProtocol | None = None,
     ) -> None:
         self._config = config
         self._metrics = metrics or _create_metrics(config.group_id)
@@ -200,6 +244,13 @@ class BaseKafkaConsumer(ABC, Generic[TFailure]):
         # Running count of dead-letters sent; crashes the consumer when it
         # exceeds dead_letter_cap to trigger a container restart.
         self._dead_letter_count: int = 0
+        # LIB-002 (TASK-W2-06): optional dead-letter topic emitter.  When set,
+        # the default :meth:`_dead_letter_impl` publishes failure envelopes to
+        # ``<original_topic>.dead-letter.v1`` so DLQ messages are observable
+        # from kafka-ui and external DLQ consumers.  When ``None``, the
+        # default impl logs a warning and short-circuits — subclasses that
+        # only persist failures to a DB table continue to work unchanged.
+        self._dlq_emitter: DLQEmitterProtocol | None = dlq_emitter
         # DEF-032 backpressure (opt-in).  When None or policy.enabled=False,
         # the integration short-circuits in _maybe_apply_backpressure with
         # zero per-poll overhead so existing consumers see no behaviour change.
@@ -271,16 +322,111 @@ class BaseKafkaConsumer(ABC, Generic[TFailure]):
             failure: :class:`FailureInfo` with updated attempt count and error.
         """
 
-    @abstractmethod
     async def _dead_letter_impl(self, failure: FailureInfo[TFailure]) -> None:
-        """Move a failure record to the dead-letter store (subclass hook).
+        """Default dead-letter handler — publish to ``<topic>.dead-letter.v1``.
 
-        Called by :meth:`dead_letter` after the cap check passes.
-        Subclasses persist the record to their dead-letter table/topic here.
+        Called by :meth:`dead_letter` after the cap check passes.  The
+        default implementation emits a JSON failure envelope to
+        ``<failure.topic>.dead-letter.v1`` via the configured
+        :attr:`_dlq_emitter` so the message is observable from kafka-ui and
+        any external DLQ consumer.
+
+        Back-compat: this method used to be abstract.  Concrete subclasses
+        across worldview's services already override it (typically to write
+        a DLQ row to a Postgres table) — those overrides continue to work
+        unchanged.  Subclasses that want to keep DB persistence AND gain
+        topic emission should override and call ``await super().
+        _dead_letter_impl(failure)`` after their DB write so both happen.
+
+        To OPT OUT of topic emission entirely (e.g. consumers whose DLQ
+        contract is DB-only by design) simply do NOT pass a ``dlq_emitter``
+        when constructing the consumer; the default impl will then log a
+        warning and short-circuit.  Document the rationale at the override
+        site.
 
         Args:
             failure: :class:`FailureInfo` that exceeded max retries.
         """
+        # No emitter wired → preserve historical behaviour (no topic emit)
+        # but log a warning so operators can spot consumers that should be
+        # upgraded.  We intentionally do NOT raise: persistence to a DB
+        # dead-letter table (the typical subclass override) has already
+        # happened by this point, so failing here would just double-count
+        # the failure.
+        if self._dlq_emitter is None:
+            logger.warning(
+                "dead_letter_no_emitter_configured",
+                topic=failure.topic,
+                event_id=failure.event_id,
+                attempt=failure.attempt,
+                hint="pass dlq_emitter to BaseKafkaConsumer to enable DLQ topic publishing",
+            )
+            return
+
+        dlq_topic = f"{failure.topic}{DLQ_TOPIC_SUFFIX}"
+        # Failure envelope — JSON-serialisable summary of the failure.  This
+        # is deliberately metadata-only (no original payload bytes) because
+        # the abstract failure record does not carry the raw message body;
+        # subclasses that want to include the raw payload can override.
+        envelope: dict[str, Any] = {
+            "event_id": failure.event_id,
+            "original_topic": failure.topic,
+            "partition": failure.partition,
+            "offset": failure.offset,
+            "attempt": failure.attempt,
+            "error": str(failure.last_error)[:1024],
+            "error_type": type(failure.last_error).__name__,
+            "dead_lettered_at": datetime.now(UTC).isoformat(),
+            "consumer_group": self._config.group_id,
+        }
+        # Standard headers — operators rely on these for routing and
+        # debugging in kafka-ui.  Truncated where unbounded to keep header
+        # size within Kafka's per-message limit (1 MiB by default but each
+        # header is best kept well under 1 KiB).
+        headers: dict[str, str] = {
+            "X-Dead-Letter-Error": str(failure.last_error)[:1024],
+            "X-Dead-Letter-Original-Topic": failure.topic,
+            "X-Dead-Letter-Timestamp": envelope["dead_lettered_at"],
+            "X-Dead-Letter-Event-Id": failure.event_id,
+        }
+        try:
+            await self._dlq_emitter.emit(
+                topic=dlq_topic,
+                payload=envelope,
+                headers=headers,
+                key=failure.event_id,
+            )
+        except Exception as exc:
+            # DLQ emission failure must never crash the consumer loop —
+            # the message has already been logged + retried + counted
+            # against the cap.  Log loud so operators can spot the gap.
+            logger.error(
+                "dead_letter_emit_failed",
+                topic=dlq_topic,
+                event_id=failure.event_id,
+                error=str(exc),
+                error_type=type(exc).__name__,
+            )
+            return
+
+        logger.warning(
+            "message_dead_lettered",
+            topic=dlq_topic,
+            original_topic=failure.topic,
+            event_id=failure.event_id,
+            attempt=failure.attempt,
+            error=str(failure.last_error)[:512],
+        )
+
+    @staticmethod
+    def _serialize_dlq_envelope(envelope: dict[str, Any]) -> bytes:
+        """JSON-encode a DLQ envelope to UTF-8 bytes.
+
+        Exposed as a helper so subclasses or emitter implementations that
+        need raw bytes (e.g. a direct ``confluent_kafka.Producer.produce``)
+        can use the same encoding the rest of the platform expects.
+        """
+        return json.dumps(envelope, separators=(",", ":"), default=str).encode("utf-8")
 
     async def dead_letter(self, failure: FailureInfo[TFailure]) -> None:
         """Move a failure record to the dead-letter store with cap enforcement.
