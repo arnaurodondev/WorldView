@@ -3,8 +3,10 @@
 Covers:
   * Happy path: emits 1 canonical UPSERT + 2 alias inserts (EXACT, TICKER)
     + ensure_rows_exist call.
-  * Re-delivery (idempotent): all SQL is ON CONFLICT DO NOTHING — re-running
-    process_message must succeed without raising.
+  * Re-delivery (idempotent): PLAN-0089 F2 step 4 changed the canonical
+    conflict clause from DO NOTHING → DO UPDATE.  Re-running
+    process_message must still succeed without raising; SQL stays identical
+    across deliveries and the DB handles dedup via ON CONFLICT.
   * Missing/empty symbol → MalformedDataError (dead-lettered).
   * is_duplicate / mark_processed thread through the dedup client.
 """
@@ -107,7 +109,14 @@ class TestInstrumentDiscoveredConsumerHappyPath:
         # First call: canonical entity UPSERT keyed on entity_id = instrument_id
         canonical_sql, canonical_params = sql_calls[0]
         assert "INSERT INTO canonical_entities" in canonical_sql
-        assert "ON CONFLICT (entity_id) DO NOTHING" in canonical_sql
+        # PLAN-0089 F2 step 4: conflict clause UPSERTs the lightweight columns
+        # so a re-delivery with updated metadata propagates to the canonical
+        # row (M-017 enforcement).
+        assert "ON CONFLICT (entity_id) DO UPDATE" in canonical_sql
+        assert "ticker = EXCLUDED.ticker" in canonical_sql
+        assert "exchange = EXCLUDED.exchange" in canonical_sql
+        assert "canonical_name = EXCLUDED.canonical_name" in canonical_sql
+        assert "updated_at = now()" in canonical_sql
         assert canonical_params["entity_id"] == str(_INSTRUMENT_ID)
         assert canonical_params["canonical_name"] == "AAPL"  # placeholder = symbol
         assert canonical_params["ticker"] == "AAPL"
