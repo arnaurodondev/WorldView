@@ -212,7 +212,14 @@ export function WatchlistPanel() {
               <div
                 key={member.entity_id}
                 className="flex h-[22px] items-center cursor-pointer px-2 hover:bg-muted/40"
-                onClick={() => router.push(`/instruments/${member.entity_id}`)}
+                // PRD-0089 F2 step 11 (§6.6): ticker-first URL. ticker can be
+                // null for `resolution=pending` rows; fall back to the UUID
+                // and let the middleware resolve.
+                onClick={() =>
+                  router.push(
+                    `/instruments/${member.ticker || member.instrument_id || member.entity_id}`,
+                  )
+                }
                 aria-label={`${member.ticker ?? member.entity_id} — view instrument detail`}
               >
                 {/* Ticker — 40px fixed, mono for column alignment */}

@@ -70,12 +70,12 @@ export function WatchlistMemberRow({
     // only on row hover, keeping the table uncluttered during the primary read flow.
     <tr
       className="h-[20px] hover:bg-muted/40 cursor-pointer transition-colors group/row"
-      onClick={() => onRowClick(member.instrument_id ?? member.entity_id)}
+      onClick={() => onRowClick(member.ticker ?? member.instrument_id ?? member.entity_id)}
       tabIndex={0}
       onKeyDown={(e) => {
         if (e.key === "Enter" || e.key === " ") {
           e.preventDefault();
-          onRowClick(member.instrument_id ?? member.entity_id);
+          onRowClick(member.ticker ?? member.instrument_id ?? member.entity_id);
         }
       }}
     >

@@ -414,7 +414,10 @@ export function WatchlistMoversWidget() {
                 mover={m}
                 side="gainer"
                 showEnrichmentBadges={period === "1D"}
-                onClick={() => router.push(`/instruments/${m.instrumentId}`)}
+                // PRD-0089 F2 step 11 (§6.6): ticker-first URL.
+                onClick={() =>
+                  router.push(`/instruments/${m.ticker || m.instrumentId}`)
+                }
               />
             ))}
             {gainers.length === 0 && (
@@ -434,7 +437,10 @@ export function WatchlistMoversWidget() {
                 mover={m}
                 side="loser"
                 showEnrichmentBadges={period === "1D"}
-                onClick={() => router.push(`/instruments/${m.instrumentId}`)}
+                // PRD-0089 F2 step 11 (§6.6): ticker-first URL.
+                onClick={() =>
+                  router.push(`/instruments/${m.ticker || m.instrumentId}`)
+                }
               />
             ))}
             {losers.length === 0 && (

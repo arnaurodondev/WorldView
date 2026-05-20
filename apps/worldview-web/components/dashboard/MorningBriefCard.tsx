@@ -313,7 +313,13 @@ export function MorningBriefCard() {
     (brief.entity_mentions ?? []).reduce((acc, mention) => {
       if (!mention.name) return acc;
       const regex = new RegExp(`\\b${escapeRegex(mention.name)}\\b`, "g");
-      return acc.replace(regex, `[${mention.name}](/instruments/${mention.entity_id})`);
+      // PRD-0089 F2 step 11 (§6.6): ticker-first URL — BriefingEntityMention
+      // carries `ticker | null`. Non-tradable mentions (sectors, events) fall
+      // back to entity_id; middleware resolves either. The displayed link
+      // text stays as `mention.name` so the analyst still sees the entity
+      // name in the prose; only the href changes.
+      const slug = mention.ticker || mention.entity_id;
+      return acc.replace(regex, `[${mention.name}](/instruments/${slug})`);
     }, text);
 
   // WHY two parallel pipelines: summary is the collapsed-view source and

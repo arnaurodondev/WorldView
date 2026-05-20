@@ -119,7 +119,14 @@ export function GraphEvents({ centerEntityId, onNodeHover, onEdgeHover, onNodeCl
           });
           onNodeClick(node, attrs.label as string, attrs.nodeType as string, graph.degree(node), edges);
         } else {
-          router.push(`/instruments/${node}`);
+          // PRD-0089 F2 step 11 (§6.6): prefer the ticker attribute over the
+          // raw sigma node id (entity_id UUID). Falls back to UUID for
+          // non-tradable nodes; the middleware will resolve via
+          // resolve_security_id and 404 if there is no instrument.
+          const ticker = sigma.getGraph().getNodeAttribute(node, "ticker") as
+            | string
+            | undefined;
+          router.push(`/instruments/${ticker || node}`);
         }
       },
     });
@@ -155,6 +162,10 @@ export function GraphLoader({ data, centerEntityId, layout }: GraphLoaderProps) 
         label: node.label,
         // WHY nodeType (not type): sigma/graphology reserves 'type' for renderer type (e.g., "circle").
         nodeType: node.type,
+        // PRD-0089 F2 step 11 (§6.6): persist ticker on the graph attrs so the
+        // clickNode handler can build a ticker-first URL without re-querying.
+        // Undefined for non-tradable nodes (sectors/persons/events).
+        ticker: node.ticker,
         x: Math.random() * 100 - 50,
         y: Math.random() * 100 - 50,
         size: baseSize,

@@ -291,11 +291,17 @@ function SnapshotRow({ ticker, instrumentId, quote }: SnapshotRowProps) {
         // WHY cursor-pointer + hover:bg-muted/30 only when navigable.
         canNavigate && "cursor-pointer transition-colors hover:bg-muted/20",
       )}
+      // PRD-0089 F2 step 11 (§6.6): ticker-first URL — `ticker` is the
+      // visible label so the URL stays in sync. We still gate on
+      // instrumentId being resolved (canNavigate) because the ticker→UUID
+      // lookup may not have completed yet; preventing navigation avoids a
+      // 404 spinner. Once canNavigate is true, either form works.
       onClick={() => {
-        if (canNavigate) router.push(`/instruments/${instrumentId}`);
+        if (canNavigate) router.push(`/instruments/${ticker || instrumentId}`);
       }}
       onKeyDown={(e) => {
-        if (canNavigate && e.key === "Enter") router.push(`/instruments/${instrumentId}`);
+        if (canNavigate && e.key === "Enter")
+          router.push(`/instruments/${ticker || instrumentId}`);
       }}
       role={canNavigate ? "button" : undefined}
       tabIndex={canNavigate ? 0 : undefined}

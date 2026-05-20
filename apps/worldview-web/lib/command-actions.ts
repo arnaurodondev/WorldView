@@ -274,6 +274,13 @@ export const actionRegistry = new ActionRegistry();
 
 // ── NAVIGATE ──────────────────────────────────────────────────────────────────
 
+// PRD-0089 F2 step 11 (§6.6): all instrument-navigation actions below use the
+// ticker-first URL form. Every row context shape (Holding/Screener/Watchlist)
+// carries a `ticker` field, and the new instrument slug `[ticker]` accepts
+// either a ticker symbol or a UUID — the middleware 301s lowercase / alias /
+// UUID forms to the canonical uppercase ticker. We keep a UUID fallback so
+// these actions still work on a row where ticker is somehow empty.
+
 actionRegistry.register({
   id: "navigate.instrument-detail",
   label: "Open Instrument Detail",
@@ -283,7 +290,7 @@ actionRegistry.register({
   mnemonic: "D",
   run({ row, navigate }) {
     if (!row) return;
-    navigate?.(`/instruments/${encodeURIComponent(row.entityId)}`);
+    navigate?.(`/instruments/${encodeURIComponent(row.ticker || row.entityId)}`);
   },
 });
 
@@ -296,7 +303,7 @@ actionRegistry.register({
   mnemonic: "G",
   run({ row, navigate }) {
     if (!row) return;
-    navigate?.(`/instruments/${encodeURIComponent(row.entityId)}?tab=chart`);
+    navigate?.(`/instruments/${encodeURIComponent(row.ticker || row.entityId)}?tab=chart`);
   },
 });
 
@@ -309,7 +316,7 @@ actionRegistry.register({
   mnemonic: "N",
   run({ row, navigate }) {
     if (!row) return;
-    navigate?.(`/instruments/${encodeURIComponent(row.entityId)}?tab=news`);
+    navigate?.(`/instruments/${encodeURIComponent(row.ticker || row.entityId)}?tab=news`);
   },
 });
 
@@ -326,7 +333,7 @@ actionRegistry.register({
   mnemonic: "E",
   run({ row, navigate }) {
     if (!row) return;
-    navigate?.(`/instruments/${encodeURIComponent(row.entityId)}?tab=financials`);
+    navigate?.(`/instruments/${encodeURIComponent(row.ticker || row.entityId)}?tab=financials`);
   },
 });
 
@@ -653,7 +660,8 @@ actionRegistry.register({
   mnemonic: "F",
   run({ row, navigate }) {
     if (!row) return;
-    navigate?.(`/instruments/${encodeURIComponent(row.entityId)}?tab=fundamentals`);
+    // PRD-0089 F2 step 11 (§6.6): ticker-first URL.
+    navigate?.(`/instruments/${encodeURIComponent(row.ticker || row.entityId)}?tab=fundamentals`);
   },
 });
 
@@ -665,7 +673,8 @@ actionRegistry.register({
   scopes: ["row"],
   run({ row, navigate }) {
     if (!row) return;
-    navigate?.(`/instruments/${encodeURIComponent(row.entityId)}?tab=filings`);
+    // PRD-0089 F2 step 11 (§6.6): ticker-first URL.
+    navigate?.(`/instruments/${encodeURIComponent(row.ticker || row.entityId)}?tab=filings`);
   },
 });
 
@@ -678,7 +687,8 @@ actionRegistry.register({
   mnemonic: "R",
   run({ row, navigate }) {
     if (!row) return;
-    navigate?.(`/instruments/${encodeURIComponent(row.entityId)}?tab=ratings`);
+    // PRD-0089 F2 step 11 (§6.6): ticker-first URL.
+    navigate?.(`/instruments/${encodeURIComponent(row.ticker || row.entityId)}?tab=ratings`);
   },
 });
 

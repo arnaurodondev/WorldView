@@ -176,12 +176,16 @@ export function GlobalSearch() {
   // WHY useCallback: stable reference so it can be used safely in both handlers
   // without triggering re-renders.
   const navigateTo = useCallback((entityId: string, ticker: string, name: string) => {
-    // ADR-F-12: entity_id ≠ instrument_id — always use entity_id for URL routing.
+    // PRD-0089 F2 step 11 (§6.6): ticker-first URL. ADR-F-12 was SUPERSEDED by
+    // PRD-0089 F2 — `entity_id === instrument_id` for tradable kinds (M-017),
+    // so the URL now uses the analyst-friendly ticker symbol. Falls back to the
+    // UUID only when ticker is empty (defensive — search backend always
+    // populates it for instruments). Middleware resolves either form.
     // WHY saveRecent before push: localStorage write is sync; if we wrote after
     // push, the re-read triggered by recentKey increment might race with navigation.
     saveRecent(entityId, ticker, name);
     setRecentKey((k) => k + 1); // trigger re-read of recent list
-    router.push(`/instruments/${entityId}`);
+    router.push(`/instruments/${ticker || entityId}`);
     setQuery("");
     setOpen(false);
   }, [router]);

@@ -218,7 +218,12 @@ export default function InstrumentsPage() {
           ariaLabel="Instruments browser"
           isLoading={isLoading}
           emptyMessage="No instruments found. Try a different search term."
-          onRowClick={(row) => router.push(`/instruments/${row.entity_id}`)}
+          // PRD-0089 F2 step 11 (§6.6): ticker-first URL. ScreenerResult
+          // guarantees ticker as a non-null string; fall back to UUID only if
+          // the row payload is malformed (middleware resolves UUID → ticker).
+          onRowClick={(row) =>
+            router.push(`/instruments/${row.ticker || row.instrument_id}`)
+          }
           virtualize
         />
       </div>

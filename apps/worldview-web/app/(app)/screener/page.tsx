@@ -356,11 +356,14 @@ export default function ScreenerPage() {
           getRowId={(p) => p.data.instrument_id}
           onGridReady={handleGridReady}
           onRowClicked={(row) =>
-            // FR-4.1: entity_id is always present and non-null (ScreenerResult guarantees
-            // both fields as string). Navigate via entity_id — the canonical KG identifier
-            // that the instrument detail page expects. instrument_id is the S3 data ID;
-            // entity_id is the stable cross-service bridge (ADR-F-12).
-            router.push(`/instruments/${row.entity_id}`)
+            // PRD-0089 F2 step 11 (§6.6): navigate via ticker. ScreenerResult
+            // guarantees `ticker` as a non-null string; the new instrument
+            // detail slug is `[ticker]`. We fall back to `instrument_id` only
+            // if ticker is somehow missing — the middleware then resolves the
+            // UUID via `resolve_security_id` and 301-rewrites to the canonical
+            // ticker URL. Post-F2 `entity_id === instrument_id` (M-017) so the
+            // old `entity_id` form is removed entirely.
+            router.push(`/instruments/${row.ticker || row.instrument_id}`)
           }
           className="flex-1"
         />

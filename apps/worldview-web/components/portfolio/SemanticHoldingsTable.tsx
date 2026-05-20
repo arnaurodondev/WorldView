@@ -355,7 +355,13 @@ export function SemanticHoldingsTable({
         getRowId={(p) => p.data.h.holding_id}
         onGridReady={handleGridReady}
         onRowClicked={(row) =>
-          router.push(`/instruments/${encodeURIComponent(row.h.instrument_id ?? row.h.entity_id)}`)
+          // PRD-0089 F2 step 11 (§6.6): ticker-first URL. Holding.ticker is
+          // populated for every row (S1 portfolio service resolves on add).
+          // encodeURIComponent passes dot-form tickers (BRK.B) through cleanly.
+          // Falls back to UUID for the rare case where ticker is empty.
+          router.push(
+            `/instruments/${encodeURIComponent(row.h.ticker ?? row.h.instrument_id ?? row.h.entity_id)}`,
+          )
         }
         onSortChanged={handleSortChanged}
         onColumnStateChanged={handleColumnStateChanged}

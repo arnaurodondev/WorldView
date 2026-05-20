@@ -129,7 +129,17 @@ export interface WsTokenResponse {
 
 export interface Instrument {
   instrument_id: string;
-  entity_id: string;    // WHY separate: entity_id ≠ instrument_id (ADR-F-12)
+  /**
+   * @deprecated post-F2 (PRD-0089) — equal to `instrument_id` for tradable
+   * securities. Will be removed in v1.1 cleanup. Use `instrument_id` going
+   * forward. Non-tradable entity contexts (graph nodes, mentions, persons)
+   * keep `entity_id` semantics.
+   *
+   * Historical note: pre-F2 this was a SEPARATE KG-side UUID (ADR-F-12).
+   * F2 collapsed the two namespaces — `entity_id === instrument_id` is now
+   * an enforced invariant (M-017) for `kind = 'financial_instrument'` rows.
+   */
+  entity_id: string;
   ticker: string;       // e.g., "AAPL"
   name: string;         // e.g., "Apple Inc."
   exchange: string;     // e.g., "NASDAQ"
@@ -430,7 +440,13 @@ export interface CompanyOverview {
  */
 export interface InstrumentPageBundle {
   instrument_id: string;
-  /** KG entity_id resolved by the gateway via ticker → KG lookup. Falls back to instrument_id. */
+  /**
+   * @deprecated post-F2 (PRD-0089) — equal to `instrument_id` for tradable
+   * securities (M-017 invariant). Kept on the v1 wire shape for backwards
+   * compatibility; will be dropped in v1.1 cleanup. Historical note: the
+   * gateway used to resolve this via a ticker→KG lookup that diverged from
+   * the S3 `instrument_id`; that 145 LOC translation dance is gone post-F2.
+   */
   entity_id: string;
   /** CompanyOverview composite (instrument + quote + fundamentals header + 90d ohlcv). */
   overview: CompanyOverview | null;
@@ -1079,6 +1095,14 @@ export interface PortfolioBundleResponse {
 // ── Watchlist ──────────────────────────────────────────────────────────────
 
 export interface WatchlistMember {
+  /**
+   * @deprecated post-F2 (PRD-0089) — for tradable members this equals
+   * `instrument_id` once resolved; for unresolved members (resolution="pending")
+   * it may still be a KG-side UUID until the instrument lookup completes.
+   * Will be renamed to `instrument_id` (and `entity_id` dropped) in the v1.1
+   * cleanup wave. Use `instrument_id` for tradable lookups; fall back to
+   * `entity_id` only when `instrument_id` is null.
+   */
   entity_id: string;
   instrument_id: string | null;
   ticker: string | null;

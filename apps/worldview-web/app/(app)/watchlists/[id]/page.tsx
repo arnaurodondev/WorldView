@@ -118,8 +118,16 @@ export default function WatchlistDetailPage() {
       {
         id: "open",
         label: "Open instrument",
+        // PRD-0089 F2 step 11 (§6.6): prefer ticker for the URL slug; fall
+        // back to instrument_id (UUID), then entity_id, then empty string.
+        // Watchlist members may be in `resolution=pending` state during the
+        // S9 ticker→instrument cache miss; in that case ticker is null but
+        // entity_id is always present. Middleware resolves any UUID form
+        // back to the canonical ticker via resolve_security_id.
         onClick: (m) =>
-          router.push(`/instruments/${m.entity_id || m.instrument_id || ""}`),
+          router.push(
+            `/instruments/${m.ticker || m.instrument_id || m.entity_id || ""}`,
+          ),
       },
       {
         id: "remove",
@@ -206,7 +214,11 @@ export default function WatchlistDetailPage() {
           density="compact"
           ariaLabel={`Members of ${watchlist.name}`}
           onRowClick={(m) =>
-            router.push(`/instruments/${m.entity_id || m.instrument_id || ""}`)
+            // PRD-0089 F2 step 11 (§6.6): ticker-first URL; UUID fallbacks
+            // are handled by the middleware which 301s to canonical ticker.
+            router.push(
+              `/instruments/${m.ticker || m.instrument_id || m.entity_id || ""}`,
+            )
           }
           contextMenu={contextMenu}
         />

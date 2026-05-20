@@ -94,12 +94,12 @@ export function TopMovers() {
             <button
               key={mover.instrument_id}
               onClick={() => {
-                // WHY prefer entity_id over instrument_id: ADR-F-12 — the instrument detail
-                // route is /instruments/[entityId] and the URL must use the stable entity_id.
-                // instrument_id can change on exchange migrations; entity_id is permanent.
-                // Fallback to instrument_id because the S9 overview endpoint accepts either
-                // (confirmed in [entityId]/page.tsx comment: "accepts entity_id or instrument_id").
-                const navId = mover.entity_id ?? mover.instrument_id;
+                // PRD-0089 F2 step 11 (§6.6): ticker-first URL. F2 superseded
+                // ADR-F-12 — the slug is now `[ticker]` and `entity_id ===
+                // instrument_id` (M-017) for tradable kinds. ticker is
+                // always populated on Mover rows. UUID is the defensive
+                // fallback that the middleware would 301 to the ticker form.
+                const navId = mover.ticker || mover.entity_id || mover.instrument_id;
                 router.push(`/instruments/${navId}`);
               }}
               // WHY hover:bg-surface-3/40: surface-3 is a deeper elevation token than muted,

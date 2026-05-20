@@ -453,9 +453,12 @@ function SectorTile({
             </div>
           ) : (
             topMovers.map((mover) => {
-              // ADR-F-12: prefer entity_id for navigation; fall back to
-              // instrument_id since S9's overview endpoint accepts either.
-              const navId = mover.entity_id ?? mover.instrument_id;
+              // PRD-0089 F2 step 11 (§6.6): ticker-first URL. F2 superseded
+              // ADR-F-12 — `entity_id === instrument_id` (M-017), so the
+              // analyst-facing ticker is the canonical URL slug. ticker is
+              // always populated on Mover rows; UUID is a defensive fallback
+              // that the middleware would 301-resolve back to ticker form.
+              const navId = mover.ticker || mover.entity_id || mover.instrument_id;
               return (
                 <button
                   key={mover.instrument_id}

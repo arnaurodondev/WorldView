@@ -161,7 +161,12 @@ export function AlertDetailSheet({ alert, open, onClose, onAck, onSnooze }: Aler
                     // WHY <Link> (not <a>): Next.js client-side nav avoids a
                     // full page reload — keeps Sheet animation snappy on close.
                     <Link
-                      href={`/instruments/${encodeURIComponent(alert.entity_id)}`}
+                      // PRD-0089 F2 step 11 (§6.6): ticker-first URL — alerts
+                      // can target non-tradable entities (macro events, sectors)
+                      // in which case ticker is null and we fall back to the
+                      // UUID. encodeURIComponent guards against unusual chars
+                      // in either form. Middleware resolves both.
+                      href={`/instruments/${encodeURIComponent(alert.ticker || alert.entity_id)}`}
                       className="text-primary underline-offset-2 hover:underline"
                     >
                       View instrument →
@@ -264,10 +269,15 @@ function SuggestedActions({ alert }: { alert: Alert }) {
   const hasInstrument = hasEntity && Boolean(alert.ticker || (alert.payload?.ticker as string | undefined));
   const entityId = alert.entity_id;
 
-  /** Navigate to /instrument/{entity_id}. Disabled when no instrument. */
+  /** Navigate to /instrument/{ticker}. Disabled when no instrument. */
   function handleViewInstrument() {
     if (!hasInstrument || !entityId) return;
-    router.push(`/instruments/${encodeURIComponent(entityId)}`);
+    // PRD-0089 F2 step 11 (§6.6): prefer ticker (from the alert row or its
+    // payload). Falls back to UUID; middleware resolves either form. The
+    // hasInstrument guard above only allows navigation when ticker exists.
+    const ticker =
+      alert.ticker || (alert.payload?.ticker as string | undefined);
+    router.push(`/instruments/${encodeURIComponent(ticker || entityId)}`);
   }
 
   /**

@@ -115,7 +115,11 @@ export function WorkspacePortfolioPanel() {
           // spacing entirely. px-2: 8px horizontal gutter per §0.2 cell padding spec.
           <Link
             key={h.holding_id}
-            href={`/instruments/${h.entity_id}`}
+            // PRD-0089 F2 step 11 (§6.6): ticker-first URL — h.ticker is
+            // already displayed in the row, so reusing it for the href keeps
+            // the URL and visible label in sync. Falls back to UUID if ticker
+            // is somehow empty; middleware resolves either form.
+            href={`/instruments/${h.ticker || h.entity_id}`}
             className="flex items-center gap-2 px-2 h-[22px] hover:bg-muted/40 text-foreground"
           >
             {/* Ticker — monospace, left-aligned */}

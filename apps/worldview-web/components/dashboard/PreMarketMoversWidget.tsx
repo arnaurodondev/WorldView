@@ -415,10 +415,12 @@ interface MoverRowProps {
 function MoverRow({ mover, side }: MoverRowProps) {
   const router = useRouter();
 
-  // WHY prefer entity_id over instrument_id: ADR-F-12 — entity_id is the stable
-  // cross-system identifier used in all instrument detail URLs. instrument_id is
-  // accepted as fallback by S9's overview endpoint until entity linking is complete.
-  const navId = mover.entity_id ?? mover.instrument_id;
+  // PRD-0089 F2 step 11 (§6.6): ticker-first URL. F2 superseded ADR-F-12 —
+  // entity_id === instrument_id (M-017) for tradable kinds, so the URL slug is
+  // now the analyst-friendly ticker symbol. Fallback chain (ticker → entity_id
+  // → instrument_id) preserves resilience: a missing ticker is rare but the
+  // middleware will still resolve a UUID via resolve_security_id.
+  const navId = mover.ticker || mover.entity_id || mover.instrument_id;
 
   return (
     // WHY h-[22px]: §0 Terminal Quality Rules mandate 22px data rows
