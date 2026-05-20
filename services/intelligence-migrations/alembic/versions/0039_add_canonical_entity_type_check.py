@@ -20,36 +20,60 @@ WHY THIS MIGRATION EXISTS:
   will rewrite any legacy values (``'company'``, ``'organization'``, etc.) to
   match this enum before the constraint is enforced on real data.
 
-WHAT THIS MIGRATION DOES:
-  1. Defensively REWRITES any rows whose ``entity_type`` is NOT in the
-     11-value canonical enum to ``'unknown'``. RAISES a NOTICE with the
-     row count so operators see if anything was rewritten. This makes the
-     migration idempotent under any pre-existing data — including the
-     legacy seeds from 0009 (``'organization'``, ``'location'``,
-     ``'macroeconomic_indicator'``, etc.) and migration 0038's earlier
-     ``'organization'`` rows on stale DBs.
-  2. Adds ``ck_canonical_entities_entity_type`` CHECK constraint on the
-     pre-existing ``canonical_entities.entity_type`` column. The 11
-     canonical values are:
-       'financial_instrument', 'person', 'event', 'sector', 'industry',
-       'macro_indicator', 'place', 'product', 'index', 'currency', 'unknown'
-  3. Does NOT add a new index — migration 0001 already created
-     ``idx_entities_type ON canonical_entities (entity_type)`` (line 138).
-     A second index on the same column would be redundant.
+PRE-EXISTING-CONSTRAINT DISCOVERY (Step 1 follow-up 2, 2026-05-20):
+  During ``make dev-rebuild`` validation we discovered that the live dev
+  intelligence_db ALREADY has a CHECK constraint named
+  ``ck_canonical_entity_type`` (singular, no plural in name) that enforces
+  a DIFFERENT 12-value legacy enum:
+    'company', 'financial_instrument', 'person', 'organization',
+    'country', 'currency', 'commodity', 'index', 'sector', 'concept',
+    'event', 'other'
+  This constraint is not present in any tracked migration in the repo — it
+  is code-path drift from an earlier hand-rolled DDL or a since-deleted
+  migration. The dev DB has ~2000 rows using these legacy values.
+
+  The naive "UPDATE NOT IN canonical → 'unknown'" approach FAILS because
+  ``'unknown'`` is NOT in the pre-existing constraint's allowed list, so
+  the UPDATE itself raises CheckViolation before we can install the new
+  constraint.
+
+WHAT THIS MIGRATION DOES (three phases):
+  1. DROP any pre-existing CHECK constraint on ``entity_type`` (whatever
+     it is named) so subsequent UPDATEs can rewrite values freely. Uses
+     a dynamic lookup against ``pg_constraint`` so we don't hard-code the
+     legacy constraint name. NOTICE-logs what it dropped so operators see
+     the cleanup happen.
+  2. REMAP legacy values per the canonical mapping table below:
+       'company'      → 'financial_instrument' if ticker IS NOT NULL,
+                        else 'unknown'
+       'organization' → 'unknown'   (mostly private cos / gov bodies / NGOs)
+       'other'        → 'unknown'
+       'concept'      → 'unknown'   (industries are now tagged explicitly)
+       'commodity'    → 'unknown'   (v1 does not carry commodities)
+       'country'      → 'place'
+       (Any remaining non-canonical) → 'unknown'
+     Each remap step emits a NOTICE with the row count when it touches
+     anything — silent rewrites are dangerous, especially over ~2000 rows.
+  3. ADD the new constraint ``ck_canonical_entities_entity_type`` (plural
+     — keep this name stable; downstream code and tests reference it) over
+     the 11 canonical values.
 
 BELT-AND-SUSPENDERS NOTE:
-  Migration 0038 was also patched (PLAN-0089 F2 Step 1 follow-up) to insert
-  OpenAI / Anthropic with ``entity_type = 'unknown'`` directly, so on a
-  fresh ``alembic upgrade head`` the Phase 1 UPDATE here rewrites zero rows
-  and emits no NOTICE. The defensive UPDATE remains in place for any
-  environment with stale data from prior 0038 applies or legacy 0009 seeds.
+  Migration 0038 was also patched in commit bea77cdc (PLAN-0089 F2 Step 1
+  follow-up 1) to insert OpenAI / Anthropic with ``entity_type = 'unknown'``
+  directly, so on a fresh ``alembic upgrade head`` Phase 2 rewrites zero
+  rows and emits no NOTICEs. The defensive remap remains in place for any
+  environment with legacy / drifted data.
 
 DOWNGRADE:
-  Drops the CHECK constraint. The Phase 1 UPDATE is NOT reverted — those
-  legacy values are not reachable through the new application code anyway,
-  and re-introducing them would break the invariant this migration enforces.
-  The pre-existing ``idx_entities_type`` index is untouched (it was created
-  by migration 0001 and is not owned by this migration).
+  Drops the new ``ck_canonical_entities_entity_type`` constraint. It does
+  NOT restore the pre-existing ``ck_canonical_entity_type`` (singular)
+  constraint — that constraint was untracked code-path drift, never lived
+  in this migration chain, and bringing it back would re-poison the schema
+  with the legacy 12-value enum. The data rewrite from Phase 2 is also NOT
+  reversed (those legacy values are not reachable through the new
+  application code, and re-introducing them would break the invariants
+  the rest of F2 relies on).
 """
 
 from __future__ import annotations
@@ -82,46 +106,126 @@ _CANONICAL_KINDS: tuple[str, ...] = (
 
 
 def upgrade() -> None:
-    """Add the CHECK constraint on canonical_entities.entity_type.
+    """Install the new CHECK constraint after dropping any drifted predecessor.
 
-    Two-phase upgrade (PLAN-0089 F2 Step 1 follow-up):
-      1. DEFENSIVE REWRITE — UPDATE any row whose entity_type is NOT in the
-         11-value canonical enum to ``'unknown'``. This makes the migration
-         idempotent under any pre-existing data (legacy seeds from 0009,
-         migration 0038's original ``'organization'`` rows on a stale DB,
-         or any future migration we haven't yet audited).
-      2. ADD CONSTRAINT — once the data is known-clean, install the CHECK.
+    Three-phase upgrade (PLAN-0089 F2 Step 1 follow-up 2, 2026-05-20):
+      1. DROP pre-existing CHECK on entity_type (if any) — required because
+         the dev DB has an untracked ``ck_canonical_entity_type`` constraint
+         enforcing a 12-value legacy enum that excludes ``'unknown'``, which
+         would block Phase 2's UPDATE.
+      2. REMAP legacy entity_type values to the canonical 11-value enum,
+         using ticker-presence as the disambiguator for ``'company'``.
+      3. ADD ``ck_canonical_entities_entity_type`` CHECK constraint over
+         the 11 canonical values.
 
-    The defensive rewrite is a one-time cleanup; the downgrade() does NOT
-    undo it (the legacy values are not reachable through the new application
-    code anyway, and re-introducing them would break the very invariant this
-    migration enforces).
+    The data rewrites in Phase 2 are NOT undone by downgrade() — see the
+    module docstring for rationale.
     """
-    # Render the SQL VALUES list once so the migration body is auditable in
-    # one glance. Each value is single-quoted and comma-separated. Reused by
-    # both the defensive UPDATE and the CHECK constraint body.
+    # Render the SQL VALUES list once so the migration body is auditable
+    # in one glance. Each value is single-quoted and comma-separated.
     values_sql = ", ".join(f"'{kind}'" for kind in _CANONICAL_KINDS)
 
-    # ── Phase 1: defensive rewrite of any legacy / non-canonical values ──
-    # Wrapped in a DO block so we can RAISE NOTICE with the rewritten count.
-    # GET DIAGNOSTICS captures the row count from the just-executed UPDATE.
-    # Operators on real DBs (if any future env has them) get a heads-up if
-    # this UPDATE actually touched rows — silent rewrites are dangerous.
+    # ── Phase 1: drop ANY pre-existing CHECK constraint on entity_type ──
+    # We look up the constraint dynamically via pg_constraint because:
+    #   - The drifted constraint is named ``ck_canonical_entity_type`` (singular)
+    #     in the live dev DB but might be named differently in other envs.
+    #   - We don't want to hard-code "drop a constraint name we don't own".
+    # The query filters on:
+    #   - the canonical_entities table
+    #   - contype = 'c' (CHECK constraint)
+    #   - the constraint definition mentions ``entity_type``
+    # If multiple matched, only the first is dropped — but in practice there
+    # is at most one such constraint at a time.
+    op.execute(
+        """
+        DO $$
+        DECLARE
+            constraint_name TEXT;
+        BEGIN
+            SELECT conname INTO constraint_name
+            FROM pg_constraint
+            WHERE conrelid = 'canonical_entities'::regclass
+              AND contype = 'c'
+              AND pg_get_constraintdef(oid) LIKE '%entity_type%';
+            IF constraint_name IS NOT NULL THEN
+                EXECUTE format(
+                  'ALTER TABLE canonical_entities DROP CONSTRAINT %I',
+                  constraint_name
+                );
+                RAISE NOTICE
+                  '[migration 0039] dropped pre-existing CHECK constraint % '
+                  'on canonical_entities.entity_type before installing the '
+                  'canonical 11-value constraint',
+                  constraint_name;
+            END IF;
+        END
+        $$
+        """
+    )
+
+    # ── Phase 2: remap legacy entity_type values to canonical enum ──
+    # Mapping table (per user's domain decisions, 2026-05-20):
+    #   'company'      → 'financial_instrument' if ticker IS NOT NULL
+    #                  → 'unknown'              otherwise
+    #   'organization' → 'unknown'   (mostly private cos / gov bodies / NGOs;
+    #                                  not tradable, not a financial instrument)
+    #   'other'        → 'unknown'
+    #   'concept'      → 'unknown'   (industries are tagged explicitly now)
+    #   'commodity'    → 'unknown'   (v1 does not carry commodities as a kind)
+    #   'country'      → 'place'
+    #   (anything else NOT in canonical list) → 'unknown'
+    #
+    # Each UPDATE is wrapped in its own GET DIAGNOSTICS + RAISE NOTICE
+    # block so operators see exactly how many rows each remap touched.
+    # We deliberately do the company→FI remap FIRST (before the catch-all)
+    # so company-with-ticker is rescued before the residual sweep would
+    # otherwise re-label it as 'unknown'.
     op.execute(
         f"""
         DO $$
         DECLARE
             rewritten_count INTEGER;
         BEGIN
+            -- 2a: 'company' WITH ticker → 'financial_instrument'
+            -- These are public listed companies; the ticker presence is
+            -- the strongest signal we have that the row is a tradable.
+            UPDATE canonical_entities
+               SET entity_type = 'financial_instrument'
+             WHERE entity_type = 'company' AND ticker IS NOT NULL;
+            GET DIAGNOSTICS rewritten_count = ROW_COUNT;
+            IF rewritten_count > 0 THEN
+                RAISE NOTICE
+                  '[migration 0039] remapped % ''company''-with-ticker rows '
+                  'to ''financial_instrument''',
+                  rewritten_count;
+            END IF;
+
+            -- 2b: 'country' → 'place'
+            -- Direct rename; the canonical enum uses the broader 'place'
+            -- bucket which subsumes country / region.
+            UPDATE canonical_entities
+               SET entity_type = 'place'
+             WHERE entity_type = 'country';
+            GET DIAGNOSTICS rewritten_count = ROW_COUNT;
+            IF rewritten_count > 0 THEN
+                RAISE NOTICE
+                  '[migration 0039] remapped % ''country'' rows to ''place''',
+                  rewritten_count;
+            END IF;
+
+            -- 2c: residual sweep — anything NOT in canonical enum → 'unknown'
+            -- After 2a + 2b this covers: 'organization', 'other', 'concept',
+            -- 'commodity', 'company'-WITHOUT-ticker, plus any future legacy
+            -- value we haven't yet seen. Last so the company→FI rescue runs
+            -- before this catch-all could re-label it.
             UPDATE canonical_entities
                SET entity_type = 'unknown'
              WHERE entity_type NOT IN ({values_sql});
             GET DIAGNOSTICS rewritten_count = ROW_COUNT;
             IF rewritten_count > 0 THEN
                 RAISE NOTICE
-                  '[migration 0039] rewrote % canonical_entities rows from '
-                  'legacy entity_type values to ''unknown'' before adding '
-                  'CHECK constraint',
+                  '[migration 0039] rewrote % residual non-canonical '
+                  'canonical_entities rows to ''unknown''',
                   rewritten_count;
             END IF;
         END
@@ -129,7 +233,10 @@ def upgrade() -> None:
         """
     )
 
-    # ── Phase 2: install the CHECK constraint on now-clean data ──
+    # ── Phase 3: install the new CHECK constraint on now-clean data ──
+    # Name is ``ck_canonical_entities_entity_type`` (plural ``entities``,
+    # matches the table name); deliberately distinct from the legacy
+    # ``ck_canonical_entity_type`` so we can tell which one is in force.
     op.execute(
         f"""
         ALTER TABLE canonical_entities
@@ -144,5 +251,18 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    """Drop the CHECK constraint added in upgrade()."""
+    """Drop the CHECK constraint added in upgrade().
+
+    DESIGN NOTE: we deliberately do NOT restore the pre-existing
+    ``ck_canonical_entity_type`` (singular) constraint that Phase 1 dropped.
+    That constraint was untracked code-path drift — it never lived in this
+    migration chain, it enforced an obsolete 12-value enum, and bringing it
+    back on downgrade would re-poison the schema with a domain that the
+    rest of F2 has moved past. If a future migration genuinely needs an
+    entity_type CHECK at this point in the chain, it should add its own
+    forward migration with a clear name and audit trail.
+
+    The Phase 2 data rewrites are likewise NOT reverted — those legacy
+    values are not reachable through the new application code anyway.
+    """
     op.execute("ALTER TABLE canonical_entities DROP CONSTRAINT IF EXISTS ck_canonical_entities_entity_type")
