@@ -410,6 +410,30 @@ def build_workers(
         description_client = _build_description_client(settings, valkey_client)
         embed_model = settings.embedding_model_id
         embed_batch_limit = settings.worker_embedding_batch_limit
+
+        # PRD-0089 F2 step 5 wiring (formerly deferred — see BP-495 /
+        # F2-DEFERRED-FOLLOWUPS.md).  ProvisionalEnrichmentWorker needs an
+        # S2 lookup port so that when a provisional entity carries a
+        # tradable ticker it can adopt the existing market-data
+        # ``instrument_id`` instead of minting a fresh UUID (M-017 at
+        # promotion time).  We build a dedicated MarketDataClient here
+        # rather than sharing the StructuredEnrichmentWorker's client —
+        # that client is scoped to ``_add_structured_enrichment_worker``
+        # and GC'd at the end of its function body.  Sharing would
+        # require a wider refactor; building a second small client is
+        # the minimum-risk wiring.
+        from knowledge_graph.infrastructure.http.market_data_client import MarketDataClient
+        from knowledge_graph.infrastructure.http.market_data_lookup_adapter import MarketDataLookupAdapter
+
+        _provisional_md_client = MarketDataClient(
+            base_url=settings.market_data_internal_url,
+            internal_jwt=build_market_data_signer(settings),
+        )
+        _provisional_lookup = MarketDataLookupAdapter(_provisional_md_client)
+        workers.setdefault("_aux_aclose", []).append(
+            ("provisional_enrichment_market_data_client", _provisional_md_client.aclose)
+        )
+
         # PLAN-0057 A-5 / F-CRIT-03: thread the cost logger into workers that
         # explicitly accept it.  ``DefinitionRefreshWorker`` already exposes
         # ``usage_logger`` (used by GeminiDescriptionAdapter); the new
@@ -483,6 +507,12 @@ def build_workers(
                     # outage does not cause every retry sweep to re-hit the API.
                     base_retry_minutes=settings.provisional_enrichment_base_retry_minutes,
                     max_retry_minutes=settings.provisional_enrichment_max_retry_minutes,
+                    # PRD-0089 F2 step 5: tradable promotion now defers when
+                    # S2 has no matching instrument row.  Falls back to None
+                    # silently if MarketDataClient construction fails — the
+                    # worker treats absent port as "M-017 enforcement off" so
+                    # we preserve the pre-F2 behaviour as a safe-default.
+                    market_data_lookup=_provisional_lookup,
                     read_session_factory=_read_factory,
                 ),
                 "embedding_refresh": EmbeddingRefreshWorker(
