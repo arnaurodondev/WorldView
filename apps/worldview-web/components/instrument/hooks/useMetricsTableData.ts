@@ -19,9 +19,19 @@ import { useQuery } from "@tanstack/react-query";
 import { createGateway } from "@/lib/gateway";
 import { useAccessToken } from "@/lib/api-client";
 import { qk } from "@/lib/query/keys";
-import type { FundamentalsSnapshot, FundamentalsSectionResponse } from "@/types/api";
+import type { Fundamentals, FundamentalsSnapshot, FundamentalsSectionResponse } from "@/types/api";
 
 export interface MetricsTableData {
+  // WHY add `fundamentals` (PLAN-0090 follow-up audit 2026-05-20): the page-bundle
+  // `overview.fundamentals` payload only carries 5 fields (market_cap, pe_ratio,
+  // week_52_high/low, daily_return). 16 MetricsTable rows depend on the FULL
+  // /v1/fundamentals/{id} transformer output (gross_margin, roe, debt/equity,
+  // analyst counts, payout_ratio, …). Reading from the slim bundle prop made
+  // every one of those rows render "—" against AAPL even though the data is
+  // present in postgres. Joining the rich endpoint here makes MetricsTable
+  // declarative — it consumes `fundamentals` from the hook instead of relying
+  // on QuoteTab to thread the right shape down.
+  fundamentals: Fundamentals | undefined;
   snapshot: FundamentalsSnapshot | undefined;
   technicals: FundamentalsSectionResponse | undefined;
   shareStats: FundamentalsSectionResponse | undefined;
@@ -38,7 +48,21 @@ export function useMetricsTableData(instrumentId: string): MetricsTableData {
   const token = useAccessToken();
   const enabled = !!instrumentId;
 
-  // 10min: snapshot is backfilled, not intraday.
+  // 5min: full Fundamentals (highlights + valuation_ratios + analyst_consensus +
+  // technicals_snapshot merged into the flat Fundamentals shape). This shares
+  // the same queryKey as useFinancialsTabData so the Financials tab and the
+  // Quote-tab MetricsTable both warm the same cache entry — switching tabs is
+  // free after the first fetch.
+  const fundamentalsQuery = useQuery({
+    queryKey: qk.instruments.fundamentals(instrumentId),
+    queryFn: () => createGateway(token).getFundamentals(instrumentId),
+    staleTime: 5 * 60 * 1000,
+    enabled,
+  });
+
+  // 10min: snapshot is backfilled, not intraday. Carries derived fields
+  // (eps_ttm, beta, free_cash_flow, …) that the rich /v1/fundamentals/{id}
+  // endpoint does NOT compute — kept separate so the row count stays honest.
   const snapshotQuery = useQuery({
     queryKey: qk.instruments.fundamentalsSnapshot(instrumentId),
     queryFn: () => createGateway(token).getFundamentalsSnapshot(instrumentId),
@@ -64,11 +88,19 @@ export function useMetricsTableData(instrumentId: string): MetricsTableData {
   });
 
   return {
+    fundamentals: fundamentalsQuery.data,
     snapshot: snapshotQuery.data,
     technicals: technicalsQuery.data,
     shareStats: shareStatsQuery.data,
     isLoading:
-      snapshotQuery.isLoading || technicalsQuery.isLoading || shareStatsQuery.isLoading,
-    isError: snapshotQuery.isError || technicalsQuery.isError || shareStatsQuery.isError,
+      fundamentalsQuery.isLoading ||
+      snapshotQuery.isLoading ||
+      technicalsQuery.isLoading ||
+      shareStatsQuery.isLoading,
+    isError:
+      fundamentalsQuery.isError ||
+      snapshotQuery.isError ||
+      technicalsQuery.isError ||
+      shareStatsQuery.isError,
   };
 }

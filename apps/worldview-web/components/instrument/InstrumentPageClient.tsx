@@ -88,11 +88,9 @@ export function InstrumentPageClient({ entityId }: InstrumentPageClientProps) {
 
   // ── Bundle fetch (T-A-03) ─────────────────────────────────────────────────
   // The hook owns the queryKey (qk.instruments.pageBundle), staleTime, and
-  // gateway wiring. We only consume its data + loading state here.
-  // WHY underscore-prefixed isLoading: kept on the destructure for future
-  // global loading-state plumbing (e.g. Wave D deep-links into a tab while the
-  // bundle is still warming up). Lint passes because the binding is intentional.
-  const { data: bundle, isLoading: _isLoading } = useInstrumentBundle(entityId);
+  // gateway wiring. We only consume its data here; tab components handle
+  // their own loading UI via the per-section query hooks.
+  const { data: bundle } = useInstrumentBundle(entityId);
 
   // ── Cache priming (PRD-0088 §6.3) ─────────────────────────────────────────
   // We seed the per-section query caches so when a tab content component
@@ -144,13 +142,15 @@ export function InstrumentPageClient({ entityId }: InstrumentPageClientProps) {
           its prop surface narrow and unit-testable. We fall back to null while
           the bundle is loading — the header renders "—" placeholders rather
           than collapsing layout. */}
-      {bundle?.overview?.instrument && (
-        <InstrumentHeader
-          instrument={bundle.overview.instrument}
-          quote={bundle.overview.quote ?? null}
-          fundamentals={bundle.overview.fundamentals ?? null}
-        />
-      )}
+      {/* AUDIT 2026-05-20: render unconditionally so the 36px sticky row never
+          disappears mid-fetch. InstrumentHeader handles `instrument: null` with
+          "—" fallbacks and skips the LiveQuoteBadge subscription until the id
+          is known. */}
+      <InstrumentHeader
+        instrument={bundle?.overview?.instrument ?? null}
+        quote={bundle?.overview?.quote ?? null}
+        fundamentals={bundle?.overview?.fundamentals ?? null}
+      />
 
       {/* AI brief banner: returns null when no brief is available, so the
           banner area disappears cleanly with no reserved space. */}

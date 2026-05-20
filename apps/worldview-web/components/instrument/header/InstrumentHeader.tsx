@@ -29,7 +29,13 @@ import type { Instrument, Quote, Fundamentals } from "@/types/api";
 import { WeekRangeMini } from "./WeekRangeMini";
 
 interface InstrumentHeaderProps {
-  readonly instrument: Instrument;
+  // WHY instrument is now nullable (audit 2026-05-20): the page-bundle request
+  // can still be in flight when the parent first paints, and the prior strict
+  // `Instrument` type forced InstrumentPageClient to gate the entire header
+  // behind `bundle?.overview?.instrument` — making the sticky 36px row vanish
+  // for the ~200ms warm-up window. Accepting null here lets us render the
+  // chrome (back button + "—" fallbacks) immediately and fill values in place.
+  readonly instrument: Instrument | null;
   readonly quote: Quote | null;
   readonly fundamentals: Fundamentals | null;
 }
@@ -69,12 +75,16 @@ export function InstrumentHeader({ instrument, quote, fundamentals }: Instrument
       {/* WHY font-mono on ticker: tickers are conceptually code (AAPL, MSFT).
           Mono spacing matches the rest of the numeric row and is the
           IBM Plex Mono standard from docs/ui/DESIGN_SYSTEM.md §3. */}
-      <span className="text-[13px] font-semibold tracking-wide font-mono">{instrument.ticker}</span>
-      <span className="rounded-[2px] bg-muted/30 px-1.5 text-[10px] text-muted-foreground">
-        {instrument.exchange}
+      <span className="text-[13px] font-semibold tracking-wide font-mono">
+        {instrument?.ticker ?? "—"}
       </span>
+      {instrument?.exchange && (
+        <span className="rounded-[2px] bg-muted/30 px-1.5 text-[10px] text-muted-foreground">
+          {instrument.exchange}
+        </span>
+      )}
       <span className="max-w-[200px] truncate text-[11px] text-muted-foreground">
-        {instrument.name}
+        {instrument?.name ?? ""}
       </span>
 
       {/* ── Right cluster: price + change + CAP/VOL/P/E + range bar + badge ── */}
@@ -109,7 +119,11 @@ export function InstrumentHeader({ instrument, quote, fundamentals }: Instrument
         {/* WHY compact mode: we already render price + change inline above,
             so LiveQuoteBadge only contributes the freshness dot + badge —
             no duplicate price display. */}
-        <LiveQuoteBadge instrumentId={instrument.instrument_id} initialPrice={price} compact />
+        {/* WHY guard on instrument_id: LiveQuoteBadge subscribes to a WS feed
+            keyed off the id — no point firing the subscription before we know it. */}
+        {instrument?.instrument_id && (
+          <LiveQuoteBadge instrumentId={instrument.instrument_id} initialPrice={price} compact />
+        )}
       </div>
     </header>
   );

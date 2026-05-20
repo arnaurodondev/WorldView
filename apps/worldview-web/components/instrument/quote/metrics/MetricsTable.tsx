@@ -31,7 +31,13 @@ import type { Fundamentals, Quote, ShareStatisticsData, TechnicalsData } from "@
 
 interface MetricsTableProps {
   instrumentId: string;
-  fundamentals: Fundamentals | null;
+  // WHY no longer reads fundamentals from a prop (PLAN-0090 follow-up 2026-05-20):
+  // the page-bundle overview.fundamentals only carries 5 fields. We now pull the
+  // full Fundamentals shape from useMetricsTableData (which calls getFundamentals
+  // directly, sharing the cache key with the Financials tab). The prop is kept
+  // OPTIONAL for migration safety — if a caller passes one, it acts as a fast-path
+  // seed but the hook's value takes precedence as soon as it resolves.
+  fundamentals?: Fundamentals | null;
   quote: Quote | null;
 }
 
@@ -74,11 +80,20 @@ const signColor = (v: number | null | undefined): MetricValueColor =>
 const trendColor = (p: number | null, m: number | null): MetricValueColor =>
   p == null || m == null ? "default" : p >= m ? "positive" : "negative";
 
-export function MetricsTable({ instrumentId, fundamentals, quote }: MetricsTableProps) {
-  // WHY one hook: all three sub-resources share a single loading surface;
+export function MetricsTable({ instrumentId, fundamentals: fundamentalsProp, quote }: MetricsTableProps) {
+  // WHY one hook: all four sub-resources share a single loading surface;
   // undefined fields render "—" via MetricValue automatically.
-  const { snapshot, technicals: technicalsResp, shareStats: shareStatsResp } =
-    useMetricsTableData(instrumentId);
+  const {
+    fundamentals: fundamentalsFromHook,
+    snapshot,
+    technicals: technicalsResp,
+    shareStats: shareStatsResp,
+  } = useMetricsTableData(instrumentId);
+  // WHY hook-wins coalesce: the prop (when provided) is the slim page-bundle
+  // shape — only safe to use until the hook's rich /v1/fundamentals/{id} fetch
+  // resolves. Once that lands we switch to the full object so the 16 rows that
+  // depend on margin/roe/leverage/analyst fields populate.
+  const fundamentals: Fundamentals | null = fundamentalsFromHook ?? fundamentalsProp ?? null;
 
   // WHY records[0].data cast: getTechnicals/getShareStatistics return a raw
   // FundamentalsSectionResponse envelope; the typed shape lives on records[0]
