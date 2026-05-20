@@ -32,10 +32,12 @@ import { useRouter } from "next/navigation";
 import { useQueryClient } from "@tanstack/react-query";
 
 import { qk } from "@/lib/query/keys";
+import { GatewayError } from "@/lib/gateway";
 import { useInstrumentBundle } from "@/components/instrument/hooks/useInstrumentBundle";
 import { InstrumentHeader } from "@/components/instrument/header/InstrumentHeader";
 import { AiBriefBanner } from "@/components/instrument/brief/AiBriefBanner";
 import { InstrumentTabs } from "@/components/instrument/tabs/InstrumentTabs";
+import { InstrumentNotFound } from "@/components/primitives/InstrumentNotFound";
 import { FinancialsTab } from "@/components/instrument/financials/FinancialsTab";
 // WHY direct import (no `next/dynamic`): IntelligenceTab itself is a thin
 // orchestrator; its heavy children (NewsColumn list, GraphColumn → sigma.js)
@@ -90,7 +92,23 @@ export function InstrumentPageClient({ entityId }: InstrumentPageClientProps) {
   // The hook owns the queryKey (qk.instruments.pageBundle), staleTime, and
   // gateway wiring. We only consume its data here; tab components handle
   // their own loading UI via the per-section query hooks.
-  const { data: bundle } = useInstrumentBundle(entityId);
+  // WHY also pull error + isError (PRD-0089 F2 step 10): when the page-bundle
+  // endpoint returns 404 (unknown ticker after the URL slug unification), we
+  // must render the InstrumentNotFound primitive instead of the placeholder
+  // header + tab shell. Other errors (5xx, network) fall through to the
+  // existing UI which renders "—" placeholders — those are transient.
+  const { data: bundle, error: bundleError, isError: bundleIsError } = useInstrumentBundle(entityId);
+
+  // ── 404 detection ─────────────────────────────────────────────────────────
+  // WHY GatewayError instanceof check: the gateway throws GatewayError with a
+  // numeric `status` field for non-2xx responses (see lib/api/_client.ts).
+  // A plain `.status` cast risks false positives if some other error object
+  // happens to expose a `status` field. instanceof is the safe form.
+  // WHY 404 only (not 4xx in general): 401/403 are auth states handled by the
+  // higher-level RequireAuth wrapper; 400 would indicate a malformed slug
+  // (covered by middleware) — not a user-facing "unknown ticker".
+  const isNotFound =
+    bundleIsError && bundleError instanceof GatewayError && bundleError.status === 404;
 
   // ── Cache priming (PRD-0088 §6.3) ─────────────────────────────────────────
   // We seed the per-section query caches so when a tab content component
@@ -129,6 +147,24 @@ export function InstrumentPageClient({ entityId }: InstrumentPageClientProps) {
     // entire staleTime window (~5min) and the Financials tab renders all
     // "—". The snapshot hook fires its own fetch on tab open instead.
   }, [bundle, entityId, queryClient]);
+
+  // ── 404 early return (PRD-0089 F2 step 10) ────────────────────────────────
+  // WHY render the not-found primitive INSIDE the normal page chrome (flex
+  // column / bg-background) but WITHOUT the header / brief / tabs: those
+  // sub-components depend on a non-null bundle to compute their own state
+  // and would either crash or render misleading "—" placeholders for an
+  // instrument that does not exist. The unified shell padding (p-3) keeps
+  // the primitive aligned with the rest of the page-level layout.
+  // NOTE: the suggestedTickers prop is intentionally omitted here — the S9
+  // fuzzy-match endpoint is a follow-up step. When wired, this is a
+  // one-line change: `suggestedTickers={data?.candidates}`.
+  if (isNotFound) {
+    return (
+      <div className="flex flex-col h-screen overflow-hidden bg-background p-3">
+        <InstrumentNotFound attemptedTicker={entityId} />
+      </div>
+    );
+  }
 
   // ── Layout ────────────────────────────────────────────────────────────────
   // WHY flex column + h-screen: the page must fill the viewport so the active
