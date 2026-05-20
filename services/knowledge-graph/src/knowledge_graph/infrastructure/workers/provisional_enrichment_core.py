@@ -34,6 +34,7 @@ _ENTITY_DIRTIED_SCHEMA_PATH = get_schema_path("entity.dirtied.v1.avsc")
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession
 
+    from knowledge_graph.application.ports.market_data_lookup_port import MarketDataLookupPort
     from knowledge_graph.infrastructure.llm.fallback_chain import FallbackChainClient
 
 logger = get_logger(__name__)  # type: ignore[no-any-return]
@@ -175,6 +176,7 @@ async def persist_enrichment(
     profile: dict[str, Any],
     embedding: list[float] | None = None,
     embed_model_id: str = "bge-large:latest",
+    market_data_lookup: MarketDataLookupPort | None = None,
 ) -> UUID | None:
     """Persist an LLM-extracted entity profile to intelligence_db.
 
@@ -186,7 +188,24 @@ async def persist_enrichment(
       - relation_evidence_raw provisional flag clear
       - entity.canonical.created.v1 outbox entry
 
-    Session-only — no external HTTP/LLM calls (ARCH-003).
+    Session-only with ONE strictly-bounded exception: when ``market_data_lookup``
+    is supplied AND the profile is a tradable instrument (``entity_type ==
+    'financial_instrument'`` AND a ticker is present), we issue ONE HTTP GET
+    to S2 to discover the existing ``instrument_id``.  This is the M-017
+    enforcement point (PRD-0089 F2 §4.3): when S2 already owns an instrument
+    row for this ticker the canonical entity MUST share that UUID so the two
+    databases stay in lock-step.  When S2 returns 404 we cannot promote yet,
+    so we return ``None`` to signal the caller to defer (the worker's
+    ``_apply_retry`` then increments retry_count + sets next_retry_at; rows
+    that cross ``max_retries`` transition to terminal status='failed').
+    The lookup runs BEFORE any DB writes so the deferral path is side-effect
+    free.
+
+    ARCH-003 note: persist_enrichment was previously billed as "session-only,
+    no external HTTP".  The S2 lookup is the deliberate, narrow exception
+    introduced by F2; it is bounded to a sub-second DB-backed call (S2 lookup
+    timeout is 5 s) and runs synchronously before the session is touched, so
+    no session is held during the HTTP call.
     """
     from sqlalchemy import text
 
@@ -227,6 +246,58 @@ async def persist_enrichment(
             "provisional_enrichment_isin_discarded",
             isin_raw=_isin_raw,
             entity=canonical_name,
+        )
+
+    # ── PRD-0089 F2 §4.3 — M-017 enforcement for tradable provisional entities ──
+    # When the LLM has classified this provisional as a tradable instrument AND
+    # produced a ticker, we MUST anchor the canonical entity_id on the existing
+    # market_data.instruments.id rather than minting a fresh UUID. This is the
+    # cross-database invariant the F2 wave introduces:
+    #     canonical_entities.entity_id == instruments.id
+    # for every row with entity_type='financial_instrument'.
+    #
+    # When S2 already has the instrument row we capture the UUID and pass it
+    # to ``create_or_get`` below. When S2 does NOT have a row yet, we cannot
+    # promote without violating M-017, so we return ``None`` to signal the
+    # caller to defer (worker's _apply_retry then increments retry_count and
+    # writes next_retry_at; rows that cross max_retries transition to terminal
+    # status='failed', which is the project's DLQ convention for the queue —
+    # we deliberately reuse the existing terminal state rather than adding a
+    # new ``provisional_entity_dlq`` Kafka topic because the queue table is
+    # already operator-visible via the /admin/dlq endpoints.)
+    #
+    # Why this position: ticker normalisation has happened above, so the
+    # uppercase ticker we look up is the same one we'd write to the canonical
+    # row. Why before fuzzy pre-lookup: an existing instrument_id is the
+    # strongest possible signal — it short-circuits the trigram match because
+    # a successful S2 lookup is an exact-by-construction match.
+    forced_entity_id: UUID | None = None
+    if market_data_lookup is not None and entity_type == "financial_instrument" and ticker:
+        instrument_ref = await market_data_lookup.lookup_instrument_by_ticker(ticker)
+        if instrument_ref is None:
+            # S2 has no instrument row for this ticker yet. The market-data
+            # ingestion pipeline (S4) may still be discovering it (via EODHD,
+            # SnapTrade, etc.). Returning None signals the worker to call
+            # _apply_retry which:
+            #   - increments retry_count (capped at max_retries)
+            #   - schedules next_retry_at via exponential backoff
+            #   - transitions status='failed' when retry_count reaches max
+            # The row stays addressable to ops via the /admin/dlq endpoints
+            # so a stuck instrument can be diagnosed and resolved manually.
+            logger.info(  # type: ignore[no-any-return]
+                "provisional_enrichment_deferred_instrument_absent",
+                ticker=ticker,
+                canonical_name=canonical_name,
+                queue_id=str(queue_id),
+                reason="s2_instrument_missing",
+            )
+            return None
+        forced_entity_id = instrument_ref.instrument_id
+        logger.info(  # type: ignore[no-any-return]
+            "provisional_enrichment_anchored_on_instrument",
+            ticker=ticker,
+            instrument_id=str(forced_entity_id),
+            queue_id=str(queue_id),
         )
 
     # QA-iter1 (PLAN-0062 SA-005 fix): pre-validate the Avro payload BEFORE any
@@ -297,11 +368,19 @@ async def persist_enrichment(
     # issues an atomic INSERT ... ON CONFLICT DO NOTHING and re-SELECTs on conflict.
     # When ``was_created=False`` we skip alias inserts, embedding, and outbox.
     entity_repo = CanonicalEntityRepository(session)
+    # F2 §4.3: when ``forced_entity_id`` is set, S2 already owns an instrument
+    # row for this ticker — we MUST reuse that UUID so canonical_entities and
+    # market_data.instruments stay aligned (invariant M-017). ``create_or_get``
+    # accepts ``entity_id`` directly and routes through an alternate INSERT that
+    # explicitly binds the value; on conflict the existing row is fetched, so
+    # the (rare) case where the row was independently inserted by another
+    # consumer is still idempotent.
     entity_id, was_created = await entity_repo.create_or_get(  # type: ignore[attr-defined]
         canonical_name=canonical_name,
         entity_type=entity_type,
         ticker=ticker,
         isin=isin,
+        entity_id=forced_entity_id,
     )
     if not was_created:
         logger.info(  # type: ignore[no-any-return]
