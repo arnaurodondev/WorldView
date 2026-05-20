@@ -24,6 +24,7 @@ from typing import TYPE_CHECKING, Literal
 import structlog
 
 from market_data.domain.errors import EodhRateLimitError, InstrumentNotFoundError  # noqa: F401
+from market_data.infrastructure._ticker_normalize import _normalize_ticker
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -138,14 +139,27 @@ class OnDemandProfileUseCase:
         if not any([ticker, isin]):
             raise ValueError("At least one of ticker or isin must be provided")
 
-        # SSRF validation before any external call
-        upper_ticker = ticker.upper() if ticker else None
+        # SSRF validation before any external call.
+        # Order matters:
+        #   1. Validate the RAW (uppercased) input against TICKER_PATTERN.  We
+        #      must do this BEFORE normalization because `_normalize_ticker`
+        #      collapses `/` and `-` to `.`, which would let a path-traversal
+        #      payload like `../../etc/passwd` survive validation (it becomes
+        #      `......ETC.PASSWD`, all chars in the regex's allowed set).
+        #   2. PLAN-0089 F2 step 7: only after the input is known-safe do we
+        #      normalize to the canonical dot-form (BRK-B / brk.b / BRK/B →
+        #      BRK.B) so the DB lookup hits the row that the Kafka consumers
+        #      wrote under the canonical form.
+        raw_upper_ticker = ticker.upper() if ticker else None
         upper_isin = isin.upper() if isin else None
 
-        if upper_ticker:
-            _validate_ticker(upper_ticker)
+        if raw_upper_ticker:
+            _validate_ticker(raw_upper_ticker)
         if upper_isin:
             _validate_isin(upper_isin)
+
+        # Normalize AFTER validation succeeded.
+        upper_ticker = _normalize_ticker(raw_upper_ticker) if raw_upper_ticker else None
 
         # ── Phase 1: DB lookup (open + close session) ────────────────────────
         snapshot = await self._phase1_lookup(upper_ticker, upper_isin)

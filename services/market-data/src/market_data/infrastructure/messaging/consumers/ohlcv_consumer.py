@@ -12,6 +12,7 @@ from market_data.domain.entities import Instrument, OHLCVBar, Security
 from market_data.domain.enums import Provider, Timeframe
 from market_data.domain.events import InstrumentDiscovered, InstrumentUpdated
 from market_data.domain.value_objects import InstrumentFlags, ProviderPriority
+from market_data.infrastructure._ticker_normalize import _normalize_ticker
 from market_data.infrastructure.messaging.outbox.dispatcher import EVENT_TOPIC_MAP, event_to_outbox_payload
 from messaging.kafka.consumer.base import BaseKafkaConsumer, ConsumerConfig, FailureInfo  # type: ignore[import-untyped]
 from messaging.kafka.consumer.dedup import ValkeyDedupMixin  # type: ignore[import-untyped]
@@ -161,7 +162,10 @@ class OHLCVConsumer(ValkeyDedupMixin, BaseKafkaConsumer[dict]):
 
         bucket = value["canonical_ref_bucket"]
         object_key = value["canonical_ref_key"]
-        symbol = value["symbol"]
+        # PLAN-0089 F2 step 7: canonicalise ticker at the ingestion boundary so
+        # the DB only ever holds the dot-form (BRK.B, not BRK-B/BRK/B).  Read
+        # paths intentionally do NOT renormalise — they trust the DB form.
+        symbol = _normalize_ticker(value["symbol"])
         exchange = value.get("exchange") or ""
         provider_str = value.get("provider", "unknown")
         timeframe_str = value.get("timeframe") or "1d"

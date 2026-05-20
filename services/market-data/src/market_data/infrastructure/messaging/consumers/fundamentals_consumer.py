@@ -13,6 +13,7 @@ from market_data.domain.entities import FundamentalsRecord, Instrument, Security
 from market_data.domain.enums import FundamentalsSection, PeriodType
 from market_data.domain.events import InstrumentCreated
 from market_data.domain.value_objects import InstrumentFlags
+from market_data.infrastructure._ticker_normalize import _normalize_ticker
 from market_data.infrastructure.db.fundamentals_snapshot_writer import (
     _most_recent_financial_row,
     derive_fundamentals_snapshot,
@@ -268,7 +269,9 @@ class FundamentalsConsumer(ValkeyDedupMixin, BaseKafkaConsumer[dict]):
 
         bucket = value["canonical_ref_bucket"]
         object_key = value["canonical_ref_key"]
-        symbol = value["symbol"]
+        # PLAN-0089 F2 step 7: canonicalise ticker at the ingestion boundary.
+        # See market_data.infrastructure._ticker_normalize for rationale.
+        symbol = _normalize_ticker(value["symbol"])
         exchange = value.get("exchange") or ""
         provider_str = value.get("provider", "unknown")
 
