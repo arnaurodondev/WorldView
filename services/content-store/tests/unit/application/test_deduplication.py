@@ -102,6 +102,35 @@ class TestNormalizeURL:
         assert "fbclid" not in result
         assert "title=test" in result
 
+    # ── BUG-006 / TASK-W2-01 — extended tracking-param strip list ────────────
+    #
+    # Each of these URLs differs from the canonical form ONLY by one of the
+    # newly-added tracking parameters (ClearURLs source list). They MUST all
+    # normalize to the same string as the bare canonical URL so that Stage B
+    # dedup catches socially-shared near-duplicates.
+    @pytest.mark.parametrize(
+        "url",
+        [
+            "https://example.com/article?_ga=2.123456789.987654321.0-1234567890",
+            "https://example.com/article?_gl=1*abc123*_ga*XYZ",
+            "https://example.com/article?_hsenc=p2ANqtz-abcDEF",
+            "https://example.com/article?_hsmi=12345678",
+            "https://example.com/article?igshid=abcdef1234567890",
+            "https://example.com/article?oly_anon_id=anon-abc-123",
+            "https://example.com/article?oly_enc_id=enc-xyz-789",
+            "https://example.com/article?wickedid=wkd-abc",
+            "https://example.com/article?vero_id=user%40example.com",
+            "https://example.com/article?vero_conv=conv-42",
+            "https://example.com/article?yclid=987654321",
+            "https://example.com/article?s_cid=adobe-camp-1",
+        ],
+    )
+    def test_strips_extended_tracking_params(self, url: str) -> None:
+        # Canonical form: same URL with no query string and no trailing slash.
+        # `normalize_url` collapses an empty query to "" and drops the "?".
+        expected = "https://example.com/article"
+        assert normalize_url(url) == expected
+
 
 class TestStageBNormalizedHash:
     def test_compute_normalized_hash_deterministic(self) -> None:
