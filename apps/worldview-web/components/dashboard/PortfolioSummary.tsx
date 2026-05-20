@@ -318,10 +318,10 @@ export function PortfolioSummary() {
               single line with column-aligned digits.
               WHY min-w-0: required so flex shrinking can kick in if the
               widget container ever narrows below the value's intrinsic width.
-              WHY text-xl (was text-2xl): 24px is too large for a dashboard
-              widget. text-xl (20px) keeps the value prominent without
+              WHY text-[20px] (was text-[24px]): 24px is too large for a dashboard
+              widget. text-[20px] (20px) keeps the value prominent without
               dominating the small panel. */}
-          <p className="min-w-0 flex-1 whitespace-nowrap font-mono text-xl font-semibold tabular-nums text-foreground">
+          <p className="min-w-0 flex-1 whitespace-nowrap font-mono text-[20px] font-semibold tabular-nums text-foreground">
             {/* WHY "~" prefix: standard financial convention for "approximately".
                 Shown when one or more prices are delayed, stale, or unavailable.
                 Bloomberg uses this same convention on delayed portfolios.
@@ -343,11 +343,11 @@ export function PortfolioSummary() {
               WHY shrink-0 + whitespace-nowrap: the P&L is the secondary metric
               but must remain fully readable; we'd rather the value (above)
               shrink/truncate than have the P&L break across lines.
-              WHY text-sm (14px): smaller than the value (20px) to establish
+              WHY text-[14px] (14px): smaller than the value (20px) to establish
               hierarchy — the user's eye lands on total value first, P&L
               second. */}
           <div
-            className={`flex shrink-0 items-center gap-1 whitespace-nowrap text-sm ${priceChangeClass(headlinePnlPct)}`}
+            className={`flex shrink-0 items-center gap-1 whitespace-nowrap text-[14px] ${priceChangeClass(headlinePnlPct)}`}
           >
             {isPnlPositive ? (
               <TrendingUp className="h-3 w-3 shrink-0" />

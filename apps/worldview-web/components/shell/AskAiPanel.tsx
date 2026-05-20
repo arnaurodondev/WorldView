@@ -512,7 +512,7 @@ export function AskAiPanel({
                * visual convention used in the full Chat page's CitationList.
                */}
               {/* HIGH-015: animate-pulse removed from cursor — Bloomberg terminal mandate.
-                  text-sm → text-[11px] for terminal density alignment. */}
+                  text-[14px] → text-[11px] for terminal density alignment. */}
               <p className="whitespace-pre-wrap text-[11px] text-foreground">
                 {isStreaming
                   ? (
@@ -565,7 +565,7 @@ export function AskAiPanel({
           rows={2}
           disabled={isStreaming}
           // WHY rounded-[2px] (was rounded-md): terminal 2px radius rule
-          // text-sm → text-[11px]: terminal density alignment (HIGH-015)
+          // text-[14px] → text-[11px]: terminal density alignment (HIGH-015)
           className="flex-1 resize-none rounded-[2px] border border-border bg-muted px-2 py-1 text-[11px] text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-ring disabled:bg-[hsl(var(--disabled-bg))] disabled:text-[hsl(var(--disabled-foreground))] disabled:border-[hsl(var(--disabled-border))]"
         />
         {/* PLAN-0059 W0 F-VISUAL-022: --accent-ai violet bg (was amber-500/90).

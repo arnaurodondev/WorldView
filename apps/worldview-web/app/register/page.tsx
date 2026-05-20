@@ -49,11 +49,11 @@ export default function RegisterPage() {
     return (
       <div className="flex min-h-screen items-center justify-center bg-background px-4">
         <div className="w-full max-w-sm space-y-4">
-          <h1 className="text-lg font-semibold text-foreground">Registration unavailable</h1>
-          <p className="text-sm text-muted-foreground">{error}</p>
+          <h1 className="text-[18px] font-semibold text-foreground">Registration unavailable</h1>
+          <p className="text-[14px] text-muted-foreground">{error}</p>
           <a
             href="/login"
-            className="block text-sm font-medium text-primary underline-offset-4 hover:underline"
+            className="block text-[14px] font-medium text-primary underline-offset-4 hover:underline"
           >
             Back to login
           </a>
@@ -68,7 +68,7 @@ export default function RegisterPage() {
     <div className="flex min-h-screen items-center justify-center bg-background">
       <div className="flex flex-col items-center gap-3">
         <div className="h-8 w-8 animate-spin rounded-full border-2 border-border border-t-primary" />
-        <p className="text-sm text-muted-foreground">Redirecting to registration…</p>
+        <p className="text-[14px] text-muted-foreground">Redirecting to registration…</p>
       </div>
     </div>
   );

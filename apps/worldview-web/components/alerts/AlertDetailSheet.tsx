@@ -83,7 +83,7 @@ export function AlertDetailSheet({ alert, open, onClose, onAck, onSnooze }: Aler
             in DESIGN_SYSTEM §2 (sticky 24-40px header strip per panel). */}
         <SheetHeader className="border-b border-border px-4 py-2.5">
           {/* WHY no extra className: SheetTitle now applies text-[13px] uppercase tracking-[0.04em]
-              by default — the old text-sm (14px) override is replaced by the base style.
+              by default — the old text-[14px] (14px) override is replaced by the base style.
               The ticker/entity name here is fine at 13px uppercase (it's the sheet header title). */}
           <SheetTitle>
             {/* WHY the ticker (when present) leads — it's the primary identifier

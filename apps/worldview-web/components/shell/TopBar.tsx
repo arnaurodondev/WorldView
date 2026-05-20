@@ -355,7 +355,7 @@ export function TopBar({
           <DropdownMenuContent align="end" className="w-48">
             {/* User info header */}
             {/* WHY text-[11px]/text-[10px]: dropdown header must match the 10-11px density
-                of the terminal chrome — text-sm (14px) is consumer-app scale */}
+                of the terminal chrome — text-[14px] (14px) is consumer-app scale */}
             <div className="px-2 py-1.5">
               <p className="text-[11px] font-medium text-foreground">{user?.name ?? "User"}</p>
               <p className="truncate text-[10px] text-muted-foreground">{user?.email}</p>

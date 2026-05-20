@@ -1669,22 +1669,35 @@ copyKey="X">` resolves.
 
 ### 16.5 Architecture-test guardrails
 
-The existing `no-off-palette-colors.test.ts` was extended with a
-`describe.skip("PRD-0089 F1 lockdown")` block exposing 7 forbidden
-regex constants: `F1_FORBIDDEN_{ROUNDED,TEXT_SIZE,SHADOW,ROW_RING2,
-TRANSITION,DURATION,GAP}`. The block is gated behind `.skip` because:
+`__tests__/architecture/` carries the F1 enforcement contract across
+four test files.  All four pass on `main` and any regression fails CI:
 
-- The mechanical purges (PRs C–G) drove `rounded-{sm|md|lg|xl|2xl}` and
-  data-surface `shadow-*` to 0 active code, but landing/marketing pages
-  intentionally keep some chrome shadows.
-- The `text-(sm|base|lg|xl)` purge is NOT in the F1 scope (per-PR
-  instructions for C–G only covered `rounded-*` and `shadow-*`); 201
-  surviving sites need a follow-up F1.1 amendment wave to migrate to
-  `text-[11px]` / `text-[12px]` / `text-[14px]`.
+1. **`no-off-palette-colors.test.ts`** — pre-existing palette/radius/
+   currency guard *plus* the `describe("PRD-0089 F1 lockdown")` block
+   exposing the 7 forbidden regex constants `F1_FORBIDDEN_{ROUNDED,
+   TEXT_SIZE,SHADOW,ROW_RING2,TRANSITION,DURATION,GAP}`.
+2. **`animation-policy.test.ts`** — bans `transition-{all|transform|
+   shadow}` and `duration-{300|500|700|1000}` outside `animate-*`
+   keyframe utilities.  Components must use `transition-color-only`
+   (T1) or `transition-color-and-opacity` (T2), or an arbitrary
+   `transition-[transform]` / `transition-[width]` for legitimate
+   layout-property animations.
+3. **`empty-copy-dictionary.test.ts`** — every literal `<EmptyState
+   copyKey="X">` resolves to a key in `lib/copy/empty-states.ts`.
+4. **`data-table-grid-scope.test.ts`** — the `data-table-grid`
+   attribute appears only inside the 7 whitelisted v1 surfaces
+   (Screener, Holdings, Transactions, FlatMetricsGrid, Watchlist,
+   Workspace, Peer Comparison).
 
-Activation contract: when the follow-up amendment lands, remove
-`describe.skip` → `describe` and add a tight allowlist (landing/feedback
-chrome) to `F1_ALLOWED_FILES`.
+The F1.1 amendment (2026-05-20) closed every remaining offence:
+~200 `text-{sm..7xl}` sites were converted to exact-pixel arbitrary
+values (`text-[14px]`, `text-[30px]`, …), 9 marketing `shadow-*`
+sites were stripped (Tailwind config already maps them to `none`,
+so this was lint cleanup), 17 `transition-{all|transform|shadow}`
+sites were converted to named tokens or arbitrary forms, 2
+`duration-300/500` sites were narrowed to 200ms, and 8 `gap-{6|8|10|12}`
+sites were converted to arbitrary pixel values.  `F1_ALLOWED_FILES`
+remains empty — the codebase is fully clean under the locked scale.
 
 ### 16.6 Tokens added in F1
 

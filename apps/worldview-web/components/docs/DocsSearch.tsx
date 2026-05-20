@@ -161,7 +161,7 @@ export function DocsSearch({ index }: DocsSearchProps) {
               }}
               placeholder="Search the docs…"
               aria-label="Search documentation"
-              className="flex-1 bg-transparent text-sm text-foreground outline-none placeholder:text-muted-foreground/60"
+              className="flex-1 bg-transparent text-[14px] text-foreground outline-none placeholder:text-muted-foreground/60"
             />
           </div>
 
@@ -187,7 +187,7 @@ export function DocsSearch({ index }: DocsSearchProps) {
                     // aria-activedescendant for AT.
                     tabIndex={-1}
                     className={cn(
-                      "flex w-full items-center justify-between gap-3 px-4 py-2 text-left text-sm transition-colors",
+                      "flex w-full items-center justify-between gap-3 px-4 py-2 text-left text-[14px] transition-colors",
                       i === active ? "bg-primary/10 text-foreground" : "text-muted-foreground hover:bg-muted/40",
                     )}
                   >

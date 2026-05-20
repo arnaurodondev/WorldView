@@ -189,7 +189,7 @@ export default function WatchlistDetailPage() {
       {watchlist.members.length === 0 ? (
         <div className="flex flex-1 items-center justify-center px-4 py-12">
           <div className="max-w-md text-center">
-            <h2 className="mb-1 font-mono text-sm uppercase tracking-[0.08em] text-foreground">
+            <h2 className="mb-1 font-mono text-[14px] uppercase tracking-[0.08em] text-foreground">
               No members yet
             </h2>
             <p className="text-[11px] text-muted-foreground">

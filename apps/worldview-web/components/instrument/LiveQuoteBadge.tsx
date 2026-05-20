@@ -152,7 +152,7 @@ export function LiveQuoteBadge({ instrumentId, initialPrice, compact = false }: 
     <div className="flex flex-col gap-0.5">
       <div className="flex items-baseline gap-3">
         {/* Current price — large and prominent */}
-        <span className={`font-mono text-2xl font-semibold tabular-nums ${priceColorClass}`}>
+        <span className={`font-mono text-[24px] font-semibold tabular-nums ${priceColorClass}`}>
           {formatPrice(quote.price)}
         </span>
 

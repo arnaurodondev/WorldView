@@ -11,6 +11,7 @@ platform_state: pre-production
 no_backfill: true
 waves_shipped:
   - F1 (2026-05-20): design-system foundation — sharp corners, primitives catalogue, 4-tier animation policy. Branch `feat/plan-0089-f1`.
+  - F1.1 (2026-05-20): close-out amendment — purged ~230 surviving off-token utilities (text-*, shadow-*, transition-*, duration-*, gap-*), shipped 3 dedicated architecture tests (animation-policy, empty-copy-dictionary, data-table-grid-scope), and activated the F1 lockdown describe block. Branch `feat/plan-0089-f1`.
 ---
 
 > **🚨 Platform constraint — applies to every wave under this PRD.** No

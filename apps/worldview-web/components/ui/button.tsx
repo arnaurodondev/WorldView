@@ -29,7 +29,7 @@ const buttonVariants = cva(
   // PLAN-0059 W0 F-VISUAL-027: replaced disabled:opacity-50 with explicit disabled
   // tokens. opacity-50 yields ~3.5:1 contrast on text-foreground (FAILS WCAG AA).
   // Explicit tokens desaturate but stay readable at 5.5:1 (passes AA).
-  "inline-flex items-center justify-center gap-2 whitespace-nowrap rounded-[2px] text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 ring-offset-background disabled:pointer-events-none disabled:bg-[hsl(var(--disabled-bg))] disabled:text-[hsl(var(--disabled-foreground))] [&_svg]:pointer-events-none [&_svg]:size-4 [&_svg]:shrink-0",
+  "inline-flex items-center justify-center gap-2 whitespace-nowrap rounded-[2px] text-[14px] font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 ring-offset-background disabled:pointer-events-none disabled:bg-[hsl(var(--disabled-bg))] disabled:text-[hsl(var(--disabled-foreground))] [&_svg]:pointer-events-none [&_svg]:size-4 [&_svg]:shrink-0",
   {
     variants: {
       variant: {
@@ -69,7 +69,7 @@ const buttonVariants = cva(
       density: {
         compact: "h-7 px-3 text-[11px] [&_svg]:size-3",
         default: "",
-        comfortable: "h-10 px-5 text-sm",
+        comfortable: "h-10 px-5 text-[14px]",
       },
     },
     defaultVariants: {

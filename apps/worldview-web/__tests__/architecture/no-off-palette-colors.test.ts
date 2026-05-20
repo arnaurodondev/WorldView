@@ -302,9 +302,11 @@ function findF1Offences(): { pattern: string; file: string; line: number; text: 
   return offences;
 }
 
-// PR-G will switch `.skip` to `.only` momentarily for verification, then to
-// the bare describe block to lock it in.
-describe.skip("PRD-0089 F1 lockdown: terminal-grade visual contract", () => {
+// F1.1 amendment (2026-05-20): mechanical purges PR-H/I + arch-test additions
+// closed every remaining offence — the lockdown is now enforcing.  Any future
+// drift (text-sm, shadow-md, gap-6, transition-all, etc.) fails this test in
+// CI and must be cleaned up before merge.
+describe("PRD-0089 F1 lockdown: terminal-grade visual contract", () => {
   it("has zero violations of the 7 forbidden patterns post-cleanup", () => {
     const offences = findF1Offences();
     if (offences.length > 0) {

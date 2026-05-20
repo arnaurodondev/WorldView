@@ -70,7 +70,7 @@ const SelectTrigger = React.forwardRef<
       // Base layout: flex row, vertically centred, full-width by default
       "flex h-[36px] w-full items-center justify-between rounded-[2px]",
       // Visual style: matches Input component (border-border, bg-muted)
-      "border border-border bg-muted px-3 py-2 text-sm",
+      "border border-border bg-muted px-3 py-2 text-[14px]",
       // Text: foreground colour so selected value is readable
       "text-foreground",
       // Focus ring: Radix applies data-[state=open] so we use focus-visible
@@ -247,7 +247,7 @@ const SelectItem = React.forwardRef<
     className={cn(
       // Layout: full-width row with space for the check indicator on the left
       "relative flex w-full cursor-default select-none items-center",
-      "rounded-[2px] py-1.5 pl-8 pr-2 text-sm outline-none",
+      "rounded-[2px] py-1.5 pl-8 pr-2 text-[14px] outline-none",
       // Interactive states
       "focus:bg-muted focus:text-foreground",
       "data-[disabled]:pointer-events-none data-[disabled]:opacity-50",

@@ -163,7 +163,7 @@ export function HotkeyCheatSheet() {
         {/* Header */}
         <div className="flex items-center justify-between gap-3 border-b border-border px-4 py-2.5">
           <div className="flex flex-col">
-            <h2 className="text-sm font-semibold">Keyboard shortcuts</h2>
+            <h2 className="text-[14px] font-semibold">Keyboard shortcuts</h2>
             <p className="text-[10px] text-muted-foreground">
               Auto-derived from the live registry — every shortcut listed here is wired.
             </p>

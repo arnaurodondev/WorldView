@@ -202,7 +202,7 @@ export function ThreadItem({
             className={cn(
               "w-full rounded-[2px] border border-primary/40 bg-card",
               // WHY text-[11px]: sidebar thread items are data rows — must use the
-              // 11px terminal data density, not the 14px consumer-app text-sm.
+              // 11px terminal data density, not the 14px consumer-app text-[14px].
               "px-1.5 py-0.5 text-[11px] text-foreground",
               "focus:outline-none focus:ring-1 focus:ring-primary",
             )}
@@ -211,7 +211,7 @@ export function ThreadItem({
           />
         ) : (
           // WHY text-[11px]: thread titles are data rows in the sidebar — terminal
-          // density rule mandates 11px for all data text. text-sm (14px) is a
+          // density rule mandates 11px for all data text. text-[14px] (14px) is a
           // consumer chatbot convention that breaks Bloomberg-grade density.
           <p
             className={`truncate text-[11px] ${

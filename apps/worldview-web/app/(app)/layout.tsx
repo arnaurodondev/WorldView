@@ -232,7 +232,7 @@ export default function AppLayout({ children }: AppLayoutProps) {
         <div className="flex flex-col items-center gap-3">
           {/* Animated ring spinner — minimal, no branding needed at this stage */}
           <div className="h-8 w-8 animate-spin rounded-full border-2 border-border border-t-primary" />
-          <p className="text-sm text-muted-foreground">Initializing session…</p>
+          <p className="text-[14px] text-muted-foreground">Initializing session…</p>
         </div>
       </div>
     );

@@ -10,9 +10,9 @@
  * score; clicking scrolls to the matching anchor in the message body.
  *
  * COLOUR THRESHOLDS (per task spec):
- *   score ≥ 0.7  → green (text-positive — high confidence)
- *   0.4–0.7      → amber (bg-warning — medium)
- *   < 0.4        → red   (text-negative — weak)
+ * score ≥ 0.7 → green (text-positive — high confidence)
+ * 0.4–0.7 → amber (bg-warning — medium)
+ * < 0.4 → red (text-negative — weak)
  *
  * WHY use design tokens (positive/warning/negative): hard-coded HEX would
  * break dark-theme parity. The Midnight Pro palette already has these.
@@ -33,15 +33,15 @@ import { cn } from "@/lib/utils";
 // ── Props ─────────────────────────────────────────────────────────────────────
 
 export interface CitationBarProps {
-  /** Citations from the message — each becomes one bar segment. */
-  citations: Citation[];
-  /**
-   * The DOM id of the anchor target this bar links to. Each segment uses the
-   * pattern `${anchorPrefix}-${index}` so the message body's [N] markers must
-   * match. Wave 4 message renderer pre-emits matching ids when it finds [N]
-   * tokens.
-   */
-  anchorPrefix: string;
+ /** Citations from the message — each becomes one bar segment. */
+ citations: Citation[];
+ /**
+ * The DOM id of the anchor target this bar links to. Each segment uses the
+ * pattern `${anchorPrefix}-${index}` so the message body's [N] markers must
+ * match. Wave 4 message renderer pre-emits matching ids when it finds [N]
+ * tokens.
+ */
+ anchorPrefix: string;
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -55,26 +55,26 @@ export interface CitationBarProps {
  * jump.
  */
 function scoreToClasses(score: number): { bg: string; outline: string; label: string } {
-  if (score >= 0.7) {
-    return {
-      bg: "bg-positive/70",
-      outline: "hover:ring-positive",
-      label: "high",
-    };
-  }
-  if (score >= 0.4) {
-    return {
-      // WHY amber/warning: middle band — neither failing nor strong.
-      bg: "bg-warning/70",
-      outline: "hover:ring-warning",
-      label: "medium",
-    };
-  }
-  return {
-    bg: "bg-negative/70",
-    outline: "hover:ring-negative",
-    label: "low",
-  };
+ if (score >= 0.7) {
+ return {
+ bg: "bg-positive/70",
+ outline: "hover:ring-positive",
+ label: "high",
+ };
+ }
+ if (score >= 0.4) {
+ return {
+ // WHY amber/warning: middle band — neither failing nor strong.
+ bg: "bg-warning/70",
+ outline: "hover:ring-warning",
+ label: "medium",
+ };
+ }
+ return {
+ bg: "bg-negative/70",
+ outline: "hover:ring-negative",
+ label: "low",
+ };
 }
 
 // ── Component ─────────────────────────────────────────────────────────────────
@@ -93,80 +93,80 @@ function scoreToClasses(score: number): { bg: string; outline: string; label: st
  * coding is still legible against a dark background.
  */
 export function CitationBar({ citations, anchorPrefix }: CitationBarProps) {
-  if (citations.length === 0) return null;
+ if (citations.length === 0) return null;
 
-  return (
-    <div
-      // WHY role=group + aria-label: assistive tech announces this as a unit.
-      role="group"
-      aria-label="Citation confidence"
-      // WHY flex-wrap (not horizontal scroll): for >25 citations a wrap reads
-      // as "another row of segments below" which mirrors how dense citation
-      // lists are presented in PDF reports. Horizontal scroll would hide the
-      // long tail entirely until the user scrolls the bar — easy to miss.
-      className="mt-2 flex flex-wrap items-stretch gap-px"
-    >
-      {citations.map((c, i) => {
-        const score = c.relevance_score ?? 0;
-        const { bg, outline, label } = scoreToClasses(score);
-        const anchorId = `${anchorPrefix}-${i + 1}`;
-        return (
-          <a
-            key={`${anchorPrefix}-${c.article_id}-${i}`}
-            href={`#${anchorId}`}
-            // WHY use safeExternalUrl in the title only when we have one: the
-            // anchor href targets the in-page id; the title shows the source URL
-            // for context if present.
-            title={`[${i + 1}] ${c.title} — ${c.source} — ${(score * 100).toFixed(0)}% (${label})`}
-            // WHY data-* attribute: makes the segment programmatically findable
-            // in tests without depending on the colour class name.
-            data-citation-index={i + 1}
-            data-citation-score={score.toFixed(2)}
-            data-citation-band={label}
-            // WHY onClick that does nothing: anchors with hashes already trigger
-            // the browser's native scrollIntoView for matching #id targets in
-            // the same document. We rely on that — no explicit JS needed.
-            onClick={(e) => {
-              // Prevent default only when the target id genuinely doesn't exist
-              // (avoids dirtying the URL bar with a useless hash).
-              const target = document.getElementById(anchorId);
-              if (!target) {
-                e.preventDefault();
-                return;
-              }
-              // WHY scrollIntoView({block:"nearest"}): the message bubble is
-              // typically already visible — we just want to nudge the [N]
-              // marker into view if it's been scrolled out.
-              target.scrollIntoView({ behavior: "smooth", block: "nearest" });
-            }}
-            // QA-iter1 MIN-1: ``min-w-[8px]`` keeps each segment legible even
-            // when the bar is overcrowded. Combined with ``flex-wrap`` on the
-            // parent, surplus segments overflow to a second row instead of
-            // collapsing to invisible slivers.
-            className={cn(
-              "h-1.5 min-w-[8px] flex-1 rounded-[2px]",
-              bg,
-              outline,
-              "transition-shadow hover:ring-1 focus:ring-1 focus:outline-none",
-            )}
-          >
-            {/* Visually hidden text for screen readers — the title attribute
-                handles desktop tooltips, but SR users get the same info here. */}
-            <span className="sr-only">
-              Citation {i + 1}: {c.title} — {(score * 100).toFixed(0)}% relevance ({label})
-            </span>
-          </a>
-        );
-      })}
-      {/*
-       * NOTE: we deliberately do NOT add hidden anchor links to the source
-       * URLs here — the visible CitationList component (rendered by the
-       * chat page below the message bubble) already exposes those, and
-       * duplicating them inside this aria-group inflates the link role
-       * count for screen readers + test queries.
-       */}
-    </div>
-  );
+ return (
+ <div
+ // WHY role=group + aria-label: assistive tech announces this as a unit.
+ role="group"
+ aria-label="Citation confidence"
+ // WHY flex-wrap (not horizontal scroll): for >25 citations a wrap reads
+ // as "another row of segments below" which mirrors how dense citation
+ // lists are presented in PDF reports. Horizontal scroll would hide the
+ // long tail entirely until the user scrolls the bar — easy to miss.
+ className="mt-2 flex flex-wrap items-stretch gap-px"
+ >
+ {citations.map((c, i) => {
+ const score = c.relevance_score ?? 0;
+ const { bg, outline, label } = scoreToClasses(score);
+ const anchorId = `${anchorPrefix}-${i + 1}`;
+ return (
+ <a
+ key={`${anchorPrefix}-${c.article_id}-${i}`}
+ href={`#${anchorId}`}
+ // WHY use safeExternalUrl in the title only when we have one: the
+ // anchor href targets the in-page id; the title shows the source URL
+ // for context if present.
+ title={`[${i + 1}] ${c.title} — ${c.source} — ${(score * 100).toFixed(0)}% (${label})`}
+ // WHY data-* attribute: makes the segment programmatically findable
+ // in tests without depending on the colour class name.
+ data-citation-index={i + 1}
+ data-citation-score={score.toFixed(2)}
+ data-citation-band={label}
+ // WHY onClick that does nothing: anchors with hashes already trigger
+ // the browser's native scrollIntoView for matching #id targets in
+ // the same document. We rely on that — no explicit JS needed.
+ onClick={(e) => {
+ // Prevent default only when the target id genuinely doesn't exist
+ // (avoids dirtying the URL bar with a useless hash).
+ const target = document.getElementById(anchorId);
+ if (!target) {
+ e.preventDefault();
+ return;
+ }
+ // WHY scrollIntoView({block:"nearest"}): the message bubble is
+ // typically already visible — we just want to nudge the [N]
+ // marker into view if it's been scrolled out.
+ target.scrollIntoView({ behavior: "smooth", block: "nearest" });
+ }}
+ // QA-iter1 MIN-1: ``min-w-[8px]`` keeps each segment legible even
+ // when the bar is overcrowded. Combined with ``flex-wrap`` on the
+ // parent, surplus segments overflow to a second row instead of
+ // collapsing to invisible slivers.
+ className={cn(
+ "h-1.5 min-w-[8px] flex-1 rounded-[2px]",
+ bg,
+ outline,
+ "hover:ring-1 focus:ring-1 focus:outline-none",
+ )}
+ >
+ {/* Visually hidden text for screen readers — the title attribute
+ handles desktop tooltips, but SR users get the same info here. */}
+ <span className="sr-only">
+ Citation {i + 1}: {c.title} — {(score * 100).toFixed(0)}% relevance ({label})
+ </span>
+ </a>
+ );
+ })}
+ {/*
+ * NOTE: we deliberately do NOT add hidden anchor links to the source
+ * URLs here — the visible CitationList component (rendered by the
+ * chat page below the message bubble) already exposes those, and
+ * duplicating them inside this aria-group inflates the link role
+ * count for screen readers + test queries.
+ */}
+ </div>
+ );
 }
 
 // ── Re-export helper for tests ───────────────────────────────────────────────
@@ -176,7 +176,7 @@ export function CitationBar({ citations, anchorPrefix }: CitationBarProps) {
  * without rendering a tree. Mirrors `scoreToClasses(...).label`.
  */
 export function scoreBand(score: number): "high" | "medium" | "low" {
-  if (score >= 0.7) return "high";
-  if (score >= 0.4) return "medium";
-  return "low";
+ if (score >= 0.7) return "high";
+ if (score >= 0.4) return "medium";
+ return "low";
 }

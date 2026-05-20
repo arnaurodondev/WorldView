@@ -276,7 +276,7 @@ export function GlobalSearch() {
                       className="cursor-pointer"
                     >
                       <div className="flex w-full items-center gap-2">
-                        {/* WHY text-[11px] (was text-sm=14px): terminal density — search results
+                        {/* WHY text-[11px] (was text-[14px]=14px): terminal density — search results
                             must match the 11px chrome standard; 14px reads as consumer-app */}
                         <span className="shrink-0 font-mono text-[11px] font-medium tabular-nums text-foreground">
                           {recent.ticker}

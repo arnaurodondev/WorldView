@@ -51,7 +51,7 @@ export function DifferentiatorsSection() {
           </p>
           <h2
             id="differentiators-heading"
-            className="text-3xl font-semibold tracking-tight text-foreground sm:text-4xl"
+            className="text-[30px] font-semibold tracking-tight text-foreground sm:text-[36px]"
           >
             Three things every other terminal gets wrong.
           </h2>
@@ -69,10 +69,10 @@ export function DifferentiatorsSection() {
                   className="mb-5 h-5 w-5 text-primary"
                   aria-hidden="true"
                 />
-                <h3 className="mb-3 text-base font-semibold text-foreground">
+                <h3 className="mb-3 text-[16px] font-semibold text-foreground">
                   {d.title}
                 </h3>
-                <p className="mb-5 flex-1 text-sm leading-relaxed text-muted-foreground">
+                <p className="mb-5 flex-1 text-[14px] leading-relaxed text-muted-foreground">
                   {d.body}
                 </p>
                 <p className="border-t border-border/40 pt-3 font-mono text-[10px] uppercase tracking-wider text-muted-foreground/70">

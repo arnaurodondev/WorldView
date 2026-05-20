@@ -218,7 +218,7 @@ export function NPSPrompt({ open, onOpenChange, surface }: NPSPromptProps) {
                 // glyph is the same width.
                 className={[
                   // PLAN-0052 Wave E QA-iter1 a11y/M-3: motion-safe transition.
-                  "h-[36px] w-9 rounded-[2px] border text-sm font-mono tabular-nums motion-safe:transition-colors",
+                  "h-[36px] w-9 rounded-[2px] border text-[14px] font-mono tabular-nums motion-safe:transition-colors",
                   // Focus ring so keyboard users see the active radio.
                   "focus:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-2 focus-visible:ring-offset-background",
                   selected
@@ -245,7 +245,7 @@ export function NPSPrompt({ open, onOpenChange, surface }: NPSPromptProps) {
             value={comment}
             onChange={(e) => setComment(e.target.value.slice(0, MAX_COMMENT_LEN))}
             rows={3}
-            className="mt-1 w-full rounded-[2px] border border-border bg-background p-2 text-sm focus:outline-none focus:ring-1 focus:ring-primary"
+            className="mt-1 w-full rounded-[2px] border border-border bg-background p-2 text-[14px] focus:outline-none focus:ring-1 focus:ring-primary"
             placeholder="What worked, what didn't, what's missing…"
           />
           <span className="mt-1 block text-right text-[10px] tabular-nums text-muted-foreground">

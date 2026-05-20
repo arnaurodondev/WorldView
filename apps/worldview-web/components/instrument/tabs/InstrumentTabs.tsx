@@ -51,7 +51,7 @@ export function InstrumentTabs({ activeTab, onTabChange }: InstrumentTabsProps) 
   );
 
   return (
-    <div className="flex h-8 items-end gap-6 border-b border-border px-3">
+    <div className="flex h-8 items-end gap-4 border-b border-border px-3">
       {TABS.map((t) => {
         const isActive = activeTab === t.key;
         // WHY border-b-2 on both branches: keeps the baseline height

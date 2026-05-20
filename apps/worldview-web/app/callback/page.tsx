@@ -184,11 +184,11 @@ function CallbackContent() {
     return (
       <div className="flex min-h-screen flex-col items-center justify-center bg-background px-4">
         <div className="w-full max-w-sm space-y-4">
-          <h1 className="text-lg font-semibold text-destructive">{copy.title}</h1>
-          <p className="text-sm text-muted-foreground">{copy.description}</p>
+          <h1 className="text-[18px] font-semibold text-destructive">{copy.title}</h1>
+          <p className="text-[14px] text-muted-foreground">{copy.description}</p>
           <a
             href="/login"
-            className="block text-sm font-medium text-primary underline-offset-4 hover:underline"
+            className="block text-[14px] font-medium text-primary underline-offset-4 hover:underline"
           >
             Try again
           </a>
@@ -202,7 +202,7 @@ function CallbackContent() {
     <div className="flex min-h-screen items-center justify-center bg-background">
       <div className="flex flex-col items-center gap-3">
         <div className="h-8 w-8 animate-spin rounded-full border-2 border-border border-t-primary" />
-        <p className="text-sm text-muted-foreground">Completing sign-in…</p>
+        <p className="text-[14px] text-muted-foreground">Completing sign-in…</p>
       </div>
     </div>
   );
@@ -224,7 +224,7 @@ export default function CallbackPage() {
         <div className="flex min-h-screen items-center justify-center bg-background">
           <div className="flex flex-col items-center gap-3">
             <div className="h-8 w-8 animate-spin rounded-full border-2 border-border border-t-primary" />
-            <p className="text-sm text-muted-foreground">Completing sign-in…</p>
+            <p className="text-[14px] text-muted-foreground">Completing sign-in…</p>
           </div>
         </div>
       }

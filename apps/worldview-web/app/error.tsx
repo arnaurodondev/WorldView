@@ -76,10 +76,10 @@ export default function ErrorPage({ error, reset }: ErrorPageProps) {
           <p className="text-xs font-mono text-muted-foreground tracking-widest uppercase">
             Something went wrong
           </p>
-          <h1 className="text-2xl font-semibold text-foreground">
+          <h1 className="text-[24px] font-semibold text-foreground">
             Unexpected error
           </h1>
-          <p className="text-sm text-muted-foreground">
+          <p className="text-[14px] text-muted-foreground">
             An unexpected error occurred. This has been logged automatically.
             You can try again or return to the dashboard.
           </p>
@@ -97,7 +97,7 @@ export default function ErrorPage({ error, reset }: ErrorPageProps) {
             // corners across the platform; the 6px curve was a consumer-app
             // throwback. Aligns with the design system rule that all radii
             // be 2px (or rounded-full for avatars).
-            className="inline-flex items-center justify-center rounded-[2px] bg-primary px-5 py-2 text-sm font-medium text-primary-foreground transition-colors hover:bg-primary/90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            className="inline-flex items-center justify-center rounded-[2px] bg-primary px-5 py-2 text-[14px] font-medium text-primary-foreground transition-colors hover:bg-primary/90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
           >
             Try again
           </button>

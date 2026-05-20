@@ -82,7 +82,7 @@ export function FAQAccordion() {
           </p>
           <h2
             id="faq-heading"
-            className="text-3xl font-semibold tracking-tight text-foreground sm:text-4xl"
+            className="text-[30px] font-semibold tracking-tight text-foreground sm:text-[36px]"
           >
             Everything else you might be wondering.
           </h2>
