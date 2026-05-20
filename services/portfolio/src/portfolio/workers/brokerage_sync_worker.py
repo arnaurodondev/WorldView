@@ -18,7 +18,6 @@ from __future__ import annotations
 
 import asyncio
 import time
-import urllib.parse
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from typing import TYPE_CHECKING
@@ -36,7 +35,12 @@ from portfolio.application.use_cases.upsert_holdings_from_snapshot import (
 )
 from portfolio.domain.entities.brokerage_sync_error import BrokerageTransactionSyncError
 from portfolio.domain.enums import SyncErrorType, TransactionDirection, TransactionType
-from portfolio.domain.errors import BrokerageApiError, IdempotencyConflictError, InstrumentResolutionTransientError
+from portfolio.domain.errors import (
+    BrokerageApiError,
+    BrokerageSyncSymbolNotFoundError,
+    IdempotencyConflictError,
+    InstrumentResolutionTransientError,
+)
 from portfolio.infrastructure.db.unit_of_work import SqlAlchemyUnitOfWork
 from portfolio.infrastructure.metrics.prometheus import (
     BROKERAGE_SYNC_CYCLE_DURATION,
@@ -48,6 +52,7 @@ if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
     from portfolio.application.ports.brokerage_client import IBrokerageClient, SnapTradeActivity, SnapTradePosition
+    from portfolio.application.ports.instrument_lookup_client import IInstrumentLookupClient
     from portfolio.config import Settings
     from portfolio.domain.entities.brokerage_connection import BrokerageConnection
     from portfolio.domain.entities.instrument import InstrumentRef
@@ -110,12 +115,18 @@ class BrokerageTransactionSyncWorker:
         brokerage_client: IBrokerageClient,
         settings: Settings,
         cipher: Fernet | None = None,
+        instrument_lookup: IInstrumentLookupClient | None = None,
     ) -> None:
         self._session_factory = session_factory
         self._brokerage_client = brokerage_client
         self._settings = settings
         self._cipher = cipher
         self._http_client: httpx.AsyncClient | None = None
+        # PRD-0089 F2 §4.4 — single canonical symbol→instrument_id resolver.
+        # ``None`` means "construct one lazily from the worker's httpx client".
+        # Tests inject a fake directly; production wires HttpInstrumentLookupClient
+        # in main() once the shared httpx client is available.
+        self._instrument_lookup: IInstrumentLookupClient | None = instrument_lookup
 
     # ── Public entry points ───────────────────────────────────────────────────
 
@@ -127,6 +138,20 @@ class BrokerageTransactionSyncWorker:
         )
         async with httpx.AsyncClient(timeout=10.0, headers=_system_jwt_headers()) as http_client:
             self._http_client = http_client
+            # If no lookup client was injected, build the production HTTP adapter
+            # against the shared httpx client. Tests inject a fake at __init__ time
+            # so this branch is a no-op there. Constructed here (not in __init__)
+            # so the adapter shares the same connection pool / auth headers as the
+            # rest of the worker.
+            if self._instrument_lookup is None:
+                from portfolio.infrastructure.market_data.instrument_lookup_client import (
+                    HttpInstrumentLookupClient,
+                )
+
+                self._instrument_lookup = HttpInstrumentLookupClient(
+                    http=http_client,
+                    market_data_url=self._settings.market_data_service_url,
+                )
             while True:
                 # PLAN-0052 platform-QA round 4 (2026-05-01): bounded
                 # exponential backoff retry. Previously ONE transient
@@ -308,7 +333,7 @@ class BrokerageTransactionSyncWorker:
                 except InstrumentResolutionTransientError:
                     # Skip transient resolution failures — next sync will retry.
                     continue
-                if instrument is None:
+                except BrokerageSyncSymbolNotFoundError:
                     # Unknown symbol — skip; we don't error-record positions
                     # the same way we do activities (positions are an overview).
                     continue
@@ -368,13 +393,14 @@ class BrokerageTransactionSyncWorker:
 
         # 3. Instrument resolution
         #
-        # Two distinct failure modes must be told apart (F-007):
-        #   a) Genuine 404 → market-data does not know this symbol → UNKNOWN_INSTRUMENT
-        #   b) S3 network exception or 5xx → transient outage → API_ERROR
+        # PRD-0089 F2 §4.4 — single canonical S2 lookup. Two distinct failure
+        # modes still need to be told apart (F-007):
+        #   a) Genuine 404 → S2 does not know this symbol → UNKNOWN_INSTRUMENT
+        #   b) Network exception or 5xx → transient outage → API_ERROR
         #
-        # _resolve_instrument() returns None only for (a); it raises
-        # InstrumentResolutionTransientError for (b).  This prevents a brief
-        # S3 outage from flooding brokerage_sync_errors with UNKNOWN_INSTRUMENT
+        # _resolve_instrument() raises BrokerageSyncSymbolNotFoundError for (a)
+        # and InstrumentResolutionTransientError for (b). This prevents a brief
+        # S2 outage from flooding brokerage_sync_errors with UNKNOWN_INSTRUMENT
         # records that look identical to real missing instruments.
         try:
             instrument = await self._resolve_instrument(activity.symbol, uow)
@@ -390,8 +416,7 @@ class BrokerageTransactionSyncWorker:
             )
             BROKERAGE_SYNC_TRANSACTIONS_TOTAL.labels(status="skipped", error_type="api_error").inc()
             return
-
-        if instrument is None:
+        except BrokerageSyncSymbolNotFoundError:
             await uow.brokerage_sync_errors.save(
                 BrokerageTransactionSyncError(
                     id=new_uuid(),
@@ -454,61 +479,45 @@ class BrokerageTransactionSyncWorker:
         self,
         symbol: str,
         uow: SqlAlchemyUnitOfWork,  # type: ignore[type-arg]
-    ) -> InstrumentRef | None:
-        """Resolve instrument by symbol — first DB, then S3 (market-data) fallback."""
-        # Primary: local DB lookup (case-insensitive)
-        instrument = await uow.instruments.get_by_symbol(symbol)
-        if instrument is not None:
-            return instrument
+    ) -> InstrumentRef:
+        """Resolve a SnapTrade symbol to a canonical ``InstrumentRef`` via S2.
 
-        # Fallback: call market-data service (S3)
-        if self._http_client is None:
-            return None
+        PRD-0089 F2 §4.4 — single canonical path. The legacy DB-first +
+        S3-fallback dual-path was deleted along with the ``InstrumentRef.entity_id``
+        bridge-field branch: post-F2 the canonical UUID lives in S2's
+        ``instruments`` table (M-017 invariant: ``canonical_entities.entity_id ==
+        instruments.id`` for tradable kinds).
 
-        # R-002: URL-encode symbol — SnapTrade tickers can contain '.', '/', etc.
-        encoded_symbol = urllib.parse.quote(symbol, safe="")
-        try:
-            response = await self._http_client.get(
-                f"{self._settings.market_data_service_url}/api/v1/instruments/symbol/{encoded_symbol}",
-            )
-        except Exception as exc:
-            # Network error (timeout, DNS failure, connection refused, etc.) —
-            # raise a transient error so the caller records API_ERROR, not
-            # UNKNOWN_INSTRUMENT.  The instrument may be perfectly valid; S3 is
-            # just temporarily unreachable.
+        Behaviour contract:
+
+        * S2 returns 200 → return the populated ``InstrumentRef``.
+        * S2 returns 404 → raise ``BrokerageSyncSymbolNotFoundError``. The caller
+          maps this to a ``SyncErrorType.UNKNOWN_INSTRUMENT`` row and continues.
+        * Anything else (timeout, 5xx, malformed payload) → propagate
+          ``InstrumentResolutionTransientError`` from the lookup client. The
+          caller maps this to ``SyncErrorType.API_ERROR`` so genuine 404s and
+          transient outages remain distinguishable in the sync-error table.
+
+        The ``uow`` parameter is unused (kept on the signature so existing call
+        sites continue to compile while wave F2 is in flight) — instrument
+        persistence is owned by the InstrumentDiscoveredConsumer, not by the
+        sync worker. The worker is a pure read-through resolver.
+        """
+        if self._instrument_lookup is None:
+            # Defensive: this should never happen in production (run() wires the
+            # client before sync_cycle is called) and tests inject a fake
+            # explicitly. We surface the misconfiguration as a transient error so
+            # the cycle skips rather than hard-crashes the worker process.
             raise InstrumentResolutionTransientError(
-                f"Transient instrument resolution failure for symbol: {symbol!r} "
-                f"— market-data service unreachable ({type(exc).__name__})",
-            ) from exc
-
-        if response.status_code == 404:
-            # S3 confirmed the symbol does not exist on this platform → genuine unknown.
-            return None
-
-        if response.status_code != 200:
-            # 5xx / 429 / etc. — transient infrastructure failure, not a genuine 404.
-            raise InstrumentResolutionTransientError(
-                f"Transient instrument resolution failure for symbol: {symbol!r} "
-                f"— market-data service unavailable (HTTP {response.status_code})",
+                f"Instrument-lookup client not configured for symbol: {symbol!r}",
             )
 
-        data = response.json()
-        from common.ids import new_uuid  # type: ignore[import-untyped]
-        from common.time import utc_now  # type: ignore[import-untyped]
-        from portfolio.domain.entities.instrument import InstrumentRef
-
-        instrument = InstrumentRef(
-            id=new_uuid(),
-            symbol=data.get("symbol", symbol),
-            exchange=data.get("exchange", ""),
-            name=data.get("name"),
-            currency=data.get("currency"),
-            asset_class=data.get("asset_class"),
-            entity_id=None,
-            source_event_id=new_uuid(),  # placeholder — no Kafka event backing S3 resolution
-            synced_at=utc_now(),
-        )
-        instrument = await uow.instruments.upsert(instrument)
+        instrument = await self._instrument_lookup.lookup_by_ticker(symbol)
+        if instrument is None:
+            # S2 confirmed the symbol does not exist on this platform → genuine
+            # unknown. Raise the dedicated exception so the caller can route the
+            # outcome to UNKNOWN_INSTRUMENT without inspecting None semantics.
+            raise BrokerageSyncSymbolNotFoundError(symbol=symbol)
         return instrument
 
 

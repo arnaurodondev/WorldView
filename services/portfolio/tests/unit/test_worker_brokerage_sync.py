@@ -1,21 +1,21 @@
-"""Unit tests for BrokerageTransactionSyncWorker (PRD-0022 §6.5)."""
+"""Unit tests for BrokerageTransactionSyncWorker (PRD-0022 §6.5 + PRD-0089 F2 §4.4)."""
 
 from __future__ import annotations
 
 from datetime import UTC, datetime
 from decimal import Decimal
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, patch
 from uuid import uuid4
 
-import httpx
 import pytest
 from portfolio.application.ports.brokerage_client import SnapTradeActivity
 from portfolio.domain.entities.brokerage_connection import BrokerageConnection
 from portfolio.domain.entities.instrument import InstrumentRef
 from portfolio.domain.enums import ConnectionStatus, SyncErrorType
+from portfolio.domain.errors import BrokerageSyncSymbolNotFoundError
 
 from common.time import utc_now  # type: ignore[import-untyped]
-from tests.unit.fakes import FakeBrokerageClient, FakeUnitOfWork
+from tests.unit.fakes import FakeBrokerageClient, FakeInstrumentLookupClient, FakeUnitOfWork
 
 pytestmark = pytest.mark.unit
 
@@ -70,13 +70,36 @@ def _make_instrument(symbol: str = "AAPL") -> InstrumentRef:
     )
 
 
-def _make_worker(uow: FakeUnitOfWork, broker: FakeBrokerageClient | None = None) -> tuple:
-    """Return (worker, session_factory_mock) with pre-wired fake UoW."""
+def _make_worker(
+    uow: FakeUnitOfWork,
+    broker: FakeBrokerageClient | None = None,
+    instrument_lookup: FakeInstrumentLookupClient | None = None,
+) -> tuple:
+    """Return (worker, session_factory_mock) with pre-wired fake UoW.
+
+    PRD-0089 F2 §4.4 — the worker now depends on an injected
+    ``IInstrumentLookupClient`` (single canonical S2 lookup, replacing the
+    legacy DB-first + S3-fallback dual path). Tests that don't care about the
+    resolution behaviour get a default fake seeded with AAPL/TSLA/MSFT/GOOG so
+    the standard activity flow still resolves.
+    """
     from portfolio.config import Settings
     from portfolio.workers.brokerage_sync_worker import BrokerageTransactionSyncWorker
 
     settings = Settings()  # type: ignore[call-arg]
     broker = broker or FakeBrokerageClient()
+
+    # Default lookup: a small dictionary covering the symbols the existing test
+    # helpers use. Specific tests override this via the ``instrument_lookup``
+    # arg when they need to exercise 404 / transient failures.
+    if instrument_lookup is None:
+        # Reuse the same instrument ids as the FakeUnitOfWork's instrument
+        # store when present, so cross-checks (e.g. transactions referencing
+        # instrument.id) line up. Falls back to fresh ids when uow is empty.
+        seed: dict[str, InstrumentRef] = {}
+        for inst in uow.instruments._store.values():  # type: ignore[attr-defined]
+            seed[inst.symbol.upper()] = inst
+        instrument_lookup = FakeInstrumentLookupClient(instruments=seed)
 
     # We pass a sentinel for the session_factory — the worker's sync_cycle and
     # _sync_connection methods normally create SqlAlchemyUnitOfWork from it.
@@ -87,6 +110,7 @@ def _make_worker(uow: FakeUnitOfWork, broker: FakeBrokerageClient | None = None)
         brokerage_client=broker,
         settings=settings,
         cipher=None,
+        instrument_lookup=instrument_lookup,
     )
     return worker, sentinel
 
@@ -144,7 +168,8 @@ async def test_process_activity_buy_records_transaction() -> None:
 
     conn = _make_connection()
     activity = _make_activity(activity_type="BUY")
-    worker._http_client = None  # disable S3 fallback
+    # PRD-0089 F2 §4.4 — instrument resolution is via the injected
+    # FakeInstrumentLookupClient (seeded by _setup_full_uow). No HTTP shim needed.
 
     await worker._process_activity(conn, activity, uow)  # type: ignore[arg-type]
 
@@ -159,7 +184,8 @@ async def test_process_activity_sell_records_transaction() -> None:
 
     conn = _make_connection()
     activity = _make_activity(activity_type="SELL")
-    worker._http_client = None
+    # PRD-0089 F2 §4.4 — instrument resolution is via the injected
+    # FakeInstrumentLookupClient; no HTTP shim needed.
 
     await worker._process_activity(conn, activity, uow)  # type: ignore[arg-type]
 
@@ -173,7 +199,8 @@ async def test_process_activity_div_records_transaction() -> None:
 
     conn = _make_connection()
     activity = _make_activity(activity_type="DIV")
-    worker._http_client = None
+    # PRD-0089 F2 §4.4 — instrument resolution is via the injected
+    # FakeInstrumentLookupClient; no HTTP shim needed.
 
     await worker._process_activity(conn, activity, uow)  # type: ignore[arg-type]
 
@@ -187,7 +214,8 @@ async def test_process_activity_dividend_alias_records_transaction() -> None:
 
     conn = _make_connection()
     activity = _make_activity(activity_type="DIVIDEND")
-    worker._http_client = None
+    # PRD-0089 F2 §4.4 — instrument resolution is via the injected
+    # FakeInstrumentLookupClient; no HTTP shim needed.
 
     await worker._process_activity(conn, activity, uow)  # type: ignore[arg-type]
 
@@ -204,7 +232,8 @@ async def test_process_activity_unsupported_type_creates_sync_error() -> None:
 
     conn = _make_connection()
     activity = _make_activity(activity_type="TRANSFER")
-    worker._http_client = None
+    # PRD-0089 F2 §4.4 — instrument resolution is via the injected
+    # FakeInstrumentLookupClient; no HTTP shim needed.
 
     await worker._process_activity(conn, activity, uow)  # type: ignore[arg-type]
 
@@ -218,13 +247,20 @@ async def test_process_activity_unsupported_type_creates_sync_error() -> None:
 
 
 async def test_process_activity_unknown_instrument_creates_sync_error() -> None:
-    """Instrument not in DB and S3 returns None → UNKNOWN_INSTRUMENT sync error."""
+    """S2 returns 404 (lookup returns None) → UNKNOWN_INSTRUMENT sync error.
+
+    PRD-0089 F2 §4.4 — the worker now resolves via the single canonical
+    ``IInstrumentLookupClient`` port. An empty fake (no seeded instruments)
+    yields None for every symbol, which the worker maps to
+    ``BrokerageSyncSymbolNotFoundError`` → UNKNOWN_INSTRUMENT row.
+    """
     uow = FakeUnitOfWork()
-    worker, _ = _make_worker(uow)
+    # Explicit empty lookup so the symbol is genuinely unknown.
+    empty_lookup = FakeInstrumentLookupClient(instruments={})
+    worker, _ = _make_worker(uow, instrument_lookup=empty_lookup)
 
     conn = _make_connection()
     activity = _make_activity(activity_type="BUY", symbol="UNKNWN")
-    worker._http_client = None  # no S3 fallback
 
     await worker._process_activity(conn, activity, uow)  # type: ignore[arg-type]
 
@@ -232,6 +268,8 @@ async def test_process_activity_unknown_instrument_creates_sync_error() -> None:
     assert len(errors) == 1
     assert errors[0].error_type == SyncErrorType.UNKNOWN_INSTRUMENT
     assert "UNKNWN" in (errors[0].error_detail or "")
+    # The lookup MUST have been consulted (single canonical path).
+    assert empty_lookup.calls == ["UNKNWN"]
 
 
 # ── _sync_connection: BrokerageApiError marks ERROR ─────────────────────────
@@ -272,7 +310,8 @@ async def test_process_activity_idempotency_conflict_silently_skipped() -> None:
 
     conn = _make_connection()
     activity = _make_activity(activity_type="BUY", txn_id="txn-dup-001")
-    worker._http_client = None
+    # PRD-0089 F2 §4.4 — instrument resolution is via the injected
+    # FakeInstrumentLookupClient; no HTTP shim needed.
 
     # Record same activity twice
     await worker._process_activity(conn, activity, uow)  # type: ignore[arg-type]
@@ -295,7 +334,8 @@ async def test_worker_skips_option_transactions() -> None:
 
     conn = _make_connection()
     activity = _make_activity(activity_type="OPTION_EXERCISE", txn_id="txn-opt-001")
-    worker._http_client = None
+    # PRD-0089 F2 §4.4 — instrument resolution is via the injected
+    # FakeInstrumentLookupClient; no HTTP shim needed.
 
     await worker._process_activity(conn, activity, uow)  # type: ignore[arg-type]
 
@@ -400,25 +440,29 @@ async def _setup_full_uow() -> FakeUnitOfWork:
     return uow
 
 
-# ── _resolve_instrument: S3 404 → genuine UNKNOWN_INSTRUMENT ─────────────────
+# ── _resolve_instrument: S2 lookup → 404 / transient (PRD-0089 F2 §4.4) ──────
+#
+# These tests previously poked the legacy ``_http_client`` to simulate raw HTTP
+# responses from the two-path resolver. Post-F2 the worker depends on the
+# ``IInstrumentLookupClient`` port, so the equivalent assertions now drive the
+# fake client's behaviour directly. The end-to-end outcome (sync-error type)
+# is preserved verbatim — only the seam moved.
 
 
 async def test_resolve_instrument_s3_404_returns_none() -> None:
-    """S3 returns 404 → _resolve_instrument returns None → UNKNOWN_INSTRUMENT sync error.
+    """S2 lookup returns None (HTTP 404) → UNKNOWN_INSTRUMENT sync error.
 
     This is the 'genuine unknown' path: market-data confirmed the symbol
-    does not exist on the platform.  The error must remain UNKNOWN_INSTRUMENT
-    (not API_ERROR) so that operators can identify truly unmappable instruments.
+    does not exist on the platform. The error must remain UNKNOWN_INSTRUMENT
+    (not API_ERROR) so operators can identify truly unmappable instruments.
+
+    Post-F2 the worker raises ``BrokerageSyncSymbolNotFoundError`` internally
+    and maps it to ``SyncErrorType.UNKNOWN_INSTRUMENT`` at the activity boundary.
     """
     uow = FakeUnitOfWork()  # empty — no instruments in DB
-    worker, _ = _make_worker(uow)
-
-    # Provide a mock HTTP client that returns 404
-    mock_http_client = MagicMock()
-    mock_response = MagicMock(spec=httpx.Response)
-    mock_response.status_code = 404
-    mock_http_client.get = AsyncMock(return_value=mock_response)
-    worker._http_client = mock_http_client
+    # Empty lookup → every symbol resolves to None (the 404 outcome).
+    lookup = FakeInstrumentLookupClient(instruments={})
+    worker, _ = _make_worker(uow, instrument_lookup=lookup)
 
     conn = _make_connection()
     activity = _make_activity(activity_type="BUY", symbol="NOTREAL")
@@ -429,27 +473,22 @@ async def test_resolve_instrument_s3_404_returns_none() -> None:
     assert len(errors) == 1
     assert errors[0].error_type == SyncErrorType.UNKNOWN_INSTRUMENT
     assert "NOTREAL" in (errors[0].error_detail or "")
+    assert lookup.calls == ["NOTREAL"]
 
 
-# ── _resolve_instrument: S3 500 → transient → API_ERROR ──────────────────────
+# ── _resolve_instrument: S2 transient (500/503) → API_ERROR ──────────────────
 
 
 async def test_resolve_instrument_s3_500_creates_api_error() -> None:
-    """S3 returns 500 (or any non-404, non-200) → API_ERROR sync error with transient message.
+    """S2 raises transient (formerly HTTP 500) → API_ERROR sync error with transient message.
 
-    A 500 from market-data is a transient infrastructure failure.  Recording it
-    as UNKNOWN_INSTRUMENT would create false positives during outages.  The error
+    A 500 from market-data is a transient infrastructure failure. Recording it
+    as UNKNOWN_INSTRUMENT would create false positives during outages. The error
     type must be API_ERROR and the message must mention 'transient'.
     """
-    uow = FakeUnitOfWork()  # empty — no instruments in DB
-    worker, _ = _make_worker(uow)
-
-    # Provide a mock HTTP client that returns 500
-    mock_http_client = MagicMock()
-    mock_response = MagicMock(spec=httpx.Response)
-    mock_response.status_code = 500
-    mock_http_client.get = AsyncMock(return_value=mock_response)
-    worker._http_client = mock_http_client
+    uow = FakeUnitOfWork()
+    lookup = FakeInstrumentLookupClient(transient_for_symbols={"AAPL"})
+    worker, _ = _make_worker(uow, instrument_lookup=lookup)
 
     conn = _make_connection()
     activity = _make_activity(activity_type="BUY", symbol="AAPL")
@@ -459,22 +498,17 @@ async def test_resolve_instrument_s3_500_creates_api_error() -> None:
     errors = uow.brokerage_sync_errors._store
     assert len(errors) == 1
     assert errors[0].error_type == SyncErrorType.API_ERROR
-    # Message must identify the symbol and signal transient failure
     detail = errors[0].error_detail or ""
     assert "AAPL" in detail
     assert "transient" in detail.lower() or "unavailable" in detail.lower()
 
 
 async def test_resolve_instrument_s3_503_creates_api_error() -> None:
-    """S3 returns 503 → API_ERROR (same as 500 — any non-200/non-404 triggers transient path)."""
+    """S2 transient (formerly HTTP 503) → API_ERROR (same path as 500)."""
     uow = FakeUnitOfWork()
-    worker, _ = _make_worker(uow)
-
-    mock_http_client = MagicMock()
-    mock_response = MagicMock(spec=httpx.Response)
-    mock_response.status_code = 503
-    mock_http_client.get = AsyncMock(return_value=mock_response)
-    worker._http_client = mock_http_client
+    # raise_transient_for_all=True is the shorthand for "S2 is completely down".
+    lookup = FakeInstrumentLookupClient(raise_transient_for_all=True)
+    worker, _ = _make_worker(uow, instrument_lookup=lookup)
 
     conn = _make_connection()
     activity = _make_activity(activity_type="BUY", symbol="TSLA")
@@ -486,22 +520,20 @@ async def test_resolve_instrument_s3_503_creates_api_error() -> None:
     assert errors[0].error_type == SyncErrorType.API_ERROR
 
 
-# ── _resolve_instrument: network exception → transient → API_ERROR ────────────
+# ── _resolve_instrument: S2 network exception → API_ERROR ────────────────────
 
 
 async def test_resolve_instrument_network_exception_creates_api_error() -> None:
-    """Network exception during S3 call → API_ERROR sync error (not UNKNOWN_INSTRUMENT).
+    """Lookup client raises transient (formerly network exception) → API_ERROR.
 
-    Connection refused, DNS failure, timeout etc. are transient failures.
-    The symbol may be perfectly valid — S3 is just temporarily unreachable.
+    Connection refused, DNS failure, timeout etc. are transient failures. The
+    symbol may be perfectly valid — S2 is just temporarily unreachable. The
+    HttpInstrumentLookupClient surfaces all of these as
+    ``InstrumentResolutionTransientError``; tests just trigger that via the fake.
     """
     uow = FakeUnitOfWork()
-    worker, _ = _make_worker(uow)
-
-    # Provide a mock HTTP client that raises a network exception
-    mock_http_client = MagicMock()
-    mock_http_client.get = AsyncMock(side_effect=httpx.ConnectError("Connection refused"))
-    worker._http_client = mock_http_client
+    lookup = FakeInstrumentLookupClient(transient_for_symbols={"MSFT"})
+    worker, _ = _make_worker(uow, instrument_lookup=lookup)
 
     conn = _make_connection()
     activity = _make_activity(activity_type="BUY", symbol="MSFT")
@@ -516,13 +548,10 @@ async def test_resolve_instrument_network_exception_creates_api_error() -> None:
 
 
 async def test_resolve_instrument_timeout_creates_api_error() -> None:
-    """httpx.TimeoutException during S3 call → API_ERROR (transient outage, not genuine unknown)."""
+    """Lookup transient (formerly httpx.TimeoutException) → API_ERROR."""
     uow = FakeUnitOfWork()
-    worker, _ = _make_worker(uow)
-
-    mock_http_client = MagicMock()
-    mock_http_client.get = AsyncMock(side_effect=httpx.TimeoutException("Request timed out"))
-    worker._http_client = mock_http_client
+    lookup = FakeInstrumentLookupClient(transient_for_symbols={"GOOG"})
+    worker, _ = _make_worker(uow, instrument_lookup=lookup)
 
     conn = _make_connection()
     activity = _make_activity(activity_type="SELL", symbol="GOOG")
@@ -532,3 +561,77 @@ async def test_resolve_instrument_timeout_creates_api_error() -> None:
     errors = uow.brokerage_sync_errors._store
     assert len(errors) == 1
     assert errors[0].error_type == SyncErrorType.API_ERROR
+
+
+# ── PRD-0089 F2 §4.4 — new direct-lookup happy + error path tests ────────────
+
+
+async def test_resolve_instrument_direct_lookup_returns_instrument() -> None:
+    """Happy path: S2 lookup returns an InstrumentRef → activity is recorded.
+
+    Post-F2 there is a single resolution call (no DB-first branch). The worker
+    must invoke the lookup client exactly once and use the returned ref's id
+    when recording the transaction.
+    """
+    uow = await _setup_full_uow()
+    # _setup_full_uow seeded AAPL into uow.instruments; _make_worker's default
+    # FakeInstrumentLookupClient mirrors that store, so AAPL resolves cleanly.
+    worker, _ = _make_worker(uow)
+
+    # Snapshot the lookup client off the worker so we can assert on .calls.
+    lookup = worker._instrument_lookup
+    assert isinstance(lookup, FakeInstrumentLookupClient)
+
+    conn = _make_connection()
+    activity = _make_activity(activity_type="BUY", symbol="AAPL")
+
+    await worker._process_activity(conn, activity, uow)  # type: ignore[arg-type]
+
+    # No sync errors — the activity was recorded.
+    assert len(uow.brokerage_sync_errors._store) == 0
+    # Lookup invoked exactly once with the activity's symbol.
+    assert lookup.calls == ["AAPL"]
+
+
+async def test_resolve_instrument_raises_symbol_not_found_for_unknown_ticker() -> None:
+    """Direct test of ``_resolve_instrument`` — unknown symbol → BrokerageSyncSymbolNotFoundError.
+
+    Exercises the contract at the resolver boundary (not through _process_activity).
+    This locks in the F2 §4.4 behaviour that the new exception class is the way
+    callers learn about genuine 404s, replacing the legacy None return value.
+    """
+    uow = FakeUnitOfWork()
+    lookup = FakeInstrumentLookupClient(instruments={})  # nothing resolves
+    worker, _ = _make_worker(uow, instrument_lookup=lookup)
+
+    with pytest.raises(BrokerageSyncSymbolNotFoundError) as excinfo:
+        await worker._resolve_instrument("ZZTOP", uow)  # type: ignore[arg-type]
+
+    assert excinfo.value.symbol == "ZZTOP"
+    assert lookup.calls == ["ZZTOP"]
+
+
+async def test_resolve_instrument_passes_through_lookup_result() -> None:
+    """Direct test: when the lookup returns an InstrumentRef, _resolve_instrument
+    returns it verbatim — no DB upsert, no entity_id bridge consulted.
+
+    Locks in the F2 §4.4 deletion of the legacy two-path branch: the post-F2
+    contract is "S2 is the single source of truth; the worker does not transform
+    or persist its output".
+    """
+    uow = FakeUnitOfWork()
+    seeded = InstrumentRef(
+        id=uuid4(),
+        symbol="NVDA",
+        exchange="NASDAQ",
+        source_event_id=uuid4(),
+        currency="USD",
+    )
+    lookup = FakeInstrumentLookupClient(instruments={"NVDA": seeded})
+    worker, _ = _make_worker(uow, instrument_lookup=lookup)
+
+    result = await worker._resolve_instrument("NVDA", uow)  # type: ignore[arg-type]
+
+    assert result is seeded
+    # No DB upsert side-effect (a side-effect of the deleted S3-fallback branch).
+    assert uow.instruments._store == {}
