@@ -73,7 +73,7 @@ Read in this order:
 | observability | structlog, metrics, tracing | [observability.md](libs/observability.md) |
 | ml-clients | ML model abstraction | [ml-clients.md](libs/ml-clients.md) |
 | prompts | LLM prompt templates | [prompts.md](libs/prompts.md) |
-| tools | LLM tool manifest + capability registry (R29) | (doc pending) |
+| tools | LLM tool manifest + capability registry (R29) | [tools.md](libs/tools.md) |
 
 ---
 

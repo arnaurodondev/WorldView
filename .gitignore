@@ -92,6 +92,8 @@ out.txt
 SF_trip/
 meshx-ai-engineers/
 resumes-*/
+/thesis/
+/tgf_memory/
 
 # Personal files (resume, cover letters) at repo root — not project artifacts
 arnau_*.typ

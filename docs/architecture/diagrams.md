@@ -5,6 +5,72 @@
 
 ---
 
+## High-Level System Overview
+
+```mermaid
+graph TB
+    subgraph "Users"
+        U[Browser / Client]
+    end
+
+    subgraph "Frontend"
+        WEB["worldview-web\nNext.js 15 · :3001"]
+    end
+
+    subgraph "Gateway"
+        GW["S9 · API Gateway\nZitadel JWT → Internal JWT\n:8000"]
+    end
+
+    subgraph "Domain Services"
+        direction TB
+        S1["S1 · Portfolio\n:8001"]
+        S3["S3 · Market Data\n:8003"]
+        S5["S5 · Content Store\n:8005"]
+        S6["S6 · NLP Pipeline\n:8006"]
+        S7["S7 · Knowledge Graph\n:8007"]
+        S8["S8 · RAG/Chat\n:8008"]
+        S10["S10 · Alert\n:8010"]
+    end
+
+    subgraph "Ingestion Workers"
+        S2["S2 · Market Ingestion\n(EODHD, scheduled)"]
+        S4["S4 · Content Ingestion\n(RSS, NewsAPI, tenant uploads)"]
+    end
+
+    subgraph "Data Layer"
+        KAFKA[("Apache Kafka\n22 topics")]
+        PG[("PostgreSQL 16\n11 databases\npgvector · TimescaleDB · AGE")]
+        MINIO[("MinIO\nObject Storage\nbronze / silver / gold")]
+        VALKEY[("Valkey\nCache · Rate Limits\nDedup")]
+    end
+
+    subgraph "External Services"
+        EODHD["EODHD\nMarket Data API"]
+        NEWSAPI["NewsAPI / RSS\nContent Sources"]
+        DEEPINFRA["DeepInfra\nLLM · Embedding"]
+        SNAPTRADE["SnapTrade\nBrokerage OAuth Connector"]
+        ZITADEL["Zitadel\nOIDC Identity Provider\n(optional in dev)"]
+    end
+
+    U --> WEB
+    WEB -->|"HTTPS\n(Next.js rewrite)"| GW
+    GW -->|"X-Internal-JWT"| S1 & S3 & S5 & S6 & S7 & S8 & S10
+    GW -.->|JWKS| ZITADEL
+
+    S2 --> EODHD
+    S4 --> NEWSAPI
+    S1 -.->|"OAuth flow\n(user's broker)"| SNAPTRADE
+
+    S2 & S4 --> MINIO
+    S2 & S3 & S4 & S5 & S6 & S7 & S1 & S8 & S10 --> KAFKA
+    S2 & S3 & S4 & S5 & S6 & S7 & S1 & S8 & S10 --> PG
+    GW & S3 --> VALKEY
+
+    S6 & S7 & S8 --> DEEPINFRA
+```
+
+---
+
 ## Component Diagram
 
 ```mermaid
@@ -90,13 +156,13 @@ flowchart LR
     end
 
     subgraph "Query / Chat Flow"
-        UI[Frontend :5173] -->|REST| GW[S9 · API Gateway :8000]
+        UI[Frontend :3001] -->|REST| GW[S9 · API Gateway :8000]
         GW --> S3_Q[S3] & S5_Q[S5] & S6_Q[S6]
         GW -->|chat| S8[S8 · RAG Service]
         S8 -->|vector search| PG_VEC
         S8 -->|graph traversal| PG_KG
         S8 -->|SQL| PG_MD
-        S8 -->|LLM| LLM[Ollama / Groq]
+        S8 -->|LLM| LLM[DeepInfra / Groq / Ollama]
     end
 ```
 

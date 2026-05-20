@@ -57,12 +57,12 @@ open http://localhost:3001
 For live market data and full NLP/LLM pipelines, set the following keys in each
 service's `services/<name>/configs/docker.env` file:
 
-| Service | Variable | Where to get it |
-|---------|----------|----------------|
-| market-ingestion, market-data | `MARKET_INGESTION_EODHD_API_KEY` | [eodhd.com](https://eodhd.com) — free 20 req/day tier |
-| nlp-pipeline, knowledge-graph | `DEEPINFRA_API_KEY` | [deepinfra.com](https://deepinfra.com) — free credits |
-| api-gateway | `ZITADEL_DOMAIN`, `ZITADEL_CLIENT_ID` | [zitadel.com](https://zitadel.com) — free cloud tier |
-| portfolio | `TASTYTRADE_CLIENT_ID` etc. | [tastytrade.com](https://tastytrade.com) — free paper account |
+| Service | Variable | Where to get it | Notes |
+|---------|----------|----------------|-------|
+| market-ingestion, market-data | `MARKET_INGESTION_EODHD_API_KEY` | [eodhd.com](https://eodhd.com) — free 20 req/day tier | Without this, only seeded demo data is available |
+| nlp-pipeline, knowledge-graph, rag-chat | `DEEPINFRA_API_KEY` | [deepinfra.com](https://deepinfra.com) — free $1 credit | Powers embeddings, NER, and LLM inference; Ollama fallback is used if not set |
+| api-gateway | `ZITADEL_DOMAIN`, `ZITADEL_CLIENT_ID` | [zitadel.com](https://zitadel.com) — free cloud tier | Not needed for local dev — use Dev Login instead |
+| portfolio | `SNAPTRADE_CONSUMER_KEY`, `SNAPTRADE_CLIENT_ID` | [snaptrade.com](https://snaptrade.com) — free developer account | Enables brokerage account connectivity via OAuth. **User broker credentials are never handled by worldview** — users authenticate directly with their broker through SnapTrade's OAuth flow outside this platform |
 
 After editing env files, restart only the affected container:
 ```bash
