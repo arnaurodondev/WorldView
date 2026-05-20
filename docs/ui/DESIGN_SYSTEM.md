@@ -1,7 +1,7 @@
 # Worldview Design System
 
 > **Single source of truth** for all frontend design decisions: tokens, components, patterns, and UX conventions.
-> **Last updated**: 2026-04-23 (v2.3 — Terminal Dark palette overhaul: #09090B bg + Bloomberg yellow (#FFD60A) + zinc text)
+> **Last updated**: 2026-05-20 (v2.4 — PRD-0089 F1: Bloomberg-grade visual contract: sharp corners, 20px rows, 4-tier animation policy, primitives catalogue) · 2026-04-23 (v2.3 — Terminal Dark palette overhaul)
 >
 > Referenced by: `/design-ui` skill, `/scaffold-frontend` skill, `ux-ui-designer` agent, `frontend-engineer` agent.
 >
@@ -1575,3 +1575,131 @@ above while reaffirming that financial data values are excluded.
 > W0 adds the chart/entity tokens without touching the topbar value to avoid
 > unintended layout breakage.
 
+---
+
+## 16. PRD-0089 F1 — Bloomberg-grade visual contract
+
+> **Status**: shipped 2026-05-20 (branch `feat/plan-0089-f1`).
+> Plan: `docs/plans/0089-pages/F1-design-system-foundation-plan.md`
+> Decisions: `docs/designs/0089/oq/_DECISIONS.md`.
+
+F1 is the foundation wave that every PRD-0089 per-page wave (Global Shell,
+Dashboard, Portfolio, Quote, Financials, Intelligence, Screener, Workspace,
+Chat) consumes. It locks the terminal-grade visual contract — sharp corners,
+zero shadows, 20px rows, 6px cell padding, three-tier focus rings, four-tier
+animation policy, and a unified primitive catalogue.
+
+### 16.1 Tiered density floor (FU-5.5)
+
+Pages no longer share a single 40-cell density floor. The tier map below is
+enforced by the Playwright canary `tests/e2e/density-screener.spec.ts`:
+
+| Page | Minimum `[data-cell]` count |
+|------|----------------------------:|
+| Header / Global Shell | 40 |
+| Quote tab | 100 |
+| Intelligence | 100 |
+| Financials | 150 |
+| Dashboard | 200 |
+| Portfolio | 250 |
+| Screener | 240 |
+
+### 16.2 Four-tier animation taxonomy (codifies DISCUSS-4)
+
+| Tier | Use | Allowed properties | Max duration |
+|------|-----|-------------------|---------------|
+| T0 — Data | Numeric values, chart bars, sparkline data, layout-shift props (width/height/max-h) | none | 0ms |
+| T1 — Affordance | Hover / focus on rows, buttons, links | `color`, `background-color`, `border-color`, `fill`, `stroke` | 100ms |
+| T2 — Chrome state | Popovers, dropdowns, accordions, modals open/close | `opacity`, `transform: translate/scale`, `clip-path` | 200ms |
+| T3 — Indicator | Spinners, skeleton-pulse, chat-token-stream, brief-generate-progress, flash-in alerts | any | unbounded (keyframe-driven) |
+
+Components MUST use the named token utilities `transition-color-only`
+(Tier-1) and `transition-color-and-opacity` (Tier-2) introduced in PR-A's
+`tailwind.config.ts` diff — never `transition-all`.
+
+### 16.3 `data-table-grid` opt-in scope (FU-5.5)
+
+The opt-in wrapper applies the 20px row + 6px cell-padding contract to
+descendants. Only 7 v1 surfaces are whitelisted:
+
+1. Screener results table
+2. Holdings table
+3. Transactions ledger
+4. Financials FlatMetricsGrid
+5. Watchlist
+6. Workspace data panels
+7. Peer Comparison
+
+Pages opt in by adding `<div data-table-grid>` (or
+`<div data-table-grid="dense">` for 18px rows). The global rules in
+`app/globals.css` then drive `--row-h`, `--cell-px`, and inner cell/row
+dividers via the `--border-subtle` token.
+
+### 16.4 Primitives catalogue
+
+All primitives live under `components/primitives/` and are imported from
+the `@/components/primitives` barrel. Per-page reuse matrix is in the
+plan §3.3.
+
+| Primitive | Purpose | LOC |
+|-----------|---------|----:|
+| `MetricLabel` | 10px uppercase metric label | 23 |
+| `MetricValue` | 11px mono tabular-nums value with em-dash fallback | 50 |
+| `SectionDivider` | 1px col-span-3 break inside grids (now uses --border-subtle) | 33 |
+| `DataTimestamp` | "Data as of …" footer for panels | 27 |
+| `TableRow` | role=row wrapper reading var(--row-h) from data-table-grid | 60 |
+| `MetricCell` | Single label+value cell inside a row | 65 |
+| `Sparkline` | 40×16 trend-tinted single-path SVG (±0.1% auto-trend) | 95 |
+| `SeverityCharBadge` | 1-char severity glyph (! / * / · / space) | 50 |
+| `BulkActionToolbar` | 22px row above tables; hides when 0 selected | 90 |
+| `DenseArticleRow` | 18px news row with left sentiment stripe | 110 |
+| `InlineCitationAnchor` | `[c1]`-style chip + HoverCard preview | 90 |
+| `FreshnessDot` | 6px live/stale/closed/after-hours dot | 50 |
+| `DataFreshnessPill` | Relative + absolute UTC freshness banner | 65 |
+| `EmptyState` | 5-condition empty state via copy dictionary | 55 |
+| `LoadingSkeleton` | 4-variant loader (table-row, cell, chart-block, sparkline-dotted) | 75 |
+| `DemoBadge` | "DEMO" outlined chip | 25 |
+| `AiContentRail` | 2px left rail in accent-ai violet for AI-generated text | 25 |
+| `FocusRing` | Constants for 3-tier focus rings (T1/T2/T3) | 30 |
+
+Empty-state copy lives in `lib/copy/empty-states.ts`. Per-page agents
+extend this dictionary with new keys; the new
+`empty-copy-dictionary` arch-test guarantees every `<EmptyState
+copyKey="X">` resolves.
+
+### 16.5 Architecture-test guardrails
+
+The existing `no-off-palette-colors.test.ts` was extended with a
+`describe.skip("PRD-0089 F1 lockdown")` block exposing 7 forbidden
+regex constants: `F1_FORBIDDEN_{ROUNDED,TEXT_SIZE,SHADOW,ROW_RING2,
+TRANSITION,DURATION,GAP}`. The block is gated behind `.skip` because:
+
+- The mechanical purges (PRs C–G) drove `rounded-{sm|md|lg|xl|2xl}` and
+  data-surface `shadow-*` to 0 active code, but landing/marketing pages
+  intentionally keep some chrome shadows.
+- The `text-(sm|base|lg|xl)` purge is NOT in the F1 scope (per-PR
+  instructions for C–G only covered `rounded-*` and `shadow-*`); 201
+  surviving sites need a follow-up F1.1 amendment wave to migrate to
+  `text-[11px]` / `text-[12px]` / `text-[14px]`.
+
+Activation contract: when the follow-up amendment lands, remove
+`describe.skip` → `describe` and add a tight allowlist (landing/feedback
+chrome) to `F1_ALLOWED_FILES`.
+
+### 16.6 Tokens added in F1
+
+| Token | Value | Use |
+|-------|-------|-----|
+| `--border-strong` | `240 4% 22%` (#37373B) | Cell-grid lines inside `data-table-grid` |
+| `--border-subtle` | `240 4% 13%` (#1E1E22) | Row dividers inside `data-table-grid`, SectionDivider |
+| `--row-h` | `20px` | Default tabular row height |
+| `--row-h-dense` | `18px` | Hyper-dense rows (transactions ledger, screener) |
+| `--cell-px` | `6px` (inside `data-table-grid` only — `8px` elsewhere) | Horizontal cell padding |
+
+`--radius` is collapsed to `0` globally — sharp corners contract.
+
+### 16.7 Pointer
+
+For the locked variant decisions on each surface (corner radii, row
+heights, divider tokens), see
+`docs/designs/0089/oq/_DECISIONS.md` §H.

@@ -9,6 +9,8 @@ decisions_index: docs/designs/0089/oq/_DECISIONS.md
 supersedes_partial: PRD-0088 (instrument detail — extended, not replaced)
 platform_state: pre-production
 no_backfill: true
+waves_shipped:
+  - F1 (2026-05-20): design-system foundation — sharp corners, primitives catalogue, 4-tier animation policy. Branch `feat/plan-0089-f1`.
 ---
 
 > **🚨 Platform constraint — applies to every wave under this PRD.** No
