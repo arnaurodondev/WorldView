@@ -72,7 +72,7 @@ const tabsTriggerVariants = cva(
         // WHY data-[state=active]:text-primary: --primary is amber/gold.
         // Amber creates clear visual hierarchy over near-white inactive tabs.
         default:
-          "rounded-sm px-3 py-1.5 data-[state=active]:bg-card data-[state=active]:text-primary",
+          "px-3 py-1.5 data-[state=active]:bg-card data-[state=active]:text-primary",
         // Terminal: underline indicator, no background on active tab.
         // WHY rounded-none: terminal panels have zero border radius.
         // WHY -mb-px: pulls the bottom border of the trigger to overlap the
