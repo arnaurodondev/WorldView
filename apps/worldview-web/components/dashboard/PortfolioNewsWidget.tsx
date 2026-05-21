@@ -36,6 +36,9 @@ import { useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { createGateway } from "@/lib/gateway";
 import { useAuth } from "@/hooks/useAuth";
+// QA A-F-001/F-002 (2026-05-21): shared selection contract.
+import { qk } from "@/lib/query/keys";
+import { useResolvedPortfolioId } from "@/hooks/useResolvedPortfolioId";
 import { Skeleton } from "@/components/ui/skeleton";
 import { InlineEmptyState } from "@/components/data/InlineEmptyState";
 import { AlertTriangle } from "lucide-react";
@@ -89,20 +92,21 @@ export function PortfolioNewsWidget() {
   // We only need ticker strings, so we don't refetch this often. WHY pull
   // from holdings vs watchlists: this widget is "Portfolio News" — the
   // filter universe should match the portfolio universe.
+  // QA A-F-001 (2026-05-21): central qk.portfolios.list() shares cache
+  // with PortfolioSwitcher / usePortfolioMetrics. Pre-fix this used its
+  // own per-widget bare key and triggered a duplicate /v1/portfolios.
   const { data: portfolios } = useQuery({
-    queryKey: ["dashboard-portfolio-news-portfolios"],
+    queryKey: qk.portfolios.list(),
     queryFn: () => createGateway(accessToken).getPortfolios(),
     enabled: !!accessToken,
     staleTime: 5 * 60_000,
   });
 
-  const firstPortfolioId = useMemo(() => {
-    if (!portfolios || portfolios.length === 0) return null;
-    const sorted = [...portfolios].sort(
-      (a, b) => Date.parse(a.created_at) - Date.parse(b.created_at),
-    );
-    return sorted[0]?.portfolio_id ?? null;
-  }, [portfolios]);
+  // QA A-F-002 (2026-05-21): respect the PortfolioSwitcher chip selection
+  // (pre-fix this widget picked the oldest-by-created_at portfolio
+  // unconditionally). The shared resolver picks the chip's selection
+  // first; falls back to portfolios[0] when none selected.
+  const firstPortfolioId = useResolvedPortfolioId(portfolios);
 
   const { data: holdingsResp } = useQuery({
     queryKey: ["dashboard-portfolio-news-holdings", firstPortfolioId],

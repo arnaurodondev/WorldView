@@ -31,7 +31,8 @@
 import { useQuery } from "@tanstack/react-query";
 import { createGateway } from "@/lib/gateway";
 import { useAuth } from "@/hooks/useAuth";
-import { useActivePortfolio } from "@/contexts/ActivePortfolioContext";
+import { qk } from "@/lib/query/keys";
+import { useResolvedPortfolioId } from "@/hooks/useResolvedPortfolioId";
 
 /** Snapshot of the user's portfolio at a moment in time, for the TopBar rail. */
 export interface PortfolioMetrics {
@@ -69,33 +70,24 @@ export const HOLDINGS_REFETCH_MS = 30_000;
  */
 export function usePortfolioMetrics(): PortfolioMetrics {
   const { accessToken, isAuthenticated } = useAuth();
-  // W1.1 F-002: the active portfolio comes from the PortfolioSwitcher chip
-  // via context. When null ("All Portfolios"), we fall back to the first
-  // portfolio the user has — true ROOT aggregation (sum-across-all) is
-  // deferred to the dedicated Portfolio Overview wave.
-  const { activePortfolioId } = useActivePortfolio();
 
-  // WHY share the EXACT query key with PortfolioSummary and the dashboard:
-  // TanStack Query dedupes by key, so multiple consumers of this hook share a
-  // single HTTP fetch. Changing the key here would silently double-fire queries.
+  // QA A-F-001 (2026-05-21) — migrate from the bare ["portfolios"] key to
+  // the central qk.portfolios.list() factory. PortfolioSwitcher (W1.1
+  // F-002) already uses the factory; the bare key here was forking the
+  // cache, causing TWO /v1/portfolios fetches per authenticated page
+  // render instead of one.
   const { data: portfoliosData } = useQuery({
-    queryKey: ["portfolios"],
+    queryKey: qk.portfolios.list(),
     queryFn: () => createGateway(accessToken).getPortfolios(),
     enabled: !!accessToken && isAuthenticated,
     staleTime: 60_000,
   });
 
-  // Resolve effective portfolio id: switcher selection wins; otherwise fall
-  // back to the first portfolio (legacy single-portfolio MVP behaviour).
-  // Validates the persisted id against the user's actual portfolios so a
-  // stale localStorage entry (e.g. after deleting a portfolio) doesn't
-  // silently produce a 404 on the holdings fetch.
-  const persistedPortfolioExists = activePortfolioId
-    ? portfoliosData?.some((p) => p.portfolio_id === activePortfolioId) ?? false
-    : false;
-  const firstPortfolioId = persistedPortfolioExists
-    ? activePortfolioId
-    : portfoliosData?.[0]?.portfolio_id;
+  // Resolve effective portfolio id via the shared helper so this hook and
+  // every other portfolio-scoped widget use ONE selection contract
+  // (active-portfolio context first, fallback to portfolios[0], guard
+  // against stale persisted ids that no longer exist).
+  const firstPortfolioId = useResolvedPortfolioId(portfoliosData);
 
   const { data: holdingsResp, isLoading: holdingsLoading } = useQuery({
     queryKey: ["holdings", firstPortfolioId],

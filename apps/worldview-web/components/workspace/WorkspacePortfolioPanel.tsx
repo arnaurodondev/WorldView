@@ -23,18 +23,28 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { createGateway } from "@/lib/gateway";
 import { useAuth } from "@/hooks/useAuth";
 import { formatMarketCap } from "@/lib/utils";
+// QA A-F-001/F-002 (2026-05-21): central key factory + shared selection
+// helper so this widget joins the same cache namespace as PortfolioSwitcher
+// and respects the chip's active-portfolio selection.
+import { qk } from "@/lib/query/keys";
+import { useResolvedPortfolioId } from "@/hooks/useResolvedPortfolioId";
 
 export function WorkspacePortfolioPanel() {
   const { accessToken } = useAuth();
 
+  // QA A-F-001 (2026-05-21): central qk.portfolios.list() so this widget
+  // shares the cache with the PortfolioSwitcher chip and usePortfolioMetrics
+  // (was firing a duplicate /v1/portfolios request).
   const { data: portfolios, isLoading: portfoliosLoading } = useQuery({
-    queryKey: ["portfolios"],
+    queryKey: qk.portfolios.list(),
     queryFn: () => createGateway(accessToken).getPortfolios(),
     enabled: !!accessToken,
     staleTime: 5 * 60_000,
   });
 
-  const firstPortfolioId = portfolios?.[0]?.portfolio_id;
+  // QA A-F-002 (2026-05-21): respect the chip selection (was picking
+  // portfolios[0] unconditionally).
+  const firstPortfolioId = useResolvedPortfolioId(portfolios);
 
   const { data: holdingsResp, isLoading: holdingsLoading } = useQuery({
     queryKey: ["holdings", firstPortfolioId],

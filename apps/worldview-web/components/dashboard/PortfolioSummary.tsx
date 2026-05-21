@@ -30,6 +30,12 @@ import { useAuth } from "@/hooks/useAuth";
 import { Skeleton } from "@/components/ui/skeleton";
 import { cn, formatPrice, formatPercent, priceChangeClass } from "@/lib/utils";
 import { QUOTE_REFETCH_MS } from "@/hooks/usePortfolioMetrics";
+// QA A-F-001/F-002 (2026-05-21): central query-key factory + shared
+// active-portfolio resolution so this widget shares the cache with
+// PortfolioSwitcher / usePortfolioMetrics AND respects the user's chip
+// selection.
+import { qk } from "@/lib/query/keys";
+import { useResolvedPortfolioId } from "@/hooks/useResolvedPortfolioId";
 
 // WHY local Period type: avoids importing a global enum just for three values
 // — the dashboard only ever toggles 1D/1W/1M and Bloomberg's panel-header
@@ -49,13 +55,20 @@ export function PortfolioSummary() {
 
   // ── Query 1: portfolio list ────────────────────────────────────────────────
   const { data: portfolios, isLoading: portfoliosLoading } = useQuery({
-    queryKey: ["portfolios"],
+    queryKey: qk.portfolios.list(),
     queryFn: () => createGateway(accessToken).getPortfolios(),
     enabled: !!accessToken,
     staleTime: 60_000, // WHY 60s: portfolios rarely change during the day
   });
 
-  const firstPortfolio = portfolios?.[0];
+  // QA A-F-002 (2026-05-21): respect the PortfolioSwitcher chip selection.
+  // Pre-fix this widget always picked portfolios[0], so toggling the chip
+  // flipped the TopBar but left this card showing the first portfolio's
+  // data — half-shipped W1.1 F-002.
+  const resolvedPortfolioId = useResolvedPortfolioId(portfolios);
+  const firstPortfolio = portfolios?.find(
+    (p) => p.portfolio_id === resolvedPortfolioId,
+  );
 
   // ── Query 2: holdings for first portfolio ─────────────────────────────────
   const { data: holdingsResp, isLoading: holdingsLoading } = useQuery({

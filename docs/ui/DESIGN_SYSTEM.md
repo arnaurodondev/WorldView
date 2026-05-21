@@ -223,7 +223,7 @@ following hard tokens; per-page surfaces never override them.
 | Region | Class / size | Notes |
 |--------|--------------|-------|
 | TopBar | `h-8` (32px) | 17 information slots: wordmark · GlobalSearch · PortfolioSwitcher (+DemoBadge) · IndexStrip (10 cells) · UtcClock · MarketStatusPill · PortfolioRail · AskAi · RefreshAll · Bell · Avatar |
-| IndexStrip cell | `w-[60px] h-6` | Static 10-cell row; responsive priority drop via `xl:`/`2xl:` (USO drops first); hidden below `lg` |
+| IndexStrip cell | `w-[88px] h-6` | 10-cell horizontally-scrolling marquee (6s × N = 60s cycle); pause on hover/focus-within; `prefers-reduced-motion` hides the duplicate pass and freezes the strip; hidden below `lg`. (W1.1 H-001 reverted the W1 "static strip" decision per direct user preference.) |
 | PortfolioSwitcher chip | `h-6` | Always visible (FU-1.1) — even with zero or one portfolio; `Alt+P` toggles the 240px dropdown |
 | CollapsibleSidebar | `w-[200px]` expanded / `w-10` collapsed | Drag-resize 160–340 (`mod+b` toggles); `worldview-sidebar-expanded` localStorage multi-tab sync |
 | Sidebar nav row | `h-7 px-2.5 gap-1.5` | Icon `size-[14px]`, label `text-[10px]`; active = `bg-primary/10 text-primary border-l-2 border-primary` |
@@ -298,7 +298,7 @@ Purpose-built components for financial data. Implement these consistently:
 |-----------|-----------|-------|
 | `CollapsibleSidebar` | `components/shell/CollapsibleSidebar.tsx` | 200px expanded / 40px collapsed; nav + WatchlistPanel + AlarmsPanel + bottom chrome (PRD-0089 W1 §4.4) |
 | `TopBar` | `components/shell/TopBar.tsx` | 17 information slots (PRD-0089 W1 §4.3): wordmark + GlobalSearch + PortfolioSwitcher + IndexStrip + UtcClock + MarketStatusPill + PortfolioRail + AskAi + Refresh + Bell + Avatar |
-| `IndexStrip` | `components/shell/IndexStrip.tsx` | Static 10-cell index row (SPY/QQQ/IWM/VIX/DIA/TLT/^TNX/BTC-USD/GLD/USO); replaces the prior animated marquee |
+| `IndexStrip` | `components/shell/IndexStrip.tsx` | Animated 10-cell horizontal marquee (SPY/QQQ/IWM/VIX/DIA/TLT/^TNX/BTC-USD/GLD/USO); pause-on-hover, reduced-motion-safe (duplicate pass hidden) |
 | `PortfolioSwitcher` | `components/shell/PortfolioSwitcher.tsx` | Always-visible chip + 240px dropdown; ROOT default per DISCUSS-1; `Alt+P` toggles |
 | `GlobalSearch` | `components/shell/GlobalSearch.tsx` | ⌘K command palette overlay (cmdk) |
 | `UtcClock` | `components/shell/UtcClock.tsx` | Live UTC clock display |
