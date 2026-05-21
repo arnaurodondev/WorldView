@@ -34,6 +34,11 @@ import { usePathname } from "next/navigation";
 import { useMemo } from "react";
 import { formatChordForDisplay } from "@/lib/hotkey-registry";
 import { useHotkeyBindings } from "@/contexts/HotkeyContext";
+// PRD-0089 W1 §4.6 — the WS dot now reads the live alert-stream connection
+// state and the freshness dot is suppressed (rendered muted with "MARKET
+// CLOSED" copy) outside trading hours. Both inputs are React-context hooks.
+import { useAlertStream } from "@/contexts/AlertStreamContext";
+import { useMarketStatus } from "@/hooks/useMarketStatus";
 
 /**
  * How many chord hints fit comfortably on the StatusBar left cluster at a
@@ -68,6 +73,15 @@ const PRIORITY_IDS: readonly string[] = [
 export function StatusBar() {
   const pathname = usePathname();
   const bindings = useHotkeyBindings();
+  // PRD-0089 W1 §4.6 — live inputs to the WS + freshness dots.
+  // `isConnected` is the AlertStream's WebSocket state; we never invent a
+  // client-side timer for "live vs stale" because that would lie when the WS
+  // is paused for backend maintenance. `marketStatus.overall` lets us
+  // suppress the freshness label entirely on weekends so the user does not
+  // see a misleading "stale 42h" — C-20.
+  const { isConnected } = useAlertStream();
+  const marketStatus = useMarketStatus();
+  const marketClosed = marketStatus.overall === "closed";
 
   // Pick the chord hints to display. Sort by PRIORITY_IDS order, then any
   // remaining global Navigation chords, then cap at STATUS_BAR_HINT_LIMIT.
@@ -113,7 +127,11 @@ export function StatusBar() {
     // the bar is ambient chrome, not a floating panel.
     // WHY shrink-0: prevents the status bar from being squeezed when the viewport
     // is short. The 24px allocation must be guaranteed regardless of content height.
-    <div className="h-6 shrink-0 flex items-center justify-between px-3 border-t border-white/[0.06] bg-background">
+    // PRD-0089 W1 §4.6: h-[22px] (was h-6 = 24px) reclaims 2px across the
+    // full viewport. Top border uses the F1 `border-border-subtle` token
+    // (was the `border-white/[0.06]` opacity-literal — banned by the W1
+    // architecture-test extension in commit 13).
+    <div className="h-[22px] shrink-0 flex items-center justify-between px-3 border-t border-border-subtle bg-background">
       {/* Left: keyboard shortcut hints — derived from the live registry */}
       <div className="flex items-center gap-3 overflow-hidden" aria-label="Keyboard shortcuts">
         {hints.length === 0 ? (
@@ -148,14 +166,42 @@ export function StatusBar() {
           </span>
         )}
 
-        {/* Connection status dot — static green when connected */}
-        {/* WHY static (no animate-pulse): Bloomberg status dots are static.
-            The color (green=live) communicates state; pulsing animation is a
-            consumer-app pattern — institutional terminals don't pulse because
-            it would be distracting on a densely-packed display. */}
-        <div className="flex items-center gap-1">
-          <span className="h-1.5 w-1.5 rounded-full bg-positive" aria-hidden />
-          <span className="text-[10px] text-muted-foreground/50 font-mono">Live</span>
+        {/* ── WS connection dot ────────────────────────────────────
+            Reads useAlertStream().isConnected so the colour reflects the
+            actual WebSocket state. green = connected, red = disconnected.
+            Bloomberg convention: static dots; pulsing animation is a
+            consumer-app pattern that adds visual noise on a dense display. */}
+        <div className="flex items-center gap-1" aria-label="WebSocket status">
+          <span
+            className={`h-1.5 w-1.5 rounded-full ${
+              isConnected ? "bg-positive" : "bg-destructive"
+            }`}
+            aria-hidden
+          />
+          <span className="text-[10px] text-muted-foreground/50 font-mono">
+            {isConnected ? "WS Live" : "WS Offline"}
+          </span>
+        </div>
+
+        {/* ── Freshness dot — market-closed override (C-20) ────────
+            When the market is closed we render a muted dot with
+            "MARKET CLOSED" so weekend / holiday views never display the
+            misleading "stale 42h" timer. While the market is open the dot
+            tracks the live quote feed via the WS connection. */}
+        <div className="flex items-center gap-1" aria-label="Quote freshness">
+          <span
+            className={`h-1.5 w-1.5 rounded-full ${
+              marketClosed
+                ? "bg-muted-foreground"
+                : isConnected
+                  ? "bg-positive"
+                  : "bg-warning"
+            }`}
+            aria-hidden
+          />
+          <span className="text-[10px] text-muted-foreground/50 font-mono">
+            {marketClosed ? "MARKET CLOSED" : "Quotes Live"}
+          </span>
         </div>
       </div>
     </div>
