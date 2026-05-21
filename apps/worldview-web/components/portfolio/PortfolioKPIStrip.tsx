@@ -1,22 +1,23 @@
 /**
- * components/portfolio/PortfolioKPIStrip.tsx — 6-tile KPI bar for the portfolio page
+ * components/portfolio/PortfolioKPIStrip.tsx — 8-tile KPI bar for the portfolio page
  *
  * WHY THIS EXISTS: Traders need an instant snapshot of their book's health without
- * clicking through tabs. Six KPI tiles — total value, day P&L, unrealised P&L,
- * top gainer, top loser, and position count — answer the four key "how am I doing?"
- * questions in one horizontal bar, always visible above the tab content.
+ * clicking through tabs. Eight KPI tiles answer the key "how am I doing?" questions
+ * in one horizontal bar, always visible above the tab content.
  *
- * WHY 6 TILES (not 4): Bloomberg's portfolio header shows similar density. The
- * previous PnlSummaryRow (4 tiles) omitted Top Gainer/Top Loser and position count,
- * which are the most actionable pieces of information for an active portfolio manager.
+ * WHY 8 TILES (W2, was 7): PRD-0089 W2 §4.2 adds CASH and BUYING POWER tiles and
+ * removes the "# Positions" tile (which moves to the header scope sub-line).
+ *   Old: Total Value | Day P&L | Unrealised P&L | Realized P&L | Top Gainer | Top Loser | # Positions
+ *   New: Total Value | Day P&L | Unrealised P&L | Realized P&L | CASH | BUYING PWR | Top Gainer | Top Loser
+ * CASH comes from exposure.cash; BUYING PWR = CASH for v1 (margin accounts are v2).
  *
  * WHY divide-x (not gap/grid): divide-x produces 1px vertical separators between tiles
  * with no risk of tile widths diverging. It's the terminal-native way to subdivide
  * a horizontal band — see Bloomberg's port header or Refinitiv's portfolio overview.
  *
  * WHO USES IT: app/(app)/portfolio/page.tsx — always rendered above Tabs
- * DATA SOURCE: Computed from holdings + live quotes + transactions in the parent page
- * DESIGN REFERENCE: PRD-0031 §8.1 Portfolio KPI Strip, Wave 4
+ * DATA SOURCE: Computed from holdings + live quotes + transactions + exposure in the parent page
+ * DESIGN REFERENCE: PRD-0031 §8.1 Portfolio KPI Strip, PRD-0089 W2 §4.2
  */
 
 "use client";
@@ -57,8 +58,12 @@ export interface PortfolioKPIStripProps {
   topGainer: { ticker: string; pnlPct: number } | null;
   /** Holding with lowest unrealised P&L% (biggest loser); null when no holdings */
   topLoser: { ticker: string; pnlPct: number } | null;
-  /** Number of open positions */
-  positionCount: number;
+  /**
+   * @deprecated W2 §4.2: # Positions tile removed — it now lives in the
+   * header scope sub-line. The prop is kept optional to avoid breaking the
+   * call site in portfolio/page.tsx until step 4.19 rewrites the page.
+   */
+  positionCount?: number;
   /**
    * Realized P&L summed across all SELL transactions (price − avg_cost) × qty.
    * null when transactions have not yet loaded or cannot be computed.
@@ -83,6 +88,20 @@ export interface PortfolioKPIStripProps {
   realizedPnlLongTerm?: number | null;
   /** Short-term portion of realized P&L for the tooltip. Optional. */
   realizedPnlShortTerm?: number | null;
+  /**
+   * Cash balance from the exposure endpoint (ExposureResponse.cash).
+   * null when not yet loaded. Renders "—" when null.
+   * WHY here: cash is a top-of-book KPI — portfolio managers check cash
+   * before sizing new positions. W2 §4.2 adds it adjacent to buying power.
+   */
+  cash?: number | null;
+  /**
+   * Buying power — for v1 cash accounts this equals cash. Margin accounts
+   * (v2) will compute: settled_cash + margin_available.
+   * null renders "—". WHY here: institutional traders monitor buying power
+   * constantly to avoid over-allocation.
+   */
+  buyingPower?: number | null;
 }
 
 // ── KPI tile ──────────────────────────────────────────────────────────────────
@@ -200,11 +219,13 @@ export function PortfolioKPIStrip({
   unrealisedPnlPct,
   topGainer,
   topLoser,
-  positionCount,
+  // positionCount intentionally omitted from destructuring — tile removed in W2 §4.2
   realizedPnl,
   realizedPnlApprox = false,
   realizedPnlLongTerm = null,
   realizedPnlShortTerm = null,
+  cash = null,
+  buyingPower = null,
 }: PortfolioKPIStripProps) {
   // F-201 fix (PLAN-0048 QA iter-1): formatPercent already prepends "+" for
   // positive values (lib/utils.ts:81). The previous "+${formatPercent()}" wrap
@@ -353,11 +374,30 @@ export function PortfolioKPIStrip({
         );
       })()}
 
-      {/* Tile 5: Top Gainer — best performer in the book; always green when present
+      {/* Tile 5: Cash — broker-reported cash balance from exposure endpoint.
+          WHY here: cash is the first question a PM asks before sizing a new
+          trade. Adjacent to buying power so the two are read as a pair. */}
+      <KPITile
+        label="Cash"
+        value={cash != null ? formatPrice(cash) : "—"}
+        dataTestId="kpi-cash"
+      />
+
+      {/* Tile 6: Buying Power — v1: equals cash (cash accounts only).
+          WHY separate tile from Cash: v2 margin accounts will show a different
+          value (settled_cash + margin). Keeping them distinct future-proofs the
+          layout so v2 doesn't require a tile restructure. */}
+      <KPITile
+        label="Buying Pwr"
+        value={buyingPower != null ? formatPrice(buyingPower) : "—"}
+        dataTestId="kpi-buying-pwr"
+      />
+
+      {/* Tile 7: Top Gainer — best performer in the book; always green when present
           WHY pnlPct / 100: the stored value is already a percentage (e.g. 4.82),
           so formatPercent (which multiplies by 100) would over-scale it. */}
       <KPITile
-        label="Top Gainer"
+        label="Top Gain"
         value={
           topGainer
             // WHY no leading "+": formatPercent already prefixes positive values
@@ -368,21 +408,15 @@ export function PortfolioKPIStrip({
         positive={topGainer != null}
       />
 
-      {/* Tile 6: Top Loser — worst performer; always red when present */}
+      {/* Tile 8: Top Loser — worst performer; always red when present */}
       <KPITile
-        label="Top Loser"
+        label="Top Lose"
         value={
           topLoser
             ? `${topLoser.ticker} ${formatPercent(topLoser.pnlPct / 100)}`
             : "—"
         }
         negative={topLoser != null}
-      />
-
-      {/* Tile 7: # Positions — quick book-size reference */}
-      <KPITile
-        label="# Positions"
-        value={String(positionCount)}
       />
     </div>
   );
