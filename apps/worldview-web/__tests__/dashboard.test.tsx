@@ -60,10 +60,14 @@ vi.mock("@/contexts/AlertStreamContext", () => ({
 
 vi.mock("@/lib/gateway", () => ({
   createGateway: vi.fn(() => ({
+    // WHY Yahoo Finance/DB names (not GICS canonical): the DB stores Yahoo Finance
+    // sector labels. abbreviateSector() maps these — using GICS names ("Information
+    // Technology", "Health Care") would fall through to the 6-char slice and produce
+    // duplicate abbreviations for "Consumer Cyclical"/"Consumer Defensive" (F-2 fix).
     getMarketHeatmap: vi.fn().mockResolvedValue({
       sectors: [
-        { name: "Information Technology", change_pct: 1.5, instrument_count: 67 },
-        { name: "Health Care", change_pct: -0.8, instrument_count: 62 },
+        { name: "Technology", change_pct: 1.5, instrument_count: 67 },
+        { name: "Healthcare", change_pct: -0.8, instrument_count: 62 },
         { name: "Energy", change_pct: null, instrument_count: 23 },
       ],
     }),
@@ -146,8 +150,17 @@ vi.mock("@/lib/gateway", () => ({
       ],
       total: 1,
     }),
-    // WHY getPendingAlerts: RecentAlerts widget (in DashboardPage) polls pending alerts
+    // WHY getPendingAlerts: kept for backward-compat; other consumers may still call it.
     getPendingAlerts: vi.fn().mockResolvedValue({
+      alerts: [],
+      total: 0,
+      offset: 0,
+      limit: 10,
+    }),
+    // WHY getAlertHistory: RecentAlerts widget now calls getAlertHistory (not
+    // getPendingAlerts) because /pending reads the delivery queue (empty after
+    // fan-out) while /history reads the authoritative alerts table (F-5 fix).
+    getAlertHistory: vi.fn().mockResolvedValue({
       alerts: [],
       total: 0,
       offset: 0,
@@ -282,8 +295,8 @@ describe("MarketHeatmap", () => {
 
     // Should show loading skeletons initially
     await waitFor(() => {
-      // After loading, sector tiles render
-      expect(screen.getByTitle("Information Technology")).toBeInTheDocument();
+      // After loading, sector tiles render — mock uses DB/Yahoo Finance name "Technology"
+      expect(screen.getByTitle("Technology")).toBeInTheDocument();
     });
   });
 

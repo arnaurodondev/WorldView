@@ -63,11 +63,12 @@ type SectorPeriod = "1D" | "1W" | "1M";
 const MIN_WEIGHT = 0.05;
 
 /**
- * TILE_HEIGHT_PX — fixed tile height. Locked at 56px so wrap rows are
- * predictable and the widget fits within Row 2's 130px allowance even when
- * 11 sectors wrap into 2 rows.
+ * TILE_HEIGHT_PX — fixed tile height. Reduced to 48px so two wrap rows fit
+ * inside Row 2's ~130px height cap (2×48 + 20px header + 4px gaps = 120px).
+ * The previous 56px caused the second row to be clipped by overflow-hidden
+ * on the Row 2 container (F-2 bug fix).
  */
-const TILE_HEIGHT_PX = 56;
+const TILE_HEIGHT_PX = 48;
 
 /**
  * GAP_PX — flex gap between tiles. We subtract this from `flex-basis` below
@@ -271,7 +272,7 @@ export function SectorHeatmapWidget() {
               // Equal-width skeletons (1/8 ≈ 12.5%) approximate the loaded
               // layout closely enough that there is no visible jump when
               // real tiles render.
-              className="min-h-[56px]"
+              className="min-h-[48px]"
               style={{
                 height: `${TILE_HEIGHT_PX}px`,
                 flexBasis: `calc(${100 / 8}% - ${GAP_PX}px)`,
@@ -381,7 +382,7 @@ function SectorTile({
           className={cn(
             // Base layout: vertical stack, centred horizontally, vertically
             // centred on a fixed-height tile.
-            "flex min-h-[56px] flex-col items-center justify-center px-1",
+            "flex min-h-[48px] flex-col items-center justify-center px-1",
             // Color encoding: bg-positive/N or bg-negative/N at 4 magnitude steps.
             colorClassFor(changePct),
             // Foreground colour: kept neutral so the *background* tint carries
@@ -494,12 +495,18 @@ function SectorTile({
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 /**
- * abbreviateSector — compress GICS sector names to 4-7 chars for tile labels.
+ * abbreviateSector — compress sector names to 4-7 chars for tile labels.
  *
- * WHY: GICS canonical names like "Information Technology" or "Consumer
- * Discretionary" don't fit in a narrow tile (especially for a flat sector
- * floored to MIN_WEIGHT width). The abbreviations match conventions used
- * across the worldview UI (and lib/sectors.ts pill labels for consistency).
+ * WHY: sector names from the DB (Yahoo Finance / EODHD naming convention)
+ * like "Consumer Cyclical" don't fit in a narrow tile. The abbreviations
+ * match conventions used across the worldview UI.
+ *
+ * WHY Yahoo Finance names (not GICS canonical): the DB stores Yahoo Finance /
+ * EODHD sector labels ("Consumer Cyclical", "Financial Services", etc.), NOT
+ * GICS 2.0 standard names ("Consumer Discretionary", "Financials"). Using
+ * GICS keys caused ~8 sectors to fall through to the 6-char slice fallback,
+ * and "Consumer Cyclical" + "Consumer Defensive" both sliced to "Consum" —
+ * producing duplicate tile labels (F-2 bug fix).
  */
 function abbreviateSector(name: string): string {
   // WHY title-case strings (not UPPER): the tile already has a CSS
@@ -507,17 +514,20 @@ function abbreviateSector(name: string): string {
   // the underlying DOM text matchable by tests / a11y tools (e.g.
   // `screen.getByText("Tech")`) while CSS handles the visual uppercase.
   const map: Record<string, string> = {
-    "Information Technology": "Tech",
-    "Health Care": "Health",
-    "Consumer Discretionary": "Discr",
-    "Consumer Staples": "Staple",
+    "Technology": "Tech",
+    "Healthcare": "Health",
+    "Consumer Cyclical": "Discr",
+    "Consumer Defensive": "Staple",
     "Communication Services": "Comm",
-    Financials: "Fins",
-    Industrials: "Indus",
-    Materials: "Mat",
+    "Financial Services": "Fins",
+    "Industrials": "Indus",
+    "Basic Materials": "Mat",
     "Real Estate": "REIT",
-    Utilities: "Util",
-    Energy: "Energy",
+    "Utilities": "Util",
+    "Energy": "Energy",
+    "Crypto": "Crypto",
+    "ETF": "ETF",
+    "Macro": "Macro",
   };
   return map[name] ?? name.slice(0, 6);
 }

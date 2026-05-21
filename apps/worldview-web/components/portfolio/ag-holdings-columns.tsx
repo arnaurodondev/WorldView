@@ -78,7 +78,10 @@ function NameCellRenderer(params: ICellRendererParams<EnrichedHoldingRow>) {
     return <span className="text-[11px] text-muted-foreground">—</span>;
   }
   return (
-    <span className="text-[11px] text-foreground truncate block max-w-[120px]">
+    // WHY max-w-full (was max-w-[120px]): the NAME column is 268px wide.
+    // A hard 120px cap clipped names at less than half the available space.
+    // max-w-full lets the span fill the full column cell (F-3 bug fix).
+    <span className="text-[11px] text-foreground truncate block max-w-full">
       {params.data?.h.name}
     </span>
   );
