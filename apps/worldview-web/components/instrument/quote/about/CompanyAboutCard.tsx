@@ -17,9 +17,9 @@
  */
 
 "use client";
-// WHY "use client": useState for description toggle requires browser runtime.
+// WHY "use client": useState + useEffect for description toggle + hotkey listener.
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import type { Instrument } from "@/types/api";
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -66,6 +66,13 @@ interface CompanyAboutCardProps {
 
 export function CompanyAboutCard({ instrument, isLoading = false }: CompanyAboutCardProps) {
   const [descExpanded, setDescExpanded] = useState(false);
+
+  // WHY "wv:desc-toggle": InstrumentTabs (T-26) dispatches on "D" keydown.
+  useEffect(() => {
+    const handler = () => setDescExpanded((v) => !v);
+    window.addEventListener("wv:desc-toggle", handler);
+    return () => window.removeEventListener("wv:desc-toggle", handler);
+  }, []);
 
   // ── Derived values ───────────────────────────────────────────────────────
   const sector = instrument?.gics_sector ?? null;

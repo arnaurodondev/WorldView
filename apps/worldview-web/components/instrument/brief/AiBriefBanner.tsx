@@ -20,7 +20,7 @@
 
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { ChevronRight } from "lucide-react";
 import { useInstrumentBrief } from "@/components/instrument/hooks/useInstrumentBrief";
 import { formatRelativeTime } from "@/lib/utils";
@@ -50,13 +50,20 @@ export function AiBriefBanner({ entityId }: AiBriefBannerProps) {
 
   const { data: brief, status, retryAfter } = useInstrumentBrief(entityId, entityId);
 
-  const toggle = () => {
+  // WHY "wv:brief-toggle" custom event: InstrumentTabs (T-26) dispatches it on
+  // "B" keydown so the banner responds to the hotkey without prop-drilling.
+  const toggle = useCallback(() => {
     const next = !expanded;
     setExpanded(next);
     if (typeof window !== "undefined") {
       window.sessionStorage.setItem(storageKey, next ? "expanded" : "collapsed");
     }
-  };
+  }, [expanded, storageKey]);
+
+  useEffect(() => {
+    window.addEventListener("wv:brief-toggle", toggle);
+    return () => window.removeEventListener("wv:brief-toggle", toggle);
+  }, [toggle]);
 
   // ── Status label (collapsed-mode suffix) ─────────────────────────────────
   let statusLabel: string | null = null;
