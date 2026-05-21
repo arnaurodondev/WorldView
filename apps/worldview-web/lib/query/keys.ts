@@ -393,6 +393,21 @@ export const qk = {
         : ([QK_VERSION, "briefing", "history"] as const),
   },
 
+  // ── Market (PRD-0089 W2) ────────────────────────────────────────────────
+  // Keys for market-level data that don't belong to a specific instrument
+  // or portfolio. Namespaced here so qc.invalidateQueries({ queryKey: qk.market.all })
+  // clears all market-level queries at once (e.g. on session reset).
+  market: {
+    all: [QK_VERSION, "market"] as const,
+    // WHY benchmarkSeries: PerformanceChartPanel overlays SPY closes on the
+    // portfolio line. Keeping the benchmark key in a dedicated market.* namespace
+    // prevents cross-contamination with instrument-detail OHLCV invalidations
+    // (which cascade via qk.instruments.detail(id), a different branch).
+    // The ticker + period participate so different periods cache independently.
+    benchmarkSeries: (ticker: string, period: string) =>
+      [QK_VERSION, "market", "benchmark-series", ticker, period] as const,
+  },
+
   // ── Shell (PRD-0089 W1) ─────────────────────────────────────────────────
   // Keys owned by the global shell — the IndexStrip in the TopBar, alarm
   // cluster, etc. Kept under their own namespace so they do not pollute the

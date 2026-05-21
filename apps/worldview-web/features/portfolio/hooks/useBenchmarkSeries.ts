@@ -7,8 +7,6 @@
  * DATA SOURCE: GET /v1/ohlcv/SPY?timeframe=1d&limit=N (single-instrument OHLCV)
  * DESIGN REFERENCE: PRD-0089 W2 §4.18, DISCUSS-10
  *
- * NOTE: the query key will be updated to qk.market.benchmarkSeries in step 4.23
- * when that key is added to lib/query/keys.ts.
  */
 "use client";
 // WHY "use client": useQuery (TanStack) requires React context.
@@ -16,7 +14,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { createGateway } from "@/lib/gateway";
 import { useAuth } from "@/hooks/useAuth";
-import { QK_VERSION } from "@/lib/query/keys";
+import { qk } from "@/lib/query/keys";
 import type { PerfPeriod } from "@/components/portfolio/PerformanceChartPanel";
 
 // Map display period to approximate calendar-day lookback for OHLCV start param.
@@ -50,10 +48,10 @@ export function useBenchmarkSeries(period: PerfPeriod): UseBenchmarkSeriesResult
     .slice(0, 10);
 
   const { data, isLoading, isError } = useQuery({
-    // WHY market.benchmark-series key: keeps the benchmark series separate from
+    // WHY qk.market.benchmarkSeries: keeps the benchmark series separate from
     // instrument-detail OHLCV keys so invalidations don't cross-contaminate.
-    // Will be migrated to qk.market.benchmarkSeries(ticker, period) in step 4.23.
-    queryKey: [QK_VERSION, "market", "benchmark-series", SPY_TICKER, period] as const,
+    // Added to lib/query/keys.ts in step 4.23 (PRD-0089 W2 §4.23).
+    queryKey: qk.market.benchmarkSeries(SPY_TICKER, period),
     queryFn: async () => {
       // WHY single-instrument call not batch: SPY is always the only benchmark (v1).
       // Batch overhead (POST + body parsing) would be wasteful for one ticker.
