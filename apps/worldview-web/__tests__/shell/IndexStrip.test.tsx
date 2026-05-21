@@ -135,6 +135,34 @@ describe("IndexStrip", () => {
     }
   });
 
+  // QA F-004 regression: caret-prefixed tickers like ^TNX don't match in
+  // the S1 search index. Pre-fix the ^TNX cell rendered "TNX — —" because
+  // searchInstruments("^TNX") returned no results. Fix: strip the caret
+  // first, fall back to literal if that misses.
+  it("(F-004 regression) ^TNX resolves via caret-stripped search first", async () => {
+    // Mock returns a hit ONLY for the caret-stripped form to prove the
+    // resolver tried it first.
+    mockSearchInstruments.mockImplementation((ticker: string) => {
+      if (ticker === "TNX") {
+        return Promise.resolve({ results: [{ instrument_id: "id-TNX-stripped" }] });
+      }
+      if (ticker === "^TNX") {
+        // Literal form returns empty — the resolver should never need this
+        // result because the stripped form already succeeded.
+        return Promise.resolve({ results: [] });
+      }
+      // All other manifest tickers resolve normally.
+      return Promise.resolve({ results: [{ instrument_id: `id-${ticker}` }] });
+    });
+    render(<IndexStrip />, { wrapper: makeWrapper() });
+    await screen.findByRole("button", { name: /10-Year Treasury Yield/i });
+    // The caret-stripped query must have been issued before any literal "^TNX" call.
+    const tnxCalls = mockSearchInstruments.mock.calls
+      .map((call) => call[0] as string)
+      .filter((t) => t === "TNX" || t === "^TNX");
+    expect(tnxCalls[0]).toBe("TNX");
+  });
+
   it("hides the entire strip below the lg breakpoint", () => {
     // CSS class assertion is the most we can verify in jsdom (no layout).
     // The wrapper carries `hidden lg:flex` so it is display:none in <1024px.

@@ -119,16 +119,33 @@ export function IndexStrip({ manifest = INDEX_MANIFEST }: IndexStripProps = {}) 
   // WHY Promise.allSettled: one failed lookup must not blank the whole strip.
   // The cells whose resolution failed render with em-dash placeholders rather
   // than disappearing — matches Bloomberg's "data outage" behaviour.
+  //
+  // QA F-004 (2026-05-21): caret-prefixed tickers like `^TNX` do not match
+  // anything in the S1 search index — searchInstruments returns zero
+  // results. We strip a leading `^` and try the canonical form first
+  // (`TNX`); if that misses we retry with the literal caret form so any
+  // future backend that DOES index caret-prefixed symbols still resolves.
   const { data: tickerToId, isLoading: idsLoading } = useQuery({
     queryKey: qk.shell.indexResolveIds(),
     queryFn: async () => {
       const gw = createGateway(accessToken);
+      const resolveOne = async (canonicalTicker: string): Promise<string | null> => {
+        // Try the caret-stripped form first (matches how S1 indexes most rates symbols).
+        const stripped = canonicalTicker.replace(/^\^/, "");
+        if (stripped !== canonicalTicker) {
+          const r = await gw.searchInstruments(stripped, 1);
+          const id = r.results?.[0]?.instrument_id ?? null;
+          if (id) return id;
+        }
+        // Fall back to the literal form (with caret if originally present).
+        const r2 = await gw.searchInstruments(canonicalTicker, 1);
+        return r2.results?.[0]?.instrument_id ?? null;
+      };
       const settled = await Promise.allSettled(
-        manifest.map((cell) =>
-          gw
-            .searchInstruments(cell.ticker, 1)
-            .then((r) => ({ ticker: cell.ticker, id: r.results?.[0]?.instrument_id ?? null })),
-        ),
+        manifest.map(async (cell) => ({
+          ticker: cell.ticker,
+          id: await resolveOne(cell.ticker),
+        })),
       );
       const map: Record<string, string | null> = {};
       for (const r of settled) {
