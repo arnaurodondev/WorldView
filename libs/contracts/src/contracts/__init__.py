@@ -15,6 +15,7 @@ from contracts.canonical.ohlcv import CanonicalOHLCVBar
 from contracts.canonical.quotes import CanonicalQuote
 from contracts.canonical.sentiment import CanonicalSentiment
 from contracts.enums import ContentSourceType, IngestionTaskStatus
+from contracts.pagination import PaginatedResponse, PaginationParams
 from contracts.parsing import (
     parse_ohlcv_from_json,
     parse_ohlcv_from_jsonl,
@@ -66,6 +67,8 @@ __all__ = [
     "CanonicalWatchlistEvent",
     "ContentSourceType",
     "IngestionTaskStatus",
+    "PaginatedResponse",
+    "PaginationParams",
     "parse_ohlcv_from_json",
     "parse_ohlcv_from_jsonl",
     "parse_ohlcv_from_parquet",
