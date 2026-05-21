@@ -20,7 +20,7 @@ from __future__ import annotations
 
 from uuid import UUID
 
-from fastapi import APIRouter, HTTPException, Query, Request, status
+from fastapi import APIRouter, Header, HTTPException, Query, Request, status
 from fastapi.responses import Response
 
 from portfolio.api.dependencies import ReadUoWDep, UoWDep
@@ -165,12 +165,14 @@ def _to_response(record: FeedbackSubmissionRecord) -> FeedbackSubmissionResponse
 @router.post(
     "/submissions",
     response_model=FeedbackSubmissionResponse,
-    status_code=status.HTTP_201_CREATED,
 )
 async def create_submission(
     body: FeedbackSubmissionCreate,
     uow: UoWDep,
     request: Request,
+    response: Response,
+    # REQ-002d (TASK-W0-05): optional ``Idempotency-Key`` header.
+    idempotency_key: str | None = Header(None, alias="Idempotency-Key"),
 ) -> FeedbackSubmissionResponse:
     """Create a feedback submission.
 
@@ -178,6 +180,13 @@ async def create_submission(
     required so support staff can follow up. We still need a tenant_id —
     the gateway issues a system JWT for unauthenticated public routes,
     which carries the public tenant id.
+
+    Status codes:
+        201 — newly created.
+        200 — idempotent replay of the same ``Idempotency-Key``.
+        409 — idempotency key reuse with a different request body.
+        422 — idempotency key is not a valid UUID, or anonymous request
+              without an email.
     """
     tenant_id = _extract_tenant_id(request)
     user_id = _extract_user_id_optional(request)
@@ -197,9 +206,12 @@ async def create_submission(
         screenshot_url=body.screenshot_url,
         page_url=body.page_url,
         user_agent=body.user_agent,
+        idempotency_key=idempotency_key,
     )
-    record = await CreateFeedbackSubmissionUseCase().execute(cmd, uow)
-    return _to_response(record)
+    result = await CreateFeedbackSubmissionUseCase().execute(cmd, uow)
+    # REQ-002d: 201 for new, 200 for replay.
+    response.status_code = status.HTTP_201_CREATED if result.created else status.HTTP_200_OK
+    return _to_response(result.record)
 
 
 @router.get("/submissions", response_model=FeedbackListResponse)

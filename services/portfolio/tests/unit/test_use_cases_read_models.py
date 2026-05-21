@@ -44,10 +44,13 @@ async def active_user(uow: FakeUnitOfWork, active_tenant: Tenant) -> User:
 @pytest.fixture
 async def portfolio(uow: FakeUnitOfWork, active_tenant: Tenant, active_user: User) -> Portfolio:
     uc = CreatePortfolioUseCase()
-    return await uc.execute(
+    # REQ-002a: use case now returns ``CreatePortfolioResult`` wrapping the
+    # entity + ``created`` flag. Unwrap to ``Portfolio`` for the fixture.
+    result = await uc.execute(
         CreatePortfolioCommand(tenant_id=active_tenant.id, owner_id=active_user.id, name="Read Portfolio"),
         uow,
     )
+    return result.portfolio
 
 
 # ── Holdings ─────────────────────────────────────────────────────────────────

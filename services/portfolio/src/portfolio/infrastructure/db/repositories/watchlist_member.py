@@ -34,7 +34,28 @@ class SqlAlchemyWatchlistMemberRepository(WatchlistMemberRepository):
             ticker=row.ticker,
             name=row.name,
             instrument_id=row.instrument_id,
+            # REQ-002b: surface the idempotency key for replay detection.
+            idempotency_key=row.idempotency_key,
         )
+
+    async def find_by_idempotency_key(
+        self,
+        watchlist_id: UUID,
+        idempotency_key: UUID,
+    ) -> WatchlistMember | None:
+        """REQ-002b — fetch the member earlier added with this idempotency key.
+
+        Scoped by watchlist_id to match the partial unique index
+        ``uq_watchlist_members_watchlist_idempotency_key``.
+        """
+        result = await self._session.execute(
+            select(WatchlistMemberModel).where(
+                WatchlistMemberModel.watchlist_id == watchlist_id,
+                WatchlistMemberModel.idempotency_key == idempotency_key,
+            ),
+        )
+        row = result.scalar_one_or_none()
+        return self._to_entity(row) if row else None
 
     async def get(self, watchlist_id: UUID, entity_id: UUID) -> WatchlistMember | None:
         result = await self._session.execute(
@@ -139,6 +160,8 @@ class SqlAlchemyWatchlistMemberRepository(WatchlistMemberRepository):
                 ticker=member.ticker,
                 name=member.name,
                 instrument_id=member.instrument_id,
+                # REQ-002b: persist idempotency key on insert; unset by default.
+                idempotency_key=member.idempotency_key,
             )
             self._session.add(row)
             await self._session.flush()

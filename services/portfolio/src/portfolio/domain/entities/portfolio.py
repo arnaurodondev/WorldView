@@ -34,6 +34,11 @@ class Portfolio:
     # construction sites (CreatePortfolioUseCase, brokerage flows, tests).
     kind: PortfolioKind = PortfolioKind.MANUAL
     created_at: datetime = field(default_factory=utc_now)
+    # REQ-002a: caller-supplied ``Idempotency-Key`` (UUID) recorded on creation.
+    # Nullable for legacy rows + callers that don't send the header. A partial
+    # unique index on (tenant_id, idempotency_key) WHERE idempotency_key IS NOT
+    # NULL enforces uniqueness only when set (migration 0019).
+    idempotency_key: UUID | None = None
 
     def is_active(self) -> bool:
         return self.status == PortfolioStatus.ACTIVE

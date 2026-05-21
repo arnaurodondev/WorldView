@@ -90,7 +90,28 @@ def _make_connection(
     )
 
 
-def _build_test_app(uow: FakeUnitOfWork) -> Any:
+class _InMemoryValkey:
+    """Tiny in-memory stand-in for ValkeyClient.set_nx with TTL ignored.
+
+    REQ-002c: the brokerage-sync trigger route uses ``set_nx(key, "1", ex=300)``
+    as its only Valkey contact. We expose just that method (plus ``__init__``
+    to hold the store) so the test can assert "second POST does not enqueue
+    a second background task" by observing the set_nx return value over time.
+    """
+
+    def __init__(self) -> None:
+        self._store: set[str] = set()
+        self.set_nx_calls: list[str] = []
+
+    async def set_nx(self, key: str, value: str, ex: int) -> bool:  # — match ValkeyClient signature
+        self.set_nx_calls.append(key)
+        if key in self._store:
+            return False
+        self._store.add(key)
+        return True
+
+
+def _build_test_app(uow: FakeUnitOfWork, valkey_client: _InMemoryValkey | None = None) -> Any:
     """Build a test Portfolio app with:
 
     - All DB I/O stubbed via ``get_read_uow`` override → FakeUnitOfWork
@@ -118,6 +139,12 @@ def _build_test_app(uow: FakeUnitOfWork) -> Any:
     app.state.brokerage_client = MagicMock()
     app.state.settings = MagicMock()
     app.state.snaptrade_cipher = None
+    # REQ-002c: tests that exercise the Idempotency-Key path inject an
+    # in-memory Valkey stub so we can observe set_nx behaviour. The route
+    # tolerates ``None`` (treats it as "Valkey unavailable, fall back to
+    # no dedup") so non-idempotency tests still pass without one.
+    if valkey_client is not None:
+        app.state.valkey_client = valkey_client
 
     return app
 
@@ -270,3 +297,124 @@ async def test_trigger_sync_pending_connection_returns_422() -> None:
     assert resp.status_code == 422
     body = resp.json()
     assert "not active" in body.get("detail", "").lower()
+
+
+# ── REQ-002c: idempotent POST /brokerage-connections/{id}/sync ───────────────
+
+
+@pytest.mark.asyncio
+async def test_trigger_sync_idempotency_key_first_call_acquires_lock() -> None:
+    """REQ-002c — first POST with an Idempotency-Key returns 202 + status="syncing"
+    and writes the Valkey dedup key.
+    """
+    conn_id = uuid.uuid4()
+    conn = _make_connection(connection_id=conn_id, status=ConnectionStatus.ACTIVE)
+
+    uow = FakeUnitOfWork()
+    await uow.brokerage_connections.save(conn)
+
+    valkey = _InMemoryValkey()
+    app = _build_test_app(uow, valkey_client=valkey)
+    key = str(uuid.uuid4())
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        resp = await client.post(
+            f"/api/v1/brokerage-connections/{conn_id}/sync",
+            headers={
+                "X-Internal-JWT": _make_internal_jwt(),
+                "Idempotency-Key": key,
+            },
+        )
+
+    assert resp.status_code == 202
+    assert resp.json()["status"] == "syncing"
+    # Valkey set_nx was called once with the expected key shape.
+    assert len(valkey.set_nx_calls) == 1
+    assert valkey.set_nx_calls[0] == f"brokerage_sync_trigger:{_TENANT_ID}:{conn_id}:{key}"
+
+
+@pytest.mark.asyncio
+async def test_trigger_sync_idempotency_key_replay_returns_already_queued() -> None:
+    """REQ-002c — second POST with the same key returns 202 + status="already_queued"
+    and does NOT enqueue a second background task.
+    """
+    conn_id = uuid.uuid4()
+    conn = _make_connection(connection_id=conn_id, status=ConnectionStatus.ACTIVE)
+
+    uow = FakeUnitOfWork()
+    await uow.brokerage_connections.save(conn)
+
+    valkey = _InMemoryValkey()
+    app = _build_test_app(uow, valkey_client=valkey)
+    key = str(uuid.uuid4())
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        resp1 = await client.post(
+            f"/api/v1/brokerage-connections/{conn_id}/sync",
+            headers={"X-Internal-JWT": _make_internal_jwt(), "Idempotency-Key": key},
+        )
+        resp2 = await client.post(
+            f"/api/v1/brokerage-connections/{conn_id}/sync",
+            headers={"X-Internal-JWT": _make_internal_jwt(), "Idempotency-Key": key},
+        )
+
+    assert resp1.status_code == 202
+    assert resp1.json()["status"] == "syncing"
+    assert resp2.status_code == 202
+    body = resp2.json()
+    assert body["status"] == "already_queued"
+    assert body["idempotency_key"] == key
+    # Valkey saw both attempts; only the first acquired the lock.
+    assert len(valkey.set_nx_calls) == 2
+
+
+@pytest.mark.asyncio
+async def test_trigger_sync_invalid_idempotency_key_returns_422() -> None:
+    """REQ-002c — non-UUID Idempotency-Key value → 422."""
+    conn_id = uuid.uuid4()
+    conn = _make_connection(connection_id=conn_id, status=ConnectionStatus.ACTIVE)
+
+    uow = FakeUnitOfWork()
+    await uow.brokerage_connections.save(conn)
+
+    valkey = _InMemoryValkey()
+    app = _build_test_app(uow, valkey_client=valkey)
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        resp = await client.post(
+            f"/api/v1/brokerage-connections/{conn_id}/sync",
+            headers={
+                "X-Internal-JWT": _make_internal_jwt(),
+                "Idempotency-Key": "not-a-uuid",
+            },
+        )
+
+    assert resp.status_code == 422
+    # No Valkey calls — validation happens before the dedup write.
+    assert valkey.set_nx_calls == []
+
+
+@pytest.mark.asyncio
+async def test_trigger_sync_no_idempotency_key_is_backcompat() -> None:
+    """REQ-002c — missing Idempotency-Key header keeps original behaviour: 202
+    + status="syncing" and no Valkey contact at all.
+    """
+    conn_id = uuid.uuid4()
+    conn = _make_connection(connection_id=conn_id, status=ConnectionStatus.ACTIVE)
+
+    uow = FakeUnitOfWork()
+    await uow.brokerage_connections.save(conn)
+
+    valkey = _InMemoryValkey()
+    app = _build_test_app(uow, valkey_client=valkey)
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        resp = await client.post(
+            f"/api/v1/brokerage-connections/{conn_id}/sync",
+            headers={"X-Internal-JWT": _make_internal_jwt()},
+        )
+
+    assert resp.status_code == 202
+    assert resp.json()["status"] == "syncing"
+    # No header → no Valkey contact.
+    assert valkey.set_nx_calls == []

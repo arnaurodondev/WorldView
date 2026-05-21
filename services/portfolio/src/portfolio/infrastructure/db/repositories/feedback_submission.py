@@ -42,6 +42,8 @@ class SqlAlchemyFeedbackSubmissionRepo(FeedbackSubmissionRepo):
             assigned_to=row.assigned_to,
             created_at=row.created_at,
             updated_at=row.updated_at,
+            # REQ-002d: surface idempotency_key so replay detection can compare.
+            idempotency_key=row.idempotency_key,
         )
 
     async def add(self, record: FeedbackSubmissionRecord) -> None:
@@ -62,9 +64,26 @@ class SqlAlchemyFeedbackSubmissionRepo(FeedbackSubmissionRepo):
             assigned_to=record.assigned_to,
             created_at=record.created_at,
             updated_at=record.updated_at,
+            # REQ-002d: persist idempotency_key on insert.
+            idempotency_key=record.idempotency_key,
         )
         self._session.add(row)
         await self._session.flush()
+
+    async def find_by_idempotency_key(
+        self,
+        tenant_id: UUID,
+        idempotency_key: UUID,
+    ) -> FeedbackSubmissionRecord | None:
+        """REQ-002d — fetch the submission earlier created with this key."""
+        result = await self._session.execute(
+            select(FeedbackSubmissionModel).where(
+                FeedbackSubmissionModel.tenant_id == tenant_id,
+                FeedbackSubmissionModel.idempotency_key == idempotency_key,
+            ),
+        )
+        row = result.scalar_one_or_none()
+        return self._to_record(row) if row else None
 
     async def get(self, submission_id: UUID, tenant_id: UUID) -> FeedbackSubmissionRecord | None:
         result = await self._session.execute(

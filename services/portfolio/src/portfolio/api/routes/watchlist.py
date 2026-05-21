@@ -15,7 +15,7 @@ from __future__ import annotations
 
 from uuid import UUID
 
-from fastapi import APIRouter, HTTPException, Query, Request, status
+from fastapi import APIRouter, Header, HTTPException, Query, Request, status
 from fastapi.responses import Response
 
 from portfolio.api.dependencies import ReadUoWDep, UoWDep, WatchlistCacheDep
@@ -233,7 +233,6 @@ async def list_members(
 @router.post(
     "/{watchlist_id}/members",
     response_model=WatchlistMemberResponse,
-    status_code=status.HTTP_201_CREATED,
 )
 async def add_member(
     watchlist_id: UUID,
@@ -241,21 +240,40 @@ async def add_member(
     uow: UoWDep,
     cache: WatchlistCacheDep,
     request: Request,
+    response: Response,
+    # REQ-002b: optional ``Idempotency-Key`` header. Same alias as
+    # POST /v1/transactions for client-side consistency.
+    idempotency_key: str | None = Header(None, alias="Idempotency-Key"),
 ) -> WatchlistMemberResponse:
+    """Add an entity to a watchlist.
+
+    Status codes:
+        201 — newly added.
+        200 — naturally-idempotent replay (same entity already in watchlist,
+              or ``Idempotency-Key`` replay).
+        409 — ``Idempotency-Key`` reused with a different entity_id, or an
+              instrument-level collision (different entity_id resolves to the
+              same instrument).
+        422 — idempotency key is not a valid UUID.
+    """
     x_tenant_id = _extract_tenant_id(request)
     x_owner_id = _extract_owner_id(request)
     uc = AddWatchlistMemberUseCase()
-    member = await uc.execute(
+    result = await uc.execute(
         AddWatchlistMemberCommand(
             tenant_id=x_tenant_id,
             watchlist_id=watchlist_id,
             owner_id=x_owner_id,
             entity_id=body.entity_id,
             entity_type=body.entity_type,
+            idempotency_key=idempotency_key,
         ),
         uow,
         cache,
     )
+    # REQ-002b: explicit status code so 201 vs 200 reflects create vs replay.
+    response.status_code = status.HTTP_201_CREATED if result.created else status.HTTP_200_OK
+    member = result.member
     # F-206 (QA iter-2): mirror the GET-list item shape so the optimistic UI
     # can render the resolution status without a follow-up fetch. ``member``
     # is the domain entity returned from the use case which already carries

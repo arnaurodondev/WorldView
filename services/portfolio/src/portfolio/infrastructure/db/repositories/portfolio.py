@@ -34,7 +34,29 @@ class SqlAlchemyPortfolioRepository(PortfolioRepository):
             status=PortfolioStatus(row.status),
             kind=PortfolioKind(row.kind),
             created_at=row.created_at,
+            # REQ-002a: surface the idempotency key so the use case can
+            # detect "same key, different payload" conflicts on replay.
+            idempotency_key=row.idempotency_key,
         )
+
+    async def find_by_idempotency_key(
+        self,
+        tenant_id: UUID,
+        idempotency_key: UUID,
+    ) -> Portfolio | None:
+        """REQ-002a — fetch the portfolio earlier created with this key.
+
+        Tenant-scoped to match the partial unique index
+        ``uq_portfolios_tenant_idempotency_key``. Returns at most one row.
+        """
+        result = await self._session.execute(
+            select(PortfolioModel).where(
+                PortfolioModel.tenant_id == tenant_id,
+                PortfolioModel.idempotency_key == idempotency_key,
+            ),
+        )
+        row = result.scalar_one_or_none()
+        return self._to_entity(row) if row else None
 
     async def find_root_by_owner(self, owner_id: UUID, tenant_id: UUID) -> Portfolio | None:
         """Return the user's ROOT portfolio if one exists, else None.
@@ -136,6 +158,9 @@ class SqlAlchemyPortfolioRepository(PortfolioRepository):
                 # initial insert. Subsequent updates do not mutate ``kind``.
                 kind=str(portfolio.kind),
                 created_at=portfolio.created_at,
+                # REQ-002a: persist the idempotency key only on initial insert;
+                # rename/archive paths leave it untouched.
+                idempotency_key=portfolio.idempotency_key,
             )
             self._session.add(row)
             try:

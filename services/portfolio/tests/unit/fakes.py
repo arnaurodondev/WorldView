@@ -222,6 +222,17 @@ class FakePortfolioRepository(PortfolioRepository):
             and p.status == PortfolioStatus.ACTIVE
         ]
 
+    async def find_by_idempotency_key(
+        self,
+        tenant_id: UUID,
+        idempotency_key: UUID,
+    ) -> Portfolio | None:
+        # REQ-002a: mirror the SQL repo — scope by tenant + match the key.
+        for p in self._store.values():
+            if p.tenant_id == tenant_id and p.idempotency_key == idempotency_key:
+                return p
+        return None
+
 
 class FakeInstrumentRepository(InstrumentRepository):
     """In-memory instrument store."""
@@ -510,6 +521,17 @@ class FakeWatchlistMemberRepository(WatchlistMemberRepository):
 
     async def delete(self, watchlist_id: UUID, entity_id: UUID) -> None:
         self._store.pop((watchlist_id, entity_id), None)
+
+    async def find_by_idempotency_key(
+        self,
+        watchlist_id: UUID,
+        idempotency_key: UUID,
+    ) -> WatchlistMember | None:
+        # REQ-002b: mirror the SQL repo — scope by watchlist + match the key.
+        for m in self._store.values():
+            if m.watchlist_id == watchlist_id and m.idempotency_key == idempotency_key:
+                return m
+        return None
 
 
 class FakeNotificationPreferencesRepository(NotificationPreferencesRepository):
@@ -981,6 +1003,17 @@ class FakeFeedbackSubmissionRepo(FeedbackSubmissionRepo):
             return False
         del self._store[submission_id]
         return True
+
+    async def find_by_idempotency_key(
+        self,
+        tenant_id: UUID,
+        idempotency_key: UUID,
+    ) -> FeedbackSubmissionRecord | None:
+        # REQ-002d: scope by tenant + match idempotency_key.
+        for rec in self._store.values():
+            if rec.tenant_id == tenant_id and rec.idempotency_key == idempotency_key:
+                return rec
+        return None
 
 
 class FakeNPSScoreRepo(NPSScoreRepo):

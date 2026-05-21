@@ -30,3 +30,7 @@ class PortfolioModel(Base):
     # The mapped_column also carries ``default='manual'`` for ORM-level INSERTs.
     kind: Mapped[str] = mapped_column(default="manual", server_default="manual")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    # REQ-002a (migration 0019): caller-supplied Idempotency-Key — nullable
+    # so legacy rows + non-idempotent callers remain valid. Uniqueness is
+    # enforced by a partial unique index on (tenant_id, idempotency_key).
+    idempotency_key: Mapped[uuid.UUID | None] = mapped_column(PGUUID(as_uuid=True), nullable=True, default=None)

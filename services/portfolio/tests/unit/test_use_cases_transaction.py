@@ -119,6 +119,12 @@ class FakePortfolioRepo(PortfolioRepository):
     async def list_active_root(self):
         return []
 
+    # REQ-002a — required by abstract base.
+    async def find_by_idempotency_key(self, tenant_id, idempotency_key):
+        if self._portfolio.idempotency_key == idempotency_key and self._portfolio.tenant_id == tenant_id:
+            return self._portfolio
+        return None
+
 
 class FakeInstrumentRepo(InstrumentRepository):
     def __init__(self, instrument: InstrumentRef | None = None) -> None:
