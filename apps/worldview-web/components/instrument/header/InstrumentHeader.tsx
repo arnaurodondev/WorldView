@@ -93,6 +93,14 @@ export function InstrumentHeader({ instrument, quote, fundamentals }: Instrument
       <span className="max-w-[200px] truncate text-[11px] text-muted-foreground">
         {instrument?.name ?? ""}
       </span>
+      {/* WHY gics_sector micro-pill (T-13, Δ — §6.4): adds sector context to
+          the sticky header without requiring a scroll to the About card.
+          text-[10px] uppercase: F1 floor (Δ2). No rounded-* (Δ3). */}
+      {instrument?.gics_sector && (
+        <span className="text-[10px] uppercase tracking-wide text-muted-foreground/60 shrink-0">
+          {instrument.gics_sector}
+        </span>
+      )}
 
       {/* ── Right cluster: price + change + CAP/VOL/P/E + range bar + badge ── */}
       {/* WHY ml-auto: pushes the entire right cluster against the right edge
