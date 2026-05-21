@@ -139,13 +139,25 @@ export function Providers({ children }: ProvidersProps) {
        * semantic tokens. font-mono + tabular-nums + text-[11px] keeps the toast
        * visually consistent with the terminal-grade row rhythm.
        */}
+      {/*
+       * PRD-0089 W1 §4.11 / C-26 / FU-10.3 — Toaster moves to top-right
+       * with z-60 so it sits above the shell chrome (TopBar z-50, sidebar
+       * z-40) but below the FlashOverlay (z-[9999]). Top-right is the
+       * Sonner default and matches the locked FU-10.3 decision: the
+       * bottom-right position collided visually with the floating
+       * ForceUpdateBanner before that banner moved to the top in W1.
+       */}
       <Toaster
-        position="bottom-right"
+        position="top-right"
         richColors
         theme="dark"
         closeButton
         expand
         visibleToasts={5}
+        // WHY style + className: Sonner attaches className to each toast
+        // (mono font for terminal density) and style to the viewport root.
+        // z:60 belongs on the viewport, not the per-toast element.
+        style={{ zIndex: 60 } as React.CSSProperties}
         toastOptions={{
           className: "font-mono text-[11px] tabular-nums",
         }}
