@@ -41,64 +41,31 @@ import { createGateway } from "@/lib/gateway";
 import { useAuth } from "@/hooks/useAuth";
 import { qk } from "@/lib/query/keys";
 import { useHotkeyScope } from "@/contexts/HotkeyContext";
+import { useActivePortfolio } from "@/contexts/ActivePortfolioContext";
 import { DemoBadge } from "@/components/primitives/DemoBadge";
 import { cn } from "@/lib/utils";
 import type { Portfolio } from "@/types/api";
 
 // ── Constants ──────────────────────────────────────────────────────────────
 
-/** localStorage key that persists the active selection across reloads. */
-const ACTIVE_PORTFOLIO_LS_KEY = "shell.activePortfolioId";
-
-/** Sentinel value for the ROOT (All Portfolios) selection. */
-const ROOT_SENTINEL = "__root__";
-
-// ── Helpers ────────────────────────────────────────────────────────────────
-
-/**
- * Read the persisted active portfolio id. Returns null when nothing is
- * persisted (or during SSR). Wrapped in try/catch because Safari Private mode
- * throws on localStorage access.
+/** Sentinel value for the ROOT (All Portfolios) selection. The context stores
+ *  this as `null`; we map to/from this sentinel inside the component so the
+ *  existing UI logic (== ROOT_SENTINEL → "All Portfolios" label) stays clean.
  */
-function readPersistedActiveId(): string | null {
-  if (typeof window === "undefined") return null;
-  try {
-    return window.localStorage.getItem(ACTIVE_PORTFOLIO_LS_KEY);
-  } catch {
-    return null;
-  }
-}
-
-function writePersistedActiveId(id: string | null): void {
-  if (typeof window === "undefined") return;
-  try {
-    if (id) window.localStorage.setItem(ACTIVE_PORTFOLIO_LS_KEY, id);
-    else window.localStorage.removeItem(ACTIVE_PORTFOLIO_LS_KEY);
-  } catch {
-    /* ignored — private mode */
-  }
-}
+const ROOT_SENTINEL = "__root__";
 
 // ── Component ──────────────────────────────────────────────────────────────
 
-interface PortfolioSwitcherProps {
-  /**
-   * Optional change callback so the TopBar can flip the active portfolio used
-   * by PortfolioRail / usePortfolioMetrics once the parent wires it up. W1
-   * ships the chip self-contained; W4 integration will plumb the selection.
-   */
-  readonly onActivePortfolioChange?: (portfolioId: string | null) => void;
-}
-
-export function PortfolioSwitcher({ onActivePortfolioChange }: PortfolioSwitcherProps = {}) {
+export function PortfolioSwitcher() {
   const router = useRouter();
   const { accessToken, isAuthenticated } = useAuth();
   const { registry } = useHotkeyScope();
-
-  // ── Active selection state (ROOT_SENTINEL = aggregated household view) ───
-  // Lazy initializer reads localStorage exactly once at mount so we don't
-  // flash the wrong selection on first paint.
-  const [activeId, setActiveId] = useState<string>(() => readPersistedActiveId() ?? ROOT_SENTINEL);
+  // W1.1 F-002 — selection now lives in ActivePortfolioContext so the
+  // chip's pick is readable by usePortfolioMetrics and any future
+  // portfolio-scoped widget. Context fallback (noop) keeps this component
+  // testable outside the provider.
+  const { activePortfolioId, setActivePortfolio } = useActivePortfolio();
+  const activeId = activePortfolioId ?? ROOT_SENTINEL;
   const [open, setOpen] = useState(false);
 
   // ── Portfolio list (cached via the existing qk.portfolios.list namespace) ─
@@ -141,15 +108,13 @@ export function PortfolioSwitcher({ onActivePortfolioChange }: PortfolioSwitcher
   const isDemo = (activePortfolio?.kind as string | undefined) === "demo";
 
   // ── Selection handler ────────────────────────────────────────────────────
+  // Writes through the context; the context handles localStorage persistence.
   const select = useCallback(
     (id: string) => {
-      setActiveId(id);
       setOpen(false);
-      const portfolioId = id === ROOT_SENTINEL ? null : id;
-      writePersistedActiveId(portfolioId);
-      onActivePortfolioChange?.(portfolioId);
+      setActivePortfolio(id === ROOT_SENTINEL ? null : id);
     },
-    [onActivePortfolioChange],
+    [setActivePortfolio],
   );
 
   // ── Alt+P hotkey ─────────────────────────────────────────────────────────

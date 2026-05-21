@@ -19,6 +19,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { ReactNode } from "react";
 import { HotkeyProvider } from "@/contexts/HotkeyContext";
 import { HotkeyRegistry } from "@/lib/hotkey-registry";
+import { ActivePortfolioProvider } from "@/contexts/ActivePortfolioContext";
 
 // ── Mocks ──────────────────────────────────────────────────────────────────
 
@@ -38,11 +39,17 @@ import { PortfolioSwitcher } from "@/components/shell/PortfolioSwitcher";
 
 // ── Helpers ────────────────────────────────────────────────────────────────
 
-function makeWrapper(registry: HotkeyRegistry) {
+function makeWrapper(registry: HotkeyRegistry, initialActiveId?: string | null) {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   return ({ children }: { children: ReactNode }) => (
     <QueryClientProvider client={client}>
-      <HotkeyProvider registry={registry}>{children}</HotkeyProvider>
+      {/* `initialActiveId === undefined` (the default) lets the provider
+          fall through to its localStorage lazy-init — tests that pre-seed
+          localStorage before render rely on this behaviour. Passing an
+          explicit value (including null) overrides it. */}
+      <ActivePortfolioProvider initialActiveId={initialActiveId}>
+        <HotkeyProvider registry={registry}>{children}</HotkeyProvider>
+      </ActivePortfolioProvider>
     </QueryClientProvider>
   );
 }
@@ -107,8 +114,7 @@ describe("PortfolioSwitcher", () => {
 
   it("selecting a non-ROOT portfolio flips the chip label to its name", async () => {
     const user = userEvent.setup();
-    const onChange = vi.fn();
-    render(<PortfolioSwitcher onActivePortfolioChange={onChange} />, {
+    render(<PortfolioSwitcher />, {
       wrapper: makeWrapper(new HotkeyRegistry()),
     });
     await user.click(await screen.findByTestId("portfolio-switcher-chip"));
@@ -121,8 +127,12 @@ describe("PortfolioSwitcher", () => {
       return row as HTMLButtonElement;
     });
     await user.click(bkRow);
-    expect(onChange).toHaveBeenCalledWith("p-bk");
+    // W1.1 F-002: selection writes through the ActivePortfolioContext,
+    // which persists to localStorage and immediately updates the chip
+    // label. The onChange callback prop no longer exists; the context
+    // is the canonical wiring surface.
     expect(await screen.findByTestId("portfolio-switcher-chip")).toHaveTextContent("Tastytrade Main");
+    expect(window.localStorage.getItem("shell.activePortfolioId")).toBe("p-bk");
   });
 
   it("renders DemoBadge when the active portfolio kind === 'demo'", async () => {

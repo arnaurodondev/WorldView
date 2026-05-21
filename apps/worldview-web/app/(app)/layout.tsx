@@ -35,6 +35,9 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useAuth } from "@/hooks/useAuth";
 import { useIdleLock } from "@/hooks/useIdleLock";
 import { PreferencesProvider } from "@/contexts/PreferencesContext";
+// W1.1 F-002 — active-portfolio selection shared between the
+// PortfolioSwitcher chip (writer) and usePortfolioMetrics (reader).
+import { ActivePortfolioProvider } from "@/contexts/ActivePortfolioContext";
 import { TopBar } from "@/components/shell/TopBar";
 import { CollapsibleSidebar } from "@/components/shell/CollapsibleSidebar";
 import { FlashOverlay } from "@/components/shell/FlashOverlay";
@@ -304,6 +307,7 @@ export default function AppLayout({ children }: AppLayoutProps) {
     // persistence, keep this mount but document the dependency so a future
     // refactor doesn't relocate ApiClientProvider below us.
     <PreferencesProvider>
+    <ActivePortfolioProvider>
     <HotkeyProvider>
       {/* GlobalHotkeyBindings has no DOM output — registers global chords
           (g d/p/i/s/w/a/n/c/, plus mod+b) AND mounts the document keydown
@@ -413,6 +417,7 @@ export default function AppLayout({ children }: AppLayoutProps) {
       </div>
       </WorkspaceProvider>
     </HotkeyProvider>
+    </ActivePortfolioProvider>
     </PreferencesProvider>
   );
 }
