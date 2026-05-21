@@ -56,6 +56,9 @@ def create_rag_session_factory(
         When a distinct read URL is configured, both engines are independent
         and the caller is responsible for disposing both.
     """
+    # BP-502: application_name surfaces this service in pg_stat_activity for
+    # connection debugging; pool_recycle=300 defends against stale DNS sockets.
+    _connect_args: dict[str, object] = {"server_settings": {"application_name": "rag-chat"}}
     write_engine = create_async_engine(
         settings.database_url.get_secret_value(),
         echo=False,
@@ -63,6 +66,8 @@ def create_rag_session_factory(
         pool_pre_ping=True,
         pool_size=settings.db_pool_size,
         max_overflow=settings.db_max_overflow,
+        pool_recycle=300,
+        connect_args=_connect_args,
     )
     write_factory: async_sessionmaker[AsyncSession] = async_sessionmaker(
         write_engine,
@@ -85,6 +90,8 @@ def create_rag_session_factory(
             pool_pre_ping=True,
             pool_size=settings.db_pool_size_read,
             max_overflow=settings.db_max_overflow_read,
+            pool_recycle=300,
+            connect_args=_connect_args,
         )
         read_factory = async_sessionmaker(read_engine, expire_on_commit=False)
 

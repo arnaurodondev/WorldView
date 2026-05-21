@@ -25,6 +25,9 @@ def build_write_engine(settings: Settings) -> AsyncEngine:
         pool_size=20,
         max_overflow=30,
         pool_timeout=60,
+        # BP-502: application_name surfaces this service in pg_stat_activity.
+        pool_recycle=300,
+        connect_args={"server_settings": {"application_name": "market-data"}},
     )
 
 
@@ -43,6 +46,9 @@ def build_read_engine(settings: Settings) -> AsyncEngine:
         pool_size=20,
         max_overflow=30,
         pool_timeout=60,
+        # BP-502: application_name surfaces this service in pg_stat_activity.
+        pool_recycle=300,
+        connect_args={"server_settings": {"application_name": "market-data"}},
     )
 
 

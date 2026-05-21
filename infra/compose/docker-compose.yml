@@ -74,6 +74,10 @@ services:
     build:
       context: ../postgres
       dockerfile: Dockerfile
+    # BP-502: 55 DB-connected containers × standard pool config saturates the
+    # default max_connections=100. Raise to 500 (costs ~4 MB shared memory).
+    # shared_buffers raised proportionally for cache efficiency.
+    command: postgres -c max_connections=500 -c shared_buffers=256MB
     profiles: [infra, all]
     ports:
       # SEC-007: bind to localhost only — prevent external DB access
