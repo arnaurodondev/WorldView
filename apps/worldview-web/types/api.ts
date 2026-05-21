@@ -825,6 +825,13 @@ export interface Holding {
   unrealised_pnl?: number | null; // computed: (current_price - avg_cost) * qty
   unrealised_pnl_pct?: number | null;
   portfolio_weight?: number | null; // % of total portfolio value
+  /**
+   * Instrument asset class — e.g. "equity", "etf", "bond", "crypto".
+   * PRD-0089 W2 §4.9: used by the ASSET chip column in the AG Grid table.
+   * Optional because older S9 builds may not emit it; the ASSET column
+   * renders "—" or "O" (other) when absent.
+   */
+  asset_class?: string | null;
 }
 
 export interface Transaction {

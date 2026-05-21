@@ -56,7 +56,11 @@ import type {
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
-const HOLDINGS_COLS_KEY = "worldview-holdings-cols";
+// WHY v2 (was "worldview-holdings-cols"): W2 adds SPARK + ASSET columns that don't
+// exist in the v1 persisted column state. Loading a v1 state would position the new
+// columns in wrong places or hide them entirely. Bumping the key creates a new
+// localStorage namespace so stale v1 state is ignored automatically on first load.
+const HOLDINGS_COLS_KEY = "holdings.col-state.v2";
 
 // Valid AG Grid sort column IDs for holdings (guards against malformed URL params).
 const VALID_SORT_COL_IDS = new Set([
