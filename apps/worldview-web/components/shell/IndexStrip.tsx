@@ -1,11 +1,12 @@
 /**
  * components/shell/IndexStrip.tsx — Static 10-cell index row for the TopBar.
  *
- * WHY THIS EXISTS: Replaces TopBarMarquee. Bloomberg's FNZX strip is the
- *   reference — every benchmark always visible, instantly scannable, zero
- *   motion. A hedge-fund PM glancing at the TopBar should be able to read
- *   SPY's price without waiting for a marquee scroll to bring it into view.
- *   Animated marquees also violate prefers-reduced-motion and steal cognitive
+ * WHY THIS EXISTS: Bloomberg's FNZX strip is the reference — every benchmark
+ *   always visible, instantly scannable, zero motion. A hedge-fund PM
+ *   glancing at the TopBar should be able to read SPY's price immediately
+ *   without waiting for any animation to bring it into view. PRD-0089 W1
+ *   replaced the prior animated ticker scroller with this static row
+ *   because animation violates prefers-reduced-motion and steals cognitive
  *   bandwidth on a densely-packed terminal.
  *
  * WHO USES IT: components/shell/TopBar.tsx (single slot between

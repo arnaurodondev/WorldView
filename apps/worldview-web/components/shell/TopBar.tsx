@@ -10,7 +10,7 @@
  * center = market data, right = tools + user.
  *
  * WHO USES IT: app/(app)/layout.tsx — rendered at the top of every protected page
- * DATA SOURCE: auth state from AuthContext, market data from TopBarMarquee (10-ticker scroll)
+ * DATA SOURCE: auth state from AuthContext; market data from IndexStrip (static 10-cell row)
  * DESIGN REFERENCE: PRD-0028 §6.5 TopBar; Handoff 2026-05-01 Tier-3 #7
  */
 
@@ -25,9 +25,9 @@ import { LogOut, Settings, User, Bell } from "lucide-react";
 import { useAuth } from "@/hooks/useAuth";
 import { useHotkeyScope } from "@/contexts/HotkeyContext";
 import { UtcClock } from "@/components/shell/UtcClock";
-// PRD-0089 W1 §4.3: replaces the animated TopBarMarquee with a static
-// 10-cell IndexStrip. The old marquee + ticker chip files are removed in the
-// W1 cleanup commit; nothing else still imports them.
+// PRD-0089 W1 §4.3: static 10-cell IndexStrip replaces the prior animated
+// marquee. The marquee + ticker chip files were deleted in the W1 cleanup
+// commit; the architecture-test ban on those identifiers prevents resurrection.
 import { IndexStrip } from "@/components/shell/IndexStrip";
 import { PortfolioSwitcher } from "@/components/shell/PortfolioSwitcher";
 import { MarketStatusPill } from "@/components/shell/MarketStatusPill";
@@ -172,13 +172,13 @@ export function TopBar({
     // PLAN-0048 Wave C-1 — Layout was previously [left] [absolute-centered ticker] [right].
     // The absolute centering meant the right cluster could overflow into the ticker at
     // narrower viewports (the ticker was painted under it because it sat outside the flex
-    // flow). We now use a single flex row with three siblings where the IndexTicker is
+    // flow). We now use a single flex row with three siblings where the IndexStrip is
     // the only flex-1 child, so it absorbs slack and truncates first under pressure
     // instead of colliding with the portfolio rail.
     <header className="flex h-8 w-full shrink-0 items-center gap-3 border-b border-border bg-background px-3">
       {/* ── Left: Logo + Search ───────────────────────────────────── */}
       {/* WHY shrink-0: the logo + search must never shrink — they're nav anchors.
-          Slack absorbed by the IndexTicker (the only flex-1 sibling). */}
+          Slack absorbed by the IndexStrip (the only flex-1 sibling). */}
       <div className="flex shrink-0 items-center gap-3">
         {/* Wordmark — text for crisp rendering at all DPIs.
             PRD-0089 W1 §4.3 slot 1 — adds aria-label so the skip-link target
@@ -202,7 +202,7 @@ export function TopBar({
       </div>
 
       {/* ── Center: IndexStrip (PRD-0089 W1 §4.3 slot 5) ─────────────
-          Static 10-cell strip replaces the animated TopBarMarquee.  The
+          Static 10-cell strip (Bloomberg FNZX pattern).  The
           IndexStrip owns its own responsive priority drop; we still wrap
           it in flex-1 + min-w-0 so the right cluster keeps pinned to the
           viewport edge under width pressure. */}

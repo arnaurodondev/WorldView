@@ -34,7 +34,7 @@ export function createScreenerApi(t: string | undefined) {
      * `sector → gics_sector` here in the gateway client so the UI types
      * line up. `entity_id` is computed as a Worldview-conventional
      * `entity-{ticker-lc}` slug when the backend doesn't provide one
-     * (matches the IndexTicker / GlobalSearch fallback convention) so
+     * (matches the IndexStrip / GlobalSearch fallback convention) so
      * row-click navigation lands on the correct entity page.
      */
     async runScreener(request: ScreenerRequest): Promise<ScreenerResponse> {
@@ -82,7 +82,7 @@ export function createScreenerApi(t: string | undefined) {
           // PLAN-0052: synthesize entity_id from ticker when the backend
           // doesn't provide one. ADR-F-12 says entity_id is the canonical
           // navigation key for /instruments/[entityId]; the GlobalSearch
-          // + IndexTicker chips already use this `entity-{ticker-lc}`
+          // + IndexStrip chips already use this `entity-{ticker-lc}`
           // convention, so the screener row click now lands on a real
           // page instead of /instruments/undefined.
           // BP-330: entity_id falls back to the raw instrument_id string so
