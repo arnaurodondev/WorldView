@@ -39,7 +39,12 @@
 
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, fireEvent, waitFor, act } from "@testing-library/react";
-import { AskAiPanel, parseCitationResponse, renderWithCitations } from "@/components/shell/AskAiPanel";
+// PRD-0089 W1 §4.7 — parseCitationResponse + renderWithCitations were
+// deleted (DISCUSS-6 / C-17) because AskAiPanel now consumes the F1
+// InlineCitationAnchor primitive and the AiContentRail wrapper. The
+// describe blocks that exercised those helpers are removed below; the new
+// "AskAiPanel — citation rail (PRD-0089 W1)" block asserts the W1 contract.
+import { AskAiPanel } from "@/components/shell/AskAiPanel";
 
 // ── Next.js mock ───────────────────────────────────────────────────────────────
 
@@ -470,152 +475,74 @@ describe("AskAiPanel — auth guard", () => {
   });
 });
 
-// ── P2B-1: parseCitationResponse unit tests ───────────────────────────────────
+// ── AskAiPanel — citation rail (PRD-0089 W1 §4.7) ─────────────────────────
+//
+// W1 deleted parseCitationResponse + renderWithCitations + the local
+// post-stream Sources section (~310 LOC) in favour of the F1
+// AiContentRail wrapper and InlineCitationAnchor primitive (DISCUSS-6 +
+// DISCUSS-12). The old tests for those helpers were testing dead code so
+// they were removed per R19 (test was genuinely wrong after the locked
+// design decision). The block below pins the new W1 contract.
 
-describe("parseCitationResponse", () => {
-  it("returns full text as body when no Sources section is present", () => {
-    const { body, sources } = parseCitationResponse("Apple earnings beat by 5%.");
-    expect(body).toBe("Apple earnings beat by 5%.");
-    expect(sources).toHaveLength(0);
-  });
-
-  it("splits on plain-text 'Sources:' delimiter", () => {
-    const raw = "The analysis [1] is clear.\n\nSources:\n1. Reuters article — https://reuters.com";
-    const { body, sources } = parseCitationResponse(raw);
-    expect(body).toBe("The analysis [1] is clear.");
-    expect(sources).toHaveLength(1);
-    expect(sources[0].title).toBe("Reuters article");
-  });
-
-  it("splits on markdown '## Sources' delimiter", () => {
-    const raw = "Good data [1].\n## Sources\n1. WSJ — https://wsj.com/article";
-    const { body, sources } = parseCitationResponse(raw);
-    expect(body).toBe("Good data [1].");
-    expect(sources).toHaveLength(1);
-    expect(sources[0].title).toBe("WSJ");
-  });
-
-  it("parses multiple sources", () => {
-    const raw = "Analysis here.\n\nSources:\n1. Reuters — https://reuters.com\n2. Bloomberg — https://bloomberg.com\n3. WSJ — https://wsj.com";
-    const { sources } = parseCitationResponse(raw);
-    expect(sources).toHaveLength(3);
-    expect(sources[0].title).toBe("Reuters");
-    expect(sources[1].title).toBe("Bloomberg");
-    expect(sources[2].title).toBe("WSJ");
-  });
-
-  it("handles sources without URL suffix", () => {
-    const raw = "Text.\n\nSources:\n1. Internal research note";
-    const { sources } = parseCitationResponse(raw);
-    expect(sources[0].title).toBe("Internal research note");
-  });
-
-  it("filters blank source lines", () => {
-    const raw = "Text.\n\nSources:\n1. Reuters\n\n2. Bloomberg";
-    const { sources } = parseCitationResponse(raw);
-    expect(sources).toHaveLength(2);
-  });
-});
-
-// ── P2B-1: renderWithCitations unit tests ────────────────────────────────────
-
-describe("renderWithCitations", () => {
-  it("returns the plain string unchanged when no [N] markers are present", () => {
-    const result = renderWithCitations("No citations here.");
-    // WHY string equality: when there are no [N] markers, renderWithCitations
-    // returns the original string directly (not wrapped in an array). This is
-    // an intentional optimization — no array allocation needed for plain text.
-    expect(result).toBe("No citations here.");
-  });
-
-  it("returns an array when [N] markers are present", () => {
-    const result = renderWithCitations("See [1] and [2] for details.");
-    expect(Array.isArray(result)).toBe(true);
-  });
-
-  it("produces sup elements for each [N] marker", () => {
-    const result = renderWithCitations("See [1] and [2].") as unknown[];
-    // Filter to only the object (ReactElement) entries — strings are the text segments.
-    const supElements = result.filter((r) => typeof r === "object");
-    expect(supElements).toHaveLength(2);
-  });
-});
-
-// ── P2B-1: AskAiPanel citation rendering integration tests ───────────────────
-
-describe("AskAiPanel — P2B-1 citation rendering", () => {
+describe("AskAiPanel — citation rail (PRD-0089 W1)", () => {
   afterEach(() => {
     vi.unstubAllGlobals();
     vi.clearAllMocks();
   });
 
-  it("renders [N] markers as <sup> elements after stream completes", async () => {
-    // WHY full response with [1] marker: tests that the post-stream parsing
-    // triggers renderWithCitations, which converts [1] into a <sup> element
-    // with className containing 'font-mono'. The streaming blinking cursor
-    // is NOT present, confirming this is the settled (post-stream) state.
+  it("wraps the response body in an AiContentRail (data-ai-content)", async () => {
     mockFetch([
       'data: {"token":"See analysis [1] for details."}\n\n',
       "data: [DONE]\n\n",
     ]);
-
     renderPanel();
     const textarea = screen.getByPlaceholderText(/ask about markets/i);
     fireEvent.change(textarea, { target: { value: "Cite test" } });
     fireEvent.click(screen.getByRole("button", { name: /send message/i }));
 
-    // Wait for stream to complete and citation parsing to fire
+    // F1 AiContentRail tags itself with data-ai-content="true" — the
+    // assertion stays decoupled from the exact CSS class names so later
+    // primitive tweaks (e.g. accent colour swap) don't break this test.
     await waitFor(() => {
-      // WHY query sup: renderWithCitations wraps [1] in a <sup> element.
-      // The text "for details." appears outside the sup as a text node.
-      const sups = document.querySelectorAll("sup");
-      expect(sups.length).toBeGreaterThan(0);
+      const rail = document.querySelector('[data-ai-content="true"]');
+      expect(rail).not.toBeNull();
     });
   });
 
-  it("renders a Sources section when response contains a Sources block", async () => {
-    const responseWithSources =
-      "The analysis [1] shows growth.\n\nSources:\n1. Reuters — https://reuters.com/article";
-
+  it("renders [N] markers via InlineCitationAnchor (role=link, aria-label includes citation kind)", async () => {
     mockFetch([
-      `data: ${JSON.stringify({ token: responseWithSources })}\n\n`,
+      'data: {"token":"See analysis [1] and [2] for context."}\n\n',
       "data: [DONE]\n\n",
     ]);
-
     renderPanel();
     const textarea = screen.getByPlaceholderText(/ask about markets/i);
-    fireEvent.change(textarea, { target: { value: "Source test" } });
+    fireEvent.change(textarea, { target: { value: "Cite test" } });
     fireEvent.click(screen.getByRole("button", { name: /send message/i }));
 
-    // Wait for the Sources section header to appear
+    // InlineCitationAnchor renders role="link" with aria-label "Citation:
+    // NEWS <id>". We expect both [1] and [2] markers to materialise as
+    // separate anchors.
     await waitFor(() => {
-      // WHY uppercase "SOURCES": the Sources label uses uppercase tracking-wider
-      // font-mono styling (terminal label convention). The regex is case-insensitive.
-      expect(screen.getByText(/sources/i)).toBeInTheDocument();
-    });
-
-    // The extracted source title should appear in the list
-    await waitFor(() => {
-      expect(screen.getByText("Reuters")).toBeInTheDocument();
+      const anchors = screen.getAllByRole("link", { name: /Citation: NEWS/i });
+      expect(anchors).toHaveLength(2);
     });
   });
 
-  it("does not render a Sources section when response has no Sources block", async () => {
+  it("renders plain text unchanged when no [N] markers are present", async () => {
     mockFetch([
       'data: {"token":"Plain answer with no citations."}\n\n',
       "data: [DONE]\n\n",
     ]);
-
     renderPanel();
     const textarea = screen.getByPlaceholderText(/ask about markets/i);
-    fireEvent.change(textarea, { target: { value: "No sources test" } });
+    fireEvent.change(textarea, { target: { value: "No cites" } });
     fireEvent.click(screen.getByRole("button", { name: /send message/i }));
 
     await waitFor(() => {
       expect(screen.getByText("Plain answer with no citations.")).toBeInTheDocument();
     });
-
-    // The "Sources" label must NOT be present — the response has no sources block.
-    expect(document.querySelector(".border-border\\/40.pt-1\\.5")).toBeNull();
+    // No InlineCitationAnchor should render when the text carries no
+    // markers — the response stays a single text node inside the rail.
+    expect(screen.queryByRole("link", { name: /Citation: NEWS/i })).toBeNull();
   });
 });
