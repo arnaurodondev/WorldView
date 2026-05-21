@@ -347,6 +347,66 @@ describe("PRD-0089 F1 lockdown: terminal-grade visual contract", () => {
   });
 });
 
+// ── PRD-0089 W2 §4.24 — rowHeight=22 regression guard ──────────────────────
+//
+// W2 §4.8 locked the AG Grid holdings table to rowHeight=20 (Bloomberg density).
+// 22 was the previous value — any regression back to 22 would break the V5
+// acceptance criterion ("at least 15 rows visible above the fold at 1440px").
+//
+// WHY portfolio components only (not all files): rowHeight=22 is only meaningful
+// in the context of the AG Grid table inside the portfolio surface. Other surfaces
+// (watchlists, screener) have their own rowHeight contracts; we don't want false
+// positives from unrelated grid configuration.
+
+describe("PRD-0089 W2: rowHeight=22 regression guard for portfolio components", () => {
+  it("has no rowHeight=22 in portfolio components (W2 locks to 20)", () => {
+    const portfolioRoots = ["components/portfolio", "features/portfolio"];
+    const offences: { file: string; line: number; text: string }[] = [];
+
+    for (const root of portfolioRoots) {
+      let files: string[];
+      try {
+        files = walk(root);
+      } catch {
+        // Root may not exist in all environments — skip silently.
+        continue;
+      }
+      for (const file of files) {
+        const raw = readFileSync(file, "utf-8");
+        const stripped = stripComments(raw);
+        const rawLines = raw.split("\n");
+        const strippedLines = stripped.split("\n");
+        for (let i = 0; i < strippedLines.length; i++) {
+          const codeLine = strippedLines[i] ?? "";
+          if (codeLine.trim().length === 0) continue;
+          // WHY this exact pattern: matches `rowHeight=22`, `rowHeight={22}`,
+          // `rowHeight: 22` (object literal), and `rowHeight={22}` (JSX prop).
+          // The word boundary \b ensures we don't match rowHeight=220 etc.
+          if (/rowHeight\s*[=:{]\s*\{?\s*22\s*\}?\b/.test(codeLine)) {
+            offences.push({
+              file,
+              line: i + 1,
+              text: (rawLines[i] ?? "").trim(),
+            });
+          }
+        }
+      }
+    }
+
+    if (offences.length > 0) {
+      const detail = offences
+        .map((o) => `${o.file}:${o.line}  ${o.text}`)
+        .join("\n");
+      throw new Error(
+        `Found ${offences.length} rowHeight=22 regression(s) in portfolio components.\n` +
+          `W2 §4.8 locked row height to 20 — revert these or update the test with a deliberate exception:\n` +
+          detail,
+      );
+    }
+    expect(offences).toEqual([]);
+  });
+});
+
 // Export the constants so other tests (animation-policy, data-table-grid-scope)
 // can reuse the same regex catalogue.
 export {

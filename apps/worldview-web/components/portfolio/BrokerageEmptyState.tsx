@@ -13,7 +13,7 @@ import Link from "next/link";
 
 export function BrokerageEmptyState() {
   return (
-    <div className="flex flex-1 flex-col items-center justify-center gap-6 bg-background">
+    <div className="flex flex-1 flex-col items-center justify-center gap-5 bg-background">
       <div className="text-center">
         <p className="font-mono text-[13px] text-foreground">No positions tracked yet</p>
         <p className="mt-1 font-mono text-[11px] text-muted-foreground">
