@@ -133,6 +133,12 @@ export function WatchlistPanel() {
   }, [registry, router]);
 
   // ── Watchlist list (cached 30 s) ───────────────────────────────────────
+  // NOTE: the S1 list endpoint deliberately omits members for performance
+  // (per `lib/api/watchlists.ts` doc). `activeWatchlist.members` is ALWAYS
+  // an empty array here — we resolve real members via the dependent query
+  // below. Without that second call the sidebar shows the empty state even
+  // when the watchlist has stocks (BP-W1-001 / QA F-003 in
+  // `docs/audits/2026-05-21-qa-w1-visual-regressions-report.md`).
   const { data: watchlistsData } = useQuery({
     queryKey: qk.watchlists.sidebar(),
     queryFn: () => createGateway(accessToken).getWatchlists(),
@@ -140,11 +146,24 @@ export function WatchlistPanel() {
     staleTime: 30_000,
   });
 
-  // Resolve active watchlist
+  // Resolve active watchlist (metadata only — members come from the next query).
   const activeWatchlist =
     watchlistsData?.find((wl) => wl.watchlist_id === selectedWatchlistId) ??
     watchlistsData?.[0];
-  const members: WatchlistMember[] = activeWatchlist?.members ?? [];
+  const activeWatchlistId = activeWatchlist?.watchlist_id;
+
+  // ── Active-watchlist members (dependent on activeWatchlistId) ────────
+  // Reuses the existing `qk.watchlists.members(id)` key so other consumers
+  // (the future /watchlists hub member panel, etc.) hit the same cache.
+  // 60s staleTime — watchlist membership rarely changes mid-session.
+  const { data: activeMembers } = useQuery({
+    queryKey: qk.watchlists.members(activeWatchlistId ?? ""),
+    queryFn: () => createGateway(accessToken).getWatchlistMembers(activeWatchlistId!),
+    enabled: !!accessToken && !!activeWatchlistId,
+    staleTime: 60_000,
+  });
+
+  const members: WatchlistMember[] = activeMembers ?? [];
   const memberIds = members.map((m) => m.entity_id);
   const memberTickers = members.map((m) => m.ticker).filter((t): t is string => !!t);
 

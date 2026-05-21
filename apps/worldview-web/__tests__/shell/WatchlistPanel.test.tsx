@@ -21,12 +21,14 @@ import { HotkeyRegistry } from "@/lib/hotkey-registry";
 // ── Mocks ──────────────────────────────────────────────────────────────────
 
 const mockGetWatchlists = vi.fn();
+const mockGetWatchlistMembers = vi.fn();
 const mockGetBatchQuotes = vi.fn();
 const mockGetBatchOhlcvBars = vi.fn();
 
 vi.mock("@/lib/gateway", () => ({
   createGateway: () => ({
     getWatchlists: mockGetWatchlists,
+    getWatchlistMembers: mockGetWatchlistMembers,
     getBatchQuotes: mockGetBatchQuotes,
     getBatchOhlcvBars: mockGetBatchOhlcvBars,
   }),
@@ -87,7 +89,13 @@ function makeWrapper(registry: HotkeyRegistry) {
 
 beforeEach(() => {
   vi.clearAllMocks();
-  mockGetWatchlists.mockResolvedValue([WATCHLIST]);
+  // List endpoint deliberately returns SHALLOW watchlists (no members) —
+  // matches the real S1 contract. Members come from getWatchlistMembers.
+  const shallow = { ...WATCHLIST, members: [] };
+  mockGetWatchlists.mockResolvedValue([shallow]);
+  // Members endpoint returns the populated array — what the component
+  // actually consumes for the row list after QA F-003 fix.
+  mockGetWatchlistMembers.mockResolvedValue(WATCHLIST.members);
   mockGetBatchQuotes.mockResolvedValue({
     quotes: {
       "e-aapl": {
@@ -147,19 +155,17 @@ describe("WatchlistPanel (PRD-0089 W1)", () => {
 
   it('"+N more →" link routes to /watchlists (C-09)', async () => {
     // Build a watchlist with 12 members so the overflow link renders.
-    const big = {
-      ...WATCHLIST,
-      member_count: 12,
-      members: Array.from({ length: 12 }).map((_, i) => ({
-        entity_id: `e-${i}`,
-        instrument_id: `i-${i}`,
-        ticker: `T${i}`,
-        name: `Ticker ${i}`,
-        added_at: "2026-01-01T00:00:00Z",
-        resolution: "resolved" as const,
-      })),
-    };
+    const bigMembers = Array.from({ length: 12 }).map((_, i) => ({
+      entity_id: `e-${i}`,
+      instrument_id: `i-${i}`,
+      ticker: `T${i}`,
+      name: `Ticker ${i}`,
+      added_at: "2026-01-01T00:00:00Z",
+      resolution: "resolved" as const,
+    }));
+    const big = { ...WATCHLIST, member_count: 12, members: [] };
     mockGetWatchlists.mockResolvedValue([big]);
+    mockGetWatchlistMembers.mockResolvedValue(bigMembers);
     mockGetBatchQuotes.mockResolvedValue({ quotes: {} });
     mockGetBatchOhlcvBars.mockResolvedValue({ results: [] });
 
@@ -205,5 +211,20 @@ describe("WatchlistPanel (PRD-0089 W1)", () => {
     render(<WatchlistPanel />, { wrapper: makeWrapper(new HotkeyRegistry()) });
     const skeletons = screen.getAllByTestId("watchlist-skeleton-row");
     expect(skeletons).toHaveLength(5);
+  });
+
+  // QA F-003 regression: the S1 list endpoint returns shallow watchlists
+  // (no members). Pre-fix the sidebar consumed activeWatchlist.members and
+  // always rendered the empty state. The fix is a dependent
+  // getWatchlistMembers query — this test pins both that the second call
+  // fires once activeWatchlistId is known and that its results drive the
+  // row list.
+  it("(F-003 regression) hydrates members via getWatchlistMembers when list returns shallow watchlists", async () => {
+    render(<WatchlistPanel />, { wrapper: makeWrapper(new HotkeyRegistry()) });
+    // AAPL row only renders if the members fetch resolved AND its result
+    // was consumed in place of the (empty) list-endpoint members.
+    expect(await screen.findByText("AAPL")).toBeInTheDocument();
+    // Sanity check: the second call really happened.
+    expect(mockGetWatchlistMembers).toHaveBeenCalledWith("wl-1");
   });
 });
