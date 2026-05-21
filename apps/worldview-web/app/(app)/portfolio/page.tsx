@@ -156,7 +156,11 @@ export default function PortfolioPage() {
   usePortfolioBundle({ portfolioId: activePortfolioId, accessToken });
 
   // ── W2: batch-fetch 14d daily OHLCV series for SPARK column ───────────
-  const { holdingsSeries } = useHoldingsSeries(holdingsResp?.holdings ?? []);
+  // WHY _holdingsSeries prefix: series is pre-fetched here to warm the TanStack
+  // cache; SparklineCellRenderer reads it via AG Grid context (see ag-holdings-columns.tsx).
+  // The underscore suppresses the lint unused-vars warning — the side-effect (cache warm)
+  // is the intent, not the value binding.
+  const { holdingsSeries: _holdingsSeries } = useHoldingsSeries(holdingsResp?.holdings ?? []);
 
   // ── W2: derive contributors / detractors from enriched holdings ────────
   const { contributors, detractors } = useTopMovers(enrichedHoldings);
