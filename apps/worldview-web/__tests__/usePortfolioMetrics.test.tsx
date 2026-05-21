@@ -11,6 +11,11 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { renderHook, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { ReactNode } from "react";
+// QA F-003 (2026-05-21): the hook now consumes useActivePortfolio. The
+// branch tests below wrap the hook in ActivePortfolioProvider; the
+// existing tests (which omit the provider) exercise the noop fallback
+// path — both must keep working.
+import { ActivePortfolioProvider } from "@/contexts/ActivePortfolioContext";
 
 // Mock the gateway BEFORE the hook is imported so the dynamic gateway
 // returned by createGateway() exposes our stubs.
@@ -183,5 +188,72 @@ describe("usePortfolioMetrics", () => {
     expect(result.current.dailyPnl).toBe(5);          // 5 × 1
     // Unrealised = 250 − (5 × 0) = 250 — gifted shares are 100% upside.
     expect(result.current.unrealisedPnl).toBe(250);
+  });
+
+  // ── QA F-003 (2026-05-21): active-portfolio context branches ──────────
+  describe("active-portfolio context (W1.1 F-002 + QA-2026-05-21)", () => {
+    /**
+     * Wrapper that mounts ActivePortfolioProvider with a specific
+     * initialActiveId — bypasses localStorage so the tests are
+     * deterministic regardless of suite order.
+     */
+    function makeWrapperWithActive(activeId: string | null) {
+      const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+      return ({ children }: { children: ReactNode }) => (
+        <QueryClientProvider client={client}>
+          <ActivePortfolioProvider initialActiveId={activeId}>
+            {children}
+          </ActivePortfolioProvider>
+        </QueryClientProvider>
+      );
+    }
+
+    const P1 = "01900000-0000-7000-8000-000000000a01";
+    const P2 = "01900000-0000-7000-8000-000000000a02";
+
+    it("scopes holdings fetch to the active-portfolio id when it exists in the user's list", async () => {
+      mockGetPortfolios.mockResolvedValue([
+        { portfolio_id: P1, name: "First" },
+        { portfolio_id: P2, name: "Second" },
+      ]);
+      mockGetHoldings.mockResolvedValue({ holdings: [] });
+      mockGetBatchQuotes.mockResolvedValue({ quotes: {} });
+      renderHook(() => usePortfolioMetrics(), {
+        wrapper: makeWrapperWithActive(P2),
+      });
+      await waitFor(() => expect(mockGetHoldings).toHaveBeenCalled());
+      // getHoldings was called with the active id (P2), NOT portfolios[0] (P1).
+      expect(mockGetHoldings).toHaveBeenCalledWith(P2);
+      expect(mockGetHoldings).not.toHaveBeenCalledWith(P1);
+    });
+
+    it("falls back to portfolios[0] when the persisted active id is NOT in the list (stale-id guard)", async () => {
+      mockGetPortfolios.mockResolvedValue([
+        { portfolio_id: P1, name: "First" },
+      ]);
+      mockGetHoldings.mockResolvedValue({ holdings: [] });
+      mockGetBatchQuotes.mockResolvedValue({ quotes: {} });
+      renderHook(() => usePortfolioMetrics(), {
+        wrapper: makeWrapperWithActive("01900000-0000-7000-8000-000000000dead"),
+      });
+      await waitFor(() => expect(mockGetHoldings).toHaveBeenCalled());
+      // Stale persisted id → fall back to portfolios[0]; the holdings
+      // call must use P1, NOT the stale id (which would 404 on S1).
+      expect(mockGetHoldings).toHaveBeenCalledWith(P1);
+    });
+
+    it("uses portfolios[0] when active id is null (ROOT/All semantics)", async () => {
+      mockGetPortfolios.mockResolvedValue([
+        { portfolio_id: P1, name: "First" },
+        { portfolio_id: P2, name: "Second" },
+      ]);
+      mockGetHoldings.mockResolvedValue({ holdings: [] });
+      mockGetBatchQuotes.mockResolvedValue({ quotes: {} });
+      renderHook(() => usePortfolioMetrics(), {
+        wrapper: makeWrapperWithActive(null),
+      });
+      await waitFor(() => expect(mockGetHoldings).toHaveBeenCalled());
+      expect(mockGetHoldings).toHaveBeenCalledWith(P1);
+    });
   });
 });

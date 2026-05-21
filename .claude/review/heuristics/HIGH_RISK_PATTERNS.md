@@ -958,3 +958,43 @@ Any `useState` holding a user-preference value without a corresponding `useEffec
 grep -n "useQuery\b" apps/worldview-web/ -r --include="*.tsx" | grep -v "staleTime"
 ```
 Any `useQuery` call without `staleTime` on a non-price endpoint is a candidate for rate-limit exhaustion under concurrent component mounts.
+
+---
+
+### HR-060: TanStack query-key drift between consumers of the same endpoint
+
+**Category**: Frontend, Cache
+**Severity**: HIGH
+**Detection**:
+```bash
+# Any bare-array queryKey for a domain that has a qk.* factory
+grep -rE 'queryKey: \[' apps/worldview-web/components apps/worldview-web/hooks | grep -v "qk\."
+```
+
+When `lib/query/keys.ts` defines a factory for an endpoint (`qk.portfolios.list()`, `qk.watchlists.sidebar()`, etc.), every `useQuery`/`useQueries` call against that endpoint must use the factory. Bare-array literals (`queryKey: ["portfolios"]`) hash as different cache entries — TanStack treats them as separate queries and fires duplicate HTTP requests, silently defeating the dedup contract the factory promises.
+
+The pattern is hard to spot in review because both consumers individually look correct; the issue is the relationship between them. Detection is mechanical: grep for `queryKey: \[` and reject any hit that doesn't reference the central factory.
+
+**Real instance**: BP-497 (PRD-0089 W1.1) — 6 consumers of `getPortfolios()` drifted from the new factory introduced by PortfolioSwitcher; surfaced only in a downstream QA pass.
+
+---
+
+### HR-061: Cross-component selection context that consumers ignore
+
+**Category**: Frontend, UX
+**Severity**: HIGH
+**Detection**:
+```bash
+# Whenever a new selection context is added, audit list-endpoint consumers:
+grep -rE '\?\.\[0\]\?\.[a-z_]+_id' apps/worldview-web/components apps/worldview-web/hooks
+# Each match is a candidate that should respect the new selection context
+# instead of unconditionally picking the first item.
+```
+
+When a new selection context is introduced (active-portfolio, active-watchlist, active-tenant, etc.) the SAME commit must migrate every existing consumer of the underlying list endpoint to read the context first. Otherwise the chip/switcher will appear to work in the place it was wired (TopBar) but every other surface keeps using the legacy "first item" pick — half-shipped UX that users will immediately notice as "the chip does nothing".
+
+The classic shape: a new context with a setter, a writer component (chip / switcher), and ONE reader hook adopted in a single useful surface. The remaining 3-5 readers of the same domain keep `?.[0]` and silently ignore the user's selection.
+
+Review prompt: "List every consumer of the underlying list endpoint and confirm each one respects the new selection context. If even one doesn't, ship a shared resolver hook in the same commit."
+
+**Real instance**: BP-498 (PRD-0089 W1.1) — `ActivePortfolioContext` wired into `usePortfolioMetrics` but 5 other widgets kept their pre-existing `portfolios?.[0]` pick.

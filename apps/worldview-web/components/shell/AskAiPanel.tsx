@@ -58,14 +58,25 @@ import { formatPrice } from "@/lib/format";
  * button in the header) shows the structured kind-aware citation list when
  * the user wants the full reference set.
  */
+// Sec F-002 (QA 2026-05-21): cap citation-id length at 6 digits.
+// `\d+` matches arbitrarily long digit runs; a degenerate SSE stream
+// returning `[999999999999...]` would otherwise produce a huge DOM
+// string in the aria-label + label slots. Six digits covers every
+// realistic citation count (a chat response with >1M chunks doesn't
+// exist) and bounds the worst case to ~50 chars per anchor.
+const MAX_CITATION_ID_LEN = 6;
+
 function renderCitedText(text: string) {
   const CITATION_RE = /\[(\d+)\]/g;
   const parts: React.ReactNode[] = [];
   let lastIndex = 0;
   let match: RegExpExecArray | null;
   while ((match = CITATION_RE.exec(text)) !== null) {
-    if (match.index > lastIndex) parts.push(text.slice(lastIndex, match.index));
     const n = match[1];
+    // Sec F-002: skip pathological markers — keep their literal text in
+    // the body rather than rendering as a citation anchor.
+    if (n.length > MAX_CITATION_ID_LEN) continue;
+    if (match.index > lastIndex) parts.push(text.slice(lastIndex, match.index));
     parts.push(
       <InlineCitationAnchor
         key={`cite-${match.index}`}

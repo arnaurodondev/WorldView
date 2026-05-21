@@ -46,8 +46,14 @@ export function WorkspacePortfolioPanel() {
   // portfolios[0] unconditionally).
   const firstPortfolioId = useResolvedPortfolioId(portfolios);
 
+  // BP-497 / HR-060 (2026-05-21): use qk.portfolios.holdingsByPortfolio
+  // — the existing "flat legacy-shape" key documented in lib/query/keys.ts
+  // that usePortfolioMetrics already consumes. Same cache entry across
+  // both consumers; no duplicate /v1/portfolios/{id}/holdings fetch.
   const { data: holdingsResp, isLoading: holdingsLoading } = useQuery({
-    queryKey: ["holdings", firstPortfolioId],
+    queryKey: firstPortfolioId
+      ? qk.portfolios.holdingsByPortfolio(firstPortfolioId)
+      : ["holdings", "no-portfolio"],
     queryFn: () => createGateway(accessToken).getHoldings(firstPortfolioId!),
     enabled: !!accessToken && !!firstPortfolioId,
     staleTime: 5 * 60_000,

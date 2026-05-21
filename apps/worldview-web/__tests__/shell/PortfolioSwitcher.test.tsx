@@ -55,7 +55,7 @@ function makeWrapper(registry: HotkeyRegistry, initialActiveId?: string | null) 
 }
 
 const PORT_ROOT = {
-  portfolio_id: "p-root",
+  portfolio_id: "01900000-0000-7000-8000-000000000001",
   name: "ROOT",
   currency: "USD",
   owner_id: "u-1",
@@ -65,7 +65,7 @@ const PORT_ROOT = {
 };
 const PORT_BROKERAGE = {
   ...PORT_ROOT,
-  portfolio_id: "p-bk",
+  portfolio_id: "01900000-0000-7000-8000-000000000002",
   name: "Tastytrade Main",
   kind: "brokerage" as const,
 };
@@ -73,7 +73,7 @@ const PORT_BROKERAGE = {
 // forward-compat string-compare in the component can light up DemoBadge.
 const PORT_DEMO = {
   ...PORT_ROOT,
-  portfolio_id: "p-demo",
+  portfolio_id: "01900000-0000-7000-8000-000000000003",
   name: "Sample Demo",
   kind: "demo",
 } as unknown as typeof PORT_ROOT;
@@ -82,7 +82,16 @@ beforeEach(() => {
   vi.clearAllMocks();
   mockGetPortfolios.mockResolvedValue([PORT_ROOT, PORT_BROKERAGE]);
   // Clean localStorage between tests so persistence assertions don't leak.
-  if (typeof window !== "undefined") window.localStorage.clear();
+  // QA F-006 (2026-05-21): wrap in try/catch to mirror production helpers'
+  // defensiveness — Safari Private Mode throws on localStorage access and
+  // would otherwise blow up the entire beforeEach.
+  if (typeof window !== "undefined") {
+    try {
+      window.localStorage.clear();
+    } catch {
+      /* private mode — no-op */
+    }
+  }
 });
 
 // ── Tests ──────────────────────────────────────────────────────────────────
@@ -132,7 +141,7 @@ describe("PortfolioSwitcher", () => {
     // label. The onChange callback prop no longer exists; the context
     // is the canonical wiring surface.
     expect(await screen.findByTestId("portfolio-switcher-chip")).toHaveTextContent("Tastytrade Main");
-    expect(window.localStorage.getItem("shell.activePortfolioId")).toBe("p-bk");
+    expect(window.localStorage.getItem("shell.activePortfolioId")).toBe("01900000-0000-7000-8000-000000000002");
   });
 
   it("renders DemoBadge when the active portfolio kind === 'demo'", async () => {
@@ -158,7 +167,7 @@ describe("PortfolioSwitcher", () => {
       return row as HTMLButtonElement;
     });
     await user.click(bkRow);
-    expect(window.localStorage.getItem("shell.activePortfolioId")).toBe("p-bk");
+    expect(window.localStorage.getItem("shell.activePortfolioId")).toBe("01900000-0000-7000-8000-000000000002");
   });
 
   it("registers the alt+p chord on mount", () => {
@@ -170,5 +179,61 @@ describe("PortfolioSwitcher", () => {
     expect(altP?.chord).toBe("alt+p");
     // Firing the handler toggles dropdown — sanity-check it does not throw.
     act(() => altP?.handler(new KeyboardEvent("keydown", { key: "p", altKey: true })));
+  });
+
+  // ── QA F-005 (2026-05-21): edge cases ────────────────────────────────
+
+  it("(F-005) chip renders fallback label while portfolios are loading", () => {
+    // Never-resolving fetch keeps the query in loading state forever.
+    mockGetPortfolios.mockImplementation(() => new Promise(() => {}));
+    render(<PortfolioSwitcher />, { wrapper: makeWrapper(new HotkeyRegistry()) });
+    // Chip is always visible (FU-1.1) and shows "All Portfolios" while
+    // the active portfolio is unresolved — no flash of empty label.
+    const chip = screen.getByTestId("portfolio-switcher-chip");
+    expect(chip).toHaveTextContent(/All Portfolios/i);
+  });
+
+  it("(F-005) chip does not crash when getPortfolios rejects", async () => {
+    mockGetPortfolios.mockRejectedValue(new Error("S9 down"));
+    render(<PortfolioSwitcher />, { wrapper: makeWrapper(new HotkeyRegistry()) });
+    // Network error → chip stays visible with the fallback label.
+    // (PortfolioSwitcher does not surface its own error UI — it
+    // degrades silently to the "no portfolios" code path.)
+    const chip = await screen.findByTestId("portfolio-switcher-chip");
+    expect(chip).toBeInTheDocument();
+  });
+
+  it("(F-005) Alt+P actually opens the popover (not just no-throw)", async () => {
+    const registry = new HotkeyRegistry();
+    render(<PortfolioSwitcher />, { wrapper: makeWrapper(registry) });
+    await screen.findByTestId("portfolio-switcher-chip");
+    expect(screen.queryByTestId("portfolio-switcher-popover")).toBeNull();
+    const binding = registry.all().find((b) => b.id === "shell.portfolio.switcher.toggle")!;
+    act(() => binding.handler(new KeyboardEvent("keydown", { key: "p", altKey: true })));
+    expect(await screen.findByTestId("portfolio-switcher-popover")).toBeInTheDocument();
+    // Firing again closes it.
+    act(() => binding.handler(new KeyboardEvent("keydown", { key: "p", altKey: true })));
+    await waitFor(() => {
+      expect(screen.queryByTestId("portfolio-switcher-popover")).toBeNull();
+    });
+  });
+
+  it("(F-005) clicking outside the chip closes an open popover", async () => {
+    const user = userEvent.setup();
+    render(
+      <div>
+        <PortfolioSwitcher />
+        <button data-testid="outside-target">elsewhere</button>
+      </div>,
+      { wrapper: makeWrapper(new HotkeyRegistry()) },
+    );
+    await user.click(await screen.findByTestId("portfolio-switcher-chip"));
+    expect(await screen.findByTestId("portfolio-switcher-popover")).toBeInTheDocument();
+    // The click-outside handler is on `mousedown` — dispatch one directly
+    // since userEvent.click maps to pointerdown→mousedown→pointerup→click.
+    await user.click(screen.getByTestId("outside-target"));
+    await waitFor(() => {
+      expect(screen.queryByTestId("portfolio-switcher-popover")).toBeNull();
+    });
   });
 });

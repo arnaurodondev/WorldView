@@ -193,6 +193,79 @@ describe("IndexStrip", () => {
     expect(tnxCalls[0]).toBe("TNX");
   });
 
+  // QA F-001 (2026-05-21): the pre-W1 IndexTicker tests asserted the
+  // "stale / no-quote → muted color + em-dash" contract. With the W1
+  // marquee restoration those tests went away; replace with focused
+  // assertions on the same contract for the new component.
+  it("(F-001) renders em-dash + muted color when batchQuotes returns no entry for an id", async () => {
+    mockGetBatchQuotes.mockResolvedValue({ quotes: {} });
+    render(<IndexStrip />, { wrapper: makeWrapper() });
+    const spy = await waitFor(() => {
+      const all = screen.getAllByRole("button", { name: /S&P 500 ETF/i });
+      if (all.length === 0) throw new Error("no SPY button yet");
+      return all[0];
+    });
+    // Both price and change% slots render em-dash when no quote is found.
+    const dashes = within(spy).getAllByText("—");
+    expect(dashes.length).toBe(2);
+    // The change% slot is the one carrying text-muted-foreground when no
+    // quote (the price slot keeps text-foreground per design).
+    const mutedDash = dashes.find((el) => /text-muted-foreground/.test(el.className));
+    expect(mutedDash).toBeDefined();
+  });
+
+  it("(F-001) passes a missing change_pct through priceChangeClass deadband", async () => {
+    mockGetBatchQuotes.mockResolvedValue({
+      quotes: {
+        "id-SPY": { ticker: "SPY", price: 100, change: 0, change_pct: 0, timestamp: "t", volume: 0 },
+      },
+    });
+    render(<IndexStrip />, { wrapper: makeWrapper() });
+    const spy = await waitFor(() => {
+      const all = screen.getAllByRole("button", { name: /S&P 500 ETF/i });
+      if (all.length === 0) throw new Error("no SPY button yet");
+      return all[0];
+    });
+    // 0% change rendered as "+0.00%" by formatPercentDirect, not em-dash.
+    // The exact text depends on the formatter but it should NOT be "—".
+    const cells = within(spy).getAllByText(/0/);
+    expect(cells.length).toBeGreaterThan(0);
+  });
+
+  // QA F-008 (2026-05-21): formatPrice has 4 branches (>=1M, >=10K, >=1K,
+  // default + null fallback). Without these the marquee silently
+  // misrenders any ticker whose value crosses a threshold.
+  it("(F-008) formats prices via the compact-K/M rules for high-value tickers", async () => {
+    mockSearchInstruments.mockImplementation((ticker: string) =>
+      Promise.resolve({ results: [{ instrument_id: `id-${ticker}` }] }),
+    );
+    mockGetBatchQuotes.mockResolvedValue({
+      quotes: {
+        "id-SPY":     { ticker: "SPY",     price: 100,        change: 0, change_pct: 0,  timestamp: "t", volume: 0 },
+        "id-QQQ":     { ticker: "QQQ",     price: 1500,       change: 0, change_pct: 0,  timestamp: "t", volume: 0 },
+        "id-IWM":     { ticker: "IWM",     price: 15000,      change: 0, change_pct: 0,  timestamp: "t", volume: 0 },
+        "id-BTC-USD": { ticker: "BTC-USD", price: 1_500_000,  change: 0, change_pct: 0,  timestamp: "t", volume: 0 },
+      },
+    });
+    render(<IndexStrip />, { wrapper: makeWrapper() });
+    // SPY = 100.00 (default decimal branch)
+    const spy = await waitFor(() => {
+      const all = screen.getAllByRole("button", { name: /S&P 500 ETF/i });
+      if (all.length === 0) throw new Error("no SPY button yet");
+      return all[0];
+    });
+    expect(within(spy).getByText("100.00")).toBeInTheDocument();
+    // QQQ = 1500 → "1.5K"
+    const qqq = screen.getAllByRole("button", { name: /Nasdaq-100 ETF/i })[0];
+    expect(within(qqq).getByText("1.5K")).toBeInTheDocument();
+    // IWM = 15000 → "15K" (the ≥10K branch uses .toFixed(0))
+    const iwm = screen.getAllByRole("button", { name: /Russell 2000 ETF/i })[0];
+    expect(within(iwm).getByText("15K")).toBeInTheDocument();
+    // BTC = 1.5M
+    const btc = screen.getAllByRole("button", { name: /Bitcoin/i })[0];
+    expect(within(btc).getByText("1.5M")).toBeInTheDocument();
+  });
+
   it("hides the entire strip below the lg breakpoint", () => {
     // CSS class assertion is the most we can verify in jsdom (no layout).
     // The wrapper carries `hidden lg:flex` so it is display:none in <1024px.

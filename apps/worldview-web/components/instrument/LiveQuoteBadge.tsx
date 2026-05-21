@@ -28,6 +28,8 @@ import { useQuery } from "@tanstack/react-query";
 import { TrendingUp, TrendingDown, Minus } from "lucide-react";
 import { createGateway } from "@/lib/gateway";
 import { useAuth } from "@/hooks/useAuth";
+// BP-497 / HR-060: central qk.* factory.
+import { qk } from "@/lib/query/keys";
 import { formatPrice, formatPercent, priceChangeClass } from "@/lib/utils";
 import { StaleBadge } from "@/components/ui/StaleBadge";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -62,8 +64,12 @@ const REFETCH_INTERVAL_MS = 15_000;
 export function LiveQuoteBadge({ instrumentId, initialPrice, compact = false }: LiveQuoteBadgeProps) {
   const { accessToken } = useAuth();
 
+  // BP-497 / HR-060 fix (2026-05-21): use qk.quotes.single() so this
+  // badge shares the cache with every other consumer of a single-quote
+  // fetch (other badges on the same instrument page, the LiveQuoteBadge
+  // inside the InstrumentHeader, etc).
   const { data: quote } = useQuery({
-    queryKey: ["quote-live", instrumentId],
+    queryKey: qk.quotes.single(instrumentId),
     queryFn: () => createGateway(accessToken).getQuote(instrumentId),
     enabled: !!accessToken && !!instrumentId,
     refetchInterval: REFETCH_INTERVAL_MS,

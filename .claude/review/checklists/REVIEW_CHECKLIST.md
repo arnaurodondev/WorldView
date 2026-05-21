@@ -257,6 +257,18 @@ Mark N/A for pure backend changes.
 - [ ] Any new settings page is either: (a) fully wired to a backend endpoint, or (b) returns `notFound()` and hidden from sidebar nav
 - [ ] No `console.log + toast("Coming soon")` patterns in settings pages
 
+### 10l. TanStack Query Key Hygiene (HR-060 / BP-497)
+- [ ] Every `useQuery` / `useQueries` `queryKey` uses the `qk.*` factory from `lib/query/keys.ts` — NO bare-array literals (`["portfolios"]`, `["holdings", id]`, etc.) anywhere in `components/` or `hooks/`
+- [ ] When introducing a NEW `qk.*` factory entry, the SAME PR migrates every existing consumer of that endpoint (`grep -rn 'queryFn:.*<methodName>' apps/worldview-web/`)
+- [ ] Detection: `grep -rE 'queryKey: \[' apps/worldview-web/components apps/worldview-web/hooks` returns 0 hits (excluding documented exceptions)
+
+### 10m. Cross-Component Selection Context (HR-061 / BP-498)
+- [ ] When introducing a NEW selection context (active-portfolio, active-watchlist, active-tenant, etc.), audit every consumer of the underlying list endpoint:
+  - `grep -rE '\?\.\[0\]\?\.[a-z_]+_id' apps/worldview-web/components apps/worldview-web/hooks`
+- [ ] Each matching consumer is migrated in the same PR to respect the new context (typically via a shared `useResolved<Entity>Id()` helper)
+- [ ] The chip / switcher that writes the context is mounted in a place where its readers can subscribe (provider above all consumer subtrees)
+- [ ] A stale-id guard exists: if the persisted selection no longer matches any item in the user's list, fall back to `items[0]` (not 404)
+
 ---
 
 ## Scoring
