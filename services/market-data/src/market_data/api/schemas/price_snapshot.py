@@ -10,7 +10,7 @@ from __future__ import annotations
 from datetime import datetime
 from uuid import UUID
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, RootModel, field_validator
 
 
 class PriceSnapshotResponse(BaseModel):
@@ -63,3 +63,30 @@ class BatchPriceSnapshotRequest(BaseModel):
             except ValueError as exc:
                 raise ValueError(f"instrument_ids must be valid UUIDs; got {item!r}") from exc
         return v
+
+
+# ── REQ-004 / TASK-W0-07 — partial-result schema for batch price endpoint ──
+#
+# The default response shape for POST /internal/v1/price/batch is a *list* of
+# resolved snapshots (instruments with no data are silently omitted).  Callers
+# of that legacy shape (notably S9 api-gateway in
+# `routes/market.py:786-810`) rely on `isinstance(resp, list)` and would break
+# if we changed the default shape unilaterally — see audit BACKEND-AUDIT-REPORT
+# section "REQ-004".
+#
+# This dict-shaped alternative is opt-in via `?include_missing=true`:
+#   { "<instrument_id>": PriceSnapshotResponse | None, ... }
+# so callers that need to detect which instruments were missing can request it
+# explicitly without breaking the existing list contract.  Once all consumers
+# migrate, the default shape can be flipped in a follow-up PR (separate audit
+# task; coordinated with the frontend / S9 PR).
+class BatchPriceSnapshotMap(RootModel[dict[str, PriceSnapshotResponse | None]]):
+    """Dict-shaped batch response keyed by instrument_id.
+
+    Returned by POST /internal/v1/price/batch?include_missing=true. Missing
+    instruments are represented with explicit `null` values so the caller can
+    detect them (vs. the legacy list shape which silently drops them).
+    """
+
+    # RootModel exposes the underlying dict via `.root`; Pydantic serialises it
+    # as a plain JSON object on the wire — no envelope key required.
