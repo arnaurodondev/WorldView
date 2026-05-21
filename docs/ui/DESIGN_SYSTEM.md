@@ -213,7 +213,27 @@ acceptable in that context.
 | Section gap | `space-y-4` or `space-y-6` | Between panels |
 | Grid columns | `grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3` | Metric grids |
 | Max content width | `max-w-7xl mx-auto` | Constrained page layouts |
-| Sidebar width | `w-[220px]` | Fixed, not resizable |
+| Sidebar width | `w-[200px]` (PRD-0089 W1 default) | Drag-resizable 160–340px |
+
+### 4.1 Global Shell (PRD-0089 W1 — locked 2026-05-20)
+
+The application shell rendered by `app/(app)/layout.tsx` consumes the
+following hard tokens; per-page surfaces never override them.
+
+| Region | Class / size | Notes |
+|--------|--------------|-------|
+| TopBar | `h-8` (32px) | 17 information slots: wordmark · GlobalSearch · PortfolioSwitcher (+DemoBadge) · IndexStrip (10 cells) · UtcClock · MarketStatusPill · PortfolioRail · AskAi · RefreshAll · Bell · Avatar |
+| IndexStrip cell | `w-[60px] h-6` | Static 10-cell row; responsive priority drop via `xl:`/`2xl:` (USO drops first); hidden below `lg` |
+| PortfolioSwitcher chip | `h-6` | Always visible (FU-1.1) — even with zero or one portfolio; `Alt+P` toggles the 240px dropdown |
+| CollapsibleSidebar | `w-[200px]` expanded / `w-10` collapsed | Drag-resize 160–340 (`mod+b` toggles); `worldview-sidebar-expanded` localStorage multi-tab sync |
+| Sidebar nav row | `h-7 px-2.5 gap-1.5` | Icon `size-[14px]`, label `text-[10px]`; active = `bg-primary/10 text-primary border-l-2 border-primary` |
+| WatchlistPanel row | 20px via `data-table-grid` | Ticker 44px / Price flex-1 / Chg% 44px / FreshnessDot / 40×16 Sparkline; click → `/instruments/{TICKER}` (F2) |
+| StatusBar | `h-[22px]` | Top border = `border-border-subtle` (F1); WS dot from `useAlertStream().isConnected`; "MARKET CLOSED" override when `useMarketStatus().overall === "closed"` |
+| ForceUpdateBanner | `h-6` sticky above TopBar | Renders only when a new build is detected; otherwise returns null (zero height reserved) |
+| Skip-to-content | First focusable child | `sr-only focus:not-sr-only`, target `<main id="main">` |
+| Sonner Toaster | top-right, z-60 | Above shell chrome (TopBar z-50, sidebar z-40); below FlashOverlay (z-9999) |
+
+`docs/plans/0089-pages/W1-global-shell-plan.md` is the canonical source.
 
 ---
 
@@ -276,8 +296,10 @@ Purpose-built components for financial data. Implement these consistently:
 
 | Component | File path | Notes |
 |-----------|-----------|-------|
-| `Sidebar` | `components/shell/Sidebar.tsx` | 56px icon-only nav rail, watchlist prices, keyboard hint strip |
-| `TopBar` | `components/shell/TopBar.tsx` | Logo + GlobalSearch + IndexTicker + alerts badge + avatar |
+| `CollapsibleSidebar` | `components/shell/CollapsibleSidebar.tsx` | 200px expanded / 40px collapsed; nav + WatchlistPanel + AlarmsPanel + bottom chrome (PRD-0089 W1 §4.4) |
+| `TopBar` | `components/shell/TopBar.tsx` | 17 information slots (PRD-0089 W1 §4.3): wordmark + GlobalSearch + PortfolioSwitcher + IndexStrip + UtcClock + MarketStatusPill + PortfolioRail + AskAi + Refresh + Bell + Avatar |
+| `IndexStrip` | `components/shell/IndexStrip.tsx` | Static 10-cell index row (SPY/QQQ/IWM/VIX/DIA/TLT/^TNX/BTC-USD/GLD/USO); replaces the prior animated marquee |
+| `PortfolioSwitcher` | `components/shell/PortfolioSwitcher.tsx` | Always-visible chip + 240px dropdown; ROOT default per DISCUSS-1; `Alt+P` toggles |
 | `GlobalSearch` | `components/shell/GlobalSearch.tsx` | ⌘K command palette overlay (cmdk) |
 | `UtcClock` | `components/shell/UtcClock.tsx` | Live UTC clock display |
 | `IndexTicker` | `components/shell/IndexTicker.tsx` | Center-bar market index prices |
