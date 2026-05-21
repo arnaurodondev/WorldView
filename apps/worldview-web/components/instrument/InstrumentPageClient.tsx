@@ -213,6 +213,12 @@ export function InstrumentPageClient({ entityId }: InstrumentPageClientProps) {
             fundamentals={bundle?.overview?.fundamentals ?? null}
             quote={bundle?.overview?.quote ?? null}
             initialBars={bundle?.overview?.ohlcv?.bars}
+            // WHY W5-T-27: pass bundle sub-resources so QuoteTab can seed
+            // CompanyAboutCard, InsiderActivityList, RelatedHeadlinesList without
+            // extra network round-trips. All are already in the page-bundle.
+            instrument={bundle?.overview?.instrument ?? null}
+            insiderData={bundle?.insider ?? null}
+            topNews={bundle?.top_news ?? null}
           />
         )}
         {/* Wave C: Financials tab orchestrator (T-C-03). WHY guard on the
