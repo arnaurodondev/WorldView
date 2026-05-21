@@ -24,7 +24,7 @@ import { useRouter } from "next/navigation";
 import { useQueryClient } from "@tanstack/react-query";
 import { createGateway } from "@/lib/gateway";
 import { useAccessToken } from "@/lib/api-client";
-import { formatMarketCap, formatRatio, formatPercentDirect } from "@/lib/utils";
+import { formatMarketCap, formatRatio } from "@/lib/utils";
 import type { PeersResponse } from "@/types/api";
 
 // ── Helpers ───────────────────────────────────────────────────────────────────

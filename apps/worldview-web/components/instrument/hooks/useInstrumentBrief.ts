@@ -38,7 +38,6 @@ import { createGateway } from "@/lib/gateway";
 import { useAccessToken } from "@/lib/api-client";
 import { qk } from "@/lib/query/keys";
 import type { BriefingResponse } from "@/types/api";
-import { GatewayError } from "@/lib/api/_client";
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
