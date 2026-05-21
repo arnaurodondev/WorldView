@@ -864,3 +864,113 @@ async def test_sync_connection_returns_early_when_lock_unavailable() -> None:
         await worker._sync_connection(conn)
 
     assert do_sync_called == 0
+
+
+# ── BP-501: cash activity types silently skipped ─────────────────────────────
+
+
+async def test_process_activity_fee_silently_skipped_no_sync_error() -> None:
+    """FEE activity → silently skipped; no BrokerageTransactionSyncError recorded.
+
+    BP-501: FEE is a cash-only activity (no instrument_id). The schema requires
+    NOT NULL instrument_id, so recording it would fail. We skip without creating
+    a sync error so the brokerage panel stays clean.
+    """
+    uow = await _setup_full_uow()
+    worker, _ = _make_worker(uow)
+
+    conn = _make_connection()
+    activity = _make_activity(activity_type="FEE", symbol="", txn_id="fee-001")
+
+    await worker._process_activity(conn, activity, uow)  # type: ignore[arg-type]
+
+    assert len(uow.brokerage_sync_errors._store) == 0, "FEE must not create a sync error"
+    assert len(uow.transactions._store) == 0, "FEE must not create a transaction"
+
+
+async def test_process_activity_interest_silently_skipped_no_sync_error() -> None:
+    """INTEREST activity → silently skipped; no BrokerageTransactionSyncError recorded.
+
+    BP-501: INTEREST is a cash-only activity (no instrument_id). Same constraint
+    as FEE — intercepted before instrument lookup to avoid UNSUPPORTED_TYPE error.
+    """
+    uow = await _setup_full_uow()
+    worker, _ = _make_worker(uow)
+
+    conn = _make_connection()
+    activity = _make_activity(activity_type="INTEREST", symbol="", txn_id="int-001")
+
+    await worker._process_activity(conn, activity, uow)  # type: ignore[arg-type]
+
+    assert len(uow.brokerage_sync_errors._store) == 0, "INTEREST must not create a sync error"
+    assert len(uow.transactions._store) == 0, "INTEREST must not create a transaction"
+
+
+# ── BP-500: holdings not wiped when snapshot positions all fail resolution ────
+
+
+async def test_sync_holdings_not_wiped_when_all_positions_unresolved() -> None:
+    """Existing holdings survive when every broker position fails instrument resolution.
+
+    BP-500: if the broker returns N positions but all fail lookup (e.g. ETFs not
+    yet seeded in S2), the worker must NOT call UpsertHoldingsFromSnapshotUseCase
+    with positions=[] — that would delete every existing holding.
+    """
+    from portfolio.domain.entities.holding import Holding
+    from portfolio.domain.errors import BrokerageSyncSymbolNotFoundError
+
+    from tests.unit.fakes import FakeBrokerageClient, FakeInstrumentLookupClient
+
+    class AlwaysNotFoundLookup(FakeInstrumentLookupClient):
+        """Simulates S2 returning 404 for every symbol."""
+
+        async def lookup_by_ticker(self, symbol: str) -> InstrumentRef | None:
+            raise BrokerageSyncSymbolNotFoundError(symbol=symbol)
+
+    uow = await _setup_full_uow()
+
+    # Pre-seed a holding so we can verify it survives the sync.
+    instrument = next(iter(uow.instruments._store.values()))  # type: ignore[attr-defined]
+    existing_holding = Holding(
+        id=uuid4(),
+        portfolio_id=PORTFOLIO_ID,
+        instrument_id=instrument.id,
+        tenant_id=TENANT_ID,
+        currency="USD",
+        quantity=Decimal("50"),
+        average_cost=Decimal("100"),
+    )
+    await uow.holdings.save(existing_holding)
+
+    from portfolio.application.ports.brokerage_client import SnapTradePosition
+
+    broker = FakeBrokerageClient()
+    # FakeBrokerageClient uses dynamic attribute injection for snapshot data.
+    broker.account_ids = ["acc-1"]  # type: ignore[attr-defined]
+    broker.positions_by_account = {  # type: ignore[attr-defined]
+        "acc-1": [
+            SnapTradePosition(
+                account_id="acc-1",
+                symbol="VWO",
+                quantity=Decimal("100"),
+                average_purchase_price=Decimal("45"),
+                currency="USD",
+            ),
+        ],
+    }
+
+    worker, _ = _make_worker(uow, broker=broker, instrument_lookup=AlwaysNotFoundLookup())
+    conn = _make_connection()
+
+    with patch("portfolio.workers.brokerage_sync_worker.SqlAlchemyUnitOfWork") as mock_uow_cls:
+        mock_ctx = AsyncMock()
+        mock_ctx.__aenter__ = AsyncMock(return_value=uow)
+        mock_ctx.__aexit__ = AsyncMock(return_value=False)
+        mock_uow_cls.return_value = mock_ctx
+
+        await worker._sync_holdings_from_snapshot(conn, object())  # type: ignore[arg-type]
+
+    # The pre-existing AAPL holding must still be there.
+    holdings = await uow.holdings.list_by_portfolio(PORTFOLIO_ID)
+    assert len(holdings) == 1, "Existing holding must not be deleted when all positions fail resolution"
+    assert holdings[0].instrument_id == existing_holding.instrument_id

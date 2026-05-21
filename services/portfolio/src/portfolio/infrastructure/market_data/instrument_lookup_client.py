@@ -2,7 +2,14 @@
 
 PRD-0089 F2 §4.4. Replaces the old two-path ``_resolve_instrument`` in the
 brokerage-sync worker (DB-first then S3 REST fallback) with a single canonical
-``GET /api/v1/instruments/symbol/{symbol}`` round-trip.
+``GET /api/v1/instruments/lookup?symbol={symbol}`` round-trip.
+
+BP-499: The original implementation called ``/api/v1/instruments/symbol/{symbol}``
+(path-param form), but S2 removed that route during the F2 redesign and now
+exposes ``/api/v1/instruments/lookup?symbol={symbol}`` (query-param form) from
+the InstrumentLookupUseCase. The old path always returned 404, causing ALL
+brokerage sync instrument lookups to fail as UNKNOWN_INSTRUMENT errors. Fixed
+by switching to the query-param URL.
 
 R7 (no cross-service DB access) and R-002 (URL-encode SnapTrade symbols — they
 can contain '.', '/', etc.) are both honoured here.
@@ -15,7 +22,6 @@ just a read-through symbol-resolver.
 
 from __future__ import annotations
 
-import urllib.parse
 from typing import TYPE_CHECKING
 
 from observability import get_logger  # type: ignore[import-untyped]
@@ -56,13 +62,13 @@ class HttpInstrumentLookupClient(IInstrumentLookupClient):
                 ``UNKNOWN_INSTRUMENT``) so a brief S2 outage cannot pollute the
                 sync-error table with false unknowns.
         """
-        # R-002: URL-encode the symbol — SnapTrade tickers can contain '.', '/',
-        # which would otherwise corrupt the path segment.
-        encoded_symbol = urllib.parse.quote(symbol, safe="")
-        url = f"{self._base_url}/api/v1/instruments/symbol/{encoded_symbol}"
+        # BP-499: Use query-param form (?symbol=) — the old path-param route
+        # (/instruments/symbol/{symbol}) was removed from S2 during F2 redesign.
+        # urllib.parse.urlencode handles R-002 encoding for the query value.
+        url = f"{self._base_url}/api/v1/instruments/lookup"
 
         try:
-            response = await self._http.get(url)
+            response = await self._http.get(url, params={"symbol": symbol})
         except Exception as exc:
             # Network failure (connection refused, DNS, timeout). The symbol may
             # still be valid; raise transient so the caller records API_ERROR.

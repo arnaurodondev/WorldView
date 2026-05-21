@@ -75,7 +75,21 @@ _TYPE_MAP: dict[str, tuple[TransactionType, TransactionDirection]] = {
     "SELL": (TransactionType.SELL, TransactionDirection.OUTFLOW),
     "DIV": (TransactionType.DIVIDEND, TransactionDirection.INFLOW),
     "DIVIDEND": (TransactionType.DIVIDEND, TransactionDirection.INFLOW),
+    # NOTE: FEE / INTEREST intentionally absent — they are cash-only activities
+    # (no instrument_id) and are intercepted by _CASH_ACTIVITY_TYPES before this
+    # map is consulted. They will be added here once the transactions table
+    # supports nullable instrument_id (BP-501).
 }
+
+# ── Cash-only activity types (BP-501) ────────────────────────────────────────
+#
+# FEE and INTEREST come from SnapTrade without a tradable symbol. The current
+# transactions schema has instrument_id NOT NULL, so they cannot be recorded
+# yet. Intercept them before the instrument-lookup step so they don't produce
+# UNSUPPORTED_TYPE sync errors in the brokerage panel — they are expected, not
+# failures. A future schema change (nullable instrument_id + cash tx support)
+# will remove this set and add the types to _TYPE_MAP.
+_CASH_ACTIVITY_TYPES: frozenset[str] = frozenset({"FEE", "INTEREST"})
 
 
 # ── BUG-003 / TASK-W1-03 ─────────────────────────────────────────────────────
@@ -441,6 +455,21 @@ class BrokerageTransactionSyncWorker:
                     ),
                 )
 
+            # BP-500: Guard — if the broker returned positions but ALL failed
+            # instrument resolution, calling the use case with resolved=[] would
+            # delete every existing holding (the use case treats "absent from
+            # snapshot = closed position"). This happens when S2 doesn't know a
+            # symbol yet (seeding gap). Skip the upsert so existing holdings
+            # survive; the next sync will retry after instruments are seeded.
+            if all_positions and not resolved:
+                logger.warning(  # type: ignore[no-any-return]
+                    "brokerage_sync_snapshot_all_unresolved",
+                    connection_id=str(connection.id),
+                    portfolio_id=str(connection.portfolio_id),
+                    total_positions=len(all_positions),
+                )
+                return
+
             await UpsertHoldingsFromSnapshotUseCase().execute(
                 UpsertHoldingsFromSnapshotCommand(
                     tenant_id=connection.tenant_id,
@@ -458,6 +487,15 @@ class BrokerageTransactionSyncWorker:
     ) -> None:
         """Process a single SnapTrade activity into a transaction record."""
         from common.ids import new_uuid  # type: ignore[import-untyped]
+
+        # 0. Cash-only activity types — silently skip, no sync error.
+        # BP-501: FEE/INTEREST have no instrument_id; transactions.instrument_id
+        # is NOT NULL so they can't be recorded until the schema supports cash
+        # transactions. Skipping without an error record keeps the brokerage
+        # panel clean — these are expected, not failures.
+        if activity.activity_type.upper() in _CASH_ACTIVITY_TYPES:
+            BROKERAGE_SYNC_TRANSACTIONS_TOTAL.labels(status="skipped", error_type="cash_activity").inc()
+            return
 
         # 1. Type check
         mapping = _TYPE_MAP.get(activity.activity_type.upper())
