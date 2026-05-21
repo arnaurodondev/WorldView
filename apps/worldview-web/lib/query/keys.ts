@@ -403,9 +403,12 @@ export const qk = {
     // portfolio line. Keeping the benchmark key in a dedicated market.* namespace
     // prevents cross-contamination with instrument-detail OHLCV invalidations
     // (which cascade via qk.instruments.detail(id), a different branch).
-    // The ticker + period participate so different periods cache independently.
-    benchmarkSeries: (ticker: string, period: string) =>
-      [QK_VERSION, "market", "benchmark-series", ticker, period] as const,
+    // The ticker + period + startDate all participate so:
+    //   - different periods cache independently
+    //   - the date boundary is captured (prevents stale cache across midnight UTC
+    //     — F-DATA-001, QA 2026-05-21)
+    benchmarkSeries: (ticker: string, period: string, startDate?: string) =>
+      [QK_VERSION, "market", "benchmark-series", ticker, period, startDate ?? ""] as const,
   },
 
   // ── Shell (PRD-0089 W1) ─────────────────────────────────────────────────

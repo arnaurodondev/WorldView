@@ -100,7 +100,11 @@ export function usePortfolioMetrics(): PortfolioMetrics {
 
   // The 15s window is a deliberate, plan-mandated cadence (T-A-1-02).
   const { data: navQuotes } = useQuery({
-    queryKey: ["holdings-quotes", navInstrumentIds],
+    // WHY qk.portfolios.holdingsQuotesByIds (not inline array): the factory sorts
+    // the IDs so [A,B] and [B,A] share the same cache entry — prevents orphaned
+    // cache entries when the holdings API returns instruments in different order
+    // across fetches (F-DS-002, QA 2026-05-21).
+    queryKey: qk.portfolios.holdingsQuotesByIds(navInstrumentIds),
     queryFn: () => createGateway(accessToken).getBatchQuotes(navInstrumentIds),
     enabled: navInstrumentIds.length > 0 && !!accessToken && isAuthenticated,
     staleTime: QUOTE_REFETCH_MS,

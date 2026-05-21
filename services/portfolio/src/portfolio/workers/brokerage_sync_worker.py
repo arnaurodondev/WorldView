@@ -153,7 +153,7 @@ async def _try_acquire_connection_lock(uow: SqlAlchemyUnitOfWork, connection_id:
     return bool(result.scalar())
 
 
-def _system_jwt_headers() -> dict[str, str]:
+def _system_jwt_headers(settings: Settings) -> dict[str, str]:
     """Generate X-Internal-JWT for service-to-service calls to market-data.
 
     WHY: Market-data uses InternalJWTMiddleware which requires X-Internal-JWT on
@@ -174,7 +174,7 @@ def _system_jwt_headers() -> dict[str, str]:
             "iat": now,
             "exp": now + 86400,
         },
-        "dev-skip-verification-key-for-brokerage-sync-worker",
+        settings.brokerage_sync_jwt_secret.get_secret_value(),
         algorithm="HS256",
     )
     return {"X-Internal-JWT": token}
@@ -214,7 +214,7 @@ class BrokerageTransactionSyncWorker:
             "brokerage_sync_worker_started",
             cycle_seconds=self._settings.brokerage_sync_cycle_seconds,
         )
-        async with httpx.AsyncClient(timeout=10.0, headers=_system_jwt_headers()) as http_client:
+        async with httpx.AsyncClient(timeout=10.0, headers=_system_jwt_headers(self._settings)) as http_client:
             self._http_client = http_client
             # If no lookup client was injected, build the production HTTP adapter
             # against the shared httpx client. Tests inject a fake at __init__ time

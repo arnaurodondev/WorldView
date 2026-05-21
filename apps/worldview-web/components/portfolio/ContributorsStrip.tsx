@@ -45,7 +45,7 @@ export function ContributorsStrip({ contributors, detractors, isLoading }: Contr
             <div key={i} className="h-5 flex items-center gap-2">
               {entry ? (
                 <>
-                  <Link href={`/instruments/${(entry as MoverEntry).ticker}`} className="font-mono text-[11px] text-primary hover:underline">{(entry as MoverEntry).ticker}</Link>
+                  <Link href={`/instruments/${encodeURIComponent((entry as MoverEntry).ticker)}`} className="font-mono text-[11px] text-primary hover:underline">{(entry as MoverEntry).ticker}</Link>
                   <span className="font-mono text-[11px] tabular-nums text-positive">{formatPercent((entry as MoverEntry).pnlPct / 100)}</span>
                 </>
               ) : (
@@ -72,7 +72,7 @@ export function ContributorsStrip({ contributors, detractors, isLoading }: Contr
             <div key={i} className="h-5 flex items-center gap-2">
               {entry ? (
                 <>
-                  <Link href={`/instruments/${(entry as MoverEntry).ticker}`} className="font-mono text-[11px] text-primary hover:underline">{(entry as MoverEntry).ticker}</Link>
+                  <Link href={`/instruments/${encodeURIComponent((entry as MoverEntry).ticker)}`} className="font-mono text-[11px] text-primary hover:underline">{(entry as MoverEntry).ticker}</Link>
                   <span className="font-mono text-[11px] tabular-nums text-negative">{formatPercent((entry as MoverEntry).pnlPct / 100)}</span>
                 </>
               ) : (

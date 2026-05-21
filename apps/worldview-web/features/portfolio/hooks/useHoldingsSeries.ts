@@ -35,7 +35,12 @@ export function useHoldingsSeries(holdings: Holding[]): UseHoldingsSeriesResult 
   const instrumentIds = holdings.map((h) => h.instrument_id).filter(Boolean) as string[];
 
   const { data, isLoading } = useQuery({
-    queryKey: qk.instruments.ohlcvBatch(tickers, "1d", 14),
+    // WHY instrumentIds (not tickers) in the cache key: tickers are derived from
+    // company-overview enrichment which resolves incrementally. Using tickers
+    // causes unnecessary query refires as each holding's ticker resolves.
+    // instrumentIds are immutable (set at holding creation) so the key is stable
+    // from the first render (F-DS-002, QA 2026-05-21).
+    queryKey: qk.instruments.ohlcvBatch(instrumentIds, "1d", 14),
     queryFn: () =>
       createGateway(accessToken).getBatchOhlcvBars({
         instrument_ids: instrumentIds,

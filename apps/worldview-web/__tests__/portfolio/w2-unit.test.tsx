@@ -21,8 +21,8 @@
  * DESIGN REFERENCE: PRD-0089 W2 §4.13–4.18
  */
 
-import { describe, it, expect, vi } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { describe, it, expect, vi, beforeEach } from "vitest";
+import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { renderHook } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
@@ -148,6 +148,8 @@ function makeHolding(ticker: string, pct: number): Holding {
 }
 
 describe("useTopMovers", () => {
+  beforeEach(() => vi.clearAllMocks());
+
   it("sorts contributors descending (highest pnlPct first)", () => {
     const holdings = [
       makeHolding("AAPL", 0.08),
@@ -201,6 +203,8 @@ describe("useTopMovers", () => {
 import { useHoldingsSeries } from "@/features/portfolio/hooks/useHoldingsSeries";
 
 describe("useHoldingsSeries", () => {
+  beforeEach(() => vi.clearAllMocks());
+
   it("returns empty holdingsSeries when holdings is empty", () => {
     const { result } = renderHook(() => useHoldingsSeries([]), { wrapper: qcWrapper });
     // WHY: empty holdings → query disabled → holdingsSeries is {}
@@ -215,6 +219,17 @@ describe("useHoldingsSeries", () => {
     // (isFetching + no cached data).
     expect(result.current.holdingsSeries).toBeDefined();
   });
+
+  it("resolves close prices keyed by ticker after query completes", async () => {
+    const holdings: Holding[] = [makeHolding("AAPL", 0.05)];
+    const { result } = renderHook(() => useHoldingsSeries(holdings), { wrapper: qcWrapper });
+    // WHY waitFor: the getBatchOhlcvBars mock is async — wait for isLoading to settle.
+    await waitFor(() => expect(result.current.isLoading).toBe(false), { timeout: 3000 });
+    // The mock returns bars with closes [183, 185] for ins-aapl.
+    // useHoldingsSeries maps instrument_id→ticker so the result is keyed "AAPL".
+    expect(result.current.holdingsSeries).toHaveProperty("AAPL");
+    expect(result.current.holdingsSeries["AAPL"]).toEqual([183, 185]);
+  });
 });
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -224,6 +239,8 @@ describe("useHoldingsSeries", () => {
 import { useBenchmarkSeries } from "@/features/portfolio/hooks/useBenchmarkSeries";
 
 describe("useBenchmarkSeries", () => {
+  beforeEach(() => vi.clearAllMocks());
+
   it("returns { data: null, isLoading: true } on mount before data resolves", () => {
     const { result } = renderHook(() => useBenchmarkSeries("1M"), { wrapper: qcWrapper });
     // On first render data is null (not yet fetched)
@@ -238,6 +255,15 @@ describe("useBenchmarkSeries", () => {
       const { result } = renderHook(() => useBenchmarkSeries(period), { wrapper: qcWrapper });
       expect(result.current.isError).toBe(false);
     }
+  });
+
+  it("resolves SPY close prices [502, 506] after query completes", async () => {
+    const { result } = renderHook(() => useBenchmarkSeries("1M"), { wrapper: qcWrapper });
+    // WHY waitFor: getOHLCV mock is async — SPY data resolves on the next tick.
+    await waitFor(() => expect(result.current.data).not.toBeNull(), { timeout: 3000 });
+    // The getOHLCV mock returns bars with closes 502 and 506 (see gateway mock above).
+    expect(result.current.data).toEqual([502, 506]);
+    expect(result.current.isError).toBe(false);
   });
 });
 
@@ -258,6 +284,8 @@ const baseKpiProps = {
 };
 
 describe("PortfolioKPIStrip — W2 8-tile layout", () => {
+  beforeEach(() => vi.clearAllMocks());
+
   it("renders Total Value tile", () => {
     render(<PortfolioKPIStrip {...baseKpiProps} />, { wrapper: qcWrapper });
     expect(screen.getByText("Total Value")).toBeInTheDocument();
@@ -296,6 +324,8 @@ describe("PortfolioKPIStrip — W2 8-tile layout", () => {
 import { PerformanceChartPanel } from "@/components/portfolio/PerformanceChartPanel";
 
 describe("PerformanceChartPanel", () => {
+  beforeEach(() => vi.clearAllMocks());
+
   it("renders period selector buttons", () => {
     const onPeriodChange = vi.fn();
     render(
@@ -372,6 +402,8 @@ function makeCellParams(ticker: string, isPinned = false) {
 }
 
 describe("TickerLinkCellRenderer", () => {
+  beforeEach(() => vi.clearAllMocks());
+
   it("renders a link to /instruments/AAPL for the AAPL ticker", () => {
     const { container } = render(<TickerLinkCellRenderer {...makeCellParams("AAPL")} />);
     const link = container.querySelector("a");
@@ -389,6 +421,23 @@ describe("TickerLinkCellRenderer", () => {
   it("renders em-dash when ticker is empty and not pinned", () => {
     render(<TickerLinkCellRenderer {...makeCellParams("")} />);
     expect(screen.getByText("—")).toBeInTheDocument();
+  });
+
+  it("preserves dot in BRK.B ticker (not URL-encoded)", () => {
+    // WHY: BRK.B is a valid path segment; over-encoding to BRK%2EB would break
+    // server-side ticker resolution. The middleware canonicalises to uppercase only.
+    const { container } = render(<TickerLinkCellRenderer {...makeCellParams("BRK.B")} />);
+    const link = container.querySelector("a");
+    expect(link?.getAttribute("href")).toBe("/instruments/BRK.B");
+  });
+
+  it("URL-encodes special chars that are invalid path segments (e.g. spaces)", () => {
+    // WHY: if a ticker somehow has a space (unlikely but defensive), it must
+    // be encoded so the browser doesn't split the URL at the space boundary.
+    const { container } = render(<TickerLinkCellRenderer {...makeCellParams("BAD TICKER")} />);
+    const link = container.querySelector("a");
+    // encodeURIComponent("BAD TICKER") → "BAD%20TICKER"
+    expect(link?.getAttribute("href")).toBe("/instruments/BAD%20TICKER");
   });
 });
 
@@ -421,6 +470,8 @@ function makeSparklineParams(ticker: string, series: number[], isPinned = false)
 }
 
 describe("SparklineCellRenderer", () => {
+  beforeEach(() => vi.clearAllMocks());
+
   it("renders em-dash when no series data in context", () => {
     render(<SparklineCellRenderer {...makeSparklineParams("AAPL", [])} />);
     expect(screen.getByText("—")).toBeInTheDocument();
@@ -473,6 +524,8 @@ function makeAssetParams(assetClass: string | null, isPinned = false) {
 }
 
 describe("AssetTypeBadgeCellRenderer", () => {
+  beforeEach(() => vi.clearAllMocks());
+
   it("renders E for equity", () => {
     render(<AssetTypeBadgeCellRenderer {...makeAssetParams("equity")} />);
     expect(screen.getByText("E")).toBeInTheDocument();
@@ -511,6 +564,8 @@ describe("AssetTypeBadgeCellRenderer", () => {
 import { ContributorsStrip } from "@/components/portfolio/ContributorsStrip";
 
 describe("ContributorsStrip", () => {
+  beforeEach(() => vi.clearAllMocks());
+
   it("renders section labels", () => {
     render(<ContributorsStrip contributors={[]} detractors={[]} />);
     expect(screen.getByText("Top Contributors")).toBeInTheDocument();
@@ -552,6 +607,8 @@ describe("ContributorsStrip", () => {
 import { RecentActivityStrip } from "@/components/portfolio/RecentActivityStrip";
 
 describe("RecentActivityStrip", () => {
+  beforeEach(() => vi.clearAllMocks());
+
   it("renders nothing (null) when portfolioId is null", () => {
     const { container } = render(<RecentActivityStrip portfolioId={null} />, { wrapper: qcWrapper });
     expect(container.firstChild).toBeNull();
@@ -570,5 +627,26 @@ describe("RecentActivityStrip", () => {
     // After data resolves the loading text disappears and rows appear.
     // We assert the loading state is present synchronously.
     expect(screen.getByText("loading…")).toBeInTheDocument();
+  });
+
+  it("F-QA-003 — renders BUY/SELL rows; no sync-event row types in DOM (C-34)", async () => {
+    // WHY: C-34 specifies sync events move to BrokerageStatusBanner. The gateway
+    // returns only BUY/SELL/DIVIDEND from getTransactions. This test verifies:
+    // (a) the component renders all returned rows (BUY + SELL from the mock)
+    // (b) no unexpected row types from broker-sync activity appear.
+    render(<RecentActivityStrip portfolioId="port-1" />, { wrapper: qcWrapper });
+    await waitFor(
+      () => expect(screen.queryByText("loading…")).not.toBeInTheDocument(),
+      { timeout: 3000 },
+    );
+    // Mock (above) returns tx-1: BUY AAPL and tx-2: SELL NVDA
+    expect(screen.getByText("AAPL")).toBeInTheDocument();
+    expect(screen.getByText("NVDA")).toBeInTheDocument();
+    expect(screen.getByText("BUY")).toBeInTheDocument();
+    expect(screen.getByText("SELL")).toBeInTheDocument();
+    // Broker-sync events have no defined type in the transaction union.
+    // Verifying "SYNC" is absent guards against a regression where sync
+    // activities leak into the strip (C-34 violation).
+    expect(screen.queryByText("SYNC")).not.toBeInTheDocument();
   });
 });

@@ -51,7 +51,10 @@ export function useBenchmarkSeries(period: PerfPeriod): UseBenchmarkSeriesResult
     // WHY qk.market.benchmarkSeries: keeps the benchmark series separate from
     // instrument-detail OHLCV keys so invalidations don't cross-contaminate.
     // Added to lib/query/keys.ts in step 4.23 (PRD-0089 W2 §4.23).
-    queryKey: qk.market.benchmarkSeries(SPY_TICKER, period),
+    // WHY startDate in key: the queryFn uses startDate to filter OHLCV bars.
+    // Without it, the cache key is identical across the date boundary (midnight UTC)
+    // and the cache serves yesterday's bars with today's request (F-DATA-001, QA 2026-05-21).
+    queryKey: qk.market.benchmarkSeries(SPY_TICKER, period, startDate),
     queryFn: async () => {
       // WHY single-instrument call not batch: SPY is always the only benchmark (v1).
       // Batch overhead (POST + body parsing) would be wasteful for one ticker.

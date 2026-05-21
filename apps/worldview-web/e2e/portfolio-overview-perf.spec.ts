@@ -1,22 +1,23 @@
 /**
- * e2e/portfolio-overview-perf.spec.ts — Portfolio page load correctness
+ * e2e/portfolio-overview-perf.spec.ts — Portfolio page load correctness + FPS canary
  *
  * WHY THIS EXISTS: The W2 portfolio page fires 9+ parallel TanStack Query
  * requests on mount (portfolios, holdings, quotes, transactions, watchlists,
  * brokerage, exposure, performance, ohlcv). Any one of these failing should
  * NOT crash the page — only that widget should show an error state.
  *
- * These tests assert:
+ * Tests:
  * 1. Page loads and renders the shell (no JS errors, no Application error overlay)
  * 2. Page handles all-500 gracefully (each widget degrades independently)
  * 3. Page handles auth token correctly (no 401 flash on load)
+ * 4. (C-37) Scroll FPS ≥ 60 with 100-row fixture at 1440×900 viewport
  *
  * WHY "perf" in the filename: this spec was named after the "performance"
- * requirement in PRD-0089 W2 §4.21 (page must load without errors). It is
- * a correctness test, not a timing benchmark.
+ * requirement in PRD-0089 W2 §4.21 (page must load without errors). Tests
+ * 1-3 are correctness tests; test 4 is the C-37 FPS canary.
  *
  * DATA SOURCE: installStrictApiMocks() from e2e/fixtures/api-mocks.ts
- * DESIGN REFERENCE: PRD-0089 W2 §4.21 (no-error load requirement)
+ * DESIGN REFERENCE: PRD-0089 W2 §4.21 (no-error load), C-37 (scroll FPS ≥ 60)
  */
 
 import { test, expect } from "@playwright/test";
@@ -81,5 +82,145 @@ test.describe("Portfolio W2 — page load correctness", () => {
     // would be visible to unauthenticated users.
     await page.goto("/portfolio");
     await expect(page).toHaveURL(/\/login/, { timeout: 8000 });
+  });
+});
+
+// ── C-37: scroll FPS canary ────────────────────────────────────────────────────
+
+test.describe("Portfolio W2 — C-37 scroll FPS canary", () => {
+  /**
+   * Generate 100 raw S1 holdings for the FPS fixture.
+   *
+   * WHY raw S1 format: getHoldings() at /v1/holdings/{portfolioId} receives
+   * RawHolding[] and transforms them client-side. The mock must match the wire
+   * format (flat array with Decimal-as-string quantities), not the frontend type.
+   */
+  function make100Holdings(): object[] {
+    const tickers = ["AAPL", "MSFT", "GOOGL", "AMZN", "META", "NVDA", "TSLA", "JPM", "V", "UNH"];
+    return Array.from({ length: 100 }, (_, i) => ({
+      id: `h-${i}`,
+      portfolio_id: "port-perf",
+      instrument_id: `ins-${i}`,
+      entity_id: `ent-${i}`,
+      ticker: tickers[i % tickers.length],
+      name: `Stock ${i} Inc.`,
+      quantity: `${(i + 1) * 2}.00000000`,
+      average_cost: `${50 + i}.00000000`,
+      currency: "USD",
+    }));
+  }
+
+  test("C-37 — grid scrolls at ≥ 60 FPS with 100-row fixture", async ({ page }) => {
+    // WHY 1440×900: the density requirement (§4.14) specifies this viewport;
+    // FPS test must validate at the same dimensions.
+    await page.setViewportSize({ width: 1440, height: 900 });
+
+    const fakeToken = btoa(JSON.stringify({ alg: "RS256", typ: "JWT" })).replace(/=/g, "").replace(/\+/g, "-").replace(/\//g, "_") +
+      "." +
+      btoa(JSON.stringify({ sub: "e2e-fps", tenant_id: "e2e-tenant", email: "e2e@test.local", name: "FPS Tester", exp: Math.floor(Date.now() / 1000) + 3600 })).replace(/=/g, "").replace(/\+/g, "-").replace(/\//g, "_") +
+      ".fake-fps-sig";
+
+    await page.route("**/api/v1/auth/refresh", (route) =>
+      route.fulfill({
+        status: 200, contentType: "application/json",
+        body: JSON.stringify({ access_token: fakeToken, expires_in: 3600, user: { user_id: "e2e-fps", tenant_id: "e2e-tenant", email: "e2e@test.local", name: "FPS Tester" } }),
+      }),
+    );
+    await page.route("**/api/v1/auth/ws-token", (route) =>
+      route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ token: "fake-ws" }) }),
+    );
+
+    // S1 envelope for portfolios
+    await page.route("**/api/v1/portfolios", (route) => {
+      if (route.request().method() !== "GET") return route.fallback();
+      return route.fulfill({
+        status: 200, contentType: "application/json",
+        body: JSON.stringify({
+          items: [{ id: "port-perf", tenant_id: "e2e-tenant", owner_id: "e2e-fps", name: "Perf Portfolio", currency: "USD", status: "active", kind: "manual", created_at: "2026-01-01T00:00:00Z" }],
+          total: 1, limit: 100, offset: 0,
+        }),
+      });
+    });
+
+    // 100 holdings in S1 raw format
+    const holdings = make100Holdings();
+    await page.route("**/api/v1/holdings/**", (route) =>
+      route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(holdings) }),
+    );
+
+    // Flat quotes for all 100 holdings
+    const quotes = Object.fromEntries(
+      holdings.map((h) => {
+        const holding = h as { instrument_id: string; ticker: string; average_cost: string };
+        return [
+          holding.instrument_id,
+          { instrument_id: holding.instrument_id, ticker: holding.ticker, price: parseFloat(holding.average_cost) * 1.1, change: 1.0, change_pct: 0.5, timestamp: "2026-05-01T15:00:00Z", volume: 100_000 },
+        ];
+      }),
+    );
+    await page.route("**/api/v1/quotes/batch**", (route) =>
+      route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ quotes }) }),
+    );
+
+    await page.route("**/api/v1/**", (route) =>
+      route.fulfill({ status: 200, contentType: "application/json", body: "{}" }),
+    );
+
+    await page.goto("/portfolio");
+
+    // Wait for the AG Grid to render (at least one cell visible)
+    await page.waitForSelector(".ag-cell", { timeout: 15000 });
+
+    // WHY scrollable-container: AG Grid uses this class for the row viewport.
+    const gridViewport = page.locator(".ag-body-viewport");
+    await expect(gridViewport).toBeVisible({ timeout: 5000 });
+
+    // Measure FPS during a programmatic scroll of the AG Grid.
+    // WHY rAF timing: the FPS gate is ≥60 average across 60 consecutive frames.
+    // A single dropped frame doesn't fail this — sustained jank would.
+    const fps = await page.evaluate(async () => {
+      const maybeContainer = document.querySelector(".ag-body-viewport");
+      if (!maybeContainer) return 0;
+      // Narrowed to non-null so the closure below can use it without `!`.
+      const container: Element = maybeContainer;
+
+      return new Promise<number>((resolve) => {
+        const FRAMES = 60;
+        const timestamps: number[] = [];
+        let scrollDir = 1;
+        let scrollPos = 0;
+        let frame = 0;
+
+        function tick(ts: number) {
+          timestamps.push(ts);
+          // Scroll down then up to exercise both directions
+          scrollPos += scrollDir * 20;
+          if (scrollPos > 1000) scrollDir = -1;
+          if (scrollPos < 0) { scrollPos = 0; scrollDir = 1; }
+          (container as HTMLElement).scrollTop = scrollPos;
+
+          frame++;
+          if (frame < FRAMES) {
+            requestAnimationFrame(tick);
+          } else {
+            // Compute average FPS from consecutive frame deltas
+            let totalMs = 0;
+            for (let i = 1; i < timestamps.length; i++) {
+              totalMs += timestamps[i] - timestamps[i - 1];
+            }
+            const avgFrameMs = totalMs / (timestamps.length - 1);
+            resolve(avgFrameMs > 0 ? 1000 / avgFrameMs : 0);
+          }
+        }
+
+        requestAnimationFrame(tick);
+      });
+    });
+
+    // C-37: scroll FPS must be ≥ 60 to satisfy the W2 performance requirement.
+    // In a headless browser, vsync is disabled so rAF runs as fast as possible
+    // — the 60 FPS floor is easily met when the grid has no layout thrashing.
+    // A value below 60 indicates forced synchronous layout or excessive DOM work.
+    expect(fps).toBeGreaterThanOrEqual(60);
   });
 });

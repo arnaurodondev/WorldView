@@ -26,7 +26,7 @@ export function useTopMovers(enrichedHoldings: EnrichedHolding[]): UseTopMoversR
     // WHY filter pnlPct null: holdings without a price cannot be ranked.
     // Ranking $0.00 would put all unpriced holdings at the extremes.
     const ranked = enrichedHoldings
-      .filter((h) => h.unrealised_pnl_pct != null)
+      .filter((h) => typeof h.unrealised_pnl_pct === "number")
       .map((h) => ({
         ticker: h.ticker ?? h.instrument_id,
         pnlPct: h.unrealised_pnl_pct as number,
