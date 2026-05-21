@@ -207,21 +207,36 @@ export function WatchlistPanel() {
   return (
     <div className="flex flex-col overflow-hidden">
       {/* ── Section header ────────────────────────────────────────────── */}
-      <div className="flex h-6 shrink-0 items-center justify-between border-b border-border border-t border-t-border px-2">
-        <span className="text-[10px] uppercase tracking-[0.08em] text-muted-foreground">
+      {/*
+        W1.1 G-002 — single-line header fix. Pre-fix at narrow sidebar
+        widths the WATCHLIST label + watchlist name wrapped to two
+        lines (e.g. "Tech Watchlist ▾" pushed below "WATCHLIST"). The
+        fix forces the row to one line:
+          • `gap-2` between label and button so they always sit side-by-side
+          • The label is `shrink-0` (never compressed)
+          • The button wrapper is `min-w-0 flex-1` so its inner text can
+            actually shrink and the inner span gets `truncate` + a max
+            ch-width — names longer than the slot render as "Tech Wat…".
+        The chevron stays outside the truncating span so it never gets
+        clipped along with the name.
+      */}
+      <div className="flex h-6 shrink-0 items-center justify-between gap-2 border-b border-border border-t border-t-border px-2">
+        <span className="shrink-0 text-[10px] uppercase tracking-[0.08em] text-muted-foreground">
           WATCHLIST
         </span>
         {/* Watchlist dropdown switcher — clicking the header opens a 200px
             popover listing all watchlists + "+ New" CTA (plan §4.5). */}
         {activeWatchlist && (
-          <div className="relative" ref={dropdownRef}>
+          <div className="relative min-w-0 flex-1" ref={dropdownRef}>
             <button
               onClick={() => (dropdownOpen ? setDropdownOpen(false) : openDropdown())}
-              className="font-mono text-[10px] text-muted-foreground transition-colors duration-0 hover:text-foreground"
+              className="flex w-full items-center justify-end gap-1 whitespace-nowrap font-mono text-[10px] text-muted-foreground transition-colors duration-0 hover:text-foreground"
               aria-label={`Switch watchlist (current: ${activeWatchlist.name})`}
               aria-expanded={dropdownOpen}
+              title={activeWatchlist.name}
             >
-              {activeWatchlist.name} ▾
+              <span className="min-w-0 truncate">{activeWatchlist.name}</span>
+              <span aria-hidden className="shrink-0">▾</span>
             </button>
 
             {dropdownOpen && watchlistsData && watchlistsData.length > 0 && dropdownPos && (

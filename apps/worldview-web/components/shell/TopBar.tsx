@@ -202,11 +202,20 @@ export function TopBar({
       </div>
 
       {/* ── Center: IndexStrip (PRD-0089 W1 §4.3 slot 5) ─────────────
-          Static 10-cell strip (Bloomberg FNZX pattern).  The
-          IndexStrip owns its own responsive priority drop; we still wrap
-          it in flex-1 + min-w-0 so the right cluster keeps pinned to the
-          viewport edge under width pressure. */}
-      <div className="flex min-w-0 max-w-[680px] flex-1 justify-center">
+          Static 10-cell strip (Bloomberg FNZX pattern).  The IndexStrip
+          owns its own responsive priority drop; we still wrap it in
+          flex-1 + min-w-0 so the right cluster keeps pinned to the
+          viewport edge under width pressure.
+
+          W1.1 G-001 — `overflow-hidden` is critical: IndexStrip cells
+          carry `shrink-0` so they refuse to compress, and at viewports
+          where the wrapper is squeezed (right cluster grew when
+          PortfolioRail became always-visible) the cells would visibly
+          spill into the right cluster's space and overlap the clock /
+          market pill / rail. Clipping the overflow keeps every cluster
+          in its lane — cells simply get cut off at the wrapper edge
+          rather than drawing over their neighbours. */}
+      <div className="flex min-w-0 max-w-[680px] flex-1 justify-center overflow-hidden">
         <IndexStrip />
       </div>
 
@@ -258,6 +267,14 @@ export function TopBar({
             matching the IndexStrip's "never collapse to zero width"
             treatment in the same row. Per-value min-w slots still prevent
             digit-count jitter when prices arrive. */}
+        {/* W1.1 G-001 — label tightening to relieve right-cluster width
+            pressure that caused the IndexStrip / right cluster overlap:
+              * "Day P&L" → "DAY" (–6 chars)
+              * "Total P&L" → "TOT" (–7 chars)
+              * Slot widths: 3.5/4/4rem → 3.25/3.25/3.25rem
+            Net win ≈ 90px on the rail without losing meaning — the
+            tooltip + aria-label still spell out "Day P&L" / "Total P&L"
+            for assistive tech and hover discovery. */}
         <div
           className="flex items-center gap-2 border border-border/30 bg-muted/20 px-2 py-0.5"
           aria-label="Portfolio header metrics"
@@ -275,20 +292,16 @@ export function TopBar({
             }
           >
             <span className="text-muted-foreground">PORT</span>
-            <span className="inline-block min-w-[3.5rem] text-right text-foreground">
+            <span className="inline-block min-w-[3.25rem] text-right text-foreground">
               {portfolioValue != null ? formatPortfolioValue(portfolioValue) : "—"}
             </span>
           </span>
 
-          {/* Divider hairline between PORT and Day P&L — always present
-              now that the box is always rendered. */}
           <span aria-hidden="true" className="h-3 w-px bg-border/40" />
 
           {/* Day P&L — colored teal/red so direction is instantly readable.
-              F-QA-09 fix: pnlColorClass uses a deadband to render a true
-              "flat" day as neutral muted colour instead of arbitrarily
-              green or red because of floating-point dust. Em-dash when
-              null so the slot stays width-stable. */}
+              F-QA-09: pnlColorClass uses a deadband to render a true "flat"
+              day as muted neutral instead of arbitrarily green or red. */}
           <span
             className={`flex items-center gap-1 whitespace-nowrap font-mono text-[11px] tabular-nums ${
               dailyPnl != null ? pnlColorClass(dailyPnl) : "text-muted-foreground"
@@ -300,8 +313,8 @@ export function TopBar({
                 : "Day P&L pending"
             }
           >
-            <span className="text-muted-foreground">Day P&amp;L</span>
-            <span className="inline-block min-w-[4rem] text-right">
+            <span className="text-muted-foreground">DAY</span>
+            <span className="inline-block min-w-[3.25rem] text-right">
               {dailyPnl != null
                 ? `${dailyPnl >= 0 ? "+" : "-"}${formatPortfolioValue(Math.abs(dailyPnl))}`
                 : "—"}
@@ -310,8 +323,7 @@ export function TopBar({
 
           <span aria-hidden="true" className="h-3 w-px bg-border/40" />
 
-          {/* Total P&L — total mark-to-market vs cost basis.
-              F-QA-09 fix: same deadband as Day P&L. */}
+          {/* Total P&L — total mark-to-market vs cost basis. */}
           <span
             className={`flex items-center gap-1 whitespace-nowrap font-mono text-[11px] tabular-nums ${
               unrealisedPnl != null ? pnlColorClass(unrealisedPnl) : "text-muted-foreground"
@@ -323,8 +335,8 @@ export function TopBar({
                 : "Total P&L pending"
             }
           >
-            <span className="text-muted-foreground">Total P&amp;L</span>
-            <span className="inline-block min-w-[4rem] text-right">
+            <span className="text-muted-foreground">TOT</span>
+            <span className="inline-block min-w-[3.25rem] text-right">
               {unrealisedPnl != null
                 ? `${unrealisedPnl >= 0 ? "+" : "-"}${formatPortfolioValue(Math.abs(unrealisedPnl))}`
                 : "—"}

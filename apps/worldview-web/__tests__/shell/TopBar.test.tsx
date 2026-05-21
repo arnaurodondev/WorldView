@@ -125,10 +125,15 @@ describe("TopBar — slot composition (PRD-0089 W1)", () => {
     expect(screen.getByRole("button", { name: /Worldview — Home/i })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /unread alerts/i })).toBeInTheDocument();
 
-    // PortfolioRail renders three labelled subslots (PORT / Day P&L / Total P&L).
+    // PortfolioRail renders three labelled subslots. W1.1 G-001 shortened
+    // the labels (Day P&L → DAY, Total P&L → TOT) to relieve the right-
+    // cluster width pressure that caused overlap at narrow viewports —
+    // the full meanings still live on the title + aria-label attributes.
     expect(screen.getByText("PORT")).toBeInTheDocument();
-    expect(screen.getByText("Day P&L")).toBeInTheDocument();
-    expect(screen.getByText("Total P&L")).toBeInTheDocument();
+    expect(screen.getByText("DAY")).toBeInTheDocument();
+    expect(screen.getByText("TOT")).toBeInTheDocument();
+    expect(screen.getByLabelText(/Day P&L/i)).toBeInTheDocument();
+    expect(screen.getByLabelText(/Total P&L/i)).toBeInTheDocument();
   });
 
   it("portfolio rail no longer carries rounded-[2px] (F1 radius=0 lock — C-04)", () => {
@@ -152,9 +157,10 @@ describe("TopBar — slot composition (PRD-0089 W1)", () => {
     const rail = screen.getByLabelText(/Portfolio header metrics/i);
     expect(rail).toBeInTheDocument();
     // Each of the three slots still renders its label and an em-dash.
+    // Labels are short-form (DAY/TOT) post G-001 — full names live in aria.
     expect(screen.getByText("PORT")).toBeInTheDocument();
-    expect(screen.getByText("Day P&L")).toBeInTheDocument();
-    expect(screen.getByText("Total P&L")).toBeInTheDocument();
+    expect(screen.getByText("DAY")).toBeInTheDocument();
+    expect(screen.getByText("TOT")).toBeInTheDocument();
     // The three em-dash spans live inside the rail and carry tabular-nums
     // so the slot width stays stable when real numbers arrive.
     const dashes = rail.querySelectorAll('span.tabular-nums');
