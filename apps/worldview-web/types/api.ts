@@ -152,6 +152,10 @@ export interface Instrument {
   // company-profile ingestion wave may not have a description in company_profiles.
   // The UI handles null gracefully (shows nothing). EODHD "General.Description" field.
   description: string | null;
+  // WHY founded nullable: EODHD omits Founded for ETFs and some foreign ADRs.
+  // T-S2-02 (W5): exposed from company_profiles.data JSONB via S9 overview endpoint.
+  // CompanyAboutCard renders "—" on null. Field path: overview.instrument.founded.
+  founded: string | null;
 }
 
 export interface OHLCVBar {

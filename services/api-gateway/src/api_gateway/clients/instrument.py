@@ -163,6 +163,11 @@ async def get_company_overview(
         # market-data persists this in company_profiles.data JSONB under key "Description".
         # S9 extracts it here so the frontend gets description in the same CompanyOverview
         # response — no extra round-trip needed (UI-004 fix, 2026-04-24).
+        #
+        # T-S2-02 (W5): EODHD General.Founded is stored verbatim in company_profiles.data
+        # JSONB by market-data (no serialiser filter — data flows through unchanged).
+        # Exposed here as "founded" so CompanyAboutCard gets it without an extra call.
+        # Field path for frontend: overview.instrument.founded.
         instrument: dict[str, Any] = {
             "instrument_id": instrument_raw.get("id", company_id),
             "entity_id": kg_entity_id,
@@ -175,6 +180,10 @@ async def get_company_overview(
             "isin": profile_data.get("ISIN"),
             "country": profile_data.get("CountryISO"),
             "description": profile_data.get("Description") or None,
+            # WHY founded nullable: EODHD omits Founded for ETFs, foreign ADRs,
+            # and instruments ingested before the company_profile wave. Frontend
+            # renders "—" on null (never crashes on absence).
+            "founded": profile_data.get("Founded") or None,
         }
 
         # Map the market-data QuoteResponse → frontend Quote shape (best-effort; no change/change_pct).
