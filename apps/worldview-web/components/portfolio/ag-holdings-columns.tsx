@@ -26,6 +26,7 @@ import { formatPrice, formatPercent, formatPercentUnsigned } from "@/lib/utils";
 import { formatStalenessAwarePrice, fmtPnl } from "./holdings-columns";
 import { TickerLinkCellRenderer } from "./cells/TickerLink";
 import { SparklineCellRenderer } from "./cells/SparklineCellRenderer";
+import { AssetTypeBadgeCellRenderer } from "./cells/AssetTypeBadge";
 
 // ── Pinned-row detection helper ───────────────────────────────────────────────
 // WHY: AG Grid passes `node.rowPinned === 'bottom'` for pinnedBottomRowData rows.
@@ -69,26 +70,8 @@ export const HOLDINGS_AG_COL_WIDTHS: Record<string, number> = {
 // NOTE: SparklineCellRendererInline removed in step 4.11.
 // SparklineCellRenderer (cells/SparklineCellRenderer.tsx) is now imported above.
 
-// AssetTypeBadgeCellRenderer — inline placeholder until cells/AssetTypeBadge.tsx
-// is wired in step 4.12. Maps asset_class to a single char; replaced in 4.12.
-const ASSET_CLASS_CHAR_INLINE: Record<string, string> = {
-  equity: "E", etf: "F", fund: "F", bond: "B", fixed_income: "B",
-  crypto: "C", cryptocurrency: "C",
-};
-function AssetTypeBadgeCellRendererInline(params: ICellRendererParams<EnrichedHoldingRow>) {
-  if (isPinnedBottom(params)) return null;
-  const assetClass = params.data?.h.asset_class;
-  const chip = assetClass
-    ? (ASSET_CLASS_CHAR_INLINE[assetClass.toLowerCase()] ?? "O")
-    : "—";
-  return (
-    <div className="flex items-center justify-center h-full">
-      <span className="font-mono text-[10px] uppercase tabular-nums text-muted-foreground">
-        {chip}
-      </span>
-    </div>
-  );
-}
+// NOTE: AssetTypeBadgeCellRendererInline removed in step 4.12.
+// AssetTypeBadgeCellRenderer (cells/AssetTypeBadge.tsx) is now imported above.
 
 function NameCellRenderer(params: ICellRendererParams<EnrichedHoldingRow>) {
   if (isPinnedBottom(params)) {
@@ -408,6 +391,6 @@ export const holdingsAgColumns: ColDef<EnrichedHoldingRow>[] = [
     sortable: true,
     width: HOLDINGS_AG_COL_WIDTHS.asset,
     valueGetter: (params) => params.data?.h.asset_class ?? "",
-    cellRenderer: AssetTypeBadgeCellRendererInline,
+    cellRenderer: AssetTypeBadgeCellRenderer,
   },
 ];
