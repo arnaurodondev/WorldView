@@ -1254,3 +1254,140 @@ class TestDeepInfraEmbeddingAdapter:
 
         assert len(captured_headers) == 1
         assert "Bearer my-secret-deepinfra-key" in captured_headers[0]["Authorization"]
+
+    # ── LIB-005 / TASK-W4-03: 429 is RETRYABLE ───────────────────────────────
+    # Previously DeepInfra 429 was caught by the generic 4xx branch and raised as
+    # FatalError, which crashed the Kafka consumer instead of triggering a
+    # back-off + retry. These tests pin the new behaviour: 429 must propagate as
+    # ``RateLimitError`` (a subclass of ``RetryableError``) and the
+    # ``Retry-After`` header must be parsed into ``exc.retry_after``.
+
+    async def test_429_raises_retryable_rate_limit_error(self) -> None:
+        """HTTP 429 → ``RateLimitError`` which IS a ``RetryableError``."""
+        import httpx
+        from ml_clients.adapters.deepinfra_embedding import DeepInfraEmbeddingAdapter
+        from ml_clients.dataclasses import EmbeddingInput
+        from ml_clients.errors import FatalError, RateLimitError, RetryableError
+
+        inputs = [EmbeddingInput(text="test text", model_id="BAAI/bge-large-en-v1.5")]
+
+        with patch("httpx.AsyncClient") as mock_client_cls:
+            mock_client = AsyncMock()
+            mock_client_cls.return_value.__aenter__ = AsyncMock(return_value=mock_client)
+            mock_client_cls.return_value.__aexit__ = AsyncMock(return_value=False)
+            # 429 with NO Retry-After header → retry_after must be None
+            err_resp = MagicMock(status_code=429, headers={})
+            mock_client.post.side_effect = httpx.HTTPStatusError(
+                message="429 Too Many Requests", request=MagicMock(), response=err_resp
+            )
+
+            adapter = DeepInfraEmbeddingAdapter(api_key="test-key")
+            with pytest.raises(RateLimitError) as exc_info:
+                await adapter.embed(inputs)
+
+        # Must also be RetryableError (consumers catching RetryableError pick it up)
+        assert isinstance(exc_info.value, RetryableError)
+        # Must NOT be FatalError (would route to DLQ instead of back-off)
+        assert not isinstance(exc_info.value, FatalError)
+        # No header supplied → retry_after defaults to None
+        assert exc_info.value.retry_after is None
+
+    async def test_429_parses_retry_after_seconds_header(self) -> None:
+        """``Retry-After: 5`` (integer seconds) → ``exc.retry_after == 5``."""
+        import httpx
+        from ml_clients.adapters.deepinfra_embedding import DeepInfraEmbeddingAdapter
+        from ml_clients.dataclasses import EmbeddingInput
+        from ml_clients.errors import RateLimitError
+
+        inputs = [EmbeddingInput(text="test text", model_id="BAAI/bge-large-en-v1.5")]
+
+        with patch("httpx.AsyncClient") as mock_client_cls:
+            mock_client = AsyncMock()
+            mock_client_cls.return_value.__aenter__ = AsyncMock(return_value=mock_client)
+            mock_client_cls.return_value.__aexit__ = AsyncMock(return_value=False)
+            err_resp = MagicMock(status_code=429, headers={"Retry-After": "5"})
+            mock_client.post.side_effect = httpx.HTTPStatusError(
+                message="429 Too Many Requests", request=MagicMock(), response=err_resp
+            )
+
+            adapter = DeepInfraEmbeddingAdapter(api_key="test-key")
+            with pytest.raises(RateLimitError) as exc_info:
+                await adapter.embed(inputs)
+
+        assert exc_info.value.retry_after == 5
+
+    async def test_429_missing_retry_after_defaults_to_none(self) -> None:
+        """No ``Retry-After`` header → ``exc.retry_after is None`` (caller uses default back-off)."""
+        import httpx
+        from ml_clients.adapters.deepinfra_embedding import DeepInfraEmbeddingAdapter
+        from ml_clients.dataclasses import EmbeddingInput
+        from ml_clients.errors import RateLimitError
+
+        inputs = [EmbeddingInput(text="test text", model_id="BAAI/bge-large-en-v1.5")]
+
+        with patch("httpx.AsyncClient") as mock_client_cls:
+            mock_client = AsyncMock()
+            mock_client_cls.return_value.__aenter__ = AsyncMock(return_value=mock_client)
+            mock_client_cls.return_value.__aexit__ = AsyncMock(return_value=False)
+            # Distinct from previous test: pass a non-empty headers dict that
+            # simply lacks Retry-After, to prove the parser checks the key.
+            err_resp = MagicMock(status_code=429, headers={"X-RateLimit-Limit": "1000"})
+            mock_client.post.side_effect = httpx.HTTPStatusError(
+                message="429 Too Many Requests", request=MagicMock(), response=err_resp
+            )
+
+            adapter = DeepInfraEmbeddingAdapter(api_key="test-key")
+            with pytest.raises(RateLimitError) as exc_info:
+                await adapter.embed(inputs)
+
+        assert exc_info.value.retry_after is None
+
+    async def test_5xx_still_raises_retryable_non_regression(self) -> None:
+        """5xx must continue to raise RetryableError (NOT RateLimitError) after the 429 patch."""
+        import httpx
+        from ml_clients.adapters.deepinfra_embedding import DeepInfraEmbeddingAdapter
+        from ml_clients.dataclasses import EmbeddingInput
+        from ml_clients.errors import RateLimitError, RetryableError
+
+        inputs = [EmbeddingInput(text="test text", model_id="BAAI/bge-large-en-v1.5")]
+
+        with patch("httpx.AsyncClient") as mock_client_cls:
+            mock_client = AsyncMock()
+            mock_client_cls.return_value.__aenter__ = AsyncMock(return_value=mock_client)
+            mock_client_cls.return_value.__aexit__ = AsyncMock(return_value=False)
+            err_resp = MagicMock(status_code=503, headers={})
+            mock_client.post.side_effect = httpx.HTTPStatusError(
+                message="503 Service Unavailable", request=MagicMock(), response=err_resp
+            )
+
+            adapter = DeepInfraEmbeddingAdapter(api_key="test-key")
+            with pytest.raises(RetryableError, match="5xx") as exc_info:
+                await adapter.embed(inputs)
+
+        # Must NOT be misclassified as a rate-limit error
+        assert not isinstance(exc_info.value, RateLimitError)
+
+    async def test_401_still_fatal_non_regression(self) -> None:
+        """401 must continue to raise FatalError (auth bug, retrying won't help)."""
+        import httpx
+        from ml_clients.adapters.deepinfra_embedding import DeepInfraEmbeddingAdapter
+        from ml_clients.dataclasses import EmbeddingInput
+        from ml_clients.errors import FatalError, RetryableError
+
+        inputs = [EmbeddingInput(text="test text", model_id="BAAI/bge-large-en-v1.5")]
+
+        with patch("httpx.AsyncClient") as mock_client_cls:
+            mock_client = AsyncMock()
+            mock_client_cls.return_value.__aenter__ = AsyncMock(return_value=mock_client)
+            mock_client_cls.return_value.__aexit__ = AsyncMock(return_value=False)
+            err_resp = MagicMock(status_code=401, headers={})
+            mock_client.post.side_effect = httpx.HTTPStatusError(
+                message="401 Unauthorized", request=MagicMock(), response=err_resp
+            )
+
+            adapter = DeepInfraEmbeddingAdapter(api_key="bad-key")
+            with pytest.raises(FatalError, match="4xx") as exc_info:
+                await adapter.embed(inputs)
+
+        # Must NOT be a retryable error
+        assert not isinstance(exc_info.value, RetryableError)

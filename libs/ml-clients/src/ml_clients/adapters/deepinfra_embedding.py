@@ -30,7 +30,7 @@ import httpx
 import structlog
 
 from ml_clients.dataclasses import EmbeddingInput, EmbeddingOutput
-from ml_clients.errors import FatalError, RetryableError
+from ml_clients.errors import FatalError, RateLimitError, RetryableError, parse_retry_after
 
 if TYPE_CHECKING:
     from observability.metrics import MLMetrics
@@ -123,6 +123,14 @@ class DeepInfraEmbeddingAdapter:
             except httpx.TimeoutException as exc:
                 raise RetryableError(f"DeepInfra embedding timeout: {exc}") from exc
             except httpx.HTTPStatusError as exc:
+                # 429 (rate-limited) is RETRYABLE — surface RateLimitError so the
+                # Kafka consumer/back-off layer can honour Retry-After (LIB-005).
+                if exc.response.status_code == 429:
+                    retry_after = parse_retry_after(exc.response.headers)
+                    raise RateLimitError(
+                        f"DeepInfra embedding rate-limited (429): {exc}",
+                        retry_after=retry_after,
+                    ) from exc
                 if exc.response.status_code >= 500:
                     raise RetryableError(f"DeepInfra embedding 5xx: {exc}") from exc
                 raise FatalError(f"DeepInfra embedding 4xx: {exc}") from exc
