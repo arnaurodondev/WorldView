@@ -24,6 +24,7 @@ import type { EnrichedHoldingRow } from "./holdings-columns";
 import { cn } from "@/lib/utils";
 import { formatPrice, formatPercent, formatPercentUnsigned } from "@/lib/utils";
 import { formatStalenessAwarePrice, fmtPnl } from "./holdings-columns";
+import { TickerLinkCellRenderer } from "./cells/TickerLink";
 
 // ── Pinned-row detection helper ───────────────────────────────────────────────
 // WHY: AG Grid passes `node.rowPinned === 'bottom'` for pinnedBottomRowData rows.
@@ -60,27 +61,9 @@ export const HOLDINGS_AG_COL_WIDTHS: Record<string, number> = {
 
 // ── Cell renderers ────────────────────────────────────────────────────────────
 
-// TickerCellRenderer — kept for the pinned-bottom TOTAL row.
-// WHY still here (not removed): the pinned row needs to show "TOTAL" and the
-// TickerLinkCellRenderer in cells/TickerLink.tsx handles the link+pinned guard.
-// This function is unused after step 4.10 wires TickerLinkCellRenderer.
-function TickerCellRenderer(params: ICellRendererParams<EnrichedHoldingRow>) {
-  // WHY pinned-row branch: the totals footer is a pinnedBottomRowData row.
-  // The TICKER cell is the natural place to show the "TOTAL" label since it is
-  // pinned left and always visible regardless of horizontal scroll.
-  if (isPinnedBottom(params)) {
-    return (
-      <span className="text-[10px] uppercase tracking-[0.08em] text-muted-foreground font-semibold">
-        TOTAL
-      </span>
-    );
-  }
-  return (
-    <span className="font-mono text-[11px] tabular-nums text-primary font-medium">
-      {params.data?.h.ticker}
-    </span>
-  );
-}
+// NOTE: TickerCellRenderer removed in step 4.10. TickerLinkCellRenderer
+// (imported from cells/TickerLink.tsx) handles both the link and the TOTAL
+// pinned-row label via its rowPinned guard.
 
 // SparklineCellRenderer — inline placeholder until cells/SparklineCellRenderer.tsx
 // is wired in step 4.11. Renders "—" for all rows; replaced in 4.11.
@@ -294,10 +277,10 @@ export const holdingsAgColumns: ColDef<EnrichedHoldingRow>[] = [
     sortable: false,
     resizable: false,
     width: HOLDINGS_AG_COL_WIDTHS.ticker,
-    // WHY TickerCellRenderer (not TickerLinkCellRenderer yet): step 4.10
-    // wires in the link renderer. Using the plain renderer here keeps this
-    // commit's typecheck clean without the cells/ file existing yet.
-    cellRenderer: TickerCellRenderer,
+    // WHY TickerLinkCellRenderer: step 4.10 — navigates to /instruments/{TICKER}
+    // on click. The pinned-bottom guard inside TickerLinkCellRenderer renders
+    // "TOTAL" for the totals footer row (same as the old TickerCellRenderer).
+    cellRenderer: TickerLinkCellRenderer,
   },
 
   // ── NAME ───────────────────────────────────────────────────────────────────
