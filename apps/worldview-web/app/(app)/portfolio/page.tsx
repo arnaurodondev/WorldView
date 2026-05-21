@@ -156,11 +156,9 @@ export default function PortfolioPage() {
   usePortfolioBundle({ portfolioId: activePortfolioId, accessToken });
 
   // ── W2: batch-fetch 14d daily OHLCV series for SPARK column ───────────
-  // WHY _holdingsSeries prefix: series is pre-fetched here to warm the TanStack
-  // cache; SparklineCellRenderer reads it via AG Grid context (see ag-holdings-columns.tsx).
-  // The underscore suppresses the lint unused-vars warning — the side-effect (cache warm)
-  // is the intent, not the value binding.
-  const { holdingsSeries: _holdingsSeries } = useHoldingsSeries(holdingsResp?.holdings ?? []);
+  // Passed to SemanticHoldingsTable as context.holdingsSeries so
+  // SparklineCellRenderer can look up each ticker's series without re-fetching.
+  const { holdingsSeries } = useHoldingsSeries(holdingsResp?.holdings ?? []);
 
   // ── W2: derive contributors / detractors from enriched holdings ────────
   // WHY holdingsQuotes: pnlPct is computed from live prices, not the null
@@ -330,9 +328,10 @@ export default function PortfolioPage() {
           />
 
           {/* 9. Holdings table — 14-col AG Grid, rowHeight=20, sparkline context */}
-          {/* WHY context.holdingsSeries: SparklineCellRenderer reads sparkline data
-              from AG Grid context so it doesn't need to re-fetch per row. The context
-              object is stable (new reference only when holdingsSeries changes). */}
+          {/* WHY holdingsSeries prop: SparklineCellRenderer reads series from AG Grid
+              context (params.context.holdingsSeries). The context object is stable
+              — new reference only when holdingsSeries changes — so it does not
+              cause spurious re-renders of unchanged rows. */}
           <SemanticHoldingsTable
             holdings={enrichedHoldings}
             quotes={holdingsQuotes}
@@ -343,6 +342,7 @@ export default function PortfolioPage() {
               ]),
             )}
             totalValue={kpi.totalValue}
+            holdingsSeries={holdingsSeries}
           />
 
           {/* 10. Contributors + detractors strip */}

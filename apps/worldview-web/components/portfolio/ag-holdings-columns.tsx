@@ -390,7 +390,10 @@ export const holdingsAgColumns: ColDef<EnrichedHoldingRow>[] = [
     headerName: "A",
     sortable: true,
     width: HOLDINGS_AG_COL_WIDTHS.asset,
-    valueGetter: (params) => params.data?.h.asset_class ?? "",
+    // WHY params.data?.assetClass (not h.asset_class): getHoldings() never
+    // populates asset_class — it is always undefined at the API layer. assetClass
+    // is derived in SemanticHoldingsTable.enrichedRows with an ETF/sector fallback.
+    valueGetter: (params) => params.data?.assetClass ?? "",
     cellRenderer: AssetTypeBadgeCellRenderer,
   },
 ];

@@ -189,6 +189,11 @@ class OnDemandProfileUseCase:
         general = eodhd_data.get("General", {})
         description = general.get("Description") or None
         eodhd_sector = general.get("Sector") or None
+        # WHY ETF fallback: EODHD General.Sector is absent for ETF/FUND instruments —
+        # the field simply does not exist in their fundamentals response. Without this
+        # fallback every ETF holding shows "Unknown" in the sector bar (BP-508).
+        if eodhd_sector is None and general.get("Type", "").upper() in ("ETF", "FUND", "MUTUAL FUND"):
+            eodhd_sector = "ETF"
         eodhd_industry = general.get("Industry") or None
         eodhd_country = general.get("CountryISO") or None
         eodhd_isin = general.get("ISIN") or None

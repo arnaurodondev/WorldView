@@ -46,6 +46,14 @@ export interface AgGridBaseProps<TData extends object> {
    * positions above the fold without scrolling.
    */
   rowHeight?: number;
+  /**
+   * AG Grid context — arbitrary data passed to every cell renderer via
+   * params.context. Use this to inject external data (e.g. holdingsSeries
+   * for SparklineCellRenderer) without prop-drilling through each ColDef.
+   * WHY Record<string, unknown>: keeps AgGridBase generic; callers cast to
+   * their own typed context interface inside the cell renderer.
+   */
+  context?: Record<string, unknown>;
 }
 
 /**
@@ -80,6 +88,7 @@ export function AgGridBase<TData extends object>({
   preventDefaultOnContextMenu,
   pinnedBottomRowData,
   rowHeight = 28,
+  context,
 }: AgGridBaseProps<TData>) {
   const colStateHandler = onColumnStateChanged;
 
@@ -96,6 +105,7 @@ export function AgGridBase<TData extends object>({
         rowData={rowData}
         columnDefs={columnDefs}
         pinnedBottomRowData={pinnedBottomRowData}
+        context={context}
         rowHeight={rowHeight}
         headerHeight={28}
         groupHeaderHeight={22}

@@ -82,6 +82,14 @@ export interface SemanticHoldingsTableProps {
   sectors?: Record<string, string | null>;
   /** Total portfolio market value — used to compute Weight column */
   totalValue: number;
+  /**
+   * 14-day OHLCV close-price series keyed by ticker — fed to SparklineCellRenderer
+   * via AG Grid context. WHY context (not a per-row prop): AG Grid ColDefs are
+   * static objects; passing dynamic data per-row requires context injection.
+   * The context object reference only changes when holdingsSeries changes, so
+   * it does not cause spurious re-renders of unchanged rows.
+   */
+  holdingsSeries?: Record<string, number[]>;
 }
 
 // ── Context menu overlay ──────────────────────────────────────────────────────
@@ -99,6 +107,7 @@ export function SemanticHoldingsTable({
   quotes,
   sectors,
   totalValue,
+  holdingsSeries,
 }: SemanticHoldingsTableProps) {
   const router = useRouter();
   const searchParams = useSearchParams();
@@ -307,11 +316,17 @@ export function SemanticHoldingsTable({
     const dayChange = quote?.change ?? null;
     const dayChangePct = quote?.change_pct ?? null;
     const dayChangeValue = dayChange != null ? dayChange * h.quantity : null;
+    // WHY fallback chain: getHoldings() never populates asset_class (it's absent
+    // from the raw API response transform). We derive it here:
+    //   1. Use h.asset_class if the field ever gets populated upstream.
+    //   2. If sector is "ETF" (set by the EODHD ETF fallback), classify as "etf".
+    //   3. Default to "equity" — the most common instrument type in a portfolio.
+    const assetClass = h.asset_class ?? (sector === "ETF" ? "etf" : "equity");
 
     totalPnl += pnl;
     totalPnlCost += h.average_cost * h.quantity;
 
-    return { h, livePrice, freshness, value, pnl, pnlPct, weight, sector, dayChange, dayChangePct, dayChangeValue };
+    return { h, livePrice, freshness, value, pnl, pnlPct, weight, sector, assetClass, dayChange, dayChangePct, dayChangeValue };
   });
 
   const totalPnlPct = totalPnlCost > 0 ? (totalPnl / totalPnlCost) * 100 : 0;
@@ -346,6 +361,7 @@ export function SemanticHoldingsTable({
     pnlPct: totalPnlPct,
     weight: 0,
     sector: null,
+    assetClass: "",
     dayChange: null,
     dayChangePct: null,
     dayChangeValue: null,
@@ -360,6 +376,9 @@ export function SemanticHoldingsTable({
       <AgGridBase<EnrichedHoldingRow>
         rowData={enrichedRows}
         columnDefs={holdingsAgColumns}
+        // WHY context: SparklineCellRenderer reads holdingsSeries from params.context.
+        // Passing via AG Grid context avoids threading data through each ColDef.
+        context={holdingsSeries ? { holdingsSeries } : undefined}
         getRowId={(p) => p.data.h.holding_id}
         onGridReady={handleGridReady}
         onRowClicked={(row) =>
