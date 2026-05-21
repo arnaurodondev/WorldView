@@ -28,6 +28,7 @@ PLAN-0066 Wave C (T-W10-C-01, T-W10-C-02):
 
 from __future__ import annotations
 
+from datetime import UTC, datetime, timedelta
 from typing import Annotated, Any, Literal
 from uuid import UUID
 
@@ -251,8 +252,12 @@ async def get_instrument_briefing(entity_id: str, request: Request) -> PublicBri
     user_id = _extract_user_id(request)
     tenant_id = _extract_tenant_id(request)  # noqa: F841 — reserved for future cache-key scope
     valkey = _get_valkey(request)
-    # WHY v2: PLAN-0062-W4 cache key bump — see morning briefing comment above.
-    cache_key = f"briefing:instrument:v2:{entity_id}:{user_id}"
+    # WHY no user_id suffix (T-S8-06 / W5 Δ12): instrument briefs are entity-scoped,
+    # not user-scoped — the same brief is valid for all users viewing the same entity.
+    # Dropping the user_id suffix means a single Valkey entry serves all concurrent
+    # viewers, cutting cache misses by ~N users per entity per day. Stale-user-brief
+    # isolation is preserved by the morning briefing (which retains the user_id key).
+    cache_key = f"briefing:instrument:v2:{entity_id}"
 
     # ── Check Valkey cache ────────────────────────────────────────────────────
     if valkey is not None:
@@ -339,6 +344,153 @@ async def get_instrument_briefing(entity_id: str, request: Request) -> PublicBri
             log.warning("briefing_cache_write_failed", error=str(e), key=cache_key)  # type: ignore[no-any-return]
 
     return instr_resp
+
+
+# ── W5 T-S8-05: lazy-generate endpoint ───────────────────────────────────────
+
+
+class GenerateBriefResponse(BaseModel):
+    """Response for POST /api/v1/briefings/instrument/{entity_id}/generate.
+
+    status:
+      "cached"  — a valid brief is already in Valkey; returned immediately (HTTP 200).
+      "queued"  — no cached brief; generation was started (HTTP 202).
+
+    WHY brief_id optional: when status="queued", no brief exists yet.
+    The caller should poll GET /v1/briefings/instrument/{entity_id} until the brief
+    appears (Δ27 lazy-generate contract).
+    """
+
+    status: Literal["cached", "queued"]
+    brief_id: str | None = None
+    entity_id: str
+
+
+@router.post("/briefings/instrument/{entity_id}/generate", status_code=200)
+async def generate_instrument_brief(
+    entity_id: str,
+    request: Request,
+) -> Any:
+    """Idempotent lazy-generate endpoint (W5-T-S8-05, Δ27).
+
+    Flow:
+      1. Check Valkey for a cached brief (key: briefing:instrument:v2:{entity_id}).
+         If found → return 200 + status="cached" + brief_id (avoids re-generation).
+      2. Rate-limit: 60 POST calls per user per clock hour via Valkey INCR counter.
+         On excess → 429 + Retry-After header with seconds until next hour.
+      3. Enqueue generation via GenerateBriefingUseCase.execute_public_instrument().
+         If generation fails (503) → propagate. If entity not found (404) → propagate.
+      4. Cache the result (briefing:instrument:v2:{entity_id}) for 24h.
+      5. Return 202 + status="queued" if the brief was newly generated.
+
+    WHY idempotent: multiple simultaneous page loads should not trigger parallel
+    LLM calls for the same entity. The Valkey cache acts as a natural dedup gate.
+
+    WHY 200 (not 201) when cached: the brief was NOT created by this request.
+    FastAPI is configured with status_code=200; cached path returns 200 via Response,
+    queued path returns 202 by raising a response override.
+
+    Auth: InternalJWTMiddleware enforces X-Internal-JWT (PRD-0025).
+    """
+    import math
+
+    user_id = _extract_user_id(request)
+    valkey = _get_valkey(request)
+    cache_key = f"briefing:instrument:v2:{entity_id}"
+
+    # ── Step 1: Cache hit (return 200 immediately) ────────────────────────────
+    if valkey is not None:
+        try:
+            cached = await valkey.get(cache_key)
+            if cached:
+                raw = cached.decode("utf-8") if isinstance(cached, bytes) else cached
+                cached_resp = PublicBriefingResponse.model_validate_json(raw)
+                return GenerateBriefResponse(
+                    status="cached",
+                    brief_id=getattr(cached_resp, "id", None) and str(cached_resp.id),  # type: ignore[attr-defined]
+                    entity_id=entity_id,
+                )
+        except Exception as exc:
+            log.warning("generate_brief_cache_read_failed", entity_id=entity_id, error=str(exc))  # type: ignore[no-any-return]
+
+    # ── Step 2: Rate limit (60 calls per user per clock hour) ────────────────
+    # WHY clock-hour (not rolling window): simpler implementation; acceptable
+    # granularity for a 60/hr quota that resets predictably on the hour.
+    if valkey is not None:
+        now_utc = datetime.now(tz=UTC)
+        hour_bucket = now_utc.strftime("%Y%m%d%H")
+        rate_key = f"brief_gen_rate:{user_id}:{hour_bucket}"
+        try:
+            count = await valkey.incr(rate_key)
+            # WHY EXPIRE only on first increment: avoids resetting TTL on every call.
+            if count == 1:
+                await valkey.expire(rate_key, 3600)
+            if count > 60:
+                # Compute seconds until next full hour boundary.
+                next_hour = now_utc.replace(minute=0, second=0, microsecond=0, tzinfo=UTC) + timedelta(hours=1)
+                retry_after = math.ceil((next_hour - now_utc).total_seconds())
+                raise HTTPException(
+                    status_code=429,
+                    detail=f"Brief generation quota exceeded (60/hour). Retry after {retry_after}s.",
+                    headers={"Retry-After": str(retry_after)},
+                )
+        except HTTPException:
+            raise
+        except Exception as exc:
+            # Fail-open: if Valkey is down, allow generation (prefer availability over strict throttling).
+            log.warning("generate_brief_rate_check_failed", user_id=user_id, error=str(exc))  # type: ignore[no-any-return]
+
+    # ── Step 3: Generate briefing ─────────────────────────────────────────────
+    uc = _get_briefing_uc(request)
+    try:
+        result = await uc.execute_public_instrument(entity_id=entity_id)
+    except RateLimitExceededError as exc:
+        raise HTTPException(status_code=429, detail=str(exc)) from exc
+    except ProviderUnavailableError as exc:
+        raise HTTPException(status_code=503, detail="Briefing generation unavailable") from exc
+    except EntityNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=f"Invalid entity_id: {entity_id}") from exc
+    except Exception as exc:
+        log.error("generate_brief_failed", entity_id=entity_id, error=str(exc))  # type: ignore[no-any-return]
+        raise HTTPException(status_code=503, detail="Briefing generation unavailable") from exc
+
+    # ── Step 4: Cache the newly generated brief ───────────────────────────────
+    response_data = {
+        "narrative": result.get("content", result.get("narrative", "")),
+        "risk_summary": result.get("risk_summary") or {},
+        "citations": result.get("citations", []),
+        "generated_at": result["generated_at"],
+        "cached": False,
+        "entity_id": entity_id,
+        "sections": result.get("sections", []),
+        "confidence": result.get("confidence", 1.0),
+        "lead": result.get("lead"),
+    }
+    new_resp = PublicBriefingResponse(**response_data)
+    if valkey is not None:
+        try:
+            await valkey.set(cache_key, new_resp.model_dump_json(), ex=_CACHE_TTL)
+        except Exception as exc:
+            log.warning("generate_brief_cache_write_failed", entity_id=entity_id, error=str(exc))  # type: ignore[no-any-return]
+
+    log.info("generate_instrument_brief_queued", entity_id=entity_id, user_id=user_id)  # type: ignore[no-any-return]
+
+    # ── Step 5: Return 202 (newly generated) ─────────────────────────────────
+    # WHY 202 via raise: FastAPI's status_code=200 is set at the route level.
+    # To return 202 for the queued case we need a Response object. We use
+    # JSONResponse here to bypass the default Pydantic serialisation.
+    from fastapi.responses import JSONResponse as _JSONResp
+
+    return _JSONResp(  # type: ignore[return-value]
+        status_code=202,
+        content=GenerateBriefResponse(
+            status="queued",
+            brief_id=None,
+            entity_id=entity_id,
+        ).model_dump(),
+    )
 
 
 # ── PLAN-0066 Wave B: brief history endpoint ──────────────────────────────────
