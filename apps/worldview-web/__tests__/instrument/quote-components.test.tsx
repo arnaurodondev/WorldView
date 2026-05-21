@@ -126,7 +126,14 @@ const METRIC_CELLS = [
   { label: "FCF",     value: "$108B" },
 ];
 
+// WHY `as unknown as FundamentalsSectionResponse`: FundamentalsRecord requires
+// `source` and `ingested_at` fields that are not relevant for display-layer unit
+// tests. Using the cast avoids maintaining fake provenance strings in every
+// test fixture while still exercising the real component rendering path.
+import type { FundamentalsSectionResponse } from "@/types/api";
+
 const INSIDER_DATA = {
+  security_id: "aapl-uuid",
   records: [
     { id: "1", security_id: "a", section: "i", period_end: "2024-01-01", period_type: "SNAPSHOT" as const, data: { date: "2024-04-30", owner_name: "L.Maestri", transaction_type: "Sale", shares: 10000, value: 2800000 } },
     { id: "2", security_id: "a", section: "i", period_end: "2024-01-01", period_type: "SNAPSHOT" as const, data: { date: "2024-04-22", owner_name: "J.Williams", transaction_type: "Sale", shares: 5000, value: 900000 } },
@@ -134,16 +141,17 @@ const INSIDER_DATA = {
     { id: "4", security_id: "a", section: "i", period_end: "2024-01-01", period_type: "SNAPSHOT" as const, data: { date: "2024-02-28", owner_name: "C.Adams", transaction_type: "Sale", shares: 3500, value: 640000 } },
     { id: "5", security_id: "a", section: "i", period_end: "2024-01-01", period_type: "SNAPSHOT" as const, data: { date: "2024-01-12", owner_name: "D.Luca", transaction_type: "Buy", shares: 1000, value: 182000 } },
   ],
-};
+} as unknown as FundamentalsSectionResponse;
 
 const EARNINGS_DATA = {
+  security_id: "aapl-uuid",
   records: [
     { id: "1", security_id: "a", section: "e", period_end: "2024-09-30", period_type: "ANNUAL" as const, data: { date: "2024-09-30", epsActual: 6.42, epsEstimate: 6.38, surprisePercent: 0.63 } },
     { id: "2", security_id: "a", section: "e", period_end: "2023-09-30", period_type: "ANNUAL" as const, data: { date: "2023-09-30", epsActual: 6.12, epsEstimate: 5.98, surprisePercent: 2.34 } },
     { id: "3", security_id: "a", section: "e", period_end: "2022-09-30", period_type: "ANNUAL" as const, data: { date: "2022-09-30", epsActual: 6.11, epsEstimate: 6.05, surprisePercent: 0.99 } },
     { id: "4", security_id: "a", section: "e", period_end: "2021-09-30", period_type: "ANNUAL" as const, data: { date: "2021-09-30", epsActual: 5.61, epsEstimate: 5.52, surprisePercent: 1.63 } },
   ],
-};
+} as unknown as FundamentalsSectionResponse;
 
 const NEWS_DATA = {
   total: 3,
@@ -154,18 +162,18 @@ const NEWS_DATA = {
   ],
 };
 
+// WHY `value` (not `price`): PriceLevel type uses `value: number` field name.
+// The S9 endpoint returns { label, value, direction } — "price" would be ignored.
 const PRICE_LEVELS_DATA = {
   instrument_id: "aapl",
-  current_price: 185.00,
-  pivot: 183.50,
   levels: [
-    { label: "R3", price: 196.80, direction: "above" as const },
-    { label: "R2", price: 192.40, direction: "above" as const },
-    { label: "R1", price: 188.10, direction: "above" as const },
-    { label: "PIVOT", price: 183.50, direction: "at" as const },
-    { label: "S1", price: 179.20, direction: "below" as const },
-    { label: "S2", price: 174.80, direction: "below" as const },
-    { label: "S3", price: 170.40, direction: "below" as const },
+    { label: "R3" as const, value: 196.80, direction: "above" as const },
+    { label: "R2" as const, value: 192.40, direction: "above" as const },
+    { label: "R1" as const, value: 188.10, direction: "above" as const },
+    { label: "PIVOT" as const, value: 183.50, direction: "at" as const },
+    { label: "S1" as const, value: 179.20, direction: "below" as const },
+    { label: "S2" as const, value: 174.80, direction: "below" as const },
+    { label: "S3" as const, value: 170.40, direction: "below" as const },
   ],
   ma50: 182.30,
   ma200: 175.60,
@@ -181,14 +189,17 @@ describe("U-4 MultiPeriodReturnsStrip", () => {
   });
 
   it("renders '—' placeholders when isLoading=true", () => {
-    render(<MultiPeriodReturnsStrip isLoading />);
+    // WHY data={undefined}: MultiPeriodReturnsStrip.data is typed as
+    // `MultiPeriodReturnsResponse | undefined` (required prop). Pass undefined
+    // explicitly to satisfy TypeScript while testing the loading branch.
+    render(<MultiPeriodReturnsStrip data={undefined} isLoading />);
     const cells = screen.getAllByRole("cell");
     // All 7 period columns still render; values are "—"
     expect(cells.length).toBe(7);
   });
 
-  it("renders '—' when data is null", () => {
-    render(<MultiPeriodReturnsStrip data={null} />);
+  it("renders '—' when data is undefined", () => {
+    render(<MultiPeriodReturnsStrip data={undefined} />);
     // Cells still render (structure stable) but values are "—"
     const cells = screen.getAllByRole("cell");
     expect(cells.length).toBe(7);
@@ -211,7 +222,9 @@ describe("U-5 IntradayStatsBand", () => {
   });
 
   it("renders '—' placeholders when isLoading=true", () => {
-    render(<IntradayStatsBand isLoading />);
+    // WHY data={undefined}: IntradayStatsBand.data is a required prop typed
+    // as `IntradayStatsResponse | undefined`. Pass explicitly for loading test.
+    render(<IntradayStatsBand data={undefined} isLoading />);
     // Structure present even while loading
     const cells = screen.getAllByRole("cell");
     expect(cells.length).toBeGreaterThanOrEqual(5);
@@ -327,17 +340,18 @@ describe("U-8 InsiderActivityList", () => {
   });
 
   it("empty state: shows message when records array is empty", () => {
-    render(<InsiderActivityList data={{ records: [] }} />);
+    render(<InsiderActivityList data={{ security_id: "aapl-uuid", records: [] } as unknown as FundamentalsSectionResponse} />);
     expect(screen.getByText(/No insider activity/)).toBeTruthy();
   });
 
   it("caps at 5 rows even for >5 records", () => {
     const moreData = {
+      security_id: "aapl-uuid",
       records: [
-        ...INSIDER_DATA.records,
+        ...(INSIDER_DATA as unknown as { records: unknown[] }).records,
         { id: "6", security_id: "a", section: "i", period_end: "2024-01-01", period_type: "SNAPSHOT" as const, data: { date: "2024-01-05", owner_name: "Extra Person", transaction_type: "Sale", shares: 500, value: 50000 } },
       ],
-    };
+    } as unknown as FundamentalsSectionResponse;
     render(<InsiderActivityList data={moreData} />);
     const rows = screen.getAllByRole("row");
     expect(rows.length).toBe(5);
@@ -373,7 +387,7 @@ describe("U-9 EarningsMiniList", () => {
   });
 
   it("empty state: shows message when records array is empty", () => {
-    render(<EarningsMiniList data={{ records: [] }} />);
+    render(<EarningsMiniList data={{ security_id: "aapl-uuid", records: [] } as unknown as FundamentalsSectionResponse} />);
     expect(screen.getByText(/No earnings history/)).toBeTruthy();
   });
 });

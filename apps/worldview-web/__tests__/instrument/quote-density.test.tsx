@@ -79,7 +79,12 @@ const METRIC_GRID_CELLS_VALUATION = [
   { label: "FCF", value: "$108B" },
 ];
 
+// WHY `as unknown as FundamentalsSectionResponse`: FundamentalsRecord.source and
+// .ingested_at are required fields irrelevant to display. Casting avoids noise.
+import type { FundamentalsSectionResponse } from "@/types/api";
+
 const INSIDER_RECORDS = {
+  security_id: "aapl-uuid",
   records: [
     { id: "1", security_id: "a", section: "i", period_end: "2024-01-01", period_type: "SNAPSHOT" as const, data: { date: "2024-04-30", owner_name: "L.Maestri", transaction_type: "Sale", shares: 10000, value: 2800000 } },
     { id: "2", security_id: "a", section: "i", period_end: "2024-01-01", period_type: "SNAPSHOT" as const, data: { date: "2024-04-22", owner_name: "J.Williams", transaction_type: "Sale", shares: 5000, value: 900000 } },
@@ -87,16 +92,17 @@ const INSIDER_RECORDS = {
     { id: "4", security_id: "a", section: "i", period_end: "2024-01-01", period_type: "SNAPSHOT" as const, data: { date: "2024-02-28", owner_name: "C.Adams", transaction_type: "Sale", shares: 3500, value: 640000 } },
     { id: "5", security_id: "a", section: "i", period_end: "2024-01-01", period_type: "SNAPSHOT" as const, data: { date: "2024-01-12", owner_name: "D.Luca", transaction_type: "Buy", shares: 1000, value: 182000 } },
   ],
-};
+} as unknown as FundamentalsSectionResponse;
 
 const EARNINGS_RECORDS = {
+  security_id: "aapl-uuid",
   records: [
     { id: "1", security_id: "a", section: "e", period_end: "2024-09-30", period_type: "ANNUAL" as const, data: { date: "2024-09-30", epsActual: 6.42, epsEstimate: 6.38, surprisePercent: 0.63 } },
     { id: "2", security_id: "a", section: "e", period_end: "2023-09-30", period_type: "ANNUAL" as const, data: { date: "2023-09-30", epsActual: 6.12, epsEstimate: 5.98, surprisePercent: 2.34 } },
     { id: "3", security_id: "a", section: "e", period_end: "2022-09-30", period_type: "ANNUAL" as const, data: { date: "2022-09-30", epsActual: 6.11, epsEstimate: 6.05, surprisePercent: 0.99 } },
     { id: "4", security_id: "a", section: "e", period_end: "2021-09-30", period_type: "ANNUAL" as const, data: { date: "2021-09-30", epsActual: 5.61, epsEstimate: 5.52, surprisePercent: 1.63 } },
   ],
-};
+} as unknown as FundamentalsSectionResponse;
 
 const NEWS_DATA = {
   total: 5,
