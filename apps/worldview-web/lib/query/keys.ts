@@ -148,6 +148,25 @@ export const qk = {
       [QK_VERSION, "instruments", "detail", instrumentId, "brief"] as const,
     ohlcv: (instrumentId: string, timeframe: string) =>
       [QK_VERSION, "instruments", "detail", instrumentId, "ohlcv", timeframe] as const,
+    // PRD-0089 W1 (§4.5 / §5): batched intraday OHLCV used by WatchlistPanel
+    // sparklines and potentially IndexStrip. One round trip per ticker set keeps
+    // sidebar render cost flat regardless of how many watchlist members the user
+    // tracks. Tickers are sorted in the key so [A,B] and [B,A] share one cache
+    // entry; `timeframe` and `limit` participate in the key so different bar
+    // widths (5m vs 1d) do not collide.
+    ohlcvBatch: (
+      tickers: readonly string[],
+      timeframe: string,
+      limit: number,
+    ) =>
+      [
+        QK_VERSION,
+        "instruments",
+        "ohlcv-batch",
+        [...tickers].sort(),
+        timeframe,
+        limit,
+      ] as const,
     fundamentals: (instrumentId: string) =>
       [QK_VERSION, "instruments", "detail", instrumentId, "fundamentals"] as const,
     fundamentalsSnapshot: (instrumentId: string) =>
@@ -372,6 +391,25 @@ export const qk = {
       params
         ? ([QK_VERSION, "briefing", "history", params] as const)
         : ([QK_VERSION, "briefing", "history"] as const),
+  },
+
+  // ── Shell (PRD-0089 W1) ─────────────────────────────────────────────────
+  // Keys owned by the global shell — the IndexStrip in the TopBar, alarm
+  // cluster, etc. Kept under their own namespace so they do not pollute the
+  // per-page domain namespaces and so a single `qc.invalidateQueries({queryKey:
+  // qk.shell.all})` clears every shell-owned query at once (used by RefreshAll
+  // and logout).
+  shell: {
+    all: [QK_VERSION, "shell"] as const,
+    // IndexStrip resolves its 10-ticker manifest (SPY / QQQ / IWM / DIA / VIX /
+    // TLT / ^TNX / GLD / USO / BTC-USD) to canonical instrument UUIDs once and
+    // caches for 30min — entity IDs are immutable per ticker so frequent
+    // refetch is wasted bandwidth.
+    indexResolveIds: () => [QK_VERSION, "shell", "index", "resolve-ids"] as const,
+    // Live batch quotes for the resolved index instrument IDs. 15s cadence
+    // matches MarketStatusPill so a single S9 batch call can serve both.
+    indexQuotes: (instrumentIds: readonly string[]) =>
+      [QK_VERSION, "shell", "index", "quotes", [...instrumentIds].sort()] as const,
   },
 
   // ── User ─────────────────────────────────────────────────────────────────
