@@ -3,8 +3,12 @@ id: PRD-0089-W2
 title: Wave 2 — Portfolio Overview
 prd: PRD-0089
 order: W2 (second page wave — runs after F1 + F2 + W1)
-status: ready-to-execute
+status: complete
 created: 2026-05-20
+updated: 2026-05-21
+shipped: 2026-05-21
+branch: feat/plan-0089-w2
+commits: 26 (24 feature + 2 test)
 platform_state: pre-production (no_backfill: true)
 parent_design: docs/designs/0089/03-portfolio-overview.md
 corners_audit: docs/designs/0089/oq/03-portfolio-overview-CORNERS-AUDIT.md
@@ -15,6 +19,8 @@ depends_on:
 unblocks:
   - Page 3 (Portfolio Detail / Holdings drilldown / Transactions ledger / Analytics)
 ---
+
+> ✅ **SHIPPED 2026-05-21** — 26 commits on `feat/plan-0089-w2`; 1,945 unit + 6 Playwright e2e pass; container healthy at http://localhost:3001.
 
 # Wave 2 — Portfolio Overview (PRD-0089)
 
