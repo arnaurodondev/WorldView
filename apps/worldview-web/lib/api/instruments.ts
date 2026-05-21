@@ -23,6 +23,11 @@ import type {
   FundamentalsSnapshot,
   FundamentalsSectionResponse,
   FundamentalsTimeseriesResponse,
+  // W5 Quote-tab types (T-02)
+  PeersResponse,
+  IntradayStatsResponse,
+  MultiPeriodReturnsResponse,
+  PriceLevelsResponse,
 } from "@/types/api";
 import { apiFetch, GatewayError } from "./_client";
 
@@ -527,6 +532,73 @@ export function createInstrumentsApi(t: string | undefined) {
     getIncomeStatement(instrumentId: string): Promise<FundamentalsSectionResponse> {
       return apiFetch<FundamentalsSectionResponse>(
         `/v1/fundamentals/${encodeURIComponent(instrumentId)}/income-statement`,
+        { token: t },
+      );
+    },
+
+    // ── W5 Quote-tab methods (T-02) ─────────────────────────────────────────
+
+    /**
+     * getPeers — top-N market-cap peers in the same GICS industry.
+     *
+     * WHY limit=5 default: the PeersStrip shows 5 rows on standard desktop
+     * viewports. Callers that need more (e.g. W3 PeerComparisonTable) can
+     * pass limit=10 without a separate endpoint call.
+     *
+     * S9 caches the response for 24h in Valkey; repeated calls within that
+     * window are served from cache without hitting S3.
+     */
+    getPeers(instrumentId: string, limit = 5): Promise<PeersResponse> {
+      return apiFetch<PeersResponse>(
+        `/v1/instruments/${encodeURIComponent(instrumentId)}/peers?limit=${limit}`,
+        { token: t },
+      );
+    },
+
+    /**
+     * getIntradayStats — session stats computed on the fly from 5m OHLCV bars.
+     *
+     * WHY no staleTime override here: the hook layer (T-04 useQuoteSidebarData)
+     * sets staleTime=60_000 during market hours, 5min after-hours, using
+     * lastBarTimestamp from the OHLCV response as part of the query key so a
+     * new bar invalidates the stat cache without evicting peers / levels.
+     *
+     * Fail-soft: S9 always returns 200; individual fields are null when the
+     * underlying bars or technicals are unavailable.
+     */
+    getIntradayStats(instrumentId: string): Promise<IntradayStatsResponse> {
+      return apiFetch<IntradayStatsResponse>(
+        `/v1/fundamentals/${encodeURIComponent(instrumentId)}/intraday-stats`,
+        { token: t },
+      );
+    },
+
+    /**
+     * getMultiPeriodReturns — close-on-close returns over 7 anchor periods.
+     *
+     * Periods: 1D / 5D / 1M / 3M / 6M / YTD / 1Y.
+     * S9 computes from the most recent 550 daily bars (enough for 2Y lookback).
+     * Returns null for any period with insufficient OHLCV history (e.g. IPO
+     * stocks less than 1Y old).
+     */
+    getMultiPeriodReturns(instrumentId: string): Promise<MultiPeriodReturnsResponse> {
+      return apiFetch<MultiPeriodReturnsResponse>(
+        `/v1/fundamentals/${encodeURIComponent(instrumentId)}/multi-period-returns`,
+        { token: t },
+      );
+    },
+
+    /**
+     * getPriceLevels — classic floor pivot levels from prior-day OHLCV.
+     *
+     * Returns 7 pivot levels (R3/R2/R1/PIVOT/S1/S2/S3) plus MA50/MA200.
+     * Each level carries a direction tag (above/at/below) vs current price.
+     * S9 uses the most recent 310 daily bars to compute pivots and MAs.
+     * Empty levels list is returned when fewer than 2 bars exist.
+     */
+    getPriceLevels(instrumentId: string): Promise<PriceLevelsResponse> {
+      return apiFetch<PriceLevelsResponse>(
+        `/v1/fundamentals/${encodeURIComponent(instrumentId)}/price-levels`,
         { token: t },
       );
     },

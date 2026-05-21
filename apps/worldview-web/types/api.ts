@@ -2198,3 +2198,83 @@ export interface UpdateNotificationPreferencesPayload {
   movers_alerts?: boolean;
   contradiction_alerts?: boolean;
 }
+
+// ── W5 Quote-tab response shapes ─────────────────────────────────────────────
+// WHY typed here (not generated): these shapes come from new S9 computed
+// endpoints (T-S9-01..04). The openapi-typescript spec hasn't been regenerated
+// yet; hand-written types are the source of truth until spec is updated.
+
+/** One peer instrument row — from GET /v1/instruments/{id}/peers */
+export interface PeerInstrument {
+  instrument_id: string;
+  /** Ticker symbol. Null for newly-listed / legacy records without a ticker. */
+  ticker: string | null;
+  name: string | null;
+  market_cap: number | null;
+  pe_ratio: number | null;
+  /** 1Y price return (%), already scaled ×100 by S9. */
+  return_1y: number | null;
+  /** Daily change (%), already scaled ×100 by S9. */
+  change_pct: number | null;
+}
+
+/** GET /v1/instruments/{id}/peers */
+export interface PeersResponse {
+  instrument_id: string;
+  /** GICS industry. Null for ETFs / instruments with no GICS assignment. */
+  industry: string | null;
+  peers: PeerInstrument[];
+}
+
+/** GET /v1/fundamentals/{id}/intraday-stats — session stats computed from 5m bars */
+export interface IntradayStatsResponse {
+  instrument_id: string;
+  /** Volume-weighted average price (5m bars). Null when bars unavailable. */
+  vwap: number | null;
+  /** Average True Range — 14-day lookback. Null when fewer than 14 daily bars. */
+  atr_14: number | null;
+  /** Relative Strength Index — 14-day lookback. Null when fewer than 14 bars. */
+  rsi_14: number | null;
+  /** Gap % = (today open - yesterday close) / yesterday close × 100. */
+  gap_pct: number | null;
+  /** Premarket session high (null if no premarket bars). */
+  premarket_high: number | null;
+  /** Premarket session low (null if no premarket bars). */
+  premarket_low: number | null;
+  /** Short Interest % of float (from technicals snapshot). Null if unavailable. */
+  short_interest_pct: number | null;
+}
+
+/** One period return in multi-period-returns response. */
+export type PeriodReturnMap = {
+  [period in "1D" | "5D" | "1M" | "3M" | "6M" | "YTD" | "1Y"]: number | null;
+};
+
+/** GET /v1/fundamentals/{id}/multi-period-returns */
+export interface MultiPeriodReturnsResponse {
+  instrument_id: string;
+  /**
+   * Map of period → return (%). Values are already multiplied by 100 by S9.
+   * Null when insufficient OHLCV history exists for the period.
+   */
+  periods: PeriodReturnMap;
+}
+
+/** One price level in price-levels response (e.g. R1, PIVOT, S2). */
+export interface PriceLevel {
+  label: "R3" | "R2" | "R1" | "PIVOT" | "S1" | "S2" | "S3";
+  value: number;
+  /** Whether current price is above / at / below this level. */
+  direction: "above" | "at" | "below";
+}
+
+/** GET /v1/fundamentals/{id}/price-levels — floor pivot levels + moving averages */
+export interface PriceLevelsResponse {
+  instrument_id: string;
+  /** 7 classic floor pivot levels (R3/R2/R1/PIVOT/S1/S2/S3) from prior-day OHLCV. */
+  levels: PriceLevel[];
+  /** 50-day simple moving average. Null when fewer than 50 daily bars. */
+  ma50: number | null;
+  /** 200-day simple moving average. Null when fewer than 200 daily bars. */
+  ma200: number | null;
+}
