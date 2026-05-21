@@ -313,11 +313,12 @@ just churn the consumer loop. Wire an alert on the log event instead.
 | Symbol | Purpose |
 |--------|---------|
 | `BaseOutboxDispatcher` | Lease-based outbox publisher. Hybrid: `dispatch_now()` inline + background `run()` poll loop. Marks records published only after Kafka ACK. Dead-letters records exceeding `max_attempts`. |
-| `DispatcherConfig` | All knobs: `poll_interval_seconds`, `lease_seconds`, `batch_size`, `max_attempts`, back-off params, `immediate_dispatch`, `worker_id`. |
+| `DispatcherConfig` | All knobs: `poll_interval_seconds`, `idle_poll_interval_seconds`, `lease_seconds`, `batch_size`, `max_attempts`, back-off params, `immediate_dispatch`, `worker_id`. |
 | `DeliveryResult` | Outcome of one dispatch: `record_id`, `success`, `topic`, `error`. |
 | `OutboxRecordProtocol` | Structural type for outbox table rows. |
 | `OutboxRepositoryProtocol` | Port for outbox table: `fetch_pending`, `mark_published`, `increment_attempts`, `move_to_dead_letter`. |
 | `UnitOfWorkWithOutboxProtocol` | UoW that exposes `.outbox` repository + `commit`/`rollback`. |
+| `OUTBOX_NOTIFY_CHANNEL` | Postgres channel name (`"outbox_events_new"`) used by the LISTEN/NOTIFY wake-up optimisation (LIB-003 / TASK-W4-01). |
 | `run_dispatcher(dispatcher)` | Coroutine — run in a background task via `asyncio.create_task(run_dispatcher(d))`. |
 
 **Abstract methods for `BaseOutboxDispatcher`:**
@@ -328,6 +329,87 @@ just churn the consumer loop. Wire an alert on the log event instead.
 | `get_serializer(event_type)` | Avro value serializer callable for the given `event_type`. |
 | `get_producer()` | Confluent `SerializingProducer` instance. |
 | `on_delivery_failure(result)` *(optional)* | Override to add alerting on dead-letter. |
+| `register_notify_listener(on_notify)` *(optional)* | Wire a Postgres `LISTEN` on `OUTBOX_NOTIFY_CHANNEL` so the dispatcher wakes immediately on each new outbox INSERT. Default returns `None` (no LISTEN, dispatcher uses legacy 5s polling). See "LISTEN/NOTIFY wake-up" below. |
+
+#### LISTEN/NOTIFY wake-up (LIB-003 / TASK-W4-01)
+
+Polling the outbox every 5 seconds across 10 services costs ~172 800
+idle queries per day — pure waste when the table is empty. The
+dispatcher now supports a Postgres `LISTEN/NOTIFY` wake-up that
+collapses idle polling to a safety-net `idle_poll_interval_seconds`
+(default 60s) while keeping at-least-once semantics intact.
+
+**Activation is opt-in per service** in two steps:
+
+**1. Add an AFTER-INSERT trigger to `outbox_events`** (one-time Alembic
+migration per service that owns an outbox table):
+
+```sql
+CREATE OR REPLACE FUNCTION notify_outbox_events_new() RETURNS trigger AS $$
+BEGIN
+  -- Statement-level trigger: one NOTIFY per INSERT batch, not per row.
+  -- The dispatcher always re-polls the table when woken, so collapsing
+  -- multiple inserts into a single NOTIFY is safe and cheaper.
+  NOTIFY outbox_events_new;
+  RETURN NULL;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE TRIGGER outbox_events_notify_trigger
+  AFTER INSERT ON outbox_events
+  FOR EACH STATEMENT
+  EXECUTE FUNCTION notify_outbox_events_new();
+```
+
+Producers do not need to know about the trigger — any normal
+`INSERT INTO outbox_events (...)` automatically fires `NOTIFY
+outbox_events_new`. The NOTIFY is delivered to all LISTEN sessions
+when the transaction commits, so dual-write semantics are preserved
+(no spurious wake-ups on rolled-back inserts).
+
+**2. Override `register_notify_listener` in the service dispatcher** to
+wire `asyncpg.Connection.add_listener` on a dedicated connection:
+
+```python
+from messaging.kafka.dispatcher import OUTBOX_NOTIFY_CHANNEL, BaseOutboxDispatcher
+
+class MyServiceDispatcher(BaseOutboxDispatcher):
+    async def register_notify_listener(self, on_notify):
+        conn = await self._engine.connect()
+        raw = await conn.get_raw_connection()
+        asyncpg_conn = raw.driver_connection
+
+        def _callback(*_args):
+            # Called from asyncpg's I/O loop — must be sync + cheap.
+            on_notify()
+
+        await asyncpg_conn.add_listener(OUTBOX_NOTIFY_CHANNEL, _callback)
+
+        async def _cleanup():
+            await asyncpg_conn.remove_listener(OUTBOX_NOTIFY_CHANNEL, _callback)
+            await conn.close()
+
+        return _cleanup
+```
+
+**Back-compat is mandatory.** Services that don't override the hook
+behave exactly as before — `register_notify_listener` returns `None`
+by default, and the dispatcher falls back to the legacy
+`poll_interval_seconds=5` loop. Any exception raised inside the hook
+is caught and logged as `outbox_dispatcher_listen_unavailable`; the
+dispatcher then continues polling. This means a test using SQLite or
+a misconfigured driver never breaks the run loop.
+
+**Operational notes:**
+
+- LISTEN ties up a Postgres connection — use a dedicated one outside
+  the regular pool.
+- NOTIFY is delivered only on commit, so a producer rollback never
+  wakes the dispatcher (correct: nothing to dispatch).
+- The safety-net poll still fires every `idle_poll_interval_seconds`
+  to catch NOTIFYs lost during connection drops / restarts.
+- Multiple NOTIFYs between polls collapse into a single wake-up; the
+  dispatcher always re-polls the table after waking.
 
 ### Valkey Client (`messaging.valkey`)
 

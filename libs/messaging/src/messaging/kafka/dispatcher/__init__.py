@@ -1,6 +1,7 @@
 """Lease-based transactional outbox dispatcher."""
 
 from messaging.kafka.dispatcher.base import (
+    OUTBOX_NOTIFY_CHANNEL,
     BaseOutboxDispatcher,
     DeliveryResult,
     DispatcherConfig,
@@ -11,6 +12,7 @@ from messaging.kafka.dispatcher.base import (
 )
 
 __all__ = [
+    "OUTBOX_NOTIFY_CHANNEL",
     "BaseOutboxDispatcher",
     "DeliveryResult",
     "DispatcherConfig",
