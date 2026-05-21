@@ -1,118 +1,124 @@
 /**
- * components/instrument/brief/AiBriefBanner.tsx — collapsible AI brief banner
+ * components/instrument/brief/AiBriefBanner.tsx — collapsible AI brief banner (T-23)
  *
  * WHY THIS EXISTS: PRD-0088 §6.5 — a 1-line brief between header and tab
- * bar, visible on all 3 tabs. Collapsed by default to maximise chart real
- * estate; click expands. Hidden entirely when no brief is cached.
- * WHO USES IT: components/instrument/InstrumentPageClient.tsx (T-A-05).
- * DATA SOURCE: GET /v1/briefings/instrument/{entityId} (S9 gateway, 10 min cache).
- * DESIGN REFERENCE: docs/specs/0088-…-redesign.md §6.5.
- * TARGET READER: junior Next.js dev — sessionStorage (not localStorage)
- * because the choice is per-tab/window, not user-wide.
+ *   bar, always visible (never returns null — §1.4). Collapsed default; click
+ *   expands. Uses `useInstrumentBrief` (T-04) for lazy-generate flow (Δ27).
+ *
+ * STATUS RENDERS:
+ *   loading      → "BRIEF · —" (placeholder, keeps layout height stable)
+ *   generating   → "BRIEF · Generating…" (POST queued; polling)
+ *   ready        → preview text + expand toggle
+ *   unavailable  → "BRIEF · Unavailable"
+ *   quota-exceeded → "BRIEF · Quota exceeded — retry in Nm" (Δ44)
+ *
+ * DESIGN: No `transition-[transform]` on chevron (Δ9 — F1 animation policy).
+ *   Border-b hairline; bg-card. h-6 banner row. text-[10px] "BRIEF" label.
+ *
+ * WHO USES IT: InstrumentPageClient.tsx. LINE LIMIT: soft 120.
  */
 
 "use client";
-// WHY "use client": useState + useQuery + sessionStorage all require the
-// browser runtime; this is a client-only interactive component.
 
 import { useEffect, useState } from "react";
-import { useQuery } from "@tanstack/react-query";
 import { ChevronRight } from "lucide-react";
-import { createGateway } from "@/lib/gateway";
-import { useAuth } from "@/hooks/useAuth";
-import { qk } from "@/lib/query/keys";
+import { useInstrumentBrief } from "@/components/instrument/hooks/useInstrumentBrief";
 import { formatRelativeTime } from "@/lib/utils";
 
-interface AiBriefBannerProps {
- readonly entityId: string;
-}
+// ── Constants ─────────────────────────────────────────────────────────────────
 
-// WHY 10 minutes: briefs cost LLM tokens; the backend already caches them
-// in Valkey for ~10 min so any refetch sooner just hits cache. Matches
-// the staleTime used by morning-brief consumers elsewhere.
-const BRIEF_STALE_MS = 10 * 60 * 1000;
-
-// WHY first-140 char preview: spec §6.5 — collapsed row shows a single
-// truncated line. 140 chars roughly fills the available width at 11px.
 const PREVIEW_CHARS = 140;
 
+// ── Props ─────────────────────────────────────────────────────────────────────
+
+interface AiBriefBannerProps {
+  /** entityId used for the GET/POST brief endpoints (may equal instrumentId). */
+  readonly entityId: string;
+}
+
+// ── Component ─────────────────────────────────────────────────────────────────
+
 export function AiBriefBanner({ entityId }: AiBriefBannerProps) {
- const { accessToken } = useAuth();
+  const storageKey = `wv:brief-collapsed:${entityId}`;
+  const [expanded, setExpanded] = useState(false);
 
- // WHY sessionStorage (not localStorage): collapse pref is per-tab and
- // resets on a fresh session — spec §6.5. Key shape namespaces by
- // entityId so each ticker keeps its own state.
- const storageKey = `wv:brief-collapsed:${entityId}`;
+  // Adopt session-persisted expand preference on the client (SSR-safe).
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    if (window.sessionStorage.getItem(storageKey) === "expanded") setExpanded(true);
+  }, [storageKey]);
 
- // WHY initial state TRUE (collapsed): spec §6.5 default.
- const [expanded, setExpanded] = useState(false);
+  const { data: brief, status, retryAfter } = useInstrumentBrief(entityId, entityId);
 
- // WHY useEffect for hydration: reading sessionStorage during initial
- // render breaks SSR (window undefined). We start collapsed on the
- // server and adopt the persisted preference on the client after mount.
- useEffect(() => {
- if (typeof window === "undefined") return;
- const stored = window.sessionStorage.getItem(storageKey);
- if (stored === "expanded") setExpanded(true);
- }, [storageKey]);
+  const toggle = () => {
+    const next = !expanded;
+    setExpanded(next);
+    if (typeof window !== "undefined") {
+      window.sessionStorage.setItem(storageKey, next ? "expanded" : "collapsed");
+    }
+  };
 
- const { data: brief } = useQuery({
- queryKey: qk.instruments.brief(entityId),
- queryFn: () => createGateway(accessToken).getInstrumentBrief(entityId),
- enabled: !!accessToken && !!entityId,
- staleTime: BRIEF_STALE_MS,
- // WHY retry:false: brief endpoint 404s for instruments with no cached
- // brief yet — retrying just hits the LLM-cold path again and again.
- retry: false,
- });
+  // ── Status label (collapsed-mode suffix) ─────────────────────────────────
+  let statusLabel: string | null = null;
+  if (status === "generating") statusLabel = "Generating…";
+  if (status === "unavailable") statusLabel = "Unavailable";
+  if (status === "quota-exceeded") {
+    const mins = retryAfter != null ? Math.ceil(retryAfter / 60) : null;
+    statusLabel = mins != null ? `Quota exceeded — retry in ${mins}m` : "Quota exceeded";
+  }
 
- // WHY render nothing on null/missing: spec §6.5 — "Unavailable state:
- // show nothing (banner hidden entirely if brief returns 404 or is null)".
- // No skeleton; we never reserve empty space.
- if (!brief || !brief.narrative) return null;
+  const preview = brief?.narrative?.slice(0, PREVIEW_CHARS) ?? null;
+  const isReady = status === "ready" && preview != null;
 
- const toggle = () => {
- const next = !expanded;
- setExpanded(next);
- if (typeof window !== "undefined") {
- window.sessionStorage.setItem(storageKey, next ? "expanded" : "collapsed");
- }
- };
+  return (
+    // WHY always mounted (never return null): §1.4 — AiBriefBanner is ALWAYS
+    // visible. The "loading" state preserves the 24px layout slot.
+    <div className="border-b border-border/50 bg-card">
+      <button
+        type="button"
+        onClick={toggle}
+        className="flex h-6 w-full items-center gap-2 px-3 text-left"
+        aria-expanded={expanded && isReady}
+        aria-label="Toggle AI brief"
+      >
+        {/* WHY no transition-[transform] (Δ9): F1 animation-policy forbids CSS
+            transition on layout-shifting elements; instant flip is preferred. */}
+        <ChevronRight
+          className={`size-3 shrink-0 text-muted-foreground ${expanded && isReady ? "rotate-90" : "rotate-0"}`}
+          aria-hidden="true"
+        />
+        <span className="text-[10px] uppercase tracking-wide text-muted-foreground shrink-0">
+          BRIEF
+        </span>
+        {/* Collapsed state: preview text OR status label */}
+        {!expanded && (
+          <span className="flex-1 truncate text-[11px] text-foreground/70">
+            {isReady ? preview : (statusLabel ?? "—")}
+          </span>
+        )}
+      </button>
 
- const preview = brief.narrative.slice(0, PREVIEW_CHARS);
+      {/* Expanded body — only shown when brief is ready */}
+      {expanded && isReady && (
+        <div className="max-h-[120px] overflow-y-auto px-3 pb-2">
+          {/* WHY whitespace-pre-wrap: §6.5 — plain text, not markdown. */}
+          <p className="whitespace-pre-wrap text-[11px] leading-[1.5] text-foreground/80">
+            {brief?.narrative}
+          </p>
+          {brief?.generated_at && (
+            <p className="mt-1 text-[10px] text-muted-foreground">
+              Updated {formatRelativeTime(brief.generated_at)}
+            </p>
+          )}
+        </div>
+      )}
 
- return (
- <div className="border-b border-border/50 bg-card">
- {/* WHY a button (not a div with onClick): keyboard + screen-reader
- users get free focus + Enter activation. The visual styling is
- identical to a flex row. */}
- <button
- type="button"
- onClick={toggle}
- className="flex h-6 w-full items-center gap-2 px-3 text-left"
- aria-expanded={expanded}
- >
- <ChevronRight
- className={`size-3 shrink-0 text-muted-foreground transition-[transform] ${expanded ? "rotate-90" : "rotate-0"}`}
- aria-hidden="true"
- />
- <span className="text-[10px] uppercase tracking-wide text-muted-foreground">BRIEF</span>
- {!expanded && (
- <span className="flex-1 truncate text-[11px] text-foreground/70">{preview}</span>
- )}
- </button>
- {expanded && (
- <div className="max-h-[120px] overflow-y-auto px-3 pb-2">
- {/* WHY whitespace-pre-wrap: spec §6.5 — "markdown NOT rendered
- (plain text)". Preserves paragraph breaks the LLM emitted. */}
- <p className="whitespace-pre-wrap text-[11px] leading-[1.5] text-foreground/80">
- {brief.narrative}
- </p>
- <p className="mt-1 text-[10px] text-muted-foreground">
- Updated {formatRelativeTime(brief.generated_at)}
- </p>
- </div>
- )}
- </div>
- );
+      {/* Expanded error states */}
+      {expanded && !isReady && statusLabel && (
+        <div className="px-3 pb-2 text-[11px] text-muted-foreground/60">
+          {statusLabel}
+        </div>
+      )}
+    </div>
+  );
 }
