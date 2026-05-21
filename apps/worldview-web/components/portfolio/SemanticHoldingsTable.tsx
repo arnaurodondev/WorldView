@@ -1,10 +1,10 @@
 /**
- * components/portfolio/SemanticHoldingsTable.tsx — 12-column holdings table
+ * components/portfolio/SemanticHoldingsTable.tsx — 14-column holdings table
  *
  * WHY THIS EXISTS: The portfolio holdings table is the most data-critical surface
- * for a portfolio manager. Twelve columns give enough data to make re-balancing
+ * for a portfolio manager. Fourteen columns give enough data to make re-balancing
  * decisions without navigating to the instrument detail page.
- *   Ticker | Name | Qty | Avg Cost | Current | Day$ | Day% | P&L$ | P&L% | Value | Weight | Sector
+ *   Ticker | Name | Qty | Avg Cost | Current | Day$ | Day% | SPARK | P&L$ | P&L% | Value | Weight | Sector | Asset
  *
  * PLAN-0071 Phase 6 — AG Grid migration:
  *   - DataTable replaced with AgGridBase (ag-grid-community v35).
@@ -24,9 +24,13 @@
  *     hardcoded-pixel-width sibling <div> footer was removed; the pinned row
  *     stays in sync with column widths and TICKER pin automatically.
  *
+ * PRD-0089 W2 §4.8 — density lock:
+ *   - rowHeight=20 (was 28) — fits more positions above the fold.
+ *   - SPARK + ASSET columns added in §4.9 via ag-holdings-columns.tsx.
+ *
  * WHO USES IT: app/(app)/portfolio/page.tsx — Holdings tab
  * DATA SOURCE: holdingsResp.holdings + batch quotes from S9
- * DESIGN REFERENCE: PLAN-0044 Wave 2, PLAN-0059 F-1, PLAN-0071 Phase 6
+ * DESIGN REFERENCE: PLAN-0044 Wave 2, PLAN-0059 F-1, PLAN-0071 Phase 6, PRD-0089 W2
  */
 
 "use client";
@@ -368,6 +372,10 @@ export function SemanticHoldingsTable({
         onCellContextMenu={handleCellContextMenu}
         preventDefaultOnContextMenu={true}
         pinnedBottomRowData={[pinnedBottomRow]}
+        // WHY rowHeight=20 (was 28): W2 density lock — fits more positions above the
+        // fold. 20px gives one row per ~11px font line + 4.5px top + 4.5px bottom
+        // padding, which is legible at text-[11px] while reducing wasted whitespace.
+        rowHeight={20}
         className="flex-1"
       />
 

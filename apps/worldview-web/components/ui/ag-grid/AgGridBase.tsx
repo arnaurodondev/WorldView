@@ -40,6 +40,12 @@ export interface AgGridBaseProps<TData extends object> {
    * the TICKER column is pinned left.
    */
   pinnedBottomRowData?: TData[];
+  /**
+   * Row height in pixels. Defaults to 28 (terminal-standard).
+   * PRD-0089 W2 §4.8: the holdings table uses 20px density to fit more
+   * positions above the fold without scrolling.
+   */
+  rowHeight?: number;
 }
 
 /**
@@ -73,6 +79,7 @@ export function AgGridBase<TData extends object>({
   onColumnStateChanged,
   preventDefaultOnContextMenu,
   pinnedBottomRowData,
+  rowHeight = 28,
 }: AgGridBaseProps<TData>) {
   const colStateHandler = onColumnStateChanged;
 
@@ -89,7 +96,7 @@ export function AgGridBase<TData extends object>({
         rowData={rowData}
         columnDefs={columnDefs}
         pinnedBottomRowData={pinnedBottomRowData}
-        rowHeight={28}
+        rowHeight={rowHeight}
         headerHeight={28}
         groupHeaderHeight={22}
         getRowId={getRowId}
