@@ -61,11 +61,16 @@ export function ConcentrationSectorTeaseStrip({
         <>
           {/* WHY hhi (not hhi_index): ConcentrationResponse uses `hhi`, not `hhi_index`.
               The API shape comes from ConcentrationStrip which reads data.hhi.
-              See types/api.ts ConcentrationResponse interface. */}
-          <span className="font-mono text-[11px] tabular-nums text-foreground">
-            HHI {conc.hhi.toFixed(0)}
-            <span className="ml-1 text-muted-foreground text-[10px]">[{hhiLabel(conc.hhi)}]</span>
-          </span>
+              See types/api.ts ConcentrationResponse interface.
+              WHY null guard on hhi: when the catch-all mock returns {} or S9 responds
+              with an unexpected shape, hhi can be undefined — undefined.toFixed() would
+              throw a TypeError and crash the error boundary before the table renders. */}
+          {conc.hhi != null ? (
+            <span className="font-mono text-[11px] tabular-nums text-foreground">
+              HHI {conc.hhi.toFixed(0)}
+              <span className="ml-1 text-muted-foreground text-[10px]">[{hhiLabel(conc.hhi)}]</span>
+            </span>
+          ) : null}
           {top3.length > 0 && (
             <>
               <span className="text-[10px] text-muted-foreground">·</span>
