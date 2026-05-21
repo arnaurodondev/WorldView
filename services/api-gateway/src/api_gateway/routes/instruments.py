@@ -193,6 +193,35 @@ async def instruments_lookup(request: Request) -> Any:
     return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
 
 
+# ── Peers (W5-T-S9-01) ───────────────────────────────────────────────────────
+
+
+@router.get("/instruments/{instrument_id}/peers")
+async def instrument_peers(instrument_id: str, request: Request) -> Any:
+    """Proxy GET /v1/instruments/{id}/peers → S3 Market Data /peers.
+
+    Returns the top-N market-cap peers in the same GICS industry.
+
+    WHY proxy-only (no S9 transform): the peers response shape is already
+    frontend-friendly (`PeersResponse` from T-S2-01). S9 just gates auth
+    and forwards query params (limit=) to S3 unchanged. S3 handles the 24h
+    Valkey cache and the GICS industry lookup.
+
+    Requires authentication. Returns 404 if the instrument is not found.
+    S3 returns 200 + empty peers list for ETFs with no GICS industry.
+    """
+    if not getattr(request.state, "user", None):
+        raise HTTPException(status_code=401, detail="Authentication required")
+    headers = _auth_headers(request)
+    clients = _clients(request)
+    resp = await clients.market_data.get(
+        f"/api/v1/instruments/{instrument_id}/peers",
+        params=dict(request.query_params),
+        headers=headers,
+    )
+    return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
+
+
 # ── Manual price refresh (PLAN-0036 W1-11) ────────────────────────────────────
 
 
