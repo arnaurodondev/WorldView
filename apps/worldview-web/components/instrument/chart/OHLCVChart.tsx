@@ -110,10 +110,66 @@ export function OHLCVChart({ instrumentId, initialBars }: OHLCVChartProps) {
     return () => window.removeEventListener("keydown", handler);
   }, [isFullscreen]);
 
+  // W5-T-07: numeric chord 1/5/30 switches the chart timeframe (Δ15).
+  // WHY window-scoped with page guard: the chart may not be focused; window
+  // capture reaches the shortcut regardless of focus state. The Quote-tab
+  // scope guard in InstrumentTabs (T-26) prevents collision with global chords.
+  //
+  // WHY 1→1D / 5→1W / 30→1M:
+  //   The Timeframe enum has "5M"|"1H"|"1D"|"1W"|"1M" — no "5D"/"30D".
+  //   1 week = ~5 trading days; 1 month = ~30 trading days.
+  //   The "30" chord is a 2-key sequence ("3" then "0"). We implement it via
+  //   a pending-digit buffer with a 400ms window: pressing "3" primes the
+  //   buffer; pressing "0" within 400ms completes the chord to "1M". If "3"
+  //   is not followed by "0", it is discarded (no single-"3" action).
+  //
+  // WHY !e.ctrlKey && !e.metaKey && !e.altKey:
+  //   Prevents shadowing browser shortcuts like Ctrl+1 (tab switch in many
+  //   browsers) or Cmd+1 (macOS workspace switch).
+  useEffect(() => {
+    let pendingDigit: string | null = null;
+    let pendingTimer: ReturnType<typeof setTimeout> | null = null;
+
+    const clearPending = () => {
+      pendingDigit = null;
+      if (pendingTimer !== null) { clearTimeout(pendingTimer); pendingTimer = null; }
+    };
+
+    const handler = (e: KeyboardEvent) => {
+      if (e.ctrlKey || e.metaKey || e.altKey || e.shiftKey) { clearPending(); return; }
+      // WHY target check: ignore keypresses inside text inputs / textareas.
+      const target = e.target as HTMLElement | null;
+      if (target && (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.isContentEditable)) {
+        clearPending(); return;
+      }
+      if (pendingDigit === "3" && e.key === "0") {
+        clearPending();
+        setTimeframe("1M"); // 30 trading days ≈ 1M
+        return;
+      }
+      clearPending();
+      if (e.key === "1") { setTimeframe("1D"); return; }
+      if (e.key === "5") { setTimeframe("1W"); return; } // 5 trading days ≈ 1W
+      if (e.key === "3") {
+        // Prime the 2-key "30" chord; discard after 400ms if "0" not pressed.
+        pendingDigit = "3";
+        pendingTimer = setTimeout(clearPending, 400);
+      }
+    };
+    window.addEventListener("keydown", handler);
+    return () => { window.removeEventListener("keydown", handler); clearPending(); };
+  }, []);
+
   return (
-    // WHY conditional fixed positioning: fullscreen stretches chart to fill
-    // the viewport (z-50); exit via toolbar or Escape.
-    <div className={isFullscreen ? "fixed inset-0 z-50 bg-background flex flex-col" : ""}>
+    // WHY conditional class (Δ32 — W5-T-07):
+    //   Fullscreen: fixed overlay fills the viewport (z-50).
+    //   Normal: min-h-[320px] guarantees a usable chart height in the CSS Grid
+    //     slot (QuoteTab grid cell). Previously 440px, reduced to 320px to give
+    //     the MultiPeriodReturnsStrip + IntradayStatsBand room below the chart
+    //     without requiring the user to scroll immediately on 1080p displays.
+    //   `h-full flex flex-col`: fills the grid cell height; inner toolbar (h-7)
+    //     + canvas (flex-1) stack without overflow.
+    <div className={isFullscreen ? "fixed inset-0 z-50 bg-background flex flex-col" : "min-h-[320px] h-full flex flex-col"}>
       <div className="flex items-center h-7 px-2 border-b border-border/30 shrink-0">
         <TimeframeToolbar
           timeframe={timeframe}
