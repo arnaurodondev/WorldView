@@ -36,6 +36,7 @@ from knowledge_graph.api import (
     cypher,
     dlq,
     entities,
+    entity_refresh,  # REQ-003 / TASK-W0-06: manual entity refresh trigger
     events,
     health,
     internal_costs,
@@ -256,5 +257,6 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(internal_costs.router)
     app.include_router(paths.router)  # PLAN-0074 Wave E2 — path insights
     app.include_router(narratives.router)  # PRD-0074 Wave D — narrative history + manual trigger
+    app.include_router(entity_refresh.router)  # REQ-003 / TASK-W0-06 — manual entity refresh trigger
 
     return app

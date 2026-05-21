@@ -48,10 +48,15 @@ class Settings(BaseSettings):
     schema_registry_url: str = "http://localhost:8081"
     kafka_consumer_group: str = "nlp-pipeline-group"
     kafka_watchlist_consumer_group: str = "nlp-watchlist-group"
+    # REQ-003 / TASK-W0-06: dedicated consumer group for entity.refresh.v1 so
+    # the manual refresh path runs independently of the main article pipeline.
+    kafka_entity_refresh_consumer_group: str = "nlp-entity-refresh-group"
 
     # Topics (consumed)
     topic_article_stored: str = "content.article.stored.v1"
     topic_watchlist_updated: str = "portfolio.watchlist.updated.v1"
+    # REQ-003 / TASK-W0-06: manual entity refresh event from S7.
+    topic_entity_refresh: str = "entity.refresh.v1"
 
     # Topics (produced)
     topic_article_enriched: str = "nlp.article.enriched.v1"

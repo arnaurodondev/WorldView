@@ -443,6 +443,85 @@ async def trigger_entity_narrative_generation(
     return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
 
 
+# ── Entity refresh trigger (REQ-003 / TASK-W0-06) ─────────────────────────────
+
+
+@router.post(
+    "/entities/{entity_id}/refresh",
+    status_code=202,
+    summary="Manually trigger entity re-enrichment (REQ-003)",
+)
+async def trigger_entity_refresh(
+    entity_id: UUID,
+    request: Request,
+) -> Any:
+    """Proxy ``POST /api/v1/entities/{entity_id}/refresh`` → S7.
+
+    Body (forwarded verbatim)::
+
+        {"refresh_type": "description" | "narrative" | "all"}   (default "all")
+
+    Rate-limited to one request per entity+tenant+user per hour at the S9
+    proxy layer (in addition to the identical rate limit enforced by S7).
+    Defence-in-depth — same posture as ``trigger_entity_narrative_generation``.
+
+    Rate-limit key: ``entity_refresh_proxy:<tenant_id>:<entity_id>:<user_id>``
+    BP-200: uses ``set_nx(key, "1", ex=3600)`` — NOT ``set(..., nx=True)``.
+
+    - 202: refresh queued (job_id returned).
+    - 401: missing/invalid authentication.
+    - 404: entity_id not found in canonical_entities.
+    - 422: invalid refresh_type or malformed UUID.
+    - 429: rate limit hit — ``Retry-After: 3600`` header included.
+    """
+    if not getattr(request.state, "user", None):
+        raise HTTPException(status_code=401, detail="Authentication required")
+
+    user = request.state.user
+    tenant_id: str = str(user.get("tenant_id", ""))
+    user_id: str = str(user.get("user_id") or user.get("sub", "anonymous"))
+
+    # ── Proxy-layer rate limit (BP-200) ─────────────────────────────────────
+    valkey = getattr(request.app.state, "valkey", None)
+    if valkey is not None:
+        rl_key = f"entity_refresh_proxy:{tenant_id}:{entity_id}:{user_id}"
+        try:
+            allowed = await valkey.set_nx(rl_key, "1", ex=3600)
+            if not allowed:
+                raise HTTPException(
+                    status_code=429,
+                    detail="Rate limit: one entity refresh per hour.",
+                    headers={"Retry-After": "3600"},
+                )
+        except HTTPException:
+            raise
+        except Exception:
+            # Fail-open: Valkey error → allow the request through.
+            logger.warning("entity_refresh_proxy_rl_failed", entity_id=str(entity_id))
+
+    # ── Forward the JSON body verbatim to S7 ────────────────────────────────
+    # Reading the body once (FastAPI accepts None content-type bodies); falling
+    # back to an empty dict when the client sent no body — S7 will default
+    # refresh_type to "all".
+    try:
+        body_bytes: bytes = await request.body()
+    except Exception:
+        body_bytes = b""
+
+    headers = _auth_headers(request)
+    # Preserve Content-Type so S7 deserialises the body correctly when present.
+    if body_bytes:
+        headers.setdefault("Content-Type", request.headers.get("Content-Type", "application/json"))
+
+    clients = _clients(request)
+    resp = await clients.knowledge_graph.post(
+        f"/api/v1/entities/{entity_id}/refresh",
+        content=body_bytes if body_bytes else None,
+        headers=headers,
+    )
+    return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
+
+
 @router.get(
     "/entities/{entity_id}/paths",
     summary="Multi-hop opportunity paths for an entity (PLAN-0074 Wave G)",

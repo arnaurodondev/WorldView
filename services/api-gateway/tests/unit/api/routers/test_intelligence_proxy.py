@@ -298,6 +298,75 @@ async def test_narrative_generate_rate_limited(authed_app, authed_mock_clients) 
     authed_mock_clients.knowledge_graph.post.assert_not_called()
 
 
+# ── REQ-003 / TASK-W0-06: POST /v1/entities/{id}/refresh ────────────────────
+
+
+@pytest.mark.asyncio
+async def test_entity_refresh_requires_auth(app, mock_clients) -> None:
+    """POST /v1/entities/{id}/refresh without auth → 401."""
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        resp = await client.post(f"/v1/entities/{_ENTITY_UUID}/refresh")
+    assert resp.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_entity_refresh_happy_path(authed_app, authed_mock_clients) -> None:
+    """POST /v1/entities/{id}/refresh → S7 returns 202; body forwarded."""
+    # set_nx True → proxy rate limit not hit.
+    mock_valkey = authed_app.state.valkey
+    mock_valkey.set_nx = AsyncMock(return_value=True)
+
+    authed_mock_clients.knowledge_graph.post = AsyncMock(
+        return_value=_mock_response(
+            202,
+            {
+                "job_id": "0193abcd-0000-7000-8000-000000000001",
+                "entity_id": _ENTITY_UUID,
+                "refresh_type": "description",
+                "message": "Entity refresh queued",
+            },
+        ),
+    )
+
+    transport = ASGITransport(app=authed_app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        resp = await client.post(
+            f"/v1/entities/{_ENTITY_UUID}/refresh",
+            headers={"Authorization": f"Bearer {_make_jwt()}"},
+            json={"refresh_type": "description"},
+        )
+
+    assert resp.status_code == 202
+    call_args = authed_mock_clients.knowledge_graph.post.call_args
+    assert call_args[0][0] == f"/api/v1/entities/{_ENTITY_UUID}/refresh"
+    # Body bytes forwarded verbatim.
+    forwarded = call_args.kwargs.get("content")
+    assert forwarded is not None
+    assert b"description" in forwarded
+
+
+@pytest.mark.asyncio
+async def test_entity_refresh_rate_limited_at_proxy(authed_app, authed_mock_clients) -> None:
+    """POST /v1/entities/{id}/refresh — S9 proxy rate limit → 429 with Retry-After."""
+    mock_valkey = authed_app.state.valkey
+    mock_valkey.set_nx = AsyncMock(return_value=False)  # rate-limited
+
+    authed_mock_clients.knowledge_graph.post = AsyncMock()
+
+    transport = ASGITransport(app=authed_app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        resp = await client.post(
+            f"/v1/entities/{_ENTITY_UUID}/refresh",
+            headers={"Authorization": f"Bearer {_make_jwt()}"},
+        )
+
+    assert resp.status_code == 429
+    assert resp.headers.get("retry-after") == "3600"
+    # S7 must NOT have been called when the proxy rate-limit fires.
+    authed_mock_clients.knowledge_graph.post.assert_not_called()
+
+
 # ── T-G-02: GET /v1/entities/{id}/graph (new params) ────────────────────────
 
 
