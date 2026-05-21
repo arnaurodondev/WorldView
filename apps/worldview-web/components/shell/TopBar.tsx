@@ -242,93 +242,95 @@ export function TopBar({
             without growing the 36px bar height. Labels also bumped to 11px
             for visual parity. */}
 
-        {/* ── Portfolio metrics cluster (PLAN-0050 T-A-1-01) ────────────────
-            The three values (PORT / Day P&L / Total P&L) are now visually
+        {/* ── Portfolio metrics cluster (PLAN-0050 T-A-1-01 + W1.1 F-001) ──
+            The three values (PORT / Day P&L / Total P&L) are visually
             grouped inside a single subtly-tinted box with a thin border and
-            internal divider hairlines. Why:
-            - Before: three free-floating sibling spans separated only by
-              gap-2 made the rail feel like a row of unrelated badges. The
-              audit (F-D-008) called this "loose" and noted the eye had to
-              re-anchor on each label to follow the relationship between
-              NAV, day move, and total P&L.
-            - After: one box with bg-muted/20 + border-border/30 reads as
-              "your account", and the divider hairlines reinforce that
-              these three numbers are calculated from the same source. We
-              keep the same per-value min-w slots so digits still don't jump
-              on every refetch.
+            internal divider hairlines.
 
-            WHY render the cluster wrapper even when a value is null: it
-            stabilises the rail width as positions update from null → known.
-            The wrapper renders its known-value children only — the
-            container itself is conditional on at least one value existing
-            so empty accounts still get a clean rail. */}
-        {(portfolioValue != null || dailyPnl != null || unrealisedPnl != null) && (
-          // PRD-0089 W1 C-04 — drop `rounded-[2px]` per F1 border-radius=0 lock.
-          <div
-            className="flex items-center gap-2 border border-border/30 bg-muted/20 px-2 py-0.5"
-            aria-label="Portfolio header metrics"
+            W1.1 F-001 (QA 2026-05-21): the rail is now rendered
+            UNCONDITIONALLY — previously the outer wrapper was gated on at
+            least one value being non-null, which made the entire box
+            disappear for users with zero holdings (demo sessions, brand-new
+            accounts). With the W1 IndexStrip + PortfolioSwitcher gone live,
+            the absence of any portfolio info on the TopBar was the loudest
+            visual regression of the wave. We now reserve the box's slot at
+            all times and render `—` placeholders per value when null,
+            matching the IndexStrip's "never collapse to zero width"
+            treatment in the same row. Per-value min-w slots still prevent
+            digit-count jitter when prices arrive. */}
+        <div
+          className="flex items-center gap-2 border border-border/30 bg-muted/20 px-2 py-0.5"
+          aria-label="Portfolio header metrics"
+        >
+          {/* Portfolio NAV — compact value display matching Bloomberg's
+              account rail convention. Renders "—" while loading or for
+              accounts with zero holdings. */}
+          <span
+            className="flex items-center gap-1 whitespace-nowrap font-mono text-[11px] tabular-nums text-muted-foreground/80"
+            title="Total portfolio value (live quote-based)"
+            aria-label={
+              portfolioValue != null
+                ? `Portfolio value ${formatPortfolioValue(portfolioValue)}`
+                : "Portfolio value pending"
+            }
           >
-            {/* Portfolio NAV — compact value display matching Bloomberg's account rail convention.
-                F-QA-23: standardised on `!= null` (covers both null AND undefined) for
-                consistency with the dailyPnl / unrealisedPnl checks below. */}
-            {portfolioValue != null && (
-              <span
-                className="flex items-center gap-1 whitespace-nowrap font-mono text-[11px] tabular-nums text-muted-foreground/80"
-                title="Total portfolio value (live quote-based)"
-                aria-label={`Portfolio value ${formatPortfolioValue(portfolioValue)}`}
-              >
-                <span className="text-muted-foreground">PORT</span>
-                <span className="inline-block min-w-[3.5rem] text-right text-foreground">
-                  {formatPortfolioValue(portfolioValue)}
-                </span>
-              </span>
-            )}
+            <span className="text-muted-foreground">PORT</span>
+            <span className="inline-block min-w-[3.5rem] text-right text-foreground">
+              {portfolioValue != null ? formatPortfolioValue(portfolioValue) : "—"}
+            </span>
+          </span>
 
-            {/* Divider hairline between PORT and Day P&L — only renders when both
-                are present so a single-value cluster doesn't show a stray rule. */}
-            {portfolioValue != null && dailyPnl != null && (
-              <span aria-hidden="true" className="h-3 w-px bg-border/40" />
-            )}
+          {/* Divider hairline between PORT and Day P&L — always present
+              now that the box is always rendered. */}
+          <span aria-hidden="true" className="h-3 w-px bg-border/40" />
 
-            {/* Day P&L — colored teal/red so direction is instantly readable.
-                F-QA-09 fix: pnlColorClass uses a deadband to render a true
-                "flat" day as neutral muted colour instead of arbitrarily
-                green or red because of floating-point dust. */}
-            {dailyPnl != null && (
-              <span
-                className={`flex items-center gap-1 whitespace-nowrap font-mono text-[11px] tabular-nums ${pnlColorClass(dailyPnl)}`}
-                title="Today's portfolio P&L (live quote-based)"
-                aria-label={`Day P&L: ${dailyPnl >= 0 ? "+" : ""}${formatPortfolioValue(Math.abs(dailyPnl))}`}
-              >
-                <span className="text-muted-foreground">Day P&amp;L</span>
-                <span className="inline-block min-w-[4rem] text-right">
-                  {dailyPnl >= 0 ? "+" : "-"}
-                  {formatPortfolioValue(Math.abs(dailyPnl))}
-                </span>
-              </span>
-            )}
+          {/* Day P&L — colored teal/red so direction is instantly readable.
+              F-QA-09 fix: pnlColorClass uses a deadband to render a true
+              "flat" day as neutral muted colour instead of arbitrarily
+              green or red because of floating-point dust. Em-dash when
+              null so the slot stays width-stable. */}
+          <span
+            className={`flex items-center gap-1 whitespace-nowrap font-mono text-[11px] tabular-nums ${
+              dailyPnl != null ? pnlColorClass(dailyPnl) : "text-muted-foreground"
+            }`}
+            title="Today's portfolio P&L (live quote-based)"
+            aria-label={
+              dailyPnl != null
+                ? `Day P&L: ${dailyPnl >= 0 ? "+" : ""}${formatPortfolioValue(Math.abs(dailyPnl))}`
+                : "Day P&L pending"
+            }
+          >
+            <span className="text-muted-foreground">Day P&amp;L</span>
+            <span className="inline-block min-w-[4rem] text-right">
+              {dailyPnl != null
+                ? `${dailyPnl >= 0 ? "+" : "-"}${formatPortfolioValue(Math.abs(dailyPnl))}`
+                : "—"}
+            </span>
+          </span>
 
-            {dailyPnl != null && unrealisedPnl != null && (
-              <span aria-hidden="true" className="h-3 w-px bg-border/40" />
-            )}
+          <span aria-hidden="true" className="h-3 w-px bg-border/40" />
 
-            {/* Total P&L — total mark-to-market vs cost basis.
-                F-QA-09 fix: same deadband as Day P&L. */}
-            {unrealisedPnl != null && (
-              <span
-                className={`flex items-center gap-1 whitespace-nowrap font-mono text-[11px] tabular-nums ${pnlColorClass(unrealisedPnl)}`}
-                title="Total unrealised P&L vs cost basis (mark-to-market)"
-                aria-label={`Total P&L: ${unrealisedPnl >= 0 ? "+" : ""}${formatPortfolioValue(Math.abs(unrealisedPnl))}`}
-              >
-                <span className="text-muted-foreground">Total P&amp;L</span>
-                <span className="inline-block min-w-[4rem] text-right">
-                  {unrealisedPnl >= 0 ? "+" : "-"}
-                  {formatPortfolioValue(Math.abs(unrealisedPnl))}
-                </span>
-              </span>
-            )}
-          </div>
-        )}
+          {/* Total P&L — total mark-to-market vs cost basis.
+              F-QA-09 fix: same deadband as Day P&L. */}
+          <span
+            className={`flex items-center gap-1 whitespace-nowrap font-mono text-[11px] tabular-nums ${
+              unrealisedPnl != null ? pnlColorClass(unrealisedPnl) : "text-muted-foreground"
+            }`}
+            title="Total unrealised P&L vs cost basis (mark-to-market)"
+            aria-label={
+              unrealisedPnl != null
+                ? `Total P&L: ${unrealisedPnl >= 0 ? "+" : ""}${formatPortfolioValue(Math.abs(unrealisedPnl))}`
+                : "Total P&L pending"
+            }
+          >
+            <span className="text-muted-foreground">Total P&amp;L</span>
+            <span className="inline-block min-w-[4rem] text-right">
+              {unrealisedPnl != null
+                ? `${unrealisedPnl >= 0 ? "+" : "-"}${formatPortfolioValue(Math.abs(unrealisedPnl))}`
+                : "—"}
+            </span>
+          </span>
+        </div>
 
         {/* ── Ask AI trigger (PLAN-0050 T-A-1-03) ───────────────────────────
             Persistent assistant entry-point. The actual floating panel is

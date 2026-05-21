@@ -141,6 +141,26 @@ describe("TopBar — slot composition (PRD-0089 W1)", () => {
     expect(rail?.className).not.toMatch(/rounded-\[2px\]/);
   });
 
+  // QA F-001 regression: the rail must be rendered even when every value
+  // is null (demo session / new user). Pre-fix the outer wrapper was
+  // gated on at least one value being non-null and the whole box would
+  // collapse — the most-visible W1 regression per the user audit.
+  it("(F-001 regression) portfolio rail renders with em-dash placeholders when all three values are null", () => {
+    render(<TopBar portfolioValue={null} dailyPnl={null} unrealisedPnl={null} />, {
+      wrapper: makeWrapper(),
+    });
+    const rail = screen.getByLabelText(/Portfolio header metrics/i);
+    expect(rail).toBeInTheDocument();
+    // Each of the three slots still renders its label and an em-dash.
+    expect(screen.getByText("PORT")).toBeInTheDocument();
+    expect(screen.getByText("Day P&L")).toBeInTheDocument();
+    expect(screen.getByText("Total P&L")).toBeInTheDocument();
+    // The three em-dash spans live inside the rail and carry tabular-nums
+    // so the slot width stays stable when real numbers arrive.
+    const dashes = rail.querySelectorAll('span.tabular-nums');
+    expect(dashes.length).toBeGreaterThanOrEqual(3);
+  });
+
   it("logout clears the query cache, resets scopes, then redirects (C-28)", async () => {
     const user = userEvent.setup();
     // Build a wrapper where we control the QueryClient + registry instances so
