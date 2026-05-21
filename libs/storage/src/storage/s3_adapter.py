@@ -18,6 +18,7 @@ from storage.interface import ObjectStorage
 if TYPE_CHECKING:
     from collections.abc import Callable
 
+    from storage.buckets import BucketTier
     from storage.settings import StorageSettings
 
 logger = structlog.get_logger(__name__)
@@ -102,31 +103,35 @@ class S3ObjectStorage(ObjectStorage):
 
     async def put_bytes(
         self,
-        bucket: str,
+        bucket: str | BucketTier,
         key: str,
         data: bytes,
         content_type: str = "application/octet-stream",
     ) -> None:
-        logger.debug("put_bytes", bucket=bucket, key=key, size=len(data))
+        # Coerce BucketTier (StrEnum) to its string value; raw strings pass through unchanged.
+        bucket_str = str(bucket)
+        logger.debug("put_bytes", bucket=bucket_str, key=key, size=len(data))
         try:
             await self._run(
                 lambda: self._client.put_object(
-                    Bucket=bucket,
+                    Bucket=bucket_str,
                     Key=key,
                     Body=data,
                     ContentType=content_type,
                 )
             )
         except Exception as exc:
-            self._handle_client_error(exc, bucket, key)
+            self._handle_client_error(exc, bucket_str, key)
 
-    async def get_bytes(self, bucket: str, key: str) -> bytes:
-        logger.debug("get_bytes", bucket=bucket, key=key)
+    async def get_bytes(self, bucket: str | BucketTier, key: str) -> bytes:
+        # Coerce BucketTier (StrEnum) to its string value; raw strings pass through unchanged.
+        bucket_str = str(bucket)
+        logger.debug("get_bytes", bucket=bucket_str, key=key)
         try:
-            response = await self._run(lambda: self._client.get_object(Bucket=bucket, Key=key))
+            response = await self._run(lambda: self._client.get_object(Bucket=bucket_str, Key=key))
             return response["Body"].read()  # type: ignore[no-any-return]
         except Exception as exc:
-            self._handle_client_error(exc, bucket, key)
+            self._handle_client_error(exc, bucket_str, key)
         return b""  # unreachable — _handle_client_error always raises
 
     async def delete(self, bucket: str, key: str) -> None:

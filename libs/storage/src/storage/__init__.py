@@ -1,5 +1,6 @@
 """storage — S3-compatible object storage abstraction for worldview."""
 
+from storage.buckets import BucketTier
 from storage.exceptions import (
     BucketNotFoundError,
     InvalidObjectKeyError,
@@ -17,6 +18,7 @@ from storage.settings import StorageSettings
 
 __all__ = [
     "BucketNotFoundError",
+    "BucketTier",
     "InvalidObjectKeyError",
     "KeyBuilder",
     "KeyComponents",

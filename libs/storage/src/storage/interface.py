@@ -4,7 +4,10 @@ from __future__ import annotations
 
 import json
 from abc import ABC, abstractmethod
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from storage.buckets import BucketTier
 
 
 class ObjectStorage(ABC):
@@ -20,7 +23,7 @@ class ObjectStorage(ABC):
     @abstractmethod
     async def put_bytes(
         self,
-        bucket: str,
+        bucket: str | BucketTier,
         key: str,
         data: bytes,
         content_type: str = "application/octet-stream",
@@ -28,14 +31,15 @@ class ObjectStorage(ABC):
         """Upload raw bytes to *key* in *bucket*.
 
         Args:
-            bucket: Target bucket name.
+            bucket: Target bucket name — accepts either a raw string or a
+                :class:`~storage.buckets.BucketTier` enum member for type safety.
             key: Object key (canonical format).
             data: Raw bytes to upload.
             content_type: MIME content-type header value.
         """
 
     @abstractmethod
-    async def get_bytes(self, bucket: str, key: str) -> bytes:
+    async def get_bytes(self, bucket: str | BucketTier, key: str) -> bytes:
         """Download and return the raw bytes for *key* in *bucket*.
 
         Raises:

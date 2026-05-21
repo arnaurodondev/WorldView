@@ -7,6 +7,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from storage.buckets import BucketTier
 from storage.exceptions import (
     BucketNotFoundError,
     ObjectNotFoundError,
@@ -107,6 +108,62 @@ class TestGetBytes:
             store = S3ObjectStorage(_make_settings())
             with pytest.raises(ObjectNotFoundError):
                 await store.get_bytes("bucket", "missing/key")
+
+
+class TestBucketTierAcceptance:
+    """W4-04 / LIB-006 — adapter accepts both raw strings and BucketTier enum."""
+
+    @pytest.mark.asyncio
+    async def test_put_bytes_with_bucket_tier_enum(self) -> None:
+        """``put_bytes(BucketTier.BRONZE, ...)`` writes to the canonical bronze bucket."""
+        with patch("boto3.client") as mock_boto:
+            mock_client = MagicMock()
+            mock_boto.return_value = mock_client
+
+            store = S3ObjectStorage(_make_settings())
+            await store.put_bytes(BucketTier.BRONZE, "k", b"data")
+
+            # StrEnum coerces to its value — the canonical bucket name string.
+            mock_client.put_object.assert_called_once_with(
+                Bucket="worldview-bronze",
+                Key="k",
+                Body=b"data",
+                ContentType="application/octet-stream",
+            )
+
+    @pytest.mark.asyncio
+    async def test_put_bytes_with_raw_string_still_works(self) -> None:
+        """Back-compat: existing raw-string callers must continue to work unchanged."""
+        with patch("boto3.client") as mock_boto:
+            mock_client = MagicMock()
+            mock_boto.return_value = mock_client
+
+            store = S3ObjectStorage(_make_settings())
+            await store.put_bytes("worldview-bronze", "k", b"data")
+
+            mock_client.put_object.assert_called_once_with(
+                Bucket="worldview-bronze",
+                Key="k",
+                Body=b"data",
+                ContentType="application/octet-stream",
+            )
+
+    @pytest.mark.asyncio
+    async def test_get_bytes_with_bucket_tier_enum(self) -> None:
+        """``get_bytes(BucketTier.SILVER, ...)`` reads from the canonical silver bucket."""
+        with patch("boto3.client") as mock_boto:
+            mock_client = MagicMock()
+            mock_boto.return_value = mock_client
+            mock_client.get_object.return_value = {"Body": io.BytesIO(b"payload")}
+
+            store = S3ObjectStorage(_make_settings())
+            result = await store.get_bytes(BucketTier.SILVER, "k")
+            assert result == b"payload"
+
+            mock_client.get_object.assert_called_once_with(
+                Bucket="worldview-silver",
+                Key="k",
+            )
 
 
 class TestDelete:

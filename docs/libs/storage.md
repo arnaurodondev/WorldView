@@ -96,6 +96,27 @@ is_healthy = await check_storage_health(store, "market-data")
 # → True if a HEAD request to the bucket succeeds; never raises
 ```
 
+### `BucketTier` — Typed bucket alias
+
+```python
+from storage import BucketTier
+
+# Opt-in: use the enum instead of a raw string to avoid typo'd bucket names.
+await store.put_bytes(BucketTier.BRONZE, key, data)
+```
+
+`BucketTier` is a `StrEnum` with three members whose values are the canonical
+MinIO bucket names used across the platform:
+
+| Member | Value | Tier |
+|--------|-------|------|
+| `BucketTier.BRONZE` | `"worldview-bronze"` | Raw provider payloads |
+| `BucketTier.SILVER` | `"worldview-silver"` | Canonicalized records |
+| `BucketTier.GOLD` | `"worldview-gold"` | Analysis-ready aggregates |
+
+Both `put_bytes()` and `get_bytes()` accept `str | BucketTier`. Existing
+raw-string callers continue to work unchanged — adoption is incremental.
+
 ### Exceptions
 
 | Exception | When raised |
