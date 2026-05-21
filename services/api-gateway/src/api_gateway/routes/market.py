@@ -8,6 +8,7 @@ Split from proxy.py (PLAN-0089 B-3).
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any
@@ -237,6 +238,382 @@ async def earnings_calendar(request: Request) -> Any:
 # to prevent FastAPI matching sub-paths (e.g. "technicals") as an instrument_id.
 # FastAPI matches in registration order; more-specific paths registered first win.
 # PLAN-0041 Wave A-1 — proxy 6 S3 section endpoints that were missing from S9.
+
+
+# ── W5 computed endpoints (T-S9-02 / T-S9-03 / T-S9-04) ─────────────────────
+#
+# These three endpoints compose OHLCV + fundamentals data into pre-computed
+# dashboard bands. Computing at S9 keeps the frontend thin and avoids forcing
+# the client to fetch raw bars + run signal math.
+#
+# WHY registered before /fundamentals/{instrument_id}: FastAPI matches routes
+# in registration order. "intraday-stats", "multi-period-returns", and
+# "price-levels" would be swallowed by the /{instrument_id} catch-all if
+# registered after it.
+
+
+def _bars_from_response(resp_json: dict[str, Any]) -> list[dict[str, Any]]:
+    """Normalise S3 OHLCV response → list of float-typed bar dicts.
+
+    S3 returns two shapes depending on the endpoint path:
+    - items-based: {items: [{bar_date, open: str, high: str, ...}]}
+    - bars-based (proxied): {bars: [{timestamp, open: float, ...}]}
+
+    Both are normalised to [{timestamp, open, high, low, close, volume}].
+    """
+    raw_items: list[dict[str, Any]] = resp_json.get("items") or resp_json.get("bars") or []
+    out: list[dict[str, Any]] = []
+    for item in raw_items:
+        try:
+            out.append(
+                {
+                    "timestamp": item.get("bar_date") or item.get("timestamp", ""),
+                    "open": float(item["open"]) if item.get("open") else 0.0,
+                    "high": float(item["high"]) if item.get("high") else 0.0,
+                    "low": float(item["low"]) if item.get("low") else 0.0,
+                    "close": float(item["close"]) if item.get("close") else 0.0,
+                    "volume": int(item["volume"]) if item.get("volume") else 0,
+                }
+            )
+        except (KeyError, ValueError, TypeError):
+            continue
+    return out
+
+
+@router.get("/fundamentals/{instrument_id}/intraday-stats")
+async def get_intraday_stats(instrument_id: str, request: Request) -> Any:
+    """Compose intraday statistics from OHLCV + technicals (W5-T-S9-02).
+
+    Fetches in parallel:
+    - 5m intraday bars for today (VWAP + premarket H/L)
+    - 20 daily bars (ATR-14, RSI-14, GAP%)
+    - technicals_snapshot (short interest)
+
+    Returns a flat dict with 6 fields:
+    - vwap        float | null — volume-weighted average price (intraday 5m bars)
+    - atr_14      float | null — 14-bar ATR from daily bars (True Range avg)
+    - rsi_14      float | null — 14-bar RSI from daily bars
+    - gap_pct     float | null — (today_open - prev_close) / prev_close x 100
+    - premarket_high  float | null — max(high) from 5m bars before 09:30 ET
+    - premarket_low   float | null — min(low) from 5m bars before 09:30 ET
+    - short_interest_pct  float | null — from technicals_snapshot.ShortPercent
+    - short_interest_delta float | null — change from prior snapshot (null if unavailable)
+
+    All fields are null when insufficient data exists — no 404 is raised.
+    Requires authentication.
+
+    WHY S9-computed: keeps the frontend free of signal math; single round-trip;
+    staleTime = 60s (active hours) / 300s (after-hours) per Δ28.
+    """
+    if not getattr(request.state, "user", None):
+        raise HTTPException(status_code=401, detail="Authentication required")
+
+    headers = _auth_headers(request)
+    clients = _clients(request)
+    now_utc = datetime.now(tz=UTC)
+    today_str = now_utc.date().isoformat()
+    # 20 daily bars suffices for ATR(14) + RSI(14) with a small buffer.
+    daily_start = (now_utc - timedelta(days=30)).date().isoformat()
+
+    # Fan-out three S3 requests in parallel.
+    intraday_resp_fut = clients.market_data.get(
+        f"/api/v1/ohlcv/{instrument_id}",
+        params={"timeframe": "5m", "start": today_str},
+        headers=headers,
+    )
+    daily_resp_fut = clients.market_data.get(
+        f"/api/v1/ohlcv/{instrument_id}",
+        params={"timeframe": "1d", "start": daily_start},
+        headers=headers,
+    )
+    tech_resp_fut = clients.market_data.get(
+        f"/api/v1/fundamentals/{instrument_id}/technicals-snapshot",
+        headers=headers,
+    )
+
+    _gathered: list[httpx.Response | BaseException] = list(
+        await asyncio.gather(
+            intraday_resp_fut,
+            daily_resp_fut,
+            tech_resp_fut,
+            return_exceptions=True,
+        )
+    )
+    intraday_resp: httpx.Response | BaseException = _gathered[0]
+    daily_resp: httpx.Response | BaseException = _gathered[1]
+    tech_resp: httpx.Response | BaseException = _gathered[2]
+
+    # ── Parse OHLCV responses (fail-soft) ─────────────────────────────────────
+    intraday_bars: list[dict[str, Any]] = []
+    daily_bars: list[dict[str, Any]] = []
+    tech_data: dict[str, Any] = {}
+
+    if isinstance(intraday_resp, httpx.Response) and intraday_resp.status_code == 200:
+        with contextlib.suppress(ValueError, KeyError):
+            intraday_bars = _bars_from_response(json.loads(intraday_resp.content))
+
+    if isinstance(daily_resp, httpx.Response) and daily_resp.status_code == 200:
+        with contextlib.suppress(ValueError, KeyError):
+            daily_bars = _bars_from_response(json.loads(daily_resp.content))
+
+    if isinstance(tech_resp, httpx.Response) and tech_resp.status_code == 200:
+        with contextlib.suppress(ValueError, KeyError):
+            raw_tech = json.loads(tech_resp.content)
+            records = raw_tech.get("records") or []
+            for rec in records:
+                if rec.get("section") == "technicals_snapshot":
+                    tech_data = rec.get("data") or {}
+                    break
+
+    # ── VWAP (intraday 5m bars) ───────────────────────────────────────────────
+    vwap: float | None = None
+    if intraday_bars:
+        total_vol = sum(b["volume"] for b in intraday_bars)
+        if total_vol > 0:
+            vwap = sum((b["high"] + b["low"] + b["close"]) / 3 * b["volume"] for b in intraday_bars) / total_vol
+
+    # ── Premarket H/L (5m bars before 14:30 UTC = 09:30 ET / 10:30 BST approx) ─
+    # WHY 14:30 UTC: US market opens at 09:30 ET = 14:30 UTC (ignoring DST).
+    # Premarket = before that cutoff on the current calendar date.
+    premarket_high: float | None = None
+    premarket_low: float | None = None
+    premarket_bars = [b for b in intraday_bars if b["timestamp"] < f"{today_str}T14:30"]
+    if premarket_bars:
+        premarket_high = max(b["high"] for b in premarket_bars)
+        premarket_low = min(b["low"] for b in premarket_bars)
+
+    # ── ATR(14) from daily bars ───────────────────────────────────────────────
+    atr_14: float | None = None
+    if len(daily_bars) >= 15:  # need N bars for N-1 true-range values
+        trs: list[float] = []
+        for i in range(1, len(daily_bars)):
+            cur = daily_bars[i]
+            prev_close = daily_bars[i - 1]["close"]
+            tr = max(
+                cur["high"] - cur["low"],
+                abs(cur["high"] - prev_close),
+                abs(cur["low"] - prev_close),
+            )
+            trs.append(tr)
+        if len(trs) >= 14:
+            atr_14 = sum(trs[-14:]) / 14
+
+    # ── RSI(14) from daily bars ───────────────────────────────────────────────
+    rsi_14: float | None = None
+    if len(daily_bars) >= 15:
+        changes = [daily_bars[i]["close"] - daily_bars[i - 1]["close"] for i in range(1, len(daily_bars))]
+        gains = [max(c, 0.0) for c in changes[-14:]]
+        losses = [abs(min(c, 0.0)) for c in changes[-14:]]
+        avg_gain = sum(gains) / 14
+        avg_loss = sum(losses) / 14
+        if avg_loss > 0:
+            rs = avg_gain / avg_loss
+            rsi_14 = 100.0 - (100.0 / (1.0 + rs))
+        elif avg_gain > 0:
+            rsi_14 = 100.0  # all gains, no losses
+        else:
+            rsi_14 = 50.0  # flat
+
+    # ── GAP% ────────────────────────────────────────────────────────────────
+    gap_pct: float | None = None
+    if len(daily_bars) >= 2:
+        last_bar = daily_bars[-1]
+        prev_bar = daily_bars[-2]
+        if prev_bar["close"] > 0:
+            gap_pct = (last_bar["open"] - prev_bar["close"]) / prev_bar["close"] * 100.0
+
+    # ── Short interest from technicals_snapshot ───────────────────────────────
+    # EODHD stores ShortPercent as a decimal fraction (0.05 = 5%).
+    # WHY * 100: frontend expects a percentage integer, not a decimal.
+    raw_si = tech_data.get("ShortPercent")
+    short_interest_pct: float | None = float(raw_si) * 100 if raw_si is not None else None
+    # SI delta is not stored in the snapshot; would require timeseries comparison.
+    # Return null for now — the UI renders "—" for null values.
+    short_interest_delta: float | None = None
+
+    return JSONResponse(
+        content={
+            "instrument_id": instrument_id,
+            "vwap": round(vwap, 4) if vwap is not None else None,
+            "atr_14": round(atr_14, 4) if atr_14 is not None else None,
+            "rsi_14": round(rsi_14, 2) if rsi_14 is not None else None,
+            "gap_pct": round(gap_pct, 4) if gap_pct is not None else None,
+            "premarket_high": round(premarket_high, 4) if premarket_high is not None else None,
+            "premarket_low": round(premarket_low, 4) if premarket_low is not None else None,
+            "short_interest_pct": round(short_interest_pct, 2) if short_interest_pct is not None else None,
+            "short_interest_delta": short_interest_delta,
+        }
+    )
+
+
+@router.get("/fundamentals/{instrument_id}/multi-period-returns")
+async def get_multi_period_returns(instrument_id: str, request: Request) -> Any:
+    """Compute close-on-close returns over 7 anchor periods (W5-T-S9-03).
+
+    Fetches 390 daily bars (approx 1Y + buffer) from S3. Computes:
+      1D   = (bars[-1].close / bars[-2].close) - 1
+      5D   = (bars[-1].close / bars[-6].close) - 1  (5 trading days)
+      1M   = (bars[-1].close / bars[-22].close) - 1 (~22 trading days)
+      3M   = (bars[-1].close / bars[-66].close) - 1
+      6M   = (bars[-1].close / bars[-132].close) - 1
+      YTD  = (bars[-1].close / first_bar_of_year.close) - 1
+      1Y   = (bars[-1].close / bars[-252].close) - 1
+
+    Returns null for any period where insufficient bars exist.
+    Requires authentication.
+    """
+    if not getattr(request.state, "user", None):
+        raise HTTPException(status_code=401, detail="Authentication required")
+
+    headers = _auth_headers(request)
+    clients = _clients(request)
+    now_utc = datetime.now(tz=UTC)
+    # 390 calendar days > 252 trading days (1Y); use 550 to handle weekends/holidays.
+    start_str = (now_utc - timedelta(days=550)).date().isoformat()
+
+    resp = await clients.market_data.get(
+        f"/api/v1/ohlcv/{instrument_id}",
+        params={"timeframe": "1d", "start": start_str},
+        headers=headers,
+    )
+
+    if isinstance(resp, Exception) or resp.status_code != 200:
+        return JSONResponse(
+            content={
+                "instrument_id": instrument_id,
+                "periods": {p: None for p in ("1D", "5D", "1M", "3M", "6M", "YTD", "1Y")},
+            }
+        )
+
+    try:
+        bars = _bars_from_response(json.loads(resp.content))
+    except (ValueError, KeyError):
+        bars = []
+
+    def _ret(anchor: int) -> float | None:
+        """Return close-on-close return for a given lookback bar count."""
+        if len(bars) < anchor + 1:
+            return None
+        last_close = bars[-1]["close"]
+        anchor_close = bars[-1 - anchor]["close"]
+        if anchor_close <= 0:
+            return None
+        return float(round((last_close / anchor_close - 1) * 100, 4))
+
+    # YTD: find the last bar of the prior calendar year.
+    ytd_ret: float | None = None
+    this_year = now_utc.year
+    prior_year_bars = [b for b in bars if b["timestamp"] < f"{this_year}-01-01"]
+    if prior_year_bars and bars:
+        py_close = prior_year_bars[-1]["close"]
+        if py_close > 0:
+            ytd_ret = round((bars[-1]["close"] / py_close - 1) * 100, 4)
+
+    return JSONResponse(
+        content={
+            "instrument_id": instrument_id,
+            "periods": {
+                "1D": _ret(1),
+                "5D": _ret(5),
+                "1M": _ret(22),
+                "3M": _ret(66),
+                "6M": _ret(132),
+                "YTD": ytd_ret,
+                "1Y": _ret(252),
+            },
+        }
+    )
+
+
+@router.get("/fundamentals/{instrument_id}/price-levels")
+async def get_price_levels(instrument_id: str, request: Request) -> Any:
+    """Compute classic floor pivots + MA50/MA200 from daily OHLCV (W5-T-S9-04).
+
+    Fetches 210 daily bars from S3 (enough for MA200 + 1 buffer bar).
+
+    Pivot levels derived from prior closed session (bars[-2]):
+      PIVOT = (H + L + C) / 3
+      R1 = 2 x PIVOT - L      S1 = 2 x PIVOT - H
+      R2 = PIVOT + (H - L)    S2 = PIVOT - (H - L)
+      R3 = H + 2 x (PIVOT - L) S3 = L - 2 x (H - PIVOT)
+
+    MA50  = simple moving average of last 50 daily closes
+    MA200 = simple moving average of last 200 daily closes
+
+    Each level includes: value (float | null), label (str), direction ("above"|"below"|"at"|null).
+    Requires authentication.
+    """
+    if not getattr(request.state, "user", None):
+        raise HTTPException(status_code=401, detail="Authentication required")
+
+    headers = _auth_headers(request)
+    clients = _clients(request)
+    now_utc = datetime.now(tz=UTC)
+    # 205 trading days for MA200; pad with 60 calendar days for holidays.
+    start_str = (now_utc - timedelta(days=310)).date().isoformat()
+
+    resp = await clients.market_data.get(
+        f"/api/v1/ohlcv/{instrument_id}",
+        params={"timeframe": "1d", "start": start_str},
+        headers=headers,
+    )
+
+    if isinstance(resp, Exception) or resp.status_code != 200:
+        return JSONResponse(content={"instrument_id": instrument_id, "levels": [], "ma50": None, "ma200": None})
+
+    try:
+        bars = _bars_from_response(json.loads(resp.content))
+    except (ValueError, KeyError):
+        bars = []
+
+    if len(bars) < 2:
+        return JSONResponse(content={"instrument_id": instrument_id, "levels": [], "ma50": None, "ma200": None})
+
+    current_price = bars[-1]["close"]
+    prev = bars[-2]  # prior closed session
+
+    def _dir(level: float) -> str:
+        """Return direction label: above / below / at (within 0.1% band)."""
+        if current_price <= 0:
+            return "at"
+        diff_pct = (current_price - level) / level
+        if abs(diff_pct) < 0.001:
+            return "at"
+        return "above" if current_price > level else "below"
+
+    h, lo, c = prev["high"], prev["low"], prev["close"]
+    pivot = (h + lo + c) / 3
+    r1 = 2 * pivot - lo
+    r2 = pivot + (h - lo)
+    r3 = h + 2 * (pivot - lo)
+    s1 = 2 * pivot - h
+    s2 = pivot - (h - lo)
+    s3 = lo - 2 * (h - pivot)
+
+    levels = [
+        {"label": "R3", "value": round(r3, 4), "direction": _dir(r3)},
+        {"label": "R2", "value": round(r2, 4), "direction": _dir(r2)},
+        {"label": "R1", "value": round(r1, 4), "direction": _dir(r1)},
+        {"label": "PIVOT", "value": round(pivot, 4), "direction": _dir(pivot)},
+        {"label": "S1", "value": round(s1, 4), "direction": _dir(s1)},
+        {"label": "S2", "value": round(s2, 4), "direction": _dir(s2)},
+        {"label": "S3", "value": round(s3, 4), "direction": _dir(s3)},
+    ]
+
+    closes = [b["close"] for b in bars]
+    ma50: float | None = round(sum(closes[-50:]) / 50, 4) if len(closes) >= 50 else None
+    ma200: float | None = round(sum(closes[-200:]) / 200, 4) if len(closes) >= 200 else None
+
+    return JSONResponse(
+        content={
+            "instrument_id": instrument_id,
+            "levels": levels,
+            "ma50": ma50,
+            "ma50_direction": _dir(ma50) if ma50 is not None else None,
+            "ma200": ma200,
+            "ma200_direction": _dir(ma200) if ma200 is not None else None,
+        }
+    )
 
 
 @router.get("/fundamentals/{instrument_id}/technicals")
