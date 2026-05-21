@@ -159,6 +159,19 @@ def _norm(text: str) -> str:
 
 
 def upgrade() -> None:
+    # ── BUG-A / fresh-DB bring-up fix ────────────────────────────────────────
+    # Migration 0021 adds ``ck_canonical_entity_type`` with an allowed-values
+    # list that does NOT include ``'unknown'``. The demo seed rows below
+    # (OpenAI, Anthropic) insert with ``entity_type='unknown'`` so the
+    # constraint must not be active when these INSERTs run. The next
+    # migration (0039) drops + replaces the constraint with the new
+    # ``ck_canonical_entities_entity_type`` that DOES include ``'unknown'``,
+    # but on a fresh DB 0039 has not yet run when 0038 fires. Defensively
+    # drop the legacy constraint here. Idempotent: ``IF EXISTS`` is a no-op
+    # for prod DBs whose ordering already dropped it via some other path.
+    # Migration 0039 re-adds the new constraint after this seed completes.
+    op.execute("ALTER TABLE canonical_entities DROP CONSTRAINT IF EXISTS ck_canonical_entity_type")
+
     canonical_rows: list[str] = []
     alias_rows: list[str] = []
 
