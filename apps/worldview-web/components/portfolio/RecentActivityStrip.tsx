@@ -1,13 +1,19 @@
 /**
- * RecentActivityStrip — compact last-8-transactions feed (transactions only, no sync events).
+ * RecentActivityStrip — compact last-8-transactions feed.
  *
- * WHY THIS EXISTS: The old RecentActivityFeed mixed transactions + broker sync events.
- * C-34 locks that sync events move to BrokerageStatusBanner — the activity strip
- * stays focused on actual trade events (BUY/SELL/DIVIDEND). 8 rows at 18px each
- * = 144px, similar to the old feed but lighter.
- * WHO USES IT: portfolio overview page, below ContributorsStrip.
+ * WHY THIS EXISTS: The old layout had overlapping text because flex children
+ * lacked `min-w-0` and truncation — each span expanded to its intrinsic
+ * content width and overflowed into neighbours (C-34, density pass 2026-05-21).
+ * This rewrite uses a CSS grid with explicit column widths so each field
+ * occupies a fixed slot and text truncates cleanly.
+ *
+ * COLUMN LAYOUT: DATE(48px) | TYPE(36px) | TICKER(52px) | QTY(flex) | PRICE(flex)
+ * WHY grid (not flex): grid column templates enforce widths even when content
+ * is shorter — flex columns can shrink to zero if `shrink-0` is forgotten.
+ *
+ * WHO USES IT: BottomInfoStrip (3-column grid below SemanticHoldingsTable).
  * DATA SOURCE: GET /v1/portfolios/{id}/transactions?limit=8 (via TanStack Query).
- * DESIGN REFERENCE: PRD-0089 W2 §4.14, C-34, C-35
+ * DESIGN REFERENCE: PRD-0089 W2 §4.14, C-34, C-35, density pass 2026-05-21
  */
 "use client";
 // WHY "use client": useQuery (TanStack) requires React context; date formatting uses Date.
@@ -46,8 +52,6 @@ export function RecentActivityStrip({ portfolioId }: RecentActivityStripProps) {
   const { data, isLoading } = useQuery({
     // WHY separate key from full transactions: this strip fetches limit=8 only;
     // sharing the full transactions key would overwrite the paginated cache entry.
-    // Using the nested detail key here (not the flat legacy key) so it cascades
-    // under portfolio detail invalidation but is scoped to "recent-8".
     queryKey: portfolioId
       ? ([QK_VERSION, "portfolios", "detail", portfolioId, "transactions", "recent-8"] as const)
       : (["disabled"] as const),
@@ -61,30 +65,83 @@ export function RecentActivityStrip({ portfolioId }: RecentActivityStripProps) {
   if (!portfolioId) return null;
 
   return (
-    <div className="shrink-0 bg-card border-b border-border">
-      <div className="flex h-[22px] items-center px-3 border-b border-border">
-        <span className="text-[10px] uppercase tracking-[0.06em] text-muted-foreground">Recent Activity</span>
+    <div className="flex flex-col bg-card border-b border-border shrink-0">
+      {/* Section header — fixed 22px matches the rest of the portfolio page chrome */}
+      <div className="flex h-[22px] shrink-0 items-center border-b border-border px-3">
+        <span className="text-[10px] uppercase tracking-[0.06em] text-neutral-500">
+          Recent Activity
+        </span>
       </div>
+
+      {/* Column headers — match the data grid widths below */}
+      {/* WHY grid-cols template: aligns headers with data rows at zero cost.
+          The template mirrors the data row template exactly. */}
+      <div
+        className="grid h-[18px] items-center border-b border-border/40 px-3"
+        style={{ gridTemplateColumns: "48px 40px 52px 1fr 1fr" }}
+      >
+        <span className="font-mono text-[10px] text-muted-foreground">DATE</span>
+        <span className="font-mono text-[10px] text-muted-foreground">TYPE</span>
+        <span className="font-mono text-[10px] text-muted-foreground">TICKER</span>
+        <span className="font-mono text-[10px] text-muted-foreground">QTY</span>
+        <span className="font-mono text-[10px] text-right text-muted-foreground">PRICE</span>
+      </div>
+
+      {/* Body */}
       {isLoading ? (
-        <div className="flex items-center px-3 h-[22px]">
+        <div className="flex h-[22px] items-center px-3">
           <span className="font-mono text-[11px] text-muted-foreground">loading…</span>
         </div>
       ) : rows.length === 0 ? (
-        <div className="flex items-center px-3 h-[22px]">
+        <div className="flex h-[22px] items-center px-3">
           <span className="font-mono text-[11px] text-muted-foreground">No transactions yet</span>
         </div>
       ) : (
         rows.map((tx) => (
-          <div key={tx.transaction_id} className="flex items-center h-[18px] px-3 gap-3">
-            <span className="font-mono text-[10px] tabular-nums text-muted-foreground w-10 shrink-0">
+          // WHY grid (not flex): grid template columns enforce widths and prevent
+          // children from overflowing into neighbours — fixes the text overlap bug
+          // that appeared with the old `flex gap-3` layout (no min-w-0 on children).
+          <div
+            key={tx.transaction_id}
+            className="grid h-[22px] items-center px-3"
+            style={{ gridTemplateColumns: "48px 40px 52px 1fr 1fr" }}
+          >
+            {/* DATE — fixed 48px, tabular nums for alignment */}
+            <span className="font-mono text-[11px] tabular-nums text-neutral-500 truncate">
               {formatActivityDate(tx.executed_at)}
             </span>
-            <span className={`font-mono text-[10px] w-8 shrink-0 ${tx.type === "BUY" ? "text-positive" : tx.type === "SELL" ? "text-negative" : "text-muted-foreground"}`}>
+
+            {/* TYPE — color-coded BUY/SELL/DIVIDEND */}
+            {/* WHY truncate: "DIVIDEND" is 8 chars; the 40px column clips it to "DIVID…"
+                which is still readable. A full "DIVIDEND" label would overflow the slot. */}
+            <span
+              className={`font-mono text-[11px] truncate ${
+                tx.type === "BUY"
+                  ? "text-positive"
+                  : tx.type === "SELL"
+                    ? "text-negative"
+                    : "text-neutral-500"
+              }`}
+            >
               {tx.type}
             </span>
-            <span className="font-mono text-[11px] text-primary">{tx.ticker}</span>
-            <span className="font-mono text-[10px] tabular-nums text-muted-foreground">{tx.quantity.toLocaleString()}</span>
-            <span className="font-mono text-[10px] tabular-nums text-foreground">{formatPrice(tx.price)}</span>
+
+            {/* TICKER — primary colour, links to instrument */}
+            <span className="font-mono text-[11px] text-neutral-100 truncate">
+              {tx.ticker || "—"}
+            </span>
+
+            {/* QTY — right-aligned tabular nums, flex-1 so it fills the remaining space */}
+            <span className="font-mono text-[11px] tabular-nums text-neutral-500 truncate">
+              {tx.type === "DIVIDEND" ? "—" : tx.quantity.toLocaleString()}
+            </span>
+
+            {/* PRICE — right-aligned */}
+            <span className="font-mono text-[11px] tabular-nums text-neutral-100 text-right truncate">
+              {tx.type === "DIVIDEND"
+                ? formatPrice(tx.amount ?? 0)
+                : formatPrice(tx.price)}
+            </span>
           </div>
         ))
       )}

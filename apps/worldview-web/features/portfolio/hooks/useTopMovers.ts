@@ -19,6 +19,7 @@ import type { EnrichedHolding, QuoteMap } from "@/features/portfolio/lib/kpi";
 
 interface MoverEntry {
   ticker: string;
+  name?: string;
   pnlPct: number;
 }
 
@@ -44,7 +45,7 @@ export function useTopMovers(
         // keeps the strip empty (shows "—") during the loading window.
         const livePrice = livePriceFor(h, quotes);
         const pnlPct = ((livePrice - h.average_cost) / h.average_cost) * 100;
-        return { ticker: h.ticker || h.instrument_id, pnlPct };
+        return { ticker: h.ticker || h.instrument_id, name: h.name ?? undefined, pnlPct };
       })
       .sort((a, b) => b.pnlPct - a.pnlPct);
 

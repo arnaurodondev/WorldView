@@ -17,8 +17,8 @@
  *   7. SectorAllocationBar         — 22px stacked sector bar
  *   8. HoldingsTableChrome         — 22px filter / count chrome
  *   9. SemanticHoldingsTable       — 14-col AG Grid (rowHeight=20, context.holdingsSeries)
- *  10. ContributorsStrip           — top-4 contributors + detractors (96px)
- *  11. RecentActivityStrip         — last-8 transactions (transactions only, no sync events)
+ *  10. BottomInfoStrip (3-col grid) — col1: ContributorsStrip (top movers), col2: RecentActivityStrip (table),
+ *                                    col3: SectorExposurePanel (vertical sector list)
  *
  * EMPTY STATE: BrokerageEmptyState replaces all content when holdings=0 AND !loading (V18).
  *
@@ -58,6 +58,7 @@ import { HoldingsTableChrome } from "@/components/portfolio/HoldingsTableChrome"
 import { SemanticHoldingsTable } from "@/components/portfolio/SemanticHoldingsTable";
 import { ContributorsStrip } from "@/components/portfolio/ContributorsStrip";
 import { RecentActivityStrip } from "@/components/portfolio/RecentActivityStrip";
+import { SectorExposurePanel } from "@/components/portfolio/SectorExposurePanel";
 import { BrokerageEmptyState } from "@/components/portfolio/BrokerageEmptyState";
 import { BrokerageStatusBanner } from "@/components/portfolio/BrokerageStatusBanner";
 import { ConnectBrokerageModal } from "@/components/brokerage/ConnectBrokerageModal";
@@ -345,15 +346,39 @@ export default function PortfolioPage() {
             holdingsSeries={holdingsSeries}
           />
 
-          {/* 10. Contributors + detractors strip */}
-          <ContributorsStrip
-            contributors={contributors}
-            detractors={detractors}
-            isLoading={holdingsLoading}
-          />
+          {/* 10–12. Bottom info strip — 3-column grid: movers | activity | sectors
+               WHY grid grid-cols-3: three equal panels need to share the full
+               page width at a fixed ratio (35% / 35% / 30%) without manual px
+               calculations. CSS grid enforces this regardless of content height.
+               WHY items-start: each column can have a different number of rows;
+               align to top so all columns start at the same baseline even when
+               ContributorsStrip is taller than RecentActivityStrip.
+               WHY border-t: the grid sits below SemanticHoldingsTable which
+               already has a bottom border — adding a top border here would
+               double-up. The individual panels carry their own border-b. */}
+          <div className="grid grid-cols-3 items-start border-b border-border">
+            {/* Col 1 — Top Movers (combined contributors + detractors) */}
+            <div className="border-r border-border">
+              <ContributorsStrip
+                contributors={contributors}
+                detractors={detractors}
+                isLoading={holdingsLoading}
+              />
+            </div>
 
-          {/* 11. Recent activity strip (transactions only, C-34) */}
-          <RecentActivityStrip portfolioId={activePortfolioId} />
+            {/* Col 2 — Recent Activity (fixed-width grid table, no text overlap) */}
+            <div className="border-r border-border">
+              <RecentActivityStrip portfolioId={activePortfolioId} />
+            </div>
+
+            {/* Col 3 — Sector Exposure (vertical sector list with % weights) */}
+            <div>
+              <SectorExposurePanel
+                bySector={bySector}
+                isLoading={holdingsLoading}
+              />
+            </div>
+          </div>
         </>
       )}
 
