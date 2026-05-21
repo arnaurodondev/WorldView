@@ -20,10 +20,16 @@
 
 import type { RefObject } from "react";
 import { useRouter } from "next/navigation";
+import { useQueryClient } from "@tanstack/react-query";
 import { LogOut, Settings, User, Bell } from "lucide-react";
 import { useAuth } from "@/hooks/useAuth";
+import { useHotkeyScope } from "@/contexts/HotkeyContext";
 import { UtcClock } from "@/components/shell/UtcClock";
-import { TopBarMarquee } from "@/components/shell/TopBarMarquee";
+// PRD-0089 W1 §4.3: replaces the animated TopBarMarquee with a static
+// 10-cell IndexStrip. The old marquee + ticker chip files are removed in the
+// W1 cleanup commit; nothing else still imports them.
+import { IndexStrip } from "@/components/shell/IndexStrip";
+import { PortfolioSwitcher } from "@/components/shell/PortfolioSwitcher";
 import { MarketStatusPill } from "@/components/shell/MarketStatusPill";
 import { GlobalSearch } from "@/components/shell/GlobalSearch";
 import { AskAiButton } from "@/components/shell/AskAiButton";
@@ -133,8 +139,21 @@ export function TopBar({
 }: TopBarProps) {
   const router = useRouter();
   const { user, logout } = useAuth();
+  // PRD-0089 W1 C-28: logout must clear both the TanStack cache (no stale
+  // portfolio numbers flashing on re-login) and the hotkey scope stack (so
+  // the next session doesn't inherit a "modal" scope from a half-closed
+  // dialog). We pull the queryClient + hotkey context once here so the
+  // handler is synchronous up to the awaited logout() call.
+  const queryClient = useQueryClient();
+  const { resetScopes } = useHotkeyScope();
 
   const handleLogout = async () => {
+    // Clear *before* awaiting logout() so an in-flight refetch can't repopulate
+    // the cache between the clear and the redirect. The order matters when
+    // refetchInterval queries are mid-fire at the moment the user clicks Sign
+    // out — clearing first cancels them safely.
+    queryClient.clear();
+    resetScopes();
     await logout();
     // WHY replace: don't leave the protected page in history — back button
     // should not return user to authenticated content after logout
@@ -161,30 +180,34 @@ export function TopBar({
       {/* WHY shrink-0: the logo + search must never shrink — they're nav anchors.
           Slack absorbed by the IndexTicker (the only flex-1 sibling). */}
       <div className="flex shrink-0 items-center gap-3">
-        {/* Wordmark — text for crisp rendering at all DPIs */}
-        {/* WHY font-mono font-bold: Bloomberg terminal wordmarks are rendered in a
-            monospace fixed-width style — proportional font reads as consumer web app */}
+        {/* Wordmark — text for crisp rendering at all DPIs.
+            PRD-0089 W1 §4.3 slot 1 — adds aria-label so the skip-link target
+            and screen readers identify the button as the "Home" anchor. */}
         <button
           onClick={() => router.push("/dashboard")}
+          aria-label="Worldview — Home"
           className="font-mono font-bold text-[13px] tracking-tight text-foreground hover:opacity-80"
         >
           Worldview
         </button>
 
         <GlobalSearch />
+
+        {/*
+          PRD-0089 W1 §4.3 slots 3 + 4 — PortfolioSwitcher always renders next
+          to GlobalSearch (FU-1.1). DemoBadge mounts inside the switcher
+          itself when the active portfolio's kind === "demo".
+        */}
+        <PortfolioSwitcher />
       </div>
 
-      {/* ── Center: Market data (TopBarMarquee) ─────────────────────── */}
-      {/* WHY flex-1 + min-w-0 + max-w-[640px]:
-          - flex-1: this child absorbs all horizontal slack so left/right blocks
-            stay pinned to their edges.
-          - min-w-0: required for any flex child that may need to shrink below
-            its intrinsic content width — without it, the scrolling marquee
-            would force the parent to overflow at 1280px.
-          - max-w-[640px]: caps the ticker viewport on ultrawide screens.
-          - overflow-hidden: clips the CSS-animated scrolling strip cleanly. */}
-      <div className="flex min-w-0 max-w-[640px] flex-1 justify-center overflow-hidden">
-        <TopBarMarquee />
+      {/* ── Center: IndexStrip (PRD-0089 W1 §4.3 slot 5) ─────────────
+          Static 10-cell strip replaces the animated TopBarMarquee.  The
+          IndexStrip owns its own responsive priority drop; we still wrap
+          it in flex-1 + min-w-0 so the right cluster keeps pinned to the
+          viewport edge under width pressure. */}
+      <div className="flex min-w-0 max-w-[680px] flex-1 justify-center">
+        <IndexStrip />
       </div>
 
       {/* ── Right: Tools + User ──────────────────────────────────── */}
@@ -240,8 +263,9 @@ export function TopBar({
             container itself is conditional on at least one value existing
             so empty accounts still get a clean rail. */}
         {(portfolioValue != null || dailyPnl != null || unrealisedPnl != null) && (
+          // PRD-0089 W1 C-04 — drop `rounded-[2px]` per F1 border-radius=0 lock.
           <div
-            className="flex items-center gap-2 rounded-[2px] border border-border/30 bg-muted/20 px-2 py-0.5"
+            className="flex items-center gap-2 border border-border/30 bg-muted/20 px-2 py-0.5"
             aria-label="Portfolio header metrics"
           >
             {/* Portfolio NAV — compact value display matching Bloomberg's account rail convention.
