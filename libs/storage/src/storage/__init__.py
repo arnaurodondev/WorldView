@@ -3,6 +3,7 @@
 from storage.buckets import BucketTier
 from storage.exceptions import (
     BucketNotFoundError,
+    ETagMismatchError,
     InvalidObjectKeyError,
     ObjectNotFoundError,
     StorageError,
@@ -19,6 +20,7 @@ from storage.settings import StorageSettings
 __all__ = [
     "BucketNotFoundError",
     "BucketTier",
+    "ETagMismatchError",
     "InvalidObjectKeyError",
     "KeyBuilder",
     "KeyComponents",

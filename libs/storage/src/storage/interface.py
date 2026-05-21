@@ -27,7 +27,7 @@ class ObjectStorage(ABC):
         key: str,
         data: bytes,
         content_type: str = "application/octet-stream",
-    ) -> None:
+    ) -> str | None:
         """Upload raw bytes to *key* in *bucket*.
 
         Args:
@@ -36,15 +36,39 @@ class ObjectStorage(ABC):
             key: Object key (canonical format).
             data: Raw bytes to upload.
             content_type: MIME content-type header value.
+
+        Returns:
+            The object's ETag (typically an MD5 hex digest for non-multipart
+            uploads) when the backend returns one, otherwise ``None``.
+            Existing callers that ignore the return value are unaffected;
+            claim-check producers may persist the ETag and pass it back to
+            :meth:`get_bytes` via ``expected_etag`` to detect tampering or
+            overwrite between produce and consume.
         """
 
     @abstractmethod
-    async def get_bytes(self, bucket: str | BucketTier, key: str) -> bytes:
+    async def get_bytes(
+        self,
+        bucket: str | BucketTier,
+        key: str,
+        *,
+        expected_etag: str | None = None,
+    ) -> bytes:
         """Download and return the raw bytes for *key* in *bucket*.
+
+        Args:
+            bucket: Source bucket name (raw string or :class:`BucketTier`).
+            key: Object key (canonical format).
+            expected_etag: Optional ETag to verify against the object returned
+                by the backend. When provided, raises
+                :exc:`storage.exceptions.ETagMismatchError` if the actual
+                ETag does not match. Defaults to ``None`` (no verification).
 
         Raises:
             :exc:`storage.exceptions.ObjectNotFoundError`: If the key does not exist.
             :exc:`storage.exceptions.BucketNotFoundError`: If the bucket does not exist.
+            :exc:`storage.exceptions.ETagMismatchError`: If ``expected_etag`` is
+                set and does not match the backend's reported ETag.
         """
 
     @abstractmethod

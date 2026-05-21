@@ -9,6 +9,7 @@ import structlog
 
 from storage.exceptions import (
     BucketNotFoundError,
+    ETagMismatchError,
     ObjectNotFoundError,
     StoragePermissionError,
     StorageUnavailableError,
@@ -107,12 +108,12 @@ class S3ObjectStorage(ObjectStorage):
         key: str,
         data: bytes,
         content_type: str = "application/octet-stream",
-    ) -> None:
+    ) -> str | None:
         # Coerce BucketTier (StrEnum) to its string value; raw strings pass through unchanged.
         bucket_str = str(bucket)
         logger.debug("put_bytes", bucket=bucket_str, key=key, size=len(data))
         try:
-            await self._run(
+            response = await self._run(
                 lambda: self._client.put_object(
                     Bucket=bucket_str,
                     Key=key,
@@ -122,17 +123,53 @@ class S3ObjectStorage(ObjectStorage):
             )
         except Exception as exc:
             self._handle_client_error(exc, bucket_str, key)
+            return None  # unreachable — _handle_client_error always raises
+        # LIB-007 / W4-05: surface ETag so claim-check producers can persist it
+        # and pass it back as ``expected_etag`` on the consumer side. MinIO and
+        # AWS S3 both wrap the ETag value in double quotes; strip them so the
+        # returned string can be compared directly. Some backends (or future
+        # transports) may not return an ETag — fall back to ``None`` so callers
+        # can detect the missing-ETag case explicitly rather than asserting on
+        # an empty string.
+        raw_etag = response.get("ETag", "") if isinstance(response, dict) else ""
+        etag = raw_etag.strip('"') if isinstance(raw_etag, str) else ""
+        return etag or None
 
-    async def get_bytes(self, bucket: str | BucketTier, key: str) -> bytes:
+    async def get_bytes(
+        self,
+        bucket: str | BucketTier,
+        key: str,
+        *,
+        expected_etag: str | None = None,
+    ) -> bytes:
         # Coerce BucketTier (StrEnum) to its string value; raw strings pass through unchanged.
         bucket_str = str(bucket)
         logger.debug("get_bytes", bucket=bucket_str, key=key)
         try:
             response = await self._run(lambda: self._client.get_object(Bucket=bucket_str, Key=key))
-            return response["Body"].read()  # type: ignore[no-any-return]
         except Exception as exc:
             self._handle_client_error(exc, bucket_str, key)
-        return b""  # unreachable — _handle_client_error always raises
+            return b""  # unreachable — _handle_client_error always raises
+        # LIB-007 / W4-05: optional ETag verification. The check is opt-in;
+        # passing ``expected_etag=None`` (the default) preserves the original
+        # behavior exactly. When provided, compare against the backend's
+        # ETag with surrounding quotes stripped (MinIO/S3 quote the value).
+        if expected_etag is not None:
+            raw_etag = response.get("ETag", "") if isinstance(response, dict) else ""
+            actual_etag = raw_etag.strip('"') if isinstance(raw_etag, str) else ""
+            if actual_etag != expected_etag:
+                logger.warning(
+                    "etag_mismatch",
+                    bucket=bucket_str,
+                    key=key,
+                    expected=expected_etag,
+                    actual=actual_etag,
+                )
+                raise ETagMismatchError(
+                    f"ETag mismatch for bucket={bucket_str!r}, key={key!r}: "
+                    f"expected={expected_etag!r}, actual={actual_etag!r}"
+                )
+        return response["Body"].read()  # type: ignore[no-any-return]
 
     async def delete(self, bucket: str, key: str) -> None:
         logger.debug("delete", bucket=bucket, key=key)
