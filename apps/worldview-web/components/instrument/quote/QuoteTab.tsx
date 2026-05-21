@@ -4,11 +4,15 @@
  * WHY THIS EXISTS (PRD-0088 §6.7 / PLAN-0090 T-B-04):
  *   The Instrument Detail redesign replaces the legacy `OverviewLayout` blob
  *   with a 3-tab structure (Quote / Financials / Intelligence). The Quote tab
- *   is the trader's first impression: chart on the left (60%), Finviz-density
- *   metrics table on the right (40%). This orchestrator owns ONLY the layout
- *   wiring — no data fetching, no domain logic. Children own their own
- *   queries via TanStack Query (chart fetches OHLCV; MetricsTable uses
- *   `useMetricsTableData`).
+ *   is the trader's first impression: chart on the left, Finviz-density
+ *   metrics + strips on the right (320px lg / 380px xl fixed rail). This
+ *   orchestrator owns ONLY the layout wiring — no data fetching, no domain
+ *   logic. Children own their own queries via TanStack Query (chart fetches
+ *   OHLCV; MetricsTable uses `useMetricsTableData`).
+ *
+ * W5-T-06 layout pivot: root changed from `flex` to CSS Grid with a fixed
+ *   right-rail width (320px/380px) replacing the former 40% flex share. This
+ *   enables the Bloomberg-grade right-rail density target (Δ31, Δ34).
  *
  * WHY THE ORCHESTRATOR IS THIN:
  *   - Children are independently testable (chart, strip, metrics each have
@@ -134,26 +138,26 @@ export function QuoteTab({
   };
 
   return (
-    // WHY `flex flex-row h-full overflow-hidden`:
-    //   - `h-full`: fill the tab content slot defined by InstrumentPageClient
-    //     (which sets `flex-1 min-h-0 overflow-hidden` on the tab container).
-    //   - `overflow-hidden`: each half owns its own scroll container; the
-    //     orchestrator must never scroll as a unit (would break sticky chart
-    //     and metrics independence).
-    //   - `flex-row`: explicit horizontal layout — even though `flex` defaults
-    //     to row, naming it makes the responsive intent obvious.
-    <div className="flex flex-row h-full overflow-hidden">
-      {/* ── LEFT: chart + session stats (60%) ─────────────────────────────
-       * WHY `flex-1 min-w-0`: `flex-1` gives the chart the remaining space
-       * after the metrics column claims its fixed 40%. `min-w-0` is critical
-       * — without it, flex children default to `min-width: auto` and the
-       * chart canvas would force the parent to overflow on narrow viewports.
-       *
-       * WHY `flex flex-col`: stacks the chart on top of the 22px session
-       * strip. The chart fills the remaining vertical space; the strip
-       * sits at the bottom at its fixed 22px height.
+    // WHY CSS Grid (not flex) — W5-T-06 layout pivot (Δ31):
+    //   - `grid-cols-[minmax(0,1fr)_320px]`: left column takes remaining space
+    //     (chart+strips); right column is fixed 320px on lg, 380px on xl.
+    //     minmax(0,1fr) is the ONLY correct way to make a grid column shrink
+    //     below its content width — plain `1fr` still respects min-content.
+    //   - `xl:grid-cols-[minmax(0,1fr)_380px]`: wider right rail at 1280px+
+    //     per Δ30 (380px breakpoint with 8px padding each side = 364px usable).
+    //   - `p-0`: no outer inset — each panel owns its own padding (Δ41).
+    //     Previously the legacy flex root had no padding either, so this is a
+    //     no-op for existing children; it makes the contract explicit so future
+    //     panels don't accidentally add double-padding.
+    //   - `h-full overflow-hidden`: fill the tab slot without scrolling the
+    //     grid container itself (each column owns its scroll independently).
+    <div className="grid grid-cols-[minmax(0,1fr)_320px] xl:grid-cols-[minmax(0,1fr)_380px] h-full overflow-hidden p-0">
+      {/* ── LEFT: chart + session stats ────────────────────────────────────
+       * WHY `flex flex-col min-w-0`: inner flex column stacks the chart on
+       * top of the 22px session strip. `min-w-0` is still needed inside a
+       * grid cell because grid cells also default to `min-width: auto`.
        */}
-      <div className="flex flex-col min-w-0 flex-1">
+      <div className="flex flex-col min-w-0">
         {/* Chart fills remaining vertical space inside the left column. */}
         <div className="flex-1 min-h-0 overflow-hidden">
           <OHLCVChart instrumentId={instrumentId} initialBars={initialBars} />
@@ -162,21 +166,16 @@ export function QuoteTab({
         <SessionStatsStrip {...stripProps} />
       </div>
 
-      {/* ── RIGHT: metrics table (40%) ────────────────────────────────────
-       * WHY `w-[40%] flex-shrink-0`: exact 40% width per PRD-0088 §6.7. The
-       * `flex-shrink-0` guarantee prevents the column from being squeezed
-       * if the chart canvas asks for more space — the metrics column has
-       * the higher information density, so it must hold its width.
+      {/* ── RIGHT: metrics table ───────────────────────────────────────────
+       * WHY `border-l border-border`: 1px vertical hairline rule between the
+       * two grid columns. `border-border` matches the F1 design system token
+       * for column dividers (not `border-border/30` which F1 deprecated).
        *
-       * WHY `border-l border-border`: subtle 1px vertical rule separates
-       * the two halves; matches the divider style used throughout the
-       * Bloomberg-density UI.
-       *
-       * WHY `overflow-y-auto`: the metrics table is taller than the viewport
-       * on smaller laptops — the right column owns its own scroll bar so
-       * the chart and strip stay locked while the user scrolls metrics.
+       * WHY `overflow-y-auto`: the metrics table exceeds viewport height on
+       * 1080p laptops. The right column scrolls independently so the chart
+       * + strips stay locked while the user scrolls metrics.
        */}
-      <div className="w-[40%] flex-shrink-0 border-l border-border overflow-y-auto">
+      <div className="border-l border-border overflow-y-auto">
         <MetricsTable
           instrumentId={instrumentId}
           fundamentals={fundamentals}
