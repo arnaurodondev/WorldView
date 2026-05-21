@@ -467,6 +467,7 @@ def create_app() -> FastAPI:
         instruments,
         market,
         ohlcv,
+        peers,
         prediction_markets,
         price_snapshot,
         quotes,
@@ -482,6 +483,10 @@ def create_app() -> FastAPI:
     app.include_router(fundamental_metrics.router, prefix="/api/v1")
     app.include_router(fundamentals.router, prefix="/api/v1")
     app.include_router(securities.router, prefix="/api/v1")
+    # peers: /instruments/{id}/peers — registered after instruments.router to
+    # keep the literal /peers sub-path distinct from the UUID catch-all.
+    # W5-T-S2-01: top-N market-cap peers in same GICS industry.
+    app.include_router(peers.router, prefix="/api/v1")
     # prediction_markets: /prediction-markets/{market_id}/history registered
     # before /{market_id} inside the router to avoid path-param conflicts
     app.include_router(prediction_markets.router, prefix="/api/v1")
