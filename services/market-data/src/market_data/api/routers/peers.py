@@ -23,7 +23,7 @@ from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel
-from sqlalchemy import and_, func, select, text
+from sqlalchemy import UUID, and_, bindparam, cast, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from market_data.infrastructure.db.models.fundamental_metrics import FundamentalMetricModel
@@ -120,10 +120,13 @@ async def get_peers(
     instr = InstrumentModel
 
     # Fetch the target instrument to get its industry column.
-    # WHY text() for UUID cast: asyncpg rejects string literals in
-    # UUID-typed columns without an explicit cast (BP-180 / BP-121).
+    # WHY cast(bindparam, UUID): asyncpg rejects bare string literals in UUID
+    # columns (BP-180/BP-121). Using cast() is cleaner than text("::uuid") because
+    # SQLAlchemy's text() parser chokes on the `::` immediately after `:param`.
     result: Any = await session.execute(
-        select(instr.id, instr.symbol, instr.industry).where(text("id = :iid::uuid").bindparams(iid=instrument_id))
+        select(instr.id, instr.symbol, instr.industry).where(
+            instr.id == cast(bindparam("iid", value=instrument_id), UUID)
+        )
     )
     row = result.first()
 
@@ -188,9 +191,10 @@ async def get_peers(
         .where(
             and_(
                 instr.industry == industry,
-                # WHY text() for UUID cast: asyncpg rejects string literals in
-                # UUID-typed columns without an explicit cast (BP-180 / BP-121).
-                text("instruments.id != :self_id::uuid").bindparams(self_id=instrument_id),
+                # WHY cast(bindparam): exclude self from peers list; same UUID cast
+                # rationale as the target lookup above — text("::uuid") confuses
+                # SQLAlchemy's parameter parser.
+                instr.id != cast(bindparam("self_id", value=instrument_id), UUID),
             )
         )
         .outerjoin(mktcap_sq, instr.id == mktcap_sq.c.instrument_id)
