@@ -119,11 +119,18 @@ services:
     volumes:
       - kafka_data:/var/lib/kafka/data
     healthcheck:
+      # kafka-broker-api-versions spawns a JVM client and can take >10s on
+      # cold / loaded machines, especially while __consumer_offsets is being
+      # loaded after a restart. Bumped timeout 10→30s and start_period
+      # 30→60s so the container reaches "healthy" instead of perpetually
+      # "unhealthy" while consumer groups rebalance (observed during the
+      # 2026-05-20 stack restart — Kafka was serving traffic correctly but
+      # docker compose deps that required `service_healthy` were failing).
       test: ["CMD", "kafka-broker-api-versions", "--bootstrap-server", "localhost:9092"]
       interval: 15s
-      timeout: 10s
+      timeout: 30s
       retries: 5
-      start_period: 30s
+      start_period: 60s
 
   schema-registry:
     image: confluentinc/cp-schema-registry:7.6.0
@@ -1289,6 +1296,32 @@ services:
     env_file:
       - ../../services/nlp-pipeline/configs/docker.env
     command: ["python", "-m", "nlp_pipeline.infrastructure.messaging.consumers.watchlist_consumer_main"]
+    restart: on-failure
+    healthcheck:
+      test: ["CMD", "python", "-c", "import os; os.kill(1, 0)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+
+  nlp-pipeline-entity-refresh-consumer:
+    # REQ-003 / TASK-W0-06: consumes entity.refresh.v1 events from S7's
+    # TriggerEntityRefreshUseCase and marks entity_embedding_state rows as
+    # due (next_refresh_at = now()). Without this container running, the
+    # manual /api/v1/entities/{entity_id}/refresh endpoint would publish to
+    # Kafka but never be consumed → silent no-op.
+    build:
+      context: ../..
+      dockerfile: services/nlp-pipeline/Dockerfile
+    profiles: [infra, all]
+    depends_on:
+      kafka-init:
+        condition: service_completed_successfully
+      nlp-pipeline-migrate:
+        condition: service_completed_successfully
+    env_file:
+      - ../../services/nlp-pipeline/configs/docker.env
+    command: ["python", "-m", "nlp_pipeline.infrastructure.messaging.consumers.entity_refresh_consumer_main"]
     restart: on-failure
     healthcheck:
       test: ["CMD", "python", "-c", "import os; os.kill(1, 0)"]

@@ -115,7 +115,20 @@ class InternalJWTMiddleware(BaseHTTPMiddleware):
         valkey_attr: str = "valkey",
         jti_key_includes_service_name: bool = False,
         skip_verification_log_level: str = "critical",
-        set_skip_verification_on_state: bool = False,
+        # W2-05 follow-up: default flipped False → True (2026-05-20) because all
+        # currently-known readyz handlers across the 9 backends read
+        # ``app.state._internal_jwt_skip_verification`` to decide whether the
+        # absent ``_internal_jwt_public_key`` is intentional (dev/test skip
+        # mode) or a real failure. Defaulting to False meant 6 of 9 backends
+        # reported readyz=503 ``jwks_not_loaded`` whenever skip_verification
+        # was enabled — the W2-05 refactor wired the flag in 3 subclasses
+        # (content-store, knowledge-graph, nlp-pipeline) but missed
+        # portfolio / alert / content-ingestion / market-ingestion /
+        # market-data / rag-chat. Flipping the default fixes all 6 at once
+        # and matches the readyz contract every existing handler expects.
+        # Any service that explicitly does NOT want this side effect can
+        # opt out via set_skip_verification_on_state=False.
+        set_skip_verification_on_state: bool = True,
         skip_verification_takes_precedence: bool = False,
     ) -> None:
         super().__init__(app)
@@ -283,6 +296,15 @@ class InternalJWTMiddleware(BaseHTTPMiddleware):
             )
             return True
         except Exception as exc:  # — fault-tolerant refresh
+            # On fetch failure (network blip, S9 5xx) the up-front cooldown
+            # reservation would otherwise lock us out for the full 60 s even
+            # though no refresh succeeded. Reset the timestamp so the next
+            # attempt is allowed after a short back-off (5 s) — preserves the
+            # stampede defense (concurrent callers in the window still see the
+            # reserved slot) while giving the user a fast retry on transient
+            # errors. Post-audit code-review SF #1.
+            with _refresh_lock:
+                _last_refresh_ts = now - _REFRESH_COOLDOWN_SECONDS + 5
             logger.warning("internal_jwt_jwks_refresh_on_miss_failed", error=str(exc))
             return False
 

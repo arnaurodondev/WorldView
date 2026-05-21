@@ -26,8 +26,12 @@ Outbox dispatcher:
     BaseOutboxDispatcher, DispatcherConfig, DeliveryResult, OutboxRecordProtocol,
     OutboxRepositoryProtocol, UnitOfWorkWithOutboxProtocol, run_dispatcher
 
-Maintenance:
+Maintenance (import directly from ``messaging.kafka.maintenance``):
     ProcessedEventsCleanupWorker — retention enforcement for ``processed_events``
+    is intentionally NOT re-exported from the package root because it imports
+    ``sqlalchemy`` and would force every consumer of ``messaging`` (incl. the
+    S9 api-gateway, which has no DB dependency by design — R7) to bring
+    sqlalchemy into its image. See the module path for the actual import.
 
 Valkey:
     ValkeyClient, ValkeyConfig, create_valkey_client, create_valkey_client_from_url
@@ -67,9 +71,6 @@ from messaging.kafka.dispatcher.base import (
     OutboxRepositoryProtocol,
     UnitOfWorkWithOutboxProtocol,
     run_dispatcher,
-)
-from messaging.kafka.maintenance.processed_events_cleanup import (
-    ProcessedEventsCleanupWorker,
 )
 from messaging.kafka.producer import (
     KafkaEventValueSerializer,
@@ -130,7 +131,6 @@ __all__ = [
     "OutboxRecordProtocol",
     "OutboxRepositoryProtocol",
     "OutboxStatus",
-    "ProcessedEventsCleanupWorker",
     "RateLimitedError",
     "RetryableError",
     "SchemaRegistryConfig",

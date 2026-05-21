@@ -387,7 +387,15 @@ def create_app() -> FastAPI:
         all_ok = True
 
         # F-003B: JWKS public key must be loaded before accepting traffic.
-        if getattr(app.state, "_internal_jwt_public_key", None) is None:
+        # Exception (dev/test): when InternalJWTMiddleware is in
+        # skip_verification mode the public key is intentionally absent — the
+        # middleware sets ``app.state._internal_jwt_skip_verification = True``
+        # so readyz can distinguish "intentionally absent" from "failed to
+        # fetch". Matches portfolio/app.py:222.
+        skip_jwt = getattr(app.state, "_internal_jwt_skip_verification", False)
+        if skip_jwt:
+            checks["jwks"] = "skipped"
+        elif getattr(app.state, "_internal_jwt_public_key", None) is None:
             checks["jwks"] = "not_loaded"
             all_ok = False
         else:
