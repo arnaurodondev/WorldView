@@ -41,9 +41,13 @@ const ALLOWED_SURFACES: readonly string[] = [
   "app/(app)/portfolio/",
   // 4. Financials FlatMetricsGrid
   "components/instrument/financials/",
-  // 5. Watchlist
+  // 5. Watchlist — both the future /watchlists page surface AND the global
+  // shell sidebar panel. PRD-0089 W1 §4.5 adopts data-table-grid on the
+  // sidebar so its rows inherit the 20px row height token (FU-5.5 explicitly
+  // lists "Watchlist" among the 7 v1 surfaces).
   "components/watchlists/",
   "app/(app)/watchlists/",
+  "components/shell/WatchlistPanel.tsx",
   // 6. Workspace data panels
   "components/workspace/",
   "app/(app)/workspace/",

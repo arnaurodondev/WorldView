@@ -26,6 +26,11 @@ import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { CollapsibleSidebar } from "@/components/shell/CollapsibleSidebar";
+// PRD-0089 W1: WatchlistPanel (nested under the sidebar) now consumes the
+// HotkeyContext to register `mod+shift+w`. Tests must wrap renders in a
+// HotkeyProvider or the panel throws.
+import { HotkeyProvider } from "@/contexts/HotkeyContext";
+import { HotkeyRegistry } from "@/lib/hotkey-registry";
 
 // ── Next.js navigation mock ────────────────────────────────────────────────────
 // WHY: CollapsibleSidebar uses usePathname() to highlight the active nav item.
@@ -69,8 +74,13 @@ vi.mock("@/lib/gateway", () => ({
 
 function makeWrapper() {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  const registry = new HotkeyRegistry();
   return function Wrapper({ children }: { children: React.ReactNode }) {
-    return <QueryClientProvider client={qc}>{children}</QueryClientProvider>;
+    return (
+      <QueryClientProvider client={qc}>
+        <HotkeyProvider registry={registry}>{children}</HotkeyProvider>
+      </QueryClientProvider>
+    );
   };
 }
 
