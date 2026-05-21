@@ -170,7 +170,7 @@ async def get_company_overview(
             "name": profile_data.get("Name") or instrument_raw.get("symbol", ""),
             "exchange": instrument_raw.get("exchange", ""),
             "currency": profile_data.get("Currency", "USD"),
-            "gics_sector": profile_data.get("GicSector"),
+            "gics_sector": profile_data.get("GicSector") or instrument_raw.get("sector"),
             "gics_industry": profile_data.get("GicGroup"),
             "isin": profile_data.get("ISIN"),
             "country": profile_data.get("CountryISO"),
