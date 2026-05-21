@@ -109,7 +109,7 @@ export function IndexDetailClient({ ticker }: IndexDetailClientProps) {
   return (
     <main
       id="main"
-      className="mx-auto flex max-w-4xl flex-col gap-6 px-6 py-8"
+      className="mx-auto flex max-w-4xl flex-col gap-4 px-6 py-8"
       aria-labelledby="index-heading"
     >
       {/* ── Header ────────────────────────────────────────── */}

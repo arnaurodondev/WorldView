@@ -247,6 +247,18 @@ const F1_FORBIDDEN_DURATION =
 // generosity and rejected.
 const F1_FORBIDDEN_GAP = /\bgap-(?:6|8|10|12)\b/;
 
+// PRD-0089 W1 §13 / gate 7 — ban the `border-white/[0.06]` opacity literal
+// pattern that the StatusBar previously carried. Forces every "subtle"
+// border to use the F1 `border-border-subtle` token instead. The regex
+// matches any `border-white/[` prefix regardless of the opacity value.
+const F1_FORBIDDEN_BORDER_OPACITY = /\bborder-white\/\[/;
+
+// PRD-0089 W1 §13 / gate 8 — ban the names of the three deleted marquee
+// components. Catches resurrected imports / type references that would
+// silently re-introduce the animated ticker scroller after W1 deleted it.
+const F1_FORBIDDEN_DELETED_COMPONENTS =
+  /\b(?:TopBarMarquee|MarqueeTickerChip|IndexTicker)\b/;
+
 const F1_PATTERNS: Array<{ name: string; pattern: RegExp }> = [
   { name: "rounded-{sm|md|lg|xl|2xl|3xl}", pattern: F1_FORBIDDEN_ROUNDED },
   {
@@ -261,6 +273,12 @@ const F1_PATTERNS: Array<{ name: string; pattern: RegExp }> = [
   },
   { name: "duration-{300|500|700|1000}", pattern: F1_FORBIDDEN_DURATION },
   { name: "gap-{6|8|10|12}", pattern: F1_FORBIDDEN_GAP },
+  // PRD-0089 W1 additions
+  { name: "border-white/[...] (use border-border-subtle)", pattern: F1_FORBIDDEN_BORDER_OPACITY },
+  {
+    name: "deleted W1 components (TopBarMarquee/MarqueeTickerChip/IndexTicker)",
+    pattern: F1_FORBIDDEN_DELETED_COMPONENTS,
+  },
 ];
 
 // Files explicitly allowed to keep certain patterns (filled in PR-G after
@@ -333,6 +351,8 @@ describe("PRD-0089 F1 lockdown: terminal-grade visual contract", () => {
 // can reuse the same regex catalogue.
 export {
   F1_ALLOWED_FILES,
+  F1_FORBIDDEN_BORDER_OPACITY,
+  F1_FORBIDDEN_DELETED_COMPONENTS,
   F1_FORBIDDEN_DURATION,
   F1_FORBIDDEN_GAP,
   F1_FORBIDDEN_ROUNDED,
