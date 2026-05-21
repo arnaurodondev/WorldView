@@ -25,6 +25,7 @@ import { cn } from "@/lib/utils";
 import { formatPrice, formatPercent, formatPercentUnsigned } from "@/lib/utils";
 import { formatStalenessAwarePrice, fmtPnl } from "./holdings-columns";
 import { TickerLinkCellRenderer } from "./cells/TickerLink";
+import { SparklineCellRenderer } from "./cells/SparklineCellRenderer";
 
 // ── Pinned-row detection helper ───────────────────────────────────────────────
 // WHY: AG Grid passes `node.rowPinned === 'bottom'` for pinnedBottomRowData rows.
@@ -65,14 +66,8 @@ export const HOLDINGS_AG_COL_WIDTHS: Record<string, number> = {
 // (imported from cells/TickerLink.tsx) handles both the link and the TOTAL
 // pinned-row label via its rowPinned guard.
 
-// SparklineCellRenderer — inline placeholder until cells/SparklineCellRenderer.tsx
-// is wired in step 4.11. Renders "—" for all rows; replaced in 4.11.
-function SparklineCellRendererInline(params: ICellRendererParams<EnrichedHoldingRow>) {
-  if (isPinnedBottom(params)) return null;
-  return (
-    <span className="font-mono text-[11px] text-muted-foreground">—</span>
-  );
-}
+// NOTE: SparklineCellRendererInline removed in step 4.11.
+// SparklineCellRenderer (cells/SparklineCellRenderer.tsx) is now imported above.
 
 // AssetTypeBadgeCellRenderer — inline placeholder until cells/AssetTypeBadge.tsx
 // is wired in step 4.12. Maps asset_class to a single char; replaced in 4.12.
@@ -351,7 +346,7 @@ export const holdingsAgColumns: ColDef<EnrichedHoldingRow>[] = [
     sortable: false,
     suppressMovable: false,
     width: HOLDINGS_AG_COL_WIDTHS.spark,
-    cellRenderer: SparklineCellRendererInline,
+    cellRenderer: SparklineCellRenderer,
   },
 
   // ── VALUE — sortable ────────────────────────────────────────────────────────
