@@ -205,6 +205,32 @@ export const qk = {
     // stay correct.
     pageBundle: (instrumentId: string) =>
       [QK_VERSION, "instrument-page-bundle", instrumentId] as const,
+    // ── W5 Quote-tab keys ──────────────────────────────────────────────────
+    // WHY all 4 nest under ["instruments","detail",id,...]:
+    // qc.invalidateQueries({ queryKey: qk.instruments.detail(id) }) cascades to
+    // all 4 in one shot (Δ38 / Shift+R cascade). "intraday-stats" includes an
+    // optional lastBarTs parameter so a new 5m bar invalidates only that stale
+    // entry without evicting the daily-close peers / returns / levels caches.
+    peers: (instrumentId: string, limit?: number) =>
+      limit == null
+        ? ([QK_VERSION, "instruments", "detail", instrumentId, "peers"] as const)
+        : ([QK_VERSION, "instruments", "detail", instrumentId, "peers", limit] as const),
+    intradayStats: (instrumentId: string, lastBarTs?: string) =>
+      [
+        QK_VERSION,
+        "instruments",
+        "detail",
+        instrumentId,
+        "intraday-stats",
+        // WHY "live" sentinel: when lastBarTs is unknown we still want a stable
+        // key so the first render doesn't thrash. "live" is replaced on the next
+        // bar-close once the bar timestamp is available from the OHLCV response.
+        lastBarTs ?? "live",
+      ] as const,
+    multiPeriodReturns: (instrumentId: string) =>
+      [QK_VERSION, "instruments", "detail", instrumentId, "multi-period-returns"] as const,
+    priceLevels: (instrumentId: string) =>
+      [QK_VERSION, "instruments", "detail", instrumentId, "price-levels"] as const,
     // WHY browse: the /instruments list page runs the screener with a simple
     // name_ticker filter. Keeping it under instruments.* lets
     // `qc.invalidateQueries({ queryKey: qk.instruments.all })` cascade.
