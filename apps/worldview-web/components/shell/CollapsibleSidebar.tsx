@@ -33,7 +33,7 @@
 // useRef for drag-resize geometry, and renders WatchlistPanel + AlarmsPanel
 // (both are client components).
 
-import { useRef } from "react";
+import { useEffect, useRef } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import {
@@ -102,9 +102,9 @@ interface CollapsibleSidebarProps {
  /** Callback — parent (layout.tsx) flips the expanded boolean and persists it */
  onToggle: () => void;
  /**
- * Current expanded width in px (default 220).
- * WHY optional: callers that haven't migrated yet don't need to pass it — the
- * sidebar falls back to 220px so no behaviour breaks.
+ * Current expanded width in px (default 200 per PRD-0089 W1 §9.4 — down from
+ * 220 to reclaim 20px of main-content width). Callers that haven't migrated
+ * yet still get the new default.
  */
  width?: number;
  /**
@@ -112,6 +112,14 @@ interface CollapsibleSidebarProps {
  * WHY optional: resize is a progressive enhancement; works without this prop.
  */
  onResize?: (w: number) => void;
+ /**
+ * localStorage key the parent persists `expanded` to. Used for multi-tab
+ * sync (PRD-0089 W1 C-21): when another tab flips the sidebar this tab
+ * receives a `storage` event and matches the new state. Optional so legacy
+ * callers without multi-tab sync still work — sync only activates when
+ * supplied. Layout.tsx passes `worldview-sidebar-expanded`.
+ */
+ storageKey?: string;
 }
 
 // ── Component ─────────────────────────────────────────────────────────────────
@@ -119,10 +127,34 @@ interface CollapsibleSidebarProps {
 export function CollapsibleSidebar({
  expanded,
  onToggle,
- width = 220,
+ width = 200,
  onResize,
+ storageKey,
 }: CollapsibleSidebarProps) {
  const pathname = usePathname();
+
+ // PRD-0089 W1 C-21 — multi-tab sync.
+ // When another browser tab flips the sidebar via localStorage, this tab must
+ // reflect the change within 100ms. We listen for the `storage` event (only
+ // fires on cross-tab writes — the same tab does not receive its own writes),
+ // parse the new value, and call onToggle() only when the parsed state
+ // differs from our current `expanded` prop. The compare-before-toggle guard
+ // prevents drift if tabs ever get out of sync (e.g. a tab missed an event).
+ useEffect(() => {
+   if (!storageKey || typeof window === "undefined") return;
+   const handler = (e: StorageEvent) => {
+     if (e.key !== storageKey || e.newValue == null) return;
+     try {
+       const next = JSON.parse(e.newValue);
+       if (typeof next !== "boolean") return;
+       if (next !== expanded) onToggle();
+     } catch {
+       // Invalid JSON — ignore. The other tab will write a clean value soon.
+     }
+   };
+   window.addEventListener("storage", handler);
+   return () => window.removeEventListener("storage", handler);
+ }, [storageKey, expanded, onToggle]);
 
  // WHY useRef for currentWidth: the drag handler is attached to document-level
  // mousemove/mouseup events which close over the values at the time of mousedown.
@@ -296,7 +328,10 @@ export function CollapsibleSidebar({
  {!expanded && <div className="flex-1" />}
 
  {/* ── Bottom chrome: Settings + collapse toggle ──────────────────────── */}
- <div className="flex shrink-0 flex-col border-t border-border">
+ {/* PRD-0089 W1 §4.4 — hairline divider via the F1 `border-border-subtle`
+     token replaces the heavier `border-border`. Same visual concept (1px
+     line, no padding gap-band) but tied to the design-system token. */}
+ <div className="flex shrink-0 flex-col border-t border-border-subtle">
  {/* Settings link — same h-7/px-2.5/gap-1.5/text-[10px] density as nav items above */}
  <Link
  href="/settings"
