@@ -46,9 +46,13 @@ vi.mock("@/hooks/useAuth", () => ({
 }));
 
 // ── Gateway mock — drive REST alert payload per test ─────────────────────────
-const mockGetPendingAlerts = vi.fn();
+// WHY getAlertHistory (not getPendingAlerts): the component was refactored in
+// PLAN-0049 F-5 to read from the `alerts` table directly via getAlertHistory —
+// the authoritative store. getPendingAlerts reads the delivery queue which is
+// empty for seeded/acknowledged alerts. Tests must mirror what the component calls.
+const mockGetAlertHistory = vi.fn();
 vi.mock("@/lib/gateway", () => ({
-  createGateway: vi.fn(() => ({ getPendingAlerts: mockGetPendingAlerts })),
+  createGateway: vi.fn(() => ({ getAlertHistory: mockGetAlertHistory })),
 }));
 
 import { RecentAlerts } from "@/components/dashboard/RecentAlerts";
@@ -128,7 +132,7 @@ describe("RecentAlerts — PLAN-0049 T-D-4-04 fallback ladder + deep-links", () 
         created_at: "2026-04-29T08:30:00Z",
       }),
     ];
-    mockGetPendingAlerts.mockResolvedValueOnce({
+    mockGetAlertHistory.mockResolvedValueOnce({
       alerts,
       total: alerts.length,
       offset: 0,
@@ -153,7 +157,7 @@ describe("RecentAlerts — PLAN-0049 T-D-4-04 fallback ladder + deep-links", () 
     // "LOW signal" / "MEDIUM alert". This test repeats the contract from
     // alerts-no-bare-severity.test.tsx but drives it through the merged path
     // (live + REST) to catch regressions in the merge logic too.
-    mockGetPendingAlerts.mockResolvedValueOnce({
+    mockGetAlertHistory.mockResolvedValueOnce({
       alerts: [
         makeAlert({
           alert_id: "00000000-0000-0000-0000-00000000000a",
@@ -200,7 +204,7 @@ describe("RecentAlerts — PLAN-0049 T-D-4-04 fallback ladder + deep-links", () 
       ticker: "AAPL",
       severity: "HIGH",
     });
-    mockGetPendingAlerts.mockResolvedValueOnce({
+    mockGetAlertHistory.mockResolvedValueOnce({
       alerts: [alert],
       total: 1,
       offset: 0,

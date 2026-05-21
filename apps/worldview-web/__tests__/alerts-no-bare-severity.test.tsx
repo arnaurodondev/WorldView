@@ -35,10 +35,14 @@ vi.mock("@/hooks/useAuth", () => ({
   })),
 }));
 
-// Gateway mock — RecentAlerts calls getPendingAlerts via createGateway().
-const mockGetPendingAlerts = vi.fn();
+// Gateway mock — RecentAlerts calls getAlertHistory via createGateway().
+// WHY getAlertHistory (not getPendingAlerts): the component was refactored in
+// PLAN-0049 F-5 to use getAlertHistory (reads `alerts` table directly — the
+// authoritative store) instead of getPendingAlerts (reads delivery queue, empty
+// for seeded alerts). Tests must mock the same method the component actually calls.
+const mockGetAlertHistory = vi.fn();
 vi.mock("@/lib/gateway", () => ({
-  createGateway: vi.fn(() => ({ getPendingAlerts: mockGetPendingAlerts })),
+  createGateway: vi.fn(() => ({ getAlertHistory: mockGetAlertHistory })),
 }));
 
 import { RecentAlerts } from "@/components/dashboard/RecentAlerts";
@@ -52,7 +56,7 @@ describe("RecentAlerts — no bare-severity strings (F-D-006)", () => {
   it("never renders bare 'LOW signal' / 'MEDIUM alert' strings for naked alerts", async () => {
     // Worst case: alert with neither title, signal_label, ticker, nor entity_name.
     // Old code rendered "LOW alert"; new code must humanise alert_type instead.
-    mockGetPendingAlerts.mockResolvedValueOnce({
+    mockGetAlertHistory.mockResolvedValueOnce({
       alerts: [
         {
           alert_id: "00000000-0000-0000-0000-000000000001",
@@ -87,7 +91,7 @@ describe("RecentAlerts — no bare-severity strings (F-D-006)", () => {
   });
 
   it("uses backend-composed title when present", async () => {
-    mockGetPendingAlerts.mockResolvedValueOnce({
+    mockGetAlertHistory.mockResolvedValueOnce({
       alerts: [
         {
           alert_id: "00000000-0000-0000-0000-000000000002",

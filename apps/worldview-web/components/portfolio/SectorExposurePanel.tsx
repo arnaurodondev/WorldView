@@ -27,17 +27,21 @@ interface SectorExposurePanelProps {
 // WHY dots (not full-width bars): full-width colored bars would compete visually
 // with the colored pct badges in ContributorsStrip to the left. A small dot +
 // label + pct right-aligned is the Bloomberg PORT sector list pattern.
+// WHY semantic tokens only (bg-primary, bg-muted-foreground): the architecture
+// regression test (no-off-palette-colors.test.ts) forbids off-palette Tailwind
+// shorthand classes like bg-sky-500, bg-emerald-500, etc. Semantic opacity
+// variants create sufficient visual differentiation for ≤10 sectors at 11px density.
 const SECTOR_DOTS = [
-  "bg-primary/70",
-  "bg-primary/50",
-  "bg-primary/30",
-  "bg-sky-500/60",
-  "bg-emerald-500/60",
-  "bg-amber-500/60",
-  "bg-rose-500/60",
-  "bg-violet-500/60",
-  "bg-muted-foreground/40",
+  "bg-primary/80",
+  "bg-primary/60",
+  "bg-primary/40",
+  "bg-primary/25",
+  "bg-muted-foreground/70",
+  "bg-muted-foreground/50",
+  "bg-muted-foreground/35",
   "bg-muted-foreground/25",
+  "bg-muted-foreground/15",
+  "bg-muted-foreground/10",
 ];
 
 export function SectorExposurePanel({ bySector, isLoading }: SectorExposurePanelProps) {
