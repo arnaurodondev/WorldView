@@ -15,6 +15,7 @@ injected by the API layer (resolved from app.state at request time).
 
 from __future__ import annotations
 
+import contextlib
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 from uuid import UUID
@@ -163,17 +164,28 @@ class TriggerEntityRefreshUseCase:
             refresh_type=refresh_type,
         )
 
-        async with self._write_sf() as write_session:
-            outbox_repo = self._outbox_repo_class(write_session)
-            # Returns the outbox row's UUID — but for the public job_id we
-            # surface the event_id baked into the Avro payload (clients reference
-            # the same UUID that downstream consumers see in ``event_id``).
-            await outbox_repo.append(
-                topic=_ENTITY_REFRESH_TOPIC,
-                partition_key=str(entity_id),
-                payload_avro=payload_avro,
-            )
-            await write_session.commit()
+        try:
+            async with self._write_sf() as write_session:
+                outbox_repo = self._outbox_repo_class(write_session)
+                # Returns the outbox row's UUID — but for the public job_id we
+                # surface the event_id baked into the Avro payload (clients reference
+                # the same UUID that downstream consumers see in ``event_id``).
+                await outbox_repo.append(
+                    topic=_ENTITY_REFRESH_TOPIC,
+                    partition_key=str(entity_id),
+                    payload_avro=payload_avro,
+                )
+                await write_session.commit()
+        except Exception:
+            # Outbox append / commit failed — release the rate-limit slot so
+            # the user can retry immediately instead of being locked out for
+            # the full 1-hour window. The set_nx reservation guards against
+            # concurrent stampede during the in-flight window; deletion on
+            # failure restores idempotent retry semantics. Post-audit review SF #7.
+            if self._valkey is not None:
+                with contextlib.suppress(Exception):
+                    await self._valkey.delete(rate_key)
+            raise
 
         logger.info(  # type: ignore[no-any-return]
             "entity_refresh_queued",

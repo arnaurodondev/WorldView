@@ -217,6 +217,16 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
+    # NOTE: The legacy ``ck_canonical_entity_type`` constraint dropped at the
+    # top of upgrade() (BUG-A fix) is intentionally NOT restored here.
+    # Migration 0039 owns the canonical constraint state — it drops the
+    # legacy ``ck_canonical_entity_type`` (singular) and installs the new
+    # ``ck_canonical_entities_entity_type`` (plural) with ``'unknown'`` in
+    # the allowed list. Restoring the legacy constraint here would
+    # contradict 0039's contract and would not actually be reachable in a
+    # normal downgrade chain (downgrade flows from head → 0038 already
+    # passes through 0039's downgrade first).
+    #
     # Delete by metadata->>seed_source for safety (also catches any operator
     # who hand-applied the seed via psql).
     op.execute("DELETE FROM entity_aliases WHERE source = 'seed:PLAN-0087'")

@@ -213,9 +213,14 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     # responses are still processed by middleware layers (e.g. Prometheus timing).
     register_error_handlers(app)
 
-    # Middleware registration order (Starlette: last added = outermost for requests)
-    # Request order: RequestId → SecurityHeaders → Prometheus → OTel → CORS → RateLimit → OIDCAuth → InternalJWT
-    # InternalJWT innermost (after OIDCAuth) so request.state.user is set before JWT issuance.
+    # Middleware registration order (Starlette: last added = outermost for requests).
+    # Registration order (top→bottom below): RequestId → SecurityHeaders → Prometheus
+    # → OTel → CORS → RateLimit → InternalJWT → OIDCAuth.
+    # Actual REQUEST-time order is the REVERSE of registration:
+    #   OIDCAuth → InternalJWT → RateLimit → CORS → OTel → Prometheus → SecurityHeaders → RequestId.
+    # OIDCAuth runs FIRST at request time (it's added LAST below) so request.state.user
+    # is populated before any downstream middleware (notably RateLimitMiddleware which
+    # reads it for the per-user vs per-IP bucket decision).
     app.add_middleware(RequestIdMiddleware)
     app.add_middleware(SecurityHeadersMiddleware)
     metrics = create_metrics(service_name=settings.service_name)

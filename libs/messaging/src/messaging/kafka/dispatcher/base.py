@@ -655,7 +655,13 @@ class BaseOutboxDispatcher(ABC):
             for task in (stop_task, notify_task):
                 if not task.done():
                     task.cancel()
-                    with contextlib.suppress(asyncio.CancelledError, Exception):
+                    # Narrow to CancelledError: the wake tasks only ever raise
+                    # CancelledError under normal cancellation. Any other
+                    # exception from `await task` is a real bug in the wake
+                    # implementation (or its asyncio plumbing) and MUST
+                    # surface — suppressing `Exception` here would mask future
+                    # regressions. Post-audit review SF #6.
+                    with contextlib.suppress(asyncio.CancelledError):
                         await task
 
     def stop(self) -> None:

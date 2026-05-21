@@ -819,3 +819,61 @@ async def test_add_member_invalid_idempotency_key_raises(
             ),
             uow,
         )
+
+
+@pytest.mark.asyncio
+async def test_add_member_ownership_check_runs_before_idempotency_lookup(
+    uow: FakeUnitOfWork,
+    tenant: Tenant,
+    user: User,
+    watchlist: Watchlist,
+) -> None:
+    """Post-audit security MED #2 — ownership check must run BEFORE
+    ``find_by_idempotency_key`` so an attacker who guesses (watchlist_id,
+    idempotency_key) cannot replay-leak another tenant's member data.
+
+    Combined entropy ~244 bits makes the attack practically infeasible,
+    but defense-in-depth ordering is mandatory — the call site MUST 404
+    on ownership mismatch BEFORE consulting the idempotency table.
+    """
+    from portfolio.application.use_cases.watchlist import (
+        AddWatchlistMemberCommand,
+        AddWatchlistMemberUseCase,
+    )
+
+    # Pre-seed an idempotency replay row for this watchlist.
+    # If the new ordering is correct, the wrong-owner attempt MUST 404
+    # WITHOUT ever calling find_by_idempotency_key on this row.
+    key = str(uuid4())
+    seeded_entity = uuid4()
+    uc = AddWatchlistMemberUseCase()
+    await uc.execute(
+        AddWatchlistMemberCommand(
+            tenant_id=tenant.id,
+            watchlist_id=watchlist.id,
+            owner_id=user.id,
+            entity_id=seeded_entity,
+            idempotency_key=key,
+        ),
+        uow,
+    )
+
+    # Wrong-owner replay: same watchlist_id + same idempotency_key but
+    # different owner_id. Must raise an ownership error (AuthorizationError
+    # OR WatchlistNotFoundError — both fire INSIDE _fetch_watchlist_for_owner
+    # which now runs BEFORE find_by_idempotency_key). The seeded member
+    # MUST NOT be returned. Either exception class proves the invariant.
+    from portfolio.domain.errors import AuthorizationError
+
+    attacker_owner = uuid4()
+    with pytest.raises((WatchlistNotFoundError, AuthorizationError)):
+        await uc.execute(
+            AddWatchlistMemberCommand(
+                tenant_id=tenant.id,
+                watchlist_id=watchlist.id,
+                owner_id=attacker_owner,
+                entity_id=uuid4(),
+                idempotency_key=key,
+            ),
+            uow,
+        )

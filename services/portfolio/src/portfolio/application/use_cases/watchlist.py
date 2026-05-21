@@ -254,11 +254,15 @@ class AddWatchlistMemberUseCase:
         if cache is None:
             cache = NoOpWatchlistCache()
 
-        # ── REQ-002b: idempotency key validation + early replay lookup ────────
-        # The replay lookup happens BEFORE the natural duplicate check so
-        # callers retrying with the same key get the original member back
-        # without ever validating ownership again on the second hop. Same-key
-        # different-entity_id is rejected as 409.
+        # ── REQ-002b: idempotency key parsing (validation only, NO lookup yet) ─
+        # Validate the UUID shape up-front so caller misuse fails fast with
+        # 422, before any DB call. The replay lookup is deferred until AFTER
+        # the ownership check below — defense-in-depth per the post-audit
+        # security review: looking up by (watchlist_id, idempotency_key)
+        # without first confirming the caller owns the watchlist would let
+        # an attacker who guesses both UUIDs (~244 bits combined) replay-leak
+        # member data. ~244 bits is practically infeasible, but ordering
+        # matters for the invariant.
         idem_uuid: UUID | None = None
         if cmd.idempotency_key is not None:
             try:
@@ -269,13 +273,20 @@ class AddWatchlistMemberUseCase:
                 raise IdempotencyKeyInvalidError(
                     f"idempotency_key must be a valid UUID: {exc}",
                 ) from exc
+
+        # Ownership check FIRST — must pass before any idempotency replay.
+        watchlist = await _fetch_watchlist_for_owner(cmd.watchlist_id, cmd.owner_id, cmd.tenant_id, uow)
+
+        # ── REQ-002b: idempotency replay lookup (post-ownership) ──────────────
+        # Now that ownership is confirmed, look up any prior replay. Same-key
+        # same-entity returns the existing member (200). Same-key
+        # different-entity is caller misuse (409).
+        if idem_uuid is not None:
             existing_by_key = await uow.watchlist_members.find_by_idempotency_key(
                 cmd.watchlist_id,
                 idem_uuid,
             )
             if existing_by_key is not None:
-                # Same key + same entity → idempotent replay (200).
-                # Same key + different entity → caller misuse (409).
                 if existing_by_key.entity_id != cmd.entity_id:
                     from portfolio.domain.errors import IdempotencyConflictError
 
@@ -284,7 +295,6 @@ class AddWatchlistMemberUseCase:
                     )
                 return AddWatchlistMemberResult(member=existing_by_key, created=False)
 
-        watchlist = await _fetch_watchlist_for_owner(cmd.watchlist_id, cmd.owner_id, cmd.tenant_id, uow)
         if not watchlist.is_active():
             raise WatchlistNotFoundError(f"Watchlist {cmd.watchlist_id} is not active")
 
