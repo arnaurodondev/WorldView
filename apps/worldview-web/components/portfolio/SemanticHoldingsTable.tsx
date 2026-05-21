@@ -367,8 +367,23 @@ export function SemanticHoldingsTable({
     dayChangeValue: null,
   };
 
+  // WHY explicit height (not h-full): this component lives inside a page-level
+  // overflow-y-auto scroll container. In that layout, h-full on the AG Grid
+  // wrapper resolves to 0px (no explicit parent height in a scroll container).
+  // AG Grid requires a non-zero container height to render rows into the
+  // virtual viewport — with 0px the grid header appears but all rows are
+  // clipped. Computing the height from rowCount * rowHeight + headerHeight
+  // gives an intrinsic size that the scroll container can accommodate.
+  // Cap at 20 rows (400px data + 28px header = 428px) to avoid an
+  // excessively tall grid when portfolios have many holdings.
+  const ROW_H = 20;   // must match rowHeight prop below
+  const HEADER_H = 28;
+  const PINNED_H = ROW_H;  // 1 pinned totals row
+  const visibleRows = Math.min(enrichedRows.length, 20);
+  const gridHeight = visibleRows * ROW_H + HEADER_H + PINNED_H;
+
   return (
-    <div className="flex flex-col overflow-auto relative">
+    <div className="flex flex-col relative" style={{ height: `${gridHeight}px` }}>
       {/* ── AG Grid table ─────────────────────────────────────────────────── */}
       {/* WHY pinnedBottomRowData: renders totals as a proper AG Grid pinned row,
           which tracks column widths/pinning/scroll automatically. Replaces the
@@ -399,7 +414,6 @@ export function SemanticHoldingsTable({
         // fold. 20px gives one row per ~11px font line + 4.5px top + 4.5px bottom
         // padding, which is legible at text-[11px] while reducing wasted whitespace.
         rowHeight={20}
-        className="flex-1"
       />
 
       {/* ── Floating context menu ─────────────────────────────────────────── */}
