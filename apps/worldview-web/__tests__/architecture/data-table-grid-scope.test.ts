@@ -41,6 +41,11 @@ const ALLOWED_SURFACES: readonly string[] = [
   "app/(app)/portfolio/",
   // 4. Financials FlatMetricsGrid
   "components/instrument/financials/",
+  // 4b. W5 Quote-tab density surfaces (PRD-0089 W5, §1.6):
+  //   MultiPeriodReturnsStrip, IntradayStatsBand, MetricGrid4Col, CompanyAboutCard,
+  //   InsiderActivityList, EarningsMiniList, RelatedHeadlinesList,
+  //   PeersStrip, PriceLevelsStrip, WhatsMovingStrip (all data-table-grid opt-in).
+  "components/instrument/quote/",
   // 5. Watchlist — both the future /watchlists page surface AND the global
   // shell sidebar panel. PRD-0089 W1 §4.5 adopts data-table-grid on the
   // sidebar so its rows inherit the 20px row height token (FU-5.5 explicitly

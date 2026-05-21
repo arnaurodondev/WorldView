@@ -65,13 +65,12 @@ export function MetricGrid4Col({ title, cells }: MetricGrid4ColProps) {
           regardless of label + value length, preventing per-row width jitter. */}
       <div className="grid grid-cols-4">
         {cells.map((cell, idx) => (
-          // WHY role="cell" (F1 §16.3): MetricCell itself also sets role="cell"
-          // internally. The wrapping div adds the [role="row"] boundary every
-          // 4 cells so F1 inner-border rules fire correctly. We set role on the
-          // wrapping div and let MetricCell manage its own inner role.
+          // WHY no role="cell" here: MetricCell already sets role="cell" on its
+          // inner div. Adding a second wrapper with the same role would double-
+          // count cells in the density gate test and create an invalid ARIA tree
+          // (nested role="cell" elements).
           <div
             key={`${cell.label}-${idx}`}
-            role="cell"
             className="min-w-0"
           >
             <MetricCell
