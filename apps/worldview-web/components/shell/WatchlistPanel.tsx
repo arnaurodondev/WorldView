@@ -286,6 +286,25 @@ export function WatchlistPanel() {
         )}
       </div>
 
+      {/* ── Column header (W1.1 H-002 / user feedback Image #6) ─────────
+          A 14 px label row immediately under the section header. Without
+          it the numeric columns are unlabelled and the user has to
+          remember which column is price vs change. Uses the same column
+          widths as the data rows below so the labels line up exactly
+          above their values. Uppercase 9 px mono mirrors the rest of the
+          terminal's data-table headers (matches the convention in
+          `components/portfolio/TransactionsTable.tsx`). */}
+      <div className="flex h-[14px] shrink-0 items-center gap-1 border-b border-border/30 px-2 text-[9px] uppercase tracking-wide text-muted-foreground/70">
+        <span className="w-[44px] shrink-0">Tkr</span>
+        <span className="flex-1 text-right">Price</span>
+        <span className="w-[44px] shrink-0 text-right">%Chg</span>
+        {/* Spacer cells aligned with the FreshnessDot + Sparkline columns
+            in the data rows so the label row reserves the same total
+            width and the section header doesn't expand or shift. */}
+        <span aria-hidden className="inline-block h-[6px] w-[6px]" />
+        <span aria-hidden className="inline-block" style={{ width: 40 }} />
+      </div>
+
       {/* ── Symbol rows ───────────────────────────────────────────────── */}
       {/*
         WHY data-table-grid: the F1 design-system grid sets `--row-h: 20px`

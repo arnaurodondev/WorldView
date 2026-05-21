@@ -49,52 +49,47 @@ import { priceChangeClass, formatPercentDirect } from "@/lib/utils";
 
 // ── Manifest ────────────────────────────────────────────────────────────────
 // `ticker` is the canonical symbol (the form the resolver searches with and
-// the URL path component); `displayName` populates the hover tooltip; `drop`
-// is the rank used by the responsive trim (lower = drop sooner). Cells with
-// drop=null are pinned (SPY/QQQ/IWM are always shown if the strip renders).
+// the URL path component); `displayName` populates the hover tooltip.
+// Static priority-drop ranks were removed in W1.1 H-001 — with the marquee
+// restored, cells scroll horizontally so every ticker becomes visible over
+// one cycle regardless of viewport width. No need to hide cells at narrow
+// viewports anymore.
 interface IndexCell {
   readonly ticker: string;
   readonly label: string;          // visible cell label (strip ^ from ^TNX)
   readonly displayName: string;     // tooltip text
-  readonly drop: number | null;     // priority drop rank; null = pinned
 }
 
 const INDEX_MANIFEST: readonly IndexCell[] = [
-  { ticker: "SPY",     label: "SPY",  displayName: "S&P 500 ETF",                drop: null },
-  { ticker: "QQQ",     label: "QQQ",  displayName: "Nasdaq-100 ETF",             drop: null },
-  { ticker: "IWM",     label: "IWM",  displayName: "Russell 2000 ETF",           drop: null },
-  // VIX last among the pinned-ish — drop=6 means it survives all but the
-  // tightest viewport.
-  { ticker: "VIX",     label: "VIX",  displayName: "CBOE Volatility Index",       drop: 6 },
-  { ticker: "DIA",     label: "DIA",  displayName: "Dow Jones Industrial ETF",   drop: 5 },
-  { ticker: "TLT",     label: "TLT",  displayName: "20+ Year Treasury Bond ETF", drop: 4 },
+  { ticker: "SPY",     label: "SPY",  displayName: "S&P 500 ETF" },
+  { ticker: "QQQ",     label: "QQQ",  displayName: "Nasdaq-100 ETF" },
+  { ticker: "IWM",     label: "IWM",  displayName: "Russell 2000 ETF" },
+  { ticker: "VIX",     label: "VIX",  displayName: "CBOE Volatility Index" },
+  { ticker: "DIA",     label: "DIA",  displayName: "Dow Jones Industrial ETF" },
+  { ticker: "TLT",     label: "TLT",  displayName: "20+ Year Treasury Bond ETF" },
   // ^TNX = CBOE 10-Year Treasury yield. ticker keeps the caret; label/URL
   // strip it so we render "TNX" and route to /indices/TNX.
-  { ticker: "^TNX",    label: "TNX",  displayName: "10-Year Treasury Yield",     drop: 3 },
-  { ticker: "BTC-USD", label: "BTC",  displayName: "Bitcoin (USD)",              drop: 2 },
-  { ticker: "GLD",     label: "GLD",  displayName: "SPDR Gold Trust",             drop: 1 },
-  // USO drops first under width pressure — single-commodity ETF, lowest
-  // signal-to-bytes ratio of any cell.
-  { ticker: "USO",     label: "USO",  displayName: "US Oil Fund",                 drop: 0 },
+  { ticker: "^TNX",    label: "TNX",  displayName: "10-Year Treasury Yield" },
+  { ticker: "BTC-USD", label: "BTC",  displayName: "Bitcoin (USD)" },
+  { ticker: "GLD",     label: "GLD",  displayName: "SPDR Gold Trust" },
+  { ticker: "USO",     label: "USO",  displayName: "US Oil Fund" },
 ];
 
 // Number of full-detail cells we always render (loading skeleton uses this so
 // the strip never collapses to zero width while quotes resolve).
 const FULL_CELL_COUNT = INDEX_MANIFEST.length;
 
-// Tailwind breakpoints we honour. We rely on Tailwind's class-based responsive
-// utilities (hidden / lg:flex) so the SSR markup matches; everything below the
-// `lg` breakpoint (1024px) hides via `hidden lg:flex`. Priority drop within the
-// lg+ range is handled with `xl:`/`2xl:` visibility on individual cells.
-//   - lg  (≥1024): drops everything with drop ≤ 3 (USO/GLD/BTC/TNX hidden)
-//   - xl  (≥1280): drops everything with drop ≤ 1 (USO/GLD hidden)
-//   - 2xl (≥1536): everything visible
-function visibilityClass(cell: IndexCell): string {
-  if (cell.drop === null) return "flex";       // always visible (within lg+)
-  if (cell.drop >= 5) return "hidden lg:flex"; // VIX/DIA — visible from lg up
-  if (cell.drop >= 3) return "hidden xl:flex"; // TLT/^TNX — visible from xl up
-  return "hidden 2xl:flex";                    // BTC/GLD/USO — only at 2xl
-}
+// Per-cell width — 88px (was 60px in the static W1 version).
+// User feedback Image #6: 60px butted the ticker label against the price text
+// with no breathing room ("Q704.23" looked like a single token). 88px gives
+// ~25px of gap between the ticker label and a 6-char price like "735.68",
+// matching Bloomberg FNZX visual rhythm.
+const CELL_WIDTH_PX = 88;
+
+// Marquee cycle = 6s per visible cell (slow enough to read each one without
+// the strip feeling rushed; matches the pre-W1 cadence the user remembered as
+// the "previous moving approach"). 10 cells × 6s = 60s per full cycle.
+const ANIMATION_DURATION_S = INDEX_MANIFEST.length * 6;
 
 /** Compact-format a price so >10K values fit the 60px cell. */
 function formatPrice(price: number | null | undefined): string {
@@ -195,7 +190,8 @@ export function IndexStrip({ manifest = INDEX_MANIFEST }: IndexStripProps = {}) 
         {Array.from({ length: FULL_CELL_COUNT }).map((_, i) => (
           <div
             key={i}
-            className="flex h-6 w-[60px] shrink-0 flex-col justify-center bg-muted/30 px-1"
+            className="flex h-6 shrink-0 flex-col justify-center bg-muted/30 px-1"
+            style={{ width: CELL_WIDTH_PX }}
             aria-hidden
           />
         ))}
@@ -203,61 +199,112 @@ export function IndexStrip({ manifest = INDEX_MANIFEST }: IndexStripProps = {}) 
     );
   }
 
+  /**
+   * Render a single cell. Extracted because we paint the manifest twice
+   * (once for the visible pass, once for the seamless loop) and want each
+   * instance to render identically.
+   */
+  function renderCell(cell: IndexCell, keySuffix = ""): React.ReactNode {
+    const id = tickerToId?.[cell.ticker];
+    const quote = id ? quotes[id] : undefined;
+    // WHY ±0.005% deadband (matches PortfolioRail PNL_FLAT_EPSILON in
+    // TopBar.tsx): floating-point dust should not paint a flat ticker
+    // red or green. priceChangeClass handles its own zero check so we
+    // simply pass the change_pct through.
+    const change = quote?.change_pct ?? null;
+
+    return (
+      <Tooltip key={`${cell.ticker}${keySuffix}`}>
+        <TooltipTrigger asChild>
+          <button
+            onClick={() => goToIndex(cell.label)}
+            // gap-2 between ticker and price (user feedback Image #6 —
+            // pre-fix the two glyphs visually merged into a single token).
+            className="flex h-6 shrink-0 flex-col items-start justify-center px-1 text-left hover:bg-muted/20"
+            style={{ width: CELL_WIDTH_PX }}
+            aria-label={`${cell.displayName} — view index detail`}
+            data-ticker={cell.ticker}
+          >
+            <span className="flex w-full items-center justify-between gap-2">
+              <span className="font-mono text-[11px] font-medium text-foreground">
+                {cell.label}
+              </span>
+              <span className="font-mono text-[11px] tabular-nums text-foreground">
+                {formatPrice(quote?.price)}
+              </span>
+            </span>
+            <span
+              className={`block w-full text-right font-mono text-[10px] tabular-nums ${
+                change != null ? priceChangeClass(change) : "text-muted-foreground"
+              }`}
+            >
+              {change != null ? formatPercentDirect(change) : "—"}
+            </span>
+          </button>
+        </TooltipTrigger>
+        <TooltipContent side="bottom" className="font-mono text-[10px]">
+          {cell.displayName} ({cell.ticker})
+        </TooltipContent>
+      </Tooltip>
+    );
+  }
+
   return (
     <TooltipProvider delayDuration={300}>
       {/*
+        W1.1 H-001 — marquee restored per direct user feedback. Static
+        strip was clipping cells at narrow viewports; the user explicitly
+        asked for the moving values back.
+
         Outer wrapper:
-          - hidden lg:flex: never render below 1024px (mobile = v1.1).
-          - h-full items-center: cells inherit the 32px TopBar height.
-          - gap-2: matches the rest of the TopBar inter-cell rhythm.
-          - data-testid: drives narrow-viewport Playwright spec.
+          - hidden lg:flex: never render below 1024px (mobile = v1.1)
+          - h-full items-center overflow-hidden: cells inherit 32px height
+            and overflow is clipped at the wrapper edge so the right
+            cluster's lane stays clean
+          - role=marquee + aria-label: screen readers announce the region
+            once instead of every animation frame
       */}
       <div
-        className="hidden h-full items-center gap-2 lg:flex"
+        className="hidden h-full w-full items-center overflow-hidden lg:flex"
+        role="marquee"
         aria-label="Market index strip"
         data-testid="index-strip"
       >
-        {manifest.map((cell) => {
-          const id = tickerToId?.[cell.ticker];
-          const quote = id ? quotes[id] : undefined;
-          // WHY ±0.005% deadband (matches PortfolioRail PNL_FLAT_EPSILON in
-          // TopBar.tsx): floating-point dust should not paint a flat ticker
-          // red or green. priceChangeClass handles its own zero check so we
-          // simply pass the change_pct through.
-          const change = quote?.change_pct ?? null;
+        {/*
+          Inner scrolling track:
+            - flex w-max gap-2: every cell in one horizontal line, no wrap
+            - marquee-strip: CSS class in app/globals.css owns the
+              `worldview-ticker-scroll` keyframes (translate3d 0 → -50%)
+            - w-max: prevents flex-wrap; track must be one unbroken line
+              that the keyframe shifts left by exactly half its own width
+              for a seamless loop
+            - --marquee-duration: scales with cell count (6s × N)
 
-          return (
-            <Tooltip key={cell.ticker}>
-              <TooltipTrigger asChild>
-                <button
-                  onClick={() => goToIndex(cell.label)}
-                  className={`${visibilityClass(cell)} h-6 w-[60px] shrink-0 flex-col items-start justify-center px-1 text-left hover:bg-muted/20`}
-                  aria-label={`${cell.displayName} — view index detail`}
-                  data-ticker={cell.ticker}
-                >
-                  <span className="flex w-full items-center justify-between">
-                    <span className="font-mono text-[11px] font-medium text-foreground">
-                      {cell.label}
-                    </span>
-                    <span className="font-mono text-[11px] tabular-nums text-foreground">
-                      {formatPrice(quote?.price)}
-                    </span>
-                  </span>
-                  <span
-                    className={`block w-full text-right font-mono text-[10px] tabular-nums ${
-                      change != null ? priceChangeClass(change) : "text-muted-foreground"
-                    }`}
-                  >
-                    {change != null ? formatPercentDirect(change) : "—"}
-                  </span>
-                </button>
-              </TooltipTrigger>
-              <TooltipContent side="bottom" className="font-mono text-[10px]">
-                {cell.displayName} ({cell.ticker})
-              </TooltipContent>
-            </Tooltip>
-          );
-        })}
+          NOTE on aria: the outer wrapper carries role=marquee + aria-label
+          to announce the region. The first cell pass stays in the
+          accessibility tree (screen readers and keyboard nav can reach
+          every button); only the second pass is `aria-hidden` so duplicate
+          buttons do not announce twice.
+        */}
+        <div
+          className="marquee-strip flex w-max items-center gap-2"
+          style={{ "--marquee-duration": `${ANIMATION_DURATION_S}s` } as React.CSSProperties}
+        >
+          {/* First pass — the visible + announceable copy. */}
+          {manifest.map((cell) => renderCell(cell))}
+          {/* Second pass — pixel-identical duplicate so the -50% translate
+              loops without a visible seam. aria-hidden + role=presentation
+              so AT users never see double. The `.marquee-pass-second`
+              class lets the reduced-motion media query hide this entire
+              duplicate while leaving the first pass static. */}
+          <div
+            className="marquee-pass-second flex items-center gap-2"
+            aria-hidden="true"
+            role="presentation"
+          >
+            {manifest.map((cell) => renderCell(cell, "-2"))}
+          </div>
+        </div>
       </div>
     </TooltipProvider>
   );

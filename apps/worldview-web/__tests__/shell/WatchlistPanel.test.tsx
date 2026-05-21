@@ -227,4 +227,14 @@ describe("WatchlistPanel (PRD-0089 W1)", () => {
     // Sanity check: the second call really happened.
     expect(mockGetWatchlistMembers).toHaveBeenCalledWith("wl-1");
   });
+
+  // H-002 regression: column header row renders above the data rows so the
+  // user can read what each numeric column represents.
+  it("(H-002) renders the column header row above the data rows", async () => {
+    render(<WatchlistPanel />, { wrapper: makeWrapper(new HotkeyRegistry()) });
+    await screen.findByText("AAPL");
+    expect(screen.getByText("Tkr")).toBeInTheDocument();
+    expect(screen.getByText("Price")).toBeInTheDocument();
+    expect(screen.getByText("%Chg")).toBeInTheDocument();
+  });
 });

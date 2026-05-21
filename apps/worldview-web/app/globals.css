@@ -483,10 +483,50 @@ html {
   scroll-padding-top: 5rem;
 }
 
-/* PRD-0089 W1 §4.10 / C-29 — the prior animated index strip keyframes
- * block was removed in favour of the static IndexStrip component.
- * .marquee-strip / .marquee-static-fallback are no longer needed.
+/* ── IndexStrip motion (PRD-0089 W1.1 H-001 — restored 2026-05-21) ────
+ *
+ * W1 originally shipped a static row; user feedback after the live build
+ * was unambiguous: at sub-1440 viewports overflow-hidden clips cells
+ * partway and the strip looks broken. They explicitly asked for the
+ * scrolling marquee back. We bring it back with two safeguards the
+ * pre-W1 version had:
+ *   • prefers-reduced-motion → static fallback row (.marquee-static-fallback)
+ *     so vestibular-sensitive users don't get auto-motion
+ *   • pause on hover / focus-within so users can read a specific value
+ *
+ * WHY @keyframes here (not Tailwind plugin): the animation translates
+ * the doubled cell-list by exactly -50% of its own width — a per-element
+ * percentage Tailwind cannot express inline. Custom @keyframes with the
+ * -50% target is the idiomatic CSS solution.
+ *
+ * WHY var(--marquee-duration): IndexStrip sets the duration inline so
+ * the cadence scales with cell count (~6s per cell). One CSS variable
+ * lets JS drive timing without injecting per-render style tags.
  */
+@keyframes worldview-ticker-scroll {
+  from { transform: translate3d(0, 0, 0); }
+  to   { transform: translate3d(-50%, 0, 0); }
+}
+
+.marquee-strip {
+  animation: worldview-ticker-scroll var(--marquee-duration, 60s) linear infinite;
+}
+
+.marquee-strip:hover,
+.marquee-strip:focus-within {
+  animation-play-state: paused;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .marquee-strip {
+    /* Stop motion entirely; render the static fallback below. */
+    animation: none;
+  }
+  .marquee-strip > .marquee-pass-second {
+    display: none;
+  }
+}
+
 
 /* ── 2. Forced colors (Windows High Contrast Mode) ──────────────────── */
 @media (forced-colors: active) {

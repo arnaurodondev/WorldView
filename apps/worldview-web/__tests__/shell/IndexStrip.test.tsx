@@ -77,27 +77,46 @@ beforeEach(() => {
 });
 
 describe("IndexStrip", () => {
-  it("renders a button for every manifest entry once quotes resolve", async () => {
+  // W1.1 H-001: the marquee renders the manifest TWICE in the DOM (first
+  // pass + seamless loop duplicate) but the duplicate sits inside an
+  // `aria-hidden role=presentation` subtree so AT / getByRole queries only
+  // see the first pass — exactly manifest.length buttons. That's the
+  // intended behaviour: screen readers never announce double.
+  it("renders a button per manifest entry in the accessibility tree (a11y)", async () => {
     render(<IndexStrip />, { wrapper: makeWrapper() });
-    // Each manifest entry becomes a button whose aria-label includes its
-    // displayName (e.g. "S&P 500 ETF — view index detail").
     await waitFor(() => {
       const buttons = screen.getAllByRole("button", { name: /view index detail/i });
       expect(buttons).toHaveLength(MANIFEST_TICKERS.length);
     });
   });
 
+  // Pin the doubled-DOM render too — without the duplicate the marquee
+  // loops with a visible seam. We count via querySelectorAll on data-ticker
+  // (the dup is aria-hidden, so we can't use getAllByRole).
+  it("renders the cell DOM twice (first pass + aria-hidden loop duplicate)", async () => {
+    const { container } = render(<IndexStrip />, { wrapper: makeWrapper() });
+    await waitFor(() => {
+      const tickerNodes = container.querySelectorAll("[data-ticker]");
+      expect(tickerNodes.length).toBe(MANIFEST_TICKERS.length * 2);
+    });
+  });
+
   it("includes the TNX cell (^TNX swap from FU-4.3)", async () => {
     render(<IndexStrip />, { wrapper: makeWrapper() });
     await waitFor(() => {
-      expect(screen.getByRole("button", { name: /10-Year Treasury Yield/i })).toBeInTheDocument();
+      const tnx = screen.getAllByRole("button", { name: /10-Year Treasury Yield/i });
+      expect(tnx.length).toBeGreaterThanOrEqual(1);
     });
   });
 
   it("routes click on SPY cell to /indices/SPY", async () => {
     const user = userEvent.setup();
     render(<IndexStrip />, { wrapper: makeWrapper() });
-    const spy = await screen.findByRole("button", { name: /S&P 500 ETF/i });
+    const spy = await waitFor(() => {
+      const all = screen.getAllByRole("button", { name: /S&P 500 ETF/i });
+      if (all.length === 0) throw new Error("no SPY button yet");
+      return all[0];
+    });
     await user.click(spy);
     expect(mockPush).toHaveBeenCalledWith("/indices/SPY");
   });
@@ -105,7 +124,11 @@ describe("IndexStrip", () => {
   it("routes ^TNX click to /indices/TNX (caret stripped from URL)", async () => {
     const user = userEvent.setup();
     render(<IndexStrip />, { wrapper: makeWrapper() });
-    const tnx = await screen.findByRole("button", { name: /10-Year Treasury Yield/i });
+    const tnx = await waitFor(() => {
+      const all = screen.getAllByRole("button", { name: /10-Year Treasury Yield/i });
+      if (all.length === 0) throw new Error("no TNX button yet");
+      return all[0];
+    });
     await user.click(tnx);
     expect(mockPush).toHaveBeenCalledWith("/indices/TNX");
   });
@@ -122,7 +145,11 @@ describe("IndexStrip", () => {
 
   it("applies font-mono tabular-nums to numeric cells", async () => {
     render(<IndexStrip />, { wrapper: makeWrapper() });
-    const spy = await screen.findByRole("button", { name: /S&P 500 ETF/i });
+    const spy = await waitFor(() => {
+      const all = screen.getAllByRole("button", { name: /S&P 500 ETF/i });
+      if (all.length === 0) throw new Error("no SPY button yet");
+      return all[0];
+    });
     // Both price and change% spans must carry tabular-nums so columns align
     // when prices change digit count. The exact spans live as descendants of
     // the button.
@@ -155,7 +182,10 @@ describe("IndexStrip", () => {
       return Promise.resolve({ results: [{ instrument_id: `id-${ticker}` }] });
     });
     render(<IndexStrip />, { wrapper: makeWrapper() });
-    await screen.findByRole("button", { name: /10-Year Treasury Yield/i });
+    await waitFor(() => {
+      const all = screen.getAllByRole("button", { name: /10-Year Treasury Yield/i });
+      if (all.length === 0) throw new Error("no TNX button yet");
+    });
     // The caret-stripped query must have been issued before any literal "^TNX" call.
     const tnxCalls = mockSearchInstruments.mock.calls
       .map((call) => call[0] as string)
