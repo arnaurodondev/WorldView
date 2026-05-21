@@ -163,7 +163,9 @@ export default function PortfolioPage() {
   const { holdingsSeries: _holdingsSeries } = useHoldingsSeries(holdingsResp?.holdings ?? []);
 
   // ── W2: derive contributors / detractors from enriched holdings ────────
-  const { contributors, detractors } = useTopMovers(enrichedHoldings);
+  // WHY holdingsQuotes: pnlPct is computed from live prices, not the null
+  // unrealised_pnl_pct field on enrichedHoldings (BP-503).
+  const { contributors, detractors } = useTopMovers(enrichedHoldings, holdingsQuotes);
 
   // ── W2: page-scope hotkeys ─────────────────────────────────────────────
   // WHY document-level listener (not a library): zero dependency, ~10 lines,

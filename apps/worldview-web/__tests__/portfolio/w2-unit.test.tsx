@@ -131,8 +131,11 @@ function qcWrapper({ children }: { children: ReactNode }) {
 // ═══════════════════════════════════════════════════════════════════════════════
 
 import { useTopMovers } from "@/features/portfolio/hooks/useTopMovers";
+import type { QuoteMap } from "@/features/portfolio/lib/kpi";
 import type { Holding } from "@/types/api";
 
+// pct is a decimal fraction: 0.08 = 8% gain, -0.15 = 15% loss.
+// average_cost is fixed at 100 so the live price is easy to derive.
 function makeHolding(ticker: string, pct: number): Holding {
   return {
     holding_id: `h-${ticker}`,
@@ -143,8 +146,29 @@ function makeHolding(ticker: string, pct: number): Holding {
     name: ticker,
     quantity: 10,
     average_cost: 100,
+    // WHY still set: the field remains on the Holding type; the new
+    // useTopMovers no longer reads it (uses quotes instead), but keeping it
+    // avoids a TS strict-null complaint and documents the intent of pct.
     unrealised_pnl_pct: pct,
   };
+}
+
+// Build a quotes map from holdings so that livePriceFor() returns
+// average_cost*(1+pct) — reproducing the desired pnlPct in the hook.
+// WHY cast to QuoteMap: the test only needs `price`; the full Quote interface
+// has required fields (instrument_id, ticker, timestamp, volume) that are
+// irrelevant here. livePriceFor() only reads `q.price`.
+function makeQuotesFromHoldings(holdings: Holding[]): QuoteMap {
+  return Object.fromEntries(
+    holdings.map((h) => [
+      h.instrument_id,
+      {
+        price: h.average_cost * (1 + (h.unrealised_pnl_pct ?? 0)),
+        change: 0,
+        change_pct: 0,
+      },
+    ]),
+  ) as QuoteMap;
 }
 
 describe("useTopMovers", () => {
@@ -158,7 +182,8 @@ describe("useTopMovers", () => {
       makeHolding("AMZN", 0.20),
       makeHolding("TSLA", -0.05),
     ];
-    const { result } = renderHook(() => useTopMovers(holdings), { wrapper: qcWrapper });
+    const quotes = makeQuotesFromHoldings(holdings);
+    const { result } = renderHook(() => useTopMovers(holdings, quotes), { wrapper: qcWrapper });
     expect(result.current.contributors[0].ticker).toBe("AMZN");
     expect(result.current.contributors[1].ticker).toBe("MSFT");
     expect(result.current.contributors.length).toBe(4);
@@ -172,25 +197,35 @@ describe("useTopMovers", () => {
       makeHolding("GME", -0.50),
       makeHolding("SNAP", -0.20),
     ];
-    const { result } = renderHook(() => useTopMovers(holdings), { wrapper: qcWrapper });
+    const quotes = makeQuotesFromHoldings(holdings);
+    const { result } = renderHook(() => useTopMovers(holdings, quotes), { wrapper: qcWrapper });
     // Detractors: most negative first → GME(-50%) > SNAP(-20%) > TSLA(-15%) > META(-3%)
     expect(result.current.detractors[0].ticker).toBe("GME");
     expect(result.current.detractors.length).toBe(4);
   });
 
-  it("excludes holdings with null pnlPct", () => {
+  it("excludes holdings with no price gain (falls back to average_cost when no quote)", () => {
     const holdings = [
       makeHolding("AAPL", 0.05),
-      { ...makeHolding("NODATA", 0), unrealised_pnl_pct: null },
+      makeHolding("NODATA", 0),
     ];
-    const { result } = renderHook(() => useTopMovers(holdings), { wrapper: qcWrapper });
-    // NODATA has null pct — should not appear in contributors
+    // NODATA has pnlPct=0 via quote fallback — excluded from contributors (>0 filter)
+    const quotes = makeQuotesFromHoldings(holdings);
+    const { result } = renderHook(() => useTopMovers(holdings, quotes), { wrapper: qcWrapper });
     expect(result.current.contributors.find((m) => m.ticker === "NODATA")).toBeUndefined();
     expect(result.current.contributors[0].ticker).toBe("AAPL");
   });
 
+  it("returns empty arrays when no quotes available (loading state)", () => {
+    const holdings = [makeHolding("AAPL", 0.05), makeHolding("TSLA", -0.10)];
+    // Empty quotes → livePriceFor falls back to average_cost → pnlPct=0 for all
+    const { result } = renderHook(() => useTopMovers(holdings, {}), { wrapper: qcWrapper });
+    expect(result.current.contributors).toHaveLength(0);
+    expect(result.current.detractors).toHaveLength(0);
+  });
+
   it("returns empty arrays when no holdings", () => {
-    const { result } = renderHook(() => useTopMovers([]), { wrapper: qcWrapper });
+    const { result } = renderHook(() => useTopMovers([], {}), { wrapper: qcWrapper });
     expect(result.current.contributors).toHaveLength(0);
     expect(result.current.detractors).toHaveLength(0);
   });
