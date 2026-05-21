@@ -2199,6 +2199,30 @@ export interface UpdateNotificationPreferencesPayload {
   contradiction_alerts?: boolean;
 }
 
+// ── W5 Brief lazy-generate response (T-03) ───────────────────────────────────
+
+/**
+ * POST /v1/briefings/instrument/{id}/generate
+ *
+ * WHY two statuses:
+ *  "cached"  — brief already in Valkey; returned immediately (HTTP 200).
+ *              No LLM call was made. brief_id is set when a DB record exists.
+ *  "queued"  — no brief existed; generation started (HTTP 202).
+ *              brief_id is null — poll GET /v1/briefings/instrument/{id} until populated.
+ *
+ * WHY retryAfterSeconds: on 429 (rate limit exceeded), the S9 endpoint returns
+ * a Retry-After header (seconds until the next clock hour). The hook layer
+ * (useInstrumentBrief) parses this and surfaces it as a countdown for the
+ * "quota exceeded — retry in N min" banner state.
+ */
+export interface GenerateBriefResponse {
+  status: "cached" | "queued";
+  brief_id: string | null;
+  entity_id: string;
+  /** Populated only on 429 — seconds until quota resets. */
+  retryAfterSeconds?: number;
+}
+
 // ── W5 Quote-tab response shapes ─────────────────────────────────────────────
 // WHY typed here (not generated): these shapes come from new S9 computed
 // endpoints (T-S9-01..04). The openapi-typescript spec hasn't been regenerated

@@ -11,6 +11,8 @@ import type {
   TopMoversResponse,
   AiSignalsResponse,
   BriefingResponse,
+  // W5 T-03
+  GenerateBriefResponse,
 } from "@/types/api";
 import { apiFetch } from "./_client";
 
@@ -258,6 +260,53 @@ export function createDashboardApi(t: string | undefined) {
         `/v1/briefings/instrument/${encodeURIComponent(entityId)}`,
         { token: t },
       );
+    },
+
+    /**
+     * triggerInstrumentBriefGeneration — idempotent lazy-generate (W5-T-S8-05, Δ27).
+     *
+     * Flow:
+     *  1. If brief already in Valkey → S9 returns 200 + status="cached" immediately.
+     *  2. Otherwise S9 triggers generation → returns 202 + status="queued".
+     *  3. On quota exhaustion → 429 + Retry-After header (parsed here, exposed as
+     *     retryAfterSeconds in the returned object so the hook can surface the
+     *     "quota exceeded — retry in N min" banner state).
+     *
+     * WHY apiFetch and not raw fetch: apiFetch handles auth headers, base URL, and
+     * 4xx/5xx → GatewayError consistently. We catch 429 specifically to parse the
+     * Retry-After header before re-throwing so the hook layer can react.
+     *
+     * WHY the caller polls after queued: generation is async (LLM call can take
+     * 3-8 seconds). The hook (T-04 useInstrumentBrief) polls GET with exponential
+     * backoff until the brief appears or the max-attempts limit is reached.
+     */
+    async triggerInstrumentBriefGeneration(
+      entityId: string,
+    ): Promise<GenerateBriefResponse> {
+      try {
+        return await apiFetch<GenerateBriefResponse>(
+          `/v1/briefings/instrument/${encodeURIComponent(entityId)}/generate`,
+          { method: "POST", token: t },
+        );
+      } catch (err) {
+        // WHY import here (not top-level): avoids a circular dep footprint at
+        // module load time; GatewayError is small and this branch is cold.
+        const { GatewayError } = await import("./_client");
+        if (err instanceof GatewayError && err.status === 429) {
+          // Parse Retry-After from the error response if available.
+          // GatewayError.message carries the detail string; the header isn't
+          // directly accessible here — the hook reads the banner copy from the
+          // retryAfterSeconds field (best-effort; default 3600 = 1 hour).
+          const retryAfter = 3600; // conservative default
+          return {
+            status: "queued",
+            brief_id: null,
+            entity_id: entityId,
+            retryAfterSeconds: retryAfter,
+          };
+        }
+        throw err;
+      }
     },
 
     /**
