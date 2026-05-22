@@ -6,6 +6,7 @@
  */
 
 import type { EntityGraph, ContradictionsResponse, EntityPublic } from "@/types/api";
+import type { NarrativeHistoryPage } from "@/types/intelligence";
 import { apiFetch, GatewayError } from "./_client";
 
 export function createKnowledgeGraphApi(t: string | undefined) {
@@ -157,6 +158,40 @@ export function createKnowledgeGraphApi(t: string | undefined) {
       } catch (err) {
         // WHY catch here: 404 means enrichment has not run yet — not an error the
         // caller needs to handle.  All other errors propagate normally.
+        if (err instanceof GatewayError && err.status === 404) return null;
+        throw err;
+      }
+    },
+
+    /**
+     * getEntityContradictions — alias for getContradictions (W7 T-20).
+     *
+     * WHY alias: W7 component code uses `gateway.getEntityContradictions(id)` for
+     * naming consistency with other entity-scoped methods. Both call the same
+     * endpoint so the cache key and response shape are identical.
+     */
+    getEntityContradictions(entityId: string): Promise<ContradictionsResponse | null> {
+      return this.getContradictions(entityId);
+    },
+
+    /**
+     * getNarratives — first page of narrative version history (W7 T-21).
+     *
+     * WHY non-infinite (not cursor-paginated): NarrativeHistoryDisclosure renders
+     * a collapsed Accordion that shows at most ~10 versions before the user needs
+     * to visit the full history page. Loading only the first page (default 20
+     * versions) avoids the complexity of useInfiniteQuery inside a disclosure.
+     * The full pagination is available via useEntityNarrativeHistory.
+     *
+     * Returns null when the entity has no narrative history yet (404).
+     */
+    async getNarratives(entityId: string): Promise<NarrativeHistoryPage | null> {
+      try {
+        return await apiFetch<NarrativeHistoryPage>(
+          `/v1/entities/${encodeURIComponent(entityId)}/narratives`,
+          { token: t },
+        );
+      } catch (err) {
         if (err instanceof GatewayError && err.status === 404) return null;
         throw err;
       }

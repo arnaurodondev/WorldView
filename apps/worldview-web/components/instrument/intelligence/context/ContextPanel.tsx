@@ -35,6 +35,7 @@ import { useMemo } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useAuth } from "@/hooks/useAuth";
 import { createGateway } from "@/lib/gateway";
+import { qk } from "@/lib/query/keys";
 import { useEntityIntelligence } from "@/lib/api/intelligence";
 import { Skeleton } from "@/components/ui/skeleton";
 import { cn } from "@/lib/utils";
@@ -114,7 +115,10 @@ export function ContextPanel({
   // the exact same query key + staleTime — we re-use the cache slot. No need
   // for a custom hook just for this one component.
   const entityDetailQuery = useQuery({
-    queryKey: ["entity-detail", entityId],
+    // WHY qk.kg.entityDetail: centralised key aligns with the W7 cache namespace
+    // so other panels (EntityOverviewBlock) that also call getEntityDetail share
+    // the same TanStack cache slot — no duplicate network requests.
+    queryKey: qk.kg.entityDetail(entityId),
     queryFn: () => createGateway(accessToken).getEntityDetail(entityId),
     enabled: !!accessToken && !!entityId,
     // WHY 2 hours: descriptions are stable once written by Worker 13J (the
@@ -135,7 +139,9 @@ export function ContextPanel({
   // visualisation, but TanStack Query de-dupes by key so only ONE network
   // request fires. Both consumers see the same cached data.
   const graphQuery = useQuery<EntityGraph | null>({
-    queryKey: ["entity-graph", entityId, 1, null],
+    // WHY qk.instruments.entityGraph: shares cache with GraphColumn's depth=1
+    // fetch so only one network request fires when both components are mounted.
+    queryKey: qk.instruments.entityGraph(entityId, 1),
     queryFn: () => createGateway(accessToken).getEntityGraph(entityId, 1),
     enabled: !!accessToken && !!entityId,
     // WHY 5 min: graph topology changes after Worker 13C runs (~5 min cadence
