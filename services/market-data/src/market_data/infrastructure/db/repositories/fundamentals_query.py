@@ -117,18 +117,38 @@ async def query_fundamentals(
         section: Which fundamentals section to query.
 
     Returns:
-        List of domain ``FundamentalsRecord`` instances.
+        List of domain ``FundamentalsRecord`` instances ordered by
+        ``period_end_date ASC`` (mixin sections) or ``ingested_at ASC``
+        (company profile). The ascending order lets callers use ``slice(-N)``
+        to grab the N most recent records without an additional sort pass.
+
+    WHY ORDER BY: Without an explicit order, SQLAlchemy returns rows in
+    heap / insertion order which is non-deterministic. For time-series
+    sections (e.g. earnings_annual_trend) that have 30+ years of annual
+    records, the frontend ``slice(-4)`` must receive them in ascending
+    chronological order or it displays the oldest 4 instead of the newest 4.
     """
     model_class = _SECTION_MODEL_MAP.get(section)
     if model_class is None:
         return []
 
-    result: Any = await session.execute(
-        select(model_class).where(model_class.instrument_id == security_id)  # type: ignore[attr-defined]
-    )
-    rows = result.scalars().all()
-
     if section == FundamentalsSection.COMPANY_PROFILE:
+        # CompanyProfileModel has no period_end_date; sort by ingested_at ASC
+        # so the caller always receives snapshots in ingestion order.
+        result: Any = await session.execute(
+            select(model_class)
+            .where(model_class.instrument_id == security_id)  # type: ignore[attr-defined]
+            .order_by(model_class.ingested_at.asc())  # type: ignore[attr-defined]
+        )
+        rows = result.scalars().all()
         return [_company_profile_row_to_domain(row) for row in rows]
 
+    # Mixin sections all have period_end_date; sort ascending so newest records
+    # are last and slice(-N) returns the N most recent entries.
+    result = await session.execute(
+        select(model_class)
+        .where(model_class.instrument_id == security_id)  # type: ignore[attr-defined]
+        .order_by(model_class.period_end_date.asc())  # type: ignore[attr-defined]
+    )
+    rows = result.scalars().all()
     return [_row_to_domain(row, section) for row in rows]
