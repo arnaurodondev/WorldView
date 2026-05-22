@@ -95,8 +95,11 @@ export function EarningsMiniList({ data, isLoading = false }: EarningsMiniListPr
 
       <div data-table-grid="dense">
         {isLoading && Array.from({ length: 4 }).map((_, i) => (
-          <div key={i} role="row" className="flex items-center h-[var(--row-h,18px)] px-3 gap-2">
-            <span className="text-[10px] text-muted-foreground/30">—</span>
+          <div key={i} role="row" className="flex items-center h-[var(--row-h,18px)] px-3 gap-1.5">
+            <span className="text-[10px] text-muted-foreground/30 shrink-0 w-[28px]">—</span>
+            <span className="text-[10px] text-muted-foreground/30 shrink-0 w-[40px]" />
+            <span className="text-[10px] text-muted-foreground/30 shrink-0 w-[40px]" />
+            <span className="text-[10px] text-muted-foreground/30 flex-1" />
           </div>
         ))}
 
@@ -118,16 +121,16 @@ export function EarningsMiniList({ data, isLoading = false }: EarningsMiniListPr
               <span className="text-[10px] text-muted-foreground shrink-0 w-[28px]">
                 {year}
               </span>
-              {/* EPS actual */}
-              <span className="text-[10px] font-mono tabular-nums text-foreground shrink-0 w-[40px]">
+              {/* EPS actual — right-aligned in fixed column */}
+              <span className="text-[10px] font-mono tabular-nums text-foreground shrink-0 w-[40px] text-right">
                 {fmtEPS(rec.epsActual)}
               </span>
-              {/* EPS estimate */}
-              <span className="text-[10px] font-mono tabular-nums text-muted-foreground shrink-0 w-[40px]">
+              {/* EPS estimate — right-aligned in fixed column */}
+              <span className="text-[10px] font-mono tabular-nums text-muted-foreground shrink-0 w-[40px] text-right">
                 {fmtEPS(rec.epsEstimate)}
               </span>
-              {/* Surprise % chip */}
-              <span className={`text-[10px] font-mono tabular-nums shrink-0 ${surpriseColor(rec.surprisePercent)}`}>
+              {/* Surprise % — flex-1 so it fills remaining space, right-aligned */}
+              <span className={`text-[10px] font-mono tabular-nums flex-1 text-right ${surpriseColor(rec.surprisePercent)}`}>
                 {fmtSurprise(rec.surprisePercent) ?? "—"}
               </span>
             </div>

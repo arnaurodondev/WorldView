@@ -173,7 +173,9 @@ export function QuoteTab({
        * The right column scrolls independently, keeping the chart locked.
        * WHY border-l border-border: 1px vertical hairline rule.
        */}
-      <div className="border-l border-border overflow-y-auto flex flex-col">
+      {/* WHY min-h-0: grid item default min-height=auto lets content expand past the
+          grid track, making overflow-y-auto a no-op. min-h-0 caps the track height. */}
+      <div className="border-l border-border overflow-y-auto flex flex-col min-h-0">
         {/* Statistics (MetricsTable with 3x MetricGrid4Col + trailing rows). */}
         <MetricsTable
           instrumentId={instrumentId}

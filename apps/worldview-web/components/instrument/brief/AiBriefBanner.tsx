@@ -29,6 +29,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { ChevronRight } from "lucide-react";
 import { useInstrumentBrief } from "@/components/instrument/hooks/useInstrumentBrief";
+import { StructuredBrief } from "@/components/brief/StructuredBrief";
 import { formatRelativeTime } from "@/lib/utils";
 import type { BriefCitation, BriefingCitation } from "@/types/api";
 
@@ -114,7 +115,9 @@ export function AiBriefBanner({ entityId }: AiBriefBannerProps) {
     statusLabel = mins != null ? `Quota exceeded — retry in ${mins}m` : "Quota exceeded";
   }
 
-  const preview = brief?.narrative?.slice(0, PREVIEW_CHARS) ?? null;
+  // WHY lead first: brief.lead is the pre-extracted ## LEAD executive summary
+  // (1-3 sentences). Pre-W4 cached responses lack lead; fall back to narrative slice.
+  const preview = brief?.lead ?? brief?.narrative?.slice(0, PREVIEW_CHARS) ?? null;
   const isReady = status === "ready" && preview != null;
 
   // WHY filter source_type==="article": events and alerts have no external URL
@@ -171,15 +174,32 @@ export function AiBriefBanner({ entityId }: AiBriefBannerProps) {
 
       {/* Expanded body — only shown when brief is ready */}
       {expanded && isReady && (
-        <div className="max-h-[180px] overflow-y-auto px-3 pb-2">
-          {/* WHY whitespace-pre-wrap: §6.5 — plain text, not markdown. */}
-          <p className="whitespace-pre-wrap text-[11px] leading-[1.5] text-foreground/80">
-            {brief?.narrative}
-          </p>
+        <div className="max-h-[240px] overflow-y-auto px-3 pb-2">
+          {/* WHY StructuredBrief for sections-based responses: W4+ briefs include
+              sections[] with citation chips per bullet — rendering them with the
+              shared StructuredBrief component gives the same Bloomberg-grade look
+              as MorningBriefCard. Pre-W4 cached entries lack sections and fall
+              back to the plain whitespace-pre-wrap narrative path. */}
+          {brief?.sections && brief.sections.length > 0 ? (
+            <StructuredBrief
+              lead={brief.lead}
+              sections={brief.sections.filter(
+                // WHY filter "REMOVED": some LLM completions emit a literal
+                // "REMOVED" placeholder section heading (prompt artifact).
+                (s) => !s.title?.toUpperCase().includes("REMOVED")
+              )}
+              confidence={brief.confidence}
+              variant="compact"
+            />
+          ) : (
+            // Fallback: plain text narrative for pre-W4 cached entries.
+            <p className="whitespace-pre-wrap text-[11px] leading-[1.5] text-foreground/80">
+              {brief?.narrative}
+            </p>
+          )}
 
           {/* Top Stories chip strip — mirrors MorningBriefCard pattern.
-              WHY <a> not <Link>: citations point to external publisher URLs;
-              opening in a new tab keeps the instrument page in focus. */}
+              WHY <a> not <Link>: external publisher URLs; new tab keeps instrument page. */}
           {topSources.length > 0 && (
             <div
               className="mt-1.5 flex flex-wrap gap-1 border-t border-border/40 pt-1.5"
@@ -194,13 +214,9 @@ export function AiBriefBanner({ entityId }: AiBriefBannerProps) {
                   className="inline-flex max-w-[260px] items-center gap-1 rounded-[2px] border border-border bg-muted px-2 py-1 text-[11px] text-muted-foreground hover:bg-muted/70 hover:text-foreground"
                   title={story.title}
                 >
-                  {/* Source domain — uppercase mono label lets the trader
-                      identify the publisher before clicking. */}
                   <span className="shrink-0 font-mono text-[9px] uppercase tracking-[0.06em] text-muted-foreground/70">
                     {extractDomain(story.url ?? "")}
                   </span>
-                  {/* Title capped at CHIP_TITLE_MAX chars via JS slice —
-                      CSS text-overflow on flex-wrap children is unreliable. */}
                   <span className="truncate">{truncate(story.title, CHIP_TITLE_MAX)}</span>
                 </a>
               ))}

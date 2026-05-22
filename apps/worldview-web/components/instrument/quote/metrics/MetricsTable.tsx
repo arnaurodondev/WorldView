@@ -130,7 +130,7 @@ export function MetricsTable({ instrumentId, fundamentals: fundamentalsProp, quo
   const upside = target != null && price != null && price > 0 ? (target - price) / price : null;
 
   return (
-    <div className="w-full h-full flex flex-col border-l border-border overflow-y-auto">
+    <div className="w-full flex flex-col">
       {/* Section header — 28px (h-7), 10px caps per PRD §6.7.2. */}
       <div className="flex items-center h-7 px-3 border-b border-border/50 bg-card/50 text-[10px] uppercase tracking-wide text-muted-foreground">
         Statistics
