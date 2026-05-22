@@ -207,15 +207,27 @@ async def instrument_peers(instrument_id: str, request: Request) -> Any:
     and forwards query params (limit=) to S3 unchanged. S3 handles the 24h
     Valkey cache and the GICS industry lookup.
 
+    WHY resolve_security_id: PRD-0089 F2 — the URL slug is a ticker (e.g.
+    "AAPL"), not a UUID. market-data peers endpoint only accepts UUIDs.
+    Resolution canonicalises the ticker before forwarding.
+
     Requires authentication. Returns 404 if the instrument is not found.
     S3 returns 200 + empty peers list for ETFs with no GICS industry.
     """
     if not getattr(request.state, "user", None):
         raise HTTPException(status_code=401, detail="Authentication required")
+    try:
+        resolved = await resolve_security_id(
+            instrument_id,
+            clients=_clients(request),
+            headers=_auth_headers(request),
+        )
+    except InstrumentNotFoundError as e:
+        raise HTTPException(status_code=404, detail=f"Instrument not found: {e.identifier}") from e
     headers = _auth_headers(request)
     clients = _clients(request)
     resp = await clients.market_data.get(
-        f"/api/v1/instruments/{instrument_id}/peers",
+        f"/api/v1/instruments/{resolved.instrument_id}/peers",
         params=dict(request.query_params),
         headers=headers,
     )
