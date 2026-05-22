@@ -130,15 +130,17 @@ function CurrentCellRenderer(params: ICellRendererParams<EnrichedHoldingRow>) {
 }
 
 function DayChangeCellRenderer(params: ICellRendererParams<EnrichedHoldingRow>) {
-  if (isPinnedBottom(params)) {
-    return <span className="font-mono text-[11px] tabular-nums text-muted-foreground text-right w-full block">—</span>;
-  }
+  // WHY pinned row falls through: the TOTAL row now shows the portfolio-level
+  // day change (sum of all position day changes). The same renderer handles
+  // both the individual-row and the totals-row cases; the bold font-semibold
+  // class distinguishes the totals row visually.
   const v = params.data?.dayChangeValue;
   return (
     <span
       className={cn(
         "font-mono text-[11px] tabular-nums text-right w-full block",
         v == null ? "text-muted-foreground" : v >= 0 ? "text-positive" : "text-negative",
+        isPinnedBottom(params) && "font-semibold",
       )}
     >
       {v == null ? "—" : fmtPnl(v)}
@@ -147,15 +149,13 @@ function DayChangeCellRenderer(params: ICellRendererParams<EnrichedHoldingRow>) 
 }
 
 function DayChangePctCellRenderer(params: ICellRendererParams<EnrichedHoldingRow>) {
-  if (isPinnedBottom(params)) {
-    return <span className="font-mono text-[11px] tabular-nums text-muted-foreground text-right w-full block">—</span>;
-  }
   const v = params.data?.dayChangePct;
   return (
     <span
       className={cn(
         "font-mono text-[11px] tabular-nums text-right w-full block",
         v == null ? "text-muted-foreground" : v >= 0 ? "text-positive" : "text-negative",
+        isPinnedBottom(params) && "font-semibold",
       )}
     >
       {v == null ? "—" : formatPercent(v / 100)}
@@ -210,7 +210,12 @@ function ValueCellRenderer(params: ICellRendererParams<EnrichedHoldingRow>) {
 
 function WeightCellRenderer(params: ICellRendererParams<EnrichedHoldingRow>) {
   if (isPinnedBottom(params)) {
-    return <span className="font-mono text-[11px] tabular-nums text-muted-foreground text-right w-full block">—</span>;
+    // Total portfolio weight is always 100% by definition.
+    return (
+      <span className="font-mono text-[11px] tabular-nums text-muted-foreground text-right w-full block font-semibold">
+        100.0%
+      </span>
+    );
   }
   const weight = params.data?.weight ?? 0;
   return (

@@ -38,7 +38,7 @@
 
 import { useQuery } from "@tanstack/react-query";
 import { useFinancialsTabData } from "@/components/instrument/hooks/useFinancialsTabData";
-import { FlatMetricsGrid } from "@/components/instrument/financials/FlatMetricsGrid";
+import { DenseMetricsGrid } from "@/components/instrument/financials/DenseMetricsGrid";
 import { IncomeStatementTable } from "@/components/instrument/financials/IncomeStatementTable";
 import { EarningsBarChart } from "@/components/instrument/financials/EarningsBarChart";
 import { AnalystSidebar } from "@/components/instrument/financials/AnalystSidebar";
@@ -109,8 +109,9 @@ export function FinancialsTab({ instrumentId }: FinancialsTabProps) {
       <div className="flex min-w-0 flex-1 flex-col overflow-y-auto">
         {/* Block 1: flat key-metrics grid. Always at the top — gives analysts
             the snapshot they need before drilling into multi-year history. */}
-        <FlatMetricsGrid
-          instrumentId={instrumentId}
+        {/* T-06/T-07: DenseMetricsGrid replaces FlatMetricsGrid (iter-2 redesign).
+            6-col, 40 cells, data-table-grid="dense" CSS driver, F1 MetricCell. */}
+        <DenseMetricsGrid
           fundamentals={fundamentals ?? null}
           snapshot={snapshot ?? null}
           // eslint-disable-next-line @typescript-eslint/no-explicit-any -- envelope→typed cast (see WHY note above)

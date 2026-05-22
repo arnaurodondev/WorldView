@@ -110,7 +110,7 @@ export function ContributorsStrip({ contributors, detractors, isLoading }: Contr
   ];
 
   return (
-    <div className="flex flex-col bg-card border-b border-border shrink-0">
+    <div className="flex flex-col bg-card border-b border-border h-full">
       {/* Section header */}
       <div className="flex h-[22px] shrink-0 items-center border-b border-border px-3">
         <span className="text-[10px] uppercase tracking-[0.06em] text-neutral-500">Top Movers</span>

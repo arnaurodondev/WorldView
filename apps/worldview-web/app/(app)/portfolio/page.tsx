@@ -46,6 +46,7 @@ import { useQueryClient } from "@tanstack/react-query";
 import { useAuth } from "@/hooks/useAuth";
 import { Skeleton } from "@/components/ui/skeleton";
 import { qk } from "@/lib/query/keys";
+import { useExposure } from "@/hooks/useExposure";
 
 // ── Portfolio chrome components ─────────────────────────────────────────────
 import { PortfolioKPIStrip } from "@/components/portfolio/PortfolioKPIStrip";
@@ -155,6 +156,13 @@ export default function PortfolioPage() {
 
   // PLAN-0070 C-1: fire the bundle endpoint to warm the cache in one round-trip.
   usePortfolioBundle({ portfolioId: activePortfolioId, accessToken });
+
+  // WHY useExposure here: PortfolioKPIStrip renders Cash and Buying Power tiles
+  // (W2 §4.2) that need exposure.cash. ExposureCurrencyStrip already calls this
+  // hook with the same portfolioId so TanStack Query deduplicates the request —
+  // zero extra network round-trips. Without this call the cash/buyingPower props
+  // default to null and the KPI tiles permanently show "—".
+  const { data: exposureData } = useExposure(activePortfolioId);
 
   // ── W2: batch-fetch 14d daily OHLCV series for SPARK column ───────────
   // Passed to SemanticHoldingsTable as context.holdingsSeries so
@@ -295,6 +303,8 @@ export default function PortfolioPage() {
               realizedPnlApprox={!useFifo}
               realizedPnlLongTerm={useFifo ? fifo!.realized_long_term : null}
               realizedPnlShortTerm={useFifo ? fifo!.realized_short_term : null}
+              cash={exposureData?.cash ?? null}
+              buyingPower={exposureData?.cash ?? null}
             />
           )}
 
@@ -350,15 +360,18 @@ export default function PortfolioPage() {
                WHY grid grid-cols-3: three equal panels need to share the full
                page width at a fixed ratio (35% / 35% / 30%) without manual px
                calculations. CSS grid enforces this regardless of content height.
-               WHY items-start: each column can have a different number of rows;
-               align to top so all columns start at the same baseline even when
-               ContributorsStrip is taller than RecentActivityStrip.
-               WHY border-t: the grid sits below SemanticHoldingsTable which
-               already has a bottom border — adding a top border here would
-               double-up. The individual panels carry their own border-b. */}
-          <div className="grid grid-cols-3 items-start border-b border-border">
+               WHY flex-1 min-h-0: the portfolio page outer container is a flex
+               column with overflow-y-auto. flex-1 makes this grid expand to fill
+               all remaining vertical space, eliminating the black void that
+               previously appeared below the strip when the page content was
+               shorter than the viewport.
+               WHY items-stretch: ensures all three columns are the same height
+               (determined by the tallest column), matching the "equal column"
+               terminal panel aesthetic. The individual panels carry h-full to
+               fill their grid cell with bg-card. */}
+          <div className="grid grid-cols-3 flex-1 min-h-0 items-stretch border-b border-border">
             {/* Col 1 — Top Movers (combined contributors + detractors) */}
-            <div className="border-r border-border">
+            <div className="border-r border-border h-full">
               <ContributorsStrip
                 contributors={contributors}
                 detractors={detractors}
@@ -367,12 +380,12 @@ export default function PortfolioPage() {
             </div>
 
             {/* Col 2 — Recent Activity (fixed-width grid table, no text overlap) */}
-            <div className="border-r border-border">
+            <div className="border-r border-border h-full">
               <RecentActivityStrip portfolioId={activePortfolioId} />
             </div>
 
             {/* Col 3 — Sector Exposure (vertical sector list with % weights) */}
-            <div>
+            <div className="h-full">
               <SectorExposurePanel
                 bySector={bySector}
                 isLoading={holdingsLoading}

@@ -300,6 +300,12 @@ export function SemanticHoldingsTable({
   // ── Enrich rows ───────────────────────────────────────────────────────────
   let totalPnl = 0;
   let totalPnlCost = 0;
+  // Accumulate portfolio-level day change across all positions that have a quote.
+  // WHY separate hasDayChange flag: if NO position has a live quote yet, the
+  // sum is 0 but it's meaningless — we'd show "+$0.00" while data is loading.
+  // Only show the total once at least one position has a real day-change value.
+  let totalDayChangeValue = 0;
+  let hasDayChange = false;
 
   const enrichedRows: EnrichedHoldingRow[] = holdings.map((h) => {
     const quote = quotes[h.instrument_id];
@@ -325,11 +331,21 @@ export function SemanticHoldingsTable({
 
     totalPnl += pnl;
     totalPnlCost += h.average_cost * h.quantity;
+    if (dayChangeValue != null) {
+      totalDayChangeValue += dayChangeValue;
+      hasDayChange = true;
+    }
 
     return { h, livePrice, freshness, value, pnl, pnlPct, weight, sector, assetClass, dayChange, dayChangePct, dayChangeValue };
   });
 
   const totalPnlPct = totalPnlCost > 0 ? (totalPnl / totalPnlCost) * 100 : 0;
+  // WHY previous-day basis: day% for the portfolio = dayChange$ / (totalValue - dayChange$).
+  // This approximates yesterday's portfolio value to compute a meaningful % return for today.
+  const prevDayValue = totalValue - totalDayChangeValue;
+  const totalDayChangePct = hasDayChange && prevDayValue > 0
+    ? (totalDayChangeValue / prevDayValue) * 100
+    : null;
 
   // ── Pinned bottom row (AG Grid totals) ──────────────────────────────────────
   // WHY pinnedBottomRowData instead of a sibling <div>: AG Grid renders pinned
@@ -359,12 +375,18 @@ export function SemanticHoldingsTable({
     value: totalValue,
     pnl: totalPnl,
     pnlPct: totalPnlPct,
-    weight: 0,
+    // WHY 100 (not 0): the TOTAL row weight is always 100% by definition —
+    // all positions together are 100% of the portfolio. The WeightCellRenderer
+    // has a pinned-bottom guard that renders this special value.
+    weight: 100,
     sector: null,
     assetClass: "",
     dayChange: null,
-    dayChangePct: null,
-    dayChangeValue: null,
+    dayChangePct: hasDayChange ? totalDayChangePct : null,
+    // WHY hasDayChange guard: only show the total when at least one position
+    // has a live quote change. Showing $0.00 while quotes are loading would
+    // mislead the trader into thinking the market is flat.
+    dayChangeValue: hasDayChange ? totalDayChangeValue : null,
   };
 
   // WHY explicit height (not h-full): this component lives inside a page-level
