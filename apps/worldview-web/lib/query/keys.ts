@@ -205,6 +205,15 @@ export const qk = {
     // stay correct.
     pageBundle: (instrumentId: string) =>
       [QK_VERSION, "instrument-page-bundle", instrumentId] as const,
+    // ── W3 Financials-tab sidebar keys ────────────────────────────────────
+    // WHY separate from shareStatistics: institutional/fund holders are slow-
+    // changing data (quarterly 13F filings) and are only needed on the Financials
+    // tab sidebar — keeping them under their own keys prevents unnecessary
+    // cache eviction when the main fundamentals invalidation fires on the Quote tab.
+    institutionalHolders: (instrumentId: string) =>
+      [QK_VERSION, "instruments", "detail", instrumentId, "institutional-holders"] as const,
+    fundHolders: (instrumentId: string) =>
+      [QK_VERSION, "instruments", "detail", instrumentId, "fund-holders"] as const,
     // ── W5 Quote-tab keys ──────────────────────────────────────────────────
     // WHY all 4 nest under ["instruments","detail",id,...]:
     // qc.invalidateQueries({ queryKey: qk.instruments.detail(id) }) cascades to
