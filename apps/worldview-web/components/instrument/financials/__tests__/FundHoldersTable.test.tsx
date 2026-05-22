@@ -60,4 +60,25 @@ describe("FundHoldersTable", () => {
     render(<FundHoldersTable fundHoldersData={undefined} />);
     expect(screen.getByText(/fund holder data not available/i)).toBeInTheDocument();
   });
+
+  it("renders empty state when data is an empty dict-of-dicts", () => {
+    // EODHD can return {} when no fund filings are available for this ticker.
+    const emptyDict: FundamentalsSectionResponse = {
+      security_id: "aapl",
+      records: [
+        {
+          id: "r1",
+          security_id: "aapl",
+          section: "fund_holders",
+          period_end: "2026-03-31",
+          period_type: "SNAPSHOT",
+          source: "eodhd",
+          ingested_at: "2026-04-01T00:00:00Z",
+          data: {},
+        },
+      ],
+    };
+    render(<FundHoldersTable fundHoldersData={emptyDict} />);
+    expect(screen.getByText(/fund holder data not available/i)).toBeInTheDocument();
+  });
 });

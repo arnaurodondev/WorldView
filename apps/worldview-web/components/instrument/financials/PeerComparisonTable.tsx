@@ -132,7 +132,7 @@ export function PeerComparisonTable({
                 // WHY push (not Link): we want row-level click on the tr element.
                 // Using Link would require nesting a tags which is invalid HTML
                 // (block element inside table row). router.push is cleaner here.
-                if (peer.ticker) router.push(`/instruments/${peer.ticker}`);
+                if (peer.ticker) router.push(`/instruments/${encodeURIComponent(peer.ticker)}`);
               }}
               title={peer.ticker ? `Go to ${peer.ticker}` : undefined}
             >

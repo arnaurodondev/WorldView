@@ -62,6 +62,14 @@ function extractHolders(data: FundamentalsSectionResponse | undefined): EohdHold
     return Object.values(firstData).filter(Boolean).slice(0, 10);
   }
 
+  // WHY empty-object check: EODHD returns {} when no institutional filings exist.
+  // isDictOfDicts({}) = false (first value is undefined). Without this guard the
+  // legacy path returns [{}] — a holder row with all-dash cells instead of the
+  // "data not available" empty state.
+  if (firstData && typeof firstData === "object" && !Array.isArray(firstData) && Object.keys(firstData as object).length === 0) {
+    return [];
+  }
+
   // Fallback: each record is one holder (legacy / test fixture format).
   return rawRecords.slice(0, 10).map((r) => r.data as unknown as EohdHolder);
 }

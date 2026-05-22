@@ -58,6 +58,13 @@ function extractHolders(data: FundamentalsSectionResponse | undefined): EohdFund
     return Object.values(firstData).filter(Boolean).slice(0, 10);
   }
 
+  // WHY empty-object check: EODHD returns {} when no fund filings exist for the
+  // ticker. isDictOfDicts({}) = false (first value is undefined). Without this
+  // guard the legacy path would return [{}] — a holder row with all-dash cells.
+  if (firstData && typeof firstData === "object" && !Array.isArray(firstData) && Object.keys(firstData as object).length === 0) {
+    return [];
+  }
+
   return rawRecords.slice(0, 10).map((r) => r.data as unknown as EohdFundHolder);
 }
 

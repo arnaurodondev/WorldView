@@ -67,4 +67,25 @@ describe("InstitutionalHoldersTable", () => {
     render(<InstitutionalHoldersTable institutionalData={INSTITUTIONAL_DATA} />);
     expect(screen.getByText("Holder")).toBeInTheDocument();
   });
+
+  it("renders empty state when data is an empty dict-of-dicts", () => {
+    // EODHD can return {} when no institutional filings exist yet.
+    const emptyDict: FundamentalsSectionResponse = {
+      security_id: "aapl",
+      records: [
+        {
+          id: "r1",
+          security_id: "aapl",
+          section: "institutional_holders",
+          period_end: "2026-03-31",
+          period_type: "SNAPSHOT",
+          source: "eodhd",
+          ingested_at: "2026-04-01T00:00:00Z",
+          data: {},
+        },
+      ],
+    };
+    render(<InstitutionalHoldersTable institutionalData={emptyDict} />);
+    expect(screen.getByText(/institutional holder data not available/i)).toBeInTheDocument();
+  });
 });

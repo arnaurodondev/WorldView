@@ -91,6 +91,35 @@ function fourYearAnnual() {
   };
 }
 
+function fourQuarterQuarterly() {
+  // 4 quarterly records Q1-Q4 FY24 — simulates EODHD quarterly endpoint data.
+  const quarters = [
+    { end: "2024-03-31", q: "Q1" },
+    { end: "2024-06-30", q: "Q2" },
+    { end: "2024-09-30", q: "Q3" },
+    { end: "2024-12-31", q: "Q4" },
+  ];
+  return {
+    security_id: "i-test-1",
+    records: quarters.map(({ end }, i) => ({
+      id: `rec-q${i}`,
+      security_id: "i-test-1",
+      section: "income_statement",
+      period_end: end,
+      period_type: "QUARTERLY" as const,
+      data: {
+        totalRevenue: 90_000_000 * (i + 1),
+        grossProfit: 35_000_000 * (i + 1),
+        operatingIncome: 22_000_000 * (i + 1),
+        netIncome: 18_000_000 * (i + 1),
+        eps: 1.2 + i * 0.2,
+      },
+      source: "eodhd",
+      ingested_at: new Date().toISOString(),
+    })),
+  };
+}
+
 beforeEach(() => {
   mockGateway.getIncomeStatement.mockReset();
 });
@@ -131,5 +160,26 @@ describe("IncomeStatementTable", () => {
     for (const label of ["Revenue", "Gross Profit", "EBIT", "Net Income", "EPS"]) {
       expect(screen.getByText(label)).toBeInTheDocument();
     }
+  });
+
+  it("renders quarterly column headers when periodType=QUARTERLY", async () => {
+    // WHY separate quarterly fixture: period_type filter must select QUARTERLY
+    // records only — mixing annual + quarterly in one fixture would pass even if
+    // the filter is broken. Isolated fixture makes the filter contract explicit.
+    mockGateway.getIncomeStatement.mockResolvedValue(fourQuarterQuarterly());
+    render(
+      <Wrapper>
+        <IncomeStatementTable instrumentId="i-test-1" periodType="QUARTERLY" />
+      </Wrapper>,
+    );
+    // Q4'24 header confirms quarterly formatting ("Q4'24" not "FY24").
+    await waitFor(() => {
+      expect(screen.getByText("Q4'24")).toBeInTheDocument();
+    });
+    expect(screen.getByText("Q1'24")).toBeInTheDocument();
+    expect(screen.getByText("Q2'24")).toBeInTheDocument();
+    expect(screen.getByText("Q3'24")).toBeInTheDocument();
+    // Section header must identify the mode.
+    expect(screen.getByText(/QUARTERLY/i)).toBeInTheDocument();
   });
 });

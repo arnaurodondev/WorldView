@@ -1,19 +1,31 @@
 /**
- * BeatMissHistoryPanel.test.tsx (T-30)
+ * BeatMissHistoryPanel.test.tsx (T-30 + QA-W3)
  *
  * WHY THIS EXISTS: Pins the beat/miss caption contract. When earnings history
  * returns with surprise data, the panel must render "NB / NM last NY" and the
  * sparkline. Tests use mocked gateway + QueryClient so no network calls fire.
+ * The empty-state "No data" branch is also covered (sparkData.length < 2).
  */
 
-import { describe, it, expect, vi } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { describe, it, expect, vi, beforeEach } from "vitest";
+import { render } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { ReactNode } from "react";
 import { BeatMissHistoryPanel } from "@/components/instrument/financials/sidebar/BeatMissHistoryPanel";
 
 // Mock auth + gateway so useQuery resolves instantly from inline data.
 vi.mock("@/lib/api-client", () => ({ useAccessToken: () => "mock-token" }));
+
+// WHY vi.hoisted: createGateway is called inside the component; hoisting the
+// mock function lets individual tests override the resolved value per-test via
+// mockResolvedValue, without re-declaring the whole vi.mock factory.
+const mockGetEarningsHistory = vi.hoisted(() => vi.fn());
+
+vi.mock("@/lib/gateway", () => ({
+  createGateway: () => ({
+    getEarningsHistory: mockGetEarningsHistory,
+  }),
+}));
 
 const MOCK_EARNINGS = {
   records: [
@@ -24,16 +36,15 @@ const MOCK_EARNINGS = {
   ],
 };
 
-vi.mock("@/lib/gateway", () => ({
-  createGateway: () => ({
-    getEarningsHistory: vi.fn().mockResolvedValue(MOCK_EARNINGS),
-  }),
-}));
-
 function wrap(children: ReactNode) {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   return <QueryClientProvider client={qc}>{children}</QueryClientProvider>;
 }
+
+beforeEach(() => {
+  mockGetEarningsHistory.mockReset();
+  mockGetEarningsHistory.mockResolvedValue(MOCK_EARNINGS);
+});
 
 describe("BeatMissHistoryPanel", () => {
   it("renders section header", async () => {
@@ -51,5 +62,12 @@ describe("BeatMissHistoryPanel", () => {
     const { findByText } = render(wrap(<BeatMissHistoryPanel instrumentId="aapl" />));
     // 1 miss out of 4 records → "1M"
     expect(await findByText("1M")).toBeInTheDocument();
+  });
+
+  it("renders No data when earnings history returns fewer than 2 records", async () => {
+    // sparkData.length < 2 triggers the "No data" fallback in the component.
+    mockGetEarningsHistory.mockResolvedValue({ records: [] });
+    const { findByText } = render(wrap(<BeatMissHistoryPanel instrumentId="empty-inst" />));
+    expect(await findByText("No data")).toBeInTheDocument();
   });
 });

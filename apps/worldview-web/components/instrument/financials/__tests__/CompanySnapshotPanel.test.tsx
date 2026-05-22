@@ -46,7 +46,7 @@ function wrap(children: ReactNode) {
 describe("CompanySnapshotPanel", () => {
   it("renders section header", async () => {
     const { findByText } = render(wrap(<CompanySnapshotPanel instrumentId="aapl" />));
-    expect(await findByText("COMPANY")).toBeInTheDocument();
+    expect(await findByText("COMPANY SNAPSHOT")).toBeInTheDocument();
   });
 
   it("renders sector label and value", async () => {

@@ -2,7 +2,7 @@
  * components/instrument/financials/DenseMetricsGrid.tsx — 6-col dense snapshot grid
  *
  * WHY THIS EXISTS: The Financials tab redesign (iter-2) replaces the 3-col
- * FlatMetricsGrid with a 6-column Bloomberg-grade density layout. 40 cells
+ * FlatMetricsGrid with a 6-column Bloomberg-grade density layout. 39 cells
  * in 8 sections give analysts the full fundamentals snapshot in one screen
  * without scrolling — matching Finviz's "Stats" block in terms of information
  * per pixel. The 6-col layout fits the ~800px left column comfortably at 11px
@@ -21,7 +21,7 @@
  * DATA SOURCE: Props from useFinancialsTabData (instrumentId → S9 fundamentals,
  *   snapshot, technicals, shareStats, splitsDividends).
  * DESIGN REFERENCE: docs/designs/0089/06-instrument-financials.md §4.1
- *   40 cells: VALUATION 6 / PROFITABILITY 6 / GROWTH 3 / BALANCE SHEET 4 /
+ *   39 cells: VALUATION 6 / PROFITABILITY 6 / GROWTH 3 / BALANCE SHEET 4 /
  *             CASH FLOW 3 / DIVIDENDS 4 / OWNERSHIP (4+3 SHORTS) / TECHNICALS 6
  */
 
@@ -122,7 +122,7 @@ export function DenseMetricsGrid({
 }: DenseMetricsGridProps) {
   return (
     // WHY data-table-grid="dense": sets --row-h: 18px and --cell-px: 6px via F1
-    // §16.3 CSS. All 40 MetricCell children pick up 6px horizontal padding from
+    // §16.3 CSS. All 39 MetricCell children pick up 6px horizontal padding from
     // --cell-px, tighter than the 8px default.
     // WHY grid-cols-6: 6 equal columns, each MetricCell occupies one slot.
     // WHY gap-0: no gap between cells — dividers come from data-table-grid CSS.

@@ -71,7 +71,7 @@ export function CompanySnapshotPanel({ instrumentId }: CompanySnapshotPanelProps
   return (
     <div className="flex flex-col gap-0.5 px-2 py-2">
       <span className="text-[9px] uppercase tracking-widest text-muted-foreground/70 mb-1">
-        COMPANY
+        COMPANY SNAPSHOT
       </span>
 
       <SnapshotRow label="SECTOR"   value={instrument.gics_sector} />

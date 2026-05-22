@@ -72,4 +72,56 @@ describe("InsiderTransactionsTable", () => {
     render(<InsiderTransactionsTable insiderData={undefined} ticker="AAPL" />);
     expect(screen.getByText(/no insider activity/i)).toBeInTheDocument();
   });
+
+  it("parses legacy flat format (one record per row)", () => {
+    const legacyData: FundamentalsSectionResponse = {
+      security_id: "aapl",
+      records: [
+        {
+          id: "r1",
+          security_id: "aapl",
+          section: "insider_transactions",
+          period_end: "2026-01-01",
+          period_type: "SNAPSHOT",
+          source: "eodhd",
+          ingested_at: "2026-01-01T00:00:00Z",
+          data: { date: "2025-12-01", owner_name: "Jane Doe", transaction_type: "BUY", shares: 1000, value: 200000 },
+        },
+      ],
+    };
+    render(<InsiderTransactionsTable insiderData={legacyData} ticker="AAPL" />);
+    expect(screen.getByText("Jane Doe")).toBeInTheDocument();
+  });
+
+  it("hides SEC link when url is not https", () => {
+    // secLink with javascript: scheme must NOT produce an <a> tag.
+    const maliciousData: FundamentalsSectionResponse = {
+      security_id: "aapl",
+      records: [
+        {
+          id: "r1",
+          security_id: "aapl",
+          section: "insider_transactions",
+          period_end: "2026-05-01",
+          period_type: "SNAPSHOT",
+          source: "eodhd",
+          ingested_at: "2026-05-01T00:00:00Z",
+          data: {
+            "0": {
+              date: "2026-04-15",
+              ownerName: "Bad Actor",
+              transactionCode: "S",
+              transactionAmount: 100,
+              transactionPrice: 50,
+              // eslint-disable-next-line no-script-url
+              secLink: "javascript:alert(1)",
+            },
+          },
+        },
+      ],
+    };
+    render(<InsiderTransactionsTable insiderData={maliciousData} ticker="AAPL" />);
+    // The SEC link must not be rendered as an <a> element.
+    expect(screen.queryByRole("link", { name: "SEC" })).not.toBeInTheDocument();
+  });
 });

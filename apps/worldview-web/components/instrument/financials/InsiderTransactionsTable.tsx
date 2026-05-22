@@ -231,7 +231,7 @@ export function InsiderTransactionsTable({
                   {tx.value != null ? formatMarketCap(tx.value) : "—"}
                 </td>
                 <td className="px-2 text-center">
-                  {tx.secLink ? (
+                  {tx.secLink && tx.secLink.startsWith("https://") ? (
                     <a
                       href={tx.secLink}
                       target="_blank"
