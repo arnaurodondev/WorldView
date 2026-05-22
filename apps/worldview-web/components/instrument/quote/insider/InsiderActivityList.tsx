@@ -32,6 +32,7 @@
 
 import type { FundamentalsSectionResponse } from "@/types/api";
 import { formatMarketCap } from "@/lib/utils";
+import { isDictOfDicts } from "@/lib/eohdUtils";
 
 // ── EODHD wire shape ──────────────────────────────────────────────────────────
 
@@ -84,16 +85,8 @@ interface NormalisedTx {
 
 // ── Extraction ────────────────────────────────────────────────────────────────
 
-/**
- * isDictOfDicts — detects EODHD's dict-of-dicts storage format
- * `{"0": {...}, "1": {...}, ...}` by checking that the first value is a
- * plain object (not a string / number / null / array).
- */
-function isDictOfDicts(obj: unknown): obj is Record<string, EohdInsiderTx> {
-  if (!obj || typeof obj !== "object" || Array.isArray(obj)) return false;
-  const first = Object.values(obj as Record<string, unknown>)[0];
-  return first !== null && typeof first === "object" && !Array.isArray(first);
-}
+// WHY no local isDictOfDicts: the shared lib/eohdUtils version fixes {"0": {}}
+// edge case and is the single source of truth for all 4 EODHD holder components.
 
 /**
  * legacyTypeToCode — converts old free-text transaction_type values to
@@ -125,7 +118,7 @@ function extractTransactions(data: FundamentalsSectionResponse | null | undefine
 
   if (isDictOfDicts(firstData)) {
     // EODHD dict-of-dicts: {"0": {ownerName, transactionCode, ...}, "1": ...}
-    return Object.values(firstData)
+    return Object.values(firstData as Record<string, EohdInsiderTx>)
       .filter(Boolean)
       .slice(0, 5)
       .map((tx) => ({

@@ -19,6 +19,7 @@
 // WHY no "use client": pure presentational — no hooks, no browser APIs.
 
 import { formatMarketCap, formatPercent } from "@/lib/utils";
+import { isDictOfDicts } from "@/lib/eohdUtils";
 import type { FundamentalsSectionResponse } from "@/types/api";
 
 // ── EODHD wire shape ──────────────────────────────────────────────────────────
@@ -42,30 +43,24 @@ interface FundHoldersTableProps {
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
-function isDictOfDicts(obj: unknown): obj is Record<string, EohdFundHolder> {
-  if (!obj || typeof obj !== "object" || Array.isArray(obj)) return false;
-  const first = Object.values(obj as Record<string, unknown>)[0];
-  return first !== null && typeof first === "object" && !Array.isArray(first);
-}
-
 function extractHolders(data: FundamentalsSectionResponse | undefined): EohdFundHolder[] {
   const rawRecords = data?.records ?? [];
   if (rawRecords.length === 0) return [];
 
   const firstData = rawRecords[0]?.data as unknown;
 
+  // WHY isDictOfDicts (shared): detects EODHD's {"0": {...}, "1": {...}} format.
+  // The shared implementation rejects {}, {"0": {}}, and {"0": null} — all
+  // cases that the previous local version mishandled (false positives / gaps).
   if (isDictOfDicts(firstData)) {
-    return Object.values(firstData).filter(Boolean).slice(0, 10);
+    return Object.values(firstData as Record<string, EohdFundHolder>).filter(Boolean).slice(0, 10);
   }
 
-  // WHY empty-object check: EODHD returns {} when no fund filings exist for the
-  // ticker. isDictOfDicts({}) = false (first value is undefined). Without this
-  // guard the legacy path would return [{}] — a holder row with all-dash cells.
-  if (firstData && typeof firstData === "object" && !Array.isArray(firstData) && Object.keys(firstData as object).length === 0) {
-    return [];
-  }
-
-  return rawRecords.slice(0, 10).map((r) => r.data as unknown as EohdFundHolder);
+  // Legacy per-record format. Filter by name to exclude malformed/empty entries.
+  return rawRecords
+    .slice(0, 10)
+    .map((r) => r.data as unknown as EohdFundHolder)
+    .filter((h) => !!h.name);
 }
 
 function changeColor(change: number | null | undefined): string {

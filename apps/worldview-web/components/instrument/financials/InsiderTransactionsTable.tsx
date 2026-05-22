@@ -26,6 +26,7 @@
 
 import { useRouter } from "next/navigation";
 import { formatMarketCap, formatPrice } from "@/lib/utils";
+import { isDictOfDicts } from "@/lib/eohdUtils";
 import type { FundamentalsSectionResponse } from "@/types/api";
 
 // ── EODHD wire shapes ─────────────────────────────────────────────────────────
@@ -68,12 +69,6 @@ interface InsiderTransactionsTableProps {
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
-function isDictOfDicts(obj: unknown): obj is Record<string, EohdInsiderTx> {
-  if (!obj || typeof obj !== "object" || Array.isArray(obj)) return false;
-  const first = Object.values(obj as Record<string, unknown>)[0];
-  return first !== null && typeof first === "object" && !Array.isArray(first);
-}
-
 function legacyTypeToCode(type: string | undefined): string | undefined {
   if (!type) return undefined;
   const u = type.toUpperCase();
@@ -90,7 +85,7 @@ function extractTransactions(data: FundamentalsSectionResponse | undefined): Nor
   const firstData = rawRecords[0]?.data as unknown;
 
   if (isDictOfDicts(firstData)) {
-    return Object.values(firstData)
+    return (Object.values(firstData as Record<string, EohdInsiderTx>))
       .filter(Boolean)
       .slice(0, 8)
       .map((tx) => ({

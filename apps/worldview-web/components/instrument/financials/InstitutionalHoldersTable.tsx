@@ -19,6 +19,7 @@
 // WHY no "use client": pure presentational — no hooks, no browser APIs.
 
 import { formatMarketCap, formatPercent } from "@/lib/utils";
+import { isDictOfDicts } from "@/lib/eohdUtils";
 import type { FundamentalsSectionResponse } from "@/types/api";
 
 // ── EODHD wire shape ──────────────────────────────────────────────────────────
@@ -46,32 +47,23 @@ interface InstitutionalHoldersTableProps {
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
-function isDictOfDicts(obj: unknown): obj is Record<string, EohdHolder> {
-  if (!obj || typeof obj !== "object" || Array.isArray(obj)) return false;
-  const first = Object.values(obj as Record<string, unknown>)[0];
-  return first !== null && typeof first === "object" && !Array.isArray(first);
-}
-
 function extractHolders(data: FundamentalsSectionResponse | undefined): EohdHolder[] {
   const rawRecords = data?.records ?? [];
   if (rawRecords.length === 0) return [];
 
   const firstData = rawRecords[0]?.data as unknown;
 
+  // WHY isDictOfDicts (shared): rejects {}, {"0": {}}, {"0": null} — all EODHD
+  // empty-data patterns. The previous local copy mishandled {"0": {}}.
   if (isDictOfDicts(firstData)) {
-    return Object.values(firstData).filter(Boolean).slice(0, 10);
+    return Object.values(firstData as Record<string, EohdHolder>).filter(Boolean).slice(0, 10);
   }
 
-  // WHY empty-object check: EODHD returns {} when no institutional filings exist.
-  // isDictOfDicts({}) = false (first value is undefined). Without this guard the
-  // legacy path returns [{}] — a holder row with all-dash cells instead of the
-  // "data not available" empty state.
-  if (firstData && typeof firstData === "object" && !Array.isArray(firstData) && Object.keys(firstData as object).length === 0) {
-    return [];
-  }
-
-  // Fallback: each record is one holder (legacy / test fixture format).
-  return rawRecords.slice(0, 10).map((r) => r.data as unknown as EohdHolder);
+  // Legacy per-record format. Filter by name to exclude empty/malformed entries.
+  return rawRecords
+    .slice(0, 10)
+    .map((r) => r.data as unknown as EohdHolder)
+    .filter((h) => !!h.name);
 }
 
 function changeColor(change: number | null | undefined): string {
