@@ -85,7 +85,8 @@ export function useQuoteSidebarData(
   lastBarTs?: string,
 ): QuoteSidebarData {
   const token = useAccessToken();
-  const enabled = !!instrumentId;
+  // WHY !!token: same auth-race guard as useInstrumentBrief (see that hook for rationale).
+  const enabled = !!instrumentId && !!token;
   // WHY factory: createGateway(token) is cheap (no network call); creating it
   // once per render avoids constructing N identical objects for N useQuery calls.
   const gw = () => createGateway(token);

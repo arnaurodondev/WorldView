@@ -99,7 +99,12 @@ export function useInstrumentBrief(
       createGateway(token).getInstrumentBrief(briefEntityId ?? ""),
     staleTime: 5 * 60 * 1000, // 5 min — brief changes at most once per session
     retry: false,              // WHY retry:false: a 404 is expected on cold cache; we handle it below
-    enabled: !!instrumentId,
+    // WHY !!token guard: the auth gate in (app)/layout.tsx blocks children until
+    // isAuthenticated=true, but in React 18 concurrent mode the context update and
+    // component render can race. Without this guard, a null-token first-render
+    // fires a 401 that puts the query into permanent error state (retry:false).
+    // The POST then also 401s → setStatus("unavailable") before token loads.
+    enabled: !!instrumentId && !!token,
   });
 
   // ── Local state ───────────────────────────────────────────────────────────
