@@ -184,6 +184,13 @@ async def get_company_overview(
             # and instruments ingested before the company_profile wave. Frontend
             # renders "—" on null (never crashes on absence).
             "founded": profile_data.get("Founded") or None,
+            # WHY cast to int: EODHD returns FullTimeEmployees as a string (e.g. "147000").
+            # int() normalises it so the frontend never has to parse a numeric string.
+            # Guard against None/empty string (field is absent for ETFs + foreign ADRs).
+            # WHY _fte_raw local: profile_data is dict[str, Any]; storing the raw value
+            # in _fte_raw and then calling str(_fte_raw) gives mypy a concrete str to
+            # pass to int() instead of the untyped Any|None from .get().
+            "full_time_employees": int(str(_fte_raw)) if (_fte_raw := profile_data.get("FullTimeEmployees")) else None,
         }
 
         # Map the market-data QuoteResponse → frontend Quote shape (best-effort; no change/change_pct).

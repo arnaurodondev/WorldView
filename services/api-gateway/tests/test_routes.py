@@ -195,6 +195,118 @@ async def test_company_overview_propagates_downstream_error(authed_client, authe
     assert response.status_code == 404
 
 
+@pytest.mark.asyncio
+async def test_company_overview_includes_full_time_employees(authed_client, authed_mock_clients) -> None:
+    """F-009 (PLAN-0089): full_time_employees is extracted from EODHD FullTimeEmployees
+    and returned as an integer in overview.instrument.
+
+    EODHD stores FullTimeEmployees as a string (e.g. "147000"); S9 must cast it to int
+    so the frontend never has to parse a numeric string.  Absent field must return None.
+    """
+    _entity_id = "01900000-0000-7000-8000-000000001099"
+
+    inst_data = {"id": _entity_id, "symbol": "AAPL", "exchange": "NASDAQ", "is_active": True}
+    # profile_data includes FullTimeEmployees as a string — mirrors real EODHD response.
+    profile_data = {
+        "records": [
+            {
+                "data": {
+                    "Name": "Apple Inc.",
+                    "Currency": "USD",
+                    "GicSector": "Information Technology",
+                    "FullTimeEmployees": "147000",
+                }
+            }
+        ]
+    }
+    ohlcv_data = {"items": [], "total": 0, "timeframe": "1d"}
+    quote_data = {"instrument_id": _entity_id, "last": "174.00", "timestamp": "2026-04-24T16:00:00Z"}
+    fundamentals_data = {
+        "security_id": _entity_id,
+        "records": [
+            {
+                "section": "highlights",
+                "period_type": "ttm",
+                "period_end_date": "2026-03-31",
+                "data": {"MarketCapitalization": 2_500_000_000_000, "PERatio": 28.5},
+            }
+        ],
+    }
+
+    def _make_resp(data: dict) -> MagicMock:
+        r = MagicMock(spec=httpx.Response)
+        r.status_code = 200
+        r.json.return_value = data
+        return r
+
+    async def _dispatch(path: str, **kwargs: object) -> MagicMock:
+        if "ohlcv" in path:
+            return _make_resp(ohlcv_data)
+        if "quotes" in path:
+            return _make_resp(quote_data)
+        if "fundamentals" in path and "company-profile" in path:
+            return _make_resp(profile_data)
+        if "fundamentals" in path:
+            return _make_resp(fundamentals_data)
+        return _make_resp(inst_data)
+
+    authed_mock_clients.market_data.get = AsyncMock(side_effect=_dispatch)
+
+    response = await authed_client.get(
+        f"/v1/companies/{_entity_id}/overview",
+        headers={"Authorization": f"Bearer {_make_jwt()}"},
+    )
+    assert response.status_code == 200
+
+    body = response.json()
+    instrument = body["instrument"]
+    # S9 must cast the EODHD string "147000" to the integer 147000.
+    assert (
+        instrument["full_time_employees"] == 147000
+    ), "FullTimeEmployees must be cast to int (not returned as the raw EODHD string)"
+
+
+@pytest.mark.asyncio
+async def test_company_overview_full_time_employees_absent_returns_none(authed_client, authed_mock_clients) -> None:
+    """F-009: full_time_employees is None when EODHD omits the field (ETFs, foreign ADRs)."""
+    _entity_id = "01900000-0000-7000-8000-000000001098"
+
+    inst_data = {"id": _entity_id, "symbol": "SPY", "exchange": "NYSE", "is_active": True}
+    # profile_data deliberately omits FullTimeEmployees — typical for ETFs.
+    profile_data = {"records": [{"data": {"Name": "SPDR S&P 500 ETF", "Currency": "USD"}}]}
+    ohlcv_data = {"items": [], "total": 0, "timeframe": "1d"}
+    quote_data = {"instrument_id": _entity_id, "last": "530.00", "timestamp": "2026-04-24T16:00:00Z"}
+    fundamentals_data = {"security_id": _entity_id, "records": []}
+
+    def _make_resp(data: dict) -> MagicMock:
+        r = MagicMock(spec=httpx.Response)
+        r.status_code = 200
+        r.json.return_value = data
+        return r
+
+    async def _dispatch(path: str, **kwargs: object) -> MagicMock:
+        if "ohlcv" in path:
+            return _make_resp(ohlcv_data)
+        if "quotes" in path:
+            return _make_resp(quote_data)
+        if "fundamentals" in path and "company-profile" in path:
+            return _make_resp(profile_data)
+        if "fundamentals" in path:
+            return _make_resp(fundamentals_data)
+        return _make_resp(inst_data)
+
+    authed_mock_clients.market_data.get = AsyncMock(side_effect=_dispatch)
+
+    response = await authed_client.get(
+        f"/v1/companies/{_entity_id}/overview",
+        headers={"Authorization": f"Bearer {_make_jwt()}"},
+    )
+    assert response.status_code == 200
+
+    body = response.json()
+    assert body["instrument"]["full_time_employees"] is None
+
+
 # ── PLAN-0059 I-5: instrument page-bundle ─────────────────────────────
 
 
@@ -1217,3 +1329,79 @@ async def test_entity_graph_resilient_to_missing_fields(authed_client, authed_mo
     assert len(body["nodes"]) == 1  # center only
     assert body["nodes"][0]["size"] == 2
     assert body["edges"] == []
+
+
+# ── F-010: UUID validation on instrument_id path params ──────────────────────
+
+
+@pytest.mark.parametrize(
+    "bad_id",
+    [
+        "not-a-uuid",
+        "AAPL",
+        "screen",
+        "'; DROP TABLE instruments; --",
+        "12345678-1234-1234-1234",  # truncated UUID
+        "javascript:alert(1)",
+    ],
+)
+@pytest.mark.asyncio
+async def test_market_routes_reject_non_uuid_instrument_id(authed_client, bad_id: str) -> None:
+    """Routes with instrument_id: UUID path param return 422 for non-UUID inputs.
+
+    WHY: FastAPI auto-validates UUID path params and returns 422 for malformed
+    inputs, stopping invalid IDs at the S9 boundary before they reach asyncpg
+    or downstream services (F-010 security fix).
+    """
+    resp = await authed_client.get(
+        f"/v1/fundamentals/{bad_id}/snapshot",
+        headers={"Authorization": f"Bearer {_DUMMY_JWT}"},
+    )
+    assert resp.status_code == 422, f"Expected 422 for malformed instrument_id={bad_id!r}, got {resp.status_code}"
+
+
+@pytest.mark.asyncio
+async def test_market_routes_accept_valid_uuid(authed_client, authed_mock_clients) -> None:
+    """Routes with instrument_id: UUID path param accept valid UUIDs without 422.
+
+    WHY: The UUID annotation must not block valid UUID inputs — response may be
+    any non-422 status code depending on downstream mock state.
+    """
+    authed_mock_clients.market_data.get = AsyncMock(return_value=_downstream_200())
+
+    resp = await authed_client.get(
+        f"/v1/fundamentals/{_INSTR_ID}/snapshot",
+        headers={"Authorization": f"Bearer {_DUMMY_JWT}"},
+    )
+    # Must NOT be 422 — a valid UUID is accepted.
+    assert resp.status_code != 422, f"Valid UUID should not return 422, got {resp.status_code}"
+
+
+@pytest.mark.parametrize(
+    "route_suffix",
+    [
+        "snapshot",
+        "technicals",
+        "share-statistics",
+        "insider-transactions",
+        "institutional-holders",
+        "fund-holders",
+        "earnings-trend",
+        "earnings-annual-trend",
+        "splits-dividends",
+        "income-statement",
+        "intraday-stats",
+        "multi-period-returns",
+        "price-levels",
+    ],
+)
+@pytest.mark.asyncio
+async def test_fundamentals_routes_reject_non_uuid_id(authed_client, route_suffix: str) -> None:
+    """All /v1/fundamentals/{instrument_id}/... routes reject non-UUID inputs with 422."""
+    resp = await authed_client.get(
+        f"/v1/fundamentals/not-a-uuid/{route_suffix}",
+        headers={"Authorization": f"Bearer {_DUMMY_JWT}"},
+    )
+    assert resp.status_code == 422, (
+        f"Expected 422 for non-UUID id on /v1/fundamentals/not-a-uuid/{route_suffix}, " f"got {resp.status_code}"
+    )

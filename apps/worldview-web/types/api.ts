@@ -156,6 +156,11 @@ export interface Instrument {
   // T-S2-02 (W5): exposed from company_profiles.data JSONB via S9 overview endpoint.
   // CompanyAboutCard renders "—" on null. Field path: overview.instrument.founded.
   founded: string | null;
+  // WHY number | null: EODHD "General.FullTimeEmployees" is a string in the raw
+  // response; S9 casts it to int before returning so the frontend receives a number.
+  // Absent for ETFs and foreign ADRs — CompanySnapshotPanel renders "—" on null.
+  // F-009 (PLAN-0089): exposed to render the EMPLOYEES row in CompanySnapshotPanel.
+  full_time_employees: number | null;
 }
 
 export interface OHLCVBar {

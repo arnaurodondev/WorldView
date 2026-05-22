@@ -76,6 +76,12 @@ export function CompanySnapshotPanel({ instrumentId }: CompanySnapshotPanelProps
 
       <SnapshotRow label="SECTOR"   value={instrument.gics_sector} />
       <SnapshotRow label="INDUSTRY" value={instrument.gics_industry} />
+      {/* WHY toLocaleString(): formats 147000 → "147,000" for readability.
+          Spec: docs/designs/0089/06-instrument-financials.md §5.2 (F-009). */}
+      <SnapshotRow
+        label="EMPLOYEES"
+        value={instrument.full_time_employees ? instrument.full_time_employees.toLocaleString() : undefined}
+      />
       <SnapshotRow label="COUNTRY"  value={hq} />
 
       {description && (
