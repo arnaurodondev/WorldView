@@ -132,21 +132,13 @@ export function FinancialsTab({ instrumentId }: FinancialsTabProps) {
         <EarningsBarChart instrumentId={instrumentId} />
       </div>
 
-      {/* ── Right column — fixed 280px sidebar.
-          WHY w-[280px] shrink-0: locked width per spec; shrink-0 prevents the
-          flex parent from shrinking the sidebar when the left column has
-          unusually long content. */}
-      <div className="w-[280px] shrink-0">
+      {/* ── Right column — fixed 240px sidebar (T-24: narrowed from 280px to give
+          left column more room for 6-col DenseMetricsGrid and InsiderTable). */}
+      <div className="w-[240px] shrink-0">
         <AnalystSidebar
-          // WHY pull from fundamentals (not snapshot): analyst counts live on
-          // Fundamentals (analyst_*_count fields). targetPrice → analyst_target_price.
-          strongBuy={fundamentals?.analyst_strong_buy_count ?? null}
-          buy={fundamentals?.analyst_buy_count ?? null}
-          hold={fundamentals?.analyst_hold_count ?? null}
-          sell={fundamentals?.analyst_sell_count ?? null}
-          strongSell={fundamentals?.analyst_strong_sell_count ?? null}
-          targetPrice={fundamentals?.analyst_target_price ?? null}
-          updatedAt={fundamentals?.updated_at ?? null}
+          instrumentId={instrumentId}
+          fundamentals={fundamentals ?? null}
+          snapshot={snapshot ?? null}
         />
       </div>
     </div>
