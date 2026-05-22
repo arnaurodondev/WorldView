@@ -1,51 +1,34 @@
 /**
- * IntelligenceTab — PLAN-0090 T-D-04 — orchestrator for the Intelligence tab.
+ * IntelligenceTab — W7 T-16 — orchestrator for the Intelligence tab.
  *
- * WHY THIS EXISTS (PRD-0088 §6.9):
- * The new Intelligence tab is a 3-column grid:
- *   left  (col-span-3) : <NewsColumn />          — news rail
- *   center(col-span-6) : <GraphColumn />          — brief + graph
- *   right (col-span-3) : <ContextPanel />         — entity / node detail
+ * WHY THIS EXISTS (PRD-0089 §6.9):
+ * The Intelligence tab is a 3-column grid (14-col base, 4+7+3):
+ *   left   (col-span-4) : <NewsColumn />   — dense 18px news rail
+ *   center (col-span-7) : <GraphColumn />  — brief + sigma.js graph
+ *   right  (col-span-3) : <ContextPanel /> — entity overview / node detail
  *
- * The previous IntelligenceTab.tsx (sibling file at ../IntelligenceTab.tsx) was a
- * single ~1330-line component that stacked summary cards, the graph and filters,
- * the brief and contradictions all in one vertical scroll. That mode does not
- * fit the redesign — the new layout puts the three views side-by-side so the
- * analyst can read news while exploring the graph and inspecting a node without
- * losing context.
+ * WHY 14-COL (not 12): W7 design doc §3 — the extra 2 columns give the
+ * graph center more breathing room (7/14 = 50% same ratio, but 4/14 vs 3/12
+ * widens the news rail from 25% → 28.6% to accommodate 18px row density).
  *
- * STATE OWNERSHIP — the only state in this file is `selectedNodeId: string|null`.
- * It is owned here (and not inside GraphColumn) so the right-hand ContextPanel
- * can read it AND the center GraphColumn can reflect it. Hoisting selection up
- * to the smallest common parent is the canonical React pattern; it also keeps
- * the children fully presentational and trivially testable.
+ * STATE OWNERSHIP — `selectedNodeId` is lifted here so ContextPanel (right)
+ * and GraphColumn (center) share a single source of truth. Keeping selection
+ * at the smallest common parent avoids a context provider for a single string.
  *
- * DATA FETCHING — this file is intentionally a thin layout. All gateway calls
- * live inside the children (GraphColumn owns brief+graph; NewsColumn owns
- * articles; ContextPanel owns entity detail). Past versions co-fetched here
- * and prop-drilled — that approach made the cache shape implicit and broke
- * whenever a child added a new field.
- *
- * WHY only `entityId` (instrumentId removed): every downstream child consumes
- * the KG entity id (S9 routes are entity-scoped). The instrumentId from the
- * page bundle is already cached by TanStack Query at the layout level so the
- * children that need it (e.g. quote/financials) read it independently.
+ * HOTKEY SCOPE — IntelligenceTab pushes the "page" scope on mount and pops
+ * it on unmount. This activates the j/k/Enter news bindings (T-17) and the
+ * 1/2/3/g/r/Esc graph bindings (T-18) which are registered under scope="page"
+ * by their respective columns.
  */
 
 "use client";
-// WHY "use client": useState plus useQuery-driven children all require the
-// React client runtime. The whole tab is a client island.
+// WHY "use client": useState + useEffect + useHotkeyScope require the browser.
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
+import { useHotkeyScope } from "@/contexts/HotkeyContext";
 import { NewsColumn } from "./news/NewsColumn";
 import { GraphColumn } from "./graph/GraphColumn";
 import { ContextPanel } from "./context/ContextPanel";
-
-// ── Props ────────────────────────────────────────────────────────────────────
-//
-// WHY just entityId: see file header. The page-bundle hook already caches the
-// instrument-level data so children that need an instrumentId can pull it from
-// the query cache without prop-drilling.
 
 export interface IntelligenceTabProps {
   /** Authoritative KG entity_id for the instrument being viewed. */
@@ -53,31 +36,32 @@ export interface IntelligenceTabProps {
 }
 
 export function IntelligenceTab({ entityId }: IntelligenceTabProps) {
-  // ── Selected-node state (lifted up) ───────────────────────────────────────
-  // WHY useState here (not inside GraphColumn): the right-hand ContextPanel
-  // needs to know which node is selected to toggle between "entity overview"
-  // and "node detail" modes. Lifting selection up to the smallest common
-  // parent keeps the two children in sync without a context provider.
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
 
+  // Push "page" scope so j/k/Enter (news) and 1/2/3/g/r/Esc (graph) bindings
+  // are active while this tab is mounted. Pop on unmount / tab switch.
+  const { pushScope, popScope } = useHotkeyScope();
+  useEffect(() => {
+    pushScope("page");
+    return () => popScope("page");
+  }, [pushScope, popScope]);
+
   return (
-    // WHY grid grid-cols-12: PRD-0088 §6.9 specifies a 12-column layout where
-    // the news rail is 3/12 (≈25%), the graph is 6/12 (50%), and the context
-    // rail is 3/12. h-full + overflow-hidden lock the tab to the parent box
-    // (InstrumentPageClient's `<div className="flex-1 min-h-0 overflow-hidden">`).
-    // Each column then owns its own scroll context.
-    <div className="grid grid-cols-12 h-full overflow-hidden">
-      {/* ── LEFT: news rail (3/12) ──────────────────────────────────────────
-          overflow-y-auto so the article list scrolls inside this column
-          without lifting the whole tab. border-r separates from the graph. */}
-      <div className="col-span-3 overflow-y-auto border-r border-border">
+    // WHY grid-cols-14: W7 §3 — 4+7+3 split. Literal class so JIT scanner picks it up.
+    // h-full + overflow-hidden lock the tab to the parent's scroll context;
+    // each column owns its own overflow independently.
+    <div className="grid grid-cols-14 h-full overflow-hidden">
+      {/* ── LEFT: dense news rail (4/14 ≈ 28.6%) ──────────────────────────
+          Extra column vs. previous 3/12 to accommodate 18px DenseArticleRow
+          density — wider rail shows more of each headline before truncation. */}
+      <div className="col-span-4 overflow-y-auto border-r border-border">
         <NewsColumn instrumentId={entityId} />
       </div>
 
-      {/* ── CENTER: graph + brief (6/12) ────────────────────────────────────
-          GraphColumn manages its own internal layout (brief on top, toolbar,
-          graph fills remaining height) so this slot is just `flex flex-col`. */}
-      <div className="col-span-6 flex flex-col">
+      {/* ── CENTER: graph + brief (7/14 = 50%) ─────────────────────────────
+          GraphColumn manages its own internal layout (brief strip on top,
+          depth toolbar, sigma.js canvas fills remaining height). */}
+      <div className="col-span-7 flex flex-col border-r border-border">
         <GraphColumn
           entityId={entityId}
           selectedNodeId={selectedNodeId}
@@ -85,17 +69,15 @@ export function IntelligenceTab({ entityId }: IntelligenceTabProps) {
         />
       </div>
 
-      {/* ── RIGHT: context panel (3/12) ────────────────────────────────────
-          When selectedNodeId === null → entity-overview mode.
-          When selectedNodeId !== null → node-detail mode + Back to overview.
-          The panel does its own data fetching for entity detail and graph,
-          keyed by entityId — see components/instrument/intelligence/context/
-          ContextPanel.tsx for the canonical implementation contract. */}
-      <div className="col-span-3 overflow-y-auto border-l border-border">
+      {/* ── RIGHT: context panel (3/14 ≈ 21.4%) ────────────────────────────
+          selectedNodeId === null → entity-overview (5-block stack).
+          selectedNodeId !== null → node-detail (NodeDetailCard + paths). */}
+      <div className="col-span-3 overflow-y-auto">
         <ContextPanel
           entityId={entityId}
           selectedNodeId={selectedNodeId}
           onClearSelection={() => setSelectedNodeId(null)}
+          onNodeSelect={setSelectedNodeId}
         />
       </div>
     </div>

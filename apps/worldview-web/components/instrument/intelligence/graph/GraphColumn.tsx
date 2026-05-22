@@ -1,5 +1,5 @@
 /**
- * GraphColumn — middle column of Intelligence tab (PRD-0088 §6.9 / W7 T-06).
+ * GraphColumn — middle column of Intelligence tab (PRD-0088 §6.9 / W7 T-06 / T-18).
  * Renders: StructuredBrief → GraphStats strip → GraphToolbar → sigma.js entity graph.
  * Owns depth + typeFilters; `selectedNodeId` lives in the parent IntelligenceTab.
  *
@@ -18,18 +18,24 @@
  * S9 does not expose a backend-measured latency field on BriefingResponse. We
  * measure round-trip time client-side with performance.now() so the footer strip
  * shows the analyst how stale/fast the data is ("312 ms" vs "cached" feel).
+ *
+ * WHY GRAPH HOTKEYS (T-18):
+ * 1/2/3 for depth, r for refresh, Esc to clear selection, g to reset view.
+ * Registered under scope="page" so they only fire when the Intelligence tab
+ * is active (IntelligenceTab pushes "page" scope on mount).
  */
 
 "use client";
 // WHY "use client": useState, useRef, useEffect, useQuery — all browser-only.
 
-import { useEffect, useMemo, useRef, useState } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useEffect, useMemo, useRef, useState, useCallback } from "react";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import dynamic from "next/dynamic";
 import { RefreshCw } from "lucide-react";
 import { useAuth } from "@/hooks/useAuth";
 import { createGateway } from "@/lib/gateway";
 import { qk } from "@/lib/query/keys";
+import { useHotkeyScope } from "@/contexts/HotkeyContext";
 import { GraphToolbar } from "@/components/instrument/graph/GraphToolbar";
 import { EntityGraphErrorBoundary } from "@/components/instrument/EntityGraphErrorBoundary";
 import { StructuredBrief } from "@/components/brief/StructuredBrief";
@@ -66,6 +72,7 @@ export interface GraphColumnProps {
 
 export function GraphColumn({ entityId, selectedNodeId, onNodeSelect }: GraphColumnProps) {
   const { accessToken } = useAuth();
+  const queryClient = useQueryClient();
   const [depth, setDepth] = useState<number>(2);
   const [typeFilters, setTypeFilters] = useState<string[]>([]);
   // WHY ref for latency: we measure performance.now() inside the queryFn
@@ -96,7 +103,6 @@ export function GraphColumn({ entityId, selectedNodeId, onNodeSelect }: GraphCol
   } = useQuery<EntityGraphData | null>({
     queryKey: qk.instruments.entityGraph(entityId, depth),
     queryFn: async ({ signal }) => {
-      // Record start time for client-side latency measurement.
       graphFetchStartRef.current = performance.now();
       const timeout = GRAPH_TIMEOUT_MS[depth] ?? 4000;
       const ctrl = new AbortController();
@@ -137,6 +143,73 @@ export function GraphColumn({ entityId, selectedNodeId, onNodeSelect }: GraphCol
   // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => { onNodeSelect(null); }, [entityId]);
 
+  // ── Graph hotkeys (T-18) ──────────────────────────────────────────────────
+  const { registry } = useHotkeyScope();
+
+  const handleRefresh = useCallback(() => {
+    void queryClient.invalidateQueries({ queryKey: qk.instruments.entityGraph(entityId, depth) });
+    console.debug("[intelligence] graph.refresh", { entityId, depth });
+  }, [queryClient, entityId, depth]);
+
+  // g → reset view: clear type filters + deselect node (return to overview).
+  const handleResetView = useCallback(() => {
+    setTypeFilters([]);
+    onNodeSelect(null);
+    console.debug("[intelligence] graph.reset");
+  }, [onNodeSelect]);
+
+  useEffect(() => {
+    const un1 = registry.register({
+      id: "intelligence.graph.depth1",
+      chord: "1",
+      scope: "page",
+      group: "View",
+      label: "Graph depth 1",
+      handler: (e) => { e.preventDefault(); setDepth(1); },
+    });
+    const un2 = registry.register({
+      id: "intelligence.graph.depth2",
+      chord: "2",
+      scope: "page",
+      group: "View",
+      label: "Graph depth 2",
+      handler: (e) => { e.preventDefault(); setDepth(2); },
+    });
+    const un3 = registry.register({
+      id: "intelligence.graph.depth3",
+      chord: "3",
+      scope: "page",
+      group: "View",
+      label: "Graph depth 3",
+      handler: (e) => { e.preventDefault(); setDepth(3); },
+    });
+    const unR = registry.register({
+      id: "intelligence.graph.refresh",
+      chord: "r",
+      scope: "page",
+      group: "Action",
+      label: "Refresh graph",
+      handler: (e) => { e.preventDefault(); handleRefresh(); },
+    });
+    const unG = registry.register({
+      id: "intelligence.graph.reset",
+      chord: "g",
+      scope: "page",
+      group: "View",
+      label: "Reset graph view",
+      handler: (e) => { e.preventDefault(); handleResetView(); },
+    });
+    const unEsc = registry.register({
+      id: "intelligence.graph.esc",
+      chord: "escape",
+      scope: "page",
+      group: "Navigation",
+      label: "Clear node selection",
+      handler: (e) => { e.preventDefault(); onNodeSelect(null); },
+    });
+    return () => { un1(); un2(); un3(); unR(); unG(); unEsc(); };
+  }, [registry, handleRefresh, handleResetView, onNodeSelect]);
+
   const availableEntityTypes = useMemo<string[]>(() => {
     if (!graphData?.nodes?.length) return [];
     const s = new Set<string>();
@@ -160,8 +233,6 @@ export function GraphColumn({ entityId, selectedNodeId, onNodeSelect }: GraphCol
   const handleNodeClick = (id: string) => onNodeSelect(selectedNodeId === id ? null : id);
   const isTimeout = isError && graphErr instanceof Error && graphErr.message === "GRAPH_TIMEOUT";
 
-  // Brief renders when structured content is available (lead or sections).
-  // MarkdownContent over raw narrative is intentionally removed — it lost citation context.
   const hasBriefContent = !!(brief?.lead || (brief?.sections && brief.sections.length > 0));
 
   return (

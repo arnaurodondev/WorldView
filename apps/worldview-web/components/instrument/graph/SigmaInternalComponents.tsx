@@ -69,6 +69,8 @@ export interface NodeTooltip {
 export interface EdgeTooltip {
   label: string;
   weight: number;
+  /** Up to 3 evidence text snippets sourced from relation_evidence_raw (W7 T-19). */
+  evidence_snippets: string[];
   x: number;
   y: number;
 }
@@ -102,7 +104,13 @@ export function GraphEvents({ centerEntityId, onNodeHover, onEdgeHover, onNodeCl
       enterEdge: ({ edge, event }) => {
         const graph = sigma.getGraph();
         const attrs = graph.getEdgeAttributes(edge);
-        onEdgeHover({ label: attrs.label as string, weight: attrs.weight as number, x: event.x, y: event.y });
+        onEdgeHover({
+          label: attrs.label as string,
+          weight: attrs.weight as number,
+          evidence_snippets: (attrs.evidence_snippets as string[] | undefined) ?? [],
+          x: event.x,
+          y: event.y,
+        });
       },
       leaveEdge: () => onEdgeHover(null),
       clickNode: ({ node }) => {
@@ -179,7 +187,13 @@ export function GraphLoader({ data, centerEntityId, layout }: GraphLoaderProps) 
       if (graph.hasNode(edge.source) && graph.hasNode(edge.target) && edge.source !== edge.target) {
         if (!graph.hasEdge(edge.source, edge.target)) {
           graph.addEdge(edge.source, edge.target, {
-            id: edge.id, label: edge.label, weight: edge.weight,
+            id: edge.id,
+            label: edge.label,
+            weight: edge.weight,
+            // WHY store evidence_snippets on graphology attrs: EdgeTooltipPanel
+            // reads them via sigma.getEdgeAttributes() in the enterEdge event
+            // handler — avoids a separate lookup into the raw EntityGraph data.
+            evidence_snippets: edge.evidence_snippets ?? [],
             size: Math.max(0.5, edge.weight * 2),
             color: "#18181B",
           });
@@ -335,7 +349,7 @@ export function NodeTooltipPanel({ tooltip }: { tooltip: NodeTooltip }) {
 export function EdgeTooltipPanel({ tooltip }: { tooltip: EdgeTooltip }) {
   const displayLabel = tooltip.label.replace(/_/g, " ").toLowerCase();
   return (
-    <div className="pointer-events-none absolute z-50 rounded-[2px] border border-border/50 bg-card px-3 py-2"
+    <div className="pointer-events-none absolute z-50 max-w-[280px] rounded-[2px] border border-border/50 bg-card px-3 py-2"
       style={{ left: tooltip.x + 12, top: tooltip.y - 8 }}>
       <p className="text-xs font-medium uppercase tracking-wider text-foreground">{displayLabel}</p>
       {/* WHY tabular-nums + font-mono: numeric weight value; tabular-nums prevents
@@ -343,6 +357,18 @@ export function EdgeTooltipPanel({ tooltip }: { tooltip: EdgeTooltip }) {
       <p className="mt-0.5 font-mono text-[10px] tabular-nums text-muted-foreground">
         Strength: {tooltip.weight.toFixed(2)}
       </p>
+      {/* WHY evidence snippets (T-19): surfaces the raw source text that supports
+          this relation claim. Analysts can evaluate credibility without leaving
+          the graph. Limited to 2 snippets to keep the tooltip compact. */}
+      {tooltip.evidence_snippets.length > 0 && (
+        <div className="mt-1.5 space-y-1 border-t border-border/30 pt-1.5">
+          {tooltip.evidence_snippets.slice(0, 2).map((snippet, i) => (
+            <p key={i} className="text-[9px] text-muted-foreground/80 leading-tight line-clamp-2">
+              "{snippet}"
+            </p>
+          ))}
+        </div>
+      )}
     </div>
   );
 }
