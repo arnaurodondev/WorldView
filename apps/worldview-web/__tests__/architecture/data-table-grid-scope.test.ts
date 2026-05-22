@@ -39,7 +39,9 @@ const ALLOWED_SURFACES: readonly string[] = [
   "components/portfolio/",
   "features/portfolio/",
   "app/(app)/portfolio/",
-  // 4. Financials FlatMetricsGrid
+  // 4. Financials tab surfaces: DenseMetricsGrid, IncomeStatementTable,
+  //    EarningsBarChart, PeerComparisonTable, InsiderTransactionsTable,
+  //    InstitutionalHoldersTable, FundHoldersTable (all data-table-grid opt-in).
   "components/instrument/financials/",
   // 4b. W5 Quote-tab density surfaces (PRD-0089 W5, §1.6):
   //   MultiPeriodReturnsStrip, IntradayStatsBand, MetricGrid4Col, CompanyAboutCard,
