@@ -15,9 +15,14 @@ import { formatPrice } from "@/lib/utils";
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
-/** Extract fiscal year from an ISO date string (e.g. "2024-12-31" → "FY24"). */
+/**
+ * Extract 2-digit fiscal year from an ISO date string (e.g. "2024-12-31" → "FY24").
+ * WHY slice(2,4): EODHD dates are "YYYY-MM-DD". Chars at index 2-3 are the
+ * last two digits of the 4-digit year ("24" from "2024"). This is intentional
+ * — FY-prefixed 2-digit years are the standard display on Bloomberg terminals.
+ */
 function fmtYear(date: string): string {
-  const year = date.slice(2, 4); // "24"
+  const year = date.slice(2, 4); // e.g. "2024-09-30" → "24"
   return `FY${year}`;
 }
 
@@ -63,8 +68,18 @@ interface EarningsMiniListProps {
 
 export function EarningsMiniList({ data, isLoading = false }: EarningsMiniListProps) {
   const rawRecords = data?.records ?? [];
-  // slice(-4): most recent 4 annual records (ascending order); reverse() = newest first.
-  const records: EarningsData[] = rawRecords.slice(-4).reverse().map((r) => r.data as EarningsData);
+  // WHY .sort() before slice(-4): the backend query_fundamentals() now orders
+  // by period_end_date ASC, but we add a safety sort here so the component
+  // is correct even against unordered responses (e.g. older cached payloads).
+  // Sorting by `date` string is safe because EODHD uses ISO 8601 (YYYY-MM-DD)
+  // which sorts lexicographically identically to chronologically.
+  // slice(-4) then takes the 4 MOST RECENT records; reverse() → newest first.
+  const records: EarningsData[] = rawRecords
+    .map((r) => r.data as EarningsData)
+    .filter((r) => !!r.date)
+    .sort((a, b) => (a.date ?? "").localeCompare(b.date ?? "")) // ascending by date string
+    .slice(-4) // last 4 = most recent
+    .reverse(); // newest first for display
 
   const isEmpty = !isLoading && records.length === 0;
 
