@@ -158,7 +158,13 @@ export function PredictionMarketsWidget() {
   // WHY include categoryFilter in queryKey: TanStack Query refetches when the
   // key changes; switching from "all" to "macro" must trigger a new request
   // with the higher limit, otherwise the cache returns the smaller list.
-  const effectiveLimit = categoryFilter ? 50 : 25;
+  // WHY 100/75: default sort is now volume_24h DESC so we need a larger pool
+  // to buffer filtering noise (some high-volume markets may not match the
+  // active category filter). Previous 25/50 was sized for updated_at ordering
+  // where markets were clustered by ingestion batch — not relevant once sorted
+  // by volume. 75 open markets fetched → typically 6 high-volume ones surface
+  // after filtering.
+  const effectiveLimit = categoryFilter ? 100 : 75;
   const { data, isLoading, isError, refetch } = useQuery({
     queryKey: ["dashboard-prediction-markets", categoryFilter, effectiveLimit],
     queryFn: () =>
@@ -191,14 +197,16 @@ export function PredictionMarketsWidget() {
   const filteredMarkets = categoryFilter
     ? allMarkets.filter((m) => categorize(m.title) === categoryFilter)
     : allMarkets;
-  const topMarkets = filteredMarkets.slice(0, 3);
+  // WHY 6: user requested 5-6 visible rows. 6 fills the widget height without
+  // crowding; the "View all" link below handles discovery of the full 500+ set.
+  const topMarkets = filteredMarkets.slice(0, 6);
   const totalMarkets = data?.total ?? 0;
 
   // ── Per-row history fetch (PLAN-0048 D-2) ──────────────────────────────────
   // WHY useQueries (not per-row useQuery in a child component): hooks must be
   // called at the top of the component, not conditionally inside a `.map()`.
   // useQueries fans out one query per market in a single hook call, returning
-  // an aligned array of results. With at most 3 rows the parallelism is
+  // an aligned array of results. With at most 6 rows the parallelism is
   // bounded; staleTime=60s prevents repeated fetches when the user toggles
   // ECON or the parent re-renders.
   // WHY enabled gate on accessToken: the gateway requires a token; skipping

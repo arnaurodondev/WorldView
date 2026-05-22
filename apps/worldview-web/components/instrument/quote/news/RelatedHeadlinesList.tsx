@@ -62,7 +62,10 @@ interface RelatedHeadlinesListProps {
 export function RelatedHeadlinesList({ data, isLoading = false }: RelatedHeadlinesListProps) {
   const router = useRouter();
 
-  const articles = data?.articles.slice(0, 5) ?? [];
+  // WHY optional chaining on .articles: RankedNewsResponse may arrive as `{}`
+  // if the S9 endpoint returns a partial shape. data?.articles?.slice() guards
+  // against "Cannot read properties of undefined (reading 'slice')".
+  const articles = data?.articles?.slice(0, 5) ?? [];
   const isEmpty = !isLoading && articles.length === 0;
 
   return (

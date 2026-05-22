@@ -3,10 +3,10 @@
 **PRD**: 0089 platform page redesign
 **Design**: `docs/designs/0089/06-instrument-financials.md` (iter-2, 506 lines)
 **Audit**: `docs/designs/0089/oq/06-instrument-financials-CORNERS-AUDIT.md` (39 corners)
-**Sibling foundation**: F1 (design system, shipped) / F2 (entity ID, shipped) / W1 (global shell, in flight) / W2 (portfolio overview, in flight)
-**Status**: ready-to-execute
+**Sibling foundation**: F1 (design system, shipped) / F2 (entity ID, shipped) / W1 (global shell, shipped) / W2 (portfolio overview, shipped) / W5 (Quote tab, shipped 2026-05-21)
+**Status**: ready-to-execute (W5 amendment applied — see §3 note below)
 **Estimated**: 6–7 engineer-days
-**Branch**: `feat/plan-0089-w3` (off the W2 integration head)
+**Branch**: `feat/plan-0089-w3` (off the W2/W5 integration head)
 
 ---
 
@@ -102,18 +102,20 @@ If any check fails, stop and report — don't improvise.
 
 ## §3. Backend dependencies (Wave 3 ships these)
 
-| ID | Service | Change | LOC est. |
-|----|---------|--------|----------|
-| T-S9-01 | api-gateway | Add `GET /v1/fundamentals/{id}/institutional-holders` proxy → S3 `/institutional-holders` | ~15 |
-| T-S9-02 | api-gateway | Add `GET /v1/fundamentals/{id}/fund-holders` proxy → S3 `/fund-holders` | ~15 |
-| T-S9-03 | api-gateway | Add `GET /v1/instruments/{id}/peers?n=5` proxy → S2 `/instruments/{id}/peers` | ~15 |
-| T-S2-04 | market-data | Add `GET /v1/instruments/{id}/peers?n=5` — SQL: top-N market-cap peers in same `gics_industry`, 24h cache | ~60 |
-| T-S8-05 | rag-chat | Confirm `POST /v1/briefings/instrument/{id}/generate` lazy endpoint exists (DISCUSS-7 / Wave E backend lock). If not, ship it: enqueue brief generation, return 202 + brief_id | ~60 (only if missing) |
-| T-S8-06 | rag-chat | Drop `:user_id` suffix from `briefing:instrument:v2:` cache key (DISCUSS-7) | ~5 |
-| T-S9-07 | api-gateway | Add tests for T-S9-01/02/03 (3 tests in `tests/test_routes.py`) | ~50 |
-| T-S2-08 | market-data | Add tests for T-S2-04 (peer endpoint unit + integration) | ~80 |
+> **W5 amendment (2026-05-21)**: T-S9-03, T-S2-04, T-S8-05, T-S8-06, T-S9-07 (peers tests), T-S2-08 (peers tests) and the `useInstrumentBrief` hook (T-05) were **all shipped in W5** on commit range `ce5a7b43`..`ce3de480` on `feat/plan-0089-w2`. Do NOT re-implement them. W3 only needs T-S9-01/02 (institutional/fund-holder proxies) from the original backend table.
 
-**Total backend LOC**: ~300. **Estimated**: 1.5 days backend + 4.5 days frontend = 6 days serial. Could parallelize backend (1 agent) and component shells (1 agent) for 4.5 days wall-clock.
+| ID | Service | Change | LOC est. | Status |
+|----|---------|--------|----------|--------|
+| T-S9-01 | api-gateway | Add `GET /v1/fundamentals/{id}/institutional-holders` proxy → S3 `/institutional-holders` | ~15 | **pending** |
+| T-S9-02 | api-gateway | Add `GET /v1/fundamentals/{id}/fund-holders` proxy → S3 `/fund-holders` | ~15 | **pending** |
+| ~~T-S9-03~~ | ~~api-gateway~~ | ~~`GET /v1/instruments/{id}/peers?n=5` proxy → S2~~ | — | **DONE in W5** (feat(w5): T-S9-01) |
+| ~~T-S2-04~~ | ~~market-data~~ | ~~`GET /v1/instruments/{id}/peers?n=5` SQL~~ | — | **DONE in W5** (feat(w5): T-S2-01) |
+| ~~T-S8-05~~ | ~~rag-chat~~ | ~~`POST /v1/briefings/instrument/{id}/generate`~~ | — | **DONE in W5** (feat(w5): T-S8-05/06) |
+| ~~T-S8-06~~ | ~~rag-chat~~ | ~~Drop `:user_id` from cache key~~ | — | **DONE in W5** (feat(w5): T-S8-05/06) |
+| T-S9-07 (partial) | api-gateway | Add tests for T-S9-01/02 (2 tests in `tests/test_routes.py`) | ~30 | **pending** (peers test already done in W5) |
+| ~~T-S2-08~~ | ~~market-data~~ | ~~peer endpoint tests~~ | — | **DONE in W5** (feat(w5): T-S2-08) |
+
+**Total remaining backend LOC**: ~60 (T-S9-01/02 routes + 2 tests). **Estimated**: 5.5–6 days total (reduced by W5 backend pre-work).
 
 ---
 

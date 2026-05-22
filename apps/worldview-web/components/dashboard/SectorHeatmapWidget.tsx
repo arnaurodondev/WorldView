@@ -305,8 +305,13 @@ export function SectorHeatmapWidget() {
         // FR-1.7 MED-005: replace flex-wrap with CSS grid auto-fit so tiles
         // reflow cleanly at any viewport width without the sub-pixel overflow
         // that occasionally pushed the last column past the container edge at
-        // 1280px (B-2-03). `auto-fit` + `minmax(120px, 1fr)` means:
-        //   - Each tile is at least 120px wide (enough for "HEALTH" + "+1.23%").
+        // 1280px (B-2-03). `auto-fit` + `minmax(60px, 1fr)` means:
+        //   - Each tile is at least 60px wide (enough for "Health" + "+1.23%"
+        //     at the 9-10px mono font used in the tile label).
+        //   - At the ~395px widget width (col-span-4 of 12), 6 columns fit →
+        //     11 sectors wrap into exactly 2 rows (2×48 + 20px header = 116px,
+        //     safely inside the 130px Row 2 budget). Previous minmax(120px) gave
+        //     only 3 cols → 4 rows → 4×48+20 = 212px clipped by overflow-hidden.
         //   - Tiles grow to fill remaining space equally (1fr).
         //   - The browser auto-computes the column count from the container
         //     width — no hardcoded "11 columns" that breaks at non-standard
@@ -315,7 +320,7 @@ export function SectorHeatmapWidget() {
         // the Bloomberg "dense grid" aesthetic without hairline-seam ambiguity.
         <div
           className="grid gap-0.5 flex-1 px-0.5 py-0"
-          style={{ gridTemplateColumns: "repeat(auto-fit, minmax(120px, 1fr))" }}
+          style={{ gridTemplateColumns: "repeat(auto-fit, minmax(60px, 1fr))" }}
         >
           {sectorTiles.map(({ sector, weight }) => (
             <SectorTile

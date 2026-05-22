@@ -48,7 +48,10 @@ interface WhatsMovingStripProps {
 
 export function WhatsMovingStrip({ data, isLoading = false }: WhatsMovingStripProps) {
   const router = useRouter();
-  const articles = data?.articles.slice(0, 3) ?? [];
+  // WHY optional chaining on .articles: RankedNewsResponse may arrive as `{}` if
+  // the endpoint returns a partial shape (e.g. catch-all mock). data?.articles
+  // would be undefined → .slice() crash. data?.articles?.slice() is safe.
+  const articles = data?.articles?.slice(0, 3) ?? [];
   const isEmpty = !isLoading && articles.length === 0;
 
   return (

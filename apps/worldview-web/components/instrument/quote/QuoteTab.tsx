@@ -202,19 +202,21 @@ export function QuoteTab({
           data={topNews}
         />
 
-        {/* Bottom triple strip: Peers | PriceLevels | WhatsMoving. */}
-        <div className="mt-auto">
-          <BottomTripleStrip
-            peers={sidebar.peers}
-            priceLevels={sidebar.priceLevels}
-            topNews={topNews}
-            currentPrice={quote?.price}
-            isLoadingPeers={sidebar.errors.peers ? undefined : sidebar.isLoading}
-            isLoadingLevels={sidebar.errors.priceLevels ? undefined : sidebar.isLoading}
-            isErrorPeers={sidebar.errors.peers}
-            isErrorLevels={sidebar.errors.priceLevels}
-          />
-        </div>
+        {/* Bottom triple strip: Peers | PriceLevels | WhatsMoving.
+            WHY no mt-auto wrapper (Δ42 density fix): mt-auto pushed the strip to
+            the bottom of the overflow-y-auto container, making it fall below the
+            fold when the content above it exceeded ~780px at 900px viewport. The
+            strip must be in-flow and visible above-fold for the Δ42 density gate. */}
+        <BottomTripleStrip
+          peers={sidebar.peers}
+          priceLevels={sidebar.priceLevels}
+          topNews={topNews}
+          currentPrice={quote?.price}
+          isLoadingPeers={sidebar.errors.peers ? undefined : sidebar.isLoading}
+          isLoadingLevels={sidebar.errors.priceLevels ? undefined : sidebar.isLoading}
+          isErrorPeers={sidebar.errors.peers}
+          isErrorLevels={sidebar.errors.priceLevels}
+        />
       </div>
     </div>
   );

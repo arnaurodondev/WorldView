@@ -63,7 +63,11 @@ export function PeersStrip({ data, isLoading = false, isError = false }: PeersSt
   // one peer can be hovered at a time.
   const hoverTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  const peers = data?.peers.slice(0, 5) ?? [];
+  // WHY optional chaining on .peers (not just data): PeersResponse arrives as `{}`
+  // from the catch-all mock (or a partial S9 response) before the real payload
+  // resolves. data?.peers would be undefined in that case, so .slice() would throw
+  // "Cannot read properties of undefined". data?.peers?.slice() short-circuits safely.
+  const peers = data?.peers?.slice(0, 5) ?? [];
   const isEmpty = !isLoading && !isError && peers.length === 0;
 
   /** Hover start: schedule a prefetch after 200ms (Δ39). */

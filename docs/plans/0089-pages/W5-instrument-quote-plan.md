@@ -3,10 +3,10 @@
 **PRD**: 0089 platform page redesign
 **Design**: `docs/designs/0089/05-instrument-quote.md` (562 lines, iter-2 on PLAN-0090 baseline)
 **Audit**: `docs/designs/0089/oq/05-instrument-quote-CORNERS-AUDIT.md` (44 corners)
-**Sibling foundation**: F1 (shipped) / F2 (shipped) / W1 (in flight) / W2 (in flight) / W3 (Financials — planned)
-**Status**: ready-to-execute (pending W3 amendment per §0.5)
+**Sibling foundation**: F1 (shipped) / F2 (shipped) / W1 (shipped) / W2 (shipped) / W3 (Financials — planned)
+**Status**: SHIPPED 2026-05-21 on `feat/plan-0089-w2` — 38 commits + 1 fix; 49 files, +7163/-420 LOC; 2005 Vitest + 11 api-gw + 8 mkt-data + 27 rag-chat tests pass; 4 containers rebuilt
 **Estimated**: 7 engineer-days serial / 4.5 wall-clock with 1 backend + 1 frontend agent
-**Branch**: `feat/plan-0089-w5` (off the W3 integration head)
+**Branch**: `feat/plan-0089-w2` (landed on W2 integration head per session policy)
 
 ---
 

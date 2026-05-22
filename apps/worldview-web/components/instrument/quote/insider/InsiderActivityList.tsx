@@ -25,7 +25,11 @@ import { formatMarketCap } from "@/lib/utils";
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 /** Map transaction_type to color class. BUY=positive, SALE=negative. */
-function txColor(type: string): string {
+// WHY string|undefined: EODHD records occasionally arrive with empty `data`
+// objects that pass `filter(Boolean)` but have no transaction_type field.
+// Without the undefined guard, `.toUpperCase()` crashes the instrument page.
+function txColor(type: string | undefined): string {
+  if (!type) return "text-muted-foreground";
   const upper = type.toUpperCase();
   if (upper === "BUY" || upper === "PURCHASE") return "text-positive";
   if (upper === "SALE" || upper === "SELL") return "text-negative";
@@ -33,7 +37,8 @@ function txColor(type: string): string {
 }
 
 /** Abbreviate transaction type to 4 chars for tight columns. */
-function txLabel(type: string): string {
+function txLabel(type: string | undefined): string {
+  if (!type) return "—";
   const upper = type.toUpperCase();
   if (upper === "BUY" || upper === "PURCHASE") return "BUY";
   if (upper === "SALE" || upper === "SELL") return "SALE";
@@ -42,8 +47,8 @@ function txLabel(type: string): string {
 }
 
 /** Format USD value as compact string (e.g. "-$2.8M"). */
-function fmtValue(value: number | null, type: string): string | null {
-  if (value == null) return null;
+function fmtValue(value: number | null, type: string | undefined): string | null {
+  if (value == null || !type) return null;
   const sign = type.toUpperCase() === "BUY" || type.toUpperCase() === "PURCHASE" ? "+" : "-";
   const abs = Math.abs(value);
   return `${sign}${formatMarketCap(abs)}`;
