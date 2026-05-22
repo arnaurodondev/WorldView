@@ -13,7 +13,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { useEntityNewsInfinite } from "@/components/instrument/hooks/useEntityNewsInfinite";
-import { CompactArticleRow } from "./CompactArticleRow";
+import { DenseArticleRow } from "./DenseArticleRow";
 import { NewsFilters, type NewsSentiment, type NewsTimeRange } from "./NewsFilters";
 
 interface NewsColumnProps {
@@ -90,7 +90,7 @@ export function NewsColumn({ instrumentId }: NewsColumnProps) {
         ) : (
           <>
             {articles.map((a) => (
-              <CompactArticleRow key={a.article_id} article={a} />
+              <DenseArticleRow key={a.article_id} article={a} />
             ))}
             {/* Sentinel: invisible row watched by the observer above. */}
             <div ref={sentinelRef} className="h-4" aria-hidden="true" />
