@@ -22,6 +22,10 @@ pytestmark = pytest.mark.unit
 _JWT_SECRET = "test-secret"  # noqa: S105
 _JWT_PAYLOAD = {"sub": "user-1", "tenant_id": "t-1", "exp": 9999999999}
 
+# WHY valid UUID: instrument_id path params are now UUID-typed (F-010 security fix).
+# FastAPI auto-validates and returns 422 for non-UUID values before route logic runs.
+_INSTRUMENT_UUID = "11111111-1111-1111-1111-111111111111"
+
 
 def _make_jwt() -> str:
     return jwt.encode(_JWT_PAYLOAD, _JWT_SECRET, algorithm="HS256")
@@ -65,7 +69,7 @@ async def test_ohlcv_proxy_requires_auth(app, mock_clients) -> None:
     """GET /v1/ohlcv/{id} without auth → 401; downstream never called."""
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as client:
-        resp = await client.get("/v1/ohlcv/instr-1")
+        resp = await client.get(f"/v1/ohlcv/{_INSTRUMENT_UUID}")
 
     assert resp.status_code == 401
     mock_clients.market_data.get.assert_not_called()
@@ -81,7 +85,7 @@ async def test_ohlcv_proxy_forwards_query_params(authed_app, authed_mock_clients
     transport = ASGITransport(app=authed_app)
     async with AsyncClient(transport=transport, base_url="http://test") as client:
         resp = await client.get(
-            "/v1/ohlcv/instr-1",
+            f"/v1/ohlcv/{_INSTRUMENT_UUID}",
             params={"period": "1d", "from": "2026-01-01"},
             headers={"Authorization": f"Bearer {_make_jwt()}"},
         )
@@ -102,14 +106,14 @@ async def test_ohlcv_proxy_authenticated(authed_app, authed_mock_clients) -> Non
     transport = ASGITransport(app=authed_app)
     async with AsyncClient(transport=transport, base_url="http://test") as client:
         resp = await client.get(
-            "/v1/ohlcv/instr-1",
+            f"/v1/ohlcv/{_INSTRUMENT_UUID}",
             headers={"Authorization": f"Bearer {_make_jwt()}"},
         )
 
     assert resp.status_code == 200
     authed_mock_clients.market_data.get.assert_called_once()
     call_args = authed_mock_clients.market_data.get.call_args[0]
-    assert "/api/v1/ohlcv/instr-1" in call_args[0]
+    assert f"/api/v1/ohlcv/{_INSTRUMENT_UUID}" in call_args[0]
 
 
 # ── Quotes ───────────────────────────────────────────────────────────────────
@@ -141,7 +145,7 @@ async def test_quotes_single_proxy_fallback(authed_app, authed_mock_clients) -> 
     transport = ASGITransport(app=authed_app)
     async with AsyncClient(transport=transport, base_url="http://test") as client:
         resp = await client.get(
-            "/v1/quotes/instr-1",
+            f"/v1/quotes/{_INSTRUMENT_UUID}",
             headers={"Authorization": f"Bearer {_make_jwt()}"},
         )
 
@@ -149,8 +153,8 @@ async def test_quotes_single_proxy_fallback(authed_app, authed_mock_clients) -> 
     # Two calls: first to PriceSnapshot (404), then to legacy quote endpoint
     assert authed_mock_clients.market_data.get.call_count == 2
     calls = [c[0][0] for c in authed_mock_clients.market_data.get.call_args_list]
-    assert any("/internal/v1/price/instr-1" in c for c in calls)
-    assert any("/api/v1/quotes/instr-1" in c for c in calls)
+    assert any(f"/internal/v1/price/{_INSTRUMENT_UUID}" in c for c in calls)
+    assert any(f"/api/v1/quotes/{_INSTRUMENT_UUID}" in c for c in calls)
 
 
 @pytest.mark.asyncio
@@ -185,7 +189,7 @@ async def test_quotes_single_proxy_price_snapshot(authed_app, authed_mock_client
     transport = ASGITransport(app=authed_app)
     async with AsyncClient(transport=transport, base_url="http://test") as client:
         resp = await client.get(
-            "/v1/quotes/instr-1",
+            f"/v1/quotes/{_INSTRUMENT_UUID}",
             headers={"Authorization": f"Bearer {_make_jwt()}"},
         )
 
@@ -246,7 +250,7 @@ async def test_fundamentals_proxy_unauthenticated(app, mock_clients) -> None:
     """GET /v1/fundamentals/{id} without auth → 401."""
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as client:
-        resp = await client.get("/v1/fundamentals/instr-1")
+        resp = await client.get(f"/v1/fundamentals/{_INSTRUMENT_UUID}")
 
     assert resp.status_code == 401
     mock_clients.market_data.get.assert_not_called()
@@ -262,7 +266,7 @@ async def test_fundamentals_proxy_forwards_params(authed_app, authed_mock_client
     transport = ASGITransport(app=authed_app)
     async with AsyncClient(transport=transport, base_url="http://test") as client:
         resp = await client.get(
-            "/v1/fundamentals/instr-1",
+            f"/v1/fundamentals/{_INSTRUMENT_UUID}",
             params={"fields": "pe_ratio"},
             headers={"Authorization": f"Bearer {_make_jwt()}"},
         )
@@ -272,7 +276,7 @@ async def test_fundamentals_proxy_forwards_params(authed_app, authed_mock_client
     assert call_kwargs["params"].get("fields") == "pe_ratio"
     # Verify downstream path includes instrument_id
     call_args = authed_mock_clients.market_data.get.call_args[0]
-    assert "/api/v1/fundamentals/instr-1" in call_args[0]
+    assert f"/api/v1/fundamentals/{_INSTRUMENT_UUID}" in call_args[0]
 
 
 # ── Entity Graph + Contradictions ────────────────────────────────────────────
@@ -433,7 +437,7 @@ async def test_ohlcv_proxy_downstream_500(authed_app, authed_mock_clients) -> No
     transport = ASGITransport(app=authed_app)
     async with AsyncClient(transport=transport, base_url="http://test") as client:
         resp = await client.get(
-            "/v1/ohlcv/instr-1",
+            f"/v1/ohlcv/{_INSTRUMENT_UUID}",
             headers={"Authorization": f"Bearer {_make_jwt()}"},
         )
 

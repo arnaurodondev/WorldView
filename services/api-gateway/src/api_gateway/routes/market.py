@@ -12,6 +12,7 @@ import contextlib
 import json
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any
+from uuid import UUID
 
 import httpx
 from fastapi import APIRouter, HTTPException, Query, Request, Response
@@ -281,7 +282,7 @@ def _bars_from_response(resp_json: dict[str, Any]) -> list[dict[str, Any]]:
 
 
 @router.get("/fundamentals/{instrument_id}/intraday-stats")
-async def get_intraday_stats(instrument_id: str, request: Request) -> Any:
+async def get_intraday_stats(instrument_id: UUID, request: Request) -> Any:
     """Compose intraday statistics from OHLCV + technicals (W5-T-S9-02).
 
     Fetches in parallel:
@@ -433,7 +434,7 @@ async def get_intraday_stats(instrument_id: str, request: Request) -> Any:
 
     return JSONResponse(
         content={
-            "instrument_id": instrument_id,
+            "instrument_id": str(instrument_id),
             "vwap": round(vwap, 4) if vwap is not None else None,
             "atr_14": round(atr_14, 4) if atr_14 is not None else None,
             "rsi_14": round(rsi_14, 2) if rsi_14 is not None else None,
@@ -447,7 +448,7 @@ async def get_intraday_stats(instrument_id: str, request: Request) -> Any:
 
 
 @router.get("/fundamentals/{instrument_id}/multi-period-returns")
-async def get_multi_period_returns(instrument_id: str, request: Request) -> Any:
+async def get_multi_period_returns(instrument_id: UUID, request: Request) -> Any:
     """Compute close-on-close returns over 7 anchor periods (W5-T-S9-03).
 
     Fetches 390 daily bars (approx 1Y + buffer) from S3. Computes:
@@ -480,7 +481,7 @@ async def get_multi_period_returns(instrument_id: str, request: Request) -> Any:
     if isinstance(resp, Exception) or resp.status_code != 200:
         return JSONResponse(
             content={
-                "instrument_id": instrument_id,
+                "instrument_id": str(instrument_id),
                 "periods": {p: None for p in ("1D", "5D", "1M", "3M", "6M", "YTD", "1Y")},
             }
         )
@@ -511,7 +512,7 @@ async def get_multi_period_returns(instrument_id: str, request: Request) -> Any:
 
     return JSONResponse(
         content={
-            "instrument_id": instrument_id,
+            "instrument_id": str(instrument_id),
             "periods": {
                 "1D": _ret(1),
                 "5D": _ret(5),
@@ -526,7 +527,7 @@ async def get_multi_period_returns(instrument_id: str, request: Request) -> Any:
 
 
 @router.get("/fundamentals/{instrument_id}/price-levels")
-async def get_price_levels(instrument_id: str, request: Request) -> Any:
+async def get_price_levels(instrument_id: UUID, request: Request) -> Any:
     """Compute classic floor pivots + MA50/MA200 from daily OHLCV (W5-T-S9-04).
 
     Fetches 210 daily bars from S3 (enough for MA200 + 1 buffer bar).
@@ -559,7 +560,7 @@ async def get_price_levels(instrument_id: str, request: Request) -> Any:
     )
 
     if isinstance(resp, Exception) or resp.status_code != 200:
-        return JSONResponse(content={"instrument_id": instrument_id, "levels": [], "ma50": None, "ma200": None})
+        return JSONResponse(content={"instrument_id": str(instrument_id), "levels": [], "ma50": None, "ma200": None})
 
     try:
         bars = _bars_from_response(json.loads(resp.content))
@@ -567,7 +568,7 @@ async def get_price_levels(instrument_id: str, request: Request) -> Any:
         bars = []
 
     if len(bars) < 2:
-        return JSONResponse(content={"instrument_id": instrument_id, "levels": [], "ma50": None, "ma200": None})
+        return JSONResponse(content={"instrument_id": str(instrument_id), "levels": [], "ma50": None, "ma200": None})
 
     current_price = bars[-1]["close"]
     prev = bars[-2]  # prior closed session
@@ -606,7 +607,7 @@ async def get_price_levels(instrument_id: str, request: Request) -> Any:
 
     return JSONResponse(
         content={
-            "instrument_id": instrument_id,
+            "instrument_id": str(instrument_id),
             "levels": levels,
             "ma50": ma50,
             "ma50_direction": _dir(ma50) if ma50 is not None else None,
@@ -617,7 +618,7 @@ async def get_price_levels(instrument_id: str, request: Request) -> Any:
 
 
 @router.get("/fundamentals/{instrument_id}/technicals")
-async def get_technicals(instrument_id: str, request: Request) -> Any:
+async def get_technicals(instrument_id: UUID, request: Request) -> Any:
     """Proxy GET /v1/fundamentals/{id}/technicals → S3 /technicals-snapshot.
 
     WHY: S3 stores beta, SMA 50/200, 52W range, short interest under the
@@ -636,7 +637,7 @@ async def get_technicals(instrument_id: str, request: Request) -> Any:
 
 
 @router.get("/fundamentals/{instrument_id}/share-statistics")
-async def get_share_statistics(instrument_id: str, request: Request) -> Any:
+async def get_share_statistics(instrument_id: UUID, request: Request) -> Any:
     """Proxy GET /v1/fundamentals/{id}/share-statistics → S3 /share-statistics.
 
     WHY: Shares outstanding, float, short interest, insider/institutional
@@ -654,7 +655,7 @@ async def get_share_statistics(instrument_id: str, request: Request) -> Any:
 
 
 @router.get("/fundamentals/{instrument_id}/insider-transactions")
-async def get_insider_transactions(instrument_id: str, request: Request) -> Any:
+async def get_insider_transactions(instrument_id: UUID, request: Request) -> Any:
     """Proxy GET /v1/fundamentals/{id}/insider-transactions → S3 /insider-transactions-snapshot.
 
     WHY: Recent insider buys/sells — used by InsiderTransactionsTable.
@@ -672,7 +673,7 @@ async def get_insider_transactions(instrument_id: str, request: Request) -> Any:
 
 
 @router.get("/fundamentals/{instrument_id}/institutional-holders")
-async def get_institutional_holders(instrument_id: str, request: Request) -> Any:
+async def get_institutional_holders(instrument_id: UUID, request: Request) -> Any:
     """Proxy GET /v1/fundamentals/{id}/institutional-holders → S3 /institutional-holders.
 
     WHY: Top institutional shareholders (fund name, shares held, % of float) —
@@ -690,7 +691,7 @@ async def get_institutional_holders(instrument_id: str, request: Request) -> Any
 
 
 @router.get("/fundamentals/{instrument_id}/fund-holders")
-async def get_fund_holders(instrument_id: str, request: Request) -> Any:
+async def get_fund_holders(instrument_id: UUID, request: Request) -> Any:
     """Proxy GET /v1/fundamentals/{id}/fund-holders → S3 /fund-holders.
 
     WHY: Mutual fund and ETF holders (fund name, shares held, % of total) —
@@ -708,7 +709,7 @@ async def get_fund_holders(instrument_id: str, request: Request) -> Any:
 
 
 @router.get("/fundamentals/{instrument_id}/earnings-trend")
-async def get_earnings_trend(instrument_id: str, request: Request) -> Any:
+async def get_earnings_trend(instrument_id: UUID, request: Request) -> Any:
     """Proxy GET /v1/fundamentals/{id}/earnings-trend → S3 /earnings-trend.
 
     WHY: Forward EPS/revenue analyst estimates by quarter — used by
@@ -726,7 +727,7 @@ async def get_earnings_trend(instrument_id: str, request: Request) -> Any:
 
 
 @router.get("/fundamentals/{instrument_id}/earnings-annual-trend")
-async def get_earnings_annual_trend(instrument_id: str, request: Request) -> Any:
+async def get_earnings_annual_trend(instrument_id: UUID, request: Request) -> Any:
     """Proxy GET /v1/fundamentals/{id}/earnings-annual-trend → S3 /earnings-annual-trend.
 
     WHY: Annual earnings projections — supplementary to quarterly earnings-trend
@@ -744,7 +745,7 @@ async def get_earnings_annual_trend(instrument_id: str, request: Request) -> Any
 
 
 @router.get("/fundamentals/{instrument_id}/splits-dividends")
-async def get_splits_dividends(instrument_id: str, request: Request) -> Any:
+async def get_splits_dividends(instrument_id: UUID, request: Request) -> Any:
     """Proxy GET /v1/fundamentals/{id}/splits-dividends → S3 /splits-dividends.
 
     WHY: Dividend history (dates, amounts, frequency) and stock split history —
@@ -762,7 +763,7 @@ async def get_splits_dividends(instrument_id: str, request: Request) -> Any:
 
 
 @router.get("/fundamentals/{instrument_id}/income-statement")
-async def get_income_statement(instrument_id: str, request: Request) -> Any:
+async def get_income_statement(instrument_id: UUID, request: Request) -> Any:
     """Proxy GET /v1/fundamentals/{id}/income-statement → S3 /income-statement.
 
     WHY: Annual income-statement records (Revenue, Gross Profit, Operating Income,
@@ -785,7 +786,7 @@ async def get_income_statement(instrument_id: str, request: Request) -> Any:
 # NOTE: /snapshot MUST be registered before /{instrument_id} to prevent FastAPI
 # matching "snapshot" as an instrument_id path parameter value.
 @router.get("/fundamentals/{instrument_id}/snapshot")
-async def get_fundamentals_snapshot(instrument_id: str, request: Request) -> Any:
+async def get_fundamentals_snapshot(instrument_id: UUID, request: Request) -> Any:
     """Proxy GET /v1/fundamentals/{id}/snapshot → S3 /api/v1/fundamentals/{id}/snapshot.
 
     WHY THIS ENDPOINT: The InstrumentKeyMetrics sidebar and FundamentalsTab need
@@ -817,7 +818,7 @@ async def get_fundamentals_snapshot(instrument_id: str, request: Request) -> Any
     response_model=FundamentalsResponse,
     response_model_exclude_none=True,
 )
-async def get_fundamentals(instrument_id: str, request: Request) -> Any:
+async def get_fundamentals(instrument_id: UUID, request: Request) -> Any:
     """Proxy GET /api/v1/fundamentals/{instrument_id} → S3 Market Data.
 
     Requires authentication. Forwards query parameters (fields, etc.) to S3 for
@@ -844,7 +845,7 @@ async def get_fundamentals(instrument_id: str, request: Request) -> Any:
 
 
 @router.get("/ohlcv/{instrument_id}", response_model=OHLCVResponse, response_model_exclude_none=True)
-async def get_ohlcv(instrument_id: str, request: Request) -> Any:
+async def get_ohlcv(instrument_id: UUID, request: Request) -> Any:
     """Proxy GET /api/v1/ohlcv/{instrument_id} → S3 Market Data.
 
     Requires authentication. Forwards query parameters to S3 for OHLCV bar
@@ -1164,7 +1165,7 @@ async def get_quote_stream_stub(request: Request) -> Response:
 
 
 @router.get("/quotes/{instrument_id}", response_model=QuoteResponse, response_model_exclude_none=True)
-async def get_quote(instrument_id: str, request: Request) -> Any:
+async def get_quote(instrument_id: UUID, request: Request) -> Any:
     """Proxy GET /api/v1/quotes/{instrument_id} → S3 PriceSnapshot (with fallback).
 
     Requires authentication. Returns the latest quote enriched with freshness fields
@@ -1175,7 +1176,7 @@ async def get_quote(instrument_id: str, request: Request) -> Any:
         raise HTTPException(status_code=401, detail="Authentication required")
     headers = _auth_headers(request)
     clients = _clients(request)
-    body, status = await _get_enriched_quote(instrument_id, clients, headers)
+    body, status = await _get_enriched_quote(str(instrument_id), clients, headers)
     return Response(content=body, status_code=status, media_type="application/json")
 
 

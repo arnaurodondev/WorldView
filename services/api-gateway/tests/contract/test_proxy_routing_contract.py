@@ -556,8 +556,12 @@ async def test_fundamentals_snapshot_maps_to_market_data(
 
     Contract: instrument-scoped snapshot is path-mapped to S3 market-data;
     the {instrument_id} segment is preserved verbatim.
+
+    WHY UUID: instrument_id path params are now UUID-typed (F-010 security fix).
+    FastAPI auto-validates and returns 422 for non-UUID values.
     """
-    instrument_id = "instr-aapl"
+    # WHY UUID: F-010 — instrument_id is now UUID-typed; non-UUID values → 422.
+    instrument_id = "11111111-1111-1111-1111-111111111111"
     authed_mock_clients.market_data.get = AsyncMock(
         return_value=_mock_response(200, b'{"ticker": "AAPL", "pe_ratio": 25.0}'),
     )
