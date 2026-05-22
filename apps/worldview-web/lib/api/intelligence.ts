@@ -38,6 +38,7 @@ import {
   useQueryClient,
 } from "@tanstack/react-query";
 import { useAccessToken } from "@/lib/api-client";
+import { qk } from "@/lib/query/keys";
 import { apiFetch } from "./_client";
 import type {
   EntityIntelligencePublic,
@@ -45,28 +46,6 @@ import type {
   NarrativeHistoryPage,
   PathFilters,
 } from "@/types/intelligence";
-
-// ── Query key factory ─────────────────────────────────────────────────────────
-
-/**
- * iqk — Intelligence query key factory.
- *
- * WHY a factory (not inline arrays): TanStack Query's cache key comparison uses
- * deep equality. By centralising key shapes here, invalidation in useTriggerNarrativeGeneration
- * uses the SAME shape as the query definition — impossible to miss an
- * element or get the order wrong in two places.
- */
-const iqk = {
-  /** Cache key for GET /v1/entities/{id}/intelligence */
-  intelligence: (entityId: string) =>
-    ["entity-intelligence", entityId] as const,
-  /** Cache key for GET /v1/entities/{id}/paths */
-  paths: (entityId: string, filters: PathFilters) =>
-    ["entity-paths", entityId, filters] as const,
-  /** Cache key for GET /v1/entities/{id}/narratives (infinite) */
-  narratives: (entityId: string) =>
-    ["entity-narratives", entityId] as const,
-};
 
 // ── useEntityIntelligence ─────────────────────────────────────────────────────
 
@@ -92,7 +71,7 @@ export function useEntityIntelligence(entityId: string) {
   return useQuery<EntityIntelligencePublic>({
     // WHY [entityId] in key: each entity gets its own cache slot. Switching
     // between entity pages (A → B → A) reuses A's cached data immediately.
-    queryKey: iqk.intelligence(entityId),
+    queryKey: qk.kg.intelligence(entityId),
     queryFn: () =>
       apiFetch<EntityIntelligencePublic>(
         `/v1/entities/${encodeURIComponent(entityId)}/intelligence`,
@@ -128,7 +107,7 @@ export function useEntityPaths(entityId: string, filters: PathFilters = {}) {
 
   return useQuery<EntityPathsResponse>({
     // WHY filters in key: see module comment on filter-keying
-    queryKey: iqk.paths(entityId, filters),
+    queryKey: qk.kg.paths(entityId, filters),
     queryFn: () => {
       // Build query params from filters — only add defined values
       const params = new URLSearchParams();
@@ -170,7 +149,7 @@ export function useEntityNarrativeHistory(entityId: string) {
   const token = useAccessToken();
 
   return useInfiniteQuery<NarrativeHistoryPage>({
-    queryKey: iqk.narratives(entityId),
+    queryKey: qk.kg.narratives(entityId),
     // WHY pageParam as the cursor:
     // TanStack Query passes the return value of `getNextPageParam` as `pageParam`
     // on the next fetch. We pass it as `cursor=` to the API. On the first fetch
@@ -241,13 +220,13 @@ export function useTriggerNarrativeGeneration(entityId: string) {
       // the generation completes. Invalidating now triggers a refetch that will
       // pick up the new narrative as soon as S9 has it.
       void queryClient.invalidateQueries({
-        queryKey: iqk.intelligence(entityId),
+        queryKey: qk.kg.intelligence(entityId),
       });
       // WHY invalidate narratives: the new version will appear in history once
       // the job completes. Invalidating the infinite cache causes the timeline
       // to refetch from the start, showing the freshest version at the top.
       void queryClient.invalidateQueries({
-        queryKey: iqk.narratives(entityId),
+        queryKey: qk.kg.narratives(entityId),
       });
     },
   });

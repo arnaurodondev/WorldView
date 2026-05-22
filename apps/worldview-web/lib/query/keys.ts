@@ -33,6 +33,8 @@
  *   useQuery({ queryKey: qk.instrument.ohlcv(id, "1D"), queryFn: ... });
  */
 
+import type { PathFilters } from "@/types/intelligence";
+
 // ── Cache-namespace version ──────────────────────────────────────────────────
 //
 // WHY THIS CONSTANT EXISTS (PRD-0089 F2 step 11 / §6.3):
@@ -463,6 +465,32 @@ export const qk = {
     // matches MarketStatusPill so a single S9 batch call can serve both.
     indexQuotes: (instrumentIds: readonly string[]) =>
       [QK_VERSION, "shell", "index", "quotes", [...instrumentIds].sort()] as const,
+  },
+
+  // ── Knowledge Graph entity keys (W7) ────────────────────────────────────
+  // WHY separate from instruments.*: KG queries are entity-scoped (any entity
+  // type), while instruments.* are instrument-scoped (tradable securities).
+  // Keeping them in their own namespace lets a single
+  // `qc.invalidateQueries({ queryKey: qk.kg.all })` flush all entity-level
+  // detail, intelligence, path, contradiction, and narrative caches at once
+  // (e.g., after a full KG pipeline run). The instruments.entityGraph key
+  // is kept under instruments.* to preserve the existing cascade behaviour.
+  kg: {
+    all: [QK_VERSION, "kg"] as const,
+    entityDetail: (id: string) =>
+      [QK_VERSION, "kg", "entity", id, "detail"] as const,
+    intelligence: (id: string) =>
+      [QK_VERSION, "kg", "entity", id, "intelligence"] as const,
+    // WHY filters in paths key: each unique filter set gets its own cache slot
+    // so switching between filter combinations restores from cache instantly.
+    paths: (id: string, filters?: PathFilters) =>
+      filters
+        ? ([QK_VERSION, "kg", "entity", id, "paths", filters] as const)
+        : ([QK_VERSION, "kg", "entity", id, "paths"] as const),
+    contradictions: (id: string) =>
+      [QK_VERSION, "kg", "entity", id, "contradictions"] as const,
+    narratives: (id: string) =>
+      [QK_VERSION, "kg", "entity", id, "narratives"] as const,
   },
 
   // ── User ─────────────────────────────────────────────────────────────────

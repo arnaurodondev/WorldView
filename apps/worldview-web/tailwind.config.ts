@@ -189,6 +189,13 @@ const config: Config = {
         "150": "150ms",
         "200": "200ms",
       },
+      // WHY grid-cols-14: Intelligence tab uses a 14-column grid (4+7+3 layout)
+      // for higher density than the previous 12-col split. Literal string
+      // `grid-cols-14` required so Tailwind JIT scanner picks it up at build
+      // time (dynamic `grid-cols-${n}` is NOT scanned by JIT).
+      gridTemplateColumns: {
+        "14": "repeat(14, minmax(0, 1fr))",
+      },
     },
   },
   plugins: [
