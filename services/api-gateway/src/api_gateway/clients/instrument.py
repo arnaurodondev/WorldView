@@ -380,7 +380,7 @@ async def get_instrument_page_bundle(
             _safe_md(f"/api/v1/fundamentals/{instrument_id}"),
             _safe_md(f"/api/v1/fundamentals/{instrument_id}/technicals-snapshot"),
             _safe_md(f"/api/v1/fundamentals/{instrument_id}/insider-transactions-snapshot"),
-            _safe_nlp(f"/api/v1/news/entity/{instrument_id}", params={"limit": 5}),
+            _safe_nlp(f"/api/v1/entities/{instrument_id}/briefing-articles", params={"limit": 5}),
         )
 
         return {
