@@ -69,8 +69,29 @@ export function InstrumentTabs({ activeTab, onTabChange }: InstrumentTabsProps) 
         label: "Toggle description expand",
         handler: () => window.dispatchEvent(new CustomEvent("wv:desc-toggle")),
       },
+      // Financials-tab-scoped chord: P (period toggle annual/quarterly).
+      // WHY scope guard (activeTab === "financials"): p is a common key that
+      // could fire accidentally while on Quote/Intelligence. The guard keeps
+      // the binding harmless outside the Financials tab.
+      // WHY custom event (not direct setState): FinancialsTab owns the period
+      // state; InstrumentTabs is unaware of it. Dispatching an event avoids
+      // prop-drilling a setPeriodType callback through InstrumentPageClient.
+      // Alt+1..5 section scroll: not bound as hotkeys — analysts use standard
+      // browser scroll (arrow keys / Page Down) since the left column has
+      // natural focus. Reserved for a future scroll-to-section feature.
+      {
+        id: "ins.financials.period",
+        chord: "p",
+        group: "Symbol" as const,
+        label: "Toggle annual/quarterly period (Financials tab)",
+        handler: () => {
+          if (activeTab === "financials") {
+            window.dispatchEvent(new CustomEvent("wv:financials-period-toggle"));
+          }
+        },
+      },
     ],
-    [onTabChange],
+    [onTabChange, activeTab],
   );
 
   return (
