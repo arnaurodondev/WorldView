@@ -775,6 +775,36 @@ async def test_get_splits_dividends_proxies_to_market_data(authed_client, authed
 
 
 @pytest.mark.asyncio
+async def test_get_institutional_holders_proxies_to_market_data(authed_client, authed_mock_clients) -> None:
+    """GET /v1/fundamentals/{id}/institutional-holders → S3 /institutional-holders."""
+    authed_mock_clients.market_data.get = AsyncMock(return_value=_downstream_200())
+
+    response = await authed_client.get(
+        f"/v1/fundamentals/{_INSTR_ID}/institutional-holders",
+        headers={"Authorization": f"Bearer {_DUMMY_JWT}"},
+    )
+
+    assert response.status_code == 200
+    call_args = authed_mock_clients.market_data.get.call_args
+    assert "/institutional-holders" in call_args[0][0]
+
+
+@pytest.mark.asyncio
+async def test_get_fund_holders_proxies_to_market_data(authed_client, authed_mock_clients) -> None:
+    """GET /v1/fundamentals/{id}/fund-holders → S3 /fund-holders."""
+    authed_mock_clients.market_data.get = AsyncMock(return_value=_downstream_200())
+
+    response = await authed_client.get(
+        f"/v1/fundamentals/{_INSTR_ID}/fund-holders",
+        headers={"Authorization": f"Bearer {_DUMMY_JWT}"},
+    )
+
+    assert response.status_code == 200
+    call_args = authed_mock_clients.market_data.get.call_args
+    assert "/fund-holders" in call_args[0][0]
+
+
+@pytest.mark.asyncio
 async def test_fundamentals_section_routes_require_auth(client, mock_clients) -> None:
     """Fundamentals section routes return 401 when user is not authenticated."""
     # Uses the unauthenticated `client` fixture (no bearer token injected)
@@ -784,6 +814,8 @@ async def test_fundamentals_section_routes_require_auth(client, mock_clients) ->
         "technicals",
         "share-statistics",
         "insider-transactions",
+        "institutional-holders",
+        "fund-holders",
         "earnings-trend",
         "earnings-annual-trend",
         "splits-dividends",
