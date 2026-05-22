@@ -305,22 +305,23 @@ export function SectorHeatmapWidget() {
         // FR-1.7 MED-005: replace flex-wrap with CSS grid auto-fit so tiles
         // reflow cleanly at any viewport width without the sub-pixel overflow
         // that occasionally pushed the last column past the container edge at
-        // 1280px (B-2-03). `auto-fit` + `minmax(60px, 1fr)` means:
-        //   - Each tile is at least 60px wide (enough for "Health" + "+1.23%"
-        //     at the 9-10px mono font used in the tile label).
-        //   - At the ~395px widget width (col-span-4 of 12), 6 columns fit →
-        //     11 sectors wrap into exactly 2 rows (2×48 + 20px header = 116px,
-        //     safely inside the 130px Row 2 budget). Previous minmax(120px) gave
-        //     only 3 cols → 4 rows → 4×48+20 = 212px clipped by overflow-hidden.
+        // 1280px (B-2-03). `auto-fit` + `minmax(55px, 1fr)` means:
+        //   - Each tile is at least 55px wide (sector abbreviations are ≤6
+        //     chars at 9px mono font — fits comfortably in 55px).
+        //   - At the ~395px widget width (col-span-4 of 12), 7 columns fit →
+        //     14 sectors (11 GICS + ETF/Crypto/Macro) wrap into exactly 2 rows
+        //     (2×48 + 20px header = 116px, inside the 130px Row 2 budget).
+        //     Previous minmax(60px) gave 6 cols → ceil(14/6)=3 rows → 164px,
+        //     clipping the last 2 sectors via overflow-hidden.
         //   - Tiles grow to fill remaining space equally (1fr).
         //   - The browser auto-computes the column count from the container
-        //     width — no hardcoded "11 columns" that breaks at non-standard
-        //     resolutions or when the number of GICS sectors changes.
+        //     width — no hardcoded column count that breaks when sector count
+        //     changes (ETF/Crypto/Macro added = 14 total, not the original 11).
         // WHY gap-0.5 (2px): matches the previous flex gap; tight enough for
         // the Bloomberg "dense grid" aesthetic without hairline-seam ambiguity.
         <div
           className="grid gap-0.5 flex-1 px-0.5 py-0"
-          style={{ gridTemplateColumns: "repeat(auto-fit, minmax(60px, 1fr))" }}
+          style={{ gridTemplateColumns: "repeat(auto-fit, minmax(55px, 1fr))" }}
         >
           {sectorTiles.map(({ sector, weight }) => (
             <SectorTile

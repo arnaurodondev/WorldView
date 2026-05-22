@@ -255,6 +255,22 @@ async def get_company_overview(
                 "daily_return": daily_return,
             }
 
+        # T-A-1-04 follow-up: backfill quote.change / change_pct from OHLCV bars.
+        # The quote block above sets both to None because the S3 real-time quote
+        # endpoint has no intraday change field. Deriving from the last two OHLCV
+        # bars is the standard approach (prev-close → current-close).
+        # WHY outside the highlights_data block: ETFs and crypto may lack EODHD
+        # Highlights (highlights_data falsy) but still have OHLCV bars — we want
+        # change_pct populated for all instruments, not just equities.
+        if quote is not None and ohlcv_out:
+            _bars: list[dict[str, Any]] = ohlcv_out.get("bars") or []
+            if len(_bars) >= 2:
+                _pc: float = float(_bars[-2].get("close") or 0.0)
+                _lc: float = float(_bars[-1].get("close") or 0.0)
+                if _pc > 0:
+                    quote["change"] = round(_lc - _pc, 4)
+                    quote["change_pct"] = round((_lc - _pc) / _pc * 100, 4)
+
         return {
             "instrument": instrument,
             "quote": quote,
