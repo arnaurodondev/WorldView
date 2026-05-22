@@ -998,3 +998,20 @@ The classic shape: a new context with a setter, a writer component (chip / switc
 Review prompt: "List every consumer of the underlying list endpoint and confirm each one respects the new selection context. If even one doesn't, ship a shared resolver hook in the same commit."
 
 **Real instance**: BP-498 (PRD-0089 W1.1) — `ActivePortfolioContext` wired into `usePortfolioMetrics` but 5 other widgets kept their pre-existing `portfolios?.[0]` pick.
+
+### HR-062: filter(Boolean) on EODHD dict-of-dicts values
+
+**Category**: Frontend, Data
+**Severity**: HIGH
+**Detection**:
+```bash
+grep -rn "filter(Boolean)" apps/worldview-web/components --include="*.tsx"
+# For each match, check: is the array being filtered from Object.values()?
+# If so, verify isDictOfDicts was called first AND that it rejects {"0": {}}
+```
+
+`filter(Boolean)` does **not** catch empty objects — `Boolean({}) === true`. If EODHD returns `{"0": {}}` (an empty placeholder) for a section with no filings, `Object.values({"0": {}}).filter(Boolean)` = `[{}]`, which then renders as an all-dash row instead of showing the empty state.
+
+The correct guard requires `isDictOfDicts` to also check `Object.keys(first).length > 0`. The shared implementation at `lib/eohdUtils.ts` handles this correctly. Do NOT duplicate `isDictOfDicts` locally — always import from the shared utility.
+
+**Real instance**: W3 QA F-011 — FundHoldersTable, InstitutionalHoldersTable, InsiderTransactionsTable, InsiderActivityList all had local copies that accepted `{"0": {}}`. Fixed 2026-05-22 by extracting shared `lib/eohdUtils.ts`.

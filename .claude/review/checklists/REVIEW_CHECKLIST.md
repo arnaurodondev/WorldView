@@ -86,6 +86,8 @@
 - [ ] **`InternalJWTMiddleware` is mounted on all services that accept internal requests** — adding a new service without it bypasses auth entirely (PLAN-0025 pattern)
 - [ ] JWT/token values NOT passed as CLI arguments or environment variable substitutions in shell command strings (`--header "X-JWT: ${TOKEN}"`) — process-list visible; use httpx in Python or curl `--config` file instead (BP-419, HR-048 context, S-012)
 - [ ] CB `record_failure()`: does it distinguish 4xx (client error) from 5xx/network (service fault)? Counting 4xx inflates CB failure count causing false-positive circuit opens (S-003)
+- [ ] **FastAPI path params that are UUIDs use `instrument_id: UUID` (not `str`)** — bare `str` accepts arbitrary input (path traversal, SQL injection attempt, ticker symbols that cause asyncpg DataError → 500). `UUID` type annotation auto-validates and returns 422. (F-010, 24 routes in api-gateway routes/market.py + instruments.py)
+- [ ] **`<a href>` from external data validates scheme** — must check `url.startsWith("https://")` before rendering. `javascript:` URLs in EODHD `secLink` or similar fields execute on click. (F-004 W3 QA)
 
 ## 6b. Schema & Data Pipeline Integrity
 
