@@ -119,12 +119,12 @@ async def get_peers(
     # ── Resolve target instrument ────────────────────────────────────────────
     instr = InstrumentModel
 
-    # Fetch the target instrument to get its industry column.
+    # Fetch the target instrument to get its industry + sector columns.
     # WHY cast(bindparam, UUID): asyncpg rejects bare string literals in UUID
     # columns (BP-180/BP-121). Using cast() is cleaner than text("::uuid") because
     # SQLAlchemy's text() parser chokes on the `::` immediately after `:param`.
     result: Any = await session.execute(
-        select(instr.id, instr.symbol, instr.industry).where(
+        select(instr.id, instr.symbol, instr.industry, instr.sector).where(
             instr.id == cast(bindparam("iid", value=instrument_id), UUID)
         )
     )
@@ -134,11 +134,11 @@ async def get_peers(
         raise HTTPException(status_code=404, detail=f"Instrument not found: {instrument_id}")
 
     industry: str | None = row.industry
+    sector: str | None = row.sector
 
-    # WHY return empty peers (not 404) when industry is null: ETFs and some
-    # newer listings have no GICS industry assignment. Returning an empty list
-    # lets the frontend render the "—" state gracefully.
-    if not industry:
+    # WHY return empty peers (not 404) when both industry and sector are null:
+    # ETFs and newer listings may have no GICS assignment at all.
+    if not industry and not sector:
         resp = PeersResponse(instrument_id=instrument_id, industry=None, peers=[])
         _write_cache(valkey, cache_key, resp)
         return resp
@@ -178,35 +178,50 @@ async def get_peers(
     ret1y_sq = _latest_sq("return_1y", "ret1y")
     chg_sq = _latest_sq("daily_return", "chg")
 
-    stmt = (
-        select(
-            instr.id.label("instrument_id"),
-            instr.symbol.label("ticker"),
-            instr.name.label("name"),
-            mktcap_sq.c.value_numeric.label("market_cap"),
-            pe_sq.c.value_numeric.label("pe_ratio"),
-            ret1y_sq.c.value_numeric.label("return_1y"),
-            chg_sq.c.value_numeric.label("change_pct"),
-        )
-        .where(
-            and_(
-                instr.industry == industry,
-                # WHY cast(bindparam): exclude self from peers list; same UUID cast
-                # rationale as the target lookup above — text("::uuid") confuses
-                # SQLAlchemy's parameter parser.
-                instr.id != cast(bindparam("self_id", value=instrument_id), UUID),
+    def _build_peer_stmt(filter_col: Any, filter_val: str) -> Any:
+        """Build the peer SELECT with a given column=value industry/sector filter."""
+        return (
+            select(
+                instr.id.label("instrument_id"),
+                instr.symbol.label("ticker"),
+                instr.name.label("name"),
+                mktcap_sq.c.value_numeric.label("market_cap"),
+                pe_sq.c.value_numeric.label("pe_ratio"),
+                ret1y_sq.c.value_numeric.label("return_1y"),
+                chg_sq.c.value_numeric.label("change_pct"),
             )
+            .where(
+                and_(
+                    filter_col == filter_val,
+                    # WHY cast(bindparam): exclude self from peers list; same UUID cast
+                    # rationale as the target lookup above — text("::uuid") confuses
+                    # SQLAlchemy's parameter parser.
+                    instr.id != cast(bindparam("self_id", value=instrument_id), UUID),
+                )
+            )
+            .outerjoin(mktcap_sq, instr.id == mktcap_sq.c.instrument_id)
+            .outerjoin(pe_sq, instr.id == pe_sq.c.instrument_id)
+            .outerjoin(ret1y_sq, instr.id == ret1y_sq.c.instrument_id)
+            .outerjoin(chg_sq, instr.id == chg_sq.c.instrument_id)
+            .order_by(mktcap_sq.c.value_numeric.desc().nulls_last())
+            .limit(limit)
         )
-        .outerjoin(mktcap_sq, instr.id == mktcap_sq.c.instrument_id)
-        .outerjoin(pe_sq, instr.id == pe_sq.c.instrument_id)
-        .outerjoin(ret1y_sq, instr.id == ret1y_sq.c.instrument_id)
-        .outerjoin(chg_sq, instr.id == chg_sq.c.instrument_id)
-        .order_by(mktcap_sq.c.value_numeric.desc().nulls_last())
-        .limit(limit)
-    )
 
-    peer_result: Any = await session.execute(stmt)
+    # Try exact industry match first.
+    effective_label = industry
+    peer_result: Any = await session.execute(
+        _build_peer_stmt(instr.industry, industry) if industry else _build_peer_stmt(instr.sector, sector)  # type: ignore[arg-type]
+    )
     peer_rows = peer_result.all()
+
+    # WHY sector fallback: some instruments (e.g. AAPL "Consumer Electronics") are
+    # the sole representative of their EODHD sub-industry in the DB. Falling back to
+    # the broader sector ("Technology") surfaces meaningful large-cap peers instead of
+    # an empty list, matching what traders expect from a "peers" widget.
+    if not peer_rows and industry and sector:
+        peer_result = await session.execute(_build_peer_stmt(instr.sector, sector))
+        peer_rows = peer_result.all()
+        effective_label = sector  # Label reflects what we actually matched on
 
     peers = [
         PeerInstrumentResponse(
@@ -223,7 +238,7 @@ async def get_peers(
         for r in peer_rows
     ]
 
-    resp = PeersResponse(instrument_id=instrument_id, industry=industry, peers=peers)
+    resp = PeersResponse(instrument_id=instrument_id, industry=effective_label, peers=peers)
     _write_cache(valkey, cache_key, resp)
     return resp
 
