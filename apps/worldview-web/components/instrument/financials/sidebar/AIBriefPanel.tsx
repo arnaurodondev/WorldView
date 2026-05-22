@@ -39,7 +39,7 @@ interface AIBriefPanelProps {
 
 function riskLabel(score: number): { label: string; color: string } {
   if (score >= 0.7) return { label: "HIGH RISK", color: "text-negative" };
-  if (score >= 0.4) return { label: "MED RISK",  color: "text-yellow-400" };
+  if (score >= 0.4) return { label: "MED RISK",  color: "text-warning" };
   return { label: "LOW RISK", color: "text-positive" };
 }
 

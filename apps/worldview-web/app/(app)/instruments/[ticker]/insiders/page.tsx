@@ -33,7 +33,7 @@ export default async function InsidersPage({ params }: PageProps) {
         <span className="text-[11px] text-foreground font-mono">INSIDERS</span>
       </div>
 
-      <div className="border border-border rounded-sm p-4">
+      <div className="border border-border rounded-[2px] p-4">
         <p className="text-[12px] text-muted-foreground font-mono">
           Full insider transaction history for{" "}
           <span className="text-foreground font-semibold">{ticker}</span> is

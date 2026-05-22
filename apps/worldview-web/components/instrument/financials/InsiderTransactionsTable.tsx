@@ -25,7 +25,7 @@
 // WHY "use client": useRouter for the "View all" link navigation.
 
 import { useRouter } from "next/navigation";
-import { formatMarketCap } from "@/lib/utils";
+import { formatMarketCap, formatPrice } from "@/lib/utils";
 import type { FundamentalsSectionResponse } from "@/types/api";
 
 // ── EODHD wire shapes ─────────────────────────────────────────────────────────
@@ -225,7 +225,7 @@ export function InsiderTransactionsTable({
                   {fmtShares(tx.shares)}
                 </td>
                 <td className="px-2 text-right tabular-nums text-foreground whitespace-nowrap">
-                  {tx.price != null ? `$${tx.price.toFixed(2)}` : "—"}
+                  {tx.price != null ? formatPrice(tx.price) : "—"}
                 </td>
                 <td className={`px-2 text-right tabular-nums whitespace-nowrap ${txColor(tx.code)}`}>
                   {tx.value != null ? formatMarketCap(tx.value) : "—"}
