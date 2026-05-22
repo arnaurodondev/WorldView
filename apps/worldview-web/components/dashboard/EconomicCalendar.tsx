@@ -101,7 +101,7 @@ export function EconomicCalendar() {
       {/* ── Event rows ──────────────────────────────────────────────────── */}
       {!isLoading && !isError && events.length > 0 && (
         <div className="flex-1 divide-y divide-border/30 overflow-auto">
-          {events.slice(0, 8).map((event) => {
+          {events.map((event) => {
             const date = new Date(event.event_date);
             const dateStr = date.toISOString().slice(5, 10); // "MM-DD"
             const timeStr = date.toISOString().slice(11, 16); // "HH:MM"

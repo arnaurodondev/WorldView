@@ -46,7 +46,7 @@ export function EarningsCalendarWidget() {
     // deduplicate fetches across components. Using the same key as the route
     // name keeps it easy to invalidate when real-time earnings data arrives.
     queryKey: ["earnings-calendar"],
-    queryFn: () => createGateway(accessToken).getEarningsCalendar(),
+    queryFn: () => createGateway(accessToken).getEarningsCalendar({ limit: 25 }),
     // WHY enabled guard: if the user is not authenticated yet, accessToken is
     // undefined. We must not fire the request — S9 would return 401 which
     // counts as an error state and would show the error banner on first render.
@@ -134,7 +134,7 @@ export function EarningsCalendarWidget() {
         // WHY divide-y: hairline separators between rows without explicit border classes
         // on each row — same pattern as EconomicCalendar.
         <div className="flex-1 divide-y divide-border/30 overflow-auto">
-          {events.slice(0, 8).map((event) => (
+          {events.map((event) => (
             <EarningsRow key={event.event_id} event={event} />
           ))}
         </div>

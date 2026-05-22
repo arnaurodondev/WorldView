@@ -380,8 +380,14 @@ export function PredictionMarketsWidget() {
       {!isLoading && topMarkets.length > 0 && (
         <div className="flex-1 divide-y divide-border/30 overflow-auto">
           {topMarkets.map((market, idx) => {
-            const yesPct = Math.round(market.yes_probability * 100);
-            const noPct = 100 - yesPct;
+            // WHY conditional precision: probabilities <1% round to 0 with Math.round(),
+            // making e.g. 0.4% and 0% indistinguishable. Show one decimal for <1% so
+            // "0.4%" is distinct from a true zero market.
+            const yesRaw = market.yes_probability * 100;
+            const yesPct = yesRaw < 1 ? parseFloat(yesRaw.toFixed(1)) : Math.round(yesRaw);
+            const noPct = parseFloat((100 - yesRaw).toFixed(1)) < 1
+              ? parseFloat((100 - yesRaw).toFixed(1))
+              : Math.round(100 - yesRaw);
 
             // WHY color threshold: >60% YES → positive (strong signal),
             // <40% YES → negative (unlikely), else neutral.

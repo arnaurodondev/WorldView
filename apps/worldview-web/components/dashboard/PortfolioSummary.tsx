@@ -247,14 +247,13 @@ export function PortfolioSummary() {
     performance?.return_pct != null ? performance.return_pct : totalUnrealisedPnlPct;
   const isPnlPositive = headlinePnl >= 0;
 
-  // ── Top 4 holdings by current value ───────────────────────────────────────
+  // Show all holdings sorted by current value — container is overflow-auto so it scrolls.
   const topHoldings = [...holdings]
     .sort((a, b) => {
       const aVal = (quotes[a.instrument_id]?.price ?? a.average_cost) * a.quantity;
       const bVal = (quotes[b.instrument_id]?.price ?? b.average_cost) * b.quantity;
       return bVal - aVal;
-    })
-    .slice(0, 4);
+    });
 
   return (
     // WHY bg-background: other dashboard widgets (SectorHeatmap, TopMovers, etc.)
@@ -466,19 +465,13 @@ export function PortfolioSummary() {
         })}
       </div>
 
-      {/* Link to full portfolio */}
-      {holdings.length > 4 && (
-        // T-B-2-06: truncate + px-2 prevents long counts (e.g., "+46 more")
-        // from overflowing the widget on narrow viewports. The redundant
-        // " → View all" suffix is dropped because the entire row is the
-        // click target — duplicating affordance language adds noise.
-        <Link
-          href="/portfolio"
-          className="mt-2 block truncate px-2 text-center text-xs text-muted-foreground hover:text-foreground"
-        >
-          +{holdings.length - 4} more
-        </Link>
-      )}
+      {/* Link to full portfolio page */}
+      <Link
+        href="/portfolio"
+        className="mt-2 block truncate px-2 text-center text-[10px] text-muted-foreground/60 hover:text-foreground"
+      >
+        View portfolio →
+      </Link>
 
       {/* Close inner content wrapper (flex-1 overflow-auto px-2 py-1) */}
       </div>
