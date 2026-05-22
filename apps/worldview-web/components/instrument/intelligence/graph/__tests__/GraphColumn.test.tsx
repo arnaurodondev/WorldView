@@ -73,6 +73,18 @@ vi.mock("@/components/instrument/EntityGraph", () => ({
   EntityGraph: () => <div data-testid="entity-graph-stub" />,
 }));
 
+// WHY mock HotkeyContext: GraphColumn registers hotkeys via useHotkeyScope (T-18).
+// The test environment has no HotkeyProvider — mock the context to avoid the
+// "must be used inside <HotkeyProvider>" throw.
+vi.mock("@/contexts/HotkeyContext", () => ({
+  useHotkeyScope: vi.fn(() => ({
+    registry: { register: vi.fn(() => vi.fn()) },
+    pushScope: vi.fn(),
+    popScope: vi.fn(),
+    activeScopes: new Set(),
+  })),
+}));
+
 // IMPORTANT: import AFTER mocks.
 // eslint-disable-next-line import/first
 import { GraphColumn } from "@/components/instrument/intelligence/graph/GraphColumn";
