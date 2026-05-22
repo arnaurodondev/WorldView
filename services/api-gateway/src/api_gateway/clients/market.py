@@ -226,34 +226,16 @@ async def get_top_movers(
     single JWT at batch start — prevents stale-token failures on long-running
     batches (e.g. batch_ohlcv fan-out in proxy.py).
     """
-    import json as _json
 
     # Resolve header factory once: prefer make_headers, fall back to static headers dict.
     _h = make_headers if make_headers is not None else (lambda: headers or {})
 
-    # For weekly/monthly periods, call the dedicated S3 period-movers endpoint.
-    if period in ("1W", "1M"):
-        resp = await clients.market_data.get(
-            f"/api/v1/market/period-movers?period={period}&type={mover_type}&limit={limit}",
-            headers=_h(),
-        )
-        if resp.status_code >= 400:
-            raise DownstreamError("market-data", resp.status_code, resp.text)
-        return cast("dict[str, Any]", resp.json())
-
-    sort_order = "desc" if mover_type == "gainers" else "asc"
-    body = _json.dumps(
-        {
-            "filters": [{"metric": "daily_return", "min_value": -100, "max_value": 100}],
-            "sort_by": "daily_return",
-            "sort_order": sort_order,
-            "limit": limit,
-        }
-    )
-    resp = await clients.market_data.post(
-        "/api/v1/fundamentals/screen",
-        content=body.encode(),
-        headers={"Content-Type": "application/json", **_h()},
+    # WHY all periods use period-movers: the screener-based 1D path queried
+    # fundamental_metrics.daily_return which is only populated for ~8 instruments.
+    # The OHLCV LATERAL JOIN in period-movers yields 500+ instruments for all periods.
+    resp = await clients.market_data.get(
+        f"/api/v1/market/period-movers?period={period}&type={mover_type}&limit={limit}",
+        headers=_h(),
     )
     if resp.status_code >= 400:
         raise DownstreamError("market-data", resp.status_code, resp.text)

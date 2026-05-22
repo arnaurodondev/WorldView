@@ -190,9 +190,9 @@ export function PreMarketMoversWidget() {
     });
   }
 
-  // Take top 5 from each side after sector filter.
-  const gainers = applyFilter(allGainers).slice(0, 5);
-  const losers = applyFilter(allLosers).slice(0, 5);
+  // Show all rows after sector filter (up to the limit requested from the API).
+  const gainers = applyFilter(allGainers);
+  const losers = applyFilter(allLosers);
 
   return (
     // WHY bg-background: see PortfolioNewsWidget for rationale — consistent with

@@ -84,6 +84,8 @@ export function createDashboardApi(t: string | undefined) {
         }>;
         type?: string;
         total?: number;
+        // period-movers endpoint returns results[] instead of movers[]
+        period?: string;
       }>(
         `/v1/market/top-movers?type=${moverType}&limit=${limit}&period=${period}`,
         { token: t },
@@ -121,6 +123,16 @@ export function createDashboardApi(t: string | undefined) {
                 : typeof (r as Record<string, unknown>).price === "number"
                   ? ((r as Record<string, unknown>).price as number)
                   : 0;
+        // WHY period_return_pct first: the period-movers endpoint (used for all
+        // periods since the screener daily_return path was retired) returns a
+        // top-level period_return_pct already in % form (3.1 = 3.1%). The old
+        // screener path stored daily_return as a decimal fraction (0.031 = 3.1%)
+        // and required *100. Keep the screener fallback for backward compat.
+        const rr = r as Record<string, unknown>;
+        const changePct =
+          typeof rr.period_return_pct === "number"
+            ? rr.period_return_pct
+            : (r.metrics?.daily_return ?? 0) * 100;
         return {
           instrument_id: r.instrument_id ?? "",
           // WHY propagate entity_id when present: top-mover rows need it for correct
@@ -135,10 +147,7 @@ export function createDashboardApi(t: string | undefined) {
             "",
           name: r.name ?? r.ticker ?? r.symbol ?? "", // name for tooltip/detail
           price: priceFromMetrics,
-          // WHY * 100: S3 daily_return is a decimal fraction (0.031 = 3.1%).
-          // The Mover.change_pct field is treated as a percentage by MoverRow
-          // (mover.change_pct.toFixed(2) → "3.11"). Multiply to convert.
-          change_pct: (r.metrics?.daily_return ?? 0) * 100,
+          change_pct: changePct,
           volume: null as number | null,
         };
       });

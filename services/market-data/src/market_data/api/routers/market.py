@@ -50,8 +50,8 @@ async def period_movers(
 
     Returns list of instruments sorted by their period_return_pct.
     """
-    if period not in ("1W", "1M"):
-        raise HTTPException(status_code=400, detail="period must be '1W' or '1M'")
+    if period not in ("1D", "1W", "1M"):
+        raise HTTPException(status_code=400, detail="period must be '1D', '1W', or '1M'")
     if mover_type not in ("gainers", "losers"):
         raise HTTPException(status_code=400, detail="type must be 'gainers' or 'losers'")
     try:
