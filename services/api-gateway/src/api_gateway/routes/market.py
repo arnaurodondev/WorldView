@@ -671,6 +671,42 @@ async def get_insider_transactions(instrument_id: str, request: Request) -> Any:
     return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
 
 
+@router.get("/fundamentals/{instrument_id}/institutional-holders")
+async def get_institutional_holders(instrument_id: str, request: Request) -> Any:
+    """Proxy GET /v1/fundamentals/{id}/institutional-holders → S3 /institutional-holders.
+
+    WHY: Top institutional shareholders (fund name, shares held, % of float) —
+    used by InstitutionalHoldersTable on the Financials tab.
+    """
+    if not getattr(request.state, "user", None):
+        raise HTTPException(status_code=401, detail="Authentication required")
+    headers = _auth_headers(request)
+    clients = _clients(request)
+    resp = await clients.market_data.get(
+        f"/api/v1/fundamentals/{instrument_id}/institutional-holders",
+        headers=headers,
+    )
+    return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
+
+
+@router.get("/fundamentals/{instrument_id}/fund-holders")
+async def get_fund_holders(instrument_id: str, request: Request) -> Any:
+    """Proxy GET /v1/fundamentals/{id}/fund-holders → S3 /fund-holders.
+
+    WHY: Mutual fund and ETF holders (fund name, shares held, % of total) —
+    used by FundHoldersTable on the Financials tab.
+    """
+    if not getattr(request.state, "user", None):
+        raise HTTPException(status_code=401, detail="Authentication required")
+    headers = _auth_headers(request)
+    clients = _clients(request)
+    resp = await clients.market_data.get(
+        f"/api/v1/fundamentals/{instrument_id}/fund-holders",
+        headers=headers,
+    )
+    return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
+
+
 @router.get("/fundamentals/{instrument_id}/earnings-trend")
 async def get_earnings_trend(instrument_id: str, request: Request) -> Any:
     """Proxy GET /v1/fundamentals/{id}/earnings-trend → S3 /earnings-trend.
