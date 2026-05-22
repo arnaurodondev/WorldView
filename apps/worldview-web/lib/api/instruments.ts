@@ -455,6 +455,34 @@ export function createInstrumentsApi(t: string | undefined) {
     },
 
     /**
+     * getInstitutionalHolders — top institutional shareholders from S3
+     *
+     * Returns records with section="institutional_holders". Each record's data
+     * carries fund name, shares held, and % of total outstanding.
+     * Used by: InstitutionalHoldersTable on the Financials tab (W3-T-14).
+     */
+    getInstitutionalHolders(instrumentId: string): Promise<FundamentalsSectionResponse> {
+      return apiFetch<FundamentalsSectionResponse>(
+        `/v1/fundamentals/${encodeURIComponent(instrumentId)}/institutional-holders`,
+        { token: t },
+      );
+    },
+
+    /**
+     * getFundHolders — mutual-fund and ETF holders from S3
+     *
+     * Returns records with section="fund_holders". Each record's data carries
+     * fund name, shares held, and % of total outstanding.
+     * Used by: FundHoldersTable on the Financials tab (W3-T-15).
+     */
+    getFundHolders(instrumentId: string): Promise<FundamentalsSectionResponse> {
+      return apiFetch<FundamentalsSectionResponse>(
+        `/v1/fundamentals/${encodeURIComponent(instrumentId)}/fund-holders`,
+        { token: t },
+      );
+    },
+
+    /**
      * getEarningsHistory — historical EPS actuals from S3 (ANNUAL records)
      *
      * WHY /earnings-annual-trend (not /earnings-trend): The S9 /earnings-trend
