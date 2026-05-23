@@ -125,19 +125,15 @@ class TestBuildDescriptionClientDeepInfra:
     """Tests for _build_description_client() with DeepInfra provider (BP-092 regression guard)."""
 
     @pytest.mark.unit()
-    def test_deepinfra_provider_returns_deepinfra_adapter(self) -> None:
-        """description_provider='deepinfra' with valid api_key → DeepInfraDescriptionAdapter.
+    def test_deepinfra_provider_returns_chained_adapter_with_deepinfra_primary(self) -> None:
+        """description_provider='deepinfra' → ChainedDescriptionAdapter with DeepInfra as first adapter.
 
-        The scheduler module is pre-imported BEFORE patch.dict so it stays in sys.modules
-        after the patch exits (avoiding prometheus re-registration in subsequent tests).
-        openai is mocked because it is not installed in the KG test environment.
+        Since the description client now supports a Gemini fallback, _build_description_client
+        returns a ChainedDescriptionAdapter.  When only DEEPINFRA_API_KEY is set (no Gemini
+        key), the chain contains a single DeepInfraDescriptionAdapter as the primary.
         """
         from unittest.mock import MagicMock, patch
 
-        # Pre-import: ensures scheduler module is in sys.modules before patch.dict runs.
-        # patch.dict only removes/restores the specified key (openai); everything else persists.
-        # Without this, the scheduler would be re-imported in subsequent tests causing
-        # duplicate prometheus metric registration.
         import knowledge_graph.infrastructure.scheduler.scheduler as _sched  # noqa: F401
 
         mock_openai = MagicMock()
@@ -158,8 +154,12 @@ class TestBuildDescriptionClientDeepInfra:
             )
             client = _build_description_client(s)
 
-            assert type(client).__name__ == "DeepInfraDescriptionAdapter"
-            assert type(client).__module__ == "ml_clients.adapters.deepinfra_description"
+            # Now returns ChainedDescriptionAdapter wrapping DeepInfra (+ optional Gemini)
+            assert type(client).__name__ == "ChainedDescriptionAdapter"
+            assert type(client).__module__ == "ml_clients.adapters.chained_description"
+            # Primary adapter in the chain must be DeepInfraDescriptionAdapter
+            primary = client._adapters[0]  # type: ignore[attr-defined]
+            assert type(primary).__name__ == "DeepInfraDescriptionAdapter"
 
     @pytest.mark.unit()
     def test_deepinfra_provider_empty_key_returns_null_adapter(self) -> None:
