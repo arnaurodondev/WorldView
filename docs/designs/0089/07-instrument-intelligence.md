@@ -2,7 +2,7 @@
 
 **Status**: draft — design only, no implementation
 **Owner**: agent-instr-intelligence
-**Date**: 2026-05-20
+**Date**: 2026-05-22 (iter-3 — post-investigation amendments Δ11-Δ23)
 **Parent index**: `docs/designs/0089/_INDEX.md`
 **Prior art**: PLAN-0090 Wave D (the implementation we are rebuilding) — `apps/worldview-web/components/instrument/intelligence/*`
 
@@ -120,6 +120,8 @@ Citations are line-anchored to `docs/designs/0089/00-backend-data-inventory.md`.
 | `GET /v1/search/relations` | semantic relation search across entities | Power-user search box at top of right rail (deferred to v1.1) |
 | `BriefingResponse.sections` | `[{title, bullets[]}]` | New structured-brief renderer at top (replaces markdown blob) |
 | `BriefingResponse.headline` | one-sentence summary | Surface as `text-[12px]` bold above the narrative |
+| S9 GraphNode proxy enrichment (NEW) | `description?: string`, `sector?: string`, `exchange?: string` added to S9 `GraphNodeSchema` Pydantic model | Enables rich node hover tooltips (description + sector) and reduces need to call `getEntityDetail()` just for the tooltip. **Requires backend change B-01** (3-field addition to S9 proxy schema). |
+| S9 RelationResponse proxy enrichment (NEW) | `decay_class: str` added to S9 edge schema | Enables temporal edge opacity in the graph. **Requires backend change B-02** (1-field addition to S9 proxy schema). Value is one of: PERMANENT, DURABLE, SLOW, MEDIUM, FAST, EPHEMERAL. |
 
 ### 3.3 Data the user **explicitly mentioned**
 
@@ -128,8 +130,20 @@ Citations are line-anchored to `docs/designs/0089/00-backend-data-inventory.md`.
 - **Paths to portfolio** — `/v1/entities/{id}/paths` filtered to paths whose terminal node is in the user's holdings (NEW).
 - **Contradictions** — full list with severity badge (NEW).
 - **Narrative** — full brief at top (kept, but render `sections` instead of blob).
+- **Key highlights** — surfaced via `BriefingResponse.sections[0]` with `title="Key highlights"` and `bullets[]`. NO separate endpoint exists. The `StructuredBrief variant="compact"` component renders this automatically as the first structured section. "Key highlights" is the first section the S8 prompt emits.
+- **Risks to watch** — surfaced via `BriefingResponse.risk_summary.top_risk_signals[]` AND as `sections[N]` with `title="Risks to watch"`. Both are rendered by `StructuredBrief variant="compact"` automatically (E-03). No additional work required.
 - **Depth controls** — exist in GraphToolbar (kept).
 - **Graph stats** — node/edge counts + latency (NEW).
+
+### 3.4 Backend changes required for W7 (3 S9 proxy additions)
+
+No new endpoints. No new workers. All changes are additions to existing S9 Pydantic proxy schemas.
+
+| ID | File | Change | Enables |
+|----|------|--------|---------|
+| B-01 | `services/api-gateway/src/api_gateway/routes/intelligence.py` (GraphNode schema) | Add `description: str \| None = None`, `sector: str \| None = None`, `exchange: str \| None = None` to the node proxy schema. Source: S7 `EntitySummary` already has `ticker`, `isin`, `exchange`; description requires a JOIN to `canonical_entities` — add to S7 graph endpoint response. | Node hover tooltips (Δ13) |
+| B-02 | Same file (RelationResponse / edge schema) | Add `decay_class: str \| None = None` to the edge proxy schema. Source: `relations.decay_class` already exists in S7 domain layer. | Edge decay opacity (Δ14), EdgeDetailCard decay badge (Δ11) |
+| B-03 | Same file (graph endpoint handler) | Add 5-min Valkey cache: `cache_key = f"graph:{tenant_id}:{entity_id}:{limit}:{depth}"`, TTL 300 s. Pattern identical to the existing intelligence endpoint cache. | Reduce S7 load on repeated depth=2/3 calls (Δ21). Non-blocking for W7. |
 
 ---
 
@@ -285,8 +299,8 @@ interface DenseArticleRowProps { article: RankedArticle; }
 
 | Sub-component | File | Budget | Renders |
 |---------------|------|--------|---------|
-| `StructuredBrief` (NEW) | `intelligence/brief/StructuredBrief.tsx` | ≤ 110 LOC | `BriefingResponse.headline` (12 px bold) + each `section.title` (10 px UPPERCASE) followed by `bullets.map` as 11 px disc-bulleted list. Footer: `generated_at · provider · latency_ms`. Replaces the current `<MarkdownContent>` blob. |
-| `GraphStats` (NEW) | `intelligence/graph/GraphStats.tsx` | ≤ 40 LOC | 18 px strip rendering `{node_count} nodes · {edge_count} edges · depth {depth} · {latency_ms} ms` — values derived from `graphData.nodes.length`, `graphData.edges.length`, `depth` prop, and a `useRef<number>` timer around the queryFn. |
+| `StructuredBrief` (REUSE — **do NOT create new**) | `components/brief/StructuredBrief.tsx` (already shipped) | 0 LOC (existing) | Pass `brief={brief} variant="compact"`. Renders `brief.lead ?? brief.summary` (12 px bold) + each `section.title` (10 px UPPERCASE) + `bullets.map` (11 px). Footer strip added **in GraphColumn** (not inside StructuredBrief): `generated_at · {client-measured latency_ms} ms`. Replaces the current `<MarkdownContent>` blob. **C-BR-01 fix**: `BriefingResponse.headline` does not exist — the equivalent is `brief.lead` (PLAN-0062-W4). **C-BR-02 fix**: `provider` does not exist on `BriefingResponse` — omit from footer. Measure `latency_ms` client-side via `performance.now()` around the queryFn (same pattern as §8.4 graph timing). **C-SB-01 fix**: the shared `StructuredBrief` at `components/brief/` already handles `variant="compact"` correctly; forking into `intelligence/brief/` would create two sources of truth. |
+| `GraphStats` (NEW) | `intelligence/graph/GraphStats.tsx` | ≤ 40 LOC | 18 px strip rendering `{node_count} nodes · {edge_count} edges · depth {depth} · {latency_ms} ms`. `latency_ms` received as prop from `GraphColumn` (measured via `performance.now()` in queryFn; stored in `graphFetchStartRef` + `useState` for settled value). |
 | `GraphToolbar` | `instrument/graph/GraphToolbar.tsx` | 155 LOC (existing) | UNCHANGED — already supports depth slider + type filter |
 | `EntityGraph` | `instrument/EntityGraph.tsx` | 700+ LOC (existing) | UNCHANGED in this design pass; sigma.js canvas |
 
@@ -301,6 +315,19 @@ const GRAPH_TIMEOUT_MS_BY_DEPTH: Record<number, number> = {
 ```
 
 Reason: PLAN-0090 hardcoded 3000 ms for all depths, which kills depth=3 unnecessarily (memory: `project_age_cypher_fix_2026_05_11.md` shows healthy depth=3 at 285 ms after BP-461 fix, but cold-cache traversals still take 4-6 s). On timeout, show `"Graph timed out at depth {d}. Try depth {d-1} or wait 30 s and retry."` — also surfaces a Retry button.
+
+**Edge decay visualization (Δ14)**: When `decay_class` is present on a `GraphEdge` (after backend change B-02), apply it in the sigma.js `edgeReducer`:
+```ts
+const decayOpacity: Record<string, number> = {
+  PERMANENT: 1.0, DURABLE: 1.0,
+  SLOW: 0.7, MEDIUM: 0.7,
+  FAST: 0.4, EPHEMERAL: 0.4,
+};
+// In edgeReducer:
+const alpha = decayOpacity[edge.decay_class ?? 'MEDIUM'] ?? 0.7;
+return { ...data, color: hexWithAlpha(edge.color, alpha) };
+```
+This makes the graph tell a temporal story — AAPL's durable supplier relations appear vivid while ephemeral news-cycle connections fade.
 
 ### 5.4 Context panel
 
@@ -335,26 +362,37 @@ Node-detail mode (`selectedNodeId !== null`):
 </section>
 ```
 
+Edge-detail mode (`selectedEdgeId !== null && selectedNodeId === null`):
+
+```tsx
+<section className="flex flex-col h-full">
+  <EdgeDetailCard edgeId={selectedEdgeId} onBack={() => setSelectedEdgeId(null)} />
+</section>
+```
+
+The `IntelligenceTab` parent must lift `selectedEdgeId: string | null` state alongside `selectedNodeId`. When the user clicks an edge, `setSelectedEdgeId(id)` and clear `selectedNodeId`.
+
 ### 5.5 New blocks (right rail)
 
 | Block | File | Budget | Endpoint | Renders |
 |-------|------|--------|----------|---------|
-| `EntityOverviewBlock` | `intelligence/context/EntityOverviewBlock.tsx` | ≤ 80 LOC | `GET /v1/entities/{id}` + `GET /v1/entities/{id}/intelligence` | Name (12 px) · type badge (9 px) · health badge (9 px, tone-colored) · description (11 px, 4-line clamp) · `intelligence.key_metrics` 4-cell strip (market_cap, employees, founded, hq_country) |
-| `TopRelationsBlock` | `intelligence/context/TopRelationsBlock.tsx` | ≤ 90 LOC | derive from `GET /v1/entities/{id}/graph?depth=1` already fetched by `ContextPanel` | Header "TOP RELATIONS · (n)". List of 10 rows, 18 px each: target label (truncate) · relation label (lowercase, 9 px) · weight (0.00 tabular-nums, 3 chars). Sort by `edge.weight` desc. Click → triggers `onNodeSelect(target.id)` |
-| `PathInsightsBlock` | `intelligence/context/PathInsightsBlock.tsx` | ≤ 110 LOC | `GET /v1/entities/{id}/paths?max_hops=3&limit=10` (via existing `useEntityPaths`) | Header "PATH INSIGHTS · (n)". For top 3 paths: 38 px card with route arrows ("→ Anthropic → AI-chip-rsrch"), 2-line meta ("2 hops · invests, researches"). Click → triggers a workspace event to log the path. |
-| `ContradictionsBlock` | `intelligence/context/ContradictionsBlock.tsx` | ≤ 90 LOC | `GET /v1/entities/{id}/contradictions` (existing in knowledge-graph.ts) | Header "CONTRADICTIONS · (n)". For top 5: 60 px card per item — severity badge (HIGH/MED/LOW with tone color) · claim_a · "vs" · claim_b · source_a vs source_b · timestamp |
+| `EntityOverviewBlock` | `intelligence/context/EntityOverviewBlock.tsx` | ≤ 100 LOC | `GET /v1/entities/{id}` + `GET /v1/entities/{id}/intelligence` | Name (12 px) · type badge (9 px) · health badge (9 px, tone-colored, with `title` tooltip showing `confidence_breakdown` detail: "127 high · 89 med · 34 low claims" — **E-01**) · data completeness badge "81% complete" derived from `intelligence.data_completeness` (**E-02**) · description (11 px, 4-line clamp) · `intelligence.key_metrics` 4-cell strip (market_cap, employees, founded, hq_country) · ↻ Refresh narrative button (icon-only, fires `POST /v1/entities/{id}/narratives/generate`, shows cooldown state — **C-NG-01**) · Confidence trend sparkline (Δ17): `confidence_breakdown.confidence_trend[]` (90-day rolling from IntelligenceResponse) rendered as a 40×18 px inline SVG sparkline below the health badge. No third-party chart library — raw SVG polyline. Color: positive trend → `stroke-positive`, negative trend → `stroke-negative`, flat → `stroke-muted-foreground`. Shows "stability of the narrative over time." · Source distribution chips (Δ18): `confidence_breakdown.source_distribution[]` rendered as max 4 `bg-muted/40 text-[9px] px-1.5 py-0.5 rounded-[2px]` chips inline: "Reuters 45%" · "Bloomberg 32%" · "SEC 23%". Sorted by share desc. If source_distribution is empty, omit entirely. |
+| `TopRelationsBlock` | `intelligence/context/TopRelationsBlock.tsx` | ≤ 90 LOC | `GET /v1/entities/{id}/graph?depth=1` — fetched **independently** with `qk.instruments.entityGraph(entityId, 1)`, staleTime 10 min (**C-TD-01 fix**: this is a separate cache slot from GraphColumn's variable-depth slot; depth=1 is always fast <600 ms, SQL JOIN, not AGE; a second network call is acceptable and will be cache-hit after first load). | Header "TOP RELATIONS · (n)". List of 10 rows, 18 px each: target label (truncate) · relation label (lowercase, 9 px) · weight (0.00 tabular-nums, 3 chars). Sort by `edge.weight` desc. Click → triggers `onNodeSelect(target.id)` |
+| `PathInsightsBlock` | `intelligence/context/PathInsightsBlock.tsx` | ≤ 110 LOC | `GET /v1/entities/{id}/paths?max_hops=3&limit=10` (via existing `useEntityPaths`) | Header "PATH INSIGHTS · (n)". For top 3 paths: 38 px card with route arrows ("→ Anthropic → AI-chip-rsrch"), 2-line meta ("2 hops · invests, researches"). Path scoring badges (second line): `surprise_score > 0.7` → amber "UNEXPECTED" pill (the connection is non-obvious); `harmonic_score` displayed as "Quality: {score}". Both fields are already in `PathInsightPublic` response — no backend change. Click → triggers a workspace event to log the path. |
+| `ContradictionsBlock` | `intelligence/context/ContradictionsBlock.tsx` | ≤ 90 LOC | `GET /v1/entities/{id}/contradictions` (existing in knowledge-graph.ts) | Header "CONTRADICTIONS · (n)". For top 5: 60 px card per item — severity badge · claim_a · "vs" · claim_b · source_a vs source_b · timestamp. **C-OQ-05 fix**: raw `severity` may be uppercase or lowercase depending on S7; always call `.toUpperCase()` before rendering and branching (`'HIGH'/'MEDIUM'/'LOW'`). Fallback unrecognised values to `'LOW'` tier. Color map: `HIGH` → `bg-negative/15 text-negative`; `MEDIUM` → `bg-warning/15 text-warning`; `LOW` → `bg-muted text-muted-foreground`. Also show `claim_type` pill (e.g. "revenue_guidance", "market_cap") if present — 9 px, `bg-muted text-muted-foreground`, positioned inline with severity badge. Per-side extraction confidence shown as "(conf: 0.91)" next to each source. These fields (`claim_type`, `sides[].confidence`) are already in `ContradictionDetailResponse` — no backend change. |
 | `NarrativeHistoryDisclosure` | `intelligence/context/NarrativeHistoryDisclosure.tsx` | ≤ 70 LOC | `GET /v1/entities/{id}/narratives` (existing `useEntityNarratives`) | Collapsed by default ("Narrative history ▾"). Expanded: scrollable list of versions, each 32 px tall: timestamp · model · 1-line snippet. Click → opens version in a small inline drawer (no modal) |
 | `NodePathsBlock` | `intelligence/context/NodePathsBlock.tsx` | ≤ 80 LOC | `GET /v1/entities/{selected_id}/paths?target_entity_id={primary_entity_id}` | Same row pattern as `PathInsightsBlock` but constrained to paths between the selected node and the primary entity (or user portfolio entities when available) |
-| `SectionDivider` (NEW shared) | `instrument/shared/SectionDivider.tsx` (already exists but used differently — extend) | ≤ 20 LOC | — | 1 px `border-border/40` rule with optional 9 px UPPERCASE label centered |
+| `EdgeDetailCard` (NEW) | `intelligence/context/EdgeDetailCard.tsx` | ≤ 110 LOC | `GET /v1/entities/{src}/graph?depth=1` (data already in graph payload — no new network request) | **Source → RELATION_TYPE → Target** breadcrumb (12 px). Relation type in UPPERCASE. Strength: `weight` as 0–100 bar + numeric (e.g. "82 / 100"). Decay badge: `decay_class` (PERMANENT/DURABLE/SLOW/MEDIUM/FAST/EPHEMERAL, color-coded). LLM relation summary: `relation_summary` (11 px, 4-line clamp). Evidence sentences: `evidence_snippets[]` (each as a 9 px blockquote-style indented row, max 5). Evidence count: "Based on {evidence_count} articles". Temporal: `latest_evidence_at` formatted as "Last seen: 14 May 2026". Back button (`←`) clears selection. |
+| `SectionDivider` (REUSE) | `components/primitives/SectionDivider.tsx` (**C-SD-01 fix**: this is the actual path; `instrument/shared/SectionDivider.tsx` does NOT exist) | 0 LOC | — | Import from `@/components/primitives/SectionDivider`. Check existing props before planning — the label feature may already be present. |
 
 ### 5.6 NodeDetailCard upgrade
 
 **File**: `components/instrument/intelligence/context/NodeDetailCard.tsx`
-**Change**: Add an internal `useQuery(['entity-detail', node.id])` call to fetch `GET /v1/entities/{node.id}` so the description shows real text instead of "No description available." Cache `staleTime: 30 min` (descriptions are stable; Worker 13J updates overnight).
+**Change**: Add an internal `useQuery` call to fetch `GET /v1/entities/{node.id}` so the description shows real text instead of "No description available." Cache `staleTime: 30 min` (descriptions are stable; Worker 13J updates overnight). **C-QK-01 fix**: use `qk.kg.entityDetail(node.id)` (not the ad-hoc `['entity-detail', id]` key) so the cascade-invalidation via `qk.kg.all` works.
 
 ```ts
 const { data: detail } = useQuery({
-  queryKey: ['entity-detail', node.id],
+  queryKey: qk.kg.entityDetail(node.id),  // C-QK-01: replaces ad-hoc ['entity-detail', id]
   queryFn: () => createGateway(token).getEntityDetail(node.id),
   enabled: !!token,
   staleTime: 30 * 60 * 1000,
@@ -418,6 +456,8 @@ Render `detail?.description ?? "Description unavailable."` (italicised when null
 - Severity badge: HIGH `bg-negative/15 text-negative`; MEDIUM `bg-warning/15 text-warning`; LOW `bg-muted text-muted-foreground`
 - Active filter pill underline: `border-b-2 border-primary` (Bloomberg yellow)
 - Graph node selection ring: `ring-2 ring-primary` (handled inside sigma.js via nodeReducer; no DOM change)
+- Edge decay opacity: PERMANENT/DURABLE → `opacity-100`; SLOW/MEDIUM → `opacity-70`; FAST/EPHEMERAL → `opacity-40`. Applied as sigma.js `edgeReducer` attribute `color` with alpha encoding. Stale edges (FAST/EPHEMERAL) visually recede, helping the analyst focus on durable connections.
+- Decay class badge (in EdgeDetailCard): PERMANENT → `bg-positive/15 text-positive`; DURABLE → `bg-muted text-foreground`; SLOW/MEDIUM → `bg-warning/15 text-warning`; FAST/EPHEMERAL → `bg-negative/15 text-negative`
 
 ### 6.5 Animations
 
@@ -432,7 +472,9 @@ No transitions on row hover other than `bg-muted/20` opacity flip (CSS, no JS).
 
 ## 7. Interaction model
 
-### 7.1 Hotkeys (scoped to Intelligence tab; registered in `useHotkeys` from `hooks/useHotkeys.ts`)
+### 7.1 Hotkeys (scoped to Intelligence tab; registered via `useChordHotkeys` from `hooks/useChordHotkeys.ts`)
+
+**C-HK-01 fix**: `hooks/useHotkeys.ts` does not exist. The platform uses `hooks/useChordHotkeys.ts` with `HotkeyScope` (`"global" | "page" | "table" | "chart" | "input" | "modal"`). Use `scope: "page"` — push on `IntelligenceTab` mount, pop on unmount. All hotkeys below fire only when `"page"` is active and `"modal"` is NOT active.
 
 | Key | Action |
 |-----|--------|
@@ -441,7 +483,7 @@ No transitions on row hover other than `bg-muted/20` opacity flip (CSS, no JS).
 | `1` / `2` / `3` | Set graph depth to 1 / 2 / 3 |
 | `t` | Toggle type-filter dropdown |
 | `g` | Focus the graph canvas (sigma.js takes keyboard) |
-| `r` | Regenerate AI brief (fires `POST /v1/briefings/instrument/{id}` if backend supports it; else `queryClient.invalidateQueries`) |
+| `r` | Regenerate AI brief — `queryClient.invalidateQueries({ queryKey: qk.instruments.brief(entityId) })` which triggers `useInstrumentBrief` lazy-generate flow (W5). **OQ-6 resolved**: `POST /v1/briefings/instrument/{id}/regenerate` does NOT exist; the correct approach is cache invalidation → lazy generate on next read. |
 | `Esc` | Clear node selection (`onClearSelection()`) — same as `Back` button |
 | `?` | Open hotkey legend overlay (global) |
 
@@ -449,8 +491,8 @@ No transitions on row hover other than `bg-muted/20` opacity flip (CSS, no JS).
 
 - **News row**: 100 ms `bg-muted/20` darken on hover. Title attribute exposes full headline if truncated.
 - **Top-relation row**: title attribute shows `{source.label} → {target.label}` (full). Hover ring `ring-1 ring-border` to signal click affordance.
-- **Graph node**: existing `NodeTooltipPanel` (PLAN-0090 keeps this).
-- **Graph edge**: existing `EdgeTooltipPanel` — enhance to render `evidence_snippets[0..2]` as 9 px lines under the relation label (data already on payload).
+- **Graph node**: `NodeTooltipPanel` — **enhanced in W7**: shows entity name (12 px bold) · entity type badge (9 px) · sector badge (9 px, muted — requires `sector` field on GraphNode; see §3.2 backend change Δ13) · description (11 px, 2-line clamp, fetched lazily from `GraphNode.description` when available — same field used in `NodeDetailCard`; falls back to "No description." italic). Does NOT trigger a network call — description is added to the GraphNode payload in the S9 proxy (see §3.2).
+- **Graph edge**: `EdgeTooltipPanel` — **enhanced in W7**: shows relation label (UPPERCASE, 10 px) · strength (weight × 100 as integer, "82 strength") · `relation_summary` (if non-null: 11 px, 1-line) · `evidence_snippets[0..2]` as 9 px indented lines (data already on GraphEdge payload for depth=1). For depth>1 edges, `evidence_snippets` is empty — show "Expand at depth 1 to see evidence". Decay class badge if `decay_class` is exposed (see Δ14).
 - **Contradiction card**: title attribute shows source URLs.
 
 ### 7.3 Click handlers
@@ -459,20 +501,23 @@ No transitions on row hover other than `bg-muted/20` opacity flip (CSS, no JS).
 |--------|---------|
 | News row | `window.open(article.url, '_blank', 'noopener,noreferrer')` |
 | Top-relation row | `onNodeSelect(edge.target_id)` — triggers node-detail mode in the right rail AND highlights the node in the graph |
-| Path card | log path to telemetry (`analytics.track('path.viewed', {entityId, pathId})`); future v1.1: pin to a workspace note |
+| Path card | `console.debug('[intelligence] path.viewed', { entityId, pathId })` — **C-AN-01 fix**: `analytics.track` / `lib/telemetry.ts` does not exist in the codebase; deferred to platform-wide telemetry initiative. Future v1.1: pin to a workspace note. |
 | Contradiction card | `window.open(contradiction.source_a.url, '_blank')` (priority: highest severity source first) |
 | Narrative history row | expand inline drawer (≤ 120 px) showing full `narrative_text` for that version; click again to collapse |
+| Graph edge (click) | `setSelectedEdgeId(edge.id)` + `setSelectedNodeId(null)` — triggers EdgeDetailCard mode in the right rail. The `IntelligenceTab` lifts `selectedEdgeId: string \| null` state. **Cross-pane sync**: clicked edge highlighted in sigma.js via `edgeReducer` (ring color). |
 | Graph node | existing `handleNodeClick` (toggle select) |
 | Type-filter dropdown | existing `onEntityTypesChange` |
 | Depth slider | existing `onDepthChange` |
 | `Back` button (NodeDetailCard) | `onClearSelection()` |
+
+**Narrative generate polling pattern (Δ22)**: After `POST /v1/entities/{id}/narratives/generate` returns 202, the frontend must poll `GET /v1/entities/{id}/narratives` every 3 s (up to 10 attempts = 30 s max). Show a "Generating…" spinner in `NarrativeHistoryDisclosure` header while polling. On 429 (rate-limited), show "Rate limited — retry in 1 h" with countdown. On timeout after 10 polls, show "Generation in progress — check back shortly." This is handled inside `NarrativeHistoryDisclosure` state machine.
 
 ### 7.4 Loading / Error / Empty states (per pane)
 
 | Pane | Loading | Error | Empty |
 |------|---------|-------|-------|
 | News column | 8 skeleton 18 px rows (`animate-pulse bg-muted/20`) | "Failed to load news. [Retry]" — `text-[11px] text-negative`. Retry calls `refetch()` | "No articles for this entity." — italic 11 px |
-| Brief | 4 skeleton lines (12 / 11 / 11 / 11 px) | "Brief unavailable. [Retry]" + `r` hotkey hint | Headline+narrative null → render headline-only fallback "No brief yet — analysis runs every 10 min" |
+| Brief | 4 skeleton lines (12 / 11 / 11 / 11 px) | "Brief unavailable. [Retry]" + `r` hotkey hint | `brief.lead ?? brief.summary` null → render fallback "No brief yet — analysis runs every 10 min" (**C-BR-01**: field is `lead`, not `headline`) |
 | Graph stats strip | "loading…" muted-foreground | "stats unavailable" | "0 nodes · 0 edges" |
 | Graph canvas | spinning `RefreshCw` 16 px | depth-aware copy (see §5.3); show `Retry` button | "No relations for this entity at depth {d}." + "Try depth +1" link |
 | Top relations | 6 skeleton 18 px rows | "Relations unavailable" | "No direct relations." |
@@ -481,6 +526,7 @@ No transitions on row hover other than `bg-muted/20` opacity flip (CSS, no JS).
 | Narrative history | (collapsed by default; no skeleton) | inline error in drawer | "Only the current version exists." |
 | Entity overview | combined skeleton (header + 4 description lines) | "Entity detail unavailable" | "No entity record." |
 | Node detail | (no skeleton — payload already in graph) | description fetch error → fall back to "Description unavailable." italic | n/a |
+| Edge detail | (no loading skeleton — data already in graph payload) | "Edge detail unavailable" if edge not found | n/a |
 
 ### 7.5 Cross-pane synchronisation
 
@@ -495,6 +541,8 @@ No transitions on row hover other than `bg-muted/20` opacity flip (CSS, no JS).
 
 All keys use the `qk.*` namespace from `lib/query/keys.ts`. We **extend** the namespace; we do NOT rename existing keys (cache-stable migration).
 
+**C-QK-01 fix — migration required**: `lib/query/keys.ts` has NO `qk.kg` namespace today. The three intelligence hooks (`useEntityIntelligence`, `useEntityPaths`, `useEntityNarratives`) use a private `iqk` object local to `lib/api/intelligence.ts`. `NodeDetailCard` uses ad-hoc `['entity-detail', id]`. W7 must: (1) add `qk.kg` to `lib/query/keys.ts` as below; (2) migrate `iqk.intelligence/paths/narratives` → `qk.kg.*` inside `intelligence.ts`; (3) replace ad-hoc `['entity-detail', id]` with `qk.kg.entityDetail(id)` in `NodeDetailCard`. `PathFilters` type is already exported from `lib/api/intelligence.ts` — re-export or import from there.
+
 | Resource | Key | staleTime | Hook |
 |----------|-----|-----------|------|
 | Instrument brief | `qk.instruments.brief(entityId)` | 10 min | existing in `GraphColumn` |
@@ -505,6 +553,7 @@ All keys use the `qk.*` namespace from `lib/query/keys.ts`. We **extend** the na
 | Entity contradictions | `qk.kg.contradictions(entityId)` (NEW) | 2 min | NEW |
 | Entity narratives (infinite) | `qk.kg.narratives(entityId)` (NEW) | 5 min | existing `useEntityNarratives` |
 | Entity news (infinite) | `qk.news.entity(entityId, filters)` | 30 s | existing |
+| Edge detail | `qk.kg.edgeDetail(edgeId)` | instant (data in graph payload — no separate fetch) | read from graph query data |
 
 Proposed addition to `lib/query/keys.ts`:
 
@@ -528,7 +577,7 @@ This lets `queryClient.invalidateQueries({ queryKey: qk.kg.all })` cascade-inval
 
 ### 8.2 Dedup opportunities
 
-- The graph is fetched twice today (`GraphColumn` at variable depth, `ContextPanel` at depth=1). After the redesign, `ContextPanel` and `TopRelationsBlock` **both read from the same cache slot** as `GraphColumn` by using `qk.instruments.entityGraph(entityId, 1)` and accepting whatever depth is in the cache (read-only — only `GraphColumn` writes).
+- **C-TD-01 fix**: `TopRelationsBlock` fetches depth=1 independently using `qk.instruments.entityGraph(entityId, 1)`, staleTime 10 min. This is a separate cache slot from GraphColumn's variable-depth slot. If the user has moved the slider to depth=2, the depth=1 slot will be empty on first load but fast to fill (<600 ms, SQL JOIN, no AGE). After the first load it is cached for 10 min. The design's original phrase "accept whatever depth is in the cache" was ambiguous and incorrect — the keys are depth-specific.
 - `BriefingResponse` is shared between this tab and the Quote tab's `AiBriefBanner` (if reintroduced per `01-global-shell.md`). Same `qk.instruments.brief(entityId)` key.
 - `Entity detail` is reused by the Quote tab's `EntityDescriptionPanel` (legacy). New `qk.kg.entityDetail` key replaces the ad-hoc `['entity-detail', id]` everywhere — coordinate with `05-instrument-quote.md`.
 
@@ -544,7 +593,9 @@ We continue to **gate** by `enabled: !!accessToken && !!entityId` (no Suspense b
 | 2 | < 1500 ms | 4000 ms | S7 AGE Cypher 2-hop |
 | 3 | < 3000 ms target / 8000 ms hard | 8000 ms | S7 AGE Cypher 3-hop (currently O(degree³) — backend ticket required for materialisation; see `project_graph_bugs_2026_05_11.md`) |
 
-Frontend MUST measure with `performance.now()` around the queryFn and emit `analytics.track('graph.fetch', { depth, latency_ms, node_count, edge_count })`. This data also powers the GraphStats strip in §5.3.
+Frontend MUST measure with `performance.now()` around the queryFn. Store elapsed time in `GraphColumn` state and pass as `latencyMs` prop to `GraphStats`. Also log: `console.debug('[intelligence] graph.fetch', { depth, latency_ms, node_count, edge_count })` — **C-AN-01 fix**: `analytics.track` does not exist; telemetry is deferred. This measurement powers the GraphStats strip in §5.3.
+
+**Caching recommendation (Δ21)**: Currently the graph endpoint has NO server-side cache. Adding a 5-min Valkey TTL at S9 (cache key: `graph:{tenant_id}:{entity_id}:{limit}:{depth}`) would reduce repeated load by ~95% during analysis sessions. This is recorded as **backend change B-03** but is not blocking W7 frontend work. The TanStack Query `staleTime: 10 min` already provides a client-side cache; the S9 server cache would benefit multi-tab and mobile scenarios.
 
 ---
 
@@ -566,7 +617,7 @@ Frontend MUST measure with `performance.now()` around the queryFn and emit `anal
 
 **Chosen**: structured `BriefingResponse.sections` renderer (StructuredBrief).
 **Alternative**: keep `<MarkdownContent>` blob.
-**Why structured wins**: the backend already emits `headline + sections[].title + sections[].bullets[]` (see `00-backend-data-inventory.md` §3.7) — rendering it as a markdown blob discards the structure the LLM was prompted to produce. The structured renderer makes the brief scannable (each section is its own micro-card) and accessible (proper heading levels for a11y).
+**Why structured wins**: the backend already emits `lead + sections[].title + sections[].bullets[]` (see `00-backend-data-inventory.md` §3.7 — note: the inventory sample calls it `headline` but the actual `BriefingResponse` field is `lead` per PLAN-0062-W4; **C-BR-01**) — rendering it as a markdown blob discards the structure the LLM was prompted to produce. The structured renderer makes the brief scannable (each section is its own micro-card) and accessible (proper heading levels for a11y). The shared `StructuredBrief` component at `components/brief/StructuredBrief.tsx` already handles this with `variant="compact"` — no fork required (**C-SB-01**).
 
 ### Decision 4 — Graph timeout: fixed 3 s vs. depth-adaptive
 
@@ -594,13 +645,48 @@ Frontend MUST measure with `performance.now()` around the queryFn and emit `anal
 
 ---
 
-## 10. Open questions
+## 10. Open questions (all resolved — 2026-05-22 audit)
 
-1. **Path-to-portfolio paths**: `/v1/entities/{id}/paths` does not currently filter by user-portfolio terminal nodes. Do we (a) ship without portfolio filtering and rely on top 3 generic paths, (b) post-filter client-side after fetching the user's `holdings`, or (c) request S7 to accept a `target_entity_ids[]` query parameter? Recommend (b) for v1, (c) for v1.1.
-2. **Narrative-history drawer mechanism**: clicking a version expands inline (no modal) — does our existing accordion primitive (`components/ui/accordion`) suffice, or do we need a custom inline drawer? Recommend the existing primitive.
-3. **Hotkey collisions**: `j`/`k` may conflict with the global watchlist navigator from `01-global-shell.md`. Coordinate with shell agent — propose scoping news-row nav under `n j` / `n k` if shell uses bare `j`/`k`.
-4. **Backend ticket for AGE depth=3**: the 8 s budget is generous but not sustainable. Open a `docs/specs/0089-platform-page-redesign.md` follow-up item to materialise 3-hop paths in `entity_relationships_materialized` (S7 worker, async). Out of scope for this design.
-5. **Contradictions endpoint shape**: `00-backend-data-inventory.md` lists `severity` but doesn't show a sample. Confirm enum values (`HIGH/MEDIUM/LOW` vs `high/medium/low`) before implementation; tone-color map depends on this.
-6. **Regenerate-brief endpoint**: is there a `POST /v1/briefings/instrument/{id}/regenerate` route? If not, the `r` hotkey simply invalidates the cache and waits for the next backend run. Confirm with rag-chat docs (`docs/services/rag-chat.md`).
-7. **Telemetry events**: confirm the analytics shape (`analytics.track`) — same key set as the rest of the platform (`apps/worldview-web/lib/telemetry.ts`)? PRD-0089 will codify this once all per-page designs are merged.
-8. **Workspace pin for paths**: future v1.1 — pinning a path to a workspace note requires a new endpoint (`POST /v1/workspace/notes` or extension to existing). Out of scope here but recorded for `09-workspace-predictions-alerts.md`.
+All OQs resolved during `/revise-prd` pass. Audit corners file: `docs/designs/0089/oq/07-instrument-intelligence-CORNERS-AUDIT.md`.
+
+| # | Question | Decision |
+|---|----------|----------|
+| 1 | Path-to-portfolio filtering | **Option (b)**: client-side post-filter. Fetch `qk.portfolios.holdings(activePortfolioId)` (already in cache on most page loads). Filter paths where any terminal node ticker matches a held ticker. Fall back to top-3 generic paths if user has no holdings or holdings are unavailable. Option (c) deferred to v1.1. |
+| 2 | Narrative-history drawer mechanism | Use **existing `components/ui/accordion`** (shadcn Accordion). `NarrativeHistoryDisclosure` renders an `AccordionItem`. No custom inline drawer needed. |
+| 3 | `j`/`k` hotkey collision | **SAFE** — `GlobalHotkeyBindings.tsx` does NOT register bare `j` or `k`. WatchlistPanel does NOT register them. Use bare `j`/`k` for news-row navigation without chord prefix. |
+| 4 | AGE depth=3 materialisation | Deferred. The 8 s budget is a frontend stopgap. A follow-up spec item (`entity_relationships_materialized` S7 worker) is recorded in `docs/specs/0089-platform-page-redesign.md §14`. Out of scope for W7. |
+| 5 | Contradictions severity casing | Always call `.toUpperCase()` before branching. Fallback unknown values → `'LOW'`. Color map in §5.5 uses uppercase keys (`HIGH/MEDIUM/LOW`). |
+| 6 | Regenerate-brief endpoint | `POST /v1/briefings/instrument/{id}/regenerate` does **NOT** exist. `r` hotkey → `queryClient.invalidateQueries({ queryKey: qk.instruments.brief(entityId) })`, which triggers `useInstrumentBrief`'s lazy-generate flow (shipped in W5). |
+| 7 | Telemetry / analytics.track | `lib/telemetry.ts` does NOT exist. Replace all `analytics.track(...)` calls with `console.debug(...)`. Telemetry is a future platform initiative (deferred). |
+| 8 | Workspace pin for paths | Future v1.1. Recorded in `09-workspace-predictions-alerts.md`. No action in W7. |
+
+---
+
+## 11. Enhancement opportunities (backend data not in original design — added 2026-05-22)
+
+These three items come from the `/revise-prd` audit. Each ships with W7 as zero-backend-cost improvements because the data is already in existing API responses.
+
+### E-01 — `confidence_breakdown` tooltip on health badge
+
+`GET /v1/entities/{id}/intelligence` returns `confidence_breakdown: {fully_confident, high_confidence, medium_confidence, low_confidence}` (integer claim counts). Currently discarded.
+
+**Implementation**: Add `title` prop on the health badge in `EntityOverviewBlock`:
+```tsx
+title={`${cb.fully_confident} high · ${cb.high_confidence} med · ${cb.medium_confidence} low · ${cb.low_confidence} uncertain claims`}
+```
+No new component. Single line. Surfaces data quality signal instantly on hover.
+
+### E-02 — `data_completeness` percentage badge
+
+`GET /v1/entities/{id}/intelligence` returns `data_completeness: {fields_populated: 34, total_fields: 42}`. Currently discarded.
+
+**Implementation**: Render as a small secondary badge in `EntityOverviewBlock` using `DataFreshnessPill` from F1 primitives:
+```tsx
+const pct = Math.round((completeness.fields_populated / completeness.total_fields) * 100);
+<DataFreshnessPill label={`${pct}% complete`} />
+```
+Positioned next to the type badge. Analysts can judge data quality at a glance.
+
+### E-03 — `BriefingResponse.risk_summary` surfaced via `StructuredBrief`
+
+`BriefingResponse.risk_summary` (top_risk_signals array) is already in the frontend type and the existing `StructuredBrief` component renders risk signals when `variant="compact"` is used. This enhancement is a **free by-product** of the C-SB-01 fix (reusing the shared component instead of forking). No additional implementation required — confirm `StructuredBrief` variant="compact" renders risk chips and document in acceptance criteria.
