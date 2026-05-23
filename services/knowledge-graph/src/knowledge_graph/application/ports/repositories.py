@@ -197,7 +197,7 @@ class RelationEvidenceRepositoryPort(ABC):
         evidence_date: datetime,
         *,
         canonical_type: str | None = None,
-        polarity: str = "positive",
+        polarity: str = "neutral",
         claim_id: UUID | None = None,
         chunk_id: UUID | None = None,
         is_backfill: bool = False,

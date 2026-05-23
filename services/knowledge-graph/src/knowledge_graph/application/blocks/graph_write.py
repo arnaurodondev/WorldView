@@ -76,7 +76,7 @@ class RawRelation:
     subject_entity_id: UUID
     object_entity_id: UUID
     raw_type: str
-    polarity: str = "positive"
+    polarity: str = "neutral"
     extraction_confidence: float = 0.5
     source_trust_weight: float = 1.0
     evidence_date: datetime = dataclasses.field(
