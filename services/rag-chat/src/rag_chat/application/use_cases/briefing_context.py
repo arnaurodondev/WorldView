@@ -419,25 +419,23 @@ class BriefingContextGatherer:
         entity_id: str,
         entity_name: str,
     ) -> list[EnrichedChunkResult]:
-        """ANN chunk search filtered to entity: SEC filings, earnings transcripts, analyst reports.
+        """ANN chunk search filtered to entity across all document types.
 
-        Uses entity_ids filter (GIN-indexed at S6) so only semantically relevant
-        chunks for this entity surface.  source_types excludes news articles —
-        those are already handled by _fetch_entity_articles.  top_k=10 keeps
-        prompt size bounded; min_score=0.4 prunes low-quality matches.
-
-        query_text=entity_name is required by S6's "exactly_one_query" validator
-        (search_type="ann" always needs a query vector or text to embed).  The
-        entity name gives sufficient semantic signal to find relevant document
-        sections even without an explicit user query.
+        Uses entity_ids filter so only chunks mentioning this entity surface.
+        No source_type filter: HNSW only scores top_k candidates globally and
+        sparse source types (sec_edgar ≈ 2% of index) never appear in those
+        candidates, yielding 0 results.  chunk granularity returns full text
+        (stored in MinIO) rather than section headings only.
         """
+        # No source_type filter: HNSW ANN returns only top_k candidates globally,
+        # so filtering to sparse source types (sec_edgar ≈ 2% of index) yields
+        # 0 results. The entity_id filter already narrows to relevant chunks.
         request = ChunkSearchRequest(
             query_text=entity_name,
-            top_k=10,
-            min_score=0.4,
-            granularity="section",
+            top_k=12,
+            min_score=0.35,
+            granularity="chunk",
             include_entities=False,
-            source_types=["sec_edgar", "sec_10k", "sec_10q", "sec_8k", "earnings_transcript"],
             search_type="ann",
             entity_ids=[UUID(entity_id)],
         )
