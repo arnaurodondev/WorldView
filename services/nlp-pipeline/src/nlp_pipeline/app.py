@@ -75,6 +75,12 @@ async def _expire_stale_embeddings(
     Sets ``expires_at = now()`` on any ``chunk_embeddings`` / ``section_embeddings``
     rows whose ``model_id`` does not match ``config.embedding_model_id``.
     The EmbeddingRetryWorker will re-generate them on its next cycle.
+
+    F-013: ``config.embedding_model_id`` MUST match the ``model_id`` string the
+    active embedding adapter writes into ``EmbeddingOutput.model_id`` at ingestion
+    time.  For the DeepInfra adapter that is ``config.embedding_api_model_id``
+    (``"BAAI/bge-large-en-v1.5"``); for the Ollama adapter it is ``"bge-large"``.
+    A mismatch inverts the logic: correct rows get expired and stale rows are kept.
     """
     import structlog
     from sqlalchemy import text

@@ -90,7 +90,13 @@ class Settings(BaseSettings):
 
     # Ollama / ML endpoints
     ollama_base_url: str = "http://localhost:11434"
-    embedding_model_id: str = "bge-large"
+    # F-013: MUST match the model_id string returned by the active embedding adapter.
+    # DeepInfra (provider="deepinfra") returns "BAAI/bge-large-en-v1.5" (embedding_api_model_id).
+    # Ollama (provider="ollama") returns "bge-large" (the pull name used in the container).
+    # _expire_stale_embeddings() compares chunk_embeddings.model_id against this value —
+    # a mismatch will expire all CORRECT chunks and keep all stale ones (backwards expiry).
+    # Default here is the DeepInfra value since EMBEDDING_PROVIDER defaults to "deepinfra" in docker.env.
+    embedding_model_id: str = "BAAI/bge-large-en-v1.5"
     ner_model_id: str = "urchade/gliner_large-v2.1"
     extraction_model_id: str = "qwen2.5:7b-instruct"
 
