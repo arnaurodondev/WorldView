@@ -527,8 +527,10 @@ def _build_relation_merge_sql(edge_label: str) -> str:
     SECURITY: Defense-in-depth assertion — prevents any future caller from
     bypassing whitelist validation and injecting arbitrary Cypher edge labels.
     """
-    # SECURITY: edge_label must be whitelist-validated; assert here as defense-in-depth.
-    assert edge_label in _VALID_EDGE_LABELS, f"Cypher label injection guard: {edge_label!r} not in whitelist"
+    # SECURITY: edge_label must be whitelist-validated. Use if/raise (not assert) so the
+    # guard is never stripped by python -O optimized mode in production containers.
+    if edge_label not in _VALID_EDGE_LABELS:
+        raise ValueError(f"Cypher label injection guard: {edge_label!r} not in whitelist")
     # BP-SA5-001: use lowercase ``entity`` label (same as _SQL_ENTITY_MERGE and
     # path_discovery.py) so MATCHes resolve to the correct label namespace.
     cypher = (

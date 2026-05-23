@@ -356,13 +356,18 @@ class TestEdgeLabelDerivation:
 
         assert _derive_edge_label("unknown_injected_type") is None
 
-    def test_all_27_labels_valid(self) -> None:
+    def test_all_valid_edge_labels_round_trip(self) -> None:
         """Every label in _VALID_EDGE_LABELS survives a round-trip through _derive_edge_label."""
         from knowledge_graph.infrastructure.workers.age_sync_worker import (
             _VALID_EDGE_LABELS,
             _derive_edge_label,
         )
 
+        # Count assertion: update this when new relation types are seeded.
+        # 27 original + 5 PLAN-0089 Lever-4 (migration 0041) + EVENT_EXPOSES + EXPOSED_TO_THEME = 34
+        assert (
+            len(_VALID_EDGE_LABELS) == 34
+        ), f"Expected 33 labels but got {len(_VALID_EDGE_LABELS)}; update this count after adding new relation types."
         for label in _VALID_EDGE_LABELS:
             assert _derive_edge_label(label) == label
 

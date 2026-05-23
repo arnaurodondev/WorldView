@@ -403,7 +403,9 @@ async def get_entity_intelligence(
 
     user = request.state.user
     tenant_id: str = str(user.get("tenant_id", ""))
-    cache_key = f"intel:{tenant_id}:{entity_id}"
+    # Include forwarded params in the cache key so different param combinations
+    # are not served the same cached response (e.g. confidence_breakdown=true vs false).
+    cache_key = f"intel:{tenant_id}:{entity_id}:{int(confidence_breakdown)}:{focus_node or ''}"
     valkey = getattr(request.app.state, "valkey", None)
 
     # ── Cache hit check ─────────────────────────────────────────────────────
