@@ -32,7 +32,7 @@ function makeArticle(i: number): RankedArticle {
     published_at: "2026-05-22T08:30:00Z",
     sentiment: i % 3 === 0 ? "positive" : i % 3 === 1 ? "negative" : "neutral",
     impact_score: (i % 10) / 10,
-    relevance_score: 0.9,
+    display_relevance_score: 0.9,
   } as RankedArticle;
 }
 

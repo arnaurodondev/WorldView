@@ -61,7 +61,14 @@ export function NewsColumn({ instrumentId }: NewsColumnProps) {
       e.preventDefault();
       const article = articles[selectedIdx];
       if (!article?.url) return;
-      console.debug("[intelligence] news.open", { idx: selectedIdx, url: article.url });
+      // WHY protocol check: reject javascript:/data: URLs to prevent injection.
+      try {
+        const parsed = new URL(article.url);
+        if (!["http:", "https:"].includes(parsed.protocol)) return;
+      } catch {
+        return;
+      }
+      console.debug("[intelligence] news.open", { idx: selectedIdx, article_id: article.article_id });
       window.open(article.url, "_blank", "noopener,noreferrer");
     },
     [articles, selectedIdx],

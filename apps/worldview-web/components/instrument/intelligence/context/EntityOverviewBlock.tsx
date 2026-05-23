@@ -161,9 +161,9 @@ export function EntityOverviewBlock({ entityId }: EntityOverviewBlockProps) {
   const pct = completeness != null ? Math.round(completeness * 100) : null;
 
   // Metadata fields — all from entity.metadata (EntityMetadata shape)
-  const employees = entity.metadata.employee_count;
-  const founded = entity.metadata.founded_year;
-  const hqCountry = entity.metadata.headquarters_country ?? entity.metadata.country;
+  const employees = entity.metadata?.employee_count;
+  const founded = entity.metadata?.founded_year;
+  const hqCountry = entity.metadata?.headquarters_country ?? entity.metadata?.country;
 
   return (
     <div className="p-3 space-y-2">

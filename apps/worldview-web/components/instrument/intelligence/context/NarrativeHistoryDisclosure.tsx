@@ -28,7 +28,7 @@
 
 import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { useAuth } from "@/hooks/useAuth";
+import { useAccessToken } from "@/lib/api-client";
 import { createGateway } from "@/lib/gateway";
 import { qk } from "@/lib/query/keys";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -48,7 +48,7 @@ export interface NarrativeHistoryDisclosureProps {
 // ── Component ─────────────────────────────────────────────────────────────────
 
 export function NarrativeHistoryDisclosure({ entityId }: NarrativeHistoryDisclosureProps) {
-  const { accessToken } = useAuth();
+  const accessToken = useAccessToken();
   // WHY local expanded set (not global state): each version row can be expanded
   // independently. A Set of version_ids gives O(1) toggle without lifting state.
   const [expandedVersionIds, setExpandedVersionIds] = useState<Set<string>>(new Set());

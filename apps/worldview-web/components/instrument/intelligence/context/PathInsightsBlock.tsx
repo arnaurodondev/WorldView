@@ -24,12 +24,8 @@
 // WHY "use client": useQuery + useQueryClient + useActivePortfolio require browser.
 
 import { useMemo } from "react";
-import { useQueryClient } from "@tanstack/react-query";
 import { useEntityPaths } from "@/lib/api/intelligence";
-import { useActivePortfolio } from "@/contexts/ActivePortfolioContext";
-import { qk } from "@/lib/query/keys";
 import { Skeleton } from "@/components/ui/skeleton";
-import type { HoldingsResponse } from "@/types/api";
 import type { PathInsightPublic } from "@/types/intelligence";
 
 export interface PathInsightsBlockProps {
@@ -40,37 +36,17 @@ export interface PathInsightsBlockProps {
 // ── Component ─────────────────────────────────────────────────────────────────
 
 export function PathInsightsBlock({ entityId, limit = 3 }: PathInsightsBlockProps) {
-  const queryClient = useQueryClient();
-  const { activePortfolioId } = useActivePortfolio();
-
   // WHY useEntityPaths (not direct useQuery): the hook already centralises the
   // qk.kg.paths key, auth token plumbing, and 5-min staleTime that matches
   // the backend's own path-computation cache TTL.
   const { data: pathsData, isLoading, isError } = useEntityPaths(entityId);
 
-  // WHY getQueryData (not useQuery): we only OBSERVE the holdings cache that
-  // the portfolio page/bundle already populated. Creating a second query here
-  // would require a portfolio ID from props and fire a fresh S1 request just
-  // for ticker filtering. Reading from cache is free and sufficient — if the
-  // cache is empty (user never visited portfolio), the filter set is empty and
-  // we fall back to top paths anyway.
-  const holdingTickers = useMemo<Set<string>>(() => {
-    if (!activePortfolioId) return new Set();
-    const holdings = queryClient.getQueryData<HoldingsResponse>(
-      qk.portfolios.holdings(activePortfolioId),
-    );
-    return new Set(holdings?.holdings?.map((h) => h.ticker) ?? []);
-  }, [queryClient, activePortfolioId]);
-
-  // Post-filter: prefer paths that pass through a holding ticker.
-  // Fallback to top-scored paths when no holding intersection is found.
+  // WHY top-scored only (no portfolio filter): PathNodePublic has no ticker field,
+  // so comparing n.name ("Apple Inc.") against portfolio tickers ("AAPL") always
+  // returns false. Showing top-scored paths is more useful than an always-empty filter.
   const display = useMemo<PathInsightPublic[]>(() => {
-    const all = pathsData?.paths ?? [];
-    const filtered = all.filter((path) =>
-      path.path_nodes.some((n) => holdingTickers.has(n.name)),
-    );
-    return (filtered.length > 0 ? filtered : all).slice(0, limit);
-  }, [pathsData, holdingTickers, limit]);
+    return (pathsData?.paths ?? []).slice(0, limit);
+  }, [pathsData, limit]);
 
   const sectionLabel = (
     <span className="text-[9px] font-mono uppercase tracking-[0.1em] text-muted-foreground px-3 py-1 block">

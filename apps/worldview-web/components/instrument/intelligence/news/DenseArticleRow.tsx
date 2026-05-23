@@ -87,19 +87,27 @@ function impactColorClass(score: number | null): string {
 export function DenseArticleRow({ article, highlighted = false }: DenseArticleRowProps) {
   // WHY useMemo for click: avoids allocating a new closure on every render
   // (this row is rendered 30+ times in the news rail).
+  // WHY protocol check: reject javascript:/data: URLs from API to prevent injection.
   const handleClick = useMemo(() => {
     if (!article.url) return undefined;
+    try {
+      const parsed = new URL(article.url);
+      if (!["http:", "https:"].includes(parsed.protocol)) return undefined;
+    } catch {
+      return undefined;
+    }
     const url = article.url;
     return () => window.open(url, "_blank", "noopener,noreferrer");
   }, [article.url]);
 
   // Local-timezone HH:MM — traders scan in their session timezone.
   const timeLabel = article.published_at
-    ? new Date(article.published_at).toLocaleTimeString(undefined, {
-        hour: "2-digit",
-        minute: "2-digit",
-        hour12: false,
-      })
+    ? (() => {
+        const d = new Date(article.published_at);
+        return isNaN(d.getTime())
+          ? "—"
+          : d.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit", hour12: false });
+      })()
     : "—";
 
   // impact_score 0.0–1.0 → 0–100 integer display (compact, no decimal noise).

@@ -60,7 +60,6 @@ const mockEntity = {
 const mockIntelligence = {
   health_score: 0.8,
   confidence_breakdown: {},
-  overall_health: "good",
 };
 
 beforeEach(() => {

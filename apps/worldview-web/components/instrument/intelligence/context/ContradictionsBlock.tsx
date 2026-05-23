@@ -22,7 +22,7 @@
 // WHY "use client": useQuery + onClick require browser context.
 
 import { useQuery } from "@tanstack/react-query";
-import { useAuth } from "@/hooks/useAuth";
+import { useAccessToken } from "@/lib/api-client";
 import { createGateway } from "@/lib/gateway";
 import { qk } from "@/lib/query/keys";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -56,7 +56,10 @@ function severityClass(severity: "LOW" | "MEDIUM" | "HIGH" | "CRITICAL"): string
 // ── Component ─────────────────────────────────────────────────────────────────
 
 export function ContradictionsBlock({ entityId, limit = 5 }: ContradictionsBlockProps) {
-  const { accessToken } = useAuth();
+  // WHY useAccessToken (not useAuth): matches the token source used by all other
+  // intelligence hooks (useEntityPaths, EntityOverviewBlock) so enabled guard fires
+  // consistently. useAuth().accessToken can lag behind on hydration causing suppressed queries.
+  const accessToken = useAccessToken();
 
   const { data, isLoading, isError } = useQuery({
     queryKey: qk.kg.contradictions(entityId),
@@ -111,8 +114,17 @@ export function ContradictionsBlock({ entityId, limit = 5 }: ContradictionsBlock
           // WHY source_a as URL: the existing ContradictionsResponse type uses
           // source_a/source_b as string URLs (not {url, label} objects). We open
           // source_a in a new tab so analysts can read the originating claim.
-          const handleClick = () =>
-            window.open(c.source_a ?? "#", "_blank", "noopener,noreferrer");
+          // WHY protocol guard: reject javascript:/data: URLs from API to prevent injection.
+          const handleClick = () => {
+            if (!c.source_a) return;
+            try {
+              const parsed = new URL(c.source_a);
+              if (!["http:", "https:"].includes(parsed.protocol)) return;
+            } catch {
+              return;
+            }
+            window.open(c.source_a, "_blank", "noopener,noreferrer");
+          };
 
           return (
             <button

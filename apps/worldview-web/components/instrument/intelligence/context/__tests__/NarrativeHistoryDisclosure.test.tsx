@@ -19,8 +19,8 @@ vi.mock("next/navigation", () => ({
   useParams: vi.fn(() => ({})),
 }));
 
-vi.mock("@/hooks/useAuth", () => ({
-  useAuth: vi.fn(() => ({ accessToken: "tok" })),
+vi.mock("@/lib/api-client", () => ({
+  useAccessToken: vi.fn(() => "tok"),
 }));
 
 const mockGateway = vi.hoisted(() => ({ getNarratives: vi.fn() }));

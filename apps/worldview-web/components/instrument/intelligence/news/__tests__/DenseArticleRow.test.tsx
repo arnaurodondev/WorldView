@@ -24,7 +24,7 @@ function makeArticle(overrides: Partial<RankedArticle> = {}): RankedArticle {
     published_at: "2026-05-22T08:30:00Z",
     sentiment: "positive",
     impact_score: 0.75,
-    relevance_score: 0.9,
+    display_relevance_score: 0.9,
     ...overrides,
   } as RankedArticle;
 }

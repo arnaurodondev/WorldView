@@ -19,10 +19,6 @@ vi.mock("next/navigation", () => ({
   useParams: vi.fn(() => ({})),
 }));
 
-vi.mock("@/hooks/useAuth", () => ({
-  useAuth: vi.fn(() => ({ accessToken: "tok" })),
-}));
-
 vi.mock("@/lib/api/intelligence", () => ({
   useEntityPaths: vi.fn(),
 }));
@@ -54,7 +50,11 @@ describe("PathInsightsBlock", () => {
     const paths = [{
       insight_id: "p1",
       hop_count: 2,
-      path_nodes: [{ id: "n1", name: "Apple" }, { id: "n2", name: "TSMC" }, { id: "n3", name: "ASML" }],
+      path_nodes: [
+        { entity_id: "n1", name: "Apple", entity_type: "financial_instrument" },
+        { entity_id: "n2", name: "TSMC", entity_type: "financial_instrument" },
+        { entity_id: "n3", name: "ASML", entity_type: "financial_instrument" },
+      ],
       path_edges: [{ relation_type: "SUPPLIER_OF" }, { relation_type: "CUSTOMER_OF" }],
     }];
     mockUseEntityPaths.mockReturnValue({ data: { paths }, isLoading: false, isError: false } as never);
