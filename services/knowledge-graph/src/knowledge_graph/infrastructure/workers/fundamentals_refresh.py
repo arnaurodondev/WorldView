@@ -387,19 +387,22 @@ class FundamentalsRefreshWorker:
                     )
                     refreshed += 1
 
-                # Tombstone no-ticker entities: push next_refresh_at 1 year
-                # forward so they are not re-queued on every worker cycle.
-                if no_ticker_ids:
-                    from sqlalchemy import text as _sa_text
+                await session.commit()
 
-                    far_future = utc_now() + timedelta(days=365)
-                    tombstoned = 0
+            # Tombstone no-ticker entities in a dedicated session so they are
+            # not re-queued on every worker cycle (next_refresh_at +365 days).
+            if no_ticker_ids:
+                from sqlalchemy import text as _sa_text
+
+                far_future = utc_now() + timedelta(days=365)
+                async with self._sf() as _ts_session:
                     for _no_ticker_id in no_ticker_ids:
-                        await session.execute(
+                        await _ts_session.execute(
                             _sa_text(
                                 "UPDATE entity_embedding_state"
                                 " SET next_refresh_at = :far_future"
-                                " WHERE entity_id = :entity_id AND view_type = :view_type"
+                                " WHERE entity_id = :entity_id"
+                                " AND view_type = :view_type"
                             ),
                             {
                                 "far_future": far_future,
@@ -407,14 +410,12 @@ class FundamentalsRefreshWorker:
                                 "view_type": VIEW_FUNDAMENTALS,
                             },
                         )
-                        tombstoned += 1
-                    logger.info(  # type: ignore[no-any-return]
-                        "fundamentals_refresh_no_ticker_tombstoned",
-                        count=tombstoned,
-                        retry_in_days=365,
-                    )
-
-                await session.commit()
+                    await _ts_session.commit()
+                logger.info(  # type: ignore[no-any-return]
+                    "fundamentals_refresh_no_ticker_tombstoned",
+                    count=len(no_ticker_ids),
+                    retry_in_days=365,
+                )
         finally:
             if own_http:
                 await http.aclose()
