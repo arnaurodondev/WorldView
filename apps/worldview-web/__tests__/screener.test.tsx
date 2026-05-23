@@ -124,6 +124,23 @@ vi.mock("@/lib/gateway", () => ({
   },
 }));
 
+// ── ApiClient hook mock ───────────────────────────────────────────────────────
+// NLScreenerInput uses useApiClient() (memoised gateway). Return the same
+// gateway instance that @/lib/gateway mock provides so translateNLScreenerQuery
+// is available without an ApiClientProvider in the test tree.
+vi.mock("@/lib/api-client", () => ({
+  useApiClient: vi.fn(() => ({
+    runScreener: vi.fn().mockResolvedValue({ results: [], total: 0, offset: 0, limit: 50 }),
+    translateNLScreenerQuery: vi.fn().mockResolvedValue({
+      explanation: "Mocked NL result",
+      filters: {},
+    }),
+    refreshToken: vi.fn(),
+    logout: vi.fn(),
+  })),
+  ApiClientProvider: ({ children }: { children: React.ReactNode }) => children,
+}));
+
 // ── Auth mock ─────────────────────────────────────────────────────────────────
 vi.mock("@/hooks/useAuth", () => ({
   useAuth: vi.fn(() => ({

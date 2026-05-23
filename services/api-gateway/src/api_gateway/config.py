@@ -100,6 +100,11 @@ class Settings(BaseSettings):
     # leaking timing information.
     service_account_token: SecretStr = SecretStr("")
 
+    # NL screener — DeepInfra key for direct chat/completions call.
+    # Falls back to empty (feature disabled) when not set.
+    # env var: API_GATEWAY_DEEPINFRA_API_KEY (env_prefix + field name)
+    deepinfra_api_key: SecretStr = SecretStr("")
+
     # Observability (STANDARDS.md §5 — mandatory in every service)
     service_name: str = "api-gateway"
     log_level: str = "INFO"

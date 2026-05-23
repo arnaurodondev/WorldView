@@ -1459,3 +1459,62 @@ Run this for all items in `to_write` where `source_text` is non-empty.
 - Integration test: after `DefinitionRefreshWorker.run()`, assert `canonical_entities.description IS NOT NULL` for processed entities.
 
 **Regression test**: N/A — add integration test for write-back as part of next test pass
+
+---
+
+### BP-542: NarrativeRefreshWorker overwrites LLM narrative with claims template — two siloed workers fighting over entity_embedding_state
+
+**Category**: Workers & Schedulers
+**Severity**: HIGH
+**First seen**: 2026-05-23
+**Services**: knowledge-graph (NarrativeRefreshWorker, NarrativeGenerationWorker)
+
+**Symptoms**:
+- 91.8% of `entity_embedding_state` narrative rows contain name-only stubs: `"Himax (financial_instrument)"` (24 chars)
+- `entity_narrative_versions` contains good LLM prose for the same entities
+- `entity_embedding_state.source_text` for narrative view never exceeds 60 chars for 91.8% of entities despite a running LLM narrative worker
+- Semantic search on the narrative ANN index cannot differentiate entities — all look identical
+
+**Root cause**:
+Two workers write to the same narrative space without coordination:
+1. `NarrativeRefreshWorker` (hourly polling): rebuilds `entity_embedding_state.source_text` from `claims` table. For the 85%+ of entities with zero claims, produces `"{name} ({type})"` stub. **Has zero awareness of `entity_narrative_versions`.**
+2. `NarrativeGenerationWorker` (LLM): writes real prose to `entity_narrative_versions`. The `NarrativeRefreshKafkaConsumer` bridges the gap by embedding the LLM narrative on event arrival — BUT the hourly `NarrativeRefreshWorker` overwrites this with the stub on its next cycle, because it rebuilds `source_text` from claims unconditionally.
+
+**Fix**:
+In `NarrativeRefreshWorker._build_narrative_text()`, before building the claims template, check `canonical_entities.current_narrative_version_id`. If a version exists in `entity_narrative_versions`, use its `narrative_text` as `source_text`. Fall back to claims template only when no LLM narrative exists. Add an idempotency guard: skip rebuild when `source_hash` already matches the hash of the current LLM narrative.
+
+**Prevention**:
+- When two workers write to the same column/table, the one with more frequent writes must be made aware of the other's output or explicitly yield to it
+- Test: after `NarrativeGenerationWorker` runs, wait 1 hour, then assert `entity_embedding_state.source_text` still contains LLM content (not stub)
+
+**Regression test**: N/A — add as integration test in next test pass
+
+---
+
+### BP-543: Seeded canonical entities bypass the provisional enrichment queue — permanent data-completeness deficit
+
+**Category**: Workers & Schedulers, Database & ORM
+**Severity**: HIGH
+**First seen**: 2026-05-23
+**Services**: knowledge-graph (FundamentalsRefreshWorker, DefinitionRefreshWorker, ProvisionalEnrichmentWorker)
+
+**Symptoms**:
+- `key_metrics: {}` for major seeded tickers (AAPL, NVDA, MSFT)
+- `data_completeness: 0.1` for seeded entities (only 1/10 metadata fields populated)
+- Definition embedding is NULL for seeded entities
+- Claims count = 0 for seeded entities despite active news flow
+- Intelligence API shows impoverished data for the most prominent stocks
+
+**Root cause**:
+Entities seeded directly into `canonical_entities` via Alembic migrations (before the enrichment pipeline existed) have entity_ids that were never inserted into `provisional_enrichment_queue` / `entity_embedding_state` bootstrap tables. The enrichment workers (`FundamentalsRefreshWorker`, `DefinitionRefreshWorker`) only process entities that have rows in `entity_embedding_state`. The `canonical_entities_pkey` conflict error (seen in scheduler logs) confirms that when NLP pipeline discovers e.g. "AAPL" again, it tries to INSERT with a new entity_id, which conflicts, but the original seeded entity_id is still not in the enrichment queue.
+
+NLP pipeline claims also link to the newly-discovered (conflicting) entity_id rather than the seeded one — so AAPL's claims accumulate on an unreachable entity, not the seeded one.
+
+**Fix**:
+Manually insert the 10 seeded entity_ids into `entity_embedding_state` for all view types (definition, narrative, fundamentals_ohlcv) with `next_refresh_at = NOW()`. Also add them to `provisional_enrichment_queue` if that table tracks entities for structured enrichment. This will trigger the workers to enrich them on the next cycle.
+
+**Prevention**:
+- When seeding canonical entities via migration, also seed corresponding rows in `entity_embedding_state` for all required view types
+- Add a startup health check: `SELECT COUNT(*) FROM canonical_entities ce LEFT JOIN entity_embedding_state ees ON ce.entity_id = ees.entity_id WHERE ees.entity_id IS NULL` — alert if any canonical entities are missing embedding state rows
+
+**Regression test**: N/A — add as integration test on next enrichment pipeline test pass

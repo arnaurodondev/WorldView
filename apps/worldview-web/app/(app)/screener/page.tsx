@@ -212,12 +212,14 @@ export default function ScreenerPage() {
     setNlVisible(false);
   }, [appliedFilters, handleApply]);
 
-  // "/" hotkey toggles the NL input bar; only fires when no input/textarea has focus.
+  // "/" hotkey toggles the NL input bar; guarded against input, textarea, and
+  // contenteditable regions so it doesn't fire while the user is typing.
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
       if (e.key !== "/") return;
-      const tag = (e.target as HTMLElement).tagName;
-      if (tag === "INPUT" || tag === "TEXTAREA") return;
+      const el = e.target as HTMLElement;
+      const tag = el.tagName;
+      if (tag === "INPUT" || tag === "TEXTAREA" || el.contentEditable === "true") return;
       e.preventDefault();
       setNlVisible((v) => !v);
     };

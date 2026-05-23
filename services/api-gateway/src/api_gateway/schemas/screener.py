@@ -19,7 +19,7 @@ schema change.
 
 from __future__ import annotations
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class ScreenerResultItem(BaseModel):
@@ -51,7 +51,7 @@ class NLScreenerRequest(BaseModel):
 
     model_config = ConfigDict(extra="allow")
 
-    query: str  # natural-language screening query, e.g. "profitable tech stocks under $50"
+    query: str = Field(min_length=1, max_length=500)  # natural-language screening query
 
 
 class NLScreenerResponse(BaseModel):

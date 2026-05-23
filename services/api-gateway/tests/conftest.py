@@ -59,6 +59,8 @@ def _mock_settings():
         # F-013: default changed to True in production; keep False in tests so
         # the SecurityHeadersMiddleware does not inject HSTS on HTTP test responses.
         cookie_secure=False,
+        # NL screener DeepInfra key — needed for POST /v1/screener/nl-translate tests.
+        deepinfra_api_key="test-deepinfra-key",
     )
 
 

@@ -24,8 +24,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useMutation } from "@tanstack/react-query";
 import { ArrowRight, Loader2, X } from "lucide-react";
-import { createGateway } from "@/lib/gateway";
-import { useAuth } from "@/hooks/useAuth";
+import { useApiClient } from "@/lib/api-client";
 import type { FilterState } from "@/features/screener/lib/filter-state";
 
 // ── Filter conversion ─────────────────────────────────────────────────────────
@@ -47,24 +46,18 @@ const FIELD_LABELS: Record<string, string> = {
 /** The set of backend field names we can convert to FilterState. */
 const KNOWN_FIELDS = new Set(Object.keys(FIELD_LABELS).concat(["sector"]));
 
+/** Guard against LLM-hallucinated overflow values (Infinity, NaN, astronomically large). */
+const isValidNum = (n: unknown): n is number =>
+  typeof n === "number" && Number.isFinite(n) && Math.abs(n) < 1e9;
+
 /** Extract numeric min/max from a condition object (LLM uses gte/lte/gt/lt). */
 function getRange(v: unknown): { min?: number; max?: number } {
-  if (typeof v === "number") return { min: v };
+  if (isValidNum(v)) return { min: v };
   if (typeof v === "object" && v !== null) {
     const obj = v as Record<string, unknown>;
     return {
-      min:
-        typeof obj.gte === "number"
-          ? obj.gte
-          : typeof obj.gt === "number"
-            ? obj.gt
-            : undefined,
-      max:
-        typeof obj.lte === "number"
-          ? obj.lte
-          : typeof obj.lt === "number"
-            ? obj.lt
-            : undefined,
+      min: isValidNum(obj.gte) ? obj.gte : isValidNum(obj.gt) ? obj.gt : undefined,
+      max: isValidNum(obj.lte) ? obj.lte : isValidNum(obj.lt) ? obj.lt : undefined,
     };
   }
   return {};
@@ -154,7 +147,7 @@ export interface NLScreenerInputProps {
 // ── Component ─────────────────────────────────────────────────────────────────
 
 export function NLScreenerInput({ visible, onApply, onDismiss }: NLScreenerInputProps) {
-  const { accessToken } = useAuth();
+  const gateway = useApiClient();
   const inputRef = useRef<HTMLInputElement>(null);
 
   const [query, setQuery] = useState("");
@@ -176,7 +169,7 @@ export function NLScreenerInput({ visible, onApply, onDismiss }: NLScreenerInput
   }, [visible]);
 
   const mutation = useMutation({
-    mutationFn: (q: string) => createGateway(accessToken).translateNLScreenerQuery(q),
+    mutationFn: (q: string) => gateway.translateNLScreenerQuery(q),
     onSuccess: (data) => {
       setExplanation(data.explanation ?? "");
       const patch = parseNLFilters(data.filters);

@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import json
 import uuid
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
 import jwt
@@ -307,6 +307,22 @@ async def test_yield_curve_uses_macro_indicator_data(authed_app, authed_mock_cli
 
 # ── T-E-1-01: nl-screener translate ──────────────────────────────────────────
 
+# WHY _make_deepinfra_ctx: the route now calls DeepInfra directly via
+# `async with httpx.AsyncClient(...) as client: client.post(...)`. Tests must
+# mock the AsyncClient context manager, not authed_mock_clients.rag_chat.
+
+
+def _make_deepinfra_ctx(llm_content: str, status_code: int = 200) -> MagicMock:
+    """Return a mock httpx.AsyncClient context manager for DeepInfra calls."""
+    response_body = json.dumps({"choices": [{"message": {"content": llm_content}}]}).encode()
+    mock_response = _mock_response(status_code, response_body)
+    mock_client = AsyncMock()
+    mock_client.post = AsyncMock(return_value=mock_response)
+    ctx = MagicMock()
+    ctx.__aenter__ = AsyncMock(return_value=mock_client)
+    ctx.__aexit__ = AsyncMock(return_value=None)
+    return ctx
+
 
 @pytest.mark.asyncio
 async def test_nl_screener_requires_auth(app, mock_clients) -> None:
@@ -318,7 +334,6 @@ async def test_nl_screener_requires_auth(app, mock_clients) -> None:
         )
 
     assert resp.status_code == 401
-    mock_clients.rag_chat.post.assert_not_called()
 
 
 @pytest.mark.asyncio
@@ -329,16 +344,14 @@ async def test_nl_screener_happy_path(authed_app, authed_mock_clients) -> None:
         return_value=_mock_response(200, json.dumps({"fields": valid_fields}).encode()),
     )
     llm_result = {"sector": "Technology", "pe_ratio": {"lte": 20}}
-    chat_response = json.dumps({"content": json.dumps(llm_result)}).encode()
-    authed_mock_clients.rag_chat.post = AsyncMock(return_value=_mock_response(200, chat_response))
-
-    transport = ASGITransport(app=authed_app)
-    async with AsyncClient(transport=transport, base_url="http://test") as client:
-        resp = await client.post(
-            "/v1/screener/nl-translate",
-            json={"query": "profitable tech stocks with low PE"},
-            headers={"Authorization": f"Bearer {_make_jwt()}"},
-        )
+    with patch("httpx.AsyncClient", return_value=_make_deepinfra_ctx(json.dumps(llm_result))):
+        transport = ASGITransport(app=authed_app)
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            resp = await client.post(
+                "/v1/screener/nl-translate",
+                json={"query": "profitable tech stocks with low PE"},
+                headers={"Authorization": f"Bearer {_make_jwt()}"},
+            )
 
     assert resp.status_code == 200
     body = resp.json()
@@ -347,58 +360,57 @@ async def test_nl_screener_happy_path(authed_app, authed_mock_clients) -> None:
 
 
 @pytest.mark.asyncio
-async def test_nl_screener_returns_422_on_invalid_fields(authed_app, authed_mock_clients) -> None:
-    """LLM returning hallucinated field names → 422."""
+async def test_nl_screener_strips_unknown_fields(authed_app, authed_mock_clients) -> None:
+    """LLM returning hallucinated field names -> stripped, valid fields returned (graceful degradation)."""
     valid_fields = [{"name": "sector"}, {"name": "pe_ratio"}]
     authed_mock_clients.market_data.get = AsyncMock(
         return_value=_mock_response(200, json.dumps({"fields": valid_fields}).encode()),
     )
     llm_result = {"sector": "Technology", "hallucinated_field": 999}
-    chat_response = json.dumps({"content": json.dumps(llm_result)}).encode()
-    authed_mock_clients.rag_chat.post = AsyncMock(return_value=_mock_response(200, chat_response))
+    with patch("httpx.AsyncClient", return_value=_make_deepinfra_ctx(json.dumps(llm_result))):
+        transport = ASGITransport(app=authed_app)
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            resp = await client.post(
+                "/v1/screener/nl-translate",
+                json={"query": "tech stocks"},
+                headers={"Authorization": f"Bearer {_make_jwt()}"},
+            )
 
-    transport = ASGITransport(app=authed_app)
-    async with AsyncClient(transport=transport, base_url="http://test") as client:
-        resp = await client.post(
-            "/v1/screener/nl-translate",
-            json={"query": "tech stocks"},
-            headers={"Authorization": f"Bearer {_make_jwt()}"},
-        )
-
-    assert resp.status_code == 422
+    assert resp.status_code == 200
+    body = resp.json()
+    assert "sector" in body["filters"]
+    assert "hallucinated_field" not in body["filters"]
 
 
 @pytest.mark.asyncio
 async def test_nl_screener_returns_422_when_llm_unparseable(authed_app, authed_mock_clients) -> None:
     """LLM returning _unparseable → 422."""
     authed_mock_clients.market_data.get = AsyncMock(return_value=_mock_response(200, b'{"fields": []}'))
-    chat_response = json.dumps({"content": json.dumps({"_unparseable": True})}).encode()
-    authed_mock_clients.rag_chat.post = AsyncMock(return_value=_mock_response(200, chat_response))
-
-    transport = ASGITransport(app=authed_app)
-    async with AsyncClient(transport=transport, base_url="http://test") as client:
-        resp = await client.post(
-            "/v1/screener/nl-translate",
-            json={"query": "xyz gibberish"},
-            headers={"Authorization": f"Bearer {_make_jwt()}"},
-        )
+    llm_result = {"_unparseable": True}
+    with patch("httpx.AsyncClient", return_value=_make_deepinfra_ctx(json.dumps(llm_result))):
+        transport = ASGITransport(app=authed_app)
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            resp = await client.post(
+                "/v1/screener/nl-translate",
+                json={"query": "xyz gibberish"},
+                headers={"Authorization": f"Bearer {_make_jwt()}"},
+            )
 
     assert resp.status_code == 422
 
 
 @pytest.mark.asyncio
 async def test_nl_screener_returns_502_on_llm_error(authed_app, authed_mock_clients) -> None:
-    """S8 returning non-200 → 502."""
+    """DeepInfra returning non-200 → 502."""
     authed_mock_clients.market_data.get = AsyncMock(return_value=_mock_response(200, b'{"fields": []}'))
-    authed_mock_clients.rag_chat.post = AsyncMock(return_value=_mock_response(503, b"unavailable"))
-
-    transport = ASGITransport(app=authed_app)
-    async with AsyncClient(transport=transport, base_url="http://test") as client:
-        resp = await client.post(
-            "/v1/screener/nl-translate",
-            json={"query": "profitable stocks"},
-            headers={"Authorization": f"Bearer {_make_jwt()}"},
-        )
+    with patch("httpx.AsyncClient", return_value=_make_deepinfra_ctx("unavailable", status_code=503)):
+        transport = ASGITransport(app=authed_app)
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            resp = await client.post(
+                "/v1/screener/nl-translate",
+                json={"query": "profitable stocks"},
+                headers={"Authorization": f"Bearer {_make_jwt()}"},
+            )
 
     assert resp.status_code == 502
 
@@ -417,16 +429,14 @@ async def test_nl_screener_returns_explanation_from_two_key_format(authed_app, a
         "explanation": "Profitable tech stocks, P/E below 20, positive margins",
         "filters": {"sector": "Technology", "pe_ratio": {"lte": 20}},
     }
-    chat_response = json.dumps({"content": json.dumps(llm_result)}).encode()
-    authed_mock_clients.rag_chat.post = AsyncMock(return_value=_mock_response(200, chat_response))
-
-    transport = ASGITransport(app=authed_app)
-    async with AsyncClient(transport=transport, base_url="http://test") as client:
-        resp = await client.post(
-            "/v1/screener/nl-translate",
-            json={"query": "profitable tech stocks with low PE"},
-            headers={"Authorization": f"Bearer {_make_jwt()}"},
-        )
+    with patch("httpx.AsyncClient", return_value=_make_deepinfra_ctx(json.dumps(llm_result))):
+        transport = ASGITransport(app=authed_app)
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            resp = await client.post(
+                "/v1/screener/nl-translate",
+                json={"query": "profitable tech stocks with low PE"},
+                headers={"Authorization": f"Bearer {_make_jwt()}"},
+            )
 
     assert resp.status_code == 200
     body = resp.json()
@@ -442,18 +452,15 @@ async def test_nl_screener_legacy_flat_format_explanation_empty(authed_app, auth
     authed_mock_clients.market_data.get = AsyncMock(
         return_value=_mock_response(200, json.dumps({"fields": valid_fields}).encode()),
     )
-    # Legacy format: flat dict with no "filters" wrapper — backward compat
     llm_result = {"sector": "Technology", "pe_ratio": {"lte": 20}}
-    chat_response = json.dumps({"content": json.dumps(llm_result)}).encode()
-    authed_mock_clients.rag_chat.post = AsyncMock(return_value=_mock_response(200, chat_response))
-
-    transport = ASGITransport(app=authed_app)
-    async with AsyncClient(transport=transport, base_url="http://test") as client:
-        resp = await client.post(
-            "/v1/screener/nl-translate",
-            json={"query": "tech stocks low PE"},
-            headers={"Authorization": f"Bearer {_make_jwt()}"},
-        )
+    with patch("httpx.AsyncClient", return_value=_make_deepinfra_ctx(json.dumps(llm_result))):
+        transport = ASGITransport(app=authed_app)
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            resp = await client.post(
+                "/v1/screener/nl-translate",
+                json={"query": "tech stocks low PE"},
+                headers={"Authorization": f"Bearer {_make_jwt()}"},
+            )
 
     assert resp.status_code == 200
     body = resp.json()
@@ -468,20 +475,15 @@ async def test_nl_screener_explanation_not_included_in_filters(authed_app, authe
     authed_mock_clients.market_data.get = AsyncMock(
         return_value=_mock_response(200, json.dumps({"fields": valid_fields}).encode()),
     )
-    llm_result = {
-        "explanation": "Tech companies only",
-        "filters": {"sector": "Technology"},
-    }
-    chat_response = json.dumps({"content": json.dumps(llm_result)}).encode()
-    authed_mock_clients.rag_chat.post = AsyncMock(return_value=_mock_response(200, chat_response))
-
-    transport = ASGITransport(app=authed_app)
-    async with AsyncClient(transport=transport, base_url="http://test") as client:
-        resp = await client.post(
-            "/v1/screener/nl-translate",
-            json={"query": "tech companies"},
-            headers={"Authorization": f"Bearer {_make_jwt()}"},
-        )
+    llm_result = {"explanation": "Tech companies only", "filters": {"sector": "Technology"}}
+    with patch("httpx.AsyncClient", return_value=_make_deepinfra_ctx(json.dumps(llm_result))):
+        transport = ASGITransport(app=authed_app)
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            resp = await client.post(
+                "/v1/screener/nl-translate",
+                json={"query": "tech companies"},
+                headers={"Authorization": f"Bearer {_make_jwt()}"},
+            )
 
     assert resp.status_code == 200
     body = resp.json()
@@ -496,18 +498,15 @@ async def test_nl_screener_explanation_empty_string_when_absent(authed_app, auth
     authed_mock_clients.market_data.get = AsyncMock(
         return_value=_mock_response(200, json.dumps({"fields": valid_fields}).encode()),
     )
-    # Two-key format but explanation key omitted
     llm_result = {"filters": {"sector": "Technology"}}
-    chat_response = json.dumps({"content": json.dumps(llm_result)}).encode()
-    authed_mock_clients.rag_chat.post = AsyncMock(return_value=_mock_response(200, chat_response))
-
-    transport = ASGITransport(app=authed_app)
-    async with AsyncClient(transport=transport, base_url="http://test") as client:
-        resp = await client.post(
-            "/v1/screener/nl-translate",
-            json={"query": "tech sector"},
-            headers={"Authorization": f"Bearer {_make_jwt()}"},
-        )
+    with patch("httpx.AsyncClient", return_value=_make_deepinfra_ctx(json.dumps(llm_result))):
+        transport = ASGITransport(app=authed_app)
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            resp = await client.post(
+                "/v1/screener/nl-translate",
+                json={"query": "tech sector"},
+                headers={"Authorization": f"Bearer {_make_jwt()}"},
+            )
 
     assert resp.status_code == 200
     body = resp.json()

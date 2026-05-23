@@ -1599,33 +1599,41 @@ async def get_yield_curve(request: Request) -> YieldCurveResponse:
 _NL_SCREENER_SYSTEM_PROMPT = """You are a financial screener assistant. Convert the user's natural-language query
 into a JSON object with exactly two top-level keys:
   "explanation" — a concise 1-sentence plain-English description of what this screen selects
-  "filters"     — an object where each key is a valid screener field name and the value is a filter condition
+  "filters"     — an object where each key is a screener field name from the ALLOWED FIELDS list below
 
-Valid field names will be provided in the request. Only use field names from the provided list.
-Return ONLY a valid JSON object — no markdown fences.
+IMPORTANT: Only use field names from the ALLOWED FIELDS list provided below. Do not invent new fields.
+Filter values: numeric range {"gte": N, "lte": N}, exact string, or boolean true/false.
+Return ONLY a valid JSON object — no markdown fences, no extra text.
 
-Example input: "profitable tech stocks with low PE"
-Example output:
-{"explanation": "Profitable tech stocks, P/E below 20, positive margins",
- "filters": {"sector": "Technology", "pe_ratio": {"lte": 20}, "profit_margin": {"gte": 0.05}}}
+Example output format:
+{"explanation": "Large-cap technology stocks with low debt",
+ "filters": {"market_cap": {"gte": 10000000000}, "pe_ratio": {"lte": 30}}}
 
 If you cannot parse the query into a valid filter, return {"_unparseable": true}.
 """
+
+_DEEPINFRA_CHAT_URL = "https://api.deepinfra.com/v1/openai/chat/completions"
+_NL_SCREENER_MODEL = "meta-llama/Meta-Llama-3.1-8B-Instruct"
 
 
 @router.post("/screener/nl-translate", response_model=NLScreenerResponse)
 async def nl_screener_translate(body: NLScreenerRequest, request: Request) -> NLScreenerResponse:
     """Translate a natural-language query into structured screener filters.
 
-    Calls S8 /v1/chat with a structured system prompt, parses the JSON response,
-    validates all returned field names against the GET /v1/fundamentals/screen/fields
-    allowlist, and returns 422 if the LLM response cannot be parsed or contains
-    invalid field names.
+    Calls DeepInfra directly (OpenAI-compatible API) with a structured system
+    prompt. S8 (rag-chat) is NOT used here - it has a different schema and adds
+    RAG retrieval overhead that is irrelevant for a simple translation task.
+    Validates all returned field names against the GET /v1/fundamentals/screen/fields
+    allowlist. Returns 422 if the LLM response cannot be parsed.
     """
     if not getattr(request.state, "user", None):
         raise HTTPException(status_code=401, detail="Authentication required")
 
-    headers = _auth_headers(request)
+    cfg = request.app.state.settings
+    deepinfra_key: str = cfg.deepinfra_api_key.get_secret_value()
+    if not deepinfra_key:
+        raise HTTPException(status_code=503, detail="NL screener not configured (missing API key)")
+
     sys_headers = _system_headers(request)
     clients = _clients(request)
 
@@ -1640,38 +1648,41 @@ async def nl_screener_translate(body: NLScreenerRequest, request: Request) -> NL
     except Exception:
         logger.warning("nl_screener_fields_fetch_failed", exc_info=True)
 
-    # 2. Call S8 chat with system prompt
+    # 2. Call DeepInfra OpenAI-compatible chat/completions directly.
+    # WHY not S8: S8's /api/v1/chat schema expects {message, entity_ids} and runs
+    # a full RAG pipeline (retrieval + contradiction detection), which is wasteful
+    # and incorrect for a pure LLM translation task.
+    fields_hint = f"ALLOWED FIELDS: {', '.join(sorted(valid_fields))}\n\n" if valid_fields else ""
+    user_message = f"{fields_hint}Query: {body.query}"
     chat_payload = {
+        "model": _NL_SCREENER_MODEL,
         "messages": [
             {"role": "system", "content": _NL_SCREENER_SYSTEM_PROMPT},
-            {"role": "user", "content": body.query},
+            {"role": "user", "content": user_message},
         ],
+        "max_tokens": 512,
+        "temperature": 0.0,
         "stream": False,
     }
     try:
-        chat_resp = await clients.rag_chat.post(
-            "/v1/chat",
-            json=chat_payload,
-            headers={"Content-Type": "application/json", **headers},
-            timeout=httpx.Timeout(20.0),
-        )
+        async with httpx.AsyncClient(timeout=httpx.Timeout(25.0)) as llm_client:
+            chat_resp = await llm_client.post(
+                _DEEPINFRA_CHAT_URL,
+                json=chat_payload,
+                headers={"Authorization": f"Bearer {deepinfra_key}", "Content-Type": "application/json"},
+            )
     except Exception as exc:
         logger.warning("nl_screener_chat_failed", error=str(exc))
         raise HTTPException(status_code=502, detail="LLM service unavailable") from exc
 
     if chat_resp.status_code != 200:
+        logger.warning("nl_screener_llm_error", status=chat_resp.status_code, body=chat_resp.text[:200])
         raise HTTPException(status_code=502, detail="LLM service returned an error")
 
-    # 3. Extract JSON from LLM response
+    # 3. Extract JSON from LLM response (OpenAI format: choices[0].message.content)
     try:
         chat_body = chat_resp.json()
-        # S8 may return {content: "..."} or {message: {content: "..."}} or {choices: [...]}
-        raw_text: str = (
-            chat_body.get("content")
-            or (chat_body.get("message") or {}).get("content")
-            or ((chat_body.get("choices") or [{}])[0].get("message") or {}).get("content")
-            or ""
-        )
+        raw_text: str = ((chat_body.get("choices") or [{}])[0].get("message") or {}).get("content") or ""
         # Strip markdown code fences if present
         raw_text = raw_text.strip()
         if raw_text.startswith("```"):
@@ -1693,13 +1704,12 @@ async def nl_screener_translate(body: NLScreenerRequest, request: Request) -> NL
     else:
         filters = {k: v for k, v in raw_json.items() if k not in ("_unparseable", "explanation")}
 
-    # 4. Validate field names against allowlist (only when we have valid_fields)
+    # 4. Strip fields not in allowlist rather than 422 — graceful degradation when
+    # the LLM hallucinates field names despite the prompt constraint.
     if valid_fields:
         invalid = [k for k in filters if not k.startswith("_") and k not in valid_fields]
         if invalid:
-            raise HTTPException(
-                status_code=422,
-                detail=f"LLM returned unknown screener fields: {invalid}",
-            )
+            logger.warning("nl_screener_unknown_fields_stripped", fields=invalid)
+            filters = {k: v for k, v in filters.items() if k.startswith("_") or k in valid_fields}
 
     return NLScreenerResponse(filters=filters, natural_language_query=body.query, explanation=explanation)
