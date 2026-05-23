@@ -274,6 +274,22 @@ interface FilterControllerProps {
   graphData: EntityGraphData;
 }
 
+// WHY declare outside component: stable reference, avoids recreating in the edgeReducer
+// closure. Mirrors DECAY_ALPHA in EntityGraph.tsx — must stay in sync.
+const DECAY_ALPHA_MAP: Record<string, number> = {
+  PERMANENT: 1.0, DURABLE: 1.0,
+  SLOW: 0.7, MEDIUM: 0.7,
+  FAST: 0.4, EPHEMERAL: 0.4,
+};
+
+function hexToRgba(hex: string, alpha: number): string {
+  const clean = hex.replace("#", "");
+  const r = parseInt(clean.substring(0, 2), 16);
+  const g = parseInt(clean.substring(2, 4), 16);
+  const b = parseInt(clean.substring(4, 6), 16);
+  return `rgba(${r},${g},${b},${alpha})`;
+}
+
 export function FilterController({ activeRelFilter, minWeight, searchQuery }: FilterControllerProps) {
   const sigma = useSigma();
 
@@ -287,7 +303,17 @@ export function FilterController({ activeRelFilter, minWeight, searchQuery }: Fi
         if (activeRelFilter !== "all" && !matchesRelFilter(label, activeRelFilter)) {
           return { ...data, hidden: true };
         }
-        return { ...data, hidden: false };
+        // WHY read decay_class from graphology attrs (not `data`):
+        // `data` in edgeReducer is sigma's rendered state — the raw graphology
+        // attribute decay_class is only available via sigma.getGraph().getEdgeAttributes().
+        // We apply decay-based alpha so PERMANENT edges are visually dominant and
+        // EPHEMERAL edges recede, helping analysts distinguish structural from transient ties.
+        const attrs = sigma.getGraph().getEdgeAttributes(edge);
+        const decayClass = (attrs.decay_class as string | undefined) ?? "MEDIUM";
+        const alpha = DECAY_ALPHA_MAP[decayClass] ?? 0.7;
+        const baseColor = (data.color as string | undefined) ?? "#71717A";
+        const edgeColor = baseColor.startsWith("#") ? hexToRgba(baseColor, alpha) : baseColor;
+        return { ...data, hidden: false, color: edgeColor };
       },
       nodeReducer: (node: string, data: Record<string, unknown>) => {
         if (!searchQuery) return data;

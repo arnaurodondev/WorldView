@@ -57,6 +57,30 @@ import type { NodeTooltip, EdgeTooltip, SelectedEdgeInfo } from "./graph/SigmaIn
 const DENSE_GRAPH_EDGE_THRESHOLD = 50;
 const DENSE_GRAPH_AUTO_MIN_WEIGHT = 30; // percent
 
+// ── Decay-class edge opacity ───────────────────────────────────────────────────
+// WHY: KG edges carry a decay_class from S7 (B-02) indicating how fast the
+// relationship signal decays. Ephemeral/Fast edges are dimmed so analysts
+// visually deprioritise noisy short-lived connections; Permanent/Durable
+// edges render at full opacity as structural anchor relationships.
+const DECAY_ALPHA: Record<string, number> = {
+  PERMANENT: 1.0,
+  DURABLE: 1.0,
+  SLOW: 0.7,
+  MEDIUM: 0.7,
+  FAST: 0.4,
+  EPHEMERAL: 0.4,
+};
+
+// WHY helper: sigma's WebGL edgeReducer requires rgba() strings (not hex) to
+// support fractional alpha. Converts "#RRGGBB" → "rgba(R,G,B,A)".
+function hexToRgba(hex: string, alpha: number): string {
+  const clean = hex.replace("#", "");
+  const r = parseInt(clean.substring(0, 2), 16);
+  const g = parseInt(clean.substring(2, 4), 16);
+  const b = parseInt(clean.substring(4, 6), 16);
+  return `rgba(${r},${g},${b},${alpha})`;
+}
+
 // ── WebGL ErrorBoundary ───────────────────────────────────────────────────────
 // WHY class component: React error boundaries can ONLY be class components.
 // sigma.js attempts WebGL context creation, which throws in unsupported browsers.
