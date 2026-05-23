@@ -128,10 +128,10 @@ References `00-backend-data-inventory.md` (forthcoming) and the existing
 | `invested`, `cash`, `leverage`, `prices_stale`, `prices_as_of` | `GET /v1/portfolios/{id}/exposure` | Partially (single bar, no leverage / staleness pill) | Overview exposure cell |
 | `drawdown_max`, `drawdown_current`, `volatility_annualized`, `sharpe`, `sortino`, `beta_vs_spy`, `data_quality.{status, n_returns, details}` | `GET /v1/portfolios/{id}/risk-metrics` | 5-tile strip only | Overview RiskMetricsStrip |
 | FIFO lots (`open_date`, `qty`, `cost_per_share`, `days_held`, `is_long_term`, `unrealised_pnl`) | `GET /v1/portfolios/{id}/holdings/{instrument_id}/lots` | Yes (HoldingLotsPanel below table) | Overview Holdings tab |
-| Transactions (date, type, asset_class, ticker, qty, price, fee, total, currency, notes, amount) | `GET /v1/transactions` (paginated, server-side filter via `X-Portfolio-ID`) | Yes — TransactionsTable | Transactions tab |
+| Transactions (date, type, asset_class, ticker, name, qty, price, fee, total, currency, amount; `description` not yet in response — see backend gap §3.7) | `GET /v1/transactions` (paginated, server-side filter via `X-Portfolio-ID`) | Yes — TransactionsTable | Transactions tab |
 | Portfolio bundle (BFF) — portfolio + holdings + transactions + value_history in 1 round-trip | `GET /v1/portfolio/{id}/bundle` | Used to warm cache | Page mount |
 | `concentration` (Top-N weights) | `GET /v1/portfolios/{id}/concentration` | Yes (overview ConcentrationStrip) | Overview |
-| `performance` (Calmar, win-rate) | `GET /v1/portfolios/{id}/performance` | **Not rendered yet** | — |
+| `performance` — `{return_pct, return_abs, covered_pct}` | `GET /v1/portfolios/{id}/performance` | **Not rendered yet** | — |
 
 ### Available but currently dropped / unused
 
@@ -142,8 +142,9 @@ References `00-backend-data-inventory.md` (forthcoming) and the existing
 | `metadata.last_snapshot_at`, `metadata.next_scheduled_run_utc` | Available | Render as "as-of" pill on every analytics chart (data-freshness dot pattern) |
 | `data_quality.details.zero_indices` (RiskMetricsStrip) | Available, only count shown | Show the dates with anomaly in a tooltip on the affected metric |
 | `tx.amount` (broker-reported total) | Already used for DIV | Add `Cash Impact` column to ledger; lets the user see net cash flow including FX / fees independent of qty × price |
-| `tx.notes` | Filter haystack only | Display as 9px subline under ticker when present |
+| `tx.description` (broker-reported notes, e.g. "Dividend Payment - AAPL") | **Not in `TransactionListItem` — must be threaded**: add `description: str \| None = None` to `services/portfolio/src/portfolio/api/schemas.py` `TransactionListItem` and `ListTransactionsUseCase` | Display as 9px subline under ticker when present |
 | `tx.currency` (USD / EUR) | Filter only | Show currency chip in `Total` cell when ≠ portfolio currency |
+| `tx.name` (instrument name) | **Already in `TransactionListItem`** as `name: str \| None` — frontend addition only | Add NAME column to ledger (frontend only, no backend change needed) |
 
 ### Data the user explicitly flagged as missing
 None apply to drilldown surfaces — the AI-brief / company-narrative / sector
@@ -175,6 +176,22 @@ to the data-inventory agent for the master PRD.
 5. **Running cash balance per transaction row** — useful for the ledger
    "Balance" column. Proposal: optional field on the transactions response
    when query param `?include=running_balance` is sent.
+6. **`calmar`, `win_rate`, `alpha` for the Analytics risk sidebar** — the
+   `/risk-metrics` endpoint currently returns: `drawdown_max`, `drawdown_current`,
+   `volatility_annualized`, `sharpe`, `sortino`, `beta_vs_spy`. Three of the
+   11 Analytics sidebar tiles (CALMAR, WIN RATE, ALPHA) have no backend source.
+   These can all be computed server-side from data already fetched in the route:
+   - `calmar` = `(mean(r) * 252) / abs(drawdown_max)` (annualised return ÷ abs(max DD))
+   - `win_rate` = `count(r > 0) / count(r)` over the return series
+   - `alpha` = `portfolio_annualised_return − spy_annualised_return` (aligned daily series)
+   **This must be shipped as a backend pre-task before Wave G** to avoid rendering
+   3 empty tiles in the sidebar on day one. The computation is ~30 lines in
+   `services/api-gateway/src/api_gateway/routes/risk_metrics.py` using already-fetched data.
+7. **`tx.description` threading** — the `Transaction` domain entity has
+   `description: str | None` (broker-supplied notes) but it is absent from
+   `TransactionListItem` in `services/portfolio/src/portfolio/api/schemas.py`.
+   Backend pre-task: add `description` to the response schema and thread through
+   `ListTransactionsUseCase` so the 9px note subline can render in the ledger.
 
 ---
 
@@ -375,7 +392,7 @@ relative to the repo root.
 | `TransactionsBrokerageStatusBar` | `apps/worldview-web/components/portfolio/TransactionsBrokerageStatusBar.tsx` | 120 | `{ portfolioId }` | Pulls `/v1/brokerages/{user}` (existing), renders 22px collapsed row "▸ Brokerages: TastyTrade ✓ 2m ago · IBKR ✓ 6m ago". Expanded view opens existing `BrokerageConnectionCard` |
 | `useTransactionsFilterState` | `apps/worldview-web/features/portfolio/hooks/useTransactionsFilterState.ts` | 80 | hook | Owns the 8 filter slots + `nuqs` URL state sync (round-trippable filter view per the existing tab pattern) |
 
-### 5.3 Analytics tab (new)
+### 5.3 Analytics tab (route stub exists — fleshing out `apps/worldview-web/app/(app)/portfolio/analytics/`)
 
 | Component | File path | Line budget | Props | Renders |
 |-----------|-----------|-------------|-------|---------|
@@ -383,7 +400,7 @@ relative to the repo root.
 | `AnalyticsPeriodSelector` | `apps/worldview-web/components/portfolio/AnalyticsPeriodSelector.tsx` | 100 | `{ period, onChange, benchmark, onBenchmarkChange }` | TradingView-style pill row + benchmark dropdown + freshness pill |
 | `AnalyticsPerformanceChart` | `apps/worldview-web/components/portfolio/AnalyticsPerformanceChart.tsx` | 220 | `{ portfolioId, period, benchmark }` | Recharts line, portfolio + benchmark series, 5 x-ticks max, value-history + S3 SPY OHLCV. Reuses `EquityCurveChart`'s tooltip primitives |
 | `AnalyticsDrawdownChart` | `apps/worldview-web/components/portfolio/AnalyticsDrawdownChart.tsx` | 160 | `{ portfolioId, period }` | Recharts area baseline-zero, computed client-side from value-history (until backend endpoint); shares x-scale with the performance chart |
-| `AnalyticsRiskSidebar` | `apps/worldview-web/components/portfolio/AnalyticsRiskSidebar.tsx` | 180 | `{ portfolioId, period, benchmark }` | 11-tile vertical strip — TWR, BenchTWR, Alpha, Beta, Sharpe, Sortino, Vol, MaxDD, Calmar, WinRate (uses `/risk-metrics` + `/performance`) |
+| `AnalyticsRiskSidebar` | `apps/worldview-web/components/portfolio/AnalyticsRiskSidebar.tsx` | 180 | `{ portfolioId, period, benchmark }` | 11-tile vertical strip — TWR, BenchTWR, Alpha, Beta, Sharpe, Sortino, Vol, MaxDD, Calmar, WinRate. Data source: `/risk-metrics` (drawdown/vol/sharpe/sortino/beta/calmar/win_rate/alpha added in backend gap §3.6) + `/value-history` (for client-side TWR). `/performance` is NOT used here (too coarse). |
 | `AnalyticsPeriodReturnsTable` | `apps/worldview-web/components/portfolio/AnalyticsPeriodReturnsTable.tsx` | 140 | `{ portfolioId, benchmark }` | 9 rows × 4 cols (period × {portfolio, bench, excess}); client-side compute until backend `/twr` endpoint |
 | `AnalyticsAttributionTable` | `apps/worldview-web/components/portfolio/AnalyticsAttributionTable.tsx` | 200 | `{ portfolioId, period, dimension: "holding" \| "sector" \| "asset_class" }` | Reusable shell; renders 10 rows of top contributors + 5 detractors when `dimension="holding"`, full breakdown for the other dimensions |
 
@@ -394,7 +411,7 @@ relative to the repo root.
 | `<TerminalLineChart>` | `apps/worldview-web/components/charts/TerminalLineChart.tsx` (new) | One config of recharts (axis colour, tooltip styles, font tokens) used by EquityCurve, AnalyticsPerformance, HoldingMiniContribution |
 | `<TerminalAreaChart>` | same folder (new) | Drawdown + dashboard distribution |
 | `<TerminalAxisTickFormatter>` | same folder (new) | Currency / percent / date tick formatters at `text-[9px]` mono |
-| `<DataFreshnessPill>` | `apps/worldview-web/components/data/DataFreshnessPill.tsx` (new) | Shared between every analytics surface — shows `as_of`, recency dot, click for source |
+| `<DataFreshnessPill>` | `apps/worldview-web/components/primitives/DataFreshnessPill.tsx` (existing — exported from `components/primitives/index.ts`) | Shared between every analytics surface — shows `as_of`, recency dot, click for source |
 
 ### 5.5 Density target verification
 
@@ -478,7 +495,7 @@ relative to the repo root.
 | Tax lots block | 4 × `h-[22px]` skeletons | "Lot history unavailable. (For SnapTrade-synced positions, lots are derived from the tx stream — fills before the first sync may be absent.)" | "No open lots — position fully closed or never opened via recorded transactions." |
 | Recent tx block | 8 × 20px skeletons | "Couldn't load activity for this holding." | "No transactions recorded for this holding yet." |
 | Holding news | 5 × 16px skeletons | "News feed temporarily unavailable." | "No news in the last 14 days." |
-| Transactions ledger (no brokerage connected) | n/a | n/a | Full-bleed empty state: "No transactions yet. [Connect a brokerage] · [Add a position manually] · [Import CSV]" |
+| Transactions ledger (no brokerage connected) | n/a | n/a | Full-bleed empty state: "No transactions yet. [Connect a brokerage] · [Add a position manually]" — CSV import removed (feature not scoped for v1; a dead CTA damages trust) |
 | Transactions ledger (filters strip all rows) | n/a | n/a | "No transactions match the current filters. [Clear filters]" inline inside the table body |
 | Analytics — TWR chart | full-height `h-[180px]` skeleton | "Couldn't load performance series." inline | "Performance metrics will appear after ~10 trading days of snapshots — currently N/10." (mirrors `RiskMetricsStrip` data-quality caption) |
 | Analytics — Risk sidebar | 11 × tile skeleton | tile shows "—" with tooltip | sidebar still renders with all values as "—" so layout is stable |
@@ -505,6 +522,14 @@ relative to the repo root.
 - `qk.portfolios.riskMetrics(portfolioId)` — risk sidebar
 - `qk.portfolios.realizedPnl(portfolioId, period)` — KPI + per-instrument detail
 
+### Existing query keys to reuse (already in `apps/worldview-web/lib/query/keys.ts`)
+```ts
+// Analytics sector attribution table — use existing endpoint + key:
+qk.portfolios.sectorAttribution(portfolioId)   // → GET /v1/portfolios/{id}/sector-attribution
+// Performance for the per-period returns table (existing, takes a period param):
+qk.portfolios.performance(portfolioId, period) // → GET /v1/portfolios/{id}/performance (1D/1W/1M only)
+```
+
 ### New query keys (propose adding to `apps/worldview-web/lib/query/keys.ts`)
 ```ts
 holdingLots: (portfolioId, instrumentId, currentPrice?) =>
@@ -513,12 +538,12 @@ holdingTx: (portfolioId, instrumentId) =>
   ["portfolios", "detail", portfolioId, "holding-tx", instrumentId] as const,
 holdingValueHistory: (portfolioId, instrumentId, period) =>
   ["portfolios", "detail", portfolioId, "holding-value-history", instrumentId, period] as const,
+// NOTE: sector attribution uses qk.portfolios.sectorAttribution (existing), not this key.
+// "attribution" key below is only for the per-holding/asset-class breakdown (client-side v1):
 attribution: (portfolioId, period, dimension) =>
   ["portfolios", "detail", portfolioId, "attribution", period, dimension] as const,
 twr: (portfolioId, period, benchmark) =>
   ["portfolios", "detail", portfolioId, "twr", period, benchmark] as const,
-performance: (portfolioId) =>
-  ["portfolios", "detail", portfolioId, "performance"] as const,
 brokerageStatus: (userId) =>
   ["brokerages", userId, "status"] as const,
 ```
@@ -529,7 +554,8 @@ brokerageStatus: (userId) =>
 | `holdings`, `holdingsQuotes` | 30s | already live-refresh on overview |
 | `transactions` | 60s | append-only outside of sync events |
 | `value-history` | 60s | daily snapshots — intraday changes are noise |
-| `risk-metrics`, `performance` | 5min | recomputed once per snapshot |
+| `risk-metrics` | 5min | recomputed once per snapshot (calmar/win_rate/alpha added to same endpoint) |
+| `performance` (1D/1W/1M only — period returns table, not Analytics sidebar) | 5min | matches gateway `Cache-Control: max-age=300` |
 | `realized-pnl` | 5min | matches gateway `Cache-Control: max-age=300` |
 | `holding-lots` | 60s | derived from transactions; same cadence as tx |
 | `holding-tx` | 60s | shares cache with `transactions` once we filter in-memory |
@@ -610,32 +636,29 @@ brokerageStatus: (userId) =>
 
 ## 10. Open questions
 
-1. **Benchmark choice**: today `risk-metrics` is hard-coded to SPY. Should the
-   benchmark dropdown only offer SPY for v1, or do we add QQQ / IWM / a
-   user-selected ticker? (User input.)
-2. **Per-period excess return colouring**: should excess be coloured green/red,
-   or always neutral? Bloomberg colours it; IBKR doesn't. (UX call.)
-3. **Holding contribution chart series**: should the mini chart show the
-   holding's *price* (TradingView-style), the holding's *position value*
-   (Bloomberg PORT-style), or the holding's *contribution-to-portfolio*
-   (IBKR-style)? Recommendation: contribution-to-portfolio (most useful
-   in the context of the page).
-4. **Custom period picker**: the `Custom▾` pill needs a date-range picker
-   — should it inherit the existing `<input type="date">` pair used in
-   the ledger, or do we adopt a shadcn `Calendar` component?
-5. **Running balance accuracy**: showing a per-row running cash balance
-   requires either a backend field or client-side reconstruction (which
-   misses FX and corporate actions). Recommendation: ship the column with
-   a tooltip "Approximate — excludes FX revaluation and corporate actions
-   until backend support lands."
-6. **Attribution time aggregation**: when the user picks `5Y` and a holding
-   was sold mid-period, do we use TWR with cash-flow weighting or simple
-   buy-and-hold? Needs a S1 owner decision before the backend attribution
-   endpoint lands.
-7. **Empty-brokerage CSV import**: the empty state offers `[Import CSV]` —
-   we don't have a CSV importer yet. Either remove the CTA or scope an
-   importer (out of scope for v1?).
-8. **Slide-over on `< lg` viewports**: at narrow widths the 440px panel
-   eats most of the screen. Options: (a) full-screen modal below `lg`,
-   (b) auto-close the panel and offer a "View detail" button row.
-   Recommendation: (a) — feels native on tablet/mobile.
+1. ~~**Benchmark choice**~~ **RESOLVED (v1)**: Benchmark dropdown is SPY-only for
+   v1; the `/risk-metrics` endpoint is hard-coded to SPY. Render the dropdown
+   disabled with a "SPY" label and `title="Additional benchmarks in a future release"`.
+   QQQ / IWM / custom ticker deferred to a future wave.
+2. ~~**Per-period excess return colouring**~~ **RESOLVED**: Colour excess green/red
+   (`text-positive` / `text-negative`). Bloomberg pattern; consistent with every
+   other delta cell on the page.
+3. ~~**Holding contribution chart series**~~ **RESOLVED**: Show
+   *contribution-to-portfolio* (IBKR-style) — most useful in context; the user
+   is looking at the holding's impact on the portfolio, not its absolute price.
+4. ~~**Custom period picker**~~ **RESOLVED**: Use shadcn `<Popover>` + `<Calendar>`
+   component (already used in the screener date filters). Avoid the plain
+   `<input type="date">` pair — it has poor mobile support.
+5. ~~**Running balance accuracy**~~ **RESOLVED**: Ship the BAL column with an
+   inline tooltip: "Approximate — excludes FX revaluation and corporate actions
+   until backend `/transactions?include=running_balance` support lands."
+6. ~~**Attribution time aggregation**~~ **RESOLVED (v1)**: Client-side v1 uses
+   simple `weight × period_return` (buy-and-hold attribution). Acceptable for
+   v1. Flag in PR: migrate to TWR-weighted attribution once the backend
+   `/attribution` endpoint lands so closed positions are handled correctly.
+7. ~~**Empty-brokerage CSV import**~~ **RESOLVED**: Removed `[Import CSV]` CTA from
+   the empty state — no importer exists and a dead CTA damages trust more than a
+   shorter empty state. Out of scope for v1. See §7 loading/error/empty states.
+8. ~~**Slide-over on `< lg` viewports**~~ **RESOLVED**: Full-screen modal below
+   `lg` breakpoint (option a). Feels native on tablet/mobile; avoids the
+   table-behind-panel usability problem on smaller screens.

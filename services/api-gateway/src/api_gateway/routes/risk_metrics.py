@@ -254,6 +254,49 @@ def _sortino(returns: list[float]) -> float | None:
     return (mean_ret * _TRADING_DAYS_PER_YEAR - _RISK_FREE_RATE) / downside_dev
 
 
+def _calmar(returns: list[float], drawdown_max: float | None) -> float | None:
+    """Calmar = annualised_return / abs(drawdown_max).
+
+    Returns None if drawdown_max is None, zero, or insufficient returns.
+    Calmar measures return per unit of maximum drawdown risk — a portfolio
+    with 20% annualised return and 10% max drawdown has Calmar = 2.0.
+    """
+    if len(returns) < _MIN_RETURNS:
+        return None
+    if drawdown_max is None or drawdown_max == 0.0:
+        return None
+    mean_ret = statistics.fmean(returns)
+    return (mean_ret * _TRADING_DAYS_PER_YEAR) / abs(drawdown_max)
+
+
+def _win_rate(returns: list[float]) -> float | None:
+    """Fraction of positive daily returns.
+
+    Returns None if len(returns) < _MIN_RETURNS. A win rate of 0.58 means
+    58% of trading days had positive portfolio returns — a useful proxy for
+    the consistency of the strategy independent of magnitude.
+    """
+    if len(returns) < _MIN_RETURNS:
+        return None
+    return sum(1 for r in returns if r > 0) / len(returns)
+
+
+def _alpha(portfolio_returns: list[float], spy_returns: list[float]) -> float | None:
+    """Alpha = annualised_portfolio_return - annualised_spy_return.
+
+    Uses the same aligned series as beta so the comparison is apples-to-apples
+    (only dates where both portfolio and SPY have returns are included).
+    Returns None if either series is too short or lengths diverge.
+    """
+    if len(portfolio_returns) < _MIN_RETURNS or len(spy_returns) < _MIN_RETURNS:
+        return None
+    if len(portfolio_returns) != len(spy_returns):
+        return None
+    p_ann = statistics.fmean(portfolio_returns) * _TRADING_DAYS_PER_YEAR
+    s_ann = statistics.fmean(spy_returns) * _TRADING_DAYS_PER_YEAR
+    return p_ann - s_ann
+
+
 def _beta(portfolio_returns: list[float], spy_returns: list[float]) -> float | None:
     """β = cov(r_p, r_spy) / var(r_spy).
 
@@ -528,20 +571,35 @@ async def get_risk_metrics(
         sharpe = _sharpe(portfolio_returns)
         sortino = _sortino(portfolio_returns)
 
-    # 4. Beta — needs aligned-by-date returns from both series.
+    # 4. Beta and Alpha — both need aligned-by-date returns from portfolio + SPY.
     beta_vs_spy: float | None
+    alpha: float | None
+    # WHY track aligned returns outside the if-block: _alpha needs the same
+    # aligned series as _beta. Capturing them here avoids a second alignment call.
+    _aligned_p_returns: list[float] = []
+    _aligned_s_returns: list[float] = []
     if insufficient or not spy_series:
         beta_vs_spy = None
+        alpha = None
     else:
         # Align values, THEN compute returns (so r_t for both series
         # corresponds to the same calendar date pair).
         p_aligned, s_aligned = _align_by_date(portfolio_series, spy_series)
         if len(p_aligned) < _MIN_RETURNS + 1:
             beta_vs_spy = None
+            alpha = None
         else:
-            p_returns = _daily_returns(p_aligned)
-            s_returns = _daily_returns(s_aligned)
-            beta_vs_spy = _beta(p_returns, s_returns)
+            _aligned_p_returns = _daily_returns(p_aligned)
+            _aligned_s_returns = _daily_returns(s_aligned)
+            beta_vs_spy = _beta(_aligned_p_returns, _aligned_s_returns)
+            alpha = _alpha(_aligned_p_returns, _aligned_s_returns)
+
+    # 5. Calmar and Win Rate — derived from portfolio returns alone.
+    # WHY no explicit insufficient guard here: both _calmar and _win_rate
+    # check len(returns) < _MIN_RETURNS internally and return None — and
+    # drawdown_max is already None when insufficient (set in step 3 above).
+    calmar = _calmar(portfolio_returns, drawdown_max)
+    win_rate = _win_rate(portfolio_returns)
 
     # F-014 / F-015: surface ``as_of``, ``lookback_window``, and a
     # ``data_quality`` block so the frontend knows *why* a metric is
@@ -590,6 +648,9 @@ async def get_risk_metrics(
         sharpe = None
         sortino = None
         beta_vs_spy = None
+        calmar = None
+        win_rate = None
+        alpha = None
     elif insufficient or len(portfolio_returns) < _MIN_RETURNS:
         data_quality_status = "insufficient_data"
     elif not spy_series:
@@ -606,6 +667,11 @@ async def get_risk_metrics(
         "sharpe": sharpe,
         "sortino": sortino,
         "beta_vs_spy": beta_vs_spy,
+        # Wave G additions — computed from already-fetched data (no extra
+        # downstream calls). See docs/designs/0089/04-portfolio-detail.md §3.6.
+        "calmar": calmar,  # annualised_return / abs(drawdown_max); None when no drawdown
+        "win_rate": win_rate,  # fraction of positive daily returns [0, 1]
+        "alpha": alpha,  # portfolio_annualised_return - spy_annualised_return
         "n_returns": len(portfolio_returns),
         # When the metric was computed (UTC ISO-8601). Lets the frontend
         # cache-bust intelligently if it ever wants to compare against a

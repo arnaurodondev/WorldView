@@ -616,7 +616,7 @@ The `/v1/auth/callback` handler sanitizes `error` and `error_description` query 
 | GET | `/v1/portfolios/{id}/holding-lots` | FIFO lot breakdown per instrument | Yes |
 | GET | `/v1/portfolios/{id}/concentration` | Sector/asset class concentration | Yes |
 | GET | `/v1/portfolios/{id}/sector-attribution` | Live-priced GICS sector breakdown with day P&L (PLAN-0091 T-A-2-03). Returns `{portfolio_id, buckets: [{sector, holding_count, market_value, sector_weight_pct, sector_day_pnl}], covered_pct, prices_stale?}` | Yes |
-| GET | `/v1/portfolios/{id}/performance` | Performance metrics (Calmar, win-rate) | Yes |
+| GET | `/v1/portfolios/{id}/performance` | Period return: `{return_pct, return_abs, covered_pct}` for `period ∈ {1D, 1W, 1M}` (query param `period`). Does NOT compute Calmar or win-rate. S9 composition: holdings from S1 + OHLCV from S3. | Yes |
 | GET | `/v1/portfolios/{id}/transactions` | Transactions nested under portfolio | Yes |
 
 **Transaction note**: `GET /v1/transactions` forwards `portfolio_id` as `X-Portfolio-ID`

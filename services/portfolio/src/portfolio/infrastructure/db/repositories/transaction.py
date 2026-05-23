@@ -37,6 +37,9 @@ class SqlAlchemyTransactionRepository(TransactionRepository):
             currency=row.currency,
             executed_at=row.executed_at,
             external_ref=row.external_ref,
+            # P2-E: broker-supplied description (Alembic 0020). NULL on all rows
+            # before the migration and when SnapTrade omits the field.
+            description=row.description,
             created_at=row.created_at,
         )
 
