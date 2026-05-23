@@ -1,6 +1,6 @@
 # Instrument — Intelligence Tab — Design Spec (PRD-0089)
 
-**Status**: draft — design only, no implementation
+**Status**: draft — iter-4 (2026-05-22): PLAN-0091 C-2/D-1/D-2 added
 **Owner**: agent-instr-intelligence
 **Date**: 2026-05-22 (iter-3 — post-investigation amendments Δ11-Δ23)
 **Parent index**: `docs/designs/0089/_INDEX.md`
@@ -690,3 +690,211 @@ Positioned next to the type badge. Analysts can judge data quality at a glance.
 ### E-03 — `BriefingResponse.risk_summary` surfaced via `StructuredBrief`
 
 `BriefingResponse.risk_summary` (top_risk_signals array) is already in the frontend type and the existing `StructuredBrief` component renders risk signals when `variant="compact"` is used. This enhancement is a **free by-product** of the C-SB-01 fix (reusing the shared component instead of forking). No additional implementation required — confirm `StructuredBrief` variant="compact" renders risk chips and document in acceptance criteria.
+
+---
+
+## 12. PLAN-0091 Additions (2026-05-22)
+
+These three waves extend the Intelligence tab with sentiment enrichment on news rows, an opportunity paths panel in the right rail, and entity similarity + graph enrichment features. Waves C-2 and D-2 depend on PLAN-0091 Wave A-1; Wave D-1 ships independently using the existing paths endpoint.
+
+### 12.1 Wave C-2 — SentimentBadge + ArticleImpactDrawer on news rows
+
+**Depends on**: PLAN-0091 Wave A-1 (`sentiment`, `impact_score`, `impact_windows` fields added to S9 `ArticleResponse`)
+
+Every row in `NewsColumn` (rendered by `DenseArticleRow`) gains two new inline affordances.
+
+#### SentimentBadge
+
+9px uppercase pill rendered inline between the impact-score column and the headline. Only renders when `article.sentiment` is non-null — LIGHT-tier articles that carry no LLM scoring show nothing, not even a placeholder.
+
+| Sentiment | Label | Style |
+|-----------|-------|-------|
+| `"positive"` | POS | `text-positive bg-positive/10` |
+| `"negative"` | NEG | `text-negative bg-negative/10` |
+| `"neutral"` | NEU | `text-muted-foreground bg-muted/20` |
+| `"mixed"` | MIX | `text-warning bg-warning/10` |
+
+Pill shape: `px-1.5 py-0.5 rounded-[2px] text-[9px] uppercase font-mono` — same pill convention as type/health badges in `EntityOverviewBlock`.
+
+#### Impact score bar
+
+Inline `40×4px` bar using the same weight-bar style as `InlineSelectionPanel`. Source: `article.impact_score` (0–1 scale). Renders only when `impact_score` is non-null. Clicking the bar opens `ArticleImpactDrawer` anchored below the clicked row.
+
+#### ArticleImpactDrawer
+
+Popover (`180×120px`) anchored below the news row that triggered it. Closes on click-outside or `Esc`.
+
+```
+PRICE IMPACT AFTER ARTICLE
+T+0 DAY   T+1 DAY   T+2 DAYS   T+5 DAYS
+ +0.8%     +1.4%      +2.3%      +1.9%
+ ████       ██████    ████████   ███████
+Data quality: intraday measured
+```
+
+- Bars: `text-positive` for positive delta, `text-negative` for negative delta.
+- `data_quality: "daily_proxy"` renders an italic "estimated" note below the bars.
+- Data source: `GET /v1/articles/{article_id}/impact-history` (new endpoint, PLAN-0091 Wave A-2).
+
+#### Component files
+
+| Component | File | Status | Notes |
+|-----------|------|--------|-------|
+| `SentimentBadge` | `components/ui/sentiment-badge.tsx` | NEW shared primitive | Props: `sentiment: "positive" \| "negative" \| "neutral" \| "mixed" \| null` |
+| `NewsColumn` | `components/instrument/intelligence/news/NewsColumn.tsx` | MODIFY | Correct path includes `news/` subdir; insert `SentimentBadge` + impact bar into each `DenseArticleRow` |
+| `ArticleImpactDrawer` | `components/instrument/intelligence/ArticleImpactDrawer.tsx` | NEW | Popover; fetches impact history on open |
+
+#### Data fetching
+
+| Resource | Key | staleTime | Endpoint |
+|----------|-----|-----------|---------|
+| Article impact history | `qk.articleImpactHistory(articleId)` (NEW in keys.ts) | 24h | `GET /v1/articles/{article_id}/impact-history` |
+
+#### Loading / error / empty
+
+| State | Behaviour |
+|-------|-----------|
+| Loading (drawer open) | 4 skeleton cells at 22px height |
+| Error | "Impact data unavailable" muted 9px |
+| Empty (no windows) | "No impact data recorded for this article" muted |
+
+---
+
+### 12.2 Wave D-1 — OpportunityPathsPanel in Intelligence tab right rail
+
+**Depends on**: none — `GET /v1/entities/{id}/paths` already exists.
+
+New panel in `ContextPanel` entity-overview mode (`selectedNodeId === null`), positioned below `EntityOverviewBlock`. Shows the top 5 multi-hop opportunity paths for the current entity. Only renders when `entityId` is non-null.
+
+#### Visual spec
+
+```
+OPPORTUNITY PATHS                                [5 paths]
+NVDA → SUPPLIES → TSMC → MANUFACTURES → ASML      score: 0.84
+NVDA → COMPETES WITH → AMD → PARTNER → MSFT        score: 0.71
+NVDA → ACQUIRED → Mellanox → SUBSIDIARY OF → HPE   score: 0.65
+[Hover for LLM explanation]
+```
+
+| Element | Token | Notes |
+|---------|-------|-------|
+| Section header | `text-[10px] uppercase tracking-wide text-muted-foreground` | 16px height, standard right-rail header |
+| Entity node labels | `text-[10px] font-mono text-foreground/90` | |
+| Relation type labels | `text-[9px] font-mono uppercase text-primary/70` | between `→` arrows |
+| Score | `text-[9px] tabular-nums text-muted-foreground` | right-aligned |
+| Row height | 18px | consistent with `TopRelationsBlock` rows |
+
+Hover tooltip: shows `path.llm_explanation` when non-null, or `"Analysis in progress"` when null. Tooltip triggers on the full path row. Clicking any intermediate entity node in a path navigates to `/instruments/{ticker}` using `router.push`.
+
+#### Component and data fetching
+
+| Component | File | Status |
+|-----------|------|--------|
+| `OpportunityPathsPanel` | `components/instrument/intelligence/OpportunityPathsPanel.tsx` | NEW |
+
+Wire into `ContextPanel` entity-overview mode after `EntityOverviewBlock` + `SectionDivider`:
+
+```tsx
+<EntityOverviewBlock entityId={entityId} />
+<SectionDivider />
+<OpportunityPathsPanel entityId={entityId} />
+<SectionDivider />
+<TopRelationsBlock entityId={entityId} limit={10} />
+```
+
+| Resource | Key | staleTime | Endpoint |
+|----------|-----|-----------|---------|
+| Entity paths | `qk.entityPaths(entityId)` (NEW in keys.ts) | 10min | `GET /v1/entities/{id}/paths?limit=5&min_score=0.4` |
+
+#### Loading / error / empty
+
+| State | Behaviour |
+|-------|-----------|
+| Loading | 3 skeleton 18px rows (`animate-pulse bg-muted/20`) |
+| Error | "Path engine unavailable" muted 10px |
+| Empty | "No opportunity paths found" muted (min_score threshold filters all results) |
+
+---
+
+### 12.3 Wave D-2 — EntitySimilarityPanel + graph edge validity + node industry colouring
+
+**Depends on**: PLAN-0091 Wave A-1 (graph edges gain `valid_from`, `valid_to`, `confidence_stale`; graph nodes gain `industry`, `market_cap`)
+
+Three related sub-features shipped as one wave.
+
+#### 12.3.1 EntitySimilarityPanel
+
+Compact 5-row list in the right rail, above `OpportunityPathsPanel`. Calls `POST /v1/entities/similar` with `{ entity_id, limit: 5 }`.
+
+```
+SIMILAR ENTITIES
+MSFT   Microsoft Corp        TECH   0.94
+GOOGL  Alphabet Inc          TECH   0.91
+META   Meta Platforms        TECH   0.88
+AMZN   Amazon.com            TECH   0.85
+TSLA   Tesla Inc             AUTO   0.72
+```
+
+| Element | Token | Notes |
+|---------|-------|-------|
+| Ticker | `text-[10px] font-mono text-foreground` | left-aligned |
+| Name | `text-[10px] text-foreground/80` | truncated |
+| Sector chip | `text-[9px] uppercase px-1.5 py-0.5 rounded-[2px] bg-muted text-muted-foreground` | |
+| Score | `text-[9px] tabular-nums text-muted-foreground` | right-aligned |
+| Row height | 18px | |
+
+Each row links to `/instruments/{ticker}`.
+
+| Component | File | Status |
+|-----------|------|--------|
+| `EntitySimilarityPanel` | `components/instrument/intelligence/EntitySimilarityPanel.tsx` | NEW |
+
+| Resource | Key | staleTime | Endpoint |
+|----------|-----|-----------|---------|
+| Similar entities | `qk.similarEntities(entityId)` (NEW in keys.ts) | 10min | `POST /v1/entities/similar` with `{ entity_id, limit: 5 }` |
+
+#### 12.3.2 Graph edge validity in InlineSelectionPanel
+
+When an edge is selected, display below the source → label → target breadcrumb in `EdgeDetailCard`:
+
+```
+Active since: 2023-Q1          [STALE confidence]
+```
+
+- `valid_from` formatted as `YYYY-Qn` (quarter derived as `Math.ceil((new Date(valid_from).getMonth() + 1) / 3)`).
+- `valid_to` shown as `Ended: YYYY-Qn` when non-null; omitted when null (ongoing relation).
+- `confidence_stale: true` renders a `[STALE]` badge: `text-warning/80 bg-warning/10 text-[9px] px-1 py-0.5 rounded-[2px]`.
+
+File: `components/instrument/intelligence/context/EdgeDetailCard.tsx` (MODIFY).
+
+#### 12.3.3 Graph node industry colouring
+
+Extend `nodeReducer` in `SigmaInternalComponents.tsx` to tint nodes by the `industry` field (now available in enriched graph response after Wave A-1).
+
+```typescript
+const INDUSTRY_COLORS: Record<string, string> = {
+  "Technology": "#3B82F6",
+  "Financial Services": "#10B981",
+  "Energy": "#F97316",
+  "Healthcare": "#EF4444",
+  "Consumer Cyclical": "#8B5CF6",
+};
+// fallback: existing default grey when industry is null or unmapped
+```
+
+Inside `nodeReducer`:
+
+```typescript
+const industryColor = node.industry ? (INDUSTRY_COLORS[node.industry] ?? undefined) : undefined;
+return { ...data, color: industryColor ?? data.color };
+```
+
+File: `components/instrument/graph/SigmaInternalComponents.tsx` (MODIFY).
+
+#### 12.3.4 Loading / error / empty
+
+| Surface | Loading | Error | Empty |
+|---------|---------|-------|-------|
+| EntitySimilarityPanel | 5 skeleton 18px rows | "Similar entities unavailable" muted | "No similar entities found" |
+| Edge validity (EdgeDetailCard) | n/a — data already in graph payload | omit quietly when fields absent | omit when `valid_from` is null |
+| Node industry colouring | n/a — applied in nodeReducer on every render | fallback to default grey | fallback to default grey when industry null or unmapped |
