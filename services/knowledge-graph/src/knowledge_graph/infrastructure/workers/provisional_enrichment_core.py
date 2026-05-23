@@ -74,20 +74,23 @@ _ENTITY_TYPE_ALIASES: dict[str, str] = {
     "enterprise": "financial_instrument",
     "firm": "financial_instrument",
     "business": "financial_instrument",
-    # organization variants → unknown (migration 0039 §2c)
-    "organization": "unknown",
-    "organisation": "unknown",
-    "inst": "unknown",
-    "institution": "unknown",
-    "regulator": "unknown",
+    # organization variants → financial_instrument (F-009: organizations are most
+    # commonly companies/institutions that trade or have a financial presence;
+    # mapping to 'unknown' was discarding meaningful classification signal)
+    "organization": "financial_instrument",
+    "organisation": "financial_instrument",
+    "inst": "financial_instrument",
+    "institution": "financial_instrument",
+    "regulator": "unknown",  # regulators (SEC, Fed) are not financial instruments
     # country → place (migration 0039 §2b)
     "country": "place",
     "nation": "place",
     "region": "place",
-    # other legacy values → unknown (migration 0039 §2c)
+    # other legacy values
     "other": "unknown",
     "concept": "unknown",
-    "commodity": "unknown",
+    # commodity → product (F-009: commodities like gold/oil are physical products)
+    "commodity": "product",
     # fund is a tradable financial product
     "fund": "financial_instrument",
     # macro_indicator is canonical; alias kept for older prompt variants that
