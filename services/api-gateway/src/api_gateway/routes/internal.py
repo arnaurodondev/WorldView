@@ -67,7 +67,7 @@ async def get_jwks(request: Request) -> JSONResponse:
 _ALLOWED_SERVICE_NAMES: frozenset[str] = frozenset(
     {
         "nlp-pipeline-price-impact",
-    }
+    },
 )
 
 

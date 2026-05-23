@@ -35,7 +35,7 @@ _AUTH_SKIP_PATHS: frozenset[str] = frozenset(
         "/v1/health",
         "/metrics",
         "/internal/jwks",
-    ]
+    ],
 )
 
 
@@ -513,7 +513,7 @@ def add_cors(app: FastAPI, origins: str) -> None:
     if "*" in origin_list:
         raise ValueError(
             "CORS misconfiguration: allow_origins=['*'] with allow_credentials=True "
-            "is rejected by browsers. Set explicit origins in API_GATEWAY_CORS_ORIGINS."
+            "is rejected by browsers. Set explicit origins in API_GATEWAY_CORS_ORIGINS.",
         )
     app.add_middleware(
         CORSMiddleware,

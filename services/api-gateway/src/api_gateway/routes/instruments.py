@@ -303,7 +303,7 @@ async def refresh_instrument_price(instrument_id: str, request: Request) -> Any:
                             "status": "cooldown",
                             "cooldown_remaining_sec": remaining,
                             "message": f"Manual refresh available in {remaining}s",
-                        }
+                        },
                     ).encode(),
                     status_code=429,
                     media_type="application/json",
@@ -332,7 +332,7 @@ async def refresh_instrument_price(instrument_id: str, request: Request) -> Any:
             "exchange": exchange or None,
             "dataset_types": ["quotes"],
             "priority": "high",
-        }
+        },
     ).encode()
 
     s2_resp = await clients.market_ingestion.post(
@@ -360,7 +360,7 @@ async def refresh_instrument_price(instrument_id: str, request: Request) -> Any:
                 "instrument_id": instrument_id,
                 "status": "accepted",
                 "message": "Price refresh queued — data will update within 30 seconds",
-            }
+            },
         ).encode(),
         status_code=202,
         media_type="application/json",

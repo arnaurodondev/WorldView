@@ -274,7 +274,7 @@ def _bars_from_response(resp_json: dict[str, Any]) -> list[dict[str, Any]]:
                     "low": float(item["low"]) if item.get("low") else 0.0,
                     "close": float(item["close"]) if item.get("close") else 0.0,
                     "volume": int(item["volume"]) if item.get("volume") else 0,
-                }
+                },
             )
         except (KeyError, ValueError, TypeError):
             continue
@@ -338,7 +338,7 @@ async def get_intraday_stats(instrument_id: UUID, request: Request) -> Any:
             daily_resp_fut,
             tech_resp_fut,
             return_exceptions=True,
-        )
+        ),
     )
     intraday_resp: httpx.Response | BaseException = _gathered[0]
     daily_resp: httpx.Response | BaseException = _gathered[1]
@@ -443,7 +443,7 @@ async def get_intraday_stats(instrument_id: UUID, request: Request) -> Any:
             "premarket_low": round(premarket_low, 4) if premarket_low is not None else None,
             "short_interest_pct": round(short_interest_pct, 2) if short_interest_pct is not None else None,
             "short_interest_delta": short_interest_delta,
-        }
+        },
     )
 
 
@@ -483,7 +483,7 @@ async def get_multi_period_returns(instrument_id: UUID, request: Request) -> Any
             content={
                 "instrument_id": str(instrument_id),
                 "periods": {p: None for p in ("1D", "5D", "1M", "3M", "6M", "YTD", "1Y")},
-            }
+            },
         )
 
     try:
@@ -522,7 +522,7 @@ async def get_multi_period_returns(instrument_id: UUID, request: Request) -> Any
                 "YTD": ytd_ret,
                 "1Y": _ret(252),
             },
-        }
+        },
     )
 
 
@@ -613,7 +613,7 @@ async def get_price_levels(instrument_id: UUID, request: Request) -> Any:
             "ma50_direction": _dir(ma50) if ma50 is not None else None,
             "ma200": ma200,
             "ma200_direction": _dir(ma200) if ma200 is not None else None,
-        }
+        },
     )
 
 
@@ -1156,7 +1156,7 @@ async def get_quote_stream_stub(request: Request) -> Response:
                 "detail": "WebSocket quote stream lands in PLAN-0059 Wave D. "
                 "Use polling on /v1/quotes/{instrument_id} until then.",
                 "wave": "D",
-            }
+            },
         ).encode(),
         status_code=503,
         media_type="application/json",
@@ -1325,7 +1325,7 @@ _POSITIVE_SIGNAL_TYPES = frozenset(
         # NLP deep-extraction event_type enum (deep_extraction.py JSON schema)
         "PRODUCT_LAUNCH",
         "CAPITAL_RAISE",
-    }
+    },
 )
 _NEGATIVE_SIGNAL_TYPES = frozenset(
     {
@@ -1347,7 +1347,7 @@ _NEGATIVE_SIGNAL_TYPES = frozenset(
         "NATURAL_DISASTER",
         "GEOPOLITICAL",
         "SANCTIONS",
-    }
+    },
 )
 
 

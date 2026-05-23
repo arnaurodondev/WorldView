@@ -398,7 +398,7 @@ async def get_watchlist_insights(
                     "has_active_alert": bool(eid) and eid in alerts_by_entity,
                     "top_news_title": (top_news or {}).get("title"),
                     "top_news_url": (top_news or {}).get("url"),
-                }
+                },
             )
 
         # ── 5. Aggregates ─────────────────────────────────────────────────────────

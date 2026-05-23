@@ -85,7 +85,7 @@ async def _screener_for_sector(
             "sort_by": "daily_return",
             "sort_order": "desc",
             "limit": 20,
-        }
+        },
     )
     resp = await client.post(
         "/api/v1/fundamentals/screen",
@@ -189,7 +189,7 @@ async def get_market_heatmap(
                     # value (0.16 = 0.16%) — multiply here so the display shows correct values.
                     "change_pct": round(avg_change * 100, 2) if avg_change is not None else None,
                     "instrument_count": len(instruments),
-                }
+                },
             )
         return {"sectors": sectors}
 
