@@ -90,7 +90,7 @@ class InternalJWTMiddleware(BaseHTTPMiddleware):
         self._jti_replay_check_enabled = jti_replay_check_enabled
 
         if self._skip_verification:
-            logger.critical(  # type: ignore[no-any-return]
+            logger.warning(  # type: ignore[no-any-return]
                 "internal_jwt_skip_verification_enabled",
                 detail=(
                     "InternalJWTMiddleware signature verification is DISABLED. "

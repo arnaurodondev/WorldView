@@ -95,7 +95,7 @@ class InternalJWTMiddleware(BaseHTTPMiddleware):
         self._jti_replay_check_enabled = jti_replay_check_enabled
 
         if self._skip_verification:
-            logger.critical(  # type: ignore[no-any-return]
+            logger.warning(  # type: ignore[no-any-return]
                 "internal_jwt_skip_verification_enabled",
                 detail=(
                     "InternalJWTMiddleware signature verification is DISABLED. "
@@ -261,7 +261,7 @@ class InternalJWTMiddleware(BaseHTTPMiddleware):
 
             # skip_verification=True: decode WITHOUT signature verification.
             # This path exists ONLY for E2E tests without the full S9 stack.
-            logger.critical(  # type: ignore[no-any-return]
+            logger.debug(  # type: ignore[no-any-return]
                 "internal_jwt_unverified_decode",
                 detail="Decoding JWT WITHOUT signature verification (skip_verification=True).",
             )
