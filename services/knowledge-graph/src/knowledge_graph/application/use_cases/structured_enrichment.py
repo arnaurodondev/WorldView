@@ -375,6 +375,12 @@ class StructuredEnrichmentUseCase:
             from sqlalchemy.exc import SQLAlchemyError
 
             if isinstance(exc, SQLAlchemyError):
+                logger.error(  # type: ignore[no-any-return]
+                    "enrichment_db_write_failed",
+                    entity_id=str(entity.entity_id),
+                    error=str(exc),
+                    exc_info=True,
+                )
                 raise RetryableEnrichmentError("DB error during enrichment write") from exc
             raise
 

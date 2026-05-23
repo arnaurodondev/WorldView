@@ -32,6 +32,7 @@ from knowledge_graph.application.use_cases.structured_enrichment import (
 from knowledge_graph.domain.enrichment_result import EnrichmentResult, EnrichmentSource
 from knowledge_graph.domain.errors import FatalEnrichmentError, RetryableEnrichmentError
 from knowledge_graph.domain.models import CanonicalEntity
+from structlog.testing import capture_logs
 
 pytestmark = pytest.mark.unit
 
@@ -466,3 +467,78 @@ async def test_enrichment_attempts_incremented_on_llm_short_response() -> None:
     await worker.run()
 
     adapter.increment_attempts.assert_awaited()
+
+
+# ---------------------------------------------------------------------------
+# DB write failure — logging and error propagation (F-X09 regression guard)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_db_write_sqlalchemy_error_raises_retryable_with_log() -> None:
+    """write_enrichment_result raises SQLAlchemyError → RetryableEnrichmentError raised
+    AND a structlog event with key 'enrichment_db_write_failed' is emitted.
+
+    This is the regression test for the silent-failure bug where SQLAlchemy errors
+    were caught and re-raised as RetryableEnrichmentError with no logging, making
+    3,951 entities permanently invisible to the operator.
+
+    Root-cause fix: the adapter's seed_relations INSERT contained the column
+    ``is_backfill`` which does not exist on the ``relations`` table.  The
+    ProgrammingError was caught silently.  Both the logging addition and the
+    column removal are guarded by this test.
+    """
+    from sqlalchemy.exc import ProgrammingError
+
+    mdc = _make_mdc(lookup_payload={"description": "Apple is a technology giant."})
+    adapter = _make_adapter()
+    # Simulate the ProgrammingError that was caused by the is_backfill column bug.
+    adapter.write_enrichment_result = AsyncMock(
+        side_effect=ProgrammingError(
+            "column 'is_backfill' of relation 'relations' does not exist",
+            params=None,
+            orig=Exception("column is_backfill does not exist"),
+        )
+    )
+    uc = _make_use_case(mdc=mdc, adapter=adapter)
+
+    with capture_logs() as captured:
+        with pytest.raises(RetryableEnrichmentError, match="DB error during enrichment write"):
+            await uc.enrich(_make_entity())
+
+    error_events = [e for e in captured if e.get("event") == "enrichment_db_write_failed"]
+    assert error_events, (
+        "Expected a structlog event with key 'enrichment_db_write_failed' but none was emitted. "
+        "This means the logging fix in the Phase 3 except block has been reverted."
+    )
+    assert str(_ENTITY_ID) in error_events[0].get(
+        "entity_id", ""
+    ), "Log event must carry entity_id so operators can identify the failing entity."
+
+
+@pytest.mark.asyncio
+async def test_db_write_seed_relations_sqlalchemy_error_raises_retryable_with_log() -> None:
+    """seed_relations raises SQLAlchemyError → RetryableEnrichmentError with log.
+
+    Guards against seed_relations failures (e.g. bad column name in INSERT)
+    also being surfaced and logged.
+    """
+    from sqlalchemy.exc import ProgrammingError
+
+    mdc = _make_mdc(lookup_payload={"description": "Apple is a technology giant."})
+    adapter = _make_adapter()
+    adapter.seed_relations = AsyncMock(
+        side_effect=ProgrammingError(
+            "column 'is_backfill' of relation 'relations' does not exist",
+            params=None,
+            orig=Exception("column is_backfill does not exist"),
+        )
+    )
+    uc = _make_use_case(mdc=mdc, adapter=adapter)
+
+    with capture_logs() as captured:
+        with pytest.raises(RetryableEnrichmentError, match="DB error during enrichment write"):
+            await uc.enrich(_make_entity())
+
+    error_events = [e for e in captured if e.get("event") == "enrichment_db_write_failed"]
+    assert error_events, "SQLAlchemy error from seed_relations must also emit 'enrichment_db_write_failed' log."

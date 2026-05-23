@@ -252,14 +252,14 @@ LIMIT 1
 INSERT INTO relations (
     relation_id, subject_entity_id, object_entity_id, canonical_type,
     semantic_mode, decay_class, decay_alpha, base_confidence,
-    is_backfill, confidence_stale, summary_stale,
+    confidence_stale, summary_stale,
     evidence_count, first_evidence_at, latest_evidence_at,
     relation_source
 )
 VALUES (
     :relation_id, :subject, :object, :canonical_type,
     'RELATION_STATE', 'DURABLE', 0.000950, 0.70,
-    false, true, true,
+    true, true,
     0, :now, :now,
     'structured_enrichment'
 )

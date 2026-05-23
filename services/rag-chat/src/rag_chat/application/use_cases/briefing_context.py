@@ -31,6 +31,7 @@ from rag_chat.application.models.briefing_context import (
     QuoteSummary,
     WatchlistItem,
 )
+from rag_chat.application.ports.upstream_clients import ChunkSearchRequest, EnrichedChunkResult
 from rag_chat.domain.errors import ContextGatheringError, EntityNotFoundError
 
 if TYPE_CHECKING:
@@ -223,14 +224,20 @@ class BriefingContextGatherer:
             coros.append(_empty_dict())
             coros.append(_empty_dict())
 
-        # S6 entity articles
+        # S6 entity articles (news)
         coros.append(self._fetch_entity_articles(entity_id))
 
         # S7 events for this entity
         coros.append(self._fetch_events([entity_id], days=30))
 
+        # S6 ANN chunk search — SEC filings, earnings transcripts, analyst reports.
+        # Uses entity_graph.canonical_name as the query so the ANN index can
+        # surface semantically relevant sections even without a user query.
+        # source_types excludes news (those are covered by _fetch_entity_articles).
+        coros.append(self._fetch_entity_chunks(entity_id, entity_graph.canonical_name))
+
         results = await asyncio.gather(*coros, return_exceptions=True)
-        quote_result, fundamentals_result, articles_result, events_result = results
+        quote_result, fundamentals_result, articles_result, events_result, chunks_result = results
 
         # ── 4. Map results ───────────────────────────────────────────────────
         quote: QuoteSummary | None = None
@@ -272,6 +279,13 @@ class BriefingContextGatherer:
         else:
             events = events_result  # type: ignore[assignment]
 
+        # R9 safe degradation: chunk search failure → empty list, no crash.
+        relevant_chunks: list[EnrichedChunkResult] = []
+        if isinstance(chunks_result, BaseException):
+            log.warning("briefing_chunk_search_failed", entity_id=entity_id, error=str(chunks_result))
+        else:
+            relevant_chunks = chunks_result  # type: ignore[assignment]
+
         # ── 5. Assemble BriefingContext ──────────────────────────────────────
         return BriefingContext.for_instrument(
             entity_id=entity_id,
@@ -281,6 +295,7 @@ class BriefingContextGatherer:
             active_alerts=[],
             quotes=quotes,
             recent_events=events,
+            relevant_chunks=relevant_chunks,
             gathered_at=datetime.now(tz=UTC),
         )
 
@@ -398,6 +413,35 @@ class BriefingContextGatherer:
             )
             for e in results
         ]
+
+    async def _fetch_entity_chunks(
+        self,
+        entity_id: str,
+        entity_name: str,
+    ) -> list[EnrichedChunkResult]:
+        """ANN chunk search filtered to entity: SEC filings, earnings transcripts, analyst reports.
+
+        Uses entity_ids filter (GIN-indexed at S6) so only semantically relevant
+        chunks for this entity surface.  source_types excludes news articles —
+        those are already handled by _fetch_entity_articles.  top_k=10 keeps
+        prompt size bounded; min_score=0.4 prunes low-quality matches.
+
+        query_text=entity_name is required by S6's "exactly_one_query" validator
+        (search_type="ann" always needs a query vector or text to embed).  The
+        entity name gives sufficient semantic signal to find relevant document
+        sections even without an explicit user query.
+        """
+        request = ChunkSearchRequest(
+            query_text=entity_name,
+            top_k=10,
+            min_score=0.4,
+            granularity="section",
+            include_entities=False,
+            source_types=["sec_filing", "earnings_transcript", "analyst_report"],
+            search_type="ann",
+            entity_ids=[UUID(entity_id)],
+        )
+        return await self._s6.search_chunks(request)
 
     def _map_entity_graph(
         self,

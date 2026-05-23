@@ -166,16 +166,23 @@ ORDER BY rcl.detected_at DESC
 
         Returns claims ordered by created_at DESC so newest are examined first.
         Uses ``idx_claims_contradiction_detection`` index via WHERE predicate.
+
+        Also JOINs ``relation_evidence_raw`` to resolve the ``raw_id`` needed for
+        ``relation_contradiction_links.relation_evidence_id`` (FK → raw_id, NOT claim_id).
+        ``relation_evidence_raw_id`` will be ``None`` when no corresponding
+        ``relation_evidence_raw`` row exists for the claim.
         """
         result = await self._session.execute(
             text("""
-SELECT DISTINCT ON (subject_entity_id, claim_type)
-    claim_id, subject_entity_id, claim_type, polarity, extraction_confidence
-FROM claims
-WHERE subject_entity_id IS NOT NULL
-  AND polarity != 'neutral'
-  AND created_at >= now() - make_interval(days => :window_days)
-ORDER BY subject_entity_id, claim_type, created_at DESC
+SELECT DISTINCT ON (c.subject_entity_id, c.claim_type)
+    c.claim_id, c.subject_entity_id, c.claim_type, c.polarity, c.extraction_confidence,
+    rer.raw_id AS relation_evidence_raw_id
+FROM claims c
+LEFT JOIN relation_evidence_raw rer ON rer.claim_id = c.claim_id
+WHERE c.subject_entity_id IS NOT NULL
+  AND c.polarity != 'neutral'
+  AND c.created_at >= now() - make_interval(days => :window_days)
+ORDER BY c.subject_entity_id, c.claim_type, c.created_at DESC
 LIMIT :limit
 """),
             {"window_days": window_days, "limit": limit},
@@ -188,6 +195,9 @@ LIMIT :limit
                 "claim_type": r[2],
                 "polarity": r[3],
                 "extraction_confidence": float(r[4]),
+                # raw_id from relation_evidence_raw — None when no matching row exists.
+                # The worker MUST use this as relation_evidence_id (not claim_id).
+                "relation_evidence_raw_id": UUID(str(r[5])) if r[5] is not None else None,
             }
             for r in rows
         ]
