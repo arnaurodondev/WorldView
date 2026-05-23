@@ -263,7 +263,7 @@ class TestAgeSyncWorkerEntities:
                 None,  # third _setup_age_session (after relations commit)
                 empty,
                 empty,  # temporal_events SELECT + exposures SELECT
-            ]
+            ],
         )
 
         sf = _make_session_factory(session)
@@ -313,7 +313,7 @@ class TestAgeSyncWorkerEntities:
                 None,  # third _setup_age_session
                 _make_result([]),
                 _make_result([]),  # temporal + exposures
-            ]
+            ],
         )
         sf = _make_session_factory(session)
         settings = _make_settings()
@@ -401,7 +401,7 @@ class TestAgeSyncWorkerRelations:
                 None,  # third _setup_age_session
                 _make_result([]),  # temporal events SELECT
                 _make_result([]),  # exposures SELECT
-            ]
+            ],
         )
 
         sf = _make_session_factory(session)
@@ -438,7 +438,7 @@ class TestAgeSyncWorkerRelations:
                 None,  # third _setup_age_session
                 _make_result([]),  # temporal events SELECT
                 _make_result([]),  # exposures SELECT
-            ]
+            ],
         )
 
         sf = _make_session_factory(session)
@@ -478,7 +478,7 @@ class TestAgeSyncWorkerRelations:
                 None,  # third _setup_age_session
                 _make_result([]),  # temporal events SELECT
                 _make_result([]),  # exposures SELECT
-            ]
+            ],
         )
 
         sf = _make_session_factory(session)
@@ -594,7 +594,7 @@ class TestSyncTemporalEventsPagination:
                 None,  # third _setup_age_session
                 _make_result([]),  # temporal_events SELECT
                 _make_result([]),  # exposures SELECT
-            ]
+            ],
         )
         sf = _make_session_factory(session)
         valkey = _make_valkey()
@@ -633,7 +633,7 @@ class TestSyncTemporalEventsPagination:
                 _make_result([event_row]),
                 None,  # temporal SELECT + MERGE
                 _make_result([]),  # exposures SELECT
-            ]
+            ],
         )
         sf = _make_session_factory(session)
         valkey = _make_valkey()
@@ -678,7 +678,7 @@ class TestSyncTemporalEventsPagination:
                 _make_result([event_row]),
                 None,  # temporal SELECT + Cypher
                 _make_result([]),  # exposures SELECT
-            ]
+            ],
         )
         sf = _make_session_factory(session)
 
@@ -739,3 +739,106 @@ class TestSyncTemporalEventsPagination:
         worker = AgeSyncWorker(session_factory=sf, valkey_client=valkey, settings=_make_settings())
         # Must not raise
         asyncio.run(worker.run())
+
+
+# ── Test: F-159 ProgrammingError graceful handling ───────────────────────────
+
+
+class TestAgeSyncWorkerProgrammingError:
+    """F-159: When the AGE extension fails to load at runtime (e.g. LOAD 'age'
+    raises ProgrammingError), the worker must catch it, log a structured warning
+    at WARNING level, and return without re-raising.
+
+    Re-raising would increment the APScheduler crash counter and trigger an
+    exponential backoff spiral that prevents all subsequent sync runs.
+    """
+
+    def test_programming_error_is_caught_does_not_raise(self) -> None:
+        """ProgrammingError from the first DB call inside run() must not propagate."""
+        from knowledge_graph.infrastructure.workers.age_sync_worker import AgeSyncWorker
+        from sqlalchemy.exc import ProgrammingError
+
+        # Build a session that raises ProgrammingError on the very first execute()
+        # call — this simulates ``LOAD 'age'`` failing because the .so is absent.
+        session = AsyncMock()
+        session.__aenter__ = AsyncMock(return_value=session)
+        session.__aexit__ = AsyncMock(return_value=False)
+        session.commit = AsyncMock()
+        session.execute = AsyncMock(
+            side_effect=ProgrammingError("LOAD 'age' failed", params={}, orig=Exception("age.so missing"))
+        )
+
+        sf = _make_session_factory(session)
+        valkey = _make_valkey()
+        settings = _make_settings(cypher_enabled=True)
+
+        worker = AgeSyncWorker(session_factory=sf, valkey_client=valkey, settings=settings)
+
+        # Must not raise — ProgrammingError is caught internally.
+        asyncio.run(worker.run())
+
+    def test_programming_error_logs_age_sync_age_unavailable(self) -> None:
+        """The worker must emit ``age_sync_age_unavailable`` at WARNING on ProgrammingError."""
+        from unittest.mock import patch
+
+        from knowledge_graph.infrastructure.workers.age_sync_worker import AgeSyncWorker
+        from sqlalchemy.exc import ProgrammingError
+
+        session = AsyncMock()
+        session.__aenter__ = AsyncMock(return_value=session)
+        session.__aexit__ = AsyncMock(return_value=False)
+        session.commit = AsyncMock()
+        session.execute = AsyncMock(
+            side_effect=ProgrammingError("LOAD 'age' failed", params={}, orig=Exception("age missing"))
+        )
+
+        sf = _make_session_factory(session)
+        valkey = _make_valkey()
+        settings = _make_settings(cypher_enabled=True)
+
+        worker = AgeSyncWorker(session_factory=sf, valkey_client=valkey, settings=settings)
+
+        log_calls: list[tuple[str, str]] = []
+
+        # Patch the module-level ``logger`` used by AgeSyncWorker.  We capture
+        # calls to logger.warning() so we can assert on the event key without
+        # depending on the logging backend configuration.
+        import knowledge_graph.infrastructure.workers.age_sync_worker as _mod
+
+        original_warning = _mod.logger.warning
+
+        def _capture_warning(event: str, **kwargs: Any) -> None:
+            log_calls.append((event, str(kwargs)))
+            return original_warning(event, **kwargs)
+
+        with patch.object(_mod.logger, "warning", side_effect=_capture_warning):
+            asyncio.run(worker.run())
+
+        warning_events = [e for e, _ in log_calls]
+        assert (
+            "age_sync_age_unavailable" in warning_events
+        ), f"F-159: expected 'age_sync_age_unavailable' WARNING — got: {warning_events}"
+
+    def test_programming_error_does_not_update_watermark(self) -> None:
+        """When a ProgrammingError aborts the sync, the Valkey watermark must
+        NOT be updated — the next run should re-sync from the previous watermark."""
+        from knowledge_graph.infrastructure.workers.age_sync_worker import AgeSyncWorker
+        from sqlalchemy.exc import ProgrammingError
+
+        session = AsyncMock()
+        session.__aenter__ = AsyncMock(return_value=session)
+        session.__aexit__ = AsyncMock(return_value=False)
+        session.commit = AsyncMock()
+        session.execute = AsyncMock(
+            side_effect=ProgrammingError("LOAD 'age' failed", params={}, orig=Exception("age missing"))
+        )
+
+        sf = _make_session_factory(session)
+        valkey = _make_valkey()
+        settings = _make_settings(cypher_enabled=True)
+
+        worker = AgeSyncWorker(session_factory=sf, valkey_client=valkey, settings=settings)
+        asyncio.run(worker.run())
+
+        # Watermark must NOT have been written — Valkey.set() should not be called.
+        valkey.set.assert_not_awaited()

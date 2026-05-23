@@ -39,6 +39,7 @@ from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
 
 from sqlalchemy import text
+from sqlalchemy.exc import ProgrammingError
 
 from common.time import utc_now  # type: ignore[import-untyped]
 from knowledge_graph.infrastructure.metrics.prometheus import (
@@ -223,19 +224,36 @@ class AgeSyncWorker:
         relations_synced = 0
         temporal_events_synced = 0
 
-        async with self._sf() as session:
-            await _setup_age_session(session)
-            # F-016: intermediate commits after each batch type so that a failure
-            # mid-sync does not roll back all previously completed work. AGE MERGE
-            # is idempotent (re-run is safe), so partial commits are correct here.
-            entities_synced = await self._sync_entities(session, watermark)
-            await session.commit()
-            await _setup_age_session(session)  # reload AGE after commit
-            relations_synced = await self._sync_relations(session, watermark)
-            await session.commit()
-            await _setup_age_session(session)
-            temporal_events_synced = await self._sync_temporal_events(session, watermark)
-            await session.commit()
+        try:
+            async with self._sf() as session:
+                await _setup_age_session(session)
+                # F-016: intermediate commits after each batch type so that a failure
+                # mid-sync does not roll back all previously completed work. AGE MERGE
+                # is idempotent (re-run is safe), so partial commits are correct here.
+                entities_synced = await self._sync_entities(session, watermark)
+                await session.commit()
+                await _setup_age_session(session)  # reload AGE after commit
+                relations_synced = await self._sync_relations(session, watermark)
+                await session.commit()
+                await _setup_age_session(session)
+                temporal_events_synced = await self._sync_temporal_events(session, watermark)
+                await session.commit()
+        except ProgrammingError as exc:
+            # F-159: AGE extension is not installed or failed to load at runtime
+            # (e.g. ``LOAD 'age'`` raises ProgrammingError when the .so is absent).
+            # Log a structured warning and return — do NOT re-raise, because
+            # re-raising would increment the APScheduler crash counter and trigger
+            # an exponential backoff spiral that prevents all subsequent runs.
+            # Structlog-only (never stdlib logging) — CLAUDE.md rule 10.
+            logger.warning(  # type: ignore[no-any-return]
+                "age_sync_age_unavailable",
+                error=str(exc),
+                message=(
+                    "AGE extension unavailable — skipping sync cycle; "
+                    "set KNOWLEDGE_GRAPH_CYPHER_ENABLED=false to suppress"
+                ),
+            )
+            return
 
         await self._set_watermark(new_watermark)
 
