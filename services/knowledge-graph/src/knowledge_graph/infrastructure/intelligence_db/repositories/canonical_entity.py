@@ -25,10 +25,17 @@ class CanonicalEntityRepository(CanonicalEntityRepositoryPort):
         self._session = session
 
     async def get(self, entity_id: UUID) -> dict[str, object] | None:
-        """Fetch a canonical entity by ID."""
+        """Fetch a canonical entity by ID.
+
+        F-101: description and sector are included so S7 EntitySummary can forward
+        them to S9 for graph node enrichment in _transform_graph_response().
+        description is a direct column (migration 0022); sector is extracted from
+        the metadata JSONB field where structured enrichment stores it.
+        """
         result = await self._session.execute(
             text("""
-SELECT entity_id, canonical_name, entity_type, isin, ticker, exchange, metadata
+SELECT entity_id, canonical_name, entity_type, isin, ticker, exchange, metadata,
+       description, metadata->>'sector' AS sector
 FROM canonical_entities
 WHERE entity_id = :entity_id
 """),
@@ -45,6 +52,8 @@ WHERE entity_id = :entity_id
             "ticker": row[4],
             "exchange": row[5],
             "metadata": row[6],
+            "description": row[7],
+            "sector": row[8],
         }
 
     async def exists(self, entity_id: UUID) -> bool:
@@ -59,12 +68,16 @@ WHERE entity_id = :entity_id
         """Fetch multiple canonical entities in one query.
 
         Returns only entities that exist; missing IDs are omitted silently.
+
+        F-101: description and sector included alongside the single-entity get()
+        so neighbor nodes in graph responses also carry enrichment context.
         """
         if not entity_ids:
             return []
         result = await self._session.execute(
             text("""
-SELECT entity_id, canonical_name, entity_type, isin, ticker, exchange, metadata
+SELECT entity_id, canonical_name, entity_type, isin, ticker, exchange, metadata,
+       description, metadata->>'sector' AS sector
 FROM canonical_entities
 WHERE entity_id = ANY(:ids)
 """),
@@ -79,6 +92,8 @@ WHERE entity_id = ANY(:ids)
                 "ticker": row[4],
                 "exchange": row[5],
                 "metadata": row[6],
+                "description": row[7],
+                "sector": row[8],
             }
             for row in result.fetchall()
         ]

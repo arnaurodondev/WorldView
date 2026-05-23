@@ -55,6 +55,9 @@ def _summary_authority(confidence: float | None, evidence_count: int) -> float:
 
 
 def _entity_summary(row: dict[str, Any]) -> EntitySummary:
+    # F-101: description and sector forwarded when present. The cypher path row dicts
+    # may not include these columns (AGE returns only graph topology fields), so
+    # .get() with no default yields None safely — matches EntitySummary field defaults.
     return EntitySummary(
         entity_id=row["entity_id"],  # type: ignore[arg-type]
         canonical_name=str(row["canonical_name"]),
@@ -62,6 +65,8 @@ def _entity_summary(row: dict[str, Any]) -> EntitySummary:
         isin=str(row["isin"]) if row.get("isin") else None,
         ticker=str(row["ticker"]) if row.get("ticker") else None,
         exchange=str(row["exchange"]) if row.get("exchange") else None,
+        description=str(row["description"]) if row.get("description") else None,
+        sector=str(row["sector"]) if row.get("sector") else None,
     )
 
 

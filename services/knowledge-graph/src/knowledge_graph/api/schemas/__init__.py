@@ -76,6 +76,11 @@ class EntitySummary(BaseModel):
     isin: str | None = None
     ticker: str | None = None
     exchange: str | None = None
+    # F-101: description is stored in canonical_entities.description (migration 0022).
+    # sector is stored in canonical_entities.metadata JSONB under key "sector".
+    # Both are forwarded to S9 so _transform_graph_response() can populate graph nodes.
+    description: str | None = None
+    sector: str | None = None
 
 
 # ── Relation ────────────────────────────────────────────────────────────────

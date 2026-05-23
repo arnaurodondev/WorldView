@@ -60,7 +60,7 @@ class TestRelationRepository:
                 decay_class="DURABLE",
                 decay_alpha=0.000950,
                 base_confidence=0.70,
-            )
+            ),
         )
         assert isinstance(result, UUID)
         assert session.execute.call_count == 2
@@ -91,7 +91,7 @@ class TestRelationRepository:
                 decay_class="DURABLE",
                 decay_alpha=0.000950,
                 base_confidence=0.70,
-            )
+            ),
         )
         first_call_sql = str(session.execute.call_args_list[0][0][0])
         assert "advisory" in first_call_sql.lower()
@@ -121,7 +121,7 @@ class TestRelationRepository:
                 decay_class="DURABLE",
                 decay_alpha=0.000950,
                 base_confidence=0.70,
-            )
+            ),
         )
         # The INSERT SQL (second call) must not mention partition_key
         insert_sql = str(session.execute.call_args_list[1][0][0])
@@ -152,7 +152,7 @@ class TestRelationEvidenceRepository:
                 extraction_confidence=0.85,
                 source_trust_weight=0.90,
                 evidence_date=_NOW,
-            )
+            ),
         )
         sql = str(session.execute.call_args_list[0][0][0])
         assert "partition_key" not in sql
@@ -175,7 +175,7 @@ class TestRelationEvidenceRepository:
                 extraction_confidence=0.85,
                 source_trust_weight=0.90,
                 evidence_date=_NOW,
-            )
+            ),
         )
         assert result == raw_id
 
@@ -211,7 +211,7 @@ class TestRelationSummaryRepository:
                 model_id="llama3",
                 prompt_template_id=uuid4(),
                 generation_trigger="stale",
-            )
+            ),
         )
         assert session.execute.call_count == 2
         update_sql = str(session.execute.call_args_list[0][0][0])
@@ -240,7 +240,7 @@ class TestContradictionRepository:
                 subject_entity_id=uuid4(),
                 claim_type="analyst_rating",
                 polarity="neutral",
-            )
+            ),
         )
         assert result == []
         # Session should NOT have been called (short-circuit)
@@ -261,7 +261,7 @@ class TestContradictionRepository:
                 subject_entity_id=uuid4(),
                 claim_type="analyst_rating",
                 polarity="positive",
-            )
+            ),
         )
         # SQL uses parameterized :window_days (not hardcoded literal)
         sql = str(session.execute.call_args_list[0][0][0])
@@ -284,7 +284,7 @@ class TestContradictionRepository:
                 subject_entity_id=uuid4(),
                 claim_type="analyst_rating",
                 polarity="positive",
-            )
+            ),
         )
         params = session.execute.call_args_list[0][0][1]
         assert params["opposite_polarity"] == "negative"
@@ -311,7 +311,7 @@ class TestOutboxRepository:
                 topic="graph.state.changed.v1",
                 partition_key="entity-123",
                 payload_avro=b"avro-bytes",
-            )
+            ),
         )
         assert result == event_id
 
@@ -606,7 +606,8 @@ class TestCanonicalEntityRepositoryGetBatch:
         )
 
         eid = uuid4()
-        row = (str(eid), "Apple Inc.", "financial_instrument", "US0378331005", "AAPL", "NASDAQ", None)
+        # F-101: row now has 9 columns (added description at [7] and sector at [8])
+        row = (str(eid), "Apple Inc.", "financial_instrument", "US0378331005", "AAPL", "NASDAQ", None, None, None)
 
         session = _make_session(fetchall_return=[row])
         repo = CanonicalEntityRepository(session)
@@ -627,10 +628,11 @@ class TestCanonicalEntityRepositoryGetBatch:
         )
 
         ids = [uuid4(), uuid4(), uuid4()]
+        # F-101: each row has 9 columns — description at [7], sector at [8]
         rows = [
-            (str(ids[0]), "Corp A", "financial_instrument", None, "A", "NYSE", None),
-            (str(ids[1]), "Corp B", "financial_instrument", None, "B", "NYSE", None),
-            (str(ids[2]), "Corp C", "financial_instrument", None, "C", "NYSE", None),
+            (str(ids[0]), "Corp A", "financial_instrument", None, "A", "NYSE", None, None, None),
+            (str(ids[1]), "Corp B", "financial_instrument", None, "B", "NYSE", None, None, None),
+            (str(ids[2]), "Corp C", "financial_instrument", None, "C", "NYSE", None, None, None),
         ]
 
         session = _make_session(fetchall_return=rows)
@@ -653,7 +655,8 @@ class TestCanonicalEntityRepositoryGetBatch:
         existing_id = uuid4()
         missing_id = uuid4()
 
-        row = (str(existing_id), "Only One Corp", "financial_instrument", None, "OOC", "NYSE", None)
+        # F-101: row has 9 columns — description at [7], sector at [8]
+        row = (str(existing_id), "Only One Corp", "financial_instrument", None, "OOC", "NYSE", None, None, None)
         session = _make_session(fetchall_return=[row])
         repo = CanonicalEntityRepository(session)
 
@@ -706,7 +709,7 @@ class TestEntityEmbeddingStateUpsertCoalesce:
                 source_text="text",
                 source_hash="hash",
                 next_refresh_at=_NOW,
-            )
+            ),
         )
 
         call_sql = str(session.execute.call_args[0][0])
@@ -733,7 +736,7 @@ class TestEntityEmbeddingStateUpsertCoalesce:
                 source_text="text",
                 source_hash="hash",
                 next_refresh_at=_NOW,
-            )
+            ),
         )
 
         call_sql = str(session.execute.call_args[0][0])

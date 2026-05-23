@@ -63,6 +63,9 @@ def _summary_authority(confidence: float | None, evidence_count: int) -> float:
 
 
 def _entity_summary(row: dict[str, object]) -> EntitySummary:
+    # F-101: description and sector are now included in the DB query (canonical_entity
+    # repository get/get_batch).  They default to None via .get() so rows fetched by
+    # code paths that do not yet select these columns (e.g. cypher path) are safe.
     return EntitySummary(
         entity_id=row["entity_id"],  # type: ignore[arg-type]
         canonical_name=str(row["canonical_name"]),
@@ -70,6 +73,8 @@ def _entity_summary(row: dict[str, object]) -> EntitySummary:
         isin=str(row["isin"]) if row.get("isin") else None,
         ticker=str(row["ticker"]) if row.get("ticker") else None,
         exchange=str(row["exchange"]) if row.get("exchange") else None,
+        description=str(row["description"]) if row.get("description") else None,
+        sector=str(row["sector"]) if row.get("sector") else None,
     )
 
 
@@ -172,7 +177,7 @@ async def get_entities_batch(
                 "canonical_name": str(row["canonical_name"]) if row.get("canonical_name") else None,
             }
             for row in rows
-        ]
+        ],
     }
 
 
@@ -222,7 +227,7 @@ async def resolve_entity_by_name(
                 "similarity": h["similarity"],
             }
             for h in hits
-        ]
+        ],
     }
 
 
