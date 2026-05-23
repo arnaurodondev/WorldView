@@ -165,11 +165,8 @@ WHERE rer.entity_provisional = false
       AND re.evidence_date = rer.evidence_date
   )
   AND rer.extraction_confidence < :conf_threshold
-  -- Density gate disabled — see _FETCH_SQL for the explanation.
-  -- This counter now only counts rows blocked by the confidence gate
-  -- (the density signal is unavailable). The :density_threshold parameter
-  -- is still accepted at the call site for compatibility but is ignored
-  -- by this query — the WHERE clause's density predicate has been removed.
+  -- Density gate disabled — density signal unavailable (see _FETCH_SQL).
+  -- This counter only counts rows blocked by the confidence gate.
 """
 
 # SQL: insert one promotable row into the partitioned immutable table.
@@ -280,11 +277,15 @@ class RelationEvidencePromoterWorker:
             # This informs operations how much evidence is accumulating
             # in the raw table pending future promotion.
             async with self._sf() as session:
+                # Note: density_threshold was removed from _COUNT_GATED_QUALITY_SQL
+                # (density signal unavailable) so only conf_threshold is passed.
+                # Passing density_threshold here caused asyncpg to raise
+                # InterfaceError("server expects 1 argument, 2 were passed") because
+                # asyncpg uses positional $1/$2 params and the second bind was stale.
                 gq_result = await session.execute(
                     text(_COUNT_GATED_QUALITY_SQL),
                     {
                         "conf_threshold": _CONF_THRESHOLD,
-                        "density_threshold": _DENSITY_THRESHOLD,
                     },
                 )
                 gated_quality = int(gq_result.scalar() or 0)

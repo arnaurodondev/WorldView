@@ -201,12 +201,15 @@ def get_chunk_search_use_case(
     # spec default of 1.5 when the setting is absent (older configs).
     settings = getattr(request.app.state, "settings", None)
     lexical_boost = float(getattr(settings, "hybrid_lexical_boost", 1.5)) if settings is not None else 1.5
+    # embedding_client is set on app.state at startup (app.py:179); pass it
+    # through so query_text searches can embed the query without a pre-computed vector.
+    embedding_client = getattr(request.app.state, "embedding_client", None)
     return EnhancedChunkSearchUseCase(
         chunk_ann_repo=ChunkANNRepository(nlp_session),
         source_metadata_repo=SQLAlchemyDocumentSourceMetadataRepository(nlp_session),
         canonical_entity_repo=CanonicalEntityRepository(intel_session),
         valkey=raw_valkey,
-        embedding_client=None,
+        embedding_client=embedding_client,
         chunk_text_store=chunk_text_store,
         lexical_boost=lexical_boost,
     )
