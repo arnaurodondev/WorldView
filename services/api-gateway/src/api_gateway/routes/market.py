@@ -1597,13 +1597,17 @@ async def get_yield_curve(request: Request) -> YieldCurveResponse:
 # ── NL Screener Translation (PLAN-0091 Wave E-1, T-E-1-01) ───────────────────
 
 _NL_SCREENER_SYSTEM_PROMPT = """You are a financial screener assistant. Convert the user's natural-language query
-into a JSON object where each key is a valid screener field name and the value is a filter condition.
+into a JSON object with exactly two top-level keys:
+  "explanation" — a concise 1-sentence plain-English description of what this screen selects
+  "filters"     — an object where each key is a valid screener field name and the value is a filter condition
 
-Valid field names will be provided in the request. Only use field names from that list.
-Return ONLY a valid JSON object — no explanation, no markdown fences.
+Valid field names will be provided in the request. Only use field names from the provided list.
+Return ONLY a valid JSON object — no markdown fences.
 
 Example input: "profitable tech stocks with low PE"
-Example output: {"sector": "Technology", "pe_ratio": {"lte": 20}, "profit_margin": {"gte": 0.05}}
+Example output:
+{"explanation": "Profitable tech stocks, P/E below 20, positive margins",
+ "filters": {"sector": "Technology", "pe_ratio": {"lte": 20}, "profit_margin": {"gte": 0.05}}}
 
 If you cannot parse the query into a valid filter, return {"_unparseable": true}.
 """
@@ -1673,12 +1677,21 @@ async def nl_screener_translate(body: NLScreenerRequest, request: Request) -> NL
         if raw_text.startswith("```"):
             lines = raw_text.split("\n")
             raw_text = "\n".join(lines[1:-1]) if len(lines) > 2 else raw_text
-        filters: dict[str, Any] = json.loads(raw_text)
+        raw_json: dict[str, Any] = json.loads(raw_text)
     except Exception:
         raise HTTPException(status_code=422, detail="LLM could not produce a valid filter JSON")  # noqa: B904
 
-    if filters.get("_unparseable"):
+    if raw_json.get("_unparseable"):
         raise HTTPException(status_code=422, detail="LLM could not parse the query into screener filters")
+
+    # Extract explanation + filters — support new {"explanation": "...", "filters": {...}} format
+    # and legacy flat format {"field": condition} for backwards compat with cached LLM versions.
+    explanation: str = ""
+    if "filters" in raw_json and isinstance(raw_json.get("filters"), dict):
+        explanation = str(raw_json.get("explanation") or "")
+        filters: dict[str, Any] = raw_json["filters"]
+    else:
+        filters = {k: v for k, v in raw_json.items() if k not in ("_unparseable", "explanation")}
 
     # 4. Validate field names against allowlist (only when we have valid_fields)
     if valid_fields:
@@ -1689,4 +1702,4 @@ async def nl_screener_translate(body: NLScreenerRequest, request: Request) -> NL
                 detail=f"LLM returned unknown screener fields: {invalid}",
             )
 
-    return NLScreenerResponse(filters=filters, natural_language_query=body.query)
+    return NLScreenerResponse(filters=filters, natural_language_query=body.query, explanation=explanation)

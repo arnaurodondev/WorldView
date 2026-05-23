@@ -27,6 +27,8 @@
 
 | PLAN-0091 | **Data Enrichment — Tier 1/2/3 Intelligence Features** — Sub-Plans A–F: S9 schema extensions (sentiment on news, graph edge validity, entity industry/market_cap), new S9 endpoints (article impact history, sentiment timeseries, sector attribution, yield curve, NL screener), Frontend components (risk metrics, concentration, lots, watchlist insights, opportunity paths, TA overlays, NL screener UI, sentiment trend overlay). No DB migrations. 13 waves. **Waves B-1/B-2/C-2/D-1/D-2/F-1/F-2/F-3 shipped 2026-05-22 — 8 frontend waves. Remaining: NL screener (F-4/F-5), yield curve UI (A-2 frontend), market breadth (remaining E waves). Backend QA 2026-05-22 — PASS (5 fixes: auth guard + UUID on impact-history, portfolio return type, yield-curve any() vs all(), ETF source indentation. Report: `docs/audits/2026-05-22-qa-plan-0091-report.md`).** | in-progress | 12/13 | none | 2026-05-22 |
 
+| PLAN-0092 | **Screener Redesign + Financials Timeseries Chart** — W8-screener full redesign (PresetBar, FilterChipStrip, ScreenerHeader, FilterPanel refactor, NL screener explanation field) + FundamentalsTimeseriesChart (11-metric chip strip, period_type defaults, order=asc). 5 waves (~9.5h). **Next: Wave A (TypeScript types + backend tests for `explanation` field)**. | draft | 0/5 | none | 2026-05-23 |
+
 <!-- New plans are appended here by the /plan skill -->
 
 ## Frontend Platform Hardening (PRD-frontend-platform)

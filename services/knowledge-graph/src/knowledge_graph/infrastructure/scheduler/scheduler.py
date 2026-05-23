@@ -657,11 +657,12 @@ class _EntityDirtiedProducerAdapter:
         # Lazy import keeps ``messaging.*`` and the heavy serializer cost out
         # of the application/domain import paths; this code path runs only at
         # most once per entity so the import overhead is irrelevant.
+        from common.ids import new_uuid7  # type: ignore[import-untyped]
         from knowledge_graph.infrastructure.workers.provisional_enrichment_core import (
             _build_dirtied_event,
         )
 
-        value = _build_dirtied_event(entity_id, dirty_reason=reason)
+        value = _build_dirtied_event(entity_id, dirty_reason=reason, event_id=new_uuid7())
         self._dp.produce_bytes(
             topic=self._topic,
             key=str(entity_id).encode(),

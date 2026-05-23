@@ -940,8 +940,8 @@ async def test_fundamentals_section_routes_require_auth(client, mock_clients) ->
 
 
 @pytest.mark.asyncio
-async def test_find_similar_entities_proxies_to_knowledge_graph(client, mock_clients) -> None:
-    """POST /v1/entities/similar proxies body to S7 knowledge-graph."""
+async def test_find_similar_entities_proxies_to_knowledge_graph(authed_client, authed_mock_clients) -> None:
+    """POST /v1/entities/similar proxies body to S7 knowledge-graph (requires auth)."""
     entity_id = "00000000-0000-0000-0000-000000000001"
     downstream_resp = MagicMock(spec=httpx.Response)
     downstream_resp.status_code = 200
@@ -949,50 +949,61 @@ async def test_find_similar_entities_proxies_to_knowledge_graph(client, mock_cli
         b'{"entity_id": "' + entity_id.encode() + b'", "canonical_name": "AAPL", "results": [], "total": 0}'
     )
 
-    mock_clients.knowledge_graph.post = AsyncMock(return_value=downstream_resp)
+    authed_mock_clients.knowledge_graph.post = AsyncMock(return_value=downstream_resp)
 
+    response = await authed_client.post(
+        "/v1/entities/similar",
+        content=b'{"entity_id": "00000000-0000-0000-0000-000000000001"}',
+        headers={"Content-Type": "application/json", "Authorization": f"Bearer {_make_jwt()}"},
+    )
+
+    assert response.status_code == 200
+    authed_mock_clients.knowledge_graph.post.assert_called_once()
+    call_args = authed_mock_clients.knowledge_graph.post.call_args[0]
+    assert "/api/v1/entities/similar" in call_args[0]
+
+
+@pytest.mark.asyncio
+async def test_find_similar_entities_requires_auth(client, mock_clients) -> None:
+    """POST /v1/entities/similar returns 401 when no Bearer token is provided."""
     response = await client.post(
         "/v1/entities/similar",
         content=b'{"entity_id": "00000000-0000-0000-0000-000000000001"}',
         headers={"Content-Type": "application/json"},
     )
-
-    assert response.status_code == 200
-    mock_clients.knowledge_graph.post.assert_called_once()
-    call_args = mock_clients.knowledge_graph.post.call_args[0]
-    assert "/api/v1/entities/similar" in call_args[0]
+    assert response.status_code == 401
 
 
 @pytest.mark.asyncio
-async def test_find_similar_entities_propagates_s7_404(client, mock_clients) -> None:
-    """S7 404 (entity not found) is propagated unchanged."""
+async def test_find_similar_entities_propagates_s7_404(authed_client, authed_mock_clients) -> None:
+    """S7 404 (entity not found) is propagated unchanged (requires auth)."""
     downstream_resp = MagicMock(spec=httpx.Response)
     downstream_resp.status_code = 404
     downstream_resp.content = b'{"detail": "Entity not found"}'
 
-    mock_clients.knowledge_graph.post = AsyncMock(return_value=downstream_resp)
+    authed_mock_clients.knowledge_graph.post = AsyncMock(return_value=downstream_resp)
 
-    response = await client.post(
+    response = await authed_client.post(
         "/v1/entities/similar",
         content=b'{"entity_id": "00000000-0000-0000-0000-000000000099"}',
-        headers={"Content-Type": "application/json"},
+        headers={"Content-Type": "application/json", "Authorization": f"Bearer {_make_jwt()}"},
     )
     assert response.status_code == 404
 
 
 @pytest.mark.asyncio
-async def test_find_similar_entities_propagates_s7_503(client, mock_clients) -> None:
-    """S7 503 (pgvector unavailable) is propagated unchanged."""
+async def test_find_similar_entities_propagates_s7_503(authed_client, authed_mock_clients) -> None:
+    """S7 503 (pgvector unavailable) is propagated unchanged (requires auth)."""
     downstream_resp = MagicMock(spec=httpx.Response)
     downstream_resp.status_code = 503
     downstream_resp.content = b'{"detail": "Similarity search unavailable"}'
 
-    mock_clients.knowledge_graph.post = AsyncMock(return_value=downstream_resp)
+    authed_mock_clients.knowledge_graph.post = AsyncMock(return_value=downstream_resp)
 
-    response = await client.post(
+    response = await authed_client.post(
         "/v1/entities/similar",
         content=b'{"entity_id": "00000000-0000-0000-0000-000000000001"}',
-        headers={"Content-Type": "application/json"},
+        headers={"Content-Type": "application/json", "Authorization": f"Bearer {_make_jwt()}"},
     )
     assert response.status_code == 503
 
@@ -1068,26 +1079,25 @@ async def test_fundamentals_timeseries_sends_system_jwt(app, mock_clients) -> No
 
 
 @pytest.mark.asyncio
-async def test_similar_entities_sends_system_jwt(app, mock_clients) -> None:
-    """F-02: POST /v1/entities/similar (public) sends X-Internal-JWT to S7."""
-    _inject_rsa_keys(app)
+async def test_similar_entities_sends_user_jwt(authed_app_with_rsa, rsa_authed_mock_clients) -> None:
+    """POST /v1/entities/similar (authenticated) forwards X-Internal-JWT derived from user JWT to S7."""
     downstream_resp = MagicMock(spec=httpx.Response)
     downstream_resp.status_code = 200
     downstream_resp.content = b'{"results": [], "total": 0}'
-    mock_clients.knowledge_graph.post = AsyncMock(return_value=downstream_resp)
+    rsa_authed_mock_clients.knowledge_graph.post = AsyncMock(return_value=downstream_resp)
 
     from httpx import ASGITransport, AsyncClient
 
-    transport = ASGITransport(app=app)
+    transport = ASGITransport(app=authed_app_with_rsa)
     async with AsyncClient(transport=transport, base_url="http://test") as client:
         response = await client.post(
             "/v1/entities/similar",
             content=b'{"entity_id": "00000000-0000-0000-0000-000000000001"}',
-            headers={"Content-Type": "application/json"},
+            headers={"Content-Type": "application/json", "Authorization": f"Bearer {_make_jwt()}"},
         )
 
     assert response.status_code == 200
-    call_kwargs = mock_clients.knowledge_graph.post.call_args[1]
+    call_kwargs = rsa_authed_mock_clients.knowledge_graph.post.call_args[1]
     assert "X-Internal-JWT" in call_kwargs["headers"]
 
 

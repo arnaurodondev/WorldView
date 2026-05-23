@@ -19,8 +19,10 @@
  *
  * DATA SOURCE:
  *   TA chips: no API calls — computes from bars[] via lib/ta/indicators.ts.
- *   SENTI chip: GET /v1/entities/{entityId}/sentiment-timeseries?days=90
- *               (only when entityId is provided AND SENTI chip is active).
+ *   SENTI chip: GET /v1/entities/{entityId}/sentiment-timeseries?days=N
+ *               where N = getMaxDaysForTimeframe(timeframe) — aligns with
+ *               the active chart period (7–365 days, capped at S9 le=365).
+ *               Only fetched when entityId is provided AND SENTI chip is active.
  *
  * DESIGN REFERENCE: PLAN-0091 F-1/F-2 chip strip spec.
  *   - Chip strip: flex flex-wrap gap-1 px-2 py-1
@@ -45,8 +47,10 @@ import { ema, sma, rsi, macd, bollingerBands, vwap } from "@/lib/ta/indicators";
 // daily article-level sentiment aggregates from S9. This is the only hook that
 // owns that cache slot; importing it here keeps all overlay data in one file.
 import { useEntitySentimentTimeseries } from "@/lib/api/intelligence";
+import { getMaxDaysForTimeframe } from "@/lib/ta/timeframe-to-days";
 import type { OHLCVBar } from "@/types/api";
 import type { OverlaySeries } from "@/components/instrument/chart/OHLCVChart";
+import type { Timeframe } from "@/lib/chart-adapter";
 
 // ── Chip definitions ─────────────────────────────────────────────────────────
 
@@ -119,6 +123,18 @@ export interface TAOverlayPanelProps {
    * loading window.
    */
   entityId?: string | null;
+  /**
+   * Active chart timeframe — controls the SENTI overlay lookback window.
+   *
+   * WHY required: the sentiment overlay must cover the visible bar range.
+   * A hardcoded 90-day window "dies" at the left edge on 1W/1M charts.
+   * `getMaxDaysForTimeframe` maps "5M"→7, "1H"→14, "1D"→30, "1W"→30, "1M"→90,
+   * capped at S9's max of 365 days.
+   *
+   * Value flow: OHLCVChart owns the timeframe state; it passes the current
+   * value as a prop when rendering TAOverlayPanel.
+   */
+  timeframe: Timeframe;
 }
 
 // ── Overlay computation ───────────────────────────────────────────────────────
@@ -213,7 +229,7 @@ export function computeOverlays(active: Set<ChipId>, bars: OHLCVBar[]): OverlayS
  *   array. Including `sentiKey` (a string of sentimentData length or "none") in
  *   the chipsKey derivative ensures the memo fires when data changes.
  */
-export function TAOverlayPanel({ bars, onOverlaysChange, entityId }: TAOverlayPanelProps) {
+export function TAOverlayPanel({ bars, onOverlaysChange, entityId, timeframe }: TAOverlayPanelProps) {
   // activeChips: which chips are currently toggled on.
   // WHY Set<ChipId> (not boolean[] or Record<ChipId, boolean>): Set membership
   // tests (has/add/delete) are O(1) and the spread into a new Set gives
@@ -234,14 +250,18 @@ export function TAOverlayPanel({ bars, onOverlaysChange, entityId }: TAOverlayPa
   //   enabled = !!entityId && !!token && sentiActive
   // When disabled, the hook returns { data: undefined } without fetching.
   //
-  // WHY 90 days: covers ~3 months of trading days, giving enough history to
-  // see sentiment trends alongside the default 1D timeframe OHLCV bars.
+  // WHY dynamic days (not hardcoded 90): the overlay must cover the visible bar
+  // range. A hardcoded 90-day window "dies" at the left edge on 1W/1M charts.
+  // getMaxDaysForTimeframe maps timeframe to the appropriate lookback window
+  // capped at S9's max of 365 days. TanStack Query keys include `days` so each
+  // timeframe caches independently — switching timeframes triggers a new fetch.
+  const sentiDays = getMaxDaysForTimeframe(timeframe);
   const { data: sentimentData } = useEntitySentimentTimeseries(
     // WHY pass null explicitly when inactive: the hook's `enabled` guard
     // checks `!!entityId` — passing null prevents any spurious fetch even
     // if sentiActive briefly becomes true before entityId resolves.
     sentiActive ? (entityId ?? null) : null,
-    90,
+    sentiDays,
   );
 
   // ── Date-aligned sentiment values ──────────────────────────────────────────

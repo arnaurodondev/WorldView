@@ -101,7 +101,7 @@ describe("TAOverlayPanel", () => {
   // ── Initial render ─────────────────────────────────────────────────────────
 
   it("renders all 7 TA chip buttons plus the SENTI chip (8 total)", () => {
-    render(<TAOverlayPanel bars={BARS_250} onOverlaysChange={onOverlaysChange} />);
+    render(<TAOverlayPanel bars={BARS_250} onOverlaysChange={onOverlaysChange} timeframe="1D" />);
 
     // Each chip has an aria-label of the form "Toggle <label> overlay".
     // WHY aria-label: more reliable than text content because the label
@@ -118,7 +118,7 @@ describe("TAOverlayPanel", () => {
   });
 
   it("all chips are inactive (aria-pressed=false) by default", () => {
-    render(<TAOverlayPanel bars={BARS_250} onOverlaysChange={onOverlaysChange} />);
+    render(<TAOverlayPanel bars={BARS_250} onOverlaysChange={onOverlaysChange} timeframe="1D" />);
 
     // WHY getAllByRole without name filter: includes the SENTI chip which is
     // disabled (aria-disabled=true) but still has aria-pressed=false.
@@ -133,7 +133,7 @@ describe("TAOverlayPanel", () => {
   // ── Toggle on ─────────────────────────────────────────────────────────────
 
   it("clicking an inactive chip makes it active (aria-pressed=true)", async () => {
-    render(<TAOverlayPanel bars={BARS_250} onOverlaysChange={onOverlaysChange} />);
+    render(<TAOverlayPanel bars={BARS_250} onOverlaysChange={onOverlaysChange} timeframe="1D" />);
 
     const ema20Btn = screen.getByRole("button", { name: /Toggle EMA 20 overlay/i });
     expect(ema20Btn).toHaveAttribute("aria-pressed", "false");
@@ -148,7 +148,7 @@ describe("TAOverlayPanel", () => {
   });
 
   it("clicking EMA 20 calls onOverlaysChange with an overlay whose id is 'ema-20'", async () => {
-    render(<TAOverlayPanel bars={BARS_250} onOverlaysChange={onOverlaysChange} />);
+    render(<TAOverlayPanel bars={BARS_250} onOverlaysChange={onOverlaysChange} timeframe="1D" />);
 
     await act(async () => {
       fireEvent.click(screen.getByRole("button", { name: /Toggle EMA 20 overlay/i }));
@@ -168,7 +168,7 @@ describe("TAOverlayPanel", () => {
   });
 
   it("clicking BOLL calls onOverlaysChange with 3 Bollinger overlay series", async () => {
-    render(<TAOverlayPanel bars={BARS_250} onOverlaysChange={onOverlaysChange} />);
+    render(<TAOverlayPanel bars={BARS_250} onOverlaysChange={onOverlaysChange} timeframe="1D" />);
 
     await act(async () => {
       fireEvent.click(screen.getByRole("button", { name: /Toggle BOLL overlay/i }));
@@ -184,7 +184,7 @@ describe("TAOverlayPanel", () => {
   });
 
   it("clicking VWAP adds an overlay with strokeWidth 2", async () => {
-    render(<TAOverlayPanel bars={BARS_250} onOverlaysChange={onOverlaysChange} />);
+    render(<TAOverlayPanel bars={BARS_250} onOverlaysChange={onOverlaysChange} timeframe="1D" />);
 
     await act(async () => {
       fireEvent.click(screen.getByRole("button", { name: /Toggle VWAP overlay/i }));
@@ -201,7 +201,7 @@ describe("TAOverlayPanel", () => {
   // ── Toggle off ────────────────────────────────────────────────────────────
 
   it("clicking an active chip deactivates it (aria-pressed=false)", async () => {
-    render(<TAOverlayPanel bars={BARS_250} onOverlaysChange={onOverlaysChange} />);
+    render(<TAOverlayPanel bars={BARS_250} onOverlaysChange={onOverlaysChange} timeframe="1D" />);
 
     const btn = screen.getByRole("button", { name: /Toggle EMA 50 overlay/i });
 
@@ -215,7 +215,7 @@ describe("TAOverlayPanel", () => {
   });
 
   it("deactivating a chip removes its overlay from onOverlaysChange result", async () => {
-    render(<TAOverlayPanel bars={BARS_250} onOverlaysChange={onOverlaysChange} />);
+    render(<TAOverlayPanel bars={BARS_250} onOverlaysChange={onOverlaysChange} timeframe="1D" />);
 
     const btn = screen.getByRole("button", { name: /Toggle RSI overlay/i });
 
@@ -235,7 +235,7 @@ describe("TAOverlayPanel", () => {
   });
 
   it("toggling multiple chips produces multiple overlay series", async () => {
-    render(<TAOverlayPanel bars={BARS_250} onOverlaysChange={onOverlaysChange} />);
+    render(<TAOverlayPanel bars={BARS_250} onOverlaysChange={onOverlaysChange} timeframe="1D" />);
 
     await act(async () => {
       fireEvent.click(screen.getByRole("button", { name: /Toggle EMA 20 overlay/i }));
@@ -255,7 +255,7 @@ describe("TAOverlayPanel", () => {
   // ── Overlay data quality ───────────────────────────────────────────────────
 
   it("overlay data arrays are the same length as bars", async () => {
-    render(<TAOverlayPanel bars={BARS_250} onOverlaysChange={onOverlaysChange} />);
+    render(<TAOverlayPanel bars={BARS_250} onOverlaysChange={onOverlaysChange} timeframe="1D" />);
 
     await act(async () => {
       fireEvent.click(screen.getByRole("button", { name: /Toggle EMA 20 overlay/i }));
@@ -278,6 +278,7 @@ describe("TAOverlayPanel", () => {
         bars={BARS_250}
         onOverlaysChange={onOverlaysChange}
         entityId={null}
+        timeframe="1D"
       />,
     );
 
@@ -294,7 +295,7 @@ describe("TAOverlayPanel", () => {
   it("SENTI chip renders as disabled when entityId is undefined (prop omitted)", () => {
     // WHY separate test for undefined: the prop is optional (entityId?: string | null),
     // so omitting it is a valid call pattern. Both null and undefined must disable.
-    render(<TAOverlayPanel bars={BARS_250} onOverlaysChange={onOverlaysChange} />);
+    render(<TAOverlayPanel bars={BARS_250} onOverlaysChange={onOverlaysChange} timeframe="1D" />);
 
     const sentiBtn = screen.getByRole("button", { name: /Toggle SENTI overlay/i });
     expect(sentiBtn).toHaveAttribute("aria-disabled", "true");
@@ -307,6 +308,7 @@ describe("TAOverlayPanel", () => {
         bars={BARS_250}
         onOverlaysChange={onOverlaysChange}
         entityId="entity-uuid-123"
+        timeframe="1D"
       />,
     );
 
@@ -325,6 +327,7 @@ describe("TAOverlayPanel", () => {
         bars={BARS_250}
         onOverlaysChange={onOverlaysChange}
         entityId="entity-uuid-123"
+        timeframe="1D"
       />,
     );
 
@@ -372,6 +375,7 @@ describe("TAOverlayPanel", () => {
         bars={THREE_BARS}
         onOverlaysChange={onOverlaysChange}
         entityId={ENTITY_ID}
+        timeframe="1D"
       />,
     );
 
@@ -419,6 +423,7 @@ describe("TAOverlayPanel", () => {
         bars={FOUR_BARS}
         onOverlaysChange={onOverlaysChange}
         entityId={ENTITY_ID}
+        timeframe="1D"
       />,
     );
 

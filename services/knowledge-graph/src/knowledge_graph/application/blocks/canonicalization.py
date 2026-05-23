@@ -154,8 +154,9 @@ async def canonicalize_relation_type(
     # ------------------------------------------------------------------
     # Step 3 — Unknown type: propose via outbox, return None
     # ------------------------------------------------------------------
+    outbox_event_id = new_uuid7()  # type: ignore[no-any-return]
     proposal_payload = {
-        "event_id": str(new_uuid7()),
+        "event_id": str(outbox_event_id),
         "event_type": "relation.type.proposed",
         "schema_version": 1,
         "occurred_at": utc_now().isoformat(),
@@ -180,6 +181,7 @@ async def canonicalize_relation_type(
         topic=TOPIC_RELATION_PROPOSED,
         partition_key=str(subject_entity_id),
         payload_avro=payload_avro_bytes,
+        event_id=outbox_event_id,
     )
 
     return CanonicalizationResult(

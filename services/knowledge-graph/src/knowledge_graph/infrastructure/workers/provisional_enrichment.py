@@ -41,6 +41,7 @@ from uuid import UUID
 
 import httpx
 
+from common.ids import new_uuid7  # type: ignore[import-untyped]
 from knowledge_graph.infrastructure.intelligence_db.repositories.outbox import OutboxRepository
 from knowledge_graph.infrastructure.metrics.prometheus import (
     s7_provisional_enrichment_failed_total,
@@ -473,10 +474,12 @@ WHERE queue_id = :queue_id
                 async with self._sf() as outbox_session:
                     outbox_repo = OutboxRepository(outbox_session)
                     for dirty_id in entity_ids_to_dirty:
+                        dirty_event_id = new_uuid7()  # type: ignore[no-any-return]
                         await outbox_repo.append(
                             topic=self._dirtied_topic,
                             partition_key=str(dirty_id),
-                            payload_avro=core._build_dirtied_event(dirty_id),
+                            payload_avro=core._build_dirtied_event(dirty_id, event_id=dirty_event_id),
+                            event_id=dirty_event_id,
                         )
                     await outbox_session.commit()
                 logger.info(  # type: ignore[no-any-return]

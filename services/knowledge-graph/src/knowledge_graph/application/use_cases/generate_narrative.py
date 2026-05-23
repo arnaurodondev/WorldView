@@ -265,12 +265,14 @@ class GenerateNarrativeUseCase:
             await narrative_repo_w.insert_and_promote(version, write_session, health_score=health_score)
 
             # Build and publish outbox event (Avro-serialized)
-            event_payload = self._build_outbox_event(version, reason)
+            narrative_event_id = new_uuid7()  # type: ignore[no-any-return]
+            event_payload = self._build_outbox_event(version, reason, event_id=narrative_event_id)
             outbox_repo = OutboxRepository(write_session)
             await outbox_repo.append(
                 topic=_ENTITY_NARRATIVE_GENERATED_TOPIC,
                 partition_key=str(entity_id),
                 payload_avro=event_payload,
+                event_id=narrative_event_id,
             )
 
             await write_session.commit()
@@ -658,13 +660,13 @@ LIMIT 5
 
         return (data_completeness * 0.4) + (evidence_freshness * 0.3) + (relation_density * 0.3)
 
-    def _build_outbox_event(self, version: EntityNarrativeVersion, reason: str) -> bytes:
+    def _build_outbox_event(self, version: EntityNarrativeVersion, reason: str, *, event_id: UUID) -> bytes:
         """Serialize the entity.narrative.generated.v1 event for the outbox."""
         from messaging.kafka.serialization_utils import serialize_confluent_avro  # type: ignore[import-untyped]
 
         now_iso: str = utc_now().isoformat()  # type: ignore[no-any-return]
         payload = {
-            "event_id": str(new_uuid7()),  # type: ignore[no-any-return]
+            "event_id": str(event_id),
             "entity_id": str(version.entity_id),
             "version_id": str(version.version_id),
             "tenant_id": None,

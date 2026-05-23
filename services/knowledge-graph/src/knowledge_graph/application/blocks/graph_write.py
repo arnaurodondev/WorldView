@@ -622,8 +622,9 @@ async def materialize_graph(
     # with garbage bytes", which the dispatcher cannot recover from.
     if affected_entity_ids or relations or events:
         primary_entity_id = str(next(iter(affected_entity_ids))) if affected_entity_ids else str(doc_id)
+        outbox_event_id = new_uuid7()  # type: ignore[no-any-return]
         state_payload: dict[str, Any] = {
-            "event_id": str(new_uuid7()),
+            "event_id": str(outbox_event_id),
             "event_type": "graph.state.changed",
             "schema_version": 1,
             "occurred_at": now.isoformat(),
@@ -644,6 +645,7 @@ async def materialize_graph(
             topic=TOPIC_GRAPH_STATE_CHANGED,
             partition_key=primary_entity_id,
             payload_avro=state_bytes,
+            event_id=outbox_event_id,
         )
 
     return MaterializationSummary(

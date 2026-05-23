@@ -101,7 +101,7 @@ _ENTITY_TYPE_ALIASES: dict[str, str] = {
 }
 
 
-def _build_dirtied_event(entity_id: UUID, dirty_reason: str = "profile_updated") -> bytes:
+def _build_dirtied_event(entity_id: UUID, dirty_reason: str = "profile_updated", *, event_id: UUID) -> bytes:
     """Build a fully-populated entity.dirtied.v1 Confluent-Avro payload.
 
     B-3 fix: previously callers emitted ``{"entity_id": "<uuid>"}`` which is
@@ -118,7 +118,7 @@ def _build_dirtied_event(entity_id: UUID, dirty_reason: str = "profile_updated")
     return serialize_confluent_avro(
         _ENTITY_DIRTIED_SCHEMA_PATH,
         {
-            "event_id": str(new_uuid7()),
+            "event_id": str(event_id),
             "event_type": "entity.dirtied",
             "schema_version": 1,
             "occurred_at": utc_now().isoformat(),
@@ -331,8 +331,9 @@ async def persist_enrichment(
     # By serializing first we either fail-fast (no DB writes) or have valid
     # bytes ready when the outbox INSERT runs at the end of this function.
     entity_id_str = str(new_uuid7())
+    canonical_created_event_id = new_uuid7()  # type: ignore[no-any-return]
     avro_record: dict[str, Any] = {
-        "event_id": str(new_uuid7()),
+        "event_id": str(canonical_created_event_id),
         "event_type": "entity.canonical.created",
         "schema_version": 1,
         "occurred_at": utc_now().isoformat(),
@@ -490,6 +491,7 @@ WHERE provisional_queue_id = :queue_id
         topic=_ENTITY_CANONICAL_CREATED_TOPIC,
         partition_key=str(entity_id),
         payload_avro=avro_payload_bytes,
+        event_id=canonical_created_event_id,
     )
 
     return entity_id  # type: ignore[no-any-return]

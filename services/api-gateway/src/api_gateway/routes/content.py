@@ -30,15 +30,18 @@ router = APIRouter(prefix="/v1")
 async def find_similar_entities(request: Request) -> Any:
     """Proxy POST /api/v1/entities/similar → S7 Knowledge Graph.
 
-    Public endpoint — issues a system JWT for backend authentication.
+    Requires user authentication — consistent with all other /entities/* routes.
     S7 returns 404 (entity not found), 422 (no embedding), 503 (pgvector unavailable).
     """
+    if not getattr(request.state, "user", None):
+        raise HTTPException(status_code=401, detail="Authentication required")
     body = await request.body()
     clients = _clients(request)
+    headers = _auth_headers(request)
     resp = await clients.knowledge_graph.post(
         "/api/v1/entities/similar",
         content=body,
-        headers={"Content-Type": "application/json", **_system_headers(request)},
+        headers={"Content-Type": "application/json", **headers},
     )
     return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
 

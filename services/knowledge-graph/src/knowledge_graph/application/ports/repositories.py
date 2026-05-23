@@ -72,6 +72,8 @@ class OutboxRepositoryPort(ABC):
         topic: str,
         partition_key: str,
         payload_avro: bytes,
+        *,
+        event_id: UUID,
     ) -> UUID: ...
 
 

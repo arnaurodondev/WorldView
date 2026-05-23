@@ -27,6 +27,7 @@ import json
 from typing import TYPE_CHECKING, Any, Protocol
 from uuid import UUID
 
+from common.ids import new_uuid7  # type: ignore[import-untyped]
 from knowledge_graph.infrastructure.metrics.prometheus import s7_provisional_queue_stuck_total
 from knowledge_graph.infrastructure.workers import provisional_enrichment_core as core
 from messaging.kafka.consumer.base import (  # type: ignore[import-untyped]
@@ -306,10 +307,11 @@ WHERE queue_id = :queue_id
         # ── Step 5: emit entity.dirtied.v1 after successful commit ──────────
         if entity_id and self._producer:
             try:
+                dirtied_event_id = new_uuid7()  # type: ignore[no-any-return]
                 self._producer.produce_bytes(
                     topic=self._dirtied_topic,
                     key=str(entity_id).encode(),
-                    value=core._build_dirtied_event(entity_id),
+                    value=core._build_dirtied_event(entity_id, event_id=dirtied_event_id),
                 )
             except Exception:
                 logger.warning(  # type: ignore[no-any-return]

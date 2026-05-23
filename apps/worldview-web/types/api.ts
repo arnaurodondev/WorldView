@@ -812,6 +812,17 @@ export interface ScreenerResponse {
   limit: number;
 }
 
+/** POST /v1/screener/nl-translate — convert a natural-language query into screener filters.
+ *  The backend LLM generates `explanation` (1-sentence plain-English) and `filters`
+ *  (field → value/range map). `natural_language_query` echoes the original input.
+ *  PLAN-0092 Wave A — matches NLScreenerResponse in api_gateway/schemas/screener.py.
+ */
+export interface NLScreenerResponse {
+  filters: Record<string, unknown>; // field → value or {gte/lte/eq} range
+  natural_language_query: string;
+  explanation: string; // LLM-generated 1-sentence description, e.g. "Profitable tech stocks, P/E below 20"
+}
+
 // ── Portfolio ──────────────────────────────────────────────────────────────
 
 export interface Portfolio {

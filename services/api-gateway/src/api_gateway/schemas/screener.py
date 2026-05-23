@@ -61,6 +61,7 @@ class NLScreenerResponse(BaseModel):
 
     filters: dict[str, object] = {}  # field → value/range; keys validated against /screen/fields
     natural_language_query: str = ""  # echo of the original query
+    explanation: str = ""  # LLM-generated 1-sentence plain-English description of the screen
 
 
 class ScreenerResponse(BaseModel):

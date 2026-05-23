@@ -311,6 +311,7 @@ class TestOutboxRepository:
                 topic="graph.state.changed.v1",
                 partition_key="entity-123",
                 payload_avro=b"avro-bytes",
+                event_id=event_id,
             ),
         )
         assert result == event_id

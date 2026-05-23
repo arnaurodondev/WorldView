@@ -3,6 +3,7 @@
  */
 
 import type {
+  NLScreenerResponse,
   ScreenerField,
   ScreenerRequest,
   ScreenerResponse,

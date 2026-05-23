@@ -174,6 +174,7 @@ class TriggerEntityRefreshUseCase:
                     topic=_ENTITY_REFRESH_TOPIC,
                     partition_key=str(entity_id),
                     payload_avro=payload_avro,
+                    event_id=event_id,
                 )
                 await write_session.commit()
         except Exception:
