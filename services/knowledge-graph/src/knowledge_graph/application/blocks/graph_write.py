@@ -149,11 +149,16 @@ class MaterializationSummary:
 
 
 _DETERMINISTIC_CREATED_AT_FALLBACK = datetime(2024, 1, 1, 0, 0, 0, tzinfo=UTC)
-"""Stable ``created_at`` baseline for events whose ``event_date`` is None.
+"""Fallback ``created_at`` used ONLY when a natural date is unavailable.
 
-The events table is partitioned monthly starting at 2024-01 (see migration
-0001), so a literal 2024-01-01 timestamp ALWAYS lands inside a pre-seeded
-partition — no risk of ``no partition of relation \"events\" found for row``.
+For events: used when ``RawEvent.event_date`` is None.
+For claims: used when ``article_published_at`` is None (malformed message).
+
+The events/claims tables are partitioned monthly starting at 2024-01, so this
+constant lands in a pre-seeded partition.  IMPORTANT: this value is now the
+last-resort fallback for claims — the enriched consumer threads ``published_at``
+from the Kafka envelope so normal claims land in the correct monthly partition
+instead.  See F-401/F-501 fix and ``_insert_claim`` docstring.
 
 Using a constant here (rather than e.g. epoch=0 which would be 1970-01-01 and
 fall outside the partition window) makes replays both idempotent AND insertable
@@ -276,6 +281,7 @@ async def _insert_claim(
     doc_id: UUID,
     raw_claim: RawClaim,
     extraction_model_id: str | None = None,
+    article_published_at: datetime | None = None,
 ) -> UUID:
     """INSERT a claim record.  Returns the deterministic claim_id.
 
@@ -292,11 +298,13 @@ async def _insert_claim(
       * If we let ``created_at`` default to ``now()`` server-side, every Kafka
         replay produces a different ``created_at``, so ON CONFLICT NEVER
         matches even though ``claim_id`` is now deterministic.
-      * We bind ``created_at`` to the stable ``_DETERMINISTIC_CREATED_AT_FALLBACK``
-        (2024-01-01 UTC) — a pre-seeded partition boundary that always exists —
-        because claims carry no natural event date that could serve as a stable
-        alternative.  The fallback is the same constant used for events without
-        an ``event_date``.
+
+    F-401/F-501 fix: ``created_at`` now uses ``article_published_at`` (the
+    article's publish date from the Kafka envelope) so claims land in the
+    correct monthly partition instead of all landing in 2024-01.  This also
+    re-enables the 90-day contradiction detection window for claims.
+    ``_DETERMINISTIC_CREATED_AT_FALLBACK`` is the last-resort fallback for
+    malformed messages missing ``published_at``.
 
     ``extraction_model_id`` is the LLM model that produced this claim
     (PLAN-0031 B-2).  When None the DB server_default='unknown' applies.
@@ -328,10 +336,14 @@ ON CONFLICT (claim_id, created_at) DO NOTHING
 """),
         {
             "claim_id": str(claim_id),
-            # Bind ``created_at`` to the stable migration-aligned fallback so that
-            # the conflict-target tuple (claim_id, created_at) is identical on
-            # every replay of the same Kafka message (F-154 / BP-397 pattern).
-            "created_at": _DETERMINISTIC_CREATED_AT_FALLBACK,
+            # F-401/F-501: use the article's publish date so claims land in the
+            # correct monthly partition and participate in the 90-day contradiction
+            # window.  Fall back to the 2024-01-01 sentinel only for malformed
+            # messages that carry no published_at (the fallback constant always
+            # lands inside a pre-seeded partition — see its docstring).
+            "created_at": article_published_at
+            if article_published_at is not None
+            else _DETERMINISTIC_CREATED_AT_FALLBACK,
             "doc_id": str(doc_id),
             "chunk_id": str(raw_claim.chunk_id) if raw_claim.chunk_id else None,
             "claimer_entity_id": (str(raw_claim.claimer_entity_id) if raw_claim.claimer_entity_id else None),
@@ -401,6 +413,7 @@ async def materialize_graph(
     extraction_model_id: str | None = None,
     source_name: str | None = None,
     source_type_metadata: str | None = None,
+    article_published_at: datetime | None = None,
 ) -> MaterializationSummary:
     """Materialize graph from a single enriched article message.
 
@@ -580,7 +593,13 @@ async def materialize_graph(
     # 4 — Claims (ON CONFLICT DO NOTHING)
     # ------------------------------------------------------------------
     for raw_claim in claims:
-        await _insert_claim(session, doc_id, raw_claim, extraction_model_id=extraction_model_id)
+        await _insert_claim(
+            session,
+            doc_id,
+            raw_claim,
+            extraction_model_id=extraction_model_id,
+            article_published_at=article_published_at,
+        )
         claim_count += 1
         affected_entity_ids.add(raw_claim.subject_entity_id)
 

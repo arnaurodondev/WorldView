@@ -278,3 +278,28 @@ def get_sentiment_timeseries_repo(
 
 
 SentimentTimeseriesRepoDep = Annotated[DocumentSourceMetadataRepository, Depends(get_sentiment_timeseries_repo)]
+
+
+async def require_internal_jwt(request: Request) -> None:
+    """Belt-and-suspenders auth check on top of InternalJWTMiddleware.
+
+    In production (skip_verification=False), InternalJWTMiddleware sets
+    ``request.state.internal_jwt`` in its ``_post_validate`` hook after
+    successful RS256 signature verification.  This dependency asserts that
+    attribute is present, giving a second layer of protection if the middleware
+    is ever misconfigured (e.g. removed from app.py without updating routes).
+
+    In dev/E2E mode (skip_verification=True), the middleware decodes the token
+    without signature verification and does NOT call ``_post_validate``, so
+    ``internal_jwt`` is not set.  We detect this via the
+    ``_internal_jwt_skip_verification`` app.state flag and allow the request
+    through — the middleware has already validated the token shape.
+    """
+    skip = getattr(request.app.state, "_internal_jwt_skip_verification", False)
+    if skip:
+        return
+    if getattr(request.state, "internal_jwt", None) is None:
+        raise HTTPException(status_code=401, detail="X-Internal-JWT header required")
+
+
+InternalJwtAuthDep = Annotated[None, Depends(require_internal_jwt)]

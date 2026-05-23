@@ -192,6 +192,7 @@ class DocumentSourceMetadataRepository(ABC):
         self,
         entity_id: UUID,
         days: int,
+        tenant_id: str | None = None,
     ) -> list[dict[str, object]]:
         """Return daily sentiment aggregates for an entity over the last N days.
 

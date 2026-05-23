@@ -83,12 +83,28 @@ class SQLAlchemyDocumentSourceMetadataRepository(DocumentSourceMetadataRepositor
         self,
         entity_id: UUID,
         days: int,
+        tenant_id: str | None = None,
     ) -> list[dict[str, object]]:
-        """Daily sentiment aggregates for *entity_id* over the last *days* calendar days."""
+        """Daily sentiment aggregates for *entity_id* over the last *days* calendar days.
+
+        F-301/F-410: when *tenant_id* is provided (normal authenticated calls),
+        the JOIN on entity_mentions is restricted to that tenant's rows.  When
+        *tenant_id* is None (system-level JWT with no tenant scope), no tenant
+        filter is applied — this is the intentional cross-tenant path for
+        internal analytics workers.
+        """
         from sqlalchemy import text as sa_text
 
+        # Build the tenant filter clause conditionally.  We never interpolate
+        # user-supplied values into the SQL string — tenant_filter is one of
+        # two hard-coded literals, so this is injection-safe.
+        tenant_clause = "AND em.tenant_id = :tenant_id" if tenant_id is not None else ""
+        params: dict[str, object] = {"entity_id": entity_id, "days": days}
+        if tenant_id is not None:
+            params["tenant_id"] = UUID(tenant_id)
+
         stmt = sa_text(
-            """
+            f"""
             SELECT
                 date_trunc('day', dsm.published_at AT TIME ZONE 'UTC')::date AS day,
                 COUNT(DISTINCT dsm.doc_id)::int AS article_count,
@@ -102,12 +118,13 @@ class SQLAlchemyDocumentSourceMetadataRepository(DocumentSourceMetadataRepositor
             JOIN entity_mentions em
                 ON em.doc_id = dsm.doc_id
                AND em.resolved_entity_id = :entity_id
+               {tenant_clause}
             WHERE dsm.published_at >= now() - make_interval(days => :days)
               AND dsm.published_at IS NOT NULL
             GROUP BY day
             ORDER BY day ASC
             """
-        ).bindparams(entity_id=entity_id, days=days)
+        ).bindparams(**params)
 
         result = await self._session.execute(stmt)
         rows = result.mappings().all()

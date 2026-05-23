@@ -248,6 +248,22 @@ class EnrichedArticleConsumer(ValkeyDedupMixin, BaseKafkaConsumer[None]):
         source_name: str | None = value.get("source_name")
         source_type_str: str | None = value.get("source_type")
 
+        # F-401/F-501: use the article's publish date as claim created_at so
+        # claims land in the correct monthly partition and participate in the
+        # 90-day contradiction window.  published_at is nullable in the Avro
+        # schema; fall back to None (materialize_graph uses _DETERMINISTIC_CREATED_AT_FALLBACK).
+        _published_at_raw: str | None = value.get("published_at")
+        article_published_at: datetime | None = None
+        if _published_at_raw is not None:
+            try:
+                article_published_at = datetime.fromisoformat(_published_at_raw).replace(tzinfo=UTC)
+            except (ValueError, TypeError):
+                logger.warning(  # type: ignore[no-any-return]
+                    "enriched_consumer_bad_published_at",
+                    doc_id=str(doc_id),
+                    value_type=type(_published_at_raw).__name__,
+                )
+
         if source_name is None:
             logger.warning(  # type: ignore[no-any-return]
                 "evidence_source_metadata_missing",
@@ -335,6 +351,9 @@ class EnrichedArticleConsumer(ValkeyDedupMixin, BaseKafkaConsumer[None]):
                 # T-B-03: propagate resolved source metadata into evidence rows.
                 source_name=source_name,
                 source_type_metadata=source_type_str,
+                # F-401/F-501: thread published_at so claims land in the
+                # correct monthly partition (not all in 2024-01 sentinel).
+                article_published_at=article_published_at,
             )
 
             # ----------------------------------------------------------

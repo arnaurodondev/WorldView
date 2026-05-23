@@ -28,6 +28,9 @@ class GetEntitySentimentTimeseriesUseCase:
         repo: DocumentSourceMetadataRepository,
         entity_id: UUID,
         days: int,
+        tenant_id: str | None = None,
     ) -> list[dict[str, object]]:
-        log.debug("get_entity_sentiment_timeseries", entity_id=str(entity_id), days=days)
-        return await repo.get_entity_sentiment_timeseries(entity_id=entity_id, days=days)
+        log.debug(
+            "get_entity_sentiment_timeseries", entity_id=str(entity_id), days=days, has_tenant=tenant_id is not None
+        )
+        return await repo.get_entity_sentiment_timeseries(entity_id=entity_id, days=days, tenant_id=tenant_id)
