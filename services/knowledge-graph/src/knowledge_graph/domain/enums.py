@@ -31,12 +31,13 @@ class DecayClass(StrEnum):
 
 
 class RelationType(StrEnum):
-    """11 well-known relation types for typed application code.
+    """16 well-known relation types for typed application code.
 
-    The full registry lives in ``relation_type_registry`` (27 seed rows after migration 0004).
+    The full registry lives in ``relation_type_registry`` (32 rows after migration 0041).
     These are the most commonly referenced types in domain logic.
 
-    Original 8 (PRD §6.7 Block 11) + 3 new from PRD-0018 §6.4.
+    Original 8 (PRD §6.7 Block 11) + 3 new from PRD-0018 §6.4
+    + 5 new from PLAN-0089 taxonomy expansion (migration 0041).
     """
 
     EMPLOYS = "employs"
@@ -51,6 +52,12 @@ class RelationType(StrEnum):
     HAS_EXECUTIVE = "has_executive"
     REVENUE_FROM_COUNTRY = "revenue_from_country"
     OPERATES_IN_COUNTRY = "operates_in_country"
+    # PLAN-0089 Lever-4 financial taxonomy expansion — seeded in migration 0041
+    APPOINTED_AS = "appointed_as"
+    DIVESTED_FROM = "divested_from"
+    DOWNGRADED_BY = "downgraded_by"
+    FILED_LAWSUIT_AGAINST = "filed_lawsuit_against"
+    REPORTED_REVENUE_OF = "reported_revenue_of"
 
 
 # ---------------------------------------------------------------------------

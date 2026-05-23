@@ -175,6 +175,36 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     except Exception as exc:  # pragma: no cover — never block startup on the repair
         log.warning("kg_embedding_state_repair_failed", error=str(exc))
 
+    # 6. QW-1 — Warn if relation_type_registry has NULL embeddings.
+    # NULL embeddings silently bypass S7 Block 11 Step 2 (ANN soft-map), causing
+    # ~20-30% of valid relations to fall through to Step 3 (relation.type.proposed.v1)
+    # instead of being written to the relations table.  Migration 0013 seeds embeddings
+    # via Ollama; if Ollama was unavailable at migration time, all rows remain NULL.
+    # Migration 0041 adds 5 new rows which also start with embedding = NULL.
+    # This check is best-effort: any DB error is caught and logged, never raised.
+    try:
+        import sqlalchemy as _sa
+
+        async with read_factory() as _session:
+            _result = await _session.execute(
+                _sa.text("SELECT COUNT(*) FROM relation_type_registry WHERE embedding IS NULL")
+            )
+            _null_count: int = _result.scalar_one()
+        if _null_count > 0:
+            log.warning(
+                "registry_embeddings_missing",
+                null_count=_null_count,
+                action=(
+                    "re-run migration 0013 with Ollama running, or execute: "
+                    "python -m knowledge_graph.infrastructure.scripts.seed_registry_embeddings"
+                ),
+                impact="S7 Block 11 Step 2 ANN soft-map bypassed for NULL-embedding rows",
+            )
+        else:
+            log.info("registry_embeddings_ok", total_null=_null_count)
+    except Exception as _exc:  # pragma: no cover — DB unavailable at startup is non-fatal
+        log.warning("registry_embeddings_check_failed", error=str(_exc))
+
     try:
         log.info("knowledge_graph_started", service=settings.service_name)
         yield

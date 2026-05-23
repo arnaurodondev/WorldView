@@ -27,8 +27,8 @@ class TestDeepExtraction:
             DEEP_EXTRACTION.render(entities="AAPL")
 
     def test_version_is_semver(self) -> None:
-        # v1.3: few-shot examples + predicate inline descriptions added (QW-5/QW-6)
-        assert DEEP_EXTRACTION.version == "1.3"
+        # v1.4: 5 new financial predicates added (PLAN-0089 Lever-4 taxonomy expansion)
+        assert DEEP_EXTRACTION.version == "1.4"
 
     def test_frozen(self) -> None:
         with pytest.raises(AttributeError):

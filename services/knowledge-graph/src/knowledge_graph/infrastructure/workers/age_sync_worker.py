@@ -147,6 +147,12 @@ _VALID_EDGE_LABELS: frozenset[str] = frozenset(
         "HAS_EXECUTIVE",
         "REVENUE_FROM_COUNTRY",
         "OPERATES_IN_COUNTRY",
+        # migration 0041 — Lever-4 financial taxonomy expansion
+        "APPOINTED_AS",
+        "DIVESTED_FROM",
+        "DOWNGRADED_BY",
+        "FILED_LAWSUIT_AGAINST",
+        "REPORTED_REVENUE_OF",
         # temporal event exposure
         "EVENT_EXPOSES",
         # theme exposure (added in migration 0029 / PLAN-0076)
