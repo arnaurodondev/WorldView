@@ -266,12 +266,14 @@ async def get_news_entity(entity_id: str, request: Request) -> Any:
 
 
 @router.get("/articles/{article_id}/impact-history")
-async def get_article_impact_history(article_id: str, request: Request) -> Any:
+async def get_article_impact_history(article_id: UUID, request: Request) -> Any:
     """Proxy GET /api/v1/articles/{article_id}/impact-windows → S6 NLP Pipeline.
 
     Returns the 4-window (t0/t1/t2/t5) price-impact history for the article.
     Auth required — the S6 endpoint enforces tenant scoping via X-Internal-JWT.
     """
+    if not getattr(request.state, "user", None):
+        raise HTTPException(status_code=401, detail="Authentication required")
     headers = _auth_headers(request)
     clients = _clients(request)
     resp = await clients.nlp_pipeline.get(

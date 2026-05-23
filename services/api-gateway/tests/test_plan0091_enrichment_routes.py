@@ -28,6 +28,7 @@ _JWT_SECRET = "test-secret"  # noqa: S105
 _JWT_PAYLOAD = {"sub": "user-1", "tenant_id": "t-1", "exp": 9999999999}
 
 _ENTITY_ID = str(uuid.uuid4())
+_ARTICLE_ID = str(uuid.uuid4())
 
 
 def _make_jwt() -> str:
@@ -57,14 +58,14 @@ async def test_article_impact_history_proxies_to_s6(authed_app, authed_mock_clie
     transport = ASGITransport(app=authed_app)
     async with AsyncClient(transport=transport, base_url="http://test") as client:
         resp = await client.get(
-            "/v1/articles/article-abc/impact-history",
+            f"/v1/articles/{_ARTICLE_ID}/impact-history",
             headers={"Authorization": f"Bearer {_make_jwt()}"},
         )
 
     assert resp.status_code == 200
     authed_mock_clients.nlp_pipeline.get.assert_called_once()
     call_args = authed_mock_clients.nlp_pipeline.get.call_args[0]
-    assert "/api/v1/articles/article-abc/impact-windows" in call_args[0]
+    assert f"/api/v1/articles/{_ARTICLE_ID}/impact-windows" in call_args[0]
 
 
 @pytest.mark.asyncio
@@ -77,7 +78,7 @@ async def test_article_impact_history_passes_through_404(authed_app, authed_mock
     transport = ASGITransport(app=authed_app)
     async with AsyncClient(transport=transport, base_url="http://test") as client:
         resp = await client.get(
-            "/v1/articles/missing-article/impact-history",
+            f"/v1/articles/{_ARTICLE_ID}/impact-history",
             headers={"Authorization": f"Bearer {_make_jwt()}"},
         )
 

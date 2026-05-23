@@ -787,7 +787,7 @@ async def get_portfolio_concentration(portfolio_id: str, request: Request) -> An
 
 
 @router.get("/portfolios/{portfolio_id}/sector-attribution", response_model=PortfolioSectorAttributionResponse)
-async def get_portfolio_sector_attribution(portfolio_id: str, request: Request) -> PortfolioSectorAttributionResponse:
+async def get_portfolio_sector_attribution(portfolio_id: str, request: Request) -> Any:
     """Composition: holdings (S1) + batch quotes (S3) + per-instrument sector (S3).
 
     Algorithm:
@@ -807,7 +807,7 @@ async def get_portfolio_sector_attribution(portfolio_id: str, request: Request) 
     # Step 1 — holdings from S1
     holdings_resp = await clients.portfolio.get(f"/api/v1/holdings/{portfolio_id}", headers=headers)
     if holdings_resp.status_code != 200:
-        return Response(  # type: ignore[return-value, no-any-return]
+        return Response(
             content=holdings_resp.content,
             status_code=holdings_resp.status_code,
             media_type="application/json",

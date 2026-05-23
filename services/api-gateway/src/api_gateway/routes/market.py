@@ -486,7 +486,7 @@ async def get_multi_period_returns(instrument_id: UUID, request: Request) -> Any
         return JSONResponse(
             content={
                 "instrument_id": str(instrument_id),
-                "periods": {p: None for p in ("1D", "5D", "1M", "3M", "6M", "YTD", "1Y")},
+                "periods": dict.fromkeys(("1D", "5D", "1M", "3M", "6M", "YTD", "1Y")),
             },
         )
 
@@ -1506,7 +1506,7 @@ async def get_yield_curve(request: Request) -> YieldCurveResponse:
                 macro: dict[str, Any] = ev.get("macro_indicators") or ev.get("structured_data") or {}
                 # Match titles like "US_2Y_YIELD", "TREASURY_10Y", "UST 5Y", etc.
                 for maturity in ("2Y", "5Y", "10Y", "30Y"):
-                    if maturity in title and "YIELD" in title or "TREASURY" in title and maturity in title:
+                    if (maturity in title and "YIELD" in title) or ("TREASURY" in title and maturity in title):
                         yld = macro.get("yield") or macro.get("rate") or macro.get("value")
                         if yld is not None:
                             try:
@@ -1518,7 +1518,7 @@ async def get_yield_curve(request: Request) -> YieldCurveResponse:
         logger.warning("yield_curve_macro_indicator_fetch_failed", exc_info=True)
 
     # ── Priority 2: ETF proxy if macro_indicator data absent ─────────────────
-    if all(v is None for v in yield_by_maturity.values()):
+    if any(v is None for v in yield_by_maturity.values()):
         try:
             # Resolve ETF tickers to instrument_ids via S3 search
             ticker_to_iid: dict[str, str] = {}
@@ -1564,7 +1564,7 @@ async def get_yield_curve(request: Request) -> YieldCurveResponse:
                                 # We can only give a relative change without a baseline;
                                 # store the day_change_pct raw as a proxy indicator
                                 yield_by_maturity[mat] = round(implied_yield_change, 4)
-                            source = "etf_proxy"
+                                source = "etf_proxy"
         except Exception:
             logger.warning("yield_curve_etf_proxy_failed", exc_info=True)
 
