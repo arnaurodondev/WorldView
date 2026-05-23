@@ -16,7 +16,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 # a body-level import. This satisfies LAYER-API-NO-MODULE-LEVEL-INFRA without
 # the runtime NameError that previously blocked the TYPE_CHECKING approach.
 from nlp_pipeline.application.ports.entity_mention import EntityMentionRepositoryPort
-from nlp_pipeline.application.ports.repositories import NewsQueryPort, SignalsQueryPort
+from nlp_pipeline.application.ports.repositories import (
+    DocumentSourceMetadataRepository,
+    NewsQueryPort,
+    SignalsQueryPort,
+)
 from nlp_pipeline.application.use_cases.dlq_admin import DLQAdminUseCase
 from nlp_pipeline.application.use_cases.enhanced_chunk_search import EnhancedChunkSearchUseCase
 from nlp_pipeline.application.use_cases.query_entity_resolver import QueryEntityResolverUseCase
@@ -260,3 +264,17 @@ def get_search_documents_use_case(
 
 
 SearchDocumentsUseCaseDep = Annotated[SearchDocumentsUseCase, Depends(get_search_documents_use_case)]
+
+
+def get_sentiment_timeseries_repo(
+    session: Annotated[AsyncSession, Depends(get_read_nlp_session)],  # R27: read replica
+) -> DocumentSourceMetadataRepository:
+    """Build SQLAlchemyDocumentSourceMetadataRepository backed by the read replica (R27)."""
+    from nlp_pipeline.infrastructure.nlp_db.repositories.document_source_metadata import (
+        SQLAlchemyDocumentSourceMetadataRepository,
+    )
+
+    return SQLAlchemyDocumentSourceMetadataRepository(session)
+
+
+SentimentTimeseriesRepoDep = Annotated[DocumentSourceMetadataRepository, Depends(get_sentiment_timeseries_repo)]

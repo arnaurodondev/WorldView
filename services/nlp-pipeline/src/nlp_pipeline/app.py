@@ -22,7 +22,18 @@ from fastapi import FastAPI, Request, Response
 from fastapi.responses import JSONResponse
 from starlette.middleware.base import BaseHTTPMiddleware
 
-from nlp_pipeline.api.routes import admin, dlq, embed, entities, health, internal_costs, news, search, signals
+from nlp_pipeline.api.routes import (
+    admin,
+    analytics,
+    dlq,
+    embed,
+    entities,
+    health,
+    internal_costs,
+    news,
+    search,
+    signals,
+)
 from nlp_pipeline.api.routes.search_documents import router as search_documents_router
 from nlp_pipeline.config import Settings
 from nlp_pipeline.infrastructure.intelligence_db.session import (
@@ -295,5 +306,6 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(admin.router)
     # PLAN-0064 W6: full-text document search (stub in Wave 1, wired in Wave 3).
     app.include_router(search_documents_router)
+    app.include_router(analytics.router)
 
     return app

@@ -78,3 +78,47 @@ class SQLAlchemyDocumentSourceMetadataRepository(DocumentSourceMetadataRepositor
             )
             for row in rows
         }
+
+    async def get_entity_sentiment_timeseries(
+        self,
+        entity_id: UUID,
+        days: int,
+    ) -> list[dict[str, object]]:
+        """Daily sentiment aggregates for *entity_id* over the last *days* calendar days."""
+        from sqlalchemy import text as sa_text
+
+        stmt = sa_text(
+            """
+            SELECT
+                date_trunc('day', dsm.published_at AT TIME ZONE 'UTC')::date AS day,
+                COUNT(DISTINCT dsm.doc_id)::int AS article_count,
+                AVG(dsm.llm_relevance_score)::double precision AS avg_relevance,
+                SUM(CASE WHEN dsm.sentiment = 'positive' THEN 1 ELSE 0 END)::double precision
+                    / NULLIF(COUNT(dsm.doc_id), 0) AS positive_ratio,
+                SUM(CASE WHEN dsm.sentiment = 'negative' THEN 1 ELSE 0 END)::double precision
+                    / NULLIF(COUNT(dsm.doc_id), 0) AS negative_ratio,
+                AVG(dsm.impact_score)::double precision AS avg_impact_score
+            FROM document_source_metadata dsm
+            JOIN entity_mentions em
+                ON em.doc_id = dsm.doc_id
+               AND em.resolved_entity_id = :entity_id
+            WHERE dsm.published_at >= now() - make_interval(days => :days)
+              AND dsm.published_at IS NOT NULL
+            GROUP BY day
+            ORDER BY day ASC
+            """
+        ).bindparams(entity_id=entity_id, days=days)
+
+        result = await self._session.execute(stmt)
+        rows = result.mappings().all()
+        return [
+            {
+                "date": str(row["day"]),
+                "article_count": int(row["article_count"] or 0),
+                "avg_relevance": float(row["avg_relevance"]) if row["avg_relevance"] is not None else None,
+                "positive_ratio": float(row["positive_ratio"]) if row["positive_ratio"] is not None else None,
+                "negative_ratio": float(row["negative_ratio"]) if row["negative_ratio"] is not None else None,
+                "avg_impact_score": float(row["avg_impact_score"]) if row["avg_impact_score"] is not None else None,
+            }
+            for row in rows
+        ]

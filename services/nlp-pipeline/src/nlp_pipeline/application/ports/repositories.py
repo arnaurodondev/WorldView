@@ -187,6 +187,20 @@ class DocumentSourceMetadataRepository(ABC):
         """Return metadata keyed by doc_id; only present doc_ids are included."""
         ...
 
+    @abstractmethod
+    async def get_entity_sentiment_timeseries(
+        self,
+        entity_id: UUID,
+        days: int,
+    ) -> list[dict[str, object]]:
+        """Return daily sentiment aggregates for an entity over the last N days.
+
+        Each element has: date (str YYYY-MM-DD), article_count (int),
+        avg_relevance (float|None), positive_ratio (float|None),
+        negative_ratio (float|None), avg_impact_score (float|None).
+        """
+        ...
+
 
 # ── PriceImpact repository port ───────────────────────────────────────────────
 

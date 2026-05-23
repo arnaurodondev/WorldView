@@ -148,18 +148,28 @@ ON CONFLICT (canonical_type) DO NOTHING
 """
 
 # ---------------------------------------------------------------------------
-# AGE edge labels — create inside a DO block so CI without AGE silently skips
+# AGE edge labels — create inside a DO block so CI without AGE silently skips.
+# IDEMPOTENT: each label is wrapped in its own BEGIN/EXCEPTION/END block so a
+# partial previous run (where some labels already exist) does not cause the
+# outer EXCEPTION to fire and silently skip the remaining labels.  Re-running
+# this migration is therefore safe — already-existing labels emit NOTICE only.
 # ---------------------------------------------------------------------------
 _CREATE_AGE_LABELS = """
 DO $$
+DECLARE
+    _labels TEXT[] := ARRAY['APPOINTED_AS', 'DIVESTED_FROM', 'DOWNGRADED_BY',
+                             'FILED_LAWSUIT_AGAINST', 'REPORTED_REVENUE_OF'];
+    _l TEXT;
 BEGIN
     LOAD 'age';
     SET search_path = ag_catalog, "$user", public;
-    PERFORM create_elabel('worldview_graph', 'APPOINTED_AS');
-    PERFORM create_elabel('worldview_graph', 'DIVESTED_FROM');
-    PERFORM create_elabel('worldview_graph', 'DOWNGRADED_BY');
-    PERFORM create_elabel('worldview_graph', 'FILED_LAWSUIT_AGAINST');
-    PERFORM create_elabel('worldview_graph', 'REPORTED_REVENUE_OF');
+    FOREACH _l IN ARRAY _labels LOOP
+        BEGIN
+            PERFORM create_elabel('worldview_graph', _l);
+        EXCEPTION WHEN OTHERS THEN
+            RAISE NOTICE 'Label % already exists or creation failed: %', _l, SQLERRM;
+        END;
+    END LOOP;
 EXCEPTION WHEN OTHERS THEN
     RAISE WARNING
         'AGE extension not available (%) — new edge labels not created. '
@@ -185,14 +195,20 @@ WHERE canonical_type IN (
 
 _DROP_AGE_LABELS = """
 DO $$
+DECLARE
+    _labels TEXT[] := ARRAY['APPOINTED_AS', 'DIVESTED_FROM', 'DOWNGRADED_BY',
+                             'FILED_LAWSUIT_AGAINST', 'REPORTED_REVENUE_OF'];
+    _l TEXT;
 BEGIN
     LOAD 'age';
     SET search_path = ag_catalog, "$user", public;
-    PERFORM drop_elabel('worldview_graph', 'APPOINTED_AS',        true);
-    PERFORM drop_elabel('worldview_graph', 'DIVESTED_FROM',       true);
-    PERFORM drop_elabel('worldview_graph', 'DOWNGRADED_BY',       true);
-    PERFORM drop_elabel('worldview_graph', 'FILED_LAWSUIT_AGAINST', true);
-    PERFORM drop_elabel('worldview_graph', 'REPORTED_REVENUE_OF', true);
+    FOREACH _l IN ARRAY _labels LOOP
+        BEGIN
+            PERFORM drop_elabel('worldview_graph', _l, true);
+        EXCEPTION WHEN OTHERS THEN
+            RAISE NOTICE 'Label % already absent or drop failed: %', _l, SQLERRM;
+        END;
+    END LOOP;
 EXCEPTION WHEN OTHERS THEN
     RAISE WARNING
         'AGE extension not available or labels already absent (%) — skipping edge-label drop.',
