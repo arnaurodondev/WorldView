@@ -94,9 +94,9 @@ class SQLAlchemyDocumentSourceMetadataRepository(DocumentSourceMetadataRepositor
                 COUNT(DISTINCT dsm.doc_id)::int AS article_count,
                 AVG(dsm.llm_relevance_score)::double precision AS avg_relevance,
                 SUM(CASE WHEN dsm.sentiment = 'positive' THEN 1 ELSE 0 END)::double precision
-                    / NULLIF(COUNT(dsm.doc_id), 0) AS positive_ratio,
+                    / NULLIF(COUNT(DISTINCT dsm.doc_id), 0) AS positive_ratio,
                 SUM(CASE WHEN dsm.sentiment = 'negative' THEN 1 ELSE 0 END)::double precision
-                    / NULLIF(COUNT(dsm.doc_id), 0) AS negative_ratio,
+                    / NULLIF(COUNT(DISTINCT dsm.doc_id), 0) AS negative_ratio,
                 AVG(dsm.impact_score)::double precision AS avg_impact_score
             FROM document_source_metadata dsm
             JOIN entity_mentions em

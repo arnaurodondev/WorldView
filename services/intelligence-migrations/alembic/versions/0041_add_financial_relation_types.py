@@ -204,7 +204,7 @@ BEGIN
     SET search_path = ag_catalog, "$user", public;
     FOREACH _l IN ARRAY _labels LOOP
         BEGIN
-            PERFORM drop_elabel('worldview_graph', _l, true);
+            PERFORM drop_elabel('worldview_graph', _l);
         EXCEPTION WHEN OTHERS THEN
             RAISE NOTICE 'Label % already absent or drop failed: %', _l, SQLERRM;
         END;

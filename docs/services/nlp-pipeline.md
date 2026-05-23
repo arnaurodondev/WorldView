@@ -227,6 +227,7 @@ Runs on MEDIUM and DEEP tier only. Uses `Qwen/Qwen3-235B-A22B-Instruct-2507` via
 | GET | `/api/v1/entities` | — | Search entities by mention text |
 | GET | `/api/v1/entities/{id}` | — | Entity detail with resolution statistics |
 | GET | `/api/v1/entities/{id}/articles` | — | Articles mentioning entity with `display_relevance_score`, `sentiment`, `impact_score`. Params: `start_date`, `end_date`, `order_by` |
+| GET | `/api/v1/entities/{id}/sentiment-timeseries` | X-Internal-JWT | Daily sentiment aggregates (article_count, avg_relevance, positive_ratio, negative_ratio, avg_impact_score). Params: `days` [1–365, default 90]. PLAN-0091 WIP. |
 | POST | `/api/v1/entities/resolve` | — | Query-time 5-stage entity resolution |
 | POST | `/api/v1/search/chunks` | — | ANN chunk/section search with entity facets and citation metadata |
 | POST | `/api/v1/vector-search` | — | Semantic section/chunk search (legacy) |

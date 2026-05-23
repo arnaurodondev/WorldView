@@ -507,7 +507,7 @@ async def materialize_graph(
         subject_id = rel.subject_entity_id
         object_id = rel.object_entity_id
         if (
-            rel.raw_type in ("has_executive", "employs")
+            rel.raw_type in ("has_executive", "employs", "appointed_as")
             and rel.subject_entity_type == "person"
             and rel.object_entity_type != "person"
         ):

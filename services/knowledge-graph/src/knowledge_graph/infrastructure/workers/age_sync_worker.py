@@ -247,7 +247,7 @@ class AgeSyncWorker:
             # Structlog-only (never stdlib logging) — CLAUDE.md rule 10.
             logger.warning(  # type: ignore[no-any-return]
                 "age_sync_age_unavailable",
-                error=str(exc),
+                error=type(exc).__name__,
                 message=(
                     "AGE extension unavailable — skipping sync cycle; "
                     "set KNOWLEDGE_GRAPH_CYPHER_ENABLED=false to suppress"
