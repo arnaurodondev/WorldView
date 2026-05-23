@@ -314,18 +314,22 @@ async def test_entity_graph_depth_param(authed_app, authed_mock_clients) -> None
         )
 
     assert resp.status_code == 200
-    # ISSUE-5 fix (2026-05-10): depth IS now forwarded to S7. The previous behaviour
-    # stripped depth because the comment in proxy.py was wrong — S7 has a depth param
-    # (ge=1, le=3) for AGE Cypher multi-hop traversal. depth>1 is forwarded; depth=1
-    # is omitted (S7 default) to avoid a redundant param on the common case.
-    # The `limit` param IS always forwarded (defaulting to 40 when not provided).
-    authed_mock_clients.knowledge_graph.get.assert_called_once()
-    call_kwargs = authed_mock_clients.knowledge_graph.get.call_args[1]
-    assert "depth" in call_kwargs["params"], "depth must be forwarded to S7 when >1 (ISSUE-5)"
-    assert call_kwargs["params"]["depth"] == "2", "depth value must be forwarded as string"
-    assert "limit" in call_kwargs["params"], "limit is always forwarded to S7"
-    call_args = authed_mock_clients.knowledge_graph.get.call_args[0]
-    assert f"/api/v1/entities/{entity_id}/graph" in call_args[0]
+    # ISSUE-5 fix (2026-05-10): depth IS now forwarded to S7.
+    # BP-S9-GRAPH-001 (depth>1 merge): the handler makes TWO S7 calls when depth>1 —
+    # the primary call with the requested depth, then a depth=1 SQL call to merge in
+    # direct-neighbor edges (AGE only returns depth-N neighbors but the `relations` list
+    # is always depth=1, so depth=2 graphs had no edges without the merge).
+    # call_args_list[0] = primary (depth=2), call_args_list[1] = merge (depth=1).
+    assert authed_mock_clients.knowledge_graph.get.call_count == 2
+    first_call_kwargs = authed_mock_clients.knowledge_graph.get.call_args_list[0][1]
+    assert "depth" in first_call_kwargs["params"], "depth must be forwarded to S7 when >1 (ISSUE-5)"
+    assert first_call_kwargs["params"]["depth"] == "2", "depth value must be forwarded as string"
+    assert "limit" in first_call_kwargs["params"], "limit is always forwarded to S7"
+    first_call_args = authed_mock_clients.knowledge_graph.get.call_args_list[0][0]
+    assert f"/api/v1/entities/{entity_id}/graph" in first_call_args[0]
+    # Second call is the depth=1 merge — must NOT include depth param.
+    second_call_kwargs = authed_mock_clients.knowledge_graph.get.call_args_list[1][1]
+    assert "depth" not in second_call_kwargs["params"], "merge call must use SQL path (no depth)"
     # Verify response is transformed to EntityGraph format (not raw S7 shape)
     body = resp.json()
     assert "entity_id" in body

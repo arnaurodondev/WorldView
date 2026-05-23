@@ -60,6 +60,11 @@ def _transform_graph_response(raw: dict[str, Any]) -> dict[str, Any]:
                 # WHY ticker: PeerComparisonPanel needs ticker to look up S3
                 # fundamentals (entity_id ≠ instrument_id; resolved by ticker).
                 "ticker": center.get("ticker") or "",
+                # B-01 (Block I T-25): description and sector are optional fields
+                # from S7 EntitySummary. Included here so the frontend type contract
+                # is stable — InlineSelectionPanel may render them if present.
+                "description": center.get("description") or None,
+                "sector": center.get("sector") or None,
             }
         )
 
@@ -74,6 +79,9 @@ def _transform_graph_response(raw: dict[str, Any]) -> dict[str, Any]:
                 "type": entity_data.get("entity_type") or "unknown",
                 "size": 1,
                 "ticker": entity_data.get("ticker") or "",
+                # B-01: description and sector forwarded if S7 provides them.
+                "description": entity_data.get("description") or None,
+                "sector": entity_data.get("sector") or None,
             }
         )
 
@@ -103,8 +111,32 @@ def _transform_graph_response(raw: dict[str, Any]) -> dict[str, Any]:
                 # snippets in the Top Relations panel without a second API call.
                 "relation_summary": rel.get("relation_summary"),  # str | None
                 "evidence_snippets": rel.get("evidence_snippets") or [],  # list[str]
+                # B-02 (Block I T-25): decay_class drives edge opacity in the sigma
+                # edgeReducer (PERMANENT/DURABLE=1.0, SLOW/MEDIUM=0.7, FAST/EPHEMERAL=0.4).
+                # None when S7 omits it — frontend defaults to MEDIUM opacity.
+                "decay_class": rel.get("decay_class") or None,  # str | None
             }
         )
+
+    # WHY filter orphan edges: S7 may include relations whose endpoints are not
+    # present in the `entities` dict (e.g. entities filtered by confidence threshold
+    # or missing from canonical_entities). These produce dangling edges that sigma
+    # renders as "orphan" nodes with no visual connections — very confusing.
+    # Filter BEFORE filtering orphan nodes so the node filter sees accurate edge data.
+    node_id_set = {n["id"] for n in nodes}
+    edges = [e for e in edges if e["source"] in node_id_set and e["target"] in node_id_set]
+
+    # WHY filter orphan nodes: at depth=2 S7's CypherNeighborhoodUseCase correctly
+    # discovers depth-2 neighbor_ids via AGE Cypher, but `relation_repo.list_for_entity`
+    # only returns direct (depth=1) relations of the center entity. Result: depth-2
+    # nodes arrive in `entities` but have no connecting edges in `relations`. These
+    # render as isolated floating nodes — worse than not showing them.
+    # Keep the center node unconditionally (it is the page anchor).
+    edge_endpoints: set[str] = set()
+    for e in edges:
+        edge_endpoints.add(e["source"])
+        edge_endpoints.add(e["target"])
+    nodes = [n for n in nodes if n["id"] == entity_id or n["id"] in edge_endpoints]
 
     return {"entity_id": entity_id, "nodes": nodes, "edges": edges}
 
@@ -182,6 +214,8 @@ async def get_entity_graph(
     if focus_node is not None:
         s7_params["focus_node"] = focus_node
 
+    import json as _json
+
     resp = await clients.knowledge_graph.get(
         f"/api/v1/entities/{entity_id}/graph",
         params=s7_params,
@@ -190,10 +224,52 @@ async def get_entity_graph(
     # Pass non-2xx responses through unchanged (404 = entity not found, etc.)
     if resp.status_code >= 400:
         return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
-    import json as _json
 
     raw: dict[str, Any] = resp.json()
     transformed = _transform_graph_response(raw)
+
+    # WHY merge depth=1 when depth>1 (BP-S9-GRAPH-001):
+    # S7's CypherNeighborhoodUseCase uses AGE to discover depth-N neighbor IDs,
+    # then fetches those entities from SQL. At depth=2, AGE fills its LIMIT with
+    # second-order entities, and the `relations` list only contains the center's
+    # direct (depth=1) relations. After orphan-filtering, the depth=2 graph ends up
+    # with fewer connected nodes than depth=1, which is counter-intuitive and broken.
+    # Fix: always re-fetch depth=1 (fast SQL, no AGE) and merge its nodes+edges into
+    # the higher-depth result. The union is then orphan-filtered by _transform_graph_response.
+    if depth > 1:
+        depth1_resp = await clients.knowledge_graph.get(
+            f"/api/v1/entities/{entity_id}/graph",
+            params={"limit": str(limit)},  # no depth param → depth=1 SQL path
+            headers=headers,
+        )
+        if depth1_resp.status_code == 200:
+            raw1: dict[str, Any] = depth1_resp.json()
+            t1 = _transform_graph_response(raw1)
+            # Merge: take union of nodes and edges; deduplicate by id.
+            existing_node_ids = {n["id"] for n in transformed["nodes"]}
+            existing_edge_ids = {e["id"] for e in transformed["edges"]}
+            for n in t1["nodes"]:
+                if n["id"] not in existing_node_ids:
+                    transformed["nodes"].append(n)
+                    existing_node_ids.add(n["id"])
+            for e in t1["edges"]:
+                if e["id"] not in existing_edge_ids:
+                    transformed["edges"].append(e)
+                    existing_edge_ids.add(e["id"])
+            # Re-apply orphan filter after merge (new edges may validate previously-
+            # orphan nodes, and new nodes may validate previously-orphan edges).
+            node_id_set2 = {n["id"] for n in transformed["nodes"]}
+            transformed["edges"] = [
+                e for e in transformed["edges"] if e["source"] in node_id_set2 and e["target"] in node_id_set2
+            ]
+            edge_eps2: set[str] = set()
+            for e in transformed["edges"]:
+                edge_eps2.add(e["source"])
+                edge_eps2.add(e["target"])
+            transformed["nodes"] = [
+                n for n in transformed["nodes"] if n["id"] == str(entity_id) or n["id"] in edge_eps2
+            ]
+
     return Response(
         content=_json.dumps(transformed).encode(),
         status_code=resp.status_code,
