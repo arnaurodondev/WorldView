@@ -102,19 +102,29 @@ export interface ScreenerColumn {
  *   - Users can hide it via the settings popover if they prefer pure data.
  */
 export const DEFAULT_COLUMNS: readonly ScreenerColumn[] = Object.freeze([
-  Object.freeze({ key: "ticker",     label: "Ticker",     sortable: true,  align: "left",  formatter: "text" as const,    visible: true }),
-  Object.freeze({ key: "name",       label: "Name",       sortable: true,  align: "left",  formatter: "text" as const,    visible: true }),
-  Object.freeze({ key: "sector",     label: "Sector",     sortable: true,  align: "left",  formatter: "text" as const,    visible: true }),
-  Object.freeze({ key: "price",      label: "Price",      sortable: true,  align: "right", formatter: "price" as const,   visible: true }),
-  Object.freeze({ key: "change",     label: "Chg%",       sortable: true,  align: "right", formatter: "percent" as const, visible: true }),
-  Object.freeze({ key: "marketCap",  label: "Mkt Cap",    sortable: true,  align: "right", formatter: "compact" as const, visible: true }),
-  Object.freeze({ key: "pe",         label: "P/E",        sortable: true,  align: "right", formatter: "number" as const,  visible: true }),
-  Object.freeze({ key: "revenue",    label: "Revenue",    sortable: true,  align: "right", formatter: "compact" as const, visible: true }),
-  Object.freeze({ key: "beta",       label: "Beta",       sortable: true,  align: "right", formatter: "number" as const,  visible: true }),
-  Object.freeze({ key: "score",      label: "Score",      sortable: true,  align: "right",                                  visible: true }),
-  Object.freeze({ key: "range52w",   label: "52W Range",  sortable: false, align: "right",                                  visible: true }),
-  Object.freeze({ key: "volume",     label: "Volume",     sortable: false, align: "right", formatter: "compact" as const, visible: true }),
-  Object.freeze({ key: "sparkline",  label: "Trend (30d)", sortable: false, align: "right",                                 visible: true }),
+  // ── Default-visible columns ─────────────────────────────────────────────────
+  Object.freeze({ key: "ticker",        label: "Ticker",      sortable: true,  align: "left",  formatter: "text" as const,    visible: true }),
+  Object.freeze({ key: "name",          label: "Name",        sortable: true,  align: "left",  formatter: "text" as const,    visible: true }),
+  Object.freeze({ key: "sector",        label: "Sector",      sortable: true,  align: "left",  formatter: "text" as const,    visible: true }),
+  Object.freeze({ key: "price",         label: "Price",       sortable: true,  align: "right", formatter: "price" as const,   visible: true }),
+  Object.freeze({ key: "change",        label: "Chg%",        sortable: true,  align: "right", formatter: "percent" as const, visible: true }),
+  Object.freeze({ key: "marketCap",     label: "Mkt Cap",     sortable: true,  align: "right", formatter: "compact" as const, visible: true }),
+  Object.freeze({ key: "pe",            label: "P/E",         sortable: true,  align: "right", formatter: "number" as const,  visible: true }),
+  // PLAN-0092 Wave C: replaced revenue with revenue growth; added fwdPe, divYield, roe
+  Object.freeze({ key: "revenueGrowth", label: "Rev YoY%",    sortable: true,  align: "right", formatter: "percent" as const, visible: true }),
+  Object.freeze({ key: "forwardPe",     label: "Fwd P/E",     sortable: true,  align: "right", formatter: "number" as const,  visible: true }),
+  Object.freeze({ key: "divYield",      label: "Div Y%",      sortable: true,  align: "right", formatter: "percent" as const, visible: true }),
+  Object.freeze({ key: "roe",           label: "ROE%",        sortable: true,  align: "right", formatter: "percent" as const, visible: true }),
+  Object.freeze({ key: "beta",          label: "Beta",        sortable: true,  align: "right", formatter: "number" as const,  visible: true }),
+  Object.freeze({ key: "score",         label: "Score",       sortable: true,  align: "right",                                visible: true }),
+  Object.freeze({ key: "range52w",      label: "52W Range",   sortable: false, align: "right",                                visible: true }),
+  Object.freeze({ key: "sparkline",     label: "Trend (30d)", sortable: false, align: "right",                                visible: true }),
+  // ── Opt-in columns (hidden by default — user reveals via ⚙ popover) ─────────
+  // WHY hidden by default: these metrics are valuable for specific strategies but
+  // add column width that crowds the 12-column default layout at 1440px.
+  Object.freeze({ key: "opMargin",      label: "OP MGN%",     sortable: true,  align: "right", formatter: "percent" as const, visible: false }),
+  Object.freeze({ key: "evEbitda",      label: "EV/EBITDA",   sortable: true,  align: "right", formatter: "number" as const,  visible: false }),
+  Object.freeze({ key: "avgVol",        label: "Avg Vol",     sortable: true,  align: "right", formatter: "compact" as const, visible: false }),
 ]) as readonly ScreenerColumn[];
 
 // ── Internal helpers ─────────────────────────────────────────────────────────

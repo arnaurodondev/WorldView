@@ -38,6 +38,21 @@ export function createScreenerApi(t: string | undefined) {
      * (matches the IndexStrip / GlobalSearch fallback convention) so
      * row-click navigation lands on the correct entity page.
      */
+    /**
+     * translateNLScreenerQuery — POST /v1/screener/nl-translate
+     * Converts a natural-language query ("profitable tech stocks under $50") into a
+     * structured { filters, explanation } object the screener can apply directly.
+     * Returns `explanation` (LLM-generated 1-sentence description) + `filters` map.
+     * PLAN-0092 Wave A.
+     */
+    translateNLScreenerQuery(query: string): Promise<NLScreenerResponse> {
+      return apiFetch<NLScreenerResponse>("/v1/screener/nl-translate", {
+        method: "POST",
+        body: { query },
+        token: t,
+      });
+    },
+
     async runScreener(request: ScreenerRequest): Promise<ScreenerResponse> {
       // WHY GET for no-filter case: the POST screener uses INNER JOIN on each
       // filter metric, which excludes instruments that lack that metric's data.
@@ -113,6 +128,18 @@ export function createScreenerApi(t: string | undefined) {
           market_impact_score: num(
             row["market_impact_score"] ?? metrics["market_impact_score"],
           ),
+          // PLAN-0092 Wave C: new default + opt-in metric columns
+          forward_pe: num(row["forward_pe"] ?? metrics["forward_pe"]),
+          dividend_yield: num(row["dividend_yield"] ?? metrics["dividend_yield"]),
+          revenue_growth_yoy: num(row["revenue_growth_yoy"] ?? metrics["revenue_growth_yoy"]),
+          roe: num(row["roe"] ?? metrics["roe"] ?? metrics["return_on_equity"]),
+          operating_margin_ttm: num(
+            row["operating_margin_ttm"] ?? metrics["operating_margin_ttm"],
+          ),
+          enterprise_value_ebitda: num(
+            row["enterprise_value_ebitda"] ?? metrics["enterprise_value_ebitda"],
+          ),
+          avg_volume_30d: num(row["avg_volume_30d"] ?? metrics["avg_volume_30d"]),
         } as unknown as ScreenerResult;
       });
       return {

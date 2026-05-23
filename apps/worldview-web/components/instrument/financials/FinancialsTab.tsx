@@ -44,6 +44,7 @@ import { PeerComparisonTable } from "@/components/instrument/financials/PeerComp
 import { InsiderTransactionsTable } from "@/components/instrument/financials/InsiderTransactionsTable";
 import { InstitutionalHoldersTable } from "@/components/instrument/financials/InstitutionalHoldersTable";
 import { FundHoldersTable } from "@/components/instrument/financials/FundHoldersTable";
+import { FundamentalsTimeseriesChart } from "@/components/instrument/financials/FundamentalsTimeseriesChart";
 import { AnalystSidebar } from "@/components/instrument/financials/AnalystSidebar";
 import { useApiClient } from "@/lib/api-client";
 import { qk } from "@/lib/query/keys";
@@ -141,6 +142,12 @@ export function FinancialsTab({ instrumentId }: FinancialsTabProps) {
 
         {/* Block 3: annual EPS beat/miss bar chart (64px, surprise chips). */}
         <EarningsBarChart instrumentId={instrumentId} />
+
+        {/* Block 3b: 11-metric historical trend chart (PLAN-0092 Wave B).
+            WHY after EarningsBarChart: EPS chart shows the bottom line; the
+            timeseries chart shows how valuation multiples have moved alongside
+            earnings — the natural next question an analyst asks. */}
+        <FundamentalsTimeseriesChart instrumentId={instrumentId} />
 
         {/* Block 4: 5-peer + self comparison table.
             WHY pass peersData + fundamentals: PeerComparisonTable needs both

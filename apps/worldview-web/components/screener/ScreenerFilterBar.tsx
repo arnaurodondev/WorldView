@@ -182,7 +182,7 @@ export function ScreenerFilterBar({
 
  <div className="flex items-center gap-2">
  <button
- aria-label="Toggle screener filters"
+ aria-label="Close screener filters"
  aria-expanded={isOpen}
  aria-controls="screener-filter-panel"
  className="flex items-center gap-0.5 text-[10px] text-muted-foreground hover:text-foreground font-mono uppercase tracking-[0.06em]"

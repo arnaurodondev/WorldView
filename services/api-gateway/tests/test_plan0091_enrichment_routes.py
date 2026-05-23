@@ -401,3 +401,115 @@ async def test_nl_screener_returns_502_on_llm_error(authed_app, authed_mock_clie
         )
 
     assert resp.status_code == 502
+
+
+# ── PLAN-0092 Wave A: NLScreenerResponse.explanation field tests ─────────────
+
+
+@pytest.mark.asyncio
+async def test_nl_screener_returns_explanation_from_two_key_format(authed_app, authed_mock_clients) -> None:
+    """Two-key LLM format {explanation, filters} → explanation propagated to response."""
+    valid_fields = [{"name": "sector"}, {"name": "pe_ratio"}, {"name": "profit_margin"}]
+    authed_mock_clients.market_data.get = AsyncMock(
+        return_value=_mock_response(200, json.dumps({"fields": valid_fields}).encode()),
+    )
+    llm_result = {
+        "explanation": "Profitable tech stocks, P/E below 20, positive margins",
+        "filters": {"sector": "Technology", "pe_ratio": {"lte": 20}},
+    }
+    chat_response = json.dumps({"content": json.dumps(llm_result)}).encode()
+    authed_mock_clients.rag_chat.post = AsyncMock(return_value=_mock_response(200, chat_response))
+
+    transport = ASGITransport(app=authed_app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        resp = await client.post(
+            "/v1/screener/nl-translate",
+            json={"query": "profitable tech stocks with low PE"},
+            headers={"Authorization": f"Bearer {_make_jwt()}"},
+        )
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["explanation"] == "Profitable tech stocks, P/E below 20, positive margins"
+    assert body["filters"]["sector"] == "Technology"
+    assert body["natural_language_query"] == "profitable tech stocks with low PE"
+
+
+@pytest.mark.asyncio
+async def test_nl_screener_legacy_flat_format_explanation_empty(authed_app, authed_mock_clients) -> None:
+    """Legacy flat LLM format (no 'filters' key) → explanation defaults to empty string."""
+    valid_fields = [{"name": "sector"}, {"name": "pe_ratio"}]
+    authed_mock_clients.market_data.get = AsyncMock(
+        return_value=_mock_response(200, json.dumps({"fields": valid_fields}).encode()),
+    )
+    # Legacy format: flat dict with no "filters" wrapper — backward compat
+    llm_result = {"sector": "Technology", "pe_ratio": {"lte": 20}}
+    chat_response = json.dumps({"content": json.dumps(llm_result)}).encode()
+    authed_mock_clients.rag_chat.post = AsyncMock(return_value=_mock_response(200, chat_response))
+
+    transport = ASGITransport(app=authed_app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        resp = await client.post(
+            "/v1/screener/nl-translate",
+            json={"query": "tech stocks low PE"},
+            headers={"Authorization": f"Bearer {_make_jwt()}"},
+        )
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["explanation"] == ""
+    assert body["filters"]["sector"] == "Technology"
+
+
+@pytest.mark.asyncio
+async def test_nl_screener_explanation_not_included_in_filters(authed_app, authed_mock_clients) -> None:
+    """explanation key from LLM must NOT appear in the returned filters dict."""
+    valid_fields = [{"name": "sector"}]
+    authed_mock_clients.market_data.get = AsyncMock(
+        return_value=_mock_response(200, json.dumps({"fields": valid_fields}).encode()),
+    )
+    llm_result = {
+        "explanation": "Tech companies only",
+        "filters": {"sector": "Technology"},
+    }
+    chat_response = json.dumps({"content": json.dumps(llm_result)}).encode()
+    authed_mock_clients.rag_chat.post = AsyncMock(return_value=_mock_response(200, chat_response))
+
+    transport = ASGITransport(app=authed_app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        resp = await client.post(
+            "/v1/screener/nl-translate",
+            json={"query": "tech companies"},
+            headers={"Authorization": f"Bearer {_make_jwt()}"},
+        )
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert "explanation" not in body["filters"]
+    assert body["explanation"] == "Tech companies only"
+
+
+@pytest.mark.asyncio
+async def test_nl_screener_explanation_empty_string_when_absent(authed_app, authed_mock_clients) -> None:
+    """Two-key format without explanation key → explanation is empty string (not null/missing)."""
+    valid_fields = [{"name": "sector"}]
+    authed_mock_clients.market_data.get = AsyncMock(
+        return_value=_mock_response(200, json.dumps({"fields": valid_fields}).encode()),
+    )
+    # Two-key format but explanation key omitted
+    llm_result = {"filters": {"sector": "Technology"}}
+    chat_response = json.dumps({"content": json.dumps(llm_result)}).encode()
+    authed_mock_clients.rag_chat.post = AsyncMock(return_value=_mock_response(200, chat_response))
+
+    transport = ASGITransport(app=authed_app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        resp = await client.post(
+            "/v1/screener/nl-translate",
+            json={"query": "tech sector"},
+            headers={"Authorization": f"Bearer {_make_jwt()}"},
+        )
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["explanation"] == ""
+    assert "explanation" in body  # field always present, never missing

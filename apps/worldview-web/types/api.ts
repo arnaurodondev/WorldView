@@ -802,6 +802,10 @@ export interface ScreenerResult {
   dividend_yield?: number | null;      // annual dividend yield (decimal, e.g. 0.015 = 1.5%)
   revenue_growth_yoy?: number | null;  // year-over-year revenue growth (decimal)
   roe?: number | null;                 // return on equity (decimal)
+  // PLAN-0092 Wave C: opt-in columns (hidden by default in ColumnSettingsPopover)
+  operating_margin_ttm?: number | null; // operating margin TTM (decimal)
+  enterprise_value_ebitda?: number | null; // EV/EBITDA ratio
+  avg_volume_30d?: number | null;      // 30-day average daily volume
   [key: string]: unknown; // dynamic fields depending on screener config
 }
 

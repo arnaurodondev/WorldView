@@ -184,8 +184,8 @@ export const qk = {
       [QK_VERSION, "instruments", "detail", instrumentId, "fundamentals"] as const,
     fundamentalsSnapshot: (instrumentId: string) =>
       [QK_VERSION, "instruments", "detail", instrumentId, "fundamentals-snapshot"] as const,
-    fundamentalsTimeseries: (instrumentId: string, period: string) =>
-      [QK_VERSION, "instruments", "detail", instrumentId, "fundamentals-ts", period] as const,
+    fundamentalsTimeseries: (instrumentId: string, metric: string) =>
+      [QK_VERSION, "instruments", "detail", instrumentId, "fundamentals-ts", metric] as const,
     technicals: (instrumentId: string) =>
       [QK_VERSION, "instruments", "detail", instrumentId, "technicals"] as const,
     entityGraph: (instrumentId: string, depth?: number) =>

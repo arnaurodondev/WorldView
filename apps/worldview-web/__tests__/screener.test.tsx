@@ -25,7 +25,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { render, screen, waitFor, act } from "@testing-library/react";
+import { render, screen, waitFor, act, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 // PLAN-0059 C-6: ScreenerPage uses nuqs URL state (sector + capTier).
@@ -199,7 +199,7 @@ describe("HeatCell", () => {
 describe("ScreenerPage — structure", () => {
   it("renders the page heading", () => {
     render(<ScreenerPage />, { wrapper: makeWrapper() });
-    expect(screen.getByText("Instrument Screener")).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: /screener/i })).toBeInTheDocument();
   });
 
   it("renders the filter toggle button", () => {
@@ -454,15 +454,17 @@ describe("ScreenerPage — Wave B filter sections (PLAN-0051)", () => {
 
     await user.click(screen.getByRole("button", { name: /toggle screener filters/i }));
 
-    // Each section's header is rendered as a button (clickable to expand/collapse).
-    // We assert every section name is present so a future rename or accidental
-    // removal triggers a test failure.
-    expect(screen.getByRole("button", { name: /valuation/i })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /profitability/i })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /growth/i })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /leverage/i })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /technical/i })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /news & signals/i })).toBeInTheDocument();
+    // WHY within(filterRegion): the ScreenerHeader preset bar also contains a "Growth"
+    // chip (aria-pressed), which would cause getByRole("button", { name: /growth/i })
+    // to match two elements. Scoping to the filter region avoids the ambiguity.
+    const filterRegion = screen.getByRole("region", { name: /screener filters/i });
+
+    expect(within(filterRegion).getByRole("button", { name: /valuation/i })).toBeInTheDocument();
+    expect(within(filterRegion).getByRole("button", { name: /profitability/i })).toBeInTheDocument();
+    expect(within(filterRegion).getByRole("button", { name: /growth/i })).toBeInTheDocument();
+    expect(within(filterRegion).getByRole("button", { name: /leverage/i })).toBeInTheDocument();
+    expect(within(filterRegion).getByRole("button", { name: /technical/i })).toBeInTheDocument();
+    expect(within(filterRegion).getByRole("button", { name: /news & signals/i })).toBeInTheDocument();
   });
 
   it("Valuation section is expanded by default and shows P/E inputs", async () => {
