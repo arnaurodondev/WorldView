@@ -68,15 +68,23 @@ class DeepInfraNarrativeChatClient:
                     "role": "system",
                     "content": (
                         "You are a financial intelligence analyst. Given a structured "
-                        "entity profile, write a concise factual 2-4 sentence narrative. "
-                        "Output ONLY the narrative prose — no JSON, no preamble, no headers."
+                        "entity profile, write a concise factual narrative of 100-120 words. "
+                        "Output ONLY the narrative prose — no JSON, no preamble, no headers. "
+                        "IMPORTANT: Only describe facts directly supported by the provided "
+                        "relations and claims. Do not invent acquisition events, funding rounds, "
+                        "product launches, or leadership changes not present in the data. "
+                        "If the entity is not well-known or has limited data, write a "
+                        "conservative description based only on what is provided. "
+                        "Prefer a shorter, accurate description over a longer, speculative one."
                     ),
                 },
                 {"role": "user", "content": prompt},
             ],
             # NOT json_object: narrative prose is plain text.
+            # max_tokens capped at 180 to enforce the 100-120 word target and
+            # reduce padding-induced hallucination in low-data entities.
             temperature=0.2,
-            max_tokens=400,
+            max_tokens=180,
         )
         msg = response.choices[0].message
         text: str = msg.content or ""

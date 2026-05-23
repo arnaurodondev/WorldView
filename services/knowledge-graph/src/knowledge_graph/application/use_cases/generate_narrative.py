@@ -348,6 +348,23 @@ LIMIT 5
             )
             contra_rows = contra_result.fetchall()
 
+            # Top-3 most recent non-neutral claims for grounding context.
+            # Claims are extracted from ingested articles (intelligence_db.claims)
+            # and represent the highest-signal factual assertions about the entity.
+            # Using them prevents hallucination by anchoring the LLM to verified facts
+            # (PRD-0074 anti-hallucination hardening, 2026-05-23).
+            claims_result = await session.execute(
+                text("""
+SELECT claim_text FROM claims
+WHERE subject_entity_id = CAST(:entity_id AS uuid)
+  AND polarity != 'neutral'
+ORDER BY created_at DESC
+LIMIT 3
+"""),
+                {"entity_id": str(entity_id)},
+            )
+            claim_rows = claims_result.fetchall()
+
         relations = [
             {
                 "relation_id": str(row[0]),
@@ -369,6 +386,10 @@ LIMIT 5
             for row in contra_rows
         ]
 
+        # Extract claim_text strings from the result rows.
+        # claim_text is the first (and only) column selected.
+        claims: list[str] = [str(row[0]) for row in claim_rows if row[0]]
+
         return {
             "entity": {
                 "entity_id": str(entity_row[0]),
@@ -379,6 +400,9 @@ LIMIT 5
             "relations": relations,
             "articles": [],  # NOTE: S5 HTTP client not implemented in Wave C
             "contradictions": contradictions,
+            # Top-3 recent non-neutral claims from intelligence_db.claims.
+            # Populated by the extraction pipeline; empty list when no claims exist.
+            "claims": claims,
         }
 
     def _build_snapshot(self, entity_ctx: dict[str, Any]) -> tuple[dict[str, Any], str]:
@@ -393,6 +417,9 @@ LIMIT 5
             "relations": entity_ctx["relations"],
             "articles": [],
             "contradictions": entity_ctx["contradictions"],
+            # Include claims in the snapshot so that new claims arriving after the
+            # last generation trigger a fresh narrative (idempotency key changes).
+            "claims": entity_ctx.get("claims", []),
         }
         canonical_json = json.dumps(snapshot, sort_keys=True, default=str)
         snapshot_hash = hashlib.sha256(canonical_json.encode()).hexdigest()
@@ -476,7 +503,8 @@ LIMIT 5
             relations,
             entity_ctx.get("contradictions", []),
         )
-        prompt = self._build_prompt(entity_name, entity_type, clean_relations, clean_contradictions)
+        claims = entity_ctx.get("claims", [])
+        prompt = self._build_prompt(entity_name, entity_type, clean_relations, clean_contradictions, claims)
 
         # PLAN-0088 P0-7: free-form narrative chat path. When a dedicated
         # ``narrative_chat_client`` is wired (production: DeepInfra chat without
@@ -579,18 +607,43 @@ LIMIT 5
         entity_type: str,
         relations: list[dict[str, Any]],
         contradictions: list[dict[str, Any]],
+        claims: list[str] | None = None,
     ) -> str:
-        """Construct an LLM prompt for narrative generation."""
+        """Construct an LLM prompt for narrative generation.
+
+        Anti-hallucination hardening (2026-05-23):
+        - Claims (from intelligence_db.claims) are injected BEFORE the KG
+          relations section so the model grounds its output in verified facts.
+        - Explicit instructions forbid inventing events not present in the data.
+        - Output is capped at 100-120 words to reduce padding-induced speculation.
+        """
         relation_lines = "\n".join(
             f"- {r['canonical_type']} {r.get('object_name', '')} (confidence: {r['confidence']:.2f})"
             for r in relations[:10]
         )
         contradiction_lines = "\n".join(f"- Contradicted {c['canonical_type']} claim" for c in contradictions[:3])
+
         prompt = (
-            f"Write a factual, professional 2-4 sentence intelligence narrative about the "
-            f"entity described below. Focus on what is known from structured evidence.\n\n"
+            f"Write a factual, professional intelligence narrative (100-120 words maximum) about "
+            f"the entity described below.\n\n"
+            f"RULES:\n"
+            f"- Only describe facts directly supported by the provided relations and claims.\n"
+            f"- Do NOT invent acquisition events, funding rounds, product launches, or leadership "
+            f"changes not present in the data.\n"
+            f"- If the entity is not well-known or has limited data, write a conservative description "
+            f"based only on what is provided. Prefer a shorter, accurate description over a longer, "
+            f"speculative one.\n\n"
             f"Entity: {entity_name} ({entity_type})\n"
         )
+
+        # Grounding context from recent news claims — placed BEFORE KG relations so
+        # the model anchors to verified facts extracted from articles first.
+        if claims:
+            claim_lines = "\n".join(f"- {c}" for c in claims[:3])
+            prompt += (
+                f"\nVerified facts from recent news (ground your description primarily in these):\n" f"{claim_lines}\n"
+            )
+
         if relation_lines:
             prompt += f"\nKey relationships:\n{relation_lines}\n"
         if contradiction_lines:
