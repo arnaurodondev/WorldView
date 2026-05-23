@@ -437,7 +437,7 @@ class BriefingContextGatherer:
             min_score=0.4,
             granularity="section",
             include_entities=False,
-            source_types=["sec_filing", "earnings_transcript", "analyst_report"],
+            source_types=["sec_edgar", "sec_10k", "sec_10q", "sec_8k", "earnings_transcript"],
             search_type="ann",
             entity_ids=[UUID(entity_id)],
         )
