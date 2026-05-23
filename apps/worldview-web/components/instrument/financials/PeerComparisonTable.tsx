@@ -55,7 +55,6 @@ function fmtPct(v: number | null | undefined): string {
 
 export function PeerComparisonTable({
   peersData,
-  instrumentId,
   fundamentals,
 }: PeerComparisonTableProps) {
   const router = useRouter();

@@ -364,7 +364,7 @@ export function EdgeTooltipPanel({ tooltip }: { tooltip: EdgeTooltip }) {
         <div className="mt-1.5 space-y-1 border-t border-border/30 pt-1.5">
           {tooltip.evidence_snippets.slice(0, 2).map((snippet, i) => (
             <p key={i} className="text-[9px] text-muted-foreground/80 leading-tight line-clamp-2">
-              "{snippet}"
+              {`"${snippet}"`}
             </p>
           ))}
         </div>

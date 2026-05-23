@@ -43,7 +43,6 @@ export interface AnalystSidebarProps {
 export function AnalystSidebar({
   instrumentId,
   fundamentals,
-  snapshot,
 }: AnalystSidebarProps) {
   // WHY not spreading analyst fields: passing the entire fundamentals object
   // keeps this shell thin and avoids a 10-field prop explosion when the panel
