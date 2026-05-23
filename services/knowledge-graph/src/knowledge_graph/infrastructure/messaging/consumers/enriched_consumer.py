@@ -504,6 +504,11 @@ def _parse_raw_relations(data: list[dict[str, Any]]) -> list[RawRelation]:
                     chunk_id=UUID(d["chunk_id"]) if d.get("chunk_id") else None,
                     # PLAN-0062 F-019: cap pathological evidence text length.
                     evidence_text=_truncate_text_field(d.get("evidence_text"), field_name="evidence_text"),
+                    # BP-521: carry entity-type hints when the upstream message
+                    # includes them; used by materialize_graph to normalize
+                    # has_executive/employs direction without a DB lookup.
+                    subject_entity_type=d.get("subject_entity_type"),
+                    object_entity_type=d.get("object_entity_type"),
                 ),
             )
         # PLAN-0062 F-021: split into typed handlers — drop the ``data=`` echo

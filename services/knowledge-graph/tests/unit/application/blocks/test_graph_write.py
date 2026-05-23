@@ -1094,3 +1094,331 @@ class TestDeterministicCreatedAt:
         )
         params = _extract_events_insert_params(session)
         assert params["created_at"] == _DETERMINISTIC_CREATED_AT_FALLBACK
+
+
+# ---------------------------------------------------------------------------
+# BP-520 — Self-loop guard: subject_entity_id == object_entity_id → dropped
+# ---------------------------------------------------------------------------
+
+
+class TestSelfLoopGuard:
+    """BP-520: Evidence rows where subject == object must be silently dropped.
+
+    17% of rows historically had this pattern when the company context was
+    missing and the person entity resolved as both subject and object.
+    The DB promoter cannot insert self-loop edges so these rows accumulated
+    forever.  The guard in materialize_graph closes that accumulation path.
+    """
+
+    def test_self_loop_relation_not_inserted(self) -> None:
+        """A relation with subject == object must NOT reach evidence_repo."""
+        from knowledge_graph.application.blocks.graph_write import RawRelation, materialize_graph
+
+        entity_id = uuid4()
+        rel = RawRelation(
+            subject_entity_id=entity_id,
+            object_entity_id=entity_id,  # same → self-loop
+            raw_type="employs",
+            extraction_confidence=0.9,
+            evidence_date=_NOW,
+        )
+        evidence_repo = _make_evidence_repo()
+        asyncio.run(
+            materialize_graph(
+                doc_id=uuid4(),
+                source_type="news",
+                is_backfill=False,
+                relations=[rel],
+                canonical_types=["employs"],
+                canonical_semantic_modes=[None],
+                canonical_decay_classes=[None],
+                canonical_decay_alphas=[None],
+                canonical_base_confidences=[None],
+                events=[],
+                claims=[],
+                session=_make_session(),
+                relation_repo=_make_relation_repo(),
+                evidence_repo=evidence_repo,
+                outbox_repo=_make_outbox_repo(),
+            )
+        )
+        # Self-loop must be dropped — no write to evidence or relations table.
+        evidence_repo.insert_raw.assert_not_called()
+
+    def test_self_loop_relation_upsert_not_called(self) -> None:
+        """A relation with subject == object must NOT reach relation_repo.upsert."""
+        from knowledge_graph.application.blocks.graph_write import RawRelation, materialize_graph
+
+        entity_id = uuid4()
+        rel = RawRelation(
+            subject_entity_id=entity_id,
+            object_entity_id=entity_id,
+            raw_type="has_executive",
+            extraction_confidence=0.8,
+            evidence_date=_NOW,
+        )
+        relation_repo = _make_relation_repo()
+        asyncio.run(
+            materialize_graph(
+                doc_id=uuid4(),
+                source_type="news",
+                is_backfill=False,
+                relations=[rel],
+                canonical_types=["has_executive"],
+                canonical_semantic_modes=[None],
+                canonical_decay_classes=[None],
+                canonical_decay_alphas=[None],
+                canonical_base_confidences=[None],
+                events=[],
+                claims=[],
+                session=_make_session(),
+                relation_repo=relation_repo,
+                evidence_repo=_make_evidence_repo(),
+                outbox_repo=_make_outbox_repo(),
+            )
+        )
+        relation_repo.upsert.assert_not_called()
+
+    def test_self_loop_summary_counts_are_zero(self) -> None:
+        """Summary must report zero evidence rows and zero dirtied entities for a self-loop batch."""
+        from knowledge_graph.application.blocks.graph_write import RawRelation, materialize_graph
+
+        entity_id = uuid4()
+        rel = RawRelation(
+            subject_entity_id=entity_id,
+            object_entity_id=entity_id,
+            raw_type="employs",
+            extraction_confidence=0.9,
+            evidence_date=_NOW,
+        )
+        summary = asyncio.run(
+            materialize_graph(
+                doc_id=uuid4(),
+                source_type="news",
+                is_backfill=False,
+                relations=[rel],
+                canonical_types=["employs"],
+                canonical_semantic_modes=[None],
+                canonical_decay_classes=[None],
+                canonical_decay_alphas=[None],
+                canonical_base_confidences=[None],
+                events=[],
+                claims=[],
+                session=_make_session(),
+                relation_repo=_make_relation_repo(),
+                evidence_repo=_make_evidence_repo(),
+                outbox_repo=_make_outbox_repo(),
+            )
+        )
+        # evidence_rows_inserted tracks actual inserts — must be 0 for a self-loop.
+        assert summary.evidence_rows_inserted == 0
+        # No entities should be dirtied since the relation was dropped.
+        assert len(summary.entity_ids_to_dirty) == 0
+
+    def test_valid_relation_alongside_self_loop_still_inserted(self) -> None:
+        """A valid relation in the same batch as a self-loop must still be written."""
+        from knowledge_graph.application.blocks.graph_write import RawRelation, materialize_graph
+
+        entity_id = uuid4()
+        company_id = uuid4()
+        person_id = uuid4()
+        self_loop = RawRelation(
+            subject_entity_id=entity_id,
+            object_entity_id=entity_id,  # self-loop
+            raw_type="employs",
+            extraction_confidence=0.9,
+            evidence_date=_NOW,
+        )
+        valid = RawRelation(
+            subject_entity_id=company_id,
+            object_entity_id=person_id,
+            raw_type="employs",
+            extraction_confidence=0.8,
+            evidence_date=_NOW,
+        )
+        evidence_repo = _make_evidence_repo()
+        summary = asyncio.run(
+            materialize_graph(
+                doc_id=uuid4(),
+                source_type="news",
+                is_backfill=False,
+                relations=[self_loop, valid],
+                canonical_types=["employs", "employs"],
+                canonical_semantic_modes=[None, None],
+                canonical_decay_classes=[None, None],
+                canonical_decay_alphas=[None, None],
+                canonical_base_confidences=[None, None],
+                events=[],
+                claims=[],
+                session=_make_session(),
+                relation_repo=_make_relation_repo(),
+                evidence_repo=evidence_repo,
+                outbox_repo=_make_outbox_repo(),
+            )
+        )
+        # Only the valid relation should have been written.
+        assert summary.evidence_rows_inserted == 1
+        evidence_repo.insert_raw.assert_called_once()
+
+
+# ---------------------------------------------------------------------------
+# BP-521 — Direction normalization: has_executive/employs person→company swap
+# ---------------------------------------------------------------------------
+
+
+class TestDirectionNormalization:
+    """BP-521: has_executive/employs with person as subject must be swapped
+    to company → person before the upsert and evidence insert.
+
+    The LLM extraction can produce inverted triples like:
+      person has_executive company   (wrong)
+    when it should emit:
+      company has_executive person   (correct)
+
+    The fix swaps subject↔object in materialize_graph when entity-type hints
+    are present on RawRelation and the raw_type is has_executive or employs.
+    """
+
+    def _run_with_relation(
+        self,
+        rel: object,
+        canonical_type: str = "has_executive",
+    ) -> tuple[object, object, object]:
+        """Run materialize_graph with a single relation; return (relation_repo, evidence_repo, summary)."""
+        from knowledge_graph.application.blocks.graph_write import materialize_graph
+
+        relation_repo = _make_relation_repo()
+        evidence_repo = _make_evidence_repo()
+        summary = asyncio.run(
+            materialize_graph(
+                doc_id=uuid4(),
+                source_type="news",
+                is_backfill=False,
+                relations=[rel],  # type: ignore[list-item]
+                canonical_types=[canonical_type],
+                canonical_semantic_modes=[None],
+                canonical_decay_classes=[None],
+                canonical_decay_alphas=[None],
+                canonical_base_confidences=[None],
+                events=[],
+                claims=[],
+                session=_make_session(),
+                relation_repo=relation_repo,
+                evidence_repo=evidence_repo,
+                outbox_repo=_make_outbox_repo(),
+            )
+        )
+        return relation_repo, evidence_repo, summary
+
+    def test_has_executive_person_subject_gets_swapped(self) -> None:
+        """Person-as-subject has_executive must swap subject/object before upsert."""
+        from knowledge_graph.application.blocks.graph_write import RawRelation
+
+        person_id = uuid4()
+        company_id = uuid4()
+        rel = RawRelation(
+            subject_entity_id=person_id,  # person is subject — WRONG direction
+            object_entity_id=company_id,
+            raw_type="has_executive",
+            extraction_confidence=0.9,
+            evidence_date=_NOW,
+            subject_entity_type="person",
+            object_entity_type="financial_instrument",
+        )
+        relation_repo, evidence_repo, _ = self._run_with_relation(rel, "has_executive")
+
+        # After normalization the upsert must see company as subject, person as object.
+        upsert_kwargs = relation_repo.upsert.call_args.kwargs
+        assert (
+            upsert_kwargs["subject_entity_id"] == company_id
+        ), "BP-521: has_executive upsert should use company as subject after swap"
+        assert upsert_kwargs["object_entity_id"] == person_id
+
+        insert_kwargs = evidence_repo.insert_raw.call_args.kwargs
+        assert insert_kwargs["subject_entity_id"] == company_id
+        assert insert_kwargs["object_entity_id"] == person_id
+
+    def test_employs_person_subject_gets_swapped(self) -> None:
+        """Person-as-subject employs must swap subject/object before upsert."""
+        from knowledge_graph.application.blocks.graph_write import RawRelation
+
+        person_id = uuid4()
+        company_id = uuid4()
+        rel = RawRelation(
+            subject_entity_id=person_id,
+            object_entity_id=company_id,
+            raw_type="employs",
+            extraction_confidence=0.8,
+            evidence_date=_NOW,
+            subject_entity_type="person",
+            object_entity_type="organization",
+        )
+        relation_repo, evidence_repo, _ = self._run_with_relation(rel, "employs")
+
+        upsert_kwargs = relation_repo.upsert.call_args.kwargs
+        assert upsert_kwargs["subject_entity_id"] == company_id
+        assert upsert_kwargs["object_entity_id"] == person_id
+
+    def test_correct_direction_not_swapped(self) -> None:
+        """Company-as-subject has_executive must NOT be swapped (already correct)."""
+        from knowledge_graph.application.blocks.graph_write import RawRelation
+
+        person_id = uuid4()
+        company_id = uuid4()
+        rel = RawRelation(
+            subject_entity_id=company_id,  # company is subject — CORRECT direction
+            object_entity_id=person_id,
+            raw_type="has_executive",
+            extraction_confidence=0.9,
+            evidence_date=_NOW,
+            subject_entity_type="financial_instrument",
+            object_entity_type="person",
+        )
+        relation_repo, _, _ = self._run_with_relation(rel, "has_executive")
+
+        upsert_kwargs = relation_repo.upsert.call_args.kwargs
+        assert upsert_kwargs["subject_entity_id"] == company_id, "Correctly-directed has_executive must not be swapped"
+        assert upsert_kwargs["object_entity_id"] == person_id
+
+    def test_no_entity_types_no_swap(self) -> None:
+        """When entity type hints are absent (None), direction must not be changed."""
+        from knowledge_graph.application.blocks.graph_write import RawRelation
+
+        person_id = uuid4()
+        company_id = uuid4()
+        rel = RawRelation(
+            subject_entity_id=person_id,
+            object_entity_id=company_id,
+            raw_type="has_executive",
+            extraction_confidence=0.7,
+            evidence_date=_NOW,
+            # No subject_entity_type / object_entity_type — normalization must be skipped.
+        )
+        relation_repo, _, _ = self._run_with_relation(rel, "has_executive")
+
+        upsert_kwargs = relation_repo.upsert.call_args.kwargs
+        # Without type hints the order is preserved as-is.
+        assert upsert_kwargs["subject_entity_id"] == person_id
+        assert upsert_kwargs["object_entity_id"] == company_id
+
+    def test_unrelated_relation_type_not_swapped(self) -> None:
+        """Non has_executive/employs relations must never be swapped regardless of types."""
+        from knowledge_graph.application.blocks.graph_write import RawRelation
+
+        person_id = uuid4()
+        company_id = uuid4()
+        rel = RawRelation(
+            subject_entity_id=person_id,
+            object_entity_id=company_id,
+            raw_type="competes_with",  # unaffected relation type
+            extraction_confidence=0.7,
+            evidence_date=_NOW,
+            subject_entity_type="person",
+            object_entity_type="financial_instrument",
+        )
+        relation_repo, _, _ = self._run_with_relation(rel, "competes_with")
+
+        upsert_kwargs = relation_repo.upsert.call_args.kwargs
+        # Direction unchanged for unrelated types.
+        assert upsert_kwargs["subject_entity_id"] == person_id
+        assert upsert_kwargs["object_entity_id"] == company_id
