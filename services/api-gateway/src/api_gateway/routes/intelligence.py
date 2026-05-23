@@ -148,7 +148,7 @@ async def get_entity_graph(
     limit: int = Query(default=40, ge=1, le=200),
     depth: int = Query(default=1, ge=1, le=3),
     confidence_breakdown: bool = Query(default=False),
-    focus_node: str | None = Query(default=None),
+    focus_node: str | None = Query(default=None, max_length=36),
 ) -> Any:
     """Proxy GET /api/v1/entities/{entity_id}/graph → S7 Knowledge Graph.
 
@@ -237,9 +237,17 @@ async def get_entity_graph(
     # Fix: always re-fetch depth=1 (fast SQL, no AGE) and merge its nodes+edges into
     # the higher-depth result. The union is then orphan-filtered by _transform_graph_response.
     if depth > 1:
+        # WHY share filter params (F-205): min_confidence and semantic_mode from
+        # the caller apply to all depths — omitting them from the depth=1 merge
+        # call would surface lower-quality edges than the primary call filtered out.
+        depth1_params: dict[str, str] = {"limit": str(limit)}
+        if "min_confidence" in raw_params:
+            depth1_params["min_confidence"] = raw_params["min_confidence"]
+        if "semantic_mode" in raw_params:
+            depth1_params["semantic_mode"] = raw_params["semantic_mode"]
         depth1_resp = await clients.knowledge_graph.get(
             f"/api/v1/entities/{entity_id}/graph",
-            params={"limit": str(limit)},  # no depth param → depth=1 SQL path
+            params=depth1_params,  # no depth param → depth=1 SQL path
             headers=headers,
         )
         if depth1_resp.status_code == 200:
@@ -278,7 +286,7 @@ async def get_entity_graph(
 
 
 @router.get("/entities/{entity_id}/contradictions")
-async def get_entity_contradictions(entity_id: str, request: Request) -> Any:
+async def get_entity_contradictions(entity_id: UUID, request: Request) -> Any:
     """Proxy GET /api/v1/entities/{entity_id}/contradictions → S7 Knowledge Graph.
 
     Requires authentication. Returns detected contradictions for the entity.

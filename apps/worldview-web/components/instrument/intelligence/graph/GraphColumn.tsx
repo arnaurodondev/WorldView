@@ -330,8 +330,8 @@ export function GraphColumn({ entityId, selectedNodeId, onNodeSelect, onNodeClic
             <EntityGraph
               data={filteredGraph}
               centerEntityId={entityId}
+              selectedNodeId={selectedNodeId}
               onNodeClick={handleNodeClick}
-
               onEdgeClick={onEdgeSelect}
             />
           </EntityGraphErrorBoundary>

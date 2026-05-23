@@ -338,6 +338,140 @@ async def test_entity_graph_depth_param(authed_app, authed_mock_clients) -> None
 
 
 @pytest.mark.asyncio
+async def test_transform_graph_response_orphan_filter() -> None:
+    """_transform_graph_response strips orphan edges and orphan nodes.
+
+    F-001: the orphan filter logic is pure and testable without an HTTP stack.
+    Two cases:
+    (a) an edge referencing an entity_id absent from the nodes dict is removed
+    (b) a node that only appeared as an edge endpoint — now removed — becomes
+        orphaned and is also removed (unless it is the center entity).
+    """
+    from api_gateway.routes.intelligence import _transform_graph_response
+
+    center_id = "00000000-0000-0000-0000-000000000001"
+    connected_id = "00000000-0000-0000-0000-000000000002"
+    ghost_id = "00000000-0000-0000-0000-000000000099"  # in entities but in no relation
+
+    s7_payload = {
+        "center": {"entity_id": center_id, "canonical_name": "Center Co.", "entity_type": "company"},
+        "relations": [
+            {
+                "relation_id": "rel-1",
+                "subject_entity_id": center_id,
+                "object_entity_id": connected_id,
+                "canonical_type": "competes_with",
+                "confidence": 0.8,
+                "decay_class": "DURABLE",
+                "relation_summary": None,
+            },
+            # Edge whose object is absent from entities dict → must be filtered out.
+            {
+                "relation_id": "rel-ghost",
+                "subject_entity_id": center_id,
+                "object_entity_id": ghost_id,
+                "canonical_type": "partner_of",
+                "confidence": 0.7,
+                "decay_class": "MEDIUM",
+                "relation_summary": None,
+            },
+        ],
+        "entities": {
+            connected_id: {"entity_id": connected_id, "canonical_name": "Connected Co.", "entity_type": "company"},
+            # ghost_id deliberately absent — simulates AGE returning entity_id not in entities dict.
+        },
+    }
+
+    result = _transform_graph_response(s7_payload)
+
+    node_ids = {n["id"] for n in result["nodes"]}
+    edge_ids = {e["id"] for e in result["edges"]}
+
+    # Center must always be present.
+    assert center_id in node_ids
+    # Connected node (has a valid edge) must be present.
+    assert connected_id in node_ids
+    # Ghost id was absent from entities dict → its edge and itself must be absent.
+    assert ghost_id not in node_ids
+    assert "rel-ghost" not in edge_ids
+    # Valid edge must remain.
+    assert "rel-1" in edge_ids
+
+
+@pytest.mark.asyncio
+async def test_entity_graph_depth1_merge_with_real_data(authed_app, authed_mock_clients) -> None:
+    """depth>1 merge integrates depth=1 nodes+edges into the primary result.
+
+    F-002: the previous test used empty payloads so the merge loop never ran.
+    This test uses payloads where depth=2 returns only a depth-2 orphan node
+    and depth=1 returns the connected neighbor — verifying that after merge the
+    depth-1 neighbor and its edge are present in the final response.
+    """
+    entity_id = "00000000-0000-0000-0000-000000000001"
+    depth2_entity = "00000000-0000-0000-0000-000000000002"
+    depth1_entity = "00000000-0000-0000-0000-000000000003"
+
+    # depth=2 primary call: returns a depth-2 node with NO relations (AGE bug).
+    depth2_payload = {
+        "center": {"entity_id": entity_id, "canonical_name": "Center", "entity_type": "company"},
+        "relations": [],  # no edges → depth2_entity becomes an orphan after filter
+        "entities": {
+            depth2_entity: {"entity_id": depth2_entity, "canonical_name": "Depth2 Co.", "entity_type": "company"},
+        },
+    }
+    # depth=1 merge call: returns the direct neighbor with 1 edge.
+    depth1_payload = {
+        "center": {"entity_id": entity_id, "canonical_name": "Center", "entity_type": "company"},
+        "relations": [
+            {
+                "relation_id": "rel-d1",
+                "subject_entity_id": entity_id,
+                "object_entity_id": depth1_entity,
+                "canonical_type": "employs",
+                "confidence": 0.9,
+                "decay_class": "PERMANENT",
+                "relation_summary": None,
+            }
+        ],
+        "entities": {
+            depth1_entity: {"entity_id": depth1_entity, "canonical_name": "Depth1 Co.", "entity_type": "company"},
+        },
+    }
+
+    def _make_resp(payload: dict) -> MagicMock:
+        r = MagicMock(spec=httpx.Response)
+        r.status_code = 200
+        r.json.return_value = payload
+        return r
+
+    authed_mock_clients.knowledge_graph.get = AsyncMock(
+        side_effect=[_make_resp(depth2_payload), _make_resp(depth1_payload)]
+    )
+
+    transport = ASGITransport(app=authed_app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        resp = await client.get(
+            f"/v1/entities/{entity_id}/graph",
+            params={"depth": "2"},
+            headers={"Authorization": f"Bearer {_make_jwt()}"},
+        )
+
+    assert resp.status_code == 200
+    body = resp.json()
+    node_ids = {n["id"] for n in body["nodes"]}
+    edge_ids = {e["id"] for e in body["edges"]}
+
+    # Center must always be present.
+    assert entity_id in node_ids
+    # depth=1 entity must be present after merge (it has a valid edge).
+    assert depth1_entity in node_ids
+    # depth=2 entity had no edges → orphan filter removes it even after merge.
+    assert depth2_entity not in node_ids
+    # The depth=1 edge must be present.
+    assert "rel-d1" in edge_ids
+
+
+@pytest.mark.asyncio
 async def test_entity_contradictions_proxy(authed_app, authed_mock_clients) -> None:
     """GET /v1/entities/{id}/contradictions proxied to S7."""
     authed_mock_clients.knowledge_graph.get = AsyncMock(

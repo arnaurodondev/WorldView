@@ -120,4 +120,28 @@ describe("InlineSelectionPanel", () => {
     fireEvent.click(closeBtn);
     expect(onClear).toHaveBeenCalledTimes(1);
   });
+
+  // F-004 — edge mode: no evidence AND no summary shows empty-state message
+  it("shows 'No evidence or summary available' when edge has no snippets and no summary", () => {
+    render(
+      <InlineSelectionPanel
+        selectedNode={null}
+        selectedEdge={{ ...mockEdge, evidence_snippets: [], relation_summary: undefined }}
+        onClear={vi.fn()}
+      />,
+    );
+    expect(screen.getByText(/no evidence or summary available/i)).toBeInTheDocument();
+  });
+
+  // F-005 — node mode: singular "connection" (not "connections") when degree === 1
+  it("renders '1 connection' (singular) when node degree is 1", () => {
+    render(
+      <InlineSelectionPanel
+        selectedNode={{ ...mockNode, degree: 1, edges: [mockNode.edges[0]] }}
+        selectedEdge={null}
+        onClear={vi.fn()}
+      />,
+    );
+    expect(screen.getByText(/1 connection$/i)).toBeInTheDocument();
+  });
 });

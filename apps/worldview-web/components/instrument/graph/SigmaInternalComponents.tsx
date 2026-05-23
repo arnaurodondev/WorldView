@@ -272,6 +272,8 @@ interface FilterControllerProps {
   minWeight: number;
   searchQuery: string;
   graphData: EntityGraphData;
+  /** Currently selected node id — highlighted with a ring and enlarged. */
+  selectedNodeId?: string | null;
 }
 
 // WHY declare outside component: stable reference, avoids recreating in the edgeReducer
@@ -290,7 +292,7 @@ function hexToRgba(hex: string, alpha: number): string {
   return `rgba(${r},${g},${b},${alpha})`;
 }
 
-export function FilterController({ activeRelFilter, minWeight, searchQuery }: FilterControllerProps) {
+export function FilterController({ activeRelFilter, minWeight, searchQuery, selectedNodeId }: FilterControllerProps) {
   const sigma = useSigma();
 
   useEffect(() => {
@@ -316,6 +318,18 @@ export function FilterController({ activeRelFilter, minWeight, searchQuery }: Fi
         return { ...data, hidden: false, color: edgeColor };
       },
       nodeReducer: (node: string, data: Record<string, unknown>) => {
+        // WHY selection ring first: the selected node always stays visible even when
+        // the search query would otherwise dim it. Highlighted node gets a ring
+        // (borderColor + borderSize) and a size boost for clear visual feedback.
+        if (selectedNodeId && node === selectedNodeId) {
+          return {
+            ...data,
+            highlighted: true,
+            size: ((data.size as number) ?? 6) * 1.5,
+            borderColor: "#EAB308", // --chart-2 (Bloomberg yellow) ring
+            borderSize: 2,
+          };
+        }
         if (!searchQuery) return data;
         const label = (data.label as string ?? "").toLowerCase();
         if (!label.includes(searchQuery.toLowerCase())) {
@@ -327,7 +341,7 @@ export function FilterController({ activeRelFilter, minWeight, searchQuery }: Fi
       },
     });
     sigma.refresh();
-  }, [sigma, activeRelFilter, minWeight, searchQuery]);
+  }, [sigma, activeRelFilter, minWeight, searchQuery, selectedNodeId]);
 
   return null;
 }

@@ -24,6 +24,10 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
+pytestmark = pytest.mark.unit
+
 _MIGRATIONS_DIR = Path(__file__).resolve().parent.parent.parent / "alembic" / "versions"
 _MIGRATION_0038 = _MIGRATIONS_DIR / "0038_seed_demo_entities.py"
 

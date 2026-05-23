@@ -115,12 +115,14 @@ export interface EntityGraphProps {
   ) => void;
   /** Called when user clicks an edge — fires full edge info from graphology attrs. */
   onEdgeClick?: (info: SelectedEdgeInfo) => void;
+  /** Node id currently selected by the parent — renders a yellow ring + size boost in sigma. */
+  selectedNodeId?: string | null;
 }
 
 // Re-export for consumers (e.g. GraphColumn, IntelligenceTab)
 export type { SelectedEdgeInfo };
 
-export function EntityGraph({ data, centerEntityId, onNodeClick, onEdgeClick }: EntityGraphProps) {
+export function EntityGraph({ data, centerEntityId, onNodeClick, onEdgeClick, selectedNodeId }: EntityGraphProps) {
   const [nodeTooltip, setNodeTooltip] = useState<NodeTooltip | null>(null);
   const [edgeTooltip, setEdgeTooltip] = useState<EdgeTooltip | null>(null);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -235,6 +237,7 @@ export function EntityGraph({ data, centerEntityId, onNodeClick, onEdgeClick }: 
             minWeight={minWeight}
             searchQuery={searchQuery}
             graphData={data}
+            selectedNodeId={selectedNodeId}
           />
           {/* SA-3 (2026-05-10): auto-fit camera when entity changes */}
           <CameraAutoFit centerEntityId={centerEntityId} />

@@ -26,8 +26,6 @@ from pydantic import BaseModel
 from sqlalchemy import UUID, and_, bindparam, cast, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from market_data.infrastructure.db.models.fundamental_metrics import FundamentalMetricModel
-from market_data.infrastructure.db.models.instruments import InstrumentModel
 from observability.logging import get_logger  # type: ignore[import-untyped]
 
 logger = get_logger(__name__)  # type: ignore[no-any-return]
@@ -103,6 +101,13 @@ async def get_peers(
     WHY AsyncSession via read_session_factory: this is a read-only query
     (R27). The session comes from the replica factory wired at startup.
     """
+    # WHY lazy imports: IG-LAYER-002 / R16 forbid module-level infrastructure
+    # imports in API modules. Models are only needed inside this handler.
+    from market_data.infrastructure.db.models.fundamental_metrics import (
+        FundamentalMetricModel,
+    )
+    from market_data.infrastructure.db.models.instruments import InstrumentModel
+
     # ── Valkey cache check (best-effort) ────────────────────────────────────
     valkey = getattr(request.app.state, "valkey", None)
     cache_key = f"peers:v1:{instrument_id}:{limit}"
