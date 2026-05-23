@@ -114,7 +114,7 @@ class InternalJWTMiddleware(BaseHTTPMiddleware):
         skip_prefixes: Iterable[str] = DEFAULT_SKIP_PREFIXES,
         valkey_attr: str = "valkey",
         jti_key_includes_service_name: bool = False,
-        skip_verification_log_level: str = "critical",
+        skip_verification_log_level: str = "warning",
         # W2-05 follow-up: default flipped False → True (2026-05-20) because all
         # currently-known readyz handlers across the 9 backends read
         # ``app.state._internal_jwt_skip_verification`` to decide whether the
@@ -371,10 +371,12 @@ class InternalJWTMiddleware(BaseHTTPMiddleware):
         Note: the dispatcher calls ``await call_next(request)`` after this
         hook returns ``None``.
         """
-        # Demoted from CRITICAL → DEBUG in market-data; default keeps CRITICAL
-        # parity with the historical per-service behaviour.  Subclasses can
-        # override this method entirely to log at a different level.
-        logger.critical(
+        # Demoted from CRITICAL → DEBUG: skip_verification=True is the expected
+        # dev/E2E path (documented in docker.env).  Logging at CRITICAL produced
+        # ~1800 CRITICAL lines per 10 min, drowning real alert signals.
+        # The startup log records internal_jwt_skip_verification_enabled at WARNING
+        # once at boot, which is sufficient for ops awareness.
+        logger.debug(
             "internal_jwt_unverified_decode",
             detail="Decoding JWT WITHOUT signature verification (skip_verification=True).",
         )

@@ -81,7 +81,7 @@ class InternalJWTMiddleware(_Shared):
 
     async def _unverified_decode(self, request: Request, token: str) -> Response | None:
         """Accept HS256 OR RS256 in dev mode (parity with the original S10 path)."""
-        logger.critical(
+        logger.debug(
             "internal_jwt_unverified_decode",
             detail="Decoding JWT WITHOUT signature verification (skip_verification=True).",
         )

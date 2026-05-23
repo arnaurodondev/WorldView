@@ -41,40 +41,58 @@ logger = get_logger(__name__)  # type: ignore[no-any-return]
 
 _EXTRACT_MODEL_ID = "kg-entity-profile-v1"
 
-# Canonical entity types seeded in migration 0001. The code-level validation
-# here mirrors the DB CHECK constraint added by migration 0021 (T-72-3-02).
+# Canonical entity types matching the DB CHECK constraint installed by
+# migration 0039 (``ck_canonical_entities_entity_type``).  Any value that
+# does NOT appear in this frozenset is remapped to ``"unknown"`` below.
 _VALID_ENTITY_TYPES: frozenset[str] = frozenset(
     {
-        "company",
         "financial_instrument",
         "person",
-        "organization",
-        "country",
-        "currency",
-        "commodity",
-        "index",
-        "sector",
-        "concept",
         "event",
-        "other",
+        "sector",
+        "industry",
+        "macro_indicator",
+        "place",
+        "product",
+        "index",
+        "currency",
+        "unknown",
     }
 )
 
-# Map legacy or LLM-invented aliases to the canonical type.
-# Includes types emitted by entity_profile.py v1.0 prompt (pre-T-72-3-02).
+# Map legacy or LLM-invented aliases to a canonical type.
+# Migration 0039 defines the authoritative remap for DB values; this dict
+# mirrors that mapping for values that arrive via the LLM extraction path
+# before they ever reach the DB.
 _ENTITY_TYPE_ALIASES: dict[str, str] = {
-    "corp": "company",
-    "corporation": "company",
-    "enterprise": "company",
-    "firm": "company",
-    "business": "company",
-    "organisation": "organization",
-    "inst": "organization",
-    "institution": "organization",
-    # Legacy v1.0 prompt types not in the canonical list:
-    "regulator": "organization",
+    # company → financial_instrument (mirrors migration 0039 "company-with-ticker"
+    # path; we don't have ticker availability here so we always use FI as the
+    # closest canonical type for a named company).
+    "company": "financial_instrument",
+    "corp": "financial_instrument",
+    "corporation": "financial_instrument",
+    "enterprise": "financial_instrument",
+    "firm": "financial_instrument",
+    "business": "financial_instrument",
+    # organization variants → unknown (migration 0039 §2c)
+    "organization": "unknown",
+    "organisation": "unknown",
+    "inst": "unknown",
+    "institution": "unknown",
+    "regulator": "unknown",
+    # country → place (migration 0039 §2b)
+    "country": "place",
+    "nation": "place",
+    "region": "place",
+    # other legacy values → unknown (migration 0039 §2c)
+    "other": "unknown",
+    "concept": "unknown",
+    "commodity": "unknown",
+    # fund is a tradable financial product
     "fund": "financial_instrument",
-    "macro_indicator": "concept",
+    # macro_indicator is canonical; alias kept for older prompt variants that
+    # emitted it as "macro indicator" (with space → underscore normalisation
+    # already applied before this dict is consulted).
 }
 
 
@@ -229,9 +247,9 @@ async def persist_enrichment(
             "provisional_enrichment_invalid_entity_type",
             raw_type=_raw_type,
             mention_text=mention_text,
-            defaulting_to="other",
+            defaulting_to="unknown",
         )
-        entity_type = "other"
+        entity_type = "unknown"
     # Clamp ticker/isin to DB column widths (varchar(20)); discard if malformed.
     # Qwen3.5-0.8B occasionally returns oversized values despite prompt instructions.
     _ticker_raw: str | None = profile.get("ticker")

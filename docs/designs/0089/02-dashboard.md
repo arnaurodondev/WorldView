@@ -6,9 +6,10 @@
 > (c) what changed since last login. Current dashboard fails (b) and is too
 > spaced for (a)/(c).
 
-Status: **proposed**
+Status: **revised**
 Author: agent-dashboard
 Date: 2026-05-19
+Revised: 2026-05-22 (revise-prd audit — R-001..R-006 + E-01..E-05 applied)
 Shared tokens: see `_INDEX.md` §"Shared design tokens" — all sizes/colors below
 reference that scale. No new tokens introduced.
 
@@ -124,7 +125,7 @@ Pending that doc, this is the working catalogue from grep of widgets +
 | Holdings for portfolio | `S9 GET /v1/portfolios/{id}/holdings` | `Holding[]` w/ qty, avg_cost, instrument_id | YES (but only `qty` rendered) |
 | Live quotes (batch) | `S9 POST /v1/quotes/batch` | `{ [iid]: Quote }` w/ price, day_change, day_change_pct | YES |
 | Portfolio performance series | `S9 GET /v1/portfolios/{id}/performance?period=` | `{ points: [{t, value}] }` | YES (sparkline) |
-| Portfolio KPIs (NEW — not currently surfaced) | `S9 GET /v1/portfolios/{id}/summary` | `{ total_value, cost_basis, unrealized_pnl, unrealized_pnl_pct, day_pnl, day_pnl_pct, mtd_pnl_pct, ytd_pnl_pct, cash_balance }` | **NO — backend has it (PortfolioSummaryService); widget does not consume it** |
+| Portfolio KPIs (computed client-side — no dedicated summary endpoint) | Composed from: `S9 GET /v1/portfolio/{id}/bundle` (holdings + value_history) + `S9 POST /v1/quotes/batch` (live prices) + `S9 GET /v1/portfolios/{id}/exposure` (cash balance) | NLV=Σ(qty×price), cost=Σ(qty×avg_cost), unrealPnl=NLV−cost, dayPnl=Σ(qty×quote.day_change), cash=exposure.cash, MTD%=(NLV−first_of_month_value)/first_of_month_value, YTD%=(NLV−jan1_value)/jan1_value | **NO — `GET /v1/portfolios/{id}/summary` does NOT exist and is NOT needed. All 8 KPIs are computable from the three endpoints above. The W2 `usePortfolioMetrics` hook already computes NLV/unrealized/day. MTD/YTD require slicing value_history snapshots.** |
 | Top movers (universe) | `S9 GET /v1/market/top-movers?bucket=gainers\|losers&limit=` | `Mover[]` w/ ticker, %chg, price, sector | YES |
 | Sector heatmap | `S9 GET /v1/market/heatmap?period=` | `Sector[]` w/ name, market_cap, day_change_pct | YES |
 | Market snapshot (indices) | `S9 POST /v1/quotes/batch` for SPY/QQQ/DIA/VIX/TLT/UUP/GLD/BTCUSD | `Quote[]` | YES (MarketSnapshotWidget — currently only 4 tickers) |
@@ -132,15 +133,44 @@ Pending that doc, this is the working catalogue from grep of widgets +
 | Prediction markets | `S9 GET /v1/signals/prediction-markets` | `PredictionMarket[]` w/ question, yes_pct, volume_usd | YES |
 | Economic calendar | `S9 GET /api/v1/fundamentals/economic-calendar` | `EconomicEvent[]` w/ name, country, importance, scheduled_at, actual, forecast, previous | YES |
 | Earnings calendar | `S9 GET /v1/fundamentals/earnings-calendar` | `EarningsEvent[]` w/ ticker, when (BMO/AMC), eps_est, eps_actual, revenue_est | YES |
-| Portfolio-relevant news | `S9 GET /v1/news/top?limit=20` filtered client-side | `RankedArticle[]` | YES (PortfolioNewsWidget) |
-| Alerts (recent) | SSE stream + `S9 GET /api/v1/alerts?acknowledged=false&limit=` | `Alert[]` w/ severity, title, ticker, ts | YES |
+| Portfolio-relevant news | `S9 GET /v1/news/top?entity_ids={ids}&limit=10` — backend-filtered by holding entity_ids (E-03; previously client-side filtered from limit=20) | `RankedArticle[]` | YES (PortfolioNewsWidget) |
+| Alerts (recent) | SSE stream + `S9 GET /v1/alerts/pending` | `Alert[]` w/ severity, title, ticker, ts | YES |
 | Watchlist (in shell, not dashboard) | `S9 GET /v1/watchlists` | — | (handled by `01-global-shell.md`) |
 | Dashboard snapshot warm-up | `S9 GET /v1/dashboard/snapshot` | bundled cache prime | YES (prefetcher) |
 
+### 3.1 Portfolio KPI data strategy (R-001 resolution)
+
+`GET /v1/portfolios/{id}/summary` does **not** exist and does not need to be built.
+All 8 KPI values for the TopOfPortfolio widget are derivable from existing endpoints:
+
+| KPI | Source |
+|---|---|
+| NLV | Σ(holding.quantity × live_price) — from bundle holdings + batch quotes |
+| Cost basis | Σ(holding.quantity × holding.average_cost) — from bundle |
+| Cash balance | `exposure.cash` — from `GET /v1/portfolios/{id}/exposure` |
+| Unrealized P&L | NLV − cost_basis (computed) |
+| Unrealized P&L % | (NLV − cost) / cost × 100 (computed) |
+| Day P&L | Σ(holding.quantity × quote.day_change) — from batch quotes |
+| MTD % | (NLV − first_of_month_value) / first_of_month_value — slice value_history |
+| YTD % | (NLV − jan_1_value) / jan_1_value — slice value_history |
+
+**Data fetch strategy**: Use `GET /v1/portfolio/{id}/bundle` as the primary call (returns
+portfolio metadata, holdings, and value_history in one round-trip). Issue
+`POST /v1/quotes/batch` for live prices and `GET /v1/portfolios/{id}/exposure` for
+current cash. The W2 `usePortfolioMetrics` hook already implements NLV/unrealized/day P&L;
+extend it to slice value_history for MTD/YTD.
+
+**Per-portfolio model**: KPIs are scoped to the **selected portfolio** (one at a time via
+the `[Demo · Live · Paper ▾]` dropdown). They are NOT aggregated across all portfolios.
+Selecting a different portfolio re-fetches bundle + exposure for that `portfolio_id`.
+
+---
+
 **Data the user explicitly mentioned as missing or under-surfaced**:
-- *"User positions not clearly displayed"* → `GET /v1/portfolios/{id}/holdings`
-  + `POST /v1/quotes/batch` + `GET /v1/portfolios/{id}/summary`. All three exist.
-  The widget just doesn't render most of it.
+- *"User positions not clearly displayed"* → `GET /v1/portfolio/{id}/bundle`
+  (holdings + value_history) + `POST /v1/quotes/batch` + `GET /v1/portfolios/{id}/exposure`
+  (cash). All endpoints exist — see §3.1 for KPI derivation. The widget just doesn't
+  render most of it.
 - Morning Brief is already visible but takes too much vertical real estate
   collapsed (~120-160px). New design caps it at 96px collapsed (header + 2-line
   summary + chip strip on one row).
@@ -257,27 +287,32 @@ All new/changed files. ✚ = new, ✱ = renamed/major rewrite, ☐ = unchanged.
 | `components/dashboard/MarketStrip.tsx` | ✚ | ~180 | R2 — 8 cell market strip (replaces `MarketSnapshotWidget`) | `tickers?: string[]` (default 8) |
 | `components/portfolio/TopOfPortfolio.tsx` | ✚ | ~280 | R3 — full portfolio widget. Two children: `PortfolioKpiStrip` + `PortfolioPositionsTable` + `PortfolioPerfSparkline` | `portfolioId?: string` |
 | `components/portfolio/PortfolioKpiStrip.tsx` | ✚ | ~90 | NLV / Cost / Cash / Day P&L / Unr P&L / MTD / YTD — 8 metric cells in 2×4 grid | `summary: PortfolioSummaryDto` |
-| `components/portfolio/PortfolioPositionsTable.tsx` | ✚ | ~160 | 5 visible rows × 7 cols (ticker, qty, avg, mkt, mkt val, unr P&L, day P&L, weight) — scroll for more | `holdings: HoldingWithQuote[]`, `maxRows?: number = 10` |
-| `components/portfolio/PortfolioPerfSparkline.tsx` | ✚ | ~70 | 1D/5D/1M/3M/YTD period chips + sparkline (130×40) | `series: PerfPoint[]`, `period: Period` |
+| `components/portfolio/PortfolioPositionsTable.tsx` | ✚ | ~160 | 5 visible rows × 7 cols (ticker, qty, avg, mkt, mkt val, unr P&L, day P&L, weight) — scroll for more. Use W2 `AssetTypeBadge` in TICKER column (E-02) | `holdings: HoldingWithQuote[]`, `maxRows?: number = 10` |
+| `components/portfolio/PortfolioPerfSparkline.tsx` | ✚ | ~70 | 1D/5D/1M/3M/YTD period chips + sparkline (130×40) — **base on W2 `PerformanceChartPanel` (E-01)** | `series: PerfPoint[]`, `period: Period` |
 | `components/dashboard/GainersWidget.tsx` | ✚ | ~120 | R4 col 1 — 6-row gainers table (split from current `MoversWidgetTabs` MARKET tab) | `limit?: number = 8` |
 | `components/dashboard/LosersWidget.tsx` | ✚ | ~120 | R4 col 2 — 6-row losers table | `limit?: number = 8` |
 | `components/dashboard/AiSignalsWidget.tsx` | ☐ | ~150 | R4 col 3 — unchanged | none |
 | `components/dashboard/PredictionMarketsWidget.tsx` | ✱ | ~200 | R4 col 4 — same data, denser 22px row table | none |
 | `components/dashboard/SectorHeatmapWidget.tsx` | ✱ | ~250 | R5 col 1 — treemap (existing, slight CSS density) | none |
-| `components/dashboard/EarningsCalendarWidget.tsx` | ☐ | ~180 | R5 col 2 — unchanged | none |
+| `components/dashboard/EarningsCalendarWidget.tsx` | ✱ | ~200 | R5 col 2 — adds "My holdings" toggle chip (E-04); filters by portfolio tickers when active | `portfolioTickers?: Set<string>` |
 | `components/dashboard/EconomicCalendar.tsx` | ☐ | ~180 | R5 col 3 — unchanged | none |
-| `components/dashboard/PortfolioNewsWidget.tsx` | ☐ | ~200 | R6 col 1 — unchanged | none |
+| `components/dashboard/PortfolioNewsWidget.tsx` | ✱ | ~200 | R6 col 1 — switches to backend `entity_ids=` filter (E-03); drops client-side filtering | `entityIds: string[]` |
 | `components/dashboard/RecentAlerts.tsx` | ✱ | ~180 | R6 col 2 — adds severity dots column; otherwise unchanged | none |
 | `components/dashboard/TopNewsWidget.tsx` | ✚ | ~140 | R6 col 3 — global top news (split from PortfolioNewsWidget; portfolio one stays filtered) | `limit?: number = 12` |
 | `components/dashboard/MoversWidgetTabs.tsx` | DELETE | — | Replaced by separate Gainers + Losers widgets | — |
 | `components/dashboard/MarketSnapshotWidget.tsx` | DELETE | — | Replaced by `MarketStrip` | — |
 | `components/dashboard/PortfolioSummary.tsx` | DELETE | — | Replaced by `TopOfPortfolio` | — |
 
-### Shared primitives reused
-- `components/ui/sparkline.tsx` (existing)
-- `components/ui/data-table.tsx` (existing — used by all R4/R5/R6 tables)
-- `components/ui/severity-dot.tsx` (existing — for alerts)
-- `components/ui/period-tabs.tsx` (existing — 1D/5D/1M/3M/YTD)
+### Shared primitives required
+- `components/ui/sparkline.tsx` (**✚ NEW — must create** — 60×20px and 130×40px variants)
+- `components/ui/data-table.tsx` (**✚ NEW — must create** — used by all R4/R5/R6 tables; 22px rows, monospaced numeric cells)
+- `components/ui/severity-dot.tsx` (**✚ NEW — must create** — HIGH=text-negative, MED=text-warning, LOW=text-muted-foreground)
+- `components/ui/period-tabs.tsx` (**✚ NEW — must create** — 1D/5D/1M/3M/YTD chip strip)
+
+### W2 components available for reuse (saves ~2 days of duplicate work)
+- `components/portfolio/PerformanceChartPanel.tsx` — period tabs + sparkline already shipped in W2; use as `PortfolioPerfSparkline` base (E-01)
+- `components/portfolio/AssetTypeBadge.tsx` — equity/crypto/ETF chip with correct palette colors; use in `PortfolioPositionsTable` TICKER column (E-02)
+- `components/portfolio/SemanticHoldingsTable.tsx` — W2 holdings table; different column set but reusable styling patterns
 
 ---
 
@@ -344,6 +379,11 @@ All new/changed files. ✚ = new, ✱ = renamed/major rewrite, ☐ = unchanged.
 - `/` — open global search (handled by shell)
 - `?` — show hotkey cheat sheet (handled by shell)
 
+> **Implementation note**: All 6 dashboard-scoped hotkeys (`b`, `r`, `g g`, `g l`, `g p`,
+> `1–5`) must be registered via `useHotkeyScope('dashboard')` in `app/(app)/dashboard/page.tsx`.
+> None are currently registered in `hotkey-registry.ts`. The chord keys (`g g`, `g l`, `g p`)
+> require a 2-keystroke chord listener (300ms window between keys).
+
 ### Hover behaviour
 - Ticker cells (any widget): underline + cursor-pointer; clicking navigates to
   `/instruments/{instrument_id}` (NOT `/instruments/{ticker}` — see ADR-F-12)
@@ -396,22 +436,26 @@ keys use the proposed `qk.*` from `lib/query/keys.ts`.
 | Resource | queryKey | staleTime | refetchInterval | Reused by |
 |---|---|---|---|---|
 | Morning brief | `qk.briefMorning()` → `["brief","morning"]` | 30 min | — | only dashboard |
-| Brief diff | `qk.briefDiff(briefId)` | 5 min | — | dashboard only |
+| Brief diff | `qk.briefDiff(briefId)` → `["brief","diff",briefId]` **(NEW in keys.ts)** | 5 min | — | dashboard only |
 | Portfolios | `qk.portfolios()` → `["portfolios"]` | 5 min | — | portfolio pages |
-| Portfolio summary | `qk.portfolioSummary(id)` → `["portfolio","summary",id]` | 30 s | 30 s (during market hours) | portfolio overview |
+| Portfolio bundle | `qk.portfolioBundle(id)` → `["portfolio","bundle",id]` **(NEW in keys.ts)** | 30 s | 60 s | dashboard + portfolio overview |
+| Portfolio exposure | `qk.portfolioExposure(id)` → `["portfolio","exposure",id]` **(NEW in keys.ts)** | 30 s | 30 s (market hours) | dashboard + portfolio overview |
+| Portfolio value history | `qk.portfolioValueHistory(id)` → `["portfolio","value-history",id]` **(NEW in keys.ts)** | 5 min | — | dashboard + portfolio overview (for MTD/YTD) |
 | Holdings | `qk.holdings(id)` → `["holdings",id]` | 30 s | 60 s | portfolio overview |
-| Batch quotes | `qk.quotesBatch(ids)` → `["quotes","batch",sortedIds]` | 5 s | 15 s during market hours | every page |
-| Portfolio perf | `qk.portfolioPerf(id, period)` → `["portfolio","perf",id,period]` | 5 min | — | portfolio overview |
+| Batch quotes | `qk.quotesBatch(ids)` → `["quotes","batch",sortedIds]` **(NEW in keys.ts)** | 5 s | 15 s during market hours | every page |
+| Portfolio perf | `qk.portfolioPerf(id, period)` → `["portfolio","perf",id,period]` **(NEW in keys.ts)** | 5 min | — | portfolio overview |
 | Top movers (gainers) | `qk.topMovers("gainers",20)` | 60 s | 60 s | screener |
 | Top movers (losers) | `qk.topMovers("losers",20)` | 60 s | 60 s | screener |
 | AI signals | `qk.aiSignals(6)` | 5 min | — | workspace |
 | Predictions | `qk.predictions("all",10)` | 5 min | — | workspace |
 | Sector heatmap | `qk.sectorHeatmap("1D")` | 60 s | 60 s | screener |
-| Earnings calendar | `qk.earningsCalendar()` | 5 min | — | calendar page |
+| Earnings calendar | `qk.earningsCalendar()` **(NEW in keys.ts)** | 5 min | — | calendar page |
 | Economic calendar | `qk.economicCalendar()` | 5 min | — | calendar page |
-| Top news | `qk.topNews(20)` | 2 min | 2 min | news pages |
-| Alerts pending | `qk.alertsPending(10)` | 30 s | SSE + 30 s poll | alerts page |
-| Dashboard snapshot warmup | `qk.dashboardSnapshot()` | — | — | dashboard only |
+| Top news | `qk.topNews(20)` **(NEW in keys.ts)** | 2 min | 2 min | news pages |
+| Alerts pending | `qk.alertsPending(10)` **(NEW in keys.ts — endpoint: GET /v1/alerts/pending)** | 30 s | SSE + 30 s poll | alerts page |
+| Dashboard snapshot warmup | `qk.dashboardSnapshot()` **(NEW in keys.ts)** | — | — | dashboard only |
+
+> Keys marked `(NEW in keys.ts)` must be added to `apps/worldview-web/lib/query/keys.ts` before use.
 
 **Dedup opportunities** (resources used by 2+ pages — share cache):
 - `qk.portfolios()`, `qk.holdings(id)`, `qk.quotesBatch(ids)` — used by 6+ pages
@@ -474,8 +518,9 @@ Pros:
   money" alone. Closes the gap from current 8.
 - Single contiguous region — no eye-saccade between three separated widgets.
 - Mirrors Bloomberg PORT, IBKR Mosaic Portfolio panel, Koyfin Dashboard.
-- All data already available (`/v1/portfolios/{id}/summary` + `/holdings` +
-  `/quotes/batch` + `/performance`).
+- All data already available via `GET /v1/portfolio/{id}/bundle` (holdings +
+  value_history) + `POST /v1/quotes/batch` + `GET /v1/portfolios/{id}/exposure`
+  (cash) — see §3.1 for full KPI derivation strategy.
 
 Cons:
 - R3 spans col 1-12, can't be reordered with neighbours. Reservations: user
@@ -593,11 +638,62 @@ per-row query split).
    ▎thick left border only (more Bloomberg-amber-rail authentic)? Proposal:
    left rail only — 3px `border-l-primary`, removes 6px of yellow chrome on
    top/right/bottom.
-8. **Backend data inventory file**: this doc was written before
+8. **Backend data inventory file**: ~~this doc was written before
    `00-backend-data-inventory.md` exists. When agent-data-audit returns,
    reconcile every "Currently used?" column entry against the actual
-   endpoint catalogue. If any cited endpoint differs in name/shape, patch
-   this doc.
+   endpoint catalogue.~~ **RESOLVED** (2026-05-22 revise-prd audit):
+   14/15 endpoints verified; corrections applied in §3 (portfolio summary strategy,
+   alerts path). No further reconciliation needed.
+
+---
+
+## 11. Enhancements (post-revision additions)
+
+### E-01 — Reuse W2 `PerformanceChartPanel` for `PortfolioPerfSparkline`
+
+`apps/worldview-web/components/portfolio/PerformanceChartPanel.tsx` shipped in W2
+with period-tabs (1D/5D/1M/3M/YTD) + a performance sparkline using the same
+`GET /v1/portfolios/{id}/performance` endpoint. `PortfolioPerfSparkline` should
+**extend or wrap** this component rather than reimplementing it. Saves ~70 lines.
+
+### E-02 — Reuse W2 `AssetTypeBadge` in positions table
+
+`apps/worldview-web/components/portfolio/AssetTypeBadge.tsx` shipped in W2.
+Use it in `PortfolioPositionsTable` TICKER column to show equity/ETF/crypto chip
+alongside the ticker symbol. Zero additional backend data required — instrument
+type is already in the holdings response.
+
+### E-03 — Backend news filtering for `PortfolioNewsWidget`
+
+`GET /v1/news/top` supports an `entity_ids=` query parameter on the backend.
+The current design does client-side filtering (fetches 20 articles, filters by
+holding tickers). Switch to backend filtering: pass `entity_ids` of all held
+instruments. Reduces network payload from 20 articles to 5-8 relevant ones.
+Implementation: resolve `entity_id` from holdings (already present in
+`HoldingResponse.entity_id`) → pass to `GET /v1/news/top?entity_ids=...`.
+
+### E-04 — Earnings calendar portfolio filter toggle
+
+Add a "My holdings" toggle chip to `EarningsCalendarWidget`. When active,
+filter the earnings events to only tickers held in the selected portfolio.
+The portfolio tickers are already fetched for R3 — no additional API calls.
+Implementation: compare `EarningsEvent.ticker` against `Set<string>` of
+holding tickers derived from the bundle query.
+
+### E-05 — Market Strip full 8-ticker list
+
+The design specifies 8 tickers (SPX, NDX, DJI, RUT, VIX, TNX, DXY, BTC) but
+the current `MarketSnapshotWidget` only queries 4 (SPY/QQQ/DIA/VIX). The new
+`MarketStrip` must hit `POST /v1/quotes/batch` with all 8 symbols. Verify that
+the batch endpoint accepts non-equity instruments (VIX, TNX/TLT, DXY/UUP,
+BTCUSD) — use the ETF proxies (TLT for 10Y, UUP for DXY) if futures/indices
+are not supported.
+
+### E-06 — `MorningBriefCard` confirmed unchanged
+
+Verified (2026-05-22): `MorningBriefCard` post-PLAN-0062-W4 already renders at
+96px collapsed height with `h-5` header and bottom chip strip. §5 status `☐` is
+correct — no CSS or logic changes required.
 
 ---
 

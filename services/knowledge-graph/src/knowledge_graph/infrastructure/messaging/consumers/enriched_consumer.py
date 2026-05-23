@@ -493,7 +493,7 @@ def _parse_raw_relations(data: list[dict[str, Any]]) -> list[RawRelation]:
                     object_entity_id=UUID(d["object_entity_id"]),
                     raw_type=d["raw_type"],
                     # PLAN-0062 F-019: collapse out-of-vocabulary polarities.
-                    polarity=_normalize_polarity(d.get("polarity"), default="positive"),
+                    polarity=_normalize_polarity(d.get("polarity"), default="neutral"),
                     extraction_confidence=float(d.get("extraction_confidence", 0.5)),
                     source_trust_weight=float(d.get("source_trust_weight", 1.0)),
                     evidence_date=_parse_dt(d.get("evidence_date")),

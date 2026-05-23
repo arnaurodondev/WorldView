@@ -759,3 +759,25 @@ class TestParseRawRelationsTruncationAndPolarity:
         assert results[0].polarity == "neutral"
         norm_logs = [le for le in logs if le.get("event") == "enriched_consumer_polarity_normalized"]
         assert norm_logs, "expected polarity-normalization warning to be logged"
+
+    @pytest.mark.unit
+    def test_parse_raw_relations_absent_polarity_defaults_to_neutral(self) -> None:
+        """BP-FIX: when polarity is absent (None), _parse_raw_relations must default
+        to 'neutral', not 'positive'.  The old default caused 100% of relation-evidence
+        rows to show polarity='positive' regardless of actual LLM output."""
+        from knowledge_graph.infrastructure.messaging.consumers.enriched_consumer import _parse_raw_relations
+
+        subj = str(uuid4())
+        obj = str(uuid4())
+        # No polarity key at all — d.get("polarity") returns None.
+        data = [
+            {
+                "subject_entity_id": subj,
+                "object_entity_id": obj,
+                "raw_type": "employs",
+            },
+        ]
+        results = _parse_raw_relations(data)
+
+        assert len(results) == 1
+        assert results[0].polarity == "neutral", f"Expected 'neutral' default, got '{results[0].polarity}'"
