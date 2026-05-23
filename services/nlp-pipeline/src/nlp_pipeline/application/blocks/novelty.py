@@ -125,8 +125,18 @@ async def run_novelty_gate(
     Stage 2: Per-entity embedding similarity — if ALL entities are
              near-duplicates → downgrade DEEP→LIGHT.
 
-    The ``final_routing_tier`` field on the returned RoutingDecision is set
-    when a downgrade occurs; otherwise it remains None.
+    The ``final_routing_tier`` field on the returned RoutingDecision is always
+    set: to ``RoutingTier.LIGHT`` when a downgrade occurs, or to the original
+    ``routing_tier`` otherwise.
+
+    WHY always set: downstream queries use ``final_routing_tier`` directly for
+    analytics (e.g. "which tier did this article end up in?").  Leaving it NULL
+    for non-downgraded documents means 97%+ of rows have NULL and any query that
+    doesn't use COALESCE returns empty.  COALESCE(final_routing_tier, routing_tier)
+    already handles NULL in the relevance-scoring and news-query SQL, but direct
+    equality checks against ``final_routing_tier`` silently return nothing.
+    Setting it unconditionally makes the column a reliable, self-contained source
+    of truth for the effective post-novelty-gate tier.
 
     Returns:
         (updated_routing_decision, novelty_score [0.0 - 1.0])
@@ -165,5 +175,12 @@ async def run_novelty_gate(
             )
             routing_decision.final_routing_tier = RoutingTier.LIGHT
             novelty_score = 0.0
+
+    # ── Always populate final_routing_tier ───────────────────────────────────
+    # If neither stage downgraded the tier, the effective final tier equals the
+    # initial routing_tier.  Set it here so routing_decisions.final_routing_tier
+    # is never NULL — direct equality queries work without COALESCE.
+    if routing_decision.final_routing_tier is None:
+        routing_decision.final_routing_tier = routing_decision.routing_tier
 
     return routing_decision, novelty_score

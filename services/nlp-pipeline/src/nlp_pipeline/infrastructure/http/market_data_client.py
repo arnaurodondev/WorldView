@@ -172,12 +172,13 @@ class MarketDataClient:
         was always empty → news-relevance scoring couldn't use price
         signal at all.
 
-        Fix: resolve the ticker once via market-data's existing
-        ``/api/v1/instruments/symbol/{ticker}`` endpoint (already used by
-        the brokerage-sync worker), cache in process memory keyed on
-        ticker+date so the next call within the same labelling cycle is
-        free. The cache is bounded to 1024 entries (LRU-ish via dict
-        ordering) — we typically resolve <100 distinct tickers per cycle.
+        Fix: resolve the ticker once via market-data's
+        ``GET /api/v1/instruments/lookup?symbol={ticker}`` endpoint
+        (PLAN-0073 B-1 renamed the old ``/instruments/symbol/{ticker}``
+        route; it no longer exists and returns 404).  Cache in process
+        memory keyed on ticker so the next call within the same labelling
+        cycle is free. The cache is bounded to 1024 entries (LRU-ish via
+        dict ordering) — we typically resolve <100 distinct tickers per cycle.
 
         Returns ``None`` on any failure (auth, 404, network) so the
         outer ``get_ohlcv`` falls back to its existing "no data" path
@@ -195,7 +196,9 @@ class MarketDataClient:
             # to be unresolvable. Treat it as None for the caller's purposes.
             return cached if cached else None
 
-        url = f"{self._base_url}/api/v1/instruments/symbol/{urllib.parse.quote(ticker, safe='')}"
+        # PLAN-0073 B-1: /instruments/symbol/{ticker} was removed; use the
+        # unified /instruments/lookup?symbol= endpoint instead.
+        url = f"{self._base_url}/api/v1/instruments/lookup"
         token = await self._get_internal_jwt()
         headers = {"X-Internal-JWT": token} if token else {}
         try:
@@ -203,7 +206,13 @@ class MarketDataClient:
             # an explicit per-call timeout (10s) so the worker can never hang
             # indefinitely if the outer AsyncClient default timeout is ever
             # cleared by a future refactor (BP-235 pattern).
-            response = await self._client.get(url, headers=headers, timeout=10.0)
+            # Pass symbol as a query parameter to match /instruments/lookup signature.
+            response = await self._client.get(
+                url,
+                params={"symbol": ticker},
+                headers=headers,
+                timeout=10.0,
+            )
         except Exception as exc:
             logger.warning(  # type: ignore[no-any-return]
                 "market_data_resolve_request_error",
@@ -224,7 +233,9 @@ class MarketDataClient:
             return None
         try:
             body = response.json()
-            instrument_id = body.get("instrument_id")
+            # InstrumentLookupResponse returns "id", not "instrument_id".
+            # /instruments/lookup?symbol= → {"id": "<uuid>", "symbol": ..., ...}
+            instrument_id = body.get("id")
             if not instrument_id:
                 cache[ticker] = ""
                 return None

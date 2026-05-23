@@ -1363,10 +1363,27 @@ services:
       dockerfile: services/nlp-pipeline/Dockerfile
     profiles: [infra, all]
     depends_on:
+      # BP-064 (DNS race): postgres must be healthy BEFORE the worker starts so
+      # asyncpg does not race against docker-embedded DNS during pool initialisation.
+      # nlp-pipeline-migrate already waits for postgres:service_healthy, but after
+      # migrate completes the container exits; the worker then starts and hits a
+      # brief window where the postgres DNS entry is not yet stable in its resolver
+      # cache → socket.gaierror [Errno -2] Name or service not known on first connect.
+      # Adding postgres:service_healthy here ensures DNS is fully stable at start.
+      postgres:
+        condition: service_healthy
       nlp-pipeline-migrate:
         condition: service_completed_successfully
       kafka-init:
         condition: service_completed_successfully
+      # api-gateway required for MarketDataClient to mint X-Internal-JWT via
+      # POST /v1/auth/dev-login (dev) or POST /internal/v1/service-token (prod).
+      # Without this the first OHLCV fetch silently 401s, but the dependency also
+      # ensures the JWT-mint HTTP call does not race against gateway startup.
+      api-gateway:
+        condition: service_healthy
+      market-data:
+        condition: service_healthy
     env_file:
       - ../../services/nlp-pipeline/configs/docker.env
     command: ["python", "-m", "nlp_pipeline.workers.price_impact_labelling_worker"]

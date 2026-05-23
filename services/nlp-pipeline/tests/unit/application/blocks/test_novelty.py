@@ -151,8 +151,9 @@ class TestRunNoveltyGate:
             entity_embeddings={},
         )
 
-        # MEDIUM should not be downgraded by novelty gate
-        assert updated.final_routing_tier is None
+        # MEDIUM should not be downgraded by novelty gate; final_routing_tier
+        # is always set to routing_tier when no downgrade occurs.
+        assert updated.final_routing_tier == RoutingTier.MEDIUM
 
     @pytest.mark.asyncio
     async def test_novel_document_preserves_tier(self) -> None:
@@ -174,7 +175,8 @@ class TestRunNoveltyGate:
             entity_embeddings={},
         )
 
-        assert updated.final_routing_tier is None
+        # No downgrade occurred: final_routing_tier equals the initial routing_tier.
+        assert updated.final_routing_tier == RoutingTier.DEEP
         assert novelty_score > 0.5
 
     @pytest.mark.asyncio
@@ -197,6 +199,7 @@ class TestRunNoveltyGate:
             entity_embeddings={},
         )
 
-        # Should not downgrade — treated as novel
-        assert updated.final_routing_tier is None
+        # Should not downgrade — treated as novel; final_routing_tier mirrors
+        # the initial routing_tier (DEEP unchanged).
+        assert updated.final_routing_tier == RoutingTier.DEEP
         assert novelty_score == 1.0
