@@ -11,7 +11,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient
-from nlp_pipeline.api.dependencies import get_sentiment_timeseries_repo, require_internal_jwt
+from nlp_pipeline.api.dependencies import get_entity_sentiment_timeseries_use_case, require_internal_jwt
 from nlp_pipeline.api.routes.analytics import router
 
 pytestmark = pytest.mark.unit
@@ -20,7 +20,7 @@ _ENTITY_ID = uuid.uuid4()
 
 
 def _make_app(*, timeseries_data: list[dict] | None = None, raise_exc: Exception | None = None) -> FastAPI:
-    """Build a minimal FastAPI app with analytics router and overridden repo + auth dependencies.
+    """Build a minimal FastAPI app with analytics router and overridden use case + auth dependencies.
 
     Auth is bypassed via dependency_override — the require_internal_jwt dep is
     replaced with a no-op so unit tests do not require a running InternalJWTMiddleware.
@@ -31,19 +31,19 @@ def _make_app(*, timeseries_data: list[dict] | None = None, raise_exc: Exception
     # Simulate InternalJWTMiddleware skip_verification=True (dev/test mode).
     app.state._internal_jwt_skip_verification = True
 
-    mock_repo = MagicMock()
+    mock_uc = MagicMock()
     if raise_exc:
-        mock_repo.get_entity_sentiment_timeseries = AsyncMock(side_effect=raise_exc)
+        mock_uc.execute = AsyncMock(side_effect=raise_exc)
     else:
-        mock_repo.get_entity_sentiment_timeseries = AsyncMock(return_value=timeseries_data or [])
+        mock_uc.execute = AsyncMock(return_value=timeseries_data or [])
 
-    async def _override_repo() -> MagicMock:
-        return mock_repo
+    async def _override_use_case() -> MagicMock:
+        return mock_uc
 
     async def _override_auth() -> None:
         return None
 
-    app.dependency_overrides[get_sentiment_timeseries_repo] = _override_repo
+    app.dependency_overrides[get_entity_sentiment_timeseries_use_case] = _override_use_case
     app.dependency_overrides[require_internal_jwt] = _override_auth
     return app
 
@@ -156,21 +156,21 @@ class TestEntitySentimentTimeseries:
         and no internal_jwt on request.state (middleware absent), the dep
         raises 401.
 
-        The repo dep IS overridden (to prevent a session-factory AttributeError
+        The use case dep IS overridden (to prevent a session-factory AttributeError
         on the minimal test app) — FastAPI may resolve deps concurrently and
-        we need the repo to be resolvable so auth fires cleanly.
+        we need the use case to be resolvable so auth fires cleanly.
         """
         app = FastAPI()
         app.include_router(router)
         # Production mode: skip_verification NOT set (defaults to absent → False).
 
-        mock_repo = MagicMock()
-        mock_repo.get_entity_sentiment_timeseries = AsyncMock(return_value=[])
+        mock_uc = MagicMock()
+        mock_uc.execute = AsyncMock(return_value=[])
 
-        async def _override_repo() -> MagicMock:
-            return mock_repo
+        async def _override_use_case() -> MagicMock:
+            return mock_uc
 
-        app.dependency_overrides[get_sentiment_timeseries_repo] = _override_repo
+        app.dependency_overrides[get_entity_sentiment_timeseries_use_case] = _override_use_case
         # require_internal_jwt is intentionally NOT overridden — the real dep runs.
 
         transport = ASGITransport(app=app)

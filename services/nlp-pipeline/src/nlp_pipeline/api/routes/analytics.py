@@ -14,10 +14,7 @@ from uuid import UUID
 import structlog
 from fastapi import APIRouter, Query, Request
 
-from nlp_pipeline.api.dependencies import InternalJwtAuthDep, SentimentTimeseriesRepoDep
-from nlp_pipeline.application.use_cases.get_entity_sentiment_timeseries import (
-    GetEntitySentimentTimeseriesUseCase,
-)
+from nlp_pipeline.api.dependencies import InternalJwtAuthDep, SentimentTimeseriesUseCaseDep
 
 log = structlog.get_logger(__name__)
 
@@ -28,7 +25,7 @@ router = APIRouter(prefix="/api/v1", tags=["analytics"])
 async def get_entity_sentiment_timeseries(
     entity_id: UUID,
     request: Request,
-    repo: SentimentTimeseriesRepoDep,
+    use_case: SentimentTimeseriesUseCaseDep,
     _auth: InternalJwtAuthDep,
     days: int = Query(default=90, ge=1, le=365, description="Look-back window in days (1-365)"),
 ) -> dict[str, object]:
@@ -56,8 +53,7 @@ async def get_entity_sentiment_timeseries(
         tenant_id = None
 
     log.debug("get_entity_sentiment_timeseries", entity_id=str(entity_id), days=days, has_tenant=tenant_id is not None)
-    uc = GetEntitySentimentTimeseriesUseCase()
-    points = await uc.execute(repo=repo, entity_id=entity_id, days=days, tenant_id=tenant_id)
+    points = await use_case.execute(entity_id=entity_id, days=days, tenant_id=tenant_id)
     return {
         "entity_id": str(entity_id),
         "days": days,

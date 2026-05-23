@@ -23,6 +23,7 @@ from nlp_pipeline.application.ports.repositories import (
 )
 from nlp_pipeline.application.use_cases.dlq_admin import DLQAdminUseCase
 from nlp_pipeline.application.use_cases.enhanced_chunk_search import EnhancedChunkSearchUseCase
+from nlp_pipeline.application.use_cases.get_entity_sentiment_timeseries import GetEntitySentimentTimeseriesUseCase
 from nlp_pipeline.application.use_cases.query_entity_resolver import QueryEntityResolverUseCase
 from nlp_pipeline.application.use_cases.search_documents import SearchDocumentsUseCase
 
@@ -278,6 +279,22 @@ def get_sentiment_timeseries_repo(
 
 
 SentimentTimeseriesRepoDep = Annotated[DocumentSourceMetadataRepository, Depends(get_sentiment_timeseries_repo)]
+
+
+def get_entity_sentiment_timeseries_use_case(
+    repo: Annotated[DocumentSourceMetadataRepository, Depends(get_sentiment_timeseries_repo)],
+) -> GetEntitySentimentTimeseriesUseCase:
+    """Build GetEntitySentimentTimeseriesUseCase for the current request.
+
+    Uses the read replica session (R27) via get_sentiment_timeseries_repo.
+    """
+    return GetEntitySentimentTimeseriesUseCase(repo)
+
+
+SentimentTimeseriesUseCaseDep = Annotated[
+    GetEntitySentimentTimeseriesUseCase,
+    Depends(get_entity_sentiment_timeseries_use_case),
+]
 
 
 async def require_internal_jwt(request: Request) -> None:
