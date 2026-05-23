@@ -66,6 +66,9 @@ def _transform_graph_response(raw: dict[str, Any]) -> dict[str, Any]:
                 # is stable — InlineSelectionPanel may render them if present.
                 "description": center.get("description") or None,
                 "sector": center.get("sector") or None,
+                # T-A-1-03 (PLAN-0091): from canonical_entities.metadata JSONB via S7.
+                "industry": center.get("industry") or None,
+                "market_cap": center.get("market_cap") or None,
             },
         )
 
@@ -83,6 +86,9 @@ def _transform_graph_response(raw: dict[str, Any]) -> dict[str, Any]:
                 # B-01: description and sector forwarded if S7 provides them.
                 "description": entity_data.get("description") or None,
                 "sector": entity_data.get("sector") or None,
+                # T-A-1-03 (PLAN-0091): industry + market_cap from S7 EntitySummary.
+                "industry": entity_data.get("industry") or None,
+                "market_cap": entity_data.get("market_cap") or None,
             },
         )
 
@@ -129,6 +135,10 @@ def _transform_graph_response(raw: dict[str, Any]) -> dict[str, Any]:
                 # None when S7 omits it — frontend defaults to MEDIUM opacity.
                 "decay_class": rel.get("decay_class") or None,  # str | None
                 "direction": direction,  # "outbound" | "inbound" | "lateral"
+                # T-A-1-02 (PLAN-0091): temporal validity fields from S7 confidence_breakdown.
+                "valid_from": str(rel["valid_from"]) if rel.get("valid_from") else None,
+                "valid_to": str(rel["valid_to"]) if rel.get("valid_to") else None,
+                "confidence_stale": bool(rel.get("confidence_stale") or False),
             },
         )
 
@@ -224,9 +234,11 @@ async def get_entity_graph(
     # a redundant param on the common case. depth>1 requires KNOWLEDGE_GRAPH_CYPHER_ENABLED.
     if depth > 1:
         s7_params["depth"] = str(depth)
-    # PLAN-0074 Wave G: forward confidence_breakdown and focus_node (Wave D additions).
-    if confidence_breakdown:
-        s7_params["confidence_breakdown"] = "true"
+    # T-A-1-02 (PLAN-0091): always request confidence_breakdown=true so S7
+    # populates valid_from/valid_to/confidence_stale on every RelationResponse.
+    # Ignore the client-supplied confidence_breakdown param — we always want
+    # the full breakdown to forward temporal edge fields to the frontend.
+    s7_params["confidence_breakdown"] = "true"
     if focus_node is not None:
         s7_params["focus_node"] = focus_node
 
@@ -821,6 +833,34 @@ async def get_prediction_market_history(
     resp = await clients.market_data.get(
         f"/api/v1/prediction-markets/{market_id}/history",
         params=dict(request.query_params),
+        headers=headers,
+    )
+    return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
+
+
+# ── Entity Sentiment Timeseries (PLAN-0091 Wave A-2 / E-2, T-A-2-02) ─────────
+
+
+@router.get("/entities/{entity_id}/sentiment-timeseries")
+async def get_entity_sentiment_timeseries(
+    entity_id: UUID,
+    request: Request,
+    days: int = Query(default=90, ge=1, le=365),
+) -> Any:
+    """Proxy GET /api/v1/entities/{entity_id}/sentiment-timeseries → S6 NLP Pipeline.
+
+    Returns daily sentiment and relevance aggregates for the entity over the
+    requested window. The S6 route (PLAN-0091 Wave E-1) is the authoritative
+    source; this gateway endpoint simply proxies and forwards auth headers.
+    Returns 401 if unauthenticated, 502 if S6 is unavailable.
+    """
+    if not getattr(request.state, "user", None):
+        raise HTTPException(status_code=401, detail="Authentication required")
+    headers = _auth_headers(request)
+    clients = _clients(request)
+    resp = await clients.nlp_pipeline.get(
+        f"/api/v1/entities/{entity_id}/sentiment-timeseries",
+        params={"days": days},
         headers=headers,
     )
     return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")

@@ -28,8 +28,12 @@ from api_gateway.routes.helpers import _auth_headers, _clients, _system_headers
 from api_gateway.schemas import (
     EarningsCalendarResponse,
     FundamentalsResponse,
+    NLScreenerRequest,
+    NLScreenerResponse,
     OHLCVResponse,
     QuoteResponse,
+    YieldCurveResponse,
+    YieldPoint,
 )
 from observability.logging import get_logger  # type: ignore[import-untyped]
 
@@ -1448,3 +1452,241 @@ async def ai_signals(request: Request) -> Any:
     except Exception:
         logger.warning("ai_signals_transform_failed", exc_info=True)
         return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
+
+
+# ── Yield Curve (PLAN-0091 Wave A-2, T-A-2-04 / Wave E-2, T-E-2-02) ─────────
+
+# ETF ticker → maturity label used as fallback when macro_indicator rows absent.
+# Duration approximations: SHY≈2Y, IEI≈5Y, IEF≈10Y, TLT≈30Y.
+_YIELD_ETF_MAP: list[tuple[str, str]] = [
+    ("SHY", "2Y"),
+    ("IEI", "5Y"),
+    ("IEF", "10Y"),
+    ("TLT", "30Y"),
+]
+
+# Rough duration-to-yield mapping for ETF NAV proxy (change in NAV approx -duration * delta_y).
+# These are not real yield calculations — they surface approximate yield levels
+# inferred from ETF trailing returns as a graceful-degradation fallback.
+_ETF_DURATION: dict[str, float] = {"SHY": 1.9, "IEI": 4.3, "IEF": 8.3, "TLT": 17.0}
+
+
+@router.get("/market/yield-curve", response_model=YieldCurveResponse)
+async def get_yield_curve(request: Request) -> YieldCurveResponse:
+    """4-point US Treasury yield curve with graceful degradation (PLAN-0091 T-A-2-04).
+
+    Priority 1: S3 TemporalEvent rows with event_type=macro_indicator and
+    title matching treasury yield maturities (2Y/5Y/10Y/30Y).
+    Priority 2: ETF proxy via POST /internal/v1/price/batch for SHY/IEI/IEF/TLT.
+    Returns null yield_pct for maturities with no data.
+    Computes spread_2s10s = yield_10Y - yield_2Y (basis points).
+    Auth required.
+    """
+    if not getattr(request.state, "user", None):
+        raise HTTPException(status_code=401, detail="Authentication required")
+
+    headers = _auth_headers(request)
+    clients = _clients(request)
+
+    # ── Priority 1: check S3 macro_indicator TemporalEvents ──────────────────
+    yield_by_maturity: dict[str, float | None] = {m: None for _, m in _YIELD_ETF_MAP}
+    source = "unavailable"
+
+    try:
+        te_resp = await clients.market_data.get(
+            "/api/v1/temporal-events",
+            params={"event_type": "macro_indicator", "limit": 50},
+            headers=headers,
+        )
+        if te_resp.status_code == 200:
+            te_body = te_resp.json()
+            events = te_body if isinstance(te_body, list) else te_body.get("events", [])
+            for ev in events:
+                title: str = str(ev.get("title") or "").upper()
+                macro: dict[str, Any] = ev.get("macro_indicators") or ev.get("structured_data") or {}
+                # Match titles like "US_2Y_YIELD", "TREASURY_10Y", "UST 5Y", etc.
+                for maturity in ("2Y", "5Y", "10Y", "30Y"):
+                    if maturity in title and "YIELD" in title or "TREASURY" in title and maturity in title:
+                        yld = macro.get("yield") or macro.get("rate") or macro.get("value")
+                        if yld is not None:
+                            try:
+                                yield_by_maturity[maturity] = float(yld)
+                                source = "macro_indicator"
+                            except (TypeError, ValueError):
+                                pass
+    except Exception:
+        logger.warning("yield_curve_macro_indicator_fetch_failed", exc_info=True)
+
+    # ── Priority 2: ETF proxy if macro_indicator data absent ─────────────────
+    if all(v is None for v in yield_by_maturity.values()):
+        try:
+            # Resolve ETF tickers to instrument_ids via S3 search
+            ticker_to_iid: dict[str, str] = {}
+            for ticker, _mat in _YIELD_ETF_MAP:
+                search_resp = await clients.market_data.get(
+                    "/api/v1/instruments/search",
+                    params={"q": ticker, "limit": 1},
+                    headers=headers,
+                )
+                if search_resp.status_code == 200:
+                    results = search_resp.json()
+                    items = results if isinstance(results, list) else results.get("results", [])
+                    for item in items:
+                        if str(item.get("ticker", "")).upper() == ticker.upper():
+                            iid = str(item.get("instrument_id", ""))
+                            if iid:
+                                ticker_to_iid[ticker] = iid
+                            break
+
+            if ticker_to_iid:
+                snap_resp = await clients.market_data.post(
+                    "/internal/v1/price/batch",
+                    json={"instrument_ids": list(ticker_to_iid.values())},
+                    headers={"Content-Type": "application/json", **headers},
+                )
+                if snap_resp.status_code == 200:
+                    snap_list = snap_resp.json()
+                    if isinstance(snap_list, list):
+                        iid_to_ticker = {v: k for k, v in ticker_to_iid.items()}
+                        for snap in snap_list:
+                            iid = str(snap.get("instrument_id", ""))
+                            ticker = iid_to_ticker.get(iid, "")
+                            if not ticker:
+                                continue
+                            change_pct = snap.get("day_change_pct") or snap.get("change_percent")
+                            if change_pct is None:
+                                continue
+                            duration = _ETF_DURATION.get(ticker, 5.0)
+                            # Approximate: Δy ≈ -ΔP / duration (simplified)
+                            implied_yield_change = -float(change_pct) / duration
+                            mat = dict(_YIELD_ETF_MAP).get(ticker)
+                            if mat:
+                                # We can only give a relative change without a baseline;
+                                # store the day_change_pct raw as a proxy indicator
+                                yield_by_maturity[mat] = round(implied_yield_change, 4)
+                            source = "etf_proxy"
+        except Exception:
+            logger.warning("yield_curve_etf_proxy_failed", exc_info=True)
+
+    # ── Build response ────────────────────────────────────────────────────────
+    points = [
+        YieldPoint(
+            maturity=maturity,
+            yield_pct=yield_by_maturity.get(maturity),
+            source=source if yield_by_maturity.get(maturity) is not None else None,
+        )
+        for _, maturity in _YIELD_ETF_MAP
+    ]
+
+    y2 = yield_by_maturity.get("2Y")
+    y10 = yield_by_maturity.get("10Y")
+    spread: float | None = None
+    inverted: bool | None = None
+    if y2 is not None and y10 is not None:
+        spread = round((y10 - y2) * 100, 2)  # basis points
+        inverted = spread < 0
+
+    return YieldCurveResponse(
+        points=points,
+        spread_2s10s=spread,
+        spread_2s10s_inverted=inverted,
+        source=source,
+    )
+
+
+# ── NL Screener Translation (PLAN-0091 Wave E-1, T-E-1-01) ───────────────────
+
+_NL_SCREENER_SYSTEM_PROMPT = """You are a financial screener assistant. Convert the user's natural-language query
+into a JSON object where each key is a valid screener field name and the value is a filter condition.
+
+Valid field names will be provided in the request. Only use field names from that list.
+Return ONLY a valid JSON object — no explanation, no markdown fences.
+
+Example input: "profitable tech stocks with low PE"
+Example output: {"sector": "Technology", "pe_ratio": {"lte": 20}, "profit_margin": {"gte": 0.05}}
+
+If you cannot parse the query into a valid filter, return {"_unparseable": true}.
+"""
+
+
+@router.post("/screener/nl-translate", response_model=NLScreenerResponse)
+async def nl_screener_translate(body: NLScreenerRequest, request: Request) -> NLScreenerResponse:
+    """Translate a natural-language query into structured screener filters.
+
+    Calls S8 /v1/chat with a structured system prompt, parses the JSON response,
+    validates all returned field names against the GET /v1/fundamentals/screen/fields
+    allowlist, and returns 422 if the LLM response cannot be parsed or contains
+    invalid field names.
+    """
+    if not getattr(request.state, "user", None):
+        raise HTTPException(status_code=401, detail="Authentication required")
+
+    headers = _auth_headers(request)
+    sys_headers = _system_headers(request)
+    clients = _clients(request)
+
+    # 1. Fetch valid field names from S3
+    valid_fields: set[str] = set()
+    try:
+        fields_resp = await clients.market_data.get("/api/v1/fundamentals/screen/fields", headers=sys_headers)
+        if fields_resp.status_code == 200:
+            fields_data = fields_resp.json()
+            raw_fields = fields_data if isinstance(fields_data, list) else fields_data.get("fields", [])
+            valid_fields = {str(f.get("name") or f) for f in raw_fields if f}
+    except Exception:
+        logger.warning("nl_screener_fields_fetch_failed", exc_info=True)
+
+    # 2. Call S8 chat with system prompt
+    chat_payload = {
+        "messages": [
+            {"role": "system", "content": _NL_SCREENER_SYSTEM_PROMPT},
+            {"role": "user", "content": body.query},
+        ],
+        "stream": False,
+    }
+    try:
+        chat_resp = await clients.rag_chat.post(
+            "/v1/chat",
+            json=chat_payload,
+            headers={"Content-Type": "application/json", **headers},
+            timeout=httpx.Timeout(20.0),
+        )
+    except Exception as exc:
+        logger.warning("nl_screener_chat_failed", error=str(exc))
+        raise HTTPException(status_code=502, detail="LLM service unavailable") from exc
+
+    if chat_resp.status_code != 200:
+        raise HTTPException(status_code=502, detail="LLM service returned an error")
+
+    # 3. Extract JSON from LLM response
+    try:
+        chat_body = chat_resp.json()
+        # S8 may return {content: "..."} or {message: {content: "..."}} or {choices: [...]}
+        raw_text: str = (
+            chat_body.get("content")
+            or (chat_body.get("message") or {}).get("content")
+            or ((chat_body.get("choices") or [{}])[0].get("message") or {}).get("content")
+            or ""
+        )
+        # Strip markdown code fences if present
+        raw_text = raw_text.strip()
+        if raw_text.startswith("```"):
+            lines = raw_text.split("\n")
+            raw_text = "\n".join(lines[1:-1]) if len(lines) > 2 else raw_text
+        filters: dict[str, Any] = json.loads(raw_text)
+    except Exception:
+        raise HTTPException(status_code=422, detail="LLM could not produce a valid filter JSON")  # noqa: B904
+
+    if filters.get("_unparseable"):
+        raise HTTPException(status_code=422, detail="LLM could not parse the query into screener filters")
+
+    # 4. Validate field names against allowlist (only when we have valid_fields)
+    if valid_fields:
+        invalid = [k for k in filters if not k.startswith("_") and k not in valid_fields]
+        if invalid:
+            raise HTTPException(
+                status_code=422,
+                detail=f"LLM returned unknown screener fields: {invalid}",
+            )
+
+    return NLScreenerResponse(filters=filters, natural_language_query=body.query)

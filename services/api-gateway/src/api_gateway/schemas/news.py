@@ -35,6 +35,34 @@ class NewsArticle(BaseModel):
     routing_score: float | None = None
     primary_entity_id: str | None = None
     primary_entity_symbol: str | None = None
+    # T-A-1-01 (PLAN-0091): enrichment fields from article_impact_windows / S6 scoring
+    sentiment: str | None = None  # "positive" | "negative" | "neutral" | "mixed"
+    impact_windows: dict[str, float | None] | None = None  # keys: day_t0..day_t5
+    impact_score: float | None = None  # pre-computed MAX(day_t0, day_t1)
+
+
+class ImpactWindow(BaseModel):
+    """One price-impact window row for a given article (PLAN-0091 T-A-2-01)."""
+
+    model_config = ConfigDict(extra="allow")
+
+    window: str  # "t0" | "t1" | "t2" | "t5"
+    delta_pct: float | None = None
+    high_pct: float | None = None
+    low_pct: float | None = None
+    volume: int | None = None
+    impact_score: float | None = None
+    data_quality: str | None = None  # "intraday" | "daily_proxy"
+
+
+class ArticleImpactHistoryResponse(BaseModel):
+    """Response for GET /v1/articles/{article_id}/impact-history (PLAN-0091 T-A-2-01)."""
+
+    model_config = ConfigDict(extra="allow")
+
+    article_id: str
+    entity_id: str | None = None
+    windows: list[ImpactWindow] = []
 
 
 class NewsTopResponse(BaseModel):

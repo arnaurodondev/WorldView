@@ -8,8 +8,10 @@ Split from proxy.py (PLAN-0089 B-3).
 
 from __future__ import annotations
 
+import asyncio
 import json
 import uuid as _uuid
+from collections import defaultdict
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
@@ -21,6 +23,8 @@ from api_gateway.schemas import (
     DashboardSnapshotResponse,
     PortfolioBundleResponse,
     PortfolioResponse,
+    PortfolioSectorAttributionResponse,
+    SectorBucket,
     WatchlistResponse,
 )
 from observability.logging import get_logger  # type: ignore[import-untyped]
@@ -776,6 +780,138 @@ async def get_portfolio_concentration(portfolio_id: str, request: Request) -> An
         status_code=resp.status_code,
         media_type="application/json",
         headers=response_headers,
+    )
+
+
+# ── Portfolio Sector Attribution (PLAN-0091 Wave A-2, T-A-2-03) ──────────────
+
+
+@router.get("/portfolios/{portfolio_id}/sector-attribution", response_model=PortfolioSectorAttributionResponse)
+async def get_portfolio_sector_attribution(portfolio_id: str, request: Request) -> PortfolioSectorAttributionResponse:
+    """Composition: holdings (S1) + batch quotes (S3) + per-instrument sector (S3).
+
+    Algorithm:
+      1. Fetch all holdings from S1 — quantity + average_cost per instrument
+      2. Fetch current price + day_change_pct via S3 /internal/v1/price/batch
+      3. Fetch sector for each unique instrument via S3 /api/v1/fundamentals/{id}
+         (parallel asyncio.gather, graceful degradation to "Unknown" on failure)
+      4. Group by sector → compute market_value, sector_weight_pct, sector_day_pnl
+    """
+    if not getattr(request.state, "user", None):
+        raise HTTPException(status_code=401, detail="Authentication required")
+
+    headers = _portfolio_headers(request)
+    s3_headers = _auth_headers(request)
+    clients = _clients(request)
+
+    # Step 1 — holdings from S1
+    holdings_resp = await clients.portfolio.get(f"/api/v1/holdings/{portfolio_id}", headers=headers)
+    if holdings_resp.status_code != 200:
+        return Response(  # type: ignore[return-value, no-any-return]
+            content=holdings_resp.content,
+            status_code=holdings_resp.status_code,
+            media_type="application/json",
+        )
+    try:
+        raw = json.loads(holdings_resp.content)
+    except Exception:
+        raise HTTPException(status_code=502, detail="Invalid response from portfolio service")  # noqa: B904
+
+    holdings: list[dict[str, Any]] = (
+        raw if isinstance(raw, list) else (raw.get("items") or []) if isinstance(raw, dict) else []
+    )
+    if not holdings:
+        return PortfolioSectorAttributionResponse(portfolio_id=portfolio_id)
+
+    instrument_ids = [str(h["instrument_id"]) for h in holdings if h.get("instrument_id")]
+
+    # Step 2 — batch price snapshots from S3
+    price_map: dict[str, dict[str, Any]] = {}
+    try:
+        snap_resp = await clients.market_data.post(
+            "/internal/v1/price/batch",
+            json={"instrument_ids": instrument_ids},
+            headers={"Content-Type": "application/json", **s3_headers},
+        )
+        if snap_resp.status_code == 200:
+            snap_list = snap_resp.json()
+            if isinstance(snap_list, list):
+                for snap in snap_list:
+                    iid = str(snap.get("instrument_id", ""))
+                    if iid:
+                        price_map[iid] = snap
+    except Exception:
+        logger.warning("sector_attribution_price_fetch_failed", portfolio_id=portfolio_id, exc_info=True)
+
+    # Step 3 — sector per instrument (parallel)
+    async def _fetch_sector(iid: str) -> tuple[str, str]:
+        try:
+            r = await clients.market_data.get(
+                f"/api/v1/fundamentals/{iid}",
+                params={"sections": "General"},
+                headers=s3_headers,
+            )
+            if r.status_code == 200:
+                data = r.json()
+                sector = str(data.get("General", {}).get("Sector") or data.get("sector") or "Unknown")
+                return iid, sector
+        except Exception:
+            logger.debug("sector_attribution_fetch_sector_failed", instrument_id=iid, exc_info=True)
+        return iid, "Unknown"
+
+    sector_results = await asyncio.gather(*[_fetch_sector(iid) for iid in instrument_ids], return_exceptions=True)
+    sector_map: dict[str, str] = {}
+    for result in sector_results:
+        if isinstance(result, tuple):
+            sector_map[result[0]] = result[1]
+
+    # Step 4 — aggregate by sector
+    buckets_raw: dict[str, dict[str, float]] = defaultdict(lambda: {"market_value": 0.0, "day_pnl": 0.0, "count": 0.0})
+    total_market_value = 0.0
+    covered_value = 0.0
+
+    for h in holdings:
+        iid = str(h.get("instrument_id", ""))
+        try:
+            qty = float(h.get("quantity", 0))
+        except (TypeError, ValueError):
+            continue
+
+        snap = price_map.get(iid, {})
+        price = float(snap.get("price") or snap.get("close") or 0.0)
+        if price <= 0:
+            continue
+
+        market_val = qty * price
+        day_change_pct = float(snap.get("day_change_pct") or snap.get("change_percent") or 0.0)
+        day_pnl = market_val * day_change_pct / 100.0
+
+        sector = sector_map.get(iid, "Unknown")
+        buckets_raw[sector]["market_value"] += market_val
+        buckets_raw[sector]["day_pnl"] += day_pnl
+        buckets_raw[sector]["count"] += 1.0
+        total_market_value += market_val
+        if sector != "Unknown":
+            covered_value += market_val
+
+    buckets = [
+        SectorBucket(
+            sector=sector,
+            holding_count=int(vals["count"]),
+            market_value=round(vals["market_value"], 2),
+            sector_weight_pct=round(vals["market_value"] / total_market_value * 100, 4)
+            if total_market_value > 0
+            else 0.0,
+            sector_day_pnl=round(vals["day_pnl"], 2),
+        )
+        for sector, vals in sorted(buckets_raw.items(), key=lambda x: -x[1]["market_value"])
+    ]
+
+    covered_pct = covered_value / total_market_value if total_market_value > 0 else 0.0
+    return PortfolioSectorAttributionResponse(
+        portfolio_id=portfolio_id,
+        buckets=buckets,
+        covered_pct=round(covered_pct, 4),
     )
 
 

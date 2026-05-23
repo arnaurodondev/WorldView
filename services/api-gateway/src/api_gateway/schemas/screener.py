@@ -46,6 +46,23 @@ class ScreenerResultItem(BaseModel):
     metrics: dict[str, float | None] | None = None
 
 
+class NLScreenerRequest(BaseModel):
+    """Request body for POST /v1/screener/nl-translate (PLAN-0091 Wave E-1)."""
+
+    model_config = ConfigDict(extra="allow")
+
+    query: str  # natural-language screening query, e.g. "profitable tech stocks under $50"
+
+
+class NLScreenerResponse(BaseModel):
+    """Structured screener filter object parsed from the LLM response."""
+
+    model_config = ConfigDict(extra="allow")
+
+    filters: dict[str, object] = {}  # field → value/range; keys validated against /screen/fields
+    natural_language_query: str = ""  # echo of the original query
+
+
 class ScreenerResponse(BaseModel):
     """Response from POST /v1/fundamentals/screen.
 
