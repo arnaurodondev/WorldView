@@ -272,11 +272,11 @@ async def get_article_impact_history(article_id: str, request: Request) -> Any:
     Returns the 4-window (t0/t1/t2/t5) price-impact history for the article.
     Auth required — the S6 endpoint enforces tenant scoping via X-Internal-JWT.
     """
+    headers = _auth_headers(request)
     clients = _clients(request)
-    sys_headers = _system_headers(request)
     resp = await clients.nlp_pipeline.get(
         f"/api/v1/articles/{article_id}/impact-windows",
-        headers=sys_headers,
+        headers=headers,
     )
     return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
 

@@ -83,10 +83,11 @@ _ENTITY_TYPE_ALIASES: dict[str, str] = {
     "inst": "financial_instrument",
     "institution": "financial_instrument",
     "regulator": "unknown",  # regulators (SEC, Fed) are not financial instruments
-    # country → place (migration 0039 §2b)
+    # country/location → place (migration 0039 §2b; GLiNER uses 'location' not 'country')
     "country": "place",
     "nation": "place",
     "region": "place",
+    "location": "place",
     # other legacy values
     "other": "unknown",
     "concept": "unknown",
