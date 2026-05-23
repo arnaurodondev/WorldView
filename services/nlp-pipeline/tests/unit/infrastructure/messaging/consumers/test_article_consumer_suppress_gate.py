@@ -47,6 +47,9 @@ def _make_settings() -> MagicMock:
     s.topic_signal_detected = "nlp.signal.detected.v1"
     s.max_ollama_queue_depth = 20
     s.resume_ollama_queue_depth = 10
+    # RC-1: disable stub filter in these suppress-gate tests — they use "text" (1 word)
+    # as a placeholder article body and are not testing the word-count gate.
+    s.min_word_count = 0
     return s
 
 
