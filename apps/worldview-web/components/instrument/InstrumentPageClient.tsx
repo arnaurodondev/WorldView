@@ -232,9 +232,13 @@ export function InstrumentPageClient({ entityId }: InstrumentPageClientProps) {
         )}
         {/* Wave D: Intelligence tab (T-D-04) — 3-column orchestrator
             (NewsColumn | GraphColumn | ContextPanel). All data fetching lives
-            inside the children, so this slot only needs the entityId. */}
+            inside the children. WHY bundle?.entity_id (not entityId): entityId
+            is the raw URL slug (ticker or UUID) — KG entity endpoints require a
+            UUID. bundle.entity_id is the resolved UUID from the page-bundle.
+            Until the bundle resolves, pass "" so useQuery enabled guards fire
+            consistently (same pattern as FinancialsTab line above). */}
         {activeTab === "intelligence" && (
-          <IntelligenceTab entityId={entityId} />
+          <IntelligenceTab entityId={bundle?.entity_id ?? ""} />
         )}
       </div>
     </div>
