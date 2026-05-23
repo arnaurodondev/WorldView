@@ -49,6 +49,44 @@ function relLabel(raw: string): string {
   return raw.replace(/_/g, " ").toLowerCase();
 }
 
+/**
+ * toYearQuarter — converts an ISO-8601 date string to "YYYY-Qn" display format.
+ *
+ * WHY "YYYY-Qn" (not full ISO): finance terminals use fiscal quarter notation
+ * for relation validity — "2024-Q3" communicates "this relation was active in
+ * the July–September 2024 period" more intuitively than a raw date string.
+ * Bloomberg and FactSet both use this notation for relation validity ranges.
+ *
+ * WHY guard on NaN: Date.parse() returns NaN for invalid strings. If the KG
+ * stores a malformed date we should fall back gracefully, not crash the panel.
+ *
+ * @param dateStr - ISO-8601 date string (e.g., "2024-08-15T00:00:00Z")
+ * @returns "YYYY-Qn" string (e.g., "2024-Q3") or the original string on parse failure
+ */
+function toYearQuarter(dateStr: string): string {
+  const d = new Date(dateStr);
+  if (isNaN(d.getTime())) return dateStr; // graceful fallback for malformed dates
+  const year = d.getUTCFullYear();
+  // WHY Math.ceil(month/3): months 1–3 → Q1, 4–6 → Q2, 7–9 → Q3, 10–12 → Q4.
+  // getUTCMonth() is 0-indexed so we add 1 first.
+  const quarter = Math.ceil((d.getUTCMonth() + 1) / 3);
+  return `${year}-Q${quarter}`;
+}
+
+/**
+ * isDateInPast — returns true when a date string represents a moment before now.
+ *
+ * WHY UTC comparison: the KG stores validity dates in UTC. Comparing against
+ * Date.now() (also UTC epoch) avoids false positives from local timezone offsets.
+ *
+ * @param dateStr - ISO-8601 date string to compare against today
+ */
+function isDateInPast(dateStr: string): boolean {
+  const d = new Date(dateStr);
+  if (isNaN(d.getTime())) return false; // unknown date → do not mark stale
+  return d.getTime() < Date.now();
+}
+
 function weightBar(weight: number): React.ReactElement {
   const pct = Math.round(weight * 100);
   return (
@@ -155,6 +193,41 @@ export function InlineSelectionPanel({ selectedNode, selectedEdge, onClear }: In
             )}
             <span className="ml-auto shrink-0">{weightBar(selectedEdge.weight)}</span>
           </div>
+
+          {/* ── Edge validity period (D-2) ─────────────────────────────────
+              WHY here (between breadcrumb and summary): validity metadata gives
+              the analyst temporal context before they read the evidence.
+              Showing "STALE" immediately after the relation breadcrumb signals
+              that the claim may no longer be current — relevant before investing
+              time reading the LLM summary and evidence snippets below.
+              WHY conditional rendering (not always shown): most KG relations lack
+              explicit validity dates (open-ended). We only show this section when
+              at least one validity field is present. */}
+          {(selectedEdge.valid_from ?? selectedEdge.valid_to) && (
+            <div className="h-[22px] flex items-center px-3 gap-2 border-b border-border/20">
+              {/* Valid-from in YYYY-Qn format */}
+              {selectedEdge.valid_from && (
+                <span className="text-[9px] font-mono text-muted-foreground">
+                  FROM {toYearQuarter(selectedEdge.valid_from)}
+                </span>
+              )}
+              {/* Valid-to in YYYY-Qn format */}
+              {selectedEdge.valid_to && (
+                <span className="text-[9px] font-mono text-muted-foreground">
+                  TO {toYearQuarter(selectedEdge.valid_to)}
+                </span>
+              )}
+              {/* STALE badge — only when valid_to is in the past.
+                  WHY warning amber (#FFB000): signals caution without the severity
+                  of #EF5350 (error red). A stale relation may still be partially
+                  relevant; it is not an error, just aged data. */}
+              {selectedEdge.valid_to && isDateInPast(selectedEdge.valid_to) && (
+                <span className="text-[9px] font-mono bg-[#FFB000]/10 text-[#FFB000]/80 px-1 rounded">
+                  STALE
+                </span>
+              )}
+            </div>
+          )}
 
           {/* LLM summary */}
           {selectedEdge.relation_summary && (

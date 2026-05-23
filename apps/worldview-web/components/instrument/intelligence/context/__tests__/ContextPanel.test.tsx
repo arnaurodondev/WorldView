@@ -62,6 +62,14 @@ vi.mock("@/components/primitives/SectionDivider", () => ({
   SectionDivider: () => <hr />,
 }));
 
+// WHY mock OpportunityPathsPanel: added in PLAN-0091 D-1, mounted inside
+// ContextPanel. Without this mock, the component tries to call useEntityPaths
+// → useAccessToken which requires ApiClientProvider (not present in this test).
+// ContextPanel tests focus on ContextPanel's own aria contract, not child data.
+vi.mock("@/components/instrument/intelligence/OpportunityPathsPanel", () => ({
+  OpportunityPathsPanel: () => <div data-testid="opportunity-paths-stub" />,
+}));
+
 // ── Import AFTER mocks ────────────────────────────────────────────────────────
 
 // eslint-disable-next-line import/first

@@ -30,6 +30,7 @@ import { TopRelationsBlock } from "./TopRelationsBlock";
 import { PathInsightsBlock } from "./PathInsightsBlock";
 import { ContradictionsBlock } from "./ContradictionsBlock";
 import { NarrativeHistoryDisclosure } from "./NarrativeHistoryDisclosure";
+import { OpportunityPathsPanel } from "@/components/instrument/intelligence/OpportunityPathsPanel";
 
 export interface ContextPanelProps {
   /** Primary entity for the instrument page (UUIDv7). */
@@ -50,6 +51,11 @@ export function ContextPanel({ entityId, onNodeSelect, className }: ContextPanel
       aria-label="Entity overview"
     >
       <EntityOverviewBlock entityId={entityId} />
+      <SectionDivider />
+      {/* OpportunityPathsPanel: top-5 multi-hop paths from this entity to related
+          companies. Only rendered when entityId is available (always true here since
+          ContextPanel requires entityId, but the guard is explicit for clarity). */}
+      {entityId && <OpportunityPathsPanel entityId={entityId} />}
       <SectionDivider />
       {/* TopRelationsBlock fires onNodeSelect → highlights node in graph */}
       <TopRelationsBlock

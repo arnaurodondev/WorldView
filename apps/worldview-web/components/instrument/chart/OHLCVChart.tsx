@@ -9,6 +9,12 @@
  * / VolumeProfileOverlay / Compare overlay all REMOVED per PRD-0088 §5 — deferred
  * for the Quote tab redesign. WHO USES IT: components/instrument/OverviewLayout.tsx.
  * DATA SOURCE: S9 GET /v1/ohlcv/{instrumentId}?timeframe=1D.
+ *
+ * PLAN-0091 F-1 (TA overlay extension):
+ *   Added optional `overlays` prop so TAOverlayPanel can inject computed TA lines
+ *   (EMA 20/50, SMA 200, MACD, Bollinger, RSI, VWAP) into the chart without
+ *   touching useChartSeries internals. The `OverlaySeries` type is exported so
+ *   TAOverlayPanel can import it alongside OHLCVChart.
  */
 
 "use client";
@@ -30,13 +36,45 @@ import {
 } from "@/lib/instrument-context";
 import type { OHLCVBar } from "@/types/api";
 
+/**
+ * OverlaySeries — a single TA indicator line to overlay on the OHLCV chart.
+ *
+ * WHY EXPORTED: TAOverlayPanel imports this type to type-check its
+ * `onOverlaysChange` callback without creating a circular dependency.
+ *
+ * DESIGN NOTES:
+ *   id          — stable string key (e.g. "ema-20", "boll-upper") used to
+ *                 identify series handles in useChartSeries; changes cause
+ *                 the old series to be removed and a new one created.
+ *   data        — same length as the bars array; NaN entries are skipped
+ *                 (lightweight-charts does not render gaps for NaN).
+ *   axis        — "left" binds to the main candlestick price scale; "right"
+ *                 is reserved for future right-axis oscillators (RSI on its
+ *                 own axis). Currently all overlays use "left".
+ *   strokeWidth — default 1; VWAP uses 2 for visual emphasis.
+ */
+export interface OverlaySeries {
+  id: string;
+  label: string;
+  data: number[];
+  color: string;
+  axis?: "left" | "right";
+  strokeWidth?: number;
+}
+
 interface OHLCVChartProps {
   instrumentId: string;
   /** Initial bars from CompanyOverview (last 30d 1D — render immediately). */
   initialBars?: OHLCVBar[];
+  /**
+   * TA overlay lines computed by TAOverlayPanel (PLAN-0091 F-1).
+   * Each entry becomes a lightweight-charts LineSeries on the main price pane.
+   * Changing this prop updates series data without re-mounting the chart.
+   */
+  overlays?: OverlaySeries[];
 }
 
-export function OHLCVChart({ instrumentId, initialBars }: OHLCVChartProps) {
+export function OHLCVChart({ instrumentId, initialBars, overlays }: OHLCVChartProps) {
   const { accessToken } = useAuth();
   const [timeframe, setTimeframe] = useState<Timeframe>("1D");
   // WHY default showVolume=true: volume is the industry-standard candlestick companion.
@@ -91,6 +129,9 @@ export function OHLCVChart({ instrumentId, initialBars }: OHLCVChartProps) {
     showVolume, showMA50, showMA200, showVolMA20, showVWAPLine,
     data, instrumentId, timeframe, logScaleRef, logScale,
     onVolumeProfileBuckets: handleVolumeProfileBuckets,
+    // PLAN-0091 F-1: TA overlay lines from TAOverlayPanel (or undefined when
+    // TAOverlayPanel is not rendered). useChartSeries manages dynamic series.
+    overlays,
   });
 
   // Indicator toggle handler persists selections to localStorage.

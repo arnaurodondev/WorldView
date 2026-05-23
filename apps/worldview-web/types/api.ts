@@ -2301,6 +2301,97 @@ export interface MultiPeriodReturnsResponse {
   periods: PeriodReturnMap;
 }
 
+// ── PLAN-0091 Data Enrichment types ─────────────────────────────────────────
+
+/**
+ * SectorBucket — one sector row in GET /v1/portfolios/{id}/sector-attribution.
+ * market_value and sector_day_pnl are in portfolio currency (USD by default).
+ * sector_weight_pct is 0-100 (percent of total portfolio market value).
+ */
+export interface SectorBucket {
+  sector: string;
+  holding_count: number;
+  market_value: number;
+  sector_weight_pct: number;
+  sector_day_pnl: number;
+}
+
+/**
+ * SectorAttributionResponse — GET /v1/portfolios/{id}/sector-attribution.
+ * covered_pct is 0.0-1.0 (fraction of portfolio with sector data available).
+ * prices_stale is optional — older S9 builds omit it (treat absent as false).
+ */
+export interface SectorAttributionResponse {
+  portfolio_id: string;
+  buckets: SectorBucket[];
+  covered_pct: number;
+  prices_stale?: boolean;
+}
+
+/**
+ * SimilarEntityItem — one result row from POST /v1/entities/similar.
+ * final_score = weighted combination of ann_similarity_score + competes_with_confidence.
+ * has_competes_with_relation is true when the KG already has a COMPETES_WITH edge.
+ */
+export interface SimilarEntityItem {
+  entity_id: string;
+  canonical_name: string;
+  entity_type: string;
+  ticker: string | null;
+  exchange: string | null;
+  ann_similarity_score: number;
+  competes_with_confidence: number | null;
+  final_score: number;
+  has_competes_with_relation: boolean;
+}
+
+/** SimilarEntitiesResponse — POST /v1/entities/similar */
+export interface SimilarEntitiesResponse {
+  entity_id: string;
+  canonical_name: string;
+  results: SimilarEntityItem[];
+  total: number;
+}
+
+/**
+ * ArticleImpactWindows — 4-window price-impact scores for a single article.
+ * day_t0 = same-day price move, day_t1 = +1 trading day, day_t2 = +2, day_t5 = +5.
+ * Each value is null when the window has not been computed yet.
+ */
+export interface ArticleImpactWindows {
+  day_t0: number | null;
+  day_t1: number | null;
+  day_t2: number | null;
+  day_t5: number | null;
+}
+
+/** ArticleImpactHistoryResponse — GET /v1/articles/{article_id}/impact-history */
+export interface ArticleImpactHistoryResponse {
+  article_id: string;
+  impact_windows: ArticleImpactWindows | null;
+}
+
+/**
+ * SentimentTimeseriesPoint — one daily aggregate in the sentiment timeseries.
+ * positive_ratio and negative_ratio are 0-1 fractions (not percentages).
+ * net_sentiment = positive_ratio − negative_ratio, computed client-side by F-2.
+ */
+export interface SentimentTimeseriesPoint {
+  date: string; // "YYYY-MM-DD"
+  article_count: number;
+  avg_relevance: number;
+  positive_ratio: number;
+  negative_ratio: number;
+  avg_impact_score: number;
+}
+
+/** SentimentTimeseriesResponse — GET /v1/entities/{id}/sentiment-timeseries */
+export interface SentimentTimeseriesResponse {
+  entity_id: string;
+  days: number;
+  points: SentimentTimeseriesPoint[];
+}
+
 /** One price level in price-levels response (e.g. R1, PIVOT, S2). */
 export interface PriceLevel {
   label: "R3" | "R2" | "R1" | "PIVOT" | "S1" | "S2" | "S3";

@@ -55,6 +55,18 @@ const ALLOWED_FILES = new Set<string>([
   // from MA50 yellow). When lightweight-charts grows token support this
   // entry should move out of the allowlist.
   "components/instrument/chart/createChartSeries.ts",
+  // PLAN-0091 Wave B-1: the three portfolio enrichment widgets use #0EA5E9
+  // (primary blue) for fill bars and active chip highlights as specified
+  // in the design system (primary=text-[#0EA5E9]). These are deliberate
+  // design-system references, not off-palette drift. The SectorDonut palette
+  // array also requires a raw hex literal (SVG fill= cannot resolve CSS vars).
+  "components/portfolio/RiskMetricsPanel.tsx",
+  "components/portfolio/ConcentrationWidget.tsx",
+  "components/portfolio/SectorAttributionWidget.tsx",
+  // OpportunityPathsPanel and TAOverlayPanel use #0EA5E9 for chart overlays
+  // where CSS variables cannot be resolved (same constraint as createChartSeries).
+  "components/instrument/intelligence/OpportunityPathsPanel.tsx",
+  "components/instrument/quote/TAOverlayPanel.tsx",
 ]);
 
 // Retired Bloomberg-Dark / Midnight-Pro hex codes (must never appear in code).

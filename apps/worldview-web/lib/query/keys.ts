@@ -94,6 +94,17 @@ export const qk = {
     // after mutations that affect multiple portfolio sub-resources at once.
     bundle: (portfolioId: string) =>
       [QK_VERSION, "portfolios", "bundle", portfolioId] as const,
+    // WHY concentration nests under detail(id): qc.invalidateQueries({
+    // queryKey: qk.portfolios.detail(id) }) cascades to this key so a
+    // portfolio mutation (add/sell position) automatically clears the HHI
+    // widget without a manual invalidation call at every mutation site.
+    concentration: (portfolioId: string) =>
+      [QK_VERSION, "portfolios", "detail", portfolioId, "concentration"] as const,
+    // WHY sectorAttribution nests under detail(id): same cascade logic as
+    // concentration above. The sector panel must reflect the updated weights
+    // immediately after any position change — cascade invalidation provides that.
+    sectorAttribution: (portfolioId: string) =>
+      [QK_VERSION, "portfolios", "detail", portfolioId, "sector-attribution"] as const,
     // ── Flat legacy-shape keys for usePortfolioData queries ─────────────
     // WHY different shape from holdings()/transactions() above: those keys nest
     // under [QK_VERSION,"portfolios","detail",id,...] for cascade-invalidation. The queries
@@ -283,6 +294,11 @@ export const qk = {
     // so different clusters cache independently but share the "news" root for
     // future invalidation via qk.news.all.
     cluster: (clusterId: string) => [QK_VERSION, "news", "cluster", clusterId] as const,
+    // PLAN-0091 C-2: impact-history per article powers the ArticleImpactDrawer
+    // popover in the Intelligence tab news rows. Scoped under news.* so a
+    // global news invalidation (e.g. on login/logout) clears it automatically.
+    articleImpactHistory: (articleId: string) =>
+      [QK_VERSION, "news", "article", articleId, "impact-history"] as const,
   },
 
   // ── Screener ─────────────────────────────────────────────────────────────
@@ -491,6 +507,16 @@ export const qk = {
       [QK_VERSION, "kg", "entity", id, "contradictions"] as const,
     narratives: (id: string) =>
       [QK_VERSION, "kg", "entity", id, "narratives"] as const,
+    // PLAN-0091 D-2: similar entities (ANN embedding search) for the
+    // EntitySimilarityPanel. Scoped under kg.entity.* for cascade invalidation
+    // alongside contradictions/narratives on pipeline reruns.
+    similarEntities: (entityId: string) =>
+      [QK_VERSION, "kg", "entity", entityId, "similar"] as const,
+    // PLAN-0091 F-2: daily sentiment aggregates for the SENTI overlay in
+    // OHLCVChart. Days participates in the key so 30d and 90d views cache
+    // independently — switching lookback shows cached data instantly.
+    sentimentTimeseries: (entityId: string, days: number) =>
+      [QK_VERSION, "kg", "entity", entityId, "sentiment-ts", days] as const,
   },
 
   // ── User ─────────────────────────────────────────────────────────────────

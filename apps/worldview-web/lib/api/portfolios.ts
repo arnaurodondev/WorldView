@@ -26,6 +26,7 @@ import type {
   PortfolioBundleResponse,
   HoldingLotsResponse,
   ConcentrationResponse,
+  SectorAttributionResponse,
 } from "@/types/api";
 import { apiFetch } from "./_client";
 
@@ -779,6 +780,28 @@ export function createPortfoliosApi(t: string | undefined) {
         })),
         prices_stale: raw.prices_stale,
       };
+    },
+
+    /**
+     * getSectorAttribution — live-priced sector breakdown for a portfolio.
+     *
+     * WHY a dedicated method (not baked into exposure): exposure gives a single
+     * invested/cash/leverage view; sector attribution decomposes invested capital
+     * by GICS sector with per-sector day P&L. The two serve different components.
+     *
+     * WHY covered_pct matters: not all instruments have GICS sector data in S3.
+     * When covered_pct < 1.0 the UI should show a "prices delayed" badge so
+     * the analyst knows the pie is a partial picture.
+     *
+     * No query params — sector attribution is always the current snapshot (no
+     * historical slicing). The SectorAttributionWidget uses a 30s refetch interval
+     * so it stays live during market hours without a manual refresh.
+     */
+    getSectorAttribution(portfolioId: string): Promise<SectorAttributionResponse> {
+      return apiFetch<SectorAttributionResponse>(
+        `/v1/portfolios/${encodeURIComponent(portfolioId)}/sector-attribution`,
+        { token: t },
+      );
     },
 
     /**

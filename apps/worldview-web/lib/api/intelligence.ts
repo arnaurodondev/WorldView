@@ -46,6 +46,7 @@ import type {
   NarrativeHistoryPage,
   PathFilters,
 } from "@/types/intelligence";
+import type { SentimentTimeseriesResponse } from "@/types/api";
 
 // ── useEntityIntelligence ─────────────────────────────────────────────────────
 
@@ -167,6 +168,52 @@ export function useEntityNarrativeHistory(entityId: string) {
     // WHY extract next_cursor: TanStack passes this return value as `pageParam`
     // for the NEXT fetch. Returning undefined stops the infinite scroll.
     getNextPageParam: (lastPage) => lastPage.next_cursor ?? undefined,
+    enabled: !!entityId && !!token,
+  });
+}
+
+// ── useEntitySentimentTimeseries ──────────────────────────────────────────────
+
+/**
+ * useEntitySentimentTimeseries — daily sentiment aggregates for an entity.
+ *
+ * WHY this hook exists: the SENTI overlay chip in TAOverlayPanel (PLAN-0091 F-2)
+ * overlays net_sentiment (positive_ratio − negative_ratio) as a right-axis series
+ * on the OHLCV chart. Analysts can correlate news sentiment direction with price
+ * moves to identify sentiment-driven inflection points — a core Bloomberg feature.
+ *
+ * WHY staleTime 3_600_000 (1h): sentiment aggregates are recomputed by S6 at most
+ * once per pipeline cycle (~60 min). Re-fetching more often wastes S9 resources
+ * without improving the signal. The TAOverlayPanel only shows the series when the
+ * SENTI chip is active, so the cache stays warm even when the chart is hidden.
+ *
+ * WHY entityId can be null: the hook is mounted once the instrument page loads;
+ * entityId comes from the instrument brief which resolves async. The `enabled`
+ * guard prevents a `GET /undefined/sentiment-timeseries` request on first render.
+ *
+ * @param entityId - The entity UUID (null until brief resolves → no fetch)
+ * @param days     - Look-back window in days (1-365, default 90)
+ */
+export function useEntitySentimentTimeseries(entityId: string | null, days = 90) {
+  const token = useAccessToken();
+
+  return useQuery<SentimentTimeseriesResponse>({
+    // WHY entityId ?? "": useQuery requires a stable, non-optional queryKey.
+    // The `enabled` guard below prevents any fetch when entityId is null, so
+    // the "" fallback never reaches the queryFn — it's only there to satisfy
+    // TypeScript's requirement that the key be defined at hook call time.
+    queryKey: qk.kg.sentimentTimeseries(entityId ?? "", days),
+    queryFn: () =>
+      apiFetch<SentimentTimeseriesResponse>(
+        // WHY encodeURIComponent: entityId is a UUID so this is defensive;
+        // it prevents any injection if the ID format ever changes.
+        `/v1/entities/${encodeURIComponent(entityId!)}/sentiment-timeseries?days=${days}`,
+        { token: token ?? undefined },
+      ),
+    // 1h — matches S6 pipeline cycle (see module comment)
+    staleTime: 3_600_000,
+    // WHY both conditions: the endpoint requires auth (X-Internal-JWT) and the
+    // entityId must be a real UUID — we guard both to avoid spurious 401/422.
     enabled: !!entityId && !!token,
   });
 }

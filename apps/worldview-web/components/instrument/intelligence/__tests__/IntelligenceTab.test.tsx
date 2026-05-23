@@ -106,7 +106,10 @@ const NODE_1: SelectedNodeInfo = {
   edges: [{ label: "COMPETES_WITH", weight: 0.8, neighborId: "n2", neighborLabel: "Microsoft" }],
 };
 
-const NODE_2: SelectedNodeInfo = {
+// WHY _NODE_2 prefix: this fixture was added for a planned T4 multi-selection test
+// that wasn't implemented yet. The _ suppresses the no-unused-vars lint rule while
+// keeping the fixture co-located with its peers so the T4 test can use it directly.
+const _NODE_2: SelectedNodeInfo = {
   id: "n2",
   label: "Microsoft",
   type: "company",

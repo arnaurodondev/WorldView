@@ -33,6 +33,30 @@ export { matchesRelFilter };
 // CSS classes never reach the canvas. Mirrors --muted-foreground (#83838A) from globals.css.
 const NODE_DEFAULT_COLOR = "#83838A";
 
+/**
+ * INDUSTRY_COLORS — sector-based fill color overrides for sigma.js nodes (D-2).
+ *
+ * WHY these 5 sectors only: together they cover 80%+ of S&P 500 market cap.
+ * Unknown or unlisted sectors fall through to ENTITY_TYPE_COLOR_MAP (in GraphLoader)
+ * so there is always a sensible fallback — no entry here = no override.
+ *
+ * WHY hex (not CSS vars): sigma WebGL cannot read CSS variables — hex values are
+ * required. These match Tailwind blue-500, emerald-500, orange-500, red-500, violet-500.
+ *
+ * WHY separate from ENTITY_TYPE_COLOR_MAP: entity type (company / person / event)
+ * is coarser than industry — all companies would get the same color. Industry
+ * colouring adds a second visual dimension without conflicting with entity-type.
+ */
+const INDUSTRY_COLORS: Record<string, string> = {
+  "Technology": "#3B82F6",          // blue-500
+  "Financial Services": "#10B981",  // emerald-500
+  "Energy": "#F97316",              // orange-500
+  "Healthcare": "#EF4444",          // red-500
+  "Consumer Cyclical": "#8B5CF6",   // violet-500
+  // WHY these 5 only: covers 80%+ of S&P 500 by market cap. Unknown sectors
+  // fall back to the graph's default node color (no entry = no override).
+};
+
 // ── NodeTooltip / EdgeTooltip types (shared with EntityGraph.tsx) ─────────────
 
 export interface NodeTooltip {
@@ -69,6 +93,17 @@ export interface SelectedEdgeInfo {
   targetLabel: string;
   /** "outbound" = center entity is subject; "inbound" = center entity is object; "lateral" = depth>1 edge */
   direction?: "outbound" | "inbound" | "lateral" | null;
+  /**
+   * WHY valid_from / valid_to (D-2 edge validity):
+   * KG relation_validity stores the ISO-8601 date range when this relation was
+   * considered active. valid_from marks the earliest confirmed evidence date;
+   * valid_to is set when the relation ended (e.g., an executive left a company).
+   * Both are optional — most relations lack explicit validity dates (open-ended).
+   * EdgeDetailCard uses these to display "YYYY-Qn" validity and a STALE badge
+   * when valid_to is in the past.
+   */
+  valid_from?: string | null;
+  valid_to?: string | null;
 }
 
 interface GraphEventsProps {
@@ -147,6 +182,11 @@ export function GraphEvents({ centerEntityId, onNodeHover, onEdgeHover, onNodeCl
           sourceLabel: (graph.getNodeAttribute(src, "label") as string | undefined) ?? src,
           targetLabel: (graph.getNodeAttribute(tgt, "label") as string | undefined) ?? tgt,
           direction: (attrs.direction as "outbound" | "inbound" | "lateral" | null | undefined) ?? null,
+          // WHY forward valid_from/valid_to: graphology stores these from the
+          // GraphEdge data (D-2 edge validity). InlineSelectionPanel reads them
+          // to display the "YYYY-Qn" validity period and the STALE badge.
+          valid_from: (attrs.valid_from as string | null | undefined) ?? null,
+          valid_to: (attrs.valid_to as string | null | undefined) ?? null,
         });
       },
     });
@@ -211,6 +251,11 @@ export function GraphLoader({ data, centerEntityId, layout }: GraphLoaderProps) 
             // WHY store decay_class: FilterController reads it via getEdgeAttributes()
             // to apply alpha-based opacity. Without this attr it always defaults to MEDIUM.
             decay_class: edge.decay_class ?? null,
+            // WHY store valid_from/valid_to (D-2 edge validity): the clickEdge handler
+            // in GraphEvents reads these attrs and emits them via SelectedEdgeInfo so
+            // InlineSelectionPanel can display the YYYY-Qn validity period + STALE badge.
+            valid_from: (edge as { valid_from?: string | null }).valid_from ?? null,
+            valid_to: (edge as { valid_to?: string | null }).valid_to ?? null,
             size: Math.max(0.5, edge.weight * 2),
             color: "#18181B",
           });
@@ -314,14 +359,38 @@ export function FilterController({ activeRelFilter, minWeight, searchQuery, sele
             borderSize: 2,
           };
         }
-        if (!searchQuery) return data;
-        const label = (data.label as string ?? "").toLowerCase();
+
+        // WHY industry color BEFORE search dimming (D-2 industry colouring):
+        // We apply the sector override to the base data so the industry color
+        // is visible when no search is active. The search-dim branch below
+        // overrides it with near-invisible colors for unmatched nodes — that's
+        // intentional (dimmed unmatched nodes should lose their industry color
+        // so the matching nodes stand out clearly).
+        //
+        // HOW: nodeType is always "company", "person", etc. — not the sector.
+        // The sector is stored as the `sector` or `industry` graphology attribute
+        // (populated from the KG entity_summary during GraphLoader). We read
+        // whichever is present and look it up in INDUSTRY_COLORS.
+        const rawSector = (data.sector as string | undefined) ?? (data.industry as string | undefined);
+        let nodeData = data;
+        if (rawSector) {
+          const industryColor = INDUSTRY_COLORS[rawSector];
+          if (industryColor) {
+            // WHY spread + color override (not mutation): sigma nodeReducer must
+            // return a new object — mutating `data` would corrupt the shared
+            // graphology attribute store across multiple sigma refresh cycles.
+            nodeData = { ...data, color: industryColor };
+          }
+        }
+
+        if (!searchQuery) return nodeData;
+        const label = (nodeData.label as string ?? "").toLowerCase();
         if (!label.includes(searchQuery.toLowerCase())) {
           // WHY #09090B (Terminal Dark --background): makes unmatched nodes nearly invisible
           // without fully hiding them (avoids dangling-edge errors in sigma).
-          return { ...data, color: "#09090B", labelColor: "#09090B" };
+          return { ...nodeData, color: "#09090B", labelColor: "#09090B" };
         }
-        return data;
+        return nodeData;
       },
     });
     sigma.refresh();

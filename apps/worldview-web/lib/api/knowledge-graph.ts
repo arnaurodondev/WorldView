@@ -5,7 +5,12 @@
  * contradictions panel.
  */
 
-import type { EntityGraph, ContradictionsResponse, EntityPublic } from "@/types/api";
+import type {
+  EntityGraph,
+  ContradictionsResponse,
+  EntityPublic,
+  SimilarEntitiesResponse,
+} from "@/types/api";
 import type { NarrativeHistoryPage } from "@/types/intelligence";
 import { apiFetch, GatewayError } from "./_client";
 
@@ -172,6 +177,52 @@ export function createKnowledgeGraphApi(t: string | undefined) {
      */
     getEntityContradictions(entityId: string): Promise<ContradictionsResponse | null> {
       return this.getContradictions(entityId);
+    },
+
+    /**
+     * getSimilarEntities — ANN embedding similarity search for an entity.
+     *
+     * WHY POST (not GET): the request carries a JSON body with entity_id,
+     * top_k, min_score, include_competitors_only — too many params for a
+     * clean GET query string. S9 proxies this to S7 which uses pgvector
+     * cosine distance on the entity narrative embeddings.
+     *
+     * WHY this lives in knowledge-graph.ts (not content.ts or intelligence.ts):
+     * S9's content.py proxies it but the underlying data source is S7 Knowledge
+     * Graph — entity embeddings are computed and stored there. Keeping the client
+     * method alongside getEntityGraph/getEntityDetail gives a consistent entity
+     * API surface for component developers.
+     *
+     * Returns null on 404 (entity not found) or 422 (no embedding computed yet).
+     *
+     * @param entityId - The source entity UUID for the similarity search
+     * @param topK     - Max results (default 5 for the EntitySimilarityPanel list)
+     * @param minScore - Min ANN cosine similarity 0-1 (default 0.0 = all results)
+     */
+    async getSimilarEntities(
+      entityId: string,
+      topK = 5,
+      minScore = 0.0,
+    ): Promise<SimilarEntitiesResponse | null> {
+      try {
+        return await apiFetch<SimilarEntitiesResponse>("/v1/entities/similar", {
+          method: "POST",
+          // WHY JSON body: S9/S7 expect SimilarEntitiesRequest shape
+          // {entity_id, top_k, min_score}. These don't fit a GET query string
+          // because entity_id is a UUID that must not be percent-encoded in a
+          // path param for this POST endpoint.
+          body: { entity_id: entityId, top_k: topK, min_score: minScore },
+          token: t,
+        });
+      } catch (err) {
+        // 404 = entity not in KG yet; 422 = embedding not computed yet — both
+        // are expected for newly ingested instruments. Return null so the
+        // EntitySimilarityPanel shows an empty state, not an error banner.
+        if (err instanceof GatewayError && (err.status === 404 || err.status === 422)) {
+          return null;
+        }
+        throw err;
+      }
     },
 
     /**

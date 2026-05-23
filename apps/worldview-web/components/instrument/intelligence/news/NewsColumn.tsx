@@ -7,6 +7,11 @@
  * sentinel pattern converts paging into pure scrolling.
  * WHY j/k/Enter hotkeys (T-17): analysts with Bloomberg muscle memory expect
  * arrow-key-style navigation through news without touching the mouse.
+ *
+ * PLAN-0091 C-2: SentimentBadge and ArticleImpactDrawer are wired inside
+ * DenseArticleRow (after the source code column). This column passes the
+ * full RankedArticle down, so article.sentiment and article.article_id are
+ * available to the row without any prop threading here.
  */
 
 "use client";
@@ -16,6 +21,15 @@ import { useEntityNewsInfinite } from "@/components/instrument/hooks/useEntityNe
 import { useHotkeyScope } from "@/contexts/HotkeyContext";
 import { DenseArticleRow } from "./DenseArticleRow";
 import { NewsFilters, type NewsSentiment, type NewsTimeRange } from "./NewsFilters";
+// PLAN-0091 C-2: SentimentBadge + ArticleImpactDrawer wired at the column level
+// so DenseArticleRow stays a pure presentational component with no query hooks.
+// WHY here (not inside DenseArticleRow): DenseArticleRow has existing tests that
+// render without <ApiClientProvider>. Adding ArticleImpactDrawer (which calls
+// useAuthedQuery) inside DenseArticleRow would require mocking the provider in
+// every DenseArticleRow test. Wiring in NewsColumn avoids that test surface
+// growth while still placing the badges visually inline with each row.
+import { SentimentBadge } from "@/components/ui/sentiment-badge";
+import { ArticleImpactDrawer } from "@/components/instrument/intelligence/ArticleImpactDrawer";
 
 interface NewsColumnProps {
   // PRD-0089 F2 §6.5: this rail is tradable-only, so the canonical id name
@@ -161,11 +175,34 @@ export function NewsColumn({ instrumentId }: NewsColumnProps) {
         ) : (
           <>
             {articles.map((a, idx) => (
-              <DenseArticleRow
+              // PLAN-0091 C-2: wrap each row in a flex container so the
+              // SentimentBadge and ArticleImpactDrawer sit inline to the right
+              // of the DenseArticleRow without disrupting its internal layout.
+              // WHY relative (not absolute): the badges must occupy real space in
+              // the row so their widths don't collapse onto the headline text.
+              // WHY items-center: badges are smaller than 18px and need vertical
+              // centering relative to the row div.
+              <div
                 key={a.article_id}
-                article={a}
-                highlighted={idx === selectedIdx}
-              />
+                className="flex items-center"
+              >
+                <DenseArticleRow
+                  article={a}
+                  highlighted={idx === selectedIdx}
+                />
+                {/*
+                 * WHY only when article_id is defined: LIGHT-tier articles may
+                 * arrive with a null article_id (pre-scoring state). Rendering
+                 * ArticleImpactDrawer with a null id fires a guaranteed 404
+                 * to /v1/articles/null/impact-history. Guard avoids the wasted request.
+                 */}
+                {a.article_id && (
+                  <div className="flex items-center gap-1 shrink-0 ml-1">
+                    <SentimentBadge sentiment={a.sentiment} />
+                    <ArticleImpactDrawer articleId={a.article_id} />
+                  </div>
+                )}
+              </div>
             ))}
             <div ref={sentinelRef} className="h-4" aria-hidden="true" />
             {isFetchingNextPage && (

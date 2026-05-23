@@ -41,6 +41,16 @@ export interface HoldingLotsPanelProps {
   holdings: Holding[];
   /** Live quote map; used to compute per-lot unrealised on the server. */
   quotes: BatchQuoteResponse["quotes"];
+  /**
+   * Optional instrument_id to pre-select on mount.
+   *
+   * WHY optional (not required): backward-compatible addition. Existing callers
+   * (HoldingsTab, analytics page default) do not pass this prop and fall through
+   * to the largest-position heuristic. The analytics page wires ?ticker from the
+   * context menu "View Tax Lots" action so the right-clicked holding is immediately
+   * visible rather than requiring the user to re-select from the dropdown.
+   */
+  defaultInstrumentId?: string | null;
 }
 
 // ── Component ────────────────────────────────────────────────────────────────
@@ -49,12 +59,19 @@ export function HoldingLotsPanel({
   portfolioId,
   holdings,
   quotes,
+  defaultInstrumentId,
 }: HoldingLotsPanelProps) {
   const { accessToken } = useAuth();
 
-  // Default selection: largest position (matches the row-1 instinct on the
-  // table above). Users override via the select control.
+  // Default selection: use caller-supplied defaultInstrumentId when present
+  // (e.g. pre-selected via the context-menu "View Tax Lots" action), otherwise
+  // fall back to the largest position (matches the row-1 instinct on the table
+  // above). Users can always override via the select control.
   const initialSelection = useMemo(() => {
+    // WHY defaultInstrumentId check first: if a specific holding was
+    // right-clicked, the user's intent is to see that holding's lots. The
+    // largest-position heuristic is only meaningful when no preference is given.
+    if (defaultInstrumentId) return defaultInstrumentId;
     if (holdings.length === 0) return null;
     const sorted = [...holdings].sort(
       (a, b) =>
@@ -62,7 +79,7 @@ export function HoldingLotsPanel({
         Number(a.quantity) * (quotes[a.instrument_id]?.price ?? Number(a.average_cost)),
     );
     return sorted[0]?.instrument_id ?? null;
-  }, [holdings, quotes]);
+  }, [defaultInstrumentId, holdings, quotes]);
   const [selectedInstrumentId, setSelectedInstrumentId] = useState<string | null>(
     initialSelection,
   );

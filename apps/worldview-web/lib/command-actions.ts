@@ -638,6 +638,41 @@ actionRegistry.register({
 // ── VIEW ──────────────────────────────────────────────────────────────────────
 
 actionRegistry.register({
+  id: "view.tax-lots",
+  label: "View Tax Lots",
+  description:
+    "Open the Holdings Lots panel for this instrument on the Analytics page.",
+  category: "View",
+  // WHY "row" scope only: tax lots are a per-holding concept — the action
+  // only makes sense when a specific holding row has been right-clicked.
+  // WHY "page:/portfolio" scope: lots are only meaningful inside the portfolio
+  // context (you cannot view lots for a screener result that you don't hold).
+  scopes: ["row", "page:/portfolio"],
+  // WHY mnemonic "L": "L" for Lots; no other row-level action claims it.
+  mnemonic: "L",
+  // WHY visible guard on holding kind: the "View Tax Lots" item should not
+  // appear in the context menu when right-clicking a watchlist or screener row
+  // where there is no actual holding behind it (no lots to show).
+  visible({ row }) {
+    return row?.kind === "holding";
+  },
+  run({ row, navigate }) {
+    if (!row || row.kind !== "holding") return;
+    // Navigate to the portfolio analytics page (which renders HoldingLotsPanel).
+    // WHY query param `ticker`: HoldingLotsPanel selects the initial instrument
+    // via the largest-position heuristic by default. Passing `ticker` lets the
+    // analytics page pre-select the right-clicked holding so the user lands
+    // directly on the requested lot breakdown.
+    // WHY analytics sub-route: HoldingLotsPanel is rendered on /portfolio/analytics
+    // (alongside DayPnLDistribution, RealizedPnLSparkline, etc.) so the holdings
+    // table on /portfolio stays at 1-screen density (PRD-0089 W2 §4.21).
+    navigate?.(
+      `/portfolio/analytics?ticker=${encodeURIComponent(row.ticker)}`,
+    );
+  },
+});
+
+actionRegistry.register({
   id: "view.compare-chart",
   label: "Compare on Chart",
   description: "Add this instrument to the chart comparison overlay.",
