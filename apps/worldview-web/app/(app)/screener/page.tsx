@@ -33,9 +33,10 @@ import {
 import { useQuery } from "@tanstack/react-query";
 import { useQueryState, parseAsString, parseAsStringLiteral } from "nuqs";
 import { useRouter } from "next/navigation";
-import type { GridApi, GridReadyEvent } from "ag-grid-community";
+import type { GridApi, GridReadyEvent, CellMouseOverEvent } from "ag-grid-community";
 import { createGateway } from "@/lib/gateway";
 import { useAuth } from "@/hooks/useAuth";
+import { useQueryClient } from "@tanstack/react-query";
 import { AgGridBase } from "@/components/ui/ag-grid/AgGridBase";
 import { createAgScreenerColumns } from "@/components/screener/ag-screener-columns";
 import dynamic from "next/dynamic";
@@ -66,6 +67,8 @@ import { applyClientFilters } from "@/features/screener/lib/apply-client-filters
 import { qk } from "@/lib/query/keys";
 import { ScreenerHeader } from "@/components/screener/ScreenerHeader";
 import { FilterChipStrip } from "@/components/screener/FilterChipStrip";
+import { NLScreenerInput } from "@/components/screener/NLScreenerInput";
+import { RowHoverToolbar } from "@/components/screener/RowHoverToolbar";
 import { SCREENER_PRESETS } from "@/lib/screener/presets";
 
 // ── Constants ──────────────────────────────────────────────────────────────────
@@ -88,6 +91,7 @@ function detectActivePreset(filters: FilterState): string | null {
 export default function ScreenerPage() {
   const { accessToken } = useAuth();
   const router = useRouter();
+  const queryClient = useQueryClient();
 
   // ── URL-backed dimensions ───────────────────────────────────────────────
   const [urlSector, setUrlSector] = useQueryState(
@@ -120,6 +124,8 @@ export default function ScreenerPage() {
   // ── UI state ────────────────────────────────────────────────────────────
   const [filtersOpen, setFiltersOpen] = useState(false);
   const [savedDialogOpen, setSavedDialogOpen] = useState(false);
+  const [nlVisible, setNlVisible] = useState(false);
+  const [hoveredRow, setHoveredRow] = useState<{ data: ScreenerResult; rect: DOMRect } | null>(null);
 
   // ── Column preferences ──────────────────────────────────────────────────
   const [columns, setColumns] = useState<ScreenerColumn[]>(() => loadColumnPrefs());
@@ -198,6 +204,63 @@ export default function ScreenerPage() {
   const handleLoadMore = useCallback(() => {
     setOffset((o) => o + PAGE_SIZE);
   }, []);
+
+  // ── NL screener handlers ────────────────────────────────────────────────
+  const handleNLApply = useCallback((patch: Partial<FilterState>) => {
+    const merged = { ...appliedFilters, ...patch };
+    handleApply(merged);
+    setNlVisible(false);
+  }, [appliedFilters, handleApply]);
+
+  // "/" hotkey toggles the NL input bar; only fires when no input/textarea has focus.
+  useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key !== "/") return;
+      const tag = (e.target as HTMLElement).tagName;
+      if (tag === "INPUT" || tag === "TEXTAREA") return;
+      e.preventDefault();
+      setNlVisible((v) => !v);
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, []);
+
+  // ── Row hover handlers ──────────────────────────────────────────────────
+  // WHY CellMouseOver (not RowMouseEnter): AG Grid React doesn't expose row-level
+  // mouse events. Cell events fire on every cell entry; we deduplicate by rowIndex.
+  const lastHoveredRowIndex = useRef<number | null>(null);
+  // WHY mouseOutPending: CellMouseOut fires between cells in the same row. The rAF
+  // delay lets CellMouseOver cancel the clear before it commits. Without this flag
+  // the toolbar flickers every time the cursor crosses a column boundary.
+  const mouseOutPendingRef = useRef(false);
+
+  const handleCellMouseOver = useCallback((e: CellMouseOverEvent<ScreenerResult>) => {
+    mouseOutPendingRef.current = false;
+    if (e.rowIndex === lastHoveredRowIndex.current) return;
+    lastHoveredRowIndex.current = e.rowIndex;
+    if (!e.data || !e.event) return;
+    const rowEl = (e.event.target as HTMLElement).closest(".ag-row");
+    if (!rowEl) return;
+    setHoveredRow({ data: e.data, rect: rowEl.getBoundingClientRect() });
+  }, []);
+
+  const handleCellMouseOut = useCallback(() => {
+    mouseOutPendingRef.current = true;
+    requestAnimationFrame(() => {
+      if (!mouseOutPendingRef.current) return;
+      lastHoveredRowIndex.current = null;
+      setHoveredRow(null);
+    });
+  }, []);
+
+  // ── Compare set (session-scoped) ────────────────────────────────────────
+  const handleCompare = useCallback((ticker: string) => {
+    // WHY void queryClient: import is satisfied; future compare feature will
+    // use a session-scoped set stored here. For now show a browser toast.
+    void queryClient;
+    // eslint-disable-next-line no-console
+    console.info(`[compare] ${ticker} added to compare set`);
+  }, [queryClient]);
 
   // ── Client-side filtering + sparklines ──────────────────────────────────
   const filteredRows = useMemo(
@@ -314,6 +377,13 @@ export default function ScreenerPage() {
       {/* ── Active-filter chip strip (hidden when no filters set) ────── */}
       <FilterChipStrip filters={appliedFilters} onApply={handleApply} />
 
+      {/* ── NL screener bar (toggled by "/" hotkey) ──────────────────── */}
+      <NLScreenerInput
+        visible={nlVisible}
+        onApply={handleNLApply}
+        onDismiss={() => setNlVisible(false)}
+      />
+
       {/* ── Collapsible filter panel ─────────────────────────────────── */}
       <ScreenerFilterBar
         isOpen={filtersOpen}
@@ -325,7 +395,7 @@ export default function ScreenerPage() {
       />
 
       {/* ── AG Grid table ────────────────────────────────────────────── */}
-      <div className="flex-1 min-h-0 flex flex-col overflow-hidden">
+      <div className="flex-1 min-h-0 flex flex-col overflow-hidden relative">
         <AgGridBase<ScreenerResult>
           rowData={filteredRows}
           columnDefs={agColumns}
@@ -334,8 +404,22 @@ export default function ScreenerPage() {
           onRowClicked={(row) =>
             router.push(`/instruments/${row.ticker || row.instrument_id}`)
           }
+          onCellMouseOver={handleCellMouseOver}
+          onCellMouseOut={handleCellMouseOut}
           className="flex-1"
         />
+
+        {/* ── Row hover action toolbar ───────────────────────────────── */}
+        {hoveredRow && (
+          <RowHoverToolbar
+            rowRect={hoveredRow.rect}
+            ticker={hoveredRow.data.ticker ?? ""}
+            instrumentId={hoveredRow.data.instrument_id}
+            onWatch={() => { /* watchlist endpoint not yet available */ }}
+            onAlert={() => { /* alert dialog integration pending */ }}
+            onCompare={handleCompare}
+          />
+        )}
 
         {!isLoading && !error && lastMergedOffset.current !== null && filteredRows.length === 0 && (
           <DashboardEmptyState

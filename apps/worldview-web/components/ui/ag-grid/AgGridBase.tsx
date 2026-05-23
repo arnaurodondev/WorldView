@@ -12,6 +12,8 @@ import type {
   GridReadyEvent,
   GetRowIdParams,
   RowClickedEvent,
+  CellMouseOverEvent,
+  CellMouseOutEvent,
   CellContextMenuEvent,
   SortChangedEvent,
 } from "ag-grid-community";
@@ -32,6 +34,10 @@ export interface AgGridBaseProps<TData extends object> {
   onColumnStateChanged?: () => void;
   /** When true, suppresses the browser's native right-click context menu. */
   preventDefaultOnContextMenu?: boolean;
+  /** Fires when the cursor enters a cell. Use to show row-level action overlays. */
+  onCellMouseOver?: (params: CellMouseOverEvent<TData>) => void;
+  /** Fires when the cursor leaves a cell. Use to hide row-level action overlays. */
+  onCellMouseOut?: (params: CellMouseOutEvent<TData>) => void;
   /**
    * WHY pinnedBottomRowData: AG Grid renders pinned rows inside the grid DOM,
    * keeping them in sync with column widths, pinning, and horizontal scroll
@@ -89,6 +95,8 @@ export function AgGridBase<TData extends object>({
   pinnedBottomRowData,
   rowHeight = 28,
   context,
+  onCellMouseOver,
+  onCellMouseOut,
 }: AgGridBaseProps<TData>) {
   const colStateHandler = onColumnStateChanged;
 
@@ -123,6 +131,8 @@ export function AgGridBase<TData extends object>({
         onColumnResized={colStateHandler ? () => colStateHandler() : undefined}
         onColumnVisible={colStateHandler ? () => colStateHandler() : undefined}
         onColumnMoved={colStateHandler ? () => colStateHandler() : undefined}
+        onCellMouseOver={onCellMouseOver}
+        onCellMouseOut={onCellMouseOut}
         preventDefaultOnContextMenu={preventDefaultOnContextMenu}
         enableCellTextSelection={true}
         defaultColDef={{
