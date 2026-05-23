@@ -13,7 +13,7 @@ import json
 from typing import Any
 from uuid import UUID
 
-from fastapi import APIRouter, HTTPException, Query, Request, Response
+from fastapi import APIRouter, HTTPException, Path, Query, Request, Response
 
 from api_gateway.routes.helpers import _auth_headers, _clients
 from api_gateway.schemas import PredictionMarket, PredictionMarketsListResponse
@@ -66,7 +66,7 @@ def _transform_graph_response(raw: dict[str, Any]) -> dict[str, Any]:
                 # is stable — InlineSelectionPanel may render them if present.
                 "description": center.get("description") or None,
                 "sector": center.get("sector") or None,
-            }
+            },
         )
 
     for eid, entity_data in entities.items():
@@ -83,7 +83,7 @@ def _transform_graph_response(raw: dict[str, Any]) -> dict[str, Any]:
                 # B-01: description and sector forwarded if S7 provides them.
                 "description": entity_data.get("description") or None,
                 "sector": entity_data.get("sector") or None,
-            }
+            },
         )
 
     # Build edges from S7 relations; skip any relation missing required fields
@@ -129,7 +129,7 @@ def _transform_graph_response(raw: dict[str, Any]) -> dict[str, Any]:
                 # None when S7 omits it — frontend defaults to MEDIUM opacity.
                 "decay_class": rel.get("decay_class") or None,  # str | None
                 "direction": direction,  # "outbound" | "inbound" | "lateral"
-            }
+            },
         )
 
     # WHY filter orphan edges: S7 may include relations whose endpoints are not
@@ -163,6 +163,8 @@ async def get_entity_graph(
     depth: int = Query(default=1, ge=1, le=3),
     confidence_breakdown: bool = Query(default=False),
     focus_node: str | None = Query(default=None, max_length=36),
+    min_confidence: float | None = Query(default=None, ge=0.0, le=1.0),
+    semantic_mode: str | None = Query(default=None, max_length=20),
 ) -> Any:
     """Proxy GET /api/v1/entities/{entity_id}/graph → S7 Knowledge Graph.
 
@@ -209,14 +211,14 @@ async def get_entity_graph(
     headers = _auth_headers(request)
     clients = _clients(request)
 
-    # Build params: forward known S7 params explicitly so the intent of each
-    # forwarded param is clear and log noise from unknown params is avoided.
-    raw_params = dict(request.query_params)
+    # Build params: all forwarded values are typed FastAPI Query params — no raw_params.
+    # WHY no raw_params forwarding: unvalidated query strings allow any string (including
+    # injection payloads) to reach S7. Typed params get 422 from FastAPI before any I/O.
     s7_params: dict[str, str] = {"limit": str(limit)}
-    if "min_confidence" in raw_params:
-        s7_params["min_confidence"] = raw_params["min_confidence"]
-    if "semantic_mode" in raw_params:
-        s7_params["semantic_mode"] = raw_params["semantic_mode"]
+    if min_confidence is not None:
+        s7_params["min_confidence"] = str(min_confidence)
+    if semantic_mode is not None:
+        s7_params["semantic_mode"] = semantic_mode
     # ISSUE-5 (2026-05-10): forward depth to S7 which supports AGE Cypher multi-hop
     # traversal. depth=1 is S7's default (SQL query) so only send when >1 to avoid
     # a redundant param on the common case. depth>1 requires KNOWLEDGE_GRAPH_CYPHER_ENABLED.
@@ -253,10 +255,10 @@ async def get_entity_graph(
         # the caller apply to all depths — omitting them from the depth=1 merge
         # call would surface lower-quality edges than the primary call filtered out.
         depth1_params: dict[str, str] = {"limit": str(limit)}
-        if "min_confidence" in raw_params:
-            depth1_params["min_confidence"] = raw_params["min_confidence"]
-        if "semantic_mode" in raw_params:
-            depth1_params["semantic_mode"] = raw_params["semantic_mode"]
+        if min_confidence is not None:
+            depth1_params["min_confidence"] = str(min_confidence)
+        if semantic_mode is not None:
+            depth1_params["semantic_mode"] = semantic_mode
         depth1_resp = await clients.knowledge_graph.get(
             f"/api/v1/entities/{entity_id}/graph",
             params=depth1_params,  # no depth param → depth=1 SQL path
@@ -372,7 +374,7 @@ async def get_entity_intelligence(
     entity_id: UUID,
     request: Request,
     confidence_breakdown: bool = Query(default=False),
-    focus_node: str | None = Query(default=None),
+    focus_node: str | None = Query(default=None, max_length=36),
 ) -> Any:
     """Proxy GET /api/v1/entities/{entity_id}/intelligence → S7 Knowledge Graph.
 
@@ -775,7 +777,11 @@ async def get_prediction_market_categories(request: Request) -> Any:
     response_model=PredictionMarket,
     response_model_exclude_none=True,
 )
-async def get_prediction_market(market_id: str, request: Request) -> Any:
+async def get_prediction_market(
+    market_id: str = Path(..., min_length=1, max_length=80, pattern=r"^[\w\-\.]+$"),
+    *,
+    request: Request,
+) -> Any:
     """Proxy GET /api/v1/prediction-markets/{id} → S3 Market Data.
 
     Requires authentication. S3 returns 404 if the market_id is unknown.
@@ -797,7 +803,11 @@ async def get_prediction_market(market_id: str, request: Request) -> Any:
 
 
 @router.get("/signals/prediction-markets/{market_id}/history")
-async def get_prediction_market_history(market_id: str, request: Request) -> Any:
+async def get_prediction_market_history(
+    market_id: str = Path(..., min_length=1, max_length=80, pattern=r"^[\w\-\.]+$"),
+    *,
+    request: Request,
+) -> Any:
     """Proxy GET /api/v1/prediction-markets/{id}/history → S3 Market Data.
 
     Requires authentication. Forwards from/to/limit query params.

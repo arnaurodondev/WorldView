@@ -399,6 +399,228 @@ async def test_transform_graph_response_orphan_filter() -> None:
 
 
 @pytest.mark.asyncio
+async def test_transform_graph_b01_optional_fields_on_nodes() -> None:
+    """_transform_graph_response propagates B-01 optional fields on center and neighbor nodes.
+
+    F-007: ticker, description, sector are forwarded from S7 EntitySummary so
+    the frontend InlineSelectionPanel and PeerComparisonPanel can use them
+    without a second API call.  None is the correct sentinel when the field is
+    absent — NOT an empty string.
+    """
+    from api_gateway.routes.intelligence import _transform_graph_response
+
+    center_id = "00000000-0000-0000-0000-000000000001"
+    neighbor_id = "00000000-0000-0000-0000-000000000002"
+
+    s7_payload = {
+        "center": {
+            "entity_id": center_id,
+            "canonical_name": "Apple Inc.",
+            "entity_type": "company",
+            "ticker": "AAPL",
+            "description": "Technology company.",
+            "sector": "Technology",
+        },
+        "relations": [
+            {
+                "relation_id": "rel-1",
+                "subject_entity_id": center_id,
+                "object_entity_id": neighbor_id,
+                "canonical_type": "competes_with",
+                "confidence": 0.85,
+            }
+        ],
+        "entities": {
+            neighbor_id: {
+                "entity_id": neighbor_id,
+                "canonical_name": "Microsoft Corp.",
+                "entity_type": "company",
+                "ticker": "MSFT",
+                "description": "Software company.",
+                "sector": "Technology",
+            }
+        },
+    }
+
+    result = _transform_graph_response(s7_payload)
+
+    nodes_by_id = {n["id"]: n for n in result["nodes"]}
+
+    # Center node B-01 fields
+    center_node = nodes_by_id[center_id]
+    assert center_node["ticker"] == "AAPL", "center ticker must be forwarded"
+    assert center_node["description"] == "Technology company.", "center description must be forwarded"
+    assert center_node["sector"] == "Technology", "center sector must be forwarded"
+
+    # Neighbor node B-01 fields
+    neighbor_node = nodes_by_id[neighbor_id]
+    assert neighbor_node["ticker"] == "MSFT", "neighbor ticker must be forwarded"
+    assert neighbor_node["description"] == "Software company.", "neighbor description must be forwarded"
+    assert neighbor_node["sector"] == "Technology", "neighbor sector must be forwarded"
+
+
+@pytest.mark.asyncio
+async def test_transform_graph_b01_optional_fields_absent_when_missing() -> None:
+    """_transform_graph_response sets description and sector to None when S7 omits them.
+
+    F-007: optional B-01 fields must be None (not empty string) when absent —
+    the frontend type contract uses null/undefined to conditionally render panels.
+    ticker defaults to empty string (non-nullable in the frontend type).
+    """
+    from api_gateway.routes.intelligence import _transform_graph_response
+
+    center_id = "00000000-0000-0000-0000-000000000010"
+    neighbor_id = "00000000-0000-0000-0000-000000000011"
+
+    s7_payload = {
+        "center": {
+            "entity_id": center_id,
+            "canonical_name": "No-Meta Corp.",
+            "entity_type": "company",
+            # ticker, description, sector intentionally absent
+        },
+        "relations": [
+            {
+                "relation_id": "rel-nm",
+                "subject_entity_id": center_id,
+                "object_entity_id": neighbor_id,
+                "canonical_type": "partner_of",
+                "confidence": 0.7,
+            }
+        ],
+        "entities": {
+            neighbor_id: {
+                "entity_id": neighbor_id,
+                "canonical_name": "Also No Meta.",
+                "entity_type": "company",
+                # B-01 fields absent
+            }
+        },
+    }
+
+    result = _transform_graph_response(s7_payload)
+    nodes_by_id = {n["id"]: n for n in result["nodes"]}
+
+    center_node = nodes_by_id[center_id]
+    assert center_node["description"] is None, "description must be None when absent from S7"
+    assert center_node["sector"] is None, "sector must be None when absent from S7"
+    assert center_node["ticker"] == "", "ticker must default to empty string when absent"
+
+    neighbor_node = nodes_by_id[neighbor_id]
+    assert neighbor_node["description"] is None
+    assert neighbor_node["sector"] is None
+    assert neighbor_node["ticker"] == ""
+
+
+@pytest.mark.asyncio
+async def test_transform_graph_edge_decay_class_forwarded() -> None:
+    """_transform_graph_response forwards decay_class from S7 relation to edge.
+
+    F-007 / B-02: decay_class drives edge opacity in the sigma edgeReducer
+    (PERMANENT/DURABLE=1.0, SLOW/MEDIUM=0.7, FAST/EPHEMERAL=0.4).
+    When S7 omits it the edge must carry decay_class=None so the frontend
+    falls back to MEDIUM opacity without raising a KeyError.
+    """
+    from api_gateway.routes.intelligence import _transform_graph_response
+
+    center_id = "00000000-0000-0000-0000-000000000020"
+    neighbor_a = "00000000-0000-0000-0000-000000000021"
+    neighbor_b = "00000000-0000-0000-0000-000000000022"
+
+    s7_payload = {
+        "center": {"entity_id": center_id, "canonical_name": "Center", "entity_type": "company"},
+        "relations": [
+            {
+                "relation_id": "rel-durable",
+                "subject_entity_id": center_id,
+                "object_entity_id": neighbor_a,
+                "canonical_type": "owns",
+                "confidence": 0.9,
+                "decay_class": "DURABLE",
+            },
+            {
+                "relation_id": "rel-no-decay",
+                "subject_entity_id": center_id,
+                "object_entity_id": neighbor_b,
+                "canonical_type": "partner_of",
+                "confidence": 0.6,
+                # decay_class intentionally absent
+            },
+        ],
+        "entities": {
+            neighbor_a: {"entity_id": neighbor_a, "canonical_name": "Neighbor A", "entity_type": "company"},
+            neighbor_b: {"entity_id": neighbor_b, "canonical_name": "Neighbor B", "entity_type": "company"},
+        },
+    }
+
+    result = _transform_graph_response(s7_payload)
+    edges_by_id = {e["id"]: e for e in result["edges"]}
+
+    # decay_class present in S7 → forwarded to edge
+    assert edges_by_id["rel-durable"]["decay_class"] == "DURABLE"
+    # decay_class absent in S7 → None on edge (not missing key, not empty string)
+    assert "decay_class" in edges_by_id["rel-no-decay"], "decay_class key must always be present on edge"
+    assert edges_by_id["rel-no-decay"]["decay_class"] is None
+
+
+@pytest.mark.asyncio
+async def test_transform_graph_edge_direction_outbound_inbound_lateral() -> None:
+    """_transform_graph_response sets direction=outbound/inbound/lateral correctly.
+
+    F-007: direction encodes the semantic role of center vs endpoint:
+    - outbound: center is the subject (the initiating/owning side)
+    - inbound: center is the object (the receiving side)
+    - lateral: neither endpoint is the center (depth>1 cross-edges)
+    """
+    from api_gateway.routes.intelligence import _transform_graph_response
+
+    center_id = "00000000-0000-0000-0000-000000000030"
+    neighbor_a = "00000000-0000-0000-0000-000000000031"
+    neighbor_b = "00000000-0000-0000-0000-000000000032"
+
+    s7_payload = {
+        "center": {"entity_id": center_id, "canonical_name": "Center", "entity_type": "company"},
+        "relations": [
+            # center→neighbor_a: outbound (center is subject)
+            {
+                "relation_id": "rel-out",
+                "subject_entity_id": center_id,
+                "object_entity_id": neighbor_a,
+                "canonical_type": "employs",
+                "confidence": 0.9,
+            },
+            # neighbor_b→center: inbound (center is object)
+            {
+                "relation_id": "rel-in",
+                "subject_entity_id": neighbor_b,
+                "object_entity_id": center_id,
+                "canonical_type": "acquired_by",
+                "confidence": 0.8,
+            },
+            # neighbor_a→neighbor_b: lateral (neither endpoint is center)
+            {
+                "relation_id": "rel-lat",
+                "subject_entity_id": neighbor_a,
+                "object_entity_id": neighbor_b,
+                "canonical_type": "partner_of",
+                "confidence": 0.7,
+            },
+        ],
+        "entities": {
+            neighbor_a: {"entity_id": neighbor_a, "canonical_name": "Neighbor A", "entity_type": "company"},
+            neighbor_b: {"entity_id": neighbor_b, "canonical_name": "Neighbor B", "entity_type": "company"},
+        },
+    }
+
+    result = _transform_graph_response(s7_payload)
+    edges_by_id = {e["id"]: e for e in result["edges"]}
+
+    assert edges_by_id["rel-out"]["direction"] == "outbound", "center as subject → direction must be outbound"
+    assert edges_by_id["rel-in"]["direction"] == "inbound", "center as object → direction must be inbound"
+    assert edges_by_id["rel-lat"]["direction"] == "lateral", "neither endpoint is center → direction must be lateral"
+
+
+@pytest.mark.asyncio
 async def test_entity_graph_depth1_merge_with_real_data(authed_app, authed_mock_clients) -> None:
     """depth>1 merge integrates depth=1 nodes+edges into the primary result.
 
