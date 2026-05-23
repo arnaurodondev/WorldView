@@ -151,3 +151,127 @@ class TestNarrativeRefreshWorker:
         # The embedding kwarg must be None.
         call_kwargs = emb_repo.upsert.call_args.kwargs
         assert call_kwargs.get("embedding") is None, "embedding should be None when embed returns empty list"
+
+    def test_llm_narrative_used_when_available(self) -> None:
+        """BP-542 regression: when entity_narrative_versions has rich text, worker must use it.
+
+        The hourly NarrativeRefreshWorker previously overwrote LLM narratives with
+        the claims-template stub because _build_narrative_text never checked
+        entity_narrative_versions.  This test verifies the fix: if the first DB
+        execute() (LLM narrative lookup) returns a row with >60 chars, that text
+        is used as source_text — not the '{name} ({type})' stub.
+        """
+
+        from knowledge_graph.infrastructure.workers.narrative_refresh import NarrativeRefreshWorker
+
+        llm_narrative = (
+            "NVIDIA Corporation is a leading semiconductor company that designs graphics "
+            "processing units for gaming and AI workloads. Its H100 GPU has become the "
+            "de facto standard for large-scale AI training infrastructure globally."
+        )
+
+        due_rows = [_make_due_row(_ENTITY_ID_1, "NVIDIA Corporation", "financial_instrument")]
+        sf, emb_repo = _make_session_factory(due_rows)
+
+        # Override execute() on the session: first call (LLM narrative lookup) returns
+        # a row with rich text; subsequent calls (claims, contradictions) return empty.
+        session = AsyncMock()
+        session.commit = AsyncMock()
+
+        llm_row_result = MagicMock()
+        llm_row_result.fetchone.return_value = (llm_narrative,)
+        empty_result = MagicMock()
+        empty_result.fetchall.return_value = []
+        empty_result.fetchone.return_value = None
+
+        execute_results = [llm_row_result, empty_result, empty_result]
+        execute_call_count = 0
+
+        async def _side_effect(*args: object, **kwargs: object) -> object:
+            nonlocal execute_call_count
+            result = execute_results[min(execute_call_count, len(execute_results) - 1)]
+            execute_call_count += 1
+            return result
+
+        session.execute = AsyncMock(side_effect=_side_effect)
+
+        def _make_cm() -> AsyncMock:
+            cm = AsyncMock()
+            cm.__aenter__ = AsyncMock(return_value=session)
+            cm.__aexit__ = AsyncMock(return_value=False)
+            return cm
+
+        sf_llm = MagicMock(side_effect=lambda: _make_cm())
+
+        emb_repo_llm = AsyncMock()
+        emb_repo_llm.get_due_for_refresh = AsyncMock(return_value=due_rows)
+        emb_repo_llm.upsert = AsyncMock()
+
+        llm_client = AsyncMock()
+        llm_client.embed = AsyncMock(return_value=_make_embedding_output(1))
+
+        with patch(_EMB_REPO, return_value=emb_repo_llm):
+            worker = NarrativeRefreshWorker(sf_llm, llm_client)
+            asyncio.run(worker.run())
+
+        # Upsert must have been called with the LLM narrative as source_text.
+        emb_repo_llm.upsert.assert_awaited_once()
+        upsert_kwargs = emb_repo_llm.upsert.call_args.kwargs
+        assert (
+            upsert_kwargs.get("source_text") == llm_narrative
+        ), "source_text must be the LLM narrative, not the claims-template stub"
+
+    def test_llm_narrative_stub_falls_back_to_claims_template(self) -> None:
+        """BP-542: when entity_narrative_versions has a stub (<= 60 chars), fall back to claims template."""
+        from knowledge_graph.infrastructure.workers.narrative_refresh import NarrativeRefreshWorker
+
+        stub_narrative = "NVIDIA Corporation (financial_instrument)"  # <60 chars — stub
+
+        due_rows = [_make_due_row(_ENTITY_ID_2, "NVIDIA Corporation", "financial_instrument")]
+
+        session = AsyncMock()
+        session.commit = AsyncMock()
+
+        llm_stub_result = MagicMock()
+        llm_stub_result.fetchone.return_value = (stub_narrative,)
+        empty_result = MagicMock()
+        empty_result.fetchall.return_value = []
+        empty_result.fetchone.return_value = None
+
+        execute_results = [llm_stub_result, empty_result, empty_result]
+        execute_call_count = 0
+
+        async def _side_effect(*args: object, **kwargs: object) -> object:
+            nonlocal execute_call_count
+            result = execute_results[min(execute_call_count, len(execute_results) - 1)]
+            execute_call_count += 1
+            return result
+
+        session.execute = AsyncMock(side_effect=_side_effect)
+
+        def _make_cm() -> AsyncMock:
+            cm = AsyncMock()
+            cm.__aenter__ = AsyncMock(return_value=session)
+            cm.__aexit__ = AsyncMock(return_value=False)
+            return cm
+
+        sf_fallback = MagicMock(side_effect=lambda: _make_cm())
+
+        emb_repo_fallback = AsyncMock()
+        emb_repo_fallback.get_due_for_refresh = AsyncMock(return_value=due_rows)
+        emb_repo_fallback.upsert = AsyncMock()
+
+        llm_client = AsyncMock()
+        llm_client.embed = AsyncMock(return_value=_make_embedding_output(1))
+
+        with patch(_EMB_REPO, return_value=emb_repo_fallback):
+            worker = NarrativeRefreshWorker(sf_fallback, llm_client)
+            asyncio.run(worker.run())
+
+        emb_repo_fallback.upsert.assert_awaited_once()
+        upsert_kwargs = emb_repo_fallback.upsert.call_args.kwargs
+        # Falls back to claims template: source_text starts with "NVIDIA Corporation (financial_instrument)"
+        source_text = upsert_kwargs.get("source_text", "")
+        assert source_text.startswith(
+            "NVIDIA Corporation (financial_instrument)"
+        ), f"Expected claims-template fallback, got: {source_text!r}"
