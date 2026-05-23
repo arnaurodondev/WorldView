@@ -178,9 +178,14 @@ async def test_heatmap_handles_partial_failure(authed_app, authed_mock_clients) 
 
 @pytest.mark.asyncio
 async def test_top_movers_gainers_desc(authed_app, authed_mock_clients) -> None:
-    """GET /v1/market/top-movers?type=gainers calls S3 with sort_order=desc."""
-    authed_mock_clients.market_data.post = AsyncMock(
-        return_value=_mock_response(200, b'{"results": [], "count": 0, "total": 0}'),
+    """GET /v1/market/top-movers?type=gainers calls S3 period-movers via GET with type=gainers."""
+    # Implementation uses clients.market_data.get() — NOT .post() — forwarding
+    # period/type/limit as URL query params in the path string (not a POST body).
+    authed_mock_clients.market_data.get = AsyncMock(
+        return_value=_mock_response(
+            200,
+            json.dumps({"results": [], "type": "gainers", "period": "1D"}).encode(),
+        ),
     )
 
     transport = ASGITransport(app=authed_app)
@@ -192,18 +197,24 @@ async def test_top_movers_gainers_desc(authed_app, authed_mock_clients) -> None:
         )
 
     assert resp.status_code == 200
-    authed_mock_clients.market_data.post.assert_called_once()
-    call_kwargs = authed_mock_clients.market_data.post.call_args[1]
-    body = json.loads(call_kwargs["content"])
-    assert body["sort_order"] == "desc"
-    assert body["limit"] == 5
+    authed_mock_clients.market_data.get.assert_called_once()
+    # The implementation passes params in the URL path string, not as a params kwarg.
+    call_args = authed_mock_clients.market_data.get.call_args[0]
+    url = call_args[0]  # First positional arg is the URL string
+    assert "type=gainers" in url
+    assert "limit=5" in url
 
 
 @pytest.mark.asyncio
 async def test_top_movers_losers_asc(authed_app, authed_mock_clients) -> None:
-    """GET /v1/market/top-movers?type=losers calls S3 with sort_order=asc."""
-    authed_mock_clients.market_data.post = AsyncMock(
-        return_value=_mock_response(200, b'{"results": [], "count": 0, "total": 0}'),
+    """GET /v1/market/top-movers?type=losers calls S3 period-movers via GET with type=losers."""
+    # Implementation uses clients.market_data.get() — NOT .post() — with type=losers
+    # embedded in the URL query string.
+    authed_mock_clients.market_data.get = AsyncMock(
+        return_value=_mock_response(
+            200,
+            json.dumps({"results": [], "type": "losers", "period": "1D"}).encode(),
+        ),
     )
 
     transport = ASGITransport(app=authed_app)
@@ -215,9 +226,10 @@ async def test_top_movers_losers_asc(authed_app, authed_mock_clients) -> None:
         )
 
     assert resp.status_code == 200
-    call_kwargs = authed_mock_clients.market_data.post.call_args[1]
-    body = json.loads(call_kwargs["content"])
-    assert body["sort_order"] == "asc"
+    authed_mock_clients.market_data.get.assert_called_once()
+    call_args = authed_mock_clients.market_data.get.call_args[0]
+    url = call_args[0]
+    assert "type=losers" in url
 
 
 @pytest.mark.asyncio
@@ -422,14 +434,15 @@ async def test_heatmap_mixed_success_failure(authed_app, authed_mock_clients) ->
 
 @pytest.mark.asyncio
 async def test_top_movers_downstream_500(authed_app, authed_mock_clients) -> None:
-    """GET /v1/market/top-movers when S3 screener returns 500 → DownstreamError → 500.
+    """GET /v1/market/top-movers when S3 period-movers returns 500 → DownstreamError → 500.
 
-    get_top_movers() raises DownstreamError on failure, which the route handler
-    converts to an HTTPException with the same status code.
+    get_top_movers() uses clients.market_data.get() (not .post()); it raises
+    DownstreamError on failure, which the route handler converts to HTTPException.
     """
     error_resp = _mock_response(500, b'{"detail": "Internal Server Error"}')
     error_resp.text = '{"detail": "Internal Server Error"}'
-    authed_mock_clients.market_data.post = AsyncMock(return_value=error_resp)
+    # Mock .get not .post — the implementation calls market_data.get()
+    authed_mock_clients.market_data.get = AsyncMock(return_value=error_resp)
 
     transport = ASGITransport(app=authed_app)
     async with AsyncClient(transport=transport, base_url="http://test") as client:
@@ -440,7 +453,7 @@ async def test_top_movers_downstream_500(authed_app, authed_mock_clients) -> Non
         )
 
     assert resp.status_code == 500
-    authed_mock_clients.market_data.post.assert_called_once()
+    authed_mock_clients.market_data.get.assert_called_once()
 
 
 @pytest.mark.asyncio
