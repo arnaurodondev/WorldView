@@ -269,8 +269,10 @@ export function TAOverlayPanel({ bars, onOverlaysChange, entityId }: TAOverlayPa
         pt.date, // already "YYYY-MM-DD"
         // WHY positive_ratio − negative_ratio: this is the "net" signal in [-1, +1].
         // 1.0 = 100% positive articles on that day; -1.0 = 100% negative; 0 = neutral.
-        // Neutral (0) means equal positive/negative or no sentiment signals.
-        pt.positive_ratio - pt.negative_ratio,
+        // WHY ?? NaN: backend returns null when sentiment scoring is incomplete
+        // (e.g. no LLM labels for that day). NaN causes lightweight-charts to render
+        // a gap rather than treating null as 0 (which would produce a misleading flat line).
+        (pt.positive_ratio ?? NaN) - (pt.negative_ratio ?? NaN),
       ]),
     );
 

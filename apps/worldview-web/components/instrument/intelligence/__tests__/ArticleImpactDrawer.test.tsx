@@ -118,11 +118,12 @@ const MOCK_IMPACT_DATA: ArticleImpactHistoryResponse = {
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
-beforeEach(() => {
-  mockUseAuthedQuery.mockReset();
-});
-
 describe("ArticleImpactDrawer", () => {
+  // WHY inside describe: keeps beforeEach scoped to this test suite only,
+  // consistent with all other test files in this directory.
+  beforeEach(() => {
+    mockUseAuthedQuery.mockReset();
+  });
   it("renders the 4-segment impact bar as the trigger", () => {
     // WHY idle state (not loading): we want to test the trigger bar itself,
     // which is always visible regardless of query state. We use idle so the
@@ -141,7 +142,7 @@ describe("ArticleImpactDrawer", () => {
     // WHY getByLabelText: the impact bar has aria-label="price impact bar" so
     // screen readers announce it correctly. This assertion pins that contract.
     const bar = screen.getByLabelText("price impact bar");
-    expect(bar).toBeDefined();
+    expect(bar).toBeInTheDocument();
 
     // The bar must have exactly 4 child segments (one per window).
     // WHY children.length: Popover renders the trigger in a Portal; the bar's
@@ -170,13 +171,13 @@ describe("ArticleImpactDrawer", () => {
     fireEvent.click(triggerBtn);
 
     // All four window labels must be visible in the open popover.
-    expect(screen.getByText("SAME DAY")).toBeDefined();
-    expect(screen.getByText("+1 DAY")).toBeDefined();
-    expect(screen.getByText("+2 DAYS")).toBeDefined();
-    expect(screen.getByText("+5 DAYS")).toBeDefined();
+    expect(screen.getByText("SAME DAY")).toBeInTheDocument();
+    expect(screen.getByText("+1 DAY")).toBeInTheDocument();
+    expect(screen.getByText("+2 DAYS")).toBeInTheDocument();
+    expect(screen.getByText("+5 DAYS")).toBeInTheDocument();
 
     // The header label must be visible.
-    expect(screen.getByText("PRICE IMPACT")).toBeDefined();
+    expect(screen.getByText("PRICE IMPACT")).toBeInTheDocument();
   });
 
   it("shows skeleton rows when loading", () => {
@@ -197,10 +198,10 @@ describe("ArticleImpactDrawer", () => {
     // WHY query [aria-busy="true"]: the loading state sets aria-busy on the
     // container div, which is both a semantic signal and a stable test handle.
     const loadingContainer = document.querySelector('[aria-busy="true"]');
-    expect(loadingContainer).toBeDefined();
+    expect(loadingContainer).not.toBeNull();
 
     // The loading container must have 4 skeleton children (one per window).
-    expect(loadingContainer?.children.length).toBe(4);
+    expect(loadingContainer!.children.length).toBe(4);
   });
 
   it('shows "Impact data unavailable" on error', () => {
@@ -224,6 +225,6 @@ describe("ArticleImpactDrawer", () => {
 
     // WHY exact text: the spec mandates this exact copy. If the message changes,
     // the test fails, prompting a deliberate decision to update it.
-    expect(screen.getByText("Impact data unavailable")).toBeDefined();
+    expect(screen.getByText("Impact data unavailable")).toBeInTheDocument();
   });
 });

@@ -64,10 +64,11 @@ export function WatchlistInsightsPanel({ watchlistId }: WatchlistInsightsPanelPr
   const { accessToken } = useAuth();
 
   const { data, isLoading, isError } = useQuery({
-    // WHY query disabled when no token: if accessToken is undefined (user not
-    // yet authenticated or token expired) we should not fire a 401-destined
-    // request. The enabled guard avoids a noisy error flash on first render.
-    enabled: Boolean(accessToken),
+    // WHY query disabled without token OR watchlistId: if accessToken is undefined
+    // (user not yet authenticated) we get 401; if watchlistId is empty string (parent
+    // hasn't resolved the watchlist UUID yet) we get a malformed URL "/watchlists//insights".
+    // Both guards are required — mirrors the pattern in ConcentrationWidget and SectorAttributionWidget.
+    enabled: Boolean(accessToken) && !!watchlistId,
     queryKey: qk.watchlists.insights(watchlistId),
     queryFn: () => createGateway(accessToken!).getWatchlistInsights(watchlistId),
     // WHY 60_000ms stale + refetch: watchlist insights are a "dashboard pulse"

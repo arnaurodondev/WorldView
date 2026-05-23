@@ -2375,14 +2375,19 @@ export interface ArticleImpactHistoryResponse {
  * SentimentTimeseriesPoint — one daily aggregate in the sentiment timeseries.
  * positive_ratio and negative_ratio are 0-1 fractions (not percentages).
  * net_sentiment = positive_ratio − negative_ratio, computed client-side by F-2.
+ *
+ * WHY nullable floats: S6 returns null for days where scoring data is incomplete
+ * (e.g. articles with no LLM-scored sentiment or no relevance score).
+ * The backend schema declares all four metrics as float | None = None.
+ * TAOverlayPanel guards against null via (pt.positive_ratio ?? NaN).
  */
 export interface SentimentTimeseriesPoint {
   date: string; // "YYYY-MM-DD"
   article_count: number;
-  avg_relevance: number;
-  positive_ratio: number;
-  negative_ratio: number;
-  avg_impact_score: number;
+  avg_relevance: number | null;
+  positive_ratio: number | null;
+  negative_ratio: number | null;
+  avg_impact_score: number | null;
 }
 
 /** SentimentTimeseriesResponse — GET /v1/entities/{id}/sentiment-timeseries */
@@ -2390,6 +2395,27 @@ export interface SentimentTimeseriesResponse {
   entity_id: string;
   days: number;
   points: SentimentTimeseriesPoint[];
+}
+
+/**
+ * YieldPoint — one maturity on the US Treasury yield curve.
+ * Matches services/api-gateway/src/api_gateway/schemas/market.py::YieldPoint.
+ */
+export interface YieldPoint {
+  maturity: string; // e.g. "1M", "3M", "6M", "1Y", "2Y", "5Y", "10Y", "30Y"
+  yield_pct: number | null;
+  source: string | null; // "macro_indicator" | "etf_proxy" | null
+}
+
+/**
+ * YieldCurveResponse — GET /v1/market/yield-curve (PLAN-0091 T-A-2-04).
+ * Matches services/api-gateway/src/api_gateway/schemas/market.py::YieldCurveResponse.
+ */
+export interface YieldCurveResponse {
+  points: YieldPoint[];
+  spread_2s10s: number | null; // 10Y − 2Y in basis points; null when either maturity unavailable
+  spread_2s10s_inverted: boolean | null; // true when spread < 0 (yield curve inversion signal)
+  source: string | null; // "macro_indicator" | "etf_proxy" | "unavailable"
 }
 
 /** One price level in price-levels response (e.g. R1, PIVOT, S2). */

@@ -106,8 +106,11 @@ export function ConcentrationWidget({ portfolioId }: ConcentrationWidgetProps) {
     enabled: !!accessToken && !!portfolioId,
     // WHY 30s staleTime + refetchInterval: concentration is a live-price-derived
     // metric during market hours. 30s balances freshness vs request volume.
+    // WHY refetchIntervalInBackground: false: suppress background-tab polling to avoid
+    // S9 load from unfocused tabs. Data refetches on focus regain (TanStack default).
     staleTime: 30_000,
     refetchInterval: 30_000,
+    refetchIntervalInBackground: false,
   });
 
   return (

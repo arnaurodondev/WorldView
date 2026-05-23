@@ -207,7 +207,10 @@ export function useEntitySentimentTimeseries(entityId: string | null, days = 90)
       apiFetch<SentimentTimeseriesResponse>(
         // WHY encodeURIComponent: entityId is a UUID so this is defensive;
         // it prevents any injection if the ID format ever changes.
-        `/v1/entities/${encodeURIComponent(entityId!)}/sentiment-timeseries?days=${days}`,
+        // WHY entityId ?? "": the enabled guard above prevents any fetch when entityId
+        // is null, so "" is never reached — but this avoids the non-null assertion (entityId!)
+        // which would silently produce "null" in the URL if the enabled guard were ever removed.
+        `/v1/entities/${encodeURIComponent(entityId ?? "")}/sentiment-timeseries?days=${days}`,
         { token: token ?? undefined },
       ),
     // 1h — matches S6 pipeline cycle (see module comment)

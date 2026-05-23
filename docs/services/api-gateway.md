@@ -210,6 +210,7 @@ preferable to all-or-nothing for dashboard widgets.
 | GET | `/v1/entities/{entity_id}/narratives` | Paginated narrative version history. Query params: `limit`, `cursor` (PLAN-0074 Wave G) | Yes |
 | POST | `/v1/entities/{entity_id}/narratives/generate` | Manually trigger narrative generation. Proxy-layer rate limit: 1 req/hr/entity/user via `set_nx` (BP-200). Returns 202. (PLAN-0074 Wave G) | Yes |
 | GET | `/v1/entities/{entity_id}/paths` | Pre-computed multi-hop opportunity paths. Valkey-cached 5 min. Query params: `limit`, `min_score`, `min_hops`, `max_hops` (PLAN-0074 Wave G) | Yes |
+| GET | `/v1/entities/{entity_id}/sentiment-timeseries` | Daily sentiment aggregates for SENTI chart overlay (PLAN-0091 T-A-2-02). Query param: `days` (1-365, default 90). Proxies to S6 NLP. Returns `{entity_id, days, points: [{date, article_count, avg_relevance, positive_ratio, negative_ratio, avg_impact_score}]}`. All metric fields nullable. | Yes |
 
 ### Entity-Context Chat Endpoints (→ S8 RAG-Chat)
 
@@ -614,6 +615,7 @@ The `/v1/auth/callback` handler sanitizes `error` and `error_description` query 
 | DELETE | `/v1/portfolios/{id}` | Archive portfolio | Yes |
 | GET | `/v1/portfolios/{id}/holding-lots` | FIFO lot breakdown per instrument | Yes |
 | GET | `/v1/portfolios/{id}/concentration` | Sector/asset class concentration | Yes |
+| GET | `/v1/portfolios/{id}/sector-attribution` | Live-priced GICS sector breakdown with day P&L (PLAN-0091 T-A-2-03). Returns `{portfolio_id, buckets: [{sector, holding_count, market_value, sector_weight_pct, sector_day_pnl}], covered_pct, prices_stale?}` | Yes |
 | GET | `/v1/portfolios/{id}/performance` | Performance metrics (Calmar, win-rate) | Yes |
 | GET | `/v1/portfolios/{id}/transactions` | Transactions nested under portfolio | Yes |
 

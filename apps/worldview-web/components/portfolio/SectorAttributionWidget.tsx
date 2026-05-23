@@ -231,8 +231,11 @@ export function SectorAttributionWidget({ portfolioId }: SectorAttributionWidget
     queryFn: () =>
       createGateway(accessToken).getSectorAttribution(portfolioId),
     enabled: !!accessToken && !!portfolioId,
+    // WHY refetchIntervalInBackground: false: suppress background-tab polling to
+    // avoid S9 load from unfocused browser tabs. Data refetches on focus regain.
     staleTime: 30_000,
     refetchInterval: 30_000,
+    refetchIntervalInBackground: false,
   });
 
   // Sort buckets by market_value desc — gives consistent ordering across
