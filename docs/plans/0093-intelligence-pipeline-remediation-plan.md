@@ -5,6 +5,9 @@ source_audit: docs/audits/2026-05-23-qa-intelligence-pipelines-report.md
 status: draft
 created: 2026-05-23
 updated: 2026-05-23
+revision_log:
+  - 2026-05-23 — Initial draft (24 waves, ~95 tasks).
+  - 2026-05-23 — Q1-Q4 open questions resolved. T-E-2-01 amended (per-FieldKind tolerance). T-G-3-05 expanded (multi-quarter × multi-question-variant). T-G-3-11 added (Weak-Point Survey: 5×5×3 = 75 queries). T-C-3-01 amended (agent investigates + 3 explicit outcome paths). Total tasks 95→96. Sub-Plan G effort 2.0d→2.5d. Total 15.5d→16.0d.
 ---
 
 # PLAN-0093 — Intelligence Pipeline Remediation (KG-RAG + Infrastructure)
@@ -21,7 +24,7 @@ updated: 2026-05-23
 - **Infra affected**: `infra/compose/docker-compose.yml` (restart policies, depends_on, APP_ENV)
 - **Total sub-plans**: 7
 - **Total waves**: 24
-- **Total tasks**: ~95
+- **Total tasks**: ~96
 - **Estimated effort**: 9-12 engineer-days (one engineer); 5-7 days with two engineers running parallel sub-plans
 
 ## Sub-Plan Index
@@ -34,7 +37,7 @@ updated: 2026-05-23
 | **D** | KG Refresh Workers | 3 | 11 | B-1, B-2 | parallel with C |
 | **E** | RAG Agent Quality | 5 | 19 | none (independent code) | parallel with B/C/D |
 | **F** | Migration / Schema-Drift Fixes | 2 | 7 | A-1 | parallel with B/C |
-| **G** | Validation Test Suite | 3 | 18 | A-F all done | gate before merge |
+| **G** | Validation Test Suite | 3 | 19 | A-F all done | gate before merge |
 
 ## Dependency Graph
 
@@ -1174,11 +1177,23 @@ Mirror in `get_entity_paths.py`. Update the S9 Pydantic response model to includ
 - `services/market-data/src/market_data/api/routes/` (read all)
 **Audit reference**: F-NPL-FUNDAMENTALS-001
 
-**What to build**: read every route in market-data and document which endpoints exist for symbol-based lookup. The audit found `GET /api/v1/instruments/symbol/<SYMBOL>` returns 404 for every ticker. Likely the actual route is `GET /api/v1/instruments/{ticker}` or requires a query parameter.
+**What to build** (Q2 decision 2026-05-23: agent investigates first): read every route in market-data, then `curl` each candidate endpoint against the live container with a known ticker (e.g. AAPL) to confirm what actually responds. Three possible outcomes — the agent must pick exactly one and document it:
+
+| Outcome | Means | Next action (precondition for T-C-3-02) |
+|---|---|---|
+| **(A) Correct path found** | e.g. `GET /api/v1/instruments?symbol=AAPL` returns 200 with instrument_id | T-C-3-02 proceeds — uses the corrected path |
+| **(B) No symbol resolver exists** | every candidate returns 404 | T-C-3-02 is BLOCKED — agent must propose a new market-data wave (precursor) that adds `GET /api/v1/instruments/by-symbol/{symbol}`, including the use case, repo query (`WHERE symbol = :symbol AND active = true`), test, and OpenAPI registration. Surface this as a blocker to the user before continuing. |
+| **(C) Path exists but uses different arg shape** | e.g. `?ticker=AAPL` instead of `?symbol=AAPL` | T-C-3-02 proceeds with the corrected arg name; no new endpoint needed |
+
+Whichever outcome wins, document it in `docs/services/market-data.md` with:
+- Complete endpoint table (paths, query params, path params, response shapes, status codes)
+- A "symbol resolution" subsection that explicitly states the chosen path + arg shape, and links back to PLAN-0093 T-C-3-01 for the audit history
 
 **Acceptance criteria**:
+- [ ] Live curl verification recorded in the doc (request + response captured)
+- [ ] Exactly one of outcomes (A/B/C) is selected and explicit in the doc
+- [ ] If outcome (B), a new precursor task `T-C-3-00` is added to this plan with full task spec for the new endpoint, and T-C-3-02 `depends_on` is updated to `T-C-3-00`
 - [ ] `docs/services/market-data.md` has a complete endpoint table with paths, params, response shapes
-- [ ] Document confirms the correct path for symbol → instrument_id resolution
 
 ---
 
@@ -1709,43 +1724,99 @@ Update the orchestrator: after the first tool-call iteration, call `infer_intent
 - `services/rag-chat/tests/unit/application/services/test_numeric_grounding.py` **(NEW)**
 **Audit reference**: F-CHAT-AGENT-001 / F-CHAT-003
 
-**What to build**: a class with one public method:
-```python
-class NumericGroundingValidator:
-    """Detects numerical claims in LLM output that are not present in tool results.
+**What to build**: a class with per-field tolerance configuration. Different financial fields tolerate different rounding levels — EPS quoted as $0.45 vs the actual $0.50 is 11% off and absolutely wrong; employee headcount quoted as 161,000 vs 161,400 is 0.25% off and acceptable. A single global tolerance cannot serve both.
 
-    Strategy:
-      1. Extract every number from the response (regex `[-+]?\d[\d,]*\.?\d*[BMKbmk%]?`)
-      2. For each number, normalise (strip commas, expand suffixes — "$34.6B" → "34_600_000_000")
-      3. For each tool response (already structured), flatten into a list of numeric values
-      4. For each response number, fail-closed: if NOT found in any tool result → flag
-      5. Return `GroundingResult(passed=bool, unsupported=[...], total_numbers=N)`
-    """
-    def validate(self, response: str, tool_results: list[ToolResult]) -> GroundingResult: ...
+```python
+# libs/contracts/src/contracts/numeric_grounding.py (NEW — shared dataclass)
+class FieldKind(str, Enum):
+    """Financial field families that share rounding behaviour."""
+    PRICE = "price"                # daily price, intraday — LLM must quote exact
+    RETURN_PCT = "return_pct"      # day/week/period returns — exact
+    YEAR = "year"                  # 2024, 2025 — exact (or skip)
+    QUARTER = "quarter"            # Q1 2026 — exact (treated specially — must match label, not numeric)
+    EPS = "eps"                    # earnings per share — tighter than revenue
+    RATIO = "ratio"                # P/E, P/B, ROE, ROA, gross/operating margin — tight
+    REVENUE = "revenue"            # revenue, EBIT, net income, FCF — LLM rounds these
+    MARKET_CAP = "market_cap"      # often quoted in B/T with rounding
+    SHARES = "shares"              # share count
+    HEADCOUNT = "headcount"        # employee count
+    UNKNOWN = "unknown"            # default fallback for any number we can't classify
+
+# Default per-kind tolerances (% relative diff). Override via settings.
+DEFAULT_TOLERANCES: dict[FieldKind, float] = {
+    FieldKind.PRICE: 0.001,        # 0.1% — analyst will spot a 1¢ error on a $100 stock
+    FieldKind.RETURN_PCT: 0.001,   # 0.1% — exact match expected
+    FieldKind.YEAR: 0.0,           # exact
+    FieldKind.QUARTER: 0.0,        # exact label match, not numeric
+    FieldKind.EPS: 0.02,           # 2% — EPS quoted to 2 decimals; $0.45 vs $0.46 ok
+    FieldKind.RATIO: 0.02,         # 2% — P/E 23.7 vs 24.1 ok; 23.7 vs 28.0 NOT
+    FieldKind.REVENUE: 0.005,      # 0.5% — $68.1B vs $68.127B passes; $34.6B vs $10.25B fails
+    FieldKind.MARKET_CAP: 0.005,   # 0.5% — same as revenue
+    FieldKind.SHARES: 0.01,        # 1% — share counts are usually exact in filings but LLM rounds
+    FieldKind.HEADCOUNT: 0.05,     # 5% — headcounts are quarterly snapshots; some lag ok
+    FieldKind.UNKNOWN: 0.005,      # conservative default
+}
 ```
 
-Tolerance:
-- Exact match preferred
-- ± 0.5% match accepted (LLM sometimes rounds: "$68.1B" vs tool's "$68.127B")
-- Numbers in dates (years, quarters like "Q3 2025") are ignored
-- Numbers in citation markers (`[N1]`) are ignored
-- Percentages match against fractions and vice versa (`50%` matches `0.50`)
+**Logic & Behavior**:
+1. Extract every number from the response (regex `[-+]?\d[\d,]*\.?\d*[BMKbmk%]?`).
+2. **Classify each extracted number** into a `FieldKind` based on:
+   - Surrounding ±50 chars of context (e.g. "EPS of $0.45" → `EPS`; "revenue was $68B" → `REVENUE`; "P/E of 23.7" → `RATIO`)
+   - Numeric magnitude heuristics (numbers > 10^9 → likely `REVENUE`/`MARKET_CAP`; 4-digit 1900-2099 → `YEAR`)
+   - Currency / suffix presence (`$` + B/M/K → REVENUE-family; `%` → RATIO or RETURN_PCT depending on context)
+   - Unclassifiable → `UNKNOWN` (conservative default)
+3. For each tool response, flatten into structured `(value, field_kind)` pairs using the same classifier on the source-row column name (so tool data has known `FieldKind` from schema).
+4. For each response number:
+   - Look up its `FieldKind` → tolerance
+   - Find best match in tool results of the SAME `FieldKind` first; if none, try any kind (loose)
+   - Pass if abs((response - tool) / tool) ≤ tolerance
+   - Fail otherwise → add to `unsupported` with `(value, field_kind, tolerance_used, closest_tool_value)`
+5. Return `GroundingResult(passed, unsupported, total_numbers, per_kind_stats)`.
+
+**Settings override** (operator can tune):
+```python
+# rag-chat config.py
+numeric_grounding_tolerances: dict[str, float] = Field(
+    default_factory=lambda: {kind.value: tol for kind, tol in DEFAULT_TOLERANCES.items()},
+    description="Per-field-kind relative tolerance for NumericGroundingValidator. Env: NUMERIC_GROUNDING_TOLERANCES_JSON",
+)
+```
+
+Special handling:
+- Numbers in dates (4-digit 1900-2099 alone, or "Q[1-4] 20XX") classified as `YEAR`/`QUARTER`; tolerance 0 → must match exactly (so an invented "$10.3B in Q2 2026" before AMD has reported Q2 fails immediately).
+- Numbers in citation markers (`[N\d+]`) are skipped (handled by T-E-5-01).
+- Percentages match against fractions (`50%` ↔ `0.50`).
+- Negative numbers must match sign too (a loss reported as a gain is an outright lie, not a tolerance issue).
 
 **Tests to write**:
 | Test Name | What It Verifies | Type |
 |---|---|---|
-| `test_exact_number_match_passes` | response "$10.253B" + tool returns 10253000000 → passes | unit |
-| `test_invented_number_fails` | response "$34.6B" + tool returns 10.253B → fails with unsupported=["$34.6B"] | unit |
-| `test_rounded_number_within_tolerance` | response "$68.1B" + tool "68.127B" → passes (0.04% diff) | unit |
-| `test_year_numbers_ignored` | "2026" not flagged | unit |
-| `test_citation_markers_ignored` | "[N1]" not flagged | unit |
-| `test_percentage_to_fraction_match` | "50%" matches "0.5" | unit |
+| `test_exact_revenue_match_passes` | response "$10.253B" + tool returns 10.253e9 → REVENUE kind, passes | unit |
+| `test_invented_revenue_fails` | response "$34.6B" + tool 10.253B → REVENUE kind, fails (337% diff > 0.5%) | unit |
+| `test_rounded_revenue_within_tolerance` | response "$68.1B" + tool 68.127B → REVENUE, passes (0.04% < 0.5%) | unit |
+| `test_eps_tighter_tolerance_catches_wrong_cents` | response "$0.50" + tool $0.40 → EPS kind, fails (25% > 2%) | unit |
+| `test_eps_within_2pct_passes` | response "$0.45" + tool $0.456 → passes (1.3% ≤ 2%) | unit |
+| `test_pe_ratio_fails_on_4pt_drift` | response "P/E 28" + tool "P/E 23.7" → RATIO, fails (18% > 2%) | unit |
+| `test_headcount_5pct_tolerance` | response "161,000" + tool 161,400 → HEADCOUNT, passes (0.25% < 5%); response "150,000" → fails (7% > 5%) | unit |
+| `test_year_must_match_exactly` | response "2025" + tool "2026" → YEAR, fails | unit |
+| `test_quarter_must_match_exactly` | response "Q1 2026" + tool "Q4 2025" → QUARTER, fails | unit |
+| `test_invented_quarter_for_unreported_period` | response "Q2 2026 revenue $10.3B" but AMD hasn't reported Q2 2026 → unsupported, fails | unit |
+| `test_classifier_revenue_from_context` | "revenue of $X" → REVENUE; "EPS of $X" → EPS; same number, different kind | unit |
+| `test_classifier_falls_back_to_unknown_safely` | unclassifiable context → UNKNOWN with 0.5% tol | unit |
+| `test_year_numbers_ignored_when_skipped` | when skip_kinds={YEAR}, year numbers not validated | unit |
+| `test_citation_markers_ignored` | `[N1]` not extracted as number | unit |
+| `test_percentage_to_fraction_match` | "50%" matches "0.5" within RATIO tolerance | unit |
 | `test_no_numbers_response_passes` | qualitative response → passes | unit |
 | `test_empty_tool_results_fails_any_number` | response has number, no tools called → fails | unit |
+| `test_settings_override_applies` | env override → headcount tol 0.10 → "150K" vs "161K" now passes | unit |
+| `test_sign_must_match_loss_vs_gain` | response "earned $1.5B" + tool "lost $1.5B" → fails (sign mismatch, not tolerance) | unit |
+| `test_per_kind_stats_in_result` | result includes breakdown of (passed, failed) per FieldKind | unit |
 
 **Acceptance criteria**:
-- [ ] All 8 tests pass
+- [ ] All 20 tests pass
 - [ ] False-positive rate on a hand-curated set of 20 correct responses ≤ 1
+- [ ] False-negative rate on a hand-curated set of 10 known-bad responses (incl. the $34.6B AMD case) ≤ 0 — zero hallucinations may slip through
+- [ ] Per-kind tolerances overridable via `NUMERIC_GROUNDING_TOLERANCES_JSON` env var
 
 ---
 
@@ -2234,7 +2305,7 @@ Handle the case where a SQL references a temporary table or a CTE — PREPARE ha
 
 **Goal**: a comprehensive, automated, reproducible test suite that re-verifies every BLOCKING/CRITICAL/MAJOR finding from the QA report.
 
-**Waves**: 3 | **Tasks**: 18 | **Estimated**: 2 engineer-days
+**Waves**: 3 | **Tasks**: 19 | **Estimated**: 2.5 engineer-days
 
 ### Wave G-1: Data Quality SLO Tests (Postgres + AGE)
 
@@ -2565,23 +2636,72 @@ Handle the case where a SQL references a temporary table or a CTE — PREPARE ha
 
 ---
 
-#### Task T-G-3-05: Q4 — NVDA vs AMD revenue test (HARDEST — primary hallucination check)
+#### Task T-G-3-05: Q4 — NVDA vs AMD revenue test (HARDEST — primary hallucination check, multi-quarter)
 
 **Type**: test
 **depends_on**: T-G-3-01
 **blocks**: none
-**Target files**: `tests/validation/chat_eval/test_q4_nvda_amd_revenue.py` **(NEW)**
+**Target files**: `tests/validation/chat_eval/test_q4_nvda_amd_revenue.py` **(NEW)**, `tests/validation/chat_eval/fixtures/q4_ground_truth.yaml` **(NEW)**
 **Audit reference**: A5 Q4 / F-CHAT-003 / F-CHAT-AGENT-001
 
-**What to build**: assertions (this is the regression test for the $34.6B fabrication):
-- HTTP 200
-- `tools_called` includes `get_fundamentals_history` (called at least twice — once per ticker)
-- Every numerical claim in the response must be within 0.5% of a value present in fundamentals tool output
-- The response MUST NOT contain "$34.6B" or any AMD figure > $15B for any quarter
-- The response MUST NOT contain rationalisations like "potential volatility" or "one-time event" if the supporting figures aren't grounded
-- `verdict == USEFUL` (this is the bar)
+**What to build**: assertions across **6 quarters × 2 tickers (12 datapoints)**. Loads ground truth from a fixture file (`q4_ground_truth.yaml`) generated by querying `market_data_db.fundamental_metrics` at test setup, so the test is self-updating as new quarters arrive.
 
-**Critical**: if this test fails, the entire remediation fails. Q4 is the bellwether.
+**Ground-truth fixture** (auto-generated by test setup; this is the schema):
+```yaml
+NVDA:
+  - quarter: Q4FY26   # 2026-01-31
+    revenue: 68127000000
+    eps: 0.89
+    gross_margin: 0.745
+  - quarter: Q3FY26   # 2025-10-31
+    revenue: 57000000000
+    eps: 0.80
+    gross_margin: 0.732
+  # ... 4 more quarters
+AMD:
+  - quarter: Q1FY26   # 2026-03-31
+    revenue: 10253000000
+    eps: 0.45
+    gross_margin: 0.508
+  # ... 5 more quarters
+```
+
+**Question variants fired** (all must pass — 6 variants per test run):
+1. "Compare the revenue trajectories of NVIDIA and AMD over the last 4 quarters."
+2. "What was NVIDIA's revenue in Q4 of fiscal 2026?"
+3. "What was AMD's Q1 2026 revenue and EPS?"
+4. "Show me NVIDIA's gross margin trend over the past 6 quarters."
+5. "What is AMD's revenue growth YoY for the most recent quarter?"
+6. "Compare NVDA and AMD on revenue, EPS, and gross margin for the latest reported quarter."
+
+**Per-question assertions**:
+- HTTP 200
+- `tools_called` includes `get_fundamentals_history` (called ≥ 2 times for comparison questions)
+- For every numeric claim:
+  - Classify into `FieldKind` via `NumericGroundingValidator` (T-E-2-01)
+  - Match against fixture using per-kind tolerance
+  - Fail with `assert_grounded(extracted_numbers, fixture)` helper
+- **Forbidden phrases** (regex-checked):
+  - Any AMD revenue figure > $15B for any quarter (the $34.6B fabrication signature)
+  - Any NVDA revenue figure > $100B for any quarter (current ceiling ~$70B)
+  - Rationalisation patterns: `r"(potential volatility|one-time event|may reflect|likely (due|caused))"` — ONLY allowed if followed by a citation marker
+- **Quarter labels MUST match fixture exactly** (no inventing "Q2 2026" for AMD when only Q1 has reported)
+- `verdict == USEFUL`
+
+**Sub-tests (separate pytest functions)**:
+| Sub-test | Verifies |
+|---|---|
+| `test_q4_v1_compare_revenues` | full comparison question; all 8 quarters across both tickers grounded |
+| `test_q4_v2_nvda_single_quarter` | single-quarter NVDA query — exact revenue match |
+| `test_q4_v3_amd_revenue_and_eps` | AMD multi-field; revenue (REVENUE tol) + EPS (EPS tighter tol) both pass |
+| `test_q4_v4_nvda_margin_trend` | gross margin sequence; RATIO kind tolerance applies |
+| `test_q4_v5_amd_yoy_growth` | derived value (YoY %) computed correctly from quarterly fixture |
+| `test_q4_v6_full_comparison_table` | revenue + EPS + margin for both tickers simultaneously |
+| `test_q4_zero_amd_figures_above_15b` | regex check: no fabricated AMD numbers in any v1-v6 response |
+| `test_q4_zero_orphan_rationalisations` | no "potential volatility" without a citation in any response |
+| `test_q4_no_invented_quarter_labels` | every "Q[1-4] 20XX" mentioned exists in fixture |
+
+**Critical**: if any sub-test fails, the entire remediation fails. Q4 is the bellwether — it's the exact scenario where the audit caught the agent fabricating a 3.4×-wrong revenue figure. This test must catch the same failure mode under any of the 6 question variants.
 
 ---
 
@@ -2663,12 +2783,102 @@ Handle the case where a SQL references a temporary table or a CTE — PREPARE ha
 - Median latency ≤ 30s
 - p99 latency ≤ 60s
 
-**Acceptance criteria**: this is the **gate test** for the entire remediation. If it passes, PLAN-0093 is complete.
+**Acceptance criteria**: this is the **gate test** for the 8-question audit-regression suite. If it passes AND T-G-3-11 (below) finds no new BLOCKING weak points, PLAN-0093 is complete.
+
+---
+
+#### Task T-G-3-11: Weak-Point Survey — 5 × 5 × 3 matrix to find new failure modes (Q4 follow-up)
+
+**Type**: test + investigation
+**depends_on**: T-G-3-02 ... T-G-3-10
+**blocks**: none
+**Target files**:
+- `tests/validation/chat_eval/test_weak_point_survey.py` **(NEW)**
+- `tests/validation/chat_eval/fixtures/survey_matrix.yaml` **(NEW)**
+- `tests/validation/chat_eval/weak_point_report.py` **(NEW — generates a markdown report from the run)**
+**Audit reference**: Q4 decision (2026-05-23) — "investigate other quarters and informations to search for other weak points/corners/edges where our platform is failing"
+
+**What to build**: a systematic sweep across the surface area that the original 8-question audit only sampled. The audit revealed Q4's $34.6B AMD fabrication by accident — we got lucky. This task tries to be unlucky on purpose by firing a much larger matrix of queries and using `NumericGroundingValidator` to surface every ungrounded number, grouped by (ticker, metric_kind, question_form). The output is a report listing the (ticker × metric) cells where the agent systematically fabricates or refuses — those are the next BLOCKING items.
+
+**The matrix**: 5 tickers × 5 metric families × 3 question variants = 75 queries per run.
+
+**Tickers (representative + diverse)**:
+| Ticker | Selection reason |
+|---|---|
+| AAPL | Mega-cap, abundant data, original audit target |
+| NVDA | Recent high-volatility, exotic FY (Jan year-end) — already-known edge case |
+| AMD | Original Q4 hallucination victim |
+| TSM | Non-US (Taiwan), tests ADR / foreign filer path |
+| BRK.B | Class-B share, holding company — tests entity disambiguation + non-traditional financials |
+
+**Metric families (one from each FieldKind cluster)**:
+| Family | Probes | Why included |
+|---|---|---|
+| REVENUE | quarterly revenue | the original $34.6B failure mode |
+| EPS | TTM EPS, last-quarter EPS | tighter tolerance kind |
+| RATIO | P/E, P/B, gross margin, ROE | derived metrics where LLM loves to guess |
+| HEADCOUNT | employee count | EODHD field — often stale, looser tol |
+| CORPORATE_ACTION | last buyback, last dividend, last M&A | KG-side data (relations table) — different surface |
+
+**Question variants (3 forms per family)**:
+1. **Specific lookup**: "What is {ticker}'s {metric}?"
+2. **Comparative**: "Compare {ticker} and AAPL on {metric}."
+3. **Trend**: "Show me {ticker}'s {metric} over the last 4 quarters."
+
+Total: 5 × 5 × 3 = **75 queries**.
+
+**Per-query analysis (using NumericGroundingValidator + classifiers)**:
+For each response, record:
+- HTTP status + latency
+- Tools called
+- Numbers extracted with classified `FieldKind`
+- Numbers ungrounded (via T-E-2-01 validator)
+- Quarter labels invented (not present in `market_data_db.fundamental_metrics`)
+- Refusal indicators (`PROVIDER_UNAVAILABLE`, `unable to retrieve`)
+- Hallucination indicators (rationalisation phrases)
+
+**Aggregation report** (written to `tests/validation/chat_eval/runs/<timestamp>/weak_point_report.md`):
+| Section | Content |
+|---|---|
+| Headline | "X of 75 queries had ungrounded numbers" + worst-offender cell |
+| Per-ticker | for each ticker: query count, ungrounded count, refusal count, top failure pattern |
+| Per-metric-family | same breakdown by metric family — surfaces "platform always fabricates EPS for non-US tickers" patterns |
+| Per-question-form | which form (specific / comparative / trend) fails most often |
+| Newly-discovered patterns | regex extraction of common hallucinations across queries — surfaces e.g. "agent invents 'AMD MI300' in 4 of 5 AI-context queries" |
+| Top-10 (ticker, metric, form) cells to fix | ranked by `ungrounded_count / total_queries_for_cell` |
+
+**Gating logic** (pytest assertions, BLOCKING the overall plan completion):
+- **HARMFUL count** (ungrounded numerical claim in a confident response) must be 0 for any of the 75 queries → BLOCKING
+- **Refusal rate** (HTTP 503 or "unable to retrieve") must be ≤ 20% across the 75 queries
+- **Ungrounded-numbers rate** (any unsupported number per validator) must be ≤ 10% across all numbers extracted
+- **New invented-quarter** (a quarter label not in the fixture) count must be 0 — zero tolerance
+
+**Sub-tests**:
+| Sub-test | Verifies |
+|---|---|
+| `test_survey_runs_all_75_queries` | full sweep completes; no infrastructure failure |
+| `test_survey_zero_harmful_responses` | 0 confident-fabrication queries (BLOCKING gate) |
+| `test_survey_refusal_rate_under_20pct` | ≤ 15 of 75 return 503 |
+| `test_survey_ungrounded_numbers_under_10pct` | per-query average ungrounded ≤ 10% |
+| `test_survey_zero_invented_quarter_labels` | no fabricated quarters across all queries |
+| `test_survey_report_artifact_written` | markdown report written and well-formed |
+| `test_survey_per_ticker_breakdown_complete` | each ticker has its breakdown in report |
+| `test_survey_per_metric_breakdown_complete` | each metric family has its breakdown |
+| `test_survey_no_systematic_metric_failure` | no metric family fails > 50% across all tickers (catches "platform always fails on EPS" class bugs) |
+
+**Acceptance criteria**:
+- [ ] All 9 sub-tests pass
+- [ ] `weak_point_report.md` produced and reviewed by a human; any newly-discovered systematic failure pattern is filed as a BP-NEW-NNN candidate or a follow-up plan
+- [ ] Report includes a "newly-discovered patterns" section that future audits use as baseline
+
+**Why this matters**: the original audit found the $34.6B AMD bug by firing 8 questions. With 75, we have ~10× the coverage and ~10× the chance of catching the next class of bug BEFORE a paying analyst does. This task is the difference between "we patched what we found" and "we have confidence in what we did NOT find."
 
 #### Validation Gate (Wave G-3)
-- [ ] All 10 task files exist and tests run
-- [ ] Aggregate suite shows ≥ 6/8 USEFUL, zero HARMFUL
+- [ ] All 11 task files exist and tests run
+- [ ] T-G-3-10 aggregate suite shows ≥ 6/8 USEFUL, zero HARMFUL
+- [ ] T-G-3-11 weak-point survey: zero HARMFUL across 75 queries, refusal ≤ 20%, ungrounded ≤ 10%, zero invented quarters
 - [ ] Suite scheduled to run on every PR touching `services/rag-chat/`, `services/knowledge-graph/`, or `services/nlp-pipeline/`
+- [ ] Weak-point report committed to `docs/audits/` for each scheduled nightly run
 
 ---
 
@@ -2751,19 +2961,19 @@ Append the following row to `docs/plans/TRACKING.md` Active Plans table:
 | D | 3 | 11 | 2.0 days | depends on B |
 | E | 5 | 19 | 3.5 days | parallel |
 | F | 2 | 7 | 1.5 days | parallel |
-| G | 3 | 18 | 2.0 days | gate |
-| **Total** | **24** | **95** | **15.5 days** (1 eng) / **7-9 days** (2 eng parallel) | — |
+| G | 3 | 19 | 2.5 days | gate |
+| **Total** | **24** | **96** | **16.0 days** (1 eng) / **7.5-9.5 days** (2 eng parallel) | — |
 
 ---
 
-## Open Questions Before Implementation
+## Resolved Decisions (2026-05-23)
 
-1. **Q1 (T-C-1-01)**: Do we want two-pass routing now (rebuild routing to fire post-resolution) or stick with the "drop dead signals" path? **Default**: drop signals (simpler, ships sooner). Two-pass is a follow-up plan.
-2. **Q2 (T-C-3-01)**: Does market-data actually expose a symbol→instrument_id endpoint? **Action**: T-C-3-01 investigates first; if missing, add a precursor wave to market-data.
-3. **Q3 (T-E-2-01)**: Tolerance for numeric grounding — 0.5% appropriate? Some financial numbers (e.g. EPS) need tighter; some (e.g. employee count) looser. **Default**: 0.5% global; per-field tuning in a follow-up.
-4. **Q4 (T-G-3-05)**: For the Q4 NVDA/AMD regression test, do we want to assert on EVERY quarter's revenue or just the latest? **Default**: latest quarter only (the LLM hallucinated the latest quarter for AMD specifically).
+All 4 open questions resolved by the product owner; sections of this plan have been amended accordingly. Original questions + final decisions:
 
-These open questions should be resolved with the user before starting Wave 1 of any affected sub-plan.
+1. **Q1 (T-C-1-01) — RESOLVED: drop dead signals**. Two-pass routing deferred to a follow-up plan. T-C-1-01 as written.
+2. **Q2 (T-C-3-01) — RESOLVED: agent investigates first**. T-C-3-01 is the investigation task; if it discovers no symbol resolver exists, the implementing agent must surface this as a blocker before starting T-C-3-02 and propose either (a) adding the endpoint to market-data, or (b) using the existing path with a corrected argument shape. Now explicit in T-C-3-01 acceptance criteria.
+3. **Q3 (T-E-2-01) — RESOLVED: per-field tolerance config**. T-E-2-01 amended to use a `NUMERIC_GROUNDING_TOLERANCES` settings dict keyed by financial-field type (tighter for EPS/ratios/prices; looser for headcount). Global 0.5% is no longer the design — see the amended task spec.
+4. **Q4 (T-G-3-05) — RESOLVED: multi-quarter + new investigation task**. T-G-3-05 expanded to assert on 6 quarters × 2 tickers (12 datapoints) AND a new task **T-G-3-11 (Weak-Point Survey)** added at the end of Wave G-3 to fire a 5 × 5 × 3 matrix (75 chat queries) surfacing systematic data-layer gaps the original audit didn't cover.
 
 ---
 
@@ -2778,4 +2988,4 @@ These open questions should be resolved with the user before starting Wave 1 of 
 
 **END OF PLAN PLAN-0093.**
 
-This plan implements the full QA report remediation, gated by a 28-sub-test SLO suite + 8-question chat regression suite. Verdict reversal (FAIL → PASS_WITH_WARNINGS) is gated by T-G-3-10 — once that test goes green, the platform is shippable.
+This plan implements the full QA report remediation, gated by a **28-sub-test SLO suite + 8-question chat regression + a 75-query Weak-Point Survey** (T-G-3-11) that fires 5 tickers × 5 metric families × 3 question variants to surface failure modes the original audit could not have found. Verdict reversal (FAIL → PASS_WITH_WARNINGS) is gated by **both** T-G-3-10 (≥ 6/8 useful answers) AND T-G-3-11 (zero HARMFUL across 75 queries) — once both pass, the platform is shippable.
