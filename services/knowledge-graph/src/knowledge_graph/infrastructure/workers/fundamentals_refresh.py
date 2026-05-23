@@ -187,6 +187,7 @@ class FundamentalsRefreshWorker:
             # DEF-034 (Wave B-5): Phase 1 fetch uses the read replica when
             # configured. Phase 3 writes still go through ``self._sf``.
             due_entities: list[dict[str, Any]] = []
+            no_ticker_ids: list[UUID] = []
             async with self._read_session_factory() as session:
                 emb_repo = EntityEmbeddingStateRepository(session)
                 # 0 = unlimited (drain full queue); see EntityEmbeddingStateRepository.get_due_for_refresh
@@ -195,6 +196,9 @@ class FundamentalsRefreshWorker:
                     ticker: str | None = row.get("ticker")  # type: ignore[assignment]
                     if not ticker:
                         skipped += 1
+                        # Collect for Phase 3 tombstone so they are not re-queued
+                        # every cycle forever (next_refresh_at stays in the past).
+                        no_ticker_ids.append(row["entity_id"])  # type: ignore[arg-type]
                         continue
                     # Materialise the row data we need for Phase 2 HTTP calls
                     due_entities.append(
@@ -382,6 +386,33 @@ class FundamentalsRefreshWorker:
                         next_refresh_at=next_at,
                     )
                     refreshed += 1
+
+                # Tombstone no-ticker entities: push next_refresh_at 1 year
+                # forward so they are not re-queued on every worker cycle.
+                if no_ticker_ids:
+                    from sqlalchemy import text as _sa_text
+
+                    far_future = utc_now() + timedelta(days=365)
+                    tombstoned = 0
+                    for _no_ticker_id in no_ticker_ids:
+                        await session.execute(
+                            _sa_text(
+                                "UPDATE entity_embedding_state"
+                                " SET next_refresh_at = :far_future"
+                                " WHERE entity_id = :entity_id AND view_type = :view_type"
+                            ),
+                            {
+                                "far_future": far_future,
+                                "entity_id": str(_no_ticker_id),
+                                "view_type": VIEW_FUNDAMENTALS,
+                            },
+                        )
+                        tombstoned += 1
+                    logger.info(  # type: ignore[no-any-return]
+                        "fundamentals_refresh_no_ticker_tombstoned",
+                        count=tombstoned,
+                        retry_in_days=365,
+                    )
 
                 await session.commit()
         finally:
@@ -654,6 +685,9 @@ ON CONFLICT DO NOTHING
                     source_trust_weight=_SECTOR_BASE_CONFIDENCE,
                     evidence_date=now,
                     canonical_type=_IS_IN_SECTOR_TYPE,
+                    evidence_text=f"EODHD fundamentals: {sector_name} sector classification.",
+                    source_name="eodhd",
+                    source_type="eodhd",
                 )
                 upserted += 1
 
@@ -684,6 +718,9 @@ ON CONFLICT DO NOTHING
                     source_trust_weight=_INDUSTRY_BASE_CONFIDENCE,
                     evidence_date=now,
                     canonical_type=_IS_IN_INDUSTRY_TYPE,
+                    evidence_text=f"EODHD fundamentals: {industry_name} industry classification.",
+                    source_name="eodhd",
+                    source_type="eodhd",
                 )
                 upserted += 1
 

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import re
 import time
@@ -13,8 +14,6 @@ from ml_clients.dataclasses import ExtractionInput, ExtractionOutput
 from ml_clients.errors import FatalError, RetryableError
 
 if TYPE_CHECKING:
-    import asyncio
-
     from observability.metrics import MLMetrics
 
 logger = structlog.get_logger()
@@ -25,8 +24,10 @@ _DEFAULT_BASE_URL = "https://api.deepinfra.com/v1/openai"
 # Extraction prompts for 8B-class models on DeepInfra typically return in 30-90s.
 # The openai SDK default of 600s means a stalled request hangs the article consumer
 # for up to 10 minutes before the docker restart policy triggers (BP-235 variant).
-# 120s gives a 2x margin over the p99 observed latency while preventing infinite hangs.
-_EXTRACTION_TIMEOUT_S = 120.0
+# 90s wall-clock cap via asyncio.wait_for prevents DLQ storms when DeepInfra is
+# under queue pressure (root cause of 93 DLQ timeouts seen 2026-05-10..21).
+# The httpx read=90s provides a secondary per-chunk guard.
+_EXTRACTION_TIMEOUT_S = 90.0
 
 
 class DeepSeekExtractionAdapter:
@@ -51,6 +52,7 @@ class DeepSeekExtractionAdapter:
         self._semaphore = semaphore
         self._metrics = metrics
         self._openai = _openai
+        self._timeout_s = timeout_s
         # Client is created once at startup so httpx maintains a persistent connection
         # pool across extraction calls. This also enables DeepInfra's server-side KV
         # prefix cache: when the system prompt bytes are identical across calls, the
@@ -93,19 +95,25 @@ class DeepSeekExtractionAdapter:
                     # prompt_cache_key — DeepInfra caches the system-prompt prefix KV
                     #   tensors across requests sharing the same key; only new (user-role)
                     #   tokens are billed after the initial cache-miss call.
-                    response = await self._client.chat.completions.create(
-                        model=self._model_id,
-                        messages=[
-                            {"role": "system", "content": inp.prompt},
-                            {"role": "user", "content": inp.context},
-                        ],
-                        response_format={"type": "json_object"},
-                        temperature=0.0,
-                        max_tokens=4096,
-                        extra_body={
-                            "reasoning_effort": "none",
-                            "prompt_cache_key": "kg_extraction_v1",
-                        },
+                    # asyncio.wait_for enforces a wall-clock total timeout so
+                    # a stalled DeepInfra request (high TTFT under queue pressure)
+                    # cannot consume the article consumer's 300s watchdog budget.
+                    response = await asyncio.wait_for(
+                        self._client.chat.completions.create(
+                            model=self._model_id,
+                            messages=[
+                                {"role": "system", "content": inp.prompt},
+                                {"role": "user", "content": inp.context},
+                            ],
+                            response_format={"type": "json_object"},
+                            temperature=0.0,
+                            max_tokens=4096,
+                            extra_body={
+                                "reasoning_effort": "none",
+                                "prompt_cache_key": "kg_extraction_v1",
+                            },
+                        ),
+                        timeout=self._timeout_s,
                     )
                     # Capture actual token usage from API response when available.
                     # cached_tokens: DeepInfra KV prefix cache hit count — non-zero when
@@ -189,6 +197,8 @@ class DeepSeekExtractionAdapter:
                     raise RetryableError(f"DeepSeek connection error: {exc}") from exc
                 except self._openai.APITimeoutError as exc:
                     raise RetryableError(f"DeepSeek timeout: {exc}") from exc
+                except TimeoutError as exc:
+                    raise RetryableError(f"DeepSeek wall-clock timeout after {self._timeout_s}s") from exc
                 except self._openai.APIStatusError as exc:
                     if exc.status_code >= 500:
                         raise RetryableError(f"DeepSeek 5xx: {exc}") from exc

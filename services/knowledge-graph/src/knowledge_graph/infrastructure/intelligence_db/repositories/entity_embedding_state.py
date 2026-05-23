@@ -176,7 +176,8 @@ ON CONFLICT (entity_id, view_type) DO NOTHING
         result = await self._session.execute(
             text("""
 SELECT ees.entity_id, ees.source_hash, ees.source_text, ce.canonical_name,
-       ce.entity_type, ce.ticker, ce.isin, ce.exchange
+       ce.entity_type, ce.ticker, ce.isin, ce.exchange,
+       ees.model_id IS NOT NULL AS has_embedding
 FROM entity_embedding_state ees
 JOIN canonical_entities ce ON ce.entity_id = ees.entity_id
 WHERE ees.view_type       = :view_type
@@ -199,6 +200,7 @@ FOR UPDATE OF ees SKIP LOCKED
                 "ticker": r[5],
                 "isin": r[6],
                 "exchange": r[7],
+                "has_embedding": bool(r[8]),
             }
             for r in rows
         ]

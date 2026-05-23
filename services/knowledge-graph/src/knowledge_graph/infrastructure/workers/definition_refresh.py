@@ -166,7 +166,10 @@ class DefinitionRefreshWorker:
                 continue
 
             new_hash = sha256_hex(source_text)
-            if new_hash == row.get("source_hash"):
+            # Only skip re-embedding when hash matches AND an embedding already exists.
+            # If embedding IS NULL (first-run row or COALESCE-preserved NULL), fall
+            # through to needs_embed so the entity gets its first embedding.
+            if new_hash == row.get("source_hash") and row.get("has_embedding"):
                 # Unchanged — push next_refresh_at forward, keep existing embedding.
                 unchanged.append(
                     _Update(
