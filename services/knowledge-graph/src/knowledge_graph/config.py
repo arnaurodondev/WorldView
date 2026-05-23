@@ -252,6 +252,13 @@ class Settings(BaseSettings):
     provisional_enrichment_base_retry_minutes: int = 2
     provisional_enrichment_max_retry_minutes: int = 1440
 
+    # PathExplanationBatchWorker controls (2026-05-23, Wave E2).
+    # batch_size: rows fetched per scheduler tick (ordered by composite_score DESC).
+    # concurrency: max parallel LLM calls within a single tick.
+    # At concurrency=5 and ~500ms/call this processes 200 rows in ~20s per tick.
+    path_explanation_batch_size: int = 200  # KNOWLEDGE_GRAPH_PATH_EXPLANATION_BATCH_SIZE
+    path_explanation_concurrency: int = 5  # KNOWLEDGE_GRAPH_PATH_EXPLANATION_CONCURRENCY
+
     # Path Insight Worker (PLAN-0074 Wave E1)
     # Model ID for Wave E2 LLM explanations (stored but not used in E1).
     path_insight_explanation_model_id: str = "meta-llama/Meta-Llama-3.1-8B-Instruct"

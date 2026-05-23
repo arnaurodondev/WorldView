@@ -225,6 +225,21 @@ class KnowledgeGraphScheduler:
             next_run_time=datetime.now(tz=UTC) + timedelta(seconds=90),  # fire 90s after boot
         )
 
+        # PathExplanationBatchWorker: sweep path_insights for rows with
+        # llm_explanation IS NULL and generate explanations in bulk (Task 1/3).
+        # Fires 3 minutes after boot so the seeder + path_insight_worker have
+        # a chance to run first, then every 30 minutes.
+        fn_exp_batch = self._resolve_job("path_explanation_batch")
+        self._scheduler.add_job(
+            fn_exp_batch,
+            "interval",
+            minutes=30,
+            id="worker_path_explanation_batch",
+            max_instances=1,
+            coalesce=True,
+            next_run_time=datetime.now(tz=UTC) + timedelta(seconds=180),  # fire 3 min after boot
+        )
+
     def _resolve_job(self, name: str) -> Any:
         """Return the real worker.run if available, otherwise a no-op stub."""
         worker = self._workers.get(name)
@@ -535,7 +550,7 @@ def build_workers(
     # PLAN-0074 Wave E1: PathInsightSeeder — registered unconditionally so the
     # scheduler cron stub works even when AGE is not fully configured.
     # The seeder only needs the DB session factory (no LLM dependency).
-    _add_path_insight_workers(workers, settings, write_session_factory)
+    _add_path_insight_workers(workers, settings, write_session_factory, llm_client=llm_client)
 
     return workers
 
@@ -544,13 +559,21 @@ def _add_path_insight_workers(
     workers: dict[str, Any],
     settings: Settings,
     write_session_factory: Any,
+    llm_client: Any | None = None,
 ) -> None:
-    """Wire PathInsightSeeder into the workers dict (PLAN-0074 Wave E1).
+    """Wire PathInsightSeeder and PathExplanationBatchWorker into the workers dict.
+
+    PathInsightSeeder (PLAN-0074 Wave E1):
+      Runs nightly + on startup to enqueue hub entity jobs. No LLM dependency.
+
+    PathExplanationBatchWorker (2026-05-23, Wave E2):
+      Sweeps path_insights for rows with llm_explanation IS NULL and generates
+      explanations in bulk.  Wired unconditionally — PathExplanationService is
+      a no-op when llm_client is None so the scheduler job is always registered.
 
     PathInsightWorker runs as a standalone process (docker-compose
-    ``path-insight-worker`` service) — it is NOT registered here as a
-    scheduler cron job because it runs continuously rather than on a
-    fixed interval.  Only the seeder gets a scheduler entry.
+    ``path-insight-worker`` service) — NOT registered here as a scheduler
+    cron job because it runs continuously.
     """
     from knowledge_graph.infrastructure.workers.path_insight_seeder import PathInsightSeeder
 
@@ -559,6 +582,76 @@ def _add_path_insight_workers(
     # wrap the seeder with a run() alias pointing to seed_hub_entities.
     seeder.run = seeder.seed_hub_entities  # type: ignore[attr-defined]
     workers["path_insight_seeder"] = seeder
+
+    # PathExplanationBatchWorker: sweep existing path_insights rows that have
+    # llm_explanation IS NULL.  Handles both:
+    #   - Paths created before Wave E2 (12,689 rows in production as of 2026-05-23).
+    #   - New paths created by PathInsightWorker after hub-penalty re-scoring.
+    from knowledge_graph.infrastructure.intelligence_db.repositories.path_insight_repository import (
+        PathInsightRepository,
+    )
+    from knowledge_graph.infrastructure.workers.path_explanation_batch_worker import PathExplanationBatchWorker
+
+    _exp_service = _build_explanation_service(
+        write_session_factory,
+        llm_client=llm_client,
+        model_id=getattr(settings, "narrative_llm_model_id", "meta-llama/Meta-Llama-3.1-8B-Instruct"),
+        repo_class=PathInsightRepository,
+    )
+    # Cast to int so that MagicMock settings in tests don't break asyncio.Semaphore.
+    _exp_batch_size: int = int(getattr(settings, "path_explanation_batch_size", 200) or 200)
+    _exp_concurrency: int = int(getattr(settings, "path_explanation_concurrency", 5) or 5)
+    workers["path_explanation_batch"] = PathExplanationBatchWorker(
+        session_factory=write_session_factory,
+        explanation_service=_exp_service,
+        batch_size=_exp_batch_size,
+        concurrency=_exp_concurrency,
+    )
+
+
+def _build_explanation_service(
+    session_factory: Any,
+    *,
+    llm_client: Any | None,
+    model_id: str,
+    repo_class: Any,
+) -> Any:
+    """Build a PathExplanationService with a session-factory-aware repo adapter.
+
+    PathExplanationService.update_explanation() needs a write session.  We wrap
+    the repo in an adapter that opens its own session for each write so no
+    session leaks across LLM calls (3-phase pattern).
+    """
+    from knowledge_graph.application.services.path_explanation_service import PathExplanationService
+
+    class _SessionBoundRepoAdapter:
+        """Repo adapter that opens a fresh write session for each update_explanation call."""
+
+        def __init__(self, sf: Any, repo_cls: Any) -> None:
+            self._sf = sf
+            self._repo_cls = repo_cls
+
+        async def update_explanation(
+            self,
+            insight_id: Any,
+            llm_explanation: str,
+            explanation_model: str,
+        ) -> None:
+            async with self._sf() as session:
+                repo = self._repo_cls(session)
+                await repo.update_explanation(
+                    insight_id=insight_id,
+                    llm_explanation=llm_explanation,
+                    explanation_model=explanation_model,
+                )
+                await session.commit()
+
+    repo_adapter = _SessionBoundRepoAdapter(session_factory, repo_class)
+    return PathExplanationService(
+        path_insight_repo=repo_adapter,  # type: ignore[arg-type]
+        llm_client=llm_client,
+        model_id=model_id,
+    )
 
 
 def build_market_data_signer(settings: Settings) -> Any:
