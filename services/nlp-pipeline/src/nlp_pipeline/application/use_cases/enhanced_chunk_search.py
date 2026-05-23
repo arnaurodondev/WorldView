@@ -564,7 +564,11 @@ class EnhancedChunkSearchUseCase:
         if self._emb is None:
             raise RuntimeError("EmbeddingClient is required when query_text is provided without query_embedding")
 
-        vec: list[float] = await self._emb.embed(query_text)  # type: ignore[attr-defined, assignment, arg-type]
+        from ml_clients.dataclasses import EmbeddingInput  # type: ignore[import-not-found]
+
+        outputs = await self._emb.embed([EmbeddingInput(text=query_text, model_id="BAAI/bge-large-en-v1.5")])
+        vec: list[float] = outputs[0].embedding
+        model_name = outputs[0].model_id
 
         if self._valkey is not None:
             try:
