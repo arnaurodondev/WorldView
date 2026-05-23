@@ -1342,3 +1342,120 @@ docker exec worldview-valkey-1 valkey-cli GET "newsapi:daily_requests:$(date +%Y
 
 **File**: `services/content-ingestion/src/content_ingestion/infrastructure/adapters/newsapi/adapter.py` — `NewsAPIAdapter.fetch()`
 **Config fix**: `content_ingestion_db.sources` — removed `from_date` from NewsAPI source configs
+
+---
+
+### BP-539: AGE graph sync lag causes Cypher path traversal to operate on 25% of true graph
+
+**Category**: Workers & Schedulers
+**Severity**: HIGH
+**First seen**: 2026-05-23
+**Services**: knowledge-graph (AGE sync worker), rag-query, api-gateway
+
+**Symptoms**:
+- `GET /intelligence/{id}/graph` returns far fewer edges than expected
+- Path traversal routes through unexpected intermediaries (e.g. all Apple→Microsoft paths via "Artificial Intelligence" node, not the direct COMPETES_WITH edge)
+- `ag_catalog` label counts much lower than `SELECT COUNT(*) FROM relations` in Postgres
+- 18 of 35 AGE edge type tables show stale statistics (`-1` approximate count)
+
+**Root cause**:
+New relations inserted into `relations` (Postgres) are not propagated to Apache AGE in real time. The AGE sync worker has a cursor/watermark that falls behind as the NLP pipeline inserts relations faster than the sync rate. Confirmed gap: 5,870 of 7,911 Postgres relations absent from AGE (74% missing). All Cypher queries (`MATCH p = ... -[r]->...`) operate on only ~2,041 of 7,911 edges.
+
+**Example**:
+```sql
+-- Check the gap
+SELECT r.canonical_type,
+       COUNT(*) AS postgres_count,
+       (SELECT COUNT(*) FROM ag_catalog.ag_edge e
+        JOIN ag_catalog.ag_graph g ON e.graph_oid = g.oid
+        WHERE g.name = 'worldview_graph') AS age_total
+FROM relations r GROUP BY r.canonical_type;
+```
+
+**Fix**:
+1. Check AGE sync worker logs for last successful cursor position
+2. Run a catch-up sync: reset the watermark and allow the worker to re-sync all unsynced relations
+3. Or: execute a one-time backfill by iterating over `relations` WHERE `id NOT IN (SELECT edge id from AGE)` and inserting each via `cypher()`
+
+**Prevention**:
+- Monitor the AGE edge count vs Postgres `relations` count as a Prometheus gauge; alert when divergence > 5%
+- Add a health check endpoint that reports the sync lag in absolute relation count
+
+**Regression test**: N/A (operational runbook — check `ag_catalog` counts after any large NLP pipeline run)
+
+---
+
+### BP-540: `build_fundamentals_narrative()` returns placeholder text when no data — pollutes ANN index
+
+**Category**: Workers & Schedulers, ML & LLM
+**Severity**: HIGH
+**First seen**: 2026-05-23
+**Services**: knowledge-graph (FundamentalsRefreshWorker, DefinitionRefreshWorker)
+
+**Symptoms**:
+- All `entity_embedding_state` rows with `view_type = 'fundamentals_ohlcv'` have identical `source_text`:
+  `"<EntityName> (financial_instrument) — Financial State Summary\nNo financial data available."`
+- ANN similarity search on the fundamentals index returns random/noise results — all entities appear equally similar
+- `SELECT DISTINCT source_text FROM entity_embedding_state WHERE view_type = 'fundamentals_ohlcv'` returns only a handful of distinct strings (differing only in entity name)
+
+**Root cause**:
+`build_fundamentals_narrative()` returned a non-None string even when no financial data was provided — the function appended "No financial data available." to the header and returned that string. The worker dutifully embedded the placeholder, creating 1,542 noise vectors in the ANN index. Vectors differing only in entity name are nearly identical → ANN search cannot discriminate.
+
+**Example**:
+```python
+# Bad — returns placeholder string that gets embedded as noise
+def build_fundamentals_narrative(name, entity_type, ...) -> str:
+    if len(parts) == 1:
+        parts.append("No financial data available.")
+    return "\n".join(parts)
+
+# Good — returns None so caller skips embedding
+def build_fundamentals_narrative(name, entity_type, ...) -> str | None:
+    if len(parts) == 1:
+        return None  # callers must check for None before embedding
+    return "\n".join(parts)
+```
+
+**Fix**:
+1. Change return type to `str | None`; return `None` when only the header is in `parts`
+2. Worker already handles `None` narrative via `if res["narrative"] is not None:` guard
+3. Backfill: `UPDATE entity_embedding_state SET embedding=NULL, source_text=NULL, source_hash=NULL, model_id=NULL, next_refresh_at=NOW() WHERE view_type='fundamentals_ohlcv' AND source_text LIKE '%No financial data available%'`
+
+**Prevention**:
+- Any narrative-building utility that can produce no-content output MUST return `None` (not a stub string) so callers can skip embedding
+- Test the no-data case explicitly: `assert build_fundamentals_narrative("X", "org") is None`
+
+**Regression test**: `tests/unit/application/test_fundamentals_narrative.py::TestBuildFundamentalsNarrativeDeterminism::test_no_financial_data_returns_none`
+
+---
+
+### BP-541: Embedding worker writes to embedding store but never writes back to source entity table
+
+**Category**: Workers & Schedulers, Database & ORM
+**Severity**: MEDIUM
+**First seen**: 2026-05-23
+**Services**: knowledge-graph (DefinitionRefreshWorker)
+
+**Symptoms**:
+- `canonical_entities.description` is NULL for nearly all entities (99.8% — 4,008/4,016)
+- `canonical_entities.enriched_at` is NULL for all entities
+- Graph node descriptions in API responses are `null` for almost all nodes
+- Entity description appears correctly in `entity_embedding_state.source_text` but not in `canonical_entities`
+
+**Root cause**:
+`DefinitionRefreshWorker` generates and embeds description text, storing it in `entity_embedding_state.source_text`. The worker never wrote this text back to `canonical_entities.description`. The write-back was implicitly assumed to be done by a different worker (structured enrichment) but `DefinitionRefreshWorker` is the only worker that generates non-financial descriptions for `person`, `sector`, `unknown`, etc. entity types. The 8 entities with non-null descriptions were seeded manually in migrations.
+
+**Fix**:
+In Phase 3 of `DefinitionRefreshWorker.run()`, after each `emb_repo.upsert()` call, execute:
+```sql
+UPDATE canonical_entities
+SET description = :description, enriched_at = :enriched_at
+WHERE entity_id = :entity_id
+```
+Run this for all items in `to_write` where `source_text` is non-empty.
+
+**Prevention**:
+- When an embedding worker generates text, assert in code review: "where does this text appear in API responses?" If the text is not accessible through a lookup from the source entity table, the write-back is missing.
+- Integration test: after `DefinitionRefreshWorker.run()`, assert `canonical_entities.description IS NOT NULL` for processed entities.
+
+**Regression test**: N/A — add integration test for write-back as part of next test pass
