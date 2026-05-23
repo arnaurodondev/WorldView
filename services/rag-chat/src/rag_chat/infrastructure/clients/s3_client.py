@@ -4,7 +4,7 @@ Endpoints:
   GET  /api/v1/fundamentals/{id}/highlights  -> fundamentals highlights
   GET  /api/v1/fundamentals/{id}/earnings    -> earnings history
   GET  /api/v1/quotes/{id}                   -> latest price quote
-  GET  /api/v1/instruments/symbol/{ticker}   -> ticker -> instrument UUID
+  GET  /api/v1/instruments/lookup?symbol=     -> ticker -> instrument UUID
   POST /api/v1/quotes/batch                  -> batch price quotes
   GET  /api/v1/ohlcv/bars                    -> OHLCV bars (PLAN-0066 Wave G)
   GET  /api/v1/fundamentals/history          -> quarterly history (PLAN-0066 Wave G)
@@ -59,11 +59,16 @@ class S3Client(BaseUpstreamClient):
         return await self._get(f"/api/v1/quotes/{instrument_id}")
 
     async def find_instrument_by_ticker(self, ticker: str) -> UUID | None:
-        """GET /api/v1/instruments/symbol/{ticker} → instrument UUID or None.
+        """GET /api/v1/instruments/lookup?symbol={ticker} → instrument UUID or None.
+
+        WHY lookup not symbol/{ticker}: the market-data service exposes
+        /instruments/lookup?symbol= (query param) not /instruments/symbol/{ticker}
+        (path param). Using the wrong path returns 404 on every call, silently
+        breaking financial context in instrument briefings (BP-XXX).
 
         Returns ``None`` on timeout, 404, or any HTTP error.
         """
-        raw = await self._get(f"/api/v1/instruments/symbol/{ticker}")
+        raw = await self._get("/api/v1/instruments/lookup", params={"symbol": ticker})
         if not raw:
             return None
         # Market-data InstrumentResponse uses "id" not "instrument_id"

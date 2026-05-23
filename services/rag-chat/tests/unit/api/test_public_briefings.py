@@ -509,6 +509,75 @@ async def test_cache_write_uses_model_dump_json(settings: RagChatSettings) -> No
         assert isinstance(sec, dict), f"Section serialized as non-dict (BP-322): {type(sec)}"
 
 
+async def test_morning_briefing_sets_context_var_jwt(settings: RagChatSettings) -> None:
+    """get_morning_briefing must call set_current_jwt(internal_jwt) before the use case.
+
+    WHY: BaseUpstreamClient._get()/_post() reads get_current_jwt() to propagate
+    X-Internal-JWT to S6/S7 calls.  If the ContextVar is not explicitly set in
+    the route (before the UC call), code paths that bypass InternalJWTMiddleware
+    (unit tests, background tasks) leave the ContextVar as None → S6 gets no JWT
+    header → 401 on every embedding/news call in briefings.
+    """
+    from rag_chat.infrastructure.clients.auth_context import get_current_jwt
+
+    # Capture the JWT value that was set in the ContextVar at UC call time
+    captured: list[str | None] = []
+
+    async def _side_effect(**kwargs: object) -> dict:
+        # Record the ContextVar state at the moment the UC is invoked
+        captured.append(get_current_jwt())
+        return _MORNING_RESULT
+
+    app = _make_app(settings)
+    app.state.briefing_uc.execute_public_morning = _side_effect  # type: ignore[assignment]
+
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        resp = await client.get("/api/v1/briefings/morning", headers=_JWT_HEADERS)
+
+    assert resp.status_code == 200
+    # ContextVar must have been set to the JWT token before the UC was called
+    assert len(captured) == 1
+    assert captured[0] == _JWT_TOKEN
+
+
+async def test_instrument_briefing_sets_context_var_jwt(settings: RagChatSettings) -> None:
+    """get_instrument_briefing must call set_current_jwt(internal_jwt) before the use case.
+
+    Same rationale as test_morning_briefing_sets_context_var_jwt — ensures that
+    execute_public_instrument() (which has no internal_jwt parameter of its own)
+    can still propagate the JWT to S6/S7 via the ContextVar.
+    """
+    from rag_chat.infrastructure.clients.auth_context import get_current_jwt
+
+    captured: list[str | None] = []
+
+    _INSTRUMENT_RESULT = {
+        "content": "Instrument briefing text.",
+        "risk_summary": {},
+        "citations": [],
+        "generated_at": "2026-04-19T12:00:00+00:00",
+        "confidence": 0.9,
+        "lead": "Stock surged on earnings beat.",
+        "sections": [],
+    }
+
+    async def _side_effect(**kwargs: object) -> dict:
+        captured.append(get_current_jwt())
+        return _INSTRUMENT_RESULT
+
+    app = _make_app(settings)
+    app.state.briefing_uc.execute_public_instrument = _side_effect  # type: ignore[assignment]
+
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        resp = await client.get("/api/v1/briefings/instrument/entity-abc", headers=_JWT_HEADERS)
+
+    assert resp.status_code == 200
+    assert len(captured) == 1
+    assert captured[0] == _JWT_TOKEN
+
+
 async def test_cache_read_round_trip_with_w4_sections(settings: RagChatSettings) -> None:
     """Cache hit with W4 BriefBullet sections must deserialise correctly (BP-322 regression guard)."""
     from rag_chat.api.schemas import BriefBullet, BriefCitation, BriefSection, PublicBriefingResponse
