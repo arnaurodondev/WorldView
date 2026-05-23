@@ -9,6 +9,7 @@ Split from proxy.py (PLAN-0089 B-3).
 
 from __future__ import annotations
 
+import json
 from typing import Any
 from uuid import UUID
 
@@ -227,8 +228,6 @@ async def get_entity_graph(
     if focus_node is not None:
         s7_params["focus_node"] = focus_node
 
-    import json as _json
-
     resp = await clients.knowledge_graph.get(
         f"/api/v1/entities/{entity_id}/graph",
         params=s7_params,
@@ -292,7 +291,7 @@ async def get_entity_graph(
             ]
 
     return Response(
-        content=_json.dumps(transformed).encode(),
+        content=json.dumps(transformed).encode(),
         status_code=resp.status_code,
         media_type="application/json",
     )

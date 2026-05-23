@@ -26,35 +26,12 @@ import { useRouter } from "next/navigation";
 import { ENTITY_TYPE_COLOR_MAP } from "@/lib/entity-types";
 import type { EntityGraph as EntityGraphData } from "@/types/api";
 import type { RelationFilter } from "./GraphControls";
+import { matchesRelFilter } from "./graphFilterUtils";
+export { matchesRelFilter };
 
 // WHY hex literal (not Tailwind): sigma WebGL reads hex/rgb from node attributes;
 // CSS classes never reach the canvas. Mirrors --muted-foreground (#83838A) from globals.css.
 const NODE_DEFAULT_COLOR = "#83838A";
-
-// ── matchesRelFilter ──────────────────────────────────────────────────────────
-// WHY pattern-based (not exact-match): relation labels vary by data source.
-// "CEO_OF", "EXECUTIVE_CHAIR", "CHIEF_EXEC" all map to "executive".
-export function matchesRelFilter(label: string, filter: RelationFilter): boolean {
-  const upper = label.toUpperCase();
-  switch (filter) {
-    case "all": return true;
-    case "executive":
-      return upper.includes("CEO") || upper.includes("CFO") || upper.includes("CTO") ||
-        upper.includes("COO") || upper.includes("CHAIR") || upper.includes("EXEC") ||
-        upper.includes("OFFICER") || upper.includes("DIRECTOR");
-    case "investor":
-      return upper.includes("INVEST") || upper.includes("SHAREHOLDER") ||
-        upper.includes("HOLDS") || upper.includes("OWNED");
-    case "supplier":
-      return upper.includes("SUPPL") || upper.includes("MANUFACTUR") || upper.includes("PRODUCES");
-    case "customer":
-      return upper.includes("CUSTOMER") || upper.includes("CLIENT") || upper.includes("USES");
-    case "competitor":
-      return upper.includes("COMPET") || upper.includes("RIVAL");
-    default:
-      return true;
-  }
-}
 
 // ── NodeTooltip / EdgeTooltip types (shared with EntityGraph.tsx) ─────────────
 
@@ -231,6 +208,9 @@ export function GraphLoader({ data, centerEntityId, layout }: GraphLoaderProps) 
             evidence_snippets: edge.evidence_snippets ?? [],
             relation_summary: edge.relation_summary ?? null,
             direction: edge.direction ?? null,
+            // WHY store decay_class: FilterController reads it via getEdgeAttributes()
+            // to apply alpha-based opacity. Without this attr it always defaults to MEDIUM.
+            decay_class: edge.decay_class ?? null,
             size: Math.max(0.5, edge.weight * 2),
             color: "#18181B",
           });
@@ -276,7 +256,6 @@ interface FilterControllerProps {
   activeRelFilter: RelationFilter;
   minWeight: number;
   searchQuery: string;
-  graphData: EntityGraphData;
   /** Currently selected node id — highlighted with a ring and enlarged. */
   selectedNodeId?: string | null;
 }

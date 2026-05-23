@@ -48,11 +48,11 @@ export function TopRelationsBlock({
 
   // WHY depth=1 and staleTime=10min:
   // Δ7 — TopRelationsBlock fetches depth=1 independently; the cache key matches
-  // ContextPanel's graphQuery so both share one network slot.
+  // GraphColumn's graphQuery so both share one network slot (same 10-min TTL).
   const { data: graph, isLoading, isError } = useQuery<EntityGraph | null>({
     queryKey: qk.instruments.entityGraph(entityId, 1),
     queryFn: () => createGateway(accessToken).getEntityGraph(entityId, 1),
-    staleTime: 5 * 60 * 1000,
+    staleTime: 10 * 60 * 1000,
     enabled: !!accessToken && !!entityId,
   });
 

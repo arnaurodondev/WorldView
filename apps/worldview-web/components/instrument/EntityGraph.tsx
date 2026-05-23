@@ -236,7 +236,6 @@ export function EntityGraph({ data, centerEntityId, onNodeClick, onEdgeClick, se
             activeRelFilter={activeRelFilter}
             minWeight={minWeight}
             searchQuery={searchQuery}
-            graphData={data}
             selectedNodeId={selectedNodeId}
           />
           {/* SA-3 (2026-05-10): auto-fit camera when entity changes */}

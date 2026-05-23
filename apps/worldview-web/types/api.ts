@@ -483,6 +483,10 @@ export interface GraphNode {
    *  Empty string for non-instrument entities (sectors, people, events).
    *  WHY needed: KG entity_id ≠ S3 instrument_id; ticker is the stable bridge. */
   ticker?: string;
+  /** Short company/entity description from KG entity_summary (B-01). */
+  description?: string | null;
+  /** GICS sector from KG entity_summary (B-01). */
+  sector?: string | null;
 }
 
 export interface GraphEdge {
@@ -503,6 +507,9 @@ export interface GraphEdge {
    *  "inbound"  = center is object (e.g. TSMC supplier_of Apple),
    *  "lateral"  = edge between two non-center entities at depth>1. */
   direction?: "outbound" | "inbound" | "lateral" | null;
+  /** Temporal decay class from KG relation_decay_state (B-02).
+   *  Controls edge opacity in sigma: PERMANENT/DURABLE=1.0, SLOW/MEDIUM=0.7, FAST/EPHEMERAL=0.4. */
+  decay_class?: string | null;
 }
 
 export interface EntityGraph {

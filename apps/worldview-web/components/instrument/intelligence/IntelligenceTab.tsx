@@ -44,9 +44,14 @@ export function IntelligenceTab({ entityId }: IntelligenceTabProps) {
   // Selecting a node clears edge; selecting an edge clears node.
   const [selectedNodeInfo, setSelectedNodeInfo] = useState<SelectedNodeInfo | null>(null);
   const [selectedEdgeInfo, setSelectedEdgeInfo] = useState<SelectedEdgeInfo | null>(null);
+  // WHY separate visualHighlightNodeId: ContextPanel row clicks (TopRelationsBlock)
+  // need to highlight a node in sigma WITHOUT opening InlineSelectionPanel — the
+  // right-rail click lacks full node data (label, edges list) required to render
+  // the panel. selectedNodeInfo drives InlineSelectionPanel; this drives sigma only.
+  const [visualHighlightNodeId, setVisualHighlightNodeId] = useState<string | null>(null);
 
-  // Derived: nodeId for graph visual highlighting (sigma uses ID, not full info)
-  const selectedNodeId = selectedNodeInfo?.id ?? null;
+  // Derived: sigma receives whichever ID is active — full selection takes priority.
+  const selectedNodeId = selectedNodeInfo?.id ?? visualHighlightNodeId;
 
   const handleNodeClick = useCallback((
     nodeId: string,
@@ -60,16 +65,19 @@ export function IntelligenceTab({ entityId }: IntelligenceTabProps) {
       prev?.id === nodeId ? null : { id: nodeId, label, type: nodeType, degree, edges },
     );
     setSelectedEdgeInfo(null);
+    setVisualHighlightNodeId(null); // graph-click supersedes any right-rail highlight
   }, []);
 
   const handleEdgeClick = useCallback((info: SelectedEdgeInfo) => {
     setSelectedEdgeInfo(info);
     setSelectedNodeInfo(null);
+    setVisualHighlightNodeId(null);
   }, []);
 
   const handleClearSelection = useCallback(() => {
     setSelectedNodeInfo(null);
     setSelectedEdgeInfo(null);
+    setVisualHighlightNodeId(null);
   }, []);
 
   // Reset selection when entity changes (stale selection from prior entity would
@@ -77,6 +85,7 @@ export function IntelligenceTab({ entityId }: IntelligenceTabProps) {
   useEffect(() => {
     setSelectedNodeInfo(null);
     setSelectedEdgeInfo(null);
+    setVisualHighlightNodeId(null);
   }, [entityId]);
 
   // Push "page" scope so j/k/Enter (news) and 1/2/3/g/r/Esc (graph) bindings
@@ -134,11 +143,12 @@ export function IntelligenceTab({ entityId }: IntelligenceTabProps) {
         <ContextPanel
           entityId={entityId}
           onNodeSelect={(nodeId) => {
-            // WHY TopRelationsBlock row click still needs to set selection:
-            // clicking a relation row in the right panel should highlight
-            // that node in the graph. We only set the ID, not full info
-            // (full info requires a graph lookup not available here).
-            setSelectedNodeInfo({ id: nodeId, label: "", type: "", degree: 0, edges: [] });
+            // WHY visualHighlightNodeId (not selectedNodeInfo): TopRelationsBlock
+            // row clicks only have a nodeId, not the full edges list needed to
+            // render InlineSelectionPanel. Use the visual-only highlight slot so
+            // sigma shows the yellow ring without opening the detail panel.
+            setVisualHighlightNodeId(nodeId);
+            setSelectedNodeInfo(null);
             setSelectedEdgeInfo(null);
           }}
         />

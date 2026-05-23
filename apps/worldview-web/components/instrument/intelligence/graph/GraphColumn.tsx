@@ -139,13 +139,6 @@ export function GraphColumn({ entityId, selectedNodeId, onNodeSelect, onNodeClic
   useEffect(() => {
     if (graphData !== undefined) {
       setGraphLatencyMs(Math.round(performance.now() - graphFetchStartRef.current));
-      console.debug("[intelligence] graph.fetch", {
-        entityId,
-        depth,
-        latencyMs: Math.round(performance.now() - graphFetchStartRef.current),
-        nodeCount: graphData?.nodes?.length ?? 0,
-        edgeCount: graphData?.edges?.length ?? 0,
-      });
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [graphData]);
@@ -160,14 +153,12 @@ export function GraphColumn({ entityId, selectedNodeId, onNodeSelect, onNodeClic
 
   const handleRefresh = useCallback(() => {
     void queryClient.invalidateQueries({ queryKey: qk.instruments.entityGraph(entityId, depth) });
-    console.debug("[intelligence] graph.refresh", { entityId, depth });
   }, [queryClient, entityId, depth]);
 
   // g → reset view: clear type filters + deselect node (return to overview).
   const handleResetView = useCallback(() => {
     setTypeFilters([]);
     onNodeSelect(null);
-    console.debug("[intelligence] graph.reset");
   }, [onNodeSelect]);
 
   useEffect(() => {
