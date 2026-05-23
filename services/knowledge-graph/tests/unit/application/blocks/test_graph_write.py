@@ -91,7 +91,7 @@ class TestGraphMaterializationRelations:
                 relation_repo=_make_relation_repo(),
                 evidence_repo=_make_evidence_repo(),
                 outbox_repo=_make_outbox_repo(),
-            )
+            ),
         )
         assert summary.relations_upserted == 0
         assert summary.evidence_rows_inserted == 0
@@ -118,7 +118,7 @@ class TestGraphMaterializationRelations:
                 relation_repo=relation_repo,
                 evidence_repo=_make_evidence_repo(),
                 outbox_repo=_make_outbox_repo(),
-            )
+            ),
         )
         relation_repo.upsert.assert_called_once()
 
@@ -145,7 +145,7 @@ class TestGraphMaterializationRelations:
                 relation_repo=relation_repo,
                 evidence_repo=_make_evidence_repo(),
                 outbox_repo=_make_outbox_repo(),
-            )
+            ),
         )
         relation_repo.upsert.assert_not_called()
 
@@ -172,7 +172,7 @@ class TestGraphMaterializationRelations:
                 relation_repo=_make_relation_repo(),
                 evidence_repo=evidence_repo,
                 outbox_repo=_make_outbox_repo(),
-            )
+            ),
         )
         evidence_repo.insert_raw.assert_called_once()
 
@@ -206,7 +206,7 @@ class TestPartitionKeyNotInInsert:
                 relation_repo=_make_relation_repo(),
                 evidence_repo=evidence_repo,
                 outbox_repo=_make_outbox_repo(),
-            )
+            ),
         )
         # Verify insert_raw was called with no partition_key kwarg
         kwargs = evidence_repo.insert_raw.call_args.kwargs
@@ -253,7 +253,7 @@ class TestEntityDirtiedReturnedNotProduced:
                 relation_repo=_make_relation_repo(),
                 evidence_repo=_make_evidence_repo(),
                 outbox_repo=_make_outbox_repo(),
-            )
+            ),
         )
         # Both subject and object IDs must be in the returned frozenset
         assert subj_id in summary.entity_ids_to_dirty
@@ -285,7 +285,7 @@ class TestEntityDirtiedReturnedNotProduced:
                 relation_repo=_make_relation_repo(),
                 evidence_repo=_make_evidence_repo(),
                 outbox_repo=_make_outbox_repo(),
-            )
+            ),
         )
         # The function returns entity IDs to dirty (not empty for a relation)
         assert summary.entities_dirtied >= 1
@@ -312,7 +312,7 @@ class TestEntityDirtiedReturnedNotProduced:
                 relation_repo=_make_relation_repo(),
                 evidence_repo=_make_evidence_repo(),
                 outbox_repo=_make_outbox_repo(),
-            )
+            ),
         )
         assert len(summary.entity_ids_to_dirty) == 0
 
@@ -339,7 +339,7 @@ class TestEntityDirtiedReturnedNotProduced:
                 relation_repo=_make_relation_repo(),
                 evidence_repo=_make_evidence_repo(),
                 outbox_repo=outbox,
-            )
+            ),
         )
         assert outbox.append.called
         topics = [c.kwargs["topic"] for c in outbox.append.call_args_list]
@@ -380,7 +380,7 @@ class TestEventsAndClaims:
                 relation_repo=_make_relation_repo(),
                 evidence_repo=_make_evidence_repo(),
                 outbox_repo=_make_outbox_repo(),
-            )
+            ),
         )
         # session.execute should have been called (INSERT events + INSERT event_entities)
         assert session.execute.call_count >= 2
@@ -413,7 +413,7 @@ class TestEventsAndClaims:
                 relation_repo=_make_relation_repo(),
                 evidence_repo=_make_evidence_repo(),
                 outbox_repo=_make_outbox_repo(),
-            )
+            ),
         )
         # session.execute should have been called for INSERT claims
         assert session.execute.call_count >= 1
@@ -483,7 +483,7 @@ class TestClaimMaterialization:
                 relation_repo=_make_relation_repo(),
                 evidence_repo=_make_evidence_repo(),
                 outbox_repo=_make_outbox_repo(),
-            )
+            ),
         )
         assert summary.claims_inserted == 3
         # Each claim triggers one session.execute call
@@ -519,7 +519,7 @@ class TestClaimMaterialization:
                 relation_repo=_make_relation_repo(),
                 evidence_repo=_make_evidence_repo(),
                 outbox_repo=_make_outbox_repo(),
-            )
+            ),
         )
         # Find the claims INSERT call and verify params
         for call in session.execute.call_args_list:
@@ -555,7 +555,7 @@ class TestClaimMaterialization:
                 relation_repo=_make_relation_repo(),
                 evidence_repo=_make_evidence_repo(),
                 outbox_repo=_make_outbox_repo(),
-            )
+            ),
         )
         for call in session.execute.call_args_list:
             sql_text = str(call.args[0])
@@ -590,7 +590,7 @@ class TestClaimMaterialization:
                 relation_repo=_make_relation_repo(),
                 evidence_repo=_make_evidence_repo(),
                 outbox_repo=_make_outbox_repo(),
-            )
+            ),
         )
         for call in session.execute.call_args_list:
             sql_text = str(call.args[0])
@@ -626,7 +626,7 @@ class TestClaimMaterialization:
                 relation_repo=_make_relation_repo(),
                 evidence_repo=_make_evidence_repo(),
                 outbox_repo=_make_outbox_repo(),
-            )
+            ),
         )
         # Claims-only message: the graph.state.changed outbox should still fire
         # because affected_entity_ids is non-empty from the claim
@@ -658,7 +658,7 @@ class TestClaimMaterialization:
                 evidence_repo=_make_evidence_repo(),
                 outbox_repo=_make_outbox_repo(),
                 extraction_model_id="qwen2.5:7b-instruct",
-            )
+            ),
         )
         for call in session.execute.call_args_list:
             sql_text = str(call.args[0])
@@ -732,7 +732,7 @@ class TestDeterministicEventId:
                 relation_repo=_make_relation_repo(),
                 evidence_repo=_make_evidence_repo(),
                 outbox_repo=_make_outbox_repo(),
-            )
+            ),
         )
         event_id_a = _extract_events_insert_event_id(session_a)
 
@@ -755,7 +755,7 @@ class TestDeterministicEventId:
                 relation_repo=_make_relation_repo(),
                 evidence_repo=_make_evidence_repo(),
                 outbox_repo=_make_outbox_repo(),
-            )
+            ),
         )
         event_id_b = _extract_events_insert_event_id(session_b)
 
@@ -808,7 +808,7 @@ class TestDeterministicEventId:
                     relation_repo=_make_relation_repo(),
                     evidence_repo=_make_evidence_repo(),
                     outbox_repo=_make_outbox_repo(),
-                )
+                ),
             )
             ids[label] = _extract_events_insert_event_id(session)
 
@@ -853,7 +853,7 @@ class TestDeterministicEventId:
                 relation_repo=_make_relation_repo(),
                 evidence_repo=_make_evidence_repo(),
                 outbox_repo=_make_outbox_repo(),
-            )
+            ),
         )
 
         # BP-397: the events INSERT SQL must explicitly contain the
@@ -903,7 +903,7 @@ class TestDeterministicEventId:
                 relation_repo=_make_relation_repo(),
                 evidence_repo=_make_evidence_repo(),
                 outbox_repo=_make_outbox_repo(),
-            )
+            ),
         )
         actual = _extract_events_insert_event_id(session)
         expected = uuid5_from_parts(str(doc_id), str(subject_id), event_type)
@@ -980,7 +980,7 @@ class TestDeterministicCreatedAt:
                 relation_repo=_make_relation_repo(),
                 evidence_repo=_make_evidence_repo(),
                 outbox_repo=_make_outbox_repo(),
-            )
+            ),
         )
         params_a = _extract_events_insert_params(session_a)
 
@@ -1002,7 +1002,7 @@ class TestDeterministicCreatedAt:
                 relation_repo=_make_relation_repo(),
                 evidence_repo=_make_evidence_repo(),
                 outbox_repo=_make_outbox_repo(),
-            )
+            ),
         )
         params_b = _extract_events_insert_params(session_b)
 
@@ -1047,7 +1047,7 @@ class TestDeterministicCreatedAt:
                 relation_repo=_make_relation_repo(),
                 evidence_repo=_make_evidence_repo(),
                 outbox_repo=_make_outbox_repo(),
-            )
+            ),
         )
         params = _extract_events_insert_params(session)
         assert params["created_at"] == explicit_date
@@ -1090,10 +1090,230 @@ class TestDeterministicCreatedAt:
                 relation_repo=_make_relation_repo(),
                 evidence_repo=_make_evidence_repo(),
                 outbox_repo=_make_outbox_repo(),
-            )
+            ),
         )
         params = _extract_events_insert_params(session)
         assert params["created_at"] == _DETERMINISTIC_CREATED_AT_FALLBACK
+
+
+# ---------------------------------------------------------------------------
+# F-154 — Deterministic claim_id (idempotent on Kafka replay)
+# ---------------------------------------------------------------------------
+
+
+def _extract_claims_insert_params(session: AsyncMock) -> dict:
+    """Pull the bound parameter dict out of the claims INSERT call on the
+    mock session.  Walks every execute() call until it finds one whose SQL
+    text contains an ``INSERT INTO claims`` statement.
+    """
+    for call in session.execute.call_args_list:
+        sql_text = str(call.args[0])
+        if "INSERT INTO claims" in sql_text:
+            return dict(call.args[1])
+    raise AssertionError("claims INSERT call not found on session mock")
+
+
+class TestDeterministicClaimId:
+    """F-154: Replays of the same enriched-article message must produce the same
+    claim_id so that ON CONFLICT (claim_id, created_at) fires and de-duplicates
+    the row instead of inserting a duplicate.
+
+    These tests pin the F-154 fix in place: any future code change that
+    re-introduces ``new_uuid7()`` for the claims INSERT will fail
+    ``test_deterministic_claim_id_same_inputs`` immediately.
+    """
+
+    def test_deterministic_claim_id_same_inputs(self) -> None:
+        """Two calls with the same (doc_id, subject_entity_id, claim_type, polarity)
+        must produce the same claim_id at the SQL parameter level."""
+        from knowledge_graph.application.blocks.graph_write import materialize_graph
+
+        doc_id = uuid4()
+        subject_id = uuid4()
+        claim = _raw_claim(subject_entity_id=subject_id, claim_type="analyst_rating", polarity="positive")
+
+        # First call — capture the claim_id used in the claims INSERT.
+        session_a = _make_session()
+        asyncio.run(
+            materialize_graph(
+                doc_id=doc_id,
+                source_type="news",
+                is_backfill=False,
+                relations=[],
+                canonical_types=[],
+                canonical_semantic_modes=[],
+                canonical_decay_classes=[],
+                canonical_decay_alphas=[],
+                canonical_base_confidences=[],
+                events=[],
+                claims=[claim],  # type: ignore[list-item]
+                session=session_a,
+                relation_repo=_make_relation_repo(),
+                evidence_repo=_make_evidence_repo(),
+                outbox_repo=_make_outbox_repo(),
+            ),
+        )
+        params_a = _extract_claims_insert_params(session_a)
+
+        # Second call — same inputs, fresh session.  Must reuse the same UUID.
+        session_b = _make_session()
+        asyncio.run(
+            materialize_graph(
+                doc_id=doc_id,
+                source_type="news",
+                is_backfill=False,
+                relations=[],
+                canonical_types=[],
+                canonical_semantic_modes=[],
+                canonical_decay_classes=[],
+                canonical_decay_alphas=[],
+                canonical_base_confidences=[],
+                events=[],
+                claims=[claim],  # type: ignore[list-item]
+                session=session_b,
+                relation_repo=_make_relation_repo(),
+                evidence_repo=_make_evidence_repo(),
+                outbox_repo=_make_outbox_repo(),
+            ),
+        )
+        params_b = _extract_claims_insert_params(session_b)
+
+        assert params_a["claim_id"] == params_b["claim_id"], (
+            "F-154 regression: same (doc_id, subject_entity_id, claim_type, polarity) "
+            "produced different claim_ids — Kafka replay idempotency broken."
+        )
+
+    def test_different_claim_types_produce_different_ids(self) -> None:
+        """Different claim_type values must produce different claim_ids."""
+        from knowledge_graph.application.blocks.graph_write import materialize_graph
+
+        doc_id = uuid4()
+        subject_id = uuid4()
+
+        claim_a = _raw_claim(subject_entity_id=subject_id, claim_type="analyst_rating", polarity="positive")
+        claim_b = _raw_claim(subject_entity_id=subject_id, claim_type="revenue_guidance", polarity="positive")
+
+        session_a = _make_session()
+        asyncio.run(
+            materialize_graph(
+                doc_id=doc_id,
+                source_type="news",
+                is_backfill=False,
+                relations=[],
+                canonical_types=[],
+                canonical_semantic_modes=[],
+                canonical_decay_classes=[],
+                canonical_decay_alphas=[],
+                canonical_base_confidences=[],
+                events=[],
+                claims=[claim_a],  # type: ignore[list-item]
+                session=session_a,
+                relation_repo=_make_relation_repo(),
+                evidence_repo=_make_evidence_repo(),
+                outbox_repo=_make_outbox_repo(),
+            ),
+        )
+        params_a = _extract_claims_insert_params(session_a)
+
+        session_b = _make_session()
+        asyncio.run(
+            materialize_graph(
+                doc_id=doc_id,
+                source_type="news",
+                is_backfill=False,
+                relations=[],
+                canonical_types=[],
+                canonical_semantic_modes=[],
+                canonical_decay_classes=[],
+                canonical_decay_alphas=[],
+                canonical_base_confidences=[],
+                events=[],
+                claims=[claim_b],  # type: ignore[list-item]
+                session=session_b,
+                relation_repo=_make_relation_repo(),
+                evidence_repo=_make_evidence_repo(),
+                outbox_repo=_make_outbox_repo(),
+            ),
+        )
+        params_b = _extract_claims_insert_params(session_b)
+
+        assert (
+            params_a["claim_id"] != params_b["claim_id"]
+        ), "F-154: different claim_type values must produce different claim_ids"
+
+    def test_claim_id_matches_uuid5_from_parts(self) -> None:
+        """Direct contract test: the claim_id in the INSERT must equal
+        uuid5_from_parts(doc_id, subject_entity_id, claim_type, polarity)."""
+        from knowledge_graph.application.blocks.graph_write import materialize_graph
+
+        from common.ids import uuid5_from_parts  # type: ignore[import-untyped]
+
+        doc_id = uuid4()
+        subject_id = uuid4()
+        claim_type = "analyst_rating"
+        polarity = "positive"
+        claim = _raw_claim(subject_entity_id=subject_id, claim_type=claim_type, polarity=polarity)
+
+        session = _make_session()
+        asyncio.run(
+            materialize_graph(
+                doc_id=doc_id,
+                source_type="news",
+                is_backfill=False,
+                relations=[],
+                canonical_types=[],
+                canonical_semantic_modes=[],
+                canonical_decay_classes=[],
+                canonical_decay_alphas=[],
+                canonical_base_confidences=[],
+                events=[],
+                claims=[claim],  # type: ignore[list-item]
+                session=session,
+                relation_repo=_make_relation_repo(),
+                evidence_repo=_make_evidence_repo(),
+                outbox_repo=_make_outbox_repo(),
+            ),
+        )
+        params = _extract_claims_insert_params(session)
+        expected = uuid5_from_parts(str(doc_id), str(subject_id), claim_type, polarity)
+        assert params["claim_id"] == expected
+
+    def test_claim_insert_binds_deterministic_created_at(self) -> None:
+        """The claims INSERT must explicitly bind created_at to the fallback
+        so the conflict-target tuple (claim_id, created_at) is stable on replay
+        (BP-397 pattern applied to claims — F-154)."""
+        from knowledge_graph.application.blocks.graph_write import (
+            _DETERMINISTIC_CREATED_AT_FALLBACK,
+            materialize_graph,
+        )
+
+        session = _make_session()
+        claim = _raw_claim()
+        asyncio.run(
+            materialize_graph(
+                doc_id=uuid4(),
+                source_type="news",
+                is_backfill=False,
+                relations=[],
+                canonical_types=[],
+                canonical_semantic_modes=[],
+                canonical_decay_classes=[],
+                canonical_decay_alphas=[],
+                canonical_base_confidences=[],
+                events=[],
+                claims=[claim],  # type: ignore[list-item]
+                session=session,
+                relation_repo=_make_relation_repo(),
+                evidence_repo=_make_evidence_repo(),
+                outbox_repo=_make_outbox_repo(),
+            ),
+        )
+        params = _extract_claims_insert_params(session)
+        assert "created_at" in params, "claims INSERT must explicitly bind created_at (F-154)"
+        assert params["created_at"] == _DETERMINISTIC_CREATED_AT_FALLBACK, (
+            "F-154: created_at must use the stable fallback so ON CONFLICT (claim_id, created_at) "
+            "fires correctly on Kafka replay"
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -1140,7 +1360,7 @@ class TestSelfLoopGuard:
                 relation_repo=_make_relation_repo(),
                 evidence_repo=evidence_repo,
                 outbox_repo=_make_outbox_repo(),
-            )
+            ),
         )
         # Self-loop must be dropped — no write to evidence or relations table.
         evidence_repo.insert_raw.assert_not_called()
@@ -1175,7 +1395,7 @@ class TestSelfLoopGuard:
                 relation_repo=relation_repo,
                 evidence_repo=_make_evidence_repo(),
                 outbox_repo=_make_outbox_repo(),
-            )
+            ),
         )
         relation_repo.upsert.assert_not_called()
 
@@ -1208,7 +1428,7 @@ class TestSelfLoopGuard:
                 relation_repo=_make_relation_repo(),
                 evidence_repo=_make_evidence_repo(),
                 outbox_repo=_make_outbox_repo(),
-            )
+            ),
         )
         # evidence_rows_inserted tracks actual inserts — must be 0 for a self-loop.
         assert summary.evidence_rows_inserted == 0
@@ -1254,7 +1474,7 @@ class TestSelfLoopGuard:
                 relation_repo=_make_relation_repo(),
                 evidence_repo=evidence_repo,
                 outbox_repo=_make_outbox_repo(),
-            )
+            ),
         )
         # Only the valid relation should have been written.
         assert summary.evidence_rows_inserted == 1
@@ -1306,7 +1526,7 @@ class TestDirectionNormalization:
                 relation_repo=relation_repo,
                 evidence_repo=evidence_repo,
                 outbox_repo=_make_outbox_repo(),
-            )
+            ),
         )
         return relation_repo, evidence_repo, summary
 

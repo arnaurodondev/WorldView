@@ -277,28 +277,61 @@ async def _insert_claim(
     raw_claim: RawClaim,
     extraction_model_id: str | None = None,
 ) -> UUID:
-    """INSERT a claim record.  Returns the new claim_id.
+    """INSERT a claim record.  Returns the deterministic claim_id.
+
+    F-154 fix: ``claim_id`` is now derived deterministically via UUID5 from
+    ``(doc_id, subject_entity_id, claim_type, polarity)`` so that Kafka replays
+    of the same enriched-article message produce the same ``claim_id`` and the
+    ``ON CONFLICT (claim_id, created_at) DO NOTHING`` clause fires correctly.
+
+    Why we MUST also bind ``created_at`` explicitly (same reason as events,
+    BP-397):
+      * ``claims`` is RANGE-partitioned by ``created_at`` and the PRIMARY KEY is
+        ``(claim_id, created_at)`` — a partitioned-table unique constraint MUST
+        include all partition-key columns.
+      * If we let ``created_at`` default to ``now()`` server-side, every Kafka
+        replay produces a different ``created_at``, so ON CONFLICT NEVER
+        matches even though ``claim_id`` is now deterministic.
+      * We bind ``created_at`` to the stable ``_DETERMINISTIC_CREATED_AT_FALLBACK``
+        (2024-01-01 UTC) — a pre-seeded partition boundary that always exists —
+        because claims carry no natural event date that could serve as a stable
+        alternative.  The fallback is the same constant used for events without
+        an ``event_date``.
 
     ``extraction_model_id`` is the LLM model that produced this claim
     (PLAN-0031 B-2).  When None the DB server_default='unknown' applies.
     """
     from sqlalchemy import text
 
-    claim_id = new_uuid7()
+    # Deterministic UUID5 — same (doc_id, subject_entity_id, claim_type, polarity)
+    # always yields the same claim_id (F-154 fix).  All four fields are cast to
+    # str explicitly because uuid5_from_parts accepts *str only.
+    claim_id = UUID(
+        uuid5_from_parts(
+            str(doc_id),
+            str(raw_claim.subject_entity_id),
+            raw_claim.claim_type,
+            raw_claim.polarity,
+        ),
+    )
     await session.execute(
         text("""
 INSERT INTO claims
-    (claim_id, doc_id, chunk_id, claimer_entity_id, subject_entity_id,
+    (claim_id, created_at, doc_id, chunk_id, claimer_entity_id, subject_entity_id,
      claim_type, polarity, claim_text, extraction_confidence, is_backfill,
      extraction_model_id)
 VALUES
-    (:claim_id, :doc_id, :chunk_id, :claimer_entity_id, :subject_entity_id,
+    (:claim_id, :created_at, :doc_id, :chunk_id, :claimer_entity_id, :subject_entity_id,
      :claim_type, :polarity, :claim_text, :extraction_confidence, :is_backfill,
      :extraction_model_id)
 ON CONFLICT (claim_id, created_at) DO NOTHING
 """),
         {
             "claim_id": str(claim_id),
+            # Bind ``created_at`` to the stable migration-aligned fallback so that
+            # the conflict-target tuple (claim_id, created_at) is identical on
+            # every replay of the same Kafka message (F-154 / BP-397 pattern).
+            "created_at": _DETERMINISTIC_CREATED_AT_FALLBACK,
             "doc_id": str(doc_id),
             "chunk_id": str(raw_claim.chunk_id) if raw_claim.chunk_id else None,
             "claimer_entity_id": (str(raw_claim.claimer_entity_id) if raw_claim.claimer_entity_id else None),
@@ -311,7 +344,7 @@ ON CONFLICT (claim_id, created_at) DO NOTHING
             "extraction_model_id": extraction_model_id,
         },
     )
-    return claim_id  # type: ignore[return-value]
+    return claim_id
 
 
 def _build_entity_dirtied_payload(
