@@ -79,15 +79,30 @@ export interface EdgeTooltip {
 // WHY separate: useRegisterEvents + useSigma are context hooks that only work
 // when rendered as a descendant of <SigmaContainer>.
 
+/** Full edge info emitted on click — all fields sourced from graphology edge attributes. */
+export interface SelectedEdgeInfo {
+  id: string;
+  label: string;
+  weight: number;
+  evidence_snippets: string[];
+  relation_summary?: string | null;
+  sourceId: string;
+  targetId: string;
+  sourceLabel: string;
+  targetLabel: string;
+}
+
 interface GraphEventsProps {
   centerEntityId: string;
   onNodeHover: (tooltip: NodeTooltip | null) => void;
   onEdgeHover: (tooltip: EdgeTooltip | null) => void;
   onNodeClick?: (nodeId: string, label: string, nodeType: string, degree: number,
     edges: Array<{label: string; weight: number; neighborId: string; neighborLabel: string}>) => void;
+  /** Called when the user clicks an edge — fires the full edge data from graphology attrs. */
+  onEdgeClick?: (info: SelectedEdgeInfo) => void;
 }
 
-export function GraphEvents({ centerEntityId, onNodeHover, onEdgeHover, onNodeClick }: GraphEventsProps) {
+export function GraphEvents({ centerEntityId, onNodeHover, onEdgeHover, onNodeClick, onEdgeClick }: GraphEventsProps) {
   const sigma = useSigma();
   const registerEvents = useRegisterEvents();
   const router = useRouter();
@@ -137,8 +152,25 @@ export function GraphEvents({ centerEntityId, onNodeHover, onEdgeHover, onNodeCl
           router.push(`/instruments/${ticker || node}`);
         }
       },
+      clickEdge: ({ edge }) => {
+        if (!onEdgeClick) return;
+        const graph = sigma.getGraph();
+        const attrs = graph.getEdgeAttributes(edge);
+        const [src, tgt] = graph.extremities(edge);
+        onEdgeClick({
+          id: edge,
+          label: (attrs.label as string | undefined) ?? "",
+          weight: (attrs.weight as number | undefined) ?? 0,
+          evidence_snippets: (attrs.evidence_snippets as string[] | undefined) ?? [],
+          relation_summary: (attrs.relation_summary as string | null | undefined) ?? null,
+          sourceId: src,
+          targetId: tgt,
+          sourceLabel: (graph.getNodeAttribute(src, "label") as string | undefined) ?? src,
+          targetLabel: (graph.getNodeAttribute(tgt, "label") as string | undefined) ?? tgt,
+        });
+      },
     });
-  }, [registerEvents, sigma, router, centerEntityId, onNodeHover, onEdgeHover, onNodeClick]);
+  }, [registerEvents, sigma, router, centerEntityId, onNodeHover, onEdgeHover, onNodeClick, onEdgeClick]);
 
   return null;
 }

@@ -32,7 +32,7 @@ import { useEffect, useMemo, useRef, useState, useCallback } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import dynamic from "next/dynamic";
 import { RefreshCw } from "lucide-react";
-import { useAuth } from "@/hooks/useAuth";
+import { useAccessToken } from "@/lib/api-client";
 import { createGateway } from "@/lib/gateway";
 import { qk } from "@/lib/query/keys";
 import { useHotkeyScope } from "@/contexts/HotkeyContext";
@@ -42,6 +42,7 @@ import { StructuredBrief } from "@/components/brief/StructuredBrief";
 import { formatDateTime } from "@/lib/utils";
 import { GraphStats } from "./GraphStats";
 import type { BriefingResponse, EntityGraph as EntityGraphData } from "@/types/api";
+import type { SelectedEdgeInfo } from "@/components/instrument/EntityGraph";
 
 // WHY ssr:false: EntityGraph uses sigma.js (WebGL) — cannot run in Node.js.
 const EntityGraph = dynamic(
@@ -67,11 +68,22 @@ const GRAPH_TIMEOUT_MS: Record<number, number> = { 1: 1500, 2: 4000, 3: 8000 };
 export interface GraphColumnProps {
   readonly entityId: string;
   readonly selectedNodeId: string | null;
+  /** Called when node selection changes (id or null for deselect). */
   readonly onNodeSelect: (nodeId: string | null) => void;
+  /** Called with full node data when user clicks a node — used by InlineSelectionPanel. */
+  readonly onNodeClickFull?: (
+    nodeId: string,
+    label: string,
+    nodeType: string,
+    degree: number,
+    edges: Array<{ label: string; weight: number; neighborId: string; neighborLabel: string }>,
+  ) => void;
+  /** Called when user clicks an edge in the sigma canvas. */
+  readonly onEdgeSelect?: (info: SelectedEdgeInfo) => void;
 }
 
-export function GraphColumn({ entityId, selectedNodeId, onNodeSelect }: GraphColumnProps) {
-  const { accessToken } = useAuth();
+export function GraphColumn({ entityId, selectedNodeId, onNodeSelect, onNodeClickFull, onEdgeSelect }: GraphColumnProps) {
+  const accessToken = useAccessToken();
   const queryClient = useQueryClient();
   const [depth, setDepth] = useState<number>(2);
   const [typeFilters, setTypeFilters] = useState<string[]>([]);
@@ -228,9 +240,26 @@ export function GraphColumn({ entityId, selectedNodeId, onNodeSelect }: GraphCol
     return { ...graphData, nodes, edges };
   }, [graphData, typeFilters]);
 
-  // WHY adapter: collapse EntityGraph's multi-field click to nodeId.
-  // Clicking the same node deselects (toggles detail panel closed).
-  const handleNodeClick = (id: string) => onNodeSelect(selectedNodeId === id ? null : id);
+  // WHY adapter: EntityGraph fires (id, label, type, degree, edges).
+  // Pass full data to onNodeClickFull for InlineSelectionPanel.
+  // Pass id/null to onNodeSelect for visual graph highlighting (toggle).
+  const handleNodeClick = (
+    id: string,
+    label: string,
+    nodeType: string,
+    degree: number,
+    edges: Array<{ label: string; weight: number; neighborId: string; neighborLabel: string }>,
+  ) => {
+    const next = selectedNodeId === id ? null : id;
+    onNodeSelect(next);
+    if (onNodeClickFull) {
+      if (next === null) {
+        // Deselect: parent clears via onNodeSelect(null) path
+      } else {
+        onNodeClickFull(id, label, nodeType, degree, edges);
+      }
+    }
+  };
   const isTimeout = isError && graphErr instanceof Error && graphErr.message === "GRAPH_TIMEOUT";
 
   const hasBriefContent = !!(brief?.lead || (brief?.sections && brief.sections.length > 0));
@@ -302,6 +331,8 @@ export function GraphColumn({ entityId, selectedNodeId, onNodeSelect }: GraphCol
               data={filteredGraph}
               centerEntityId={entityId}
               onNodeClick={handleNodeClick}
+
+              onEdgeClick={onEdgeSelect}
             />
           </EntityGraphErrorBoundary>
         )}

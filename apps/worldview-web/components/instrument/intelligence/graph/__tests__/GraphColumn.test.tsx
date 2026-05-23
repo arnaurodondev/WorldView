@@ -49,6 +49,10 @@ vi.mock("@/hooks/useAuth", () => ({
   })),
 }));
 
+vi.mock("@/lib/api-client", () => ({
+  useAccessToken: vi.fn(() => "test-token"),
+}));
+
 // WHY a hoisted handle: lets each test mock-reject getEntityGraph differently.
 const mockGateway = vi.hoisted(() => ({
   getEntityGraph: vi.fn(),

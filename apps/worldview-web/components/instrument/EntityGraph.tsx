@@ -49,7 +49,7 @@ import {
   NodeTooltipPanel,
   EdgeTooltipPanel,
 } from "./graph/SigmaInternalComponents";
-import type { NodeTooltip, EdgeTooltip } from "./graph/SigmaInternalComponents";
+import type { NodeTooltip, EdgeTooltip, SelectedEdgeInfo } from "./graph/SigmaInternalComponents";
 
 // ── Dense-graph threshold ─────────────────────────────────────────────────────
 // WHY 50 edges: graphs with >50 edges become unreadable with no filtering.
@@ -113,9 +113,14 @@ export interface EntityGraphProps {
     degree: number,
     edges: Array<{ label: string; weight: number; neighborId: string; neighborLabel: string }>,
   ) => void;
+  /** Called when user clicks an edge — fires full edge info from graphology attrs. */
+  onEdgeClick?: (info: SelectedEdgeInfo) => void;
 }
 
-export function EntityGraph({ data, centerEntityId, onNodeClick }: EntityGraphProps) {
+// Re-export for consumers (e.g. GraphColumn, IntelligenceTab)
+export type { SelectedEdgeInfo };
+
+export function EntityGraph({ data, centerEntityId, onNodeClick, onEdgeClick }: EntityGraphProps) {
   const [nodeTooltip, setNodeTooltip] = useState<NodeTooltip | null>(null);
   const [edgeTooltip, setEdgeTooltip] = useState<EdgeTooltip | null>(null);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -210,6 +215,9 @@ export function EntityGraph({ data, centerEntityId, onNodeClick }: EntityGraphPr
             // WHY allowInvalidContainer:true: prevents sigma from throwing when the
             // DOM element is briefly unmounted during React StrictMode double-invoke.
             allowInvalidContainer: true,
+            // WHY enableEdgeEvents:true: sigma 3.x defaults to false — without this
+            // enterEdge/leaveEdge events never fire, making edge hover impossible.
+            enableEdgeEvents: true,
           }}
           style={{ background: "hsl(var(--background))" }}
         >
@@ -220,6 +228,7 @@ export function EntityGraph({ data, centerEntityId, onNodeClick }: EntityGraphPr
             onNodeHover={handleNodeHover}
             onEdgeHover={handleEdgeHover}
             onNodeClick={onNodeClick}
+            onEdgeClick={onEdgeClick}
           />
           <FilterController
             activeRelFilter={activeRelFilter}
