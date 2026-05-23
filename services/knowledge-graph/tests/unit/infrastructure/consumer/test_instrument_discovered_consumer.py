@@ -91,7 +91,7 @@ class TestInstrumentDiscoveredConsumerHappyPath:
             "exchange": "NASDAQ",
         }
 
-        import unittest.mock as mock
+        from unittest import mock
 
         # Patch EntityEmbeddingStateRepository so we can assert it was called.
         emb_repo_mock = mock.AsyncMock()
@@ -170,7 +170,7 @@ class TestInstrumentDiscoveredConsumerHappyPath:
             "exchange": "NASDAQ",
         }
 
-        import unittest.mock as mock
+        from unittest import mock
 
         emb_repo_mock = mock.AsyncMock()
         emb_repo_mock.ensure_rows_exist = mock.AsyncMock()
@@ -198,7 +198,7 @@ class TestInstrumentDiscoveredConsumerHappyPath:
             "exchange": None,
         }
 
-        import unittest.mock as mock
+        from unittest import mock
 
         with mock.patch(
             "knowledge_graph.infrastructure.intelligence_db.repositories.entity_embedding_state.EntityEmbeddingStateRepository",

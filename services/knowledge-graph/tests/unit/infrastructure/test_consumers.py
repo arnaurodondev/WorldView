@@ -133,7 +133,7 @@ class TestEnrichedConsumerOrchestration:
         consumer = self._make_consumer()
         msg = _build_enriched_message()
         asyncio.run(
-            consumer.process_message(None, msg, {})  # type: ignore[attr-defined]
+            consumer.process_message(None, msg, {}),  # type: ignore[attr-defined]
         )
 
     def test_process_message_commits_session(self) -> None:
@@ -141,7 +141,7 @@ class TestEnrichedConsumerOrchestration:
         consumer = self._make_consumer(session)
         msg = _build_enriched_message()
         asyncio.run(
-            consumer.process_message(None, msg, {})  # type: ignore[attr-defined]
+            consumer.process_message(None, msg, {}),  # type: ignore[attr-defined]
         )
         session.commit.assert_called_once()
 
@@ -191,7 +191,7 @@ class TestEnrichedConsumerOrchestration:
             ),
         ):
             asyncio.run(
-                consumer.process_message(None, msg, {})  # type: ignore[attr-defined]
+                consumer.process_message(None, msg, {}),  # type: ignore[attr-defined]
             )
 
         assert call_order == ["block11", "block12a"]
@@ -239,7 +239,7 @@ class TestEnrichedConsumerIdempotency:
     def test_is_duplicate_returns_false_without_dedup(self) -> None:
         consumer = self._make_consumer()
         result = asyncio.run(
-            consumer.is_duplicate(str(uuid4()))  # type: ignore[attr-defined]
+            consumer.is_duplicate(str(uuid4())),  # type: ignore[attr-defined]
         )
         assert result is False
 
@@ -247,7 +247,7 @@ class TestEnrichedConsumerIdempotency:
         consumer = self._make_consumer()
         # Should not raise
         asyncio.run(
-            consumer.mark_processed(str(uuid4()))  # type: ignore[attr-defined]
+            consumer.mark_processed(str(uuid4())),  # type: ignore[attr-defined]
         )
 
 
@@ -284,7 +284,7 @@ class TestEntityCreatedConsumer:
             "provisional_queue_id": str(uuid4()),
         }
         asyncio.run(
-            consumer.process_message(None, msg, {})  # type: ignore[attr-defined]
+            consumer.process_message(None, msg, {}),  # type: ignore[attr-defined]
         )
         session.commit.assert_called_once()
 
@@ -299,7 +299,7 @@ class TestEntityCreatedConsumer:
             "provisional_queue_id": str(uuid4()),
         }
         asyncio.run(
-            consumer.process_message(None, msg, {})  # type: ignore[attr-defined]
+            consumer.process_message(None, msg, {}),  # type: ignore[attr-defined]
         )
         # UPDATE relation_evidence_raw must have been called
         session.execute.assert_called()
@@ -344,7 +344,7 @@ class TestEntityCreatedConsumerDedupResilience:
         consumer = self._make_consumer_with_dedup(dedup_client)
 
         result = asyncio.run(
-            consumer.is_duplicate("event-1")  # type: ignore[attr-defined]
+            consumer.is_duplicate("event-1"),  # type: ignore[attr-defined]
         )
         assert result is False
 
@@ -361,7 +361,7 @@ class TestEntityCreatedConsumerDedupResilience:
 
         with patch("messaging.kafka.consumer.dedup.logger") as mock_logger:
             asyncio.run(
-                consumer.is_duplicate("event-1")  # type: ignore[attr-defined]
+                consumer.is_duplicate("event-1"),  # type: ignore[attr-defined]
             )
 
         mock_logger.warning.assert_called_once()
@@ -378,7 +378,7 @@ class TestEntityCreatedConsumerDedupResilience:
 
         # Should not raise
         asyncio.run(
-            consumer.mark_processed("event-1")  # type: ignore[attr-defined]
+            consumer.mark_processed("event-1"),  # type: ignore[attr-defined]
         )
 
     def test_entity_consumer_dedup_mark_failure_logs_warning(self) -> None:
@@ -394,7 +394,7 @@ class TestEntityCreatedConsumerDedupResilience:
 
         with patch("messaging.kafka.consumer.dedup.logger") as mock_logger:
             asyncio.run(
-                consumer.mark_processed("event-1")  # type: ignore[attr-defined]
+                consumer.mark_processed("event-1"),  # type: ignore[attr-defined]
             )
 
         mock_logger.warning.assert_called_once()

@@ -68,7 +68,9 @@ class TestBuildFundamentalsNarrativeDeterminism:
 
     def test_description_included_when_provided(self) -> None:
         result = build_fundamentals_narrative(
-            "Tech Co", "financial_instrument", description="Leading software company."
+            "Tech Co",
+            "financial_instrument",
+            description="Leading software company.",
         )
         assert "Leading software company." in result
 

@@ -140,7 +140,7 @@ class TestInstrumentEntityConsumerNew:
             "description": _DESCRIPTION,
         }
 
-        import unittest.mock as mock
+        from unittest import mock
 
         with (
             mock.patch(
@@ -174,7 +174,7 @@ class TestInstrumentEntityConsumerNew:
             "description": "",  # empty
         }
 
-        import unittest.mock as mock
+        from unittest import mock
 
         with (
             mock.patch(
@@ -211,7 +211,7 @@ class TestInstrumentEntityConsumerReplay:
             "description": _DESCRIPTION,
         }
 
-        import unittest.mock as mock
+        from unittest import mock
 
         with (
             mock.patch(
@@ -242,7 +242,7 @@ class TestInstrumentEntityConsumerReplay:
             "description": _DESCRIPTION,
         }
 
-        import unittest.mock as mock
+        from unittest import mock
 
         with (
             mock.patch(
@@ -358,7 +358,7 @@ def _build_consumer_with_alias_capture() -> tuple[Any, list[dict[str, Any]], Any
 
 def _run_with_repos(consumer: Any, msg: dict[str, Any], entity_repo: Any, alias_repo: Any, emb_repo: Any) -> None:
     """Invoke consumer.process_message with the three repo constructors patched."""
-    import unittest.mock as mock
+    from unittest import mock
 
     with (
         mock.patch(

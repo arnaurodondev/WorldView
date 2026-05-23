@@ -63,8 +63,8 @@ class TestContraColumnsUpdated:
                     "extraction_confidence": 0.8,
                     # raw_id is present — insert_link should be called.
                     "relation_evidence_raw_id": _RAW_ID_A,
-                }
-            ]
+                },
+            ],
         )
         mock_contra.find_opposing_claims = AsyncMock(
             return_value=[
@@ -72,8 +72,8 @@ class TestContraColumnsUpdated:
                     "claim_id": _CLAIM_ID_B,
                     "polarity": "negative",
                     "extraction_confidence": 0.7,
-                }
-            ]
+                },
+            ],
         )
         mock_contra.insert_link = AsyncMock()
         mock_contra.aggregate_contra_stats_for_active_links = AsyncMock(
@@ -84,8 +84,8 @@ class TestContraColumnsUpdated:
                     "contra_count_by_type": {"polarity_conflict": 1},
                     "latest_contra_at": _NOW,
                     "current_confidence": 0.5,
-                }
-            ]
+                },
+            ],
         )
 
         mock_rel = AsyncMock()
@@ -130,11 +130,11 @@ class TestContraColumnsUpdated:
                     "polarity": "positive",
                     "extraction_confidence": 0.9,
                     "relation_evidence_raw_id": _RAW_ID_A,
-                }
-            ]
+                },
+            ],
         )
         mock_contra.find_opposing_claims = AsyncMock(
-            return_value=[{"claim_id": _CLAIM_ID_B, "polarity": "negative", "extraction_confidence": 0.9}]
+            return_value=[{"claim_id": _CLAIM_ID_B, "polarity": "negative", "extraction_confidence": 0.9}],
         )
         mock_contra.insert_link = AsyncMock()
         # Simulate a relation with very low confidence (below 0.1 threshold).
@@ -146,8 +146,8 @@ class TestContraColumnsUpdated:
                     "contra_count_by_type": {"polarity_conflict": 2},
                     "latest_contra_at": _NOW,
                     "current_confidence": 0.05,  # below 0.1 threshold
-                }
-            ]
+                },
+            ],
         )
 
         mock_rel = AsyncMock()
@@ -192,11 +192,11 @@ class TestContraColumnsUpdated:
                     "polarity": "positive",
                     "extraction_confidence": 0.5,
                     "relation_evidence_raw_id": _RAW_ID_A,
-                }
-            ]
+                },
+            ],
         )
         mock_contra.find_opposing_claims = AsyncMock(
-            return_value=[{"claim_id": _CLAIM_ID_B, "polarity": "negative", "extraction_confidence": 0.5}]
+            return_value=[{"claim_id": _CLAIM_ID_B, "polarity": "negative", "extraction_confidence": 0.5}],
         )
         mock_contra.insert_link = AsyncMock()
         mock_contra.aggregate_contra_stats_for_active_links = AsyncMock(
@@ -207,8 +207,8 @@ class TestContraColumnsUpdated:
                     "contra_count_by_type": {"polarity_conflict": 1},
                     "latest_contra_at": _NOW,
                     "current_confidence": 0.1,  # exactly at threshold, not below
-                }
-            ]
+                },
+            ],
         )
 
         mock_rel = AsyncMock()
@@ -252,11 +252,11 @@ class TestContraCountByType:
                     "polarity": "positive",
                     "extraction_confidence": 0.6,
                     "relation_evidence_raw_id": _RAW_ID_A,
-                }
-            ]
+                },
+            ],
         )
         mock_contra.find_opposing_claims = AsyncMock(
-            return_value=[{"claim_id": _CLAIM_ID_B, "polarity": "negative", "extraction_confidence": 0.6}]
+            return_value=[{"claim_id": _CLAIM_ID_B, "polarity": "negative", "extraction_confidence": 0.6}],
         )
         mock_contra.insert_link = AsyncMock()
         mock_contra.aggregate_contra_stats_for_active_links = AsyncMock(
@@ -267,8 +267,8 @@ class TestContraCountByType:
                     "contra_count_by_type": expected_count_by_type,
                     "latest_contra_at": _NOW,
                     "current_confidence": 0.4,
-                }
-            ]
+                },
+            ],
         )
 
         mock_rel = AsyncMock()
@@ -309,8 +309,8 @@ class TestContraCountByType:
                     "polarity": "positive",
                     "extraction_confidence": 0.6,
                     "relation_evidence_raw_id": _RAW_ID_A,
-                }
-            ]
+                },
+            ],
         )
         # No opposing claims → no links inserted.
         mock_contra.find_opposing_claims = AsyncMock(return_value=[])
@@ -371,11 +371,11 @@ class TestInsertLinkUsesRawId:
                     "extraction_confidence": 0.8,
                     # raw_id is deliberately different from claim_id to catch the bug.
                     "relation_evidence_raw_id": _RAW_ID_A,  # UUID ...0099
-                }
-            ]
+                },
+            ],
         )
         mock_contra.find_opposing_claims = AsyncMock(
-            return_value=[{"claim_id": _CLAIM_ID_B, "polarity": "negative", "extraction_confidence": 0.7}]
+            return_value=[{"claim_id": _CLAIM_ID_B, "polarity": "negative", "extraction_confidence": 0.7}],
         )
         mock_contra.insert_link = AsyncMock()
         mock_contra.aggregate_contra_stats_for_active_links = AsyncMock(return_value=[])
@@ -431,11 +431,11 @@ class TestInsertLinkUsesRawId:
                     "extraction_confidence": 0.8,
                     # No relation_evidence_raw row for this claim.
                     "relation_evidence_raw_id": None,
-                }
-            ]
+                },
+            ],
         )
         mock_contra.find_opposing_claims = AsyncMock(
-            return_value=[{"claim_id": _CLAIM_ID_B, "polarity": "negative", "extraction_confidence": 0.7}]
+            return_value=[{"claim_id": _CLAIM_ID_B, "polarity": "negative", "extraction_confidence": 0.7}],
         )
         mock_contra.insert_link = AsyncMock()
         mock_contra.aggregate_contra_stats_for_active_links = AsyncMock(return_value=[])

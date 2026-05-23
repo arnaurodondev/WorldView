@@ -45,7 +45,7 @@ _CANONICAL_TYPE_OBJECT_ENTITY_TYPES: dict[str, str] = {
 # source_field is outside this set is skipped, preventing accidental upserts
 # driven by attacker-controlled metadata keys or careless future seeds.
 _ALLOWED_SOURCE_FIELDS: frozenset[str] = frozenset(
-    {"sector", "industry", "country", "exchange", "ticker", "currency_code"}
+    {"sector", "industry", "country", "exchange", "ticker", "currency_code"},
 )
 
 

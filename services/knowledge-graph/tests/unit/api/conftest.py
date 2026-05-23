@@ -35,7 +35,7 @@ _SYSTEM_JWT = _make_system_jwt()
 _INTERNAL_HEADERS: dict[str, str] = {"X-Internal-JWT": _SYSTEM_JWT}
 
 
-@pytest.fixture
+@pytest.fixture()
 def api_app():
     """FastAPI app with readonly session dependency overridden."""
     # WARNING: TEST-ONLY. Never use skip_verification in integration/e2e against real services.
@@ -48,7 +48,7 @@ def api_app():
     return app
 
 
-@pytest.fixture
+@pytest.fixture()
 async def api_client(api_app):
     """ASGI test client using the overridden app.
 

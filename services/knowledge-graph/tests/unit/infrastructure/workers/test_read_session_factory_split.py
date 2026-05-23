@@ -205,7 +205,7 @@ class TestEntityEnrichmentAdapterConstructor:
 
 
 class TestDefinitionRefreshFetchUsesReadFactory:
-    @pytest.mark.asyncio
+    @pytest.mark.asyncio()
     async def test_phase1_opens_read_factory_session(self) -> None:
         """The Phase 1 ``get_due_for_refresh`` SELECT must open a session from
         the read factory; when ``due`` is empty the worker returns early so
@@ -239,7 +239,7 @@ class TestDefinitionRefreshFetchUsesReadFactory:
 
 
 class TestNarrativeRefreshFetchUsesReadFactory:
-    @pytest.mark.asyncio
+    @pytest.mark.asyncio()
     async def test_phase1_opens_read_factory_session(self) -> None:
         from knowledge_graph.infrastructure.workers.narrative_refresh import NarrativeRefreshWorker
 
@@ -264,7 +264,7 @@ class TestNarrativeRefreshFetchUsesReadFactory:
 
 
 class TestEmbeddingRefreshFetchUsesReadFactory:
-    @pytest.mark.asyncio
+    @pytest.mark.asyncio()
     async def test_phase1_opens_read_factory_session(self) -> None:
         from knowledge_graph.infrastructure.workers.embedding_refresh import EmbeddingRefreshWorker
 
@@ -296,7 +296,7 @@ class TestEmbeddingRefreshFetchUsesReadFactory:
 
 
 class TestEntityEnrichmentAdapterFetchUsesReadFactory:
-    @pytest.mark.asyncio
+    @pytest.mark.asyncio()
     async def test_list_unenriched_opens_read_factory_session(self) -> None:
         """``list_unenriched`` is a pure SELECT — must open the read factory."""
         from knowledge_graph.infrastructure.intelligence_db.adapters.entity_enrichment_adapter import (

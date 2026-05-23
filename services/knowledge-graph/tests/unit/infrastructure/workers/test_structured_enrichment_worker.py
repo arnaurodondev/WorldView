@@ -83,7 +83,7 @@ async def test_drains_batches_until_empty() -> None:
             [_entity(_E1), _entity(_E2)],
             [_entity(_E3)],
             [],
-        ]
+        ],
     )
     use_case = AsyncMock()
     use_case.enrich = AsyncMock()

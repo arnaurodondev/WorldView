@@ -392,7 +392,7 @@ class SummaryWorker:
 
         try:
             outputs = await self._embedding_port.embed(  # type: ignore[union-attr]
-                [EmbeddingInput(text=embed_text, model_id="summary-embed-v1")]
+                [EmbeddingInput(text=embed_text, model_id="summary-embed-v1")],
             )
             if not outputs:
                 raise ValueError("empty embedding output")

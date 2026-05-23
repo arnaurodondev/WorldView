@@ -78,7 +78,7 @@ class TestGetEntityGraphUseCase:
                 min_confidence=0.3,
                 semantic_mode=None,
                 limit=50,
-            )
+            ),
         )
 
         entity_row, relation_rows, entities_map = result
@@ -110,7 +110,7 @@ class TestGetEntityGraphUseCase:
                 min_confidence=0.5,
                 semantic_mode="RELATION_STATE",
                 limit=100,
-            )
+            ),
         )
 
         assert entity_row == center
@@ -139,7 +139,7 @@ class TestGetEntityGraphUseCase:
                 min_confidence=0.0,
                 semantic_mode=None,
                 limit=50,
-            )
+            ),
         )
 
         # Self-loop: both endpoints are _ENT_ID which is excluded as center
@@ -162,7 +162,7 @@ class TestGetEntityGraphUseCase:
                 min_confidence=0.45,
                 semantic_mode="TEMPORAL_CLAIM",
                 limit=75,
-            )
+            ),
         )
 
         relation_repo.list_for_entity.assert_called_once_with(
@@ -189,7 +189,7 @@ class TestGetEntityGraphUseCase:
                 min_confidence=0.3,
                 semantic_mode=None,
                 limit=50,
-            )
+            ),
         )
 
         assert relation_rows == []
@@ -226,7 +226,7 @@ class TestGetEntityGraphUseCase:
                 semantic_mode=None,
                 limit=50,
                 evidence_limit=3,
-            )
+            ),
         )
 
         assert len(relation_rows) == 1
@@ -265,7 +265,7 @@ class TestGetEntityGraphUseCase:
                 min_confidence=0.0,
                 semantic_mode=None,
                 limit=50,
-            )
+            ),
         )
 
         assert len(relation_rows) == 1
@@ -292,7 +292,7 @@ class TestGetEntityGraphUseCase:
                 min_confidence=0.0,
                 semantic_mode=None,
                 limit=50,
-            )
+            ),
         )
 
         assert relation_rows[0]["evidence_snippets"] == []
@@ -316,7 +316,7 @@ class TestGetEntityGraphUseCase:
                 min_confidence=0.0,
                 semantic_mode=None,
                 limit=50,
-            )
+            ),
         )
 
         evidence_repo.get_evidence_snippets_batch.assert_not_called()
@@ -359,7 +359,7 @@ class TestGetEntityGraphUseCase:
                 semantic_mode=None,
                 limit=50,
                 # evidence_limit NOT passed — default of 3 must be used
-            )
+            ),
         )
 
         # The evidence repo must have been called with limit_per_relation=3 (the default).
@@ -384,7 +384,7 @@ class TestListRelationsUseCase:
                 min_confidence=0.5,
                 limit=20,
                 offset=0,
-            )
+            ),
         )
 
         assert len(result) == 2
@@ -408,7 +408,7 @@ class TestListRelationsUseCase:
                 min_confidence=0.70,
                 limit=10,
                 offset=5,
-            )
+            ),
         )
 
         relation_repo.list_filtered.assert_called_once_with(
@@ -451,7 +451,7 @@ class TestEvidenceBatchDegradation:
                 min_confidence=0.0,
                 semantic_mode=None,
                 limit=50,
-            )
+            ),
         )
 
         assert len(relation_rows) == 1, "Relations must still be returned despite evidence failure"
@@ -485,7 +485,7 @@ class TestEvidenceBatchDegradation:
                 min_confidence=0.0,
                 semantic_mode=None,
                 limit=50,
-            )
+            ),
         )
 
         assert len(relation_rows) == 1, "Relations must still be returned despite summary failure"
@@ -562,7 +562,7 @@ class TestGraphQueryGracefulDegradationGaps:
                 min_confidence=0.0,
                 semantic_mode=None,
                 limit=50,
-            )
+            ),
         )
 
         assert entity_row is None
@@ -599,7 +599,7 @@ class TestGraphQueryGracefulDegradationGaps:
                 min_confidence=0.0,
                 semantic_mode=None,
                 limit=50,
-            )
+            ),
         )
 
         # Desired behaviour: entity row preserved, relations empty.
@@ -635,7 +635,7 @@ class TestGraphQueryGracefulDegradationGaps:
                 min_confidence=0.0,
                 semantic_mode=None,
                 limit=50,
-            )
+            ),
         )
 
         assert entity_row == center

@@ -36,7 +36,7 @@ def _nodes_to_json(nodes: tuple[PathNode, ...]) -> str:
                 "entity_type": n.entity_type,
             }
             for n in nodes
-        ]
+        ],
     )
 
 
@@ -113,7 +113,7 @@ class PathInsightRepository(PathInsightRepositoryPort):
                 f":composite{suffix}, "
                 f":llm_exp{suffix}, "
                 f":exp_model{suffix}, "
-                f"CAST(:computed_at{suffix} AS TIMESTAMPTZ))"
+                f"CAST(:computed_at{suffix} AS TIMESTAMPTZ))",
             )
             params[f"insight_id{suffix}"] = str(insight.insight_id)
             params[f"anchor{suffix}"] = str(insight.anchor_entity_id)
@@ -189,7 +189,7 @@ LIMIT :lim
                     llm_explanation=str(row[10]) if row[10] else None,
                     explanation_model=str(row[11]) if row[11] else None,
                     computed_at=row[12],
-                )
+                ),
             )
         return insights
 

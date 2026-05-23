@@ -45,7 +45,7 @@ def _full_response_dict() -> dict:
                 "llm_explanation": None,
                 "explanation_pending": True,
                 "computed_at": _NOW.isoformat(),
-            }
+            },
         ],
         "total": 1,
         "freshness_ts": _NOW.isoformat(),

@@ -55,7 +55,7 @@ class TestArticleClaimSearchUseCase:
             ArticleClaimSearchUseCase().execute(
                 claim_repo=repo,
                 entity_ids=[entity_id],
-            )
+            ),
         )
 
         assert result == expected
@@ -76,7 +76,7 @@ class TestArticleClaimSearchUseCase:
                 claim_repo=repo,
                 entity_ids=[uuid4()],
                 claim_types=["analyst_rating"],
-            )
+            ),
         )
 
         call_kwargs = repo.search_claims.call_args.kwargs
@@ -98,7 +98,7 @@ class TestArticleClaimSearchUseCase:
                 entity_ids=[uuid4()],
                 date_from=d_from,
                 date_to=d_to,
-            )
+            ),
         )
 
         call_kwargs = repo.search_claims.call_args.kwargs
@@ -118,7 +118,7 @@ class TestArticleClaimSearchUseCase:
                 claim_repo=repo,
                 entity_ids=[uuid4()],
                 min_confidence=0.70,
-            )
+            ),
         )
 
         call_kwargs = repo.search_claims.call_args.kwargs

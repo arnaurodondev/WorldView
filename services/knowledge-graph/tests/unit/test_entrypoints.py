@@ -63,7 +63,7 @@ def _mock_settings(**overrides: object) -> MagicMock:
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.asyncio
+@pytest.mark.asyncio()
 async def test_enriched_consumer_uses_ollama_base_url() -> None:
     """OllamaEmbeddingAdapter is constructed with settings.ollama_base_url.
 
@@ -86,7 +86,8 @@ async def test_enriched_consumer_uses_ollama_base_url() -> None:
         ),
         patch("messaging.valkey.create_valkey_client_from_url", return_value=mock_valkey),
         patch(
-            "ml_clients.adapters.ollama_embedding.OllamaEmbeddingAdapter", return_value=MagicMock()
+            "ml_clients.adapters.ollama_embedding.OllamaEmbeddingAdapter",
+            return_value=MagicMock(),
         ) as mock_embedding_cls,
         patch("confluent_kafka.Producer", return_value=MagicMock()),
         patch(
@@ -107,7 +108,7 @@ async def test_enriched_consumer_uses_ollama_base_url() -> None:
     )
 
 
-@pytest.mark.asyncio
+@pytest.mark.asyncio()
 async def test_enriched_consumer_graceful_stop() -> None:
     """valkey.close() and engine.dispose() called on graceful stop."""
     mock_engine = AsyncMock()
@@ -147,7 +148,7 @@ async def test_enriched_consumer_graceful_stop() -> None:
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.asyncio
+@pytest.mark.asyncio()
 async def test_entity_consumer_graceful_stop() -> None:
     """valkey.close() and engine.dispose() called on entity consumer stop."""
     mock_engine = AsyncMock()
@@ -186,7 +187,7 @@ async def test_entity_consumer_graceful_stop() -> None:
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.asyncio
+@pytest.mark.asyncio()
 async def test_fundamentals_consumer_group_id_from_settings() -> None:
     """Consumer group_id uses f\"{settings.kafka_consumer_group}-fundamentals\"."""
     mock_engine = AsyncMock()
@@ -237,7 +238,7 @@ async def test_fundamentals_consumer_group_id_from_settings() -> None:
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.asyncio
+@pytest.mark.asyncio()
 async def test_instrument_consumer_group_id_from_settings() -> None:
     """Consumer group_id uses f\"{settings.kafka_consumer_group}-instrument\"."""
     mock_engine = AsyncMock()
@@ -283,7 +284,7 @@ async def test_instrument_consumer_group_id_from_settings() -> None:
     mock_consumer.run.assert_called_once()
 
 
-@pytest.mark.asyncio
+@pytest.mark.asyncio()
 async def test_any_consumer_stop_pre_set() -> None:
     """With a pre-set stop event, entity consumer exits quickly after cleanup."""
     mock_engine = AsyncMock()
@@ -321,7 +322,7 @@ async def test_any_consumer_stop_pre_set() -> None:
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.asyncio
+@pytest.mark.asyncio()
 async def test_dispatcher_main_cleanup() -> None:
     """engine.dispose() called on exit from knowledge-graph dispatcher main()."""
     mock_engine = AsyncMock()
@@ -356,7 +357,7 @@ async def test_dispatcher_main_cleanup() -> None:
     mock_engine.dispose.assert_called_once()
 
 
-@pytest.mark.asyncio
+@pytest.mark.asyncio()
 async def test_dispatcher_main_stop() -> None:
     """dispatcher.stop() called when stop_event fires in dispatcher main()."""
     mock_engine = AsyncMock()

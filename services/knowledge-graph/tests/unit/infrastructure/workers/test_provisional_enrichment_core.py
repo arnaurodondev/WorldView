@@ -286,7 +286,11 @@ class TestRetryTransitionExponentialBackoff:
 
         with structlog.testing.capture_logs() as captured:
             out = await core.apply_retry_transition(
-                session, _QUEUE_ID, max_retries=5, base_retry_minutes=2, max_retry_minutes=1440
+                session,
+                _QUEUE_ID,
+                max_retries=5,
+                base_retry_minutes=2,
+                max_retry_minutes=1440,
             )
 
         assert out is False  # not terminal
@@ -317,7 +321,11 @@ class TestRetryTransitionExponentialBackoff:
 
         with structlog.testing.capture_logs() as captured:
             await core.apply_retry_transition(
-                session, _QUEUE_ID, max_retries=10, base_retry_minutes=2, max_retry_minutes=1440
+                session,
+                _QUEUE_ID,
+                max_retries=10,
+                base_retry_minutes=2,
+                max_retry_minutes=1440,
             )
 
         log_events = [e for e in captured if e.get("event") == "provisional_enrichment_retry_transition"]
@@ -346,7 +354,11 @@ class TestRetryTransitionExponentialBackoff:
 
         with structlog.testing.capture_logs() as captured:
             await core.apply_retry_transition(
-                session, _QUEUE_ID, max_retries=999, base_retry_minutes=2, max_retry_minutes=1440
+                session,
+                _QUEUE_ID,
+                max_retries=999,
+                base_retry_minutes=2,
+                max_retry_minutes=1440,
             )
 
         log_events = [e for e in captured if e.get("event") == "provisional_enrichment_retry_transition"]
@@ -591,7 +603,7 @@ class TestPersistEnrichment:
             side_effect=[
                 {"entity_id": _EXISTING_OTHER_ID},  # 'apple' already maps elsewhere → skip
                 None,  # 'aapl inc.' clean → insert
-            ]
+            ],
         )
         profile = {
             "canonical_name": "Apple Inc.",
@@ -746,7 +758,10 @@ class TestEntityTypeNormalisation:
 
         with _patch_persist_repos(repos):
             await core.persist_enrichment(
-                session=session, queue_id=_QUEUE_ID, mention_text="Apple Inc.", profile=profile
+                session=session,
+                queue_id=_QUEUE_ID,
+                mention_text="Apple Inc.",
+                profile=profile,
             )
 
         # DEF-014 / Wave A-1: persist_enrichment uses create_or_get (atomic
@@ -789,7 +804,10 @@ class TestEntityTypeNormalisation:
 
         with _patch_persist_repos(repos):
             await core.persist_enrichment(
-                session=session, queue_id=_QUEUE_ID, mention_text="Acme Corp", profile=profile
+                session=session,
+                queue_id=_QUEUE_ID,
+                mention_text="Acme Corp",
+                profile=profile,
             )
 
         # DEF-014 / Wave A-1: assert against the new create_or_get call site.
@@ -826,7 +844,10 @@ class TestEntityTypeNormalisation:
         with structlog.testing.capture_logs() as captured:
             with _patch_persist_repos(repos):
                 await core.persist_enrichment(
-                    session=session, queue_id=_QUEUE_ID, mention_text="MegaCorp", profile=profile
+                    session=session,
+                    queue_id=_QUEUE_ID,
+                    mention_text="MegaCorp",
+                    profile=profile,
                 )
             log_output = list(captured)
 
@@ -887,13 +908,16 @@ class TestEntityTypeNormalisation:
 
         with _patch_persist_repos(repos):
             await core.persist_enrichment(
-                session=session, queue_id=_QUEUE_ID, mention_text="UK Regulator", profile=profile
+                session=session,
+                queue_id=_QUEUE_ID,
+                mention_text="UK Regulator",
+                profile=profile,
             )
 
         call_kwargs = repos.canonical_create_or_get.call_args.kwargs
-        assert call_kwargs["entity_type"] == "unknown", (
-            f"BP-523: 'organisation' (British spelling) must map to 'unknown'; " f"got {call_kwargs['entity_type']!r}"
-        )
+        assert (
+            call_kwargs["entity_type"] == "unknown"
+        ), f"BP-523: 'organisation' (British spelling) must map to 'unknown'; got {call_kwargs['entity_type']!r}"
 
     async def test_fully_invalid_type_fallback_is_unknown_not_other(self) -> None:
         """BP-523: the invalid-type fallback must be 'unknown', not 'other'.
@@ -915,13 +939,16 @@ class TestEntityTypeNormalisation:
 
         with _patch_persist_repos(repos):
             await core.persist_enrichment(
-                session=session, queue_id=_QUEUE_ID, mention_text="Weird Entity", profile=profile
+                session=session,
+                queue_id=_QUEUE_ID,
+                mention_text="Weird Entity",
+                profile=profile,
             )
 
         call_kwargs = repos.canonical_create_or_get.call_args.kwargs
-        assert call_kwargs["entity_type"] == "unknown", (
-            f"BP-523: invalid-type fallback must be 'unknown' (not 'other'); " f"got {call_kwargs['entity_type']!r}"
-        )
+        assert (
+            call_kwargs["entity_type"] == "unknown"
+        ), f"BP-523: invalid-type fallback must be 'unknown' (not 'other'); got {call_kwargs['entity_type']!r}"
         assert (
             call_kwargs["entity_type"] != "other"
         ), "BP-523: 'other' is not in the DB CHECK constraint — fallback must be 'unknown'"
@@ -993,10 +1020,10 @@ class TestContextSnippetInjectionGuard:
         assert len(captured_inputs) == 1
         context_passed = captured_inputs[0].context  # type: ignore[attr-defined]
         assert context_passed.startswith(
-            "<article_context>"
+            "<article_context>",
         ), f"context must be wrapped with <article_context> opening tag; got: {context_passed!r}"
         assert context_passed.endswith(
-            "</article_context>"
+            "</article_context>",
         ), f"context must be wrapped with </article_context> closing tag; got: {context_passed!r}"
         assert (
             snippet in context_passed

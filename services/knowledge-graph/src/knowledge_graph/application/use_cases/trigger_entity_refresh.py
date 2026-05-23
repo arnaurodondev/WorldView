@@ -211,7 +211,7 @@ class TriggerEntityRefreshUseCase:
         async with self._read_sf() as session:
             result = await session.execute(
                 text(
-                    "SELECT 1 FROM canonical_entities " "WHERE entity_id = CAST(:entity_id AS uuid) LIMIT 1",
+                    "SELECT 1 FROM canonical_entities WHERE entity_id = CAST(:entity_id AS uuid) LIMIT 1",
                 ),
                 {"entity_id": str(entity_id)},
             )

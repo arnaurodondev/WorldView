@@ -186,7 +186,7 @@ class TestGetEntityIntelligenceUseCase:
             return_value=_make_canonical_entity(
                 entity_type="company",
                 metadata={"sector": "Technology", "ticker": "AAPL", "market_cap": 3_000_000},
-            )
+            ),
         )
         narrative_repo.find_current = AsyncMock(return_value=None)
         aggregates_repo.get_confidence_breakdown = AsyncMock(return_value=_make_breakdown_data())
@@ -207,7 +207,7 @@ class TestGetEntityIntelligenceUseCase:
             return_value=_make_canonical_entity(
                 entity_type="person",
                 metadata={"role": "CEO", "organization": "Apple Inc."},
-            )
+            ),
         )
         narrative_repo.find_current = AsyncMock(return_value=None)
         aggregates_repo.get_confidence_breakdown = AsyncMock(return_value=_make_breakdown_data())
@@ -224,7 +224,7 @@ class TestGetEntityIntelligenceUseCase:
         """For unknown entity types, key_metrics is empty dict."""
         uc, entity_repo, narrative_repo, aggregates_repo = await _make_uc()
         entity_repo.get_by_id = AsyncMock(
-            return_value=_make_canonical_entity(entity_type="location", metadata={"country": "US"})
+            return_value=_make_canonical_entity(entity_type="location", metadata={"country": "US"}),
         )
         narrative_repo.find_current = AsyncMock(return_value=None)
         aggregates_repo.get_confidence_breakdown = AsyncMock(return_value=_make_breakdown_data())

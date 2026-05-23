@@ -187,7 +187,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
         async with read_factory() as _session:
             _result = await _session.execute(
-                _sa.text("SELECT COUNT(*) FROM relation_type_registry WHERE embedding IS NULL")
+                _sa.text("SELECT COUNT(*) FROM relation_type_registry WHERE embedding IS NULL"),
             )
             _null_count: int = _result.scalar_one()
         if _null_count > 0:

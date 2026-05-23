@@ -78,7 +78,7 @@ class ContradictionBatchWorker:
                 text("""
 DELETE FROM relation_contradiction_links
 WHERE relation_evidence_id NOT IN (SELECT raw_id FROM relation_evidence_raw)
-""")
+"""),
             )
 
             # Fetch a batch of non-neutral claims to examine

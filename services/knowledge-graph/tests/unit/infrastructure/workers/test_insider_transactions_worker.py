@@ -12,7 +12,7 @@ import pytest
 pytestmark = pytest.mark.unit
 
 
-@pytest.mark.unit
+@pytest.mark.unit()
 def test_insider_transactions_worker_raises_import_error() -> None:
     """Importing the tombstoned worker module must raise ImportError."""
     module_name = "knowledge_graph.infrastructure.workers.insider_transactions_worker"

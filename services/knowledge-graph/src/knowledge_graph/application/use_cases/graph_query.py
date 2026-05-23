@@ -90,7 +90,8 @@ class GetEntityGraphUseCase:
             # propagating a 500 — the entity and relation data is still valid.
             try:
                 evidence_map = await evidence_repo.get_evidence_snippets_batch(
-                    relation_ids, limit_per_relation=evidence_limit
+                    relation_ids,
+                    limit_per_relation=evidence_limit,
                 )
             except Exception:
                 _log.warning(

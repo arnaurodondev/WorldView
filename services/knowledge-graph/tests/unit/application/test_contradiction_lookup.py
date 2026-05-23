@@ -65,7 +65,7 @@ class TestEntityContradictionsUseCase:
             EntityContradictionsUseCase().execute(
                 claim_repo=repo,
                 entity_id=entity_id,
-            )
+            ),
         )
 
         assert result == expected
@@ -85,7 +85,7 @@ class TestEntityContradictionsUseCase:
             EntityContradictionsUseCase().execute(
                 claim_repo=repo,
                 entity_id=uuid4(),
-            )
+            ),
         )
 
         assert result == []
@@ -103,7 +103,7 @@ class TestEntityContradictionsUseCase:
                 claim_repo=repo,
                 entity_id=uuid4(),
                 claim_type="polarity_flip",
-            )
+            ),
         )
 
         call_kwargs = repo.fetch_contradictions_for_entity.call_args.kwargs
@@ -122,7 +122,7 @@ class TestEntityContradictionsUseCase:
                 claim_repo=repo,
                 entity_id=uuid4(),
                 top_k=5,
-            )
+            ),
         )
 
         call_kwargs = repo.fetch_contradictions_for_entity.call_args.kwargs

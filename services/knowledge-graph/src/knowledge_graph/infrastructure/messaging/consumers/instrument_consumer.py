@@ -230,7 +230,7 @@ class InstrumentEntityConsumer(BaseKafkaConsumer[None]):
             if existing:
                 metadata_existing = existing.get("metadata") or {}
                 needs_enrichment = isinstance(metadata_existing, dict) and bool(
-                    metadata_existing.get("needs_fundamentals_enrichment")
+                    metadata_existing.get("needs_fundamentals_enrichment"),
                 )
                 if needs_enrichment:
                     # Lightweight canonical → real one.  We use raw SQL (not the

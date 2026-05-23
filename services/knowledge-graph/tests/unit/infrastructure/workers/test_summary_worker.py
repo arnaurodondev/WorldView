@@ -96,7 +96,7 @@ class TestSummaryWorkerHashSkip:
                 result={"summary": "New LLM summary."},
                 raw_response="ok",
                 model_id="m",
-            )
+            ),
         )
 
         with (
@@ -167,7 +167,7 @@ class TestSummaryWorkerEvidenceTextFallback:
             {
                 "evidence_text": None,
                 "canonicalized_evidence_text": "Apple reported strong iPhone sales in Q3.",
-            }
+            },
         ]
         stale_relations = [{"relation_id": "00000000-0000-0000-0000-000000000020"}]
         sf, _session, mock_rel, mock_ev, mock_sum = _make_session(stale_relations, evidence_rows, None)
@@ -178,7 +178,7 @@ class TestSummaryWorkerEvidenceTextFallback:
                 result={"summary": "Apple showed strong Q3 performance."},
                 raw_response='{"summary": "Apple showed strong Q3 performance."}',
                 model_id="m",
-            )
+            ),
         )
 
         with (
@@ -231,7 +231,7 @@ class TestSummaryWorkerEvidenceTextFallback:
                 result={"summary": "Apple grew revenue in Q3."},
                 raw_response=raw_json,
                 model_id="kg-summary-v1",
-            )
+            ),
         )
 
         with (
@@ -275,7 +275,7 @@ class TestSummaryWorkerRawFallback:
                 result={"summary": "Apple had strong performance."},
                 raw_response="ok",
                 model_id="m",
-            )
+            ),
         )
 
         with (
@@ -333,7 +333,7 @@ class TestSummaryWorkerRawFallback:
 
         llm = AsyncMock()
         llm.extract = AsyncMock(
-            return_value=ExtractionOutput(result={"summary": "ok"}, raw_response="ok", model_id="m")
+            return_value=ExtractionOutput(result={"summary": "ok"}, raw_response="ok", model_id="m"),
         )
 
         with (
@@ -363,7 +363,7 @@ class TestSummaryWorkerSessionDiscipline:
 
         llm = AsyncMock()
         llm.extract = AsyncMock(
-            return_value=ExtractionOutput(result={"summary": "ok"}, raw_response="ok", model_id="m")
+            return_value=ExtractionOutput(result={"summary": "ok"}, raw_response="ok", model_id="m"),
         )
 
         with (
@@ -435,7 +435,7 @@ class TestSummaryWorkerAuditMetric:
 
         llm = AsyncMock()
         llm.extract = AsyncMock(
-            return_value=ExtractionOutput(result={"summary": "ok"}, raw_response="ok", model_id="m")
+            return_value=ExtractionOutput(result={"summary": "ok"}, raw_response="ok", model_id="m"),
         )
 
         # Capture structured log calls by patching the module-level logger.
@@ -487,7 +487,7 @@ class TestSummaryWorkerAuditMetric:
 
         llm = AsyncMock()
         llm.extract = AsyncMock(
-            return_value=ExtractionOutput(result={"summary": "ok"}, raw_response="ok", model_id="m")
+            return_value=ExtractionOutput(result={"summary": "ok"}, raw_response="ok", model_id="m"),
         )
 
         logged_events: list[tuple] = []
@@ -546,13 +546,13 @@ class TestSummaryWorkerEmbedding:
 
         llm = AsyncMock()
         llm.extract = AsyncMock(
-            return_value=ExtractionOutput(result={"summary": "Apple Q3 beat."}, raw_response="ok", model_id="m")
+            return_value=ExtractionOutput(result={"summary": "Apple Q3 beat."}, raw_response="ok", model_id="m"),
         )
 
         fake_embedding = [0.1] * 1024
         embedding_port = AsyncMock()
         embedding_port.embed = AsyncMock(
-            return_value=[EmbeddingOutput(embedding=fake_embedding, model_id="bge-large", dimension=1024)]
+            return_value=[EmbeddingOutput(embedding=fake_embedding, model_id="bge-large", dimension=1024)],
         )
 
         with (
@@ -591,7 +591,7 @@ class TestSummaryWorkerEmbedding:
 
         llm = AsyncMock()
         llm.extract = AsyncMock(
-            return_value=ExtractionOutput(result={"summary": long_summary}, raw_response="ok", model_id="m")
+            return_value=ExtractionOutput(result={"summary": long_summary}, raw_response="ok", model_id="m"),
         )
 
         captured_embed_inputs: list = []
@@ -633,7 +633,7 @@ class TestSummaryWorkerEmbedding:
 
         llm = AsyncMock()
         llm.extract = AsyncMock(
-            return_value=ExtractionOutput(result={"summary": "Summary text."}, raw_response="ok", model_id="m")
+            return_value=ExtractionOutput(result={"summary": "Summary text."}, raw_response="ok", model_id="m"),
         )
 
         # Embedding port raises on every call.
@@ -668,7 +668,7 @@ class TestSummaryWorkerEmbedding:
 
         llm = AsyncMock()
         llm.extract = AsyncMock(
-            return_value=ExtractionOutput(result={"summary": "Summary."}, raw_response="ok", model_id="m")
+            return_value=ExtractionOutput(result={"summary": "Summary."}, raw_response="ok", model_id="m"),
         )
 
         with (
@@ -731,7 +731,7 @@ class TestSummaryWorkerForceRegen:
         sf, _session, mock_rel, mock_ev, mock_sum = _make_session(stale_relations, evidence_rows, existing)
         llm = AsyncMock()
         llm.extract = AsyncMock(
-            return_value=ExtractionOutput(result={"summary": "refreshed"}, raw_response="ok", model_id="m")
+            return_value=ExtractionOutput(result={"summary": "refreshed"}, raw_response="ok", model_id="m"),
         )
 
         with (
@@ -790,7 +790,7 @@ class TestSummaryWorkerForceRegen:
 
         llm = AsyncMock()
         llm.extract = AsyncMock(
-            return_value=ExtractionOutput(result={"summary": "forced"}, raw_response="ok", model_id="m")
+            return_value=ExtractionOutput(result={"summary": "forced"}, raw_response="ok", model_id="m"),
         )
 
         with (
@@ -865,7 +865,7 @@ class TestSummaryWorkerLlmFailure:
                 result={"summary": ""},
                 raw_response="",
                 model_id="m",
-            )
+            ),
         )
 
         with (
@@ -1221,7 +1221,7 @@ class TestSummaryWorkerRetryAndGeminiFallback:
 
         llm = AsyncMock()
         llm.extract = AsyncMock(
-            return_value=ExtractionOutput(result={"summary": "Apple strong Q3."}, raw_response="ok", model_id="m")
+            return_value=ExtractionOutput(result={"summary": "Apple strong Q3."}, raw_response="ok", model_id="m"),
         )
 
         gemini = AsyncMock()
@@ -1335,7 +1335,9 @@ class TestSummaryWorkerRetryAndGeminiFallback:
         llm.extract = AsyncMock(return_value=None)
 
         gemini_output = ExtractionOutput(
-            result={"summary": "Gemini summary."}, raw_response="ok", model_id="gemini-2.5-flash-lite"
+            result={"summary": "Gemini summary."},
+            raw_response="ok",
+            model_id="gemini-2.5-flash-lite",
         )
         gemini = AsyncMock()
         gemini.extract = AsyncMock(return_value=gemini_output)

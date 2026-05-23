@@ -51,13 +51,13 @@ _SYSTEM_JWT = _make_system_jwt()
 _INTERNAL_HEADERS: dict[str, str] = {"X-Internal-JWT": _SYSTEM_JWT}
 
 
-@pytest.fixture
+@pytest.fixture()
 def app():
     # WARNING: TEST-ONLY. Never use skip_verification in integration/e2e against real services.
     return create_app(Settings(internal_jwt_skip_verification=True))  # type: ignore[call-arg]
 
 
-@pytest.fixture
+@pytest.fixture()
 async def client(app):
     transport = ASGITransport(app=app)
     async with AsyncClient(

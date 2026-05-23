@@ -74,7 +74,7 @@ def _make_embedding_output(n: int = 1) -> list:
     return [EmbeddingOutput(embedding=[0.1] * 10, model_id="nomic-embed-text", dimension=10) for _ in range(n)]
 
 
-@pytest.mark.unit
+@pytest.mark.unit()
 class TestNarrativeRefreshWorker:
     def test_embed_called_once_for_batch_of_entities(self) -> None:
         """5 due entities → embed() must be called exactly once with 5 inputs."""
@@ -89,7 +89,7 @@ class TestNarrativeRefreshWorker:
                     _ENTITY_ID_3,
                     _ENTITY_ID_4,
                     _ENTITY_ID_5,
-                ]
+                ],
             )
         ]
 

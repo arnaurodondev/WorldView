@@ -69,7 +69,7 @@ def _is_md_db_available() -> bool:
     return True
 
 
-@pytest.fixture
+@pytest.fixture()
 async def market_data_db_session() -> AsyncGenerator[AsyncSession, None]:
     """Yield an AsyncSession bound to market_data_db.
 
@@ -87,7 +87,7 @@ async def market_data_db_session() -> AsyncGenerator[AsyncSession, None]:
         # previous schema version).
         async with engine.begin() as conn:
             result = await conn.execute(
-                text("SELECT EXISTS (SELECT 1 FROM information_schema.tables " "WHERE table_name = 'instruments')")
+                text("SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = 'instruments')"),
             )
             if not result.scalar():
                 pytest.skip("market_data_db.instruments table missing — run S2 alembic")
@@ -123,8 +123,8 @@ async def test_every_post_f2_tradable_canonical_entity_has_matching_instrument(
         text(
             "SELECT entity_id FROM canonical_entities "
             "WHERE entity_type = 'financial_instrument' "
-            "AND entity_id::text LIKE '0190%'"
-        )
+            "AND entity_id::text LIKE '0190%'",
+        ),
     )
     tradable_ids = {row.entity_id for row in kg_rows.fetchall()}
 

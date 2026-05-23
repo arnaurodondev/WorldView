@@ -17,7 +17,7 @@ pytestmark = pytest.mark.unit
 class TestSchedulerMainEmbeddingProviderSelection:
     """Tests for embedding provider selection in scheduler_main."""
 
-    @pytest.mark.unit
+    @pytest.mark.unit()
     def test_deepinfra_provider_selected_when_api_key_set(self) -> None:
         """When embedding_provider=deepinfra + api_key set → config fields are consistent."""
         from knowledge_graph.config import Settings
@@ -39,7 +39,7 @@ class TestSchedulerMainEmbeddingProviderSelection:
         assert s.embedding_api_key == "test-key"
         assert s.embedding_api_model_id == "BAAI/bge-large-en-v1.5"
 
-    @pytest.mark.unit
+    @pytest.mark.unit()
     def test_ollama_provider_is_default(self) -> None:
         """Default embedding_provider is 'ollama' and embedding_api_key is empty."""
         from knowledge_graph.config import Settings
@@ -54,7 +54,7 @@ class TestSchedulerMainEmbeddingProviderSelection:
         # SecretStr migration: compare unwrapped value, not the SecretStr wrapper.
         assert s.embedding_api_key.get_secret_value() == ""
 
-    @pytest.mark.unit
+    @pytest.mark.unit()
     def test_deepinfra_api_base_url_default(self) -> None:
         """Default embedding_api_base_url points to DeepInfra OpenAI-compatible endpoint."""
         from knowledge_graph.config import Settings
@@ -68,7 +68,7 @@ class TestSchedulerMainEmbeddingProviderSelection:
         assert s.embedding_api_base_url == "https://api.deepinfra.com/v1/openai"
         assert s.embedding_api_model_id == "BAAI/bge-large-en-v1.5"
 
-    @pytest.mark.unit
+    @pytest.mark.unit()
     def test_deepinfra_adapter_can_be_instantiated(self) -> None:
         """DeepInfraEmbeddingAdapter is importable and constructable for KG use."""
         from ml_clients.adapters.deepinfra_embedding import DeepInfraEmbeddingAdapter  # type: ignore[import-not-found]
@@ -86,7 +86,7 @@ class TestSchedulerMainEmbeddingProviderSelection:
 class TestSchedulerMainExtractionProviderConfig:
     """Tests for DeepInfra extraction provider config (PLAN-0061 T-C-2)."""
 
-    @pytest.mark.unit
+    @pytest.mark.unit()
     def test_deepinfra_extraction_config_fields_present(self) -> None:
         """Config has all four DeepInfra extraction fields with correct defaults."""
         from knowledge_graph.config import Settings
@@ -102,7 +102,7 @@ class TestSchedulerMainExtractionProviderConfig:
         assert s.deepinfra_extraction_base_url == "https://api.deepinfra.com/v1/openai"
         assert s.deepinfra_extraction_concurrency == 5
 
-    @pytest.mark.unit
+    @pytest.mark.unit()
     def test_deepinfra_extraction_config_can_be_set(self) -> None:
         """deepinfra_api_key can be set (triggers non-empty check in scheduler_main)."""
         from knowledge_graph.config import Settings
@@ -124,7 +124,7 @@ class TestSchedulerMainExtractionProviderConfig:
 class TestBuildDescriptionClientDeepInfra:
     """Tests for _build_description_client() with DeepInfra provider (BP-092 regression guard)."""
 
-    @pytest.mark.unit
+    @pytest.mark.unit()
     def test_deepinfra_provider_returns_deepinfra_adapter(self) -> None:
         """description_provider='deepinfra' with valid api_key → DeepInfraDescriptionAdapter.
 
@@ -161,7 +161,7 @@ class TestBuildDescriptionClientDeepInfra:
             assert type(client).__name__ == "DeepInfraDescriptionAdapter"
             assert type(client).__module__ == "ml_clients.adapters.deepinfra_description"
 
-    @pytest.mark.unit
+    @pytest.mark.unit()
     def test_deepinfra_provider_empty_key_returns_null_adapter(self) -> None:
         """description_provider='deepinfra' with empty api_key → NullDescriptionAdapter (fail-safe)."""
         from knowledge_graph.config import Settings
@@ -179,7 +179,7 @@ class TestBuildDescriptionClientDeepInfra:
 
         assert type(client).__name__ == "NullDescriptionAdapter"
 
-    @pytest.mark.unit
+    @pytest.mark.unit()
     def test_unknown_provider_returns_null_adapter(self) -> None:
         """Unrecognised description_provider → NullDescriptionAdapter (no external calls)."""
         from knowledge_graph.config import Settings
@@ -196,7 +196,7 @@ class TestBuildDescriptionClientDeepInfra:
 
         assert type(client).__name__ == "NullDescriptionAdapter"
 
-    @pytest.mark.unit
+    @pytest.mark.unit()
     def test_deepinfra_description_config_fields_present(self) -> None:
         """Settings has all 3 DeepInfra description fields with correct defaults."""
         from knowledge_graph.config import Settings

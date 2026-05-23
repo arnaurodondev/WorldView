@@ -117,7 +117,7 @@ _NOISE_BLOCKLIST: frozenset[str] = frozenset(
         "sector",
         "industry",
         "index",
-    }
+    },
 )
 
 # Layer 2: cheap binary classifier model (fast, low cost vs. full DeepSeek extraction).
@@ -386,7 +386,7 @@ WHERE queue_id = ANY(CAST(:ids AS uuid[]))
                     return (queue_id, mention_text, mention_class, context_snippet, retry_count, None, None)
 
         enrichment_results: list[tuple[UUID, str, str, str, int, dict[str, Any] | None, list[float] | None]] = list(
-            await asyncio.gather(*[_enrich_one(r) for r in pending_rows])
+            await asyncio.gather(*[_enrich_one(r) for r in pending_rows]),
         )
 
         # ── Phase 3: Write results — one fresh session PER ROW ──────────────

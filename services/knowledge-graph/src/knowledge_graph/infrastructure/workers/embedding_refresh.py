@@ -113,7 +113,7 @@ class EmbeddingRefreshWorker:
                     _Row(
                         summary_id=row["summary_id"],  # type: ignore[arg-type]
                         summary_text=str(row["summary_text"]),
-                    )
+                    ),
                 )
         # Session released — no DB connection held during embed() calls.
 

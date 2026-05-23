@@ -256,7 +256,7 @@ class FundamentalsRefreshWorker:
 
             # Run all entity HTTP fetches concurrently.
             raw_results: list[dict[str, Any]] = list(
-                await asyncio.gather(*[_process_entity_io(e) for e in due_entities])
+                await asyncio.gather(*[_process_entity_io(e) for e in due_entities]),
             )
 
             # ── Batch embed after all HTTP fetches ──

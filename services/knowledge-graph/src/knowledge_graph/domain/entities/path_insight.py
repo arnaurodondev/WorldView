@@ -79,7 +79,7 @@ class PathInsight:
     def __post_init__(self) -> None:
         # Invariant: hop_count must equal the number of edges.
         if self.hop_count != len(self.path_edges):
-            msg = f"PathInsight.hop_count={self.hop_count} does not match " f"len(path_edges)={len(self.path_edges)}"
+            msg = f"PathInsight.hop_count={self.hop_count} does not match len(path_edges)={len(self.path_edges)}"
             raise ValueError(msg)
 
         # Invariant: hop range [2, 5].
@@ -133,7 +133,7 @@ class PathInsightJob:
             )
             raise ValueError(msg)
         if self.claimed_by is None and self.status == PathJobStatus.RUNNING:
-            msg = "PathInsightJob.status=RUNNING but claimed_by is None; " "a running job must have claimed_by set"
+            msg = "PathInsightJob.status=RUNNING but claimed_by is None; a running job must have claimed_by set"
             raise ValueError(msg)
 
         # Invariant: retry_count <= 3.

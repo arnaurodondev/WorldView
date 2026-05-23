@@ -56,7 +56,7 @@ class TestEventSearchUseCase:
             EventSearchUseCase().execute(
                 event_repo=repo,
                 entity_ids=[entity_id],
-            )
+            ),
         )
 
         assert result == expected
@@ -74,7 +74,7 @@ class TestEventSearchUseCase:
                 event_repo=repo,
                 entity_ids=[uuid4()],
                 event_types=["earnings_released"],
-            )
+            ),
         )
 
         call_kwargs = repo.search_events.call_args.kwargs
@@ -94,7 +94,7 @@ class TestEventSearchUseCase:
                 entity_ids=[uuid4()],
                 date_from=d_from,
                 date_to=d_to,
-            )
+            ),
         )
 
         call_kwargs = repo.search_events.call_args.kwargs
@@ -112,7 +112,7 @@ class TestEventSearchUseCase:
                 event_repo=repo,
                 entity_ids=[uuid4()],
                 top_k=5,
-            )
+            ),
         )
 
         call_kwargs = repo.search_events.call_args.kwargs
@@ -128,7 +128,7 @@ class TestEventSearchUseCase:
             EventSearchUseCase().execute(
                 event_repo=repo,
                 entity_ids=[],
-            )
+            ),
         )
 
         call_kwargs = repo.search_events.call_args.kwargs

@@ -34,13 +34,13 @@ def _make_consumer(*, dedup_client: object | None = None) -> EnrichedArticleCons
 
 
 class TestEnrichedConsumerValkey:
-    @pytest.mark.unit
+    @pytest.mark.unit()
     async def test_is_duplicate_none_client_returns_false(self) -> None:
         """Without dedup client, is_duplicate always returns False."""
         consumer = _make_consumer()
         assert await consumer.is_duplicate("any-id") is False
 
-    @pytest.mark.unit
+    @pytest.mark.unit()
     async def test_is_duplicate_valkey_error_returns_false(self) -> None:
         """When Valkey raises, is_duplicate returns False without propagating."""
         mock_client = AsyncMock()
@@ -55,7 +55,7 @@ class TestEnrichedConsumerValkey:
             e.get("event") == "dedup.valkey_check_failed" for e in cap
         ), f"Expected warning log not found in {cap}"
 
-    @pytest.mark.unit
+    @pytest.mark.unit()
     async def test_mark_processed_valkey_error_logs_warning(self) -> None:
         """When Valkey raises on set, mark_processed logs warning and returns silently."""
         mock_client = AsyncMock()
@@ -131,7 +131,7 @@ class TestPostCommitDirtiedProduce:
     """PLAN-0031 C-1: entity.dirtied.v1 Kafka messages must only be produced
     AFTER the intelligence_db session has been committed."""
 
-    @pytest.mark.unit
+    @pytest.mark.unit()
     async def test_consumer_produces_dirtied_after_commit(self) -> None:
         """produce_bytes() is called AFTER session.commit(), not before."""
         sf, session = _mock_session_factory()
@@ -189,7 +189,7 @@ class TestPostCommitDirtiedProduce:
             commit_idx < produce_idx
         ), f"produce_bytes() called at index {produce_idx} but session.commit() at {commit_idx} — must be commit FIRST"
 
-    @pytest.mark.unit
+    @pytest.mark.unit()
     async def test_consumer_produces_for_all_dirty_entities(self) -> None:
         """All entity IDs from summary.entity_ids_to_dirty get a produce call."""
         sf, _session = _mock_session_factory()
@@ -235,7 +235,7 @@ class TestPostCommitDirtiedProduce:
         assert subj_id in produced_keys, f"Subject {subj_id} not in produced keys: {produced_keys}"
         assert obj_id in produced_keys, f"Object {obj_id} not in produced keys: {produced_keys}"
 
-    @pytest.mark.unit
+    @pytest.mark.unit()
     async def test_consumer_no_produce_on_commit_failure(self) -> None:
         """If session.commit() raises, produce_bytes() is never called."""
         sf, session = _mock_session_factory()
@@ -282,7 +282,7 @@ class TestPostCommitDirtiedProduce:
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.unit
+@pytest.mark.unit()
 class TestParseRawClaims:
     """Validate _parse_raw_claims() correctly deserializes claim dicts into
     typed RawClaim dataclass objects, handling optional fields and bad data."""
@@ -433,7 +433,7 @@ class TestEnrichedConsumerClaimsE2E:
     are parsed and passed through to materialize_graph, resulting in
     claims_inserted > 0 in the materialization summary."""
 
-    @pytest.mark.unit
+    @pytest.mark.unit()
     async def test_consumer_materializes_claims_from_enriched_message(self) -> None:
         """Claims in the enriched message flow through to graph_write."""
         sf, _ = _mock_session_factory()
@@ -479,7 +479,7 @@ class TestEnrichedConsumerClaimsE2E:
 class TestEnrichedConsumerAvroDeserialization:
     """PLAN-0062 Wave B: Confluent-Avro wire format with JSON fallback."""
 
-    @pytest.mark.unit
+    @pytest.mark.unit()
     def test_decodes_confluent_avro_payload(self) -> None:
         from knowledge_graph.infrastructure.messaging.consumers.enriched_consumer import (
             _ARTICLE_ENRICHED_SCHEMA_PATH,
@@ -520,7 +520,7 @@ class TestEnrichedConsumerAvroDeserialization:
         assert decoded["routing_tier"] == "deep"
         assert decoded["raw_relations_json"] == '[{"subject_entity_id": "x"}]'
 
-    @pytest.mark.unit
+    @pytest.mark.unit()
     def test_falls_back_to_json_for_legacy_payload(self) -> None:
         import json
 
@@ -538,7 +538,7 @@ class TestEnrichedConsumerAvroDeserialization:
 
     # ── PLAN-0062 F-015: malformed Avro payload ───────────────────────────
 
-    @pytest.mark.unit
+    @pytest.mark.unit()
     def test_malformed_avro_raises(self) -> None:
         """A payload with the magic byte but a truncated/garbage Avro body
         must surface as a non-``JSONDecodeError`` exception so the dispatch
@@ -557,7 +557,7 @@ class TestEnrichedConsumerAvroDeserialization:
 
     # ── PLAN-0062 F-018: oversized JSON-fallback payload ─────────────────
 
-    @pytest.mark.unit
+    @pytest.mark.unit()
     def test_json_fallback_oversized_payload_raises_malformed_data_error(self) -> None:
         """A JSON-fallback payload above the 16 MiB cap must raise
         :class:`MalformedDataError` BEFORE ``json.loads`` is called.
@@ -591,7 +591,7 @@ class TestRawRelationsJsonProcessMessage:
     AND the legacy ``raw_relations`` list field (pre-migration).
     """
 
-    @pytest.mark.unit
+    @pytest.mark.unit()
     async def test_decodes_raw_relations_json_through_process_message(self) -> None:
         """A message with ``raw_relations_json`` (JSON string) is decoded and
         passed through to ``materialize_graph`` with one relation.
@@ -651,7 +651,7 @@ class TestRawRelationsJsonProcessMessage:
         relations = mock_materialize.call_args.kwargs["relations"]
         assert len(relations) == 1, f"Expected 1 relation from raw_relations_json, got {len(relations)}"
 
-    @pytest.mark.unit
+    @pytest.mark.unit()
     async def test_legacy_raw_relations_list_fallback_through_process_message(self) -> None:
         """A message with the LEGACY ``raw_relations`` list field (no
         ``_json`` suffix) still flows end-to-end with one relation — covers
@@ -711,7 +711,7 @@ class TestParseRawRelationsTruncationAndPolarity:
     structured warnings.
     """
 
-    @pytest.mark.unit
+    @pytest.mark.unit()
     def test_parse_raw_relations_truncates_oversized_evidence_text(self) -> None:
         from knowledge_graph.infrastructure.messaging.consumers.enriched_consumer import (
             _MAX_TEXT_FIELD_LEN,
@@ -738,7 +738,7 @@ class TestParseRawRelationsTruncationAndPolarity:
         truncation_logs = [le for le in logs if le.get("event") == "enriched_consumer_text_field_truncated"]
         assert truncation_logs, "expected truncation warning to be logged"
 
-    @pytest.mark.unit
+    @pytest.mark.unit()
     def test_parse_raw_relations_normalizes_invalid_polarity(self) -> None:
         from knowledge_graph.infrastructure.messaging.consumers.enriched_consumer import _parse_raw_relations
 
@@ -760,7 +760,7 @@ class TestParseRawRelationsTruncationAndPolarity:
         norm_logs = [le for le in logs if le.get("event") == "enriched_consumer_polarity_normalized"]
         assert norm_logs, "expected polarity-normalization warning to be logged"
 
-    @pytest.mark.unit
+    @pytest.mark.unit()
     def test_parse_raw_relations_absent_polarity_defaults_to_neutral(self) -> None:
         """BP-FIX: when polarity is absent (None), _parse_raw_relations must default
         to 'neutral', not 'positive'.  The old default caused 100% of relation-evidence

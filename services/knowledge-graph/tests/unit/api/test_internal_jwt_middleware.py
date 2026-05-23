@@ -82,7 +82,7 @@ def _build_app(
             {
                 "tenant_id": getattr(request.state, "tenant_id", None),
                 "role": getattr(request.state, "role", None),
-            }
+            },
         )
 
     @app.get("/health")

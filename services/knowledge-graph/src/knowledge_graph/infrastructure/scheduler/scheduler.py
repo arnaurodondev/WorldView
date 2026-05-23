@@ -431,7 +431,7 @@ def build_workers(
         )
         _provisional_lookup = MarketDataLookupAdapter(_provisional_md_client)
         workers.setdefault("_aux_aclose", []).append(
-            ("provisional_enrichment_market_data_client", _provisional_md_client.aclose)
+            ("provisional_enrichment_market_data_client", _provisional_md_client.aclose),
         )
 
         # PLAN-0057 A-5 / F-CRIT-03: thread the cost logger into workers that
@@ -486,7 +486,9 @@ def build_workers(
                     # issues a cryptographically verifiable JWT for market-data calls.
                     # Falls back to HS256 dev token when the key is absent.
                     internal_jwt_private_key_pem=getattr(
-                        settings, "internal_jwt_private_key", type("_", (), {"get_secret_value": lambda _: ""})()
+                        settings,
+                        "internal_jwt_private_key",
+                        type("_", (), {"get_secret_value": lambda _: ""})(),
                     ).get_secret_value(),
                     read_session_factory=_read_factory,
                 ),

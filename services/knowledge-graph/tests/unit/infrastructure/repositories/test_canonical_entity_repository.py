@@ -219,7 +219,7 @@ class TestConcurrentCreateOrGet:
         # All five callers see the SAME entity_id (no duplicate row created).
         entity_ids = {r[0] for r in results}
         assert entity_ids == {
-            _NEW_ENTITY_ID
+            _NEW_ENTITY_ID,
         }, f"Concurrent callers diverged: {entity_ids}.  Expected exactly one entity_id."
         # Exactly one caller reports was_created=True; the rest report False.
         was_created_flags = [r[1] for r in results]

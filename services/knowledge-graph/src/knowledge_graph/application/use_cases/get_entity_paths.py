@@ -166,7 +166,7 @@ class GetEntityPathsUseCase:
                     # If explanation_service is None no task fires, so pending stays False.
                     explanation_pending=(needs_explanation and self._explanation_service is not None),
                     computed_at=path.computed_at,
-                )
+                ),
             )
             freshness_candidates.append(path.computed_at)
 

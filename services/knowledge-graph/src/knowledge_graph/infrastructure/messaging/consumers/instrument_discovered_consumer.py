@@ -131,7 +131,7 @@ class InstrumentDiscoveredConsumer(BaseKafkaConsumer[None]):
 
             raise MalformedDataError(
                 "market.instrument.discovered.v1: missing or empty 'symbol' — "
-                "cannot create lightweight canonical without a placeholder name"
+                "cannot create lightweight canonical without a placeholder name",
             )
         symbol = str(symbol_raw).strip()
         exchange = value.get("exchange")

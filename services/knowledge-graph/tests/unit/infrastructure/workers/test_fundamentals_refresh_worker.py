@@ -170,7 +170,7 @@ class TestFundamentalsRefreshWorkerS3Failure:
 
         llm = AsyncMock()
         llm.embed = AsyncMock(
-            return_value=[EmbeddingOutput(embedding=[0.1] * 10, model_id="nomic-embed-text", dimension=10)]
+            return_value=[EmbeddingOutput(embedding=[0.1] * 10, model_id="nomic-embed-text", dimension=10)],
         )
 
         with patch(_EMB_REPO, return_value=emb_repo):
@@ -370,9 +370,9 @@ def _make_profile_http(status: int = 200, gic_sector: str = "Information Technol
                     "data": {"GicSector": gic_sector, "GicGroup": "Software & Services"},
                     "source": "eodhd",
                     "ingested_at": "2024-10-01T00:00:00",
-                }
+                },
             ],
-        }
+        },
     )
     http = AsyncMock()
     http.get = AsyncMock(return_value=resp)
@@ -391,7 +391,7 @@ def _make_sector_repos(sector_found: bool = True, industry_found: bool = True) -
             _SECTOR_ENTITY_ID
             if typ == "sector" and sector_found
             else (_INDUSTRY_ENTITY_ID if typ == "industry_group" and industry_found else None)
-        )
+        ),
     )
     return relation_repo, evidence_repo, entity_repo
 
@@ -418,8 +418,13 @@ class TestSectorRelationUpsert:
         # Phase 3: write relations (DB)
         count = asyncio.run(
             worker._write_sector_relations(
-                _ENTITY_ID, _ENTITY_ID, profile_data, relation_repo, evidence_repo, entity_repo
-            )
+                _ENTITY_ID,
+                _ENTITY_ID,
+                profile_data,
+                relation_repo,
+                evidence_repo,
+                entity_repo,
+            ),
         )
 
         assert count == 2  # is_in_sector + is_in_industry
@@ -444,8 +449,13 @@ class TestSectorRelationUpsert:
         # Phase 3: write relations (DB) — entity lookup returns None for both
         count = asyncio.run(
             worker._write_sector_relations(
-                _ENTITY_ID, _ENTITY_ID, profile_data, relation_repo, evidence_repo, entity_repo
-            )
+                _ENTITY_ID,
+                _ENTITY_ID,
+                profile_data,
+                relation_repo,
+                evidence_repo,
+                entity_repo,
+            ),
         )
 
         assert count == 0
@@ -462,14 +472,24 @@ class TestSectorRelationUpsert:
         profile_data = asyncio.run(worker._fetch_company_profile_data(http, _ENTITY_ID))
         asyncio.run(
             worker._write_sector_relations(
-                _ENTITY_ID, _ENTITY_ID, profile_data, relation_repo, evidence_repo, entity_repo
-            )
+                _ENTITY_ID,
+                _ENTITY_ID,
+                profile_data,
+                relation_repo,
+                evidence_repo,
+                entity_repo,
+            ),
         )
         profile_data = asyncio.run(worker._fetch_company_profile_data(http, _ENTITY_ID))
         asyncio.run(
             worker._write_sector_relations(
-                _ENTITY_ID, _ENTITY_ID, profile_data, relation_repo, evidence_repo, entity_repo
-            )
+                _ENTITY_ID,
+                _ENTITY_ID,
+                profile_data,
+                relation_repo,
+                evidence_repo,
+                entity_repo,
+            ),
         )
 
         # Advisory-lock upsert is called on every run (idempotency handled at DB level)
@@ -557,7 +577,7 @@ class TestBatchEmbedding:
         llm.embed = AsyncMock(
             return_value=[
                 EmbeddingOutput(embedding=[0.1] * 10, model_id="nomic-embed-text", dimension=10) for _ in range(3)
-            ]
+            ],
         )
 
         with patch(_EMB_REPO, return_value=emb_repo):

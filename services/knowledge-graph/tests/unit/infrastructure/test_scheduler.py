@@ -40,7 +40,7 @@ def _make_scheduler(workers: dict | None = None) -> KnowledgeGraphScheduler:
 
 
 class TestWorkerCrashInstrumentation:
-    @pytest.mark.asyncio
+    @pytest.mark.asyncio()
     async def test_worker_crash_increments_counter(self) -> None:
         """When a worker raises, s7_worker_crash_total is incremented with the worker label."""
         scheduler = _make_scheduler()
@@ -54,7 +54,7 @@ class TestWorkerCrashInstrumentation:
         mock_counter.labels.assert_called_once_with(worker="my_worker")
         mock_counter.labels.return_value.inc.assert_called_once()
 
-    @pytest.mark.asyncio
+    @pytest.mark.asyncio()
     async def test_worker_crash_logs_error(self) -> None:
         """When a worker raises, kg_worker_crashed is logged at ERROR with exc_info."""
         scheduler = _make_scheduler()
@@ -70,7 +70,7 @@ class TestWorkerCrashInstrumentation:
             e.get("event") == "kg_worker_crashed" and e.get("log_level") == "error" for e in cap
         ), f"Expected 'kg_worker_crashed' error log not found in: {cap}"
 
-    @pytest.mark.asyncio
+    @pytest.mark.asyncio()
     async def test_worker_crash_reraises(self) -> None:
         """Exception is re-raised after counter increment and logging (APScheduler needs it)."""
         scheduler = _make_scheduler()
@@ -81,7 +81,7 @@ class TestWorkerCrashInstrumentation:
             with pytest.raises(RuntimeError, match="should be reraised"):
                 await wrapped()
 
-    @pytest.mark.asyncio
+    @pytest.mark.asyncio()
     async def test_stub_does_not_increment_counter(self) -> None:
         """A no-op stub run does not trigger the crash counter."""
         scheduler = _make_scheduler()  # no workers → stubs only
@@ -94,7 +94,7 @@ class TestWorkerCrashInstrumentation:
 
 
 class TestProvisionalEnrichmentInterval:
-    @pytest.mark.asyncio
+    @pytest.mark.asyncio()
     async def test_provisional_enrichment_uses_dedicated_interval(self) -> None:
         """Scheduler wires 'worker_13e_provisional' to worker_provisional_enrichment_interval_s.
 

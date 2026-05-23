@@ -75,7 +75,7 @@ class TestPathInsightJobRepository:
         assert jobs[0].status.value == "running"
         assert jobs[0].claimed_by is not None
 
-    @pytest.mark.asyncio
+    @pytest.mark.asyncio()
     async def test_claim_batch_skip_locked_no_overlap(self) -> None:
         """Two concurrent claim_batch calls return disjoint job sets (SKIP LOCKED).
 
@@ -216,7 +216,7 @@ def _make_insight_row(
     import json
 
     nodes = json.dumps(
-        [{"entity_id": str(uuid4()), "name": f"E{i}", "entity_type": "company"} for i in range(hop_count + 1)]
+        [{"entity_id": str(uuid4()), "name": f"E{i}", "entity_type": "company"} for i in range(hop_count + 1)],
     )
     edges = json.dumps([{"relation_type": "SUPPLIES_TO", "confidence": 0.8} for _ in range(hop_count)])
     # Derive a valid composite score: round(min(h*0.4 + d*0.35 + s*0.25, 1.0), 6)
