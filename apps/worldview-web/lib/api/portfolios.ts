@@ -455,6 +455,8 @@ export function createPortfoliosApi(t: string | undefined) {
           currency: tx.currency,
           executed_at: tx.executed_at,
           notes: tx.external_ref,
+          // P2-E (Wave G): broker-supplied description; null when absent.
+          description: (tx as Record<string, unknown>).description as string | null ?? null,
         };
       });
 

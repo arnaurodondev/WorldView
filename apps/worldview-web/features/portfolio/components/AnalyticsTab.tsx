@@ -117,11 +117,13 @@ export function AnalyticsTab({ portfolioId }: AnalyticsTabProps) {
               <button
                 key={bm}
                 onClick={() => setBenchmark(bm)}
+                disabled={BENCHMARKS.length <= 1 && benchmark === bm}
                 className={cn(
                   "text-[11px] font-mono px-2 py-0.5 rounded transition-colors",
                   benchmark === bm
                     ? "bg-primary text-primary-foreground"
-                    : "bg-muted text-muted-foreground",
+                    : "bg-muted text-muted-foreground hover:text-foreground",
+                  BENCHMARKS.length <= 1 && "opacity-60 cursor-not-allowed",
                 )}
               >
                 {bm}

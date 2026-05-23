@@ -163,6 +163,9 @@ class SqlAlchemyTransactionRepository(TransactionRepository):
                 currency=transaction.currency,
                 executed_at=transaction.executed_at,
                 external_ref=transaction.external_ref,
+                # P2-E (Wave G): broker-supplied human-readable description.
+                # Nullable; historical rows + brokers that omit it stay NULL.
+                description=transaction.description,
                 created_at=transaction.created_at,
             )
             self._session.add(row)

@@ -30,7 +30,7 @@ def upgrade() -> None:
     # this transaction") and matches the domain entity's `str | None` type.
     op.add_column(
         "transactions",
-        sa.Column("description", sa.Text, nullable=True),
+        sa.Column("description", sa.Text(), nullable=True),
     )
 
 

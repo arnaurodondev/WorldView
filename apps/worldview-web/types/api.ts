@@ -899,6 +899,10 @@ export interface Transaction {
   currency: string;
   executed_at: string; // ISO 8601 UTC
   notes: string | null;
+  // P2-E (Wave G): broker-supplied human-readable description threaded from
+  // Alembic 0020 + TransactionListItem.description. null for historical rows
+  // and brokers that omit the field.
+  description?: string | null;
 }
 
 export interface TransactionRequest {

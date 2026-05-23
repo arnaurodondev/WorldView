@@ -41,6 +41,6 @@ class TransactionModel(Base):
     external_ref: Mapped[str | None] = mapped_column(default=None)
     # P2-E: broker-supplied human-readable description (e.g. "Dividend Payment - AAPL").
     # Nullable — not all brokers or activity types populate this. None when SnapTrade omits it.
-    # Column added Alembic 0020; historical rows default to NULL via server_default.
+    # Column added Alembic 0020; historical rows are NULL (nullable, no server_default).
     description: Mapped[str | None] = mapped_column(Text, nullable=True, default=None)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())

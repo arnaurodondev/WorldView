@@ -296,8 +296,9 @@ export function HoldingDetailPanel({
           <div className="py-1">
             <button
               type="button"
-              onClick={() => router.push(`/instruments/${holding.ticker}`)}
-              className="w-full text-[11px] text-muted-foreground hover:text-foreground transition-colors py-2 text-center font-mono"
+              onClick={() => router.push(`/instruments/${encodeURIComponent(holding.ticker)}`)}
+              disabled={!holding.ticker}
+              className="w-full text-[11px] text-muted-foreground hover:text-foreground transition-colors py-2 text-center font-mono disabled:opacity-40 disabled:cursor-not-allowed"
             >
               Open Instrument →
             </button>

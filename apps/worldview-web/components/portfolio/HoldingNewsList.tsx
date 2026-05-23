@@ -118,7 +118,7 @@ export function HoldingNewsList({
         <button
           key={article.article_id}
           type="button"
-          onClick={() => router.push(`/instruments/${instrumentId}`)}
+          onClick={() => router.push(`/instruments/${encodeURIComponent(instrumentId)}`)}
           className="w-full text-left px-3 py-1.5 hover:bg-muted/30 transition-colors group"
           // WHY aria-label: the button text is a headline that may be truncated;
           // including the full title in aria-label gives screen readers the full

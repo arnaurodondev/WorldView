@@ -129,8 +129,11 @@ export const qk = {
     // WHY holdingLots nests under detail(id): invalidating a portfolio's detail
     // cascade-invalidates lot data so a new fill (via brokerage sync) is reflected
     // immediately without an explicit per-holding invalidation call.
-    holdingLots: (portfolioId: string, instrumentId: string, currentPrice?: number) =>
-      [QK_VERSION, "portfolios", "detail", portfolioId, "holding-lots", instrumentId, currentPrice] as const,
+    // WHY currentPrice removed from key: lot data (quantity, cost basis) does not
+    // change with market price — only the unrealised P&L display does. Including a
+    // live price caused cache thrashing on every 15s quote tick (DS Agent F-009).
+    holdingLots: (portfolioId: string, instrumentId: string) =>
+      [QK_VERSION, "portfolios", "detail", portfolioId, "holding-lots", instrumentId] as const,
     holdingTx: (portfolioId: string, instrumentId: string) =>
       [QK_VERSION, "portfolios", "detail", portfolioId, "holding-tx", instrumentId] as const,
     holdingValueHistory: (portfolioId: string, instrumentId: string, period: string) =>
