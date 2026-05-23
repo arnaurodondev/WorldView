@@ -28,7 +28,7 @@
 "use client";
 // WHY "use client": useQuery + useMutation + onClick all require browser context.
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { RefreshCw } from "lucide-react";
 import { useAccessToken } from "@/lib/api-client";
@@ -79,7 +79,10 @@ export function EntityOverviewBlock({ entityId }: EntityOverviewBlockProps) {
   const [cooldownSec, setCooldownSec] = useState<number | null>(null);
 
   // ── Entity detail (stable — 30 min staleTime) ────────────────────────────
-  const { data: entity, isLoading: entityLoading } = useQuery<EntityPublic | null>({
+  // WHY retry:1 (F-156): default retry=3 with exponential backoff can stall
+  // the UI for ~30s showing an infinite skeleton. One retry is sufficient to
+  // recover from a transient network blip without hiding hard failures.
+  const entityQuery = useQuery<EntityPublic | null>({
     queryKey: qk.kg.entityDetail(entityId),
     queryFn: () =>
       apiFetch<EntityPublic>(
@@ -88,10 +91,13 @@ export function EntityOverviewBlock({ entityId }: EntityOverviewBlockProps) {
       ),
     staleTime: 30 * 60 * 1000,
     enabled: !!entityId && !!token,
+    retry: 1,
   });
+  const { data: entity, isLoading: entityLoading, isError: entityError } = entityQuery;
 
   // ── Entity intelligence (fast-changing — 60s staleTime) ─────────────────
-  const { data: intelligence, isLoading: intelLoading } = useQuery<EntityIntelligencePublic | null>({
+  // WHY retry:1: same reasoning as entity detail above (F-156).
+  const intelligenceQuery = useQuery<EntityIntelligencePublic | null>({
     queryKey: qk.kg.intelligence(entityId),
     queryFn: () =>
       apiFetch<EntityIntelligencePublic>(
@@ -100,7 +106,9 @@ export function EntityOverviewBlock({ entityId }: EntityOverviewBlockProps) {
       ),
     staleTime: 60_000,
     enabled: !!entityId && !!token,
+    retry: 1,
   });
+  const { data: intelligence, isLoading: intelLoading, isError: intelligenceError } = intelligenceQuery;
 
   // ── Narrative refresh mutation (Δ10) ─────────────────────────────────────
   const refreshMutation = useMutation({
@@ -127,6 +135,19 @@ export function EntityOverviewBlock({ entityId }: EntityOverviewBlockProps) {
     },
   });
 
+  // ── Cooldown countdown (F-157) ────────────────────────────────────────────
+  // WHY setTimeout instead of setInterval: each 1s tick goes through React
+  // state so the effect re-runs with the updated value — setInterval would
+  // need a ref to avoid stale-closure captures. The timeout cleans itself up
+  // on unmount or when cooldownSec reaches null/0 (no leak).
+  useEffect(() => {
+    if (cooldownSec === null || cooldownSec <= 0) return;
+    const id = setTimeout(() => {
+      setCooldownSec((prev) => (prev !== null && prev > 1 ? prev - 1 : null));
+    }, 1000);
+    return () => clearTimeout(id);
+  }, [cooldownSec]);
+
   // ── Loading state ─────────────────────────────────────────────────────────
   if (entityLoading || intelLoading) {
     return (
@@ -143,6 +164,29 @@ export function EntityOverviewBlock({ entityId }: EntityOverviewBlockProps) {
           <Skeleton className="h-5 w-16" />
           <Skeleton className="h-5 w-16" />
         </div>
+      </div>
+    );
+  }
+
+  // ── Error state (F-156) ───────────────────────────────────────────────────
+  // WHY compact error bar (not full-page error): the right rail is narrow (240px).
+  // A small dismissible bar with a refetch button gives the analyst a clear signal
+  // and an escape hatch without blowing up the panel layout.
+  if (entityError || intelligenceError) {
+    return (
+      <div className="flex items-center gap-2 px-3 py-2 text-[11px] text-muted-foreground">
+        <span>Could not load entity data.</span>
+        <button
+          type="button"
+          onClick={() => {
+            void entityQuery.refetch();
+            void intelligenceQuery.refetch();
+          }}
+          aria-label="Retry loading entity data"
+          className="shrink-0 p-0.5 rounded-[2px] text-muted-foreground hover:text-foreground transition-color-only duration-100"
+        >
+          <RefreshCw className="h-3 w-3" />
+        </button>
       </div>
     );
   }
