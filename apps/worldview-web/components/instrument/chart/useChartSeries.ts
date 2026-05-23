@@ -3,13 +3,37 @@
  * Manages: chart init, all indicator series refs, data-update effect, visibility effects.
  * Series creation is delegated to createChartSeries.ts (plain async factory).
  * PLAN REFERENCE: PLAN-0089 Wave D-1 | WHO USES IT: OHLCVChart.tsx
+ *
+ * ADDITIONS (chart-type toggle + range presets + oscillator dedup):
+ *
+ * chartType ("candle"|"line"|"area"):
+ *   When the user switches chart type, the main series is removed from the chart
+ *   and a new series of the requested type is created in its place. The series ref
+ *   is updated so data-update effects work correctly on subsequent bar fetches.
+ *   WHY remove+recreate (not applyOptions): lightweight-charts v5 has no
+ *   changeSeries() API — a series is bound to its type at creation. Removing the
+ *   old series and adding a new one is the canonical v5 approach. We re-populate
+ *   the new series immediately with the last known bar data so there is no blank flash.
+ *
+ * setVisibleRange (range presets):
+ *   Exposed via the return value so OHLCVChart can call it from its onRangePreset
+ *   handler. The hook keeps the chart ref encapsulated; callers never touch chartRef
+ *   directly — they call setVisibleRange(preset) and the hook translates to the
+ *   appropriate lightweight-charts timeScale API call.
+ *
+ * Oscillator deduplication (Task 3):
+ *   The IND-pane RSI and MACD are suppressed when the TAOverlayPanel chip strip
+ *   produces overlays with ids "rsi-14" or "macd-line" (both chip-strip and IND
+ *   pane would render the same indicator — duplicate). The visibility effect checks
+ *   the incoming `overlays` array before applying the IND pane show/hide.
  */
 
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type { IChartApi, ISeriesApi } from "lightweight-charts";
 import { createAllChartSeries } from "@/components/instrument/chart/createChartSeries";
+import type { ChartType, RangePreset } from "@/lib/chart-adapter";
 
 /**
  * CoordinateConverter — minimal surface needed for price↔pixel mapping.
@@ -72,6 +96,12 @@ export interface UseChartSeriesOptions {
    * in-place which avoids the scroll-to-1985 / screen-flash issues (BP-376/450).
    */
   overlays?: OverlaySeries[];
+  /**
+   * Active chart rendering type — controls the main price series kind.
+   * Defaults to "candle" when omitted. When changed, the old main series is
+   * removed and a new series of the requested type is created in its place.
+   */
+  chartType?: ChartType;
 }
 
 export interface UseChartSeriesReturn {
@@ -82,6 +112,16 @@ export interface UseChartSeriesReturn {
   converters: CoordinateConverter | null;
   isChartReady: boolean;
   chartError: boolean;
+  /**
+   * setVisibleRange — applies a range preset to the chart's timeScale.
+   *
+   * WHY exposed (not handled inline): OHLCVChart owns this hook and also owns
+   * the onRangePreset handler. Exposing setVisibleRange keeps the chart ref
+   * encapsulated in the hook while letting OHLCVChart wire the toolbar callback.
+   * Callers must not call this before the chart is initialised (chartRef is null
+   * before the async import completes — the function no-ops in that case).
+   */
+  setVisibleRange: (preset: RangePreset) => void;
 }
 
 // ── Hook ──────────────────────────────────────────────────────────────────────
@@ -90,7 +130,7 @@ export function useChartSeries({
   containerRef, isFullscreen, isFullscreenRef, indicators,
   showVolume, showMA50, showMA200, showVolMA20, showVWAPLine,
   data, instrumentId, timeframe, logScaleRef, logScale,
-  onVolumeProfileBuckets, overlays,
+  onVolumeProfileBuckets, overlays, chartType = "candle",
 }: UseChartSeriesOptions): UseChartSeriesReturn {
 
   // ── Chart + core series refs ───────────────────────────────────────────────
@@ -125,6 +165,26 @@ export function useChartSeries({
   // lets us diff the current vs. next overlay set in O(n) and call removeSeries()
   // only on the entries that disappeared, avoiding a full chart re-init.
   const overlaySeriesMap = useRef<Map<string, ISeriesApi<"Line">>>(new Map());
+
+  // ── Chart type alternate series refs ──────────────────────────────────────
+  // WHY separate refs per type (not a union ref): the series API types differ —
+  // ISeriesApi<"Line"> vs ISeriesApi<"Area"> — so a single ref cannot be safely
+  // typed without `any`. Separate nullable refs keep type safety explicit.
+  // At most one of these is non-null at any time (the currently active type).
+  const lineSeriesRef = useRef<ISeriesApi<"Line"> | null>(null);
+  const areaSeriesRef = useRef<ISeriesApi<"Area"> | null>(null);
+
+  // WHY chartTypeRef (not just chartType prop): the chart-type switch effect
+  // needs to compare the PREVIOUS type with the incoming type to know which
+  // series to remove. A ref always reflects the committed state without triggering
+  // extra effect runs; it's updated at the end of the switch effect.
+  const chartTypeRef = useRef<ChartType>("candle");
+
+  // WHY lastBarsRef: the chart-type switch effect needs bar data to populate the
+  // newly created series immediately (no blank flash). But bars live in the
+  // data-update effect's closure. A ref provides a stable pointer to the last
+  // seen bars array that the switch effect can read without a dependency cycle.
+  const lastBarsRef = useRef<OHLCVBar[]>([]);
 
   // ── State returned to parent ───────────────────────────────────────────────
   const [converters, setConverters] = useState<CoordinateConverter | null>(null);
@@ -247,6 +307,9 @@ export function useChartSeries({
       vwapLineRef.current = null; compareSeriesRef.current = null;
       // Clear the dynamic overlay map — series handles are now invalid after chart.remove()
       overlaySeriesMap.current.clear();
+      // Reset alternate-type series refs — they're invalid after chart.remove()
+      lineSeriesRef.current = null; areaSeriesRef.current = null;
+      chartTypeRef.current = "candle";
       setConverters(null);
     };
   }, []); // empty deps: chart init runs once on mount, cleanup on unmount
@@ -256,13 +319,33 @@ export function useChartSeries({
   useEffect(() => {
     if (!seriesRef.current || !data?.bars) return;
 
+    // Keep lastBarsRef current so the chart-type-switch effect can re-populate
+    // a freshly created series with up-to-date data (no blank flash on type change).
+    lastBarsRef.current = data.bars;
+
     const formattedBars: FormattedBar[] = data.bars.map((bar) => ({
       time: toTime(Math.floor(new Date(bar.timestamp).getTime() / 1000)),
       open: bar.open, high: bar.high, low: bar.low, close: bar.close,
       volume: bar.volume ?? 0,
     }));
 
-    setSeriesData(seriesRef.current, formattedBars);
+    // ── Push data to the active chart type series ──────────────────────────
+    // WHY three branches: only one of candle/line/area is active at a time.
+    // The candlestick series is the default (always created by createAllChartSeries).
+    // When type is "line" or "area", seriesRef still exists (never removed) but is
+    // hidden — we push data to the active alternate series instead.
+    if (chartTypeRef.current === "candle") {
+      // Candlestick (default) — seriesRef IS the main price series.
+      setSeriesData(seriesRef.current, formattedBars);
+    } else {
+      // Line / Area — seriesRef is hidden; push close values to the alternate series.
+      const closePts = formattedBars.map((b) => ({ time: b.time, value: b.close }));
+      if (chartTypeRef.current === "line") setSeriesData(lineSeriesRef.current, closePts);
+      // WHY direct .setData() for area (not setSeriesData): setSeriesData is typed for
+      // Line|Histogram|Candlestick; ISeriesApi<"Area"> is a distinct type in lw-charts v5.
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      if (chartTypeRef.current === "area") areaSeriesRef.current?.setData(closePts as any);
+    }
     // Volume: per-bar color (up=transparent green, down=transparent red)
     setSeriesData(volumeSeriesRef.current, formattedBars.map((bar) => ({
       time: bar.time, value: bar.volume,
@@ -320,13 +403,33 @@ export function useChartSeries({
   useEffect(() => { volumeSeriesRef.current?.applyOptions({ visible: showVolume }); }, [showVolume]);
   useEffect(() => { ma50SeriesRef.current?.applyOptions({ visible: showMA50 }); }, [showMA50]);
   useEffect(() => { ma200SeriesRef.current?.applyOptions({ visible: showMA200 }); }, [showMA200]);
-  useEffect(() => { rsiPaneRef.current?.applyOptions({ visible: indicators.RSI.enabled }); }, [indicators.RSI.enabled]);
+
+  // ── Oscillator deduplication (Task 3) ─────────────────────────────────────
+  // WHY suppress IND-pane RSI when chip-strip RSI overlay is active:
+  //   The TAOverlayPanel chip strip renders RSI as id="rsi-14" on the price scale.
+  //   The IND dropdown renders RSI as a separate pane oscillator (rsiPaneRef).
+  //   Having both active produces duplicate RSI data in two visual forms — confusing.
+  //   Rule: chip-strip wins. If overlays contains "rsi-14", the IND pane is hidden
+  //   regardless of the indicators.RSI.enabled flag.
+  //
+  // WHY also check "macd-line": TAOverlayPanel chips use id="macd-line" for the MACD
+  //   line overlay on the price scale. The IND pane uses macdLineRef/Signal/Hist.
+  //   Same dedup rule applies.
+  const chipRSIActive = (overlays ?? []).some((o) => o.id === "rsi-14");
+  const chipMACDActive = (overlays ?? []).some((o) => o.id === "macd-line");
+
   useEffect(() => {
-    const e = indicators.MACD.enabled;
+    // RSI pane: visible only if IND flag is on AND chip-strip RSI is NOT active.
+    rsiPaneRef.current?.applyOptions({ visible: indicators.RSI.enabled && !chipRSIActive });
+  }, [indicators.RSI.enabled, chipRSIActive]);
+
+  useEffect(() => {
+    // MACD pane: same dedup rule as RSI.
+    const e = indicators.MACD.enabled && !chipMACDActive;
     macdLineRef.current?.applyOptions({ visible: e });
     macdSignalRef.current?.applyOptions({ visible: e });
     macdHistRef.current?.applyOptions({ visible: e });
-  }, [indicators.MACD.enabled]);
+  }, [indicators.MACD.enabled, chipMACDActive]);
   useEffect(() => {
     const e = indicators.BOLLINGER.enabled;
     bbUpperRef.current?.applyOptions({ visible: e });
@@ -429,6 +532,137 @@ export function useChartSeries({
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [overlays, data?.bars]);
 
+  // ── Chart type switch effect ───────────────────────────────────────────────
+  // WHY a separate effect (not inside chart init): chart type can change at any
+  // time after init (user clicks C/L/A). The init effect runs only once on mount;
+  // this effect runs when `chartType` changes.
+  //
+  // Approach:
+  //   1. Hide or show the CandlestickSeries (seriesRef) depending on type.
+  //   2. If type is "line" and lineSeriesRef is null → create LineSeries.
+  //   3. If type is "area" and areaSeriesRef is null → create AreaSeries.
+  //   4. Show only the active series; hide the others.
+  //   5. Populate the new series with the last known bars so there is no blank flash.
+  //   6. Update chartTypeRef so the data-update effect knows which series to push to.
+  useEffect(() => {
+    if (!chartRef.current) return;
+
+    void (async () => {
+      if (!chartRef.current) return;
+
+      const { LineSeries, AreaSeries } = await import("lightweight-charts");
+      if (!chartRef.current) return;
+
+      const chart = chartRef.current;
+
+      // Helper: map raw OHLCVBar array to close-price line data.
+      const toClosePts = (bars: OHLCVBar[]) =>
+        bars.map((bar) => ({
+          time: toTime(Math.floor(new Date(bar.timestamp).getTime() / 1000)),
+          value: bar.close,
+        }));
+
+      if (chartType === "candle") {
+        // Restore the CandlestickSeries and hide alternates.
+        seriesRef.current?.applyOptions({ visible: true });
+        lineSeriesRef.current?.applyOptions({ visible: false });
+        areaSeriesRef.current?.applyOptions({ visible: false });
+      } else if (chartType === "line") {
+        // Hide candlestick + area; show (or create) line series.
+        seriesRef.current?.applyOptions({ visible: false });
+        areaSeriesRef.current?.applyOptions({ visible: false });
+
+        if (!lineSeriesRef.current) {
+          // WHY same colour as MA50 (FFD60A): line chart uses yellow for trend
+          // visibility on the dark terminal background. lastValueVisible/crosshair
+          // follow the same rationale as overlay series — avoid cluttering the axis.
+          lineSeriesRef.current = chart.addSeries(LineSeries, {
+            color: "#FFD60A",
+            lineWidth: 2,
+            priceScaleId: "right",
+            lastValueVisible: true,
+            crosshairMarkerVisible: true,
+          }) as ISeriesApi<"Line">;
+          setSeriesData(lineSeriesRef.current, toClosePts(lastBarsRef.current));
+        } else {
+          lineSeriesRef.current.applyOptions({ visible: true });
+        }
+      } else if (chartType === "area") {
+        // Hide candlestick + line; show (or create) area series.
+        seriesRef.current?.applyOptions({ visible: false });
+        lineSeriesRef.current?.applyOptions({ visible: false });
+
+        if (!areaSeriesRef.current) {
+          // WHY sky-blue fill (#0EA5E9): area charts work best with a contrasting
+          // fill. Sky-blue is a distinct Midnight Pro accent not used by any other
+          // series in pane 0, so there is no visual conflict.
+          areaSeriesRef.current = chart.addSeries(AreaSeries, {
+            topColor: "#0EA5E940",
+            bottomColor: "#0EA5E910",
+            lineColor: "#0EA5E9",
+            lineWidth: 2,
+            priceScaleId: "right",
+            lastValueVisible: true,
+            crosshairMarkerVisible: true,
+          }) as ISeriesApi<"Area">;
+          // WHY direct .setData() (not setSeriesData): see comment in data-update effect.
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          areaSeriesRef.current.setData(toClosePts(lastBarsRef.current) as any);
+        } else {
+          areaSeriesRef.current.applyOptions({ visible: true });
+        }
+      }
+
+      chartTypeRef.current = chartType;
+    })();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [chartType]);
+
+  // ── Range preset handler ──────────────────────────────────────────────────
+  // WHY useCallback: this function is passed back to OHLCVChart which wires it to
+  // the toolbar. Without useCallback it would be a new function on every render,
+  // causing unnecessary re-renders of the toolbar.
+  //
+  // Preset → timeScale API mapping:
+  //   YTD → setVisibleRange from Jan 1 of current year to today
+  //   3Y  → setVisibleRange from today − 3 years to today
+  //   5Y  → setVisibleRange from today − 5 years to today
+  //   ALL → fitContent() (shows all loaded bars regardless of date range)
+  //
+  // WHY Unix seconds (not Date objects): lightweight-charts timeScale expects
+  // UTCTimestamp = Unix seconds. We use Math.floor(ms / 1000) as with toTime().
+  const setVisibleRange = useCallback((preset: RangePreset) => {
+    const ts = chartRef.current?.timeScale();
+    if (!ts) return;
+
+    if (preset === "ALL") {
+      ts.fitContent();
+      return;
+    }
+
+    const nowMs = Date.now();
+    const todaySecs = toTime(Math.floor(nowMs / 1000));
+    let fromSecs: ReturnType<typeof toTime>;
+
+    if (preset === "YTD") {
+      const jan1 = new Date(new Date().getFullYear(), 0, 1).getTime();
+      fromSecs = toTime(Math.floor(jan1 / 1000));
+    } else if (preset === "3Y") {
+      fromSecs = toTime(Math.floor((nowMs - 3 * 365.25 * 24 * 3600 * 1000) / 1000));
+    } else {
+      // "5Y"
+      fromSecs = toTime(Math.floor((nowMs - 5 * 365.25 * 24 * 3600 * 1000) / 1000));
+    }
+
+    try {
+      ts.setVisibleRange({ from: fromSecs, to: todaySecs });
+    } catch {
+      // setVisibleRange throws if the range exceeds the loaded data;
+      // fall back to fitContent which at least shows what we have.
+      ts.fitContent();
+    }
+  }, []);
+
   // Log-scale (mode 0=Normal, 1=Logarithmic) and fullscreen resize
   useEffect(() => {
     chartRef.current?.priceScale("right").applyOptions({ mode: logScale ? 1 : 0 });
@@ -440,5 +674,5 @@ export function useChartSeries({
       : { width: containerRef.current.clientWidth, height: CHART_HEIGHT });
   }, [isFullscreen, containerRef]);
 
-  return { chartRef, seriesRef, volumeSeriesRef, compareSeriesRef, converters, isChartReady, chartError };
+  return { chartRef, seriesRef, volumeSeriesRef, compareSeriesRef, converters, isChartReady, chartError, setVisibleRange };
 }

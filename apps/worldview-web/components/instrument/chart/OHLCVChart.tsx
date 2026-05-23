@@ -34,7 +34,7 @@ import { ChartToolbar } from "@/components/instrument/ChartToolbar";
 import { TimeframeToolbar } from "@/components/instrument/chart/TimeframeToolbar";
 import { TAOverlayPanel } from "@/components/instrument/quote/TAOverlayPanel";
 import { useChartSeries } from "@/components/instrument/chart/useChartSeries";
-import { CHART_HEIGHT, type Timeframe } from "@/lib/chart-adapter";
+import { CHART_HEIGHT, type ChartType, type RangePreset, type Timeframe } from "@/lib/chart-adapter";
 import {
   loadIndicatorsFromStorage,
   saveIndicatorsToStorage,
@@ -91,6 +91,9 @@ interface OHLCVChartProps {
 export function OHLCVChart({ instrumentId, initialBars, entityId, overlays: externalOverlays }: OHLCVChartProps) {
   const { accessToken } = useAuth();
   const [timeframe, setTimeframe] = useState<Timeframe>("1D");
+  // WHY default chartType="candle": candlestick is the institutional default for
+  // equity charts — OHLC data visible in full. Line/Area are alternative views.
+  const [chartType, setChartType] = useState<ChartType>("candle");
   // WHY default showVolume=true: volume is the industry-standard candlestick companion.
   const [showVolume, setShowVolume] = useState(true);
   const [showMA50, setShowMA50] = useState(false);
@@ -154,7 +157,7 @@ export function OHLCVChart({ instrumentId, initialBars, entityId, overlays: exte
     placeholderData: memoizedPlaceholder,
   });
 
-  const { chartError } = useChartSeries({
+  const { chartError, setVisibleRange } = useChartSeries({
     containerRef, isFullscreen, isFullscreenRef, indicators,
     showVolume, showMA50, showMA200, showVolMA20, showVWAPLine,
     data, instrumentId, timeframe, logScaleRef, logScale,
@@ -162,7 +165,15 @@ export function OHLCVChart({ instrumentId, initialBars, entityId, overlays: exte
     // PLAN-0091 F-1: TA overlay lines from the chip strip (or external prop override).
     // useChartSeries manages the diff-based series creation/removal without re-mounting.
     overlays: resolvedOverlays,
+    // Chart type toggle — controls which series kind renders the main price series.
+    chartType,
   });
+
+  // Range preset handler — translates a RangePreset into a chart timeScale call.
+  // WHY useCallback: stable reference prevents unnecessary re-renders of TimeframeToolbar.
+  const handleRangePreset = useCallback((preset: RangePreset) => {
+    setVisibleRange(preset);
+  }, [setVisibleRange]);
 
   // Indicator toggle handler persists selections to localStorage.
   const handleToggleIndicator = useCallback((id: IndicatorId) => {
@@ -254,6 +265,11 @@ export function OHLCVChart({ instrumentId, initialBars, entityId, overlays: exte
           compareInput=""
           onCompareInputChange={() => { /* deferred */ }}
           onCompareSubmit={() => { /* deferred */ }}
+          // Chart type toggle (C/L/A buttons).
+          chartType={chartType}
+          onChartTypeChange={setChartType}
+          // Range preset buttons (YTD/3Y/5Y/ALL).
+          onRangePreset={handleRangePreset}
         />
         <div className="ml-auto flex items-center">
           <ChartToolbar

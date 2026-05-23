@@ -226,9 +226,15 @@ export function InstrumentPageClient({ entityId }: InstrumentPageClientProps) {
             S9 instrument_id (NOT entityId — the KG entity id can't address
             /v1/fundamentals/*). Until the page-bundle resolves, no fetches
             should fire — pass undefined-coerced empty string makes useQuery's
-            enabled flag false. */}
+            enabled flag false.
+            WHY also pass entityId: the COMPETITORS sub-tab in PeerComparisonTable
+            calls getSimilarEntities which is KG entity-scoped (not instrument_id).
+            bundle.entity_id is the resolved KG UUID from the page-bundle. */}
         {activeTab === "financials" && (
-          <FinancialsTab instrumentId={bundle?.instrument_id ?? ""} />
+          <FinancialsTab
+            instrumentId={bundle?.instrument_id ?? ""}
+            entityId={bundle?.entity_id}
+          />
         )}
         {/* Wave D: Intelligence tab (T-D-04) — 3-column orchestrator
             (NewsColumn | GraphColumn | ContextPanel). All data fetching lives

@@ -46,6 +46,17 @@ vi.mock("@/contexts/HotkeyContext", () => ({
   })),
 }));
 
+// WHY mock useAccessToken: InlineSelectionPanel (rendered for real in these tests)
+// now calls useAccessToken() to auth the lazy entity-detail fetch. Without this
+// mock the hook throws "useAccessToken must be used inside <ApiClientProvider>".
+// The token value doesn't matter here — the `enabled` guard on the detailQuery
+// is also gated on `selectedNode?.description === null`, and the nodes in these
+// tests have description=null but the query is effectively a no-op since we don't
+// assert on description content. A non-null token ensures the guard doesn't block.
+vi.mock("@/lib/api-client", () => ({
+  useAccessToken: vi.fn(() => "test-token"),
+}));
+
 // ── GraphColumn test-double ───────────────────────────────────────────────────
 // WHY capture ref (not spy): GraphColumn receives onNodeChange + onEdgeSelect
 // as props. We capture them via module-level refs so individual tests can fire

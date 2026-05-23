@@ -5,6 +5,7 @@ prd: investigation-2026-05-22
 status: in-progress
 created: 2026-05-22
 updated: 2026-05-22
+revised: 2026-05-22 (revise-prd pass — 8 blocking + 6 non-blocking fixes applied)
 ---
 
 # PLAN-0091 — Data Enrichment: Tier 1 / 2 / 3 Intelligence Features
@@ -153,12 +154,12 @@ S7's `RelationResponse` already includes `valid_from: datetime | None` and `vali
 **blocks**: [T-D-2-02]
 **Target files**:
 - `services/api-gateway/src/api_gateway/routes/intelligence.py`
-- `services/knowledge-graph/src/knowledge_graph/api/schemas/graph.py`
+- `services/knowledge-graph/src/knowledge_graph/api/schemas/__init__.py` (NOT `graph.py` — `EntitySummary` is at line 70 of `__init__.py`; `graph.py` does not exist)
 
 **What to build**:
 S7's `EntitySummary` model (returned in `GraphNeighborhoodResponse.entities` dict) currently surfaces `ticker`, `exchange`, `isin`. The `canonical_entities.metadata` JSONB column stores `sector`, `industry`, `market_cap`. Extend S7's `EntitySummary` to include `industry: str | None` and `market_cap: float | None` extracted from the metadata JSONB, then forward these in S9's node-building loop.
 
-**Fields to add to S7 `EntitySummary`** (in `knowledge_graph/api/schemas/graph.py`):
+**Fields to add to S7 `EntitySummary`** (in `knowledge_graph/api/schemas/__init__.py` — class at line 70):
 - `industry: str | None = None` — from `metadata.get("industry")`
 - `market_cap: float | None = None` — from `metadata.get("market_cap")`
 
@@ -236,7 +237,7 @@ class ArticleImpactHistoryResponse(BaseModel):
 
 **Logic**: S9 calls S6 `GET /api/v1/articles/{doc_id}/impact-windows` (add this endpoint to S6 if not present). Returns all 4 windows sorted by window label.
 
-**Read-only**: YES → ReadUoWDep (S9 level)
+**Read-only**: YES — S9 is a stateless proxy; no `UnitOfWork` at S9 level. The S6 endpoint (added as companion to this task or in T-E-1-02) uses `ReadOnlyUnitOfWork`.
 
 **Acceptance criteria**:
 - [ ] `GET /v1/articles/{article_id}/impact-history` returns 4 windows (t0, t1, t2, t5)
@@ -253,7 +254,7 @@ class ArticleImpactHistoryResponse(BaseModel):
 **Target files**:
 - `services/api-gateway/src/api_gateway/routes/intelligence.py`
 - `services/api-gateway/src/api_gateway/schemas/intelligence.py`
-- `services/nlp-pipeline/src/nlp_pipeline/api/routers/` (new internal route)
+- `services/nlp-pipeline/src/nlp_pipeline/api/routes/analytics.py` (NEW — directory is `api/routes/`, NOT `api/routers/`)
 
 **What to build**:
 New S9 endpoint that returns daily aggregated sentiment and article volume for an entity over the last N days. Used to render the sentiment trend overlay on the price chart (Tier 3 frontend feature). S6 must expose a new aggregation endpoint — `GET /api/v1/entities/{entity_id}/sentiment-timeseries?days=90&granularity=1d`.
@@ -419,9 +420,9 @@ class YieldCurveResponse(BaseModel):
 **depends_on**: none
 **blocks**: none
 **Target files**:
-- `apps/worldview-web/components/portfolio/RiskMetricsPanel.tsx` (NEW)
-- `apps/worldview-web/lib/gateway.ts` — `getRiskMetrics()` already exists; add TanStack Query hook
-- `apps/worldview-web/lib/query/keys.ts` — add `qk.riskMetrics(id)`
+- `apps/worldview-web/components/portfolio/RiskMetricsPanel.tsx` (NEW — distinct from `RiskMetricsStrip.tsx` which already exists as a 22px tease strip for the portfolio overview; this is the full-detail panel with period switcher, used on the dashboard)
+- `apps/worldview-web/lib/gateway.ts` — `getRiskMetrics()` already exists; add TanStack Query hook if absent
+- `apps/worldview-web/lib/query/keys.ts` — `qk.portfolios.riskMetrics(portfolioId)` **already exists**; use it, do NOT create a new `qk.riskMetrics(id)` key
 
 **What to build**:
 Dense metrics panel showing portfolio risk statistics. Calls `GET /v1/portfolios/{id}/risk-metrics`.
@@ -455,8 +456,8 @@ Layout: 6 monospaced metric cells in 2 rows × 3 cols at 22px row height. Lookba
 **depends_on**: none
 **blocks**: none
 **Target files**:
-- `apps/worldview-web/components/portfolio/ConcentrationWidget.tsx` (NEW)
-- `apps/worldview-web/lib/query/keys.ts` — add `qk.concentration(id)`
+- `apps/worldview-web/components/portfolio/ConcentrationWidget.tsx` (NEW — distinct from `ConcentrationSectorTeaseStrip.tsx` which already exists as a 22px strip for the portfolio overview; this is the full-detail panel with top-5 bar chart)
+- `apps/worldview-web/lib/query/keys.ts` — add `qk.portfolios.concentration(portfolioId)` under the `portfolios` namespace
 
 **What to build**:
 Portfolio concentration panel. Calls `GET /v1/portfolios/{id}/concentration`.
@@ -488,9 +489,9 @@ Plus a compact bar chart showing top-5 position weights (from `top_positions`).
 **depends_on**: [T-A-2-03]
 **blocks**: none
 **Target files**:
-- `apps/worldview-web/components/portfolio/SectorAttributionWidget.tsx` (NEW)
+- `apps/worldview-web/components/portfolio/SectorAttributionWidget.tsx` (NEW — distinct from `SectorAllocationBar.tsx` and `SectorAllocationPanel.tsx` which already exist but derive allocation from cached portfolio bundle data without live quotes. This new widget uses the new `GET /v1/portfolios/{id}/sector-attribution` endpoint which uses live-quoted prices for accurate day P&L attribution)
 - `apps/worldview-web/lib/gateway.ts` — add `getPortfolioSectorAttribution()` method (NEW)
-- `apps/worldview-web/lib/query/keys.ts` — add `qk.sectorAttribution(id)`
+- `apps/worldview-web/lib/query/keys.ts` — add `qk.portfolios.sectorAttribution(portfolioId)` under the `portfolios` namespace
 
 **What to build**:
 Horizontal bar chart showing portfolio weight by sector. Each row: `SECTOR_NAME [████░░░░] 32.4% +$1,240`. Sorted by weight descending. Calls the new `GET /v1/portfolios/{id}/sector-attribution` endpoint.
@@ -522,34 +523,24 @@ Horizontal bar chart showing portfolio weight by sector. Each row: `SECTOR_NAME 
 **Depends on**: none
 **Estimated effort**: 2h
 
-#### T-B-2-01: FIFO lot drill-down in Holdings table
+#### T-B-2-01: FIFO lot drill-down — wire existing `HoldingLotsPanel`
 
 **Type**: impl
 **depends_on**: none
 **Target files**:
-- `apps/worldview-web/components/portfolio/HoldingLotsDrawer.tsx` (NEW)
-- `apps/worldview-web/lib/query/keys.ts` — add `qk.holdingLots(portfolioId, instrumentId)`
-- Existing holdings table component — add row expand affordance
+- `apps/worldview-web/components/portfolio/HoldingLotsPanel.tsx` — ALREADY EXISTS (PLAN-0088 Wave E). Do NOT create `HoldingLotsDrawer.tsx` — that would duplicate existing functionality.
+- `apps/worldview-web/lib/query/keys.ts` — add `qk.holdingLots(portfolioId, instrumentId)` if not already present
 
 **What to build**:
-Expandable row in the holdings table that shows FIFO lot detail. Clicking a holdings row fetches `GET /v1/portfolios/{id}/holdings/{instrument_id}/lots` and renders:
-```
-LOT DATE    QTY     COST/SH    DAYS HELD    L/S-TERM    UNR P&L
-2024-01-15  50      $398.20      492d         LT        +$1,402
-2024-08-03  130     $420.10      261d         ST        -$2,840
-TOTAL       180     $412.10
-```
-`L/S-TERM` = long-term (>365d) shown in text-positive, short-term in text-muted.
+`HoldingLotsPanel.tsx` was shipped in PLAN-0088 Wave E as a standalone panel (not an inline row expansion) calling `GET /v1/portfolios/{id}/holdings/{instrument_id}/lots`. This task wires it into the Portfolio Overview page layout and ensures it is accessible from the SemanticHoldingsTable.
 
-**Props**: `portfolioId: string`, `instrumentId: string`, `open: boolean`, `onClose: () => void`
-**Query key**: `qk.holdingLots(portfolioId, instrumentId)` → `["holding","lots",portfolioId,instrumentId]`
-**staleTime**: 5min (lots change only on new transactions)
+Read `HoldingLotsPanel.tsx` first to understand its prop interface and current wiring. If it is already wired in the portfolio page, mark this task as verified-complete and skip implementation.
 
 **Acceptance criteria**:
+- [ ] `HoldingLotsPanel` visible/accessible from portfolio overview (not just hidden in code)
 - [ ] Lot rows sorted by open_date ascending
 - [ ] Long-term lots (>365d) highlighted
-- [ ] Total row shows weighted avg cost
-- [ ] Closes cleanly, no stale data shown
+- [ ] No duplicate component created — `HoldingLotsDrawer.tsx` must NOT be created
 
 ---
 
@@ -558,11 +549,11 @@ TOTAL       180     $412.10
 **Type**: impl
 **depends_on**: none
 **Target files**:
-- `apps/worldview-web/components/watchlist/WatchlistInsightsPanel.tsx` (NEW)
-- `apps/worldview-web/lib/query/keys.ts` — add `qk.watchlistInsights(id)`
+- `apps/worldview-web/components/watchlist/WatchlistInsightsPanel.tsx` (NEW display component)
+- `apps/worldview-web/lib/query/keys.ts` — `qk.watchlists.insights(watchlistId)` **already exists**; use it, do NOT add a duplicate `qk.watchlistInsights(id)` key
 
 **What to build**:
-Compact panel showing watchlist aggregate stats. Calls `GET /v1/watchlists/{id}/insights`.
+Compact panel showing watchlist aggregate stats. Calls `GET /v1/watchlists/{id}/insights`. Note: `get_watchlist_insights()` **already exists** in `clients/portfolio.py` — use this existing function; do NOT re-implement the client.
 
 **Visual spec**:
 ```
@@ -599,47 +590,39 @@ SECTORS: TECH 42% · SEMI 28% · COMM 15% · OTHER 15%
 **Depends on**: none (endpoints already exist)
 **Estimated effort**: 2h
 
-#### T-C-1-01: `InsiderTransactionsTable` component (NEW)
+#### T-C-1-01: `InsiderActivityList` component (NEW — Quote tab variant)
 
 **Type**: impl
 **depends_on**: none
 **Target files**:
-- `apps/worldview-web/components/instrument/quote/InsiderTransactionsTable.tsx` (NEW)
-- `apps/worldview-web/lib/query/keys.ts` — add `qk.insiderTransactions(id)`
+- `apps/worldview-web/components/instrument/quote/InsiderActivityList.tsx` (NEW — Quote tab variant; do NOT confuse with the existing `components/instrument/financials/InsiderTransactionsTable.tsx` which is a full prop-driven table shipped in W3)
+- `apps/worldview-web/lib/query/keys.ts` — add `qk.instruments.insiderActivity(instrumentId)` if not present
 
 **What to build**:
-Dense table of recent insider trades. Calls `GET /v1/fundamentals/{id}/insider-transactions`. The EODHD response is a JSONB blob — parse the `InsiderTransactions.transactions` array from the `data` field.
+Compact self-fetching list of the 5 most recent insider trades for the Quote tab. The full 8-row detailed table (`InsiderTransactionsTable.tsx`) is already on the Financials tab. This is a lighter Quote-tab version: self-fetching, max 5 rows, smaller than the Financials variant, linking to the Financials tab for the full view.
 
-**Expected EODHD shape** (from `data` JSONB in `FundamentalsRecordResponse`):
-```
-transactions: [{
-  date, ownerName, ownerRelationship, transactionCode,
-  transactionAmount, transactionPrice, transactionAcquiredDisposed,
-  postTransactionAmount, secLink
-}]
-```
+Calls `GET /v1/fundamentals/{id}/insider-transactions`. The EODHD response is a JSONB blob — parse the `InsiderTransactions.transactions` array from the `data` field. Reuse the dict-of-dicts detection logic from `InsiderTransactionsTable.tsx` (see `isDictOfDicts` from `@/lib/eohdUtils`).
 
-**Visual spec** (22px rows, monospace):
+**Visual spec** (22px rows, monospace, max 5 rows):
 ```
-INSIDER TRANSACTIONS                             [30D · 90D · 1Y ▾]
-DATE         INSIDER              ROLE         TX    SHARES    PRICE
-2026-05-10   Tim Cook             CEO          BUY   10,000   $182.40
-2026-04-28   Luca Maestri         CFO          SELL   5,000   $178.90
-2026-03-15   Arthur D. Levinson   Director     BUY    2,500   $175.20
+INSIDER ACTIVITY                              [View all →]
+DATE         INSIDER         TX    SHARES    PRICE
+2026-05-10   Tim Cook        BUY   10,000   $182.40
+2026-04-28   Luca Maestri    SELL   5,000   $178.90
 ```
 
-Colour: BUY = text-positive, SELL = text-negative. `secLink` opens SEC filing in new tab.
+Colour: BUY = text-positive, SELL = text-negative. "View all →" link switches to Financials tab.
 
 **Props**: `instrumentId: string`
-**Query key**: `qk.insiderTransactions(instrumentId)` → `["fundamentals","insider-transactions",instrumentId]`
+**Query key**: `qk.instruments.insiderActivity(instrumentId)` (check keys.ts; add if absent)
 **staleTime**: 1h
 
 **Acceptance criteria**:
-- [ ] Table renders recent insider transactions from EODHD data
+- [ ] Shows max 5 rows (full table is on Financials tab)
 - [ ] BUY/SELL colour coding applied
-- [ ] SEC link opens in new tab
-- [ ] Empty state: "No recent insider transactions"
-- [ ] JSONB parsing handles missing keys gracefully (optional chaining, no crashes)
+- [ ] Self-fetching (no prop drilling from parent)
+- [ ] Empty state: "No recent insider activity"
+- [ ] Does NOT create a duplicate of `financials/InsiderTransactionsTable.tsx`
 
 ---
 
@@ -710,7 +693,7 @@ Wire `InsiderTransactionsTable` into the Quote tab (below analyst sidebar) and `
 **Type**: impl
 **depends_on**: [T-A-1-01]
 **Target files**:
-- `apps/worldview-web/components/instrument/intelligence/NewsColumn.tsx` (or `NewsItem.tsx`)
+- `apps/worldview-web/components/instrument/intelligence/news/NewsColumn.tsx` (CORRECT path — includes `news/` subdir; NOT `intelligence/NewsColumn.tsx`)
 - `apps/worldview-web/components/ui/sentiment-badge.tsx` (NEW shared primitive)
 
 **What to build**:
@@ -933,8 +916,8 @@ const INDUSTRY_COLORS: Record<string, string> = {
 **depends_on**: none
 **blocks**: [T-F-1-01]
 **Target files**:
-- `services/api-gateway/src/api_gateway/routes/screener.py` (new route in existing file)
-- `services/api-gateway/src/api_gateway/schemas/screener.py` (new request/response schemas)
+- `services/api-gateway/src/api_gateway/routes/market.py` (add new route here — `routes/screener.py` does NOT exist; all screener endpoints `/fundamentals/screen*` are in `market.py`)
+- `services/api-gateway/src/api_gateway/schemas/screener.py` (add `NLScreenerRequest` + `NLScreenerResponse` here — file exists)
 
 **What to build**:
 New S9 endpoint `POST /v1/screener/nl-translate` that:
@@ -994,16 +977,16 @@ class NLScreenerResponse(BaseModel):
 **depends_on**: none
 **blocks**: [T-A-2-02]
 **Target files**:
-- `services/nlp-pipeline/src/nlp_pipeline/api/routers/analytics.py` (NEW router file)
+- `services/nlp-pipeline/src/nlp_pipeline/api/routes/analytics.py` (NEW — directory is `api/routes/` NOT `api/routers/`; the actual existing route files are in `api/routes/`)
 - `services/nlp-pipeline/src/nlp_pipeline/application/use_cases/get_entity_sentiment_timeseries.py` (NEW)
 - `services/nlp-pipeline/src/nlp_pipeline/application/ports/repositories.py` (extend with new port method)
 
 **What to build**:
 New internal S6 endpoint `GET /api/v1/entities/{entity_id}/sentiment-timeseries` that runs the aggregation SQL from T-A-2-02, using the `ReadOnlyUnitOfWork`.
 
-**Port interface** (add to existing `repositories.py`):
+**Port interface** (add method to existing `DocumentSourceMetadataRepository` ABC — NOT `IDocumentRepository` which does not exist; actual class is `DocumentSourceMetadataRepository` at line 173 of `repositories.py`):
 ```python
-class IDocumentRepository(ABC):
+class DocumentSourceMetadataRepository(ABC):
     ...
     @abstractmethod
     async def get_entity_sentiment_timeseries(
@@ -1102,7 +1085,7 @@ Complete the `GET /v1/market/yield-curve` endpoint. Strategy: use `POST /v1/quot
 **Target files**:
 - `apps/worldview-web/lib/ta/indicators.ts` (NEW — TA computation library)
 - `apps/worldview-web/components/instrument/quote/TAOverlayPanel.tsx` (NEW)
-- `apps/worldview-web/components/instrument/quote/OHLCVChart.tsx` — extend to accept overlay data
+- `apps/worldview-web/components/instrument/chart/OHLCVChart.tsx` — extend to accept overlay data (CORRECT path — file is in `chart/`, not `quote/`)
 
 **What to build**:
 Client-side TA computation from the OHLCV bars already fetched. No new API calls.
@@ -1153,7 +1136,7 @@ Selected chips are highlighted. Each active indicator passes its computed series
 **Type**: impl
 **depends_on**: [T-F-1-01]
 **Target files**:
-- `apps/worldview-web/components/instrument/quote/QuoteTab.tsx` (or equivalent)
+- `apps/worldview-web/components/instrument/quote/QuoteTab.tsx` (confirmed at this path)
 
 **What to build**:
 Wire `TAOverlayPanel` and overlay props into the Quote tab layout. Selected indicators are stored in local React state (not URL/localStorage — session-only preference). OHLCVChart receives the computed overlay data.
@@ -1217,7 +1200,7 @@ The explanation line ("Interpreted as: ...") comes from the `explanation` field 
 **Target files**:
 - `apps/worldview-web/components/instrument/quote/SentimentOverlay.tsx` (NEW)
 - `apps/worldview-web/lib/query/keys.ts` — add `qk.entitySentimentTimeseries(entityId, days)`
-- `apps/worldview-web/components/instrument/quote/OHLCVChart.tsx` — add sentiment overlay support
+- `apps/worldview-web/components/instrument/chart/OHLCVChart.tsx` — add sentiment overlay support (CORRECT path — file is in `chart/`, not `quote/`)
 
 **What to build**:
 Optional chart overlay that shows daily sentiment score (positive_ratio − negative_ratio) as a secondary line, coloured green above 0 and red below. Toggled by a chip in the TAOverlayPanel.

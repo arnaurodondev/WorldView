@@ -50,6 +50,30 @@ export const PALETTE_WIDTH = 28;
  */
 export type Timeframe = "5M" | "1H" | "1D" | "1W" | "1M";
 
+/**
+ * ChartType — the three main price chart rendering modes.
+ *
+ * WHY three modes: candlestick is the institutional default (OHLC visible);
+ * line and area are useful for clean trend reading on high-noise timeframes
+ * (e.g., 5M scalping view where wicks crowd the display).
+ *
+ * "candle" — CandlestickSeries (existing, default)
+ * "line"   — LineSeries mapped to close price
+ * "area"   — AreaSeries mapped to close price
+ */
+export type ChartType = "candle" | "line" | "area";
+
+/**
+ * RangePreset — visible-range shortcuts that set the lightweight-charts
+ * timeScale viewport without changing the fetch timeframe.
+ *
+ * WHY different from Timeframe: Timeframe controls which bars are fetched
+ * (5-min vs daily vs weekly). RangePreset only moves the viewport over
+ * already-fetched bars — the data layer is unchanged. This lets a trader
+ * zoom a 1D chart to just the last year without fetching a new dataset.
+ */
+export type RangePreset = "YTD" | "3Y" | "5Y" | "ALL";
+
 // ── Terminal Dark chart theme ──────────────────────────────────────────────────
 //
 // WHY inline object (not CSS): lightweight-charts applies these via its own

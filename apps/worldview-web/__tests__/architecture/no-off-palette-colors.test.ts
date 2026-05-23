@@ -67,6 +67,9 @@ const ALLOWED_FILES = new Set<string>([
   // where CSS variables cannot be resolved (same constraint as createChartSeries).
   "components/instrument/intelligence/OpportunityPathsPanel.tsx",
   "components/instrument/quote/TAOverlayPanel.tsx",
+  // useChartSeries line/area series use #0EA5E9 as primary blue for the
+  // chart line colour — same lightweight-charts hex constraint as createChartSeries.
+  "components/instrument/chart/useChartSeries.ts",
 ]);
 
 // Retired Bloomberg-Dark / Midnight-Pro hex codes (must never appear in code).

@@ -58,11 +58,18 @@ export interface FinancialsTabProps {
   // The page-bundle in InstrumentPageClient supplies both — we receive the
   // instrument_id here.
   readonly instrumentId: string;
+  /**
+   * KG entity UUID (resolved from the page-bundle in InstrumentPageClient).
+   * WHY optional: FinancialsTab is reusable outside the full page shell where
+   * the bundle may not yet be available. When absent, PeerComparisonTable
+   * disables the COMPETITORS tab and shows a "KG entity not linked" message.
+   */
+  readonly entityId?: string;
 }
 
 // ── Component ─────────────────────────────────────────────────────────────────
 
-export function FinancialsTab({ instrumentId }: FinancialsTabProps) {
+export function FinancialsTab({ instrumentId, entityId }: FinancialsTabProps) {
   // ── Period toggle state (p chord) ─────────────────────────────────────────
   // WHY local state (not URL param): period choice is ephemeral — analysts
   // switch between annual/quarterly within a session but don't bookmark it.
@@ -149,14 +156,16 @@ export function FinancialsTab({ instrumentId }: FinancialsTabProps) {
             earnings — the natural next question an analyst asks. */}
         <FundamentalsTimeseriesChart instrumentId={instrumentId} />
 
-        {/* Block 4: 5-peer + self comparison table.
-            WHY pass peersData + fundamentals: PeerComparisonTable needs both
-            to populate the self-row (ticker/name/mktcap/pe from fundamentals)
-            and the peer rows (from peersData). */}
+        {/* Block 4: 5-peer + self comparison table with COMPETITORS toggle.
+            WHY pass entityId: the COMPETITORS tab uses the KG entity UUID
+            (not instrument_id) to call getSimilarEntities on the knowledge-graph
+            service. entityId is optional — when absent the COMPETITORS tab is
+            disabled with an explanatory message so the PEERS tab keeps working. */}
         <PeerComparisonTable
           peersData={peersData}
           instrumentId={instrumentId}
           fundamentals={fundamentals ?? null}
+          entityId={entityId}
         />
 
         {/* Block 5: insider transactions — 8 most-recent Form 4 filings. */}

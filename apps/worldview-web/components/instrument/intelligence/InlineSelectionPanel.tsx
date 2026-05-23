@@ -15,13 +15,34 @@
  *
  * HEIGHT: fixed 180 px with overflow-y-auto — tall enough for 5 evidence
  * snippets at 18 px each without pushing the graph off screen.
+ *
+ * LAZY ENTITY DETAIL (Task 1):
+ * When `selectedNode.description === null` (graph response didn't include a
+ * description — common for nodes that haven't been through the enrichment
+ * pipeline yet), this component fires a lazy `useQuery(qk.kg.entityDetail(id))`
+ * to fetch the full entity record and display the description.
+ * staleTime=30min — entity descriptions are stable for hours after 13J enrichment.
+ *
+ * EDGE EVIDENCE COUNT (Task 2):
+ * `evidence_count` is NOT present in the S9 `/v1/entities/{id}/graph` response.
+ * S9 returns `evidence_snippets: string[]` (a subset of raw text) and
+ * `relation_summary: string | null` on each edge, but no aggregate count field.
+ * Future enhancement: add `evidence_count: number` to S7 RelationResponse and
+ * surface it via S9's `_transform_graph_response()`. Until then, we display
+ * snippet count from the already-loaded `evidence_snippets` array length.
  */
 
 "use client";
-// WHY "use client": onClick callbacks require browser context.
+// WHY "use client": useQuery + onClick callbacks both require browser context.
 
+import { useQuery } from "@tanstack/react-query";
 import { X } from "lucide-react";
+import { Skeleton } from "@/components/ui/skeleton";
 import { cn } from "@/lib/utils";
+import { useAccessToken } from "@/lib/api-client";
+import { apiFetch } from "@/lib/api/_client";
+import { qk } from "@/lib/query/keys";
+import type { EntityPublic } from "@/types/api";
 import type { SelectedEdgeInfo } from "@/components/instrument/EntityGraph";
 
 // ── Node selection type (sourced from GraphEvents.clickNode callback) ─────────
@@ -107,6 +128,62 @@ function weightBar(weight: number): React.ReactElement {
 // ── Component ─────────────────────────────────────────────────────────────────
 
 export function InlineSelectionPanel({ selectedNode, selectedEdge, onClear }: InlineSelectionPanelProps) {
+  // WHY useAccessToken at component level (not inside the conditional):
+  // React hooks must be called unconditionally (Rules of Hooks). We always call
+  // this hook; the `enabled` guard below prevents any network request when not needed.
+  const token = useAccessToken();
+
+  // ── Lazy entity detail fetch (Task 1) ────────────────────────────────────
+  // WHY: The graph response populates `description` from S7 EntitySummary, but
+  // many graph nodes are not yet enriched — their description field arrives as
+  // null. When that happens we fire a targeted GET /v1/entities/{id} call to
+  // fetch the full EntityPublic record and surface the description from there.
+  //
+  // WHY enabled guard: `description === null` (not undefined) means the graph
+  // response explicitly returned null — we need to fall back. `undefined` would
+  // mean the field was missing entirely from the graph response (shouldn't
+  // happen after B-01, but guard it anyway). We never fire when description is
+  // already a non-null string — no point fetching what we already have.
+  //
+  // WHY staleTime=30min: entity descriptions are written once by 13J enrichment
+  // and rarely updated. Caching for 30 minutes avoids re-fetching on every node
+  // click and matches the staleTime used in EntityOverviewBlock for the same endpoint.
+  //
+  // WHY we silently hide on error (not show a banner):
+  // The node click itself is working — the panel shows label, type, edges.
+  // A failed description fetch is a minor data gap, not an action-blocking error.
+  // Showing an error banner for a description would confuse analysts who need the
+  // relation data (which loaded fine) more than the description.
+  const detailQuery = useQuery<EntityPublic | null>({
+    queryKey: qk.kg.entityDetail(selectedNode?.id ?? ""),
+    queryFn: () =>
+      apiFetch<EntityPublic>(
+        `/v1/entities/${encodeURIComponent(selectedNode!.id)}`,
+        { token: token ?? undefined },
+      ),
+    // WHY this enabled condition:
+    //   1. selectedNode must exist (obvious — we're in node mode)
+    //   2. description must be null — if it's a non-null string we already have it
+    //   3. token must be available — no point firing without auth
+    enabled: selectedNode?.description === null && !!selectedNode?.id && !!token,
+    staleTime: 30 * 60 * 1000,
+    // WHY retry:1 — mirrors EntityOverviewBlock pattern (F-156). Default retry=3
+    // with backoff stalls the UI for ~30s; one retry is enough for transient blips.
+    retry: 1,
+  });
+
+  // Resolve the description to display: prefer graph attrs (non-null string),
+  // then fall back to the lazy-fetched entity detail, then nothing.
+  const resolvedDescription: string | null =
+    selectedNode?.description ??
+    detailQuery.data?.description ??
+    null;
+
+  // WHY isLoading (not isPending): isLoading=true only when the query is
+  // fetching for the first time AND enabled=true. isPending is true even when
+  // disabled — using it would show the skeleton on every node click.
+  const isDescriptionLoading = detailQuery.isLoading;
+
   if (!selectedNode && !selectedEdge) return null;
 
   return (
@@ -150,10 +227,27 @@ export function InlineSelectionPanel({ selectedNode, selectedEdge, onClear }: In
               </span>
             )}
           </div>
-          {selectedNode.description && (
+          {/* ── Description row (with lazy-fetch fallback) ───────────────
+              WHY show skeleton on loading (not empty gap):
+              An empty gap between "3 connections" and the first edge row would
+              look like a layout bug. A single skeleton row communicates "data
+              inbound" clearly without jank. We only show the skeleton when the
+              lazy fetch is in flight AND the graph attrs description is null —
+              if the graph already had a description we skip the fetch entirely.
+
+              WHY NOT show error state: description fetch failure is silent.
+              The panel still shows label, type, sector, and all edge rows —
+              the core information the analyst needs. A description is additive
+              context, not load-bearing data. */}
+          {isDescriptionLoading && (
+            <div className="px-3 py-1 border-b border-border/20" aria-label="Loading description">
+              <Skeleton className="h-2.5 w-full rounded-[2px]" />
+            </div>
+          )}
+          {!isDescriptionLoading && resolvedDescription && (
             <div className="px-3 py-1 border-b border-border/20">
               <p className="text-[10px] text-muted-foreground/80 leading-snug line-clamp-2">
-                {selectedNode.description}
+                {resolvedDescription}
               </p>
             </div>
           )}
