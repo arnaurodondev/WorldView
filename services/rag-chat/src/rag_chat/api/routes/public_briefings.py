@@ -172,12 +172,23 @@ async def get_morning_briefing(request: Request) -> PublicBriefingResponse:
     # portfolio-aware path that invokes BriefingContextGatherer (S1/S3/S5/S6/S7),
     # renders the MORNING_BRIEFING prompt, and returns content/risk_summary/citations.
     # Calling execute() here would use the email brief path with no frontend context.
+    #
+    # WHY set_current_jwt here: InternalJWTMiddleware sets the ContextVar when it
+    # validates the incoming JWT.  However, some code paths (e.g. tests that bypass
+    # the middleware, or future background-task execution) do not go through the
+    # middleware.  Explicitly setting the ContextVar here before any upstream HTTP
+    # call is made guarantees that BaseUpstreamClient._get()/_post() — which read
+    # get_current_jwt() — always have a valid token for S6/S7 calls (prevents 401).
+    from rag_chat.infrastructure.clients.auth_context import set_current_jwt
+
+    internal_jwt = request.headers.get("X-Internal-JWT")
+    set_current_jwt(internal_jwt)
     uc = _get_briefing_uc(request)
     try:
         result = await uc.execute_public_morning(
             user_id=user_id,
             tenant_id=tenant_id,
-            internal_jwt=request.headers.get("X-Internal-JWT"),
+            internal_jwt=internal_jwt,
         )
     except RateLimitExceededError as e:
         raise HTTPException(status_code=429, detail=str(e)) from e
@@ -272,6 +283,13 @@ async def get_instrument_briefing(entity_id: str, request: Request) -> PublicBri
     # assembles S7 graph + S3 fundamentals + S6 news, and renders the v3.0
     # INSTRUMENT_BRIEFING prompt.  Calling execute() here would use the
     # portfolio/email brief path with no entity context (PRD-0030 bug fix).
+    #
+    # WHY set_current_jwt here: same rationale as get_morning_briefing — ensures
+    # BaseUpstreamClient._get()/_post() calls to S6/S7 always carry the JWT even
+    # when code paths bypass InternalJWTMiddleware (e.g. tests, background tasks).
+    from rag_chat.infrastructure.clients.auth_context import set_current_jwt
+
+    set_current_jwt(request.headers.get("X-Internal-JWT"))
     uc = _get_briefing_uc(request)
     try:
         result = await uc.execute_public_instrument(entity_id=entity_id)
