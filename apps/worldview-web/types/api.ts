@@ -498,6 +498,11 @@ export interface GraphEdge {
   relation_summary?: string | null;
   /** Top evidence text snippets (max 3, from relation_evidence_raw). */
   evidence_snippets?: string[];
+  /** Semantic orientation relative to the center entity.
+   *  "outbound" = center is subject (e.g. Apple employs Tim Cook),
+   *  "inbound"  = center is object (e.g. TSMC supplier_of Apple),
+   *  "lateral"  = edge between two non-center entities at depth>1. */
+  direction?: "outbound" | "inbound" | "lateral" | null;
 }
 
 export interface EntityGraph {

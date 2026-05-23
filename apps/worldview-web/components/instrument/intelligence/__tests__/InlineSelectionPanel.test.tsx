@@ -43,6 +43,7 @@ const mockEdge: SelectedEdgeInfo = {
   targetId: "node-002",
   sourceLabel: "Apple Inc.",
   targetLabel: "Microsoft",
+  direction: "outbound",
 };
 
 // ── Tests ────────────────────────────────────────────────────────────────────
@@ -143,5 +144,27 @@ describe("InlineSelectionPanel", () => {
       />,
     );
     expect(screen.getByText(/1 connection$/i)).toBeInTheDocument();
+  });
+
+  // QW-3 — edge mode: direction badge shows "outbound" / "inbound" / hidden for lateral
+  it("shows 'outbound' direction badge on outbound edge", () => {
+    render(
+      <InlineSelectionPanel selectedNode={null} selectedEdge={{ ...mockEdge, direction: "outbound" }} onClear={vi.fn()} />,
+    );
+    expect(screen.getByText(/outbound/i)).toBeInTheDocument();
+  });
+
+  it("shows 'inbound' direction badge on inbound edge", () => {
+    render(
+      <InlineSelectionPanel selectedNode={null} selectedEdge={{ ...mockEdge, direction: "inbound" }} onClear={vi.fn()} />,
+    );
+    expect(screen.getByText(/inbound/i)).toBeInTheDocument();
+  });
+
+  it("hides direction badge for lateral edges", () => {
+    render(
+      <InlineSelectionPanel selectedNode={null} selectedEdge={{ ...mockEdge, direction: "lateral" }} onClear={vi.fn()} />,
+    );
+    expect(screen.queryByText(/outbound|inbound/i)).not.toBeInTheDocument();
   });
 });

@@ -138,6 +138,21 @@ export function InlineSelectionPanel({ selectedNode, selectedEdge, onClear }: In
             <span className="text-[11px] font-medium text-foreground/90 truncate max-w-[120px]">
               {selectedEdge.targetLabel}
             </span>
+            {/* WHY direction badge: asymmetric types (employs, acquired_by, subsidiary_of)
+                read differently depending on which entity is the subject. Showing outbound/inbound
+                lets analysts immediately understand the semantic orientation. */}
+            {selectedEdge.direction && selectedEdge.direction !== "lateral" && (
+              <span
+                className={cn(
+                  "text-[8px] font-mono uppercase tracking-wider px-1 py-0.5 rounded shrink-0",
+                  selectedEdge.direction === "outbound"
+                    ? "text-positive/80 bg-positive/10"
+                    : "text-chart-2/80 bg-chart-2/10",
+                )}
+              >
+                {selectedEdge.direction}
+              </span>
+            )}
             <span className="ml-auto shrink-0">{weightBar(selectedEdge.weight)}</span>
           </div>
 

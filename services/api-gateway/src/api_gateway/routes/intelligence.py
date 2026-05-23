@@ -98,6 +98,18 @@ def _transform_graph_response(raw: dict[str, Any]) -> dict[str, Any]:
         tgt = str(rel.get("object_entity_id") or "")
         if not rel_id or not src or not tgt:
             continue
+        # WHY direction: asymmetric relation types (employs, has_executive, acquired_by,
+        # subsidiary_of, supplier_of, regulates) are semantically different depending on
+        # which entity is the subject vs object. "outbound" = center entity is the
+        # subject (the initiating/owning side); "inbound" = center entity is the object
+        # (the receiving side); "lateral" = edge between two non-center entities (depth>1).
+        if entity_id and src == entity_id:
+            direction = "outbound"
+        elif entity_id and tgt == entity_id:
+            direction = "inbound"
+        else:
+            direction = "lateral"
+
         edges.append(
             {
                 "id": rel_id,
@@ -115,6 +127,7 @@ def _transform_graph_response(raw: dict[str, Any]) -> dict[str, Any]:
                 # edgeReducer (PERMANENT/DURABLE=1.0, SLOW/MEDIUM=0.7, FAST/EPHEMERAL=0.4).
                 # None when S7 omits it — frontend defaults to MEDIUM opacity.
                 "decay_class": rel.get("decay_class") or None,  # str | None
+                "direction": direction,  # "outbound" | "inbound" | "lateral"
             }
         )
 

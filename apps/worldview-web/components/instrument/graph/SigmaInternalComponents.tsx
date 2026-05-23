@@ -90,6 +90,8 @@ export interface SelectedEdgeInfo {
   targetId: string;
   sourceLabel: string;
   targetLabel: string;
+  /** "outbound" = center entity is subject; "inbound" = center entity is object; "lateral" = depth>1 edge */
+  direction?: "outbound" | "inbound" | "lateral" | null;
 }
 
 interface GraphEventsProps {
@@ -167,6 +169,7 @@ export function GraphEvents({ centerEntityId, onNodeHover, onEdgeHover, onNodeCl
           targetId: tgt,
           sourceLabel: (graph.getNodeAttribute(src, "label") as string | undefined) ?? src,
           targetLabel: (graph.getNodeAttribute(tgt, "label") as string | undefined) ?? tgt,
+          direction: (attrs.direction as "outbound" | "inbound" | "lateral" | null | undefined) ?? null,
         });
       },
     });
@@ -226,6 +229,8 @@ export function GraphLoader({ data, centerEntityId, layout }: GraphLoaderProps) 
             // reads them via sigma.getEdgeAttributes() in the enterEdge event
             // handler — avoids a separate lookup into the raw EntityGraph data.
             evidence_snippets: edge.evidence_snippets ?? [],
+            relation_summary: edge.relation_summary ?? null,
+            direction: edge.direction ?? null,
             size: Math.max(0.5, edge.weight * 2),
             color: "#18181B",
           });
