@@ -419,28 +419,60 @@ class BriefingContextGatherer:
         entity_id: str,
         entity_name: str,
     ) -> list[EnrichedChunkResult]:
-        """ANN chunk search filtered to entity across all document types.
+        """ANN chunk search for an entity — two-stage filtered/unfiltered fallback.
 
-        Uses entity_ids filter so only chunks mentioning this entity surface.
-        No source_type filter: HNSW only scores top_k candidates globally and
-        sparse source types (sec_edgar ≈ 2% of index) never appear in those
-        candidates, yielding 0 results.  chunk granularity returns full text
-        (stored in MinIO) rather than section headings only.
+        Stage 1 (filtered): search with entity_ids=[entity_id] so only chunks
+        that explicitly mention this entity are returned.  This is the preferred
+        result because it prevents generic entity names (e.g. "Capital", "General")
+        from pulling in unrelated documents.
+
+        Stage 2 (unfiltered fallback): if the filtered search returns fewer than
+        3 results the entity embedding may be too sparse for the HNSW index to
+        find enough candidates — e.g. Apple chunks are only ~0.6% of the index.
+        In that case we fall back to an unfiltered ANN search using the entity
+        name as the query text; the high min_score (0.55) ensures relevance.
+
+        No source_type filter in either stage: HNSW only scores top_k candidates
+        globally, so sparse source types (sec_edgar ≈ 2%) never appear in those
+        candidates when a WHERE clause eliminates all HNSW candidates first.
         """
-        # No entity_ids or source_type filter: HNSW ANN only scores top_k
-        # candidates globally. Apple entity chunks are 0.6% of the index;
-        # entity_id and source_type WHERE filters eliminate all HNSW candidates.
-        # query_text=entity_name provides semantic signal to surface relevant
-        # chunks; the high min_score (0.55) ensures relevance without filters.
-        request = ChunkSearchRequest(
+        fallback_threshold = 3  # minimum results before we prefer filtered
+
+        # Stage 1: entity-filtered search — avoids cross-entity pollution for
+        # generic names like "General" (General Motors) or "Capital" (fund names).
+        filtered_request = ChunkSearchRequest(
             query_text=entity_name,
             top_k=12,
             min_score=0.55,
             granularity="chunk",
             include_entities=False,
             search_type="ann",
+            entity_ids=[UUID(entity_id)],
         )
-        return await self._s6.search_chunks(request)
+        filtered_results = await self._s6.search_chunks(filtered_request)
+
+        if len(filtered_results) >= fallback_threshold:
+            # Enough entity-specific chunks found — use them without pollution risk.
+            return filtered_results
+
+        # Stage 2: fallback to unfiltered search when entity embeddings are sparse.
+        # Logs at debug level so it's visible during tuning without alarming on-call.
+        log.debug(
+            "entity_chunk_search_fallback_unfiltered",
+            entity_id=entity_id,
+            filtered_count=len(filtered_results),
+            threshold=fallback_threshold,
+        )
+        unfiltered_request = ChunkSearchRequest(
+            query_text=entity_name,
+            top_k=12,
+            min_score=0.55,
+            granularity="chunk",
+            include_entities=False,
+            search_type="ann",
+            # No entity_ids — relies on min_score threshold for relevance.
+        )
+        return await self._s6.search_chunks(unfiltered_request)
 
     def _map_entity_graph(
         self,

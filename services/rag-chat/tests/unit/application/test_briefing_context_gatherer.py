@@ -79,6 +79,10 @@ def _make_s6(
     chunks: list[EnrichedChunkResult] | None = None,
     fail: bool = False,
     chunks_fail: bool = False,
+    # F-155: two-stage search support — supply separate responses for
+    # the first (filtered) and second (unfiltered) search_chunks calls.
+    # When provided, filtered_chunks controls call 1 and chunks controls call 2.
+    filtered_chunks: list[EnrichedChunkResult] | None = None,
 ) -> MagicMock:
     """Create a mock S6Client with configurable news + chunk search responses."""
     s6 = MagicMock()
@@ -89,6 +93,9 @@ def _make_s6(
         s6._get = AsyncMock(return_value={"articles": news_articles or []})
         if chunks_fail:
             s6.search_chunks = AsyncMock(side_effect=RuntimeError("chunk search failed"))
+        elif filtered_chunks is not None:
+            # Two-stage: first call returns filtered_chunks, second call returns chunks.
+            s6.search_chunks = AsyncMock(side_effect=[filtered_chunks, chunks or []])
         else:
             s6.search_chunks = AsyncMock(return_value=chunks or [])
     return s6
@@ -463,9 +470,14 @@ async def test_gather_instrument_entity_not_found() -> None:
 
 
 async def test_gather_instrument_chunks_populated() -> None:
-    """search_chunks returns 2 results — BriefingContext.relevant_chunks has them."""
+    """Filtered search returns 2 results (<3 threshold) — unfiltered fallback used.
+
+    F-155: stage-1 filtered call returns only 2 chunks, which is below the
+    threshold of 3, so stage-2 unfiltered is also called and its results
+    are returned.  Both calls use query_text=canonical_name and search_type=ann.
+    """
     graph = _sample_graph()
-    chunks = _sample_chunks()
+    chunks = _sample_chunks()  # 2 results — below the ≥3 threshold
     s1 = _make_s1()
     s3 = _make_s3(
         instrument_id=_INSTRUMENT_ID,
@@ -473,7 +485,8 @@ async def test_gather_instrument_chunks_populated() -> None:
         fundamentals={"pe_ratio": 25.0},
     )
     s5 = _make_s5()
-    s6 = _make_s6(news_articles=_sample_news_raw(), chunks=chunks)
+    # filtered_chunks=[] (stage 1 returns 0) → unfiltered fallback returns `chunks`
+    s6 = _make_s6(news_articles=_sample_news_raw(), filtered_chunks=[], chunks=chunks)
     s7 = _make_s7(graph=graph, events=_sample_events())
 
     gatherer = BriefingContextGatherer(s1=s1, s3=s3, s5=s5, s6=s6, s7=s7)
@@ -484,14 +497,18 @@ async def test_gather_instrument_chunks_populated() -> None:
     assert ctx.relevant_chunks[0].chunk_id == "chunk-001"
     assert ctx.relevant_chunks[0].source_type == "earnings_transcript"
     assert ctx.relevant_chunks[1].source_type == "sec_filing"
-    # search_chunks was called with query_text=entity_name and no entity_ids/source_types
-    # (entity_id and source_type WHERE filters cause HNSW to return 0 results for sparse chunks)
-    s6.search_chunks.assert_called_once()
-    call_arg = s6.search_chunks.call_args[0][0]  # positional arg 0 = ChunkSearchRequest
-    assert call_arg.query_text == "Apple Inc."  # canonical_name from graph
-    assert call_arg.entity_ids is None
-    assert call_arg.source_types is None or call_arg.source_types == []
-    assert call_arg.search_type == "ann"
+    # search_chunks called twice: stage 1 (filtered) then stage 2 (unfiltered fallback)
+    assert s6.search_chunks.call_count == 2
+    first_call_arg = s6.search_chunks.call_args_list[0][0][0]
+    second_call_arg = s6.search_chunks.call_args_list[1][0][0]
+    # Stage 1: must include entity_ids filter
+    assert first_call_arg.query_text == "Apple Inc."
+    assert first_call_arg.entity_ids == [UUID(_ENTITY_ID)]
+    assert first_call_arg.search_type == "ann"
+    # Stage 2: must NOT include entity_ids (unfiltered fallback)
+    assert second_call_arg.query_text == "Apple Inc."
+    assert second_call_arg.entity_ids is None
+    assert second_call_arg.search_type == "ann"
 
 
 # ── Test: Instrument — chunk search failure degrades gracefully ──────────────
@@ -539,3 +556,111 @@ async def test_gather_morning_relevant_chunks_empty() -> None:
     assert ctx.relevant_chunks == []
     # search_chunks should not have been called for morning briefings
     s6.search_chunks.assert_not_called()
+
+
+# ── F-155: Two-stage HNSW chunk search (filtered → unfiltered fallback) ──────
+
+
+def _make_3_chunks() -> list[EnrichedChunkResult]:
+    """Three chunks — meets the >=3 threshold for the filtered-result fast path."""
+    return [
+        EnrichedChunkResult(
+            chunk_id=f"chunk-{i:03d}",
+            doc_id=f"doc-{i:03d}",
+            text=f"Chunk text {i}",
+            score=0.80 - i * 0.02,
+            source_type="earnings_transcript",
+            title=f"Earnings Call Q{i}",
+            url=f"https://example.com/q{i}",
+        )
+        for i in range(3)
+    ]
+
+
+async def test_f155_filtered_search_gte_3_skips_unfiltered() -> None:
+    """F-155: filtered search returns >=3 results -- unfiltered search is NOT called.
+
+    When entity-filtered ANN finds enough candidates the fallback must be skipped
+    entirely to avoid cross-entity chunk pollution for generic entity names.
+    """
+    graph = _sample_graph()
+    three_chunks = _make_3_chunks()
+    s1 = _make_s1()
+    s3 = _make_s3(
+        instrument_id=_INSTRUMENT_ID,
+        quote={"last": "175.50", "timestamp": datetime.now(tz=UTC).isoformat()},
+        fundamentals={"pe_ratio": 25.0},
+    )
+    s5 = _make_s5()
+    # Stage 1 returns 3 chunks (>= threshold) -- stage 2 must never be called.
+    # Pass filtered_chunks=three_chunks and chunks=[] (stage-2 would return []).
+    s6 = _make_s6(news_articles=_sample_news_raw(), filtered_chunks=three_chunks, chunks=[])
+    s7 = _make_s7(graph=graph, events=_sample_events())
+
+    gatherer = BriefingContextGatherer(s1=s1, s3=s3, s5=s5, s6=s6, s7=s7)
+    ctx = await gatherer.gather_instrument_context(_ENTITY_ID)
+
+    # Only stage-1 (filtered) was called -- exactly once.
+    assert s6.search_chunks.call_count == 1
+    call_arg = s6.search_chunks.call_args_list[0][0][0]
+    assert call_arg.entity_ids == [UUID(_ENTITY_ID)], "stage-1 must filter by entity_id"
+    assert call_arg.query_text == "Apple Inc."
+
+    # The 3 filtered chunks must be returned verbatim.
+    assert len(ctx.relevant_chunks) == 3
+    assert ctx.relevant_chunks[0].chunk_id == "chunk-000"
+
+
+async def test_f155_filtered_search_lt_3_uses_unfiltered_fallback() -> None:
+    """F-155: filtered search returns <3 results -- unfiltered fallback IS called.
+
+    Entities with sparse embeddings (few indexed chunks) should still produce
+    useful context by falling back to the unfiltered ANN search.  The unfiltered
+    results are returned even if they are fewer than the threshold.
+    """
+    graph = _sample_graph()
+    unfiltered_chunks = _sample_chunks()  # 2 chunks returned by stage 2
+
+    s1 = _make_s1()
+    s3 = _make_s3(
+        instrument_id=_INSTRUMENT_ID,
+        quote={"last": "175.50", "timestamp": datetime.now(tz=UTC).isoformat()},
+        fundamentals={"pe_ratio": 25.0},
+    )
+    s5 = _make_s5()
+    # Stage 1 returns 1 chunk (<3 threshold) -> stage 2 (unfiltered) must be called.
+    one_chunk = [
+        EnrichedChunkResult(
+            chunk_id="chunk-filtered",
+            doc_id="doc-filtered",
+            text="Only matching filtered chunk.",
+            score=0.75,
+            source_type="sec_filing",
+            title="Sparse entity 10-K",
+            url="https://sec.gov/sparse",
+        )
+    ]
+    s6 = _make_s6(
+        news_articles=_sample_news_raw(),
+        filtered_chunks=one_chunk,
+        chunks=unfiltered_chunks,
+    )
+    s7 = _make_s7(graph=graph, events=_sample_events())
+
+    gatherer = BriefingContextGatherer(s1=s1, s3=s3, s5=s5, s6=s6, s7=s7)
+    ctx = await gatherer.gather_instrument_context(_ENTITY_ID)
+
+    # Both stages were called.
+    assert s6.search_chunks.call_count == 2
+
+    # Stage 1: filtered (entity_ids set).
+    first_call = s6.search_chunks.call_args_list[0][0][0]
+    assert first_call.entity_ids == [UUID(_ENTITY_ID)]
+
+    # Stage 2: unfiltered (entity_ids is None).
+    second_call = s6.search_chunks.call_args_list[1][0][0]
+    assert second_call.entity_ids is None
+
+    # Unfiltered results are returned.
+    assert len(ctx.relevant_chunks) == 2
+    assert ctx.relevant_chunks[0].chunk_id == "chunk-001"

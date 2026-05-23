@@ -57,7 +57,7 @@ _VALID_ENTITY_TYPES: frozenset[str] = frozenset(
         "index",
         "currency",
         "unknown",
-    }
+    },
 )
 
 # Map legacy or LLM-invented aliases to a canonical type.
@@ -74,11 +74,12 @@ _ENTITY_TYPE_ALIASES: dict[str, str] = {
     "enterprise": "financial_instrument",
     "firm": "financial_instrument",
     "business": "financial_instrument",
-    # organization variants → financial_instrument (F-009: organizations are most
-    # commonly companies/institutions that trade or have a financial presence;
-    # mapping to 'unknown' was discarding meaningful classification signal)
-    "organization": "financial_instrument",
-    "organisation": "financial_instrument",
+    # 'organization'/'organisation' → 'unknown': too broad to safely assume FI;
+    # covers regulators, NGOs, non-profits. The prompt fix (F-009) prevents the
+    # LLM from emitting these; alias is the safety net for legacy/fallback data.
+    # Migration 0039 established this mapping — do not promote to financial_instrument.
+    "organization": "unknown",
+    "organisation": "unknown",
     "inst": "financial_instrument",
     "institution": "financial_instrument",
     "regulator": "unknown",  # regulators (SEC, Fed) are not financial instruments
