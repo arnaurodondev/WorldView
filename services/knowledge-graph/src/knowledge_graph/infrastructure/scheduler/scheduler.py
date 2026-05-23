@@ -785,9 +785,15 @@ def _add_structured_enrichment_worker(
 def _build_description_client(settings: Settings, valkey_client: Any | None = None) -> Any:
     """Construct the EntityDescriptionClient based on ``KNOWLEDGE_GRAPH_DESCRIPTION_PROVIDER``.
 
-    - ``"deepinfra"`` → ``DeepInfraDescriptionAdapter`` (Qwen3-235B-A22B primary, Qwen3-32B fallback).
-    - ``"gemini"``    → ``GeminiDescriptionAdapter`` (gemini-3.1-flash-lite).
+    Provider values:
+    - ``"deepinfra"`` → ``ChainedDescriptionAdapter([DeepInfraDescriptionAdapter, GeminiDescriptionAdapter?])``
+                        DeepInfra (Qwen3-235B-A22B) is primary; Gemini is wired as fallback when
+                        ``KNOWLEDGE_GRAPH_GEMINI_API_KEY`` is also set.
+    - ``"gemini"``    → ``GeminiDescriptionAdapter`` alone (gemini-3.1-flash-lite).
     - anything else  → ``NullDescriptionAdapter`` (no external calls; fallback template always used).
+
+    Chain ordering (BP-RC8):
+        DeepInfra (primary) → Gemini (fallback 1) → None → deterministic stub
 
     Args:
     ----
@@ -802,31 +808,65 @@ def _build_description_client(settings: Settings, valkey_client: Any | None = No
     provider = settings.description_provider.lower()
 
     if provider == "deepinfra":
-        api_key = settings.deepinfra_api_key.get_secret_value()  # DEF-005
-        if not api_key:
+        deepinfra_key = settings.deepinfra_api_key.get_secret_value()  # DEF-005
+        if not deepinfra_key:
             logger.warning(  # type: ignore[no-any-return]
                 "description_client_deepinfra_key_missing",
                 message="KNOWLEDGE_GRAPH_DEEPINFRA_API_KEY is empty; falling back to NullDescriptionAdapter",
             )
             return NullDescriptionAdapter()
 
+        from ml_clients.adapters.chained_description import ChainedDescriptionAdapter  # type: ignore[import-untyped]
         from ml_clients.adapters.deepinfra_description import (
             DeepInfraDescriptionAdapter,  # type: ignore[import-untyped]
         )
 
-        semaphore = asyncio.Semaphore(settings.description_deepinfra_concurrency)
-        return DeepInfraDescriptionAdapter(
-            api_key=api_key,
+        deepinfra_semaphore = asyncio.Semaphore(settings.description_deepinfra_concurrency)
+        deepinfra_adapter = DeepInfraDescriptionAdapter(
+            api_key=deepinfra_key,
             primary_model_id=settings.description_deepinfra_model_id,
             fallback_model_id=settings.description_deepinfra_fallback_model_id,
-            semaphore=semaphore,
+            semaphore=deepinfra_semaphore,
             cost_tracker=valkey_client,
             max_monthly_usd=settings.description_max_monthly_usd,
         )
 
+        # Wire Gemini as fallback 1 when its key is also configured (BP-RC8).
+        # If GEMINI_API_KEY is empty the chain is [DeepInfra] only — Gemini is
+        # skipped entirely rather than producing a noisy "key missing" warning on
+        # every worker cycle.
+        chain: list[Any] = [deepinfra_adapter]
+        gemini_key = settings.gemini_api_key.get_secret_value()
+        if gemini_key:
+            from ml_clients.adapters.gemini_description import (
+                GeminiDescriptionAdapter,  # type: ignore[import-untyped]
+            )
+
+            gemini_semaphore = asyncio.Semaphore(settings.description_gemini_concurrency)
+            chain.append(
+                GeminiDescriptionAdapter(
+                    api_key=gemini_key,
+                    semaphore=gemini_semaphore,
+                    cost_tracker=valkey_client,
+                    max_monthly_usd=settings.description_max_monthly_usd,
+                )
+            )
+            logger.info(  # type: ignore[no-any-return]
+                "description_client_chain_built",
+                chain=["DeepInfraDescriptionAdapter", "GeminiDescriptionAdapter"],
+            )
+        else:
+            logger.info(  # type: ignore[no-any-return]
+                "description_client_chain_built",
+                chain=["DeepInfraDescriptionAdapter"],
+                note="GEMINI_API_KEY unset; Gemini fallback disabled",
+            )
+
+        return ChainedDescriptionAdapter(chain)
+
     if provider == "gemini":
-        api_key = settings.gemini_api_key.get_secret_value()
-        if not api_key:
+        gemini_key = settings.gemini_api_key.get_secret_value()
+        if not gemini_key:
             logger.warning(  # type: ignore[no-any-return]
                 "description_client_gemini_key_missing",
                 message="KNOWLEDGE_GRAPH_GEMINI_API_KEY is empty; falling back to NullDescriptionAdapter",
@@ -837,7 +877,7 @@ def _build_description_client(settings: Settings, valkey_client: Any | None = No
 
         semaphore = asyncio.Semaphore(settings.description_gemini_concurrency)
         return GeminiDescriptionAdapter(
-            api_key=api_key,
+            api_key=gemini_key,
             semaphore=semaphore,
             cost_tracker=valkey_client,
             max_monthly_usd=settings.description_max_monthly_usd,
