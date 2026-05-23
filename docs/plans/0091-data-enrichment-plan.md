@@ -2,7 +2,7 @@
 id: PLAN-0091
 title: Data Enrichment — Tier 1 / 2 / 3 Intelligence Features
 prd: investigation-2026-05-22
-status: draft
+status: in-progress
 created: 2026-05-22
 updated: 2026-05-22
 ---
@@ -67,7 +67,7 @@ Sub-Plan F (Tier 3 frontend — depends on E)
 
 **Goal**: Forward fields that S6 and S7 already return but S9 filters out, and add two new composition endpoints.
 
-### Wave A-1: News + Graph response enrichment
+### Wave A-1: News + Graph response enrichment ✅ DONE
 
 **Goal**: Extend two response schemas — add sentiment/impact_windows to news, add valid_from/valid_to + industry/market_cap to graph.
 **Depends on**: none
@@ -198,7 +198,7 @@ S7's `EntitySummary` model (returned in `GraphNeighborhoodResponse.entities` dic
 
 ---
 
-### Wave A-2: New S9 composition endpoints
+### Wave A-2: New S9 composition endpoints ✅ DONE
 
 **Goal**: Add three new S9 endpoints: article impact history, sentiment timeseries, portfolio sector attribution.
 **Depends on**: Wave A-1 (shares intelligence route context)
@@ -921,7 +921,7 @@ const INDUSTRY_COLORS: Record<string, string> = {
 
 **Goal**: Build the S8 NL→screener translation layer and S6 sentiment endpoint.
 
-### Wave E-1: NL screener translation
+### Wave E-1: NL screener translation ✅ DONE
 
 **Goal**: Add an LLM-powered query translation endpoint that converts natural language to screener filters.
 **Depends on**: none
@@ -1036,7 +1036,7 @@ class IDocumentRepository(ABC):
 
 ---
 
-### Wave E-2: Portfolio attribution + yield curve data
+### Wave E-2: Portfolio attribution + yield curve data ✅ DONE
 
 **Goal**: Wire the S6 sentiment timeseries into the S9 proxy endpoint, and add sector attribution + yield curve endpoints.
 **Depends on**: Wave E-1, Wave A-2
