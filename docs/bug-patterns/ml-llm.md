@@ -2,7 +2,7 @@
 
 > **Category**: ml-llm
 > **Description**: ML model integration (Ollama, GLiNER, DeepInfra), LLM adapters, NER/NMS, embedding, prompt/output mismatch
-> **Count**: 25 patterns
+> **Count**: 27 patterns
 > **Back to index**: [BUG_PATTERNS.md](../BUG_PATTERNS.md)
 
 ---
@@ -917,3 +917,97 @@ In `services/rag-chat/src/rag_chat/infrastructure/clients/s7_client.py`, line 13
 - Pay extra attention to S7 graph API endpoints: relations with stale confidence scores return `"confidence": null` (the knowledge-graph route explicitly maps stale rows to `None`).
 
 **Regression test**: Manual curl: `GET /v1/briefings/instrument/{entity_with_null_confidence_relations}` must return 200.
+
+---
+
+### BP-529: HNSW ANN sparse-index filter kills recall for rare categories
+
+**Category**: ML & LLM
+**Severity**: HIGH
+**First seen**: 2026-05-23
+**Services**: nlp-pipeline (chunk search), rag-chat (briefing context)
+
+**Symptoms**:
+- `ChunkSearchRequest` with `entity_ids=[some_uuid]` or `source_types=["sec_edgar"]` returns 0 results even though matching rows clearly exist in the database
+- Vector similarity search works fine without filters; adding a filter drops the result count to 0
+- The HNSW index returns correct global top-k candidates, but none happen to pass the filter
+
+**Root cause**:
+pgvector HNSW ANN search finds the global `top_k` nearest neighbours first, then applies WHERE filters as a post-step. If the filtered category represents only 2-5% of the total index, none of the globally-closest `top_k` vectors will belong to that category, so the filtered result set is empty. The HNSW graph is optimised for global recall — it cannot efficiently navigate to a sparse sub-cluster matching a rare predicate.
+
+Example: sec_edgar chunks = ~2% of total ANN index. With `top_k=12`, only ~0.24 expected matches, so 0 results is the norm, not a bug.
+
+**Fix** (immediate):
+Remove the sparse filter and rely on semantic signal from `query_text`:
+```python
+# Bad — sec_edgar is 2% of index; entity_id may be 0.6%
+request = ChunkSearchRequest(
+    query_text=entity_name,
+    top_k=12,
+    source_types=["sec_edgar"],   # kills recall
+    entity_ids=[entity_uuid],     # kills recall
+)
+
+# Good — let HNSW find best global candidates; semantic query provides specificity
+request = ChunkSearchRequest(
+    query_text=entity_name,
+    top_k=12,
+    min_score=0.55,               # quality gate instead of hard filter
+)
+```
+
+**Fix** (long-term):
+Use `SET hnsw.ef_search = 400` (or higher) to widen the candidate pool, then apply the filter in a two-pass approach. Alternatively, build a partial HNSW index per source_type for high-cardinality filter sets.
+
+**Prevention**:
+- Never apply WHERE filters to pgvector ANN (HNSW/IVFFlat) queries for categories that represent <10% of the indexed rows.
+- Use `min_score` as a quality gate rather than `WHERE source_type IN (...)` for recall-critical queries.
+- Prefer increasing `top_k` and filtering post-retrieval in application code over DB-side filters on sparse categories.
+
+**Regression test**: `services/rag-chat/tests/unit/application/test_briefing_context_gatherer.py::test_gather_instrument_chunks_no_source_type_filter`
+
+---
+
+### BP-530: `ml_clients.EmbeddingClient.embed()` requires `list[EmbeddingInput]`, returns `list[EmbeddingOutput]`
+
+**Category**: ML & LLM
+**Severity**: HIGH
+**First seen**: 2026-05-23
+**Services**: nlp-pipeline
+
+**Symptoms**:
+- `AttributeError: 'str' object has no attribute 'instruction_prefix'` when calling `embed()`
+- Chunk search embedding path crashes silently or returns wrong model_name (`"nomic-embed-text"` default instead of actual provider)
+- Unit tests pass because mocks return raw `list[float]` — the protocol mismatch is only caught at runtime
+
+**Root cause**:
+`ml_clients.EmbeddingClient.embed()` is a typed protocol method:
+- **Input**: `list[EmbeddingInput]` (each has `text: str` and `model_id: str`)
+- **Output**: `list[EmbeddingOutput]` (each has `embedding: list[float]` and `model_id: str`)
+
+Callers that pass a raw `str` or `list[str]` trigger an `AttributeError` inside the adapter when it tries to read `input.instruction_prefix` or `input.model_id`. The `model_id` on the output is crucial — it propagates the actual provider model name for cache-key generation and stale-embedding expiry logic.
+
+**Bad code**:
+```python
+# Wrong — passes raw string
+vec = await self._emb.embed(query_text)            # AttributeError at runtime
+model_name = "nomic-embed-text"                    # hardcoded fallback masks provider
+```
+
+**Good code**:
+```python
+from ml_clients.dataclasses import EmbeddingInput  # lazy import in method body
+
+outputs = await self._emb.embed(
+    [EmbeddingInput(text=query_text, model_id="BAAI/bge-large-en-v1.5")]
+)
+vec: list[float] = outputs[0].embedding
+model_name: str = outputs[0].model_id              # propagate actual provider model
+```
+
+**Prevention**:
+- Always use `EmbeddingInput` / `EmbeddingOutput` — never pass raw strings/lists to `embed()`.
+- Unit test mocks must return `list[EmbeddingOutput]`, not `list[float]`, to catch this at test time.
+- The `model_id` from `EmbeddingOutput` must always be propagated; never hardcode `"nomic-embed-text"` or any other model string at the call site.
+
+**Regression test**: `services/nlp-pipeline/tests/unit/application/use_cases/test_enhanced_chunk_search.py::TestEnhancedChunkSearchUseCase::test_chunk_search_embed_called_on_cache_miss`
