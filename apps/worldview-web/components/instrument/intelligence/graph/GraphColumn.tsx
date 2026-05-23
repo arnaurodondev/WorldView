@@ -32,8 +32,7 @@ import { useEffect, useMemo, useRef, useState, useCallback } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import dynamic from "next/dynamic";
 import { RefreshCw } from "lucide-react";
-import { useAccessToken } from "@/lib/api-client";
-import { createGateway } from "@/lib/gateway";
+import { useApiClient } from "@/lib/api-client";
 import { qk } from "@/lib/query/keys";
 import { useHotkeyScope } from "@/contexts/HotkeyContext";
 import { GraphToolbar } from "@/components/instrument/graph/GraphToolbar";
@@ -43,6 +42,7 @@ import { formatDateTime } from "@/lib/utils";
 import { GraphStats } from "./GraphStats";
 import type { BriefingResponse, EntityGraph as EntityGraphData } from "@/types/api";
 import type { SelectedEdgeInfo } from "@/components/instrument/EntityGraph";
+import type { SelectedNodeInfo } from "@/components/instrument/intelligence/InlineSelectionPanel";
 
 // WHY ssr:false: EntityGraph uses sigma.js (WebGL) — cannot run in Node.js.
 const EntityGraph = dynamic(
@@ -68,22 +68,18 @@ const GRAPH_TIMEOUT_MS: Record<number, number> = { 1: 1500, 2: 4000, 3: 8000 };
 export interface GraphColumnProps {
   readonly entityId: string;
   readonly selectedNodeId: string | null;
-  /** Called when node selection changes (id or null for deselect). */
-  readonly onNodeSelect: (nodeId: string | null) => void;
-  /** Called with full node data when user clicks a node — used by InlineSelectionPanel. */
-  readonly onNodeClickFull?: (
-    nodeId: string,
-    label: string,
-    nodeType: string,
-    degree: number,
-    edges: Array<{ label: string; weight: number; neighborId: string; neighborLabel: string }>,
-  ) => void;
+  /**
+   * Called when node selection changes. Receives full node info on select, null on deselect.
+   * The toggle (clicking the same node deselects) is handled internally in GraphColumn:
+   * if the clicked id matches selectedNodeId, onNodeChange(null) fires.
+   */
+  readonly onNodeChange?: (info: SelectedNodeInfo | null) => void;
   /** Called when user clicks an edge in the sigma canvas. */
   readonly onEdgeSelect?: (info: SelectedEdgeInfo) => void;
 }
 
-export function GraphColumn({ entityId, selectedNodeId, onNodeSelect, onNodeClickFull, onEdgeSelect }: GraphColumnProps) {
-  const accessToken = useAccessToken();
+export function GraphColumn({ entityId, selectedNodeId, onNodeChange, onEdgeSelect }: GraphColumnProps) {
+  const gateway = useApiClient();
   const queryClient = useQueryClient();
   const [depth, setDepth] = useState<number>(2);
   const [typeFilters, setTypeFilters] = useState<string[]>([]);
@@ -95,8 +91,8 @@ export function GraphColumn({ entityId, selectedNodeId, onNodeSelect, onNodeClic
 
   const { data: brief } = useQuery<BriefingResponse>({
     queryKey: qk.instruments.brief(entityId),
-    queryFn: () => createGateway(accessToken).getInstrumentBrief(entityId),
-    enabled: !!accessToken && !!entityId,
+    queryFn: () => gateway.getInstrumentBrief(entityId),
+    enabled: !!entityId,
     staleTime: BRIEF_STALE_MS,
     // WHY retry: false — brief 404s for instruments without a generated brief
     // (common for newly-added tickers). Retrying would hammer S8 LLM.
@@ -121,7 +117,7 @@ export function GraphColumn({ entityId, selectedNodeId, onNodeSelect, onNodeClic
       signal?.addEventListener("abort", () => ctrl.abort());
       const timer = setTimeout(() => ctrl.abort(), timeout);
       try {
-        return await createGateway(accessToken).getEntityGraph(entityId, depth);
+        return await gateway.getEntityGraph(entityId, depth);
       } catch (err) {
         if (ctrl.signal.aborted) throw new Error("GRAPH_TIMEOUT");
         throw err;
@@ -129,7 +125,7 @@ export function GraphColumn({ entityId, selectedNodeId, onNodeSelect, onNodeClic
         clearTimeout(timer);
       }
     },
-    enabled: !!accessToken && !!entityId,
+    enabled: !!entityId,
     staleTime: GRAPH_STALE_MS,
     retry: 0,
   });
@@ -143,10 +139,12 @@ export function GraphColumn({ entityId, selectedNodeId, onNodeSelect, onNodeClic
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [graphData]);
 
-  // WHY reset selection on entity change: a stale selectedNodeId from a previous
-  // entity would point at a node that doesn't exist in the new graph payload.
+  // WHY belt-and-suspenders: IntelligenceTab's useEffect([entityId]) is the canonical
+  // reset (clears selectedNodeInfo + selectedEdge + visualHighlightNodeId). This
+  // secondary call is idempotent (null→null is a no-op) and guards against future
+  // refactors that move the canonical reset out of IntelligenceTab.
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  useEffect(() => { onNodeSelect(null); }, [entityId]);
+  useEffect(() => { onNodeChange?.(null); }, [entityId]);
 
   // ── Graph hotkeys (T-18) ──────────────────────────────────────────────────
   const { registry } = useHotkeyScope();
@@ -158,8 +156,8 @@ export function GraphColumn({ entityId, selectedNodeId, onNodeSelect, onNodeClic
   // g → reset view: clear type filters + deselect node (return to overview).
   const handleResetView = useCallback(() => {
     setTypeFilters([]);
-    onNodeSelect(null);
-  }, [onNodeSelect]);
+    onNodeChange?.(null);
+  }, [onNodeChange]);
 
   useEffect(() => {
     const un1 = registry.register({
@@ -208,10 +206,10 @@ export function GraphColumn({ entityId, selectedNodeId, onNodeSelect, onNodeClic
       scope: "page",
       group: "Navigation",
       label: "Clear node selection",
-      handler: (e) => { e.preventDefault(); onNodeSelect(null); },
+      handler: (e) => { e.preventDefault(); onNodeChange?.(null); },
     });
     return () => { un1(); un2(); un3(); unR(); unG(); unEsc(); };
-  }, [registry, handleRefresh, handleResetView, onNodeSelect]);
+  }, [registry, handleRefresh, handleResetView, onNodeChange]);
 
   const availableEntityTypes = useMemo<string[]>(() => {
     if (!graphData?.nodes?.length) return [];
@@ -232,8 +230,8 @@ export function GraphColumn({ entityId, selectedNodeId, onNodeSelect, onNodeClic
   }, [graphData, typeFilters]);
 
   // WHY adapter: EntityGraph fires (id, label, type, degree, edges).
-  // Pass full data to onNodeClickFull for InlineSelectionPanel.
-  // Pass id/null to onNodeSelect for visual graph highlighting (toggle).
+  // Toggle detection: if clicked id === selectedNodeId, fire onNodeChange(null) to deselect;
+  // otherwise fire onNodeChange with the full SelectedNodeInfo for InlineSelectionPanel.
   const handleNodeClick = (
     id: string,
     label: string,
@@ -241,14 +239,11 @@ export function GraphColumn({ entityId, selectedNodeId, onNodeSelect, onNodeClic
     degree: number,
     edges: Array<{ label: string; weight: number; neighborId: string; neighborLabel: string }>,
   ) => {
-    const next = selectedNodeId === id ? null : id;
-    onNodeSelect(next);
-    if (onNodeClickFull) {
-      if (next === null) {
-        // Deselect: parent clears via onNodeSelect(null) path
-      } else {
-        onNodeClickFull(id, label, nodeType, degree, edges);
-      }
+    if (selectedNodeId === id) {
+      // Same node clicked again — deselect
+      onNodeChange?.(null);
+    } else {
+      onNodeChange?.({ id, label, type: nodeType, degree, edges });
     }
   };
   const isTimeout = isError && graphErr instanceof Error && graphErr.message === "GRAPH_TIMEOUT";

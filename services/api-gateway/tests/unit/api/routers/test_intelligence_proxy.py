@@ -522,3 +522,142 @@ async def test_paths_404_from_s7_forwarded(authed_app, authed_mock_clients) -> N
         )
 
     assert resp.status_code == 404
+
+
+# ── F-QA-016: Valkey fail-open paths ─────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_intelligence_cache_read_fail_open(authed_app, authed_mock_clients) -> None:
+    """Valkey.get raises ConnectionError → request still completes via S7 (fail-open)."""
+    mock_valkey = authed_app.state.valkey
+    mock_valkey.get = AsyncMock(side_effect=ConnectionError("Valkey unavailable"))
+    mock_valkey.set = AsyncMock()
+
+    payload = {"entity_id": _ENTITY_UUID, "canonical_name": "Apple Inc.", "confidence_breakdown": {}}
+    authed_mock_clients.knowledge_graph.get = AsyncMock(
+        return_value=_mock_response(200, payload),
+    )
+
+    transport = ASGITransport(app=authed_app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        resp = await client.get(
+            f"/v1/entities/{_ENTITY_UUID}/intelligence",
+            headers={"Authorization": f"Bearer {_make_jwt()}"},
+        )
+
+    # Request must complete successfully despite cache failure.
+    assert resp.status_code == 200
+    assert resp.json()["canonical_name"] == "Apple Inc."
+    # S7 was still called (cache miss path followed after exception).
+    authed_mock_clients.knowledge_graph.get.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_intelligence_cache_write_fail_open(authed_app, authed_mock_clients) -> None:
+    """Valkey.set raises ConnectionError after S7 success → response still returned (fail-open)."""
+    mock_valkey = authed_app.state.valkey
+    mock_valkey.get = AsyncMock(return_value=None)  # cache miss
+    mock_valkey.set = AsyncMock(side_effect=ConnectionError("Valkey unavailable"))
+
+    payload = {"entity_id": _ENTITY_UUID, "canonical_name": "Apple Inc.", "confidence_breakdown": {}}
+    authed_mock_clients.knowledge_graph.get = AsyncMock(
+        return_value=_mock_response(200, payload),
+    )
+
+    transport = ASGITransport(app=authed_app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        resp = await client.get(
+            f"/v1/entities/{_ENTITY_UUID}/intelligence",
+            headers={"Authorization": f"Bearer {_make_jwt()}"},
+        )
+
+    # Cache write failure must not affect the response.
+    assert resp.status_code == 200
+    assert resp.json()["canonical_name"] == "Apple Inc."
+
+
+# ── F-SEC-001: focus_node max_length validation ───────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_intelligence_focus_node_too_long_rejected(authed_app, authed_mock_clients) -> None:
+    """focus_node longer than 36 chars → 422 before S7 call (max_length guard)."""
+    transport = ASGITransport(app=authed_app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        resp = await client.get(
+            f"/v1/entities/{_ENTITY_UUID}/intelligence",
+            params={"focus_node": "x" * 37},
+            headers={"Authorization": f"Bearer {_make_jwt()}"},
+        )
+
+    assert resp.status_code == 422
+    authed_mock_clients.knowledge_graph.get.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_graph_focus_node_too_long_rejected(authed_app, authed_mock_clients) -> None:
+    """focus_node > 36 chars on graph endpoint → 422 (consistent with intelligence endpoint)."""
+    transport = ASGITransport(app=authed_app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        resp = await client.get(
+            f"/v1/entities/{_ENTITY_UUID}/graph",
+            params={"focus_node": "y" * 37},
+            headers={"Authorization": f"Bearer {_make_jwt()}"},
+        )
+
+    assert resp.status_code == 422
+
+
+# ── F-SEC-002: min_confidence typed validation ───────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_graph_min_confidence_invalid_rejected(authed_app, authed_mock_clients) -> None:
+    """min_confidence=not-a-float → 422 before any S7 call (typed Query param guard)."""
+    transport = ASGITransport(app=authed_app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        resp = await client.get(
+            f"/v1/entities/{_ENTITY_UUID}/graph",
+            params={"min_confidence": "not-a-float"},
+            headers={"Authorization": f"Bearer {_make_jwt()}"},
+        )
+
+    assert resp.status_code == 422
+    authed_mock_clients.knowledge_graph.get.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_graph_min_confidence_out_of_range_rejected(authed_app, authed_mock_clients) -> None:
+    """min_confidence=1.5 (> le=1.0) → 422 before any S7 call."""
+    transport = ASGITransport(app=authed_app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        resp = await client.get(
+            f"/v1/entities/{_ENTITY_UUID}/graph",
+            params={"min_confidence": "1.5"},
+            headers={"Authorization": f"Bearer {_make_jwt()}"},
+        )
+
+    assert resp.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_graph_min_confidence_forwarded_as_float(authed_app, authed_mock_clients) -> None:
+    """Valid min_confidence=0.7 is forwarded to S7 as string '0.7'."""
+    graph_payload = {"center": {"entity_id": _ENTITY_UUID, "canonical_name": "X"}, "relations": [], "entities": {}}
+    authed_mock_clients.knowledge_graph.get = AsyncMock(
+        return_value=_mock_response(200, graph_payload),
+    )
+
+    transport = ASGITransport(app=authed_app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        resp = await client.get(
+            f"/v1/entities/{_ENTITY_UUID}/graph",
+            params={"min_confidence": "0.7"},
+            headers={"Authorization": f"Bearer {_make_jwt()}"},
+        )
+
+    assert resp.status_code == 200
+    call_kwargs = authed_mock_clients.knowledge_graph.get.call_args[1]
+    forwarded = call_kwargs.get("params", {})
+    assert forwarded.get("min_confidence") == "0.7"

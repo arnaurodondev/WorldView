@@ -167,4 +167,44 @@ describe("InlineSelectionPanel", () => {
     );
     expect(screen.queryByText(/outbound|inbound/i)).not.toBeInTheDocument();
   });
+
+  // F-QA-003 — node mode: weight=0 edge renders 0% bar without error
+  it("renders weight=0 edge as 0% bar and '0' label without crashing", () => {
+    const zeroWeightEdge = { label: "COMPETES_WITH", weight: 0, neighborId: "node-002", neighborLabel: "Microsoft" };
+    render(
+      <InlineSelectionPanel
+        selectedNode={{ ...mockNode, edges: [zeroWeightEdge] }}
+        selectedEdge={null}
+        onClear={vi.fn()}
+      />,
+    );
+    // The weight bar renders "0" as the numeric label (pct=0)
+    expect(screen.getByText("0")).toBeInTheDocument();
+    // The neighbor label still renders
+    expect(screen.getByText("Microsoft")).toBeInTheDocument();
+  });
+
+  // F-QA-004 — node mode: more than 6 edges truncates to first 6 (slice(0,6))
+  it("renders at most 6 edge rows when node has more than 6 connections", () => {
+    const manyEdges = Array.from({ length: 8 }, (_, i) => ({
+      label: "COMPETES_WITH",
+      weight: 0.5,
+      neighborId: `node-${i + 10}`,
+      neighborLabel: `Company ${i + 1}`,
+    }));
+    render(
+      <InlineSelectionPanel
+        selectedNode={{ ...mockNode, degree: 8, edges: manyEdges }}
+        selectedEdge={null}
+        onClear={vi.fn()}
+      />,
+    );
+    // Only the first 6 neighbors should appear; Company 7 and 8 are truncated.
+    expect(screen.getByText("Company 1")).toBeInTheDocument();
+    expect(screen.getByText("Company 6")).toBeInTheDocument();
+    expect(screen.queryByText("Company 7")).not.toBeInTheDocument();
+    expect(screen.queryByText("Company 8")).not.toBeInTheDocument();
+    // Degree count still shows the total (8), not the truncated display count.
+    expect(screen.getByText(/8 connections/i)).toBeInTheDocument();
+  });
 });

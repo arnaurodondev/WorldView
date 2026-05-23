@@ -15,8 +15,13 @@
  * WHO USES IT: IntelligenceTab (right column, col-span-5).
  */
 
-"use client";
-// WHY "use client": child components with hooks require browser context.
+// WHY no "use client": ContextPanel has no hooks or state — it is a pure layout
+// wrapper. Each child (EntityOverviewBlock, TopRelationsBlock, etc.) carries its
+// own "use client" boundary. Next.js App Router propagates client context inward
+// automatically; the parent does not need to re-declare it.
+// ContextPanel is always rendered inside IntelligenceTab.tsx ("use client"),
+// so removing "use client" here has no runtime effect — but leaving it would
+// silently force the component into the client bundle even when rendered elsewhere.
 
 import { cn } from "@/lib/utils";
 import { SectionDivider } from "@/components/primitives/SectionDivider";
