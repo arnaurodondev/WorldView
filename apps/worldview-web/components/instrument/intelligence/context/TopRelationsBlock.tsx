@@ -24,6 +24,7 @@
 
 import { useMemo } from "react";
 import { useQuery } from "@tanstack/react-query";
+import { ArrowRight, ArrowLeft, ArrowLeftRight } from "lucide-react";
 import { useApiClient } from "@/lib/api-client";
 import { qk } from "@/lib/query/keys";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -62,15 +63,27 @@ export function TopRelationsBlock({
     return m;
   }, [graph]);
 
-  // WHY filter source === entityId: edges can point TO the primary entity too.
-  // We only want outgoing relations (entity IS the source) for "top relations"
-  // semantics — the entity's direct dependencies/competitors/executives.
+  // WHY no direction filter (F-158): the original .filter(e.source === entityId)
+  // silently excluded all inbound edges (e.g. "TSMC is supplier_of Apple",
+  // "Berkshire invested_in Apple"). Analysts missed half the graph context.
+  // We now show outbound + inbound + lateral, sorted by direction priority then
+  // weight, so the most "active" relationships appear first.
+  //
+  // Priority map: outbound=0 (entity acts) → inbound=1 (entity is acted upon)
+  //               → lateral=2 (between non-center nodes, rare at depth=1)
+  const DIRECTION_PRIORITY: Record<string, number> = { outbound: 0, inbound: 1, lateral: 2 };
   const topEdges = useMemo<GraphEdge[]>(() => {
     return (graph?.edges ?? [])
-      .filter((e) => e.source === entityId)
-      .sort((a, b) => b.weight - a.weight)
+      .sort((a, b) => {
+        const pa = DIRECTION_PRIORITY[a.direction ?? "outbound"] ?? 2;
+        const pb = DIRECTION_PRIORITY[b.direction ?? "outbound"] ?? 2;
+        if (pa !== pb) return pa - pb;
+        return b.weight - a.weight; // within same direction, heaviest first
+      })
       .slice(0, limit);
-  }, [graph, entityId, limit]);
+  // DIRECTION_PRIORITY is defined in this render scope but never changes — safe to omit.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [graph, limit]);
 
   // ── Section label ─────────────────────────────────────────────────────────
   const sectionLabel = (
@@ -117,8 +130,13 @@ export function TopRelationsBlock({
     <div>
       {sectionLabel}
       {topEdges.map((edge) => {
-        const neighbor = nodesById[edge.target];
-        const neighborLabel = neighbor?.label ?? edge.target;
+        // WHY neighborId depends on direction (F-158): for inbound edges the
+        // primary entity is the TARGET — the node to navigate to is the SOURCE.
+        // For outbound/lateral the neighbor is edge.target as before.
+        const isInbound = edge.direction === "inbound";
+        const neighborId = isInbound ? edge.source : edge.target;
+        const neighbor = nodesById[neighborId];
+        const neighborLabel = neighbor?.label ?? neighborId;
         // WHY toFixed(2): weight is [0,1]; 2 decimal places fits 3-char column width.
         const weightLabel = edge.weight.toFixed(2);
 
@@ -126,14 +144,35 @@ export function TopRelationsBlock({
           <button
             key={edge.id}
             type="button"
-            onClick={() => onNodeSelect(edge.target)}
+            onClick={() => onNodeSelect(neighborId)}
             title={`${neighborLabel} — ${edge.label} (weight: ${weightLabel})`}
             className={cn(
               "w-full h-[18px] px-3 flex items-center gap-2 border-b border-border-subtle",
               "text-left hover:bg-muted/20 transition-color-only duration-100 cursor-pointer",
             )}
           >
-            {/* Target entity name — takes all remaining space */}
+            {/* Direction icon (F-158) — 10px arrow shows edge orientation.
+                WHY display direction: "TSMC → Apple" (inbound supplier_of) is
+                semantically opposite to "Apple → TSMC" (outbound). */}
+            {edge.direction === "outbound" && (
+              <ArrowRight
+                className="h-[10px] w-[10px] shrink-0 text-muted-foreground/60"
+                aria-label="outbound"
+              />
+            )}
+            {edge.direction === "inbound" && (
+              <ArrowLeft
+                className="h-[10px] w-[10px] shrink-0 text-muted-foreground/60"
+                aria-label="inbound"
+              />
+            )}
+            {(edge.direction === "lateral" || edge.direction == null) && (
+              <ArrowLeftRight
+                className="h-[10px] w-[10px] shrink-0 text-muted-foreground/40"
+                aria-label="lateral"
+              />
+            )}
+            {/* Neighbor entity name — takes all remaining space */}
             <span className="flex-1 text-[11px] truncate text-foreground/90">{neighborLabel}</span>
             {/* Relation type — muted 9px label */}
             <span className="text-[9px] text-muted-foreground shrink-0 truncate max-w-[60px]">
