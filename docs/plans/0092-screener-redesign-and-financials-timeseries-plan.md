@@ -2,7 +2,7 @@
 id: PLAN-0092
 title: Screener Redesign (W8) + FundamentalsTimeseriesChart (C-1)
 prd: PRD-0089 / PLAN-0091 C-1 + F-2
-status: draft
+status: complete
 created: 2026-05-23
 updated: 2026-05-23
 ---
