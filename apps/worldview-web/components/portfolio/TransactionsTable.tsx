@@ -45,6 +45,7 @@ import {
   assetClassAbbrev,
   assetClassBadgeClass,
 } from "./transaction-columns";
+import type { TransactionRow } from "./transaction-columns";
 import { formatDateTime } from "@/lib/utils";
 import type { Transaction } from "@/types/api";
 
@@ -62,6 +63,36 @@ export interface TransactionsTableProps {
    * always empty. The server-side enrichment supersedes it.
    */
   tickerByInstrumentId?: Record<string, string | null | undefined>;
+  /**
+   * Optional external filter overrides (PRD-0089 SA-C).
+   *
+   * WHY optional controlled mode: TransactionsTable has an integrated filter bar
+   * that handles all filter state internally. When TransactionsTab wires
+   * URL-synced filters (via useTransactionsFilterState), passing them here
+   * overrides the internal filter state so the two stay in sync. If omitted,
+   * the table falls back to its own internal filter bar.
+   *
+   * The external filter shape maps as follows:
+   *   type      → activeFilter ("All" → "ALL", "DIV" → "DIVIDEND", others as-is)
+   *   dateFrom  → fromDate
+   *   dateTo    → toDate
+   *   ticker    → tickerFilter
+   *   currency  → currencyFilter ("" → "ALL", others as-is)
+   *   search    → searchRaw
+   */
+  externalFilters?: {
+    type: string;
+    dateFrom: string;
+    dateTo: string;
+    ticker: string;
+    currency: string;
+    search: string;
+  };
+  /**
+   * When true, hides the internal filter bar (the external bar in TransactionsTab
+   * replaces it). Defaults to false for backward compatibility.
+   */
+  hideInternalFilterBar?: boolean;
 }
 
 // WHY "ALL" exists as a literal value: avoids special-casing null in filter
@@ -116,7 +147,7 @@ const COL_WIDTHS_PCT = [
  * and that its colgroup col widths match the header colgroup. The testid makes it
  * queryable independently of the mocked FixedSizeList container.
  */
-function makeVirtualRowRenderer(rows: Transaction[]) {
+function makeVirtualRowRenderer(rows: TransactionRow[]) {
   // WHY return a named function (not anonymous arrow): React DevTools shows the
   // component name in the component tree which helps debugging. Named inner
   // functions also produce cleaner stack traces.
@@ -246,6 +277,8 @@ const INPUT_CLS =
 export function TransactionsTable({
   transactions,
   tickerByInstrumentId,
+  externalFilters,
+  hideInternalFilterBar = false,
 }: TransactionsTableProps) {
   // ── Filter state ──────────────────────────────────────────────────────────
   const [activeFilter, setActiveFilter] = useState<FilterType>("ALL");
@@ -262,19 +295,51 @@ export function TransactionsTable({
   // bursts into one pass.
   const search = useDebouncedValue(searchRaw, 200);
 
+  // ── External filter override (PRD-0089 SA-C) ─────────────────────────────
+  // WHY compute effective filter values: when externalFilters are provided (from
+  // TransactionsTab's URL-synced state), they override the internal state. This
+  // allows the parent to control filtering via nuqs URL params while keeping the
+  // table's internal filter bar functional when externalFilters is not provided.
+  //
+  // "DIV" → "DIVIDEND": the external bar uses "DIV" (the display label); the
+  // internal filter uses "DIVIDEND" (the API type). The mapping happens here so
+  // neither the parent nor the internal filter logic needs to know about the other.
+  const effectiveActiveFilter: FilterType = externalFilters
+    ? (() => {
+        const t = externalFilters.type;
+        if (t === "All" || t === "") return "ALL";
+        if (t === "DIV") return "DIVIDEND";
+        if (t === "BUY" || t === "SELL" || t === "DIVIDEND") return t;
+        return "ALL";
+      })()
+    : activeFilter;
+
+  const effectiveFromDate = externalFilters ? externalFilters.dateFrom : fromDate;
+  const effectiveToDate = externalFilters ? externalFilters.dateTo : toDate;
+  const effectiveTickerFilter = externalFilters ? externalFilters.ticker : tickerFilter;
+  const effectiveCurrencyFilter: CurrencyFilter = externalFilters
+    ? (() => {
+        const c = externalFilters.currency;
+        if (!c || c === "") return "ALL";
+        if (c === "USD" || c === "EUR") return c;
+        return "ALL"; // unknown currency codes fall back to ALL
+      })()
+    : currencyFilter;
+  const effectiveSearch = externalFilters ? externalFilters.search : searchRaw;
+
   // TODO(PLAN-0051 / backend): the original spec calls for a "market" filter.
   // Transaction has no market/exchange/MIC field today — currency is a proxy.
 
   // ── Filter active? ────────────────────────────────────────────────────────
   const anyFilterActive =
-    activeFilter !== "ALL" ||
-    fromDate !== "" ||
-    toDate !== "" ||
-    tickerFilter.trim() !== "" ||
-    currencyFilter !== "ALL" ||
+    effectiveActiveFilter !== "ALL" ||
+    effectiveFromDate !== "" ||
+    effectiveToDate !== "" ||
+    effectiveTickerFilter.trim() !== "" ||
+    effectiveCurrencyFilter !== "ALL" ||
     minAmount !== "" ||
     maxAmount !== "" ||
-    searchRaw !== "";
+    effectiveSearch !== "";
 
   function clearFilters() {
     setActiveFilter("ALL");
@@ -320,16 +385,18 @@ export function TransactionsTable({
 
   const minAmt = minAmount === "" ? NaN : Number(minAmount);
   const maxAmt = maxAmount === "" ? NaN : Number(maxAmount);
-  const tickerLower = tickerFilter.trim().toLowerCase();
-  const searchLower = search.trim().toLowerCase();
+  const tickerLower = effectiveTickerFilter.trim().toLowerCase();
+  // WHY effectiveSearch (not searchRaw): when external filters are active the
+  // debounce step doesn't apply — the URL value IS the stable value.
+  const searchLower = (externalFilters ? effectiveSearch : search).trim().toLowerCase();
 
   const filtered = sorted.filter((tx) => {
-    if (activeFilter !== "ALL" && tx.type !== activeFilter) return false;
+    if (effectiveActiveFilter !== "ALL" && tx.type !== effectiveActiveFilter) return false;
 
     // WHY string comparison for dates: avoids timezone shifts that would drop
     // a tx executed at 00:30 UTC out of "today's" range for a PST user.
-    if (fromDate && tx.executed_at.slice(0, 10) < fromDate) return false;
-    if (toDate && tx.executed_at.slice(0, 10) > toDate) return false;
+    if (effectiveFromDate && tx.executed_at.slice(0, 10) < effectiveFromDate) return false;
+    if (effectiveToDate && tx.executed_at.slice(0, 10) > effectiveToDate) return false;
 
     if (tickerLower) {
       const t = (
@@ -338,7 +405,7 @@ export function TransactionsTable({
       if (!t.includes(tickerLower)) return false;
     }
 
-    if (currencyFilter !== "ALL" && tx.currency !== currencyFilter) return false;
+    if (effectiveCurrencyFilter !== "ALL" && tx.currency !== effectiveCurrencyFilter) return false;
 
     // Amount range applies to the row's "total" so the filter behaves the way
     // the user reads the Total column.
@@ -359,6 +426,41 @@ export function TransactionsTable({
 
     return true;
   });
+
+  // ── Running balance pre-computation (PRD-0089 SA-C BAL column) ──────────
+  //
+  // WHY walk chronologically (oldest first): the running balance is cumulative
+  // from the earliest transaction. We walk the *sorted* array in reverse
+  // (since sorted is newest-first) to accumulate in time order, then store
+  // the resulting balance on each row. Finally we reverse back so `filteredWithBal`
+  // is still in newest-first order for the table renderer.
+  //
+  // Sign convention: BUY reduces cash (cash_impact < 0), SELL/DIV adds cash.
+  // We start from 0 (the table doesn't have a starting cash balance from the
+  // API) and accumulate cash_impact for each transaction.
+  //
+  // WHY abs() for BUY: BUY's cash impact is negative (cash leaves); subtracting
+  // it from running balance is equivalent to bal -= qty*price.
+  const filteredWithBal: TransactionRow[] = (() => {
+    // Clone to avoid mutating sorted's reference; walk in chrono order.
+    const chrono = [...filtered].reverse(); // oldest → newest
+    let bal = 0;
+    const withBal: TransactionRow[] = chrono.map((tx) => {
+      let cashImpact: number;
+      if (tx.type === "DIVIDEND") {
+        cashImpact = tx.amount ?? 0;
+      } else if (tx.amount != null) {
+        cashImpact = tx.type === "BUY" ? -Math.abs(tx.amount) : Math.abs(tx.amount);
+      } else {
+        const raw = tx.quantity * tx.price;
+        cashImpact = tx.type === "BUY" ? -raw : raw;
+      }
+      bal += cashImpact;
+      return { ...tx, runningBalance: bal };
+    });
+    // Reverse back to newest-first for the table renderer.
+    return withBal.reverse();
+  })();
 
   // ── Totals row ────────────────────────────────────────────────────────────
   let buyCost = 0;
@@ -402,16 +504,19 @@ export function TransactionsTable({
   // ── Render ────────────────────────────────────────────────────────────────
   return (
     <div className="flex flex-col gap-0">
-      {/* ── Filter bar ──────────────────────────────────────────────────── */}
-      <div className="flex flex-wrap h-auto items-center gap-1 gap-y-1 border-b border-border px-2 py-1 shrink-0">
+      {/* ── Filter bar (hidden when external filter bar is used) ─────────── */}
+      {/* WHY conditional: when TransactionsTab passes hideInternalFilterBar=true,
+          the parent has already rendered TransactionsFilterBar above this table.
+          Showing both would create a confusing duplicate filter UI. */}
+      <div className={cn("flex flex-wrap h-auto items-center gap-1 gap-y-1 border-b border-border px-2 py-1 shrink-0", hideInternalFilterBar && "hidden")}>
         {filterButtons.map(({ label, value }) => (
           <button
             key={value}
-            aria-pressed={activeFilter === value}
+            aria-pressed={effectiveActiveFilter === value}
             aria-label={`Show ${value === "ALL" ? "all transactions" : value + " transactions"}`}
             className={cn(
               "h-6 px-2 text-[10px] font-mono uppercase tracking-[0.06em] border rounded-[2px] transition-colors",
-              activeFilter === value
+              effectiveActiveFilter === value
                 ? "bg-primary/10 border-primary text-primary"
                 : "bg-transparent border-border text-muted-foreground hover:text-foreground",
             )}
@@ -517,12 +622,12 @@ export function TransactionsTable({
         </button>
 
         <span className="ml-auto font-mono text-[10px] tabular-nums text-muted-foreground">
-          {filtered.length} / {transactions.length}
+          {filteredWithBal.length} / {transactions.length}
         </span>
       </div>
 
       {/* ── Table ───────────────────────────────────────────────────────── */}
-      {filtered.length > VIRTUALISATION_THRESHOLD ? (
+      {filteredWithBal.length > VIRTUALISATION_THRESHOLD ? (
         /*
          * ── Virtualised path (> 200 rows) ─────────────────────────────────
          * WHY react-window FixedSizeList (not DataTable's built-in react-virtual):
@@ -571,11 +676,11 @@ export function TransactionsTable({
               from the type because the closure already has the array. */}
           <FixedSizeList
             height={400}
-            itemCount={filtered.length}
+            itemCount={filteredWithBal.length}
             itemSize={22}
             width="100%"
           >
-            {makeVirtualRowRenderer(filtered)}
+            {makeVirtualRowRenderer(filteredWithBal)}
           </FixedSizeList>
         </div>
       ) : (
@@ -616,14 +721,14 @@ export function TransactionsTable({
               </tr>
             </thead>
             <tbody>
-              {filtered.length === 0 ? (
+              {filteredWithBal.length === 0 ? (
                 <tr>
                   <td colSpan={8} className="px-2 py-2 text-[11px] text-muted-foreground">
-                    {`No${activeFilter !== "ALL" ? ` ${activeFilter}` : ""} transactions match the current filters.`}
+                    {`No${effectiveActiveFilter !== "ALL" ? ` ${effectiveActiveFilter}` : ""} transactions match the current filters.`}
                   </td>
                 </tr>
               ) : (
-                filtered.map((tx) => {
+                filteredWithBal.map((tx) => {
                   // WHY isPlaceholder: brokerage imports include sentinel rows
                   // (corporate actions) with qty=0 AND price=0. De-emphasise them
                   // visually so real fills stand out. (BP-263 / F-P-028)

@@ -90,6 +90,22 @@ export interface SemanticHoldingsTableProps {
    * it does not cause spurious re-renders of unchanged rows.
    */
   holdingsSeries?: Record<string, number[]>;
+  /**
+   * Optional row-click handler for the HoldingDetailPanel slide-over (PRD-0089 SA-B).
+   *
+   * WHY optional (not required): backward-compatible addition. Every existing
+   * call site (analytics page, HoldingsTab prior to SA-B) does not pass this prop
+   * and continues to get the default "navigate to instrument page" behavior.
+   *
+   * When provided: clicking a row calls onSelectHolding(row.ticker) instead of
+   * navigating to /instruments/{ticker}. The caller is responsible for showing
+   * the HoldingDetailPanel.
+   *
+   * WHY string ticker (not full Holding): the caller already has the enriched
+   * holdings array; passing the ticker lets it look up the full object via
+   * findHoldingByTicker() without threading a second holding reference here.
+   */
+  onSelectHolding?: (ticker: string) => void;
 }
 
 // ── Context menu overlay ──────────────────────────────────────────────────────
@@ -108,6 +124,7 @@ export function SemanticHoldingsTable({
   sectors,
   totalValue,
   holdingsSeries,
+  onSelectHolding,
 }: SemanticHoldingsTableProps) {
   const router = useRouter();
   const searchParams = useSearchParams();
@@ -418,15 +435,23 @@ export function SemanticHoldingsTable({
         context={holdingsSeries ? { holdingsSeries } : undefined}
         getRowId={(p) => p.data.h.holding_id}
         onGridReady={handleGridReady}
-        onRowClicked={(row) =>
+        onRowClicked={(row) => {
+          // PRD-0089 SA-B: when the parent provides onSelectHolding (HoldingDetailPanel
+          // wiring), clicking a row opens the slide-over instead of navigating.
+          // WHY optional chaining: every existing call site without onSelectHolding
+          // falls through to the default instrument-page navigation unchanged.
+          if (onSelectHolding) {
+            onSelectHolding(row.h.ticker ?? row.h.instrument_id ?? row.h.entity_id);
+            return;
+          }
           // PRD-0089 F2 step 11 (§6.6): ticker-first URL. Holding.ticker is
           // populated for every row (S1 portfolio service resolves on add).
           // encodeURIComponent passes dot-form tickers (BRK.B) through cleanly.
           // Falls back to UUID for the rare case where ticker is empty.
           router.push(
             `/instruments/${encodeURIComponent(row.h.ticker ?? row.h.instrument_id ?? row.h.entity_id)}`,
-          )
-        }
+          );
+        }}
         onSortChanged={handleSortChanged}
         onColumnStateChanged={handleColumnStateChanged}
         onCellContextMenu={handleCellContextMenu}

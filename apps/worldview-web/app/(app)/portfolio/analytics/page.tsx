@@ -1,105 +1,79 @@
 /**
- * app/(app)/portfolio/analytics/page.tsx — Analytics sub-page stub.
+ * app/(app)/portfolio/analytics/page.tsx — Analytics tab page.
  *
- * WHY THIS EXISTS: W2 moves the analytics components (HoldingLotsPanel,
- * DayPnLDistribution, RealizedPnLSparkline, DividendYTDStrip, PositionBarHeat,
- * PortfolioAnalyticsSection) off the /portfolio overview to keep the overview
- * at 1-screen density. The "A" hotkey navigates here from /portfolio.
- * WHO USES IT: PMs who want deep P&L analysis, sector heat, lots breakdown.
- * DATA SOURCE: Same data as HoldingsTab — usePortfolioData orchestrator.
- * DESIGN REFERENCE: PRD-0089 W2 §4.21, V16
+ * WHY THIS PAGE EXISTS: Wave G of PRD-0089 replaces the original analytics
+ * stub (which composed existing overview components) with a dedicated analytics
+ * experience: TWR vs benchmark, drawdown chart, 11-tile risk sidebar,
+ * attribution by holding/sector/asset-class, and period returns table.
  *
- * WIRING: The context-menu "View Tax Lots" action (lib/command-actions.ts
- * id="view.tax-lots") navigates here with ?ticker=<TICKER>. The analytics page
- * reads that param and passes the matching instrument_id to HoldingLotsPanel
- * so the right-clicked holding is immediately selected in the dropdown.
+ * WHY portfolioId comes from useActivePortfolio (not URL params):
+ * The portfolio section uses a context-based selection model (ActivePortfolioContext).
+ * The TopBar PortfolioSwitcher writes to that context; reading from the same
+ * context here means switching portfolios in the TopBar updates the analytics
+ * view immediately — same as the portfolio overview page (F-DS-001, QA 2026-05-21).
+ *
+ * WHY this is a "use client" page: useActivePortfolio drives TanStack Query hooks
+ * (browser-only). useActivePortfolio is a client-side context hook that cannot
+ * run in a React Server Component.
+ *
+ * PRESERVED FROM ORIGINAL:
+ *   - Back link ("← Portfolio")
+ *   - Page header with "Analytics" label
+ *   - activePortfolioId source pattern (same context read)
+ *
+ * REMOVED FROM ORIGINAL (moved to overview page):
+ *   - DayPnLDistribution, HoldingLotsPanel, PositionBarHeat, RealizedPnLSparkline,
+ *     DividendYTDStrip, PortfolioAnalyticsSection — these belonged on the overview.
+ *     The analytics tab now focuses on performance analytics per design spec §4.3.
+ *
+ * DATA SOURCE: All data fetched by AnalyticsTab child components. This page is
+ * a thin layout shell that resolves the active portfolioId and renders the header.
+ *
+ * DESIGN REFERENCE: docs/designs/0089/04-portfolio-detail.md §4.3
  */
 "use client";
-// WHY "use client": usePortfolioData drives TanStack Query hooks (browser-only).
-// useSearchParams is also a client-side hook (cannot be used in RSC).
+// WHY "use client": useActivePortfolio reads from a React Context; context
+// consumers must be client components.
 
 import Link from "next/link";
-import { useMemo } from "react";
-import { useSearchParams } from "next/navigation";
-import { useAuth } from "@/hooks/useAuth";
-import { usePortfolioData } from "@/features/portfolio/hooks/usePortfolioData";
-import { HoldingLotsPanel } from "@/components/portfolio/HoldingLotsPanel";
-import { DayPnLDistribution } from "@/components/portfolio/DayPnLDistribution";
-import { RealizedPnLSparkline } from "@/components/portfolio/RealizedPnLSparkline";
-import { DividendYTDStrip } from "@/components/portfolio/DividendYTDStrip";
-import { PositionBarHeat } from "@/components/portfolio/PositionBarHeat";
-import { PortfolioAnalyticsSection } from "@/components/portfolio/PortfolioAnalyticsSection";
+import { useActivePortfolio } from "@/contexts/ActivePortfolioContext";
+import { AnalyticsTab } from "@/features/portfolio/components/AnalyticsTab";
 
 export default function PortfolioAnalyticsPage() {
-  const { accessToken } = useAuth();
-  // WHY selectedPeriod = "1D": same lock as the main page (T-B-2-07).
-  const selectedPeriod = "1D" as const;
-  const {
-    activePortfolioId,
-    enrichedHoldings,
-    holdingsQuotes,
-    kpi,
-  } = usePortfolioData({ accessToken, selectedPeriod });
-
-  // WHY useSearchParams: the "View Tax Lots" context-menu action (command-actions.ts
-  // id="view.tax-lots") navigates here with ?ticker=<TICKER> so the HoldingLotsPanel
-  // pre-selects the right-clicked holding rather than defaulting to the largest
-  // position. We resolve the ticker → instrument_id here because HoldingLotsPanel
-  // uses instrument_id (not ticker) as its selection key.
-  const searchParams = useSearchParams();
-  const defaultInstrumentId = useMemo(() => {
-    const ticker = searchParams?.get("ticker");
-    if (!ticker) return null;
-    // Find the holding whose ticker matches the URL param. Ticker matching is
-    // case-insensitive to be safe against URL encoding differences.
-    const matched = enrichedHoldings.find(
-      (h) => h.ticker?.toLowerCase() === ticker.toLowerCase(),
-    );
-    return matched?.instrument_id ?? null;
-  }, [searchParams, enrichedHoldings]);
+  // WHY useActivePortfolio (not usePortfolioData): this page only needs the
+  // active portfolio ID — it does not need holdings, quotes, transactions, or
+  // any of the other data orchestrated by usePortfolioData. Using the leaner
+  // context hook avoids firing 9 queries just to get one value.
+  const { activePortfolioId } = useActivePortfolio();
 
   return (
     <div className="flex flex-col h-full min-h-0 overflow-y-auto bg-background">
-      {/* Page header */}
-      <div className="flex h-[36px] shrink-0 items-center border-b border-border bg-card px-3 gap-3 sticky top-0 z-10">
-        <Link href="/portfolio" className="font-mono text-[10px] text-muted-foreground hover:text-foreground">← Portfolio</Link>
-        <span className="font-mono text-[11px] uppercase tracking-[0.08em] text-muted-foreground">Analytics</span>
+      {/* Page header — sticky so the "← Portfolio" link stays visible when
+          the user scrolls through the charts. Same h-[36px] + border-b pattern
+          as every other portfolio sub-page header for visual consistency. */}
+      <div className="flex h-[36px] shrink-0 items-center border-b border-border bg-card px-3 gap-3 sticky top-0 z-20">
+        <Link
+          href="/portfolio"
+          className="font-mono text-[10px] text-muted-foreground hover:text-foreground"
+        >
+          ← Portfolio
+        </Link>
+        <span className="font-mono text-[11px] uppercase tracking-[0.08em] text-muted-foreground">
+          Analytics
+        </span>
       </div>
 
-      {/* DayPnLDistribution — 30-day Δ$ sparkline */}
-      {activePortfolioId && <DayPnLDistribution portfolioId={activePortfolioId} />}
-
-      {/* HoldingLotsPanel — FIFO tax-lot drilldown.
-          WHY defaultInstrumentId: when the user arrives from the context-menu
-          "View Tax Lots" action, defaultInstrumentId is already resolved to the
-          right-clicked holding's instrument_id. When navigating directly (e.g.
-          "A" hotkey), defaultInstrumentId is null and HoldingLotsPanel falls back
-          to the largest-position heuristic — same behaviour as before this change. */}
-      {activePortfolioId && (
-        <HoldingLotsPanel
-          portfolioId={activePortfolioId}
-          holdings={enrichedHoldings}
-          quotes={holdingsQuotes}
-          defaultInstrumentId={defaultInstrumentId}
-        />
-      )}
-
-      {/* PositionBarHeat — weight × pnl% mini-bars */}
-      <PositionBarHeat
-        holdings={enrichedHoldings}
-        quotes={holdingsQuotes}
-        totalValue={kpi.totalValue}
-      />
-
-      {/* RealizedPnLSparkline — cumulative realised + ST/LT split */}
-      {activePortfolioId && <RealizedPnLSparkline portfolioId={activePortfolioId} />}
-
-      {/* DividendYTDStrip — YTD · forward yield · next ex-date */}
-      {activePortfolioId && <DividendYTDStrip portfolioId={activePortfolioId} />}
-
-      {/* PortfolioAnalyticsSection — equity curve + risk metrics */}
-      {activePortfolioId && (
-        <PortfolioAnalyticsSection portfolioId={activePortfolioId} />
+      {/* Main analytics content.
+          WHY guard activePortfolioId: if no portfolio is selected (brand-new
+          user or context not yet resolved) we show a loading hint rather than
+          mounting AnalyticsTab with an empty string portfolioId — which would
+          fire queries with an invalid ID and likely produce 400 errors. */}
+      {activePortfolioId ? (
+        <AnalyticsTab portfolioId={activePortfolioId} />
+      ) : (
+        <div className="flex items-center justify-center flex-1 text-[11px] text-muted-foreground font-mono">
+          Loading portfolio…
+        </div>
       )}
     </div>
   );

@@ -51,6 +51,19 @@ export interface HoldingLotsPanelProps {
    * visible rather than requiring the user to re-select from the dropdown.
    */
   defaultInstrumentId?: string | null;
+  /**
+   * Layout variant controlling column density.
+   *
+   * WHY variant prop instead of a duplicate component: the wide and narrow
+   * layouts share all logic (query, selection, formatting). Only the column
+   * set differs — narrow drops "Days Held" for use in constrained side-panels
+   * where horizontal space is limited (e.g. the analytics drawer). Defaulting
+   * to "wide" preserves every existing call site unchanged.
+   *
+   * wide  (default): Open Date | Qty | Cost/sh | Days | LT? | Unrealised P&L
+   * narrow:          Open Date | Qty | Cost/sh |       LT? | Unrealised P&L
+   */
+  variant?: "wide" | "narrow";
 }
 
 // ── Component ────────────────────────────────────────────────────────────────
@@ -60,7 +73,11 @@ export function HoldingLotsPanel({
   holdings,
   quotes,
   defaultInstrumentId,
+  variant = "wide",
 }: HoldingLotsPanelProps) {
+  // Derive a boolean for readability — prevents repeated `variant === "narrow"`
+  // comparisons throughout the render body.
+  const isNarrow = variant === "narrow";
   const { accessToken } = useAuth();
 
   // Default selection: use caller-supplied defaultInstrumentId when present
@@ -177,23 +194,41 @@ export function HoldingLotsPanel({
           </div>
         ) : (
           <div className="font-mono text-[11px]">
-            {/* Column header row. */}
+            {/* Column header row.
+                WHY conditional grid-cols: narrow variant drops the "DAYS"
+                column to reclaim ~70px in space-constrained side-panels.
+                Using cn() keeps the two grid shapes in one line rather than
+                duplicating the entire header/row markup. */}
             {/* WHY 110px last column (was 90px): the UNREAL cell renders both
                 a dollar value (+$X,XXX.XX) and a percentage sub-label in a
                 text-[9px] span (+XX.XX%). Combined they exceed 90px on most
                 lots, causing visible overflow. 110px fits the widest case. */}
-            <div className="grid grid-cols-[100px_70px_90px_70px_70px_110px] gap-2 px-3 py-1 text-[9px] uppercase tracking-[0.08em] text-muted-foreground border-b border-border bg-muted/10">
+            <div
+              className={cn(
+                "grid gap-2 px-3 py-1 text-[9px] uppercase tracking-[0.08em] text-muted-foreground border-b border-border bg-muted/10",
+                isNarrow
+                  ? "grid-cols-[100px_70px_90px_70px_110px]"
+                  : "grid-cols-[100px_70px_90px_70px_70px_110px]",
+              )}
+            >
               <div>OPEN DATE</div>
               <div className="text-right">QTY</div>
               <div className="text-right">COST/SHR</div>
-              <div className="text-right">DAYS</div>
+              {/* WHY conditional: narrow variant hides Days Held to keep the
+                  panel usable in constrained side-panel widths (~360px). */}
+              {!isNarrow && <div className="text-right">DAYS</div>}
               <div className="text-right">TERM</div>
               <div className="text-right">UNREAL</div>
             </div>
             {data.lots.map((lot, i) => (
               <div
                 key={`${lot.open_date}-${i}`}
-                className="grid grid-cols-[100px_70px_90px_70px_70px_110px] gap-2 px-3 h-[20px] items-center hover:bg-muted/20 border-b border-border/50"
+                className={cn(
+                  "grid gap-2 px-3 h-[20px] items-center hover:bg-muted/20 border-b border-border/50",
+                  isNarrow
+                    ? "grid-cols-[100px_70px_90px_70px_110px]"
+                    : "grid-cols-[100px_70px_90px_70px_70px_110px]",
+                )}
               >
                 <div className="tabular-nums text-foreground">{lot.open_date}</div>
                 <div className="text-right tabular-nums text-foreground">
@@ -202,9 +237,12 @@ export function HoldingLotsPanel({
                 <div className="text-right tabular-nums text-foreground">
                   {formatPrice(lot.cost_per_share)}
                 </div>
-                <div className="text-right tabular-nums text-muted-foreground">
-                  {lot.days_held}d
-                </div>
+                {/* Days Held — omitted in narrow variant (same rationale as header). */}
+                {!isNarrow && (
+                  <div className="text-right tabular-nums text-muted-foreground">
+                    {lot.days_held}d
+                  </div>
+                )}
                 <div className="text-right">
                   {/* Tiny ST/LT badge — same colour cue as the FIFO realised
                       P&L breakdown elsewhere on the page (LT is muted /

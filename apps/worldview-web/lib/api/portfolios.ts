@@ -27,6 +27,8 @@ import type {
   HoldingLotsResponse,
   ConcentrationResponse,
   SectorAttributionResponse,
+  TwrResponse,
+  AttributionResponse,
 } from "@/types/api";
 import { apiFetch } from "./_client";
 
@@ -802,6 +804,84 @@ export function createPortfoliosApi(t: string | undefined) {
         `/v1/portfolios/${encodeURIComponent(portfolioId)}/sector-attribution`,
         { token: t },
       );
+    },
+
+    /**
+     * getTwr — time-weighted return for a portfolio over a period vs a benchmark.
+     *
+     * WHY a dedicated endpoint: TWR (Modified Dietz formula) is the authoritative
+     * performance metric for multi-period portfolios. The frontend could compute
+     * it from value-history but the backend guarantees formula consistency across
+     * surfaces (analytics tab, period returns table, report PDF).
+     *
+     * WHY period + benchmark params: the analytics tab lets the user change both;
+     * each unique combination gets its own TanStack Query cache entry via
+     * qk.portfolios.twr(portfolioId, period, benchmark) so switching periods
+     * restores from cache instantly.
+     *
+     * NOTE: this endpoint is planned (docs/designs/0089/04-portfolio-detail.md §3.1
+     * backend gap #1). If not yet deployed the component falls back to computing
+     * the period return from value-history (Decision 2, Alt A in the design spec).
+     * The method is typed as Promise<TwrResponse | null> to signal graceful degradation.
+     *
+     * @param portfolioId resolved portfolio UUID
+     * @param period      analytics period string ("1M" / "3M" / "6M" / "YTD" / "1Y" / "2Y" / "ALL")
+     * @param benchmark   benchmark ticker ("SPY" / "QQQ" / "None")
+     */
+    async getTwr(
+      portfolioId: string,
+      period: string,
+      benchmark: string,
+    ): Promise<TwrResponse | null> {
+      // WHY try/catch: the TWR endpoint is a planned addition. If the backend
+      // returns 404 or is not yet deployed, the analytics chart degrades to
+      // value-history-derived returns instead of breaking with an error.
+      try {
+        const qs = new URLSearchParams({ period, benchmark }).toString();
+        return await apiFetch<TwrResponse>(
+          `/v1/portfolios/${encodeURIComponent(portfolioId)}/twr?${qs}`,
+          { token: t },
+        );
+      } catch {
+        return null;
+      }
+    },
+
+    /**
+     * getAttribution — contribution-to-return breakdown for a portfolio period.
+     *
+     * WHY a dedicated endpoint: attribution by holding/sector/asset_class requires
+     * the backend to join holdings + transactions + value-history + OHLCV into a
+     * single denormalized view. Doing this client-side would mean 3 extra round-trips
+     * and approximate buy-and-hold math that misses closed positions.
+     *
+     * WHY dimension param: a single endpoint with a `dimension` query param is more
+     * cache-friendly than three endpoints — adding a new dimension (e.g. "geography")
+     * is one query param change, not a new route.
+     *
+     * NOTE: planned endpoint (design spec §3.3 backend gap #3). Falls back to
+     * client-side `weight × period_return` approximation when unavailable.
+     *
+     * @param portfolioId resolved portfolio UUID
+     * @param period      analytics period string
+     * @param dimension   breakdown dimension
+     */
+    async getAttribution(
+      portfolioId: string,
+      period: string,
+      dimension: "holding" | "sector" | "asset_class",
+    ): Promise<AttributionResponse | null> {
+      // WHY try/catch: planned endpoint — degrade to "Attribution unavailable"
+      // message when the backend has not shipped this route yet.
+      try {
+        const qs = new URLSearchParams({ period, dimension }).toString();
+        return await apiFetch<AttributionResponse>(
+          `/v1/portfolios/${encodeURIComponent(portfolioId)}/attribution?${qs}`,
+          { token: t },
+        );
+      } catch {
+        return null;
+      }
     },
 
     /**

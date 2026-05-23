@@ -126,6 +126,19 @@ export const qk = {
       [QK_VERSION, "holdings-overviews", [...ids].sort()] as const,
     watchlistQuotes: (ids: readonly string[]) =>
       [QK_VERSION, "watchlist-quotes", [...ids].sort()] as const,
+    // WHY holdingLots nests under detail(id): invalidating a portfolio's detail
+    // cascade-invalidates lot data so a new fill (via brokerage sync) is reflected
+    // immediately without an explicit per-holding invalidation call.
+    holdingLots: (portfolioId: string, instrumentId: string, currentPrice?: number) =>
+      [QK_VERSION, "portfolios", "detail", portfolioId, "holding-lots", instrumentId, currentPrice] as const,
+    holdingTx: (portfolioId: string, instrumentId: string) =>
+      [QK_VERSION, "portfolios", "detail", portfolioId, "holding-tx", instrumentId] as const,
+    holdingValueHistory: (portfolioId: string, instrumentId: string, period: string) =>
+      [QK_VERSION, "portfolios", "detail", portfolioId, "holding-value-history", instrumentId, period] as const,
+    attribution: (portfolioId: string, period: string, dimension: "holding" | "sector" | "asset_class") =>
+      [QK_VERSION, "portfolios", "detail", portfolioId, "attribution", period, dimension] as const,
+    twr: (portfolioId: string, period: string, benchmark: string) =>
+      [QK_VERSION, "portfolios", "detail", portfolioId, "twr", period, benchmark] as const,
   },
 
   // ── Watchlists ───────────────────────────────────────────────────────────
@@ -525,6 +538,15 @@ export const qk = {
     profile: () => [QK_VERSION, "user", "profile"] as const,
     notificationPrefs: () => [QK_VERSION, "user", "notification-prefs"] as const,
   },
+
+  // ── Brokerage status (top-level; per-user) ────────────────────────────────
+  // WHY top-level instead of brokerage.*: brokerage.* is connection-management
+  // (list connections, sync errors). brokerageStatus is a lightweight per-user
+  // health check used by the analytics shell header badge — it is polled
+  // independently of the connection-management panel and should not cascade-
+  // invalidate on every connection-list refresh.
+  brokerageStatus: (userId: string) =>
+    [QK_VERSION, "brokerages", userId, "status"] as const,
 } as const;
 
 /**

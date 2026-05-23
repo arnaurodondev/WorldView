@@ -2454,3 +2454,96 @@ export interface PriceLevelsResponse {
   /** 200-day simple moving average. Null when fewer than 200 daily bars. */
   ma200: number | null;
 }
+
+// ── Analytics: TWR (docs/designs/0089/04-portfolio-detail.md §3.1 gap #1) ───
+
+/**
+ * GET /v1/portfolios/{id}/twr?period=YTD&benchmark=SPY
+ *
+ * Time-weighted return scalars for the portfolio and benchmark over a period.
+ * Planned endpoint — not yet shipped. The frontend falls back to computing
+ * portfolio_return from value-history when this endpoint returns null/404.
+ *
+ * WHY all fields nullable: the endpoint may lack SPY data (benchmark_return)
+ * or insufficient history (portfolio_return) — same null-as-absent convention
+ * as RiskMetricsResponse.
+ */
+export interface TwrResponse {
+  portfolio_id: string;
+  period: string;
+  benchmark: string;
+  /** Time-weighted return for the portfolio over the period. Fraction, not percent. */
+  portfolio_return: number | null;
+  /** Time-weighted return for the benchmark over the same period. Fraction. */
+  benchmark_return: number | null;
+  /** Excess return (portfolio_return − benchmark_return). */
+  excess_return: number | null;
+}
+
+// ── Analytics: Attribution (docs/designs/0089/04-portfolio-detail.md §3.3) ──
+
+/**
+ * One attribution row — applies to holding / sector / asset_class dimensions.
+ *
+ * WHY bps for contrib: basis points are the standard market-convention unit for
+ * contribution-to-return. 1 bps = 0.01%. Rendering as a float (e.g. 0.0335)
+ * and multiplying ×10000 in the component is fragile — storing pre-computed
+ * bps on the wire removes the per-component conversion.
+ */
+export interface AttributionRow {
+  /** Display name: ticker (holding), sector name, or asset class label. */
+  name: string;
+  /** Portfolio weight as a fraction (e.g. 0.124 = 12.4%). */
+  weight: number | null;
+  /** Period return for this slice as a fraction (e.g. 0.284 = 28.4%). */
+  period_return: number | null;
+  /** Contribution to portfolio return in basis points (e.g. 335 = +3.35%). */
+  contrib_bps: number | null;
+}
+
+/**
+ * GET /v1/portfolios/{id}/attribution?period=YTD&dimension=holding
+ *
+ * Contribution-to-return breakdown for a portfolio period.
+ * Planned endpoint — falls back to client-side weight × period_return when
+ * the backend has not shipped this route.
+ */
+export interface AttributionResponse {
+  portfolio_id: string;
+  period: string;
+  dimension: "holding" | "sector" | "asset_class";
+  rows: AttributionRow[];
+}
+
+// ── Analytics: Extended risk metrics ─────────────────────────────────────────
+
+/**
+ * Extended RiskMetricsResponse fields added in the Wave G backend pre-task
+ * (docs/designs/0089/04-portfolio-detail.md §3 backend gap #6).
+ *
+ * These fields are OPTIONAL on the wire — older gateway builds that have not
+ * shipped the backend pre-task simply omit them and the sidebar tiles render "—".
+ *
+ * WHY augment RiskMetricsResponse (not a new type): the endpoint is the same
+ * route (/v1/portfolios/{id}/risk-metrics) with additional fields. Keeping one
+ * type avoids the two-query pattern and preserves the existing staleTime / cache
+ * entry semantics.
+ */
+export interface ExtendedRiskMetricsResponse extends RiskMetricsResponse {
+  /** Calmar ratio = annualised_return / |max_drawdown|. Null when drawdown_max is 0 or null. */
+  calmar: number | null;
+  /** Win rate = count(daily_return > 0) / count(daily_return) over the lookback window. */
+  win_rate: number | null;
+  /**
+   * Alpha = portfolio_annualised_return − spy_annualised_return (simple excess return).
+   * WHY not CAPM alpha: simple alpha is sufficient for retail analytics and avoids
+   * the need for a regression over the risk-free rate time series.
+   */
+  alpha: number | null;
+  /** CAGR = (final_value / initial_value)^(1 / years) − 1 over the lookback window. */
+  cagr: number | null;
+  /** Historical VaR at 95% confidence level. Fraction (e.g. −0.023 = −2.3%). */
+  var_95: number | null;
+  /** Period return = (final_value − initial_value) / initial_value. Fraction. */
+  period_return: number | null;
+}
