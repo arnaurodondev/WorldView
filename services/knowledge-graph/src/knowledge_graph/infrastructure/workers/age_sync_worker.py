@@ -11,7 +11,10 @@ in ``intelligence_db`` to the Apache AGE property-graph extension:
      records written while the sync is running.
   3. Set up the AGE session: ``LOAD 'age'`` + ``SET search_path``.
   4. Sync ``canonical_entities WHERE updated_at > watermark`` → MERGE Entity vertices.
-  5. Sync ``relations WHERE updated_at > watermark AND confidence > 0.1`` → MERGE edges.
+  5. Sync ``relations WHERE updated_at > watermark AND (confidence > 0.1 OR confidence IS NULL)`` → MERGE edges.
+     NULL-confidence relations (provisional evidence not yet resolved) are synced with confidence=0.0
+     so Cypher path queries see the full graph structure. The confidence value is backfilled later
+     by ConfidenceWorker once provisional evidence is cleared.
   6. Sync ``temporal_events WHERE updated_at > watermark`` → MERGE TemporalEvent vertices.
   7. Sync ``entity_event_exposures WHERE created_at > watermark`` → MERGE EVENT_EXPOSES edges.
   8. Commit the DB transaction.
@@ -110,7 +113,11 @@ _EPOCH = datetime(1970, 1, 1, tzinfo=UTC)
 _ENTITY_BATCH = 1000
 _RELATION_BATCH = 5000
 
-# Confidence threshold — relations below this are not synced (noise filter).
+# Confidence threshold — relations BELOW this AND with non-NULL confidence are not synced (noise filter).
+# NULL-confidence relations (provisional evidence, not yet computed) ARE synced with confidence=0.0
+# so Cypher path queries see the full graph. BP-539 fix: the previous hard filter excluded 72% of
+# relations because their evidence was still provisional (entity_provisional=true), causing AGE to
+# reflect only 27% of the true graph structure.
 _MIN_RELATION_CONFIDENCE = 0.1
 
 # Whitelist of all valid AGE edge labels (27 relation types + EVENT_EXPOSES).
@@ -383,10 +390,13 @@ class AgeSyncWorker:
             rows = await session.execute(
                 text(
                     "SELECT relation_id, subject_entity_id, object_entity_id,"
-                    "       canonical_type, confidence, updated_at"
+                    "       canonical_type, COALESCE(confidence, 0.0) AS confidence, updated_at"
                     " FROM relations"
                     " WHERE updated_at > :since"
-                    "   AND confidence > :min_conf"
+                    # BP-539: include NULL-confidence relations (provisional evidence not yet resolved).
+                    # COALESCE above maps NULL→0.0 so the AGE edge gets a valid confidence float.
+                    # The filter keeps rows where confidence exceeds the threshold OR is NULL (provisional).
+                    "   AND (confidence > :min_conf OR confidence IS NULL)"
                     " ORDER BY updated_at ASC, relation_id ASC"
                     " LIMIT :lim OFFSET :off",
                 ),

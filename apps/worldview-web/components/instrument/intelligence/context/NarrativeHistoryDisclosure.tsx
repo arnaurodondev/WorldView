@@ -103,13 +103,7 @@ export function NarrativeHistoryDisclosure({ entityId }: NarrativeHistoryDisclos
             </p>
           )}
 
-          {!isLoading && !isError && versions.length === 1 && (
-            <p className="text-[11px] text-muted-foreground px-3 py-2">
-              Only the current version exists.
-            </p>
-          )}
-
-          {!isLoading && !isError && versions.length > 1 && (
+          {!isLoading && !isError && versions.length > 0 && (
             // WHY overflow-y-auto + max-h: cap the expanded list height so it
             // doesn't push the page scrollbar. 400px ≈ 12 rows at 32px each.
             <div className="overflow-y-auto max-h-[400px]">

@@ -104,6 +104,8 @@ const NODE_1: SelectedNodeInfo = {
   type: "company",
   degree: 3,
   edges: [{ label: "COMPETES_WITH", weight: 0.8, neighborId: "n2", neighborLabel: "Microsoft" }],
+  description: null,
+  sector: null,
 };
 
 // WHY _NODE_2 prefix: this fixture was added for a planned T4 multi-selection test
@@ -115,6 +117,8 @@ const _NODE_2: SelectedNodeInfo = {
   type: "company",
   degree: 2,
   edges: [],
+  description: null,
+  sector: null,
 };
 
 const EDGE_1: SelectedEdgeInfo = {

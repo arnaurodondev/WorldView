@@ -146,6 +146,12 @@ class Settings(BaseSettings):
     # chunks.entity_mentions JSONB (avoids index bloat from low-confidence noise).
     gliner_mention_floor: float = 0.6
 
+    # RC-1 fix: minimum word count for articles to enter the NLP pipeline.
+    # Articles below this threshold are stub headlines (Finnhub ~91% stub rate,
+    # SEC Edgar ~52%) that carry no relational signal but consume NER + embedding
+    # capacity. Configurable via NLP_PIPELINE_MIN_WORD_COUNT (default 50).
+    min_word_count: int = 50
+
     # Routing tier thresholds (PRD §6.7 Block 5)
     routing_tier_deep: float = 0.70  # score >= this → DEEP processing
     # Lowered from 0.45: watchlist signal fires post-resolution, effective max without it is ~0.44

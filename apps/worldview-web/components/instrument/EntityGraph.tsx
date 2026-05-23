@@ -112,6 +112,8 @@ export interface EntityGraphProps {
     nodeType: string,
     degree: number,
     edges: Array<{ label: string; weight: number; neighborId: string; neighborLabel: string }>,
+    description: string | null,
+    sector: string | null,
   ) => void;
   /** Called when user clicks an edge — fires full edge info from graphology attrs. */
   onEdgeClick?: (info: SelectedEdgeInfo) => void;

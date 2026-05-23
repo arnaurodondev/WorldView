@@ -11,10 +11,16 @@
  * DATA SOURCE: S9 GET /v1/ohlcv/{instrumentId}?timeframe=1D.
  *
  * PLAN-0091 F-1 (TA overlay extension):
- *   Added optional `overlays` prop so TAOverlayPanel can inject computed TA lines
- *   (EMA 20/50, SMA 200, MACD, Bollinger, RSI, VWAP) into the chart without
- *   touching useChartSeries internals. The `OverlaySeries` type is exported so
- *   TAOverlayPanel can import it alongside OHLCVChart.
+ *   TAOverlayPanel is rendered INSIDE OHLCVChart (below the toolbar row) rather
+ *   than in QuoteTab because it needs both `timeframe` and `data.bars`, which are
+ *   internal state/data here. Lifting them to QuoteTab would bloat the orchestrator
+ *   with chart-only concerns. OHLCVChart manages `overlayLines` state and passes it
+ *   down to useChartSeries as the `overlays` option.
+ *
+ *   The `overlays` prop on OHLCVChartProps is kept for external callers (e.g. tests
+ *   or non-QuoteTab embed points) that want to inject overlays without TAOverlayPanel.
+ *   When both `overlays` prop and internal TAOverlayPanel are active, the prop wins
+ *   (external caller takes precedence over the chip strip).
  */
 
 "use client";
@@ -26,6 +32,7 @@ import { useAuth } from "@/hooks/useAuth";
 import { Skeleton } from "@/components/ui/skeleton";
 import { ChartToolbar } from "@/components/instrument/ChartToolbar";
 import { TimeframeToolbar } from "@/components/instrument/chart/TimeframeToolbar";
+import { TAOverlayPanel } from "@/components/instrument/quote/TAOverlayPanel";
 import { useChartSeries } from "@/components/instrument/chart/useChartSeries";
 import { CHART_HEIGHT, type Timeframe } from "@/lib/chart-adapter";
 import {
@@ -67,14 +74,21 @@ interface OHLCVChartProps {
   /** Initial bars from CompanyOverview (last 30d 1D — render immediately). */
   initialBars?: OHLCVBar[];
   /**
-   * TA overlay lines computed by TAOverlayPanel (PLAN-0091 F-1).
-   * Each entry becomes a lightweight-charts LineSeries on the main price pane.
-   * Changing this prop updates series data without re-mounting the chart.
+   * KG entity UUID — forwarded to TAOverlayPanel to enable the SENTI chip
+   * (sentiment timeseries overlay). When null/undefined the SENTI chip renders
+   * disabled. Comes from QuoteTab → useInstrumentBrief().entity_id.
+   */
+  entityId?: string | null;
+  /**
+   * External TA overlay lines (PLAN-0091 F-1 escape hatch for non-QuoteTab callers).
+   * When provided, these overlays are merged with (or override) the lines produced
+   * by the internal TAOverlayPanel chip strip. Most callers should omit this prop
+   * and rely on the chip strip instead.
    */
   overlays?: OverlaySeries[];
 }
 
-export function OHLCVChart({ instrumentId, initialBars, overlays }: OHLCVChartProps) {
+export function OHLCVChart({ instrumentId, initialBars, entityId, overlays: externalOverlays }: OHLCVChartProps) {
   const { accessToken } = useAuth();
   const [timeframe, setTimeframe] = useState<Timeframe>("1D");
   // WHY default showVolume=true: volume is the industry-standard candlestick companion.
@@ -105,6 +119,22 @@ export function OHLCVChart({ instrumentId, initialBars, overlays }: OHLCVChartPr
     setVolumeProfileBuckets(b);
   }, []);
 
+  // WHY overlayLines (internal state for chip-strip overlays, distinct from externalOverlays prop):
+  //   TAOverlayPanel lives inside OHLCVChart because it needs `timeframe` + `data.bars`
+  //   which are internal here. The chip strip calls handleOverlaysChange → setOverlayLines.
+  //   The final `overlays` passed to useChartSeries merges chip lines with any external
+  //   overlays (external prop takes precedence so embed callers can fully override).
+  const [overlayLines, setOverlayLines] = useState<OverlaySeries[]>([]);
+  const handleOverlaysChange = useCallback((lines: OverlaySeries[]) => {
+    setOverlayLines(lines);
+  }, []);
+
+  // Merge chip-strip overlays with any externally-injected overlays.
+  // WHY external prop takes precedence: embed callers (non-QuoteTab contexts) that
+  // supply the `overlays` prop know exactly what they want — the chip strip should
+  // not interfere. When externalOverlays is undefined the chip strip is the sole source.
+  const resolvedOverlays = externalOverlays ?? overlayLines;
+
   const containerRef = useRef<HTMLDivElement>(null);
 
   // WHY useMemo: a fresh object every render re-fires the data-update effect
@@ -129,9 +159,9 @@ export function OHLCVChart({ instrumentId, initialBars, overlays }: OHLCVChartPr
     showVolume, showMA50, showMA200, showVolMA20, showVWAPLine,
     data, instrumentId, timeframe, logScaleRef, logScale,
     onVolumeProfileBuckets: handleVolumeProfileBuckets,
-    // PLAN-0091 F-1: TA overlay lines from TAOverlayPanel (or undefined when
-    // TAOverlayPanel is not rendered). useChartSeries manages dynamic series.
-    overlays,
+    // PLAN-0091 F-1: TA overlay lines from the chip strip (or external prop override).
+    // useChartSeries manages the diff-based series creation/removal without re-mounting.
+    overlays: resolvedOverlays,
   });
 
   // Indicator toggle handler persists selections to localStorage.
@@ -239,6 +269,24 @@ export function OHLCVChart({ instrumentId, initialBars, overlays }: OHLCVChartPr
           />
         </div>
       </div>
+
+      {/* PLAN-0091 F-1: TA chip strip — renders below the toolbar, above the canvas.
+          WHY inside OHLCVChart (not QuoteTab): TAOverlayPanel needs `timeframe` and
+          `data.bars` which are internal state/data here. Rendering here avoids lifting
+          them to QuoteTab which would bloat the orchestrator with chart-only concerns.
+          WHY shrink-0: the chip strip must not flex-shrink — it is always visible
+          regardless of chart height. The canvas area (flex-1) absorbs the remaining space.
+          WHY data.bars ?? []: during the initial skeleton (data=undefined), the chip
+          strip renders but all TA chips produce empty arrays → no overlays appear
+          until bars arrive (correct behaviour — no "flash of empty lines"). */}
+      {!chartError && (
+        <TAOverlayPanel
+          bars={data?.bars ?? []}
+          onOverlaysChange={handleOverlaysChange}
+          entityId={entityId}
+          timeframe={timeframe}
+        />
+      )}
 
       {chartError && (
         <div className="flex items-center justify-center rounded-[2px] border border-border bg-card" style={{ height: CHART_HEIGHT }}>

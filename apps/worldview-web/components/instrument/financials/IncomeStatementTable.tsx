@@ -78,8 +78,16 @@ function extractValue(data: IncomeStatementData, key: RowKey): number | null {
 
 function formatFY(dateStr: string, quarterly: boolean): string {
   // WHY UTC parse: avoids off-by-one-day in western timezones at midnight UTC.
+  // WHY slice before "T": S3's Pydantic datetime serialiser emits full ISO
+  // strings like "2024-09-30T00:00:00".  Appending "T00:00:00Z" to such a
+  // string produces "2024-09-30T00:00:00T00:00:00Z" — an invalid date that
+  // new Date() silently accepts as Invalid Date (no throw), causing
+  // getUTCFullYear() → NaN → String(NaN).slice(2) → "N" → "FYN".
+  // Stripping any existing time component before appending fixes the bug for
+  // both date-only strings ("2024-09-30") and full datetime strings.
+  const datePart = dateStr.split("T")[0] ?? dateStr;
   try {
-    const d = new Date(dateStr + "T00:00:00Z");
+    const d = new Date(datePart + "T00:00:00Z");
     if (quarterly) {
       // WHY Q1-Q4 mapping: quarters end March/June/September/December per EODHD.
       const m = d.getUTCMonth(); // 0-indexed
@@ -88,7 +96,7 @@ function formatFY(dateStr: string, quarterly: boolean): string {
     }
     return `FY${String(d.getUTCFullYear()).slice(2)}`;
   } catch {
-    return dateStr.slice(0, 4);
+    return datePart.slice(0, 4);
   }
 }
 

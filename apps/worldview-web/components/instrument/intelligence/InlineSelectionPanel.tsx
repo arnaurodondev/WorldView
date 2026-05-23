@@ -32,6 +32,8 @@ export interface SelectedNodeInfo {
   type: string;
   degree: number;
   edges: Array<{ label: string; weight: number; neighborId: string; neighborLabel: string }>;
+  description: string | null;
+  sector: string | null;
 }
 
 // ── Props ─────────────────────────────────────────────────────────────────────
@@ -142,7 +144,19 @@ export function InlineSelectionPanel({ selectedNode, selectedEdge, onClear }: In
             <span className="text-[10px] font-mono text-muted-foreground">
               {selectedNode.degree} connection{selectedNode.degree !== 1 ? "s" : ""}
             </span>
+            {selectedNode.sector && (
+              <span className="text-[9px] font-mono uppercase tracking-wider text-muted-foreground/60 ml-auto shrink-0 truncate max-w-[120px]">
+                {selectedNode.sector}
+              </span>
+            )}
           </div>
+          {selectedNode.description && (
+            <div className="px-3 py-1 border-b border-border/20">
+              <p className="text-[10px] text-muted-foreground/80 leading-snug line-clamp-2">
+                {selectedNode.description}
+              </p>
+            </div>
+          )}
           {selectedNode.edges.slice(0, 6).map((e, i) => (
             <div
               key={i}

@@ -842,3 +842,81 @@ class TestAgeSyncWorkerProgrammingError:
 
         # Watermark must NOT have been written — Valkey.set() should not be called.
         valkey.set.assert_not_awaited()
+
+
+# ── Test: BP-539 regression — NULL-confidence relations must be synced ─────────
+
+
+class TestNullConfidenceRelationSync:
+    """Regression tests for BP-539: AGE sync excluded 72% of relations because
+    their evidence was still provisional (entity_provisional=true), leaving
+    confidence=NULL. The fix: COALESCE(confidence, 0.0) + include NULL rows."""
+
+    def test_null_confidence_relation_is_synced(self) -> None:
+        """A relation with confidence=NULL (provisional evidence) MUST be synced
+        with confidence=0.0. The old filter 'confidence > 0.1' silently excluded
+        all NULL-confidence rows, causing a 74% AGE coverage gap (BP-539)."""
+        import json
+
+        # Simulate a relation row where confidence is 0.0 (COALESCE maps NULL→0.0
+        # in the SQL; by the time the row reaches Python confidence is a float).
+        relation_row = _make_relation_row(
+            canonical_type="competes_with",
+            confidence=0.0,  # COALESCE(NULL, 0.0) → 0.0
+        )
+
+        session = AsyncMock()
+        session.__aenter__ = AsyncMock(return_value=session)
+        session.__aexit__ = AsyncMock(return_value=False)
+        session.commit = AsyncMock()
+        session.execute = AsyncMock(
+            side_effect=[
+                None,
+                None,  # _setup_age_session (LOAD + SET)
+                _make_result([]),  # entities SELECT (empty)
+                None,
+                None,  # second _setup_age_session
+                _make_result([relation_row]),  # relations SELECT — one NULL-conf row
+                None,  # Cypher MERGE (COMPETES_WITH edge)
+                None,
+                None,  # third _setup_age_session
+                _make_result([]),  # temporal events SELECT
+                _make_result([]),  # exposures SELECT
+            ],
+        )
+
+        sf = _make_session_factory(session)
+        settings = _make_settings()
+        valkey = _make_valkey()
+
+        from knowledge_graph.infrastructure.workers.age_sync_worker import AgeSyncWorker
+
+        worker = AgeSyncWorker(session_factory=sf, valkey_client=valkey, settings=settings)
+        asyncio.run(worker.run())
+
+        # Verify the Cypher MERGE was executed (edge was synced despite confidence=0.0)
+        cypher_calls = [c for c in session.execute.call_args_list if "COMPETES_WITH" in str(c[0][0])]
+        assert len(cypher_calls) == 1, "NULL-confidence relation must generate a Cypher MERGE call"
+
+        # Verify the params JSON has confidence=0.0 (not null, which is not valid AGE agtype).
+        # session.execute is called as execute(text(...), {"params": json_str}) — positional args.
+        params_dict = cypher_calls[0][0][1]  # second positional arg is the bind-params dict
+        params = json.loads(params_dict["params"])
+        assert (
+            params["confidence"] == 0.0
+        ), f"confidence must be 0.0 (not null) in AGE params, got {params['confidence']}"
+
+    def test_sql_query_includes_null_confidence_clause(self) -> None:
+        """The SQL query for relations MUST include 'confidence IS NULL' in the filter
+        so that provisional-evidence rows are not silently excluded (BP-539 regression guard)."""
+        # The SQL is embedded in _sync_relations. Inspect via the source code
+        # constant-checking pattern: verify the generated SQL text includes the correct filter.
+        import inspect
+
+        from knowledge_graph.infrastructure.workers.age_sync_worker import AgeSyncWorker
+
+        source = inspect.getsource(AgeSyncWorker._sync_relations)
+        assert "confidence IS NULL" in source, (
+            "BP-539 regression: _sync_relations must include 'confidence IS NULL' in the WHERE clause "
+            "so that relations with NULL confidence (provisional evidence) are synced to AGE."
+        )

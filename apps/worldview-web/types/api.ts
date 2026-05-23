@@ -2268,9 +2268,12 @@ export interface PeerInstrument {
   name: string | null;
   market_cap: number | null;
   pe_ratio: number | null;
-  /** 1Y price return (%), already scaled ×100 by S9. */
+  /** 1Y price return as a decimal fraction (0.125 = 12.5%). S3 does NOT
+   *  scale this field. Use formatPercent(return_1y) for display. */
   return_1y: number | null;
-  /** Daily change (%), already scaled ×100 by S9. */
+  /** Daily change already scaled to percentage by S3 (3.1 = 3.1%).
+   *  S3 multiplies daily_return × 100 before building PeerInstrumentResponse.
+   *  Use formatPercentDirect(change_pct) for display. */
   change_pct: number | null;
 }
 

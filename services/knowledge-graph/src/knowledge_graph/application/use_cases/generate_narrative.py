@@ -4,6 +4,7 @@ Block 13D-3: Worker 13D-3 calls this use case per entity.
 
 Pipeline:
   1. Load entity context (READ session — R27 read replica).
+     Includes top-3 recent article claims from intelligence_db.claims for grounding.
   2. Build input_snapshot + compute snapshot_hash.
   3. Idempotency check via narrative_repo.find_by_input_snapshot.
   4. Sanitize LLM inputs via prompts.knowledge.alias.sanitize_description.
@@ -11,9 +12,6 @@ Pipeline:
   6. Compute health_score (data_completeness*0.4 + evidence_freshness*0.3 + density*0.3).
   7. Persist via WRITE session: narrative_repo.insert_and_promote + outbox event.
   8. Increment Prometheus metrics.
-
-NOTE: S5 articles are NOT fetched in this wave (articles=[]).  The HTTP client
-for cross-service calls will be added in a later wave.
 """
 
 from __future__ import annotations

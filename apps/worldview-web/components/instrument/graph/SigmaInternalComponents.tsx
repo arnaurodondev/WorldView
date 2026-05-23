@@ -111,7 +111,8 @@ interface GraphEventsProps {
   onNodeHover: (tooltip: NodeTooltip | null) => void;
   onEdgeHover: (tooltip: EdgeTooltip | null) => void;
   onNodeClick?: (nodeId: string, label: string, nodeType: string, degree: number,
-    edges: Array<{label: string; weight: number; neighborId: string; neighborLabel: string}>) => void;
+    edges: Array<{label: string; weight: number; neighborId: string; neighborLabel: string}>,
+    description: string | null, sector: string | null) => void;
   /** Called when the user clicks an edge — fires the full edge data from graphology attrs. */
   onEdgeClick?: (info: SelectedEdgeInfo) => void;
 }
@@ -154,7 +155,11 @@ export function GraphEvents({ centerEntityId, onNodeHover, onEdgeHover, onNodeCl
             return { label: ea.label as string, weight: ea.weight as number,
               neighborId, neighborLabel: graph.getNodeAttributes(neighborId).label as string };
           });
-          onNodeClick(node, attrs.label as string, attrs.nodeType as string, graph.degree(node), edges);
+          onNodeClick(
+            node, attrs.label as string, attrs.nodeType as string, graph.degree(node), edges,
+            (attrs.description as string | null | undefined) ?? null,
+            (attrs.sector as string | null | undefined) ?? null,
+          );
         } else {
           // PRD-0089 F2 step 11 (§6.6): prefer the ticker attribute over the
           // raw sigma node id (entity_id UUID). Falls back to UUID for
@@ -226,6 +231,8 @@ export function GraphLoader({ data, centerEntityId, layout }: GraphLoaderProps) 
         // clickNode handler can build a ticker-first URL without re-querying.
         // Undefined for non-tradable nodes (sectors/persons/events).
         ticker: node.ticker,
+        description: node.description ?? null,
+        sector: node.sector ?? null,
         x: Math.random() * 100 - 50,
         y: Math.random() * 100 - 50,
         size: baseSize,

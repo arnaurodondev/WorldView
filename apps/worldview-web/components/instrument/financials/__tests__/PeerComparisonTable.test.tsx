@@ -62,7 +62,10 @@ const PEERS_RESPONSE: PeersResponse = {
       name: "Microsoft Corp",
       market_cap: 2_900_000_000_000,
       pe_ratio: 35.2,
-      return_1y: 18.4,
+      // WHY 0.184: return_1y from S3 is a decimal fraction (0.184 = 18.4%).
+      // S3 does NOT multiply return_1y by 100 (unlike change_pct which it does).
+      return_1y: 0.184,
+      // WHY 0.3: change_pct from S3 is already a percentage (0.3 = +0.30%).
       change_pct: 0.3,
     },
     {
@@ -124,6 +127,35 @@ describe("PeerComparisonTable", () => {
     // GOOGL has null return_1y → should show "—"
     const dashes = screen.getAllByText("—");
     expect(dashes.length).toBeGreaterThan(0);
+  });
+
+  it("formats return_1y as decimal fraction (18.4% shown as +18.40%)", () => {
+    // WHY this test: return_1y from S3 is a decimal fraction (0.184 = 18.4%).
+    // Previously fmtPct divided by 100 again → 0.001840 → "+0.18%" (wrong).
+    // After fix, fmtDecimalPct calls formatPercent(0.184) → "+18.40%".
+    render(
+      <PeerComparisonTable
+        peersData={PEERS_RESPONSE}
+        instrumentId="aapl"
+        fundamentals={FUNDAMENTALS}
+      />,
+    );
+    // MSFT has return_1y=0.184 → should render "+18.40%"
+    expect(screen.getByText("+18.40%")).toBeInTheDocument();
+  });
+
+  it("formats change_pct as already-percentage (0.3 shown as +0.30%)", () => {
+    // WHY this test: change_pct from S3 is already a percentage (0.3 = +0.30%).
+    // fmtPctDirect calls formatPercentDirect(0.3) → "+0.30%".
+    render(
+      <PeerComparisonTable
+        peersData={PEERS_RESPONSE}
+        instrumentId="aapl"
+        fundamentals={FUNDAMENTALS}
+      />,
+    );
+    // MSFT has change_pct=0.3 → should render "+0.30%"
+    expect(screen.getByText("+0.30%")).toBeInTheDocument();
   });
 
   it("renders loading state when peersData is undefined", () => {

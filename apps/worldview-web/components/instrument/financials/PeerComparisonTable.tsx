@@ -22,7 +22,7 @@
 // WHY "use client": useRouter requires the client runtime for navigation.
 
 import { useRouter } from "next/navigation";
-import { formatMarketCap, formatPercent, formatRatio } from "@/lib/utils";
+import { formatMarketCap, formatPercent, formatPercentDirect, formatRatio } from "@/lib/utils";
 import type { PeersResponse, Fundamentals } from "@/types/api";
 
 // ── Types ──────────────────────────────────────────────────────────────────
@@ -45,10 +45,21 @@ function returnColor(v: number | null): string {
   return "text-foreground";
 }
 
-function fmtPct(v: number | null | undefined): string {
-  // WHY null guard before formatPercent: formatPercent throws on NaN.
+// WHY two formatters: S3 sends `return_1y` as a decimal fraction (0.125 =
+// 12.5%) but sends `change_pct` already as a percentage (3.1 = 3.1%).
+// `formatPercent` (canonical) multiplies its input by 100, so it is correct
+// for decimal fractions. `formatPercentDirect` does not multiply, so it is
+// correct for already-scaled values.
+function fmtDecimalPct(v: number | null | undefined): string {
+  // WHY null guard before formatPercent: formatPercent returns DASH on null,
+  // but an explicit guard keeps the intent explicit.
   if (v == null) return "—";
-  return formatPercent(v / 100);
+  return formatPercent(v); // input is 0.125 → formats as "+12.50%"
+}
+
+function fmtPctDirect(v: number | null | undefined): string {
+  if (v == null) return "—";
+  return formatPercentDirect(v); // input is 3.1 → formats as "+3.10%"
 }
 
 // ── Component ──────────────────────────────────────────────────────────────
@@ -118,7 +129,11 @@ export function PeerComparisonTable({
                 doesn't carry return_1y. Use change_pct (daily) instead. */}
             <td className={`px-2 text-right tabular-nums whitespace-nowrap text-muted-foreground/40`}>—</td>
             <td className={`px-2 text-right tabular-nums whitespace-nowrap ${returnColor(fundamentals?.daily_return ?? null)}`}>
-              {fmtPct(fundamentals?.daily_return != null ? fundamentals.daily_return * 100 : null)}
+              {/* WHY fmtDecimalPct (not fmtPctDirect): daily_return in
+                  Fundamentals is a decimal fraction (0.012 = 1.2%) matching
+                  the EODHD daily_return metric convention. formatPercent
+                  already multiplies by 100 internally. */}
+              {fmtDecimalPct(fundamentals?.daily_return ?? null)}
             </td>
           </tr>
 
@@ -147,11 +162,18 @@ export function PeerComparisonTable({
               <td className="px-2 text-right tabular-nums text-foreground">
                 {peer.pe_ratio != null ? formatRatio(peer.pe_ratio) : "—"}
               </td>
+              {/* WHY fmtDecimalPct for return_1y: S3 sends return_1y as a
+                  decimal fraction (0.125 = 12.5%); formatPercent multiplies
+                  by 100, so passing 0.125 yields "+12.50%". */}
               <td className={`px-2 text-right tabular-nums whitespace-nowrap ${returnColor(peer.return_1y)}`}>
-                {fmtPct(peer.return_1y)}
+                {fmtDecimalPct(peer.return_1y)}
               </td>
+              {/* WHY fmtPctDirect for change_pct: S3 already scales
+                  daily_return × 100 before building PeerInstrumentResponse
+                  (see peers.py line 241 — "# WHY * 100"). formatPercentDirect
+                  does not multiply again, so 3.1 → "+3.10%". */}
               <td className={`px-2 text-right tabular-nums whitespace-nowrap ${returnColor(peer.change_pct)}`}>
-                {fmtPct(peer.change_pct)}
+                {fmtPctDirect(peer.change_pct)}
               </td>
             </tr>
           ))}

@@ -28,6 +28,8 @@ const mockNode: SelectedNodeInfo = {
     { label: "COMPETES_WITH", weight: 0.85, neighborId: "node-002", neighborLabel: "Microsoft" },
     { label: "SUPPLIER_OF", weight: 0.6, neighborId: "node-003", neighborLabel: "TSMC" },
   ],
+  description: null,
+  sector: null,
 };
 
 const mockEdge: SelectedEdgeInfo = {

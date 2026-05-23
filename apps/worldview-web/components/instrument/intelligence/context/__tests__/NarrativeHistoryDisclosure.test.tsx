@@ -2,7 +2,7 @@
  * context/__tests__/NarrativeHistoryDisclosure.test.tsx — W7 T-23
  *
  * Pins 3 contracts:
- *  1. Single version → "Only the current version exists."
+ *  1. Single version → renders the version row (not a dismissive placeholder).
  *  2. Multiple versions render in the list (≥1 row visible when accordion open).
  *  3. Empty versions → "No narrative history available."
  */
@@ -34,15 +34,17 @@ function Wrapper({ children }: { children: ReactNode }) {
 beforeEach(() => { mockGateway.getNarratives.mockReset(); });
 
 describe("NarrativeHistoryDisclosure", () => {
-  it("shows 'Only the current version exists.' for a single version", async () => {
+  it("renders a version row for a single version", async () => {
     mockGateway.getNarratives.mockResolvedValue({
       versions: [{ version_id: "v1", narrative_text: "Hello world narrative.", model_id: "llm/a", generated_at: "2026-05-01T00:00:00Z" }],
     });
     render(<Wrapper><NarrativeHistoryDisclosure entityId="ent-001" /></Wrapper>);
-    // Open the accordion
     const trigger = screen.getByText("NARRATIVE HISTORY");
     fireEvent.click(trigger);
-    await waitFor(() => screen.getByText("Only the current version exists."));
+    await waitFor(() => {
+      const rows = screen.getAllByRole("button");
+      expect(rows.length).toBeGreaterThanOrEqual(2);
+    });
   });
 
   it("shows 'No narrative history available.' for zero versions", async () => {

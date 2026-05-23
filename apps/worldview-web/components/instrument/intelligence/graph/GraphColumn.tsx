@@ -238,12 +238,14 @@ export function GraphColumn({ entityId, selectedNodeId, onNodeChange, onEdgeSele
     nodeType: string,
     degree: number,
     edges: Array<{ label: string; weight: number; neighborId: string; neighborLabel: string }>,
+    description: string | null,
+    sector: string | null,
   ) => {
     if (selectedNodeId === id) {
       // Same node clicked again — deselect
       onNodeChange?.(null);
     } else {
-      onNodeChange?.({ id, label, type: nodeType, degree, edges });
+      onNodeChange?.({ id, label, type: nodeType, degree, edges, description, sector });
     }
   };
   const isTimeout = isError && graphErr instanceof Error && graphErr.message === "GRAPH_TIMEOUT";

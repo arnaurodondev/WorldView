@@ -92,7 +92,7 @@ const STRIP_TIMEFRAME = "1D" as const;
 
 export function QuoteTab({
   instrumentId,
-  entityId: _entityId,
+  entityId,
   fundamentals,
   quote,
   initialBars,
@@ -149,7 +149,9 @@ export function QuoteTab({
       <div className="flex flex-col min-w-0 overflow-hidden">
         {/* Chart fills remaining vertical space inside the left column. */}
         <div className="flex-1 min-h-0 overflow-hidden">
-          <OHLCVChart instrumentId={instrumentId} initialBars={initialBars} />
+          {/* WHY entityId forwarded: OHLCVChart passes it to TAOverlayPanel for the
+              SENTI chip. QuoteTab receives entityId from the page bundle (KG entity_id). */}
+          <OHLCVChart instrumentId={instrumentId} initialBars={initialBars} entityId={entityId} />
         </div>
 
         {/* Multi-period returns strip (7 periods, data-table-grid 20px). */}

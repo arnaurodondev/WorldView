@@ -520,6 +520,25 @@ class ArticleProcessingConsumer(ValkeyDedupMixin, BaseKafkaConsumer[None]):
         # Block 3: Sectioning
         text = await self._download_article(minio_key)
         word_count: int = len(text.split())
+
+        # RC-1: stub-article filter — skip articles below the minimum word count.
+        # Finnhub (~91% stub rate) and SEC Edgar (~52% stub rate) frequently emit
+        # headline-only records that have no relational signal but consume NER,
+        # embedding, and LLM extraction budget. The word count is computed on the
+        # raw downloaded text (not the message envelope field) because the envelope
+        # field may be absent or stale for older events. Early return prevents all
+        # downstream blocks from running; the document remains in content_store but
+        # is not indexed in the NLP pipeline.
+        if word_count < self._settings.min_word_count:
+            logger.info(  # type: ignore[no-any-return]
+                "article_consumer.stub_filtered",
+                doc_id=str(doc_id),
+                word_count=word_count,
+                min_word_count=self._settings.min_word_count,
+                source_type=source_type,
+            )
+            return
+
         sections = section_document(doc_id, text, source_type)
         if tenant_id is not None:
             sections = [dataclasses.replace(s, tenant_id=tenant_id) for s in sections]

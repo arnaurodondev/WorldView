@@ -60,7 +60,7 @@ function Wrapper({ children }: { children: ReactNode }) {
  * fourYearAnnual — synthetic FundamentalsSectionResponse with exactly four
  * ANNUAL records FY21 → FY24. PascalCase keys mirror EODHD's payload.
  */
-function fourYearAnnual() {
+function fourYearAnnual(useDateOnly = true) {
   const years = [2021, 2022, 2023, 2024];
   return {
     security_id: "i-test-1",
@@ -68,9 +68,11 @@ function fourYearAnnual() {
       id: `rec-${y}`,
       security_id: "i-test-1",
       section: "income_statement",
-      // WHY 12-31: EODHD uses fiscal-year-end dates; this is the canonical
-      // calendar-year FY close (good enough for non-shifted-FY tickers).
-      period_end: `${y}-12-31`,
+      // WHY conditional format: S3's Pydantic datetime serialiser emits full
+      // ISO strings like "2021-12-31T00:00:00"; production data always has
+      // the time component. The useDateOnly flag lets the "FYN bug" test
+      // verify that formatFY strips the "T..." suffix before parsing.
+      period_end: useDateOnly ? `${y}-12-31` : `${y}-12-31T00:00:00`,
       period_type: "ANNUAL" as const,
       data: {
         totalRevenue: 100_000_000 * (i + 1),
@@ -136,6 +138,26 @@ describe("IncomeStatementTable", () => {
     expect(screen.getByText("FY22")).toBeInTheDocument();
     expect(screen.getByText("FY23")).toBeInTheDocument();
     expect(screen.getByText("FY24")).toBeInTheDocument();
+  });
+
+  it("renders FY headers from full ISO datetime period_end (not FYN)", async () => {
+    // WHY this test: S3 Pydantic serialises period_end as "2024-12-31T00:00:00".
+    // The old formatFY appended "T00:00:00Z" to that → invalid date → NaN year
+    // → "FYN". The fix strips "T..." before parsing.
+    mockGateway.getIncomeStatement.mockResolvedValue(fourYearAnnual(false));
+    render(
+      <Wrapper>
+        <IncomeStatementTable instrumentId="i-test-1" />
+      </Wrapper>,
+    );
+    await waitFor(() => {
+      expect(screen.getByText("FY21")).toBeInTheDocument();
+    });
+    expect(screen.getByText("FY22")).toBeInTheDocument();
+    expect(screen.getByText("FY23")).toBeInTheDocument();
+    expect(screen.getByText("FY24")).toBeInTheDocument();
+    // Ensure "FYN" is NOT in the document (was the bug symptom)
+    expect(screen.queryByText("FYN")).not.toBeInTheDocument();
   });
 
   it("renders all 5 P&L row labels", async () => {
