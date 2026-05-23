@@ -88,6 +88,13 @@ class RawRelation:
     claim_id: UUID | None = None
     chunk_id: UUID | None = None
     evidence_text: str | None = None
+    # BP-521: optional entity-type hints used for direction normalization.
+    # When the upstream enriched message includes entity types (e.g. "person",
+    # "financial_instrument", "organization"), materialize_graph can correct
+    # the subject/object ordering for has_executive/employs relations without
+    # requiring an extra DB round-trip.  None means "type unknown — skip swap."
+    subject_entity_type: str | None = None
+    object_entity_type: str | None = None
 
 
 @dataclasses.dataclass(frozen=True)
@@ -434,28 +441,59 @@ async def materialize_graph(
         canonical_base_confidences,
         strict=True,
     ):
-        # ── Self-loop guard (BP-385) ──────────────────────────────────────
+        # ── Self-loop guard (BP-385 / BP-520) ────────────────────────────
         # graphology is initialised with allowSelfLoops=false; self-loop
         # triples also pollute the KG with tautological statements.
         # Skip both the relation upsert AND the evidence insert so these
         # are not stored at all. The check runs on fully-resolved UUIDs so
         # it catches loops introduced by entity merges inside S7, not just
         # those from S6 extraction.
+        # BP-520: ~17% of rows were self-loops (person as both subject and
+        # object when company context is missing); those rows accumulate
+        # forever because the DB promoter cannot insert self-loop edges.
         if rel.subject_entity_id == rel.object_entity_id:
-            _log.warning(
-                "relation_self_loop_skipped",
+            _log.debug(
+                "self_loop_dropped",
                 entity_id=str(rel.subject_entity_id),
                 raw_type=rel.raw_type,
             )
             continue
+
+        # ── Direction normalization for has_executive / employs (BP-521) ──
+        # The LLM occasionally emits these relations with the person as the
+        # subject (e.g. "Tim Cook has_executive Apple").  The canonical
+        # direction is company → person.  When entity-type hints are present
+        # on the RawRelation, swap subject↔object so the edge lands in the
+        # correct orientation before any upsert or evidence write.
+        # We only swap when:
+        #   • relation_type is has_executive or employs, AND
+        #   • subject is a "person", AND
+        #   • object is not a "person" (i.e. company-like: org, instrument, …)
+        # When type hints are absent (None) we leave the ordering as-is to
+        # avoid breaking relations where the direction was already correct.
+        subject_id = rel.subject_entity_id
+        object_id = rel.object_entity_id
+        if (
+            rel.raw_type in ("has_executive", "employs")
+            and rel.subject_entity_type == "person"
+            and rel.object_entity_type != "person"
+        ):
+            subject_id, object_id = object_id, subject_id
+            _log.debug(
+                "relation_direction_normalized",
+                raw_type=rel.raw_type,
+                original_subject=str(rel.subject_entity_id),
+                original_object=str(rel.object_entity_id),
+                swapped=True,
+            )
 
         # Skip provisional entities from the aggregation worker perspective,
         # but still INSERT the raw evidence row (entity_provisional=true rows
         # are held until entity.canonical.created.v1 resolves them).
         if canonical_type is not None:
             relation_id = await relation_repo.upsert(
-                subject_entity_id=rel.subject_entity_id,
-                object_entity_id=rel.object_entity_id,
+                subject_entity_id=subject_id,
+                object_entity_id=object_id,
                 canonical_type=canonical_type,
                 semantic_mode=semantic_mode or "RELATION_STATE",
                 decay_class=decay_class or "DURABLE",
@@ -468,8 +506,11 @@ async def materialize_graph(
             relation_id = None  # type: ignore[assignment]
 
         await evidence_repo.insert_raw(
-            subject_entity_id=rel.subject_entity_id,
-            object_entity_id=rel.object_entity_id,
+            # Use the (possibly direction-normalized) subject_id / object_id
+            # so evidence rows always reflect company→person ordering for
+            # has_executive/employs relations (BP-521).
+            subject_entity_id=subject_id,
+            object_entity_id=object_id,
             source_document_id=doc_id,
             extraction_confidence=rel.extraction_confidence,
             source_trust_weight=rel.source_trust_weight,
@@ -487,12 +528,12 @@ async def materialize_graph(
             source_type=source_type_metadata,
         )
         evidence_count += 1
-        affected_entity_ids.add(rel.subject_entity_id)
-        affected_entity_ids.add(rel.object_entity_id)
+        affected_entity_ids.add(subject_id)
+        affected_entity_ids.add(object_id)
 
         # Dirty both entities (aggregation worker will recompute confidence)
-        dirtied_entities.add(rel.subject_entity_id)
-        dirtied_entities.add(rel.object_entity_id)
+        dirtied_entities.add(subject_id)
+        dirtied_entities.add(object_id)
 
     # ------------------------------------------------------------------
     # 3 — Events + event_entities (ON CONFLICT DO NOTHING)
