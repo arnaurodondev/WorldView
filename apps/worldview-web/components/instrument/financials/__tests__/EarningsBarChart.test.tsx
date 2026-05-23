@@ -26,28 +26,10 @@ import type { ReactNode } from "react";
 
 // ── Mocks ────────────────────────────────────────────────────────────────────
 
-vi.mock("@/hooks/useAuth", () => ({
-  useAuth: vi.fn(() => ({
-    accessToken: "test-token",
-    isAuthenticated: true,
-    isLoading: false,
-    user: { user_id: "u1", tenant_id: "t1", email: "a@b.com", name: "A", avatar_url: null },
-    setTokens: vi.fn(),
-    logout: vi.fn(),
-  })),
-}));
-
 const mockGateway = vi.hoisted(() => ({ getEarningsHistory: vi.fn() }));
 
-vi.mock("@/lib/gateway", () => ({
-  createGateway: vi.fn(() => mockGateway),
-  GatewayError: class GatewayError extends Error {
-    status: number;
-    constructor(status: number, msg: string) {
-      super(msg);
-      this.status = status;
-    }
-  },
+vi.mock("@/lib/api-client", () => ({
+  useApiClient: vi.fn(() => mockGateway),
 }));
 
 // eslint-disable-next-line import/first

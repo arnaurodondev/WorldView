@@ -24,8 +24,7 @@
 // WHY "use client": useQuery + useAuth require client-side React context.
 
 import { useQuery } from "@tanstack/react-query";
-import { createGateway } from "@/lib/gateway";
-import { useAuth } from "@/hooks/useAuth";
+import { useApiClient } from "@/lib/api-client";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Sparkline } from "@/components/primitives/Sparkline";
 import { formatMarketCap, formatPrice } from "@/lib/utils";
@@ -106,15 +105,15 @@ export function IncomeStatementTable({
   instrumentId,
   periodType = "ANNUAL",
 }: IncomeStatementTableProps) {
-  const { accessToken } = useAuth();
+  const gateway = useApiClient();
   const isQuarterly = periodType === "QUARTERLY";
 
   // WHY staleTime 24h: annual P&L changes only on 10-K filings; quarterly on
   // earnings calls. 24h refresh is safe and matches useFinancialsTabData policy.
   const { data, isLoading } = useQuery({
     queryKey: ["income-statement", instrumentId],
-    queryFn: () => createGateway(accessToken).getIncomeStatement(instrumentId),
-    enabled: !!accessToken && !!instrumentId,
+    queryFn: () => gateway.getIncomeStatement(instrumentId),
+    enabled: !!instrumentId,
     staleTime: 24 * 60 * 60 * 1000,
   });
 

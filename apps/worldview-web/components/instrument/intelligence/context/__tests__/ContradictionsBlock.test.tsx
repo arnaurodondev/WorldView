@@ -20,12 +20,10 @@ vi.mock("next/navigation", () => ({
   useParams: vi.fn(() => ({})),
 }));
 
-vi.mock("@/lib/api-client", () => ({
-  useAccessToken: vi.fn(() => "tok"),
-}));
-
 const mockGateway = vi.hoisted(() => ({ getContradictions: vi.fn() }));
-vi.mock("@/lib/gateway", () => ({ createGateway: vi.fn(() => mockGateway) }));
+vi.mock("@/lib/api-client", () => ({
+  useApiClient: vi.fn(() => mockGateway),
+}));
 
 import { ContradictionsBlock } from "@/components/instrument/intelligence/context/ContradictionsBlock";
 

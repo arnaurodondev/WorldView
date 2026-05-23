@@ -26,19 +26,13 @@ import type { ReactNode } from "react";
 
 // ── Mocks ────────────────────────────────────────────────────────────────────
 
-vi.mock("@/hooks/useAuth", () => ({
-  useAuth: vi.fn(() => ({
-    accessToken: "test-token",
-    isAuthenticated: true,
-    isLoading: false,
-    user: { user_id: "u1", tenant_id: "t1", email: "a@b.com", name: "A", avatar_url: null },
-    setTokens: vi.fn(),
-    logout: vi.fn(),
-  })),
-}));
-
 const mockGateway = vi.hoisted(() => ({ getIncomeStatement: vi.fn() }));
 
+vi.mock("@/lib/api-client", () => ({
+  useApiClient: vi.fn(() => mockGateway),
+}));
+
+// Keep gateway mock for type compatibility with GatewayError (some imports may still pull it)
 vi.mock("@/lib/gateway", () => ({
   createGateway: vi.fn(() => mockGateway),
   GatewayError: class GatewayError extends Error {

@@ -15,18 +15,14 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { ReactNode } from "react";
 import { CompanySnapshotPanel } from "@/components/instrument/financials/sidebar/CompanySnapshotPanel";
 
-vi.mock("@/lib/api-client", () => ({ useAccessToken: () => "mock-token" }));
-
 // WHY mockGetOverview is hoisted: keeping a reference to the inner mock function
 // lets individual tests override the resolved value without re-mocking the whole
-// module.  The factory `createGateway` always returns an object whose
-// getCompanyOverview property points to this same vi.fn().
+// module. useApiClient returns an object whose getCompanyOverview property
+// points to this same vi.fn().
 const mockGetOverview = vi.fn();
 
-vi.mock("@/lib/gateway", () => ({
-  createGateway: () => ({
-    getCompanyOverview: mockGetOverview,
-  }),
+vi.mock("@/lib/api-client", () => ({
+  useApiClient: () => ({ getCompanyOverview: mockGetOverview }),
 }));
 
 const MOCK_OVERVIEW = {

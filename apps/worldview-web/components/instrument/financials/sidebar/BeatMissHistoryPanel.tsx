@@ -23,8 +23,7 @@
 // WHY "use client": useQuery requires the React QueryClient context.
 
 import { useQuery } from "@tanstack/react-query";
-import { createGateway } from "@/lib/gateway";
-import { useAccessToken } from "@/lib/api-client";
+import { useApiClient } from "@/lib/api-client";
 import { Sparkline } from "@/components/primitives/Sparkline";
 
 interface BeatMissHistoryPanelProps {
@@ -39,15 +38,15 @@ interface EarningsAnnualRecord {
 }
 
 export function BeatMissHistoryPanel({ instrumentId }: BeatMissHistoryPanelProps) {
-  const token = useAccessToken();
+  const gateway = useApiClient();
 
   // WHY ["earnings-history"] key (not a sidebar-specific key): EarningsBarChart
   // on the same page fires this exact query. Sharing the key gives zero-cost
   // deduplication — the panel reads from cache, not from a second HTTP call.
   const { data, isLoading } = useQuery({
     queryKey: ["earnings-history", instrumentId],
-    queryFn: () => createGateway(token).getEarningsHistory(instrumentId),
-    enabled: !!instrumentId && !!token,
+    queryFn: () => gateway.getEarningsHistory(instrumentId),
+    enabled: !!instrumentId,
     staleTime: 24 * 60 * 60 * 1000,
   });
 

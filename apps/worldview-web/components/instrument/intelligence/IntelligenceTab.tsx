@@ -53,17 +53,9 @@ export function IntelligenceTab({ entityId }: IntelligenceTabProps) {
   // Derived: sigma receives whichever ID is active — full selection takes priority.
   const selectedNodeId = selectedNodeInfo?.id ?? visualHighlightNodeId;
 
-  const handleNodeClick = useCallback((
-    nodeId: string,
-    label: string,
-    nodeType: string,
-    degree: number,
-    edges: SelectedNodeInfo["edges"],
-  ) => {
-    // Toggle: clicking the already-selected node deselects it.
-    setSelectedNodeInfo((prev) =>
-      prev?.id === nodeId ? null : { id: nodeId, label, type: nodeType, degree, edges },
-    );
+  const handleNodeChange = useCallback((info: SelectedNodeInfo | null) => {
+    // null = deselect; non-null = new selection (toggle logic is now in GraphColumn).
+    setSelectedNodeInfo(info);
     setSelectedEdgeInfo(null);
     setVisualHighlightNodeId(null); // graph-click supersedes any right-rail highlight
   }, []);
@@ -116,14 +108,7 @@ export function IntelligenceTab({ entityId }: IntelligenceTabProps) {
           <GraphColumn
             entityId={entityId}
             selectedNodeId={selectedNodeId}
-            onNodeSelect={(id) => {
-              // WHY onNodeSelect still needed: GraphColumn uses it internally
-              // for the toggle (deselect on same-node click). The full info
-              // arrives via onNodeClick which was called with the node data.
-              // Pass null to GraphColumn to clear visual highlight on deselect.
-              if (id === null) handleClearSelection();
-            }}
-            onNodeClickFull={handleNodeClick}
+            onNodeChange={handleNodeChange}
             onEdgeSelect={handleEdgeClick}
           />
         </div>

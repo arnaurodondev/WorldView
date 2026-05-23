@@ -28,8 +28,7 @@
 
 import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { useAccessToken } from "@/lib/api-client";
-import { createGateway } from "@/lib/gateway";
+import { useApiClient } from "@/lib/api-client";
 import { qk } from "@/lib/query/keys";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
@@ -48,16 +47,16 @@ export interface NarrativeHistoryDisclosureProps {
 // ── Component ─────────────────────────────────────────────────────────────────
 
 export function NarrativeHistoryDisclosure({ entityId }: NarrativeHistoryDisclosureProps) {
-  const accessToken = useAccessToken();
+  const gateway = useApiClient();
   // WHY local expanded set (not global state): each version row can be expanded
   // independently. A Set of version_ids gives O(1) toggle without lifting state.
   const [expandedVersionIds, setExpandedVersionIds] = useState<Set<string>>(new Set());
 
   const { data, isLoading, isError } = useQuery({
     queryKey: qk.kg.narratives(entityId),
-    queryFn: () => createGateway(accessToken).getNarratives(entityId),
+    queryFn: () => gateway.getNarratives(entityId),
     staleTime: 5 * 60 * 1000, // WHY 5 min: matches S9 backend cache TTL for narrative history
-    enabled: !!accessToken && !!entityId,
+    enabled: !!entityId,
   });
 
   const versions = data?.versions ?? [];

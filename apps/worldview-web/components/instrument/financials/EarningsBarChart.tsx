@@ -28,8 +28,7 @@
 // WHY "use client": useQuery requires React context.
 
 import { useQuery } from "@tanstack/react-query";
-import { createGateway } from "@/lib/gateway";
-import { useAuth } from "@/hooks/useAuth";
+import { useApiClient } from "@/lib/api-client";
 import { Skeleton } from "@/components/ui/skeleton";
 
 interface EarningsBarChartProps {
@@ -78,15 +77,15 @@ function formatFY(dateStr: string): string {
 }
 
 export function EarningsBarChart({ instrumentId }: EarningsBarChartProps) {
-  const { accessToken } = useAuth();
+  const gateway = useApiClient();
 
   // WHY staleTime 24h: annual EPS records update only on quarterly earnings
   // releases. Matches T-A-03 useFinancialsTabData policy → TanStack dedupes
   // when both this component and the hook are mounted with the same key.
   const { data, isLoading } = useQuery({
     queryKey: ["earnings-history", instrumentId],
-    queryFn: () => createGateway(accessToken).getEarningsHistory(instrumentId),
-    enabled: !!accessToken && !!instrumentId,
+    queryFn: () => gateway.getEarningsHistory(instrumentId),
+    enabled: !!instrumentId,
     staleTime: 24 * 60 * 60 * 1000,
   });
 

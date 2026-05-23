@@ -484,15 +484,13 @@ async def test_gather_instrument_chunks_populated() -> None:
     assert ctx.relevant_chunks[0].chunk_id == "chunk-001"
     assert ctx.relevant_chunks[0].source_type == "earnings_transcript"
     assert ctx.relevant_chunks[1].source_type == "sec_filing"
-    # search_chunks was called with entity_ids=[UUID(_ENTITY_ID)]
+    # search_chunks was called with query_text=entity_name and no entity_ids/source_types
+    # (entity_id and source_type WHERE filters cause HNSW to return 0 results for sparse chunks)
     s6.search_chunks.assert_called_once()
     call_arg = s6.search_chunks.call_args[0][0]  # positional arg 0 = ChunkSearchRequest
-    from uuid import UUID as _UUID
-
-    assert _UUID(_ENTITY_ID) in call_arg.entity_ids
     assert call_arg.query_text == "Apple Inc."  # canonical_name from graph
-    assert "sec_filing" in call_arg.source_types
-    assert "earnings_transcript" in call_arg.source_types
+    assert call_arg.entity_ids is None
+    assert call_arg.source_types is None or call_arg.source_types == []
     assert call_arg.search_type == "ann"
 
 

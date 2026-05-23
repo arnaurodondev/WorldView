@@ -29,8 +29,7 @@
 import { useState, useRef, useMemo, useEffect } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useRouter } from "next/navigation";
-import { createGateway } from "@/lib/gateway";
-import { useAuth } from "@/hooks/useAuth";
+import { useApiClient } from "@/lib/api-client";
 import { Skeleton } from "@/components/ui/skeleton";
 import type { GraphNode, GraphEdge } from "@/types/api";
 
@@ -168,7 +167,7 @@ function computeRadialLayout(
 // ── Component ─────────────────────────────────────────────────────────────────
 
 export function EntityGraphPanel({ entityId, centerLabel }: EntityGraphPanelProps) {
-  const { accessToken } = useAuth();
+  const gateway = useApiClient();
   const router = useRouter();
   const [hoveredNodeId, setHoveredNodeId] = useState<string | null>(null);
   // PLAN-0050 Wave E T-E-5-04: hover tooltips for nodes and edges.
@@ -203,8 +202,8 @@ export function EntityGraphPanel({ entityId, centerLabel }: EntityGraphPanelProp
     queryKey: ["entity-graph", entityId, 1],
     // WHY depth=1: Overview sidebar is compact (~320px). Depth=1 = direct neighbors only.
     // The full depth=2 interactive graph lives in the Intelligence tab (EntityGraph.tsx).
-    queryFn: () => createGateway(accessToken).getEntityGraph(entityId, 1),
-    enabled: !!accessToken && !!entityId,
+    queryFn: () => gateway.getEntityGraph(entityId, 1),
+    enabled: !!entityId,
     // WHY 10min: knowledge graph edges don't change frequently
     staleTime: 10 * 60_000,
   });

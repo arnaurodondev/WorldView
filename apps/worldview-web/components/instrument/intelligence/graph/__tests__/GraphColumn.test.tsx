@@ -50,24 +50,14 @@ vi.mock("@/hooks/useAuth", () => ({
 }));
 
 vi.mock("@/lib/api-client", () => ({
-  useAccessToken: vi.fn(() => "test-token"),
+  useApiClient: vi.fn(() => mockGateway),
 }));
 
 // WHY a hoisted handle: lets each test mock-reject getEntityGraph differently.
+// useApiClient now returns this mock gateway directly (no createGateway wrapper).
 const mockGateway = vi.hoisted(() => ({
   getEntityGraph: vi.fn(),
   getInstrumentBrief: vi.fn(),
-}));
-
-vi.mock("@/lib/gateway", () => ({
-  createGateway: vi.fn(() => mockGateway),
-  GatewayError: class GatewayError extends Error {
-    status: number;
-    constructor(status: number, msg: string) {
-      super(msg);
-      this.status = status;
-    }
-  },
 }));
 
 // WHY stub the dynamically-imported EntityGraph: the real component pulls in
@@ -121,7 +111,7 @@ describe("GraphColumn timeout fallback", () => {
     mockGateway.getEntityGraph.mockRejectedValue(new Error("GRAPH_TIMEOUT"));
     render(
       <Wrapper>
-        <GraphColumn entityId="ent-001" selectedNodeId={null} onNodeSelect={() => {}} />
+        <GraphColumn entityId="ent-001" selectedNodeId={null} />
       </Wrapper>,
     );
     // The fallback copy is "Graph timed out at depth 2. Try depth 1 or 2."

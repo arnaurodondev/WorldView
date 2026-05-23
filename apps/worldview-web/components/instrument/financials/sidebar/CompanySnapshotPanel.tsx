@@ -26,8 +26,7 @@
 
 import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { createGateway } from "@/lib/gateway";
-import { useAccessToken } from "@/lib/api-client";
+import { useApiClient } from "@/lib/api-client";
 import { qk } from "@/lib/query/keys";
 
 interface CompanySnapshotPanelProps {
@@ -49,7 +48,7 @@ function SnapshotRow({ label, value }: { label: string; value: string | null | u
 }
 
 export function CompanySnapshotPanel({ instrumentId }: CompanySnapshotPanelProps) {
-  const token = useAccessToken();
+  const gateway = useApiClient();
   const [expanded, setExpanded] = useState(false);
 
   // WHY staleTime 30min: overview is seeded by the page bundle at load time.
@@ -57,8 +56,8 @@ export function CompanySnapshotPanel({ instrumentId }: CompanySnapshotPanelProps
   // analysis session (< 30min). The bundle seed makes the initial render free.
   const { data: overview } = useQuery({
     queryKey: qk.instruments.overview(instrumentId),
-    queryFn: () => createGateway(token).getCompanyOverview(instrumentId),
-    enabled: !!instrumentId && !!token,
+    queryFn: () => gateway.getCompanyOverview(instrumentId),
+    enabled: !!instrumentId,
     staleTime: 30 * 60 * 1000,
   });
 

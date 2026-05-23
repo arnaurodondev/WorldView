@@ -13,18 +13,12 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { ReactNode } from "react";
 import { BeatMissHistoryPanel } from "@/components/instrument/financials/sidebar/BeatMissHistoryPanel";
 
-// Mock auth + gateway so useQuery resolves instantly from inline data.
-vi.mock("@/lib/api-client", () => ({ useAccessToken: () => "mock-token" }));
-
-// WHY vi.hoisted: createGateway is called inside the component; hoisting the
-// mock function lets individual tests override the resolved value per-test via
-// mockResolvedValue, without re-declaring the whole vi.mock factory.
+// WHY vi.hoisted: useApiClient is called inside the component; hoisting the
+// mock lets individual tests override gateway methods per-test via mockResolvedValue.
 const mockGetEarningsHistory = vi.hoisted(() => vi.fn());
 
-vi.mock("@/lib/gateway", () => ({
-  createGateway: () => ({
-    getEarningsHistory: mockGetEarningsHistory,
-  }),
+vi.mock("@/lib/api-client", () => ({
+  useApiClient: () => ({ getEarningsHistory: mockGetEarningsHistory }),
 }));
 
 const MOCK_EARNINGS = {

@@ -24,8 +24,7 @@
 
 import { useMemo } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { useAccessToken } from "@/lib/api-client";
-import { createGateway } from "@/lib/gateway";
+import { useApiClient } from "@/lib/api-client";
 import { qk } from "@/lib/query/keys";
 import { Skeleton } from "@/components/ui/skeleton";
 import { cn } from "@/lib/utils";
@@ -44,16 +43,16 @@ export function TopRelationsBlock({
   limit = 10,
   onNodeSelect,
 }: TopRelationsBlockProps) {
-  const accessToken = useAccessToken();
+  const gateway = useApiClient();
 
   // WHY depth=1 and staleTime=10min:
   // Δ7 — TopRelationsBlock fetches depth=1 independently; the cache key matches
   // GraphColumn's graphQuery so both share one network slot (same 10-min TTL).
   const { data: graph, isLoading, isError } = useQuery<EntityGraph | null>({
     queryKey: qk.instruments.entityGraph(entityId, 1),
-    queryFn: () => createGateway(accessToken).getEntityGraph(entityId, 1),
+    queryFn: () => gateway.getEntityGraph(entityId, 1),
     staleTime: 10 * 60 * 1000,
-    enabled: !!accessToken && !!entityId,
+    enabled: !!entityId,
   });
 
   // Build a label lookup map so we can show the neighbor name in each row.

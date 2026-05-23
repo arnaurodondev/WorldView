@@ -45,8 +45,7 @@ import { InsiderTransactionsTable } from "@/components/instrument/financials/Ins
 import { InstitutionalHoldersTable } from "@/components/instrument/financials/InstitutionalHoldersTable";
 import { FundHoldersTable } from "@/components/instrument/financials/FundHoldersTable";
 import { AnalystSidebar } from "@/components/instrument/financials/AnalystSidebar";
-import { createGateway } from "@/lib/gateway";
-import { useAccessToken } from "@/lib/api-client";
+import { useApiClient } from "@/lib/api-client";
 import { qk } from "@/lib/query/keys";
 
 // ── Props ─────────────────────────────────────────────────────────────────────
@@ -91,10 +90,10 @@ export function FinancialsTab({ instrumentId }: FinancialsTabProps) {
 
   // WHY a dedicated splits-dividends fetch (not bundled in useFinancialsTabData):
   // splits-dividends is rarely-changing (filing-cadence) — 24h staleTime works.
-  const token = useAccessToken();
+  const gateway = useApiClient();
   const { data: splitsDivResp } = useQuery({
     queryKey: qk.instruments.splitsDividends(instrumentId),
-    queryFn: () => createGateway(token).getSplitsDividends(instrumentId),
+    queryFn: () => gateway.getSplitsDividends(instrumentId),
     staleTime: 24 * 60 * 60 * 1000,
     enabled: !!instrumentId,
   });

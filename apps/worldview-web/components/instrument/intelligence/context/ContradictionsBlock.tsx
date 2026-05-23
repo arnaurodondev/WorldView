@@ -22,8 +22,7 @@
 // WHY "use client": useQuery + onClick require browser context.
 
 import { useQuery } from "@tanstack/react-query";
-import { useAccessToken } from "@/lib/api-client";
-import { createGateway } from "@/lib/gateway";
+import { useApiClient } from "@/lib/api-client";
 import { qk } from "@/lib/query/keys";
 import { Skeleton } from "@/components/ui/skeleton";
 import { cn } from "@/lib/utils";
@@ -56,16 +55,13 @@ function severityClass(severity: "LOW" | "MEDIUM" | "HIGH" | "CRITICAL"): string
 // ── Component ─────────────────────────────────────────────────────────────────
 
 export function ContradictionsBlock({ entityId, limit = 5 }: ContradictionsBlockProps) {
-  // WHY useAccessToken (not useAuth): matches the token source used by all other
-  // intelligence hooks (useEntityPaths, EntityOverviewBlock) so enabled guard fires
-  // consistently. useAuth().accessToken can lag behind on hydration causing suppressed queries.
-  const accessToken = useAccessToken();
+  const gateway = useApiClient();
 
   const { data, isLoading, isError } = useQuery({
     queryKey: qk.kg.contradictions(entityId),
-    queryFn: () => createGateway(accessToken).getContradictions(entityId),
+    queryFn: () => gateway.getContradictions(entityId),
     staleTime: 2 * 60 * 1000, // WHY 2 min: contradictions update with every pipeline run (~2 min cadence)
-    enabled: !!accessToken && !!entityId,
+    enabled: !!entityId,
   });
 
   const sectionLabel = (

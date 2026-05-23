@@ -26,8 +26,7 @@
 
 import { useQuery } from "@tanstack/react-query";
 import { TrendingUp, TrendingDown, Minus } from "lucide-react";
-import { createGateway } from "@/lib/gateway";
-import { useAuth } from "@/hooks/useAuth";
+import { useApiClient } from "@/lib/api-client";
 // BP-497 / HR-060: central qk.* factory.
 import { qk } from "@/lib/query/keys";
 import { formatPrice, formatPercent, priceChangeClass } from "@/lib/utils";
@@ -62,7 +61,7 @@ const REFETCH_INTERVAL_MS = 15_000;
 // ── Component ─────────────────────────────────────────────────────────────────
 
 export function LiveQuoteBadge({ instrumentId, initialPrice, compact = false }: LiveQuoteBadgeProps) {
-  const { accessToken } = useAuth();
+  const gateway = useApiClient();
 
   // BP-497 / HR-060 fix (2026-05-21): use qk.quotes.single() so this
   // badge shares the cache with every other consumer of a single-quote
@@ -70,8 +69,8 @@ export function LiveQuoteBadge({ instrumentId, initialPrice, compact = false }: 
   // inside the InstrumentHeader, etc).
   const { data: quote } = useQuery({
     queryKey: qk.quotes.single(instrumentId),
-    queryFn: () => createGateway(accessToken).getQuote(instrumentId),
-    enabled: !!accessToken && !!instrumentId,
+    queryFn: () => gateway.getQuote(instrumentId),
+    enabled: !!instrumentId,
     refetchInterval: REFETCH_INTERVAL_MS,
     staleTime: 0,
     // WHY placeholderData: show initial price immediately while first quote loads.
