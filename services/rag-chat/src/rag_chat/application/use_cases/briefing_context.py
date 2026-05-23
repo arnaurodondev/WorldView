@@ -427,17 +427,18 @@ class BriefingContextGatherer:
         candidates, yielding 0 results.  chunk granularity returns full text
         (stored in MinIO) rather than section headings only.
         """
-        # No source_type filter: HNSW ANN returns only top_k candidates globally,
-        # so filtering to sparse source types (sec_edgar ≈ 2% of index) yields
-        # 0 results. The entity_id filter already narrows to relevant chunks.
+        # No entity_ids or source_type filter: HNSW ANN only scores top_k
+        # candidates globally. Apple entity chunks are 0.6% of the index;
+        # entity_id and source_type WHERE filters eliminate all HNSW candidates.
+        # query_text=entity_name provides semantic signal to surface relevant
+        # chunks; the high min_score (0.55) ensures relevance without filters.
         request = ChunkSearchRequest(
             query_text=entity_name,
             top_k=12,
-            min_score=0.35,
+            min_score=0.55,
             granularity="chunk",
             include_entities=False,
             search_type="ann",
-            entity_ids=[UUID(entity_id)],
         )
         return await self._s6.search_chunks(request)
 
