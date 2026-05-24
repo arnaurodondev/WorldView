@@ -123,6 +123,120 @@ def _should_skip(sql: str) -> str | None:
 
 
 # ---------------------------------------------------------------------------
+# Placeholder translation — :name → $N (FIX-LIVE-F / INV-LIVE-B Part 1).
+# ---------------------------------------------------------------------------
+#
+# Why this exists
+# ---------------
+# SQLAlchemy ``text()`` uses ``:name`` placeholders. Postgres ``PREPARE``
+# itself only accepts ``$N`` positional placeholders — feeding a raw
+# ``:name`` SQL into PREPARE produces a syntax error at the colon, e.g.::
+#
+#     ERROR: syntax error at or near ":"
+#
+# That noise was the root cause of 60+ false positives in the Phase 5c
+# PREPARE pass. The fix is a *small* purpose-built translator: walk the SQL
+# left-to-right, replace ``:name`` with ``$N`` (re-using ``$N`` for repeated
+# names), but **skip** characters that live inside single-quoted strings,
+# inside ``$$...$$`` dollar-quoted blocks, or right after ``::`` Postgres
+# type casts.
+#
+# We intentionally avoid a full SQL parser — the rules below cover every
+# pattern observed in worldview repository SQL.
+
+# Match a bare ``:name`` not preceded by another ``:`` (which would make it
+# a ``::TYPE`` cast) and not preceded by an identifier char (defence in depth).
+_NAMED_PARAM = re.compile(r"(?<![:\w]):([A-Za-z_][A-Za-z0-9_]*)")
+
+
+def _translate_named_to_positional(sql: str) -> str:
+    """Translate SQLAlchemy ``:name`` placeholders into Postgres ``$N``.
+
+    Rules (in order):
+
+    * Inside ``'...'`` single-quoted string literals: never translate.
+      String literals may legitimately contain colons (e.g. ``':status'``
+      in a WHERE clause comparing against a literal value).
+    * Inside ``$$...$$`` dollar-quoted blocks (used for plpgsql function
+      bodies and AGE Cypher payloads): never translate.
+    * After ``::`` (Postgres type-cast prefix): never translate. The
+      regex ``_NAMED_PARAM`` already guards against this, but we double-
+      check in the per-segment walk for robustness.
+    * Repeated names re-use the same ``$N`` slot (matches asyncpg
+      semantics and SQLAlchemy's compile-to-positional behaviour).
+
+    Returns the translated SQL. If there are no ``:name`` placeholders,
+    the original string is returned unchanged.
+    """
+    # Fast path — no colons at all, nothing to do.
+    if ":" not in sql:
+        return sql
+
+    # We segment the SQL into translatable and non-translatable regions:
+    #   * ``'…'`` single-quoted strings        → opaque
+    #   * ``$$…$$`` dollar-quoted blocks       → opaque
+    #   * Everything else                       → run _NAMED_PARAM substitution
+    #
+    # Postgres also supports ``E'…'`` escape strings and ``$tag$…$tag$``
+    # tagged dollar quoting; both are rare in worldview SQL and the simple
+    # rules above cover every existing case. If a future repository needs
+    # one of those forms, extend this routine — don't reach for a full
+    # SQL parser unless complexity demands it.
+    out: list[str] = []
+    # Name → $N mapping; preserves first-seen ordering.
+    name_to_idx: dict[str, int] = {}
+
+    def _sub_named(match: re.Match[str]) -> str:
+        name = match.group(1)
+        if name not in name_to_idx:
+            # Slots are 1-indexed per Postgres convention.
+            name_to_idx[name] = len(name_to_idx) + 1
+        return f"${name_to_idx[name]}"
+
+    i = 0
+    n = len(sql)
+    while i < n:
+        ch = sql[i]
+        # ── $$ dollar-quoted block ──────────────────────────────────────
+        # Look for an opening "$$"; if found, copy through (and including)
+        # the next "$$" verbatim.
+        if ch == "$" and i + 1 < n and sql[i + 1] == "$":
+            end = sql.find("$$", i + 2)
+            if end == -1:
+                # Unterminated — copy the rest verbatim and stop.
+                out.append(sql[i:])
+                break
+            # Copy the entire $$…$$ block (including delimiters) verbatim.
+            out.append(sql[i : end + 2])
+            i = end + 2
+            continue
+        # ── single-quoted string literal ────────────────────────────────
+        if ch == "'":
+            j = i + 1
+            while j < n:
+                # SQL escapes '' inside a literal — skip the pair as a unit.
+                if sql[j] == "'" and j + 1 < n and sql[j + 1] == "'":
+                    j += 2
+                    continue
+                if sql[j] == "'":
+                    j += 1
+                    break
+                j += 1
+            out.append(sql[i:j])
+            i = j
+            continue
+        # ── translatable region: find the next opaque boundary ──────────
+        # Scan until the next "'" or "$$" (or EOF), then translate that slice.
+        j = i
+        while j < n and sql[j] != "'" and not (sql[j] == "$" and j + 1 < n and sql[j + 1] == "$"):
+            j += 1
+        segment = sql[i:j]
+        out.append(_NAMED_PARAM.sub(_sub_named, segment))
+        i = j
+    return "".join(out)
+
+
+# ---------------------------------------------------------------------------
 # Unit tests for the extractor (T-F-1-01 acceptance criteria).
 # ---------------------------------------------------------------------------
 
@@ -309,6 +423,10 @@ def _prepare_one(conn, sql: str) -> str | None:  # type: ignore[no-untyped-def]
         # may legitimately contain ``$$`` blocks (functions), so just inline.
         # We also strip a trailing semicolon to avoid syntax errors at PREPARE.
         cleaned = sql.strip().rstrip(";")
+        # FIX-LIVE-F: SQLAlchemy uses ``:name`` placeholders; Postgres PREPARE
+        # only understands ``$N``. Translate before PREPARE so legitimate
+        # named-param SQL doesn't trip "syntax error at or near ':'" noise.
+        cleaned = _translate_named_to_positional(cleaned)
         cur.execute(f"PREPARE _qatest_drift AS {cleaned}")
         cur.execute("DEALLOCATE _qatest_drift")
         conn.commit()

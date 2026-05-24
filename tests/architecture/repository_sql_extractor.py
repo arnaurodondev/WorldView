@@ -117,6 +117,138 @@ def _detect_kind(sql: str) -> str:
 
 
 # ---------------------------------------------------------------------------
+# Fragment folding (FIX-LIVE-F / INV-LIVE-B Part 3).
+# ---------------------------------------------------------------------------
+#
+# Why this exists
+# ---------------
+# Several repositories compose SQL by gluing module-level string constants:
+#
+#     _SEARCH_CTE   = "WITH ... AS (...)"
+#     _COUNT_SELECT = "SELECT count(*) FROM filtered"
+#     QUERY         = _SEARCH_CTE + " " + _COUNT_SELECT
+#
+# The simple ``ast.walk`` extractor below would emit ``_COUNT_SELECT`` as a
+# standalone statement and try to PREPARE it — which fails because the CTE
+# it references (``filtered``) only exists in the composed ``QUERY``. That
+# produced 60+ false-positive PREPARE failures in the Phase 5c live pass.
+#
+# Fix: walk module-level ``Assign`` / ``AnnAssign`` whose RHS is a
+# ``BinOp(Add)`` chain, resolve every leaf via the module's name table, and
+# if the whole chain folds into a single SQL string, emit that composed
+# statement. Record the names consumed so the second pass can skip them.
+
+
+def _collect_module_string_constants(tree: ast.Module) -> dict[str, str]:
+    """Return ``{NAME: literal_string}`` for module-level ``NAME = "..."``.
+
+    Handles three shapes:
+      * ``NAME = "literal"``                             (Assign + Constant)
+      * ``NAME: str = "literal"``                        (AnnAssign + Constant)
+      * ``NAME = f"…"`` where every formatted value is itself a constant
+        (handled via ``_str_from_constant`` for symmetry with the main
+        walker).
+
+    Anything more dynamic (function call, attribute, BinOp, …) is left out
+    deliberately — fragment folding is a *recursive* operation and the
+    recursion bottoms out only on simple constants.
+    """
+    names: dict[str, str] = {}
+    for stmt in tree.body:
+        # Plain ``X = "..."`` may bind to a single Name or multiple targets;
+        # we only care about single-target assignments at module scope.
+        if isinstance(stmt, ast.Assign) and len(stmt.targets) == 1:
+            target = stmt.targets[0]
+            if isinstance(target, ast.Name):
+                value = _str_from_constant(stmt.value)
+                if value is not None:
+                    names[target.id] = value
+        elif isinstance(stmt, ast.AnnAssign) and isinstance(stmt.target, ast.Name) and stmt.value is not None:
+            value = _str_from_constant(stmt.value)
+            if value is not None:
+                names[stmt.target.id] = value
+    return names
+
+
+def _fold_addition(node: ast.AST, names: dict[str, str]) -> str | None:
+    """Resolve a ``Constant | Name | BinOp(Add)`` tree into a single string.
+
+    Returns ``None`` if any leaf cannot be resolved (e.g. an unknown name,
+    a function call, or a non-string constant). The caller treats ``None``
+    as "skip — too dynamic for static folding" and the affected SQL goes
+    into the ``skipped`` bucket exactly as before.
+
+    The recursion intentionally accepts only ``ast.Add``. Other ops on
+    strings (``%``, ``*``) are out of scope.
+    """
+    # Leaf 1: a literal string (or fold-friendly f-string).
+    literal = _str_from_constant(node)
+    if literal is not None:
+        return literal
+    # Leaf 2: a Name reference into the precomputed module table.
+    if isinstance(node, ast.Name):
+        return names.get(node.id)
+    # Branch: Add chain — recurse both sides.
+    if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Add):
+        left = _fold_addition(node.left, names)
+        if left is None:
+            return None
+        right = _fold_addition(node.right, names)
+        if right is None:
+            return None
+        return left + right
+    return None
+
+
+def _collect_consumed_name_constants(
+    node: ast.AST,
+    names: dict[str, str],
+    name_to_constant_id: dict[str, int] | None = None,
+) -> set[int]:
+    """Return ids of ``ast.Constant`` nodes consumed by an emitted fold.
+
+    The constant-walker pass (see ``extract_sql_from_file``) would otherwise
+    re-emit every literal inside the fold as a standalone statement. By
+    tracking the ``id(...)`` of the consumed Constant nodes we can suppress
+    those duplicates without false-skipping legitimate other statements in
+    the same module.
+
+    We collect:
+      * Literal Constant / JoinedStr nodes directly reachable from the
+        BinOp tree (e.g. the ``" "`` glue strings between two Names).
+      * Module-level Constant nodes pointed to by every Name reference in
+        the tree, when ``name_to_constant_id`` is supplied. This is what
+        prevents ``_SEARCH_CTE = "WITH ..."`` from being re-emitted once
+        its composition has been emitted as a single statement.
+    """
+    consumed: set[int] = set()
+    name_to_constant_id = name_to_constant_id or {}
+
+    def _visit(n: ast.AST) -> None:
+        if isinstance(n, ast.Constant) and isinstance(n.value, str):
+            consumed.add(id(n))
+            return
+        if isinstance(n, ast.JoinedStr):
+            # Treat the JoinedStr (and its constant children) as consumed.
+            consumed.add(id(n))
+            for value in n.values:
+                _visit(value)
+            return
+        if isinstance(n, ast.Name):
+            # Mark the module-level constant the Name points to (if any).
+            ref = name_to_constant_id.get(n.id)
+            if ref is not None:
+                consumed.add(ref)
+            return
+        if isinstance(n, ast.BinOp) and isinstance(n.op, ast.Add):
+            _visit(n.left)
+            _visit(n.right)
+
+    _visit(node)
+    return consumed
+
+
+# ---------------------------------------------------------------------------
 # Main API.
 # ---------------------------------------------------------------------------
 
@@ -160,12 +292,69 @@ def extract_sql_from_file(path: Path) -> tuple[list[ExtractedSQL], list[SkippedS
         skipped.append(SkippedSQL(path, getattr(exc, "lineno", 0) or 0, f"SyntaxError: {exc.msg}"))
         return extracted, skipped
 
+    # ── PRE-PASS: collect module-level NAME → "literal" bindings ────────────
+    # FIX-LIVE-F: needed by the fragment-folding first pass below.
+    module_names = _collect_module_string_constants(tree)
+    # Reverse index: NAME → id(Constant node) defining it. Used to suppress
+    # standalone re-emission of fragment literals once their composition has
+    # been emitted.
+    name_to_constant_id: dict[str, int] = {}
+    for stmt in tree.body:
+        rhs: ast.AST | None = None
+        target_name: str | None = None
+        if isinstance(stmt, ast.Assign) and len(stmt.targets) == 1 and isinstance(stmt.targets[0], ast.Name):
+            target_name = stmt.targets[0].id
+            rhs = stmt.value
+        elif isinstance(stmt, ast.AnnAssign) and isinstance(stmt.target, ast.Name) and stmt.value is not None:
+            target_name = stmt.target.id
+            rhs = stmt.value
+        if target_name is None or rhs is None:
+            continue
+        # Only register pure-Constant RHS (the fragment literals themselves).
+        if isinstance(rhs, ast.Constant) and isinstance(rhs.value, str):
+            name_to_constant_id[target_name] = id(rhs)
+        elif isinstance(rhs, ast.JoinedStr) and _str_from_constant(rhs) is not None:
+            name_to_constant_id[target_name] = id(rhs)
+
+    # ── FIRST PASS: fold module-level ``NAME = lhs + rhs + …`` chains ──────
+    # When the chain resolves to a SQL statement, emit the composed query as
+    # a single ExtractedSQL and record the consumed Constant node ids so the
+    # second pass can suppress duplicate emissions.
+    consumed_constant_ids: set[int] = set()
+    for stmt in tree.body:
+        # Target a single Name = BinOp(Add) or Name: Ann = BinOp(Add).
+        if isinstance(stmt, ast.Assign) and len(stmt.targets) == 1 and isinstance(stmt.targets[0], ast.Name):
+            rhs = stmt.value
+        elif isinstance(stmt, ast.AnnAssign) and isinstance(stmt.target, ast.Name) and stmt.value is not None:
+            rhs = stmt.value
+        else:
+            continue
+        if not (isinstance(rhs, ast.BinOp) and isinstance(rhs.op, ast.Add)):
+            continue
+        folded = _fold_addition(rhs, module_names)
+        if folded is None or not _looks_like_sql(folded):
+            continue
+        extracted.append(
+            ExtractedSQL(
+                file_path=path,
+                line_number=stmt.lineno,
+                sql_text=folded,
+                kind=_detect_kind(folded),
+            )
+        )
+        consumed_constant_ids |= _collect_consumed_name_constants(rhs, module_names, name_to_constant_id)
+
+    # ── SECOND PASS: existing walker (skips consumed constants) ────────────
     # We walk every node. For ``text("…")`` calls we look at Call → args[0].
     # For raw asyncpg ``conn.fetch("…", …)`` we also look at Call → args[0].
     # Standalone string literals (e.g. ``SQL_FOO = "SELECT …"``) are caught by
     # walking every Constant/JoinedStr — but we filter with ``_looks_like_sql``
     # so log strings don't pollute the result.
     for node in ast.walk(tree):
+        # FIX-LIVE-F: if this Constant/JoinedStr was already consumed by an
+        # emitted fold, skip — don't double-emit.
+        if id(node) in consumed_constant_ids:
+            continue
         # 1) Standalone string constants assigned to a name or used inline.
         if isinstance(node, ast.Constant) and isinstance(node.value, str):
             value = node.value
