@@ -60,6 +60,36 @@ def upgrade() -> None:
     op.execute("ALTER TABLE relations ADD COLUMN IF NOT EXISTS last_summary_attempt_at TIMESTAMPTZ NULL")
     op.execute("ALTER TABLE relations ADD COLUMN IF NOT EXISTS summary_attempt_count INT NOT NULL DEFAULT 0")
 
+    # ── PLAN-0093 QA-4 A.4.3: partition-DDL desync verification ───────────────
+    # Postgres normally cascades ALTER TABLE … ADD COLUMN to every partition
+    # of a HASH-partitioned table, but partition DDL desync has bitten us
+    # before (BP-393 family).  If any ``relations_p*`` child is missing the
+    # new column at this point, the next batch of writes will explode with
+    # an obscure UndefinedColumn error from inside a hot-path INSERT.  Better
+    # to fail loudly *during the migration* with the offending child names.
+    op.execute(
+        """
+        DO $$
+        DECLARE missing TEXT;
+        BEGIN
+            SELECT string_agg(part.relname, ', ')
+              INTO missing
+              FROM pg_inherits inh
+              JOIN pg_class parent ON parent.oid = inh.inhparent
+              JOIN pg_class part   ON part.oid   = inh.inhrelid
+             WHERE parent.relname = 'relations'
+               AND NOT EXISTS (
+                   SELECT 1 FROM information_schema.columns
+                    WHERE table_name = part.relname
+                      AND column_name = 'summary_attempt_count'
+               );
+            IF missing IS NOT NULL THEN
+                RAISE EXCEPTION 'Partitions missing summary_attempt_count: %', missing;
+            END IF;
+        END$$;
+        """
+    )
+
 
 def downgrade() -> None:
     """Drop both columns (NOT atomic — both ALTERs run in their own txn)."""

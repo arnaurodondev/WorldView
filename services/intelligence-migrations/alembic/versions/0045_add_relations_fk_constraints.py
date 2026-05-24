@@ -30,12 +30,35 @@ DOWNGRADE:
 
 from __future__ import annotations
 
+import os
+
 from alembic import op
 
 revision: str = "0045"
 down_revision: str = "0044"
 branch_labels = None
 depends_on = None
+
+
+# PLAN-0093 Phase 5 (QA-4 A.4.1) — production TRUNCATE guard.
+# Prefer the shared helper at ``alembic/_guards.py`` (so a single source of
+# truth governs every destructive migration), but inline a fallback in case
+# the alembic runtime's ``sys.path`` does not expose sibling modules in some
+# CI configuration.  Both implementations behave identically.
+try:  # pragma: no cover - import path varies by alembic invocation mode
+    from _guards import assert_truncate_allowed  # type: ignore[import-not-found]
+except ImportError:  # pragma: no cover - fallback path
+
+    def assert_truncate_allowed(table: str) -> None:
+        """Inline fallback — see alembic/_guards.py for the canonical version."""
+        if (
+            os.environ.get("APP_ENV", "").lower() == "production"
+            and os.environ.get("ALLOW_DESTRUCTIVE_MIGRATION") != "1"
+        ):
+            raise RuntimeError(
+                f"Refusing to TRUNCATE {table!r} in APP_ENV=production. "
+                "Set ALLOW_DESTRUCTIVE_MIGRATION=1 to override (requires SRE sign-off)."
+            )
 
 
 # Helper child tables that hold FKs / data tied to specific relations.
@@ -51,6 +74,12 @@ _DEPENDENT_TABLES = (
 
 def upgrade() -> None:
     """TRUNCATE legacy data + add FKs (deferrable for outbox pattern)."""
+
+    # ── Step 0: production safety guard ───────────────────────────────────────
+    # Refuses to run in APP_ENV=production unless ALLOW_DESTRUCTIVE_MIGRATION=1.
+    # The migration was designed for pre-prod cleanup; a stray prod replay
+    # would silently destroy ``relations`` + its dependents.
+    assert_truncate_allowed("relations + dependents")
 
     # ── Step 1: nuke pre-prod data so FKs can be added clean ──────────────────
     # CASCADE so any partitioned-child or trigger-dependent rows also drop.
@@ -87,6 +116,15 @@ def upgrade() -> None:
     # (they're placeholders).  Real entities self-looping is always a bug
     # (BP-385 regression guard).  We can't reference a sub-query in a CHECK,
     # so we encode the 5 sentinel UUIDs directly.
+    #
+    # SYNC INVARIANT (PLAN-0093 QA-4 A.4.2):
+    #   The five UUID literals below MUST stay identical to the entity_ids in
+    #   ``services/intelligence-migrations/alembic/versions/
+    #   0044_seed_kg_system_entities.py::_SENTINELS``.
+    #   The regression test
+    #   ``tests/migrations/test_sentinel_check_constraint_sync.py``
+    #   re-parses both files and asserts set-equality.  Update both files
+    #   together whenever a sentinel is added, removed, or renumbered.
     op.execute(
         """
         ALTER TABLE relations

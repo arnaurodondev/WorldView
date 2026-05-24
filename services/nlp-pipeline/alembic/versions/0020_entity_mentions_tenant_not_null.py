@@ -28,6 +28,8 @@ DOWNGRADE:
 
 from __future__ import annotations
 
+import os
+
 import sqlalchemy as sa
 from alembic import op
 
@@ -37,8 +39,31 @@ branch_labels = None
 depends_on = None
 
 
+# PLAN-0093 Phase 5 (QA-4 A.4.1) — production TRUNCATE guard.
+# Prefer the shared helper at ``alembic/_guards.py``; inline fallback if the
+# alembic runtime ``sys.path`` doesn't expose siblings.
+try:  # pragma: no cover - import path varies by alembic invocation mode
+    from _guards import assert_truncate_allowed  # type: ignore[import-not-found]
+except ImportError:  # pragma: no cover - fallback path
+
+    def assert_truncate_allowed(table: str) -> None:
+        """Inline fallback — see alembic/_guards.py for the canonical version."""
+        if (
+            os.environ.get("APP_ENV", "").lower() == "production"
+            and os.environ.get("ALLOW_DESTRUCTIVE_MIGRATION") != "1"
+        ):
+            raise RuntimeError(
+                f"Refusing to TRUNCATE {table!r} in APP_ENV=production. "
+                "Set ALLOW_DESTRUCTIVE_MIGRATION=1 to override (requires SRE sign-off)."
+            )
+
+
 def upgrade() -> None:
     """TRUNCATE legacy rows + flip tenant_id NOT NULL + add tenant-only index."""
+    # Production safety guard (PLAN-0093 QA-4 A.4.1) — refuses to truncate
+    # in APP_ENV=production unless ALLOW_DESTRUCTIVE_MIGRATION=1.
+    assert_truncate_allowed("entity_mentions")
+
     # CASCADE so child tables (e.g. chunk_entity_mentions if any FK exists)
     # also clear.  Pre-prod data is disposable.
     op.execute("TRUNCATE TABLE entity_mentions CASCADE")
