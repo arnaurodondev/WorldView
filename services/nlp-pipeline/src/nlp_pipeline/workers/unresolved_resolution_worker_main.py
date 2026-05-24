@@ -21,6 +21,7 @@ import signal
 import sys
 from contextlib import suppress
 
+from common.retry import retry_on_startup  # type: ignore[import-untyped]
 from observability import configure_logging, get_logger  # type: ignore[import-untyped]
 
 logger = get_logger(__name__)  # type: ignore[no-any-return]
@@ -80,7 +81,18 @@ async def main() -> None:
     )
 
     # Reset any stuck-escalated mentions from a previous crash (one-time startup call).
-    await worker.recover_stale_escalated()
+    # PLAN-0093 Wave A-3 / F-NPL-002: wrap the unguarded startup DB call in
+    # the retry decorator so a transient postgres blip during compose startup
+    # logs WARN+sleep instead of crashing the container.
+    @retry_on_startup()
+    async def _recover_stale_escalated() -> None:
+        await worker.recover_stale_escalated()
+
+    try:
+        await _recover_stale_escalated()
+    except Exception as exc:
+        log.error("unresolved_resolution_worker_startup_failed", error=str(exc))
+        sys.exit(1)
 
     log.info(
         "unresolved_resolution_worker_ready",
