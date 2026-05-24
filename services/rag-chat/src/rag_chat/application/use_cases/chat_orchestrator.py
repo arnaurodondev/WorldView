@@ -746,8 +746,14 @@ class ChatOrchestratorUseCase:
         # do not appear in any tool result within the per-FieldKind tolerance
         # table. On failure we re-prompt the LLM ONCE; if that still fails
         # we append a banner so the user knows numbers are unverified.
+        #
+        # PLAN-0093 Phase 5c F-LIVE-008 — grounding_passed gates the
+        # post-loop completion-cache write so we never persist an answer
+        # the validator rejected (would otherwise poison the cache for
+        # 24h via the deterministic message+thread_id key).
+        grounding_passed = True
         if had_tool_calls and full_text.strip():
-            full_text = await self._run_grounding_validation(
+            full_text, grounding_passed = await self._run_grounding_validation(
                 p=p,
                 response=full_text,
                 tool_items=non_none_items,
@@ -830,11 +836,24 @@ class ChatOrchestratorUseCase:
             log.warning("persist_chat_cancelled_after_done", thread_id=str(thread_id))
             raise
 
-        try:
-            await asyncio.shield(p.write_completion_cache(request.message, request.thread_id, answer, citations))
-        except asyncio.CancelledError:
-            log.warning("completion_cache_cancelled_after_done", thread_id=str(thread_id))
-            raise
+        # PLAN-0093 Phase 5c F-LIVE-008 — only persist to the completion
+        # cache when numeric grounding accepted the answer. Caching a
+        # validator-rejected answer (with the "⚠ Some numbers could not
+        # be verified" banner) would freeze a known-bad response for the
+        # 24h TTL and replay it on every identical question (the harness
+        # sends thread_id=None, so the key is deterministic across runs).
+        if grounding_passed:
+            try:
+                await asyncio.shield(p.write_completion_cache(request.message, request.thread_id, answer, citations))
+            except asyncio.CancelledError:
+                log.warning("completion_cache_cancelled_after_done", thread_id=str(thread_id))
+                raise
+        else:
+            log.info(  # type: ignore[no-any-return]
+                "completion_cache_skipped_grounding_failed",
+                thread_id=str(thread_id),
+                reason="numeric_grounding_failed",
+            )
 
         _total_latency_s = (datetime.now(tz=UTC) - start).total_seconds()
         rag_queries_total.labels(
@@ -921,8 +940,17 @@ class ChatOrchestratorUseCase:
         messages: list[dict[str, Any]],
         budget: AgentBudget,
         entity_context: Any = None,
-    ) -> str:
+    ) -> tuple[str, bool]:
         """PLAN-0093 E-2 T-E-2-02 — numeric-grounding validation pass.
+
+        Returns a ``(final_text, grounding_passed)`` tuple. ``grounding_passed``
+        is ``True`` only if numeric grounding accepted the response on the
+        first or second pass; it is ``False`` whenever the banner was
+        appended (validator rejected both the original and the rewrite, or
+        the rewrite stream itself errored). Callers use this flag to gate
+        the completion-cache write — PLAN-0093 Phase 5c F-LIVE-008 found
+        that caching an answer flagged by the grounding validator poisons
+        all subsequent identical requests for 24h.
 
         Pipeline:
           1. Run ``NumericGroundingValidator.validate(response, tool_items)``.
@@ -948,7 +976,7 @@ class ChatOrchestratorUseCase:
         first_result = validator.validate(response, tool_items)
         if first_result.passed:
             rag_grounding_validation_total.labels(result="passed").inc()
-            return response
+            return response, True
 
         # First pass failed — log the unsupported numbers structurally so
         # an operator can grep for the AMD-style regression patterns.
@@ -1020,20 +1048,20 @@ class ChatOrchestratorUseCase:
         except Exception as exc:
             log.warning("numeric_grounding_rewrite_failed", error=str(exc))  # type: ignore[no-any-return]
             rag_grounding_validation_total.labels(result="failed_banner").inc()
-            return response + "\n\n⚠ Some numbers could not be verified against retrieved data."
+            return response + "\n\n⚠ Some numbers could not be verified against retrieved data.", False
 
         # Re-validate the rewrite.
         second_result = validator.validate(rewritten, tool_items)
         if second_result.passed:
             rag_grounding_validation_total.labels(result="failed_one_rewrite").inc()
-            return rewritten
+            return rewritten, True
 
         # Both passes failed — append the banner. We return the
         # REWRITE text (not the original) because the rewrite at least
         # had the LLM attempt to fix the numbers; usually it's strictly
         # better even if not perfect.
         rag_grounding_validation_total.labels(result="failed_banner").inc()
-        return rewritten + "\n\n⚠ Some numbers could not be verified against retrieved data."
+        return rewritten + "\n\n⚠ Some numbers could not be verified against retrieved data.", False
 
     async def execute_sync(
         self,
