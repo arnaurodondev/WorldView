@@ -201,12 +201,40 @@ def is_refusal(answer: str) -> bool:
 # Quarter-label extraction (used by survey + Q4).
 # ---------------------------------------------------------------------------
 
-_QUARTER_LABEL_RE = re.compile(r"\bQ([1-4])\s*(?:FY)?\s*(20\d{2})\b", re.IGNORECASE)
+# PLAN-0093 Phase 5 QA-2 Gap 2: mirror the broadened pattern in
+# ``services/rag-chat/.../numeric_grounding.py`` so the grading rubric
+# extracts the same set of canonical quarter labels regardless of the
+# fiscal-year variant the LLM emits ("Q1 FY26", "Q1 fiscal 2027", etc.).
+_QUARTER_LABEL_RE = re.compile(
+    r"""
+    \bQ([1-4])                                   # Q1..Q4
+    \s*
+    (?:
+        (?:of\s+)?fiscal\s+year\s+               # "of fiscal year 2026"
+      | (?:of\s+)?fiscal\s+                      # "fiscal 2027"
+      | FY\s*                                    # "FY26", "FY 2026"
+    )?
+    \s*[/-]?\s*
+    (\d{2}|\d{4})                                # 2- or 4-digit year
+    \b
+    """,
+    re.IGNORECASE | re.VERBOSE,
+)
 
 
 def extract_quarter_labels(text: str) -> set[str]:
-    """Return canonical ``QnYYYY`` strings mentioned in *text*."""
-    return {f"Q{m.group(1)}{m.group(2)}" for m in _QUARTER_LABEL_RE.finditer(text)}
+    """Return canonical ``QnYYYY`` strings mentioned in *text*.
+
+    Two-digit years are expanded by prefixing ``20`` so ``FY26`` and
+    ``2026`` collapse to the same label.
+    """
+    out: set[str] = set()
+    for m in _QUARTER_LABEL_RE.finditer(text):
+        year = m.group(2)
+        if len(year) == 2:
+            year = f"20{year}"
+        out.add(f"Q{m.group(1)}{year}")
+    return out
 
 
 # ---------------------------------------------------------------------------

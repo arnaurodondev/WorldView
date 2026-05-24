@@ -175,6 +175,41 @@ class IntelligenceHandler(ToolHandler):
         if not candidates:
             log.warning("tool_entity_unresolved", tool=tool_name, entity_name=entity_name, reason="no_alias_match")
             return None
+        # PLAN-0093 Phase 5 QA-2 P1 — ambiguity threshold guard.
+        # When the top two candidates are within 0.10 similarity of each
+        # other the resolution is statistically ambiguous (e.g. "Apple"
+        # → Apple Inc. vs Apple Computer Holdings). Returning the top
+        # candidate silently has previously caused the agent to pull
+        # tool data for the wrong entity; instead, refuse the resolve so
+        # the caller can ask the user to disambiguate.
+        if len(candidates) >= 2:
+            try:
+                top_sim = float(candidates[0].get("similarity", 0.0))
+                second_sim = float(candidates[1].get("similarity", 0.0))
+                if (top_sim - second_sim) < 0.10:
+                    log.warning(
+                        "tool_entity_ambiguous",
+                        tool=tool_name,
+                        entity_name=entity_name,
+                        top_two=[
+                            {
+                                "entity_id": str(candidates[0].get("entity_id")),
+                                "similarity": top_sim,
+                                "alias_text": candidates[0].get("alias_text"),
+                            },
+                            {
+                                "entity_id": str(candidates[1].get("entity_id")),
+                                "similarity": second_sim,
+                                "alias_text": candidates[1].get("alias_text"),
+                            },
+                        ],
+                        reason="similarity_delta_below_0.10",
+                    )
+                    return None
+            except (TypeError, ValueError):
+                # Malformed similarity score — fall through to legacy
+                # behaviour (use top candidate) rather than crash.
+                pass
         try:
             entity_id = UUID(str(candidates[0]["entity_id"]))
         except (ValueError, KeyError):

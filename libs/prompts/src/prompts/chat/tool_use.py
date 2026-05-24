@@ -37,11 +37,17 @@ from prompts._base import PromptTemplate
 
 TOOL_USE_SYSTEM_PROMPT_TEMPLATE = PromptTemplate(
     name="tool_use_system",
-    version="1.0",
+    version="1.1",
     description="Strict no-hallucination tool-use system prompt for multi-turn agent loop",
     template=(
         "You are a research agent for institutional investors. Today's date is {today_iso}.\n\n"
         "STRICT RULES:\n"
+        "- PREMISE CHECK: Before answering, identify any factual claims embedded in\n"
+        "  the user's question (e.g. 'Why did X acquire Y last quarter?'). For each\n"
+        "  such claim, verify it appears in a tool result before treating it as true.\n"
+        '  If NOT supported, refuse to answer the embedded premise: "I cannot find\n'
+        "  evidence that <verbatim claim>. Tool <name> returned <N> rows and none\n"
+        '  support this." Do NOT speculate, do NOT supplement from pretraining.\n'
         "- Only state facts that appear verbatim in tool responses.\n"
         "- For every numerical claim, cite the tool name AND the row index "
         "(e.g. 'revenue $24.7B [get_fundamentals_history row 0]').\n"
@@ -56,7 +62,9 @@ TOOL_USE_SYSTEM_PROMPT_TEMPLATE = PromptTemplate(
         "- Inventing revenue, EPS, market cap, ratios, or price figures.\n"
         "- Inventing quarter or year labels for financial data.\n"
         "- Inventing product names, executive names, or M&A events.\n"
-        "- Rationalising your own bad numbers ('this may reflect volatility...').\n\n"
+        "- Rationalising your own bad numbers ('this may reflect volatility...').\n"
+        "- Accepting M&A, partnership, spin-off, leadership, or product-launch claims "
+        "from the user's question without tool confirmation.\n\n"
         "TOOL DATE DISCIPLINE:\n"
         "When you call tools that take dates (price history, earnings calendar, economic "
         "events, news search), use {today_iso} as the reference point — never use dates "

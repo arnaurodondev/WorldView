@@ -93,7 +93,57 @@ _YEAR_RANGE = range(1900, 2100)
 
 # Quarter labels — exact-match driven (Q1 2026 etc.). Used by the
 # classifier and special-handled by the validator (string equality).
-_QUARTER_RE = re.compile(r"\bQ([1-4])\s*[/-]?\s*(20\d{2})\b")
+#
+# PLAN-0093 Phase 5 QA-2 Gap 2: the original pattern only matched
+# 4-digit calendar years. LLMs routinely emit fiscal-year forms
+# ("Q1 FY26", "Q1 fiscal 2027", "Q1 of fiscal year 2026") and 2-digit
+# years ("Q1 FY26"). The verbose pattern below matches every canonical
+# variant; ``_normalize_quarter_label`` then canonicalises the captured
+# token to ``Q<n> 20YY`` so set comparisons collapse all forms.
+_QUARTER_RE = re.compile(
+    r"""
+    \bQ([1-4])                                   # Q1..Q4 — capture quarter
+    \s*                                          # optional whitespace
+    (?:
+        (?:of\s+)?fiscal\s+year\s+               # "of fiscal year 2026"
+      | (?:of\s+)?fiscal\s+                      # "fiscal 2027"
+      | FY\s*                                    # "FY26", "FY 2026"
+    )?
+    \s*[/-]?\s*                                  # optional separator
+    (\d{2}|\d{4})                                # 2-digit or 4-digit year
+    \b
+    """,
+    re.VERBOSE | re.IGNORECASE,
+)
+
+
+def _normalize_quarter_label(match: re.Match[str]) -> str:
+    """Canonicalise a ``_QUARTER_RE`` match to ``Q<n> 20YY``.
+
+    Two-digit years are expanded by prefixing ``20`` (so ``FY26`` →
+    ``2026``). Four-digit years pass through. Quarter digit is taken
+    verbatim from group(1).
+    """
+    quarter = match.group(1)
+    year = match.group(2)
+    if len(year) == 2:
+        year = f"20{year}"
+    return f"Q{quarter} {year}"
+
+
+# Bare quarters (no year at all) appearing near financial keywords are a
+# common hallucination shape: "Q3 revenue was $X". Without a year the
+# claim cannot be tool-verified, so the validator surfaces them as
+# ungrounded with snippet ``"Q<n> (no year)"``.
+_BARE_QUARTER_RE = re.compile(r"\bQ([1-4])\b(?!\s*(?:of\s+)?(?:fiscal|FY|/|-|\s*\d))", re.IGNORECASE)
+
+# Financial-context keywords that elevate a bare-quarter mention from
+# harmless prose ("Q4 chip launch") to a numeric-grounding concern
+# ("Q3 revenue"). Kept short to avoid false positives.
+_FINANCIAL_KW_RE = re.compile(
+    r"\b(revenue|earnings|eps|net\s+income|sales|guidance|profit|margin|ebit|ebitda|fcf|free\s+cash\s+flow)\b",
+    re.IGNORECASE,
+)
 
 
 # ── Public result types ──────────────────────────────────────────────────────
@@ -261,23 +311,95 @@ def _extract_numbers(text: str) -> list[tuple[float, str, str]]:
 # ── Tool result flattening ───────────────────────────────────────────────────
 
 
-def _flatten_tool_values(tool_results: Iterable[Any]) -> list[tuple[float, FieldKind]]:
-    """Extract numeric values + FieldKind from tool result rows.
+@dataclass(frozen=True)
+class ToolValue:
+    """A numeric value extracted from a tool result, tagged with entity scope.
+
+    PLAN-0093 Phase 5 QA-2 Gap 3: the previous flat ``(value, kind)``
+    tuple let validator candidate pools mix entities — e.g. an AMD vs
+    NVDA comparison query had both vendors' revenue numbers in one pool,
+    so an LLM could write "AMD Q4 revenue $68B" and pass validation
+    because $68B existed in NVDA's tool corpus. Tagging each value with
+    an ``entity_tag`` (ticker or UUID short-prefix) lets the validator
+    restrict the candidate pool to the entity actually mentioned near
+    the response number.
+
+    ``entity_tag`` is best-effort:
+      - ``""`` (empty) when no entity could be inferred from the row.
+      - A short ticker string when ``item_id`` matches ``<ticker>_<...>``.
+      - The first 8 chars of ``entity_id`` UUID when only the ID is known.
+      - ``citation_meta.entity_name`` lower-cased when present.
+    """
+
+    value: float
+    field_kind: FieldKind
+    entity_tag: str  # may be "" when no entity is known
+
+
+# Matches the leading ticker portion of an ``item_id`` like
+# ``AAPL_2026Q1`` or ``NVDA-fundamentals-0``. Captures 1-5 uppercase
+# letters, optionally followed by a dot+letter exchange suffix.
+_ITEM_ID_TICKER_RE = re.compile(r"^([A-Z]{1,5}(?:\.[A-Z]{1,2})?)[_\-]")
+
+
+def _entity_tag_for(raw: Any) -> str:
+    """Extract an entity tag from a tool-result row, best-effort.
+
+    Resolution order (each step is wrapped in ``getattr`` so duck-typed
+    mocks and dicts both work):
+
+      1. ``raw.entity_id`` — first 8 chars of UUID string.
+      2. ``raw.item_id`` — strip a leading ``<TICKER>_`` if present.
+      3. ``raw.citation_meta.entity_name`` — lower-cased.
+      4. ``""`` when nothing matches.
+
+    Returns a lower-cased string so comparisons are case-insensitive.
+    """
+    # 1. entity_id (UUID) — preferred when present.
+    entity_id = getattr(raw, "entity_id", None)
+    if entity_id is None and isinstance(raw, dict):
+        entity_id = raw.get("entity_id")
+    if entity_id:
+        return str(entity_id)[:8].lower()
+    # 2. item_id (often "<TICKER>_<period>").
+    item_id = getattr(raw, "item_id", None)
+    if item_id is None and isinstance(raw, dict):
+        item_id = raw.get("item_id")
+    if isinstance(item_id, str) and item_id:
+        m = _ITEM_ID_TICKER_RE.match(item_id)
+        if m:
+            return m.group(1).lower()
+    # 3. citation_meta.entity_name.
+    citation_meta = getattr(raw, "citation_meta", None)
+    if citation_meta is None and isinstance(raw, dict):
+        citation_meta = raw.get("citation_meta")
+    if citation_meta is not None:
+        ent_name = getattr(citation_meta, "entity_name", None)
+        if ent_name is None and isinstance(citation_meta, dict):
+            ent_name = citation_meta.get("entity_name")
+        if isinstance(ent_name, str) and ent_name:
+            return ent_name.lower()
+    return ""
+
+
+def _flatten_tool_values(tool_results: Iterable[Any]) -> list[ToolValue]:
+    """Extract ``ToolValue`` rows from tool results, entity-tagged.
 
     Each tool result is duck-typed. We look for:
+      - ``.value`` + ``.field_kind`` (structured row — preferred path).
+      - dict rows with ``value`` and optional ``field_kind`` keys.
       - ``.text`` (string) — scan it with the same number extractor +
         classifier as the response so we have a uniform pipeline.
-      - ``.value`` + ``.field_kind`` (if a tool already emits structured
-        rows tagged with a FieldKind — future schema upgrade).
-      - dict rows with ``value`` and optional ``field_kind`` keys.
 
-    Values are returned in base units (same scale as the response
-    extractor) so direct comparison works.
+    Every emitted ``ToolValue`` carries the same ``entity_tag`` derived
+    from the source row via :func:`_entity_tag_for`. Values are in base
+    units (same scale as the response extractor).
     """
-    out: list[tuple[float, FieldKind]] = []
+    out: list[ToolValue] = []
     for raw in tool_results:
         if raw is None:
             continue
+        entity_tag = _entity_tag_for(raw)
         # Structured row with explicit field_kind — preferred path.
         explicit_value = getattr(raw, "value", None)
         explicit_kind_obj = getattr(raw, "field_kind", None)
@@ -287,7 +409,7 @@ def _flatten_tool_values(tool_results: Iterable[Any]) -> list[tuple[float, Field
                 kind = (
                     explicit_kind_obj if isinstance(explicit_kind_obj, FieldKind) else FieldKind(str(explicit_kind_obj))
                 )
-                out.append((fv, kind))
+                out.append(ToolValue(value=fv, field_kind=kind, entity_tag=entity_tag))
                 continue
             except (ValueError, TypeError):
                 pass
@@ -297,7 +419,7 @@ def _flatten_tool_values(tool_results: Iterable[Any]) -> list[tuple[float, Field
                 fv = float(raw["value"])
                 kind_v = raw.get("field_kind", FieldKind.UNKNOWN)
                 kind = kind_v if isinstance(kind_v, FieldKind) else FieldKind(str(kind_v))
-                out.append((fv, kind))
+                out.append(ToolValue(value=fv, field_kind=kind, entity_tag=entity_tag))
                 continue
             except (ValueError, TypeError):
                 pass
@@ -307,23 +429,117 @@ def _flatten_tool_values(tool_results: Iterable[Any]) -> list[tuple[float, Field
         if isinstance(raw, str):
             for value, raw_tok, ctx in _extract_numbers(raw):
                 kind = classify_number(value, raw_tok, ctx)
-                out.append((value, kind))
+                out.append(ToolValue(value=value, field_kind=kind, entity_tag=entity_tag))
         else:
             text = getattr(raw, "text", None)
             if isinstance(text, str) and text:
                 for value, raw_tok, ctx in _extract_numbers(text):
                     kind = classify_number(value, raw_tok, ctx)
-                    out.append((value, kind))
+                    out.append(ToolValue(value=value, field_kind=kind, entity_tag=entity_tag))
     return out
 
 
 def _extract_quarter_labels(text: str) -> set[str]:
-    """Return the set of 'Q<n> <yyyy>' labels appearing in *text*.
+    """Return the set of canonical ``Q<n> 20YY`` labels appearing in *text*.
 
-    Used to enforce exact-label match for quarter references. We
-    normalise to ``Q1 2026`` form so spacing/dash variations collapse.
+    Used to enforce exact-label match for quarter references. All
+    canonical variants — ``Q1 2026``, ``Q1 FY26``, ``Q1 fiscal 2027``,
+    ``Q1 FY 2026``, ``Q1 of fiscal year 2026``, two-digit years — are
+    collapsed to ``Q<n> 20YY`` via :func:`_normalize_quarter_label` so
+    set comparisons treat all forms as equivalent.
     """
-    return {f"Q{m.group(1)} {m.group(2)}" for m in _QUARTER_RE.finditer(text)}
+    return {_normalize_quarter_label(m) for m in _QUARTER_RE.finditer(text)}
+
+
+def _extract_bare_quarters(text: str) -> set[str]:
+    """Return bare-quarter mentions (``Q<n>`` with no year) near financial keywords.
+
+    A bare quarter on its own ("Q4 chip launch") is harmless prose, but
+    one within close proximity of a financial keyword ("Q3 revenue") is
+    an ungroundable numeric claim — the validator surfaces it with the
+    snippet ``"Q<n> (no year)"`` so the rewrite prompt can ask the LLM
+    to either add the year or remove the claim.
+
+    Proximity window: 60 chars on either side of the bare-quarter match
+    (matches the ``_context_around`` radius used elsewhere).
+    """
+    out: set[str] = set()
+    for m in _BARE_QUARTER_RE.finditer(text):
+        lo = max(0, m.start() - 60)
+        hi = min(len(text), m.end() + 60)
+        window = text[lo:hi]
+        if _FINANCIAL_KW_RE.search(window):
+            out.add(f"Q{m.group(1)} (no year)")
+    return out
+
+
+# Common all-caps tokens that LOOK like tickers but aren't — we must
+# not treat these as entity scope. EPS, P/E, GAAP, USD, etc.
+_NON_TICKER_TOKENS = frozenset(
+    {
+        "EPS",
+        "GAAP",
+        "USD",
+        "EUR",
+        "GBP",
+        "ETF",
+        "REIT",
+        "IPO",
+        "CEO",
+        "CFO",
+        "COO",
+        "CTO",
+        "Q1",
+        "Q2",
+        "Q3",
+        "Q4",
+        "FY",
+        "YOY",
+        "YTD",
+        "MOM",
+        "ROE",
+        "ROA",
+        "EBIT",
+        "EBITDA",
+        "FCF",
+        "SEC",
+        "NYSE",
+        "NASDAQ",
+        "S&P",
+        "GDP",
+        "CPI",
+        "API",
+        "CAGR",
+        "VAR",
+    }
+)
+
+
+def _nearest_entity_tag(response: str, raw_token: str) -> str:
+    """Return the entity tag (ticker) mentioned within 100 chars BEFORE *raw_token*.
+
+    Used by the validator to entity-scope the candidate pool. We scan
+    backwards from the response number for any 2-5 uppercase-letter
+    ticker token, skipping known non-ticker acronyms (EPS, USD, GAAP,
+    etc.). If found, return it lower-cased; otherwise ``""``.
+
+    A 100-char window is wide enough to catch "AMD's Q4 revenue was
+    $68B" patterns and narrow enough to avoid bleeding into the
+    previous entity in a comparison response.
+    """
+    idx = response.find(raw_token)
+    if idx == -1:
+        return ""
+    lo = max(0, idx - 100)
+    window = response[lo:idx]
+    # Last occurrence is closest — search from the right.
+    candidates = list(re.finditer(r"\b([A-Z]{2,5})\b", window))
+    for m in reversed(candidates):
+        tok = m.group(1)
+        if tok in _NON_TICKER_TOKENS:
+            continue
+        return tok.lower()
+    return ""
 
 
 # ── Validator ────────────────────────────────────────────────────────────────
@@ -426,7 +642,47 @@ class NumericGroundingValidator:
                 )
                 per_kind_failed[FieldKind.QUARTER] += 1
 
+            # ── PLAN-0093 Phase 5 QA-2 Gap 2 bare-quarter check ─────────
+            # A bare "Q3 revenue" with no year is ungroundable. Surface
+            # any bare-quarter mention near a financial keyword that is
+            # NOT supported by:
+            #   (a) a year-bearing quarter for the same digit in the
+            #       response (already validated against tool_quarters), OR
+            #   (b) the same bare-quarter+financial-keyword pattern in
+            #       the tool corpus (tool itself says "Q3 revenue"), OR
+            #   (c) any explicit "Q<digit> <year>" in the tool corpus
+            #       (tool talks about Q3 by name).
+            response_bare = _extract_bare_quarters(response)
+            tool_bare = _extract_bare_quarters(tool_text_blob)
+            response_quarter_digits = {q.split()[0] for q in response_quarters}
+            tool_quarter_digits = {q.split()[0] for q in tool_quarters}
+            for bare in response_bare:
+                digit = bare.split()[0]  # "Q3"
+                if digit in response_quarter_digits:
+                    continue
+                if bare in tool_bare:
+                    continue
+                if digit in tool_quarter_digits:
+                    continue
+                unsupported.append(
+                    UnsupportedNumber(
+                        value=0.0,
+                        field_kind=FieldKind.QUARTER,
+                        tolerance_used=0.0,
+                        closest_tool_value=None,
+                        snippet=bare,
+                    )
+                )
+                per_kind_failed[FieldKind.QUARTER] += 1
+
         # ── Step 4: Per-number validation ──────────────────────────────
+        # PLAN-0093 Phase 5 QA-2 Gap 3: entity-scope the candidate pool
+        # so AMD's tool values can't ground an NVDA-attributed number.
+        # When the response mentions a ticker within 100 chars BEFORE the
+        # number, restrict candidates to tool values tagged with the same
+        # entity. When no entity can be inferred, fall back to the legacy
+        # any-kind pool — but the legacy fall-back is exact-match only
+        # (tol=0) so we don't silently accept cross-entity collisions.
         total_numbers = len(response_numbers)
         for value, raw_tok, ctx in response_numbers:
             kind = classify_number(value, raw_tok, ctx)
@@ -434,12 +690,32 @@ class NumericGroundingValidator:
                 continue
             tol = self._tolerances.get(kind, DEFAULT_TOLERANCES[FieldKind.UNKNOWN])
 
-            # Prefer same-kind tool values.
-            same_kind = [v for v, k in tool_values if k is kind]
-            any_kind = [v for v, _ in tool_values]
-            candidate_pool = same_kind or any_kind
+            # Find entity nearest to this number in the response.
+            entity_tag = _nearest_entity_tag(response, raw_tok)
 
-            matched, closest = _matches_any(value, candidate_pool, tol)
+            # Pool selection:
+            #  1. Entity-scoped + same-kind  (strictest, preferred)
+            #  2. Entity-scoped + any-kind   (fallback if no same-kind hit)
+            #  3. Any-entity + same-kind     (last resort when entity_tag="")
+            if entity_tag:
+                scoped = [tv for tv in tool_values if tv.entity_tag and entity_tag in tv.entity_tag]
+                scoped_same = [tv.value for tv in scoped if tv.field_kind is kind]
+                scoped_any = [tv.value for tv in scoped]
+                candidate_pool = scoped_same or scoped_any
+                effective_tol = tol
+            else:
+                # No entity context — keep legacy same-kind > any-kind
+                # ordering, but tighten tolerance for any-kind fallback
+                # to exact match (tol=0) to prevent cross-entity leakage.
+                same_kind = [tv.value for tv in tool_values if tv.field_kind is kind]
+                if same_kind:
+                    candidate_pool = same_kind
+                    effective_tol = tol
+                else:
+                    candidate_pool = [tv.value for tv in tool_values]
+                    effective_tol = 0.0
+
+            matched, closest = _matches_any(value, candidate_pool, effective_tol)
             if matched:
                 per_kind_passed[kind] += 1
             else:
@@ -460,9 +736,25 @@ class NumericGroundingValidator:
             per_kind_stats[kind] = (per_kind_passed[kind], per_kind_failed[kind])
 
         # Quarter mismatches count toward total_numbers for stats purposes
-        # so the metric reflects the real number of items we judged.
-        _quarter_misses = len(response_quarters - tool_quarters) if FieldKind.QUARTER not in self._skip_kinds else 0
-        total_numbers_with_quarters = total_numbers + _quarter_misses
+        # so the metric reflects the real number of items we judged. Bare
+        # quarters near financial keywords are counted alongside year-bearing
+        # mismatches (PLAN-0093 Phase 5 QA-2 Gap 2).
+        if FieldKind.QUARTER not in self._skip_kinds:
+            _quarter_misses = len(response_quarters - tool_quarters)
+            _response_quarter_digits = {q.split()[0] for q in response_quarters}
+            _tool_quarter_digits = {q.split()[0] for q in tool_quarters}
+            _tool_bare = _extract_bare_quarters(tool_text_blob)
+            _bare_misses = sum(
+                1
+                for bare in _extract_bare_quarters(response)
+                if bare.split()[0] not in _response_quarter_digits
+                and bare not in _tool_bare
+                and bare.split()[0] not in _tool_quarter_digits
+            )
+        else:
+            _quarter_misses = 0
+            _bare_misses = 0
+        total_numbers_with_quarters = total_numbers + _quarter_misses + _bare_misses
 
         return GroundingResult(
             passed=not unsupported,
@@ -505,6 +797,7 @@ def _matches_any(
 __all__ = [
     "GroundingResult",
     "NumericGroundingValidator",
+    "ToolValue",
     "UnsupportedNumber",
     "classify_number",
 ]

@@ -212,3 +212,115 @@ class TestNumericGroundingValidator:
         rev_passed, rev_failed = result.per_kind_stats.get(FieldKind.REVENUE, (0, 0))
         assert eps_passed >= 1
         assert rev_failed >= 1
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# PLAN-0093 Phase 5 QA-2 Gap 2 — broadened quarter-label regex.
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+@dataclass
+class _TaggedRow:
+    """Tool row with an explicit item_id to test entity-scope behaviour."""
+
+    text: str = ""
+    value: float | None = None
+    field_kind: FieldKind | None = None
+    item_id: str = ""
+    entity_id: str | None = None
+
+
+class TestQuarterLabelVariants:
+    """Confirm the canonicalising regex accepts FY/fiscal forms + 2-digit years."""
+
+    def setup_method(self) -> None:
+        self.v = NumericGroundingValidator()
+
+    def test_q1_fy26_matches_q1_2026_in_tools(self) -> None:
+        """LLM writes "Q1 FY26" — tool says "Q1 2026" — must pass (same period)."""
+        rows = [_row_with_text("Q1 2026 revenue was $10B.")]
+        result = self.v.validate("Q1 FY26 results were strong.", rows)
+        # No QUARTER unsupported entries — "Q1 FY26" normalises to "Q1 2026".
+        kinds = {u.field_kind for u in result.unsupported}
+        assert FieldKind.QUARTER not in kinds, result.unsupported
+
+    def test_q1_fiscal_year_2026_matches_q1_2026(self) -> None:
+        """Long-form "Q1 of fiscal year 2026" → matches "Q1 2026"."""
+        rows = [_row_with_text("Q1 2026 revenue was $10B.")]
+        result = self.v.validate("Q1 of fiscal year 2026 saw growth.", rows)
+        kinds = {u.field_kind for u in result.unsupported}
+        assert FieldKind.QUARTER not in kinds, result.unsupported
+
+    def test_q1_fiscal_2027_mismatch_caught(self) -> None:
+        """LLM writes "Q1 fiscal 2027" — tool only has "Q1 2026" — must fail."""
+        rows = [_row_with_text("Q1 2026 revenue was $10B.")]
+        result = self.v.validate("Q1 fiscal 2027 will be even bigger.", rows)
+        quarter_snippets = {u.snippet for u in result.unsupported if u.field_kind is FieldKind.QUARTER}
+        assert "Q1 2027" in quarter_snippets, quarter_snippets
+
+    def test_bare_q3_revenue_flagged(self) -> None:
+        """Bare "Q3 revenue" with no year → surfaced as "Q3 (no year)" failure."""
+        rows = [_row_with_text("Q1 2026 results were positive.")]
+        result = self.v.validate("Q3 revenue surged this period.", rows)
+        bare_snippets = {u.snippet for u in result.unsupported if u.field_kind is FieldKind.QUARTER}
+        assert "Q3 (no year)" in bare_snippets, bare_snippets
+
+    def test_bare_q4_chip_launch_not_flagged(self) -> None:
+        """Bare "Q4 chip launch" — no financial keyword nearby → no failure."""
+        rows = [_row_with_text("Q1 2026 results were positive.")]
+        result = self.v.validate("Q4 chip launch is on track.", rows)
+        bare_snippets = {u.snippet for u in result.unsupported if u.field_kind is FieldKind.QUARTER}
+        # "Q4" appears alone; no financial keyword (revenue/earnings/etc.)
+        # within the 60-char window → must not be surfaced.
+        assert "Q4 (no year)" not in bare_snippets, bare_snippets
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# PLAN-0093 Phase 5 QA-2 Gap 3 — entity-scoped candidate pool.
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+class TestCrossEntityLeakage:
+    """Confirm the validator does not let NVDA values ground AMD claims."""
+
+    def setup_method(self) -> None:
+        self.v = NumericGroundingValidator()
+
+    def test_amd_revenue_grounded_only_by_amd_rows(self) -> None:
+        """Mixed AMD+NVDA corpus — AMD's claim ($10B) matches AMD's tool row."""
+        rows = [
+            _TaggedRow(value=10.0e9, field_kind=FieldKind.REVENUE, item_id="AMD_2026Q1"),
+            _TaggedRow(value=68.0e9, field_kind=FieldKind.REVENUE, item_id="NVDA_2026Q1"),
+        ]
+        # AMD's name appears just before the number.
+        result = self.v.validate("AMD reported revenue of $10B last quarter.", rows)
+        # No REVENUE failures — AMD's $10B matches AMD's tool row.
+        rev_failures = [u for u in result.unsupported if u.field_kind is FieldKind.REVENUE]
+        assert not rev_failures, rev_failures
+
+    def test_amd_claim_using_nvda_value_rejected(self) -> None:
+        """The canonical leak: 'AMD revenue $68B' must NOT pass on NVDA's $68B row."""
+        rows = [
+            _TaggedRow(value=10.0e9, field_kind=FieldKind.REVENUE, item_id="AMD_2026Q1"),
+            _TaggedRow(value=68.0e9, field_kind=FieldKind.REVENUE, item_id="NVDA_2026Q1"),
+        ]
+        result = self.v.validate("AMD reported revenue of $68B last quarter.", rows)
+        rev_failures = [u for u in result.unsupported if u.field_kind is FieldKind.REVENUE]
+        # AMD scope contains only $10B → $68B is unsupported.
+        assert rev_failures, result.unsupported
+        assert any(abs(u.value - 68e9) < 1 for u in rev_failures), rev_failures
+
+    def test_no_entity_context_falls_back_to_exact_match(self) -> None:
+        """When the response mentions no ticker, any-kind pool is exact-match only.
+
+        Tool row has $10.0B; response says $10.1B with no entity context.
+        Previously this would pass at REVENUE 0.5% tolerance; now the
+        any-kind fallback is exact-match only → must fail.
+        """
+        # No entity_id / item_id on the row → entity_tag = "".
+        # Response also has no ticker before the number.
+        rows = [_TaggedRow(value=10.0e9, field_kind=FieldKind.UNKNOWN)]  # kind mismatch forces any-kind path
+        result = self.v.validate("The company reported revenue of $10.1B.", rows)
+        # 10.1B vs 10.0B at exact-match tolerance → fails.
+        rev_failures = [u for u in result.unsupported if u.field_kind is FieldKind.REVENUE]
+        assert rev_failures, result.unsupported
