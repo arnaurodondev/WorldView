@@ -66,7 +66,16 @@ _SENTINELS: list[tuple[str, str, str]] = [
     (
         "11111111-0004-7000-8000-000000000003",
         "Unknown Organization",
-        "organization",
+        # F-LIVE-002 (Phase 5c, 2026-05-24): CHECK constraint
+        # ``ck_canonical_entities_entity_type`` allows only 11 enum values
+        # (financial_instrument, person, event, sector, industry,
+        # macro_indicator, place, product, index, currency, unknown).
+        # The original choice "organization" is not in the enum and caused
+        # migration 0044 to fail at first INSERT, blocking 0045-0048 from
+        # ever applying. Using "unknown" — the catch-all — matches the
+        # semantic intent ("we don't know what kind of organization") and
+        # satisfies the constraint.
+        "unknown",
     ),
     (
         "11111111-0004-7000-8000-000000000004",

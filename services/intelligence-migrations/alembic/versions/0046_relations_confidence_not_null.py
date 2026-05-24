@@ -47,15 +47,29 @@ def upgrade() -> None:
     """confidence NOT NULL with default = base_confidence."""
 
     # ── Step 1: alter the column ──────────────────────────────────────────────
-    # ``server_default = base_confidence`` lets bare INSERTs (without an
-    # explicit confidence value) pick up the row's own base_confidence — a
-    # natural default that matches the in-app fallback in ConfidenceWorker.
+    # F-LIVE-003 (Phase 5c, 2026-05-24): the original implementation used
+    # ``server_default=sa.text("base_confidence")`` so bare INSERTs would
+    # adopt the row's own base_confidence value. PostgreSQL rejects this
+    # outright — ``cannot use column reference in DEFAULT expression`` —
+    # and the migration crashed before NOT NULL was applied, leaving 0045
+    # and beyond unable to apply. SQL DEFAULTs must be constants or
+    # constant-function calls (NOW(), gen_random_uuid()), never another
+    # column.
+    #
+    # Resolution: drop the server_default entirely. Migration 0045 TRUNCATEs
+    # the relations table beforehand (pre-prod simplification), so there are
+    # no rows to backfill. Every NEW INSERT path in the application layer
+    # (graph_write.py + relation_evidence repository) already passes
+    # confidence explicitly — the missing default is therefore unreachable.
+    # If a future code path needs an automatic fallback, add a BEFORE INSERT
+    # trigger that copies base_confidence into confidence — that is the only
+    # SQL-supported way to express "default to another column's value".
     op.alter_column(
         "relations",
         "confidence",
         existing_type=sa.Float(),
         nullable=False,
-        server_default=sa.text("base_confidence"),
+        server_default=None,
     )
 
     # NOTE: confidence_stale is intentionally retained — see migration docstring.
