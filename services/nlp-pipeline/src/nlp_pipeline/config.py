@@ -146,6 +146,15 @@ class Settings(BaseSettings):
     # chunks.entity_mentions JSONB (avoids index bloat from low-confidence noise).
     gliner_mention_floor: float = 0.6
 
+    # PLAN-0093 C-2 (F-NPL-005): minimum GLiNER confidence required to PERSIST a
+    # mention row to the entity_mentions table (audited table consumed by the
+    # resolution cascade + downstream workers). Without this floor, ~26% of all
+    # entity_mentions rows historically had score < 0.6 — the chunks.entity_mentions
+    # JSONB cache already used gliner_mention_floor to suppress them, but the table
+    # writer did not. This brings the table writer into parity. Override via
+    # NLP_PIPELINE_MIN_PERSIST_FLOOR.
+    min_persist_floor: float = 0.6
+
     # RC-1 fix: minimum word count for articles to enter the NLP pipeline.
     # Articles below this threshold are stub headlines (Finnhub ~91% stub rate,
     # SEC Edgar ~52%) that carry no relational signal but consume NER + embedding

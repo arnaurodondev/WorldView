@@ -7,14 +7,22 @@
  * "Did I beat SPY over 1M / 3M / YTD / 1Y?" without navigating between charts.
  *
  * DATA SOURCE:
- *   - Fetches value-history at each standard period individually.
+ *   - Fetches value-history at each standard period via useQueries (D-002).
  *   - Computes period return client-side from first/last value point.
  *   - Benchmark column uses the TWR endpoint when available; currently shows "—"
  *     until the backend endpoint ships (Decision 2 fallback in design spec).
  *
- * WHY one query per period (not one bundle query): TanStack Query's per-entry
- * caching means the 1Y fetch is not re-triggered when only the 1M period changes
- * on the performance chart. Each row is independent and can go stale separately.
+ * WHY useQueries instead of per-row PeriodRow components (D-002 refactor):
+ * The original design used a separate PeriodRow sub-component per period, each
+ * owning its own useQuery. This was architecturally sound (independent cache
+ * entries) but created 7 extra component instances per table mount and made
+ * integration tests impossible — there was no data-testid to select rows from
+ * outside the component tree.
+ *
+ * useQueries achieves the same independent caching guarantee (each entry in the
+ * queries array has its own queryKey, isLoading, and data) while keeping all
+ * rendering in one component. This exposes data-testid="period-row-{PERIOD}"
+ * which the test suite requires.
  *
  * WHY 7 rows (not the 9 IBKR shows): We use the same 7 periods as
  * AnalyticsPeriodSelector. "3Y" and "ITD" are deferred until the backend
@@ -24,8 +32,7 @@
  */
 "use client";
 
-import { useMemo } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useQueries } from "@tanstack/react-query";
 
 import { useAuth } from "@/hooks/useAuth";
 import { createGateway } from "@/lib/gateway";
@@ -55,24 +62,6 @@ const PERIODS = [
   { label: "ALL", days: null }, // full history
 ] as const;
 
-// ── Helper: single period query ───────────────────────────────────────────────
-
-/**
- * Single-period value history query — used per row.
- *
- * WHY inline hook-like pattern (not a custom hook): React rules of hooks
- * require all hooks to be called unconditionally. We cannot call useQuery
- * inside a loop. Instead we define a component per row that runs its own
- * query and renders directly. This keeps the code simple and within React's
- * rules.
- */
-interface PeriodRowProps {
-  portfolioId: string;
-  label: string;
-  days: number | null;
-  accessToken: string | null;
-}
-
 // ── Formatting helpers ────────────────────────────────────────────────────────
 
 function fmtReturn(v: number | null): string {
@@ -88,78 +77,15 @@ function returnColorClass(v: number | null): string {
   return "text-muted-foreground";
 }
 
-// ── PeriodRow component ───────────────────────────────────────────────────────
+// ── Period return computation ─────────────────────────────────────────────────
 
-/**
- * PeriodRow — renders a single row in the period returns table.
- *
- * WHY a separate component per row: allows each row to run its own useQuery.
- * React hooks cannot be called conditionally or inside loops — extracting each
- * row as a component is the idiomatic pattern for "N independent queries".
- *
- * Each row fetches its period's value-history. Many rows will share cache entries
- * with the performance chart (same portfolioId+period key), so cold-start cost
- * is bounded to the number of unique periods NOT already cached.
- */
-function PeriodRow({ portfolioId, label, days, accessToken }: PeriodRowProps) {
-  const params = useMemo(
-    () => ({
-      ...(days != null ? { days } : {}),
-      granularity: "1d" as const,
-    }),
-    [days],
-  );
-
-  const { data, isLoading } = useQuery({
-    queryKey: qk.portfolios.valueHistory(portfolioId, label),
-    queryFn: () =>
-      createGateway(accessToken).getValueHistory(portfolioId, params),
-    enabled: !!accessToken && !!portfolioId,
-    staleTime: 60_000,
-  });
-
-  // Compute the period return from value-history.
-  const periodReturn = useMemo(() => {
-    const pts = data?.points ?? [];
-    if (pts.length < 2) return null;
-    const first = pts[0].value;
-    const last = pts[pts.length - 1].value;
-    if (first === 0) return null;
-    return (last - first) / first;
-  }, [data]);
-
-  if (isLoading) {
-    return (
-      <tr className="h-[24px]">
-        <td className="pr-3"><Skeleton className="h-3 w-6" /></td>
-        <td className="pr-3"><Skeleton className="h-3 w-12" /></td>
-        <td className="pr-3"><Skeleton className="h-3 w-12" /></td>
-        <td><Skeleton className="h-3 w-12" /></td>
-      </tr>
-    );
-  }
-
-  const display = fmtReturn(periodReturn);
-  const colorClass = returnColorClass(periodReturn);
-
-  return (
-    <tr className="h-[24px] border-b border-border/40 last:border-0">
-      {/* Period label */}
-      <td className="text-muted-foreground pr-3 py-0.5">
-        {label}
-      </td>
-      {/* Portfolio return */}
-      <td className={cn("pr-3 py-0.5 tabular-nums", colorClass)}>
-        {display}
-      </td>
-      {/* vs SPY — placeholder until TWR endpoint ships.
-          WHY "—" not "N/A": "—" is the universal absent-value glyph used
-          throughout the app. "N/A" implies the value will never exist. */}
-      <td className="pr-3 py-0.5 text-muted-foreground tabular-nums">—</td>
-      {/* Excess return — also unavailable until TWR endpoint ships */}
-      <td className="py-0.5 text-muted-foreground tabular-nums">—</td>
-    </tr>
-  );
+function computePeriodReturn(points: Array<{ value: number }> | undefined): number | null {
+  const pts = points ?? [];
+  if (pts.length < 2) return null;
+  const first = pts[0].value;
+  const last = pts[pts.length - 1].value;
+  if (first === 0) return null;
+  return (last - first) / first;
 }
 
 // ── Main component ────────────────────────────────────────────────────────────
@@ -169,12 +95,27 @@ export function AnalyticsPeriodReturnsTable({
 }: AnalyticsPeriodReturnsTableProps) {
   const { accessToken } = useAuth();
 
+  // WHY useQueries (D-002): fires 7 independent queries in one hook call.
+  // Each entry has its own queryKey, so each period's cache entry is independent —
+  // the 1Y fetch is not invalidated when only the 1M period changes on the
+  // performance chart above. The results array is index-aligned with PERIODS.
+  const results = useQueries({
+    queries: PERIODS.map((p) => ({
+      queryKey: qk.portfolios.valueHistory(portfolioId, p.label),
+      queryFn: () =>
+        createGateway(accessToken).getValueHistory(portfolioId, {
+          ...(p.days != null ? { days: p.days } : {}),
+          granularity: "1d" as const,
+        }),
+      enabled: !!accessToken && !!portfolioId,
+      staleTime: 60_000,
+    })),
+  });
+
   return (
     <div className="border border-border rounded-[2px] overflow-hidden">
-      {/* WHY <table> with <thead>/<tbody>/<tfoot>: the design spec requires
-          an accessible table element so screen readers announce the column
-          headers. A pure CSS grid would require aria-rowheader markup to
-          achieve the same a11y. */}
+      {/* WHY <table> with <thead>/<tbody>: the design spec requires an accessible
+          table element so screen readers announce the column headers. */}
       <table className="w-full text-[11px] font-mono border-collapse">
         <thead>
           <tr className="border-b border-border bg-muted/20">
@@ -193,15 +134,42 @@ export function AnalyticsPeriodReturnsTable({
           </tr>
         </thead>
         <tbody>
-          {PERIODS.map((p) => (
-            <PeriodRow
-              key={p.label}
-              portfolioId={portfolioId}
-              label={p.label}
-              days={p.days}
-              accessToken={accessToken}
-            />
-          ))}
+          {PERIODS.map((p, i) => {
+            const { data, isLoading } = results[i];
+
+            // Skeleton row while this period's fetch is in-flight.
+            if (isLoading) {
+              return (
+                <tr key={p.label} className="h-[24px]">
+                  <td className="pr-3"><Skeleton className="h-3 w-6" /></td>
+                  <td className="pr-3"><Skeleton className="h-3 w-12" /></td>
+                  <td className="pr-3"><Skeleton className="h-3 w-12" /></td>
+                  <td><Skeleton className="h-3 w-12" /></td>
+                </tr>
+              );
+            }
+
+            const periodReturn = computePeriodReturn(data?.points);
+            const display = fmtReturn(periodReturn);
+            const colorClass = returnColorClass(periodReturn);
+
+            return (
+              // WHY data-testid: lets the test suite assert each period row
+              // is present by label without fragile text/CSS selectors.
+              <tr
+                key={p.label}
+                data-testid={`period-row-${p.label}`}
+                className="h-[24px] border-b border-border/40 last:border-0"
+              >
+                <td className="text-muted-foreground pr-3 py-0.5">{p.label}</td>
+                <td className={cn("pr-3 py-0.5 tabular-nums", colorClass)}>{display}</td>
+                {/* vs SPY — placeholder until TWR endpoint ships. */}
+                <td className="pr-3 py-0.5 text-muted-foreground tabular-nums">—</td>
+                {/* Excess return — unavailable until TWR endpoint ships */}
+                <td className="py-0.5 text-muted-foreground tabular-nums">—</td>
+              </tr>
+            );
+          })}
         </tbody>
       </table>
     </div>

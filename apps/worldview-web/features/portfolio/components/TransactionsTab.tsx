@@ -23,7 +23,7 @@
 // state via useState and binds onClick handlers. Also uses nuqs hooks
 // (useTransactionsFilterState) which require the browser's URL API.
 
-import { useState, useMemo } from "react";
+import { useState, useMemo, useEffect } from "react";
 import { ChevronRight } from "lucide-react";
 
 import { cn } from "@/lib/utils";
@@ -67,6 +67,16 @@ export function TransactionsTab({
  // to this component lets all three stay in sync without prop-drilling into
  // deeply nested internals.
  const { filters, setFilters, resetFilters } = useTransactionsFilterState();
+
+ // D-003: Reset URL-synced filter state whenever the active portfolio changes.
+ // WHY: nuqs stores filter values in the URL query string. Without this reset,
+ // switching from Portfolio A (filtered to BUY) to Portfolio B would carry
+ // the BUY filter over — Portfolio B's table would render pre-filtered even
+ // though the user never set a filter on it. Resetting on portfolio change
+ // matches the IBKR convention (each account starts with the "All" view).
+ useEffect(() => {
+  resetFilters();
+ }, [activePortfolioId, resetFilters]);
 
  // ── All transactions (unfiltered) ───────────────────────────────────────
  const allTransactions = transactionsResp?.transactions ?? [];
