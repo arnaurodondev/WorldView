@@ -228,3 +228,207 @@ The QA-5 PASS is meaningful — the architecture of what was built is sound. The
 4. **The entire compounding (BP/HR/R) section of the plan was skipped** (QA-6)
 
 None of these are deep architecture flaws — all are addressable with focused fix agents. The remaining question is whether to remediate-then-revalidate now, or land what's there and address fixes in a follow-up plan.
+
+---
+
+# Annex A — Root Causes & Exact Patches (Investigation Phase, 2026-05-24)
+
+After the initial QA pass returned FAIL, four investigation agents (INV-1 through INV-4) read the authoritative schema, prompt, compose, and docs to produce file-level patches. This annex is the **source of truth for fix agents** — every patch below is line-anchored against the head of `feat/plan-0093-remediation` as of commit `9e5958e8`.
+
+## A.1 — QA-1 Root Cause: 3 G-1 SQL Bugs (INV-1)
+
+### Bug 1 — `tests/validation/test_age_coverage.py` (singular table name)
+**Root cause**: Test references `entity_event_exposure` (singular); authoritative table is `entity_event_exposures` (plural), defined identically in intelligence-migrations 0004:210, 0007:68, 0037:127. Every site against this table will raise `UndefinedTable`.
+
+**Patch** (4 sites): lines 13, 140, 145, 147 — change `entity_event_exposure` → `entity_event_exposures`. Same for the docstring at line 13.
+
+**Validation hook**: `grep -n "entity_event_exposure\b" tests/validation/test_age_coverage.py` must return zero matches post-patch.
+
+### Bug 2 — `tests/validation/test_enrichment_quality.py:47` (wrong table entirely)
+**Root cause**: Query is `provisional_entity_queue.updated_at` — but that column doesn't exist on `provisional_entity_queue` (schema: `created_at, resolved_at, retry_count, next_retry_at, processing_started_at`). **More importantly**, the SLO's actual target is `canonical_entities.enrichment_attempts` being frozen (audit F-DB-ENRICHMENT-001 at line 237: "1,790 of 5,230 canonical_entities (34%) have `enriched_at IS NULL` AND every row has `enrichment_attempts=0`"). The test queries the wrong table.
+
+**Patch**: replace the SLO query with:
+```sql
+SELECT count(*) FROM canonical_entities WHERE enriched_at >= now() - interval '24 hours'
+```
+And update docstring + failure-message to cite F-DB-ENRICHMENT-001 + `StructuredEnrichmentWorker` properly. Asserts `> 0` (no enrichment in 24h = worker stalled).
+
+### Bug 3 — `tests/validation/test_relations_quality.py:147-152` (non-existent join columns)
+**Root cause**: EXISTS subquery joins `relation_summaries` on `subject_entity_id`, `object_entity_id`, `relation_type` — none exist on `relation_summaries` (per migration 0001:440-453, the columns are `summary_id, relation_id, summary_text, evidence_count, ...`). Also `relations` has `canonical_type` not `relation_type`. Even the right-hand side of the equality would fail.
+
+**Patch**: replace EXISTS clause with `WHERE rs.relation_id = r.relation_id AND rs.is_current = true`. Aligns with the unique partial index `uidx_relation_summaries_current` (migration 0001:456).
+
+---
+
+## A.2 — QA-2 Root Cause: 3 RAG Safety Gaps (INV-2)
+
+### Gap 1 — Premise-contradiction refusal missing
+**Root cause**: `libs/prompts/src/prompts/chat/tool_use.py:44-59` has STRICT RULES + FORBIDDEN blocks; no rule obligates the LLM to challenge a contradictory premise in the user's question. `numeric_grounding.py` only checks numbers/quarters, never relational claims.
+
+**Patch**: prepend new STRICT RULE to `tool_use.py` template (before the existing rules):
+```
+- PREMISE CHECK: Before answering, identify any factual claims embedded in
+  the user's question (e.g. 'Why did X acquire Y last quarter?'). For each
+  such claim, verify it appears in a tool result before treating it as true.
+  If NOT supported, refuse: "I cannot find evidence that <verbatim claim>.
+  Tool <name> returned <N> rows and none support this." Do NOT speculate.
+```
+Plus add to FORBIDDEN: `- Accepting M&A, partnership, spin-off, leadership, or product-launch claims from the user's question without tool confirmation.`
+
+**Regression test**: assert rendered prompt contains literal strings `"PREMISE CHECK"` and `"refuse to answer"`. Add A10 question to `tests/validation/chat_eval/questions.py` with `must_mention_any_of=["cannot find evidence", "no evidence", "I cannot confirm"]`.
+
+### Gap 2 — `_QUARTER_RE` too narrow
+**Root cause**: `numeric_grounding.py:96` regex `\bQ([1-4])\s*[/-]?\s*(20\d{2})\b` requires 4-digit year, no FY support. `grading.py:204` allows optional FY but year still mandatory. Bypass forms: "Q3 revenue" (no year), "Q1 FY26" (2-digit), "Q1 fiscal 2027".
+
+**Patch**:
+1. Replace `_QUARTER_RE` with verbose pattern matching all canonical forms + 2/4-digit years; add `_normalize_quarter_label` helper that canonicalizes to `Q<n> 20YY`.
+2. Add `_BARE_QUARTER_RE` + `_FINANCIAL_KW_RE` + `_extract_bare_quarters()` helper — bare quarters near financial keywords are treated as ungrounded with snippet `"Q3 (no year)"`.
+3. Mirror the regex change in `grading.py:204` with 2-digit year normalization.
+4. Wire `_extract_bare_quarters` into `NumericGroundingValidator.validate` after line 414.
+
+**Regression tests**: `TestQuarterLabelVariants` class with 4 cases (Q1 FY26 → matches Q1 2026; Q1 fiscal year 2027 mismatch; Q3 revenue → bare-quarter fail; Q4 chip → no fail without financial keyword).
+
+### Gap 3 — Numeric pool not entity-scoped
+**Root cause**: `_flatten_tool_values` at `numeric_grounding.py:264-317` returns `list[tuple[float, FieldKind]]` with no entity annotation. Same-kind pool at line 438 mixes AMD + NVDA values — LLM could write "AMD's Q4 revenue was $68B" and validator passes because $68B exists in NVDA's tool corpus.
+
+**Patch**:
+1. Replace flat tuple with `@dataclass(frozen=True) class ToolValue(value, field_kind, entity_tag)`.
+2. Add `_entity_tag_for(raw)` helper: extracts entity from `raw.entity_id` UUID > `raw.item_id` matched by `_ITEM_ID_TICKER_RE` > `citation_meta.entity_name` > `""`.
+3. Validator-side: add `_nearest_entity_tag(response, raw_token)` helper that finds the ticker mentioned within 100 chars BEFORE the number. When entity_tag is identified, restrict pool to matching entities. When not, fall back to per-kind pool with `tol=0` (exact match only).
+
+**Regression tests**: `TestCrossEntityLeakage` — assert AMD+NVDA mixed corpus correctly rejects "$68B AMD revenue".
+
+### Bonus P1 triage from INV-2
+- **`_resolve_entity_by_name` ambiguity threshold** (intelligence.py:174): real bug, fix alongside P0s. Log `tool_entity_ambiguous` warning + return None when top-2 similarity diff < 0.10.
+- **Q6 hardcoded forbid list**: defer (cost > benefit, partial overlap with new premise-check)
+- **Reprompt entity-specific context** (chat_orchestrator.py:944-963): real bug, fix alongside P0s (modest enrichment of rewrite payload with `canonical_name`, `ticker`).
+- **Language-discipline clause**: defer (no non-English test cases yet).
+
+---
+
+## A.3 — QA-3 Root Cause: 11 Containers Missing Restart Policy (INV-3)
+
+### Per-service decision
+All 11 are long-running (FastAPI APIs / ML inference / Next.js frontend). Unified policy: `restart: unless-stopped`.
+
+| Service | Justification |
+|---|---|
+| alert | Long-running FastAPI (port 8010); silent alerting outage is security-relevant |
+| api-gateway | S9 stateless reverse proxy — sole platform ingress |
+| content-ingestion | S3 RSS/EODHD API plane (port 8004) |
+| content-store | S5 storage API (port 8005) |
+| gliner-server | ML inference (10-min start_period for model download — must auto-recover) |
+| knowledge-graph | S7 API (port 8007) |
+| market-ingestion | S2 API (port 8002) |
+| nlp-pipeline | S6 API (port 8006) |
+| portfolio | S1 API (port 8001) |
+| rag-chat | S8 chat WebSocket (port 8008) |
+| worldview-web | Next.js production frontend (port 3001) |
+
+### Compose patch
+Add `restart: unless-stopped` to each of the 11 service blocks (after the healthcheck block, with PLAN-0093 QA-3 comment). 11 single-line additions in `infra/compose/docker-compose.yml`.
+
+### Test patch — unified critical list
+Grow `tests/validation/test_restart_policy.py:_CRITICAL_SERVICES` from 7 to 18 entries (add the 11 above). Keep `tests/infra/test_compose_restart_policy.py` unchanged (6-entry historical anchor — Sub-Plan A baseline pin) with cross-reference comment to the superset.
+
+### Soak detector patch (P1)
+`tests/validation/soak/test_no_restart_loops.py` currently greps for `"restarting"` substring only — misses `Exited` containers. Replace with dual-streak detector:
+1. `_snapshot_container_states()` returns `{name: classification}` where classification ∈ {up, restarting, down, unknown}
+2. Take `expected_up` baseline at soak start (every `worldview-*` container currently Up)
+3. Track two streaks per container: `restart_streak` AND `down_streak`
+4. Fail if either crosses `_FAILURE_THRESHOLD` (3 samples × 5min = 15min)
+
+One-shot `*-init` / `*-migrate` containers are correctly EXCLUDED from `expected_up` (already Exited at baseline).
+
+---
+
+## A.4 — QA-4 Migration Patches (INV-4)
+
+### A.4.1 — APP_ENV guard on 3 TRUNCATE migrations
+Add shared helper (or inline, but prefer module):
+```python
+def _assert_truncate_allowed(table: str) -> None:
+    """Refuse to TRUNCATE in production unless explicitly overridden.
+
+    The platform-wide assert_app_env_or_die runs at APP startup — Alembic
+    migrations run independently (CI, ad-hoc CLI, restored staging dumps)
+    and bypass that gate.
+    """
+    if os.environ.get("APP_ENV", "").lower() == "production":
+        if os.environ.get("ALLOW_DESTRUCTIVE_MIGRATION") != "1":
+            raise RuntimeError(
+                f"Refusing to TRUNCATE {table!r} in APP_ENV=production. "
+                "Set ALLOW_DESTRUCTIVE_MIGRATION=1 to override."
+            )
+```
+Apply to:
+- `services/intelligence-migrations/alembic/versions/0045_add_relations_fk_constraints.py:60` — `_assert_truncate_allowed("relations + dependents")`
+- `services/intelligence-migrations/alembic/versions/0047_evidence_raw_not_null_fks.py:51` — `_assert_truncate_allowed("relation_evidence_raw")`
+- `services/nlp-pipeline/alembic/versions/0020_entity_mentions_tenant_not_null.py:44` — `_assert_truncate_allowed("entity_mentions")`
+
+### A.4.2 — 0045 sentinel CHECK constraint
+Add a comment block before the CHECK definition pointing to `0044._SENTINELS`. Add new regression test `services/intelligence-migrations/tests/migrations/test_sentinel_check_constraint_sync.py` that dynamically imports `_SENTINELS` from 0044 (via importlib) and regex-extracts the UUIDs in 0045's CHECK source. Asserts set equality. Pure text test, no DB needed.
+
+### A.4.3 — 0048 partition verification
+Append a `DO $$ ... RAISE EXCEPTION ...` block to `upgrade()` that queries `pg_inherits` + `information_schema.columns` and raises if any `relations_p*` partition is missing `summary_attempt_count`. Cheap, single-pass, surfaces partition-DDL desync at migration time.
+
+---
+
+## A.5 — QA-6 Documentation Patches (INV-4)
+
+### Numbering corrections (important)
+- **BP**: plan called for BP-545..549; current max is BP-543 → **renumber to BP-544..548 (5 patterns)**. The audit only enumerated 5 patterns.
+- **HR**: plan called for HR-051/052/053; those IDs are taken by PLAN-0084 → **renumber to HR-063/064/065**.
+
+### B.1 — BUG_PATTERNS.md (append 5 rows after BP-543)
+- **BP-544**: AGE vlabel/elabel missing → silent ProgrammingError → watermark advance (B-1 fix, source F-KG-PERSIST-001)
+- **BP-545**: rdkafka DNS cache holds stale broker IPs; consumers silently stop (A-2 fix, source F-LOG-003)
+- **BP-546**: Repository SELECT with stale column name fails at execution time, not parse time (F-1 production guard; QA-1 P0s are repro of this pattern in TEST CODE)
+- **BP-547**: LLM agent extrapolates from N=1 tool row; numeric hallucination wrapped in prose (E-2 partial fix; QA-2 P0-1 premise refusal still OPEN)
+- **BP-548**: `enrichment_attempts` counter that never UPDATEs makes a partial-index sweep look correct (D-1 fix, source F-DB-ENRICHMENT-001)
+
+### B.2 — RULES.md R35 (insert after line 345, before `---`)
+Verbatim text + Summary Table row. Wording: "Every long-running service that calls postgres/valkey/kafka/an LLM endpoint MUST declare `depends_on: { <dep>: { condition: service_healthy } }` in docker-compose. Optional deps wrap startup probes in `@retry_on_startup`. `condition: service_started` is insufficient — must be `service_healthy`."
+
+### B.3 — HIGH_RISK_PATTERNS.md (append after line 1018)
+- **HR-063**: Silent-Failure-as-Restart-Loop (Watermark Advance in Generic Exception Handler) — BP-544/548 are real instances
+- **HR-064**: Prompt-Supplements-Pretraining for Numerical or Factual Claims — BP-547 + QA-2 P0-1 are real instances
+- **HR-065**: Watermark Advances on Partial Sync (or Empty Result Counted as Success) — BP-544/548/533 are flow-related
+
+### B.4 — REVIEW_CHECKLIST.md (3 new bullets)
+- Under `## 7b. Docker Compose Completeness`: depends_on healthcheck check (R35 reference)
+- Under `## 6b. Schema & Data Pipeline Integrity`: repository SELECT columns exist check (BP-546 reference)
+- Under `## 10i. LLM Agent Loop` (line 181, NOT the Frontend Mutations 10i): no-pretraining clause check (HR-064 reference)
+
+### B.5 — Service docs
+- **`docs/services/rag-chat.md`**: new H2 `## PLAN-0093 E-Wave Hardening (2026-05-24)` with 6 bullets (intent inference, numeric grounding, name resolution, multi-tool fallback, citation validation, plus pointer to audit)
+- **`services/knowledge-graph/.claude-context.md`**: 7 new pitfall bullets (B-1..B-4 + D-1..D-3)
+- **`services/rag-chat/.claude-context.md`**: 5 new pitfall bullets (E-1..E-5)
+- **`docs/MASTER_PLAN.md`**: per INV-4's analysis, MASTER_PLAN has no plan-completion log table. Recommend Option 1: inline PLAN-0093 reference in §3 Service Catalog rows for S6/S7/S8 (rather than creating a new pattern). Defer to user decision.
+
+### B.6 — TRACKING.md row 32
+After all QA-4 + QA-6 fixes land AND Phase 5 re-QA passes:
+- Status: `in-progress` → `complete`
+- Blocking On: `Phase 5 QA pending` → `none`
+- Append to title block: outcome note ("Phase 5 QA initial FAIL → patches applied → re-QA PASS_WITH_NOTES")
+
+**Open question from INV-4**: TRACKING.md `## Conventions` line 282 references moving completed rows but no Completed Plans table exists. Either (a) add new `## Completed Plans` section, or (b) leave in Active with status `complete` (current convention drift). Defer to user.
+
+---
+
+# Annex B — Fix Orchestration Plan
+
+After this annex is committed, spawn the following fix agents (most can run in parallel):
+
+| Fix Agent | Scope | Source patches |
+|---|---|---|
+| FIX-1 | QA-1 G-1 SQL bugs (3 test files) | A.1 |
+| FIX-2 | QA-2 RAG safety contract (5 source files, 2 test files) | A.2 |
+| FIX-3 | QA-3 compose + tests (3 files) | A.3 |
+| FIX-4 | QA-4 migration guards + tests (4 files) | A.4 |
+| FIX-5 | QA-6 BUG_PATTERNS + RULES + HIGH_RISK_PATTERNS + REVIEW_CHECKLIST (4 files) | A.5 / B.1-B.4 |
+| FIX-6 | QA-6 service docs (3 files) | A.5 / B.5 |
+
+FIX-1..FIX-6 are independent (no file overlap). Run in parallel via 6 worktree agents.
+
+After all 6 commit + merge, spawn Phase 5b — a fresh adversarial QA team (QA-1', QA-2', QA-3', QA-4', QA-6') re-running the focused checks against the fixed code.
