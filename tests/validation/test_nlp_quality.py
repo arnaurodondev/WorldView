@@ -46,7 +46,10 @@ def test_zero_sub_floor_entity_mentions(nlp_db_conn: psycopg.Connection) -> None
     bad_count = int(
         scalar(
             nlp_db_conn,
-            "SELECT count(*) FROM entity_mentions WHERE score < :floor",
+            # F-LIVE-005 (Phase 5c, 2026-05-24): column is `confidence`, not `score`.
+            # The audit referenced "GLiNER score" colloquially but the schema column
+            # added by migration 0001 is `confidence DOUBLE PRECISION NOT NULL`.
+            "SELECT count(*) FROM entity_mentions WHERE confidence < %(floor)s",
             {"floor": MIN_PERSIST_FLOOR},
         )
         or 0

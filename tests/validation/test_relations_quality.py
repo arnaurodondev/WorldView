@@ -184,7 +184,7 @@ def test_macro_sentinel_entity_exists(intelligence_db_conn: psycopg.Connection) 
     """
     exists = scalar(
         intelligence_db_conn,
-        "SELECT 1 FROM canonical_entities WHERE entity_id = :eid",
+        "SELECT 1 FROM canonical_entities WHERE entity_id = %(eid)s",
         {"eid": MACRO_SENTINEL_ENTITY_ID},
     )
     assert exists is not None, (
