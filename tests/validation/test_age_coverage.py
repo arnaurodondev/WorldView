@@ -10,7 +10,7 @@ all four cardinalities:
 * AGE ``:entity`` vertices vs ``canonical_entities`` rows
 * AGE relation edges vs ``relations`` rows
 * AGE ``:TemporalEvent`` vertices vs ``temporal_events`` rows
-* AGE ``EVENT_EXPOSES`` edges vs ``entity_event_exposure`` rows
+* AGE ``EVENT_EXPOSES`` edges vs ``entity_event_exposures`` rows
 
 The two event-related counts were at 0% (F-DB-009). Wave B-1/B-3 of the
 remediation plan re-runs the AGE sync worker on all backlogged rows; this
@@ -137,14 +137,14 @@ def test_age_temporal_event_coverage(age_session: psycopg.Connection) -> None:
 
 
 def test_age_event_exposures_coverage(age_session: psycopg.Connection) -> None:
-    """AGE ``EVENT_EXPOSES`` edges must cover ≥ 95% of ``entity_event_exposure``.
+    """AGE ``EVENT_EXPOSES`` edges must cover ≥ 95% of ``entity_event_exposures``.
 
     Audit ref: F-DB-009 — pre-remediation this was 0% (events synced as
     isolated vertices, never linked).
     """
-    pg_count = int(scalar(age_session, "SELECT count(*) FROM entity_event_exposure") or 0)
+    pg_count = int(scalar(age_session, "SELECT count(*) FROM entity_event_exposures") or 0)
     if pg_count == 0:
-        pytest.skip("no entity_event_exposure rows in test DB — nothing to assert")
+        pytest.skip("no entity_event_exposures rows in test DB — nothing to assert")
     age_count = _age_count(age_session, "MATCH ()-[r:EVENT_EXPOSES]->() RETURN count(r)")
     coverage = age_count / pg_count
     assert coverage >= COVERAGE_THRESHOLD, (

@@ -29,28 +29,30 @@ if TYPE_CHECKING:  # pragma: no cover
 
 
 def test_enrichment_attempts_counter_advances(intelligence_db_conn: psycopg.Connection) -> None:
-    """Sum of provisional-enrichment attempts in the last 24h must be > 0.
+    """At least one canonical_entities row must have been enriched in the last 24h.
 
-    Audit ref: F-DB-ENRICHMENT-001. A frozen attempts counter indicates the
-    ProvisionalEnrichmentWorker is dead-locked or its claim loop is empty
-    when it shouldn't be (e.g. ``next_retry_at`` is being set to a far-future
-    timestamp due to the exponential-backoff bug).
+    Audit ref: F-DB-ENRICHMENT-001. The original audit observed 1,790 of 5,230
+    canonical_entities (34%) with ``enriched_at IS NULL`` AND every row at
+    ``enrichment_attempts=0`` — proof the StructuredEnrichmentWorker was
+    silently dead. A live worker must move ``enriched_at`` forward continuously,
+    so a 24h window with zero updates means the worker has stalled (claim loop
+    empty, exponential-backoff bug, or queue-side deadlock).
 
-    We count attempts by looking at how many ``provisional_entity_queue`` rows
-    had a state transition in the window. Pure ``attempts`` column would also
-    work but isn't present on every schema revision; this version is
-    schema-portable.
+    We query ``canonical_entities.enriched_at`` directly because that column is
+    the authoritative SLO target (per F-DB-ENRICHMENT-001). The earlier draft
+    of this test queried a queue-side table on a non-existent ``updated_at``
+    column, which fails at SQL parse time and silently bypassed the SLO.
     """
     advanced = int(
         scalar(
             intelligence_db_conn,
-            "SELECT count(*) FROM provisional_entity_queue " "WHERE updated_at >= now() - interval '24 hours'",
+            "SELECT count(*) FROM canonical_entities " "WHERE enriched_at >= now() - interval '24 hours'",
         )
         or 0
     )
     assert advanced > 0, (
-        "No provisional_entity_queue rows updated in the last 24h. "
-        "ProvisionalEnrichmentWorker appears dead — F-DB-ENRICHMENT-001 regression."
+        "No canonical_entities rows had enriched_at advanced in the last 24h. "
+        "StructuredEnrichmentWorker appears dead — F-DB-ENRICHMENT-001 regression."
     )
 
 

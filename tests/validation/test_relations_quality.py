@@ -146,9 +146,8 @@ def test_summary_coverage(intelligence_db_conn: psycopg.Connection) -> None:
             intelligence_db_conn,
             "SELECT count(*) FROM relations r "
             "WHERE EXISTS (SELECT 1 FROM relation_summaries rs "
-            "WHERE rs.subject_entity_id = r.subject_entity_id "
-            "AND rs.object_entity_id = r.object_entity_id "
-            "AND rs.relation_type = r.relation_type)",
+            "WHERE rs.relation_id = r.relation_id "
+            "AND rs.is_current = true)",
         )
         or 0
     )
