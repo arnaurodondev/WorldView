@@ -1,21 +1,23 @@
 """S6 NLP Pipeline HTTP client adapter (T-E-3-01).
 
 Endpoints:
-  POST /api/v1/entities/resolve  → entity resolution
+  POST /api/v1/entities/resolve  → entity resolution (used for ticker resolution too)
   POST /api/v1/search/chunks     → ANN chunk search
+  POST /api/v1/embed             → text → BGE-large embedding (PLAN-0093 E-4)
 """
 
 from __future__ import annotations
 
 from datetime import UTC
-from typing import TYPE_CHECKING
+from uuid import UUID
+
+import structlog
 
 from rag_chat.application.ports.upstream_clients import ChunkSearchRequest, EnrichedChunkResult
 from rag_chat.domain.entities.chat import ResolvedEntity
 from rag_chat.infrastructure.clients.base import BaseUpstreamClient
 
-if TYPE_CHECKING:
-    from uuid import UUID
+_log = structlog.get_logger(__name__)  # type: ignore[no-any-return]
 
 
 class S6Client(BaseUpstreamClient):
@@ -124,3 +126,62 @@ class S6Client(BaseUpstreamClient):
             except (KeyError, TypeError, ValueError):
                 continue
         return results
+
+    # ── Embedding (PLAN-0093 Wave E-4) ────────────────────────────────────────
+
+    async def embed_text(self, text: str) -> list[float]:
+        """POST /api/v1/embed → BGE-large 1024-dim vector for *text*.
+
+        Used by ``search_entity_relations`` so the ANN search receives a real
+        query embedding instead of a 1024-dim zero vector (F-RAG-004). The
+        endpoint already exists on the S6 service (used by HyDE adapter).
+
+        On any transport/HTTP error we return a zero vector and log a
+        warning — callers that need ANN ranking can detect the empty
+        vector and skip the query.
+        """
+        if not text or not text.strip():
+            return [0.0] * 1024
+        try:
+            raw = await self._post("/api/v1/embed", {"text": text})
+            vec = raw.get("embedding")
+            if isinstance(vec, list) and vec:
+                return [float(x) for x in vec]
+        except Exception as exc:
+            _log.warning("s6_embed_text_failed", error=str(exc), text_len=len(text))
+        return [0.0] * 1024
+
+    # ── Ticker → entity resolution (PLAN-0093 Wave E-4 T-E-4-02) ──────────────
+
+    async def resolve_entity_by_ticker(self, ticker: str) -> UUID | None:
+        """Resolve a stock ticker to a financial-instrument entity_id.
+
+        Reuses the existing ``/api/v1/entities/resolve`` endpoint which already
+        accepts free-text queries containing ticker symbols (e.g. "AAPL").
+        Returns the highest-confidence ResolvedEntity that has a matching
+        ticker field, or None if no candidate matches.
+
+        Why a separate method (not just resolve_entities): callers want a
+        clean (ticker → UUID-or-None) API without the ResolvedEntity wrapper
+        + confidence filtering boilerplate.
+        """
+        if not ticker or not ticker.strip():
+            return None
+        try:
+            candidates = await self.resolve_entities(ticker.upper())
+        except Exception as exc:
+            _log.warning("s6_resolve_ticker_failed", error=str(exc), ticker=ticker)
+            return None
+        # Prefer a candidate whose ``ticker`` field matches the input.
+        for cand in candidates:
+            cand_ticker = getattr(cand, "ticker", None)
+            if cand_ticker and cand_ticker.upper() == ticker.upper():
+                return UUID(str(cand.entity_id))
+        if not candidates:
+            _log.warning("ticker_unresolved", ticker=ticker)
+            return None
+        # Fallback: best-confidence candidate (still log so we know the
+        # ticker→entity link is only inferred, not exact).
+        best = candidates[0]
+        _log.info("ticker_resolved_inexact", ticker=ticker, entity_id=str(best.entity_id))
+        return UUID(str(best.entity_id))

@@ -160,6 +160,26 @@ class S6Port(Protocol):
         """ANN chunk search → ranked list of enriched chunk results."""
         ...
 
+    # PLAN-0093 Wave E-4: explicit embed_text + resolve_entity_by_ticker
+    # methods on the port so the orchestrator can hit them without
+    # cracking open ChunkSearchRequest just to get a vector.
+    async def embed_text(self, text: str) -> list[float]:
+        """POST /api/v1/embed → 1024-dim BGE embedding for ``text``.
+
+        Returns a zero vector on transport error so callers can fall
+        through to a text-only path (BP-183-class behaviour).
+        """
+        ...
+
+    async def resolve_entity_by_ticker(self, ticker: str) -> UUID | None:
+        """Resolve a ticker symbol (e.g. "AAPL") to its entity_id.
+
+        Returns None when no match is found. Implementations should
+        log a structured warning ``ticker_unresolved`` on misses so
+        operators can spot bulk failures.
+        """
+        ...
+
 
 @runtime_checkable
 class S7Port(Protocol):

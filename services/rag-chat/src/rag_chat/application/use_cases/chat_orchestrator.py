@@ -44,7 +44,7 @@ import time
 from collections import Counter as _Counter
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, ClassVar
 
 import structlog
 
@@ -513,6 +513,21 @@ class ChatOrchestratorUseCase:
             # Add retrieval items to the accumulated non_none_items pool.
             non_none_items.extend(_retrieval_items)
 
+            # ── PLAN-0093 E-4 T-E-4-03: multi-tool fallback ───────────────────
+            # Before surfacing PROVIDER_UNAVAILABLE on a first-iteration empty,
+            # try ONE alternate tool from the fallback map. The mapping was
+            # picked from the QA audit failures (Q2 MSTR news → intelligence,
+            # Q5 TSLA macro → temporal events) — see plan E-4 for the table.
+            if iteration == 0 and _all_failed and not _action_pending_items:
+                fallback_items = await self._try_fallback_tools(
+                    p=p,
+                    tool_executor=tool_executor,
+                    failed_calls=tool_calls,
+                )
+                if fallback_items:
+                    non_none_items.extend(fallback_items)
+                    _all_failed = False  # fallback succeeded — continue normally
+
             # ── All-tools-failed guard (iteration 0 only) ────────────────────
             # On the first iteration, if all tools fail and there are no pending
             # actions, emit error and stop. This prevents hallucination on empty context.
@@ -522,7 +537,7 @@ class ChatOrchestratorUseCase:
                     "all_tools_failed",
                     tool_count=len(tool_calls),
                     tools=[tc.name for tc in tool_calls],
-                    query=request.message[:100],
+                    query_length=len(request.message),
                 )
                 yield p.emitter.emit_error("all_tools_failed", "Unable to retrieve relevant data")
                 return
@@ -720,6 +735,71 @@ class ChatOrchestratorUseCase:
 
         yield p.emitter.emit_metadata(thread_id, asst_msg_id, intent.value, provider_name, latency_ms)
         yield p.emitter.emit_done()
+
+    # ── PLAN-0093 E-4 T-E-4-03: multi-tool fallback map ───────────────────
+    # When a tool returns 0 items on the first iteration, try ONE alternate
+    # tool before surfacing PROVIDER_UNAVAILABLE. Keys are the failed tool's
+    # name; values are the alternate to retry with the SAME args (modulo
+    # filter fields). This is intentionally a small whitelist — adding new
+    # mappings should be deliberate (operator + audit reviewed).
+    _FALLBACK_MAP: ClassVar[dict[str, str]] = {
+        "search_documents": "get_entity_intelligence",
+        "get_contradictions": "search_claims",
+        "get_economic_calendar": "get_temporal_events",
+        "search_claims": "search_documents",
+    }
+
+    async def _try_fallback_tools(
+        self,
+        *,
+        p: ChatPipeline,
+        tool_executor: Any,
+        failed_calls: list[ToolUseBlock],
+    ) -> list[RetrievedItem]:
+        """Attempt one alternate tool per failed call. Returns the merged items.
+
+        Each fallback uses the same input args as the failed call (the
+        alternate tool is expected to accept a compatible subset). If the
+        fallback also returns empty, we surface the original empty state
+        upstream (i.e. the orchestrator will still emit
+        ``all_tools_failed`` if no fallback yielded items).
+        """
+        from rag_chat.application.pipeline.tool_executor import ToolUseBlock
+
+        accumulated: list[Any] = []
+        for failed in failed_calls:
+            alt_name = self._FALLBACK_MAP.get(failed.name)
+            if not alt_name:
+                continue
+            log.info(  # type: ignore[no-any-return]
+                "tool_fallback_attempted",
+                original=failed.name,
+                fallback=alt_name,
+            )
+            # search_claims polarity=negative is the agreed substitute for
+            # get_contradictions per the plan E-4 mapping.
+            alt_args = dict(failed.input)
+            if failed.name == "get_contradictions" and alt_name == "search_claims":
+                alt_args["polarity"] = "negative"
+            alt_call = ToolUseBlock(name=alt_name, input=alt_args)
+            try:
+                alt_results = await tool_executor.execute_all([alt_call])
+            except Exception as exc:
+                log.warning("tool_fallback_failed", fallback=alt_name, error=str(exc))  # type: ignore[no-any-return]
+                continue
+            # Flatten the same way the main loop does.
+            flat: list[Any] = []
+            for r in alt_results:
+                if isinstance(r, list):
+                    flat.extend(r)
+                elif r is not None:
+                    flat.append(r)
+            if flat:
+                log.info("tool_fallback_succeeded", fallback=alt_name, items=len(flat))  # type: ignore[no-any-return]
+                accumulated.extend(flat)
+            else:
+                log.warning("tool_fallback_empty", fallback=alt_name)  # type: ignore[no-any-return]
+        return accumulated
 
     async def _run_grounding_validation(
         self,

@@ -159,7 +159,9 @@ class ToolExecutor:
         self._alerts_handler = AlertsHandler(s10=s10, user_id=user_id, tenant_id=tenant_id, timeout=timeout)
         self._handlers = [
             MarketHandler(s3=s3, s3_brief=s3_brief, timeout=timeout),
-            IntelligenceHandler(s7=s7, entity_context=entity_context, timeout=timeout),
+            # PLAN-0093 E-4 T-E-4-01: pass S6 so search_entity_relations can
+            # call S6.embed_text() for real query embeddings.
+            IntelligenceHandler(s7=s7, s6=s6, entity_context=entity_context, timeout=timeout),
             NarrativeHandler(s7_intel=s7_intel, entity_context=entity_context, timeout=timeout),
             PortfolioHandler(s1=s1, user_id=user_id, tenant_id=tenant_id, internal_jwt=internal_jwt, timeout=timeout),
             NewsHandler(
