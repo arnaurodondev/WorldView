@@ -7,7 +7,7 @@ source_audit: docs/audits/2026-05-23-qa-intelligence-pipelines-report.md
 branch: feat/plan-0093-remediation
 methodology: 6 adversarial agents run in parallel, each independently assuming the implementation is wrong
 mode: STATIC (live DBs unreachable; docker daemon stopped)
-overall_verdict: FAIL
+overall_verdict: PASS_WITH_NOTES (after Phase 5b remediation + re-QA on 2026-05-24; original Phase 5 verdict was FAIL)
 ---
 
 # PLAN-0093 Phase 5 — Adversarial QA Validation Report
@@ -432,3 +432,57 @@ After this annex is committed, spawn the following fix agents (most can run in p
 FIX-1..FIX-6 are independent (no file overlap). Run in parallel via 6 worktree agents.
 
 After all 6 commit + merge, spawn Phase 5b — a fresh adversarial QA team (QA-1', QA-2', QA-3', QA-4', QA-6') re-running the focused checks against the fixed code.
+
+---
+
+# Annex C — Phase 5b Remediation + Re-QA Results (2026-05-24)
+
+## Fix commits landed
+| Agent | Commit | Scope | Verdict |
+|---|---|---|---|
+| FIX-1 | `2a72ce1e` | 3 G-1 SQL test bugs (Annex A.1) | DONE |
+| FIX-2 | `c6fed940` (merge `4f...`) | RAG safety: premise check + quarter regex + entity-scoped pool + 2 P1s (A.2) | DONE — 8 files, 620 LOC, 107 tests pass |
+| FIX-3 | `5c468d56` (merge `...`) | Compose +11 restart policies + soak dual-streak (A.3) | DONE — +11 services, soak detects Exited |
+| FIX-4 | `0e529bef` | Migration TRUNCATE guards + sentinel sync test + partition verify (A.4) | DONE — 9 files, 2 sentinel-sync tests pass |
+| FIX-5 | `1f30b80a` | BP-544..548 + R35 (A.5 / B.1-B.2) | PARTIAL — sandbox blocked .claude/review/ paths |
+| FIX-6 | `70d97f5a` | Service docs + MASTER_PLAN (A.5 / B.5) | DONE — 4 files, +36 lines |
+| Orchestrator follow-up | `e65dc8c8` | HR-063..065 + 3 REVIEW_CHECKLIST checks (FIX-5 sandbox-blocked work) | DONE |
+
+## Re-QA verdicts (5 agents — QA-5 architecture skipped, already PASS clean)
+
+| Agent | Verdict | Findings |
+|---|---|---|
+| **QA-1' Data-Quality** | **PASS** | All 3 P0 SQL bugs verified fixed. 28 G-1 tests still collect, 0 errors. 0 new bugs. |
+| **QA-2' RAG Safety** | **PASS_WITH_NOTES** | All 3 P0 + 2 P1 verified. 107 tests pass (9 premise + 28 grounding + 70 orchestrator). A2 (cross-entity leak) + A6 (bare quarter) demonstrably guarded; A1 + A10 require live execution to fully confirm refusal-phrase emission. |
+| **QA-3' Infra** | **PASS_WITH_NOTES** | +11 restart policies confirmed (grep `restart: unless-stopped` jumped 15→26). 2/2 tests pass. Soak dual-streak detector verified (5/5 elements). Pre-existing `test_retry_workers_gate_on_healthy_deps` drift documented as NOT FIX-3's regression (caused by earlier `c0303d5f`). |
+| **QA-4' Schema** | **PASS_WITH_NOTES** | All 3 P1 patches verified. 2 sentinel-sync tests + 999 nlp-pipeline tests pass. 141 DB-backed errors are pre-existing infra (no Postgres in worktree) — not FIX-4's responsibility. |
+| **QA-6' Docs** | **PASS** | 9/9 broken promises now KEPT. BP-544..548 + R35 + HR-063..065 + 3 REVIEW_CHECKLIST + 4 service docs all confirmed in place. |
+
+## Canonical numbering corrections (apply going forward)
+| Original audit ID | Actually landed | File |
+|---|---|---|
+| BP-545..549 | **BP-544..548** | `docs/BUG_PATTERNS.md` |
+| HR-051..053 | **HR-063..065** | `.claude/review/heuristics/HIGH_RISK_PATTERNS.md` |
+| R35 | R35 (unchanged) | `RULES.md` |
+
+## Final verdict logic
+Per orchestrator topology:
+- PASS = zero P0 from any agent
+- PASS_WITH_WARNINGS = zero P0 from QA-1/2/3/4/5; ≤ 3 P0 from QA-6 (docs only)
+- FAIL = any P0 from QA-1 through QA-5
+
+**Post-remediation: zero P0 findings from any agent.** All 4 P1-tier remaining notes are either (a) live-execution gaps acceptable in this static environment OR (b) future-hardening recommendations (entity_tag prompt section, multi-entity reprompt context, BP-547 PARTIAL pending Phase-5c live eval).
+
+## **FINAL OVERALL VERDICT: PASS_WITH_NOTES**
+
+### Conditions for upgrade to full PASS (Phase 5c — live execution, future session)
+1. Bring up rag-chat with prompt v1.1 + run `tests/validation/chat_eval/harness.py` against live stack — confirm 0 HARMFUL on 8 audit questions + A10 + 75-query weak-point survey
+2. Run G-1 tests against live `INTELLIGENCE_DB_URL_TEST` + `NLP_DB_URL_TEST` — confirm SLOs themselves pass (this audit only confirmed queries no longer error at parse time)
+3. Run `alembic downgrade -10 && alembic upgrade head` cycle + F-1 PREPARE pass with live DBs — confirm no schema-drift surprises
+4. Run T-G-2-02 host-event survival runbook + extended fault injection — confirm 11 application-tier containers auto-recover within 5 min
+
+### Outstanding non-blocking items (for future plans, not Phase 5)
+- `test_retry_workers_gate_on_healthy_deps` drift from c0303d5f (DP-F005 removed Ollama from embedding-retry-worker; test still expects it). Independent of PLAN-0093.
+- Multi-entity reprompt context in chat_orchestrator (currently anchors only first entity).
+- `entity_tag` section in tool_use.py prompt (current entity-scoping is validator-only; future prompt-side scoping would tighten further).
+- Live BP-547 confirmation (LLM premise-refusal behavior under prompt v1.1).
