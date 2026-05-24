@@ -1485,13 +1485,16 @@ services:
   # The worker class existed since 2026-02 but no entry point ever ran it, so
   # rows accumulated forever.  Standalone process per R22.
   #
-  # F-NPL-002 / PLAN-0093 T-A-1-02: gate boot on postgres + valkey + ollama
-  # health.  Although the deepinfra provider path doesn't strictly need
-  # Ollama, the worker still falls back to it when DeepInfra is unavailable
-  # AND the platform plan calls for consistent dep guards across all three
-  # retry/path workers to eliminate startup restart-loops.  When Ollama is
-  # healthy this is a no-op; when Ollama is down at boot the worker now waits
-  # for it instead of crashing on the fallback path.
+  # F-NPL-002 / PLAN-0093 T-A-1-02: gate boot on postgres + valkey health.
+  #
+  # DP-F005 (2026-05-24): removed `ollama: service_healthy` dep.  The primary
+  # embedding path is DeepInfra (`NLP_PIPELINE_EMBEDDING_PROVIDER=deepinfra`,
+  # BAAI/bge-large-en-v1.5) and `EMBEDDING_API_KEY` is set in every shipped
+  # environment, so the Ollama fallback is never exercised.  The dep added
+  # ~15-30s cold-start delay and caused spurious refusal-to-start outages
+  # when Ollama was unavailable despite DeepInfra being healthy.  If an
+  # operator unsets `EMBEDDING_API_KEY` for local dev they must start Ollama
+  # manually before this worker.
   nlp-pipeline-embedding-retry-worker:
     build:
       context: ../..
@@ -1503,8 +1506,6 @@ services:
       postgres:
         condition: service_healthy
       valkey:
-        condition: service_healthy
-      ollama:
         condition: service_healthy
     env_file:
       - ../../services/nlp-pipeline/configs/docker.env
