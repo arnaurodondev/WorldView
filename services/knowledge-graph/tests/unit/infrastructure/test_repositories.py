@@ -127,6 +127,52 @@ class TestRelationRepository:
         insert_sql = str(session.execute.call_args_list[1][0][0])
         assert "partition_key" not in insert_sql
 
+    def test_upsert_includes_explicit_confidence_value(self) -> None:
+        """PLAN-0093 B-2 T-B-2-04: confidence is an explicit INSERT column.
+
+        Migration 0046 adds a server_default = base_confidence so omitting
+        confidence still produces a NOT-NULL value, but the application
+        writer is required to set it EXPLICITLY so the invariant is visible
+        in the SQL and reviewers immediately see what value is being stored.
+        """
+        import asyncio
+
+        from knowledge_graph.infrastructure.intelligence_db.repositories.relation import (
+            RelationRepository,
+        )
+
+        session = AsyncMock()
+        lock_result = MagicMock()
+        lock_result.fetchone.return_value = None
+        upsert_result = MagicMock()
+        upsert_result.fetchone.return_value = (str(uuid4()),)
+        session.execute = AsyncMock(side_effect=[lock_result, upsert_result])
+
+        repo = RelationRepository(session)
+        asyncio.run(
+            repo.upsert(
+                subject_entity_id=uuid4(),
+                object_entity_id=uuid4(),
+                canonical_type="employs",
+                semantic_mode="RELATION_STATE",
+                decay_class="DURABLE",
+                decay_alpha=0.000950,
+                base_confidence=0.70,
+            ),
+        )
+        insert_sql = str(session.execute.call_args_list[1][0][0])
+        # The column list must include ``confidence`` (not just confidence_stale).
+        # We search for the token between commas/parens to avoid false-positives
+        # from "confidence_stale" matches.
+        assert ", confidence," in insert_sql or "confidence, " in insert_sql, (
+            "expected ``confidence`` column in INSERT — got:\n" + insert_sql
+        )
+        # And the VALUES side must reference :base_confidence twice (one for
+        # the base_confidence column, one for the confidence column).
+        assert (
+            insert_sql.count(":base_confidence") >= 2
+        ), "expected :base_confidence to be bound for both base_confidence and confidence columns"
+
 
 # ---------------------------------------------------------------------------
 # RelationEvidenceRepository

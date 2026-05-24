@@ -498,10 +498,17 @@ async def materialize_graph(
         # object when company context is missing); those rows accumulate
         # forever because the DB promoter cannot insert self-loop edges.
         if rel.subject_entity_id == rel.object_entity_id:
+            # PLAN-0093 B-2 T-B-2-05: this drop is now backed by the
+            # ``chk_relations_no_self_loop`` CHECK constraint added in
+            # migration 0045 — real entities cannot self-loop at the DB
+            # level either (system sentinels in the 11111111-0004 range
+            # are explicitly whitelisted in the CHECK).  Keeping the
+            # application-level guard avoids a wasted advisory-lock cycle.
             _log.debug(
-                "self_loop_dropped",
+                "relation_dropped_unresolvable",
                 entity_id=str(rel.subject_entity_id),
                 raw_type=rel.raw_type,
+                reason="self_loop_or_unresolved_pair",
             )
             continue
 

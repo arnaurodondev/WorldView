@@ -247,19 +247,23 @@ LIMIT 1
             object_entity_id = UUID(str(obj_row[0]))
             relation_id = new_uuid7()
 
+            # PLAN-0093 B-2 T-B-2-04: pass an explicit confidence value (= the
+            # row's base_confidence of 0.70 for structured-enrichment seeds)
+            # so the NOT NULL invariant added in migration 0046 is satisfied
+            # without depending on the server_default.
             await session.execute(
                 text("""
 INSERT INTO relations (
     relation_id, subject_entity_id, object_entity_id, canonical_type,
     semantic_mode, decay_class, decay_alpha, base_confidence,
-    confidence_stale, summary_stale,
+    confidence, confidence_stale, summary_stale,
     evidence_count, first_evidence_at, latest_evidence_at,
     relation_source
 )
 VALUES (
     :relation_id, :subject, :object, :canonical_type,
     'RELATION_STATE', 'DURABLE', 0.000950, 0.70,
-    true, true,
+    0.70, true, true,
     0, :now, :now,
     'structured_enrichment'
 )

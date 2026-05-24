@@ -59,17 +59,25 @@ class RelationRepository(RelationRepositoryPort):
 
         # Upsert: on conflict update evidence metadata, mark confidence stale.
         # partition_key NOT in INSERT — it is GENERATED ALWAYS AS STORED.
+        #
+        # PLAN-0093 B-2 T-B-2-04: explicitly write ``confidence`` instead of
+        # relying on the server_default (= base_confidence) added in
+        # migration 0046.  Being explicit means a developer who reads this
+        # INSERT immediately sees the invariant "every relation row has a
+        # non-NULL confidence", and the value matches base_confidence by
+        # default until the ConfidenceWorker recomputes it (confidence_stale
+        # is set to true below so the worker picks it up next cycle).
         result = await self._session.execute(
             text("""
 INSERT INTO relations (
     subject_entity_id, canonical_type, object_entity_id,
     semantic_mode, decay_class, decay_alpha, base_confidence,
-    confidence_stale, summary_stale,
+    confidence, confidence_stale, summary_stale,
     first_evidence_at, latest_evidence_at, evidence_count
 ) VALUES (
     :subject_entity_id, :canonical_type, :object_entity_id,
     :semantic_mode, :decay_class, :decay_alpha, :base_confidence,
-    true, true,
+    :base_confidence, true, true,
     now(), now(), 1
 )
 ON CONFLICT (subject_entity_id, canonical_type, object_entity_id) DO UPDATE SET
