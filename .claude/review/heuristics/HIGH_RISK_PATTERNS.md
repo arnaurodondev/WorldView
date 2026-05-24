@@ -1015,3 +1015,73 @@ grep -rn "filter(Boolean)" apps/worldview-web/components --include="*.tsx"
 The correct guard requires `isDictOfDicts` to also check `Object.keys(first).length > 0`. The shared implementation at `lib/eohdUtils.ts` handles this correctly. Do NOT duplicate `isDictOfDicts` locally — always import from the shared utility.
 
 **Real instance**: W3 QA F-011 — FundHoldersTable, InstitutionalHoldersTable, InsiderTransactionsTable, InsiderActivityList all had local copies that accepted `{"0": {}}`. Fixed 2026-05-22 by extracting shared `lib/eohdUtils.ts`.
+
+## RED — Added from PLAN-0093 Phase 5 QA (2026-05-24)
+
+### HR-063: Silent-Failure-as-Restart-Loop (Watermark Advance in Generic Exception Handler)
+
+**Category**: Workers, Distributed, Data
+**Severity**: HIGH
+**Detection**:
+```bash
+# Any worker loop that catches `Exception` AND updates a watermark/cursor:
+grep -rEn "except Exception" services/*/src --include="*.py" -A 5 | \
+    grep -E "(watermark|cursor|next_refresh_at|UPDATE.*WHERE.*=).*=" -B 5
+```
+
+A worker that catches a generic `Exception`, logs a warning, and **advances its watermark / cursor / `next_refresh_at`** inside the handler converts a real failure into a silent skip. The row is marked "done" without the work actually completing; the watermark moves; the row is never revisited. Externally the worker looks healthy (no error metric, no DLQ entry, throughput on the watermark advance metric). Internally the data is permanently divergent from source.
+
+Two canonical PLAN-0093 instances:
+- `age_sync_worker.py` caught `psycopg2.ProgrammingError` (unknown AGE label) in a generic `except`, advanced the sync cursor — 74% of `relations` rows silently missing from AGE for weeks.
+- `EnrichmentWorker` (BP-548) incremented `attempts` in memory only — partial-index sweep returned the same rows forever; no error surfaced.
+
+Fix: classify every caught exception (RetryableError → re-raise to the consumer framework which routes to DLQ; FatalError → re-raise to crash the worker; unknown → re-raise — never log + swallow). NEVER advance a watermark inside an exception handler — the watermark advance must be the **last** operation after all work has succeeded.
+
+**Real instance**: BP-544 (AGE sync); BP-548 (enrichment_attempts counter).
+
+### HR-064: Prompt-Supplements-Pretraining for Numerical or Factual Claims
+
+**Category**: ML & LLM, RAG, Safety
+**Severity**: HIGH
+**Detection**:
+```bash
+# LLM system prompts that don't forbid pretraining knowledge:
+grep -rEn "system.*prompt|SYSTEM_PROMPT|tool_use" libs/prompts services/rag-chat \
+    --include="*.py" --include="*.md" --include="*.txt" -A 10 | \
+    grep -vE "(only|exclusively|do not.*supplement|do not.*invent|refuse)" | head -40
+# Then read each match and confirm an explicit "no supplementation" clause exists.
+```
+
+A tool-using LLM agent prompted with "answer the question using the tool results" will **freely supplement tool output with values from pretraining** when the tool returns sparse or unrelated data. The supplemented values look plausible (Apple's Q3 2024 EPS *might* be $1.40), pass numeric-grounding validators that only check "is this number in the tool corpus?" (because the tool corpus had $1.40 from a different quarter), and surface to the user as confident, cited prose.
+
+Worse, when the user's premise contradicts tool data ("Why did Apple acquire Microsoft last quarter?"), an unconstrained agent will synthesize a coherent narrative around the false premise rather than refusing.
+
+Fix: every system prompt for a tool-using agent must include:
+1. An **explicit ban**: "Do NOT supplement with knowledge from your pretraining for numerical, financial, or factual claims. If the tool data is insufficient, say so."
+2. A **premise-contradiction refusal rule**: "If the user's premise contradicts tool data, refuse and state the contradiction explicitly."
+3. A **claim-kind validator** downstream (`NumericGroundingValidator` keyed by FieldKind) that requires N rows for trend/aggregate claims, not just numeric presence.
+
+**Real instance**: BP-547 (rag-chat agent N=1 extrapolation); PLAN-0093 E-1 prompt + E-2 validator + QA-2 P0-1 premise-contradiction refusal (closed by FIX-2 in `libs/prompts/src/prompts/chat/tool_use.py`).
+
+### HR-065: Watermark Advances on Partial Sync (or Empty Result Counted as Success)
+
+**Category**: Workers, Distributed, Data
+**Severity**: HIGH
+**Detection**:
+```bash
+# Workers that update next_refresh_at after a phase that may return [] or partial:
+grep -rEn "next_refresh_at|last_synced_at" services/*/src --include="*.py" -B 5 | \
+    grep -E "(=|UPDATE).*next_refresh_at" | head -20
+# For each match: verify the result count was checked AND > 0 (or that 0 is genuinely terminal).
+```
+
+A worker that fetches a batch, processes whatever returned, and unconditionally advances `next_refresh_at` (or equivalent) converts every partial-fetch failure into a silent gap. Common shapes:
+- HTTP fetch returns 200 with empty body → worker treats as "no work" → advances watermark → real data on the next page is skipped.
+- Database SELECT with stale column name (BP-546) returns zero rows due to `UndefinedColumn` caught upstream → worker advances watermark → all matching rows skipped forever.
+- API rate-limit returns 429 → worker classifies as transient, retries inside the same batch → exhausts retries → batch returns empty → watermark advances anyway.
+
+The PLAN-0093 instance: `FundamentalsRefreshWorker` Phase 1 with no-ticker entities (BP-533) — `if not ticker: continue` skipped the row WITHOUT updating `next_refresh_at`, so it requeued forever. The mirror-image failure (advancing without verifying success) is HR-065.
+
+Fix: a watermark advance MUST be gated on (a) the underlying operation returned a verified success status AND (b) for batch workers, the result count is checked against expectations (e.g. "we asked for 100 rows and got 100; pages exhausted"). Empty results from a still-paginating source must NOT advance the watermark — surface as an error and retry.
+
+**Real instance**: BP-544 (AGE sync); BP-548 (enrichment counter); BP-533 (no-ticker requeue is the inverse of this pattern — both flow from the same lack of explicit "did this phase succeed?" verification).

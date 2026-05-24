@@ -92,6 +92,7 @@
 ## 6b. Schema & Data Pipeline Integrity
 
 - [ ] Migration DDL matches ORM columns exactly — names, types, defaults, nullability (BP-008, BP-019)
+- [ ] **Every repository SELECT statement references only columns that exist in the current migration head** — `text("SELECT ... FROM ...")` and asyncpg fetch calls are opaque to mypy; they fail at runtime, one row at a time, often inside a generic `except Exception:` swallow that masks the failure as throughput=0. Run `scripts/run_repository_prepare_audit.sh` (PLAN-0093 F-1 PREPARE pass) before declaring done, OR add the relevant SELECT to a CI prepare-time validation test (BP-546, HR-065 cousin)
 - [ ] `move_to_dead_letter` INSERTs a DLQ row with original payload (not just status update) (BP-020)
 - [ ] DLQ `requeue()` preserves original `aggregate_id`, `aggregate_type`, `event_type` from stored DLQ columns — never hardcode or use outbox PK as `aggregate_id` (BP-024)
 - [ ] DNS resolution in async context uses `asyncio.to_thread(socket.getaddrinfo, ...)` with explicit timeout — never blocking `socket.getaddrinfo` directly on event loop (BP-025)
@@ -133,6 +134,8 @@
 - [ ] When editing `docker-compose.prod.yml`: port overrides use `!override []` (not additive merge) — `ports:` without `!override` in an overlay file ADDS ports rather than replacing them, leaving infra ports exposed in production
 - [ ] New public-facing services in production have Traefik labels (`traefik.enable=true`, router rule, TLS cert resolver, service port) and are added to the `traefik` network
 - [ ] New services with `prod.env.example` added to `services/<name>/configs/` so worldview-gitops can provide prod values
+- [ ] **Every long-running service (API, worker, scheduler, consumer, dispatcher) declares `depends_on: { <dep>: { condition: service_healthy } }` for every required external dep** — postgres, valkey, kafka, schema-registry, MinIO, LLM endpoint, another microservice. `condition: service_started` is insufficient. Optional deps (fallback Ollama) wrap startup probes in `@retry_on_startup` instead (R35, BP-545, HR-063 cousin)
+- [ ] **Every new long-running service declares an explicit `restart:` policy** — long-running APIs/UI/ML servers → `restart: unless-stopped`; background workers/consumers/dispatchers → `restart: on-failure`; one-shot jobs (`*-migrate`, `*-init`) → `restart: "no"` (explicit, never implicit). Add to `_CRITICAL_SERVICES` in `tests/validation/test_restart_policy.py` (PLAN-0093 QA-3)
 
 ## 7c. Observability Correctness
 
@@ -185,6 +188,7 @@
 - [ ] **Budget governance**: agent loop enforces token budget (per-turn), latency budget (cumulative tool wall-clock), per-tool timeout, iteration cap, and consecutive error limit — all five independently
 - [ ] **User message persisted before loop**: user message is written to DB before `AgentLoop` starts (so LLM crash does not silently drop the request)
 - [ ] **Input guard present**: at minimum regex-layer injection detection runs before agent loop entry; fail-closed on all error paths
+- [ ] **System prompt forbids pretraining-knowledge for numerical/factual claims** — every tool-using agent prompt must include an explicit "Do NOT supplement with knowledge from your pretraining for numerical, financial, or factual claims; if tool data is insufficient, say so" clause AND a "premise-contradiction refusal" rule ("if user premise contradicts tool data, refuse and state the contradiction"). Numeric-grounding validator must be claim-kind-aware (FieldKind-keyed thresholds), not a flat "is this number in the tool corpus" check (HR-064, BP-547, PLAN-0093 QA-2)
 
 ## 10. Frontend / TypeScript (applies when `apps/frontend/` files are changed)
 
