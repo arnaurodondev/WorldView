@@ -357,7 +357,10 @@ class IntelligenceHandler(ToolHandler):
         if self._s7 is None:
             log.warning("tool_handler_missing_port", tool="search_entity_relations", port="s7")
             return []
-        entity_id = self._require_context_entity("search_entity_relations", entity_name)
+        # PLAN-0093 E-3 T-E-3-01: route through _resolve_entity_by_name so the
+        # tool works even without a scoped entity_context — previously this
+        # silently returned [] for any out-of-scope entity (F-RAG-003).
+        entity_id = await self._resolve_entity_by_name("search_entity_relations", entity_name)
         if entity_id is None:
             return []
         # Use a zero embedding as placeholder — S7 will fall back to entity_id filter
@@ -426,7 +429,9 @@ class IntelligenceHandler(ToolHandler):
         if self._s7 is None:
             log.warning("tool_handler_missing_port", tool="search_claims", port="s7")
             return []
-        entity_id = self._require_context_entity("search_claims", entity_name)
+        # PLAN-0093 E-3 T-E-3-01: route through _resolve_entity_by_name so
+        # claims work without a scoped entity_context (F-RAG-003).
+        entity_id = await self._resolve_entity_by_name("search_claims", entity_name)
         if entity_id is None:
             return []
         claim_types = [claim_type] if claim_type else None
@@ -501,7 +506,9 @@ class IntelligenceHandler(ToolHandler):
         if self._s7 is None:
             log.warning("tool_handler_missing_port", tool="search_events", port="s7")
             return []
-        entity_id = self._require_context_entity("search_events", entity_name)
+        # PLAN-0093 E-3 T-E-3-01: route through _resolve_entity_by_name so
+        # events work without a scoped entity_context (F-RAG-003).
+        entity_id = await self._resolve_entity_by_name("search_events", entity_name)
         if entity_id is None:
             return []
         event_types = [event_type] if event_type else None
@@ -572,7 +579,9 @@ class IntelligenceHandler(ToolHandler):
         if self._s7 is None:
             log.warning("tool_handler_missing_port", tool="get_contradictions", port="s7")
             return []
-        entity_id = self._require_context_entity("get_contradictions", entity_name)
+        # PLAN-0093 E-3 T-E-3-01: route through _resolve_entity_by_name so
+        # contradictions work without a scoped entity_context (F-RAG-003).
+        entity_id = await self._resolve_entity_by_name("get_contradictions", entity_name)
         if entity_id is None:
             return []
 
