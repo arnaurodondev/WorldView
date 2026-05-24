@@ -1325,8 +1325,6 @@ services:
         condition: service_completed_successfully
       valkey:
         condition: service_healthy
-      ollama:
-        condition: service_healthy
       gliner-server:
         condition: service_healthy
     env_file:
@@ -1456,8 +1454,6 @@ services:
     depends_on:
       nlp-pipeline-migrate:
         condition: service_completed_successfully
-      ollama:
-        condition: service_healthy
     env_file:
       - ../../services/nlp-pipeline/configs/docker.env
     command: ["python", "-m", "nlp_pipeline.workers.article_relevance_scoring_worker"]
@@ -1474,10 +1470,12 @@ services:
       context: ../..
       dockerfile: services/nlp-pipeline/Dockerfile
     profiles: [infra, all]
-    # F-NPL-002 / PLAN-0093 T-A-1-02: gate boot on postgres + valkey + ollama
-    # health so the worker doesn't sys.exit(1) on its first LLM/DB call when
-    # the platform is mid-startup.  Without these guards the worker entered a
-    # 60-second restart loop until ollama came up.
+    # F-NPL-002 / PLAN-0093 T-A-1-02: gate boot on postgres + valkey so the
+    # worker doesn't sys.exit(1) on its first LLM/DB call when the platform is
+    # mid-startup.  DP-F005 follow-up (2026-05-24): dropped the `ollama` dep —
+    # primary path is DeepInfra (NLP_PIPELINE_RELEVANCE_SCORING_API_KEY is set
+    # in docker.env), Ollama would only be used as fallback when the key is
+    # unset, which is never the case in shipped environments.
     depends_on:
       nlp-pipeline-migrate:
         condition: service_completed_successfully
@@ -1488,8 +1486,6 @@ services:
       postgres:
         condition: service_healthy
       valkey:
-        condition: service_healthy
-      ollama:
         condition: service_healthy
     env_file:
       - ../../services/nlp-pipeline/configs/docker.env
@@ -1917,10 +1913,12 @@ services:
       context: ../..
       dockerfile: services/knowledge-graph/Dockerfile
     profiles: [infra, all]
-    # F-LOG-002 / PLAN-0093 T-A-1-02: explicit healthy-deps on postgres,
-    # valkey and ollama prevent the worker from booting before its backing
-    # services and entering a sys.exit(1) → 60s restart loop.  The
-    # intelligence-migrations + knowledge-graph deps were already declared.
+    # F-LOG-002 / PLAN-0093 T-A-1-02: explicit healthy-deps on postgres + valkey
+    # prevent the worker from booting before its backing services and entering
+    # a sys.exit(1) → 60s restart loop.  The intelligence-migrations +
+    # knowledge-graph deps were already declared.  DP-F005 follow-up
+    # (2026-05-24): dropped the `ollama` dep — this worker has no ML client at
+    # all (AGE graph traversal + rule-based scoring + template matching only).
     depends_on:
       intelligence-migrations:
         condition: service_completed_successfully
@@ -1929,8 +1927,6 @@ services:
       postgres:
         condition: service_healthy
       valkey:
-        condition: service_healthy
-      ollama:
         condition: service_healthy
     env_file:
       - ../../services/knowledge-graph/configs/docker.env
@@ -2102,8 +2098,6 @@ services:
         condition: service_completed_successfully
       valkey:
         condition: service_healthy
-      ollama:
-        condition: service_started
       # BP-164: InternalJWTMiddleware fetches JWKS from api-gateway at startup.
       # Without this dependency rag-chat starts before api-gateway is healthy,
       # the 3 retries all fail, and the service returns 503 on all authenticated
