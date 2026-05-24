@@ -55,9 +55,25 @@ import yaml  # type: ignore[import-untyped]  # PyYAML ships no stubs; types-PyYA
 _REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 _COMPOSE_FILE = _REPO_ROOT / "infra" / "compose" / "docker-compose.yml"
 
-# The SUPERSET critical list — adds ``minio`` to the A-1 baseline.  Sourced
-# verbatim from PLAN-0093 Wave G-2 T-G-2-01.
+# The SUPERSET critical list.
+#
+# Layer 1 — original PLAN-0093 Wave G-2 T-G-2-01 baseline:
+#   postgres, kafka, valkey, ollama, schema-registry, market-data, minio (7)
+#
+# Layer 2 — PLAN-0093 Phase 5 QA-3 expansion (audit annex A.3, 2026-05-24):
+#   The QA-3 adversarial agent found 11 long-running API / UI / ML containers
+#   missing any ``restart:`` directive entirely (compose defaults to ``no``).
+#   When the host docker daemon restarts those containers stay down silently,
+#   producing the exact "every health probe green / nothing works" failure
+#   pattern that triggered F-LOG-INFRA-001 originally.  Each entry below was
+#   justified individually in annex A.3 (FastAPI ingress, ML inference, or
+#   Next.js production frontend) — none are one-shot or worker containers.
+#
+# Adding a new long-running API/UI/ML container?  Append it here AND add
+# ``restart: unless-stopped`` to its compose block.  ``always`` is rejected
+# repo-wide because it overrides ``docker stop`` (breaks ``make dev-down``).
 _CRITICAL_SERVICES: tuple[str, ...] = (
+    # ── Layer 1 (G-2 baseline, 7 entries) ────────────────────────────────────
     "postgres",
     "kafka",
     "valkey",
@@ -65,6 +81,18 @@ _CRITICAL_SERVICES: tuple[str, ...] = (
     "schema-registry",
     "market-data",
     "minio",
+    # ── Layer 2 (QA-3 expansion, 11 entries) ─────────────────────────────────
+    "alert",  # S10 alert API (port 8010) — silent alerting outage is security-relevant
+    "api-gateway",  # S9 — sole platform ingress; downtime breaks frontend + backend JWKS
+    "content-ingestion",  # S3 RSS/EODHD source registration API (port 8004)
+    "content-store",  # S5 silver-bucket storage API (port 8005)
+    "gliner-server",  # ML inference (10-min start_period); NLP halts if it dies
+    "knowledge-graph",  # S7 AGE graph / RAG context API (port 8007)
+    "market-ingestion",  # S2 ingestion API (port 8002)
+    "nlp-pipeline",  # S6 enrichment API (port 8006)
+    "portfolio",  # S1 portfolio API (port 8001)
+    "rag-chat",  # S8 chat WebSocket service (port 8008)
+    "worldview-web",  # Canonical Next.js 15 frontend (port 3001)
 )
 
 # The only policy we accept for critical infra.  ``always`` is rejected

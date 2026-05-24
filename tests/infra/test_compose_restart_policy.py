@@ -36,6 +36,16 @@ _COMPOSE_FILE = _REPO_ROOT / "infra" / "compose" / "docker-compose.yml"
 # intentionally a small, curated list — the test enforces a hard floor, not a
 # universal policy (some containers, e.g. one-shot ``*-init`` and ``*-migrate``
 # jobs, intentionally use ``restart: "no"``).
+#
+# Cross-reference (PLAN-0093 Phase 5 QA-3, 2026-05-24)
+# ----------------------------------------------------
+# This 6-entry list is the **historical Sub-Plan A baseline anchor** cited in
+# the wave A-1 commit message and intentionally frozen here.  The full
+# SUPERSET (now 18 entries: this list + ``minio`` + 11 API/UI/ML containers)
+# lives in ``tests/validation/test_restart_policy.py:_CRITICAL_SERVICES``.
+# Both tests share ``_load_compose_services`` semantics so they stay aligned;
+# any new long-running infra/API container should be added to the superset
+# file, NOT here, so this file remains the immutable Sub-Plan A audit trail.
 _CRITICAL_SERVICES: tuple[str, ...] = (
     # Core data infra.
     "postgres",

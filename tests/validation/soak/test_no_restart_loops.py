@@ -6,23 +6,40 @@ Why this test exists
 --------------------
 After Sub-Plan A added health-gated ``depends_on`` clauses and ``restart``
 policies, no worldview container should enter a sustained ``Restarting``
-state.  ``Restarting`` is a classic silent-failure mode: ``docker ps`` shows
-the container "exists" but it's actually crashlooping every 60 seconds.
+state — AND no container that was Up at soak start should silently slide
+into an ``Exited``/``Dead``/``Created`` state and stay there.
 
-This soak test polls ``docker ps -a`` every 5 minutes and fails the run if
-any container shows ``Restarting`` for 3 consecutive samples (= ~10-15
-minutes of crashlooping, well above any legitimate transient).  On failure
-it dumps the container name and the last 50 log lines so the operator can
-diagnose without re-running.
+PLAN-0093 Phase 5 QA-3 P1 — dual-streak detector
+-------------------------------------------------
+The original implementation grep'd ``"restarting"`` only.  That misses the
+nastier silent-failure mode: a container that crashes hard, exhausts its
+restart-policy retries (e.g. ``restart: on-failure:3`` workers) and ends up
+``Exited`` while the rest of the platform keeps running.  ``Up X minutes
+(unhealthy)`` is similarly hidden — the container is "running" but failing
+liveness probes.
+
+This refactor introduces a four-way classification (``up``, ``restarting``,
+``down``, ``unknown``) and tracks two independent streaks per container:
+
+1. ``consecutive_restarts`` — container is currently ``Restarting``.
+2. ``consecutive_down``     — container *was* in the ``expected_up`` baseline
+   at soak start but is now classified ``down`` (Exited / Dead / Created
+   / Paused / unhealthy).
+
+Either streak crossing ``_FAILURE_THRESHOLD`` fails the soak — both fast
+crashloops and slow silent dropouts surface in the same run.
+
+One-shot ``*-init`` and ``*-migrate`` containers are correctly EXCLUDED from
+``expected_up`` because they are already ``Exited (0)`` at baseline.
 
 Invocation
 ----------
 Default ``pytest`` runs SKIP this test (``SOAK_TEST_ENABLED`` unset).  The
 nightly CI cron should set:
 
-    SOAK_TEST_ENABLED=1 \
-    WORLDVIEW_DOCKER_TEST_ALLOWED=1 \
-    SOAK_DURATION_MINUTES=1440 \
+    SOAK_TEST_ENABLED=1 \\
+    WORLDVIEW_DOCKER_TEST_ALLOWED=1 \\
+    SOAK_DURATION_MINUTES=1440 \\
     pytest tests/validation/soak/test_no_restart_loops.py -v -s
 
 The ``-s`` flag preserves stdout so the per-poll progress lines surface in
@@ -53,9 +70,10 @@ import pytest
 # catch sustained crashloops without spamming the docker daemon.
 _POLL_INTERVAL_S = 5 * 60.0
 
-# Consecutive ``Restarting`` samples that constitute a failure.  3 x 5min =
-# 15 minutes of crashlooping; legitimate transients (e.g. OOM kill recovery)
-# resolve well inside that window.
+# Consecutive failing samples that constitute a failure (applied independently
+# to both the restart streak and the down streak).  3 x 5min = 15 minutes;
+# legitimate transients (e.g. OOM kill recovery) resolve well inside that
+# window.
 _FAILURE_THRESHOLD = 3
 
 # How many tail lines of container logs to dump on failure.  50 is enough
@@ -69,6 +87,24 @@ _DEFAULT_DURATION_MINUTES = 1440
 # Substring filter for worldview containers.  All compose-managed containers
 # share the ``worldview-`` prefix (the default ``COMPOSE_PROJECT_NAME``).
 _CONTAINER_PREFIX = os.environ.get("WORLDVIEW_CONTAINER_PREFIX", "worldview-")
+
+# Substrings (lower-cased) that classify a container as "down" — i.e. it was
+# Up at baseline but has now silently dropped off the running set.  Each
+# entry maps to a real docker ``Status`` value seen in production:
+#   * ``exited``  — container finished and was NOT restarted (policy=on-failure
+#                   exhausted, or no policy + crashed)
+#   * ``dead``    — daemon could not stop the container; broken state
+#   * ``created`` — container exists but never started (image pull race)
+#   * ``paused``  — explicitly paused via ``docker pause`` (unusual)
+#   * ``unhealthy`` — substring appears in ``Up 5 minutes (unhealthy)``;
+#                     liveness/readiness probes failing
+_DOWN_STATUS_SUBSTRINGS: tuple[str, ...] = (
+    "exited",
+    "dead",
+    "created",
+    "paused",
+    "unhealthy",
+)
 
 
 # ---------------------------------------------------------------------------
@@ -110,12 +146,35 @@ def _soak_duration_s() -> float:
 # ---------------------------------------------------------------------------
 
 
-def _list_restarting_containers() -> list[str]:
-    """Return the names of worldview containers currently in ``Restarting`` state.
+def _classify_status(status: str) -> str:
+    """Bucket a docker Status string into ``up``/``restarting``/``down``/``unknown``.
+
+    The classification order matters: we check ``restarting`` and ``down``
+    substrings BEFORE accepting an ``Up`` prefix, because ``Up 5 minutes
+    (unhealthy)`` should classify as ``down`` not ``up``.
+    """
+    lower = status.lower()
+    if "restarting" in lower:
+        return "restarting"
+    # Check "down" substrings first so "(unhealthy)" wins over "Up".
+    for needle in _DOWN_STATUS_SUBSTRINGS:
+        if needle in lower:
+            return "down"
+    if lower.startswith("up"):
+        return "up"
+    return "unknown"
+
+
+def _snapshot_container_states() -> dict[str, str]:
+    """Return ``{container_name: classification}`` for every worldview container.
 
     Uses ``docker ps -a --format`` so we get a stable tab-separated output
     regardless of the operator's docker version.  Filters to the worldview
     prefix to avoid false positives from unrelated containers on the host.
+
+    Replaces the old ``_list_restarting_containers()`` helper.  The richer
+    return type lets the caller track both restart streaks AND silent-down
+    streaks against the baseline (see ``test_no_container_in_sustained...``).
     """
     result = subprocess.run(
         ["docker", "ps", "-a", "--format", "{{.Status}}\t{{.Names}}"],
@@ -127,22 +186,18 @@ def _list_restarting_containers() -> list[str]:
     if result.returncode != 0:
         pytest.fail(f"docker ps failed (rc={result.returncode}): stderr={result.stderr!r}")
 
-    restarting: list[str] = []
+    states: dict[str, str] = {}
     for line in result.stdout.splitlines():
-        # ``{{.Status}}`` looks like "Restarting (1) 5 seconds ago" or
-        # "Up 3 minutes (healthy)".  Case-insensitive substring match catches
-        # both "Restarting" and any future docker variants.
-        if "restarting" not in line.lower():
-            continue
         # Expected format: "<status>\t<name>".  Split once on tab so a status
         # field with whitespace (which is common) doesn't break parsing.
         parts = line.split("\t", 1)
         if len(parts) != 2:
             continue
-        _, name = parts
-        if name.startswith(_CONTAINER_PREFIX):
-            restarting.append(name)
-    return restarting
+        status, name = parts
+        if not name.startswith(_CONTAINER_PREFIX):
+            continue
+        states[name] = _classify_status(status)
+    return states
 
 
 def _tail_logs(container: str) -> str:
@@ -166,12 +221,18 @@ def _tail_logs(container: str) -> str:
 
 @pytest.mark.slow
 def test_no_container_in_sustained_restart_loop() -> None:
-    """No worldview container should ``Restarting`` for ``_FAILURE_THRESHOLD`` consecutive samples.
+    """No worldview container should be Restarting *or* silently Down for the threshold window.
 
     Walks the full soak duration polling every ``_POLL_INTERVAL_S`` seconds.
-    Maintains a per-container consecutive-strikes counter; when any container
-    hits the threshold we fail the test with its name + log tail and abort
-    the loop early.
+    Maintains two per-container streak counters:
+
+    * ``consecutive_restarts[name]`` — currently in ``restarting`` state.
+    * ``consecutive_down[name]``     — was Up at baseline but is now in
+      ``down`` (Exited / unhealthy / dead / paused / created).
+
+    Either streak crossing ``_FAILURE_THRESHOLD`` fails the test with the
+    container name + log tail.  Reset on first sample where the container
+    returns to ``up`` so transient blips do not accumulate.
     """
     _require_soak_enabled()
     _require_docker_destructive_allowed()
@@ -179,40 +240,87 @@ def test_no_container_in_sustained_restart_loop() -> None:
     duration_s = _soak_duration_s()
     deadline = time.monotonic() + duration_s
 
-    # consecutive_restarts[name] = current streak length.  Reset to 0 the
-    # moment a container leaves the Restarting state — only sustained loops
-    # are failures.
+    # Take the baseline at soak start.  One-shot ``*-init`` and ``*-migrate``
+    # containers are already ``Exited (0)`` here, so they are CORRECTLY
+    # excluded from ``expected_up`` — they will never appear in the
+    # ``consecutive_down`` map even when they remain Exited for hours.
+    baseline_states = _snapshot_container_states()
+    expected_up: frozenset[str] = frozenset(name for name, cls in baseline_states.items() if cls == "up")
+    print(
+        f"[soak baseline] total_containers={len(baseline_states)} "
+        f"expected_up={len(expected_up)} "
+        f"(baseline excludes init/migrate one-shots)"
+    )
+
     consecutive_restarts: dict[str, int] = {}
+    consecutive_down: dict[str, int] = {}
 
     sample = 0
     while time.monotonic() < deadline:
         sample += 1
-        restarting = _list_restarting_containers()
-        currently_restarting = set(restarting)
+        states = _snapshot_container_states()
 
-        # Increment streak for everyone currently restarting; reset everyone else.
+        # ── Restart streak (every container, not just baseline) ──────────────
+        currently_restarting = {name for name, cls in states.items() if cls == "restarting"}
         for name in currently_restarting:
             consecutive_restarts[name] = consecutive_restarts.get(name, 0) + 1
         for name in list(consecutive_restarts):
             if name not in currently_restarting:
                 consecutive_restarts[name] = 0
 
-        # Per-sample progress line — visible with pytest -s.
-        # Format: ``[soak sample N] restarting=K offenders=[name(streak=M), ...]``
-        offenders = [(n, s) for n, s in consecutive_restarts.items() if s > 0]
-        offenders.sort(key=lambda x: -x[1])  # Worst-first.
-        offender_str = ", ".join(f"{n}(streak={s})" for n, s in offenders[:5]) or "none"
-        print(f"[soak sample {sample}] restarting={len(currently_restarting)} offenders=[{offender_str}]")
+        # ── Down streak (only baseline-Up containers) ────────────────────────
+        # A baseline-Up container is "down" this sample if it is now classified
+        # as ``down`` OR is missing from the snapshot entirely (the container
+        # was removed by `docker rm` while soak was running — also a violation).
+        currently_down: set[str] = set()
+        for name in expected_up:
+            cls = states.get(name, "down")  # missing = down
+            if cls == "down" or cls == "unknown":
+                currently_down.add(name)
+        for name in currently_down:
+            consecutive_down[name] = consecutive_down.get(name, 0) + 1
+        for name in list(consecutive_down):
+            if name not in currently_down:
+                consecutive_down[name] = 0
 
-        # Check for any container that has crossed the failure threshold.
-        # Sorting by streak (desc) ensures we surface the worst offender first.
-        for name, streak in sorted(consecutive_restarts.items(), key=lambda x: -x[1]):
+        # ── Per-sample progress line — visible with pytest -s ────────────────
+        restart_offenders = sorted(
+            ((n, s) for n, s in consecutive_restarts.items() if s > 0),
+            key=lambda x: -x[1],
+        )
+        down_offenders = sorted(
+            ((n, s) for n, s in consecutive_down.items() if s > 0),
+            key=lambda x: -x[1],
+        )
+        restart_str = ", ".join(f"{n}(streak={s})" for n, s in restart_offenders[:5]) or "none"
+        down_str = ", ".join(f"{n}(streak={s})" for n, s in down_offenders[:5]) or "none"
+        print(
+            f"[soak sample {sample}] "
+            f"restarting={len(currently_restarting)} restart_offenders=[{restart_str}] "
+            f"down={len(currently_down)} down_offenders=[{down_str}]"
+        )
+
+        # ── Threshold check (either streak type fails the soak) ──────────────
+        # Restart streak first — usually the louder failure mode.
+        for name, streak in restart_offenders:
             if streak >= _FAILURE_THRESHOLD:
                 logs = _tail_logs(name)
                 pytest.fail(
                     f"Container {name!r} has been Restarting for {streak} consecutive "
                     f"samples ({streak * _POLL_INTERVAL_S / 60:.0f} minutes). "
                     f"This violates the F-LOG-002 / F-NPL-002 / F-REF-006 SLO.\n\n"
+                    f"Last {_LOG_TAIL_LINES} log lines:\n{logs}"
+                )
+        for name, streak in down_offenders:
+            if streak >= _FAILURE_THRESHOLD:
+                logs = _tail_logs(name)
+                pytest.fail(
+                    f"Container {name!r} was Up at soak baseline but has been "
+                    f"classified Down (Exited/unhealthy/dead/missing) for "
+                    f"{streak} consecutive samples "
+                    f"({streak * _POLL_INTERVAL_S / 60:.0f} minutes). "
+                    f"This is the PLAN-0093 QA-3 silent-dropout failure mode "
+                    f"(restart policy missing or restart-retries exhausted).\n\n"
                     f"Last {_LOG_TAIL_LINES} log lines:\n{logs}"
                 )
 
@@ -224,7 +332,10 @@ def test_no_container_in_sustained_restart_loop() -> None:
 
     # If we got here, no container crossed the threshold — soak passed.
     # Emit a final summary line so nightly logs always have a clear marker.
-    total_offenders = sum(1 for s in consecutive_restarts.values() if s > 0)
+    trailing_restart = sum(1 for s in consecutive_restarts.values() if s > 0)
+    trailing_down = sum(1 for s in consecutive_down.values() if s > 0)
     print(
-        f"[soak complete] samples={sample} duration={duration_s / 60:.1f}min " f"trailing_offenders={total_offenders}"
+        f"[soak complete] samples={sample} duration={duration_s / 60:.1f}min "
+        f"trailing_restart_offenders={trailing_restart} "
+        f"trailing_down_offenders={trailing_down}"
     )
