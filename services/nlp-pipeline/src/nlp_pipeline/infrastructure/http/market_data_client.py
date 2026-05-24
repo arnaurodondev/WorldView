@@ -29,6 +29,7 @@ Use a single ``MarketDataClient`` instance per asyncio loop.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import time
 import urllib.parse
 from dataclasses import dataclass
@@ -41,12 +42,25 @@ from observability import get_logger  # type: ignore[import-untyped]
 if TYPE_CHECKING:
     import httpx
 
+    from messaging.valkey.client import ValkeyClient  # type: ignore[import-untyped]
+
 logger = get_logger(__name__)  # type: ignore[no-any-return]
 
 
 # Refresh the internal JWT at most this often — S9 dev-login mints 5-minute
 # tokens; refreshing every 240 s leaves a 60 s safety margin.
 _TOKEN_REFRESH_S: float = 240.0
+
+# PLAN-0093 T-C-3-02: persistent 404 backoff for symbol resolution.
+# After 3 consecutive 404s for the same ticker we mark it as "unknown" in
+# Valkey for 7 days so subsequent worker cycles skip the round-trip. This
+# prevents the 404 storms the audit (F-NPL-FUNDAMENTALS-001) flagged when a
+# ticker is genuinely unmapped (delisted, foreign exchange, etc.).
+_UNKNOWN_TICKER_KEY_PREFIX: str = "nlp:price_impact:unknown_tickers"
+_UNKNOWN_TICKER_FAIL_KEY_PREFIX: str = "nlp:price_impact:unknown_tickers:fails"
+_UNKNOWN_TICKER_TTL_S: int = 7 * 24 * 60 * 60  # 7 days
+_UNKNOWN_TICKER_FAIL_TTL_S: int = 24 * 60 * 60  # 1 day rolling counter
+_UNKNOWN_TICKER_FAIL_THRESHOLD: int = 3
 
 
 @dataclass(frozen=True)
@@ -81,9 +95,14 @@ class MarketDataClient:
         api_gateway_url: str | None = None,
         service_account_token: str | None = None,
         service_name: str = "nlp-pipeline-price-impact",
+        valkey_client: ValkeyClient | None = None,
     ) -> None:
         self._client = client
         self._base_url = base_url.rstrip("/")
+        # PLAN-0093 T-C-3-02: optional Valkey client for the 7-day unknown-ticker
+        # skip-set. When None, the worker still uses the existing in-process
+        # negative cache (so unit tests + dev workflows continue to work).
+        self._valkey: ValkeyClient | None = valkey_client
         # F-101: api-gateway base URL for token bootstrap. When None we fall
         # back to the legacy "no headers" behaviour — which still produces
         # 401s on a guarded receiver but lets unit tests run without mocking
@@ -196,6 +215,13 @@ class MarketDataClient:
             # to be unresolvable. Treat it as None for the caller's purposes.
             return cached if cached else None
 
+        # PLAN-0093 T-C-3-02: cross-process unknown-ticker skip-set in Valkey.
+        # Survives worker restarts (the in-process cache does not). 7-day TTL
+        # so newly-mapped tickers eventually retry without manual flush.
+        if self._valkey is not None and await self._is_in_unknown_set(ticker):
+            cache[ticker] = ""  # warm the in-process negative cache
+            return None
+
         # PLAN-0073 B-1: /instruments/symbol/{ticker} was removed; use the
         # unified /instruments/lookup?symbol= endpoint instead.
         url = f"{self._base_url}/api/v1/instruments/lookup"
@@ -230,6 +256,12 @@ class MarketDataClient:
                     status=response.status_code,
                 )
             cache[ticker] = ""  # negative cache so we don't retry per-bar
+            # PLAN-0093 T-C-3-02: increment cross-process fail counter on 404;
+            # once we cross the threshold we promote into the 7-day skip-set so
+            # the next worker cycle (and every cycle for 7 days after) skips
+            # the round-trip entirely.
+            if self._valkey is not None and response.status_code == 404:
+                await self._record_unknown_ticker_failure(ticker)
             return None
         try:
             body = response.json()
@@ -257,6 +289,65 @@ class MarketDataClient:
                 error=str(exc),
             )
             return None
+
+    # ── PLAN-0093 T-C-3-02 helpers — Valkey unknown-ticker skip-set ─────────
+
+    async def _is_in_unknown_set(self, ticker: str) -> bool:
+        """Return True if *ticker* is currently in the unknown-ticker skip-set.
+
+        Best-effort: any Valkey error returns False so we fall through to a
+        normal lookup attempt (degraded but functional). We never let a Valkey
+        outage cascade into a worker failure.
+        """
+        if self._valkey is None:
+            return False
+        try:
+            return await self._valkey.exists(f"{_UNKNOWN_TICKER_KEY_PREFIX}:{ticker.upper()}")
+        except Exception as exc:
+            logger.debug(  # type: ignore[no-any-return]
+                "market_data_unknown_set_check_failed", ticker=ticker, error=str(exc)
+            )
+            return False
+
+    async def _record_unknown_ticker_failure(self, ticker: str) -> None:
+        """Increment per-ticker 404 counter; promote to skip-set after threshold.
+
+        Implements the plan's "3 consecutive 404s → 7-day skip" semantics:
+          - INCR a counter at ``…:fails:<ticker>``; on first hit set TTL to 1 day
+            (rolling window — sporadic 404s never accumulate forever)
+          - When counter >= threshold, write a separate marker key at
+            ``…:unknown_tickers:<ticker>`` with 7-day TTL → checked by
+            ``_is_in_unknown_set`` at the top of ``_resolve_instrument_id``
+
+        Best-effort: Valkey errors are swallowed.
+        """
+        if self._valkey is None:
+            return
+        try:
+            key = ticker.upper()
+            fail_key = f"{_UNKNOWN_TICKER_FAIL_KEY_PREFIX}:{key}"
+            new_count = await self._valkey.incr(fail_key)
+            # On the FIRST increment, attach a TTL so the counter expires if
+            # the failures stop (e.g. ticker becomes resolvable again).
+            if new_count == 1:
+                with contextlib.suppress(Exception):
+                    await self._valkey.expire(fail_key, _UNKNOWN_TICKER_FAIL_TTL_S)
+            if new_count >= _UNKNOWN_TICKER_FAIL_THRESHOLD:
+                # Promote: write the long-TTL skip marker so future calls bypass
+                # the network entirely. Using set() with ex= so the TTL is set
+                # atomically with the value (avoids a race where the key exists
+                # without a TTL).
+                await self._valkey.set(f"{_UNKNOWN_TICKER_KEY_PREFIX}:{key}", "1", ex=_UNKNOWN_TICKER_TTL_S)
+                logger.info(  # type: ignore[no-any-return]
+                    "market_data_ticker_marked_unknown",
+                    ticker=ticker,
+                    consecutive_404s=new_count,
+                    ttl_seconds=_UNKNOWN_TICKER_TTL_S,
+                )
+        except Exception as exc:
+            logger.debug(  # type: ignore[no-any-return]
+                "market_data_unknown_set_write_failed", ticker=ticker, error=str(exc)
+            )
 
     async def get_ohlcv(self, symbol: str, bar_date: date) -> OHLCVBar | None:
         """Return the daily OHLCV bar for *symbol* on *bar_date*, or ``None``.

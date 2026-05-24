@@ -156,9 +156,15 @@ class ArticleRelevanceScoringWorker:
         # PLAN-0055 C-2: dual-write. Legacy UPDATE keeps the news read path
         # working until Wave C-3 wires the materialized view; the append-only
         # INSERT establishes the audit trail going forward.
+        # PLAN-0093 T-C-3-03 (F-NPL-008): in the same write session, also pull
+        # max(impact_score) from article_impact_windows per doc and persist it
+        # into document_source_metadata.impact_score (PRD-0026 §6.5 — the
+        # market-impact component of display_relevance_score). Writes NULL
+        # when no windows exist yet (article < 25h old or unmapped ticker).
         model_id_for_provenance = self._api_model_id if self._api_key else self._model
         async with self._nlp_sf() as session:
             await self._write_scores(session, scored)
+            await self._write_impact_scores(session, [doc_id for doc_id, *_ in scored])
             await self._append_provenance(session, scored, model_id_for_provenance)
             await session.commit()
 
@@ -419,6 +425,40 @@ class ArticleRelevanceScoringWorker:
                 error=str(exc),
                 exc_info=True,
             )
+
+    @staticmethod
+    async def _write_impact_scores(
+        session: AsyncSession,
+        doc_ids: list[UUID],
+    ) -> None:
+        """PLAN-0093 T-C-3-03 (F-NPL-008): populate ``document_source_metadata.impact_score``.
+
+        For each doc_id, compute MAX(impact_score) across all article_impact_windows
+        rows (already normalised to [0, 1] by PriceImpactLabellingWorker) and write
+        it back. Articles with no impact_windows row stay NULL — per PRD-0026 §6.5
+        the display formula uses ``IS NULL`` to drop the market-impact term out of
+        the weighted average. Writing 0.0 would conflate "no data yet" with
+        "labelled zero-impact" and skew the fallback branches.
+
+        Implemented as a single UPDATE … FROM (SELECT … GROUP BY) so the cost is
+        one round-trip regardless of batch size.
+        """
+        if not doc_ids:
+            return
+        stmt = text(
+            """
+            UPDATE document_source_metadata dsm
+            SET impact_score = sub.max_impact
+            FROM (
+                SELECT article_id AS doc_id, MAX(impact_score) AS max_impact
+                FROM article_impact_windows
+                WHERE article_id = ANY(:doc_ids)
+                GROUP BY article_id
+            ) AS sub
+            WHERE dsm.doc_id = sub.doc_id
+            """,
+        )
+        await session.execute(stmt, {"doc_ids": [str(d) for d in doc_ids]})
 
     @staticmethod
     async def _write_scores(

@@ -175,3 +175,21 @@ class ArticleImpactWindowRepository(ArticleImpactWindowRepositoryPort):
         )
         val = result.scalar_one_or_none()
         return Decimal(str(val)) if val is not None else Decimal("0.0")
+
+    async def get_max_impact_for_doc_nullable(self, doc_id: UUID) -> Decimal | None:
+        """PLAN-0093 T-C-3-03 variant — return ``None`` when no windows exist.
+
+        Distinct from :py:meth:`get_max_impact_for_doc` (which collapses missing
+        rows to ``0.0`` for the routing signal that always wants a numeric
+        value). The PRD-0026 §6.5 display-formula author chose the
+        ``impact_score IS NULL`` shape to mean "not yet labelled" — writing
+        ``0.0`` would conflate that with "labelled but zero impact" and skew
+        the weighted-display fallback branches.
+        """
+        result = await self._session.execute(
+            sa.select(func.max(ArticleImpactWindowModel.impact_score)).where(
+                ArticleImpactWindowModel.article_id == doc_id
+            )
+        )
+        val = result.scalar_one_or_none()
+        return Decimal(str(val)) if val is not None else None

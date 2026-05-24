@@ -78,6 +78,36 @@ or articles, perform NLP processing, manage portfolios.
 
 ---
 
+## Symbol Resolution (PLAN-0093 T-C-3-01, 2026-05-23)
+
+Audit 2026-05-23 (F-NPL-FUNDAMENTALS-001) flagged that `PriceImpactLabellingWorker`
+and `fundamentals_refresh` were hitting `market-data/api/v1/instruments/symbol/<TICKER>`
+and getting 404 for every ticker (AAPL, MSFT, NVDA, ...) → `article_impact_windows`
+stayed empty + `fundamentals_ohlcv` embeddings stayed NULL.
+
+**Investigation outcome: (A) — the correct symbol-resolver endpoint already exists.**
+
+| | |
+|---|---|
+| **Endpoint** | `GET /api/v1/instruments/lookup` |
+| **Arg shape** | `?symbol={ticker}` (one of `symbol` / `isin` / `id` is required) |
+| **Auth** | `X-Internal-JWT` required (workers mint one via `POST /internal/v1/service-token`) |
+| **200 body** | `{"id": "<uuid>", "symbol": "...", "exchange": "...", "is_active": true}` (with `?extra_info=true`, additionally returns `name`, `isin`, `sector`, `industry`, `country`, `currency_code`, `description`) |
+| **404** | `{"detail": "Instrument not found"}` — ticker has no row in `instruments` |
+| **400** | When none of `symbol`/`isin`/`id` is supplied |
+| **Source** | `services/market-data/src/market_data/api/routers/instruments.py` (function `lookup_instrument`) |
+| **Use case** | `services/market-data/src/market_data/application/use_cases/lookup_instrument.py` (`InstrumentLookupUseCase.execute`) |
+
+The legacy `GET /api/v1/instruments/symbol/{ticker}` and `GET /api/v1/instruments/{id}`
+routes were **removed by PLAN-0073 B-1** and now return 404. The audit-cited 404 storm
+was caused by the workers still pointing at the legacy paths. Both workers
+(`nlp-pipeline.../market_data_client.py:_resolve_instrument_id` and
+`knowledge-graph.../fundamentals_refresh.py`) were already migrated to
+`/instruments/lookup?symbol=` before this audit but the workers' Valkey skip-set
+was missing — see PLAN-0093 T-C-3-02 (7-day backoff on persistent 404s).
+
+---
+
 ## Kafka Topics
 
 ### Consumed
