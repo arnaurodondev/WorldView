@@ -10,7 +10,7 @@ new input_summary param), updated emit_tool_result (item_count param).
 from __future__ import annotations
 
 import json
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 from uuid import UUID
 
 if TYPE_CHECKING:
@@ -164,11 +164,18 @@ class SSEEmitter:
         tool_name: str,
         input_summary: dict,  # type: ignore[type-arg]
         status: str = "running",
+        is_fallback: bool = False,
+        fallback_of: str | None = None,
     ) -> dict[str, str]:
         """Emit a tool_call event before execution starts (PLAN-0066 Wave H T-W10-H-04).
 
         Updated in PLAN-0067 W11-3: added ``label`` field (user-friendly string) and
         renamed ``tool_input`` → ``input_summary`` (safe subset, no PII).
+
+        FIX-LIVE-E (2026-05-24): added ``is_fallback``/``fallback_of`` so the
+        orchestrator can flag automatic alt-tool retries after a primary tool
+        returns empty.  The frontend can render a subtler "(retrying with X)"
+        affordance instead of a fresh spinner.
 
         WHY BEFORE EXECUTE: the frontend can immediately show a spinner
         "Fetching AAPL price history..." without waiting for the S3 round-trip.
@@ -182,19 +189,26 @@ class SSEEmitter:
             tool_name:     Internal tool name (from capability_manifest.yaml).
             input_summary: Safe subset of the tool input, no PII. Displayed in UI.
             status:        Current tool status. Defaults to "running".
+            is_fallback:   True when this is an automatic alt-tool retry after a
+                           primary tool returned empty (FIX-LIVE-E).
+            fallback_of:   Name of the originally-failed tool when is_fallback=True;
+                           ignored otherwise.
         """
         label = _TOOL_LABELS.get(tool_name, f"{tool_name}...")
+        payload: dict[str, Any] = {
+            "type": "tool_call",
+            "tool": tool_name,
+            "label": label,
+            "input": input_summary,
+            "status": status,
+        }
+        if is_fallback:
+            payload["is_fallback"] = True
+            if fallback_of:
+                payload["fallback_of"] = fallback_of
         return {
             "event": "tool_call",
-            "data": json.dumps(
-                {
-                    "type": "tool_call",
-                    "tool": tool_name,
-                    "label": label,
-                    "input": input_summary,
-                    "status": status,
-                }
-            ),
+            "data": json.dumps(payload),
         }
 
     def emit_pending_action(

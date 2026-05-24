@@ -221,7 +221,18 @@ class ToolExecutor:
         return await self._get_news_handler()._handle_get_morning_brief(tool_call)
 
     async def execute(self, tool_call: ToolUseBlock) -> RetrievedItem | list[RetrievedItem] | None:
-        """Dispatch a single tool call to the owning domain handler."""
+        """Dispatch a single tool call to the owning domain handler.
+
+        FIX-LIVE-E (2026-05-24): exceptions are CLASSIFIED before being swallowed.
+        Previously a single ``except Exception: return None`` masked TypeErrors
+        from arg-shape mismatches as "tool returned None", which made the
+        Phase 5c Q2 fallback failure invisible.  Now ``TypeError`` and
+        ``AttributeError`` log under ``tool_argument_error`` while every other
+        exception logs under ``tool_execution_error`` — both include
+        ``exception_type`` and ``exception_repr`` for debugging.  We still
+        return None so the orchestrator's fallback chain can take over, but the
+        structured log now lets us debug arg-shape mismatches without re-running.
+        """
         if self._registry.get_spec(tool_call.name) is None:
             log.warning("unknown_tool_name", name=tool_call.name)
             return None
@@ -236,8 +247,24 @@ class ToolExecutor:
                     return result  # type: ignore[no-any-return]
             log.warning("unknown_tool_name", name=tool_call.name)
             return None
+        except (TypeError, AttributeError) as exc:
+            # Arg-shape mismatch (e.g. fallback passed keys the handler doesn't accept).
+            # Distinct event tag so dashboards/log queries can isolate this class.
+            log.warning(
+                "tool_argument_error",
+                tool=tool_call.name,
+                exception_type=type(exc).__name__,
+                exception_repr=repr(exc),
+                input_keys=sorted(tool_call.input.keys()),
+            )
+            return None
         except Exception as exc:
-            log.warning("tool_failed", tool=tool_call.name, error=str(exc))
+            log.warning(
+                "tool_execution_error",
+                tool=tool_call.name,
+                exception_type=type(exc).__name__,
+                exception_repr=repr(exc),
+            )
             return None
 
     async def execute_all(self, tool_calls: list[ToolUseBlock]) -> list[RetrievedItem | list[RetrievedItem] | None]:
