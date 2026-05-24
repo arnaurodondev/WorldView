@@ -324,3 +324,72 @@ class TestCrossEntityLeakage:
         # 10.1B vs 10.0B at exact-match tolerance → fails.
         rev_failures = [u for u in result.unsupported if u.field_kind is FieldKind.REVENUE]
         assert rev_failures, result.unsupported
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# PLAN-0093 Phase 5c F-LIVE-008-RATIONALISATION — orphan rationalisation prose.
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+class TestRationalisationDetection:
+    """Validator must surface orphan rationalisation phrases as PROSE failures.
+
+    The Q4 v1 cached pre-FIX answer contained "may reflect", "potential
+    volatility", and "one-time event" with NO citation markers. The
+    number-based validator passed it (the prose has no numbers). The
+    rewrite pipeline never saw the issue. These tests pin the new
+    behaviour: orphan rationalisations → UnsupportedNumber(PROSE);
+    cited rationalisations → no entry.
+    """
+
+    def setup_method(self) -> None:
+        self.v = NumericGroundingValidator()
+
+    def test_orphan_may_reflect_flagged(self) -> None:
+        """'may reflect' without a [Nk] citation within 100 chars → flagged."""
+        result = self.v.validate("Q4 results may reflect changing market conditions.", [])
+        prose_failures = [u for u in result.unsupported if u.field_kind is FieldKind.PROSE]
+        assert len(prose_failures) == 1, result.unsupported
+        assert "may reflect" in prose_failures[0].snippet.lower()
+
+    def test_cited_may_reflect_not_flagged(self) -> None:
+        """'may reflect [N1]' — citation within 100 chars → not flagged."""
+        result = self.v.validate("Q4 results may reflect [N1] guidance updates.", [])
+        prose_failures = [u for u in result.unsupported if u.field_kind is FieldKind.PROSE]
+        assert not prose_failures, prose_failures
+
+    def test_cited_one_time_event_not_flagged(self) -> None:
+        """'one-time event [N2]' — citation present → not flagged."""
+        result = self.v.validate("Revenue declined due to one-time event [N2] in Q3.", [])
+        prose_failures = [u for u in result.unsupported if u.field_kind is FieldKind.PROSE]
+        assert not prose_failures, prose_failures
+
+    def test_plain_numeric_answer_no_rationalisation(self) -> None:
+        """Number-only answer with no rationalisation prose → no PROSE failures."""
+        rows = [_row_with_value(10.253e9, FieldKind.REVENUE)]
+        result = self.v.validate("Reported revenue of $10.253B last quarter.", rows)
+        prose_failures = [u for u in result.unsupported if u.field_kind is FieldKind.PROSE]
+        assert not prose_failures, prose_failures
+
+    def test_multiple_orphan_phrases_each_flagged(self) -> None:
+        """Three orphan phrases in one answer → three PROSE entries."""
+        text = "Results may reflect headwinds. Potential volatility ahead. Likely due to inflation."
+        result = self.v.validate(text, [])
+        prose_failures = [u for u in result.unsupported if u.field_kind is FieldKind.PROSE]
+        # 3 distinct phrases — "may reflect", "potential volatility", "likely due"
+        assert len(prose_failures) == 3, prose_failures
+
+    def test_orphan_potential_volatility_flagged(self) -> None:
+        """'potential volatility' without citation → flagged."""
+        result = self.v.validate("Investors should expect potential volatility this quarter.", [])
+        prose_failures = [u for u in result.unsupported if u.field_kind is FieldKind.PROSE]
+        assert len(prose_failures) == 1, prose_failures
+
+    def test_citation_beyond_100_char_window_still_flagged(self) -> None:
+        """A citation > 100 chars after the phrase does NOT rescue the orphan."""
+        # 100+ chars of filler before the citation → orphan.
+        filler = "x" * 120
+        text = f"Q4 may reflect {filler} [N1]"
+        result = self.v.validate(text, [])
+        prose_failures = [u for u in result.unsupported if u.field_kind is FieldKind.PROSE]
+        assert len(prose_failures) == 1, prose_failures
