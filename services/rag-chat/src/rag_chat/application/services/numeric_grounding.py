@@ -145,6 +145,48 @@ _FINANCIAL_KW_RE = re.compile(
     re.IGNORECASE,
 )
 
+# ── Rationalisation prose detection (PLAN-0093 Phase 5c F-LIVE-008-RATIONALISATION) ──
+#
+# The numeric validator caught the canonical AMD QA failure ($34.6B
+# hallucinated revenue) but missed the *prose* form of the same problem:
+# the LLM emitting unsupported speculative explanations like "may
+# reflect", "potential volatility", or "one-time event" to justify
+# numbers it was uncertain about. These phrases carry NO number — so
+# they slipped through the number-based validator entirely. The
+# eval-suite grader (tests/validation/chat_eval/grading.py) flagged
+# them, but only as a verdict signal AFTER the answer was rendered; the
+# runtime rewrite loop never saw them and never asked the LLM to drop
+# them.
+#
+# Mirror the grader's pattern + 100-char citation window so a
+# rationalisation phrase followed by ``[Nk]`` (i.e. the LLM is citing a
+# tool result for the speculation) is considered LEGITIMATE — only
+# ORPHAN rationalisations are surfaced as unsupported.
+_RATIONALISATION_RE = re.compile(
+    r"(potential volatility|one-time event|may reflect|likely (?:due|caused))",
+    re.IGNORECASE,
+)
+
+
+def _extract_orphan_rationalisations(text: str) -> list[str]:
+    """Return rationalisation phrases NOT followed by a citation marker.
+
+    A rationalisation phrase that DOES cite a tool within 100 chars is
+    considered grounded (the LLM is speculating *on top of* tool data
+    rather than fabricating). Only orphan matches are surfaced for the
+    rewrite pipeline to strip.
+
+    Returns a list (not a set) so duplicate phrasings across a response
+    each produce their own ``UnsupportedNumber`` entry — the rewrite
+    prompt then knows the LLM repeated itself.
+    """
+    orphans: list[str] = []
+    for m in _RATIONALISATION_RE.finditer(text):
+        tail = text[m.end() : m.end() + 100]
+        if not _CITATION_RE.search(tail):
+            orphans.append(m.group(0))
+    return orphans
+
 
 # ── Public result types ──────────────────────────────────────────────────────
 
@@ -675,6 +717,29 @@ class NumericGroundingValidator:
                 )
                 per_kind_failed[FieldKind.QUARTER] += 1
 
+        # ── Step 3b: Rationalisation prose detection ───────────────────
+        # PLAN-0093 Phase 5c F-LIVE-008-RATIONALISATION: the LLM may
+        # surface ungrounded speculation ("may reflect", "potential
+        # volatility") with no numeric value attached — the number-based
+        # validator above can't catch this. Emit a synthetic
+        # UnsupportedNumber per orphan rationalisation so the rewrite
+        # pipeline asks the LLM to drop them. A phrase followed by a
+        # citation within 100 chars is treated as legitimate (the LLM is
+        # speculating on top of tool data, not from thin air).
+        if FieldKind.PROSE not in self._skip_kinds:
+            orphans = _extract_orphan_rationalisations(response)
+            for phrase in orphans:
+                unsupported.append(
+                    UnsupportedNumber(
+                        value=0.0,
+                        field_kind=FieldKind.PROSE,
+                        tolerance_used=0.0,
+                        closest_tool_value=None,
+                        snippet=phrase,
+                    )
+                )
+                per_kind_failed[FieldKind.PROSE] += 1
+
         # ── Step 4: Per-number validation ──────────────────────────────
         # PLAN-0093 Phase 5 QA-2 Gap 3: entity-scope the candidate pool
         # so AMD's tool values can't ground an NVDA-attributed number.
@@ -754,7 +819,14 @@ class NumericGroundingValidator:
         else:
             _quarter_misses = 0
             _bare_misses = 0
-        total_numbers_with_quarters = total_numbers + _quarter_misses + _bare_misses
+        # PROSE orphans count toward total_numbers so the metric reflects
+        # the real number of items the validator judged (PLAN-0093
+        # F-LIVE-008-RATIONALISATION).
+        if FieldKind.PROSE not in self._skip_kinds:
+            _prose_misses = len(_extract_orphan_rationalisations(response))
+        else:
+            _prose_misses = 0
+        total_numbers_with_quarters = total_numbers + _quarter_misses + _bare_misses + _prose_misses
 
         return GroundingResult(
             passed=not unsupported,

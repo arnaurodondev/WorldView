@@ -191,10 +191,45 @@ _REFUSAL_TOKENS = (
 )
 
 
+# PLAN-0093 Phase 5c F-LIVE-005C-REFUSAL: a true refusal is SHORT and
+# CITES NOTHING. A long answer that includes a table + an honest data-gap
+# acknowledgement ("...I cannot provide gross margin because the tool
+# did not return that field") is NOT a refusal — it is the agent doing
+# exactly the right thing under R19 (no fabrication). The old detector
+# matched purely on token presence which mis-classified Q4 v4/v5/v6 as
+# USELESS even though those answers were fully grounded.
+_REFUSAL_LENGTH_THRESHOLD = 300  # chars — true refusals are short
+
+_CITATION_MARKER_FOR_REFUSAL_RE = re.compile(r"\[N\d+\]")
+
+
 def is_refusal(answer: str) -> bool:
-    """Heuristic: does the answer read as a refusal / no-data response?"""
+    """Heuristic: does the answer read as a refusal / no-data response?
+
+    Tightened to avoid mis-classifying honest data-gap acknowledgements
+    as refusals. An answer is a refusal only when ALL three hold:
+
+      1. A ``_REFUSAL_TOKENS`` phrase appears in the text.
+      2. The answer is shorter than 300 chars (true refusals are
+         short — the agent gave up).
+      3. The answer contains NO ``[Nk]`` citation markers (a citing
+         answer is actively engaging with the tool data).
+
+    A long, table-bearing, citation-laden response that also includes
+    "I cannot provide field X — not in retrieved data" is the agent
+    correctly observing a tool gap, not refusing.
+    """
     lower = answer.lower()
-    return any(tok in lower for tok in _REFUSAL_TOKENS)
+    has_refusal_token = any(tok in lower for tok in _REFUSAL_TOKENS)
+    if not has_refusal_token:
+        return False
+    # Tightening conditions — both must hold for the answer to be a
+    # honest data-gap rather than a real refusal.
+    is_long = len(answer) >= _REFUSAL_LENGTH_THRESHOLD
+    has_citations = bool(_CITATION_MARKER_FOR_REFUSAL_RE.search(answer))
+    if is_long or has_citations:
+        return False
+    return True
 
 
 # ---------------------------------------------------------------------------

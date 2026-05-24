@@ -106,7 +106,15 @@ _PER_INTENT_ADDENDA: dict[str, str] = {
         "\n\nFINANCIAL DATA FORMAT:\n"
         "Use a structured table whenever multiple metrics are reported. Columns: "
         "| Metric | Value | Unit | Period | As-of Date | Source |. If a requested "
-        "metric is absent from any tool result, write 'N/A — not in retrieved data'."
+        "metric is absent from any tool result, write 'N/A — not in retrieved data'.\n"
+        # PLAN-0093 Phase 5c F-LIVE-005C-YOY: the agent was calling
+        # get_fundamentals_history with periods=2 for a YoY question;
+        # YoY needs the prior-year quarter, which requires periods >= 5
+        # (current quarter + four trailing quarters back to Q-5).
+        "When the user asks for YoY (year-over-year) or QoQ "
+        "(quarter-over-quarter) growth, request periods >= 5 so the "
+        "prior-period comparison quarter is included. For multi-quarter "
+        "trend questions, default to periods=6."
     ),
     "MACRO": (
         "\n\nMACRO FORMAT:\n"

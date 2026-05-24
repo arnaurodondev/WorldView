@@ -49,6 +49,7 @@ class FieldKind(str, Enum):
     MARKET_CAP = "market_cap"  # often quoted in B/T with rounding
     SHARES = "shares"  # share count
     HEADCOUNT = "headcount"  # employee count
+    PROSE = "prose"  # rationalisation prose (no numeric value) — surfaced by validator
     UNKNOWN = "unknown"  # default fallback for unclassifiable numbers
 
 
@@ -68,6 +69,7 @@ DEFAULT_TOLERANCES: dict[FieldKind, float] = {
     FieldKind.MARKET_CAP: 0.005,  # 0.5%
     FieldKind.SHARES: 0.01,  # 1%
     FieldKind.HEADCOUNT: 0.05,  # 5%
+    FieldKind.PROSE: 0.0,  # n/a — PROSE entries carry no numeric value, surfaced by exact-phrase match
     FieldKind.UNKNOWN: 0.005,  # 0.5% conservative default
 }
 
