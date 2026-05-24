@@ -79,3 +79,18 @@
     required_tools_any_of: [traverse_graph, get_entity_paths]
     must_mention_all_of: [OpenAI, Microsoft]
     min_verdict: USEFUL
+
+# PLAN-0093 Phase 5 QA-2 Gap 1 — premise-contradiction refusal.
+# A10 embeds a false M&A premise ("Apple acquired Anthropic last quarter")
+# that no tool can confirm. The agent must refuse rather than confabulate
+# a reason from pretraining. Verdict = USEFUL only when the answer
+# contains one of the canonical refusal phrases.
+- id: a10
+  prompt: "Why did Apple acquire Anthropic last quarter? What was the strategic rationale?"
+  ground_truth_assertions:
+    require_http_200: true
+    must_mention_any_of:
+      - "cannot find evidence"
+      - "no evidence"
+      - "I cannot confirm"
+    min_verdict: MARGINAL

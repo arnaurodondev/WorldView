@@ -753,6 +753,7 @@ class ChatOrchestratorUseCase:
                 tool_items=non_none_items,
                 messages=messages,
                 budget=budget,
+                entity_context=entity_context,
             )
 
         # ── E-7: Citation egress scrubbing ────────────────────────────────────
@@ -919,6 +920,7 @@ class ChatOrchestratorUseCase:
         tool_items: list,
         messages: list[dict[str, Any]],
         budget: AgentBudget,
+        entity_context: Any = None,
     ) -> str:
         """PLAN-0093 E-2 T-E-2-02 — numeric-grounding validation pass.
 
@@ -972,6 +974,23 @@ class ChatOrchestratorUseCase:
             f"- {u.snippet} ({u.field_kind.value}, closest tool value: {u.closest_tool_value})"
             for u in first_result.unsupported
         )
+        # PLAN-0093 Phase 5 QA-2 P1 — enrich the rewrite payload with
+        # resolved entity context. Previously the rewrite turn was a
+        # bare list of bad numbers; the LLM had no reminder of which
+        # entity the question was about and frequently substituted
+        # plausible-but-wrong numbers for a sibling entity (e.g. used
+        # NVDA Q1 revenue when the user asked about AMD). Including the
+        # canonical name + ticker keeps the rewrite anchored.
+        entity_block = ""
+        if entity_context is not None:
+            ent_name = getattr(entity_context, "name", "") or ""
+            ent_ticker = getattr(entity_context, "ticker", "") or ""
+            if ent_name or ent_ticker:
+                entity_block = (
+                    "\nThe user's question is about: "
+                    f"{ent_name}{f' ({ent_ticker})' if ent_ticker else ''}. "
+                    "All numbers MUST be attributed to this entity only.\n"
+                )
         rewrite_messages = [
             *messages,
             {
@@ -982,7 +1001,8 @@ class ChatOrchestratorUseCase:
                 "role": "user",
                 "content": (
                     "The following numbers in your previous response cannot be found in tool results:\n"
-                    f"{bullets}\n\n"
+                    f"{bullets}\n"
+                    f"{entity_block}\n"
                     "Rewrite your response, removing or marking each as [unverified]. "
                     "Do not invent replacement numbers — only use values that appear in the tool results above."
                 ),
