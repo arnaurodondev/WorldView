@@ -38,7 +38,6 @@ if TYPE_CHECKING:
 
     from rag_chat.application.caching.completion_cache import CompletionCache
     from rag_chat.application.caching.rate_limiter import RateLimiter
-    from rag_chat.application.pipeline.fusion import FusionPipeline, GraphEnricher
     from rag_chat.application.pipeline.hyde_expander import HydeExpander
     from rag_chat.application.pipeline.retrieval_orchestrator import ParallelRetrievalOrchestrator
     from rag_chat.application.pipeline.retrieval_plan_builder import RetrievalPlanBuilder
@@ -167,8 +166,6 @@ class ChatPipeline:
     s6_client: S6Port
     hyde: HydeExpander
     embedder: EmbeddingPort
-    graph_enricher: GraphEnricher
-    fusion: FusionPipeline
     # BGEReranker | DeepInfraReranker | CohereReranker — all expose .rerank()
     reranker: Any
     llm_chain: LLMProviderChain
@@ -393,20 +390,6 @@ class ChatPipeline:
             rag_retrieval_items.labels(source_type=_source_type).observe(_count)
 
         return raw_items
-
-    # ── Steps 6-7: Graph enrichment + fusion (synchronous) ───────────────────
-
-    def enrich_and_fuse(self, items: list) -> list:
-        """Steps 6-7: Graph enrichment + fusion (synchronous, no I/O).
-
-        Step 6 (GraphEnricher): injects top-3 relation summaries adjacent to
-        each chunk that references a known entity.
-
-        Step 7 (FusionPipeline): deduplicates by doc_id (keeps highest
-        fusion_score), applies trust weights, sorts DESC, returns top-30.
-        """
-        enriched = self.graph_enricher.enrich(items, [])  # relation_results always [] here
-        return self.fusion.process(enriched)
 
     # ── Step 8: Reranking ────────────────────────────────────────────────────
 

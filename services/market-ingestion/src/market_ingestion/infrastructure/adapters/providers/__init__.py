@@ -32,9 +32,10 @@ def build_provider_registry(
         http_timeout: Optional timeout in seconds for ``httpx.AsyncClient``
             instances.  Defaults to httpx's built-in 5 s timeout when *None*.
 
-    NOTE: Polygon and AlphaVantage are intentionally NOT registered (D-006).
-    Their stub adapters raise confusing errors; they will be re-added when
-    real implementations are complete.
+    NOTE: Polygon is registered only when an API key is configured (D-006).
+    Alpha Vantage is not a ProviderAdapter — its fundamentals adapter lives
+    in ``infrastructure/external/alpha_vantage_adapter.py`` and is used by
+    the EPS/Beta backfill script directly (PLAN-0053).
     """
     from market_ingestion.infrastructure.adapters.providers.eodhd import EODHDProviderAdapter
     from market_ingestion.infrastructure.adapters.providers.yahoo import YahooFinanceProviderAdapter

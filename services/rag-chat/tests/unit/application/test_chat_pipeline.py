@@ -47,8 +47,6 @@ def _make_pipeline(**overrides: Any) -> ChatPipeline:
         "hyde": MagicMock(),
         "embedder": MagicMock(),
         "retrieval": MagicMock(),
-        "graph_enricher": MagicMock(),
-        "fusion": MagicMock(),
         "reranker": MagicMock(),
         "llm_chain": MagicMock(),
         "persistence": MagicMock(),
@@ -378,33 +376,6 @@ class TestRetrieve:
         assert mock_metric.labels.call_count == 2
 
 
-# ── Steps 6-7: enrich_and_fuse ───────────────────────────────────────────────
-
-
-class TestEnrichAndFuse:
-    def test_enrich_and_fuse(self) -> None:
-        """Chains graph_enricher.enrich then fusion.process."""
-        fake_items = [MagicMock(), MagicMock()]
-        enriched_items = [MagicMock()]
-        fused_items = [MagicMock()]
-
-        graph_enricher = MagicMock()
-        graph_enricher.enrich = MagicMock(return_value=enriched_items)
-
-        fusion = MagicMock()
-        fusion.process = MagicMock(return_value=fused_items)
-
-        pipeline = _make_pipeline(graph_enricher=graph_enricher, fusion=fusion)
-
-        result = pipeline.enrich_and_fuse(fake_items)
-
-        # graph_enricher receives the input items and [] for relation_results.
-        graph_enricher.enrich.assert_called_once_with(fake_items, [])
-        # fusion receives the enriched output.
-        fusion.process.assert_called_once_with(enriched_items)
-        assert result == fused_items
-
-
 # ── Step 8: rerank_items ──────────────────────────────────────────────────────
 
 
@@ -686,7 +657,7 @@ class TestChatPipelineStructure:
             pipeline.validator = MagicMock()  # type: ignore[misc]
 
     def test_has_all_step_methods(self) -> None:
-        """All 16 step methods are present on ChatPipeline."""
+        """All 15 step methods are present on ChatPipeline."""
         expected_methods = [
             "validate_input",
             "check_cache",
@@ -697,7 +668,6 @@ class TestChatPipelineStructure:
             "expand_query",
             "embed_query",
             "retrieve",
-            "enrich_and_fuse",
             "rerank_items",
             "build_prompt",
             "stream_llm",

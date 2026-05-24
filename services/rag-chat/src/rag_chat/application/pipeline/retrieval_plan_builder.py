@@ -1,8 +1,10 @@
 """RetrievalPlanBuilder — maps QueryIntent to a RetrievalPlan (T-E-2-02).
 
-The builder encodes the intent→source mapping from PRD §6.7 Step 3. The
-``use_cypher`` flag is ANDed with ``cypher_enabled`` at build time so Cypher
-queries remain gated even if the base plan includes them (feature flag AD-06).
+The builder encodes the intent→source mapping from PRD §6.7 Step 3. After
+PLAN-0067's tool-use migration, this builder is only used by the
+``RetrieveOnlyUseCase`` eval harness; the main chat path lets the LLM call
+the ``traverse_graph`` tool directly (always available, guarded by the
+``_ALLOWED_CYPHER_REL_TYPES`` allowlist in ``tool_executor.py``).
 """
 
 from __future__ import annotations
@@ -30,7 +32,7 @@ class _PlanFlags:
     use_contradictions: bool
     use_financial: bool
     use_portfolio: bool
-    use_cypher: bool  # base — ANDed with cypher_enabled at build time
+    use_cypher: bool
 
 
 # Intent → retrieval source matrix (PRD §6.7 / plan T-E-2-02 spec)
@@ -129,13 +131,10 @@ _INTENT_TO_FLAGS: dict[QueryIntent, _PlanFlags] = {
 class RetrievalPlanBuilder:
     """Build a ``RetrievalPlan`` from a classified intent and request context.
 
-    Args:
-        cypher_enabled: Feature flag — when ``False``, ``use_cypher`` is always
-                        ``False`` regardless of the intent's base plan.
+    Eval-harness-only after PLAN-0067 (see module docstring). The main chat
+    path no longer goes through this builder; the LLM tool-use loop decides
+    when to invoke graph traversal at runtime.
     """
-
-    def __init__(self, cypher_enabled: bool = False) -> None:
-        self._cypher_enabled = cypher_enabled
 
     def build(
         self,
@@ -154,7 +153,7 @@ class RetrievalPlanBuilder:
             use_contradictions=flags.use_contradictions,
             use_financial=flags.use_financial,
             use_portfolio=flags.use_portfolio,
-            use_cypher=flags.use_cypher and self._cypher_enabled,
+            use_cypher=flags.use_cypher,
             entity_ids=entity_ids,
             date_filter=date_filter,
         )

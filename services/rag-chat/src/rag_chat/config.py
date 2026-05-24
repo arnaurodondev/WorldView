@@ -112,9 +112,6 @@ class Settings(BaseSettings):
     # s7_client calls used by the retrieval pipeline.
     kg_internal_base_url: str = "http://knowledge-graph:8007"  # RAG_CHAT_KG_INTERNAL_BASE_URL
 
-    # ── Feature flags ─────────────────────────────────────────────────────────
-    cypher_enabled: bool = False
-
     # ── Circuit breaker (PLAN-0031 T-D-1-02, PLAN-0084 A-2) ──────────────────
     cb_enabled: bool = True
     cb_failure_threshold: int = 3

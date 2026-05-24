@@ -173,7 +173,6 @@ def _wire_orchestrator(app: FastAPI, settings: RagChatSettings, valkey_client: V
     from rag_chat.application.caching.completion_cache import CompletionCache
     from rag_chat.application.caching.rate_limiter import RateLimiter
     from rag_chat.application.pipeline.circuit_breaker import SourceCircuitBreaker
-    from rag_chat.application.pipeline.fusion import FusionPipeline, GraphEnricher
     from rag_chat.application.pipeline.hyde_expander import HydeExpander
     from rag_chat.application.pipeline.intent_classifier import (
         DeepInfraIntentClassifier,
@@ -381,7 +380,7 @@ def _wire_orchestrator(app: FastAPI, settings: RagChatSettings, valkey_client: V
         model=settings.deepinfra_classification_model,
     )
 
-    _plan_builder = RetrievalPlanBuilder(cypher_enabled=settings.cypher_enabled)
+    _plan_builder = RetrievalPlanBuilder()
     _hyde = HydeExpander(
         llm_provider=providers[0],
         embedding_client=embedding_client,
@@ -444,8 +443,6 @@ def _wire_orchestrator(app: FastAPI, settings: RagChatSettings, valkey_client: V
         s6_client=s6,
         hyde=_hyde,
         embedder=embedding_client,
-        graph_enricher=GraphEnricher(),
-        fusion=FusionPipeline(),
         reranker=reranker,
         llm_chain=llm_chain,
         persistence=ChatPersistenceUseCase(),
