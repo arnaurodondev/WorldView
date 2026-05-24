@@ -284,6 +284,21 @@ Three fallback branches (tracked by Prometheus counter `news_display_score_path_
 | `entity.provisional.queued.v1` | `EntityProvisionalQueued` | `entity_id` | Outbox (`nlp_db`) | `entity.provisional.queued.v1.avsc` |
 | `intelligence.temporal_event.v1` | temporal event | — | Outbox (`nlp_db`) | `intelligence.temporal_event.v1.avsc` |
 
+#### Intentional asymmetry: enriched vs. temporal event filtering (DP-F001)
+
+The two produced event families filter unresolved entity mentions differently — by design.
+`nlp.article.enriched.v1` carries `raw_relations_json`, `raw_events_json`, and `raw_claims_json`
+payloads built by `_build_raw_*` in `infrastructure/messaging/consumers/blocks/enriched_event.py`.
+Those builders drop any mention that resolves to neither a canonical entity nor a provisional
+queue id, because the downstream graph writer (S7 Block 12) would have no entity to anchor the
+edge to. `intelligence.temporal_event.v1` does the opposite: it emits every detected event
+regardless of how many participants the resolver tied to canonical entities. Macro events such
+as CPI prints, FOMC decisions, and sanctions announcements legitimately have zero company
+participants, and S7's `TemporalEventConsumer` accepts `exposed_entities=[]` without rejection.
+This asymmetry is intentional — flagged DP-F001 in
+`docs/audits/2026-05-24-investigation-qa-open-items.md` so future QA passes do not re-open it
+as a bug.
+
 #### Key schema fields — `nlp.article.enriched.v1`
 
 ```json

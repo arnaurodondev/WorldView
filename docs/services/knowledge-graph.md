@@ -761,6 +761,12 @@ tick.
     `financial_instrument` entity exists. Fix requires removing the partial predicate and
     adding a pre-insert `class_aware_canonical_match()` lookup.
 
+12. **`temporal_events.exposed_entities=[]` is valid** (DP-F001): Macro events (CPI prints, FOMC
+    decisions, sanctions announcements) legitimately arrive with zero company participants, and
+    `TemporalEventConsumer` accepts them. This is the intentional counterpart to S6's enriched-event
+    filtering — see `docs/services/nlp-pipeline.md` "Intentional asymmetry" and
+    `docs/audits/2026-05-24-investigation-qa-open-items.md` DP-F001.
+
 ---
 
 ## Runbook
