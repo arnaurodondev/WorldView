@@ -150,7 +150,7 @@ describe("HoldingContributionStat", () => {
       expect(screen.getByText("Contrib")).toBeInTheDocument();
       // A numeric bps value (positive or negative) should be present.
       // The full portfolio is one holding → weight = 1.0 → contrib = 10% × 1 × 10000 = 1000 bps.
-      expect(screen.getByText(/\d+(\.\d+)?\s*bps/i)).toBeInTheDocument();
+      expect(screen.getByText(/1000(\.\d+)?\s*bps/i)).toBeInTheDocument();
     });
   });
 });

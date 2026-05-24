@@ -166,7 +166,7 @@ export function HoldingInstrumentTxList({
           <div>
             <span
               className={cn(
-                "inline-block px-1 py-px text-[9px] uppercase tracking-[0.05em] rounded-sm",
+                "inline-block px-1 py-px text-[9px] uppercase tracking-[0.05em] rounded-[2px]",
                 // WHY per-type class variants: even without custom hue tokens we
                 // can use the semantic text-positive / text-negative colours for
                 // BUY (inflow, positive = adding value) and SELL (outflow, negative

@@ -590,7 +590,7 @@ class UnresolvedResolutionWorker:
             logger.debug(
                 "unresolved_enqueue_conflict_skipped",
                 mention_id=str(mention.mention_id),
-                surface=mention.mention_text,
+                surface_hash=hashlib.sha256((mention.mention_text or "").encode()).hexdigest()[:16],
             )
             return None
 

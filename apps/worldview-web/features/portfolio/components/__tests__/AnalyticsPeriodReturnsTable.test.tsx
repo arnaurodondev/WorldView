@@ -92,7 +92,7 @@ describe("AnalyticsPeriodReturnsTable", () => {
     await waitFor(() => {
       // +20% return → "+20.00%". At least one row must show a positive return.
       const positiveReturns = screen.getAllByText(/^\+\d/);
-      expect(positiveReturns.length).toBeGreaterThan(0);
+      expect(positiveReturns.length).toBe(7);
     });
   });
 

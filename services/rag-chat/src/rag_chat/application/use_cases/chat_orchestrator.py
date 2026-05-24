@@ -77,9 +77,12 @@ if TYPE_CHECKING:
 log = structlog.get_logger(__name__)  # type: ignore[no-any-return]
 
 # Maximum characters for tool result text injected into LLM messages.
-# WHY 4000: OHLCV data for a year at ~50 chars/row ≈ 12,600 chars — well beyond
-# most context windows. Cap prevents context overflow (BP-225 class).
-_TOOL_RESULT_MAX_CHARS = 4000
+# PLAN-0093 E-5 T-E-5-05 (F-RAG-012): raised 4000 → 16000. The 4000 cap was
+# the same as the per-chunk cap on individual tool rows, so only the first
+# chunk of a 5-row search_documents response actually survived. 16k is well
+# under Llama-3.1-8B's 128K context and lets a 5-chunk response (≈ 12,500
+# chars including separators) reach the LLM in full.
+_TOOL_RESULT_MAX_CHARS = 16000
 
 # ── E-6: Agent budget governance ─────────────────────────────────────────────
 
@@ -119,6 +122,32 @@ class AgentBudget:
 # we normalise to lowercase for comparison with the seen_ids set.
 _ENTITY_REF_RE = re.compile(r"entity:[0-9a-f-]{36}", re.IGNORECASE)
 _ARTICLE_REF_RE = re.compile(r"article:[0-9a-f-]{36}", re.IGNORECASE)
+
+
+# PLAN-0093 E-5 T-E-5-01: orphan [N\d+] citation marker scrubber.
+# When the LLM emits "...[N7]" but only 3 items were retrieved, the marker
+# points to nothing. We strip orphans (and only orphans — valid [N1]-[N3]
+# stay put) and log so we can monitor the LLM's citation discipline.
+_CITATION_MARKER_RE = re.compile(r"\[N(\d+)\]")
+
+
+def _scrub_orphan_citations(text: str, max_index: int) -> tuple[str, int]:
+    """Strip any [N\\d+] marker where N > max_index. Returns (scrubbed, count).
+
+    max_index is the number of retrieved items (1-based marker count).
+    A 3-item retrieval makes [N1]..[N3] valid; [N4]+ are orphans.
+    """
+    count = 0
+
+    def _replace_orphan(m: re.Match) -> str:  # type: ignore[type-arg]
+        nonlocal count
+        idx = int(m.group(1))
+        if idx <= max_index and idx >= 1:
+            return str(m.group(0))
+        count += 1
+        return ""
+
+    return _CITATION_MARKER_RE.sub(_replace_orphan, text), count
 
 
 def _scrub_unseen_refs(text: str, seen_ids: set[str]) -> tuple[str, int]:
@@ -370,6 +399,14 @@ class ChatOrchestratorUseCase:
         had_tool_calls = False
         iteration_count = 0
 
+        # PLAN-0093 E-5 T-E-5-02: tool-call dedup cache across iterations.
+        # Key = (tool_name, frozenset((k, repr(v)) for k,v in input.items())).
+        # The cache holds the LAST result for that key so a re-emitted call
+        # is served from memory + a tool_dedup_hit log is emitted (F-RAG-007).
+        # We use repr(v) so unhashable inputs (lists, dicts) still produce a
+        # stable key without crashing on frozenset() of unhashable contents.
+        _tool_result_cache: dict[tuple[str, frozenset[tuple[str, str]]], Any] = {}
+
         # ── E-6: Agent loop ───────────────────────────────────────────────────
         for iteration in range(budget.max_iterations):
             # LLM non-streaming turn to decide next tool calls
@@ -438,11 +475,41 @@ class ChatOrchestratorUseCase:
                 _safe_input = {k: v for k, v in tc.input.items() if k not in {"query", "text"}}
                 yield p.emitter.emit_tool_call(tc.name, _safe_input)
 
-            # Execute all tool calls concurrently.
+            # ── PLAN-0093 E-5 T-E-5-02: tool-call dedup ───────────────────
+            # Split tool_calls into ones we've already executed (served from
+            # cache) and fresh ones to actually run. The cache key normalises
+            # args via repr() so list/dict inputs hash safely.
+            _fresh_calls: list[ToolUseBlock] = []
+            _fresh_keys: list[tuple[str, frozenset[tuple[str, str]]]] = []
+            _cached_pairs: list[tuple[ToolUseBlock, Any]] = []
+            for tc in tool_calls:
+                _key: tuple[str, frozenset[tuple[str, str]]] = (
+                    tc.name,
+                    frozenset((str(k), repr(v)) for k, v in tc.input.items()),
+                )
+                if _key in _tool_result_cache:
+                    log.info("tool_dedup_hit", tool=tc.name)  # type: ignore[no-any-return]
+                    _cached_pairs.append((tc, _tool_result_cache[_key]))
+                else:
+                    _fresh_calls.append(tc)
+                    _fresh_keys.append(_key)
+
+            # Execute fresh tool calls concurrently.
             _tool_t0 = time.monotonic()
-            tool_items = await tool_executor.execute_all(tool_calls)
+            _fresh_results = await tool_executor.execute_all(_fresh_calls) if _fresh_calls else []
             _tool_latency = time.monotonic() - _tool_t0
             cumulative_tool_latency += _tool_latency
+
+            # Populate cache with fresh results.
+            for _key, _res in zip(_fresh_keys, _fresh_results, strict=False):
+                _tool_result_cache[_key] = _res
+
+            # Re-assemble tool_items in the original call order so downstream
+            # zip(tool_calls, tool_items) lines up correctly.
+            _by_call_id: dict[int, Any] = {id(tc): r for tc, r in zip(_fresh_calls, _fresh_results, strict=False)}
+            for tc, cached in _cached_pairs:
+                _by_call_id[id(tc)] = cached
+            tool_items = [_by_call_id.get(id(tc)) for tc in tool_calls]
 
             # Flatten results.
             _flat_items: list[RetrievedItem] = []
@@ -688,11 +755,27 @@ class ChatOrchestratorUseCase:
         # ── Step 9: Output processing + citations ────────────────────────────────
         answer, citations = p.process_output(full_text, reranked)
 
+        # PLAN-0093 E-5 T-E-5-01: strip orphan [N\d+] citation markers that
+        # point past the retrieved-item count. The LLM occasionally emits
+        # e.g. "[N7]" when only 3 items were retrieved — those markers must
+        # not surface to users (F-RAG-006).
+        if reranked:
+            answer, _orphans = _scrub_orphan_citations(answer, max_index=len(reranked))
+            if _orphans:
+                log.warning("citation_marker_orphan", count=_orphans, retrieved=len(reranked))  # type: ignore[no-any-return]
+
         # E-12: stash the final answer on the audit object so execute_streaming's
         # finally block can pass it to finalize(). Using a private attribute to avoid
         # modifying the ChatAuditLogger public interface with a mutable answer field.
         audit._last_answer = answer  # type: ignore[attr-defined]
 
+        # PLAN-0093 E-5 T-E-5-03: emit the post-validation answer as a
+        # single ``final_answer`` event so ``execute_sync`` can prefer it
+        # over the accumulated draft token stream (avoids the F-CHAT-002
+        # response duplication where the user saw both the bad draft and
+        # the rewrite). Streaming clients ignore this — they already
+        # consumed the token stream.
+        yield p.emitter.emit_final_answer(answer)
         yield p.emitter.emit_citations(citations)
         yield p.emitter.emit_contradictions(contradiction_refs)
 
@@ -924,7 +1007,12 @@ class ChatOrchestratorUseCase:
             RateLimitExceededError,
         )
 
-        answer = ""
+        # PLAN-0093 E-5 T-E-5-03: prefer the ``final_answer`` event when the
+        # orchestrator emits it. The token stream is the live draft; the
+        # post-validation answer can differ (numeric-grounding rewrite,
+        # banner appended, etc.) and we must NOT concatenate both.
+        token_buffer = ""
+        final_answer: str | None = None
         citations: list = []
         contradictions: list = []
         metadata: dict = {}  # type: ignore[type-arg]
@@ -934,7 +1022,11 @@ class ChatOrchestratorUseCase:
             event_type = event.get("event", "")
             data = json.loads(event.get("data", "{}"))
             if event_type == "token":
-                answer += data.get("text", "")
+                token_buffer += data.get("text", "")
+            elif event_type == "final_answer":
+                # final_answer wins — the orchestrator already ran
+                # post-validation rewriting + banner appending on this text.
+                final_answer = data.get("text", "")
             elif event_type == "citations":
                 citations = data
             elif event_type == "contradictions":
@@ -943,6 +1035,9 @@ class ChatOrchestratorUseCase:
                 metadata = data
             elif event_type == "error" and error_payload is None:
                 error_payload = data
+        # If the orchestrator never emitted final_answer (e.g. cache hit
+        # path) fall through to the buffered token stream.
+        answer = final_answer if final_answer is not None else token_buffer
 
         if error_payload is not None:
             code = str(error_payload.get("code", "")).upper()

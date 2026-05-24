@@ -15,7 +15,7 @@ Tests verify:
 
 from __future__ import annotations
 
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 from uuid import UUID
 
 import pytest
@@ -60,10 +60,19 @@ def _make_session_factory() -> MagicMock:
 
 
 def _make_adapter(batches: list[list[CanonicalEntity]]) -> AsyncMock:
-    """Adapter whose list_unenriched yields the given batches in order."""
+    """Adapter whose claim_for_enrichment yields the given batches in order.
+
+    PLAN-0093 T-C-4-01: the worker no longer calls ``list_unenriched`` —
+    it now calls ``claim_for_enrichment`` which atomically returns + bumps
+    enrichment_attempts in a single SQL round-trip. Tests are updated to
+    mock the new method; ``list_unenriched`` is still wired here as a
+    no-op so any forgotten reference fails loudly rather than silently.
+    """
     adapter = AsyncMock()
-    adapter.list_unenriched = AsyncMock(side_effect=batches)
+    adapter.claim_for_enrichment = AsyncMock(side_effect=batches)
+    adapter.list_unenriched = AsyncMock(side_effect=AssertionError("worker must use claim_for_enrichment"))
     adapter.increment_attempts = AsyncMock()
+    adapter.decrement_attempts = AsyncMock()
     return adapter
 
 
@@ -97,20 +106,34 @@ async def test_drains_batches_until_empty() -> None:
     adapter.increment_attempts.assert_not_called()
 
 
-async def test_retryable_error_does_not_increment_attempts() -> None:
-    """RetryableEnrichmentError is a transient failure — attempts must NOT be bumped."""
+async def test_retryable_error_decrements_attempts() -> None:
+    """PLAN-0093 T-C-4-01: claim already incremented attempts; retryable error must
+    DECREMENT so transient failures don't burn an attempt (preserves the existing
+    semantic that 429s/network blips don't count against the 3-attempt budget).
+    """
     adapter = _make_adapter([[_entity(_E1)], []])
     use_case = AsyncMock()
     use_case.enrich = AsyncMock(side_effect=RetryableEnrichmentError("429 from EODHD"))
     worker = StructuredEnrichmentWorker(adapter, use_case, _make_session_factory())
 
-    await worker.run()
+    # Patch asyncio.sleep so the exponential-backoff sleep doesn't slow the test.
+    with patch(
+        "knowledge_graph.infrastructure.workers.structured_enrichment_worker.asyncio.sleep",
+        new=AsyncMock(),
+    ):
+        await worker.run()
 
+    # The rollback (decrement) is what the worker calls now.
+    adapter.decrement_attempts.assert_awaited_once()
+    # Old +1 path must NOT fire on retryable — that would double-charge.
     adapter.increment_attempts.assert_not_called()
 
 
-async def test_fatal_error_increments_attempts() -> None:
-    """FatalEnrichmentError must trigger _increment_attempts so the entity ages out."""
+async def test_fatal_error_does_not_double_increment() -> None:
+    """PLAN-0093 T-C-4-01: claim_for_enrichment already incremented at claim time,
+    so the worker MUST NOT call increment_attempts again on fatal errors —
+    double-charging would exhaust the 3-attempt budget after just 2 real failures.
+    """
     adapter = _make_adapter([[_entity(_E1)], []])
     use_case = AsyncMock()
     use_case.enrich = AsyncMock(side_effect=FatalEnrichmentError("LLM short response"))
@@ -118,14 +141,13 @@ async def test_fatal_error_increments_attempts() -> None:
 
     await worker.run()
 
-    adapter.increment_attempts.assert_awaited_once()
-    # The first positional arg should be the entity_id (UUID).
-    args, _kwargs = adapter.increment_attempts.call_args
-    assert args[0] == _E1
+    # Counter already advanced at claim time — no second bump.
+    adapter.increment_attempts.assert_not_called()
+    adapter.decrement_attempts.assert_not_called()
 
 
-async def test_unexpected_exception_increments_attempts() -> None:
-    """Generic Exception (not Retryable) is treated as Fatal — attempts++."""
+async def test_unexpected_exception_does_not_double_increment() -> None:
+    """PLAN-0093 T-C-4-01: same no-double-increment rule for unexpected RuntimeErrors."""
     adapter = _make_adapter([[_entity(_E1)], []])
     use_case = AsyncMock()
     use_case.enrich = AsyncMock(side_effect=RuntimeError("totally unexpected"))
@@ -133,28 +155,31 @@ async def test_unexpected_exception_increments_attempts() -> None:
 
     await worker.run()
 
-    adapter.increment_attempts.assert_awaited_once()
+    adapter.increment_attempts.assert_not_called()
 
 
-async def test_increment_attempts_failure_logs_but_does_not_crash_loop() -> None:
-    """When _increment_attempts itself raises, the loop continues with the next entity.
-
-    This guards against a DB outage during error-handling cascading into a worker crash:
-    the operator would lose visibility on every remaining entity in the batch.
+async def test_decrement_failure_logs_but_does_not_crash_loop() -> None:
+    """When _decrement_attempts itself raises (e.g. DB down during retryable rollback),
+    the loop continues with the next entity so the operator doesn't lose visibility
+    on the remaining batch.
     """
     adapter = _make_adapter([[_entity(_E1), _entity(_E2)], []])
     use_case = AsyncMock()
-    # Both entities fail fatally — ensures _increment_attempts is invoked twice.
-    use_case.enrich = AsyncMock(side_effect=FatalEnrichmentError("LLM short"))
-    # The increment itself raises (DB down).
-    adapter.increment_attempts = AsyncMock(side_effect=RuntimeError("DB down"))
+    # Both entities are retryable — exercises the decrement path twice.
+    use_case.enrich = AsyncMock(side_effect=RetryableEnrichmentError("429"))
+    adapter.decrement_attempts = AsyncMock(side_effect=RuntimeError("DB down"))
     worker = StructuredEnrichmentWorker(adapter, use_case, _make_session_factory())
 
-    # Must not propagate — the worker logs and continues.
-    await worker.run()
+    # Patch sleep so the exponential-backoff between retryable attempts doesn't slow the test.
+    with patch(
+        "knowledge_graph.infrastructure.workers.structured_enrichment_worker.asyncio.sleep",
+        new=AsyncMock(),
+    ):
+        # Must not propagate — the worker logs and continues.
+        await worker.run()
 
-    # Both rows attempted to increment despite the first one raising internally.
-    assert adapter.increment_attempts.await_count == 2
+    # Both retryable rows attempted to roll back despite the first one raising.
+    assert adapter.decrement_attempts.await_count == 2
 
 
 async def test_logs_summary_counts() -> None:
@@ -177,7 +202,13 @@ async def test_logs_summary_counts() -> None:
     use_case.enrich = AsyncMock(side_effect=_enrich)
     worker = StructuredEnrichmentWorker(adapter, use_case, _make_session_factory())
 
-    with capture_logs() as logs:
+    with (
+        capture_logs() as logs,
+        patch(
+            "knowledge_graph.infrastructure.workers.structured_enrichment_worker.asyncio.sleep",
+            new=AsyncMock(),
+        ),
+    ):
         await worker.run()
 
     summary = [le for le in logs if le.get("event") == "structured_enrichment_worker_complete"]

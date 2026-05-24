@@ -41,6 +41,7 @@ from __future__ import annotations
 import json
 import math
 import statistics
+import uuid as _uuid
 from datetime import UTC, date, datetime, timedelta
 from typing import TYPE_CHECKING, Any, cast
 
@@ -519,6 +520,10 @@ async def get_risk_metrics(
     """
     if not getattr(request.state, "user", None):
         raise HTTPException(status_code=401, detail="Authentication required")
+    try:
+        _uuid.UUID(portfolio_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail="Invalid portfolio_id — must be a UUID") from exc
 
     today = datetime.now(tz=UTC).date()
     start = today - timedelta(days=lookback_days)

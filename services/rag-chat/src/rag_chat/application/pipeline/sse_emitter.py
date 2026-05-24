@@ -60,6 +60,17 @@ class SSEEmitter:
         """Emit a single LLM token chunk."""
         return {"event": "token", "data": json.dumps({"text": text})}
 
+    def emit_final_answer(self, text: str) -> dict[str, str]:
+        """Emit the post-validation final answer in a single event.
+
+        PLAN-0093 E-5 T-E-5-03: ``execute_sync`` uses this to avoid
+        concatenating intermediate-draft token events together with the
+        post-validation rewrite (F-CHAT-002 response duplication).
+        Streaming clients can ignore this event — they already saw the
+        token-by-token stream.
+        """
+        return {"event": "final_answer", "data": json.dumps({"text": text})}
+
     def emit_citations(self, citations: list[Citation]) -> dict[str, str]:
         """Emit the citations block after LLM generation completes."""
         return {

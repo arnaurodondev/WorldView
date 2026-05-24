@@ -75,7 +75,7 @@ export function HoldingNewsList({
   const { data, isLoading } = useQuery<RankedNewsResponse>({
     queryKey: qk.news.forEntity(instrumentId),
     queryFn: () =>
-      createGateway(accessToken!).getEntityNews(instrumentId, { limit }),
+      createGateway(accessToken).getEntityNews(instrumentId, { limit }),
     enabled: Boolean(accessToken && instrumentId),
     staleTime: 300_000, // 5 min — news doesn't change second-to-second
   });

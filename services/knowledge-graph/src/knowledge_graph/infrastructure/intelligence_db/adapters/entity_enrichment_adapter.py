@@ -128,6 +128,32 @@ WHERE entity_id = :entity_id
             {"entity_id": str(entity_id)},
         )
 
+    async def decrement_attempts(
+        self,
+        entity_id: UUID,
+        session: AsyncSession,
+    ) -> None:
+        """PLAN-0093 T-C-4-01: undo a claim-time increment for retryable errors.
+
+        ``claim_for_enrichment`` unconditionally bumps ``enrichment_attempts``
+        so the counter advances even when the worker crashes mid-enrichment.
+        But retryable errors (transient 429s, network blips) shouldn't burn an
+        attempt — they're guaranteed-to-be-tried-again-soon failures, not
+        evidence that the entity can't be enriched. The worker calls this
+        method in the RetryableEnrichmentError branch to roll the claim back.
+
+        Floor-clamped at 0 (defensive — should never go negative under normal
+        flow because the corresponding claim incremented from >= 0).
+        """
+        await session.execute(
+            text("""
+UPDATE canonical_entities
+SET enrichment_attempts = GREATEST(enrichment_attempts - 1, 0)
+WHERE entity_id = :entity_id
+"""),
+            {"entity_id": str(entity_id)},
+        )
+
     async def list_unenriched(self, batch_size: int) -> list[CanonicalEntity]:
         """Return up to batch_size entities eligible for enrichment.
 
@@ -142,6 +168,13 @@ WHERE entity_id = :entity_id
         before exhausted ones), then ``enriched_at ASC NULLS FIRST`` (oldest
         stale rows + never-enriched rows first within an attempt bucket). This
         keeps the sweep both index-friendly and FIFO-ish.
+
+        PLAN-0093 C-4 (F-DB-ENRICHMENT-001 / F-DB-005): this method is read-only
+        and does NOT claim the rows — concurrent workers can race on the same
+        entity, and a worker that crashes mid-enrichment never advances the
+        attempts counter. Prefer the new :py:meth:`claim_for_enrichment` for
+        production code; ``list_unenriched`` is kept for tests + diagnostics
+        that need to inspect candidates without mutating state.
         """
         from knowledge_graph.domain.models import CanonicalEntity
 
@@ -162,6 +195,82 @@ LIMIT :batch_size
                 {"batch_size": batch_size},
             )
             rows = result.fetchall()
+
+        return [
+            CanonicalEntity(
+                entity_id=UUID(str(row[0])),
+                canonical_name=str(row[1]),
+                entity_type=str(row[2]),
+                ticker=row[3],
+                isin=row[4],
+                exchange=row[5],
+                metadata=dict(row[6]) if row[6] else {},
+                enrichment_attempts=int(row[7]),
+                description=row[8],
+                data_completeness=float(row[9]) if row[9] is not None else None,
+                enriched_at=row[10],
+            )
+            for row in rows
+        ]
+
+    async def claim_for_enrichment(self, batch_size: int) -> list[CanonicalEntity]:
+        """PLAN-0093 T-C-4-01 — atomic claim + attempt-increment in one SQL.
+
+        Solves F-DB-ENRICHMENT-001 / F-DB-005 (counter frozen at 0). The old
+        flow was:
+
+            1. SELECT eligible rows                 (list_unenriched)
+            2. (worker loop calls enrich)
+            3. on FAIL only: UPDATE +1              (increment_attempts)
+
+        Two failure modes:
+          - Worker crashes between step 1 and step 3 -> attempts never advances
+            -> partial-index keeps the row forever.
+          - Two workers race on the same row -> both succeed/fail with the same
+            stale value -> wasted LLM cycles + accounting drift.
+
+        The fix is one atomic UPDATE ... RETURNING that does both at claim
+        time. Rows whose attempts were already maxed out, or which another
+        worker has just snatched, are not returned -> the caller skips them.
+
+        The CTE picks eligible rows with the SAME ordering as
+        ``list_unenriched`` (matches the partial-index walk), then the outer
+        UPDATE locks + bumps + returns the claimed rows in one round-trip.
+        ``FOR UPDATE SKIP LOCKED`` inside the CTE prevents two workers from
+        ever picking the same row.
+
+        After enrichment SUCCESS the existing ``write_enrichment_result``
+        resets ``enrichment_attempts=0`` (CASE WHEN description IS NOT NULL),
+        so a successful claim still recovers fully. After enrichment FAILURE
+        nothing extra is needed — the +1 happened at claim time.
+        """
+        from knowledge_graph.domain.models import CanonicalEntity
+
+        async with self._sf() as session:
+            result = await session.execute(
+                text("""
+WITH eligible AS (
+    SELECT entity_id
+    FROM canonical_entities
+    WHERE (enriched_at IS NULL OR data_completeness < 0.5)
+      AND enrichment_attempts < 3
+    ORDER BY enrichment_attempts ASC, enriched_at ASC NULLS FIRST
+    LIMIT :batch_size
+    FOR UPDATE SKIP LOCKED
+)
+UPDATE canonical_entities ce
+SET enrichment_attempts = ce.enrichment_attempts + 1
+FROM eligible
+WHERE ce.entity_id = eligible.entity_id
+  AND ce.enrichment_attempts < 3
+RETURNING ce.entity_id, ce.canonical_name, ce.entity_type, ce.ticker,
+          ce.isin, ce.exchange, ce.metadata, ce.enrichment_attempts,
+          ce.description, ce.data_completeness, ce.enriched_at
+"""),
+                {"batch_size": batch_size},
+            )
+            rows = result.fetchall()
+            await session.commit()
 
         return [
             CanonicalEntity(

@@ -972,7 +972,7 @@ class BaseKafkaConsumer(ABC, Generic[TFailure]):
         * The loop honours :attr:`_stop_event` so a graceful shutdown does
           not log misleading failure events.
         """
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         consecutive_failures = 0
         while not self._stop_event.is_set():
             # Sleep first so we do not probe immediately on startup, where the
@@ -992,10 +992,13 @@ class BaseKafkaConsumer(ABC, Generic[TFailure]):
                 continue
 
             try:
-                await loop.run_in_executor(
-                    None,
-                    lambda: self._consumer.list_topics(timeout=self._probe_list_topics_timeout),
-                )
+                consumer = self._consumer  # snapshot to avoid TOCTOU if shutdown races
+                timeout = self._probe_list_topics_timeout
+
+                def _probe(c: Any = consumer, t: float = timeout) -> Any:
+                    return c.list_topics(timeout=t)
+
+                await loop.run_in_executor(None, _probe)
                 # Success → reset the counter.  This is the only place a
                 # success resets the counter, so a single good probe wipes
                 # out two prior misses (matches the spec).

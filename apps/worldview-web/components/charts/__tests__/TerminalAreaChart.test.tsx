@@ -92,6 +92,6 @@ describe("TerminalAreaChart", () => {
     // elements (axes + reference) than without it.
     const withoutLines = withoutZero.querySelectorAll("line").length;
     const withLines = withZero.querySelectorAll("line").length;
-    expect(withLines).toBeGreaterThanOrEqual(withoutLines);
+    expect(withLines).toBeGreaterThan(withoutLines);
   });
 });

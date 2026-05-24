@@ -204,9 +204,11 @@ async def test_realized_pnl_passes_404_through(
 
 @pytest.mark.asyncio
 async def test_risk_metrics_requires_auth(app) -> None:
+    # SEC-F001 (QA 2026-05-23): portfolio_id is now UUID-validated. Auth check
+    # runs BEFORE UUID validation so unauthenticated probes get 401, not 422.
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as client:
-        resp = await client.get("/v1/portfolios/p-1/risk-metrics")
+        resp = await client.get("/v1/portfolios/00000000-0000-0000-0000-000000000001/risk-metrics")
     assert resp.status_code == 401
 
 
@@ -232,7 +234,7 @@ async def test_risk_metrics_returns_nulls_for_short_history(
     transport = ASGITransport(app=authed_app)
     async with AsyncClient(transport=transport, base_url="http://test") as client:
         resp = await client.get(
-            "/v1/portfolios/p-1/risk-metrics",
+            "/v1/portfolios/00000000-0000-0000-0000-000000000001/risk-metrics",
             headers={"Authorization": f"Bearer {_make_jwt()}"},
         )
     assert resp.status_code == 200
@@ -255,7 +257,7 @@ async def test_risk_metrics_passes_value_history_404_through(
     transport = ASGITransport(app=authed_app)
     async with AsyncClient(transport=transport, base_url="http://test") as client:
         resp = await client.get(
-            "/v1/portfolios/missing/risk-metrics",
+            "/v1/portfolios/00000000-0000-0000-0000-00000000dead/risk-metrics",
             headers={"Authorization": f"Bearer {_make_jwt()}"},
         )
     assert resp.status_code == 404
@@ -267,7 +269,7 @@ async def test_risk_metrics_lookback_bounds(authed_app) -> None:
     transport = ASGITransport(app=authed_app)
     async with AsyncClient(transport=transport, base_url="http://test") as client:
         resp = await client.get(
-            "/v1/portfolios/p-1/risk-metrics",
+            "/v1/portfolios/00000000-0000-0000-0000-000000000001/risk-metrics",
             params={"lookback_days": "5"},
             headers={"Authorization": f"Bearer {_make_jwt()}"},
         )

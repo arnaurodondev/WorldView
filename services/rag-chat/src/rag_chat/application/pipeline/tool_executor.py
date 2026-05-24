@@ -242,6 +242,17 @@ class ToolExecutor:
 
     async def execute_all(self, tool_calls: list[ToolUseBlock]) -> list[RetrievedItem | list[RetrievedItem] | None]:
         """Execute up to _MAX_CONCURRENT_TOOLS calls concurrently via asyncio.gather."""
+        # PLAN-0093 E-5 T-E-5-04: warn when the LLM emits more tool calls than
+        # the concurrency cap allows. Previously the surplus was silently
+        # dropped; now operators get a structured event so they can spot
+        # over-aggressive tool-batching by the LLM (F-RAG-011).
+        if len(tool_calls) > _MAX_CONCURRENT_TOOLS:
+            log.warning(
+                "tool_calls_truncated",
+                requested=len(tool_calls),
+                kept=_MAX_CONCURRENT_TOOLS,
+                dropped_tool_names=[c.name for c in tool_calls[_MAX_CONCURRENT_TOOLS:]],
+            )
         capped = tool_calls[:_MAX_CONCURRENT_TOOLS]
         return list(await asyncio.gather(*[self.execute(tc) for tc in capped]))
 

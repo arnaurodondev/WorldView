@@ -118,7 +118,7 @@ export function HoldingDetailPanel({
         // WHY flex flex-col: header must stay fixed at top while content scrolls
         "flex flex-col",
         // Slide animation: translate out to the right when hidden
-        "transition-transform duration-[120ms] ease-out",
+        "transition-[transform] duration-[120ms] ease-out",
         // WHY translate-x-full (not visibility:hidden): the DOM stays mounted
         // so TanStack Query keeps its cache alive while the panel is hidden.
         holding !== null ? "translate-x-0" : "translate-x-full",
