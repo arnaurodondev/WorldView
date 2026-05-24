@@ -158,6 +158,130 @@ def _resolve_model_id(llm_chain: Any, provider_name: str) -> str:
     return ""
 
 
+# ── FIX-LIVE-E: Multi-tool fallback chain (F-LIVE-005C-FALLBACK) ─────────────
+#
+# WHY: Phase 5c Q2 ("Show me the latest news on MSTR — what should I know?")
+# verdict USELESS with error all_tools_failed.  The agent called
+# search_documents() which returned empty, then the all-tools-failed guard
+# fired without trying any alternative tool.  This module-level fallback table
+# gives the orchestrator a structured way to try semantically-equivalent tools
+# when the primary tool returns empty results on iteration 0.
+#
+# Two tables work in tandem:
+#   _FALLBACK_MAP            — ordered list of alt tools to try, by failed tool
+#   _FALLBACK_ARG_PROJECTIONS — per (failed_tool, alt_tool) arg shaper
+#
+# The projection function takes the failed-call args + an optional EntityContext
+# and returns valid args for the alt tool.  Returning None means "we cannot
+# build valid args for this alt tool" (e.g. no entity_id available) and the
+# orchestrator should move to the next alt in the chain.
+#
+# Pre-FIX-LIVE-E behavior: alt_args = dict(failed.input) verbatim, which raised
+# TypeError inside the handler's **args call when the alt tool's signature did
+# not accept the failed tool's keys.  ToolExecutor silently swallowed it as
+# "tool returned None".  See FIX-LIVE-E in
+# docs/audits/2026-05-24-qa-plan-0093-phase-5c-investigation-report.md.
+
+_FALLBACK_MAP: dict[str, list[str]] = {
+    # search_documents → relaxed-filter retry → claims → intelligence bundle
+    # WHY this order: cheapest first (same tool, looser filters), then claims
+    # (analyst-curated, narrower scope), then full intelligence bundle (heaviest
+    # S7Intel call but always returns SOMETHING for a known entity).
+    "search_documents": ["search_documents", "search_claims", "get_entity_intelligence"],
+}
+
+
+def _project_relaxed_search_documents(
+    failed_args: dict[str, Any],
+    ctx: Any,  # EntityContext | None  (avoid circular TYPE_CHECKING import at runtime)
+) -> dict[str, Any] | None:
+    """Identity-shape retry: same tool, drop source_types, widen window by 90d.
+
+    WHY widen: the most common reason search_documents returns empty for a
+    narrow date_from/date_to window is publication lag — a 90-day pad usually
+    recovers something.  We deliberately KEEP date filters (relaxed) so the
+    LLM still understands the result is approximately what it asked for.
+    """
+    out = {k: v for k, v in failed_args.items() if k != "source_types"}
+
+    # Best-effort date widening — only when both bounds are ISO strings.
+    from datetime import datetime as _dt
+    from datetime import timedelta as _td
+
+    df_raw = out.get("date_from")
+    dt_raw = out.get("date_to")
+    if isinstance(df_raw, str) and isinstance(dt_raw, str):
+        try:
+            df = _dt.fromisoformat(df_raw) - _td(days=90)
+            dt = _dt.fromisoformat(dt_raw) + _td(days=90)
+            out["date_from"] = df.date().isoformat()
+            out["date_to"] = dt.date().isoformat()
+        except ValueError:
+            # Leave dates untouched if parse fails; the retry is still useful.
+            pass
+    return out
+
+
+def _project_search_documents_to_search_claims(
+    failed_args: dict[str, Any],
+    ctx: Any,  # EntityContext | None
+) -> dict[str, Any] | None:
+    """search_documents → search_claims: keep entity scope, drop date/source filters.
+
+    search_claims requires ``entity_name``.  We use the EntityContext name when
+    available (entity-first queries always have ctx); otherwise pull the first
+    ticker from entity_tickers as a best-effort name.
+    """
+    entity_name: str | None = None
+    if ctx is not None and getattr(ctx, "name", None):
+        entity_name = ctx.name
+    else:
+        tickers = failed_args.get("entity_tickers") or []
+        if isinstance(tickers, list) and tickers:
+            entity_name = str(tickers[0])
+    if not entity_name:
+        return None
+    return {"entity_name": entity_name}
+
+
+def _project_search_documents_to_entity_intelligence(
+    failed_args: dict[str, Any],  # (unused; signature kept uniform)
+    ctx: Any,  # EntityContext | None
+) -> dict[str, Any] | None:
+    """search_documents → get_entity_intelligence: needs entity_id from ctx only.
+
+    Returns None when there is no EntityContext (e.g. open-domain question with
+    no entity resolved) because we have no UUID to look up.
+    """
+    if ctx is None or getattr(ctx, "entity_id", None) is None:
+        return None
+    return {"entity_id": str(ctx.entity_id)}
+
+
+# Keyed by (failed_tool, alt_tool).  Default behaviour (when a pair is absent)
+# is to copy args verbatim — this preserves backward compatibility with any
+# alt tool whose signature happens to match the failed tool's.
+_FALLBACK_ARG_PROJECTIONS: dict[tuple[str, str], Any] = {
+    ("search_documents", "search_documents"): _project_relaxed_search_documents,
+    ("search_documents", "search_claims"): _project_search_documents_to_search_claims,
+    ("search_documents", "get_entity_intelligence"): _project_search_documents_to_entity_intelligence,
+}
+
+
+def _build_fallback_args(
+    failed_tool: str,
+    alt_tool: str,
+    failed_args: dict[str, Any],
+    ctx: Any,
+) -> dict[str, Any] | None:
+    """Return projected args for (failed_tool → alt_tool), or None if not buildable."""
+    projector = _FALLBACK_ARG_PROJECTIONS.get((failed_tool, alt_tool))
+    if projector is None:
+        # No projection registered — copy verbatim (legacy/default behavior).
+        return dict(failed_args)
+    return projector(failed_args, ctx)  # type: ignore[no-any-return]
+
+
 class ChatOrchestratorUseCase:
     """Coordinate all pipeline steps for a single chat request.
 
@@ -485,15 +609,53 @@ class ChatOrchestratorUseCase:
             # On the first iteration, if all tools fail and there are no pending
             # actions, emit error and stop. This prevents hallucination on empty context.
             # On subsequent iterations we use the consecutive_errors soft budget instead.
+            #
+            # FIX-LIVE-E (2026-05-24): before surrendering, try the multi-tool
+            # fallback chain.  For each failed tool with a registered
+            # _FALLBACK_MAP entry, walk the alt tools in order, project the args
+            # via _build_fallback_args, and invoke them via the same executor.
+            # SSE events are emitted with is_fallback=true so the UI/operator
+            # can see the retry visibly.  Cite F-LIVE-005C-FALLBACK.
             if iteration == 0 and _all_failed and not _action_pending_items:
-                log.warning(  # type: ignore[no-any-return]
-                    "all_tools_failed",
-                    tool_count=len(tool_calls),
-                    tools=[tc.name for tc in tool_calls],
-                    query=request.message[:100],
+                _fallback_events: list[dict[str, str]] = []
+                _fallback_items = await self._run_fallback_chain(
+                    tool_calls=tool_calls,
+                    tool_items=tool_items,
+                    tool_executor=tool_executor,
+                    emitter=p.emitter,
+                    audit=audit,
+                    entity_context=entity_context,
+                    sse_events_out=_fallback_events,
                 )
-                yield p.emitter.emit_error("all_tools_failed", "Unable to retrieve relevant data")
-                return
+                # Yield any SSE events the fallback chain produced (tool_call,
+                # tool_result).  Doing this after the await keeps the helper
+                # synchronous-in-effect for the orchestrator caller.
+                for _ev in _fallback_events:
+                    yield _ev
+
+                # If fallback recovered ANY items, reset _all_failed + append to
+                # the accumulated pool and continue the loop normally — the LLM
+                # will see the data on its next turn.
+                if _fallback_items:
+                    _all_failed = False
+                    non_none_items.extend(_fallback_items)
+                    # Harvest IDs from fallback items for E-7 citation allowlist.
+                    for _it in _fallback_items:
+                        _raw_id = getattr(_it, "item_id", None)
+                        if _raw_id:
+                            seen_item_ids.add(str(_raw_id).lower())
+                        _src_id = getattr(_it, "source_id", None)
+                        if _src_id:
+                            seen_item_ids.add(str(_src_id).lower())
+                else:
+                    log.warning(  # type: ignore[no-any-return]
+                        "all_tools_failed",
+                        tool_count=len(tool_calls),
+                        tools=[tc.name for tc in tool_calls],
+                        query=request.message[:100],
+                    )
+                    yield p.emitter.emit_error("all_tools_failed", "Unable to retrieve relevant data")
+                    return
 
             # ── E-6: Soft budget checks ───────────────────────────────────────
             if _all_failed:
@@ -674,6 +836,106 @@ class ChatOrchestratorUseCase:
 
         yield p.emitter.emit_metadata(thread_id, asst_msg_id, intent.value, provider_name, latency_ms)
         yield p.emitter.emit_done()
+
+    async def _run_fallback_chain(
+        self,
+        *,
+        tool_calls: list[ToolUseBlock],
+        tool_items: list[Any],
+        tool_executor: Any,
+        emitter: Any,
+        audit: Any,
+        entity_context: Any,
+        sse_events_out: list[dict[str, str]],
+    ) -> list[RetrievedItem]:
+        """FIX-LIVE-E: Try multi-tool fallback chain for each failed primary tool.
+
+        For each ``tool_calls[i]`` whose ``tool_items[i]`` returned empty/None,
+        walk the registered alt chain from ``_FALLBACK_MAP``, project args via
+        ``_build_fallback_args``, and invoke the alt via ``tool_executor.execute``.
+        Stop at the first alt that returns items.
+
+        SSE events (tool_call with ``is_fallback=true``, then tool_result) are
+        appended to ``sse_events_out`` so the orchestrator can yield them in
+        order after this coroutine returns.
+
+        Args:
+            tool_calls:      LLM-emitted primary tool calls (parallel to tool_items).
+            tool_items:      Per-call results (None / [] / list[RetrievedItem]).
+            tool_executor:   Per-request ToolExecutor (already auth-scoped).
+            emitter:         SSE emitter (pipeline.emitter).
+            audit:           ChatAuditLogger for E-12 tool-call recording.
+            entity_context:  EntityContext | None for arg-projection.
+            sse_events_out:  Mutable list — events appended in emission order.
+
+        Returns:
+            Flat list of RetrievedItems recovered across all fallback attempts.
+        """
+        from rag_chat.application.pipeline.tool_executor import ToolUseBlock
+
+        recovered: list[RetrievedItem] = []
+
+        for tc, item in zip(tool_calls, tool_items, strict=False):
+            _count = len(item) if isinstance(item, list) else (1 if item is not None else 0)
+            if _count > 0:
+                continue  # primary tool succeeded — no fallback needed
+
+            alt_chain = _FALLBACK_MAP.get(tc.name) or []
+            if not alt_chain:
+                continue  # no fallback registered for this tool
+
+            for alt_name in alt_chain:
+                # Skip the trivial identity case: only allow same-tool re-invocation
+                # when an explicit projection (e.g. relaxed-filter retry) is registered.
+                if alt_name == tc.name and (tc.name, alt_name) not in _FALLBACK_ARG_PROJECTIONS:
+                    continue
+
+                projected = _build_fallback_args(tc.name, alt_name, tc.input, entity_context)
+                if projected is None:
+                    log.warning(  # type: ignore[no-any-return]
+                        "tool_fallback_no_valid_args",
+                        failed_tool=tc.name,
+                        alt_tool=alt_name,
+                    )
+                    continue
+
+                # Emit SSE tool_call (is_fallback=true) so the UI shows the retry.
+                _safe_input = {k: v for k, v in projected.items() if k not in {"query", "text"}}
+                sse_events_out.append(
+                    emitter.emit_tool_call(
+                        alt_name,
+                        _safe_input,
+                        is_fallback=True,
+                        fallback_of=tc.name,
+                    )
+                )
+
+                _alt_block = ToolUseBlock(name=alt_name, input=projected, tool_use_id=f"fallback_{alt_name}")
+                _alt_result = await tool_executor.execute(_alt_block)
+                _alt_count = (
+                    len(_alt_result) if isinstance(_alt_result, list) else (1 if _alt_result is not None else 0)
+                )
+                _alt_status = "ok" if _alt_count > 0 else ("empty" if _alt_result is not None else "error")
+
+                sse_events_out.append(emitter.emit_tool_result(alt_name, status=_alt_status, item_count=_alt_count))
+
+                # Record on audit log so /chat_audit_log captures the retry.
+                audit.record_tool_call(alt_name, success=_alt_count > 0, latency_ms=0)
+
+                if _alt_count > 0:
+                    log.info(  # type: ignore[no-any-return]
+                        "tool_fallback_succeeded",
+                        failed_tool=tc.name,
+                        alt_tool=alt_name,
+                        item_count=_alt_count,
+                    )
+                    if isinstance(_alt_result, list):
+                        recovered.extend(_alt_result)
+                    else:
+                        recovered.append(_alt_result)
+                    break  # first hit wins; move on to next failed primary tool
+
+        return recovered
 
     async def execute_sync(
         self,
