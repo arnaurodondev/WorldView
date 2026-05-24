@@ -344,6 +344,38 @@ Rules:
 5. Worktree isolation is a convenience, not a safety net; commits are the only reliable
    persistence mechanism
 
+### R35: Every long-running service MUST declare `depends_on: service_healthy` for its critical dependencies
+**Why**: When a Compose stack is recreated (rebuild, machine restart, `docker compose up -d`),
+service start order without `depends_on` is undefined. A FastAPI service that boots before
+Postgres has finished initializing will crash-loop until the restart policy gives up, or — worse —
+will start "successfully" against a stale DNS cache and silently stop processing messages
+when the dependency's IP later changes (BP-545). Healthcheck-aware dependency declarations
+ensure dependents only start once the dependency is genuinely ready to serve traffic.
+
+Rules:
+1. Every long-running service (FastAPI APIs, ML inference servers, consumers, schedulers,
+   Next.js frontend) that talks to `postgres`, `valkey`, `kafka`, or an LLM endpoint MUST
+   declare:
+   ```yaml
+   depends_on:
+     postgres:
+       condition: service_healthy
+     kafka:
+       condition: service_healthy
+   ```
+   in `infra/compose/docker-compose.yml`.
+2. `condition: service_started` is INSUFFICIENT — `service_started` only waits for the
+   container's main process to spawn, not for it to be accepting connections. Must be
+   `service_healthy` (which requires the dependency itself to declare a working `healthcheck:`).
+3. Optional dependencies (e.g. tracing collector, optional cache) MAY use `condition: service_started`
+   but the consumer code MUST then wrap startup probes in `@retry_on_startup` so a flaky
+   optional dep does not crash the service.
+4. New services added to `docker-compose.yml` are reviewed for this rule via REVIEW_CHECKLIST
+   §7b ("depends_on declares service_healthy for all critical dependencies").
+5. Healthcheck contracts: the `kafka`, `postgres`, and `valkey` infra services MUST themselves
+   keep their `healthcheck:` blocks current — a `healthcheck: { test: ["CMD", "true"] }` stub
+   defeats the entire chain.
+
 ---
 
 ## Summary Table
@@ -384,3 +416,4 @@ Rules:
 | R32 | Operational | MUST |
 | R33 | Operational | MUST |
 | R34 | Operational | MUST |
+| R35 | Infrastructure | MUST |
