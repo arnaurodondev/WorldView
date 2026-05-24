@@ -75,10 +75,35 @@ class PathExplanationBatchWorker:
     async def run(self) -> None:
         """APScheduler-compatible entry point.
 
+        Phase 0 (PLAN-0093 D-1, T-D-1-02): refresh the
+                ``path_insight_explanation_pending_total`` gauge so Prometheus
+                always exposes the current backlog even on idle ticks.
+        Phase 0b (PLAN-0093 D-1, T-D-1-03): null-guard — if the explanation
+                service has no LLM client wired, log CRITICAL and short-circuit
+                the cycle instead of silently looping forever while writing
+                NULL explanations.  HR-031 silent-failure prevention.
         Phase 1: fetch a batch of un-explained insights (READ, no LLM).
         Phase 2: call PathExplanationService for each (LLM, no session).
         Phase 3: PathExplanationService persists each result in its own session.
         """
+        # Phase 0 — update the pending-explanation gauge.  Best-effort: a
+        # transient SELECT failure must not crash the worker; the LLM phase is
+        # what actually matters.
+        await self._update_pending_gauge()
+
+        # Phase 0b — fail-fast guard (HR-031): the only way the explanation
+        # service is a no-op is when the LLM client is None (DEEPINFRA_API_KEY
+        # missing or every provider in the fallback chain unconfigured).  In
+        # that state we must NOT keep looping silently — emit a CRITICAL log
+        # and return without touching the DB.  The next scheduler tick will
+        # re-check (so transient credential rotation is handled).
+        if getattr(self._explanation_service, "_llm", None) is None:
+            logger.critical(  # type: ignore[no-any-return]
+                "path_insight_llm_client_unavailable",
+                reason="explanation_service.llm is None — check DEEPINFRA_API_KEY / fallback chain",
+            )
+            return
+
         rows = await self._fetch_unexplained_batch()
         if not rows:
             logger.info("path_explanation_batch_worker_no_rows")  # type: ignore[no-any-return]
@@ -121,6 +146,43 @@ class PathExplanationBatchWorker:
             "path_explanation_batch_worker_complete",
             **counters,
         )
+
+    async def _update_pending_gauge(self) -> None:
+        """Refresh ``path_insight_explanation_pending_total`` (T-D-1-02).
+
+        Counts ``path_insights`` rows where ``llm_explanation IS NULL`` AND
+        ``computed_at`` is older than 1 hour — so freshly-seeded rows that
+        are about to be explained on this very tick are not counted as a
+        backlog.
+
+        Best-effort: any DB failure here is swallowed (warning log).  The
+        worker's job is to generate explanations, not to compute metrics —
+        a transient SELECT failure must not block the LLM phase.
+        """
+        from knowledge_graph.infrastructure.metrics.prometheus import (
+            path_insight_explanation_pending_total,
+        )
+
+        try:
+            async with self._sf() as session:
+                result = await session.execute(
+                    text("""
+SELECT count(*)
+FROM path_insights
+WHERE llm_explanation IS NULL
+  AND computed_at < now() - interval '1 hour'
+""")
+                )
+                row = result.fetchone()
+                pending = int(row[0]) if row and row[0] is not None else 0
+        except Exception as exc:
+            logger.warning(  # type: ignore[no-any-return]
+                "path_insight_pending_gauge_update_failed",
+                error=str(exc),
+            )
+            return
+
+        path_insight_explanation_pending_total.set(pending)
 
     async def _fetch_unexplained_batch(
         self,

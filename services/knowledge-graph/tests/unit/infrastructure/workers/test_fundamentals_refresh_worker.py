@@ -635,3 +635,137 @@ class TestBatchEmbedding:
         assert embed_call_count == 1, f"Expected 1 embed call, got {embed_call_count}"
         # All 3 entities have narratives → 3 upserts.
         assert emb_repo.upsert.await_count == 3
+
+
+# ── PLAN-0093 D-2 (T-D-2-01) — per-ticker exponential backoff tests ──────────
+
+
+class TestFundamentalsRefreshBackoff:
+    """Unit tests for the per-ticker Valkey backoff schedule (T-D-2-01).
+
+    These exercise the pure ``_next_backoff_seconds`` helper plus the
+    instance methods that read/write the Valkey key.  No DB session is
+    actually opened (the helpers are isolated from the run() pipeline).
+    """
+
+    def test_first_404_backs_off_1h(self) -> None:
+        """No prior backoff → escalate to 3600 s (1h)."""
+        from knowledge_graph.infrastructure.workers.fundamentals_refresh import (
+            _BACKOFF_STAGE_1H_S,
+            FundamentalsRefreshWorker,
+        )
+
+        valkey = AsyncMock()
+        valkey.get = AsyncMock(return_value=None)  # no prior key
+        valkey.set = AsyncMock()
+        valkey.delete = AsyncMock()
+
+        sf, _emb_repo = _make_session_factory([])
+        llm = AsyncMock()
+        worker = FundamentalsRefreshWorker(
+            sf,
+            llm,
+            "http://market-data:8003",
+            valkey_client=valkey,
+        )
+
+        new_s = asyncio.run(worker._escalate_backoff("AAPL"))
+        assert new_s == _BACKOFF_STAGE_1H_S
+        # SET key with TTL == 3600 s.
+        valkey.set.assert_awaited_once()
+        call_args = valkey.set.await_args
+        assert call_args.args[0] == "s7:fundamentals:backoff:aapl"
+        assert call_args.args[1] == str(_BACKOFF_STAGE_1H_S)
+        assert call_args.kwargs.get("ex") == _BACKOFF_STAGE_1H_S
+
+    def test_consecutive_errors_escalate_to_7d(self) -> None:
+        """3rd consecutive error → 7d backoff (604800 s)."""
+        from knowledge_graph.infrastructure.workers.fundamentals_refresh import (
+            _BACKOFF_STAGE_1D_S,
+            _BACKOFF_STAGE_1H_S,
+            _BACKOFF_STAGE_7D_S,
+            FundamentalsRefreshWorker,
+            _next_backoff_seconds,
+        )
+
+        # Verify the pure escalation table.
+        assert _next_backoff_seconds(None) == _BACKOFF_STAGE_1H_S
+        assert _next_backoff_seconds(_BACKOFF_STAGE_1H_S) == _BACKOFF_STAGE_1D_S
+        assert _next_backoff_seconds(_BACKOFF_STAGE_1D_S) == _BACKOFF_STAGE_7D_S
+        # Terminal stage stays at 7d (we never escalate past 7d).
+        assert _next_backoff_seconds(_BACKOFF_STAGE_7D_S) == _BACKOFF_STAGE_7D_S
+
+        # End-to-end: starting from "currently at 1d" → escalate sets 7d.
+        valkey = AsyncMock()
+        valkey.get = AsyncMock(return_value=str(_BACKOFF_STAGE_1D_S))
+        valkey.set = AsyncMock()
+
+        sf, _emb_repo = _make_session_factory([])
+        llm = AsyncMock()
+        worker = FundamentalsRefreshWorker(
+            sf,
+            llm,
+            "http://market-data:8003",
+            valkey_client=valkey,
+        )
+
+        new_s = asyncio.run(worker._escalate_backoff("BADTICK"))
+        assert new_s == _BACKOFF_STAGE_7D_S
+        valkey.set.assert_awaited_once()
+        assert valkey.set.await_args.kwargs.get("ex") == _BACKOFF_STAGE_7D_S
+
+    def test_success_resets_backoff(self) -> None:
+        """A successful HTTP fetch → DELETE the backoff key."""
+        from knowledge_graph.infrastructure.workers.fundamentals_refresh import FundamentalsRefreshWorker
+
+        valkey = AsyncMock()
+        valkey.delete = AsyncMock()
+
+        sf, _emb_repo = _make_session_factory([])
+        llm = AsyncMock()
+        worker = FundamentalsRefreshWorker(
+            sf,
+            llm,
+            "http://market-data:8003",
+            valkey_client=valkey,
+        )
+        asyncio.run(worker._reset_backoff("AAPL"))
+        valkey.delete.assert_awaited_once_with("s7:fundamentals:backoff:aapl")
+
+
+# ── PLAN-0093 D-2 (T-D-2-02) — HTTP status-code logging tests ───────────────
+
+
+class TestFundamentalsRefreshStatusLogging:
+    """Verify _fetch_json logs status code + ticker + latency on every call."""
+
+    def test_5xx_logs_at_error(self, capsys: pytest.CaptureFixture[str]) -> None:
+        """503 response → ERROR log with structured fields.
+
+        structlog routes output to stdout in the dev formatter, so we
+        capture via ``capsys`` instead of ``caplog`` (which only sees
+        stdlib-logger records).
+        """
+        from knowledge_graph.infrastructure.workers.fundamentals_refresh import FundamentalsRefreshWorker
+
+        mock_response = MagicMock()
+        mock_response.status_code = 503
+        mock_response.content = b""
+        http = AsyncMock()
+        http.get = AsyncMock(return_value=mock_response)
+
+        result = asyncio.run(
+            FundamentalsRefreshWorker._fetch_json(
+                http,
+                "http://market-data:8003/api/v1/fundamentals/abc",
+                ticker="AAPL",
+            ),
+        )
+        assert result is None
+        captured = capsys.readouterr()
+        # All four assertions must hold to prove the log record is well-formed.
+        combined = captured.out + captured.err
+        assert "market_data_call_server_error" in combined
+        assert "status_code=503" in combined
+        assert "ticker=AAPL" in combined
+        assert "latency_ms=" in combined

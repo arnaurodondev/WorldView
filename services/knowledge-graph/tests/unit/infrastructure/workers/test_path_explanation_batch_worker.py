@@ -41,10 +41,19 @@ def _make_edges_json(n: int = 1) -> str:
     return json.dumps([{"relation_type": "COMPETES_WITH", "confidence": 0.8} for _ in range(n)])
 
 
-def _make_session_factory(rows: list[tuple]) -> tuple[MagicMock, AsyncMock]:
-    """Build a mock session factory that returns the given rows from execute()."""
+def _make_session_factory(rows: list[tuple], gauge_count: int = 0) -> tuple[MagicMock, AsyncMock]:
+    """Build a mock session factory that returns the given rows from execute().
+
+    ``gauge_count`` is the integer returned by ``fetchone()`` for the
+    ``_update_pending_gauge`` SELECT (PLAN-0093 D-1 T-D-1-02).  Default 0
+    keeps the legacy tests behaviour: no pending backlog reported.
+    """
     result_mock = MagicMock()
     result_mock.fetchall = MagicMock(return_value=rows)
+    # PLAN-0093 D-1: the new pending-gauge SELECT uses ``fetchone`` and
+    # expects a one-element tuple of (count,) — return a configurable int
+    # so unit tests can assert the gauge value end-to-end.
+    result_mock.fetchone = MagicMock(return_value=(gauge_count,))
 
     session = AsyncMock()
     session.execute = AsyncMock(return_value=result_mock)
@@ -261,3 +270,121 @@ class TestPathExplanationBatchWorkerConcurrency:
 
         # Peak should not exceed our concurrency limit.
         assert peak_count <= concurrency
+
+
+# ── PLAN-0093 D-1, T-D-1-02 — pending-gauge tests ─────────────────────────────
+
+
+class TestPathExplanationPendingGauge:
+    """T-D-1-02 gauge update tests.
+
+    These tests stub out the ``run()`` flow and exercise the
+    ``_update_pending_gauge`` helper directly so we can assert the gauge
+    value without spinning up the full LLM phase.
+    """
+
+    def test_pending_gauge_increments_on_stale_rows(self) -> None:
+        """DB reports 5 stale rows → gauge value == 5."""
+        from knowledge_graph.infrastructure.metrics.prometheus import (
+            path_insight_explanation_pending_total,
+        )
+        from knowledge_graph.infrastructure.workers.path_explanation_batch_worker import (
+            PathExplanationBatchWorker,
+        )
+
+        factory, _session = _make_session_factory([], gauge_count=5)
+        worker = PathExplanationBatchWorker(
+            session_factory=factory,
+            explanation_service=MagicMock(),
+        )
+        asyncio.run(worker._update_pending_gauge())
+        # ``_value.get()`` is the documented prometheus_client gauge accessor.
+        assert path_insight_explanation_pending_total._value.get() == 5
+
+    def test_pending_gauge_excludes_recent_rows(self) -> None:
+        """When the SELECT (which filters by computed_at < now() - 1 hour) returns 0 → gauge == 0.
+
+        The 1-hour exclusion is enforced by the SQL itself, so the gauge
+        update logic just trusts the COUNT(*).  This test verifies the
+        round-trip: 0 returned → 0 reported.
+        """
+        from knowledge_graph.infrastructure.metrics.prometheus import (
+            path_insight_explanation_pending_total,
+        )
+        from knowledge_graph.infrastructure.workers.path_explanation_batch_worker import (
+            PathExplanationBatchWorker,
+        )
+
+        factory, _session = _make_session_factory([], gauge_count=0)
+        worker = PathExplanationBatchWorker(
+            session_factory=factory,
+            explanation_service=MagicMock(),
+        )
+        asyncio.run(worker._update_pending_gauge())
+        assert path_insight_explanation_pending_total._value.get() == 0
+
+
+# ── PLAN-0093 D-1, T-D-1-03 — null-guard / fail-fast tests ────────────────────
+
+
+class TestPathExplanationLLMNullGuard:
+    """T-D-1-03 — worker must NOT loop silently when no LLM client is wired."""
+
+    def test_run_exits_critical_when_llm_client_none(self, caplog: pytest.LogCaptureFixture) -> None:
+        """When explanation_service._llm is None → CRITICAL log + no fetch_batch call."""
+        import logging
+
+        from knowledge_graph.infrastructure.workers.path_explanation_batch_worker import (
+            PathExplanationBatchWorker,
+        )
+
+        factory, session = _make_session_factory([])
+        # Build a "real-ish" service whose _llm attribute is explicitly None
+        # (mirroring the production state when DEEPINFRA_API_KEY is missing).
+        service = MagicMock()
+        service._llm = None
+        # Track whether generate_explanation gets called — it must not.
+        gen_calls: list[UUID] = []
+
+        async def _generate(insight_id: UUID, path_nodes: list, path_edges: list) -> None:
+            gen_calls.append(insight_id)
+
+        service.generate_explanation = _generate
+
+        worker = PathExplanationBatchWorker(
+            session_factory=factory,
+            explanation_service=service,
+        )
+
+        with caplog.at_level(logging.CRITICAL):
+            asyncio.run(worker.run())
+
+        # The LLM phase must be short-circuited.
+        assert gen_calls == []
+        # The SELECT in _fetch_unexplained_batch must NOT run when guard fires;
+        # only the gauge SELECT (one call) is allowed.
+        assert session.execute.call_count == 1
+        # Either structlog captured the critical event or a logger record was made.
+        # We at minimum require execute() to be skipped past the gauge call.
+
+    def test_run_resumes_after_llm_client_is_restored(self) -> None:
+        """When _llm is restored to a non-None value, run() should process rows again."""
+        from knowledge_graph.infrastructure.workers.path_explanation_batch_worker import (
+            PathExplanationBatchWorker,
+        )
+
+        insight_ids = [uuid4()]
+        rows = [(str(iid), _make_nodes_json(["A", "B"]), _make_edges_json(1)) for iid in insight_ids]
+        factory, _session = _make_session_factory(rows)
+        called: list[str] = []
+        service = _make_exp_service(called=called)
+        # MagicMock attribute access already returns a (non-None) MagicMock,
+        # so the guard is naturally satisfied.  Sanity-check that.
+        assert getattr(service, "_llm", None) is not None
+
+        worker = PathExplanationBatchWorker(
+            session_factory=factory,
+            explanation_service=service,
+        )
+        asyncio.run(worker.run())
+        assert called == [str(insight_ids[0])]

@@ -482,6 +482,10 @@ def build_workers(
                     force_regen_batch_size=settings.summary_worker_force_regen_batch_size,
                     read_session_factory=_read_factory,
                     gemini_extraction_client=gemini_extraction_client,
+                    # PLAN-0093 D-3 T-D-3-02: raise to 5 concurrent LLM calls
+                    # per cycle so a 50-row batch drains in roughly the same
+                    # wall time as the previous 20-row sequential batch.
+                    concurrency=5,
                 ),
                 "definition_embedding": def_worker,
                 "narrative_embedding": NarrativeRefreshWorker(
@@ -506,6 +510,11 @@ def build_workers(
                         type("_", (), {"get_secret_value": lambda _: ""})(),
                     ).get_secret_value(),
                     read_session_factory=_read_factory,
+                    # PLAN-0093 D-2 (T-D-2-01): pass the same Valkey client used
+                    # by the AGE sync worker for per-ticker backoff state.  When
+                    # Valkey is not wired (unit-test path) the worker simply
+                    # never backs off — behaviour is identical to pre-D-2.
+                    valkey_client=valkey_client,
                 ),
                 "provisional_enrichment": ProvisionalEnrichmentWorker(
                     write_session_factory,
