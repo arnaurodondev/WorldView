@@ -506,6 +506,11 @@ def build_workers(
                         type("_", (), {"get_secret_value": lambda _: ""})(),
                     ).get_secret_value(),
                     read_session_factory=_read_factory,
+                    # PLAN-0093 D-2 (T-D-2-01): pass the same Valkey client used
+                    # by the AGE sync worker for per-ticker backoff state.  When
+                    # Valkey is not wired (unit-test path) the worker simply
+                    # never backs off — behaviour is identical to pre-D-2.
+                    valkey_client=valkey_client,
                 ),
                 "provisional_enrichment": ProvisionalEnrichmentWorker(
                     write_session_factory,
