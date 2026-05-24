@@ -233,14 +233,36 @@ FOR UPDATE SKIP LOCKED
         """Fetch relations needing a fresh LLM summary (Worker 13C).
 
         # max_instances=1 APScheduler coalescing prevents concurrent calls — no row-level lock needed
+
+        PLAN-0093 D-3 T-D-3-02 starve-avoidance ordering:
+          1. summary_stale = true rows always come first (was already
+             enforced by the WHERE clause; restated as primary ORDER BY for
+             documentation).
+          2. last_summary_attempt_at NULLS FIRST — brand-new stale rows
+             (never attempted) beat rows that have already failed N times.
+          3. summary_attempt_count ASC — among rows that *have* been
+             attempted, fewer-failed rows go first.
+          4. confidence DESC, latest_evidence_at DESC — original tie-breakers.
         """
         result = await self._session.execute(
             text("""
-SELECT relation_id, semantic_mode, decay_class, decay_alpha, confidence
+SELECT
+    relation_id,
+    semantic_mode,
+    decay_class,
+    decay_alpha,
+    confidence,
+    last_summary_attempt_at,
+    summary_attempt_count
 FROM relations
 WHERE summary_stale = true
   AND confidence IS NOT NULL
-ORDER BY confidence DESC, latest_evidence_at DESC
+ORDER BY
+    (summary_stale = true) DESC,
+    last_summary_attempt_at NULLS FIRST,
+    summary_attempt_count ASC,
+    confidence DESC,
+    latest_evidence_at DESC
 LIMIT :limit
 """),
             {"limit": limit},
@@ -253,9 +275,38 @@ LIMIT :limit
                 "decay_class": r[2],
                 "decay_alpha": float(r[3]),
                 "confidence": float(r[4]) if r[4] is not None else None,
+                # PLAN-0093 D-3: expose attempt-tracking fields so the
+                # worker can detect the "stuck" condition (>= 3 attempts).
+                "last_summary_attempt_at": r[5],
+                "summary_attempt_count": int(r[6]) if r[6] is not None else 0,
             }
             for r in rows
         ]
+
+    async def count_summary_backlog(self) -> int:
+        """Count relations needing a summary (T-D-3-01 backlog gauge).
+
+        Returns the union of two conditions:
+          - summary_stale = true (writer has flagged it for re-summary), OR
+          - no current row in relation_summaries (never summarised at all).
+
+        Used by SummaryWorker to refresh the ``relation_summary_backlog``
+        Prometheus gauge once per cycle.
+        """
+        result = await self._session.execute(
+            text("""
+SELECT count(*)
+FROM relations r
+WHERE r.summary_stale = true
+   OR NOT EXISTS (
+       SELECT 1 FROM relation_summaries rs
+       WHERE rs.relation_id = r.relation_id
+         AND rs.is_current = true
+   )
+""")
+        )
+        row = result.fetchone()
+        return int(row[0]) if row and row[0] is not None else 0
 
     async def update_contra_columns(
         self,
@@ -311,12 +362,46 @@ WHERE relation_id = :relation_id
             },
         )
 
-    async def mark_summary_updated(self, relation_id: UUID) -> None:
-        """Clear ``summary_stale`` after a new summary has been generated."""
-        await self._session.execute(
-            text("UPDATE relations SET summary_stale = false WHERE relation_id = :relation_id"),
-            {"relation_id": str(relation_id)},
-        )
+    async def mark_summary_updated(self, relation_id: UUID, *, success: bool = True) -> None:
+        """Clear ``summary_stale`` and reset/increment attempt counters.
+
+        PLAN-0093 D-3 T-D-3-02/T-D-3-03:
+          - ``last_summary_attempt_at`` is always advanced to ``now()`` so
+            the next ORDER BY puts this row at the back of the queue.
+          - On ``success=True`` (default — preserves the pre-D-3 callers'
+            behaviour for the hash-unchanged path): reset
+            ``summary_attempt_count`` to 0 because we treat "no LLM call
+            needed" as a successful refresh outcome.
+          - On ``success=False`` (called from the LLM-failure branch in
+            SummaryWorker): increment ``summary_attempt_count`` so we can
+            detect stuck rows (count >= 3 triggers the
+            ``summary_worker_stuck_relations_total`` counter).
+
+        The default of ``success=True`` keeps existing tests + call sites
+        working unchanged.
+        """
+        if success:
+            await self._session.execute(
+                text("""
+UPDATE relations
+SET summary_stale            = false,
+    last_summary_attempt_at  = now(),
+    summary_attempt_count    = 0
+WHERE relation_id = :relation_id
+"""),
+                {"relation_id": str(relation_id)},
+            )
+        else:
+            await self._session.execute(
+                text("""
+UPDATE relations
+SET summary_stale            = false,
+    last_summary_attempt_at  = now(),
+    summary_attempt_count    = summary_attempt_count + 1
+WHERE relation_id = :relation_id
+"""),
+                {"relation_id": str(relation_id)},
+            )
 
     async def fetch_stale_summary_embeddings(self, limit: int = 100) -> list[dict[str, object]]:
         """Fetch relation summaries whose embeddings have not been computed (Worker 13F)."""
