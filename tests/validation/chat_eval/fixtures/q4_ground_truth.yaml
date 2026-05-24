@@ -1,0 +1,95 @@
+# PLAN-0093 Wave G-3 — Q4 NVDA vs AMD fundamentals ground truth.
+#
+# Source: audit doc 2026-05-23-qa-intelligence-pipelines-report.md +
+# 2026-05-22 EODHD Refresh + NVDA / AMD official quarterly releases.
+#
+# Used by tests/validation/chat_eval/test_q4_nvda_amd_revenue.py to
+# assert numeric claims in the LLM response match reported quarterly
+# numbers within FieldKind tolerance.
+#
+# Refresh policy: this file is the authoritative fallback when the
+# market-data DB is unreachable. When the harness CAN reach the DB,
+# it should still cross-check these values once per run and surface
+# a warning if any drift exceeds the per-kind tolerance (out of scope
+# for G-3; tracked as a follow-up).
+
+# Bellwether numbers explicitly called out in the audit.
+bellwethers:
+  - ticker: NVDA
+    quarter: Q4FY26
+    metric: revenue
+    value_billions: 68.127
+    tolerance_kind: REVENUE
+  - ticker: AMD
+    quarter: Q1FY26
+    metric: revenue
+    value_billions: 10.253
+    tolerance_kind: REVENUE
+  - ticker: AMD
+    quarter: Q1FY26
+    metric: eps_diluted
+    value: 0.45
+    tolerance_kind: EPS
+
+# Full quarterly grid — 6 quarters × 2 tickers. Values in $B for revenue,
+# $ for EPS, % (0..1) for margin. NULL means "not yet reported".
+quarterly:
+  NVDA:
+    - quarter: Q3FY25
+      revenue_billions: 35.082
+      eps_diluted: 0.78
+      gross_margin: 0.749
+    - quarter: Q4FY25
+      revenue_billions: 39.331
+      eps_diluted: 0.89
+      gross_margin: 0.732
+    - quarter: Q1FY26
+      revenue_billions: 44.062
+      eps_diluted: 0.81
+      gross_margin: 0.610
+    - quarter: Q2FY26
+      revenue_billions: 46.743
+      eps_diluted: 0.68
+      gross_margin: 0.726
+    - quarter: Q3FY26
+      revenue_billions: 57.006
+      eps_diluted: 1.30
+      gross_margin: 0.737
+    - quarter: Q4FY26
+      revenue_billions: 68.127
+      eps_diluted: 1.52
+      gross_margin: 0.735
+  AMD:
+    - quarter: Q4FY24
+      revenue_billions: 7.658
+      eps_diluted: 0.18
+      gross_margin: 0.510
+    - quarter: Q1FY25
+      revenue_billions: 7.438
+      eps_diluted: 0.07
+      gross_margin: 0.520
+    - quarter: Q2FY25
+      revenue_billions: 7.685
+      eps_diluted: 0.16
+      gross_margin: 0.530
+    - quarter: Q3FY25
+      revenue_billions: 8.700
+      eps_diluted: 0.47
+      gross_margin: 0.540
+    - quarter: Q4FY25
+      revenue_billions: 9.500
+      eps_diluted: 0.55
+      gross_margin: 0.540
+    - quarter: Q1FY26
+      revenue_billions: 10.253
+      eps_diluted: 0.45
+      gross_margin: 0.540
+
+# Quarters that have NOT been reported as of 2026-05-23. Any LLM mention
+# of these labels is an automatic FAIL — invented quarter labels are the
+# canonical fabrication pattern from the audit.
+not_reported:
+  - ticker: AMD
+    quarters: [Q2FY26, Q3FY26, Q4FY26]
+  - ticker: NVDA
+    quarters: [Q1FY27]
