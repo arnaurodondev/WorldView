@@ -220,6 +220,17 @@ rag_citations_scrubbed_total = Counter(
     "Citation references scrubbed from answers (not grounded in tool results)",
 )
 
+# ── PLAN-0093 Wave E-2: numeric-grounding validator ──────────────────────────
+
+rag_grounding_validation_total = Counter(
+    "rag_grounding_validation_total",
+    "Numeric grounding validator outcomes per chat turn",
+    # passed: response numbers all matched tool results within tolerance
+    # failed_one_rewrite: first pass failed → LLM re-prompted → second pass passed
+    # failed_banner: both passes failed → banner appended to the response
+    ["result"],
+)
+
 # ── E-12: Per-turn audit log ──────────────────────────────────────────────────
 
 rag_audit_entries_total = Counter(

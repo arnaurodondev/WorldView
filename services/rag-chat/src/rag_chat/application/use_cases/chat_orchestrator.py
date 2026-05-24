@@ -53,6 +53,7 @@ from rag_chat.application.metrics.prometheus import (
     rag_budget_exceeded_total,
     rag_cache_hits,
     rag_citations_scrubbed_total,
+    rag_grounding_validation_total,
     rag_latency,
     rag_queries_total,
     rag_tool_call_latency_seconds,
@@ -647,6 +648,20 @@ class ChatOrchestratorUseCase:
                 return
             provider_name = p.llm_chain.last_provider_name
 
+        # ── PLAN-0093 E-2: Numeric-grounding validation ───────────────────────
+        # Inspect the LLM answer for numbers (revenue, EPS, P/E, etc.) that
+        # do not appear in any tool result within the per-FieldKind tolerance
+        # table. On failure we re-prompt the LLM ONCE; if that still fails
+        # we append a banner so the user knows numbers are unverified.
+        if had_tool_calls and full_text.strip():
+            full_text = await self._run_grounding_validation(
+                p=p,
+                response=full_text,
+                tool_items=non_none_items,
+                messages=messages,
+                budget=budget,
+            )
+
         # ── E-7: Citation egress scrubbing ────────────────────────────────────
         # Scrub entity/article refs in the answer that were NOT grounded in any
         # tool result. This prevents the LLM from fabricating citation IDs.
@@ -705,6 +720,110 @@ class ChatOrchestratorUseCase:
 
         yield p.emitter.emit_metadata(thread_id, asst_msg_id, intent.value, provider_name, latency_ms)
         yield p.emitter.emit_done()
+
+    async def _run_grounding_validation(
+        self,
+        *,
+        p: ChatPipeline,
+        response: str,
+        tool_items: list,
+        messages: list[dict[str, Any]],
+        budget: AgentBudget,
+    ) -> str:
+        """PLAN-0093 E-2 T-E-2-02 — numeric-grounding validation pass.
+
+        Pipeline:
+          1. Run ``NumericGroundingValidator.validate(response, tool_items)``.
+          2. If passed → record "passed" metric and return the original
+             response unchanged.
+          3. If failed → log + emit a rewrite re-prompt with the
+             unsupported numbers, run ``llm_chain.stream_chat`` once more
+             at lower max_tokens, and re-validate.
+          4. If the rewrite passes → record "failed_one_rewrite" and
+             return the rewritten text.
+          5. If the rewrite also fails → record "failed_banner" and
+             append a one-line "⚠ Some numbers could not be verified
+             against retrieved data." banner so the user is warned even
+             when the LLM stubbornly refuses to fix its numbers.
+
+        The validator + this orchestrator hook are designed to be
+        deterministic so the Sub-Plan G G-3 chat regression suite can
+        re-run the validator on stored fixtures and get stable results.
+        """
+        from rag_chat.application.services.numeric_grounding import NumericGroundingValidator
+
+        validator = NumericGroundingValidator()
+        first_result = validator.validate(response, tool_items)
+        if first_result.passed:
+            rag_grounding_validation_total.labels(result="passed").inc()
+            return response
+
+        # First pass failed — log the unsupported numbers structurally so
+        # an operator can grep for the AMD-style regression patterns.
+        log.warning(  # type: ignore[no-any-return]
+            "numeric_grounding_failed",
+            unsupported_count=len(first_result.unsupported),
+            unsupported=[
+                {
+                    "value": u.value,
+                    "field_kind": u.field_kind.value,
+                    "tolerance_used": u.tolerance_used,
+                    "closest_tool_value": u.closest_tool_value,
+                    "snippet": u.snippet,
+                }
+                for u in first_result.unsupported[:10]  # cap log payload
+            ],
+        )
+
+        # Build the rewrite re-prompt. We list each unsupported number
+        # with the closest tool value so the LLM can either correct or
+        # mark it [unverified].
+        bullets = "\n".join(
+            f"- {u.snippet} ({u.field_kind.value}, closest tool value: {u.closest_tool_value})"
+            for u in first_result.unsupported
+        )
+        rewrite_messages = [
+            *messages,
+            {
+                "role": "assistant",
+                "content": response,
+            },
+            {
+                "role": "user",
+                "content": (
+                    "The following numbers in your previous response cannot be found in tool results:\n"
+                    f"{bullets}\n\n"
+                    "Rewrite your response, removing or marking each as [unverified]. "
+                    "Do not invent replacement numbers — only use values that appear in the tool results above."
+                ),
+            },
+        ]
+
+        rewritten = ""
+        try:
+            async for chunk in p.llm_chain.stream_chat(
+                rewrite_messages,
+                max_tokens=budget.max_tokens_final,
+                temperature=0.0,  # deterministic rewrite
+            ):
+                rewritten += chunk
+        except Exception as exc:
+            log.warning("numeric_grounding_rewrite_failed", error=str(exc))  # type: ignore[no-any-return]
+            rag_grounding_validation_total.labels(result="failed_banner").inc()
+            return response + "\n\n⚠ Some numbers could not be verified against retrieved data."
+
+        # Re-validate the rewrite.
+        second_result = validator.validate(rewritten, tool_items)
+        if second_result.passed:
+            rag_grounding_validation_total.labels(result="failed_one_rewrite").inc()
+            return rewritten
+
+        # Both passes failed — append the banner. We return the
+        # REWRITE text (not the original) because the rewrite at least
+        # had the LLM attempt to fix the numbers; usually it's strictly
+        # better even if not perfect.
+        rag_grounding_validation_total.labels(result="failed_banner").inc()
+        return rewritten + "\n\n⚠ Some numbers could not be verified against retrieved data."
 
     async def execute_sync(
         self,
