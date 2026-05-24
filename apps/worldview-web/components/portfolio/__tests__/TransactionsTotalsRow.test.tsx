@@ -14,7 +14,7 @@
  */
 
 import { describe, it, expect } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { render, screen, within } from "@testing-library/react";
 import { TransactionsTotalsRow } from "../TransactionsTotalsRow";
 import type { Transaction } from "@/types/api";
 
@@ -163,6 +163,59 @@ describe("TransactionsTotalsRow", () => {
   });
 
   // ── Edge cases ─────────────────────────────────────────────────────────────
+
+  // ── Multi-currency grouping (D-001) ────────────────────────────────────────
+
+  it("groups multi-currency transactions separately (D-001)", () => {
+    // Mix of USD, EUR, GBP transactions. If the component were to regress and
+    // aggregate across currencies, the USD row would show $4,000.00 (sum of
+    // 2000 USD + 2000 EUR) — or even $5,500 if SELL proceeds were also lumped.
+    // Properly grouped, each currency stands alone.
+    const txs = [
+      makeTx({ type: "BUY", quantity: 10, price: 100, fee: 0, currency: "USD" }), // 1000 USD
+      makeTx({ type: "BUY", quantity: 5, price: 200, fee: 0, currency: "USD" }), // 1000 USD
+      makeTx({ type: "BUY", quantity: 20, price: 50, fee: 0, currency: "EUR" }), // 1000 EUR
+      makeTx({ type: "BUY", quantity: 10, price: 100, fee: 0, currency: "EUR" }), // 1000 EUR
+      makeTx({ type: "SELL", quantity: 5, price: 300, fee: 0, currency: "GBP" }), // 1500 GBP
+    ];
+
+    render(<TransactionsTotalsRow filtered={txs} />);
+
+    // The multi-currency layout renders one row per currency, each prefixed by
+    // the 3-letter ISO code as plain text. Use getAllByText to confirm each
+    // appears exactly once (so we know the group-by ran).
+    expect(screen.getAllByText("USD")).toHaveLength(1);
+    expect(screen.getAllByText("EUR")).toHaveLength(1);
+    expect(screen.getAllByText("GBP")).toHaveLength(1);
+
+    // Locate each currency's row by finding its label, then walking up to the
+    // flex row container so we can scope assertions with `within`. This avoids
+    // collisions across rows (each row has its own BUY/SELL/DIV/Fees/Net labels).
+    const usdRow = screen.getByText("USD").closest("div")!;
+    const eurRow = screen.getByText("EUR").closest("div")!;
+    const gbpRow = screen.getByText("GBP").closest("div")!;
+
+    // USD row: BUY total = 1000 + 1000 = 2000. NOT 4000 (would mean USD+EUR
+    // were aggregated) and NOT 5500 (would mean all three currencies summed).
+    expect(within(usdRow).getByText("$2,000.00")).toBeDefined();
+    // No SELL in USD → SELL proceeds should be $0.00.
+    // (Implicitly verified by GBP being the only row to show $1,500.00.)
+
+    // EUR row: BUY total = 1000 + 1000 = 2000.
+    expect(within(eurRow).getByText("$2,000.00")).toBeDefined();
+
+    // GBP row: SELL proceeds = 5 × 300 = 1500. Net should also be +$1,500.00
+    // (no BUY, no DIV, no fees).
+    expect(within(gbpRow).getByText("$1,500.00")).toBeDefined();
+    expect(within(gbpRow).getByText("+$1,500.00")).toBeDefined();
+
+    // Critical anti-regression check: the cross-currency sum ($4,000 or $5,500)
+    // must NEVER appear anywhere in the rendered output. queryByText returns
+    // null when absent (rather than throwing), which is what we want here.
+    expect(screen.queryByText("$4,000.00")).toBeNull();
+    expect(screen.queryByText("$5,500.00")).toBeNull();
+    expect(screen.queryByText("+$4,000.00")).toBeNull();
+  });
 
   it("renders all $0.00 with empty filtered list", () => {
     render(<TransactionsTotalsRow filtered={[]} />);
