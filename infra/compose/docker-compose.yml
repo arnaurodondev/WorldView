@@ -33,6 +33,12 @@ services:
     image: minio/minio:RELEASE.2025-04-08T15-41-24Z
     command: server /data --console-address ":9001"
     profiles: [infra, lib-test, all]
+    # F-LOG-INFRA-001 / PLAN-0093 T-G-2-01: MinIO was the last critical infra
+    # piece without a restart policy.  Without ``unless-stopped`` MinIO stays
+    # down after a host reboot, leaving every silver-bucket reader (S6/S7) to
+    # fail on first ``GetObject``.  Matches the policy applied to postgres /
+    # kafka / valkey / ollama / schema-registry / market-data.
+    restart: unless-stopped
     ports:
       # SEC-007: bind to localhost only — prevent external access to infra
       - "127.0.0.1:7480:9000"    # S3 API (matches STORAGE_ENDPOINT default)
