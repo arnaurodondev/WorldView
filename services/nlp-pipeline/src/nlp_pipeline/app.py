@@ -41,7 +41,12 @@ from nlp_pipeline.infrastructure.intelligence_db.session import (
 )
 from nlp_pipeline.infrastructure.middleware.internal_jwt import InternalJWTMiddleware
 from nlp_pipeline.infrastructure.nlp_db.session import _build_nlp_factories
-from observability import configure_logging, get_logger, register_error_handlers  # type: ignore[import-untyped]
+from observability import (  # type: ignore[import-untyped]
+    assert_app_env_or_die,
+    configure_logging,
+    get_logger,
+    register_error_handlers,
+)
 from observability.metrics import (  # type: ignore[import-untyped]
     add_prometheus_middleware,
     create_metrics,
@@ -145,6 +150,13 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         json=settings.log_json,
     )
     log = get_logger("nlp_pipeline.app")  # type: ignore[no-any-return]
+
+    # 1b. Boot-time security guard (PLAN-0093 Wave A-1 / F-LOG-JWT-001).
+    # Refuses to start when JWT verification is disabled AND APP_ENV is unset.
+    assert_app_env_or_die(
+        service_name=settings.service_name,
+        internal_jwt_skip_verification=settings.internal_jwt_skip_verification,
+    )
 
     # 2. Tracing (conditional)
     if settings.otlp_endpoint:

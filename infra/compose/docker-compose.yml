@@ -79,6 +79,11 @@ services:
     # shared_buffers raised proportionally for cache efficiency.
     command: postgres -c max_connections=500 -c shared_buffers=256MB
     profiles: [infra, all]
+    # F-LOG-INFRA-001 / PLAN-0093 T-A-1-01: postgres is the most critical
+    # piece of infrastructure — losing it after a host reboot stalls every
+    # consumer/dispatcher/API in the platform.  ``unless-stopped`` preserves
+    # ``docker stop`` for intentional teardowns (``make dev-down``).
+    restart: unless-stopped
     ports:
       # SEC-007: bind to localhost only — prevent external DB access
       - "127.0.0.1:5432:5432"
@@ -104,6 +109,9 @@ services:
   kafka:
     image: confluentinc/cp-kafka:7.6.0
     profiles: [infra, all]
+    # F-LOG-INFRA-001 / PLAN-0093 T-A-1-01: kafka is the event-bus backbone;
+    # every consumer/dispatcher dies if it stays down after a host reboot.
+    restart: unless-stopped
     ports:
       # SEC-007: bind to localhost only
       - "127.0.0.1:9092:9092"
@@ -139,6 +147,10 @@ services:
   schema-registry:
     image: confluentinc/cp-schema-registry:7.6.0
     profiles: [infra, all]
+    # F-LOG-INFRA-001 / PLAN-0093 T-A-1-01: schema-registry is core
+    # infrastructure for every Avro consumer/producer; ensure it auto-recovers
+    # on host restart.  ``unless-stopped`` preserves manual ``docker stop``.
+    restart: unless-stopped
     ports:
       # SEC-007: bind to localhost only
       - "127.0.0.1:8081:8081"
@@ -208,6 +220,10 @@ services:
   valkey:
     image: valkey/valkey:7.2-alpine
     profiles: [infra, all]
+    # F-LOG-INFRA-001 / PLAN-0093 T-A-1-01: valkey backs rate limiting,
+    # circuit breakers, and the brief cache — every service degrades if it
+    # vanishes after a host bounce.
+    restart: unless-stopped
     ports:
       # SEC-007: bind to localhost only
       - "127.0.0.1:6379:6379"
@@ -793,6 +809,11 @@ services:
       context: ../..
       dockerfile: services/market-data/Dockerfile
     profiles: [infra, all]
+    # F-LOG-INFRA-001 / PLAN-0093 T-A-1-01: market-data was the only S* API
+    # container missing a restart policy — every other service has one and
+    # historically this caused dashboards to lose price quotes after any host
+    # bounce.  ``unless-stopped`` brings it in line with the rest.
+    restart: unless-stopped
     depends_on:
       market-data-migrate:
         condition: service_completed_successfully
@@ -1095,6 +1116,11 @@ services:
   ollama:
     image: ollama/ollama:0.6.7
     profiles: [infra, all]
+    # F-LOG-INFRA-001 / PLAN-0093 T-A-1-01: ensure ollama recovers from host
+    # restarts (docker daemon restart, machine reboot).  ``unless-stopped`` is
+    # the correct choice over ``always`` because it still honours ``docker
+    # stop`` for intentional shutdowns (e.g. during ``make dev-down``).
+    restart: unless-stopped
     ports:
       - "11434:11434"
     volumes:
@@ -1421,6 +1447,10 @@ services:
       context: ../..
       dockerfile: services/nlp-pipeline/Dockerfile
     profiles: [infra, all]
+    # F-NPL-002 / PLAN-0093 T-A-1-02: gate boot on postgres + valkey + ollama
+    # health so the worker doesn't sys.exit(1) on its first LLM/DB call when
+    # the platform is mid-startup.  Without these guards the worker entered a
+    # 60-second restart loop until ollama came up.
     depends_on:
       nlp-pipeline-migrate:
         condition: service_completed_successfully
@@ -1428,6 +1458,12 @@ services:
         condition: service_completed_successfully
       kafka-init:
         condition: service_completed_successfully
+      postgres:
+        condition: service_healthy
+      valkey:
+        condition: service_healthy
+      ollama:
+        condition: service_healthy
     env_file:
       - ../../services/nlp-pipeline/configs/docker.env
     command: ["python", "-m", "nlp_pipeline.workers.unresolved_resolution_worker_main"]
@@ -1443,11 +1479,13 @@ services:
   # The worker class existed since 2026-02 but no entry point ever ran it, so
   # rows accumulated forever.  Standalone process per R22.
   #
-  # Intentionally NO `ollama` dependency: deployments running with
-  # NLP_PIPELINE_EMBEDDING_PROVIDER=deepinfra (the dev/prod default) never
-  # touch Ollama, so coupling the retry queue to Ollama health would block
-  # drain whenever Ollama flakes — for no benefit.  The Ollama-fallback path
-  # gracefully degrades to "embedding_retry_failed" and re-tries with backoff.
+  # F-NPL-002 / PLAN-0093 T-A-1-02: gate boot on postgres + valkey + ollama
+  # health.  Although the deepinfra provider path doesn't strictly need
+  # Ollama, the worker still falls back to it when DeepInfra is unavailable
+  # AND the platform plan calls for consistent dep guards across all three
+  # retry/path workers to eliminate startup restart-loops.  When Ollama is
+  # healthy this is a no-op; when Ollama is down at boot the worker now waits
+  # for it instead of crashing on the fallback path.
   nlp-pipeline-embedding-retry-worker:
     build:
       context: ../..
@@ -1456,6 +1494,12 @@ services:
     depends_on:
       nlp-pipeline-migrate:
         condition: service_completed_successfully
+      postgres:
+        condition: service_healthy
+      valkey:
+        condition: service_healthy
+      ollama:
+        condition: service_healthy
     env_file:
       - ../../services/nlp-pipeline/configs/docker.env
     command: ["python", "-m", "nlp_pipeline.workers.embedding_retry_worker_main"]
@@ -1842,10 +1886,20 @@ services:
       context: ../..
       dockerfile: services/knowledge-graph/Dockerfile
     profiles: [infra, all]
+    # F-LOG-002 / PLAN-0093 T-A-1-02: explicit healthy-deps on postgres,
+    # valkey and ollama prevent the worker from booting before its backing
+    # services and entering a sys.exit(1) → 60s restart loop.  The
+    # intelligence-migrations + knowledge-graph deps were already declared.
     depends_on:
       intelligence-migrations:
         condition: service_completed_successfully
       knowledge-graph:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+      valkey:
+        condition: service_healthy
+      ollama:
         condition: service_healthy
     env_file:
       - ../../services/knowledge-graph/configs/docker.env

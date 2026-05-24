@@ -7,8 +7,14 @@ InternalJWTMiddleware is included (PRD-0025) with a system JWT in the default cl
 
 from __future__ import annotations
 
+import os
 import time
 from unittest.mock import AsyncMock, MagicMock
+
+# PLAN-0093 T-A-1-03: pin APP_ENV before app imports so the new
+# observability.assert_app_env_or_die() lifespan guard never aborts tests
+# that enable internal_jwt_skip_verification.
+os.environ.setdefault("APP_ENV", "test")
 
 import jwt as _jwt
 import pytest

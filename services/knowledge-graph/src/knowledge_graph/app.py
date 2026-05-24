@@ -52,7 +52,12 @@ from knowledge_graph.infrastructure.intelligence_db.session import (
     _build_factories as _build_intel_factories,
 )
 from knowledge_graph.infrastructure.middleware.internal_jwt import InternalJWTMiddleware
-from observability import configure_logging, get_logger, register_error_handlers  # type: ignore[import-untyped]
+from observability import (  # type: ignore[import-untyped]
+    assert_app_env_or_die,
+    configure_logging,
+    get_logger,
+    register_error_handlers,
+)
 from observability.metrics import (  # type: ignore[import-untyped]
     add_prometheus_middleware,
     create_metrics,
@@ -95,6 +100,13 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         json=settings.log_json,
     )
     log = get_logger("knowledge_graph.app")
+
+    # 1b. Boot-time security guard (PLAN-0093 Wave A-1 / F-LOG-JWT-001).
+    # Refuses to start when JWT verification is disabled AND APP_ENV is unset.
+    assert_app_env_or_die(
+        service_name=settings.service_name,
+        internal_jwt_skip_verification=settings.internal_jwt_skip_verification,
+    )
 
     # 2. Tracing (conditional — middleware registered in create_app)
     if settings.otlp_endpoint:

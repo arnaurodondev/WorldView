@@ -15,6 +15,10 @@ import time
 # before Settings() is instantiated in create_app() or any test fixture.
 os.environ.setdefault("KNOWLEDGE_GRAPH_STORAGE_ACCESS_KEY", "minioadmin-test")
 os.environ.setdefault("KNOWLEDGE_GRAPH_STORAGE_SECRET_KEY", "minioadmin-test")
+# PLAN-0093 T-A-1-03: the new observability.assert_app_env_or_die() boot guard
+# aborts startup when ``internal_jwt_skip_verification=True`` and APP_ENV is
+# unset.  Pin APP_ENV here so test runs do not trip the guard.
+os.environ.setdefault("APP_ENV", "test")
 # DEF-001: database_url no longer has a default (fail-fast hardening).
 # Unit tests provide a fake DSN — no real DB connection is made in unit tests.
 os.environ.setdefault(

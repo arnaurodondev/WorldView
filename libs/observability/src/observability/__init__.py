@@ -11,6 +11,7 @@ from observability.metrics import (
     create_ml_metrics,
 )
 from observability.sentry import SentrySettings, init_sentry
+from observability.startup_assert import assert_app_env_or_die
 from observability.tracing import add_otel_middleware, configure_tracing, get_tracer
 
 __all__ = [
@@ -20,6 +21,7 @@ __all__ = [
     "ServiceMetrics",
     "add_otel_middleware",
     "add_prometheus_middleware",
+    "assert_app_env_or_die",
     "configure_logging",
     "configure_tracing",
     "create_metrics",

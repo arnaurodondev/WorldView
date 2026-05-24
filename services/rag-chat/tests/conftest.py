@@ -14,8 +14,16 @@ lazily re-created on the current test's event loop.
 
 from __future__ import annotations
 
+import os
 import time
 from typing import TYPE_CHECKING
+
+# PLAN-0093 T-A-1-03: the new observability.assert_app_env_or_die() boot guard
+# aborts startup when ``internal_jwt_skip_verification=True`` and APP_ENV is
+# unset.  Several tests enable skip_verification — pin APP_ENV here BEFORE any
+# settings/create_app() import so the import-time module-level Settings() in
+# config.py does not trip the existing pydantic validator either.
+os.environ.setdefault("APP_ENV", "test")
 
 import jwt as _jwt
 import pytest

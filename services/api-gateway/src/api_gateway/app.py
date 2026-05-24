@@ -29,7 +29,12 @@ from api_gateway.routes.health import router as health_router
 from api_gateway.routes.internal import router as internal_router
 from api_gateway.routes.risk_metrics import router as risk_metrics_router
 from messaging.valkey import ValkeyClient, create_valkey_client_from_url  # type: ignore[import-untyped]
-from observability import configure_logging, get_logger, register_error_handlers  # type: ignore[import-untyped]
+from observability import (  # type: ignore[import-untyped]
+    assert_app_env_or_die,
+    configure_logging,
+    get_logger,
+    register_error_handlers,
+)
 from observability.metrics import add_prometheus_middleware, create_metrics  # type: ignore[import-untyped]
 from observability.sentry import SentrySettings, init_sentry  # type: ignore[import-untyped]
 from observability.tracing import add_otel_middleware, configure_tracing  # type: ignore[import-untyped]
@@ -76,6 +81,16 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         json=settings.log_json,
     )
     logger = get_logger("api_gateway.app")
+
+    # 1b. Boot-time security guard (PLAN-0093 Wave A-1 / F-LOG-JWT-001).
+    # api-gateway issues JWTs (it does not consume them) so it has no
+    # ``internal_jwt_skip_verification`` setting; we pass ``False`` to make
+    # the call a no-op for the gateway while keeping the lifespan pattern
+    # uniform across every service for grep-ability and audit consistency.
+    assert_app_env_or_die(
+        service_name=settings.service_name,
+        internal_jwt_skip_verification=False,
+    )
 
     # 2. Tracing config (optional)
     if settings.otlp_endpoint:
