@@ -218,3 +218,39 @@ class TestOrchestratorGroundingHook:
         # The persisted answer ends with the banner.
         assistant_response = pipeline.persist_chat.await_args.kwargs["assistant_response"]
         assert "could not be verified" in assistant_response.content
+
+    def test_completion_cache_skipped_when_grounding_fails(self) -> None:
+        """F-LIVE-008 regression — cache write MUST be skipped when grounding fails.
+
+        PLAN-0093 Phase 5c found that caching answers flagged by the
+        numeric-grounding validator poisons the completion cache for 24h
+        (the harness key is deterministic since thread_id=None). The fix
+        is to skip ``write_completion_cache`` whenever
+        ``_run_grounding_validation`` reports ``grounding_passed=False``
+        — i.e. when both the initial draft and the single rewrite
+        attempt invented numbers and the banner was appended.
+        """
+        orch, _, pipeline = self._build(
+            stream_chunks=["Q2 revenue was $34.6B per the filing."],
+            rewrite_chunks=["Actually Q2 revenue was $99.9B by my count."],
+        )
+        asyncio.run(_collect(orch, _make_request(), MagicMock()))
+        # Persistence still runs (we want the audit trail) but the cache
+        # write does NOT — otherwise the banner-laden answer would be
+        # frozen for 24h and replayed on every identical question.
+        assert pipeline.persist_chat.await_count == 1
+        assert pipeline.write_completion_cache.await_count == 0
+
+    def test_completion_cache_written_when_grounding_passes(self) -> None:
+        """Sanity check — passing grounding still writes to the cache.
+
+        Counterpart to ``test_completion_cache_skipped_when_grounding_fails``:
+        when the validator accepts the answer (number matches a tool
+        value within tolerance), the cache write must STILL fire so we
+        keep the performance benefit of completion caching for good
+        answers.
+        """
+        orch, _, pipeline = self._build(stream_chunks=["Apple Q3 revenue was $10.253B."])
+        asyncio.run(_collect(orch, _make_request(), MagicMock()))
+        assert pipeline.persist_chat.await_count == 1
+        assert pipeline.write_completion_cache.await_count == 1
