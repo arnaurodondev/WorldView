@@ -543,7 +543,11 @@ class ArticleProcessingConsumer(ValkeyDedupMixin, BaseKafkaConsumer[None]):
         if tenant_id is not None:
             sections = [dataclasses.replace(s, tenant_id=tenant_id) for s in sections]
 
-        # Block 4: NER + deterministic mention IDs (PLAN-0084 B-3)
+        # Block 4: NER + deterministic mention IDs (PLAN-0084 B-3).
+        # PLAN-0093 B-3 T-B-3-04: pass tenant_id through so EntityMention is
+        # constructed with it (avoids the post-construction stamp going
+        # missing in any future refactor).  The explicit post-construction
+        # stamp below is retained as a belt-and-braces safeguard.
         mentions, stats = await run_ner_block(
             doc_id=doc_id,
             sections=sections,
@@ -552,6 +556,7 @@ class ArticleProcessingConsumer(ValkeyDedupMixin, BaseKafkaConsumer[None]):
             batch_size=self._settings.gliner_batch_size,
             ner_model_id=self._settings.ner_model_id,
             section_token_limit=self._settings.gliner_section_token_limit,
+            tenant_id=tenant_id,
         )
         for _i, m in enumerate(mentions):
             m.mention_id = uuid.UUID(uuid5_from_parts(str(doc_id), str(_i), m.mention_text.lower().strip()))

@@ -116,6 +116,14 @@ class RelationResponse(BaseModel):
         description="Top evidence text snippets supporting this relation (max evidence_snippets_limit).",
     )
     relation_summary: str | None = None
+    # PLAN-0093 B-4 T-B-4-01 (F-KG-103 / QW-3): "outgoing" when the queried
+    # entity is the subject, "incoming" when it is the object.  Optional
+    # with default None for backward compatibility with clients (and tests)
+    # that fetch a relation list outside an entity context (e.g. list_filtered).
+    direction: str | None = Field(
+        default=None,
+        description="'outgoing' or 'incoming' relative to the queried entity_id (None for context-free lists).",
+    )
     # ── Confidence breakdown fields (PRD-0074 Wave D, T-D-02) ─────────────────
     # All optional with default=None — only populated when confidence_breakdown=True
     # is passed to GET /entities/{id}/graph.  BP-148: new optional fields on an

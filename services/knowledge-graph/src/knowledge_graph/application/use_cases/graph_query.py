@@ -118,6 +118,15 @@ class GetEntityGraphUseCase:
                 r["evidence_snippets"] = evidence_map.get(rid, []) if isinstance(rid, UUID) else []  # type: ignore[index]
                 r["relation_summary"] = summary_map.get(rid) if isinstance(rid, UUID) else None  # type: ignore[index]
 
+        # PLAN-0093 B-4 T-B-4-01 (F-KG-103 / QW-3): stamp ``direction`` on every
+        # relation row so the frontend can render the arrow without re-doing the
+        # subject/object comparison.  "outgoing" means the queried ``entity_id``
+        # is the subject (edge points OUT); "incoming" means it is the object
+        # (edge points IN).  Stamped here in the use case (not the route) so
+        # every API surface returning relation rows gets the same field.
+        for r in relation_rows:
+            r["direction"] = "outgoing" if r.get("subject_entity_id") == entity_id else "incoming"
+
         return entity_row, relation_rows, entities_map
 
 

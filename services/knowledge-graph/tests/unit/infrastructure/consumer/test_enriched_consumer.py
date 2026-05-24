@@ -120,6 +120,11 @@ def _enriched_message(
                 "object_entity_id": obj,
                 "raw_type": "employs",
                 "extraction_confidence": 0.85,
+                # PLAN-0093 B-3 T-B-3-02: claim_id + chunk_id NOT NULL on
+                # relation_evidence_raw — writer raises ValueError if either
+                # is missing.  Real enriched events from S6 carry both.
+                "claim_id": str(uuid4()),
+                "chunk_id": str(uuid4()),
             },
         ],
         "raw_events": [],

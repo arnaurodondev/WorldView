@@ -127,6 +127,52 @@ class TestRelationRepository:
         insert_sql = str(session.execute.call_args_list[1][0][0])
         assert "partition_key" not in insert_sql
 
+    def test_upsert_includes_explicit_confidence_value(self) -> None:
+        """PLAN-0093 B-2 T-B-2-04: confidence is an explicit INSERT column.
+
+        Migration 0046 adds a server_default = base_confidence so omitting
+        confidence still produces a NOT-NULL value, but the application
+        writer is required to set it EXPLICITLY so the invariant is visible
+        in the SQL and reviewers immediately see what value is being stored.
+        """
+        import asyncio
+
+        from knowledge_graph.infrastructure.intelligence_db.repositories.relation import (
+            RelationRepository,
+        )
+
+        session = AsyncMock()
+        lock_result = MagicMock()
+        lock_result.fetchone.return_value = None
+        upsert_result = MagicMock()
+        upsert_result.fetchone.return_value = (str(uuid4()),)
+        session.execute = AsyncMock(side_effect=[lock_result, upsert_result])
+
+        repo = RelationRepository(session)
+        asyncio.run(
+            repo.upsert(
+                subject_entity_id=uuid4(),
+                object_entity_id=uuid4(),
+                canonical_type="employs",
+                semantic_mode="RELATION_STATE",
+                decay_class="DURABLE",
+                decay_alpha=0.000950,
+                base_confidence=0.70,
+            ),
+        )
+        insert_sql = str(session.execute.call_args_list[1][0][0])
+        # The column list must include ``confidence`` (not just confidence_stale).
+        # We search for the token between commas/parens to avoid false-positives
+        # from "confidence_stale" matches.
+        assert ", confidence," in insert_sql or "confidence, " in insert_sql, (
+            "expected ``confidence`` column in INSERT — got:\n" + insert_sql
+        )
+        # And the VALUES side must reference :base_confidence twice (one for
+        # the base_confidence column, one for the confidence column).
+        assert (
+            insert_sql.count(":base_confidence") >= 2
+        ), "expected :base_confidence to be bound for both base_confidence and confidence columns"
+
 
 # ---------------------------------------------------------------------------
 # RelationEvidenceRepository
@@ -152,6 +198,10 @@ class TestRelationEvidenceRepository:
                 extraction_confidence=0.85,
                 source_trust_weight=0.90,
                 evidence_date=_NOW,
+                # PLAN-0093 B-3 T-B-3-02: claim_id + chunk_id are NOT NULL
+                # (migration 0047).  Writer raises ValueError when omitted.
+                claim_id=uuid4(),
+                chunk_id=uuid4(),
             ),
         )
         sql = str(session.execute.call_args_list[0][0][0])
@@ -175,9 +225,59 @@ class TestRelationEvidenceRepository:
                 extraction_confidence=0.85,
                 source_trust_weight=0.90,
                 evidence_date=_NOW,
+                claim_id=uuid4(),
+                chunk_id=uuid4(),
             ),
         )
         assert result == raw_id
+
+    def test_insert_raw_rejects_missing_claim_id(self) -> None:
+        """PLAN-0093 B-3 T-B-3-02: omitting claim_id raises ValueError at the writer."""
+        import asyncio
+
+        from knowledge_graph.infrastructure.intelligence_db.repositories.relation_evidence import (
+            RelationEvidenceRepository,
+        )
+
+        session = _make_session(fetchone_return=(str(uuid4()),))
+        repo = RelationEvidenceRepository(session)
+        with pytest.raises(ValueError, match="claim_id is NOT NULL"):
+            asyncio.run(
+                repo.insert_raw(
+                    subject_entity_id=uuid4(),
+                    object_entity_id=uuid4(),
+                    source_document_id=uuid4(),
+                    extraction_confidence=0.85,
+                    source_trust_weight=0.90,
+                    evidence_date=_NOW,
+                    # claim_id omitted
+                    chunk_id=uuid4(),
+                ),
+            )
+
+    def test_insert_raw_rejects_missing_chunk_id(self) -> None:
+        """PLAN-0093 B-3 T-B-3-02: omitting chunk_id raises ValueError at the writer."""
+        import asyncio
+
+        from knowledge_graph.infrastructure.intelligence_db.repositories.relation_evidence import (
+            RelationEvidenceRepository,
+        )
+
+        session = _make_session(fetchone_return=(str(uuid4()),))
+        repo = RelationEvidenceRepository(session)
+        with pytest.raises(ValueError, match="chunk_id is NOT NULL"):
+            asyncio.run(
+                repo.insert_raw(
+                    subject_entity_id=uuid4(),
+                    object_entity_id=uuid4(),
+                    source_document_id=uuid4(),
+                    extraction_confidence=0.85,
+                    source_trust_weight=0.90,
+                    evidence_date=_NOW,
+                    claim_id=uuid4(),
+                    # chunk_id omitted
+                ),
+            )
 
 
 # ---------------------------------------------------------------------------

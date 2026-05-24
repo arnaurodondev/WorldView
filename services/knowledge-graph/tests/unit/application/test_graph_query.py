@@ -643,3 +643,96 @@ class TestGraphQueryGracefulDegradationGaps:
         assert entities_map == {}, "No referenced neighbours → entities_map must be empty"
         # Critical assertion: the short-circuit must skip the batch fetch.
         entity_repo.get_batch.assert_not_called()
+
+
+# ── PLAN-0093 B-4 T-B-4-01: direction field on relation rows ──────────────────
+
+
+class TestRelationDirectionStamp:
+    """The use case stamps ``direction`` ("outgoing" or "incoming") on every
+    returned relation row so the frontend can render arrows without
+    re-comparing subject_entity_id to the queried entity_id.
+    """
+
+    def test_outgoing_relation_marked_outgoing(self) -> None:
+        """When the queried entity is the subject, direction == 'outgoing'."""
+        from knowledge_graph.application.use_cases.graph_query import GetEntityGraphUseCase
+
+        center = _entity_row(_ENT_ID)
+        # Subject = queried entity → outgoing.
+        rel = _relation_row(subject_id=_ENT_ID, object_id=_OBJ_ID)
+
+        entity_repo = _make_entity_repo(entity=center, batch=[_entity_row(_OBJ_ID)])
+        relation_repo = _make_relation_repo(rows=[rel])
+
+        _, relation_rows, _ = asyncio.run(
+            GetEntityGraphUseCase().execute(
+                entity_repo=entity_repo,
+                relation_repo=relation_repo,
+                evidence_repo=_make_evidence_repo(),
+                summary_repo=_make_summary_repo(),
+                entity_id=_ENT_ID,
+                min_confidence=0.0,
+                semantic_mode=None,
+                limit=50,
+            ),
+        )
+        assert len(relation_rows) == 1
+        assert relation_rows[0].get("direction") == "outgoing"
+
+    def test_incoming_relation_marked_incoming(self) -> None:
+        """When the queried entity is the object, direction == 'incoming'."""
+        from knowledge_graph.application.use_cases.graph_query import GetEntityGraphUseCase
+
+        center = _entity_row(_ENT_ID)
+        # Object = queried entity → incoming.  Subject is a third entity.
+        other = uuid4()
+        rel = _relation_row(subject_id=other, object_id=_ENT_ID)
+
+        entity_repo = _make_entity_repo(entity=center, batch=[_entity_row(other)])
+        relation_repo = _make_relation_repo(rows=[rel])
+
+        _, relation_rows, _ = asyncio.run(
+            GetEntityGraphUseCase().execute(
+                entity_repo=entity_repo,
+                relation_repo=relation_repo,
+                evidence_repo=_make_evidence_repo(),
+                summary_repo=_make_summary_repo(),
+                entity_id=_ENT_ID,
+                min_confidence=0.0,
+                semantic_mode=None,
+                limit=50,
+            ),
+        )
+        assert len(relation_rows) == 1
+        assert relation_rows[0].get("direction") == "incoming"
+
+    def test_mixed_directions_in_one_query(self) -> None:
+        """A mix of outgoing + incoming rows each gets its own direction stamp."""
+        from knowledge_graph.application.use_cases.graph_query import GetEntityGraphUseCase
+
+        center = _entity_row(_ENT_ID)
+        out_rel = _relation_row(subject_id=_ENT_ID, object_id=_OBJ_ID)
+        other = uuid4()
+        in_rel = _relation_row(subject_id=other, object_id=_ENT_ID)
+
+        entity_repo = _make_entity_repo(
+            entity=center,
+            batch=[_entity_row(_OBJ_ID), _entity_row(other)],
+        )
+        relation_repo = _make_relation_repo(rows=[out_rel, in_rel])
+
+        _, relation_rows, _ = asyncio.run(
+            GetEntityGraphUseCase().execute(
+                entity_repo=entity_repo,
+                relation_repo=relation_repo,
+                evidence_repo=_make_evidence_repo(),
+                summary_repo=_make_summary_repo(),
+                entity_id=_ENT_ID,
+                min_confidence=0.0,
+                semantic_mode=None,
+                limit=50,
+            ),
+        )
+        # Preserve order from list_for_entity → first outgoing, second incoming.
+        assert [r["direction"] for r in relation_rows] == ["outgoing", "incoming"]

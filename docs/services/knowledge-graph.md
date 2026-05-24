@@ -156,6 +156,31 @@ support parameterized labels); they are validated against a 28-label whitelist
 **R27 exception**: Cypher queries use a write session because AGE requires `LOAD 'age'` which
 is not supported by read-replica connections.
 
+#### Recovering from AGE undercount
+
+If the Apache AGE shadow graph reports far fewer rows than the relational source tables
+(e.g. 0 `TemporalEvent` vertices, missing `EVENT_EXPOSES` edges, ~30 % relation coverage),
+the most likely cause is a missing label bootstrap or a stale per-phase watermark.
+
+**Symptoms**
+- `s7_age_sync_phase_stalled_total{phase=...}` keeps incrementing
+- AGE counts (`SELECT count(*) FROM cypher('worldview_graph', $$ MATCH (n) RETURN n $$) ...`)
+  are well below `SELECT count(*) FROM canonical_entities` / `relations` / `temporal_events`
+- Logs show `age_sync_phase_failed` for one or more phases
+
+**Fix** — reset all four AGE watermark keys so the next worker cycle does a full resync:
+
+```bash
+./scripts/ops/reset_age_watermark.sh
+```
+
+The script deletes the legacy `s7:age:sync:watermark` key plus the three per-phase keys
+(`...:entities`, `...:relations`, `...:temporal_events`). On the next cycle the worker
+re-runs the label bootstrap (idempotent) and re-MERGEs every row from epoch.
+
+**Safety** — AGE MERGE is idempotent; re-syncing already-synced rows produces no duplicates.
+The only cost is a longer-than-usual first run (full table scan instead of incremental).
+
 ---
 
 ## API Endpoints
