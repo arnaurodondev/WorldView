@@ -16,6 +16,10 @@ class QueryIntent(StrEnum):
     REASONING = "REASONING"
     RELATIONSHIP = "RELATIONSHIP"
     SIGNAL_INTEL = "SIGNAL_INTEL"
+    # PLAN-0093 Wave E-1: dedicated intent for macro/calendar queries so the
+    # per-intent rerank weights and prompt addendum can differentiate macro
+    # questions ("ECB meeting next week") from generic factual lookups.
+    MACRO = "MACRO"
 
 
 class ItemType(StrEnum):

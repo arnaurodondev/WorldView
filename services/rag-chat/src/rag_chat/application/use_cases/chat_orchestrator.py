@@ -320,23 +320,25 @@ class ChatOrchestratorUseCase:
                 )
             _entity_map_section = "\n\nEntities resolved from this query:\n" + "\n".join(_emap_lines)
 
-        system_prompt = (
-            tool_executor._registry.to_system_prompt_section()
-            + f"\n\nYou are a market intelligence assistant with access to the tools listed above. "
-            f"Today's date is {_today}. When you call tools that take dates "
-            f"(price history, earnings calendar, economic events, news search), use this "
-            f"date as the reference point — never use dates from your pre-training cutoff. "
-            f"Use the tools to retrieve precise data before answering. "
-            f"If a tool returns no data, acknowledge that in your answer. "
-            f"For well-known entity relationships where tools return sparse results, you may supplement "
-            f"from your training knowledge but must label it 'Based on public knowledge: …' without "
-            f"inventing any KG-specific metadata.\n\n"
-            f"CITATIONS: when the tools you call return documents, articles, or chunks "
-            f"with identifiers, cite them inline using [N1], [N2], … markers — one marker "
-            f"per claim that is supported by a retrieved item, in the order the items "
-            f"appear in the tool output. Do NOT invent citation numbers. If no documents "
-            f"were retrieved, do not emit any citation markers." + _entity_map_section
+        # ── E-1: Strict tool-use prompt from libs/prompts ─────────────────
+        # The old inline prompt explicitly invited training-knowledge
+        # supplement for relationship facts, which the LLM happily extended
+        # to invent revenue, EPS, P/E, and quarter labels. The new prompt
+        # (libs/prompts/chat/tool_use.py) is structurally identical in its
+        # CITATIONS section but adds a hard FORBIDDEN block + structural-
+        # only public-knowledge carve-out. See PLAN-0093 T-E-1-01.
+        from prompts.chat.tool_use import get_tool_use_system_prompt  # type: ignore[import-untyped]
+
+        # Initial intent is GENERAL — we re-infer after the first tool batch
+        # so the per-intent style addendum reflects what the LLM actually
+        # asked the tools to fetch (E-1 T-E-1-02).
+        intent = QueryIntent.GENERAL
+        _tool_use_prompt = get_tool_use_system_prompt(
+            intent=intent.value,
+            today_iso=_today,
+            entity_map_section=_entity_map_section,
         )
+        system_prompt = tool_executor._registry.to_system_prompt_section() + "\n\n" + _tool_use_prompt
 
         messages: list[dict[str, Any]] = [{"role": "system", "content": system_prompt}]
         for msg in conversation_history:
@@ -347,10 +349,13 @@ class ChatOrchestratorUseCase:
         messages.append({"role": "user", "content": request.message})
 
         # ── E-6: Multi-turn agent loop state ──────────────────────────────────
+        # intent is initialised above (defaults to GENERAL); we re-infer it
+        # after the first tool-call batch (E-1 T-E-1-02) so the per-intent
+        # rerank weights + prompt addendum + metrics labels reflect what the
+        # LLM actually requested via tool calls.
         non_none_items: list[RetrievedItem] = []
         reranked: list[RetrievedItem] = []
         contradiction_refs: list = []
-        intent = QueryIntent.GENERAL
         _type_counts: _Counter = _Counter()
         full_text = ""
         provider_name = p.llm_chain.last_provider_name
@@ -400,6 +405,32 @@ class ChatOrchestratorUseCase:
 
             # ── Tool execution ────────────────────────────────────────────────
             had_tool_calls = True
+
+            # ── E-1 T-E-1-02: infer intent from the first tool-call batch ─
+            # We only re-infer on iteration 0 — subsequent rounds are LLM
+            # refinements over data already retrieved, so the intent doesn't
+            # change. The inferred intent is used for (a) the next prompt's
+            # per-intent addendum, (b) the rerank pass, and (c) metrics +
+            # audit log labels emitted later.
+            if iteration == 0:
+                from rag_chat.application.services.intent_inference import infer_intent
+
+                intent = infer_intent(tool_calls)
+                # Refresh the system message in-place so iteration 1 onward
+                # uses the per-intent style addendum. messages[0] is always
+                # the system prompt slot (set above before the loop began).
+                messages[0] = {
+                    "role": "system",
+                    "content": (
+                        tool_executor._registry.to_system_prompt_section()
+                        + "\n\n"
+                        + get_tool_use_system_prompt(
+                            intent=intent.value,
+                            today_iso=_today,
+                            entity_map_section=_entity_map_section,
+                        )
+                    ),
+                }
 
             # Emit tool_call SSE events before executing so the frontend spinner appears.
             for tc in tool_calls:

@@ -30,7 +30,10 @@ class TestQueryIntentEnum:
         assert QueryIntent.GENERAL == "GENERAL"
 
     def test_eight_query_intents(self) -> None:
-        assert len(QueryIntent) == 8  # 7 original + GENERAL (PRD-0016 Wave A-1)
+        # 7 original + GENERAL (PRD-0016 Wave A-1) + MACRO (PLAN-0093 Wave E-1).
+        # PLAN-0093 Wave E-1 added MACRO so the macro/calendar tool family
+        # gets its own per-intent prompt + rerank weight bucket.
+        assert len(QueryIntent) == 9
 
     def test_all_original_intents_present(self) -> None:
         original = {

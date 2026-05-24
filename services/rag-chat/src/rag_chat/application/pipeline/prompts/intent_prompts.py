@@ -208,6 +208,20 @@ _GENERAL_PROMPT = (
     f"{_SAFETY}"
 )
 
+# PLAN-0093 Wave E-1: dedicated macro-calendar prompt so the rerank weights
+# and answer format can differentiate macroeconomic queries (central-bank
+# decisions, CPI prints, geopolitical events) from generic factual lookups.
+_MACRO_PROMPT = (
+    "You are a financial intelligence analyst summarising macroeconomic events.\n"
+    "Order events chronologically (most recent first).\n"
+    "For each event, include: [DATE] [EVENT-TYPE] [Country/Region] —"
+    " [one-sentence description] with the source citation [N].\n"
+    "Group related events (e.g. all Fed-related items together) when helpful.\n"
+    "Do NOT invent calendar events that are not present in the retrieved context.\n"
+    f"{_V2_EXTRA_RULES}\n"
+    f"{_SAFETY}"
+)
+
 # ── EMAIL_DEEP_BRIEF special mode (not a QueryIntent — used by briefing endpoint) ──
 
 EMAIL_DEEP_BRIEF_PROMPT = (
@@ -236,6 +250,7 @@ _INTENT_PROMPTS: dict[str, str] = {
     "REASONING": _REASONING_PROMPT,
     "PORTFOLIO": _PORTFOLIO_PROMPT,
     "GENERAL": _GENERAL_PROMPT,
+    "MACRO": _MACRO_PROMPT,
 }
 
 
