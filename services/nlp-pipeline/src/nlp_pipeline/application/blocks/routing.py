@@ -1,8 +1,27 @@
-"""Block 5 — Document Routing Score (PRD §6.7 Block 5).
+"""Block 5 — Document Routing Score (PRD §6.7 Block 5, PLAN-0093 C-1 v2).
 
-8-signal weighted formula. Weights sum to exactly 1.0 (module-level assertion).
-Watchlist signal sourced from Valkey SET maintained by the watchlist consumer.
-price_impact signal sourced from article_price_impacts table (PRD-0020 §6.5).
+Routing signal v2 (PLAN-0093 Sub-Plan C, Wave C-1, 2026-05-23)
+==============================================================
+
+Originally a weighted formula over 8 signals. Audit 2026-05-23 (F-NPL-003/004/006,
+F-NPL-ROUTING-001) confirmed that 3 of those 8 signals are permanently zero in the
+current single-pass routing architecture:
+
+  1. ``watchlist`` — checks ``m.resolved_entity_id``, but ``compute_routing_score``
+     runs BEFORE entity resolution. ``resolved_entity_id`` is always ``None``.
+  2. ``novelty`` — hardcoded to ``1.0`` at the call site (article_consumer.py:575)
+     because MinHash novelty runs AFTER routing, not before it.
+  3. ``price_impact`` — derived from ``article_impact_windows`` which is empty
+     (F-NPL-FUNDAMENTALS-001 — market-data symbol resolver broken; PLAN-0093 C-3
+     re-enables this signal once data starts flowing).
+
+To restore these signals we would need to implement two-pass routing (route →
+resolve → re-route) which is a substantial architecture change. PLAN-0093 defers
+that to a follow-up plan. For now we **drop** the three dead signals and
+re-weight the remaining 5 so they sum to exactly 1.0.
+
+If/when two-pass routing lands, the dropped signals can be reintroduced by
+restoring the keys here and rebalancing weights — keep the assertion intact.
 """
 
 from __future__ import annotations
@@ -14,17 +33,22 @@ from uuid import UUID
 from nlp_pipeline.domain.enums import MentionClass, RoutingTier
 from nlp_pipeline.domain.models import EntityMention, RoutingDecision
 
-# ── Signal weights (PRD §6.7 Block 5 / PRD-0020 §6.5 rebalance) ─────────────
-
+# ── Signal weights (PLAN-0093 Sub-Plan C Wave C-1 — v2) ─────────────────────
+#
+# v1 weights (deprecated 2026-05-23, kept here for traceability):
+#   entity_density=0.25, source_reliability=0.20, novelty=0.15, recency=0.10,
+#   watchlist=0.10, document_type=0.05, extraction_yield=0.05, price_impact=0.10
+#   → composite ceiling ~0.65 because watchlist/novelty/price_impact never fired
+#
+# v2 weights (active): the 3 dead signals are removed and their 0.35 of weight
+# is redistributed to the 5 live signals, prioritising the strongest ones
+# (entity_density and source_reliability are the most informative live signals).
 SIGNAL_WEIGHTS: dict[str, float] = {
-    "entity_density": 0.25,
-    "source_reliability": 0.20,
-    "novelty": 0.15,
-    "recency": 0.10,
-    "watchlist": 0.10,
-    "document_type": 0.05,
-    "extraction_yield": 0.05,
-    "price_impact": 0.10,
+    "entity_density": 0.35,
+    "source_reliability": 0.30,
+    "recency": 0.15,
+    "document_type": 0.10,
+    "extraction_yield": 0.10,
 }
 
 # Module-level assertion: weights must sum to exactly 1.0
@@ -32,9 +56,13 @@ assert (
     abs(sum(SIGNAL_WEIGHTS.values()) - 1.0) < 1e-9
 ), f"Signal weights must sum to 1.0, got {sum(SIGNAL_WEIGHTS.values())}"
 
-# ── Tier thresholds (PRD §6.7 Block 5) ───────────────────────────────────────
-
-TIER_DEEP: float = 0.70
+# ── Tier thresholds (PLAN-0093 C-1 — recalibrated for v2 ceiling) ───────────
+#
+# With v1 (8 signals, 3 dead) the practical max composite was ~0.65 because the
+# 3 dead signals contributed 0.0 even on perfect docs. With v2 (5 live signals)
+# the practical max is ~0.90+, so tier thresholds shift upward to maintain the
+# same DEEP/MEDIUM/LIGHT proportions.
+TIER_DEEP: float = 0.75
 TIER_MEDIUM: float = 0.45
 TIER_LIGHT: float = 0.20
 
@@ -98,6 +126,14 @@ def _recency_signal(published_at: datetime | None, extracted_at: datetime) -> fl
 def _watchlist_signal(mentions: list[EntityMention], watched_entity_ids: frozenset[UUID]) -> float:
     """min(1.0, watchlist_overlap_count / 3).
 
+    DEPRECATED (PLAN-0093 C-1, 2026-05-23): no longer wired into
+    ``compute_routing_score`` because resolution runs AFTER routing in the
+    current single-pass architecture, so ``resolved_entity_id`` is always
+    ``None`` at the time this would be called. The helper is kept ONLY so the
+    existing unit tests in ``test_routing.py`` can continue to exercise the
+    signal-math invariants (overlap counting, cap-at-1 behaviour) until
+    two-pass routing is implemented in a follow-up plan.
+
     Checks resolved entity_ids against watched_entity_ids set.
     Best-effort: if Valkey is unavailable, caller passes an empty frozenset → 0.0.
     """
@@ -143,14 +179,16 @@ def compute_routing_score(
     section_count: int,
     *,
     source_trust_weight: float,
-    novelty_score: float,
-    watched_entity_ids: frozenset[UUID],
-    price_impact_score: float = 0.0,
     tier_deep: float = TIER_DEEP,
     tier_medium: float = TIER_MEDIUM,
     tier_light: float = TIER_LIGHT,
 ) -> RoutingDecision:
-    """Compute the 8-signal routing score and assign a RoutingTier.
+    """Compute the 5-signal routing score and assign a RoutingTier.
+
+    PLAN-0093 C-1 (2026-05-23): dropped ``novelty_score``, ``watched_entity_ids``,
+    and ``price_impact_score`` arguments — the corresponding signals were
+    permanently zero in single-pass routing. See module docstring for the
+    full rationale. Re-introducing them requires implementing two-pass routing.
 
     Args:
         doc_id: Document being routed.
@@ -161,11 +199,6 @@ def compute_routing_score(
         mentions: Entity mentions from Block 4.
         section_count: Number of sections from Block 3.
         source_trust_weight: From intelligence_db.source_trust_weights.
-        novelty_score: Stage 1 novelty output [0, 1].
-        watched_entity_ids: Resolved entity IDs currently on any watchlist.
-        price_impact_score: Normalised price-impact score [0, 1] from
-            article_price_impacts table. Defaults to 0.0 for articles not
-            yet labelled (< 25h old) or when lookup fails (best-effort).
 
     Returns:
         RoutingDecision with composite_score, feature_scores, and routing_tier.
@@ -173,12 +206,9 @@ def compute_routing_score(
     feature_scores: dict[str, float] = {
         "entity_density": _entity_density_signal(mentions),
         "source_reliability": source_trust_weight,
-        "novelty": novelty_score,
         "recency": _recency_signal(published_at, extracted_at),
-        "watchlist": _watchlist_signal(mentions, watched_entity_ids),
         "document_type": DOCUMENT_TYPE_SIGNAL.get(source_type, _DEFAULT_DOCUMENT_TYPE_SIGNAL),
         "extraction_yield": _extraction_yield_signal(len(mentions), section_count),
-        "price_impact": max(0.0, min(1.0, price_impact_score)),
     }
 
     composite = sum(SIGNAL_WEIGHTS[signal] * value for signal, value in feature_scores.items())

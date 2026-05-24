@@ -116,24 +116,37 @@ Key behaviours:
 
 ### Block 5 — Routing Score
 
-Computes a composite routing score from 8 weighted signals. Weights sum to exactly 1.0 (enforced
-by a module-level assertion):
+#### Routing signal v2 (PLAN-0093 Sub-Plan C, 2026-05-23)
+
+Audit 2026-05-23 (F-NPL-003/004/006, F-NPL-ROUTING-001) found that 3 of the original
+8 signals were permanently zero in the current single-pass routing architecture:
+
+| Dropped signal | Reason it always fired 0.0 |
+|---|---|
+| `watchlist` | Checks `mention.resolved_entity_id`, but routing runs BEFORE entity resolution |
+| `novelty` | Hardcoded to `1.0` at the call site — MinHash novelty runs AFTER routing |
+| `price_impact` | Sourced from `article_impact_windows` which is empty (F-NPL-FUNDAMENTALS-001) |
+
+PLAN-0093 C-1 drops these signals from `compute_routing_score()` and re-weights the
+remaining 5 so they still sum to exactly 1.0 (enforced by module-level assertion).
+Re-adding the dropped signals would require implementing two-pass routing
+(route → resolve → re-route); deferred to a follow-up plan.
+
+#### Active signal weights (v2)
 
 | Signal | Weight | Data source |
 |--------|--------|-------------|
-| `entity_density` | 0.25 | Block 4 mention count / section count |
-| `source_reliability` | 0.20 | `source_trust_weights` table |
-| `novelty` | 0.15 | Block 8 MinHash similarity |
-| `recency` | 0.10 | `published_at` age |
-| `watchlist` | 0.10 | Valkey SET `nlp:v1:watched_entities` (best-effort, 0.0 on failure) |
-| `price_impact` | 0.10 | `article_impact_windows` (0.0 when not yet labelled) |
-| `document_type` | 0.05 | Source type (filings > news) |
-| `extraction_yield` | 0.05 | Prior LLM extraction quality for this source |
+| `entity_density` | 0.35 | Block 4 mention count / section count |
+| `source_reliability` | 0.30 | `source_trust_weights` table |
+| `recency` | 0.15 | `published_at` age |
+| `document_type` | 0.10 | Source type (filings > news) |
+| `extraction_yield` | 0.10 | Prior LLM extraction quality for this source |
 
-Routing tier boundaries:
-- `DEEP` ≥ 0.70
-- `MEDIUM` ≥ 0.35 (lowered from 0.45 — watchlist signal fires post-resolution)
-- `LIGHT` ≥ 0.20
+Routing tier boundaries (recalibrated for the v2 ceiling — the live-signal max is
+now ~0.90+ vs ~0.65 in v1):
+- `DEEP` ≥ 0.75 (was 0.70)
+- `MEDIUM` ≥ 0.45 (was 0.35)
+- `LIGHT` ≥ 0.20 (unchanged)
 - `SUPPRESS` < 0.20
 
 ### Block 6 — Suppression Gate

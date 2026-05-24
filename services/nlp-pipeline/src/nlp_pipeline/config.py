@@ -152,10 +152,12 @@ class Settings(BaseSettings):
     # capacity. Configurable via NLP_PIPELINE_MIN_WORD_COUNT (default 50).
     min_word_count: int = 50
 
-    # Routing tier thresholds (PRD §6.7 Block 5)
-    routing_tier_deep: float = 0.70  # score >= this → DEEP processing
-    # Lowered from 0.45: watchlist signal fires post-resolution, effective max without it is ~0.44
-    routing_tier_medium: float = 0.35  # score >= this → MEDIUM processing
+    # Routing tier thresholds (PRD §6.7 Block 5, PLAN-0093 C-1 recalibration)
+    # PLAN-0093 C-1: now that the 3 dead signals (watchlist/novelty/price_impact)
+    # are dropped, the live-signal composite ceiling rises from ~0.65 to ~0.90+.
+    # Thresholds bumped accordingly to preserve DEEP/MEDIUM/LIGHT proportions.
+    routing_tier_deep: float = 0.75  # score >= this → DEEP processing
+    routing_tier_medium: float = 0.45  # score >= this → MEDIUM processing
     routing_tier_light: float = 0.20  # score >= this → LIGHT processing
 
     # Entity resolution thresholds (PRD §6.7 Block 9)

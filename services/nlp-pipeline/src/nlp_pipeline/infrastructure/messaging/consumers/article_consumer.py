@@ -561,8 +561,10 @@ class ArticleProcessingConsumer(ValkeyDedupMixin, BaseKafkaConsumer[None]):
         s6_ner_mentions_total.inc(len(mentions))
 
         # Blocks 5-6: Routing + suppression
-        watched_ids = await self._watchlist.get_all_watched()
-        price_impact = await self._fetch_price_impact(doc_id)
+        # PLAN-0093 C-1: watched_ids + price_impact no longer feed compute_routing_score
+        # (the 3 dead signals are dropped). watched_ids is still fetched downstream for
+        # other features, so we keep the call. price_impact lookup is dropped here — it
+        # was always returning 0.0 anyway (article_impact_windows is empty until C-3).
         routing_decision = compute_routing_score(
             doc_id=doc_id,
             decision_id=uuid.UUID(uuid5_from_parts(str(doc_id), "routing_decision")),
@@ -572,9 +574,6 @@ class ArticleProcessingConsumer(ValkeyDedupMixin, BaseKafkaConsumer[None]):
             mentions=mentions,
             section_count=len(sections),
             source_trust_weight=_DEFAULT_SOURCE_TRUST,
-            novelty_score=1.0,
-            watched_entity_ids=watched_ids,
-            price_impact_score=price_impact,
             tier_deep=self._settings.routing_tier_deep,
             tier_medium=self._settings.routing_tier_medium,
             tier_light=self._settings.routing_tier_light,
