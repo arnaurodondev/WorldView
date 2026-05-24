@@ -190,15 +190,38 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     app.state.clients = clients
 
     # 7. Valkey (fail-open: rate limiting degrades gracefully if unavailable)
+    # FIX-LIVE-D (PLAN-0093 Phase 5c, F-LIVE-005C-VALKEY): emit a structured
+    # ``valkey_health`` event with the ping result + latency so we have a
+    # scrape-friendly anchor for "Valkey was healthy at boot" in logs. This
+    # complements the per-request ``valkey_op_failed`` event in middleware.py
+    # and the ``rate_limiting_unavailable_total`` counter so the next time
+    # Valkey hiccups we have boot-time baseline + per-request flap trail.
     valkey: ValkeyClient | None = None
+    _valkey_t0 = asyncio.get_event_loop().time()
     try:
         valkey = create_valkey_client_from_url(settings.valkey_url)
         await valkey.ping()
         app.state.valkey = valkey
+        _valkey_latency_ms = round((asyncio.get_event_loop().time() - _valkey_t0) * 1000, 2)
         logger.info("valkey_connected", url=settings.valkey_url)
+        logger.info(
+            "valkey_health",
+            status="healthy",
+            ping_latency_ms=_valkey_latency_ms,
+            url=settings.valkey_url,
+        )
     except Exception as exc:
         app.state.valkey = None
+        _valkey_latency_ms = round((asyncio.get_event_loop().time() - _valkey_t0) * 1000, 2)
         logger.warning("valkey_unavailable", error=str(exc), detail="rate limiting disabled")
+        logger.warning(
+            "valkey_health",
+            status="unhealthy",
+            ping_latency_ms=_valkey_latency_ms,
+            url=settings.valkey_url,
+            error=str(exc),
+            error_type=type(exc).__name__,
+        )
 
     logger.info("service_started", service=settings.service_name)
     yield
