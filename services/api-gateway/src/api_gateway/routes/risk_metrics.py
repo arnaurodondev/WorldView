@@ -298,6 +298,72 @@ def _alpha(portfolio_returns: list[float], spy_returns: list[float]) -> float | 
     return p_ann - s_ann
 
 
+def _period_return(values: list[float]) -> float | None:
+    """Total return over the window: ``(final - initial) / initial``.
+
+    Returns ``None`` when fewer than 2 data points are available or the
+    initial value is non-positive (the ratio is undefined / would explode).
+    Sign convention: positive = gain, negative = loss. The frontend renders
+    the value as a percentage.
+    """
+    if len(values) < 2:
+        return None
+    initial = values[0]
+    if initial <= 0:
+        return None
+    return (values[-1] - initial) / initial
+
+
+def _cagr(values: list[float], lookback_days: int) -> float | None:
+    """Compound Annual Growth Rate: ``(V_T / V_0) ** (365.25 / lookback_days) - 1``.
+
+    Uses ``365.25`` (calendar days, accounting for leap years) because the
+    lookback window is expressed in calendar days, not trading days — the
+    ``_TRADING_DAYS_PER_YEAR`` (252) constant is only correct when the
+    exponent base is also in trading days.
+
+    Returns ``None`` when fewer than 2 points are available, the initial
+    value is non-positive, or ``lookback_days <= 0`` (the exponent is
+    undefined). Also returns ``None`` if the final value is non-positive —
+    the math would yield a complex number for the fractional root.
+    """
+    if len(values) < 2 or lookback_days <= 0:
+        return None
+    initial = values[0]
+    final = values[-1]
+    if initial <= 0 or final <= 0:
+        return None
+    # WHY explicit float(): ``a ** b`` widens to Any under mypy's stub for
+    # int/float exponentiation; the cast pins the return type so the helper
+    # stays ``float | None`` without a ``# type: ignore``.
+    return float((final / initial) ** (365.25 / lookback_days) - 1)
+
+
+def _var_95(returns: list[float]) -> float | None:
+    """Historical Value-at-Risk at 95% confidence.
+
+    Returns the empirical 5th-percentile of the daily-return series — i.e.
+    the loss threshold such that on 95% of days the portfolio does no worse
+    than this. Sign convention matches the rest of this file: negative for
+    losses (e.g. ``-0.023`` means "5% of days lose at least 2.3%"). The
+    frontend takes responsibility for formatting (sign flip / abs).
+
+    Returns ``None`` if the series has fewer than ``_MIN_RETURNS`` (10)
+    points — the percentile estimate would be too noisy to publish.
+
+    Implementation note: ``statistics.quantiles(returns, n=20)`` partitions
+    the series into 20 equal-frequency buckets; index ``[0]`` is the 5th
+    percentile. This matches numpy's ``percentile(r, 5, method='inclusive')``
+    closely enough for our purposes and avoids the numpy dependency.
+    """
+    if len(returns) < _MIN_RETURNS:
+        return None
+    # statistics.quantiles with n=20 returns 19 cut points at the 5%, 10%, ..., 95%
+    # marks. Index 0 is the 5th-percentile cut.
+    cuts = statistics.quantiles(returns, n=20, method="inclusive")
+    return cuts[0]
+
+
 def _beta(portfolio_returns: list[float], spy_returns: list[float]) -> float | None:
     """β = cov(r_p, r_spy) / var(r_spy).
 
@@ -606,6 +672,17 @@ async def get_risk_metrics(
     calmar = _calmar(portfolio_returns, drawdown_max)
     win_rate = _win_rate(portfolio_returns)
 
+    # 5b. ARCH-F002: period_return, cagr, var_95 — derived from the raw
+    # portfolio_values / portfolio_returns series. period_return and cagr
+    # use the full value series (they care about endpoints, not returns)
+    # so they degrade independently — a 2-point series gives a valid
+    # period_return even though every return-based metric is null.
+    # var_95 follows the same _MIN_RETURNS gate as Sharpe/Sortino since
+    # it's a percentile of the return distribution.
+    period_return: float | None = _period_return(portfolio_values)
+    cagr: float | None = _cagr(portfolio_values, lookback_days)
+    var_95: float | None = _var_95(portfolio_returns)
+
     # F-014 / F-015: surface ``as_of``, ``lookback_window``, and a
     # ``data_quality`` block so the frontend knows *why* a metric is
     # null and can render an honest empty-state hint instead of just "—".
@@ -656,6 +733,11 @@ async def get_risk_metrics(
         calmar = None
         win_rate = None
         alpha = None
+        # ARCH-F002: same suppression discipline for the three new metrics —
+        # the underlying series is contaminated so any value would be misleading.
+        period_return = None
+        cagr = None
+        var_95 = None
     elif insufficient or len(portfolio_returns) < _MIN_RETURNS:
         data_quality_status = "insufficient_data"
     elif not spy_series:
@@ -677,6 +759,11 @@ async def get_risk_metrics(
         "calmar": calmar,  # annualised_return / abs(drawdown_max); None when no drawdown
         "win_rate": win_rate,  # fraction of positive daily returns [0, 1]
         "alpha": alpha,  # portfolio_annualised_return - spy_annualised_return
+        # ARCH-F002 additions — AnalyticsRiskSidebar tiles (VAR 95 / CAGR /
+        # RETURN). Same nulling discipline as the siblings above.
+        "period_return": period_return,  # (final - initial) / initial; None when < 2 points
+        "cagr": cagr,  # (final/initial) ** (365.25 / lookback_days) - 1
+        "var_95": var_95,  # 5th-percentile daily return (negative for losses)
         "n_returns": len(portfolio_returns),
         # When the metric was computed (UTC ISO-8601). Lets the frontend
         # cache-bust intelligently if it ever wants to compare against a

@@ -599,9 +599,9 @@ The `/v1/auth/callback` handler sanitizes `error` and `error_description` query 
 | GET | `/v1/portfolios/{id}/risk-metrics` | Drawdown, volatility, Sharpe, Sortino, beta vs SPY. Pure S9 composition over S1 value-history + S3 SPY OHLCV. Query param: `lookback_days` (10-3650, default 90). All metrics independently nullable. | Yes |
 
 **Response fields**: `drawdown_max`, `drawdown_current`, `volatility_annualized`, `sharpe`,
-`sortino`, `beta_vs_spy`, `calmar`, `win_rate`, `alpha`, `n_returns`, `as_of`, `lookback_window`, `data_quality`.
+`sortino`, `beta_vs_spy`, `calmar`, `win_rate`, `alpha`, `period_return`, `cagr`, `var_95`, `n_returns`, `as_of`, `lookback_window`, `data_quality`.
 
-Wave G additions: `calmar` (annualised_return / |drawdown_max|), `win_rate` (fraction of positive daily returns [0,1]), `alpha` (portfolio_ann_return − spy_ann_return). All three are null when drawdown_max is null/zero, history < 10 returns, or SPY data unavailable.
+Wave G additions: `calmar` (annualised_return / |drawdown_max|), `win_rate` (fraction of positive daily returns [0,1]), `alpha` (portfolio_ann_return − spy_ann_return), `period_return` ((final − initial) / initial; null when < 2 points or initial ≤ 0), `cagr` ((final/initial)^(365.25/lookback_days) − 1; null when < 2 points or endpoints ≤ 0), `var_95` (5th-percentile daily return — negative for losses; null when < 10 returns). All six are null on contamination, on insufficient history, or when mathematically undefined.
 
 **`data_quality.status` values**:
 - `ok` — sufficient data and SPY available
