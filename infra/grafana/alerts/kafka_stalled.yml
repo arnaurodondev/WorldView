@@ -1,0 +1,48 @@
+# PLAN-0093 Wave A-2 (audit ref F-LOG-003): Kafka consumer stalled alert.
+#
+# Fires when a consumer client has processed zero messages over a 5-minute
+# window WHILE there is at least one unread message on the topic.  The
+# combined predicate is important: a healthy idle consumer (caught-up on
+# every topic it subscribes to) must NOT page anyone.
+#
+# Backing metric: ``kafka_consumer_messages_consumed_total`` is the
+# cross-service counter exported from ``libs/observability/metrics.py`` and
+# incremented inside ``BaseKafkaConsumer._handle_message`` on every
+# successfully processed message.  Labels: service, topic, consumer_group.
+#
+# Backlog signal: ``kafka_topic_size`` is the standard Kafka exporter gauge
+# for the highest committed-offset distance on a topic.  When the Kafka
+# exporter is not deployed, the alert simply will not fire — that is by
+# design; the platform contract is "consumer-side counter is the source of
+# truth, backlog is the AND-gate to suppress false positives on quiet
+# topics".
+groups:
+  - name: kafka_stalled
+    rules:
+      - alert: KafkaConsumerStalled
+        # rate() over the cross-service counter == 0 → no messages processed
+        # in the last 5 minutes.  AND kafka_topic_size > 0 → there is at
+        # least one message waiting for that topic.  The label join is on
+        # `topic` so we only page when both sides agree.
+        expr: |
+          (
+            sum by (service, topic, consumer_group) (
+              rate(kafka_consumer_messages_consumed_total[5m])
+            ) == 0
+          )
+          and on (topic) (
+            kafka_topic_size > 0
+          )
+        for: 5m
+        labels:
+          severity: critical
+          subsystem: kafka
+        annotations:
+          summary: "Kafka consumer {{ $labels.consumer_group }} stalled on {{ $labels.topic }}"
+          description: >
+            Consumer group {{ $labels.consumer_group }} (service: {{ $labels.service }})
+            has processed zero messages from {{ $labels.topic }} for >5 minutes
+            while the topic has a non-zero backlog.  Likely causes: stale broker
+            DNS (see BaseKafkaConsumer connectivity probe — should self-exit at
+            3 misses), DLQ-cap hit, or a hung message handler.
+          runbook_url: "https://github.com/worldview/runbooks/blob/main/KafkaConsumerStalled.md"

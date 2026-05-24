@@ -4,6 +4,7 @@ from observability.error_capture import register_error_handlers
 from observability.internal_jwt import InternalJWTMiddleware
 from observability.logging import configure_logging, get_logger
 from observability.metrics import (
+    KAFKA_CONSUMER_MESSAGES,
     MLMetrics,
     ServiceMetrics,
     add_prometheus_middleware,
@@ -15,6 +16,7 @@ from observability.startup_assert import assert_app_env_or_die
 from observability.tracing import add_otel_middleware, configure_tracing, get_tracer
 
 __all__ = [
+    "KAFKA_CONSUMER_MESSAGES",
     "InternalJWTMiddleware",
     "MLMetrics",
     "SentrySettings",

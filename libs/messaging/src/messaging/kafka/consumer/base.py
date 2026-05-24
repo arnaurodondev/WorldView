@@ -26,7 +26,12 @@ from typing import TYPE_CHECKING, Any, Generic, Protocol, TypeVar, runtime_check
 
 from messaging.kafka.consumer.backpressure import BackpressurePolicy, LagCalculator
 from messaging.kafka.consumer.errors import ConsumerError, FatalError, RetryableError
-from observability import ServiceMetrics, get_logger  # type: ignore[import-untyped]
+from messaging.kafka_config import apply_base_rdkafka_config
+from observability import (  # type: ignore[import-untyped]
+    KAFKA_CONSUMER_MESSAGES,
+    ServiceMetrics,
+    get_logger,
+)
 from observability import create_metrics as _create_metrics  # type: ignore[import-untyped]
 
 if TYPE_CHECKING:
@@ -167,16 +172,21 @@ class ConsumerConfig:
         is via ``fetch.message.max.bytes`` / ``queued.max.messages.kbytes``,
         not record count.
         """
-        return {
-            "bootstrap.servers": self.bootstrap_servers,
-            "group.id": self.group_id,
-            "auto.offset.reset": self.auto_offset_reset,
-            "enable.auto.commit": self.enable_auto_commit,
-            "session.timeout.ms": self.session_timeout_ms,
-            "heartbeat.interval.ms": self.heartbeat_interval_ms,
-            "max.poll.interval.ms": self.max_poll_interval_ms,
-            "partition.assignment.strategy": self.partition_assignment_strategy,
-        }
+        # PLAN-0093 Wave A-2 (F-LOG-003): prepend the rdkafka base config so
+        # every consumer carries broker.address.ttl=30s + family=v4.  User
+        # keys are spread on top → per-consumer overrides still win.
+        return apply_base_rdkafka_config(
+            {
+                "bootstrap.servers": self.bootstrap_servers,
+                "group.id": self.group_id,
+                "auto.offset.reset": self.auto_offset_reset,
+                "enable.auto.commit": self.enable_auto_commit,
+                "session.timeout.ms": self.session_timeout_ms,
+                "heartbeat.interval.ms": self.heartbeat_interval_ms,
+                "max.poll.interval.ms": self.max_poll_interval_ms,
+                "partition.assignment.strategy": self.partition_assignment_strategy,
+            }
+        )
 
 
 @dataclasses.dataclass
@@ -654,6 +664,16 @@ class BaseKafkaConsumer(ABC, Generic[TFailure]):
             topic=topic,
             consumer_group=self._config.group_id,
         ).inc()
+        # PLAN-0093 Wave A-2 (F-LOG-003): cross-service counter so the
+        # ``KafkaConsumerStalled`` alert can pivot across every consumer in
+        # a single Prometheus expression.  ``service`` label uses the
+        # ServiceMetrics service_name when available, falling back to the
+        # consumer group_id (always present).
+        KAFKA_CONSUMER_MESSAGES.labels(
+            service=self._metrics.service_name if self._metrics is not None else self._config.group_id,
+            topic=topic,
+            consumer_group=self._config.group_id,
+        ).inc()
 
     async def _handle_failure(
         self,
@@ -921,6 +941,84 @@ class BaseKafkaConsumer(ABC, Generic[TFailure]):
                 logger.error("retry_loop_error", error=str(exc))
             await asyncio.sleep(self._config.poll_timeout_seconds)
 
+    # PLAN-0093 Wave A-2 (F-LOG-003): connectivity probe configuration.
+    # Tuned conservatively — 60 s between probes x 3 misses = a 3-minute
+    # detection window before we force-exit, which lines up with the
+    # ``kafka_unreachable_for_5min`` alert window with room to spare.  These
+    # are class attributes (not ConsumerConfig fields) because every consumer
+    # in the platform wants the same behaviour and exposing them as knobs
+    # would invite per-service drift, which is the exact pattern the probe
+    # is designed to defend against.
+    _probe_interval_seconds: float = 60.0
+    _probe_failure_threshold: int = 3
+    _probe_list_topics_timeout: float = 5.0
+
+    async def _connectivity_probe_loop(self) -> None:
+        """Periodically probe the broker; force-exit on sustained failure.
+
+        Runs alongside the poll loop.  Every ``_probe_interval_seconds`` we
+        call ``consumer.list_topics(timeout=5)``; if 3 consecutive probes
+        fail we log ``kafka_unreachable_for_5min`` at CRITICAL and exit
+        the process with code 2 so the container orchestrator can give us
+        a fresh DNS lookup on restart.
+
+        Important properties:
+
+        * Probe failures NEVER bubble up — only the consecutive-failure
+          count matters.  The consume loop must not be affected by transient
+          metadata errors.
+        * ``list_topics`` is a blocking librdkafka call → hopped onto the
+          default executor so it cannot delay the event loop.
+        * The loop honours :attr:`_stop_event` so a graceful shutdown does
+          not log misleading failure events.
+        """
+        loop = asyncio.get_event_loop()
+        consecutive_failures = 0
+        while not self._stop_event.is_set():
+            # Sleep first so we do not probe immediately on startup, where the
+            # consumer may not yet have completed its initial metadata fetch.
+            try:
+                await asyncio.wait_for(
+                    self._stop_event.wait(),
+                    timeout=self._probe_interval_seconds,
+                )
+                # Stop event fired during the wait → graceful shutdown.
+                return
+            except TimeoutError:
+                pass  # interval elapsed, run a probe
+
+            if self._consumer is None:
+                # Consumer not yet initialised; do not count as a failure.
+                continue
+
+            try:
+                await loop.run_in_executor(
+                    None,
+                    lambda: self._consumer.list_topics(timeout=self._probe_list_topics_timeout),
+                )
+                # Success → reset the counter.  This is the only place a
+                # success resets the counter, so a single good probe wipes
+                # out two prior misses (matches the spec).
+                consecutive_failures = 0
+            except Exception as exc:
+                consecutive_failures += 1
+                logger.warning(
+                    "kafka_connectivity_probe_failed",
+                    group_id=self._config.group_id,
+                    consecutive_failures=consecutive_failures,
+                    threshold=self._probe_failure_threshold,
+                    error=str(exc),
+                    error_type=type(exc).__name__,
+                )
+                if consecutive_failures >= self._probe_failure_threshold:
+                    logger.critical(
+                        "kafka_unreachable_for_5min",
+                        group_id=self._config.group_id,
+                        consecutive_failures=consecutive_failures,
+                        action="exiting_with_code_2_for_dns_refresh",
+                    )
+                    sys.exit(2)
+
     async def run(self) -> None:
         """Start consuming messages until :meth:`stop` is called.
 
@@ -929,6 +1027,10 @@ class BaseKafkaConsumer(ABC, Generic[TFailure]):
         """
         self._init_kafka()
         retry_task = asyncio.create_task(self._retry_loop())
+        # PLAN-0093 Wave A-2 (F-LOG-003): launch the broker connectivity probe
+        # in parallel with the poll loop.  Cancelled in ``finally`` so the
+        # task does not leak on shutdown.
+        probe_task = asyncio.create_task(self._connectivity_probe_loop())
 
         # BP-268 fix: asyncio.create_task without a done_callback means a crash
         # in the retry loop is silently swallowed — the task becomes a failed
@@ -946,6 +1048,20 @@ class BaseKafkaConsumer(ABC, Generic[TFailure]):
                 sys.exit(1)
 
         retry_task.add_done_callback(_on_retry_task_done)
+
+        def _on_probe_task_done(task: asyncio.Task[None]) -> None:  # type: ignore[type-arg]
+            # The probe deliberately calls sys.exit(2) on sustained failure
+            # (handled by SystemExit propagating up to the event loop).  An
+            # un-cancelled task with an unhandled non-SystemExit exception
+            # would otherwise be silently swallowed — log it loud so the
+            # operator sees that connectivity monitoring is gone.
+            if task.cancelled():
+                return
+            exc = task.exception()
+            if exc is not None:
+                logger.critical("connectivity_probe_crashed", exc_info=exc)
+
+        probe_task.add_done_callback(_on_probe_task_done)
 
         try:
             loop = asyncio.get_event_loop()
@@ -997,6 +1113,11 @@ class BaseKafkaConsumer(ABC, Generic[TFailure]):
             retry_task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await retry_task
+            # PLAN-0093 Wave A-2: cancel the probe last so a graceful shutdown
+            # never produces a spurious connectivity-failure log.
+            probe_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await probe_task
             self._shutdown_kafka()
 
     def stop(self) -> None:
