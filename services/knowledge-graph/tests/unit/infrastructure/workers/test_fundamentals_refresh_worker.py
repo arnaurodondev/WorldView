@@ -769,3 +769,162 @@ class TestFundamentalsRefreshStatusLogging:
         assert "status_code=503" in combined
         assert "ticker=AAPL" in combined
         assert "latency_ms=" in combined
+
+
+class TestFundamentalsRefreshFailureObservability:
+    """FIX-LIVE-G (2026-05-24) regression tests.
+
+    INV-LIVE-E mis-diagnosed a 100% ``fundamentals_refresh_market_data_unavailable``
+    failure rate as a JWT/auth issue. The real cause was 99% missing
+    instruments in market-data (data-availability gap). The generic warning
+    hid the actual failure category — making the next investigator chase the
+    wrong hypothesis. These tests pin the observability contract: when a
+    market-data call fails, the structured event must carry a precise
+    ``failure_reason`` that distinguishes ``instrument_lookup_failed`` (data
+    gap) from ``fundamentals_http_404`` (instrument exists but no fundamentals
+    ingested) from ``fundamentals_http_401`` (auth — the hypothesis INV-LIVE-E
+    chased) from ``fundamentals_transport_error`` (network).
+    """
+
+    def test_instrument_lookup_404_emits_failure_reason(self, capsys: pytest.CaptureFixture[str]) -> None:
+        """Lookup 404 → unavailable warning carries ``failure_reason='instrument_lookup_failed'``."""
+        from knowledge_graph.infrastructure.workers.fundamentals_refresh import FundamentalsRefreshWorker
+
+        due_rows = [
+            {
+                "entity_id": _ENTITY_ID,
+                "ticker": "OBSCURE",
+                "canonical_name": "Obscure Ltd",
+                "entity_type": "financial_instrument",
+            },
+        ]
+        sf, emb_repo = _make_session_factory(due_rows)
+
+        lookup_404 = MagicMock()
+        lookup_404.status_code = 404
+        lookup_404.content = b'{"detail": "not found"}'
+        lookup_404.json = MagicMock(return_value={"detail": "not found"})
+
+        http_client = AsyncMock()
+        http_client.get = AsyncMock(return_value=lookup_404)
+        http_client.aclose = AsyncMock()
+
+        llm = AsyncMock()
+
+        with patch(_EMB_REPO, return_value=emb_repo):
+            worker = FundamentalsRefreshWorker(sf, llm, "http://market-data:8003", http_client=http_client)
+            asyncio.run(worker.run())
+
+        captured = capsys.readouterr()
+        combined = captured.out + captured.err
+        # Both the precise reason and the aggregate breakdown must surface.
+        assert "fundamentals_refresh_market_data_unavailable" in combined
+        assert "failure_reason=instrument_lookup_failed" in combined
+        # worker_complete summary must include the aggregate counter.
+        assert "fundamentals_refresh_worker_complete" in combined
+        assert "instrument_lookup_failed" in combined.split("worker_complete", 1)[1]
+
+    def test_fundamentals_http_404_emits_failure_reason_with_status(self, capsys: pytest.CaptureFixture[str]) -> None:
+        """Fundamentals 404 → ``failure_reason='fundamentals_http_404'`` (distinct from lookup miss)."""
+        from knowledge_graph.infrastructure.workers.fundamentals_refresh import FundamentalsRefreshWorker
+
+        due_rows = [
+            {
+                "entity_id": _ENTITY_ID,
+                "ticker": "NEWLIST",
+                "canonical_name": "Newly Listed Co",
+                "entity_type": "financial_instrument",
+            },
+        ]
+        sf, emb_repo = _make_session_factory(due_rows)
+
+        _INSTRUMENT_ID = UUID("01900000-0000-7000-8000-000000099999")
+
+        # Lookup succeeds — the instrument IS in market-data.
+        lookup_ok = MagicMock()
+        lookup_ok.status_code = 200
+        lookup_ok.content = b'{"id": "..."}'
+        lookup_ok.json = MagicMock(return_value={"id": str(_INSTRUMENT_ID), "symbol": "NEWLIST"})
+
+        # All fundamentals/earnings/profile calls return 404 — newly-listed
+        # instrument with no derived data ingested yet.
+        not_found = MagicMock()
+        not_found.status_code = 404
+        not_found.content = b'{"detail": "no data"}'
+        not_found.json = MagicMock(return_value={"detail": "no data"})
+
+        def _route(url: str, **_kwargs: object) -> object:
+            if "/instruments/lookup" in url:
+                return lookup_ok
+            return not_found
+
+        http_client = AsyncMock()
+        http_client.get = AsyncMock(side_effect=_route)
+        http_client.aclose = AsyncMock()
+
+        llm = AsyncMock()
+
+        with patch(_EMB_REPO, return_value=emb_repo):
+            worker = FundamentalsRefreshWorker(sf, llm, "http://market-data:8003", http_client=http_client)
+            asyncio.run(worker.run())
+
+        captured = capsys.readouterr()
+        combined = captured.out + captured.err
+        assert "fundamentals_refresh_market_data_unavailable" in combined
+        assert "failure_reason=fundamentals_http_404" in combined
+
+    def test_fundamentals_http_401_emits_failure_reason_with_status(self, capsys: pytest.CaptureFixture[str]) -> None:
+        """Auth failure (401) → distinct ``failure_reason='fundamentals_http_401'``.
+
+        This is exactly the failure mode INV-LIVE-E *hypothesised*. The test
+        pins that if auth ever really does break, the log will say so
+        explicitly rather than the generic message that started this whole
+        investigation. Future investigators will not have to guess.
+        """
+        from knowledge_graph.infrastructure.workers.fundamentals_refresh import FundamentalsRefreshWorker
+
+        due_rows = [
+            {
+                "entity_id": _ENTITY_ID,
+                "ticker": "AAPL",
+                "canonical_name": "Apple Inc.",
+                "entity_type": "financial_instrument",
+            },
+        ]
+        sf, emb_repo = _make_session_factory(due_rows)
+
+        _INSTRUMENT_ID = UUID("01900000-0000-7000-8000-000000001001")
+        lookup_ok = MagicMock()
+        lookup_ok.status_code = 200
+        lookup_ok.content = b'{"id": "..."}'
+        lookup_ok.json = MagicMock(return_value={"id": str(_INSTRUMENT_ID), "symbol": "AAPL"})
+
+        unauthorized = MagicMock()
+        unauthorized.status_code = 401
+        unauthorized.content = b'{"detail": "invalid JWT"}'
+        unauthorized.json = MagicMock(return_value={"detail": "invalid JWT"})
+
+        def _route(url: str, **_kwargs: object) -> object:
+            if "/instruments/lookup" in url:
+                return lookup_ok
+            return unauthorized
+
+        http_client = AsyncMock()
+        http_client.get = AsyncMock(side_effect=_route)
+        http_client.aclose = AsyncMock()
+
+        llm = AsyncMock()
+
+        with patch(_EMB_REPO, return_value=emb_repo):
+            worker = FundamentalsRefreshWorker(sf, llm, "http://market-data:8003", http_client=http_client)
+            asyncio.run(worker.run())
+
+        captured = capsys.readouterr()
+        combined = captured.out + captured.err
+        assert "fundamentals_refresh_market_data_unavailable" in combined
+        assert "failure_reason=fundamentals_http_401" in combined
+        # The dedicated per-call HTTP log must also surface the 401 status,
+        # so an investigator can immediately see "the request was rejected"
+        # without inferring it from the worker's summary.
+        assert "market_data_call_client_error" in combined
+        assert "status_code=401" in combined

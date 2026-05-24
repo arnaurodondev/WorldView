@@ -293,6 +293,14 @@ class FundamentalsRefreshWorker:
         # fields even when the cycle has zero due entities.
         backoff_escalations = 0
         backoff_resets = 0
+        # FIX-LIVE-G (2026-05-24): per-reason failure counter so the
+        # ``fundamentals_refresh_worker_complete`` summary reveals whether the
+        # cycle's losses were caused by missing instruments (data-availability
+        # gap), missing fundamentals (ingestion gap), auth (401/403), or
+        # transport errors. Previously all four collapsed into a single
+        # generic ``market_data_unavailable`` warning, costing INV-LIVE-E ~1h
+        # chasing a JWT hypothesis that turned out to be wrong.
+        failure_counts: dict[str, int] = {}
 
         try:
             # ── Phase 1: Read due entities, then release the session ──
@@ -376,14 +384,23 @@ class FundamentalsRefreshWorker:
                             "earnings_data": None,
                             "profile_data": None,
                             "narrative": None,
+                            # FIX-LIVE-G (2026-05-24): structured failure
+                            # reason — distinguishes the "no instrument
+                            # ingested" case (~99% of dev failures) from a
+                            # downstream fundamentals failure.
+                            "failure_reason": "instrument_lookup_failed",
                         }
 
                     # Fetch earnings, profile, and fundamentals narrative in parallel.
-                    _earnings_data, _profile_data, _narrative = await asyncio.gather(
+                    # FIX-LIVE-G (2026-05-24): _build_fundamentals_narrative
+                    # now returns a (narrative, failure_reason) tuple so we
+                    # can attribute the failure precisely.
+                    _earnings_data, _profile_data, _narrative_result = await asyncio.gather(
                         self._fetch_earnings_data(http, _instrument_id, _ticker_str),
                         self._fetch_company_profile_data(http, _instrument_id),
                         self._build_fundamentals_narrative(_entity_id, _ticker_str, ent["row"], http, _instrument_id),
                     )
+                    _narrative, _narrative_failure_reason = _narrative_result
 
                     return {
                         "entity_id": _entity_id,
@@ -392,6 +409,7 @@ class FundamentalsRefreshWorker:
                         "earnings_data": _earnings_data,
                         "profile_data": _profile_data,
                         "narrative": _narrative,
+                        "failure_reason": _narrative_failure_reason,
                     }
 
             # Run all entity HTTP fetches concurrently.
@@ -447,6 +465,10 @@ class FundamentalsRefreshWorker:
                         # PLAN-0093 D-2: propagate the backoff marker so Phase 3
                         # can defer next_refresh_at by the backoff window.
                         "backoff_active_seconds": res.get("backoff_active_seconds"),
+                        # FIX-LIVE-G (2026-05-24): propagate the specific
+                        # market-data failure category to Phase 3 so the
+                        # warning event names the actual cause.
+                        "failure_reason": res.get("failure_reason"),
                     },
                 )
 
@@ -511,10 +533,20 @@ class FundamentalsRefreshWorker:
 
                     # --- Write embedding ---
                     if result["narrative"] is None:
+                        # FIX-LIVE-G (2026-05-24): include the precise
+                        # failure_reason so ops/QA can grep on the actual
+                        # cause (e.g. ``instrument_lookup_failed``,
+                        # ``fundamentals_http_404``, ``fundamentals_http_401``)
+                        # without re-reading every per-call log line. Also
+                        # bumps an aggregate counter that is surfaced in the
+                        # worker_complete event.
+                        reason = result.get("failure_reason") or "unknown"
+                        failure_counts[reason] = failure_counts.get(reason, 0) + 1
                         logger.warning(  # type: ignore[no-any-return]
                             "fundamentals_refresh_market_data_unavailable",
                             entity_id=str(entity_id),
                             ticker=result["ticker"],
+                            failure_reason=reason,
                         )
                         continue  # Don't update next_refresh_at — will retry next cycle
 
@@ -612,6 +644,10 @@ class FundamentalsRefreshWorker:
             # PLAN-0093 D-2 backoff observability:
             backoff_escalations=backoff_escalations,
             backoff_resets=backoff_resets,
+            # FIX-LIVE-G (2026-05-24): aggregate per-reason failure breakdown
+            # so the single complete-event log answers "which class of failure
+            # dominated this cycle?" without scanning per-entity warnings.
+            failure_breakdown=failure_counts,
         )
 
     # ── T-C-4-01: Earnings — HTTP fetch (Phase 2) ─────────────────────────────
@@ -935,33 +971,94 @@ ON CONFLICT DO NOTHING
         entity_row: dict[str, Any],
         http: httpx.AsyncClient,
         instrument_id: UUID | None = None,
-    ) -> str | None:
-        """Fetch market data and build the narrative string."""
-        lookup_id = instrument_id or entity_id
-        try:
-            fundamentals = await self._fetch_json(http, f"{self._market_data_url}/api/v1/fundamentals/{lookup_id}")
-            if fundamentals is None:
-                return None
+    ) -> tuple[str | None, str | None]:
+        """Fetch market data and build the narrative string.
 
-            return build_fundamentals_narrative(
-                canonical_name=str(entity_row.get("canonical_name", ticker)),
-                entity_type=str(entity_row.get("entity_type", "financial_instrument")),
-                revenue_usd_millions=_safe_float(fundamentals, "revenue_usd_millions"),
-                gross_margin_pct=_safe_float(fundamentals, "gross_margin_pct"),
-                net_margin_pct=_safe_float(fundamentals, "net_margin_pct"),
-                pe_ratio=_safe_float(fundamentals, "pe_ratio"),
-                price=_safe_float(fundamentals, "price"),
-                week_52_high=_safe_float(fundamentals, "week_52_high"),
-                week_52_low=_safe_float(fundamentals, "week_52_low"),
-                description=fundamentals.get("description"),
-            )
+        FIX-LIVE-G (2026-05-24): now returns a ``(narrative, failure_reason)``
+        tuple. ``failure_reason`` is ``None`` on success or a precise string
+        like ``"fundamentals_http_404"``, ``"fundamentals_http_401"`` (auth
+        regression — the hypothesis INV-LIVE-E chased that turned out to be
+        wrong), or ``"fundamentals_transport_error"`` on failure. The caller
+        uses it for the structured Phase 3 warning + aggregate counter so
+        future investigations see the actual failure category immediately.
+
+        Note: this method uses ``_fetch_json`` which already emits a
+        per-call log line (``market_data_call_client_error`` / ``_server_error``)
+        with HTTP status, URL, ticker, and latency. The tuple is the
+        aggregate signal; the per-call logs are the detail.
+        """
+        import time as _time
+
+        lookup_id = instrument_id or entity_id
+        url = f"{self._market_data_url}/api/v1/fundamentals/{lookup_id}"
+        _t0 = _time.monotonic()
+        try:
+            resp = await http.get(url)
         except Exception as exc:
+            _latency_ms = int((_time.monotonic() - _t0) * 1000)
+            logger.error(  # type: ignore[no-any-return]
+                "market_data_call_exception",
+                url=url,
+                ticker=ticker,
+                status_code=-1,
+                latency_ms=_latency_ms,
+                error=str(exc),
+            )
             logger.warning(  # type: ignore[no-any-return]
                 "fundamentals_refresh_http_error",
                 entity_id=str(entity_id),
+                ticker=ticker,
+                error_type=type(exc).__name__,
                 error=str(exc),
             )
-            return None
+            return None, "fundamentals_transport_error"
+
+        # Mirror the per-call observability from _fetch_json so this code
+        # path is not less-observable than the resolve/earnings/profile
+        # paths.
+        _latency_ms = int((_time.monotonic() - _t0) * 1000)
+        _body_len = len(resp.content) if hasattr(resp, "content") and resp.content is not None else 0
+        _log_fields = {
+            "url": url,
+            "ticker": ticker,
+            "status_code": resp.status_code,
+            "latency_ms": _latency_ms,
+            "body_len": _body_len,
+        }
+        if 200 <= resp.status_code < 300:
+            logger.info("market_data_call_ok", **_log_fields)  # type: ignore[no-any-return]
+        elif 400 <= resp.status_code < 500:
+            logger.warning("market_data_call_client_error", **_log_fields)  # type: ignore[no-any-return]
+        else:
+            logger.error("market_data_call_server_error", **_log_fields)  # type: ignore[no-any-return]
+
+        if resp.status_code != 200:
+            return None, f"fundamentals_http_{resp.status_code}"
+
+        try:
+            fundamentals: dict[str, Any] = resp.json()
+        except Exception as exc:
+            logger.warning(  # type: ignore[no-any-return]
+                "fundamentals_refresh_json_decode_failed",
+                entity_id=str(entity_id),
+                ticker=ticker,
+                error=str(exc),
+            )
+            return None, "fundamentals_json_decode_failed"
+
+        narrative = build_fundamentals_narrative(
+            canonical_name=str(entity_row.get("canonical_name", ticker)),
+            entity_type=str(entity_row.get("entity_type", "financial_instrument")),
+            revenue_usd_millions=_safe_float(fundamentals, "revenue_usd_millions"),
+            gross_margin_pct=_safe_float(fundamentals, "gross_margin_pct"),
+            net_margin_pct=_safe_float(fundamentals, "net_margin_pct"),
+            pe_ratio=_safe_float(fundamentals, "pe_ratio"),
+            price=_safe_float(fundamentals, "price"),
+            week_52_high=_safe_float(fundamentals, "week_52_high"),
+            week_52_low=_safe_float(fundamentals, "week_52_low"),
+            description=fundamentals.get("description"),
+        )
+        return narrative, None
 
     async def _resolve_instrument_id(self, http: httpx.AsyncClient, ticker: str) -> UUID | None:
         """Resolve ticker → market-data instrument_id via /api/v1/instruments/lookup?symbol=.
