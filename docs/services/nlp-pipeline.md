@@ -468,8 +468,8 @@ All environment variables use the prefix `NLP_PIPELINE_`. Loaded by `pydantic-se
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `NLP_PIPELINE_ROUTING_TIER_DEEP` | `0.70` | DEEP tier lower bound |
-| `NLP_PIPELINE_ROUTING_TIER_MEDIUM` | `0.35` | MEDIUM tier lower bound |
+| `NLP_PIPELINE_ROUTING_TIER_DEEP` | `0.75` | DEEP tier lower bound (PLAN-0093 C-1: was 0.70 in v1 formula) |
+| `NLP_PIPELINE_ROUTING_TIER_MEDIUM` | `0.45` | MEDIUM tier lower bound (PLAN-0093 C-1: was 0.35 in v1 formula) |
 | `NLP_PIPELINE_ROUTING_TIER_LIGHT` | `0.20` | LIGHT tier lower bound |
 | `NLP_PIPELINE_ENTITY_RESOLUTION_AUTO_RESOLVE_THRESHOLD` | `0.72` | Auto-resolve above this |
 | `NLP_PIPELINE_ENTITY_RESOLUTION_PROVISIONAL_THRESHOLD` | `0.45` | Provisional queue threshold |

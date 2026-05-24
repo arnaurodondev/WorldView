@@ -19,9 +19,10 @@
  *   benefit — the user is just slicing what's already loaded. Client-side
  *   filtering also gives instant feedback (zero latency).
  *
- * WHY ROUTING_TIER BADGE: The tier (LIGHT/MEDIUM/HIGH/DEEP) tells traders at
+ * WHY ROUTING_TIER BADGE: The tier (LIGHT/MEDIUM/DEEP) tells traders at
  * a glance how significant the S6 pipeline ranked the article — no need to
- * parse a score number.
+ * parse a score number. (HIGH is a legacy v1 value retained in the filter
+ * union for backward-compat with any stored URL state; backend now emits DEEP.)
  *
  * WHO USES IT: app/(app)/dashboard/page.tsx (Row 4, col-span-3)
  * DATA SOURCE: S9 GET /v1/news/top via createGateway().getTopNews({ limit: 20 })
@@ -50,9 +51,12 @@ import type { RankedArticle } from "@/types/api";
 // ── Types ────────────────────────────────────────────────────────────────────
 
 type SortMode = "impact" | "date";
-// Tier filter values normalized to upper case (S6 returns "DEEP" / "HIGH" /
-// "MEDIUM" / "LIGHT" but with occasional case drift). Including the literal
-// strings here pins the contract.
+// Tier filter values normalized to upper case. Backend (S6) only ever emits
+// "DEEP" / "MEDIUM" / "LIGHT" — see services/nlp-pipeline/.../routing.py
+// RoutingTier enum and the routing_decisions_final_tier_chk DB constraint.
+// "HIGH" is retained in the union for backward-compat with any URL state that
+// still references the (never-emitted) legacy frontend label; the filter that
+// selects it will simply match zero rows.
 const ALL_TIERS = ["LIGHT", "MEDIUM", "HIGH", "DEEP"] as const;
 type Tier = (typeof ALL_TIERS)[number];
 

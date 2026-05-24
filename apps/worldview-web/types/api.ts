@@ -602,10 +602,11 @@ export interface Article {
   impact_window_t1: number | null; // 2-day
   impact_window_t2: number | null; // 3-day
   impact_window_t5: number | null; // 5-day
-  // WHY optional: older API responses may omit this field; undefined → treat as STANDARD.
-  // LIGHT = low-relevance/low-signal article (de-emphasised in UI at 60% opacity).
-  // HIGH = top-ranked article (may receive visual boost in future waves).
-  routing_tier?: "LIGHT" | "STANDARD" | "HIGH";
+  // WHY optional: older API responses may omit this field; undefined → treat as MEDIUM.
+  // Tier names match the backend's RoutingTier enum (services/nlp-pipeline
+  // application/blocks/routing.py): SUPPRESS < LIGHT < MEDIUM < DEEP.
+  // LIGHT/MEDIUM = de-emphasised in UI; DEEP = top-ranked, eligible for visual boost.
+  routing_tier?: "LIGHT" | "MEDIUM" | "DEEP";
 }
 
 export interface NewsResponse {
