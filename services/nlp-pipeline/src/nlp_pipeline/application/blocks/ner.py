@@ -110,6 +110,8 @@ async def run_ner_block(
     batch_size: int = 32,
     ner_model_id: str | None = None,
     section_token_limit: int = SECTION_TOKEN_LIMIT,
+    *,
+    tenant_id: UUID | None = None,
 ) -> tuple[list[EntityMention], DocumentEntityStats]:
     """Run GLiNER NER on all sections of a document.
 
@@ -123,6 +125,16 @@ async def run_ner_block(
         ner_client: Injected NERClient (GLiNERLocalAdapter).
         threshold: GLiNER confidence threshold for routing signal.
         batch_size: Sections per NER call (GLiNER batching).
+        ner_model_id: Versioned identifier of the GLiNER model in use.
+        section_token_limit: Token cap per section batch input.
+        tenant_id: PLAN-0093 B-3 T-B-3-04 — tenant that owns this document.
+            Stamped onto every EntityMention at construction time so the
+            nlp_db.entity_mentions.tenant_id NOT NULL constraint (migration
+            0020) is always satisfied.  Optional in the function signature
+            for backward compatibility with the wide set of existing tests
+            and the article_consumer's defensive None-check (the consumer
+            already stamps tenant_id post-construction when this argument
+            is omitted), but production call sites should always supply it.
 
     Returns:
         Tuple of (mentions, document_entity_stats).
@@ -189,6 +201,12 @@ async def run_ner_block(
                         char_start=ml_mention.start,
                         char_end=ml_mention.end,
                         ner_model_id=ner_model_id,
+                        # PLAN-0093 B-3 T-B-3-04: stamp tenant_id at construction
+                        # so the NOT NULL constraint on entity_mentions.tenant_id
+                        # (migration 0020) is always satisfied for production
+                        # call sites.  ``None`` is preserved (tests + the
+                        # article_consumer's post-construction stamp still work).
+                        tenant_id=tenant_id,
                     ),
                 )
 

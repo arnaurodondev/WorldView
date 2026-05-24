@@ -55,6 +55,10 @@ def _raw_relation(
 ) -> object:
     from knowledge_graph.application.blocks.graph_write import RawRelation
 
+    # PLAN-0093 B-3 T-B-3-02: claim_id + chunk_id are NOT NULL on
+    # relation_evidence_raw (migration 0047).  Default to fresh UUIDs so
+    # every test relation has provenance attached without breaking the
+    # writer's new pre-insert guard in RelationEvidenceRepository.insert_raw.
     return RawRelation(
         subject_entity_id=subject_entity_id or uuid4(),
         object_entity_id=object_entity_id or uuid4(),
@@ -62,6 +66,8 @@ def _raw_relation(
         extraction_confidence=0.85,
         evidence_date=_NOW,
         entity_provisional=entity_provisional,
+        claim_id=uuid4(),
+        chunk_id=uuid4(),
     )
 
 
@@ -235,6 +241,9 @@ class TestEntityDirtiedReturnedNotProduced:
             raw_type="employs",
             extraction_confidence=0.85,
             evidence_date=_NOW,
+            # PLAN-0093 B-3: claim_id + chunk_id NOT NULL at writer level.
+            claim_id=uuid4(),
+            chunk_id=uuid4(),
         )
         summary = asyncio.run(
             materialize_graph(

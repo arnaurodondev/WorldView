@@ -198,6 +198,10 @@ class TestRelationEvidenceRepository:
                 extraction_confidence=0.85,
                 source_trust_weight=0.90,
                 evidence_date=_NOW,
+                # PLAN-0093 B-3 T-B-3-02: claim_id + chunk_id are NOT NULL
+                # (migration 0047).  Writer raises ValueError when omitted.
+                claim_id=uuid4(),
+                chunk_id=uuid4(),
             ),
         )
         sql = str(session.execute.call_args_list[0][0][0])
@@ -221,9 +225,59 @@ class TestRelationEvidenceRepository:
                 extraction_confidence=0.85,
                 source_trust_weight=0.90,
                 evidence_date=_NOW,
+                claim_id=uuid4(),
+                chunk_id=uuid4(),
             ),
         )
         assert result == raw_id
+
+    def test_insert_raw_rejects_missing_claim_id(self) -> None:
+        """PLAN-0093 B-3 T-B-3-02: omitting claim_id raises ValueError at the writer."""
+        import asyncio
+
+        from knowledge_graph.infrastructure.intelligence_db.repositories.relation_evidence import (
+            RelationEvidenceRepository,
+        )
+
+        session = _make_session(fetchone_return=(str(uuid4()),))
+        repo = RelationEvidenceRepository(session)
+        with pytest.raises(ValueError, match="claim_id is NOT NULL"):
+            asyncio.run(
+                repo.insert_raw(
+                    subject_entity_id=uuid4(),
+                    object_entity_id=uuid4(),
+                    source_document_id=uuid4(),
+                    extraction_confidence=0.85,
+                    source_trust_weight=0.90,
+                    evidence_date=_NOW,
+                    # claim_id omitted
+                    chunk_id=uuid4(),
+                ),
+            )
+
+    def test_insert_raw_rejects_missing_chunk_id(self) -> None:
+        """PLAN-0093 B-3 T-B-3-02: omitting chunk_id raises ValueError at the writer."""
+        import asyncio
+
+        from knowledge_graph.infrastructure.intelligence_db.repositories.relation_evidence import (
+            RelationEvidenceRepository,
+        )
+
+        session = _make_session(fetchone_return=(str(uuid4()),))
+        repo = RelationEvidenceRepository(session)
+        with pytest.raises(ValueError, match="chunk_id is NOT NULL"):
+            asyncio.run(
+                repo.insert_raw(
+                    subject_entity_id=uuid4(),
+                    object_entity_id=uuid4(),
+                    source_document_id=uuid4(),
+                    extraction_confidence=0.85,
+                    source_trust_weight=0.90,
+                    evidence_date=_NOW,
+                    claim_id=uuid4(),
+                    # chunk_id omitted
+                ),
+            )
 
 
 # ---------------------------------------------------------------------------

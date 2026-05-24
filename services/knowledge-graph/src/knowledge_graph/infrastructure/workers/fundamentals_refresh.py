@@ -689,6 +689,14 @@ ON CONFLICT DO NOTHING
                     evidence_text=f"EODHD fundamentals: {sector_name} sector classification.",
                     source_name="eodhd",
                     source_type="eodhd",
+                    # PLAN-0093 B-3 T-B-3-02: claim_id + chunk_id are NOT NULL on
+                    # relation_evidence_raw (migration 0047).  Fundamentals
+                    # evidence is structured (EODHD API) and has no real
+                    # claim/chunk — synthesise both per-relation so each row
+                    # still satisfies the NOT NULL constraint and downstream
+                    # joins simply find no matching claim/chunk (intended).
+                    claim_id=new_uuid7(),
+                    chunk_id=new_uuid7(),
                 )
                 upserted += 1
 
@@ -722,6 +730,11 @@ ON CONFLICT DO NOTHING
                     evidence_text=f"EODHD fundamentals: {industry_name} industry classification.",
                     source_name="eodhd",
                     source_type="eodhd",
+                    # PLAN-0093 B-3 T-B-3-02: synthesise claim_id + chunk_id —
+                    # structured EODHD evidence has no real claim/chunk;
+                    # both columns are NOT NULL on relation_evidence_raw.
+                    claim_id=new_uuid7(),
+                    chunk_id=new_uuid7(),
                 )
                 upserted += 1
 
