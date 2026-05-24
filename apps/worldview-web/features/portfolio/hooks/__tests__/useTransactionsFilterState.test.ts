@@ -125,4 +125,48 @@ describe("useTransactionsFilterState", () => {
     expect(filters.currency).toBe("");
     expect(filters.search).toBe("");
   });
+
+  // ── QA-F002 regression guard ────────────────────────────────────────────────
+  // WHY this exists alongside the previous test: the audit (QA-F002, see
+  // docs/audits/2026-05-24-investigation-qa-open-items.md) flagged that
+  // resetFilters() is implemented as 8 independent setX(null) calls — if a
+  // future refactor drops ONE of those lines, the URL-synced state for that
+  // slot would silently keep its previous value. This test pins every slot
+  // INDIVIDUALLY so such a regression triggers a precise assertion failure
+  // pointing at the missing reset.
+  it("resetFilters clears all 8 filter slots individually (D-003, QA-F002)", async () => {
+    const { result } = renderHook(() => useTransactionsFilterState(), {
+      wrapper,
+    });
+
+    // Set every slot to a non-default value so any forgotten reset is visible.
+    await act(async () => {
+      result.current.setFilters({
+        type: "SELL",
+        dateFrom: "2026-01-01",
+        dateTo: "2026-12-31",
+        ticker: "TSLA",
+        minAmount: "1000",
+        maxAmount: "50000",
+        currency: "EUR",
+        search: "tesla",
+      });
+    });
+
+    await act(async () => {
+      result.current.resetFilters();
+    });
+
+    // Per-slot assertions — defaults pulled from useTransactionsFilterState.ts:
+    // type → withDefault("All"); all others → withDefault("").
+    const { filters } = result.current;
+    expect(filters.type).toBe("All");
+    expect(filters.dateFrom).toBe("");
+    expect(filters.dateTo).toBe("");
+    expect(filters.ticker).toBe("");
+    expect(filters.minAmount).toBe("");
+    expect(filters.maxAmount).toBe("");
+    expect(filters.currency).toBe("");
+    expect(filters.search).toBe("");
+  });
 });
