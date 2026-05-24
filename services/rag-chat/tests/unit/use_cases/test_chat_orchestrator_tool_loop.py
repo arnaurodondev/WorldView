@@ -665,3 +665,146 @@ class TestMaxIterationsSurrender:
         # not "execute_all is called N times" — assert >= 1 and leave the
         # iteration-count assertion to the surrender event itself.
         assert executor.execute_all.call_count >= 1
+
+
+# ---------------------------------------------------------------------------
+# Tests: DS-F003 — shielded persistence + DS-F004 — pending-action JSON warning
+# ---------------------------------------------------------------------------
+
+
+class TestPersistenceShield:
+    """DS-F003: persist_chat + write_completion_cache must run under asyncio.shield.
+
+    The shield protects mid-transaction DB writes from being cancelled by a
+    client disconnect that arrives after the final_answer SSE event.
+    """
+
+    def test_persist_chat_runs_under_shield_on_happy_path(self) -> None:
+        """Smoke test: persist_chat + write_completion_cache are still invoked
+        on the happy path (no cancellation). Proves the shield wrapping did
+        not regress the normal completion flow.
+        """
+        from rag_chat.application.use_cases.chat_orchestrator import ChatOrchestratorUseCase
+
+        # LLM responds with direct text — no tools, fastest path through the
+        # generator that still exercises Step 10 (persist + cache).
+        direct_resp = _make_llm_tool_response(text="AAPL closed at $195.50.", tool_calls=[])
+        pipeline = _make_pipeline(first_llm_response=direct_resp)
+
+        orch = ChatOrchestratorUseCase(pipeline=pipeline)
+        request = _make_chat_request()
+        uow = MagicMock()
+
+        events = asyncio.run(_collect_events(orch, request, uow))
+        event_types = [e.get("event") for e in events]
+
+        # Generator completed normally
+        assert "done" in event_types
+        # Both shielded calls were still invoked exactly once
+        assert pipeline.persist_chat.await_count == 1
+        assert pipeline.write_completion_cache.await_count == 1
+
+    def test_persist_chat_completes_when_consumer_stops_after_done(self) -> None:
+        """Cancellation-style smoke test: even when the consumer stops consuming
+        events right after `done`, persist_chat must have already been awaited
+        because the shield runs to completion before the `done` event is yielded.
+        """
+        from rag_chat.application.use_cases.chat_orchestrator import ChatOrchestratorUseCase
+
+        direct_resp = _make_llm_tool_response(text="Direct answer.", tool_calls=[])
+        pipeline = _make_pipeline(first_llm_response=direct_resp)
+
+        # Track that persist_chat was actually invoked before the consumer
+        # stopped reading from the generator.
+        persist_invocations: list[float] = []
+
+        async def _slow_persist(**kwargs: Any) -> tuple[str, str]:
+            # Tiny await so an in-flight cancellation would have a chance to
+            # hit us if the shield were missing.
+            await asyncio.sleep(0)
+            persist_invocations.append(1.0)
+            return (_FAKE_UUID, _FAKE_UUID)
+
+        pipeline.persist_chat = AsyncMock(side_effect=_slow_persist)
+
+        orch = ChatOrchestratorUseCase(pipeline=pipeline)
+        request = _make_chat_request()
+        uow = MagicMock()
+
+        async def _consume_until_done() -> list:
+            collected: list = []
+            async for event in orch.execute_streaming(request, uow):
+                collected.append(event)
+                if event.get("event") == "done":
+                    # Simulate a client that drops the connection right after
+                    # receiving `done`. Because persist_chat is shielded and
+                    # runs before `done` is yielded, the invocation must
+                    # already have been recorded.
+                    break
+            return collected
+
+        events = asyncio.run(_consume_until_done())
+        assert any(e.get("event") == "done" for e in events)
+        # The shielded persistence ran to completion before `done` was yielded.
+        assert len(persist_invocations) == 1
+
+
+class TestPendingActionJsonWarning:
+    """DS-F004: malformed pending-action JSON emits a structured warning."""
+
+    def test_pending_action_json_parse_failure_logs_warning(self, capsys: Any) -> None:
+        """When a tool returns an action_pending RetrievedItem with malformed
+        JSON in `.text`, the orchestrator must emit a
+        `pending_action_json_parse_failure` log event (with `pending_id` +
+        `error`) instead of silently swallowing the parse failure.
+
+        Uses `capsys` (not `caplog`) because structlog in this repo renders
+        directly to stdout via its own ConsoleRenderer chain — see the same
+        pattern in test_chat_orchestrator_fallback.py.
+        """
+        from rag_chat.application.use_cases.chat_orchestrator import ChatOrchestratorUseCase
+        from rag_chat.domain.enums import ItemType
+
+        # Build a malformed action_pending RetrievedItem mock. The orchestrator
+        # filters by `item.item_type == ItemType.action_pending`, so we use the
+        # real enum value.
+        pending = MagicMock()
+        pending.item_type = ItemType.action_pending
+        pending.item_id = "tool:create_alert:NOT-A-VALID-UUID"
+        pending.text = "{not valid json"  # triggers json.JSONDecodeError
+        pending.score = 1.0
+
+        # Pipeline: a tool call returns the malformed pending item. The LLM
+        # then short-circuits to a direct answer on the second turn so we
+        # reach the persistence step without further detours.
+        tool_block = _make_tool_use_block("create_alert")
+        call_count = [0]
+
+        async def _chat_with_tools(messages, tools=None, max_tokens=1024, temperature=0.1):
+            call_count[0] += 1
+            if call_count[0] == 1:
+                return _make_llm_tool_response(tool_calls=[tool_block])
+            return _make_llm_tool_response(text="Alert created.", tool_calls=[])
+
+        pipeline = _make_pipeline()
+        pipeline.llm_chain.chat_with_tools = _chat_with_tools
+
+        executor = _make_tool_executor_mock([pending])
+        factory = _make_factory_mock(executor)
+
+        orch = ChatOrchestratorUseCase(pipeline=pipeline, tool_executor_factory=factory)
+        request = _make_chat_request()
+        uow = MagicMock()
+
+        asyncio.run(_collect_events(orch, request, uow))
+
+        # structlog renders the event name + key=value context into stdout.
+        captured = capsys.readouterr()
+        combined = captured.out + captured.err
+        assert (
+            "pending_action_json_parse_failure" in combined
+        ), f"expected pending_action_json_parse_failure log event, got: {combined!r}"
+        # The warning must carry pending_id + error context so operators can
+        # triage the malformed upstream payload.
+        assert "pending_id" in combined, f"warning missing pending_id key: {combined!r}"
+        assert "error" in combined, f"warning missing error key: {combined!r}"

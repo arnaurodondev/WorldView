@@ -38,6 +38,7 @@ emit an error and stop. Without this guard the LLM hallucinates from empty conte
 
 from __future__ import annotations
 
+import asyncio
 import json
 import re
 import time
@@ -545,7 +546,17 @@ class ChatOrchestratorUseCase:
             for _pending in _action_pending_items:
                 try:
                     _params = json.loads(_pending.text)
-                except Exception:
+                except json.JSONDecodeError as exc:
+                    # DS-F004: surface malformed upstream JSON instead of silently
+                    # rendering "Create alert: ?". The fallback to `{}` is preserved
+                    # so the pending-action card still renders, but operators now
+                    # have a structured signal to investigate.
+                    log.warning(
+                        "pending_action_json_parse_failure",
+                        pending_id=str(_pending.item_id),
+                        error=str(exc),
+                        text_sample=_pending.text[:80],
+                    )
                     _params = {}
                 _proposal_id = _params.get("proposal_id", str(_pending.item_id))
                 _tool_name = _pending.item_id.split(":")[1] if ":" in _pending.item_id else "create_alert"
@@ -785,28 +796,44 @@ class ChatOrchestratorUseCase:
         _model_id = _resolve_model_id(p.llm_chain, provider_name)
         token_count_in_est = len(request.message) // 4
 
-        _user_msg_id, asst_msg_id = await p.persist_chat(
-            thread_id=thread_id,
-            user_message=request.message,
-            assistant_response=AssistantResponse(
-                content=answer,
-                intent=intent,
-                resolved_entities=tuple(entities),
-                retrieval_plan=None,
-                citations=tuple(citations),
-                contradiction_refs=tuple(contradiction_refs),
-                provider=provider_name,
-                model=_model_id,
-                token_count_in=token_count_in_est,
-                token_count_out=len(full_text.split()),
-                latency_ms=latency_ms,
-            ),
-            uow=uow,
-            tenant_id=request.tenant_id,
-            user_id=request.user_id,
-        )
+        # DS-F003: wrap persistence + cache write in asyncio.shield so a client
+        # disconnect AFTER the final_answer SSE event cannot cancel the DB
+        # transaction mid-flight. The shield ensures the inner task continues
+        # to completion even when this generator is cancelled by the caller;
+        # we still re-raise CancelledError so the outer async-gen cleanup
+        # (finally blocks, audit-log finalisation) runs correctly.
+        try:
+            _user_msg_id, asst_msg_id = await asyncio.shield(
+                p.persist_chat(
+                    thread_id=thread_id,
+                    user_message=request.message,
+                    assistant_response=AssistantResponse(
+                        content=answer,
+                        intent=intent,
+                        resolved_entities=tuple(entities),
+                        retrieval_plan=None,
+                        citations=tuple(citations),
+                        contradiction_refs=tuple(contradiction_refs),
+                        provider=provider_name,
+                        model=_model_id,
+                        token_count_in=token_count_in_est,
+                        token_count_out=len(full_text.split()),
+                        latency_ms=latency_ms,
+                    ),
+                    uow=uow,
+                    tenant_id=request.tenant_id,
+                    user_id=request.user_id,
+                )
+            )
+        except asyncio.CancelledError:
+            log.warning("persist_chat_cancelled_after_done", thread_id=str(thread_id))
+            raise
 
-        await p.write_completion_cache(request.message, request.thread_id, answer, citations)
+        try:
+            await asyncio.shield(p.write_completion_cache(request.message, request.thread_id, answer, citations))
+        except asyncio.CancelledError:
+            log.warning("completion_cache_cancelled_after_done", thread_id=str(thread_id))
+            raise
 
         _total_latency_s = (datetime.now(tz=UTC) - start).total_seconds()
         rag_queries_total.labels(
