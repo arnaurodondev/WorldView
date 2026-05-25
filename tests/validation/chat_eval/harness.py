@@ -221,38 +221,46 @@ class RagChatClient:
         }
 
         start = time.monotonic()
-        try:
-            with self._client.stream("POST", "/v1/chat/stream", json=payload, headers=headers) as resp:
-                # If the initial response is a non-2xx (auth, server boot
-                # error), capture the status and bail with an empty
-                # result — tests can still assert on status_code.
-                status = resp.status_code
-                if status != 200:
-                    body_preview = b""
-                    try:
-                        body_preview = resp.read()[:500]
-                    except Exception:  # noqa: S110 — diagnostic-only; pass is intentional
-                        pass
-                    return ChatRunResult(
-                        question=question,
-                        status_code=status,
-                        latency_s=time.monotonic() - start,
-                        answer_text="",
-                        error={
-                            "code": "HTTP_ERROR",
-                            "message": body_preview.decode(errors="replace"),
-                        },
-                    )
-
-                # SSE format: alternating ``event: …`` / ``data: …`` / blank
-                # lines. We accumulate one event at a time via tiny state
-                # machine — no aiohttp/SSE-client dep needed.
-                events = _read_sse_events(resp)
-                result = _events_to_result(question, status, events, time.monotonic() - start)
-                return result
-        except httpx.RequestError as exc:
-            pytest.skip(f"chat request failed: {exc}")
-            raise  # pragma: no cover — pytest.skip raises, unreachable
+        # Refresh-on-401: dev-login mints a 5-min user JWT (gateway _USER_TTL=300s).
+        # The chained Q1..Q8 + adversarial + 75-query weak-point survey runs >5 min
+        # in one pytest invocation, so the cached token silently expires partway
+        # through and every later request 401s. On 401, drop the cache, re-login,
+        # rebuild headers, retry once.
+        for _attempt in range(2):
+            try:
+                with self._client.stream("POST", "/v1/chat/stream", json=payload, headers=headers) as resp:
+                    status = resp.status_code
+                    if status == 401 and _attempt == 0:
+                        self._access_token = None
+                        token = self.login()
+                        headers["Authorization"] = f"Bearer {token}"
+                        continue
+                    if status != 200:
+                        body_preview = b""
+                        try:
+                            body_preview = resp.read()[:500]
+                        except Exception:  # noqa: S110 — diagnostic-only; pass is intentional
+                            pass
+                        return ChatRunResult(
+                            question=question,
+                            status_code=status,
+                            latency_s=time.monotonic() - start,
+                            answer_text="",
+                            error={
+                                "code": "HTTP_ERROR",
+                                "message": body_preview.decode(errors="replace"),
+                            },
+                        )
+                    # SSE format: alternating ``event: …`` / ``data: …`` / blank
+                    # lines. We accumulate one event at a time via tiny state
+                    # machine — no aiohttp/SSE-client dep needed.
+                    events = _read_sse_events(resp)
+                    return _events_to_result(question, status, events, time.monotonic() - start)
+            except httpx.RequestError as exc:
+                pytest.skip(f"chat request failed: {exc}")
+                raise  # pragma: no cover — pytest.skip raises, unreachable
+        # Defensive — loop only exits via return; this satisfies the type checker.
+        raise RuntimeError("unreachable: stream loop exited without return")
 
     # ── Lifecycle ─────────────────────────────────────────────────────────
 
