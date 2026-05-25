@@ -1085,3 +1085,58 @@ The PLAN-0093 instance: `FundamentalsRefreshWorker` Phase 1 with no-ticker entit
 Fix: a watermark advance MUST be gated on (a) the underlying operation returned a verified success status AND (b) for batch workers, the result count is checked against expectations (e.g. "we asked for 100 rows and got 100; pages exhausted"). Empty results from a still-paginating source must NOT advance the watermark — surface as an error and retry.
 
 **Real instance**: BP-544 (AGE sync); BP-548 (enrichment counter); BP-533 (no-ticker requeue is the inverse of this pattern — both flow from the same lack of explicit "did this phase succeed?" verification).
+
+## RED — Added from PLAN-0093 ITER-5 closeout (2026-05-25)
+
+### HR-066: Generic `except Exception` with class-name-only logging hides root cause
+
+**Category**: Observability, Debug
+**Severity**: HIGH
+**Detection**:
+```bash
+# Any error-path log that records only the exception type, not repr or traceback:
+grep -rEn "log(ger)?\.(error|warning|exception).*type\(.*\)\.__name__" services/ libs/ --include="*.py"
+# For each match, verify repr(e) AND traceback.format_exc() appear in the same call.
+```
+
+A blanket `except Exception as e: logger.error("...", error=type(e).__name__)` reduces every distinct failure mode to a single opaque class name. PLAN-0093 ITER-2 hotfix incident: `IntelligenceHandler.__init__()` raised `TypeError: got an unexpected keyword argument 's6'` for every chat request after a rebuild; the orchestrator's stream-error path logged only `event=stream_internal_error error=TypeError` 12 times. 90 minutes of triage to discover the `s6=s6` kwarg mismatch — would have been 30 seconds with `repr(e)`.
+
+Fix: every error-path log MUST include `error_type=type(e).__name__` **plus** `error_repr=repr(e)` **plus** `traceback=traceback.format_exc()`. The repr surfaces the message; the traceback surfaces the file + line. Without all three, exception-class statistics cannot be acted on.
+
+**Real instance**: BP-555 (PLAN-0093 ITER-2 IntelligenceHandler TypeError hotfix); same pattern caught FIX-LIVE-X timeout debug (BP-562 — empty error strings hid that DeepInfra was timing out, not rejecting).
+
+### HR-067: Cached completion responses can mask upstream regressions for weeks
+
+**Category**: RAG, Caching, Observability
+**Severity**: HIGH
+**Detection**:
+```bash
+# Any completion cache whose key does NOT include a prompt/validator version hash:
+grep -rEn "rag:.*completion:" services/rag-chat libs/ --include="*.py" -B 2 -A 5
+# Verify each key contains a literal version segment (e.g. "rag:v2:") AND a sha256(prompt) digest.
+```
+
+A completion cache keyed only by the user query (or thread_id) will serve pre-regression answers for weeks after the prompt, validator, or grader is upgraded. PLAN-0093 Phase 5c: `rag:v1:completion:*` served pre-FIX-2 prompts containing the fabricated "$34.6B AMD revenue" for days after the prompt + validator + grader were all upgraded. Three latent prod-grade bugs (F-LIVE-J/K/L) were surfaced ONLY after FIX-LIVE-A invalidated the cache.
+
+Worse, caching ABOVE a strict-output validator is structurally unsafe — the validator runs once on the first response, the cached prose is returned forever without re-validation when the validator is later tightened.
+
+Fix: (1) every completion-cache key MUST include `f"rag:{PROMPT_VERSION}:{hashlib.sha256(system_prompt).hexdigest()[:8]}"` so any prompt edit auto-invalidates; (2) refuse to write to cache if grounding-validator score < threshold; (3) in any PR touching prompts/validators/graders, the cache version segment MUST be bumped in the same commit.
+
+**Real instance**: BP-559 (FIX-LIVE-A cache key bump v1→v2 + grounding-gated write); BP-560 (eval harness must use fresh thread_id or disable cache to avoid the same trap).
+
+### HR-068: Multi-agent orchestrator must verify worktree-vs-main isolation after each subagent returns
+
+**Category**: Process, Multi-Agent
+**Severity**: HIGH
+**Detection**:
+```bash
+# After spawning parallel agents with isolation: "worktree", the orchestrator should always run:
+git -C <main_worktree> status   # MUST be clean
+git -C <agent_worktree> log --oneline -3   # MUST show agent's commit
+```
+
+Agents launched with `isolation: "worktree"` are NOT prevented from editing files in the orchestrator's main worktree. In two separate PLAN-0093 iterations, a sub-agent silently edited files in main (then `git stash`d) instead of its own worktree branch — partial edits leaked into main and broke unrelated tests until the orchestrator ran `git status` and discarded them.
+
+Fix: orchestrator launching parallel agents MUST (a) record each agent's intended worktree path, (b) after each agent returns, `git -C <main> status` and verify NO unexpected modifications (discard any with `git checkout --` after explicit user confirmation), (c) `git -C <agent_worktree> log --oneline` to confirm the agent's commit landed on its branch, (d) merge the agent's worktree branch into main as the canonical source. Worktree isolation is a convenience, not a safety net (cross-ref R34).
+
+**Real instance**: BP-570 (PLAN-0093 multi-iteration campaign — at least 2 stray-edit incidents).
