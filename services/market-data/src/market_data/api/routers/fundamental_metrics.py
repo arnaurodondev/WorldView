@@ -170,6 +170,7 @@ async def screen_instruments(
             max_value=f.max_value,
             period_type=f.period_type,
             sector=f.sector,
+            industry=f.industry,
         )
         for f in body.filters
     ]

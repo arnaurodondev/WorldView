@@ -268,6 +268,12 @@ async def query_screen(
     for sv in (f.sector for f in filters if f.sector is not None):
         stmt = stmt.where(instr.sector == sv)
 
+    # FIX-LIVE-M (2026-05-24): mirror sector with industry — GICS industry
+    # (e.g. "Semiconductors") is more selective than sector ("Technology").
+    # AND logic across all filter entries that specify an industry.
+    for iv in (f.industry for f in filters if f.industry is not None):
+        stmt = stmt.where(instr.industry == iv)
+
     # Sorting — column resolved from ORM attributes (no raw SQL interpolation)
     sort_col: Any
     if sort_by == "ticker":

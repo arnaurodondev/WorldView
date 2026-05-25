@@ -56,6 +56,10 @@ class ScreenFilter:
     max_value: float | None = None
     period_type: str | None = None
     sector: str | None = None
+    # FIX-LIVE-M (2026-05-24): industry filter (GICS taxonomy). NVDA/AMD/AVGO
+    # are sector=Technology, industry=Semiconductors — sector alone is too broad
+    # for "AI chip" / "semiconductor" queries from the screen_universe tool.
+    industry: str | None = None
 
 
 @dataclass(frozen=True, slots=True)

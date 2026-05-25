@@ -428,6 +428,39 @@ class TestScreenUniverse:
         call_args = s3_brief.screen_instruments.call_args[0][0]
         assert call_args["limit"] == 100
 
+    @pytest.mark.asyncio
+    async def test_industry_filter_propagates(self) -> None:
+        """FIX-LIVE-M: industry kwarg surfaces in the filters dict forwarded to S9.
+
+        GICS-tagged tickers (NVDA, AMD, AVGO) live under sector='Technology',
+        industry='Semiconductors'. The LLM must be able to target the narrower
+        bucket; the handler must therefore pass the kwarg through.
+        """
+        s3_brief = _make_s3_brief_port(screen_result={"instruments": [{"ticker": "NVDA"}]})
+        handler = _make_market_handler(s3_brief=s3_brief)
+        await handler._handle_screen_universe(
+            sector="Technology",
+            industry="Semiconductors",
+            limit=10,
+        )
+        call_args = s3_brief.screen_instruments.call_args[0][0]
+        assert call_args["sector"] == "Technology"
+        assert call_args["industry"] == "Semiconductors"
+        assert call_args["limit"] == 10
+
+    @pytest.mark.asyncio
+    async def test_industry_not_set_when_none(self) -> None:
+        """When industry kwarg is omitted, the key is absent from the filters dict.
+
+        Mirrors the existing sector/region pattern — None values are dropped so
+        S9 doesn't receive a literal ``industry=null`` in the request body.
+        """
+        s3_brief = _make_s3_brief_port(screen_result={"instruments": [{"ticker": "AAPL"}]})
+        handler = _make_market_handler(s3_brief=s3_brief)
+        await handler._handle_screen_universe(sector="Technology")
+        call_args = s3_brief.screen_instruments.call_args[0][0]
+        assert "industry" not in call_args
+
 
 # ── get_market_movers tests ───────────────────────────────────────────────────
 

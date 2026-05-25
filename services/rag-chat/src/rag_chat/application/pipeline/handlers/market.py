@@ -262,6 +262,7 @@ class MarketHandler(ToolHandler):
         market_cap_max: float | None = None,
         pe_ratio_max: float | None = None,
         sector: str | None = None,
+        industry: str | None = None,
         region: str | None = None,
         limit: int = 20,
     ) -> list[RetrievedItem]:
@@ -284,6 +285,9 @@ class MarketHandler(ToolHandler):
             filters["pe_ratio_max"] = pe_ratio_max
         if sector:
             filters["sector"] = sector
+        # FIX-LIVE-M (2026-05-24): GICS industry filter — more selective than sector.
+        if industry:
+            filters["industry"] = industry
         if region:
             filters["region"] = region
         # WHY clamp limit: prevent the LLM from requesting huge result sets that

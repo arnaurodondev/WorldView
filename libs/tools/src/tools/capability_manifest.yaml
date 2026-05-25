@@ -415,8 +415,9 @@ tools:
   - name: screen_universe
     description: >
       Quantitative screener — filters the instrument universe by market cap, P/E ratio,
-      sector, and region. Use when the user asks to screen, filter, or find stocks that
-      meet specific fundamental criteria.
+      sector, industry, and region. Use when the user asks to screen, filter, or find
+      stocks that meet specific fundamental criteria. For AI-chip / semiconductor
+      queries, set sector='Technology' AND industry='Semiconductors' (GICS taxonomy).
     parameters:
       - name: market_cap_min
         type: number
@@ -433,6 +434,13 @@ tools:
       - name: sector
         type: string
         description: "Sector filter (e.g. 'Technology', 'Healthcare')"
+        required: false
+      # FIX-LIVE-M (2026-05-24): GICS industry filter. NVDA/AMD/AVGO are
+      # sector=Technology, industry=Semiconductors — industry is required to
+      # narrow "AI chip" or "semiconductor" queries from the LLM.
+      - name: industry
+        type: string
+        description: "Industry filter (e.g. 'Semiconductors', 'Cloud Computing')"
         required: false
       - name: region
         type: string
