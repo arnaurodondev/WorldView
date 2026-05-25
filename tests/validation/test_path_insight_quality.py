@@ -32,11 +32,15 @@ from tests.validation.conftest import scalar
 if TYPE_CHECKING:  # pragma: no cover
     import psycopg
 
-# Default metrics URL — the knowledge-graph service is on port 8007 in dev
-# compose (see services/knowledge-graph/.claude-context.md). Override via the
-# ``KNOWLEDGE_GRAPH_METRICS_URL`` env var when running against a non-default
-# environment (e.g. k8s in CI).
-_DEFAULT_METRICS_URL = "http://localhost:8007/metrics"
+# Default metrics URL — the gauge lives in the *scheduler* process, not the
+# main knowledge-graph API on :8007. FIX-LIVE-C wired
+# ``start_http_server(9108)`` inside ``scheduler_main.py`` because the
+# scheduler is a standalone process with no FastAPI ``/metrics`` route, and
+# the ``PathExplanationBatchWorker`` (which sets this gauge) only runs in
+# that process. FIX-LIVE-U then published :9108 to the host in
+# ``infra/compose/docker-compose.yml`` so this test can reach it.
+# Override via ``KNOWLEDGE_GRAPH_METRICS_URL`` for k8s / non-default envs.
+_DEFAULT_METRICS_URL = "http://localhost:9108/metrics"
 
 # Name of the gauge added by T-D-1-02. Must match the registration in
 # ``services/knowledge-graph/src/knowledge_graph/infrastructure/metrics/prometheus.py``.

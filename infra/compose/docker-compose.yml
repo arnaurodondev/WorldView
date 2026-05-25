@@ -1607,8 +1607,12 @@ services:
     # FIX-LIVE-C / F-LIVE-006-B: scheduler_main starts a Prometheus
     # ``start_http_server(9108)`` so worker gauges (path_insight backlog,
     # relation_summary backlog, stuck-relation count) are scrape-visible.
-    expose:
-      - "9108"
+    # FIX-LIVE-U: publish :9108 to the host so the data-SLO validation suite
+    # (``tests/validation/test_path_insight_quality.py``) can scrape the
+    # gauge from outside the Docker network. Prometheus inside the network
+    # continues to scrape via DNS (``knowledge-graph-scheduler:9108``).
+    ports:
+      - "9108:9108"
     command: ["python", "-m", "knowledge_graph.infrastructure.scheduler.scheduler_main"]
     restart: unless-stopped
     healthcheck:
