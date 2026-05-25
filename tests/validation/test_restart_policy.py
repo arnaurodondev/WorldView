@@ -108,15 +108,20 @@ _REQUIRED_POLICY = "unless-stopped"
 # Sub-Plan A wave A-1 task notes (see compose comments referencing
 # F-NPL-002 / F-LOG-002).
 _RETRY_WORKER_HEALTH_DEPS: dict[str, frozenset[str]] = {
-    # path-insight worker (F-LOG-002).  Needs postgres + valkey + ollama
-    # healthy before its first LLM/DB call to avoid sys.exit(1).
-    "knowledge-graph-path-insight-worker": frozenset({"postgres", "valkey", "ollama"}),
-    # embedding-retry worker (F-NPL-002).  Same set — when ollama is the
-    # fallback embedding provider it must be healthy.
-    "nlp-pipeline-embedding-retry-worker": frozenset({"postgres", "valkey", "ollama"}),
-    # unresolved-resolution worker (F-NPL-002).  Same dep set; the worker
-    # calls Ollama for LLM-based name resolution.
-    "nlp-pipeline-unresolved-resolution-worker": frozenset({"postgres", "valkey", "ollama"}),
+    # path-insight worker (F-LOG-002).  Needs postgres + valkey healthy
+    # before its first DB call to avoid sys.exit(1).
+    # DP-F005 (2026-05-24): Ollama dep dropped — worker has no ML client
+    # (graph traversal + template matching only).
+    "knowledge-graph-path-insight-worker": frozenset({"postgres", "valkey"}),
+    # embedding-retry worker (F-NPL-002).  Needs postgres + valkey healthy.
+    # DP-F005 (2026-05-24): Ollama dep dropped — DeepInfra is the primary
+    # embedding provider in shipped envs; Ollama is a fallback only when
+    # the API key is unset (never the case in production).
+    "nlp-pipeline-embedding-retry-worker": frozenset({"postgres", "valkey"}),
+    # unresolved-resolution worker (F-NPL-002).  Needs postgres + valkey.
+    # DP-F005 (2026-05-24): Ollama dep dropped — DeepInfra is the primary
+    # LLM provider for name resolution; Ollama is a fallback only.
+    "nlp-pipeline-unresolved-resolution-worker": frozenset({"postgres", "valkey"}),
 }
 
 
