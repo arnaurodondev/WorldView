@@ -376,7 +376,6 @@ services/rag-chat/src/rag_chat/
 │   ├── pipeline/
 │   │   ├── tool_executor.py          # ToolExecutorFactory, EntityContext, ToolCallProvenance; 8 handlers; Cypher injection guard (_ALLOWED_CYPHER_REL_TYPES)
 │   │   ├── hyde_expander.py          # HyDE hypothesis + embedding
-│   │   ├── fusion.py                 # GraphEnricher + FusionPipeline
 │   │   ├── reranker.py               # BGE reranker via Ollama
 │   │   ├── context_assembler.py      # Numbered context blocks
 │   │   ├── prompt_builder.py         # Full prompt assembly
@@ -502,6 +501,19 @@ All env vars use prefix `RAG_CHAT_`.
 | `rag_tool_call_total` | counter | `tool_name`, `status` |
 | `rag_tool_call_latency_seconds` | histogram | `tool_name` |
 | `rag_tool_use_first_turn_latency_seconds` | histogram | — |
+
+#### New Metrics (PLAN-0093 QA-7)
+
+Four additional metrics were introduced in PLAN-0093 QA-7 to surface tool-use regressions and registry health:
+
+| Metric | Type | Labels | Description |
+|--------|------|--------|-------------|
+| `rag_no_tool_calls_first_turn_total` | counter | `provider` | LLM answered on iteration 0 without calling any tool; a spike indicates prompt or provider regression |
+| `rag_tool_result_items` | histogram | `tool_name` | Number of items returned per tool call (buckets: 0/1/3/5/10/20/50/100/250); p95 spike = retrieval bottleneck |
+| `rag_chat_with_tools_failed_total` | counter | `provider` | Provider-level `chat_with_tools` failures; increments on every exception in the fallback chain |
+| `rag_tool_registry_size` | gauge | `kind` | Set at startup by `validate_registry_parity()`; `kind=manifest` = tools declared in YAML, `kind=handled` = tools with a registered handler; if these two values diverge the service refuses to start |
+
+**`rag_latency_seconds` per-tool threshold (PLAN-0093 QA-7)**: the existing histogram now also covers per-tool timing. A `tool_slow` warning fires whenever a single tool execution exceeds **2 seconds** (configurable); previously timing was only tracked at the full-turn level.
 
 #### Retrieval Quality Metrics (PLAN-0063 W5-5)
 

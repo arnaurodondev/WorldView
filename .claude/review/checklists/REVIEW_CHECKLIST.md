@@ -125,6 +125,7 @@
 - [ ] All `market-ingestion` provider adapters extend `BaseProviderAdapter` (not `ProviderAdapter` directly) — ensures `_record_api_call()` is available and generic metrics are emitted (STANDARDS §18)
 - [ ] `domain/errors.py` defines `DomainError(Exception)` — all other exceptions inherit from it (R21)
 - [ ] Service-specific error alias defined as subclass, not assignment (e.g., `class MyServiceError(DomainError):`)
+- [ ] **After deleting a class/module**: grep all callers before closing the PR. If the deleted item was a constructor arg, a base class, or an import target, verify its removal in every call site. A deletion that passes type-check + unit tests can still leave orphan downstream helpers (see BP-549).
 
 ## 7b. Docker Compose Completeness
 
