@@ -382,6 +382,86 @@ class TestToolCallsEmitted:
             for content in tool_msg_contents:
                 assert "x" * 10001 not in content
 
+    def test_orchestrator_parallel_tool_calls_produce_unique_ids_and_nonempty_content(self) -> None:
+        """FIX-LIVE-R: per-tool messages must (a) have unique tool_call_ids and
+        (b) carry non-empty content even when the same tool is invoked twice.
+
+        Live re-QA (2026-05-25) caught two DeepInfra spec violations after
+        FIX-LIVE-J:
+
+        - When the LLM emits two parallel calls to the same function
+          (Compare NVDA + AMD ⇒ two get_fundamentals_history calls), both
+          tool_call entries previously fell back to the function name as the
+          ``id`` field. Duplicate ids violate the OpenAI spec; DeepInfra
+          silently dropped the second tool message and rejected the next turn
+          with "missing required tool".
+        - The non-first tool message carried ``"content": ""``. DeepInfra
+          rejects empty content on role="tool".
+
+        This test pins both invariants so a future refactor cannot regress.
+        """
+        from rag_chat.application.use_cases.chat_orchestrator import ChatOrchestratorUseCase
+
+        # Two parallel calls to the SAME tool — the exact shape that triggered
+        # the live failure on Q4 v1 ("Compare NVDA and AMD revenue").
+        tool_a = _make_tool_use_block("get_fundamentals_history", inp={"ticker": "NVDA", "periods": 4})
+        tool_b = _make_tool_use_block("get_fundamentals_history", inp={"ticker": "AMD", "periods": 4})
+        # Simulate the provider returning an EMPTY id (the bug condition):
+        # adapters parse ``id=call.get("id", "")``, so when DeepInfra omits an
+        # id the dataclass attribute is "". The orchestrator must NOT then
+        # collapse both calls to the same fallback identifier.
+        tool_a.id = ""
+        tool_b.id = ""
+
+        call_count = [0]
+        captured_messages: list[list] = []
+
+        async def _two_call_llm(messages, tools=None, **kwargs):
+            call_count[0] += 1
+            captured_messages.append(list(messages))
+            if call_count[0] == 1:
+                return _make_llm_tool_response(tool_calls=[tool_a, tool_b])
+            return _make_llm_tool_response(text="Answer.", tool_calls=[])
+
+        pipeline = _make_pipeline()
+        pipeline.llm_chain.chat_with_tools = _two_call_llm
+        pipeline.build_prompt = MagicMock(return_value=("prompt", [], "aggregated context block"))
+
+        item = _make_retrieved_item()
+        executor = _make_tool_executor_mock([item])
+        factory = _make_factory_mock(executor)
+
+        orch = ChatOrchestratorUseCase(pipeline=pipeline, tool_executor_factory=factory)
+        request = _make_chat_request()
+        uow = MagicMock()
+
+        asyncio.run(_collect_events(orch, request, uow))
+
+        assert len(captured_messages) >= 2, "expected at least 2 LLM turns"
+        msgs = captured_messages[-1]
+
+        # Locate the assistant tool-call message + its tool replies.
+        assistant_msgs = [m for m in msgs if m.get("role") == "assistant" and m.get("tool_calls")]
+        tool_msgs = [m for m in msgs if m.get("role") == "tool"]
+        assert assistant_msgs, "expected assistant message with tool_calls"
+        assert len(tool_msgs) == 2, f"expected 2 tool messages, got {len(tool_msgs)}"
+
+        # (a) Unique tool_call_ids — no collision between the parallel calls.
+        ids_on_assistant = [tc["id"] for tc in assistant_msgs[-1]["tool_calls"]]
+        ids_on_tool_msgs = [m["tool_call_id"] for m in tool_msgs]
+        assert len(set(ids_on_assistant)) == 2, f"duplicate ids in assistant tool_calls: {ids_on_assistant}"
+        assert len(set(ids_on_tool_msgs)) == 2, f"duplicate ids on tool messages: {ids_on_tool_msgs}"
+        assert set(ids_on_assistant) == set(ids_on_tool_msgs), "tool reply ids must mirror assistant tool_calls"
+
+        # (b) Every tool message has NON-EMPTY content (DeepInfra spec).
+        for m in tool_msgs:
+            assert m.get("content"), f"tool message must have non-empty content, got {m!r}"
+
+        # (c) Every tool message includes the ``name`` field (helps stricter
+        # providers resolve the tool_call_id ↔ function name mapping).
+        for m in tool_msgs:
+            assert m.get("name"), f"tool message must include name field, got {m!r}"
+
 
 # ---------------------------------------------------------------------------
 # Tests: all-tools-failed guard
