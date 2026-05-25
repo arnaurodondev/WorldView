@@ -39,6 +39,7 @@ emit an error and stop. Without this guard the LLM hallucinates from empty conte
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import re
 import time
@@ -56,9 +57,11 @@ from rag_chat.application.metrics.prometheus import (
     rag_citations_scrubbed_total,
     rag_grounding_validation_total,
     rag_latency,
+    rag_no_tool_calls_first_turn,
     rag_queries_total,
     rag_tool_call_latency_seconds,
     rag_tool_call_total,
+    rag_tool_result_items,
     rag_tool_use_first_turn_latency_seconds,
     record_reranker_position_change,
 )
@@ -471,7 +474,7 @@ class ChatOrchestratorUseCase:
             for _ent in entities:
                 _ticker_str = f", ticker: {_ent.ticker}" if _ent.ticker else ""
                 _emap_lines.append(
-                    f'- "{_ent.canonical_name}": entity_id={_ent.entity_id}' f" (type: {_ent.entity_type}{_ticker_str})"
+                    f'- "{_ent.canonical_name}": entity_id={_ent.entity_id} (type: {_ent.entity_type}{_ticker_str})'
                 )
             _entity_map_section = "\n\nEntities resolved from this query:\n" + "\n".join(_emap_lines)
 
@@ -557,6 +560,22 @@ class ChatOrchestratorUseCase:
 
             # ── LLM chose to answer directly (no tool calls) ─────────────────
             if not tool_calls:
+                # PLAN-0093 QA-7 P0-2: smoke-signal log + counter for iteration-0
+                # "no-tool" exits.  Later iterations legitimately end without tool
+                # calls (the LLM has the data it needs from previous rounds), so
+                # we only emit on the first turn — that's the regression signal.
+                if iteration == 0:
+                    _direct_text_preview = (
+                        getattr(llm_response, "content", "") or getattr(llm_response, "text", "") or ""
+                    )
+                    log.warning(  # type: ignore[no-any-return]
+                        "llm_answered_without_tools",
+                        iteration=iteration,
+                        text_length=len(_direct_text_preview),
+                        provider=provider_name,
+                    )
+                    rag_no_tool_calls_first_turn.labels(provider=provider_name).inc()
+
                 # Stream the direct text answer immediately.
                 direct_text = getattr(llm_response, "text", "") or ""
                 if direct_text:
@@ -568,6 +587,18 @@ class ChatOrchestratorUseCase:
 
             # ── Tool execution ────────────────────────────────────────────────
             had_tool_calls = True
+
+            # PLAN-0093 QA-7 P1-1: structured trace of which tools the LLM picked
+            # on this iteration. Tool *names* only — never args (PII risk) or the
+            # user message. Bounded label-style fields make this safe to aggregate.
+            log.info(  # type: ignore[no-any-return]
+                "tool_selection_resolved",
+                request_id=str(getattr(audit, "turn_id", "") or ""),
+                iteration=iteration,
+                tools=[tc.name for tc in tool_calls],
+                n_calls=len(tool_calls),
+                provider=provider_name,
+            )
 
             # ── E-1 T-E-1-02: infer intent from the first tool-call batch ─
             # We only re-infer on iteration 0 — subsequent rounds are LLM
@@ -624,6 +655,24 @@ class ChatOrchestratorUseCase:
             _fresh_results = await tool_executor.execute_all(_fresh_calls) if _fresh_calls else []
             _tool_latency = time.monotonic() - _tool_t0
             cumulative_tool_latency += _tool_latency
+
+            # Q1 fix: use per-tool latencies from the executor instead of dividing
+            # total batch time by the number of tools (incorrect for concurrent execution).
+            # ``last_per_tool_latencies_s`` is set by execute_all in the same order as
+            # _fresh_calls; cached calls get 0.0 (cache hit is near-instant).
+            # isinstance guard: MagicMock test doubles return a MagicMock for any
+            # attribute access; we must confirm we got a real list before using it.
+            _raw_latencies = getattr(tool_executor, "last_per_tool_latencies_s", None)
+            _fresh_latencies: list[float] = (
+                _raw_latencies
+                if isinstance(_raw_latencies, list)
+                else [_tool_latency / max(len(_fresh_calls), 1)] * len(_fresh_calls)
+            )
+            _latency_by_call_id: dict[int, float] = {
+                id(tc): lat for tc, lat in zip(_fresh_calls, _fresh_latencies, strict=False)
+            }
+            for tc, _cached in _cached_pairs:
+                _latency_by_call_id[id(tc)] = 0.0
 
             # Populate cache with fresh results.
             for _key, _res in zip(_fresh_keys, _fresh_results, strict=False):
@@ -704,12 +753,30 @@ class ChatOrchestratorUseCase:
                 if _count > 0:
                     _all_failed = False
                 rag_tool_call_total.labels(tool_name=tc.name, status=_status).inc()
-                rag_tool_call_latency_seconds.labels(tool_name=tc.name).observe(_tool_latency / max(len(tool_calls), 1))
+                # Q1 fix: use accurate per-tool latency from the executor rather than
+                # total_batch_time / n_tools (which incorrectly averages concurrent calls).
+                _per_tool_latency = _latency_by_call_id.get(id(tc), _tool_latency / max(len(tool_calls), 1))
+                rag_tool_call_latency_seconds.labels(tool_name=tc.name).observe(_per_tool_latency)
+                # PLAN-0093 QA-7 P0-3: empty-result quality signal — record the
+                # item count per tool. _count is already computed for the SSE
+                # emit immediately below, so we just re-use it.
+                rag_tool_result_items.labels(tool_name=tc.name).observe(_count)
+                # PLAN-0093 QA-7 P1-3: slow-tool early warning. 2s is the same
+                # threshold the per-tool latency histogram crosses its second-
+                # to-last bucket; tools above it are likely degenerate.
+                if _per_tool_latency > 2.0:
+                    log.warning(  # type: ignore[no-any-return]
+                        "tool_slow",
+                        tool=tc.name,
+                        latency_ms=int(_per_tool_latency * 1000),
+                        threshold_ms=2000,
+                        request_id=str(getattr(audit, "turn_id", "") or ""),
+                    )
                 yield p.emitter.emit_tool_result(tc.name, status=_status, item_count=_count)
 
                 # E-12: record each tool call outcome.
                 _success = _count > 0
-                _latency_ms = int(_tool_latency / max(len(tool_calls), 1) * 1000)
+                _latency_ms = int(_per_tool_latency * 1000)
                 audit.record_tool_call(tc.name, success=_success, latency_ms=_latency_ms)
 
             # Add retrieval items to the accumulated non_none_items pool.
@@ -763,11 +830,25 @@ class ChatOrchestratorUseCase:
                         if _src_id:
                             seen_item_ids.add(str(_src_id).lower())
                 else:
+                    # PLAN-0093 QA-7 P0-1: PII redaction for the all-tools-failed
+                    # log. Previously we logged the first 100 chars of the user
+                    # message verbatim — anything from API keys to PHI could
+                    # leak via structured-log shipping. Now we emit a stable
+                    # 12-char SHA-256 prefix (deterministic across runs for the
+                    # same query, useful for grepping) plus length + the first
+                    # 3 whitespace-separated tokens — enough triage signal to
+                    # see the kind of question without exposing the body.
+                    _q = request.message or ""
+                    _q_hash = hashlib.sha256(_q.encode("utf-8")).hexdigest()[:12]
+                    _q_split = _q.split()
+                    _q_word = _q_split[0] if _q_split else ""
                     log.warning(  # type: ignore[no-any-return]
                         "all_tools_failed",
                         tool_count=len(tool_calls),
                         tools=[tc.name for tc in tool_calls],
-                        query=request.message[:100],
+                        query_hash=_q_hash,
+                        query_length=len(_q),
+                        query_first_word=_q_word,
                     )
                     yield p.emitter.emit_error("all_tools_failed", "Unable to retrieve relevant data")
                     return
@@ -780,6 +861,15 @@ class ChatOrchestratorUseCase:
 
             if consecutive_errors >= budget.max_consecutive_errors:
                 rag_budget_exceeded_total.labels(budget_type="consecutive_errors").inc()
+                # PLAN-0093 QA-7 P1-4: pair budget-exceeded counter increments
+                # with a structured log so dashboards + log search agree.
+                log.info(  # type: ignore[no-any-return]
+                    "agent_budget_exceeded",
+                    budget_type="consecutive_errors",
+                    iterations_used=iteration,
+                    cumulative_latency_s=cumulative_tool_latency,
+                    consecutive_errors=consecutive_errors,
+                )
                 messages.append(
                     {
                         "role": "user",
@@ -793,6 +883,13 @@ class ChatOrchestratorUseCase:
 
             if cumulative_tool_latency >= budget.max_tool_latency_s:
                 rag_budget_exceeded_total.labels(budget_type="latency").inc()
+                log.info(  # type: ignore[no-any-return]
+                    "agent_budget_exceeded",
+                    budget_type="latency",
+                    iterations_used=iteration,
+                    cumulative_latency_s=cumulative_tool_latency,
+                    consecutive_errors=consecutive_errors,
+                )
                 messages.append(
                     {
                         "role": "user",
@@ -821,7 +918,23 @@ class ChatOrchestratorUseCase:
                 _type_counts,
             )
 
-            # Inject assistant turn + tool results as user message.
+            # Inject assistant turn + per-tool result messages.
+            #
+            # FIX-LIVE-J (2026-05-24): the OpenAI / DeepInfra Chat Completions
+            # spec requires that after an ``assistant`` message containing
+            # ``tool_calls``, every tool call MUST be answered by its own
+            # message with ``role="tool"`` and a matching ``tool_call_id``.
+            # Previously we collapsed every result into a single
+            # ``role="user"`` blob, which DeepInfra rejects with:
+            #   "missing required tool from [<name>]; got []"
+            # This broke any second-turn synthesis (e.g., Q4 fundamentals
+            # comparisons). The minimal spec-compliant fix is to emit one
+            # ``role="tool"`` message per tool call. To avoid a wider refactor
+            # of the prompt builder (which already concatenates per-tool
+            # results into ``_context_block``), we attach the full context
+            # block to the FIRST tool message and empty content to the rest —
+            # the audit report explicitly flags this as the acceptable
+            # minimal fix. Cite docs/audits/2026-05-24-inv-live-jklm-investigation-report.md.
             messages.append(
                 {
                     "role": "assistant",
@@ -836,16 +949,20 @@ class ChatOrchestratorUseCase:
                     ],
                 }
             )
-            messages.append(
-                {
-                    "role": "user",
-                    "content": (
-                        "Here is the data retrieved by the tools:\n\n"
-                        + _context_block[:_TOOL_RESULT_MAX_CHARS]
-                        + "\n\nPlease answer the original question using this data."
-                    ),
-                }
-            )
+            _capped_context = _context_block[:_TOOL_RESULT_MAX_CHARS]
+            for _idx, tc in enumerate(tool_calls):
+                # First tool message carries the full (capped) aggregated
+                # context; the rest are empty placeholders so each tool_call_id
+                # is satisfied per spec. ``tool_use_id`` falls back to the tool
+                # name to match the ``id`` used on the assistant message above.
+                _tool_content = _capped_context if _idx == 0 else ""
+                messages.append(
+                    {
+                        "role": "tool",
+                        "tool_call_id": getattr(tc, "tool_use_id", tc.name),
+                        "content": _tool_content,
+                    }
+                )
 
             # E-12: increment iteration counter.
             audit.increment_iteration()
@@ -854,6 +971,13 @@ class ChatOrchestratorUseCase:
         else:
             # for/else: loop exited by hitting max_iterations (not by break).
             rag_budget_exceeded_total.labels(budget_type="iterations").inc()
+            log.info(  # type: ignore[no-any-return]
+                "agent_budget_exceeded",
+                budget_type="iterations",
+                iterations_used=iteration_count,
+                cumulative_latency_s=cumulative_tool_latency,
+                consecutive_errors=consecutive_errors,
+            )
             messages.append(
                 {
                     "role": "user",

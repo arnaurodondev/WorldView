@@ -362,19 +362,24 @@ class TestToolCallsEmitted:
 
         asyncio.run(_collect_events(orch, request, uow))
 
-        # The second LLM call receives messages including the injected context block.
-        # Verify the context was capped at 4000 chars in the injected user message.
+        # The second LLM call receives messages including per-tool result
+        # messages.  FIX-LIVE-J: tool results are now injected as one
+        # ``role="tool"`` message per call (OpenAI / DeepInfra spec) with a
+        # matching ``tool_call_id``; the first such message carries the full
+        # aggregated (and capped) context block.  Verify the cap still holds.
         if len(captured_messages) >= 2:
-            # Find the user message with "Here is the data retrieved by the tools"
             messages_for_second_call = captured_messages[-1]
-            user_msgs_with_data = [
-                m.get("content", "")
-                for m in messages_for_second_call
-                if m.get("role") == "user" and "Here is the data" in str(m.get("content", ""))
-            ]
-            if user_msgs_with_data:
-                content = user_msgs_with_data[0]
-                # The 10000-char context must NOT appear verbatim (cap at 4000)
+            tool_msg_contents = [str(m.get("content", "")) for m in messages_for_second_call if m.get("role") == "tool"]
+            # At least one tool message must exist (matching the single tool_call).
+            assert tool_msg_contents, "expected at least one role='tool' message in second turn"
+            # Every tool message must carry a tool_call_id (spec requirement).
+            for m in messages_for_second_call:
+                if m.get("role") == "tool":
+                    assert m.get("tool_call_id"), "role='tool' messages must include a tool_call_id"
+            # The 10000-char context must NOT appear verbatim (cap at 4000)
+            # in any tool message — including the first, which carries the
+            # aggregated context.
+            for content in tool_msg_contents:
                 assert "x" * 10001 not in content
 
 

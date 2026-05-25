@@ -61,6 +61,16 @@ rag_provider_unavail = Counter(
     ["provider"],
 )
 
+# PLAN-0093 QA-7 P1-5: per-provider chat_with_tools failure counter.
+# Companion to the structured `provider_chat_with_tools_failed` log so failures
+# in the non-streaming tool-use path are dashable without scraping logs.
+# Label cardinality bounded by provider chain (deepinfra / openrouter / ollama).
+rag_chat_with_tools_failed = Counter(
+    "rag_chat_with_tools_failed_total",
+    "Number of times a provider's chat_with_tools call failed in the tool-use loop",
+    labelnames=["provider"],
+)
+
 # ── Threads ──────────────────────────────────────────────────────────────────
 
 rag_thread_count = Gauge(
@@ -199,6 +209,47 @@ rag_tool_use_first_turn_latency_seconds = Histogram(
     buckets=[0.1, 0.25, 0.5, 1.0, 2.0, 4.0, 8.0],
 )
 
+# PLAN-0093 QA-7 P0-2: Regression smoke signal. The orchestrator's iteration-0
+# branch breaks out of the agent loop when the LLM produces no tool_calls, which
+# is the smoking gun for tool-discipline / prompt regressions. Label cardinality
+# is bounded by the provider chain (≤4) — never user/tenant/entity IDs.
+rag_no_tool_calls_first_turn = Counter(
+    "rag_no_tool_calls_first_turn_total",
+    "LLM answered without calling any tool on iteration 0 (regression smoke signal)",
+    labelnames=["provider"],
+)
+
+# PLAN-0093 QA-7 P0-3: Empty-result quality signal — how many items each tool
+# returned on a given call. We deliberately label by tool_name only (bounded ≤22
+# by the registry) so dashboards can split the empty-result rate per tool.
+rag_tool_result_items = Histogram(
+    "rag_tool_result_items",
+    "Number of items returned by a tool call (empty result quality signal)",
+    labelnames=["tool_name"],
+    buckets=(0, 1, 3, 5, 10, 20, 50, 100, 250),
+)
+
+# ── Tool-registry parity (PLAN-0093 QA P0-1) ─────────────────────────────────
+#
+# Drift signal between the YAML manifest and the in-process handler registry.
+# The boot-time guard (validate_registry_parity) refuses to start the service
+# if these two diverge, so under normal operation the two labels are always
+# equal.  The gauge is published anyway because:
+#   1. Ops dashboards want a single panel showing "22 tools registered" without
+#      having to grep service logs.
+#   2. Alert rule (documented for runbook):
+#        rag_tool_registry_size{kind="manifest"}
+#          != rag_tool_registry_size{kind="handled"}
+#      This would never fire in healthy state — the startup guard fails first —
+#      but if a future change moves validation to a non-fatal warn, the alert
+#      will still catch silent drift.
+
+rag_tool_registry_size = Gauge(
+    "rag_tool_registry_size",
+    "Number of tools registered in the manifest vs handlers (drift signal)",
+    labelnames=["kind"],  # kind: "manifest" | "handled"
+)
+
 # ── E-6: Multi-turn agent loop (AgentBudget) ──────────────────────────────────
 
 rag_agent_iterations = Histogram(
@@ -236,4 +287,17 @@ rag_grounding_validation_total = Counter(
 rag_audit_entries_total = Counter(
     "rag_audit_entries_total",
     "Number of chat audit log entries written",
+)
+
+# ── Pipeline stage input-size histogram (PLAN-0093 observability) ─────────────
+# Tracks the number of items entering each named pipeline stage so operators
+# can spot stages that receive 0 items (silent empty-pipeline regressions) or
+# suspiciously large batches (runaway retrieval).  Label cardinality is bounded
+# by the fixed set of stage names (≤ 6) — never user/tenant/entity IDs.
+
+rag_pipeline_stage_input_size = Histogram(
+    "rag_pipeline_stage_input_size",
+    "Number of items entering each pipeline stage",
+    labelnames=["stage"],
+    buckets=(0, 1, 3, 5, 10, 20, 50, 100, 250, 500),
 )
