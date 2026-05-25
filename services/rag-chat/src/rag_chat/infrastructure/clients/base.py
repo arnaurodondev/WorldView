@@ -40,6 +40,18 @@ class BaseUpstreamClient:
         jwt = get_current_jwt()
         if jwt and "X-Internal-JWT" not in headers:
             headers["X-Internal-JWT"] = jwt
+        # FIX-LIVE-S (2026-05-25): S9-proxied gateway routes (e.g.
+        # /v1/fundamentals/economic-calendar, top-movers) gate behind
+        # ``request.state.user`` populated by OIDCAuthMiddleware from the
+        # ``Authorization: Bearer`` header.  In dev mode the gateway also
+        # accepts our internal JWT as Bearer (validates iss=worldview-gateway
+        # + aud=worldview-internal).  Without this, rag-chat's calls to those
+        # routes returned 401 (Q5 macro-Tesla USELESS verdict).  In prod the
+        # gateway silently ignores invalid bearers (sets user=None), so this
+        # is a no-op for production until a service-to-service auth path is
+        # added.  Only set when caller did not already provide one.
+        if jwt and "Authorization" not in headers:
+            headers["Authorization"] = f"Bearer {jwt}"
 
         try:
             resp = await self._client.post(path, json=payload, headers=headers)
@@ -76,6 +88,10 @@ class BaseUpstreamClient:
         jwt = get_current_jwt()
         if jwt and "X-Internal-JWT" not in headers:
             headers["X-Internal-JWT"] = jwt
+        # FIX-LIVE-S (2026-05-25): see ``_post`` for the rationale — S9-proxied
+        # gateway routes require Bearer auth populating request.state.user.
+        if jwt and "Authorization" not in headers:
+            headers["Authorization"] = f"Bearer {jwt}"
 
         try:
             resp = await self._client.get(path, params=params, headers=headers)

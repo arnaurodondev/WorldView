@@ -132,6 +132,60 @@ class TestFallbackArgProjection:
         # Must be a copy (not the same reference), so mutations don't leak.
         assert out is not args
 
+    def test_economic_calendar_to_search_documents_preserves_dates_and_ticker(self) -> None:
+        """FIX-LIVE-S: empty calendar → macro-news search_documents.
+
+        Verifies:
+          - Hard-coded macro vocabulary becomes the query (not the user's question).
+          - from_date/to_date carried over as date_from/date_to.
+          - ctx.ticker becomes entity_tickers anchor (when ctx supplied).
+        """
+        from rag_chat.application.pipeline.tool_executor import EntityContext
+        from rag_chat.application.use_cases.chat_orchestrator import _build_fallback_args
+
+        ctx = EntityContext(
+            entity_id=UUID("00000000-0000-0000-0000-000000000099"),
+            ticker="TSLA",
+            name="Tesla, Inc.",
+        )
+        failed_args = {"from_date": "2026-05-25", "to_date": "2026-06-24", "region": "US"}
+
+        out = _build_fallback_args("get_economic_calendar", "search_documents", failed_args, ctx)
+        assert out is not None
+        # Query carries macro vocabulary that maximises BM25 hit rate.
+        assert "macroeconomic" in out["query"].lower()
+        assert "fomc" in out["query"].lower()
+        # Date window preserved (renamed to search_documents schema).
+        assert out["date_from"] == "2026-05-25"
+        assert out["date_to"] == "2026-06-24"
+        # Ticker anchor from EntityContext.
+        assert out["entity_tickers"] == ["TSLA"]
+        # region is calendar-specific and should not leak through.
+        assert "region" not in out
+
+    def test_economic_calendar_to_search_documents_without_ctx_skips_ticker(self) -> None:
+        """No EntityContext: search_documents still runs but without entity_tickers anchor.
+
+        This is the open-domain macro question case (e.g. "what's happening in the
+        economy this week?") — we still want a useful fallback even without a
+        resolved entity.
+        """
+        from rag_chat.application.use_cases.chat_orchestrator import _build_fallback_args
+
+        out = _build_fallback_args(
+            "get_economic_calendar",
+            "search_documents",
+            {"from_date": "2026-05-25", "to_date": "2026-06-24"},
+            ctx=None,
+        )
+        assert out is not None
+        # Query is still the macro vocabulary; dates still preserved.
+        assert "macroeconomic" in out["query"].lower()
+        assert out["date_from"] == "2026-05-25"
+        assert out["date_to"] == "2026-06-24"
+        # No ctx → no entity_tickers anchor.
+        assert "entity_tickers" not in out
+
 
 # ---------------------------------------------------------------------------
 # Helpers (mirror test_chat_orchestrator_tool_loop.py for consistency)
