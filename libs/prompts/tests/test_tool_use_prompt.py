@@ -72,3 +72,41 @@ class TestToolUsePromptContract:
         """``TOOL_USE_SYSTEM_PROMPT_TEMPLATE.render`` must reject missing params."""
         with pytest.raises(ValueError):
             TOOL_USE_SYSTEM_PROMPT_TEMPLATE.render(today_iso="2026-05-23")
+
+    def test_prompt_contains_ai_semis_allowlist(self) -> None:
+        """FIX-LIVE-Q regression — AI-semi allowlist hint must be present.
+
+        Q6 ("Find undervalued AI semiconductor companies...") used to fail
+        because the screener payload has no ``ai_focus`` flag and the LLM
+        honestly refused to label rows. The system prompt now carries a
+        tight ticker allowlist the LLM can cross-reference against
+        ``screen_universe`` output. Guards against accidental removal.
+        """
+        prompt = get_tool_use_system_prompt(
+            intent="FINANCIAL_DATA",
+            today_iso="2026-05-25",
+        )
+        # The hint header must be present so the LLM can locate the rule.
+        assert "SCREENER — AI-SEMICONDUCTOR HINT:" in prompt
+        # Every canonical AI-semi ticker must appear verbatim — these are
+        # the only tickers the LLM may mark as AI-relevant.
+        for ticker in (
+            "NVDA",
+            "AMD",
+            "AVGO",
+            "TSM",
+            "ARM",
+            "AMAT",
+            "ASML",
+            "MRVL",
+            "INTC",
+            "QCOM",
+            "MU",
+            "LRCX",
+        ):
+            assert ticker in prompt, f"AI-semi allowlist missing ticker {ticker}"
+        # FIX-LIVE-M filter pairing must be encouraged in the hint.
+        assert "industry='Semiconductors'" in prompt
+        # Fabrication guard wording must be present so future edits don't
+        # silently turn the allowlist into a free-form list.
+        assert "Do NOT fabricate" in prompt or "do NOT fabricate" in prompt

@@ -74,7 +74,22 @@ TOOL_USE_SYSTEM_PROMPT_TEMPLATE = PromptTemplate(
         "cite them inline using [N1], [N2], … markers — one marker per claim that is "
         "supported by a retrieved item, in the order the items appear in the tool output. "
         "Do NOT invent citation numbers. If no documents were retrieved, do not emit any "
-        "citation markers.\n"
+        "citation markers.\n\n"
+        # FIX-LIVE-Q (2026-05-25): screener payload has no `ai_focus` flag,
+        # so the LLM previously refused to label any returned row as
+        # "AI-relevant semiconductor". Provide a tight allowlist the LLM
+        # can cross-reference against ticker fields in screener output.
+        # The allowlist is the ONLY source of truth for AI-semi labelling —
+        # do NOT extend it from pretraining knowledge.
+        "SCREENER — AI-SEMICONDUCTOR HINT:\n"
+        "When the user asks about 'AI chip', 'AI semiconductor', 'AI silicon', "
+        "or 'AI accelerator' companies, first call `screen_universe` with "
+        "sector='Technology' AND industry='Semiconductors'. Then, from the "
+        "returned rows, mark a company as AI-relevant ONLY if its ticker "
+        "appears in this allowlist: NVDA, AMD, AVGO, TSM, ARM, AMAT, ASML, "
+        "MRVL, INTC, QCOM, MU, LRCX. Do NOT fabricate or extend this list "
+        "from training knowledge; if a returned ticker is not in the "
+        "allowlist, do not label it AI-relevant.\n"
         "{per_intent_addendum}{entity_map_section}"
     ),
     # ``today_iso``, ``entity_map_section`` and ``per_intent_addendum`` are all
