@@ -10,7 +10,6 @@ read (replica) session.
 from __future__ import annotations
 
 from datetime import date
-from decimal import Decimal
 from typing import TYPE_CHECKING, Any
 
 from sqlalchemy import and_, func, select
@@ -18,8 +17,21 @@ from sqlalchemy import and_, func, select
 from market_data.application.ports.repositories import MetricDataPoint, ScreenFilter, ScreenResult
 from market_data.domain.entities import ScreenFieldMetadata
 from market_data.infrastructure.db.models.fundamental_metrics import FundamentalMetricModel
+from market_data.infrastructure.db.models.fundamentals_snapshot import InstrumentFundamentalsSnapshotModel
 from market_data.infrastructure.db.models.instruments import InstrumentModel
 from market_data.infrastructure.db.models.screen_field_metadata import ScreenFieldMetadataModel
+
+# Snapshot metric columns selected from instrument_fundamentals_snapshot (L-2).
+# Aliased with "snap_" prefix to avoid name collisions with fundamental_metrics columns.
+_SNAP_FIELDS: tuple[str, ...] = (
+    "avg_volume_30d",
+    "eps_ttm",
+    "free_cash_flow",
+    "fcf_margin",
+    "interest_coverage",
+    "net_debt_to_ebitda",
+    "credit_rating",
+)
 
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession
@@ -111,6 +123,7 @@ async def query_screen(
     into raw SQL; column references are resolved via SQLAlchemy ORM attributes.
     """
     instr = InstrumentModel
+    snap = InstrumentFundamentalsSnapshotModel
 
     if not filters:
         # No filters — return ALL instruments sorted by symbol, with the most
@@ -169,10 +182,13 @@ async def query_screen(
         ]
         for metric_name, sq in key_sqs.items():
             select_cols.append(sq.c.value_numeric.label(metric_name))
+        for sf in _SNAP_FIELDS:
+            select_cols.append(getattr(snap, sf).label(f"snap_{sf}"))
 
         stmt = select(*select_cols).order_by(instr.symbol.asc()).offset(offset).limit(limit)
         for sq in key_sqs.values():
             stmt = stmt.outerjoin(sq, instr.id == sq.c.instrument_id)
+        stmt = stmt.outerjoin(snap, instr.id == snap.instrument_id)
 
         result: Any = await session.execute(stmt)
         rows = result.all()
@@ -187,7 +203,12 @@ async def query_screen(
                 exchange=row.exchange,
                 sector=row.sector,
                 metrics={
-                    name: getattr(row, name, None) for name in key_metrics if getattr(row, name, None) is not None
+                    **{name: getattr(row, name, None) for name in key_metrics if getattr(row, name, None) is not None},
+                    **{
+                        sf: getattr(row, f"snap_{sf}")
+                        for sf in _SNAP_FIELDS
+                        if getattr(row, f"snap_{sf}", None) is not None
+                    },
                 },
             )
             for row in rows
@@ -255,6 +276,8 @@ async def query_screen(
     ]
     for metric_name, col in metric_columns:
         filter_select_cols.append(col.label(metric_name))
+    for sf in _SNAP_FIELDS:
+        filter_select_cols.append(getattr(snap, sf).label(f"snap_{sf}"))
 
     stmt = select(*filter_select_cols)
 
@@ -263,6 +286,7 @@ async def query_screen(
 
     # Always JOIN instruments (provides ticker/name/exchange/sector + sector filter)
     stmt = stmt.join(instr, instr.id == base.c.instrument_id)
+    stmt = stmt.outerjoin(snap, instr.id == snap.instrument_id)
 
     # Sector filter (AND logic across all filter entries that specify a sector)
     for sv in (f.sector for f in filters if f.sector is not None):
@@ -273,6 +297,18 @@ async def query_screen(
     # AND logic across all filter entries that specify an industry.
     for iv in (f.industry for f in filters if f.industry is not None):
         stmt = stmt.where(instr.industry == iv)
+
+    # L-1: instrument-attribute filters — applied as AND predicates against instruments table
+    for cv in (f.country for f in filters if f.country is not None):
+        stmt = stmt.where(instr.country == cv)
+    for ev in (f.exchange for f in filters if f.exchange is not None):
+        stmt = stmt.where(instr.exchange == ev)
+    if any(f.has_fundamentals is not None for f in filters):
+        hf = next(f.has_fundamentals for f in filters if f.has_fundamentals is not None)
+        stmt = stmt.where(instr.has_fundamentals == hf)
+    if any(f.has_ohlcv is not None for f in filters):
+        ho = next(f.has_ohlcv for f in filters if f.has_ohlcv is not None)
+        stmt = stmt.where(instr.has_ohlcv == ho)
 
     # Sorting — column resolved from ORM attributes (no raw SQL interpolation)
     sort_col: Any
@@ -303,9 +339,13 @@ async def query_screen(
     total = int(rows[0].total_count)
     results = []
     for row in rows:
-        metrics_dict: dict[str, Decimal | None] = {}
+        metrics_dict: dict[str, Any] = {}
         for metric_name, _ in metric_columns:
             metrics_dict[metric_name] = getattr(row, metric_name, None)
+        for sf in _SNAP_FIELDS:
+            v = getattr(row, f"snap_{sf}", None)
+            if v is not None:
+                metrics_dict[sf] = v
         results.append(
             ScreenResult(
                 instrument_id=row.instrument_id,

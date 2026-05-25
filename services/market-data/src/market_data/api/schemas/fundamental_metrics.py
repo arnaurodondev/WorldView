@@ -36,6 +36,11 @@ class ScreenFilterRequest(BaseModel):
     # FIX-LIVE-M (2026-05-24): GICS industry filter (e.g. "Semiconductors").
     # Sector alone is too broad for queries like "AI chip companies".
     industry: str | None = None
+    # Wave L-1: instrument-attribute filters (applied as WHERE on instruments table)
+    country: str | None = None
+    exchange: str | None = None
+    has_fundamentals: bool | None = None
+    has_ohlcv: bool | None = None
 
 
 class ScreenRequest(BaseModel):
@@ -66,7 +71,8 @@ class ScreenInstrumentResponse(BaseModel):
     name: str | None = None
     exchange: str | None = None
     sector: str | None = None
-    metrics: dict[str, float | None]
+    # WHY float | str | None: numeric metrics are float; credit_rating is a string.
+    metrics: dict[str, float | str | None]
 
 
 class ScreenResponse(BaseModel):

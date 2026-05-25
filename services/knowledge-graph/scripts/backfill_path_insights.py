@@ -307,8 +307,23 @@ async def main() -> int:
                 await repo.update_explanation(insight_id, explanation_text, model_id)
                 await session.commit()
 
+    # ``_SessionBoundRepoAdapter`` is duck-typed against
+    # ``PathInsightRepositoryPort`` (only ``update_explanation`` is called) but
+    # mypy enforces nominal types, so we ``cast`` to satisfy the strict
+    # checker.  Cast is preferred over ``# type: ignore`` because RUF100 (ruff
+    # --fix) strips comment-style ignores that mypy still needs, creating a
+    # ruff/mypy chicken-and-egg loop in the pre-commit hook.
+    from typing import cast as _cast
+
+    from knowledge_graph.application.ports.path_insight_repository import (
+        PathInsightRepositoryPort as _PathInsightRepositoryPort,
+    )
+
     explanation_service = PathExplanationService(
-        path_insight_repo=_SessionBoundRepoAdapter(write_factory, PathInsightRepository),  # type: ignore[arg-type]
+        path_insight_repo=_cast(
+            _PathInsightRepositoryPort,
+            _SessionBoundRepoAdapter(write_factory, PathInsightRepository),
+        ),
         llm_client=llm_client,
         model_id=getattr(settings, "narrative_llm_model_id", "meta-llama/Meta-Llama-3.1-8B-Instruct"),
     )

@@ -273,6 +273,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         valkey_client=None,  # replaced by app.state.valkey at lifespan
         max_requests=settings.rate_limit_requests,
         window_seconds=settings.rate_limit_window_seconds,
+        # PLAN-0094 W1: 3 sibling limits, env-driven via worldview-gitops.
+        financial_mutation_limit=settings.rate_limit_financial_mutation_requests,
+        unauthenticated_limit=settings.rate_limit_unauthenticated_requests,
+        public_feedback_limit=settings.rate_limit_public_feedback_requests,
     )
     # OIDCAuth must run before InternalJWT: OIDCAuth validates token + sets request.state.user;
     # InternalJWT then signs and attaches X-Internal-JWT using that user state.

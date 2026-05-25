@@ -18,7 +18,7 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from datetime import date, datetime
 from decimal import Decimal
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from market_data.domain.entities import (
@@ -60,6 +60,11 @@ class ScreenFilter:
     # are sector=Technology, industry=Semiconductors — sector alone is too broad
     # for "AI chip" / "semiconductor" queries from the screen_universe tool.
     industry: str | None = None
+    # Wave L-1: instrument-attribute filters (non-metric, WHERE on instruments table)
+    country: str | None = None
+    exchange: str | None = None
+    has_fundamentals: bool | None = None
+    has_ohlcv: bool | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -67,7 +72,7 @@ class ScreenResult:
     """One instrument matching the screen criteria."""
 
     instrument_id: str
-    metrics: dict[str, Decimal | None]
+    metrics: dict[str, Any]
     ticker: str | None = None
     name: str | None = None
     exchange: str | None = None

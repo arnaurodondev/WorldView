@@ -320,6 +320,7 @@ class NewsQueryPort(ABC):
         offset: int,
         min_display_score: float | None,
         routing_tier: str | None,
+        tickers: list[str] | None = None,
     ) -> tuple[list[RankedArticleData], int]:
         """Return top-N globally ranked articles within the given hour window.
 
@@ -332,6 +333,8 @@ class NewsQueryPort(ABC):
             offset: Pagination offset.
             min_display_score: Exclude articles below this score (``None`` = no filter).
             routing_tier: Filter by effective routing tier (``None`` = all tiers).
+            tickers: Optional list of ticker symbols to filter by primary entity
+                (e.g. ``["AAPL", "MSFT"]``). ``None`` = no ticker filter (global feed).
 
         Returns:
             ``(articles, total_count)`` — total_count is computed before LIMIT/OFFSET.

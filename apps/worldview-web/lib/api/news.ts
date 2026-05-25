@@ -21,12 +21,17 @@ export function createNewsApi(t: string | undefined) {
      * getTopNews — ranked news feed by composite relevance/impact score (PRD-0026)
      * Used by: Dashboard WatchlistNews, Alerts/News page → Top Today tab
      *
-     * WHY no auth: news/top is a public endpoint — no personal data involved.
+     * WHY token sent (BP-545): S9 rate-limits unauthenticated requests far more
+     * aggressively than authenticated ones. Sending the token places the request
+     * in the user's own rate-limit bucket, preventing 429s on the dashboard when
+     * multiple tabs or rapid refetches occur.
      * WHY RankedNewsResponse: S6 NLP Pipeline (not S5 Content Store) now serves
      * this endpoint, returning the richer RankedArticle shape with multi-window
      * price impact scores and LLM relevance scores. Proxy retargeted in Wave 7.
+     * WHY tickers param: pass comma-separated portfolio tickers so S9 can server-side
+     * filter to portfolio-relevant articles before returning the ranked feed.
      *
-     * @param params - TopNewsParams (hours, limit, offset, min_display_score, routing_tier)
+     * @param params - TopNewsParams (hours, limit, offset, min_display_score, routing_tier, tickers)
      */
     getTopNews(params: TopNewsParams = {}): Promise<RankedNewsResponse> {
       const qs = new URLSearchParams(
@@ -36,7 +41,7 @@ export function createNewsApi(t: string | undefined) {
           .filter(([, v]) => v != null)
           .map(([k, v]) => [k, String(v)]),
       ).toString();
-      return apiFetch<RankedNewsResponse>(`/v1/news/top${qs ? `?${qs}` : ""}`);
+      return apiFetch<RankedNewsResponse>(`/v1/news/top${qs ? `?${qs}` : ""}`, { token: t });
     },
 
     /**

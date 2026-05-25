@@ -721,6 +721,7 @@ export interface TopNewsParams {
   offset?: number;
   min_display_score?: number;             // filter: minimum composite score 0.0–1.0
   routing_tier?: 'LIGHT' | 'MEDIUM' | 'DEEP';
+  tickers?: string;                       // comma-separated ticker symbols, e.g. "AAPL,MSFT"
 }
 
 /** Query params for GET /v1/news/entity/{id} (PRD-0026 §6.2 F-26) */

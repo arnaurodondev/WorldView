@@ -65,14 +65,22 @@ class Settings(BaseSettings):
     alert_url: str = "http://localhost:8010"
     alert_ws_url: str = "ws://localhost:8010"  # env: API_GATEWAY_ALERT_WS_URL
 
-    # Rate limiting
-    # WHY 300: authenticated users on the instrument detail page fire 4+ simultaneous
-    # OHLCV timeseries calls (one per workspace panel) plus screener + KG graph + news.
-    # 100 req/60s was too tight for multi-panel workspace usage → 429s on timeseries.
-    # 300/min was still tight for instrument pages (bundle + OHLCV + quote + KG + insider).
-    # Unauthenticated tier stays at 20 req/60s (enforced in RateLimitMiddleware).
-    rate_limit_requests: int = 1000
+    # Rate limiting (PLAN-0094 W1 — all 4 limits env-driven)
+    # ``rate_limit_requests`` is the per-user authenticated bucket. Bumped 1000→2000
+    # to match expected production load (multi-panel workspaces fire 4+ simultaneous
+    # OHLCV + screener + KG + news on every instrument page load).
+    # The 3 sibling limits below were hard-coded literals until W1; they are now
+    # env-configurable so worldview-gitops can tune them per environment.
+    rate_limit_requests: int = 2000
     rate_limit_window_seconds: int = 60
+    # Tighter sub-tier for POST/PUT/DELETE on /v1/transactions, /v1/brokerage,
+    # /v1/portfolios — protects payment-adjacent writes from accidental loops.
+    rate_limit_financial_mutation_requests: int = 20
+    # Per-IP cap for unauthenticated traffic.
+    rate_limit_unauthenticated_requests: int = 20
+    # Per-IP cap for /v1/feedback/* (PLAN-0052 fix — separate bucket so feedback
+    # surfaces don't share the strict unauthenticated cap on shared NAT).
+    rate_limit_public_feedback_requests: int = 120
 
     # CORS
     # SEC-008: Port 3001 is the worldview-web frontend.  Port 3000 is unused and

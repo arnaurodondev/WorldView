@@ -94,7 +94,14 @@ async def test_rate_limit_retry_succeeds_after_transient_failure() -> None:
     valkey.expire = AsyncMock()
 
     app = _make_minimal_app()
-    app.add_middleware(RateLimitMiddleware, valkey_client=valkey, max_requests=100)
+    app.add_middleware(
+        RateLimitMiddleware,
+        valkey_client=valkey,
+        max_requests=100,
+        financial_mutation_limit=20,
+        unauthenticated_limit=20,
+        public_feedback_limit=120,
+    )
 
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as client:
@@ -134,7 +141,14 @@ async def test_rate_limit_503_after_retry_exhausted() -> None:
     valkey.expire = AsyncMock()
 
     app = _make_minimal_app()
-    app.add_middleware(RateLimitMiddleware, valkey_client=valkey, max_requests=100)
+    app.add_middleware(
+        RateLimitMiddleware,
+        valkey_client=valkey,
+        max_requests=100,
+        financial_mutation_limit=20,
+        unauthenticated_limit=20,
+        public_feedback_limit=120,
+    )
 
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as client:
@@ -172,7 +186,14 @@ async def test_rate_limit_no_retry_on_non_transient_error() -> None:
     valkey.expire = AsyncMock()
 
     app = _make_minimal_app()
-    app.add_middleware(RateLimitMiddleware, valkey_client=valkey, max_requests=100)
+    app.add_middleware(
+        RateLimitMiddleware,
+        valkey_client=valkey,
+        max_requests=100,
+        financial_mutation_limit=20,
+        unauthenticated_limit=20,
+        public_feedback_limit=120,
+    )
 
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as client:

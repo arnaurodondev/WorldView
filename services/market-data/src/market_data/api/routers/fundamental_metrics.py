@@ -132,7 +132,10 @@ async def screen_instruments_get(
                 name=r.name,
                 exchange=r.exchange,
                 sector=r.sector,
-                metrics={k: float(v) if v is not None else None for k, v in r.metrics.items()},
+                metrics={
+                    k: (v if isinstance(v, str) else (float(v) if v is not None else None))
+                    for k, v in r.metrics.items()
+                },
             )
             for r in results
         ],
@@ -171,6 +174,10 @@ async def screen_instruments(
             period_type=f.period_type,
             sector=f.sector,
             industry=f.industry,
+            country=f.country,
+            exchange=f.exchange,
+            has_fundamentals=f.has_fundamentals,
+            has_ohlcv=f.has_ohlcv,
         )
         for f in body.filters
     ]
@@ -189,7 +196,10 @@ async def screen_instruments(
                 name=r.name,
                 exchange=r.exchange,
                 sector=r.sector,
-                metrics={k: float(v) if v is not None else None for k, v in r.metrics.items()},
+                metrics={
+                    k: (v if isinstance(v, str) else (float(v) if v is not None else None))
+                    for k, v in r.metrics.items()
+                },
             )
             for r in results
         ],

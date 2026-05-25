@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import random
+import time
 from typing import TYPE_CHECKING, Any, cast
 
 import jwt
@@ -209,6 +211,9 @@ class OIDCAuthMiddleware(BaseHTTPMiddleware):
                             # dev-login or the gateway), so we trust that value.
                             user_data.setdefault("role", payload.get("role", "user"))
                             request.state.user = user_data
+                            # PLAN-0094 W1: record active user for daily-brief eligibility
+                            valkey_for_tracking = getattr(request.app.state, "valkey", None)
+                            await _record_active_user(valkey_for_tracking, user_data.get("user_id", ""))
                     except jwt.InvalidTokenError:
                         pass  # Expected: token was not meant for internal validation
                     except Exception:
@@ -304,6 +309,8 @@ class OIDCAuthMiddleware(BaseHTTPMiddleware):
             # at the IdP and we must reflect that immediately.
             user_data_oidc["role"] = oidc_role
             request.state.user = user_data_oidc
+            # PLAN-0094 W1: record active user for daily-brief eligibility
+            await _record_active_user(valkey, user_data_oidc.get("user_id", ""))
 
         except jwt.InvalidTokenError:
             # Expected path: invalid/expired OIDC token — user gets no auth context.
@@ -400,10 +407,45 @@ _FINANCIAL_MUTATION_PREFIXES: tuple[str, ...] = (
     "/v1/brokerage",  # POST brokerage connections, trigger sync
     "/v1/portfolios",  # POST rebalance, PUT/DELETE portfolio entries
 )
-# Strict limit for financial mutations (POST/PUT/DELETE on the paths above).
-# 20/min allows ~1 transaction create every 3 seconds — generous for manual
-# entry but tight enough to stop accidental loops or misbehaving clients.
-_FINANCIAL_MUTATION_LIMIT = 20
+# PLAN-0094 W1: ``_FINANCIAL_MUTATION_LIMIT`` removed — limit is env-driven via
+# ``Settings.rate_limit_financial_mutation_requests`` and threaded through
+# RateLimitMiddleware's keyword-only ``financial_mutation_limit`` arg.
+
+
+# ── Active-user tracking (PLAN-0094 W1 / Option A) ────────────────────────────
+# Global Valkey sorted-set ``active_users`` records the last successful-auth
+# timestamp for every user_id. ZADD on every successful auth (this file);
+# ZRANGEBYSCORE in rag-chat's brief pre-generation worker (W2). Score = unix
+# seconds. Member = stringified user_id. Re-ZADD updates the score (sliding
+# window — newest activity wins).
+_ACTIVE_USERS_KEY = "active_users"
+_ACTIVE_USERS_PRUNE_AGE_SECONDS = 30 * 86400  # 30d >> default 7d window
+_ACTIVE_USERS_PRUNE_PROBABILITY = 0.001  # ~1/1000 requests; idempotent maintenance
+
+
+async def _record_active_user(valkey: Any, user_id: str) -> None:
+    """Best-effort ZADD to ``active_users`` on successful authentication.
+
+    Swallows Valkey errors (logged at warning) — the auth path is hot and must
+    never 503 on a Valkey hiccup. The brief pre-gen worker (W2) is tolerant of
+    missed records (next successful auth re-adds the user).
+    """
+    if valkey is None or not user_id:
+        return
+    try:
+        await valkey.zadd(_ACTIVE_USERS_KEY, {str(user_id): int(time.time())})
+        # Probabilistic prune so the set doesn't grow unbounded.
+        # random.random() is a non-crypto sampler for an idempotent
+        # maintenance task; S311 doesn't apply here.
+        if random.random() < _ACTIVE_USERS_PRUNE_PROBABILITY:  # noqa: S311
+            cutoff = int(time.time()) - _ACTIVE_USERS_PRUNE_AGE_SECONDS
+            await valkey.zremrangebyscore(_ACTIVE_USERS_KEY, 0, cutoff)
+    except Exception as exc:
+        logger.warning(  # type: ignore[no-any-return]
+            "active_users_zadd_failed",
+            error=str(exc),
+            error_type=type(exc).__name__,
+        )
 
 
 class RateLimitMiddleware(BaseHTTPMiddleware):
@@ -424,11 +466,19 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         valkey_client: Any,  # redis.asyncio.Redis | None
         max_requests: int = 100,
         window_seconds: int = 60,
+        *,
+        financial_mutation_limit: int,
+        unauthenticated_limit: int,
+        public_feedback_limit: int,
     ) -> None:
         super().__init__(app)
         self.valkey = valkey_client
         self.max_requests = max_requests
         self.window_seconds = window_seconds
+        # PLAN-0094 W1: 3 sibling limits, keyword-only so misordered call sites fail loudly.
+        self.financial_mutation_limit = financial_mutation_limit
+        self.unauthenticated_limit = unauthenticated_limit
+        self.public_feedback_limit = public_feedback_limit
 
     async def dispatch(self, request: Request, call_next: Callable) -> Response:
         # F-05: Skip rate limiting for health probes, metrics, and internal endpoints.
@@ -509,7 +559,7 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
                 # up to 20 transaction writes per minute while simultaneously
                 # firing 300 read requests for charts / screener / KG data.
                 key = f"rl:v1:fin:{user['user_id']}"
-                limit = _FINANCIAL_MUTATION_LIMIT
+                limit = self.financial_mutation_limit
             else:
                 key = f"rl:v1:user:{user['user_id']}"
                 limit = self.max_requests
@@ -521,10 +571,10 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
                 # eat the global 20/min budget for the same IP. Different
                 # key prefix ensures the two counters don't collide.
                 key = f"rl:v1:ip-fb:{ip_hash}"
-                limit = 120
+                limit = self.public_feedback_limit
             else:
                 key = f"rl:v1:ip:{ip_hash}"
-                limit = 20  # stricter limit for unauthenticated
+                limit = self.unauthenticated_limit
 
         # FIX-LIVE-D (PLAN-0093 Phase 5c, F-LIVE-005C-VALKEY): retry-with-
         # backoff around the Valkey op. Phase 5c live chat-eval Q5/Q6/Q7 all

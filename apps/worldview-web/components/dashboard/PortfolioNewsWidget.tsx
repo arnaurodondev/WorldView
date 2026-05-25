@@ -78,12 +78,19 @@ export function PortfolioNewsWidget() {
   const [activeTiers, setActiveTiers] = useState<Set<Tier>>(new Set());
 
   // ── 1. Top news ─────────────────────────────────────────────────────────
+  // WHY tickers: server-side filtering returns only portfolio-relevant articles (BP-545 fix 2).
+  // Client-side ticker filter refines within the returned set. When portfolio has no holdings,
+  // tickers=undefined falls back to the global ranked feed.
+  // WHY portfolioTickers in queryKey: cache is per-portfolio so different portfolios
+  // don't share a stale news cache. On first render portfolioTickers=undefined (holdings
+  // not yet loaded) → first fetch uses global feed → once holdings load the key changes
+  // and a new fetch fires with the correct tickers. This is correct expected behavior.
   const { data, isLoading, isError, refetch } = useQuery({
-    queryKey: ["dashboard-portfolio-news"],
+    queryKey: ["dashboard-portfolio-news", portfolioTickers],
     // PLAN-0050 T-F-6-02 / PLAN-0053 T-D-4-01: limit=20 keeps the filter
     // candidate pool deep enough that a tier or ticker filter doesn't
     // empty the widget on most days.
-    queryFn: () => createGateway(accessToken).getTopNews({ limit: 20 }),
+    queryFn: () => createGateway(accessToken).getTopNews({ limit: 20, tickers: portfolioTickers }),
     enabled: !!accessToken,
     // WHY 5min: S9 now caches /v1/news/top for 120s in Valkey, so cold
     // requests are already fast. 5min frontend staleTime avoids polling
@@ -127,6 +134,14 @@ export function PortfolioNewsWidget() {
     }
     return Array.from(set).sort();
   }, [holdingsResp]);
+
+  // WHY portfolioTickers: derive a comma-separated string from tickerOptions to pass
+  // to the backend. When the portfolio has no holdings (tickerOptions empty), this
+  // returns undefined, which the backend treats as "no filter" (global ranked feed).
+  const portfolioTickers = useMemo(
+    () => (tickerOptions.length > 0 ? tickerOptions.join(",") : undefined),
+    [tickerOptions],
+  );
 
   // ── 3. Filter + sort articles ──────────────────────────────────────────
   const articles = useMemo(() => {
