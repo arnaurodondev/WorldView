@@ -632,9 +632,35 @@ class ChatOrchestratorUseCase:
                         }
                     )
                     break
-                log.error("tool_use_first_turn_failed", error=str(exc), iteration=iteration)  # type: ignore[no-any-return]
-                yield p.emitter.emit_error("llm_first_turn_failed", "Unable to process request")
-                return
+                # FIX-LIVE-BB (2026-05-25): iter-0 first-turn DeepInfra failure.
+                # FIX-LIVE-V handled iteration > 0 (mid-loop) by appending a synthesis
+                # nudge and breaking. Iter-0 has no prior tool data to synthesise from
+                # — but a hard error event makes any provider hiccup look like a total
+                # outage to the user. Fall back to a tool-less stream_chat synthesis
+                # with a disclaimer so the user gets something useful from the model's
+                # own knowledge instead of an opaque error. The final hard error code
+                # is preserved as a defensive fallback if even the synthesis-only
+                # call fails.
+                log.warning(  # type: ignore[no-any-return]
+                    "tool_use_first_turn_recovered_to_synthesis",
+                    error=str(exc),
+                    iteration=iteration,
+                )
+                # Tool-less synthesis: append the user message + a system nudge,
+                # then break to the post-loop stream_chat which will answer
+                # without tools.
+                messages.append(
+                    {
+                        "role": "user",
+                        "content": (
+                            "Tool selection is currently unavailable. "
+                            "Answer the user's question from your general knowledge, "
+                            "with an explicit caveat that you could not consult live tools. "
+                            "If you cannot answer reliably, say so clearly."
+                        ),
+                    }
+                )
+                break
             finally:
                 # Record first-turn latency only on iteration 0 (original metric semantics).
                 if iteration == 0:
