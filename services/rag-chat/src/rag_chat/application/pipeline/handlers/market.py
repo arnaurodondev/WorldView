@@ -262,6 +262,7 @@ class MarketHandler(ToolHandler):
         market_cap_max: float | None = None,
         pe_ratio_max: float | None = None,
         sector: str | None = None,
+        industry: str | None = None,
         region: str | None = None,
         limit: int = 20,
     ) -> list[RetrievedItem]:
@@ -275,25 +276,63 @@ class MarketHandler(ToolHandler):
             log.warning("tool_handler_missing_port", tool="screen_universe", port="s3_brief")
             return []
 
-        filters: dict = {}
-        if market_cap_min is not None:
-            filters["market_cap_min"] = market_cap_min
-        if market_cap_max is not None:
-            filters["market_cap_max"] = market_cap_max
-        if pe_ratio_max is not None:
-            filters["pe_ratio_max"] = pe_ratio_max
+        # FIX-LIVE-T (2026-05-25): The S3 ``POST /v1/fundamentals/screen`` endpoint
+        # expects ``ScreenRequest`` with a ``filters: list[ScreenFilterRequest]``
+        # body — top-level ``sector``/``industry``/``market_cap_min`` were silently
+        # ignored as unknown pydantic fields, so the call effectively ran the
+        # "no-filter" path and returned 50 unrelated tickers (Healthcare,
+        # Industrials, …). FIX-LIVE-Q's allowlist hint could not help because the
+        # LLM never saw the right tickers in the result. Build a proper filter
+        # list here. WHY ``market_capitalization`` (and not ``market_cap_usd``):
+        # the screener metric whitelist is keyed off the DB metric column, where
+        # cap is stored as ``market_capitalization``; ``market_cap_usd`` is only a
+        # display-side alias from the /screen/fields endpoint.
+        filter_list: list[dict[str, Any]] = []
+
+        # ``ScreenFilterRequest.sector``/``industry`` are *per-filter* fields
+        # (not body-level) and only one filter can carry them — replicate them
+        # on every entry so the WHERE clause AND-combines correctly.
+        scope: dict[str, str] = {}
         if sector:
-            filters["sector"] = sector
-        if region:
-            filters["region"] = region
+            scope["sector"] = sector
+        # FIX-LIVE-M (2026-05-24): GICS industry filter — more selective than sector.
+        if industry:
+            scope["industry"] = industry
+
+        if market_cap_min is not None or market_cap_max is not None:
+            entry: dict[str, Any] = {"metric": "market_capitalization", **scope}
+            if market_cap_min is not None:
+                entry["min_value"] = market_cap_min
+            if market_cap_max is not None:
+                entry["max_value"] = market_cap_max
+            filter_list.append(entry)
+
+        if pe_ratio_max is not None:
+            filter_list.append({"metric": "pe_ratio", "max_value": pe_ratio_max, **scope})
+
+        # If the LLM only supplied sector/industry (no numeric thresholds) we
+        # still need ONE filter entry so the sector/industry predicates bind —
+        # screener body-level fields don't exist. Use a no-op cap floor of 0.
+        if not filter_list and scope:
+            filter_list.append({"metric": "market_capitalization", "min_value": 0, **scope})
+
         # WHY clamp limit: prevent the LLM from requesting huge result sets that
-        # would overflow the context window budget.
-        filters["limit"] = max(1, min(int(limit), 100))
+        # would overflow the context window budget. Hard upper bound is the
+        # ScreenRequest ``le=200`` constraint.
+        clamped_limit = max(1, min(int(limit), 100))
+
+        # ``region`` is not a ScreenFilterRequest field, so it is dropped here
+        # (no DB column for it). Track it in the log so we notice if the LLM
+        # routinely supplies it and we need to add support upstream.
+        if region:
+            log.info("tool_arg_dropped", tool="screen_universe", arg="region", value=region)
+
+        payload: dict[str, Any] = {"filters": filter_list, "limit": clamped_limit}
 
         t0 = time.monotonic()
         try:
             raw = await asyncio.wait_for(
-                self._s3_brief.screen_instruments(filters),
+                self._s3_brief.screen_instruments(payload),
                 timeout=self._timeout,
             )
         except Exception as e:

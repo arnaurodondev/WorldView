@@ -404,11 +404,14 @@ class TestScreenUniverse:
         assert item.trust_weight == pytest.approx(0.80)
         assert item.citation_meta is not None
         assert item.citation_meta.source_name == "screener"
-        # Verify filters were forwarded
+        # Verify filters were forwarded as a ScreenRequest-shaped payload
+        # (FIX-LIVE-T): sector/industry live INSIDE each filter entry, not at
+        # the top level. With no numeric thresholds we inject a no-op
+        # market_capitalization >= 0 so the sector predicate binds.
         s3_brief.screen_instruments.assert_awaited_once()
         call_args = s3_brief.screen_instruments.call_args[0][0]
-        assert call_args["sector"] == "Technology"
         assert call_args["limit"] == 20
+        assert call_args["filters"] == [{"metric": "market_capitalization", "min_value": 0, "sector": "Technology"}]
 
     @pytest.mark.asyncio
     async def test_upstream_raises_returns_empty(self) -> None:
@@ -427,6 +430,101 @@ class TestScreenUniverse:
         await handler._handle_screen_universe(limit=9999)
         call_args = s3_brief.screen_instruments.call_args[0][0]
         assert call_args["limit"] == 100
+
+    @pytest.mark.asyncio
+    async def test_industry_filter_propagates(self) -> None:
+        """FIX-LIVE-M + FIX-LIVE-T: industry kwarg surfaces inside the ScreenRequest filter entry.
+
+        GICS-tagged tickers (NVDA, AMD, AVGO) live under sector='Technology',
+        industry='Semiconductors'. The LLM must be able to target the narrower
+        bucket; the handler must therefore pass the kwarg through *inside* the
+        filter entry (ScreenFilterRequest), not at body-level — the latter
+        silently drops on the ScreenRequest schema.
+        """
+        s3_brief = _make_s3_brief_port(screen_result={"instruments": [{"ticker": "NVDA"}]})
+        handler = _make_market_handler(s3_brief=s3_brief)
+        await handler._handle_screen_universe(
+            sector="Technology",
+            industry="Semiconductors",
+            market_cap_min=50_000_000_000,
+            limit=10,
+        )
+        call_args = s3_brief.screen_instruments.call_args[0][0]
+        assert call_args["limit"] == 10
+        assert call_args["filters"] == [
+            {
+                "metric": "market_capitalization",
+                "min_value": 50_000_000_000,
+                "sector": "Technology",
+                "industry": "Semiconductors",
+            }
+        ]
+
+    @pytest.mark.asyncio
+    async def test_industry_not_set_when_none(self) -> None:
+        """When industry kwarg is omitted, the key is absent from every filter entry.
+
+        Mirrors the existing sector/region pattern — None values are dropped so
+        S9 doesn't receive a literal ``industry=null`` in the request body.
+        """
+        s3_brief = _make_s3_brief_port(screen_result={"instruments": [{"ticker": "AAPL"}]})
+        handler = _make_market_handler(s3_brief=s3_brief)
+        await handler._handle_screen_universe(sector="Technology")
+        call_args = s3_brief.screen_instruments.call_args[0][0]
+        for entry in call_args["filters"]:
+            assert "industry" not in entry
+
+    @pytest.mark.asyncio
+    async def test_payload_matches_screen_request_schema(self) -> None:
+        """FIX-LIVE-T regression: payload must be ScreenRequest-shaped.
+
+        The market-data ``POST /v1/fundamentals/screen`` endpoint validates the
+        body against ``ScreenRequest(filters: list[ScreenFilterRequest], limit, ...)``.
+        Top-level ``sector``/``industry``/``market_cap_min`` are unknown fields
+        that pydantic silently drops, which caused Q6 to receive 50 unrelated
+        tickers (Healthcare, Industrials, …) instead of the AI-semi bucket.
+
+        This test pins the wire format so a regression to flat-dict-style
+        forwarding fails fast.
+        """
+        s3_brief = _make_s3_brief_port(screen_result={"instruments": [{"ticker": "NVDA"}]})
+        handler = _make_market_handler(s3_brief=s3_brief)
+        await handler._handle_screen_universe(
+            sector="Technology",
+            industry="Semiconductors",
+            market_cap_min=50_000_000_000,
+            pe_ratio_max=30.0,
+            limit=25,
+        )
+        payload = s3_brief.screen_instruments.call_args[0][0]
+        # Only the documented body-level keys.
+        assert set(payload.keys()) == {"filters", "limit"}
+        assert payload["limit"] == 25
+        # Per-filter keys must come from ScreenFilterRequest only.
+        allowed_keys = {"metric", "min_value", "max_value", "sector", "industry", "period_type"}
+        for entry in payload["filters"]:
+            assert set(entry.keys()).issubset(allowed_keys), entry
+            assert "metric" in entry  # required field
+            assert entry.get("sector") == "Technology"
+            assert entry.get("industry") == "Semiconductors"
+        # market_cap and pe_ratio filters present.
+        metrics = {e["metric"] for e in payload["filters"]}
+        assert "market_capitalization" in metrics
+        assert "pe_ratio" in metrics
+
+    @pytest.mark.asyncio
+    async def test_no_filters_no_scope_emits_empty_filter_list(self) -> None:
+        """When no kwargs are given, send ``filters: []`` (no-filter path).
+
+        This preserves the legacy "show first N instruments" behaviour for
+        callers that pass no constraints — the ScreenRequest schema accepts
+        ``min_length=0`` for filters precisely so this works.
+        """
+        s3_brief = _make_s3_brief_port(screen_result={"instruments": [{"ticker": "AAPL"}]})
+        handler = _make_market_handler(s3_brief=s3_brief)
+        await handler._handle_screen_universe()
+        payload = s3_brief.screen_instruments.call_args[0][0]
+        assert payload == {"filters": [], "limit": 20}
 
 
 # ── get_market_movers tests ───────────────────────────────────────────────────
