@@ -603,6 +603,35 @@ class ChatOrchestratorUseCase:
                     temperature=0.1,
                 )
             except Exception as exc:
+                # FIX-LIVE-V (2026-05-25): mid-loop chat_with_tools failure
+                # recovery. Previously ANY failure inside the agent loop —
+                # including DeepInfra timeouts / 5xx on iteration > 0 — aborted
+                # the whole turn with `llm_first_turn_failed`, throwing away
+                # the data the prior iterations had successfully retrieved
+                # (Q6: 5 successful tool calls then iter-5 failure → user sees
+                # generic error; iter3_date_arithmetic: 1 successful call then
+                # iter-2 failure → same).  When iteration > 0 we now break out
+                # of the loop instead of returning; the final stream_chat
+                # synthesises an answer from the accumulated tool messages.
+                if iteration > 0 and had_tool_calls:
+                    log.warning(  # type: ignore[no-any-return]
+                        "tool_use_mid_loop_recovered",
+                        error=str(exc),
+                        iteration=iteration,
+                        accumulated_messages=len(messages),
+                    )
+                    # Append a synthesis nudge so the LLM knows to summarise
+                    # the data already in the messages stack.
+                    messages.append(
+                        {
+                            "role": "user",
+                            "content": (
+                                "Tool selection failed unexpectedly. "
+                                "Synthesise the best answer you can from the tool results above."
+                            ),
+                        }
+                    )
+                    break
                 log.error("tool_use_first_turn_failed", error=str(exc), iteration=iteration)  # type: ignore[no-any-return]
                 yield p.emitter.emit_error("llm_first_turn_failed", "Unable to process request")
                 return
@@ -1224,9 +1253,29 @@ class ChatOrchestratorUseCase:
                     if chunk:
                         yield p.emitter.emit_token(chunk)
             except Exception as exc:
-                log.error("tool_use_second_turn_failed", error=str(exc))  # type: ignore[no-any-return]
-                yield p.emitter.emit_error("llm_second_turn_failed", "Unable to generate answer")
-                return
+                # FIX-LIVE-V (2026-05-25): stream_chat partial-content recovery.
+                # The OpenAI SSE stream can break MID-STREAM (connection
+                # reset, DeepInfra/Llama 5xx after first chunks, JSON parse
+                # error in the [DONE] frame) AFTER yielding useful tokens.
+                # The previous behaviour was to throw away those tokens and
+                # emit the generic ``llm_second_turn_failed`` error — which
+                # is what surfaced as the "answer appears then user sees
+                # error" UX on q8 (393 chars), iter3_multilingual (219),
+                # and new_time_relative (974).  We now keep the partial
+                # answer when it is "substantive" (>= 80 chars) and let the
+                # grounding/citation passes downstream finalise it; only
+                # raise the hard error when we have NO usable text.
+                _partial_len = len(full_text)
+                if _partial_len >= 80:
+                    log.warning(  # type: ignore[no-any-return]
+                        "tool_use_second_turn_partial_recovered",
+                        error=str(exc),
+                        partial_chars=_partial_len,
+                    )
+                else:
+                    log.error("tool_use_second_turn_failed", error=str(exc), partial_chars=_partial_len)  # type: ignore[no-any-return]
+                    yield p.emitter.emit_error("llm_second_turn_failed", "Unable to generate answer")
+                    return
             provider_name = p.llm_chain.last_provider_name
 
         # ── PLAN-0093 E-2: Numeric-grounding validation ───────────────────────

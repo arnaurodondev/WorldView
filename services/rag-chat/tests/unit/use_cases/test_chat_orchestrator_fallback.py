@@ -508,3 +508,182 @@ class TestFallbackChainIntegration:
         # Verify total tool_result count matches primary (1) + fallbacks.
         tool_result_events = [e for e in events if e.get("event") == "tool_result"]
         assert len(tool_result_events) >= 1 + len(fallback_tool_calls)
+
+
+# ---------------------------------------------------------------------------
+# Tests: FIX-LIVE-V mid-loop recovery + partial-stream recovery
+# ---------------------------------------------------------------------------
+
+
+class TestFixLiveVMidLoopRecovery:
+    """FIX-LIVE-V regression tests.
+
+    These pin two complementary recovery paths the orchestrator gained when
+    the Phase 5c re-QA found that:
+      1. A 5xx / timeout on ``chat_with_tools`` AFTER the first iteration
+         threw away every successful tool result and emitted the generic
+         ``llm_first_turn_failed`` (Q6 + iter3_date_arithmetic).
+      2. A mid-stream rupture in ``stream_chat`` after substantive tokens
+         had been emitted to the user produced the cryptic
+         "answer flashes then user sees error" UX on q8, multilingual,
+         and new_time_relative.
+
+    Both are now soft-recovered: the loop breaks with a synthesis nudge in
+    case (1); the partial answer is preserved + grounding validation runs
+    in case (2).
+    """
+
+    def test_chat_with_tools_failure_mid_loop_does_not_lose_prior_results(self) -> None:
+        """Iteration > 0 chat_with_tools failure must NOT emit llm_first_turn_failed
+        when prior iterations succeeded. Loop breaks; final stream_chat synthesises."""
+        from rag_chat.application.use_cases.chat_orchestrator import ChatOrchestratorUseCase
+
+        # Iteration 0: tool_call succeeds; iteration 1: chat_with_tools raises.
+        tool_block = _make_tool_use_block("search_documents", {"query": "Q6 fundamentals"})
+        first_resp = _make_llm_tool_response(tool_calls=[tool_block])
+        pipeline = _make_pipeline(
+            first_llm_response=first_resp,
+            stream_chunks=["Synthesised ", "from prior data."],
+        )
+        # First call returns tool_calls; second raises a transient API error.
+        pipeline.llm_chain.chat_with_tools = AsyncMock(
+            side_effect=[first_resp, RuntimeError("deepinfra 502 bad gateway")]
+        )
+
+        # Successful primary tool result so had_tool_calls=True after iter-0.
+        recovered_item = _make_retrieved_item("Iter-0 fundamentals payload.")
+        factory = _make_factory_with_execute_side_effect(
+            execute_all_return=[[recovered_item]],
+            execute_side_effects=[],
+        )
+
+        orch = ChatOrchestratorUseCase(pipeline=pipeline, tool_executor_factory=factory)
+        request = _make_chat_request()
+        uow = MagicMock()
+
+        events = asyncio.run(_collect_events(orch, request, uow))
+
+        error_events = [e for e in events if e.get("event") == "error"]
+        # The mid-loop failure must NOT surface as llm_first_turn_failed.
+        for e in error_events:
+            payload = json.loads(e["data"]) if isinstance(e.get("data"), str) else e["data"]
+            assert payload.get("code") != "llm_first_turn_failed", (
+                "FIX-LIVE-V regression: mid-loop chat_with_tools failure aborted the "
+                "request instead of falling through to the final stream_chat synthesis."
+            )
+
+        # Final stream_chat tokens must reach the user (proves the loop broke
+        # cleanly and the synthesis path ran).
+        token_texts = [
+            json.loads(e["data"]).get("text", "") if isinstance(e.get("data"), str) else ""
+            for e in events
+            if e.get("event") == "token"
+        ]
+        assert any(
+            "Synthesised" in t or "prior data" in t for t in token_texts
+        ), f"Expected synthesis tokens, got: {token_texts!r}"
+
+    def test_iteration_zero_chat_with_tools_failure_still_emits_hard_error(self) -> None:
+        """Hard error contract preserved when there are NO prior tool results to
+        synthesise from (iteration == 0 failure)."""
+        from rag_chat.application.use_cases.chat_orchestrator import ChatOrchestratorUseCase
+
+        # Iter-0 fails immediately — nothing to recover.
+        pipeline = _make_pipeline(first_llm_response=_make_llm_tool_response(text=""))
+        pipeline.llm_chain.chat_with_tools = AsyncMock(side_effect=RuntimeError("immediate boom"))
+
+        factory = _make_factory_with_execute_side_effect(execute_all_return=[], execute_side_effects=[])
+
+        orch = ChatOrchestratorUseCase(pipeline=pipeline, tool_executor_factory=factory)
+        request = _make_chat_request()
+        uow = MagicMock()
+
+        events = asyncio.run(_collect_events(orch, request, uow))
+
+        error_codes = [json.loads(e["data"]).get("code") for e in events if e.get("event") == "error"]
+        assert (
+            "llm_first_turn_failed" in error_codes
+        ), f"Iter-0 failure must still raise the hard error code; got {error_codes!r}"
+
+    def test_stream_chat_mid_stream_failure_preserves_substantive_partial_answer(self) -> None:
+        """When stream_chat raises AFTER emitting >= 80 chars, the partial answer
+        survives — the orchestrator no longer overwrites it with llm_second_turn_failed."""
+        from rag_chat.application.use_cases.chat_orchestrator import ChatOrchestratorUseCase
+
+        # Iter-0: tool_call → tool_result. Iter-1: direct text with no tool_calls
+        # would normally short-circuit; instead we force iter-1 to return text=""
+        # so the final stream_chat path runs.
+        tool_block = _make_tool_use_block("search_documents", {"query": "q8 graph"})
+        iter0 = _make_llm_tool_response(tool_calls=[tool_block])
+        iter1 = _make_llm_tool_response(text="")  # forces final stream_chat
+        pipeline = _make_pipeline(
+            first_llm_response=iter0,
+            stream_chunks=[],  # we override below
+        )
+        pipeline.llm_chain.chat_with_tools = AsyncMock(side_effect=[iter0, iter1])
+
+        # Stream yields 2 substantive chunks (well above the 80-char floor) then raises.
+        big_chunk_1 = "OpenAI is connected to Microsoft through a direct partnership."
+        big_chunk_2 = " The relationship has confidence 1.0 and is well-attested."
+
+        async def _broken_stream(messages: list, **kwargs: Any):
+            yield big_chunk_1
+            yield big_chunk_2
+            raise RuntimeError("connection reset by peer")
+
+        pipeline.llm_chain.stream_chat = _broken_stream
+
+        recovered_item = _make_retrieved_item("Graph traversal payload.")
+        factory = _make_factory_with_execute_side_effect(
+            execute_all_return=[[recovered_item]],
+            execute_side_effects=[],
+        )
+
+        orch = ChatOrchestratorUseCase(pipeline=pipeline, tool_executor_factory=factory)
+        request = _make_chat_request()
+        uow = MagicMock()
+
+        events = asyncio.run(_collect_events(orch, request, uow))
+
+        error_codes = [json.loads(e["data"]).get("code") for e in events if e.get("event") == "error"]
+        # No hard llm_second_turn_failed when we have substantive partial text.
+        assert (
+            "llm_second_turn_failed" not in error_codes
+        ), f"FIX-LIVE-V: partial-stream answer should be preserved; got error codes {error_codes!r}"
+        # The partial tokens reached the SSE stream.
+        token_texts = [json.loads(e["data"]).get("text", "") for e in events if e.get("event") == "token"]
+        assert any(big_chunk_1 in t for t in token_texts), token_texts
+
+    def test_stream_chat_failure_with_no_partial_still_emits_hard_error(self) -> None:
+        """If stream_chat raises BEFORE emitting any (or only trivial) text, the
+        hard error contract is preserved so the client can fall back gracefully."""
+        from rag_chat.application.use_cases.chat_orchestrator import ChatOrchestratorUseCase
+
+        tool_block = _make_tool_use_block("search_documents", {"query": "x"})
+        iter0 = _make_llm_tool_response(tool_calls=[tool_block])
+        iter1 = _make_llm_tool_response(text="")
+        pipeline = _make_pipeline(first_llm_response=iter0)
+        pipeline.llm_chain.chat_with_tools = AsyncMock(side_effect=[iter0, iter1])
+
+        async def _instant_raise(messages: list, **kwargs: Any):
+            if False:  # pragma: no cover — empty async gen with raise
+                yield ""
+            raise RuntimeError("deepinfra 503")
+
+        pipeline.llm_chain.stream_chat = _instant_raise
+
+        recovered_item = _make_retrieved_item("Payload.")
+        factory = _make_factory_with_execute_side_effect(
+            execute_all_return=[[recovered_item]],
+            execute_side_effects=[],
+        )
+
+        orch = ChatOrchestratorUseCase(pipeline=pipeline, tool_executor_factory=factory)
+        request = _make_chat_request()
+        uow = MagicMock()
+
+        events = asyncio.run(_collect_events(orch, request, uow))
+        error_codes = [json.loads(e["data"]).get("code") for e in events if e.get("event") == "error"]
+        assert (
+            "llm_second_turn_failed" in error_codes
+        ), f"Empty-partial stream_chat failure must still emit hard error; got {error_codes!r}"
