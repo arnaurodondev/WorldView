@@ -84,6 +84,15 @@ class Settings(BaseSettings):
     # OpenRouter fallback model — configurable independently from the DeepInfra primary.
     openrouter_completion_model: str = "deepseek/deepseek-r1-distill-qwen-32b"  # RAG_CHAT_OPENROUTER_COMPLETION_MODEL
 
+    # FIX-LIVE-X (2026-05-25): Q6 second-turn `chat_with_tools` calls regularly
+    # exceed the previous 30s hardcoded budget when the completion model is the
+    # heavier Qwen3-235B-A22B and the message stack carries 5+ tool results
+    # (e.g. screen_universe + N fundamentals).  The timeout fired *before* the
+    # HTTP request was even dispatched (asyncio.wait_for), and TimeoutError's
+    # empty str() produced a silent `provider_chat_with_tools_failed` log.
+    # Default raised to 90s; lowered in tests via env var when needed.
+    deepinfra_tool_call_timeout_seconds: float = 90.0  # RAG_CHAT_DEEPINFRA_TOOLCALL_TIMEOUT
+
     # ── Auth (PRD-0025): RS256 internal JWT via api-gateway JWKS ─────────────
     api_gateway_url: str = "http://api-gateway:8000"
 
