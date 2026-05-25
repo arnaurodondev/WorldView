@@ -14,7 +14,12 @@ from fastapi import FastAPI, Request, Response
 from starlette.middleware.base import BaseHTTPMiddleware
 
 from market_data.infrastructure.middleware.internal_jwt import InternalJWTMiddleware
-from observability import configure_logging, get_logger, register_error_handlers  # type: ignore[import-untyped]
+from observability import (  # type: ignore[import-untyped]
+    assert_app_env_or_die,
+    configure_logging,
+    get_logger,
+    register_error_handlers,
+)
 from observability.metrics import add_prometheus_middleware, create_metrics  # type: ignore[import-untyped]
 from observability.sentry import SentrySettings, init_sentry  # type: ignore[import-untyped]
 from observability.tracing import add_otel_middleware, configure_tracing  # type: ignore[import-untyped]
@@ -249,6 +254,13 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     )
     log = get_logger("market_data.app")
 
+    # 1b. Boot-time security guard (PLAN-0093 Wave A-1 / F-LOG-JWT-001).
+    # Refuses to start when JWT verification is disabled AND APP_ENV is unset.
+    assert_app_env_or_die(
+        service_name=settings.service_name,
+        internal_jwt_skip_verification=settings.internal_jwt_skip_verification,
+    )
+
     # 2. Internal JWT middleware startup — fetch JWKS from S9 (PRD-0025)
     jwt_middleware = InternalJWTMiddleware(
         app,
@@ -387,7 +399,15 @@ def create_app() -> FastAPI:
         all_ok = True
 
         # F-003B: JWKS public key must be loaded before accepting traffic.
-        if getattr(app.state, "_internal_jwt_public_key", None) is None:
+        # Exception (dev/test): when InternalJWTMiddleware is in
+        # skip_verification mode the public key is intentionally absent — the
+        # middleware sets ``app.state._internal_jwt_skip_verification = True``
+        # so readyz can distinguish "intentionally absent" from "failed to
+        # fetch". Matches portfolio/app.py:222.
+        skip_jwt = getattr(app.state, "_internal_jwt_skip_verification", False)
+        if skip_jwt:
+            checks["jwks"] = "skipped"
+        elif getattr(app.state, "_internal_jwt_public_key", None) is None:
             checks["jwks"] = "not_loaded"
             all_ok = False
         else:
@@ -459,6 +479,7 @@ def create_app() -> FastAPI:
         instruments,
         market,
         ohlcv,
+        peers,
         prediction_markets,
         price_snapshot,
         quotes,
@@ -474,6 +495,10 @@ def create_app() -> FastAPI:
     app.include_router(fundamental_metrics.router, prefix="/api/v1")
     app.include_router(fundamentals.router, prefix="/api/v1")
     app.include_router(securities.router, prefix="/api/v1")
+    # peers: /instruments/{id}/peers — registered after instruments.router to
+    # keep the literal /peers sub-path distinct from the UUID catch-all.
+    # W5-T-S2-01: top-N market-cap peers in same GICS industry.
+    app.include_router(peers.router, prefix="/api/v1")
     # prediction_markets: /prediction-markets/{market_id}/history registered
     # before /{market_id} inside the router to avoid path-param conflicts
     app.include_router(prediction_markets.router, prefix="/api/v1")

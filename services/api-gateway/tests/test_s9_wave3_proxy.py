@@ -178,9 +178,14 @@ async def test_heatmap_handles_partial_failure(authed_app, authed_mock_clients) 
 
 @pytest.mark.asyncio
 async def test_top_movers_gainers_desc(authed_app, authed_mock_clients) -> None:
-    """GET /v1/market/top-movers?type=gainers calls S3 with sort_order=desc."""
-    authed_mock_clients.market_data.post = AsyncMock(
-        return_value=_mock_response(200, b'{"results": [], "count": 0, "total": 0}'),
+    """GET /v1/market/top-movers?type=gainers calls S3 period-movers via GET with type=gainers."""
+    # Implementation uses clients.market_data.get() — NOT .post() — forwarding
+    # period/type/limit as URL query params in the path string (not a POST body).
+    authed_mock_clients.market_data.get = AsyncMock(
+        return_value=_mock_response(
+            200,
+            json.dumps({"results": [], "type": "gainers", "period": "1D"}).encode(),
+        ),
     )
 
     transport = ASGITransport(app=authed_app)
@@ -192,18 +197,24 @@ async def test_top_movers_gainers_desc(authed_app, authed_mock_clients) -> None:
         )
 
     assert resp.status_code == 200
-    authed_mock_clients.market_data.post.assert_called_once()
-    call_kwargs = authed_mock_clients.market_data.post.call_args[1]
-    body = json.loads(call_kwargs["content"])
-    assert body["sort_order"] == "desc"
-    assert body["limit"] == 5
+    authed_mock_clients.market_data.get.assert_called_once()
+    # The implementation passes params in the URL path string, not as a params kwarg.
+    call_args = authed_mock_clients.market_data.get.call_args[0]
+    url = call_args[0]  # First positional arg is the URL string
+    assert "type=gainers" in url
+    assert "limit=5" in url
 
 
 @pytest.mark.asyncio
 async def test_top_movers_losers_asc(authed_app, authed_mock_clients) -> None:
-    """GET /v1/market/top-movers?type=losers calls S3 with sort_order=asc."""
-    authed_mock_clients.market_data.post = AsyncMock(
-        return_value=_mock_response(200, b'{"results": [], "count": 0, "total": 0}'),
+    """GET /v1/market/top-movers?type=losers calls S3 period-movers via GET with type=losers."""
+    # Implementation uses clients.market_data.get() — NOT .post() — with type=losers
+    # embedded in the URL query string.
+    authed_mock_clients.market_data.get = AsyncMock(
+        return_value=_mock_response(
+            200,
+            json.dumps({"results": [], "type": "losers", "period": "1D"}).encode(),
+        ),
     )
 
     transport = ASGITransport(app=authed_app)
@@ -215,9 +226,10 @@ async def test_top_movers_losers_asc(authed_app, authed_mock_clients) -> None:
         )
 
     assert resp.status_code == 200
-    call_kwargs = authed_mock_clients.market_data.post.call_args[1]
-    body = json.loads(call_kwargs["content"])
-    assert body["sort_order"] == "asc"
+    authed_mock_clients.market_data.get.assert_called_once()
+    call_args = authed_mock_clients.market_data.get.call_args[0]
+    url = call_args[0]
+    assert "type=losers" in url
 
 
 @pytest.mark.asyncio
@@ -422,14 +434,15 @@ async def test_heatmap_mixed_success_failure(authed_app, authed_mock_clients) ->
 
 @pytest.mark.asyncio
 async def test_top_movers_downstream_500(authed_app, authed_mock_clients) -> None:
-    """GET /v1/market/top-movers when S3 screener returns 500 → DownstreamError → 500.
+    """GET /v1/market/top-movers when S3 period-movers returns 500 → DownstreamError → 500.
 
-    get_top_movers() raises DownstreamError on failure, which the route handler
-    converts to an HTTPException with the same status code.
+    get_top_movers() uses clients.market_data.get() (not .post()); it raises
+    DownstreamError on failure, which the route handler converts to HTTPException.
     """
     error_resp = _mock_response(500, b'{"detail": "Internal Server Error"}')
     error_resp.text = '{"detail": "Internal Server Error"}'
-    authed_mock_clients.market_data.post = AsyncMock(return_value=error_resp)
+    # Mock .get not .post — the implementation calls market_data.get()
+    authed_mock_clients.market_data.get = AsyncMock(return_value=error_resp)
 
     transport = ASGITransport(app=authed_app)
     async with AsyncClient(transport=transport, base_url="http://test") as client:
@@ -440,7 +453,7 @@ async def test_top_movers_downstream_500(authed_app, authed_mock_clients) -> Non
         )
 
     assert resp.status_code == 500
-    authed_mock_clients.market_data.post.assert_called_once()
+    authed_mock_clients.market_data.get.assert_called_once()
 
 
 @pytest.mark.asyncio
@@ -595,10 +608,15 @@ async def test_top_movers_period_invalid_returns_400(authed_app, authed_mock_cli
 
 @pytest.mark.asyncio
 async def test_fundamentals_snapshot_requires_auth(app, mock_clients) -> None:
-    """GET /v1/fundamentals/{id}/snapshot without auth → 401."""
+    """GET /v1/fundamentals/{id}/snapshot without auth → 401.
+
+    WHY UUID: instrument_id is now UUID-typed (F-010 security fix); non-UUID → 422.
+    """
+    # WHY UUID: F-010 — must use valid UUID so FastAPI doesn't short-circuit with 422.
+    valid_id = "11111111-1111-1111-1111-111111111111"
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as client:
-        resp = await client.get("/v1/fundamentals/some-instrument-id/snapshot")
+        resp = await client.get(f"/v1/fundamentals/{valid_id}/snapshot")
 
     assert resp.status_code == 401
 
@@ -612,8 +630,10 @@ async def test_fundamentals_snapshot_proxies_to_s3(authed_app, authed_mock_clien
     The endpoint must return 200 even when all fields are null (instrument not yet
     backfilled) — never 404.
     """
+    # WHY UUID: F-010 — instrument_id is now UUID-typed; non-UUID values → 422.
+    aapl_id = "11111111-1111-1111-1111-111111111111"
     snapshot_payload = {
-        "instrument_id": "aapl-uuid-001",
+        "instrument_id": aapl_id,
         "eps_ttm": 6.11,
         "beta": 1.29,
         "avg_volume_30d": 56000000,
@@ -633,13 +653,13 @@ async def test_fundamentals_snapshot_proxies_to_s3(authed_app, authed_mock_clien
     transport = ASGITransport(app=authed_app)
     async with AsyncClient(transport=transport, base_url="http://test") as client:
         resp = await client.get(
-            "/v1/fundamentals/aapl-uuid-001/snapshot",
+            f"/v1/fundamentals/{aapl_id}/snapshot",
             headers={"Authorization": f"Bearer {_make_jwt()}"},
         )
 
     assert resp.status_code == 200
     body = resp.json()
-    assert body["instrument_id"] == "aapl-uuid-001"
+    assert body["instrument_id"] == aapl_id
     assert body["eps_ttm"] == pytest.approx(6.11)
     assert body["beta"] == pytest.approx(1.29)
     assert body["avg_volume_30d"] == 56_000_000
@@ -661,8 +681,10 @@ async def test_fundamentals_snapshot_all_null_fields(authed_app, authed_mock_cli
     return a valid 200 with all null fields.  This is the expected behaviour as per
     the API design in T-D-4-04 and the S3 /snapshot implementation.
     """
+    # WHY UUID: F-010 — instrument_id is now UUID-typed; non-UUID values → 422.
+    etf_id = "22222222-2222-2222-2222-222222222222"
     all_null_payload = {
-        "instrument_id": "new-etf-uuid",
+        "instrument_id": etf_id,
         "eps_ttm": None,
         "beta": None,
         "avg_volume_30d": None,
@@ -682,13 +704,13 @@ async def test_fundamentals_snapshot_all_null_fields(authed_app, authed_mock_cli
     transport = ASGITransport(app=authed_app)
     async with AsyncClient(transport=transport, base_url="http://test") as client:
         resp = await client.get(
-            "/v1/fundamentals/new-etf-uuid/snapshot",
+            f"/v1/fundamentals/{etf_id}/snapshot",
             headers={"Authorization": f"Bearer {_make_jwt()}"},
         )
 
     assert resp.status_code == 200
     body = resp.json()
-    assert body["instrument_id"] == "new-etf-uuid"
+    assert body["instrument_id"] == etf_id
     # All derived metric fields null
     for field in ("eps_ttm", "beta", "avg_volume_30d", "free_cash_flow", "credit_rating"):
         assert body[field] is None, f"Expected {field} to be null"
@@ -700,11 +722,12 @@ async def test_fundamentals_snapshot_downstream_error_forwarded(authed_app, auth
     authed_mock_clients.market_data.get = AsyncMock(
         return_value=_mock_response(500, b'{"detail": "Internal Server Error"}'),
     )
-
+    # WHY UUID: F-010 — instrument_id is now UUID-typed; non-UUID values → 422.
+    valid_id = "11111111-1111-1111-1111-111111111111"
     transport = ASGITransport(app=authed_app)
     async with AsyncClient(transport=transport, base_url="http://test") as client:
         resp = await client.get(
-            "/v1/fundamentals/aapl-uuid-001/snapshot",
+            f"/v1/fundamentals/{valid_id}/snapshot",
             headers={"Authorization": f"Bearer {_make_jwt()}"},
         )
 

@@ -1,7 +1,6 @@
 # Instrument Detail — Quote Tab — Design Spec (PRD-0089)
 
-> **Status:** in-discovery (proposes next iteration on top of PLAN-0090
-> baseline shipped 2026-05-20).
+> **Status:** in-discovery — iter-2 (2026-05-22): PLAN-0091 F-1 TAOverlayPanel + F-2 SentimentOverlay added.
 > **Agent:** agent-instr-quote
 > **Reads:** `docs/designs/0089/_INDEX.md` (shared tokens), `docs/specs/0088-instrument-detail-page-ground-up-redesign.md` (current PRD), `docs/designs/0089/00-backend-data-inventory.md` (when published).
 > **Baseline being iterated:** `apps/worldview-web/components/instrument/quote/QuoteTab.tsx` + `MetricsTable.tsx` + `OHLCVChart.tsx` + `SessionStatsStrip.tsx` + `InstrumentHeader.tsx` + `AiBriefBanner.tsx`.
@@ -560,3 +559,101 @@ network cost from 11 round-trips to 1. Defer to a follow-up wave.
 5. **Brief banner generation cost.** B-Q-5 lazy generation triggers an LLM call per first-visit instrument. Is rate-limiting (e.g. max 60 cold generations/hour per user) needed, or is the S8 LLM budget enough? Need data-platform call.
 6. **Sticky position for the multi-period + intraday strips.** Should L4/L5 stay sticky when the chart scrolls? Currently the entire left column scrolls together; recommendation: keep non-sticky (avoids overlap with metric grid scrolling on smaller screens), revisit after live testing.
 7. **Mobile / tablet behaviour.** The current QuoteTab is desktop-only (1024px+). v2 inherits that — does the redesign need a phone-friendly stacked variant in this wave or in a later one? Recommendation: defer; PRD-0089 is desktop-grade Bloomberg parity.
+
+---
+
+## 11. PLAN-0091 Additions (2026-05-22)
+
+These two features extend the chart toolbar on the Quote tab. Wave F-1 adds client-side TA indicator overlays with a formal `TAOverlayPanel` component; Wave F-2 adds a sentiment timeseries secondary line triggered by the `[SENTI]` chip.
+
+### 11.1 Wave F-1 — TAOverlayPanel (TA indicator chip strip)
+
+The existing wireframe (§4.1) shows `MA50 MA200 RSI MACD BB` in the chart toolbar row, but the spec does not define the `TAOverlayPanel` component. This wave formalises it.
+
+#### Chip strip layout
+
+```
+OVERLAYS: [EMA 20] [EMA 50] [SMA 200] [MACD] [BOLL] [RSI] [VWAP] [SENTI]
+```
+
+Each chip is a toggle button. Row sits directly below the OHLCVChart canvas, above `SessionStatsStrip` (row L3 in §4.2).
+
+| State | Style |
+|-------|-------|
+| Active chip | `bg-primary/20 text-primary` (same as active filter chips across the platform) |
+| Inactive chip | `bg-muted/30 text-muted-foreground` |
+| Chip height | 18px |
+| Chip font | `text-[9px] uppercase tracking-wide font-mono` |
+
+When `MACD` or `RSI` is active: a secondary sub-chart panel (40px fixed height) appears below the main chart, between L2 and L3, sharing the x-axis. When `SENTI` is active: the sentiment timeseries overlay appears on the main chart right Y-axis (see §11.2).
+
+#### TA computations
+
+All TA computed client-side from OHLCV bars already fetched — no new API calls for EMA/SMA/RSI/MACD/BOLL/VWAP. Computations memoized via `useMemo`.
+
+**New file**: `lib/ta/indicators.ts`
+
+```typescript
+export function ema(bars: OHLCVBar[], period: number): number[]
+export function sma(bars: OHLCVBar[], period: number): number[]
+export function rsi(bars: OHLCVBar[], period?: number): number[]          // default period=14
+export function macd(bars: OHLCVBar[]): MACDResult[]                      // (12,26,9)
+export function bollingerBands(bars: OHLCVBar[], period?: number, std?: number): BBResult[]  // default period=20, std=2
+export function vwap(bars: OHLCVBar[]): number[]
+```
+
+`OHLCVChart` accepts an optional `overlays?: OverlaySeries[]` prop — non-breaking addition. Each series: `{ label: string; color: string; data: number[]; type: "line" | "band" }`. Indicator selection stored in local `useState` only (session-local; no URL, no localStorage).
+
+#### Component files
+
+| Component | File | Status | Notes |
+|-----------|------|--------|-------|
+| `TAOverlayPanel` | `components/instrument/quote/TAOverlayPanel.tsx` | NEW | Chip strip + active-indicator state |
+| TA computation utils | `lib/ta/indicators.ts` | NEW | Pure functions; no React dependencies |
+| `OHLCVChart` | `components/instrument/chart/OHLCVChart.tsx` | MODIFY | Correct path is `chart/`, not `quote/`; add optional `overlays` prop |
+
+#### Loading / error / empty
+
+| State | Behaviour |
+|-------|-----------|
+| Bars not yet fetched | Chips disabled with `opacity-50 pointer-events-none` |
+| Bars fetch error | Chips remain disabled; main chart error state handles messaging |
+| Fewer than 2 bars | Chips disabled; TA requires a minimum data window |
+
+---
+
+### 11.2 Wave F-2 — SentimentOverlay chip in TAOverlayPanel
+
+**Depends on**: PLAN-0091 Wave A-2 (`GET /v1/entities/{entityId}/sentiment-timeseries` new endpoint)
+
+The `[SENTI]` chip in `TAOverlayPanel` fetches a daily sentiment timeseries and renders `net_sentiment = positive_ratio − negative_ratio` as a secondary line overlaid on the price chart.
+
+#### Behaviour
+
+1. `[SENTI]` chip is enabled only when `entityId` is non-null (instruments with a KG entity). Instruments without a KG entity show the chip with `opacity-50 pointer-events-none` and `title="No KG entity for this instrument"`.
+2. When activated, fetches `GET /v1/entities/{entityId}/sentiment-timeseries?days={N}` where `N` maps from the current chart period (1D → 7, 5D → 14, 1M → 30, 3M → 90, 1Y → 365, 5Y → 365 capped).
+3. Computes `net_sentiment = positive_ratio − negative_ratio` per daily data point.
+4. Renders as a secondary line on the price chart using the right Y-axis (scale −1 to +1). Left Y-axis (price) is unchanged.
+5. Line colour: `text-positive` (#00D26A) where `net_sentiment > 0`; `text-negative` (#FF3B5C) where `net_sentiment < 0`. Two separate path segments per sign-change, or a CSS gradient on the SVG path.
+
+#### Data fetching
+
+| Resource | Key | staleTime | Endpoint |
+|----------|-----|-----------|---------|
+| Entity sentiment timeseries | `qk.entitySentimentTimeseries(entityId, days)` (NEW in keys.ts) | 1h | `GET /v1/entities/{entityId}/sentiment-timeseries?days={N}` |
+
+#### Component files
+
+| Component / File | Status | Notes |
+|------------------|--------|-------|
+| `TAOverlayPanel` | MODIFY | Add `[SENTI]` chip; disabled when `entityId` null |
+| `OHLCVChart` | MODIFY | Add right Y-axis for sentiment overlay; accept optional `sentimentSeries?: SentimentDataPoint[]` prop |
+| `lib/query/keys.ts` | MODIFY | Add `qk.entitySentimentTimeseries(entityId: string, days: number)` |
+
+#### Loading / error / empty
+
+| State | Behaviour |
+|-------|-----------|
+| Loading (fetching timeseries) | Chip shows a 9px spinner; chart renders without overlay until data resolves |
+| Error | "Sentiment data unavailable" tooltip on chip; chip auto-deactivates |
+| Empty (no data points in range) | "No sentiment data for this period" tooltip; chip deactivates |

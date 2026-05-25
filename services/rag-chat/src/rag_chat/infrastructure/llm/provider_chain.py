@@ -234,10 +234,16 @@ class LLMProviderChain:
                 # Skip providers that don't support function calling (e.g. Ollama)
                 continue
             except Exception as exc:
+                # FIX-LIVE-X (2026-05-25): include the exception class name so
+                # silent failures like asyncio.TimeoutError (which has empty
+                # str()) are still actionable from logs.  Previously a
+                # tool-call turn timeout surfaced as `error=""` and the
+                # operator had no way to tell apart a timeout from a 4xx.
                 log.warning(  # type: ignore[no-any-return]
                     "provider_chat_with_tools_failed",
                     provider=provider.name,
-                    error=str(exc),
+                    error=str(exc) or repr(exc),
+                    error_type=type(exc).__name__,
                 )
                 continue
         raise RuntimeError("All LLM providers failed or unsupported for chat_with_tools")

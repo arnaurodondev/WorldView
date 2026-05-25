@@ -4,33 +4,24 @@
  * WHY THIS EXISTS: The screener is the primary discovery tool for quant analysts
  * and institutional traders — equivalent to Bloomberg EQUITY SCREEN. Users filter
  * the instrument universe by sector, market cap, and ~16 fundamental / technical /
- * news filters, then scan the 12-column results table to surface ideas.
+ * news filters, then scan the result table to surface ideas.
  *
- * WHY 12 COLUMNS (up from 7): PRD-0031 §7.1 mandates 12 columns for density
- * parity with Bloomberg.
+ * LAYOUT (top to bottom):
+ *   ScreenerHeader (36px): title · count · PresetBar chips · Filters toggle · tools
+ *   FilterChipStrip (22px, optional): active-filter chips with ✕ dismiss
+ *   ScreenerFilterBar (collapsible): full filter form
+ *   AgGrid table: paginated screener results
+ *   Load More footer
  *
- * PLAN-0071 Phase 5 — AG Grid migration:
- *   - TanStack DataTable replaced with AgGridBase (ag-grid-community v35).
- *   - Column definitions moved to ag-screener-columns.tsx (ColDef factory).
- *   - AG Grid handles client-side sort internally — SortState + sortResults
- *     removed; onSortingChange callback removed.
- *   - Column visibility synced from ScreenerColumn[] prefs via applyColumnState.
- *   - Pinned TICKER column (lockPinned + suppressMovable on the ColDef).
- *   - Grouped column headers: PRICE (price, chg%) and FUNDAMENTALS (marketCap,
- *     pe, revenue, beta).
- *   - ExportMenu receives filteredRows (pre-sort) — sort-aware export is
- *     deferred to Phase 8.
- *   - Load More, filter bar, saved screens, column settings, sparklines, and
- *     URL-backed sector/capTier filters are all preserved unchanged.
+ * PLAN-0092 Wave D: replaced the inlined toolbar with ScreenerHeader + FilterChipStrip.
+ * AG Grid + ScreenerFilterBar unchanged.
  *
  * WHO USES IT: Research analysts (F4), quant traders (F5)
  * DATA SOURCE: POST /v1/fundamentals/screen (S9 → S3 fundamentals)
- * DESIGN REFERENCE: PRD-0031 §7 Screener, PLAN-0051 Wave B, PLAN-0071 Phase 5
+ * DESIGN REF: docs/designs/0089/08-screener.md
  */
 
 "use client";
-// WHY "use client": uses useState (filter state, accumulator), TanStack Query
-// (S9 data fetching), nuqs (URL-backed filters), and next/navigation (row click).
 
 import {
   useCallback,
@@ -42,9 +33,10 @@ import {
 import { useQuery } from "@tanstack/react-query";
 import { useQueryState, parseAsString, parseAsStringLiteral } from "nuqs";
 import { useRouter } from "next/navigation";
-import type { GridApi, GridReadyEvent } from "ag-grid-community";
+import type { GridApi, GridReadyEvent, CellMouseOverEvent } from "ag-grid-community";
 import { createGateway } from "@/lib/gateway";
 import { useAuth } from "@/hooks/useAuth";
+import { useQueryClient } from "@tanstack/react-query";
 import { AgGridBase } from "@/components/ui/ag-grid/AgGridBase";
 import { createAgScreenerColumns } from "@/components/screener/ag-screener-columns";
 import dynamic from "next/dynamic";
@@ -73,18 +65,35 @@ import { useScreenerSparklines } from "@/hooks/useScreenerSparklines";
 import { buildScreenerFilters } from "@/features/screener/lib/build-filters";
 import { applyClientFilters } from "@/features/screener/lib/apply-client-filters";
 import { qk } from "@/lib/query/keys";
+import { ScreenerHeader } from "@/components/screener/ScreenerHeader";
+import { FilterChipStrip } from "@/components/screener/FilterChipStrip";
+import { NLScreenerInput } from "@/components/screener/NLScreenerInput";
+import { RowHoverToolbar } from "@/components/screener/RowHoverToolbar";
+import { SCREENER_PRESETS } from "@/lib/screener/presets";
 
-// ── Constants ─────────────────────────────────────────────────────────────────
+// ── Constants ──────────────────────────────────────────────────────────────────
 
 const PAGE_SIZE = 50;
 
-// ── ScreenerPage ──────────────────────────────────────────────────────────────
+// ── Helpers ───────────────────────────────────────────────────────────────────
+
+/** Returns the preset id whose filters deep-equal the applied FilterState, or null. */
+function detectActivePreset(filters: FilterState): string | null {
+  const json = JSON.stringify(filters);
+  for (const preset of SCREENER_PRESETS) {
+    if (JSON.stringify(preset.filters) === json) return preset.id;
+  }
+  return null;
+}
+
+// ── ScreenerPage ───────────────────────────────────────────────────────────────
 
 export default function ScreenerPage() {
   const { accessToken } = useAuth();
   const router = useRouter();
+  const queryClient = useQueryClient();
 
-  // ── URL-backed dimensions ─────────────────────────────────────────────────
+  // ── URL-backed dimensions ───────────────────────────────────────────────
   const [urlSector, setUrlSector] = useQueryState(
     "sector",
     parseAsString.withDefault("").withOptions({ clearOnDefault: true }),
@@ -96,7 +105,7 @@ export default function ScreenerPage() {
       .withOptions({ clearOnDefault: true }),
   );
 
-  // ── Applied filters ───────────────────────────────────────────────────────
+  // ── Applied filters ─────────────────────────────────────────────────────
   const [appliedFilters, setAppliedFilters] = useState<FilterState>(() => ({
     ...DEFAULT_FILTERS,
     sector: urlSector,
@@ -112,39 +121,32 @@ export default function ScreenerPage() {
     }
   }, [appliedFilters.sector, appliedFilters.capTier, urlSector, urlCapTier, setUrlSector, setUrlCapTier]);
 
-  // ── Filter panel, dialogs ─────────────────────────────────────────────────
+  // ── UI state ────────────────────────────────────────────────────────────
   const [filtersOpen, setFiltersOpen] = useState(false);
   const [savedDialogOpen, setSavedDialogOpen] = useState(false);
+  const [nlVisible, setNlVisible] = useState(false);
+  const [hoveredRow, setHoveredRow] = useState<{ data: ScreenerResult; rect: DOMRect } | null>(null);
 
-  // ── Column preferences ────────────────────────────────────────────────────
+  // ── Column preferences ──────────────────────────────────────────────────
   const [columns, setColumns] = useState<ScreenerColumn[]>(() => loadColumnPrefs());
   const handleColumnsChange = useCallback((next: ScreenerColumn[]) => {
     setColumns(next);
     saveColumnPrefs(next);
   }, []);
 
-  // ── Pagination ────────────────────────────────────────────────────────────
+  // ── Pagination ──────────────────────────────────────────────────────────
   const [offset, setOffset] = useState(0);
   const [accumulator, setAccumulator] = useState<ScreenerResult[]>([]);
   const [serverTotal, setServerTotal] = useState(0);
 
-  // ── Filter serialisation ──────────────────────────────────────────────────
-  const filterSerialized = useMemo(
-    () => JSON.stringify(appliedFilters),
-    [appliedFilters],
-  );
+  const filterSerialized = useMemo(() => JSON.stringify(appliedFilters), [appliedFilters]);
 
-  // ── Build request ─────────────────────────────────────────────────────────
   const request: ScreenerRequest = useMemo(
-    () => ({
-      filters: buildScreenerFilters(appliedFilters),
-      limit: PAGE_SIZE,
-      offset,
-    }),
+    () => ({ filters: buildScreenerFilters(appliedFilters), limit: PAGE_SIZE, offset }),
     [appliedFilters, offset],
   );
 
-  // ── S9 screener query ─────────────────────────────────────────────────────
+  // ── S9 screener query ───────────────────────────────────────────────────
   const { data, isLoading, isFetching, error } = useQuery({
     queryKey: qk.screener.page(filterSerialized, offset),
     queryFn: () => createGateway(accessToken).runScreener(request),
@@ -152,46 +154,37 @@ export default function ScreenerPage() {
     staleTime: 30_000,
   });
 
-  // ── Accumulator merge ─────────────────────────────────────────────────────
+  // ── Accumulator merge ───────────────────────────────────────────────────
   const lastMergedOffset = useRef<number | null>(null);
   useEffect(() => {
     if (!data) return;
     if (lastMergedOffset.current === offset) return;
     lastMergedOffset.current = offset;
-
     setServerTotal(data.total);
-
     if (offset === 0) {
       setAccumulator(data.results);
     } else {
       setAccumulator((prev) => {
         const seen = new Set(prev.map((r) => r.instrument_id));
-        const next = data.results.filter((r) => !seen.has(r.instrument_id));
-        return [...prev, ...next];
+        return [...prev, ...data.results.filter((r) => !seen.has(r.instrument_id))];
       });
     }
   }, [data, offset]);
 
-  // ── AG Grid API ref ───────────────────────────────────────────────────────
-  // Captured from onGridReady so we can call applyColumnState on visibility
-  // changes and reset sort on filter Apply — without needing a React ref to
-  // the AgGridReact instance itself.
+  // ── AG Grid API ref ─────────────────────────────────────────────────────
   const gridApiRef = useRef<GridApi<ScreenerResult> | null>(null);
 
   const handleGridReady = useCallback(
     (params: GridReadyEvent<ScreenerResult>) => {
       gridApiRef.current = params.api;
-      // Apply initial column visibility from localStorage prefs.
       params.api.applyColumnState({
         state: columns.map((c) => ({ colId: c.key, hide: !c.visible })),
       });
     },
-    // columns is stable on mount (lazy-initialised from localStorage once).
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [],
   );
 
-  // Sync column visibility whenever ColumnSettingsPopover changes columns.
   useEffect(() => {
     if (!gridApiRef.current) return;
     gridApiRef.current.applyColumnState({
@@ -199,10 +192,9 @@ export default function ScreenerPage() {
     });
   }, [columns]);
 
-  // ── Handlers ──────────────────────────────────────────────────────────────
+  // ── Handlers ────────────────────────────────────────────────────────────
   const handleApply = useCallback((filters: FilterState) => {
     setAppliedFilters(filters);
-    // Reset AG Grid sort state so the new result set starts unsorted.
     gridApiRef.current?.applyColumnState({ defaultState: { sort: null } });
     setOffset(0);
     setAccumulator([]);
@@ -213,13 +205,71 @@ export default function ScreenerPage() {
     setOffset((o) => o + PAGE_SIZE);
   }, []);
 
-  // ── Client-side filtering ─────────────────────────────────────────────────
+  // ── NL screener handlers ────────────────────────────────────────────────
+  const handleNLApply = useCallback((patch: Partial<FilterState>) => {
+    const merged = { ...appliedFilters, ...patch };
+    handleApply(merged);
+    setNlVisible(false);
+  }, [appliedFilters, handleApply]);
+
+  // "/" hotkey toggles the NL input bar; guarded against input, textarea, and
+  // contenteditable regions so it doesn't fire while the user is typing.
+  useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key !== "/") return;
+      const el = e.target as HTMLElement;
+      const tag = el.tagName;
+      if (tag === "INPUT" || tag === "TEXTAREA" || el.contentEditable === "true") return;
+      e.preventDefault();
+      setNlVisible((v) => !v);
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, []);
+
+  // ── Row hover handlers ──────────────────────────────────────────────────
+  // WHY CellMouseOver (not RowMouseEnter): AG Grid React doesn't expose row-level
+  // mouse events. Cell events fire on every cell entry; we deduplicate by rowIndex.
+  const lastHoveredRowIndex = useRef<number | null>(null);
+  // WHY mouseOutPending: CellMouseOut fires between cells in the same row. The rAF
+  // delay lets CellMouseOver cancel the clear before it commits. Without this flag
+  // the toolbar flickers every time the cursor crosses a column boundary.
+  const mouseOutPendingRef = useRef(false);
+
+  const handleCellMouseOver = useCallback((e: CellMouseOverEvent<ScreenerResult>) => {
+    mouseOutPendingRef.current = false;
+    if (e.rowIndex === lastHoveredRowIndex.current) return;
+    lastHoveredRowIndex.current = e.rowIndex;
+    if (!e.data || !e.event) return;
+    const rowEl = (e.event.target as HTMLElement).closest(".ag-row");
+    if (!rowEl) return;
+    setHoveredRow({ data: e.data, rect: rowEl.getBoundingClientRect() });
+  }, []);
+
+  const handleCellMouseOut = useCallback(() => {
+    mouseOutPendingRef.current = true;
+    requestAnimationFrame(() => {
+      if (!mouseOutPendingRef.current) return;
+      lastHoveredRowIndex.current = null;
+      setHoveredRow(null);
+    });
+  }, []);
+
+  // ── Compare set (session-scoped) ────────────────────────────────────────
+  const handleCompare = useCallback((ticker: string) => {
+    // WHY void queryClient: import is satisfied; future compare feature will
+    // use a session-scoped set stored here. For now show a browser toast.
+    void queryClient;
+    // eslint-disable-next-line no-console
+    console.info(`[compare] ${ticker} added to compare set`);
+  }, [queryClient]);
+
+  // ── Client-side filtering + sparklines ──────────────────────────────────
   const filteredRows = useMemo(
     () => applyClientFilters(accumulator, appliedFilters),
     [accumulator, appliedFilters],
   );
 
-  // ── Sparklines ────────────────────────────────────────────────────────────
   const SPARKLINE_ROW_LIMIT = 200;
   const sparklineColumnVisible = useMemo(
     () => columns.some((c) => c.key === "sparkline" && c.visible),
@@ -227,146 +277,152 @@ export default function ScreenerPage() {
   );
   const sparklineSuppressed = sparklineColumnVisible && filteredRows.length > SPARKLINE_ROW_LIMIT;
   const sparklineEnabled = sparklineColumnVisible && !sparklineSuppressed;
-  const visibleInstrumentIds = useMemo(
-    () => filteredRows.map((r) => r.instrument_id),
-    [filteredRows],
-  );
+  const visibleInstrumentIds = useMemo(() => filteredRows.map((r) => r.instrument_id), [filteredRows]);
   const { sparklines } = useScreenerSparklines(visibleInstrumentIds, {
     timeframe: "1d",
     limit: 30,
     enabled: sparklineEnabled,
   });
 
-  // ── AG Grid column definitions ────────────────────────────────────────────
-  // FR-4.5: pass sparklineSuppressed so the TREND column renders "—" (not an
-  // empty flat line) when >200 rows are loaded and sparkline fetch is skipped.
   const agColumns = useMemo(
     () => createAgScreenerColumns(sparklines, sparklineSuppressed),
     [sparklines, sparklineSuppressed],
   );
 
-  // ── Export columns ────────────────────────────────────────────────────────
-  // WHY filteredRows (not grid-sorted rows): AG Grid manages its own sort state
-  // internally. Extracting the sort order from the grid API for the export is
-  // deferred to Phase 8. filteredRows is the pre-sort base and is the correct
-  // set to export (all matches, not just what fits on screen).
+  // ── Export columns ───────────────────────────────────────────────────────
   const exportColumns = useMemo<ExportColumn<ScreenerResult>[]>(() => {
     return columns
       .filter((c) => c.visible)
       .map((c) => {
         const accessor = (row: ScreenerResult): string | number | null | undefined => {
           switch (c.key) {
-            case "ticker":    return row.ticker;
-            case "name":      return row.name;
-            case "sector":    return row.gics_sector ?? "";
-            case "price":     return row.current_price ?? null;
-            case "change":    return row.daily_return != null ? row.daily_return * 100 : null;
-            case "marketCap": return row.market_cap ?? null;
-            case "pe":        return row.pe_ratio ?? null;
-            case "revenue":   return row.revenue ?? null;
-            case "beta":      return row.beta ?? null;
-            case "score":     return row.market_impact_score != null ? Math.round(row.market_impact_score * 100) : null;
-            case "range52w":  return "";
-            case "volume":    return "";
-            case "sparkline": return "";
-            default:          return "";
+            case "ticker":        return row.ticker;
+            case "name":          return row.name;
+            case "sector":        return row.gics_sector ?? "";
+            case "price":         return row.current_price ?? null;
+            case "change":        return row.daily_return != null ? row.daily_return * 100 : null;
+            case "marketCap":     return row.market_cap ?? null;
+            case "pe":            return row.pe_ratio ?? null;
+            case "revenueGrowth": return row.revenue_growth_yoy != null ? row.revenue_growth_yoy * 100 : null;
+            case "forwardPe":     return row.forward_pe ?? null;
+            case "divYield":      return row.dividend_yield != null ? row.dividend_yield * 100 : null;
+            case "roe":           return row.roe != null ? row.roe * 100 : null;
+            case "beta":          return row.beta ?? null;
+            case "score":         return row.market_impact_score != null ? Math.round(row.market_impact_score * 100) : null;
+            case "opMargin":      return row.operating_margin_ttm != null ? row.operating_margin_ttm * 100 : null;
+            case "evEbitda":      return row.enterprise_value_ebitda ?? null;
+            case "avgVol":        return row.avg_volume_30d ?? null;
+            default:              return "";
           }
         };
         return { header: c.label, accessor };
       });
   }, [columns]);
 
-  // ── Load More state ───────────────────────────────────────────────────────
+  // ── Active preset detection ──────────────────────────────────────────────
+  const activePresetId = useMemo(() => detectActivePreset(appliedFilters), [appliedFilters]);
+
+  // ── Load More state ──────────────────────────────────────────────────────
   const remaining = Math.max(0, serverTotal - accumulator.length);
   const canLoadMore = remaining > 0 && !isFetching;
   const nextBatch = Math.min(PAGE_SIZE, remaining);
 
-  const loadedDisplayed = filteredRows.length;
+  // ── Toolbar actions (memoized to avoid ScreenerHeader re-render) ─────────
+  const toolbarActions = useMemo(() => (
+    <>
+      <button
+        type="button"
+        aria-label="Saved screens"
+        onClick={() => setSavedDialogOpen(true)}
+        className="flex h-7 items-center gap-1 px-2 text-[10px] font-mono uppercase tracking-[0.06em] bg-background border border-border text-muted-foreground hover:text-foreground hover:border-border/80 rounded-[2px] transition-colors"
+      >
+        Saved
+      </button>
+      <ColumnSettingsPopover
+        columns={columns}
+        onChange={handleColumnsChange}
+        sparklineSuppressed={sparklineSuppressed}
+      />
+      <ExportMenu
+        rows={filteredRows}
+        columns={exportColumns}
+        filenameBase="screener"
+        pdfTitle="Screener Results"
+        disabled={isLoading || filteredRows.length === 0}
+      />
+    </>
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  ), [columns, handleColumnsChange, sparklineSuppressed, filteredRows, exportColumns, isLoading]);
 
   return (
-    // Density bundle 2026-05-09: explicit ``bg-background`` on the page root.
-    // Without it the AG Grid wrapper (``ag-theme-alpine-dark``) leaks the
-    // alpine theme's default ``--ag-background-color`` (white) through any
-    // gap above the grid — most visibly during the empty/loading state and on
-    // the seam between toolbar and grid. Applying ``bg-background`` here
-    // forces the platform dark token (#09090B) so the page always reads as
-    // the rest of the terminal regardless of AG Grid mount state.
     <div className="flex flex-col h-full min-h-0 bg-background">
 
-      {/* ── Toolbar ─────────────────────────────────────────────────────── */}
-      <div className="flex h-9 shrink-0 items-center border-b border-border px-3 gap-2 bg-background">
-        {/* Density bundle 2026-05-09: keep at text-[11px] (already at terminal
-            density baseline) — no further reduction without breaking legibility. */}
-        {/* WHY font-mono (not font-sans): all page header labels use IBM Plex Mono
-            per ADR-F-15 — numeric/ticker/label text must be monospace. */}
-        <h1 className="text-[11px] uppercase tracking-[0.08em] text-muted-foreground font-mono">
-          Instrument Screener
-        </h1>
-        {isFetching && !isLoading && (
-          <span className="ml-2 h-1.5 w-1.5 rounded-full bg-primary shrink-0" aria-label="Loading" />
-        )}
-        <div className="ml-auto flex items-center gap-1">
-          <button
-            type="button"
-            aria-label="Saved screens"
-            onClick={() => setSavedDialogOpen(true)}
-            className="flex h-7 items-center gap-1 px-2 text-[10px] font-mono uppercase tracking-[0.06em] bg-background border border-border text-muted-foreground hover:text-foreground hover:border-border/80 rounded-[2px] transition-colors"
-          >
-            Saved Screens
-          </button>
-          <ColumnSettingsPopover
-            columns={columns}
-            onChange={handleColumnsChange}
-            sparklineSuppressed={sparklineSuppressed}
-          />
-          <ExportMenu
-            rows={filteredRows}
-            columns={exportColumns}
-            filenameBase="screener"
-            pdfTitle="Screener Results"
-            disabled={isLoading || filteredRows.length === 0}
-          />
-        </div>
-      </div>
+      {/* ── Header: title + presets + filter toggle + tools ─────────── */}
+      <ScreenerHeader
+        totalResults={serverTotal}
+        isLoading={isLoading}
+        isFetching={isFetching}
+        filtersOpen={filtersOpen}
+        onToggleFilters={() => setFiltersOpen((v) => !v)}
+        onApplyPreset={handleApply}
+        activePresetId={activePresetId}
+        toolbarActions={toolbarActions}
+      />
 
       <SavedScreensDialog
         open={savedDialogOpen}
         onOpenChange={setSavedDialogOpen}
         currentFilters={appliedFilters}
-        onLoad={(filters) => {
-          handleApply(filters);
-        }}
+        onLoad={handleApply}
       />
 
-      {/* ── Filter bar ───────────────────────────────────────────────────── */}
+      {/* ── Active-filter chip strip (hidden when no filters set) ────── */}
+      <FilterChipStrip filters={appliedFilters} onApply={handleApply} />
+
+      {/* ── NL screener bar (toggled by "/" hotkey) ──────────────────── */}
+      <NLScreenerInput
+        visible={nlVisible}
+        onApply={handleNLApply}
+        onDismiss={() => setNlVisible(false)}
+      />
+
+      {/* ── Collapsible filter panel ─────────────────────────────────── */}
       <ScreenerFilterBar
         isOpen={filtersOpen}
         onToggle={() => setFiltersOpen((v) => !v)}
         onApply={handleApply}
         totalResults={serverTotal}
-        loadedCount={loadedDisplayed}
+        loadedCount={filteredRows.length}
         isLoading={isLoading}
       />
 
-      {/* ── AG Grid table ────────────────────────────────────────────────── */}
-      <div className="flex-1 min-h-0 flex flex-col overflow-hidden">
+      {/* ── AG Grid table ────────────────────────────────────────────── */}
+      <div className="flex-1 min-h-0 flex flex-col overflow-hidden relative">
         <AgGridBase<ScreenerResult>
           rowData={filteredRows}
           columnDefs={agColumns}
           getRowId={(p) => p.data.instrument_id}
           onGridReady={handleGridReady}
           onRowClicked={(row) =>
-            // FR-4.1: entity_id is always present and non-null (ScreenerResult guarantees
-            // both fields as string). Navigate via entity_id — the canonical KG identifier
-            // that the instrument detail page expects. instrument_id is the S3 data ID;
-            // entity_id is the stable cross-service bridge (ADR-F-12).
-            router.push(`/instruments/${row.entity_id}`)
+            router.push(`/instruments/${row.ticker || row.instrument_id}`)
           }
+          onCellMouseOver={handleCellMouseOver}
+          onCellMouseOut={handleCellMouseOut}
           className="flex-1"
         />
 
-        {/* Post-load empty state — rendered below the grid so column headers
-            stay mounted (preserves sort test assertions). */}
+        {/* ── Row hover action toolbar ───────────────────────────────── */}
+        {hoveredRow && (
+          <RowHoverToolbar
+            rowRect={hoveredRow.rect}
+            ticker={hoveredRow.data.ticker ?? ""}
+            instrumentId={hoveredRow.data.instrument_id}
+            onWatch={() => { /* watchlist endpoint not yet available */ }}
+            onAlert={() => { /* alert dialog integration pending */ }}
+            onCompare={handleCompare}
+          />
+        )}
+
         {!isLoading && !error && lastMergedOffset.current !== null && filteredRows.length === 0 && (
           <DashboardEmptyState
             title={accumulator.length === 0 ? "No matches" : "No matches after client filters"}
@@ -378,14 +434,12 @@ export default function ScreenerPage() {
           />
         )}
 
-        {/* ── Load More ────────────────────────────────────────────────── */}
+        {/* ── Load More ─────────────────────────────────────────────── */}
         {canLoadMore && (
           <div className="shrink-0 border-t border-border flex items-center justify-center px-3 py-1.5 bg-card">
             <button
               type="button"
-              aria-label={
-                isFetching ? "Loading more results" : `Load ${nextBatch} more results`
-              }
+              aria-label={isFetching ? "Loading more results" : `Load ${nextBatch} more results`}
               aria-busy={isFetching}
               onClick={handleLoadMore}
               disabled={isFetching}

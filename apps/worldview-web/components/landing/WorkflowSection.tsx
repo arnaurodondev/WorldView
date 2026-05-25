@@ -54,7 +54,7 @@ export function WorkflowSection() {
           </p>
           <h2
             id="workflow-heading"
-            className="text-3xl font-semibold tracking-tight text-foreground sm:text-4xl"
+            className="text-[30px] font-semibold tracking-tight text-foreground sm:text-[36px]"
           >
             Discover → Analyze → Track → Act.
             <br />
@@ -95,10 +95,10 @@ export function WorkflowSection() {
                   </div>
 
                   <div className="flex-1 pt-1">
-                    <h3 className="mb-2 text-lg font-semibold text-foreground">
+                    <h3 className="mb-2 text-[18px] font-semibold text-foreground">
                       {step.title}
                     </h3>
-                    <p className="mb-3 text-sm leading-relaxed text-muted-foreground">
+                    <p className="mb-3 text-[14px] leading-relaxed text-muted-foreground">
                       {step.body}
                     </p>
                     <p className="font-mono text-[10px] uppercase tracking-wider text-muted-foreground/60">

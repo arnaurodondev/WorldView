@@ -42,10 +42,10 @@ export function SectorHeatmapPreview() {
             <p className="mb-2 font-mono text-[10px] uppercase tracking-[0.18em] text-muted-foreground">
               Live in your dashboard
             </p>
-            <h2 className="text-3xl font-semibold tracking-tight text-foreground sm:text-4xl">
+            <h2 className="text-[30px] font-semibold tracking-tight text-foreground sm:text-[36px]">
               7-step sector heatmap
             </h2>
-            <p className="mt-2 max-w-xl text-sm text-muted-foreground">
+            <p className="mt-2 max-w-xl text-[14px] text-muted-foreground">
               Real-time GICS sector performance with the same color scale used
               across the screener and watchlist views — no toggling palettes.
             </p>

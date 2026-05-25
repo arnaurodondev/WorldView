@@ -145,8 +145,9 @@ async def detect_and_record_contradictions(
         # bytes verbatim — the producer is responsible for the full envelope.
         from messaging.kafka.serialization_utils import serialize_confluent_avro  # type: ignore[import-untyped]
 
+        outbox_event_id = new_uuid7()  # type: ignore[no-any-return]
         contradiction_payload = {
-            "event_id": str(new_uuid7()),
+            "event_id": str(outbox_event_id),
             "event_type": "intelligence.contradiction",
             "schema_version": 1,
             "occurred_at": now.isoformat(),
@@ -163,6 +164,7 @@ async def detect_and_record_contradictions(
             topic=TOPIC_CONTRADICTION,
             partition_key=str(subject_entity_id),
             payload_avro=serialize_confluent_avro(_CONTRADICTION_SCHEMA_PATH, contradiction_payload),
+            event_id=outbox_event_id,
         )
 
         results.append(

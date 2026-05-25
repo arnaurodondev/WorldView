@@ -1,6 +1,6 @@
 /**
  * components/portfolio/ag-holdings-columns.tsx — AG Grid ColDef array for the
- * portfolio holdings table (PLAN-0071 Phase 6).
+ * portfolio holdings table (PLAN-0071 Phase 6, PRD-0089 W2).
  *
  * WHY PARALLEL FILE (not replacing holdings-columns.tsx): holdings-columns.tsx
  * drives the legacy DataTable and its unit tests. Keeping both lets the AG Grid
@@ -12,9 +12,9 @@
  * on EnrichedHoldingRow, not on a flat field path. valueGetter extracts it; the
  * cellRenderer formats it for display. Same contract as TanStack's accessorFn.
  *
- * COLUMN ORDER:
+ * W2 COLUMN ORDER (14 cols, 1336px total):
  *   TICKER (pinned-left) | NAME | QTY | AVG COST | CURRENT |
- *   DAY $ | DAY % | P&L $ | P&L % | VALUE | WEIGHT | SECTOR
+ *   DAY $ | DAY % | SPARK | P&L $ | P&L % | VALUE | WEIGHT | SECTOR | ASSET
  *
  * WHO USES IT: components/portfolio/SemanticHoldingsTable.tsx
  */
@@ -24,6 +24,9 @@ import type { EnrichedHoldingRow } from "./holdings-columns";
 import { cn } from "@/lib/utils";
 import { formatPrice, formatPercent, formatPercentUnsigned } from "@/lib/utils";
 import { formatStalenessAwarePrice, fmtPnl } from "./holdings-columns";
+import { TickerLinkCellRenderer } from "./cells/TickerLink";
+import { SparklineCellRenderer } from "./cells/SparklineCellRenderer";
+import { AssetTypeBadgeCellRenderer } from "./cells/AssetTypeBadge";
 
 // ── Pinned-row detection helper ───────────────────────────────────────────────
 // WHY: AG Grid passes `node.rowPinned === 'bottom'` for pinnedBottomRowData rows.
@@ -36,48 +39,49 @@ function isPinnedBottom(params: ICellRendererParams<EnrichedHoldingRow>): boolea
 }
 
 // ── Column pixel widths ───────────────────────────────────────────────────────
+// W2 spec — 14 cols summing to 1336px (design §6.2 §Appendix A).
+// WHY these specific widths: TICKER is narrow (76px) because ticker symbols
+// are ≤5 chars at text-[11px]. NAME gets the most space (268px) for full
+// instrument names. ASSET is minimal (48px) — single-char chip.
 
 export const HOLDINGS_AG_COL_WIDTHS: Record<string, number> = {
-  ticker: 80,
-  name: 130,
-  qty: 80,
-  avgCost: 90,
-  current: 90,
-  dayChange: 90,
-  dayChangePct: 80,
-  pnl: 100,
-  pnlPct: 80,
-  value: 100,
+  ticker: 76,
+  name: 268,
+  qty: 78,
+  avgCost: 86,
+  current: 86,
+  dayChange: 82,
+  dayChangePct: 70,
+  spark: 76,
+  value: 96,
+  pnl: 90,
+  pnlPct: 70,
   weight: 110,
-  sector: 110,
+  sector: 100,
+  asset: 48,
 };
 
 // ── Cell renderers ────────────────────────────────────────────────────────────
 
-function TickerCellRenderer(params: ICellRendererParams<EnrichedHoldingRow>) {
-  // WHY pinned-row branch: the totals footer is a pinnedBottomRowData row.
-  // The TICKER cell is the natural place to show the "TOTAL" label since it is
-  // pinned left and always visible regardless of horizontal scroll.
-  if (isPinnedBottom(params)) {
-    return (
-      <span className="text-[10px] uppercase tracking-[0.08em] text-muted-foreground font-semibold">
-        TOTAL
-      </span>
-    );
-  }
-  return (
-    <span className="font-mono text-[11px] tabular-nums text-primary font-medium">
-      {params.data?.h.ticker}
-    </span>
-  );
-}
+// NOTE: TickerCellRenderer removed in step 4.10. TickerLinkCellRenderer
+// (imported from cells/TickerLink.tsx) handles both the link and the TOTAL
+// pinned-row label via its rowPinned guard.
+
+// NOTE: SparklineCellRendererInline removed in step 4.11.
+// SparklineCellRenderer (cells/SparklineCellRenderer.tsx) is now imported above.
+
+// NOTE: AssetTypeBadgeCellRendererInline removed in step 4.12.
+// AssetTypeBadgeCellRenderer (cells/AssetTypeBadge.tsx) is now imported above.
 
 function NameCellRenderer(params: ICellRendererParams<EnrichedHoldingRow>) {
   if (isPinnedBottom(params)) {
     return <span className="text-[11px] text-muted-foreground">—</span>;
   }
   return (
-    <span className="text-[11px] text-foreground truncate block max-w-[120px]">
+    // WHY max-w-full (was max-w-[120px]): the NAME column is 268px wide.
+    // A hard 120px cap clipped names at less than half the available space.
+    // max-w-full lets the span fill the full column cell (F-3 bug fix).
+    <span className="text-[11px] text-foreground truncate block max-w-full">
       {params.data?.h.name}
     </span>
   );
@@ -126,15 +130,17 @@ function CurrentCellRenderer(params: ICellRendererParams<EnrichedHoldingRow>) {
 }
 
 function DayChangeCellRenderer(params: ICellRendererParams<EnrichedHoldingRow>) {
-  if (isPinnedBottom(params)) {
-    return <span className="font-mono text-[11px] tabular-nums text-muted-foreground text-right w-full block">—</span>;
-  }
+  // WHY pinned row falls through: the TOTAL row now shows the portfolio-level
+  // day change (sum of all position day changes). The same renderer handles
+  // both the individual-row and the totals-row cases; the bold font-semibold
+  // class distinguishes the totals row visually.
   const v = params.data?.dayChangeValue;
   return (
     <span
       className={cn(
         "font-mono text-[11px] tabular-nums text-right w-full block",
         v == null ? "text-muted-foreground" : v >= 0 ? "text-positive" : "text-negative",
+        isPinnedBottom(params) && "font-semibold",
       )}
     >
       {v == null ? "—" : fmtPnl(v)}
@@ -143,15 +149,13 @@ function DayChangeCellRenderer(params: ICellRendererParams<EnrichedHoldingRow>) 
 }
 
 function DayChangePctCellRenderer(params: ICellRendererParams<EnrichedHoldingRow>) {
-  if (isPinnedBottom(params)) {
-    return <span className="font-mono text-[11px] tabular-nums text-muted-foreground text-right w-full block">—</span>;
-  }
   const v = params.data?.dayChangePct;
   return (
     <span
       className={cn(
         "font-mono text-[11px] tabular-nums text-right w-full block",
         v == null ? "text-muted-foreground" : v >= 0 ? "text-positive" : "text-negative",
+        isPinnedBottom(params) && "font-semibold",
       )}
     >
       {v == null ? "—" : formatPercent(v / 100)}
@@ -206,7 +210,12 @@ function ValueCellRenderer(params: ICellRendererParams<EnrichedHoldingRow>) {
 
 function WeightCellRenderer(params: ICellRendererParams<EnrichedHoldingRow>) {
   if (isPinnedBottom(params)) {
-    return <span className="font-mono text-[11px] tabular-nums text-muted-foreground text-right w-full block">—</span>;
+    // Total portfolio weight is always 100% by definition.
+    return (
+      <span className="font-mono text-[11px] tabular-nums text-muted-foreground text-right w-full block font-semibold">
+        100.0%
+      </span>
+    );
   }
   const weight = params.data?.weight ?? 0;
   return (
@@ -237,6 +246,11 @@ function SectorCellRenderer(params: ICellRendererParams<EnrichedHoldingRow>) {
 }
 
 // ── Column definitions ────────────────────────────────────────────────────────
+// W2 order: TICKER | NAME | QTY | AVG COST | CURRENT | DAY $ | DAY % |
+//           SPARK | VALUE | P&L $ | P&L % | WEIGHT | SECTOR | ASSET
+// NOTE: TickerCellRenderer is replaced by TickerLinkCellRenderer in step 4.10.
+//       SparklineCellRendererInline is replaced by SparklineCellRenderer in step 4.11.
+//       AssetTypeBadgeCellRendererInline is replaced by AssetTypeBadgeCellRenderer in step 4.12.
 
 export const holdingsAgColumns: ColDef<EnrichedHoldingRow>[] = [
   // ── TICKER — pinned left, not movable ──────────────────────────────────────
@@ -249,7 +263,10 @@ export const holdingsAgColumns: ColDef<EnrichedHoldingRow>[] = [
     sortable: false,
     resizable: false,
     width: HOLDINGS_AG_COL_WIDTHS.ticker,
-    cellRenderer: TickerCellRenderer,
+    // WHY TickerLinkCellRenderer: step 4.10 — navigates to /instruments/{TICKER}
+    // on click. The pinned-bottom guard inside TickerLinkCellRenderer renders
+    // "TOTAL" for the totals footer row (same as the old TickerCellRenderer).
+    cellRenderer: TickerLinkCellRenderer,
   },
 
   // ── NAME ───────────────────────────────────────────────────────────────────
@@ -309,6 +326,30 @@ export const holdingsAgColumns: ColDef<EnrichedHoldingRow>[] = [
     cellRenderer: DayChangePctCellRenderer,
   },
 
+  // ── SPARK — sparkline for 14-day close-price momentum ──────────────────────
+  // WHY field="ticker": sparkline data is keyed by ticker in the AG Grid context
+  // (params.context.holdingsSeries). The ticker value in params.value is the
+  // lookup key for the series array. Replaced by SparklineCellRenderer in step 4.11.
+  {
+    colId: "spark",
+    headerName: "SPARK",
+    field: "h" as unknown as keyof EnrichedHoldingRow,
+    sortable: false,
+    suppressMovable: false,
+    width: HOLDINGS_AG_COL_WIDTHS.spark,
+    cellRenderer: SparklineCellRenderer,
+  },
+
+  // ── VALUE — sortable ────────────────────────────────────────────────────────
+  {
+    colId: "value",
+    headerName: "VALUE",
+    sortable: true,
+    width: HOLDINGS_AG_COL_WIDTHS.value,
+    valueGetter: (params) => params.data?.value ?? 0,
+    cellRenderer: ValueCellRenderer,
+  },
+
   // ── P&L $ — sortable ────────────────────────────────────────────────────────
   {
     colId: "pnl",
@@ -329,16 +370,6 @@ export const holdingsAgColumns: ColDef<EnrichedHoldingRow>[] = [
     cellRenderer: PnlPctCellRenderer,
   },
 
-  // ── VALUE — sortable ────────────────────────────────────────────────────────
-  {
-    colId: "value",
-    headerName: "VALUE",
-    sortable: true,
-    width: HOLDINGS_AG_COL_WIDTHS.value,
-    valueGetter: (params) => params.data?.value ?? 0,
-    cellRenderer: ValueCellRenderer,
-  },
-
   // ── WEIGHT — sortable ───────────────────────────────────────────────────────
   {
     colId: "weight",
@@ -356,5 +387,21 @@ export const holdingsAgColumns: ColDef<EnrichedHoldingRow>[] = [
     sortable: false,
     width: HOLDINGS_AG_COL_WIDTHS.sector,
     cellRenderer: SectorCellRenderer,
+  },
+
+  // ── ASSET — single-char asset class chip ───────────────────────────────────
+  // WHY 48px: single char (E/F/B/C/O) at text-[10px] needs only ~12px content
+  // width; 48px gives comfortable padding while staying minimal.
+  // Replaced by AssetTypeBadgeCellRenderer in step 4.12.
+  {
+    colId: "asset",
+    headerName: "A",
+    sortable: true,
+    width: HOLDINGS_AG_COL_WIDTHS.asset,
+    // WHY params.data?.assetClass (not h.asset_class): getHoldings() never
+    // populates asset_class — it is always undefined at the API layer. assetClass
+    // is derived in SemanticHoldingsTable.enrichedRows with an ETF/sector fallback.
+    valueGetter: (params) => params.data?.assetClass ?? "",
+    cellRenderer: AssetTypeBadgeCellRenderer,
   },
 ];

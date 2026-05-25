@@ -72,7 +72,7 @@ const ContextMenuSubContent = React.forwardRef<
   <ContextMenuPrimitive.SubContent
     ref={ref}
     className={cn(
-      "z-50 min-w-[8rem] overflow-hidden rounded-[2px] border border-border bg-popover p-0.5 text-popover-foreground shadow-md " +
+      "z-50 min-w-[8rem] overflow-hidden rounded-[2px] border border-border bg-popover p-0.5 text-popover-foreground  " +
         "data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 " +
         "data-[state=closed]:zoom-out-95 data-[state=open]:zoom-in-95",
       className,
@@ -91,7 +91,7 @@ const ContextMenuContent = React.forwardRef<
       ref={ref}
       // WHY z-50: lifts above the dialog/sheet stack (z-40).
       className={cn(
-        "z-50 min-w-[10rem] overflow-hidden rounded-[2px] border border-border bg-popover p-0.5 text-popover-foreground shadow-md " +
+        "z-50 min-w-[10rem] overflow-hidden rounded-[2px] border border-border bg-popover p-0.5 text-popover-foreground  " +
           "font-mono " + // institutional terminal look
           "data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 " +
           "data-[state=closed]:zoom-out-95 data-[state=open]:zoom-in-95",

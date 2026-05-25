@@ -33,6 +33,12 @@ services:
     image: minio/minio:RELEASE.2025-04-08T15-41-24Z
     command: server /data --console-address ":9001"
     profiles: [infra, lib-test, all]
+    # F-LOG-INFRA-001 / PLAN-0093 T-G-2-01: MinIO was the last critical infra
+    # piece without a restart policy.  Without ``unless-stopped`` MinIO stays
+    # down after a host reboot, leaving every silver-bucket reader (S6/S7) to
+    # fail on first ``GetObject``.  Matches the policy applied to postgres /
+    # kafka / valkey / ollama / schema-registry / market-data.
+    restart: unless-stopped
     ports:
       # SEC-007: bind to localhost only — prevent external access to infra
       - "127.0.0.1:7480:9000"    # S3 API (matches STORAGE_ENDPOINT default)
@@ -74,7 +80,16 @@ services:
     build:
       context: ../postgres
       dockerfile: Dockerfile
+    # BP-502: 55 DB-connected containers × standard pool config saturates the
+    # default max_connections=100. Raise to 500 (costs ~4 MB shared memory).
+    # shared_buffers raised proportionally for cache efficiency.
+    command: postgres -c max_connections=500 -c shared_buffers=256MB
     profiles: [infra, all]
+    # F-LOG-INFRA-001 / PLAN-0093 T-A-1-01: postgres is the most critical
+    # piece of infrastructure — losing it after a host reboot stalls every
+    # consumer/dispatcher/API in the platform.  ``unless-stopped`` preserves
+    # ``docker stop`` for intentional teardowns (``make dev-down``).
+    restart: unless-stopped
     ports:
       # SEC-007: bind to localhost only — prevent external DB access
       - "127.0.0.1:5432:5432"
@@ -100,6 +115,9 @@ services:
   kafka:
     image: confluentinc/cp-kafka:7.6.0
     profiles: [infra, all]
+    # F-LOG-INFRA-001 / PLAN-0093 T-A-1-01: kafka is the event-bus backbone;
+    # every consumer/dispatcher dies if it stays down after a host reboot.
+    restart: unless-stopped
     ports:
       # SEC-007: bind to localhost only
       - "127.0.0.1:9092:9092"
@@ -119,15 +137,26 @@ services:
     volumes:
       - kafka_data:/var/lib/kafka/data
     healthcheck:
+      # kafka-broker-api-versions spawns a JVM client and can take >10s on
+      # cold / loaded machines, especially while __consumer_offsets is being
+      # loaded after a restart. Bumped timeout 10→30s and start_period
+      # 30→60s so the container reaches "healthy" instead of perpetually
+      # "unhealthy" while consumer groups rebalance (observed during the
+      # 2026-05-20 stack restart — Kafka was serving traffic correctly but
+      # docker compose deps that required `service_healthy` were failing).
       test: ["CMD", "kafka-broker-api-versions", "--bootstrap-server", "localhost:9092"]
       interval: 15s
-      timeout: 10s
+      timeout: 30s
       retries: 5
-      start_period: 30s
+      start_period: 60s
 
   schema-registry:
     image: confluentinc/cp-schema-registry:7.6.0
     profiles: [infra, all]
+    # F-LOG-INFRA-001 / PLAN-0093 T-A-1-01: schema-registry is core
+    # infrastructure for every Avro consumer/producer; ensure it auto-recovers
+    # on host restart.  ``unless-stopped`` preserves manual ``docker stop``.
+    restart: unless-stopped
     ports:
       # SEC-007: bind to localhost only
       - "127.0.0.1:8081:8081"
@@ -197,6 +226,10 @@ services:
   valkey:
     image: valkey/valkey:7.2-alpine
     profiles: [infra, all]
+    # F-LOG-INFRA-001 / PLAN-0093 T-A-1-01: valkey backs rate limiting,
+    # circuit breakers, and the brief cache — every service degrades if it
+    # vanishes after a host bounce.
+    restart: unless-stopped
     ports:
       # SEC-007: bind to localhost only
       - "127.0.0.1:6379:6379"
@@ -265,6 +298,10 @@ services:
       timeout: 5s
       start_period: 20s
       retries: 3
+    # PLAN-0093 QA-3 (F-LOG-INFRA-001): long-running S1 API must auto-recover
+    # from host docker daemon restarts so portfolio data plane never silently
+    # stays down after a system reboot.
+    restart: unless-stopped
 
   # ── Portfolio outbox dispatcher ──────────────────────────────────────────────
   portfolio-dispatcher:
@@ -414,6 +451,9 @@ services:
       timeout: 5s
       start_period: 15s
       retries: 3
+    # PLAN-0093 QA-3 (F-LOG-INFRA-001): S2 market-ingestion API must auto-recover
+    # from host docker daemon restarts so ingestion endpoints stay reachable.
+    restart: unless-stopped
 
   # ── Market ingestion scheduler ───────────────────────────────────────────────
   market-ingestion-scheduler:
@@ -691,6 +731,9 @@ services:
       timeout: 5s
       retries: 3
       start_period: 30s
+    # PLAN-0093 QA-3 (F-LOG-INFRA-001): S3 content-ingestion API plane must
+    # auto-recover so RSS / EODHD source registration stays available.
+    restart: unless-stopped
 
   # Scheduler process — evaluates sources and creates tasks
   content-ingestion-scheduler:
@@ -782,6 +825,11 @@ services:
       context: ../..
       dockerfile: services/market-data/Dockerfile
     profiles: [infra, all]
+    # F-LOG-INFRA-001 / PLAN-0093 T-A-1-01: market-data was the only S* API
+    # container missing a restart policy — every other service has one and
+    # historically this caused dashboards to lose price quotes after any host
+    # bounce.  ``unless-stopped`` brings it in line with the rest.
+    restart: unless-stopped
     depends_on:
       market-data-migrate:
         condition: service_completed_successfully
@@ -986,6 +1034,9 @@ services:
       timeout: 5s
       start_period: 30s
       retries: 3
+    # PLAN-0093 QA-3 (F-LOG-INFRA-001): S5 content-store API must auto-recover
+    # so silver-bucket reads/writes survive host docker daemon restarts.
+    restart: unless-stopped
 
   content-store-dispatcher:
     build:
@@ -1084,6 +1135,11 @@ services:
   ollama:
     image: ollama/ollama:0.6.7
     profiles: [infra, all]
+    # F-LOG-INFRA-001 / PLAN-0093 T-A-1-01: ensure ollama recovers from host
+    # restarts (docker daemon restart, machine reboot).  ``unless-stopped`` is
+    # the correct choice over ``always`` because it still honours ``docker
+    # stop`` for intentional shutdowns (e.g. during ``make dev-down``).
+    restart: unless-stopped
     ports:
       - "11434:11434"
     volumes:
@@ -1165,6 +1221,11 @@ services:
       timeout: 10s
       retries: 5
       start_period: 600s  # allow 10 min for first-boot model download on slow connections
+    # PLAN-0093 QA-3 (F-LOG-INFRA-001): GLiNER ML inference container has a
+    # 10-min start_period for first-boot model download; if it dies the whole
+    # NLP pipeline silently stops resolving entities, so auto-restart is
+    # mandatory.
+    restart: unless-stopped
     # ── GPU passthrough (uncomment to enable NVIDIA GPU) ──────────────────────
     # deploy:
     #   resources:
@@ -1219,6 +1280,9 @@ services:
       timeout: 5s
       start_period: 45s
       retries: 3
+    # PLAN-0093 QA-3 (F-LOG-INFRA-001): S6 nlp-pipeline API must auto-recover
+    # so NLP enrichment endpoints stay reachable after host docker restarts.
+    restart: unless-stopped
 
   nlp-pipeline-dispatcher:
     build:
@@ -1261,8 +1325,6 @@ services:
         condition: service_completed_successfully
       valkey:
         condition: service_healthy
-      ollama:
-        condition: service_healthy
       gliner-server:
         condition: service_healthy
     env_file:
@@ -1289,6 +1351,32 @@ services:
     env_file:
       - ../../services/nlp-pipeline/configs/docker.env
     command: ["python", "-m", "nlp_pipeline.infrastructure.messaging.consumers.watchlist_consumer_main"]
+    restart: on-failure
+    healthcheck:
+      test: ["CMD", "python", "-c", "import os; os.kill(1, 0)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+
+  nlp-pipeline-entity-refresh-consumer:
+    # REQ-003 / TASK-W0-06: consumes entity.refresh.v1 events from S7's
+    # TriggerEntityRefreshUseCase and marks entity_embedding_state rows as
+    # due (next_refresh_at = now()). Without this container running, the
+    # manual /api/v1/entities/{entity_id}/refresh endpoint would publish to
+    # Kafka but never be consumed → silent no-op.
+    build:
+      context: ../..
+      dockerfile: services/nlp-pipeline/Dockerfile
+    profiles: [infra, all]
+    depends_on:
+      kafka-init:
+        condition: service_completed_successfully
+      nlp-pipeline-migrate:
+        condition: service_completed_successfully
+    env_file:
+      - ../../services/nlp-pipeline/configs/docker.env
+    command: ["python", "-m", "nlp_pipeline.infrastructure.messaging.consumers.entity_refresh_consumer_main"]
     restart: on-failure
     healthcheck:
       test: ["CMD", "python", "-c", "import os; os.kill(1, 0)"]
@@ -1326,10 +1414,27 @@ services:
       dockerfile: services/nlp-pipeline/Dockerfile
     profiles: [infra, all]
     depends_on:
+      # BP-064 (DNS race): postgres must be healthy BEFORE the worker starts so
+      # asyncpg does not race against docker-embedded DNS during pool initialisation.
+      # nlp-pipeline-migrate already waits for postgres:service_healthy, but after
+      # migrate completes the container exits; the worker then starts and hits a
+      # brief window where the postgres DNS entry is not yet stable in its resolver
+      # cache → socket.gaierror [Errno -2] Name or service not known on first connect.
+      # Adding postgres:service_healthy here ensures DNS is fully stable at start.
+      postgres:
+        condition: service_healthy
       nlp-pipeline-migrate:
         condition: service_completed_successfully
       kafka-init:
         condition: service_completed_successfully
+      # api-gateway required for MarketDataClient to mint X-Internal-JWT via
+      # POST /v1/auth/dev-login (dev) or POST /internal/v1/service-token (prod).
+      # Without this the first OHLCV fetch silently 401s, but the dependency also
+      # ensures the JWT-mint HTTP call does not race against gateway startup.
+      api-gateway:
+        condition: service_healthy
+      market-data:
+        condition: service_healthy
     env_file:
       - ../../services/nlp-pipeline/configs/docker.env
     command: ["python", "-m", "nlp_pipeline.workers.price_impact_labelling_worker"]
@@ -1349,8 +1454,6 @@ services:
     depends_on:
       nlp-pipeline-migrate:
         condition: service_completed_successfully
-      ollama:
-        condition: service_healthy
     env_file:
       - ../../services/nlp-pipeline/configs/docker.env
     command: ["python", "-m", "nlp_pipeline.workers.article_relevance_scoring_worker"]
@@ -1367,6 +1470,12 @@ services:
       context: ../..
       dockerfile: services/nlp-pipeline/Dockerfile
     profiles: [infra, all]
+    # F-NPL-002 / PLAN-0093 T-A-1-02: gate boot on postgres + valkey so the
+    # worker doesn't sys.exit(1) on its first LLM/DB call when the platform is
+    # mid-startup.  DP-F005 follow-up (2026-05-24): dropped the `ollama` dep —
+    # primary path is DeepInfra (NLP_PIPELINE_RELEVANCE_SCORING_API_KEY is set
+    # in docker.env), Ollama would only be used as fallback when the key is
+    # unset, which is never the case in shipped environments.
     depends_on:
       nlp-pipeline-migrate:
         condition: service_completed_successfully
@@ -1374,6 +1483,10 @@ services:
         condition: service_completed_successfully
       kafka-init:
         condition: service_completed_successfully
+      postgres:
+        condition: service_healthy
+      valkey:
+        condition: service_healthy
     env_file:
       - ../../services/nlp-pipeline/configs/docker.env
     command: ["python", "-m", "nlp_pipeline.workers.unresolved_resolution_worker_main"]
@@ -1389,11 +1502,16 @@ services:
   # The worker class existed since 2026-02 but no entry point ever ran it, so
   # rows accumulated forever.  Standalone process per R22.
   #
-  # Intentionally NO `ollama` dependency: deployments running with
-  # NLP_PIPELINE_EMBEDDING_PROVIDER=deepinfra (the dev/prod default) never
-  # touch Ollama, so coupling the retry queue to Ollama health would block
-  # drain whenever Ollama flakes — for no benefit.  The Ollama-fallback path
-  # gracefully degrades to "embedding_retry_failed" and re-tries with backoff.
+  # F-NPL-002 / PLAN-0093 T-A-1-02: gate boot on postgres + valkey health.
+  #
+  # DP-F005 (2026-05-24): removed `ollama: service_healthy` dep.  The primary
+  # embedding path is DeepInfra (`NLP_PIPELINE_EMBEDDING_PROVIDER=deepinfra`,
+  # BAAI/bge-large-en-v1.5) and `EMBEDDING_API_KEY` is set in every shipped
+  # environment, so the Ollama fallback is never exercised.  The dep added
+  # ~15-30s cold-start delay and caused spurious refusal-to-start outages
+  # when Ollama was unavailable despite DeepInfra being healthy.  If an
+  # operator unsets `EMBEDDING_API_KEY` for local dev they must start Ollama
+  # manually before this worker.
   nlp-pipeline-embedding-retry-worker:
     build:
       context: ../..
@@ -1402,6 +1520,10 @@ services:
     depends_on:
       nlp-pipeline-migrate:
         condition: service_completed_successfully
+      postgres:
+        condition: service_healthy
+      valkey:
+        condition: service_healthy
     env_file:
       - ../../services/nlp-pipeline/configs/docker.env
     command: ["python", "-m", "nlp_pipeline.workers.embedding_retry_worker_main"]
@@ -1443,6 +1565,9 @@ services:
       timeout: 5s
       start_period: 45s
       retries: 3
+    # PLAN-0093 QA-3 (F-LOG-INFRA-001): S7 knowledge-graph API must auto-recover
+    # so AGE graph queries / RAG context retrieval stay reachable.
+    restart: unless-stopped
 
   knowledge-graph-dispatcher:
     build:
@@ -1479,6 +1604,15 @@ services:
         condition: service_healthy
     env_file:
       - ../../services/knowledge-graph/configs/docker.env
+    # FIX-LIVE-C / F-LIVE-006-B: scheduler_main starts a Prometheus
+    # ``start_http_server(9108)`` so worker gauges (path_insight backlog,
+    # relation_summary backlog, stuck-relation count) are scrape-visible.
+    # FIX-LIVE-U: publish :9108 to the host so the data-SLO validation suite
+    # (``tests/validation/test_path_insight_quality.py``) can scrape the
+    # gauge from outside the Docker network. Prometheus inside the network
+    # continues to scrape via DNS (``knowledge-graph-scheduler:9108``).
+    ports:
+      - "9108:9108"
     command: ["python", "-m", "knowledge_graph.infrastructure.scheduler.scheduler_main"]
     restart: unless-stopped
     healthcheck:
@@ -1788,10 +1922,20 @@ services:
       context: ../..
       dockerfile: services/knowledge-graph/Dockerfile
     profiles: [infra, all]
+    # F-LOG-002 / PLAN-0093 T-A-1-02: explicit healthy-deps on postgres + valkey
+    # prevent the worker from booting before its backing services and entering
+    # a sys.exit(1) → 60s restart loop.  The intelligence-migrations +
+    # knowledge-graph deps were already declared.  DP-F005 follow-up
+    # (2026-05-24): dropped the `ollama` dep — this worker has no ML client at
+    # all (AGE graph traversal + rule-based scoring + template matching only).
     depends_on:
       intelligence-migrations:
         condition: service_completed_successfully
       knowledge-graph:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+      valkey:
         condition: service_healthy
     env_file:
       - ../../services/knowledge-graph/configs/docker.env
@@ -1844,6 +1988,9 @@ services:
       timeout: 5s
       start_period: 30s
       retries: 3
+    # PLAN-0093 QA-3 (F-LOG-INFRA-001): S10 alert API must auto-recover —
+    # silent alerting outage is security-relevant (missed flash alerts).
+    restart: unless-stopped
 
   alert-dispatcher:
     build:
@@ -1960,8 +2107,6 @@ services:
         condition: service_completed_successfully
       valkey:
         condition: service_healthy
-      ollama:
-        condition: service_started
       # BP-164: InternalJWTMiddleware fetches JWKS from api-gateway at startup.
       # Without this dependency rag-chat starts before api-gateway is healthy,
       # the 3 retries all fail, and the service returns 503 on all authenticated
@@ -1979,6 +2124,9 @@ services:
       timeout: 5s
       start_period: 30s
       retries: 3
+    # PLAN-0093 QA-3 (F-LOG-INFRA-001): S8 rag-chat WebSocket service must
+    # auto-recover so chat sessions reconnect after host docker restarts.
+    restart: unless-stopped
 
   # ── API Gateway (S9) — stateless reverse proxy + auth ─────────────────────────
   api-gateway:
@@ -2004,6 +2152,10 @@ services:
       timeout: 5s
       start_period: 20s
       retries: 3
+    # PLAN-0093 QA-3 (F-LOG-INFRA-001): S9 is the SOLE platform ingress.  If
+    # api-gateway stays down after a host restart the entire frontend, mobile,
+    # and backend-to-backend JWKS chain breaks.  Auto-recovery is critical.
+    restart: unless-stopped
 
   # ── Worldview Web (Next.js 15 frontend) ────────────────────────────────────
   # Canonical production frontend. Talks exclusively to S9 API Gateway via
@@ -2028,6 +2180,9 @@ services:
       timeout: 5s
       start_period: 20s
       retries: 3
+    # PLAN-0093 QA-3 (F-LOG-INFRA-001): canonical Next.js production frontend
+    # — must auto-recover so the UI stays reachable after host restarts.
+    restart: unless-stopped
 
   # ── Pushgateway — receives metrics pushed by synthetic monitor ─────────────────
   # WHY pushgateway: Prometheus scrapes metrics by polling a /metrics endpoint.

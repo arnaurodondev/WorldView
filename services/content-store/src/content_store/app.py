@@ -21,7 +21,7 @@ from content_store.api.health import router as health_router
 from content_store.config import Settings
 from content_store.infrastructure.db.session import _build_factories
 from content_store.infrastructure.middleware.internal_jwt import InternalJWTMiddleware
-from observability import configure_logging, get_logger  # type: ignore[import-untyped]
+from observability import assert_app_env_or_die, configure_logging, get_logger  # type: ignore[import-untyped]
 from observability.metrics import add_prometheus_middleware, create_metrics  # type: ignore[import-untyped]
 from observability.sentry import SentrySettings, init_sentry  # type: ignore[import-untyped]
 from observability.tracing import add_otel_middleware, configure_tracing  # type: ignore[import-untyped]
@@ -71,6 +71,13 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         json=settings.log_json,
     )
     log = get_logger("content_store.app")
+
+    # 1b. Boot-time security guard (PLAN-0093 Wave A-1 / F-LOG-JWT-001).
+    # Refuses to start when JWT verification is disabled AND APP_ENV is unset.
+    assert_app_env_or_die(
+        service_name=settings.service_name,
+        internal_jwt_skip_verification=settings.internal_jwt_skip_verification,
+    )
 
     # 2. Tracing config (optional — middleware already registered in create_app)
     if settings.otlp_endpoint:

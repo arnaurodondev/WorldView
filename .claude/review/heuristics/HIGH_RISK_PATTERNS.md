@@ -958,3 +958,185 @@ Any `useState` holding a user-preference value without a corresponding `useEffec
 grep -n "useQuery\b" apps/worldview-web/ -r --include="*.tsx" | grep -v "staleTime"
 ```
 Any `useQuery` call without `staleTime` on a non-price endpoint is a candidate for rate-limit exhaustion under concurrent component mounts.
+
+---
+
+### HR-060: TanStack query-key drift between consumers of the same endpoint
+
+**Category**: Frontend, Cache
+**Severity**: HIGH
+**Detection**:
+```bash
+# Any bare-array queryKey for a domain that has a qk.* factory
+grep -rE 'queryKey: \[' apps/worldview-web/components apps/worldview-web/hooks | grep -v "qk\."
+```
+
+When `lib/query/keys.ts` defines a factory for an endpoint (`qk.portfolios.list()`, `qk.watchlists.sidebar()`, etc.), every `useQuery`/`useQueries` call against that endpoint must use the factory. Bare-array literals (`queryKey: ["portfolios"]`) hash as different cache entries — TanStack treats them as separate queries and fires duplicate HTTP requests, silently defeating the dedup contract the factory promises.
+
+The pattern is hard to spot in review because both consumers individually look correct; the issue is the relationship between them. Detection is mechanical: grep for `queryKey: \[` and reject any hit that doesn't reference the central factory.
+
+**Real instance**: BP-497 (PRD-0089 W1.1) — 6 consumers of `getPortfolios()` drifted from the new factory introduced by PortfolioSwitcher; surfaced only in a downstream QA pass.
+
+---
+
+### HR-061: Cross-component selection context that consumers ignore
+
+**Category**: Frontend, UX
+**Severity**: HIGH
+**Detection**:
+```bash
+# Whenever a new selection context is added, audit list-endpoint consumers:
+grep -rE '\?\.\[0\]\?\.[a-z_]+_id' apps/worldview-web/components apps/worldview-web/hooks
+# Each match is a candidate that should respect the new selection context
+# instead of unconditionally picking the first item.
+```
+
+When a new selection context is introduced (active-portfolio, active-watchlist, active-tenant, etc.) the SAME commit must migrate every existing consumer of the underlying list endpoint to read the context first. Otherwise the chip/switcher will appear to work in the place it was wired (TopBar) but every other surface keeps using the legacy "first item" pick — half-shipped UX that users will immediately notice as "the chip does nothing".
+
+The classic shape: a new context with a setter, a writer component (chip / switcher), and ONE reader hook adopted in a single useful surface. The remaining 3-5 readers of the same domain keep `?.[0]` and silently ignore the user's selection.
+
+Review prompt: "List every consumer of the underlying list endpoint and confirm each one respects the new selection context. If even one doesn't, ship a shared resolver hook in the same commit."
+
+**Real instance**: BP-498 (PRD-0089 W1.1) — `ActivePortfolioContext` wired into `usePortfolioMetrics` but 5 other widgets kept their pre-existing `portfolios?.[0]` pick.
+
+### HR-062: filter(Boolean) on EODHD dict-of-dicts values
+
+**Category**: Frontend, Data
+**Severity**: HIGH
+**Detection**:
+```bash
+grep -rn "filter(Boolean)" apps/worldview-web/components --include="*.tsx"
+# For each match, check: is the array being filtered from Object.values()?
+# If so, verify isDictOfDicts was called first AND that it rejects {"0": {}}
+```
+
+`filter(Boolean)` does **not** catch empty objects — `Boolean({}) === true`. If EODHD returns `{"0": {}}` (an empty placeholder) for a section with no filings, `Object.values({"0": {}}).filter(Boolean)` = `[{}]`, which then renders as an all-dash row instead of showing the empty state.
+
+The correct guard requires `isDictOfDicts` to also check `Object.keys(first).length > 0`. The shared implementation at `lib/eohdUtils.ts` handles this correctly. Do NOT duplicate `isDictOfDicts` locally — always import from the shared utility.
+
+**Real instance**: W3 QA F-011 — FundHoldersTable, InstitutionalHoldersTable, InsiderTransactionsTable, InsiderActivityList all had local copies that accepted `{"0": {}}`. Fixed 2026-05-22 by extracting shared `lib/eohdUtils.ts`.
+
+## RED — Added from PLAN-0093 Phase 5 QA (2026-05-24)
+
+### HR-063: Silent-Failure-as-Restart-Loop (Watermark Advance in Generic Exception Handler)
+
+**Category**: Workers, Distributed, Data
+**Severity**: HIGH
+**Detection**:
+```bash
+# Any worker loop that catches `Exception` AND updates a watermark/cursor:
+grep -rEn "except Exception" services/*/src --include="*.py" -A 5 | \
+    grep -E "(watermark|cursor|next_refresh_at|UPDATE.*WHERE.*=).*=" -B 5
+```
+
+A worker that catches a generic `Exception`, logs a warning, and **advances its watermark / cursor / `next_refresh_at`** inside the handler converts a real failure into a silent skip. The row is marked "done" without the work actually completing; the watermark moves; the row is never revisited. Externally the worker looks healthy (no error metric, no DLQ entry, throughput on the watermark advance metric). Internally the data is permanently divergent from source.
+
+Two canonical PLAN-0093 instances:
+- `age_sync_worker.py` caught `psycopg2.ProgrammingError` (unknown AGE label) in a generic `except`, advanced the sync cursor — 74% of `relations` rows silently missing from AGE for weeks.
+- `EnrichmentWorker` (BP-548) incremented `attempts` in memory only — partial-index sweep returned the same rows forever; no error surfaced.
+
+Fix: classify every caught exception (RetryableError → re-raise to the consumer framework which routes to DLQ; FatalError → re-raise to crash the worker; unknown → re-raise — never log + swallow). NEVER advance a watermark inside an exception handler — the watermark advance must be the **last** operation after all work has succeeded.
+
+**Real instance**: BP-544 (AGE sync); BP-548 (enrichment_attempts counter).
+
+### HR-064: Prompt-Supplements-Pretraining for Numerical or Factual Claims
+
+**Category**: ML & LLM, RAG, Safety
+**Severity**: HIGH
+**Detection**:
+```bash
+# LLM system prompts that don't forbid pretraining knowledge:
+grep -rEn "system.*prompt|SYSTEM_PROMPT|tool_use" libs/prompts services/rag-chat \
+    --include="*.py" --include="*.md" --include="*.txt" -A 10 | \
+    grep -vE "(only|exclusively|do not.*supplement|do not.*invent|refuse)" | head -40
+# Then read each match and confirm an explicit "no supplementation" clause exists.
+```
+
+A tool-using LLM agent prompted with "answer the question using the tool results" will **freely supplement tool output with values from pretraining** when the tool returns sparse or unrelated data. The supplemented values look plausible (Apple's Q3 2024 EPS *might* be $1.40), pass numeric-grounding validators that only check "is this number in the tool corpus?" (because the tool corpus had $1.40 from a different quarter), and surface to the user as confident, cited prose.
+
+Worse, when the user's premise contradicts tool data ("Why did Apple acquire Microsoft last quarter?"), an unconstrained agent will synthesize a coherent narrative around the false premise rather than refusing.
+
+Fix: every system prompt for a tool-using agent must include:
+1. An **explicit ban**: "Do NOT supplement with knowledge from your pretraining for numerical, financial, or factual claims. If the tool data is insufficient, say so."
+2. A **premise-contradiction refusal rule**: "If the user's premise contradicts tool data, refuse and state the contradiction explicitly."
+3. A **claim-kind validator** downstream (`NumericGroundingValidator` keyed by FieldKind) that requires N rows for trend/aggregate claims, not just numeric presence.
+
+**Real instance**: BP-547 (rag-chat agent N=1 extrapolation); PLAN-0093 E-1 prompt + E-2 validator + QA-2 P0-1 premise-contradiction refusal (closed by FIX-2 in `libs/prompts/src/prompts/chat/tool_use.py`).
+
+### HR-065: Watermark Advances on Partial Sync (or Empty Result Counted as Success)
+
+**Category**: Workers, Distributed, Data
+**Severity**: HIGH
+**Detection**:
+```bash
+# Workers that update next_refresh_at after a phase that may return [] or partial:
+grep -rEn "next_refresh_at|last_synced_at" services/*/src --include="*.py" -B 5 | \
+    grep -E "(=|UPDATE).*next_refresh_at" | head -20
+# For each match: verify the result count was checked AND > 0 (or that 0 is genuinely terminal).
+```
+
+A worker that fetches a batch, processes whatever returned, and unconditionally advances `next_refresh_at` (or equivalent) converts every partial-fetch failure into a silent gap. Common shapes:
+- HTTP fetch returns 200 with empty body → worker treats as "no work" → advances watermark → real data on the next page is skipped.
+- Database SELECT with stale column name (BP-546) returns zero rows due to `UndefinedColumn` caught upstream → worker advances watermark → all matching rows skipped forever.
+- API rate-limit returns 429 → worker classifies as transient, retries inside the same batch → exhausts retries → batch returns empty → watermark advances anyway.
+
+The PLAN-0093 instance: `FundamentalsRefreshWorker` Phase 1 with no-ticker entities (BP-533) — `if not ticker: continue` skipped the row WITHOUT updating `next_refresh_at`, so it requeued forever. The mirror-image failure (advancing without verifying success) is HR-065.
+
+Fix: a watermark advance MUST be gated on (a) the underlying operation returned a verified success status AND (b) for batch workers, the result count is checked against expectations (e.g. "we asked for 100 rows and got 100; pages exhausted"). Empty results from a still-paginating source must NOT advance the watermark — surface as an error and retry.
+
+**Real instance**: BP-544 (AGE sync); BP-548 (enrichment counter); BP-533 (no-ticker requeue is the inverse of this pattern — both flow from the same lack of explicit "did this phase succeed?" verification).
+
+## RED — Added from PLAN-0093 ITER-5 closeout (2026-05-25)
+
+### HR-066: Generic `except Exception` with class-name-only logging hides root cause
+
+**Category**: Observability, Debug
+**Severity**: HIGH
+**Detection**:
+```bash
+# Any error-path log that records only the exception type, not repr or traceback:
+grep -rEn "log(ger)?\.(error|warning|exception).*type\(.*\)\.__name__" services/ libs/ --include="*.py"
+# For each match, verify repr(e) AND traceback.format_exc() appear in the same call.
+```
+
+A blanket `except Exception as e: logger.error("...", error=type(e).__name__)` reduces every distinct failure mode to a single opaque class name. PLAN-0093 ITER-2 hotfix incident: `IntelligenceHandler.__init__()` raised `TypeError: got an unexpected keyword argument 's6'` for every chat request after a rebuild; the orchestrator's stream-error path logged only `event=stream_internal_error error=TypeError` 12 times. 90 minutes of triage to discover the `s6=s6` kwarg mismatch — would have been 30 seconds with `repr(e)`.
+
+Fix: every error-path log MUST include `error_type=type(e).__name__` **plus** `error_repr=repr(e)` **plus** `traceback=traceback.format_exc()`. The repr surfaces the message; the traceback surfaces the file + line. Without all three, exception-class statistics cannot be acted on.
+
+**Real instance**: BP-555 (PLAN-0093 ITER-2 IntelligenceHandler TypeError hotfix); same pattern caught FIX-LIVE-X timeout debug (BP-562 — empty error strings hid that DeepInfra was timing out, not rejecting).
+
+### HR-067: Cached completion responses can mask upstream regressions for weeks
+
+**Category**: RAG, Caching, Observability
+**Severity**: HIGH
+**Detection**:
+```bash
+# Any completion cache whose key does NOT include a prompt/validator version hash:
+grep -rEn "rag:.*completion:" services/rag-chat libs/ --include="*.py" -B 2 -A 5
+# Verify each key contains a literal version segment (e.g. "rag:v2:") AND a sha256(prompt) digest.
+```
+
+A completion cache keyed only by the user query (or thread_id) will serve pre-regression answers for weeks after the prompt, validator, or grader is upgraded. PLAN-0093 Phase 5c: `rag:v1:completion:*` served pre-FIX-2 prompts containing the fabricated "$34.6B AMD revenue" for days after the prompt + validator + grader were all upgraded. Three latent prod-grade bugs (F-LIVE-J/K/L) were surfaced ONLY after FIX-LIVE-A invalidated the cache.
+
+Worse, caching ABOVE a strict-output validator is structurally unsafe — the validator runs once on the first response, the cached prose is returned forever without re-validation when the validator is later tightened.
+
+Fix: (1) every completion-cache key MUST include `f"rag:{PROMPT_VERSION}:{hashlib.sha256(system_prompt).hexdigest()[:8]}"` so any prompt edit auto-invalidates; (2) refuse to write to cache if grounding-validator score < threshold; (3) in any PR touching prompts/validators/graders, the cache version segment MUST be bumped in the same commit.
+
+**Real instance**: BP-559 (FIX-LIVE-A cache key bump v1→v2 + grounding-gated write); BP-560 (eval harness must use fresh thread_id or disable cache to avoid the same trap).
+
+### HR-068: Multi-agent orchestrator must verify worktree-vs-main isolation after each subagent returns
+
+**Category**: Process, Multi-Agent
+**Severity**: HIGH
+**Detection**:
+```bash
+# After spawning parallel agents with isolation: "worktree", the orchestrator should always run:
+git -C <main_worktree> status   # MUST be clean
+git -C <agent_worktree> log --oneline -3   # MUST show agent's commit
+```
+
+Agents launched with `isolation: "worktree"` are NOT prevented from editing files in the orchestrator's main worktree. In two separate PLAN-0093 iterations, a sub-agent silently edited files in main (then `git stash`d) instead of its own worktree branch — partial edits leaked into main and broke unrelated tests until the orchestrator ran `git status` and discarded them.
+
+Fix: orchestrator launching parallel agents MUST (a) record each agent's intended worktree path, (b) after each agent returns, `git -C <main> status` and verify NO unexpected modifications (discard any with `git checkout --` after explicit user confirmation), (c) `git -C <agent_worktree> log --oneline` to confirm the agent's commit landed on its branch, (d) merge the agent's worktree branch into main as the canonical source. Worktree isolation is a convenience, not a safety net (cross-ref R34).
+
+**Real instance**: BP-570 (PLAN-0093 multi-iteration campaign — at least 2 stray-edit incidents).

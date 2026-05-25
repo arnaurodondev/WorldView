@@ -122,6 +122,9 @@ def _build_transaction_response(
                 asset_class=e.asset_class,
                 executed_at=e.transaction.executed_at,
                 external_ref=e.transaction.external_ref,
+                # P2-E: broker-supplied description (Alembic 0020). None for
+                # historical rows and brokers that omit the field.
+                description=e.transaction.description,
                 created_at=e.transaction.created_at,
             )
             for e in enriched

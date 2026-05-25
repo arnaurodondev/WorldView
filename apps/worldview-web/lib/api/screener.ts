@@ -3,6 +3,7 @@
  */
 
 import type {
+  NLScreenerResponse,
   ScreenerField,
   ScreenerRequest,
   ScreenerResponse,
@@ -34,9 +35,24 @@ export function createScreenerApi(t: string | undefined) {
      * `sector → gics_sector` here in the gateway client so the UI types
      * line up. `entity_id` is computed as a Worldview-conventional
      * `entity-{ticker-lc}` slug when the backend doesn't provide one
-     * (matches the IndexTicker / GlobalSearch fallback convention) so
+     * (matches the IndexStrip / GlobalSearch fallback convention) so
      * row-click navigation lands on the correct entity page.
      */
+    /**
+     * translateNLScreenerQuery — POST /v1/screener/nl-translate
+     * Converts a natural-language query ("profitable tech stocks under $50") into a
+     * structured { filters, explanation } object the screener can apply directly.
+     * Returns `explanation` (LLM-generated 1-sentence description) + `filters` map.
+     * PLAN-0092 Wave A.
+     */
+    translateNLScreenerQuery(query: string): Promise<NLScreenerResponse> {
+      return apiFetch<NLScreenerResponse>("/v1/screener/nl-translate", {
+        method: "POST",
+        body: { query },
+        token: t,
+      });
+    },
+
     async runScreener(request: ScreenerRequest): Promise<ScreenerResponse> {
       // WHY GET for no-filter case: the POST screener uses INNER JOIN on each
       // filter metric, which excludes instruments that lack that metric's data.
@@ -82,7 +98,7 @@ export function createScreenerApi(t: string | undefined) {
           // PLAN-0052: synthesize entity_id from ticker when the backend
           // doesn't provide one. ADR-F-12 says entity_id is the canonical
           // navigation key for /instruments/[entityId]; the GlobalSearch
-          // + IndexTicker chips already use this `entity-{ticker-lc}`
+          // + IndexStrip chips already use this `entity-{ticker-lc}`
           // convention, so the screener row click now lands on a real
           // page instead of /instruments/undefined.
           // BP-330: entity_id falls back to the raw instrument_id string so
@@ -112,6 +128,18 @@ export function createScreenerApi(t: string | undefined) {
           market_impact_score: num(
             row["market_impact_score"] ?? metrics["market_impact_score"],
           ),
+          // PLAN-0092 Wave C: new default + opt-in metric columns
+          forward_pe: num(row["forward_pe"] ?? metrics["forward_pe"]),
+          dividend_yield: num(row["dividend_yield"] ?? metrics["dividend_yield"]),
+          revenue_growth_yoy: num(row["revenue_growth_yoy"] ?? metrics["revenue_growth_yoy"]),
+          roe: num(row["roe"] ?? metrics["roe"] ?? metrics["return_on_equity"]),
+          operating_margin_ttm: num(
+            row["operating_margin_ttm"] ?? metrics["operating_margin_ttm"],
+          ),
+          enterprise_value_ebitda: num(
+            row["enterprise_value_ebitda"] ?? metrics["enterprise_value_ebitda"],
+          ),
+          avg_volume_30d: num(row["avg_volume_30d"] ?? metrics["avg_volume_30d"]),
         } as unknown as ScreenerResult;
       });
       return {

@@ -57,7 +57,7 @@ class TestFindNearest:
             fetchall_return=[
                 (str(entity_a), 0.12),
                 (str(entity_b), 0.37),
-            ]
+            ],
         )
         repo = SqlalchemyEntityEmbeddingANNRepository(session)
         query_vec = [0.1, 0.2, 0.3]
@@ -123,7 +123,7 @@ class TestFindNearest:
                 [0.1],
                 "fundamentals_ohlcv",
                 entity_types=["financial_instrument"],
-            )
+            ),
         )
 
         call_args = session.execute.call_args

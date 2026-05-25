@@ -41,6 +41,7 @@ from __future__ import annotations
 import json
 import math
 import statistics
+import uuid as _uuid
 from datetime import UTC, date, datetime, timedelta
 from typing import TYPE_CHECKING, Any, cast
 
@@ -252,6 +253,115 @@ def _sortino(returns: list[float]) -> float | None:
         return None
     mean_ret = statistics.fmean(returns)
     return (mean_ret * _TRADING_DAYS_PER_YEAR - _RISK_FREE_RATE) / downside_dev
+
+
+def _calmar(returns: list[float], drawdown_max: float | None) -> float | None:
+    """Calmar = annualised_return / abs(drawdown_max).
+
+    Returns None if drawdown_max is None, zero, or insufficient returns.
+    Calmar measures return per unit of maximum drawdown risk — a portfolio
+    with 20% annualised return and 10% max drawdown has Calmar = 2.0.
+    """
+    if len(returns) < _MIN_RETURNS:
+        return None
+    if drawdown_max is None or drawdown_max == 0.0:
+        return None
+    mean_ret = statistics.fmean(returns)
+    return (mean_ret * _TRADING_DAYS_PER_YEAR) / abs(drawdown_max)
+
+
+def _win_rate(returns: list[float]) -> float | None:
+    """Fraction of positive daily returns.
+
+    Returns None if len(returns) < _MIN_RETURNS. A win rate of 0.58 means
+    58% of trading days had positive portfolio returns — a useful proxy for
+    the consistency of the strategy independent of magnitude.
+    """
+    if len(returns) < _MIN_RETURNS:
+        return None
+    return sum(1 for r in returns if r > 0) / len(returns)
+
+
+def _alpha(portfolio_returns: list[float], spy_returns: list[float]) -> float | None:
+    """Alpha = annualised_portfolio_return - annualised_spy_return.
+
+    Uses the same aligned series as beta so the comparison is apples-to-apples
+    (only dates where both portfolio and SPY have returns are included).
+    Returns None if either series is too short or lengths diverge.
+    """
+    if len(portfolio_returns) < _MIN_RETURNS or len(spy_returns) < _MIN_RETURNS:
+        return None
+    if len(portfolio_returns) != len(spy_returns):
+        return None
+    p_ann = statistics.fmean(portfolio_returns) * _TRADING_DAYS_PER_YEAR
+    s_ann = statistics.fmean(spy_returns) * _TRADING_DAYS_PER_YEAR
+    return p_ann - s_ann
+
+
+def _period_return(values: list[float]) -> float | None:
+    """Total return over the window: ``(final - initial) / initial``.
+
+    Returns ``None`` when fewer than 2 data points are available or the
+    initial value is non-positive (the ratio is undefined / would explode).
+    Sign convention: positive = gain, negative = loss. The frontend renders
+    the value as a percentage.
+    """
+    if len(values) < 2:
+        return None
+    initial = values[0]
+    if initial <= 0:
+        return None
+    return (values[-1] - initial) / initial
+
+
+def _cagr(values: list[float], lookback_days: int) -> float | None:
+    """Compound Annual Growth Rate: ``(V_T / V_0) ** (365.25 / lookback_days) - 1``.
+
+    Uses ``365.25`` (calendar days, accounting for leap years) because the
+    lookback window is expressed in calendar days, not trading days — the
+    ``_TRADING_DAYS_PER_YEAR`` (252) constant is only correct when the
+    exponent base is also in trading days.
+
+    Returns ``None`` when fewer than 2 points are available, the initial
+    value is non-positive, or ``lookback_days <= 0`` (the exponent is
+    undefined). Also returns ``None`` if the final value is non-positive —
+    the math would yield a complex number for the fractional root.
+    """
+    if len(values) < 2 or lookback_days <= 0:
+        return None
+    initial = values[0]
+    final = values[-1]
+    if initial <= 0 or final <= 0:
+        return None
+    # WHY explicit float(): ``a ** b`` widens to Any under mypy's stub for
+    # int/float exponentiation; the cast pins the return type so the helper
+    # stays ``float | None`` without a ``# type: ignore``.
+    return float((final / initial) ** (365.25 / lookback_days) - 1)
+
+
+def _var_95(returns: list[float]) -> float | None:
+    """Historical Value-at-Risk at 95% confidence.
+
+    Returns the empirical 5th-percentile of the daily-return series — i.e.
+    the loss threshold such that on 95% of days the portfolio does no worse
+    than this. Sign convention matches the rest of this file: negative for
+    losses (e.g. ``-0.023`` means "5% of days lose at least 2.3%"). The
+    frontend takes responsibility for formatting (sign flip / abs).
+
+    Returns ``None`` if the series has fewer than ``_MIN_RETURNS`` (10)
+    points — the percentile estimate would be too noisy to publish.
+
+    Implementation note: ``statistics.quantiles(returns, n=20)`` partitions
+    the series into 20 equal-frequency buckets; index ``[0]`` is the 5th
+    percentile. This matches numpy's ``percentile(r, 5, method='inclusive')``
+    closely enough for our purposes and avoids the numpy dependency.
+    """
+    if len(returns) < _MIN_RETURNS:
+        return None
+    # statistics.quantiles with n=20 returns 19 cut points at the 5%, 10%, ..., 95%
+    # marks. Index 0 is the 5th-percentile cut.
+    cuts = statistics.quantiles(returns, n=20, method="inclusive")
+    return cuts[0]
 
 
 def _beta(portfolio_returns: list[float], spy_returns: list[float]) -> float | None:
@@ -476,6 +586,10 @@ async def get_risk_metrics(
     """
     if not getattr(request.state, "user", None):
         raise HTTPException(status_code=401, detail="Authentication required")
+    try:
+        _uuid.UUID(portfolio_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail="Invalid portfolio_id — must be a UUID") from exc
 
     today = datetime.now(tz=UTC).date()
     start = today - timedelta(days=lookback_days)
@@ -528,20 +642,46 @@ async def get_risk_metrics(
         sharpe = _sharpe(portfolio_returns)
         sortino = _sortino(portfolio_returns)
 
-    # 4. Beta — needs aligned-by-date returns from both series.
+    # 4. Beta and Alpha — both need aligned-by-date returns from portfolio + SPY.
     beta_vs_spy: float | None
+    alpha: float | None
+    # WHY track aligned returns outside the if-block: _alpha needs the same
+    # aligned series as _beta. Capturing them here avoids a second alignment call.
+    _aligned_p_returns: list[float] = []
+    _aligned_s_returns: list[float] = []
     if insufficient or not spy_series:
         beta_vs_spy = None
+        alpha = None
     else:
         # Align values, THEN compute returns (so r_t for both series
         # corresponds to the same calendar date pair).
         p_aligned, s_aligned = _align_by_date(portfolio_series, spy_series)
         if len(p_aligned) < _MIN_RETURNS + 1:
             beta_vs_spy = None
+            alpha = None
         else:
-            p_returns = _daily_returns(p_aligned)
-            s_returns = _daily_returns(s_aligned)
-            beta_vs_spy = _beta(p_returns, s_returns)
+            _aligned_p_returns = _daily_returns(p_aligned)
+            _aligned_s_returns = _daily_returns(s_aligned)
+            beta_vs_spy = _beta(_aligned_p_returns, _aligned_s_returns)
+            alpha = _alpha(_aligned_p_returns, _aligned_s_returns)
+
+    # 5. Calmar and Win Rate — derived from portfolio returns alone.
+    # WHY no explicit insufficient guard here: both _calmar and _win_rate
+    # check len(returns) < _MIN_RETURNS internally and return None — and
+    # drawdown_max is already None when insufficient (set in step 3 above).
+    calmar = _calmar(portfolio_returns, drawdown_max)
+    win_rate = _win_rate(portfolio_returns)
+
+    # 5b. ARCH-F002: period_return, cagr, var_95 — derived from the raw
+    # portfolio_values / portfolio_returns series. period_return and cagr
+    # use the full value series (they care about endpoints, not returns)
+    # so they degrade independently — a 2-point series gives a valid
+    # period_return even though every return-based metric is null.
+    # var_95 follows the same _MIN_RETURNS gate as Sharpe/Sortino since
+    # it's a percentile of the return distribution.
+    period_return: float | None = _period_return(portfolio_values)
+    cagr: float | None = _cagr(portfolio_values, lookback_days)
+    var_95: float | None = _var_95(portfolio_returns)
 
     # F-014 / F-015: surface ``as_of``, ``lookback_window``, and a
     # ``data_quality`` block so the frontend knows *why* a metric is
@@ -590,6 +730,14 @@ async def get_risk_metrics(
         sharpe = None
         sortino = None
         beta_vs_spy = None
+        calmar = None
+        win_rate = None
+        alpha = None
+        # ARCH-F002: same suppression discipline for the three new metrics —
+        # the underlying series is contaminated so any value would be misleading.
+        period_return = None
+        cagr = None
+        var_95 = None
     elif insufficient or len(portfolio_returns) < _MIN_RETURNS:
         data_quality_status = "insufficient_data"
     elif not spy_series:
@@ -606,6 +754,16 @@ async def get_risk_metrics(
         "sharpe": sharpe,
         "sortino": sortino,
         "beta_vs_spy": beta_vs_spy,
+        # Wave G additions — computed from already-fetched data (no extra
+        # downstream calls). See docs/designs/0089/04-portfolio-detail.md §3.6.
+        "calmar": calmar,  # annualised_return / abs(drawdown_max); None when no drawdown
+        "win_rate": win_rate,  # fraction of positive daily returns [0, 1]
+        "alpha": alpha,  # portfolio_annualised_return - spy_annualised_return
+        # ARCH-F002 additions — AnalyticsRiskSidebar tiles (VAR 95 / CAGR /
+        # RETURN). Same nulling discipline as the siblings above.
+        "period_return": period_return,  # (final - initial) / initial; None when < 2 points
+        "cagr": cagr,  # (final/initial) ** (365.25 / lookback_days) - 1
+        "var_95": var_95,  # 5th-percentile daily return (negative for losses)
         "n_returns": len(portfolio_returns),
         # When the metric was computed (UTC ISO-8601). Lets the frontend
         # cache-bust intelligently if it ever wants to compare against a

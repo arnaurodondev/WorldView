@@ -191,6 +191,9 @@ class TransactionListItem(BaseModel):
     asset_class: str | None = None
     executed_at: datetime
     external_ref: str | None = None
+    # P2-E: broker-supplied human-readable description (e.g. "Dividend Payment - AAPL").
+    # Not populated for all brokers or activity types. None when omitted by SnapTrade.
+    description: str | None = None
     created_at: datetime
 
     @field_serializer("quantity", "price", "fees")

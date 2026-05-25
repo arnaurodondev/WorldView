@@ -2,7 +2,7 @@
 
 > **Category**: database-orm
 > **Description**: SQLAlchemy ORM, asyncpg, Alembic migrations, PostgreSQL semantics, pgvector, advisory locks, session management, transaction handling
-> **Count**: 42 patterns
+> **Count**: 44 patterns
 > **Back to index**: [BUG_PATTERNS.md](../BUG_PATTERNS.md)
 
 ---
@@ -1476,3 +1476,49 @@ return UUID(str(row[0])) if row else None
 **Regression test**: Add a unit test to `test_canonical_entity_repository.py` that inserts a `financial_instrument` entity then attempts to create an entity with the same lowercase canonical name but `entity_type='company'` — assert the second call returns the existing entity, not a new row.
 
 ---
+
+---
+
+## BP-524: Phantom column in raw SQL INSERT causes silent enrichment failure (DB error swallowed as RetryableError)
+
+**Category**: Database & ORM
+**Services affected**: knowledge-graph (S7)
+
+**Symptom**: All entity enrichment attempts fail. `enriched_at IS NULL` for every entity in `canonical_entities`. Worker logs show `RetryableEnrichmentError` at WARNING level but no SQL error. `enrichment_complete` log events never appear.
+
+**Root cause**: A raw SQL INSERT in `entity_enrichment_adapter.py:seed_relations()` included `is_backfill` in the column list for the `relations` table. This column exists in `relation_evidence_raw` and `claims` but **not** in `relations`. PostgreSQL raises `ProgrammingError: column "is_backfill" of relation "relations" does not exist` on every call. The use case caught this as `SQLAlchemyError` and re-raised it as `RetryableEnrichmentError` without any `logger.error()` call — the actual DB error was completely invisible. The worker incremented retry counters and moved on, burning all attempts per entity without ever writing a row.
+
+**Fix**:
+1. Remove the phantom column from the INSERT: `services/knowledge-graph/src/knowledge_graph/infrastructure/intelligence_db/adapters/entity_enrichment_adapter.py` — delete `is_backfill` from the column list and `false,` from the VALUES clause.
+2. Add `logger.error("enrichment_db_write_failed", entity_id=..., error=..., exc_info=True)` in the `except SQLAlchemyError` handler in `structured_enrichment.py` before re-raising — any future DB error must be visible.
+
+**Prevention**:
+- Raw SQL INSERTs should be cross-checked against the DDL in `intelligence-migrations` before merging. A unit test that mocks the DB and checks the column names against the schema would catch this.
+- Any `except SQLAlchemyError: raise RetryableError(...)` block MUST include `logger.exception()` before re-raising; silent re-wrapping of DB errors is a reliability antipattern.
+- Code review rule: `RetryableError` raises inside except blocks require a log call at `error` or higher.
+
+**Regression test**: `services/knowledge-graph/tests/unit/application/test_structured_enrichment.py::test_db_write_sqlalchemy_error_raises_retryable_with_log`
+
+---
+
+## BP-525: FK column semantic mismatch in contradiction link INSERT (claim_id used where raw_id required)
+
+**Category**: Database & ORM
+**Services affected**: knowledge-graph (S7)
+
+**Symptom**: `relation_contradiction_links` accumulates rows but contradiction data never surfaces in any UI read query. `SELECT COUNT(*) FROM relation_contradiction_links` returns non-zero (e.g. 584) but the Relations panel always shows "No contradictions detected" for every entity.
+
+**Root cause**: `ContradictionBatchWorker.run()` inserted contradiction links with `relation_evidence_id = claim_id` (a UUID from the `claims` table), but `relation_contradiction_links.relation_evidence_id` is a FK to `relation_evidence_raw.raw_id` (a completely different UUID namespace). No DB-level FK constraint enforced this distinction (the table has `NOT NULL` but no `REFERENCES relation_evidence_raw(raw_id)` constraint). All read queries JOIN `relation_contradiction_links rcl` on `relation_evidence_raw rer ON rer.raw_id = rcl.relation_evidence_id` — since stored values were claim UUIDs, no JOIN ever matched and the UI always returned zero contradictions.
+
+**Fix**:
+1. Update `fetch_claims_for_batch_scan` in `contradiction.py` to `LEFT JOIN relation_evidence_raw rer ON rer.claim_id = c.claim_id` and return `rer.raw_id AS relation_evidence_raw_id` in results.
+2. In the worker, extract `raw_id = claim.get("relation_evidence_raw_id")` and skip link insertion if `raw_id is None` (claims with no corresponding `relation_evidence_raw` row).
+3. Pass `relation_evidence_id=raw_id` (not `claim_id`) to `insert_link`.
+4. Add cleanup: `DELETE FROM relation_contradiction_links WHERE relation_evidence_id NOT IN (SELECT raw_id FROM relation_evidence_raw)` at start of each run cycle to remove orphaned pre-fix rows.
+
+**Prevention**:
+- Tables that have logical FK relationships should have DB-level `REFERENCES` constraints so PostgreSQL enforces the semantic intent.
+- Two different UUID columns from different tables (even when both are `UUID NOT NULL`) are semantically distinct — code review must verify which table a UUID parameter references before merging.
+- Unit tests for INSERT operations should assert the FK-column value is of the correct semantic type (raw_id vs claim_id), not just that it is a UUID.
+
+**Regression test**: `services/knowledge-graph/tests/unit/infrastructure/workers/test_contradiction_batch_worker.py::TestInsertLinkUsesRawId`

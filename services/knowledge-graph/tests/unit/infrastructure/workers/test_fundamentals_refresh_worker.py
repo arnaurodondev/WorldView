@@ -170,7 +170,7 @@ class TestFundamentalsRefreshWorkerS3Failure:
 
         llm = AsyncMock()
         llm.embed = AsyncMock(
-            return_value=[EmbeddingOutput(embedding=[0.1] * 10, model_id="nomic-embed-text", dimension=10)]
+            return_value=[EmbeddingOutput(embedding=[0.1] * 10, model_id="nomic-embed-text", dimension=10)],
         )
 
         with patch(_EMB_REPO, return_value=emb_repo):
@@ -370,9 +370,9 @@ def _make_profile_http(status: int = 200, gic_sector: str = "Information Technol
                     "data": {"GicSector": gic_sector, "GicGroup": "Software & Services"},
                     "source": "eodhd",
                     "ingested_at": "2024-10-01T00:00:00",
-                }
+                },
             ],
-        }
+        },
     )
     http = AsyncMock()
     http.get = AsyncMock(return_value=resp)
@@ -391,7 +391,7 @@ def _make_sector_repos(sector_found: bool = True, industry_found: bool = True) -
             _SECTOR_ENTITY_ID
             if typ == "sector" and sector_found
             else (_INDUSTRY_ENTITY_ID if typ == "industry_group" and industry_found else None)
-        )
+        ),
     )
     return relation_repo, evidence_repo, entity_repo
 
@@ -418,8 +418,13 @@ class TestSectorRelationUpsert:
         # Phase 3: write relations (DB)
         count = asyncio.run(
             worker._write_sector_relations(
-                _ENTITY_ID, _ENTITY_ID, profile_data, relation_repo, evidence_repo, entity_repo
-            )
+                _ENTITY_ID,
+                _ENTITY_ID,
+                profile_data,
+                relation_repo,
+                evidence_repo,
+                entity_repo,
+            ),
         )
 
         assert count == 2  # is_in_sector + is_in_industry
@@ -444,8 +449,13 @@ class TestSectorRelationUpsert:
         # Phase 3: write relations (DB) — entity lookup returns None for both
         count = asyncio.run(
             worker._write_sector_relations(
-                _ENTITY_ID, _ENTITY_ID, profile_data, relation_repo, evidence_repo, entity_repo
-            )
+                _ENTITY_ID,
+                _ENTITY_ID,
+                profile_data,
+                relation_repo,
+                evidence_repo,
+                entity_repo,
+            ),
         )
 
         assert count == 0
@@ -462,14 +472,24 @@ class TestSectorRelationUpsert:
         profile_data = asyncio.run(worker._fetch_company_profile_data(http, _ENTITY_ID))
         asyncio.run(
             worker._write_sector_relations(
-                _ENTITY_ID, _ENTITY_ID, profile_data, relation_repo, evidence_repo, entity_repo
-            )
+                _ENTITY_ID,
+                _ENTITY_ID,
+                profile_data,
+                relation_repo,
+                evidence_repo,
+                entity_repo,
+            ),
         )
         profile_data = asyncio.run(worker._fetch_company_profile_data(http, _ENTITY_ID))
         asyncio.run(
             worker._write_sector_relations(
-                _ENTITY_ID, _ENTITY_ID, profile_data, relation_repo, evidence_repo, entity_repo
-            )
+                _ENTITY_ID,
+                _ENTITY_ID,
+                profile_data,
+                relation_repo,
+                evidence_repo,
+                entity_repo,
+            ),
         )
 
         # Advisory-lock upsert is called on every run (idempotency handled at DB level)
@@ -557,7 +577,7 @@ class TestBatchEmbedding:
         llm.embed = AsyncMock(
             return_value=[
                 EmbeddingOutput(embedding=[0.1] * 10, model_id="nomic-embed-text", dimension=10) for _ in range(3)
-            ]
+            ],
         )
 
         with patch(_EMB_REPO, return_value=emb_repo):
@@ -615,3 +635,296 @@ class TestBatchEmbedding:
         assert embed_call_count == 1, f"Expected 1 embed call, got {embed_call_count}"
         # All 3 entities have narratives → 3 upserts.
         assert emb_repo.upsert.await_count == 3
+
+
+# ── PLAN-0093 D-2 (T-D-2-01) — per-ticker exponential backoff tests ──────────
+
+
+class TestFundamentalsRefreshBackoff:
+    """Unit tests for the per-ticker Valkey backoff schedule (T-D-2-01).
+
+    These exercise the pure ``_next_backoff_seconds`` helper plus the
+    instance methods that read/write the Valkey key.  No DB session is
+    actually opened (the helpers are isolated from the run() pipeline).
+    """
+
+    def test_first_404_backs_off_1h(self) -> None:
+        """No prior backoff → escalate to 3600 s (1h)."""
+        from knowledge_graph.infrastructure.workers.fundamentals_refresh import (
+            _BACKOFF_STAGE_1H_S,
+            FundamentalsRefreshWorker,
+        )
+
+        valkey = AsyncMock()
+        valkey.get = AsyncMock(return_value=None)  # no prior key
+        valkey.set = AsyncMock()
+        valkey.delete = AsyncMock()
+
+        sf, _emb_repo = _make_session_factory([])
+        llm = AsyncMock()
+        worker = FundamentalsRefreshWorker(
+            sf,
+            llm,
+            "http://market-data:8003",
+            valkey_client=valkey,
+        )
+
+        new_s = asyncio.run(worker._escalate_backoff("AAPL"))
+        assert new_s == _BACKOFF_STAGE_1H_S
+        # SET key with TTL == 3600 s.
+        valkey.set.assert_awaited_once()
+        call_args = valkey.set.await_args
+        assert call_args.args[0] == "s7:fundamentals:backoff:aapl"
+        assert call_args.args[1] == str(_BACKOFF_STAGE_1H_S)
+        assert call_args.kwargs.get("ex") == _BACKOFF_STAGE_1H_S
+
+    def test_consecutive_errors_escalate_to_7d(self) -> None:
+        """3rd consecutive error → 7d backoff (604800 s)."""
+        from knowledge_graph.infrastructure.workers.fundamentals_refresh import (
+            _BACKOFF_STAGE_1D_S,
+            _BACKOFF_STAGE_1H_S,
+            _BACKOFF_STAGE_7D_S,
+            FundamentalsRefreshWorker,
+            _next_backoff_seconds,
+        )
+
+        # Verify the pure escalation table.
+        assert _next_backoff_seconds(None) == _BACKOFF_STAGE_1H_S
+        assert _next_backoff_seconds(_BACKOFF_STAGE_1H_S) == _BACKOFF_STAGE_1D_S
+        assert _next_backoff_seconds(_BACKOFF_STAGE_1D_S) == _BACKOFF_STAGE_7D_S
+        # Terminal stage stays at 7d (we never escalate past 7d).
+        assert _next_backoff_seconds(_BACKOFF_STAGE_7D_S) == _BACKOFF_STAGE_7D_S
+
+        # End-to-end: starting from "currently at 1d" → escalate sets 7d.
+        valkey = AsyncMock()
+        valkey.get = AsyncMock(return_value=str(_BACKOFF_STAGE_1D_S))
+        valkey.set = AsyncMock()
+
+        sf, _emb_repo = _make_session_factory([])
+        llm = AsyncMock()
+        worker = FundamentalsRefreshWorker(
+            sf,
+            llm,
+            "http://market-data:8003",
+            valkey_client=valkey,
+        )
+
+        new_s = asyncio.run(worker._escalate_backoff("BADTICK"))
+        assert new_s == _BACKOFF_STAGE_7D_S
+        valkey.set.assert_awaited_once()
+        assert valkey.set.await_args.kwargs.get("ex") == _BACKOFF_STAGE_7D_S
+
+    def test_success_resets_backoff(self) -> None:
+        """A successful HTTP fetch → DELETE the backoff key."""
+        from knowledge_graph.infrastructure.workers.fundamentals_refresh import FundamentalsRefreshWorker
+
+        valkey = AsyncMock()
+        valkey.delete = AsyncMock()
+
+        sf, _emb_repo = _make_session_factory([])
+        llm = AsyncMock()
+        worker = FundamentalsRefreshWorker(
+            sf,
+            llm,
+            "http://market-data:8003",
+            valkey_client=valkey,
+        )
+        asyncio.run(worker._reset_backoff("AAPL"))
+        valkey.delete.assert_awaited_once_with("s7:fundamentals:backoff:aapl")
+
+
+# ── PLAN-0093 D-2 (T-D-2-02) — HTTP status-code logging tests ───────────────
+
+
+class TestFundamentalsRefreshStatusLogging:
+    """Verify _fetch_json logs status code + ticker + latency on every call."""
+
+    def test_5xx_logs_at_error(self, capsys: pytest.CaptureFixture[str]) -> None:
+        """503 response → ERROR log with structured fields.
+
+        structlog routes output to stdout in the dev formatter, so we
+        capture via ``capsys`` instead of ``caplog`` (which only sees
+        stdlib-logger records).
+        """
+        from knowledge_graph.infrastructure.workers.fundamentals_refresh import FundamentalsRefreshWorker
+
+        mock_response = MagicMock()
+        mock_response.status_code = 503
+        mock_response.content = b""
+        http = AsyncMock()
+        http.get = AsyncMock(return_value=mock_response)
+
+        result = asyncio.run(
+            FundamentalsRefreshWorker._fetch_json(
+                http,
+                "http://market-data:8003/api/v1/fundamentals/abc",
+                ticker="AAPL",
+            ),
+        )
+        assert result is None
+        captured = capsys.readouterr()
+        # All four assertions must hold to prove the log record is well-formed.
+        combined = captured.out + captured.err
+        assert "market_data_call_server_error" in combined
+        assert "status_code=503" in combined
+        assert "ticker=AAPL" in combined
+        assert "latency_ms=" in combined
+
+
+class TestFundamentalsRefreshFailureObservability:
+    """FIX-LIVE-G (2026-05-24) regression tests.
+
+    INV-LIVE-E mis-diagnosed a 100% ``fundamentals_refresh_market_data_unavailable``
+    failure rate as a JWT/auth issue. The real cause was 99% missing
+    instruments in market-data (data-availability gap). The generic warning
+    hid the actual failure category — making the next investigator chase the
+    wrong hypothesis. These tests pin the observability contract: when a
+    market-data call fails, the structured event must carry a precise
+    ``failure_reason`` that distinguishes ``instrument_lookup_failed`` (data
+    gap) from ``fundamentals_http_404`` (instrument exists but no fundamentals
+    ingested) from ``fundamentals_http_401`` (auth — the hypothesis INV-LIVE-E
+    chased) from ``fundamentals_transport_error`` (network).
+    """
+
+    def test_instrument_lookup_404_emits_failure_reason(self, capsys: pytest.CaptureFixture[str]) -> None:
+        """Lookup 404 → unavailable warning carries ``failure_reason='instrument_lookup_failed'``."""
+        from knowledge_graph.infrastructure.workers.fundamentals_refresh import FundamentalsRefreshWorker
+
+        due_rows = [
+            {
+                "entity_id": _ENTITY_ID,
+                "ticker": "OBSCURE",
+                "canonical_name": "Obscure Ltd",
+                "entity_type": "financial_instrument",
+            },
+        ]
+        sf, emb_repo = _make_session_factory(due_rows)
+
+        lookup_404 = MagicMock()
+        lookup_404.status_code = 404
+        lookup_404.content = b'{"detail": "not found"}'
+        lookup_404.json = MagicMock(return_value={"detail": "not found"})
+
+        http_client = AsyncMock()
+        http_client.get = AsyncMock(return_value=lookup_404)
+        http_client.aclose = AsyncMock()
+
+        llm = AsyncMock()
+
+        with patch(_EMB_REPO, return_value=emb_repo):
+            worker = FundamentalsRefreshWorker(sf, llm, "http://market-data:8003", http_client=http_client)
+            asyncio.run(worker.run())
+
+        captured = capsys.readouterr()
+        combined = captured.out + captured.err
+        # Both the precise reason and the aggregate breakdown must surface.
+        assert "fundamentals_refresh_market_data_unavailable" in combined
+        assert "failure_reason=instrument_lookup_failed" in combined
+        # worker_complete summary must include the aggregate counter.
+        assert "fundamentals_refresh_worker_complete" in combined
+        assert "instrument_lookup_failed" in combined.split("worker_complete", 1)[1]
+
+    def test_fundamentals_http_404_emits_failure_reason_with_status(self, capsys: pytest.CaptureFixture[str]) -> None:
+        """Fundamentals 404 → ``failure_reason='fundamentals_http_404'`` (distinct from lookup miss)."""
+        from knowledge_graph.infrastructure.workers.fundamentals_refresh import FundamentalsRefreshWorker
+
+        due_rows = [
+            {
+                "entity_id": _ENTITY_ID,
+                "ticker": "NEWLIST",
+                "canonical_name": "Newly Listed Co",
+                "entity_type": "financial_instrument",
+            },
+        ]
+        sf, emb_repo = _make_session_factory(due_rows)
+
+        _INSTRUMENT_ID = UUID("01900000-0000-7000-8000-000000099999")
+
+        # Lookup succeeds — the instrument IS in market-data.
+        lookup_ok = MagicMock()
+        lookup_ok.status_code = 200
+        lookup_ok.content = b'{"id": "..."}'
+        lookup_ok.json = MagicMock(return_value={"id": str(_INSTRUMENT_ID), "symbol": "NEWLIST"})
+
+        # All fundamentals/earnings/profile calls return 404 — newly-listed
+        # instrument with no derived data ingested yet.
+        not_found = MagicMock()
+        not_found.status_code = 404
+        not_found.content = b'{"detail": "no data"}'
+        not_found.json = MagicMock(return_value={"detail": "no data"})
+
+        def _route(url: str, **_kwargs: object) -> object:
+            if "/instruments/lookup" in url:
+                return lookup_ok
+            return not_found
+
+        http_client = AsyncMock()
+        http_client.get = AsyncMock(side_effect=_route)
+        http_client.aclose = AsyncMock()
+
+        llm = AsyncMock()
+
+        with patch(_EMB_REPO, return_value=emb_repo):
+            worker = FundamentalsRefreshWorker(sf, llm, "http://market-data:8003", http_client=http_client)
+            asyncio.run(worker.run())
+
+        captured = capsys.readouterr()
+        combined = captured.out + captured.err
+        assert "fundamentals_refresh_market_data_unavailable" in combined
+        assert "failure_reason=fundamentals_http_404" in combined
+
+    def test_fundamentals_http_401_emits_failure_reason_with_status(self, capsys: pytest.CaptureFixture[str]) -> None:
+        """Auth failure (401) → distinct ``failure_reason='fundamentals_http_401'``.
+
+        This is exactly the failure mode INV-LIVE-E *hypothesised*. The test
+        pins that if auth ever really does break, the log will say so
+        explicitly rather than the generic message that started this whole
+        investigation. Future investigators will not have to guess.
+        """
+        from knowledge_graph.infrastructure.workers.fundamentals_refresh import FundamentalsRefreshWorker
+
+        due_rows = [
+            {
+                "entity_id": _ENTITY_ID,
+                "ticker": "AAPL",
+                "canonical_name": "Apple Inc.",
+                "entity_type": "financial_instrument",
+            },
+        ]
+        sf, emb_repo = _make_session_factory(due_rows)
+
+        _INSTRUMENT_ID = UUID("01900000-0000-7000-8000-000000001001")
+        lookup_ok = MagicMock()
+        lookup_ok.status_code = 200
+        lookup_ok.content = b'{"id": "..."}'
+        lookup_ok.json = MagicMock(return_value={"id": str(_INSTRUMENT_ID), "symbol": "AAPL"})
+
+        unauthorized = MagicMock()
+        unauthorized.status_code = 401
+        unauthorized.content = b'{"detail": "invalid JWT"}'
+        unauthorized.json = MagicMock(return_value={"detail": "invalid JWT"})
+
+        def _route(url: str, **_kwargs: object) -> object:
+            if "/instruments/lookup" in url:
+                return lookup_ok
+            return unauthorized
+
+        http_client = AsyncMock()
+        http_client.get = AsyncMock(side_effect=_route)
+        http_client.aclose = AsyncMock()
+
+        llm = AsyncMock()
+
+        with patch(_EMB_REPO, return_value=emb_repo):
+            worker = FundamentalsRefreshWorker(sf, llm, "http://market-data:8003", http_client=http_client)
+            asyncio.run(worker.run())
+
+        captured = capsys.readouterr()
+        combined = captured.out + captured.err
+        assert "fundamentals_refresh_market_data_unavailable" in combined
+        assert "failure_reason=fundamentals_http_401" in combined
+        # The dedicated per-call HTTP log must also surface the 401 status,
+        # so an investigator can immediately see "the request was rejected"
+        # without inferring it from the worker's summary.
+        assert "market_data_call_client_error" in combined
+        assert "status_code=401" in combined

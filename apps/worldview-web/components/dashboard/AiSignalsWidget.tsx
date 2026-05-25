@@ -128,7 +128,11 @@ export function AiSignalsWidget() {
           <SignalRow
             key={signal.signal_id}
             signal={signal}
-            onClick={() => router.push(`/instruments/${signal.entity_id}`)}
+            // PRD-0089 F2 step 11 (§6.6): ticker-first URL — falls back to
+            // UUID when signal is not instrument-scoped.
+            onClick={() =>
+              router.push(`/instruments/${signal.ticker || signal.entity_id}`)
+            }
           />
         ))}
       </div>

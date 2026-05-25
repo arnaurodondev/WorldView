@@ -262,7 +262,9 @@ class TestProvisionalEnrichmentWorkerPostCommitOrdering:
 
         captured_calls: list[dict] = []
 
-        async def _capture_append(topic: str, partition_key: str, payload_avro: bytes) -> None:
+        async def _capture_append(
+            topic: str, partition_key: str, payload_avro: bytes, *, event_id: object = None
+        ) -> None:
             captured_calls.append({"topic": topic, "partition_key": partition_key, "payload_avro": payload_avro})
 
         with (
@@ -308,7 +310,9 @@ class TestProvisionalEnrichmentWorkerPostCommitOrdering:
 
         partition_keys_appended: list[str] = []
 
-        async def _capture_append(topic: str, partition_key: str, payload_avro: bytes) -> None:
+        async def _capture_append(
+            topic: str, partition_key: str, payload_avro: bytes, *, event_id: object = None
+        ) -> None:
             partition_keys_appended.append(partition_key)
 
         # Phase 2: extract returns profiles for both rows
@@ -443,7 +447,7 @@ class TestRetryCapAndFailedStatus:
             patch.object(worker, "_extract_entity_profile", return_value=None),
             patch(
                 # patch where the name is used (already imported at module level)
-                "knowledge_graph.infrastructure.workers.provisional_enrichment.s7_provisional_enrichment_failed_total"
+                "knowledge_graph.infrastructure.workers.provisional_enrichment.s7_provisional_enrichment_failed_total",
             ) as mock_counter,
         ):
             await worker.run()
@@ -468,7 +472,7 @@ class TestRetryCapAndFailedStatus:
         with (
             patch.object(worker, "_extract_entity_profile", return_value=None),
             patch(
-                "knowledge_graph.infrastructure.workers.provisional_enrichment.s7_provisional_enrichment_failed_total"
+                "knowledge_graph.infrastructure.workers.provisional_enrichment.s7_provisional_enrichment_failed_total",
             ) as mock_counter,
         ):
             await worker.run()
@@ -648,7 +652,7 @@ class TestProvisionalEnrichmentSuccessCounter:
             patch.object(worker, "_compute_embedding", return_value=[0.1, 0.2]),
             patch.object(worker, "_persist_enrichment", return_value=_ENTITY_ID),
             patch(
-                "knowledge_graph.infrastructure.workers.provisional_enrichment.s7_provisional_enrichment_success_total"
+                "knowledge_graph.infrastructure.workers.provisional_enrichment.s7_provisional_enrichment_success_total",
             ) as mock_counter,
             patch("knowledge_graph.infrastructure.workers.provisional_enrichment.OutboxRepository") as mock_outbox_cls,
         ):
@@ -670,7 +674,7 @@ class TestProvisionalEnrichmentSuccessCounter:
         with (
             patch.object(worker, "_extract_entity_profile", return_value=None),
             patch(
-                "knowledge_graph.infrastructure.workers.provisional_enrichment.s7_provisional_enrichment_success_total"
+                "knowledge_graph.infrastructure.workers.provisional_enrichment.s7_provisional_enrichment_success_total",
             ) as mock_counter,
         ):
             await worker.run()
@@ -782,6 +786,8 @@ class TestDirtiedEventPayload:
         wire-format bytes (5-byte header + Avro body), not JSON. Test updated
         to decode via deserialize_confluent_avro.
         """
+        from uuid import uuid4
+
         from knowledge_graph.infrastructure.workers.provisional_enrichment_core import (
             _ENTITY_DIRTIED_SCHEMA_PATH,
             _build_dirtied_event,
@@ -790,7 +796,7 @@ class TestDirtiedEventPayload:
         from messaging.kafka.serialization_utils import deserialize_confluent_avro  # type: ignore[import-untyped]
 
         entity_id = _ENTITY_ID
-        raw = _build_dirtied_event(entity_id)
+        raw = _build_dirtied_event(entity_id, event_id=uuid4())
 
         # Must start with Confluent magic byte 0x00
         assert raw[:1] == b"\x00", "Expected Confluent-Avro wire format (magic byte 0x00)"
@@ -1060,7 +1066,7 @@ class TestNoiseFilters:
         mock_response = MagicMock()
         mock_response.raise_for_status = MagicMock()
         mock_response.json.return_value = {
-            "choices": [{"message": {"content": _json.dumps({"is_entity": True, "confidence": 0.5})}}]
+            "choices": [{"message": {"content": _json.dumps({"is_entity": True, "confidence": 0.5})}}],
         }
 
         mock_client = AsyncMock()
@@ -1153,7 +1159,7 @@ class TestNoiseFilters:
 class TestAcloseLifecycle:
     """aclose() must be a no-op when no HTTP client was created, and close when present."""
 
-    @pytest.mark.asyncio
+    @pytest.mark.asyncio()
     async def test_aclose_when_no_client_is_noop(self) -> None:
         """aclose() with no HTTP client created should not raise (noise_api_key='')."""
         from knowledge_graph.infrastructure.workers.provisional_enrichment import (
@@ -1172,7 +1178,7 @@ class TestAcloseLifecycle:
         await worker.aclose()
         assert worker._noise_http_client is None
 
-    @pytest.mark.asyncio
+    @pytest.mark.asyncio()
     async def test_aclose_closes_http_client(self) -> None:
         """aclose() calls aclose() on the shared httpx client when one exists."""
         from knowledge_graph.infrastructure.workers.provisional_enrichment import (
@@ -1203,7 +1209,7 @@ class TestAcloseLifecycle:
 class TestPhase3PerRowSessionIsolation:
     """Per-row session: a failure on one row must not prevent subsequent rows from committing."""
 
-    @pytest.mark.asyncio
+    @pytest.mark.asyncio()
     async def test_second_row_committed_even_if_first_row_persist_fails(self) -> None:
         """Per-row session: a failure on row 1 does not prevent row 2 from committing.
 
@@ -1227,7 +1233,9 @@ class TestPhase3PerRowSessionIsolation:
 
         outbox_partition_keys: list[str] = []
 
-        async def _capture_append(topic: str, partition_key: str, payload_avro: bytes) -> None:
+        async def _capture_append(
+            topic: str, partition_key: str, payload_avro: bytes, *, event_id: object = None
+        ) -> None:
             outbox_partition_keys.append(partition_key)
 
         worker = ProvisionalEnrichmentWorker(factory, AsyncMock())
@@ -1266,7 +1274,7 @@ class TestPhase3PerRowSessionIsolation:
 class TestNoiseLayer2EmptyApiKey:
     """F-QA-202: when noise_classifier_api_key='' Layer 2 must be a no-op (no HTTP)."""
 
-    @pytest.mark.asyncio
+    @pytest.mark.asyncio()
     async def test_layer2_classify_returns_false_with_empty_api_key(self) -> None:
         """Empty noise_api_key → _layer2_classify returns False without creating an HTTP client."""
         from knowledge_graph.infrastructure.workers.provisional_enrichment import (
@@ -1289,7 +1297,7 @@ class TestNoiseLayer2EmptyApiKey:
         # The guard must NOT lazily create a client when the key is empty.
         assert worker._noise_http_client is None
 
-    @pytest.mark.asyncio
+    @pytest.mark.asyncio()
     async def test_run_noise_filters_with_empty_api_key_passes_rows_to_layer3(self) -> None:
         """With empty noise_api_key, non-blocklisted rows pass through to Layer 3.
 
@@ -1327,7 +1335,7 @@ class TestNoiseGatherFailOpen:
     """F-QA-203: asyncio.gather(return_exceptions=True) → wrapper exceptions
     must NOT silently drop rows; they must propagate to Layer 3 instead."""
 
-    @pytest.mark.asyncio
+    @pytest.mark.asyncio()
     async def test_gather_wrapper_exception_recovers_row_via_index(self) -> None:
         """If gather() returns an Exception in slot i, layer2_candidates[i] is
         recovered into the `remaining` (Layer 3) bucket — never dropped.
@@ -1384,7 +1392,7 @@ class TestNoiseLayer1CounterMetric:
     """F-QA-204: s7_provisional_noise_filtered_total.inc() must be called
     once per Layer-1 noise hit (1:1 with blocklist matches)."""
 
-    @pytest.mark.asyncio
+    @pytest.mark.asyncio()
     async def test_layer1_counter_incremented_per_blocklist_row(self) -> None:
         """N blocklist rows → counter.inc() called exactly N times."""
         from knowledge_graph.infrastructure.workers.provisional_enrichment import (
@@ -1407,7 +1415,7 @@ class TestNoiseLayer1CounterMetric:
         ]
 
         with patch(
-            "knowledge_graph.infrastructure.workers.provisional_enrichment.s7_provisional_noise_filtered_total"
+            "knowledge_graph.infrastructure.workers.provisional_enrichment.s7_provisional_noise_filtered_total",
         ) as mock_counter:
             l1, _l2, _remaining = await worker._run_noise_filters(rows)
 

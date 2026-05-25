@@ -30,7 +30,7 @@ const tabsListVariants = cva(
     variants: {
       variant: {
         // Default: elevated muted background pill row (existing behavior)
-        default: "h-9 rounded-[2px] bg-muted p-1",
+        default: "h-[36px] rounded-[2px] bg-muted p-1",
         // Terminal: flat bottom-border line, no background, no padding.
         // WHY: Bloomberg-grade tab bars use an underline indicator, not pills.
         // The border-b on the list creates the full-width baseline; each active
@@ -64,7 +64,7 @@ TabsList.displayName = TabsPrimitive.List.displayName;
 
 const tabsTriggerVariants = cva(
   // WHY text-[11px] not text-xs (12px): finance mandate — all data text 11px for density.
-  "inline-flex items-center justify-center whitespace-nowrap text-[11px] font-medium ring-offset-background transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:pointer-events-none disabled:text-[hsl(var(--disabled-foreground))]",
+  "inline-flex items-center justify-center whitespace-nowrap text-[11px] font-medium ring-offset-background transition-color-only duration-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:pointer-events-none disabled:text-[hsl(var(--disabled-foreground))]",
   {
     variants: {
       variant: {
@@ -72,7 +72,7 @@ const tabsTriggerVariants = cva(
         // WHY data-[state=active]:text-primary: --primary is amber/gold.
         // Amber creates clear visual hierarchy over near-white inactive tabs.
         default:
-          "rounded-sm px-3 py-1.5 data-[state=active]:bg-card data-[state=active]:text-primary",
+          "px-3 py-1.5 data-[state=active]:bg-card data-[state=active]:text-primary",
         // Terminal: underline indicator, no background on active tab.
         // WHY rounded-none: terminal panels have zero border radius.
         // WHY -mb-px: pulls the bottom border of the trigger to overlap the

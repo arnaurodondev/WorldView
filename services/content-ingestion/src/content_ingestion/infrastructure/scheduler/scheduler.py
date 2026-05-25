@@ -8,6 +8,7 @@ processes a given source at any time.
 from __future__ import annotations
 
 import asyncio
+import hashlib
 from typing import TYPE_CHECKING, Any
 
 from content_ingestion.domain.entities import SourceType
@@ -24,6 +25,27 @@ if TYPE_CHECKING:
     from content_ingestion.infrastructure.adapters.base import SourceAdapter
 
 logger = get_logger(__name__)  # type: ignore[no-any-return]
+
+
+def _startup_offset_seconds(source_name: str, interval_seconds: int) -> int:
+    """Deterministic per-source startup offset to spread the thundering herd.
+
+    Returns an int in ``[0, interval_seconds // 4)``. Stable across restarts
+    so a given source always lands in the same slot of the interval window.
+    Uses md5 (with ``usedforsecurity=False``) because we only need a
+    deterministic integer; collision resistance is irrelevant here.
+
+    Mitigates BUG-008 (BP-491): without this, all 4 source adapters (EODHD,
+    SEC EDGAR, Finnhub, NewsAPI) start their poll loops at the same wall
+    clock instant and fire simultaneously on every interval tick, producing
+    a recurring CPU/network spike.
+    """
+    if interval_seconds <= 0:
+        return 0
+    span = max(1, interval_seconds // 4)
+    digest = hashlib.md5(source_name.encode("utf-8"), usedforsecurity=False).hexdigest()
+    return int(digest, 16) % span
+
 
 ADAPTER_REGISTRY: dict[SourceType, type[SourceAdapter]] = {
     SourceType.EODHD: EODHDAdapter,
@@ -116,6 +138,14 @@ class IngestionScheduler:
 
     async def _poll_loop(self, source: Source) -> None:
         """Run the polling loop for a single source with exponential backoff."""
+        # BUG-008 / BP-491: stagger source startups using a deterministic
+        # per-source offset so the 4 adapters don't all tick at the same
+        # wall-clock instant. Only the *initial* delay is offset; subsequent
+        # ticks remain at full ``interval_seconds`` (no per-tick jitter).
+        offset = _startup_offset_seconds(source.name, self._interval_seconds)
+        if offset > 0:
+            logger.info("source_startup_jitter", source=source.name, offset_seconds=offset)
+            await asyncio.sleep(offset)
         failures = 0
         while self._running:
             try:

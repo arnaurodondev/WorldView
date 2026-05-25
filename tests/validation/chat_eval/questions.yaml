@@ -1,0 +1,96 @@
+# PLAN-0093 Wave G-3 — the 8 audit questions in declarative form.
+#
+# Each entry is consumed by harness.load_questions(). The per-question test
+# files (test_q1..q8_*.py) hard-code the prompt themselves for clarity, but
+# this YAML is the single source of truth for ad-hoc replay scripts and the
+# aggregate scoring test that iterates over all 8 in one pass.
+#
+# ground_truth_assertions is an *advisory* dict — most fields drive the
+# rubric in grading.py (e.g. ``required_tools`` → tools_called check). The
+# per-question test files are still the authoritative gate.
+
+- id: q1
+  prompt: "Who are Apple's main competitors?"
+  ground_truth_assertions:
+    required_tools_any_of: [compare_entities, get_entity_intelligence]
+    must_mention_at_least_n: 2
+    must_mention_candidates: [Samsung, Microsoft, Google, Huawei, Xiaomi]
+    forbid_hallucination: true
+    min_verdict: MARGINAL
+
+- id: q2
+  prompt: "Show me the latest news on MSTR — what should I know?"
+  ground_truth_assertions:
+    require_http_200: true
+    min_distinct_tools: 2
+    must_mention_any_of: [Bitcoin, BTC]
+    min_verdict: MARGINAL
+
+- id: q3
+  prompt: "Give me a brief history of Tim Cook — where did he work before Apple?"
+  ground_truth_assertions:
+    required_tools_any_of: [get_entity_intelligence, traverse_graph]
+    must_mention_all_of: [Apple]
+    should_mention_any_of: [Compaq, IBM]
+    forbid_duplicate_paragraphs: true
+    min_verdict: MARGINAL
+
+- id: q4
+  prompt: "Compare the revenue trajectories of NVIDIA and AMD over the last 4 quarters."
+  ground_truth_assertions:
+    required_tools_any_of: [get_fundamentals_history]
+    forbid_amd_revenue_above_billions: 15.0
+    forbid_nvda_revenue_above_billions: 100.0
+    fixture: q4_ground_truth.yaml
+    min_verdict: USEFUL
+
+- id: q5
+  prompt: "What macroeconomic events are likely to affect Tesla in the next 30 days?"
+  ground_truth_assertions:
+    require_http_200: true
+    required_tools_any_of:
+      - get_economic_calendar
+      - get_temporal_events
+      - get_entity_event_exposures
+    min_distinct_tools: 2
+    min_verdict: MARGINAL
+
+- id: q6
+  prompt: "Screen for AI semiconductor companies with market cap above $50B and positive YoY revenue growth."
+  ground_truth_assertions:
+    required_tools_any_of: [screen_universe]
+    min_ticker_mentions: 3
+    expected_ticker_candidates: [NVDA, AMD, AVGO, TSM, INTC, MU, QCOM, MRVL]
+    forbid_invented_products: [MI300 design wins]
+    min_verdict: MARGINAL
+
+- id: q7
+  prompt: "Are there any contradictions in the recent narrative around Tesla?"
+  ground_truth_assertions:
+    require_http_200: true
+    required_tools_any_of: [get_contradictions]
+    must_mention_any_of: [Tesla]
+    allow_empty_finding: true
+    min_verdict: MARGINAL
+
+- id: q8
+  prompt: "How is OpenAI connected to Microsoft? Show me the relationship paths."
+  ground_truth_assertions:
+    required_tools_any_of: [traverse_graph, get_entity_paths]
+    must_mention_all_of: [OpenAI, Microsoft]
+    min_verdict: USEFUL
+
+# PLAN-0093 Phase 5 QA-2 Gap 1 — premise-contradiction refusal.
+# A10 embeds a false M&A premise ("Apple acquired Anthropic last quarter")
+# that no tool can confirm. The agent must refuse rather than confabulate
+# a reason from pretraining. Verdict = USEFUL only when the answer
+# contains one of the canonical refusal phrases.
+- id: a10
+  prompt: "Why did Apple acquire Anthropic last quarter? What was the strategic rationale?"
+  ground_truth_assertions:
+    require_http_200: true
+    must_mention_any_of:
+      - "cannot find evidence"
+      - "no evidence"
+      - "I cannot confirm"
+    min_verdict: MARGINAL

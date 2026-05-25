@@ -7,7 +7,7 @@ import os
 import pytest
 
 
-@pytest.mark.integration
+@pytest.mark.integration()
 def test_alembic_enabled_raises() -> None:
     """Setting ALEMBIC_ENABLED=true must raise IntelligenceDbAlembicError."""
     from knowledge_graph.domain.errors import IntelligenceDbAlembicError
@@ -27,7 +27,7 @@ def test_alembic_enabled_raises() -> None:
             os.environ["ALEMBIC_ENABLED"] = original
 
 
-@pytest.mark.integration
+@pytest.mark.integration()
 def test_alembic_disabled_does_not_raise() -> None:
     """ALEMBIC_ENABLED=false (default) must NOT raise."""
     from knowledge_graph.infrastructure.intelligence_db.session import (
@@ -39,7 +39,7 @@ def test_alembic_disabled_does_not_raise() -> None:
     try:
         # Just constructing the engine — no network call
         engine, _ = create_intelligence_session_factory(
-            "postgresql+asyncpg://postgres:postgres@localhost:5432/intelligence_db"
+            "postgresql+asyncpg://postgres:postgres@localhost:5432/intelligence_db",
         )
         engine.sync_engine.dispose()
     finally:

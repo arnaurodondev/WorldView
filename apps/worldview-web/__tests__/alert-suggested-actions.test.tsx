@@ -106,7 +106,7 @@ describe("AlertDetailSheet — Suggested Actions", () => {
     expect(screen.getByRole("button", { name: /Open in chat/i })).toBeEnabled();
   });
 
-  it("View instrument navigates to /instruments/{entity_id}", async () => {
+  it("View instrument navigates to /instruments/{ticker}", async () => {
     const user = userEvent.setup();
     render(
       <AlertDetailSheet
@@ -119,7 +119,11 @@ describe("AlertDetailSheet — Suggested Actions", () => {
       { wrapper },
     );
     await user.click(screen.getByRole("button", { name: /View instrument/i }));
-    expect(pushMock).toHaveBeenCalledWith("/instruments/entity-aapl");
+    // PRD-0089 F2 step 11 (§6.6): the alert handler now prefers `alert.ticker`
+    // (or payload.ticker) over `entity_id` so the URL is human-readable. The
+    // fixture sets ticker="AAPL", so the expected path swaps from the legacy
+    // `/instruments/entity-aapl` UUID form to `/instruments/AAPL`.
+    expect(pushMock).toHaveBeenCalledWith("/instruments/AAPL");
   });
 
   it("Open in chat navigates to /chat with entity_id + starter params", async () => {

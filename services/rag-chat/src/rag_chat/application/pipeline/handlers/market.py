@@ -35,6 +35,57 @@ log = structlog.get_logger(__name__)  # type: ignore[no-any-return]
 _TOOL_RESULT_MAX_CHARS = 4000
 
 
+# FIX-LIVE-DD (2026-05-25): Q6 ("AI semiconductors above $50B") graded USELESS
+# because the LLM fabricated market caps ($5.23T for NVDA, $742B for AMD,
+# $842B for MU). The screener output rendered ``market_cap`` as a raw
+# 13-digit integer (e.g. ``MCap: 5230000000000``). 8B-parameter models
+# struggle to read scientific-magnitude integers and tend to substitute
+# plausible-looking trillion/billion strings from pretraining. The
+# numeric-grounding validator then flags those as unsupported, the rewrite
+# prompt tells the LLM "you can't verify these", and the model collapses
+# into a flat refusal.
+#
+# Fix: render market caps in BOTH raw and human-friendly form. The raw
+# integer stays so the validator's tolerance-based matching (MARKET_CAP ±
+# 0.5%) still works against `$5.23T` (= 5.23e12) extractions; the
+# pre-formatted `$X.XXT` string gives the LLM a copy-paste-ready label so
+# it doesn't need to convert digits in its head.
+#
+# Why $X.XXT/B/M cutoffs (not just T): the screener returns mid-caps too
+# (e.g. ARM at $226B). A single trillion-only label would read as
+# "$0.23T" — fine numerically but ugly. Use T for >= 1e12, B for >= 1e9,
+# M for >= 1e6, otherwise plain dollars. Two decimals everywhere keeps
+# the format predictable for the LLM.
+def _format_market_cap_value(value: Any) -> str | None:
+    """Render a numeric market cap as ``$X.XXT/B/M``.
+
+    Returns ``None`` for non-numeric input so callers can decide whether to
+    fall back to ``str(value)`` (preserving legacy pre-formatted strings
+    like ``"3T"`` that some upstream APIs already return).
+    """
+    if value is None:
+        return None
+    # If upstream already gave us a string with a magnitude suffix
+    # (legacy/test path: ``"3T"``, ``"$2.8T"``), trust it verbatim.
+    if isinstance(value, str):
+        return None
+    try:
+        num = float(value)
+    except (TypeError, ValueError):
+        return None
+    if num <= 0:
+        return None
+    abs_n = abs(num)
+    sign = "-" if num < 0 else ""
+    if abs_n >= 1e12:
+        return f"{sign}${abs_n / 1e12:.2f}T"
+    if abs_n >= 1e9:
+        return f"{sign}${abs_n / 1e9:.2f}B"
+    if abs_n >= 1e6:
+        return f"{sign}${abs_n / 1e6:.2f}M"
+    return f"{sign}${abs_n:,.0f}"
+
+
 class MarketHandler(ToolHandler):
     """Handles price, fundamentals, screener, movers, and calendar tools.
 
@@ -229,6 +280,18 @@ class MarketHandler(ToolHandler):
                 for key in ("market_cap", "pe_ratio", "revenue", "gross_profit", "eps"):
                     val = funda.get(key)
                     if val is not None:
+                        # FIX-LIVE-DD: same problem as the screener — raw
+                        # 13-digit market caps in compare_entities output
+                        # invite the LLM to hallucinate plausible trillion/
+                        # billion labels. Pre-format numeric values for the
+                        # cap-style metrics (market_cap, revenue, gross_profit)
+                        # while leaving ratios/EPS untouched (those are
+                        # already at human scale).
+                        if key in ("market_cap", "revenue", "gross_profit"):
+                            formatted = _format_market_cap_value(val)
+                            if formatted is not None:
+                                lines.append(f"  {key.replace('_', ' ').title()}: {formatted} (raw: {val})")
+                                continue
                         lines.append(f"  {key.replace('_', ' ').title()}: {val}")
             lines.append("")
 
@@ -262,6 +325,7 @@ class MarketHandler(ToolHandler):
         market_cap_max: float | None = None,
         pe_ratio_max: float | None = None,
         sector: str | None = None,
+        industry: str | None = None,
         region: str | None = None,
         limit: int = 20,
     ) -> list[RetrievedItem]:
@@ -275,25 +339,63 @@ class MarketHandler(ToolHandler):
             log.warning("tool_handler_missing_port", tool="screen_universe", port="s3_brief")
             return []
 
-        filters: dict = {}
-        if market_cap_min is not None:
-            filters["market_cap_min"] = market_cap_min
-        if market_cap_max is not None:
-            filters["market_cap_max"] = market_cap_max
-        if pe_ratio_max is not None:
-            filters["pe_ratio_max"] = pe_ratio_max
+        # FIX-LIVE-T (2026-05-25): The S3 ``POST /v1/fundamentals/screen`` endpoint
+        # expects ``ScreenRequest`` with a ``filters: list[ScreenFilterRequest]``
+        # body — top-level ``sector``/``industry``/``market_cap_min`` were silently
+        # ignored as unknown pydantic fields, so the call effectively ran the
+        # "no-filter" path and returned 50 unrelated tickers (Healthcare,
+        # Industrials, …). FIX-LIVE-Q's allowlist hint could not help because the
+        # LLM never saw the right tickers in the result. Build a proper filter
+        # list here. WHY ``market_capitalization`` (and not ``market_cap_usd``):
+        # the screener metric whitelist is keyed off the DB metric column, where
+        # cap is stored as ``market_capitalization``; ``market_cap_usd`` is only a
+        # display-side alias from the /screen/fields endpoint.
+        filter_list: list[dict[str, Any]] = []
+
+        # ``ScreenFilterRequest.sector``/``industry`` are *per-filter* fields
+        # (not body-level) and only one filter can carry them — replicate them
+        # on every entry so the WHERE clause AND-combines correctly.
+        scope: dict[str, str] = {}
         if sector:
-            filters["sector"] = sector
-        if region:
-            filters["region"] = region
+            scope["sector"] = sector
+        # FIX-LIVE-M (2026-05-24): GICS industry filter — more selective than sector.
+        if industry:
+            scope["industry"] = industry
+
+        if market_cap_min is not None or market_cap_max is not None:
+            entry: dict[str, Any] = {"metric": "market_capitalization", **scope}
+            if market_cap_min is not None:
+                entry["min_value"] = market_cap_min
+            if market_cap_max is not None:
+                entry["max_value"] = market_cap_max
+            filter_list.append(entry)
+
+        if pe_ratio_max is not None:
+            filter_list.append({"metric": "pe_ratio", "max_value": pe_ratio_max, **scope})
+
+        # If the LLM only supplied sector/industry (no numeric thresholds) we
+        # still need ONE filter entry so the sector/industry predicates bind —
+        # screener body-level fields don't exist. Use a no-op cap floor of 0.
+        if not filter_list and scope:
+            filter_list.append({"metric": "market_capitalization", "min_value": 0, **scope})
+
         # WHY clamp limit: prevent the LLM from requesting huge result sets that
-        # would overflow the context window budget.
-        filters["limit"] = max(1, min(int(limit), 100))
+        # would overflow the context window budget. Hard upper bound is the
+        # ScreenRequest ``le=200`` constraint.
+        clamped_limit = max(1, min(int(limit), 100))
+
+        # ``region`` is not a ScreenFilterRequest field, so it is dropped here
+        # (no DB column for it). Track it in the log so we notice if the LLM
+        # routinely supplies it and we need to add support upstream.
+        if region:
+            log.info("tool_arg_dropped", tool="screen_universe", arg="region", value=region)
+
+        payload: dict[str, Any] = {"filters": filter_list, "limit": clamped_limit}
 
         t0 = time.monotonic()
         try:
             raw = await asyncio.wait_for(
-                self._s3_brief.screen_instruments(filters),
+                self._s3_brief.screen_instruments(payload),
                 timeout=self._timeout,
             )
         except Exception as e:
@@ -317,8 +419,19 @@ class MarketHandler(ToolHandler):
                 row = f"  {ticker}"
                 if name:
                     row += f" — {name}"
-                if mc:
-                    row += f" | MCap: {mc}"
+                if mc is not None and mc != "":
+                    # FIX-LIVE-DD: render BOTH raw and formatted. The raw
+                    # integer is kept for the numeric-grounding validator
+                    # (tolerance-matches `$5.23T` ↔ ``5230000000000``);
+                    # the ``MCap`` (formatted) label is what the LLM
+                    # actually copies into its answer.
+                    formatted = _format_market_cap_value(mc)
+                    if formatted is not None:
+                        row += f" | MCap: {formatted} (raw: {mc})"
+                    else:
+                        # Legacy/string path: upstream already gave a
+                        # display-ready label like ``"3T"`` — keep it.
+                        row += f" | MCap: {mc}"
                 if pe:
                     row += f" | P/E: {pe}"
                 lines.append(row)

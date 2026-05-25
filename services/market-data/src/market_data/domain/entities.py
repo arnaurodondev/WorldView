@@ -78,6 +78,11 @@ class Instrument:
     industry: str | None = None
     country: str | None = None
     currency_code: str | None = None
+    # FIX-LIVE-P: month (1-12) of the fiscal-year end. Needed to compute fiscal
+    # quarter labels for companies whose fiscal year does not align with the
+    # calendar (NVDA=1, AAPL=9, MSFT=6). None when unknown — label code falls
+    # back to calendar-year quarters and emits a structured warning.
+    fiscal_year_end_month: int | None = None
 
 
 @dataclass

@@ -378,6 +378,15 @@ async def commit_transaction(
         watermark.content_hash = new_sha256
 
         if data_changed:
+            # BP-492 / BUG-009: propagate is_backfill so downstream consumers can
+            # skip alert fan-out / cache hot-paths during historical replay.
+            # We derive the flag the same way the task_repository does
+            # (services/market-ingestion/src/market_ingestion/infrastructure/db/
+            #  repositories/task_repository.py:83): a task that carries an
+            # explicit range_start was scheduled as a backfill; an incremental
+            # live-tick task leaves range_start unset (the worker only sets
+            # range_end at execution time).
+            is_backfill = task.range_start is not None
             event = MarketDatasetFetched(
                 provider=str(task.provider),
                 dataset_type=str(task.dataset_type),
@@ -392,6 +401,7 @@ async def commit_transaction(
                 canonical_schema_version=1,
                 row_count=row_count,
                 task_id=task.id,
+                is_backfill=is_backfill,
             )
             await uow.outbox.add(events=[event])
         else:

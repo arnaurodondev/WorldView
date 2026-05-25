@@ -20,7 +20,12 @@ from fastapi import FastAPI, Request, Response
 from starlette.middleware.base import BaseHTTPMiddleware
 
 from messaging.valkey.client import ValkeyClient  # type: ignore[import-untyped]
-from observability import configure_logging, get_logger, register_error_handlers  # type: ignore[import-untyped]
+from observability import (  # type: ignore[import-untyped]
+    assert_app_env_or_die,
+    configure_logging,
+    get_logger,
+    register_error_handlers,
+)
 from observability.metrics import (  # type: ignore[import-untyped]
     add_prometheus_middleware,
     create_metrics,
@@ -75,6 +80,15 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         json=settings.log_json,
     )
     log = get_logger("rag_chat.app")  # type: ignore[no-any-return]
+
+    # 1b. Boot-time security guard (PLAN-0093 Wave A-1 / F-LOG-JWT-001).
+    # Refuses to start when JWT verification is disabled AND APP_ENV is unset.
+    # This belongs BEFORE every other lifespan step so a misconfigured
+    # container can never start accepting requests, even on the health endpoint.
+    assert_app_env_or_die(
+        service_name=settings.service_name,
+        internal_jwt_skip_verification=settings.internal_jwt_skip_verification,
+    )
 
     # 2. Tracing — conditional
     if settings.otlp_endpoint:
@@ -159,7 +173,6 @@ def _wire_orchestrator(app: FastAPI, settings: RagChatSettings, valkey_client: V
     from rag_chat.application.caching.completion_cache import CompletionCache
     from rag_chat.application.caching.rate_limiter import RateLimiter
     from rag_chat.application.pipeline.circuit_breaker import SourceCircuitBreaker
-    from rag_chat.application.pipeline.fusion import FusionPipeline, GraphEnricher
     from rag_chat.application.pipeline.hyde_expander import HydeExpander
     from rag_chat.application.pipeline.intent_classifier import (
         DeepInfraIntentClassifier,
@@ -209,6 +222,11 @@ def _wire_orchestrator(app: FastAPI, settings: RagChatSettings, valkey_client: V
             DeepInfraCompletionAdapter(
                 api_key=_deepinfra_api_key,
                 model=settings.completion_model,  # RAG_CHAT_COMPLETION_MODEL
+                # FIX-LIVE-X (2026-05-25): explicit tool-call budget. Previously
+                # bound to the 30s default; Q6's second turn (Qwen3-235B with a
+                # 5-tool message stack) timed out before HTTP dispatch and the
+                # error surfaced as a blank `llm_first_turn_failed` to the user.
+                chat_with_tools_timeout=settings.deepinfra_tool_call_timeout_seconds,
             )
         )
     if _openrouter_api_key:
@@ -367,7 +385,7 @@ def _wire_orchestrator(app: FastAPI, settings: RagChatSettings, valkey_client: V
         model=settings.deepinfra_classification_model,
     )
 
-    _plan_builder = RetrievalPlanBuilder(cypher_enabled=settings.cypher_enabled)
+    _plan_builder = RetrievalPlanBuilder()
     _hyde = HydeExpander(
         llm_provider=providers[0],
         embedding_client=embedding_client,
@@ -430,8 +448,6 @@ def _wire_orchestrator(app: FastAPI, settings: RagChatSettings, valkey_client: V
         s6_client=s6,
         hyde=_hyde,
         embedder=embedding_client,
-        graph_enricher=GraphEnricher(),
-        fusion=FusionPipeline(),
         reranker=reranker,
         llm_chain=llm_chain,
         persistence=ChatPersistenceUseCase(),
@@ -444,7 +460,11 @@ def _wire_orchestrator(app: FastAPI, settings: RagChatSettings, valkey_client: V
     # tool handlers (search_documents, get_entity_graph, traverse_graph, etc.)
     # execute against real S6/S7/S1 adapters instead of returning [] silently.
     # The s6/s7/s3/s1 instances are created above in this function scope.
-    from rag_chat.application.pipeline.tool_executor import ToolExecutorFactory, build_default_registry
+    from rag_chat.application.pipeline.tool_executor import (
+        ToolExecutorFactory,
+        build_default_registry,
+        validate_registry_parity,
+    )
     from rag_chat.infrastructure.clients.brief_archive_read_adapter import BriefArchiveReadAdapter
     from rag_chat.infrastructure.clients.s3_brief_client import S3BriefClient
     from rag_chat.infrastructure.clients.s7_intelligence_client import S7IntelligenceClient
@@ -484,6 +504,27 @@ def _wire_orchestrator(app: FastAPI, settings: RagChatSettings, valkey_client: V
     app.state.s10_client = s10_client  # PLAN-0082 Wave B
 
     tool_registry = build_default_registry()
+
+    # PLAN-0093 QA P0-1 — startup manifest ↔ handler parity check.
+    # Fail-fast: ToolRegistryDriftError is intentionally NOT caught here so a
+    # misconfigured deploy cannot serve traffic with a silent dormant tool
+    # (this is the GraphEnricher follow-up: a tool listed in the YAML but
+    # missing a handler would otherwise only surface mid-conversation when
+    # the LLM tried to call it).
+    from rag_chat.application.metrics.prometheus import rag_tool_registry_size
+
+    _tool_registry_sizes = validate_registry_parity(tool_registry)
+    rag_tool_registry_size.labels(kind="manifest").set(_tool_registry_sizes["manifest"])
+    rag_tool_registry_size.labels(kind="handled").set(_tool_registry_sizes["handled"])
+    # WHY local logger: _wire_orchestrator does not have the lifespan-scoped
+    # ``log`` binding, so we obtain a module logger here.  structlog.get_logger
+    # is the project-mandated entry point (R10 — never stdlib logging).
+    get_logger("rag_chat.app").info(  # type: ignore[no-any-return]
+        "tool_registry_loaded",
+        manifest_count=_tool_registry_sizes["manifest"],
+        handled_count=_tool_registry_sizes["handled"],
+    )
+
     tool_executor_factory = ToolExecutorFactory(
         registry=tool_registry,
         s3=s3,

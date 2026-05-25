@@ -70,7 +70,7 @@ class AlertErrorBoundary extends Component<{ children: ReactNode }, ErrorBoundar
         <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/90">
           <div className="text-center text-foreground">
             <AlertTriangle className="mx-auto h-8 w-8 text-destructive" />
-            <p className="mt-2 text-sm">Critical alert (display error)</p>
+            <p className="mt-2 text-[14px]">Critical alert (display error)</p>
           </div>
         </div>
       );
@@ -154,7 +154,7 @@ function FlashOverlayContent({ alert, onDismiss }: FlashOverlayContentProps) {
           <div className="flex items-start justify-between">
             <div className="flex items-center gap-2">
               <AlertTriangle className="h-5 w-5 text-destructive" />
-              <span id="flash-alert-title" className="text-sm font-semibold uppercase tracking-wider text-destructive">
+              <span id="flash-alert-title" className="text-[14px] font-semibold uppercase tracking-wider text-destructive">
                 {alert.severity} Alert
               </span>
             </div>
@@ -169,7 +169,7 @@ function FlashOverlayContent({ alert, onDismiss }: FlashOverlayContentProps) {
           </div>
 
           {/* Alert message */}
-          <p id="flash-alert-message" className="mt-3 text-base font-medium text-foreground">
+          <p id="flash-alert-message" className="mt-3 text-[16px] font-medium text-foreground">
             {alert.message}
           </p>
 

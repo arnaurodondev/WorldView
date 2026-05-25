@@ -105,15 +105,17 @@ function deriveSentiment(
 
 export function ArticleCard({ article }: ArticleCardProps) {
   // WHY isLightTier: LIGHT routing tier = low-relevance/low-signal article. De-emphasised
-  // at 60% opacity so traders can focus on HIGH/STANDARD signal articles. The italic source
+  // at 60% opacity so traders can focus on DEEP/MEDIUM signal articles. The italic source
   // badge reinforces "lower confidence" routing without hiding the article entirely.
   // WHY ?? false: RankedArticle.routing_tier is string | null; null → not LIGHT.
   const isLightTier = (article.routing_tier ?? '') === "LIGHT";
 
-  // WHY isHighTier: HIGH routing tier = top-signal article that passed deep processing.
+  // WHY isHighTier: DEEP routing tier = top-signal article that passed deep processing.
   // These deserve a "TOP" pill so analysts can spot them in a long feed at a glance,
   // the same way Bloomberg terminals flag "FLASH" stories in a different colour.
-  const isHighTier = (article.routing_tier ?? '') === "HIGH";
+  // PLAN-0093 C-1: backend emits DEEP (not HIGH); this check used to look for the
+  // wrong string so the TOP pill never rendered.
+  const isHighTier = (article.routing_tier ?? '') === "DEEP";
 
   const source = getSource(article);
   const summary = getSummary(article);
@@ -161,7 +163,7 @@ export function ArticleCard({ article }: ArticleCardProps) {
       {/* ── Top row: source + routing tier pill + timestamp ────────────────── */}
       <div className="mb-0 flex items-center justify-between gap-2">
 
-        {/* Left cluster: source badge + optional HIGH-tier pill */}
+        {/* Left cluster: source badge + optional DEEP-tier pill */}
         <div className="flex shrink-0 items-center gap-1.5">
           {/* Source badge — secondary variant for neutral, muted appearance */}
           <Badge variant="secondary" className={cn(
@@ -171,9 +173,9 @@ export function ArticleCard({ article }: ArticleCardProps) {
             {source}
           </Badge>
 
-          {/* WHY "TOP" pill only for HIGH tier: STANDARD articles are the baseline —
+          {/* WHY "TOP" pill only for DEEP tier: MEDIUM articles are the baseline —
               no badge needed. LIGHT articles are already de-emphasised via opacity.
-              Only HIGH deserves a positive signal to make it stand out in the feed.
+              Only DEEP deserves a positive signal to make it stand out in the feed.
               Using primary/15 background instead of a solid colour keeps it readable
               in both light and dark themes without clashing with the score badge. */}
           {isHighTier && (

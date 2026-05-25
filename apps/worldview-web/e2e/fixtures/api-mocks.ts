@@ -285,9 +285,8 @@ export async function installStrictApiMocks(
 ): Promise<void> {
   const mocks = getStrictEndpointMocks(apiStatus);
 
-  // Register all endpoint mocks in parallel — order doesn't matter because
-  // Playwright matches routes in registration order (first match wins),
-  // and our patterns are specific enough to not overlap.
+  // Register all endpoint mocks. Playwright 1.36+ uses LIFO (last registered wins).
+  // Order matters only when patterns overlap; these are specific enough not to overlap.
   for (const mock of mocks) {
     await page.route(mock.pattern, (route) => {
       void route.fulfill({

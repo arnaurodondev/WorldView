@@ -84,7 +84,7 @@ RETURNING
                     retry_count=int(row[5]) if row[5] is not None else 0,
                     error_text=str(row[6]) if row[6] else None,
                     created_at=row[7] if row[7] else datetime.now(tz=UTC),
-                )
+                ),
             )
         return jobs
 

@@ -64,6 +64,9 @@ def _build_intelligence_factories(
     """
     _check_alembic_guard()
 
+    # BP-502: application_name surfaces this service in pg_stat_activity for
+    # connection debugging; pool_recycle=300 defends against stale DNS sockets.
+    _connect_args: dict[str, object] = {"server_settings": {"application_name": "nlp-pipeline"}}
     write_engine = create_async_engine(
         settings.intelligence_database_url.get_secret_value(),
         echo=False,
@@ -71,6 +74,8 @@ def _build_intelligence_factories(
         pool_pre_ping=True,
         pool_size=settings.intelligence_db_pool_size,
         max_overflow=settings.intelligence_db_max_overflow,
+        pool_recycle=300,
+        connect_args=_connect_args,
     )
     write_factory: async_sessionmaker[AsyncSession] = async_sessionmaker(
         bind=write_engine,
@@ -94,6 +99,8 @@ def _build_intelligence_factories(
             pool_pre_ping=True,
             pool_size=settings.intelligence_db_pool_size_read,
             max_overflow=settings.intelligence_db_max_overflow_read,
+            pool_recycle=300,
+            connect_args=_connect_args,
         )
         read_factory = async_sessionmaker(
             bind=read_engine,
@@ -125,6 +132,8 @@ def create_intelligence_session_factory(
         pool_pre_ping=True,
         pool_size=10,
         max_overflow=20,
+        pool_recycle=300,
+        connect_args={"server_settings": {"application_name": "nlp-pipeline"}},
     )
     factory: async_sessionmaker[AsyncSession] = async_sessionmaker(
         bind=engine,

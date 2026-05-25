@@ -214,8 +214,34 @@ class NarrativeRefreshWorker:
         entity_type: str,
         session: AsyncSession,
     ) -> str:
-        """Build deterministic narrative text for an entity."""
+        """Build narrative text for an entity.
+
+        BP-542 fix: prefers LLM-generated prose from entity_narrative_versions
+        (via current_narrative_version_id) over the deterministic claims template.
+        The claims template is the fallback when no LLM narrative exists or when
+        the stored narrative is shorter than 60 chars (name-only stub).
+        """
         from sqlalchemy import text as sql_text
+
+        # BP-542: check for LLM narrative before building the claims stub.
+        # NarrativeGenerationWorker writes to entity_narrative_versions and sets
+        # current_narrative_version_id; this worker previously ignored that path.
+        llm_result = await session.execute(
+            sql_text("""
+SELECT env.narrative_text
+FROM canonical_entities ce
+JOIN entity_narrative_versions env ON env.version_id = ce.current_narrative_version_id
+WHERE ce.entity_id = :entity_id
+  AND env.narrative_text IS NOT NULL
+LIMIT 1
+"""),
+            {"entity_id": str(entity_id)},
+        )
+        llm_row = llm_result.fetchone()
+        if llm_row is not None:
+            llm_text = str(llm_row[0])
+            if len(llm_text) > 60:
+                return llm_text
 
         parts = [f"{canonical_name} ({entity_type})"]
 

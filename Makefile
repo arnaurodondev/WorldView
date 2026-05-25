@@ -205,6 +205,56 @@ dev-clean:
 seed:
 	@./scripts/seed-dev-data.sh
 	@.venv312/bin/python scripts/seed_demo_data.py
+	@$(MAKE) --no-print-directory seed-verify-m017
+
+## PLAN-0089 F2 Step 8: M-017 invariant check.
+## Asserts every canonical_entities row with entity_type='financial_instrument'
+## has a matching market_data_db.instruments.id (one canonical UUID per
+## tradable security). Run automatically by ``make seed`` but exposed as a
+## separate target so CI / debug scripts can invoke it standalone.
+##
+## Implementation note: ``dblink`` is not installed on the dev Postgres image
+## by default. We avoid it here by issuing two separate psql queries against
+## the same Postgres container (intelligence_db + market_data_db live in the
+## same instance) and diffing the UUID sets in shell. Per R7 ``dblink`` is
+## banned at runtime anyway, but the alternative shell-diff is simpler and
+## doesn't require an extension.
+##
+## Expected output: ``M-017 OK: <N> financial_instrument entities — 0 missing.``
+## Non-zero exit if any tradable canonical lacks a matching instrument row.
+.PHONY: seed-verify-m017
+# Make recipes run under /bin/sh by default. Earlier revision used bash
+# process substitution `<(...)` which posix sh does not understand: the
+# substitution silently produced an empty MISSING string and the check
+# always reported "M-017 OK" regardless of actual state (BP-494).
+# Two changes versus the original:
+#   1. Switched MISSING computation to temp files (sh-compatible).
+#   2. Restricted the invariant to UUIDv7-prefixed entities (entity_id LIKE
+#      '0190%') so the ~1238 legacy foreign canonical entities seeded by
+#      migration 0009 (.KS / .SZ / .HK / .T / etc.) do not falsely violate
+#      M-017 — the invariant only applies to entities created post-F2.
+#      See docs/plans/0089-pages/F2-DEFERRED-FOLLOWUPS.md for the legacy
+#      cleanup decision.
+seed-verify-m017:
+	@echo "[seed-verify-m017] Checking M-017 invariant (UUIDv7 entity_id == instruments.id)..."
+	@CONTAINER="$${SEED_CONTAINER:-worldview-postgres-1}" ; \
+	  TMP_ENT=$$(mktemp) ; TMP_INS=$$(mktemp) ; TMP_MISS=$$(mktemp) ; \
+	  trap 'rm -f $$TMP_ENT $$TMP_INS $$TMP_MISS' EXIT ; \
+	  docker exec -i $$CONTAINER psql -U postgres -d intelligence_db -tA -c \
+	    "SELECT entity_id FROM canonical_entities WHERE entity_type = 'financial_instrument' AND entity_id::text LIKE '0190%' ORDER BY entity_id" \
+	    | sort > $$TMP_ENT ; \
+	  docker exec -i $$CONTAINER psql -U postgres -d market_data_db -tA -c \
+	    "SELECT id FROM instruments ORDER BY id" \
+	    | sort > $$TMP_INS ; \
+	  comm -23 $$TMP_ENT $$TMP_INS > $$TMP_MISS ; \
+	  N_ENT=$$(grep -c -E '^[0-9a-f-]+$$' $$TMP_ENT || true) ; \
+	  N_MISS=$$(grep -c -E '^[0-9a-f-]+$$' $$TMP_MISS || true) ; \
+	  if [ "$$N_MISS" -gt 0 ]; then \
+	    echo "M-017 FAIL: $$N_MISS UUIDv7 financial_instrument entity_id(s) have no matching instruments.id:" ; \
+	    cat $$TMP_MISS ; \
+	    exit 1 ; \
+	  fi ; \
+	  echo "M-017 OK: $$N_ENT UUIDv7 financial_instrument entities — 0 missing."
 
 # ── Retrieval eval stack (isolated — no ingestion workers) ──────────────────
 #

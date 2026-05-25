@@ -2,7 +2,7 @@
   "type": "record",
   "name": "EntityCanonicalCreatedV1",
   "namespace": "com.worldview.intelligence",
-  "doc": "Emitted by S6 Block 13E when a provisional entity is resolved into a canonical entity. S7 consumes this to create entity profile embeddings and unblock held relation_evidence_raw rows.",
+  "doc": "Emitted by S6 Block 13E when a provisional entity is resolved into a canonical entity. S7 consumes this to create entity profile embeddings and unblock held relation_evidence_raw rows. PLAN-0089 F2 audit (2026-05-20): confirmed `entity_type` field is already present (the canonical discriminator per option-c). No `kind` field used — `entity_type` IS the discriminator. Forward-compat default of 'unknown' added so older v1 producers that lack the field can still publish.",
   "fields": [
     {"name": "event_id", "type": "string", "doc": "UUIDv7 event identifier"},
     {"name": "event_type", "type": "string", "default": "entity.canonical.created", "doc": "Event type discriminator"},
@@ -10,7 +10,7 @@
     {"name": "occurred_at", "type": "string", "doc": "ISO-8601 UTC timestamp"},
     {"name": "entity_id", "type": "string", "doc": "Newly created canonical entity UUID"},
     {"name": "canonical_name", "type": "string", "doc": "Primary entity name"},
-    {"name": "entity_type", "type": "string", "doc": "organization | person | financial_instrument | location | commodity | index | currency | government_body | regulatory_body | financial_institution | macroeconomic_indicator"},
+    {"name": "entity_type", "type": "string", "default": "unknown", "doc": "PLAN-0089 F2 discriminator (per _DECISIONS.md §A DISCUSS-2 option-c): the canonical entity kind. Allowed values (11): financial_instrument | person | event | sector | industry | macro_indicator | place | product | index | currency | unknown. Stored as string (NOT Avro enum) so adding new values is forward-compatible. Older value set (organization | person | financial_instrument | location | commodity | index | currency | government_body | regulatory_body | financial_institution | macroeconomic_indicator) remains accepted at the wire level — F2 reconciliation happens in the consumer."},
     {"name": "provisional_queue_id", "type": "string", "doc": "ID from provisional_entity_queue that triggered creation"},
     {"name": "alias_texts", "type": {"type": "array", "items": "string"}, "default": [], "doc": "Initial alias set generated for the entity"},
     {"name": "correlation_id", "type": ["null", "string"], "default": null}

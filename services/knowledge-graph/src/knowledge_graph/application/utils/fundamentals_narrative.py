@@ -24,7 +24,7 @@ def build_fundamentals_narrative(
     week_52_high: float | None = None,
     week_52_low: float | None = None,
     description: str | None = None,
-) -> str:
+) -> str | None:
     """Build a deterministic embeddable financial narrative.
 
     Args:
@@ -42,8 +42,9 @@ def build_fundamentals_narrative(
 
     Returns:
     -------
-        A single UTF-8 string suitable for embedding.  Same inputs always
-        produce identical output.
+        A single UTF-8 string suitable for embedding, or ``None`` when no
+        financial data is available (prevents placeholder text from polluting
+        the ANN index — callers should skip embedding for ``None`` results).
 
     """
     parts: list[str] = []
@@ -83,8 +84,9 @@ def build_fundamentals_narrative(
         parts.append(f"Price: ${price:.2f}.")
 
     if len(parts) == 1:
-        # Only the header — no financial data provided
-        parts.append("No financial data available.")
+        # Only the header — no financial data provided. Return None so callers
+        # skip embedding rather than storing a placeholder in the ANN index.
+        return None
 
     return "\n".join(parts)
 

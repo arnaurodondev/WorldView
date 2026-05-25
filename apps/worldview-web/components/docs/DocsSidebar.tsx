@@ -44,7 +44,7 @@ export function DocsSidebar({ sections }: DocsSidebarProps) {
       // own scroll container instead of pushing the page out of view.
       // QA iter-1 (design POLISH): top-16 matches the actual sticky nav
       // height (~52-56px) — was top-20 = 80px = 24px dead band.
-      className="sticky top-16 max-h-[calc(100vh-5rem)] overflow-y-auto pr-4 text-sm"
+      className="sticky top-16 max-h-[calc(100vh-5rem)] overflow-y-auto pr-4 text-[14px]"
     >
       {sections.map((section) => (
         <div key={section.heading} className="mb-6">

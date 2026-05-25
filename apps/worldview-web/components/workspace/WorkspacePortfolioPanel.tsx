@@ -23,21 +23,37 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { createGateway } from "@/lib/gateway";
 import { useAuth } from "@/hooks/useAuth";
 import { formatMarketCap } from "@/lib/utils";
+// QA A-F-001/F-002 (2026-05-21): central key factory + shared selection
+// helper so this widget joins the same cache namespace as PortfolioSwitcher
+// and respects the chip's active-portfolio selection.
+import { qk } from "@/lib/query/keys";
+import { useResolvedPortfolioId } from "@/hooks/useResolvedPortfolioId";
 
 export function WorkspacePortfolioPanel() {
   const { accessToken } = useAuth();
 
+  // QA A-F-001 (2026-05-21): central qk.portfolios.list() so this widget
+  // shares the cache with the PortfolioSwitcher chip and usePortfolioMetrics
+  // (was firing a duplicate /v1/portfolios request).
   const { data: portfolios, isLoading: portfoliosLoading } = useQuery({
-    queryKey: ["portfolios"],
+    queryKey: qk.portfolios.list(),
     queryFn: () => createGateway(accessToken).getPortfolios(),
     enabled: !!accessToken,
     staleTime: 5 * 60_000,
   });
 
-  const firstPortfolioId = portfolios?.[0]?.portfolio_id;
+  // QA A-F-002 (2026-05-21): respect the chip selection (was picking
+  // portfolios[0] unconditionally).
+  const firstPortfolioId = useResolvedPortfolioId(portfolios);
 
+  // BP-497 / HR-060 (2026-05-21): use qk.portfolios.holdingsByPortfolio
+  // — the existing "flat legacy-shape" key documented in lib/query/keys.ts
+  // that usePortfolioMetrics already consumes. Same cache entry across
+  // both consumers; no duplicate /v1/portfolios/{id}/holdings fetch.
   const { data: holdingsResp, isLoading: holdingsLoading } = useQuery({
-    queryKey: ["holdings", firstPortfolioId],
+    queryKey: firstPortfolioId
+      ? qk.portfolios.holdingsByPortfolio(firstPortfolioId)
+      : ["holdings", "no-portfolio"],
     queryFn: () => createGateway(accessToken).getHoldings(firstPortfolioId!),
     enabled: !!accessToken && !!firstPortfolioId,
     staleTime: 5 * 60_000,
@@ -107,17 +123,14 @@ export function WorkspacePortfolioPanel() {
               ? "text-negative"
               : "text-muted-foreground";
 
-        return (
-          // WHY Link (not div): clicking a holding row should navigate to the instrument
-          // detail page. A real <a> element gives keyboard navigation, screen-reader
-          // semantics, and middle-click / open-in-new-tab for free.
-          // WHY h-[22px]: §0.2 row height mandate. py-0: row height controls vertical
-          // spacing entirely. px-2: 8px horizontal gutter per §0.2 cell padding spec.
-          <Link
-            key={h.holding_id}
-            href={`/instruments/${h.entity_id}`}
-            className="flex items-center gap-2 px-2 h-[22px] hover:bg-muted/40 text-foreground"
-          >
+        // PRD-0089 F2 §6.6: post-F2 URL slug is the ticker only. A bare UUID
+        // slug would 404 (the middleware case-canonicalises + alias-redirects
+        // but does NOT resolve UUIDs). Holdings on a real portfolio always
+        // carry a ticker; if for some reason ticker is empty, render a
+        // non-link row so we never serve a guaranteed-404 URL.
+        const rowClass = "flex items-center gap-2 px-2 h-[22px] hover:bg-muted/40 text-foreground";
+        const rowContent = (
+          <>
             {/* Ticker — monospace, left-aligned */}
             <span className="w-14 shrink-0 font-mono text-[11px] tabular-nums font-medium text-foreground">
               {h.ticker}
@@ -138,6 +151,27 @@ export function WorkspacePortfolioPanel() {
                 ? `${unrealizedPnl >= 0 ? "+" : ""}${unrealizedPnl.toFixed(0)}`
                 : "—"}
             </span>
+          </>
+        );
+        if (!h.ticker) {
+          return (
+            <div key={h.holding_id} className={rowClass}>
+              {rowContent}
+            </div>
+          );
+        }
+        return (
+          // WHY Link (not div): clicking a holding row should navigate to the instrument
+          // detail page. A real <a> element gives keyboard navigation, screen-reader
+          // semantics, and middle-click / open-in-new-tab for free.
+          // WHY h-[22px]: §0.2 row height mandate. py-0: row height controls vertical
+          // spacing entirely. px-2: 8px horizontal gutter per §0.2 cell padding spec.
+          <Link
+            key={h.holding_id}
+            href={`/instruments/${h.ticker}`}
+            className={rowClass}
+          >
+            {rowContent}
           </Link>
         );
       })}

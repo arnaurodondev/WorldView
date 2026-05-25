@@ -33,7 +33,19 @@ class DeepInfraCompletionAdapter:
         model:       Model ID override (default: deepseek-ai/DeepSeek-R1-Distill-Llama-70B).
                      Configurable via RAG_CHAT_COMPLETION_MODEL env var.
         http_client: Optional pre-built httpx.AsyncClient for testing.
-        timeout:     Request timeout in seconds (default 30).
+        timeout:     Generic request timeout in seconds (default 30); used for
+                     stream() and the per-request httpx client floor.
+        chat_with_tools_timeout: Per-call timeout for chat_with_tools (default
+                     90). FIX-LIVE-X: with the Qwen3-235B completion model and
+                     a multi-tool context (screen_universe + N fundamentals
+                     results in the same message stack), the second-turn
+                     `chat_with_tools` call regularly exceeds 30s — it timed
+                     out *before* hitting the HTTP layer (asyncio.TimeoutError
+                     with empty str()), which surfaced as the cryptic
+                     ``provider_chat_with_tools_failed`` log + empty
+                     ``llm_first_turn_failed`` error in Q6.  Default raised to
+                     90s; configurable via RAG_CHAT_DEEPINFRA_TOOLCALL_TIMEOUT.
+        thinking:   Whether to enable Qwen3 "thinking" mode on streaming calls.
     """
 
     name = "deepinfra"
@@ -45,16 +57,28 @@ class DeepInfraCompletionAdapter:
         *,
         http_client: httpx.AsyncClient | None = None,
         timeout: float = 30.0,
+        chat_with_tools_timeout: float | None = None,
         thinking: bool = True,
     ) -> None:
         self._api_key = api_key
         self._model = model
         self.model_id: str = model  # expose for orchestrator model tracking
         self._timeout = timeout
+        # FIX-LIVE-X (2026-05-25): split timeout so the heavier chat-with-tools
+        # second turn isn't bound by the 30s stream() default.  If the caller
+        # didn't override, fall back to max(timeout, 90s).
+        self._chat_with_tools_timeout = (
+            chat_with_tools_timeout if chat_with_tools_timeout is not None else max(timeout, 90.0)
+        )
         self._thinking = thinking
+        # WHY use the larger of the two as the httpx floor: a low httpx
+        # timeout would clip chat_with_tools BEFORE asyncio.wait_for could
+        # honour the per-call budget.  We always size the client to the
+        # widest budget the adapter knows about.
+        _client_timeout = max(self._timeout, self._chat_with_tools_timeout)
         self._client = http_client or httpx.AsyncClient(
             headers={"Authorization": f"Bearer {api_key}"},
-            timeout=timeout,
+            timeout=httpx.Timeout(_client_timeout),
         )
 
     async def stream(
@@ -116,10 +140,14 @@ class DeepInfraCompletionAdapter:
             try:
                 args = json.loads(fn.get("arguments", "{}"))
             except (json.JSONDecodeError, ValueError):
+                # PLAN-0093 QA-7 security: do not log the raw arguments string —
+                # it may carry user-entered text from the LLM-generated tool args
+                # (e.g. `search_documents.query`). Log only length + tool name.
+                _raw = fn.get("arguments", "") or ""
                 log.warning(  # type: ignore[no-any-return]
                     "tool_call_bad_json",
-                    name=fn.get("name", ""),
-                    raw=fn.get("arguments", "")[:100],
+                    name=fn.get("name", "unknown"),
+                    raw_length=len(_raw),
                 )
                 args = {}
             result.append(
@@ -185,7 +213,18 @@ class DeepInfraCompletionAdapter:
                 usage=usage,
             )
 
-        return await asyncio.wait_for(_do_request(), timeout=self._timeout)
+        # FIX-LIVE-X (2026-05-25): wrap TimeoutError so the failure surfaces
+        # with a non-empty error message in provider_chat_with_tools_failed
+        # logs (str(TimeoutError()) is "" by default — which is why the Q6
+        # failure was a black box until this fix).
+        try:
+            return await asyncio.wait_for(_do_request(), timeout=self._chat_with_tools_timeout)
+        except TimeoutError as exc:
+            raise TimeoutError(
+                f"deepinfra chat_with_tools timed out after {self._chat_with_tools_timeout}s "
+                f"(model={self._model}, n_messages={len(messages)}, "
+                f"n_tools={len(tools) if tools else 0})"
+            ) from exc
 
     async def stream_chat(
         self,

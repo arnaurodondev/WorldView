@@ -30,15 +30,18 @@ router = APIRouter(prefix="/v1")
 async def find_similar_entities(request: Request) -> Any:
     """Proxy POST /api/v1/entities/similar → S7 Knowledge Graph.
 
-    Public endpoint — issues a system JWT for backend authentication.
+    Requires user authentication — consistent with all other /entities/* routes.
     S7 returns 404 (entity not found), 422 (no embedding), 503 (pgvector unavailable).
     """
+    if not getattr(request.state, "user", None):
+        raise HTTPException(status_code=401, detail="Authentication required")
     body = await request.body()
     clients = _clients(request)
+    headers = _auth_headers(request)
     resp = await clients.knowledge_graph.post(
         "/api/v1/entities/similar",
         content=body,
-        headers={"Content-Type": "application/json", **_system_headers(request)},
+        headers={"Content-Type": "application/json", **headers},
     )
     return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
 
@@ -257,6 +260,27 @@ async def get_news_entity(entity_id: str, request: Request) -> Any:
     resp = await clients.nlp_pipeline.get(
         f"/api/v1/entities/{entity_id}/articles",
         params=dict(request.query_params),
+        headers=headers,
+    )
+    return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
+
+
+# ── Article Impact History (PLAN-0091 Wave A-2, T-A-2-01) ───────────────────
+
+
+@router.get("/articles/{article_id}/impact-history")
+async def get_article_impact_history(article_id: UUID, request: Request) -> Any:
+    """Proxy GET /api/v1/articles/{article_id}/impact-windows → S6 NLP Pipeline.
+
+    Returns the 4-window (t0/t1/t2/t5) price-impact history for the article.
+    Auth required — the S6 endpoint enforces tenant scoping via X-Internal-JWT.
+    """
+    if not getattr(request.state, "user", None):
+        raise HTTPException(status_code=401, detail="Authentication required")
+    headers = _auth_headers(request)
+    clients = _clients(request)
+    resp = await clients.nlp_pipeline.get(
+        f"/api/v1/articles/{article_id}/impact-windows",
         headers=headers,
     )
     return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")

@@ -59,6 +59,8 @@ def _mock_settings():
         # F-013: default changed to True in production; keep False in tests so
         # the SecurityHeadersMiddleware does not inject HSTS on HTTP test responses.
         cookie_secure=False,
+        # NL screener DeepInfra key — needed for POST /v1/screener/nl-translate tests.
+        deepinfra_api_key="test-deepinfra-key",
     )
 
 
@@ -78,6 +80,13 @@ def _build_app(settings, inject_user_from_bearer: bool = False):
     mock_valkey.incr = AsyncMock(return_value=1)
     mock_valkey.expire = AsyncMock(return_value=True)
     mock_valkey.ping = AsyncMock(return_value=True)  # readyz probe
+    # WHY AsyncMock for get/set: cache routes await these; plain MagicMock raises
+    # TypeError when awaited, which the fail-open except catches — technically a
+    # coincidental pass, but it masks the real cache-miss vs cache-hit distinction.
+    # Default: cache miss (None) so tests exercise the S7 proxy path by default.
+    mock_valkey.get = AsyncMock(return_value=None)
+    mock_valkey.set = AsyncMock(return_value=True)
+    mock_valkey.set_nx = AsyncMock(return_value=True)  # rate-limiting path
     application.state.valkey = mock_valkey
     application.state.oidc_config = None  # no real OIDC; OIDCAuthMiddleware skips
     application.state.rsa_private_key = None

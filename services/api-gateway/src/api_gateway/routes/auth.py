@@ -46,7 +46,7 @@ _KNOWN_OIDC_ERRORS: frozenset[str] = frozenset(
         "login_required",
         "account_selection_required",
         "consent_required",
-    }
+    },
 )
 
 # SEC-003: Only alphanumeric characters plus safe punctuation are allowed in

@@ -994,6 +994,26 @@ services:
       retries: 3
       start_period: 5s
 
+  nlp-pipeline-entity-refresh-consumer:
+    # REQ-003 / TASK-W0-06 — see prod compose for the full rationale.
+    build:
+      context: ../..
+      dockerfile: services/nlp-pipeline/Dockerfile
+    profiles: [intelligence-test, all]
+    depends_on:
+      kafka-init:
+        condition: service_completed_successfully
+    env_file:
+      - ../../services/nlp-pipeline/configs/docker.env
+    command: ["python", "-m", "nlp_pipeline.infrastructure.messaging.consumers.entity_refresh_consumer_main"]
+    restart: on-failure
+    healthcheck:
+      test: ["CMD", "python", "-c", "import sys; sys.exit(0)"]
+      interval: 15s
+      timeout: 3s
+      retries: 3
+      start_period: 5s
+
   nlp-pipeline-price-impact-worker:
     build:
       context: ../..

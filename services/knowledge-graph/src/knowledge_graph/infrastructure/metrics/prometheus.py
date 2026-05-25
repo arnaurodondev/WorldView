@@ -14,7 +14,7 @@ below and wired at these sites:
 
 from __future__ import annotations
 
-from prometheus_client import Counter, Histogram
+from prometheus_client import Counter, Gauge, Histogram
 
 # Worker 13J metrics: defined in application/metrics.py and re-exported here so
 # infrastructure/workers/structured_enrichment_worker.py can import without a
@@ -108,6 +108,16 @@ s7_age_sync_duration_seconds = Histogram(
     buckets=(1, 5, 10, 30, 60, 120, 300, 600),
 )
 
+# PLAN-0093 B-1 (T-B-1-03): per-phase stall detector.  Incremented when a sync
+# phase reports synced_count == 0 even though the source table has rows newer
+# than the watermark — indicates a silent sync failure (e.g. AGE label missing,
+# Cypher MERGE silently no-op'ing).
+s7_age_sync_phase_stalled_total = Counter(
+    "s7_age_sync_phase_stalled_total",
+    "Times an AGE sync phase reported 0 rows synced despite the source table having newer rows.",
+    ["phase"],
+)
+
 s7_insider_transactions_relations_total = Counter(
     "s7_insider_transactions_relations_total",
     "Total has_executive relations upserted by Worker 13D-8, by ticker.",
@@ -165,4 +175,33 @@ s7_provisional_noise_llm_filtered_total = Counter(
 kg_evidence_quality_gated_total = Counter(
     "kg_evidence_quality_gated_total",
     "Relation evidence rows blocked by quality gate (low confidence + low density).",
+)
+
+
+# ── PLAN-0093 Sub-Plan D — KG refresh workers (path-insight + summary) ────────
+
+# T-D-1-02 — gauge for path_insights rows still awaiting an LLM explanation.
+# A row is "pending" when llm_explanation IS NULL AND computed_at is older than
+# 1 hour (so we are not counting freshly-seeded rows that are about to be
+# explained on the next sweep).  Updated once per PathExplanationBatchWorker
+# cycle.  Alert rule: > 100 for 30 min.
+path_insight_explanation_pending_total = Gauge(
+    "path_insight_explanation_pending_total",
+    "Count of path_insights rows with llm_explanation IS NULL older than 1 hour.",
+)
+
+# T-D-3-01 — gauge for relations missing a fresh summary.  A relation is in
+# the backlog when summary_stale=true OR no current row in relation_summaries.
+# Updated once per SummaryWorker cycle.  Alert rule: > 1000 for 1 h.
+relation_summary_backlog = Gauge(
+    "relation_summary_backlog",
+    "Count of relations whose summary is stale or missing entirely.",
+)
+
+# T-D-3-03 — counter for relations that have failed summary generation
+# repeatedly (>= 3 attempts) without success.  Lets us identify pathological
+# rows (e.g. zero evidence) for tombstoning.
+summary_worker_stuck_relations_total = Counter(
+    "summary_worker_stuck_relations_total",
+    "Relations whose summary generation has failed >= 3 consecutive times.",
 )

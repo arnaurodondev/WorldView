@@ -31,6 +31,7 @@ from rag_chat.application.models.briefing_context import (
     QuoteSummary,
     WatchlistItem,
 )
+from rag_chat.application.ports.upstream_clients import ChunkSearchRequest, EnrichedChunkResult
 from rag_chat.domain.errors import ContextGatheringError, EntityNotFoundError
 
 if TYPE_CHECKING:
@@ -223,14 +224,20 @@ class BriefingContextGatherer:
             coros.append(_empty_dict())
             coros.append(_empty_dict())
 
-        # S6 entity articles
+        # S6 entity articles (news)
         coros.append(self._fetch_entity_articles(entity_id))
 
         # S7 events for this entity
         coros.append(self._fetch_events([entity_id], days=30))
 
+        # S6 ANN chunk search — SEC filings, earnings transcripts, analyst reports.
+        # Uses entity_graph.canonical_name as the query so the ANN index can
+        # surface semantically relevant sections even without a user query.
+        # source_types excludes news (those are covered by _fetch_entity_articles).
+        coros.append(self._fetch_entity_chunks(entity_id, entity_graph.canonical_name))
+
         results = await asyncio.gather(*coros, return_exceptions=True)
-        quote_result, fundamentals_result, articles_result, events_result = results
+        quote_result, fundamentals_result, articles_result, events_result, chunks_result = results
 
         # ── 4. Map results ───────────────────────────────────────────────────
         quote: QuoteSummary | None = None
@@ -272,6 +279,13 @@ class BriefingContextGatherer:
         else:
             events = events_result  # type: ignore[assignment]
 
+        # R9 safe degradation: chunk search failure → empty list, no crash.
+        relevant_chunks: list[EnrichedChunkResult] = []
+        if isinstance(chunks_result, BaseException):
+            log.warning("briefing_chunk_search_failed", entity_id=entity_id, error=str(chunks_result))
+        else:
+            relevant_chunks = chunks_result  # type: ignore[assignment]
+
         # ── 5. Assemble BriefingContext ──────────────────────────────────────
         return BriefingContext.for_instrument(
             entity_id=entity_id,
@@ -281,6 +295,7 @@ class BriefingContextGatherer:
             active_alerts=[],
             quotes=quotes,
             recent_events=events,
+            relevant_chunks=relevant_chunks,
             gathered_at=datetime.now(tz=UTC),
         )
 
@@ -398,6 +413,66 @@ class BriefingContextGatherer:
             )
             for e in results
         ]
+
+    async def _fetch_entity_chunks(
+        self,
+        entity_id: str,
+        entity_name: str,
+    ) -> list[EnrichedChunkResult]:
+        """ANN chunk search for an entity — two-stage filtered/unfiltered fallback.
+
+        Stage 1 (filtered): search with entity_ids=[entity_id] so only chunks
+        that explicitly mention this entity are returned.  This is the preferred
+        result because it prevents generic entity names (e.g. "Capital", "General")
+        from pulling in unrelated documents.
+
+        Stage 2 (unfiltered fallback): if the filtered search returns fewer than
+        3 results the entity embedding may be too sparse for the HNSW index to
+        find enough candidates — e.g. Apple chunks are only ~0.6% of the index.
+        In that case we fall back to an unfiltered ANN search using the entity
+        name as the query text; the high min_score (0.55) ensures relevance.
+
+        No source_type filter in either stage: HNSW only scores top_k candidates
+        globally, so sparse source types (sec_edgar ≈ 2%) never appear in those
+        candidates when a WHERE clause eliminates all HNSW candidates first.
+        """
+        fallback_threshold = 3  # minimum results before we prefer filtered
+
+        # Stage 1: entity-filtered search — avoids cross-entity pollution for
+        # generic names like "General" (General Motors) or "Capital" (fund names).
+        filtered_request = ChunkSearchRequest(
+            query_text=entity_name,
+            top_k=12,
+            min_score=0.55,
+            granularity="chunk",
+            include_entities=False,
+            search_type="ann",
+            entity_ids=[UUID(entity_id)],
+        )
+        filtered_results = await self._s6.search_chunks(filtered_request)
+
+        if len(filtered_results) >= fallback_threshold:
+            # Enough entity-specific chunks found — use them without pollution risk.
+            return filtered_results
+
+        # Stage 2: fallback to unfiltered search when entity embeddings are sparse.
+        # Logs at debug level so it's visible during tuning without alarming on-call.
+        log.debug(
+            "entity_chunk_search_fallback_unfiltered",
+            entity_id=entity_id,
+            filtered_count=len(filtered_results),
+            threshold=fallback_threshold,
+        )
+        unfiltered_request = ChunkSearchRequest(
+            query_text=entity_name,
+            top_k=12,
+            min_score=0.55,
+            granularity="chunk",
+            include_entities=False,
+            search_type="ann",
+            # No entity_ids — relies on min_score threshold for relevance.
+        )
+        return await self._s6.search_chunks(unfiltered_request)
 
     def _map_entity_graph(
         self,

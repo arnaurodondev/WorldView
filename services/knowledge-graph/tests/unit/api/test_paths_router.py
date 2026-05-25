@@ -119,7 +119,7 @@ class TestGetEntityPathsRoute:
         api_app.dependency_overrides[get_entity_paths_uc] = lambda: mock_uc  # type: ignore[union-attr]
 
         resp = await api_client.get(  # type: ignore[union-attr]
-            f"/api/v1/entities/{_ENTITY_ID}/paths?min_hops=4&max_hops=3"
+            f"/api/v1/entities/{_ENTITY_ID}/paths?min_hops=4&max_hops=3",
         )
 
         assert resp.status_code == 422
@@ -136,7 +136,7 @@ class TestGetEntityPathsRoute:
         api_app.dependency_overrides[get_entity_paths_uc] = lambda: mock_uc  # type: ignore[union-attr]
 
         resp = await api_client.get(  # type: ignore[union-attr]
-            f"/api/v1/entities/{_ENTITY_ID}/paths?limit=51"
+            f"/api/v1/entities/{_ENTITY_ID}/paths?limit=51",
         )
 
         assert resp.status_code == 422

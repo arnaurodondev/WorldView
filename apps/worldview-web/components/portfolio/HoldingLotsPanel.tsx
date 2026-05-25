@@ -41,6 +41,29 @@ export interface HoldingLotsPanelProps {
   holdings: Holding[];
   /** Live quote map; used to compute per-lot unrealised on the server. */
   quotes: BatchQuoteResponse["quotes"];
+  /**
+   * Optional instrument_id to pre-select on mount.
+   *
+   * WHY optional (not required): backward-compatible addition. Existing callers
+   * (HoldingsTab, analytics page default) do not pass this prop and fall through
+   * to the largest-position heuristic. The analytics page wires ?ticker from the
+   * context menu "View Tax Lots" action so the right-clicked holding is immediately
+   * visible rather than requiring the user to re-select from the dropdown.
+   */
+  defaultInstrumentId?: string | null;
+  /**
+   * Layout variant controlling column density.
+   *
+   * WHY variant prop instead of a duplicate component: the wide and narrow
+   * layouts share all logic (query, selection, formatting). Only the column
+   * set differs — narrow drops "Days Held" for use in constrained side-panels
+   * where horizontal space is limited (e.g. the analytics drawer). Defaulting
+   * to "wide" preserves every existing call site unchanged.
+   *
+   * wide  (default): Open Date | Qty | Cost/sh | Days | LT? | Unrealised P&L
+   * narrow:          Open Date | Qty | Cost/sh |       LT? | Unrealised P&L
+   */
+  variant?: "wide" | "narrow";
 }
 
 // ── Component ────────────────────────────────────────────────────────────────
@@ -49,12 +72,23 @@ export function HoldingLotsPanel({
   portfolioId,
   holdings,
   quotes,
+  defaultInstrumentId,
+  variant = "wide",
 }: HoldingLotsPanelProps) {
+  // Derive a boolean for readability — prevents repeated `variant === "narrow"`
+  // comparisons throughout the render body.
+  const isNarrow = variant === "narrow";
   const { accessToken } = useAuth();
 
-  // Default selection: largest position (matches the row-1 instinct on the
-  // table above). Users override via the select control.
+  // Default selection: use caller-supplied defaultInstrumentId when present
+  // (e.g. pre-selected via the context-menu "View Tax Lots" action), otherwise
+  // fall back to the largest position (matches the row-1 instinct on the table
+  // above). Users can always override via the select control.
   const initialSelection = useMemo(() => {
+    // WHY defaultInstrumentId check first: if a specific holding was
+    // right-clicked, the user's intent is to see that holding's lots. The
+    // largest-position heuristic is only meaningful when no preference is given.
+    if (defaultInstrumentId) return defaultInstrumentId;
     if (holdings.length === 0) return null;
     const sorted = [...holdings].sort(
       (a, b) =>
@@ -62,7 +96,7 @@ export function HoldingLotsPanel({
         Number(a.quantity) * (quotes[a.instrument_id]?.price ?? Number(a.average_cost)),
     );
     return sorted[0]?.instrument_id ?? null;
-  }, [holdings, quotes]);
+  }, [defaultInstrumentId, holdings, quotes]);
   const [selectedInstrumentId, setSelectedInstrumentId] = useState<string | null>(
     initialSelection,
   );
@@ -104,7 +138,7 @@ export function HoldingLotsPanel({
             line of code, fully accessible, and matches the dense terminal
             aesthetic. */}
         <select
-          className="bg-card border border-border rounded-sm px-2 py-px text-[11px] font-mono text-foreground focus:outline-none focus:ring-1 focus:ring-primary"
+          className="bg-card border border-border px-2 py-px text-[11px] font-mono text-foreground focus:outline-none focus:ring-1 focus:ring-primary"
           value={selectedInstrumentId ?? ""}
           onChange={(e) => setSelectedInstrumentId(e.target.value || null)}
         >
@@ -148,7 +182,7 @@ export function HoldingLotsPanel({
         {isLoading ? (
           <div className="p-2 space-y-px">
             {Array.from({ length: 4 }).map((_, i) => (
-              <Skeleton key={i} className="h-[22px] w-full" />
+              <Skeleton key={i} className="h-[20px] w-full" />
             ))}
           </div>
         ) : !data || data.lots.length === 0 ? (
@@ -160,23 +194,41 @@ export function HoldingLotsPanel({
           </div>
         ) : (
           <div className="font-mono text-[11px]">
-            {/* Column header row. */}
+            {/* Column header row.
+                WHY conditional grid-cols: narrow variant drops the "DAYS"
+                column to reclaim ~70px in space-constrained side-panels.
+                Using cn() keeps the two grid shapes in one line rather than
+                duplicating the entire header/row markup. */}
             {/* WHY 110px last column (was 90px): the UNREAL cell renders both
                 a dollar value (+$X,XXX.XX) and a percentage sub-label in a
                 text-[9px] span (+XX.XX%). Combined they exceed 90px on most
                 lots, causing visible overflow. 110px fits the widest case. */}
-            <div className="grid grid-cols-[100px_70px_90px_70px_70px_110px] gap-2 px-3 py-1 text-[9px] uppercase tracking-[0.08em] text-muted-foreground border-b border-border bg-muted/10">
+            <div
+              className={cn(
+                "grid gap-2 px-3 py-1 text-[9px] uppercase tracking-[0.08em] text-muted-foreground border-b border-border bg-muted/10",
+                isNarrow
+                  ? "grid-cols-[100px_70px_90px_70px_110px]"
+                  : "grid-cols-[100px_70px_90px_70px_70px_110px]",
+              )}
+            >
               <div>OPEN DATE</div>
               <div className="text-right">QTY</div>
               <div className="text-right">COST/SHR</div>
-              <div className="text-right">DAYS</div>
+              {/* WHY conditional: narrow variant hides Days Held to keep the
+                  panel usable in constrained side-panel widths (~360px). */}
+              {!isNarrow && <div className="text-right">DAYS</div>}
               <div className="text-right">TERM</div>
               <div className="text-right">UNREAL</div>
             </div>
             {data.lots.map((lot, i) => (
               <div
                 key={`${lot.open_date}-${i}`}
-                className="grid grid-cols-[100px_70px_90px_70px_70px_110px] gap-2 px-3 h-[22px] items-center hover:bg-muted/20 border-b border-border/50"
+                className={cn(
+                  "grid gap-2 px-3 h-[20px] items-center hover:bg-muted/20 border-b border-border/50",
+                  isNarrow
+                    ? "grid-cols-[100px_70px_90px_70px_110px]"
+                    : "grid-cols-[100px_70px_90px_70px_70px_110px]",
+                )}
               >
                 <div className="tabular-nums text-foreground">{lot.open_date}</div>
                 <div className="text-right tabular-nums text-foreground">
@@ -185,16 +237,19 @@ export function HoldingLotsPanel({
                 <div className="text-right tabular-nums text-foreground">
                   {formatPrice(lot.cost_per_share)}
                 </div>
-                <div className="text-right tabular-nums text-muted-foreground">
-                  {lot.days_held}d
-                </div>
+                {/* Days Held — omitted in narrow variant (same rationale as header). */}
+                {!isNarrow && (
+                  <div className="text-right tabular-nums text-muted-foreground">
+                    {lot.days_held}d
+                  </div>
+                )}
                 <div className="text-right">
                   {/* Tiny ST/LT badge — same colour cue as the FIFO realised
                       P&L breakdown elsewhere on the page (LT is muted /
                       green-leaning because long-term gains are tax-favoured). */}
                   <span
                     className={cn(
-                      "px-1 py-px rounded-sm text-[9px] uppercase tracking-[0.06em] border",
+                      "px-1 py-px text-[9px] uppercase tracking-[0.06em] border",
                       lot.is_long_term
                         ? "bg-positive/10 text-positive border-positive/30"
                         : "bg-warning/10 text-warning border-warning/30",

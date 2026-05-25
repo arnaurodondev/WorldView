@@ -156,7 +156,7 @@ export default function SettingsNotificationsPage() {
   return (
     <Card className="border-border/60 bg-card">
       <CardHeader className="pb-3">
-        <CardTitle className="text-sm font-medium text-foreground">
+        <CardTitle className="text-[14px] font-medium text-foreground">
           Notification preferences
         </CardTitle>
         <CardDescription className="text-xs">
@@ -188,7 +188,7 @@ export default function SettingsNotificationsPage() {
                 <div className="space-y-0.5">
                   <Label
                     htmlFor={`notif-${row.field}`}
-                    className="cursor-pointer text-sm font-medium text-foreground"
+                    className="cursor-pointer text-[14px] font-medium text-foreground"
                   >
                     {row.label}
                   </Label>

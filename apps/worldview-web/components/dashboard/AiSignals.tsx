@@ -91,7 +91,13 @@ export function AiSignals() {
         return (
           <button
             key={signal.signal_id}
-            onClick={() => signal.entity_id && router.push(`/instruments/${signal.entity_id}`)}
+            // PRD-0089 F2 step 11 (§6.6): ticker-first URL. Signals carry a
+            // ticker for instrument-level signals (POSITIVE/NEGATIVE on an
+            // equity); macro / sector signals may not. Falls back to UUID.
+            onClick={() =>
+              signal.entity_id &&
+              router.push(`/instruments/${signal.ticker || signal.entity_id}`)
+            }
             // WHY rounded-[2px]: design system mandates 2px radius everywhere; bare `rounded` = 4px default
             className="flex w-full items-center gap-2 rounded-[2px] px-1 py-0.5 hover:bg-muted/30"
           >

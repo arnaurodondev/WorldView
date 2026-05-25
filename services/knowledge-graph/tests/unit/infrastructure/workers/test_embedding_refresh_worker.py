@@ -51,7 +51,7 @@ def _make_embedding_output(n: int) -> list:
     return [EmbeddingOutput(embedding=[0.2] * 10, model_id="nomic-embed-text", dimension=10) for _ in range(n)]
 
 
-@pytest.mark.unit
+@pytest.mark.unit()
 class TestEmbeddingRefreshWorker:
     def test_embed_called_once_for_batch(self) -> None:
         """3 stale summaries → embed() called once with 3 inputs, not 3 separate calls."""
@@ -181,7 +181,7 @@ class TestEmbeddingRefreshWorker:
         assert summary_repo.update_embedding.await_args.kwargs["model_id"] == "custom-model-id"
 
 
-@pytest.mark.unit
+@pytest.mark.unit()
 class TestSettingsDefaults:
     """Wave A-2 / DEF-022 — Settings field defaults."""
 

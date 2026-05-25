@@ -35,8 +35,14 @@
 // only TanStack Query), and useCallback closures over setState. None of that
 // runs in a server component.
 
-import { useState, useMemo, useCallback } from "react";
+import { useMemo, useCallback } from "react";
 import { useQuery, useQueryClient, useMutation } from "@tanstack/react-query";
+// WHY useActivePortfolio: the W1 PortfolioSwitcher writes portfolio selections to
+// ActivePortfolioContext. usePortfolioData must read from the same context so the
+// portfolio page re-renders when the user switches portfolios via the TopBar chip.
+// Previously used local useState which was invisible to the context — switching
+// portfolios in the TopBar had no effect on the portfolio page (F-DS-001, QA 2026-05-21).
+import { useActivePortfolio } from "@/contexts/ActivePortfolioContext";
 
 import { createGateway } from "@/lib/gateway";
 // WHY qk: all queryKey literals must go through the central factory so
@@ -158,12 +164,13 @@ export function usePortfolioData(
   const { accessToken, selectedPeriod = "1D" } = args;
   const queryClient = useQueryClient();
 
-  // WHY selectedPortfolioId in state (not URL): switching portfolios is
-  // ephemeral. The URL always shows /portfolio regardless of which portfolio
-  // is active.
-  const [selectedPortfolioId, setSelectedPortfolioId] = useState<string | null>(
-    null,
-  );
+  // WHY context (not local useState): the TopBar PortfolioSwitcher writes to
+  // ActivePortfolioContext when the user clicks a portfolio. Reading from the
+  // same context means this hook re-renders instantly when the switcher fires.
+  // Local useState was invisible to the context — the page never re-fetched
+  // holdings for the newly selected portfolio (F-DS-001, QA 2026-05-21).
+  const { activePortfolioId: contextPortfolioId, setActivePortfolio: setSelectedPortfolioId } =
+    useActivePortfolio();
 
   // ── Query 1: portfolio list ────────────────────────────────────────────
   // WHY qk.portfolios.all: the root ["portfolios"] key; invalidating it
@@ -192,11 +199,13 @@ export function usePortfolioData(
     });
   }, [portfolios]);
 
-  // WHY derived activePortfolioId (not stored): default = sortedPortfolios[0]
-  // (= ROOT once it lands in S1's response). Selecting a portfolio updates
-  // selectedPortfolioId. Storing both would cause a double-render on init.
+  // WHY derived (not stored): context provides the selection; fall back to the
+  // first portfolio (ROOT by sort order) when context is null or points to a
+  // portfolio that no longer exists (e.g. after deletion).
   const activePortfolioId =
-    selectedPortfolioId ?? sortedPortfolios?.[0]?.portfolio_id ?? null;
+    (contextPortfolioId && sortedPortfolios?.some((p) => p.portfolio_id === contextPortfolioId))
+      ? contextPortfolioId
+      : sortedPortfolios?.[0]?.portfolio_id ?? null;
   const activePortfolio = sortedPortfolios?.find(
     (p) => p.portfolio_id === activePortfolioId,
   );
@@ -489,6 +498,8 @@ export function usePortfolioData(
       // If we just deleted the active one, fall back to whichever portfolio
       // sortedPortfolios?.[0] resolves to next render (typically root).
       if (activePortfolioId === deletedId) {
+        // Reset context selection so the page falls back to the first surviving
+        // portfolio (sortedPortfolios[0]) rather than keeping a stale deleted id.
         setSelectedPortfolioId(null);
       }
     },
@@ -497,7 +508,7 @@ export function usePortfolioData(
   return {
     portfolios,
     sortedPortfolios,
-    selectedPortfolioId,
+    selectedPortfolioId: contextPortfolioId,
     setSelectedPortfolioId,
     activePortfolioId,
     activePortfolio,

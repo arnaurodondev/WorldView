@@ -13,6 +13,7 @@ import httpx
 from fastapi import APIRouter, HTTPException, Request, Response
 from fastapi.responses import StreamingResponse
 
+from api_gateway.resolution import InstrumentNotFoundError, resolve_security_id
 from api_gateway.routes.helpers import _auth_headers, _clients
 
 if TYPE_CHECKING:
@@ -348,14 +349,66 @@ async def get_instrument_briefing(entity_id: str, request: Request) -> Any:
     Requires authentication. Returns the AI-generated briefing for a specific
     instrument/entity. Returns 503 (not 500) on httpx.TimeoutException so the
     frontend IntelligenceTab can show a "try again" message instead of an error.
+
+    WHY resolve_security_id: PRD-0089 F2 — the URL slug is a ticker ("AAPL"),
+    not a UUID. rag-chat expects a UUID entity_id. Resolution canonicalises
+    the ticker to the instrument_id UUID (= entity_id in the F2 unified model).
     """
     if not getattr(request.state, "user", None):
         raise HTTPException(status_code=401, detail="Authentication required")
+    try:
+        resolved = await resolve_security_id(
+            entity_id,
+            clients=_clients(request),
+            headers=_auth_headers(request),
+        )
+        canonical_entity_id = str(resolved.instrument_id)
+    except InstrumentNotFoundError:
+        canonical_entity_id = entity_id  # pass through; rag-chat will 404
     headers = _auth_headers(request)
     clients = _clients(request)
     try:
         resp = await clients.rag_chat.get(
-            f"/api/v1/briefings/instrument/{entity_id}",
+            f"/api/v1/briefings/instrument/{canonical_entity_id}",
+            headers=headers,
+        )
+    except (httpx.TimeoutException, httpx.NetworkError) as exc:
+        raise HTTPException(status_code=503, detail="Briefing generation timed out") from exc
+    return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
+
+
+@router.post("/briefings/instrument/{entity_id}/generate")
+async def generate_instrument_briefing(entity_id: str, request: Request) -> Any:
+    """Proxy POST /v1/briefings/instrument/{id}/generate → S8 rag-chat.
+
+    Idempotent lazy-generate endpoint (W5-T-S8-05, Δ27). Returns:
+      200 + {"status":"cached"} if the brief already exists in Valkey.
+      202 + {"status":"queued"} if generation was triggered.
+      429 + Retry-After if the user has hit the 60/hr rate limit.
+
+    WHY resolve_security_id: same ticker→UUID canonicalisation as the GET
+    route above — rag-chat expects a UUID entity_id.
+
+    WHY separate POST (not lazy GET): the GET blocks for 3-8s during generation.
+    The lazy POST lets the frontend trigger generation and poll, keeping the
+    GET path fast (cache hit = 50ms, miss = 404 immediately).
+    """
+    if not getattr(request.state, "user", None):
+        raise HTTPException(status_code=401, detail="Authentication required")
+    try:
+        resolved = await resolve_security_id(
+            entity_id,
+            clients=_clients(request),
+            headers=_auth_headers(request),
+        )
+        canonical_entity_id = str(resolved.instrument_id)
+    except InstrumentNotFoundError as e:
+        raise HTTPException(status_code=404, detail=f"Instrument not found: {e.identifier}") from e
+    headers = _auth_headers(request)
+    clients = _clients(request)
+    try:
+        resp = await clients.rag_chat.post(
+            f"/api/v1/briefings/instrument/{canonical_entity_id}/generate",
             headers=headers,
         )
     except (httpx.TimeoutException, httpx.NetworkError) as exc:

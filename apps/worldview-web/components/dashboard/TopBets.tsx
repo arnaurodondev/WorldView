@@ -56,8 +56,8 @@ export function TopBets() {
   // WHY muted (not destructive red): prediction market service offline is not a user error.
   if (isError) {
     return (
-      // WHY text-xs (was text-sm): empty/error copy on dense dashboard tiles
-      // matches the 12px Bloomberg standard. text-sm (14px) drifts toward
+      // WHY text-xs (was text-[14px]): empty/error copy on dense dashboard tiles
+      // matches the 12px Bloomberg standard. text-[14px] (14px) drifts toward
       // marketing-page typography. PLAN-0087 F-DENSITY-001.
       <p className="text-xs text-muted-foreground">
         Prediction markets unavailable — odds will appear once Polymarket data syncs.

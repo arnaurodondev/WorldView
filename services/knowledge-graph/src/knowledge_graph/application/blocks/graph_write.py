@@ -76,7 +76,7 @@ class RawRelation:
     subject_entity_id: UUID
     object_entity_id: UUID
     raw_type: str
-    polarity: str = "positive"
+    polarity: str = "neutral"
     extraction_confidence: float = 0.5
     source_trust_weight: float = 1.0
     evidence_date: datetime = dataclasses.field(
@@ -88,6 +88,13 @@ class RawRelation:
     claim_id: UUID | None = None
     chunk_id: UUID | None = None
     evidence_text: str | None = None
+    # BP-521: optional entity-type hints used for direction normalization.
+    # When the upstream enriched message includes entity types (e.g. "person",
+    # "financial_instrument", "organization"), materialize_graph can correct
+    # the subject/object ordering for has_executive/employs relations without
+    # requiring an extra DB round-trip.  None means "type unknown — skip swap."
+    subject_entity_type: str | None = None
+    object_entity_type: str | None = None
 
 
 @dataclasses.dataclass(frozen=True)
@@ -142,11 +149,16 @@ class MaterializationSummary:
 
 
 _DETERMINISTIC_CREATED_AT_FALLBACK = datetime(2024, 1, 1, 0, 0, 0, tzinfo=UTC)
-"""Stable ``created_at`` baseline for events whose ``event_date`` is None.
+"""Fallback ``created_at`` used ONLY when a natural date is unavailable.
 
-The events table is partitioned monthly starting at 2024-01 (see migration
-0001), so a literal 2024-01-01 timestamp ALWAYS lands inside a pre-seeded
-partition — no risk of ``no partition of relation \"events\" found for row``.
+For events: used when ``RawEvent.event_date`` is None.
+For claims: used when ``article_published_at`` is None (malformed message).
+
+The events/claims tables are partitioned monthly starting at 2024-01, so this
+constant lands in a pre-seeded partition.  IMPORTANT: this value is now the
+last-resort fallback for claims — the enriched consumer threads ``published_at``
+from the Kafka envelope so normal claims land in the correct monthly partition
+instead.  See F-401/F-501 fix and ``_insert_claim`` docstring.
 
 Using a constant here (rather than e.g. epoch=0 which would be 1970-01-01 and
 fall outside the partition window) makes replays both idempotent AND insertable
@@ -269,29 +281,69 @@ async def _insert_claim(
     doc_id: UUID,
     raw_claim: RawClaim,
     extraction_model_id: str | None = None,
+    article_published_at: datetime | None = None,
 ) -> UUID:
-    """INSERT a claim record.  Returns the new claim_id.
+    """INSERT a claim record.  Returns the deterministic claim_id.
+
+    F-154 fix: ``claim_id`` is now derived deterministically via UUID5 from
+    ``(doc_id, subject_entity_id, claim_type, polarity)`` so that Kafka replays
+    of the same enriched-article message produce the same ``claim_id`` and the
+    ``ON CONFLICT (claim_id, created_at) DO NOTHING`` clause fires correctly.
+
+    Why we MUST also bind ``created_at`` explicitly (same reason as events,
+    BP-397):
+      * ``claims`` is RANGE-partitioned by ``created_at`` and the PRIMARY KEY is
+        ``(claim_id, created_at)`` — a partitioned-table unique constraint MUST
+        include all partition-key columns.
+      * If we let ``created_at`` default to ``now()`` server-side, every Kafka
+        replay produces a different ``created_at``, so ON CONFLICT NEVER
+        matches even though ``claim_id`` is now deterministic.
+
+    F-401/F-501 fix: ``created_at`` now uses ``article_published_at`` (the
+    article's publish date from the Kafka envelope) so claims land in the
+    correct monthly partition instead of all landing in 2024-01.  This also
+    re-enables the 90-day contradiction detection window for claims.
+    ``_DETERMINISTIC_CREATED_AT_FALLBACK`` is the last-resort fallback for
+    malformed messages missing ``published_at``.
 
     ``extraction_model_id`` is the LLM model that produced this claim
     (PLAN-0031 B-2).  When None the DB server_default='unknown' applies.
     """
     from sqlalchemy import text
 
-    claim_id = new_uuid7()
+    # Deterministic UUID5 — same (doc_id, subject_entity_id, claim_type, polarity)
+    # always yields the same claim_id (F-154 fix).  All four fields are cast to
+    # str explicitly because uuid5_from_parts accepts *str only.
+    claim_id = UUID(
+        uuid5_from_parts(
+            str(doc_id),
+            str(raw_claim.subject_entity_id),
+            raw_claim.claim_type,
+            raw_claim.polarity,
+        ),
+    )
     await session.execute(
         text("""
 INSERT INTO claims
-    (claim_id, doc_id, chunk_id, claimer_entity_id, subject_entity_id,
+    (claim_id, created_at, doc_id, chunk_id, claimer_entity_id, subject_entity_id,
      claim_type, polarity, claim_text, extraction_confidence, is_backfill,
      extraction_model_id)
 VALUES
-    (:claim_id, :doc_id, :chunk_id, :claimer_entity_id, :subject_entity_id,
+    (:claim_id, :created_at, :doc_id, :chunk_id, :claimer_entity_id, :subject_entity_id,
      :claim_type, :polarity, :claim_text, :extraction_confidence, :is_backfill,
      :extraction_model_id)
 ON CONFLICT (claim_id, created_at) DO NOTHING
 """),
         {
             "claim_id": str(claim_id),
+            # F-401/F-501: use the article's publish date so claims land in the
+            # correct monthly partition and participate in the 90-day contradiction
+            # window.  Fall back to the 2024-01-01 sentinel only for malformed
+            # messages that carry no published_at (the fallback constant always
+            # lands inside a pre-seeded partition — see its docstring).
+            "created_at": article_published_at
+            if article_published_at is not None
+            else _DETERMINISTIC_CREATED_AT_FALLBACK,
             "doc_id": str(doc_id),
             "chunk_id": str(raw_claim.chunk_id) if raw_claim.chunk_id else None,
             "claimer_entity_id": (str(raw_claim.claimer_entity_id) if raw_claim.claimer_entity_id else None),
@@ -304,7 +356,7 @@ ON CONFLICT (claim_id, created_at) DO NOTHING
             "extraction_model_id": extraction_model_id,
         },
     )
-    return claim_id  # type: ignore[return-value]
+    return claim_id
 
 
 def _build_entity_dirtied_payload(
@@ -361,6 +413,7 @@ async def materialize_graph(
     extraction_model_id: str | None = None,
     source_name: str | None = None,
     source_type_metadata: str | None = None,
+    article_published_at: datetime | None = None,
 ) -> MaterializationSummary:
     """Materialize graph from a single enriched article message.
 
@@ -434,28 +487,66 @@ async def materialize_graph(
         canonical_base_confidences,
         strict=True,
     ):
-        # ── Self-loop guard (BP-385) ──────────────────────────────────────
+        # ── Self-loop guard (BP-385 / BP-520) ────────────────────────────
         # graphology is initialised with allowSelfLoops=false; self-loop
         # triples also pollute the KG with tautological statements.
         # Skip both the relation upsert AND the evidence insert so these
         # are not stored at all. The check runs on fully-resolved UUIDs so
         # it catches loops introduced by entity merges inside S7, not just
         # those from S6 extraction.
+        # BP-520: ~17% of rows were self-loops (person as both subject and
+        # object when company context is missing); those rows accumulate
+        # forever because the DB promoter cannot insert self-loop edges.
         if rel.subject_entity_id == rel.object_entity_id:
-            _log.warning(
-                "relation_self_loop_skipped",
+            # PLAN-0093 B-2 T-B-2-05: this drop is now backed by the
+            # ``chk_relations_no_self_loop`` CHECK constraint added in
+            # migration 0045 — real entities cannot self-loop at the DB
+            # level either (system sentinels in the 11111111-0004 range
+            # are explicitly whitelisted in the CHECK).  Keeping the
+            # application-level guard avoids a wasted advisory-lock cycle.
+            _log.debug(
+                "relation_dropped_unresolvable",
                 entity_id=str(rel.subject_entity_id),
                 raw_type=rel.raw_type,
+                reason="self_loop_or_unresolved_pair",
             )
             continue
+
+        # ── Direction normalization for has_executive / employs (BP-521) ──
+        # The LLM occasionally emits these relations with the person as the
+        # subject (e.g. "Tim Cook has_executive Apple").  The canonical
+        # direction is company → person.  When entity-type hints are present
+        # on the RawRelation, swap subject↔object so the edge lands in the
+        # correct orientation before any upsert or evidence write.
+        # We only swap when:
+        #   • relation_type is has_executive or employs, AND
+        #   • subject is a "person", AND
+        #   • object is not a "person" (i.e. company-like: org, instrument, …)
+        # When type hints are absent (None) we leave the ordering as-is to
+        # avoid breaking relations where the direction was already correct.
+        subject_id = rel.subject_entity_id
+        object_id = rel.object_entity_id
+        if (
+            rel.raw_type in ("has_executive", "employs", "appointed_as")
+            and rel.subject_entity_type == "person"
+            and rel.object_entity_type != "person"
+        ):
+            subject_id, object_id = object_id, subject_id
+            _log.debug(
+                "relation_direction_normalized",
+                raw_type=rel.raw_type,
+                original_subject=str(rel.subject_entity_id),
+                original_object=str(rel.object_entity_id),
+                swapped=True,
+            )
 
         # Skip provisional entities from the aggregation worker perspective,
         # but still INSERT the raw evidence row (entity_provisional=true rows
         # are held until entity.canonical.created.v1 resolves them).
         if canonical_type is not None:
             relation_id = await relation_repo.upsert(
-                subject_entity_id=rel.subject_entity_id,
-                object_entity_id=rel.object_entity_id,
+                subject_entity_id=subject_id,
+                object_entity_id=object_id,
                 canonical_type=canonical_type,
                 semantic_mode=semantic_mode or "RELATION_STATE",
                 decay_class=decay_class or "DURABLE",
@@ -468,8 +559,11 @@ async def materialize_graph(
             relation_id = None  # type: ignore[assignment]
 
         await evidence_repo.insert_raw(
-            subject_entity_id=rel.subject_entity_id,
-            object_entity_id=rel.object_entity_id,
+            # Use the (possibly direction-normalized) subject_id / object_id
+            # so evidence rows always reflect company→person ordering for
+            # has_executive/employs relations (BP-521).
+            subject_entity_id=subject_id,
+            object_entity_id=object_id,
             source_document_id=doc_id,
             extraction_confidence=rel.extraction_confidence,
             source_trust_weight=rel.source_trust_weight,
@@ -487,12 +581,12 @@ async def materialize_graph(
             source_type=source_type_metadata,
         )
         evidence_count += 1
-        affected_entity_ids.add(rel.subject_entity_id)
-        affected_entity_ids.add(rel.object_entity_id)
+        affected_entity_ids.add(subject_id)
+        affected_entity_ids.add(object_id)
 
         # Dirty both entities (aggregation worker will recompute confidence)
-        dirtied_entities.add(rel.subject_entity_id)
-        dirtied_entities.add(rel.object_entity_id)
+        dirtied_entities.add(subject_id)
+        dirtied_entities.add(object_id)
 
     # ------------------------------------------------------------------
     # 3 — Events + event_entities (ON CONFLICT DO NOTHING)
@@ -506,7 +600,13 @@ async def materialize_graph(
     # 4 — Claims (ON CONFLICT DO NOTHING)
     # ------------------------------------------------------------------
     for raw_claim in claims:
-        await _insert_claim(session, doc_id, raw_claim, extraction_model_id=extraction_model_id)
+        await _insert_claim(
+            session,
+            doc_id,
+            raw_claim,
+            extraction_model_id=extraction_model_id,
+            article_published_at=article_published_at,
+        )
         claim_count += 1
         affected_entity_ids.add(raw_claim.subject_entity_id)
 
@@ -529,8 +629,9 @@ async def materialize_graph(
     # with garbage bytes", which the dispatcher cannot recover from.
     if affected_entity_ids or relations or events:
         primary_entity_id = str(next(iter(affected_entity_ids))) if affected_entity_ids else str(doc_id)
+        outbox_event_id = new_uuid7()  # type: ignore[no-any-return]
         state_payload: dict[str, Any] = {
-            "event_id": str(new_uuid7()),
+            "event_id": str(outbox_event_id),
             "event_type": "graph.state.changed",
             "schema_version": 1,
             "occurred_at": now.isoformat(),
@@ -551,6 +652,7 @@ async def materialize_graph(
             topic=TOPIC_GRAPH_STATE_CHANGED,
             partition_key=primary_entity_id,
             payload_avro=state_bytes,
+            event_id=outbox_event_id,
         )
 
     return MaterializationSummary(

@@ -50,7 +50,12 @@ logger = get_logger(__name__)  # type: ignore[no-any-return]
 # during LLM I/O — sleeping here is safe and does not block the DB pool.
 _SUMMARY_RETRY_DELAYS: tuple[float, ...] = (2.0, 5.0)
 
-_BATCH_LIMIT = 20
+# PLAN-0093 D-3 T-D-3-02: raise per-cycle batch size from 20 → 50 so the
+# 60-min summary cycle can drain a larger backlog.  The ordering enforced by
+# ``fetch_stale_summary`` (NULL last_summary_attempt_at first, then
+# summary_attempt_count ASC) keeps brand-new stale rows ahead of repeat
+# failures, so the larger batch does not starve fresh work.
+_BATCH_LIMIT = 50
 _EVIDENCE_LIMIT = 10
 _PROMPT_TEMPLATE_ID = "00000000-0000-0000-0000-000000000001"  # seeded in prompt_templates
 
@@ -87,6 +92,15 @@ class SummaryWorker:
             SA-2: delays (seconds) between retries of the primary LLM call.
             Default ``_SUMMARY_RETRY_DELAYS`` = (2 s, 5 s) → 3 total attempts.
             Pass ``()`` in unit tests to skip sleeping.
+        concurrency:
+            PLAN-0093 D-3 T-D-3-02: upper bound on the number of relations
+            whose LLM call may be in flight at once.  Stored on the worker
+            but the per-relation loop in :meth:`run` currently processes one
+            relation at a time — the kwarg is accepted (and forwarded by the
+            scheduler) so future work can introduce ``asyncio.gather``-based
+            parallelism without churning the constructor signature.
+            Default 1 preserves the historical sequential behaviour for
+            tests that omit the kwarg.
 
     """
 
@@ -100,6 +114,7 @@ class SummaryWorker:
         *,
         gemini_extraction_client: ExtractionClient | None = None,
         summary_retry_delays: tuple[float, ...] = _SUMMARY_RETRY_DELAYS,
+        concurrency: int = 1,
     ) -> None:
         self._sf = session_factory
         # DEF-018 / Wave B-1: route Phase 1 + Phase 2 reads through the read
@@ -118,6 +133,40 @@ class SummaryWorker:
         self._gemini_ext: ExtractionClient | None = gemini_extraction_client
         # SA-2: retry delays for the primary LLM call before escalating to Gemini.
         self._summary_retry_delays = summary_retry_delays
+        # T-D-3-02: parallelism cap (wired by scheduler, currently inert — see
+        # constructor docstring).  Held as an attribute so a future wave can
+        # adopt ``asyncio.gather`` without changing the constructor signature.
+        self._concurrency = concurrency
+
+    async def _update_backlog_gauge(self) -> None:
+        """Refresh ``relation_summary_backlog`` gauge from the read replica (T-D-3-01).
+
+        Opens a short-lived READ session, asks ``RelationRepository.count_summary_backlog``
+        for the current backlog count (relations with ``summary_stale=true`` OR
+        no current row in ``relation_summaries``), then publishes that value to
+        the Prometheus gauge.
+
+        Errors are swallowed deliberately — backlog metrics are observability,
+        not control flow.  A transient DB failure here must not abort the
+        SummaryWorker cycle (the actual work happens in :meth:`run`).
+        """
+        # Lazy import: keep the metrics module out of the import graph for
+        # callers that just want to construct the worker (mirrors the
+        # repository imports inside :meth:`run`).
+        from knowledge_graph.infrastructure.intelligence_db.repositories.relation import RelationRepository
+        from knowledge_graph.infrastructure.metrics.prometheus import relation_summary_backlog
+
+        try:
+            async with self._read_session_factory() as session:
+                rel_repo = RelationRepository(session)
+                backlog = await rel_repo.count_summary_backlog()  # type: ignore[attr-defined]
+            relation_summary_backlog.set(backlog)
+        except Exception as exc:
+            logger.warning(  # type: ignore[no-any-return]
+                "summary_worker_backlog_gauge_failed",
+                error=str(exc),
+                message="count_summary_backlog raised; gauge left unchanged",
+            )
 
     async def run(self) -> None:
         """Generate summaries for stale relations.
@@ -295,10 +344,40 @@ class SummaryWorker:
                     relation_id=str(relation_id),
                     summary_last_failed_at=utc_now().isoformat(),
                 )
+                # T-D-3-03: bump stuck counter BEFORE the UPDATE when the prior
+                # ``summary_attempt_count`` was already >= 2 — the in-flight
+                # increment via ``success=False`` will land at >= 3, the
+                # operational definition of "stuck".  The prior count comes
+                # from the ``fetch_stale_summary`` row dict; it defaults to 0
+                # for backwards compat with tests that omit the field.
+                # cast through ``Any`` (via ``cast``) so mypy does not balk on
+                # the ``object`` return from ``dict.get`` — ``fetch_stale_summary``
+                # produces dicts typed ``dict[str, object]`` for legacy reasons.
+                _raw_attempt = rel.get("summary_attempt_count", 0) or 0
+                prior_attempt_count = int(_raw_attempt)  # type: ignore[call-overload]
+                if prior_attempt_count >= 2:
+                    # Lazy import keeps metrics off the cold-path import graph.
+                    from knowledge_graph.infrastructure.metrics.prometheus import (
+                        summary_worker_stuck_relations_total,
+                    )
+
+                    summary_worker_stuck_relations_total.inc()
+                    logger.warning(  # type: ignore[no-any-return]
+                        "summary_worker_stuck_relation",
+                        relation_id=str(relation_id),
+                        prior_attempt_count=prior_attempt_count,
+                        new_attempt_count=prior_attempt_count + 1,
+                    )
                 try:
                     async with self._sf() as session:
                         rel_repo = RelationRepository(session)
-                        await rel_repo.mark_summary_updated(relation_id)  # type: ignore[arg-type, attr-defined]
+                        # T-D-3-03: ``success=False`` increments
+                        # ``summary_attempt_count`` (instead of resetting it)
+                        # so future cycles can detect the stuck state.
+                        await rel_repo.mark_summary_updated(  # type: ignore[attr-defined]
+                            relation_id,  # type: ignore[arg-type]
+                            success=False,
+                        )
                         await session.commit()
                 except Exception as exc:
                     logger.error(  # type: ignore[no-any-return]
@@ -392,7 +471,7 @@ class SummaryWorker:
 
         try:
             outputs = await self._embedding_port.embed(  # type: ignore[union-attr]
-                [EmbeddingInput(text=embed_text, model_id="summary-embed-v1")]
+                [EmbeddingInput(text=embed_text, model_id="summary-embed-v1")],
             )
             if not outputs:
                 raise ValueError("empty embedding output")

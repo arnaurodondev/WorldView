@@ -51,6 +51,7 @@ from nlp_pipeline.application.blocks.suppression import (
     should_generate_chunk_embeddings,
     should_run_deep_extraction,
 )
+from nlp_pipeline.domain.enums import ProcessingPath
 from nlp_pipeline.infrastructure.intelligence_db.repositories.canonical_entity import (
     CanonicalEntityRepository,
 )
@@ -519,11 +520,34 @@ class ArticleProcessingConsumer(ValkeyDedupMixin, BaseKafkaConsumer[None]):
         # Block 3: Sectioning
         text = await self._download_article(minio_key)
         word_count: int = len(text.split())
+
+        # RC-1: stub-article filter — skip articles below the minimum word count.
+        # Finnhub (~91% stub rate) and SEC Edgar (~52% stub rate) frequently emit
+        # headline-only records that have no relational signal but consume NER,
+        # embedding, and LLM extraction budget. The word count is computed on the
+        # raw downloaded text (not the message envelope field) because the envelope
+        # field may be absent or stale for older events. Early return prevents all
+        # downstream blocks from running; the document remains in content_store but
+        # is not indexed in the NLP pipeline.
+        if word_count < self._settings.min_word_count:
+            logger.info(  # type: ignore[no-any-return]
+                "article_consumer.stub_filtered",
+                doc_id=str(doc_id),
+                word_count=word_count,
+                min_word_count=self._settings.min_word_count,
+                source_type=source_type,
+            )
+            return
+
         sections = section_document(doc_id, text, source_type)
         if tenant_id is not None:
             sections = [dataclasses.replace(s, tenant_id=tenant_id) for s in sections]
 
-        # Block 4: NER + deterministic mention IDs (PLAN-0084 B-3)
+        # Block 4: NER + deterministic mention IDs (PLAN-0084 B-3).
+        # PLAN-0093 B-3 T-B-3-04: pass tenant_id through so EntityMention is
+        # constructed with it (avoids the post-construction stamp going
+        # missing in any future refactor).  The explicit post-construction
+        # stamp below is retained as a belt-and-braces safeguard.
         mentions, stats = await run_ner_block(
             doc_id=doc_id,
             sections=sections,
@@ -532,6 +556,7 @@ class ArticleProcessingConsumer(ValkeyDedupMixin, BaseKafkaConsumer[None]):
             batch_size=self._settings.gliner_batch_size,
             ner_model_id=self._settings.ner_model_id,
             section_token_limit=self._settings.gliner_section_token_limit,
+            tenant_id=tenant_id,
         )
         for _i, m in enumerate(mentions):
             m.mention_id = uuid.UUID(uuid5_from_parts(str(doc_id), str(_i), m.mention_text.lower().strip()))
@@ -541,8 +566,10 @@ class ArticleProcessingConsumer(ValkeyDedupMixin, BaseKafkaConsumer[None]):
         s6_ner_mentions_total.inc(len(mentions))
 
         # Blocks 5-6: Routing + suppression
-        watched_ids = await self._watchlist.get_all_watched()
-        price_impact = await self._fetch_price_impact(doc_id)
+        # PLAN-0093 C-1: watched_ids + price_impact no longer feed compute_routing_score
+        # (the 3 dead signals are dropped). watched_ids is still fetched downstream for
+        # other features, so we keep the call. price_impact lookup is dropped here — it
+        # was always returning 0.0 anyway (article_impact_windows is empty until C-3).
         routing_decision = compute_routing_score(
             doc_id=doc_id,
             decision_id=uuid.UUID(uuid5_from_parts(str(doc_id), "routing_decision")),
@@ -552,9 +579,6 @@ class ArticleProcessingConsumer(ValkeyDedupMixin, BaseKafkaConsumer[None]):
             mentions=mentions,
             section_count=len(sections),
             source_trust_weight=_DEFAULT_SOURCE_TRUST,
-            novelty_score=1.0,
-            watched_entity_ids=watched_ids,
-            price_impact_score=price_impact,
             tier_deep=self._settings.routing_tier_deep,
             tier_medium=self._settings.routing_tier_medium,
             tier_light=self._settings.routing_tier_light,
@@ -646,40 +670,63 @@ class ArticleProcessingConsumer(ValkeyDedupMixin, BaseKafkaConsumer[None]):
             )
 
             # ── Outbox event emission (all within the open nlp_s transaction) ──
-            await _enqueue_enriched(
-                outbox_repo=outbox_repo,
-                settings=self._settings,
-                doc_id=doc_id,
-                source_type=source_type,
-                source_name=source_name,
-                published_at=published_at,
-                is_backfill=is_backfill,
-                routing_decision=routing_decision,
-                sections=sections,
-                chunks=chunks,
-                mentions=final_mentions,
-                extraction_result=ml.extraction_result,
-                correlation_id=correlation_id,
-                extraction_model_id=(
-                    self._settings.extraction_model_id if should_run_deep_extraction(ml.final_path) else None
-                ),
-            )
-            if ml.signals:
-                await _enqueue_signal_events(
+            # W1-01 (BUG-001): SUPPRESS-tier articles (ProcessingPath.HALT) must NOT
+            # emit nlp.article.enriched.v1 — S7 would consume an empty document and
+            # pollute the knowledge graph with dead-weight relations from zero-
+            # extraction documents.  We also skip signal events and temporal events
+            # because both require extraction output that does not exist on HALT
+            # (deep extraction is gated by should_run_deep_extraction(HALT)==False
+            # so ml.extraction_result["events"] is empty and ml.signals is empty).
+            # Block 8 (price-impact labelling) is a SEPARATE worker (see
+            # workers/price_impact_labelling_worker.py) and still runs against the
+            # routing_decisions row written by persist_artifacts above — this gate
+            # only affects the three outbox emissions below.
+            if ml.final_path == ProcessingPath.HALT:
+                tier_value = (
+                    routing_decision.routing_tier.value
+                    if hasattr(routing_decision.routing_tier, "value")
+                    else routing_decision.routing_tier
+                )
+                logger.info(  # type: ignore[no-any-return]
+                    "article_suppressed_skipping_enriched_event",
+                    doc_id=str(doc_id),
+                    routing_tier=tier_value,
+                )
+            else:
+                await _enqueue_enriched(
                     outbox_repo=outbox_repo,
                     settings=self._settings,
-                    signals=ml.signals,
                     doc_id=doc_id,
+                    source_type=source_type,
+                    source_name=source_name,
+                    published_at=published_at,
                     is_backfill=is_backfill,
+                    routing_decision=routing_decision,
+                    sections=sections,
+                    chunks=chunks,
+                    mentions=final_mentions,
+                    extraction_result=ml.extraction_result,
                     correlation_id=correlation_id,
+                    extraction_model_id=(
+                        self._settings.extraction_model_id if should_run_deep_extraction(ml.final_path) else None
+                    ),
                 )
-            await _maybe_emit_temporal_events(
-                outbox_repo=outbox_repo,
-                settings=self._settings,
-                doc_id=doc_id,
-                published_at=published_at,
-                ml=ml,
-            )
+                if ml.signals:
+                    await _enqueue_signal_events(
+                        outbox_repo=outbox_repo,
+                        settings=self._settings,
+                        signals=ml.signals,
+                        doc_id=doc_id,
+                        is_backfill=is_backfill,
+                        correlation_id=correlation_id,
+                    )
+                await _maybe_emit_temporal_events(
+                    outbox_repo=outbox_repo,
+                    settings=self._settings,
+                    doc_id=doc_id,
+                    published_at=published_at,
+                    ml=ml,
+                )
             if tenant_id is not None:
                 await _enqueue_document_ready(
                     outbox_repo=outbox_repo,

@@ -6,13 +6,16 @@ Split from proxy.py (PLAN-0089 B-3).
 
 from __future__ import annotations
 
-import uuid as _uuid
 from typing import Any
 
 import httpx
 from fastapi import APIRouter, HTTPException, Query, Request, Response
 
 from api_gateway.clients import DownstreamError, get_map_layers, get_relevant_news
+from api_gateway.resolution import (
+    InstrumentNotFoundError,
+    resolve_security_id,
+)
 from api_gateway.routes.helpers import _auth_headers, _clients, _system_headers
 from api_gateway.schemas import InstrumentSearchResult
 from observability.logging import get_logger  # type: ignore[import-untyped]
@@ -43,11 +46,22 @@ async def company_overview(company_id: str, request: Request) -> dict[str, Any]:
     """
     if getattr(request.state, "user", None) is None:
         raise HTTPException(status_code=401, detail="Authentication required")
-    # F-026: validate company_id is a UUID to prevent path traversal attacks.
+
+    # PRD-0089 F2: resolve_security_id accepts BOTH a UUID and a ticker.
+    # The legacy F-026 UUID-only guard is gone — the resolver validates
+    # the input shape (UUID regex or live ticker lookup) and raises
+    # InstrumentNotFoundError on miss, which we map to 404.
     try:
-        _uuid.UUID(company_id)
-    except ValueError:
-        raise HTTPException(status_code=422, detail="Invalid company_id — must be a UUID")  # noqa: B904
+        resolved = await resolve_security_id(
+            company_id,
+            clients=_clients(request),
+            headers=_auth_headers(request),
+        )
+    except InstrumentNotFoundError as e:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Instrument not found: {e.identifier}",
+        ) from e
 
     from api_gateway.application.use_cases.company_overview import CompanyOverviewUseCase
 
@@ -59,8 +73,11 @@ async def company_overview(company_id: str, request: Request) -> dict[str, Any]:
         service_clients=_clients(request),
     )
     try:
+        # Downstream now always receives a canonical instrument_id UUID
+        # string (no ticker, no entity_id). The translation dance in
+        # clients.get_company_overview has been deleted.
         return await use_case.execute(
-            company_id=company_id,
+            company_id=str(resolved.instrument_id),
             make_headers=lambda: _auth_headers(request),
         )
     except DownstreamError as e:
@@ -86,11 +103,22 @@ async def instrument_page_bundle(instrument_id: str, request: Request) -> dict[s
     """
     if getattr(request.state, "user", None) is None:
         raise HTTPException(status_code=401, detail="Authentication required")
-    # F-026: validate instrument_id is a UUID to prevent path traversal attacks.
+
+    # PRD-0089 F2: ticker-friendly path — accept either a UUID or a
+    # ticker symbol. resolve_security_id canonicalises both to an
+    # instrument_id UUID so the use case + downstream legs always
+    # receive the right id shape.
     try:
-        _uuid.UUID(instrument_id)
-    except ValueError:
-        raise HTTPException(status_code=422, detail="Invalid instrument_id — must be a UUID")  # noqa: B904
+        resolved = await resolve_security_id(
+            instrument_id,
+            clients=_clients(request),
+            headers=_auth_headers(request),
+        )
+    except InstrumentNotFoundError as e:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Instrument not found: {e.identifier}",
+        ) from e
 
     # PLAN-0089 B-2: delegates to InstrumentPageBundleUseCase (application layer).
     # The external behaviour is identical — the use case wraps get_instrument_page_bundle.
@@ -104,7 +132,7 @@ async def instrument_page_bundle(instrument_id: str, request: Request) -> dict[s
         service_clients=_clients(request),
     )
     return await use_case.execute(
-        instrument_id=instrument_id,
+        instrument_id=str(resolved.instrument_id),
         make_headers=lambda: _auth_headers(request),
     )
 
@@ -165,6 +193,47 @@ async def instruments_lookup(request: Request) -> Any:
     return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
 
 
+# ── Peers (W5-T-S9-01) ───────────────────────────────────────────────────────
+
+
+@router.get("/instruments/{instrument_id}/peers")
+async def instrument_peers(instrument_id: str, request: Request) -> Any:
+    """Proxy GET /v1/instruments/{id}/peers → S3 Market Data /peers.
+
+    Returns the top-N market-cap peers in the same GICS industry.
+
+    WHY proxy-only (no S9 transform): the peers response shape is already
+    frontend-friendly (`PeersResponse` from T-S2-01). S9 just gates auth
+    and forwards query params (limit=) to S3 unchanged. S3 handles the 24h
+    Valkey cache and the GICS industry lookup.
+
+    WHY resolve_security_id: PRD-0089 F2 — the URL slug is a ticker (e.g.
+    "AAPL"), not a UUID. market-data peers endpoint only accepts UUIDs.
+    Resolution canonicalises the ticker before forwarding.
+
+    Requires authentication. Returns 404 if the instrument is not found.
+    S3 returns 200 + empty peers list for ETFs with no GICS industry.
+    """
+    if not getattr(request.state, "user", None):
+        raise HTTPException(status_code=401, detail="Authentication required")
+    try:
+        resolved = await resolve_security_id(
+            instrument_id,
+            clients=_clients(request),
+            headers=_auth_headers(request),
+        )
+    except InstrumentNotFoundError as e:
+        raise HTTPException(status_code=404, detail=f"Instrument not found: {e.identifier}") from e
+    headers = _auth_headers(request)
+    clients = _clients(request)
+    resp = await clients.market_data.get(
+        f"/api/v1/instruments/{resolved.instrument_id}/peers",
+        params=dict(request.query_params),
+        headers=headers,
+    )
+    return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
+
+
 # ── Manual price refresh (PLAN-0036 W1-11) ────────────────────────────────────
 
 
@@ -190,6 +259,22 @@ async def refresh_instrument_price(instrument_id: str, request: Request) -> Any:
 
     clients = _clients(request)
     headers = _auth_headers(request)
+
+    # PRD-0089 F2: accept either a UUID or ticker. Resolved id is used
+    # for cooldown keying so a ticker refresh and a UUID refresh share
+    # the same gate (preventing duplicate EODHD spend).
+    try:
+        resolved = await resolve_security_id(
+            instrument_id,
+            clients=clients,
+            headers=headers,
+        )
+    except InstrumentNotFoundError as e:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Instrument not found: {e.identifier}",
+        ) from e
+    instrument_id = str(resolved.instrument_id)
 
     # ── Cooldown check via Valkey ─────────────────────────────────────────────
     valkey = getattr(request.app.state, "valkey", None)
@@ -218,7 +303,7 @@ async def refresh_instrument_price(instrument_id: str, request: Request) -> Any:
                             "status": "cooldown",
                             "cooldown_remaining_sec": remaining,
                             "message": f"Manual refresh available in {remaining}s",
-                        }
+                        },
                     ).encode(),
                     status_code=429,
                     media_type="application/json",
@@ -247,7 +332,7 @@ async def refresh_instrument_price(instrument_id: str, request: Request) -> Any:
             "exchange": exchange or None,
             "dataset_types": ["quotes"],
             "priority": "high",
-        }
+        },
     ).encode()
 
     s2_resp = await clients.market_ingestion.post(
@@ -275,7 +360,7 @@ async def refresh_instrument_price(instrument_id: str, request: Request) -> Any:
                 "instrument_id": instrument_id,
                 "status": "accepted",
                 "message": "Price refresh queued — data will update within 30 seconds",
-            }
+            },
         ).encode(),
         status_code=202,
         media_type="application/json",

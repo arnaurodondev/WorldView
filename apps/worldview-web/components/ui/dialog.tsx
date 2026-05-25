@@ -56,7 +56,7 @@ const DialogContent = React.forwardRef<
       {...props}
     >
       {children}
-      <DialogPrimitive.Close className="absolute right-4 top-4 rounded-sm opacity-70 ring-offset-background transition-opacity hover:opacity-100 focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 disabled:pointer-events-none data-[state=open]:bg-accent data-[state=open]:text-muted-foreground">
+      <DialogPrimitive.Close className="absolute right-4 top-4 opacity-70 ring-offset-background transition-opacity hover:opacity-100 focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 disabled:pointer-events-none data-[state=open]:bg-accent data-[state=open]:text-muted-foreground">
         <X className="h-4 w-4" />
         <span className="sr-only">Close</span>
       </DialogPrimitive.Close>
@@ -81,8 +81,8 @@ const DialogTitle = React.forwardRef<
 >(({ className, ...props }, ref) => (
   <DialogPrimitive.Title
     ref={ref}
-    // WHY text-[13px] uppercase tracking-[0.04em] (was text-lg leading-none tracking-tight):
-    // Bloomberg terminal dialog titles use 13px ALL-CAPS — "text-lg" (18px) is consumer-app
+    // WHY text-[13px] uppercase tracking-[0.04em] (was text-[18px] leading-none tracking-tight):
+    // Bloomberg terminal dialog titles use 13px ALL-CAPS — "text-[18px]" (18px) is consumer-app
     // scale; leading-none + tracking-tight conflict with the uppercase terminal aesthetic.
     // 13px uppercase matches sheet.tsx SheetTitle for visual parity across all modal surfaces.
     className={cn("text-[13px] font-semibold uppercase tracking-[0.04em] leading-none", className)}
@@ -97,7 +97,7 @@ const DialogDescription = React.forwardRef<
 >(({ className, ...props }, ref) => (
   <DialogPrimitive.Description
     ref={ref}
-    // WHY text-[10px] (was text-sm=14px): dialog description is secondary metadata —
+    // WHY text-[10px] (was text-[14px]=14px): dialog description is secondary metadata —
     // 14px is consumer-app scale; 10px matches the Bloomberg caption/metadata standard
     // for supplementary text in dialogs and modals.
     className={cn("text-[10px] text-muted-foreground", className)}

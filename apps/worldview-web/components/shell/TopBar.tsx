@@ -10,7 +10,7 @@
  * center = market data, right = tools + user.
  *
  * WHO USES IT: app/(app)/layout.tsx — rendered at the top of every protected page
- * DATA SOURCE: auth state from AuthContext, market data from TopBarMarquee (10-ticker scroll)
+ * DATA SOURCE: auth state from AuthContext; market data from IndexStrip (static 10-cell row)
  * DESIGN REFERENCE: PRD-0028 §6.5 TopBar; Handoff 2026-05-01 Tier-3 #7
  */
 
@@ -20,10 +20,16 @@
 
 import type { RefObject } from "react";
 import { useRouter } from "next/navigation";
+import { useQueryClient } from "@tanstack/react-query";
 import { LogOut, Settings, User, Bell } from "lucide-react";
 import { useAuth } from "@/hooks/useAuth";
+import { useHotkeyScope } from "@/contexts/HotkeyContext";
 import { UtcClock } from "@/components/shell/UtcClock";
-import { TopBarMarquee } from "@/components/shell/TopBarMarquee";
+// PRD-0089 W1 §4.3: static 10-cell IndexStrip replaces the prior animated
+// marquee. The marquee + ticker chip files were deleted in the W1 cleanup
+// commit; the architecture-test ban on those identifiers prevents resurrection.
+import { IndexStrip } from "@/components/shell/IndexStrip";
+import { PortfolioSwitcher } from "@/components/shell/PortfolioSwitcher";
 import { MarketStatusPill } from "@/components/shell/MarketStatusPill";
 import { GlobalSearch } from "@/components/shell/GlobalSearch";
 import { AskAiButton } from "@/components/shell/AskAiButton";
@@ -133,8 +139,21 @@ export function TopBar({
 }: TopBarProps) {
   const router = useRouter();
   const { user, logout } = useAuth();
+  // PRD-0089 W1 C-28: logout must clear both the TanStack cache (no stale
+  // portfolio numbers flashing on re-login) and the hotkey scope stack (so
+  // the next session doesn't inherit a "modal" scope from a half-closed
+  // dialog). We pull the queryClient + hotkey context once here so the
+  // handler is synchronous up to the awaited logout() call.
+  const queryClient = useQueryClient();
+  const { resetScopes } = useHotkeyScope();
 
   const handleLogout = async () => {
+    // Clear *before* awaiting logout() so an in-flight refetch can't repopulate
+    // the cache between the clear and the redirect. The order matters when
+    // refetchInterval queries are mid-fire at the moment the user clicks Sign
+    // out — clearing first cancels them safely.
+    queryClient.clear();
+    resetScopes();
     await logout();
     // WHY replace: don't leave the protected page in history — back button
     // should not return user to authenticated content after logout
@@ -144,7 +163,7 @@ export function TopBar({
   return (
     // WHY h-8 (32px): PLAN-0071 Phase 6.5 further reduces to 32px following
     // bloomberg-terminal reference. Minimum feasible: h-7 avatar + 2px top/bottom
-    // margin = 32px. PRD-0031 §4.1 originally reduced from 44px to 36px (h-9);
+    // margin = 32px. PRD-0031 §4.1 originally reduced from 44px to 36px (h-[36px]);
     // Phase 6.5 takes the next step to 32px (h-8) for maximum data-display vertical
     // space recovery while remaining WCAG-compliant (h-7 avatar = 28px touch target +
     // surrounding 4px padding satisfies the 32px minimum for pointer-based devices).
@@ -153,38 +172,51 @@ export function TopBar({
     // PLAN-0048 Wave C-1 — Layout was previously [left] [absolute-centered ticker] [right].
     // The absolute centering meant the right cluster could overflow into the ticker at
     // narrower viewports (the ticker was painted under it because it sat outside the flex
-    // flow). We now use a single flex row with three siblings where the IndexTicker is
+    // flow). We now use a single flex row with three siblings where the IndexStrip is
     // the only flex-1 child, so it absorbs slack and truncates first under pressure
     // instead of colliding with the portfolio rail.
     <header className="flex h-8 w-full shrink-0 items-center gap-3 border-b border-border bg-background px-3">
       {/* ── Left: Logo + Search ───────────────────────────────────── */}
       {/* WHY shrink-0: the logo + search must never shrink — they're nav anchors.
-          Slack absorbed by the IndexTicker (the only flex-1 sibling). */}
+          Slack absorbed by the IndexStrip (the only flex-1 sibling). */}
       <div className="flex shrink-0 items-center gap-3">
-        {/* Wordmark — text for crisp rendering at all DPIs */}
-        {/* WHY font-mono font-bold: Bloomberg terminal wordmarks are rendered in a
-            monospace fixed-width style — proportional font reads as consumer web app */}
+        {/* Wordmark — text for crisp rendering at all DPIs.
+            PRD-0089 W1 §4.3 slot 1 — adds aria-label so the skip-link target
+            and screen readers identify the button as the "Home" anchor. */}
         <button
           onClick={() => router.push("/dashboard")}
+          aria-label="Worldview — Home"
           className="font-mono font-bold text-[13px] tracking-tight text-foreground hover:opacity-80"
         >
           Worldview
         </button>
 
         <GlobalSearch />
+
+        {/*
+          PRD-0089 W1 §4.3 slots 3 + 4 — PortfolioSwitcher always renders next
+          to GlobalSearch (FU-1.1). DemoBadge mounts inside the switcher
+          itself when the active portfolio's kind === "demo".
+        */}
+        <PortfolioSwitcher />
       </div>
 
-      {/* ── Center: Market data (TopBarMarquee) ─────────────────────── */}
-      {/* WHY flex-1 + min-w-0 + max-w-[640px]:
-          - flex-1: this child absorbs all horizontal slack so left/right blocks
-            stay pinned to their edges.
-          - min-w-0: required for any flex child that may need to shrink below
-            its intrinsic content width — without it, the scrolling marquee
-            would force the parent to overflow at 1280px.
-          - max-w-[640px]: caps the ticker viewport on ultrawide screens.
-          - overflow-hidden: clips the CSS-animated scrolling strip cleanly. */}
-      <div className="flex min-w-0 max-w-[640px] flex-1 justify-center overflow-hidden">
-        <TopBarMarquee />
+      {/* ── Center: IndexStrip (PRD-0089 W1 §4.3 slot 5) ─────────────
+          Static 10-cell strip (Bloomberg FNZX pattern).  The IndexStrip
+          owns its own responsive priority drop; we still wrap it in
+          flex-1 + min-w-0 so the right cluster keeps pinned to the
+          viewport edge under width pressure.
+
+          W1.1 G-001 — `overflow-hidden` is critical: IndexStrip cells
+          carry `shrink-0` so they refuse to compress, and at viewports
+          where the wrapper is squeezed (right cluster grew when
+          PortfolioRail became always-visible) the cells would visibly
+          spill into the right cluster's space and overlap the clock /
+          market pill / rail. Clipping the overflow keeps every cluster
+          in its lane — cells simply get cut off at the wrapper edge
+          rather than drawing over their neighbours. */}
+      <div className="flex min-w-0 max-w-[680px] flex-1 justify-center overflow-hidden">
+        <IndexStrip />
       </div>
 
       {/* ── Right: Tools + User ──────────────────────────────────── */}
@@ -219,92 +251,98 @@ export function TopBar({
             without growing the 36px bar height. Labels also bumped to 11px
             for visual parity. */}
 
-        {/* ── Portfolio metrics cluster (PLAN-0050 T-A-1-01) ────────────────
-            The three values (PORT / Day P&L / Total P&L) are now visually
+        {/* ── Portfolio metrics cluster (PLAN-0050 T-A-1-01 + W1.1 F-001) ──
+            The three values (PORT / Day P&L / Total P&L) are visually
             grouped inside a single subtly-tinted box with a thin border and
-            internal divider hairlines. Why:
-            - Before: three free-floating sibling spans separated only by
-              gap-2 made the rail feel like a row of unrelated badges. The
-              audit (F-D-008) called this "loose" and noted the eye had to
-              re-anchor on each label to follow the relationship between
-              NAV, day move, and total P&L.
-            - After: one box with bg-muted/20 + border-border/30 reads as
-              "your account", and the divider hairlines reinforce that
-              these three numbers are calculated from the same source. We
-              keep the same per-value min-w slots so digits still don't jump
-              on every refetch.
+            internal divider hairlines.
 
-            WHY render the cluster wrapper even when a value is null: it
-            stabilises the rail width as positions update from null → known.
-            The wrapper renders its known-value children only — the
-            container itself is conditional on at least one value existing
-            so empty accounts still get a clean rail. */}
-        {(portfolioValue != null || dailyPnl != null || unrealisedPnl != null) && (
-          <div
-            className="flex items-center gap-2 rounded-[2px] border border-border/30 bg-muted/20 px-2 py-0.5"
-            aria-label="Portfolio header metrics"
+            W1.1 F-001 (QA 2026-05-21): the rail is now rendered
+            UNCONDITIONALLY — previously the outer wrapper was gated on at
+            least one value being non-null, which made the entire box
+            disappear for users with zero holdings (demo sessions, brand-new
+            accounts). With the W1 IndexStrip + PortfolioSwitcher gone live,
+            the absence of any portfolio info on the TopBar was the loudest
+            visual regression of the wave. We now reserve the box's slot at
+            all times and render `—` placeholders per value when null,
+            matching the IndexStrip's "never collapse to zero width"
+            treatment in the same row. Per-value min-w slots still prevent
+            digit-count jitter when prices arrive. */}
+        {/* W1.1 G-001 — label tightening to relieve right-cluster width
+            pressure that caused the IndexStrip / right cluster overlap:
+              * "Day P&L" → "DAY" (–6 chars)
+              * "Total P&L" → "TOT" (–7 chars)
+              * Slot widths: 3.5/4/4rem → 3.25/3.25/3.25rem
+            Net win ≈ 90px on the rail without losing meaning — the
+            tooltip + aria-label still spell out "Day P&L" / "Total P&L"
+            for assistive tech and hover discovery. */}
+        <div
+          className="flex items-center gap-2 border border-border/30 bg-muted/20 px-2 py-0.5"
+          aria-label="Portfolio header metrics"
+        >
+          {/* Portfolio NAV — compact value display matching Bloomberg's
+              account rail convention. Renders "—" while loading or for
+              accounts with zero holdings. */}
+          <span
+            className="flex items-center gap-1 whitespace-nowrap font-mono text-[11px] tabular-nums text-muted-foreground/80"
+            title="Total portfolio value (live quote-based)"
+            aria-label={
+              portfolioValue != null
+                ? `Portfolio value ${formatPortfolioValue(portfolioValue)}`
+                : "Portfolio value pending"
+            }
           >
-            {/* Portfolio NAV — compact value display matching Bloomberg's account rail convention.
-                F-QA-23: standardised on `!= null` (covers both null AND undefined) for
-                consistency with the dailyPnl / unrealisedPnl checks below. */}
-            {portfolioValue != null && (
-              <span
-                className="flex items-center gap-1 whitespace-nowrap font-mono text-[11px] tabular-nums text-muted-foreground/80"
-                title="Total portfolio value (live quote-based)"
-                aria-label={`Portfolio value ${formatPortfolioValue(portfolioValue)}`}
-              >
-                <span className="text-muted-foreground">PORT</span>
-                <span className="inline-block min-w-[3.5rem] text-right text-foreground">
-                  {formatPortfolioValue(portfolioValue)}
-                </span>
-              </span>
-            )}
+            <span className="text-muted-foreground">PORT</span>
+            <span className="inline-block min-w-[3.25rem] text-right text-foreground">
+              {portfolioValue != null ? formatPortfolioValue(portfolioValue) : "—"}
+            </span>
+          </span>
 
-            {/* Divider hairline between PORT and Day P&L — only renders when both
-                are present so a single-value cluster doesn't show a stray rule. */}
-            {portfolioValue != null && dailyPnl != null && (
-              <span aria-hidden="true" className="h-3 w-px bg-border/40" />
-            )}
+          <span aria-hidden="true" className="h-3 w-px bg-border/40" />
 
-            {/* Day P&L — colored teal/red so direction is instantly readable.
-                F-QA-09 fix: pnlColorClass uses a deadband to render a true
-                "flat" day as neutral muted colour instead of arbitrarily
-                green or red because of floating-point dust. */}
-            {dailyPnl != null && (
-              <span
-                className={`flex items-center gap-1 whitespace-nowrap font-mono text-[11px] tabular-nums ${pnlColorClass(dailyPnl)}`}
-                title="Today's portfolio P&L (live quote-based)"
-                aria-label={`Day P&L: ${dailyPnl >= 0 ? "+" : ""}${formatPortfolioValue(Math.abs(dailyPnl))}`}
-              >
-                <span className="text-muted-foreground">Day P&amp;L</span>
-                <span className="inline-block min-w-[4rem] text-right">
-                  {dailyPnl >= 0 ? "+" : "-"}
-                  {formatPortfolioValue(Math.abs(dailyPnl))}
-                </span>
-              </span>
-            )}
+          {/* Day P&L — colored teal/red so direction is instantly readable.
+              F-QA-09: pnlColorClass uses a deadband to render a true "flat"
+              day as muted neutral instead of arbitrarily green or red. */}
+          <span
+            className={`flex items-center gap-1 whitespace-nowrap font-mono text-[11px] tabular-nums ${
+              dailyPnl != null ? pnlColorClass(dailyPnl) : "text-muted-foreground"
+            }`}
+            title="Today's portfolio P&L (live quote-based)"
+            aria-label={
+              dailyPnl != null
+                ? `Day P&L: ${dailyPnl >= 0 ? "+" : ""}${formatPortfolioValue(Math.abs(dailyPnl))}`
+                : "Day P&L pending"
+            }
+          >
+            <span className="text-muted-foreground">DAY</span>
+            <span className="inline-block min-w-[3.25rem] text-right">
+              {dailyPnl != null
+                ? `${dailyPnl >= 0 ? "+" : "-"}${formatPortfolioValue(Math.abs(dailyPnl))}`
+                : "—"}
+            </span>
+          </span>
 
-            {dailyPnl != null && unrealisedPnl != null && (
-              <span aria-hidden="true" className="h-3 w-px bg-border/40" />
-            )}
+          <span aria-hidden="true" className="h-3 w-px bg-border/40" />
 
-            {/* Total P&L — total mark-to-market vs cost basis.
-                F-QA-09 fix: same deadband as Day P&L. */}
-            {unrealisedPnl != null && (
-              <span
-                className={`flex items-center gap-1 whitespace-nowrap font-mono text-[11px] tabular-nums ${pnlColorClass(unrealisedPnl)}`}
-                title="Total unrealised P&L vs cost basis (mark-to-market)"
-                aria-label={`Total P&L: ${unrealisedPnl >= 0 ? "+" : ""}${formatPortfolioValue(Math.abs(unrealisedPnl))}`}
-              >
-                <span className="text-muted-foreground">Total P&amp;L</span>
-                <span className="inline-block min-w-[4rem] text-right">
-                  {unrealisedPnl >= 0 ? "+" : "-"}
-                  {formatPortfolioValue(Math.abs(unrealisedPnl))}
-                </span>
-              </span>
-            )}
-          </div>
-        )}
+          {/* Total P&L — total mark-to-market vs cost basis. */}
+          <span
+            className={`flex items-center gap-1 whitespace-nowrap font-mono text-[11px] tabular-nums ${
+              unrealisedPnl != null ? pnlColorClass(unrealisedPnl) : "text-muted-foreground"
+            }`}
+            title="Total unrealised P&L vs cost basis (mark-to-market)"
+            aria-label={
+              unrealisedPnl != null
+                ? `Total P&L: ${unrealisedPnl >= 0 ? "+" : ""}${formatPortfolioValue(Math.abs(unrealisedPnl))}`
+                : "Total P&L pending"
+            }
+          >
+            <span className="text-muted-foreground">TOT</span>
+            <span className="inline-block min-w-[3.25rem] text-right">
+              {unrealisedPnl != null
+                ? `${unrealisedPnl >= 0 ? "+" : "-"}${formatPortfolioValue(Math.abs(unrealisedPnl))}`
+                : "—"}
+            </span>
+          </span>
+        </div>
 
         {/* ── Ask AI trigger (PLAN-0050 T-A-1-03) ───────────────────────────
             Persistent assistant entry-point. The actual floating panel is
@@ -355,7 +393,7 @@ export function TopBar({
           <DropdownMenuContent align="end" className="w-48">
             {/* User info header */}
             {/* WHY text-[11px]/text-[10px]: dropdown header must match the 10-11px density
-                of the terminal chrome — text-sm (14px) is consumer-app scale */}
+                of the terminal chrome — text-[14px] (14px) is consumer-app scale */}
             <div className="px-2 py-1.5">
               <p className="text-[11px] font-medium text-foreground">{user?.name ?? "User"}</p>
               <p className="truncate text-[10px] text-muted-foreground">{user?.email}</p>

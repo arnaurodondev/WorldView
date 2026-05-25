@@ -27,6 +27,7 @@ import signal
 import sys
 from typing import Any
 
+from common.retry import retry_on_startup  # type: ignore[import-untyped]
 from observability import configure_logging, get_logger  # type: ignore[import-untyped]
 
 logger = get_logger(__name__)  # type: ignore[no-any-return]
@@ -81,9 +82,22 @@ async def main() -> None:
     # Surface any pre-existing abandoned rows so silent rot is impossible.
     # PLAN-0057 QA A-005: max_retries comes from settings (was hard-coded 5).
     max_retries = settings.embedding_retry_max_attempts
-    async with nlp_sf() as session:
-        repo = EmbeddingPendingRepository(session)
-        abandoned = await repo.count_abandoned(max_retries=max_retries)
+
+    # PLAN-0093 Wave A-3 / F-NPL-002: retry the first DB read so a brief
+    # postgres-not-ready window at compose startup does not crash the
+    # container.  The decorator logs WARN per retry and CRITICAL on
+    # exhaustion before re-raising — compose restart-policy then takes over.
+    @retry_on_startup()
+    async def _count_initial_abandoned() -> int:
+        async with nlp_sf() as session:
+            repo = EmbeddingPendingRepository(session)
+            return await repo.count_abandoned(max_retries=max_retries)
+
+    try:
+        abandoned = await _count_initial_abandoned()
+    except Exception as exc:
+        log.error("embedding_retry_worker_startup_failed", error=str(exc))
+        sys.exit(1)
     if abandoned:
         log.warning(
             "embedding_retry_abandoned_at_startup",

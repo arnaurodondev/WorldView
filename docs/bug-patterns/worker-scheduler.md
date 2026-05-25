@@ -1342,3 +1342,179 @@ docker exec worldview-valkey-1 valkey-cli GET "newsapi:daily_requests:$(date +%Y
 
 **File**: `services/content-ingestion/src/content_ingestion/infrastructure/adapters/newsapi/adapter.py` — `NewsAPIAdapter.fetch()`
 **Config fix**: `content_ingestion_db.sources` — removed `from_date` from NewsAPI source configs
+
+---
+
+### BP-539: AGE graph sync lag causes Cypher path traversal to operate on 25% of true graph
+
+**Category**: Workers & Schedulers
+**Severity**: HIGH
+**First seen**: 2026-05-23
+**Services**: knowledge-graph (AGE sync worker), rag-query, api-gateway
+
+**Symptoms**:
+- `GET /intelligence/{id}/graph` returns far fewer edges than expected
+- Path traversal routes through unexpected intermediaries (e.g. all Apple→Microsoft paths via "Artificial Intelligence" node, not the direct COMPETES_WITH edge)
+- `ag_catalog` label counts much lower than `SELECT COUNT(*) FROM relations` in Postgres
+- 18 of 35 AGE edge type tables show stale statistics (`-1` approximate count)
+
+**Root cause**:
+New relations inserted into `relations` (Postgres) are not propagated to Apache AGE in real time. The AGE sync worker has a cursor/watermark that falls behind as the NLP pipeline inserts relations faster than the sync rate. Confirmed gap: 5,870 of 7,911 Postgres relations absent from AGE (74% missing). All Cypher queries (`MATCH p = ... -[r]->...`) operate on only ~2,041 of 7,911 edges.
+
+**Example**:
+```sql
+-- Check the gap
+SELECT r.canonical_type,
+       COUNT(*) AS postgres_count,
+       (SELECT COUNT(*) FROM ag_catalog.ag_edge e
+        JOIN ag_catalog.ag_graph g ON e.graph_oid = g.oid
+        WHERE g.name = 'worldview_graph') AS age_total
+FROM relations r GROUP BY r.canonical_type;
+```
+
+**Fix**:
+1. Check AGE sync worker logs for last successful cursor position
+2. Run a catch-up sync: reset the watermark and allow the worker to re-sync all unsynced relations
+3. Or: execute a one-time backfill by iterating over `relations` WHERE `id NOT IN (SELECT edge id from AGE)` and inserting each via `cypher()`
+
+**Prevention**:
+- Monitor the AGE edge count vs Postgres `relations` count as a Prometheus gauge; alert when divergence > 5%
+- Add a health check endpoint that reports the sync lag in absolute relation count
+
+**Regression test**: N/A (operational runbook — check `ag_catalog` counts after any large NLP pipeline run)
+
+---
+
+### BP-540: `build_fundamentals_narrative()` returns placeholder text when no data — pollutes ANN index
+
+**Category**: Workers & Schedulers, ML & LLM
+**Severity**: HIGH
+**First seen**: 2026-05-23
+**Services**: knowledge-graph (FundamentalsRefreshWorker, DefinitionRefreshWorker)
+
+**Symptoms**:
+- All `entity_embedding_state` rows with `view_type = 'fundamentals_ohlcv'` have identical `source_text`:
+  `"<EntityName> (financial_instrument) — Financial State Summary\nNo financial data available."`
+- ANN similarity search on the fundamentals index returns random/noise results — all entities appear equally similar
+- `SELECT DISTINCT source_text FROM entity_embedding_state WHERE view_type = 'fundamentals_ohlcv'` returns only a handful of distinct strings (differing only in entity name)
+
+**Root cause**:
+`build_fundamentals_narrative()` returned a non-None string even when no financial data was provided — the function appended "No financial data available." to the header and returned that string. The worker dutifully embedded the placeholder, creating 1,542 noise vectors in the ANN index. Vectors differing only in entity name are nearly identical → ANN search cannot discriminate.
+
+**Example**:
+```python
+# Bad — returns placeholder string that gets embedded as noise
+def build_fundamentals_narrative(name, entity_type, ...) -> str:
+    if len(parts) == 1:
+        parts.append("No financial data available.")
+    return "\n".join(parts)
+
+# Good — returns None so caller skips embedding
+def build_fundamentals_narrative(name, entity_type, ...) -> str | None:
+    if len(parts) == 1:
+        return None  # callers must check for None before embedding
+    return "\n".join(parts)
+```
+
+**Fix**:
+1. Change return type to `str | None`; return `None` when only the header is in `parts`
+2. Worker already handles `None` narrative via `if res["narrative"] is not None:` guard
+3. Backfill: `UPDATE entity_embedding_state SET embedding=NULL, source_text=NULL, source_hash=NULL, model_id=NULL, next_refresh_at=NOW() WHERE view_type='fundamentals_ohlcv' AND source_text LIKE '%No financial data available%'`
+
+**Prevention**:
+- Any narrative-building utility that can produce no-content output MUST return `None` (not a stub string) so callers can skip embedding
+- Test the no-data case explicitly: `assert build_fundamentals_narrative("X", "org") is None`
+
+**Regression test**: `tests/unit/application/test_fundamentals_narrative.py::TestBuildFundamentalsNarrativeDeterminism::test_no_financial_data_returns_none`
+
+---
+
+### BP-541: Embedding worker writes to embedding store but never writes back to source entity table
+
+**Category**: Workers & Schedulers, Database & ORM
+**Severity**: MEDIUM
+**First seen**: 2026-05-23
+**Services**: knowledge-graph (DefinitionRefreshWorker)
+
+**Symptoms**:
+- `canonical_entities.description` is NULL for nearly all entities (99.8% — 4,008/4,016)
+- `canonical_entities.enriched_at` is NULL for all entities
+- Graph node descriptions in API responses are `null` for almost all nodes
+- Entity description appears correctly in `entity_embedding_state.source_text` but not in `canonical_entities`
+
+**Root cause**:
+`DefinitionRefreshWorker` generates and embeds description text, storing it in `entity_embedding_state.source_text`. The worker never wrote this text back to `canonical_entities.description`. The write-back was implicitly assumed to be done by a different worker (structured enrichment) but `DefinitionRefreshWorker` is the only worker that generates non-financial descriptions for `person`, `sector`, `unknown`, etc. entity types. The 8 entities with non-null descriptions were seeded manually in migrations.
+
+**Fix**:
+In Phase 3 of `DefinitionRefreshWorker.run()`, after each `emb_repo.upsert()` call, execute:
+```sql
+UPDATE canonical_entities
+SET description = :description, enriched_at = :enriched_at
+WHERE entity_id = :entity_id
+```
+Run this for all items in `to_write` where `source_text` is non-empty.
+
+**Prevention**:
+- When an embedding worker generates text, assert in code review: "where does this text appear in API responses?" If the text is not accessible through a lookup from the source entity table, the write-back is missing.
+- Integration test: after `DefinitionRefreshWorker.run()`, assert `canonical_entities.description IS NOT NULL` for processed entities.
+
+**Regression test**: N/A — add integration test for write-back as part of next test pass
+
+---
+
+### BP-542: NarrativeRefreshWorker overwrites LLM narrative with claims template — two siloed workers fighting over entity_embedding_state
+
+**Category**: Workers & Schedulers
+**Severity**: HIGH
+**First seen**: 2026-05-23
+**Services**: knowledge-graph (NarrativeRefreshWorker, NarrativeGenerationWorker)
+
+**Symptoms**:
+- 91.8% of `entity_embedding_state` narrative rows contain name-only stubs: `"Himax (financial_instrument)"` (24 chars)
+- `entity_narrative_versions` contains good LLM prose for the same entities
+- `entity_embedding_state.source_text` for narrative view never exceeds 60 chars for 91.8% of entities despite a running LLM narrative worker
+- Semantic search on the narrative ANN index cannot differentiate entities — all look identical
+
+**Root cause**:
+Two workers write to the same narrative space without coordination:
+1. `NarrativeRefreshWorker` (hourly polling): rebuilds `entity_embedding_state.source_text` from `claims` table. For the 85%+ of entities with zero claims, produces `"{name} ({type})"` stub. **Has zero awareness of `entity_narrative_versions`.**
+2. `NarrativeGenerationWorker` (LLM): writes real prose to `entity_narrative_versions`. The `NarrativeRefreshKafkaConsumer` bridges the gap by embedding the LLM narrative on event arrival — BUT the hourly `NarrativeRefreshWorker` overwrites this with the stub on its next cycle, because it rebuilds `source_text` from claims unconditionally.
+
+**Fix**:
+In `NarrativeRefreshWorker._build_narrative_text()`, before building the claims template, check `canonical_entities.current_narrative_version_id`. If a version exists in `entity_narrative_versions`, use its `narrative_text` as `source_text`. Fall back to claims template only when no LLM narrative exists. Add an idempotency guard: skip rebuild when `source_hash` already matches the hash of the current LLM narrative.
+
+**Prevention**:
+- When two workers write to the same column/table, the one with more frequent writes must be made aware of the other's output or explicitly yield to it
+- Test: after `NarrativeGenerationWorker` runs, wait 1 hour, then assert `entity_embedding_state.source_text` still contains LLM content (not stub)
+
+**Regression test**: N/A — add as integration test in next test pass
+
+---
+
+### BP-543: Seeded canonical entities bypass the provisional enrichment queue — permanent data-completeness deficit
+
+**Category**: Workers & Schedulers, Database & ORM
+**Severity**: HIGH
+**First seen**: 2026-05-23
+**Services**: knowledge-graph (FundamentalsRefreshWorker, DefinitionRefreshWorker, ProvisionalEnrichmentWorker)
+
+**Symptoms**:
+- `key_metrics: {}` for major seeded tickers (AAPL, NVDA, MSFT)
+- `data_completeness: 0.1` for seeded entities (only 1/10 metadata fields populated)
+- Definition embedding is NULL for seeded entities
+- Claims count = 0 for seeded entities despite active news flow
+- Intelligence API shows impoverished data for the most prominent stocks
+
+**Root cause**:
+Entities seeded directly into `canonical_entities` via Alembic migrations (before the enrichment pipeline existed) have entity_ids that were never inserted into `provisional_enrichment_queue` / `entity_embedding_state` bootstrap tables. The enrichment workers (`FundamentalsRefreshWorker`, `DefinitionRefreshWorker`) only process entities that have rows in `entity_embedding_state`. The `canonical_entities_pkey` conflict error (seen in scheduler logs) confirms that when NLP pipeline discovers e.g. "AAPL" again, it tries to INSERT with a new entity_id, which conflicts, but the original seeded entity_id is still not in the enrichment queue.
+
+NLP pipeline claims also link to the newly-discovered (conflicting) entity_id rather than the seeded one — so AAPL's claims accumulate on an unreachable entity, not the seeded one.
+
+**Fix**:
+Manually insert the 10 seeded entity_ids into `entity_embedding_state` for all view types (definition, narrative, fundamentals_ohlcv) with `next_refresh_at = NOW()`. Also add them to `provisional_enrichment_queue` if that table tracks entities for structured enrichment. This will trigger the workers to enrich them on the next cycle.
+
+**Prevention**:
+- When seeding canonical entities via migration, also seed corresponding rows in `entity_embedding_state` for all required view types
+- Add a startup health check: `SELECT COUNT(*) FROM canonical_entities ce LEFT JOIN entity_embedding_state ees ON ce.entity_id = ees.entity_id WHERE ees.entity_id IS NULL` — alert if any canonical entities are missing embedding state rows
+
+**Regression test**: N/A — add as integration test on next enrichment pipeline test pass

@@ -188,7 +188,7 @@ export default function BetaProgramPage() {
 
       <Card className="border-border/60 bg-card">
         <CardHeader className="pb-3">
-          <CardTitle className="flex items-center gap-2 text-sm font-medium text-foreground">
+          <CardTitle className="flex items-center gap-2 text-[14px] font-medium text-foreground">
             <Beaker className="h-4 w-4 text-primary" aria-hidden="true" strokeWidth={1.5} />
             Beta Program
           </CardTitle>
@@ -204,7 +204,7 @@ export default function BetaProgramPage() {
             <div className="min-w-0 flex-1">
               <Label
                 htmlFor="beta-enrolled-switch"
-                className="block text-sm font-medium text-foreground"
+                className="block text-[14px] font-medium text-foreground"
               >
                 Enroll in beta
               </Label>
@@ -244,7 +244,7 @@ export default function BetaProgramPage() {
           <div>
             <Label
               htmlFor="beta-notes-textarea"
-              className="block text-sm font-medium text-foreground"
+              className="block text-[14px] font-medium text-foreground"
             >
               What are you most interested in? (optional)
             </Label>
@@ -259,7 +259,7 @@ export default function BetaProgramPage() {
               // matches the Button focus pattern used everywhere else in
               // the design system. Previously was a thinner ring-1 with
               // no offset, which read as "lower-tier input".
-              className="mt-1 w-full rounded-[2px] border border-border bg-background p-2 text-sm focus:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-2 focus-visible:ring-offset-background"
+              className="mt-1 w-full rounded-[2px] border border-border bg-background p-2 text-[14px] focus:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-2 focus-visible:ring-offset-background"
             />
             <div className="mt-1 flex items-center justify-between">
               <span className="text-[11px] tabular-nums text-muted-foreground">

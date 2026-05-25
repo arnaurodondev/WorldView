@@ -543,6 +543,13 @@ test.describe("Instrument Detail — AI subheader, 5-zone overview (PLAN-0039 Wa
       },
     });
 
+    // WHY non-ticker slug (PLAN-0089 F2 step 13 — deliberate exception):
+    // This test intentionally navigates with the legacy slug `instrument-aapl-demo`
+    // (not a canonical AAPL ticker) to exercise the middleware fallback path
+    // (acceptance criterion #6): when the path segment is neither a known ticker
+    // nor a canonical-case alias, the route should still render via the mocked
+    // S9 overview keyed on the slug. Do NOT migrate this URL to the ticker form
+    // — the entire point is to verify the non-ticker fallback continues to work.
     await page.goto(`/instruments/${DEMO_ENTITY}`);
     // WHY domcontentloaded + waitForSelector: networkidle times out (polling queries)
     await page.waitForLoadState("domcontentloaded");

@@ -68,23 +68,23 @@ export const mdxComponents = {
   // Page-level h1 is rendered by page.tsx outside the MDX body. The amber
   // left-border on orphan h1 makes the lint failure obvious in dev.
   h1: ({ children }: { children?: ReactNode }) => (
-    <h2 id={slugify(textOf(children))} className="mt-9 mb-2 border-l-2 border-primary pl-3 text-2xl font-semibold tracking-tight text-foreground scroll-mt-24">
+    <h2 id={slugify(textOf(children))} className="mt-9 mb-2 border-l-2 border-primary pl-3 text-[24px] font-semibold tracking-tight text-foreground scroll-mt-24">
       {children}
     </h2>
   ),
   // QA iter-1 (design M-D2): tighter rhythm — mt-10 → mt-9 / mb-3 → mb-2.
   h2: ({ children }: { children?: ReactNode }) => (
-    <h2 id={slugify(textOf(children))} className="mt-9 mb-2 text-2xl font-semibold tracking-tight text-foreground scroll-mt-24">
+    <h2 id={slugify(textOf(children))} className="mt-9 mb-2 text-[24px] font-semibold tracking-tight text-foreground scroll-mt-24">
       {children}
     </h2>
   ),
   h3: ({ children }: { children?: ReactNode }) => (
-    <h3 id={slugify(textOf(children))} className="mt-6 mb-1.5 text-lg font-semibold tracking-tight text-foreground scroll-mt-24">
+    <h3 id={slugify(textOf(children))} className="mt-6 mb-1.5 text-[18px] font-semibold tracking-tight text-foreground scroll-mt-24">
       {children}
     </h3>
   ),
   h4: ({ children }: { children?: ReactNode }) => (
-    <h4 id={slugify(textOf(children))} className="mt-5 mb-2 text-base font-semibold text-foreground scroll-mt-24">
+    <h4 id={slugify(textOf(children))} className="mt-5 mb-2 text-[16px] font-semibold text-foreground scroll-mt-24">
       {children}
     </h4>
   ),
@@ -94,15 +94,15 @@ export const mdxComponents = {
   // leading-relaxed (consumer-SaaS) to text-foreground/90 + leading-6
   // (Bloomberg-grade — full-strength reading text, tight rhythm).
   p: ({ children }: { children?: ReactNode }) => (
-    <p className="my-3 text-sm leading-6 text-foreground/90">{children}</p>
+    <p className="my-3 text-[14px] leading-6 text-foreground/90">{children}</p>
   ),
   ul: ({ children }: { children?: ReactNode }) => (
-    <ul className="my-3 list-disc space-y-1 pl-5 text-sm leading-6 text-foreground/90 marker:text-primary/60">
+    <ul className="my-3 list-disc space-y-1 pl-5 text-[14px] leading-6 text-foreground/90 marker:text-primary/60">
       {children}
     </ul>
   ),
   ol: ({ children }: { children?: ReactNode }) => (
-    <ol className="my-3 list-decimal space-y-1 pl-5 text-sm leading-6 text-foreground/90 marker:text-primary/60">
+    <ol className="my-3 list-decimal space-y-1 pl-5 text-[14px] leading-6 text-foreground/90 marker:text-primary/60">
       {children}
     </ol>
   ),
@@ -153,7 +153,7 @@ export const mdxComponents = {
   // ── Tables ───────────────────────────────────────────────────────────
   table: ({ children }: { children?: ReactNode }) => (
     <div className="my-5 overflow-x-auto rounded-[2px] border border-border/40">
-      <table className="w-full text-left text-sm">{children}</table>
+      <table className="w-full text-left text-[14px]">{children}</table>
     </div>
   ),
   th: ({ children }: { children?: ReactNode }) => (
@@ -162,7 +162,7 @@ export const mdxComponents = {
     </th>
   ),
   td: ({ children }: { children?: ReactNode }) => (
-    <td className="border-b border-border/20 px-3 py-2 text-sm text-foreground">{children}</td>
+    <td className="border-b border-border/20 px-3 py-2 text-[14px] text-foreground">{children}</td>
   ),
 
   // ── Custom components ────────────────────────────────────────────────

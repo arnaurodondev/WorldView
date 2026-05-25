@@ -1,10 +1,10 @@
 /**
- * components/portfolio/SemanticHoldingsTable.tsx — 12-column holdings table
+ * components/portfolio/SemanticHoldingsTable.tsx — 14-column holdings table
  *
  * WHY THIS EXISTS: The portfolio holdings table is the most data-critical surface
- * for a portfolio manager. Twelve columns give enough data to make re-balancing
+ * for a portfolio manager. Fourteen columns give enough data to make re-balancing
  * decisions without navigating to the instrument detail page.
- *   Ticker | Name | Qty | Avg Cost | Current | Day$ | Day% | P&L$ | P&L% | Value | Weight | Sector
+ *   Ticker | Name | Qty | Avg Cost | Current | Day$ | Day% | SPARK | P&L$ | P&L% | Value | Weight | Sector | Asset
  *
  * PLAN-0071 Phase 6 — AG Grid migration:
  *   - DataTable replaced with AgGridBase (ag-grid-community v35).
@@ -24,9 +24,13 @@
  *     hardcoded-pixel-width sibling <div> footer was removed; the pinned row
  *     stays in sync with column widths and TICKER pin automatically.
  *
+ * PRD-0089 W2 §4.8 — density lock:
+ *   - rowHeight=20 (was 28) — fits more positions above the fold.
+ *   - SPARK + ASSET columns added in §4.9 via ag-holdings-columns.tsx.
+ *
  * WHO USES IT: app/(app)/portfolio/page.tsx — Holdings tab
  * DATA SOURCE: holdingsResp.holdings + batch quotes from S9
- * DESIGN REFERENCE: PLAN-0044 Wave 2, PLAN-0059 F-1, PLAN-0071 Phase 6
+ * DESIGN REFERENCE: PLAN-0044 Wave 2, PLAN-0059 F-1, PLAN-0071 Phase 6, PRD-0089 W2
  */
 
 "use client";
@@ -52,7 +56,11 @@ import type {
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
-const HOLDINGS_COLS_KEY = "worldview-holdings-cols";
+// WHY v2 (was "worldview-holdings-cols"): W2 adds SPARK + ASSET columns that don't
+// exist in the v1 persisted column state. Loading a v1 state would position the new
+// columns in wrong places or hide them entirely. Bumping the key creates a new
+// localStorage namespace so stale v1 state is ignored automatically on first load.
+const HOLDINGS_COLS_KEY = "holdings.col-state.v2";
 
 // Valid AG Grid sort column IDs for holdings (guards against malformed URL params).
 const VALID_SORT_COL_IDS = new Set([
@@ -74,6 +82,30 @@ export interface SemanticHoldingsTableProps {
   sectors?: Record<string, string | null>;
   /** Total portfolio market value — used to compute Weight column */
   totalValue: number;
+  /**
+   * 14-day OHLCV close-price series keyed by ticker — fed to SparklineCellRenderer
+   * via AG Grid context. WHY context (not a per-row prop): AG Grid ColDefs are
+   * static objects; passing dynamic data per-row requires context injection.
+   * The context object reference only changes when holdingsSeries changes, so
+   * it does not cause spurious re-renders of unchanged rows.
+   */
+  holdingsSeries?: Record<string, number[]>;
+  /**
+   * Optional row-click handler for the HoldingDetailPanel slide-over (PRD-0089 SA-B).
+   *
+   * WHY optional (not required): backward-compatible addition. Every existing
+   * call site (analytics page, HoldingsTab prior to SA-B) does not pass this prop
+   * and continues to get the default "navigate to instrument page" behavior.
+   *
+   * When provided: clicking a row calls onSelectHolding(row.ticker) instead of
+   * navigating to /instruments/{ticker}. The caller is responsible for showing
+   * the HoldingDetailPanel.
+   *
+   * WHY string ticker (not full Holding): the caller already has the enriched
+   * holdings array; passing the ticker lets it look up the full object via
+   * findHoldingByTicker() without threading a second holding reference here.
+   */
+  onSelectHolding?: (ticker: string) => void;
 }
 
 // ── Context menu overlay ──────────────────────────────────────────────────────
@@ -91,6 +123,8 @@ export function SemanticHoldingsTable({
   quotes,
   sectors,
   totalValue,
+  holdingsSeries,
+  onSelectHolding,
 }: SemanticHoldingsTableProps) {
   const router = useRouter();
   const searchParams = useSearchParams();
@@ -283,6 +317,12 @@ export function SemanticHoldingsTable({
   // ── Enrich rows ───────────────────────────────────────────────────────────
   let totalPnl = 0;
   let totalPnlCost = 0;
+  // Accumulate portfolio-level day change across all positions that have a quote.
+  // WHY separate hasDayChange flag: if NO position has a live quote yet, the
+  // sum is 0 but it's meaningless — we'd show "+$0.00" while data is loading.
+  // Only show the total once at least one position has a real day-change value.
+  let totalDayChangeValue = 0;
+  let hasDayChange = false;
 
   const enrichedRows: EnrichedHoldingRow[] = holdings.map((h) => {
     const quote = quotes[h.instrument_id];
@@ -299,14 +339,30 @@ export function SemanticHoldingsTable({
     const dayChange = quote?.change ?? null;
     const dayChangePct = quote?.change_pct ?? null;
     const dayChangeValue = dayChange != null ? dayChange * h.quantity : null;
+    // WHY fallback chain: getHoldings() never populates asset_class (it's absent
+    // from the raw API response transform). We derive it here:
+    //   1. Use h.asset_class if the field ever gets populated upstream.
+    //   2. If sector is "ETF" (set by the EODHD ETF fallback), classify as "etf".
+    //   3. Default to "equity" — the most common instrument type in a portfolio.
+    const assetClass = h.asset_class ?? (sector === "ETF" ? "etf" : "equity");
 
     totalPnl += pnl;
     totalPnlCost += h.average_cost * h.quantity;
+    if (dayChangeValue != null) {
+      totalDayChangeValue += dayChangeValue;
+      hasDayChange = true;
+    }
 
-    return { h, livePrice, freshness, value, pnl, pnlPct, weight, sector, dayChange, dayChangePct, dayChangeValue };
+    return { h, livePrice, freshness, value, pnl, pnlPct, weight, sector, assetClass, dayChange, dayChangePct, dayChangeValue };
   });
 
   const totalPnlPct = totalPnlCost > 0 ? (totalPnl / totalPnlCost) * 100 : 0;
+  // WHY previous-day basis: day% for the portfolio = dayChange$ / (totalValue - dayChange$).
+  // This approximates yesterday's portfolio value to compute a meaningful % return for today.
+  const prevDayValue = totalValue - totalDayChangeValue;
+  const totalDayChangePct = hasDayChange && prevDayValue > 0
+    ? (totalDayChangeValue / prevDayValue) * 100
+    : null;
 
   // ── Pinned bottom row (AG Grid totals) ──────────────────────────────────────
   // WHY pinnedBottomRowData instead of a sibling <div>: AG Grid renders pinned
@@ -336,15 +392,37 @@ export function SemanticHoldingsTable({
     value: totalValue,
     pnl: totalPnl,
     pnlPct: totalPnlPct,
-    weight: 0,
+    // WHY 100 (not 0): the TOTAL row weight is always 100% by definition —
+    // all positions together are 100% of the portfolio. The WeightCellRenderer
+    // has a pinned-bottom guard that renders this special value.
+    weight: 100,
     sector: null,
+    assetClass: "",
     dayChange: null,
-    dayChangePct: null,
-    dayChangeValue: null,
+    dayChangePct: hasDayChange ? totalDayChangePct : null,
+    // WHY hasDayChange guard: only show the total when at least one position
+    // has a live quote change. Showing $0.00 while quotes are loading would
+    // mislead the trader into thinking the market is flat.
+    dayChangeValue: hasDayChange ? totalDayChangeValue : null,
   };
 
+  // WHY explicit height (not h-full): this component lives inside a page-level
+  // overflow-y-auto scroll container. In that layout, h-full on the AG Grid
+  // wrapper resolves to 0px (no explicit parent height in a scroll container).
+  // AG Grid requires a non-zero container height to render rows into the
+  // virtual viewport — with 0px the grid header appears but all rows are
+  // clipped. Computing the height from rowCount * rowHeight + headerHeight
+  // gives an intrinsic size that the scroll container can accommodate.
+  // Cap at 20 rows (400px data + 28px header = 428px) to avoid an
+  // excessively tall grid when portfolios have many holdings.
+  const ROW_H = 20;   // must match rowHeight prop below
+  const HEADER_H = 28;
+  const PINNED_H = ROW_H;  // 1 pinned totals row
+  const visibleRows = Math.min(enrichedRows.length, 20);
+  const gridHeight = visibleRows * ROW_H + HEADER_H + PINNED_H;
+
   return (
-    <div className="flex flex-col overflow-auto relative">
+    <div className="flex flex-col relative" style={{ height: `${gridHeight}px` }}>
       {/* ── AG Grid table ─────────────────────────────────────────────────── */}
       {/* WHY pinnedBottomRowData: renders totals as a proper AG Grid pinned row,
           which tracks column widths/pinning/scroll automatically. Replaces the
@@ -352,17 +430,37 @@ export function SemanticHoldingsTable({
       <AgGridBase<EnrichedHoldingRow>
         rowData={enrichedRows}
         columnDefs={holdingsAgColumns}
+        // WHY context: SparklineCellRenderer reads holdingsSeries from params.context.
+        // Passing via AG Grid context avoids threading data through each ColDef.
+        context={holdingsSeries ? { holdingsSeries } : undefined}
         getRowId={(p) => p.data.h.holding_id}
         onGridReady={handleGridReady}
-        onRowClicked={(row) =>
-          router.push(`/instruments/${encodeURIComponent(row.h.instrument_id ?? row.h.entity_id)}`)
-        }
+        onRowClicked={(row) => {
+          // PRD-0089 SA-B: when the parent provides onSelectHolding (HoldingDetailPanel
+          // wiring), clicking a row opens the slide-over instead of navigating.
+          // WHY optional chaining: every existing call site without onSelectHolding
+          // falls through to the default instrument-page navigation unchanged.
+          if (onSelectHolding) {
+            onSelectHolding(row.h.ticker ?? row.h.instrument_id ?? row.h.entity_id);
+            return;
+          }
+          // PRD-0089 F2 step 11 (§6.6): ticker-first URL. Holding.ticker is
+          // populated for every row (S1 portfolio service resolves on add).
+          // encodeURIComponent passes dot-form tickers (BRK.B) through cleanly.
+          // Falls back to UUID for the rare case where ticker is empty.
+          router.push(
+            `/instruments/${encodeURIComponent(row.h.ticker ?? row.h.instrument_id ?? row.h.entity_id)}`,
+          );
+        }}
         onSortChanged={handleSortChanged}
         onColumnStateChanged={handleColumnStateChanged}
         onCellContextMenu={handleCellContextMenu}
         preventDefaultOnContextMenu={true}
         pinnedBottomRowData={[pinnedBottomRow]}
-        className="flex-1"
+        // WHY rowHeight=20 (was 28): W2 density lock — fits more positions above the
+        // fold. 20px gives one row per ~11px font line + 4.5px top + 4.5px bottom
+        // padding, which is legible at text-[11px] while reducing wasted whitespace.
+        rowHeight={20}
       />
 
       {/* ── Floating context menu ─────────────────────────────────────────── */}
@@ -372,7 +470,7 @@ export function SemanticHoldingsTable({
           useContextMenuActions hook. Click-outside closes via document listener. */}
       {ctxMenu && ctxGroups.length > 0 && (
         <div
-          className="fixed z-50 min-w-[160px] overflow-hidden rounded-[2px] border border-border bg-card py-1 shadow-md"
+          className="fixed z-50 min-w-[160px] overflow-hidden rounded-[2px] border border-border bg-card py-1 "
           style={{ top: ctxMenu.y, left: ctxMenu.x }}
           // Stop propagation so the document click listener doesn't immediately close the menu.
           onClick={(e) => e.stopPropagation()}

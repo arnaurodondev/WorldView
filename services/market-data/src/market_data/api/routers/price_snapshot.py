@@ -1,12 +1,19 @@
 """Price snapshot API router — internal endpoints for S9 (api-gateway).
 
 Exposes:
-  GET  /internal/v1/price/{instrument_id}   — single instrument
-  POST /internal/v1/price/batch             — up to 50 instruments
+  GET  /internal/v1/price/{instrument_id}                  — single instrument
+  POST /internal/v1/price/batch                            — up to 50 instruments (legacy list)
+  POST /internal/v1/price/batch?include_missing=true       — dict shape with explicit nulls
 
 These are INTERNAL endpoints (registered at /internal/v1 prefix).  They are
 only callable by S9 (api-gateway) via the internal JWT mechanism; they should
 not be exposed directly to the public internet.
+
+REQ-004 / TASK-W0-07: the batch endpoint supports two response shapes selected
+by the `include_missing` query parameter.  Default (`false`) returns the
+legacy `list[PriceSnapshotResponse]` shape — instruments with no data are
+silently omitted.  Opt-in `true` returns `dict[instrument_id,
+PriceSnapshotResponse | None]` so callers can detect missing instruments.
 
 Architecture:
   1. Check Valkey cache (PriceSnapshotCache) — O(1) hot path.
@@ -24,10 +31,14 @@ from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, HTTPException, Query, Request
+from fastapi.responses import JSONResponse
 
 from market_data.api.dependencies import ReadUoWDep
-from market_data.api.schemas.price_snapshot import BatchPriceSnapshotRequest, PriceSnapshotResponse
+from market_data.api.schemas.price_snapshot import (
+    BatchPriceSnapshotRequest,
+    PriceSnapshotResponse,
+)
 from market_data.application.ports.cache import PriceSnapshotCachePort
 from market_data.domain.enums import Timeframe
 from market_data.domain.price_snapshot import PriceSnapshotResolver
@@ -173,24 +184,86 @@ async def get_price_snapshot(
     return result
 
 
-@router.post("/price/batch", response_model=list[PriceSnapshotResponse])
+@router.post("/price/batch")
 async def get_price_snapshots_batch(
     body: BatchPriceSnapshotRequest,
     uow: ReadUoWDep,
     request: Request,
-) -> list[PriceSnapshotResponse]:
+    # REQ-004 / TASK-W0-07 — partial-result schema.
+    #
+    # `include_missing=false` (default, legacy):
+    #   Returns `list[PriceSnapshotResponse]` — instruments with no data are
+    #   silently omitted.  Preserves backward compatibility with the S9
+    #   api-gateway batch caller (`services/api-gateway/.../market.py:786-810`)
+    #   which currently does `isinstance(snap_list, list)`.
+    #
+    # `include_missing=true` (new opt-in):
+    #   Returns `dict[instrument_id, PriceSnapshotResponse | None]` so callers
+    #   can detect which instruments were missing (audit BUG-008 / REQ-004).
+    #   Keys preserve the input order from `body.instrument_ids` (Python 3.7+
+    #   dicts are insertion-ordered, so the JSON object iteration order is
+    #   deterministic).
+    include_missing: bool = Query(
+        default=False,
+        description=(
+            "If true, return a dict keyed by instrument_id with explicit nulls "
+            "for missing instruments (preserves input order). If false (default), "
+            "return a list with missing instruments silently omitted."
+        ),
+    ),
+    # Return annotation intentionally widened to `JSONResponse` — see the
+    # `include_missing` branch below for why we manually serialise the dict
+    # shape (FastAPI's Union response coercion drops the dict to a list).
+) -> JSONResponse:
     """Return price snapshots for up to 50 instruments in a single request.
 
-    Instruments with no available data are silently omitted from the response
-    list (not 404 — partial results are valid for a batch).
+    Two response shapes are available — selected via the `include_missing`
+    query parameter — to support a phased migration from the legacy list shape
+    to the new dict shape (REQ-004).
+
+    `include_missing=false` (default):
+        Returns `list[PriceSnapshotResponse]`. Instruments with no available
+        data are silently omitted. Backwards-compatible.
+
+    `include_missing=true`:
+        Returns `dict[instrument_id, PriceSnapshotResponse | None]`. Missing
+        instruments are present in the dict with explicit `null` values so
+        callers can detect them. Keys preserve the input order.
+
+    Empty input is rejected at the schema layer (`min_length=1`), so an empty
+    dict / list is only achievable by the dict shape when every requested
+    instrument has data (impossible) — i.e. the dict always has exactly
+    `len(body.instrument_ids)` keys.
     """
     # Get the PriceSnapshotCache from application state (injected at startup)
     cache: PriceSnapshotCachePort = request.app.state.price_snapshot_cache
 
-    results: list[PriceSnapshotResponse] = []
+    if include_missing:
+        # ── Dict shape — explicit nulls for missing instruments ──────────────
+        # We iterate in input order and rely on Python's insertion-ordered
+        # dicts to produce a deterministic JSON object key order.
+        #
+        # WHY JSONResponse (not a return value): FastAPI's response coercion
+        # collapses Union return types (`list | dict`) through Pydantic's
+        # union discriminator, which mis-routes the dict back into the list
+        # shape. Hand-building a JSONResponse bypasses that coercion and
+        # guarantees the wire shape matches what we returned.
+        mapping_payload: dict[str, dict[str, object] | None] = {}
+        for instrument_id in body.instrument_ids:
+            snap = await _resolve_and_cache(instrument_id, uow, cache)
+            # `model_dump(mode="json")` produces JSON-safe primitives (e.g.
+            # datetime → ISO-8601 string), matching the list-shape wire format.
+            mapping_payload[instrument_id] = snap.model_dump(mode="json") if snap is not None else None
+        return JSONResponse(content=mapping_payload, status_code=200)
+
+    # ── Legacy list shape — silently omit missing instruments ────────────────
+    # Use `jsonable_encoder` via Pydantic .model_dump() so we get a stable
+    # wire format. (FastAPI normally does this via response_model — we now
+    # do it explicitly so the route's return type is uniformly JSONResponse.)
+    list_payload: list[dict[str, object]] = []
     for instrument_id in body.instrument_ids:
         result = await _resolve_and_cache(instrument_id, uow, cache)
         if result is not None:
-            results.append(result)
+            list_payload.append(result.model_dump(mode="json"))
 
-    return results
+    return JSONResponse(content=list_payload, status_code=200)

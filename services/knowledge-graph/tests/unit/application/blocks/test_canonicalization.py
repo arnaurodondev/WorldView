@@ -79,7 +79,7 @@ class TestExactMatch:
                 registry_repo=registry,
                 outbox_repo=_make_outbox_repo(),
                 embedding_client=_make_embedding_client(),
-            )
+            ),
         )
         assert result.canonical_type == "employs"
         assert result.step == "exact"
@@ -101,7 +101,7 @@ class TestExactMatch:
                 registry_repo=registry,
                 outbox_repo=_make_outbox_repo(),
                 embedding_client=emb,
-            )
+            ),
         )
         emb.embed.assert_not_called()
 
@@ -121,7 +121,7 @@ class TestExactMatch:
                 registry_repo=_make_registry_repo(exact_return=_EXACT_ROW),
                 outbox_repo=outbox,
                 embedding_client=_make_embedding_client(),
-            )
+            ),
         )
         outbox.append.assert_not_called()
 
@@ -140,7 +140,7 @@ class TestExactMatch:
                 registry_repo=_make_registry_repo(exact_return=_EXACT_ROW),
                 outbox_repo=_make_outbox_repo(),
                 embedding_client=_make_embedding_client(),
-            )
+            ),
         )
         assert result.decay_alpha == pytest.approx(0.000950)
 
@@ -166,7 +166,7 @@ class TestSoftMap:
                 registry_repo=_make_registry_repo(exact_return=None, ann_return=_SOFT_ROW),
                 outbox_repo=_make_outbox_repo(),
                 embedding_client=_make_embedding_client(),
-            )
+            ),
         )
         assert result.canonical_type == "board_member_of"
         assert result.step == "soft_mapped"
@@ -187,7 +187,7 @@ class TestSoftMap:
                 registry_repo=_make_registry_repo(exact_return=None, ann_return=_SOFT_ROW),
                 outbox_repo=_make_outbox_repo(),
                 embedding_client=emb,
-            )
+            ),
         )
         emb.embed.assert_called_once_with("serves_on_board_of")
 
@@ -207,7 +207,7 @@ class TestSoftMap:
                 registry_repo=_make_registry_repo(exact_return=None, ann_return=_SOFT_ROW),
                 outbox_repo=outbox,
                 embedding_client=_make_embedding_client(),
-            )
+            ),
         )
         outbox.append.assert_not_called()
 
@@ -233,7 +233,7 @@ class TestPropose:
                 registry_repo=_make_registry_repo(exact_return=None, ann_return=None),
                 outbox_repo=_make_outbox_repo(),
                 embedding_client=_make_embedding_client(),
-            )
+            ),
         )
         assert result.canonical_type is None
         assert result.step == "proposed"
@@ -255,7 +255,7 @@ class TestPropose:
                 registry_repo=_make_registry_repo(exact_return=None, ann_return=None),
                 outbox_repo=_make_outbox_repo(),
                 embedding_client=_make_embedding_client(),
-            )
+            ),
         )
         assert result.step == "proposed"
 
@@ -275,7 +275,7 @@ class TestPropose:
                 registry_repo=_make_registry_repo(exact_return=None, ann_return=None),
                 outbox_repo=outbox,
                 embedding_client=_make_embedding_client(),
-            )
+            ),
         )
         outbox.append.assert_called_once()
         call_kwargs = outbox.append.call_args.kwargs
@@ -304,7 +304,7 @@ class TestPropose:
                 registry_repo=_make_registry_repo(exact_return=None, ann_return=None),
                 outbox_repo=outbox,
                 embedding_client=_make_embedding_client(),
-            )
+            ),
         )
         raw_payload = outbox.append.call_args.kwargs["payload_avro"]
         # Confluent magic byte present → decode via Avro path.
@@ -345,7 +345,7 @@ class TestCaseNormalization:
                 registry_repo=registry,
                 outbox_repo=_make_outbox_repo(),
                 embedding_client=_make_embedding_client(),
-            )
+            ),
         )
         assert result.canonical_type == "competes_with"
         assert result.step == "exact"
@@ -371,7 +371,7 @@ class TestCaseNormalization:
                 registry_repo=registry,
                 outbox_repo=_make_outbox_repo(),
                 embedding_client=_make_embedding_client(),
-            )
+            ),
         )
         assert result.step == "exact"
         registry.find_exact.assert_called_once_with("has_executive")
@@ -395,7 +395,7 @@ class TestCaseNormalization:
                 registry_repo=registry,
                 outbox_repo=outbox,
                 embedding_client=_make_embedding_client(),
-            )
+            ),
         )
         assert result.canonical_type is None
         assert result.step == "proposed"

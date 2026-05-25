@@ -195,6 +195,118 @@ async def test_company_overview_propagates_downstream_error(authed_client, authe
     assert response.status_code == 404
 
 
+@pytest.mark.asyncio
+async def test_company_overview_includes_full_time_employees(authed_client, authed_mock_clients) -> None:
+    """F-009 (PLAN-0089): full_time_employees is extracted from EODHD FullTimeEmployees
+    and returned as an integer in overview.instrument.
+
+    EODHD stores FullTimeEmployees as a string (e.g. "147000"); S9 must cast it to int
+    so the frontend never has to parse a numeric string.  Absent field must return None.
+    """
+    _entity_id = "01900000-0000-7000-8000-000000001099"
+
+    inst_data = {"id": _entity_id, "symbol": "AAPL", "exchange": "NASDAQ", "is_active": True}
+    # profile_data includes FullTimeEmployees as a string — mirrors real EODHD response.
+    profile_data = {
+        "records": [
+            {
+                "data": {
+                    "Name": "Apple Inc.",
+                    "Currency": "USD",
+                    "GicSector": "Information Technology",
+                    "FullTimeEmployees": "147000",
+                }
+            }
+        ]
+    }
+    ohlcv_data = {"items": [], "total": 0, "timeframe": "1d"}
+    quote_data = {"instrument_id": _entity_id, "last": "174.00", "timestamp": "2026-04-24T16:00:00Z"}
+    fundamentals_data = {
+        "security_id": _entity_id,
+        "records": [
+            {
+                "section": "highlights",
+                "period_type": "ttm",
+                "period_end_date": "2026-03-31",
+                "data": {"MarketCapitalization": 2_500_000_000_000, "PERatio": 28.5},
+            }
+        ],
+    }
+
+    def _make_resp(data: dict) -> MagicMock:
+        r = MagicMock(spec=httpx.Response)
+        r.status_code = 200
+        r.json.return_value = data
+        return r
+
+    async def _dispatch(path: str, **kwargs: object) -> MagicMock:
+        if "ohlcv" in path:
+            return _make_resp(ohlcv_data)
+        if "quotes" in path:
+            return _make_resp(quote_data)
+        if "fundamentals" in path and "company-profile" in path:
+            return _make_resp(profile_data)
+        if "fundamentals" in path:
+            return _make_resp(fundamentals_data)
+        return _make_resp(inst_data)
+
+    authed_mock_clients.market_data.get = AsyncMock(side_effect=_dispatch)
+
+    response = await authed_client.get(
+        f"/v1/companies/{_entity_id}/overview",
+        headers={"Authorization": f"Bearer {_make_jwt()}"},
+    )
+    assert response.status_code == 200
+
+    body = response.json()
+    instrument = body["instrument"]
+    # S9 must cast the EODHD string "147000" to the integer 147000.
+    assert (
+        instrument["full_time_employees"] == 147000
+    ), "FullTimeEmployees must be cast to int (not returned as the raw EODHD string)"
+
+
+@pytest.mark.asyncio
+async def test_company_overview_full_time_employees_absent_returns_none(authed_client, authed_mock_clients) -> None:
+    """F-009: full_time_employees is None when EODHD omits the field (ETFs, foreign ADRs)."""
+    _entity_id = "01900000-0000-7000-8000-000000001098"
+
+    inst_data = {"id": _entity_id, "symbol": "SPY", "exchange": "NYSE", "is_active": True}
+    # profile_data deliberately omits FullTimeEmployees — typical for ETFs.
+    profile_data = {"records": [{"data": {"Name": "SPDR S&P 500 ETF", "Currency": "USD"}}]}
+    ohlcv_data = {"items": [], "total": 0, "timeframe": "1d"}
+    quote_data = {"instrument_id": _entity_id, "last": "530.00", "timestamp": "2026-04-24T16:00:00Z"}
+    fundamentals_data = {"security_id": _entity_id, "records": []}
+
+    def _make_resp(data: dict) -> MagicMock:
+        r = MagicMock(spec=httpx.Response)
+        r.status_code = 200
+        r.json.return_value = data
+        return r
+
+    async def _dispatch(path: str, **kwargs: object) -> MagicMock:
+        if "ohlcv" in path:
+            return _make_resp(ohlcv_data)
+        if "quotes" in path:
+            return _make_resp(quote_data)
+        if "fundamentals" in path and "company-profile" in path:
+            return _make_resp(profile_data)
+        if "fundamentals" in path:
+            return _make_resp(fundamentals_data)
+        return _make_resp(inst_data)
+
+    authed_mock_clients.market_data.get = AsyncMock(side_effect=_dispatch)
+
+    response = await authed_client.get(
+        f"/v1/companies/{_entity_id}/overview",
+        headers={"Authorization": f"Bearer {_make_jwt()}"},
+    )
+    assert response.status_code == 200
+
+    body = response.json()
+    assert body["instrument"]["full_time_employees"] is None
+
+
 # ── PLAN-0059 I-5: instrument page-bundle ─────────────────────────────
 
 
@@ -393,21 +505,25 @@ async def test_instrument_page_bundle_overview_failure(
 
 
 @pytest.mark.asyncio
-async def test_instrument_page_bundle_uses_kg_resolved_entity_id(
+async def test_instrument_page_bundle_uses_unified_id_for_news(
     authed_client,
     authed_mock_clients,
 ) -> None:
-    """QA-iter1: news must be fetched with the KG-resolved entity_id.
+    """PRD-0089 F2: entity_id == instrument_id for tradable securities.
 
-    The original test had KG return entity_id == instrument_id, so the
-    'KG resolution actually reaches news' contract was untested. Here KG
-    returns a DIFFERENT UUID; we verify (a) bundle.entity_id surfaces it,
-    (b) the nlp-pipeline news call was made against THAT entity_id, not
-    instrument_id.
+    SUPERSEDES the previous contract that the bundle would resolve a
+    SEPARATE KG entity_id via /api/v1/entities/lookup and route the news
+    call against that distinct UUID. After F2 the M-017 invariant
+    guarantees ``canonical_entities.entity_id == instruments.id`` for
+    tradable kinds, so:
+
+      (a) bundle.entity_id == bundle.instrument_id (both = input UUID)
+      (b) the nlp-pipeline news call targets the same UUID
+      (c) NO KG ``/entities/lookup?ticker=`` round-trip is issued —
+          that 70 LOC translation dance was deleted in F2 step 3.
     """
     mock_clients = authed_mock_clients
     inst_id = "01900000-0000-7000-8000-000000001008"
-    kg_entity_id = "01900000-0000-7000-8000-0000000019AA"  # distinct
 
     inst_data = {"id": inst_id, "symbol": "AMZN", "exchange": "NASDAQ", "is_active": True}
     profile_data = {"records": [{"data": {"Name": "Amazon", "Currency": "USD"}}]}
@@ -441,10 +557,16 @@ async def test_instrument_page_bundle_uses_kg_resolved_entity_id(
         nlp_calls.append(path)
         return _make_resp(news_data)
 
+    kg_calls: list[str] = []
+
+    async def _kg_dispatch(path: str, **_kwargs: object) -> MagicMock:
+        kg_calls.append(path)
+        # The resolver shim may probe /entities/lookup for a TICKER
+        # input. For this test (UUID input) it must not be called.
+        return _make_resp({"entity_id": inst_id})
+
     mock_clients.market_data.get = AsyncMock(side_effect=_md_dispatch)
-    mock_clients.knowledge_graph.get = AsyncMock(
-        return_value=_make_resp({"entity_id": kg_entity_id}),
-    )
+    mock_clients.knowledge_graph.get = AsyncMock(side_effect=_kg_dispatch)
     mock_clients.nlp_pipeline.get = AsyncMock(side_effect=_nlp_dispatch)
 
     response = await authed_client.get(
@@ -453,12 +575,18 @@ async def test_instrument_page_bundle_uses_kg_resolved_entity_id(
     )
     assert response.status_code == 200
     body = response.json()
-    # Bundle surfaces the KG-resolved entity_id, not the instrument_id.
-    assert body["entity_id"] == kg_entity_id
-    # The news call was made against the KG entity_id.
+    # Post-F2: entity_id == instrument_id (M-017 invariant).
+    assert body["entity_id"] == inst_id
+    assert body["instrument_id"] == inst_id
+    # The news call targeted the unified id.
     assert any(
-        kg_entity_id in p for p in nlp_calls
-    ), f"nlp news call should target entity_id={kg_entity_id}; saw paths: {nlp_calls}"
+        inst_id in p for p in nlp_calls
+    ), f"nlp news call should target instrument_id={inst_id}; saw paths: {nlp_calls}"
+    # The deleted translation dance no longer hits the KG ticker-lookup
+    # endpoint — confirm regression doesn't reintroduce it.
+    assert not any(
+        "/entities/lookup" in p for p in kg_calls
+    ), f"F2 deleted the KG ticker-lookup round-trip; saw KG paths: {kg_calls}"
 
 
 @pytest.mark.asyncio
@@ -759,6 +887,36 @@ async def test_get_splits_dividends_proxies_to_market_data(authed_client, authed
 
 
 @pytest.mark.asyncio
+async def test_get_institutional_holders_proxies_to_market_data(authed_client, authed_mock_clients) -> None:
+    """GET /v1/fundamentals/{id}/institutional-holders → S3 /institutional-holders."""
+    authed_mock_clients.market_data.get = AsyncMock(return_value=_downstream_200())
+
+    response = await authed_client.get(
+        f"/v1/fundamentals/{_INSTR_ID}/institutional-holders",
+        headers={"Authorization": f"Bearer {_DUMMY_JWT}"},
+    )
+
+    assert response.status_code == 200
+    call_args = authed_mock_clients.market_data.get.call_args
+    assert "/institutional-holders" in call_args[0][0]
+
+
+@pytest.mark.asyncio
+async def test_get_fund_holders_proxies_to_market_data(authed_client, authed_mock_clients) -> None:
+    """GET /v1/fundamentals/{id}/fund-holders → S3 /fund-holders."""
+    authed_mock_clients.market_data.get = AsyncMock(return_value=_downstream_200())
+
+    response = await authed_client.get(
+        f"/v1/fundamentals/{_INSTR_ID}/fund-holders",
+        headers={"Authorization": f"Bearer {_DUMMY_JWT}"},
+    )
+
+    assert response.status_code == 200
+    call_args = authed_mock_clients.market_data.get.call_args
+    assert "/fund-holders" in call_args[0][0]
+
+
+@pytest.mark.asyncio
 async def test_fundamentals_section_routes_require_auth(client, mock_clients) -> None:
     """Fundamentals section routes return 401 when user is not authenticated."""
     # Uses the unauthenticated `client` fixture (no bearer token injected)
@@ -768,6 +926,8 @@ async def test_fundamentals_section_routes_require_auth(client, mock_clients) ->
         "technicals",
         "share-statistics",
         "insider-transactions",
+        "institutional-holders",
+        "fund-holders",
         "earnings-trend",
         "earnings-annual-trend",
         "splits-dividends",
@@ -780,8 +940,8 @@ async def test_fundamentals_section_routes_require_auth(client, mock_clients) ->
 
 
 @pytest.mark.asyncio
-async def test_find_similar_entities_proxies_to_knowledge_graph(client, mock_clients) -> None:
-    """POST /v1/entities/similar proxies body to S7 knowledge-graph."""
+async def test_find_similar_entities_proxies_to_knowledge_graph(authed_client, authed_mock_clients) -> None:
+    """POST /v1/entities/similar proxies body to S7 knowledge-graph (requires auth)."""
     entity_id = "00000000-0000-0000-0000-000000000001"
     downstream_resp = MagicMock(spec=httpx.Response)
     downstream_resp.status_code = 200
@@ -789,50 +949,61 @@ async def test_find_similar_entities_proxies_to_knowledge_graph(client, mock_cli
         b'{"entity_id": "' + entity_id.encode() + b'", "canonical_name": "AAPL", "results": [], "total": 0}'
     )
 
-    mock_clients.knowledge_graph.post = AsyncMock(return_value=downstream_resp)
+    authed_mock_clients.knowledge_graph.post = AsyncMock(return_value=downstream_resp)
 
+    response = await authed_client.post(
+        "/v1/entities/similar",
+        content=b'{"entity_id": "00000000-0000-0000-0000-000000000001"}',
+        headers={"Content-Type": "application/json", "Authorization": f"Bearer {_make_jwt()}"},
+    )
+
+    assert response.status_code == 200
+    authed_mock_clients.knowledge_graph.post.assert_called_once()
+    call_args = authed_mock_clients.knowledge_graph.post.call_args[0]
+    assert "/api/v1/entities/similar" in call_args[0]
+
+
+@pytest.mark.asyncio
+async def test_find_similar_entities_requires_auth(client, mock_clients) -> None:
+    """POST /v1/entities/similar returns 401 when no Bearer token is provided."""
     response = await client.post(
         "/v1/entities/similar",
         content=b'{"entity_id": "00000000-0000-0000-0000-000000000001"}',
         headers={"Content-Type": "application/json"},
     )
-
-    assert response.status_code == 200
-    mock_clients.knowledge_graph.post.assert_called_once()
-    call_args = mock_clients.knowledge_graph.post.call_args[0]
-    assert "/api/v1/entities/similar" in call_args[0]
+    assert response.status_code == 401
 
 
 @pytest.mark.asyncio
-async def test_find_similar_entities_propagates_s7_404(client, mock_clients) -> None:
-    """S7 404 (entity not found) is propagated unchanged."""
+async def test_find_similar_entities_propagates_s7_404(authed_client, authed_mock_clients) -> None:
+    """S7 404 (entity not found) is propagated unchanged (requires auth)."""
     downstream_resp = MagicMock(spec=httpx.Response)
     downstream_resp.status_code = 404
     downstream_resp.content = b'{"detail": "Entity not found"}'
 
-    mock_clients.knowledge_graph.post = AsyncMock(return_value=downstream_resp)
+    authed_mock_clients.knowledge_graph.post = AsyncMock(return_value=downstream_resp)
 
-    response = await client.post(
+    response = await authed_client.post(
         "/v1/entities/similar",
         content=b'{"entity_id": "00000000-0000-0000-0000-000000000099"}',
-        headers={"Content-Type": "application/json"},
+        headers={"Content-Type": "application/json", "Authorization": f"Bearer {_make_jwt()}"},
     )
     assert response.status_code == 404
 
 
 @pytest.mark.asyncio
-async def test_find_similar_entities_propagates_s7_503(client, mock_clients) -> None:
-    """S7 503 (pgvector unavailable) is propagated unchanged."""
+async def test_find_similar_entities_propagates_s7_503(authed_client, authed_mock_clients) -> None:
+    """S7 503 (pgvector unavailable) is propagated unchanged (requires auth)."""
     downstream_resp = MagicMock(spec=httpx.Response)
     downstream_resp.status_code = 503
     downstream_resp.content = b'{"detail": "Similarity search unavailable"}'
 
-    mock_clients.knowledge_graph.post = AsyncMock(return_value=downstream_resp)
+    authed_mock_clients.knowledge_graph.post = AsyncMock(return_value=downstream_resp)
 
-    response = await client.post(
+    response = await authed_client.post(
         "/v1/entities/similar",
         content=b'{"entity_id": "00000000-0000-0000-0000-000000000001"}',
-        headers={"Content-Type": "application/json"},
+        headers={"Content-Type": "application/json", "Authorization": f"Bearer {_make_jwt()}"},
     )
     assert response.status_code == 503
 
@@ -908,26 +1079,25 @@ async def test_fundamentals_timeseries_sends_system_jwt(app, mock_clients) -> No
 
 
 @pytest.mark.asyncio
-async def test_similar_entities_sends_system_jwt(app, mock_clients) -> None:
-    """F-02: POST /v1/entities/similar (public) sends X-Internal-JWT to S7."""
-    _inject_rsa_keys(app)
+async def test_similar_entities_sends_user_jwt(authed_app_with_rsa, rsa_authed_mock_clients) -> None:
+    """POST /v1/entities/similar (authenticated) forwards X-Internal-JWT derived from user JWT to S7."""
     downstream_resp = MagicMock(spec=httpx.Response)
     downstream_resp.status_code = 200
     downstream_resp.content = b'{"results": [], "total": 0}'
-    mock_clients.knowledge_graph.post = AsyncMock(return_value=downstream_resp)
+    rsa_authed_mock_clients.knowledge_graph.post = AsyncMock(return_value=downstream_resp)
 
     from httpx import ASGITransport, AsyncClient
 
-    transport = ASGITransport(app=app)
+    transport = ASGITransport(app=authed_app_with_rsa)
     async with AsyncClient(transport=transport, base_url="http://test") as client:
         response = await client.post(
             "/v1/entities/similar",
             content=b'{"entity_id": "00000000-0000-0000-0000-000000000001"}',
-            headers={"Content-Type": "application/json"},
+            headers={"Content-Type": "application/json", "Authorization": f"Bearer {_make_jwt()}"},
         )
 
     assert response.status_code == 200
-    call_kwargs = mock_clients.knowledge_graph.post.call_args[1]
+    call_kwargs = rsa_authed_mock_clients.knowledge_graph.post.call_args[1]
     assert "X-Internal-JWT" in call_kwargs["headers"]
 
 
@@ -1169,3 +1339,79 @@ async def test_entity_graph_resilient_to_missing_fields(authed_client, authed_mo
     assert len(body["nodes"]) == 1  # center only
     assert body["nodes"][0]["size"] == 2
     assert body["edges"] == []
+
+
+# ── F-010: UUID validation on instrument_id path params ──────────────────────
+
+
+@pytest.mark.parametrize(
+    "bad_id",
+    [
+        "not-a-uuid",
+        "AAPL",
+        "screen",
+        "'; DROP TABLE instruments; --",
+        "12345678-1234-1234-1234",  # truncated UUID
+        "javascript:alert(1)",
+    ],
+)
+@pytest.mark.asyncio
+async def test_market_routes_reject_non_uuid_instrument_id(authed_client, bad_id: str) -> None:
+    """Routes with instrument_id: UUID path param return 422 for non-UUID inputs.
+
+    WHY: FastAPI auto-validates UUID path params and returns 422 for malformed
+    inputs, stopping invalid IDs at the S9 boundary before they reach asyncpg
+    or downstream services (F-010 security fix).
+    """
+    resp = await authed_client.get(
+        f"/v1/fundamentals/{bad_id}/snapshot",
+        headers={"Authorization": f"Bearer {_DUMMY_JWT}"},
+    )
+    assert resp.status_code == 422, f"Expected 422 for malformed instrument_id={bad_id!r}, got {resp.status_code}"
+
+
+@pytest.mark.asyncio
+async def test_market_routes_accept_valid_uuid(authed_client, authed_mock_clients) -> None:
+    """Routes with instrument_id: UUID path param accept valid UUIDs without 422.
+
+    WHY: The UUID annotation must not block valid UUID inputs — response may be
+    any non-422 status code depending on downstream mock state.
+    """
+    authed_mock_clients.market_data.get = AsyncMock(return_value=_downstream_200())
+
+    resp = await authed_client.get(
+        f"/v1/fundamentals/{_INSTR_ID}/snapshot",
+        headers={"Authorization": f"Bearer {_DUMMY_JWT}"},
+    )
+    # Must NOT be 422 — a valid UUID is accepted.
+    assert resp.status_code != 422, f"Valid UUID should not return 422, got {resp.status_code}"
+
+
+@pytest.mark.parametrize(
+    "route_suffix",
+    [
+        "snapshot",
+        "technicals",
+        "share-statistics",
+        "insider-transactions",
+        "institutional-holders",
+        "fund-holders",
+        "earnings-trend",
+        "earnings-annual-trend",
+        "splits-dividends",
+        "income-statement",
+        "intraday-stats",
+        "multi-period-returns",
+        "price-levels",
+    ],
+)
+@pytest.mark.asyncio
+async def test_fundamentals_routes_reject_non_uuid_id(authed_client, route_suffix: str) -> None:
+    """All /v1/fundamentals/{instrument_id}/... routes reject non-UUID inputs with 422."""
+    resp = await authed_client.get(
+        f"/v1/fundamentals/not-a-uuid/{route_suffix}",
+        headers={"Authorization": f"Bearer {_DUMMY_JWT}"},
+    )
+    assert resp.status_code == 422, (
+        f"Expected 422 for non-UUID id on /v1/fundamentals/not-a-uuid/{route_suffix}, " f"got {resp.status_code}"
+    )

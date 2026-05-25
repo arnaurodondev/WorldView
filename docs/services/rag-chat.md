@@ -296,6 +296,24 @@ Two tools differ from the rest: they interact with user-owned state rather than 
 
 ---
 
+## PLAN-0093 E-Wave Hardening (2026-05-24)
+
+Wave E of PLAN-0093 rebuilt the chat agent's safety pipeline around five orthogonal layers, each addressing a distinct failure mode surfaced by the 2026-05-23 intelligence pipelines QA. Together they convert the chat orchestrator from a "trust the LLM" loop into a guarded pipeline where every numeric claim, entity reference, and tool result is independently validated before delivery.
+
+- **PLAN-0093 E-1 — Intent inference (`application/services/intent_inference.py`)**: a deterministic, pure-Python classifier that maps the first batch of `ToolUseBlock`s emitted by the LLM into a `QueryIntent` enum. Priority order: `compare_entities` or ≥ 2 distinct `entity_id`s → `COMPARISON`; graph tools (`traverse_graph`, `get_entity_paths`) → `RELATIONSHIP`; fundamentals/screen → `FINANCIAL_DATA`; calendar/temporal → `MACRO`; doc/claim search → `FACTUAL_LOOKUP`; else `GENERAL`. The orchestrator (`chat_orchestrator.py:454-472`) re-derives intent on iteration 0 only and rewrites `messages[0]` in place with the per-intent style addendum, so iteration 1+ uses the right formatting. Intent is also the label for `rag_queries_total{intent=...}` and the audit log. Co-located with E-1 is the **tool-call dedup coalescer** (`_tool_result_cache` keyed by `(tool_name, frozenset((k, repr(v))))`): duplicate emits across iterations are served from memory and logged as `tool_dedup_hit`. The cache is allocated per call to `_execute_streaming_inner`, so the turn boundary clears it implicitly.
+
+- **PLAN-0093 E-2 — Numeric grounding (`application/services/numeric_grounding.py`)**: `NumericGroundingValidator` extracts every signed number with optional `$`, thousands separators, decimal portion, and `B/M/K/T/%` suffix from the LLM response, classifies each via `classify_number()` into a `FieldKind` enum (`REVENUE`, `EPS`, `MARKET_CAP`, `RATIO`, `RETURN_PCT`, `HEADCOUNT`, `SHARES`, `PRICE`, `YEAR`, `QUARTER`, `UNKNOWN`), then matches against tool-result values **of the same kind first** with the per-kind tolerance from `libs/contracts/numeric_grounding.py:DEFAULT_TOLERANCES` (overridable via `NUMERIC_GROUNDING_TOLERANCES_JSON`). EPS at 11% off fails; headcount at 0.25% off passes. **Sign mismatches always fail** regardless of tolerance — a loss reported as a gain is a lie, not a rounding error. Quarter labels (`Q1 2026`, `Q1 FY26`, `Q1 fiscal 2027`) are canonicalised by `_normalize_quarter_label` and require verbatim presence in the tool text blob. On validation fail the orchestrator's `_run_grounding_validation` (chat_orchestrator.py:914+) re-prompts the LLM **once** with the unsupported numbers; if the rewrite also fails, a "⚠ Some numbers could not be verified" banner is appended so the user is warned rather than silently shown a hallucination.
+
+- **PLAN-0093 E-3 — Name resolution in 4 KG tools (`application/pipeline/handlers/intelligence.py:161-196`)**: `_resolve_entity_by_name(tool_name, entity_name)` is the single helper invoked by `get_entity_graph`, `traverse_graph`, `search_entity_relations`, `search_claims`, `search_events`, and `get_contradictions` before any KG call. Resolution priority: (1) if `entity_context` is set and a case-insensitive substring match holds, return the scoped entity_id; (2) else call `S7.resolve_entity_by_name(entity_name, limit=3)` and take `candidates[0]`. The S7 alias index does the fuzzy matching; ties surface to the user via the LLM's normal answer flow because the handler logs `tool_entity_resolved_by_name` with the chosen alias + similarity for audit, and returns `None` (skipping the tool) when no alias matches — at which point the orchestrator's all-tools-failed guard or multi-tool fallback (E-4) takes over.
+
+- **PLAN-0093 E-4 — Multi-tool fallback (`chat_orchestrator.py:594-607` + `_try_fallback_tools` at line 862)**: on iteration 0, if every tool returned empty AND no action is pending, the orchestrator consults the `_FALLBACK_MAP` whitelist — `search_documents → get_entity_intelligence`, `get_contradictions → search_claims` (with `polarity=negative` injected), `get_economic_calendar → get_temporal_events`, `search_claims → search_documents` — and retries with the same input args. Each fallback is a single attempt (no recursion) and consumes the same per-turn budget as the original call (`cumulative_tool_latency` is incremented in the surrounding loop). If the fallback also returns empty, `all_tools_failed` fires and the user gets an explicit error rather than a hallucinated answer.
+
+- **PLAN-0093 E-5 — Citation validation (`chat_orchestrator.py:128-176` + invocation at line 774)**: two scrubbers run post-LLM, pre-delivery. `_scrub_orphan_citations(text, max_index)` strips any `[N\d+]` marker where the index exceeds `len(reranked)` (the number of items the user actually saw); valid markers `[N1]..[NK]` stay put. `_scrub_unseen_refs` replaces any `entity:UUID` or `article:UUID` reference whose lowercased ID is **not** in `seen_item_ids` (harvested from tool results across all iterations) with `[ref:redacted]`. The whitelist is sourced from the live retrieval, never from a static list. Stripped-citation text is retained — only the marker disappears — so the prose still flows; the orphan count is logged for monitoring LLM citation discipline.
+
+See `docs/audits/2026-05-23-qa-intelligence-pipelines-report.md` F-CHAT-AGENT-001..005 for the original failure modes that drove each layer (AMD Q2 2026 revenue fabrication, MSTR empty-fallback hallucination, entity-name mis-resolution, citation marker drift, multi-iteration tool re-emission).
+
+---
+
 ## Caching Strategy
 
 | Key | TTL | Purpose |
@@ -358,7 +376,6 @@ services/rag-chat/src/rag_chat/
 │   ├── pipeline/
 │   │   ├── tool_executor.py          # ToolExecutorFactory, EntityContext, ToolCallProvenance; 8 handlers; Cypher injection guard (_ALLOWED_CYPHER_REL_TYPES)
 │   │   ├── hyde_expander.py          # HyDE hypothesis + embedding
-│   │   ├── fusion.py                 # GraphEnricher + FusionPipeline
 │   │   ├── reranker.py               # BGE reranker via Ollama
 │   │   ├── context_assembler.py      # Numbered context blocks
 │   │   ├── prompt_builder.py         # Full prompt assembly
@@ -484,6 +501,19 @@ All env vars use prefix `RAG_CHAT_`.
 | `rag_tool_call_total` | counter | `tool_name`, `status` |
 | `rag_tool_call_latency_seconds` | histogram | `tool_name` |
 | `rag_tool_use_first_turn_latency_seconds` | histogram | — |
+
+#### New Metrics (PLAN-0093 QA-7)
+
+Four additional metrics were introduced in PLAN-0093 QA-7 to surface tool-use regressions and registry health:
+
+| Metric | Type | Labels | Description |
+|--------|------|--------|-------------|
+| `rag_no_tool_calls_first_turn_total` | counter | `provider` | LLM answered on iteration 0 without calling any tool; a spike indicates prompt or provider regression |
+| `rag_tool_result_items` | histogram | `tool_name` | Number of items returned per tool call (buckets: 0/1/3/5/10/20/50/100/250); p95 spike = retrieval bottleneck |
+| `rag_chat_with_tools_failed_total` | counter | `provider` | Provider-level `chat_with_tools` failures; increments on every exception in the fallback chain |
+| `rag_tool_registry_size` | gauge | `kind` | Set at startup by `validate_registry_parity()`; `kind=manifest` = tools declared in YAML, `kind=handled` = tools with a registered handler; if these two values diverge the service refuses to start |
+
+**`rag_latency_seconds` per-tool threshold (PLAN-0093 QA-7)**: the existing histogram now also covers per-tool timing. A `tool_slow` warning fires whenever a single tool execution exceeds **2 seconds** (configurable); previously timing was only tracked at the full-turn level.
 
 #### Retrieval Quality Metrics (PLAN-0063 W5-5)
 

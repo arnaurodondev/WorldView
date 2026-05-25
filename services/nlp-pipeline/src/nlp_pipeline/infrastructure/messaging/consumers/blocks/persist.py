@@ -113,9 +113,23 @@ async def persist_artifacts(
 
     chunks = _augment_chunks(chunks, ml.final_mentions, gliner_mention_floor)
 
+    # PLAN-0093 C-2 (F-NPL-005): apply ``settings.min_persist_floor`` BEFORE writing
+    # to the entity_mentions table. The chunks.entity_mentions JSONB already filters
+    # by ``gliner_mention_floor`` in ``_augment_chunks`` above — this brings the
+    # audited table writer into parity. Without this filter, ~26% of all
+    # entity_mentions rows had confidence < 0.6 (noise) yet still flowed into the
+    # resolution cascade, consuming ~3.3 LLM resolution attempts each.
+    #
+    # NOTE: we filter ``ml.final_mentions`` here only for the table write — the
+    # in-memory ``ml.final_mentions`` list itself is NOT mutated because the
+    # caller still passes it into downstream emitters (chunk-entity-mention pairs,
+    # outbox events, etc.) which compute chunk overlaps from the full list. The
+    # JSONB cache + low-confidence overlap is intentionally permissive there for
+    # future-proofing (re-resolution may upgrade scores later).
+    persistable_mentions = [m for m in ml.final_mentions if m.confidence >= settings.min_persist_floor]
     await _sr.add_batch(sections)
     await _cr.add_batch(chunks)
-    await _emr.add_batch(ml.final_mentions)
+    await _emr.add_batch(persistable_mentions)
     if ml.pending_resolution_audit:
         await _mrr.add_batch(ml.pending_resolution_audit)
     await _desr.upsert(stats)
@@ -129,11 +143,14 @@ async def persist_artifacts(
         )
 
         await EmbeddingPendingRepository(nlp_session).save_batch(pending)
-    pairs = _compute_chunk_mention_pairs(chunks, ml.final_mentions)
+    # PLAN-0093 C-2: chunk_entity_mentions has FK on entity_mentions.mention_id,
+    # so the pair computation must use the same filtered set we just persisted —
+    # otherwise links pointing at filtered-out mentions would raise FK violations.
+    pairs = _compute_chunk_mention_pairs(chunks, persistable_mentions)
     if pairs:
         await _cemr.link_batch(pairs)
 
-    return ml.routing_decision, chunks, ml.final_mentions, _or
+    return ml.routing_decision, chunks, persistable_mentions, _or
 
 
 def _augment_chunks(

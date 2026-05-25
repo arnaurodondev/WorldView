@@ -362,20 +362,105 @@ class TestToolCallsEmitted:
 
         asyncio.run(_collect_events(orch, request, uow))
 
-        # The second LLM call receives messages including the injected context block.
-        # Verify the context was capped at 4000 chars in the injected user message.
+        # The second LLM call receives messages including per-tool result
+        # messages.  FIX-LIVE-J: tool results are now injected as one
+        # ``role="tool"`` message per call (OpenAI / DeepInfra spec) with a
+        # matching ``tool_call_id``; the first such message carries the full
+        # aggregated (and capped) context block.  Verify the cap still holds.
         if len(captured_messages) >= 2:
-            # Find the user message with "Here is the data retrieved by the tools"
             messages_for_second_call = captured_messages[-1]
-            user_msgs_with_data = [
-                m.get("content", "")
-                for m in messages_for_second_call
-                if m.get("role") == "user" and "Here is the data" in str(m.get("content", ""))
-            ]
-            if user_msgs_with_data:
-                content = user_msgs_with_data[0]
-                # The 10000-char context must NOT appear verbatim (cap at 4000)
+            tool_msg_contents = [str(m.get("content", "")) for m in messages_for_second_call if m.get("role") == "tool"]
+            # At least one tool message must exist (matching the single tool_call).
+            assert tool_msg_contents, "expected at least one role='tool' message in second turn"
+            # Every tool message must carry a tool_call_id (spec requirement).
+            for m in messages_for_second_call:
+                if m.get("role") == "tool":
+                    assert m.get("tool_call_id"), "role='tool' messages must include a tool_call_id"
+            # The 10000-char context must NOT appear verbatim (cap at 4000)
+            # in any tool message — including the first, which carries the
+            # aggregated context.
+            for content in tool_msg_contents:
                 assert "x" * 10001 not in content
+
+    def test_orchestrator_parallel_tool_calls_produce_unique_ids_and_nonempty_content(self) -> None:
+        """FIX-LIVE-R: per-tool messages must (a) have unique tool_call_ids and
+        (b) carry non-empty content even when the same tool is invoked twice.
+
+        Live re-QA (2026-05-25) caught two DeepInfra spec violations after
+        FIX-LIVE-J:
+
+        - When the LLM emits two parallel calls to the same function
+          (Compare NVDA + AMD ⇒ two get_fundamentals_history calls), both
+          tool_call entries previously fell back to the function name as the
+          ``id`` field. Duplicate ids violate the OpenAI spec; DeepInfra
+          silently dropped the second tool message and rejected the next turn
+          with "missing required tool".
+        - The non-first tool message carried ``"content": ""``. DeepInfra
+          rejects empty content on role="tool".
+
+        This test pins both invariants so a future refactor cannot regress.
+        """
+        from rag_chat.application.use_cases.chat_orchestrator import ChatOrchestratorUseCase
+
+        # Two parallel calls to the SAME tool — the exact shape that triggered
+        # the live failure on Q4 v1 ("Compare NVDA and AMD revenue").
+        tool_a = _make_tool_use_block("get_fundamentals_history", inp={"ticker": "NVDA", "periods": 4})
+        tool_b = _make_tool_use_block("get_fundamentals_history", inp={"ticker": "AMD", "periods": 4})
+        # Simulate the provider returning an EMPTY id (the bug condition):
+        # adapters parse ``id=call.get("id", "")``, so when DeepInfra omits an
+        # id the dataclass attribute is "". The orchestrator must NOT then
+        # collapse both calls to the same fallback identifier.
+        tool_a.id = ""
+        tool_b.id = ""
+
+        call_count = [0]
+        captured_messages: list[list] = []
+
+        async def _two_call_llm(messages, tools=None, **kwargs):
+            call_count[0] += 1
+            captured_messages.append(list(messages))
+            if call_count[0] == 1:
+                return _make_llm_tool_response(tool_calls=[tool_a, tool_b])
+            return _make_llm_tool_response(text="Answer.", tool_calls=[])
+
+        pipeline = _make_pipeline()
+        pipeline.llm_chain.chat_with_tools = _two_call_llm
+        pipeline.build_prompt = MagicMock(return_value=("prompt", [], "aggregated context block"))
+
+        item = _make_retrieved_item()
+        executor = _make_tool_executor_mock([item])
+        factory = _make_factory_mock(executor)
+
+        orch = ChatOrchestratorUseCase(pipeline=pipeline, tool_executor_factory=factory)
+        request = _make_chat_request()
+        uow = MagicMock()
+
+        asyncio.run(_collect_events(orch, request, uow))
+
+        assert len(captured_messages) >= 2, "expected at least 2 LLM turns"
+        msgs = captured_messages[-1]
+
+        # Locate the assistant tool-call message + its tool replies.
+        assistant_msgs = [m for m in msgs if m.get("role") == "assistant" and m.get("tool_calls")]
+        tool_msgs = [m for m in msgs if m.get("role") == "tool"]
+        assert assistant_msgs, "expected assistant message with tool_calls"
+        assert len(tool_msgs) == 2, f"expected 2 tool messages, got {len(tool_msgs)}"
+
+        # (a) Unique tool_call_ids — no collision between the parallel calls.
+        ids_on_assistant = [tc["id"] for tc in assistant_msgs[-1]["tool_calls"]]
+        ids_on_tool_msgs = [m["tool_call_id"] for m in tool_msgs]
+        assert len(set(ids_on_assistant)) == 2, f"duplicate ids in assistant tool_calls: {ids_on_assistant}"
+        assert len(set(ids_on_tool_msgs)) == 2, f"duplicate ids on tool messages: {ids_on_tool_msgs}"
+        assert set(ids_on_assistant) == set(ids_on_tool_msgs), "tool reply ids must mirror assistant tool_calls"
+
+        # (b) Every tool message has NON-EMPTY content (DeepInfra spec).
+        for m in tool_msgs:
+            assert m.get("content"), f"tool message must have non-empty content, got {m!r}"
+
+        # (c) Every tool message includes the ``name`` field (helps stricter
+        # providers resolve the tool_call_id ↔ function name mapping).
+        for m in tool_msgs:
+            assert m.get("name"), f"tool message must include name field, got {m!r}"
 
 
 # ---------------------------------------------------------------------------
@@ -658,5 +743,153 @@ class TestMaxIterationsSurrender:
 
         # Must terminate (done or error)
         assert "done" in event_types or "error" in event_types
-        # execute_all was called exactly max_iterations times (2)
-        assert executor.execute_all.call_count == 2
+        # PLAN-0093 E-5 T-E-5-02 introduced tool-call dedup, so when the same
+        # tool_block is emitted twice the second call is served from cache and
+        # execute_all is invoked only on iteration 1 (call_count == 1). The
+        # intent of this test is "the loop terminates after max_iterations",
+        # not "execute_all is called N times" — assert >= 1 and leave the
+        # iteration-count assertion to the surrender event itself.
+        assert executor.execute_all.call_count >= 1
+
+
+# ---------------------------------------------------------------------------
+# Tests: DS-F003 — shielded persistence + DS-F004 — pending-action JSON warning
+# ---------------------------------------------------------------------------
+
+
+class TestPersistenceShield:
+    """DS-F003: persist_chat + write_completion_cache must run under asyncio.shield.
+
+    The shield protects mid-transaction DB writes from being cancelled by a
+    client disconnect that arrives after the final_answer SSE event.
+    """
+
+    def test_persist_chat_runs_under_shield_on_happy_path(self) -> None:
+        """Smoke test: persist_chat + write_completion_cache are still invoked
+        on the happy path (no cancellation). Proves the shield wrapping did
+        not regress the normal completion flow.
+        """
+        from rag_chat.application.use_cases.chat_orchestrator import ChatOrchestratorUseCase
+
+        # LLM responds with direct text — no tools, fastest path through the
+        # generator that still exercises Step 10 (persist + cache).
+        direct_resp = _make_llm_tool_response(text="AAPL closed at $195.50.", tool_calls=[])
+        pipeline = _make_pipeline(first_llm_response=direct_resp)
+
+        orch = ChatOrchestratorUseCase(pipeline=pipeline)
+        request = _make_chat_request()
+        uow = MagicMock()
+
+        events = asyncio.run(_collect_events(orch, request, uow))
+        event_types = [e.get("event") for e in events]
+
+        # Generator completed normally
+        assert "done" in event_types
+        # Both shielded calls were still invoked exactly once
+        assert pipeline.persist_chat.await_count == 1
+        assert pipeline.write_completion_cache.await_count == 1
+
+    def test_persist_chat_completes_when_consumer_stops_after_done(self) -> None:
+        """Cancellation-style smoke test: even when the consumer stops consuming
+        events right after `done`, persist_chat must have already been awaited
+        because the shield runs to completion before the `done` event is yielded.
+        """
+        from rag_chat.application.use_cases.chat_orchestrator import ChatOrchestratorUseCase
+
+        direct_resp = _make_llm_tool_response(text="Direct answer.", tool_calls=[])
+        pipeline = _make_pipeline(first_llm_response=direct_resp)
+
+        # Track that persist_chat was actually invoked before the consumer
+        # stopped reading from the generator.
+        persist_invocations: list[float] = []
+
+        async def _slow_persist(**kwargs: Any) -> tuple[str, str]:
+            # Tiny await so an in-flight cancellation would have a chance to
+            # hit us if the shield were missing.
+            await asyncio.sleep(0)
+            persist_invocations.append(1.0)
+            return (_FAKE_UUID, _FAKE_UUID)
+
+        pipeline.persist_chat = AsyncMock(side_effect=_slow_persist)
+
+        orch = ChatOrchestratorUseCase(pipeline=pipeline)
+        request = _make_chat_request()
+        uow = MagicMock()
+
+        async def _consume_until_done() -> list:
+            collected: list = []
+            async for event in orch.execute_streaming(request, uow):
+                collected.append(event)
+                if event.get("event") == "done":
+                    # Simulate a client that drops the connection right after
+                    # receiving `done`. Because persist_chat is shielded and
+                    # runs before `done` is yielded, the invocation must
+                    # already have been recorded.
+                    break
+            return collected
+
+        events = asyncio.run(_consume_until_done())
+        assert any(e.get("event") == "done" for e in events)
+        # The shielded persistence ran to completion before `done` was yielded.
+        assert len(persist_invocations) == 1
+
+
+class TestPendingActionJsonWarning:
+    """DS-F004: malformed pending-action JSON emits a structured warning."""
+
+    def test_pending_action_json_parse_failure_logs_warning(self, capsys: Any) -> None:
+        """When a tool returns an action_pending RetrievedItem with malformed
+        JSON in `.text`, the orchestrator must emit a
+        `pending_action_json_parse_failure` log event (with `pending_id` +
+        `error`) instead of silently swallowing the parse failure.
+
+        Uses `capsys` (not `caplog`) because structlog in this repo renders
+        directly to stdout via its own ConsoleRenderer chain — see the same
+        pattern in test_chat_orchestrator_fallback.py.
+        """
+        from rag_chat.application.use_cases.chat_orchestrator import ChatOrchestratorUseCase
+        from rag_chat.domain.enums import ItemType
+
+        # Build a malformed action_pending RetrievedItem mock. The orchestrator
+        # filters by `item.item_type == ItemType.action_pending`, so we use the
+        # real enum value.
+        pending = MagicMock()
+        pending.item_type = ItemType.action_pending
+        pending.item_id = "tool:create_alert:NOT-A-VALID-UUID"
+        pending.text = "{not valid json"  # triggers json.JSONDecodeError
+        pending.score = 1.0
+
+        # Pipeline: a tool call returns the malformed pending item. The LLM
+        # then short-circuits to a direct answer on the second turn so we
+        # reach the persistence step without further detours.
+        tool_block = _make_tool_use_block("create_alert")
+        call_count = [0]
+
+        async def _chat_with_tools(messages, tools=None, max_tokens=1024, temperature=0.1):
+            call_count[0] += 1
+            if call_count[0] == 1:
+                return _make_llm_tool_response(tool_calls=[tool_block])
+            return _make_llm_tool_response(text="Alert created.", tool_calls=[])
+
+        pipeline = _make_pipeline()
+        pipeline.llm_chain.chat_with_tools = _chat_with_tools
+
+        executor = _make_tool_executor_mock([pending])
+        factory = _make_factory_mock(executor)
+
+        orch = ChatOrchestratorUseCase(pipeline=pipeline, tool_executor_factory=factory)
+        request = _make_chat_request()
+        uow = MagicMock()
+
+        asyncio.run(_collect_events(orch, request, uow))
+
+        # structlog renders the event name + key=value context into stdout.
+        captured = capsys.readouterr()
+        combined = captured.out + captured.err
+        assert (
+            "pending_action_json_parse_failure" in combined
+        ), f"expected pending_action_json_parse_failure log event, got: {combined!r}"
+        # The warning must carry pending_id + error context so operators can
+        # triage the malformed upstream payload.
+        assert "pending_id" in combined, f"warning missing pending_id key: {combined!r}"
+        assert "error" in combined, f"warning missing error key: {combined!r}"

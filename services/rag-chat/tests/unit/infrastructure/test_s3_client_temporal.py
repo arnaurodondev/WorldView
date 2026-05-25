@@ -182,3 +182,70 @@ async def test_s3_get_ohlcv_range_returns_empty_on_timeout(httpx_mock: pytest_ht
     )
 
     assert result == []
+
+
+# ── T7: find_instrument_by_ticker uses /instruments/lookup?symbol= ────────────
+
+
+@pytest.mark.asyncio
+async def test_find_instrument_by_ticker_uses_lookup_query_param(
+    httpx_mock: pytest_httpx.HTTPXMock,
+) -> None:
+    """find_instrument_by_ticker() must call /instruments/lookup?symbol=AAPL (not
+    /instruments/symbol/AAPL which returns 404 — market-data only exposes lookup).
+
+    Regression test for BP-XXX: wrong path caused every ticker→instrument_id
+    lookup to return 404, silently breaking financial context in briefings.
+    """
+    httpx_mock.add_response(
+        status_code=200,
+        json={"id": "00000000-0000-0000-0000-000000000042", "symbol": "AAPL"},
+    )
+
+    client = S3Client(base_url=_BASE)
+    result = await client.find_instrument_by_ticker("AAPL")
+
+    # Verify a UUID was returned
+    from uuid import UUID
+
+    assert result == UUID("00000000-0000-0000-0000-000000000042")
+
+    # Verify the URL used lookup + query param, NOT the old path-param form
+    requests = httpx_mock.get_requests()
+    assert len(requests) == 1
+    url = str(requests[0].url)
+    assert "/api/v1/instruments/lookup" in url
+    assert "symbol=AAPL" in url
+    # Old wrong path must NOT be present
+    assert "/instruments/symbol/" not in url
+
+
+@pytest.mark.asyncio
+async def test_find_instrument_by_ticker_returns_none_on_404(
+    httpx_mock: pytest_httpx.HTTPXMock,
+) -> None:
+    """404 from market-data (ticker not found) → None, no exception raised."""
+    httpx_mock.add_response(status_code=404)
+
+    client = S3Client(base_url=_BASE)
+    result = await client.find_instrument_by_ticker("UNKNWN")
+
+    assert result is None
+
+
+@pytest.mark.asyncio
+async def test_find_instrument_by_ticker_uses_instrument_id_field(
+    httpx_mock: pytest_httpx.HTTPXMock,
+) -> None:
+    """Response with 'instrument_id' field (not 'id') is parsed correctly."""
+    httpx_mock.add_response(
+        status_code=200,
+        json={"instrument_id": "00000000-0000-0000-0000-000000000099", "symbol": "MSFT"},
+    )
+
+    client = S3Client(base_url=_BASE)
+    result = await client.find_instrument_by_ticker("MSFT")
+
+    from uuid import UUID
+
+    assert result == UUID("00000000-0000-0000-0000-000000000099")

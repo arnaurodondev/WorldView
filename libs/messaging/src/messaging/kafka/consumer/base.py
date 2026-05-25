@@ -16,21 +16,69 @@ from __future__ import annotations
 
 import asyncio
 import dataclasses
+import json
 import random
 import sys
 import time
 from abc import ABC, abstractmethod
-from typing import TYPE_CHECKING, Any, Generic, TypeVar
+from datetime import UTC, datetime
+from typing import TYPE_CHECKING, Any, Generic, Protocol, TypeVar, runtime_checkable
 
 from messaging.kafka.consumer.backpressure import BackpressurePolicy, LagCalculator
 from messaging.kafka.consumer.errors import ConsumerError, FatalError, RetryableError
-from observability import ServiceMetrics, get_logger  # type: ignore[import-untyped]
+from messaging.kafka_config import apply_base_rdkafka_config
+from observability import (  # type: ignore[import-untyped]
+    KAFKA_CONSUMER_MESSAGES,
+    ServiceMetrics,
+    get_logger,
+)
 from observability import create_metrics as _create_metrics  # type: ignore[import-untyped]
 
 if TYPE_CHECKING:
     from confluent_kafka import TopicPartition
 
 logger = get_logger(__name__)
+
+
+# ── LIB-002 / TASK-W2-06: dead-letter topic emission ──────────────────────────
+#
+# Suffix appended to the original topic name to derive the canonical DLQ
+# topic.  Centralised here so subclasses and operators have a single source
+# of truth.  Following the worldview ``<domain>.<entity>.<verb>.v<version>``
+# convention, ``.dead-letter.v1`` is appended verbatim.
+DLQ_TOPIC_SUFFIX: str = ".dead-letter.v1"
+
+
+@runtime_checkable
+class DLQEmitterProtocol(Protocol):
+    """Port for publishing a single dead-letter envelope to a Kafka topic.
+
+    The base consumer uses this protocol so subclasses can wire either an
+    outbox repository (transactional, exactly-once-ish) or a direct Kafka
+    producer (best-effort) without the base class caring which.
+
+    Implementations must be safe to call from an asyncio context.  Failures
+    inside ``emit`` should raise — the base consumer logs and swallows so
+    a DLQ emission failure never blocks the consumer loop.
+    """
+
+    async def emit(
+        self,
+        topic: str,
+        payload: dict[str, Any],
+        headers: dict[str, str] | None = None,
+        key: str | None = None,
+    ) -> None:
+        """Publish a single DLQ envelope.
+
+        Args:
+            topic: Target Kafka topic (already suffixed with ``.dead-letter.v1``).
+            payload: JSON-serialisable envelope describing the failure.
+            headers: Optional Kafka headers (string-string).
+            key: Optional Kafka partition key (typically the original event_id).
+        """
+        ...
+
 
 # Generic type for the failure record stored by the consuming service
 TFailure = TypeVar("TFailure")
@@ -124,16 +172,21 @@ class ConsumerConfig:
         is via ``fetch.message.max.bytes`` / ``queued.max.messages.kbytes``,
         not record count.
         """
-        return {
-            "bootstrap.servers": self.bootstrap_servers,
-            "group.id": self.group_id,
-            "auto.offset.reset": self.auto_offset_reset,
-            "enable.auto.commit": self.enable_auto_commit,
-            "session.timeout.ms": self.session_timeout_ms,
-            "heartbeat.interval.ms": self.heartbeat_interval_ms,
-            "max.poll.interval.ms": self.max_poll_interval_ms,
-            "partition.assignment.strategy": self.partition_assignment_strategy,
-        }
+        # PLAN-0093 Wave A-2 (F-LOG-003): prepend the rdkafka base config so
+        # every consumer carries broker.address.ttl=30s + family=v4.  User
+        # keys are spread on top → per-consumer overrides still win.
+        return apply_base_rdkafka_config(
+            {
+                "bootstrap.servers": self.bootstrap_servers,
+                "group.id": self.group_id,
+                "auto.offset.reset": self.auto_offset_reset,
+                "enable.auto.commit": self.enable_auto_commit,
+                "session.timeout.ms": self.session_timeout_ms,
+                "heartbeat.interval.ms": self.heartbeat_interval_ms,
+                "max.poll.interval.ms": self.max_poll_interval_ms,
+                "partition.assignment.strategy": self.partition_assignment_strategy,
+            }
+        )
 
 
 @dataclasses.dataclass
@@ -192,6 +245,7 @@ class BaseKafkaConsumer(ABC, Generic[TFailure]):
         config: ConsumerConfig,
         metrics: ServiceMetrics | None = None,
         backpressure_policy: BackpressurePolicy | None = None,
+        dlq_emitter: DLQEmitterProtocol | None = None,
     ) -> None:
         self._config = config
         self._metrics = metrics or _create_metrics(config.group_id)
@@ -200,6 +254,13 @@ class BaseKafkaConsumer(ABC, Generic[TFailure]):
         # Running count of dead-letters sent; crashes the consumer when it
         # exceeds dead_letter_cap to trigger a container restart.
         self._dead_letter_count: int = 0
+        # LIB-002 (TASK-W2-06): optional dead-letter topic emitter.  When set,
+        # the default :meth:`_dead_letter_impl` publishes failure envelopes to
+        # ``<original_topic>.dead-letter.v1`` so DLQ messages are observable
+        # from kafka-ui and external DLQ consumers.  When ``None``, the
+        # default impl logs a warning and short-circuits — subclasses that
+        # only persist failures to a DB table continue to work unchanged.
+        self._dlq_emitter: DLQEmitterProtocol | None = dlq_emitter
         # DEF-032 backpressure (opt-in).  When None or policy.enabled=False,
         # the integration short-circuits in _maybe_apply_backpressure with
         # zero per-poll overhead so existing consumers see no behaviour change.
@@ -271,16 +332,111 @@ class BaseKafkaConsumer(ABC, Generic[TFailure]):
             failure: :class:`FailureInfo` with updated attempt count and error.
         """
 
-    @abstractmethod
     async def _dead_letter_impl(self, failure: FailureInfo[TFailure]) -> None:
-        """Move a failure record to the dead-letter store (subclass hook).
+        """Default dead-letter handler — publish to ``<topic>.dead-letter.v1``.
 
-        Called by :meth:`dead_letter` after the cap check passes.
-        Subclasses persist the record to their dead-letter table/topic here.
+        Called by :meth:`dead_letter` after the cap check passes.  The
+        default implementation emits a JSON failure envelope to
+        ``<failure.topic>.dead-letter.v1`` via the configured
+        :attr:`_dlq_emitter` so the message is observable from kafka-ui and
+        any external DLQ consumer.
+
+        Back-compat: this method used to be abstract.  Concrete subclasses
+        across worldview's services already override it (typically to write
+        a DLQ row to a Postgres table) — those overrides continue to work
+        unchanged.  Subclasses that want to keep DB persistence AND gain
+        topic emission should override and call ``await super().
+        _dead_letter_impl(failure)`` after their DB write so both happen.
+
+        To OPT OUT of topic emission entirely (e.g. consumers whose DLQ
+        contract is DB-only by design) simply do NOT pass a ``dlq_emitter``
+        when constructing the consumer; the default impl will then log a
+        warning and short-circuit.  Document the rationale at the override
+        site.
 
         Args:
             failure: :class:`FailureInfo` that exceeded max retries.
         """
+        # No emitter wired → preserve historical behaviour (no topic emit)
+        # but log a warning so operators can spot consumers that should be
+        # upgraded.  We intentionally do NOT raise: persistence to a DB
+        # dead-letter table (the typical subclass override) has already
+        # happened by this point, so failing here would just double-count
+        # the failure.
+        if self._dlq_emitter is None:
+            logger.warning(
+                "dead_letter_no_emitter_configured",
+                topic=failure.topic,
+                event_id=failure.event_id,
+                attempt=failure.attempt,
+                hint="pass dlq_emitter to BaseKafkaConsumer to enable DLQ topic publishing",
+            )
+            return
+
+        dlq_topic = f"{failure.topic}{DLQ_TOPIC_SUFFIX}"
+        # Failure envelope — JSON-serialisable summary of the failure.  This
+        # is deliberately metadata-only (no original payload bytes) because
+        # the abstract failure record does not carry the raw message body;
+        # subclasses that want to include the raw payload can override.
+        envelope: dict[str, Any] = {
+            "event_id": failure.event_id,
+            "original_topic": failure.topic,
+            "partition": failure.partition,
+            "offset": failure.offset,
+            "attempt": failure.attempt,
+            "error": str(failure.last_error)[:1024],
+            "error_type": type(failure.last_error).__name__,
+            "dead_lettered_at": datetime.now(UTC).isoformat(),
+            "consumer_group": self._config.group_id,
+        }
+        # Standard headers — operators rely on these for routing and
+        # debugging in kafka-ui.  Truncated where unbounded to keep header
+        # size within Kafka's per-message limit (1 MiB by default but each
+        # header is best kept well under 1 KiB).
+        headers: dict[str, str] = {
+            "X-Dead-Letter-Error": str(failure.last_error)[:1024],
+            "X-Dead-Letter-Original-Topic": failure.topic,
+            "X-Dead-Letter-Timestamp": envelope["dead_lettered_at"],
+            "X-Dead-Letter-Event-Id": failure.event_id,
+        }
+        try:
+            await self._dlq_emitter.emit(
+                topic=dlq_topic,
+                payload=envelope,
+                headers=headers,
+                key=failure.event_id,
+            )
+        except Exception as exc:
+            # DLQ emission failure must never crash the consumer loop —
+            # the message has already been logged + retried + counted
+            # against the cap.  Log loud so operators can spot the gap.
+            logger.error(
+                "dead_letter_emit_failed",
+                topic=dlq_topic,
+                event_id=failure.event_id,
+                error=str(exc),
+                error_type=type(exc).__name__,
+            )
+            return
+
+        logger.warning(
+            "message_dead_lettered",
+            topic=dlq_topic,
+            original_topic=failure.topic,
+            event_id=failure.event_id,
+            attempt=failure.attempt,
+            error=str(failure.last_error)[:512],
+        )
+
+    @staticmethod
+    def _serialize_dlq_envelope(envelope: dict[str, Any]) -> bytes:
+        """JSON-encode a DLQ envelope to UTF-8 bytes.
+
+        Exposed as a helper so subclasses or emitter implementations that
+        need raw bytes (e.g. a direct ``confluent_kafka.Producer.produce``)
+        can use the same encoding the rest of the platform expects.
+        """
+        return json.dumps(envelope, separators=(",", ":"), default=str).encode("utf-8")
 
     async def dead_letter(self, failure: FailureInfo[TFailure]) -> None:
         """Move a failure record to the dead-letter store with cap enforcement.
@@ -505,6 +661,16 @@ class BaseKafkaConsumer(ABC, Generic[TFailure]):
                 raise
 
         self._metrics.kafka_messages_consumed_total.labels(
+            topic=topic,
+            consumer_group=self._config.group_id,
+        ).inc()
+        # PLAN-0093 Wave A-2 (F-LOG-003): cross-service counter so the
+        # ``KafkaConsumerStalled`` alert can pivot across every consumer in
+        # a single Prometheus expression.  ``service`` label uses the
+        # ServiceMetrics service_name when available, falling back to the
+        # consumer group_id (always present).
+        KAFKA_CONSUMER_MESSAGES.labels(
+            service=self._metrics.service_name if self._metrics is not None else self._config.group_id,
             topic=topic,
             consumer_group=self._config.group_id,
         ).inc()
@@ -775,6 +941,87 @@ class BaseKafkaConsumer(ABC, Generic[TFailure]):
                 logger.error("retry_loop_error", error=str(exc))
             await asyncio.sleep(self._config.poll_timeout_seconds)
 
+    # PLAN-0093 Wave A-2 (F-LOG-003): connectivity probe configuration.
+    # Tuned conservatively — 60 s between probes x 3 misses = a 3-minute
+    # detection window before we force-exit, which lines up with the
+    # ``kafka_unreachable_for_5min`` alert window with room to spare.  These
+    # are class attributes (not ConsumerConfig fields) because every consumer
+    # in the platform wants the same behaviour and exposing them as knobs
+    # would invite per-service drift, which is the exact pattern the probe
+    # is designed to defend against.
+    _probe_interval_seconds: float = 60.0
+    _probe_failure_threshold: int = 3
+    _probe_list_topics_timeout: float = 5.0
+
+    async def _connectivity_probe_loop(self) -> None:
+        """Periodically probe the broker; force-exit on sustained failure.
+
+        Runs alongside the poll loop.  Every ``_probe_interval_seconds`` we
+        call ``consumer.list_topics(timeout=5)``; if 3 consecutive probes
+        fail we log ``kafka_unreachable_for_5min`` at CRITICAL and exit
+        the process with code 2 so the container orchestrator can give us
+        a fresh DNS lookup on restart.
+
+        Important properties:
+
+        * Probe failures NEVER bubble up — only the consecutive-failure
+          count matters.  The consume loop must not be affected by transient
+          metadata errors.
+        * ``list_topics`` is a blocking librdkafka call → hopped onto the
+          default executor so it cannot delay the event loop.
+        * The loop honours :attr:`_stop_event` so a graceful shutdown does
+          not log misleading failure events.
+        """
+        loop = asyncio.get_running_loop()
+        consecutive_failures = 0
+        while not self._stop_event.is_set():
+            # Sleep first so we do not probe immediately on startup, where the
+            # consumer may not yet have completed its initial metadata fetch.
+            try:
+                await asyncio.wait_for(
+                    self._stop_event.wait(),
+                    timeout=self._probe_interval_seconds,
+                )
+                # Stop event fired during the wait → graceful shutdown.
+                return
+            except TimeoutError:
+                pass  # interval elapsed, run a probe
+
+            if self._consumer is None:
+                # Consumer not yet initialised; do not count as a failure.
+                continue
+
+            try:
+                consumer = self._consumer  # snapshot to avoid TOCTOU if shutdown races
+                timeout = self._probe_list_topics_timeout
+
+                def _probe(c: Any = consumer, t: float = timeout) -> Any:
+                    return c.list_topics(timeout=t)
+
+                await loop.run_in_executor(None, _probe)
+                # Success → reset the counter.  This is the only place a
+                # success resets the counter, so a single good probe wipes
+                # out two prior misses (matches the spec).
+                consecutive_failures = 0
+            except Exception as exc:
+                consecutive_failures += 1
+                logger.warning(
+                    "kafka_connectivity_probe_failed",
+                    group_id=self._config.group_id,
+                    consecutive_failures=consecutive_failures,
+                    threshold=self._probe_failure_threshold,
+                    error=str(exc),
+                    error_type=type(exc).__name__,
+                )
+                if consecutive_failures >= self._probe_failure_threshold:
+                    logger.critical(
+                        "kafka_unreachable_for_5min",
+                        group_id=self._config.group_id,
+                        consecutive_failures=consecutive_failures,
+                        action="exiting_with_code_2_for_dns_refresh",
+                    )
+                    sys.exit(2)
+
     async def run(self) -> None:
         """Start consuming messages until :meth:`stop` is called.
 
@@ -783,6 +1030,10 @@ class BaseKafkaConsumer(ABC, Generic[TFailure]):
         """
         self._init_kafka()
         retry_task = asyncio.create_task(self._retry_loop())
+        # PLAN-0093 Wave A-2 (F-LOG-003): launch the broker connectivity probe
+        # in parallel with the poll loop.  Cancelled in ``finally`` so the
+        # task does not leak on shutdown.
+        probe_task = asyncio.create_task(self._connectivity_probe_loop())
 
         # BP-268 fix: asyncio.create_task without a done_callback means a crash
         # in the retry loop is silently swallowed — the task becomes a failed
@@ -800,6 +1051,20 @@ class BaseKafkaConsumer(ABC, Generic[TFailure]):
                 sys.exit(1)
 
         retry_task.add_done_callback(_on_retry_task_done)
+
+        def _on_probe_task_done(task: asyncio.Task[None]) -> None:  # type: ignore[type-arg]
+            # The probe deliberately calls sys.exit(2) on sustained failure
+            # (handled by SystemExit propagating up to the event loop).  An
+            # un-cancelled task with an unhandled non-SystemExit exception
+            # would otherwise be silently swallowed — log it loud so the
+            # operator sees that connectivity monitoring is gone.
+            if task.cancelled():
+                return
+            exc = task.exception()
+            if exc is not None:
+                logger.critical("connectivity_probe_crashed", exc_info=exc)
+
+        probe_task.add_done_callback(_on_probe_task_done)
 
         try:
             loop = asyncio.get_event_loop()
@@ -851,6 +1116,11 @@ class BaseKafkaConsumer(ABC, Generic[TFailure]):
             retry_task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await retry_task
+            # PLAN-0093 Wave A-2: cancel the probe last so a graceful shutdown
+            # never produces a spurious connectivity-failure log.
+            probe_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await probe_task
             self._shutdown_kafka()
 
     def stop(self) -> None:

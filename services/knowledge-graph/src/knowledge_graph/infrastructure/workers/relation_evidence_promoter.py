@@ -99,22 +99,21 @@ WHERE rer.entity_provisional = false
       AND re.doc_id        = rer.source_document_id
       AND re.evidence_date = rer.evidence_date
   )
-  AND (
-      rer.extraction_confidence >= :conf_threshold
-      OR (
-          SELECT CAST(COUNT(*) AS float)
-          FROM relation_evidence_raw rer2
-          WHERE rer2.subject_entity_id = rer.subject_entity_id
-            AND rer2.object_entity_id  = rer.object_entity_id
-            AND rer2.canonical_type    = rer.canonical_type
-      ) / NULLIF(
-          (
-              SELECT COUNT(DISTINCT em.source_document_id)
-              FROM entity_mentions em
-              WHERE em.resolved_entity_id IN (rer.subject_entity_id, rer.object_entity_id)
-          ), 0
-      ) >= :density_threshold
-  )
+  AND rer.extraction_confidence >= :conf_threshold
+  -- E-3 density gate (OR branch) is DISABLED (2026-05-20 runtime QA).
+  -- The original query referenced `entity_mentions` as a TABLE in
+  -- intelligence_db, but that table does not exist — entity mentions
+  -- live as a JSONB column `chunks.entity_mentions` in nlp_db, which
+  -- R7 forbids us from cross-DB-joining against. Result: the OR branch
+  -- threw `relation entity_mentions does not exist` every 5-minute tick
+  -- since commit a6452094 (2026-05-10), and because PostgreSQL evaluated
+  -- both branches before short-circuiting, the entire promotion pipeline
+  -- was broken for 10 days (zero promotions). Restoring the high-
+  -- confidence path here keeps the worker functional. Re-enabling the
+  -- density gate requires either replicating a mention count into
+  -- intelligence_db (preferred — add `mention_count` to canonical_entities
+  -- and have nlp-pipeline maintain it via Kafka event) or removing the
+  -- density gate from the design altogether. Tracked as a follow-up.
 ORDER BY rer.extracted_at
 LIMIT :batch_size
 """
@@ -166,19 +165,8 @@ WHERE rer.entity_provisional = false
       AND re.evidence_date = rer.evidence_date
   )
   AND rer.extraction_confidence < :conf_threshold
-  AND (
-      SELECT CAST(COUNT(*) AS float)
-      FROM relation_evidence_raw rer2
-      WHERE rer2.subject_entity_id = rer.subject_entity_id
-        AND rer2.object_entity_id  = rer.object_entity_id
-        AND rer2.canonical_type    = rer.canonical_type
-  ) / NULLIF(
-      (
-          SELECT COUNT(DISTINCT em.source_document_id)
-          FROM entity_mentions em
-          WHERE em.resolved_entity_id IN (rer.subject_entity_id, rer.object_entity_id)
-      ), 0
-  ) < :density_threshold
+  -- Density gate disabled — density signal unavailable (see _FETCH_SQL).
+  -- This counter only counts rows blocked by the confidence gate.
 """
 
 # SQL: insert one promotable row into the partitioned immutable table.
@@ -289,11 +277,15 @@ class RelationEvidencePromoterWorker:
             # This informs operations how much evidence is accumulating
             # in the raw table pending future promotion.
             async with self._sf() as session:
+                # Note: density_threshold was removed from _COUNT_GATED_QUALITY_SQL
+                # (density signal unavailable) so only conf_threshold is passed.
+                # Passing density_threshold here caused asyncpg to raise
+                # InterfaceError("server expects 1 argument, 2 were passed") because
+                # asyncpg uses positional $1/$2 params and the second bind was stale.
                 gq_result = await session.execute(
                     text(_COUNT_GATED_QUALITY_SQL),
                     {
                         "conf_threshold": _CONF_THRESHOLD,
-                        "density_threshold": _DENSITY_THRESHOLD,
                     },
                 )
                 gated_quality = int(gq_result.scalar() or 0)

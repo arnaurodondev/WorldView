@@ -55,6 +55,15 @@ scrape_configs:
       - targets: ["knowledge-graph:8007"]
     metrics_path: /metrics
 
+  # FIX-LIVE-C / F-LIVE-006-B: scheduler is a separate process (R22) without
+  # a FastAPI app — it exposes its prometheus_client gauges on :9108 via
+  # ``start_http_server`` so backlog metrics (path_insight_explanation_pending_total,
+  # relation_summary_backlog, summary_worker_stuck_relations_total) are scraped.
+  - job_name: "knowledge-graph-scheduler"
+    static_configs:
+      - targets: ["knowledge-graph-scheduler:9108"]
+    metrics_path: /metrics
+
   - job_name: "rag-chat"
     static_configs:
       - targets: ["rag-chat:8008"]

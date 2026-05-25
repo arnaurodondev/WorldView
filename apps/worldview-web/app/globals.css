@@ -194,6 +194,22 @@
     --entity-type-topic-stroke: 217 70% 62%;    /* lighter blue border */
     --entity-type-default-fill: 240 4% 40%;     /* neutral grey — default / unknown */
     --entity-type-default-stroke: 240 4% 58%;   /* lighter grey border */
+
+    /* ── PRD-0089 F1 additions (terminal-grade density tokens) ────────
+     * WHY: F1 locks the Bloomberg-grade visual contract for every
+     * subsequent page. Two new border tokens give us cell-grid contrast
+     * (Bloomberg/Refinitiv use clearly visible inner cell lines), and
+     * three sizing tokens centralise the table-row geometry so the
+     * per-page agents only need to flip `data-table-grid` on a parent
+     * div to inherit canonical 20px rows + 6px cell padding. */
+    --border-strong: 240 4% 22%;       /* #37373B — cell-grid lines inside data-table-grid */
+    --border-subtle: 240 4% 13%;       /* #1E1E22 — row dividers inside data-table-grid */
+    --row-h: 20px;                     /* default tabular row height (FU-5.5) */
+    --row-h-dense: 18px;               /* hyper-dense rows (transactions ledger, screener results) */
+    /* Note: existing --cell-px: 8px (declared above) stays as the global default
+     * so non-grid surfaces keep their current 8px horizontal padding.
+     * [data-table-grid] (below) overrides --cell-px to 6px locally — that's the
+     * scope where the tighter terminal-grade padding kicks in. */
   }
 
   /* .dark class re-applies same values — ensures shadcn/ui dark-mode variants work.
@@ -252,6 +268,66 @@
     --entity-type-topic-stroke: 217 70% 62%;
     --entity-type-default-fill: 240 4% 40%;
     --entity-type-default-stroke: 240 4% 58%;
+
+    /* ── PRD-0089 F1: mirror the terminal-grade density tokens in .dark
+     * because the dark class is the active one in production (see ADR-F-04).
+     * If we only added them to :root, the cascade would still resolve, but
+     * mirroring keeps the dual-block contract until Style Dictionary lands. */
+    --border-strong: 240 4% 22%;       /* #37373B */
+    --border-subtle: 240 4% 13%;       /* #1E1E22 */
+    --row-h: 20px;
+    --row-h-dense: 18px;
+  }
+
+  /* ── PRD-0089 F1: sharp corners contract (FU-5.3) ──────────────────
+   * WHY override after :root/.dark blocks: terminal aesthetic = 0px radius.
+   * Bloomberg HELP overlays, IBKR TWS modal frames, Refinitiv Eikon panels —
+   * all 0px radius. The previous 2px micro-radius (--radius: 0.125rem) was a
+   * holdover from the consumer-fintech pattern. Collapsing here cascades to
+   * every shadcn/ui component (Dialog, Sheet, Popover, Card) since they all
+   * read `var(--radius)` indirectly through rounded-{sm,md,lg}. */
+  :root,
+  :root.dark,
+  .dark {
+    --radius: 0;
+  }
+
+  /* ── PRD-0089 F1: opt-in dense-grid wrapper (FU-5.5) ───────────────
+   * WHY data-attribute (not Tailwind variant): the grid contract is structural
+   * (row height, cell padding, inner borders) and applies to every descendant.
+   * Pages opt in by adding `<div data-table-grid>` on the 7 v1 surfaces:
+   * Screener, Holdings, Tx Ledger, Financials FlatMetricsGrid, Watchlist,
+   * Workspace data panels, Peer Comparison. The per-page agents (F2 and later)
+   * own the opt-in; F1 only ships the rule.
+   *
+   * The role-based selectors below (role=row / role=cell / role=columnheader)
+   * intentionally piggy-back on accessibility-grade table semantics: any
+   * component using semantic ARIA roles automatically inherits the terminal
+   * geometry without a separate class. */
+  [data-table-grid] {
+    --row-h: 20px;
+    --cell-px: 6px;
+  }
+  [data-table-grid="dense"] {
+    --row-h: 18px;
+  }
+  [data-table-grid] [role="row"] {
+    height: var(--row-h);
+    border-bottom: 1px solid hsl(var(--border-subtle));
+  }
+  [data-table-grid] [role="cell"],
+  [data-table-grid] [role="columnheader"] {
+    padding-left: var(--cell-px);
+    padding-right: var(--cell-px);
+    border-right: 1px solid hsl(var(--border-subtle));
+  }
+  /* Strip trailing dividers so the grid edge stays clean. */
+  [data-table-grid] [role="row"]:last-child {
+    border-bottom: none;
+  }
+  [data-table-grid] [role="cell"]:last-child,
+  [data-table-grid] [role="columnheader"]:last-child {
+    border-right: none;
   }
 }
 
@@ -407,29 +483,26 @@ html {
   scroll-padding-top: 5rem;
 }
 
-/* ── PLAN-0052 QA-R6: TopBarMarquee — scrolling ticker strip ─────────────
+/* ── IndexStrip motion (PRD-0089 W1.1 H-001 — restored 2026-05-21) ────
  *
- * WHY @keyframes here (not Tailwind plugin):
- * The animation moves from 0 → -50% of the element's OWN width. Tailwind
- * cannot express a percentage-of-self value inline; the value is computed
- * at runtime from the total flex width of the doubled ticker list. A custom
- * @keyframes with a fixed -50% target is the idiomatic CSS solution.
+ * W1 originally shipped a static row; user feedback after the live build
+ * was unambiguous: at sub-1440 viewports overflow-hidden clips cells
+ * partway and the strip looks broken. They explicitly asked for the
+ * scrolling marquee back. We bring it back with two safeguards the
+ * pre-W1 version had:
+ *   • prefers-reduced-motion → static fallback row (.marquee-static-fallback)
+ *     so vestibular-sensitive users don't get auto-motion
+ *   • pause on hover / focus-within so users can read a specific value
  *
- * WHY var(--marquee-duration):
- * The duration is set inline on the animated element by TopBarMarquee.tsx
- * (it scales with ticker count: 6s × N). Using a CSS variable lets the JS
- * component control timing without a Tailwind plugin or style injection.
+ * WHY @keyframes here (not Tailwind plugin): the animation translates
+ * the doubled cell-list by exactly -50% of its own width — a per-element
+ * percentage Tailwind cannot express inline. Custom @keyframes with the
+ * -50% target is the idiomatic CSS solution.
  *
- * WHY animation-play-state on hover/focus-within:
- * Pausing on hover lets users read any chip without the strip scrolling past.
- * focus-within covers keyboard navigation (Tab into the marquee region).
- *
- * REDUCED-MOTION HANDLING:
- * The global prefers-reduced-motion block above already clamps all animation-
- * duration values to 0.01ms and sets animation-iteration-count: 1. For the
- * marquee we additionally show the static fallback row (.marquee-static-
- * fallback) and hide the animated strip so motion-sensitive users get a normal
- * static price bar rather than a single frozen frame. */
+ * WHY var(--marquee-duration): IndexStrip sets the duration inline so
+ * the cadence scales with cell count (~6s per cell). One CSS variable
+ * lets JS drive timing without injecting per-render style tags.
+ */
 @keyframes worldview-ticker-scroll {
   from { transform: translate3d(0, 0, 0); }
   to   { transform: translate3d(-50%, 0, 0); }
@@ -439,21 +512,21 @@ html {
   animation: worldview-ticker-scroll var(--marquee-duration, 60s) linear infinite;
 }
 
-/* Pause on hover or keyboard focus inside the marquee region. */
 .marquee-strip:hover,
 .marquee-strip:focus-within {
   animation-play-state: paused;
 }
 
-/* Reduced-motion: hide the scrolling track, show static fallback. */
 @media (prefers-reduced-motion: reduce) {
   .marquee-strip {
+    /* Stop motion entirely; render the static fallback below. */
+    animation: none;
+  }
+  .marquee-strip > .marquee-pass-second {
     display: none;
   }
-  .marquee-static-fallback {
-    display: flex !important;
-  }
 }
+
 
 /* ── 2. Forced colors (Windows High Contrast Mode) ──────────────────── */
 @media (forced-colors: active) {

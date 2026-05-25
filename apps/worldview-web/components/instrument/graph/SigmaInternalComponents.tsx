@@ -26,35 +26,36 @@ import { useRouter } from "next/navigation";
 import { ENTITY_TYPE_COLOR_MAP } from "@/lib/entity-types";
 import type { EntityGraph as EntityGraphData } from "@/types/api";
 import type { RelationFilter } from "./GraphControls";
+import { matchesRelFilter } from "./graphFilterUtils";
+export { matchesRelFilter };
 
 // WHY hex literal (not Tailwind): sigma WebGL reads hex/rgb from node attributes;
 // CSS classes never reach the canvas. Mirrors --muted-foreground (#83838A) from globals.css.
 const NODE_DEFAULT_COLOR = "#83838A";
 
-// ── matchesRelFilter ──────────────────────────────────────────────────────────
-// WHY pattern-based (not exact-match): relation labels vary by data source.
-// "CEO_OF", "EXECUTIVE_CHAIR", "CHIEF_EXEC" all map to "executive".
-export function matchesRelFilter(label: string, filter: RelationFilter): boolean {
-  const upper = label.toUpperCase();
-  switch (filter) {
-    case "all": return true;
-    case "executive":
-      return upper.includes("CEO") || upper.includes("CFO") || upper.includes("CTO") ||
-        upper.includes("COO") || upper.includes("CHAIR") || upper.includes("EXEC") ||
-        upper.includes("OFFICER") || upper.includes("DIRECTOR");
-    case "investor":
-      return upper.includes("INVEST") || upper.includes("SHAREHOLDER") ||
-        upper.includes("HOLDS") || upper.includes("OWNED");
-    case "supplier":
-      return upper.includes("SUPPL") || upper.includes("MANUFACTUR") || upper.includes("PRODUCES");
-    case "customer":
-      return upper.includes("CUSTOMER") || upper.includes("CLIENT") || upper.includes("USES");
-    case "competitor":
-      return upper.includes("COMPET") || upper.includes("RIVAL");
-    default:
-      return true;
-  }
-}
+/**
+ * INDUSTRY_COLORS — sector-based fill color overrides for sigma.js nodes (D-2).
+ *
+ * WHY these 5 sectors only: together they cover 80%+ of S&P 500 market cap.
+ * Unknown or unlisted sectors fall through to ENTITY_TYPE_COLOR_MAP (in GraphLoader)
+ * so there is always a sensible fallback — no entry here = no override.
+ *
+ * WHY hex (not CSS vars): sigma WebGL cannot read CSS variables — hex values are
+ * required. These match Tailwind blue-500, emerald-500, orange-500, red-500, violet-500.
+ *
+ * WHY separate from ENTITY_TYPE_COLOR_MAP: entity type (company / person / event)
+ * is coarser than industry — all companies would get the same color. Industry
+ * colouring adds a second visual dimension without conflicting with entity-type.
+ */
+const INDUSTRY_COLORS: Record<string, string> = {
+  "Technology": "#3B82F6",          // blue-500
+  "Financial Services": "#10B981",  // emerald-500
+  "Energy": "#F97316",              // orange-500
+  "Healthcare": "#EF4444",          // red-500
+  "Consumer Cyclical": "#8B5CF6",   // violet-500
+  // WHY these 5 only: covers 80%+ of S&P 500 by market cap. Unknown sectors
+  // fall back to the graph's default node color (no entry = no override).
+};
 
 // ── NodeTooltip / EdgeTooltip types (shared with EntityGraph.tsx) ─────────────
 
@@ -69,6 +70,8 @@ export interface NodeTooltip {
 export interface EdgeTooltip {
   label: string;
   weight: number;
+  /** Up to 3 evidence text snippets sourced from relation_evidence_raw (W7 T-19). */
+  evidence_snippets: string[];
   x: number;
   y: number;
 }
@@ -77,15 +80,44 @@ export interface EdgeTooltip {
 // WHY separate: useRegisterEvents + useSigma are context hooks that only work
 // when rendered as a descendant of <SigmaContainer>.
 
+/** Full edge info emitted on click — all fields sourced from graphology edge attributes. */
+export interface SelectedEdgeInfo {
+  id: string;
+  label: string;
+  weight: number;
+  evidence_snippets: string[];
+  relation_summary?: string | null;
+  sourceId: string;
+  targetId: string;
+  sourceLabel: string;
+  targetLabel: string;
+  /** "outbound" = center entity is subject; "inbound" = center entity is object; "lateral" = depth>1 edge */
+  direction?: "outbound" | "inbound" | "lateral" | null;
+  /**
+   * WHY valid_from / valid_to (D-2 edge validity):
+   * KG relation_validity stores the ISO-8601 date range when this relation was
+   * considered active. valid_from marks the earliest confirmed evidence date;
+   * valid_to is set when the relation ended (e.g., an executive left a company).
+   * Both are optional — most relations lack explicit validity dates (open-ended).
+   * EdgeDetailCard uses these to display "YYYY-Qn" validity and a STALE badge
+   * when valid_to is in the past.
+   */
+  valid_from?: string | null;
+  valid_to?: string | null;
+}
+
 interface GraphEventsProps {
   centerEntityId: string;
   onNodeHover: (tooltip: NodeTooltip | null) => void;
   onEdgeHover: (tooltip: EdgeTooltip | null) => void;
   onNodeClick?: (nodeId: string, label: string, nodeType: string, degree: number,
-    edges: Array<{label: string; weight: number; neighborId: string; neighborLabel: string}>) => void;
+    edges: Array<{label: string; weight: number; neighborId: string; neighborLabel: string}>,
+    description: string | null, sector: string | null) => void;
+  /** Called when the user clicks an edge — fires the full edge data from graphology attrs. */
+  onEdgeClick?: (info: SelectedEdgeInfo) => void;
 }
 
-export function GraphEvents({ centerEntityId, onNodeHover, onEdgeHover, onNodeClick }: GraphEventsProps) {
+export function GraphEvents({ centerEntityId, onNodeHover, onEdgeHover, onNodeClick, onEdgeClick }: GraphEventsProps) {
   const sigma = useSigma();
   const registerEvents = useRegisterEvents();
   const router = useRouter();
@@ -102,7 +134,13 @@ export function GraphEvents({ centerEntityId, onNodeHover, onEdgeHover, onNodeCl
       enterEdge: ({ edge, event }) => {
         const graph = sigma.getGraph();
         const attrs = graph.getEdgeAttributes(edge);
-        onEdgeHover({ label: attrs.label as string, weight: attrs.weight as number, x: event.x, y: event.y });
+        onEdgeHover({
+          label: attrs.label as string,
+          weight: attrs.weight as number,
+          evidence_snippets: (attrs.evidence_snippets as string[] | undefined) ?? [],
+          x: event.x,
+          y: event.y,
+        });
       },
       leaveEdge: () => onEdgeHover(null),
       clickNode: ({ node }) => {
@@ -117,13 +155,47 @@ export function GraphEvents({ centerEntityId, onNodeHover, onEdgeHover, onNodeCl
             return { label: ea.label as string, weight: ea.weight as number,
               neighborId, neighborLabel: graph.getNodeAttributes(neighborId).label as string };
           });
-          onNodeClick(node, attrs.label as string, attrs.nodeType as string, graph.degree(node), edges);
+          onNodeClick(
+            node, attrs.label as string, attrs.nodeType as string, graph.degree(node), edges,
+            (attrs.description as string | null | undefined) ?? null,
+            (attrs.sector as string | null | undefined) ?? null,
+          );
         } else {
-          router.push(`/instruments/${node}`);
+          // PRD-0089 F2 step 11 (§6.6): prefer the ticker attribute over the
+          // raw sigma node id (entity_id UUID). Falls back to UUID for
+          // non-tradable nodes; the middleware will resolve via
+          // resolve_security_id and 404 if there is no instrument.
+          const ticker = sigma.getGraph().getNodeAttribute(node, "ticker") as
+            | string
+            | undefined;
+          router.push(`/instruments/${ticker || node}`);
         }
       },
+      clickEdge: ({ edge }) => {
+        if (!onEdgeClick) return;
+        const graph = sigma.getGraph();
+        const attrs = graph.getEdgeAttributes(edge);
+        const [src, tgt] = graph.extremities(edge);
+        onEdgeClick({
+          id: edge,
+          label: (attrs.label as string | undefined) ?? "",
+          weight: (attrs.weight as number | undefined) ?? 0,
+          evidence_snippets: (attrs.evidence_snippets as string[] | undefined) ?? [],
+          relation_summary: (attrs.relation_summary as string | null | undefined) ?? null,
+          sourceId: src,
+          targetId: tgt,
+          sourceLabel: (graph.getNodeAttribute(src, "label") as string | undefined) ?? src,
+          targetLabel: (graph.getNodeAttribute(tgt, "label") as string | undefined) ?? tgt,
+          direction: (attrs.direction as "outbound" | "inbound" | "lateral" | null | undefined) ?? null,
+          // WHY forward valid_from/valid_to: graphology stores these from the
+          // GraphEdge data (D-2 edge validity). InlineSelectionPanel reads them
+          // to display the "YYYY-Qn" validity period and the STALE badge.
+          valid_from: (attrs.valid_from as string | null | undefined) ?? null,
+          valid_to: (attrs.valid_to as string | null | undefined) ?? null,
+        });
+      },
     });
-  }, [registerEvents, sigma, router, centerEntityId, onNodeHover, onEdgeHover, onNodeClick]);
+  }, [registerEvents, sigma, router, centerEntityId, onNodeHover, onEdgeHover, onNodeClick, onEdgeClick]);
 
   return null;
 }
@@ -155,6 +227,12 @@ export function GraphLoader({ data, centerEntityId, layout }: GraphLoaderProps) 
         label: node.label,
         // WHY nodeType (not type): sigma/graphology reserves 'type' for renderer type (e.g., "circle").
         nodeType: node.type,
+        // PRD-0089 F2 step 11 (§6.6): persist ticker on the graph attrs so the
+        // clickNode handler can build a ticker-first URL without re-querying.
+        // Undefined for non-tradable nodes (sectors/persons/events).
+        ticker: node.ticker,
+        description: node.description ?? null,
+        sector: node.sector ?? null,
         x: Math.random() * 100 - 50,
         y: Math.random() * 100 - 50,
         size: baseSize,
@@ -168,7 +246,23 @@ export function GraphLoader({ data, centerEntityId, layout }: GraphLoaderProps) 
       if (graph.hasNode(edge.source) && graph.hasNode(edge.target) && edge.source !== edge.target) {
         if (!graph.hasEdge(edge.source, edge.target)) {
           graph.addEdge(edge.source, edge.target, {
-            id: edge.id, label: edge.label, weight: edge.weight,
+            id: edge.id,
+            label: edge.label,
+            weight: edge.weight,
+            // WHY store evidence_snippets on graphology attrs: EdgeTooltipPanel
+            // reads them via sigma.getEdgeAttributes() in the enterEdge event
+            // handler — avoids a separate lookup into the raw EntityGraph data.
+            evidence_snippets: edge.evidence_snippets ?? [],
+            relation_summary: edge.relation_summary ?? null,
+            direction: edge.direction ?? null,
+            // WHY store decay_class: FilterController reads it via getEdgeAttributes()
+            // to apply alpha-based opacity. Without this attr it always defaults to MEDIUM.
+            decay_class: edge.decay_class ?? null,
+            // WHY store valid_from/valid_to (D-2 edge validity): the clickEdge handler
+            // in GraphEvents reads these attrs and emits them via SelectedEdgeInfo so
+            // InlineSelectionPanel can display the YYYY-Qn validity period + STALE badge.
+            valid_from: (edge as { valid_from?: string | null }).valid_from ?? null,
+            valid_to: (edge as { valid_to?: string | null }).valid_to ?? null,
             size: Math.max(0.5, edge.weight * 2),
             color: "#18181B",
           });
@@ -214,10 +308,27 @@ interface FilterControllerProps {
   activeRelFilter: RelationFilter;
   minWeight: number;
   searchQuery: string;
-  graphData: EntityGraphData;
+  /** Currently selected node id — highlighted with a ring and enlarged. */
+  selectedNodeId?: string | null;
 }
 
-export function FilterController({ activeRelFilter, minWeight, searchQuery }: FilterControllerProps) {
+// WHY declare outside component: stable reference, avoids recreating in the edgeReducer
+// closure. Mirrors DECAY_ALPHA in EntityGraph.tsx — must stay in sync.
+const DECAY_ALPHA_MAP: Record<string, number> = {
+  PERMANENT: 1.0, DURABLE: 1.0,
+  SLOW: 0.7, MEDIUM: 0.7,
+  FAST: 0.4, EPHEMERAL: 0.4,
+};
+
+function hexToRgba(hex: string, alpha: number): string {
+  const clean = hex.replace("#", "");
+  const r = parseInt(clean.substring(0, 2), 16);
+  const g = parseInt(clean.substring(2, 4), 16);
+  const b = parseInt(clean.substring(4, 6), 16);
+  return `rgba(${r},${g},${b},${alpha})`;
+}
+
+export function FilterController({ activeRelFilter, minWeight, searchQuery, selectedNodeId }: FilterControllerProps) {
   const sigma = useSigma();
 
   useEffect(() => {
@@ -230,21 +341,67 @@ export function FilterController({ activeRelFilter, minWeight, searchQuery }: Fi
         if (activeRelFilter !== "all" && !matchesRelFilter(label, activeRelFilter)) {
           return { ...data, hidden: true };
         }
-        return { ...data, hidden: false };
+        // WHY read decay_class from graphology attrs (not `data`):
+        // `data` in edgeReducer is sigma's rendered state — the raw graphology
+        // attribute decay_class is only available via sigma.getGraph().getEdgeAttributes().
+        // We apply decay-based alpha so PERMANENT edges are visually dominant and
+        // EPHEMERAL edges recede, helping analysts distinguish structural from transient ties.
+        const attrs = sigma.getGraph().getEdgeAttributes(edge);
+        const decayClass = (attrs.decay_class as string | undefined) ?? "MEDIUM";
+        const alpha = DECAY_ALPHA_MAP[decayClass] ?? 0.7;
+        const baseColor = (data.color as string | undefined) ?? "#71717A";
+        const edgeColor = baseColor.startsWith("#") ? hexToRgba(baseColor, alpha) : baseColor;
+        return { ...data, hidden: false, color: edgeColor };
       },
       nodeReducer: (node: string, data: Record<string, unknown>) => {
-        if (!searchQuery) return data;
-        const label = (data.label as string ?? "").toLowerCase();
+        // WHY selection ring first: the selected node always stays visible even when
+        // the search query would otherwise dim it. Highlighted node gets a ring
+        // (borderColor + borderSize) and a size boost for clear visual feedback.
+        if (selectedNodeId && node === selectedNodeId) {
+          return {
+            ...data,
+            highlighted: true,
+            size: ((data.size as number) ?? 6) * 1.5,
+            borderColor: "#EAB308", // --chart-2 (Bloomberg yellow) ring
+            borderSize: 2,
+          };
+        }
+
+        // WHY industry color BEFORE search dimming (D-2 industry colouring):
+        // We apply the sector override to the base data so the industry color
+        // is visible when no search is active. The search-dim branch below
+        // overrides it with near-invisible colors for unmatched nodes — that's
+        // intentional (dimmed unmatched nodes should lose their industry color
+        // so the matching nodes stand out clearly).
+        //
+        // HOW: nodeType is always "company", "person", etc. — not the sector.
+        // The sector is stored as the `sector` or `industry` graphology attribute
+        // (populated from the KG entity_summary during GraphLoader). We read
+        // whichever is present and look it up in INDUSTRY_COLORS.
+        const rawSector = (data.sector as string | undefined) ?? (data.industry as string | undefined);
+        let nodeData = data;
+        if (rawSector) {
+          const industryColor = INDUSTRY_COLORS[rawSector];
+          if (industryColor) {
+            // WHY spread + color override (not mutation): sigma nodeReducer must
+            // return a new object — mutating `data` would corrupt the shared
+            // graphology attribute store across multiple sigma refresh cycles.
+            nodeData = { ...data, color: industryColor };
+          }
+        }
+
+        if (!searchQuery) return nodeData;
+        const label = (nodeData.label as string ?? "").toLowerCase();
         if (!label.includes(searchQuery.toLowerCase())) {
           // WHY #09090B (Terminal Dark --background): makes unmatched nodes nearly invisible
           // without fully hiding them (avoids dangling-edge errors in sigma).
-          return { ...data, color: "#09090B", labelColor: "#09090B" };
+          return { ...nodeData, color: "#09090B", labelColor: "#09090B" };
         }
-        return data;
+        return nodeData;
       },
     });
     sigma.refresh();
-  }, [sigma, activeRelFilter, minWeight, searchQuery]);
+  }, [sigma, activeRelFilter, minWeight, searchQuery, selectedNodeId]);
 
   return null;
 }
@@ -324,7 +481,7 @@ export function NodeTooltipPanel({ tooltip }: { tooltip: NodeTooltip }) {
 export function EdgeTooltipPanel({ tooltip }: { tooltip: EdgeTooltip }) {
   const displayLabel = tooltip.label.replace(/_/g, " ").toLowerCase();
   return (
-    <div className="pointer-events-none absolute z-50 rounded-[2px] border border-border/50 bg-card px-3 py-2"
+    <div className="pointer-events-none absolute z-50 max-w-[280px] rounded-[2px] border border-border/50 bg-card px-3 py-2"
       style={{ left: tooltip.x + 12, top: tooltip.y - 8 }}>
       <p className="text-xs font-medium uppercase tracking-wider text-foreground">{displayLabel}</p>
       {/* WHY tabular-nums + font-mono: numeric weight value; tabular-nums prevents
@@ -332,6 +489,18 @@ export function EdgeTooltipPanel({ tooltip }: { tooltip: EdgeTooltip }) {
       <p className="mt-0.5 font-mono text-[10px] tabular-nums text-muted-foreground">
         Strength: {tooltip.weight.toFixed(2)}
       </p>
+      {/* WHY evidence snippets (T-19): surfaces the raw source text that supports
+          this relation claim. Analysts can evaluate credibility without leaving
+          the graph. Limited to 2 snippets to keep the tooltip compact. */}
+      {tooltip.evidence_snippets.length > 0 && (
+        <div className="mt-1.5 space-y-1 border-t border-border/30 pt-1.5">
+          {tooltip.evidence_snippets.slice(0, 2).map((snippet, i) => (
+            <p key={i} className="text-[9px] text-muted-foreground/80 leading-tight line-clamp-2">
+              {`"${snippet}"`}
+            </p>
+          ))}
+        </div>
+      )}
     </div>
   );
 }

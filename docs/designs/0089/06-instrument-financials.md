@@ -1,6 +1,6 @@
 # Instrument — Financials Tab — Design Spec (PRD-0089)
 
-> **Status**: design-proposal (iteration 2 — supersedes PLAN-0090 T-C-01..T-C-03 shipped 2026-05-19)
+> **Status**: design-proposal (iteration 2 — supersedes PLAN-0090 T-C-01..T-C-03 shipped 2026-05-19) (PLAN-0091 iter-3 — 2026-05-22: FundamentalsTimeseriesChart added) (iter-4 — 2026-05-23: R-002 removed invalid `section` param, R-003 explicit keys.ts rename note, R-006 period_type per-metric table, R-007 order=asc note, E-002 +3 metrics Fwd P/E / Op Margin / Div Yield)
 > **Author**: agent-instr-financials
 > **Parent**: `docs/designs/0089/_INDEX.md`
 > **Inventory**: `docs/designs/0089/00-backend-data-inventory.md`
@@ -109,7 +109,7 @@ All cited from `docs/designs/0089/00-backend-data-inventory.md`.
 | `institutional_holders` | `/v1/fundamentals/{id}/institutional-holders` | EODHD | Below-fold "INSTITUTIONAL HOLDERS" table |
 | `fund_holders` | `/v1/fundamentals/{id}/fund-holders` | EODHD | Below-fold "FUND HOLDERS" table |
 | `insider_transactions_snapshot` | `/v1/fundamentals/{id}/insider-transactions` | EODHD | Below-fold "INSIDER TRANSACTIONS" table |
-| `BriefingResponse.sections + risk_summary` | `/v1/briefings/instrument/{entity_id}` | S8 | Sidebar "AI BRIEF" panel |
+| `BriefingResponse.sections + risk_summary` | `/v1/briefings/instrument/{entity_id}` | S8 | Sidebar "AI BRIEF" panel | *(C-F2-03: cache key must NOT include `:{user_id}` suffix — use `qk.briefings.instrument(id)` per DISCUSS-7 lock. The brief is per-instrument, not per-user. AIBriefPanel staleTime = 30s to account for lazy-generate polling)* |
 | `BriefingResponse.bullets` | `/v1/briefings/instrument/{entity_id}` | S8 | Sidebar "AI BRIEF" panel |
 | `earnings-trend` (forward quarters) | `/v1/fundamentals/{id}/earnings-trend` | EODHD | Sidebar "EARNINGS BEAT/MISS" — needs `surprise_percent` from `earnings_annual` records (inventory §1.2 line 45) |
 
@@ -171,30 +171,38 @@ Recommend **B** — cleaner contract, no double-fetch on every instrument page. 
 ║ │ FY21 FY22 FY23 FY24 FY25                                                                                 │ │ │           2 misses  │ ║
 ║ └─────────────────────────────────────────────────────────────────────────────────────────────────────────┘ │ └─────────────────────┘ ║
 ║                                                                                                              │ ┌─ AI BRIEF ──────────┐ ║
-║ ┌── PEER COMPARISON (6 rows × 9 cols, 18px) ───────────────────────────────────────────────────────────────┐ │ │ • Bull: Services    │ ║
-║ │       │ MKT CAP │ P/E  │ FWD P/E │ ROE   │ NET MGN │ DEBT/EQ │ DIV Y │ REV YoY │ 1Y RET                  │ │ │   margin >70%       │ ║
-║ │ AAPL  │ 3.42T   │ 28.7 │ 24.1    │ 154.8 │ 25.3%   │ 1.51    │ 0.4%  │ 1.5%    │ +24.3%                  │ │ │ • Bull: $200B cash   │ ║
-║ │ MSFT  │ 3.10T   │ 35.2 │ 30.4    │  43.2 │ 36.7%   │ 0.34    │ 0.7%  │ 16.8%   │ +32.1%                  │ │ │   $$ buybacks pace  │ ║
-║ │ GOOGL │ 2.04T   │ 22.9 │ 19.8    │  29.8 │ 24.0%   │ 0.10    │  —    │ 14.2%   │ +28.4%                  │ │ │ • Bear: iPhone Ch.  │ ║
-║ │ META  │ 1.55T   │ 28.0 │ 24.1    │  35.1 │ 33.8%   │ 0.27    │ 0.5%  │ 22.1%   │ +49.2%                  │ │ │   share slip ~3pp   │ ║
-║ │ AMZN  │ 2.40T   │ 48.3 │ 35.9    │  21.4 │  9.8%   │ 0.65    │  —    │ 12.4%   │ +18.7%                  │ │ │ Risk: 5.2/10  Conf: │ ║
-║ │ — peer means highlighted; current ticker bolded                                                          │ │ │  HIGH   ⟶ expand    │ ║
-║ └─────────────────────────────────────────────────────────────────────────────────────────────────────────┘ │ └─────────────────────┘ ║
-║                                                                                                              │ ┌─ COMPANY SNAPSHOT ──┐ ║
-║ ┌── INSIDER TRANSACTIONS (last 8, 18px) ──────────────────────────────────────────────────────────────────┐ │ │ SECTOR              │ ║
-║ │ DATE       │ INSIDER            │ ROLE  │ TYPE │ SHARES   │ VALUE  │ POST-TX                            │ │ │  Technology         │ ║
-║ │ 2026-05-10 │ Cook, Timothy D    │ CEO   │ SELL │ 100,000  │ $24.5M │ 3.28M                              │ │ │ INDUSTRY            │ ║
-║ │ 2026-05-08 │ Maestri, Luca      │ CFO   │ SELL │  50,000  │ $12.3M │ 1.15M                              │ │ │  Consumer Electronics│ ║
-║ │ 2026-05-05 │ Adams, Katherine   │ GC    │ SELL │  20,000  │  $4.9M │   422K                              │ │ │ EMPLOYEES            │ ║
-║ │ 2026-04-29 │ Williams, Jeff     │ COO   │ SELL │  40,000  │  $9.8M │   860K                              │ │ │  164,000             │ ║
-║ │ … (8 rows max, more in modal)                                                                          │ │ │ HQ                   │ ║
-║ └─────────────────────────────────────────────────────────────────────────────────────────────────────────┘ │ │  Cupertino, CA, US   │ ║
-║                                                                                                              │ │ DESCRIPTION (4-line) │ ║
-║ ┌── TOP 10 INSTITUTIONAL HOLDERS (18px) ──────────────────────────────────────────────────────────────────┐ │ │ Apple Inc. designs,  │ ║
-║ │ HOLDER                          │ SHARES   │ % OUT │ VALUE   │ Δ QoQ                                    │ │ │ manufactures, and    │ ║
-║ │ Vanguard Group, Inc.            │ 1.34B    │ 8.9%  │ $328B   │ +0.21%                                   │ │ │ markets smartphones, │ ║
-║ │ BlackRock Inc.                  │ 1.05B    │ 7.0%  │ $258B   │ +0.14%                                   │ │ │ tablets… [more]      │ ║
-║ │ Berkshire Hathaway              │ 905M     │ 6.0%  │ $222B   │ –0.30%                                   │ │ └─────────────────────┘ ║
+║ ┌── METRIC HISTORY (FundamentalsTimeseriesChart, 280×80px) ────────────────────────────────────────────────┐ │ │ • Bull: Services    │ ║
+║ │ METRIC HISTORY                              [P/E ▾] [1Y · 3Y · 5Y]                                      │ │ │   margin >70%       │ ║
+║ │  25 ─────────────────────────────────────────────────────── TTM: 28.4×                                   │ │ │ • Bull: $200B cash   │ ║
+║ │  20 ·····─────────────────────────────────── FWD: 25.1×                                                  │ │ │   $$ buybacks pace  │ ║
+║ │  15 ╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌─────────────────── 5Y avg: 22.3×                                              │ │ │ • Bear: iPhone Ch.  │ ║
+║ │     Jan 23              Jan 24              Jan 25                                                        │ │ │   share slip ~3pp   │ ║
+║ └─────────────────────────────────────────────────────────────────────────────────────────────────────────┘ │ │ Risk: 5.2/10  Conf: │ ║
+║                                                                                                              │ │  HIGH   ⟶ expand    │ ║
+║ ┌── PEER COMPARISON (6 rows × 9 cols, 18px) ───────────────────────────────────────────────────────────────┐ │ └─────────────────────┘ ║
+║ │       │ MKT CAP │ P/E  │ FWD P/E │ ROE   │ NET MGN │ DEBT/EQ │ DIV Y │ REV YoY │ 1Y RET                  │ │ ┌─ COMPANY SNAPSHOT ──┐ ║
+║ │ AAPL  │ 3.42T   │ 28.7 │ 24.1    │ 154.8 │ 25.3%   │ 1.51    │ 0.4%  │ 1.5%    │ +24.3%                  │ │ │ SECTOR              │ ║
+║ │ MSFT  │ 3.10T   │ 35.2 │ 30.4    │  43.2 │ 36.7%   │ 0.34    │ 0.7%  │ 16.8%   │ +32.1%                  │ │ │  Technology         │ ║
+║ │ GOOGL │ 2.04T   │ 22.9 │ 19.8    │  29.8 │ 24.0%   │ 0.10    │  —    │ 14.2%   │ +28.4%                  │ │ │ INDUSTRY            │ ║
+║ │ META  │ 1.55T   │ 28.0 │ 24.1    │  35.1 │ 33.8%   │ 0.27    │ 0.5%  │ 22.1%   │ +49.2%                  │ │ │  Consumer Electronics│ ║
+║ │ AMZN  │ 2.40T   │ 48.3 │ 35.9    │  21.4 │  9.8%   │ 0.65    │  —    │ 12.4%   │ +18.7%                  │ │ │ EMPLOYEES  164,000   │ ║
+║ │ — peer means highlighted; current ticker bolded                                                          │ │ │ HQ  Cupertino, CA,US │ ║
+║ └─────────────────────────────────────────────────────────────────────────────────────────────────────────┘ │ │ DESCRIPTION (4-line) │ ║
+║                                                                                                              │ │ Apple Inc. designs,  │ ║
+║ ┌── INSIDER TRANSACTIONS (last 8, 18px) ──────────────────────────────────────────────────────────────────┐ │ │ manufactures, and    │ ║
+║ │ DATE       │ INSIDER            │ ROLE  │ TYPE │ SHARES   │ VALUE  │ POST-TX                            │ │ │ markets smartphones, │ ║
+║ │ 2026-05-10 │ Cook, Timothy D    │ CEO   │ SELL │ 100,000  │ $24.5M │ 3.28M                              │ │ │ tablets… [more]      │ ║
+║ │ 2026-05-08 │ Maestri, Luca      │ CFO   │ SELL │  50,000  │ $12.3M │ 1.15M                              │ │ └─────────────────────┘ ║
+║ │ 2026-05-05 │ Adams, Katherine   │ GC    │ SELL │  20,000  │  $4.9M │   422K                              │ │                         ║
+║ │ 2026-04-29 │ Williams, Jeff     │ COO   │ SELL │  40,000  │  $9.8M │   860K                              │ │                         ║
+║ │ … (8 rows max, more in modal)                                                                          │ │                         ║
+║ └─────────────────────────────────────────────────────────────────────────────────────────────────────────┘ │                         ║
+║                                                                                                              │                         ║
+║ ┌── TOP 10 INSTITUTIONAL HOLDERS (18px) ──────────────────────────────────────────────────────────────────┐ │                         ║
+║ │ HOLDER                          │ SHARES   │ % OUT │ VALUE   │ Δ QoQ                                    │ │                         ║
+║ │ Vanguard Group, Inc.            │ 1.34B    │ 8.9%  │ $328B   │ +0.21%                                   │ │                         ║
+║ │ BlackRock Inc.                  │ 1.05B    │ 7.0%  │ $258B   │ +0.14%                                   │ │                         ║
+║ │ Berkshire Hathaway              │ 905M     │ 6.0%  │ $222B   │ –0.30%                                   │ │                         ║
 ║ │ State Street Corp.              │ 580M     │ 3.8%  │ $142B   │ +0.05%                                   │ │                         ║
 ║ │ … (10 rows)                                                                                            │ │                         ║
 ║ └─────────────────────────────────────────────────────────────────────────────────────────────────────────┘ │                         ║
@@ -206,7 +214,8 @@ Recommend **B** — cleaner contract, no double-fetch on every instrument page. 
 - **Left column**: `flex-1 min-w-0 overflow-y-auto` (allows scroll for below-fold tables)
 - **Right column**: `w-[240px] shrink-0 overflow-y-auto border-l border-border` — sticky scroll, independent of left
 - **Main grid**: `grid grid-cols-6 gap-x-3 gap-y-0` — 6 metric cells per row, **NO group-header rows** (color hue carries section instead)
-- **Group color hue (subtle)**: each section has a 4px left accent in `--muted-foreground/15` to delimit sections; first cell of each row gets `border-l-2 border-{section}` where section uses muted hues (no new palette colors — uses existing `--muted-foreground` opacities only)
+- **F1 density wrapper**: the `DenseMetricsGrid` root `<div>` MUST wear `data-table-grid="dense"` (F1 §16.3). This drives `--row-h: 18px` and `--cell-px: 6px` from the design-system token. Peer / Insider / Institutional tables use plain `data-table-grid` (default 20px — not hyper-dense). (C-F1-01)
+- **Group color hue (subtle)**: each section has a 4px left accent in `--muted-foreground/15` to delimit sections; first cell of each row gets `border-l-2 border-border` — **MUST use `border-border` not section-specific hues** (off-palette arch test). (C-F1-05)
 
 ### 4.2 Density math (above the fold @ 1440×900)
 - TopBar 32 + Tab strip 28 = 60px chrome
@@ -229,13 +238,14 @@ Sidebar above-fold cell count: 5 (consensus bar buckets) + 1 (target) + 3 (revis
 | Component | File path | Line budget | Props | Renders |
 |---|---|---|---|---|
 | `DenseMetricsGrid` (replaces `FlatMetricsGrid`) | `components/instrument/financials/DenseMetricsGrid.tsx` | ≤260 | `instrumentId, fundamentals, snapshot, technicals, shareStats, dividends` | 6-col grid, 8 rows, 48 visible cells, NO header rows |
-| `DenseMetricCell` (replaces `MetricCell`) | `components/instrument/financials/DenseMetricCell.tsx` | ≤90 | `label, value, valueClass?, sectionHue?` | 18px row, 9px label + 11px value |
+| `DenseMetricCell` (replaces `MetricCell`) | **Reuse F1 primitive `components/primitives/MetricCell.tsx`** — no new file. The existing primitive has no hardcoded height; row height comes from `data-table-grid="dense"` parent CSS variable. Delete legacy `components/instrument/financials/MetricCell.tsx` after migration. (C-F1-02) | — | (same as F1 MetricCell) | 18px row via CSS var, 10px label + 11px value |
 | `IncomeStatementTable` (refactor existing) | `components/instrument/financials/IncomeStatementTable.tsx` | +30 lines | + `periodType: "ANNUAL" | "QUARTERLY"` + `showSparkline: boolean` | 5-col data + 1 sparkline col; toggle annual/quarterly |
-| `Sparkline` (new shared primitive) | `components/instrument/shared/Sparkline.tsx` | ≤60 | `values: number[], width: 40, height: 12` | inline SVG polyline; used by income table |
+| `Sparkline` (shared primitive) | **Reuse F1 primitive `components/primitives/Sparkline.tsx`** — no new file. Pass `width={40} height={12}` (height override supported; default 16). Beat/miss sidebar panel reuses the same primitive. (C-F1-03) | — | (same as F1 Sparkline) | inline SVG polyline, trend="auto" |
 | `EarningsBarChart` (refactor existing) | unchanged file | -20 lines | `instrumentId` (same) | Now 64px tall (was 80); add EPS surprise % chip per bar |
 | `PeerComparisonTable` | `components/instrument/financials/PeerComparisonTable.tsx` | ≤180 | `instrumentId` | 5 peers + self × 9 ratio columns @ 18px |
 | `InsiderTransactionsTable` | `components/instrument/financials/InsiderTransactionsTable.tsx` | ≤150 | `instrumentId` | 8 rows × 7 cols @ 18px, "view all" → modal |
 | `InstitutionalHoldersTable` | `components/instrument/financials/InstitutionalHoldersTable.tsx` | ≤150 | `instrumentId` | 10 rows × 5 cols @ 18px |
+| `FundamentalsTimeseriesChart` (NEW) | `components/instrument/financials/FundamentalsTimeseriesChart.tsx` | ≤200 | `instrumentId: string`, `defaultMetric?: string` | 280×80px line chart; metric selector dropdown (P/E · P/B · P/S · EV/EBITDA · Revenue Growth · EPS Growth · Net Margin · ROE); period chips 1Y/3Y/5Y; TTM + FWD + 5Y-avg annotations; empty: “Historical data unavailable” |
 | `AnalystSidebar` (rewrite) | `components/instrument/financials/AnalystSidebar.tsx` | ≤320 | `instrumentId` (self-fetches all 7 sub-panels) | 7 stacked panels (see §5.2) |
 
 ### 5.2 Sidebar composition (top → bottom, 240px wide)
@@ -256,7 +266,7 @@ Sidebar above-fold cell count: 5 (consensus bar buckets) + 1 (target) + 3 (revis
 
 `FinancialsTab.tsx` (rewrite):
 - 240px sidebar (was 280)
-- Left column: DenseMetricsGrid → IncomeStatementTable → EarningsBarChart → PeerComparisonTable → InsiderTransactionsTable → InstitutionalHoldersTable
+- Left column: DenseMetricsGrid → IncomeStatementTable → EarningsBarChart → **FundamentalsTimeseriesChart** → PeerComparisonTable → InsiderTransactionsTable → InstitutionalHoldersTable
 - Single `useFinancialsTabData` extended hook fetches everything sidebar needs in parallel; sidebar components read from the shared cache (`enabled: false` pattern from inventory §1.2)
 
 ---
@@ -307,7 +317,7 @@ Sidebar above-fold cell count: 5 (consensus bar buckets) + 1 (target) + 3 (revis
 | 4 | BALANCE SHEET | DEBT/EQ `formatRatio`, deClass | CURRENT R `formatRatio`, foreground | QUICK R `formatRatio`, foreground | ND/EBITDA `formatRatio`, foreground | — | — | accent: amber-900 |
 | 5 | CASH FLOW | OP CF `formatMarketCap`, foreground | CAPEX `formatMarketCap` abs(), foreground | FCF `formatMarketCap`, signClass | — | — | — | accent: cyan-900 |
 | 6 | DIVIDENDS | DIV YIELD `formatPercent`, gt3pct→positive | PAYOUT `formatPercent`, foreground | EX-DIV `formatDate`, foreground | PAY DATE `formatDate`, foreground | — | — | accent: violet-900 |
-| 7 | OWNERSHIP | SHARES OUT `formatMarketCap`, foreground | FLOAT `formatMarketCap`, foreground | %INSIDERS `formatPercent`, foreground | %INST `formatPercent`, foreground | — | — | accent: rose-900 |
+| 7 | OWNERSHIP | SHARES OUT `formatMarketCap`, foreground *(field: `shareStats.SharesOutstanding`)* | FLOAT `formatMarketCap`, foreground *(field: `shareStats.SharesFloat`)* | %INSIDERS `formatPercent` ÷100, foreground *(field: `shareStats.PercentInsiders`)* | %INST `formatPercent` ÷100, foreground *(field: `shareStats.PercentInstitutions`)* | — | — | accent: rose-900 | *(C-NEW-05: `ShareStatisticsData` uses EODHD PascalCase keys verbatim — NOT snake_case. `PercentInsiders` is raw-percent value, e.g. 1.64 = 1.64%; divide by 100 before formatPercent)* |
 | 8 | TECHNICALS-LITE | BETA `toFixed(2)`, foreground | 52W H `formatPrice`, foreground | 52W L `formatPrice`, foreground | 50DMA `formatPrice`, foreground | 200DMA `formatPrice`, foreground | AVG VOL 30D `formatVolume`, foreground | accent: slate-700 |
 | 9 | SHORTS (sub-row of 8) | SHRT SHRS `formatVolume`, foreground | SHRT RATIO `formatRatio`, foreground | SHRT % `formatPercent`, foreground | — | — | — | accent: slate-700 |
 
@@ -324,12 +334,49 @@ Sidebar above-fold cell count: 5 (consensus bar buckets) + 1 (target) + 3 (revis
 
 Alternative considered: **pack rows tighter** (Finviz style — 4×8 not 6×8). Rejected because the 6-col layout matches the design system's spacing scale better (12px gap × 6 = wider columns that fit longer labels like "EV/EBITDA" un-truncated at 9px).
 
+### 6.7 FundamentalsTimeseriesChart visual spec
+
+| Property | Value |
+|---|---|
+| Container dimensions | 280px wide × 80px tall (full left-column width with `px-3` padding) |
+| Chart type | SVG polyline (`stroke: var(--foreground)`, `stroke-width: 1.5`, no fill) |
+| Y-axis | Auto-scaled; 3 guide lines in `stroke: var(--border)` at 25%/50%/75% of range |
+| X-axis labels | `text-[9px] text-muted-foreground` at Jan of each visible year; no axis line |
+| TTM annotation | `text-[9px] font-mono text-foreground` right-aligned on last data point |
+| FWD annotation | `text-[9px] font-mono text-muted-foreground` right-aligned on projected point (dashed line extension) |
+| 5Y avg line | `stroke-dasharray: 4 2`, `stroke: var(--muted-foreground)/50` |
+| Metric selector | `text-[10px]` chip strip: P/E · P/B · P/S · EV/EBITDA · Revenue Growth · EPS Growth · Net Margin · ROE · **Fwd P/E** · **Op Margin** · **Div Yield** (11 metrics total); active chip uses `bg-muted text-foreground`, inactive `text-muted-foreground`; first 8 chips visible, last 3 scroll horizontally on mobile |
+| Period chips | `text-[9px]` chips: 1Y · 3Y · 5Y; active uses `text-primary`, inactive `text-muted-foreground` |
+| Section header | `text-[10px] uppercase tracking-[0.08em] text-muted-foreground` — "METRIC HISTORY" |
+| Empty state | `text-[11px] text-muted-foreground` centered text: "Historical data unavailable" |
+| Loading state | Single skeleton bar `bg-muted/30 animate-pulse h-[80px] w-full rounded-none` |
+
+**Per-metric `period_type` defaults** (pass to S3 `?period_type=` param — R-006 fix):
+
+| Metric chip | Backend metric | `period_type` | Rationale |
+|-------------|---------------|---------------|-----------|
+| P/E | `pe_ratio` | `QUARTERLY` | Intra-year valuation moves matter |
+| P/B | `pb_ratio` | `QUARTERLY` | Same |
+| P/S | `price_sales_ttm` | `QUARTERLY` | Same |
+| EV/EBITDA | `enterprise_value_ebitda` | `QUARTERLY` | Same |
+| Fwd P/E | `forward_pe` | `SNAPSHOT` | Point-in-time consensus estimate |
+| Revenue Growth | `quarterly_revenue_growth_yoy` | `QUARTERLY` | YoY quarterly gives clearest trend |
+| EPS Growth | `quarterly_earnings_growth_yoy` | `QUARTERLY` | Same |
+| Net Margin | `profit_margin` | `QUARTERLY` | Quarterly margin trends most insightful |
+| Op Margin | `operating_margin_ttm` | `QUARTERLY` | Same |
+| ROE | `roe_ttm` | `ANNUAL` | Annual is most stable; quarterly ROE is noisy |
+| Div Yield | `dividend_yield` | `SNAPSHOT` | Point-in-time |
+
+Always pass `order=asc` — S3 returns data sorted ascending by `as_of_date` only when explicitly
+requested (R-007 fix; prior bug logged as BP during 2026-05-09 audit caused charts to show
+oldest 12 quarters rather than most-recent).
+
 ---
 
 ## 7. Interaction model
 
 ### 7.1 Hotkeys (scoped to this tab)
-- `q` / `Q`: toggle income-statement Annual/Quarterly
+- `p` / `P`: toggle income-statement Annual/Quarterly — `q` is reserved for the global InstrumentTabs chord (switches to Quote tab); use `p` (period) to avoid conflict (C-W1-04)
 - `e` / `E`: expand AI brief sidebar panel to full-height overlay
 - `c` / `C`: expand Company snapshot description to full-height overlay
 - `1`-`5`: jump scroll to section (1=snapshot, 2=income, 3=earnings, 4=peers, 5=insider/instit)
@@ -357,7 +404,7 @@ Alternative considered: **pack rows tighter** (Finviz style — 4×8 not 6×8). 
   - Earnings chart: hide entirely (existing behaviour, keep)
   - Peer table: "Peers not configured" with link to manually pick comparables
   - Insider/Institutional: hide the block (don't show empty headers)
-  - Sidebar AI brief: "Brief generating… check back in 30s" + auto-refetch on 30s interval
+  - Sidebar AI brief: explicit lazy-generate call sequence (C-BE-05): (1) `GET /briefings/instrument/{id}` → if 404, (2) fire `POST /briefings/instrument/{id}/generate`, (3) poll `GET` every 30s up to 5 attempts (use `refetchInterval` + `refetchIntervalInBackground: false`), (4) abandon to "Brief unavailable — retry later" after 5 failed polls
   - Sidebar company snapshot: always rendered (fundamentals always has at least sector + description for live equities)
 
 ---
@@ -375,10 +422,11 @@ All resources go through `useFinancialsTabData(instrumentId)` extended hook, but
 | `/v1/fundamentals/{id}/income-statement` | `["income-statement", id]` | existing | 24h | — |
 | `/v1/fundamentals/{id}/earnings-annual-trend` | `["earnings-history", id]` | existing | 24h | Sidebar beat/miss |
 | `/v1/fundamentals/{id}/splits-dividends` | `qk.instruments.splitsDividends(id)` | existing | 24h | — |
-| `/v1/fundamentals/{id}/insider-transactions` | `qk.instruments.insiderTxns(id)` *(new key)* | **NEW** | 24h | — |
-| `/v1/fundamentals/{id}/institutional-holders` | `qk.instruments.institutionalHolders(id)` *(new key)* | **NEW** | 24h | — |
-| `/v1/fundamentals/{id}/fund-holders` | `qk.instruments.fundHolders(id)` *(new key)* | **NEW** | 24h | — |
-| `/v1/instruments/{id}/peers?n=5` | `qk.instruments.peers(id)` *(new key)* | **NEW (needs backend endpoint)** | 24h | Intelligence tab (could reuse) |
+| `/v1/fundamentals/{id}/insider-transactions` | `qk.instruments.ownership(id)` *(existing key — reuse; page-bundle already seeds this)* | existing | 24h | — | *(C-NEW-02: do NOT add `insiderTxns` key; `ownership` already exists and is seeded by the page-bundle)* |
+| `/v1/fundamentals/{id}/institutional-holders` | `qk.instruments.institutionalHolders(id)` *(new key)* | **NEW** | 24h | — | *(C-BE-01: S9 proxy route does NOT exist today — must add `GET /v1/fundamentals/{id}/institutional-holders` to `services/api-gateway/src/api_gateway/routers/fundamentals.py` ~15 LOC + test)* |
+| `/v1/fundamentals/{id}/fund-holders` | `qk.instruments.fundHolders(id)` *(new key)* | **NEW** | 24h | — | *(C-BE-01: same — must add S9 proxy route for `/fund-holders`)* |
+| `/v1/instruments/{id}/peers?n=5` | `qk.instruments.peers(id)` *(new key)* | **NEW — promoted to this wave** | 24h | Intelligence tab (could reuse) | *(C-BE-02: original wave ordering put this in Wave F / Quote. Peer comparison is a primary user task (§2.2 #3) — promote the backend endpoint to this wave. ~30 LOC S9 SQL query by `gics_industry` + market cap sort)* |
+| `GET /v1/fundamentals/timeseries?instrument_id={id}&metric={metric}&period_type={period_type}&order=asc` | `qk.instruments.fundamentalsTimeseries(id, metric)` — **IMPLEMENTATION NOTE**: key exists in `keys.ts` as `fundamentalsTimeseries(id, period)` with cache array `["fundamentals-ts", period]`; **MUST rename** both the param and the array slot to `metric` (R-003 fix). Always pass `order=asc` to get chronological data for chart rendering (R-007). The `section` param does NOT exist on S3 — do not send it (R-002 fix). | existing key *(param rename required)* | 1h | — |
 | `/v1/briefings/instrument/{entity_id}` | `qk.briefings.instrument(entityId)` | existing | 30s | Intelligence tab |
 | `/v1/fundamentals/{id}/analyst-targets-by-firm` | `qk.instruments.analystTargetsByFirm(id)` *(new key)* | **NEW (needs backend endpoint)** | 30min | — |
 
@@ -425,7 +473,7 @@ All resources go through `useFinancialsTabData(instrumentId)` extended hook, but
 - **Decision**: new endpoint. Trivial S9 implementation. Flagged as open Q-1.
 
 ### 9.7 Quarterly toggle on income statement: in-place vs separate route (chosen: in-place)
-- **In-place** (chosen): hotkey `q` flips a state flag; same component renders quarterly with 8 columns (last 8 quarters)
+- **In-place** (chosen): hotkey `p` flips a state flag; same component renders quarterly with 8 columns (last 8 quarters)
 - **Decision**: in-place. Avoids new route, matches TradingView pattern.
 
 ---
@@ -434,12 +482,12 @@ All resources go through `useFinancialsTabData(instrumentId)` extended hook, but
 
 | ID | Question | Blocker for | Recommendation |
 |---|---|---|---|
-| Q-1 | Add backend endpoint `GET /v1/instruments/{id}/peers?n=5` returning top-N market-cap peers in the same `gics_industry`? Or derive client-side? | PeerComparisonTable | New endpoint (Option B). ~30 LOC in S9 + cache rule. |
+| Q-1 | ~~Add backend endpoint `GET /v1/instruments/{id}/peers?n=5`~~ | PeerComparisonTable | **RESOLVED (C-BE-02)**: New endpoint promoted to this wave (not Wave F). ~30 LOC S9 SQL + test. |
 | Q-2 | Add backend endpoint `GET /v1/fundamentals/{id}/analyst-targets-by-firm` returning per-firm target prices? EODHD exposes individual firm targets in `AnalystRatings.*` but we don't surface them today. | Sidebar TgtByAnalyst panel | New endpoint required. Confirm EODHD plan tier exposes this field. If not, panel renders only the consensus target and falls back to "individual firm targets pending data provider upgrade". |
 | Q-3 | Where does `RevisionsPanel` source 30-day delta from? `analyst_consensus` is stored as a snapshot; we'd need to keep history of last 30 days of snapshots. Currently the section keeps only the latest record. | Sidebar RevisionsPanel | Add S3 worker rotation: keep last-90d of `analyst_consensus` records (already happens for `earnings_trend`). Confirm S3 logic. |
 | Q-4 | Should the company description respect i18n (some EODHD entries have non-English text)? | CompanySnapshotPanel | Out of scope for design — defer to i18n PRD. |
 | Q-5 | AI brief currently shows generic morning-brief format. Should we add an "instrument-specific" brief variant that emphasises fundamentals over news? | AIBriefPanel | Yes — propose new S8 prompt for `/v1/briefings/instrument/{entity_id}` that takes fundamentals snapshot as context. Tracked separately. |
-| Q-6 | Should we ship `DenseMetricCell` as a new component or extend `MetricCell`? Existing component has h-[22px] hardcoded and the 18px change would break OverviewSidebar consumers. | DenseMetricsGrid implementation | New component. Keep MetricCell at 22px for sidebar consumers. |
+| Q-6 | ~~DenseMetricCell vs MetricCell; Sparkline new vs reuse~~ | DenseMetricsGrid | **RESOLVED (C-F1-02, C-F1-03)**: Reuse F1 primitives `components/primitives/MetricCell.tsx` and `components/primitives/Sparkline.tsx`. No new files. Row height driven by `data-table-grid="dense"` CSS var. Delete legacy `components/instrument/financials/MetricCell.tsx` during migration. |
 | Q-7 | Peer table 1Y return needs OHLCV data for each peer. Hit `/v1/ohlcv/batch` with the 5 peer instrument_ids? | PeerComparisonTable | Yes — `/v1/ohlcv/batch` already supports multi-instrument fetch; compute 1Y from first/last bar client-side. |
 
 ---
@@ -454,8 +502,9 @@ For the implementation wave to be accepted:
 - [ ] Insider transactions table renders ≥ 8 rows (or "no recent activity" empty state)
 - [ ] Institutional holders table renders ≥ 10 rows (or empty state)
 - [ ] Peer comparison renders self + 5 peers × 9 columns
-- [ ] Income statement supports Annual + Quarterly toggle via `q` key
+- [ ] Income statement supports Annual + Quarterly toggle via `p` key
 - [ ] Earnings bar chart shows EPS surprise % per bar
+- [ ] `FundamentalsTimeseriesChart` renders on Financials tab with P/E as default metric; metric chip strip (11 metrics) switches data without full re-mount; period chips (1Y/3Y/5Y) filter x-axis; `period_type` and `order=asc` params set correctly per metric; empty state shows “Historical data unavailable” in `text-muted-foreground`
 - [ ] No cells render dash `—` for INT COVERAGE / CREDIT RATING / DAY RETURN / RSI(14) / ATR(14) (those are removed)
 - [ ] Architecture test `no-off-palette-colors` continues to pass
 - [ ] Vitest density check: `expect(visibleCells).toBeGreaterThanOrEqual(80)` on the snapshot grid render test
@@ -467,7 +516,8 @@ For the implementation wave to be accepted:
 
 **New**:
 - `components/instrument/financials/DenseMetricsGrid.tsx`
-- `components/instrument/financials/DenseMetricCell.tsx`
+- ~~`components/instrument/financials/DenseMetricCell.tsx`~~ — **removed** (C-F1-02: reuse F1 primitive)
+- `components/instrument/financials/FundamentalsTimeseriesChart.tsx` (NEW — PLAN-0091 T-C-1-02)
 - `components/instrument/financials/PeerComparisonTable.tsx`
 - `components/instrument/financials/InsiderTransactionsTable.tsx`
 - `components/instrument/financials/InstitutionalHoldersTable.tsx`
@@ -478,7 +528,7 @@ For the implementation wave to be accepted:
 - `components/instrument/financials/sidebar/BeatMissHistoryPanel.tsx`
 - `components/instrument/financials/sidebar/AIBriefPanel.tsx`
 - `components/instrument/financials/sidebar/CompanySnapshotPanel.tsx`
-- `components/instrument/shared/Sparkline.tsx`
+- ~~`components/instrument/shared/Sparkline.tsx`~~ — **removed** (C-F1-03: reuse F1 primitive)
 - Test files for each of the above
 
 **Modified**:

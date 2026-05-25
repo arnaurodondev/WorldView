@@ -40,15 +40,18 @@ function makeTx(overrides: Partial<Transaction> = {}): Transaction {
 // ── makeTransactionColumns ───────────────────────────────────────────────────
 
 describe("makeTransactionColumns", () => {
-  it("returns exactly 8 columns", () => {
+  it("returns exactly 13 columns (8 original + 5 new from PRD-0089 SA-C)", () => {
+    // WHY 13: PRD-0089 SA-C added TIME, NAME, FX, CASH_IMPACT, BAL to the
+    // original 8 columns (DATE, TYPE, CLASS, TICKER, QTY, PRICE, TOTAL, FEE).
     const cols = makeTransactionColumns();
-    expect(cols).toHaveLength(8);
+    expect(cols).toHaveLength(13);
   });
 
-  it("column ids match the expected order", () => {
+  it("column ids match the expected order (8 original + 5 new)", () => {
     const cols = makeTransactionColumns();
     const ids = cols.map((c) => c.id);
     expect(ids).toEqual([
+      // Original 8 (PLAN-0059 F-1 contract preserved)
       "executed_at",
       "type",
       "asset_class",
@@ -57,6 +60,12 @@ describe("makeTransactionColumns", () => {
       "price",
       "total",
       "fee",
+      // 5 new columns (PRD-0089 SA-C)
+      "time",
+      "name",
+      "fx",
+      "cash_impact",
+      "bal",
     ]);
   });
 

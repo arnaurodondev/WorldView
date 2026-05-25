@@ -298,6 +298,75 @@ async def test_narrative_generate_rate_limited(authed_app, authed_mock_clients) 
     authed_mock_clients.knowledge_graph.post.assert_not_called()
 
 
+# ── REQ-003 / TASK-W0-06: POST /v1/entities/{id}/refresh ────────────────────
+
+
+@pytest.mark.asyncio
+async def test_entity_refresh_requires_auth(app, mock_clients) -> None:
+    """POST /v1/entities/{id}/refresh without auth → 401."""
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        resp = await client.post(f"/v1/entities/{_ENTITY_UUID}/refresh")
+    assert resp.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_entity_refresh_happy_path(authed_app, authed_mock_clients) -> None:
+    """POST /v1/entities/{id}/refresh → S7 returns 202; body forwarded."""
+    # set_nx True → proxy rate limit not hit.
+    mock_valkey = authed_app.state.valkey
+    mock_valkey.set_nx = AsyncMock(return_value=True)
+
+    authed_mock_clients.knowledge_graph.post = AsyncMock(
+        return_value=_mock_response(
+            202,
+            {
+                "job_id": "0193abcd-0000-7000-8000-000000000001",
+                "entity_id": _ENTITY_UUID,
+                "refresh_type": "description",
+                "message": "Entity refresh queued",
+            },
+        ),
+    )
+
+    transport = ASGITransport(app=authed_app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        resp = await client.post(
+            f"/v1/entities/{_ENTITY_UUID}/refresh",
+            headers={"Authorization": f"Bearer {_make_jwt()}"},
+            json={"refresh_type": "description"},
+        )
+
+    assert resp.status_code == 202
+    call_args = authed_mock_clients.knowledge_graph.post.call_args
+    assert call_args[0][0] == f"/api/v1/entities/{_ENTITY_UUID}/refresh"
+    # Body bytes forwarded verbatim.
+    forwarded = call_args.kwargs.get("content")
+    assert forwarded is not None
+    assert b"description" in forwarded
+
+
+@pytest.mark.asyncio
+async def test_entity_refresh_rate_limited_at_proxy(authed_app, authed_mock_clients) -> None:
+    """POST /v1/entities/{id}/refresh — S9 proxy rate limit → 429 with Retry-After."""
+    mock_valkey = authed_app.state.valkey
+    mock_valkey.set_nx = AsyncMock(return_value=False)  # rate-limited
+
+    authed_mock_clients.knowledge_graph.post = AsyncMock()
+
+    transport = ASGITransport(app=authed_app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        resp = await client.post(
+            f"/v1/entities/{_ENTITY_UUID}/refresh",
+            headers={"Authorization": f"Bearer {_make_jwt()}"},
+        )
+
+    assert resp.status_code == 429
+    assert resp.headers.get("retry-after") == "3600"
+    # S7 must NOT have been called when the proxy rate-limit fires.
+    authed_mock_clients.knowledge_graph.post.assert_not_called()
+
+
 # ── T-G-02: GET /v1/entities/{id}/graph (new params) ────────────────────────
 
 
@@ -453,3 +522,142 @@ async def test_paths_404_from_s7_forwarded(authed_app, authed_mock_clients) -> N
         )
 
     assert resp.status_code == 404
+
+
+# ── F-QA-016: Valkey fail-open paths ─────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_intelligence_cache_read_fail_open(authed_app, authed_mock_clients) -> None:
+    """Valkey.get raises ConnectionError → request still completes via S7 (fail-open)."""
+    mock_valkey = authed_app.state.valkey
+    mock_valkey.get = AsyncMock(side_effect=ConnectionError("Valkey unavailable"))
+    mock_valkey.set = AsyncMock()
+
+    payload = {"entity_id": _ENTITY_UUID, "canonical_name": "Apple Inc.", "confidence_breakdown": {}}
+    authed_mock_clients.knowledge_graph.get = AsyncMock(
+        return_value=_mock_response(200, payload),
+    )
+
+    transport = ASGITransport(app=authed_app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        resp = await client.get(
+            f"/v1/entities/{_ENTITY_UUID}/intelligence",
+            headers={"Authorization": f"Bearer {_make_jwt()}"},
+        )
+
+    # Request must complete successfully despite cache failure.
+    assert resp.status_code == 200
+    assert resp.json()["canonical_name"] == "Apple Inc."
+    # S7 was still called (cache miss path followed after exception).
+    authed_mock_clients.knowledge_graph.get.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_intelligence_cache_write_fail_open(authed_app, authed_mock_clients) -> None:
+    """Valkey.set raises ConnectionError after S7 success → response still returned (fail-open)."""
+    mock_valkey = authed_app.state.valkey
+    mock_valkey.get = AsyncMock(return_value=None)  # cache miss
+    mock_valkey.set = AsyncMock(side_effect=ConnectionError("Valkey unavailable"))
+
+    payload = {"entity_id": _ENTITY_UUID, "canonical_name": "Apple Inc.", "confidence_breakdown": {}}
+    authed_mock_clients.knowledge_graph.get = AsyncMock(
+        return_value=_mock_response(200, payload),
+    )
+
+    transport = ASGITransport(app=authed_app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        resp = await client.get(
+            f"/v1/entities/{_ENTITY_UUID}/intelligence",
+            headers={"Authorization": f"Bearer {_make_jwt()}"},
+        )
+
+    # Cache write failure must not affect the response.
+    assert resp.status_code == 200
+    assert resp.json()["canonical_name"] == "Apple Inc."
+
+
+# ── F-SEC-001: focus_node max_length validation ───────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_intelligence_focus_node_too_long_rejected(authed_app, authed_mock_clients) -> None:
+    """focus_node longer than 36 chars → 422 before S7 call (max_length guard)."""
+    transport = ASGITransport(app=authed_app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        resp = await client.get(
+            f"/v1/entities/{_ENTITY_UUID}/intelligence",
+            params={"focus_node": "x" * 37},
+            headers={"Authorization": f"Bearer {_make_jwt()}"},
+        )
+
+    assert resp.status_code == 422
+    authed_mock_clients.knowledge_graph.get.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_graph_focus_node_too_long_rejected(authed_app, authed_mock_clients) -> None:
+    """focus_node > 36 chars on graph endpoint → 422 (consistent with intelligence endpoint)."""
+    transport = ASGITransport(app=authed_app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        resp = await client.get(
+            f"/v1/entities/{_ENTITY_UUID}/graph",
+            params={"focus_node": "y" * 37},
+            headers={"Authorization": f"Bearer {_make_jwt()}"},
+        )
+
+    assert resp.status_code == 422
+
+
+# ── F-SEC-002: min_confidence typed validation ───────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_graph_min_confidence_invalid_rejected(authed_app, authed_mock_clients) -> None:
+    """min_confidence=not-a-float → 422 before any S7 call (typed Query param guard)."""
+    transport = ASGITransport(app=authed_app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        resp = await client.get(
+            f"/v1/entities/{_ENTITY_UUID}/graph",
+            params={"min_confidence": "not-a-float"},
+            headers={"Authorization": f"Bearer {_make_jwt()}"},
+        )
+
+    assert resp.status_code == 422
+    authed_mock_clients.knowledge_graph.get.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_graph_min_confidence_out_of_range_rejected(authed_app, authed_mock_clients) -> None:
+    """min_confidence=1.5 (> le=1.0) → 422 before any S7 call."""
+    transport = ASGITransport(app=authed_app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        resp = await client.get(
+            f"/v1/entities/{_ENTITY_UUID}/graph",
+            params={"min_confidence": "1.5"},
+            headers={"Authorization": f"Bearer {_make_jwt()}"},
+        )
+
+    assert resp.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_graph_min_confidence_forwarded_as_float(authed_app, authed_mock_clients) -> None:
+    """Valid min_confidence=0.7 is forwarded to S7 as string '0.7'."""
+    graph_payload = {"center": {"entity_id": _ENTITY_UUID, "canonical_name": "X"}, "relations": [], "entities": {}}
+    authed_mock_clients.knowledge_graph.get = AsyncMock(
+        return_value=_mock_response(200, graph_payload),
+    )
+
+    transport = ASGITransport(app=authed_app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        resp = await client.get(
+            f"/v1/entities/{_ENTITY_UUID}/graph",
+            params={"min_confidence": "0.7"},
+            headers={"Authorization": f"Bearer {_make_jwt()}"},
+        )
+
+    assert resp.status_code == 200
+    call_kwargs = authed_mock_clients.knowledge_graph.get.call_args[1]
+    forwarded = call_kwargs.get("params", {})
+    assert forwarded.get("min_confidence") == "0.7"

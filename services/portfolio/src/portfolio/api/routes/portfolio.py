@@ -12,7 +12,7 @@ from decimal import Decimal
 from typing import Literal
 from uuid import UUID
 
-from fastapi import APIRouter, HTTPException, Query, Request, status
+from fastapi import APIRouter, Header, HTTPException, Query, Request, status
 from fastapi.responses import Response
 
 from portfolio.api.dependencies import ReadUoWDep, UoWDep
@@ -95,24 +95,43 @@ def _to_response(portfolio) -> PortfolioResponse:  # type: ignore[no-untyped-def
     )
 
 
-@router.post("/portfolios", response_model=PortfolioResponse, status_code=status.HTTP_201_CREATED)
+@router.post("/portfolios", response_model=PortfolioResponse)
 async def create_portfolio(
     body: PortfolioCreateRequest,
     uow: UoWDep,
     request: Request,
+    response: Response,
+    # REQ-002a (TASK-W0-02): caller-supplied ``Idempotency-Key`` for safe
+    # retries. Matches the header alias used by POST /v1/transactions so
+    # the frontend retry config can target one consistent header name.
+    idempotency_key: str | None = Header(None, alias="Idempotency-Key"),
 ) -> PortfolioResponse:
+    """Create a new portfolio.
+
+    Status codes:
+        201 — new portfolio created (no replay).
+        200 — idempotent replay returned the previously-created portfolio
+              (caller sent the same ``Idempotency-Key`` they used earlier).
+        409 — idempotency key reuse with a different request body.
+        422 — idempotency key is not a valid UUID.
+    """
     x_tenant_id = _extract_tenant_id(request)
     uc = CreatePortfolioUseCase()
-    portfolio = await uc.execute(
+    result = await uc.execute(
         CreatePortfolioCommand(
             tenant_id=x_tenant_id,
             owner_id=body.owner_user_id,
             name=body.name,
             currency=body.currency,
+            idempotency_key=idempotency_key,
         ),
         uow,
     )
-    return _to_response(portfolio)
+    # REQ-002a: set the status code explicitly here instead of via the
+    # decorator so an idempotent replay can return 200 while a fresh create
+    # returns 201 — the OpenAPI docs declare 201 as the default response.
+    response.status_code = status.HTTP_201_CREATED if result.created else status.HTTP_200_OK
+    return _to_response(result.portfolio)
 
 
 @router.get("/portfolios", response_model=PaginatedResponse[PortfolioResponse])

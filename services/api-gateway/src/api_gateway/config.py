@@ -69,8 +69,9 @@ class Settings(BaseSettings):
     # WHY 300: authenticated users on the instrument detail page fire 4+ simultaneous
     # OHLCV timeseries calls (one per workspace panel) plus screener + KG graph + news.
     # 100 req/60s was too tight for multi-panel workspace usage → 429s on timeseries.
+    # 300/min was still tight for instrument pages (bundle + OHLCV + quote + KG + insider).
     # Unauthenticated tier stays at 20 req/60s (enforced in RateLimitMiddleware).
-    rate_limit_requests: int = 300
+    rate_limit_requests: int = 1000
     rate_limit_window_seconds: int = 60
 
     # CORS
@@ -98,6 +99,11 @@ class Settings(BaseSettings):
     # via sealed secret. Compared with ``secrets.compare_digest`` to avoid
     # leaking timing information.
     service_account_token: SecretStr = SecretStr("")
+
+    # NL screener — DeepInfra key for direct chat/completions call.
+    # Falls back to empty (feature disabled) when not set.
+    # env var: API_GATEWAY_DEEPINFRA_API_KEY (env_prefix + field name)
+    deepinfra_api_key: SecretStr = SecretStr("")
 
     # Observability (STANDARDS.md §5 — mandatory in every service)
     service_name: str = "api-gateway"

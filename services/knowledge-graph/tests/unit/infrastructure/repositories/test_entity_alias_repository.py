@@ -169,6 +169,6 @@ class TestApplyRetryTransitionTypecast:
         await core.apply_retry_transition(session, queue_id, max_retries=5)
 
         sql_str = str(session.execute.call_args.args[0])
-        assert "CAST(:base_now AS timestamptz)" in sql_str, (
-            "SQL must explicitly cast :base_now to timestamptz to prevent asyncpg " "DatatypeMismatchError (BP-449B)"
-        )
+        assert (
+            "CAST(:base_now AS timestamptz)" in sql_str
+        ), "SQL must explicitly cast :base_now to timestamptz to prevent asyncpg DatatypeMismatchError (BP-449B)"

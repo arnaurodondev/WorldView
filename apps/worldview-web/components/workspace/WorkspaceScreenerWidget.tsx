@@ -119,7 +119,12 @@ export function WorkspaceScreenerWidget() {
       <ScreenerRow
         key={row.instrument_id}
         row={row}
-        onClick={() => router.push(`/instruments/${row.entity_id}`)}
+        // PRD-0089 F2 step 11 (§6.6): ticker-first URL for screener rows.
+        // ScreenerResult guarantees ticker as a non-null string; UUID fallback
+        // only for malformed payloads (middleware resolves both forms).
+        onClick={() =>
+          router.push(`/instruments/${row.ticker || row.instrument_id}`)
+        }
       />
     ));
   }

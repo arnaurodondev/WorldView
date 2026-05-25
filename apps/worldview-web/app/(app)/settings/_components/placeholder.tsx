@@ -21,7 +21,7 @@ export function SettingsPlaceholder({ title, description, bullets }: Props) {
   return (
     <Card className="border-border/60 bg-card">
       <CardHeader className="pb-3">
-        <CardTitle className="text-sm font-medium text-foreground">{title}</CardTitle>
+        <CardTitle className="text-[14px] font-medium text-foreground">{title}</CardTitle>
         <CardDescription className="text-xs">{description}</CardDescription>
       </CardHeader>
       <CardContent>

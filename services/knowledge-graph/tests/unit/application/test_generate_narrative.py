@@ -42,6 +42,7 @@ def _make_entity_ctx(
     entity_type: str = _ENTITY_TYPE,
     relations: list | None = None,
     contradictions: list | None = None,
+    claims: list | None = None,
 ) -> dict:
     return {
         "entity": {
@@ -53,6 +54,8 @@ def _make_entity_ctx(
         "relations": relations or [],
         "articles": [],
         "contradictions": contradictions or [],
+        # Top-3 grounding claims from intelligence_db.claims (anti-hallucination).
+        "claims": claims or [],
     }
 
 
@@ -85,6 +88,12 @@ def _make_session_factory(entity_ctx: dict | None = None, existing_version=None)
         contra_result = MagicMock()
         contra_result.fetchall.return_value = []
 
+        # Mock the claims query (4th execute call in _load_entity_context).
+        # Returns an empty list by default; tests that need grounding claims
+        # can override the session mock directly after calling _make_use_case.
+        claims_result = MagicMock()
+        claims_result.fetchall.return_value = []
+
         call_counter = {"n": 0}
 
         async def _execute(*args, **kwargs):
@@ -94,7 +103,10 @@ def _make_session_factory(entity_ctx: dict | None = None, existing_version=None)
                 return entity_result
             if n == 1:
                 return relations_result
-            return contra_result
+            if n == 2:
+                return contra_result
+            # n == 3: claims query (and any subsequent calls default to claims_result)
+            return claims_result
 
         session.execute = AsyncMock(side_effect=_execute)
     else:

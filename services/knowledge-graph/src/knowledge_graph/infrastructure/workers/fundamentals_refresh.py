@@ -47,6 +47,7 @@ if TYPE_CHECKING:
         RelationEvidenceRepository,
     )
     from knowledge_graph.infrastructure.llm.fallback_chain import FallbackChainClient
+    from messaging.valkey.client import ValkeyClient  # type: ignore[import-untyped]
 
 logger = get_logger(__name__)  # type: ignore[no-any-return]
 
@@ -77,6 +78,45 @@ _INDUSTRY_BASE_CONFIDENCE = 0.85
 # so any HS256 JWT with a decodable header is accepted in local dev.
 # F-015: this is only used as a fallback when no RS256 private key is configured.
 _INTERNAL_JWT_DEV_KEY = "dev-skip-verification-key-for-kg-fundamentals"
+
+# ── PLAN-0093 D-2 (T-D-2-01): per-ticker exponential backoff ─────────────────
+#
+# When market-data returns persistent HTTP errors (404 missing fundamentals,
+# 5xx provider outage), hammering the same ticker every 30-day refresh cycle
+# wastes upstream quota.  We back off in Valkey and skip the entity until the
+# backoff window elapses.
+#
+# Key  : s7:fundamentals:backoff:{ticker} (TTL == current backoff seconds)
+# Value: current backoff in seconds (string-encoded int).
+#
+# Schedule:
+#   First error           → 3600   s (1h)
+#   Second error          → 86400  s (1d)
+#   Third + later errors  → 604800 s (7d)
+#   Success               → DELETE the key (resume normal 30-day cadence).
+_BACKOFF_KEY_PREFIX = "s7:fundamentals:backoff"
+_BACKOFF_STAGE_1H_S = 3600
+_BACKOFF_STAGE_1D_S = 86400
+_BACKOFF_STAGE_7D_S = 604800
+
+
+def _backoff_key(ticker: str) -> str:
+    """Build the Valkey key for *ticker*'s backoff state."""
+    # Lower-case so AAPL == aapl (DB stores symbols case-sensitive but
+    # backoff is a quota-protection signal — collapsing case is safe).
+    return f"{_BACKOFF_KEY_PREFIX}:{ticker.lower()}"
+
+
+def _next_backoff_seconds(current: int | None) -> int:
+    """Return the next backoff value given the current one (None = first error).
+
+    Pure function — easy to unit-test without Valkey.
+    """
+    if current is None or current < _BACKOFF_STAGE_1H_S:
+        return _BACKOFF_STAGE_1H_S
+    if current < _BACKOFF_STAGE_1D_S:
+        return _BACKOFF_STAGE_1D_S
+    return _BACKOFF_STAGE_7D_S
 
 
 def _system_jwt_headers(private_key_pem: str = "") -> dict[str, str]:
@@ -138,6 +178,7 @@ class FundamentalsRefreshWorker:
         concurrency: int = 5,
         internal_jwt_private_key_pem: str = "",
         read_session_factory: Any = None,
+        valkey_client: ValkeyClient | None = None,
     ) -> None:
         self._sf = session_factory
         # DEF-034 (Wave B-5): Phase 1 due-entity SELECT runs on the read
@@ -151,6 +192,72 @@ class FundamentalsRefreshWorker:
         self._concurrency = concurrency
         # F-015: store the RS256 private key PEM (may be empty for HS256 dev fallback)
         self._internal_jwt_private_key_pem = internal_jwt_private_key_pem
+        # PLAN-0093 D-2 (T-D-2-01): Valkey client for per-ticker exponential
+        # backoff.  Optional: when ``None`` the worker behaves exactly as
+        # before — no skip, no escalation — so unit tests that do not wire
+        # Valkey keep working.
+        self._valkey = valkey_client
+
+    # ── PLAN-0093 D-2 backoff helpers ────────────────────────────────────────
+
+    async def _get_backoff_seconds(self, ticker: str) -> int | None:
+        """Return current backoff in seconds, or None if no backoff active.
+
+        Best-effort: any Valkey failure is treated as "no backoff" so a
+        transient Valkey outage does not silently halt fundamentals
+        refresh entirely.
+        """
+        if self._valkey is None:
+            return None
+        try:
+            raw = await self._valkey.get(_backoff_key(ticker))
+        except Exception as exc:
+            logger.warning(  # type: ignore[no-any-return]
+                "fundamentals_refresh_backoff_get_failed",
+                ticker=ticker,
+                error=str(exc),
+            )
+            return None
+        if raw is None:
+            return None
+        try:
+            return int(raw)
+        except (TypeError, ValueError):
+            return None
+
+    async def _escalate_backoff(self, ticker: str) -> int:
+        """Move *ticker* to the next backoff stage; returns new backoff seconds.
+
+        First call → 1h, then 1d, then 7d (terminal).  Key TTL is set to the
+        new backoff value so it expires naturally and we can detect "first
+        error" by absence of the key.
+        """
+        current = await self._get_backoff_seconds(ticker)
+        new_seconds = _next_backoff_seconds(current)
+        if self._valkey is None:
+            return new_seconds
+        try:
+            await self._valkey.set(_backoff_key(ticker), str(new_seconds), ex=new_seconds)
+        except Exception as exc:
+            logger.warning(  # type: ignore[no-any-return]
+                "fundamentals_refresh_backoff_set_failed",
+                ticker=ticker,
+                error=str(exc),
+            )
+        return new_seconds
+
+    async def _reset_backoff(self, ticker: str) -> None:
+        """Clear the backoff key on a successful refresh."""
+        if self._valkey is None:
+            return
+        try:
+            await self._valkey.delete(_backoff_key(ticker))
+        except Exception as exc:
+            logger.warning(  # type: ignore[no-any-return]
+                "fundamentals_refresh_backoff_reset_failed",
+                ticker=ticker,
+                error=str(exc),
+            )
 
     async def run(self) -> None:
         """Refresh fundamentals embeddings due for refresh.
@@ -181,12 +288,26 @@ class FundamentalsRefreshWorker:
         skipped = 0
         earnings_inserted = 0
         relations_upserted = 0
+        # PLAN-0093 D-2: per-cycle counters for backoff observability.
+        # Initialised at top so the final `complete` log always renders these
+        # fields even when the cycle has zero due entities.
+        backoff_escalations = 0
+        backoff_resets = 0
+        # FIX-LIVE-G (2026-05-24): per-reason failure counter so the
+        # ``fundamentals_refresh_worker_complete`` summary reveals whether the
+        # cycle's losses were caused by missing instruments (data-availability
+        # gap), missing fundamentals (ingestion gap), auth (401/403), or
+        # transport errors. Previously all four collapsed into a single
+        # generic ``market_data_unavailable`` warning, costing INV-LIVE-E ~1h
+        # chasing a JWT hypothesis that turned out to be wrong.
+        failure_counts: dict[str, int] = {}
 
         try:
             # ── Phase 1: Read due entities, then release the session ──
             # DEF-034 (Wave B-5): Phase 1 fetch uses the read replica when
             # configured. Phase 3 writes still go through ``self._sf``.
             due_entities: list[dict[str, Any]] = []
+            no_ticker_ids: list[UUID] = []
             async with self._read_session_factory() as session:
                 emb_repo = EntityEmbeddingStateRepository(session)
                 # 0 = unlimited (drain full queue); see EntityEmbeddingStateRepository.get_due_for_refresh
@@ -195,6 +316,9 @@ class FundamentalsRefreshWorker:
                     ticker: str | None = row.get("ticker")  # type: ignore[assignment]
                     if not ticker:
                         skipped += 1
+                        # Collect for Phase 3 tombstone so they are not re-queued
+                        # every cycle forever (next_refresh_at stays in the past).
+                        no_ticker_ids.append(row["entity_id"])  # type: ignore[arg-type]
                         continue
                     # Materialise the row data we need for Phase 2 HTTP calls
                     due_entities.append(
@@ -216,10 +340,34 @@ class FundamentalsRefreshWorker:
             semaphore = asyncio.Semaphore(self._concurrency)
 
             async def _process_entity_io(ent: dict[str, Any]) -> dict[str, Any]:
-                """Fetch all HTTP data for one entity; returns result dict (no embed yet)."""
+                """Fetch all HTTP data for one entity; returns result dict (no embed yet).
+
+                PLAN-0093 D-2 (T-D-2-01): when a backoff is active for this
+                ticker, skip all HTTP calls and return a marker so Phase 3
+                pushes ``next_refresh_at`` forward by the backoff window.
+                """
                 async with semaphore:
                     _entity_id: UUID = ent["entity_id"]
                     _ticker_str: str = str(ent["ticker"])
+
+                    # ── Backoff guard (PLAN-0093 D-2) ────────────────────────
+                    _backoff_s = await self._get_backoff_seconds(_ticker_str)
+                    if _backoff_s is not None:
+                        logger.info(  # type: ignore[no-any-return]
+                            "fundamentals_refresh_backoff_skip",
+                            entity_id=str(_entity_id),
+                            ticker=_ticker_str,
+                            backoff_seconds=_backoff_s,
+                        )
+                        return {
+                            "entity_id": _entity_id,
+                            "ticker": _ticker_str,
+                            "canonical_name": ent["canonical_name"],
+                            "earnings_data": None,
+                            "profile_data": None,
+                            "narrative": None,
+                            "backoff_active_seconds": _backoff_s,
+                        }
 
                     # Resolve ticker → market-data instrument_id
                     _instrument_id = await self._resolve_instrument_id(http, _ticker_str)
@@ -236,14 +384,23 @@ class FundamentalsRefreshWorker:
                             "earnings_data": None,
                             "profile_data": None,
                             "narrative": None,
+                            # FIX-LIVE-G (2026-05-24): structured failure
+                            # reason — distinguishes the "no instrument
+                            # ingested" case (~99% of dev failures) from a
+                            # downstream fundamentals failure.
+                            "failure_reason": "instrument_lookup_failed",
                         }
 
                     # Fetch earnings, profile, and fundamentals narrative in parallel.
-                    _earnings_data, _profile_data, _narrative = await asyncio.gather(
+                    # FIX-LIVE-G (2026-05-24): _build_fundamentals_narrative
+                    # now returns a (narrative, failure_reason) tuple so we
+                    # can attribute the failure precisely.
+                    _earnings_data, _profile_data, _narrative_result = await asyncio.gather(
                         self._fetch_earnings_data(http, _instrument_id, _ticker_str),
                         self._fetch_company_profile_data(http, _instrument_id),
                         self._build_fundamentals_narrative(_entity_id, _ticker_str, ent["row"], http, _instrument_id),
                     )
+                    _narrative, _narrative_failure_reason = _narrative_result
 
                     return {
                         "entity_id": _entity_id,
@@ -252,11 +409,12 @@ class FundamentalsRefreshWorker:
                         "earnings_data": _earnings_data,
                         "profile_data": _profile_data,
                         "narrative": _narrative,
+                        "failure_reason": _narrative_failure_reason,
                     }
 
             # Run all entity HTTP fetches concurrently.
             raw_results: list[dict[str, Any]] = list(
-                await asyncio.gather(*[_process_entity_io(e) for e in due_entities])
+                await asyncio.gather(*[_process_entity_io(e) for e in due_entities]),
             )
 
             # ── Batch embed after all HTTP fetches ──
@@ -304,6 +462,13 @@ class FundamentalsRefreshWorker:
                         "narrative": narrative,
                         "embedding": embedding_out,
                         "source_hash": source_hash,
+                        # PLAN-0093 D-2: propagate the backoff marker so Phase 3
+                        # can defer next_refresh_at by the backoff window.
+                        "backoff_active_seconds": res.get("backoff_active_seconds"),
+                        # FIX-LIVE-G (2026-05-24): propagate the specific
+                        # market-data failure category to Phase 3 so the
+                        # warning event names the actual cause.
+                        "failure_reason": res.get("failure_reason"),
                     },
                 )
 
@@ -324,6 +489,24 @@ class FundamentalsRefreshWorker:
 
                 for result in entity_io_results:
                     entity_id = result["entity_id"]
+                    _ticker_for_backoff = str(result["ticker"])
+
+                    # --- PLAN-0093 D-2: backoff-skipped entity ───────────────
+                    # No HTTP calls were issued — just push next_refresh_at
+                    # forward so the row is not re-queued before the backoff
+                    # window expires.  Skip embedding/earnings/sector writes.
+                    if result.get("backoff_active_seconds"):
+                        _bo_seconds = int(result["backoff_active_seconds"])
+                        await emb_repo.upsert(
+                            entity_id,
+                            VIEW_FUNDAMENTALS,
+                            embedding=None,
+                            model_id=None,
+                            source_text=None,
+                            source_hash=None,
+                            next_refresh_at=utc_now() + timedelta(seconds=_bo_seconds),
+                        )
+                        continue
 
                     # --- Write earnings events (idempotent) ---
                     if result["earnings_data"] is not None:
@@ -350,10 +533,20 @@ class FundamentalsRefreshWorker:
 
                     # --- Write embedding ---
                     if result["narrative"] is None:
+                        # FIX-LIVE-G (2026-05-24): include the precise
+                        # failure_reason so ops/QA can grep on the actual
+                        # cause (e.g. ``instrument_lookup_failed``,
+                        # ``fundamentals_http_404``, ``fundamentals_http_401``)
+                        # without re-reading every per-call log line. Also
+                        # bumps an aggregate counter that is surfaced in the
+                        # worker_complete event.
+                        reason = result.get("failure_reason") or "unknown"
+                        failure_counts[reason] = failure_counts.get(reason, 0) + 1
                         logger.warning(  # type: ignore[no-any-return]
                             "fundamentals_refresh_market_data_unavailable",
                             entity_id=str(entity_id),
                             ticker=result["ticker"],
+                            failure_reason=reason,
                         )
                         continue  # Don't update next_refresh_at — will retry next cycle
 
@@ -384,6 +577,60 @@ class FundamentalsRefreshWorker:
                     refreshed += 1
 
                 await session.commit()
+
+            # ── PLAN-0093 D-2: post-commit backoff escalation / reset ──────
+            # Outside the DB session — the Valkey hops are short but we still
+            # do not want to hold a Postgres connection across them.  An
+            # entity that was backoff-skipped (no HTTP issued) is left alone;
+            # an entity whose HTTP succeeded resets; an entity whose narrative
+            # came back None (all 3 HTTP calls failed) escalates one stage.
+            for result in entity_io_results:
+                _ticker_for_backoff = str(result["ticker"])
+                if result.get("backoff_active_seconds"):
+                    # Skipped this cycle — backoff already in flight, do nothing.
+                    continue
+                if result["narrative"] is None:
+                    new_seconds = await self._escalate_backoff(_ticker_for_backoff)
+                    logger.warning(  # type: ignore[no-any-return]
+                        "fundamentals_refresh_backoff_escalated",
+                        ticker=_ticker_for_backoff,
+                        new_backoff_seconds=new_seconds,
+                    )
+                    backoff_escalations += 1
+                else:
+                    # narrative is not None → at least the fundamentals fetch
+                    # was OK; clear any lingering backoff so the next cycle
+                    # resumes the normal 30-day cadence.
+                    await self._reset_backoff(_ticker_for_backoff)
+                    backoff_resets += 1
+
+            # Tombstone no-ticker entities in a dedicated session so they are
+            # not re-queued on every worker cycle (next_refresh_at +365 days).
+            if no_ticker_ids:
+                from sqlalchemy import text as _sa_text
+
+                far_future = utc_now() + timedelta(days=365)
+                async with self._sf() as _ts_session:
+                    for _no_ticker_id in no_ticker_ids:
+                        await _ts_session.execute(
+                            _sa_text(
+                                "UPDATE entity_embedding_state"
+                                " SET next_refresh_at = :far_future"
+                                " WHERE entity_id = :entity_id"
+                                " AND view_type = :view_type"
+                            ),
+                            {
+                                "far_future": far_future,
+                                "entity_id": str(_no_ticker_id),
+                                "view_type": VIEW_FUNDAMENTALS,
+                            },
+                        )
+                    await _ts_session.commit()
+                logger.info(  # type: ignore[no-any-return]
+                    "fundamentals_refresh_no_ticker_tombstoned",
+                    count=len(no_ticker_ids),
+                    retry_in_days=365,
+                )
         finally:
             if own_http:
                 await http.aclose()
@@ -394,6 +641,13 @@ class FundamentalsRefreshWorker:
             skipped_non_ticker=skipped,
             earnings_events_inserted=earnings_inserted,
             relations_upserted=relations_upserted,
+            # PLAN-0093 D-2 backoff observability:
+            backoff_escalations=backoff_escalations,
+            backoff_resets=backoff_resets,
+            # FIX-LIVE-G (2026-05-24): aggregate per-reason failure breakdown
+            # so the single complete-event log answers "which class of failure
+            # dominated this cycle?" without scanning per-entity warnings.
+            failure_breakdown=failure_counts,
         )
 
     # ── T-C-4-01: Earnings — HTTP fetch (Phase 2) ─────────────────────────────
@@ -654,6 +908,17 @@ ON CONFLICT DO NOTHING
                     source_trust_weight=_SECTOR_BASE_CONFIDENCE,
                     evidence_date=now,
                     canonical_type=_IS_IN_SECTOR_TYPE,
+                    evidence_text=f"EODHD fundamentals: {sector_name} sector classification.",
+                    source_name="eodhd",
+                    source_type="eodhd",
+                    # PLAN-0093 B-3 T-B-3-02: claim_id + chunk_id are NOT NULL on
+                    # relation_evidence_raw (migration 0047).  Fundamentals
+                    # evidence is structured (EODHD API) and has no real
+                    # claim/chunk — synthesise both per-relation so each row
+                    # still satisfies the NOT NULL constraint and downstream
+                    # joins simply find no matching claim/chunk (intended).
+                    claim_id=new_uuid7(),
+                    chunk_id=new_uuid7(),
                 )
                 upserted += 1
 
@@ -684,6 +949,14 @@ ON CONFLICT DO NOTHING
                     source_trust_weight=_INDUSTRY_BASE_CONFIDENCE,
                     evidence_date=now,
                     canonical_type=_IS_IN_INDUSTRY_TYPE,
+                    evidence_text=f"EODHD fundamentals: {industry_name} industry classification.",
+                    source_name="eodhd",
+                    source_type="eodhd",
+                    # PLAN-0093 B-3 T-B-3-02: synthesise claim_id + chunk_id —
+                    # structured EODHD evidence has no real claim/chunk;
+                    # both columns are NOT NULL on relation_evidence_raw.
+                    claim_id=new_uuid7(),
+                    chunk_id=new_uuid7(),
                 )
                 upserted += 1
 
@@ -698,33 +971,94 @@ ON CONFLICT DO NOTHING
         entity_row: dict[str, Any],
         http: httpx.AsyncClient,
         instrument_id: UUID | None = None,
-    ) -> str | None:
-        """Fetch market data and build the narrative string."""
-        lookup_id = instrument_id or entity_id
-        try:
-            fundamentals = await self._fetch_json(http, f"{self._market_data_url}/api/v1/fundamentals/{lookup_id}")
-            if fundamentals is None:
-                return None
+    ) -> tuple[str | None, str | None]:
+        """Fetch market data and build the narrative string.
 
-            return build_fundamentals_narrative(
-                canonical_name=str(entity_row.get("canonical_name", ticker)),
-                entity_type=str(entity_row.get("entity_type", "financial_instrument")),
-                revenue_usd_millions=_safe_float(fundamentals, "revenue_usd_millions"),
-                gross_margin_pct=_safe_float(fundamentals, "gross_margin_pct"),
-                net_margin_pct=_safe_float(fundamentals, "net_margin_pct"),
-                pe_ratio=_safe_float(fundamentals, "pe_ratio"),
-                price=_safe_float(fundamentals, "price"),
-                week_52_high=_safe_float(fundamentals, "week_52_high"),
-                week_52_low=_safe_float(fundamentals, "week_52_low"),
-                description=fundamentals.get("description"),
-            )
+        FIX-LIVE-G (2026-05-24): now returns a ``(narrative, failure_reason)``
+        tuple. ``failure_reason`` is ``None`` on success or a precise string
+        like ``"fundamentals_http_404"``, ``"fundamentals_http_401"`` (auth
+        regression — the hypothesis INV-LIVE-E chased that turned out to be
+        wrong), or ``"fundamentals_transport_error"`` on failure. The caller
+        uses it for the structured Phase 3 warning + aggregate counter so
+        future investigations see the actual failure category immediately.
+
+        Note: this method uses ``_fetch_json`` which already emits a
+        per-call log line (``market_data_call_client_error`` / ``_server_error``)
+        with HTTP status, URL, ticker, and latency. The tuple is the
+        aggregate signal; the per-call logs are the detail.
+        """
+        import time as _time
+
+        lookup_id = instrument_id or entity_id
+        url = f"{self._market_data_url}/api/v1/fundamentals/{lookup_id}"
+        _t0 = _time.monotonic()
+        try:
+            resp = await http.get(url)
         except Exception as exc:
+            _latency_ms = int((_time.monotonic() - _t0) * 1000)
+            logger.error(  # type: ignore[no-any-return]
+                "market_data_call_exception",
+                url=url,
+                ticker=ticker,
+                status_code=-1,
+                latency_ms=_latency_ms,
+                error=str(exc),
+            )
             logger.warning(  # type: ignore[no-any-return]
                 "fundamentals_refresh_http_error",
                 entity_id=str(entity_id),
+                ticker=ticker,
+                error_type=type(exc).__name__,
                 error=str(exc),
             )
-            return None
+            return None, "fundamentals_transport_error"
+
+        # Mirror the per-call observability from _fetch_json so this code
+        # path is not less-observable than the resolve/earnings/profile
+        # paths.
+        _latency_ms = int((_time.monotonic() - _t0) * 1000)
+        _body_len = len(resp.content) if hasattr(resp, "content") and resp.content is not None else 0
+        _log_fields = {
+            "url": url,
+            "ticker": ticker,
+            "status_code": resp.status_code,
+            "latency_ms": _latency_ms,
+            "body_len": _body_len,
+        }
+        if 200 <= resp.status_code < 300:
+            logger.info("market_data_call_ok", **_log_fields)  # type: ignore[no-any-return]
+        elif 400 <= resp.status_code < 500:
+            logger.warning("market_data_call_client_error", **_log_fields)  # type: ignore[no-any-return]
+        else:
+            logger.error("market_data_call_server_error", **_log_fields)  # type: ignore[no-any-return]
+
+        if resp.status_code != 200:
+            return None, f"fundamentals_http_{resp.status_code}"
+
+        try:
+            fundamentals: dict[str, Any] = resp.json()
+        except Exception as exc:
+            logger.warning(  # type: ignore[no-any-return]
+                "fundamentals_refresh_json_decode_failed",
+                entity_id=str(entity_id),
+                ticker=ticker,
+                error=str(exc),
+            )
+            return None, "fundamentals_json_decode_failed"
+
+        narrative = build_fundamentals_narrative(
+            canonical_name=str(entity_row.get("canonical_name", ticker)),
+            entity_type=str(entity_row.get("entity_type", "financial_instrument")),
+            revenue_usd_millions=_safe_float(fundamentals, "revenue_usd_millions"),
+            gross_margin_pct=_safe_float(fundamentals, "gross_margin_pct"),
+            net_margin_pct=_safe_float(fundamentals, "net_margin_pct"),
+            pe_ratio=_safe_float(fundamentals, "pe_ratio"),
+            price=_safe_float(fundamentals, "price"),
+            week_52_high=_safe_float(fundamentals, "week_52_high"),
+            week_52_low=_safe_float(fundamentals, "week_52_low"),
+            description=fundamentals.get("description"),
+        )
+        return narrative, None
 
     async def _resolve_instrument_id(self, http: httpx.AsyncClient, ticker: str) -> UUID | None:
         """Resolve ticker → market-data instrument_id via /api/v1/instruments/lookup?symbol=.
@@ -745,11 +1079,54 @@ ON CONFLICT DO NOTHING
             return None
 
     @staticmethod
-    async def _fetch_json(http: httpx.AsyncClient, url: str) -> dict[str, Any] | None:
+    async def _fetch_json(http: httpx.AsyncClient, url: str, ticker: str | None = None) -> dict[str, Any] | None:
+        """GET *url* and parse JSON; log status code on every call (T-D-2-02).
+
+        Logging policy (PLAN-0093 D-2):
+          - 2xx → INFO with status_code, url, ticker, latency_ms, body_len.
+          - 4xx → WARNING with same fields.
+          - 5xx → ERROR with same fields.
+          - exception (TCP error, timeout) → ERROR with status_code=-1.
+
+        Returns parsed JSON dict on 200, None otherwise (preserves the
+        existing contract so call sites do not need to change).
+        """
+        import time as _time
+
+        _t0 = _time.monotonic()
         try:
             resp = await http.get(url)
-            if resp.status_code != 200:
-                return None
+        except Exception as exc:
+            _latency_ms = int((_time.monotonic() - _t0) * 1000)
+            logger.error(  # type: ignore[no-any-return]
+                "market_data_call_exception",
+                url=url,
+                ticker=ticker,
+                status_code=-1,
+                latency_ms=_latency_ms,
+                error=str(exc),
+            )
+            return None
+
+        _latency_ms = int((_time.monotonic() - _t0) * 1000)
+        _body_len = len(resp.content) if hasattr(resp, "content") and resp.content is not None else 0
+        _log_fields = {
+            "url": url,
+            "ticker": ticker,
+            "status_code": resp.status_code,
+            "latency_ms": _latency_ms,
+            "body_len": _body_len,
+        }
+        if 200 <= resp.status_code < 300:
+            logger.info("market_data_call_ok", **_log_fields)  # type: ignore[no-any-return]
+        elif 400 <= resp.status_code < 500:
+            logger.warning("market_data_call_client_error", **_log_fields)  # type: ignore[no-any-return]
+        else:
+            logger.error("market_data_call_server_error", **_log_fields)  # type: ignore[no-any-return]
+
+        if resp.status_code != 200:
+            return None
+        try:
             return resp.json()  # type: ignore[no-any-return]
         except Exception:
             return None

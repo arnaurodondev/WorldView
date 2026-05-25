@@ -21,10 +21,13 @@ import jwt
 import pytest
 from api_gateway.routes.risk_metrics import (
     _beta,
+    _cagr,
     _daily_returns,
     _drawdowns,
+    _period_return,
     _sharpe,
     _sortino,
+    _var_95,
     _volatility_annualised,
 )
 from httpx import ASGITransport, AsyncClient
@@ -204,9 +207,11 @@ async def test_realized_pnl_passes_404_through(
 
 @pytest.mark.asyncio
 async def test_risk_metrics_requires_auth(app) -> None:
+    # SEC-F001 (QA 2026-05-23): portfolio_id is now UUID-validated. Auth check
+    # runs BEFORE UUID validation so unauthenticated probes get 401, not 422.
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as client:
-        resp = await client.get("/v1/portfolios/p-1/risk-metrics")
+        resp = await client.get("/v1/portfolios/00000000-0000-0000-0000-000000000001/risk-metrics")
     assert resp.status_code == 401
 
 
@@ -232,7 +237,7 @@ async def test_risk_metrics_returns_nulls_for_short_history(
     transport = ASGITransport(app=authed_app)
     async with AsyncClient(transport=transport, base_url="http://test") as client:
         resp = await client.get(
-            "/v1/portfolios/p-1/risk-metrics",
+            "/v1/portfolios/00000000-0000-0000-0000-000000000001/risk-metrics",
             headers={"Authorization": f"Bearer {_make_jwt()}"},
         )
     assert resp.status_code == 200
@@ -255,7 +260,7 @@ async def test_risk_metrics_passes_value_history_404_through(
     transport = ASGITransport(app=authed_app)
     async with AsyncClient(transport=transport, base_url="http://test") as client:
         resp = await client.get(
-            "/v1/portfolios/missing/risk-metrics",
+            "/v1/portfolios/00000000-0000-0000-0000-00000000dead/risk-metrics",
             headers={"Authorization": f"Bearer {_make_jwt()}"},
         )
     assert resp.status_code == 404
@@ -267,7 +272,7 @@ async def test_risk_metrics_lookback_bounds(authed_app) -> None:
     transport = ASGITransport(app=authed_app)
     async with AsyncClient(transport=transport, base_url="http://test") as client:
         resp = await client.get(
-            "/v1/portfolios/p-1/risk-metrics",
+            "/v1/portfolios/00000000-0000-0000-0000-000000000001/risk-metrics",
             params={"lookback_days": "5"},
             headers={"Authorization": f"Bearer {_make_jwt()}"},
         )
@@ -387,3 +392,64 @@ def test_beta_returns_none_on_flat_market() -> None:
 
 def test_volatility_annualised_zero_for_constant_series() -> None:
     assert _volatility_annualised([0.01, 0.01, 0.01]) == 0.0
+
+
+# ── ARCH-F002: period_return / cagr / var_95 pure-function tests ─────────────
+
+
+def test_period_return_correct_for_simple_series() -> None:
+    """V_0 = 100, V_T = 120 → (120-100)/100 = 0.20.
+
+    Sanity check that the helper returns the closed-form total return — this
+    is the value the AnalyticsRiskSidebar "RETURN" tile renders.
+    """
+    pr = _period_return([100.0, 110.0, 115.0, 120.0])
+    assert pr is not None
+    assert pr == pytest.approx(0.20)
+
+
+def test_cagr_correct_for_one_year_series() -> None:
+    """One year of growth from 100 → 120 ≈ 20% CAGR (365.25-day exponent).
+
+    The closed-form check: (120/100) ** (365.25 / 365) - 1
+        = 1.20 ** 1.000685 - 1
+        ≈ 0.20012
+    so we assert within 1e-3 to absorb the leap-year correction.
+    """
+    cagr = _cagr([100.0, 120.0], lookback_days=365)
+    assert cagr is not None
+    assert cagr == pytest.approx(0.20, abs=1e-3)
+
+
+def test_var_95_at_5th_percentile() -> None:
+    """20 daily returns with a known 5th-percentile cut.
+
+    Construct a series where the 5th-percentile cut lands deterministically.
+    ``statistics.quantiles(data, n=20, method="inclusive")`` returns 19 cut
+    points; for a sorted 20-element list the first cut is the linear
+    interpolation between index 0 and 1. Using returns ``-0.10, -0.05,
+    -0.04, ..., 0.09`` (20 evenly-spaced values from -0.10 to 0.09) gives
+    a 5th-percentile cut of -0.0905 (interpolated). We assert the helper
+    matches statistics.quantiles directly so this test is robust to any
+    method-detail interpretation.
+    """
+    # 20 returns from -0.10 to +0.09 in steps of 0.01.
+    returns = [round(-0.10 + 0.01 * i, 4) for i in range(20)]
+    var = _var_95(returns)
+    assert var is not None
+    # Expected = same library call; this validates the helper agrees with
+    # the standard-library quantile (no hand-rolled percentile drift).
+    import statistics as _stats  # local import, test-only
+
+    expected = _stats.quantiles(returns, n=20, method="inclusive")[0]
+    assert var == pytest.approx(expected)
+    # And the value is in the loss region (negative) as the sign convention requires.
+    assert var < 0
+
+
+def test_three_new_metrics_null_when_insufficient_history() -> None:
+    """1-point value-history → period_return / cagr null, var_95 null (no returns)."""
+    assert _period_return([100.0]) is None
+    assert _cagr([100.0], lookback_days=90) is None
+    # _daily_returns([100.0]) = [] → _var_95([]) → None (len < _MIN_RETURNS).
+    assert _var_95(_daily_returns([100.0])) is None

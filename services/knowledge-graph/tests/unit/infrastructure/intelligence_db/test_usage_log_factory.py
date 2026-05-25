@@ -35,7 +35,7 @@ def _make_factory() -> tuple[MagicMock, AsyncMock]:
     return factory, session
 
 
-@pytest.mark.asyncio
+@pytest.mark.asyncio()
 async def test_log_opens_session_and_calls_repository() -> None:
     """log() must open a session, delegate to LlmUsageLogRepository.log, and commit."""
     factory, session = _make_factory()
@@ -78,7 +78,7 @@ async def test_log_opens_session_and_calls_repository() -> None:
     session.commit.assert_awaited_once()
 
 
-@pytest.mark.asyncio
+@pytest.mark.asyncio()
 async def test_log_swallows_internal_exceptions() -> None:
     """log() must NEVER raise even when the underlying repo raises."""
     factory, _session = _make_factory()

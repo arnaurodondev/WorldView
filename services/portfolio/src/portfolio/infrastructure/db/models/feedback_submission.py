@@ -47,3 +47,6 @@ class FeedbackSubmissionModel(Base):
     assigned_to: Mapped[uuid.UUID | None] = mapped_column(PGUUID(as_uuid=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    # REQ-002d (migration 0019): nullable idempotency key. Partial unique index
+    # ``uq_feedback_submissions_tenant_idempotency_key`` enforces uniqueness.
+    idempotency_key: Mapped[uuid.UUID | None] = mapped_column(PGUUID(as_uuid=True), nullable=True, default=None)

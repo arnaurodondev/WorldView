@@ -11,17 +11,11 @@ import { render, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { ReactNode } from "react";
 
-// Mock gateway BEFORE importing the badge so the createGateway() callsite
-// resolves to our stub. Each test sets `freshness_status` on the returned
-// quote to drive the dot colour mapping.
+// Mock useApiClient so LiveQuoteBadge gets our stub gateway.
+// Each test sets `freshness_status` on the returned quote to drive the dot colour mapping.
 const mockGetQuote = vi.fn();
-vi.mock("@/lib/gateway", () => ({
-  createGateway: () => ({ getQuote: mockGetQuote }),
-}));
-
-// useAuth would otherwise require AuthContext.
-vi.mock("@/hooks/useAuth", () => ({
-  useAuth: () => ({ accessToken: "tok" }),
+vi.mock("@/lib/api-client", () => ({
+  useApiClient: () => ({ getQuote: mockGetQuote }),
 }));
 
 import { LiveQuoteBadge } from "@/components/instrument/LiveQuoteBadge";

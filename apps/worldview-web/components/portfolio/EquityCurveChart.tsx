@@ -197,7 +197,7 @@ function EquityCurveTooltip({ point }: { point: PointShape }) {
       // bg-card so the tooltip floats clearly above the panel. The
       // popover token is also what shadcn DropdownMenu / HoverCard use,
       // so this matches the system's elevation hierarchy.
-      className="bg-popover border border-border rounded-[2px] px-2 py-1.5 shadow-md text-foreground"
+      className="bg-popover border border-border rounded-[2px] px-2 py-1.5  text-foreground"
     >
       <div className="text-[10px] uppercase tracking-[0.06em] text-muted-foreground mb-1">
         {point.date}

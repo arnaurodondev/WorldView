@@ -13,7 +13,12 @@ from fastapi import FastAPI, Request, Response
 from fastapi.responses import Response as FastAPIResponse
 from starlette.middleware.base import BaseHTTPMiddleware
 
-from observability import configure_logging, configure_tracing, get_logger  # type: ignore[import-untyped]
+from observability import (  # type: ignore[import-untyped]
+    assert_app_env_or_die,
+    configure_logging,
+    configure_tracing,
+    get_logger,
+)
 from observability.metrics import add_prometheus_middleware, create_metrics  # type: ignore[import-untyped]
 from observability.sentry import SentrySettings, init_sentry  # type: ignore[import-untyped]
 from observability.tracing import add_otel_middleware  # type: ignore[import-untyped]
@@ -67,6 +72,14 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         service_name=settings.service_name,
         level=settings.log_level,
         json=settings.log_json,
+    )
+
+    # 1b. Boot-time security guard (PLAN-0093 Wave A-1 / F-LOG-JWT-001).
+    # Refuses to start when JWT verification is disabled AND APP_ENV is unset,
+    # so a misconfigured container can never start accepting requests.
+    assert_app_env_or_die(
+        service_name=settings.service_name,
+        internal_jwt_skip_verification=settings.internal_jwt_skip_verification,
     )
 
     # 2. Tracing config (optional — middleware already registered in create_app)

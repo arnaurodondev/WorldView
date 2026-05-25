@@ -11,7 +11,10 @@ if TYPE_CHECKING:
 # WHY not derived 1w/1M bars: derived bars require ≥2 such bars per instrument,
 # which is rarely available in practice. Daily bars with a calendar lookback work
 # with any instrument that has ≥2 trading days of history.
+# WHY 1D included: fundamental_metrics.daily_return is only populated for ~8 instruments;
+# the OHLCV LATERAL JOIN yields 500+ instruments with real day-over-day returns.
 _PERIOD_TO_LOOKBACK_DAYS: dict[str, int] = {
+    "1D": 1,
     "1W": 7,
     "1M": 30,
 }
@@ -21,7 +24,7 @@ class GetPeriodMoversUseCase:
     """Return top gainers or losers by period return from OHLCV bars.
 
     Uses ReadOnlyUnitOfWork (R27 — query-only use case must not depend on write UoW).
-    Only handles 1W and 1M periods. 1D is handled by the existing screener path in S9.
+    Handles 1D, 1W, and 1M periods — all use the OHLCV LATERAL JOIN path.
     """
 
     def __init__(self, uow: ReadOnlyUnitOfWork) -> None:

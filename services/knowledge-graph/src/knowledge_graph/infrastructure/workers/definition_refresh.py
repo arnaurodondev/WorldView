@@ -21,6 +21,8 @@ from datetime import timedelta
 from typing import TYPE_CHECKING, Any
 from uuid import UUID
 
+from sqlalchemy import text as sa_text
+
 from common.time import utc_now  # type: ignore[import-untyped]
 from knowledge_graph.infrastructure.intelligence_db.repositories.entity_embedding_state import (
     VIEW_DEFINITION,
@@ -166,7 +168,10 @@ class DefinitionRefreshWorker:
                 continue
 
             new_hash = sha256_hex(source_text)
-            if new_hash == row.get("source_hash"):
+            # Only skip re-embedding when hash matches AND an embedding already exists.
+            # If embedding IS NULL (first-run row or COALESCE-preserved NULL), fall
+            # through to needs_embed so the entity gets its first embedding.
+            if new_hash == row.get("source_hash") and row.get("has_embedding"):
                 # Unchanged — push next_refresh_at forward, keep existing embedding.
                 unchanged.append(
                     _Update(
@@ -216,6 +221,7 @@ class DefinitionRefreshWorker:
 
         # ── Phase 3: Write ───────────────────────────────────────────────────
         if to_write:
+            now = utc_now()  # type: ignore[no-any-return]
             async with self._sf() as session:
                 emb_repo = EntityEmbeddingStateRepository(session)
                 for item in to_write:
@@ -226,8 +232,24 @@ class DefinitionRefreshWorker:
                         model_id=item.model_id,
                         source_text=item.source_text,
                         source_hash=item.source_hash,
-                        next_refresh_at=utc_now() + timedelta(days=_REFRESH_INTERVAL_DAYS),  # type: ignore[no-any-return, operator]
+                        next_refresh_at=now + timedelta(days=_REFRESH_INTERVAL_DAYS),  # type: ignore[operator]
                     )
+                    # Write description text back to canonical_entities so graph
+                    # node descriptions (and the S7 EntitySummary) are populated.
+                    # Only write when source_text is present (skip if empty string).
+                    if item.source_text:
+                        await session.execute(
+                            sa_text(
+                                "UPDATE canonical_entities"
+                                " SET description = :description, enriched_at = :enriched_at"
+                                " WHERE entity_id = :entity_id"
+                            ),
+                            {
+                                "description": item.source_text,
+                                "enriched_at": now,
+                                "entity_id": str(item.entity_id),
+                            },
+                        )
                 await session.commit()
 
         logger.info(  # type: ignore[no-any-return]

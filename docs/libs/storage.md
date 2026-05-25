@@ -48,8 +48,8 @@ The backend is a deployment detail — tests swap in a fake implementation.
 
 | Method | Signature | Description |
 |--------|-----------|-------------|
-| `put_bytes` | `(bucket, key, data, content_type?)` → `None` | Upload raw bytes. |
-| `get_bytes` | `(bucket, key)` → `bytes` | Download object. Raises `ObjectNotFoundError` if missing. |
+| `put_bytes` | `(bucket, key, data, content_type?)` → `str \| None` | Upload raw bytes. Returns the object's ETag (quotes stripped) when the backend supplies one, else `None`. Existing callers that ignore the return value are unaffected. |
+| `get_bytes` | `(bucket, key, *, expected_etag?)` → `bytes` | Download object. Raises `ObjectNotFoundError` if missing. When `expected_etag` is supplied, raises `ETagMismatchError` if the backend's ETag differs. |
 | `delete` | `(bucket, key)` → `None` | Delete an object. |
 | `list_keys` | `(bucket, prefix?)` → `list[str]` | List object keys under a prefix. |
 | `exists` | `(bucket, key)` → `bool` | Check if a key exists (HEAD request). |
@@ -96,6 +96,58 @@ is_healthy = await check_storage_health(store, "market-data")
 # → True if a HEAD request to the bucket succeeds; never raises
 ```
 
+### `BucketTier` — Typed bucket alias
+
+```python
+from storage import BucketTier
+
+# Opt-in: use the enum instead of a raw string to avoid typo'd bucket names.
+await store.put_bytes(BucketTier.BRONZE, key, data)
+```
+
+`BucketTier` is a `StrEnum` with three members whose values are the canonical
+MinIO bucket names used across the platform:
+
+| Member | Value | Tier |
+|--------|-------|------|
+| `BucketTier.BRONZE` | `"worldview-bronze"` | Raw provider payloads |
+| `BucketTier.SILVER` | `"worldview-silver"` | Canonicalized records |
+| `BucketTier.GOLD` | `"worldview-gold"` | Analysis-ready aggregates |
+
+Both `put_bytes()` and `get_bytes()` accept `str | BucketTier`. Existing
+raw-string callers continue to work unchanged — adoption is incremental.
+
+### Claim-check ETag verification (W4-05 / LIB-007)
+
+`put_bytes()` now returns the object's ETag (the MD5 hex digest for non-multipart
+uploads on most S3-compatible backends), and `get_bytes()` accepts an optional
+`expected_etag` keyword that triggers verification. Both additions are opt-in:
+callers that ignore the return value or omit `expected_etag` see identical
+behavior to the pre-W4-05 API.
+
+```python
+# Producer (S4 content-ingestion):
+key = KeyBuilder.build(service="content-ingestion", domain="article",
+                       resource_id=article_id, artifact="raw", extension="json")
+etag = await store.put_bytes(BucketTier.BRONZE, key, payload)
+await outbox.add(OutboxRecord(
+    event_type="content.article.raw",
+    topic="content.article.raw.v1",
+    payload={"bucket": "worldview-bronze", "key": key, "etag": etag},
+))
+
+# Consumer (S5 content-store):
+try:
+    data = await store.get_bytes(value["bucket"], value["key"], expected_etag=value["etag"])
+except ETagMismatchError:
+    # Object was overwritten or corrupted between produce and consume.
+    raise FatalError("claim-check object integrity violation")
+```
+
+When the backend returns no ETag (uncommon — only some S3-compatible
+implementations), `put_bytes()` yields `None`; producers should treat that as
+"verification not available" and skip persisting the ETag.
+
 ### Exceptions
 
 | Exception | When raised |
@@ -106,6 +158,7 @@ is_healthy = await check_storage_health(store, "market-data")
 | `StoragePermissionError` | Access denied (403) |
 | `StorageUnavailableError` | MinIO/S3 unreachable (network error, 5xx) |
 | `InvalidObjectKeyError` | Key violates naming convention (also a `ValueError`) |
+| `ETagMismatchError` | `get_bytes` — caller-supplied `expected_etag` did not match backend ETag |
 
 ### Settings (`storage.settings.StorageSettings`)
 

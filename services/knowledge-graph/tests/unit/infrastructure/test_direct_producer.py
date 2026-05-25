@@ -78,5 +78,5 @@ class TestConfluentDirectProducer:
             [
                 call("t1", value=b"v1", key=b"k1"),
                 call("t2", value=b"v2", key=b"k2"),
-            ]
+            ],
         )

@@ -118,6 +118,40 @@ All are `@dataclass(frozen=True)` — immutable.
 
 ---
 
+## Primary → Fallback Wrappers (LIB-004 / TASK-W4-02)
+
+`ml_clients.fallback` provides drop-in wrappers that compose two adapters into a
+single client implementing the same Protocol. On `RetryableError` (timeout, 5xx,
+or `RateLimitError` 429 after the primary's own retries are exhausted), the
+wrapper transparently calls the secondary adapter. `FatalError` always
+propagates without invoking the fallback — a malformed request will fail the
+same way against either backend.
+
+| Wrapper | Protocol | Methods proxied |
+|---|---|---|
+| `FallbackEmbeddingClient` | `EmbeddingClient` | `embed` |
+| `FallbackNERClient` | `NERClient` | `extract_entities`, `batch_extract_entities` |
+| `FallbackExtractionClient` | `ExtractionClient` | `extract` |
+
+```python
+from ml_clients.adapters.deepinfra_embedding import DeepInfraEmbeddingAdapter
+from ml_clients.adapters.ollama_embedding import OllamaEmbeddingAdapter
+from ml_clients.fallback import FallbackEmbeddingClient
+
+client = FallbackEmbeddingClient(
+    primary=DeepInfraEmbeddingAdapter(api_key=..., ...),
+    fallback=OllamaEmbeddingAdapter(base_url=..., semaphore=..., ...),
+)
+# Same interface as EmbeddingClient — no other call-site changes needed.
+outputs = await client.embed(inputs)
+```
+
+A single structured log line `ml_client_falling_back_to_secondary` is emitted
+whenever the fallback fires (fields: `primary`, `fallback`, `operation`,
+`error`, `error_type`) — convenient for Grafana alerting.
+
+---
+
 ## Adaptive GLiNER Concurrency
 
 `AdaptiveGLiNERHTTPAdapter` uses **AIMD (Additive-Increase / Multiplicative-Decrease)**

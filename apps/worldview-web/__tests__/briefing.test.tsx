@@ -127,9 +127,13 @@ describe("MorningBriefCard", () => {
 
     await waitFor(() => {
       // WHY check for link: entity mentions are replaced with Next.js Link components
-      // that navigate to the instrument detail page
+      // that navigate to the instrument detail page.
+      // PRD-0089 F2 step 11 (§6.6): URLs are ticker-first now. The fixture
+      // provides `ticker: "AAPL"` so the rendered href is `/instruments/AAPL`
+      // (not the legacy `/instruments/ent-1` UUID form). The link text
+      // remains "Apple" — only the href changed.
       const link = screen.getByText("Apple");
-      expect(link.closest("a")).toHaveAttribute("href", "/instruments/ent-1");
+      expect(link.closest("a")).toHaveAttribute("href", "/instruments/AAPL");
     });
   });
 });

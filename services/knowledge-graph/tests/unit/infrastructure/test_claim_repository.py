@@ -155,7 +155,7 @@ class TestSearchClaimsBP180:
             repo.search_claims(
                 entity_ids=[entity_id],
                 claim_types=None,
-            )
+            ),
         )
 
         sql_text: str = str(session.execute.call_args[0][0].text)
@@ -185,7 +185,7 @@ class TestSearchClaimsBP180:
             repo.search_claims(
                 entity_ids=[entity_id],
                 claim_types=["analyst_rating"],
-            )
+            ),
         )
 
         params: dict = session.execute.call_args[0][1]

@@ -121,14 +121,24 @@ class NewsHandler(ToolHandler):
                 log.warning("tool_invalid_date", tool="search_documents", value=s)
                 return None
 
-        # ISSUE-1 FIX: add entity_context.entity_id to entity_ids when available.
-        # The LLM may pass entity_tickers (name-based) but full ticker→UUID resolution
-        # is deferred to PLAN-0078. For the common case (entity-first query) we already
-        # have the UUID from EntityContext injected at request build time — use it so
-        # the S6 hybrid search filters to the correct entity's documents.
-        _entity_ids: list[UUID] | None = None
+        # PLAN-0093 E-4 T-E-4-02: resolve entity_tickers → UUIDs.
+        # The LLM passes entity_tickers=["AAPL","MSFT"] for multi-entity
+        # comparison queries; before this fix the field was silently ignored
+        # and S6 returned generic results filtered only by entity_context.
+        # Each ticker is now resolved via S6.resolve_entity_by_ticker and
+        # added to entity_ids alongside any scoped entity_context.
+        _entity_ids: list[UUID] = []
         if self._entity_context is not None:
-            _entity_ids = [self._entity_context.entity_id]
+            _entity_ids.append(self._entity_context.entity_id)
+        if entity_tickers:
+            for ticker in entity_tickers:
+                if not isinstance(ticker, str) or not ticker.strip():
+                    continue
+                resolved = await self._s6.resolve_entity_by_ticker(ticker)
+                if resolved is not None and resolved not in _entity_ids:
+                    _entity_ids.append(resolved)
+                elif resolved is None:
+                    log.warning("entity_ticker_unresolved", tool="search_documents", ticker=ticker)
 
         request = ChunkSearchRequest(
             query_text=query,
@@ -137,9 +147,7 @@ class NewsHandler(ToolHandler):
             date_from=_parse_dt(date_from),
             date_to=_parse_dt(date_to),
             source_types=source_types or [],
-            entity_ids=_entity_ids,
-            # NOTE(PLAN-0078): entity_tickers from the LLM is not yet resolved to UUIDs.
-            # For entity-first queries entity_context.entity_id is used above instead.
+            entity_ids=_entity_ids or None,  # None preserves "any entity" semantics
         )
 
         try:

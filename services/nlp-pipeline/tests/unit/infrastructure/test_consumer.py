@@ -43,6 +43,9 @@ def _make_settings() -> MagicMock:
     s.topic_signal_detected = "nlp.signal.detected.v1"
     s.max_ollama_queue_depth = 20
     s.resume_ollama_queue_depth = 10
+    # RC-1: disable stub filter in these tests — they use placeholder text
+    # and are not testing the word-count gate.
+    s.min_word_count = 0
     return s
 
 
@@ -785,8 +788,13 @@ class TestPriceImpactSignalLookup:
     """Tests for T-A-4-02: price_impact signal wiring into Block 5 (PRD-0026 §6.7)."""
 
     @pytest.mark.asyncio
-    async def test_consumer_uses_price_impact_zero_when_no_label(self) -> None:
-        """When article_impact_windows has no row, price_impact_score=0.0 is passed to routing."""
+    async def test_consumer_does_not_pass_price_impact_to_routing(self) -> None:
+        """PLAN-0093 C-1: price_impact_score kwarg is no longer passed to compute_routing_score.
+
+        Previously the consumer fetched article_impact_windows and forwarded the value
+        into routing. That signal was dropped by PLAN-0093 C-1 because article_impact_windows
+        was empty (F-NPL-FUNDAMENTALS-001) — to be re-enabled once C-3 lands the writer.
+        """
         from decimal import Decimal
 
         doc_id = uuid.uuid4()
@@ -835,11 +843,17 @@ class TestPriceImpactSignalLookup:
                     p.stop()
 
         assert routing_kwargs, "compute_routing_score was not called"
-        assert routing_kwargs[0].get("price_impact_score") == 0.0
+        # PLAN-0093 C-1: dead signal kwargs must NOT appear in the routing call
+        assert "price_impact_score" not in routing_kwargs[0]
+        assert "novelty_score" not in routing_kwargs[0]
+        assert "watched_entity_ids" not in routing_kwargs[0]
 
     @pytest.mark.asyncio
-    async def test_consumer_uses_max_price_impact_across_entities(self) -> None:
-        """When article_impact_windows repo returns 0.7, price_impact_score=0.7 is passed to routing."""
+    async def test_consumer_does_not_pass_price_impact_even_when_repo_returns_value(self) -> None:
+        """PLAN-0093 C-1: even when ArticleImpactWindowRepository returns a non-zero
+        value, the consumer no longer forwards it as price_impact_score — the signal
+        has been removed from the compute_routing_score signature entirely.
+        """
         from decimal import Decimal
 
         doc_id = uuid.uuid4()
@@ -888,7 +902,8 @@ class TestPriceImpactSignalLookup:
                     p.stop()
 
         assert routing_kwargs, "compute_routing_score was not called"
-        assert abs(float(routing_kwargs[0].get("price_impact_score", -1)) - 0.7) < 1e-9
+        # PLAN-0093 C-1: dead signal kwargs must NOT appear in the routing call
+        assert "price_impact_score" not in routing_kwargs[0]
 
 
 # ── D-3: signal event emission tests ─────────────────────────────────────────

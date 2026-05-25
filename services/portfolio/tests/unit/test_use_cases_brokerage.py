@@ -60,11 +60,12 @@ async def seeded(uow: FakeUnitOfWork) -> dict[str, object]:
 
     tenant = await CreateTenantUseCase().execute(CreateTenantCommand(name="Acme"), uow)
     user = await CreateUserUseCase().execute(CreateUserCommand(tenant_id=tenant.id, email="owner@acme.com"), uow)
-    portfolio = await CreatePortfolioUseCase().execute(
+    # REQ-002a: use case returns ``CreatePortfolioResult`` — unwrap the entity.
+    portfolio_result = await CreatePortfolioUseCase().execute(
         CreatePortfolioCommand(tenant_id=tenant.id, owner_id=user.id, name="My Portfolio"),
         uow,
     )
-    return {"tenant": tenant, "user": user, "portfolio": portfolio}
+    return {"tenant": tenant, "user": user, "portfolio": portfolio_result.portfolio}
 
 
 def _seed_connection(uow: FakeUnitOfWork, **kwargs: object) -> BrokerageConnection:

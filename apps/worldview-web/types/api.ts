@@ -129,7 +129,17 @@ export interface WsTokenResponse {
 
 export interface Instrument {
   instrument_id: string;
-  entity_id: string;    // WHY separate: entity_id ≠ instrument_id (ADR-F-12)
+  /**
+   * @deprecated post-F2 (PRD-0089) — equal to `instrument_id` for tradable
+   * securities. Will be removed in v1.1 cleanup. Use `instrument_id` going
+   * forward. Non-tradable entity contexts (graph nodes, mentions, persons)
+   * keep `entity_id` semantics.
+   *
+   * Historical note: pre-F2 this was a SEPARATE KG-side UUID (ADR-F-12).
+   * F2 collapsed the two namespaces — `entity_id === instrument_id` is now
+   * an enforced invariant (M-017) for `kind = 'financial_instrument'` rows.
+   */
+  entity_id: string;
   ticker: string;       // e.g., "AAPL"
   name: string;         // e.g., "Apple Inc."
   exchange: string;     // e.g., "NASDAQ"
@@ -142,6 +152,15 @@ export interface Instrument {
   // company-profile ingestion wave may not have a description in company_profiles.
   // The UI handles null gracefully (shows nothing). EODHD "General.Description" field.
   description: string | null;
+  // WHY founded nullable: EODHD omits Founded for ETFs and some foreign ADRs.
+  // T-S2-02 (W5): exposed from company_profiles.data JSONB via S9 overview endpoint.
+  // CompanyAboutCard renders "—" on null. Field path: overview.instrument.founded.
+  founded: string | null;
+  // WHY number | null: EODHD "General.FullTimeEmployees" is a string in the raw
+  // response; S9 casts it to int before returning so the frontend receives a number.
+  // Absent for ETFs and foreign ADRs — CompanySnapshotPanel renders "—" on null.
+  // F-009 (PLAN-0089): exposed to render the EMPLOYEES row in CompanySnapshotPanel.
+  full_time_employees: number | null;
 }
 
 export interface OHLCVBar {
@@ -430,7 +449,13 @@ export interface CompanyOverview {
  */
 export interface InstrumentPageBundle {
   instrument_id: string;
-  /** KG entity_id resolved by the gateway via ticker → KG lookup. Falls back to instrument_id. */
+  /**
+   * @deprecated post-F2 (PRD-0089) — equal to `instrument_id` for tradable
+   * securities (M-017 invariant). Kept on the v1 wire shape for backwards
+   * compatibility; will be dropped in v1.1 cleanup. Historical note: the
+   * gateway used to resolve this via a ticker→KG lookup that diverged from
+   * the S3 `instrument_id`; that 145 LOC translation dance is gone post-F2.
+   */
   entity_id: string;
   /** CompanyOverview composite (instrument + quote + fundamentals header + 90d ohlcv). */
   overview: CompanyOverview | null;
@@ -458,6 +483,10 @@ export interface GraphNode {
    *  Empty string for non-instrument entities (sectors, people, events).
    *  WHY needed: KG entity_id ≠ S3 instrument_id; ticker is the stable bridge. */
   ticker?: string;
+  /** Short company/entity description from KG entity_summary (B-01). */
+  description?: string | null;
+  /** GICS sector from KG entity_summary (B-01). */
+  sector?: string | null;
 }
 
 export interface GraphEdge {
@@ -473,6 +502,14 @@ export interface GraphEdge {
   relation_summary?: string | null;
   /** Top evidence text snippets (max 3, from relation_evidence_raw). */
   evidence_snippets?: string[];
+  /** Semantic orientation relative to the center entity.
+   *  "outbound" = center is subject (e.g. Apple employs Tim Cook),
+   *  "inbound"  = center is object (e.g. TSMC supplier_of Apple),
+   *  "lateral"  = edge between two non-center entities at depth>1. */
+  direction?: "outbound" | "inbound" | "lateral" | null;
+  /** Temporal decay class from KG relation_decay_state (B-02).
+   *  Controls edge opacity in sigma: PERMANENT/DURABLE=1.0, SLOW/MEDIUM=0.7, FAST/EPHEMERAL=0.4. */
+  decay_class?: string | null;
 }
 
 export interface EntityGraph {
@@ -565,10 +602,11 @@ export interface Article {
   impact_window_t1: number | null; // 2-day
   impact_window_t2: number | null; // 3-day
   impact_window_t5: number | null; // 5-day
-  // WHY optional: older API responses may omit this field; undefined → treat as STANDARD.
-  // LIGHT = low-relevance/low-signal article (de-emphasised in UI at 60% opacity).
-  // HIGH = top-ranked article (may receive visual boost in future waves).
-  routing_tier?: "LIGHT" | "STANDARD" | "HIGH";
+  // WHY optional: older API responses may omit this field; undefined → treat as MEDIUM.
+  // Tier names match the backend's RoutingTier enum (services/nlp-pipeline
+  // application/blocks/routing.py): SUPPRESS < LIGHT < MEDIUM < DEEP.
+  // LIGHT/MEDIUM = de-emphasised in UI; DEEP = top-ranked, eligible for visual boost.
+  routing_tier?: "LIGHT" | "MEDIUM" | "DEEP";
 }
 
 export interface NewsResponse {
@@ -765,6 +803,10 @@ export interface ScreenerResult {
   dividend_yield?: number | null;      // annual dividend yield (decimal, e.g. 0.015 = 1.5%)
   revenue_growth_yoy?: number | null;  // year-over-year revenue growth (decimal)
   roe?: number | null;                 // return on equity (decimal)
+  // PLAN-0092 Wave C: opt-in columns (hidden by default in ColumnSettingsPopover)
+  operating_margin_ttm?: number | null; // operating margin TTM (decimal)
+  enterprise_value_ebitda?: number | null; // EV/EBITDA ratio
+  avg_volume_30d?: number | null;      // 30-day average daily volume
   [key: string]: unknown; // dynamic fields depending on screener config
 }
 
@@ -773,6 +815,17 @@ export interface ScreenerResponse {
   total: number;
   offset: number;
   limit: number;
+}
+
+/** POST /v1/screener/nl-translate — convert a natural-language query into screener filters.
+ *  The backend LLM generates `explanation` (1-sentence plain-English) and `filters`
+ *  (field → value/range map). `natural_language_query` echoes the original input.
+ *  PLAN-0092 Wave A — matches NLScreenerResponse in api_gateway/schemas/screener.py.
+ */
+export interface NLScreenerResponse {
+  filters: Record<string, unknown>; // field → value or {gte/lte/eq} range
+  natural_language_query: string;
+  explanation: string; // LLM-generated 1-sentence description, e.g. "Profitable tech stocks, P/E below 20"
 }
 
 // ── Portfolio ──────────────────────────────────────────────────────────────
@@ -809,6 +862,13 @@ export interface Holding {
   unrealised_pnl?: number | null; // computed: (current_price - avg_cost) * qty
   unrealised_pnl_pct?: number | null;
   portfolio_weight?: number | null; // % of total portfolio value
+  /**
+   * Instrument asset class — e.g. "equity", "etf", "bond", "crypto".
+   * PRD-0089 W2 §4.9: used by the ASSET chip column in the AG Grid table.
+   * Optional because older S9 builds may not emit it; the ASSET column
+   * renders "—" or "O" (other) when absent.
+   */
+  asset_class?: string | null;
 }
 
 export interface Transaction {
@@ -840,6 +900,10 @@ export interface Transaction {
   currency: string;
   executed_at: string; // ISO 8601 UTC
   notes: string | null;
+  // P2-E (Wave G): broker-supplied human-readable description threaded from
+  // Alembic 0020 + TransactionListItem.description. null for historical rows
+  // and brokers that omit the field.
+  description?: string | null;
 }
 
 export interface TransactionRequest {
@@ -1079,6 +1143,14 @@ export interface PortfolioBundleResponse {
 // ── Watchlist ──────────────────────────────────────────────────────────────
 
 export interface WatchlistMember {
+  /**
+   * @deprecated post-F2 (PRD-0089) — for tradable members this equals
+   * `instrument_id` once resolved; for unresolved members (resolution="pending")
+   * it may still be a KG-side UUID until the instrument lookup completes.
+   * Will be renamed to `instrument_id` (and `entity_id` dropped) in the v1.1
+   * cleanup wave. Use `instrument_id` for tradable lookups; fall back to
+   * `entity_id` only when `instrument_id` is null.
+   */
   entity_id: string;
   instrument_id: string | null;
   ticker: string | null;
@@ -2162,4 +2234,321 @@ export interface UpdateNotificationPreferencesPayload {
   news_alerts?: boolean;
   movers_alerts?: boolean;
   contradiction_alerts?: boolean;
+}
+
+// ── W5 Brief lazy-generate response (T-03) ───────────────────────────────────
+
+/**
+ * POST /v1/briefings/instrument/{id}/generate
+ *
+ * WHY two statuses:
+ *  "cached"  — brief already in Valkey; returned immediately (HTTP 200).
+ *              No LLM call was made. brief_id is set when a DB record exists.
+ *  "queued"  — no brief existed; generation started (HTTP 202).
+ *              brief_id is null — poll GET /v1/briefings/instrument/{id} until populated.
+ *
+ * WHY retryAfterSeconds: on 429 (rate limit exceeded), the S9 endpoint returns
+ * a Retry-After header (seconds until the next clock hour). The hook layer
+ * (useInstrumentBrief) parses this and surfaces it as a countdown for the
+ * "quota exceeded — retry in N min" banner state.
+ */
+export interface GenerateBriefResponse {
+  status: "cached" | "queued";
+  brief_id: string | null;
+  entity_id: string;
+  /** Populated only on 429 — seconds until quota resets. */
+  retryAfterSeconds?: number;
+}
+
+// ── W5 Quote-tab response shapes ─────────────────────────────────────────────
+// WHY typed here (not generated): these shapes come from new S9 computed
+// endpoints (T-S9-01..04). The openapi-typescript spec hasn't been regenerated
+// yet; hand-written types are the source of truth until spec is updated.
+
+/** One peer instrument row — from GET /v1/instruments/{id}/peers */
+export interface PeerInstrument {
+  instrument_id: string;
+  /** Ticker symbol. Null for newly-listed / legacy records without a ticker. */
+  ticker: string | null;
+  name: string | null;
+  market_cap: number | null;
+  pe_ratio: number | null;
+  /** 1Y price return as a decimal fraction (0.125 = 12.5%). S3 does NOT
+   *  scale this field. Use formatPercent(return_1y) for display. */
+  return_1y: number | null;
+  /** Daily change already scaled to percentage by S3 (3.1 = 3.1%).
+   *  S3 multiplies daily_return × 100 before building PeerInstrumentResponse.
+   *  Use formatPercentDirect(change_pct) for display. */
+  change_pct: number | null;
+}
+
+/** GET /v1/instruments/{id}/peers */
+export interface PeersResponse {
+  instrument_id: string;
+  /** GICS industry. Null for ETFs / instruments with no GICS assignment. */
+  industry: string | null;
+  peers: PeerInstrument[];
+}
+
+/** GET /v1/fundamentals/{id}/intraday-stats — session stats computed from 5m bars */
+export interface IntradayStatsResponse {
+  instrument_id: string;
+  /** Volume-weighted average price (5m bars). Null when bars unavailable. */
+  vwap: number | null;
+  /** Average True Range — 14-day lookback. Null when fewer than 14 daily bars. */
+  atr_14: number | null;
+  /** Relative Strength Index — 14-day lookback. Null when fewer than 14 bars. */
+  rsi_14: number | null;
+  /** Gap % = (today open - yesterday close) / yesterday close × 100. */
+  gap_pct: number | null;
+  /** Premarket session high (null if no premarket bars). */
+  premarket_high: number | null;
+  /** Premarket session low (null if no premarket bars). */
+  premarket_low: number | null;
+  /** Short Interest % of float (from technicals snapshot). Null if unavailable. */
+  short_interest_pct: number | null;
+}
+
+/** One period return in multi-period-returns response. */
+export type PeriodReturnMap = {
+  [period in "1D" | "5D" | "1M" | "3M" | "6M" | "YTD" | "1Y"]: number | null;
+};
+
+/** GET /v1/fundamentals/{id}/multi-period-returns */
+export interface MultiPeriodReturnsResponse {
+  instrument_id: string;
+  /**
+   * Map of period → return (%). Values are already multiplied by 100 by S9.
+   * Null when insufficient OHLCV history exists for the period.
+   */
+  periods: PeriodReturnMap;
+}
+
+// ── PLAN-0091 Data Enrichment types ─────────────────────────────────────────
+
+/**
+ * SectorBucket — one sector row in GET /v1/portfolios/{id}/sector-attribution.
+ * market_value and sector_day_pnl are in portfolio currency (USD by default).
+ * sector_weight_pct is 0-100 (percent of total portfolio market value).
+ */
+export interface SectorBucket {
+  sector: string;
+  holding_count: number;
+  market_value: number;
+  sector_weight_pct: number;
+  sector_day_pnl: number;
+}
+
+/**
+ * SectorAttributionResponse — GET /v1/portfolios/{id}/sector-attribution.
+ * covered_pct is 0.0-1.0 (fraction of portfolio with sector data available).
+ * prices_stale is optional — older S9 builds omit it (treat absent as false).
+ */
+export interface SectorAttributionResponse {
+  portfolio_id: string;
+  buckets: SectorBucket[];
+  covered_pct: number;
+  prices_stale?: boolean;
+}
+
+/**
+ * SimilarEntityItem — one result row from POST /v1/entities/similar.
+ * final_score = weighted combination of ann_similarity_score + competes_with_confidence.
+ * has_competes_with_relation is true when the KG already has a COMPETES_WITH edge.
+ */
+export interface SimilarEntityItem {
+  entity_id: string;
+  canonical_name: string;
+  entity_type: string;
+  ticker: string | null;
+  exchange: string | null;
+  ann_similarity_score: number;
+  competes_with_confidence: number | null;
+  final_score: number;
+  has_competes_with_relation: boolean;
+}
+
+/** SimilarEntitiesResponse — POST /v1/entities/similar */
+export interface SimilarEntitiesResponse {
+  entity_id: string;
+  canonical_name: string;
+  results: SimilarEntityItem[];
+  total: number;
+}
+
+/**
+ * ArticleImpactWindows — 4-window price-impact scores for a single article.
+ * day_t0 = same-day price move, day_t1 = +1 trading day, day_t2 = +2, day_t5 = +5.
+ * Each value is null when the window has not been computed yet.
+ */
+export interface ArticleImpactWindows {
+  day_t0: number | null;
+  day_t1: number | null;
+  day_t2: number | null;
+  day_t5: number | null;
+}
+
+/** ArticleImpactHistoryResponse — GET /v1/articles/{article_id}/impact-history */
+export interface ArticleImpactHistoryResponse {
+  article_id: string;
+  impact_windows: ArticleImpactWindows | null;
+}
+
+/**
+ * SentimentTimeseriesPoint — one daily aggregate in the sentiment timeseries.
+ * positive_ratio and negative_ratio are 0-1 fractions (not percentages).
+ * net_sentiment = positive_ratio − negative_ratio, computed client-side by F-2.
+ *
+ * WHY nullable floats: S6 returns null for days where scoring data is incomplete
+ * (e.g. articles with no LLM-scored sentiment or no relevance score).
+ * The backend schema declares all four metrics as float | None = None.
+ * TAOverlayPanel guards against null via (pt.positive_ratio ?? NaN).
+ */
+export interface SentimentTimeseriesPoint {
+  date: string; // "YYYY-MM-DD"
+  article_count: number;
+  avg_relevance: number | null;
+  positive_ratio: number | null;
+  negative_ratio: number | null;
+  avg_impact_score: number | null;
+}
+
+/** SentimentTimeseriesResponse — GET /v1/entities/{id}/sentiment-timeseries */
+export interface SentimentTimeseriesResponse {
+  entity_id: string;
+  days: number;
+  points: SentimentTimeseriesPoint[];
+}
+
+/**
+ * YieldPoint — one maturity on the US Treasury yield curve.
+ * Matches services/api-gateway/src/api_gateway/schemas/market.py::YieldPoint.
+ */
+export interface YieldPoint {
+  maturity: string; // e.g. "1M", "3M", "6M", "1Y", "2Y", "5Y", "10Y", "30Y"
+  yield_pct: number | null;
+  source: string | null; // "macro_indicator" | "etf_proxy" | null
+}
+
+/**
+ * YieldCurveResponse — GET /v1/market/yield-curve (PLAN-0091 T-A-2-04).
+ * Matches services/api-gateway/src/api_gateway/schemas/market.py::YieldCurveResponse.
+ */
+export interface YieldCurveResponse {
+  points: YieldPoint[];
+  spread_2s10s: number | null; // 10Y − 2Y in basis points; null when either maturity unavailable
+  spread_2s10s_inverted: boolean | null; // true when spread < 0 (yield curve inversion signal)
+  source: string | null; // "macro_indicator" | "etf_proxy" | "unavailable"
+}
+
+/** One price level in price-levels response (e.g. R1, PIVOT, S2). */
+export interface PriceLevel {
+  label: "R3" | "R2" | "R1" | "PIVOT" | "S1" | "S2" | "S3";
+  value: number;
+  /** Whether current price is above / at / below this level. */
+  direction: "above" | "at" | "below";
+}
+
+/** GET /v1/fundamentals/{id}/price-levels — floor pivot levels + moving averages */
+export interface PriceLevelsResponse {
+  instrument_id: string;
+  /** 7 classic floor pivot levels (R3/R2/R1/PIVOT/S1/S2/S3) from prior-day OHLCV. */
+  levels: PriceLevel[];
+  /** 50-day simple moving average. Null when fewer than 50 daily bars. */
+  ma50: number | null;
+  /** 200-day simple moving average. Null when fewer than 200 daily bars. */
+  ma200: number | null;
+}
+
+// ── Analytics: TWR (docs/designs/0089/04-portfolio-detail.md §3.1 gap #1) ───
+
+/**
+ * GET /v1/portfolios/{id}/twr?period=YTD&benchmark=SPY
+ *
+ * Time-weighted return scalars for the portfolio and benchmark over a period.
+ * Planned endpoint — not yet shipped. The frontend falls back to computing
+ * portfolio_return from value-history when this endpoint returns null/404.
+ *
+ * WHY all fields nullable: the endpoint may lack SPY data (benchmark_return)
+ * or insufficient history (portfolio_return) — same null-as-absent convention
+ * as RiskMetricsResponse.
+ */
+export interface TwrResponse {
+  portfolio_id: string;
+  period: string;
+  benchmark: string;
+  /** Time-weighted return for the portfolio over the period. Fraction, not percent. */
+  portfolio_return: number | null;
+  /** Time-weighted return for the benchmark over the same period. Fraction. */
+  benchmark_return: number | null;
+  /** Excess return (portfolio_return − benchmark_return). */
+  excess_return: number | null;
+}
+
+// ── Analytics: Attribution (docs/designs/0089/04-portfolio-detail.md §3.3) ──
+
+/**
+ * One attribution row — applies to holding / sector / asset_class dimensions.
+ *
+ * WHY bps for contrib: basis points are the standard market-convention unit for
+ * contribution-to-return. 1 bps = 0.01%. Rendering as a float (e.g. 0.0335)
+ * and multiplying ×10000 in the component is fragile — storing pre-computed
+ * bps on the wire removes the per-component conversion.
+ */
+export interface AttributionRow {
+  /** Display name: ticker (holding), sector name, or asset class label. */
+  name: string;
+  /** Portfolio weight as a fraction (e.g. 0.124 = 12.4%). */
+  weight: number | null;
+  /** Period return for this slice as a fraction (e.g. 0.284 = 28.4%). */
+  period_return: number | null;
+  /** Contribution to portfolio return in basis points (e.g. 335 = +3.35%). */
+  contrib_bps: number | null;
+}
+
+/**
+ * GET /v1/portfolios/{id}/attribution?period=YTD&dimension=holding
+ *
+ * Contribution-to-return breakdown for a portfolio period.
+ * Planned endpoint — falls back to client-side weight × period_return when
+ * the backend has not shipped this route.
+ */
+export interface AttributionResponse {
+  portfolio_id: string;
+  period: string;
+  dimension: "holding" | "sector" | "asset_class";
+  rows: AttributionRow[];
+}
+
+// ── Analytics: Extended risk metrics ─────────────────────────────────────────
+
+/**
+ * Extended RiskMetricsResponse fields added in the Wave G backend pre-task
+ * (docs/designs/0089/04-portfolio-detail.md §3 backend gap #6).
+ *
+ * These fields are OPTIONAL on the wire — older gateway builds that have not
+ * shipped the backend pre-task simply omit them and the sidebar tiles render "—".
+ *
+ * WHY augment RiskMetricsResponse (not a new type): the endpoint is the same
+ * route (/v1/portfolios/{id}/risk-metrics) with additional fields. Keeping one
+ * type avoids the two-query pattern and preserves the existing staleTime / cache
+ * entry semantics.
+ */
+export interface ExtendedRiskMetricsResponse extends RiskMetricsResponse {
+  /** Calmar ratio = annualised_return / |max_drawdown|. Null when drawdown_max is 0 or null. */
+  calmar: number | null;
+  /** Win rate = count(daily_return > 0) / count(daily_return) over the lookback window. */
+  win_rate: number | null;
+  /**
+   * Alpha = portfolio_annualised_return − spy_annualised_return (simple excess return).
+   * WHY not CAPM alpha: simple alpha is sufficient for retail analytics and avoids
+   * the need for a regression over the risk-free rate time series.
+   */
+  alpha: number | null;
+  /** CAGR = (final_value / initial_value)^(1 / years) − 1 over the lookback window. */
+  cagr: number | null;
+  /** Historical VaR at 95% confidence level. Fraction (e.g. −0.023 = −2.3%). */
+  var_95: number | null;
+  /** Period return = (final_value − initial_value) / initial_value. Fraction. */
+  period_return: number | null;
 }

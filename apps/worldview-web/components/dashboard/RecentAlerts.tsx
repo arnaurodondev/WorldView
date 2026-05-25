@@ -11,7 +11,7 @@
  * Deduplication by alert_id ensures no visual duplicates.
  *
  * WHO USES IT: app/(app)/dashboard/page.tsx
- * DATA SOURCE: AlertStreamContext.recentAlerts + S9 GET /api/v1/alerts?acknowledged=false
+ * DATA SOURCE: AlertStreamContext.recentAlerts + S9 GET /v1/alerts/history?status=active
  * DESIGN REFERENCE: PRD-0028 §6.5 Dashboard RecentAlerts
  */
 
@@ -57,10 +57,15 @@ export function RecentAlerts() {
   const { recentAlerts } = useAlertStream();
 
   // ── Poll historical alerts from REST endpoint ──────────────────────────────
-  // WHY poll: WebSocket gaps could miss alerts. REST is the authoritative source.
+  // WHY getAlertHistory (not getPendingAlerts): getPendingAlerts reads the
+  // `pending_alerts` delivery-queue table which only has rows while alerts are
+  // awaiting fan-out to notification channels. Once delivered (or for alerts
+  // seeded directly into `alerts`), that table is empty. getAlertHistory reads
+  // the `alerts` table directly — the authoritative store — and is the correct
+  // source for a monitoring widget (F-5 bug fix).
   const { data: alertsResp, isLoading, isError } = useQuery({
-    queryKey: ["alerts-pending"],
-    queryFn: () => createGateway(accessToken).getPendingAlerts({ limit: 10 }),
+    queryKey: ["alerts-history-widget"],
+    queryFn: () => createGateway(accessToken).getAlertHistory({ status: "active", limit: 10 }),
     enabled: !!accessToken,
     refetchInterval: 30_000, // WHY 30s: balance freshness vs API load
     staleTime: 15_000,

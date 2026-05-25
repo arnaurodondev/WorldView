@@ -102,7 +102,7 @@ export function MessageBubble({ message }: { message: Message }) {
 
         {/*
          * WHY text-[11px] leading-[1.5]: chat messages in a terminal must match the
-         * 11px density of all other data surfaces — text-sm (14px) breaks density
+         * 11px density of all other data surfaces — text-[14px] (14px) breaks density
          * consistency and makes chat feel like a consumer chatbot pasted into a
          * Bloomberg terminal. leading-[1.5] matches the compact prose standard.
          */}

@@ -71,7 +71,7 @@ class TestTemporalEventRepositoryUpsert:
                 title="US-China Tech Restrictions",
                 active_from=_YESTERDAY,
                 confidence=0.92,
-            )
+            ),
         )
 
         assert result == event_id
@@ -100,7 +100,7 @@ class TestTemporalEventRepositoryUpsert:
                 description="ECB raised rates by 50bp vs 25bp expected",
                 source_url="https://eodhd.com/api/economic-events",
                 residual_impact_days=30,
-            )
+            ),
         )
 
         call_args = session.execute.call_args
@@ -132,7 +132,7 @@ class TestTemporalEventRepositoryUpsert:
                 title="Company-Level SEC Investigation",
                 active_from=_YESTERDAY,
                 confidence=0.75,
-            )
+            ),
         )
 
         params = session.execute.call_args[0][1]
@@ -157,7 +157,7 @@ class TestTemporalEventRepositoryUpsert:
                 title="FOMC Rate Decision",
                 active_from=_YESTERDAY,
                 confidence=1.0,
-            )
+            ),
         )
 
         params = session.execute.call_args[0][1]
@@ -185,7 +185,7 @@ class TestTemporalEventRepositoryUpsert:
                 active_from=_YESTERDAY,
                 confidence=0.88,
                 source_article_ids=[str(article_id_1), str(article_id_2)],
-            )
+            ),
         )
 
         params = session.execute.call_args[0][1]
@@ -210,7 +210,7 @@ class TestTemporalEventRepositoryUpsert:
                 title="NFP Release",
                 active_from=_YESTERDAY,
                 confidence=1.0,
-            )
+            ),
         )
 
         sql_text = str(session.execute.call_args[0][0])
@@ -478,7 +478,7 @@ class TestEntityEventExposureRepository:
                 entity_id=uuid4(),
                 exposure_type="directly_affected",
                 confidence=0.90,
-            )
+            ),
         )
 
         assert result == exposure_id
@@ -501,7 +501,7 @@ class TestEntityEventExposureRepository:
                 entity_id=uuid4(),
                 exposure_type="sector_exposure",
                 confidence=0.75,
-            )
+            ),
         )
 
         sql = str(session.execute.call_args[0][0])
@@ -528,7 +528,7 @@ class TestEntityEventExposureRepository:
                 exposure_type="revenue_geography",
                 confidence=0.65,
                 evidence_text="Revenue 40% from US markets",
-            )
+            ),
         )
 
         params = session.execute.call_args[0][1]
@@ -555,7 +555,7 @@ class TestEntityEventExposureRepository:
                 entity_id=uuid4(),
                 exposure_type="supply_chain",
                 confidence=0.80,
-            )
+            ),
         )
 
         params = session.execute.call_args[0][1]
@@ -584,7 +584,7 @@ class TestEntityEventExposureRepository:
                 entity_id=entity_id,
                 exposure_type="directly_affected",
                 confidence=0.90,
-            )
+            ),
         )
         # Second call with same triple — ON CONFLICT DO NOTHING fires
         result_2 = _run(
@@ -594,7 +594,7 @@ class TestEntityEventExposureRepository:
                 entity_id=entity_id,
                 exposure_type="directly_affected",
                 confidence=0.91,
-            )
+            ),
         )
 
         assert isinstance(result_1, UUID)
@@ -617,7 +617,7 @@ class TestEntityEventExposureRepository:
                 entity_id=uuid4(),
                 exposure_type="operationally_impacted",
                 confidence=0.70,
-            )
+            ),
         )
 
         sql = str(session.execute.call_args[0][0])

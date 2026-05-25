@@ -29,8 +29,7 @@
 import { useState, useRef, useMemo, useEffect } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useRouter } from "next/navigation";
-import { createGateway } from "@/lib/gateway";
-import { useAuth } from "@/hooks/useAuth";
+import { useApiClient } from "@/lib/api-client";
 import { Skeleton } from "@/components/ui/skeleton";
 import type { GraphNode, GraphEdge } from "@/types/api";
 
@@ -89,6 +88,20 @@ const NODE_COLORS: Record<string, { fill: string; stroke: string }> = {
  * The center node is always at (cx, cy). Related nodes form a ring.
  * If there are 2 rings (depth=2), we use two concentric rings.
  */
+// PRD-0089 F2 step 11 (§6.6): the layout result carries `ticker` (string |
+// undefined) so the SVG click handler can build a ticker-first URL without a
+// second graph lookup. Non-tradable nodes (sectors, persons, events) have
+// ticker undefined and fall back to the UUID — middleware decides whether to
+// resolve or 404.
+type LaidOutNode = {
+  id: string;
+  x: number;
+  y: number;
+  label: string;
+  type: string;
+  ticker: string | undefined;
+};
+
 function computeRadialLayout(
   nodes: GraphNode[],
   edges: GraphEdge[],
@@ -97,7 +110,7 @@ function computeRadialLayout(
   cy: number,
   innerRadius: number,
   outerRadius: number,
-): { id: string; x: number; y: number; label: string; type: string }[] {
+): LaidOutNode[] {
   // Partition nodes into: center, directly connected, rest
   const directNeighborIds = new Set<string>();
   for (const e of edges) {
@@ -109,10 +122,17 @@ function computeRadialLayout(
   const innerNodes = nodes.filter((n) => n.id !== centerEntityId && directNeighborIds.has(n.id));
   const outerNodes = nodes.filter((n) => n.id !== centerEntityId && !directNeighborIds.has(n.id));
 
-  const result: { id: string; x: number; y: number; label: string; type: string }[] = [];
+  const result: LaidOutNode[] = [];
 
   if (centerNode) {
-    result.push({ id: centerNode.id, x: cx, y: cy, label: centerNode.label, type: centerNode.type });
+    result.push({
+      id: centerNode.id,
+      x: cx,
+      y: cy,
+      label: centerNode.label,
+      type: centerNode.type,
+      ticker: centerNode.ticker || undefined,
+    });
   }
 
   // Position inner ring nodes evenly spaced around the center
@@ -124,6 +144,7 @@ function computeRadialLayout(
       y: cy + innerRadius * Math.sin(angle),
       label: node.label,
       type: node.type,
+      ticker: node.ticker || undefined,
     });
   });
 
@@ -136,6 +157,7 @@ function computeRadialLayout(
       y: cy + outerRadius * Math.sin(angle),
       label: node.label,
       type: node.type,
+      ticker: node.ticker || undefined,
     });
   });
 
@@ -145,7 +167,7 @@ function computeRadialLayout(
 // ── Component ─────────────────────────────────────────────────────────────────
 
 export function EntityGraphPanel({ entityId, centerLabel }: EntityGraphPanelProps) {
-  const { accessToken } = useAuth();
+  const gateway = useApiClient();
   const router = useRouter();
   const [hoveredNodeId, setHoveredNodeId] = useState<string | null>(null);
   // PLAN-0050 Wave E T-E-5-04: hover tooltips for nodes and edges.
@@ -180,8 +202,8 @@ export function EntityGraphPanel({ entityId, centerLabel }: EntityGraphPanelProp
     queryKey: ["entity-graph", entityId, 1],
     // WHY depth=1: Overview sidebar is compact (~320px). Depth=1 = direct neighbors only.
     // The full depth=2 interactive graph lives in the Intelligence tab (EntityGraph.tsx).
-    queryFn: () => createGateway(accessToken).getEntityGraph(entityId, 1),
-    enabled: !!accessToken && !!entityId,
+    queryFn: () => gateway.getEntityGraph(entityId, 1),
+    enabled: !!entityId,
     // WHY 10min: knowledge graph edges don't change frequently
     staleTime: 10 * 60_000,
   });
@@ -202,6 +224,10 @@ export function EntityGraphPanel({ entityId, centerLabel }: EntityGraphPanelProp
       weight: number;
       otherId: string;
       otherLabel: string;
+      // PRD-0089 F2 step 11 (§6.6): ticker carried alongside otherId so the
+      // sparse-list <li> can construct ticker-first URLs without a second
+      // graph lookup. Undefined for non-tradable nodes.
+      otherTicker: string | undefined;
     }>;
     return [...graph.edges]
       .sort((a, b) => b.weight - a.weight)
@@ -214,6 +240,7 @@ export function EntityGraphPanel({ entityId, centerLabel }: EntityGraphPanelProp
           weight: edge.weight,
           otherId,
           otherLabel: otherNode?.label ?? otherId,
+          otherTicker: otherNode?.ticker || undefined,
         };
       })
       .slice(0, 8);
@@ -418,7 +445,14 @@ export function EntityGraphPanel({ entityId, centerLabel }: EntityGraphPanelProp
               // WHY onClick: clicking a related entity navigates to its detail page
               onClick={() => {
                 if (!isCenter) {
-                  router.push(`/instruments/${node.id}`);
+                  // PRD-0089 F2 step 11 (§6.6): prefer the ticker slug when
+                  // available. S9 populates GraphNode.ticker for
+                  // `financial_instrument` nodes only — for non-tradable kinds
+                  // (person/event/sector) ticker is undefined, so we fall back
+                  // to the UUID and let the middleware decide whether to
+                  // resolve or 404. Non-tradable detail pages are out of scope
+                  // for v1 (PRD-0089 §14 — `/entities/{uuid}/...` is v1.1).
+                  router.push(`/instruments/${node.ticker || node.id}`);
                 }
               }}
               onMouseEnter={(e) => {
@@ -492,7 +526,12 @@ export function EntityGraphPanel({ entityId, centerLabel }: EntityGraphPanelProp
               <li
                 key={rel.id}
                 className="flex items-center gap-1.5 cursor-pointer hover:bg-muted/30 rounded-[2px] px-1 py-0.5"
-                onClick={() => router.push(`/instruments/${rel.otherId}`)}
+                onClick={() =>
+                  // PRD-0089 F2 step 11 (§6.6): ticker-first URL for the
+                  // sparse-graph list. Falls back to UUID for non-tradable
+                  // entities (people, events, sectors); middleware resolves.
+                  router.push(`/instruments/${rel.otherTicker || rel.otherId}`)
+                }
                 title={`${rel.label.replace(/_/g, " ").toLowerCase()} ${rel.otherLabel} · weight ${rel.weight.toFixed(2)}`}
               >
                 {/* WHY uppercase 9px: matches the rest of the terminal "edge label" typography
@@ -520,7 +559,7 @@ export function EntityGraphPanel({ entityId, centerLabel }: EntityGraphPanelProp
           fixed/sticky elements; z-20 is sufficient and avoids z-index wars. */}
       {nodeTooltip && (
         <div
-          className="pointer-events-none absolute z-20 rounded-[2px] border border-border/50 bg-card px-2.5 py-1.5 shadow-lg"
+          className="pointer-events-none absolute z-20 rounded-[2px] border border-border/50 bg-card px-2.5 py-1.5 "
           style={{ left: nodeTooltip.x, top: nodeTooltip.y }}
           role="tooltip"
         >
@@ -546,7 +585,7 @@ export function EntityGraphPanel({ entityId, centerLabel }: EntityGraphPanelProp
           (snake_case from the NLP pipeline). Human-readable display uses spaces. */}
       {edgeTooltip && (
         <div
-          className="pointer-events-none absolute z-20 rounded-[2px] border border-border/50 bg-card px-2.5 py-1.5 shadow-lg"
+          className="pointer-events-none absolute z-20 rounded-[2px] border border-border/50 bg-card px-2.5 py-1.5 "
           style={{ left: edgeTooltip.x, top: edgeTooltip.y }}
           role="tooltip"
         >

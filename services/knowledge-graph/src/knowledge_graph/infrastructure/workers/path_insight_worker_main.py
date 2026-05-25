@@ -20,9 +20,11 @@ import asyncio
 import contextlib
 import signal
 import sys
+from typing import Any
 from uuid import UUID
 
 from common.ids import new_uuid7  # type: ignore[import-untyped]
+from common.retry import retry_on_startup  # type: ignore[import-untyped]
 from observability import configure_logging, get_logger  # type: ignore[import-untyped]
 
 logger = get_logger(__name__)  # type: ignore[no-any-return]
@@ -57,7 +59,18 @@ async def main() -> None:
     for sig in (signal.SIGTERM, signal.SIGINT):
         loop.add_signal_handler(sig, _handle_signal, sig)
 
-    engine, read_engine, write_factory, _read_factory = _build_factories(settings)
+    # PLAN-0093 Wave A-3 / F-KG-102, F-REF-006: wrap the factory build in the
+    # retry decorator so a transient DNS / TCP race when intelligence_db is
+    # still booting does not crash the path-insight worker container.
+    @retry_on_startup()
+    async def _build_factories_with_retry() -> tuple[Any, Any, Any, Any]:
+        return _build_factories(settings)
+
+    try:
+        engine, read_engine, write_factory, _read_factory = await _build_factories_with_retry()
+    except Exception as startup_exc:
+        log.error("path_insight_worker_startup_failed", error=str(startup_exc))
+        sys.exit(1)
 
     # Build PathDiscovery, PathScorer, PathTemplateMatcher.
     from knowledge_graph.application.services.path_scorer import PathScorer

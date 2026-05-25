@@ -9,13 +9,16 @@ All types are frozen (immutable) and kw_only for explicit construction.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from decimal import Decimal
-from typing import Any
+from typing import TYPE_CHECKING, Any
 from uuid import UUID
 
 from rag_chat.domain.enums import BriefingType
+
+if TYPE_CHECKING:
+    from rag_chat.application.ports.upstream_clients import EnrichedChunkResult
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -148,6 +151,10 @@ class BriefingContext:
     recent_events: list[EventSummary]
     entity_graph: EntityGraphSnapshot | None = None
     fundamentals: FundamentalsSummary | None = None
+    # ANN-retrieved chunks from SEC filings / earnings transcripts / analyst
+    # reports for the focal entity.  Only populated for INSTRUMENT briefings.
+    # Empty list for MORNING briefings (no focal entity to filter by).
+    relevant_chunks: list[EnrichedChunkResult] = field(default_factory=list)
     gathered_at: datetime
 
     @classmethod

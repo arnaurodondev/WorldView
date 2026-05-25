@@ -1,99 +1,90 @@
 /**
- * components/instrument/financials/AnalystSidebar.tsx — Right-rail analyst panel
+ * components/instrument/financials/AnalystSidebar.tsx — 7-panel right sidebar shell
  *
- * WHY THIS EXISTS: PRD-0088 §6.8 specifies a fixed 280px right column on the
- * Financials tab that surfaces the most decision-relevant artefact: Wall-Street
- * recommendation consensus + 12-month price target (Bloomberg BEST/EE; Finviz
- * "Recom" pill). Sits side-by-side with the metrics grid so the analyst can
- * compare company truth (10-K numbers, left) against market opinion (right)
- * without scrolling.
+ * WHY THIS EXISTS (T-24 rewrite): W3 expands the single-block analyst panel into
+ * 7 distinct panels covering the full analyst opinion surface: consensus bar,
+ * 12-month target, estimate revisions, per-firm targets, beat/miss history, AI
+ * brief, and company snapshot. This component is the thin orchestration shell —
+ * it receives the minimum props and delegates rendering to the individual panel
+ * components in sidebar/.
  *
- * COMPOSITION (top → bottom): "ANALYST CONSENSUS" header → <AnalystMiniBar/>
- * (T-B-02 reuse) → consensus 12-mo target (font-mono, large) → updated-at
- * timestamp pinned to bottom.
+ * WHY 240px (not 280px): T-25 narrows the sidebar from 280px to 240px to give
+ * the left column more horizontal space for the 6-column DenseMetricsGrid and
+ * the wide InsiderTransactionsTable. 240px is sufficient for the panel titles
+ * and tabular data at 11px monospace.
  *
- * WHY REUSE AnalystMiniBar (do not duplicate): T-B-02 already owns the 5-bucket
- * stacked recommendation bar with the Bloomberg palette + null-handling logic.
- * Duplicating it would fragment the design system and double the test surface.
+ * WHY NO DATA FETCHING HERE: All panel-level data fetching is in the individual
+ * panel components (BeatMissHistoryPanel, AIBriefPanel, CompanySnapshotPanel).
+ * Props passed here come from useFinancialsTabData (already in FinancialsTab's
+ * scope) — no new fetches in this shell.
  *
- * WHO USES IT: FinancialsTab.tsx (right column).
- * DATA SOURCE: Props from useFinancialsTabData (T-A-03).
+ * WHO USES IT: FinancialsTab.tsx (right column, T-25 wiring).
+ * DATA SOURCE: Props from FinancialsTab (useFinancialsTabData results).
  */
 
-// WHY no "use client": pure presentational — no hooks, no browser APIs.
+// WHY no "use client": this shell has no hooks — all interactive panels are
+// individually marked "use client". Server-safe for future RSC migration.
 
-import { AnalystMiniBar } from "@/components/instrument/quote/metrics/AnalystMiniBar";
-import { formatPrice } from "@/lib/utils";
+import { AnalystConsensusPanel } from "@/components/instrument/financials/sidebar/AnalystConsensusPanel";
+import { TargetPricePanel } from "@/components/instrument/financials/sidebar/TargetPricePanel";
+import { RevisionsPanel } from "@/components/instrument/financials/sidebar/RevisionsPanel";
+import { TargetsByAnalystPanel } from "@/components/instrument/financials/sidebar/TargetsByAnalystPanel";
+import { BeatMissHistoryPanel } from "@/components/instrument/financials/sidebar/BeatMissHistoryPanel";
+import { AIBriefPanel } from "@/components/instrument/financials/sidebar/AIBriefPanel";
+import { CompanySnapshotPanel } from "@/components/instrument/financials/sidebar/CompanySnapshotPanel";
+import type { Fundamentals, FundamentalsSnapshot } from "@/types/api";
 
 export interface AnalystSidebarProps {
-  // 5 bucket counts — null = EODHD never returned a value (no coverage).
-  // Passed verbatim to AnalystMiniBar which owns the null/empty rendering.
-  readonly strongBuy: number | null;
-  readonly buy: number | null;
-  readonly hold: number | null;
-  readonly sell: number | null;
-  readonly strongSell: number | null;
-  // Consensus 12-mo target (USD); null → "—" so layout height stays stable.
-  readonly targetPrice: number | null;
-  // ISO-8601 UTC; rendered date-only at the bottom for data-freshness signal.
-  readonly updatedAt: string | null;
+  instrumentId: string;
+  fundamentals: Fundamentals | null | undefined;
+  snapshot: FundamentalsSnapshot | null | undefined;
 }
 
 export function AnalystSidebar({
-  strongBuy,
-  buy,
-  hold,
-  sell,
-  strongSell,
-  targetPrice,
-  updatedAt,
+  instrumentId,
+  fundamentals,
 }: AnalystSidebarProps) {
-  // WHY `flex flex-col h-full`: parent gives us w-[280px] + full tab height.
-  // Filling vertically lets the timestamp pin to the bottom (mt-auto) even
-  // when the bar + target take <50% of the column — keeps the section anchored.
+  // WHY not spreading analyst fields: passing the entire fundamentals object
+  // keeps this shell thin and avoids a 10-field prop explosion when the panel
+  // interface expands. Each panel destructures what it needs.
   return (
     <aside
-      className="flex h-full w-full flex-col border-l border-border bg-background"
-      aria-label="Analyst consensus"
+      className="flex h-full w-full flex-col overflow-y-auto border-l border-border bg-background"
+      aria-label="Analyst sidebar"
     >
-      {/* Section header — 24px terminal-row baseline used across the app */}
-      <div className="flex h-6 shrink-0 items-center border-b border-border px-2">
-        <span className="text-[10px] uppercase tracking-[0.08em] text-muted-foreground">
-          ANALYST CONSENSUS
-        </span>
-      </div>
+      {/* Panel 1 — Analyst consensus bucket bar + N analysts subline */}
+      <AnalystConsensusPanel
+        strongBuy={fundamentals?.analyst_strong_buy_count ?? null}
+        buy={fundamentals?.analyst_buy_count ?? null}
+        hold={fundamentals?.analyst_hold_count ?? null}
+        sell={fundamentals?.analyst_sell_count ?? null}
+        strongSell={fundamentals?.analyst_strong_sell_count ?? null}
+      />
 
-      <div className="flex flex-1 flex-col gap-3 p-2">
-        {/* Reuse T-B-02. AnalystMiniBar handles null counts + empty-state. */}
-        <AnalystMiniBar
-          strongBuy={strongBuy}
-          buy={buy}
-          hold={hold}
-          sell={sell}
-          strongSell={strongSell}
-        />
+      {/* Panel 2 — 12-month consensus price target with upside chip */}
+      <TargetPricePanel
+        targetPrice={fundamentals?.analyst_target_price ?? null}
+        // WHY no currentPrice: Quote data is in the page bundle but not wired
+        // into FinancialsTab's prop surface. Upside chip hides gracefully when
+        // currentPrice is absent. A future T-25 pass can thread it through.
+        currentPrice={null}
+        updatedAt={fundamentals?.updated_at ?? null}
+      />
 
-        {/* WHY a dedicated block (not inline in the bar): the target price is
-            the most-cited number on the page. Caption + big mono digit makes
-            it scannable in <200ms — the "first glance" budget on a terminal. */}
-        <div className="flex flex-col gap-0.5">
-          <span className="text-[10px] uppercase tracking-[0.06em] text-muted-foreground">
-            12-MO Target
-          </span>
-          <span className="font-mono text-[18px] leading-tight text-foreground tabular-nums">
-            {targetPrice != null ? formatPrice(targetPrice) : "—"}
-          </span>
-        </div>
+      {/* Panel 3 — Estimate revisions stub (pending data source) */}
+      <RevisionsPanel />
 
-        {/* WHY mt-auto: pins the timestamp to the bottom regardless of upper
-            block heights. WHY date-only slice (not full ISO): minute precision
-            adds no decision value at this density. */}
-        {updatedAt && (
-          <div className="mt-auto pt-2 text-[10px] text-muted-foreground/70">
-            <span>Updated {updatedAt.slice(0, 10)}</span>
-          </div>
-        )}
-      </div>
+      {/* Panel 4 — Per-firm targets stub (pending data source) */}
+      <TargetsByAnalystPanel />
+
+      {/* Panel 5 — EPS beat/miss sparkline (self-fetching, 24h cache) */}
+      <BeatMissHistoryPanel instrumentId={instrumentId} />
+
+      {/* Panel 6 — AI brief bullets + expand dialog */}
+      <AIBriefPanel instrumentId={instrumentId} />
+
+      {/* Panel 7 — Company snapshot (sector/industry/country/description) */}
+      <CompanySnapshotPanel instrumentId={instrumentId} />
     </aside>
   );
 }

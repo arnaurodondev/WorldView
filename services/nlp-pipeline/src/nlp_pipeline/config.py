@@ -48,10 +48,15 @@ class Settings(BaseSettings):
     schema_registry_url: str = "http://localhost:8081"
     kafka_consumer_group: str = "nlp-pipeline-group"
     kafka_watchlist_consumer_group: str = "nlp-watchlist-group"
+    # REQ-003 / TASK-W0-06: dedicated consumer group for entity.refresh.v1 so
+    # the manual refresh path runs independently of the main article pipeline.
+    kafka_entity_refresh_consumer_group: str = "nlp-entity-refresh-group"
 
     # Topics (consumed)
     topic_article_stored: str = "content.article.stored.v1"
     topic_watchlist_updated: str = "portfolio.watchlist.updated.v1"
+    # REQ-003 / TASK-W0-06: manual entity refresh event from S7.
+    topic_entity_refresh: str = "entity.refresh.v1"
 
     # Topics (produced)
     topic_article_enriched: str = "nlp.article.enriched.v1"
@@ -85,7 +90,13 @@ class Settings(BaseSettings):
 
     # Ollama / ML endpoints
     ollama_base_url: str = "http://localhost:11434"
-    embedding_model_id: str = "bge-large"
+    # F-013: MUST match the model_id string returned by the active embedding adapter.
+    # DeepInfra (provider="deepinfra") returns "BAAI/bge-large-en-v1.5" (embedding_api_model_id).
+    # Ollama (provider="ollama") returns "bge-large" (the pull name used in the container).
+    # _expire_stale_embeddings() compares chunk_embeddings.model_id against this value —
+    # a mismatch will expire all CORRECT chunks and keep all stale ones (backwards expiry).
+    # Default here is the DeepInfra value since EMBEDDING_PROVIDER defaults to "deepinfra" in docker.env.
+    embedding_model_id: str = "BAAI/bge-large-en-v1.5"
     ner_model_id: str = "urchade/gliner_large-v2.1"
     extraction_model_id: str = "qwen2.5:7b-instruct"
 
@@ -135,10 +146,27 @@ class Settings(BaseSettings):
     # chunks.entity_mentions JSONB (avoids index bloat from low-confidence noise).
     gliner_mention_floor: float = 0.6
 
-    # Routing tier thresholds (PRD §6.7 Block 5)
-    routing_tier_deep: float = 0.70  # score >= this → DEEP processing
-    # Lowered from 0.45: watchlist signal fires post-resolution, effective max without it is ~0.44
-    routing_tier_medium: float = 0.35  # score >= this → MEDIUM processing
+    # PLAN-0093 C-2 (F-NPL-005): minimum GLiNER confidence required to PERSIST a
+    # mention row to the entity_mentions table (audited table consumed by the
+    # resolution cascade + downstream workers). Without this floor, ~26% of all
+    # entity_mentions rows historically had score < 0.6 — the chunks.entity_mentions
+    # JSONB cache already used gliner_mention_floor to suppress them, but the table
+    # writer did not. This brings the table writer into parity. Override via
+    # NLP_PIPELINE_MIN_PERSIST_FLOOR.
+    min_persist_floor: float = 0.6
+
+    # RC-1 fix: minimum word count for articles to enter the NLP pipeline.
+    # Articles below this threshold are stub headlines (Finnhub ~91% stub rate,
+    # SEC Edgar ~52%) that carry no relational signal but consume NER + embedding
+    # capacity. Configurable via NLP_PIPELINE_MIN_WORD_COUNT (default 50).
+    min_word_count: int = 50
+
+    # Routing tier thresholds (PRD §6.7 Block 5, PLAN-0093 C-1 recalibration)
+    # PLAN-0093 C-1: now that the 3 dead signals (watchlist/novelty/price_impact)
+    # are dropped, the live-signal composite ceiling rises from ~0.65 to ~0.90+.
+    # Thresholds bumped accordingly to preserve DEEP/MEDIUM/LIGHT proportions.
+    routing_tier_deep: float = 0.75  # score >= this → DEEP processing
+    routing_tier_medium: float = 0.45  # score >= this → MEDIUM processing
     routing_tier_light: float = 0.20  # score >= this → LIGHT processing
 
     # Entity resolution thresholds (PRD §6.7 Block 9)

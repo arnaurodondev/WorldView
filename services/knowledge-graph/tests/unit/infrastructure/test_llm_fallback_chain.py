@@ -31,7 +31,7 @@ def _make_extraction_client(*, fail: bool = False) -> AsyncMock:
         client.extract = AsyncMock(side_effect=RuntimeError("provider down"))
     else:
         client.extract = AsyncMock(
-            return_value=ExtractionOutput(result={"summary": "ok"}, raw_response="ok", model_id="test")
+            return_value=ExtractionOutput(result={"summary": "ok"}, raw_response="ok", model_id="test"),
         )
     return client
 

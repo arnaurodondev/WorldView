@@ -195,7 +195,7 @@ class TestFundamentalsConsumerMetadataEnrichment:
         }
 
         with patch(
-            "knowledge_graph.infrastructure.messaging.consumers.fundamentals_consumer.EntityRepository"
+            "knowledge_graph.infrastructure.messaging.consumers.fundamentals_consumer.EntityRepository",
         ) as MockRepo:
             mock_instance = AsyncMock()
             MockRepo.return_value = mock_instance
@@ -225,7 +225,7 @@ class TestFundamentalsConsumerMetadataEnrichment:
         }
 
         with patch(
-            "knowledge_graph.infrastructure.messaging.consumers.fundamentals_consumer.EntityRepository"
+            "knowledge_graph.infrastructure.messaging.consumers.fundamentals_consumer.EntityRepository",
         ) as MockRepo:
             mock_instance = AsyncMock()
             MockRepo.return_value = mock_instance
@@ -251,7 +251,7 @@ class TestFundamentalsConsumerMetadataEnrichment:
         }
 
         with patch(
-            "knowledge_graph.infrastructure.messaging.consumers.fundamentals_consumer.EntityRepository"
+            "knowledge_graph.infrastructure.messaging.consumers.fundamentals_consumer.EntityRepository",
         ) as MockRepo:
             mock_instance = AsyncMock()
             MockRepo.return_value = mock_instance
@@ -277,7 +277,7 @@ class TestFundamentalsConsumerMetadataEnrichment:
         }
 
         with patch(
-            "knowledge_graph.infrastructure.messaging.consumers.fundamentals_consumer.EntityRepository"
+            "knowledge_graph.infrastructure.messaging.consumers.fundamentals_consumer.EntityRepository",
         ) as MockRepo:
             mock_instance = AsyncMock()
             MockRepo.return_value = mock_instance
@@ -301,7 +301,7 @@ class TestFundamentalsConsumerMetadataEnrichment:
         }
 
         with patch(
-            "knowledge_graph.infrastructure.messaging.consumers.fundamentals_consumer.EntityRepository"
+            "knowledge_graph.infrastructure.messaging.consumers.fundamentals_consumer.EntityRepository",
         ) as MockRepo:
             mock_instance = AsyncMock()
             MockRepo.return_value = mock_instance
@@ -334,7 +334,7 @@ class TestFundamentalsConsumerMetadataEnrichment:
         }
 
         with patch(
-            "knowledge_graph.infrastructure.messaging.consumers.fundamentals_consumer.EntityRepository"
+            "knowledge_graph.infrastructure.messaging.consumers.fundamentals_consumer.EntityRepository",
         ) as MockRepo:
             mock_instance = AsyncMock()
             MockRepo.return_value = mock_instance

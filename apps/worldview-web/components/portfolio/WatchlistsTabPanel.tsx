@@ -139,6 +139,11 @@ export function WatchlistsTabPanel({
   });
 
   function handleRowClick(id: string) {
+    // PRD-0089 F2 step 11 (§6.6): `id` is ticker-first (the row component
+    // prefers ticker over UUID). encodeURIComponent guards against unusual
+    // chars (BRK.B passes through unmodified; the middleware handles dot-form
+    // tickers). Falls through to UUID resolution at the middleware layer if
+    // the ticker is null on a pending-resolution row.
     router.push(`/instruments/${encodeURIComponent(id)}`);
   }
 

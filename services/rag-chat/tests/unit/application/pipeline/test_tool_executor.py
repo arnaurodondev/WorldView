@@ -256,3 +256,139 @@ class TestEdgeCases:
         assert result is not None
         # Field is `text` NOT `content` (N-7)
         assert len(result.text) <= _TOOL_RESULT_MAX_CHARS
+
+
+# ---------------------------------------------------------------------------
+# FIX-LIVE-E: Exception classification in ToolExecutor.execute
+#
+# Pre-fix: a single `except Exception: return None` swallowed TypeErrors from
+# arg-shape mismatches as "tool returned None", which masked the Phase 5c Q2
+# fallback failure.  Post-fix: TypeError/AttributeError are tagged
+# tool_argument_error, all other exceptions are tagged tool_execution_error,
+# and both include exception_type + exception_repr for debugging.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+class TestExecutorExceptionClassification:
+    """Verify FIX-LIVE-E exception classification + structured logging."""
+
+    @pytest.fixture(autouse=True)
+    def _restore_structlog(self):
+        """Snapshot + restore structlog global config around each test.
+
+        WHY: the test methods below call ``structlog.configure(...)`` inline to
+        route structlog through stdlib so ``caplog`` can capture events. That
+        call mutates a process-global. Without restoring on teardown, any
+        subsequent test in the pytest session that depends on structlog's
+        default stdout renderer (e.g. ``capsys`` assertions in
+        test_chat_orchestrator_tool_loop.py) sees empty output and fails.
+        Snapshot before the test runs, restore (reset + reconfigure with the
+        snapshot) after.
+        """
+        import structlog
+
+        prior_config = structlog.get_config()
+        try:
+            yield
+        finally:
+            structlog.reset_defaults()
+            structlog.configure(**prior_config)
+
+    def _make_executor_with_failing_handler(self, exc: Exception):
+        """Build an executor whose handler raises ``exc`` when called.
+
+        We monkey-patch the executor's internal _handlers list with a single
+        failing handler whose can_handle() returns True for our test tool name.
+        """
+        from rag_chat.application.pipeline.tool_executor import ToolExecutor
+
+        executor = ToolExecutor(registry=_make_registry_with_tools(), s3=_make_s3_port())
+
+        # Inject a synthetic handler that raises the desired exception.
+        class _RaisingHandler:
+            def can_handle(self, name: str) -> bool:
+                return name == "get_price_history"
+
+            async def execute(self, name: str, args: dict[str, Any]) -> Any:
+                raise exc
+
+        executor._handlers = [_RaisingHandler()]
+        return executor
+
+    async def test_typeerror_classified_as_tool_argument_error(self, caplog: Any) -> None:
+        """Handler raising TypeError → executor logs ``tool_argument_error`` with type+repr."""
+        import logging
+
+        import structlog
+
+        # Route structlog through stdlib so caplog can capture (test environment default).
+        structlog.configure(
+            processors=[structlog.processors.KeyValueRenderer(key_order=["event"])],
+            wrapper_class=structlog.stdlib.BoundLogger,
+            logger_factory=structlog.stdlib.LoggerFactory(),
+        )
+
+        exc = TypeError("unexpected keyword 'date_from'")
+        executor = self._make_executor_with_failing_handler(exc)
+        tc = _make_tool_use_block("get_price_history", date_from="bogus")
+
+        with caplog.at_level(logging.WARNING):
+            result = await executor.execute(tc)
+
+        # Returns None so the orchestrator can fall back.
+        assert result is None
+        # Structured log includes the classification tag and exception type.
+        all_messages = " ".join(rec.getMessage() for rec in caplog.records)
+        assert "tool_argument_error" in all_messages
+        assert "TypeError" in all_messages
+
+    async def test_attributeerror_classified_as_tool_argument_error(self, caplog: Any) -> None:
+        """Handler raising AttributeError → also ``tool_argument_error`` (arg-shape family)."""
+        import logging
+
+        import structlog
+
+        structlog.configure(
+            processors=[structlog.processors.KeyValueRenderer(key_order=["event"])],
+            wrapper_class=structlog.stdlib.BoundLogger,
+            logger_factory=structlog.stdlib.LoggerFactory(),
+        )
+
+        exc = AttributeError("'NoneType' object has no attribute 'id'")
+        executor = self._make_executor_with_failing_handler(exc)
+        tc = _make_tool_use_block("get_price_history", ticker="AAPL")
+
+        with caplog.at_level(logging.WARNING):
+            result = await executor.execute(tc)
+
+        assert result is None
+        all_messages = " ".join(rec.getMessage() for rec in caplog.records)
+        assert "tool_argument_error" in all_messages
+        assert "AttributeError" in all_messages
+
+    async def test_generic_exception_classified_as_tool_execution_error(self, caplog: Any) -> None:
+        """Handler raising RuntimeError (or any non-arg exception) → ``tool_execution_error``."""
+        import logging
+
+        import structlog
+
+        structlog.configure(
+            processors=[structlog.processors.KeyValueRenderer(key_order=["event"])],
+            wrapper_class=structlog.stdlib.BoundLogger,
+            logger_factory=structlog.stdlib.LoggerFactory(),
+        )
+
+        exc = RuntimeError("upstream timeout after 30s")
+        executor = self._make_executor_with_failing_handler(exc)
+        tc = _make_tool_use_block("get_price_history", ticker="AAPL")
+
+        with caplog.at_level(logging.WARNING):
+            result = await executor.execute(tc)
+
+        assert result is None
+        all_messages = " ".join(rec.getMessage() for rec in caplog.records)
+        assert "tool_execution_error" in all_messages
+        # Must NOT be misclassified as the arg-shape variant.
+        assert "tool_argument_error" not in all_messages
+        assert "RuntimeError" in all_messages

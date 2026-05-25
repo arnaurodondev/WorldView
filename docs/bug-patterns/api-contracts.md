@@ -912,6 +912,7 @@ Orchestration logic that needs the routing cache or UoW factory belongs in the *
 ## BP-342: KG entity_id passed to market-data API that expects market-data instrument_id → 404 on all fundamentals fetches
 
 **Date discovered**: 2026-05-03
+**Status**: **RESOLVED by F2 wave of PRD-0089** (2026-05-20). See [ADR-F-16](../architecture/decisions/ADR-F-16-instrument-entity-id-unification.md). Post-F2 the KG `canonical_entities.entity_id` equals `market_data.instruments.id` for `entity_type = 'financial_instrument'` (M-017 invariant enforced by `services/knowledge-graph/tests/integration/test_m017_invariant.py`). The historical fix (resolve ticker → instrument_id first) is no longer needed; the worker passes the same UUID to both services. Pattern preserved for archaeological context.
 **Service affected**: `knowledge-graph` (`FundamentalsRefreshWorker`)
 
 **Category**: API & Contracts

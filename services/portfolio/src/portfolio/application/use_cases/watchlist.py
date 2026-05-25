@@ -224,6 +224,24 @@ class AddWatchlistMemberCommand:
     owner_id: UUID
     entity_id: UUID
     entity_type: str = "company"
+    # REQ-002b (TASK-W0-03): caller-supplied ``Idempotency-Key`` header. Acts
+    # as a defensive layer on top of the natural (watchlist_id, entity_id)
+    # uniqueness — protects against the case where a retried request lands
+    # with the SAME key but a DIFFERENT entity_id (treated as 409).
+    idempotency_key: str | None = None
+
+
+@dataclass
+class AddWatchlistMemberResult:
+    """Result wrapper so the route can pick 201 vs 200 per REQ-002b.
+
+    ``created`` is False either when the natural (watchlist_id, entity_id)
+    constraint matched (same entity added again — naturally idempotent) or
+    when an explicit ``Idempotency-Key`` replay resolved to a prior row.
+    """
+
+    member: WatchlistMember
+    created: bool
 
 
 class AddWatchlistMemberUseCase:
@@ -232,19 +250,66 @@ class AddWatchlistMemberUseCase:
         cmd: AddWatchlistMemberCommand,
         uow: UnitOfWork,
         cache: WatchlistCachePort | None = None,
-    ) -> WatchlistMember:
+    ) -> AddWatchlistMemberResult:
         if cache is None:
             cache = NoOpWatchlistCache()
 
+        # ── REQ-002b: idempotency key parsing (validation only, NO lookup yet) ─
+        # Validate the UUID shape up-front so caller misuse fails fast with
+        # 422, before any DB call. The replay lookup is deferred until AFTER
+        # the ownership check below — defense-in-depth per the post-audit
+        # security review: looking up by (watchlist_id, idempotency_key)
+        # without first confirming the caller owns the watchlist would let
+        # an attacker who guesses both UUIDs (~244 bits combined) replay-leak
+        # member data. ~244 bits is practically infeasible, but ordering
+        # matters for the invariant.
+        idem_uuid: UUID | None = None
+        if cmd.idempotency_key is not None:
+            try:
+                idem_uuid = UUID(cmd.idempotency_key)
+            except (ValueError, AttributeError) as exc:
+                from portfolio.domain.errors import IdempotencyKeyInvalidError
+
+                raise IdempotencyKeyInvalidError(
+                    f"idempotency_key must be a valid UUID: {exc}",
+                ) from exc
+
+        # Ownership check FIRST — must pass before any idempotency replay.
         watchlist = await _fetch_watchlist_for_owner(cmd.watchlist_id, cmd.owner_id, cmd.tenant_id, uow)
+
+        # ── REQ-002b: idempotency replay lookup (post-ownership) ──────────────
+        # Now that ownership is confirmed, look up any prior replay. Same-key
+        # same-entity returns the existing member (200). Same-key
+        # different-entity is caller misuse (409).
+        if idem_uuid is not None:
+            existing_by_key = await uow.watchlist_members.find_by_idempotency_key(
+                cmd.watchlist_id,
+                idem_uuid,
+            )
+            if existing_by_key is not None:
+                if existing_by_key.entity_id != cmd.entity_id:
+                    from portfolio.domain.errors import IdempotencyConflictError
+
+                    raise IdempotencyConflictError(
+                        f"Idempotency key {cmd.idempotency_key!r} already used " "with a different entity_id",
+                    )
+                return AddWatchlistMemberResult(member=existing_by_key, created=False)
+
         if not watchlist.is_active():
             raise WatchlistNotFoundError(f"Watchlist {cmd.watchlist_id} is not active")
 
         existing = await uow.watchlist_members.get(cmd.watchlist_id, cmd.entity_id)
         if existing is not None:
-            raise WatchlistMemberAlreadyExistsError(
-                f"Entity {cmd.entity_id} is already in watchlist {cmd.watchlist_id}",
-            )
+            # REQ-002b: adding the same (watchlist_id, entity_id) twice is
+            # NATURALLY idempotent — return the existing member with
+            # ``created=False`` (mapped to 200 by the route). This replaces
+            # the previous 409 ``WatchlistMemberAlreadyExistsError`` for the
+            # bare (no idempotency-key) case so retries from the frontend
+            # never produce an alarming error toast. The instrument-level
+            # F-404 dup guard below remains a 409 because that case spans
+            # two different entity_ids resolving to the same instrument
+            # (genuine ambiguity the user must resolve).
+            return AddWatchlistMemberResult(member=existing, created=False)
 
         # F-404 (QA iter-4): the unique-by-entity_id check above is necessary
         # but not sufficient. Two different entity_ids (one seed-style, one
@@ -341,6 +406,8 @@ class AddWatchlistMemberUseCase:
             ticker=ticker,
             name=name,
             instrument_id=instrument_id,
+            # REQ-002b: stamp the key so concurrent replays can resolve back.
+            idempotency_key=idem_uuid,
         )
         await uow.watchlist_members.save(member)
 
@@ -360,13 +427,37 @@ class AddWatchlistMemberUseCase:
         )
         # Commit before cache invalidation so stale cache entries are only evicted
         # after the DB write is durable (M-005: cache invalidation ordering).
-        await uow.commit()
+        # REQ-002b: catch the rare partial-unique-index race where two concurrent
+        # requests both pass ``find_by_idempotency_key`` (returning None) and
+        # then collide on commit. The second request resolves to the original
+        # row and returns it with ``created=False`` so the frontend still gets
+        # a stable 200 with the same member id.
+        from sqlalchemy.exc import IntegrityError
+
+        try:
+            await uow.commit()
+        except IntegrityError as exc:
+            await uow.rollback()
+            if idem_uuid is not None:
+                existing_by_key = await uow.watchlist_members.find_by_idempotency_key(
+                    cmd.watchlist_id,
+                    idem_uuid,
+                )
+                if existing_by_key is not None:
+                    return AddWatchlistMemberResult(member=existing_by_key, created=False)
+            # Genuine constraint violation (e.g. (watchlist_id, entity_id)
+            # natural unique index hit by a concurrent request) — surface
+            # so the caller can retry.
+            raise WatchlistMemberAlreadyExistsError(
+                f"Concurrent add for entity {cmd.entity_id} in watchlist {cmd.watchlist_id}",
+            ) from exc
+
         try:
             await cache.invalidate_entity(cmd.entity_id)
         except Exception as cache_exc:
             logger.warning("watchlist_cache_invalidation_failed", entity_id=str(cmd.entity_id), error=str(cache_exc))
         logger.info("watchlist_member_added", watchlist_id=str(cmd.watchlist_id), entity_id=str(cmd.entity_id))
-        return member
+        return AddWatchlistMemberResult(member=member, created=True)
 
 
 @dataclass

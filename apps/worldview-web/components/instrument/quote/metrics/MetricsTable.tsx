@@ -7,16 +7,19 @@
  * FundamentalsSnapshot, TechnicalsData, ShareStatisticsData) into a single
  * scrollable column — "one glance, one grid".
  *
- * WHY one component (not 5 sub-tables): divider cadence + embedded
- * WeekRangeBar/AnalystMiniBar rows are tightly coupled to the PRD row
- * sequence; splitting would scatter the spec across files.
+ * W5-T-15 refactor: the first 24 metric rows replaced by 3 × MetricGrid4Col
+ * blocks (VALUATION / MARGINS / LEVERAGE+YIELD — 8 cells each, 4 cols × 2 rows).
+ * WHY 4-col grid: halves vertical height vs the old single-column rows, reaching
+ * Δ37 density target (24 cells above-fold on 1080p). Remaining rows (52W,
+ * ownership, MA, analyst) stay as MetricRow for their unique sub-components
+ * (WeekRangeBar, AnalystMiniBar).
  *
  * WHY no inline useQuery: PLAN-0090 T-A-03 mandates `useMetricsTableData` as
  * the SOLE data hook. Inline queries would duplicate keys with the Financials
  * tab and break TanStack Query's dedup contract.
  *
  * COLOUR THRESHOLDS: all helpers map 1:1 to PRD-0088 FR-10 (see per-row WHY).
- * DESIGN REF: PRD-0088 §6.7.2, PLAN-0090 §T-B-03.
+ * DESIGN REF: PRD-0088 §6.7.2, PLAN-0090 §T-B-03; W5-T-15.
  */
 
 "use client";
@@ -24,6 +27,7 @@
 import { useMetricsTableData } from "@/components/instrument/hooks/useMetricsTableData";
 import { MetricRow, type MetricValueColor } from "./MetricRow";
 import { MetricGroupDivider } from "./MetricGroupDivider";
+import { MetricGrid4Col } from "./MetricGrid4Col";
 import { WeekRangeBar } from "./WeekRangeBar";
 import { AnalystMiniBar } from "./AnalystMiniBar";
 import { formatMarketCap, formatPercent, formatPrice, formatRatio, formatVolume } from "@/lib/utils";
@@ -126,39 +130,56 @@ export function MetricsTable({ instrumentId, fundamentals: fundamentalsProp, quo
   const upside = target != null && price != null && price > 0 ? (target - price) / price : null;
 
   return (
-    <div className="w-full h-full flex flex-col border-l border-border overflow-y-auto">
+    <div className="w-full flex flex-col">
       {/* Section header — 28px (h-7), 10px caps per PRD §6.7.2. */}
       <div className="flex items-center h-7 px-3 border-b border-border/50 bg-card/50 text-[10px] uppercase tracking-wide text-muted-foreground">
         Statistics
       </div>
 
-      {/* ── VALUATION (rows 1-7) ──────────────────────────────────────────── */}
-      <MetricRow label="MARKET CAP" value={formatMarketCap(fundamentals?.market_cap ?? null)} />
-      <MetricRow label="P/E" value={formatRatio(fundamentals?.pe_ratio ?? null, "")} color={peColor(fundamentals?.pe_ratio)} />
-      <MetricRow label="FWD P/E" value={formatRatio(fundamentals?.forward_pe ?? null, "")} color={peColor(fundamentals?.forward_pe)} />
-      <MetricRow label="EPS TTM" value={formatPrice(snapshot?.eps_ttm ?? null)} color={signColor(snapshot?.eps_ttm)} />
-      <MetricRow label="P/S" value={formatRatio(fundamentals?.price_to_sales ?? null, "")} />
-      <MetricRow label="P/B" value={formatRatio(fundamentals?.price_to_book ?? null, "")} />
-      <MetricRow label="EV/EBITDA" value={formatRatio(fundamentals?.ev_to_ebitda ?? null, "")} />
-      <MetricGroupDivider />
+      {/* ── VALUATION block (4 cols × 2 rows = 8 cells) — W5-T-15 (Δ37) ──── */}
+      <MetricGrid4Col
+        title="Valuation"
+        cells={[
+          { label: "MKT CAP",  value: formatMarketCap(fundamentals?.market_cap ?? null) },
+          { label: "P/E",      value: formatRatio(fundamentals?.pe_ratio ?? null, ""),    color: peColor(fundamentals?.pe_ratio) },
+          { label: "FWD P/E",  value: formatRatio(fundamentals?.forward_pe ?? null, ""), color: peColor(fundamentals?.forward_pe) },
+          { label: "EPS TTM",  value: formatPrice(snapshot?.eps_ttm ?? null),            color: signColor(snapshot?.eps_ttm) },
+          { label: "P/S",      value: formatRatio(fundamentals?.price_to_sales ?? null, "") },
+          { label: "P/B",      value: formatRatio(fundamentals?.price_to_book ?? null, "") },
+          { label: "EV/EBITDA",value: formatRatio(fundamentals?.ev_to_ebitda ?? null, "") },
+          { label: "FCF",      value: formatMarketCap(snapshot?.free_cash_flow ?? null) },
+        ]}
+      />
 
-      {/* ── MARGINS (rows 8-12) ───────────────────────────────────────────── */}
-      <MetricRow label="GROSS MARGIN" value={formatPercent(fundamentals?.gross_margin ?? null)} />
-      <MetricRow label="OPER MARGIN" value={formatPercent(fundamentals?.operating_margin ?? null)} />
-      <MetricRow label="NET MARGIN" value={formatPercent(fundamentals?.net_margin ?? null)} color={netMarginColor(fundamentals?.net_margin)} />
-      <MetricRow label="ROE" value={formatPercent(fundamentals?.roe ?? null)} color={roeColor(fundamentals?.roe)} />
-      <MetricRow label="ROA" value={formatPercent(fundamentals?.roa ?? null)} color={signColor(fundamentals?.roa)} />
-      <MetricGroupDivider />
+      {/* ── MARGINS block (4 cols × 2 rows = 8 cells) ───────────────────── */}
+      <MetricGrid4Col
+        title="Margins"
+        cells={[
+          { label: "GROSS",    value: formatPercent(fundamentals?.gross_margin ?? null) },
+          { label: "OPER",     value: formatPercent(fundamentals?.operating_margin ?? null) },
+          { label: "NET",      value: formatPercent(fundamentals?.net_margin ?? null),  color: netMarginColor(fundamentals?.net_margin) },
+          { label: "FCF MGN",  value: formatPercent(snapshot?.fcf_margin ?? null) },
+          { label: "ROE",      value: formatPercent(fundamentals?.roe ?? null),         color: roeColor(fundamentals?.roe) },
+          { label: "ROA",      value: formatPercent(fundamentals?.roa ?? null),         color: signColor(fundamentals?.roa) },
+          { label: "REV GRW",  value: formatPercent(fundamentals?.revenue_growth_yoy ?? null),  color: signColor(fundamentals?.revenue_growth_yoy) },
+          { label: "EPS GRW",  value: formatPercent(fundamentals?.earnings_growth_yoy ?? null), color: signColor(fundamentals?.earnings_growth_yoy) },
+        ]}
+      />
 
-      {/* ── LEVERAGE (rows 13-14) ─────────────────────────────────────────── */}
-      <MetricRow label="DEBT/EQUITY" value={formatRatio(fundamentals?.debt_to_equity ?? null)} color={debtColor(fundamentals?.debt_to_equity)} />
-      <MetricRow label="CURRENT RATIO" value={formatRatio(fundamentals?.current_ratio ?? null)} />
-      <MetricGroupDivider />
-
-      {/* ── YIELD (rows 15-16) ────────────────────────────────────────────── */}
-      <MetricRow label="DIV YIELD" value={formatPercent(fundamentals?.dividend_yield ?? null)} />
-      <MetricRow label="BETA" value={snapshot?.beta != null ? snapshot.beta.toFixed(2) : null} color={betaColor(snapshot?.beta)} />
-      <MetricGroupDivider />
+      {/* ── LEVERAGE + YIELD block (4 cols × 2 rows = 8 cells) ──────────── */}
+      <MetricGrid4Col
+        title="Leverage / Yield"
+        cells={[
+          { label: "D/E",      value: formatRatio(fundamentals?.debt_to_equity ?? null),  color: debtColor(fundamentals?.debt_to_equity) },
+          { label: "CURR",     value: formatRatio(fundamentals?.current_ratio ?? null) },
+          { label: "QUICK",    value: formatRatio(fundamentals?.quick_ratio ?? null) },
+          { label: "INT COV",  value: snapshot?.interest_coverage != null ? snapshot.interest_coverage.toFixed(1) : null },
+          { label: "DIV YLD",  value: formatPercent(fundamentals?.dividend_yield ?? null) },
+          { label: "PAYOUT",   value: formatPercent(fundamentals?.payout_ratio ?? null) },
+          { label: "BETA",     value: snapshot?.beta != null ? snapshot.beta.toFixed(2) : null, color: betaColor(snapshot?.beta) },
+          { label: "SHORT %",  value: formatPercent(shortPct), color: shortColor(shortPct) },
+        ]}
+      />
 
       {/* ── 52W RANGE (rows 17-19) — full-width WeekRangeBar at row 19 ────── */}
       <MetricRow label="52W HIGH" value={formatPrice(fundamentals?.week_52_high ?? null)} />
@@ -166,10 +187,8 @@ export function MetricsTable({ instrumentId, fundamentals: fundamentalsProp, quo
       <WeekRangeBar high={fundamentals?.week_52_high ?? null} low={fundamentals?.week_52_low ?? null} current={price} />
       <MetricGroupDivider />
 
-      {/* ── OWNERSHIP (rows 20-23) ────────────────────────────────────────── */}
+      {/* ── OWNERSHIP (rows 20-22) ── SHORT% now in LEV/YIELD grid (Δ40) ─── */}
       <MetricRow label="AVG VOL 30D" value={formatVolume(snapshot?.avg_volume_30d ?? null)} />
-      {/* SHORT %: ShortPercent is decimal-form per EODHD — feed directly. */}
-      <MetricRow label="SHORT %" value={formatPercent(shortPct)} color={shortColor(shortPct)} />
       {/* INST/INSIDER OWN: normalized above (raw% ÷ 100) before passing to formatPercent. */}
       <MetricRow label="INST OWN" value={formatPercent(pctInstitutions)} />
       <MetricRow label="INSIDER OWN" value={formatPercent(pctInsiders)} />

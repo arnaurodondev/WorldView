@@ -1,7 +1,9 @@
 """Unit tests for RetrievalPlanBuilder (PLAN-0063 W5-3 / T-E-2-02).
 
-Verifies every intent's flag matrix, cypher_enabled gating, and the
-FINANCIAL_DATA/RELATIONSHIP use_chunks=True fix (commit 9414a8b8).
+Verifies every intent's flag matrix and the FINANCIAL_DATA/RELATIONSHIP
+use_chunks=True fix (commit 9414a8b8). The cypher_enabled feature flag was
+removed in 2026-05 — ``use_cypher`` is now driven purely by the per-intent
+matrix; the tool-use loop is the runtime gate for the cypher traversal tool.
 """
 
 from __future__ import annotations
@@ -20,8 +22,8 @@ _ENTITY_ID = UUID("00000000-0000-0000-0000-000000000001")
 # ── Helpers ────────────────────────────────────────────────────────────────────
 
 
-def _builder(cypher_enabled: bool = False) -> RetrievalPlanBuilder:
-    return RetrievalPlanBuilder(cypher_enabled=cypher_enabled)
+def _builder() -> RetrievalPlanBuilder:
+    return RetrievalPlanBuilder()
 
 
 # ── use_chunks=True coverage (regression for FINANCIAL_DATA / RELATIONSHIP) ───
@@ -59,7 +61,7 @@ def test_financial_data_flags() -> None:
     assert plan.use_graph is False
     assert plan.use_contradictions is False
     assert plan.use_portfolio is False
-    assert plan.use_cypher is False  # base False, feature flag gated
+    assert plan.use_cypher is False  # intent matrix base False
 
 
 # ── RELATIONSHIP matrix ───────────────────────────────────────────────────────
@@ -77,24 +79,17 @@ def test_relationship_flags() -> None:
     assert plan.use_portfolio is False
 
 
-def test_relationship_cypher_disabled_by_default() -> None:
-    """cypher_enabled=False → use_cypher=False even for RELATIONSHIP (Cypher gated)."""
-    plan = _builder(cypher_enabled=False).build(QueryIntent.RELATIONSHIP)
-    assert plan.use_cypher is False
-
-
-def test_relationship_cypher_enabled() -> None:
-    """cypher_enabled=True → RELATIONSHIP gets use_cypher=True (feature flag open)."""
-    plan = _builder(cypher_enabled=True).build(QueryIntent.RELATIONSHIP)
-    assert plan.use_cypher is True
+def test_relationship_uses_cypher() -> None:
+    """RELATIONSHIP intent → use_cypher=True (per intent matrix)."""
+    assert _builder().build(QueryIntent.RELATIONSHIP).use_cypher is True
 
 
 # ── REASONING matrix ──────────────────────────────────────────────────────────
 
 
-def test_reasoning_cypher_gated() -> None:
-    assert _builder(cypher_enabled=False).build(QueryIntent.REASONING).use_cypher is False
-    assert _builder(cypher_enabled=True).build(QueryIntent.REASONING).use_cypher is True
+def test_reasoning_uses_cypher() -> None:
+    """REASONING intent → use_cypher=True (per intent matrix)."""
+    assert _builder().build(QueryIntent.REASONING).use_cypher is True
 
 
 # ── GENERAL minimal matrix ────────────────────────────────────────────────────

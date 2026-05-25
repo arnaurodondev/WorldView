@@ -138,6 +138,17 @@ allowlist:
       the reasoning (PRD §6.7 Block 5 watchlist signal sourcing).
     granted_at: "2026-05-07"
 
+  - class_name: EntityRefreshConsumer
+    module_path: services.nlp-pipeline.src.nlp_pipeline.infrastructure.messaging.consumers.entity_refresh_consumer
+    justification: >
+      Natural idempotency: the side effect is `UPDATE entity_embedding_state SET
+      next_refresh_at = now()` — re-delivery flips the column to now() again, which
+      is a no-op for the downstream DefinitionRefreshWorker poller (the row was
+      already due). is_duplicate() returns False unconditionally; mark_processed()
+      is a no-op. Follows the WatchlistEventConsumer pattern (also nlp-pipeline,
+      also natural idempotency). REQ-003 / TASK-W0-06.
+    granted_at: "2026-05-20"
+
   # ── portfolio ─────────────────────────────────────────────────────────────
   - class_name: InstrumentEventConsumer
     module_path: services.portfolio.src.portfolio.infrastructure.messaging.consumers.instrument_consumer

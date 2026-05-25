@@ -82,7 +82,7 @@ class TestListTemporalEventsUseCase:
                 to_date=to_date,
                 limit=100,
                 offset=20,
-            )
+            ),
         )
 
         call_kwargs = repo.list_active.call_args.kwargs

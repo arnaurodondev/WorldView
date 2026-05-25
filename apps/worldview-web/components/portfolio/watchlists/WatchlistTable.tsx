@@ -56,7 +56,7 @@ export function WatchlistTable({
     <div className="overflow-auto">
       <table className="w-full border-collapse text-[11px]">
         <thead className="sticky top-0 bg-card z-10">
-          <tr className="h-[22px] border-b border-border">
+          <tr className="h-[20px] border-b border-border">
             <th className="px-2 text-[10px] uppercase tracking-[0.08em] text-muted-foreground text-left font-normal">
               TICKER
             </th>

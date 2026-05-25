@@ -93,7 +93,8 @@ def test_market_dataset_fetched_schema_version() -> None:
 
 
 @pytest.mark.unit
-def test_to_dict_produces_27_keys() -> None:
+def test_to_dict_produces_28_keys() -> None:
+    """BP-492: schema grew by 1 (is_backfill) — to_dict now emits 28 keys."""
     evt = _make_event(
         exchange="NASDAQ",
         timeframe="1d",
@@ -104,7 +105,7 @@ def test_to_dict_produces_27_keys() -> None:
         task_id="task-abc",
     )
     d = evt.to_dict()
-    assert len(d) == 27
+    assert len(d) == 28
 
 
 @pytest.mark.unit
@@ -263,3 +264,46 @@ def test_market_dataset_fetched_row_count_roundtrip_none() -> None:
     assert d["row_count"] is None
     restored = MarketDatasetFetched.from_dict(d)
     assert restored.row_count is None
+
+
+# ── BUG-009 / BP-492: is_backfill propagation ────────────────────────────────
+
+
+@pytest.mark.unit
+def test_market_dataset_fetched_is_backfill_default_false() -> None:
+    """Forward-compat (R11): is_backfill defaults to False on construction."""
+    evt = _make_event()
+    assert evt.is_backfill is False
+
+
+@pytest.mark.unit
+def test_market_dataset_fetched_is_backfill_explicit_true_serializes() -> None:
+    """When constructed with is_backfill=True, to_dict serializes the flag."""
+    evt = _make_event(is_backfill=True)
+    d = evt.to_dict()
+    assert d["is_backfill"] is True
+
+
+@pytest.mark.unit
+def test_market_dataset_fetched_is_backfill_roundtrip() -> None:
+    """from_dict restores is_backfill — round-trip preserves the flag."""
+    evt = _make_event(is_backfill=True)
+    d = evt.to_dict()
+    restored = MarketDatasetFetched.from_dict(d)
+    assert restored.is_backfill is True
+
+
+@pytest.mark.unit
+def test_market_dataset_fetched_is_backfill_missing_key_defaults_false() -> None:
+    """Forward-compat: payloads without is_backfill (older producer) restore as False.
+
+    This is the contract that keeps the addition R11-safe: when a consumer
+    upgrades before the producer, decoding a stale payload must not raise and
+    must default the new field to its declared Avro default (false).
+    """
+    evt = _make_event()
+    d = evt.to_dict()
+    # Simulate an older payload by dropping the new key.
+    d.pop("is_backfill")
+    restored = MarketDatasetFetched.from_dict(d)
+    assert restored.is_backfill is False

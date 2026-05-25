@@ -18,10 +18,18 @@ class ConcreteStorage(ObjectStorage):
 
     async def put_bytes(
         self, bucket: str, key: str, data: bytes, content_type: str = "application/octet-stream"
-    ) -> None:
+    ) -> str | None:
+        # Minimal fake: persist the bytes and pretend the backend did not return
+        # an ETag. Production fakes that exercise W4-05 claim-check verification
+        # should compute and return a deterministic digest here.
         self._data[(bucket, key)] = data
+        return None
 
-    async def get_bytes(self, bucket: str, key: str) -> bytes:
+    async def get_bytes(self, bucket: str, key: str, *, expected_etag: str | None = None) -> bytes:
+        # The in-memory fake doesn't track ETags, so an ``expected_etag`` value
+        # is accepted for signature parity but never actually compared. Tests
+        # that need ETag verification should use ``S3ObjectStorage`` with a
+        # mocked boto3 client (see test_s3_adapter.py::TestETag).
         return self._data[(bucket, key)]
 
     async def delete(self, bucket: str, key: str) -> None:

@@ -28,8 +28,20 @@ class TestPostgresContainer:
         assert result == 1
 
     async def test_migrations_run_successfully(self, _migrated_db: str) -> None:
-        """Confirm that Alembic migration 016 is the head after upgrade head."""
+        """Alembic head in the live DB matches the highest revision on disk.
+
+        Computes the expected head from the local ``alembic`` script directory
+        (the source of truth) instead of hardcoding a literal version string —
+        otherwise every new migration silently regresses this assertion.
+        See docs/BUG_PATTERNS.md BP-493 (hardcoded migration version literals).
+        """
         import asyncpg
+        from alembic.config import Config
+        from alembic.script import ScriptDirectory
+
+        # Resolve the expected head from the on-disk migration chain.
+        alembic_cfg = Config("alembic.ini")
+        expected_head = ScriptDirectory.from_config(alembic_cfg).get_current_head()
 
         dsn = _migrated_db.replace("postgresql+asyncpg://", "postgresql://")
         conn = await asyncpg.connect(dsn)
@@ -37,7 +49,10 @@ class TestPostgresContainer:
         await conn.close()
 
         version_nums = {row["version_num"] for row in rows}
-        assert "016" in version_nums, f"Expected migration '016' to be head, got: {version_nums}"
+        assert expected_head in version_nums, (
+            f"Expected migration {expected_head!r} (from on-disk chain) to be in "
+            f"alembic_version, got: {version_nums}"
+        )
 
 
 class TestKafkaContainer:

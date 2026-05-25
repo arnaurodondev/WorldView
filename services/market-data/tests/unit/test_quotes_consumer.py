@@ -315,3 +315,66 @@ async def test_quotes_consumer_null_bid_ask_handled() -> None:
     assert quote.ask is None
     assert quote.last is None
     assert quote.volume is None
+
+
+# ── BUG-009 / BP-492: gate live-cache hot-paths on is_backfill ────────────────
+
+
+@pytest.mark.asyncio
+async def test_quotes_consumer_backfill_skips_quote_cache_invalidation() -> None:
+    """When is_backfill=True, the quote cache MUST NOT be invalidated.
+
+    Backfill replays would otherwise dump historical "last" prices into the
+    live cache and trip price alerts on stale data (BUG-009).
+    """
+    instrument = _make_instrument()
+    captured_hooks: list = []
+    mock_uow = AsyncMock()
+    mock_uow.instruments.find_by_symbol_exchange = AsyncMock(return_value=instrument)
+    mock_uow.quotes.upsert = AsyncMock(return_value=None)
+    mock_uow.schedule_post_commit = MagicMock(side_effect=captured_hooks.append)
+
+    mock_storage = AsyncMock()
+    mock_storage.get_bytes = AsyncMock(return_value=_make_quote_json())
+
+    mock_cache = AsyncMock()
+    mock_cache.invalidate = AsyncMock()
+
+    consumer = _make_consumer(mock_uow, mock_storage, quote_cache=mock_cache)
+    msg = _make_message()
+    # Backfill payload — consumer should skip BOTH cache invalidate and snapshot warm.
+    msg["is_backfill"] = True
+
+    await consumer.process_message(None, msg, {})
+
+    # DB upsert still happens (historical data is durably stored).
+    mock_uow.quotes.upsert.assert_awaited_once()
+    # …but no cache hot-paths were scheduled.
+    assert captured_hooks == []
+    mock_cache.invalidate.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_quotes_consumer_live_event_still_invalidates_cache() -> None:
+    """Backward-compat: a payload without is_backfill (or with False) still warms the cache."""
+    instrument = _make_instrument()
+    captured_hooks: list = []
+    mock_uow = AsyncMock()
+    mock_uow.instruments.find_by_symbol_exchange = AsyncMock(return_value=instrument)
+    mock_uow.quotes.upsert = AsyncMock(return_value=None)
+    mock_uow.schedule_post_commit = MagicMock(side_effect=captured_hooks.append)
+
+    mock_storage = AsyncMock()
+    mock_storage.get_bytes = AsyncMock(return_value=_make_quote_json())
+
+    mock_cache = AsyncMock()
+    mock_cache.invalidate = AsyncMock()
+
+    consumer = _make_consumer(mock_uow, mock_storage, quote_cache=mock_cache)
+    # Default _make_message() does NOT carry is_backfill (older producer scenario).
+    await consumer.process_message(None, _make_message(), {})
+
+    # One post-commit hook scheduled (the cache invalidation).
+    assert len(captured_hooks) == 1
+    await captured_hooks[0]
+    mock_cache.invalidate.assert_awaited_once_with("instr-789")

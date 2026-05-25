@@ -1,7 +1,7 @@
 # Worldview Design System
 
 > **Single source of truth** for all frontend design decisions: tokens, components, patterns, and UX conventions.
-> **Last updated**: 2026-04-23 (v2.3 — Terminal Dark palette overhaul: #09090B bg + Bloomberg yellow (#FFD60A) + zinc text)
+> **Last updated**: 2026-05-20 (v2.4 — PRD-0089 F1: Bloomberg-grade visual contract: sharp corners, 20px rows, 4-tier animation policy, primitives catalogue) · 2026-04-23 (v2.3 — Terminal Dark palette overhaul)
 >
 > Referenced by: `/design-ui` skill, `/scaffold-frontend` skill, `ux-ui-designer` agent, `frontend-engineer` agent.
 >
@@ -213,7 +213,27 @@ acceptable in that context.
 | Section gap | `space-y-4` or `space-y-6` | Between panels |
 | Grid columns | `grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3` | Metric grids |
 | Max content width | `max-w-7xl mx-auto` | Constrained page layouts |
-| Sidebar width | `w-[220px]` | Fixed, not resizable |
+| Sidebar width | `w-[200px]` (PRD-0089 W1 default) | Drag-resizable 160–340px |
+
+### 4.1 Global Shell (PRD-0089 W1 — locked 2026-05-20)
+
+The application shell rendered by `app/(app)/layout.tsx` consumes the
+following hard tokens; per-page surfaces never override them.
+
+| Region | Class / size | Notes |
+|--------|--------------|-------|
+| TopBar | `h-8` (32px) | 17 information slots: wordmark · GlobalSearch · PortfolioSwitcher (+DemoBadge) · IndexStrip (10 cells) · UtcClock · MarketStatusPill · PortfolioRail · AskAi · RefreshAll · Bell · Avatar |
+| IndexStrip cell | `w-[88px] h-6` | 10-cell horizontally-scrolling marquee (6s × N = 60s cycle); pause on hover/focus-within; `prefers-reduced-motion` hides the duplicate pass and freezes the strip; hidden below `lg`. (W1.1 H-001 reverted the W1 "static strip" decision per direct user preference.) |
+| PortfolioSwitcher chip | `h-6` | Always visible (FU-1.1) — even with zero or one portfolio; `Alt+P` toggles the 240px dropdown |
+| CollapsibleSidebar | `w-[200px]` expanded / `w-10` collapsed | Drag-resize 160–340 (`mod+b` toggles); `worldview-sidebar-expanded` localStorage multi-tab sync |
+| Sidebar nav row | `h-7 px-2.5 gap-1.5` | Icon `size-[14px]`, label `text-[10px]`; active = `bg-primary/10 text-primary border-l-2 border-primary` |
+| WatchlistPanel row | 20px via `data-table-grid` | Ticker 44px / Price flex-1 / Chg% 44px / FreshnessDot / 40×16 Sparkline; click → `/instruments/{TICKER}` (F2) |
+| StatusBar | `h-[22px]` | Top border = `border-border-subtle` (F1); WS dot from `useAlertStream().isConnected`; "MARKET CLOSED" override when `useMarketStatus().overall === "closed"` |
+| ForceUpdateBanner | `h-6` sticky above TopBar | Renders only when a new build is detected; otherwise returns null (zero height reserved) |
+| Skip-to-content | First focusable child | `sr-only focus:not-sr-only`, target `<main id="main">` |
+| Sonner Toaster | top-right, z-60 | Above shell chrome (TopBar z-50, sidebar z-40); below FlashOverlay (z-9999) |
+
+`docs/plans/0089-pages/W1-global-shell-plan.md` is the canonical source.
 
 ---
 
@@ -276,8 +296,10 @@ Purpose-built components for financial data. Implement these consistently:
 
 | Component | File path | Notes |
 |-----------|-----------|-------|
-| `Sidebar` | `components/shell/Sidebar.tsx` | 56px icon-only nav rail, watchlist prices, keyboard hint strip |
-| `TopBar` | `components/shell/TopBar.tsx` | Logo + GlobalSearch + IndexTicker + alerts badge + avatar |
+| `CollapsibleSidebar` | `components/shell/CollapsibleSidebar.tsx` | 200px expanded / 40px collapsed; nav + WatchlistPanel + AlarmsPanel + bottom chrome (PRD-0089 W1 §4.4) |
+| `TopBar` | `components/shell/TopBar.tsx` | 17 information slots (PRD-0089 W1 §4.3): wordmark + GlobalSearch + PortfolioSwitcher + IndexStrip + UtcClock + MarketStatusPill + PortfolioRail + AskAi + Refresh + Bell + Avatar |
+| `IndexStrip` | `components/shell/IndexStrip.tsx` | Animated 10-cell horizontal marquee (SPY/QQQ/IWM/VIX/DIA/TLT/^TNX/BTC-USD/GLD/USO); pause-on-hover, reduced-motion-safe (duplicate pass hidden) |
+| `PortfolioSwitcher` | `components/shell/PortfolioSwitcher.tsx` | Always-visible chip + 240px dropdown; ROOT default per DISCUSS-1; `Alt+P` toggles |
 | `GlobalSearch` | `components/shell/GlobalSearch.tsx` | ⌘K command palette overlay (cmdk) |
 | `UtcClock` | `components/shell/UtcClock.tsx` | Live UTC clock display |
 | `IndexTicker` | `components/shell/IndexTicker.tsx` | Center-bar market index prices |
@@ -1112,7 +1134,7 @@ For full implementation from a design, use `/scaffold-frontend`.
 | OQ-6 | LIGHT tier articles | Resolved | Show with opacity 0.6, italic source |
 | OQ-7 | ImpactSparkline threshold | Resolved | ≥2 windows |
 | OQ-8 | Professional table density | Resolved | `CompactTable` (text-xs, h-8 rows) for Holdings, Fundamentals, Screener; standard table for non-financial pages |
-| OQ-9 | entity_id vs instrument_id | Resolved | Distinct UUIDs. `GET /v1/instruments/{id}/context` S9 composition resolves both. See ADR-F-12 in PRD-0027. |
+| OQ-9 | entity_id vs instrument_id | **Re-resolved 2026-05-20 (F2 / PRD-0089)** | Unified per [ADR-F-16](../architecture/decisions/ADR-F-16-instrument-entity-id-unification.md): for `entity_type = 'financial_instrument'`, `entity_id == instrument_id` (M-017 enforced). Non-tradable kinds (persons, events, sectors) keep an independent `entity_id`. URLs use tickers (`/instruments/${TICKER}`), not UUIDs. ADR-F-12 (PRD-0027 §1367) is superseded. |
 | OQ-10 | Portfolio chart library | Resolved | recharts (donut + horizontal bar); code-split to `/portfolio` route only |
 | OQ-11 | Sector heat map data | Resolved | Batch quotes for 11 SPDR sector ETFs (XLK…XLC) via `POST /v1/quotes/batch` |
 | OQ-12 | Landing page hero copy | Resolved | "Bloomberg-Grade Research. Without the Bloomberg Bill." (see PRD-0027 §3 F-01) |
@@ -1575,3 +1597,144 @@ above while reaffirming that financial data values are excluded.
 > W0 adds the chart/entity tokens without touching the topbar value to avoid
 > unintended layout breakage.
 
+---
+
+## 16. PRD-0089 F1 — Bloomberg-grade visual contract
+
+> **Status**: shipped 2026-05-20 (branch `feat/plan-0089-f1`).
+> Plan: `docs/plans/0089-pages/F1-design-system-foundation-plan.md`
+> Decisions: `docs/designs/0089/oq/_DECISIONS.md`.
+
+F1 is the foundation wave that every PRD-0089 per-page wave (Global Shell,
+Dashboard, Portfolio, Quote, Financials, Intelligence, Screener, Workspace,
+Chat) consumes. It locks the terminal-grade visual contract — sharp corners,
+zero shadows, 20px rows, 6px cell padding, three-tier focus rings, four-tier
+animation policy, and a unified primitive catalogue.
+
+### 16.1 Tiered density floor (FU-5.5)
+
+Pages no longer share a single 40-cell density floor. The tier map below is
+enforced by the Playwright canary `tests/e2e/density-screener.spec.ts`:
+
+| Page | Minimum `[data-cell]` count |
+|------|----------------------------:|
+| Header / Global Shell | 40 |
+| Quote tab | 100 |
+| Intelligence | 100 |
+| Financials | 150 |
+| Dashboard | 200 |
+| Portfolio | 250 |
+| Screener | 240 |
+
+### 16.2 Four-tier animation taxonomy (codifies DISCUSS-4)
+
+| Tier | Use | Allowed properties | Max duration |
+|------|-----|-------------------|---------------|
+| T0 — Data | Numeric values, chart bars, sparkline data, layout-shift props (width/height/max-h) | none | 0ms |
+| T1 — Affordance | Hover / focus on rows, buttons, links | `color`, `background-color`, `border-color`, `fill`, `stroke` | 100ms |
+| T2 — Chrome state | Popovers, dropdowns, accordions, modals open/close | `opacity`, `transform: translate/scale`, `clip-path` | 200ms |
+| T3 — Indicator | Spinners, skeleton-pulse, chat-token-stream, brief-generate-progress, flash-in alerts | any | unbounded (keyframe-driven) |
+
+Components MUST use the named token utilities `transition-color-only`
+(Tier-1) and `transition-color-and-opacity` (Tier-2) introduced in PR-A's
+`tailwind.config.ts` diff — never `transition-all`.
+
+### 16.3 `data-table-grid` opt-in scope (FU-5.5)
+
+The opt-in wrapper applies the 20px row + 6px cell-padding contract to
+descendants. Only 7 v1 surfaces are whitelisted:
+
+1. Screener results table
+2. Holdings table
+3. Transactions ledger
+4. Financials FlatMetricsGrid
+5. Watchlist
+6. Workspace data panels
+7. Peer Comparison
+
+Pages opt in by adding `<div data-table-grid>` (or
+`<div data-table-grid="dense">` for 18px rows). The global rules in
+`app/globals.css` then drive `--row-h`, `--cell-px`, and inner cell/row
+dividers via the `--border-subtle` token.
+
+### 16.4 Primitives catalogue
+
+All primitives live under `components/primitives/` and are imported from
+the `@/components/primitives` barrel. Per-page reuse matrix is in the
+plan §3.3.
+
+| Primitive | Purpose | LOC |
+|-----------|---------|----:|
+| `MetricLabel` | 10px uppercase metric label | 23 |
+| `MetricValue` | 11px mono tabular-nums value with em-dash fallback | 50 |
+| `SectionDivider` | 1px col-span-3 break inside grids (now uses --border-subtle) | 33 |
+| `DataTimestamp` | "Data as of …" footer for panels | 27 |
+| `TableRow` | role=row wrapper reading var(--row-h) from data-table-grid | 60 |
+| `MetricCell` | Single label+value cell inside a row | 65 |
+| `Sparkline` | 40×16 trend-tinted single-path SVG (±0.1% auto-trend) | 95 |
+| `SeverityCharBadge` | 1-char severity glyph (! / * / · / space) | 50 |
+| `BulkActionToolbar` | 22px row above tables; hides when 0 selected | 90 |
+| `DenseArticleRow` | 18px news row with left sentiment stripe | 110 |
+| `InlineCitationAnchor` | `[c1]`-style chip + HoverCard preview | 90 |
+| `FreshnessDot` | 6px live/stale/closed/after-hours dot | 50 |
+| `DataFreshnessPill` | Relative + absolute UTC freshness banner | 65 |
+| `EmptyState` | 5-condition empty state via copy dictionary | 55 |
+| `LoadingSkeleton` | 4-variant loader (table-row, cell, chart-block, sparkline-dotted) | 75 |
+| `DemoBadge` | "DEMO" outlined chip | 25 |
+| `AiContentRail` | 2px left rail in accent-ai violet for AI-generated text | 25 |
+| `FocusRing` | Constants for 3-tier focus rings (T1/T2/T3) | 30 |
+
+Empty-state copy lives in `lib/copy/empty-states.ts`. Per-page agents
+extend this dictionary with new keys; the new
+`empty-copy-dictionary` arch-test guarantees every `<EmptyState
+copyKey="X">` resolves.
+
+### 16.5 Architecture-test guardrails
+
+`__tests__/architecture/` carries the F1 enforcement contract across
+four test files.  All four pass on `main` and any regression fails CI:
+
+1. **`no-off-palette-colors.test.ts`** — pre-existing palette/radius/
+   currency guard *plus* the `describe("PRD-0089 F1 lockdown")` block
+   exposing the 7 forbidden regex constants `F1_FORBIDDEN_{ROUNDED,
+   TEXT_SIZE,SHADOW,ROW_RING2,TRANSITION,DURATION,GAP}`.
+2. **`animation-policy.test.ts`** — bans `transition-{all|transform|
+   shadow}` and `duration-{300|500|700|1000}` outside `animate-*`
+   keyframe utilities.  Components must use `transition-color-only`
+   (T1) or `transition-color-and-opacity` (T2), or an arbitrary
+   `transition-[transform]` / `transition-[width]` for legitimate
+   layout-property animations.
+3. **`empty-copy-dictionary.test.ts`** — every literal `<EmptyState
+   copyKey="X">` resolves to a key in `lib/copy/empty-states.ts`.
+4. **`data-table-grid-scope.test.ts`** — the `data-table-grid`
+   attribute appears only inside the 7 whitelisted v1 surfaces
+   (Screener, Holdings, Transactions, FlatMetricsGrid, Watchlist,
+   Workspace, Peer Comparison).
+
+The F1.1 amendment (2026-05-20) closed every remaining offence:
+~200 `text-{sm..7xl}` sites were converted to exact-pixel arbitrary
+values (`text-[14px]`, `text-[30px]`, …), 9 marketing `shadow-*`
+sites were stripped (Tailwind config already maps them to `none`,
+so this was lint cleanup), 17 `transition-{all|transform|shadow}`
+sites were converted to named tokens or arbitrary forms, 2
+`duration-300/500` sites were narrowed to 200ms, and 8 `gap-{6|8|10|12}`
+sites were converted to arbitrary pixel values.  `F1_ALLOWED_FILES`
+remains empty — the codebase is fully clean under the locked scale.
+
+### 16.6 Tokens added in F1
+
+| Token | Value | Use |
+|-------|-------|-----|
+| `--border-strong` | `240 4% 22%` (#37373B) | Cell-grid lines inside `data-table-grid` |
+| `--border-subtle` | `240 4% 13%` (#1E1E22) | Row dividers inside `data-table-grid`, SectionDivider |
+| `--row-h` | `20px` | Default tabular row height |
+| `--row-h-dense` | `18px` | Hyper-dense rows (transactions ledger, screener) |
+| `--cell-px` | `6px` (inside `data-table-grid` only — `8px` elsewhere) | Horizontal cell padding |
+
+`--radius` is collapsed to `0` globally — sharp corners contract.
+
+### 16.7 Pointer
+
+For the locked variant decisions on each surface (corner radii, row
+heights, divider tokens), see
+`docs/designs/0089/oq/_DECISIONS.md` §H.

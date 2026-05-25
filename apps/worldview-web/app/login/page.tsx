@@ -270,10 +270,10 @@ function LoginContent() {
       <div className="w-full max-w-sm space-y-6">
         {/* Wordmark — text-only for crisp rendering at small sizes */}
         <div className="text-center">
-          <h1 className="text-xl font-semibold tracking-tight text-foreground">
+          <h1 className="text-[20px] font-semibold tracking-tight text-foreground">
             Worldview
           </h1>
-          <p className="mt-1 text-sm text-muted-foreground">
+          <p className="mt-1 text-[14px] text-muted-foreground">
             Market intelligence terminal
           </p>
         </div>
@@ -284,7 +284,7 @@ function LoginContent() {
             role="alert"
             // WHY rounded-[2px] (was rounded-md=6px): Terminal Dark uses 2px
             // for all corner radii; 6px reads as a consumer-app pattern.
-            className="rounded-[2px] border border-destructive/50 bg-destructive/10 px-4 py-3 text-sm text-destructive"
+            className="rounded-[2px] border border-destructive/50 bg-destructive/10 px-4 py-3 text-[14px] text-destructive"
           >
             {error}
           </div>
@@ -332,7 +332,7 @@ function LoginContent() {
 
         {/* Register link — navigates to register page which redirects to Zitadel self-registration */}
         {!devLoginAvailable && (
-          <p className="text-center text-sm text-muted-foreground">
+          <p className="text-center text-[14px] text-muted-foreground">
             Don&apos;t have an account?{" "}
             <a
               href="/register"

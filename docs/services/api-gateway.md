@@ -101,12 +101,12 @@ To register a new service caller:
 Collapses the instrument-detail page's overview-tab waterfall into a single
 HTTP request. Behavior:
 
+> **Post-F2 (PRD-0089, [ADR-F-16](../architecture/decisions/ADR-F-16-instrument-entity-id-unification.md))**: the historic Phase-1 → Phase-2 re-read (which resolved KG `entity_id` from `overview.instrument.instrument_id`) is gone. ~148 LOC deleted from `clients.py::get_instrument_page_bundle`. A single canonical UUID is used throughout; the bundle's `resolve_security_id(identifier)` accepts either a ticker or a UUID at the URL boundary. The two-phase fan-out is retained only for latency (composition of independent calls).
+
 - **Composition** — two-phase `asyncio.gather`:
-  - Phase 1: `get_company_overview` (which itself parallelises 5 calls and
-    resolves the KG `entity_id`).
-  - Phase 2 (uses Phase-1's resolved `entity_id`): full
-    `/api/v1/fundamentals/{id}` + `/technicals-snapshot` +
-    `/insider-transactions-snapshot` + S6 `/api/v1/news/entity/{entity_id}?limit=5`.
+  - Phase 1: `get_company_overview` (parallelises 5 calls).
+  - Phase 2: full `/api/v1/fundamentals/{id}` + `/technicals-snapshot` +
+    `/insider-transactions-snapshot` + S6 `/api/v1/news/entity/{id}?limit=5`. The same id is used in both phases (post-F2: `entity_id == instrument_id`).
 - **Per-call failures degrade gracefully** — failed sub-resources return
   `null` in the response. The bundle still returns 200 so the FE renders
   partial UIs rather than seeing a 5xx.
@@ -210,6 +210,7 @@ preferable to all-or-nothing for dashboard widgets.
 | GET | `/v1/entities/{entity_id}/narratives` | Paginated narrative version history. Query params: `limit`, `cursor` (PLAN-0074 Wave G) | Yes |
 | POST | `/v1/entities/{entity_id}/narratives/generate` | Manually trigger narrative generation. Proxy-layer rate limit: 1 req/hr/entity/user via `set_nx` (BP-200). Returns 202. (PLAN-0074 Wave G) | Yes |
 | GET | `/v1/entities/{entity_id}/paths` | Pre-computed multi-hop opportunity paths. Valkey-cached 5 min. Query params: `limit`, `min_score`, `min_hops`, `max_hops` (PLAN-0074 Wave G) | Yes |
+| GET | `/v1/entities/{entity_id}/sentiment-timeseries` | Daily sentiment aggregates for SENTI chart overlay (PLAN-0091 T-A-2-02). Query param: `days` (1-365, default 90). Proxies to S6 NLP. Returns `{entity_id, days, points: [{date, article_count, avg_relevance, positive_ratio, negative_ratio, avg_impact_score}]}`. All metric fields nullable. | Yes |
 
 ### Entity-Context Chat Endpoints (→ S8 RAG-Chat)
 
@@ -598,7 +599,9 @@ The `/v1/auth/callback` handler sanitizes `error` and `error_description` query 
 | GET | `/v1/portfolios/{id}/risk-metrics` | Drawdown, volatility, Sharpe, Sortino, beta vs SPY. Pure S9 composition over S1 value-history + S3 SPY OHLCV. Query param: `lookback_days` (10-3650, default 90). All metrics independently nullable. | Yes |
 
 **Response fields**: `drawdown_max`, `drawdown_current`, `volatility_annualized`, `sharpe`,
-`sortino`, `beta_vs_spy`, `n_returns`, `as_of`, `lookback_window`, `data_quality`.
+`sortino`, `beta_vs_spy`, `calmar`, `win_rate`, `alpha`, `period_return`, `cagr`, `var_95`, `n_returns`, `as_of`, `lookback_window`, `data_quality`.
+
+Wave G additions: `calmar` (annualised_return / |drawdown_max|), `win_rate` (fraction of positive daily returns [0,1]), `alpha` (portfolio_ann_return − spy_ann_return), `period_return` ((final − initial) / initial; null when < 2 points or initial ≤ 0), `cagr` ((final/initial)^(365.25/lookback_days) − 1; null when < 2 points or endpoints ≤ 0), `var_95` (5th-percentile daily return — negative for losses; null when < 10 returns). All six are null on contamination, on insufficient history, or when mathematically undefined.
 
 **`data_quality.status` values**:
 - `ok` — sufficient data and SPY available
@@ -614,7 +617,8 @@ The `/v1/auth/callback` handler sanitizes `error` and `error_description` query 
 | DELETE | `/v1/portfolios/{id}` | Archive portfolio | Yes |
 | GET | `/v1/portfolios/{id}/holding-lots` | FIFO lot breakdown per instrument | Yes |
 | GET | `/v1/portfolios/{id}/concentration` | Sector/asset class concentration | Yes |
-| GET | `/v1/portfolios/{id}/performance` | Performance metrics (Calmar, win-rate) | Yes |
+| GET | `/v1/portfolios/{id}/sector-attribution` | Live-priced GICS sector breakdown with day P&L (PLAN-0091 T-A-2-03). Returns `{portfolio_id, buckets: [{sector, holding_count, market_value, sector_weight_pct, sector_day_pnl}], covered_pct, prices_stale?}` | Yes |
+| GET | `/v1/portfolios/{id}/performance` | Period return: `{return_pct, return_abs, covered_pct}` for `period ∈ {1D, 1W, 1M}` (query param `period`). Does NOT compute Calmar or win-rate. S9 composition: holdings from S1 + OHLCV from S3. | Yes |
 | GET | `/v1/portfolios/{id}/transactions` | Transactions nested under portfolio | Yes |
 
 **Transaction note**: `GET /v1/transactions` forwards `portfolio_id` as `X-Portfolio-ID`

@@ -44,6 +44,7 @@ class PgInstrumentRepository(InstrumentRepository):
             industry=row.industry,
             country=row.country,
             currency_code=row.currency_code,
+            fiscal_year_end_month=row.fiscal_year_end_month,
         )
 
     @staticmethod

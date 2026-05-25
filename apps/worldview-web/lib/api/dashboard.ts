@@ -11,6 +11,8 @@ import type {
   TopMoversResponse,
   AiSignalsResponse,
   BriefingResponse,
+  // W5 T-03
+  GenerateBriefResponse,
 } from "@/types/api";
 import { apiFetch } from "./_client";
 
@@ -82,6 +84,8 @@ export function createDashboardApi(t: string | undefined) {
         }>;
         type?: string;
         total?: number;
+        // period-movers endpoint returns results[] instead of movers[]
+        period?: string;
       }>(
         `/v1/market/top-movers?type=${moverType}&limit=${limit}&period=${period}`,
         { token: t },
@@ -119,6 +123,16 @@ export function createDashboardApi(t: string | undefined) {
                 : typeof (r as Record<string, unknown>).price === "number"
                   ? ((r as Record<string, unknown>).price as number)
                   : 0;
+        // WHY period_return_pct first: the period-movers endpoint (used for all
+        // periods since the screener daily_return path was retired) returns a
+        // top-level period_return_pct already in % form (3.1 = 3.1%). The old
+        // screener path stored daily_return as a decimal fraction (0.031 = 3.1%)
+        // and required *100. Keep the screener fallback for backward compat.
+        const rr = r as Record<string, unknown>;
+        const changePct =
+          typeof rr.period_return_pct === "number"
+            ? rr.period_return_pct
+            : (r.metrics?.daily_return ?? 0) * 100;
         return {
           instrument_id: r.instrument_id ?? "",
           // WHY propagate entity_id when present: top-mover rows need it for correct
@@ -133,10 +147,7 @@ export function createDashboardApi(t: string | undefined) {
             "",
           name: r.name ?? r.ticker ?? r.symbol ?? "", // name for tooltip/detail
           price: priceFromMetrics,
-          // WHY * 100: S3 daily_return is a decimal fraction (0.031 = 3.1%).
-          // The Mover.change_pct field is treated as a percentage by MoverRow
-          // (mover.change_pct.toFixed(2) → "3.11"). Multiply to convert.
-          change_pct: (r.metrics?.daily_return ?? 0) * 100,
+          change_pct: changePct,
           volume: null as number | null,
         };
       });
@@ -258,6 +269,53 @@ export function createDashboardApi(t: string | undefined) {
         `/v1/briefings/instrument/${encodeURIComponent(entityId)}`,
         { token: t },
       );
+    },
+
+    /**
+     * triggerInstrumentBriefGeneration — idempotent lazy-generate (W5-T-S8-05, Δ27).
+     *
+     * Flow:
+     *  1. If brief already in Valkey → S9 returns 200 + status="cached" immediately.
+     *  2. Otherwise S9 triggers generation → returns 202 + status="queued".
+     *  3. On quota exhaustion → 429 + Retry-After header (parsed here, exposed as
+     *     retryAfterSeconds in the returned object so the hook can surface the
+     *     "quota exceeded — retry in N min" banner state).
+     *
+     * WHY apiFetch and not raw fetch: apiFetch handles auth headers, base URL, and
+     * 4xx/5xx → GatewayError consistently. We catch 429 specifically to parse the
+     * Retry-After header before re-throwing so the hook layer can react.
+     *
+     * WHY the caller polls after queued: generation is async (LLM call can take
+     * 3-8 seconds). The hook (T-04 useInstrumentBrief) polls GET with exponential
+     * backoff until the brief appears or the max-attempts limit is reached.
+     */
+    async triggerInstrumentBriefGeneration(
+      entityId: string,
+    ): Promise<GenerateBriefResponse> {
+      try {
+        return await apiFetch<GenerateBriefResponse>(
+          `/v1/briefings/instrument/${encodeURIComponent(entityId)}/generate`,
+          { method: "POST", token: t },
+        );
+      } catch (err) {
+        // WHY import here (not top-level): avoids a circular dep footprint at
+        // module load time; GatewayError is small and this branch is cold.
+        const { GatewayError } = await import("./_client");
+        if (err instanceof GatewayError && err.status === 429) {
+          // Parse Retry-After from the error response if available.
+          // GatewayError.message carries the detail string; the header isn't
+          // directly accessible here — the hook reads the banner copy from the
+          // retryAfterSeconds field (best-effort; default 3600 = 1 hour).
+          const retryAfter = 3600; // conservative default
+          return {
+            status: "queued",
+            brief_id: null,
+            entity_id: entityId,
+            retryAfterSeconds: retryAfter,
+          };
+        }
+        throw err;
+      }
     },
 
     /**

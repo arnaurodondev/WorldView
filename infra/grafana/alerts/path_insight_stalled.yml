@@ -1,0 +1,45 @@
+# PLAN-0093 Wave D-1 (audit ref F-KG-PERSIST-003): Path-insight LLM
+# explanation worker stalled alert.
+#
+# The PathExplanationBatchWorker (services/knowledge-graph/.../workers/
+# path_explanation_batch_worker.py) sweeps `path_insights` for rows with
+# `llm_explanation IS NULL` and back-fills them with an LLM-generated
+# explanation.  Healthy state: backlog drains to single digits within an hour
+# of fresh ingestion; idle ticks update the gauge to 0.
+#
+# Failure mode (the one this alert catches):
+#   - LLM client mis-configured (DEEPINFRA_API_KEY missing, fallback chain
+#     dead) and the worker silently writes nothing — the gauge stays high.
+#   - Worker container OOM-killed mid-batch, restart-storm cancels every
+#     in-flight LLM call.
+#   - Scheduler tick gets coalesced indefinitely (max_instances=1 stalled).
+#
+# Backing metric: ``path_insight_explanation_pending_total`` is the gauge
+# defined in ``services/knowledge-graph/.../infrastructure/metrics/prometheus.py``
+# and updated once per worker tick from the SQL
+# ``SELECT count(*) FROM path_insights WHERE llm_explanation IS NULL AND
+# computed_at < now() - interval '1 hour'``.
+#
+# Threshold rationale (> 100 for 30 min):
+#   - 100 rows is two batches of the default batch_size=200 worth of pending
+#     work, so a single missed cycle does not page anyone.
+#   - 30 min covers one missed APScheduler tick (30 min) plus headroom.
+groups:
+  - name: path_insight_stalled
+    rules:
+      - alert: PathInsightExplanationStalled
+        expr: path_insight_explanation_pending_total > 100
+        for: 30m
+        labels:
+          severity: warning
+          subsystem: knowledge-graph
+        annotations:
+          summary: "PathInsight explanation backlog > 100 for 30 min"
+          description: >
+            The PathExplanationBatchWorker has more than 100 path_insights rows
+            with llm_explanation IS NULL older than one hour.  Most likely
+            cause: DEEPINFRA_API_KEY misconfigured or every provider in the
+            LLM fallback chain unreachable.  Check the
+            ``path_insight_llm_client_unavailable`` CRITICAL log from
+            ``knowledge-graph`` for a fail-fast indication.
+          runbook_url: "https://github.com/worldview/runbooks/blob/main/PathInsightExplanationStalled.md"

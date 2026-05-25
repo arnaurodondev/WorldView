@@ -6,7 +6,55 @@ All callers import build_default_registry from tool_executor (re-exported there)
 
 from __future__ import annotations
 
+from typing import Any, cast
+
 from tools.tool_registry import ToolRegistry  # type: ignore[import-untyped,import-not-found]
+
+
+class ToolRegistryDriftError(RuntimeError):
+    """Raised at startup when the YAML manifest and handler registry disagree.
+
+    Fail-fast guard (PLAN-0093 QA P0-1, GraphEnricher dormant-tool follow-up):
+    a tool that exists in the manifest with no registered handler — or vice
+    versa — would otherwise only surface when the LLM tried to call it and
+    the user saw an opaque "tool unavailable" message.  Raising at boot
+    guarantees the orchestrator can never serve traffic while in this state.
+    """
+
+
+def validate_registry_parity(registry: ToolRegistry) -> dict[str, int]:
+    """Compare the YAML manifest against the registered handler set.
+
+    Returns the sizes ``{"manifest": N, "handled": M}`` for caller-side
+    metric emission.  Raises :class:`ToolRegistryDriftError` if either side
+    has an orphan — a tool in the manifest with no handler, or a registered
+    handler with no manifest entry.
+
+    The manifest is loaded via :meth:`ToolRegistry.load_manifest` (the same
+    loader the architecture tests use), so a single source of truth is
+    consulted both for parity here and for the R29 sync test.
+    """
+    manifest_doc = registry.load_manifest()
+    # The manifest schema is ``{"version": str, "tools": [{"name": str, ...}, ...]}``.
+    # We cast through Any because ``load_manifest`` returns ``dict[str, Any]`` and
+    # the entries are heterogeneous dicts.
+    tools_list = cast("list[dict[str, Any]]", manifest_doc.get("tools", []))
+    manifest_tools = {entry["name"] for entry in tools_list}
+    handled_tools = {spec.name for spec in registry.all_specs()}
+
+    # Orphan in manifest = YAML advertises a tool that no handler is registered for.
+    # Orphan in handlers = registry has a handler that the YAML manifest does not
+    # describe (so the LLM would never be told it exists).
+    orphan_in_manifest = manifest_tools - handled_tools
+    orphan_in_handlers = handled_tools - manifest_tools
+
+    if orphan_in_manifest or orphan_in_handlers:
+        raise ToolRegistryDriftError(
+            "Tool registry drift detected. "
+            f"In manifest only: {sorted(orphan_in_manifest)}. "
+            f"Handled only: {sorted(orphan_in_handlers)}."
+        )
+    return {"manifest": len(manifest_tools), "handled": len(handled_tools)}
 
 
 def build_default_registry() -> ToolRegistry:
@@ -595,8 +643,9 @@ def build_default_registry() -> ToolRegistry:
             name="screen_universe",
             description=(
                 "Quantitative screener — filters the instrument universe by market cap, P/E ratio, "
-                "sector, and region. Use when the user asks to screen, filter, or find stocks "
-                "that meet specific fundamental criteria."
+                "sector, industry, and region. Use when the user asks to screen, filter, or find "
+                "stocks that meet specific fundamental criteria. For AI-chip / semiconductor "
+                "queries, set sector='Technology' AND industry='Semiconductors' (GICS taxonomy)."
             ),
             parameters=[
                 ParameterSpec(
@@ -621,6 +670,15 @@ def build_default_registry() -> ToolRegistry:
                     name="sector",
                     type="string",
                     description="Sector filter (e.g. 'Technology', 'Healthcare')",
+                    required=False,
+                ),
+                # FIX-LIVE-M (2026-05-24): GICS industry filter — more specific than
+                # sector. "AI chip" / "semiconductor" queries need industry='Semiconductors'
+                # (sector='Technology' alone returns too many irrelevant SaaS/IT names).
+                ParameterSpec(
+                    name="industry",
+                    type="string",
+                    description="Industry filter (e.g. 'Semiconductors', 'Cloud Computing')",
                     required=False,
                 ),
                 ParameterSpec(

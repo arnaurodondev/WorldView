@@ -80,7 +80,7 @@ class TestEntityDetailEndpoint:
 
         mock_uc = AsyncMock(spec=GetEntityDetailUseCase)
         mock_uc.execute = AsyncMock(
-            return_value=_make_canonical_entity(description=None, data_completeness=None, metadata={})
+            return_value=_make_canonical_entity(description=None, data_completeness=None, metadata={}),
         )
 
         api_app.dependency_overrides[get_entity_detail_uc] = lambda: mock_uc
@@ -128,8 +128,8 @@ class TestEntityDetailEndpoint:
                     "founded_year": 1976,
                     "headquarters_city": "Cupertino",
                     "headquarters_country": "USA",
-                }
-            )
+                },
+            ),
         )
 
         api_app.dependency_overrides[get_entity_detail_uc] = lambda: mock_uc

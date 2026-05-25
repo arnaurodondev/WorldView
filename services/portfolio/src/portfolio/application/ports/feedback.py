@@ -44,6 +44,9 @@ class FeedbackSubmissionRecord:
     assigned_to: UUID | None
     created_at: datetime
     updated_at: datetime
+    # REQ-002d: caller-supplied Idempotency-Key (UUID). NULL when the header
+    # is absent. Unique per (tenant_id, idempotency_key) when set.
+    idempotency_key: UUID | None = None
 
 
 @dataclass
@@ -136,6 +139,19 @@ class FeedbackSubmissionRepo(ABC):
 
     @abstractmethod
     async def delete(self, submission_id: UUID, tenant_id: UUID) -> bool: ...
+
+    @abstractmethod
+    async def find_by_idempotency_key(
+        self,
+        tenant_id: UUID,
+        idempotency_key: UUID,
+    ) -> FeedbackSubmissionRecord | None:
+        """Return the submission created earlier with this idempotency key.
+
+        REQ-002d. Tenant-scoped — anonymous submissions live under the
+        platform-support tenant so they have a tenant_id too.
+        """
+        ...
 
 
 class NPSScoreRepo(ABC):

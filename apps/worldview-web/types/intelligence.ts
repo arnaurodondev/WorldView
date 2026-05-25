@@ -95,7 +95,7 @@ export interface EntityIntelligencePublic {
   current_narrative: NarrativeVersionPublic | null;
   confidence_breakdown: ConfidenceBreakdownPublic;
   key_metrics: Record<string, unknown>; // entity-type-specific metrics map
-  data_completeness: number;            // 0.0–1.0 fraction of expected fields
+  data_completeness?: number | null;    // 0.0–1.0 fraction of expected fields; absent on some entity types
 }
 
 // ── Path insight types ───────────────────────────────────────────────────────

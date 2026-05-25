@@ -86,10 +86,13 @@
 - [ ] **`InternalJWTMiddleware` is mounted on all services that accept internal requests** — adding a new service without it bypasses auth entirely (PLAN-0025 pattern)
 - [ ] JWT/token values NOT passed as CLI arguments or environment variable substitutions in shell command strings (`--header "X-JWT: ${TOKEN}"`) — process-list visible; use httpx in Python or curl `--config` file instead (BP-419, HR-048 context, S-012)
 - [ ] CB `record_failure()`: does it distinguish 4xx (client error) from 5xx/network (service fault)? Counting 4xx inflates CB failure count causing false-positive circuit opens (S-003)
+- [ ] **FastAPI path params that are UUIDs use `instrument_id: UUID` (not `str`)** — bare `str` accepts arbitrary input (path traversal, SQL injection attempt, ticker symbols that cause asyncpg DataError → 500). `UUID` type annotation auto-validates and returns 422. (F-010, 24 routes in api-gateway routes/market.py + instruments.py)
+- [ ] **`<a href>` from external data validates scheme** — must check `url.startsWith("https://")` before rendering. `javascript:` URLs in EODHD `secLink` or similar fields execute on click. (F-004 W3 QA)
 
 ## 6b. Schema & Data Pipeline Integrity
 
 - [ ] Migration DDL matches ORM columns exactly — names, types, defaults, nullability (BP-008, BP-019)
+- [ ] **Every repository SELECT statement references only columns that exist in the current migration head** — `text("SELECT ... FROM ...")` and asyncpg fetch calls are opaque to mypy; they fail at runtime, one row at a time, often inside a generic `except Exception:` swallow that masks the failure as throughput=0. Run `scripts/run_repository_prepare_audit.sh` (PLAN-0093 F-1 PREPARE pass) before declaring done, OR add the relevant SELECT to a CI prepare-time validation test (BP-546, HR-065 cousin)
 - [ ] `move_to_dead_letter` INSERTs a DLQ row with original payload (not just status update) (BP-020)
 - [ ] DLQ `requeue()` preserves original `aggregate_id`, `aggregate_type`, `event_type` from stored DLQ columns — never hardcode or use outbox PK as `aggregate_id` (BP-024)
 - [ ] DNS resolution in async context uses `asyncio.to_thread(socket.getaddrinfo, ...)` with explicit timeout — never blocking `socket.getaddrinfo` directly on event loop (BP-025)
@@ -122,6 +125,7 @@
 - [ ] All `market-ingestion` provider adapters extend `BaseProviderAdapter` (not `ProviderAdapter` directly) — ensures `_record_api_call()` is available and generic metrics are emitted (STANDARDS §18)
 - [ ] `domain/errors.py` defines `DomainError(Exception)` — all other exceptions inherit from it (R21)
 - [ ] Service-specific error alias defined as subclass, not assignment (e.g., `class MyServiceError(DomainError):`)
+- [ ] **After deleting a class/module**: grep all callers before closing the PR. If the deleted item was a constructor arg, a base class, or an import target, verify its removal in every call site. A deletion that passes type-check + unit tests can still leave orphan downstream helpers (see BP-549).
 
 ## 7b. Docker Compose Completeness
 
@@ -131,6 +135,8 @@
 - [ ] When editing `docker-compose.prod.yml`: port overrides use `!override []` (not additive merge) — `ports:` without `!override` in an overlay file ADDS ports rather than replacing them, leaving infra ports exposed in production
 - [ ] New public-facing services in production have Traefik labels (`traefik.enable=true`, router rule, TLS cert resolver, service port) and are added to the `traefik` network
 - [ ] New services with `prod.env.example` added to `services/<name>/configs/` so worldview-gitops can provide prod values
+- [ ] **Every long-running service (API, worker, scheduler, consumer, dispatcher) declares `depends_on: { <dep>: { condition: service_healthy } }` for every required external dep** — postgres, valkey, kafka, schema-registry, MinIO, LLM endpoint, another microservice. `condition: service_started` is insufficient. Optional deps (fallback Ollama) wrap startup probes in `@retry_on_startup` instead (R35, BP-545, HR-063 cousin)
+- [ ] **Every new long-running service declares an explicit `restart:` policy** — long-running APIs/UI/ML servers → `restart: unless-stopped`; background workers/consumers/dispatchers → `restart: on-failure`; one-shot jobs (`*-migrate`, `*-init`) → `restart: "no"` (explicit, never implicit). Add to `_CRITICAL_SERVICES` in `tests/validation/test_restart_policy.py` (PLAN-0093 QA-3)
 
 ## 7c. Observability Correctness
 
@@ -183,6 +189,7 @@
 - [ ] **Budget governance**: agent loop enforces token budget (per-turn), latency budget (cumulative tool wall-clock), per-tool timeout, iteration cap, and consecutive error limit — all five independently
 - [ ] **User message persisted before loop**: user message is written to DB before `AgentLoop` starts (so LLM crash does not silently drop the request)
 - [ ] **Input guard present**: at minimum regex-layer injection detection runs before agent loop entry; fail-closed on all error paths
+- [ ] **System prompt forbids pretraining-knowledge for numerical/factual claims** — every tool-using agent prompt must include an explicit "Do NOT supplement with knowledge from your pretraining for numerical, financial, or factual claims; if tool data is insufficient, say so" clause AND a "premise-contradiction refusal" rule ("if user premise contradicts tool data, refuse and state the contradiction"). Numeric-grounding validator must be claim-kind-aware (FieldKind-keyed thresholds), not a flat "is this number in the tool corpus" check (HR-064, BP-547, PLAN-0093 QA-2)
 
 ## 10. Frontend / TypeScript (applies when `apps/frontend/` files are changed)
 
@@ -256,6 +263,18 @@ Mark N/A for pure backend changes.
 ### 10k. Frontend Settings Pages
 - [ ] Any new settings page is either: (a) fully wired to a backend endpoint, or (b) returns `notFound()` and hidden from sidebar nav
 - [ ] No `console.log + toast("Coming soon")` patterns in settings pages
+
+### 10l. TanStack Query Key Hygiene (HR-060 / BP-497)
+- [ ] Every `useQuery` / `useQueries` `queryKey` uses the `qk.*` factory from `lib/query/keys.ts` — NO bare-array literals (`["portfolios"]`, `["holdings", id]`, etc.) anywhere in `components/` or `hooks/`
+- [ ] When introducing a NEW `qk.*` factory entry, the SAME PR migrates every existing consumer of that endpoint (`grep -rn 'queryFn:.*<methodName>' apps/worldview-web/`)
+- [ ] Detection: `grep -rE 'queryKey: \[' apps/worldview-web/components apps/worldview-web/hooks` returns 0 hits (excluding documented exceptions)
+
+### 10m. Cross-Component Selection Context (HR-061 / BP-498)
+- [ ] When introducing a NEW selection context (active-portfolio, active-watchlist, active-tenant, etc.), audit every consumer of the underlying list endpoint:
+  - `grep -rE '\?\.\[0\]\?\.[a-z_]+_id' apps/worldview-web/components apps/worldview-web/hooks`
+- [ ] Each matching consumer is migrated in the same PR to respect the new context (typically via a shared `useResolved<Entity>Id()` helper)
+- [ ] The chip / switcher that writes the context is mounted in a place where its readers can subscribe (provider above all consumer subtrees)
+- [ ] A stale-id guard exists: if the persisted selection no longer matches any item in the user's list, fall back to `items[0]` (not 404)
 
 ---
 

@@ -53,12 +53,20 @@ def test_period_movers_sparse_data_returns_whatever_repo_gives():
     assert result == partial_rows
 
 
+def test_period_movers_1d_uses_1_day_lookback():
+    """'1D' period translates to 1-day calendar lookback."""
+    uow = _make_uow([])
+    uc = GetPeriodMoversUseCase(uow)
+    asyncio.run(uc.execute("1D", "gainers", 10))
+    uow.ohlcv_read.get_period_movers.assert_awaited_once_with(1, "gainers", 10)
+
+
 def test_period_movers_invalid_period():
-    """'1D' is not supported."""
+    """Unsupported period strings raise ValueError."""
     uow = _make_uow([])
     uc = GetPeriodMoversUseCase(uow)
     with pytest.raises(ValueError, match="Unsupported period"):
-        asyncio.run(uc.execute("1D", "gainers", 10))
+        asyncio.run(uc.execute("7D", "gainers", 10))
 
 
 def test_period_movers_invalid_type():

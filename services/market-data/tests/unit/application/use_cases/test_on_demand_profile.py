@@ -252,3 +252,57 @@ async def test_on_demand_persists_metadata_to_instruments() -> None:
     assert metadata["industry"] == "Consumer Electronics"
     assert metadata["country"] == "US"
     assert metadata["currency_code"] == "USD"
+
+
+_EODHD_ETF_RESPONSE = {
+    "General": {
+        "Type": "ETF",
+        "Description": "S&P 500 ETF tracking 500 large-cap US equities.",
+        # Sector is intentionally absent — EODHD never populates it for ETFs.
+        "CountryISO": "US",
+        "ISIN": "US78462F1030",
+        "CurrencyCode": "USD",
+    },
+    "ETF_Data": {
+        "TotalAssets": 550_000_000_000,
+    },
+}
+
+
+async def test_on_demand_etf_missing_sector_uses_etf_fallback() -> None:
+    """BP-508 regression: EODHD ETFs have no General.Sector — the fallback must
+    set sector='ETF' so the portfolio sector bar shows 'ETF' instead of Unknown."""
+    inst = _make_instrument()
+    uow_mock, factory = _make_factory(_make_uow_mock(instrument=inst, security=None))
+    eodhd = _make_eodhd_client(response=_EODHD_ETF_RESPONSE)
+    uc = OnDemandProfileUseCase(factory, eodhd)
+
+    result = await uc.execute(ticker="SPY")
+
+    # sector must be "ETF", not None / "Unknown"
+    assert result.sector == "ETF"
+    # metadata write must also carry the "ETF" sector
+    call_args = uow_mock.instruments.update_metadata.call_args
+    assert call_args is not None
+    _, metadata = call_args[0]
+    assert metadata["sector"] == "ETF"
+
+
+@pytest.mark.parametrize("instrument_type", ["FUND", "MUTUAL FUND"])
+async def test_on_demand_fund_types_also_use_etf_fallback(instrument_type: str) -> None:
+    """FUND and MUTUAL FUND instrument types also lack Sector — same fallback applies."""
+    fund_response = {
+        "General": {
+            "Type": instrument_type,
+            "Description": "A mutual fund.",
+            "CurrencyCode": "USD",
+        }
+    }
+    inst = _make_instrument()
+    _, factory = _make_factory(_make_uow_mock(instrument=inst, security=None))
+    eodhd = _make_eodhd_client(response=fund_response)
+    uc = OnDemandProfileUseCase(factory, eodhd)
+
+    result = await uc.execute(ticker="VFINX")
+
+    assert result.sector == "ETF"

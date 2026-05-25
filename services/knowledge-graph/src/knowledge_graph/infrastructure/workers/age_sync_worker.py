@@ -3,20 +3,21 @@
 APScheduler interval job — every 15 minutes by default.
 
 Performs a watermark-based incremental sync from the relational tables
-in ``intelligence_db`` to the Apache AGE property-graph extension:
+in ``intelligence_db`` to the Apache AGE property-graph extension.
 
-  1. Read watermark from Valkey ``s7:age:sync:watermark`` (ISO-8601 UTC).
-     Default: Unix epoch (first run syncs everything).
-  2. Record ``new_watermark = utc_now()`` before syncing to avoid missing
-     records written while the sync is running.
-  3. Set up the AGE session: ``LOAD 'age'`` + ``SET search_path``.
-  4. Sync ``canonical_entities WHERE updated_at > watermark`` → MERGE Entity vertices.
-  5. Sync ``relations WHERE updated_at > watermark AND confidence > 0.1`` → MERGE edges.
-  6. Sync ``temporal_events WHERE updated_at > watermark`` → MERGE TemporalEvent vertices.
-  7. Sync ``entity_event_exposures WHERE created_at > watermark`` → MERGE EVENT_EXPOSES edges.
-  8. Commit the DB transaction.
-  9. Store ``new_watermark`` in Valkey.
-  10. Emit Prometheus metrics.
+PLAN-0093 Wave B-1 changes:
+  - On worker startup, ``_bootstrap_age_labels`` ensures every vlabel and
+    elabel used by the worker exists in the graph before any MERGE attempt.
+    Previously a missing label silently crashed the sync inside the outer
+    try/except, leaving 100% of temporal events out of AGE.
+  - The single ``s7:age:sync:watermark`` Valkey key is replaced by three
+    per-phase keys: ``...:entities``, ``...:relations``, ``...:temporal_events``.
+    Each phase has its own try/except + watermark — a failure in one phase no
+    longer poisons the others.
+  - A stall detector compares ``synced_count == 0`` against
+    ``COUNT(*) WHERE updated_at > watermark`` and bumps
+    ``s7_age_sync_phase_stalled_total`` + emits ``age_sync_phase_stalled``
+    when the worker silently fell behind.
 
 Feature flag: ``KNOWLEDGE_GRAPH_CYPHER_ENABLED`` (default ``false``).
 When disabled, the worker logs a debug message and returns immediately.
@@ -33,17 +34,20 @@ any Cypher call. This is enforced in ``_setup_age_session()``.
 
 from __future__ import annotations
 
+import contextlib
 import json
 import time
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
 
 from sqlalchemy import text
+from sqlalchemy.exc import ProgrammingError
 
 from common.time import utc_now  # type: ignore[import-untyped]
 from knowledge_graph.infrastructure.metrics.prometheus import (
     s7_age_sync_duration_seconds,
     s7_age_sync_entities_total,
+    s7_age_sync_phase_stalled_total,
     s7_age_sync_relations_total,
 )
 from observability import get_logger  # type: ignore[import-untyped]
@@ -58,7 +62,29 @@ logger = get_logger(__name__)  # type: ignore[no-any-return]
 
 # ── Constants ─────────────────────────────────────────────────────────────────
 
+# Legacy single watermark key — kept for one-shot migration support (reset
+# scripts DEL all four).  New code reads/writes the per-phase keys below.
 _WATERMARK_KEY = "s7:age:sync:watermark"
+
+# PLAN-0093 B-1 T-B-1-02: per-phase watermark keys.  Each phase reads + writes
+# its own key so a transient failure in one phase does not stall the others.
+_PHASE_ENTITIES = "entities"
+_PHASE_RELATIONS = "relations"
+_PHASE_TEMPORAL_EVENTS = "temporal_events"
+_PHASE_WATERMARK_KEYS: dict[str, str] = {
+    _PHASE_ENTITIES: "s7:age:sync:watermark:entities",
+    _PHASE_RELATIONS: "s7:age:sync:watermark:relations",
+    _PHASE_TEMPORAL_EVENTS: "s7:age:sync:watermark:temporal_events",
+}
+
+# Source-table watermark column per phase — used by the stall detector.
+_PHASE_SOURCE_TABLES: dict[str, tuple[str, str]] = {
+    _PHASE_ENTITIES: ("canonical_entities", "updated_at"),
+    _PHASE_RELATIONS: ("relations", "updated_at"),
+    _PHASE_TEMPORAL_EVENTS: ("temporal_events", "updated_at"),
+}
+
+_AGE_GRAPH_NAME = "worldview_graph"
 
 # Pre-built AGE Cypher SQL strings — static graph name avoids S608 false positives.
 # Data values are always passed as :params (parameterized), never string-interpolated.
@@ -109,7 +135,11 @@ _EPOCH = datetime(1970, 1, 1, tzinfo=UTC)
 _ENTITY_BATCH = 1000
 _RELATION_BATCH = 5000
 
-# Confidence threshold — relations below this are not synced (noise filter).
+# Confidence threshold — relations BELOW this AND with non-NULL confidence are not synced (noise filter).
+# NULL-confidence relations (provisional evidence, not yet computed) ARE synced with confidence=0.0
+# so Cypher path queries see the full graph. BP-539 fix: the previous hard filter excluded 72% of
+# relations because their evidence was still provisional (entity_provisional=true), causing AGE to
+# reflect only 27% of the true graph structure.
 _MIN_RELATION_CONFIDENCE = 0.1
 
 # Whitelist of all valid AGE edge labels (27 relation types + EVENT_EXPOSES).
@@ -147,6 +177,12 @@ _VALID_EDGE_LABELS: frozenset[str] = frozenset(
         "HAS_EXECUTIVE",
         "REVENUE_FROM_COUNTRY",
         "OPERATES_IN_COUNTRY",
+        # migration 0041 — Lever-4 financial taxonomy expansion
+        "APPOINTED_AS",
+        "DIVESTED_FROM",
+        "DOWNGRADED_BY",
+        "FILED_LAWSUIT_AGAINST",
+        "REPORTED_REVENUE_OF",
         # temporal event exposure
         "EVENT_EXPOSES",
         # theme exposure (added in migration 0029 / PLAN-0076)
@@ -194,23 +230,30 @@ class AgeSyncWorker:
         self._read_session_factory: Any = read_session_factory if read_session_factory is not None else session_factory
         self._valkey = valkey_client
         self._settings = settings
+        # PLAN-0093 B-1 T-B-1-01: label bootstrap runs exactly once per worker
+        # process startup.  ``True`` here means the bootstrap has not yet been
+        # attempted; the first successful run() flips it to ``False``.
+        self._labels_bootstrap_pending = True
 
     async def run(self) -> None:
-        """Execute one full AGE shadow sync cycle."""
+        """Execute one full AGE shadow sync cycle.
+
+        PLAN-0093 B-1 rewrite: each phase has its own try/except + watermark.
+        A ProgrammingError in one phase logs ``age_sync_phase_failed`` and skips
+        only that phase's watermark advance — the other phases continue normally.
+        Non-Programming exceptions are re-raised so APScheduler (and the
+        container orchestrator) can react.
+        """
         if not self._settings.cypher_enabled:
             logger.debug("age_sync_worker_disabled")  # type: ignore[no-any-return]
             return
 
         start = time.monotonic()
-        watermark = await self._get_watermark()
         new_watermark = utc_now()  # type: ignore[no-any-return]
 
-        watermark_age_s = round((new_watermark - watermark).total_seconds())
         logger.info(  # type: ignore[no-any-return]
             "age_sync_worker_start",
-            watermark=watermark.isoformat(),
-            watermark_age_s=watermark_age_s,
-            is_full_resync=watermark.year == 1970,
+            new_watermark=new_watermark.isoformat(),
         )
 
         entities_synced = 0
@@ -218,20 +261,48 @@ class AgeSyncWorker:
         temporal_events_synced = 0
 
         async with self._sf() as session:
-            await _setup_age_session(session)
-            # F-016: intermediate commits after each batch type so that a failure
-            # mid-sync does not roll back all previously completed work. AGE MERGE
-            # is idempotent (re-run is safe), so partial commits are correct here.
-            entities_synced = await self._sync_entities(session, watermark)
-            await session.commit()
-            await _setup_age_session(session)  # reload AGE after commit
-            relations_synced = await self._sync_relations(session, watermark)
-            await session.commit()
-            await _setup_age_session(session)
-            temporal_events_synced = await self._sync_temporal_events(session, watermark)
-            await session.commit()
+            # T-B-1-01: bootstrap labels on first successful session before
+            # touching any MERGE — once per process lifetime.
+            if self._labels_bootstrap_pending:
+                try:
+                    await self._bootstrap_age_labels(session)
+                    self._labels_bootstrap_pending = False
+                except ProgrammingError as exc:
+                    # AGE extension itself is missing (LOAD 'age' fails) — log
+                    # and skip the whole cycle; mirrors the old F-159 path.
+                    logger.warning(  # type: ignore[no-any-return]
+                        "age_sync_age_unavailable",
+                        error=type(exc).__name__,
+                        message=(
+                            "AGE extension unavailable during label bootstrap — "
+                            "skipping sync cycle; set KNOWLEDGE_GRAPH_CYPHER_ENABLED=false to suppress"
+                        ),
+                    )
+                    return
 
-        await self._set_watermark(new_watermark)
+            # Phase 1 — entities
+            entities_synced = await self._run_phase(
+                session=session,
+                phase=_PHASE_ENTITIES,
+                sync_fn=self._sync_entities,
+                new_watermark=new_watermark,
+            )
+
+            # Phase 2 — relations
+            relations_synced = await self._run_phase(
+                session=session,
+                phase=_PHASE_RELATIONS,
+                sync_fn=self._sync_relations,
+                new_watermark=new_watermark,
+            )
+
+            # Phase 3 — temporal events (also covers EVENT_EXPOSES edges)
+            temporal_events_synced = await self._run_phase(
+                session=session,
+                phase=_PHASE_TEMPORAL_EVENTS,
+                sync_fn=self._sync_temporal_events,
+                new_watermark=new_watermark,
+            )
 
         elapsed = time.monotonic() - start
         s7_age_sync_entities_total.inc(entities_synced)
@@ -239,13 +310,14 @@ class AgeSyncWorker:
         s7_age_sync_duration_seconds.observe(elapsed)
 
         # Log a warning when nothing was synced — may indicate the relational
-        # tables are empty or the watermark is ahead of all rows.
+        # tables are empty or the watermarks are ahead of all rows.
         if entities_synced == 0 and relations_synced == 0 and temporal_events_synced == 0:
             logger.warning(  # type: ignore[no-any-return]
                 "age_sync_worker_no_changes",
-                watermark=watermark.isoformat(),
                 duration_s=round(elapsed, 2),
-                message="all AGE MERGE operations were no-ops — relational tables may be empty or watermark is stale",
+                message=(
+                    "all AGE MERGE operations were no-ops — relational tables may be empty " "or watermarks are stale"
+                ),
             )
 
         logger.info(  # type: ignore[no-any-return]
@@ -257,19 +329,175 @@ class AgeSyncWorker:
             new_watermark=new_watermark.isoformat(),
         )
 
+    # ── Per-phase execution ───────────────────────────────────────────────────
+
+    async def _run_phase(
+        self,
+        *,
+        session: AsyncSession,
+        phase: str,
+        sync_fn: Any,
+        new_watermark: datetime,
+    ) -> int:
+        """Run one sync phase with its own watermark + try/except + stall check.
+
+        Behaviour contract:
+          - Reads the phase's own watermark from Valkey (epoch on miss).
+          - Re-runs ``_setup_age_session`` (LOAD age + SET search_path) on the
+            shared session because each commit clears it.
+          - Calls ``sync_fn(session, watermark)`` and commits.
+          - On ``ProgrammingError`` (AGE label missing, type mismatch, …) logs
+            ``age_sync_phase_failed`` and returns 0 WITHOUT advancing the phase
+            watermark — the other phases continue.
+          - On any other exception, re-raises so APScheduler can react.
+          - On success, persists ``new_watermark`` to the phase's key and
+            invokes the stall detector.
+        """
+        watermark = await self._get_phase_watermark(phase)
+        try:
+            await _setup_age_session(session)
+            synced_count = await sync_fn(session, watermark)
+            await session.commit()
+        except ProgrammingError as exc:
+            # Roll back the session so subsequent phases get a clean slate.
+            # Best-effort cleanup: if rollback itself fails we still want to
+            # log + return — never crash run() on a cleanup-of-cleanup failure.
+            with contextlib.suppress(Exception):
+                await session.rollback()
+            logger.warning(  # type: ignore[no-any-return]
+                "age_sync_phase_failed",
+                phase=phase,
+                error=type(exc).__name__,
+                message=(
+                    f"AGE sync phase '{phase}' raised ProgrammingError — "
+                    "watermark not advanced; other phases continue"
+                ),
+                exc_info=True,
+            )
+            return 0
+
+        # Phase succeeded — advance its own watermark.
+        await self._set_phase_watermark(phase, new_watermark)
+
+        logger.info(  # type: ignore[no-any-return]
+            "age_sync_phase_complete",
+            phase=phase,
+            synced_count=synced_count,
+            new_watermark=new_watermark.isoformat(),
+        )
+
+        # T-B-1-03 stall detector: if we synced nothing yet the source table
+        # has rows newer than the previous watermark, bump the counter.
+        if synced_count == 0:
+            await self._check_phase_stalled(session=session, phase=phase, watermark=watermark)
+
+        return int(synced_count)
+
+    async def _check_phase_stalled(
+        self,
+        *,
+        session: AsyncSession,
+        phase: str,
+        watermark: datetime,
+    ) -> None:
+        """Emit a stall warning + counter bump when no rows synced but the
+        source table has rows newer than the previous watermark.
+
+        Helps surface silent failures: a phase appears healthy (returns 0,
+        no exception) but the underlying data has moved on.
+        """
+        table, ts_column = _PHASE_SOURCE_TABLES[phase]
+        try:
+            row = await session.execute(
+                # Static identifiers (table, column) come from a server-side
+                # whitelist (_PHASE_SOURCE_TABLES) — never from user input.
+                text(  # - identifiers from server-side whitelist
+                    f"SELECT COUNT(*) AS c FROM {table} WHERE {ts_column} > :since",  # noqa: S608
+                ),
+                {"since": watermark},
+            )
+            newer = int(row.scalar() or 0)
+        except Exception as exc:
+            # Stall detector is best-effort observability — never crash run().
+            logger.warning(  # type: ignore[no-any-return]
+                "age_sync_phase_stall_check_failed",
+                phase=phase,
+                error=type(exc).__name__,
+                exc_info=True,
+            )
+            return
+
+        if newer > 0:
+            lag_seconds = round((utc_now() - watermark).total_seconds())  # type: ignore[no-any-return]
+            s7_age_sync_phase_stalled_total.labels(phase=phase).inc()
+            logger.warning(  # type: ignore[no-any-return]
+                "age_sync_phase_stalled",
+                phase=phase,
+                newer_rows=newer,
+                lag_seconds=lag_seconds,
+                watermark=watermark.isoformat(),
+                message=(
+                    f"AGE sync phase '{phase}' synced 0 rows but {newer} source rows "
+                    f"are newer than the watermark — possible silent failure"
+                ),
+            )
+
+    # ── Label bootstrap ───────────────────────────────────────────────────────
+
+    async def _bootstrap_age_labels(self, session: AsyncSession) -> None:
+        """Create all vlabels and elabels used by the sync worker.
+
+        AGE requires labels to exist before MERGE can target them.  Without
+        this bootstrap the ``TemporalEvent`` vlabel and ``EVENT_EXPOSES``
+        elabel were never created in fresh environments, so every sync attempt
+        raised ProgrammingError and was silently swallowed by the outer
+        try-except — leaving 0 events and 0 exposure edges in AGE.
+
+        Idempotent: ``already exists`` ProgrammingErrors are swallowed.
+        """
+        statements = [
+            # Vertex labels — entity already exists; ensure all needed types
+            f"SELECT create_vlabel('{_AGE_GRAPH_NAME}', 'entity')",
+            f"SELECT create_vlabel('{_AGE_GRAPH_NAME}', 'TemporalEvent')",
+            # Edge labels — every value in _VALID_EDGE_LABELS (includes EVENT_EXPOSES)
+            *[f"SELECT create_elabel('{_AGE_GRAPH_NAME}', '{lbl}')" for lbl in sorted(_VALID_EDGE_LABELS)],
+        ]
+        await _setup_age_session(session)
+        for stmt in statements:
+            try:
+                # Static graph name + whitelist-validated labels — no user input.
+                await session.execute(text(stmt))
+            except ProgrammingError as exc:
+                # "label already exists" is the desired idempotent path.
+                msg = str(exc).lower()
+                if "already exists" in msg:
+                    continue
+                # Any other ProgrammingError (e.g. AGE extension missing) is
+                # propagated so run() can mark the cycle skipped.
+                raise
+        await session.commit()
+        logger.info(  # type: ignore[no-any-return]
+            "age_sync_labels_bootstrapped",
+            vlabels=2,
+            elabels=len(_VALID_EDGE_LABELS),
+        )
+
     # ── Watermark ─────────────────────────────────────────────────────────────
 
-    async def _get_watermark(self) -> datetime:
-        """Read the current watermark from Valkey; return epoch on missing or error.
+    async def _get_phase_watermark(self, phase: str) -> datetime:
+        """Read the per-phase watermark from Valkey; epoch on miss or error.
 
-        Falls back to epoch (full re-sync) on Valkey unavailability — AGE MERGE
-        is idempotent so re-syncing already-synced data is safe.
+        Falls back to epoch (full re-sync for that phase) on Valkey
+        unavailability — AGE MERGE is idempotent so re-syncing is safe.
         """
+        key = _PHASE_WATERMARK_KEYS[phase]
         try:
-            raw = await self._valkey.get(_WATERMARK_KEY)
+            raw = await self._valkey.get(key)
         except Exception:
             logger.warning(  # type: ignore[no-any-return]
                 "age_sync_watermark_read_failed",
+                phase=phase,
+                key=key,
                 message="Valkey unavailable; falling back to epoch watermark (full re-sync)",
                 exc_info=True,
             )
@@ -282,17 +510,21 @@ class AgeSyncWorker:
             return result.replace(tzinfo=UTC)
         return result
 
-    async def _set_watermark(self, dt: datetime) -> None:
-        """Persist *dt* (ISO-8601 UTC) as the new watermark in Valkey.
+    async def _set_phase_watermark(self, phase: str, dt: datetime) -> None:
+        """Persist *dt* (ISO-8601 UTC) as the new per-phase watermark in Valkey.
 
-        Logs and swallows Valkey errors — on next run the watermark falls
-        back to epoch (full re-sync), which is safe since AGE MERGE is idempotent.
+        Logs and swallows Valkey errors — on next run the phase watermark
+        falls back to epoch (full re-sync), which is safe since AGE MERGE is
+        idempotent.
         """
+        key = _PHASE_WATERMARK_KEYS[phase]
         try:
-            await self._valkey.set(_WATERMARK_KEY, dt.isoformat())
+            await self._valkey.set(key, dt.isoformat())
         except Exception:
             logger.warning(  # type: ignore[no-any-return]
                 "age_sync_watermark_write_failed",
+                phase=phase,
+                key=key,
                 message="Valkey unavailable; watermark not persisted — next run will re-sync from epoch",
                 exc_info=True,
             )
@@ -359,10 +591,13 @@ class AgeSyncWorker:
             rows = await session.execute(
                 text(
                     "SELECT relation_id, subject_entity_id, object_entity_id,"
-                    "       canonical_type, confidence, updated_at"
+                    "       canonical_type, COALESCE(confidence, 0.0) AS confidence, updated_at"
                     " FROM relations"
                     " WHERE updated_at > :since"
-                    "   AND confidence > :min_conf"
+                    # BP-539: include NULL-confidence relations (provisional evidence not yet resolved).
+                    # COALESCE above maps NULL→0.0 so the AGE edge gets a valid confidence float.
+                    # The filter keeps rows where confidence exceeds the threshold OR is NULL (provisional).
+                    "   AND (confidence > :min_conf OR confidence IS NULL)"
                     " ORDER BY updated_at ASC, relation_id ASC"
                     " LIMIT :lim OFFSET :off",
                 ),
@@ -521,8 +756,10 @@ def _build_relation_merge_sql(edge_label: str) -> str:
     SECURITY: Defense-in-depth assertion — prevents any future caller from
     bypassing whitelist validation and injecting arbitrary Cypher edge labels.
     """
-    # SECURITY: edge_label must be whitelist-validated; assert here as defense-in-depth.
-    assert edge_label in _VALID_EDGE_LABELS, f"Cypher label injection guard: {edge_label!r} not in whitelist"
+    # SECURITY: edge_label must be whitelist-validated. Use if/raise (not assert) so the
+    # guard is never stripped by python -O optimized mode in production containers.
+    if edge_label not in _VALID_EDGE_LABELS:
+        raise ValueError(f"Cypher label injection guard: {edge_label!r} not in whitelist")
     # BP-SA5-001: use lowercase ``entity`` label (same as _SQL_ENTITY_MERGE and
     # path_discovery.py) so MATCHes resolve to the correct label namespace.
     cypher = (

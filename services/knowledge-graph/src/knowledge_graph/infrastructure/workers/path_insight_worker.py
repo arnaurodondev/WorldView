@@ -135,16 +135,32 @@ class PathInsightWorker:
 
         BP-113: ALL exceptions are caught and routed to mark_failed so the job
         never stays permanently stuck in 'running'.
+
+        Hub penalty (2026-05-23): the node_degree_map and max_degree are
+        pre-computed once for the full path set before scoring begins.  This
+        avoids O(N²) recomputation inside PathScorer.score() for each path.
         """
         try:
             # Phase 1: discover paths via AGE (no DB session held).
             raw_paths = await self._path_discovery.find_paths_for_anchor(job.entity_id)
 
-            # Phase 2: score and apply template matching (CPU, no I/O).
+            # Phase 2a: pre-compute hub penalty inputs once for efficiency.
+            from knowledge_graph.application.services.path_scorer import _build_node_degree_map
+
+            node_degree_map = _build_node_degree_map(raw_paths)
+            max_degree = max(node_degree_map.values(), default=1)
+
+            # Phase 2b: score and apply template matching (CPU, no I/O).
             all_insights = []
             for raw in raw_paths:
                 template = await self._template_matcher.match(raw)
-                insight = self._scorer.score(raw, raw_paths, template_match=template)
+                insight = self._scorer.score(
+                    raw,
+                    raw_paths,
+                    template_match=template,
+                    node_degree_map=node_degree_map,
+                    max_degree=max_degree,
+                )
                 all_insights.append(insight)
 
             # Phase 3: take top-50 by composite score.

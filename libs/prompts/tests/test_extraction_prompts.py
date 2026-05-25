@@ -27,8 +27,8 @@ class TestDeepExtraction:
             DEEP_EXTRACTION.render(entities="AAPL")
 
     def test_version_is_semver(self) -> None:
-        # v1.2: updated after v1.1 (DeepSeek-V4-Flash) — assertion synced with source
-        assert DEEP_EXTRACTION.version == "1.2"
+        # v1.4: 5 new financial predicates added (PLAN-0089 Lever-4 taxonomy expansion)
+        assert DEEP_EXTRACTION.version == "1.4"
 
     def test_frozen(self) -> None:
         with pytest.raises(AttributeError):

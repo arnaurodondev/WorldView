@@ -102,7 +102,7 @@ def _make_settings() -> MagicMock:
     # WHY: all numeric/string settings accessed by the consumer pipeline must be
     # real values — MagicMock auto-attributes cause TypeError when compared with
     # floats or used as string arguments in downstream blocks.
-    s.routing_tier_deep = 0.70
+    s.routing_tier_deep = 0.75
     s.routing_tier_medium = 0.45
     s.routing_tier_light = 0.20
     s.novelty_minhash_threshold = 0.80

@@ -51,4 +51,5 @@ markers = [
     "contract: Avro schema contract tests",
     "e2e: end-to-end tests requiring full infra",
     "live: tests that make real HTTP calls to external APIs (requires network + api key)",
+    "requires_infra: tests that require live Kafka/Postgres/MinIO containers (CI-only by default)",
 ]

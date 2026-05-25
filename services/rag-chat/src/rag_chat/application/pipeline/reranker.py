@@ -22,6 +22,8 @@ from typing import TYPE_CHECKING
 import httpx
 import structlog
 
+from rag_chat.application.metrics.prometheus import rag_pipeline_stage_input_size
+
 if TYPE_CHECKING:
     from rag_chat.domain.entities.chat import RetrievedItem
 
@@ -62,6 +64,8 @@ class BGEReranker:
         """
         if not items:
             return []
+
+        rag_pipeline_stage_input_size.labels(stage="reranker").observe(len(items))
 
         try:
             documents = [item.text for item in items]
@@ -151,6 +155,8 @@ class CohereReranker:
         """
         if not items:
             return []
+
+        rag_pipeline_stage_input_size.labels(stage="reranker").observe(len(items))
 
         try:
             documents = [item.text for item in items]
@@ -263,6 +269,8 @@ class DeepInfraReranker:
         """Re-rank *items* by cross-encoder relevance against *query*."""
         if not items:
             return []
+
+        rag_pipeline_stage_input_size.labels(stage="reranker").observe(len(items))
 
         # Pre-filter to the top-N candidates by fusion_score so we don't pay
         # the reranker for chunks the caller would have dropped anyway.

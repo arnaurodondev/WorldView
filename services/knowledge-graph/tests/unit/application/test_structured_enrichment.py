@@ -32,6 +32,7 @@ from knowledge_graph.application.use_cases.structured_enrichment import (
 from knowledge_graph.domain.enrichment_result import EnrichmentResult, EnrichmentSource
 from knowledge_graph.domain.errors import FatalEnrichmentError, RetryableEnrichmentError
 from knowledge_graph.domain.models import CanonicalEntity
+from structlog.testing import capture_logs
 
 pytestmark = pytest.mark.unit
 
@@ -124,7 +125,7 @@ def _make_use_case(
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.asyncio
+@pytest.mark.asyncio()
 async def test_enrich_market_data_hit() -> None:
     mdc = _make_mdc(lookup_payload={"description": "Apple is a tech giant.", "sector": "Technology"})
     llm = _make_llm()
@@ -137,7 +138,7 @@ async def test_enrich_market_data_hit() -> None:
     llm.generate_description.assert_not_called()
 
 
-@pytest.mark.asyncio
+@pytest.mark.asyncio()
 async def test_enrich_eodhd_hit() -> None:
     mdc = _make_mdc(
         lookup_payload={"sector": "Technology"},  # no description
@@ -153,7 +154,7 @@ async def test_enrich_eodhd_hit() -> None:
     llm.generate_description.assert_not_called()
 
 
-@pytest.mark.asyncio
+@pytest.mark.asyncio()
 async def test_enrich_llm_hit_after_s3_miss() -> None:
     mdc = _make_mdc(lookup_payload=None, od_payload=None)
     llm = _make_llm("Apple Inc. is a technology company headquartered in Cupertino.")
@@ -165,7 +166,7 @@ async def test_enrich_llm_hit_after_s3_miss() -> None:
     assert "Apple" in (result.description or "")
 
 
-@pytest.mark.asyncio
+@pytest.mark.asyncio()
 async def test_enrich_llm_only_type_skips_s3() -> None:
     entity = _make_entity(entity_type="person", ticker=None)
     mdc = _make_mdc()
@@ -179,7 +180,7 @@ async def test_enrich_llm_only_type_skips_s3() -> None:
     mdc.on_demand_profile.assert_not_called()
 
 
-@pytest.mark.asyncio
+@pytest.mark.asyncio()
 async def test_enrich_max_attempts_skip() -> None:
     entity = _make_entity(enrichment_attempts=3)
     mdc = _make_mdc()
@@ -194,7 +195,7 @@ async def test_enrich_max_attempts_skip() -> None:
     llm.generate_description.assert_not_called()
 
 
-@pytest.mark.asyncio
+@pytest.mark.asyncio()
 async def test_enrich_llm_timeout_raises_retryable() -> None:
     mdc = _make_mdc(lookup_payload=None, od_payload=None)
     llm = AsyncMock()
@@ -205,7 +206,7 @@ async def test_enrich_llm_timeout_raises_retryable() -> None:
         await uc.enrich(_make_entity())
 
 
-@pytest.mark.asyncio
+@pytest.mark.asyncio()
 async def test_enrich_llm_too_short_raises_fatal() -> None:
     mdc = _make_mdc(lookup_payload=None, od_payload=None)
     llm = _make_llm("Short")  # < 20 chars
@@ -215,7 +216,7 @@ async def test_enrich_llm_too_short_raises_fatal() -> None:
         await uc.enrich(_make_entity())
 
 
-@pytest.mark.asyncio
+@pytest.mark.asyncio()
 async def test_enrich_eodhd_429_raises_retryable() -> None:
     response_mock = MagicMock()
     response_mock.status_code = 429
@@ -230,7 +231,7 @@ async def test_enrich_eodhd_429_raises_retryable() -> None:
         await uc.enrich(_make_entity())
 
 
-@pytest.mark.asyncio
+@pytest.mark.asyncio()
 async def test_enrich_llm_429_raises_retryable() -> None:
     response_mock = MagicMock()
     response_mock.status_code = 429
@@ -244,7 +245,7 @@ async def test_enrich_llm_429_raises_retryable() -> None:
         await uc.enrich(_make_entity())
 
 
-@pytest.mark.asyncio
+@pytest.mark.asyncio()
 async def test_enrich_db_write_called() -> None:
     mdc = _make_mdc(lookup_payload={"description": "Apple is a tech company.", "sector": "Tech"})
     adapter = _make_adapter()
@@ -259,7 +260,7 @@ async def test_enrich_db_write_called() -> None:
     assert call_result.source == EnrichmentSource.MARKET_DATA
 
 
-@pytest.mark.asyncio
+@pytest.mark.asyncio()
 async def test_enrich_seed_relations_included() -> None:
     mdc = _make_mdc(lookup_payload={"description": "Apple is a tech company.", "sector": "Technology"})
     adapter = _make_adapter(seeded=["operates_in_sector"])
@@ -270,7 +271,7 @@ async def test_enrich_seed_relations_included() -> None:
     assert result.seeded_relations == ["operates_in_sector"]
 
 
-@pytest.mark.asyncio
+@pytest.mark.asyncio()
 async def test_enrich_dirtied_event_produced() -> None:
     mdc = _make_mdc(lookup_payload={"description": "Apple is a tech company."})
     producer = MagicMock()
@@ -285,7 +286,7 @@ async def test_enrich_dirtied_event_produced() -> None:
     assert call_kwargs["reason"] == "enrichment_updated"
 
 
-@pytest.mark.asyncio
+@pytest.mark.asyncio()
 async def test_enrich_llm_always_for_concept() -> None:
     """concept type -> LLM called regardless of whether market_data has description."""
     entity = _make_entity(entity_type="concept", ticker=None)
@@ -303,7 +304,7 @@ async def test_enrich_llm_always_for_concept() -> None:
     assert result.source == EnrichmentSource.LLM
 
 
-@pytest.mark.asyncio
+@pytest.mark.asyncio()
 async def test_enrich_market_data_exception_continues() -> None:
     """S3 lookup exception -> fall through to EODHD."""
     mdc = _make_mdc(
@@ -319,7 +320,7 @@ async def test_enrich_market_data_exception_continues() -> None:
     llm.generate_description.assert_not_called()
 
 
-@pytest.mark.asyncio
+@pytest.mark.asyncio()
 async def test_enrich_no_description_source_none() -> None:
     """All sources miss -> source=NONE, DB write still called (updates attempts)."""
     mdc = _make_mdc(lookup_payload=None, od_payload=None)
@@ -339,7 +340,7 @@ async def test_enrich_no_description_source_none() -> None:
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.asyncio
+@pytest.mark.asyncio()
 async def test_relation_seeding_eodhd_sector() -> None:
     """When EODHD returns a sector, adapter.seed_relations is called with metadata
     containing that sector.  Without this assertion we can't detect a regression
@@ -361,7 +362,7 @@ async def test_relation_seeding_eodhd_sector() -> None:
     assert metadata.get("sector") == "Technology"
 
 
-@pytest.mark.asyncio
+@pytest.mark.asyncio()
 async def test_relation_seeding_skips_missing_object_entity() -> None:
     """If seed_relations returns an empty list (e.g. sector entity not yet seeded
     in canonical_entities), enrichment still completes without error."""
@@ -376,7 +377,7 @@ async def test_relation_seeding_skips_missing_object_entity() -> None:
     adapter.write_enrichment_result.assert_awaited_once()
 
 
-@pytest.mark.asyncio
+@pytest.mark.asyncio()
 async def test_entity_dirtied_produce_failure_does_not_raise() -> None:
     """When the producer raises after commit, the use case must still return
     a successful EnrichmentResult — entity.dirtied.v1 is best-effort post-commit."""
@@ -391,7 +392,7 @@ async def test_entity_dirtied_produce_failure_does_not_raise() -> None:
     producer.produce_entity_dirtied.assert_called_once()
 
 
-@pytest.mark.asyncio
+@pytest.mark.asyncio()
 async def test_llm_prompt_sanitizes_entity_name() -> None:
     """The entity name fed to the LLM must be the canonical_name as-is.
 
@@ -417,7 +418,7 @@ async def test_llm_prompt_sanitizes_entity_name() -> None:
     assert kwargs["canonical_name"] == "<script>alert(1)</script>Tim Cook"
 
 
-@pytest.mark.asyncio
+@pytest.mark.asyncio()
 async def test_market_data_connect_error_falls_through() -> None:
     """httpx.ConnectError on Step 1 must NOT raise — Step 2 (EODHD) is tried next."""
     mdc = _make_mdc(
@@ -432,13 +433,13 @@ async def test_market_data_connect_error_falls_through() -> None:
 
 
 @pytest.mark.skip(reason="depends on F-Q08 fix — LLM fallback chain not yet implemented in use case")
-@pytest.mark.asyncio
+@pytest.mark.asyncio()
 async def test_llm_fallback_on_primary_404() -> None:
     """When F-Q08 lands, primary LLM returning 404 should trigger the fallback
     LLM rather than raising FatalEnrichmentError."""
 
 
-@pytest.mark.asyncio
+@pytest.mark.asyncio()
 async def test_enrichment_attempts_incremented_on_llm_short_response() -> None:
     """LLM returns < 20 chars → FatalEnrichmentError raised → worker increments
     enrichment_attempts (verified via the worker, not the use case).
@@ -466,3 +467,79 @@ async def test_enrichment_attempts_incremented_on_llm_short_response() -> None:
     await worker.run()
 
     adapter.increment_attempts.assert_awaited()
+
+
+# ---------------------------------------------------------------------------
+# DB write failure — logging and error propagation (F-X09 regression guard)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio()
+async def test_db_write_sqlalchemy_error_raises_retryable_with_log() -> None:
+    """write_enrichment_result raises SQLAlchemyError → RetryableEnrichmentError raised
+    AND a structlog event with key 'enrichment_db_write_failed' is emitted.
+
+    This is the regression test for the silent-failure bug where SQLAlchemy errors
+    were caught and re-raised as RetryableEnrichmentError with no logging, making
+    3,951 entities permanently invisible to the operator.
+
+    Root-cause fix: the adapter's seed_relations INSERT contained the column
+    ``is_backfill`` which does not exist on the ``relations`` table.  The
+    ProgrammingError was caught silently.  Both the logging addition and the
+    column removal are guarded by this test.
+    """
+    from sqlalchemy.exc import ProgrammingError
+
+    mdc = _make_mdc(lookup_payload={"description": "Apple is a technology giant."})
+    adapter = _make_adapter()
+    # Simulate the ProgrammingError that was caused by the is_backfill column bug.
+    adapter.write_enrichment_result = AsyncMock(
+        side_effect=ProgrammingError(
+            "column 'is_backfill' of relation 'relations' does not exist",
+            params=None,
+            orig=Exception("column is_backfill does not exist"),
+        ),
+    )
+    uc = _make_use_case(mdc=mdc, adapter=adapter)
+
+    with capture_logs() as captured:
+        with pytest.raises(RetryableEnrichmentError, match="DB error during enrichment write"):
+            await uc.enrich(_make_entity())
+
+    error_events = [e for e in captured if e.get("event") == "enrichment_db_write_failed"]
+    assert error_events, (
+        "Expected a structlog event with key 'enrichment_db_write_failed' but none was emitted. "
+        "This means the logging fix in the Phase 3 except block has been reverted."
+    )
+    assert str(_ENTITY_ID) in error_events[0].get(
+        "entity_id",
+        "",
+    ), "Log event must carry entity_id so operators can identify the failing entity."
+
+
+@pytest.mark.asyncio()
+async def test_db_write_seed_relations_sqlalchemy_error_raises_retryable_with_log() -> None:
+    """seed_relations raises SQLAlchemyError → RetryableEnrichmentError with log.
+
+    Guards against seed_relations failures (e.g. bad column name in INSERT)
+    also being surfaced and logged.
+    """
+    from sqlalchemy.exc import ProgrammingError
+
+    mdc = _make_mdc(lookup_payload={"description": "Apple is a technology giant."})
+    adapter = _make_adapter()
+    adapter.seed_relations = AsyncMock(
+        side_effect=ProgrammingError(
+            "column 'is_backfill' of relation 'relations' does not exist",
+            params=None,
+            orig=Exception("column is_backfill does not exist"),
+        ),
+    )
+    uc = _make_use_case(mdc=mdc, adapter=adapter)
+
+    with capture_logs() as captured:
+        with pytest.raises(RetryableEnrichmentError, match="DB error during enrichment write"):
+            await uc.enrich(_make_entity())
+
+    error_events = [e for e in captured if e.get("event") == "enrichment_db_write_failed"]
+    assert error_events, "SQLAlchemy error from seed_relations must also emit 'enrichment_db_write_failed' log."

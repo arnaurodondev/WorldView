@@ -156,6 +156,31 @@ support parameterized labels); they are validated against a 28-label whitelist
 **R27 exception**: Cypher queries use a write session because AGE requires `LOAD 'age'` which
 is not supported by read-replica connections.
 
+#### Recovering from AGE undercount
+
+If the Apache AGE shadow graph reports far fewer rows than the relational source tables
+(e.g. 0 `TemporalEvent` vertices, missing `EVENT_EXPOSES` edges, ~30 % relation coverage),
+the most likely cause is a missing label bootstrap or a stale per-phase watermark.
+
+**Symptoms**
+- `s7_age_sync_phase_stalled_total{phase=...}` keeps incrementing
+- AGE counts (`SELECT count(*) FROM cypher('worldview_graph', $$ MATCH (n) RETURN n $$) ...`)
+  are well below `SELECT count(*) FROM canonical_entities` / `relations` / `temporal_events`
+- Logs show `age_sync_phase_failed` for one or more phases
+
+**Fix** — reset all four AGE watermark keys so the next worker cycle does a full resync:
+
+```bash
+./scripts/ops/reset_age_watermark.sh
+```
+
+The script deletes the legacy `s7:age:sync:watermark` key plus the three per-phase keys
+(`...:entities`, `...:relations`, `...:temporal_events`). On the next cycle the worker
+re-runs the label bootstrap (idempotent) and re-MERGEs every row from epoch.
+
+**Safety** — AGE MERGE is idempotent; re-syncing already-synced rows produces no duplicates.
+The only cost is a longer-than-usual first run (full table scan instead of incremental).
+
 ---
 
 ## API Endpoints
@@ -318,7 +343,8 @@ S7 uses **two session factories** (R23 dual-factory pattern, R27 read/write spli
 
 | Table | Partitioning | Purpose |
 |-------|-------------|---------|
-| `canonical_entities` | — | Resolved entity registry (shared with S6) |
+| `canonical_entities` | — | Resolved entity registry (shared with S6). `entity_type` is the kind discriminator with an 11-value CHECK constraint (`financial_instrument, person, event, sector, industry, macro_indicator, place, product, index, currency, unknown`). For `entity_type = 'financial_instrument'`, `entity_id` equals `market_data.instruments.id` (M-017, enforced by integration test). See [ADR-F-16](../architecture/decisions/ADR-F-16-instrument-entity-id-unification.md). |
+| `ticker_aliases` | — | Historical-ticker → current-canonical-entity map. Populated by ops on ticker change events (e.g. FB → META). Used by the S9 alias-resolution path; empty at v1 per `no_backfill`. Forever retention. |
 | `entity_aliases` | — | Alias index with `alias_type` (EXACT, TICKER, ISIN, CUSIP, FIGI, LEI, NAME) |
 | `entity_embedding_state` | — | Multi-view 1024-dim embeddings; 3 rows per entity (definition, narrative, fundamentals_ohlcv) |
 | `entity_narrative_versions` | — | Version-controlled LLM-generated entity narratives |
@@ -734,6 +760,12 @@ tick.
     provisional entities with name variations can insert as new rows even when a matching
     `financial_instrument` entity exists. Fix requires removing the partial predicate and
     adding a pre-insert `class_aware_canonical_match()` lookup.
+
+12. **`temporal_events.exposed_entities=[]` is valid** (DP-F001): Macro events (CPI prints, FOMC
+    decisions, sanctions announcements) legitimately arrive with zero company participants, and
+    `TemporalEventConsumer` accepts them. This is the intentional counterpart to S6's enriched-event
+    filtering — see `docs/services/nlp-pipeline.md` "Intentional asymmetry" and
+    `docs/audits/2026-05-24-investigation-qa-open-items.md` DP-F001.
 
 ---
 

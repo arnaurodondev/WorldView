@@ -57,7 +57,7 @@ class TestAlembicGuard:
         )
 
         engine, _factory = create_intelligence_session_factory(
-            "postgresql+asyncpg://postgres:postgres@localhost/intelligence_db"
+            "postgresql+asyncpg://postgres:postgres@localhost/intelligence_db",
         )
         assert engine is not None
         assert _factory is not None
@@ -69,7 +69,7 @@ class TestAlembicGuard:
         )
 
         engine, _factory = create_intelligence_session_factory(
-            "postgresql+asyncpg://postgres:postgres@localhost/intelligence_db"
+            "postgresql+asyncpg://postgres:postgres@localhost/intelligence_db",
         )
         assert engine is not None
 

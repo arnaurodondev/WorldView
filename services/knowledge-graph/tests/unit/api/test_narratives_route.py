@@ -183,7 +183,9 @@ class TestNarrativeGenerateTriggerEndpoint:
             mock_valkey_cls.return_value = mock_valkey
 
             async with AsyncClient(
-                transport=ASGITransport(app=app), base_url="http://test", headers=_HEADERS
+                transport=ASGITransport(app=app),
+                base_url="http://test",
+                headers=_HEADERS,
             ) as client:
                 resp = await client.post(f"/api/v1/entities/{_ENTITY_ID}/narratives/generate")
 
@@ -210,7 +212,9 @@ class TestNarrativeGenerateTriggerEndpoint:
             mock_valkey_cls.return_value = mock_valkey
 
             async with AsyncClient(
-                transport=ASGITransport(app=app), base_url="http://test", headers=_HEADERS
+                transport=ASGITransport(app=app),
+                base_url="http://test",
+                headers=_HEADERS,
             ) as client:
                 resp = await client.post(f"/api/v1/entities/{_ENTITY_ID}/narratives/generate")
 
@@ -231,7 +235,9 @@ class TestNarrativeGenerateTriggerEndpoint:
             mock_valkey_cls.return_value = AsyncMock()
 
             async with AsyncClient(
-                transport=ASGITransport(app=app), base_url="http://test", headers=_HEADERS
+                transport=ASGITransport(app=app),
+                base_url="http://test",
+                headers=_HEADERS,
             ) as client:
                 resp = await client.post(f"/api/v1/entities/{_ENTITY_ID}/narratives/generate")
 

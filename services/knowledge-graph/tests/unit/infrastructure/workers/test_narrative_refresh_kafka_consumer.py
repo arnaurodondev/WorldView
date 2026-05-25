@@ -117,7 +117,7 @@ def _make_embedding_output(dim: int = 10) -> list:
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.unit
+@pytest.mark.unit()
 class TestNarrativeRefreshKafkaConsumer:
     def test_narrative_kafka_consumer_skips_duplicate_version(self) -> None:
         """is_duplicate returns True → process_message is never called.

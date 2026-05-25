@@ -88,10 +88,15 @@ tools:
 
   - name: get_entity_graph
     description: >
-      Retrieves the egocentric knowledge graph for a named entity — the entity's
-      immediate neighbours, relationships, and their summaries. Use when the question
-      asks about connections, subsidiaries, partnerships, board members, or the
-      entity's place in a larger structure. Returns nodes and edges with confidence scores.
+      Visualises 1-2 hops around a single entity — the entity's immediate
+      neighbours, edges, and their summaries. Returns nodes + edges with
+      confidence scores. (PLAN-0093 E-3 T-E-3-02 tool selection guide.)
+      USE WHEN: the question is "show me X's neighbourhood" / "what's around X" /
+      "what is X connected to" with no specific target entity.
+      DO NOT USE WHEN: you need a directed path between two known entities
+      (use get_entity_paths instead), filtering by relation_type only (use
+      search_entity_relations), or aggregating intelligence about a single
+      entity (use get_entity_intelligence — preferred for "tell me about X").
     parameters:
       - name: entity_name
         type: string
@@ -114,10 +119,14 @@ tools:
 
   - name: traverse_graph
     description: >
-      Executes a targeted knowledge graph traversal to find multi-hop paths between
-      entities. More powerful than get_entity_graph for finding indirect connections,
-      competitive relationships, or shared investors. Use when the question requires
-      tracing a path or finding how two entities are linked.
+      Advanced Cypher-style path traversal — multi-hop paths constrained by an
+      optional cypher_pattern (e.g. "[:INVESTS_IN|:BOARD_MEMBER_OF]").
+      (PLAN-0093 E-3 T-E-3-02 tool selection guide.)
+      USE WHEN: the user provides a specific relation pattern OR you need
+      paths of depth 3-4 with a directed filter.
+      DO NOT USE WHEN: you just need 1-2 hops around an entity (use
+      get_entity_graph), or you have BOTH a known start AND target entity —
+      prefer get_entity_paths which is purpose-built for that case.
     parameters:
       - name: start_entity
         type: string
@@ -144,13 +153,22 @@ tools:
 
   - name: search_entity_relations
     description: >
-      Searches for relation triplets involving an entity in the knowledge graph.
-      Returns structured (subject, relation_type, object) triples with confidence scores.
-      Use for listing what is known about an entity's relationships in structured form.
+      Searches relation triplets (subject, relation_type, object) for an entity,
+      optionally filtered by relation_type. Returns ranked triples with confidence
+      scores. (PLAN-0093 E-3 T-E-3-02 tool selection guide.)
+      USE WHEN: you need the FILTERED-BY-RELATION-TYPE slice of an entity's edges
+      (e.g. "all M&A by Microsoft" → relation_type="acquired").
+      DO NOT USE WHEN: the user wants a free-form summary of an entity (use
+      get_entity_intelligence), or wants to visualise neighbours (use
+      get_entity_graph).
+      If no scoped entity context is set, provide entity_name explicitly.
     parameters:
       - name: entity_name
         type: string
-        description: Entity to find relations for
+        description: >
+          Entity to find relations for. REQUIRED — if no entity context is
+          scoped, provide the canonical name here (the handler resolves it
+          via S7 alias search).
         required: true
       - name: relation_type
         type: string
@@ -173,14 +191,22 @@ tools:
 
   - name: search_claims
     description: >
-      Searches for analyst claims and extracted assertions about an entity. Claims are
-      LLM-extracted structured statements from financial documents (e.g., "AAPL will
-      expand into India"). Use for opinion-type questions, target price questions, or
-      when you need to contrast what analysts are saying.
+      Searches LLM-extracted analyst claims and assertions about an entity (e.g.,
+      "AAPL will expand into India", target prices, revenue forecasts, risk factors).
+      (PLAN-0093 E-3 T-E-3-02 tool selection guide.)
+      USE WHEN: the question is opinion-driven ("what are analysts saying about X"),
+      target prices, or strategic moves — claims surface qualitative analyst views.
+      DO NOT USE WHEN: the question is about price/fundamentals numbers
+      (use get_fundamentals_history or get_price_history), corporate events
+      (use search_events), or relationships (use search_entity_relations).
+      If no scoped entity context is set, provide entity_name explicitly.
     parameters:
       - name: entity_name
         type: string
-        description: Entity the claims are about
+        description: >
+          Entity the claims are about. REQUIRED — if no entity context is
+          scoped, provide the canonical name here (the handler resolves it
+          via S7 alias search).
         required: true
       - name: claim_type
         type: string
@@ -203,13 +229,21 @@ tools:
 
   - name: search_events
     description: >
-      Retrieves structured corporate events involving an entity — earnings releases,
-      M&A activity, leadership changes, product launches, regulatory filings. Use for
-      timeline or event-based questions.
+      Retrieves structured corporate events for an entity — earnings releases,
+      M&A activity, leadership changes, product launches, regulatory filings.
+      (PLAN-0093 E-3 T-E-3-02 tool selection guide.)
+      USE WHEN: the question is timeline-driven ("when did X last announce…"),
+      event-typed ("any acquisitions by X"), or about a specific event class.
+      DO NOT USE WHEN: the question is about analyst claims (use search_claims)
+      or about price data (use get_price_history).
+      If no scoped entity context is set, provide entity_name explicitly.
     parameters:
       - name: entity_name
         type: string
-        description: Entity involved in the events
+        description: >
+          Entity involved in the events. REQUIRED — if no entity context is
+          scoped, provide the canonical name here (the handler resolves it
+          via S7 alias search).
         required: true
       - name: event_type
         type: string
@@ -232,13 +266,20 @@ tools:
 
   - name: get_contradictions
     description: >
-      Retrieves cross-source contradictions detected in analyst claims about an entity.
-      Returns pairs of conflicting statements with their strength and sources.
-      Use when the question is about disagreement, uncertainty, or conflicting signals.
+      Retrieves cross-source contradictions detected in analyst claims about an
+      entity. Returns PAIRS of conflicting statements with strength + sources.
+      (PLAN-0093 E-3 T-E-3-02 tool selection guide.)
+      USE WHEN: the question explicitly asks about disagreement, conflicting views,
+      or uncertainty between sources.
+      DO NOT USE WHEN: you just want a list of analyst views (use search_claims).
+      If no scoped entity context is set, provide entity_name explicitly.
     parameters:
       - name: entity_name
         type: string
-        description: Entity to find contradictions for
+        description: >
+          Entity to find contradictions for. REQUIRED — if no entity context is
+          scoped, provide the canonical name here (the handler resolves it
+          via S7 alias search).
         required: true
       - name: confidence_threshold
         type: number
@@ -374,8 +415,9 @@ tools:
   - name: screen_universe
     description: >
       Quantitative screener — filters the instrument universe by market cap, P/E ratio,
-      sector, and region. Use when the user asks to screen, filter, or find stocks that
-      meet specific fundamental criteria.
+      sector, industry, and region. Use when the user asks to screen, filter, or find
+      stocks that meet specific fundamental criteria. For AI-chip / semiconductor
+      queries, set sector='Technology' AND industry='Semiconductors' (GICS taxonomy).
     parameters:
       - name: market_cap_min
         type: number
@@ -392,6 +434,13 @@ tools:
       - name: sector
         type: string
         description: "Sector filter (e.g. 'Technology', 'Healthcare')"
+        required: false
+      # FIX-LIVE-M (2026-05-24): GICS industry filter. NVDA/AMD/AVGO are
+      # sector=Technology, industry=Semiconductors — industry is required to
+      # narrow "AI chip" or "semiconductor" queries from the LLM.
+      - name: industry
+        type: string
+        description: "Industry filter (e.g. 'Semiconductors', 'Cloud Computing')"
         required: false
       - name: region
         type: string

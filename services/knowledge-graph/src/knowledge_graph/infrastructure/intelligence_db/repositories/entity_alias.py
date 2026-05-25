@@ -180,7 +180,7 @@ ORDER BY alias_type, alias_text
                 " WHERE normalized_alias_text % CAST(:query AS varchar)"
                 "   AND is_active = true"
                 " ORDER BY sim DESC"
-                " LIMIT :limit"
+                " LIMIT :limit",
             ),
             {"query": query, "limit": limit},
         )

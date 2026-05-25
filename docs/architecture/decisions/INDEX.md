@@ -17,6 +17,8 @@
 | [ADR-0006](0006-timescaledb-hypertable-vs-list-partitioning.md) | TimescaleDB Hypertable for OHLCV Storage | Accepted | 2026-03-10 |
 | [ADR-EODHD-FAILOVER](ADR_EODHD_FAILOVER.md) | EODHD API Failover Strategy (Circuit Breaker + 7-step chain) | Accepted | 2026-04-24 |
 | [ADR-F-02](ADR-F-02-websocket-direct-connection.md) | WebSocket Direct Connection to S10 (only exception to "frontend → S9" rule) | Accepted | 2026-04-18 |
+| ADR-F-12 | `entity_id` ≠ `instrument_id` (PRD-0027 §1367, inline) | **Superseded by ADR-F-16** | 2026-04-08 |
+| [ADR-F-16](ADR-F-16-instrument-entity-id-unification.md) | Instrument / Entity ID Unification (single UUID per tradable security) | Accepted | 2026-05-20 |
 
 ## Service/Cross-Cutting ADRs (`docs/adrs/`)
 

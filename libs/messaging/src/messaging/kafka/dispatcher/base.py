@@ -22,6 +22,16 @@ Canonical outbox table shape — single source of truth:
     on these two columns was reconciled by PLAN-0087 #9 (see
     ``docs/audits/2026-05-09-qa-beta-data-platform.md`` F-003).
 
+LISTEN/NOTIFY optimization (LIB-003 / TASK-W4-01):
+    Subclasses MAY override :meth:`BaseOutboxDispatcher.register_notify_listener`
+    to wire a Postgres ``LISTEN`` on channel :data:`OUTBOX_NOTIFY_CHANNEL`
+    (``outbox_events_new``). When a NOTIFY arrives, the run loop wakes
+    immediately instead of waiting for ``idle_poll_interval_seconds``.
+    Producers should INSERT a row into ``outbox_events`` and rely on an
+    AFTER-INSERT trigger that runs ``NOTIFY outbox_events_new`` — see
+    ``docs/libs/messaging.md`` for the SQL snippet. The polling fallback
+    remains for crash recovery and unsupported back-ends (SQLite tests).
+
 See ADR-0005 and the outbox-pattern section of ``docs/libs/messaging.md``
 for operational details.
 """
@@ -29,6 +39,7 @@ for operational details.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import dataclasses
 import random
 import socket
@@ -40,9 +51,22 @@ from observability import ServiceMetrics, get_logger  # type: ignore[import-unty
 from observability import create_metrics as _create_metrics  # type: ignore[import-untyped]
 
 if TYPE_CHECKING:
+    from collections.abc import Awaitable, Callable
     from datetime import datetime
 
 logger = get_logger(__name__)
+
+
+# ── LISTEN/NOTIFY constants (LIB-003 / TASK-W4-01) ───────────────────────────
+#
+# Postgres channel used to wake the dispatcher when a new outbox row is
+# inserted. Producers should attach an AFTER-INSERT trigger to their
+# ``outbox_events`` table that runs ``NOTIFY outbox_events_new`` — see
+# ``docs/libs/messaging.md`` for the canonical SQL snippet. The channel
+# name is intentionally namespace-free: a single Postgres database
+# typically hosts only one ``outbox_events`` table per service, and
+# LISTEN/NOTIFY is scoped to a database, so collision risk is nil.
+OUTBOX_NOTIFY_CHANNEL: str = "outbox_events_new"
 
 
 # ── Protocols (ports for the dispatcher) ─────────────────────────────────────
@@ -182,7 +206,17 @@ class DispatcherConfig:
     """Configuration for :class:`BaseOutboxDispatcher`.
 
     Args:
-        poll_interval_seconds: How often to poll the outbox table.
+        poll_interval_seconds: Polling interval used when LISTEN/NOTIFY
+            wiring is *not* registered (legacy / SQLite fallback). Kept
+            short (default 5s) so deployments without the AFTER-INSERT
+            trigger still meet at-least-once latency targets.
+        idle_poll_interval_seconds: Polling interval used as a *safety net*
+            when LISTEN/NOTIFY is wired (see
+            :meth:`BaseOutboxDispatcher.register_notify_listener`). Should
+            be long (default 60s) because the NOTIFY signal carries the
+            wakeup; the poll only catches NOTIFYs lost on connection drop.
+            LIB-003 / TASK-W4-01 — eliminates ~17 000 idle queries/day per
+            dispatcher.
         lease_seconds: How long a record is leased per dispatch attempt.
         batch_size: Maximum records per poll cycle.
         max_attempts: Records exceeding this are dead-lettered.
@@ -195,6 +229,7 @@ class DispatcherConfig:
     """
 
     poll_interval_seconds: float = 5.0
+    idle_poll_interval_seconds: float = 60.0
     lease_seconds: int = 30
     batch_size: int = 100
     max_attempts: int = 5
@@ -259,6 +294,15 @@ class BaseOutboxDispatcher(ABC):
         self._config = config or DispatcherConfig()
         self._metrics = metrics or _create_metrics("outbox-dispatcher")
         self._stop_event = asyncio.Event()
+        # NOTIFY-driven wakeup queue. ``None`` until :meth:`run` registers a
+        # listener (or attempts to and falls back). The queue is bounded to 1
+        # because we only need a "something happened" signal — multiple
+        # NOTIFYs collapse into one wake-up.
+        self._notify_queue: asyncio.Queue[None] | None = None
+        # Caller for ``remove_listener`` style cleanup that the subclass
+        # returns from :meth:`register_notify_listener`. ``None`` when no
+        # listener was registered.
+        self._notify_unregister: Callable[[], Awaitable[None]] | None = None
 
     # ── Abstract interface ────────────────────────────────────────────────────
 
@@ -289,6 +333,42 @@ class BaseOutboxDispatcher(ABC):
         Returns:
             A ready-to-use Confluent producer.
         """
+
+    # ── LISTEN/NOTIFY hook (LIB-003 / TASK-W4-01) ─────────────────────────────
+
+    async def register_notify_listener(
+        self,
+        on_notify: Callable[[], None],
+    ) -> Callable[[], Awaitable[None]] | None:
+        """Wire a Postgres ``LISTEN`` on :data:`OUTBOX_NOTIFY_CHANNEL`.
+
+        Subclasses backed by Postgres SHOULD override this to call
+        ``asyncpg.Connection.add_listener(OUTBOX_NOTIFY_CHANNEL, ...)``
+        on a dedicated long-lived connection. The override MUST invoke
+        ``on_notify()`` for every NOTIFY received (the callback is
+        synchronous and just nudges the dispatcher's wake-up queue),
+        and return an async callable that removes the listener and
+        closes the connection on shutdown.
+
+        Args:
+            on_notify: Synchronous callback that the subclass MUST call
+                whenever a NOTIFY arrives on the channel.
+
+        Returns:
+            An async cleanup callable, or ``None`` to indicate
+            LISTEN/NOTIFY is unavailable (the dispatcher then falls
+            back to the legacy short-interval poll). The default
+            implementation returns ``None`` to preserve back-compat —
+            services that have not opted in get the same 5s poll as
+            before.
+
+        Raises:
+            Any exception raised here is caught by :meth:`run` and the
+            dispatcher logs a warning + falls back to polling.
+        """
+        # Default: no LISTEN wiring. Subclasses opt in by overriding.
+        _ = on_notify
+        return None
 
     # ── Delivery callback ─────────────────────────────────────────────────────
 
@@ -449,26 +529,140 @@ class BaseOutboxDispatcher(ABC):
         return await self._dispatch_batch()
 
     async def run(self) -> None:
-        """Start the background poll loop until :meth:`stop` is called."""
+        """Start the background poll loop until :meth:`stop` is called.
+
+        Wakeup strategy (LIB-003 / TASK-W4-01):
+
+        1. Try to register a Postgres ``LISTEN`` via
+           :meth:`register_notify_listener`. If wired, the loop waits on
+           the notify queue with a long ``idle_poll_interval_seconds``
+           timeout — the NOTIFY arrives within microseconds of a new
+           outbox INSERT, so polling becomes a safety net.
+        2. If registration fails or returns ``None`` (default), fall
+           back to the legacy short-interval ``poll_interval_seconds``
+           sleep. Existing deployments keep working unchanged.
+        """
+        # Build the wake-up queue first so the listener callback (which
+        # runs on the asyncpg I/O loop) has somewhere to push notifications.
+        self._notify_queue = asyncio.Queue(maxsize=1)
+        listen_active = False
+        try:
+            self._notify_unregister = await self.register_notify_listener(self._on_notify)
+            listen_active = self._notify_unregister is not None
+        except Exception as exc:
+            # Graceful degradation: a DB that does not support LISTEN
+            # (e.g. SQLite in tests) or a transient driver issue must
+            # not prevent the dispatcher from running.
+            logger.warning(
+                "outbox_dispatcher_listen_unavailable",
+                error=str(exc),
+                fallback_poll_seconds=self._config.poll_interval_seconds,
+            )
+            self._notify_unregister = None
+
+        # Effective sleep depends on whether NOTIFY is delivering wake-ups.
+        # When NOTIFY is active we use the long idle interval — the queue
+        # wake-up handles the common case. When inactive we keep the
+        # legacy short interval so latency targets are preserved.
+        idle_timeout = self._config.idle_poll_interval_seconds if listen_active else self._config.poll_interval_seconds
+
         logger.info(
             "outbox_dispatcher_started",
             worker_id=self._config.worker_id,
             poll_interval=self._config.poll_interval_seconds,
+            idle_poll_interval=self._config.idle_poll_interval_seconds,
+            listen_notify=listen_active,
+            channel=OUTBOX_NOTIFY_CHANNEL if listen_active else None,
         )
-        while not self._stop_event.is_set():
-            try:
-                results = await self._dispatch_batch()
-                if results:
-                    logger.debug(
-                        "outbox_dispatch_cycle",
-                        dispatched=len(results),
-                        success=sum(1 for r in results if r.success),
-                        failed=sum(1 for r in results if not r.success),
-                    )
-            except Exception as exc:
-                logger.error("outbox_dispatch_cycle_error", error=str(exc))
-            await asyncio.sleep(self._config.poll_interval_seconds)
+        try:
+            while not self._stop_event.is_set():
+                try:
+                    results = await self._dispatch_batch()
+                    if results:
+                        logger.debug(
+                            "outbox_dispatch_cycle",
+                            dispatched=len(results),
+                            success=sum(1 for r in results if r.success),
+                            failed=sum(1 for r in results if not r.success),
+                        )
+                except Exception as exc:
+                    logger.error("outbox_dispatch_cycle_error", error=str(exc))
+
+                if self._stop_event.is_set():
+                    break
+                # Race the wake-up sources: either a NOTIFY landed in the
+                # queue (sub-millisecond latency on a healthy connection)
+                # or the timeout expires (safety net poll).
+                await self._wait_for_wakeup(idle_timeout)
+        finally:
+            # Always release the LISTEN connection so we don't leak a DB
+            # session when the dispatcher is stopped/cancelled.
+            if self._notify_unregister is not None:
+                try:
+                    await self._notify_unregister()
+                except Exception as exc:
+                    logger.warning("outbox_dispatcher_listen_cleanup_failed", error=str(exc))
+                self._notify_unregister = None
+            self._notify_queue = None
         logger.info("outbox_dispatcher_stopped", worker_id=self._config.worker_id)
+
+    def _on_notify(self) -> None:
+        """Callback invoked by the LISTEN listener (called from asyncpg loop).
+
+        Pushes a single sentinel into the wake-up queue. Multiple
+        NOTIFYs collapse into one wake-up because the queue is bounded
+        to ``maxsize=1`` — the dispatcher always re-polls the table
+        after waking, so we don't lose work.
+        """
+        queue = self._notify_queue
+        if queue is None:
+            return
+        # ``put_nowait`` raises ``QueueFull`` when a wake-up is already
+        # pending. That's fine — the loop will see all NOTIFYs
+        # accumulated since the last poll on its next pass.
+        with contextlib.suppress(asyncio.QueueFull):
+            queue.put_nowait(None)
+
+    async def _wait_for_wakeup(self, timeout: float) -> None:
+        """Wait for either a NOTIFY wake-up, a stop signal, or *timeout*.
+
+        Returns silently in all three cases — the caller just re-enters
+        the dispatch loop afterwards.
+        """
+        queue = self._notify_queue
+        if queue is None:
+            # Defensive: should never happen because :meth:`run` always
+            # initialises the queue. Fall back to a plain sleep.
+            await asyncio.sleep(timeout)
+            return
+
+        stop_task = asyncio.create_task(self._stop_event.wait())
+        notify_task = asyncio.create_task(queue.get())
+        try:
+            done, _pending = await asyncio.wait(
+                {stop_task, notify_task},
+                timeout=timeout,
+                return_when=asyncio.FIRST_COMPLETED,
+            )
+            # If neither task completed, the timeout fired — that's the
+            # safety-net poll. Nothing to do but return.
+            _ = done
+        finally:
+            # Cancel the pending awaiters so they don't accumulate as
+            # leaked tasks across loop iterations. We swallow both
+            # ``CancelledError`` (expected) and any unexpected exception
+            # because re-raising here would mask the dispatch result.
+            for task in (stop_task, notify_task):
+                if not task.done():
+                    task.cancel()
+                    # Narrow to CancelledError: the wake tasks only ever raise
+                    # CancelledError under normal cancellation. Any other
+                    # exception from `await task` is a real bug in the wake
+                    # implementation (or its asyncio plumbing) and MUST
+                    # surface — suppressing `Exception` here would mask future
+                    # regressions. Post-audit review SF #6.
+                    with contextlib.suppress(asyncio.CancelledError):
+                        await task
 
     def stop(self) -> None:
         """Signal the dispatcher to stop after the current cycle."""

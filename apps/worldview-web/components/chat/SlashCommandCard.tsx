@@ -37,6 +37,9 @@ import {
 
 import { createGateway } from "@/lib/gateway";
 import { useAuth } from "@/hooks/useAuth";
+// QA A-F-001/F-002 (2026-05-21): shared selection contract.
+import { qk } from "@/lib/query/keys";
+import { useResolvedPortfolioId } from "@/hooks/useResolvedPortfolioId";
 import {
   formatPrice,
   formatPercentDirect,
@@ -196,15 +199,23 @@ function QuoteCard({ ticker }: { ticker: string }) {
  */
 function PortfolioCard() {
   const { accessToken } = useAuth();
-  // First fetch portfolios → pick the first (root or default) → fetch holdings.
+  // QA A-F-001 (2026-05-21): central qk.portfolios.list() shares cache
+  // with PortfolioSwitcher / dashboard widgets; pre-fix the bare
+  // `["slash-portfolios", accessToken]` key forked the cache.
   const { data: portfolios, isLoading: pLoading } = useQuery<Portfolio[]>({
-    queryKey: ["slash-portfolios", accessToken],
+    queryKey: qk.portfolios.list(),
     queryFn: () => createGateway(accessToken).getPortfolios(),
     enabled: !!accessToken,
-    staleTime: 30_000, // WHY 30s: portfolios change rarely; reuse list across cards.
+    staleTime: 30_000,
   });
 
-  const portfolio = portfolios?.[0] ?? null;
+  // QA A-F-002 (2026-05-21): respect the PortfolioSwitcher chip
+  // selection. Pre-fix the chat slash command always targeted
+  // portfolios[0] regardless of which portfolio the user had picked
+  // in the TopBar.
+  const resolvedPortfolioId = useResolvedPortfolioId(portfolios);
+  const portfolio =
+    portfolios?.find((p) => p.portfolio_id === resolvedPortfolioId) ?? null;
 
   const { data: holdings, isLoading: hLoading, error } = useQuery<HoldingsResponse>({
     queryKey: ["slash-holdings", portfolio?.portfolio_id, accessToken],

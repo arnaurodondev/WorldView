@@ -39,7 +39,7 @@ export interface DateRangePickerProps {
   onChange: (range: DateRange | undefined) => void;
   placeholder?: string;
   disabled?: boolean;
-  /** "compact" matches terminal row height (h-7). "default" = h-9. "comfortable" = h-10. */
+  /** "compact" matches terminal row height (h-7). "default" = h-[36px]. "comfortable" = h-10. */
   density?: "compact" | "default" | "comfortable";
   /** Optional minimum selectable date (e.g. today for future-only ranges). */
   minDate?: Date;
@@ -76,7 +76,7 @@ function formatRange(range: DateRange | undefined, placeholder: string): string 
 
 const DENSITY_HEIGHT: Record<NonNullable<DateRangePickerProps["density"]>, string> = {
   compact: "h-7 text-[11px]",
-  default: "h-9 text-[12px]",
+  default: "h-[36px] text-[12px]",
   comfortable: "h-10 text-[13px]",
 };
 

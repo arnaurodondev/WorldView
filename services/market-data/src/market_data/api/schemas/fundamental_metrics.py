@@ -33,6 +33,9 @@ class ScreenFilterRequest(BaseModel):
     max_value: float | None = None
     period_type: str | None = None
     sector: str | None = None
+    # FIX-LIVE-M (2026-05-24): GICS industry filter (e.g. "Semiconductors").
+    # Sector alone is too broad for queries like "AI chip companies".
+    industry: str | None = None
 
 
 class ScreenRequest(BaseModel):

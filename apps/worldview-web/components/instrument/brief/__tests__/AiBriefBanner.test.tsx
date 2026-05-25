@@ -1,40 +1,30 @@
 /**
  * components/instrument/brief/__tests__/AiBriefBanner.test.tsx
  *
- * WHY THIS EXISTS (PLAN-0090 T-E-02): AiBriefBanner is the 1-line collapsible
- * AI brief that sits between the instrument header and tab bar (PRD-0088 §6.5).
- * This test pins three behaviours:
+ * WHY THIS EXISTS: AiBriefBanner (T-23) is the always-visible AI brief
+ * banner between InstrumentHeader and the tab strip. It uses the
+ * useInstrumentBrief hook (T-04) for the lazy-generate lifecycle.
  *
- *   1. test_AiBriefBanner_hides_when_brief_null
- *      The banner MUST render nothing when the gateway returns no brief — no
- *      empty box, no skeleton (spec: "banner hidden entirely if brief returns
- *      404 or is null"). A regression that leaves an empty 24-px row would
- *      shift the chart by 24 px on every cold-cache instrument.
+ * PRE-W5 behaviour (now replaced):
+ *   - Returned null when brief was not available → empty DOM.
  *
- *   2. test_AiBriefBanner_expands_on_click
- *      First click expands; second click collapses. The visual toggle is the
- *      whole point of the component.
+ * W5-T-23 behaviour (what we test):
+ *   1. Banner is ALWAYS visible — never renders an empty element (Δ27, §1.4).
+ *      Even when status is "unavailable", the 24-px banner row is present.
+ *   2. Shows "BRIEF" label + status text in collapsed mode.
+ *   3. Expand/collapse toggle via the button still works when status="ready".
+ *   4. sessionStorage `wv:brief-collapsed:{entityId}` persists expand pref.
+ *   5. Hydrates expand pref from sessionStorage on mount.
  *
- *   3. test_AiBriefBanner_persists_state_to_sessionStorage
- *      The collapse pref is persisted in sessionStorage so navigating away and
- *      back keeps the user's choice. Spec mandates sessionStorage (NOT local-
- *      storage) so the pref doesn't outlive the tab.
- *
- * MOCK STRATEGY: we mock @/lib/gateway so the brief query resolves to whatever
- * the test scenario needs. useAuth is mocked to provide a token so the query
- * is enabled. next/navigation is mocked because some sibling code reads
- * usePathname() during render. We use a per-test fresh QueryClient.
+ * MOCK STRATEGY: mock `useInstrumentBrief` directly — that is the hook's
+ * public API surface. Avoids threading a QueryClientProvider + AuthContext
+ * + gateway fetch through a component that no longer does those things itself.
  */
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, waitFor, fireEvent } from "@testing-library/react";
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import type { ReactNode } from "react";
+import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 
 // ── Mocks ────────────────────────────────────────────────────────────────────
-// WHY a hoisted vi.mock for gateway: hoist makes the mock replace the import
-// before the component module pulls it in. Without hoist, the component would
-// import the real module and we'd hit the network in jsdom.
 
 vi.mock("next/navigation", () => ({
   usePathname: vi.fn(() => "/instruments/ent-001"),
@@ -43,55 +33,28 @@ vi.mock("next/navigation", () => ({
   useParams: vi.fn(() => ({ entityId: "ent-001" })),
 }));
 
-vi.mock("@/hooks/useAuth", () => ({
-  useAuth: vi.fn(() => ({
-    accessToken: "test-token",
-    isAuthenticated: true,
-    isLoading: false,
-    user: { user_id: "u1", tenant_id: "t1", email: "a@b.com", name: "A", avatar_url: null },
-    setTokens: vi.fn(),
-    logout: vi.fn(),
-  })),
+// WHY mock useInstrumentBrief directly: T-23's AiBriefBanner receives its
+// data exclusively from this hook. Mocking at this layer is cheaper and
+// more reliable than mocking the gateway + QueryClient + auth chain.
+const mockUseInstrumentBrief = vi.hoisted(() => vi.fn());
+
+vi.mock("@/components/instrument/hooks/useInstrumentBrief", () => ({
+  useInstrumentBrief: mockUseInstrumentBrief,
 }));
 
-// WHY per-test mock of gateway: each scenario needs a different return value
-// (null vs a populated brief). We use vi.hoisted to share a handle so each
-// test can override the mock function via `mockGateway.getInstrumentBrief
-// .mockResolvedValue(...)`.
-const mockGateway = vi.hoisted(() => ({
-  getInstrumentBrief: vi.fn(),
-}));
+// WHY mock formatRelativeTime: it reads Date.now() internally; mocking keeps
+// snapshot tests stable without time-freezing the entire test suite.
+vi.mock("@/lib/utils", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/utils")>();
+  return { ...actual, formatRelativeTime: vi.fn(() => "3h ago") };
+});
 
-vi.mock("@/lib/gateway", () => ({
-  createGateway: vi.fn(() => mockGateway),
-  GatewayError: class GatewayError extends Error {
-    status: number;
-    constructor(status: number, msg: string) {
-      super(msg);
-      this.status = status;
-    }
-  },
-}));
-
-// IMPORTANT: import the component AFTER vi.mock calls so the mocks are wired.
+// IMPORTANT: import AFTER vi.mock calls so mocks are wired.
 // eslint-disable-next-line import/first
 import { AiBriefBanner } from "@/components/instrument/brief/AiBriefBanner";
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
-/** Fresh QueryClient per test — see makeWrapper pattern in wave-f-remainder. */
-function Wrapper({ children }: { children: ReactNode }) {
-  const qc = new QueryClient({
-    defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
-  });
-  return <QueryClientProvider client={qc}>{children}</QueryClientProvider>;
-}
-
-/**
- * Minimal valid BriefingResponse — only the fields the banner reads.
- * Cast to any-then-explicit because the full type pulls in many unrelated
- * fields (sections, entity_mentions, etc.) the banner doesn't touch.
- */
 function fakeBrief(narrative: string) {
   return {
     narrative,
@@ -106,83 +69,104 @@ function fakeBrief(narrative: string) {
 // ── Test resets ──────────────────────────────────────────────────────────────
 
 beforeEach(() => {
-  // Reset mocks + clear sessionStorage between tests so persistence assertions
-  // are deterministic (no cross-test contamination).
-  mockGateway.getInstrumentBrief.mockReset();
+  mockUseInstrumentBrief.mockReset();
   window.sessionStorage.clear();
 });
 
 // ── Tests ────────────────────────────────────────────────────────────────────
 
-describe("AiBriefBanner", () => {
-  it("renders nothing when the brief is null (banner hidden entirely)", async () => {
-    // Resolve to null = brief 404 / cold-cache path. Component should bail
-    // before rendering any DOM at all.
-    mockGateway.getInstrumentBrief.mockResolvedValue(null);
-    const { container } = render(
-      <Wrapper>
-        <AiBriefBanner entityId="ent-001" />
-      </Wrapper>,
-    );
-    // WHY waitFor: the query is async; first render returns undefined data
-    // (which also yields null). We just need the empty render to stabilise.
-    await waitFor(() => {
-      expect(container).toBeEmptyDOMElement();
+describe("AiBriefBanner (W5-T-23 — always-visible rewrite)", () => {
+  it("is always visible — renders the BRIEF label even when unavailable", () => {
+    // WHY "unavailable": simulates a cold-cache + generation timeout scenario.
+    // Pre-W5 the banner would return null here; W5 keeps the 24px layout slot.
+    mockUseInstrumentBrief.mockReturnValue({
+      data: undefined,
+      status: "unavailable",
+      retryAfter: undefined,
+      refetch: vi.fn(),
     });
+    render(<AiBriefBanner entityId="ent-001" />);
+    // Banner is visible with BRIEF label (always-visible contract §1.4).
+    expect(screen.getByText("BRIEF")).toBeInTheDocument();
+    // Status label "Unavailable" appears in the collapsed preview area.
+    expect(screen.getByText("Unavailable")).toBeInTheDocument();
   });
 
-  it("expands on first click and collapses on second click", async () => {
-    mockGateway.getInstrumentBrief.mockResolvedValue(fakeBrief("Apple beat EPS by 5c on iPhone strength."));
-    render(
-      <Wrapper>
-        <AiBriefBanner entityId="ent-001" />
-      </Wrapper>,
+  it("shows 'Generating…' when status is generating", () => {
+    mockUseInstrumentBrief.mockReturnValue({
+      data: undefined,
+      status: "generating",
+      retryAfter: undefined,
+      refetch: vi.fn(),
+    });
+    render(<AiBriefBanner entityId="ent-001" />);
+    expect(screen.getByText("Generating…")).toBeInTheDocument();
+  });
+
+  it("expands on first click and collapses on second click when ready", async () => {
+    mockUseInstrumentBrief.mockReturnValue({
+      data: fakeBrief("Apple beat EPS by 5c on iPhone strength."),
+      status: "ready",
+      retryAfter: undefined,
+      refetch: vi.fn(),
+    });
+    render(<AiBriefBanner entityId="ent-001" />);
+    const toggleButton = screen.getByRole("button");
+
+    // Default state: collapsed → aria-expanded="false" (ready + not expanded).
+    expect(toggleButton).toHaveAttribute("aria-expanded", "false");
+
+    // First click → expand (aria-expanded goes true when ready + expanded).
+    fireEvent.click(toggleButton);
+    await waitFor(() =>
+      expect(toggleButton).toHaveAttribute("aria-expanded", "true"),
     );
-    // WHY waitFor: query resolution is async — wait for the BRIEF label.
-    const toggleButton = await waitFor(() => screen.getByRole("button"));
-    // Default state: collapsed → aria-expanded="false".
-    expect(toggleButton).toHaveAttribute("aria-expanded", "false");
 
-    // First click → expand.
+    // Second click → collapse.
     fireEvent.click(toggleButton);
-    expect(toggleButton).toHaveAttribute("aria-expanded", "true");
-
-    // Second click → collapse again.
-    fireEvent.click(toggleButton);
-    expect(toggleButton).toHaveAttribute("aria-expanded", "false");
+    await waitFor(() =>
+      expect(toggleButton).toHaveAttribute("aria-expanded", "false"),
+    );
   });
 
   it("persists collapse state to sessionStorage keyed by entityId", async () => {
-    mockGateway.getInstrumentBrief.mockResolvedValue(fakeBrief("Some narrative content here."));
-    render(
-      <Wrapper>
-        <AiBriefBanner entityId="ent-001" />
-      </Wrapper>,
-    );
-    const toggleButton = await waitFor(() => screen.getByRole("button"));
+    mockUseInstrumentBrief.mockReturnValue({
+      data: fakeBrief("Some narrative content here."),
+      status: "ready",
+      retryAfter: undefined,
+      refetch: vi.fn(),
+    });
+    render(<AiBriefBanner entityId="ent-001" />);
+    const toggleButton = screen.getByRole("button");
+
     // Expand → sessionStorage should now hold "expanded".
     fireEvent.click(toggleButton);
-    expect(window.sessionStorage.getItem("wv:brief-collapsed:ent-001")).toBe("expanded");
+    await waitFor(() =>
+      expect(window.sessionStorage.getItem("wv:brief-collapsed:ent-001")).toBe("expanded"),
+    );
+
     // Collapse → "collapsed".
     fireEvent.click(toggleButton);
-    expect(window.sessionStorage.getItem("wv:brief-collapsed:ent-001")).toBe("collapsed");
+    await waitFor(() =>
+      expect(window.sessionStorage.getItem("wv:brief-collapsed:ent-001")).toBe("collapsed"),
+    );
   });
 
-  it("hydrates from sessionStorage='expanded' on mount", async () => {
-    // Pre-seed sessionStorage to simulate a previous session leaving the
-    // banner expanded. On mount the useEffect should pick this up.
+  it("hydrates from sessionStorage='expanded' on mount when ready", async () => {
+    // Pre-seed sessionStorage to simulate previous session leaving banner expanded.
     window.sessionStorage.setItem("wv:brief-collapsed:ent-001", "expanded");
-    mockGateway.getInstrumentBrief.mockResolvedValue(fakeBrief("Persisted-expanded narrative."));
-    render(
-      <Wrapper>
-        <AiBriefBanner entityId="ent-001" />
-      </Wrapper>,
-    );
-    const toggleButton = await waitFor(() => screen.getByRole("button"));
-    // WHY waitFor: the useEffect that reads sessionStorage runs after the
-    // first paint — give React a tick to flush the state update.
-    await waitFor(() => {
-      expect(toggleButton).toHaveAttribute("aria-expanded", "true");
+    mockUseInstrumentBrief.mockReturnValue({
+      data: fakeBrief("Persisted-expanded narrative."),
+      status: "ready",
+      retryAfter: undefined,
+      refetch: vi.fn(),
     });
+    render(<AiBriefBanner entityId="ent-001" />);
+    const toggleButton = screen.getByRole("button");
+    // WHY waitFor: the useEffect that reads sessionStorage runs after the first
+    // paint — give React a tick to flush the state update.
+    await waitFor(() =>
+      expect(toggleButton).toHaveAttribute("aria-expanded", "true"),
+    );
   });
 });

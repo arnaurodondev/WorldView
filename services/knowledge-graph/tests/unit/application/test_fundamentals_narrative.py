@@ -38,14 +38,16 @@ class TestBuildFundamentalsNarrativeDeterminism:
         result2 = build_fundamentals_narrative(**kwargs)
         assert result1 == result2
 
-    def test_header_always_present(self) -> None:
-        result = build_fundamentals_narrative("Foo Corp", "financial_instrument")
+    def test_header_present_when_data_provided(self) -> None:
+        result = build_fundamentals_narrative("Foo Corp", "financial_instrument", price=100.0)
+        assert result is not None
         assert "Foo Corp" in result
         assert "financial_instrument" in result
 
-    def test_no_financial_data_fallback(self) -> None:
+    def test_no_financial_data_returns_none(self) -> None:
+        # No financial fields → None so callers skip ANN indexing (BP-540).
         result = build_fundamentals_narrative("X", "org")
-        assert "No financial data available" in result
+        assert result is None
 
     def test_full_narrative_contains_all_sections(self) -> None:
         result = build_fundamentals_narrative(
@@ -68,7 +70,9 @@ class TestBuildFundamentalsNarrativeDeterminism:
 
     def test_description_included_when_provided(self) -> None:
         result = build_fundamentals_narrative(
-            "Tech Co", "financial_instrument", description="Leading software company."
+            "Tech Co",
+            "financial_instrument",
+            description="Leading software company.",
         )
         assert "Leading software company." in result
 

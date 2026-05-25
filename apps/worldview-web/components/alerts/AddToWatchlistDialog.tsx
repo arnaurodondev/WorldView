@@ -29,6 +29,8 @@ import {
 import { useAuth } from "@/hooks/useAuth";
 import { createGateway } from "@/lib/gateway";
 import { cn } from "@/lib/utils";
+// BP-497 / HR-060 (2026-05-21): central query-key factory.
+import { qk } from "@/lib/query/keys";
 
 // ── Props ──────────────────────────────────────────────────────────────────
 
@@ -60,8 +62,12 @@ export function AddToWatchlistDialog({
   // ── Watchlist list query ───────────────────────────────────────────────
   // WHY enabled: only fetch when the dialog is open + we have a token. No
   // background polling — the list isn't going to change between alerts.
+  // BP-497 / HR-060 (2026-05-21): central qk.watchlists.list() shares
+  // the cache with the sidebar WatchlistPanel + every other watchlist
+  // consumer — opening this dialog now reuses the sidebar's cached
+  // list instead of refetching.
   const { data: watchlists = [], isLoading } = useQuery({
-    queryKey: ["watchlists-for-add"],
+    queryKey: qk.watchlists.list(),
     queryFn: () => createGateway(accessToken).getWatchlists(),
     enabled: open && Boolean(accessToken),
     staleTime: 60_000, // watchlist list changes rarely; 60s avoids re-fetch on every open
@@ -82,9 +88,12 @@ export function AddToWatchlistDialog({
     retryDelay: (attemptIndex: number) =>
       Math.min(1000 * 2 ** (attemptIndex - 1), 4000),
     onSuccess: async (_, vars) => {
-      // Invalidate the watchlist queries that will now show the new member.
-      await queryClient.invalidateQueries({ queryKey: ["watchlist", vars.watchlistId] });
-      await queryClient.invalidateQueries({ queryKey: ["watchlists-for-add"] });
+      // Invalidate the watchlist queries that will now show the new
+      // member. Using the central factory's `.all` prefix invalidates
+      // every watchlist-scoped query (list + members + sidebar) in one
+      // partial-match pass — TanStack's documented cascade behaviour.
+      await queryClient.invalidateQueries({ queryKey: qk.watchlists.detail(vars.watchlistId) });
+      await queryClient.invalidateQueries({ queryKey: qk.watchlists.list() });
       setStatus({ kind: "ok", text: "Added to watchlist." });
     },
     onError: (err) => {

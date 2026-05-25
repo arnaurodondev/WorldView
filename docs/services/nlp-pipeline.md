@@ -116,24 +116,37 @@ Key behaviours:
 
 ### Block 5 — Routing Score
 
-Computes a composite routing score from 8 weighted signals. Weights sum to exactly 1.0 (enforced
-by a module-level assertion):
+#### Routing signal v2 (PLAN-0093 Sub-Plan C, 2026-05-23)
+
+Audit 2026-05-23 (F-NPL-003/004/006, F-NPL-ROUTING-001) found that 3 of the original
+8 signals were permanently zero in the current single-pass routing architecture:
+
+| Dropped signal | Reason it always fired 0.0 |
+|---|---|
+| `watchlist` | Checks `mention.resolved_entity_id`, but routing runs BEFORE entity resolution |
+| `novelty` | Hardcoded to `1.0` at the call site — MinHash novelty runs AFTER routing |
+| `price_impact` | Sourced from `article_impact_windows` which is empty (F-NPL-FUNDAMENTALS-001) |
+
+PLAN-0093 C-1 drops these signals from `compute_routing_score()` and re-weights the
+remaining 5 so they still sum to exactly 1.0 (enforced by module-level assertion).
+Re-adding the dropped signals would require implementing two-pass routing
+(route → resolve → re-route); deferred to a follow-up plan.
+
+#### Active signal weights (v2)
 
 | Signal | Weight | Data source |
 |--------|--------|-------------|
-| `entity_density` | 0.25 | Block 4 mention count / section count |
-| `source_reliability` | 0.20 | `source_trust_weights` table |
-| `novelty` | 0.15 | Block 8 MinHash similarity |
-| `recency` | 0.10 | `published_at` age |
-| `watchlist` | 0.10 | Valkey SET `nlp:v1:watched_entities` (best-effort, 0.0 on failure) |
-| `price_impact` | 0.10 | `article_impact_windows` (0.0 when not yet labelled) |
-| `document_type` | 0.05 | Source type (filings > news) |
-| `extraction_yield` | 0.05 | Prior LLM extraction quality for this source |
+| `entity_density` | 0.35 | Block 4 mention count / section count |
+| `source_reliability` | 0.30 | `source_trust_weights` table |
+| `recency` | 0.15 | `published_at` age |
+| `document_type` | 0.10 | Source type (filings > news) |
+| `extraction_yield` | 0.10 | Prior LLM extraction quality for this source |
 
-Routing tier boundaries:
-- `DEEP` ≥ 0.70
-- `MEDIUM` ≥ 0.35 (lowered from 0.45 — watchlist signal fires post-resolution)
-- `LIGHT` ≥ 0.20
+Routing tier boundaries (recalibrated for the v2 ceiling — the live-signal max is
+now ~0.90+ vs ~0.65 in v1):
+- `DEEP` ≥ 0.75 (was 0.70)
+- `MEDIUM` ≥ 0.45 (was 0.35)
+- `LIGHT` ≥ 0.20 (unchanged)
 - `SUPPRESS` < 0.20
 
 ### Block 6 — Suppression Gate
@@ -227,6 +240,7 @@ Runs on MEDIUM and DEEP tier only. Uses `Qwen/Qwen3-235B-A22B-Instruct-2507` via
 | GET | `/api/v1/entities` | — | Search entities by mention text |
 | GET | `/api/v1/entities/{id}` | — | Entity detail with resolution statistics |
 | GET | `/api/v1/entities/{id}/articles` | — | Articles mentioning entity with `display_relevance_score`, `sentiment`, `impact_score`. Params: `start_date`, `end_date`, `order_by` |
+| GET | `/api/v1/entities/{id}/sentiment-timeseries` | X-Internal-JWT | Daily sentiment aggregates (article_count, avg_relevance, positive_ratio, negative_ratio, avg_impact_score). Params: `days` [1–365, default 90]. PLAN-0091 WIP. |
 | POST | `/api/v1/entities/resolve` | — | Query-time 5-stage entity resolution |
 | POST | `/api/v1/search/chunks` | — | ANN chunk/section search with entity facets and citation metadata |
 | POST | `/api/v1/vector-search` | — | Semantic section/chunk search (legacy) |
@@ -269,6 +283,21 @@ Three fallback branches (tracked by Prometheus counter `news_display_score_path_
 | `nlp.signal.detected.v1` | `NlpSignalDetected` | `doc_id` | Outbox (`nlp_db`) | `nlp.signal.detected.v1.avsc` |
 | `entity.provisional.queued.v1` | `EntityProvisionalQueued` | `entity_id` | Outbox (`nlp_db`) | `entity.provisional.queued.v1.avsc` |
 | `intelligence.temporal_event.v1` | temporal event | — | Outbox (`nlp_db`) | `intelligence.temporal_event.v1.avsc` |
+
+#### Intentional asymmetry: enriched vs. temporal event filtering (DP-F001)
+
+The two produced event families filter unresolved entity mentions differently — by design.
+`nlp.article.enriched.v1` carries `raw_relations_json`, `raw_events_json`, and `raw_claims_json`
+payloads built by `_build_raw_*` in `infrastructure/messaging/consumers/blocks/enriched_event.py`.
+Those builders drop any mention that resolves to neither a canonical entity nor a provisional
+queue id, because the downstream graph writer (S7 Block 12) would have no entity to anchor the
+edge to. `intelligence.temporal_event.v1` does the opposite: it emits every detected event
+regardless of how many participants the resolver tied to canonical entities. Macro events such
+as CPI prints, FOMC decisions, and sanctions announcements legitimately have zero company
+participants, and S7's `TemporalEventConsumer` accepts `exposed_entities=[]` without rejection.
+This asymmetry is intentional — flagged DP-F001 in
+`docs/audits/2026-05-24-investigation-qa-open-items.md` so future QA passes do not re-open it
+as a bug.
 
 #### Key schema fields — `nlp.article.enriched.v1`
 
@@ -439,8 +468,8 @@ All environment variables use the prefix `NLP_PIPELINE_`. Loaded by `pydantic-se
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `NLP_PIPELINE_ROUTING_TIER_DEEP` | `0.70` | DEEP tier lower bound |
-| `NLP_PIPELINE_ROUTING_TIER_MEDIUM` | `0.35` | MEDIUM tier lower bound |
+| `NLP_PIPELINE_ROUTING_TIER_DEEP` | `0.75` | DEEP tier lower bound (PLAN-0093 C-1: was 0.70 in v1 formula) |
+| `NLP_PIPELINE_ROUTING_TIER_MEDIUM` | `0.45` | MEDIUM tier lower bound (PLAN-0093 C-1: was 0.35 in v1 formula) |
 | `NLP_PIPELINE_ROUTING_TIER_LIGHT` | `0.20` | LIGHT tier lower bound |
 | `NLP_PIPELINE_ENTITY_RESOLUTION_AUTO_RESOLVE_THRESHOLD` | `0.72` | Auto-resolve above this |
 | `NLP_PIPELINE_ENTITY_RESOLUTION_PROVISIONAL_THRESHOLD` | `0.45` | Provisional queue threshold |

@@ -101,8 +101,14 @@ def main() -> None:
 
             # Explicit ::vector cast required — psycopg2 binds the param as
             # text and pgvector won't implicitly coerce without the cast.
+            # BP-180: `:param::type` syntax is invalid with psycopg2 parameter
+            # substitution — must use CAST(:param AS type) instead.
             conn.execute(
-                text("UPDATE relation_type_registry SET embedding = :embedding::vector WHERE type_id = :type_id"),
+                text(
+                    "UPDATE relation_type_registry"
+                    " SET embedding = CAST(:embedding AS vector)"
+                    " WHERE type_id = :type_id"
+                ),
                 {"embedding": str(embedding), "type_id": type_id},
             )
             updated += 1

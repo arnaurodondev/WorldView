@@ -9,6 +9,11 @@ import pytest
 # before Settings() is instantiated in create_app() or any test fixture.
 os.environ.setdefault("MARKET_DATA_STORAGE_ACCESS_KEY", "minioadmin-test")
 os.environ.setdefault("MARKET_DATA_STORAGE_SECRET_KEY", "minioadmin-test")
+# PLAN-0093 T-A-1-03: the new observability.assert_app_env_or_die() boot guard
+# aborts startup when ``internal_jwt_skip_verification`` is True and APP_ENV is
+# unset.  Tests routinely enable skip_verification, so pin APP_ENV=test here
+# before any settings/create_app() call so test runs do not trip the guard.
+os.environ.setdefault("APP_ENV", "test")
 from httpx import ASGITransport, AsyncClient
 from market_data.app import create_app
 

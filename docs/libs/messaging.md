@@ -148,6 +148,7 @@ from messaging import OutboxStatus
 | `store_failure(failure)` | First failure | Persist `FailureInfo` to retry table. Return saved record. |
 | `update_failure(failure)` | Subsequent retries | Update attempt count and last error. |
 | `dead_letter(failure)` | Fatal error or max retries exceeded | Move to dead-letter store; alert. |
+| `_dead_letter_impl(failure)` | Called by `dead_letter()` after cap check | **Default**: publish to `<topic>.dead-letter.v1` via `dlq_emitter` (LIB-002). Override to add DB persistence; call `await super()._dead_letter_impl(failure)` to keep topic emission. |
 | `get_pending_retries()` | Background retry loop | Return all `FailureInfo` records eligible for retry. |
 | `process_message_from_failure(failure)` | Retry | Re-run business logic from `failure.record` (stored payload). |
 | `get_unit_of_work()` | Each message | Return a fresh async UoW context manager. |
@@ -209,6 +210,65 @@ Opt-in AIMD-style per-partition pause/resume. Reads four settings attributes:
 
 When `max_retries` is exceeded for a `RetryableError`, the message is dead-lettered.
 
+### Dead-letter topic emission (LIB-002 / TASK-W2-06)
+
+`BaseKafkaConsumer._dead_letter_impl` ships a **concrete default** that
+publishes a JSON failure envelope to `<original_topic>.dead-letter.v1` via
+an optional `DLQEmitterProtocol` passed at construction time. This makes
+dead-lettered messages observable from kafka-ui and external DLQ consumers
+without each subclass having to wire its own topic publishing.
+
+```python
+from messaging import BaseKafkaConsumer, ConsumerConfig, DLQEmitterProtocol
+
+class MyEmitter:
+    async def emit(self, topic, payload, headers=None, key=None):
+        # Use the service's outbox repo or a direct Kafka producer here.
+        await self._outbox_repo.add(topic=topic, payload=payload, headers=headers)
+
+consumer = MyConsumer(
+    config=ConsumerConfig(...),
+    dlq_emitter=MyEmitter(),  # NEW — opt-in for topic publishing
+)
+```
+
+**Behaviour matrix:**
+
+| `dlq_emitter` | Subclass overrides `_dead_letter_impl`? | Result |
+|---------------|-----------------------------------------|--------|
+| `None`        | No                                      | Logs `dead_letter_no_emitter_configured` warning, returns. (back-compat default) |
+| `None`        | Yes (no `super()` call)                 | Subclass behaviour only (e.g. DB write). |
+| Set           | No                                      | Publishes envelope to `<topic>.dead-letter.v1`. |
+| Set           | Yes + calls `super()._dead_letter_impl` | Subclass behaviour **and** topic publishing. |
+
+**Envelope payload** (JSON, UTF-8):
+
+```json
+{
+  "event_id": "01HXYZ...",
+  "original_topic": "content.article.raw.v1",
+  "partition": 3,
+  "offset": 42,
+  "attempt": 5,
+  "error": "<exception repr>",
+  "error_type": "RetryableError",
+  "dead_lettered_at": "2026-05-20T13:47:25.123456+00:00",
+  "consumer_group": "content-store-group-article"
+}
+```
+
+**Headers** emitted on every DLQ message:
+
+- `X-Dead-Letter-Error` — truncated stringified exception (≤1024 chars)
+- `X-Dead-Letter-Original-Topic` — source topic name
+- `X-Dead-Letter-Timestamp` — ISO-8601 UTC at dead-letter time
+- `X-Dead-Letter-Event-Id` — original `event_id` (also used as Kafka key)
+
+Emitter failures inside `_dead_letter_impl` are **logged and swallowed**
+(`dead_letter_emit_failed`) — by the time we reach this code the message
+has already been retried and counted against the cap, so re-raising would
+just churn the consumer loop. Wire an alert on the log event instead.
+
 ### Kafka Producer (`messaging.kafka.producer`)
 
 | Symbol | Purpose |
@@ -253,11 +313,12 @@ When `max_retries` is exceeded for a `RetryableError`, the message is dead-lette
 | Symbol | Purpose |
 |--------|---------|
 | `BaseOutboxDispatcher` | Lease-based outbox publisher. Hybrid: `dispatch_now()` inline + background `run()` poll loop. Marks records published only after Kafka ACK. Dead-letters records exceeding `max_attempts`. |
-| `DispatcherConfig` | All knobs: `poll_interval_seconds`, `lease_seconds`, `batch_size`, `max_attempts`, back-off params, `immediate_dispatch`, `worker_id`. |
+| `DispatcherConfig` | All knobs: `poll_interval_seconds`, `idle_poll_interval_seconds`, `lease_seconds`, `batch_size`, `max_attempts`, back-off params, `immediate_dispatch`, `worker_id`. |
 | `DeliveryResult` | Outcome of one dispatch: `record_id`, `success`, `topic`, `error`. |
 | `OutboxRecordProtocol` | Structural type for outbox table rows. |
 | `OutboxRepositoryProtocol` | Port for outbox table: `fetch_pending`, `mark_published`, `increment_attempts`, `move_to_dead_letter`. |
 | `UnitOfWorkWithOutboxProtocol` | UoW that exposes `.outbox` repository + `commit`/`rollback`. |
+| `OUTBOX_NOTIFY_CHANNEL` | Postgres channel name (`"outbox_events_new"`) used by the LISTEN/NOTIFY wake-up optimisation (LIB-003 / TASK-W4-01). |
 | `run_dispatcher(dispatcher)` | Coroutine — run in a background task via `asyncio.create_task(run_dispatcher(d))`. |
 
 **Abstract methods for `BaseOutboxDispatcher`:**
@@ -268,6 +329,87 @@ When `max_retries` is exceeded for a `RetryableError`, the message is dead-lette
 | `get_serializer(event_type)` | Avro value serializer callable for the given `event_type`. |
 | `get_producer()` | Confluent `SerializingProducer` instance. |
 | `on_delivery_failure(result)` *(optional)* | Override to add alerting on dead-letter. |
+| `register_notify_listener(on_notify)` *(optional)* | Wire a Postgres `LISTEN` on `OUTBOX_NOTIFY_CHANNEL` so the dispatcher wakes immediately on each new outbox INSERT. Default returns `None` (no LISTEN, dispatcher uses legacy 5s polling). See "LISTEN/NOTIFY wake-up" below. |
+
+#### LISTEN/NOTIFY wake-up (LIB-003 / TASK-W4-01)
+
+Polling the outbox every 5 seconds across 10 services costs ~172 800
+idle queries per day — pure waste when the table is empty. The
+dispatcher now supports a Postgres `LISTEN/NOTIFY` wake-up that
+collapses idle polling to a safety-net `idle_poll_interval_seconds`
+(default 60s) while keeping at-least-once semantics intact.
+
+**Activation is opt-in per service** in two steps:
+
+**1. Add an AFTER-INSERT trigger to `outbox_events`** (one-time Alembic
+migration per service that owns an outbox table):
+
+```sql
+CREATE OR REPLACE FUNCTION notify_outbox_events_new() RETURNS trigger AS $$
+BEGIN
+  -- Statement-level trigger: one NOTIFY per INSERT batch, not per row.
+  -- The dispatcher always re-polls the table when woken, so collapsing
+  -- multiple inserts into a single NOTIFY is safe and cheaper.
+  NOTIFY outbox_events_new;
+  RETURN NULL;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE TRIGGER outbox_events_notify_trigger
+  AFTER INSERT ON outbox_events
+  FOR EACH STATEMENT
+  EXECUTE FUNCTION notify_outbox_events_new();
+```
+
+Producers do not need to know about the trigger — any normal
+`INSERT INTO outbox_events (...)` automatically fires `NOTIFY
+outbox_events_new`. The NOTIFY is delivered to all LISTEN sessions
+when the transaction commits, so dual-write semantics are preserved
+(no spurious wake-ups on rolled-back inserts).
+
+**2. Override `register_notify_listener` in the service dispatcher** to
+wire `asyncpg.Connection.add_listener` on a dedicated connection:
+
+```python
+from messaging.kafka.dispatcher import OUTBOX_NOTIFY_CHANNEL, BaseOutboxDispatcher
+
+class MyServiceDispatcher(BaseOutboxDispatcher):
+    async def register_notify_listener(self, on_notify):
+        conn = await self._engine.connect()
+        raw = await conn.get_raw_connection()
+        asyncpg_conn = raw.driver_connection
+
+        def _callback(*_args):
+            # Called from asyncpg's I/O loop — must be sync + cheap.
+            on_notify()
+
+        await asyncpg_conn.add_listener(OUTBOX_NOTIFY_CHANNEL, _callback)
+
+        async def _cleanup():
+            await asyncpg_conn.remove_listener(OUTBOX_NOTIFY_CHANNEL, _callback)
+            await conn.close()
+
+        return _cleanup
+```
+
+**Back-compat is mandatory.** Services that don't override the hook
+behave exactly as before — `register_notify_listener` returns `None`
+by default, and the dispatcher falls back to the legacy
+`poll_interval_seconds=5` loop. Any exception raised inside the hook
+is caught and logged as `outbox_dispatcher_listen_unavailable`; the
+dispatcher then continues polling. This means a test using SQLite or
+a misconfigured driver never breaks the run loop.
+
+**Operational notes:**
+
+- LISTEN ties up a Postgres connection — use a dedicated one outside
+  the regular pool.
+- NOTIFY is delivered only on commit, so a producer rollback never
+  wakes the dispatcher (correct: nothing to dispatch).
+- The safety-net poll still fires every `idle_poll_interval_seconds`
+  to catch NOTIFYs lost during connection drops / restarts.
+- Multiple NOTIFYs between polls collapse into a single wake-up; the
+  dispatcher always re-polls the table after waking.
 
 ### Valkey Client (`messaging.valkey`)
 
@@ -303,6 +445,45 @@ async with pg_advisory_lock(session, "market-ingestion:eodhd-scheduler") as acqu
 - `pg_advisory_lock(session, name)` — async context manager; yields `True` if
   acquired, `False` otherwise. Uses `pg_try_advisory_lock` (non-blocking).
   Automatically releases on context exit.
+
+### `processed_events` Retention (`messaging.kafka.maintenance`)
+
+The Kafka consumer base class writes every successfully processed event id
+into a service-local ``processed_events`` table so that re-delivery
+(operator-driven offset rewinds, rebalance replays) is dropped via
+``is_duplicate()``. Without retention this table grows monotonically.
+
+`ProcessedEventsCleanupWorker` enforces a configurable retention window
+(default 30 days, default batch size 10 000 rows) with a batched, non-blocking
+DELETE using `FOR UPDATE SKIP LOCKED` so the live consumer is never blocked.
+
+```python
+from messaging import ProcessedEventsCleanupWorker
+
+worker = ProcessedEventsCleanupWorker(
+    service_name="content-store",
+    retention_days=30,   # default; override per service
+    batch_size=10_000,   # default; override on resource-constrained DBs
+)
+
+async with write_session_factory() as session:
+    deleted = await worker.run_once(session)
+```
+
+**Wiring guidance**:
+- Invoke `run_once()` daily (e.g. 02:00 UTC) via your service's existing
+  scheduler, or via a dedicated standalone entry point (`*_cleanup_main.py`)
+  per R22.
+- Use the **write** session factory — the worker issues DELETE statements.
+- Schema assumption: a `processed_events` table with `event_id` PRIMARY KEY
+  and `processed_at TIMESTAMPTZ`. Today only S5 content-store materialises
+  this table; other services use Valkey-backed dedup
+  (`ValkeyDedupConsumer`) and require no cleanup.
+
+**Safety note**: `processed_events` is belt-and-suspenders against operator
+offset rewinds — the consumer offset itself is the primary at-least-once
+guarantee. The 30-day default is comfortably longer than any plausible
+rewind window.
 
 ### EODHD Quota Service (`messaging.eodhd_quota`)
 

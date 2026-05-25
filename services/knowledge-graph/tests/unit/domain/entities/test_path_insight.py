@@ -169,7 +169,11 @@ class TestPathInsight:
     def test_path_insight_composite_score_formula_with_template(self) -> None:
         """PathInsight adds 0.1 template bonus to composite_score."""
         insight = self._make_insight(
-            hop_count=2, harmonic=0.8, diversity=0.6, surprise=0.5, template="supply_chain_3hop"
+            hop_count=2,
+            harmonic=0.8,
+            diversity=0.6,
+            surprise=0.5,
+            template="supply_chain_3hop",
         )
         from knowledge_graph.domain.entities.path_insight import PathInsight
 

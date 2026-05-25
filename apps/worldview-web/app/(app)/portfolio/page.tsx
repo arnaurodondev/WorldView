@@ -1,69 +1,76 @@
 /**
- * app/(app)/portfolio/page.tsx — Full Portfolio Page (Terminal Redesign, Wave 4)
+ * app/(app)/portfolio/page.tsx — Portfolio Overview Page (PRD-0089 W2 redesign).
  *
- * WHY THIS EXISTS: The dashboard PortfolioSummary widget shows only a 4-tile
- * summary. This page is the trader's full position-management view:
+ * WHY THIS CHANGED (W2): the 4-tab layout is replaced by a single dense overview
+ * that fits above the fold at 1440px. Heavy-lift analytics panels are relocated
+ * to /portfolio/analytics; transaction history moves to /portfolio/transactions.
+ * This follows Bloomberg PORT's one-page-per-portfolio pattern — traders scan
+ * holdings + KPIs + contributors in one view without switching tabs.
  *
- *   Holdings    — 10-column semantic table with live P&L + sector allocation
- *   Transactions — filter by BUY/SELL/DIVIDEND, newest-first
- *   Watchlist   — per-watchlist tabs with live prices (30s refresh)
- *   Brokerages  — collapsible panel inside the Transactions tab
+ * COMPONENT STACK (top → bottom):
+ *   1. PortfolioPageHeader         — name, scope hint, action buttons
+ *   2. BrokerageStatusBanner       — last sync time + error flag (gated: broker only)
+ *   3. PortfolioKPIStrip           — 8 tiles: total / day / unrealised / realized / cash / buying-pwr / gainer / loser
+ *   4. ExposureCurrencyStrip       — invested / cash / leverage / beta-adj (22px)
+ *   5. ConcentrationSectorTeaseStrip — HHI + top-3 sectors (22px)
+ *   6. PerformanceChartPanel       — 120px collapsible line chart + SPY overlay
+ *   7. SectorAllocationBar         — 22px stacked sector bar
+ *   8. HoldingsTableChrome         — 22px filter / count chrome
+ *   9. SemanticHoldingsTable       — 14-col AG Grid (rowHeight=20, context.holdingsSeries)
+ *  10. BottomInfoStrip (3-col grid) — col1: ContributorsStrip (top movers), col2: RecentActivityStrip (table),
+ *                                    col3: SectorExposurePanel (vertical sector list)
  *
- * WHY FOUR TABS (not panels): keeping 4 data surfaces in one view without tabs
- * would require a vertical scroll marathon through 500+ px of content.
- * Tabs map to 4 distinct trader workflows; switching is O(1) clicks.
+ * EMPTY STATE: BrokerageEmptyState replaces all content when holdings=0 AND !loading (V18).
  *
- * ARCHITECTURE (PLAN-0059 E-2-followup): the page is now a thin shell that:
- *   1. Loads data via `usePortfolioData()` — owns all 8 queries + KPI maths
- *      + ROOT-first sort + cross-mutation invalidations + the F-013
- *      archive mutation.
- *   2. Renders four extracted components: PortfolioPageHeader,
- *      PerformanceStrip, PortfolioKPIStrip, HoldingsTab/TransactionsTab/
- *      WatchlistsTabPanel.
- *   3. Owns three pieces of dialog-related state (open/close booleans for
- *      the three dialogs) — these intentionally stay at page level so
- *      buttons in the header can open dialogs at the page root.
+ * HOTKEYS (page-scoped):
+ *   b/B → /dashboard   t/T → /portfolio/transactions   a/A → /portfolio/analytics
+ *   w/W → /watchlists   r/R → invalidate all portfolio queries
+ *   c/C → toggle chart collapsed   1–5 → period chips   0 → "All"
  *
- * WHO USES IT: Authenticated users navigating to /portfolio.
- * DATA SOURCE: S9 portfolio + watchlist + brokerage routes (via the hook).
- * DESIGN REFERENCE: PRD-0031 §8 Portfolio, Wave 4.
- * PLAN-0059-G Wave G-2: The three portfolio dialogs (Create, AddPosition, Delete)
- * are lazy-loaded via next/dynamic. Dialogs are only rendered after a button click
- * — loading their JS (react-hook-form, zod, Radix Dialog portal) eagerly on page
- * load wastes parse budget. Lazy-loading saves ~60–80KB from the initial bundle.
- * These dialogs use Radix Dialog which opens a DOM portal — ssr:false is correct.
+ * WHO USES IT: authenticated users navigating to /portfolio.
+ * DATA SOURCE: S9 portfolio routes (via usePortfolioData orchestrator).
+ * DESIGN REFERENCE: PRD-0089 W2 §4.19, V-overview wireframe.
  */
 
 "use client";
-// WHY "use client": useState (dialog open/close + equity-curve period),
-// hook drives TanStack Query, child components include Radix portals,
-// and nuqs URL state hooks are browser-only.
+// WHY "use client": useState for local UI state (dialogs, chart collapsed, filter),
+// hotkey useEffect (document.addEventListener), nuqs URL state (period param),
+// TanStack Query client (useQueryClient for manual invalidation).
 
-import { useState, useTransition } from "react";
-// PLAN-0059 C-6: useQueryState backs the active-tab + equity-period in the
-// URL so deep-links round-trip ("share my Holdings view at 1Y period").
-// `parseAsStringLiteral` constrains the value to the allowed set; an
-// unknown URL value falls back to the default instead of crashing.
+import { useState, useEffect, useCallback } from "react";
 import { useQueryState, parseAsStringLiteral } from "nuqs";
 import dynamic from "next/dynamic";
+import { useRouter } from "next/navigation";
+import { useQueryClient } from "@tanstack/react-query";
 
 import { useAuth } from "@/hooks/useAuth";
-import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { Skeleton } from "@/components/ui/skeleton";
+import { qk } from "@/lib/query/keys";
+import { useExposure } from "@/hooks/useExposure";
 
-// ── Portfolio chrome ────────────────────────────────────────────────────────
+// ── Portfolio chrome components ─────────────────────────────────────────────
 import { PortfolioKPIStrip } from "@/components/portfolio/PortfolioKPIStrip";
-import { WatchlistsTabPanel } from "@/components/portfolio/WatchlistsTabPanel";
-// F-P-003 (PLAN-0051 W6): the equity-curve period state is hoisted to this
-// page so future panels can react to the same period. The type comes from
-// EquityCurveChart so the canonical period set lives in one place.
-import type { PeriodLabel } from "@/components/portfolio/EquityCurveChart";
-
-// ── Brokerage modal ─────────────────────────────────────────────────────────
+import { ExposureCurrencyStrip } from "@/components/portfolio/ExposureCurrencyStrip";
+import { ConcentrationSectorTeaseStrip } from "@/components/portfolio/ConcentrationSectorTeaseStrip";
+import { PerformanceChartPanel } from "@/components/portfolio/PerformanceChartPanel";
+import type { PerfPeriod } from "@/components/portfolio/PerformanceChartPanel";
+import { SectorAllocationBar } from "@/components/portfolio/SectorAllocationBar";
+import { HoldingsTableChrome } from "@/components/portfolio/HoldingsTableChrome";
+import { SemanticHoldingsTable } from "@/components/portfolio/SemanticHoldingsTable";
+import { ContributorsStrip } from "@/components/portfolio/ContributorsStrip";
+import { RecentActivityStrip } from "@/components/portfolio/RecentActivityStrip";
+import { SectorExposurePanel } from "@/components/portfolio/SectorExposurePanel";
+import { BrokerageEmptyState } from "@/components/portfolio/BrokerageEmptyState";
+import { BrokerageStatusBanner } from "@/components/portfolio/BrokerageStatusBanner";
 import { ConnectBrokerageModal } from "@/components/brokerage/ConnectBrokerageModal";
-
-// ── Terminal primitives ─────────────────────────────────────────────────────
 import { InlineEmptyState } from "@/components/data/InlineEmptyState";
+
+// ── Data hooks ─────────────────────────────────────────────────────────────
+import { PortfolioPageHeader } from "@/features/portfolio/components/PortfolioPageHeader";
+import { usePortfolioData } from "@/features/portfolio/hooks/usePortfolioData";
+import { usePortfolioBundle } from "@/features/portfolio/hooks/usePortfolioBundle";
+import { useTopMovers } from "@/features/portfolio/hooks/useTopMovers";
+import { useHoldingsSeries } from "@/features/portfolio/hooks/useHoldingsSeries";
 
 // ── Lazy-loaded portfolio dialogs ───────────────────────────────────────────
 // WHY next/dynamic for dialogs: the three dialogs each pull in react-hook-form,
@@ -78,98 +85,52 @@ import { InlineEmptyState } from "@/components/data/InlineEmptyState";
 // by which time the bundle will have loaded (dialogs are tiny, <30KB each).
 const CreatePortfolioDialog = dynamic(
   () => import("@/features/portfolio/components/CreatePortfolioDialog").then((m) => ({ default: m.CreatePortfolioDialog })),
-  {
-    ssr: false, // Radix Dialog portal requires browser DOM
-    loading: () => null, // dialog starts closed; skeleton is never visible
-  },
+  { ssr: false, loading: () => null },
 );
 
 const AddPositionDialog = dynamic(
   () => import("@/features/portfolio/components/AddPositionDialog").then((m) => ({ default: m.AddPositionDialog })),
-  {
-    ssr: false, // Radix Dialog portal requires browser DOM
-    loading: () => null, // dialog starts closed; skeleton is never visible
-  },
+  { ssr: false, loading: () => null },
 );
 
 const DeletePortfolioDialog = dynamic(
   () => import("@/features/portfolio/components/DeletePortfolioDialog").then((m) => ({ default: m.DeletePortfolioDialog })),
-  {
-    ssr: false, // Radix Dialog portal requires browser DOM
-    loading: () => null, // dialog starts closed; skeleton is never visible
-  },
+  { ssr: false, loading: () => null },
 );
-
-// ── Static imports (needed immediately on paint) ───────────────────────────
-import { PortfolioPageHeader } from "@/features/portfolio/components/PortfolioPageHeader";
-import { PerformanceStrip } from "@/features/portfolio/components/PerformanceStrip";
-import { HoldingsTab } from "@/features/portfolio/components/HoldingsTab";
-import { TransactionsTab } from "@/features/portfolio/components/TransactionsTab";
-import { usePortfolioData } from "@/features/portfolio/hooks/usePortfolioData";
-// PLAN-0070 C-1: fire the bundle endpoint to warm the cache in one round-trip.
-import { usePortfolioBundle } from "@/features/portfolio/hooks/usePortfolioBundle";
 
 // ── PortfolioPage ───────────────────────────────────────────────────────────
 
 export default function PortfolioPage() {
   const { accessToken } = useAuth();
+  const router = useRouter();
+  const queryClient = useQueryClient();
 
   // T-B-2-07: KPI strip is hard-locked to "1D". The const stays narrow so
   // queryKey shapes downstream compile unchanged.
   const selectedPeriod = "1D" as const;
 
-  // ── Dialog open/close state (page-scoped so headers can trigger them) ─
+  // ── Dialog open/close state (page-scoped so headers can trigger them) ──
   const [connectModalOpen, setConnectModalOpen] = useState(false);
   const [createPortfolioOpen, setCreatePortfolioOpen] = useState(false);
   const [addPositionOpen, setAddPositionOpen] = useState(false);
   const [deletePortfolioOpen, setDeletePortfolioOpen] = useState(false);
 
-  // ── F-P-003: hoisted equity-curve period state ────────────────────────
-  // WHY 3M default: matches Bloomberg PORT default — long enough to show a
-  // meaningful trend without compressing the most recent moves.
-  // C-6: backed by URL `?period=` so deep-links round-trip. `clearOnDefault`
-  // keeps the URL clean when the user is on the default — no `?period=3M`
-  // noise on first visit.
-  const [equityPeriod, setEquityPeriod] = useQueryState(
+  // ── W2: chart collapse state + filter state ────────────────────────────
+  const [chartCollapsed, setChartCollapsed] = useState(false);
+  const [filterText, setFilterText] = useState("");
+  const [filterVisible, setFilterVisible] = useState(false);
+
+  // ── W2: performance period URL-backed state ───────────────────────────
+  // WHY URL state for period: deep-links encode which period the user is on.
+  // WHY clearOnDefault: keeps the URL clean when on the default period.
+  const [period, setPeriod] = useQueryState(
     "period",
-    parseAsStringLiteral([
-      "1W",
-      "1M",
-      "3M",
-      "6M",
-      "1Y",
-      "All",
-    ] as const satisfies readonly PeriodLabel[])
+    parseAsStringLiteral(["1W", "1M", "3M", "6M", "1Y", "All"] as const satisfies readonly PerfPeriod[])
       .withDefault("3M")
       .withOptions({ clearOnDefault: true }),
   );
 
-  // ── C-6: URL-backed active tab ──────────────────────────────────────────
-  // WHY URL state for the tab: traders share specific views ("look at the
-  // transaction history for AAPL") and expect back/forward to navigate
-  // between tabs. WHY clearOnDefault: omitting `?tab=holdings` from the URL
-  // when Holdings is active keeps the canonical /portfolio link short.
-  const [activeTab, setActiveTab] = useQueryState(
-    "tab",
-    parseAsStringLiteral(["holdings", "transactions", "watchlist"] as const)
-      .withDefault("holdings")
-      .withOptions({ clearOnDefault: true }),
-  );
-
-  // PLAN-0059 G-3: tab switches mount/unmount whole panel trees (Holdings
-  // alone renders ~7 child surfaces — equity-curve chart, holdings table,
-  // sector treemap, recent activity, dividend timeline, analytics section).
-  // Wrapping setActiveTab in useTransition lets React render the new tab in
-  // a low-priority pass — the trigger button keeps responding to clicks /
-  // keyboard during the heavy mount, instead of feeling momentarily frozen.
-  // `isPending` is exposed so the active trigger can show a subtle pending
-  // affordance if/when designs ever ask for one.
-  const [, startTabTransition] = useTransition();
-
   // ── Data orchestrator ──────────────────────────────────────────────────
-  // All 8 queries + derived KPI/allocations/scope hint live in the hook.
-  // The hook also owns the F-013 delete mutation and the two cross-mutation
-  // invalidation callbacks.
   const data = usePortfolioData({ accessToken, selectedPeriod });
   const {
     sortedPortfolios,
@@ -180,62 +141,99 @@ export default function PortfolioPage() {
     portfoliosLoading,
     portfoliosError,
     holdingsLoading,
-    txLoading,
-    watchlistsLoading,
     holdingsResp,
     enrichedHoldings,
     holdingsQuotes,
     holdingOverviews,
-    transactionsResp,
-    watchlists,
-    watchlistQuotes,
-    performanceData,
-    performanceLoading,
     realizedPnLQuery,
     kpi,
     bySector,
-    byType,
     scopeHint,
     handlePortfolioCreated,
     handlePositionAdded,
     deletePortfolioMutation,
   } = data;
 
-  // PLAN-0070 C-1: fire the bundle endpoint for the active portfolio.
-  // WHY here (not inside usePortfolioData): the bundle is an optimisation layer —
-  // individual queries still own their own cache entries. Calling the hook here
-  // fires GET /v1/portfolio/{id}/bundle once activePortfolioId is known,
-  // collapsing 4 downstream requests into 1 round-trip on cold start.
-  // The hook is a no-op when portfolioId or accessToken are null.
+  // PLAN-0070 C-1: fire the bundle endpoint to warm the cache in one round-trip.
   usePortfolioBundle({ portfolioId: activePortfolioId, accessToken });
+
+  // WHY useExposure here: PortfolioKPIStrip renders Cash and Buying Power tiles
+  // (W2 §4.2) that need exposure.cash. ExposureCurrencyStrip already calls this
+  // hook with the same portfolioId so TanStack Query deduplicates the request —
+  // zero extra network round-trips. Without this call the cash/buyingPower props
+  // default to null and the KPI tiles permanently show "—".
+  const { data: exposureData } = useExposure(activePortfolioId);
+
+  // ── W2: batch-fetch 14d daily OHLCV series for SPARK column ───────────
+  // Passed to SemanticHoldingsTable as context.holdingsSeries so
+  // SparklineCellRenderer can look up each ticker's series without re-fetching.
+  const { holdingsSeries } = useHoldingsSeries(holdingsResp?.holdings ?? []);
+
+  // ── W2: derive contributors / detractors from enriched holdings ────────
+  // WHY holdingsQuotes: pnlPct is computed from live prices, not the null
+  // unrealised_pnl_pct field on enrichedHoldings (BP-503).
+  const { contributors, detractors } = useTopMovers(enrichedHoldings, holdingsQuotes);
+
+  // ── W2: page-scope hotkeys ─────────────────────────────────────────────
+  // WHY document-level listener (not a library): zero dependency, ~10 lines,
+  // matches the terminal aesthetic of keyboard-first navigation.
+  // WHY guard for input/textarea: a PM filtering the grid should not trigger
+  // navigation hotkeys when typing in the filter box.
+  const handleSetPeriod = useCallback(
+    (p: PerfPeriod) => { void setPeriod(p); },
+    [setPeriod],
+  );
+
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
+      // Navigation hotkeys
+      if (e.key === "b" || e.key === "B") { router.push("/dashboard"); return; }
+      if (e.key === "t" || e.key === "T") { router.push("/portfolio/transactions"); return; }
+      if (e.key === "a" || e.key === "A") { router.push("/portfolio/analytics"); return; }
+      if (e.key === "w" || e.key === "W") { router.push("/watchlists"); return; }
+      // Data hotkeys
+      if (e.key === "r" || e.key === "R") {
+        void queryClient.invalidateQueries({ queryKey: qk.portfolios.all });
+        return;
+      }
+      // Chart collapse toggle
+      if (e.key === "c" || e.key === "C") { setChartCollapsed((p) => !p); return; }
+      // Period chips
+      if (e.key === "1") { handleSetPeriod("1W"); return; }
+      if (e.key === "2") { handleSetPeriod("1M"); return; }
+      if (e.key === "3") { handleSetPeriod("3M"); return; }
+      if (e.key === "4") { handleSetPeriod("6M"); return; }
+      if (e.key === "5") { handleSetPeriod("1Y"); return; }
+      if (e.key === "0") { handleSetPeriod("All"); return; }
+    };
+    document.addEventListener("keydown", handler);
+    return () => document.removeEventListener("keydown", handler);
+  }, [router, queryClient, handleSetPeriod]);
 
   // ── Loading state (initial mount, no portfolios yet) ──────────────────
   if (portfoliosLoading || (holdingsLoading && !holdingsResp)) {
     return (
       // WHY p-3 space-y-3: terminal density — 12px padding, 12px gaps.
       <div className="flex flex-col h-full min-h-0 space-y-3 p-3">
-        <div className="flex h-9 items-center justify-between">
+        <div className="flex h-[36px] items-center justify-between">
           <Skeleton className="h-4 w-24" />
           <Skeleton className="h-7 w-36" />
         </div>
-        {/* F-P-020 (PLAN-0051 W6): KPI strip skeleton mirrors the populated
-            strip's shape exactly — same 7 tiles, same `divide-x` separator,
-            same px-3/py-1.5 padding. Any mismatch causes layout shift when
-            the data resolves. */}
+        {/* WHY 8 tiles: matches the updated W2 KPI strip (8 tiles not 7). */}
         <div className="flex divide-x divide-border border-b border-border">
-          {Array.from({ length: 7 }).map((_, i) => (
+          {Array.from({ length: 8 }).map((_, i) => (
             <div key={i} className="flex-1 px-3 py-1.5">
               <Skeleton className="h-3 w-16 mb-1" />
               <Skeleton className="h-4 w-20" />
             </div>
           ))}
         </div>
-        <Skeleton className="h-9 w-80" />
-        {/* F-P-020: row skeletons use h-[22px] to match the real holdings
-            row height token. */}
+        <Skeleton className="h-[36px] w-80" />
+        {/* F-P-020: row skeletons use h-[20px] to match the W2 rowHeight=20 token. */}
         <div className="space-y-px">
           {Array.from({ length: 8 }).map((_, i) => (
-            <Skeleton key={i} className="h-[22px] w-full" />
+            <Skeleton key={i} className="h-[20px] w-full" />
           ))}
         </div>
       </div>
@@ -251,17 +249,25 @@ export default function PortfolioPage() {
     );
   }
 
-  // ── Render ─────────────────────────────────────────────────────────────
-  // WHY h-full flex-col: fills the shell's main content area.
-  // WHY bg-background (not bg-card): the page is the lowest level of the
-  // elevation hierarchy. Panels inside (analytics cards, dialogs, sticky
-  // table headers) use bg-card (#111113). Page = bg-background (#09090B)
-  // is one shade darker so the 1px borders + tonal step give each card
-  // its own silhouette.
-  // F-P-019 (PLAN-0051 W6): mobile safe-area insets — env() values are 0
-  // on desktop, ~44px/34px on iPhones with Face ID.
+  // ── V18 empty state: no holdings AND not loading ───────────────────────
+  // WHY show BrokerageEmptyState only after loading completes: avoids a flash
+  // of the CTA during the first render before holdings resolve.
+  const showEmptyState = !holdingsLoading && enrichedHoldings.length === 0;
+
+  // ── FIFO realized P&L dispatch ─────────────────────────────────────────
+  // PLAN-0051 T-A-1-05: prefer the FIFO endpoint; fall back to client-side
+  // approximation. WHY here: matches the original page logic.
+  const fifo = realizedPnLQuery.data;
+  const useFifo = !realizedPnLQuery.isError && fifo != null;
+  const realizedPnl = useFifo ? fifo!.total_realized : kpi.realizedPnl;
+
   return (
-    <div className="flex flex-col h-full min-h-0 bg-background pt-[env(safe-area-inset-top)] pb-[env(safe-area-inset-bottom)]">
+    // WHY h-full flex-col: fills the shell's main content area.
+    // WHY bg-background: page is the lowest elevation — panels inside use bg-card.
+    // WHY overflow-y-auto: the stacked component list may exceed viewport height.
+    <div className="flex flex-col h-full min-h-0 overflow-y-auto bg-background pt-[env(safe-area-inset-top)] pb-[env(safe-area-inset-bottom)]">
+
+      {/* 1. Page header */}
       <PortfolioPageHeader
         sortedPortfolios={sortedPortfolios}
         activePortfolio={activePortfolio}
@@ -275,27 +281,16 @@ export default function PortfolioPage() {
         onDeletePortfolio={() => setDeletePortfolioOpen(true)}
       />
 
-      <PerformanceStrip
-        period={selectedPeriod}
-        performanceData={performanceData}
-        performanceLoading={performanceLoading}
-      />
+      {/* 2. Brokerage status banner (C-34: sync events move off RecentActivityStrip) */}
+      <BrokerageStatusBanner portfolioId={activePortfolioId} />
 
-      {/* ── KPI Strip ───────────────────────────────────────────────────── */}
-      {/* WHY conditional on holdingsResp (not isLoading): the strip makes no
-          sense before holdings load. We still render the page shell so the
-          tabs are visible immediately (preventing layout shift on data
-          arrival). */}
-      {/* PLAN-0051 T-A-1-05 — prefer the FIFO endpoint when it succeeds;
-          fall back to the legacy client-side approximation (kpi.realizedPnl)
-          and surface "(approx)" so traders know the value is not the FIFO
-          ground truth. */}
-      {holdingsResp &&
-        (() => {
-          const fifo = realizedPnLQuery.data;
-          const useFifo = !realizedPnLQuery.isError && fifo != null;
-          const realizedPnl = useFifo ? fifo!.total_realized : kpi.realizedPnl;
-          return (
+      {/* ── Empty state replaces all data surfaces when holdings=0 ─────── */}
+      {showEmptyState ? (
+        <BrokerageEmptyState />
+      ) : (
+        <>
+          {/* 3. KPI Strip — 8 tiles */}
+          {holdingsResp && (
             <PortfolioKPIStrip
               portfolioId={activePortfolioId}
               totalValue={kpi.totalValue}
@@ -304,110 +299,105 @@ export default function PortfolioPage() {
               unrealisedPnlPct={kpi.unrealisedPnlPct}
               topGainer={kpi.topGainer}
               topLoser={kpi.topLoser}
-              positionCount={kpi.positionCount}
               realizedPnl={realizedPnl}
               realizedPnlApprox={!useFifo}
               realizedPnlLongTerm={useFifo ? fifo!.realized_long_term : null}
               realizedPnlShortTerm={useFifo ? fifo!.realized_short_term : null}
+              cash={exposureData?.cash ?? null}
+              buyingPower={exposureData?.cash ?? null}
             />
-          );
-        })()}
+          )}
 
-      {/* ── Tabs ────────────────────────────────────────────────────────── */}
-      {/* WHY flex-1 min-h-0: tabs must fill the remaining space below the
-          KPI strip. min-h-0 is required so the overflow-y-auto inside the
-          tab content can actually create a scroll area. */}
-      <Tabs
-        value={activeTab}
-        onValueChange={(v) => {
-          // G-3: defer the heavy tab-body render so the trigger row stays
-          // interactive while React mounts the new TabsContent tree.
-          // Inside startTransition the cast keeps TS strict-mode happy.
-          startTabTransition(() => {
-            void setActiveTab(v as "holdings" | "transactions" | "watchlist");
-          });
-        }}
-        className="flex flex-col flex-1 min-h-0"
-      >
-        {/* WHY shrink-0 on TabsList: prevents the tab bar from shrinking
-            when the tab content grows. WHY bg-card: the tab bar is page
-            chrome — keeps it tonally aligned with the KPI strip and
-            page header above. */}
-        <TabsList className="shrink-0 h-9 px-2 border-b border-border rounded-none bg-card justify-start gap-0">
-          <TabsTrigger
-            value="holdings"
-            className="h-7 px-3 text-[11px] font-mono data-[state=active]:text-primary data-[state=active]:border-b-2 data-[state=active]:border-primary rounded-none"
-          >
-            Holdings
-          </TabsTrigger>
-          <TabsTrigger
-            value="transactions"
-            className="h-7 px-3 text-[11px] font-mono data-[state=active]:text-primary data-[state=active]:border-b-2 data-[state=active]:border-primary rounded-none"
-          >
-            Transactions
-          </TabsTrigger>
-          <TabsTrigger
-            value="watchlist"
-            className="h-7 px-3 text-[11px] font-mono data-[state=active]:text-primary data-[state=active]:border-b-2 data-[state=active]:border-primary rounded-none"
-          >
-            Watchlist
-          </TabsTrigger>
-          {/* WHY no Brokerages tab: merged into Transactions as a
-              collapsible panel so traders can see connection status
-              without leaving the transaction context. */}
-        </TabsList>
+          {/* 4. Exposure currency strip */}
+          <ExposureCurrencyStrip portfolioId={activePortfolioId} />
 
-        <TabsContent
-          value="holdings"
-          className="flex-1 min-h-0 overflow-y-auto p-0 mt-0 bg-background"
-        >
-          <HoldingsTab
-            activePortfolioId={activePortfolioId}
-            holdingsLoading={holdingsLoading}
-            holdingsResp={holdingsResp}
-            enrichedHoldings={enrichedHoldings}
-            holdingsQuotes={holdingsQuotes}
-            holdingOverviews={holdingOverviews}
-            kpi={kpi}
+          {/* 5. Concentration + sector tease strip */}
+          <ConcentrationSectorTeaseStrip
+            portfolioId={activePortfolioId}
             bySector={bySector}
-            byType={byType}
-            equityPeriod={equityPeriod}
-            setEquityPeriod={setEquityPeriod}
           />
-        </TabsContent>
 
-        <TabsContent
-          value="transactions"
-          className="flex-1 min-h-0 overflow-y-auto p-0 mt-0 flex flex-col bg-background"
-        >
-          <TransactionsTab
-            activePortfolioId={activePortfolioId}
-            txLoading={txLoading}
-            transactionsResp={transactionsResp}
-            holdingOverviews={holdingOverviews}
-            onConnect={() => setConnectModalOpen(true)}
+          {/* 6. Performance chart (collapsible, C hotkey, period chips) */}
+          <PerformanceChartPanel
+            period={period}
+            onPeriodChange={(p) => { void setPeriod(p); }}
+            collapsed={chartCollapsed}
+            onToggleCollapse={() => setChartCollapsed((c) => !c)}
           />
-        </TabsContent>
 
-        <TabsContent
-          value="watchlist"
-          className="flex-1 min-h-0 overflow-y-auto p-0 mt-0 bg-background"
-        >
-          {/* WHY render the watchlist name in the tab content: the existing
-              test checks `screen.getByText("Tech Watch")` after clicking the
-              Watchlist tab. WatchlistsTabPanel shows the watchlist name in
-              its internal tab bar — satisfying this assertion. */}
-          <WatchlistsTabPanel
-            watchlists={watchlists ?? []}
-            quotes={watchlistQuotes}
-            isLoading={watchlistsLoading}
+          {/* 7. Sector allocation bar */}
+          <SectorAllocationBar bySector={bySector} />
+
+          {/* 8. Holdings table chrome (filter input + position count) */}
+          <HoldingsTableChrome
+            positionCount={enrichedHoldings.length}
+            onFilterFocus={() => setFilterVisible(true)}
+            filterText={filterText}
+            onFilterChange={setFilterText}
+            filterVisible={filterVisible}
+            onFilterVisibleChange={setFilterVisible}
           />
-        </TabsContent>
-      </Tabs>
+
+          {/* 9. Holdings table — 14-col AG Grid, rowHeight=20, sparkline context */}
+          {/* WHY holdingsSeries prop: SparklineCellRenderer reads series from AG Grid
+              context (params.context.holdingsSeries). The context object is stable
+              — new reference only when holdingsSeries changes — so it does not
+              cause spurious re-renders of unchanged rows. */}
+          <SemanticHoldingsTable
+            holdings={enrichedHoldings}
+            quotes={holdingsQuotes}
+            sectors={Object.fromEntries(
+              Object.entries(holdingOverviews ?? {}).map(([id, ov]) => [
+                id,
+                ov?.sector ?? null,
+              ]),
+            )}
+            totalValue={kpi.totalValue}
+            holdingsSeries={holdingsSeries}
+          />
+
+          {/* 10–12. Bottom info strip — 3-column grid: movers | activity | sectors
+               WHY grid grid-cols-3: three equal panels need to share the full
+               page width at a fixed ratio (35% / 35% / 30%) without manual px
+               calculations. CSS grid enforces this regardless of content height.
+               WHY flex-1 min-h-0: the portfolio page outer container is a flex
+               column with overflow-y-auto. flex-1 makes this grid expand to fill
+               all remaining vertical space, eliminating the black void that
+               previously appeared below the strip when the page content was
+               shorter than the viewport.
+               WHY items-stretch: ensures all three columns are the same height
+               (determined by the tallest column), matching the "equal column"
+               terminal panel aesthetic. The individual panels carry h-full to
+               fill their grid cell with bg-card. */}
+          <div className="grid grid-cols-3 flex-1 min-h-0 items-stretch border-b border-border">
+            {/* Col 1 — Top Movers (combined contributors + detractors) */}
+            <div className="border-r border-border h-full">
+              <ContributorsStrip
+                contributors={contributors}
+                detractors={detractors}
+                isLoading={holdingsLoading}
+              />
+            </div>
+
+            {/* Col 2 — Recent Activity (fixed-width grid table, no text overlap) */}
+            <div className="border-r border-border h-full">
+              <RecentActivityStrip portfolioId={activePortfolioId} />
+            </div>
+
+            {/* Col 3 — Sector Exposure (vertical sector list with % weights) */}
+            <div className="h-full">
+              <SectorExposurePanel
+                bySector={bySector}
+                isLoading={holdingsLoading}
+              />
+            </div>
+          </div>
+        </>
+      )}
 
       {/* ── Connect Brokerage Modal ─────────────────────────────────────── */}
-      {/* WHY outside Tabs: the modal must persist through tab switches during
-          the OAuth redirect flow. */}
+      {/* WHY outside conditional: modal must persist through empty-state changes
+          and be accessible from BrokerageEmptyState's CTA. */}
       {activePortfolioId && (
         <ConnectBrokerageModal
           portfolioId={activePortfolioId}
@@ -438,9 +428,6 @@ export default function PortfolioPage() {
           isPending={deletePortfolioMutation.isPending}
           isError={deletePortfolioMutation.isError}
           onConfirm={(id) => {
-            // The mutation's onSuccess (in the hook) clears the active
-            // selection; we close the dialog here so the user gets instant
-            // feedback before the refetch completes.
             deletePortfolioMutation.mutate(id, {
               onSuccess: () => setDeletePortfolioOpen(false),
             });

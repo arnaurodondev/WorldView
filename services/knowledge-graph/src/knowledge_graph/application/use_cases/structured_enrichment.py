@@ -311,7 +311,7 @@ class StructuredEnrichmentUseCase:
                 elif llm_description is not None:
                     # Response too short — non-retryable (PRD-0073 §13.5)
                     raise FatalEnrichmentError(
-                        f"LLM description too short ({len(llm_description)} chars) for " f"entity {entity.entity_id}"
+                        f"LLM description too short ({len(llm_description)} chars) for entity {entity.entity_id}",
                     )
             except TimeoutError as exc:
                 raise RetryableEnrichmentError("LLM timed out") from exc
@@ -375,6 +375,12 @@ class StructuredEnrichmentUseCase:
             from sqlalchemy.exc import SQLAlchemyError
 
             if isinstance(exc, SQLAlchemyError):
+                logger.error(  # type: ignore[no-any-return]
+                    "enrichment_db_write_failed",
+                    entity_id=str(entity.entity_id),
+                    error=str(exc),
+                    exc_info=True,
+                )
                 raise RetryableEnrichmentError("DB error during enrichment write") from exc
             raise
 
@@ -421,11 +427,8 @@ class StructuredEnrichmentUseCase:
                 )
                 if s7_enrichment_dirtied_produce_total is not None:
                     s7_enrichment_dirtied_produce_total.labels(outcome="failure").inc()
-        else:
-            # No producer wired (dev / test path).  Counter still increments so
-            # operators can see how many entity.dirtied.v1 events were skipped.
-            if s7_enrichment_dirtied_produce_total is not None:
-                s7_enrichment_dirtied_produce_total.labels(outcome="skipped_no_producer").inc()
+        elif s7_enrichment_dirtied_produce_total is not None:
+            s7_enrichment_dirtied_produce_total.labels(outcome="skipped_no_producer").inc()
 
         return result
 

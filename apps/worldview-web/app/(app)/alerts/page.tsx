@@ -518,9 +518,9 @@ function TopTodayTab({ accessToken }: TabProps) {
     impact_window_t5: ra.impact_windows?.day_t5 ?? null,
     routing_tier:
       ra.routing_tier === "DEEP"
-        ? "HIGH"
+        ? "DEEP"
         : ra.routing_tier === "MEDIUM"
-          ? "STANDARD"
+          ? "MEDIUM"
           : ra.routing_tier === "LIGHT"
             ? "LIGHT"
             : undefined,
