@@ -170,6 +170,57 @@ class IntelligenceHandler(ToolHandler):
         if not candidates:
             log.warning("tool_entity_unresolved", tool=tool_name, entity_name=entity_name, reason="no_alias_match")
             return None
+        # FIX-LIVE-O — ambiguity gate + three tiebreakers.
+        # When the top two candidates are within 0.10 similarity of each
+        # other the resolution is statistically ambiguous (e.g. "Apple"
+        # → Apple Inc. vs Apple Computer Holdings). Naively returning the
+        # top candidate has caused the agent to pull tool data for the
+        # wrong entity; refusing outright loses queries where the top
+        # candidates are noise aliases of the SAME canonical, or where one
+        # candidate is the canonical-name exact match. Apply three rules
+        # in order before declaring ambiguous:
+        #   1. Same-canonical collapse — top-K all share entity_id → take
+        #      the highest-similarity row.
+        #   2. Exact canonical-name match — alias_text (suffix-stripped)
+        #      equals the query → wins even with lower similarity. Fixes
+        #      the Tesla case where "Teslas"(0.625) outranks "Tesla Inc"
+        #      (0.600) on raw embedding similarity.
+        #   3. Length-penalty fallback — clear length-distance winner.
+        if len(candidates) >= 2:
+            try:
+                top_sim = float(candidates[0].get("similarity", 0.0))
+                second_sim = float(candidates[1].get("similarity", 0.0))
+                if (top_sim - second_sim) < 0.10:
+                    tiebreak_winner = self._apply_resolver_tiebreakers(
+                        tool_name=tool_name,
+                        entity_name=entity_name,
+                        candidates=candidates,
+                    )
+                    if tiebreak_winner is not None:
+                        return tiebreak_winner
+                    log.warning(
+                        "tool_entity_ambiguous",
+                        tool=tool_name,
+                        entity_name=entity_name,
+                        top_two=[
+                            {
+                                "entity_id": str(candidates[0].get("entity_id")),
+                                "similarity": top_sim,
+                                "alias_text": candidates[0].get("alias_text"),
+                            },
+                            {
+                                "entity_id": str(candidates[1].get("entity_id")),
+                                "similarity": second_sim,
+                                "alias_text": candidates[1].get("alias_text"),
+                            },
+                        ],
+                        reason="similarity_delta_below_0.10",
+                    )
+                    return None
+            except (TypeError, ValueError):
+                # Malformed similarity score — fall through to legacy
+                # behaviour (use top candidate) rather than crash.
+                pass
         try:
             entity_id = UUID(str(candidates[0]["entity_id"]))
         except (ValueError, KeyError):
@@ -189,6 +240,164 @@ class IntelligenceHandler(ToolHandler):
             similarity=candidates[0].get("similarity"),
         )
         return entity_id
+
+    # Canonical-suffix tokens stripped before exact-name comparison so
+    # "Tesla" matches "Tesla Inc", "Apple Corp", etc. Kept short on
+    # purpose — broader fuzzy matching belongs in S7's alias index, not here.
+    _CANONICAL_SUFFIXES: tuple[str, ...] = (
+        " inc",
+        " inc.",
+        " corp",
+        " corp.",
+        " corporation",
+        " ltd",
+        " ltd.",
+        " limited",
+        " co",
+        " co.",
+        " company",
+        " plc",
+        " sa",
+        " ag",
+        " nv",
+        " holdings",
+        " group",
+    )
+
+    @staticmethod
+    def _normalize_canonical(text: str | None) -> str:
+        """Lower-case + strip a trailing canonical company suffix.
+
+        Used only by the exact-canonical tiebreaker — we DO NOT use this
+        for the primary alias match (S7's embedding ANN handles that).
+        """
+        if text is None:
+            return ""
+        t = text.strip().lower()
+        for suffix in IntelligenceHandler._CANONICAL_SUFFIXES:
+            if t.endswith(suffix):
+                t = t[: -len(suffix)].rstrip()
+                break
+        return t
+
+    def _apply_resolver_tiebreakers(
+        self,
+        *,
+        tool_name: str,
+        entity_name: str,
+        candidates: list[dict[str, Any]],
+    ) -> UUID | None:
+        """Apply FIX-LIVE-O tiebreakers when |Δsim| < 0.10 between top candidates.
+
+        Returns the chosen entity UUID when a rule fires, else None (caller
+        will fall back to the legacy ambiguous-bail path). Whenever a rule
+        fires we emit a structured ``entity_resolution_tiebreaker_applied``
+        event so the resolution is auditable.
+        """
+        # Look at the same top-K window the ambiguity gate already considered.
+        # We cap at 3 candidates (the request limit) but stay defensive.
+        topk = candidates[:3]
+
+        # --- Rule 1: same-canonical collapse ---------------------------------
+        # All top-K candidates share the same entity_id → not actually
+        # ambiguous; pick the highest-similarity row (which is candidates[0]
+        # because S7 returns them sorted DESC by similarity).
+        try:
+            ids = [str(c.get("entity_id")) for c in topk if c.get("entity_id") is not None]
+        except Exception:  # pragma: no cover — defensive
+            ids = []
+        if len(ids) >= 2 and len(set(ids)) == 1:
+            try:
+                winner_id = UUID(ids[0])
+            except ValueError:
+                return None
+            log.info(
+                "entity_resolution_tiebreaker_applied",
+                tool=tool_name,
+                entity_name=entity_name,
+                rule="same_canonical_collapse",
+                resolved_entity_id=str(winner_id),
+                num_candidates=len(topk),
+            )
+            return winner_id
+
+        # --- Rule 2: exact canonical-name match ------------------------------
+        # If any candidate's alias_text (normalised: lower-case + canonical
+        # suffix stripped) equals the query string (same normalisation), it
+        # wins even when its similarity score is lower than a noisy alias.
+        query_norm = self._normalize_canonical(entity_name)
+        if query_norm:
+            for cand in topk:
+                alias = cand.get("alias_text")
+                if alias is None:
+                    continue
+                if self._normalize_canonical(str(alias)) == query_norm:
+                    try:
+                        winner_id = UUID(str(cand["entity_id"]))
+                    except (ValueError, KeyError, TypeError):
+                        continue
+                    log.info(
+                        "entity_resolution_tiebreaker_applied",
+                        tool=tool_name,
+                        entity_name=entity_name,
+                        rule="exact_canonical_name",
+                        resolved_entity_id=str(winner_id),
+                        winning_alias_text=str(alias),
+                        winning_similarity=cand.get("similarity"),
+                    )
+                    return winner_id
+
+        # --- Rule 3: length-penalty fallback ---------------------------------
+        # Last-resort tiebreaker: prefer a candidate whose alias_text length
+        # is CLEARLY closer to the query length than the current top pick.
+        # Conservative gates so this can't silently regress genuinely
+        # ambiguous queries:
+        #   * best candidate must be at least 2 chars closer than the top
+        #     candidate (strict gap), AND
+        #   * best candidate must be within 3 chars of the query length
+        #     (i.e. it must actually look like a near-exact alias).
+        # When neither rule 1 nor rule 2 disambiguates and rule 3 doesn't
+        # fire either, the resolver falls through to the legacy "ambiguous"
+        # path and refuses to resolve.
+        query_len = len(entity_name.strip())
+        top_alias = candidates[0].get("alias_text")
+        top_diff = abs(len(str(top_alias)) - query_len) if top_alias is not None else None
+        best_idx: int | None = None
+        best_diff: int | None = top_diff
+        for idx, cand in enumerate(topk[1:], start=1):
+            alias = cand.get("alias_text")
+            if alias is None:
+                continue
+            diff = abs(len(str(alias)) - query_len)
+            if best_diff is None or diff < best_diff:
+                best_diff = diff
+                best_idx = idx
+        len_gap_min = 2  # best must be at least 2 chars closer than top
+        len_near_exact = 3  # AND within 3 chars of the query length
+        if (
+            best_idx is not None
+            and best_diff is not None
+            and top_diff is not None
+            and (top_diff - best_diff) >= len_gap_min
+            and best_diff <= len_near_exact
+        ):
+            cand = topk[best_idx]
+            try:
+                winner_id = UUID(str(cand["entity_id"]))
+            except (ValueError, KeyError, TypeError):
+                return None
+            log.info(
+                "entity_resolution_tiebreaker_applied",
+                tool=tool_name,
+                entity_name=entity_name,
+                rule="length_penalty",
+                resolved_entity_id=str(winner_id),
+                winning_alias_text=str(cand.get("alias_text")),
+                winning_similarity=cand.get("similarity"),
+            )
+            return winner_id
+
+        return None
 
     async def _handle_get_entity_graph(
         self,
