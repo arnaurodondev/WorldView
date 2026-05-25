@@ -23,7 +23,6 @@ from typing import TYPE_CHECKING, Any
 from uuid import UUID
 
 import structlog
-from tools.tool_registry import ToolRegistry  # type: ignore[import-untyped,import-not-found]  # noqa: TCH002
 
 from .handlers.alerts import AlertsHandler
 from .handlers.intelligence import IntelligenceHandler
@@ -31,9 +30,15 @@ from .handlers.market import MarketHandler
 from .handlers.narrative import NarrativeHandler
 from .handlers.news import NewsHandler
 from .handlers.portfolio import PortfolioHandler
-from .tool_registry_builder import build_default_registry  # re-exported for callers
+from .tool_registry_builder import (  # re-exported for callers
+    ToolRegistryDriftError,
+    build_default_registry,
+    validate_registry_parity,
+)
 
 if TYPE_CHECKING:
+    from tools.tool_registry import ToolRegistry  # type: ignore[import-untyped,import-not-found]
+
     from rag_chat.application.ports.brief_archive import BriefArchivePort
     from rag_chat.application.ports.upstream_clients import (
         S1Port,
@@ -135,7 +140,14 @@ class ToolExecutorFactory:
 
 
 class ToolExecutor:
-    """Routes LLM tool_use blocks to per-domain ToolHandler instances (R25, PLAN-0089 C-1)."""
+    """Routes LLM tool_use blocks to per-domain ToolHandler instances (R25, PLAN-0089 C-1).
+
+    After each ``execute_all`` call, ``last_per_tool_latencies_s`` holds the
+    wall-clock time for each individual tool invocation in the same order as the
+    input tool_calls.  This lets the orchestrator use accurate per-tool latency
+    for the ``tool_slow`` warning instead of dividing the total batch time by the
+    number of tools (which under-reports any single slow tool in a concurrent batch).
+    """
 
     def __init__(
         self,
@@ -174,6 +186,9 @@ class ToolExecutor:
             ),
             self._alerts_handler,
         ]
+        # Populated by execute_all; holds per-tool wall-clock seconds in the same
+        # order as the capped input list.  Empty list before the first call.
+        self.last_per_tool_latencies_s: list[float] = []
 
     @property
     def _create_alert_count(self) -> int:  # exposed for test introspection
@@ -268,7 +283,12 @@ class ToolExecutor:
             return None
 
     async def execute_all(self, tool_calls: list[ToolUseBlock]) -> list[RetrievedItem | list[RetrievedItem] | None]:
-        """Execute up to _MAX_CONCURRENT_TOOLS calls concurrently via asyncio.gather."""
+        """Execute up to _MAX_CONCURRENT_TOOLS calls concurrently via asyncio.gather.
+
+        Per-tool wall-clock latencies are stored in ``last_per_tool_latencies_s``
+        (Q1 fix: previously the orchestrator divided total batch time by the number
+        of tools, which under-reports any single slow tool running concurrently).
+        """
         # PLAN-0093 E-5 T-E-5-04: warn when the LLM emits more tool calls than
         # the concurrency cap allows. Previously the surplus was silently
         # dropped; now operators get a structured event so they can spot
@@ -281,7 +301,18 @@ class ToolExecutor:
                 dropped_tool_names=[c.name for c in tool_calls[_MAX_CONCURRENT_TOOLS:]],
             )
         capped = tool_calls[:_MAX_CONCURRENT_TOOLS]
-        return list(await asyncio.gather(*[self.execute(tc) for tc in capped]))
+
+        async def _timed_execute(tc: ToolUseBlock) -> tuple[RetrievedItem | list[RetrievedItem] | None, float]:
+            _t0 = time.monotonic()
+            result = await self.execute(tc)
+            return result, time.monotonic() - _t0
+
+        pairs: list[tuple[RetrievedItem | list[RetrievedItem] | None, float]] = list(
+            await asyncio.gather(*[_timed_execute(tc) for tc in capped])
+        )
+        results, latencies = zip(*pairs, strict=False) if pairs else ([], [])
+        self.last_per_tool_latencies_s = list(latencies)
+        return list(results)
 
 
 __all__ = [
@@ -295,6 +326,8 @@ __all__ = [
     "ToolCallProvenance",
     "ToolExecutor",
     "ToolExecutorFactory",
+    "ToolRegistryDriftError",
     "ToolUseBlock",
     "build_default_registry",
+    "validate_registry_parity",
 ]

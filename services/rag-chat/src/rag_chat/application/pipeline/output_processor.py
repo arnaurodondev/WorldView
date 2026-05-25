@@ -11,6 +11,7 @@ from typing import TYPE_CHECKING
 
 import structlog
 
+from rag_chat.application.metrics.prometheus import rag_pipeline_stage_input_size
 from rag_chat.domain.entities.conversation import Citation
 
 if TYPE_CHECKING:
@@ -96,6 +97,8 @@ class OutputProcessor:
             raw_output:       Raw streaming output accumulated from LLM.
             retrieved_items:  Items in the order they were presented in the prompt (index 0 = [1]).
         """
+        rag_pipeline_stage_input_size.labels(stage="output_processor").observe(len(retrieved_items))
+
         # 1. Strip reasoning blocks
         text = _THINK_RE.sub("", raw_output).strip()
 

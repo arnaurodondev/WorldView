@@ -45,6 +45,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from contracts.numeric_grounding import DEFAULT_TOLERANCES, FieldKind  # type: ignore[import-untyped]
+from rag_chat.application.metrics.prometheus import rag_pipeline_stage_input_size
 
 # ── Number extraction ────────────────────────────────────────────────────────
 
@@ -638,8 +639,9 @@ class NumericGroundingValidator:
              if none, try any-kind. Pass if rel_diff ≤ tolerance AND
              sign matches.
         """
-        response_numbers = _extract_numbers(response)
         tool_results_list = list(tool_results)
+        rag_pipeline_stage_input_size.labels(stage="numeric_grounding").observe(len(tool_results_list))
+        response_numbers = _extract_numbers(response)
         tool_values = _flatten_tool_values(tool_results_list)
         # Materialise the source tool texts for quarter-label matching.
         # We coerce the .text attribute to str defensively — production

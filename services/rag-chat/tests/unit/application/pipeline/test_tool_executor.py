@@ -273,6 +273,28 @@ class TestEdgeCases:
 class TestExecutorExceptionClassification:
     """Verify FIX-LIVE-E exception classification + structured logging."""
 
+    @pytest.fixture(autouse=True)
+    def _restore_structlog(self):
+        """Snapshot + restore structlog global config around each test.
+
+        WHY: the test methods below call ``structlog.configure(...)`` inline to
+        route structlog through stdlib so ``caplog`` can capture events. That
+        call mutates a process-global. Without restoring on teardown, any
+        subsequent test in the pytest session that depends on structlog's
+        default stdout renderer (e.g. ``capsys`` assertions in
+        test_chat_orchestrator_tool_loop.py) sees empty output and fails.
+        Snapshot before the test runs, restore (reset + reconfigure with the
+        snapshot) after.
+        """
+        import structlog
+
+        prior_config = structlog.get_config()
+        try:
+            yield
+        finally:
+            structlog.reset_defaults()
+            structlog.configure(**prior_config)
+
     def _make_executor_with_failing_handler(self, exc: Exception):
         """Build an executor whose handler raises ``exc`` when called.
 

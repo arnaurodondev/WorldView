@@ -116,10 +116,14 @@ class DeepInfraCompletionAdapter:
             try:
                 args = json.loads(fn.get("arguments", "{}"))
             except (json.JSONDecodeError, ValueError):
+                # PLAN-0093 QA-7 security: do not log the raw arguments string —
+                # it may carry user-entered text from the LLM-generated tool args
+                # (e.g. `search_documents.query`). Log only length + tool name.
+                _raw = fn.get("arguments", "") or ""
                 log.warning(  # type: ignore[no-any-return]
                     "tool_call_bad_json",
-                    name=fn.get("name", ""),
-                    raw=fn.get("arguments", "")[:100],
+                    name=fn.get("name", "unknown"),
+                    raw_length=len(_raw),
                 )
                 args = {}
             result.append(

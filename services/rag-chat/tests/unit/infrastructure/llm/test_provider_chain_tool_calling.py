@@ -175,26 +175,32 @@ async def test_llm_provider_chain_chat_with_tools_logs_usage() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_llm_provider_chain_stream_chat_skips_ollama() -> None:
-    """stream_chat skips Ollama (name=="ollama") and delegates to OpenRouter."""
+@pytest.mark.asyncio
+async def test_llm_provider_chain_stream_chat_skips_ollama() -> None:
+    """stream_chat skips Ollama (name=="ollama") and delegates to OpenRouter.
+
+    PLAN-0093 QA-7 P1-2: stream_chat is now an async generator function so it can
+    record per-provider failures. We must iterate it to drive the body.
+    """
     ollama = _make_ollama_provider()
     openrouter = _make_capable_provider("openrouter")
     valkey = _make_valkey()
 
     chain = LLMProviderChain(providers=[ollama, openrouter], valkey=valkey)
-    # stream_chat is synchronous — it just returns the generator
-    gen = chain.stream_chat([{"role": "user", "content": "hi"}])
+    chunks = [chunk async for chunk in chain.stream_chat([{"role": "user", "content": "hi"}])]
 
-    # The generator from openrouter is returned; it's an async generator
-    assert gen is not None
+    # OpenRouter helper yields a single "chunk" sentinel — confirm we got it.
+    assert chunks == ["chunk"]
 
 
-def test_llm_provider_chain_stream_chat_raises_if_no_provider() -> None:
-    """RuntimeError raised when only Ollama is in the chain."""
+@pytest.mark.asyncio
+async def test_llm_provider_chain_stream_chat_raises_if_no_provider() -> None:
+    """RuntimeError raised when only Ollama is in the chain (no supporting provider)."""
     ollama = _make_ollama_provider()
     valkey = _make_valkey()
 
     chain = LLMProviderChain(providers=[ollama], valkey=valkey)
 
     with pytest.raises(RuntimeError, match="stream_chat"):
-        chain.stream_chat([{"role": "user", "content": "hi"}])
+        async for _ in chain.stream_chat([{"role": "user", "content": "hi"}]):
+            pass

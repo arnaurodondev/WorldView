@@ -455,7 +455,11 @@ def _wire_orchestrator(app: FastAPI, settings: RagChatSettings, valkey_client: V
     # tool handlers (search_documents, get_entity_graph, traverse_graph, etc.)
     # execute against real S6/S7/S1 adapters instead of returning [] silently.
     # The s6/s7/s3/s1 instances are created above in this function scope.
-    from rag_chat.application.pipeline.tool_executor import ToolExecutorFactory, build_default_registry
+    from rag_chat.application.pipeline.tool_executor import (
+        ToolExecutorFactory,
+        build_default_registry,
+        validate_registry_parity,
+    )
     from rag_chat.infrastructure.clients.brief_archive_read_adapter import BriefArchiveReadAdapter
     from rag_chat.infrastructure.clients.s3_brief_client import S3BriefClient
     from rag_chat.infrastructure.clients.s7_intelligence_client import S7IntelligenceClient
@@ -495,6 +499,27 @@ def _wire_orchestrator(app: FastAPI, settings: RagChatSettings, valkey_client: V
     app.state.s10_client = s10_client  # PLAN-0082 Wave B
 
     tool_registry = build_default_registry()
+
+    # PLAN-0093 QA P0-1 — startup manifest ↔ handler parity check.
+    # Fail-fast: ToolRegistryDriftError is intentionally NOT caught here so a
+    # misconfigured deploy cannot serve traffic with a silent dormant tool
+    # (this is the GraphEnricher follow-up: a tool listed in the YAML but
+    # missing a handler would otherwise only surface mid-conversation when
+    # the LLM tried to call it).
+    from rag_chat.application.metrics.prometheus import rag_tool_registry_size
+
+    _tool_registry_sizes = validate_registry_parity(tool_registry)
+    rag_tool_registry_size.labels(kind="manifest").set(_tool_registry_sizes["manifest"])
+    rag_tool_registry_size.labels(kind="handled").set(_tool_registry_sizes["handled"])
+    # WHY local logger: _wire_orchestrator does not have the lifespan-scoped
+    # ``log`` binding, so we obtain a module logger here.  structlog.get_logger
+    # is the project-mandated entry point (R10 — never stdlib logging).
+    get_logger("rag_chat.app").info(  # type: ignore[no-any-return]
+        "tool_registry_loaded",
+        manifest_count=_tool_registry_sizes["manifest"],
+        handled_count=_tool_registry_sizes["handled"],
+    )
+
     tool_executor_factory = ToolExecutorFactory(
         registry=tool_registry,
         s3=s3,
