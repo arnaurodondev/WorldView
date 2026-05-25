@@ -577,6 +577,11 @@ class ChatOrchestratorUseCase:
         cumulative_tool_latency = 0.0
         had_tool_calls = False
         iteration_count = 0
+        # FIX-LIVE-Y: skip-final-stream flag (declared at function scope so
+        # the late ``if had_tool_calls and not _skip_final_stream`` guard sees
+        # it whether or not the inner branch ran). See FIX-LIVE-Y comments
+        # below for why this is needed.
+        _skip_final_stream = False
 
         # PLAN-0093 E-5 T-E-5-02: tool-call dedup cache across iterations.
         # Key = (tool_name, frozenset((k, repr(v)) for k,v in input.items())).
@@ -631,6 +636,19 @@ class ChatOrchestratorUseCase:
                 direct_text = getattr(llm_response, "text", "") or ""
                 if direct_text:
                     yield p.emitter.emit_token(direct_text)
+                    # FIX-LIVE-Y: when iteration > 0 ends with SUBSTANTIVE
+                    # direct text (e.g. after the all-tools-returned-empty
+                    # graceful path), we MUST suppress the second
+                    # final-streaming turn below. Otherwise a multi-iteration
+                    # loop that started with tool_calls and finished with a
+                    # direct text answer would emit the answer TWICE (once
+                    # here via ``emit_token``, once via ``stream_chat`` at
+                    # line ~1206). Gating on ``direct_text`` (not just
+                    # iteration > 0) keeps the historical behaviour where
+                    # iter-N+1 returns empty text+no tool_calls as a signal
+                    # to "synthesise the final answer from messages" via the
+                    # final ``stream_chat`` turn (existing grounding tests).
+                    _skip_final_stream = True
                 full_text = direct_text
                 # No tool calls on this iteration — nothing to add to messages.
                 # Break out of the loop; we'll skip the streaming final turn below.
@@ -796,13 +814,34 @@ class ChatOrchestratorUseCase:
                 )
 
             # Emit tool_result events + record per-tool metrics + E-12 audit.
+            #
+            # FIX-LIVE-Y (2026-05-25): we now track three states per tool call:
+            #   - ok    (count > 0)             — produced data
+            #   - empty (count = 0, item != None) — succeeded but no rows
+            #   - error (item is None)          — raised / no result
+            #
+            # ``_all_failed`` keeps its legacy meaning (no useful data this
+            # round → triggers fallback / soft budget). But we now ALSO track
+            # ``_all_errored`` separately: only when every tool genuinely
+            # crashed do we surface ``all_tools_failed``. When every tool was
+            # merely "empty" (e.g. Q7: get_contradictions returned 0 rows
+            # because the contradictions table is empty for this entity) we
+            # let the loop continue so the LLM can produce a graceful
+            # "no data found" answer instead of the opaque tool-failure
+            # error verdict. See FIX-LIVE-Y in
+            # docs/audits/2026-05-24-qa-plan-0093-phase-5c-investigation-report.md.
             _all_failed = True
+            _all_errored = True
             for tc, _item in zip(tool_calls, tool_items, strict=False):
                 _item_list2 = _item if isinstance(_item, list) else ([_item] if _item is not None else [])
                 _count = len(_item_list2)
                 _status = "ok" if _count > 0 else ("empty" if _item is not None else "error")
                 if _count > 0:
                     _all_failed = False
+                    _all_errored = False
+                elif _item is not None:
+                    # "empty" — tool ran cleanly but returned no rows
+                    _all_errored = False
                 rag_tool_call_total.labels(tool_name=tc.name, status=_status).inc()
                 # Q1 fix: use accurate per-tool latency from the executor rather than
                 # total_batch_time / n_tools (which incorrectly averages concurrent calls).
@@ -893,6 +932,82 @@ class ChatOrchestratorUseCase:
                     _q_hash = hashlib.sha256(_q.encode("utf-8")).hexdigest()[:12]
                     _q_split = _q.split()
                     _q_word = _q_split[0] if _q_split else ""
+
+                    # FIX-LIVE-Y (2026-05-25): when every tool returned
+                    # cleanly but with zero rows (no errors raised), this is
+                    # NOT a tool failure — it is a legitimate data gap (e.g.
+                    # Q7 contradictions: tool executed in 41ms, HTTP 200,
+                    # zero rows because the table is empty for this entity).
+                    # Returning ``all_tools_failed`` here gives the user an
+                    # opaque "Unable to retrieve relevant data" error when
+                    # the honest answer is "I looked, there are no
+                    # contradictions on record." We continue the loop with a
+                    # short guidance message so the LLM can produce a
+                    # graceful no-data answer on its next turn instead.
+                    # ``_all_errored`` is only true when every tool actually
+                    # crashed (item is None); only that case keeps the
+                    # legacy hard-error path.
+                    if not _all_errored:
+                        log.info(  # type: ignore[no-any-return]
+                            "all_tools_returned_empty",
+                            tool_count=len(tool_calls),
+                            tools=[tc.name for tc in tool_calls],
+                            query_hash=_q_hash,
+                        )
+                        # Build minimal tool-result messages so the next LLM
+                        # turn satisfies the OpenAI/DeepInfra spec (every
+                        # ``tool_calls`` assistant message MUST be followed by
+                        # one ``role="tool"`` message per tool_call_id; see
+                        # FIX-LIVE-J / FIX-LIVE-R). Without these the next
+                        # ``chat_with_tools`` call would reject with
+                        # "missing required tool".
+                        _empty_ids: list[str] = []
+                        for _idx, tc in enumerate(tool_calls):
+                            _raw_id = getattr(tc, "id", "") or f"call_{tc.name}_{iteration}_{_idx}"
+                            _empty_ids.append(_raw_id)
+                        messages.append(
+                            {
+                                "role": "assistant",
+                                "content": (getattr(llm_response, "text", "") or ""),
+                                "tool_calls": [
+                                    {
+                                        "id": _empty_ids[_idx],
+                                        "type": "function",
+                                        "function": {"name": tc.name, "arguments": json.dumps(tc.input)},
+                                    }
+                                    for _idx, tc in enumerate(tool_calls)
+                                ],
+                            }
+                        )
+                        for _idx, tc in enumerate(tool_calls):
+                            messages.append(
+                                {
+                                    "role": "tool",
+                                    "tool_call_id": _empty_ids[_idx],
+                                    "name": tc.name,
+                                    "content": "(no matching rows returned)",
+                                }
+                            )
+                        messages.append(
+                            {
+                                "role": "user",
+                                "content": (
+                                    "The tools you called returned no data for this query "
+                                    "(the underlying datasets contain no matching rows). "
+                                    "Do NOT call more tools. Answer the user honestly that "
+                                    "no relevant information was found, and briefly explain "
+                                    "what you searched for. Keep it under 3 sentences."
+                                ),
+                            }
+                        )
+                        # Skip soft-budget bookkeeping for this iteration —
+                        # the loop continues so the LLM can emit a final
+                        # graceful answer.
+                        consecutive_errors = 0
+                        audit.increment_iteration()
+                        iteration_count += 1
+                        continue
+
                     log.warning(  # type: ignore[no-any-return]
                         "all_tools_failed",
                         tool_count=len(tool_calls),
@@ -1083,7 +1198,15 @@ class ChatOrchestratorUseCase:
         # ── Step 6: Final streaming answer (only when tool calls occurred) ────
         # When the LLM answered directly (no tool calls), full_text is already set
         # and we skip this streaming turn.
-        if had_tool_calls:
+        #
+        # FIX-LIVE-Y: also skip when the loop broke on a later iteration's
+        # direct-text answer. Without this guard, the agent emits the answer
+        # twice — once via ``emit_token`` at the break site, once via
+        # ``stream_chat`` here — producing concatenated near-duplicates
+        # ("I searched for ... [answer A]. I searched for ... [answer B]").
+        # Grounding validation still runs (separate ``had_tool_calls`` guard
+        # below) because the tool data IS in the messages history.
+        if had_tool_calls and not _skip_final_stream:
             # Rerank + build final prompt if we haven't done so yet.
             if non_none_items and not reranked:
                 _type_counts = _Counter(item.item_type.value for item in non_none_items)

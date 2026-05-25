@@ -408,8 +408,53 @@ class TestFallbackChainIntegration:
         # Pipeline reaches the done event normally.
         assert "done" in event_types
 
-    def test_fallback_chain_exhaustion_still_emits_all_tools_failed(self) -> None:
-        """When EVERY alt also returns empty, the original all_tools_failed error is emitted."""
+    def test_all_tools_errored_still_emits_all_tools_failed(self) -> None:
+        """FIX-LIVE-Y regression: when every tool item is None (genuine error,
+        not empty list), the hard ``all_tools_failed`` path MUST still fire.
+
+        This is the legacy behaviour we want to preserve — only "clean empty"
+        results get the graceful-no-data treatment; bona-fide tool crashes
+        (e.g. upstream HTTP 500, asyncio.TimeoutError) keep their loud error
+        verdict so operators see the real failure.
+        """
+        from rag_chat.application.use_cases.chat_orchestrator import ChatOrchestratorUseCase
+
+        tool_block = _make_tool_use_block(
+            "search_documents",
+            {"query": "obscure topic", "entity_tickers": ["MSTR"]},
+        )
+        first_resp = _make_llm_tool_response(tool_calls=[tool_block])
+        pipeline = _make_pipeline(first_llm_response=first_resp)
+
+        # execute_all returns [None] (one tool slot, errored) — and all three
+        # fallback alts also return None (errored). This is the only path
+        # that should still escalate to all_tools_failed.
+        factory = _make_factory_with_execute_side_effect(
+            execute_all_return=[None],
+            execute_side_effects=[None, None, None],
+        )
+
+        orch = ChatOrchestratorUseCase(pipeline=pipeline, tool_executor_factory=factory)
+        request = _make_chat_request()
+        uow = MagicMock()
+
+        events = asyncio.run(_collect_events(orch, request, uow))
+
+        error_codes = [json.loads(e["data"]).get("code") for e in events if e.get("event") == "error"]
+        assert "all_tools_failed" in error_codes
+
+    def test_fallback_chain_exhaustion_falls_through_to_graceful_no_data(self) -> None:
+        """When EVERY alt returns empty (clean, not errored), FIX-LIVE-Y kicks in.
+
+        Pre-FIX-LIVE-Y: this would surface ``all_tools_failed`` as a hard error.
+        Post-FIX-LIVE-Y: an empty (not errored) tool result is treated as a
+        legitimate "no rows" outcome, the loop continues with a guidance
+        message, and the LLM produces a graceful "no data found" answer
+        instead of an opaque tool-failure verdict. We assert the absence of
+        ``all_tools_failed`` to document the behaviour change. The fallback
+        chain still fires (visible via fallback tool_call SSE events) but its
+        exhaustion no longer escalates to the hard error path.
+        """
         from rag_chat.application.use_cases.chat_orchestrator import ChatOrchestratorUseCase
 
         tool_block = _make_tool_use_block(
@@ -432,7 +477,7 @@ class TestFallbackChainIntegration:
         events = asyncio.run(_collect_events(orch, request, uow))
 
         error_codes = [json.loads(e["data"]).get("code") for e in events if e.get("event") == "error"]
-        assert "all_tools_failed" in error_codes
+        assert "all_tools_failed" not in error_codes
 
     def test_fallback_tool_result_event_always_fires(self) -> None:
         """Every fallback tool_call MUST be paired with a tool_result event for UI close-signal."""
