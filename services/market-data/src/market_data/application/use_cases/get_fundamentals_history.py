@@ -6,6 +6,12 @@ is sourced from the earnings_history section of the existing FundamentalsRecord 
 EODHD EarningsHistory schema and may contain:
   reportDate, date, beforeAfterMarket, currency, epsActual, epsEstimate,
   epsDifference, surprisePercent
+
+FIX-LIVE-P (2026-05-25): fiscal-quarter labels are now computed from the
+instrument's ``fiscal_year_end_month`` (see ``_period_label``). Without this
+fix, NVIDIA's Q4FY26 (period_end 2026-01-31) was labelled "Q1 2026" because
+the calendar month determined the quarter — wrong for any issuer whose
+fiscal year is not calendar-aligned.
 """
 
 from __future__ import annotations
@@ -13,8 +19,12 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 from uuid import UUID
 
+import structlog
+
 if TYPE_CHECKING:
     from market_data.application.ports.uow import ReadOnlyUnitOfWork
+
+log = structlog.get_logger(__name__)
 
 
 class GetFundamentalsHistoryUseCase:
@@ -36,16 +46,32 @@ class GetFundamentalsHistoryUseCase:
         self,
         instrument_id: UUID,
         periods: int = 8,
+        *,
+        requested_quarter: str | None = None,
     ) -> dict:
         """Return {"periods": [...], "period_count": int}.
 
         Each period dict contains:
           period, period_end_date, revenue, gross_profit, net_income,
           eps, pe_ratio, market_cap  (null when not available in source data)
+
+        FIX-LIVE-P observability: ``requested_quarter`` is an optional canonical
+        quarter label such as ``"Q4 FY2026"`` extracted from an upstream intent
+        layer (e.g. rag-chat).  When supplied, this method emits a structured
+        ``fundamentals_quarterly_missing`` warning if the returned periods do
+        not include that quarter, so operators can distinguish "data not yet
+        ingested" from "labelling bug" in production logs.
         """
         from market_data.domain.enums import FundamentalsSection
 
         iid_str = str(instrument_id)
+
+        # FIX-LIVE-P: resolve the instrument's fiscal_year_end_month so we can
+        # label periods correctly. None when unknown — _period_label falls back
+        # to calendar-year labels and emits a separate warning.
+        instrument = await self._uow.instruments_read.find_by_id(iid_str)
+        ticker = instrument.symbol if instrument is not None else iid_str
+        fiscal_year_end_month = instrument.fiscal_year_end_month if instrument is not None else None
 
         # Fetch earnings history records (quarterly EPS/surprise data)
         earnings_records = await self._uow.fundamentals_read.find_by_section(
@@ -98,9 +124,16 @@ class GetFundamentalsHistoryUseCase:
             data = rec.data if isinstance(rec.data, dict) else {}
             inc = income_by_period.get(period_key, {})
 
-            # Attempt to build a human-readable period label from the report date
+            # Attempt to build a human-readable period label from the report date.
+            # FIX-LIVE-P: pass fiscal_year_end_month so issuers with non-calendar
+            # fiscal years (NVDA=1, AAPL=9, MSFT=6) get correctly labelled fiscal
+            # quarters instead of calendar quarters.
             report_date = data.get("reportDate") or data.get("date") or period_key
-            period_label = _period_label(str(report_date))
+            period_label = _period_label(
+                str(report_date),
+                fiscal_year_end_month=fiscal_year_end_month,
+                ticker=ticker,
+            )
 
             result_periods.append(
                 {
@@ -118,22 +151,108 @@ class GetFundamentalsHistoryUseCase:
                 }
             )
 
+        # FIX-LIVE-P observability: if the caller advertised the user's requested
+        # quarter and that quarter is NOT in the returned periods, emit a
+        # structured warning so we can monitor "data not yet ingested" gaps
+        # (e.g. NVDA Q4FY26 / AMD Q1FY26 on 2026-05-25 — both genuinely missing
+        # from the DB; see FIX-LIVE-G follow-up).
+        if requested_quarter is not None:
+            # period values are always strings as constructed above — narrow for mypy.
+            available = [str(p["period"]) for p in result_periods]
+            normalised_request = _normalise_quarter_label(requested_quarter)
+            normalised_available = {_normalise_quarter_label(p) for p in available}
+            if normalised_request not in normalised_available:
+                log.warning(
+                    "fundamentals_quarterly_missing",
+                    ticker=ticker,
+                    instrument_id=iid_str,
+                    requested_quarter=requested_quarter,
+                    available_quarters=available[:5],
+                )
+
         return {"periods": result_periods, "period_count": len(result_periods)}
 
 
-def _period_label(report_date: str) -> str:
+def _period_label(
+    report_date: str,
+    *,
+    fiscal_year_end_month: int | None = None,
+    ticker: str | None = None,
+) -> str:
     """Convert a YYYY-MM-DD date string to a human-readable quarter label.
 
-    Examples:
-      "2026-03-31" → "Q1 2026"
-      "2025-12-31" → "Q4 2025"
-      "bad-value"  → "bad-value" (pass through unchanged)
+    With ``fiscal_year_end_month`` (1-12), returns a fiscal-quarter label like
+    ``"Q4 FY2026"``. Without it, falls back to a calendar-quarter label like
+    ``"Q1 2026"`` and emits a structured ``fiscal_year_end_unknown`` warning
+    so operators can monitor the gap.
+
+    FIX-LIVE-P (2026-05-25): the calendar-only path was the original bug —
+    NVIDIA's 2026-01-31 period (fiscal Q4 FY2026) was being labelled
+    "Q1 2026" because the calendar month said so. The fiscal computation
+    uses modular arithmetic on the gap between the period's calendar month
+    and the issuer's fiscal-year-end month.
+
+    Worked examples (verify cases used in the test suite):
+      * NVDA fy_end=1, period 2026-01-31 → Q4 FY2026  (months_into_fy=12 → Q4)
+      * AAPL fy_end=9, period 2026-09-30 → Q4 FY2026
+      * AAPL fy_end=9, period 2025-12-31 → Q1 FY2026  (Dec is first month after Sept)
+      * MSFT fy_end=6, period 2026-06-30 → Q4 FY2026
+      * AMD  fy_end=12, period 2026-03-31 → Q1 FY2026  (calendar = fiscal here)
+      * Unknown fy_end, period 2026-03-31 → "Q1 2026" + warning
+
+    Returns the original input unchanged on any parse failure (forward-compatible).
     """
     try:
         from datetime import date as _date
 
         dt = _date.fromisoformat(report_date)
-        quarter = (dt.month - 1) // 3 + 1
-        return f"Q{quarter} {dt.year}"
     except (ValueError, TypeError):
         return report_date
+
+    if fiscal_year_end_month is None or not (1 <= fiscal_year_end_month <= 12):
+        # No reliable fiscal calendar — emit an observability hook so coverage
+        # can be tracked (CRITICAL: ticker may be None when the caller did not
+        # plumb it through, which is fine — the warning is still actionable).
+        log.warning(
+            "fiscal_year_end_unknown",
+            ticker=ticker,
+            report_date=report_date,
+        )
+        quarter = (dt.month - 1) // 3 + 1
+        return f"Q{quarter} {dt.year}"
+
+    fy_end = fiscal_year_end_month
+    # Months into the fiscal year: the month immediately AFTER fy_end is
+    # fiscal-month 1; fy_end itself is fiscal-month 12.  Modular arithmetic
+    # avoids special-casing fy_end == 12 vs anything else.
+    months_into_fy = ((dt.month - fy_end - 1) % 12) + 1
+    fiscal_quarter = (months_into_fy - 1) // 3 + 1
+    # Fiscal-year naming: FY N ends in calendar month fy_end of year N.
+    # So months ≤ fy_end belong to FY equal to the calendar year; months
+    # > fy_end belong to the NEXT fiscal year. Example: AAPL fy_end=9,
+    # period 2025-12-31 falls in FY2026 (months_into_fy=3 = Q1 FY2026).
+    fiscal_year = dt.year if dt.month <= fy_end else dt.year + 1
+    return f"Q{fiscal_quarter} FY{fiscal_year}"
+
+
+def _normalise_quarter_label(label: str) -> str:
+    """Normalise a quarter label for set membership comparison.
+
+    Accepts variants like ``"Q4 FY2026"``, ``"Q4 2026"``, ``"q4 fy 2026"``,
+    ``"Q4-FY26"`` and collapses to a canonical form ``"Q<n>:<year>"`` where
+    ``year`` is the 4-digit year. Tolerant by design — this is used for
+    observability only, not for matching user input back to the response.
+    """
+    import re
+
+    s = label.upper().replace("-", " ").replace("FY", " ").strip()
+    # Collapse runs of whitespace
+    s = re.sub(r"\s+", " ", s)
+    m = re.match(r"Q\s*(\d+)\s+(\d{2,4})", s)
+    if m is None:
+        return label.upper().strip()
+    q, year = m.group(1), m.group(2)
+    # Tolerate 2-digit years by assuming 20xx
+    if len(year) == 2:
+        year = f"20{year}"
+    return f"Q{q}:{year}"
