@@ -135,3 +135,115 @@ Commit: `764f1edb` (`docs(bug-patterns,rules): ingest PLAN-0093 compounding less
 
 ### Test-harness invariants (header comment in `tests/validation/chat_eval/conftest.py`)
 Three rules learned the hard way during ITER 2-5 (4+ false-fail debug cycles): fresh `thread_id` per test, refresh JWT on 401, re-run on known-transient terminal errors. Cross-refs BP-559/BP-560/BP-561.
+
+---
+
+## INV-LIVE-EE — Q4 v1 transient DeepInfra investigation (iter-6)
+
+**Provider chain mapped (`provider_chain.py:113`):**
+DeepInfra (primary) → OpenRouter (fallback) → Ollama (emergency).
+
+**Current retry/backoff state:**
+- `stream()` calls: NO per-provider retry; any exception → 60s Valkey negative cache → next provider.
+- `chat_with_tools()` calls: same — wrapped in `asyncio.wait_for(timeout=90s)` but no retry inside the wrapper.
+- Negative cache window (60s) blocks the provider globally on a single transient failure, masking what would otherwise be a 2-second recovery window.
+
+**Characterised failure mode (Q4 v1 iter-0):**
+- Most likely: **DeepInfra rate-limit (429)** under chained-test load. Single Q4 v1 calls succeed; rapid sequential bursts (≥5 same-query in <1 min) intermittently 429.
+- Secondary: transient 5xx (503/502) or socket reset.
+- Why iter-0 only: FIX-LIVE-V's recovery covers iter > 0; iter-0 still aborts.
+
+**Recommended fix (Option A — provider-chain exponential backoff):**
+- Classify exceptions in `LLMProviderChain.chat_with_tools()`:
+  - **Retriable**: `TimeoutError`, `asyncio.TimeoutError`, `httpx.ConnectError`, `httpx.ReadError`, HTTP 429/503
+  - **Non-retriable**: `ValueError`, `KeyError`, HTTP 400/401/403
+- On retriable + iter-0, retry up to `RAG_CHAT_PROVIDER_RETRY_ATTEMPTS=2` with `RAG_CHAT_PROVIDER_RETRY_BACKOFF_BASE=1.0`-second exponential delays (1s, 2s) BEFORE moving to next provider.
+- On non-retriable, skip retry, move to next provider immediately.
+- Add Prometheus counter `llm_provider_retry_attempt_total{provider, attempt, outcome}`.
+
+**Files to touch (~120-150 LOC):**
+- `services/rag-chat/src/rag_chat/infrastructure/llm/provider_chain.py` (~30-40 lines, add retry loop)
+- `services/rag-chat/src/rag_chat/infrastructure/llm/deepinfra_adapter.py` + `openrouter_adapter.py` (~5 lines each, exception classification helper)
+- `services/rag-chat/src/rag_chat/config.py` (~5 lines, new env vars)
+- Unit tests under `services/rag-chat/tests/unit/infrastructure/llm/` (~50 lines)
+
+**Risk:** LOW. Retry is iter-0-only on classified-retriable exceptions; non-retriable errors bypass the retry to preserve fast-fail on real misconfigurations.
+
+**Test plan:** unit test 429+429+200 → 1 retry success; integration 10× rapid Q4 v1 → ≥8/10 pass; regression FIX-V mid-loop still works; Valkey negative-cache TTL respected.
+
+---
+
+## INV-LIVE-FF — Survey REVENUE/RATIO systematic failure (iter-6)
+
+**Per-cell breakdown (iter-5 run 20260525T195005Z):**
+- **RATIO (11/15 non-USEFUL = 73%)**: empty_final_answer × 6 (AMD v1/v2/v3, NVDA v1/v2/v3), llm_second_turn_failed × 2 (AAPL v1, TSM v3), all_tools_failed × 2 (BRK.B v1/v3).
+- **REVENUE (9/15 non-USEFUL = 60%)**: empty_final_answer × 2 (AMD v1/v3), llm_second_turn_failed × 3 (TSM v1/v2, NVDA v2), all_tools_failed × 1 (BRK.B v3).
+- Other families (CORPORATE_ACTION 7%, EPS 20%, HEADCOUNT 33%) all below 50% threshold.
+
+**Root cause (RESOLVED):**
+Smoking gun in commit timeline:
+- 12:49 PDT — FIX-LIVE-BB landed (`a3960f6f`): iter-0 failure → append "Tool selection unavailable…" → break to post-loop `stream_chat()`.
+- 12:50 PDT — survey ran with that buggy code.
+- 13:32 PDT — FIX-LIVE-BB reverted at `e84a612c` after Q1+Q4-v1 regressions surfaced in iter-5 targeted re-QA.
+
+The survey snapshot captured the buggy state: a [system, user_nudge, user_orig] message stack with NO tool results → LLM correctly refuses to hallucinate → empty answer → graded USELESS. RATIO/REVENUE were hit hardest because their queries are most numerical/precise (LLM extra-conservative when no grounding).
+
+**No new code fix needed.** Iter-6 survey re-run against current HEAD (≥`e84a612c`) is the validation step.
+
+**Iter-4 evidence**: AMD/RATIO/v1 ran with `intent=FINANCIAL_DATA, tool_calls=[get_fundamentals_history], latency=12.96s` and an honest refusal that graded USEFUL — confirming the pre-BB pipeline is healthy.
+
+---
+
+## INV-LIVE-GG — Worker-starvation triage (iter-6)
+
+**8 failing worker SLOs cluster into 3 categories.**
+
+### Cluster 1 — NLP pipeline workers blocked on external deps (2 workers, classification **D**)
+| Worker | SLO | Probable root cause | Smallest fix |
+|---|---|---|---|
+| `PriceImpactLabellingWorker` | `test_impact_score_populated` 0%, `test_article_impact_windows_populated` 0 rows | `MarketDataClient` JWT mint fails at startup (api-gateway not yet healthy → `httpx.ConnectError`) | Add `api-gateway: { condition: service_healthy }` to compose `depends_on`; add 3-retry exponential backoff to `MarketDataClient.__init__`; OR defer client creation to first `.run_once()` |
+| `ArticleRelevanceScoringWorker` | `test_llm_relevance_score_lag` 100% NULL | `NLP_PIPELINE_RELEVANCE_SCORING_API_KEY` likely empty → falls to Ollama → Ollama down → silent skip | Verify env var; wire same DeepInfra key as other workers OR ensure Ollama healthy |
+
+### Cluster 2 — KG scheduler workers starved by long intervals + small batches (4 workers, classification **C/D**)
+All 4 run in the **single asyncio event loop** of `knowledge-graph-scheduler`. Math: interval=3600s + batch=20 + LLM=60s/batch = 1.67% duty cycle → ~7 years to drain 1.3M relations (matches observed 7% coverage).
+
+| Worker | SLO | Fix |
+|---|---|---|
+| `SummaryWorker` | `test_summary_coverage` 7% | Lower `worker_summary_interval_s` 3600→600s; raise batch to 50 (+500% throughput) |
+| `EmbeddingRefreshWorker` | `test_definition_embedding_coverage` 10% NULL | Lower interval 3600→300s; raise `batch_limit` to 200 (+600%) |
+| `DefinitionRefreshWorker` | `test_description_coverage_for_company_entities` 59.5% NULL | Verify `KNOWLEDGE_GRAPH_GEMINI_API_KEY`; enable DeepInfra fallback; raise batch to 50 |
+| `FundamentalsRefreshWorker` | `test_fundamentals_ohlcv_embedding_coverage` 0/2405 | Verify S2 OHLCV ingestion is live; lower interval to 300s; check migration 0003 ran |
+
+### Cluster 3 — Path-insight historical backlog (1 worker, classification **B**)
+| Worker | SLO | Note |
+|---|---|---|
+| `PathExplanationBatchWorker` | `test_path_insight_llm_explanation_coverage` 4710 stale rows | Worker is healthy and draining FORWARD; backlog is from pre-ITER-5 transition. One-time batch backfill script clears the 4710. Pair with INV-HH-2 throughput recommendations. |
+
+**Architectural note (PLAN-0094 scope):** 5 LLM-bound workers in 1 asyncio loop have no true parallelism — each LLM-await blocks the others. Long-term: extract into separate containers (like nlp-pipeline pattern).
+
+**Prioritised fix order:** Cluster 1 (unblock dep) → Cluster 2 (interval+batch tuning) → Cluster 3 (one-time backfill). Total ~2.5h.
+
+---
+
+## INV-LIVE-HH — restart-policy + path-insight backlog drain (iter-6)
+
+### HH-1: restart-policy contract violations
+The 18 critical long-running services all PASS the `restart: unless-stopped` check. **All 3 retry workers FAIL** the `condition: service_healthy` contract because the test still requires `ollama` as a hard dep — but DP-F005 (2026-05-24) intentionally dropped Ollama from:
+- `knowledge-graph-path-insight-worker` (no ML client at all, pure graph + template matching)
+- `nlp-pipeline-embedding-retry-worker` (DeepInfra primary; Ollama fallback never used in shipped envs)
+- `nlp-pipeline-unresolved-resolution-worker` (same rationale)
+
+**Recommended fix (Option A):** drop `"ollama"` from the 3 frozensets in `tests/validation/test_restart_policy.py:113,116,119`. The DP-F005 decision was sound; the test contract is stale.
+
+### HH-2: path-insight backlog drain rate
+`PathExplanationBatchWorker` config: batch 200, concurrency 5, cycle 1800s (30 min). LLM ~400ms/call. Per-cycle wall-clock ~16-20s. **Effective throughput: 400 rows/hour.**
+
+4710 stale rows ÷ 400 = **11.8 hours** to drain at current rate. Production rate not directly measured, but PathInsightSeeder runs every 6h and the streaming PathInsightWorker continuously ingests — net drain rate may be near-zero.
+
+**Recommended fix (Option 4 hybrid):** batch 200→300 + concurrency 5→7 + cycle 1800s→1200s = ~3.15× throughput = 1266 rows/hour → 4710 backlog drains in ~3.7h. Config keys (env vars):
+- `KNOWLEDGE_GRAPH_PATH_EXPLANATION_BATCH_SIZE=300`
+- `KNOWLEDGE_GRAPH_PATH_EXPLANATION_CONCURRENCY=7`
+- Cycle: edit `scheduler.py:236` `minutes=30 → minutes=20`
+
+**Alternative (Option 5):** if production turns out to exceed 1266/hr, raise SLO threshold from ≤100 stale to ≤500. Decide after measuring real production rate (proposed gauge: `path_insights_inserted_total{source=seeder|stream}`).
+
