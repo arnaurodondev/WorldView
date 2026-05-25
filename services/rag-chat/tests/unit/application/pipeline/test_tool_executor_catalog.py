@@ -513,6 +513,68 @@ class TestScreenUniverse:
         assert "pe_ratio" in metrics
 
     @pytest.mark.asyncio
+    async def test_numeric_market_cap_is_formatted(self) -> None:
+        """FIX-LIVE-DD regression: raw numeric market caps must be rendered.
+
+        Q6 ("Find AI semiconductors above $50B") failed because the
+        screener emitted ``MCap: 5230000000000`` and the 8B-parameter
+        chat model hallucinated plausible trillion-magnitude strings
+        ($5.23T for NVDA) which the numeric-grounding validator then
+        flagged as unsupported. The handler must now render BOTH a
+        human-friendly ``$X.XXT`` label AND the raw integer (preserved
+        so the validator's tolerance check still binds against either
+        form). This test pins the wire format.
+        """
+        s3_brief = _make_s3_brief_port(
+            screen_result={
+                "instruments": [
+                    {"ticker": "NVDA", "name": "NVIDIA Corp.", "market_cap": 3_600_000_000_000},
+                    {"ticker": "AMD", "name": "AMD", "market_cap": 240_000_000_000},
+                    {"ticker": "MU", "name": "Micron", "market_cap": 130_000_000_000},
+                ]
+            }
+        )
+        handler = _make_market_handler(s3_brief=s3_brief)
+        result = await handler._handle_screen_universe(
+            sector="Technology",
+            industry="Semiconductors",
+            market_cap_min=50_000_000_000,
+        )
+        assert len(result) == 1
+        text = result[0].text
+        # Formatted labels (LLM-friendly) must appear verbatim.
+        assert "MCap: $3.60T" in text, text
+        assert "MCap: $240.00B" in text, text
+        assert "MCap: $130.00B" in text, text
+        # Raw integers must be preserved so the numeric-grounding
+        # validator can still tolerance-match `$3.60T` ↔ 3_600_000_000_000.
+        assert "3600000000000" in text
+        assert "240000000000" in text
+
+    @pytest.mark.asyncio
+    async def test_legacy_string_market_cap_passthrough(self) -> None:
+        """Backward compatibility: pre-formatted string caps stay verbatim.
+
+        Some upstream/mock paths supply ``market_cap: "3T"`` (a legacy
+        display label). The formatter MUST NOT mangle these — only
+        numeric inputs are reformatted.
+        """
+        s3_brief = _make_s3_brief_port(
+            screen_result={
+                "instruments": [
+                    {"ticker": "AAPL", "name": "Apple Inc.", "market_cap": "3T"},
+                ]
+            }
+        )
+        handler = _make_market_handler(s3_brief=s3_brief)
+        result = await handler._handle_screen_universe()
+        text = result[0].text
+        # Legacy string is passed through unchanged.
+        assert "MCap: 3T" in text
+        # Must NOT have been wrapped in raw/formatted parentheses.
+        assert "(raw: 3T)" not in text
+
+    @pytest.mark.asyncio
     async def test_no_filters_no_scope_emits_empty_filter_list(self) -> None:
         """When no kwargs are given, send ``filters: []`` (no-filter path).
 

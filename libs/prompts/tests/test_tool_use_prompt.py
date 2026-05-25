@@ -111,6 +111,36 @@ class TestToolUsePromptContract:
         # silently turn the allowlist into a free-form list.
         assert "Do NOT fabricate" in prompt or "do NOT fabricate" in prompt
 
+    def test_prompt_contains_ai_semi_rendering_directive(self) -> None:
+        """FIX-LIVE-DD regression — AI-semi rendering directive must be present.
+
+        Q6 re-graded USELESS because the LLM (1) ignored the screener's raw
+        market_cap integers, (2) hallucinated plausible trillion-magnitude
+        strings, (3) got caught by the numeric-grounding validator, and
+        (4) collapsed into a flat "I cannot find evidence" refusal. The
+        rendering directive forces the LLM to (a) emit a markdown table
+        with explicit Ticker/Market Cap columns and (b) refuse only when
+        the screener actually returns zero matching rows.
+        """
+        prompt = get_tool_use_system_prompt(
+            intent="FINANCIAL_DATA",
+            today_iso="2026-05-25",
+        )
+        # Section anchor.
+        assert "AI-SEMI RENDERING (mandatory):" in prompt
+        # Mandatory column set must be enumerated verbatim so the LLM
+        # cannot collapse them into a free-form list.
+        for column in ("Ticker", "Company", "Market Cap", "YoY Revenue Growth"):
+            assert column in prompt, f"missing required column {column}"
+        # Refusal-suppression wording: a structured market_cap field plus
+        # a pre-formatted MCap label IS the verification.
+        assert "cannot verify" in prompt
+        assert "structured output" in prompt
+        # The directive must explicitly tell the LLM to copy the
+        # pre-formatted label verbatim (no rounding, no substitution).
+        assert "VERBATIM" in prompt
+        assert "training knowledge" in prompt
+
     def test_prompt_contains_speculative_forecast_refusal(self) -> None:
         """FIX-LIVE-Z regression — speculative-price refusal must be present.
 

@@ -35,6 +35,57 @@ log = structlog.get_logger(__name__)  # type: ignore[no-any-return]
 _TOOL_RESULT_MAX_CHARS = 4000
 
 
+# FIX-LIVE-DD (2026-05-25): Q6 ("AI semiconductors above $50B") graded USELESS
+# because the LLM fabricated market caps ($5.23T for NVDA, $742B for AMD,
+# $842B for MU). The screener output rendered ``market_cap`` as a raw
+# 13-digit integer (e.g. ``MCap: 5230000000000``). 8B-parameter models
+# struggle to read scientific-magnitude integers and tend to substitute
+# plausible-looking trillion/billion strings from pretraining. The
+# numeric-grounding validator then flags those as unsupported, the rewrite
+# prompt tells the LLM "you can't verify these", and the model collapses
+# into a flat refusal.
+#
+# Fix: render market caps in BOTH raw and human-friendly form. The raw
+# integer stays so the validator's tolerance-based matching (MARKET_CAP ±
+# 0.5%) still works against `$5.23T` (= 5.23e12) extractions; the
+# pre-formatted `$X.XXT` string gives the LLM a copy-paste-ready label so
+# it doesn't need to convert digits in its head.
+#
+# Why $X.XXT/B/M cutoffs (not just T): the screener returns mid-caps too
+# (e.g. ARM at $226B). A single trillion-only label would read as
+# "$0.23T" — fine numerically but ugly. Use T for >= 1e12, B for >= 1e9,
+# M for >= 1e6, otherwise plain dollars. Two decimals everywhere keeps
+# the format predictable for the LLM.
+def _format_market_cap_value(value: Any) -> str | None:
+    """Render a numeric market cap as ``$X.XXT/B/M``.
+
+    Returns ``None`` for non-numeric input so callers can decide whether to
+    fall back to ``str(value)`` (preserving legacy pre-formatted strings
+    like ``"3T"`` that some upstream APIs already return).
+    """
+    if value is None:
+        return None
+    # If upstream already gave us a string with a magnitude suffix
+    # (legacy/test path: ``"3T"``, ``"$2.8T"``), trust it verbatim.
+    if isinstance(value, str):
+        return None
+    try:
+        num = float(value)
+    except (TypeError, ValueError):
+        return None
+    if num <= 0:
+        return None
+    abs_n = abs(num)
+    sign = "-" if num < 0 else ""
+    if abs_n >= 1e12:
+        return f"{sign}${abs_n / 1e12:.2f}T"
+    if abs_n >= 1e9:
+        return f"{sign}${abs_n / 1e9:.2f}B"
+    if abs_n >= 1e6:
+        return f"{sign}${abs_n / 1e6:.2f}M"
+    return f"{sign}${abs_n:,.0f}"
+
+
 class MarketHandler(ToolHandler):
     """Handles price, fundamentals, screener, movers, and calendar tools.
 
@@ -229,6 +280,18 @@ class MarketHandler(ToolHandler):
                 for key in ("market_cap", "pe_ratio", "revenue", "gross_profit", "eps"):
                     val = funda.get(key)
                     if val is not None:
+                        # FIX-LIVE-DD: same problem as the screener — raw
+                        # 13-digit market caps in compare_entities output
+                        # invite the LLM to hallucinate plausible trillion/
+                        # billion labels. Pre-format numeric values for the
+                        # cap-style metrics (market_cap, revenue, gross_profit)
+                        # while leaving ratios/EPS untouched (those are
+                        # already at human scale).
+                        if key in ("market_cap", "revenue", "gross_profit"):
+                            formatted = _format_market_cap_value(val)
+                            if formatted is not None:
+                                lines.append(f"  {key.replace('_', ' ').title()}: {formatted} (raw: {val})")
+                                continue
                         lines.append(f"  {key.replace('_', ' ').title()}: {val}")
             lines.append("")
 
@@ -356,8 +419,19 @@ class MarketHandler(ToolHandler):
                 row = f"  {ticker}"
                 if name:
                     row += f" — {name}"
-                if mc:
-                    row += f" | MCap: {mc}"
+                if mc is not None and mc != "":
+                    # FIX-LIVE-DD: render BOTH raw and formatted. The raw
+                    # integer is kept for the numeric-grounding validator
+                    # (tolerance-matches `$5.23T` ↔ ``5230000000000``);
+                    # the ``MCap`` (formatted) label is what the LLM
+                    # actually copies into its answer.
+                    formatted = _format_market_cap_value(mc)
+                    if formatted is not None:
+                        row += f" | MCap: {formatted} (raw: {mc})"
+                    else:
+                        # Legacy/string path: upstream already gave a
+                        # display-ready label like ``"3T"`` — keep it.
+                        row += f" | MCap: {mc}"
                 if pe:
                     row += f" | P/E: {pe}"
                 lines.append(row)
