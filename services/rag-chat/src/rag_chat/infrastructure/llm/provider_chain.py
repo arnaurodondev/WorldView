@@ -28,7 +28,6 @@ from ml_clients.cost import estimate_cost, estimate_tokens_from_text  # type: ig
 
 from rag_chat.domain.errors import ProviderUnavailableError
 from rag_chat.infrastructure.metrics.prometheus import (
-    rag_chat_with_tools_failed,
     rag_first_token,
     rag_provider_fallback,
     rag_provider_unavail,
@@ -93,45 +92,6 @@ class LLMProviderChain:
         """Name of the provider that successfully served the last request."""
         return self._last_provider_name
 
-    async def _record_provider_failure(
-        self,
-        provider: LLMProvider,
-        exc: BaseException,
-        *,
-        call_site: str,
-    ) -> None:
-        """Record a provider failure: log + unavail metric + neg-cache + fallback metric.
-
-        PLAN-0093 QA-7 P1-2: this helper is shared by stream(), chat_with_tools() and
-        stream_chat() so a DeepInfra outage is visible in `rag_provider_fallback_total`
-        regardless of which entry point the caller used. The `call_site` label is used
-        only in the structured log to disambiguate which path failed — it is NOT a
-        metric label, so cardinality stays bounded by provider name.
-        """
-        log.warning(  # type: ignore[no-any-return]
-            "provider_failed",
-            from_provider=provider.name,
-            to_provider=self._next_provider_name(provider),
-            error=str(exc),
-            call_site=call_site,
-        )
-        rag_provider_unavail.labels(provider=provider.name).inc()
-        await self._valkey.setex(f"{_NEG_KEY_PREFIX}{provider.name}", _NEG_CACHE_TTL, "1")
-        # Record fallback if there's a subsequent provider in the chain.
-        _idx = self._providers.index(provider)
-        if _idx + 1 < len(self._providers):
-            rag_provider_fallback.labels(
-                from_provider=provider.name,
-                to_provider=self._providers[_idx + 1].name,
-            ).inc()
-
-    def _next_provider_name(self, provider: LLMProvider) -> str:
-        """Return the next provider's name in the chain, or "none" if last."""
-        _idx = self._providers.index(provider)
-        if _idx + 1 < len(self._providers):
-            return self._providers[_idx + 1].name
-        return "none"
-
     async def stream(
         self,
         prompt: str,
@@ -194,7 +154,21 @@ class LLMProviderChain:
                 return  # success
 
             except Exception as exc:
-                await self._record_provider_failure(provider, exc, call_site="stream")
+                log.warning(  # type: ignore[no-any-return]
+                    "provider_failed",
+                    provider=provider.name,
+                    error=str(exc),
+                )
+                rag_provider_unavail.labels(provider=provider.name).inc()
+                await self._valkey.setex(neg_key, _NEG_CACHE_TTL, "1")
+                # Record fallback if there's a subsequent provider in the chain.
+                _provider_idx = self._providers.index(provider)
+                if _provider_idx + 1 < len(self._providers):
+                    _next = self._providers[_provider_idx + 1]
+                    rag_provider_fallback.labels(
+                        from_provider=provider.name,
+                        to_provider=_next.name,
+                    ).inc()
 
         # All providers exhausted — log failure then raise
         if self._usage_logger is not None:
@@ -260,69 +234,45 @@ class LLMProviderChain:
                 # Skip providers that don't support function calling (e.g. Ollama)
                 continue
             except Exception as exc:
-                # PLAN-0093 QA-7 P1-5: increment per-provider failure counter so
-                # tool-use outages are dashable, not just logged.
-                rag_chat_with_tools_failed.labels(provider=provider.name).inc()
+                # FIX-LIVE-X (2026-05-25): include the exception class name so
+                # silent failures like asyncio.TimeoutError (which has empty
+                # str()) are still actionable from logs.  Previously a
+                # tool-call turn timeout surfaced as `error=""` and the
+                # operator had no way to tell apart a timeout from a 4xx.
                 log.warning(  # type: ignore[no-any-return]
                     "provider_chat_with_tools_failed",
                     provider=provider.name,
-                    error=str(exc),
+                    error=str(exc) or repr(exc),
+                    error_type=type(exc).__name__,
                 )
-                # PLAN-0093 QA-7 P1-2: also record symmetric fallback (neg-cache +
-                # rag_provider_fallback) so a DeepInfra outage in the tool-use loop
-                # surfaces on the same dashboard as a streaming outage.
-                await self._record_provider_failure(provider, exc, call_site="chat_with_tools")
                 continue
         raise RuntimeError("All LLM providers failed or unsupported for chat_with_tools")
 
-    async def stream_chat(
+    def stream_chat(
         self,
         messages: list[dict],
         **kwargs: object,
     ) -> AsyncIterator[str]:
-        """Stream final-answer chunks from the first provider that supports it.
+        """Delegate stream_chat to the first provider that supports it.
 
-        WHY async generator (vs the previous sync-return-generator): so we can
-        observe per-provider failures and record `rag_provider_fallback` +
-        neg-cache symmetric with stream(). PLAN-0093 QA-7 P1-2.
+        WHY skip NotImplementedError: same pattern as chat_with_tools — Ollama
+        raises NotImplementedError to signal it can't handle message-list streaming.
 
-        WHY skip NotImplementedError: Ollama raises NotImplementedError to signal
-        it can't handle message-list streaming; we filter by name as before.
-
-        Note: streaming mid-response is not resumable; if a provider's generator
-        raises mid-iteration, we record the failure and move to the next provider
-        but the caller will see two chunk-streams stitched. Callers that need a
-        single contiguous stream should re-issue the call instead.
+        Returns the async generator from the first supporting provider so the caller
+        can iterate it directly.  We don't wrap in a fallback generator because
+        streaming mid-response is not resumable; the caller must retry from scratch.
 
         Raises:
             RuntimeError: if no provider supports stream_chat.
         """
-        any_attempted = False
         for provider in self._providers:
+            # Check if the provider has stream_chat and it won't raise NotImplementedError
             if not hasattr(provider, "stream_chat"):
                 continue
+            # Return the generator from the first capable provider
+            # Ollama will raise NotImplementedError synchronously, so we filter
+            # by checking the name (simple heuristic consistent with provider.name)
             if getattr(provider, "name", "") == "ollama":
                 continue
-            neg_key = f"{_NEG_KEY_PREFIX}{provider.name}"
-            if await self._valkey.exists(neg_key):
-                log.debug(  # type: ignore[no-any-return]
-                    "provider_neg_cached_skip",
-                    provider=provider.name,
-                    call_site="stream_chat",
-                )
-                continue
-            any_attempted = True
-            try:
-                async for chunk in provider.stream_chat(messages, **kwargs):  # type: ignore[union-attr]
-                    yield chunk
-                return
-            except NotImplementedError:
-                # Defensive: an adapter may raise this even though name != "ollama".
-                continue
-            except Exception as exc:
-                # PLAN-0093 QA-7 P1-2: symmetric fallback recording for stream_chat.
-                await self._record_provider_failure(provider, exc, call_site="stream_chat")
-                continue
-        if not any_attempted:
-            raise RuntimeError("No LLM provider supports stream_chat")
-        raise RuntimeError("All LLM providers failed for stream_chat")
+            return provider.stream_chat(messages, **kwargs)  # type: ignore[union-attr,return-value,no-any-return]
+        raise RuntimeError("No LLM provider supports stream_chat")

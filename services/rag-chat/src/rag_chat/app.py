@@ -222,6 +222,11 @@ def _wire_orchestrator(app: FastAPI, settings: RagChatSettings, valkey_client: V
             DeepInfraCompletionAdapter(
                 api_key=_deepinfra_api_key,
                 model=settings.completion_model,  # RAG_CHAT_COMPLETION_MODEL
+                # FIX-LIVE-X (2026-05-25): explicit tool-call budget. Previously
+                # bound to the 30s default; Q6's second turn (Qwen3-235B with a
+                # 5-tool message stack) timed out before HTTP dispatch and the
+                # error surfaced as a blank `llm_first_turn_failed` to the user.
+                chat_with_tools_timeout=settings.deepinfra_tool_call_timeout_seconds,
             )
         )
     if _openrouter_api_key:
