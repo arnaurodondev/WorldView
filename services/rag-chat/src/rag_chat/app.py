@@ -248,7 +248,16 @@ def _wire_orchestrator(app: FastAPI, settings: RagChatSettings, valkey_client: V
     from rag_chat.infrastructure.db.usage_log_factory import SessionScopedRagUsageLogger
 
     usage_logger = SessionScopedRagUsageLogger(session_factory=app.state.write_factory)
-    llm_chain = LLMProviderChain(providers=providers, valkey=valkey_client, usage_logger=usage_logger)
+    # FIX-LIVE-EE (2026-05-25): wire iter-0 retry config from settings. Default
+    # 2 attempts / 1.0s exponential base yields 1s+2s extra latency in the
+    # worst case before falling back to OpenRouter — well within Q4-class SLOs.
+    llm_chain = LLMProviderChain(
+        providers=providers,
+        valkey=valkey_client,
+        usage_logger=usage_logger,
+        retry_attempts=settings.provider_retry_attempts,
+        retry_backoff_base=settings.provider_retry_backoff_base,
+    )
 
     # Embedding: provider selection via RAG_CHAT_JINA_API_KEY.
     #   - jina_api_key set  → use JinaEmbeddingAdapter directly (1024-dim, ~100-300ms REST)

@@ -93,6 +93,20 @@ class Settings(BaseSettings):
     # Default raised to 90s; lowered in tests via env var when needed.
     deepinfra_tool_call_timeout_seconds: float = 90.0  # RAG_CHAT_DEEPINFRA_TOOLCALL_TIMEOUT
 
+    # FIX-LIVE-EE (2026-05-25): Provider-chain exponential backoff for the
+    # iteration-0 chat_with_tools turn. Q4 v1 + similar queries surfaced a
+    # transient DeepInfra failure rate of 60-100% under chained-test load (5x
+    # same-query within ~10s) — most likely 429s and transient 5xx. Without
+    # retry, a single transient failure flips the 60s Valkey negative cache,
+    # masking what would otherwise be a 2-second recovery window. We retry the
+    # SAME provider up to N times with exponential backoff BEFORE marking it
+    # bad and falling back to the next provider in the chain.
+    #
+    # Defaults: 2 retries → delays of 1s, 2s before fallback.
+    # Setting ATTEMPTS to 0 disables the retry entirely (legacy behaviour).
+    provider_retry_attempts: int = Field(default=2, ge=0, le=5)  # RAG_CHAT_PROVIDER_RETRY_ATTEMPTS
+    provider_retry_backoff_base: float = Field(default=1.0, gt=0.0, le=10.0)  # RAG_CHAT_PROVIDER_RETRY_BACKOFF_BASE
+
     # ── Auth (PRD-0025): RS256 internal JWT via api-gateway JWKS ─────────────
     api_gateway_url: str = "http://api-gateway:8000"
 
