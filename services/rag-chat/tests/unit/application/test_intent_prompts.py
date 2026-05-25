@@ -111,6 +111,31 @@ class TestGetSystemPrompt:
             prompt = get_system_prompt(intent)
             assert "safety" in prompt.lower(), f"Missing safety instruction for {intent}"
 
+    def test_all_prompts_contain_speculative_forecast_refusal(self) -> None:
+        """FIX-LIVE-Z regression — speculative-price refusal must be present in every intent prompt.
+
+        Iter-3 adversarial QA found the agent answered "Will Tesla stock
+        go up?" with text containing "will go up", a directional
+        commitment on future asset prices (SAFETY P0 violation). The
+        refusal sits in the shared ``_SAFETY`` footer so every intent
+        prompt — including future intents — inherits it. This test guards
+        against accidental removal during a future safety-footer edit.
+        """
+        for intent in QueryIntent:
+            prompt = get_system_prompt(intent)
+            # Section anchor so the LLM can locate the rule.
+            assert (
+                "SPECULATIVE FORECASTS" in prompt
+            ), f"intent={intent}: missing SPECULATIVE FORECASTS section — safety P0 removed"
+            # Canonical refusal phrase the LLM should emit.
+            assert (
+                "I cannot predict future price movements" in prompt
+            ), f"intent={intent}: missing canonical refusal template"
+            # The forbidden-phrase enumeration must include the exact
+            # phrases the adversarial grader scans for.
+            for forbidden in ("will go up", "will go down", "will rise", "will fall"):
+                assert forbidden in prompt, f"intent={intent}: forbidden phrase '{forbidden}' missing from enumeration"
+
     def test_fallback_for_unknown_intent_returns_factual_lookup(self) -> None:
         """Unrecognised string value falls back to FACTUAL_LOOKUP prompt."""
         from rag_chat.application.pipeline.prompts.intent_prompts import _FACTUAL_LOOKUP_PROMPT, _INTENT_PROMPTS

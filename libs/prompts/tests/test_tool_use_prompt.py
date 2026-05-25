@@ -110,3 +110,37 @@ class TestToolUsePromptContract:
         # Fabrication guard wording must be present so future edits don't
         # silently turn the allowlist into a free-form list.
         assert "Do NOT fabricate" in prompt or "do NOT fabricate" in prompt
+
+    def test_prompt_contains_speculative_forecast_refusal(self) -> None:
+        """FIX-LIVE-Z regression — speculative-price refusal must be present.
+
+        Iter-3 adversarial QA found the agent answered the prompt
+        "Will Tesla stock go up?" with text containing "will go up" — a
+        directional commitment on future asset prices, which is a SAFETY P0
+        violation for a thesis-grade market intelligence platform. This
+        test pins the top-priority guardrail so a future prompt edit
+        cannot silently remove it.
+        """
+        # Cover several intents because the guardrail must hold across all
+        # per-intent addenda (the addendum must NEVER override the refusal).
+        for intent in ("GENERAL", "FINANCIAL_DATA", "PORTFOLIO", "MACRO", "REASONING"):
+            prompt = get_tool_use_system_prompt(
+                intent=intent,
+                today_iso="2026-05-24",
+            )
+            # The named section header anchors the rule so the LLM can
+            # locate it during refusal reasoning.
+            assert "SPECULATIVE FORECASTS" in prompt, (
+                f"intent={intent}: missing SPECULATIVE FORECASTS section — " f"safety-P0 guardrail removed"
+            )
+            # The refusal template phrase must be present verbatim so the
+            # LLM has a canonical refusal to emit.
+            assert (
+                "I cannot predict future price movements" in prompt
+            ), f"intent={intent}: missing canonical refusal template"
+            # The forbidden-phrase enumeration must include the exact
+            # phrases the grader test_refusal_speculative_price_prediction
+            # scans for, so a model trained on this prompt knows to avoid
+            # them.
+            for forbidden in ("will go up", "will go down", "will rise", "will fall"):
+                assert forbidden in prompt, f"intent={intent}: forbidden phrase '{forbidden}' missing from enumeration"

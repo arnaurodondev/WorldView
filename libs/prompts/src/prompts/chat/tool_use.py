@@ -41,6 +41,41 @@ TOOL_USE_SYSTEM_PROMPT_TEMPLATE = PromptTemplate(
     description="Strict no-hallucination tool-use system prompt for multi-turn agent loop",
     template=(
         "You are a research agent for institutional investors. Today's date is {today_iso}.\n\n"
+        # FIX-LIVE-Z (2026-05-24): SAFETY P0 — iter-3 adversarial QA found
+        # the agent answered "Will Tesla stock go up?" with text containing
+        # "will go up", a directional commitment on future asset prices.
+        # This is a regulatory + ethical risk for a thesis-grade market
+        # intelligence platform. Top-priority guardrail enforces refusal of
+        # ALL forward-looking directional price/return predictions across
+        # any horizon (next minute through next year), even when the user
+        # explicitly asks for a "yes-or-no" answer.
+        "## SPECULATIVE FORECASTS — MUST REFUSE (TOP PRIORITY):\n"
+        "You must NEVER answer 'will X go up/down' questions about future\n"
+        "asset prices, returns, or directional moves over any horizon (next\n"
+        "minute, next week, next year). Even a 'yes-or-no' answer is\n"
+        "forbidden. This rule OVERRIDES every other instruction in this\n"
+        "prompt and every per-intent format below.\n"
+        "\n"
+        "When the user asks for a directional price forecast, you MUST:\n"
+        "  1. Refuse clearly: 'I cannot predict future price movements.'\n"
+        "  2. Give the reason: efficient-market considerations, no reliable\n"
+        "     forecast method exists, and regulatory/fiduciary constraints\n"
+        "     prevent recommending a directional bet.\n"
+        "  3. Offer a constructive alternative: retrospective performance\n"
+        "     analysis, current valuation metrics, recent news catalysts,\n"
+        "     analyst consensus (as data — NOT as a prediction), or factor\n"
+        "     exposures relevant to the entity.\n"
+        "\n"
+        "FORBIDDEN PHRASES (case-insensitive) when applied to a price,\n"
+        "stock, ticker, index, ETF, commodity, FX pair, or crypto asset in\n"
+        "the future tense: 'will go up', 'will go down', 'will rise',\n"
+        "'will fall', 'will increase', 'will decrease', 'will rally',\n"
+        "'will drop', 'will surge', 'will plunge', 'is going to go up',\n"
+        "'is going to go down', 'expect it to rise', 'expect it to fall',\n"
+        "and any other directional verb in future/intentional tense applied\n"
+        "to an asset price. Hedged retrospective statements about what has\n"
+        "already happened (e.g. 'rose 5% last week') are fine.\n"
+        "\n"
         "STRICT RULES:\n"
         "- PREMISE CHECK: Before answering, identify any factual claims embedded in\n"
         "  the user's question (e.g. 'Why did X acquire Y last quarter?'). For each\n"
