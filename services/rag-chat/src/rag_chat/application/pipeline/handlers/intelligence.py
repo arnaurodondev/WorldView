@@ -29,7 +29,7 @@ from .base import ToolHandler
 
 if TYPE_CHECKING:
     from rag_chat.application.pipeline.tool_executor import EntityContext, ToolUseBlock
-    from rag_chat.application.ports.upstream_clients import S7Port
+    from rag_chat.application.ports.upstream_clients import S6Port, S7Port
 
 log = structlog.get_logger(__name__)  # type: ignore[no-any-return]
 
@@ -95,10 +95,19 @@ class IntelligenceHandler(ToolHandler):
         # Accepted here so ToolExecutorFactory can pass a uniform kwarg set to
         # all handlers without per-handler conditionals.
         s7_intel: object | None = None,
+        # PLAN-0093 E-4 T-E-4-01: optional S6Port for embed_text — used by
+        # search_entity_relations to issue a real query embedding instead of
+        # a 1024-dim zero vector (F-RAG-004). None falls back to zero vec.
+        # Reinstated after FIX-LIVE-O dropped this parameter during the
+        # tiebreaker rewrite, which broke the ToolExecutorFactory call site
+        # (TypeError: unexpected keyword argument 's6') AND silently
+        # regressed search_entity_relations ranking back to zero-vector ANN.
+        s6: S6Port | None = None,
     ) -> None:
         self._s7 = s7
         self._entity_context = entity_context
         self._timeout = timeout
+        self._s6 = s6
         # s7_intel intentionally unused; accepted to keep factory call uniform.
 
     def can_handle(self, tool_name: str) -> bool:
@@ -569,8 +578,18 @@ class IntelligenceHandler(ToolHandler):
         entity_id = self._require_context_entity("search_entity_relations", entity_name)
         if entity_id is None:
             return []
-        # Use a zero embedding as placeholder — S7 will fall back to entity_id filter
-        placeholder_embedding: list[float] = [0.0] * 1024
+        # PLAN-0093 E-4 T-E-4-01: real query embedding instead of a 1024-dim
+        # zero vector. The old placeholder made S7 fall back to a non-ranked
+        # entity_id filter — the LLM got back the same top-K regardless of
+        # the user's actual question. We use ``relation_type`` (when supplied)
+        # + entity_name as the embedding text so the ANN search ranks by
+        # semantic relevance to e.g. "Microsoft acquisitions" not just
+        # "any Microsoft edge". Restored after FIX-LIVE-O regression.
+        embedding_query = f"{relation_type} {entity_name}".strip() if relation_type else entity_name
+        if self._s6 is not None:
+            placeholder_embedding: list[float] = await self._s6.embed_text(embedding_query)
+        else:
+            placeholder_embedding = [0.0] * 1024
 
         t0 = time.monotonic()
         try:

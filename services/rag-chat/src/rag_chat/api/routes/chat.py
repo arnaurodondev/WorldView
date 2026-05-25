@@ -169,7 +169,14 @@ async def chat_stream(
             except ProviderUnavailableError as e:
                 yield emitter.emit_error("PROVIDER_UNAVAILABLE", str(e))
             except Exception as e:
-                log.error("stream_internal_error", error=type(e).__name__)  # type: ignore[no-any-return]
+                import traceback as _tb
+
+                log.error(  # type: ignore[no-any-return]
+                    "stream_internal_error",
+                    error=type(e).__name__,
+                    detail=repr(e),
+                    traceback=_tb.format_exc(),
+                )
                 yield emitter.emit_error("INTERNAL_ERROR", "An internal error occurred")
 
     return EventSourceResponse(event_generator())
