@@ -190,12 +190,34 @@ class CreateThreadResponse(BaseModel):
 
 
 class MessageResponse(BaseModel):
+    """Serialised message returned in thread history responses.
+
+    Q-9: Extended with optional debug/observability fields that are already
+    persisted in the ``messages`` table.  All new fields default to ``None``
+    so responses for legacy rows (NULL columns) remain valid (R11: forward-
+    compatible schema changes).
+    """
+
     message_id: UUID
     role: str
     content: str
     intent: str | None
     citations: list[dict[str, Any]]
     created_at: datetime
+    # Q-9: fields persisted in the DB but previously omitted from the history
+    # API.  All nullable — legacy rows (pre-Q-9) have NULL in these columns.
+    # WHY None default (not empty list): returning None vs [] distinguishes
+    # "never populated" from "populated with zero items"; clients can guard on
+    # ``is not None`` if they want to render debug panels.
+    provider: str | None = None
+    model: str | None = None
+    latency_ms: int | None = None
+    resolved_entities: list[dict[str, Any]] | None = None
+    retrieval_plan: dict[str, Any] | None = None
+    # WHY "contradictions" (not "contradiction_refs"): the DB column is
+    # ``contradiction_refs`` but the API surface uses the friendlier name
+    # ``contradictions``, matching EntityContextChatResponse and ChatResponse.
+    contradictions: list[dict[str, Any]] | None = None
 
 
 class ThreadSummaryResponse(BaseModel):

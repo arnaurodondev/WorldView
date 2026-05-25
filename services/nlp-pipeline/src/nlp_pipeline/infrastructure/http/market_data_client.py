@@ -51,6 +51,16 @@ logger = get_logger(__name__)  # type: ignore[no-any-return]
 # tokens; refreshing every 240 s leaves a 60 s safety margin.
 _TOKEN_REFRESH_S: float = 240.0
 
+# FIX-LIVE-GG (2026-05-25, INV-LIVE-GG cluster 1): when the worker boots
+# slightly ahead of api-gateway, the very first JWT-mint POST surfaces a
+# ``httpx.ConnectError``.  Retry up to 4 attempts with exponential backoff
+# (0s/5s/15s/45s) so a transient startup race never leaves ``_token``
+# permanently unset.  Total grace window ~= 65 s before we fall back to the
+# unauthenticated path (which now correctly surfaces 401 errors instead of
+# the silent "skip impact labelling forever" failure mode that left
+# ``article_impact_windows`` empty across the live stack).
+_TOKEN_MINT_RETRY_DELAYS: tuple[float, ...] = (0.0, 5.0, 15.0, 45.0)
+
 # PLAN-0093 T-C-3-02: persistent 404 backoff for symbol resolution.
 # After 3 consecutive 404s for the same ticker we mark it as "unknown" in
 # Valkey for 7 days so subsequent worker cycles skip the round-trip. This
@@ -155,30 +165,66 @@ class MarketDataClient:
                 payload = {}  # type: ignore[assignment]
                 mint_path = "dev-login"
 
-            try:
-                resp = await self._client.post(url, json=payload, timeout=5.0)
-                if resp.status_code != 200:
+            # FIX-LIVE-GG: 4 attempts with exponential backoff on transient
+            # errors. Delays are picked to roughly match compose
+            # ``service_healthy`` grace periods — by 65 s after the worker
+            # starts, every dependency in the stack should be up.
+            for attempt, delay_before in enumerate(_TOKEN_MINT_RETRY_DELAYS):
+                if delay_before > 0:
+                    # First attempt fires immediately; subsequent attempts
+                    # sleep first so we don't hammer a struggling gateway.
+                    await asyncio.sleep(delay_before)
+                try:
+                    resp = await self._client.post(url, json=payload, timeout=5.0)
+                except Exception as exc:
+                    # ConnectError / ReadError / TimeoutException — likely
+                    # transient. Log and try again unless we've exhausted
+                    # the retry budget.
+                    is_last = attempt == len(_TOKEN_MINT_RETRY_DELAYS) - 1
                     logger.warning(
-                        "market_data_client_token_mint_failed",
+                        "market_data_client_token_mint_error",
                         mint_path=mint_path,
-                        status_code=resp.status_code,
-                        body=resp.text[:200],
+                        attempt=attempt + 1,
+                        max_attempts=len(_TOKEN_MINT_RETRY_DELAYS),
+                        error=str(exc),
+                        will_retry=not is_last,
                     )
-                    return None
-                token = resp.json().get("access_token")
-                if not isinstance(token, str) or not token:
-                    return None
-                self._token = token
-                self._token_minted_at = now
-                logger.debug("market_data_client_token_refreshed", mint_path=mint_path)
-                return token
-            except Exception as exc:
+                    if is_last:
+                        return None
+                    continue
+
+                # 5xx is retriable; 4xx is not (auth misconfig — won't fix
+                # itself on retry). 200 is the success path.
+                if resp.status_code == 200:
+                    token = resp.json().get("access_token")
+                    if not isinstance(token, str) or not token:
+                        return None
+                    self._token = token
+                    self._token_minted_at = now
+                    logger.debug(
+                        "market_data_client_token_refreshed",
+                        mint_path=mint_path,
+                        attempt=attempt + 1,
+                    )
+                    return token
+
+                is_retriable = 500 <= resp.status_code < 600
+                is_last = attempt == len(_TOKEN_MINT_RETRY_DELAYS) - 1
                 logger.warning(
-                    "market_data_client_token_mint_error",
+                    "market_data_client_token_mint_failed",
                     mint_path=mint_path,
-                    error=str(exc),
+                    attempt=attempt + 1,
+                    max_attempts=len(_TOKEN_MINT_RETRY_DELAYS),
+                    status_code=resp.status_code,
+                    body=resp.text[:200],
+                    will_retry=is_retriable and not is_last,
                 )
-                return None
+                if not is_retriable or is_last:
+                    return None
+                # else: loop back to retry after the next backoff delay
+
+            # Defensive — loop always returns explicitly above.
+            return None
 
     async def _resolve_instrument_id(self, ticker: str) -> str | None:
         """Resolve a ticker to its instrument_id UUID via market-data lookup.

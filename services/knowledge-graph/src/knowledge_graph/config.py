@@ -111,17 +111,26 @@ class Settings(BaseSettings):
     confidence_contradiction_top_k: int = 3
 
     # Worker intervals (seconds)
+    # FIX-LIVE-GG (2026-05-25, INV-LIVE-GG cluster 2): lowered SummaryWorker,
+    # EmbeddingRefresh and FundamentalsRefresh intervals to drain the
+    # worker-starvation backlog that surfaced in iter-5 SLO failures
+    # (``test_summary_coverage`` 7%, ``test_definition_embedding_coverage``
+    # 10%, ``test_fundamentals_ohlcv_embedding_coverage`` 0/2405).  With 5
+    # LLM-bound workers sharing one asyncio loop and ~60 s LLM calls per
+    # batch, the old 3600/7200/10800 s cadences burned <2% of wall time on
+    # work — far too sparse to keep up with ingestion.  Overridable via
+    # ``KNOWLEDGE_GRAPH_WORKER_*_INTERVAL_S`` env vars (see docker.env).
     worker_confidence_interval_s: int = 900  # 15 min
     worker_contradiction_interval_s: int = 1800  # 30 min
-    worker_summary_interval_s: int = 3600  # 60 min
+    worker_summary_interval_s: int = 600  # FIX-LIVE-GG: was 3600 (60 min); now 10 min
     # Worker 13B: relation_evidence_raw → relation_evidence promotion (SA-2).
     # Runs every 5 minutes so freshly processed NLP batches are promotable
     # within one short window.
     worker_evidence_promote_interval_s: int = 300  # 5 min
     worker_definition_refresh_interval_s: int = 3600  # 60 min
     worker_narrative_refresh_interval_s: int = 3600  # 60 min
-    worker_fundamentals_refresh_interval_s: int = 7200  # 2 h
-    worker_embedding_refresh_interval_s: int = 10800  # 3 h
+    worker_fundamentals_refresh_interval_s: int = 300  # FIX-LIVE-GG: was 7200 (2 h); now 5 min
+    worker_embedding_refresh_interval_s: int = 300  # FIX-LIVE-GG: was 10800 (3 h); now 5 min
     worker_partition_interval_s: int = 86400  # 24 h (also runs at startup)
     # Dedicated provisional enrichment worker controls (PLAN-0061 T-A-1/A-3/A-4)
     # interval: 300s = 5 min catch-up sweep; hot path handled by entity.provisional.queued.v1 consumer (Wave E)
@@ -132,9 +141,14 @@ class Settings(BaseSettings):
     worker_provisional_enrichment_max_retries: int = 5  # terminal 'failed' after N failures
 
     # Embedding worker batch controls (PLAN perf-fix)
-    # 0 = all due entities per cycle (recommended — lets workers drain the full queue).
-    # Set to a positive integer to cap the batch size for rate-limited environments.
-    worker_embedding_batch_limit: int = 0  # KNOWLEDGE_GRAPH_WORKER_EMBEDDING_BATCH_LIMIT
+    # 0 = all due entities per cycle (drain the full queue in one cycle).
+    # FIX-LIVE-GG (2026-05-25): default raised from 0->200 alongside the new
+    # 300 s EmbeddingRefresh cadence so each cycle is sized to a single
+    # DeepInfra embed batch (``_EMBED_CHUNK_SIZE=200`` in embedding_refresh.py)
+    # — prevents one cycle from issuing many sequential embed calls and
+    # blocking the asyncio loop for the other 4 workers.  Set to ``0`` only
+    # when tuning a fresh deployment that needs a full backlog drain.
+    worker_embedding_batch_limit: int = 200  # KNOWLEDGE_GRAPH_WORKER_EMBEDDING_BATCH_LIMIT
 
     # SummaryWorker force-regeneration (ARCH-008).
     # When > 0, force-regenerate this many stale summaries per cycle regardless of evidence

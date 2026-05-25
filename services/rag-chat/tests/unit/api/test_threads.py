@@ -273,6 +273,210 @@ class TestUpdateThreadEndpoint:
         assert resp.status_code == 404
 
 
+# ── Q-9: MessageResponse extended fields ─────────────────────────────────────
+
+
+class TestMessageResponseExtendedFields:
+    """Verify that Q-9 extended fields are correctly populated (or None for legacy rows)."""
+
+    def _make_message_with_extended_fields(self) -> object:
+        """Build a Message domain object with all Q-9 fields populated."""
+        from uuid import uuid4
+
+        from rag_chat.domain.entities.chat import ResolvedEntity
+        from rag_chat.domain.entities.conversation import ContradictionRef, Message
+        from rag_chat.domain.enums import MessageRole
+
+        now = datetime(2026, 5, 25, 12, 0, 0, tzinfo=UTC)
+        return Message(
+            message_id=uuid4(),
+            thread_id=_THREAD_ID,
+            role=MessageRole.assistant,
+            content="NVDA is trading near ATH.",
+            created_at=now,
+            # Q-9 fields
+            provider="deepinfra",
+            model="meta-llama/Meta-Llama-3.1-8B-Instruct",
+            latency_ms=1400,
+            resolved_entities=(
+                ResolvedEntity(
+                    entity_id=UUID("00000000-0000-0000-0000-000000000010"),
+                    canonical_name="NVIDIA",
+                    entity_type="company",
+                    confidence=0.98,
+                    matched_text="NVDA",
+                    ticker="NVDA",
+                ),
+            ),
+            contradiction_refs=(
+                ContradictionRef(
+                    claim_type="price_direction",
+                    strength=0.75,
+                    sides=({"text": "bullish"}, {"text": "bearish"}),
+                ),
+            ),
+        )
+
+    def _make_legacy_message(self) -> object:
+        """Build a Message domain object with all Q-9 fields absent (legacy row)."""
+        from uuid import uuid4
+
+        from rag_chat.domain.entities.conversation import Message
+        from rag_chat.domain.enums import MessageRole
+
+        return Message(
+            message_id=uuid4(),
+            thread_id=_THREAD_ID,
+            role=MessageRole.user,
+            content="What is the price of NVDA?",
+            created_at=datetime(2026, 5, 25, 11, 0, 0, tzinfo=UTC),
+            # All Q-9 fields left at defaults (None / empty tuple)
+        )
+
+    async def test_get_thread_returns_extended_fields_when_populated(
+        self,
+        app_with_mocks: object,
+        mock_uow: MagicMock,
+    ) -> None:
+        """GET /api/v1/threads/{id} — message with Q-9 fields returns them in response."""
+        from rag_chat.domain.entities.conversation import ConversationThread
+
+        msg = self._make_message_with_extended_fields()
+        thread = ConversationThread(
+            thread_id=_THREAD_ID,
+            tenant_id=_TENANT_ID,
+            user_id=_USER_ID,
+            created_at=datetime(2026, 5, 25, 10, 0, 0, tzinfo=UTC),
+            updated_at=datetime(2026, 5, 25, 10, 0, 0, tzinfo=UTC),
+            title="Q-9 test thread",
+            entity_ids=(),
+            messages=(msg,),
+            archived_at=None,
+        )
+        mock_uow.threads.get = AsyncMock(return_value=thread)
+
+        transport = ASGITransport(app=app_with_mocks)  # type: ignore[arg-type]
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            resp = await client.get(f"/api/v1/threads/{_THREAD_ID}", headers=_AUTH_HEADERS)
+
+        assert resp.status_code == 200
+        data = resp.json()
+        assert len(data["messages"]) == 1
+        m = data["messages"][0]
+
+        # Q-9 fields must be populated
+        assert m["provider"] == "deepinfra"
+        assert m["model"] == "meta-llama/Meta-Llama-3.1-8B-Instruct"
+        assert m["latency_ms"] == 1400
+
+        # resolved_entities: one entry with all sub-fields
+        assert isinstance(m["resolved_entities"], list)
+        assert len(m["resolved_entities"]) == 1
+        re = m["resolved_entities"][0]
+        assert re["canonical_name"] == "NVIDIA"
+        assert re["entity_type"] == "company"
+        assert re["ticker"] == "NVDA"
+
+        # contradictions: field name differs from DB column name (contradiction_refs → contradictions)
+        assert isinstance(m["contradictions"], list)
+        assert len(m["contradictions"]) == 1
+        con = m["contradictions"][0]
+        assert con["claim_type"] == "price_direction"
+        assert con["strength"] == 0.75
+
+        # retrieval_plan not yet surfaced on domain entity — always None
+        assert m["retrieval_plan"] is None
+
+    async def test_get_thread_returns_none_for_legacy_message_fields(
+        self,
+        app_with_mocks: object,
+        mock_uow: MagicMock,
+    ) -> None:
+        """GET /api/v1/threads/{id} — legacy message (NULL Q-9 columns) returns None for new fields."""
+        from rag_chat.domain.entities.conversation import ConversationThread
+
+        msg = self._make_legacy_message()
+        thread = ConversationThread(
+            thread_id=_THREAD_ID,
+            tenant_id=_TENANT_ID,
+            user_id=_USER_ID,
+            created_at=datetime(2026, 5, 25, 10, 0, 0, tzinfo=UTC),
+            updated_at=datetime(2026, 5, 25, 10, 0, 0, tzinfo=UTC),
+            title="Legacy thread",
+            entity_ids=(),
+            messages=(msg,),
+            archived_at=None,
+        )
+        mock_uow.threads.get = AsyncMock(return_value=thread)
+
+        transport = ASGITransport(app=app_with_mocks)  # type: ignore[arg-type]
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            resp = await client.get(f"/api/v1/threads/{_THREAD_ID}", headers=_AUTH_HEADERS)
+
+        assert resp.status_code == 200
+        data = resp.json()
+        m = data["messages"][0]
+
+        # All Q-9 fields must be None (not absent) for legacy rows
+        assert m["provider"] is None
+        assert m["model"] is None
+        assert m["latency_ms"] is None
+        assert m["resolved_entities"] is None
+        assert m["retrieval_plan"] is None
+        assert m["contradictions"] is None
+
+    def test_message_response_schema_direct_construction_all_none(self) -> None:
+        """MessageResponse can be constructed with only legacy fields (Q-9 fields default to None)."""
+        from uuid import uuid4
+
+        from rag_chat.api.schemas import MessageResponse
+
+        now = datetime(2026, 5, 25, 12, 0, 0, tzinfo=UTC)
+        resp = MessageResponse(
+            message_id=uuid4(),
+            role="user",
+            content="hello",
+            intent=None,
+            citations=[],
+            created_at=now,
+        )
+        # All Q-9 fields should be None by default
+        assert resp.provider is None
+        assert resp.model is None
+        assert resp.latency_ms is None
+        assert resp.resolved_entities is None
+        assert resp.retrieval_plan is None
+        assert resp.contradictions is None
+
+    def test_message_response_schema_direct_construction_populated(self) -> None:
+        """MessageResponse can be constructed with all Q-9 fields populated."""
+        from uuid import uuid4
+
+        from rag_chat.api.schemas import MessageResponse
+
+        now = datetime(2026, 5, 25, 12, 0, 0, tzinfo=UTC)
+        resp = MessageResponse(
+            message_id=uuid4(),
+            role="assistant",
+            content="NVDA is up.",
+            intent="price_query",
+            citations=[],
+            created_at=now,
+            provider="deepinfra",
+            model="qwen3-235b",
+            latency_ms=980,
+            resolved_entities=[{"entity_id": "abc", "canonical_name": "NVIDIA"}],
+            retrieval_plan={"strategy": "hybrid", "k": 10},
+            contradictions=[{"claim_type": "direction", "strength": 0.6, "sides": []}],
+        )
+        assert resp.provider == "deepinfra"
+        assert resp.model == "qwen3-235b"
+        assert resp.latency_ms == 980
+        assert resp.resolved_entities == [{"entity_id": "abc", "canonical_name": "NVIDIA"}]
+        assert resp.retrieval_plan == {"strategy": "hybrid", "k": 10}
+        assert resp.contradictions == [{"claim_type": "direction", "strength": 0.6, "sides": []}]
+
+
 # ── Auth header enforcement ───────────────────────────────────────────────────
 
 
