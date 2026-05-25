@@ -228,12 +228,15 @@ class KnowledgeGraphScheduler:
         # PathExplanationBatchWorker: sweep path_insights for rows with
         # llm_explanation IS NULL and generate explanations in bulk (Task 1/3).
         # Fires 3 minutes after boot so the seeder + path_insight_worker have
-        # a chance to run first, then every 30 minutes.
+        # a chance to run first, then every ``path_explanation_cycle_minutes``
+        # (default 20 min after FIX-LIVE-HH2 tuning, down from 30 min).
         fn_exp_batch = self._resolve_job("path_explanation_batch")
+        # Cast to int so MagicMock settings in unit tests still produce a real interval.
+        _exp_cycle_minutes: int = int(getattr(self._settings, "path_explanation_cycle_minutes", 20) or 20)
         self._scheduler.add_job(
             fn_exp_batch,
             "interval",
-            minutes=30,
+            minutes=_exp_cycle_minutes,
             id="worker_path_explanation_batch",
             max_instances=1,
             coalesce=True,

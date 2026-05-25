@@ -266,12 +266,16 @@ class Settings(BaseSettings):
     provisional_enrichment_base_retry_minutes: int = 2
     provisional_enrichment_max_retry_minutes: int = 1440
 
-    # PathExplanationBatchWorker controls (2026-05-23, Wave E2).
+    # PathExplanationBatchWorker controls (2026-05-23, Wave E2; tuned 2026-05-25 by FIX-LIVE-HH2).
     # batch_size: rows fetched per scheduler tick (ordered by composite_score DESC).
     # concurrency: max parallel LLM calls within a single tick.
-    # At concurrency=5 and ~500ms/call this processes 200 rows in ~20s per tick.
-    path_explanation_batch_size: int = 200  # KNOWLEDGE_GRAPH_PATH_EXPLANATION_BATCH_SIZE
-    path_explanation_concurrency: int = 5  # KNOWLEDGE_GRAPH_PATH_EXPLANATION_CONCURRENCY
+    # cycle_minutes: how often the scheduler fires the worker.
+    # Tuning (INV-LIVE-HH-2 Option 4): 200->300 batch, 5->7 concurrency, 30->20 min cycle =
+    # 3.15x throughput (400 rows/hr -> 1266 rows/hr). 4710-row backlog drain time
+    # drops from ~12h to ~3.7h.
+    path_explanation_batch_size: int = 300  # KNOWLEDGE_GRAPH_PATH_EXPLANATION_BATCH_SIZE
+    path_explanation_concurrency: int = 7  # KNOWLEDGE_GRAPH_PATH_EXPLANATION_CONCURRENCY
+    path_explanation_cycle_minutes: int = 20  # KNOWLEDGE_GRAPH_PATH_EXPLANATION_CYCLE_MINUTES
 
     # Path Insight Worker (PLAN-0074 Wave E1)
     # Model ID for Wave E2 LLM explanations (stored but not used in E1).
