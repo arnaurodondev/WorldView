@@ -95,3 +95,43 @@ Based on iter-5 full run (59/67) + hotfix delta (+3 recovered, -1 known regressi
 3. Compounding commit: ingest the 5 bug-pattern lessons into `docs/BUG_PATTERNS.md`, `RULES.md`, `HIGH_RISK_PATTERNS.md`.
 
 PLAN-0093 has moved the platform from **3/15 chat-eval PASS** with cache-poisoned HARMFUL fabrications to **~60/67 PASS** with explicit safety guardrails (FIX-Z), correct fiscal labels, end-to-end industry filtering, robust DeepInfra tool-calling, empty-tool-result graceful handling, and validated against 4 progressive iterations of exhaustive adversarial QA covering 67 distinct query patterns.
+
+## INV-LIVE-II — Compounding lessons ingested (iter-6)
+
+Commit: `764f1edb` (`docs(bug-patterns,rules): ingest PLAN-0093 compounding lessons (BP-551..570)`)
+
+### Bug patterns (20 added to `docs/BUG_PATTERNS.md`)
+- **BP-551** LLM tool-result follow-up MUST use `role:"tool"` + `tool_call_id` per OpenAI spec (FIX-LIVE-J/R)
+- **BP-552** Middleware-set ContextVars don't propagate into nested async tasks; routes must re-set explicitly (FIX-LIVE-K+L)
+- **BP-553** Silent-degrade tool handlers (`return []` on Exception) hide auth / upstream / 401 failures
+- **BP-554** "Tool returned empty" vs "tool errored" must be distinct orchestrator paths (cross-ref BP-550)
+- **BP-555** Generic `except Exception` with class-name-only logging hides root cause — always include `repr(e)` + `traceback.format_exc()` (ITER-2 hotfix)
+- **BP-556** Handler-level unit tests miss `ToolExecutorFactory` wiring — add factory smoke tests (FIX-LIVE-O regression)
+- **BP-557** LLM tool defs exposing only `sector` cannot satisfy GICS narrow-industry queries; expose both (FIX-LIVE-M)
+- **BP-558** LLMs can't reliably read raw multi-digit integers; render `*_formatted` + raw (FIX-LIVE-DD)
+- **BP-559** Completion-cache key must bump on prompt change; grounding-gated write (FIX-LIVE-A)
+- **BP-560** Chat-eval harness must use fresh `thread_id` OR disable cache; refresh JWT on 401
+- **BP-561** Re-run-flaky support — transient DeepInfra 5xx must not fail the gate (OPEN, queued for PLAN-0094)
+- **BP-562** DeepInfra 30s timeout too tight for 8B + heavy tool stack; needs ≥90s (FIX-LIVE-X)
+- **BP-563** Prompt-injection classifier must default SAFE on ambiguous input; tighten L1 regex (FIX-LIVE-CC)
+- **BP-564** Substring safety checks need a hedge-window — refusal text may quote forbidden phrase (FIX-LIVE-AA/W/N)
+- **BP-565** Tool-using LLM agent MUST refuse speculative price predictions (FIX-LIVE-Z, SAFETY P0)
+- **BP-566** Entity resolver MUST prefer canonical-name exact match + collapse same-`canonical_id` (FIX-LIVE-O)
+- **BP-567** New boot-time assertions need env-var seeding in every `docker.env.example` + regression test (FIX-LIVE-001)
+- **BP-568** Migration not run live before merging — DDL drift can ship to prod undetected (FIX-LIVE-002/003)
+- **BP-569** Static SQL extractor must fold module-level `Name+Constant` BinOp (FIX-LIVE-F)
+- **BP-570** Worktree-vs-main confusion — orchestrator must verify isolation per subagent (process)
+
+### Hard rules (4 added to `RULES.md`)
+- **R36** LLM tool-result follow-up MUST use `role:"tool"` + `tool_call_id` (BP-551)
+- **R37** Middleware ContextVars MUST be re-set explicitly in routes spawning async tasks (BP-552)
+- **R38** New boot-time assertions MUST seed env vars in every `docker.env.example` + regression test (BP-567)
+- **R39** Tool-using LLM agent prompts MUST contain explicit speculative-prediction refusal rule (BP-565)
+
+### High-risk patterns (3 added to `.claude/review/heuristics/HIGH_RISK_PATTERNS.md`)
+- **HR-066** Generic `except Exception` with class-name-only logging hides root cause (BP-555)
+- **HR-067** Cached completion responses can mask upstream regressions for weeks (BP-559, BP-560)
+- **HR-068** Multi-agent orchestrator must verify worktree-vs-main isolation per subagent (BP-570)
+
+### Test-harness invariants (header comment in `tests/validation/chat_eval/conftest.py`)
+Three rules learned the hard way during ITER 2-5 (4+ false-fail debug cycles): fresh `thread_id` per test, refresh JWT on 401, re-run on known-transient terminal errors. Cross-refs BP-559/BP-560/BP-561.
