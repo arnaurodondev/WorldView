@@ -595,8 +595,9 @@ def build_default_registry() -> ToolRegistry:
             name="screen_universe",
             description=(
                 "Quantitative screener — filters the instrument universe by market cap, P/E ratio, "
-                "sector, and region. Use when the user asks to screen, filter, or find stocks "
-                "that meet specific fundamental criteria."
+                "sector, industry, and region. Use when the user asks to screen, filter, or find "
+                "stocks that meet specific fundamental criteria. For AI-chip / semiconductor "
+                "queries, set sector='Technology' AND industry='Semiconductors' (GICS taxonomy)."
             ),
             parameters=[
                 ParameterSpec(
@@ -621,6 +622,15 @@ def build_default_registry() -> ToolRegistry:
                     name="sector",
                     type="string",
                     description="Sector filter (e.g. 'Technology', 'Healthcare')",
+                    required=False,
+                ),
+                # FIX-LIVE-M (2026-05-24): GICS industry filter — more specific than
+                # sector. "AI chip" / "semiconductor" queries need industry='Semiconductors'
+                # (sector='Technology' alone returns too many irrelevant SaaS/IT names).
+                ParameterSpec(
+                    name="industry",
+                    type="string",
+                    description="Industry filter (e.g. 'Semiconductors', 'Cloud Computing')",
                     required=False,
                 ),
                 ParameterSpec(
