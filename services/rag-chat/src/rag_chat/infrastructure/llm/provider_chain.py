@@ -383,7 +383,7 @@ class LLMProviderChain:
                 # tool-call turn timeout surfaced as `error=""` and the
                 # operator had no way to tell apart a timeout from a 4xx.
                 log.warning(  # type: ignore[no-any-return]
-                    "provider_chat_with_tools_failed",
+                    "provider_failed",
                     provider=provider.name,
                     error=str(exc) or repr(exc),
                     error_type=type(exc).__name__,
@@ -392,34 +392,54 @@ class LLMProviderChain:
                 # counter — incremented only for genuine failures, NOT for
                 # NotImplementedError (handled in the prior except clause).
                 rag_chat_with_tools_failed.labels(provider=provider.name).inc()
+                # Mirror stream_chat: emit fallback metric when there is a next provider.
+                _provider_idx = self._providers.index(provider)
+                if _provider_idx + 1 < len(self._providers):
+                    _next = self._providers[_provider_idx + 1]
+                    rag_provider_fallback.labels(
+                        from_provider=provider.name,
+                        to_provider=_next.name,
+                    ).inc()
                 continue
         raise RuntimeError("All LLM providers failed or unsupported for chat_with_tools")
 
-    def stream_chat(
+    async def stream_chat(  # type: ignore[override]
         self,
         messages: list[dict],
         **kwargs: object,
     ) -> AsyncIterator[str]:
-        """Delegate stream_chat to the first provider that supports it.
+        """Yield stream tokens, falling back to the next provider on failure.
 
-        WHY skip NotImplementedError: same pattern as chat_with_tools — Ollama
-        raises NotImplementedError to signal it can't handle message-list streaming.
+        WHY async generator: we wrap the inner provider generator so that
+        if the primary fails before yielding any tokens we can transparently
+        fall back to the next provider and emit the `rag_provider_fallback`
+        metric — mirroring the chat_with_tools fallback contract.
 
-        Returns the async generator from the first supporting provider so the caller
-        can iterate it directly.  We don't wrap in a fallback generator because
-        streaming mid-response is not resumable; the caller must retry from scratch.
+        Note: mid-stream failures (after tokens were already yielded) are still
+        propagated to the caller because the partial response cannot be retried.
 
         Raises:
-            RuntimeError: if no provider supports stream_chat.
+            RuntimeError: if all providers fail.
         """
-        for provider in self._providers:
-            # Check if the provider has stream_chat and it won't raise NotImplementedError
-            if not hasattr(provider, "stream_chat"):
-                continue
-            # Return the generator from the first capable provider
-            # Ollama will raise NotImplementedError synchronously, so we filter
-            # by checking the name (simple heuristic consistent with provider.name)
+        for i, provider in enumerate(self._providers):
             if getattr(provider, "name", "") == "ollama":
                 continue
-            return provider.stream_chat(messages, **kwargs)  # type: ignore[union-attr,return-value,no-any-return]
-        raise RuntimeError("No LLM provider supports stream_chat")
+            try:
+                async for chunk in provider.stream_chat(messages, **kwargs):  # type: ignore[union-attr,attr-defined]
+                    yield chunk
+                return  # success — stop iterating providers
+            except Exception as exc:
+                log.warning(  # type: ignore[no-any-return]
+                    "provider_failed",
+                    provider=provider.name,
+                    error=str(exc) or repr(exc),
+                    error_type=type(exc).__name__,
+                )
+                rag_provider_unavail.labels(provider=provider.name).inc()
+                if i + 1 < len(self._providers):
+                    _next = self._providers[i + 1]
+                    rag_provider_fallback.labels(
+                        from_provider=provider.name,
+                        to_provider=_next.name,
+                    ).inc()
+        raise RuntimeError("All LLM providers failed stream_chat")

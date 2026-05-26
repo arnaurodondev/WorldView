@@ -575,7 +575,7 @@ class IntelligenceHandler(ToolHandler):
         if self._s7 is None:
             log.warning("tool_handler_missing_port", tool="search_entity_relations", port="s7")
             return []
-        entity_id = self._require_context_entity("search_entity_relations", entity_name)
+        entity_id = await self._resolve_entity_by_name("search_entity_relations", entity_name)
         if entity_id is None:
             return []
         # PLAN-0093 E-4 T-E-4-01: real query embedding instead of a 1024-dim
@@ -654,7 +654,7 @@ class IntelligenceHandler(ToolHandler):
         if self._s7 is None:
             log.warning("tool_handler_missing_port", tool="search_claims", port="s7")
             return []
-        entity_id = self._require_context_entity("search_claims", entity_name)
+        entity_id = await self._resolve_entity_by_name("search_claims", entity_name)
         if entity_id is None:
             return []
         claim_types = [claim_type] if claim_type else None
@@ -729,7 +729,7 @@ class IntelligenceHandler(ToolHandler):
         if self._s7 is None:
             log.warning("tool_handler_missing_port", tool="search_events", port="s7")
             return []
-        entity_id = self._require_context_entity("search_events", entity_name)
+        entity_id = await self._resolve_entity_by_name("search_events", entity_name)
         if entity_id is None:
             return []
         event_types = [event_type] if event_type else None
@@ -800,7 +800,7 @@ class IntelligenceHandler(ToolHandler):
         if self._s7 is None:
             log.warning("tool_handler_missing_port", tool="get_contradictions", port="s7")
             return []
-        entity_id = self._require_context_entity("get_contradictions", entity_name)
+        entity_id = await self._resolve_entity_by_name("get_contradictions", entity_name)
         if entity_id is None:
             return []
 
