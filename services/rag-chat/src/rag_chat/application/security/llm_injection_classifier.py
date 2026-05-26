@@ -146,6 +146,12 @@ class LLMInjectionClassifier:
             return False  # disabled → treat as SAFE
 
         # ── LLM classification with asyncio timeout ────────────────────────────
+        # WHY timeout is fail-open (not fail-closed): DeepInfra latency for the
+        # classifier model occasionally exceeds 10s under load. Fail-closing on
+        # timeout blocks ALL user queries whenever the model is slow — that cost
+        # is higher than the marginal security risk of letting one timed-out
+        # request through Layer 2 (Layer 1 regex still ran). Parse/API errors
+        # remain fail-closed because they may indicate a compromised response.
         try:
             result = await asyncio.wait_for(
                 self._call_llm(message),
@@ -154,18 +160,18 @@ class LLMInjectionClassifier:
             return result
         except TimeoutError:
             log.warning(  # type: ignore[no-any-return]
-                "llm_injection_classifier_fail_closed",
+                "llm_injection_classifier_timeout_safe",
                 reason="timeout",
                 timeout_s=_CLASSIFY_TIMEOUT_S,
             )
-            return True  # fail-closed
+            return False  # fail-open on timeout — Layer 1 already ran
         except Exception as exc:
             log.warning(  # type: ignore[no-any-return]
                 "llm_injection_classifier_fail_closed",
                 reason="exception",
                 error=str(exc),
             )
-            return True  # fail-closed
+            return True  # fail-closed on unexpected errors
 
     async def _call_llm(self, message: str) -> bool:
         """Make the DeepInfra API call and parse the JSON response.

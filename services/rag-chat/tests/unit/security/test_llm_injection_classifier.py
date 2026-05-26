@@ -73,8 +73,13 @@ class TestLLMInjectionClassifierUnsafe:
 
 
 class TestLLMInjectionClassifierTimeout:
-    def test_timeout_returns_true_fail_closed(self) -> None:
-        """asyncio.TimeoutError → classify() returns True (fail-closed)."""
+    def test_timeout_returns_false_fail_open(self) -> None:
+        """asyncio.TimeoutError → classify() returns False (fail-open).
+
+        Layer 1 regex already ran; timing out DeepInfra on Layer 2 should not
+        block legitimate financial queries. Fail-open on timeout (not closed)
+        was the fix for BP-NNN: classifier timeouts blocking Q4 revenue queries.
+        """
         from rag_chat.application.security.llm_injection_classifier import LLMInjectionClassifier
 
         classifier = LLMInjectionClassifier(api_key="test-key-123")
@@ -86,7 +91,7 @@ class TestLLMInjectionClassifierTimeout:
         with patch.object(classifier, "_call_llm", side_effect=_timeout_llm):
             result = asyncio.run(classifier.classify("Some message"))
 
-        assert result is True  # fail-closed
+        assert result is False  # fail-open on timeout
 
 
 class TestLLMInjectionClassifierDisabled:

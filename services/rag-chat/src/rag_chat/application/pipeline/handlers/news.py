@@ -65,6 +65,9 @@ class NewsHandler(ToolHandler):
         _stub = ToolUseBlock(name=tool_name, input=args)
 
         if tool_name == "search_documents":
+            # Normalize to_date → date_to: LLM occasionally uses the wrong param name.
+            if "to_date" in args and "date_to" not in args:
+                args = {**args, "date_to": args.pop("to_date")}
             return await self._handle_search_documents(_stub, **args)
         if tool_name == "get_morning_brief":
             return await self._handle_get_morning_brief(_stub)

@@ -461,12 +461,16 @@ async def test_enrichment_attempts_incremented_on_llm_short_response() -> None:
 
     worker = StructuredEnrichmentWorker(adapter, use_case, sf)
 
-    # Drive list_unenriched: one batch with our entity, then empty.
-    adapter.list_unenriched = AsyncMock(side_effect=[[entity], []])
+    # PLAN-0093 T-C-4-01: worker now calls claim_for_enrichment (atomic claim +
+    # increment), not list_unenriched. One batch with our entity, then empty.
+    adapter.claim_for_enrichment = AsyncMock(side_effect=[[entity], []])
 
     await worker.run()
 
-    adapter.increment_attempts.assert_awaited()
+    # claim_for_enrichment bumps enrichment_attempts atomically at claim time;
+    # the worker must NOT double-call increment_attempts on the fatal path.
+    adapter.claim_for_enrichment.assert_awaited()
+    adapter.increment_attempts.assert_not_awaited()
 
 
 # ---------------------------------------------------------------------------
