@@ -629,7 +629,9 @@ class TestMultiIterationBehavior:
         # LLM calls: [tool_calls], [more_tool_calls], [direct answer]
         call_count = [0]
 
-        async def _chat_with_tools(messages, tools=None, max_tokens=1024, temperature=0.1):
+        async def _chat_with_tools(messages, tools=None, max_tokens=1024, temperature=0.1, **kwargs):
+            # FIX-LIVE-EE: accept the new `retry=` kwarg the orchestrator now
+            # forwards to chat_with_tools on iter-0 (swallowed via **kwargs).
             call_count[0] += 1
             if call_count[0] == 1:
                 return _make_llm_tool_response(tool_calls=[tool_block])
@@ -865,7 +867,9 @@ class TestPendingActionJsonWarning:
         tool_block = _make_tool_use_block("create_alert")
         call_count = [0]
 
-        async def _chat_with_tools(messages, tools=None, max_tokens=1024, temperature=0.1):
+        async def _chat_with_tools(messages, tools=None, max_tokens=1024, temperature=0.1, **kwargs):
+            # FIX-LIVE-EE: accept the new `retry=` kwarg forwarded by the
+            # orchestrator on iter-0 (swallowed via **kwargs).
             call_count[0] += 1
             if call_count[0] == 1:
                 return _make_llm_tool_response(tool_calls=[tool_block])

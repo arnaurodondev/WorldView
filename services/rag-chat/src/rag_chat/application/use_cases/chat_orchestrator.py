@@ -601,6 +601,12 @@ class ChatOrchestratorUseCase:
                     tools=tool_defs if tool_defs else None,
                     max_tokens=budget.max_tokens_per_iter,
                     temperature=0.1,
+                    # FIX-LIVE-EE (2026-05-25): only iter-0 gets the in-place
+                    # transient-retry path. Mid-loop failures (iter > 0) fall
+                    # through to FIX-LIVE-V's recovery branch below, which is
+                    # the right escape hatch when we already have prior tool
+                    # results to synthesise from.
+                    retry=iteration == 0,
                 )
             except Exception as exc:
                 # FIX-LIVE-V (2026-05-25): mid-loop chat_with_tools failure

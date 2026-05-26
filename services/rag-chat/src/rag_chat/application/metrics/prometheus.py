@@ -71,6 +71,24 @@ rag_chat_with_tools_failed = Counter(
     labelnames=["provider"],
 )
 
+# FIX-LIVE-EE (2026-05-25): provider-chain in-place retry counter for iter-0
+# chat_with_tools transient failures.  Distinct from rag_chat_with_tools_failed
+# (which counts terminal per-provider failures) because retries that ultimately
+# succeed are a normal happy path that we still want to track so operators can
+# tune RAG_CHAT_PROVIDER_RETRY_ATTEMPTS / _BACKOFF_BASE against observed load.
+#
+# Labels:
+#   provider — name of the provider being retried (deepinfra / openrouter)
+#   attempt  — 1-indexed retry number (1 = first retry after initial failure)
+#   outcome  — "success" (retry scheduled / succeeded) or "failure" (exhausted)
+#
+# Cardinality: at most providers (3) x attempts (<=5) x outcomes (2) = 30 series.
+llm_provider_retry_attempt = Counter(
+    "llm_provider_retry_attempt_total",
+    "Provider-chain in-place retries on iter-0 transient failures",
+    labelnames=["provider", "attempt", "outcome"],
+)
+
 # ── Threads ──────────────────────────────────────────────────────────────────
 
 rag_thread_count = Gauge(
