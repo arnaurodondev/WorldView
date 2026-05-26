@@ -6,9 +6,11 @@ Fundamentals records are stored per instrument in the DB.
 
 from __future__ import annotations
 
+import asyncio
 from typing import Annotated, Any
 from uuid import UUID
 
+import structlog
 from fastapi import APIRouter, Depends, HTTPException, Path, Query
 
 from market_data.api.dependencies import (
@@ -18,6 +20,9 @@ from market_data.api.dependencies import (
     get_lookup_instrument_uc,
 )
 from market_data.api.schemas.fundamentals import (
+    FundamentalsBatchPerTickerResult,
+    FundamentalsBatchRequest,
+    FundamentalsBatchResponse,
     FundamentalsHistoryPeriod,
     FundamentalsHistoryResponse,
     FundamentalsRecordResponse,
@@ -30,6 +35,14 @@ from market_data.application.use_cases.query_fundamentals import GetFundamentals
 from market_data.domain.entities import FundamentalsRecord
 from market_data.domain.enums import FundamentalsSection
 from market_data.domain.errors import InstrumentNotFoundError
+
+log = structlog.get_logger(__name__)
+
+# PLAN-0095 W2: bound the batch fan-out so a hostile or buggy caller can't
+# saturate the use-case worker pool with 1000 concurrent fundamentals queries.
+# 25 is the worst-case rag-chat screener result count after FIX-LIVE-T clamping;
+# above that, the LLM is no longer comparing — it's listing.
+_BATCH_TICKER_CAP = 25
 
 router = APIRouter(tags=["fundamentals"])
 
@@ -114,6 +127,89 @@ async def get_fundamentals_history(
         periods=[FundamentalsHistoryPeriod(**p) for p in data["periods"]],
         period_count=data["period_count"],
     )
+
+
+# PLAN-0095 W2 T-W2-01: POST /fundamentals/batch — multi-ticker fan-out.
+# IMPORTANT: registered before /fundamentals/{instrument_id} catch-all so
+# FastAPI's first-match wins on "/fundamentals/batch" (the UUID pattern on
+# {instrument_id} would otherwise 422 the literal "batch" string, which is
+# correct but wastes a request).
+@router.post("/fundamentals/batch", response_model=FundamentalsBatchResponse)
+async def post_fundamentals_batch(
+    body: FundamentalsBatchRequest,
+    uc: Annotated[GetFundamentalsHistoryUseCase, Depends(get_fundamentals_history_uc)] = ...,  # type: ignore[assignment]
+    lookup_uc: Annotated[InstrumentLookupUseCase, Depends(get_lookup_instrument_uc)] = ...,  # type: ignore[assignment]
+) -> FundamentalsBatchResponse:
+    """Return quarterly fundamentals history for many tickers in one call.
+
+    PLAN-0095 W2 T-W2-01. Designed for rag-chat's screener → fundamentals
+    workflow: one HTTP call replaces N sequential LLM turns. Per-ticker
+    failures (unknown ticker, transient DB error, etc.) are isolated via
+    ``return_exceptions=True`` so a single bad ticker never poisons the batch.
+
+    Response shape:
+
+        {
+          "results": {
+            "AAPL": {"status": "ok", "periods": [...]},
+            "BADTICKER": {"status": "error", "reason": "..."},
+            ...
+          }
+        }
+
+    The caller correlates by ORIGINAL ticker (preserves case) so it does not
+    need to remember the canonical instrument symbol.
+    """
+    # Hard cap to bound worst-case latency / DB load. Returning 422 (not 400)
+    # to match FastAPI's convention for body-validation failures.
+    if len(body.tickers) > _BATCH_TICKER_CAP:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Too many tickers: {len(body.tickers)} > cap {_BATCH_TICKER_CAP}",
+        )
+
+    async def _one(ticker: str) -> list[dict]:
+        """Resolve ticker → instrument_id, then call the history use case.
+
+        Raises ``InstrumentNotFoundError`` (handled by gather's
+        ``return_exceptions=True``) when the ticker is unknown.
+        """
+        result = await lookup_uc.execute(symbol=ticker)
+        instrument = result.instrument
+        data = await uc.execute(instrument_id=UUID(instrument.id), periods=body.periods)
+        # data["periods"] is already list[dict] per GetFundamentalsHistoryUseCase
+        periods_raw = data.get("periods", [])
+        return periods_raw if isinstance(periods_raw, list) else []
+
+    # WHY return_exceptions=True: per-ticker failure (e.g. unknown ticker)
+    # must not 500 the entire batch. The caller (rag-chat tool handler) wants
+    # a partial-success response so the LLM can still render the tickers that
+    # WERE resolvable.
+    raw_results = await asyncio.gather(
+        *[_one(ticker) for ticker in body.tickers],
+        return_exceptions=True,
+    )
+
+    out: dict[str, FundamentalsBatchPerTickerResult] = {}
+    for ticker, result in zip(body.tickers, raw_results, strict=True):
+        if isinstance(result, BaseException):
+            # str(InstrumentNotFoundError) gives a useful "Instrument not found: …"
+            # message; for unexpected exceptions we still return the str repr so the
+            # LLM gets *something* actionable.
+            log.info(
+                "fundamentals_batch_per_ticker_error",
+                ticker=ticker,
+                error=type(result).__name__,
+                reason=str(result),
+            )
+            out[ticker] = FundamentalsBatchPerTickerResult(status="error", reason=str(result))
+        else:
+            out[ticker] = FundamentalsBatchPerTickerResult(
+                status="ok",
+                periods=[FundamentalsHistoryPeriod(**p) for p in result],
+            )
+
+    return FundamentalsBatchResponse(results=out)
 
 
 # NOTE: /fundamentals/{instrument_id}/snapshot MUST be registered before

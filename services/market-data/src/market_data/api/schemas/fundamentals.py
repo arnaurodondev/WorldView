@@ -95,3 +95,48 @@ class FundamentalsHistoryResponse(BaseModel):
     ticker: str
     periods: list[FundamentalsHistoryPeriod]
     period_count: int
+
+
+# PLAN-0095 W2 T-W2-01: batch fundamentals history.
+# WHY a batch endpoint: rag-chat's screener → fundamentals workflow currently
+# fans out N sequential ``get_fundamentals_history`` tool calls through the
+# LLM. Each turn is a ~7-8 s LLM round-trip plus a use-case query; for 5
+# tickers that's 5 turns. A single batch tool call collapses that into one
+# turn so the LLM never has to deliberate between successive fundamentals
+# pulls — measured 5-10x latency reduction on agg_q6.
+class FundamentalsBatchRequest(BaseModel):
+    """Request body for POST /v1/fundamentals/batch.
+
+    ``tickers`` is capped at 25 entries to bound worst-case fan-out latency
+    (25 concurrent ``GetFundamentalsHistoryUseCase.execute`` calls per request);
+    requests above the cap return HTTP 422 from the route's manual length check.
+    """
+
+    tickers: list[str]
+    periods: int = 5
+
+
+class FundamentalsBatchPerTickerResult(BaseModel):
+    """Per-ticker result inside a batch response.
+
+    ``status="ok"`` populates ``periods`` (and leaves ``reason`` as ``None``);
+    ``status="error"`` populates ``reason`` (and leaves ``periods`` as ``None``).
+    Per-ticker failures NEVER fail the overall batch — see ``return_exceptions=True``
+    in the route handler. The shape is intentionally flat so callers can iterate
+    ``response.results.items()`` without branching on missing keys.
+    """
+
+    status: str  # Literal["ok", "error"] — kept str for FastAPI/OpenAPI simplicity
+    periods: list[FundamentalsHistoryPeriod] | None = None
+    reason: str | None = None
+
+
+class FundamentalsBatchResponse(BaseModel):
+    """Response for POST /v1/fundamentals/batch.
+
+    ``results`` is keyed by the ORIGINAL ticker the caller supplied (preserves
+    case so the caller can correlate with its own state) — NOT by the canonical
+    instrument symbol returned from the lookup use case.
+    """
+
+    results: dict[str, FundamentalsBatchPerTickerResult]
