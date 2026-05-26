@@ -1452,7 +1452,11 @@ services:
       dockerfile: services/nlp-pipeline/Dockerfile
     profiles: [infra, all]
     depends_on:
+      postgres:
+        condition: service_healthy
       nlp-pipeline-migrate:
+        condition: service_completed_successfully
+      kafka-init:
         condition: service_completed_successfully
     env_file:
       - ../../services/nlp-pipeline/configs/docker.env
