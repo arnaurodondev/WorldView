@@ -62,7 +62,7 @@ class GetFundamentalsHistoryUseCase:
         not include that quarter, so operators can distinguish "data not yet
         ingested" from "labelling bug" in production logs.
         """
-        from market_data.domain.enums import FundamentalsSection
+        from market_data.domain.enums import FundamentalsSection, PeriodType
 
         iid_str = str(instrument_id)
 
@@ -79,10 +79,15 @@ class GetFundamentalsHistoryUseCase:
             FundamentalsSection.EARNINGS_HISTORY,
         )
 
-        # Fetch income-statement records for revenue/gross_profit/net_income
+        # Fetch income-statement records for revenue/gross_profit/net_income.
+        # PLAN-0095 T-W1-02 (BP-559): pin to QUARTERLY so a same-period ANNUAL
+        # row never shadows the quarterly figure. Without this filter the JOIN
+        # below by ``period_end`` can match an annual row whose revenue is 4x
+        # the quarterly value (AMD/NVDA Q1FY26 returned $34B instead of $7B).
         income_records = await self._uow.fundamentals_read.find_by_section(
             iid_str,
             FundamentalsSection.INCOME_STATEMENT,
+            period_type=PeriodType.QUARTERLY,
         )
 
         # Fetch highlights for market_cap/pe_ratio (TTM snapshot)

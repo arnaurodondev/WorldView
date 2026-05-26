@@ -74,6 +74,15 @@ class InstrumentFundamentalsSnapshotModel(Base):
     # Credit rating string — e.g. "A+", "BBB", "BB-" — from EODHD CreditRating
     credit_rating: Mapped[str | None] = mapped_column(String(10), nullable=True)
 
+    # ── Source periodicity tracking (PLAN-0095 T-W1-04, BP-542, migration 020) ──
+    # Records which periodicity (QUARTERLY / ANNUAL) the corresponding derived
+    # source row came from. Nullable because: (a) rows written before migration
+    # 020 stay NULL until next refresh; (b) when the source section is absent
+    # from the EODHD payload the corresponding tracking column also stays NULL.
+    period_type_income: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    period_type_cash_flow: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    period_type_balance: Mapped[str | None] = mapped_column(String(20), nullable=True)
+
     # ── Metadata ──────────────────────────────────────────────────────────────
 
     # Timestamp of last backfill / upsert for this instrument (UTC)

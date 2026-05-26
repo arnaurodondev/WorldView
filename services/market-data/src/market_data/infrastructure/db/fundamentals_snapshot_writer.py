@@ -99,18 +99,42 @@ def _most_recent_financial_row(section_data: Any) -> dict[str, Any]:
     We prefer the most recent *yearly* entry (trailing-twelve-months semantics).
     Falls back to the most recent quarterly entry if no yearly data exists.
     Returns {} when section_data is missing or malformed.
+
+    NOTE: Periodicity tracking (PLAN-0095 T-W1-04, BP-542) lives in
+    :func:`_most_recent_financial_row_with_period` so existing callers that
+    only need the row dict are unchanged.
+    """
+    row, _periodicity = _most_recent_financial_row_with_period(section_data)
+    return row
+
+
+def _most_recent_financial_row_with_period(section_data: Any) -> tuple[dict[str, Any], str | None]:
+    """Extract the most recent row AND the periodicity it was sourced from.
+
+    PLAN-0095 T-W1-04 / BP-542: the snapshot writer needs to record whether
+    each derived metric came from a QUARTERLY or ANNUAL source row. This
+    helper returns both so the caller can persist the periodicity into the
+    new ``period_type_*`` columns on ``instrument_fundamentals_snapshot``.
+
+    Returns:
+        Tuple ``(row, periodicity)`` where:
+          * ``row`` is the most-recent row dict (``{}`` if none found).
+          * ``periodicity`` is ``"ANNUAL"`` when the row came from the
+            yearly bucket, ``"QUARTERLY"`` when it came from the quarterly
+            bucket, or ``None`` when no row was found.
     """
     if not isinstance(section_data, dict):
-        return {}
-    for period_label in ("yearly", "quarterly"):
+        return ({}, None)
+    # Map the EODHD bucket label to the canonical PeriodType value name.
+    for period_label, periodicity in (("yearly", "ANNUAL"), ("quarterly", "QUARTERLY")):
         sub = section_data.get(period_label)
         if not isinstance(sub, dict) or not sub:
             continue
         # Sort date strings descending — ISO-8601 date strings sort correctly as text
         most_recent_key = max(sub.keys())
         row = sub[most_recent_key]
-        return row if isinstance(row, dict) else {}
-    return {}
+        return (row if isinstance(row, dict) else {}, periodicity)
+    return ({}, None)
 
 
 def derive_fundamentals_snapshot(
@@ -218,12 +242,14 @@ _UPSERT_SQL = text("""
         eps_ttm, beta, avg_volume_30d,
         operating_cash_flow, capex, free_cash_flow, fcf_margin,
         interest_coverage, net_debt_to_ebitda, credit_rating,
+        period_type_income, period_type_cash_flow, period_type_balance,
         updated_at
     ) VALUES (
         :instrument_id,
         :eps_ttm, :beta, :avg_volume_30d,
         :operating_cash_flow, :capex, :free_cash_flow, :fcf_margin,
         :interest_coverage, :net_debt_to_ebitda, :credit_rating,
+        :period_type_income, :period_type_cash_flow, :period_type_balance,
         now()
     )
     ON CONFLICT (instrument_id) DO UPDATE SET
@@ -259,6 +285,16 @@ _UPSERT_SQL = text("""
                                instrument_fundamentals_snapshot.net_debt_to_ebitda),
         credit_rating       = COALESCE(EXCLUDED.credit_rating,
                                instrument_fundamentals_snapshot.credit_rating),
+        -- PLAN-0095 T-W1-04 / BP-542: track which periodicity each derived
+        -- metric was sourced from. COALESCE matches the policy above so a
+        -- partial payload (e.g. no income_statement this cycle) does not
+        -- wipe out the previously-recorded periodicity tag.
+        period_type_income    = COALESCE(EXCLUDED.period_type_income,
+                               instrument_fundamentals_snapshot.period_type_income),
+        period_type_cash_flow = COALESCE(EXCLUDED.period_type_cash_flow,
+                               instrument_fundamentals_snapshot.period_type_cash_flow),
+        period_type_balance   = COALESCE(EXCLUDED.period_type_balance,
+                               instrument_fundamentals_snapshot.period_type_balance),
         updated_at          = now()
 """)
 
@@ -274,6 +310,11 @@ async def upsert_snapshot(session: AsyncSession, instrument_id: str, snap: dict[
         session:       SQLAlchemy async write session (from UoW._write()).
         instrument_id: UUID string of the instrument (PK).
         snap:          Dict returned by ``derive_fundamentals_snapshot()``.
+
+    PLAN-0095 T-W1-04 / BP-542: the snap dict may carry three optional
+    ``period_type_*`` keys recording the periodicity of each source row.
+    Missing keys default to ``None`` (preserves existing column value under
+    the COALESCE-based UPSERT policy).
     """
     await session.execute(
         _UPSERT_SQL,
@@ -289,5 +330,8 @@ async def upsert_snapshot(session: AsyncSession, instrument_id: str, snap: dict[
             "interest_coverage": snap.get("interest_coverage"),
             "net_debt_to_ebitda": snap.get("net_debt_to_ebitda"),
             "credit_rating": snap.get("credit_rating"),
+            "period_type_income": snap.get("period_type_income"),
+            "period_type_cash_flow": snap.get("period_type_cash_flow"),
+            "period_type_balance": snap.get("period_type_balance"),
         },
     )

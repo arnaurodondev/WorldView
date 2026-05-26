@@ -15,7 +15,7 @@ from market_data.domain.enums import FundamentalsSection, PeriodType
 from market_data.domain.events import InstrumentCreated
 from market_data.domain.value_objects import InstrumentFlags
 from market_data.infrastructure.db.fundamentals_snapshot_writer import (
-    _most_recent_financial_row,
+    _most_recent_financial_row_with_period,
     derive_fundamentals_snapshot,
     upsert_snapshot,
 )
@@ -615,9 +615,13 @@ class FundamentalsConsumer(ValkeyDedupMixin, BaseKafkaConsumer[dict]):
         without touching the DB.
         """
         snap_highlights = payload.get("highlights") or {}
-        snap_cash_flow = _most_recent_financial_row(payload.get("cash_flow"))
-        snap_income = _most_recent_financial_row(payload.get("income_statement"))
-        snap_balance = _most_recent_financial_row(payload.get("balance_sheet"))
+        # PLAN-0095 T-W1-04 / BP-542: capture which periodicity each source row
+        # came from so the snapshot writer can record it in the new
+        # ``period_type_*`` columns. ``_most_recent_financial_row_with_period``
+        # returns ``(row, "ANNUAL" | "QUARTERLY" | None)``.
+        snap_cash_flow, _pt_cash_flow = _most_recent_financial_row_with_period(payload.get("cash_flow"))
+        snap_income, _pt_income = _most_recent_financial_row_with_period(payload.get("income_statement"))
+        snap_balance, _pt_balance = _most_recent_financial_row_with_period(payload.get("balance_sheet"))
         snap_technicals = payload.get("technicals_snapshot") or {}
 
         # Only derive + upsert when at least one source section is present
@@ -631,6 +635,14 @@ class FundamentalsConsumer(ValkeyDedupMixin, BaseKafkaConsumer[dict]):
             balance=snap_balance,
             technicals=snap_technicals,
         )
+        # PLAN-0095 T-W1-04 / BP-542: attach the source periodicity tags so the
+        # writer persists them into instrument_fundamentals_snapshot.period_type_*.
+        snap = {
+            **snap,
+            "period_type_income": _pt_income,
+            "period_type_cash_flow": _pt_cash_flow,
+            "period_type_balance": _pt_balance,
+        }
         # Access write session via concrete UoW — we are inside the
         # infrastructure layer; the cast is safe here (SLF001).
         write_session_fn = getattr(uow, "_write", None)

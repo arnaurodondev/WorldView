@@ -31,7 +31,7 @@ if TYPE_CHECKING:
         ScreenFieldMetadata,
         Security,
     )
-    from market_data.domain.enums import FundamentalsSection, Timeframe
+    from market_data.domain.enums import FundamentalsSection, PeriodType, Timeframe
     from market_data.domain.value_objects import InstrumentFlags
 
 # ── Read-side query result types ─────────────────────────────────────────────
@@ -480,8 +480,20 @@ class FundamentalsReadRepository(ABC):
         self,
         instrument_id: str,
         section: FundamentalsSection,
+        period_type: PeriodType | None = None,
     ) -> list[FundamentalsRecord]:
-        """Return all fundamentals records for the given instrument and section."""
+        """Return all fundamentals records for the given instrument and section.
+
+        PLAN-0095 T-W1-01: ``period_type`` is an optional periodicity filter.
+        When supplied, only rows whose ``period_type`` column matches the given
+        value are returned. Default ``None`` preserves backward compatibility
+        and returns all periodicities (the original behaviour).
+
+        WHY this matters: income_statement / balance_sheet / cash_flow tables
+        store both QUARTERLY and ANNUAL rows at the same ``period_end_date``;
+        without this filter callers that want one periodicity can silently
+        receive the other (BP-559, AMD/NVDA Q1 numbers 4-5x too large).
+        """
 
 
 # ── Read-side fundamental metrics query port ─────────────────────────────────

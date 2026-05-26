@@ -160,7 +160,11 @@ def _make_uow(
 
     uow.fundamentals_read = MagicMock()
 
-    async def _find(_iid: str, section: FundamentalsSection) -> list[FundamentalsRecord]:
+    async def _find(
+        _iid: str,
+        section: FundamentalsSection,
+        period_type: PeriodType | None = None,  # PLAN-0095 W1 T-W1-01: filter param added
+    ) -> list[FundamentalsRecord]:
         if section == FundamentalsSection.EARNINGS_HISTORY:
             return earnings
         return []  # income statement / highlights — empty for these tests

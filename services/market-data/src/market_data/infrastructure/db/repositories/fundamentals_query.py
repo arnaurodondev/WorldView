@@ -108,6 +108,7 @@ async def query_fundamentals(
     session: AsyncSession,
     security_id: str,
     section: FundamentalsSection,
+    period_type: PeriodType | None = None,
 ) -> list[FundamentalsRecord]:
     """Query all records for a given instrument + section.
 
@@ -115,6 +116,15 @@ async def query_fundamentals(
         session: An open ``AsyncSession`` (use the read session for read-only callers).
         security_id: The instrument UUID (stored as instrument_id in DB).
         section: Which fundamentals section to query.
+        period_type: Optional periodicity filter. When supplied, results are
+            restricted to rows whose ``period_type`` column equals the given
+            value (PLAN-0095 T-W1-01). The DB stores both QUARTERLY and ANNUAL
+            rows in the same section table for income_statement / balance_sheet
+            / cash_flow; without this filter the caller receives a mix and the
+            most-recent annual row can shadow a same-period quarterly row, e.g.
+            returning $200B ANNUAL revenue where the caller wanted $50B
+            QUARTERLY. ``None`` (default) preserves backward-compatible "return
+            all periodicities" behaviour.
 
     Returns:
         List of domain ``FundamentalsRecord`` instances ordered by
@@ -135,6 +145,9 @@ async def query_fundamentals(
     if section == FundamentalsSection.COMPANY_PROFILE:
         # CompanyProfileModel has no period_end_date; sort by ingested_at ASC
         # so the caller always receives snapshots in ingestion order.
+        # ``period_type`` is meaningless for company_profile (a point-in-time
+        # snapshot, no period column), so we ignore the kwarg for this section
+        # rather than raise — keeps the port signature uniform.
         result: Any = await session.execute(
             select(model_class)
             .where(model_class.instrument_id == security_id)  # type: ignore[attr-defined]
@@ -145,10 +158,16 @@ async def query_fundamentals(
 
     # Mixin sections all have period_end_date; sort ascending so newest records
     # are last and slice(-N) returns the N most recent entries.
-    result = await session.execute(
+    stmt = (
         select(model_class)
         .where(model_class.instrument_id == security_id)  # type: ignore[attr-defined]
         .order_by(model_class.period_end_date.asc())  # type: ignore[attr-defined]
     )
+    # PLAN-0095 T-W1-01: optional periodicity filter. The mixin stores
+    # ``period_type`` as a VARCHAR(20) (see _base.py); compare against the
+    # enum's string value so SQLAlchemy renders a bind param of the same type.
+    if period_type is not None:
+        stmt = stmt.where(model_class.period_type == period_type.value)  # type: ignore[attr-defined]
+    result = await session.execute(stmt)
     rows = result.scalars().all()
     return [_row_to_domain(row, section) for row in rows]
