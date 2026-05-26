@@ -59,8 +59,10 @@ def test_default_registry_has_zero_drift() -> None:
     # in BOTH yaml and builder (e.g. accidentally deleting a tool from both)
     # is still caught.  Update this number when intentionally adding/removing
     # a tool from the platform.
-    assert sizes["manifest"] == 22, (
-        f"Expected 22 platform tools, got {sizes['manifest']}. "
+    # PLAN-0095 W2 T-W2-02 bumped the count from 22 → 23 by adding
+    # ``get_fundamentals_history_batch`` alongside the singular variant.
+    assert sizes["manifest"] == 23, (
+        f"Expected 23 platform tools, got {sizes['manifest']}. "
         "If a tool was intentionally added/removed, update this assertion."
     )
 
@@ -258,6 +260,63 @@ class _StubRegistry:
 
     def load_manifest(self) -> dict[str, Any]:
         return self._manifest_doc
+
+
+# ── PLAN-0095 W3 T-W3-01: tool description anti-pattern guards ───────────────
+#
+# After Q1/Q3 misrouting in iter-9 chat-eval, we tightened five descriptions
+# so the LLM stops picking get_entity_graph + search_documents for peer or
+# biographical questions. These tests pin the new "DO NOT use for..." clauses
+# so a future copy-edit can't accidentally regress the disambiguation.
+
+
+def _spec(name: str) -> Any:
+    """Return the ToolSpec for ``name`` from the live default registry."""
+    registry = build_default_registry()
+    for spec in registry.all_specs():
+        if spec.name == name:
+            return spec
+    raise AssertionError(f"tool {name!r} not registered")
+
+
+def test_get_entity_graph_description_documents_anti_patterns() -> None:
+    desc = _spec("get_entity_graph").description
+    assert "DO NOT use for" in desc, "get_entity_graph must explicitly list anti-patterns"
+    # Peer / competitor and biographical / two-entity carve-outs.
+    assert "competitor" in desc.lower()
+    assert "biographical" in desc.lower() or "career" in desc.lower()
+    assert "traverse_graph" in desc, "should redirect two-entity queries to traverse_graph"
+
+
+def test_traverse_graph_description_documents_anti_patterns() -> None:
+    desc = _spec("traverse_graph").description
+    assert "DO NOT use for" in desc
+    # Must redirect single-entity peer queries away.
+    assert "get_entity_intelligence" in desc or "compare_entities" in desc
+    # Must redirect pre-ranked single-anchor path queries to get_entity_paths.
+    assert "get_entity_paths" in desc
+
+
+def test_get_entity_paths_description_documents_anti_patterns() -> None:
+    desc = _spec("get_entity_paths").description
+    assert "DO NOT use for" in desc
+    assert "traverse_graph" in desc, "should redirect two-entity questions to traverse_graph"
+
+
+def test_get_entity_intelligence_description_covers_peer_and_bio() -> None:
+    desc = _spec("get_entity_intelligence").description
+    # Biographical / executive-history coverage.
+    assert "biographical" in desc.lower() or "career" in desc.lower()
+    # Peer / competitor coverage — the relations_summary bucket.
+    assert "peer" in desc.lower() or "competitor" in desc.lower()
+    assert "DO NOT use for" in desc
+
+
+def test_compare_entities_description_is_financial_only() -> None:
+    desc = _spec("compare_entities").description
+    assert "FINANCIAL" in desc, "must flag itself as a financial-only tool"
+    assert "DO NOT use for" in desc
+    assert "traverse_graph" in desc, "should redirect relationship questions away"
 
 
 def _read_module_source(module: Any) -> str:

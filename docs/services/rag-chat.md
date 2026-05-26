@@ -314,6 +314,24 @@ See `docs/audits/2026-05-23-qa-intelligence-pipelines-report.md` F-CHAT-AGENT-00
 
 ---
 
+## PLAN-0095 W3 — Tool ergonomics & eval hygiene (2026-05-26)
+
+Five tool descriptions in `application/pipeline/tool_registry_builder.py` were tightened with explicit "DO NOT use for…" anti-pattern clauses to stop the LLM misrouting peer / biographical questions:
+
+- **`get_entity_graph`** — anchors on a SINGLE entity's direct neighbours. Anti-patterns now listed: (1) peer / competitor questions (KG sparse on `competitor_of`), (2) biographical / career-history about people, (3) two-entity relationship lookups. Each anti-pattern redirects to the correct sibling tool by name.
+- **`traverse_graph`** — requires BOTH `start_entity` and `target_entity`. Anti-patterns: single-entity peer questions, biographical lookups, single-anchor pre-ranked path queries (→ `get_entity_paths`).
+- **`get_entity_paths`** — pre-computed top-N paths anchored on ONE entity. Anti-patterns: two-entity questions (→ `traverse_graph`), full bundles (→ `get_entity_intelligence`), direct-neighbour structural lookups (→ `get_entity_graph`).
+- **`get_entity_intelligence`** — promoted to the PREFERRED tool for: comprehensive overviews, biographical / executive-history questions, and peer / competitor questions (relations_summary surfaces competitor / partner buckets even when KG edges are sparse).
+- **`compare_entities`** — explicitly flagged as a FINANCIAL-only tool (market cap, P/E, revenue, EPS). Anti-patterns: relationship questions between tickers, qualitative narrative, historical time-series for one entity.
+
+The `_TOOL_TO_INTENT` map in `application/services/intent_inference.py` was extended with three new entries — `get_entity_intelligence`, `search_entity_relations`, `get_entity_narrative` — all mapped to `QueryIntent.RELATIONSHIP` so the second-turn prompt picks the relationship-specialised addendum instead of the GENERAL fallback.
+
+A new env var `RAG_COMPLETION_CACHE_DISABLED` is honoured in `application/pipeline/chat_pipeline.py:check_cache()` — when set to `"true"` (case- and whitespace-tolerant) the cache lookup is short-circuited and the request runs cold-path. Intended for the chat-eval session (auto-set by `tests/validation/chat_eval/conftest.py`); production leaves it unset. The chat-eval harness (`tests/validation/chat_eval/harness.py:ask`) now also mints a fresh `thread_id = str(uuid4())` per call so two runs of the same prompt cannot collide on the cache key, even if the env var is missed. Both fixes are belt-and-suspenders defences against the iter3 "Unity Software" cache-poisoning artefact (audit §5).
+
+The grader (`tests/validation/chat_eval/grading.py`) now treats a cache-hit response (detected via `metadata.cache_hit` or a `status` SSE event with `step="cache_hit"`) as automatically satisfying the `required_tools_any_of` rubric — the original cold-path request fired the tools, and punishing a legitimate latency optimisation is noise.
+
+---
+
 ## Caching Strategy
 
 | Key | TTL | Purpose |

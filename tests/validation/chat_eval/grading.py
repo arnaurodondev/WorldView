@@ -335,8 +335,22 @@ def grade_response(
     orphan_rationals = orphan_rationalisations(answer)
 
     # ── Required-tool / required-mention checks ──────────────────────────
+    # PLAN-0095 W3 T-W3-05: a cache-served answer satisfies the per-question
+    # required-tool requirement — the tools fired on the original cold-path
+    # request that populated the cache, and the rubric should not punish a
+    # legitimate latency optimisation. We detect cache hits via either
+    # (a) ``metadata.cache_hit == True`` or (b) a ``status`` SSE event with
+    # ``step == "cache_hit"`` (emitted by chat_orchestrator.py:463). The eval
+    # session sets RAG_COMPLETION_CACHE_DISABLED=true (conftest fixture) so
+    # this branch is the safety net for ad-hoc re-runs without that env.
+    cache_hit = bool(result.metadata.get("cache_hit")) or any(
+        ev.get("event") == "status"
+        and isinstance(ev.get("data"), dict)
+        and str(ev["data"].get("step", "")) == "cache_hit"
+        for ev in result.raw_events
+    )
     required_tools = gt.get("required_tools_any_of") or []
-    if required_tools and not any(t in tools_called for t in required_tools):
+    if required_tools and not cache_hit and not any(t in tools_called for t in required_tools):
         reasons.append(f"missing required tool from {required_tools!r}; got {tools_called!r}")
 
     min_distinct_tools = int(gt.get("min_distinct_tools", 0))

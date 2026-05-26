@@ -39,6 +39,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
+from uuid import uuid4
 
 import pytest
 
@@ -213,7 +214,18 @@ class RagChatClient:
         token = self.login()
         httpx = _import_httpx()
 
-        payload = {"message": question, "entity_ids": entity_ids or []}
+        # PLAN-0095 W3 T-W3-03: ALWAYS attach a fresh thread_id per ask() call.
+        # The rag-chat completion cache keys on sha256(message:thread_id); when
+        # thread_id is omitted the key collapses to sha256(message:None) and
+        # later runs of the same prompt serve a stale cached answer from an
+        # earlier session, masking regressions (audit §5; iter3_top5 "Unity
+        # Software" artefact). The conftest header documented this invariant
+        # but did not enforce it — this line promotes it from advisory to law.
+        payload = {
+            "message": question,
+            "entity_ids": entity_ids or [],
+            "thread_id": str(uuid4()),
+        }
         headers = {
             "Authorization": f"Bearer {token}",
             "Content-Type": "application/json",

@@ -45,6 +45,13 @@ if TYPE_CHECKING:
 _TOOL_TO_INTENT: dict[str, QueryIntent] = {
     "traverse_graph": QueryIntent.RELATIONSHIP,
     "get_entity_paths": QueryIntent.RELATIONSHIP,
+    # PLAN-0095 W3 T-W3-02: bundle-style intelligence tools imply a
+    # relationship-aware second turn (peers / partners / career narrative all
+    # surface through these). Previously they defaulted to GENERAL and lost
+    # the per-intent prompt addendum.
+    "get_entity_intelligence": QueryIntent.RELATIONSHIP,
+    "search_entity_relations": QueryIntent.RELATIONSHIP,
+    "get_entity_narrative": QueryIntent.RELATIONSHIP,
     "get_fundamentals_history": QueryIntent.FINANCIAL_DATA,
     "screen_universe": QueryIntent.FINANCIAL_DATA,
     "get_economic_calendar": QueryIntent.MACRO,

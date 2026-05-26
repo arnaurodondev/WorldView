@@ -205,14 +205,19 @@ def build_default_registry() -> ToolRegistry:
             name="get_entity_graph",
             description=(
                 "Retrieves the egocentric knowledge graph for a SINGLE named entity — its immediate "
-                "neighbours, relationships, and confidence scores. Use for questions about ONE entity "
-                "like 'who are X's partners', 'what are X's subsidiaries', 'who does X compete with'. "
-                "For questions about the relationship BETWEEN two entities (e.g. 'how is X connected to Y', "
-                "'what is the relation between X and Y'), use traverse_graph instead — it is designed "
-                "for cross-entity path finding and is more reliable for two-entity queries. "
-                "If this tool returns empty or sparse results for a well-known entity, you may supplement "
-                "with training knowledge but MUST label it 'Based on public knowledge: …' — never invent "
-                "confidence scores or graph metadata."
+                "neighbours, relationships, and confidence scores. Use ONLY for explicit structural "
+                "questions about ONE entity's direct neighbours: 'who are X's partners', 'what are "
+                "X's subsidiaries', 'what board seats does X hold'. "
+                "DO NOT use for: (1) peer / competitor / 'who does X compete with' questions — the KG "
+                "is sparse on competitor_of edges and will return empty; use get_entity_intelligence "
+                "(returns relations_summary + narrative) or compare_entities for those. "
+                "(2) biographical or career-history questions about people ('what did X do before Y') "
+                "— use get_entity_intelligence for narrative. "
+                "(3) the relationship BETWEEN two named entities — use traverse_graph or "
+                "get_entity_paths for cross-entity path finding. "
+                "If this tool returns empty or sparse results for a well-known entity, you may "
+                "supplement with training knowledge but MUST label it 'Based on public knowledge: …' "
+                "— never invent confidence scores or graph metadata."
             ),
             parameters=[
                 ParameterSpec(
@@ -249,12 +254,19 @@ def build_default_registry() -> ToolRegistry:
         ToolSpec(
             name="traverse_graph",
             description=(
-                "Finds paths between two entities in the knowledge graph via multi-hop traversal. "
-                "USE THIS TOOL when asked 'what is the relation between X and Y', 'how is X connected "
-                "to Y', 'is X related to Y', or any question involving TWO named entities. "
-                "Provide start_entity AND target_entity (e.g. start_entity='Apple', target_entity='Anthropic'). "
-                "Also useful for indirect chains (shared investors, board-member chains, 3+ hops). "
-                "Returns direct and indirect paths with relation types and confidence scores."
+                "Finds paths between TWO named entities in the knowledge graph via multi-hop "
+                "traversal. USE THIS TOOL ONLY when the question names two entities explicitly: "
+                "'what is the relation between X and Y', 'how is X connected to Y', 'is X related "
+                "to Y', 'shared board members of X and Y', 'is X an investor in Y'. "
+                "Provide BOTH start_entity AND target_entity (e.g. start_entity='Apple', "
+                "target_entity='Anthropic'). Also useful for indirect chains (shared investors, "
+                "board-member chains, 3+ hops). Returns direct and indirect paths with relation "
+                "types and confidence scores. "
+                "DO NOT use for: (1) single-entity peer / competitor / 'who are X's rivals' questions "
+                "— there is no second entity to traverse toward; use get_entity_intelligence or "
+                "compare_entities. (2) biographical / 'before joining Apple' questions — use "
+                "get_entity_intelligence. (3) pre-ranked top-N paths anchored on one entity — use "
+                "get_entity_paths (no target needed; cheaper and pre-computed)."
             ),
             parameters=[
                 ParameterSpec(name="start_entity", type="string", description="Starting entity name", required=True),
@@ -502,10 +514,15 @@ def build_default_registry() -> ToolRegistry:
         ToolSpec(
             name="get_entity_paths",
             description=(
-                "Retrieves top-N pre-computed multi-hop relationship paths anchored on an entity, "
-                "ranked by composite_score. Use when the user asks about indirect connections, "
-                "how entities are linked through intermediaries, or wants to explore the entity's "
-                "broader network relationships."
+                "Retrieves top-N PRE-COMPUTED multi-hop relationship paths anchored on a SINGLE "
+                "entity, ranked by composite_score (S7 path-insight pipeline). Use when the user "
+                "asks 'what are the most important relationships of X', 'show me X's network', "
+                "'top connections for X' — one anchor, no specific target. "
+                "DO NOT use for: (1) two-entity 'how is X connected to Y' questions — use "
+                "traverse_graph (live AGE walk between the two names). (2) full intelligence "
+                "bundles (narrative + relations + health) — use get_entity_intelligence which "
+                "wraps this tool plus the others in one call. (3) direct neighbours / 'who are "
+                "X's partners' structural lookups — use get_entity_graph."
             ),
             parameters=[
                 ParameterSpec(
@@ -564,10 +581,18 @@ def build_default_registry() -> ToolRegistry:
         ToolSpec(
             name="get_entity_intelligence",
             description=(
-                "Retrieves the full intelligence bundle for an entity — combining narrative, "
-                "relationship paths, health score, and relations summary in a single call. "
-                'Use when the user asks for a comprehensive overview or says "tell me everything '
-                'about X". Prefer this over calling individual intelligence tools separately.'
+                "Retrieves the FULL intelligence bundle for a single entity — combining narrative "
+                "summary, top relationship paths, health score, and relations_summary (peers, "
+                "competitors, partners) in ONE call. PREFER this tool whenever the user asks: "
+                "(1) for a comprehensive overview, 'tell me everything about X', 'what's going on "
+                "with X'; (2) BIOGRAPHICAL or career-history questions about people / executives — "
+                "'what did Tim Cook do before Apple', 'who is Sam Altman', 'background on Lisa Su' "
+                "— the narrative section covers career timeline; (3) PEER / competitor / 'who does "
+                "X compete with' questions — the relations_summary surfaces competitor / partner "
+                "buckets even when KG competitor_of edges are sparse. "
+                "DO NOT use for: (1) two-entity 'how is X connected to Y' — use traverse_graph. "
+                "(2) raw structural neighbour lists with relation_type filters — use get_entity_graph. "
+                "(3) side-by-side numeric comparison of 2+ tickers — use compare_entities."
             ),
             parameters=[
                 ParameterSpec(
@@ -617,9 +642,16 @@ def build_default_registry() -> ToolRegistry:
         ToolSpec(
             name="compare_entities",
             description=(
-                "Side-by-side comparison of 2-4 financial entities: fundamentals highlights "
-                "(market cap, P/E, revenue, EPS) and latest price quote. Use when the user "
-                "asks to compare multiple stocks or companies against each other."
+                "FINANCIAL side-by-side comparison of 2-4 stock tickers: fundamentals highlights "
+                "(market cap, P/E, revenue, EPS) and latest price quote — one row per ticker. "
+                "Use when the user asks 'compare AAPL and MSFT', 'how does NVDA stack up vs AMD', "
+                "'which of {A, B, C} has the higher P/E'. This is a FINANCIAL tool — output is "
+                "numeric metrics, not relationships or narrative. "
+                "DO NOT use for: (1) relationship questions between the two tickers ('is X "
+                "connected to Y', 'do they share board members') — use traverse_graph. "
+                "(2) qualitative narrative / 'which is the better business' — use "
+                "get_entity_intelligence per entity. (3) historical time-series for one entity — "
+                "use get_fundamentals_history."
             ),
             parameters=[
                 ParameterSpec(
@@ -829,6 +861,49 @@ def build_default_registry() -> ToolRegistry:
             example_queries=[
                 "Show me my active alerts",
                 "What alerts do I have set up?",
+            ],
+        ),
+        handler=lambda **_: None,
+    )
+
+    # PLAN-0095 W2 T-W2-02: batched fundamentals fan-out tool.
+    # WHY a separate tool (not an overload of get_fundamentals_history): tool
+    # arguments cannot be array-OR-string in the OpenAI tool-calling schema
+    # without forcing the LLM to wrap singletons in a list every time, which
+    # ITER-7 evals showed it gets wrong ~30% of the time. A dedicated batch
+    # tool lets the model keep using the singular tool for one-shot lookups
+    # and the batch tool only when it has 2+ tickers — which matches its
+    # actual reasoning pattern (deciding-up-front vs. exploring-one).
+    registry.register(
+        ToolSpec(
+            name="get_fundamentals_history_batch",
+            description=(
+                "Fetches quarterly fundamental metrics (revenue, gross profit, net income, "
+                "EPS, P/E, market cap) for MULTIPLE tickers in a single call. "
+                "Use this when comparing or screening MULTIPLE tickers; calling the singular "
+                "get_fundamentals_history N times is 5-10x slower (each call is a separate "
+                "agent turn). Returns a per-ticker dict {ticker: {status: ok|error, periods?, "
+                "reason?}}; partial failures (unknown ticker, missing data) do not fail the "
+                "whole batch. Cap: 25 tickers per call."
+            ),
+            parameters=[
+                ParameterSpec(
+                    name="tickers",
+                    type="array",
+                    description='List of stock tickers to fetch (e.g. ["AAPL", "MSFT", "NVDA"]). Max 25.',
+                    required=True,
+                ),
+                ParameterSpec(
+                    name="periods",
+                    type="integer",
+                    description="Number of quarters per ticker (1-20). Default 5.",
+                    required=False,
+                ),
+            ],
+            source_type="fundamentals",
+            example_queries=[
+                "Compare revenue growth of AAPL, MSFT, GOOG, AMZN, META",
+                "Get the last 4 quarters of fundamentals for the top 5 AI chip stocks",
             ],
         ),
         handler=lambda **_: None,

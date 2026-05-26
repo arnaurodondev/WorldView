@@ -43,6 +43,7 @@ update BP-559 / BP-560 / BP-561 in ``docs/BUG_PATTERNS.md``.
 
 from __future__ import annotations
 
+import os
 from collections.abc import Callable, Iterator
 from datetime import UTC, datetime
 
@@ -60,6 +61,36 @@ from tests.validation.chat_eval.harness import (
 # land in the same ``runs/<ts>/`` folder. We compute it once at fixture
 # import time (session scope) and pass it into ``save_result`` everywhere.
 # ---------------------------------------------------------------------------
+
+
+# ---------------------------------------------------------------------------
+# Cache-disable fixture (PLAN-0095 W3 T-W3-04).
+#
+# The completion cache is a production latency optimisation; eval runs must
+# measure cold-path behaviour so regressions surface immediately rather than
+# the day after the TTL expires. We export ``RAG_COMPLETION_CACHE_DISABLED=
+# true`` for the whole session, and restore the prior value on teardown so a
+# parent pytest invocation that intentionally set the env keeps its state.
+#
+# Combined with the per-call ``thread_id`` invariant (harness.py T-W3-03),
+# the eval session is now belt-and-suspenders cache-isolated.
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _disable_completion_cache() -> Iterator[None]:
+    """Force ``RAG_COMPLETION_CACHE_DISABLED=true`` for the chat-eval session."""
+
+    key = "RAG_COMPLETION_CACHE_DISABLED"
+    prior = os.environ.get(key)
+    os.environ[key] = "true"
+    try:
+        yield
+    finally:
+        if prior is None:
+            os.environ.pop(key, None)
+        else:
+            os.environ[key] = prior
 
 
 @pytest.fixture(scope="session")

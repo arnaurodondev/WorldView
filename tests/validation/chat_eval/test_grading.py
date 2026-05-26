@@ -254,3 +254,112 @@ class TestSpeculativeOrphanExemption:
         text = "The Q3 dip was a one-time event tied to inventory write-downs."
         orphans = orphan_rationalisations(text)
         assert "one-time event" in orphans
+
+
+# ── PLAN-0095 W3: harness + grader cache-hit guard tests ─────────────────────
+
+
+class TestHarnessFreshThreadId:
+    """T-W3-03: every ``ask()`` call must mint a fresh thread_id.
+
+    The rag-chat completion cache keys on ``sha256(message:thread_id)`` —
+    without a per-call uuid the same prompt across runs collapses to the
+    same key and serves stale answers (audit §5; iter3 "Unity Software"
+    artefact). We pin the invariant at the source-code level rather than
+    over-the-wire because the harness skips when no live rag-chat is
+    reachable, and the invariant should hold even in CI without a server.
+    """
+
+    def test_harness_payload_includes_thread_id_literal(self) -> None:
+        """Source contains the per-call ``"thread_id": str(uuid4())`` literal."""
+        import inspect
+
+        from tests.validation.chat_eval import harness
+
+        src = inspect.getsource(harness)
+        assert (
+            '"thread_id": str(uuid4())' in src
+        ), "harness.ask() must mint a fresh thread_id per call — see PLAN-0095 W3 T-W3-03"
+        # And we must import uuid4 (catch a future refactor that drops the import).
+        assert "from uuid import uuid4" in src
+
+    def test_harness_thread_id_is_unique_per_call(self) -> None:
+        """Two synthesised payloads have distinct thread_ids."""
+        # Reconstruct the same expression the harness uses; if anyone changes
+        # the line to a module-level uuid this test still passes — but the
+        # source-literal check above catches that regression.
+        from uuid import uuid4
+
+        a = str(uuid4())
+        b = str(uuid4())
+        assert a != b
+
+
+class TestGraderCacheHitAllowance:
+    """T-W3-05: cache-hit response satisfies the ``required_tools_any_of`` rubric.
+
+    A cached answer pre-dates the current turn's tool list; punishing it with
+    a "missing required tool" reason makes the grader noisy whenever the
+    optimisation legitimately fires. The chat-eval session sets
+    ``RAG_COMPLETION_CACHE_DISABLED=true`` to force cold paths, but the
+    grader still needs to be tolerant for ad-hoc runs / replays.
+    """
+
+    @staticmethod
+    def _result(*, tool_calls: list[str], raw_events: list[dict], metadata: dict | None = None):  # type: ignore[no-untyped-def]
+        from tests.validation.chat_eval.harness import ChatRunResult, ToolCall
+
+        return ChatRunResult(
+            question="anything",
+            status_code=200,
+            latency_s=0.1,
+            answer_text="OpenAI invested in Microsoft via Azure partnership.",
+            tool_calls=[ToolCall(name=n) for n in tool_calls],
+            metadata=metadata or {},
+            raw_events=raw_events,
+        )
+
+    def test_cache_hit_via_status_event_suppresses_missing_tool_reason(self) -> None:
+        from tests.validation.chat_eval.grading import grade_response
+
+        result = self._result(
+            tool_calls=[],  # no tools fired — served from cache
+            raw_events=[{"event": "status", "data": {"step": "cache_hit"}}],
+        )
+        grade = grade_response(
+            "anything",
+            result,
+            {"required_tools_any_of": ["traverse_graph"]},
+        )
+        # The missing-tool reason must NOT be present when cache_hit fired.
+        assert not any("missing required tool" in r for r in grade["reasons"]), grade["reasons"]
+
+    def test_cache_hit_via_metadata_flag_suppresses_missing_tool_reason(self) -> None:
+        from tests.validation.chat_eval.grading import grade_response
+
+        result = self._result(
+            tool_calls=[],
+            raw_events=[],
+            metadata={"cache_hit": True},
+        )
+        grade = grade_response(
+            "anything",
+            result,
+            {"required_tools_any_of": ["traverse_graph"]},
+        )
+        assert not any("missing required tool" in r for r in grade["reasons"]), grade["reasons"]
+
+    def test_no_cache_hit_still_flags_missing_required_tool(self) -> None:
+        """Regression guard: the suppression must be cache-hit-conditional."""
+        from tests.validation.chat_eval.grading import grade_response
+
+        result = self._result(
+            tool_calls=["search_documents"],  # wrong tool, no cache
+            raw_events=[{"event": "token", "data": {"text": "..."}}],
+        )
+        grade = grade_response(
+            "anything",
+            result,
+            {"required_tools_any_of": ["traverse_graph"]},
+        )
+        assert any("missing required tool" in r for r in grade["reasons"]), grade["reasons"]

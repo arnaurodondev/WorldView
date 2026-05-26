@@ -129,6 +129,41 @@ class TestCheckCache:
 
         assert result is None
 
+    # PLAN-0095 W3 T-W3-04: env-var bypass for chat-eval sessions.
+    @pytest.mark.asyncio
+    async def test_check_cache_disabled_via_env_var(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """``RAG_COMPLETION_CACHE_DISABLED=true`` returns None without touching the cache."""
+        cache = MagicMock()
+        # If the bypass works, .get must NEVER be awaited — set up to detect a leak.
+        cache.get = AsyncMock(return_value={"answer": "would-be-cached"})
+        pipeline = _make_pipeline(cache=cache)
+
+        monkeypatch.setenv("RAG_COMPLETION_CACHE_DISABLED", "true")
+        result = await pipeline.check_cache("anything", _FAKE_THREAD_ID)
+
+        assert result is None
+        cache.get.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_check_cache_env_var_case_and_whitespace_tolerant(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Bypass tolerates ``" TRUE "`` / ``"True"``; other values fall through."""
+        cache = MagicMock()
+        cache.get = AsyncMock(return_value=None)
+        pipeline = _make_pipeline(cache=cache)
+
+        # Truthy variants → bypass active.
+        for val in (" TRUE ", "True", "true"):
+            monkeypatch.setenv("RAG_COMPLETION_CACHE_DISABLED", val)
+            assert await pipeline.check_cache("q", None) is None
+        cache.get.assert_not_called()
+
+        # Non-truthy values must fall through to the cache.
+        for val in ("", "false", "0", "yes"):
+            monkeypatch.setenv("RAG_COMPLETION_CACHE_DISABLED", val)
+            cache.get.reset_mock()
+            await pipeline.check_cache("q", None)
+            cache.get.assert_called_once()
+
 
 # ── Step 2: check_rate_limit ──────────────────────────────────────────────────
 

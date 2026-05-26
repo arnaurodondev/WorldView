@@ -113,3 +113,15 @@ class TestInferIntent:
             _call("traverse_graph", entity_id="aaaa"),
         ]
         assert infer_intent(calls) is QueryIntent.COMPARISON
+
+    # PLAN-0095 W3 T-W3-02: three new RELATIONSHIP mappings — bundle /
+    # narrative tools previously fell through to GENERAL and lost the
+    # per-intent prompt addendum.
+    def test_get_entity_intelligence_implies_RELATIONSHIP(self) -> None:
+        assert infer_intent([_call("get_entity_intelligence", entity_id="x")]) is QueryIntent.RELATIONSHIP
+
+    def test_search_entity_relations_implies_RELATIONSHIP(self) -> None:
+        assert infer_intent([_call("search_entity_relations", entity_id="x")]) is QueryIntent.RELATIONSHIP
+
+    def test_get_entity_narrative_implies_RELATIONSHIP(self) -> None:
+        assert infer_intent([_call("get_entity_narrative", entity_id="x")]) is QueryIntent.RELATIONSHIP

@@ -12,6 +12,7 @@ Wave C can import it from one canonical location).
 from __future__ import annotations
 
 import dataclasses
+import os
 from collections import Counter as _Counter
 from typing import TYPE_CHECKING, Any
 
@@ -253,7 +254,16 @@ class ChatPipeline:
 
         Returns the cached response dict or None on a cache miss.
         The caller is responsible for emitting rag_cache_hits metric on a hit.
+
+        PLAN-0095 W3 T-W3-04: ``RAG_COMPLETION_CACHE_DISABLED=true`` short-
+        circuits the cache lookup and forces a cold-path execution. Intended
+        for the chat-eval session so the grader measures real LLM behaviour
+        instead of yesterday's cached answer. Read per-call (cheap os.environ
+        lookup, eval-only blast radius) so the bypass can be toggled at any
+        time without a service restart.
         """
+        if os.environ.get("RAG_COMPLETION_CACHE_DISABLED", "").strip().lower() == "true":
+            return None
         return await self.cache.get(message, thread_id)
 
     # ── Step 2: Rate limit enforcement ───────────────────────────────────────
