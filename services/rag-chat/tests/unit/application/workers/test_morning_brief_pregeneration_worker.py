@@ -262,3 +262,138 @@ async def test_run_does_not_raise_when_active_users_throws() -> None:
     await worker.run()
 
     assert rag_brief_pregeneration_runs_total.labels(status="failed")._value.get() == failed_before + 1
+
+
+# ── PLAN-0094 W2 follow-up (BP-303 variant) — JWT minter + empty-context guard ──
+
+
+async def test_run_passes_minted_jwt_to_use_case() -> None:
+    """When jwt_minter is wired, every execute_public_morning call gets the minted JWT.
+
+    Regression guard: without this, S1/S5/S6/S7 internal endpoints return 401
+    and the brief silently degrades to empty content (live-QA round 2 finding).
+    """
+    users = [UUID("00000000-0000-0000-0000-000000000001")]
+    captured: list[str | None] = []
+
+    uc = MagicMock()
+
+    async def _capture(user_id: str, tenant_id: str, internal_jwt: str | None) -> dict[str, object]:
+        captured.append(internal_jwt)
+        return _result(0)
+
+    uc.execute_public_morning = AsyncMock(side_effect=_capture)
+
+    jwt_minter = MagicMock()
+    jwt_minter.mint = AsyncMock(return_value="signed-jwt-payload")
+
+    active_users = MagicMock()
+    active_users.list_active = AsyncMock(return_value=users)
+
+    valkey = MagicMock()
+    valkey.set = AsyncMock()
+
+    worker = MorningBriefPregenerationWorker(
+        active_users=active_users,
+        briefing_uc=uc,
+        valkey_client=valkey,
+        settings=_make_settings(),
+        jwt_minter=jwt_minter,
+    )
+
+    await worker.run()
+
+    # The minter was consulted at least once (cached across users so we don't
+    # require N invocations).
+    assert jwt_minter.mint.await_count >= 1
+    # The minted JWT was actually propagated to the use case — this is the
+    # regression assertion that fails against the pre-fix worker code.
+    assert captured == ["signed-jwt-payload"]
+
+
+async def test_run_propagates_none_jwt_when_minter_fails() -> None:
+    """A failing mint (returns None) is propagated through — no exception bubbles.
+
+    Matches the IJwtMinter contract: minters must never raise. The brief still
+    attempts generation (degraded auth), which is the pre-fix safety net.
+    """
+    users = [UUID("00000000-0000-0000-0000-000000000001")]
+    captured: list[str | None] = []
+
+    uc = MagicMock()
+
+    async def _capture(user_id: str, tenant_id: str, internal_jwt: str | None) -> dict[str, object]:
+        captured.append(internal_jwt)
+        return _result(0)
+
+    uc.execute_public_morning = AsyncMock(side_effect=_capture)
+
+    jwt_minter = MagicMock()
+    jwt_minter.mint = AsyncMock(return_value=None)  # mint failed transiently
+
+    active_users = MagicMock()
+    active_users.list_active = AsyncMock(return_value=users)
+
+    valkey = MagicMock()
+    valkey.set = AsyncMock()
+
+    worker = MorningBriefPregenerationWorker(
+        active_users=active_users,
+        briefing_uc=uc,
+        valkey_client=valkey,
+        settings=_make_settings(),
+        jwt_minter=jwt_minter,
+    )
+
+    await worker.run()
+
+    assert captured == [None]
+
+
+async def test_run_skips_cache_write_when_brief_is_empty() -> None:
+    """Empty-context heuristic — no citations / sections / risk_summary → no cache write.
+
+    Defends against the live failure mode where transient upstream 401s leave
+    the brief empty.  The user's prior lastgood (if any) stays intact, and the
+    metric ``outcome="empty_context_skipped"`` fires so ops can spot the issue.
+    """
+    from rag_chat.application.metrics.prometheus import rag_brief_pregeneration_users_total
+
+    skipped_before = rag_brief_pregeneration_users_total.labels(outcome="empty_context_skipped")._value.get()
+
+    users = [UUID("00000000-0000-0000-0000-000000000001")]
+
+    # All three "context" fields empty — the live empty-brief signature.
+    empty_result = {
+        "content": "I don't have enough information to summarise your portfolio.",
+        "risk_summary": {},
+        "citations": [],
+        "sections": [],
+        "generated_at": "2026-05-26T08:00:00+00:00",
+        "confidence": 0.0,
+        "lead": None,
+    }
+
+    uc = MagicMock()
+    uc.execute_public_morning = AsyncMock(return_value=empty_result)
+
+    active_users = MagicMock()
+    active_users.list_active = AsyncMock(return_value=users)
+
+    valkey = MagicMock()
+    valkey.set = AsyncMock()
+
+    worker = MorningBriefPregenerationWorker(
+        active_users=active_users,
+        briefing_uc=uc,
+        valkey_client=valkey,
+        settings=_make_settings(),
+    )
+
+    await worker.run()
+
+    # Cache writes were SKIPPED — neither fresh nor lastgood key touched.
+    assert valkey.set.await_count == 0
+    # Metric reflects the skip.
+    skipped_after = rag_brief_pregeneration_users_total.labels(outcome="empty_context_skipped")._value.get()
+    assert skipped_after == skipped_before + 1

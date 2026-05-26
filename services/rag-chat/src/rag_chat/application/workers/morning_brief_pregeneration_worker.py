@@ -21,19 +21,14 @@ Concurrency:
     (``asyncio.Semaphore``).  This caps DeepInfra throughput so a 50-user batch doesn't
     saturate the LLM provider.
 
-Service-JWT:
-    :meth:`GenerateBriefingUseCase.execute_public_morning` accepts an ``internal_jwt``
-    kwarg.  Outside a request context the worker has no user-issued JWT, so it relies
-    on the use case being callable with ``internal_jwt=None`` — the use case still
-    invokes BriefingContextGatherer which propagates ``None`` to its upstream clients.
-    Those clients fall back to whatever auth context is wired in production (S1 client
-    uses its own internal token; S5/S6/S7 use the internal-JWT context-var that the
-    scheduler-main entry-point seeds at startup with a service token).
-
-    A dedicated :class:`IJwtMinter` port could fetch a fresh service token per run,
-    but for v1 the unauthenticated upstream-client paths are sufficient for the
-    morning-brief context gather (BriefingContextGatherer degrades safely on any
-    upstream failure — see ``generate_briefing.py``).
+Service-JWT (PLAN-0094 W2 follow-up, BP-303 variant):
+    Outside a request context the worker has no user-issued JWT, so it depends on
+    :class:`IJwtMinter` to fetch a short-lived service JWT before each user's
+    generation.  Without this, S1/S5/S6/S7 internal endpoints return 401 and the
+    brief silently degrades to empty content — the live-QA failure mode this fix
+    addresses.  The minter is optional: callers that pass ``jwt_minter=None`` get
+    the pre-fix unauthenticated behaviour (handy in unit tests where the use case
+    is fully mocked).
 """
 
 from __future__ import annotations
@@ -55,6 +50,7 @@ from rag_chat.application.metrics.prometheus import (
 
 if TYPE_CHECKING:
     from rag_chat.application.ports.active_users import IActiveUsersPort
+    from rag_chat.application.ports.jwt_minter import IJwtMinter
     from rag_chat.application.use_cases.generate_briefing import GenerateBriefingUseCase
     from rag_chat.config import Settings
 
@@ -81,11 +77,18 @@ class MorningBriefPregenerationWorker:
         briefing_uc: GenerateBriefingUseCase,
         valkey_client: Any,
         settings: Settings,
+        jwt_minter: IJwtMinter | None = None,
     ) -> None:
         self._active_users = active_users
         self._briefing_uc = briefing_uc
         self._valkey = valkey_client
         self._settings = settings
+        # PLAN-0094 W2 follow-up (BP-303 variant): when None, the worker calls
+        # the use case with ``internal_jwt=None`` (pre-fix behaviour — empty
+        # briefs in production, fine for unit tests).  When set, the minter
+        # returns a fresh service JWT per generation so S1/S5/S6/S7 accept the
+        # worker's identity and the brief actually populates.
+        self._jwt_minter: IJwtMinter | None = jwt_minter
 
     # ─────────────────────────────────────────────────────────────────────────
     # Public entry-point
@@ -185,6 +188,15 @@ class MorningBriefPregenerationWorker:
 
         _log.debug("brief_pregeneration_user_started", user_id=user_id_str)  # type: ignore[no-any-return]
 
+        # PLAN-0094 W2 follow-up: mint a service JWT so S1/S5/S6/S7 accept
+        # us.  ``None`` (minter absent or mint failed) is propagated through
+        # — matches the pre-fix behaviour so unit tests with no minter still
+        # work.  A failed mint logs in the minter itself; here we treat it
+        # as auth-degraded and continue.
+        internal_jwt: str | None = None
+        if self._jwt_minter is not None:
+            internal_jwt = await self._jwt_minter.mint()
+
         try:
             # WHY tenant_id=user_id_str: the morning-brief use case treats
             # tenant_id as an isolation key for the rate limit + portfolio
@@ -194,7 +206,7 @@ class MorningBriefPregenerationWorker:
             result = await self._briefing_uc.execute_public_morning(
                 user_id=user_id_str,
                 tenant_id=user_id_str,
-                internal_jwt=None,
+                internal_jwt=internal_jwt,
             )
         except Exception as exc:
             rag_brief_pregeneration_users_total.labels(outcome="generation_failed").inc()
@@ -207,6 +219,24 @@ class MorningBriefPregenerationWorker:
             )
             # Per-spec: do NOT overwrite the existing last-known-good key.
             # The next handler request will surface it as ``is_stale=True``.
+            return
+
+        # ── Empty-context guard (PLAN-0094 W2 follow-up) ──────────────────────
+        # Even with a working minter, transient upstream failures can leave
+        # the gathered context empty (S1 down, S6 timing out, etc.).  Writing
+        # an empty brief to lastgood would clobber the user's previous good
+        # brief and serve garbage on the next stale fallback.  Detect the
+        # empty case and skip the cache write entirely — the user's existing
+        # lastgood (if any) stays intact, and the next handler request will
+        # either serve the older lastgood or generate on-demand with the
+        # user's own JWT (which is typically less prone to 401s).
+        if _looks_empty(result):
+            rag_brief_pregeneration_users_total.labels(outcome="empty_context_skipped").inc()
+            _log.warning(  # type: ignore[no-any-return]
+                "brief_pregeneration_user_empty_context",
+                user_id=user_id_str,
+                latency_ms=int((time.monotonic() - user_started_at) * 1000),
+            )
             return
 
         # ── Build the cached payload ──────────────────────────────────────────
@@ -269,6 +299,29 @@ class MorningBriefPregenerationWorker:
         # leaving the user with no brief at all.
         await self._valkey.set(fresh_key, payload_json, ex=fresh_ttl)
         await self._valkey.set(lastgood_key, payload_json, ex=lastgood_ttl)
+
+
+def _looks_empty(result: dict[str, Any]) -> bool:
+    """Heuristic: was the brief generated with no usable upstream context?
+
+    When BriefingContextGatherer's upstream calls all 401 (the live failure
+    mode this guard exists for), the use case returns:
+      - empty ``citations``
+      - empty ``sections``
+      - empty ``risk_summary`` (no portfolio = no risk metrics)
+    The LLM may still emit some generic ``content`` ("no data available")
+    so we can't rely on ``content`` alone — the three-field combination is
+    what reliably distinguishes "no upstream context" from "a real but bare
+    brief" (e.g. a user with one alert + no holdings).
+
+    Loose enough to let a real-but-empty-portfolio brief through (just one
+    of the three fields populated suffices), strict enough to catch the
+    401-storm pattern that produced the live empty-brief regression.
+    """
+    citations = result.get("citations") or []
+    sections = result.get("sections") or []
+    risk_summary = result.get("risk_summary") or {}
+    return not citations and not sections and not risk_summary
 
 
 __all__ = ["MorningBriefPregenerationWorker"]

@@ -115,6 +115,14 @@ class Settings(BaseSettings):
     # production — only for E2E tests that run without a full S9 stack.
     internal_jwt_skip_verification: bool = False
 
+    # PLAN-0094 W2 follow-up (BP-303 variant): shared secret for the brief
+    # pre-generation worker to mint an X-Internal-JWT via S9's
+    # ``POST /internal/v1/service-token``. Without this, the worker calls S1/S6/S7
+    # with no JWT, gets 401, and produces empty briefs (silent fail).
+    # Empty default keeps the worker functional for tests / cold dev (the
+    # adapter falls back to ``POST /v1/auth/dev-login`` when this is blank).
+    service_account_token: SecretStr = SecretStr("")  # RAG_CHAT_SERVICE_ACCOUNT_TOKEN
+
     # ── Upstream services ─────────────────────────────────────────────────────
     s6_base_url: str = "http://nlp-pipeline:8006"
     s7_base_url: str = "http://knowledge-graph:8007"

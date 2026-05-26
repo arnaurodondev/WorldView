@@ -177,11 +177,31 @@ async def _run_loop(settings: Settings) -> None:
         context_gatherer=context_gatherer,
     )
 
+    # PLAN-0094 W2 follow-up (BP-303 variant): mint a short-lived service JWT
+    # before each generation so S1/S5/S6/S7 internal endpoints accept us.
+    # Without this the briefs come back empty (live-QA round 2 finding).
+    # Reuse a single httpx.AsyncClient — the minter caches tokens for ~4 min
+    # so this is at most one POST per 4-minute window regardless of batch size.
+    import httpx  # type: ignore[import-not-found]
+
+    from rag_chat.infrastructure.clients.s9_service_jwt_minter import S9ServiceJwtMinter
+
+    jwt_minter_http_client = httpx.AsyncClient(timeout=10.0)
+    jwt_minter = S9ServiceJwtMinter(
+        client=jwt_minter_http_client,
+        api_gateway_url=settings.api_gateway_url,
+        service_account_token=(
+            settings.service_account_token.get_secret_value() if settings.service_account_token else None
+        ),
+        service_name="rag-chat-brief-scheduler",
+    )
+
     worker = MorningBriefPregenerationWorker(
         active_users=active_users,
         briefing_uc=briefing_uc,
         valkey_client=valkey,
         settings=settings,
+        jwt_minter=jwt_minter,
     )
 
     # ── Schedule the recurring job ────────────────────────────────────────────
@@ -225,6 +245,9 @@ async def _run_loop(settings: Settings) -> None:
         for client in (s1, s3, s5, s6, s7):
             with contextlib.suppress(Exception):
                 await client.aclose()
+        # PLAN-0094 W2 follow-up: the JWT minter owns its own httpx client.
+        with contextlib.suppress(Exception):
+            await jwt_minter_http_client.aclose()
         with contextlib.suppress(Exception):
             await valkey.close()
         log.info("brief_scheduler_stopped")  # type: ignore[no-any-return]
