@@ -1578,6 +1578,12 @@ export interface BriefingResponse {
   // ``lead`` is absent.
   confidence?: number;
   lead?: string | null;
+  // PLAN-0094 W2: is_stale=true when the handler served the last-known-good
+  // brief (lastgood fallback) instead of a fresh one. The frontend surfaces a
+  // subdued "Previous day's brief — {date}" badge in MorningBriefCard.
+  // WHY optional: pre-W2 cached responses + on-demand cold paths omit the field;
+  // the frontend treats missing as `false` (no badge). See PLAN-0094 W3 T-W3-01.
+  is_stale?: boolean;
 }
 
 /**

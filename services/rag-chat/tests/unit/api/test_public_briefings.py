@@ -149,18 +149,25 @@ async def test_morning_briefing_calls_use_case(settings: RagChatSettings) -> Non
 
 
 async def test_morning_briefing_writes_cache(settings: RagChatSettings) -> None:
-    """After generating, the result is written to Valkey with 24h TTL."""
+    """After generating, the result is written to Valkey under BOTH fresh + lastgood keys.
+
+    PLAN-0094 W2 added the second ``briefing:morning:lastgood:{user_id}`` write so a
+    future regeneration failure has a known-good payload to fall back on.
+    """
     app = _make_app(settings)
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as client:
         await client.get("/api/v1/briefings/morning", headers=_JWT_HEADERS)
-    # Valkey.set should have been called with the cache key and 24h TTL
-    app.state.valkey.set.assert_awaited_once()
-    call_args = app.state.valkey.set.call_args
-    assert call_args.kwargs.get("ex") == 86400
-    # PLAN-0062-W4: verify v2 cache key is used (not legacy v1 key)
-    cache_key_arg = call_args.args[0] if call_args.args else call_args.kwargs.get("key", "")
-    assert "v2" in cache_key_arg or "morning" in str(call_args)
+    # Valkey.set should have been called twice — once for fresh, once for lastgood.
+    assert app.state.valkey.set.await_count == 2
+    keys_written = [c.args[0] for c in app.state.valkey.set.await_args_list]
+    # Both keys are present.  We check the prefixes rather than the exact key so the
+    # test does not couple to the test user_id.
+    assert any(k.startswith("briefing:morning:v2:") for k in keys_written)
+    assert any(k.startswith("briefing:morning:lastgood:") for k in keys_written)
+    # Fresh key uses _CACHE_TTL=86400; lastgood uses _LASTGOOD_TTL=604800.
+    fresh_call = next(c for c in app.state.valkey.set.await_args_list if "v2" in c.args[0])
+    assert fresh_call.kwargs.get("ex") == 86400
 
 
 # ── Morning briefing — cached ─────────────────────────────────────────────────
@@ -395,16 +402,18 @@ async def test_morning_briefing_propagates_lead(settings: RagChatSettings) -> No
 
 
 async def test_morning_briefing_v2_cache_key(settings: RagChatSettings) -> None:
-    """Cache key must use v2 format (not legacy v1) — PLAN-0062-W4 cache bump."""
+    """Fresh cache key must use v2 format (not legacy v1) — PLAN-0062-W4 cache bump.
+
+    PLAN-0094 W2: the route now writes TWO keys (fresh + lastgood); we assert
+    the fresh key — looked up by the next request — is the v2 variant.
+    """
     app = _make_app(settings)
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as client:
         await client.get("/api/v1/briefings/morning", headers=_JWT_HEADERS)
-    # Inspect the key passed to valkey.set
-    set_call = app.state.valkey.set.call_args
-    # set is called as set(key, json_data, ex=TTL) — first positional arg is the key
-    actual_key = set_call.args[0] if set_call.args else ""
-    assert actual_key.startswith("briefing:morning:v2:")
+    # Inspect every key the route wrote — at least one must start with "briefing:morning:v2:".
+    keys = [c.args[0] for c in app.state.valkey.set.await_args_list if c.args]
+    assert any(k.startswith("briefing:morning:v2:") for k in keys)
 
 
 async def test_instrument_briefing_v2_cache_key(settings: RagChatSettings) -> None:
@@ -631,3 +640,168 @@ async def test_cache_read_round_trip_with_w4_sections(settings: RagChatSettings)
     assert bullet["citations"][0]["source_type"] == "article"
     # UC must NOT have been called (cache hit)
     app.state.briefing_uc.execute_public_morning.assert_not_awaited()
+
+
+# ── PLAN-0094 W2: handler fallback path (fresh → lastgood → on-demand) ───────
+
+
+def _make_app_with_keyed_valkey(
+    settings: RagChatSettings,
+    *,
+    fresh_value: str | bytes | None = None,
+    lastgood_value: str | bytes | None = None,
+    uc_result: dict | Exception | None = None,  # type: ignore[type-arg]
+) -> object:
+    """Build a test app whose Valkey.get distinguishes fresh vs lastgood keys.
+
+    WHY this helper exists: the default ``_make_app`` returns the same value for
+    every ``valkey.get`` call, so it cannot model the W2 lookup chain where the
+    fresh key misses but the lastgood key hits.  This helper installs a
+    side_effect that branches on the key prefix.
+    """
+    app = create_app(settings)
+
+    mock_uc = MagicMock()
+    if isinstance(uc_result, Exception):
+        mock_uc.execute_public_morning = AsyncMock(side_effect=uc_result)
+    else:
+        mock_uc.execute_public_morning = AsyncMock(return_value=uc_result or _MORNING_RESULT)
+    mock_uc.execute = AsyncMock(return_value=_BRIEFING_RESULT)
+    mock_uc.execute_public_instrument = AsyncMock(return_value=_BRIEFING_RESULT)
+    app.state.briefing_uc = mock_uc
+    app.state.chat_orchestrator = MagicMock()
+
+    mock_valkey = MagicMock()
+
+    async def _get_side_effect(key: str) -> str | bytes | None:
+        # WHY two prefixes (not exact key): we don't want the test to couple to
+        # the test user_id format — the handler uses ``f"briefing:morning:v2:{user_id}"``
+        # and ``f"briefing:morning:lastgood:{user_id}"``.
+        if key.startswith("briefing:morning:v2:"):
+            return fresh_value
+        if key.startswith("briefing:morning:lastgood:"):
+            return lastgood_value
+        return None
+
+    mock_valkey.get = AsyncMock(side_effect=_get_side_effect)
+    mock_valkey.set = AsyncMock()
+    app.state.valkey = mock_valkey
+    return app
+
+
+def _make_brief_json(*, narrative: str, generated_at: str = "2026-05-25T08:00:00+00:00") -> str:
+    """Helper to serialise a minimal PublicBriefingResponse for Valkey seeds."""
+    from rag_chat.api.schemas import PublicBriefingResponse
+
+    return PublicBriefingResponse(
+        narrative=narrative,
+        risk_summary={},
+        citations=[],
+        generated_at=generated_at,
+        cached=False,
+        entity_id=None,
+    ).model_dump_json()
+
+
+async def test_handler_returns_fresh_when_fresh_cache_hit(settings: RagChatSettings) -> None:
+    """Fresh key hit → is_stale=False, UC NOT called, no background regen."""
+    fresh = _make_brief_json(narrative="Fresh brief.")
+    app = _make_app_with_keyed_valkey(settings, fresh_value=fresh, lastgood_value=None)
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        resp = await client.get("/api/v1/briefings/morning", headers=_JWT_HEADERS)
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["narrative"] == "Fresh brief."
+    assert body["is_stale"] is False
+    assert body["cached"] is True
+    # UC must NOT have been called — fresh hit short-circuits.
+    app.state.briefing_uc.execute_public_morning.assert_not_awaited()  # type: ignore[attr-defined]
+
+
+async def test_handler_returns_lastgood_with_stale_flag(settings: RagChatSettings) -> None:
+    """No fresh + lastgood present → is_stale=True, served_stale counter +1."""
+    from rag_chat.application.metrics.prometheus import rag_brief_served_stale_total
+
+    before = rag_brief_served_stale_total._value.get()
+
+    stale = _make_brief_json(narrative="Yesterday's brief.", generated_at="2026-05-24T08:00:00+00:00")
+    app = _make_app_with_keyed_valkey(settings, fresh_value=None, lastgood_value=stale)
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        resp = await client.get("/api/v1/briefings/morning", headers=_JWT_HEADERS)
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["narrative"] == "Yesterday's brief."
+    assert body["is_stale"] is True
+    assert body["generated_at"] == "2026-05-24T08:00:00+00:00"
+    # Stale-serve counter incremented.
+    assert rag_brief_served_stale_total._value.get() == before + 1
+
+
+async def test_handler_falls_back_to_on_demand_when_no_cache(settings: RagChatSettings) -> None:
+    """No fresh + no lastgood (cold user) → on-demand generation, is_stale=False."""
+    app = _make_app_with_keyed_valkey(settings, fresh_value=None, lastgood_value=None)
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        resp = await client.get("/api/v1/briefings/morning", headers=_JWT_HEADERS)
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["is_stale"] is False
+    # Used the on-demand path: UC was called once.
+    app.state.briefing_uc.execute_public_morning.assert_awaited_once()  # type: ignore[attr-defined]
+
+
+async def test_handler_does_not_blockingly_regenerate_when_stale_served(
+    settings: RagChatSettings,
+) -> None:
+    """Stale serve → response returns BEFORE the background regen completes.
+
+    We measure this by asserting the response comes back even though the UC
+    mock's ``execute_public_morning`` does NOT immediately resolve — the
+    handler must not block on the background task.
+    """
+    import asyncio as _asyncio
+
+    stale = _make_brief_json(narrative="Stale.")
+    app = _make_app_with_keyed_valkey(settings, fresh_value=None, lastgood_value=stale)
+
+    # Make the UC's background regen "hang" for a long time.  If the handler
+    # blocked on it, the request would timeout.
+    async def _slow(**_kw: object) -> dict[str, object]:
+        # Sleep longer than the test timeout — we want the handler to NOT
+        # wait on this.  `asyncio.sleep` cancels cleanly when the background
+        # task is GC'd at test exit, avoiding the "coroutine never awaited"
+        # warning that `asyncio.Event.wait` would emit.
+        await _asyncio.sleep(60)
+        return {"content": "(never)", "generated_at": "2026-05-25T00:00:00+00:00"}
+
+    app.state.briefing_uc.execute_public_morning = AsyncMock(side_effect=_slow)  # type: ignore[attr-defined]
+
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test", timeout=2.0) as client:
+        resp = await client.get("/api/v1/briefings/morning", headers=_JWT_HEADERS)
+
+    # Despite the UC hanging, the response came back quickly with the stale brief.
+    assert resp.status_code == 200
+    assert resp.json()["is_stale"] is True
+
+
+async def test_handler_503_when_on_demand_fails_for_cold_user(settings: RagChatSettings) -> None:
+    """Cold user (no fresh, no lastgood) + UC raises → 503 (existing behaviour preserved)."""
+    from rag_chat.domain.errors import ProviderUnavailableError
+
+    app = _make_app_with_keyed_valkey(
+        settings,
+        fresh_value=None,
+        lastgood_value=None,
+        uc_result=ProviderUnavailableError("All providers down"),
+    )
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        resp = await client.get("/api/v1/briefings/morning", headers=_JWT_HEADERS)
+
+    assert resp.status_code == 503

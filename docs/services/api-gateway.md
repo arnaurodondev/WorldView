@@ -413,10 +413,34 @@ The `_auth_headers()` helper in `routes/proxy.py` no longer forwards `X-Tenant-I
 
 ## Rate Limiting
 
-- **Authenticated**: 300 req/min per `user_id` (key: `rl:v1:user:{user_id}`) — raised from 100 to accommodate multi-panel workspace usage where a single page load may fire 4+ parallel OHLCV calls
-- **Unauthenticated**: 20 req/min per IP hash (key: `rl:v1:ip:{sha256(ip)[:16]}`)
+PLAN-0094 W1 moved all four rate-limit buckets behind env vars (previously
+three of the four were hard-coded literals). Operators can now tune every
+bucket from `worldview-gitops/env/{dev,prod}/api-gateway.env` without a
+code change. The user-bucket default was bumped from 1000 → **2000** to
+match expected production load for multi-panel workspace usage.
+
+| Bucket | Default | Env var | Key prefix | Notes |
+|--------|---------|---------|------------|-------|
+| **Authenticated (user)** | `2000` req/min | `API_GATEWAY_RATE_LIMIT_REQUESTS` | `rl:v1:user:{user_id}` | Default raised from 1000 → 2000 (PLAN-0094) — a single dashboard page-load fires 4+ parallel OHLCV calls + 6+ panel queries. |
+| **Financial mutation** | `20` req/min | `API_GATEWAY_RATE_LIMIT_FINANCIAL_MUTATION_REQUESTS` | shares user bucket but uses tighter limit | Tighter sub-tier for `POST/PUT/DELETE` on `/v1/transactions`, `/v1/brokerage`, `/v1/portfolios`. Prevents runaway trade-write loops. |
+| **Unauthenticated (IP)** | `20` req/min | `API_GATEWAY_RATE_LIMIT_UNAUTHENTICATED_REQUESTS` | `rl:v1:ip:{sha256(ip)[:16]}` | Strict per-IP cap for any unauthenticated traffic. |
+| **Public feedback (IP)** | `120` req/min | `API_GATEWAY_RATE_LIMIT_PUBLIC_FEEDBACK_REQUESTS` | `rl:v1:fbk:{sha256(ip)[:16]}` | Generous per-IP cap for `/v1/feedback/*` — public form that may be hit repeatedly from the same IP behind shared NAT (PLAN-0052 fix). |
+
 - **Fail-closed (D-001)**: If Valkey is unavailable, reject requests with 503 (previously fail-open; changed to fail-closed per security audit decision D-001 on 2026-04-18)
 - 429 responses include `Retry-After` header
+- The window is shared across all four buckets via `API_GATEWAY_RATE_LIMIT_WINDOW_SECONDS` (default `60`).
+
+### Outbound: `active_users` Valkey sorted-set (PLAN-0094 W1)
+
+On every successful internal-JWT validation, `OIDCAuthMiddleware`
+populates a global Valkey sorted-set so the rag-chat morning-brief
+pre-generation worker (S8) can identify users worth pre-generating for.
+
+- **Key**: `active_users` (global — no tenant prefix).
+- **Operation**: `ZADD active_users <unix_ts> <user_id>` (sliding window — repeat auth updates the score).
+- **Failure mode**: ZADD errors are caught and logged at WARN; the auth path returns normally. A Valkey hiccup must NEVER 503 a successful user.
+- **Probabilistic prune**: with probability ~1/1000 per request, S9 runs `ZREMRANGEBYSCORE active_users 0 (now − 30*86400)` to drop entries older than 30 days. 30 days is well above the maximum eligibility window the worker uses (cap 90 days; default 7).
+- **Reader**: S8 — see `docs/services/rag-chat.md` § "Morning Brief — Daily Pre-Generation (PLAN-0094)".
 
 ---
 
@@ -473,8 +497,11 @@ All env vars are prefixed with `API_GATEWAY_`:
 | `RAG_CHAT_URL` | `http://localhost:8008` | No | S8 URL |
 | `ALERT_URL` | `http://localhost:8010` | No | S10 HTTP URL |
 | `ALERT_WS_URL` | `ws://localhost:8010` | No | S10 WebSocket base URL (separate from HTTP URL for WS routing) |
-| `RATE_LIMIT_REQUESTS` | `300` | No | Authenticated rate limit per minute (raised from 100 for multi-panel workspace) |
-| `RATE_LIMIT_WINDOW_SECONDS` | `60` | No | Rate limit window |
+| `RATE_LIMIT_REQUESTS` | `2000` | No | Per-user authenticated bucket (req/min). Default raised from 1000 → 2000 by PLAN-0094 W1 for multi-panel workspace load. |
+| `RATE_LIMIT_FINANCIAL_MUTATION_REQUESTS` | `20` | No | Tighter sub-tier for POST/PUT/DELETE on `/v1/transactions`, `/v1/brokerage`, `/v1/portfolios` (PLAN-0094 W1). |
+| `RATE_LIMIT_UNAUTHENTICATED_REQUESTS` | `20` | No | Per-IP unauthenticated bucket (req/min) (PLAN-0094 W1; was hard-coded `20`). |
+| `RATE_LIMIT_PUBLIC_FEEDBACK_REQUESTS` | `120` | No | Per-IP cap for `/v1/feedback/*` (req/min) (PLAN-0094 W1; was hard-coded `120`). |
+| `RATE_LIMIT_WINDOW_SECONDS` | `60` | No | Shared rate-limit window across all four buckets. |
 | `CORS_ORIGINS` | `http://localhost:5173,http://localhost:3001` | No | Comma-separated allowed origins (SEC-008: port 3001 is worldview-web, not 3000) |
 | `APP_ENV` | `development` | No | Environment guard: `development`, `staging`, or `production`. When `production`, `POST /v1/auth/dev-login` returns 403 regardless of OIDC config. |
 | `DEV_ADMIN_EMAILS` | `""` | No | Comma-separated emails that receive `role=admin` in dev-login JWTs (dev/staging only; ignored when `APP_ENV=production`) |

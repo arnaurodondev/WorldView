@@ -77,31 +77,8 @@ export function PortfolioNewsWidget() {
   // include/exclude check O(1).
   const [activeTiers, setActiveTiers] = useState<Set<Tier>>(new Set());
 
-  // ── 1. Top news ─────────────────────────────────────────────────────────
-  // WHY tickers: server-side filtering returns only portfolio-relevant articles (BP-545 fix 2).
-  // Client-side ticker filter refines within the returned set. When portfolio has no holdings,
-  // tickers=undefined falls back to the global ranked feed.
-  // WHY portfolioTickers in queryKey: cache is per-portfolio so different portfolios
-  // don't share a stale news cache. On first render portfolioTickers=undefined (holdings
-  // not yet loaded) → first fetch uses global feed → once holdings load the key changes
-  // and a new fetch fires with the correct tickers. This is correct expected behavior.
-  const { data, isLoading, isError, refetch } = useQuery({
-    queryKey: ["dashboard-portfolio-news", portfolioTickers],
-    // PLAN-0050 T-F-6-02 / PLAN-0053 T-D-4-01: limit=20 keeps the filter
-    // candidate pool deep enough that a tier or ticker filter doesn't
-    // empty the widget on most days.
-    queryFn: () => createGateway(accessToken).getTopNews({ limit: 20, tickers: portfolioTickers }),
-    enabled: !!accessToken,
-    // WHY 5min: S9 now caches /v1/news/top for 120s in Valkey, so cold
-    // requests are already fast. 5min frontend staleTime avoids polling
-    // the cache more than once per session, reducing server load.
-    staleTime: 5 * 60_000,
-    refetchInterval: 5 * 60_000,
-  });
-
-  // ── 2. Holdings — populates the ticker filter dropdown ─────────────────
-  // We only need ticker strings, so we don't refetch this often. WHY pull
-  // from holdings vs watchlists: this widget is "Portfolio News" — the
+  // ── 1. Holdings — must come first so portfolioTickers is ready before the news query ──
+  // WHY pull from holdings vs watchlists: this widget is "Portfolio News" — the
   // filter universe should match the portfolio universe.
   // QA A-F-001 (2026-05-21): central qk.portfolios.list() shares cache
   // with PortfolioSwitcher / usePortfolioMetrics. Pre-fix this used its
@@ -142,6 +119,28 @@ export function PortfolioNewsWidget() {
     () => (tickerOptions.length > 0 ? tickerOptions.join(",") : undefined),
     [tickerOptions],
   );
+
+  // ── 2. Top news — declared AFTER portfolioTickers to avoid TDZ ReferenceError ──
+  // WHY tickers: server-side filtering returns only portfolio-relevant articles (BP-545 fix 2).
+  // Client-side ticker filter refines within the returned set. When portfolio has no holdings,
+  // tickers=undefined falls back to the global ranked feed.
+  // WHY portfolioTickers in queryKey: cache is per-portfolio so different portfolios
+  // don't share a stale news cache. On first render portfolioTickers=undefined (holdings
+  // not yet loaded) → first fetch uses global feed → once holdings load the key changes
+  // and a new fetch fires with the correct tickers. This is correct expected behavior.
+  const { data, isLoading, isError, refetch } = useQuery({
+    queryKey: ["dashboard-portfolio-news", portfolioTickers],
+    // PLAN-0050 T-F-6-02 / PLAN-0053 T-D-4-01: limit=20 keeps the filter
+    // candidate pool deep enough that a tier or ticker filter doesn't
+    // empty the widget on most days.
+    queryFn: () => createGateway(accessToken).getTopNews({ limit: 20, tickers: portfolioTickers }),
+    enabled: !!accessToken,
+    // WHY 5min: S9 now caches /v1/news/top for 120s in Valkey, so cold
+    // requests are already fast. 5min frontend staleTime avoids polling
+    // the cache more than once per session, reducing server load.
+    staleTime: 5 * 60_000,
+    refetchInterval: 5 * 60_000,
+  });
 
   // ── 3. Filter + sort articles ──────────────────────────────────────────
   const articles = useMemo(() => {

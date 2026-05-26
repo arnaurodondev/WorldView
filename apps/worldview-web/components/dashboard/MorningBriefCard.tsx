@@ -61,6 +61,10 @@ import { StructuredBrief } from "@/components/brief/StructuredBrief";
 import { BriefDiffBadge } from "@/features/dashboard/components/BriefDiffBadge";
 import { BriefRating } from "@/features/dashboard/components/BriefRating";
 import { useBriefChatSeed } from "@/features/dashboard/hooks/useBriefChatSeed";
+// PLAN-0094 W3 T-W3-01: format the stale-brief generated_at timestamp using the
+// repo-wide timestamp helper so the badge date style matches the rest of the
+// dashboard (DESIGN_SYSTEM §6.4 "short" format → "May 19, 2026").
+import { useFormattedTimestamp } from "@/lib/hooks/useFormattedTimestamp";
 
 // QA-iter1: hoist remark plugins to module scope. Inline `[remarkGfm]`
 // passed as a prop creates a NEW array reference on every render, which
@@ -143,6 +147,11 @@ export function MorningBriefCard() {
   // a component function — useQueryClient grabs the client from React context.
   const queryClient = useQueryClient();
 
+  // PLAN-0094 W3 T-W3-01: pre-format the stale-brief generated_at label here so
+  // the hook ordering stays stable across renders (React rule-of-hooks — never
+  // call a hook conditionally). When `brief` is undefined the helper returns
+  // "—" which is harmless because the badge only renders when is_stale=true.
+
   // WHY useQuery: TanStack Query handles caching, refetching, error retries,
   // and deduplication automatically. The queryKey ensures the cache is keyed
   // per endpoint (not per component instance).
@@ -166,6 +175,24 @@ export function MorningBriefCard() {
     retry: 2,
     retryDelay: 10_000,
   });
+
+  // PLAN-0094 W3 T-W3-01: format the stale-brief generated_at timestamp using
+  // the repo "short" format ("May 19, 2026"). Hook MUST run on every render so
+  // we read `brief?.generated_at` (the hook tolerates undefined and returns
+  // "—"); the formatted value is only consumed by the badge below when
+  // `is_stale === true`.
+  const staleGeneratedAtLabel = useFormattedTimestamp(
+    // We deliberately reach into the (possibly undefined) brief here — the hook
+    // is null-safe and we want a stable hook ordering above the early returns.
+    // brief is defined after the loading/error/empty guards; before them the
+    // hook still fires (returns "—") which is fine because the badge isn't
+    // mounted until brief is non-null.
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (typeof brief !== "undefined" && brief !== null ? brief.generated_at : null) as
+      | string
+      | null,
+    "short",
+  );
 
   // FR-1.4: Schedule a one-shot cache invalidation at the next 00:00 UTC so
   // the brief refreshes automatically when a new one is generated at midnight.
@@ -465,6 +492,24 @@ export function MorningBriefCard() {
           )}
         </div>
       </div>
+
+      {/* ── PLAN-0094 W3 T-W3-01: stale-brief badge ─────────────────────────
+          When the backend served the last-known-good brief (`is_stale=true`)
+          instead of regenerating, we surface a small subdued line so the user
+          knows they're looking at the previous day's content. The same badge
+          carries the generated_at date so they can judge how out of date it is.
+          We render the badge inline directly below the chrome header, OUTSIDE
+          the scrollable text area, so it never scrolls away with the brief
+          content. Pre-W2 responses and fresh-cache hits omit is_stale (treated
+          as false), which means no badge — zero impact on existing visuals. */}
+      {brief.is_stale && (
+        <div
+          data-testid="brief-stale-badge"
+          className="flex h-4 shrink-0 items-center border-b border-border/40 px-1 text-[9px] text-muted-foreground"
+        >
+          Previous day's brief — {staleGeneratedAtLabel}
+        </div>
+      )}
 
       {/* ── Text area: flex-1 so it fills remaining Row 1 height ────────────── */}
       <div className="flex-1 overflow-auto px-1 py-0.5">

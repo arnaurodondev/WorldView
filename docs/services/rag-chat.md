@@ -741,6 +741,91 @@ on retry. Returns 409 on replay. Single-instance only — move to Valkey for mul
 
 ---
 
+## Morning Brief — Daily Pre-Generation (PLAN-0094)
+
+PLAN-0094 W2 adds an APScheduler-driven worker (`rag-chat-brief-scheduler`
+sidecar container) that pre-generates morning briefs for active users every
+`N` hours. The handler now follows a **3-level lookup chain** so the user
+never sees a 503 while regeneration is in flight or after a transient failure.
+
+### 3-level lookup chain (`GET /api/v1/briefings/morning`)
+
+1. **Fresh cache** — `briefing:morning:v2:{user_id}` (TTL `brief_fresh_ttl_hours`,
+   default **30 h**). Hit → return with `is_stale=false`.
+2. **Last-known-good** — `briefing:morning:lastgood:{user_id}` (TTL
+   `brief_last_good_ttl_days`, default **7 d**). Hit → return with
+   `is_stale=true`, `generated_at` from the cached payload. The handler also
+   fires a background `asyncio.create_task` regeneration so the next request
+   hits fresh — but does NOT wait for it. Increments
+   `rag_brief_served_stale_total` + emits `brief_served_stale`.
+3. **On-demand** — cold user (never had a brief): block while generating; on
+   success write BOTH keys; on failure return 503 (preserves prior behaviour).
+
+### Environment variables (prefix `RAG_CHAT_`)
+
+| Variable | Default | Range | Description |
+|----------|---------|-------|-------------|
+| `BRIEF_PREGEN_ENABLED` | `true` | bool | Master switch for the scheduler. Disable to fall back to on-demand only (handler still serves lastgood). |
+| `BRIEF_PREGEN_INTERVAL_HOURS` | `24` | 1–168 | Cadence between scheduler runs. **Recommended prod: 24.** Lower values waste LLM cost; higher risks stale-only serves between runs. |
+| `BRIEF_PREGEN_ACTIVE_WINDOW_DAYS` | `7` | 1–90 | A user is "active" if they appear in the Valkey `active_users` sorted-set with score ≥ `now − window_days*86400`. **Recommended prod: 7.** |
+| `BRIEF_PREGEN_BATCH_SIZE` | `50` | 1–500 | Users processed per concurrency batch. **Recommended prod: 50.** Tune up if LLM throughput is high; down if S6/S7 backpressure shows up. |
+| `BRIEF_PREGEN_CONCURRENCY` | `4` | 1–20 | Max in-flight per-user generations within a batch (asyncio.Semaphore). **Recommended prod: 4.** Each user fans out 10+ tool calls; concurrency=4 means ~40 concurrent upstream calls. |
+| `BRIEF_FRESH_TTL_HOURS` | `30` | 1–168 | TTL on the fresh cache key. Must be > interval so a missed run still serves fresh. **Recommended prod: 30** (= 24 h interval + 6 h safety margin). |
+| `BRIEF_LAST_GOOD_TTL_DAYS` | `7` | 1–30 | Hard ceiling on staleness — older lastgood entries expire and fall through to on-demand. **Recommended prod: 7.** |
+
+Out-of-range values raise `ValidationError` at startup so misconfiguration
+surfaces immediately rather than at the first scheduler tick.
+
+### Prometheus metrics (6 new)
+
+| Metric | Type | Labels | Intent |
+|--------|------|--------|--------|
+| `rag_brief_pregeneration_runs_total` | Counter | `status` (`started` / `completed` / `failed`) | Scheduler run lifecycle. `started ≠ completed` over a window indicates crashes. |
+| `rag_brief_pregeneration_users_total` | Counter | `outcome` (`success` / `generation_failed` / `skipped_stale_kept`) | Per-user pre-generation outcomes per run. `generation_failed` rate maps to lastgood ceiling pressure. |
+| `rag_brief_pregeneration_run_duration_seconds` | Histogram | – | End-to-end run latency. Buckets up to 1800 s (= 30 min) — a healthy run should stay well under interval/4. |
+| `rag_brief_pregeneration_user_duration_seconds` | Histogram | – | Per-user latency. Buckets up to 60 s — p99 should track typical brief-generation latency (~15–30 s). |
+| `rag_brief_pregeneration_eligible_users` | Gauge | – | Active user count from the last run. Should approximately equal `ZCARD active_users` filtered by window. |
+| `rag_brief_served_stale_total` | Counter | – | Times the handler served lastgood instead of fresh. Sustained non-zero rate = scheduler underperforming or interval too long. |
+
+### structlog event taxonomy
+
+The worker + handler emit a stable set of event names for log-based alerting:
+
+| Event | Layer | Fired when |
+|-------|-------|-----------|
+| `brief_pregeneration_run_started` | worker | One scheduler tick begins |
+| `brief_pregeneration_run_completed` | worker | Run finished (regardless of per-user failures); structured fields: `eligible_users`, `succeeded`, `failed`, `duration_ms` |
+| `brief_pregeneration_run_failed` | worker | Run aborted by an unrecoverable error (e.g., Valkey hard-down). Never raised from `run()` — scheduler keeps firing. |
+| `brief_pregeneration_user_started` | worker | Per-user attempt begins |
+| `brief_pregeneration_user_succeeded` | worker | Per-user attempt landed both fresh + lastgood writes |
+| `brief_pregeneration_user_failed` | worker | Per-user attempt raised; lastgood is **NOT** overwritten — preserves previous-day brief |
+| `brief_served_stale` | handler | 3-level chain fell through to lastgood; carries `user_id`, `generated_at` |
+| `brief_served_fresh` | handler | Fresh-cache hit (OPTIONAL — DEBUG level to avoid log noise) |
+
+### `active_users` Valkey sorted-set contract
+
+- **Key**: `active_users` (global, no tenant prefix — single-tenant deployment).
+- **Member**: `str(user_id)` (UUID).
+- **Score**: Unix epoch seconds at write time.
+- **Writer**: S9 `OIDCAuthMiddleware` calls `await valkey.zadd("active_users", {user_id: int(time.time())})` after every successful internal-JWT validation. Fire-and-forget; Valkey errors logged at WARN but do NOT block the auth response.
+- **Reader**: S8 `ActiveUsersReader.list_active()` runs `ZRANGEBYSCORE("active_users", now − window_days*86400, "+inf")` and parses each member as a UUID. Malformed members are skipped with a warning (don't abort the batch on one bad row).
+- **Prune**: S9 fires a probabilistic prune (`if random.random() < 0.001`) running `ZREMRANGEBYSCORE("active_users", 0, now − 30*86400)` so entries older than 30 days clear out roughly once per 1 000 requests. 30 days is well above the maximum eligibility window (cap 90).
+
+### Failure semantics — why lastgood matters
+
+The lastgood TTL is the **staleness ceiling**. Within the window, any
+per-user regeneration failure leaves the previous day's brief in place and
+the frontend surfaces a "Previous day's brief — {date}" badge
+(MorningBriefCard). The user never sees a 503 between failed-regeneration
+and TTL expiry — UX continuity is preserved.
+
+The worker **never overwrites** `briefing:morning:lastgood:{user_id}` on
+failure — the only write path for lastgood is a successful regeneration.
+This is the load-bearing invariant: if the worker overwrote on failure, a
+transient LLM error could silently wipe the prior good copy.
+
+---
+
 ## Internal Retrieval Endpoint (PLAN-0063)
 
 ```

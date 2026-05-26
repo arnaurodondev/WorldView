@@ -1,0 +1,220 @@
+"""Morning-brief pre-generation scheduler entry-point (PLAN-0094 W2, T-W2-06).
+
+Runs a standalone async process that fires the
+:class:`MorningBriefPregenerationWorker` every ``brief_pregen_interval_hours``
+hours via APScheduler.  Mirrors the structure of
+``services/alert/src/alert/infrastructure/email/scheduler_main.py`` so operators
+have one mental model for "scheduled background process in worldview".
+
+Usage::
+
+    python -m rag_chat.infrastructure.scheduling.brief_scheduler_main
+
+Container: ``rag-chat-brief-scheduler`` in ``infra/compose/docker-compose.yml``.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import contextlib
+from datetime import datetime, timedelta
+from typing import Any
+
+from observability import configure_logging, get_logger  # type: ignore[import-untyped]
+from rag_chat.application.use_cases.briefing_context import BriefingContextGatherer
+from rag_chat.application.use_cases.generate_briefing import GenerateBriefingUseCase
+from rag_chat.application.workers.morning_brief_pregeneration_worker import (
+    MorningBriefPregenerationWorker,
+)
+from rag_chat.config import Settings
+from rag_chat.infrastructure.clients.active_users_reader import ActiveUsersReader
+from rag_chat.infrastructure.clients.s1_client import S1Client
+from rag_chat.infrastructure.clients.s3_client import S3Client
+from rag_chat.infrastructure.clients.s5_client import S5Client
+from rag_chat.infrastructure.clients.s6_client import S6Client
+from rag_chat.infrastructure.clients.s7_client import S7Client
+from rag_chat.infrastructure.llm.ollama_adapter import OllamaCompletionAdapter
+from rag_chat.infrastructure.llm.provider_chain import LLMProviderChain
+
+
+def _build_llm_chain(settings: Settings, valkey: Any) -> LLMProviderChain:
+    """Build a minimal LLM provider chain for the scheduler process.
+
+    Mirrors the subset of ``_wire_orchestrator`` in app.py that constructs
+    :class:`LLMProviderChain`.  We deliberately skip the per-call usage logger
+    (a session-scoped DB writer) because:
+
+      * The scheduler does NOT need to record per-user usage rows — those are
+        observability for the interactive chat path.  The pre-gen worker has
+        its own metrics covering the same ground.
+      * Wiring the usage logger requires a write_factory + SqlAlchemy engine
+        — heavy machinery for a process that never touches the DB.
+
+    Provider chain ordering:  DeepInfra → OpenRouter → Ollama (matches app.py).
+    """
+    providers: list[Any] = []
+
+    deepinfra_api_key = settings.deepinfra_api_key.get_secret_value() if settings.deepinfra_api_key else None
+    openrouter_api_key = settings.openrouter_api_key.get_secret_value() if settings.openrouter_api_key else None
+
+    if deepinfra_api_key:
+        from rag_chat.infrastructure.llm.deepinfra_adapter import DeepInfraCompletionAdapter
+
+        providers.append(
+            DeepInfraCompletionAdapter(
+                api_key=deepinfra_api_key,
+                model=settings.completion_model,
+                chat_with_tools_timeout=settings.deepinfra_tool_call_timeout_seconds,
+            )
+        )
+    if openrouter_api_key:
+        from rag_chat.infrastructure.llm.openrouter_adapter import OpenRouterCompletionAdapter
+
+        providers.append(
+            OpenRouterCompletionAdapter(
+                api_key=openrouter_api_key,
+                model=settings.openrouter_completion_model,
+            )
+        )
+    # Ollama is always the emergency fallback (last in chain).
+    providers.append(
+        OllamaCompletionAdapter(
+            base_url=settings.ollama_base_url,
+            model=settings.ollama_completion_model,
+        )
+    )
+
+    return LLMProviderChain(
+        providers=providers,
+        valkey=valkey,
+        usage_logger=None,
+        retry_attempts=settings.provider_retry_attempts,
+        retry_backoff_base=settings.provider_retry_backoff_base,
+    )
+
+
+async def _run_loop(settings: Settings) -> None:
+    """Bootstrap resources, schedule the pre-gen worker, and wait forever.
+
+    WHY a single ``await asyncio.sleep(3600)`` loop instead of
+    ``await ap_scheduler.wait()``:  AsyncIOScheduler doesn't expose a clean
+    "block until shutdown" API.  An idle sleep keeps the process alive while
+    APScheduler fires the job on its interval in the background.
+    """
+    # Disabled-check first so test invocations (and operator overrides) don't
+    # globally reconfigure structlog just to verify the kill-switch works.
+    if not settings.brief_pregen_enabled:
+        # Use stdlib logging here (not structlog) to avoid the side-effect of
+        # calling configure_logging() on import-side test runners — that would
+        # globally mutate structlog config and break unrelated tests that rely
+        # on stdout capture (capsys + ConsoleRenderer).  A single stderr line
+        # is enough signal for an operator running ``docker logs``.
+        import logging as _stdlib_logging
+
+        _stdlib_logging.warning("brief_pregeneration_disabled_via_env")
+        return
+
+    configure_logging(
+        service_name=settings.service_name,
+        level=settings.log_level,
+        json=settings.log_json,
+    )
+    log = get_logger("rag_chat.brief_scheduler_main")  # type: ignore[no-any-return]
+
+    # ── Build dependencies ────────────────────────────────────────────────────
+    # We use ``redis.asyncio`` directly here (not :class:`ValkeyClient`) because
+    # the worker needs raw ``zrangebyscore`` / ``set`` semantics, and the W1
+    # api-gateway middleware writes via ``zadd`` to the same underlying redis
+    # instance.  No abstraction layer needed inside this scheduler process.
+    import redis.asyncio as redis_async  # type: ignore[import-untyped]
+
+    valkey = redis_async.from_url(settings.valkey_url)
+
+    active_users = ActiveUsersReader(
+        valkey_client=valkey,
+        window_days=settings.brief_pregen_active_window_days,
+    )
+
+    # Upstream clients — mirror _wire_briefing_uc in app.py.
+    s1 = S1Client(
+        base_url=settings.s1_base_url,
+        valkey=valkey,
+        timeout=settings.upstream_timeout_seconds,
+    )
+    s3 = S3Client(base_url=settings.s3_base_url, timeout=settings.upstream_timeout_seconds)
+    s5 = S5Client(base_url=settings.s5_base_url, timeout=settings.upstream_timeout_seconds)
+    s6 = S6Client(base_url=settings.s6_base_url, timeout=settings.upstream_timeout_seconds)
+    s7 = S7Client(base_url=settings.s7_base_url, timeout=settings.upstream_timeout_seconds)
+
+    context_gatherer = BriefingContextGatherer(s1=s1, s3=s3, s5=s5, s6=s6, s7=s7)
+    llm_chain = _build_llm_chain(settings, valkey)
+
+    # WHY brief_archive=None: persistence is an API-layer concern; the worker
+    # only needs to write to Valkey.  The use case tolerates None archive via
+    # its NullBriefArchive default.
+    briefing_uc = GenerateBriefingUseCase(
+        llm_chain=llm_chain,
+        valkey=valkey,
+        context_gatherer=context_gatherer,
+    )
+
+    worker = MorningBriefPregenerationWorker(
+        active_users=active_users,
+        briefing_uc=briefing_uc,
+        valkey_client=valkey,
+        settings=settings,
+    )
+
+    # ── Schedule the recurring job ────────────────────────────────────────────
+    # WHY IntervalTrigger (not CronTrigger): the email scheduler uses cron
+    # (top of hour) because email digests are time-of-day-aware. The brief
+    # pre-gen has no such constraint — any interval works. IntervalTrigger
+    # also gives ops a single env var (``BRIEF_PREGEN_INTERVAL_HOURS``) to
+    # adjust cadence without redeploying.
+    from apscheduler.schedulers.asyncio import AsyncIOScheduler  # type: ignore[import-untyped]
+    from apscheduler.triggers.interval import IntervalTrigger  # type: ignore[import-untyped]
+
+    ap_scheduler = AsyncIOScheduler()
+    ap_scheduler.add_job(
+        worker.run,
+        IntervalTrigger(hours=settings.brief_pregen_interval_hours),
+        id="brief_pregeneration",
+        max_instances=1,  # prevent overlapping runs (long LLM tail latency)
+        coalesce=True,  # skip accumulated missed runs after a restart
+        # WHY +30s, not "now": gives the container time to finish starting
+        # (DB pools warming, dependent service health checks) before the
+        # first pre-gen attempts hit them.  Also makes the first run visible
+        # during dev without waiting a full ``brief_pregen_interval_hours``.
+        # ``datetime.utcnow()`` is timezone-naive — APScheduler's default
+        # scheduler timezone matches.
+        next_run_time=datetime.utcnow() + timedelta(seconds=30),  # noqa: DTZ003
+    )
+    ap_scheduler.start()
+    log.info(  # type: ignore[no-any-return]
+        "brief_scheduler_started",
+        interval_hours=settings.brief_pregen_interval_hours,
+        window_days=settings.brief_pregen_active_window_days,
+    )
+
+    try:
+        while True:
+            await asyncio.sleep(3600)
+    finally:
+        ap_scheduler.shutdown(wait=False)
+        # close upstream HTTPX clients to release sockets cleanly. A single
+        # client.aclose() failure must not mask the rest of the shutdown.
+        for client in (s1, s3, s5, s6, s7):
+            with contextlib.suppress(Exception):
+                await client.aclose()
+        with contextlib.suppress(Exception):
+            await valkey.close()
+        log.info("brief_scheduler_stopped")  # type: ignore[no-any-return]
+
+
+def main() -> None:
+    settings = Settings()  # type: ignore[call-arg]
+    asyncio.run(_run_loop(settings))
+
+
+if __name__ == "__main__":
+    main()

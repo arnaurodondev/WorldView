@@ -319,3 +319,49 @@ rag_pipeline_stage_input_size = Histogram(
     labelnames=["stage"],
     buckets=(0, 1, 3, 5, 10, 20, 50, 100, 250, 500),
 )
+
+# ── PLAN-0094 W2: morning-brief pre-generation worker ─────────────────────────
+#
+# Six metrics expose the daily pre-generation pipeline so operators can answer:
+#   1. Is the scheduler firing? (runs_total{status="started"} rate)
+#   2. Are runs completing successfully? (runs_total{status="completed"} vs failed)
+#   3. How many users were eligible last run? (eligible_users gauge)
+#   4. What fraction of users failed regeneration? (users_total{outcome=...})
+#   5. What is the end-to-end vs per-user latency? (two histograms)
+#   6. How often does the handler serve stale because of a failed regen? (served_stale)
+#
+# Label cardinality is bounded — never user/tenant/entity IDs.
+
+rag_brief_pregeneration_runs_total = Counter(
+    "rag_brief_pregeneration_runs_total",
+    "Pre-generation scheduler runs",
+    labelnames=["status"],  # started | completed | failed
+)
+
+rag_brief_pregeneration_users_total = Counter(
+    "rag_brief_pregeneration_users_total",
+    "Per-user pre-generation outcomes",
+    labelnames=["outcome"],  # success | generation_failed | skipped_stale_kept
+)
+
+rag_brief_pregeneration_run_duration_seconds = Histogram(
+    "rag_brief_pregeneration_run_duration_seconds",
+    "End-to-end pre-generation run latency",
+    buckets=(1, 5, 10, 30, 60, 120, 300, 600, 1200, 1800),
+)
+
+rag_brief_pregeneration_user_duration_seconds = Histogram(
+    "rag_brief_pregeneration_user_duration_seconds",
+    "Per-user pre-generation latency",
+    buckets=(0.5, 1, 2, 5, 10, 20, 30, 60),
+)
+
+rag_brief_pregeneration_eligible_users = Gauge(
+    "rag_brief_pregeneration_eligible_users",
+    "Active users found in the last run",
+)
+
+rag_brief_served_stale_total = Counter(
+    "rag_brief_served_stale_total",
+    "Times the handler served last-known-good brief instead of fresh",
+)

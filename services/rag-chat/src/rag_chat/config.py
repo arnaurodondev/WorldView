@@ -173,6 +173,19 @@ class Settings(BaseSettings):
     rate_limit_per_tenant: int = 10  # requests per minute per tenant
     upstream_timeout_seconds: float = 5.0
 
+    # ── Brief pre-generation (PLAN-0094 W2) ───────────────────────────────────
+    # APScheduler-driven worker pre-generates morning briefs for active users
+    # (identified via Valkey sorted-set ``active_users`` populated by S9 auth
+    # middleware in W1).  The handler falls back to a last-known-good key if
+    # regeneration fails so users never see a 503 on a cold cache miss.
+    brief_pregen_enabled: bool = True  # RAG_CHAT_BRIEF_PREGEN_ENABLED
+    brief_pregen_interval_hours: int = Field(default=24, ge=1, le=168)
+    brief_pregen_active_window_days: int = Field(default=7, ge=1, le=90)
+    brief_pregen_batch_size: int = Field(default=50, ge=1, le=500)
+    brief_pregen_concurrency: int = Field(default=4, ge=1, le=20)
+    brief_fresh_ttl_hours: int = Field(default=30, ge=1, le=168)
+    brief_last_good_ttl_days: int = Field(default=7, ge=1, le=30)
+
     # ── Observability (STANDARDS.md §8.3) ────────────────────────────────────
     log_level: str = "INFO"
     log_json: bool = True

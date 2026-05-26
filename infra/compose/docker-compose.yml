@@ -2132,6 +2132,38 @@ services:
     # auto-recover so chat sessions reconnect after host docker restarts.
     restart: unless-stopped
 
+  # ── rag-chat brief pre-generation scheduler (PLAN-0094 W2) ────────────────────
+  # APScheduler-driven process that pre-generates morning briefs for active users
+  # every ``RAG_CHAT_BRIEF_PREGEN_INTERVAL_HOURS`` hours.  Without this container
+  # the first user request after a 24h cache expiry blocks ~3-5s on the LLM, and
+  # a regen failure surfaces as a 503; with it, the handler always has a fresh
+  # or last-known-good brief to serve.
+  rag-chat-brief-scheduler:
+    build:
+      context: ../..
+      dockerfile: services/rag-chat/Dockerfile
+    profiles: [infra, all]
+    depends_on:
+      rag-chat-migrate:
+        condition: service_completed_successfully
+      valkey:
+        condition: service_healthy
+      api-gateway:
+        condition: service_healthy   # JWKS fetch + active_users source
+    env_file:
+      - ../../services/rag-chat/configs/docker.env
+    command: ["python", "-m", "rag_chat.infrastructure.scheduling.brief_scheduler_main"]
+    restart: unless-stopped
+    healthcheck:
+      # Process-alive ping: ``os.kill(1, 0)`` returns without error iff PID 1
+      # (the scheduler process) is still running.  Cheaper than a HTTP probe
+      # because the scheduler exposes no HTTP server.
+      test: ["CMD", "python", "-c", "import os; os.kill(1, 0)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+
   # ── API Gateway (S9) — stateless reverse proxy + auth ─────────────────────────
   api-gateway:
     build:

@@ -33,6 +33,8 @@
 
 <!-- New plans are appended here by the /plan skill -->
 
+| PLAN-0094 | **Rate-Limit Env-ification + Daily Morning-Brief Pre-Generation** — 3 waves. W1 shipped: S9 moves 3 hard-coded rate-limits (financial mutation, unauth IP, public feedback) behind env vars + bumped user-bucket default 1000→2000 + added `ZADD active_users` to OIDC auth middleware (Option A — Valkey sorted-set populated on every successful JWT auth, 30-day probabilistic prune at ~1/1000). 40 W1 unit tests pass. W2: rag-chat ships `MorningBriefPregenerationWorker` (APScheduler interval, env-driven cadence/window/batch) + handler 3-level fallback chain (fresh → lastgood → on-demand) + 6 new Prom metrics + `is_stale`/`generated_at` response fields. W3: frontend `MorningBriefCard` stale-date badge + docs + `worldview-gitops` checklist. No DB migrations, no Kafka changes, no new endpoints. Plan: [PLAN-0094](0094-rate-limits-and-daily-brief-plan.md). **Next: W2 (rag-chat pre-gen worker)**. | in-progress | 1/3 | none | 2026-05-25 |
+
 ## Frontend Platform Hardening (PRD-frontend-platform)
 **Branch**: feat/frontend-platform-hardening
 **Status**: COMPLETE (2026-05-19)

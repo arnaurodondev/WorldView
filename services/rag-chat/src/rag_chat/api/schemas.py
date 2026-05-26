@@ -355,6 +355,12 @@ class PublicBriefingResponse(BaseModel):
     # comfortably within 1000 chars even on dense financial-domain prose.
     lead: str | None = Field(default=None, max_length=1000)
 
+    # PLAN-0094 W2: signals the frontend the brief came from the last-known-good
+    # cache because regeneration failed.  Default False so legacy callers don't
+    # break; the frontend renders a "Previous day's brief — {date}" badge when
+    # ``is_stale=True``.
+    is_stale: bool = False
+
     @field_validator("sections", mode="before")
     @classmethod
     def _validate_sections(cls, v: Any) -> list[dict[str, Any]]:

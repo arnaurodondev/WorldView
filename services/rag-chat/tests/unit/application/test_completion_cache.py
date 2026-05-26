@@ -86,32 +86,33 @@ class TestCompletionCache:
         assert await cache.get(message, thread_b) == response_b
 
     async def test_completion_cache_key_format(self) -> None:
-        """Cache keys MUST use the ``rag:v2:completion:`` prefix.
+        """Cache keys MUST use the ``rag:v3:completion:`` prefix.
 
-        PLAN-0093 Phase 5c F-LIVE-008 — the prefix was bumped from
-        ``v1`` to ``v2`` to evict pre-fix poisoned entries (an answer
-        with the fabricated "$34.6B" AMD Q1 revenue had been cached at
-        TTL 24h and was being served on every Q4 v1 re-run, bypassing
-        the new tool-use prompt + numeric-grounding validator).
+        Bump history:
+          v1 → v2 (PLAN-0093 Phase 5c F-LIVE-008): evict the fabricated
+            "$34.6B" AMD Q1 answer that bypassed numeric grounding.
+          v2 → v3 (PLAN-0093 ITER-8 FIX-LL): evict ITER-7 refusal / empty-
+            tool-call answers (Q1/Q3/Q5/Q7 "I cannot find evidence …")
+            cached while the LLM injection classifier was fail-closed.
+            With FIX-JJ (timeout → fail-open) those queries now proceed.
 
-        This test is a regression guard: ANY future code change that
-        silently reverts the prefix to ``v1`` (or any other version that
-        collides with historic poisoned entries) must fail loudly here.
-        Bump this assertion in lockstep whenever you bump the prefix in
-        ``completion_cache._cache_key``.
+        Regression guard: ANY change that silently reverts the prefix to
+        a historic version (v1, v2) must fail loudly here. Bump this
+        assertion in lockstep with ``completion_cache._cache_key``.
         """
         valkey = _make_valkey()
         cache = CompletionCache(valkey)
         await cache.set("test message", _THREAD_ID, {"answer": "ok"})
         stored_keys = list(valkey._store.keys())
         assert len(stored_keys) == 1
-        assert stored_keys[0].startswith("rag:v2:completion:"), (
-            f"Cache key prefix regression — expected 'rag:v2:completion:' "
+        assert stored_keys[0].startswith("rag:v3:completion:"), (
+            f"Cache key prefix regression — expected 'rag:v3:completion:' "
             f"but got {stored_keys[0]!r}. Pre-fix poisoned entries from "
-            f"older prefixes (e.g. 'rag:v1:') must NEVER be re-readable."
+            f"older prefixes (v1, v2) must NEVER be re-readable."
         )
-        # And explicitly NOT the old, poisoned prefix.
+        # And explicitly NOT any historic prefix.
         assert not stored_keys[0].startswith("rag:v1:completion:")
+        assert not stored_keys[0].startswith("rag:v2:completion:")
 
     async def test_set_calls_valkey_set_with_ttl(self) -> None:
         """set() calls ValkeyClient.set() with the correct TTL (86400 s)."""

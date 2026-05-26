@@ -51,6 +51,11 @@ log = structlog.get_logger(__name__)  # type: ignore[no-any-return]
 
 # Cache TTL: 24 hours — briefings are expensive (LLM call) and stable within a day.
 _CACHE_TTL = 86400
+# PLAN-0094 W2: last-known-good key TTL — 7 days by default (gives a wide
+# enough fallback window that a user away on a long weekend still has a brief
+# to read on Monday morning).  Mirrors ``brief_last_good_ttl_days`` setting;
+# this constant is the seconds equivalent.
+_LASTGOOD_TTL = 7 * 86400
 
 
 # ── PLAN-0066 Wave B: history response schemas ────────────────────────────────
@@ -151,8 +156,15 @@ async def get_morning_briefing(request: Request) -> PublicBriefingResponse:
     # WHY v2: PLAN-0062-W4 changed BriefSection.bullets from list[str] to
     # list[BriefBullet]. Cached pre-W4 responses must not be served to W4+ clients.
     cache_key = f"briefing:morning:v2:{user_id}"
+    # PLAN-0094 W2: last-known-good fallback key.  Populated by the brief
+    # pre-generation worker AND on every successful on-demand generation, so
+    # users always have a brief to fall back to if a future regen fails.
+    lastgood_key = f"briefing:morning:lastgood:{user_id}"
 
-    # ── Check Valkey cache ────────────────────────────────────────────────────
+    # ── Lookup chain (PLAN-0094 W2) ───────────────────────────────────────────
+    # 1. Fresh cache hit → return immediately with is_stale=False.
+    # 2. Lastgood hit    → return with is_stale=True, fire-and-forget regen.
+    # 3. Cold user       → existing on-demand path (block + 503 on failure).
     if valkey is not None:
         try:
             cached = await valkey.get(cache_key)
@@ -163,10 +175,99 @@ async def get_morning_briefing(request: Request) -> PublicBriefingResponse:
                 # breaks when sections are stored as Python repr strings (BP-319).
                 resp = PublicBriefingResponse.model_validate_json(raw)
                 resp.cached = True
+                resp.is_stale = False
                 return resp
         except Exception as e:
-            # Cache miss or deserialization failure — proceed to generation.
+            # Cache miss or deserialization failure — proceed to lastgood / generation.
             log.warning("briefing_cache_read_failed", error=str(e), key=cache_key)  # type: ignore[no-any-return]
+
+        # ── Step 2: last-known-good fallback ──────────────────────────────────
+        # Read the lastgood key; if present, serve as stale and schedule a
+        # best-effort background regeneration so the next request can hit fresh.
+        try:
+            lastgood = await valkey.get(lastgood_key)
+            if lastgood:
+                raw_lg = lastgood.decode("utf-8") if isinstance(lastgood, bytes) else lastgood
+                stale_resp = PublicBriefingResponse.model_validate_json(raw_lg)
+                stale_resp.cached = True
+                stale_resp.is_stale = True
+                # Observability — count stale serves separately so ops can spot
+                # a sustained regen-failure pattern.
+                try:
+                    from rag_chat.application.metrics.prometheus import rag_brief_served_stale_total
+
+                    rag_brief_served_stale_total.inc()
+                except Exception:  # pragma: no cover  # noqa: S110 — metrics import never fails in practice
+                    pass
+                log.info(  # type: ignore[no-any-return]
+                    "brief_served_stale",
+                    user_id=user_id,
+                    lastgood_generated_at=getattr(stale_resp, "generated_at", None),
+                )
+                # Fire-and-forget background regen.  We DO NOT await — the user
+                # gets the stale response immediately.  ``asyncio.create_task``
+                # schedules the coroutine; exceptions inside it are swallowed
+                # by the helper below (we don't want a background failure to
+                # surface anywhere that could affect the request).
+                from rag_chat.infrastructure.clients.auth_context import set_current_jwt
+
+                bg_jwt = request.headers.get("X-Internal-JWT")
+                set_current_jwt(bg_jwt)
+                uc_for_bg = _get_briefing_uc(request)
+
+                async def _background_regen() -> None:
+                    """Best-effort regeneration — never raises, just logs.
+
+                    WHY a closure: we need the use case + user/tenant/jwt
+                    captured at the time the task is scheduled.  The handler
+                    has all four in scope right here.
+                    """
+                    try:
+                        result = await uc_for_bg.execute_public_morning(
+                            user_id=user_id,
+                            tenant_id=tenant_id,
+                            internal_jwt=bg_jwt,
+                        )
+                        # Re-cache both keys so the next request hits fresh.
+                        fresh_payload = PublicBriefingResponse(
+                            narrative=result.get("content", ""),
+                            risk_summary=result.get("risk_summary", {}),
+                            citations=result.get("citations", []),
+                            generated_at=result["generated_at"],
+                            cached=False,
+                            entity_id=None,
+                            summary=result.get("summary"),
+                            sections=result.get("sections", []),
+                            confidence=result.get("confidence", 1.0),
+                            lead=result.get("lead"),
+                            is_stale=False,
+                        ).model_dump_json()
+                        await valkey.set(cache_key, fresh_payload, ex=_CACHE_TTL)
+                        await valkey.set(lastgood_key, fresh_payload, ex=_LASTGOOD_TTL)
+                        log.info(  # type: ignore[no-any-return]
+                            "brief_background_regen_succeeded",
+                            user_id=user_id,
+                        )
+                    except Exception as exc:
+                        log.warning(  # type: ignore[no-any-return]
+                            "brief_background_regen_failed",
+                            user_id=user_id,
+                            error=str(exc),
+                        )
+
+                # asyncio.create_task() requires a running event loop, which we
+                # have inside this async handler.  The task is not stored
+                # anywhere — best-effort fire-and-forget is the contract.
+                import asyncio as _asyncio
+
+                _asyncio.create_task(_background_regen())  # noqa: RUF006
+                return stale_resp
+        except Exception as e:
+            log.warning(  # type: ignore[no-any-return]
+                "briefing_lastgood_read_failed",
+                error=str(e),
+                key=lastgood_key,
+            )
 
     # ── Generate briefing via use case ────────────────────────────────────────
     # WHY execute_public_morning() not execute(): the morning route must use the
@@ -238,9 +339,13 @@ async def get_morning_briefing(request: Request) -> PublicBriefingResponse:
     # WHY model_dump_json: avoids json.dumps(..., default=str) which stringifies
     # Pydantic models (BriefSection, BriefBullet) to repr strings that cannot be
     # re-deserialized on cache read (BP-319).
+    # PLAN-0094 W2: also write the lastgood key so a future regen failure has
+    # a known-good payload to fall back on.
     if valkey is not None:
         try:
-            await valkey.set(cache_key, resp.model_dump_json(), ex=_CACHE_TTL)
+            payload_json = resp.model_dump_json()
+            await valkey.set(cache_key, payload_json, ex=_CACHE_TTL)
+            await valkey.set(lastgood_key, payload_json, ex=_LASTGOOD_TTL)
         except Exception as e:
             log.warning("briefing_cache_write_failed", error=str(e), key=cache_key)  # type: ignore[no-any-return]
 
