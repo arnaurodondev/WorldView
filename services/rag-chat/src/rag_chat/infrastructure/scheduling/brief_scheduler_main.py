@@ -121,6 +121,25 @@ async def _run_loop(settings: Settings) -> None:
     )
     log = get_logger("rag_chat.brief_scheduler_main")  # type: ignore[no-any-return]
 
+    # ── Prometheus scrape endpoint ────────────────────────────────────────────
+    # PLAN-0094 live-QA #2: pre-gen counters live in this process, not in the
+    # main rag-chat container, so Prometheus needs its own scrape target here.
+    # Port 9100 follows the worldview convention for non-FastAPI metrics.
+    from prometheus_client import start_http_server as _prom_start_http_server
+
+    _prom_metrics_port = 9100
+    try:
+        _prom_start_http_server(_prom_metrics_port)
+        log.info("brief_scheduler_metrics_endpoint_started", port=_prom_metrics_port)
+    except OSError as exc:
+        # Already bound (test re-import, etc.) — log + continue. The scheduler
+        # itself must keep working even if metrics can't be exposed.
+        log.warning(
+            "brief_scheduler_metrics_endpoint_unavailable",
+            port=_prom_metrics_port,
+            error=str(exc),
+        )
+
     # ── Build dependencies ────────────────────────────────────────────────────
     # We use ``redis.asyncio`` directly here (not :class:`ValkeyClient`) because
     # the worker needs raw ``zrangebyscore`` / ``set`` semantics, and the W1

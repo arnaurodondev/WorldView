@@ -2152,6 +2152,10 @@ services:
         condition: service_healthy   # JWKS fetch + active_users source
     env_file:
       - ../../services/rag-chat/configs/docker.env
+    # PLAN-0094 live-QA #2: expose the in-process Prometheus scrape endpoint
+    # so the 6 brief-pregen counters (rag_brief_pregeneration_*) are visible.
+    ports:
+      - "9100:9100"
     command: ["python", "-m", "rag_chat.infrastructure.scheduling.brief_scheduler_main"]
     restart: unless-stopped
     healthcheck:
