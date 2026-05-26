@@ -893,12 +893,19 @@ def _build_description_client(settings: Settings, valkey_client: Any | None = No
     Provider values:
     - ``"deepinfra"`` → ``ChainedDescriptionAdapter([DeepInfraDescriptionAdapter, GeminiDescriptionAdapter?])``
                         DeepInfra (Qwen3-235B-A22B) is primary; Gemini is wired as fallback when
-                        ``KNOWLEDGE_GRAPH_GEMINI_API_KEY`` is also set.
-    - ``"gemini"``    → ``GeminiDescriptionAdapter`` alone (gemini-3.1-flash-lite).
+                        ``KNOWLEDGE_GRAPH_GEMINI_API_KEY`` is also set.  When the DeepInfra key
+                        is unset, falls through to Gemini-only (PLAN-0095 W4 T-W4-03) so the
+                        chain still produces descriptions instead of silently going Null.
+    - ``"gemini"``    → ``GeminiDescriptionAdapter`` alone (gemini-3.1-flash-lite).  When the
+                        Gemini key is unset, falls back to DeepInfra if its key IS set
+                        (PLAN-0095 W4 T-W4-03 — avoids 59.5% NULL company descriptions in live
+                        when an operator forgot to flip ``description_provider`` after rotating
+                        the Gemini secret).
     - anything else  → ``NullDescriptionAdapter`` (no external calls; fallback template always used).
 
-    Chain ordering (BP-RC8):
-        DeepInfra (primary) → Gemini (fallback 1) → None → deterministic stub
+    Chain ordering (BP-RC8 + PLAN-0095 W4 T-W4-03):
+        provider=deepinfra:  DeepInfra → Gemini? → deterministic stub
+        provider=gemini:     Gemini → DeepInfra? → deterministic stub
 
     Args:
     ----
@@ -915,6 +922,35 @@ def _build_description_client(settings: Settings, valkey_client: Any | None = No
     if provider == "deepinfra":
         deepinfra_key = settings.deepinfra_api_key.get_secret_value()  # DEF-005
         if not deepinfra_key:
+            # PLAN-0095 W4 T-W4-03: instead of going straight to Null, try Gemini
+            # if its key is set. This preserves description coverage when the
+            # DeepInfra key is missing/rotated.
+            gemini_key_fallback = settings.gemini_api_key.get_secret_value()
+            if gemini_key_fallback:
+                logger.warning(  # type: ignore[no-any-return]
+                    "description_client_deepinfra_key_missing_using_gemini_fallback",
+                    message=(
+                        "KNOWLEDGE_GRAPH_DEEPINFRA_API_KEY is empty; " "using Gemini-only chain (PLAN-0095 W4 T-W4-03)."
+                    ),
+                )
+                from ml_clients.adapters.chained_description import (
+                    ChainedDescriptionAdapter,  # type: ignore[import-untyped]
+                )
+                from ml_clients.adapters.gemini_description import (
+                    GeminiDescriptionAdapter,  # type: ignore[import-untyped]
+                )
+
+                gemini_semaphore = asyncio.Semaphore(settings.description_gemini_concurrency)
+                return ChainedDescriptionAdapter(
+                    [
+                        GeminiDescriptionAdapter(
+                            api_key=gemini_key_fallback,
+                            semaphore=gemini_semaphore,
+                            cost_tracker=valkey_client,
+                            max_monthly_usd=settings.description_max_monthly_usd,
+                        )
+                    ]
+                )
             logger.warning(  # type: ignore[no-any-return]
                 "description_client_deepinfra_key_missing",
                 message="KNOWLEDGE_GRAPH_DEEPINFRA_API_KEY is empty; falling back to NullDescriptionAdapter",
@@ -972,6 +1008,39 @@ def _build_description_client(settings: Settings, valkey_client: Any | None = No
     if provider == "gemini":
         gemini_key = settings.gemini_api_key.get_secret_value()
         if not gemini_key:
+            # PLAN-0095 W4 T-W4-03: cascade to DeepInfra if its key is set
+            # rather than going straight to Null.  The audit found 59.5% of
+            # company descriptions were NULL in production because operators
+            # had ``description_provider=gemini`` configured but the Gemini key
+            # was missing — and there was no fallback path.
+            deepinfra_key_fallback = settings.deepinfra_api_key.get_secret_value()
+            if deepinfra_key_fallback:
+                logger.warning(  # type: ignore[no-any-return]
+                    "description_client_gemini_key_missing_using_deepinfra_fallback",
+                    message=(
+                        "KNOWLEDGE_GRAPH_GEMINI_API_KEY is empty; " "using DeepInfra chain (PLAN-0095 W4 T-W4-03)."
+                    ),
+                )
+                from ml_clients.adapters.chained_description import (
+                    ChainedDescriptionAdapter,  # type: ignore[import-untyped]
+                )
+                from ml_clients.adapters.deepinfra_description import (
+                    DeepInfraDescriptionAdapter,  # type: ignore[import-untyped]
+                )
+
+                deepinfra_semaphore = asyncio.Semaphore(settings.description_deepinfra_concurrency)
+                return ChainedDescriptionAdapter(
+                    [
+                        DeepInfraDescriptionAdapter(
+                            api_key=deepinfra_key_fallback,
+                            primary_model_id=settings.description_deepinfra_model_id,
+                            fallback_model_id=settings.description_deepinfra_fallback_model_id,
+                            semaphore=deepinfra_semaphore,
+                            cost_tracker=valkey_client,
+                            max_monthly_usd=settings.description_max_monthly_usd,
+                        )
+                    ]
+                )
             logger.warning(  # type: ignore[no-any-return]
                 "description_client_gemini_key_missing",
                 message="KNOWLEDGE_GRAPH_GEMINI_API_KEY is empty; falling back to NullDescriptionAdapter",
