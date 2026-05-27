@@ -53,6 +53,48 @@ export function createScreenerApi(t: string | undefined) {
       });
     },
 
+    /**
+     * getScreenerCount — debounced live-count probe.
+     *
+     * PRD-0089 Wave I-A · T-IA-11.
+     *
+     * WHY a dedicated method (not `runScreener` with `limit: 1`): callers
+     * MUST only receive `{ total }` — never the row payload. Hard-coding
+     * `limit: 1` here means a future `runScreener` callsite cannot
+     * accidentally drop pagination and end up making a count-only query
+     * that returns a single row to render. Returning a stripped object
+     * keeps the TanStack Query selector tiny (just an integer).
+     *
+     * WHY limit=1 (not 0): the backend `POST /v1/fundamentals/screen`
+     * historically interprets `limit: 0` as "all rows" on some adapters.
+     * `limit: 1` is the safe minimum that guarantees a single-row scan.
+     *
+     * USED BY: the screener live-count hook (debounced 250 ms while the
+     * user edits filters in the popover, before they click Apply).
+     */
+    async getScreenerCount(
+      request: ScreenerRequest,
+    ): Promise<{ total: number }> {
+      // WHY spread + override: callers pass the full ScreenerRequest from the
+      // popover; we keep their filters but force-cap `limit` to 1 so the
+      // response stays a single row regardless of what the popover sent.
+      const probe: ScreenerRequest = { ...request, limit: 1, offset: 0 };
+      const raw = await apiFetch<{ total?: number; results?: unknown[] }>(
+        "/v1/fundamentals/screen",
+        { method: "POST", body: probe, token: t },
+      );
+      // WHY fall back to results.length: not all backend versions echo
+      // `total` when the result set is < limit. The count probe must still
+      // surface a number rather than NaN so the UI badge can render.
+      const total =
+        typeof raw.total === "number"
+          ? raw.total
+          : Array.isArray(raw.results)
+            ? raw.results.length
+            : 0;
+      return { total };
+    },
+
     async runScreener(request: ScreenerRequest): Promise<ScreenerResponse> {
       // WHY GET for no-filter case: the POST screener uses INNER JOIN on each
       // filter metric, which excludes instruments that lack that metric's data.
