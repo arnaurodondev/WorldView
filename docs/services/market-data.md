@@ -50,7 +50,7 @@ or articles, perform NLP processing, manage portfolios.
 | GET | `/api/v1/fundamentals/{instrument_id}/snapshot` | Pre-computed derived metrics snapshot — returns one flat row from `instrument_fundamentals_snapshot` table (eps_ttm, beta, avg_volume_30d, operating_cash_flow, capex, free_cash_flow, fcf_margin, interest_coverage, net_debt_to_ebitda, credit_rating, updated_at). Always 200 — all fields null for un-backfilled instruments. PLAN-0050 Wave D. | — |
 | GET | `/api/v1/fundamentals/timeseries` | Metric timeseries — query params: `instrument_id`, `metric`, `start_date`, `end_date`, `period_type`, `limit`. Returns 422 if `start_date > end_date`. | — |
 | POST | `/api/v1/fundamentals/screen` | Screen instruments by metric thresholds (AND logic) — JSON body: `filters[]` (each filter may include `metric`, `min_value`, `max_value`, `period_type`, `sector`), `limit` (default 50, max 200), `offset` (max 5000), `sort_by` (metric name, `ticker`, or `name`; validated whitelist — SQL injection guard), `sort_order` (`asc`/`desc`). Response includes `ticker`, `name`, `exchange`, `sector` fields + `total` (COUNT(*) OVER()). | — |
-| POST | `/api/v1/fundamentals/batch` | **PLAN-0095 W2 T-W2-01** — batch quarterly fundamentals history for many tickers in one HTTP call. Body: `{tickers: list[str] (cap 25), periods: int = 5}`. Fans out via `asyncio.gather(..., return_exceptions=True)` so per-ticker failures (unknown ticker, transient DB error) are isolated. Response: `{results: {ticker: {status: "ok"\|"error", periods?, reason?}}}`. Designed to collapse rag-chat's screener → N×fundamentals tool-turn cascade into a single agent turn (5-10x latency reduction on aggregate-comparison queries). Returns 422 if `len(tickers) > 25`. | — |
+| POST | `/api/v1/fundamentals/batch` | **PLAN-0095 W2 T-W2-01** — batch quarterly fundamentals history for many tickers in one HTTP call. Body: `{tickers: list[str] (cap 25), periods: int = 5}`. **PLAN-0097 T-W3-02** split execution into two explicit `asyncio.gather` phases (resolve → fetch) so per-phase error classification is unambiguous; lookups run concurrently regardless of N. **PLAN-0097 T-W3-04** replaced raw `str(exc)` in `reason` with one of four typed codes — `invalid_ticker`, `upstream_timeout`, `upstream_404`, `upstream_error` — and routes full exception detail to structlog only (BP-582). Response: `{results: {ticker: {status: "ok"\|"error", periods?, reason?}}}`. Returns 422 if `len(tickers) > 25`. | — |
 | GET | `/api/v1/fundamentals/metrics/{instrument_id}` | List available metric names for an instrument | — |
 | GET | `/api/v1/securities` | List securities — query params: `figi`, `isin`, `limit`, `offset` (paginated DB scan when unfiltered) | — |
 | GET | `/api/v1/securities/{security_id}` | Security detail by FIGI or ISIN | — |
@@ -1013,6 +1013,11 @@ Backfill summary includes `scanned_rows`, `extracted_metric_rows`, `inserted_row
 | `002` (consolidated) | `001` (consolidated) | Add `fundamental_metrics` read-optimized projection table with unique constraint and indexes |
 | `003` (consolidated) | `002` (consolidated) | Add `lowercase_outbox_status` migration |
 | `004` (consolidated) | `003` (consolidated) | Add `screen_field_metadata` table (PRD-0017 Wave B-1) |
+| `019` | `018` | Add composite `(instrument_id, period_end_date)` indexes on 18 fundamentals section tables (PLAN-0095 T-W1-03) — 30-100x speedup on `query_fundamentals` history reads |
+| `020` | `019` | Snapshot `period_type` columns |
+| `021` | `020` | Add `instruments.last_fundamentals_ingest_at` (PLAN-0096 T-W1-02, BP-545) |
+| `022` | `021` | `ANALYZE` the 18 fundamentals tables post-019 so the planner picks the composite indexes immediately (PLAN-0097 T-W3-01, **BP-581**). Wrapped in `op.get_context().autocommit_block()` because ANALYZE cannot execute inside a transaction. Downgrade is documented no-op. |
+| `023` | `022` | Idempotent re-application of 019's composite indexes via `CREATE INDEX IF NOT EXISTS` (PLAN-0097 T-W4-02) |
 
 > **Note**: Migrations 001–005 were consolidated into a single `001` initial schema.
 > The `fundamental_metrics` migration is `002` relative to the consolidated `001`.
