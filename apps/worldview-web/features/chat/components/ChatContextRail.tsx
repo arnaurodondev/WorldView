@@ -56,14 +56,18 @@
 
 "use client";
 
-// "use client" because the rail mounts `EntityHealthDot` (Radix Tooltip),
-// `ContradictionStrip` (interactive rows), and reads from the message
-// list state owned by the chat page. None of this can SSR.
+// "use client" because the rail mounts `ContradictionStrip` (interactive
+// rows) and reads from the message list state owned by the chat page.
+// None of this can SSR. (EntityHealthDot mount removed in QA BL-01 — see
+// TODO at its prior call site for the K-FU restoration plan.)
 
 import { useMemo } from "react";
 
 import { ContradictionStrip } from "@/features/chat/components/ContradictionStrip";
-import { EntityHealthDot } from "@/features/chat/components/EntityHealthDot";
+// TODO(PLAN-0089-K-FU): re-import EntityHealthDot when the
+// get_entity_health cache anchor is wired. Removed in QA BL-01 because
+// the hard-coded score={0} was rendering as a red sell signal.
+// import { EntityHealthDot } from "@/features/chat/components/EntityHealthDot";
 import type { CitationV2, Message } from "@/types/api";
 
 // SECTION-DIVIDER NOTE: the plan calls for `<SectionDivider>` between the
@@ -260,23 +264,21 @@ function EntityCard({ activeEntity }: { activeEntity: ChatContextRailProps["acti
         >
           {ticker ?? "—"}
         </span>
-        {/* No live health score available yet — render a neutral 0 dot
-            only when we have a ticker (so the card looks intentional
-            during the live walk-through). Real data lands when the
-            cached `get_entity_health` plumbing ships. */}
-        {ticker ? <EntityHealthDot score={0} /> : null}
+        {/* TODO(PLAN-0089-K-FU): Render EntityHealthDot once
+            get_entity_health cache anchor is wired in K-FU. Hard-coded
+            score=0 was misleading analysts (false red sell signal —
+            Bloomberg PMs read `bg-negative` as a directional cue). The
+            EntityHealthDot import is intentionally retained so the
+            re-introduction in K-FU is a one-line change. */}
         <span data-cell className="ml-auto font-mono text-[10px] text-muted-foreground">
           {activeEntity?.id ? activeEntity.id.slice(0, 8) : "—"}
         </span>
       </div>
-      <div className="grid grid-cols-3 gap-x-2 px-2 pb-1 text-[10px] font-mono text-muted-foreground tabular-nums">
-        {/* Three placeholder cells — the design calls for price / change
-            / P/E in v1 + market_cap / employees / sector in v1.1. They
-            are wired to "—" until the brief cache anchor lands. */}
-        <span data-cell>price —</span>
-        <span data-cell>chg —</span>
-        <span data-cell>P/E —</span>
-      </div>
+      {/* TODO(PLAN-0089-K-FU): re-add price/chg/PE rows when the
+          intelligence-brief cache anchor lands. The three permanent "—"
+          cells were being read as a data outage during QA. Re-add as a
+          conditional render that hides the row entirely when no quote
+          is cached, rather than a permanent stub. */}
     </section>
   );
 }
