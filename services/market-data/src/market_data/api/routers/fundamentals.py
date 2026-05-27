@@ -51,6 +51,12 @@ _REASON_INVALID_TICKER = "invalid_ticker"
 _REASON_UPSTREAM_TIMEOUT = "upstream_timeout"
 _REASON_UPSTREAM_404 = "upstream_404"
 _REASON_UPSTREAM_ERROR = "upstream_error"
+# PLAN-0098 W4 T-W4-02: per-ticker error code for the rare case where the
+# lookup adapter returns a structurally malformed payload (no ``instrument``,
+# ``instrument.id`` is None, or the id is not a valid UUID string). Distinct
+# from ``invalid_ticker`` (which says "we asked, got InstrumentNotFoundError")
+# so post-mortem dashboards can spot contract drift vs genuine bad tickers.
+_REASON_INVALID_LOOKUP = "invalid_lookup"
 
 router = APIRouter(tags=["fundamentals"])
 
@@ -214,12 +220,38 @@ async def post_fundamentals_batch(
     # ── Phase 2: fetch fundamentals concurrently for every resolved id ────
     # ``fetch_tasks`` is a parallel array of (ticker, task-or-None) pairs so
     # we can re-thread results back to their original ticker preserving order.
+    # Per-ticker errors here are captured as ``invalid_lookup`` slots so a
+    # malformed resolution payload from a downstream contract change (e.g.
+    # ``result.instrument`` becoming None, or ``id`` returning a non-UUID
+    # string) fails ONLY that ticker rather than 500-ing the whole batch.
+    # PLAN-0098 W4 T-W4-02 (code-review §10.1 P2 defensiveness).
     fetch_tasks: list[tuple[str, asyncio.Task[dict] | None]] = []
+    # Per-ticker resolution failures keyed by ticker so the result-assembly
+    # loop below can surface them with the right ``reason`` code without
+    # re-deriving them from the raw exception (which was already classified).
+    resolution_overrides: dict[str, str] = {}
     for ticker, resolution in zip(body.tickers, resolutions, strict=True):
         if isinstance(resolution, BaseException):
             fetch_tasks.append((ticker, None))
             continue
-        instrument_id = UUID(resolution.instrument.id)
+        try:
+            # Defensive: ``instrument`` or ``instrument.id`` could be None,
+            # and ``UUID(...)`` raises ValueError/AttributeError/TypeError on
+            # malformed values. We catch the union so a contract regression in
+            # the lookup adapter degrades to a per-ticker error, not a 500.
+            instrument_id = UUID(resolution.instrument.id)
+        except (AttributeError, TypeError, ValueError) as exc:
+            log.info(
+                "fundamentals_batch_per_ticker_error",
+                ticker=ticker,
+                phase="resolve",
+                error=type(exc).__name__,
+                error_detail=str(exc),
+                reason=_REASON_INVALID_LOOKUP,
+            )
+            resolution_overrides[ticker] = _REASON_INVALID_LOOKUP
+            fetch_tasks.append((ticker, None))
+            continue
         fetch_tasks.append(
             (
                 ticker,
@@ -233,9 +265,18 @@ async def post_fundamentals_batch(
 
     out: dict[str, FundamentalsBatchPerTickerResult] = {}
     for (ticker, task), resolution in zip(fetch_tasks, resolutions, strict=True):
-        # Resolution-phase failure → no fetch was attempted.
+        # Resolution-phase failure → no fetch was attempted. Two sources:
+        #   (a) lookup_uc.execute raised → resolution is BaseException;
+        #   (b) UUID parse on a malformed resolution payload → recorded in
+        #       ``resolution_overrides`` (PLAN-0098 W4 T-W4-02 defensiveness).
         if task is None:
-            assert isinstance(resolution, BaseException)  # gather invariant
+            override = resolution_overrides.get(ticker)
+            if override is not None:
+                # (b) Already logged at the catch site; just emit the slot.
+                out[ticker] = FundamentalsBatchPerTickerResult(status="error", reason=override)
+                continue
+            # (a) The gather invariant holds for the non-override branch.
+            assert isinstance(resolution, BaseException)
             reason = _classify(resolution)
             # Full exception detail to structlog ONLY — never to the response.
             log.info(

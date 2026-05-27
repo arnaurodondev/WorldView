@@ -357,10 +357,14 @@ def test_fundamentals_batch_all_empty() -> None:
 def test_fundamentals_batch_resolves_tickers_in_parallel() -> None:
     """The N ticker→instrument_id lookups must run concurrently, not serially.
 
-    PLAN-0097 T-W3-02. Strategy: make ``lookup_uc.execute`` sleep 100 ms per
-    call; with N=5 sequential calls total wall-clock would be ≥500 ms, while
-    a parallel ``asyncio.gather`` finishes in ~100 ms. We assert <300 ms to
-    give CI generous headroom but still catch a regression to serial.
+    PLAN-0097 T-W3-02. PLAN-0098 W4 T-W4-01 de-flake (code-review §5.3 P2):
+    the primary assertion is now a *call-order barrier* — every lookup MUST
+    have entered before any returned (and the observed peak in-flight count
+    MUST equal ``len(tickers)``). The original wall-clock < 0.3s assertion
+    is retained as a *backup* (it would still catch a serial regression on a
+    fast runner) but is no longer the load-bearing gate — on a busy CI the
+    event loop can introduce >100 ms of jitter that would false-positive an
+    otherwise-correct parallel implementation.
     """
     import asyncio
     import time
@@ -370,19 +374,43 @@ def test_fundamentals_batch_resolves_tickers_in_parallel() -> None:
     tickers = ["AAPL", "MSFT", "GOOG", "AMZN", "META"]
     ids = {t: f"00000000-0000-0000-0000-0000{i:08d}" for i, t in enumerate(tickers)}
 
+    # Concurrency probe: every lookup increments ``in_flight`` on entry and
+    # decrements on exit. ``peak_in_flight`` records the maximum observed.
+    # A serial implementation tops out at 1; a parallel one tops out at N.
+    in_flight = 0
+    peak_in_flight = 0
+    # All N lookups must START before any RETURNS. We enforce this with a
+    # barrier event that the test only sets after observing N concurrent
+    # entries. If a serial implementation drives this, the first lookup will
+    # await the barrier forever and the test will time out (caught by the
+    # outer ``asyncio.wait_for`` below) rather than flakily pass.
+    all_entered = asyncio.Event()
+
     lookup_uc = MagicMock()
 
     async def _slow_lookup(*, id=None, isin=None, symbol=None):  # type: ignore[no-untyped-def]  # noqa: A002
-        # 100 ms per call. Serial total = ~500 ms; parallel = ~100 ms.
-        await asyncio.sleep(0.1)
-        if symbol not in ids:
-            raise InstrumentNotFoundError(f"Instrument not found: {symbol}")
-        instr = MagicMock()
-        instr.id = ids[symbol]
-        instr.symbol = symbol
-        result = MagicMock()
-        result.instrument = instr
-        return result
+        nonlocal in_flight, peak_in_flight
+        in_flight += 1
+        peak_in_flight = max(peak_in_flight, in_flight)
+        if peak_in_flight >= len(tickers):
+            # All lookups are concurrently in flight — release everyone.
+            all_entered.set()
+        try:
+            # Wait for the all-entered barrier OR a generous deadline (so a
+            # serial regression hangs on the first lookup and the outer
+            # timeout fires deterministically). 2s ≫ any plausible parallel
+            # turnaround; only a serial implementation would block here.
+            await asyncio.wait_for(all_entered.wait(), timeout=2.0)
+            if symbol not in ids:
+                raise InstrumentNotFoundError(f"Instrument not found: {symbol}")
+            instr = MagicMock()
+            instr.id = ids[symbol]
+            instr.symbol = symbol
+            result = MagicMock()
+            result.instrument = instr
+            return result
+        finally:
+            in_flight -= 1
 
     lookup_uc.execute = AsyncMock(side_effect=_slow_lookup)
 
@@ -397,11 +425,15 @@ def test_fundamentals_batch_resolves_tickers_in_parallel() -> None:
     elapsed = time.perf_counter() - start
 
     assert resp.status_code == 200
-    # Serial bound = 5 x 0.1s = 0.5s. Parallel ideal ~0.1s. 0.3s threshold
-    # gives ~3x headroom over the parallel ideal so flakiness on a busy CI
-    # runner doesn't trigger a false positive while still failing if anyone
-    # regresses to the serial pattern.
-    assert elapsed < 0.3, f"batch endpoint serialised lookups: took {elapsed:.3f}s, expected <0.3s parallel"
+    # PRIMARY assertion: every lookup entered before any returned.
+    assert peak_in_flight == len(tickers), (
+        f"batch endpoint did not run lookups concurrently: peak_in_flight=" f"{peak_in_flight}, expected {len(tickers)}"
+    )
+    # BACKUP assertion: with the barrier resolving as soon as all N enter,
+    # a correct parallel implementation finishes in well under 1s on any
+    # plausible runner. Kept as a regression alarm for cases where a future
+    # change accidentally introduces sequential post-resolve work.
+    assert elapsed < 1.0, f"batch endpoint took {elapsed:.3f}s (>1.0s suggests serial regression)"
 
 
 def test_fundamentals_batch_reason_uses_typed_codes_not_raw_exception_text() -> None:
@@ -460,3 +492,51 @@ def test_fundamentals_batch_classifies_timeout_as_upstream_timeout() -> None:
     assert body["results"]["AAPL"]["status"] == "error"
     assert body["results"]["AAPL"]["reason"] == "upstream_timeout"
     assert "simulated DB slow query" not in resp.text
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# PLAN-0098 W4 T-W4-02: defensive UUID parse around resolution.instrument.id.
+# Code-review §10.1 P2 — a malformed lookup payload (e.g. ``instrument`` None
+# or ``id`` not a UUID string) MUST fail ONE ticker, not 500 the whole batch.
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+def test_fundamentals_batch_invalid_lookup_payload_fails_one_ticker_only() -> None:
+    """A malformed lookup result is degraded to a per-ticker ``invalid_lookup``.
+
+    Two tickers requested: one resolves normally (returns a valid UUID-shaped
+    instrument), the other returns a lookup result with ``instrument.id =
+    None`` — which would raise ``TypeError`` inside the previous
+    ``UUID(resolution.instrument.id)`` line. The expected post-fix behaviour
+    is that:
+
+      * the GOOD ticker comes back ``status=ok``;
+      * the BAD ticker comes back ``status=error`` with ``reason=invalid_lookup``;
+      * the overall HTTP status is 200 (no batch-level 500).
+    """
+    tickers = ["AAPL", "MSFT"]
+    good_id = "00000000-0000-0000-0000-000000000010"
+
+    lookup_uc = MagicMock()
+
+    async def _execute(*, id=None, isin=None, symbol=None):  # type: ignore[no-untyped-def]  # noqa: A002
+        instr = MagicMock()
+        # AAPL → valid UUID-shaped instrument; MSFT → contract drift (id=None)
+        instr.id = good_id if symbol == "AAPL" else None
+        instr.symbol = symbol
+        result = MagicMock()
+        result.instrument = instr
+        return result
+
+    lookup_uc.execute = AsyncMock(side_effect=_execute)
+    history_uc = _make_history_uc({good_id: []})
+    _, client = _make_batch_app(history_uc, lookup_uc)
+
+    resp = client.post("/v1/fundamentals/batch", json={"tickers": tickers, "periods": 4})
+    assert resp.status_code == 200, (
+        f"batch endpoint 500ed on a malformed lookup payload — defensive guard regression " f"(body={resp.text!r})"
+    )
+    body = resp.json()
+    assert body["results"]["AAPL"]["status"] == "ok"
+    assert body["results"]["MSFT"]["status"] == "error"
+    assert body["results"]["MSFT"]["reason"] == "invalid_lookup"
