@@ -512,6 +512,28 @@ class AgeSyncWorker:
         case is that the phase MERGEs continue on the cached schema (i.e. the
         pre-fix behaviour); we never want the cleanup to crash the cycle.
         """
+        # PLAN-0097 W4 T-W4-03 (R36): rollback BEFORE invalidate.
+        # Although the bootstrap loop above does ``await session.commit()``
+        # before calling us, a subtle interaction can leave the session with a
+        # half-prepared autobegin transaction (e.g. when an "already exists"
+        # ProgrammingError was swallowed inside the loop and the implicit
+        # autobegin opened a fresh tx on the next iteration). Issuing an
+        # explicit rollback() first clears any such state so invalidate()
+        # safely returns the underlying DBAPI connection to the pool.
+        # Both calls are best-effort: invalidation is a cache-reset for the
+        # plpgsql label cache, and we never want cleanup-of-cleanup to crash
+        # the sync cycle.
+        try:
+            await session.rollback()
+        except Exception as exc:  # — best-effort tx clear
+            logger.warning(  # type: ignore[no-any-return]
+                "age_sync_session_rollback_failed",
+                error=type(exc).__name__,
+                message=(
+                    "best-effort session rollback before invalidate failed; "
+                    "proceeding to invalidate anyway (BP-574, R36)"
+                ),
+            )
         try:
             connection = await session.connection()
             await connection.invalidate()

@@ -508,6 +508,65 @@ class TestLabelBootstrap:
         session.connection.assert_awaited()
         connection_mock.invalidate.assert_awaited_once()
 
+    def test_bootstrap_rollback_called_before_invalidate(self) -> None:
+        """PLAN-0097 W4 T-W4-03 / R36 — after the bootstrap commit, the worker
+        MUST call ``session.rollback()`` BEFORE ``connection.invalidate()`` to
+        clear any half-prepared autobegin transaction state. Order matters:
+        an in-flight tx left over from a swallowed "already exists" branch
+        would otherwise mask the invalidate's effect.
+        """
+        valkey = _make_valkey()
+        session = _make_session()
+
+        # Record the call order across session.rollback and connection.invalidate.
+        call_order: list[str] = []
+
+        async def _rollback() -> None:
+            call_order.append("rollback")
+
+        async def _invalidate() -> None:
+            call_order.append("invalidate")
+
+        session.rollback = AsyncMock(side_effect=_rollback)
+        connection_mock = AsyncMock()
+        connection_mock.invalidate = AsyncMock(side_effect=_invalidate)
+        session.connection = AsyncMock(return_value=connection_mock)
+
+        worker = _build_worker(session, valkey)
+        asyncio.run(worker.run())
+
+        # Both calls must have happened; rollback must come BEFORE invalidate
+        # in the bootstrap cleanup sequence (R36).
+        assert "rollback" in call_order, "rollback() must run during bootstrap cleanup"
+        assert "invalidate" in call_order, "invalidate() must run during bootstrap cleanup"
+        # Find the FIRST occurrence of each (rollback may also be called from
+        # phase-cleanup paths in _run_phase; the bootstrap rollback must be
+        # earlier in call_order than the invalidate).
+        idx_rollback = call_order.index("rollback")
+        idx_invalidate = call_order.index("invalidate")
+        assert idx_rollback < idx_invalidate, f"rollback() must happen BEFORE invalidate() — got order: {call_order}"
+
+    def test_rollback_failure_does_not_prevent_invalidate(self) -> None:
+        """PLAN-0097 W4 T-W4-03 — rollback() is best-effort. If it raises, the
+        worker MUST still proceed to invalidate the connection (and the cycle
+        as a whole MUST NOT crash). Mirrors the BP-574 mitigation contract for
+        invalidate itself.
+        """
+        valkey = _make_valkey()
+        session = _make_session()
+
+        session.rollback = AsyncMock(side_effect=RuntimeError("session already closed"))
+        connection_mock = AsyncMock()
+        connection_mock.invalidate = AsyncMock()
+        session.connection = AsyncMock(return_value=connection_mock)
+
+        worker = _build_worker(session, valkey)
+        # Must not raise — both cleanup calls are best-effort.
+        asyncio.run(worker.run())
+
+        # Even though rollback raised, invalidate must still have been awaited.
+        connection_mock.invalidate.assert_awaited_once()
+
     def test_invalidate_failure_does_not_crash_run(self) -> None:
         """BP-574 mitigation — if invalidate raises, the cycle continues. The
         worst case is a silent regression to the stale-schema path, never a
