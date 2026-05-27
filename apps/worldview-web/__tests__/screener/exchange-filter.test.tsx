@@ -28,6 +28,24 @@ describe("ExchangeFilterRow", () => {
     ).toBeInTheDocument();
   });
 
+  it("renders backend-truncation badge when more than one exchange is selected", () => {
+    // WHY: QA #3 — Wave L-1 backend takes only `[0]` of the exchanges
+    // multi-select. The badge surfaces this silent drop at selection time.
+    render(<ExchangeFilterRow value={["NYSE", "NASDAQ"]} onChange={() => {}} />);
+    expect(screen.getByText("backend: 1 of 2")).toBeInTheDocument();
+  });
+
+  it("does not render the truncation badge when one or zero exchanges are selected", () => {
+    // WHY: badge must not appear when nothing is being truncated — otherwise
+    // it would falsely imply the backend is dropping data.
+    const { rerender } = render(
+      <ExchangeFilterRow value={[]} onChange={() => {}} />,
+    );
+    expect(screen.queryByText(/backend: 1 of/)).not.toBeInTheDocument();
+    rerender(<ExchangeFilterRow value={["NYSE"]} onChange={() => {}} />);
+    expect(screen.queryByText(/backend: 1 of/)).not.toBeInTheDocument();
+  });
+
   it("static option list contains the major exchanges (NYSE, NASDAQ, LSE, JPX)", () => {
     // WHY: regression guard against silent edits to the static fallback —
     // dropping a major exchange would invisibly break screens for users

@@ -52,6 +52,26 @@ describe("CountryFilterRow", () => {
     expect(onChange).toHaveBeenCalledWith([...naIso3]);
   });
 
+  it("renders backend-truncation badge when more than one country is selected", () => {
+    // WHY: QA #3 — Wave L-1 backend takes only `[0]` of the multi-select.
+    // Without this badge users silently get USA-only when selecting {USA,DEU}.
+    // The badge text "backend: 1 of N" is the user-facing disclosure of the
+    // silent-drop pattern documented in build-filters.ts.
+    render(<CountryFilterRow value={["USA", "DEU"]} onChange={() => {}} />);
+    expect(screen.getByText("backend: 1 of 2")).toBeInTheDocument();
+  });
+
+  it("does not render the truncation badge when one or zero countries are selected", () => {
+    // WHY: the badge MUST be absent at length ≤ 1 — otherwise it would lie
+    // about the backend dropping selections when nothing is being dropped.
+    const { rerender } = render(
+      <CountryFilterRow value={[]} onChange={() => {}} />,
+    );
+    expect(screen.queryByText(/backend: 1 of/)).not.toBeInTheDocument();
+    rerender(<CountryFilterRow value={["USA"]} onChange={() => {}} />);
+    expect(screen.queryByText(/backend: 1 of/)).not.toBeInTheDocument();
+  });
+
   it("preset chip shows aria-pressed=true when current selection exactly matches", () => {
     // WHY exact-match semantics: lighting up "NA" when the user has
     // {USA,CAN,MEX,KOR} would lie about what the chip would do if

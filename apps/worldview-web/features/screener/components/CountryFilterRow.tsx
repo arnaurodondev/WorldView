@@ -34,6 +34,12 @@
  */
 
 import { MultiCombobox, type MultiComboboxItem } from "@/components/ui/multi-combobox";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
 import {
   COUNTRY_REGIONS,
@@ -77,11 +83,51 @@ export function CountryFilterRow({ value, onChange }: CountryFilterRowProps) {
     return true;
   }
 
+  // WHY truncation disclosure: Wave L-1 backend takes only the FIRST element
+  // of the `countries` array per ScreenFilterRequest (see
+  // features/screener/lib/build-filters.ts §"Categorical / coverage"). The UI
+  // happily accepts and chips N selections, so without an explicit on-screen
+  // indicator the user has no idea that selecting {USA,DEU} silently filters
+  // on USA only. Wave L-2 will add IN(...) support and remove this badge.
+  // Anti-pattern guarded against: "Audit return values must be persisted" /
+  // "Prompt input vs lookup mismatch" — silent drops on UI-vs-backend contract.
+  const isTruncated = value.length > 1;
+  const truncationCopy =
+    "Wave L-1 backend currently filters on the first selected country only. Wave L-2 will add IN-list support.";
+
   return (
     <div className="flex items-center gap-2 px-2 py-1">
       <label className="text-[10px] font-mono uppercase tracking-[0.06em] text-muted-foreground w-20 shrink-0">
         Country
       </label>
+
+      {/* ── Backend-truncation badge (only when >1 selected) ───────────
+        * WHY a badge next to the label (not in the chip strip): the chips
+        * live in a separate top-of-popover region and the user doesn't see
+        * them while editing this row. Inline next to the label = visible
+        * exactly when the user is making the selection. Tooltip carries the
+        * full explanation; badge text "backend: 1 of N" is the smallest copy
+        * that still answers "what is happening to my selection?".
+        * WHY text-warning palette: terminal "amber-on-black" warning tier —
+        * less alarming than destructive red (the request still succeeds) but
+        * stronger than muted (silent failure pattern is the whole reason
+        * this exists). */}
+      {isTruncated ? (
+        <TooltipProvider delayDuration={200}>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <span
+                role="status"
+                aria-label={truncationCopy}
+                className="text-warning bg-warning/10 text-[9px] font-mono px-1.5 rounded-[2px] cursor-help"
+              >
+                {`backend: 1 of ${value.length}`}
+              </span>
+            </TooltipTrigger>
+            <TooltipContent side="top">{truncationCopy}</TooltipContent>
+          </Tooltip>
+        </TooltipProvider>
+      ) : null}
 
       {/* ── Regional preset chips (NA / EU / APAC / EM) ─────────────── */}
       <div

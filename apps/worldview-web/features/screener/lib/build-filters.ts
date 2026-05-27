@@ -85,6 +85,17 @@ export function buildScreenerFilters(f: FilterState): ScreenerFilter[] {
   // single market_capitalization filter to carry them when no metric range
   // is set. Multi-select today sends only the first selected country /
   // exchange — see filter-state.ts comment for the IN(...) future plan.
+  //
+  // BACKEND-TRUNCATION DISCLOSURE: lines 94–95 below take only `[0]` of the
+  // multi-select arrays because `ScreenFilterRequest.country` / `.exchange`
+  // are scalar strings in the Wave L-1 schema. We deliberately do NOT change
+  // the truncation logic here (that requires Wave L-1.1 / L-2 backend work to
+  // accept arrays). Instead, the user is informed at selection time by an
+  // amber "backend: 1 of N" badge with hover-tooltip rendered inside
+  // `features/screener/components/CountryFilterRow.tsx` and
+  // `features/screener/components/ExchangeFilterRow.tsx`. This makes the
+  // silent drop visible and explicit. Remove the badges + this note when
+  // Wave L-2 ships IN-list support and the line below sends the full array.
   const hasCategoricalOrCoverage =
     (f.countries && f.countries.length > 0) ||
     (f.exchanges && f.exchanges.length > 0) ||
