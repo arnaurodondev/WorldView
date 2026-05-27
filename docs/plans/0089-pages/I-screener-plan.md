@@ -3,7 +3,7 @@ id: PRD-0089-WI
 title: Wave I — Screener
 prd: PRD-0089
 order: WI (ninth page wave — runs after F1 + F2 + W1; I-B gated on Wave L)
-status: I-A done (2026-05-26) / I-B blocks IB-L1 + IB-L2 unblocked (Wave L-1/L-2 shipped 2026-05-25)
+status: I-A done (2026-05-26) / I-B blocks IB-L1 + IB-L2 unblocked (Wave L-1 shipped 2026-05-25 — Wave L-2 filter/sort + migration 024 shipped 2026-05-27)
 created: 2026-05-25
 updated: 2026-05-26
 parent_prd: docs/specs/0089-platform-page-redesign.md
@@ -105,7 +105,7 @@ remains disabled.
 | Wave L track | Backend deliverable | Unblocks I-B task |
 |--------------|---------------------|-------------------|
 | **L-1** (~1 d) | `country`, `exchange`, `has_fundamentals`, `has_ohlcv` added to `ScreenFilter` Pydantic + `query_screen` WHERE; `screen_field_metadata` rows registered | T-IB-01 (country chip + popover row), T-IB-02 (exchange chip), T-IB-03 (coverage toggles) |
-| **L-2** (~2 d) | `instrument_fundamentals_snapshot` LEFT JOIN in `query_screen` — surfaces `avg_volume_30d`, `eps_ttm`, `free_cash_flow`, `fcf_margin`, `interest_coverage`, `net_debt_to_ebitda`, `credit_rating`; registered in `screen_field_metadata` | T-IB-04..T-IB-09 (filter chips + opt-in columns) |
+| **L-2** (~2 d) **— shipped 2026-05-27** | `instrument_fundamentals_snapshot` LEFT JOIN in `query_screen` (shipped 2026-05-25) **plus** WHERE-clause filters and ORDER BY for the 7 snapshot fields (`avg_volume_30d`, `eps_ttm`, `free_cash_flow`, `fcf_margin`, `interest_coverage`, `net_debt_to_ebitda`, `credit_rating`); `ScreenFilterRequest` extended with 12 numeric `min`/`max` fields + `credit_ratings: list[str]`; migration `024_seed_l2_snapshot_screen_fields.py` persists the 7 `screen_field_metadata` rows idempotently; +12 unit tests in `test_screener_l1_l2.py` (25 total PASS) | T-IB-04..T-IB-09 (filter chips + opt-in columns) |
 | **L-3** (~3 d) | `ComputedMetricsBackfillWorker` → `dist_from_52w_high_pct`, `dist_from_52w_low_pct`, `return_1m`, `return_3m`, `return_6m`, `return_ytd`, `return_1y`, `return_3y` as `fundamental_metrics` rows | T-IB-10..T-IB-12 (52W distance + 1Y/YTD return columns + filter chips) |
 | **L-4** (~2 d) | Analyst / insider / ownership rollup ETLs → `analyst_target_price`, `analyst_consensus_rating`, `insider_net_buy_90d`, `institutional_ownership_pct`, `short_percent` | T-IB-13..T-IB-16 |
 | **L-5** (~3 d) | Intelligence-layer rollups (S7→S3 nightly sync) → `news_count_7d`, `llm_relevance_7d_max`, `display_relevance_7d_weighted`, `recent_contradiction_count`, `has_active_alert`, `has_ai_brief`, `next_earnings_date`, `next_dividend_date` | T-IB-17..T-IB-21 (IntelligenceFilterGroup row activations + 2 columns) |
