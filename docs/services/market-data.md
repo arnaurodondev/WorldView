@@ -433,6 +433,37 @@ read helper `query_fundamentals` accepts an optional `period_type` filter:
   layer, LLM grounding) can never quote a TTM number as a quarterly figure
   without seeing the mismatch. See PLAN-0097 T-W1-01 / **BP-577**.
 
+##### Contract summary (PLAN-0097 W4 T-W4-05)
+
+The cumulative period-type contract across PLAN-0095 / PLAN-0096 / PLAN-0097
+is:
+
+1. **Every fundamentals read MUST be deterministic with respect to
+   periodicity.** Callers either pass `period_type` explicitly or rely on a
+   repository default that is documented in the function docstring. A read
+   path that silently mixes QUARTERLY and ANNUAL rows is a P0 data-integrity
+   bug (BP-540, BP-543, BP-546).
+2. **Repository defaults are defensive, not implicit.** The repo defaults
+   `balance_sheet` and `cash_flow` to QUARTERLY because the EODHD pipeline
+   ingests both periodicities into the same table and an unfiltered query
+   would interleave them. New section tables MUST adopt the same
+   defensive-default pattern unless they only ever store one periodicity.
+3. **Every row leaving the use-case layer carries an explicit `period_type`
+   field.** This is the second line of defense — even if a future bug
+   reintroduces interleaving at the repo, the downstream consumer (rag-chat
+   tool layer, frontend cards, LLM grounding payloads) sees the label and
+   either filters or surfaces the mismatch.
+4. **TTM-only sections (`highlights`, `valuation_ratios`) MUST label their
+   rows as the dominant periodicity** so a TTM number is never quoted as a
+   quarterly figure without the label disagreeing visibly. See PLAN-0097
+   T-W1-01.
+5. **Rule R20 — fundamentals queries MUST specify `period_type` explicitly
+   or accept a documented repo default** is codified in `RULES.md`
+   (R20-companion: PLAN-0097 W4 added the contract; the rule itself
+   remains the union of R20 + the docs above). The repo unit tests in
+   `services/market-data/tests/unit/test_query_fundamentals.py` enforce the
+   default for every section.
+
 #### Freshness tracking
 
 Every successful `FundamentalsConsumer` cycle bumps

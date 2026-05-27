@@ -266,6 +266,8 @@ Schemas as `.avsc` files in `infra/kafka/schemas/` and per-service `infrastructu
 | `alert_db` | S10 | -- | alert_subscriptions, alerts, pending_alerts, alert_dedup, outbox_events |
 
 > **Market-data fundamentals query contract**: section tables mix QUARTERLY+ANNUAL rows under the same enum value; callers MUST pin the periodicity. See `docs/services/market-data.md` §"Period-type contract" and §"Freshness tracking" (PLAN-0095 / PLAN-0096, BP-540 / BP-543 / BP-545 / BP-546).
+>
+> **PLAN-0097 cross-references**: (a) S3 period-type contract is codified end-to-end in `docs/services/market-data.md` §"Period-type contract" — every read pins periodicity and every use-case row carries an explicit `period_type` label (BP-577); (b) S3 batch fundamentals endpoint `POST /v1/fundamentals/batch` parallelises ticker resolution + section loads via `asyncio.gather` for the rag-chat multi-ticker tool path (PLAN-0097 W3 T-W3-02); (c) S7 AGE-bootstrap pattern (label DDL + commit + rollback + connection invalidate) is codified as RULES.md R41 (PLAN-0097 W4 T-W4-03, BP-574).
 
 ### 8.2 MinIO Object Store
 

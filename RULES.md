@@ -451,6 +451,66 @@ Rules:
 
 ---
 
+### R40: Every tenant-scoped query MUST admit the PUBLIC_TENANT_ID sentinel
+**Why**: PLAN-0096 W4 introduced `PUBLIC_TENANT_ID = 00000000-0000-0000-0000-000000000000`
+(see `libs/common/src/common/ids.py`) as the tenant assignment for rows whose
+real tenant could not be resolved at write time (e.g. an inbound article with
+no producer tenant header). Without this rule the natural filter
+`tenant_id IS NULL OR tenant_id = :tenant_id` silently hides every
+PUBLIC_TENANT_ID row from authenticated callers — they remain visible only to
+anonymous queries (where the missing `:tenant_id` also matches the NULL leg).
+That's the inverse of the intent: PUBLIC rows must be visible to **every**
+tenant.
+
+Rules:
+1. Any SQL filter on `tenant_id` for read paths MUST include a third OR-leg:
+   `OR tenant_id = '00000000-0000-0000-0000-000000000000'::uuid`
+   (or the equivalent parameterised form).
+2. The repo unit test asserting the filter MUST cover all three row classes:
+   NULL-tenant, requesting-tenant, and PUBLIC_TENANT_ID sentinel.
+3. New write paths that assign PUBLIC_TENANT_ID MUST emit a structured log so
+   the population is auditable (precedent: `article_consumer.py` line 477).
+
+PLAN-0097 W4 T-W4-01 added this rule after finding `entity_mentions` filter
+inversion in `news_query.py`. Pre-existing code commits that reference this
+rule by its plan name ("R35") refer to this same rule — R40 is the canonical
+RULES.md number (R35 was already taken by the docker-compose `depends_on`
+rule, see above).
+
+### R41: After AGE DDL, call `session.rollback()` before `connection.invalidate()`
+**Why**: PostgreSQL's plpgsql engine (which backs `ag_catalog.cypher()`) caches
+the AGE label catalog on first use of a connection. After a worker creates new
+vlabels/elabels via `create_vlabel` / `create_elabel`, the subsequent Cypher
+MERGE on the same physical connection silently drops every node whose label
+was just created (BP-574 — the 0/14,822 TemporalEvent silent-drop bug).
+
+The fix is two-step:
+1. `await session.commit()` — make the DDL durable.
+2. `await session.connection().invalidate()` — drop the connection back to
+   the pool so the next operation checks out a fresh one with no cached
+   schema.
+
+PLAN-0097 W4 T-W4-03 added the explicit prerequisite that
+`await session.rollback()` MUST run **before** the invalidate. Although the
+prior commit makes the DDL durable, a swallowed "already exists"
+ProgrammingError mid-loop can leave an autobegin tx mid-flight that masks
+the invalidate's effect.
+
+Rules:
+1. Every AGE-DDL-issuing worker MUST follow the order
+   `commit() → rollback() (best-effort) → connection.invalidate() (best-effort)`.
+2. The rollback and invalidate MUST both be wrapped in try/except so a
+   cleanup failure does not crash the sync cycle (cleanup-of-cleanup
+   contract).
+3. A unit test MUST assert the call order so a future refactor cannot drop
+   either step.
+
+Pre-existing code commits that reference this rule by its plan name ("R36")
+refer to this same rule — R41 is the canonical RULES.md number (R36 was
+already taken by the LLM tool-call envelope rule, see above).
+
+---
+
 ## Summary Table
 
 | Rule | Category | Severity |
@@ -494,3 +554,5 @@ Rules:
 | R37 | Async & Concurrency | MUST |
 | R38 | Operational | MUST |
 | R39 | Safety | MUST |
+| R40 | Multi-tenancy | MUST |
+| R41 | Infrastructure | MUST |
