@@ -360,6 +360,17 @@ export const qk = {
     // `qc.invalidateQueries({ queryKey: qk.chat.all })` cascade to it on logout.
     entityResolve: (entityId: string) =>
       [QK_VERSION, "chat", "entity-resolve", entityId] as const,
+    // WHY contradictions: PLAN-0089 K Block A — chat threads accumulate
+    // contradiction events emitted by S8; the side rail surfaces them via a
+    // thread-scoped query so cache invalidation cascades on thread switch.
+    contradictions: (threadId: string) =>
+      [QK_VERSION, "chat", threadId, "contradictions"] as const,
+    // WHY recentCitations: PLAN-0089 K Block A — the chat sources panel reads a
+    // thread-scoped rolling list of citations for quick re-grounding without
+    // re-scanning every message. Scoped per-thread so switching threads serves
+    // its own cache slot instantly.
+    recentCitations: (threadId: string) =>
+      [QK_VERSION, "chat", threadId, "recent-citations"] as const,
   },
 
   // ── Dashboard widgets ────────────────────────────────────────────────────
