@@ -50,7 +50,13 @@ _TABLES: tuple[str, ...] = (
     "balance_sheets",
     "cash_flow_statements",
     "dividend_history",
-    "dividend_summary",
+    # NOTE: ``dividend_summary`` was listed in migration 019's _TABLES (and
+    # propagated to 022/023) but the table is not created by 001_initial_schema
+    # — only ``dividend_history`` and ``splits_dividends`` exist. Including it
+    # here causes ``CREATE INDEX ... ON dividend_summary`` to raise
+    # UndefinedTable even with IF NOT EXISTS (the table existence check
+    # happens before the index existence check). Removed to unblock PLAN-0097
+    # Phase D deployment.
     "earnings_annual_trends",
     "earnings_history",
     "earnings_trends",

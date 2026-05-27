@@ -69,7 +69,11 @@ _TABLES: tuple[str, ...] = (
     "balance_sheets",
     "cash_flow_statements",
     "dividend_history",
-    "dividend_summary",
+    # NOTE: ``dividend_summary`` was listed in migration 019's _TABLES but the
+    # table is not created by 001_initial_schema (only ``dividend_history`` and
+    # ``splits_dividends`` exist in the schema). Including it here would cause
+    # ``ANALYZE dividend_summary`` to fail with UndefinedTable, blocking the
+    # PLAN-0097 Phase D deployment. Removed.
     "earnings_annual_trends",
     "earnings_history",
     "earnings_trends",
