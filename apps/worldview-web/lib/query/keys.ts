@@ -332,6 +332,33 @@ export const qk = {
     saved: () => [QK_VERSION, "screener", "saved-screens"] as const,
     sparklines: (instrumentIds: readonly string[]) =>
       [QK_VERSION, "screener", "sparklines", [...instrumentIds].sort()] as const,
+    // PRD-0089 Wave I-A · T-IA-10 — debounced live-count key.
+    // WHY a dedicated key (separate from `page`): the Bloomberg EQS pattern
+    // shows "1,243 matches" as the user types filters, BEFORE they commit.
+    // It fires `POST /v1/fundamentals/screen` with `limit: 1` so the
+    // response is tiny; sharing the `page` cache slot would invalidate
+    // the user's actual paginated results on every keystroke.
+    count: (filtersSerialized: string) =>
+      [QK_VERSION, "screener", "count", filtersSerialized] as const,
+    // PRD-0089 Wave I-A · T-IA-10 — forward-compat placeholder.
+    // WHY register now: Wave L-7 will ship server-persisted presets via
+    // `POST /v1/screener/presets`. Registering the key here means the
+    // future hook can target it without a follow-up keys.ts diff (which
+    // tends to drift across PRs and is annoying to review).
+    presets: () => [QK_VERSION, "screener", "presets"] as const,
+    // PRD-0089 Wave I-A · T-IA-10 — forward-compat placeholder.
+    // WHY: Wave I-B (Block IB-L5) activates the intelligence-layer rollups
+    // (news count, brief score, contradiction count). They'll be fetched
+    // alongside the paginated screener but cached separately so a rollup
+    // refresh doesn't invalidate the result rows.
+    intelligenceRollup: (filtersSerialized: string, offset: number) =>
+      [
+        QK_VERSION,
+        "screener",
+        "intelligence-rollup",
+        filtersSerialized,
+        offset,
+      ] as const,
   },
 
   // ── Alerts ───────────────────────────────────────────────────────────────
