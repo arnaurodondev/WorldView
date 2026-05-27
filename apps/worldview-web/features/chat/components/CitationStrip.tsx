@@ -43,8 +43,11 @@
 
 import { useCallback } from "react";
 
-import { HoverCard, HoverCardContent, HoverCardTrigger } from "@/components/ui/hover-card";
-import { safeExternalUrl } from "@/lib/utils";
+import {
+  CitationHoverCard,
+  type CitationHoverData,
+} from "@/features/chat/components/CitationHoverCard";
+import { HoverCard, HoverCardTrigger } from "@/components/ui/hover-card";
 import type { CitationV2 } from "@/types/api";
 
 interface CitationStripProps {
@@ -103,11 +106,10 @@ function scrollToAnchor(ref: number, anchorPrefix?: string): void {
  * callers do not need to wrap with a conditional (matches the rest of
  * Wave K's "render nothing when nothing to show" convention).
  *
- * INLINE HOVERCARD CONTENT NOTE (T-10): we inline the hovercard layout
- * here. T-12 will extract it into a dedicated `CitationHoverCard.tsx`
- * file with a richer excerpt + published-at layout once the wire shape
- * grows those fields. Keeping the inline version minimal in T-10 lets
- * us ship the strip without depending on a file that doesn't exist yet.
+ * HOVERCARD CONTENT (T-12): the per-row hovercard layout lives in
+ * `CitationHoverCard.tsx`. CitationStrip owns the `<HoverCard>` root so
+ * the `openDelay`/`closeDelay` is consistent across all rows; the
+ * extracted component renders the `<HoverCardContent>` child.
  */
 export function CitationStrip({ citations, anchorPrefix }: CitationStripProps) {
   // useCallback so the row-level closure does not get re-created every
@@ -145,7 +147,16 @@ export function CitationStrip({ citations, anchorPrefix }: CitationStripProps) {
           cite.relevance_score !== undefined &&
           cite.relevance_score !== null &&
           cite.relevance_score < LOW_CONFIDENCE_THRESHOLD;
-        const safeUrl = cite.url ? safeExternalUrl(cite.url) : null;
+        // Adapter into the hovercard's structural shape — keeps the
+        // hovercard decoupled from `CitationV2` so we can grow the wire
+        // shape (Q-9: published_at, excerpt) without re-typing the
+        // hovercard's props.
+        const hoverData: CitationHoverData = {
+          title: cite.title,
+          source: cite.source,
+          url: cite.url,
+          kind: cite.kind,
+        };
         return (
           <HoverCard key={`${cite.id}-${ref}`} openDelay={250} closeDelay={100}>
             <HoverCardTrigger asChild>
@@ -175,35 +186,7 @@ export function CitationStrip({ citations, anchorPrefix }: CitationStripProps) {
                 ) : null}
               </button>
             </HoverCardTrigger>
-            <HoverCardContent
-              align="start"
-              sideOffset={4}
-              className="w-72 p-2 text-[11px] font-mono text-popover-foreground"
-            >
-              {/*
-                Inline minimal hover preview. T-12 will replace this block
-                with the `<CitationHoverCard citation={...} />` component.
-              */}
-              <div className="flex items-center gap-1">
-                <span className="border border-border bg-muted px-1 text-[9px] uppercase text-muted-foreground tabular-nums">
-                  {cite.kind}
-                </span>
-                <span className="truncate text-muted-foreground">{cite.source}</span>
-              </div>
-              <div className="mt-1 leading-snug text-foreground">{cite.title || "Untitled"}</div>
-              {safeUrl ? (
-                <div className="mt-1.5 text-right">
-                  <a
-                    href={safeUrl}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="text-[10px] text-primary hover:underline"
-                  >
-                    Open ↗
-                  </a>
-                </div>
-              ) : null}
-            </HoverCardContent>
+            <CitationHoverCard citation={hoverData} />
           </HoverCard>
         );
       })}
