@@ -80,26 +80,37 @@ BENIGN_RELATIONSHIP_QUERIES: list[str] = [
 # ---------------------------------------------------------------------------
 
 
-def _safe_response_mock() -> MagicMock:
-    """Build a mocked httpx response that returns ``{"label": "SAFE"}``."""
+def _labelled_response_mock(label: str) -> MagicMock:
+    """Build a mocked httpx response returning ``{"label": label}``.
+
+    ``label`` ∈ {"SAFE", "UNSAFE"}. We expose both so the asymmetric-handling
+    test below can pin that the classifier ROUTES the LLM verdict rather
+    than masking it with an internal heuristic.
+    """
     response = MagicMock()
     response.json = MagicMock(
         return_value={
-            "choices": [{"message": {"content": json.dumps({"label": "SAFE", "reason": "benign relationship query"})}}]
+            "choices": [{"message": {"content": json.dumps({"label": label, "reason": f"mocked {label.lower()}"})}}]
         }
     )
     response.raise_for_status = MagicMock()
     return response
 
 
+def _safe_response_mock() -> MagicMock:
+    """Backward-compatible helper: SAFE-labelled mocked httpx response."""
+    return _labelled_response_mock("SAFE")
+
+
 @pytest.mark.parametrize("query", BENIGN_RELATIONSHIP_QUERIES)
 def test_benign_relationship_query_classifies_safe_mocked(query: str) -> None:
     """When the mocked LLM returns SAFE for *query*, ``classify()`` returns False.
 
-    This pins the wiring/parse path; it does NOT validate the system-prompt
-    text itself (the live smoke test below does). A regression here means
-    the classifier has grown a benign-query override that conflicts with
-    SAFE LLM verdicts.
+    Strengthened by PLAN-0098 W4 T-W4-01 (code-review §5.2 P2):
+    the assertion is no longer purely structural — we ALSO verify that the
+    classifier actually invoked the LLM with the user query in the request
+    body. A regression that short-circuits and returns False without ever
+    asking the LLM (e.g. an over-eager allowlist) would now fail this test.
     """
     from rag_chat.application.security.llm_injection_classifier import LLMInjectionClassifier
 
@@ -114,6 +125,66 @@ def test_benign_relationship_query_classifies_safe_mocked(query: str) -> None:
         result = asyncio.run(classifier.classify(query))
 
     assert result is False, f"Expected SAFE for benign relationship query: {query!r}"
+    # Verify the LLM was actually consulted (no silent short-circuit) AND
+    # that the query string was carried into the request body. We do not
+    # assert on the exact URL/headers (those are model-config knobs the
+    # other unit tests cover) — only that the user query reaches the wire.
+    assert mock_client.post.await_count == 1, (
+        f"classifier did not call the LLM exactly once " f"(await_count={mock_client.post.await_count})"
+    )
+    call_kwargs = mock_client.post.await_args.kwargs
+    payload_str = json.dumps(call_kwargs.get("json", {}))
+    assert query in payload_str, (
+        f"user query {query!r} was not present in the LLM request payload "
+        f"— classifier may be classifying a sanitised/empty stand-in"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Asymmetric-handling spot check (PLAN-0098 W4 T-W4-01, code-review §5.2 P2).
+# The mocked-SAFE tests above prove SAFE → False; this complement proves
+# UNSAFE → True, on a representative sample of 5 queries (sampled across
+# the corpus: Q8, partnerships, supply-chain, board comparison, traversal).
+# Without this, the SAFE-only test would tautologically pass even if the
+# classifier hard-coded ``return False`` regardless of LLM verdict.
+# ---------------------------------------------------------------------------
+
+_ASYMMETRIC_SAMPLE: list[str] = [
+    BENIGN_RELATIONSHIP_QUERIES[0],  # Q8 verbatim
+    BENIGN_RELATIONSHIP_QUERIES[5],  # "What deals exist between Google and Samsung?"
+    BENIGN_RELATIONSHIP_QUERIES[7],  # "Which suppliers does Boeing share with Airbus?"
+    BENIGN_RELATIONSHIP_QUERIES[8],  # "Compare the boards of JPMorgan and Goldman Sachs."
+    BENIGN_RELATIONSHIP_QUERIES[-1],  # "Traverse the graph to find how Berkshire …"
+]
+
+
+@pytest.mark.parametrize("query", _ASYMMETRIC_SAMPLE)
+def test_classifier_routes_llm_unsafe_verdict_through(query: str) -> None:
+    """When the mocked LLM returns UNSAFE for *query*, ``classify()`` returns True.
+
+    Defends against the (silent) failure mode where the classifier hard-codes
+    a SAFE verdict for relationship queries via an allowlist — the SAFE
+    parametrised test above would still pass in that case, masking a real
+    safety regression. Here we pin that the LLM's UNSAFE verdict is honoured
+    on the same 5 queries that the SAFE test covers.
+    """
+    from rag_chat.application.security.llm_injection_classifier import LLMInjectionClassifier
+
+    classifier = LLMInjectionClassifier(api_key="test-key-123")
+
+    mock_client = AsyncMock()
+    mock_client.post = AsyncMock(return_value=_labelled_response_mock("UNSAFE"))
+    mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+    mock_client.__aexit__ = AsyncMock(return_value=False)
+
+    with patch("httpx.AsyncClient", return_value=mock_client):
+        result = asyncio.run(classifier.classify(query))
+
+    assert result is True, (
+        f"classifier suppressed an UNSAFE LLM verdict for {query!r} "
+        f"— relationship-query allowlist may be overriding the LLM"
+    )
+    assert mock_client.post.await_count == 1
 
 
 # ---------------------------------------------------------------------------

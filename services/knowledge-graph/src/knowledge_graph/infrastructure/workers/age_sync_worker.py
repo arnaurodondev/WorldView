@@ -512,7 +512,10 @@ class AgeSyncWorker:
         case is that the phase MERGEs continue on the cached schema (i.e. the
         pre-fix behaviour); we never want the cleanup to crash the cycle.
         """
-        # PLAN-0097 W4 T-W4-03 (R36): rollback BEFORE invalidate.
+        # PLAN-0097 W4 T-W4-03 (R41 — see RULES.md §R41; the plan-doc shorthand
+        # was "R36" before the renumbering: the canonical RULES.md entry that
+        # codifies the commit → rollback → invalidate order is R41). Rollback
+        # BEFORE invalidate:
         # Although the bootstrap loop above does ``await session.commit()``
         # before calling us, a subtle interaction can leave the session with a
         # half-prepared autobegin transaction (e.g. when an "already exists"
@@ -531,7 +534,7 @@ class AgeSyncWorker:
                 error=type(exc).__name__,
                 message=(
                     "best-effort session rollback before invalidate failed; "
-                    "proceeding to invalidate anyway (BP-574, R36)"
+                    "proceeding to invalidate anyway (BP-574, R41)"
                 ),
             )
         try:
