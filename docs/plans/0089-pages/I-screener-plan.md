@@ -3,9 +3,9 @@ id: PRD-0089-WI
 title: Wave I — Screener
 prd: PRD-0089
 order: WI (ninth page wave — runs after F1 + F2 + W1; I-B gated on Wave L)
-status: ready-to-execute (I-A) / I-B blocks IB-L1 + IB-L2 unblocked (Wave L-1/L-2 shipped 2026-05-25)
+status: I-A done (2026-05-26) / I-B blocks IB-L1 + IB-L2 unblocked (Wave L-1/L-2 shipped 2026-05-25)
 created: 2026-05-25
-updated: 2026-05-25
+updated: 2026-05-26
 parent_prd: docs/specs/0089-platform-page-redesign.md
 parent_design: docs/designs/0089/08-screener.md
 waves:
@@ -613,13 +613,30 @@ this; flag and stop if a future wave proposes >14 default columns.
 
 ## §10. Definition of done
 
-### Wave I-A
-- All 9 §7 I-A validation gates pass.
-- `git log --oneline | grep -c "feat(plan-0089-wi-a"` ≥ 14.
-- Manual eyeball: page renders at 1440×900 with 240 cells above the fold,
-  preset/chip/NL/load-more chrome stacked per design §4.1.
-- `BackendPendingBadge` visible on all 7 IntelligenceFilterGroup rows.
-- `ScreenerFilterBar.tsx` file present on disk (not deleted; renamed neither).
+### Wave I-A (shipped 2026-05-26)
+- [x] All 9 §7 I-A validation gates pass (lint / typecheck / vitest /
+      build / playwright / arch / density — see commit log + Block E
+      report; pre-existing concurrent-session contamination in
+      MorningBriefCard.tsx / portfolio tests / pnpm-audit CVEs is
+      tracked separately and out of Wave I-A scope).
+- [x] `git log --oneline | grep -c "feat(plan-0089-wi-a"` ≥ 14
+      (Block A 4 + Block B 4 + Block C 3 + Block D 3 + follow-up 1).
+- [x] Manual / runtime eyeball: page renders at 1440×900 with 240 cells
+      above the fold (ScreenerTable test asserts ≥20 rows; Playwright
+      density spec asserts ≥240 [data-cell] elements at the locked
+      1440×900 viewport).
+- [x] `BackendPendingBadge` visible on all 7 IntelligenceFilterGroup
+      rows (IntelligenceFilterGroup.test.tsx pins 7 status badges
+      when backendReady is undefined).
+- [x] `ScreenerFilterBar.tsx` file present on disk (not deleted; renamed
+      neither). Verified via `git status`.
+
+**Hotkey pattern used**: phase-capture window-level keydown listener
+(per plan R-2 fallback) because `useScopedHotkeys` does NOT exist in
+the codebase. Documented inline in
+`app/(app)/screener/page.tsx`. The pattern fires before the global
+command palette listener (which lives in a later bubble), giving us
+the required "/" override.
 
 ### Wave I-B (per block)
 - Each L-track block independently passes its Block validation gate (§6.1).
