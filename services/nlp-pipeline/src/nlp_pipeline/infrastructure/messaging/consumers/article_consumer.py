@@ -580,9 +580,14 @@ class ArticleProcessingConsumer(ValkeyDedupMixin, BaseKafkaConsumer[None]):
         )
         for _i, m in enumerate(mentions):
             m.mention_id = uuid.UUID(uuid5_from_parts(str(doc_id), str(_i), m.mention_text.lower().strip()))
-        if tenant_id is not None:
-            for m in mentions:
-                m.tenant_id = tenant_id
+        # PLAN-0098 W2 T-W2-01 (BP-586): unconditional stamp.  ``tenant_id`` is
+        # guaranteed non-None at this point (sentinel ``PUBLIC_TENANT_ID`` is
+        # substituted for legacy/missing tenants in ``process_message``).  The
+        # previous ``if tenant_id is not None`` guard was redundant; removing
+        # it makes the intent obvious and prevents any future regression where
+        # an upstream block constructs a mention with ``tenant_id=None``.
+        for m in mentions:
+            m.tenant_id = tenant_id
         s6_ner_mentions_total.inc(len(mentions))
 
         # Blocks 5-6: Routing + suppression
@@ -664,6 +669,32 @@ class ArticleProcessingConsumer(ValkeyDedupMixin, BaseKafkaConsumer[None]):
                 _canonical_repo=canonical_entity_repo,
                 _mention_resolution_repo=mention_resolution_repo,
             )
+            # ── Pre-persist tenant_id safety net (PLAN-0098 W2 T-W2-01) ──
+            # Defence-in-depth against any current or future code path that
+            # constructs an ``EntityMention`` without propagating ``tenant_id``
+            # (e.g. entity resolution, deep extraction, novelty backfill).  The
+            # ``entity_mentions.tenant_id`` column is ``NOT NULL`` (migration
+            # 0020); a single mention with ``tenant_id=None`` fails the INSERT,
+            # the exception is treated as retryable, and the topic stalls
+            # forever (BP-575/BP-586).  We substitute ``PUBLIC_TENANT_ID`` so
+            # the row writes cleanly and emit a WARN with the mention metadata
+            # so a forensic analyst can identify the offending upstream block.
+            _missing_tenant: list[uuid.UUID] = [m.mention_id for m in ml.final_mentions if m.tenant_id is None]
+            if _missing_tenant:
+                logger.warning(  # type: ignore[no-any-return]
+                    "article_consumer.pre_persist_tenant_id_substituted",
+                    doc_id=str(doc_id),
+                    missing_count=len(_missing_tenant),
+                    total_mentions=len(ml.final_mentions),
+                    sample_mention_ids=[str(mid) for mid in _missing_tenant[:5]],
+                    sentinel=str(PUBLIC_TENANT_ID),
+                    fallback_tenant_id=str(tenant_id) if tenant_id is not None else str(PUBLIC_TENANT_ID),
+                )
+                _fallback_tenant = tenant_id if tenant_id is not None else PUBLIC_TENANT_ID
+                for m in ml.final_mentions:
+                    if m.tenant_id is None:
+                        m.tenant_id = _fallback_tenant
+
             # persist_artifacts writes only DB rows; event emission is below
             # so tests can patch _enqueue_enriched etc. at article_consumer.
             # Pass pre-built repos so tests can patch them at article_consumer.
