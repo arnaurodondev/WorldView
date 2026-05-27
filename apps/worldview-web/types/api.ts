@@ -1328,8 +1328,66 @@ export interface Message {
   content: string;
   created_at: string;
   citations: Citation[];
+  // ── PLAN-0089 K Block A (Q-9) optional fields ─────────────────────────────
+  // WHY all optional: legacy assistant messages (and the user role) won't
+  // carry any of these. The chat hook populates them from `metadata`,
+  // `contradictions`, and `tool_call.is_fallback` SSE events as they arrive.
+  // Existing consumers that only read content/citations remain untouched.
+  /** Provider id that served the response (e.g. "deepinfra"). */
+  provider?: string;
+  /** Model id served (e.g. "deepseek-r1-distill-qwen-32b"). */
+  model?: string;
+  /** End-to-end latency in milliseconds reported by S8 metadata event. */
+  latency_ms?: number;
+  /**
+   * Side-channel contradictions surfaced by the KG during this turn.
+   * Shape matches S8's `contradictions` SSE event payload entries.
+   */
+  contradictions?: Array<Record<string, unknown>>;
+  /** Resolved entity IDs (KG canonical UUIDs) the turn grounded against. */
+  resolved_entities?: string[];
+  /**
+   * Optional retrieval plan summary from S8 (intent / tools chosen / fallbacks
+   * applied). Kept as opaque record — the side rail renders it generically.
+   */
+  retrieval_plan?: Record<string, unknown>;
+  /**
+   * True when this assistant message is a fallback (primary retrieval failed
+   * and S8 served a degraded answer). Used to render a warning chip.
+   */
+  is_fallback?: boolean;
+  /** Original message_id that this is a fallback of, when is_fallback=true. */
+  fallback_of?: string;
 }
 
+/**
+ * CitationV2 — wire-format citation emitted by S8 `SSEEmitter.emit_citations`.
+ *
+ * WHY a v2: the legacy `Citation` shape keyed off `article_id` because S8
+ * only had news-article sources. Q-9 added KG/graph/tool sources that have
+ * no article id — they are identified by a polymorphic `id` plus a `kind`
+ * discriminator (article | claim | entity | graph). Renaming the field on
+ * the existing interface would break dozens of callers; instead we introduce
+ * `CitationV2` as the canonical shape going forward and keep `Citation` as
+ * a `@deprecated` alias until PLAN-0089-K-FU removes it.
+ *
+ * MATCHES BACKEND: services/rag-chat → SSEEmitter.emit_citations payload.
+ */
+export interface CitationV2 {
+  /** Polymorphic citation id (article UUID, claim id, entity id, etc.). */
+  id: string;
+  /** Discriminator describing what `id` references. */
+  kind: "article" | "claim" | "entity" | "graph" | "tool";
+  title: string;
+  /** Source label (e.g. "Bloomberg", "kg.contradiction", "tool.search_documents"). */
+  source: string;
+  /** Hyperlink target — null for KG/tool citations that have no external URL. */
+  url: string | null;
+  /** Confidence/relevance signal from S8 (0..1). Optional for tool citations. */
+  relevance_score?: number;
+}
+
+/** @deprecated Use CitationV2. Removed after PLAN-0089-K-FU. */
 export interface Citation {
   article_id: string;
   title: string;
