@@ -194,6 +194,34 @@ class Settings(BaseSettings):
     brief_fresh_ttl_hours: int = Field(default=30, ge=1, le=168)
     brief_last_good_ttl_days: int = Field(default=7, ge=1, le=30)
 
+    # ── Entity resolver tuning (F-LIVE-NEW-001) ──────────────────────────────
+    # Stop-words stripped from the query string BEFORE the S7 alias fuzzy
+    # match so generic English fragments ("space", "sector", "industry") do not
+    # spuriously collide with canonical entities (e.g. "AI semiconductor space"
+    # → SpaceX). The list is intentionally configurable via env var so future
+    # tuning does not require a code change. The default below covers the
+    # observed false-positives plus common stop-words and ultra-generic
+    # industry tokens that have no business resolving to a single entity.
+    #
+    # RAG_CHAT_RESOLVER_STOP_WORDS — comma-separated list, e.g.
+    #   RAG_CHAT_RESOLVER_STOP_WORDS="space,sector,industry,..."
+    resolver_stop_words: str = Field(
+        default=(
+            "space,industry,sector,market,markets,system,platform,company,companies,"
+            "stocks,stock,share,shares,ticker,tickers,the,a,an,or,and,in,of,for,with,"
+            "ai,tech,energy,sentiment,rising,falling,bullish,bearish"
+        ),
+        alias="RAG_CHAT_RESOLVER_STOP_WORDS",
+    )
+    # Tightened from 0.10 → 0.15: when top-1 and top-2 similarity are within
+    # this delta the resolver treats the result as ambiguous (and applies
+    # tiebreakers / bails). Tuned after observing "AI semiconductor space"
+    # fuzzy-matched SpaceX with a 0.06 delta from the runner-up.
+    resolver_similarity_delta_min: float = Field(default=0.15, ge=0.0, le=1.0)
+    # Absolute minimum similarity for the top-1 candidate. Below this the
+    # resolver refuses regardless of the delta (low-quality alias match).
+    resolver_top_similarity_min: float = Field(default=0.75, ge=0.0, le=1.0)
+
     # ── Observability (STANDARDS.md §8.3) ────────────────────────────────────
     log_level: str = "INFO"
     log_json: bool = True

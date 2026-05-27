@@ -365,3 +365,20 @@ rag_brief_served_stale_total = Counter(
     "rag_brief_served_stale_total",
     "Times the handler served last-known-good brief instead of fresh",
 )
+
+# ── F-LIVE-NEW-001: entity-resolver ambiguity observability ──────────────────
+#
+# Counts the number of times ``IntelligenceHandler._resolve_entity_by_name``
+# rejected a candidate set (returned None) along with the reason it bailed.
+# Label cardinality is bounded by the fixed reason set:
+#   * stop_word_strip       — query was all-stop-words after filter; skipped
+#   * delta_below_threshold — top-1 vs top-2 similarity gap < threshold
+#   * low_top_similarity    — top-1 absolute similarity < minimum threshold
+#
+# Used to detect resolver tuning regressions (e.g. "AI semiconductor space"
+# fuzzy-matching SpaceX) without leaking the query text.
+rag_entity_resolver_ambiguous_total = Counter(
+    "entity_resolver_ambiguous_total",
+    "Entity-resolver bailed because the candidate set was ambiguous or low-quality",
+    labelnames=["reason"],  # stop_word_strip | delta_below_threshold | low_top_similarity
+)

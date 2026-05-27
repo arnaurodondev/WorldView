@@ -36,6 +36,65 @@ log = structlog.get_logger(__name__)  # type: ignore[no-any-return]
 # Maximum characters for tool result text injected into LLM context.
 _TOOL_RESULT_MAX_CHARS = 4000
 
+
+def _load_resolver_settings() -> tuple[frozenset[str], float, float]:
+    """Load resolver stop-words + similarity thresholds from rag_chat.config.
+
+    Lazy + best-effort: if Settings cannot be instantiated (e.g. running under
+    a minimal unit-test harness without env vars) we fall back to a hard-coded
+    default. The fallback mirrors the Settings default so the tuning surface
+    is identical across both code paths.
+    """
+    _fallback_words = frozenset(
+        {
+            "space",
+            "industry",
+            "sector",
+            "market",
+            "markets",
+            "system",
+            "platform",
+            "company",
+            "companies",
+            "stocks",
+            "stock",
+            "share",
+            "shares",
+            "ticker",
+            "tickers",
+            "the",
+            "a",
+            "an",
+            "or",
+            "and",
+            "in",
+            "of",
+            "for",
+            "with",
+            "ai",
+            "tech",
+            "energy",
+            "sentiment",
+            "rising",
+            "falling",
+            "bullish",
+            "bearish",
+        }
+    )
+    try:
+        from rag_chat.config import Settings  # local import to keep test imports cheap
+
+        s = Settings()  # type: ignore[call-arg]
+        words = frozenset(w.strip().lower() for w in s.resolver_stop_words.split(",") if w.strip())
+        return words, float(s.resolver_similarity_delta_min), float(s.resolver_top_similarity_min)
+    except Exception:  # pragma: no cover — defensive fallback
+        return _fallback_words, 0.15, 0.75
+
+
+# Module-level cache (recomputed on first use). Tests can override the
+# handler's instance attributes directly to inject custom values.
+_RESOLVER_STOP_WORDS, _RESOLVER_DELTA_MIN, _RESOLVER_TOP_SIM_MIN = _load_resolver_settings()
+
 # Allowlist of Cypher relationship type tokens accepted from LLM input.
 # WHY: traverse_graph accepts a cypher_pattern string; we must guard against
 # prompt injection — an adversarial user could inject arbitrary Cypher. We
@@ -103,12 +162,38 @@ class IntelligenceHandler(ToolHandler):
         # (TypeError: unexpected keyword argument 's6') AND silently
         # regressed search_entity_relations ranking back to zero-vector ANN.
         s6: S6Port | None = None,
+        # F-LIVE-NEW-001: configurable resolver tuning. Tests inject custom
+        # values; production reads from settings via the module-level cache.
+        stop_words: frozenset[str] | None = None,
+        similarity_delta_min: float | None = None,
+        top_similarity_min: float | None = None,
     ) -> None:
         self._s7 = s7
         self._entity_context = entity_context
         self._timeout = timeout
         self._s6 = s6
         # s7_intel intentionally unused; accepted to keep factory call uniform.
+        self._stop_words: frozenset[str] = stop_words if stop_words is not None else _RESOLVER_STOP_WORDS
+        self._similarity_delta_min: float = (
+            similarity_delta_min if similarity_delta_min is not None else _RESOLVER_DELTA_MIN
+        )
+        self._top_similarity_min: float = (
+            top_similarity_min if top_similarity_min is not None else _RESOLVER_TOP_SIM_MIN
+        )
+
+    def _strip_stop_words(self, query: str) -> str:
+        """Return ``query`` with all-stop-word tokens removed (lowercased).
+
+        Used as a pre-filter before fuzzy alias match so generic English
+        fragments cannot bind to a canonical entity. Returns an empty
+        string when EVERY token is a stop-word — the caller treats that as
+        a resolver refusal (the query carries no entity-shaped signal).
+        """
+        # Tokenise on whitespace; punctuation is stripped from each token so
+        # "AI semiconductor space." matches the stop list with a trailing dot.
+        tokens = query.lower().split()
+        kept = [t for t in tokens if t.strip(".,!?:;'\"()[]") not in self._stop_words]
+        return " ".join(kept)
 
     def can_handle(self, tool_name: str) -> bool:
         return tool_name in self._HANDLED_TOOLS
@@ -175,7 +260,29 @@ class IntelligenceHandler(ToolHandler):
         )
         if use_context and self._entity_context is not None:
             return self._entity_context.entity_id
-        candidates = await self._s7.resolve_entity_by_name(entity_name, limit=3)
+
+        # F-LIVE-NEW-001: strip generic stop-words BEFORE the fuzzy match so
+        # phrases like "AI semiconductor space" cannot collide with SpaceX on
+        # a partial-substring alias hit. If stripping leaves the query too
+        # short (≤ 2 chars) the resolver bails out — the remaining tokens are
+        # not specific enough to identify a single canonical entity.
+        stripped = self._strip_stop_words(entity_name)
+        if len(stripped.strip()) <= 2:
+            from rag_chat.application.metrics.prometheus import (
+                rag_entity_resolver_ambiguous_total,
+            )
+
+            rag_entity_resolver_ambiguous_total.labels(reason="stop_word_strip").inc()
+            log.warning(
+                "tool_entity_unresolved",
+                tool=tool_name,
+                entity_name=entity_name,
+                stripped=stripped,
+                reason="all_stop_words_after_strip",
+            )
+            return None
+        search_query = stripped if stripped != entity_name.lower() else entity_name
+        candidates = await self._s7.resolve_entity_by_name(search_query, limit=3)
         if not candidates:
             log.warning("tool_entity_unresolved", tool=tool_name, entity_name=entity_name, reason="no_alias_match")
             return None
@@ -195,11 +302,47 @@ class IntelligenceHandler(ToolHandler):
         #      the Tesla case where "Teslas"(0.625) outranks "Tesla Inc"
         #      (0.600) on raw embedding similarity.
         #   3. Length-penalty fallback — clear length-distance winner.
+        # F-LIVE-NEW-001: low-top-similarity floor BEFORE the delta gate so
+        # candidates that all sit below the absolute threshold are rejected
+        # even when their relative spread is large. Catches the SpaceX case
+        # where top-1 sat at ~0.62 on a noisy substring match.
+        try:
+            top_sim_value = float(candidates[0].get("similarity", 0.0))
+        except (TypeError, ValueError):
+            top_sim_value = 0.0
+        if top_sim_value < self._top_similarity_min:
+            # Exact canonical-name match is allowed to skip the floor — a
+            # perfect alias hit on a low-confidence row should still resolve.
+            # We check ALL top-K (not just candidates[0]) because the canonical
+            # row often has a slightly lower similarity than a noisy plural
+            # alias (the Tesla case from FIX-LIVE-O).
+            query_norm = self._normalize_canonical(entity_name)
+            exact = False
+            if query_norm:
+                for _c in candidates[:3]:
+                    if self._normalize_canonical(str(_c.get("alias_text") or "")) == query_norm:
+                        exact = True
+                        break
+            if not exact:
+                from rag_chat.application.metrics.prometheus import (
+                    rag_entity_resolver_ambiguous_total,
+                )
+
+                rag_entity_resolver_ambiguous_total.labels(reason="low_top_similarity").inc()
+                log.warning(
+                    "tool_entity_unresolved",
+                    tool=tool_name,
+                    entity_name=entity_name,
+                    top_similarity=top_sim_value,
+                    threshold=self._top_similarity_min,
+                    reason="top_similarity_below_threshold",
+                )
+                return None
         if len(candidates) >= 2:
             try:
                 top_sim = float(candidates[0].get("similarity", 0.0))
                 second_sim = float(candidates[1].get("similarity", 0.0))
-                if (top_sim - second_sim) < 0.10:
+                if (top_sim - second_sim) < self._similarity_delta_min:
                     tiebreak_winner = self._apply_resolver_tiebreakers(
                         tool_name=tool_name,
                         entity_name=entity_name,
@@ -207,6 +350,11 @@ class IntelligenceHandler(ToolHandler):
                     )
                     if tiebreak_winner is not None:
                         return tiebreak_winner
+                    from rag_chat.application.metrics.prometheus import (
+                        rag_entity_resolver_ambiguous_total,
+                    )
+
+                    rag_entity_resolver_ambiguous_total.labels(reason="delta_below_threshold").inc()
                     log.warning(
                         "tool_entity_ambiguous",
                         tool=tool_name,
@@ -223,7 +371,8 @@ class IntelligenceHandler(ToolHandler):
                                 "alias_text": candidates[1].get("alias_text"),
                             },
                         ],
-                        reason="similarity_delta_below_0.10",
+                        delta_min=self._similarity_delta_min,
+                        reason="similarity_delta_below_threshold",
                     )
                     return None
             except (TypeError, ValueError):

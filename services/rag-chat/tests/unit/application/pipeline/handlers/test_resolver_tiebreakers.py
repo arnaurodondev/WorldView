@@ -142,3 +142,154 @@ class TestResolverTiebreakers:
         assert "tool_entity_ambiguous" in combined
         # And no tiebreaker should have fired.
         assert "entity_resolution_tiebreaker_applied" not in combined
+
+
+class TestResolverStopWordsAndThresholds:
+    """F-LIVE-NEW-001 — stop-word filter + similarity-delta tightening.
+
+    The previous resolver (FIX-LIVE-II) loosened the alias-search gate so
+    "AI semiconductor space" fuzzy-matched SpaceX on a partial-substring
+    hit. The fix layers (a) a stop-word strip BEFORE the S7 call, (b) an
+    absolute top-similarity floor (0.75) and (c) a delta gate tightened
+    from 0.10 to 0.15.
+    """
+
+    @pytest.mark.asyncio
+    async def test_ai_semiconductor_space_does_not_match_spacex(self) -> None:
+        """The exact F-LIVE-NEW-001 reproducer.
+
+        The S7 mock returns a SpaceX-shaped row at low similarity (0.62) —
+        exactly the spurious substring hit observed live. After the stop-
+        word strip the query becomes "semiconductor" (token "space" filtered),
+        and the top-similarity floor (0.75) rejects the SpaceX hit.
+        """
+        from rag_chat.application.pipeline.handlers.intelligence import IntelligenceHandler
+
+        s7 = AsyncMock()
+        # Whatever S7 returns, the 0.62 similarity is below the 0.75 floor.
+        s7.resolve_entity_by_name.return_value = [
+            {"entity_id": str(_ID_A), "alias_text": "SpaceX", "similarity": 0.62},
+        ]
+        handler = IntelligenceHandler(s7=s7, entity_context=None, timeout=5.0)
+        resolved = await handler._resolve_entity_by_name(
+            "search_entity_relations",
+            "AI semiconductor space",
+        )
+        assert resolved is None
+        # S7 must have been called with the stripped query, NOT the original.
+        called_with = s7.resolve_entity_by_name.call_args.args[0]
+        assert "space" not in called_with.lower()
+        assert "semiconductor" in called_with
+
+    @pytest.mark.asyncio
+    async def test_stop_words_stripped_before_fuzzy_match(self) -> None:
+        """Verify the S7 alias search receives the stripped query."""
+        from rag_chat.application.pipeline.handlers.intelligence import IntelligenceHandler
+
+        s7 = AsyncMock()
+        s7.resolve_entity_by_name.return_value = []  # we only care about the call args here
+        handler = IntelligenceHandler(s7=s7, entity_context=None, timeout=5.0)
+        await handler._resolve_entity_by_name("search_claims", "the tesla stock")
+        called_with = s7.resolve_entity_by_name.call_args.args[0]
+        # "the" and "stock" both in default stop list — only "tesla" survives.
+        assert called_with.strip().lower() == "tesla"
+
+    @pytest.mark.asyncio
+    async def test_all_stop_words_short_circuits(self, capsys: Any) -> None:
+        """If after stripping the query is too short, resolver bails immediately
+        without even hitting S7.
+        """
+        from rag_chat.application.pipeline.handlers.intelligence import IntelligenceHandler
+
+        s7 = AsyncMock()
+        handler = IntelligenceHandler(s7=s7, entity_context=None, timeout=5.0)
+        resolved = await handler._resolve_entity_by_name("search_claims", "the of for in")
+        assert resolved is None
+        s7.resolve_entity_by_name.assert_not_called()
+        out = capsys.readouterr()
+        assert "all_stop_words_after_strip" in (out.out + out.err)
+
+    @pytest.mark.asyncio
+    async def test_low_top_similarity_returns_ambiguous(self) -> None:
+        """Top candidate sits well below the 0.75 floor → resolver bails."""
+        from rag_chat.application.pipeline.handlers.intelligence import IntelligenceHandler
+
+        s7 = AsyncMock()
+        s7.resolve_entity_by_name.return_value = [
+            {"entity_id": str(_ID_A), "alias_text": "Some Long Distinct Phrase", "similarity": 0.55},
+        ]
+        handler = IntelligenceHandler(s7=s7, entity_context=None, timeout=5.0)
+        resolved = await handler._resolve_entity_by_name("search_claims", "Apple")
+        assert resolved is None
+
+    @pytest.mark.asyncio
+    async def test_similarity_delta_below_threshold_returns_ambiguous(self) -> None:
+        """Δsim of 0.12 (below the tightened 0.15 default) → ambiguous bail.
+
+        Under the previous 0.10 threshold this would have passed through and
+        the resolver would have returned the top candidate. Tiebreakers
+        cannot fire because the canonicals are distinct and neither alias
+        normalises to the query.
+        """
+        from rag_chat.application.pipeline.handlers.intelligence import IntelligenceHandler
+
+        s7 = AsyncMock()
+        s7.resolve_entity_by_name.return_value = [
+            # both above the 0.75 floor, but delta = 0.12 < 0.15.
+            # Neither alias normalises to the query so the exact-canonical
+            # tiebreaker (rule 2) cannot fire; lengths are close so rule 3
+            # cannot fire either — resolver falls through to the legacy
+            # ambiguity-bail path.
+            {"entity_id": str(_ID_A), "alias_text": "Alpha Project", "similarity": 0.92},
+            {"entity_id": str(_ID_B), "alias_text": "Alpha Studios", "similarity": 0.80},
+        ]
+        handler = IntelligenceHandler(s7=s7, entity_context=None, timeout=5.0)
+        resolved = await handler._resolve_entity_by_name("search_claims", "Acme")
+        assert resolved is None
+
+    @pytest.mark.asyncio
+    async def test_tesla_still_resolves_via_exact_canonical_tiebreaker(self) -> None:
+        """Regression guard: the Tesla case from FIX-LIVE-O still resolves.
+
+        Even though "Teslas" sits at 0.625 (below the new 0.75 floor), the
+        exact-canonical tiebreaker allows the resolver to skip the floor
+        when the query exactly matches a candidate's normalised alias.
+        """
+        from rag_chat.application.pipeline.handlers.intelligence import IntelligenceHandler
+
+        s7 = AsyncMock()
+        s7.resolve_entity_by_name.return_value = [
+            # Top sits below the 0.75 floor BUT the second row's normalised
+            # alias ("tesla" via "Tesla Inc") matches the query exactly.
+            {"entity_id": str(_ID_A), "alias_text": "Teslas", "similarity": 0.625},
+            {"entity_id": str(_ID_B), "alias_text": "Tesla Inc", "similarity": 0.600},
+        ]
+        # Override the floor to a value where the exact-canonical short-circuit
+        # is what allows resolution (similarity 0.625 < 0.75 floor).
+        handler = IntelligenceHandler(s7=s7, entity_context=None, timeout=5.0)
+        resolved = await handler._resolve_entity_by_name("get_contradictions", "Tesla")
+        # The exact-canonical match on candidate[1] short-circuits the floor
+        # via the `exact` branch (or, if the floor blocks first, via the
+        # tiebreaker). Either way, "Tesla Inc" must win.
+        assert resolved == _ID_B
+
+    @pytest.mark.asyncio
+    async def test_custom_stop_words_override(self) -> None:
+        """Stop-word list is configurable per-instance (env-var tunable)."""
+        from rag_chat.application.pipeline.handlers.intelligence import IntelligenceHandler
+
+        s7 = AsyncMock()
+        s7.resolve_entity_by_name.return_value = []
+        # Inject a stop list that contains "tesla" — the resolver should now
+        # strip that token. (Demonstrates configurability for future tuning.)
+        handler = IntelligenceHandler(
+            s7=s7,
+            entity_context=None,
+            timeout=5.0,
+            stop_words=frozenset({"tesla", "the"}),
+        )
+        await handler._resolve_entity_by_name("search_claims", "the tesla stock")
+        called_with = s7.resolve_entity_by_name.call_args.args[0]
+        # "stock" survives (not in this custom list); "tesla" + "the" stripped.
+        assert "tesla" not in called_with.lower()
+        assert "stock" in called_with.lower()
