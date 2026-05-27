@@ -121,6 +121,25 @@ export interface FilterState {
   controversyMax?: number; // CLIENT_FILTER TODO
   recentEarningsDays?: 7 | 30; // CLIENT_FILTER TODO (S3 earnings calendar)
   insiderActivity?: "BUYING" | "SELLING" | "BOTH"; // CLIENT_FILTER TODO (S4 insider)
+
+  // ── Categorical / coverage (SERVER_SIDE — PRD-0089 Wave I-B Block IB-L1) ───
+  // WHY arrays even though the backend currently single-valued: the UI
+  // exposes a multi-select combobox + regional preset chips (NA/EU/APAC/EM)
+  // that expand to many ISO3 codes. We store the full set in state so the
+  // FilterChipStrip can render "Country: USA, DEU, GBR ×" and so a future
+  // backend `country IN (...)` upgrade is a one-line build-filters change.
+  // Today buildScreenerFilters() forwards only the FIRST entry because the
+  // backend ANDs repeated country/exchange filters (see Wave L-1 query
+  // implementation in fundamental_metrics_query.py:302-311).
+  countries?: string[]; // ISO 3-letter codes (e.g. ["USA","DEU"])
+  exchanges?: string[]; // Exchange codes (e.g. ["NASDAQ","NYSE"])
+  // Coverage toggles — tri-state via "undefined = ignore" + boolean. The
+  // current Wave L-1 backend ignores `false`-meaning-exclude semantics; we
+  // therefore only emit `true` to the wire (require coverage) and treat the
+  // off-state as "don't filter". The design (08-screener.md §Coverage)
+  // confirms two simple switches with no "exclude" path.
+  hasFundamentals?: boolean;
+  hasOhlcv?: boolean;
 }
 
 /** DEFAULT_FILTERS — used by the page initial state and the Reset button. */

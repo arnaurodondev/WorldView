@@ -82,6 +82,10 @@ import { RangeInput } from "@/features/screener/components/RangeInput";
 // of the popover. All 7 rows disabled today (backendReady left as defaults
 // → all false). Wave L-5 will flip individual flags one at a time.
 import { IntelligenceFilterGroup } from "@/components/screener/IntelligenceFilterGroup";
+// PRD-0089 Wave I-B Block IB-L1 — Categorical row sub-components.
+// Each row is extracted into its own file under features/screener/components/
+// so unit tests can exercise it without mounting the 766-LOC filter bar.
+import { CountryFilterRow } from "@/features/screener/components/CountryFilterRow";
 // PRD-0089 Wave I-A · T-IA-05: OQ-10 sector→industry cascading. The current
 // FilterState exposes a single `sector: string`, not a `sectors: string[]`
 // + `industries: string[]` pair. So the cascade is STAGED here: the helper
@@ -720,6 +724,31 @@ export function ScreenerFilterBar({
  </div>
  </div>
  </Section>
+
+ {/* ── CATEGORICAL SECTION (PRD-0089 Wave I-B Block IB-L1) ─────
+  * Three live (Wave L-1) rows: Country (multi-select + 4 regional
+  * chips), Exchange (multi-select), Coverage (2 toggles). These
+  * sit BELOW the per-metric Sections and ABOVE Intelligence so
+  * the popover reads "metrics → categorical scope → intelligence
+  * overlays". No active-count badge — the rows are too
+  * heterogeneous (lists vs booleans) for a single int.
+  * No BackendPendingBadge — Wave L-1 shipped 2026-05-25. */}
+ <div
+  className="border-t border-border/60"
+  role="region"
+  aria-label="Categorical filters"
+ >
+  <div className="px-2 py-1.5 text-[10px] font-mono uppercase tracking-[0.06em] text-muted-foreground">
+   Categorical
+  </div>
+  <CountryFilterRow
+   value={form.countries ?? []}
+   onChange={(countries) =>
+    patch({ countries: countries.length === 0 ? undefined : countries })
+   }
+  />
+  {/* ExchangeFilterRow added by T-IB-02; CoverageToggles by T-IB-03. */}
+ </div>
 
  {/* ── INTELLIGENCE SECTION (T-IA-07) ─────────────────────────── */}
  {/* All 7 rows disabled in Wave I-A; backendReady defaults to all

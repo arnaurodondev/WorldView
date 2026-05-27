@@ -771,6 +771,16 @@ export interface ScreenerFilter {
   min_value?: number;
   max_value?: number;
   sector?: string;
+  // Wave L-1 (PRD-0089 Wave I-B Block IB-L1) — attribute filters applied
+  // as WHERE predicates against the instruments table by `query_screen`.
+  // Backend ANDs repeats so multi-select on the frontend currently sends
+  // only the first selected entry (see features/screener/lib/build-filters.ts).
+  country?: string;
+  exchange?: string;
+  has_fundamentals?: boolean;
+  has_ohlcv?: boolean;
+  // FIX-LIVE-M / Wave L-1: GICS industry restriction (more selective than sector).
+  industry?: string;
 }
 
 export interface ScreenerRequest {

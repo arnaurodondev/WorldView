@@ -161,6 +161,18 @@ function buildChips(filters: FilterState): FilterChip[] {
     });
   }
 
+  // ── Categorical / Coverage (PRD-0089 Wave I-B Block IB-L1) ──────────────
+  // T-IB-01 adds the Country chip; T-IB-02 adds Exchange; T-IB-03 adds the
+  // two coverage chips. Each chip lives next to its row in the popover for
+  // discoverability.
+  if (filters.countries && filters.countries.length > 0) {
+    chips.push({
+      key: "countries",
+      label: `Country: ${filters.countries.join(", ")}`,
+      clear: (f) => ({ ...f, countries: undefined }),
+    });
+  }
+
   // ── Technical ───────────────────────────────────────────────────────────
   if (filters.above50dMa) {
     chips.push({
