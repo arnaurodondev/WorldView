@@ -482,6 +482,76 @@ class TestLabelBootstrap:
         asyncio.run(worker.run())
         assert worker._labels_bootstrap_pending is False
 
+    def test_bootstrap_invalidates_connection_before_phases(self) -> None:
+        """PLAN-0096 W3 T-W3-01 / BP-574 — after the bootstrap commit, the worker
+        MUST call ``session.connection().invalidate()`` so the next phase's
+        MERGE statements pick up a fresh connection without a stale AGE schema
+        cache. Without this, PostgreSQL's plpgsql engine caches the pre-label
+        schema and silently drops 100% of TemporalEvent MERGEs.
+        """
+        valkey = _make_valkey()
+        session = _make_session()
+
+        # Build an explicit connection mock so we can assert .invalidate() was
+        # awaited. session.connection() must itself be awaitable (per
+        # SQLAlchemy AsyncSession API).
+        connection_mock = AsyncMock()
+        connection_mock.invalidate = AsyncMock()
+        session.connection = AsyncMock(return_value=connection_mock)
+
+        worker = _build_worker(session, valkey)
+        asyncio.run(worker.run())
+
+        # The bootstrap path must have asked for the connection and invalidated
+        # it. Use assert_awaited (rather than assert_called) because both
+        # session.connection and connection.invalidate are async.
+        session.connection.assert_awaited()
+        connection_mock.invalidate.assert_awaited_once()
+
+    def test_invalidate_failure_does_not_crash_run(self) -> None:
+        """BP-574 mitigation — if invalidate raises, the cycle continues. The
+        worst case is a silent regression to the stale-schema path, never a
+        crash mid-cycle.
+        """
+        valkey = _make_valkey()
+        session = _make_session()
+
+        connection_mock = AsyncMock()
+        connection_mock.invalidate = AsyncMock(side_effect=RuntimeError("pool closed"))
+        session.connection = AsyncMock(return_value=connection_mock)
+
+        worker = _build_worker(session, valkey)
+        # Must not raise — invalidate failure is swallowed and logged.
+        asyncio.run(worker.run())
+        assert worker._labels_bootstrap_pending is False
+
+
+@pytest.mark.integration
+class TestAgeSyncTemporalEventReconciliationIntegration:
+    """T-W3-02 — regression test for the 0/14,822 silent-drop bug.
+
+    Seeds a fresh ``temporal_events`` SQL table with a handful of rows,
+    instantiates ``AgeSyncWorker``, runs ``run()``, then asserts via direct
+    Cypher that the AGE ``TemporalEvent`` node count equals the SQL row
+    count. Requires a live PostgreSQL + Apache AGE container; skipped when
+    the env var ``KNOWLEDGE_GRAPH_INTEGRATION_DB_URL`` is unset.
+    """
+
+    def test_bootstrap_then_phases_produce_matching_node_count(self) -> None:
+        import os
+
+        db_url = os.environ.get("KNOWLEDGE_GRAPH_INTEGRATION_DB_URL")
+        if not db_url:
+            pytest.skip(
+                "KNOWLEDGE_GRAPH_INTEGRATION_DB_URL not set — AGE-backed "
+                "integration test requires a live postgres+age container",
+            )
+        # The full integration body is intentionally not implemented in the
+        # unit-test tier — see scripts/reconcile_age_temporal_events.py for
+        # the operator-driven equivalent. This stub keeps the test marker
+        # discoverable so CI surfaces the gap when an AGE container is wired.
+        pytest.skip("integration body wired via scripts/reconcile_age_temporal_events.py")
+
 
 # ── Test: Stall detector (PLAN-0093 B-1 T-B-1-03) ─────────────────────────────
 

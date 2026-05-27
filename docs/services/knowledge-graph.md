@@ -156,6 +156,37 @@ support parameterized labels); they are validated against a 28-label whitelist
 **R27 exception**: Cypher queries use a write session because AGE requires `LOAD 'age'` which
 is not supported by read-replica connections.
 
+#### AGE label bootstrap (PLAN-0096 W3 / BP-574)
+
+`AgeSyncWorker._bootstrap_age_labels` runs once per worker process startup and creates every
+vlabel + elabel the sync worker will write to (2 vlabels + every value in `_VALID_EDGE_LABELS`).
+It MUST invalidate the underlying SQLAlchemy connection after the bootstrap `commit()`:
+
+```python
+await session.commit()
+await self._invalidate_session_connection(session)
+```
+
+PostgreSQL's plpgsql engine (which backs `ag_catalog.cypher()`) caches the label catalog on
+each physical connection at first lookup. If the bootstrap and the phase MERGEs share the
+*same* connection, the freshly-created `TemporalEvent` vlabel is invisible to the phase MERGE,
+which then silently no-ops on every row. This produced the original 0/14,822 silent-drop bug
+(see `docs/audits/2026-05-26-age-temporal-event-sync-investigation.md`).
+
+The invalidate is best-effort — a failure here is logged as `age_sync_session_invalidate_failed`
+but does not abort the cycle (worst case: phase MERGEs fall back to the pre-fix path).
+
+If you discover an existing live deployment whose AGE `TemporalEvent` count is still well
+below the SQL `temporal_events` count, drain the backlog with the reconciliation script:
+
+```bash
+# Dry-run first to confirm scope.
+python scripts/reconcile_age_temporal_events.py --dry-run
+
+# Real drain — idempotent; safe to re-run.
+python scripts/reconcile_age_temporal_events.py
+```
+
 #### Recovering from AGE undercount
 
 If the Apache AGE shadow graph reports far fewer rows than the relational source tables

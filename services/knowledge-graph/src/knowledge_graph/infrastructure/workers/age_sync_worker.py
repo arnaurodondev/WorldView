@@ -454,6 +454,16 @@ class AgeSyncWorker:
         try-except — leaving 0 events and 0 exposure edges in AGE.
 
         Idempotent: ``already exists`` ProgrammingErrors are swallowed.
+
+        PLAN-0096 W3 T-W3-01 (BP-574): after ``session.commit()`` we MUST drop
+        the underlying DB connection back to the pool so the next phase's
+        MERGE statements pick up a *fresh* connection that has not cached the
+        pre-bootstrap AGE schema. Without the invalidate, PostgreSQL's
+        plpgsql engine (which backs ``ag_catalog.cypher()``) caches the label
+        catalog at first lookup; the newly created ``TemporalEvent`` vlabel
+        is invisible to MERGE on the same physical connection, producing the
+        observed 0/14,822 silent-drop pattern (see
+        ``docs/audits/2026-05-26-age-temporal-event-sync-investigation.md``).
         """
         statements = [
             # Vertex labels — entity already exists; ensure all needed types
@@ -476,11 +486,45 @@ class AgeSyncWorker:
                 # propagated so run() can mark the cycle skipped.
                 raise
         await session.commit()
+        # BP-574 / PLAN-0096 W3 T-W3-01 — invalidate the underlying connection
+        # so the subsequent phase MERGEs see a fresh plpgsql schema cache that
+        # knows about the newly created ``TemporalEvent`` vlabel. The commit
+        # above ensures the label DDL is durable BEFORE the connection drops;
+        # ``_run_phase`` will call ``_setup_age_session`` again on the next
+        # statement, which forces SQLAlchemy to check out a fresh connection
+        # from the pool and reload AGE on it.
+        await self._invalidate_session_connection(session)
         logger.info(  # type: ignore[no-any-return]
             "age_sync_labels_bootstrapped",
             vlabels=2,
             elabels=len(_VALID_EDGE_LABELS),
         )
+
+    async def _invalidate_session_connection(self, session: AsyncSession) -> None:
+        """Drop *session*'s underlying connection back to the pool.
+
+        SQLAlchemy ``AsyncSession.connection()`` returns an ``AsyncConnection``;
+        calling ``.invalidate()`` marks it as no-longer-usable so the next
+        operation transparently checks out a fresh one. This is the safe place
+        to do it: the bootstrap loop has just committed, so there is no
+        in-flight transaction to lose. We swallow exceptions here because
+        invalidation is a best-effort cache reset — if it fails the worst
+        case is that the phase MERGEs continue on the cached schema (i.e. the
+        pre-fix behaviour); we never want the cleanup to crash the cycle.
+        """
+        try:
+            connection = await session.connection()
+            await connection.invalidate()
+        except Exception as exc:  # — best-effort cache reset
+            logger.warning(  # type: ignore[no-any-return]
+                "age_sync_session_invalidate_failed",
+                error=type(exc).__name__,
+                message=(
+                    "best-effort session-connection invalidate after label "
+                    "bootstrap failed; phase MERGEs may operate on the stale "
+                    "AGE schema cache (BP-574)"
+                ),
+            )
 
     # ── Watermark ─────────────────────────────────────────────────────────────
 
