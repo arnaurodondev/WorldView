@@ -172,6 +172,13 @@ function buildChips(filters: FilterState): FilterChip[] {
       clear: (f) => ({ ...f, countries: undefined }),
     });
   }
+  if (filters.exchanges && filters.exchanges.length > 0) {
+    chips.push({
+      key: "exchanges",
+      label: `Exchange: ${filters.exchanges.join(", ")}`,
+      clear: (f) => ({ ...f, exchanges: undefined }),
+    });
+  }
 
   // ── Technical ───────────────────────────────────────────────────────────
   if (filters.above50dMa) {
