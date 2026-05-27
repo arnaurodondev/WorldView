@@ -78,6 +78,20 @@ import {
 import { countActiveFiltersByGroup } from "@/features/screener/lib/active-counts";
 import { Section } from "@/features/screener/components/Section";
 import { RangeInput } from "@/features/screener/components/RangeInput";
+// PRD-0089 Wave I-A · T-IA-07: Intelligence section mounted at the bottom
+// of the popover. All 7 rows disabled today (backendReady left as defaults
+// → all false). Wave L-5 will flip individual flags one at a time.
+import { IntelligenceFilterGroup } from "@/components/screener/IntelligenceFilterGroup";
+// PRD-0089 Wave I-A · T-IA-05: OQ-10 sector→industry cascading. The current
+// FilterState exposes a single `sector: string`, not a `sectors: string[]`
+// + `industries: string[]` pair. So the cascade is STAGED here: the helper
+// is imported and `allowedIndustries` is computed for the future industry
+// combobox. Wave I-B (PLAN-0089-WI-B, Block IB-L1) extends FilterState with
+// the multi-select sectors + industries fields and wires the combobox to
+// `allowedIndustries`. The toast emitter for "Industries reset to match
+// new sector" is also deferred to I-B (no industries field today means
+// no invalid selections to drop).
+import { industriesForSectors } from "@/lib/screener/gics-hierarchy";
 
 // Re-export FilterState + DEFAULT_FILTERS so existing call sites that import
 // from `@/components/screener/ScreenerFilterBar` keep compiling unchanged.
@@ -129,6 +143,20 @@ export function ScreenerFilterBar({
  technical: technicalCount,
  news: newsCount,
  } = counts;
+
+ // ── T-IA-05 cascade scaffolding (staged for Wave I-B) ────────────────────
+ // WHY computed but unused today: when FilterState gains `sectors: string[]`
+ // in Wave I-B Block IB-L1, the industry combobox will consume this array
+ // directly. Computing it today proves the import chain works and prevents
+ // dead-import lint errors in a follow-up commit. The current single-select
+ // `sector` is treated as a one-element array for forward-compatibility.
+ const _allowedIndustries = form.sector
+ ? industriesForSectors([form.sector])
+ : [];
+ // WHY void-ref: keep the binding alive without shipping a no-op UI.
+ // Removing the `void` would trigger no-unused-vars; the memo will graduate
+ // to a real combobox prop in Wave I-B (one-line swap).
+ void _allowedIndustries;
 
  // ── Handlers ────────────────────────────────────────────────────────────────
 
@@ -692,6 +720,13 @@ export function ScreenerFilterBar({
  </div>
  </div>
  </Section>
+
+ {/* ── INTELLIGENCE SECTION (T-IA-07) ─────────────────────────── */}
+ {/* All 7 rows disabled in Wave I-A; backendReady defaults to all
+ * false. Wave L-5 lands the rollup fields; Wave I-B flips each
+ * row's flag as the matching field appears in the screener's
+ * `screen_field_metadata` allowlist. */}
+ <IntelligenceFilterGroup value={form} onChange={setForm} />
 
  {/* ── BOTTOM TOOLBAR ──────────────────────────────────────────── */}
  <div className="flex h-[36px] items-center gap-2 px-2 bg-background">
