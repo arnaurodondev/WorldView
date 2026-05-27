@@ -97,6 +97,8 @@ class MarketHandler(ToolHandler):
         {
             "get_price_history",
             "get_fundamentals_history",
+            # PLAN-0095 W2 T-W2-02: batch sibling of get_fundamentals_history.
+            "get_fundamentals_history_batch",
             "compare_entities",
             "screen_universe",
             "get_market_movers",
@@ -123,6 +125,9 @@ class MarketHandler(ToolHandler):
             return await self._handle_get_price_history(**args)
         if tool_name == "get_fundamentals_history":
             return await self._handle_get_fundamentals_history(**args)
+        # PLAN-0095 W2 T-W2-02: batched fundamentals fan-out tool.
+        if tool_name == "get_fundamentals_history_batch":
+            return await self._handle_get_fundamentals_history_batch(**args)
         if tool_name == "compare_entities":
             return await self._handle_compare_entities(**args)
         if tool_name == "screen_universe":
@@ -204,6 +209,95 @@ class MarketHandler(ToolHandler):
             score=0.88,
             trust_weight=0.90,
         )
+
+    async def _handle_get_fundamentals_history_batch(
+        self,
+        tickers: list[str] | None = None,
+        periods: int = 5,
+    ) -> list[RetrievedItem]:
+        """Fetch fundamentals for many tickers in one HTTP call (PLAN-0095 W2 T-W2-02).
+
+        Calls ``S3Port.get_fundamentals_history_batch`` (backed by S9-proxied
+        ``POST /api/v1/fundamentals/batch``). Per-ticker failures are surfaced
+        in the rendered text as "— data unavailable: <reason>" rather than
+        dropped silently, so the LLM can decide whether to retry the missing
+        tickers individually or carry on with what it has.
+
+        R9: returns [] on missing port, invalid input, or upstream timeout.
+        R27: read-only — no UnitOfWork.
+        """
+        ticker_list = [t.strip().upper() for t in (tickers or []) if isinstance(t, str) and t.strip()]
+        if not ticker_list:
+            log.warning("tool_invalid_param", tool="get_fundamentals_history_batch", reason="empty_tickers")
+            return []
+        # Mirror the server-side cap (25) so we fail fast with a clear log
+        # instead of letting the route return a 422 that becomes ``{}`` here.
+        if len(ticker_list) > 25:
+            log.warning(
+                "tool_invalid_param",
+                tool="get_fundamentals_history_batch",
+                reason="too_many_tickers",
+                count=len(ticker_list),
+            )
+            ticker_list = ticker_list[:25]
+
+        t0 = time.monotonic()
+        try:
+            results = await asyncio.wait_for(
+                self._s3.get_fundamentals_history_batch(tickers=ticker_list, periods=periods),
+                timeout=self._timeout,
+            )
+        except Exception as e:
+            log.warning("tool_failed", tool="get_fundamentals_history_batch", error=str(e))
+            return []
+
+        if not results:
+            log.info("tool_no_data", tool="get_fundamentals_history_batch")
+            return []
+
+        # Render one RetrievedItem per ticker so the LLM can cite each ticker
+        # independently in its answer. The id namespace ``tool:fundamentals_batch:<ticker>``
+        # avoids colliding with singular ``tool:fundamentals:<ticker>`` items
+        # if both tools run in the same turn (unlikely but defensible).
+        out: list[RetrievedItem] = []
+        for ticker in ticker_list:
+            entry = results.get(ticker) or {}
+            status = entry.get("status")
+            if status == "ok":
+                periods_data = entry.get("periods") or []
+                if not periods_data:
+                    text = f"{ticker}: no quarterly fundamentals available"
+                else:
+                    text = self._format_fundamentals_table(ticker, periods_data)
+            else:
+                reason = entry.get("reason") or "unknown"
+                text = f"{ticker}: data unavailable — {reason}"
+
+            out.append(
+                RetrievedItem.create(
+                    item_id=f"tool:fundamentals_batch:{ticker}",
+                    item_type=ItemType.financial,
+                    text=text[:_TOOL_RESULT_MAX_CHARS],
+                    score=0.88,
+                    trust_weight=0.90,
+                    citation_meta=CitationMeta(
+                        title=f"Fundamentals: {ticker}",
+                        url=None,
+                        source_name="fundamentals",
+                        published_at=None,
+                        entity_name=ticker,
+                    ),
+                )
+            )
+
+        log.info(
+            "tool_executed",
+            tool="get_fundamentals_history_batch",
+            latency_ms=round((time.monotonic() - t0) * 1000),
+            ticker_count=len(ticker_list),
+            ok_count=sum(1 for t in ticker_list if (results.get(t) or {}).get("status") == "ok"),
+        )
+        return out
 
     async def _handle_compare_entities(
         self,

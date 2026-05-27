@@ -797,3 +797,75 @@ class TestGetEarningsCalendar:
         handler = _make_market_handler(s3_brief=s3_brief)
         result = await handler._handle_get_earnings_calendar()
         assert result == []
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# PLAN-0095 W2 T-W2-02: get_fundamentals_history_batch handler tests.
+# Mocks the S3Port batch method; verifies routing of ok/error per ticker,
+# the empty-input guard, and the upstream-error R9 fallback.
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+class TestHandleGetFundamentalsHistoryBatch:
+    """Tests for _handle_get_fundamentals_history_batch on MarketHandler."""
+
+    @pytest.mark.asyncio
+    async def test_get_fundamentals_history_batch_tool_calls_batch_endpoint(self) -> None:
+        """Happy path: mocks S3 batch port, asserts POST shape + per-ticker RetrievedItems."""
+        s3 = _make_s3_port()
+        # Mixed result: 2 ok, 1 error — proves partial-failure rendering.
+        s3.get_fundamentals_history_batch = AsyncMock(
+            return_value={
+                "AAPL": {
+                    "status": "ok",
+                    "periods": [{"period": "Q4 2024", "revenue": 100.0, "eps": 2.0}],
+                },
+                "NVDA": {
+                    "status": "ok",
+                    "periods": [{"period": "Q4 2024", "revenue": 50.0, "eps": 1.0}],
+                },
+                "BADTICKER": {"status": "error", "reason": "Instrument not found"},
+            }
+        )
+        handler = _make_market_handler(s3=s3)
+
+        result = await handler._handle_get_fundamentals_history_batch(
+            tickers=["aapl", "nvda", "badticker"],  # lowercase to exercise normalisation
+            periods=4,
+        )
+
+        # Three RetrievedItem rows, one per ticker (case-normalised to upper).
+        assert isinstance(result, list)
+        assert len(result) == 3
+        ids = {item.item_id for item in result}
+        assert ids == {
+            "tool:fundamentals_batch:AAPL",
+            "tool:fundamentals_batch:NVDA",
+            "tool:fundamentals_batch:BADTICKER",
+        }
+        # Verify the port was called with normalised upper-case tickers + the same periods.
+        s3.get_fundamentals_history_batch.assert_awaited_once_with(
+            tickers=["AAPL", "NVDA", "BADTICKER"],
+            periods=4,
+        )
+        # Error ticker renders a clear unavailability message instead of crashing.
+        bad = next(item for item in result if "BADTICKER" in item.item_id)
+        assert "unavailable" in bad.text.lower()
+        assert "Instrument not found" in bad.text
+
+    @pytest.mark.asyncio
+    async def test_empty_tickers_returns_empty_list(self) -> None:
+        """Empty input → R9 degradation, no port call attempted."""
+        s3 = _make_s3_port()
+        s3.get_fundamentals_history_batch = AsyncMock()
+        handler = _make_market_handler(s3=s3)
+        assert await handler._handle_get_fundamentals_history_batch(tickers=[]) == []
+        s3.get_fundamentals_history_batch.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_upstream_raises_returns_empty_list(self) -> None:
+        """Upstream raises → returns [] (R9), does not propagate."""
+        s3 = _make_s3_port()
+        s3.get_fundamentals_history_batch = AsyncMock(side_effect=RuntimeError("boom"))
+        handler = _make_market_handler(s3=s3)
+        assert await handler._handle_get_fundamentals_history_batch(tickers=["AAPL"]) == []

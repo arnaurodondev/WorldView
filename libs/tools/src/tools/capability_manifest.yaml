@@ -51,6 +51,34 @@ tools:
       - "Show me MSFT's revenue trend over 8 quarters"
       - "What has AAPL's EPS been over the last 2 years?"
 
+  # PLAN-0095 W2 T-W2-02: batched fundamentals tool — collapses N agent turns
+  # into one. See tool_registry_builder.py for the explicit "5-10x slower"
+  # framing the LLM needs to actually pick this over the singular variant.
+  - name: get_fundamentals_history_batch
+    description: >
+      Fetches quarterly fundamental metrics (revenue, gross profit, net income,
+      EPS, P/E, market cap) for MULTIPLE tickers in a single call.
+      Use this when comparing or screening MULTIPLE tickers; calling the singular
+      get_fundamentals_history N times is 5-10x slower (each call is a separate
+      agent turn). Returns a per-ticker dict {ticker: {status: ok|error, periods?,
+      reason?}}; partial failures (unknown ticker, missing data) do not fail the
+      whole batch. Cap: 25 tickers per call.
+    parameters:
+      - name: tickers
+        type: array
+        description: 'List of stock tickers to fetch (e.g. ["AAPL", "MSFT", "NVDA"]). Max 25.'
+        required: true
+      - name: periods
+        type: integer
+        description: Number of quarters per ticker (1-20). Default 5.
+        required: false
+    source_type: fundamentals
+    since: "v4"
+    deprecated_at: null
+    example_queries:
+      - "Compare revenue growth of AAPL, MSFT, GOOG, AMZN, META"
+      - "Get the last 4 quarters of fundamentals for the top 5 AI chip stocks"
+
   - name: search_documents
     description: >
       Searches the platform's document corpus using hybrid BM25 + ANN embedding search.

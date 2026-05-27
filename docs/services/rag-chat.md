@@ -7,7 +7,7 @@
 
 ## Mission & Boundaries
 
-**Owns**: Query rewriting, tool-use chat pipeline, 20-tool catalog, SSE streaming
+**Owns**: Query rewriting, tool-use chat pipeline, 23-tool catalog, SSE streaming
 (vector + KG + SQL tools), result injection, context assembly, prompt building,
 LLM provider fallback, streaming response delivery, citation injection, response caching.
 
@@ -178,8 +178,10 @@ unchanged — R11: never break wire format.
 
 **PLAN-0067 replaced the classical 13-step pipeline with a tool-use loop. Tool-use is the ONLY path — there is no feature flag and no fallback to the classical pipeline.**
 
+**PLAN-0095 W2 T-W2-03** reordered the orchestrator so `check_cache()` runs BEFORE `validate_input()`. On cache hit (~15% of traffic) the response is streamed straight from cache and the 5-8 s LLM injection classifier (`validate_input`) is skipped. Security argument: a cached completion was already classifier-validated on its first write (the writer ran through `validate_input → check_cache miss → classifier → cache.set`), so re-running the classifier on every read is defensive duplication, not a real gate.
+
 ```
-Input → Validate → Cache check → Rate limit → Load history → Release UoW
+Input → Cache check → [hit? short-circuit ✓] → Validate → Rate limit → Load history → Release UoW
       → emit_thinking(stage)
       → LLM first turn (chat_with_tools, tool catalog injected as schema)
       → for each tool_call in response:
@@ -192,12 +194,13 @@ Input → Validate → Cache check → Rate limit → Load history → Release U
       → Re-acquire UoW → persist thread + message
 ```
 
-### Tool Catalog (20 tools — `libs/tools/src/tools/capability_manifest.yaml` v3)
+### Tool Catalog (23 tools — `libs/tools/src/tools/capability_manifest.yaml` v4)
 
 | Tool | Target | Description | Since |
 |------|--------|-------------|-------|
 | `get_price_history` | S3 | OHLCV price data for a ticker | v1 |
-| `get_fundamentals_history` | S3 | Quarterly financial metrics | v1 |
+| `get_fundamentals_history` | S3 | Quarterly financial metrics for ONE ticker | v1 |
+| `get_fundamentals_history_batch` | S3 | **PLAN-0095 W2** — quarterly metrics for MULTIPLE tickers in ONE call (cap 25). Backed by `POST /api/v1/fundamentals/batch`; collapses N×fundamentals tool-turns into one (5-10x latency reduction on screener-then-fundamentals workflows). | v4 |
 | `search_documents` | S6 | Hybrid BM25+ANN full-text search (primary text retrieval) | v1 |
 | `get_entity_graph` | S7 | Egocentric graph for an entity | v1 |
 | `traverse_graph` | S7 | Multi-hop path finding (Cypher injection guard active) | v1 |

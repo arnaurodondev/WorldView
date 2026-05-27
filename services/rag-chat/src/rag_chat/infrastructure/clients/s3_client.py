@@ -149,6 +149,34 @@ class S3Client(BaseUpstreamClient):
             return periods_data if isinstance(periods_data, list) else []
         return []
 
+    # PLAN-0095 W2 T-W2-02: batch adapter. Mirrors the contract in
+    # ``S3Port.get_fundamentals_history_batch`` and POSTs to S9-proxied
+    # ``/api/v1/fundamentals/batch``. Returns ``{}`` on any error so the
+    # caller's handler can render a "data unavailable" RetrievedItem instead
+    # of bubbling an exception into the tool executor.
+    async def get_fundamentals_history_batch(
+        self,
+        *,
+        tickers: list[str],
+        periods: int = 5,
+    ) -> dict[str, dict]:
+        """POST /api/v1/fundamentals/batch → per-ticker results dict.
+
+        R9 safe degradation: returns ``{}`` on timeout, HTTP error, or
+        unexpected response shape. The route handler bounds tickers at 25;
+        callers that pass more will get a 422 surfaced as ``{}`` here.
+        """
+        if not tickers:
+            return {}
+        raw = await self._post(
+            "/api/v1/fundamentals/batch",
+            {"tickers": tickers, "periods": periods},
+        )
+        if not isinstance(raw, dict):
+            return {}
+        results = raw.get("results", {})
+        return results if isinstance(results, dict) else {}
+
     async def get_batch_quotes(self, instrument_ids: list[str]) -> dict[str, QuoteSummary]:
         """POST /api/v1/quotes/batch -> dict of instrument_id -> QuoteSummary.
 

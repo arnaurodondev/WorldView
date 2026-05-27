@@ -305,6 +305,24 @@ class S3Port(Protocol):
         """
         ...
 
+    # PLAN-0095 W2 T-W2-02: batch fundamentals fan-out in one HTTP call.
+    # WHY: collapses the rag-chat screener → N x fundamentals tool-turn cascade
+    # into one tool call. See ``get_fundamentals_history_batch`` handler in
+    # ``rag_chat.application.pipeline.handlers.market``.
+    async def get_fundamentals_history_batch(
+        self,
+        *,
+        tickers: list[str],
+        periods: int = 5,
+    ) -> dict[str, dict]:
+        """Return per-ticker fundamentals via POST /api/v1/fundamentals/batch.
+
+        Returns ``{}`` on any HTTP or network error (R9 safe degradation).
+        On success returns the parsed ``results`` map keyed by the original
+        ticker — each value is ``{"status": "ok"|"error", "periods"?, "reason"?}``.
+        """
+        ...
+
 
 @runtime_checkable
 class S1Port(Protocol):
