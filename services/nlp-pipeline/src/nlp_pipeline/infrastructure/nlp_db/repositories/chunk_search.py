@@ -167,9 +167,19 @@ class ChunkANNRepository(ChunkSearchPort):
         # Non-None = tenant context: return public chunks OR chunks for this tenant.
         # This prevents data leakage between tenants. BP-180 CAST guards used for
         # nullable params to avoid asyncpg AmbiguousParameterError.
+        # R40 (PLAN-0098 follow-up to PLAN-0097 Phase-D code review §2.3): add the
+        # PUBLIC_TENANT_ID sentinel OR-leg so PLAN-0096 W4 fallback rows (BP-575)
+        # are visible to every authenticated tenant. Without the third leg, every
+        # sentinel-tenant row is invisible to authenticated callers — only
+        # anonymous (tenant_id=None) queries see them, exactly the inverse of the
+        # intent. Same fix as `news_query._ENTITY_ARTICLES_SQL` (commit 8c3a9249).
         if tenant_id is not None:
             params["tenant_id_str"] = tenant_id
-            where_clauses.append("(c.tenant_id IS NULL OR c.tenant_id = CAST(:tenant_id_str AS UUID))")
+            where_clauses.append(
+                "(c.tenant_id IS NULL "
+                "OR c.tenant_id = CAST(:tenant_id_str AS UUID) "
+                "OR c.tenant_id = '00000000-0000-0000-0000-000000000000'::uuid)"
+            )
         else:
             where_clauses.append("c.tenant_id IS NULL")
 
@@ -256,9 +266,15 @@ class ChunkANNRepository(ChunkSearchPort):
         # None = public-only: return only sections with tenant_id IS NULL.
         # Non-None = tenant context: return public sections OR sections for this tenant.
         # BP-180 CAST used to avoid asyncpg AmbiguousParameterError for nullable params.
+        # R40 (PLAN-0098 follow-up): include PUBLIC_TENANT_ID sentinel — see
+        # `_search_chunks` for the full rationale.
         if tenant_id is not None:
             params["tenant_id_str"] = tenant_id
-            where_clauses.append("(s.tenant_id IS NULL OR s.tenant_id = CAST(:tenant_id_str AS UUID))")
+            where_clauses.append(
+                "(s.tenant_id IS NULL "
+                "OR s.tenant_id = CAST(:tenant_id_str AS UUID) "
+                "OR s.tenant_id = '00000000-0000-0000-0000-000000000000'::uuid)"
+            )
         else:
             where_clauses.append("s.tenant_id IS NULL")
 
@@ -306,10 +322,14 @@ class ChunkANNRepository(ChunkSearchPort):
         # does not leak the count of other tenants' private sections (MED-3).
         if tenant_id is not None:
             count_params: dict[str, Any] = {"tenant_id_str": tenant_id}
+            # R40 (PLAN-0098 follow-up): include PUBLIC_TENANT_ID sentinel rows in
+            # the COUNT so it stays consistent with the SELECT visibility set.
             count_sql = text(
                 "SELECT COUNT(*) FROM section_embeddings se "
                 "JOIN sections s ON s.section_id = se.section_id "
-                "WHERE (s.tenant_id IS NULL OR s.tenant_id = CAST(:tenant_id_str AS UUID))"
+                "WHERE (s.tenant_id IS NULL "
+                "OR s.tenant_id = CAST(:tenant_id_str AS UUID) "
+                "OR s.tenant_id = '00000000-0000-0000-0000-000000000000'::uuid)"
             ).bindparams(**count_params)
         else:
             count_sql = text(
@@ -421,9 +441,15 @@ class ChunkANNRepository(ChunkSearchPort):
         # PLAN-0086 Wave C-1: tenant_id filter — CRITICAL security boundary.
         # None = public-only: return only chunks with tenant_id IS NULL.
         # Non-None = public + tenant chunks. BP-180 CAST guard prevents asyncpg error.
+        # R40 (PLAN-0098 follow-up): include PUBLIC_TENANT_ID sentinel — see
+        # `_search_chunks` for the full rationale.
         if tenant_id is not None:
             params["tenant_id_str"] = tenant_id
-            tenant_filter_sql = "AND (c.tenant_id IS NULL OR c.tenant_id = CAST(:tenant_id_str AS UUID))"
+            tenant_filter_sql = (
+                "AND (c.tenant_id IS NULL "
+                "OR c.tenant_id = CAST(:tenant_id_str AS UUID) "
+                "OR c.tenant_id = '00000000-0000-0000-0000-000000000000'::uuid)"
+            )
         else:
             tenant_filter_sql = "AND c.tenant_id IS NULL"
 

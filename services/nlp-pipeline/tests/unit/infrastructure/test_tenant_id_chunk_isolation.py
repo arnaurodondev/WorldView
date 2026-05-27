@@ -271,6 +271,117 @@ class TestChunkANNRepositoryTenantFilter:
         assert "tenant_id_str" in sql_text
 
 
+# ── R40 (PLAN-0098 follow-up to Phase-D §2.3): PUBLIC_TENANT_ID sentinel ──────
+
+
+# Canonical sentinel literal — must match `common.ids.PUBLIC_TENANT_ID`
+# (all-zero UUID, see BP-575). Hardcoded here so the test pins the literal
+# that ships in production SQL, independent of any later constant rename.
+_PUBLIC_TENANT_LITERAL = "'00000000-0000-0000-0000-000000000000'::uuid"
+
+
+def _make_dual_execute_session() -> AsyncMock:
+    """Build a session mock that yields (rows-result, count-result) in order.
+
+    Both `_search_chunks` and `_search_sections` issue exactly two execute
+    calls: the SELECT and a follow-up COUNT(*). lexical_search also issues two
+    (SELECT + COUNT) but both reuse the same `text(...)` shape. Factored as a
+    helper so each R40 test below stays a 4-liner and the assertion logic is
+    DRY across the three SQL surfaces.
+    """
+    session = AsyncMock()
+    rows_result = MagicMock()
+    rows_result.all.return_value = []
+    count_result = MagicMock()
+    count_result.scalar_one.return_value = 0
+    session.execute = AsyncMock(side_effect=[rows_result, count_result])
+    return session
+
+
+def _assert_three_or_legs(sql_text: str, column_alias: str, bind_name: str = "tenant_id_str") -> None:
+    """Assert all three R40 OR-legs are present in a single boolean grouping.
+
+    column_alias = "c" for chunks-side, "s" for sections-side.
+    Pins (1) NULL-leg, (2) bound-tenant leg, (3) PUBLIC_TENANT_ID literal leg.
+    """
+    assert f"{column_alias}.tenant_id IS NULL" in sql_text, f"missing NULL-tenant OR-leg on {column_alias}"
+    assert (
+        f"{column_alias}.tenant_id = CAST(:{bind_name} AS UUID)" in sql_text
+    ), f"missing real-tenant OR-leg on {column_alias}"
+    assert (
+        f"{column_alias}.tenant_id = {_PUBLIC_TENANT_LITERAL}" in sql_text
+    ), f"missing PUBLIC_TENANT_ID OR-leg on {column_alias} (R40 / Phase-D §2.3)"
+
+
+class TestChunkANNRepositoryPublicTenantSentinel:
+    """R40 (Phase-D §2.3 P1 follow-up): all three SQL surfaces in
+    `chunk_search.py` must admit the PUBLIC_TENANT_ID sentinel row class
+    when a real tenant_id is supplied. Without the third OR-leg, every
+    PLAN-0096 W4 fallback row (BP-575) would be invisible to authenticated
+    tenants — exactly the inverse-visibility bug R40 codifies.
+    """
+
+    @pytest.mark.asyncio
+    async def test_ann_search_chunks_admits_public_tenant_sentinel(self) -> None:
+        """`_search_chunks` SQL must include the sentinel OR-leg on `c`."""
+        session = _make_dual_execute_session()
+        repo = ChunkANNRepository(session)
+        await repo.ann_search(
+            embedding=[0.1] * 1024,
+            granularity="chunk",
+            tenant_id=str(uuid.uuid4()),
+        )
+        sql_text = str(session.execute.call_args_list[0][0][0])
+        _assert_three_or_legs(sql_text, column_alias="c")
+
+    @pytest.mark.asyncio
+    async def test_ann_search_sections_admits_public_tenant_sentinel(self) -> None:
+        """`_search_sections` SQL (SELECT and COUNT) must include the sentinel."""
+        session = _make_dual_execute_session()
+        repo = ChunkANNRepository(session)
+        await repo.ann_search(
+            embedding=[0.1] * 1024,
+            granularity="section",
+            tenant_id=str(uuid.uuid4()),
+        )
+        # SELECT statement
+        select_sql = str(session.execute.call_args_list[0][0][0])
+        _assert_three_or_legs(select_sql, column_alias="s")
+        # COUNT statement — independent string, must also carry the sentinel
+        # so totals stay consistent with the SELECT visibility set.
+        count_sql = str(session.execute.call_args_list[1][0][0])
+        _assert_three_or_legs(count_sql, column_alias="s")
+
+    @pytest.mark.asyncio
+    async def test_lexical_search_admits_public_tenant_sentinel(self) -> None:
+        """`lexical_search` SQL must include the sentinel OR-leg on `c`."""
+        session = _make_dual_execute_session()
+        repo = ChunkANNRepository(session)
+        await repo.lexical_search(
+            "apple revenue",
+            tenant_id=str(uuid.uuid4()),
+        )
+        # Both SELECT and COUNT share the same `tenant_filter_sql` fragment;
+        # asserting on the SELECT statement is sufficient because the COUNT
+        # interpolates the same f-string variable in `chunk_search.py`.
+        sql_text = str(session.execute.call_args_list[0][0][0])
+        _assert_three_or_legs(sql_text, column_alias="c")
+
+    @pytest.mark.asyncio
+    async def test_null_tenant_does_not_widen_to_public_sentinel(self) -> None:
+        """Defence-in-depth: anonymous (tenant_id=None) callers MUST NOT have
+        the PUBLIC_TENANT_ID literal injected into their WHERE clause. The
+        else-branch must stay `c.tenant_id IS NULL` only — widening it would
+        change semantics for the public/anonymous surface (out of scope here).
+        """
+        session = _make_dual_execute_session()
+        repo = ChunkANNRepository(session)
+        await repo.ann_search(embedding=[0.1] * 1024, granularity="chunk", tenant_id=None)
+        sql_text = str(session.execute.call_args_list[0][0][0])
+        # The hardcoded sentinel literal must NOT appear in the public-only branch
+        assert _PUBLIC_TENANT_LITERAL not in sql_text
+
+
 # ── T-C-1-05: API schema accepts tenant_id ────────────────────────────────────
 
 
