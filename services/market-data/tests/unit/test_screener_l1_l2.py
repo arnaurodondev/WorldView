@@ -391,3 +391,218 @@ async def test_query_screen_no_filter_result_includes_snapshot_fields() -> None:
     assert r.metrics.get("eps_ttm") == Decimal("12.50")
     # Snapshot fields that are NULL must be absent
     assert "avg_volume_30d" not in r.metrics
+
+
+# ---------------------------------------------------------------------------
+# L-2: WHERE-clause filters on snapshot columns
+# ---------------------------------------------------------------------------
+#
+# These tests assert that supplying ``<field>_min`` / ``<field>_max`` /
+# ``credit_ratings`` on a ``ScreenFilter`` produces the corresponding
+# WHERE predicate against the LEFT-JOINed ``instrument_fundamentals_snapshot``
+# table. They use the same capture-session pattern as the L-1 tests above.
+
+
+@pytest.mark.asyncio
+async def test_query_screen_eps_ttm_min_filter_adds_predicate() -> None:
+    """``eps_ttm_min`` emits ``snap.eps_ttm >= <value>`` predicate."""
+    session, captured = _make_capture_session()
+
+    filters = [ScreenFilter(metric="pe_ratio", max_value=40.0, eps_ttm_min=2.5)]
+    await query_screen(session, filters)
+
+    sql = _sql(captured[0]).lower()
+    assert "eps_ttm" in sql
+    # Numeric value 2.5 must be present after literal_binds substitution.
+    assert "2.5" in sql, f"eps_ttm_min value missing from SQL:\n{sql}"
+
+
+@pytest.mark.asyncio
+async def test_query_screen_eps_ttm_max_filter_adds_predicate() -> None:
+    """``eps_ttm_max`` emits ``snap.eps_ttm <= <value>`` predicate."""
+    session, captured = _make_capture_session()
+
+    filters = [ScreenFilter(metric="pe_ratio", max_value=40.0, eps_ttm_max=15.0)]
+    await query_screen(session, filters)
+
+    sql = _sql(captured[0]).lower()
+    assert "eps_ttm" in sql
+    assert "15.0" in sql
+
+
+@pytest.mark.asyncio
+async def test_query_screen_avg_volume_30d_range_filter_adds_predicates() -> None:
+    """Both min and max bounds emit predicates on avg_volume_30d."""
+    session, captured = _make_capture_session()
+
+    filters = [
+        ScreenFilter(
+            metric="pe_ratio",
+            max_value=40.0,
+            avg_volume_30d_min=1_000_000,
+            avg_volume_30d_max=500_000_000,
+        )
+    ]
+    await query_screen(session, filters)
+
+    sql = _sql(captured[0]).lower()
+    assert "avg_volume_30d" in sql
+    assert "1000000" in sql
+    assert "500000000" in sql
+
+
+@pytest.mark.asyncio
+async def test_query_screen_free_cash_flow_min_filter_adds_predicate() -> None:
+    """``free_cash_flow_min`` emits the expected predicate."""
+    session, captured = _make_capture_session()
+
+    filters = [ScreenFilter(metric="pe_ratio", max_value=40.0, free_cash_flow_min=1_000_000_000)]
+    await query_screen(session, filters)
+
+    sql = _sql(captured[0]).lower()
+    assert "free_cash_flow" in sql
+    assert "1000000000" in sql
+
+
+@pytest.mark.asyncio
+async def test_query_screen_fcf_margin_max_filter_adds_predicate() -> None:
+    """``fcf_margin_max`` emits the expected predicate."""
+    session, captured = _make_capture_session()
+
+    filters = [ScreenFilter(metric="pe_ratio", max_value=40.0, fcf_margin_max=0.5)]
+    await query_screen(session, filters)
+
+    sql = _sql(captured[0]).lower()
+    assert "fcf_margin" in sql
+    assert "0.5" in sql
+
+
+@pytest.mark.asyncio
+async def test_query_screen_interest_coverage_min_filter_adds_predicate() -> None:
+    """``interest_coverage_min`` emits the expected predicate."""
+    session, captured = _make_capture_session()
+
+    filters = [ScreenFilter(metric="pe_ratio", max_value=40.0, interest_coverage_min=3.0)]
+    await query_screen(session, filters)
+
+    sql = _sql(captured[0]).lower()
+    assert "interest_coverage" in sql
+    assert "3.0" in sql
+
+
+@pytest.mark.asyncio
+async def test_query_screen_net_debt_to_ebitda_max_filter_adds_predicate() -> None:
+    """``net_debt_to_ebitda_max`` emits the expected predicate."""
+    session, captured = _make_capture_session()
+
+    filters = [ScreenFilter(metric="pe_ratio", max_value=40.0, net_debt_to_ebitda_max=2.0)]
+    await query_screen(session, filters)
+
+    sql = _sql(captured[0]).lower()
+    assert "net_debt_to_ebitda" in sql
+    assert "2.0" in sql
+
+
+@pytest.mark.asyncio
+async def test_query_screen_credit_ratings_in_filter_adds_predicate() -> None:
+    """``credit_ratings`` non-empty tuple emits an IN(...) predicate."""
+    session, captured = _make_capture_session()
+
+    filters = [
+        ScreenFilter(
+            metric="pe_ratio",
+            max_value=40.0,
+            credit_ratings=("AAA", "AA+", "AA"),
+        )
+    ]
+    await query_screen(session, filters)
+
+    sql = _sql(captured[0])
+    # Either an IN ('AAA', 'AA+', 'AA') or = ANY(ARRAY[...]) form — both
+    # include the literal rating strings.
+    assert "credit_rating" in sql.lower()
+    assert "AAA" in sql
+    assert "AA+" in sql
+
+
+@pytest.mark.asyncio
+async def test_query_screen_no_l2_filters_emits_no_l2_predicates() -> None:
+    """No L-2 filter set → no snapshot WHERE predicates emitted.
+
+    The snapshot columns are still SELECTed (L-2 projection) and LEFT-JOINed,
+    but no WHERE clause should reference them.
+    """
+    session, captured = _make_capture_session()
+
+    filters = [ScreenFilter(metric="pe_ratio", max_value=40.0)]
+    await query_screen(session, filters)
+
+    sql = _sql(captured[0]).lower()
+    # SELECT and JOIN reference snapshot table; WHERE clause should not
+    # carry a comparison predicate. We assert by checking that the literal
+    # operator-value combinations we'd emit for an L-2 filter are absent.
+    # (Sentinel: '>= 2.5' style fragments that only arise from L-2 filters.)
+    assert "eps_ttm >= " not in sql
+    assert "eps_ttm <= " not in sql
+    assert "credit_rating in (" not in sql
+
+
+# ---------------------------------------------------------------------------
+# L-2: sort_by on snapshot columns
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_query_screen_sort_by_eps_ttm_orders_by_snapshot_column() -> None:
+    """``sort_by='eps_ttm'`` produces an ORDER BY against the snapshot column."""
+    session, captured = _make_capture_session()
+
+    filters = [ScreenFilter(metric="pe_ratio", max_value=40.0)]
+    await query_screen(session, filters, sort_by="eps_ttm", sort_order="desc")
+
+    sql = _sql(captured[0]).lower()
+    assert "order by" in sql
+    # The snapshot column reference appears in the ORDER BY clause
+    assert "eps_ttm desc" in sql or "snap_eps_ttm desc" in sql or "eps_ttm" in sql.split("order by", 1)[1]
+
+
+@pytest.mark.asyncio
+async def test_query_screen_sort_by_avg_volume_30d_orders_by_snapshot_column() -> None:
+    """``sort_by='avg_volume_30d'`` produces an ORDER BY against the snapshot column."""
+    session, captured = _make_capture_session()
+
+    filters = [ScreenFilter(metric="pe_ratio", max_value=40.0)]
+    await query_screen(session, filters, sort_by="avg_volume_30d", sort_order="asc")
+
+    sql = _sql(captured[0]).lower()
+    assert "order by" in sql
+    assert "avg_volume_30d" in sql.split("order by", 1)[1]
+
+
+@pytest.mark.asyncio
+async def test_query_screen_combined_l2_filters_with_l1_and_sort() -> None:
+    """Combined L-2 + L-1 + sort produces all predicates simultaneously."""
+    session, captured = _make_capture_session()
+
+    filters = [
+        ScreenFilter(
+            metric="pe_ratio",
+            max_value=40.0,
+            country="USA",
+            exchange="NASDAQ",
+            eps_ttm_min=1.0,
+            free_cash_flow_min=500_000_000,
+            credit_ratings=("AA", "AA+", "AAA"),
+        )
+    ]
+    await query_screen(session, filters, sort_by="free_cash_flow", sort_order="desc")
+
+    sql = _sql(captured[0])
+    sql_l = sql.lower()
+    assert "USA" in sql
+    assert "NASDAQ" in sql
+    assert "eps_ttm" in sql_l
+    assert "free_cash_flow" in sql_l
+    assert "credit_rating" in sql_l
+    assert "AA" in sql
+    assert "order by" in sql_l
