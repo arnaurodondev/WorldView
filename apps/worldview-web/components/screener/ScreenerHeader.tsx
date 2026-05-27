@@ -27,6 +27,9 @@ import { SlidersHorizontal } from "lucide-react";
 import { cn } from "@/lib/utils";
 import type { FilterState } from "@/features/screener/lib/filter-state";
 import { SCREENER_PRESETS } from "@/lib/screener/presets";
+// PRD-0089 Wave I-A · T-IA-01: the inline preset chip rendering was extracted
+// into a dedicated `<PresetBar>` so the Workspace screener panel can reuse it.
+import { PresetBar } from "@/components/screener/PresetBar";
 
 // ── Props ────────────────────────────────────────────────────────────────────
 
@@ -79,28 +82,16 @@ export function ScreenerHeader({
       )}
 
       {/* ── Preset chip strip ──────────────────────────────────────────── */}
-      {/* WHY gap-0.5 (not gap-1): 6 chips at 1440px; tighter gap saves ~12px. */}
-      <div className="flex items-center gap-0.5 overflow-x-auto" role="group" aria-label="Quick screener presets">
-        {SCREENER_PRESETS.map((preset) => {
-          const isActive = activePresetId === preset.id;
-          return (
-            <button
-              key={preset.id}
-              type="button"
-              aria-pressed={isActive}
-              onClick={() => onApplyPreset(preset.filters)}
-              className={cn(
-                "h-[22px] px-2 text-[10px] font-mono uppercase tracking-[0.06em] rounded-[2px] border transition-colors shrink-0",
-                isActive
-                  ? "bg-primary/15 border-primary/60 text-primary"
-                  : "bg-transparent border-border/50 text-muted-foreground hover:text-foreground hover:border-border",
-              )}
-            >
-              {preset.label}
-            </button>
-          );
-        })}
-      </div>
+      {/* T-IA-01: extracted to <PresetBar>. WHY the wrapper passes the
+       *  `preset` object to `onApply` but ScreenerHeaderProps expects
+       *  `(filters: FilterState) => void`: we unwrap `preset.filters` here so
+       *  call-sites of ScreenerHeader (page.tsx) keep their original signature
+       *  unchanged — pure refactor, zero behaviour drift. */}
+      <PresetBar
+        presets={SCREENER_PRESETS}
+        activeId={activePresetId}
+        onApply={(preset) => onApplyPreset(preset.filters)}
+      />
 
       {/* ── Spacer ─────────────────────────────────────────────────────── */}
       <div className="ml-auto flex items-center gap-1">
