@@ -310,12 +310,45 @@ async def query_screen(
         ho = next(f.has_ohlcv for f in filters if f.has_ohlcv is not None)
         stmt = stmt.where(instr.has_ohlcv == ho)
 
+    # ── Wave L-2: snapshot-column predicates ─────────────────────────────────
+    # Numeric min/max filters are applied as ``snap.<col> >= :v`` and
+    # ``snap.<col> <= :v`` against the LEFT-JOINed snapshot. Because PostgreSQL
+    # evaluates ``NULL >= :v`` to UNKNOWN, instruments without a snapshot row
+    # are correctly dropped whenever any L-2 predicate is active. credit_ratings
+    # uses an IN(...) predicate. All collapsed across filter entries with the
+    # first non-None value (mirrors L-1 has_ohlcv/has_fundamentals collapse).
+    numeric_snap_filters: tuple[str, ...] = (
+        "avg_volume_30d",
+        "eps_ttm",
+        "free_cash_flow",
+        "fcf_margin",
+        "interest_coverage",
+        "net_debt_to_ebitda",
+    )
+    for snap_field in numeric_snap_filters:
+        min_attr = f"{snap_field}_min"
+        max_attr = f"{snap_field}_max"
+        min_val = next((getattr(f, min_attr) for f in filters if getattr(f, min_attr, None) is not None), None)
+        max_val = next((getattr(f, max_attr) for f in filters if getattr(f, max_attr, None) is not None), None)
+        if min_val is not None:
+            stmt = stmt.where(getattr(snap, snap_field) >= min_val)
+        if max_val is not None:
+            stmt = stmt.where(getattr(snap, snap_field) <= max_val)
+    # credit_ratings: IN predicate across non-empty tuple
+    ratings = next((f.credit_ratings for f in filters if f.credit_ratings), None)
+    if ratings:
+        stmt = stmt.where(snap.credit_rating.in_(list(ratings)))
+
     # Sorting — column resolved from ORM attributes (no raw SQL interpolation)
     sort_col: Any
     if sort_by == "ticker":
         sort_col = instr.symbol
     elif sort_by == "name":
         sort_col = instr.name
+    elif sort_by in numeric_snap_filters:
+        # Wave L-2: ORDER BY snapshot.<col>; column lookup is by Python attribute
+        # name (no raw SQL), so this is safe to call directly without re-validation.
+        sort_col = getattr(snap, sort_by)
     elif sort_by is not None:
         # metric sort: find the column from the metric subqueries
         sort_col = next((col for mn, col in metric_columns if mn == sort_by), base.c.instrument_id)

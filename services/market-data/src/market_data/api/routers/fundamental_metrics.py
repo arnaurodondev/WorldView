@@ -157,9 +157,22 @@ async def screen_instruments(
     ``sort_by`` is validated against a whitelist (filter metric names + ``ticker``
     and ``name``) to prevent SQL injection (PRD-0017 §6.8, §8).
     """
+    # Wave L-2 snapshot fields are also valid sort/sortable targets even
+    # though they are not addressed via the ``filters[].metric`` channel —
+    # they live on the LEFT-JOINed ``instrument_fundamentals_snapshot`` row
+    # and are always projected into every result, so sorting by them is
+    # always meaningful.
+    snap_sort_fields = {
+        "avg_volume_30d",
+        "eps_ttm",
+        "free_cash_flow",
+        "fcf_margin",
+        "interest_coverage",
+        "net_debt_to_ebitda",
+    }
     # SQL injection guard: sort_by must be a filter metric name, "ticker", or "name"
     if body.sort_by is not None:
-        valid_sort_fields = {"ticker", "name"} | {f.metric for f in body.filters}
+        valid_sort_fields = {"ticker", "name"} | {f.metric for f in body.filters} | snap_sort_fields
         if body.sort_by not in valid_sort_fields:
             raise HTTPException(
                 status_code=422,
@@ -178,6 +191,20 @@ async def screen_instruments(
             exchange=f.exchange,
             has_fundamentals=f.has_fundamentals,
             has_ohlcv=f.has_ohlcv,
+            # Wave L-2: snapshot column predicates (numeric ranges + rating IN).
+            avg_volume_30d_min=f.avg_volume_30d_min,
+            avg_volume_30d_max=f.avg_volume_30d_max,
+            eps_ttm_min=f.eps_ttm_min,
+            eps_ttm_max=f.eps_ttm_max,
+            free_cash_flow_min=f.free_cash_flow_min,
+            free_cash_flow_max=f.free_cash_flow_max,
+            fcf_margin_min=f.fcf_margin_min,
+            fcf_margin_max=f.fcf_margin_max,
+            interest_coverage_min=f.interest_coverage_min,
+            interest_coverage_max=f.interest_coverage_max,
+            net_debt_to_ebitda_min=f.net_debt_to_ebitda_min,
+            net_debt_to_ebitda_max=f.net_debt_to_ebitda_max,
+            credit_ratings=tuple(f.credit_ratings) if f.credit_ratings else None,
         )
         for f in body.filters
     ]

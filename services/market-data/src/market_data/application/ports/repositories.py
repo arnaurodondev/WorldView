@@ -65,6 +65,32 @@ class ScreenFilter:
     exchange: str | None = None
     has_fundamentals: bool | None = None
     has_ohlcv: bool | None = None
+    # Wave L-2: instrument_fundamentals_snapshot column filters.
+    # Numeric min/max (inclusive) for the six snapshot metrics; equality/IN
+    # for credit_rating (string). All fields default to None so existing
+    # callers keep working (R11 forward-compat).
+    # Applied as WHERE predicates against the LEFT-JOINed snapshot table —
+    # ``... WHERE snapshot.eps_ttm >= :min AND snapshot.eps_ttm <= :max``.
+    # NULL snapshots (no row for instrument) fail every numeric predicate
+    # because PostgreSQL ``NULL >= :v`` evaluates to UNKNOWN, so instruments
+    # without a snapshot are correctly excluded when any L-2 filter is active.
+    avg_volume_30d_min: float | None = None
+    avg_volume_30d_max: float | None = None
+    eps_ttm_min: float | None = None
+    eps_ttm_max: float | None = None
+    free_cash_flow_min: float | None = None
+    free_cash_flow_max: float | None = None
+    fcf_margin_min: float | None = None
+    fcf_margin_max: float | None = None
+    interest_coverage_min: float | None = None
+    interest_coverage_max: float | None = None
+    net_debt_to_ebitda_min: float | None = None
+    net_debt_to_ebitda_max: float | None = None
+    # credit_rating accepts a list of rating strings (IN predicate) —
+    # callers can pass ["AAA", "AA+", "AA", "AA-"] to filter "AA-bracket
+    # or better". Empty list / None = no filter. Tuples accepted to allow
+    # frozen-dataclass usage from Pydantic mode='python'.
+    credit_ratings: tuple[str, ...] | None = None
 
 
 @dataclass(frozen=True, slots=True)

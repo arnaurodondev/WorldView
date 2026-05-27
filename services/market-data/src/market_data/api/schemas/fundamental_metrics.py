@@ -41,6 +41,23 @@ class ScreenFilterRequest(BaseModel):
     exchange: str | None = None
     has_fundamentals: bool | None = None
     has_ohlcv: bool | None = None
+    # ── Wave L-2: instrument_fundamentals_snapshot column filters ────────────
+    # All fields are optional/default-None for R11 forward-compatibility.
+    # Numeric min/max are inclusive ranges; credit_ratings is an IN list.
+    # Mirrors ScreenFilter port (application/ports/repositories.py).
+    avg_volume_30d_min: float | None = None
+    avg_volume_30d_max: float | None = None
+    eps_ttm_min: float | None = None
+    eps_ttm_max: float | None = None
+    free_cash_flow_min: float | None = None
+    free_cash_flow_max: float | None = None
+    fcf_margin_min: float | None = None
+    fcf_margin_max: float | None = None
+    interest_coverage_min: float | None = None
+    interest_coverage_max: float | None = None
+    net_debt_to_ebitda_min: float | None = None
+    net_debt_to_ebitda_max: float | None = None
+    credit_ratings: list[str] | None = None
 
 
 class ScreenRequest(BaseModel):
