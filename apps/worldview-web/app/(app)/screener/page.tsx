@@ -33,11 +33,10 @@ import {
 import { useQuery } from "@tanstack/react-query";
 import { useQueryState, parseAsString, parseAsStringLiteral } from "nuqs";
 import { useRouter } from "next/navigation";
-import type { GridApi, GridReadyEvent, CellMouseOverEvent } from "ag-grid-community";
+import type { GridApi, GridReadyEvent } from "ag-grid-community";
 import { createGateway } from "@/lib/gateway";
 import { useAuth } from "@/hooks/useAuth";
 import { useQueryClient } from "@tanstack/react-query";
-import { AgGridBase } from "@/components/ui/ag-grid/AgGridBase";
 import { createAgScreenerColumns } from "@/components/screener/ag-screener-columns";
 import dynamic from "next/dynamic";
 import {
@@ -68,10 +67,11 @@ import { qk } from "@/lib/query/keys";
 import { ScreenerHeader } from "@/components/screener/ScreenerHeader";
 import { FilterChipStrip } from "@/components/screener/FilterChipStrip";
 import { NLScreenerInput } from "@/components/screener/NLScreenerInput";
-import { RowHoverToolbar } from "@/components/screener/RowHoverToolbar";
 import { SCREENER_PRESETS } from "@/lib/screener/presets";
 // PRD-0089 Wave I-A · T-IA-02: extracted "Load N more" footer.
 import { LoadMoreBar } from "@/components/screener/LoadMoreBar";
+// PRD-0089 Wave I-A · T-IA-03: extracted AG-Grid + row-hover toolbar.
+import { ScreenerTable } from "@/components/screener/ScreenerTable";
 
 // ── Constants ──────────────────────────────────────────────────────────────────
 
@@ -127,7 +127,8 @@ export default function ScreenerPage() {
   const [filtersOpen, setFiltersOpen] = useState(false);
   const [savedDialogOpen, setSavedDialogOpen] = useState(false);
   const [nlVisible, setNlVisible] = useState(false);
-  const [hoveredRow, setHoveredRow] = useState<{ data: ScreenerResult; rect: DOMRect } | null>(null);
+  // T-IA-03: hovered-row state moved into <ScreenerTable>. The page no
+  // longer tracks individual cell hovers — ScreenerTable owns that.
 
   // ── Column preferences ──────────────────────────────────────────────────
   const [columns, setColumns] = useState<ScreenerColumn[]>(() => loadColumnPrefs());
@@ -227,34 +228,6 @@ export default function ScreenerPage() {
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, []);
-
-  // ── Row hover handlers ──────────────────────────────────────────────────
-  // WHY CellMouseOver (not RowMouseEnter): AG Grid React doesn't expose row-level
-  // mouse events. Cell events fire on every cell entry; we deduplicate by rowIndex.
-  const lastHoveredRowIndex = useRef<number | null>(null);
-  // WHY mouseOutPending: CellMouseOut fires between cells in the same row. The rAF
-  // delay lets CellMouseOver cancel the clear before it commits. Without this flag
-  // the toolbar flickers every time the cursor crosses a column boundary.
-  const mouseOutPendingRef = useRef(false);
-
-  const handleCellMouseOver = useCallback((e: CellMouseOverEvent<ScreenerResult>) => {
-    mouseOutPendingRef.current = false;
-    if (e.rowIndex === lastHoveredRowIndex.current) return;
-    lastHoveredRowIndex.current = e.rowIndex;
-    if (!e.data || !e.event) return;
-    const rowEl = (e.event.target as HTMLElement).closest(".ag-row");
-    if (!rowEl) return;
-    setHoveredRow({ data: e.data, rect: rowEl.getBoundingClientRect() });
-  }, []);
-
-  const handleCellMouseOut = useCallback(() => {
-    mouseOutPendingRef.current = true;
-    requestAnimationFrame(() => {
-      if (!mouseOutPendingRef.current) return;
-      lastHoveredRowIndex.current = null;
-      setHoveredRow(null);
-    });
   }, []);
 
   // ── Compare set (session-scoped) ────────────────────────────────────────
@@ -399,31 +372,21 @@ export default function ScreenerPage() {
       />
 
       {/* ── AG Grid table ────────────────────────────────────────────── */}
+      {/* T-IA-03: extracted to <ScreenerTable>. The wrapper owns the
+       *  row-hover toolbar state (CellMouseOver/Out + rAF debounce). The
+       *  page only orchestrates: gives it rows + columns, listens for the
+       *  row-click event, and supplies the compare handler. Row height is
+       *  hard-locked to 20px inside ScreenerTable (Terminal-Dark density). */}
       <div className="flex-1 min-h-0 flex flex-col overflow-hidden relative">
-        <AgGridBase<ScreenerResult>
-          rowData={filteredRows}
+        <ScreenerTable
+          rows={filteredRows}
           columnDefs={agColumns}
-          getRowId={(p) => p.data.instrument_id}
           onGridReady={handleGridReady}
-          onRowClicked={(row) =>
+          onRowClick={(row) =>
             router.push(`/instruments/${row.ticker || row.instrument_id}`)
           }
-          onCellMouseOver={handleCellMouseOver}
-          onCellMouseOut={handleCellMouseOut}
-          className="flex-1"
+          onCompare={handleCompare}
         />
-
-        {/* ── Row hover action toolbar ───────────────────────────────── */}
-        {hoveredRow && (
-          <RowHoverToolbar
-            rowRect={hoveredRow.rect}
-            ticker={hoveredRow.data.ticker ?? ""}
-            instrumentId={hoveredRow.data.instrument_id}
-            onWatch={() => { /* watchlist endpoint not yet available */ }}
-            onAlert={() => { /* alert dialog integration pending */ }}
-            onCompare={handleCompare}
-          />
-        )}
 
         {!isLoading && !error && lastMergedOffset.current !== null && filteredRows.length === 0 && (
           <DashboardEmptyState
