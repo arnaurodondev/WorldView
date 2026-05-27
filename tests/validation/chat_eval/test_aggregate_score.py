@@ -14,6 +14,26 @@ the per-test artefacts) so it can run *standalone* — `pytest
 tests/validation/chat_eval/test_aggregate_score.py` is a one-command
 acceptance check that doesn't depend on the other test files having run
 first.
+
+PLAN-0095 W2 T-W2-04 acceptance gate (DEFERRED to Phase D)
+----------------------------------------------------------
+The wave-level acceptance for PLAN-0095 W2 (latency reduction: batch tool +
+classifier reorder) is the SAME ``p99 latency ≤ 60s`` invariant asserted on
+line ~103 below — the gate is unchanged, only the projected value moves
+(ITER-8 baseline 91.9 s → projected ~45 s after T-W1-03 index + T-W2-02
+batch tool + T-W2-03 cache-hit fast path).
+
+Per-run artefacts written by this harness live at::
+
+    tests/validation/chat_eval/runs/<timestamp>/q_<slot>.json
+
+When ``_P99_LATENCY_MAX_S`` fires on a future run, the diagnostic summary
+emitted in the assert message above (``p99_latency=<float>s``) is the
+field to read. There is no separate ``summary.json`` written today; if a
+future change adds one, the field name MUST be ``latency.p99_seconds`` so
+T-W2-04's compounding gate (PLAN-0095 W2 acceptance row) lines up
+verbatim. Anyone wiring such a writer should update this docstring to
+match and bump the gate row in ``docs/plans/TRACKING.md``.
 """
 
 from __future__ import annotations
