@@ -275,6 +275,43 @@ Three fallback branches (tracked by Prometheus counter `news_display_score_path_
 | `content.article.stored.v1` | `nlp-pipeline-group` | Trigger NLP enrichment — at-least-once; manual offset commit after all DB writes |
 | `portfolio.watchlist.updated.v1` | `nlp-watchlist-group` | SADD / SREM on Valkey SET `nlp:v1:watched_entities` for Block 5 signal |
 
+#### Legacy article handling (PLAN-0096 W4 — BP-575)
+
+Pre-PLAN-0086 Wave A-1 `content.article.stored.v1` payloads do not carry a
+`tenant_id` field.  Migration `nlp_pipeline/alembic/versions/0020_entity_mentions_tenant_not_null.py`
+added a `NOT NULL` constraint on `entity_mentions.tenant_id`, which caused
+every such legacy message to crash on INSERT.  Because the consumer's
+exception handler classifies `IntegrityError` as retryable, the Kafka
+offset never advanced — the 2026-05-26 audit measured **94 messages stuck
+in flight** with `entity_mentions` row count zero for >24h, while the
+`content.article.stored.v1.dlq` topic stayed empty (no fan-out fires until
+a single message exceeds max-retries, which never happens for fully-stuck
+batches).
+
+The fix:
+
+1. `ArticleProcessingConsumer.process_message` substitutes
+   `common.ids.PUBLIC_TENANT_ID` (`00000000-0000-0000-0000-000000000000`)
+   when both the Kafka headers and the Avro payload omit `tenant_id`.
+2. The substitution emits a structured WARN
+   `article_consumer.legacy_tenant_id_sentinel_applied` with
+   `article_id`, `topic`, `partition`, `offset`, and the sentinel UUID so
+   operators can quantify legacy passthrough in dashboards.
+3. New code MUST stamp `tenant_id` on every emitted payload.  The sentinel
+   exists exclusively to drain the in-flight backlog and protect against
+   future producer bugs — never as a substitute for real tenant
+   propagation.
+
+Operator tooling:
+
+- `scripts/replay_stuck_articles.py` — inspects per-partition lag for the
+  consumer group and peeks the actual payloads to confirm the legacy
+  shape.  Idempotent; safe to re-run.  See `--dry-run` for read-only
+  mode.
+- `infra/prometheus/rules/nlp_pipeline_retry_storm.yml` — fires
+  `NlpPipelineRetryStorm` when the topic has a non-zero backlog AND
+  consumption rate is zero for >10 min.
+
 ### Produced
 
 | Topic | Event | Key | Via | Avro Schema |
@@ -559,6 +596,60 @@ symbols. The rare-token analyzer in Block 5 uses this to distinguish genuine tic
 - **Exponential backoff on Valkey failure**: `min(2^n × 60, 300)` seconds.
 - **Staleness**: at most `canonical_tickers_refresh_interval_s` seconds (default 10 minutes).
 - **Source**: `intelligence_db.canonical_entities WHERE entity_type='financial_instrument' AND ticker IS NOT NULL`
+
+---
+
+## Worker Startup Race + Provider Key Wiring (PLAN-0096 W2)
+
+Two cold-start failure modes have been hardened against silent worker
+starvation. Together they close the deferred PLAN-0095 W4 tail
+(T-W4-02 + T-W4-04) flagged by the FIX-LIVE-GG investigation.
+
+### MarketDataClient JWT-mint backoff (BP-562)
+
+`PriceImpactLabellingWorker` constructs a `MarketDataClient` at process
+startup. The client mints an `X-Internal-JWT` via S9 (`POST /v1/auth/dev-login`
+or `POST /internal/v1/service-token` when a service-account token is wired).
+During a fresh `docker compose up` the worker may boot ahead of api-gateway,
+and the first mint surfaces `httpx.ConnectError` ("connection refused").
+
+The client retries the mint up to **4 attempts** with exponential backoff
+delays of `(0s, 5s, 15s, 45s)` — total grace window ~65s, which matches the
+compose `service_healthy` envelope for every dependency. After exhaustion
+the client returns `None` rather than raising, so the caller falls through
+to the legacy "no header → 401 → warn-and-skip" path instead of crashing
+the worker loop.
+
+Tests pin both the success-after-retry and give-up-after-exhaustion
+contracts in
+`services/nlp-pipeline/tests/unit/infrastructure/test_market_data_client_jwt_backoff.py`
+(asyncio.sleep is patched out so the suite still runs in milliseconds).
+
+### Relevance-scoring provider key (BP-563)
+
+`ArticleRelevanceScoringWorker` branches on `api_key`:
+- non-empty → DeepInfra `/chat/completions` (~100-200ms GPU)
+- empty → Ollama `/api/generate` (~5-10s CPU, OOM-prone on the dev box)
+
+When `NLP_PIPELINE_RELEVANCE_SCORING_API_KEY` is left empty in `docker.env`,
+the worker silently falls back to Ollama. On the live stack Ollama is not
+always available, which manifests as relevance-scoring starvation
+(0 articles scored per cycle) without any error in the worker logs.
+
+`services/nlp-pipeline/configs/docker.env` now exports a non-empty
+`NLP_PIPELINE_RELEVANCE_SCORING_API_KEY` (same DeepInfra account secret
+used by every other nlp-pipeline worker), and `docker.env.example`
+documents the contract for new operators. The provider-selection
+contract is pinned by unit tests in
+`services/nlp-pipeline/tests/unit/infrastructure/workers/test_article_relevance_scoring_worker.py::TestProviderSelectionContract`
+so a regression in the env wiring fails fast under `pytest`.
+
+Verification on a live stack:
+
+```bash
+docker compose exec nlp-pipeline-relevance-scoring env | grep RELEVANCE_SCORING
+# Expect NLP_PIPELINE_RELEVANCE_SCORING_API_KEY to be a non-empty value.
+```
 
 ---
 
