@@ -312,7 +312,9 @@ def test_fundamentals_batch_returns_per_ticker_status() -> None:
     assert body["results"]["AAPL"]["periods"][0]["revenue"] == 1.0
     assert body["results"]["NVDA"]["status"] == "ok"
     assert body["results"]["BADTICKER"]["status"] == "error"
-    assert "not found" in body["results"]["BADTICKER"]["reason"].lower()
+    # PLAN-0097 T-W3-04: typed reason codes, NOT raw str(exc).
+    # Unknown ticker → InstrumentNotFoundError → "invalid_ticker" code.
+    assert body["results"]["BADTICKER"]["reason"] == "invalid_ticker"
 
 
 def test_fundamentals_batch_rejects_oversized_list() -> None:
@@ -344,3 +346,117 @@ def test_fundamentals_batch_all_empty() -> None:
     body = resp.json()
     assert body["results"]["AAPL"]["status"] == "ok"
     assert body["results"]["AAPL"]["periods"] == []
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# PLAN-0097 T-W3-02: parallel ticker resolution.
+# T-W3-04: sanitised typed reason codes — str(exc) never leaks to body.
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+def test_fundamentals_batch_resolves_tickers_in_parallel() -> None:
+    """The N ticker→instrument_id lookups must run concurrently, not serially.
+
+    PLAN-0097 T-W3-02. Strategy: make ``lookup_uc.execute`` sleep 100 ms per
+    call; with N=5 sequential calls total wall-clock would be ≥500 ms, while
+    a parallel ``asyncio.gather`` finishes in ~100 ms. We assert <300 ms to
+    give CI generous headroom but still catch a regression to serial.
+    """
+    import asyncio
+    import time
+
+    from market_data.domain.errors import InstrumentNotFoundError
+
+    tickers = ["AAPL", "MSFT", "GOOG", "AMZN", "META"]
+    ids = {t: f"00000000-0000-0000-0000-0000{i:08d}" for i, t in enumerate(tickers)}
+
+    lookup_uc = MagicMock()
+
+    async def _slow_lookup(*, id=None, isin=None, symbol=None):  # type: ignore[no-untyped-def]  # noqa: A002
+        # 100 ms per call. Serial total = ~500 ms; parallel = ~100 ms.
+        await asyncio.sleep(0.1)
+        if symbol not in ids:
+            raise InstrumentNotFoundError(f"Instrument not found: {symbol}")
+        instr = MagicMock()
+        instr.id = ids[symbol]
+        instr.symbol = symbol
+        result = MagicMock()
+        result.instrument = instr
+        return result
+
+    lookup_uc.execute = AsyncMock(side_effect=_slow_lookup)
+
+    history_uc = _make_history_uc({iid: [] for iid in ids.values()})
+    _, client = _make_batch_app(history_uc, lookup_uc)
+
+    start = time.perf_counter()
+    resp = client.post(
+        "/v1/fundamentals/batch",
+        json={"tickers": tickers, "periods": 4},
+    )
+    elapsed = time.perf_counter() - start
+
+    assert resp.status_code == 200
+    # Serial bound = 5 x 0.1s = 0.5s. Parallel ideal ~0.1s. 0.3s threshold
+    # gives ~3x headroom over the parallel ideal so flakiness on a busy CI
+    # runner doesn't trigger a false positive while still failing if anyone
+    # regresses to the serial pattern.
+    assert elapsed < 0.3, f"batch endpoint serialised lookups: took {elapsed:.3f}s, expected <0.3s parallel"
+
+
+def test_fundamentals_batch_reason_uses_typed_codes_not_raw_exception_text() -> None:
+    """``reason`` in the JSON body must be one of the four sanitised codes.
+
+    PLAN-0097 T-W3-04. Verifies that:
+      * InstrumentNotFoundError → ``invalid_ticker`` (not "Instrument not found: BAD")
+      * The original exception string never appears anywhere in the response body.
+
+    The full exception detail is allowed (and expected) in structlog server-side
+    logs, but the JSON body must be free of it for the security/info-leak reason
+    documented in the route handler.
+    """
+    from market_data.domain.errors import InstrumentNotFoundError
+
+    sentinel = "DO_NOT_LEAK_THIS_STRING_TO_RESPONSE"
+
+    lookup_uc = MagicMock()
+
+    async def _execute(*, id=None, isin=None, symbol=None):  # type: ignore[no-untyped-def]  # noqa: A002
+        raise InstrumentNotFoundError(f"Instrument not found: {symbol} ({sentinel})")
+
+    lookup_uc.execute = AsyncMock(side_effect=_execute)
+    history_uc = _make_history_uc()
+    _, client = _make_batch_app(history_uc, lookup_uc)
+
+    resp = client.post("/v1/fundamentals/batch", json={"tickers": ["BAD"], "periods": 4})
+    assert resp.status_code == 200
+
+    body = resp.json()
+    assert body["results"]["BAD"]["status"] == "error"
+    assert body["results"]["BAD"]["reason"] == "invalid_ticker"
+
+    # Defence-in-depth: scan the full serialised body text for the sentinel —
+    # if any future contributor adds str(exc) into another field, this catches it.
+    assert sentinel not in resp.text, "raw exception text leaked into response body"
+
+
+def test_fundamentals_batch_classifies_timeout_as_upstream_timeout() -> None:
+    """asyncio/built-in TimeoutError → ``upstream_timeout`` reason code."""
+
+    aapl_id = "00000000-0000-0000-0000-00000000aaaa"
+
+    lookup_uc = _make_lookup_uc({"AAPL": aapl_id})
+    history_uc = MagicMock()
+
+    async def _timeout(*, instrument_id, periods):  # type: ignore[no-untyped-def]
+        raise TimeoutError("simulated DB slow query")
+
+    history_uc.execute = AsyncMock(side_effect=_timeout)
+    _, client = _make_batch_app(history_uc, lookup_uc)
+
+    resp = client.post("/v1/fundamentals/batch", json={"tickers": ["AAPL"], "periods": 4})
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["results"]["AAPL"]["status"] == "error"
+    assert body["results"]["AAPL"]["reason"] == "upstream_timeout"
+    assert "simulated DB slow query" not in resp.text

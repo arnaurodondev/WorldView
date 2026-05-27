@@ -44,6 +44,14 @@ log = structlog.get_logger(__name__)
 # above that, the LLM is no longer comparing — it's listing.
 _BATCH_TICKER_CAP = 25
 
+# PLAN-0097 T-W3-04: typed reason codes for batch per-ticker failures.
+# Module-scope constants (ruff N806 forbids function-scope ALL_CAPS names).
+# Importable for regression tests that assert against the literal strings.
+_REASON_INVALID_TICKER = "invalid_ticker"
+_REASON_UPSTREAM_TIMEOUT = "upstream_timeout"
+_REASON_UPSTREAM_404 = "upstream_404"
+_REASON_UPSTREAM_ERROR = "upstream_error"
+
 router = APIRouter(tags=["fundamentals"])
 
 # PLAN-0059 W0 fix F-010 (2026-04-30):
@@ -168,46 +176,100 @@ async def post_fundamentals_batch(
             detail=f"Too many tickers: {len(body.tickers)} > cap {_BATCH_TICKER_CAP}",
         )
 
-    async def _one(ticker: str) -> list[dict]:
-        """Resolve ticker → instrument_id, then call the history use case.
+    # ──────────────────────────────────────────────────────────────────────
+    # PLAN-0097 T-W3-02: explicit two-phase parallelisation.
+    # PLAN-0097 T-W3-04: typed reason codes (str(exc) never leaks to body).
+    #
+    # Phase split (resolve → fetch) makes per-phase error classification
+    # unambiguous and gives structlog a precise `phase=` field. Concurrency
+    # within each phase is preserved via asyncio.gather; end-to-end latency
+    # is equivalent to the previous interleaved scheme when both phases are
+    # I/O-bound (audit §4 lines 145-160).
+    # ──────────────────────────────────────────────────────────────────────
 
-        Raises ``InstrumentNotFoundError`` (handled by gather's
-        ``return_exceptions=True``) when the ticker is unknown.
-        """
-        result = await lookup_uc.execute(symbol=ticker)
-        instrument = result.instrument
-        data = await uc.execute(instrument_id=UUID(instrument.id), periods=body.periods)
-        # data["periods"] is already list[dict] per GetFundamentalsHistoryUseCase
-        periods_raw = data.get("periods", [])
-        return periods_raw if isinstance(periods_raw, list) else []
+    def _classify(exc: BaseException) -> str:
+        """Map a raised exception to one of the four sanitised reason codes."""
+        # InstrumentNotFoundError → unambiguously "we don't know this ticker".
+        if isinstance(exc, InstrumentNotFoundError):
+            return _REASON_INVALID_TICKER
+        # asyncio.TimeoutError aliases the builtin TimeoutError in 3.11+; we
+        # use the union form for forward-compat with older callers.
+        if isinstance(exc, TimeoutError | asyncio.TimeoutError):
+            return _REASON_UPSTREAM_TIMEOUT
+        # HTTP-shaped errors from an upstream client — check 404 specifically
+        # so the LLM can render "no data" vs "transient error".
+        status = getattr(exc, "status_code", None) or getattr(exc, "status", None)
+        if status == 404:
+            return _REASON_UPSTREAM_404
+        # Default bucket for anything else (asyncpg errors, KeyError on bad
+        # payload shape, etc.) — full exception detail is structlog-only.
+        return _REASON_UPSTREAM_ERROR
 
-    # WHY return_exceptions=True: per-ticker failure (e.g. unknown ticker)
-    # must not 500 the entire batch. The caller (rag-chat tool handler) wants
-    # a partial-success response so the LLM can still render the tickers that
-    # WERE resolvable.
-    raw_results = await asyncio.gather(
-        *[_one(ticker) for ticker in body.tickers],
+    # ── Phase 1: resolve every ticker → instrument concurrently ───────────
+    resolutions = await asyncio.gather(
+        *[lookup_uc.execute(symbol=ticker) for ticker in body.tickers],
         return_exceptions=True,
     )
 
+    # ── Phase 2: fetch fundamentals concurrently for every resolved id ────
+    # ``fetch_tasks`` is a parallel array of (ticker, task-or-None) pairs so
+    # we can re-thread results back to their original ticker preserving order.
+    fetch_tasks: list[tuple[str, asyncio.Task[dict] | None]] = []
+    for ticker, resolution in zip(body.tickers, resolutions, strict=True):
+        if isinstance(resolution, BaseException):
+            fetch_tasks.append((ticker, None))
+            continue
+        instrument_id = UUID(resolution.instrument.id)
+        fetch_tasks.append(
+            (
+                ticker,
+                asyncio.ensure_future(uc.execute(instrument_id=instrument_id, periods=body.periods)),
+            )
+        )
+
+    pending = [task for _, task in fetch_tasks if task is not None]
+    fetch_results = await asyncio.gather(*pending, return_exceptions=True) if pending else []
+    fetch_iter = iter(fetch_results)
+
     out: dict[str, FundamentalsBatchPerTickerResult] = {}
-    for ticker, result in zip(body.tickers, raw_results, strict=True):
-        if isinstance(result, BaseException):
-            # str(InstrumentNotFoundError) gives a useful "Instrument not found: …"
-            # message; for unexpected exceptions we still return the str repr so the
-            # LLM gets *something* actionable.
+    for (ticker, task), resolution in zip(fetch_tasks, resolutions, strict=True):
+        # Resolution-phase failure → no fetch was attempted.
+        if task is None:
+            assert isinstance(resolution, BaseException)  # gather invariant
+            reason = _classify(resolution)
+            # Full exception detail to structlog ONLY — never to the response.
             log.info(
                 "fundamentals_batch_per_ticker_error",
                 ticker=ticker,
-                error=type(result).__name__,
-                reason=str(result),
+                phase="resolve",
+                error=type(resolution).__name__,
+                error_detail=str(resolution),
+                reason=reason,
             )
-            out[ticker] = FundamentalsBatchPerTickerResult(status="error", reason=str(result))
-        else:
-            out[ticker] = FundamentalsBatchPerTickerResult(
-                status="ok",
-                periods=[FundamentalsHistoryPeriod(**p) for p in result],
+            out[ticker] = FundamentalsBatchPerTickerResult(status="error", reason=reason)
+            continue
+
+        # Fetch was attempted — pull its result/exception from the iterator.
+        fetch_outcome = next(fetch_iter)
+        if isinstance(fetch_outcome, BaseException):
+            reason = _classify(fetch_outcome)
+            log.info(
+                "fundamentals_batch_per_ticker_error",
+                ticker=ticker,
+                phase="fetch",
+                error=type(fetch_outcome).__name__,
+                error_detail=str(fetch_outcome),
+                reason=reason,
             )
+            out[ticker] = FundamentalsBatchPerTickerResult(status="error", reason=reason)
+            continue
+
+        periods_raw = fetch_outcome.get("periods", []) if isinstance(fetch_outcome, dict) else []
+        periods_list = periods_raw if isinstance(periods_raw, list) else []
+        out[ticker] = FundamentalsBatchPerTickerResult(
+            status="ok",
+            periods=[FundamentalsHistoryPeriod(**p) for p in periods_list],
+        )
 
     return FundamentalsBatchResponse(results=out)
 
