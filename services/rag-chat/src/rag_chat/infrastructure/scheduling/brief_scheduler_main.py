@@ -17,9 +17,11 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
-from datetime import datetime, timedelta
+from datetime import timedelta
 from typing import Any
 
+from common.time import utc_now  # type: ignore[import-untyped]
+from messaging.valkey.client import ValkeyClient  # type: ignore[import-untyped]
 from observability import configure_logging, get_logger  # type: ignore[import-untyped]
 from rag_chat.application.use_cases.briefing_context import BriefingContextGatherer
 from rag_chat.application.use_cases.generate_briefing import GenerateBriefingUseCase
@@ -141,13 +143,13 @@ async def _run_loop(settings: Settings) -> None:
         )
 
     # ── Build dependencies ────────────────────────────────────────────────────
-    # We use ``redis.asyncio`` directly here (not :class:`ValkeyClient`) because
-    # the worker needs raw ``zrangebyscore`` / ``set`` semantics, and the W1
-    # api-gateway middleware writes via ``zadd`` to the same underlying redis
-    # instance.  No abstraction layer needed inside this scheduler process.
-    import redis.asyncio as redis_async  # type: ignore[import-untyped]
-
-    valkey = redis_async.from_url(settings.valkey_url)
+    # F-ARCH-003 (IG-MSG-002): use the shared :class:`ValkeyClient` so this
+    # scheduler does not import ``redis.asyncio`` directly.  ValkeyClient
+    # exposes ``zrangebyscore`` / ``set`` / ``zadd`` with the same semantics
+    # as the raw redis client used previously, and all downstream consumers
+    # (S1Client, ActiveUsersReader, GenerateBriefingUseCase, LLMProviderChain)
+    # already type-hint ``ValkeyClient`` and use only this shared surface.
+    valkey = ValkeyClient(url=settings.valkey_url)
 
     active_users = ActiveUsersReader(
         valkey_client=valkey,
@@ -228,9 +230,12 @@ async def _run_loop(settings: Settings) -> None:
         # (DB pools warming, dependent service health checks) before the
         # first pre-gen attempts hit them.  Also makes the first run visible
         # during dev without waiting a full ``brief_pregen_interval_hours``.
-        # ``datetime.utcnow()`` is timezone-naive — APScheduler's default
-        # scheduler timezone matches.
-        next_run_time=datetime.utcnow() + timedelta(seconds=30),  # noqa: DTZ003
+        # F-ARCH-002 (IG-COMMON-002): use the shared timezone-aware helper.
+        # APScheduler accepts tz-aware datetimes and converts internally; no
+        # behaviour change vs the previous naive utcnow() since the scheduler
+        # interprets naive datetimes as the local timezone of the configured
+        # scheduler timezone (which is UTC by default in our containers).
+        next_run_time=utc_now() + timedelta(seconds=30),
     )
     ap_scheduler.start()
     log.info(  # type: ignore[no-any-return]
