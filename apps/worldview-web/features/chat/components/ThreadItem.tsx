@@ -162,10 +162,15 @@ export function ThreadItem({
 
   return (
     <div
-      // Density bundle 2026-05-09: px-3 py-2.5 → px-2 py-1.5 (Bloomberg
-      // sidebar row density). Each thread row drops from ~46px to ~36px,
-      // letting one more thread fit in a 12-thread sidebar without scrolling.
-      className="group relative flex cursor-pointer items-start gap-2 rounded-[2px] px-2 py-1.5 transition-colors hover:bg-muted"
+      // PLAN-0089 K T-20.1 (2026-05-26): row height tightened again from
+      // py-1.5 (≈28 px) → py-1 (≈24 px) to hit the design-doc §6.4 24 px
+      // thread row contract. WHY: at 28 px we lose ~3 visible threads per
+      // 1080 px sidebar versus the 24 px Bloomberg target. The 4 px saving
+      // per row matters once a power user has 20+ research threads pinned.
+      // Density bundle 2026-05-09 reduced this from px-3 py-2.5 → px-2 py-1.5
+      // (Bloomberg sidebar row density). This step tightens it one notch
+      // further to the locked design target.
+      className="group relative flex cursor-pointer items-start gap-2 rounded-[2px] px-2 py-1 transition-colors hover:bg-muted"
       style={isActive ? { backgroundColor: "rgba(232,163,23,0.08)" } : undefined}
       onClick={() => !isEditing && onSelect(thread.thread_id)}
       role="button"
@@ -232,9 +237,29 @@ export function ThreadItem({
           </p>
         )}
         {/* Density bundle 2026-05-09: safeFormatDate guarantees we never render
-            "Invalid Date" — falls through updated_at -> created_at -> "—". */}
+            "Invalid Date" — falls through updated_at -> created_at -> "—".
+            PLAN-0089 K T-20.1: append `· N msgs` when the server attaches
+            `message_count > 0`. WHY: gives the analyst a one-glance signal
+            of which threads are deep research conversations vs. one-shot
+            queries — the LLM-generated title alone doesn't differentiate a
+            12-turn earnings dive from a single "what is XYZ?" question.
+            The field is optional on the wire (see types/api.ts); when
+            absent we render only the date and the suffix is omitted —
+            graceful degradation. Mono 9 px text-muted-foreground per the
+            T-20.1 spec.
+            WHY a single <p> (not two spans wrapped in a flex row): the
+            existing line is mono 10 px text-muted-foreground; we keep
+            the same line and append the suffix inline so the row height
+            does not grow by another text line — preserves the 24 px
+            row contract above. */}
         <p className="mt-0.5 font-mono text-[10px] text-muted-foreground">
           {safeFormatDate(thread.updated_at, thread.created_at)}
+          {typeof thread.message_count === "number" && thread.message_count > 0 ? (
+            <span className="text-[9px] text-muted-foreground tabular-nums">
+              {" · "}
+              {thread.message_count} msgs
+            </span>
+          ) : null}
         </p>
       </div>
 

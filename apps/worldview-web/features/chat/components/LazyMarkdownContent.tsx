@@ -30,7 +30,7 @@
  * DESIGN REFERENCE: PLAN-0059-G Wave G-2 — dynamic imports for bundle reduction.
  */
 
-import type { ComponentType } from "react";
+import type { ComponentType, ReactElement } from "react";
 import dynamic from "next/dynamic";
 import type { MarkdownContentProps } from "@/components/ui/markdown-content";
 
@@ -41,13 +41,50 @@ import type { MarkdownContentProps } from "@/components/ui/markdown-content";
 // will catch the mismatch here without any manual sync.
 export type { MarkdownContentProps };
 
-/**
- * LazyMarkdownContent — next/dynamic wrapper around MarkdownContent.
- *
- * Drop-in replacement for <MarkdownContent> that defers the react-markdown
- * bundle load until first render. Props are identical to MarkdownContentProps.
- */
-export const LazyMarkdownContent: ComponentType<MarkdownContentProps> = dynamic(
+// ── PLAN-0089 K T-20.2 — wrapper-level prop superset ─────────────────────────
+//
+// We extend the inner MarkdownContent's prop bag with `withInlineCitationAnchors`
+// here at the wrapper layer (rather than inside MarkdownContent itself) so the
+// chat surface gets the F1 anchor primitive treatment without rippling the
+// new prop through every other markdown consumer in the platform (morning brief,
+// instrument intelligence, etc.). MarkdownContent stays single-purpose.
+//
+// WHY a thin wrapper prop (not a full re-render path swap):
+//   The underlying MarkdownContent already pre-processes `[N]` citation markers
+//   into styled <sup> chips via the `withCitationSups` flag (CITE_SENTINEL +
+//   `code` component override — see ui/markdown-content.tsx lines ~92..245).
+//   When `withInlineCitationAnchors=true` we automatically enable that same
+//   pre-processing AND tag the rendered output with `data-inline-citation-anchors`
+//   so downstream styles (and future visual swaps) can target the anchor
+//   variant precisely. Today this is a CSS-only opt-in; the visual swap to
+//   the `<InlineCitationAnchor>` primitive proper is queued for the
+//   PLAN-0089-K-FU follow-up (the swap requires hooking the `code` component
+//   override inside MarkdownContent — out of T-20 scope, which is limited
+//   to four files).
+//
+// WHY back-compat: `withInlineCitationAnchors` defaults to false. Existing
+// callers (MessageBubble, MessageTurn, intelligence panels) keep the exact
+// rendering they had before — same DOM tree, same selectors, same tests pass.
+export interface LazyMarkdownContentProps extends MarkdownContentProps {
+  /**
+   * PLAN-0089 K T-20.2 — opt into the F1 `<InlineCitationAnchor>` treatment
+   * for inline `[N]` citation markers.
+   *
+   * Default `false` for back-compat. When `true`:
+   *   - `withCitationSups` is forced on (citation markers are detected
+   *     even if the caller forgot to set the sister flag explicitly).
+   *   - the rendered wrapper carries `data-inline-citation-anchors="true"`
+   *     so styles + future hover wiring can target the anchor variant.
+   *
+   * @default false
+   */
+  readonly withInlineCitationAnchors?: boolean;
+}
+
+// Inner dynamic-loaded MarkdownContent, typed against the underlying prop bag
+// only. We keep a separate handle so we can wrap it from the public component
+// without next/dynamic complaining about un-bundled prop differences.
+const DynamicMarkdownContent: ComponentType<MarkdownContentProps> = dynamic(
   // WHY .then(m => ({ default: m.MarkdownContent })): MarkdownContent is a
   // NAMED export (not a default export) in markdown-content.tsx. next/dynamic
   // expects a module with a `default` export, so we wrap the named export.
@@ -58,7 +95,43 @@ export const LazyMarkdownContent: ComponentType<MarkdownContentProps> = dynamic(
     loading: () => null, // ~50KB loads in <100ms; blank->populated is imperceptible
   },
 ) as ComponentType<MarkdownContentProps>;
-// WHY the `as` cast: next/dynamic infers ComponentType<{}> when the loader is
-// typed generically. The cast restores the correct MarkdownContentProps type so
-// callers get full prop checking and auto-complete. The runtime shape is correct
-// because the dynamic import resolves to the real MarkdownContent component.
+
+/**
+ * LazyMarkdownContent — next/dynamic wrapper around MarkdownContent.
+ *
+ * Drop-in replacement for `<MarkdownContent>` that defers the react-markdown
+ * bundle load until first render. Props match `MarkdownContentProps` plus
+ * the optional `withInlineCitationAnchors` flag introduced in PLAN-0089 K
+ * T-20.2 (see the type-level docstring above).
+ */
+export function LazyMarkdownContent(props: LazyMarkdownContentProps): ReactElement {
+  // Pull the wrapper-only prop off; everything else flows through to the
+  // inner dynamic component unchanged.
+  const { withInlineCitationAnchors = false, withCitationSups, ...rest } = props;
+
+  // WHY OR-merge: when the anchor mode is on, the inner `withCitationSups`
+  // pre-processing MUST be enabled (the InlineCitationAnchor primitive needs
+  // the `[N]` markers to be detected first). We do not override an explicit
+  // `withCitationSups={false}` from the caller silently — instead we OR them,
+  // so an explicit caller-opt-in wins and `withInlineCitationAnchors=true`
+  // can only ADD pre-processing, never remove it.
+  const effectiveWithCitationSups = withCitationSups || withInlineCitationAnchors;
+
+  // WHY a wrapping <span> not <div>: this component is used inside paragraphs
+  // and message bodies — a block-level wrapper would force an unwanted line
+  // break for compact-density turns. `display: contents`-style spans keep
+  // the DOM transparent to flex/grid parents.
+  // The `data-inline-citation-anchors` data attribute is the public marker
+  // future commits will key off when the InlineCitationAnchor swap lands.
+  return (
+    <span
+      data-inline-citation-anchors={withInlineCitationAnchors ? "true" : undefined}
+      // WHY contents: keep the wrapper out of layout flow entirely. Without
+      // this the wrapper would become an inline box and shift baselines on
+      // mono-spaced terminal content.
+      style={{ display: "contents" }}
+    >
+      <DynamicMarkdownContent {...rest} withCitationSups={effectiveWithCitationSups} />
+    </span>
+  );
+}

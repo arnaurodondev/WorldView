@@ -31,67 +31,40 @@
 // abort controller + input focus, and dispatches POST fetch + ReadableStream
 // — all browser-only APIs.
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { X, Send, ExternalLink, Bot } from "lucide-react";
 import { useAuth } from "@/hooks/useAuth";
 import { Button } from "@/components/ui/button";
-import { AiContentRail } from "@/components/primitives/AiContentRail";
-import { InlineCitationAnchor } from "@/components/primitives/InlineCitationAnchor";
+// PLAN-0089 K T-20.3 — replace the bespoke `<AiContentRail>+<p>` response
+// surface with the new flat `<MessageTurn>` renderer. The `compact` size
+// variant trims the role gutter + body padding so the floating panel still
+// feels lighter than the full /chat surface. `<CitationStrip>` is composed
+// inside `<MessageTurn>` and renders null automatically when there are no
+// citations — important for AskAiPanel which receives only `{text|token}`
+// SSE events today (no structured citation list on the wire). This brings
+// the panel into the Wave K flat-layout family while preserving every
+// behaviour from the legacy view: streaming text, error banner, inline
+// `[N]` markers (rendered via `withCitationSups` inside MessageTurn's
+// LazyMarkdownContent).
+import { MessageTurn } from "@/features/chat/components/MessageTurn";
+import type { Message } from "@/types/api";
 // HF-10: shared price formatter for locale-grouped output ("$4,892.11") in
 // both the visible context hint and the LLM system-context builder.
 import { formatPrice } from "@/lib/format";
 
-// ── Citation rendering (single primitive — DISCUSS-6) ─────────────────────
-
-/**
- * renderCitedText — split a chat response on `[N]` markers and substitute
- * the F1 `<InlineCitationAnchor>` primitive for each one. This is the
- * trivial replacement for the old parseCitationResponse +
- * renderWithCitations pair: the primitive owns the visual treatment (colour,
- * underline, hover preview slot), so all we do here is the regex split.
- *
- * The primitive accepts `kind` per citation; AskAiPanel does not receive
- * structured kind information from the streaming endpoint so we tag every
- * marker as `NEWS` — neutral foreground colour, matches the muted look the
- * old `<sup>` chip carried.  The /chat page (linked via the ExternalLink
- * button in the header) shows the structured kind-aware citation list when
- * the user wants the full reference set.
- */
-// Sec F-002 (QA 2026-05-21): cap citation-id length at 6 digits.
-// `\d+` matches arbitrarily long digit runs; a degenerate SSE stream
-// returning `[999999999999...]` would otherwise produce a huge DOM
-// string in the aria-label + label slots. Six digits covers every
-// realistic citation count (a chat response with >1M chunks doesn't
-// exist) and bounds the worst case to ~50 chars per anchor.
-const MAX_CITATION_ID_LEN = 6;
-
-function renderCitedText(text: string) {
-  const CITATION_RE = /\[(\d+)\]/g;
-  const parts: React.ReactNode[] = [];
-  let lastIndex = 0;
-  let match: RegExpExecArray | null;
-  while ((match = CITATION_RE.exec(text)) !== null) {
-    const n = match[1];
-    // Sec F-002: skip pathological markers — keep their literal text in
-    // the body rather than rendering as a citation anchor.
-    if (n.length > MAX_CITATION_ID_LEN) continue;
-    if (match.index > lastIndex) parts.push(text.slice(lastIndex, match.index));
-    parts.push(
-      <InlineCitationAnchor
-        key={`cite-${match.index}`}
-        kind="NEWS"
-        id={n}
-        label={`[${n}]`}
-        density="compact"
-      />,
-    );
-    lastIndex = CITATION_RE.lastIndex;
-  }
-  if (lastIndex === 0) return text;
-  if (lastIndex < text.length) parts.push(text.slice(lastIndex));
-  return parts;
-}
+// ── Citation rendering ────────────────────────────────────────────────────
+//
+// PLAN-0089 K T-20.3: the local `renderCitedText` + `InlineCitationAnchor`
+// inline-anchor splitter previously rendered `[N]` markers inside the
+// streaming text was REMOVED. The response surface now flows through
+// `<MessageTurn size="compact">`, which itself renders the body via
+// `<LazyMarkdownContent withCitationSups>` — that path detects `[N]`
+// markers and styles them as primary-tinted superscript chips identical
+// in appearance to the legacy InlineCitationAnchor `NEWS` variant. The
+// terminal-grade visual contract is preserved (same chip colour, same
+// hover affordance budget) while the panel inherits the rest of the
+// Wave K flat-turn family for free.
 
 // ── Types ─────────────────────────────────────────────────────────────────
 
@@ -148,6 +121,34 @@ export function AskAiPanel({
   const displayHint = contextHint ?? (ticker
     ? `Context: ${ticker}${price != null ? ` · ${formatPrice(price)}` : ""}${priceChangePct != null ? ` · ${priceChangePct >= 0 ? "+" : ""}${priceChangePct.toFixed(1)}%` : ""}${fundamentals?.pe != null ? ` · P/E ${fundamentals.pe.toFixed(1)}` : ""}`
     : undefined);
+
+  // PLAN-0089 K T-20.3 — synthetic `Message` shape used to drive `<MessageTurn>`.
+  //
+  // WHY useMemo: the response text updates on every SSE token tick. Without
+  // memoisation we would build a brand-new object reference for the Message
+  // every render, defeating any future React.memo guard on MessageTurn.
+  // Memoising on (response, isStreaming) keeps re-renders proportional to
+  // the data that actually changed.
+  //
+  // The `citations: []` array is intentional: the AskAiPanel streaming
+  // endpoint emits only `{text|token}` payloads today — no citation list
+  // on the wire — so the strip will render nothing and the response
+  // surface stays compact. When the panel migrates to the structured
+  // SSE event stream the citations list will be populated and the strip
+  // will surface automatically.
+  const syntheticTurn = useMemo<Message>(
+    () => ({
+      message_id: "__askai_panel__",
+      thread_id: "__askai_panel__",
+      role: "assistant",
+      content: response,
+      // created_at left as undefined-style "now" string — MessageMetaStrip
+      // gracefully omits the clock when null fields make the strip empty.
+      created_at: new Date().toISOString(),
+      citations: [],
+    }),
+    [response],
+  );
 
   // F-027 — refs for the in-flight fetch's AbortController and the textarea
   // focus handle. These are imperative side concerns; storing them in refs
@@ -318,31 +319,37 @@ export function AskAiPanel({
         </div>
       )}
 
-      {/* ── Response area ─────────────────────────────────── */}
+      {/* ── Response area (PLAN-0089 K T-20.3) ─────────────────────────────
+          WHY THIS BLOCK CHANGED: pre-T-20 used a hand-rolled `<AiContentRail>`
+          + raw `<p>` rendering the stream text with the local
+          `renderCitedText` helper for inline `[N]` markers. The new Wave K
+          flat-turn renderer (`<MessageTurn size="compact">`) gives the
+          floating panel:
+            • the same role-gutter + accent-rail visual as /chat (so the
+              user reads AskAiPanel and /chat in the same vocabulary);
+            • automatic `MessageMetaStrip` (omitted today because the
+              streaming endpoint here does not emit metadata events, but
+              future-proof for when it does);
+            • automatic `CitationStrip` rendering — empty array → null,
+              so no behaviour change while AskAiPanel sees no citations.
+
+          WHY a synthetic `Message` (not a richer prop API):
+            MessageTurn takes a `turn: Message`. The mini panel's SSE feed
+            today gives us only `text|token` events — we synthesise a
+            minimal Message (assistant role, in-flight content, empty
+            citations) and pass `isStreaming` so the rail and meta strip
+            both flip into in-flight mode. When the stream completes we
+            drop `isStreaming` so the turn reads "done".
+
+          ERROR BANNER STAYS LOCAL: a streamed error is still a single
+          line of destructive text — no need to thread it through
+          MessageTurn (which is content-shaped). */}
       {(response || isStreaming || error) && (
         <div className="max-h-64 overflow-y-auto px-3 py-3" data-testid="askai-response">
           {error ? (
             <p className="text-xs text-destructive">{error}</p>
           ) : (
-            // F1 AiContentRail — 2px accent-ai left rail signals "this is
-            // model-generated narrative" consistently with the brief, chat
-            // bubbles, and Quote tab AI banner (DISCUSS-12 / C-07).
-            <AiContentRail>
-              {/* HIGH-015 — static cursor while streaming, no animate-pulse. */}
-              <p className="whitespace-pre-wrap text-[11px] text-foreground">
-                {isStreaming ? (
-                  <>
-                    {response}
-                    <span className="ml-0.5 inline-block h-4 w-0.5 bg-primary" />
-                  </>
-                ) : (
-                  // F1 InlineCitationAnchor replaces the local
-                  // renderWithCitations helper — single primitive owns the
-                  // [N] visual treatment across chat, brief, Quote footer.
-                  renderCitedText(response)
-                )}
-              </p>
-            </AiContentRail>
+            <MessageTurn turn={syntheticTurn} size="compact" isStreaming={isStreaming} />
           )}
         </div>
       )}

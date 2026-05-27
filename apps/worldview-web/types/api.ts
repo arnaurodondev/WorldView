@@ -1403,6 +1403,15 @@ export interface Thread {
   messages: Message[];
   created_at: string;
   updated_at: string;
+  /**
+   * PLAN-0089 K design §3.8 "newly surfaced field 12" — total message count
+   * for this thread (server-derived). Optional today because the S8 backend
+   * (rag-chat) does not yet attach the field to GET /threads; the frontend
+   * gracefully degrades when missing (the `· N msgs` ThreadItem suffix
+   * simply does not render). The field will land in a follow-up backend
+   * commit; surface here so the type is forward-compatible.
+   */
+  message_count?: number;
 }
 
 export interface ChatStreamRequest {
