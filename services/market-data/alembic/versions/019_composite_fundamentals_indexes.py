@@ -61,6 +61,7 @@ are untouched so query plans simply revert to the pre-019 behaviour.
 from __future__ import annotations
 
 from alembic import op
+from sqlalchemy import inspect
 
 revision = "019"
 down_revision = "018"
@@ -100,8 +101,17 @@ def _index_name(table: str) -> str:
 
 
 def upgrade() -> None:
-    """Create the composite (instrument_id, period_end_date ASC) index on every table."""
+    """Create the composite (instrument_id, period_end_date ASC) index on every existing table.
+
+    Skips tables that don't exist in the target DB (defensive: ``dividend_summary``
+    has an ORM model but no DDL in 001_initial_schema; will be created by a
+    future migration when it ships as a real read table).
+    """
+    bind = op.get_bind()
+    existing = set(inspect(bind).get_table_names())
     for table in _TABLES:
+        if table not in existing:
+            continue
         op.create_index(
             _index_name(table),
             table,
@@ -111,6 +121,13 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    """Drop the composite indexes; existing single-column indexes remain."""
+    """Drop the composite indexes; existing single-column indexes remain.
+
+    Defensively skips tables that don't exist (mirrors upgrade()).
+    """
+    bind = op.get_bind()
+    existing = set(inspect(bind).get_table_names())
     for table in _TABLES:
+        if table not in existing:
+            continue
         op.drop_index(_index_name(table), table_name=table)

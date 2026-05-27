@@ -191,10 +191,34 @@ class MarketHandler(ToolHandler):
         self,
         ticker: str,
         periods: int = 8,
+        period_type: str = "quarterly",
     ) -> RetrievedItem | None:
-        """Fetch quarterly fundamentals and format as a markdown table RetrievedItem."""
+        """Fetch fundamentals and format as a markdown table RetrievedItem.
+
+        F-LIVE-P (2026-05-26): ``period_type`` ("quarterly" default, or
+        "annual") selects the periodicity sent to market-data. Anything
+        outside the allowlist falls back to "quarterly" with a structured
+        warning — the LLM occasionally invents values like "ttm" or
+        "trailing", and the safer behaviour is to honour the user-visible
+        default rather than 500 on an unknown enum.
+        """
+        period_type_norm = (period_type or "quarterly").strip().lower()
+        if period_type_norm not in {"quarterly", "annual"}:
+            log.warning(
+                "tool_invalid_param",
+                tool="get_fundamentals_history",
+                param="period_type",
+                value=period_type,
+                fallback="quarterly",
+            )
+            period_type_norm = "quarterly"
+
         data = await asyncio.wait_for(
-            self._s3.get_fundamentals_history(ticker=ticker, periods=periods),
+            self._s3.get_fundamentals_history(
+                ticker=ticker,
+                periods=periods,
+                period_type=period_type_norm,
+            ),
             timeout=self._timeout,
         )
         if not data:

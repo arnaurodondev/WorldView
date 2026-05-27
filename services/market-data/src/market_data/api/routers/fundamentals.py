@@ -99,6 +99,12 @@ async def get_fundamentals_history(
     symbol: Annotated[str | None, Query(min_length=1, max_length=20)] = None,
     isin: Annotated[str | None, Query(min_length=12, max_length=12)] = None,
     periods: int = Query(default=8, ge=1, le=40),
+    # F-LIVE-P (2026-05-26): explicit periodicity selector. The "quarterly"
+    # default matches the rag-chat tool's near-universal ask and is the safer
+    # choice — backwards-compatible with older callers that omit the param
+    # (which used to receive a mix and could see the FY2025 annual row
+    # quoted as Q1 FY2026, the $34.639B AMD bug).
+    period_type: Annotated[str, Query(pattern=r"^(quarterly|annual|QUARTERLY|ANNUAL)$")] = "quarterly",
     uc: Annotated[GetFundamentalsHistoryUseCase, Depends(get_fundamentals_history_uc)] = ...,  # type: ignore[assignment]
     lookup_uc: Annotated[InstrumentLookupUseCase, Depends(get_lookup_instrument_uc)] = ...,  # type: ignore[assignment]
 ) -> FundamentalsHistoryResponse:
@@ -133,6 +139,7 @@ async def get_fundamentals_history(
     data = await uc.execute(
         instrument_id=UUID(instrument.id),
         periods=periods,
+        period_type=period_type,
     )
 
     return FundamentalsHistoryResponse(

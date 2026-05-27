@@ -297,8 +297,15 @@ class S3Port(Protocol):
         instrument_id: str | None = None,
         ticker: str | None = None,
         isin: str | None = None,
+        period_type: str = "quarterly",
     ) -> list[dict]:
-        """Return quarterly earnings-based fundamentals via GET /api/v1/fundamentals/history.
+        """Return earnings-based fundamentals via GET /api/v1/fundamentals/history.
+
+        ``period_type`` (F-LIVE-P, 2026-05-26): ``"quarterly"`` (default) or
+        ``"annual"``. The default matches the historical caller contract and
+        the LLM's near-universal ask; passing ``"annual"`` returns annual
+        income-statement rows. Mixing is no longer possible at the upstream
+        layer.
 
         Returns ``[]`` on any HTTP or network error (R9 safe degradation).
         At least one of instrument_id, ticker, or isin should be provided.

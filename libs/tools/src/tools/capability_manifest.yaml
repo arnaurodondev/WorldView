@@ -32,9 +32,12 @@ tools:
 
   - name: get_fundamentals_history
     description: >
-      Fetches quarterly fundamental metrics (revenue, gross profit, net income,
+      Fetches fundamental metrics (revenue, gross profit, net income,
       EPS, P/E ratio, market cap) for a ticker over N periods. Use when the user
-      asks about revenue trends, EPS growth, or multi-quarter financial performance.
+      asks about revenue trends, EPS growth, or multi-period financial performance.
+      Defaults to QUARTERLY periodicity; pass period_type="annual" to retrieve
+      fiscal-year totals instead (F-LIVE-P, 2026-05-26 — prevents annual rows
+      leaking into quarterly answers, e.g. AMD FY2025 $34.6B quoted as Q1 FY2026).
     parameters:
       - name: ticker
         type: string
@@ -42,7 +45,13 @@ tools:
         required: true
       - name: periods
         type: integer
-        description: Number of quarters to return (1-20). Default 8.
+        description: Number of periods to return (1-20). Default 8.
+        required: false
+      - name: period_type
+        type: string
+        description: >
+          Periodicity of returned rows. Allowed values: "quarterly" (default),
+          "annual". Any other value falls back to "quarterly" with a warning.
         required: false
     source_type: fundamentals  # used by TrustScorer — trust_weight NOT stored here (PLAN-0067 §0 A-2)
     since: "v1"

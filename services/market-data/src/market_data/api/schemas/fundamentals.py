@@ -80,6 +80,11 @@ class FundamentalsHistoryPeriod(BaseModel):
 
     period: str  # human-readable label, e.g. "Q1 2026"
     period_end_date: str  # "YYYY-MM-DD"
+    # F-LIVE-P (2026-05-26): explicit periodicity label per row. The use case
+    # filters the SQL to a single period_type, so by construction every row
+    # in a single response shares the same value. Exposing it here lets the
+    # rag-chat tool layer surface the contract to the LLM (BP-577 defense).
+    period_type: str = "QUARTERLY"
     revenue: float | None = None
     gross_profit: float | None = None
     net_income: float | None = None

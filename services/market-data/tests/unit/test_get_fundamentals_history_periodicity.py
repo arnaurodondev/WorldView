@@ -214,3 +214,121 @@ async def test_use_case_forwards_quarterly_filter_to_repository() -> None:
     if period_type_arg is None and len(call.args) >= 3:
         period_type_arg = call.args[2]
     assert period_type_arg == PeriodType.QUARTERLY, f"INCOME_STATEMENT fetched without QUARTERLY filter: {call}"
+
+
+# ── F-LIVE-P (2026-05-26): explicit ``period_type`` selector ─────────────────
+
+
+@pytest.mark.asyncio
+async def test_get_fundamentals_history_defaults_to_quarterly() -> None:
+    """F-LIVE-P: no explicit period_type arg → use case must apply QUARTERLY.
+
+    Mirrors the legacy contract (PLAN-0095 T-W1-02) and the rag-chat tool's
+    almost-universal "user wants quarters" assumption.
+    """
+    instrument = _make_instrument(symbol="AMD", fy_end=12)
+    uow = _make_uow_with_mixed_periodicity(
+        instrument,
+        period_end_iso="2024-12-31",
+        quarterly_revenue=10_253_000_000.0,
+        annual_revenue=34_639_000_000.0,
+    )
+    uc = GetFundamentalsHistoryUseCase(uow=uow)
+
+    result = await uc.execute(instrument_id=uuid4(), periods=4)
+
+    assert result["period_count"] >= 1
+    for period in result["periods"]:
+        assert period["period_type"] == "QUARTERLY"
+        # Revenue must NOT be the annual figure.
+        if period["revenue"] is not None:
+            assert period["revenue"] == pytest.approx(10_253_000_000.0)
+
+
+@pytest.mark.asyncio
+async def test_get_fundamentals_history_annual_explicit() -> None:
+    """F-LIVE-P: period_type="annual" → ANNUAL rows only.
+
+    The driver section flips to income_statement (EARNINGS_HISTORY is
+    quarterly-only in EODHD), and the SQL filter must pin to ANNUAL.
+    """
+    instrument = _make_instrument(symbol="AMD", fy_end=12)
+    uow = _make_uow_with_mixed_periodicity(
+        instrument,
+        period_end_iso="2024-12-31",
+        quarterly_revenue=10_000_000_000.0,
+        annual_revenue=40_000_000_000.0,
+    )
+    uc = GetFundamentalsHistoryUseCase(uow=uow)
+
+    result = await uc.execute(instrument_id=uuid4(), periods=4, period_type="annual")
+
+    assert result["period_count"] >= 1
+    period = result["periods"][0]
+    assert period["period_type"] == "ANNUAL"
+    assert period["revenue"] == pytest.approx(40_000_000_000.0)
+
+    # Repository must have been called with ANNUAL filter for INCOME_STATEMENT.
+    calls = uow.fundamentals_read.find_by_section.await_args_list
+    income_calls = [c for c in calls if c.args[1] == FundamentalsSection.INCOME_STATEMENT]
+    assert len(income_calls) == 1
+    call = income_calls[0]
+    pt = call.kwargs.get("period_type")
+    if pt is None and len(call.args) >= 3:
+        pt = call.args[2]
+    assert pt == PeriodType.ANNUAL
+
+
+@pytest.mark.asyncio
+async def test_no_period_mixing_in_response() -> None:
+    """F-LIVE-P: every row in a single response must share the same period_type.
+
+    Walks both quarterly and annual paths and asserts the entire returned
+    ``periods`` list is homogeneous on the periodicity dimension. Catches
+    any future refactor that re-introduces a JOIN that could pull in a
+    same-period_end row of a different periodicity.
+    """
+    instrument = _make_instrument(symbol="AMD", fy_end=12)
+
+    for requested in ("quarterly", "annual"):
+        uow = _make_uow_with_mixed_periodicity(instrument)
+        uc = GetFundamentalsHistoryUseCase(uow=uow)
+        result = await uc.execute(instrument_id=uuid4(), periods=8, period_type=requested)
+        period_types = {p["period_type"] for p in result["periods"]}
+        assert len(period_types) <= 1, f"period_type={requested} response mixed periodicities: {period_types}"
+        if period_types:
+            assert period_types == {requested.upper()}
+
+
+@pytest.mark.asyncio
+async def test_amd_q1_fy2026_returns_10_253B_not_34_639B() -> None:
+    """F-LIVE-P regression: the exact bug from the iter-9 chat eval.
+
+    AMD Q1 FY2026 ground truth = $10.253B. Pre-fix the tool returned the
+    FY2025 ANNUAL row ($34.639B) labelled as Q1 FY2026 because the use case
+    JOINed income_statement on period_end and let an ANNUAL row shadow the
+    quarterly one. This test pins the post-fix contract by seeding both rows
+    at the same period_end and asserting the QUARTERLY value wins.
+
+    Test name kept EXACT so future audits can grep for it.
+    """
+    instrument = _make_instrument(symbol="AMD", fy_end=12)
+    uow = _make_uow_with_mixed_periodicity(
+        instrument,
+        period_end_iso="2026-03-31",
+        quarterly_revenue=10_253_000_000.0,  # AMD Q1 FY2026 ground truth
+        annual_revenue=34_639_000_000.0,  # AMD FY2025 (the leaking row)
+    )
+    uc = GetFundamentalsHistoryUseCase(uow=uow)
+
+    result = await uc.execute(instrument_id=uuid4(), periods=4)
+
+    assert result["period_count"] == 1
+    period = result["periods"][0]
+    assert period["period_type"] == "QUARTERLY"
+    assert period["revenue"] == pytest.approx(10_253_000_000.0), (
+        f"expected $10.253B (AMD Q1 FY2026), got {period['revenue']} — "
+        f"if this is 34_639_000_000.0 the ANNUAL→QUARTERLY leak is back"
+    )
+    # Defensive: explicitly assert we did NOT return the famous bug value.
+    assert period["revenue"] != pytest.approx(34_639_000_000.0)

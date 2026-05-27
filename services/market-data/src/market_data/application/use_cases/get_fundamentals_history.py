@@ -48,12 +48,22 @@ class GetFundamentalsHistoryUseCase:
         periods: int = 8,
         *,
         requested_quarter: str | None = None,
+        period_type: str = "quarterly",
     ) -> dict:
         """Return {"periods": [...], "period_count": int}.
 
         Each period dict contains:
           period, period_end_date, revenue, gross_profit, net_income,
-          eps, pe_ratio, market_cap  (null when not available in source data)
+          eps, pe_ratio, market_cap, period_type  (nullable per-cell)
+
+        ``period_type`` selects the periodicity of the returned rows. Accepted
+        values: ``"quarterly"`` (default — safest, matches the LLM's almost-
+        always-quarter ask) or ``"annual"``. F-LIVE-P (2026-05-26): before this
+        knob existed the use case always derived rows from EARNINGS_HISTORY
+        (quarterly-only) and JOINed an income_statement filter pinned to
+        QUARTERLY. That suppressed the ANNUAL-leak symptom, but it also meant
+        callers asking for annual data could never get it. Now the use case
+        explicitly picks per ``period_type`` and never mixes the two.
 
         FIX-LIVE-P observability: ``requested_quarter`` is an optional canonical
         quarter label such as ``"Q4 FY2026"`` extracted from an upstream intent
@@ -64,6 +74,20 @@ class GetFundamentalsHistoryUseCase:
         """
         from market_data.domain.enums import FundamentalsSection, PeriodType
 
+        # F-LIVE-P: normalise to upper-case StrEnum value. Invalid values fall
+        # back to QUARTERLY (the safer default) instead of raising — the API
+        # layer is responsible for input validation; the use case stays robust
+        # to surprise input from any future caller.
+        period_type_norm = (period_type or "quarterly").upper()
+        if period_type_norm not in {"QUARTERLY", "ANNUAL"}:
+            log.warning(
+                "fundamentals_history_unknown_period_type",
+                requested=period_type,
+                fallback="QUARTERLY",
+            )
+            period_type_norm = "QUARTERLY"
+        selected_period_type = PeriodType(period_type_norm)
+
         iid_str = str(instrument_id)
 
         # FIX-LIVE-P: resolve the instrument's fiscal_year_end_month so we can
@@ -73,21 +97,29 @@ class GetFundamentalsHistoryUseCase:
         ticker = instrument.symbol if instrument is not None else iid_str
         fiscal_year_end_month = instrument.fiscal_year_end_month if instrument is not None else None
 
-        # Fetch earnings history records (quarterly EPS/surprise data)
+        # Fetch earnings history records (quarterly EPS/surprise data — EODHD
+        # contract: EARNINGS_HISTORY is quarterly-only, no annual variant).
+        # We only need this section for the QUARTERLY response shape, where
+        # EPS/surprise drives the per-period dict; for ANNUAL we drive the
+        # response from income_statement directly (see below).
         earnings_records = await self._uow.fundamentals_read.find_by_section(
             iid_str,
             FundamentalsSection.EARNINGS_HISTORY,
         )
 
         # Fetch income-statement records for revenue/gross_profit/net_income.
-        # PLAN-0095 T-W1-02 (BP-559): pin to QUARTERLY so a same-period ANNUAL
-        # row never shadows the quarterly figure. Without this filter the JOIN
-        # below by ``period_end`` can match an annual row whose revenue is 4x
-        # the quarterly value (AMD/NVDA Q1FY26 returned $34B instead of $7B).
+        # F-LIVE-P (2026-05-26): pin to the explicit ``selected_period_type``
+        # so the use case NEVER mixes annual and quarterly rows in one
+        # response.  Pre-F-LIVE-P (PLAN-0095 T-W1-02) this was hard-pinned to
+        # QUARTERLY which suppressed the well-known $34.639B AMD Q1 FY2026
+        # leak but also made annual queries impossible.  The selector now
+        # forwards the caller's choice; the API layer (and rag-chat tool
+        # schema) validates the value so the only legal inputs that reach
+        # here are QUARTERLY or ANNUAL.
         income_records = await self._uow.fundamentals_read.find_by_section(
             iid_str,
             FundamentalsSection.INCOME_STATEMENT,
-            period_type=PeriodType.QUARTERLY,
+            period_type=selected_period_type,
         )
 
         # Fetch highlights for market_cap/pe_ratio (TTM snapshot).
@@ -128,8 +160,16 @@ class GetFundamentalsHistoryUseCase:
             except (ValueError, TypeError):
                 return None
 
-        # Sort earnings records by period_end DESC then slice
-        sorted_records = sorted(earnings_records, key=lambda r: r.period_end, reverse=True)
+        # F-LIVE-P (2026-05-26): pick the driver section by the explicit
+        # period_type. EARNINGS_HISTORY only carries quarterly EPS/surprise
+        # rows in EODHD's contract, so for ANNUAL we drive the response from
+        # the income_statement rows we already fetched (revenue / net_income
+        # are populated; EPS is sourced from income_statement.epsActual when
+        # present, else None — that is correct, not a bug).
+        driver_records = earnings_records if selected_period_type == PeriodType.QUARTERLY else income_records
+
+        # Sort driver records by period_end DESC then slice
+        sorted_records = sorted(driver_records, key=lambda r: r.period_end, reverse=True)
         selected = sorted_records[:periods]
         # Re-sort ASC for response ordering
         selected = list(reversed(selected))
@@ -139,6 +179,11 @@ class GetFundamentalsHistoryUseCase:
             period_key = rec.period_end.strftime("%Y-%m-%d")
             data = rec.data if isinstance(rec.data, dict) else {}
             inc = income_by_period.get(period_key, {})
+            # For ANNUAL the driver IS the income_statement row, so the local
+            # ``data`` dict already has revenue/netIncome. Mirror it into
+            # ``inc`` so the field-extraction block below works uniformly.
+            if selected_period_type == PeriodType.ANNUAL and not inc:
+                inc = data
 
             # Attempt to build a human-readable period label from the report date.
             # FIX-LIVE-P: pass fiscal_year_end_month so issuers with non-calendar
@@ -155,15 +200,15 @@ class GetFundamentalsHistoryUseCase:
                 {
                     "period": period_label,
                     "period_end_date": period_key,
-                    # PLAN-0097 T-W1-01 (BP-577): explicit periodicity label on
-                    # every row so the rag-chat tool layer (and ultimately the
-                    # LLM) can never quote a TTM/ANNUAL value in a quarterly
-                    # context without seeing the mismatch. income_records is
-                    # filtered to QUARTERLY above (line 87-91), so the revenue
-                    # / gross_profit / net_income fields below are guaranteed
-                    # quarterly. eps comes from EARNINGS_HISTORY which is
-                    # quarterly-only in EODHD's schema.
-                    "period_type": "QUARTERLY",
+                    # PLAN-0097 T-W1-01 (BP-577) + F-LIVE-P (2026-05-26):
+                    # explicit periodicity label on every row so the rag-chat
+                    # tool layer (and ultimately the LLM) can never quote a
+                    # TTM/ANNUAL value in a quarterly context without seeing
+                    # the mismatch. The value mirrors the caller's request and
+                    # the actual SQL filter applied above, so by construction
+                    # every row in ``result_periods`` shares the same
+                    # ``period_type``.
+                    "period_type": selected_period_type.value,
                     # Income statement fields (prefer income-stmt section, fall back to None)
                     "revenue": _safe_float(inc.get("totalRevenue") or inc.get("revenue")),
                     "gross_profit": _safe_float(inc.get("grossProfit")),

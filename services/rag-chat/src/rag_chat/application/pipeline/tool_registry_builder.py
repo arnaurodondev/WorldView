@@ -142,7 +142,21 @@ def build_default_registry() -> ToolRegistry:
                 ParameterSpec(
                     name="periods",
                     type="integer",
-                    description="Number of quarters to return (1-20). Default 8.",
+                    description="Number of periods to return (1-20). Default 8.",
+                    required=False,
+                ),
+                # F-LIVE-P (2026-05-26): explicit periodicity selector. The LLM
+                # almost always wants quarterly, so we keep that as the default
+                # and document the rare annual case in the description. The
+                # handler validates and falls back to "quarterly" on anything
+                # outside the allowlist.
+                ParameterSpec(
+                    name="period_type",
+                    type="string",
+                    description=(
+                        'Periodicity of returned rows. Allowed values: "quarterly" '
+                        '(default), "annual". Any other value falls back to "quarterly".'
+                    ),
                     required=False,
                 ),
             ],

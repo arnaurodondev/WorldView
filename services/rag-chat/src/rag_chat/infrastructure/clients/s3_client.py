@@ -126,6 +126,7 @@ class S3Client(BaseUpstreamClient):
         instrument_id: str | None = None,
         ticker: str | None = None,
         isin: str | None = None,
+        period_type: str = "quarterly",
     ) -> list[dict]:
         """GET /api/v1/fundamentals/history → list of period dicts (PLAN-0066 Wave G).
 
@@ -134,8 +135,14 @@ class S3Client(BaseUpstreamClient):
         Safe degradation: returns [] on any HTTP or network error (R9).
 
         Identifier priority: instrument_id > isin > ticker.
+
+        F-LIVE-P (2026-05-26): ``period_type`` ("quarterly"/"annual") is
+        forwarded as a query param so the upstream filter is applied at SQL
+        level. The default "quarterly" is the safer fallback and matches the
+        legacy pre-F-LIVE-P contract for any caller that has not yet been
+        updated.
         """
-        params: dict[str, str] = {"periods": str(periods)}
+        params: dict[str, str] = {"periods": str(periods), "period_type": period_type}
         if instrument_id:
             params["instrument_id"] = instrument_id
         elif isin:
