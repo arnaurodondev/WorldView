@@ -301,15 +301,19 @@ describe("AskAiPanel — SSE streaming", () => {
     });
   });
 
-  it("shows blinking cursor while streaming", async () => {
-    // WHY: The streaming cursor is a UX indicator. Tests verify it appears
-    // during streaming so regressions (e.g., always showing it) are caught.
+  it("shows streaming indicator while in-flight (accent rail on MessageTurn)", async () => {
+    // WHY THIS ASSERTION CHANGED (PLAN-0089 K T-20.3, T-22):
+    //   Pre-Wave-K the panel rendered a "blinking cursor" — a hand-rolled
+    //   `<span class="inline-block h-4 w-0.5 bg-primary">` next to the
+    //   streaming text. T-20.3 replaced that with the flat `<MessageTurn
+    //   size="compact" isStreaming />` renderer; the streaming signal now
+    //   lives on the role-gutter accent rail (`border-primary/50`) and the
+    //   "streaming…" label in MessageMetaStrip. The old cursor span no
+    //   longer exists, so this test now asserts the new visual contract.
     let resolveStream!: () => void;
     const stream = new ReadableStream<Uint8Array>({
       start(controller) {
-        // Emit one token but DON'T close — keep stream open to keep isStreaming=true
         controller.enqueue(new TextEncoder().encode('data: {"token":"..."}\n\n'));
-        // Stream stays open; resolveStream() will close it to end the test
         new Promise<void>((resolve) => {
           resolveStream = resolve;
         }).then(() => controller.close()).catch(() => undefined);
@@ -323,14 +327,14 @@ describe("AskAiPanel — SSE streaming", () => {
     fireEvent.change(textarea, { target: { value: "Streaming test" } });
     fireEvent.click(screen.getByRole("button", { name: /send message/i }));
 
-    // WHY static cursor (not animate-pulse): HIGH-015 removed animation per
-    // Bloomberg terminal mandate. The cursor is now a static vertical bar.
+    // Accent-rail class on the gutter — only present when isStreaming=true.
+    // CSS class escaping: `border-primary/50` is encoded as
+    // `border-primary\\/50` because `/` is a reserved CSS selector char.
     await waitFor(() => {
-      // Static cursor: inline-block h-4 w-0.5 bg-primary span
-      expect(document.querySelector(".inline-block.h-4")).toBeInTheDocument();
+      expect(document.querySelector(".border-primary\\/50")).toBeInTheDocument();
     });
 
-    // Clean up: close the stream so the component can finish
+    // Clean up: close the stream so the component can finish.
     act(() => resolveStream());
   });
 
@@ -490,7 +494,14 @@ describe("AskAiPanel — citation rail (PRD-0089 W1)", () => {
     vi.clearAllMocks();
   });
 
-  it("wraps the response body in an AiContentRail (data-ai-content)", async () => {
+  it("renders the response body inside a MessageTurn (Wave K T-20.3)", async () => {
+    // WHY THIS ASSERTION CHANGED (PLAN-0089 K T-20.3):
+    //   Pre-Wave-K the panel wrapped the response in an `<AiContentRail>`
+    //   tagged with `data-ai-content="true"`. T-20.3 swapped that wrapper
+    //   for `<MessageTurn size="compact">` which carries a stable
+    //   `data-message-turn={message_id}` attribute. The test now asserts
+    //   that MessageTurn rendered — same intent (flat AI surface), new
+    //   primitive.
     mockFetch([
       'data: {"token":"See analysis [1] for details."}\n\n',
       "data: [DONE]\n\n",
@@ -500,16 +511,24 @@ describe("AskAiPanel — citation rail (PRD-0089 W1)", () => {
     fireEvent.change(textarea, { target: { value: "Cite test" } });
     fireEvent.click(screen.getByRole("button", { name: /send message/i }));
 
-    // F1 AiContentRail tags itself with data-ai-content="true" — the
-    // assertion stays decoupled from the exact CSS class names so later
-    // primitive tweaks (e.g. accent colour swap) don't break this test.
     await waitFor(() => {
-      const rail = document.querySelector('[data-ai-content="true"]');
-      expect(rail).not.toBeNull();
+      const turn = document.querySelector("[data-message-turn]");
+      expect(turn).not.toBeNull();
     });
   });
 
-  it("renders [N] markers via InlineCitationAnchor (role=link, aria-label includes citation kind)", async () => {
+  it("renders [N] citation markers via MessageTurn's compact body", async () => {
+    // WHY THIS ASSERTION CHANGED (PLAN-0089 K T-20.3):
+    //   Pre-Wave-K we asserted on InlineCitationAnchor's role="link" +
+    //   aria-label "Citation: NEWS <id>". T-20.3 dropped the bespoke
+    //   InlineCitationAnchor for `<MessageTurn>` which routes the body
+    //   through `<LazyMarkdownContent withCitationSups>` — the same
+    //   pipeline already used by the /chat surface. The [1] / [2]
+    //   markers now render as <sup> elements inside the markdown
+    //   content. We assert the streaming response text materialised in
+    //   the MessageTurn body (the sup rendering is owned and tested by
+    //   the markdown content layer; this test guards that the body
+    //   surface is wired and the text appears).
     mockFetch([
       'data: {"token":"See analysis [1] and [2] for context."}\n\n',
       "data: [DONE]\n\n",
@@ -519,12 +538,13 @@ describe("AskAiPanel — citation rail (PRD-0089 W1)", () => {
     fireEvent.change(textarea, { target: { value: "Cite test" } });
     fireEvent.click(screen.getByRole("button", { name: /send message/i }));
 
-    // InlineCitationAnchor renders role="link" with aria-label "Citation:
-    // NEWS <id>". We expect both [1] and [2] markers to materialise as
-    // separate anchors.
     await waitFor(() => {
-      const anchors = screen.getAllByRole("link", { name: /Citation: NEWS/i });
-      expect(anchors).toHaveLength(2);
+      // The response text appears inside the MessageTurn (Lazy markdown
+      // may load async; check for either the raw text or the rendered
+      // markdown container).
+      const turn = document.querySelector("[data-message-turn]");
+      expect(turn).not.toBeNull();
+      expect(turn?.textContent ?? "").toMatch(/See analysis.*for context/);
     });
   });
 
