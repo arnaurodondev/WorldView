@@ -805,3 +805,106 @@ async def test_handler_503_when_on_demand_fails_for_cold_user(settings: RagChatS
         resp = await client.get("/api/v1/briefings/morning", headers=_JWT_HEADERS)
 
     assert resp.status_code == 503
+
+
+# ── F-CR-003 regression — JWT contextvar leak in stale-serve background regen ──
+
+
+async def test_stale_serve_does_not_leak_bg_jwt_into_parent_context(
+    settings: RagChatSettings,
+) -> None:
+    """F-CR-003 — set_current_jwt(bg_jwt) before asyncio.create_task leaked the
+    background JWT into the parent request's Context.  The fix passes bg_jwt
+    as an explicit arg to the coroutine and only sets the ContextVar inside
+    the background task's own Context copy.
+
+    Regression assertion: AFTER the handler returns (i.e. after the stale
+    serve schedules the background regen), the parent test scope's
+    ContextVar must be unchanged from its prior state.
+    """
+    import asyncio as _asyncio
+
+    from rag_chat.infrastructure.clients.auth_context import get_current_jwt, set_current_jwt
+
+    # Seed the parent Context with a known sentinel BEFORE invoking the handler.
+    # If the handler leaks bg_jwt into this Context, the post-handler check
+    # below will see the leaked JWT instead of the sentinel.
+    sentinel = "PARENT-CTX-SENTINEL"  # — test sentinel, not a real secret
+    set_current_jwt(sentinel)
+
+    stale = _make_brief_json(narrative="Stale brief.")
+    app = _make_app_with_keyed_valkey(settings, fresh_value=None, lastgood_value=stale)
+
+    # Make the UC mock return immediately so the background task completes
+    # quickly (we don't want a hanging task affecting GC during teardown).
+    async def _fast_uc(**_kw: object) -> dict[str, object]:
+        return {
+            "content": "regen content",
+            "risk_summary": {},
+            "citations": [],
+            "sections": [],
+            "generated_at": "2026-05-26T08:00:00+00:00",
+            "confidence": 1.0,
+            "lead": None,
+        }
+
+    app.state.briefing_uc.execute_public_morning = AsyncMock(side_effect=_fast_uc)  # type: ignore[attr-defined]
+
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        resp = await client.get("/api/v1/briefings/morning", headers=_JWT_HEADERS)
+
+    assert resp.status_code == 200
+    assert resp.json()["is_stale"] is True
+
+    # Give the background task a moment to run so we exercise the entire path.
+    await _asyncio.sleep(0.05)
+
+    # The parent Context's JWT must still be our sentinel — never replaced
+    # by bg_jwt from the handler.  Pre-fix this would have been _JWT_TOKEN.
+    assert get_current_jwt() == sentinel
+
+
+async def test_background_regen_uses_bg_jwt_inside_task_context(
+    settings: RagChatSettings,
+) -> None:
+    """F-CR-003 — the background regen coroutine MUST see bg_jwt via the
+    ContextVar inside its own task context (so BaseUpstreamClient picks it up).
+
+    Positive complement to the leak test: the JWT lives in the task's Context
+    (correct), not the parent's Context (the bug).
+    """
+    from rag_chat.infrastructure.clients.auth_context import get_current_jwt
+
+    captured_inside_task: list[str | None] = []
+
+    async def _capturing_uc(**_kw: object) -> dict[str, object]:
+        captured_inside_task.append(get_current_jwt())
+        return {
+            "content": "ok",
+            "risk_summary": {},
+            "citations": [],
+            "sections": [],
+            "generated_at": "2026-05-26T08:00:00+00:00",
+            "confidence": 1.0,
+            "lead": None,
+        }
+
+    stale = _make_brief_json(narrative="Stale.")
+    app = _make_app_with_keyed_valkey(settings, fresh_value=None, lastgood_value=stale)
+    app.state.briefing_uc.execute_public_morning = AsyncMock(side_effect=_capturing_uc)  # type: ignore[attr-defined]
+
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        resp = await client.get("/api/v1/briefings/morning", headers=_JWT_HEADERS)
+
+    assert resp.status_code == 200
+
+    # Give the bg task time to run.
+    import asyncio as _asyncio
+
+    await _asyncio.sleep(0.05)
+
+    # The bg task observed the JWT inside its own Context — the explicit-arg
+    # pattern works (the handler did NOT leak via the parent Context).
+    assert captured_inside_task == [_JWT_TOKEN]

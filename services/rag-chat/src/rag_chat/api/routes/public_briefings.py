@@ -209,24 +209,43 @@ async def get_morning_briefing(request: Request) -> PublicBriefingResponse:
                 # schedules the coroutine; exceptions inside it are swallowed
                 # by the helper below (we don't want a background failure to
                 # surface anywhere that could affect the request).
-                from rag_chat.infrastructure.clients.auth_context import set_current_jwt
-
+                #
+                # F-CR-003 fix (PLAN-0093 iter-9 QA): we MUST NOT call
+                # ``set_current_jwt(bg_jwt)`` here in the parent request scope.
+                # ``asyncio.create_task`` copies the current Context at task
+                # creation time — if we set the ContextVar before creating the
+                # task, the background JWT bleeds into anything that touches
+                # this Context (other code in this handler, future handler
+                # extensions, test isolation, etc.).  Instead we pass ``bg_jwt``
+                # as an explicit positional arg to the coroutine and the
+                # coroutine sets the ContextVar inside its OWN task context —
+                # which is isolated by asyncio task boundaries.
                 bg_jwt = request.headers.get("X-Internal-JWT")
-                set_current_jwt(bg_jwt)
                 uc_for_bg = _get_briefing_uc(request)
 
-                async def _background_regen() -> None:
+                async def _background_regen(jwt_for_bg: str | None) -> None:
                     """Best-effort regeneration — never raises, just logs.
 
-                    WHY a closure: we need the use case + user/tenant/jwt
-                    captured at the time the task is scheduled.  The handler
-                    has all four in scope right here.
+                    WHY a closure that takes ``jwt_for_bg`` as an explicit arg:
+                    F-CR-003 (PLAN-0094 iter-9 QA) — calling
+                    ``set_current_jwt`` in the parent handler scope before
+                    ``asyncio.create_task`` leaked the JWT into the parent
+                    request's context.  Setting the ContextVar INSIDE the task
+                    coroutine confines it to the background task's own Context
+                    copy.
                     """
+                    # Set the ContextVar inside the background task's own
+                    # Context — never touch the parent request's Context.
+                    from rag_chat.infrastructure.clients.auth_context import (
+                        set_current_jwt as _set_jwt_bg,
+                    )
+
+                    _set_jwt_bg(jwt_for_bg)
                     try:
                         result = await uc_for_bg.execute_public_morning(
                             user_id=user_id,
                             tenant_id=tenant_id,
-                            internal_jwt=bg_jwt,
+                            internal_jwt=jwt_for_bg,
                         )
                         # Re-cache both keys so the next request hits fresh.
                         fresh_payload = PublicBriefingResponse(
@@ -260,7 +279,7 @@ async def get_morning_briefing(request: Request) -> PublicBriefingResponse:
                 # anywhere — best-effort fire-and-forget is the contract.
                 import asyncio as _asyncio
 
-                _asyncio.create_task(_background_regen())  # noqa: RUF006
+                _asyncio.create_task(_background_regen(bg_jwt))  # noqa: RUF006
                 return stale_resp
         except Exception as e:
             log.warning(  # type: ignore[no-any-return]
