@@ -47,10 +47,17 @@ def _make_settings(*, batch_size: int = 50, concurrency: int = 4) -> Settings:
 
 
 def _result(user_index: int) -> dict[str, object]:
-    """Realistic GenerateBriefingUseCase.execute_public_morning() return."""
+    """Realistic GenerateBriefingUseCase.execute_public_morning() return.
+
+    Non-empty ``sector_breakdown`` so the empty-context guard (PLAN-0094
+    follow-up) treats this as a real brief, not the synchronization stub.
+    """
     return {
         "content": f"Brief for user {user_index}",
-        "risk_summary": {"concentration_score": 0.0},
+        "risk_summary": {
+            "concentration_score": 0.42,
+            "sector_breakdown": {"Technology": 0.6, "Healthcare": 0.4},
+        },
         "citations": [],
         "generated_at": "2026-05-25T08:00:00+00:00",
         "confidence": 0.9,

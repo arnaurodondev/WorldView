@@ -197,6 +197,26 @@ class MorningBriefPregenerationWorker:
         if self._jwt_minter is not None:
             internal_jwt = await self._jwt_minter.mint()
 
+        # PLAN-0094 follow-up (live-QA round 3): the downstream upstream
+        # clients (S1/S5/S6/S7) read the JWT from a ContextVar — not the
+        # ``internal_jwt`` kwarg of execute_public_morning.  Without
+        # ``set_current_jwt`` here, every per-user upstream call goes out
+        # with NO X-Internal-JWT header and gets a 401.  The handler in
+        # public_briefings.py:287 already sets the ContextVar from the
+        # incoming request JWT; we mirror that pattern for the worker.
+        from rag_chat.infrastructure.clients.auth_context import set_current_jwt
+
+        previous_jwt = None
+        try:
+            from rag_chat.infrastructure.clients.auth_context import get_current_jwt
+
+            previous_jwt = get_current_jwt()
+        except Exception:
+            previous_jwt = None
+
+        if internal_jwt is not None:
+            set_current_jwt(internal_jwt)
+
         try:
             # WHY tenant_id=user_id_str: the morning-brief use case treats
             # tenant_id as an isolation key for the rate limit + portfolio
@@ -220,6 +240,10 @@ class MorningBriefPregenerationWorker:
             # Per-spec: do NOT overwrite the existing last-known-good key.
             # The next handler request will surface it as ``is_stale=True``.
             return
+        finally:
+            # Always restore the previous ContextVar so concurrent users in
+            # the same task group don't see this user's JWT leak across.
+            set_current_jwt(previous_jwt)
 
         # ── Empty-context guard (PLAN-0094 W2 follow-up) ──────────────────────
         # Even with a working minter, transient upstream failures can leave
@@ -301,27 +325,69 @@ class MorningBriefPregenerationWorker:
         await self._valkey.set(lastgood_key, payload_json, ex=lastgood_ttl)
 
 
+# Known synchronization-stub fragments emitted by GenerateBriefingUseCase
+# when BriefingContextGatherer returns empty context.  Detecting these by
+# substring is more robust than the structural heuristic alone — when
+# upstream fails, ``risk_summary`` comes back populated with zero-valued
+# defaults (``concentration_score=0.0, sector_breakdown={}``) which the
+# structural check treats as "non-empty".  The narrative-substring check
+# is the deterministic signal.
+_EMPTY_STUB_NARRATIVE_FRAGMENTS: tuple[str, ...] = (
+    "Portfolio data is being synchronized",
+    "morning briefing will be available shortly",
+    "please refresh in a few minutes",
+)
+
+
 def _looks_empty(result: dict[str, Any]) -> bool:
     """Heuristic: was the brief generated with no usable upstream context?
 
-    When BriefingContextGatherer's upstream calls all 401 (the live failure
-    mode this guard exists for), the use case returns:
-      - empty ``citations``
-      - empty ``sections``
-      - empty ``risk_summary`` (no portfolio = no risk metrics)
-    The LLM may still emit some generic ``content`` ("no data available")
-    so we can't rely on ``content`` alone — the three-field combination is
-    what reliably distinguishes "no upstream context" from "a real but bare
-    brief" (e.g. a user with one alert + no holdings).
+    Catches two failure shapes:
 
-    Loose enough to let a real-but-empty-portfolio brief through (just one
-    of the three fields populated suffices), strict enough to catch the
-    401-storm pattern that produced the live empty-brief regression.
+    1. **Synchronization stub** — GenerateBriefingUseCase emits a fixed
+       placeholder narrative ("Portfolio data is being synchronized...") when
+       BriefingContextGatherer returns empty context.  This bypasses the LLM
+       entirely so the narrative is deterministic — we substring-match the
+       known fragments.
+
+    2. **Truly empty structural fields** — no citations, no sections, AND a
+       structurally empty ``risk_summary`` (only the zero-valued defaults
+       ``concentration_score=0.0`` with empty ``sector_breakdown``).
+       Strict enough to let a real-but-bare brief through (any meaningful
+       sector_breakdown entry or any citation passes the guard).
     """
+    # Shape (1): synchronization stub
+    narrative = result.get("content", result.get("narrative", "")) or ""
+    if isinstance(narrative, str):
+        for fragment in _EMPTY_STUB_NARRATIVE_FRAGMENTS:
+            if fragment in narrative:
+                return True
+
+    # Shape (2): structurally empty
     citations = result.get("citations") or []
     sections = result.get("sections") or []
+    if citations or sections:
+        return False
+
     risk_summary = result.get("risk_summary") or {}
-    return not citations and not sections and not risk_summary
+    if not risk_summary:
+        return True
+
+    # ``risk_summary`` has keys — check if they're all zero-valued defaults.
+    # The stub returns ``{"concentration_score": 0.0, "sector_breakdown": {}}``
+    # which we want to treat as empty.  Any non-empty sector_breakdown or any
+    # positive concentration score → real data → not empty.
+    sector_breakdown = risk_summary.get("sector_breakdown") or {}
+    concentration = risk_summary.get("concentration_score") or 0.0
+    if sector_breakdown:
+        return False
+    try:
+        if float(concentration) > 0:
+            return False
+    except (TypeError, ValueError):
+        pass
+
+    return True
 
 
 __all__ = ["MorningBriefPregenerationWorker"]
