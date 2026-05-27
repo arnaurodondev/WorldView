@@ -3,7 +3,7 @@ id: PRD-0089-WI
 title: Wave I — Screener
 prd: PRD-0089
 order: WI (ninth page wave — runs after F1 + F2 + W1; I-B gated on Wave L)
-status: I-A done (2026-05-26) / I-B blocks IB-L1 + IB-L2 unblocked (Wave L-1/L-2 shipped 2026-05-25)
+status: I-A done (2026-05-26) / IB-L1 done (2026-05-26) / IB-L2 unblocked (Wave L-1/L-2 shipped 2026-05-25)
 created: 2026-05-25
 updated: 2026-05-26
 parent_prd: docs/specs/0089-platform-page-redesign.md
@@ -419,6 +419,35 @@ ESTIMATED ENGINEER-DAYS (I-A): 3.5d single-agent serial
 ### §6.1 Task blocks (one block per Wave L track)
 
 #### Block IB-L1 — Country / Exchange / Coverage filters (depends on Wave L-1)
+
+**Status: DONE 2026-05-26** on branch `feat/plan-0089-wi-b-l1` (4 task commits).
+Commits: T-IB-01 `86a0e152`, T-IB-02 `6c0c8173`, T-IB-03 `dc5be78b`, T-IB-04 `baf9fed9`.
+26 new Vitest unit tests pass (country 6 + exchange 5 + coverage 8 + presets 7).
+58 broader screener tests still green. Typecheck clean. Playwright 10/10
+skip as expected (E2E_AUTH unset). Lint: pre-existing
+MorningBriefCard:510 error unchanged (out of scope).
+
+New files:
+- `lib/screener/country-regions.ts` (4 regional ISO3 presets + COMMON_COUNTRY_ISO3 fallback list)
+- `lib/screener/exchanges.ts` (23-entry COMMON_EXCHANGES static fallback)
+- `features/screener/components/CountryFilterRow.tsx`
+- `features/screener/components/ExchangeFilterRow.tsx`
+- `features/screener/components/CoverageToggles.tsx`
+- 4 test files under `__tests__/screener/`
+
+Edited:
+- `features/screener/lib/filter-state.ts` (+countries/exchanges/hasFundamentals/hasOhlcv)
+- `features/screener/lib/build-filters.ts` (forwards attribute fields to first metric filter or synthetic carrier)
+- `types/api.ts` (ScreenerFilter wire type extended)
+- `components/screener/ScreenerFilterBar.tsx` (Categorical section)
+- `components/screener/FilterChipStrip.tsx` (4 new chips)
+- `lib/screener/presets.ts` (US Equities Only)
+
+Known constraint: Wave L-1 backend ANDs repeated country/exchange filters,
+so the build-filters layer sends ONLY the first selected entry today
+(state still stores the full multi-select for chip display and future
+backend `IN (...)` upgrade). Documented inline in `filter-state.ts`.
+
 
 **T-IB-01** Country filter chip + popover row.
 - Extend `FilterState` to include `countries: string[]`.
