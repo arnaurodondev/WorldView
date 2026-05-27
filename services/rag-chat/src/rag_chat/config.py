@@ -200,6 +200,14 @@ class Settings(BaseSettings):
     otlp_endpoint: str = ""
     service_name: str = "rag-chat"
 
+    # ── Deploy-version cache flush (PLAN-0097 W4 T-W4-04) ────────────────────
+    # Operator-bumped token (e.g. git SHA, build timestamp, schema version)
+    # written to Valkey on startup. When the value changes between deploys the
+    # rag-chat completion cache (``rag:v*:completion:*``) is flushed so a new
+    # prompt/version is not served stale answers from the previous deploy.
+    # Empty string = feature disabled; the startup hook is a no-op.
+    cache_deploy_token: str = Field(default="", alias="RAG_CACHE_DEPLOY_TOKEN")
+
     @model_validator(mode="after")
     def _validate_startup(self) -> Settings:
         """Validate startup invariants: F-007/F-S005 (skip_verification) + F-014 (whitespace coercion).

@@ -113,6 +113,12 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     valkey_client = ValkeyClient(url=settings.valkey_url)
     app.state.valkey = valkey_client
 
+    # 4b. Deploy-version cache flush (PLAN-0097 W4 T-W4-04).
+    # When ``RAG_CACHE_DEPLOY_TOKEN`` changes between deploys, flush the
+    # completion cache so a new prompt/version is never served a stale answer.
+    # See ``_maybe_flush_completion_cache`` for the full contract.
+    await _maybe_flush_completion_cache(valkey_client, settings.cache_deploy_token, log)
+
     # 5. Provider negative cache
     app.state.provider_cache = {}  # type: ignore[assignment]
 
@@ -758,6 +764,94 @@ def _wire_citation_cron(
         "citation_cron_started",
         provider=settings.citation_judge_provider,
         timeout_s=settings.citation_call_timeout_s,
+    )
+
+
+# ─── Deploy-version cache flush (PLAN-0097 W4 T-W4-04) ───────────────────────
+
+# Valkey key remembering the last-seen RAG_CACHE_DEPLOY_TOKEN. Versioned with
+# the same ``rag:v1:`` prefix as the rest of the rag-chat keyspace.
+_DEPLOY_TOKEN_KEY = "rag:v1:cache:deploy_token"  # noqa: S105 — Valkey key, not a credential
+
+# Pattern matching every completion-cache entry across cache-key versions.
+# ``rag:v3:completion:*`` is the current keyspace (completion_cache.py); the
+# ``v*`` wildcard also rescues stale keys from any previous major-version bump
+# that may still be sitting in Valkey.
+_COMPLETION_CACHE_PATTERN = "rag:v*:completion:*"
+
+
+async def _maybe_flush_completion_cache(
+    valkey_client: ValkeyClient,
+    deploy_token: str,
+    log: Any,
+) -> None:
+    """Flush stale completion-cache entries when the deploy token changes.
+
+    Contract (PLAN-0097 W4 T-W4-04):
+      • ``deploy_token == ""``           → feature disabled, no-op.
+      • Stored token == ``deploy_token`` → cache still valid, no-op.
+      • Stored token != ``deploy_token`` (or unset) → call
+        ``valkey.delete_pattern("rag:v*:completion:*")`` to drop every
+        completion-cache entry, then persist the new token.
+
+    All Valkey errors are swallowed and logged at WARNING — a Valkey outage
+    must never block service startup. Worst case: stale cache lingers until
+    the next successful startup with this hook + a token change.
+    """
+    if not deploy_token:
+        # Disabled — operator has not opted in. Nothing to do.
+        return
+
+    try:
+        previous = await valkey_client.get(_DEPLOY_TOKEN_KEY)
+    except Exception as exc:
+        log.warning(  # type: ignore[no-any-return]
+            "deploy_token_read_failed",
+            error=type(exc).__name__,
+            message="skipping cache flush — Valkey GET on deploy-token key failed",
+        )
+        return
+
+    if previous == deploy_token:
+        # Token unchanged — cache is still semantically valid.
+        log.debug(  # type: ignore[no-any-return]
+            "deploy_token_unchanged",
+            token=deploy_token,
+        )
+        return
+
+    # Token changed (or first observation) — flush + persist.
+    try:
+        removed = await valkey_client.delete_pattern(_COMPLETION_CACHE_PATTERN)
+    except Exception as exc:
+        log.warning(  # type: ignore[no-any-return]
+            "completion_cache_flush_failed",
+            error=type(exc).__name__,
+            previous=previous,
+            new=deploy_token,
+            message="cache flush aborted — Valkey SCAN/DEL failed",
+        )
+        return
+
+    try:
+        await valkey_client.set(_DEPLOY_TOKEN_KEY, deploy_token)
+    except Exception as exc:
+        log.warning(  # type: ignore[no-any-return]
+            "deploy_token_persist_failed",
+            error=type(exc).__name__,
+            new=deploy_token,
+            message=(
+                "cache flushed but token not persisted; next startup will flush "
+                "again (idempotent but wastes one cache warmup)"
+            ),
+        )
+        return
+
+    log.info(  # type: ignore[no-any-return]
+        "completion_cache_flushed_on_deploy",
+        previous=previous,
+        new=deploy_token,
+        removed=removed,
     )
 
 

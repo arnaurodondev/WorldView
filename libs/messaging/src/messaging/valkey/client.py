@@ -221,6 +221,30 @@ class ValkeyClient:
             return 0
         return await self._redis.delete(*keys)  # type: ignore[no-any-return]
 
+    async def delete_pattern(self, pattern: str, *, batch_size: int = 500) -> int:
+        """Delete every key matching the glob *pattern* and return the count.
+
+        Uses non-blocking ``SCAN`` (never ``KEYS``) so production datasets are
+        not stalled on large patterns. Keys are deleted in batches of
+        ``batch_size`` via a single ``DEL key1 key2 ...`` per batch to
+        amortise round-trips. Returns the total number of keys removed.
+
+        PLAN-0097 W4 T-W4-04 — used by rag-chat's deploy-token cache flush so
+        a prompt/version change at deploy time invalidates stale completion
+        cache entries (``rag:v*:completion:*``) atomically from the operator's
+        perspective.
+        """
+        removed = 0
+        batch: list[str] = []
+        async for key in self._redis.scan_iter(match=pattern, count=batch_size):
+            batch.append(key)
+            if len(batch) >= batch_size:
+                removed += await self._redis.delete(*batch)
+                batch.clear()
+        if batch:
+            removed += await self._redis.delete(*batch)
+        return removed
+
     # ── Hash operations ───────────────────────────────────────────────────────
 
     async def hget(self, key: str, field: str) -> str | None:
