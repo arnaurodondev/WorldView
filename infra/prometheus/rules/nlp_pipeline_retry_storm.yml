@@ -1,0 +1,75 @@
+# PLAN-0096 Wave 4 (T-W4-03) — NLP pipeline retry-storm / DLQ stall alert.
+#
+# Why this exists
+# ---------------
+# The 2026-05-26 NLP-DLQ-stall investigation found that 94 pre-PLAN-0086
+# Avro article messages crashed the ``ArticleProcessingConsumer`` on every
+# redelivery because the NOT NULL ``tenant_id`` constraint added in
+# migration ``nlp_pipeline/alembic/versions/0020_*`` rejected every INSERT.
+# The consumer treated ``IntegrityError`` as retryable, so the Kafka offset
+# never advanced, the DLQ stayed empty (no fan-out happens until max-
+# retries on the SAME message), and ``entity_mentions`` row count was zero
+# for >24h — invisible to existing dashboards.  BP-575.
+#
+# Metric choice
+# -------------
+# The plan asks for ``rate(kafka_consumer_retries_total[5m]) > 1`` on the
+# affected topic.  ``kafka_consumer_retries_total`` does NOT exist in the
+# repo today (only ``kafka_consumer_messages_consumed_total`` is exported
+# from ``libs/observability/metrics.py``).  We therefore approximate the
+# spec's intent with the same two-signal pattern used by
+# ``infra/grafana/alerts/kafka_stalled.yml``: backlog non-zero AND
+# consumption rate zero.  When a retry-storm-counter is added we can
+# tighten this rule to its original shape.
+#
+# This rule is intentionally scoped to ``content.article.stored.v1`` — the
+# topic that actually exhibited the stall — to avoid duplicating the
+# repo-wide ``KafkaConsumerStalled`` alert.  The two alerts will fire
+# together on this topic (by design): the generic one is informational,
+# the topic-specific one is the page-the-pipeline-team signal.
+groups:
+  - name: nlp_pipeline_retry_storm
+    rules:
+      - alert: NlpPipelineRetryStorm
+        # Two AND-joined conditions:
+        #   1. The consumer has processed zero messages from the article
+        #      topic in the last 5 minutes.  Cross-service counter exported
+        #      by libs/observability/metrics.py and incremented in
+        #      BaseKafkaConsumer._handle_message on every successful commit.
+        #   2. The topic has at least one un-consumed message.  This is the
+        #      kafka-exporter gauge; if the exporter is not deployed this
+        #      AND-leg simply omits the page (the generic KafkaConsumerStalled
+        #      alert still covers the case).
+        # The 10-minute ``for`` clause matches PLAN-0096 W4 T-W4-03's intent
+        # while suppressing noise during routine consumer restarts (which
+        # take <60 s and self-recover).
+        expr: |
+          (
+            sum by (topic) (
+              rate(
+                kafka_consumer_messages_consumed_total{topic="content.article.stored.v1"}[5m]
+              )
+            ) == 0
+          )
+          and on (topic) (
+            kafka_topic_size{topic="content.article.stored.v1"} > 0
+          )
+        for: 10m
+        labels:
+          severity: warning
+          subsystem: nlp-pipeline
+          topic: content.article.stored.v1
+        annotations:
+          summary: "NLP article consumer stalled on content.article.stored.v1 (retry storm suspected)"
+          description: >
+            ``ArticleProcessingConsumer`` has processed zero messages from
+            ``content.article.stored.v1`` for >10 minutes while the topic has
+            a non-zero backlog.  This is the BP-575 signature: every message
+            is hitting a deterministic ``IntegrityError`` (or equivalent
+            permanent-failure pattern) and being treated as retryable, so the
+            offset never advances and the DLQ never fills.  Check the
+            consumer logs for ``article_consumer.legacy_tenant_id_sentinel_applied``
+            (legacy passthrough is working) or repeated
+            ``null value in column "tenant_id"`` traces (sentinel branch is
+            NOT reached — code drift).
+          runbook_url: "https://github.com/worldview/runbooks/blob/main/NlpPipelineRetryStorm.md"

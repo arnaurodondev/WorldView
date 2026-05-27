@@ -31,7 +31,7 @@ from typing import TYPE_CHECKING, Any, ClassVar
 
 import common.ids  # type: ignore[import-untyped]
 import common.time  # type: ignore[import-untyped]
-from common.ids import uuid5_from_parts  # type: ignore[import-untyped]
+from common.ids import PUBLIC_TENANT_ID, uuid5_from_parts  # type: ignore[import-untyped]
 from messaging.kafka.consumer.base import (  # type: ignore[import-untyped]
     BaseKafkaConsumer,
     ConsumerConfig,
@@ -451,11 +451,31 @@ class ArticleProcessingConsumer(ValkeyDedupMixin, BaseKafkaConsumer[None]):
         correlation_id: str | None = value.get("correlation_id") or None
         source_name: str | None = value.get("source_name")
 
+        # ── Tenant resolution with legacy-passthrough sentinel (PLAN-0096 W4) ──
+        # Pre-PLAN-0086 Avro payloads have no ``tenant_id`` field.  Migration
+        # 0020 added ``NOT NULL`` on ``entity_mentions.tenant_id``; without a
+        # sentinel, every legacy message dies on the INSERT, the consumer's
+        # exception handler treats it as retryable, offsets never commit,
+        # and the topic stalls (BP-575).  Substitute ``PUBLIC_TENANT_ID``
+        # for any missing / unparseable tenant so the row inserts cleanly
+        # and the offset advances — the row is still identifiable in
+        # forensics because the sentinel is the all-zero UUID.
         raw_tenant = headers.get("tenant_id") or value.get("tenant_id") or None
         tenant_id: uuid.UUID | None = None
         if raw_tenant:
             with contextlib.suppress(ValueError, AttributeError):
                 tenant_id = uuid.UUID(str(raw_tenant))
+        if tenant_id is None:
+            tenant_id = PUBLIC_TENANT_ID
+            logger.warning(  # type: ignore[no-any-return]
+                "article_consumer.legacy_tenant_id_sentinel_applied",
+                article_id=str(doc_id),
+                topic=_TOPIC,
+                partition=headers.get("__partition"),
+                offset=headers.get("__offset"),
+                raw_tenant=raw_tenant,
+                sentinel=str(PUBLIC_TENANT_ID),
+            )
 
         raw_published = value.get("published_at")
         published_at: datetime | None = None
