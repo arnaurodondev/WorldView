@@ -265,6 +265,8 @@ Schemas as `.avsc` files in `infra/kafka/schemas/` and per-service `infrastructu
 | `intelligence_db` | intelligence-migrations (DDL); S6+S7 (r/w) | pgvector | canonical_entities, entity_aliases, relations (8x hash-partitioned), relation_evidence_raw, relation_summaries, article_claims, contradictions |
 | `alert_db` | S10 | -- | alert_subscriptions, alerts, pending_alerts, alert_dedup, outbox_events |
 
+> **Market-data fundamentals query contract**: section tables mix QUARTERLY+ANNUAL rows under the same enum value; callers MUST pin the periodicity. See `docs/services/market-data.md` §"Period-type contract" and §"Freshness tracking" (PLAN-0095 / PLAN-0096, BP-540 / BP-543 / BP-545 / BP-546).
+
 ### 8.2 MinIO Object Store
 
 | Layer | Path Pattern | Content | Owner |

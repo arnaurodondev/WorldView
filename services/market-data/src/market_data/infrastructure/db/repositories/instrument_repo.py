@@ -13,6 +13,8 @@ from market_data.domain.value_objects import InstrumentFlags
 from market_data.infrastructure.db.models.instruments import InstrumentModel
 
 if TYPE_CHECKING:
+    from datetime import datetime
+
     from sqlalchemy.ext.asyncio import AsyncSession
 
 
@@ -223,6 +225,18 @@ class PgInstrumentRepository(InstrumentRepository):
         if not updates:
             return
         await self._session.execute(update(InstrumentModel).where(InstrumentModel.id == id).values(**updates))
+
+    async def touch_fundamentals_ingest_at(self, id: str, ts: datetime) -> None:  # noqa: A002
+        """Bump ``last_fundamentals_ingest_at`` to ``ts`` for instrument ``id``.
+
+        PLAN-0096 T-W1-02 / BP-545: called by FundamentalsConsumer on every
+        successful section materialisation (same UoW as the section writes).
+        """
+        from sqlalchemy import update
+
+        await self._session.execute(
+            update(InstrumentModel).where(InstrumentModel.id == id).values(last_fundamentals_ingest_at=ts)
+        )
 
     async def find_by_isin(self, isin: str) -> Instrument | None:
         result = await self._session.execute(select(InstrumentModel).where(InstrumentModel.isin == isin))

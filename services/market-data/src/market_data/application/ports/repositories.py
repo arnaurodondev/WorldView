@@ -162,6 +162,16 @@ class InstrumentRepository(ABC):
         """Update instrument metadata fields (name, isin, sector, etc.), ignoring None-valued keys."""
 
     @abstractmethod
+    async def touch_fundamentals_ingest_at(self, id: str, ts: datetime) -> None:  # noqa: A002
+        """Update ``last_fundamentals_ingest_at`` for the instrument identified by ``id``.
+
+        PLAN-0096 T-W1-02 / BP-545: the FundamentalsConsumer calls this on
+        every successful section materialisation (same UoW, no outbox) so the
+        column reflects the most-recent successful ingest time. Operators
+        query the column to identify stale tickers.
+        """
+
+    @abstractmethod
     async def find_by_isin(self, isin: str) -> Instrument | None:
         """Return the first active instrument whose ISIN matches, or ``None``."""
 

@@ -158,7 +158,7 @@ async def query_fundamentals(
 
     # Mixin sections all have period_end_date; sort ascending so newest records
     # are last and slice(-N) returns the N most recent entries.
-    stmt = (
+    stmt: Any = (
         select(model_class)
         .where(model_class.instrument_id == security_id)  # type: ignore[attr-defined]
         .order_by(model_class.period_end_date.asc())  # type: ignore[attr-defined]
@@ -166,8 +166,22 @@ async def query_fundamentals(
     # PLAN-0095 T-W1-01: optional periodicity filter. The mixin stores
     # ``period_type`` as a VARCHAR(20) (see _base.py); compare against the
     # enum's string value so SQLAlchemy renders a bind param of the same type.
-    if period_type is not None:
-        stmt = stmt.where(model_class.period_type == period_type.value)  # type: ignore[attr-defined]
+    #
+    # PLAN-0096 T-W1-01 (BP-546): defensive default — balance_sheet and
+    # cash_flow tables mix QUARTERLY+ANNUAL rows at the same period_end_date.
+    # If no caller-supplied period_type, fall through to QUARTERLY to prevent
+    # silent mixing for any future caller. Income_statement is deliberately
+    # left explicit — the use case (GetFundamentalsHistoryUseCase) already
+    # passes period_type=QUARTERLY (PLAN-0095 T-W1-02), and adding a repo
+    # default there would mask future explicit period_type=ANNUAL callers.
+    effective_period_type = period_type
+    if effective_period_type is None and section in {
+        FundamentalsSection.BALANCE_SHEET,
+        FundamentalsSection.CASH_FLOW,
+    }:
+        effective_period_type = PeriodType.QUARTERLY
+    if effective_period_type is not None:
+        stmt = stmt.where(model_class.period_type == effective_period_type.value)  # type: ignore[attr-defined]
     result = await session.execute(stmt)
     rows = result.scalars().all()
     return [_row_to_domain(row, section) for row in rows]

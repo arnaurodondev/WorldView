@@ -580,6 +580,14 @@ class FundamentalsConsumer(ValkeyDedupMixin, BaseKafkaConsumer[dict]):
             sections_processed=section_count,
         )
 
+        # PLAN-0096 T-W1-02 / BP-545: bump per-instrument fundamentals freshness
+        # column inside the same UoW as the section writes. Only bump when at
+        # least one section was actually processed — a malformed payload that
+        # produced zero rows should not lie about freshness. No outbox event:
+        # the column is observational, not a domain event.
+        if section_count > 0:
+            await uow.instruments.touch_fundamentals_ingest_at(instrument_id, ingested_at)
+
         # ── F-Q1-03: UPSERT instrument_fundamentals_snapshot ──────────────────
         # WHY here (not in a separate consumer): the snapshot is a derived
         # projection of section data already present in `payload`.  Computing

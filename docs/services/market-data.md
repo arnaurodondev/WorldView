@@ -407,6 +407,46 @@ All consumers extend `BaseKafkaConsumer[dict]` from `libs/messaging`. They:
 
 **Snapshot UPSERT COALESCE policy (PLAN-0050 QA iter-2 F-Q2-03)**: The `ON CONFLICT DO UPDATE` clause in `_UPSERT_SQL` uses `COALESCE(EXCLUDED.col, instrument_fundamentals_snapshot.col)` for all 10 nullable metric columns (`eps_ttm`, `beta`, `avg_volume_30d`, `operating_cash_flow`, `capex`, `free_cash_flow`, `fcf_margin`, `interest_coverage`, `net_debt_to_ebitda`, `credit_rating`). This prevents a partial EODHD re-poll (e.g., missing cash-flow section) from silently overwriting previously-valid data with NULL. `updated_at` is always refreshed unconditionally via `now()` regardless of which sections were present. A poll that provides no new data for a column simply preserves the existing value.
 
+#### Period-type contract
+
+Fundamentals section tables (`income_statements`, `balance_sheets`,
+`cash_flow_statements`) store both QUARTERLY and ANNUAL rows under the same
+section enum, distinguished by the `period_type` column. The repository
+read helper `query_fundamentals` accepts an optional `period_type` filter:
+
+- **`income_statement`** — the use case (`GetFundamentalsHistoryUseCase`)
+  MUST pass `period_type=PeriodType.QUARTERLY` explicitly (PLAN-0095 T-W1-02).
+  The repo deliberately does **not** apply a default here so that future
+  callers needing ANNUAL rows are forced to be explicit.
+- **`balance_sheet`** and **`cash_flow`** — the repo defaults to
+  `PeriodType.QUARTERLY` when the caller passes `None` (PLAN-0096 T-W1-01,
+  **BP-546**). This is a defensive default: there are no current direct
+  callers for these sections, but any future caller would otherwise silently
+  inherit the mixed-periodicity trap that BP-540 / BP-543 fixed for income
+  statement. Pass `period_type=PeriodType.ANNUAL` explicitly to query annual
+  rows.
+
+#### Freshness tracking
+
+Every successful `FundamentalsConsumer` cycle bumps
+`instruments.last_fundamentals_ingest_at` inside the **same UoW** as the
+section writes (PLAN-0096 T-W1-02, **BP-545**). The column is observational
+only — no Kafka event, no outbox row. The bump is gated on at least one
+section having been materialised (a zero-section payload does not lie about
+freshness).
+
+Operators can identify stale tickers with a single index-friendly query:
+
+```sql
+SELECT symbol FROM instruments
+ WHERE last_fundamentals_ingest_at < NOW() - INTERVAL '7 days'
+    OR last_fundamentals_ingest_at IS NULL;
+```
+
+`NULL` means "never ingested" (e.g., the row was seeded by the
+OHLCV/quotes consumer before fundamentals arrived) and should typically be
+treated as "stale" by freshness alerts.
+
 **Quote NULL semantics (D-004)**: `Quote.bid`, `.ask`, `.last`, `.volume` are `Decimal | None` / `int | None`. `NULL` means "no data available"; `Decimal("0")` means "zero trading activity". `CanonicalQuote.from_dict()` and the quote repo both preserve `None` — no coercion to zero.
 
 The UoW is accessed via `self._current_uow` which is set by the base class before

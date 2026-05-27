@@ -1405,3 +1405,60 @@ async def test_upsert_snapshot_partial_payload_preserves_existing_values() -> No
     assert params_2["interest_coverage"] is None
     assert params_2["net_debt_to_ebitda"] is None
     assert params_2["credit_rating"] is None
+
+
+# ── PLAN-0096 T-W1-02 / BP-545: per-instrument freshness column ──────────────
+
+
+@pytest.mark.asyncio
+async def test_consumer_sets_last_fundamentals_ingest_at() -> None:
+    """On a successful section materialisation the consumer must bump
+    ``instruments.last_fundamentals_ingest_at`` via the InstrumentRepository
+    port (PLAN-0096 T-W1-02 / BP-545). Same UoW as the section writes — no
+    outbox event, no second transaction."""
+    instrument = _make_instrument()
+    mock_uow = AsyncMock()
+    mock_uow.instruments.find_by_symbol_exchange = AsyncMock(return_value=instrument)
+    mock_uow.instruments.touch_fundamentals_ingest_at = AsyncMock()
+    mock_uow.fundamentals.upsert_income_statement = AsyncMock()
+
+    raw = _make_fundamentals_json(["income_statement"])
+    mock_storage = AsyncMock()
+    mock_storage.get_bytes = AsyncMock(return_value=raw)
+
+    consumer = _make_consumer(mock_uow, mock_storage)
+    await consumer.process_message(None, _make_message(), {})
+
+    # Exactly one touch call, against the right instrument, with a tz-aware
+    # datetime close to "now".
+    mock_uow.instruments.touch_fundamentals_ingest_at.assert_awaited_once()
+    call = mock_uow.instruments.touch_fundamentals_ingest_at.call_args
+    assert call.args[0] == instrument.id
+    ts = call.args[1]
+    assert isinstance(ts, datetime)
+    assert ts.tzinfo is not None
+    # Within 5 s of now — proves utc_now() (not a stale timestamp).
+    assert abs((datetime.now(tz=UTC) - ts).total_seconds()) < 5.0
+
+
+@pytest.mark.asyncio
+async def test_consumer_does_not_touch_freshness_on_zero_section_payload() -> None:
+    """If section_count == 0 (e.g. payload contained only company_profile —
+    which is handled separately for instrument metadata enrichment but does
+    NOT count as a section here, or payload had only unknown keys) the
+    freshness column MUST NOT be bumped. Lying about freshness on a no-op
+    cycle defeats the purpose of the column."""
+    instrument = _make_instrument()
+    mock_uow = AsyncMock()
+    mock_uow.instruments.find_by_symbol_exchange = AsyncMock(return_value=instrument)
+    mock_uow.instruments.touch_fundamentals_ingest_at = AsyncMock()
+
+    # Payload with no known section keys → section_count stays 0.
+    raw = json.dumps({"unknown_section": {"x": 1}}).encode()
+    mock_storage = AsyncMock()
+    mock_storage.get_bytes = AsyncMock(return_value=raw)
+
+    consumer = _make_consumer(mock_uow, mock_storage)
+    await consumer.process_message(None, _make_message(), {})
+
+    mock_uow.instruments.touch_fundamentals_ingest_at.assert_not_awaited()
