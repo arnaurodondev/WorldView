@@ -425,6 +425,13 @@ read helper `query_fundamentals` accepts an optional `period_type` filter:
   inherit the mixed-periodicity trap that BP-540 / BP-543 fixed for income
   statement. Pass `period_type=PeriodType.ANNUAL` explicitly to query annual
   rows.
+- **`highlights`** — TTM-only by EODHD contract; intentionally **not**
+  filtered by `period_type`. The `GetFundamentalsHistoryUseCase` only reads
+  TTM-safe scalar fields (`PERatio`, `MarketCapitalization`) from this
+  section, and every row in the use-case response carries an explicit
+  `period_type="QUARTERLY"` label so downstream consumers (rag-chat tool
+  layer, LLM grounding) can never quote a TTM number as a quarterly figure
+  without seeing the mismatch. See PLAN-0097 T-W1-01 / **BP-577**.
 
 #### Freshness tracking
 
@@ -446,6 +453,24 @@ SELECT symbol FROM instruments
 `NULL` means "never ingested" (e.g., the row was seeded by the
 OHLCV/quotes consumer before fundamentals arrived) and should typically be
 treated as "stale" by freshness alerts.
+
+**No active refresh worker (BP-578)**: there is currently no scheduled
+worker polling EODHD for new fundamentals — refresh is opportunistic and
+depends on the market-ingestion scheduler / external triggers. Until a
+proper `FundamentalsRefreshWorker` lands (deferred to PLAN-0098), use
+`scripts/refresh_fundamentals.py` to fan out
+`POST /api/v1/ingest/trigger` calls for a configurable ticker set:
+
+```bash
+MARKET_INGESTION_URL=http://localhost:8084 \
+  python scripts/refresh_fundamentals.py --tickers AMD,NVDA
+```
+
+The script accepts `--dry-run`, custom ticker lists, and a `--provider`
+override. See its module docstring for the full operational contract and
+the 2026-05-27 audit
+(`docs/audits/2026-05-27-plan-0097-data-integrity-investigation.md` Part B)
+for the underlying freshness-gap analysis.
 
 **Quote NULL semantics (D-004)**: `Quote.bid`, `.ask`, `.last`, `.volume` are `Decimal | None` / `int | None`. `NULL` means "no data available"; `Decimal("0")` means "zero trading activity". `CanonicalQuote.from_dict()` and the quote repo both preserve `None` — no coercion to zero.
 
