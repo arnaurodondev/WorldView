@@ -125,3 +125,46 @@ class TestInferIntent:
 
     def test_get_entity_narrative_implies_RELATIONSHIP(self) -> None:
         assert infer_intent([_call("get_entity_narrative", entity_id="x")]) is QueryIntent.RELATIONSHIP
+
+
+class TestInferIntentContradiction:
+    """F-LIVE-O — CONTRADICTION pattern overrides tool-call inference."""
+
+    def test_what_contradicts_tesla_routes_to_CONTRADICTION_intent(self) -> None:
+        """Q7 from ITER-9 QA: "What contradicts the bull thesis on Tesla?"
+        was routing to GENERAL because the LLM picked search_documents.
+        The question-text pre-pass now catches the explicit ``contradict`` cue.
+        """
+        calls = [_call("search_documents", query="Tesla")]
+        intent = infer_intent(calls, question_text="What contradicts the bull thesis on Tesla right now?")
+        assert intent is QueryIntent.CONTRADICTION
+
+    def test_bull_thesis_against_x_routes_to_CONTRADICTION(self) -> None:
+        """The "X against Y" phrasing is a common contradiction probe."""
+        intent = infer_intent([], question_text="What argues against the bull case on NVIDIA?")
+        assert intent is QueryIntent.CONTRADICTION
+
+    def test_bear_case_routes_to_CONTRADICTION(self) -> None:
+        intent = infer_intent([_call("search_documents")], question_text="What is the bear case for Apple?")
+        assert intent is QueryIntent.CONTRADICTION
+
+    def test_general_question_does_not_match_contradiction(self) -> None:
+        """Regression guard: tame financial questions stay on their original path."""
+        intent = infer_intent(
+            [_call("get_fundamentals_history", entity_id="aaaa")],
+            question_text="What is Tesla's revenue last quarter?",
+        )
+        assert intent is QueryIntent.FINANCIAL_DATA
+
+    def test_contradiction_pattern_beats_compare_entities(self) -> None:
+        """CONTRADICTION priority 0 wins even when the LLM emits compare_entities."""
+        calls = [_call("compare_entities", entity_ids=["aaaa", "bbbb"])]
+        intent = infer_intent(calls, question_text="What contradicts the consensus on Tesla?")
+        assert intent is QueryIntent.CONTRADICTION
+
+    def test_no_question_text_falls_back_to_tool_inference(self) -> None:
+        """Backwards compat: callers that omit question_text get the original
+        tool-only behaviour — no CONTRADICTION match possible.
+        """
+        intent = infer_intent([_call("search_documents", query="x")])
+        assert intent is QueryIntent.FACTUAL_LOOKUP

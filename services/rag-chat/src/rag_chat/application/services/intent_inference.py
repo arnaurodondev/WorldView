@@ -32,12 +32,44 @@ per-entity sub-section formatting.
 
 from __future__ import annotations
 
+import re
 from typing import TYPE_CHECKING
 
 from rag_chat.domain.enums import QueryIntent
 
 if TYPE_CHECKING:
     from collections.abc import Iterable
+
+
+# F-LIVE-O (PLAN-0093 ITER-9): CONTRADICTION question-text patterns.
+#
+# The tool-call signal alone is insufficient for "what contradicts X" /
+# "bear case against X" questions because the LLM frequently picks general
+# search tools (search_documents) and the orchestrator routes the query to
+# GENERAL. The question itself carries the strongest signal, so we scan the
+# user message text BEFORE the tool-call inference. Compiled once at module
+# import for cheap re-execution on every turn.
+_CONTRADICTION_PATTERNS: tuple[re.Pattern[str], ...] = tuple(
+    re.compile(p, re.IGNORECASE)
+    for p in (
+        r"\b(contradict|contradicts|contradiction|contradictions|contradicted|contradicting)\b",
+        r"\b(disagree|disagrees|disagreement|refute|refutes|disprove|disproves|inconsistent|opposite)\b",
+        r"\bcounter[- ]?(argument|arguments|point|points|narrative)\b",
+        r"\b(bear|bearish)\s+(case|thesis|argument|view|side)\b",
+        r"\b(bull|bullish)\s+(case|thesis|argument|view|side)\s+(against|fail|wrong)\b",
+        r"\bwhat\s+(negates|undermines|argues against|speaks against|weakens)\b",
+        r"\b(argues|arguing|speaks|speaking|argument)\s+against\b",
+        r"\bagainst\s+the\s+(bull|bullish|bear|bearish)\s+(case|thesis|view)\b",
+    )
+)
+
+
+def _matches_contradiction(question_text: str | None) -> bool:
+    """Return True when ``question_text`` contains an explicit contradiction cue."""
+    if not question_text:
+        return False
+    return any(pat.search(question_text) for pat in _CONTRADICTION_PATTERNS)
+
 
 # Tool name → intent mapping for the single-call rules (priorities 2-5).
 # We keep this as a dict (not if-chains) so adding a new rule is a one-line
@@ -95,7 +127,7 @@ def _distinct_entity_ids(tool_calls: Iterable[object]) -> set[str]:
     return seen
 
 
-def infer_intent(tool_calls: Iterable[object]) -> QueryIntent:
+def infer_intent(tool_calls: Iterable[object], question_text: str | None = None) -> QueryIntent:
     """Return the inferred ``QueryIntent`` for the first tool-call batch.
 
     Empty input → ``QueryIntent.GENERAL`` (the LLM either answered
@@ -105,7 +137,18 @@ def infer_intent(tool_calls: Iterable[object]) -> QueryIntent:
         tool_calls: Iterable of ``ToolUseBlock``-shaped objects (only
             ``.name`` and ``.input`` attributes are read). We accept any
             duck-typed object so tests can pass plain ``MagicMock``s.
+        question_text: Optional user message text. When supplied it is
+            scanned for explicit CONTRADICTION cues BEFORE tool-call
+            inference (F-LIVE-O). Backwards compatible — callers that
+            omit it get the original tool-only behaviour.
     """
+    # ── Priority 0: explicit CONTRADICTION cue in question text ──────────
+    # Checked first because the LLM's tool selection often misses the
+    # "what contradicts X" pattern, leaving the intent as GENERAL even
+    # though the question is structurally a contradiction probe.
+    if _matches_contradiction(question_text):
+        return QueryIntent.CONTRADICTION
+
     # Materialise once — we iterate twice (compare check + tool-name pass).
     calls = list(tool_calls)
     if not calls:

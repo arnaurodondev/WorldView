@@ -246,6 +246,27 @@ _MACRO_PROMPT = (
     f"{_SAFETY}"
 )
 
+# F-LIVE-O (PLAN-0093 ITER-9): dedicated prompt for "what contradicts X" /
+# "bear case against X" questions. The previous routing sent these to GENERAL,
+# which produced unfocused answers that mixed bull and bear evidence. This
+# prompt forces the model to STRUCTURE the response around the contradiction —
+# headline + supporting evidence + counter-evidence — and to surface
+# explicit risk vectors rather than balanced narrative.
+_CONTRADICTION_PROMPT = (
+    "You are a financial intelligence analyst surfacing contradictions and counter-evidence.\n"
+    "Structure the response as a contradiction analysis:\n"
+    "  1. The thesis being questioned (one sentence)\n"
+    "  2. Specific contradicting evidence with citations [N]\n"
+    "  3. Risk vectors (what could break the thesis)\n"
+    "  4. Confidence — high/medium/low — with one-line rationale\n"
+    "Be direct. Do NOT hedge with balanced 'on the other hand' narrative —"
+    " the user has explicitly asked for what argues AGAINST the thesis.\n"
+    "Cite every contradicting claim with [N]. Refuse to fabricate contradictions"
+    " when the retrieved context contains none — say 'no contradicting evidence found' instead.\n"
+    f"{_V2_EXTRA_RULES}\n"
+    f"{_SAFETY}"
+)
+
 # ── EMAIL_DEEP_BRIEF special mode (not a QueryIntent — used by briefing endpoint) ──
 
 EMAIL_DEEP_BRIEF_PROMPT = (
@@ -275,6 +296,7 @@ _INTENT_PROMPTS: dict[str, str] = {
     "PORTFOLIO": _PORTFOLIO_PROMPT,
     "GENERAL": _GENERAL_PROMPT,
     "MACRO": _MACRO_PROMPT,
+    "CONTRADICTION": _CONTRADICTION_PROMPT,
 }
 
 

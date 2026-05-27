@@ -726,7 +726,11 @@ class ChatOrchestratorUseCase:
             if iteration == 0:
                 from rag_chat.application.services.intent_inference import infer_intent
 
-                intent = infer_intent(tool_calls)
+                # F-LIVE-O: pass the user's question text so the classifier
+                # can match explicit CONTRADICTION cues ("contradict",
+                # "bear case", "argue against") that the tool-call signal
+                # alone misses.
+                intent = infer_intent(tool_calls, question_text=request.message)
                 # Refresh the system message in-place so iteration 1 onward
                 # uses the per-intent style addendum. messages[0] is always
                 # the system prompt slot (set above before the loop began).
