@@ -179,8 +179,11 @@ export function ToolTraceDrawer({ open, onClose, turn }: ToolTraceDrawerProps): 
       // chat without pushing layout. Width 320px == 20rem matches spec.
       className={cn(
         "fixed inset-y-0 right-0 z-40 flex w-80 flex-col",
-        "border-l border-border bg-card text-foreground",
-        "shadow-xl",
+        // WHY border-l-2 (no shadow): the flat terminal palette bans
+        // drop shadows (`no-off-palette-colors` arch test). We bump the
+        // left border to 2px for clearer edge separation now that the
+        // shadow-xl elevation cue is gone (QA BL-03a).
+        "border-l-2 border-border bg-card text-foreground",
       )}
       role="complementary"
       aria-label="Tool trace debug drawer"
