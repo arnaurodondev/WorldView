@@ -90,7 +90,18 @@ class GetFundamentalsHistoryUseCase:
             period_type=PeriodType.QUARTERLY,
         )
 
-        # Fetch highlights for market_cap/pe_ratio (TTM snapshot)
+        # Fetch highlights for market_cap/pe_ratio (TTM snapshot).
+        #
+        # PLAN-0097 T-W1-01 (BP-577): HIGHLIGHTS rows are TTM-only by EODHD
+        # contract (no QUARTERLY/ANNUAL variants exist for this section). We
+        # intentionally do NOT pass period_type here because the column may be
+        # populated as ANNUAL in legacy rows (see audit
+        # ``2026-05-27-plan-0097-data-integrity-investigation.md`` §A1) and a
+        # strict ``QUARTERLY`` filter would shadow valid data. Instead we
+        # extract ONLY snapshot-safe scalar fields (PERatio, MarketCapitalization)
+        # downstream, and every returned row in ``result_periods`` carries an
+        # explicit ``period_type`` label so callers can never quote a TTM
+        # value as a quarterly figure without seeing it tagged as such.
         highlights_records = await self._uow.fundamentals_read.find_by_section(
             iid_str,
             FundamentalsSection.HIGHLIGHTS,
@@ -144,13 +155,26 @@ class GetFundamentalsHistoryUseCase:
                 {
                     "period": period_label,
                     "period_end_date": period_key,
+                    # PLAN-0097 T-W1-01 (BP-577): explicit periodicity label on
+                    # every row so the rag-chat tool layer (and ultimately the
+                    # LLM) can never quote a TTM/ANNUAL value in a quarterly
+                    # context without seeing the mismatch. income_records is
+                    # filtered to QUARTERLY above (line 87-91), so the revenue
+                    # / gross_profit / net_income fields below are guaranteed
+                    # quarterly. eps comes from EARNINGS_HISTORY which is
+                    # quarterly-only in EODHD's schema.
+                    "period_type": "QUARTERLY",
                     # Income statement fields (prefer income-stmt section, fall back to None)
                     "revenue": _safe_float(inc.get("totalRevenue") or inc.get("revenue")),
                     "gross_profit": _safe_float(inc.get("grossProfit")),
                     "net_income": _safe_float(inc.get("netIncome")),
                     # EPS from earnings section
                     "eps": _safe_float(data.get("epsActual") or data.get("eps")),
-                    # PE ratio and market cap from highlights (TTM, not per-period)
+                    # PE ratio and market cap from highlights (TTM, not per-period).
+                    # The TTM-ness of these two fields is documented at the call
+                    # site that consumes them (rag-chat MarketHandler). They are
+                    # snapshot ratios, not flow metrics, so cannot be confused
+                    # with revenue/net_income even if a model misreads them.
                     "pe_ratio": _safe_float(highlights_data.get("PERatio")),
                     "market_cap": _safe_float(highlights_data.get("MarketCapitalization")),
                 }

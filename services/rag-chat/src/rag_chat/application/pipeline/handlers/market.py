@@ -803,10 +803,25 @@ class MarketHandler(ToolHandler):
         ticker: str,
         periods: list[dict[str, Any]],
     ) -> str:
-        """Format quarterly fundamentals as a markdown table."""
-        header = f"{ticker} quarterly fundamentals\n"
-        header += "| Period | Revenue | Net Income | EPS | P/E |\n"
-        header += "|--------|---------|------------|-----|-----|\n"
+        """Format quarterly fundamentals as a markdown table.
+
+        PLAN-0097 T-W1-02 (BP-577): every row carries an explicit
+        ``Periodicity`` column so the LLM cannot quote a TTM/ANNUAL value as
+        quarterly without seeing the mismatch in the table itself. The use
+        case (``GetFundamentalsHistoryUseCase``) tags every output row with
+        ``period_type="QUARTERLY"`` (income_statement filter + EARNINGS_HISTORY
+        is quarterly-only). We default to ``QUARTERLY`` if the field is
+        missing rather than ``UNKNOWN`` to stay forward-compatible with any
+        future use-case version that drops the label; if the upstream ever
+        starts returning ANNUAL/TTM rows here, the prompt grounding will
+        surface the mismatch and the validator will catch quoted values that
+        don't align with the user's quarter intent. The header row also
+        states "Periodicity: QUARTERLY" so the LLM sees the contract before
+        reading the cells.
+        """
+        header = f"{ticker} quarterly fundamentals (Periodicity: QUARTERLY)\n"
+        header += "| Period | Periodicity | Revenue | Net Income | EPS | P/E |\n"
+        header += "|--------|-------------|---------|------------|-----|-----|\n"
         rows = []
         for p in periods:
             rev_val = p.get("revenue") or p.get("totalRevenue")
@@ -818,5 +833,12 @@ class MarketHandler(ToolHandler):
             pe_val = p.get("pe_ratio") or p.get("pe")
             pe = f"{float(pe_val):.1f}x" if pe_val else "—"
             period_label = p.get("period") or p.get("date") or "?"
-            rows.append(f"| {period_label} | {rev} | {ni} | {eps} | {pe} |")
+            # Explicit per-row periodicity tag. Fall back to QUARTERLY because
+            # this formatter is only ever called from the quarterly-history
+            # path; an ANNUAL row leaking here would be a contract violation
+            # that we want the LLM to see, but until BP-577 audit confirms a
+            # provenance for any non-QUARTERLY rows, QUARTERLY is the safer
+            # default than leaving the cell blank.
+            periodicity = p.get("period_type") or "QUARTERLY"
+            rows.append(f"| {period_label} | {periodicity} | {rev} | {ni} | {eps} | {pe} |")
         return header + "\n".join(rows)
