@@ -179,6 +179,21 @@ function buildChips(filters: FilterState): FilterChip[] {
       clear: (f) => ({ ...f, exchanges: undefined }),
     });
   }
+  if (filters.hasFundamentals === true) {
+    chips.push({
+      key: "hasFundamentals",
+      // Checkmark ✓ matches the plan §6.1 Block IB-L1 acceptance copy.
+      label: "Has Fundamentals ✓",
+      clear: (f) => ({ ...f, hasFundamentals: undefined }),
+    });
+  }
+  if (filters.hasOhlcv === true) {
+    chips.push({
+      key: "hasOhlcv",
+      label: "Has OHLCV ✓",
+      clear: (f) => ({ ...f, hasOhlcv: undefined }),
+    });
+  }
 
   // ── Technical ───────────────────────────────────────────────────────────
   if (filters.above50dMa) {

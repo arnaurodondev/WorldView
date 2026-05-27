@@ -87,6 +87,7 @@ import { IntelligenceFilterGroup } from "@/components/screener/IntelligenceFilte
 // so unit tests can exercise it without mounting the 766-LOC filter bar.
 import { CountryFilterRow } from "@/features/screener/components/CountryFilterRow";
 import { ExchangeFilterRow } from "@/features/screener/components/ExchangeFilterRow";
+import { CoverageToggles } from "@/features/screener/components/CoverageToggles";
 // PRD-0089 Wave I-A · T-IA-05: OQ-10 sector→industry cascading. The current
 // FilterState exposes a single `sector: string`, not a `sectors: string[]`
 // + `industries: string[]` pair. So the cascade is STAGED here: the helper
@@ -754,7 +755,11 @@ export function ScreenerFilterBar({
     patch({ exchanges: exchanges.length === 0 ? undefined : exchanges })
    }
   />
-  {/* CoverageToggles added by T-IB-03. */}
+  <CoverageToggles
+   hasFundamentals={form.hasFundamentals}
+   hasOhlcv={form.hasOhlcv}
+   onChange={(p) => patch(p)}
+  />
  </div>
 
  {/* ── INTELLIGENCE SECTION (T-IA-07) ─────────────────────────── */}
