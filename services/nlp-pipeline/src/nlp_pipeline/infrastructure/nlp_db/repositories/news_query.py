@@ -136,7 +136,20 @@ _ENTITY_ARTICLES_SQL = (
     "    SELECT DISTINCT em.doc_id AS article_id\n"
     "    FROM entity_mentions em\n"
     "    WHERE em.resolved_entity_id = :entity_id\n"
-    "      AND (em.tenant_id IS NULL OR em.tenant_id = CAST(:tenant_id AS UUID))\n"
+    # R35 (PLAN-0097 W4 T-W4-01): include three row classes for every tenant query:
+    #   1) legacy NULL-tenant rows (pre-PLAN-0096 W4 backfill)
+    #   2) rows owned by the requesting tenant
+    #   3) rows owned by the PUBLIC_TENANT_ID sentinel
+    #      (00000000-0000-0000-0000-000000000000) — assigned by the article
+    #      consumer when tenant resolution fails (BP-575). Without this third
+    #      OR-leg, every PUBLIC_TENANT_ID row is invisible to authenticated
+    #      callers and only reachable by anonymous queries — exactly the
+    #      population that we want to surface to every tenant.
+    "      AND (\n"
+    "          em.tenant_id IS NULL\n"
+    "          OR em.tenant_id = CAST(:tenant_id AS UUID)\n"
+    "          OR em.tenant_id = '00000000-0000-0000-0000-000000000000'::uuid\n"
+    "      )\n"
     "),\n"
     "article_windows AS (\n"
     + _WINDOW_PIVOT_FRAGMENT
