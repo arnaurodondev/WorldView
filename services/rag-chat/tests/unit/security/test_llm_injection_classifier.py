@@ -462,4 +462,120 @@ class TestFixLiveCCExplicitOverrideStillRejected:
             asyncio.run(pipeline.validate_input(message))
 
 
+# ── PLAN-0097 W2 T-W2-04: DEBUG_SKIP_CLASSIFIER short-circuit ────────────────
+
+
+class TestDebugSkipClassifier:
+    """T-W2-04: ``DEBUG_SKIP_CLASSIFIER`` env-var short-circuits ``classify()``.
+
+    The chat-eval harness needs a deterministic way to disable the Layer 2
+    LLM call so test runs are reproducible without DeepInfra non-determinism.
+    The env-var is gated on ``APP_ENV != "production"`` so it is a no-op in
+    prod — even if it leaks into the environment by accident.
+
+    Tests:
+    * When ``DEBUG_SKIP_CLASSIFIER=1`` and ``APP_ENV`` is dev/test/unset, the
+      classifier returns False immediately without calling the LLM.
+    * When ``APP_ENV=production``, the env-var is ignored and the normal
+      path executes — this is the security gate.
+    * Various truthy spellings (``true``, ``yes``, ``1``) all activate.
+    * Falsy/unset values do not activate.
+    """
+
+    @pytest.fixture(autouse=True)
+    def _clear_env(self, monkeypatch: pytest.MonkeyPatch) -> None:  # type: ignore[misc]
+        # Wipe both env-vars before each test so prior state cannot leak.
+        monkeypatch.delenv("DEBUG_SKIP_CLASSIFIER", raising=False)
+        monkeypatch.delenv("APP_ENV", raising=False)
+
+    def test_skip_flag_returns_false_without_calling_llm(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """DEBUG_SKIP_CLASSIFIER=1 + dev env → False; LLM never called."""
+        from rag_chat.application.security.llm_injection_classifier import LLMInjectionClassifier
+
+        monkeypatch.setenv("DEBUG_SKIP_CLASSIFIER", "1")
+        monkeypatch.setenv("APP_ENV", "development")
+
+        classifier = LLMInjectionClassifier(api_key="test-key-123")
+        # If _call_llm were invoked the test would fail (no network mock).
+        # Spy on it to assert it stays untouched.
+        classifier._call_llm = AsyncMock(return_value=True)  # type: ignore[method-assign]
+
+        result = asyncio.run(classifier.classify("any message"))
+
+        assert result is False
+        classifier._call_llm.assert_not_awaited()  # type: ignore[attr-defined]
+
+    @pytest.mark.parametrize("truthy", ["1", "true", "TRUE", "yes", "YES"])
+    def test_truthy_spellings_activate(self, monkeypatch: pytest.MonkeyPatch, truthy: str) -> None:
+        from rag_chat.application.security.llm_injection_classifier import LLMInjectionClassifier
+
+        monkeypatch.setenv("DEBUG_SKIP_CLASSIFIER", truthy)
+        monkeypatch.setenv("APP_ENV", "test")
+
+        classifier = LLMInjectionClassifier(api_key="test-key-123")
+        classifier._call_llm = AsyncMock(return_value=True)  # type: ignore[method-assign]
+
+        assert asyncio.run(classifier.classify("any")) is False
+        classifier._call_llm.assert_not_awaited()  # type: ignore[attr-defined]
+
+    @pytest.mark.parametrize("falsy", ["", "0", "false", "no", "off", "anything-else"])
+    def test_falsy_or_unset_does_not_short_circuit(self, monkeypatch: pytest.MonkeyPatch, falsy: str) -> None:
+        """When the flag is unset/false, the normal classifier path runs."""
+        from rag_chat.application.security.llm_injection_classifier import LLMInjectionClassifier
+
+        if falsy == "":
+            monkeypatch.delenv("DEBUG_SKIP_CLASSIFIER", raising=False)
+        else:
+            monkeypatch.setenv("DEBUG_SKIP_CLASSIFIER", falsy)
+        monkeypatch.setenv("APP_ENV", "development")
+
+        classifier = LLMInjectionClassifier(api_key="test-key-123")
+        # Make the LLM return SAFE so the test cares only about the path.
+        classifier._call_llm = AsyncMock(return_value=False)  # type: ignore[method-assign]
+
+        assert asyncio.run(classifier.classify("any")) is False
+        # The LLM MUST have been called — i.e. we did NOT short-circuit.
+        classifier._call_llm.assert_awaited_once()  # type: ignore[attr-defined]
+
+    def test_production_app_env_ignores_skip_flag(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """SECURITY GATE: APP_ENV=production → DEBUG_SKIP_CLASSIFIER is ignored.
+
+        This is the explicit production guard required by T-W2-04. Even
+        when DEBUG_SKIP_CLASSIFIER=1 leaks into a prod env, the classifier
+        MUST still execute the LLM call.
+        """
+        from rag_chat.application.security.llm_injection_classifier import LLMInjectionClassifier
+
+        monkeypatch.setenv("DEBUG_SKIP_CLASSIFIER", "1")
+        monkeypatch.setenv("APP_ENV", "production")
+
+        classifier = LLMInjectionClassifier(api_key="test-key-123")
+        # Sentinel: LLM returns True. If short-circuit had fired we'd see
+        # False; observing True proves the LLM path actually ran.
+        classifier._call_llm = AsyncMock(return_value=True)  # type: ignore[method-assign]
+
+        result = asyncio.run(classifier.classify("any message"))
+
+        assert result is True  # LLM verdict honoured, short-circuit ignored
+        classifier._call_llm.assert_awaited_once()  # type: ignore[attr-defined]
+
+
+class TestClassifierPromptVersion:
+    """T-W2-01 / P2 item 6: ``CLASSIFIER_PROMPT_VERSION`` constant exists.
+
+    The on-disk classifier cache (P2 W4 T-W4-02) will include this in its
+    key so a prompt rewrite invalidates stale cached verdicts. This test
+    pins the constant's presence so a future cleanup pass cannot quietly
+    drop it.
+    """
+
+    def test_version_constant_exported(self) -> None:
+        from rag_chat.application.security import llm_injection_classifier as mod
+
+        assert hasattr(mod, "CLASSIFIER_PROMPT_VERSION")
+        assert isinstance(mod.CLASSIFIER_PROMPT_VERSION, str)
+        assert mod.CLASSIFIER_PROMPT_VERSION.startswith("v")
+        assert "CLASSIFIER_PROMPT_VERSION" in mod.__all__
+
+
 # Needed for MagicMock usage above
