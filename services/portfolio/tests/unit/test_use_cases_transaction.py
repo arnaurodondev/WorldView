@@ -88,6 +88,9 @@ class FakeUserRepo(UserRepository):
     async def find_by_email_with_conflicting_external_id(self, email, current_sub):
         return None
 
+    async def find_by_id_any_tenant(self, user_id):
+        return self._user if self._user.id == user_id else None
+
 
 class FakePortfolioRepo(PortfolioRepository):
     def __init__(self, portfolio: Portfolio) -> None:

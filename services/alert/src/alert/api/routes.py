@@ -50,6 +50,11 @@ logger = get_logger(__name__)  # type: ignore[no-any-return]
 
 router = APIRouter(prefix="/api/v1", tags=["alerts"])
 
+# PLAN-0094 follow-up: a second router with the /internal/v1 prefix so the
+# service-caller endpoint lives outside the public /api/v1 namespace. Both
+# routers are included in app.py and share the same InternalJWTMiddleware.
+internal_router = APIRouter(prefix="/internal/v1", tags=["alerts-internal"])
+
 
 # ── REST: GET /api/v1/alerts/pending ─────────────────────────────────────────
 
@@ -95,6 +100,106 @@ async def get_pending_alerts(
             severity=str(alert.severity),
             # PLAN-0049 T-D-4-04: pass enrichment columns through so the frontend
             # never has to fall back to "<SEVERITY> signal" labels (F-D-006).
+            title=alert.title,
+            ticker=alert.ticker,
+            entity_name=alert.entity_name,
+            signal_label=alert.signal_label,
+        )
+        for p, alert in pairs
+    ]
+
+    return PendingAlertsResponse(
+        alerts=alert_responses,
+        total=len(alert_responses),
+        limit=limit,
+        offset=offset,
+    )
+
+
+# ── REST: GET /internal/v1/users/{user_id}/alerts/pending ────────────────────
+# PLAN-0094 follow-up: service-caller endpoint. The default ``/api/v1/alerts/pending``
+# derives ``user_id`` from the JWT ``sub`` claim (CurrentUserIdDep) — that works
+# for human callers but the rag-chat brief pre-generation worker holds a single
+# service-account JWT whose ``sub`` is ``service:rag-chat-brief-scheduler``,
+# not a real user UUID. This parallel endpoint accepts ``user_id`` in the path
+# and is gated by an allow-list of service callers (defence-in-depth: a valid
+# service token is necessary but not sufficient).
+_SERVICE_BRIEF_ALLOWED: frozenset[str] = frozenset(
+    {
+        "rag-chat-brief-scheduler",
+    },
+)
+
+
+@internal_router.get("/users/{user_id}/alerts/pending", response_model=PendingAlertsResponse)
+async def get_pending_alerts_for_user(
+    user_id: UUID,
+    request: Request,
+    uc: GetPendingAlertsUseCaseDep,
+    limit: int = Query(default=50, ge=1, le=200),
+    offset: int = Query(default=0, ge=0),
+    min_severity: str | None = Query(default=None),
+) -> PendingAlertsResponse:
+    """Return paginated unacknowledged alerts for an arbitrary user — system callers only.
+
+    Auth requires:
+      - InternalJWTMiddleware validates the X-Internal-JWT signature.
+      - JWT role must be "system" AND service_name must be in
+        ``_SERVICE_BRIEF_ALLOWED``.  Anything else returns 403.
+
+    Used by the rag-chat brief pre-generation worker so a single service-account
+    JWT can fetch alerts for many users without minting per-user tokens.
+    """
+    jwt_role = getattr(request.state, "role", "")
+    jwt_service_name = getattr(request.state, "service_name", "")
+
+    if jwt_role != "system" or jwt_service_name not in _SERVICE_BRIEF_ALLOWED:
+        # Audit-log denied attempts so abuse / mis-config is visible (R12).
+        logger.warning(  # type: ignore[no-any-return]
+            "alert_pending_service_caller_denied",
+            service_name=jwt_service_name,
+            role=jwt_role,
+            path_user_id=str(user_id),
+        )
+        raise HTTPException(status_code=403, detail="Service-token access required")
+
+    # Audit log every successful service-caller access — small volume, high
+    # signal (one record per brief generation per user).
+    logger.info(  # type: ignore[no-any-return]
+        "alert_pending_service_caller",
+        service_name=jwt_service_name,
+        path_user_id=str(user_id),
+    )
+
+    severity_filter: AlertSeverity | None = None
+    if min_severity is not None:
+        try:
+            severity_filter = AlertSeverity(min_severity)
+        except ValueError:
+            raise HTTPException(
+                status_code=422,
+                detail="Invalid min_severity: must be low|medium|high|critical",
+            ) from None
+
+    pairs = await uc.execute(
+        user_id=user_id,
+        limit=limit,
+        offset=offset,
+        min_severity=severity_filter,
+    )
+
+    # Mirror the response shape of /api/v1/alerts/pending exactly — frontend /
+    # rag-chat consumers expect the same JSON contract.
+    alert_responses = [
+        PendingAlertResponse(
+            pending_id=p.pending_id,
+            alert_id=p.alert_id,
+            entity_id=alert.entity_id,
+            alert_type=str(alert.alert_type),
+            source_topic=alert.source_topic,
+            payload=alert.payload,
+            created_at=p.created_at,
+            severity=str(alert.severity),
             title=alert.title,
             ticker=alert.ticker,
             entity_name=alert.entity_name,

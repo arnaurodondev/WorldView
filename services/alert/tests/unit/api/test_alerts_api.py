@@ -848,3 +848,96 @@ class TestWebSocketMidStreamExpiry:
         dispatch_errors = [entry for entry in logs if entry.get("event") == "websocket_dispatch_error"]
         assert dispatch_errors, f"expected websocket_dispatch_error log entry, got: {logs}"
         assert "send_failed" in dispatch_errors[0].get("error", "")
+
+
+# ── GET /internal/v1/users/{user_id}/alerts/pending ──────────────────────────
+# PLAN-0094 follow-up: service-caller endpoint used by the rag-chat brief
+# pre-generation worker. Allow-list-gated; user_id comes from the URL path.
+
+
+def _make_service_jwt(service_name: str, role: str = "system") -> str:
+    """Encode a HS256 service JWT (skip_verification path in unit tests)."""
+    return jwt.encode(
+        {
+            # service-token sub follows the ``service:<name>`` convention used
+            # by S9's POST /internal/v1/service-token.
+            "sub": f"service:{service_name}",
+            "tenant_id": "tenant-test",
+            "role": role,
+            "service_name": service_name,
+            "iss": "worldview-gateway",
+            "exp": 9999999999,
+        },
+        "secret",
+        algorithm="HS256",
+    )
+
+
+class TestGetPendingAlertsForUser:
+    @pytest.mark.unit
+    async def test_get_pending_alerts_for_user_accepts_service_token_in_allow_list(self) -> None:
+        """role=system + service_name in allow-list -> 200 with alerts for path user_id."""
+        app, _session = _make_app()
+        transport = ASGITransport(app=app)
+        path_user_id = uuid4()
+        alert = _make_alert()
+        pending = _make_pending(path_user_id, alert.alert_id)
+        token = _make_service_jwt("rag-chat-brief-scheduler")
+
+        with (
+            patch(_PENDING_REPO_PATH) as MockPendingRepo,
+            patch(_ALERT_REPO_PATH) as MockAlertRepo,
+        ):
+            MockPendingRepo.return_value.list_by_user = AsyncMock(return_value=[pending])
+            MockAlertRepo.return_value.get_by_id = AsyncMock(return_value=alert)
+
+            async with AsyncClient(transport=transport, base_url="http://test") as client:
+                resp = await client.get(
+                    f"/internal/v1/users/{path_user_id}/alerts/pending",
+                    headers={"X-Internal-JWT": token},
+                )
+
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["total"] == 1
+        assert str(data["alerts"][0]["alert_id"]) == str(alert.alert_id)
+
+    @pytest.mark.unit
+    async def test_get_pending_alerts_for_user_rejects_user_token(self) -> None:
+        """A regular user JWT (role=owner, no service_name) must get 403."""
+        app, _session = _make_app()
+        transport = ASGITransport(app=app)
+        path_user_id = uuid4()
+        token = _make_jwt(uuid4())  # user token (role=owner, no service_name)
+
+        with (
+            patch(_PENDING_REPO_PATH),
+            patch(_ALERT_REPO_PATH),
+        ):
+            async with AsyncClient(transport=transport, base_url="http://test") as client:
+                resp = await client.get(
+                    f"/internal/v1/users/{path_user_id}/alerts/pending",
+                    headers={"X-Internal-JWT": token},
+                )
+
+        assert resp.status_code == 403
+
+    @pytest.mark.unit
+    async def test_get_pending_alerts_for_user_rejects_service_token_not_in_allow_list(self) -> None:
+        """role=system but service_name not in allow-list -> 403."""
+        app, _session = _make_app()
+        transport = ASGITransport(app=app)
+        path_user_id = uuid4()
+        token = _make_service_jwt("some-other-service")
+
+        with (
+            patch(_PENDING_REPO_PATH),
+            patch(_ALERT_REPO_PATH),
+        ):
+            async with AsyncClient(transport=transport, base_url="http://test") as client:
+                resp = await client.get(
+                    f"/internal/v1/users/{path_user_id}/alerts/pending",
+                    headers={"X-Internal-JWT": token},
+                )
+
+        assert resp.status_code == 403

@@ -385,10 +385,13 @@ class InternalJWTMiddleware(BaseHTTPMiddleware):
             request.state.tenant_id = payload.get("tenant_id", "")
             request.state.user_id = payload.get("sub", "")
             request.state.role = payload.get("role", "")
+            # PLAN-0094 follow-up: parity with the verified-decode path.
+            request.state.service_name = payload.get("service_name", "")
         except jwt.DecodeError:
             request.state.tenant_id = ""
             request.state.user_id = ""
             request.state.role = ""
+            request.state.service_name = ""
         return None
 
     async def _jti_replay_check(
@@ -570,6 +573,11 @@ class InternalJWTMiddleware(BaseHTTPMiddleware):
             request.state.tenant_id = payload.get("tenant_id", "")
             request.state.user_id = payload.get("sub", "")
             request.state.role = payload.get("role", "")
+            # PLAN-0094 follow-up: expose ``service_name`` so downstream handlers
+            # can recognise system-identity callers (e.g. rag-chat brief
+            # pre-generation worker) issued via S9 POST /internal/v1/service-token.
+            # Empty string for user tokens — safe for all existing handlers.
+            request.state.service_name = payload.get("service_name", "")
 
             # Hook: per-service post-validate actions (e.g. ContextVar, raw token).
             await self._post_validate(request, token, payload)

@@ -33,16 +33,27 @@ pytestmark = [pytest.mark.unit, pytest.mark.asyncio]
 class _InjectStateMiddleware(BaseHTTPMiddleware):
     """Test-only middleware that sets request.state.tenant_id and user_id."""
 
-    def __init__(self, app: Any, tenant_id: UUID | None = None, user_id: UUID | None = None) -> None:
+    def __init__(
+        self,
+        app: Any,
+        tenant_id: UUID | None = None,
+        user_id: UUID | None = None,
+        role: str = "",
+        service_name: str = "",
+    ) -> None:
         super().__init__(app)
         self._tenant_id = tenant_id
         self._user_id = user_id
+        self._role = role
+        self._service_name = service_name
 
     async def dispatch(self, request: Any, call_next: Any) -> Any:
         if self._tenant_id is not None:
             request.state.tenant_id = str(self._tenant_id)
         if self._user_id is not None:
             request.state.user_id = str(self._user_id)
+        request.state.role = self._role
+        request.state.service_name = self._service_name
         return await call_next(request)
 
 
@@ -51,6 +62,8 @@ def _make_app(
     *,
     tenant_id: UUID | None = None,
     user_id: UUID | None = None,
+    role: str = "",
+    service_name: str = "",
 ) -> FastAPI:
     app = FastAPI()
 
@@ -60,8 +73,14 @@ def _make_app(
     app.dependency_overrides[get_read_uow] = override_uow
     app.include_router(internal_router)
 
-    if tenant_id is not None or user_id is not None:
-        app.add_middleware(_InjectStateMiddleware, tenant_id=tenant_id, user_id=user_id)
+    if tenant_id is not None or user_id is not None or role or service_name:
+        app.add_middleware(
+            _InjectStateMiddleware,
+            tenant_id=tenant_id,
+            user_id=user_id,
+            role=role,
+            service_name=service_name,
+        )
 
     return app
 
@@ -180,6 +199,77 @@ async def test_portfolio_context_user_not_found() -> None:
 
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
         resp = await client.get(f"/internal/v1/users/{user_id}/portfolio/context")
+
+    assert resp.status_code == 404
+
+
+async def test_get_portfolio_context_accepts_service_token_in_allow_list() -> None:
+    """PLAN-0094 follow-up: system-role + allow-listed service_name -> 200, tenant resolved from users table."""
+    uow = FakeUnitOfWork()
+    tenant_id, user_id, _instrument, _holding, _member = _seed_full_context(uow)
+    # Note: the system caller does NOT pass user_id in the JWT — sub is the
+    # service identity, not a real user — so the user-match check must be
+    # bypassed by the role+service_name allow-list path.
+    app = _make_app(
+        uow,
+        role="system",
+        service_name="rag-chat-brief-scheduler",
+    )
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        resp = await client.get(f"/internal/v1/users/{user_id}/portfolio/context")
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["user_id"] == str(user_id)
+    # tenant_id should be looked up from the users table, not from the JWT.
+    assert data["tenant_id"] == str(tenant_id)
+    assert len(data["holdings"]) == 1
+
+
+async def test_get_portfolio_context_rejects_service_token_not_in_allow_list() -> None:
+    """PLAN-0094 follow-up: system-role with non-allow-listed service_name -> 403."""
+    uow = FakeUnitOfWork()
+    _tenant_id, user_id, *_ = _seed_full_context(uow)
+    app = _make_app(
+        uow,
+        role="system",
+        service_name="evil-service",
+    )
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        resp = await client.get(f"/internal/v1/users/{user_id}/portfolio/context")
+
+    # Falls through to the user-token path; no user_id in state -> 403.
+    assert resp.status_code == 403
+
+
+async def test_get_portfolio_context_rejects_user_token_with_mismatched_sub() -> None:
+    """Regression guard: existing user-token path still rejects sub != path.user_id."""
+    uow = FakeUnitOfWork()
+    tenant_id, user_id, *_ = _seed_full_context(uow)
+    other_user_id = uuid4()
+    # role="" (default user) — must NOT match the system-caller allow-list path.
+    app = _make_app(uow, tenant_id=tenant_id, user_id=other_user_id)
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        resp = await client.get(f"/internal/v1/users/{user_id}/portfolio/context")
+
+    assert resp.status_code == 403
+
+
+async def test_get_portfolio_context_404_for_unknown_user_with_service_token() -> None:
+    """PLAN-0094 follow-up: service token + non-existent user_id -> 404."""
+    uow = FakeUnitOfWork()
+    unknown_user_id = uuid4()
+    app = _make_app(
+        uow,
+        role="system",
+        service_name="rag-chat-brief-scheduler",
+    )
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        resp = await client.get(f"/internal/v1/users/{unknown_user_id}/portfolio/context")
 
     assert resp.status_code == 404
 

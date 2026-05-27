@@ -106,6 +106,17 @@ class UserRepository(ABC):
         """
         ...
 
+    @abstractmethod
+    async def find_by_id_any_tenant(self, user_id: UUID) -> User | None:
+        """Look up a user by ID without a tenant filter.
+
+        PLAN-0094 follow-up: needed by service-token callers (rag-chat brief
+        pre-generation worker) that hold a system identity but no specific
+        tenant. Use this sparingly — every user-scoped read should normally
+        pass through the tenant filter for multi-tenant isolation.
+        """
+        ...
+
 
 class PortfolioRepository(ABC):
     @abstractmethod

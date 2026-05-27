@@ -204,6 +204,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     # Routers
     app.include_router(health.router)
     app.include_router(routes.router)
+    # PLAN-0094 follow-up: /internal/v1/* — service-caller endpoints.
+    app.include_router(routes.internal_router)
     app.include_router(dlq.router)
     app.include_router(email_routes.router)
 

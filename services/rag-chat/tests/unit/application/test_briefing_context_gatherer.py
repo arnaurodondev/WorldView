@@ -664,3 +664,48 @@ async def test_f155_filtered_search_lt_3_uses_unfiltered_fallback() -> None:
     # Unfiltered results are returned.
     assert len(ctx.relevant_chunks) == 2
     assert ctx.relevant_chunks[0].chunk_id == "chunk-001"
+
+
+# ── PLAN-0094 follow-up: worker uses service-token endpoint ─────────────────
+
+
+async def test_briefing_context_gatherer_uses_service_endpoint_when_configured() -> None:
+    """use_service_endpoint=True routes alerts through get_pending_alerts_for_user.
+
+    The worker holds a single service-account JWT (sub doesn't map to a real
+    user), so it must call the /internal/v1/users/{user_id}/alerts/pending
+    endpoint instead of the default /api/v1/alerts/pending.
+    """
+    from unittest.mock import AsyncMock as _AsyncMock
+
+    s1 = _make_s1(portfolio=_sample_portfolio())
+    s3 = _make_s3(batch_quotes=_sample_quotes(), instrument_id=_INSTRUMENT_ID)
+    s5 = _make_s5(alerts=_sample_alerts())
+    # Add the service-endpoint method to the mock so we can verify which path was used.
+    s5.get_pending_alerts_for_user = _AsyncMock(return_value=_sample_alerts())
+    s6 = _make_s6(news_articles=_sample_news_raw())
+    s7 = _make_s7(events=_sample_events())
+
+    gatherer = BriefingContextGatherer(s1=s1, s3=s3, s5=s5, s6=s6, s7=s7, use_service_endpoint=True)
+    await gatherer.gather_morning_context(_USER_ID, _TENANT_ID)
+
+    s5.get_pending_alerts_for_user.assert_called_once()
+    s5.get_pending_alerts.assert_not_called()
+
+
+async def test_briefing_context_gatherer_defaults_to_user_endpoint() -> None:
+    """Default use_service_endpoint=False keeps the existing handler path."""
+    from unittest.mock import AsyncMock as _AsyncMock
+
+    s1 = _make_s1(portfolio=_sample_portfolio())
+    s3 = _make_s3(batch_quotes=_sample_quotes(), instrument_id=_INSTRUMENT_ID)
+    s5 = _make_s5(alerts=_sample_alerts())
+    s5.get_pending_alerts_for_user = _AsyncMock(return_value=_sample_alerts())
+    s6 = _make_s6(news_articles=_sample_news_raw())
+    s7 = _make_s7(events=_sample_events())
+
+    gatherer = BriefingContextGatherer(s1=s1, s3=s3, s5=s5, s6=s6, s7=s7)
+    await gatherer.gather_morning_context(_USER_ID, _TENANT_ID)
+
+    s5.get_pending_alerts.assert_called_once()
+    s5.get_pending_alerts_for_user.assert_not_called()

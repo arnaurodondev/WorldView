@@ -165,7 +165,11 @@ async def _run_loop(settings: Settings) -> None:
     s6 = S6Client(base_url=settings.s6_base_url, timeout=settings.upstream_timeout_seconds)
     s7 = S7Client(base_url=settings.s7_base_url, timeout=settings.upstream_timeout_seconds)
 
-    context_gatherer = BriefingContextGatherer(s1=s1, s3=s3, s5=s5, s6=s6, s7=s7)
+    # PLAN-0094 follow-up: worker context — use the S5 service-token endpoint
+    # (/internal/v1/users/{user_id}/alerts/pending) so a single service JWT can
+    # fetch alerts for any user. The handler path (in app.py) keeps the default
+    # ``use_service_endpoint=False`` so live users still go through JWT-sub scoping.
+    context_gatherer = BriefingContextGatherer(s1=s1, s3=s3, s5=s5, s6=s6, s7=s7, use_service_endpoint=True)
     llm_chain = _build_llm_chain(settings, valkey)
 
     # WHY brief_archive=None: persistence is an API-layer concern; the worker

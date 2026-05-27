@@ -60,12 +60,21 @@ class BriefingContextGatherer:
         s5: S5Client,
         s6: S6Client,
         s7: S7Client,
+        *,
+        use_service_endpoint: bool = False,
     ) -> None:
         self._s1 = s1
         self._s3 = s3
         self._s5 = s5
         self._s6 = s6
         self._s7 = s7
+        # PLAN-0094 follow-up: when True, the worker path uses S5's
+        # /internal/v1/users/{user_id}/alerts/pending endpoint (service-token
+        # auth, user_id in URL). When False (default — handler/on-demand path),
+        # the existing /api/v1/alerts/pending endpoint is used (JWT sub scoping).
+        # The worker holds a single service-account JWT whose sub doesn't map
+        # to a real user, so it cannot rely on JWT-sub scoping.
+        self._use_service_endpoint = use_service_endpoint
 
     # ── Morning briefing context ─────────────────────────────────────────────
 
@@ -112,12 +121,22 @@ class BriefingContextGatherer:
 
         # ── 2. Parallel calls to S3, S5, S6, S7 ─────────────────────────────
         news_coro = self._fetch_top_news(internal_jwt=internal_jwt)
-        alerts_coro = self._s5.get_pending_alerts(
-            user_id,
-            tenant_id,
-            min_severity="medium",
-            x_internal_jwt=internal_jwt,
-        )
+        # PLAN-0094 follow-up: worker context uses the service-token endpoint
+        # (user_id in URL); handler context uses the existing JWT-sub endpoint.
+        if self._use_service_endpoint:
+            alerts_coro = self._s5.get_pending_alerts_for_user(
+                user_id,
+                tenant_id,
+                min_severity="medium",
+                x_internal_jwt=internal_jwt,
+            )
+        else:
+            alerts_coro = self._s5.get_pending_alerts(
+                user_id,
+                tenant_id,
+                min_severity="medium",
+                x_internal_jwt=internal_jwt,
+            )
         quotes_coro = self._s3.get_batch_quotes(instrument_ids) if instrument_ids else _empty_quotes()
         events_coro = self._fetch_events(entity_ids) if entity_ids else _empty_events()
 

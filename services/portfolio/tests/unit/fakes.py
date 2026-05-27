@@ -109,6 +109,9 @@ class FakeUserRepository(UserRepository):
                 return user
         return None
 
+    async def find_by_id_any_tenant(self, user_id: UUID) -> User | None:
+        return self._store.get(user_id)
+
 
 class FakeAuthAuditLogRepository(AuthAuditLogRepository):
     """In-memory audit log store (append-only)."""

@@ -14,6 +14,7 @@ from uuid import UUID
 
 from fastapi import APIRouter, HTTPException, Request
 
+from observability.logging import get_logger  # type: ignore[import-untyped]
 from portfolio.api.dependencies import ReadUoWDep, UoWDep
 from portfolio.api.schemas import (
     BatchEntityLookupRequest,
@@ -29,6 +30,20 @@ from portfolio.api.schemas import (
 from portfolio.application.use_cases.portfolio_context import PortfolioContextUseCase
 from portfolio.application.use_cases.user import GetUserUseCase
 from portfolio.domain.errors import EntityNotFoundError
+
+logger = get_logger(__name__)
+
+# PLAN-0094 follow-up: allow-list of service-token callers that may read any
+# user's portfolio context. Each entry corresponds to a ``service_name`` minted
+# by S9's POST /internal/v1/service-token (matched in S9's _ALLOWED_SERVICE_NAMES).
+# Defence-in-depth: keep this list short and explicit; an attacker who obtains
+# a service-token still cannot read user data unless the calling service_name
+# is on this list.
+_SERVICE_BRIEF_ALLOWED: frozenset[str] = frozenset(
+    {
+        "rag-chat-brief-scheduler",
+    },
+)
 
 internal_router = APIRouter(prefix="/internal/v1", tags=["internal"])
 
@@ -93,14 +108,37 @@ async def get_portfolio_context(
     """
     jwt_user_id = getattr(request.state, "user_id", None)
     jwt_tenant_id = getattr(request.state, "tenant_id", None)
+    jwt_role = getattr(request.state, "role", "") or ""
+    jwt_service_name = getattr(request.state, "service_name", "") or ""
 
-    if jwt_user_id is None or str(jwt_user_id) != str(user_id):
-        raise HTTPException(status_code=403, detail="JWT user_id must match path user_id")
+    # PLAN-0094 follow-up: service-token callers from the allow-list bypass the
+    # user-match check and look up the real tenant_id by user_id, because the
+    # service token carries a nil tenant_id claim.
+    is_system_caller = jwt_role == "system" and jwt_service_name in _SERVICE_BRIEF_ALLOWED
 
-    if not jwt_tenant_id:
-        raise HTTPException(status_code=401, detail="Missing tenant_id in JWT")
-
-    tenant_id = UUID(str(jwt_tenant_id))
+    if not is_system_caller:
+        # Existing user-token path: enforce sub == path.user_id and JWT tenant.
+        if jwt_user_id is None or str(jwt_user_id) != str(user_id):
+            raise HTTPException(status_code=403, detail="JWT user_id must match path user_id")
+        if not jwt_tenant_id:
+            raise HTTPException(status_code=401, detail="Missing tenant_id in JWT")
+        tenant_id = UUID(str(jwt_tenant_id))
+    else:
+        # System-caller path: look up the real tenant_id for this user. The
+        # service token has no real tenant claim (nil UUID), so we read the
+        # user's tenant from the users table. If the user doesn't exist we 404,
+        # matching the user-token behaviour for an unknown user_id.
+        user_entity = await uow.users.find_by_id_any_tenant(user_id)
+        if user_entity is None:
+            raise HTTPException(status_code=404, detail="User not found")
+        tenant_id = user_entity.tenant_id
+        # Audit log so ops can spot unexpected service-caller access.
+        logger.info(
+            "portfolio_context_service_caller",
+            service_name=jwt_service_name,
+            path_user_id=str(user_id),
+            resolved_tenant_id=str(tenant_id),
+        )
 
     uc = PortfolioContextUseCase()
     try:
