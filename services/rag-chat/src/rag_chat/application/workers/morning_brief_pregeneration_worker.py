@@ -204,11 +204,14 @@ class MorningBriefPregenerationWorker:
         # with NO X-Internal-JWT header and gets a 401.  The handler in
         # public_briefings.py:287 already sets the ContextVar from the
         # incoming request JWT; we mirror that pattern for the worker.
-        from rag_chat.infrastructure.clients.auth_context import set_current_jwt
+        # F-ARCH-001: import from application layer (canonical location) so
+        # the worker does not violate LAYER-APP-ISOLATION. The infrastructure
+        # module continues to re-export these names for backward compatibility.
+        from rag_chat.application.auth_context import set_current_jwt
 
         previous_jwt = None
         try:
-            from rag_chat.infrastructure.clients.auth_context import get_current_jwt
+            from rag_chat.application.auth_context import get_current_jwt
 
             previous_jwt = get_current_jwt()
         except Exception:
@@ -288,10 +291,10 @@ class MorningBriefPregenerationWorker:
         For the worker we keep the dependency surface small — a plain JSON dump
         works because the schema is additive (extra keys ignored on load).
         """
-        # WHY import the Pydantic model here (not at the top): keeps the worker's
-        # import-time footprint small and avoids a circular import with
-        # rag_chat.api.schemas at module load.
-        from rag_chat.api.schemas import PublicBriefingResponse
+        # F-ARCH-001: PublicBriefingResponse now lives in the application
+        # layer so importing it here does not violate LAYER-APP-ISOLATION.
+        # The api/schemas.py module re-exports it for backward compat.
+        from rag_chat.application.schemas import PublicBriefingResponse
 
         response = PublicBriefingResponse(
             narrative=result.get("content", result.get("narrative", "")),
