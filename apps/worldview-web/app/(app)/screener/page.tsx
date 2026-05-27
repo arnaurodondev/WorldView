@@ -70,6 +70,8 @@ import { FilterChipStrip } from "@/components/screener/FilterChipStrip";
 import { NLScreenerInput } from "@/components/screener/NLScreenerInput";
 import { RowHoverToolbar } from "@/components/screener/RowHoverToolbar";
 import { SCREENER_PRESETS } from "@/lib/screener/presets";
+// PRD-0089 Wave I-A · T-IA-02: extracted "Load N more" footer.
+import { LoadMoreBar } from "@/components/screener/LoadMoreBar";
 
 // ── Constants ──────────────────────────────────────────────────────────────────
 
@@ -435,25 +437,19 @@ export default function ScreenerPage() {
         )}
 
         {/* ── Load More ─────────────────────────────────────────────── */}
+        {/* T-IA-02: extracted to <LoadMoreBar>. The bar is sticky-bottom so
+         *  it stays visible while the user scrolls the AG-Grid above. We
+         *  still gate the mount on `canLoadMore` so a fully-loaded table
+         *  shows no footer at all (cleaner end-of-list state). */}
         {canLoadMore && (
-          <div className="shrink-0 border-t border-border flex items-center justify-center px-3 py-1.5 bg-card">
-            <button
-              type="button"
-              aria-label={isFetching ? "Loading more results" : `Load ${nextBatch} more results`}
-              aria-busy={isFetching}
-              onClick={handleLoadMore}
-              disabled={isFetching}
-              className="h-7 px-3 text-[10px] font-mono uppercase tracking-[0.06em] bg-background border border-border text-muted-foreground rounded-[2px] hover:text-foreground hover:border-primary/60 transition-colors disabled:cursor-not-allowed disabled:opacity-60"
-            >
-              {isFetching ? "Loading…" : `Load ${nextBatch} more`}
-            </button>
-            <span
-              className="ml-3 font-mono text-[10px] tabular-nums uppercase tracking-[0.06em] text-muted-foreground"
-              aria-live="polite"
-            >
-              {accumulator.length.toLocaleString()} of {serverTotal.toLocaleString()} loaded
-            </span>
-          </div>
+          <LoadMoreBar
+            canLoadMore={canLoadMore}
+            isFetching={isFetching}
+            accumulatorCount={accumulator.length}
+            total={serverTotal}
+            nextBatchSize={nextBatch}
+            onLoadMore={handleLoadMore}
+          />
         )}
       </div>
     </div>
