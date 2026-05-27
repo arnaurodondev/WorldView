@@ -253,15 +253,26 @@ describe("T-F-6-10 — Workspace tabs strip has fade gradient overlay", () => {
 
 describe("T-H-8-13 — Load More button shows loading state", () => {
   it("screener Load More button uses aria-busy + disabled when fetching", async () => {
+    // PRD-0089 Wave I-A · T-IA-02 extracted the Load More chrome from
+    // app/(app)/screener/page.tsx into components/screener/LoadMoreBar.tsx.
+    // The behaviour contract (aria-busy={isFetching} + disabled gate +
+    // "Loading…" copy) is preserved verbatim; we point the source-file
+    // assertion at the new location so this regression guard keeps
+    // working after the extraction.
     const fs = await import("fs");
     const path = await import("path");
     const filePath = path.join(
       process.cwd(),
-      "app/(app)/screener/page.tsx",
+      "components/screener/LoadMoreBar.tsx",
     );
     const src = fs.readFileSync(filePath, "utf8");
     expect(src).toMatch(/aria-busy=\{isFetching\}/);
-    expect(src).toMatch(/disabled=\{isFetching\}/);
+    // The new component computes `disabled = !canLoadMore || isFetching`
+    // and passes `disabled={disabled}`. The combined predicate STILL
+    // disables on isFetching — assert the combined-expression presence
+    // so the test catches a regression that drops isFetching from the
+    // predicate without coupling to the exact JSX prop spelling.
+    expect(src).toMatch(/!canLoadMore\s*\|\|\s*isFetching/);
     expect(src).toMatch(/Loading…/);
   });
 });
