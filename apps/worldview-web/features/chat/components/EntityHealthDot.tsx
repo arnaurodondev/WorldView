@@ -31,7 +31,7 @@
 // are not available during SSR. The dot itself would render fine on the
 // server but the tooltip would never trigger.
 
-import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 
 // Threshold breakpoints — identical to ContradictionStrip severity rules.
 // If these ever change, update BOTH files (or extract to a shared module).
@@ -75,25 +75,33 @@ export function EntityHealthDot({ score, dataCompleteness }: EntityHealthDotProp
     : null;
 
   return (
-    <Tooltip>
-      <TooltipTrigger asChild>
-        <span
-          // role=img + aria-label so screen readers announce the dot's
-          // semantic meaning instead of trying to describe an empty span.
-          role="img"
-          aria-label={`Entity health score ${safeScore.toFixed(2)}${
-            completenessLabel ? `, completeness ${completenessLabel}` : ""
-          }`}
-          data-cell
-          className={`inline-block h-2 w-2 rounded-full ${colourClass(safeScore)}`}
-        />
-      </TooltipTrigger>
-      <TooltipContent>
-        <span className="font-mono text-[10px] tabular-nums">
-          {safeScore.toFixed(2)}
-          {completenessLabel ? ` · ${completenessLabel}` : null}
-        </span>
-      </TooltipContent>
-    </Tooltip>
+    // WHY a self-contained TooltipProvider (not relying on an ancestor):
+    // the chat page does NOT wrap its tree in a TooltipProvider, and
+    // ChatContextRail mounts EntityHealthDot deep enough that adding a
+    // provider at a parent risks leaking the tooltip context to siblings
+    // that don't need it. A leaf-level provider keeps the component
+    // self-installable in any tree (same convention as IndexStrip).
+    <TooltipProvider delayDuration={300}>
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <span
+            // role=img + aria-label so screen readers announce the dot's
+            // semantic meaning instead of trying to describe an empty span.
+            role="img"
+            aria-label={`Entity health score ${safeScore.toFixed(2)}${
+              completenessLabel ? `, completeness ${completenessLabel}` : ""
+            }`}
+            data-cell
+            className={`inline-block h-2 w-2 rounded-full ${colourClass(safeScore)}`}
+          />
+        </TooltipTrigger>
+        <TooltipContent>
+          <span className="font-mono text-[10px] tabular-nums">
+            {safeScore.toFixed(2)}
+            {completenessLabel ? ` · ${completenessLabel}` : null}
+          </span>
+        </TooltipContent>
+      </Tooltip>
+    </TooltipProvider>
   );
 }
