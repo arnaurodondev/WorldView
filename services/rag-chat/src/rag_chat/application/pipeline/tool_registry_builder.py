@@ -120,9 +120,17 @@ def build_default_registry() -> ToolRegistry:
         ToolSpec(
             name="get_fundamentals_history",
             description=(
+                # PLAN-0097 T-W3-03: reciprocal anti-pattern callout. Iter-9
+                # chat-eval showed the LLM looping this singular tool for
+                # multi-ticker comparisons; the warning routes those cases to
+                # `get_fundamentals_history_batch` (5-10x faster).
                 "Fetches quarterly fundamental metrics (revenue, gross profit, net income, "
-                "EPS, P/E ratio, market cap) for a ticker over N periods. Use when the user "
-                "asks about revenue trends, EPS growth, or multi-quarter financial performance."
+                "EPS, P/E ratio, market cap) for a SINGLE ticker over N periods. Use when the "
+                "user asks about revenue trends, EPS growth, or multi-quarter financial "
+                "performance for ONE company. "
+                "**Do NOT call this in a loop over multiple tickers — use "
+                "`get_fundamentals_history_batch` instead.** Calling this tool N times in "
+                "sequence is 5-10x slower than one batch call and is a tool-selection bug."
             ),
             parameters=[
                 ParameterSpec(
@@ -878,11 +886,19 @@ def build_default_registry() -> ToolRegistry:
         ToolSpec(
             name="get_fundamentals_history_batch",
             description=(
+                # PLAN-0097 T-W3-03: strict imperative directive at the top.
+                # Soft phrasing ("use this when comparing") was insufficient —
+                # iter-9 chat-eval showed the LLM still iterated the singular
+                # tool. Bold "**Use this tool — NOT ...**" forces tool selection
+                # on the first turn.
+                "**Use this tool — NOT `get_fundamentals_history` — when the user mentions "
+                "2 or more tickers, OR when you have a list of tickers from a screener "
+                "result, OR when comparing multiple companies.** Calling "
+                "`get_fundamentals_history` in a loop is 5-10x slower and is a "
+                "tool-selection bug. "
                 "Fetches quarterly fundamental metrics (revenue, gross profit, net income, "
                 "EPS, P/E, market cap) for MULTIPLE tickers in a single call. "
-                "Use this when comparing or screening MULTIPLE tickers; calling the singular "
-                "get_fundamentals_history N times is 5-10x slower (each call is a separate "
-                "agent turn). Returns a per-ticker dict {ticker: {status: ok|error, periods?, "
+                "Returns a per-ticker dict {ticker: {status: ok|error, periods?, "
                 "reason?}}; partial failures (unknown ticker, missing data) do not fail the "
                 "whole batch. Cap: 25 tickers per call."
             ),

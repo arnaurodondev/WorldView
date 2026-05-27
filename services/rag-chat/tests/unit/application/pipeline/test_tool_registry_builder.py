@@ -319,6 +319,45 @@ def test_compare_entities_description_is_financial_only() -> None:
     assert "traverse_graph" in desc, "should redirect relationship questions away"
 
 
+# ── PLAN-0097 T-W3-03: fundamentals singular vs batch disambiguation ──────────
+# Iter-9 chat-eval saw the agent looping `get_fundamentals_history` 5+ times for
+# comparison questions instead of one `get_fundamentals_history_batch` call
+# (5-10x slower per audit §4). Both descriptions now carry mutually-reciprocal
+# anti-pattern callouts; these tests pin the keywords so a future copy-edit
+# can't silently regress the tool-selection signal.
+
+
+def test_get_fundamentals_history_description_warns_against_loop() -> None:
+    """Singular tool must explicitly redirect multi-ticker callers to the batch tool."""
+    desc = _spec("get_fundamentals_history").description
+    # Singular emphasis — the LLM keys on this to distinguish from batch.
+    assert "SINGLE" in desc or "single" in desc
+    # Reciprocal warning must name the batch tool by exact identifier.
+    assert "get_fundamentals_history_batch" in desc
+    # Must explicitly call out the loop anti-pattern (not just "use other tool").
+    assert "loop" in desc.lower(), "must explicitly warn against looping this tool"
+
+
+def test_get_fundamentals_history_batch_description_is_strict_directive() -> None:
+    """Batch tool must lead with a strict 'use this — not the singular' directive.
+
+    Prior soft phrasing ("use this when comparing") was insufficient — the LLM
+    kept iterating the singular tool. The new directive uses imperative voice
+    (`**Use this tool — NOT ...**`) at the very top of the description.
+    """
+    desc = _spec("get_fundamentals_history_batch").description
+    # Strict-directive marker — bold imperative at the top.
+    assert "**Use this tool" in desc, "must lead with a strict imperative directive"
+    # Must name the singular tool by exact identifier (so the LLM disambiguates).
+    assert "get_fundamentals_history" in desc
+    # Must call out all three trigger conditions from the task spec.
+    assert "2 or more tickers" in desc, "must mention the 2+ ticker trigger"
+    assert "screener" in desc.lower(), "must mention screener result trigger"
+    assert "comparing" in desc.lower(), "must mention comparison trigger"
+    # Must label the singular-loop pattern as a bug, not just slower.
+    assert "tool-selection bug" in desc.lower()
+
+
 def _read_module_source(module: Any) -> str:
     """Return the on-disk source of ``module`` for static-presence assertions.
 
