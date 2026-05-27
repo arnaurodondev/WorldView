@@ -507,7 +507,7 @@ export function MorningBriefCard() {
           data-testid="brief-stale-badge"
           className="flex h-4 shrink-0 items-center border-b border-border/40 px-1 text-[9px] text-muted-foreground"
         >
-          Previous day's brief — {staleGeneratedAtLabel}
+          Previous day&apos;s brief — {staleGeneratedAtLabel}
         </div>
       )}
 
