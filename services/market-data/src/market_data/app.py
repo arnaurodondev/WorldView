@@ -184,20 +184,24 @@ def _get_static_screen_fields() -> list:
             observed_max=None,
             null_fraction=0.0,
         ),
+        # PLAN-0098 W3 BP-585: booleans stored as 0/1 numeric for constraint compatibility
+        # (ck_screen_field_metadata_field_type CHECK admits only 'numeric'/'text').
         ScreenFieldMetadata(
             name="has_fundamentals",
             label="Has Fundamentals",
-            field_type="boolean",
+            field_type="numeric",
             unit=None,
             description="Instrument has at least one fundamentals data point",
             observed_min=None,
             observed_max=None,
             null_fraction=0.0,
         ),
+        # PLAN-0098 W3 BP-585: booleans stored as 0/1 numeric for constraint compatibility
+        # (ck_screen_field_metadata_field_type CHECK admits only 'numeric'/'text').
         ScreenFieldMetadata(
             name="has_ohlcv",
             label="Has OHLCV",
-            field_type="boolean",
+            field_type="numeric",
             unit=None,
             description="Instrument has at least one OHLCV bar",
             observed_min=None,

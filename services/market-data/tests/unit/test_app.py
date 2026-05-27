@@ -71,6 +71,25 @@ def test_routes_registered() -> None:
     assert "/api/v1/securities" in routes
 
 
+def test_static_screen_fields_have_constraint_compatible_field_type() -> None:
+    """Every static ScreenFieldMetadata must have field_type in {'numeric','text'}.
+
+    Regression test for BP-585 (PLAN-0098 W3): the DB check constraint
+    `ck_screen_field_metadata_field_type` only allows 'numeric' or 'text'.
+    Previously `has_fundamentals` and `has_ohlcv` used 'boolean', which caused
+    a CheckViolation every ~60s during the periodic refresh.
+    """
+    from market_data.app import _get_static_screen_fields
+
+    fields = _get_static_screen_fields()
+    assert fields, "expected at least one static screen field"
+    for field in fields:
+        assert field.field_type in {"numeric", "text"}, (
+            f"field {field.name!r} has invalid field_type={field.field_type!r} "
+            "(must be 'numeric' or 'text' per ck_screen_field_metadata_field_type)"
+        )
+
+
 def test_readyz_returns_503_when_db_down() -> None:
     """GET /readyz returns 503 when the DB is unreachable.
 
