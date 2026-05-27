@@ -22,6 +22,19 @@ export interface StreamingMessage {
   text: string;
   /** Whether the stream is still open (controls blinking cursor visibility). */
   active: boolean;
+  // ── PLAN-0089 K Block A T-03 — Q-9 metadata fields ────────────────────────
+  // WHY optional + on StreamingMessage: the `metadata` SSE event arrives
+  // before the answer is finalised; we accumulate provider/model/latency on
+  // the streaming bubble and copy them onto the persisted Message in
+  // finalize() so the side rail can show "served by deepinfra/deepseek-r1
+  // in 1.2s" without an extra round-trip.
+  intent?: string;
+  provider?: string;
+  model?: string;
+  latency_ms?: number;
+  message_id?: string;
+  /** Contradictions accumulated during this turn (Q-9 side-channel). */
+  contradictions?: Array<Record<string, unknown>>;
 }
 
 /**

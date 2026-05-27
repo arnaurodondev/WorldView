@@ -44,6 +44,14 @@ export interface ToolCallState {
   label: string;
   /** Running = currently executing; ok/empty/error = completed. */
   status: "running" | "ok" | "empty" | "error";
+  // ── PLAN-0089 K Block A T-03 ───────────────────────────────────────────────
+  // WHY optional flags: S8 may flag a tool call as a fallback (primary tool
+  // failed → retried with a degraded tool). We surface the flag so the UI can
+  // render a "fallback" chip without re-deriving the state from logs.
+  /** True when this tool_call is a fallback for a prior failed call. */
+  is_fallback?: boolean;
+  /** Tool name of the original (failed) call this is a fallback of. */
+  fallback_of?: string;
 }
 
 interface ToolCallIndicatorProps {

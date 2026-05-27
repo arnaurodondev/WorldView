@@ -393,12 +393,28 @@ export function useChatStream(args: UseChatStreamArgs): UseChatStreamResult {
         // final assistant message once the stream ends.
         let pendingCitations: Message["citations"] = [];
 
+        // ── PLAN-0089 K Block A T-03: Q-9 turn-scoped state ──────────────────
+        // WHY captured as locals (not React state): these are consumed exactly
+        // once when the turn finalises. Keeping them off React state avoids
+        // unnecessary re-renders during the token stream.
+        let pendingMetadata: {
+          intent?: string;
+          provider?: string;
+          model?: string;
+          latency_ms?: number;
+          message_id?: string;
+        } = {};
+        let pendingContradictions: Array<Record<string, unknown>> = [];
+
         // Helper: finalise the stream and promote the bubble to a message.
         const finalize = (interrupted = false) => {
           setStreaming(null);
           if (finalContent || pendingCitations.length > 0) {
             const assistantMessage: Message = {
-              message_id: crypto.randomUUID(),
+              // WHY prefer server-supplied message_id: if S8's `metadata` event
+              // carried a message_id we use it so client + server agree on the
+              // canonical id for future references (feedback, fallback_of).
+              message_id: pendingMetadata.message_id ?? crypto.randomUUID(),
               thread_id: threadId,
               role: "assistant",
               content: interrupted
@@ -406,6 +422,12 @@ export function useChatStream(args: UseChatStreamArgs): UseChatStreamResult {
                 : finalContent,
               created_at: new Date().toISOString(),
               citations: pendingCitations,
+              // Q-9 metadata copy-through — all optional, undefined when absent.
+              provider: pendingMetadata.provider,
+              model: pendingMetadata.model,
+              latency_ms: pendingMetadata.latency_ms,
+              contradictions:
+                pendingContradictions.length > 0 ? pendingContradictions : undefined,
             };
             setLocalMessages((prev) => [...prev, assistantMessage]);
           }
@@ -486,9 +508,17 @@ export function useChatStream(args: UseChatStreamArgs): UseChatStreamResult {
               } else if (eventName === "tool_call") {
                 // `tool_call` — a specific tool has been invoked. The data shape
                 // from S8 SSEEmitter (W11-3):
-                //   { type: "tool_call", tool: string, label: string, input: {}, status: "running" }
-                // We only use `tool`, `label`, and `status` for rendering.
-                const tc = data as { tool?: string; label?: string; status?: string };
+                //   { type: "tool_call", tool: string, label: string, input: {}, status: "running",
+                //     is_fallback?: bool, fallback_of?: string }   // PLAN-0089 K Q-9
+                // We only use `tool`, `label`, `status`, and the optional fallback
+                // flags for rendering.
+                const tc = data as {
+                  tool?: string;
+                  label?: string;
+                  status?: string;
+                  is_fallback?: boolean;
+                  fallback_of?: string;
+                };
                 if (tc.tool && tc.label) {
                   setActiveTools((prev) => [
                     // Replace any existing entry for the same tool name (idempotent).
@@ -499,6 +529,9 @@ export function useChatStream(args: UseChatStreamArgs): UseChatStreamResult {
                       name: tc.tool as string,
                       label: tc.label as string,
                       status: "running",
+                      // PLAN-0089 K T-03: forward fallback signal to view-model.
+                      is_fallback: tc.is_fallback,
+                      fallback_of: tc.fallback_of,
                     },
                   ]);
                 }
@@ -589,8 +622,8 @@ export function useChatStream(args: UseChatStreamArgs): UseChatStreamResult {
                 // CitationList component renders KG citations as plain text (no
                 // <a> tag) when url is null/undefined.
                 if (Array.isArray(data)) {
-                  pendingCitations = data.filter(
-                    (c): c is NonNullable<Message["citations"]>[number] => {
+                  pendingCitations = data
+                    .filter((c): c is Record<string, unknown> => {
                       if (typeof c !== "object" || c === null) return false;
                       const url = (c as Record<string, unknown>).url;
                       // Accept citations without a URL (knowledge-graph sources).
@@ -601,9 +634,68 @@ export function useChatStream(args: UseChatStreamArgs): UseChatStreamResult {
                         typeof url === "string" &&
                         /^(https?:|mailto:)/i.test(url)
                       );
-                    },
+                    })
+                    // PLAN-0089 K T-03: map CitationV2.id → legacy Citation.article_id
+                    // so existing legacy consumers keep working. Read order: c.id wins
+                    // (canonical going forward), fall back to c.article_id when the
+                    // backend still emits the legacy shape. Cast at the boundary
+                    // because Message.citations is still typed as the legacy Citation[].
+                    .map((c) => {
+                      const id =
+                        typeof c.id === "string"
+                          ? c.id
+                          : typeof c.article_id === "string"
+                            ? c.article_id
+                            : "";
+                      // WHY cast via unknown: the runtime object carries the
+                      // CitationV2 superset (title/url/source/relevance_score
+                      // plus kind), but Message.citations is still typed as the
+                      // legacy Citation shape (PLAN-0089-K-FU migrates the type).
+                      // The double cast is the standard TS escape hatch here.
+                      return { ...c, article_id: id, id } as unknown as NonNullable<
+                        Message["citations"]
+                      >[number];
+                    });
+                }
+              } else if (eventName === "metadata") {
+                // PLAN-0089 K T-03 — Q-9 turn metadata.
+                // Shape from S8 SSEEmitter.emit_metadata:
+                //   { intent, provider, model, latency_ms, message_id }
+                // We collect into pendingMetadata; finalize() copies it onto the
+                // persisted Message so the side rail can render "served by X in Yms"
+                // without an extra round-trip.
+                const md = data as Record<string, unknown>;
+                pendingMetadata = {
+                  intent: typeof md.intent === "string" ? md.intent : undefined,
+                  provider: typeof md.provider === "string" ? md.provider : undefined,
+                  model: typeof md.model === "string" ? md.model : undefined,
+                  latency_ms:
+                    typeof md.latency_ms === "number" ? md.latency_ms : undefined,
+                  message_id:
+                    typeof md.message_id === "string" ? md.message_id : undefined,
+                };
+                // Mirror onto the streaming bubble so any live indicator that wants
+                // to read provider/latency mid-stream can do so without a re-fetch.
+                setStreaming((prev) =>
+                  prev ? { ...prev, ...pendingMetadata } : prev,
+                );
+              } else if (eventName === "contradictions") {
+                // PLAN-0089 K T-03 — KG-sourced contradictions for the side rail.
+                // Shape: an array of records, opaque to the hook (the side rail
+                // renders them generically). We accept any array; the rendering
+                // layer is responsible for shape validation.
+                if (Array.isArray(data)) {
+                  pendingContradictions = data as Array<Record<string, unknown>>;
+                  setStreaming((prev) =>
+                    prev ? { ...prev, contradictions: pendingContradictions } : prev,
                   );
                 }
+              } else if (eventName === "final_answer") {
+                // PLAN-0089 K T-03: S8 emits a `final_answer` event after the last
+                // token. The token stream itself is already complete by then, so
+                // there is nothing for the UI to do — we acknowledge silently to
+                // suppress the legacy "unknown event" log path.
+                void data;
               } else if (eventName === "error") {
                 const msg =
                   typeof data.message === "string"
@@ -613,8 +705,9 @@ export function useChatStream(args: UseChatStreamArgs): UseChatStreamResult {
                 setStreaming(null);
                 return;
               }
-              // status, contradictions, metadata — no UI action needed yet;
-              // accepted silently so the parser never throws on them.
+              // status — no UI action needed yet; accepted silently so the
+              // parser never throws on it. (metadata / contradictions / final_answer
+              // are now handled above per PLAN-0089 K T-03.)
             } catch {
               // Non-JSON line — keep-alive comment, blank line, etc. Skip.
             }

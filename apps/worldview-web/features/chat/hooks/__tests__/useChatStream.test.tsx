@@ -739,6 +739,157 @@ describe("useChatStream", () => {
     expect(result.current.pendingAction).toBeNull();
   });
 
+  // ── PLAN-0089 K Block A T-03 — Q-9 metadata / contradictions / fallback ─────
+
+  it("metadata SSE event populates provider/model/latency on the assistant message", async () => {
+    // WHY: S8 emits an `event: metadata` frame with intent/provider/model/
+    // latency_ms/message_id around the time the token stream completes. The
+    // hook must capture these and persist them onto the finalised Message
+    // (Q-9 fields) so the side rail can show "served by deepinfra / 1234ms"
+    // without an extra round-trip.
+    const metadataPayload = JSON.stringify({
+      intent: "research",
+      provider: "deepinfra",
+      model: "deepseek-r1-distill-qwen-32b",
+      latency_ms: 1234,
+      message_id: "msg-server-001",
+    });
+    const frames = [
+      'data: {"text":"answer"}\n',
+      `event: metadata\ndata: ${metadataPayload}\n`,
+      "data: [DONE]\n",
+    ];
+    const { reader } = makeReader(frames);
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      statusText: "OK",
+      body: { getReader: () => reader },
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { args } = makeArgs();
+    const { result } = renderHook(() => useChatStream(args));
+
+    await act(async () => {
+      await result.current.send("research question");
+    });
+
+    expect(result.current.streaming).toBeNull();
+    expect(result.current.localMessages).toHaveLength(2);
+    const assistant = result.current.localMessages[1] as {
+      role: string;
+      content: string;
+      provider?: string;
+      model?: string;
+      latency_ms?: number;
+      message_id?: string;
+    };
+    expect(assistant.role).toBe("assistant");
+    expect(assistant.content).toBe("answer");
+    expect(assistant.provider).toBe("deepinfra");
+    expect(assistant.model).toBe("deepseek-r1-distill-qwen-32b");
+    expect(assistant.latency_ms).toBe(1234);
+    // WHY message_id matches server: when metadata carries a message_id we
+    // prefer it over the client-minted uuid so client + server agree on the
+    // canonical id for feedback / fallback_of references.
+    expect(assistant.message_id).toBe("msg-server-001");
+  });
+
+  it("contradictions SSE event stores items on the assistant message", async () => {
+    // WHY: KG-sourced contradictions arrive via a dedicated side-channel event
+    // so the chat hook must surface them on the finalised Message.contradictions
+    // array. The side rail renders them generically — the hook is opaque to
+    // the contradiction shape.
+    const contradictionPayload = JSON.stringify([
+      { claim_id: "c1", left: "A", right: "B", confidence: 0.83 },
+      { claim_id: "c2", left: "C", right: "D", confidence: 0.71 },
+    ]);
+    const frames = [
+      'data: {"text":"explained"}\n',
+      `event: contradictions\ndata: ${contradictionPayload}\n`,
+      "data: [DONE]\n",
+    ];
+    const { reader } = makeReader(frames);
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      statusText: "OK",
+      body: { getReader: () => reader },
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { args } = makeArgs();
+    const { result } = renderHook(() => useChatStream(args));
+
+    await act(async () => {
+      await result.current.send("any contradictions about NVDA?");
+    });
+
+    expect(result.current.localMessages).toHaveLength(2);
+    const assistant = result.current.localMessages[1] as {
+      contradictions?: Array<Record<string, unknown>>;
+    };
+    expect(assistant.contradictions).toBeDefined();
+    expect(assistant.contradictions).toHaveLength(2);
+    expect(assistant.contradictions![0].claim_id).toBe("c1");
+  });
+
+  it("tool_call with is_fallback flags forwards to activeTools entry", async () => {
+    // WHY: when S8's primary tool fails and the planner retries with a
+    // degraded tool, the second `tool_call` event carries is_fallback=true
+    // and fallback_of=<original tool name>. We surface both on the
+    // ToolCallState entry so the indicator can render a "fallback" chip
+    // without re-deriving state from logs.
+    const ar = makeAbortableReader();
+    const fetchMock = vi.fn().mockImplementation((_url, init: RequestInit) => {
+      init.signal?.addEventListener("abort", () => ar.controller.abort());
+      return Promise.resolve({
+        ok: true,
+        status: 200,
+        statusText: "OK",
+        body: { getReader: () => ar.reader },
+      });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { args } = makeArgs();
+    const { result } = renderHook(() => useChatStream(args));
+
+    let sendPromise!: Promise<void>;
+    act(() => {
+      sendPromise = result.current.send("research");
+    });
+
+    // Fallback tool_call frame — primary failed, retrying with a degraded tool.
+    await act(async () => {
+      ar.pushChunk(
+        'event: tool_call\ndata: {"type":"tool_call","tool":"keyword_search","label":"Keyword fallback...","input":{},"status":"running","is_fallback":true,"fallback_of":"semantic_search"}\n',
+      );
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    await waitFor(() => {
+      expect(result.current.activeTools).toHaveLength(1);
+    });
+    const tc = result.current.activeTools[0] as {
+      name: string;
+      is_fallback?: boolean;
+      fallback_of?: string;
+    };
+    expect(tc.name).toBe("keyword_search");
+    expect(tc.is_fallback).toBe(true);
+    expect(tc.fallback_of).toBe("semantic_search");
+
+    // Finish cleanly.
+    await act(async () => {
+      ar.pushChunk("data: [DONE]\n");
+      ar.finish();
+      await sendPromise;
+    });
+  });
+
   it("done event clears activeTools", async () => {
     // WHY: the done event should reset activeTools so indicators vanish once
     // the answer is rendered. Uses the abortable reader to verify pre-done state.
