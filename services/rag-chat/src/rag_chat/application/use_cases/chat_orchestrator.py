@@ -453,10 +453,14 @@ class ChatOrchestratorUseCase:
         Split from execute_streaming so the try/finally in execute_streaming
         correctly wraps all yields without Python generator/finally interaction issues.
         """
-        # ── Step 0: Input validation ─────────────────────────────────────────────
-        validated_message = await p.validate_input(request.message)
-
-        # ── Step 1: Completion cache check ──────────────────────────────────────
+        # ── Step 0: Completion cache check (FAST PATH — PLAN-0095 W2 T-W2-03) ───
+        # Cache check runs BEFORE validate_input so a cache hit short-circuits
+        # the 5-8 s LLM injection classifier.
+        # SECURITY: a cached completion was already classified on its FIRST
+        # write (the writer ran through validate_input → check_cache miss →
+        # classifier → cache set). Re-running the classifier on every read is
+        # defensive duplication, not a real gate — a poisoned message cannot
+        # enter the cache unless it already passed the classifier once.
         cached = await p.check_cache(request.message, request.thread_id)
         if cached:
             rag_cache_hits.labels(cache_type="completion").inc()
@@ -465,6 +469,9 @@ class ChatOrchestratorUseCase:
             yield p.emitter.emit_citations([])
             yield p.emitter.emit_contradictions([])
             return
+
+        # ── Step 1: Input validation (only on cache miss) ───────────────────────
+        validated_message = await p.validate_input(request.message)
 
         # ── Step 2: Rate limit ───────────────────────────────────────────────────
         await p.check_rate_limit(request.tenant_id)
