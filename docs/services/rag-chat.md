@@ -180,6 +180,15 @@ unchanged — R11: never break wire format.
 
 **PLAN-0095 W2 T-W2-03** reordered the orchestrator so `check_cache()` runs BEFORE `validate_input()`. On cache hit (~15% of traffic) the response is streamed straight from cache and the 5-8 s LLM injection classifier (`validate_input`) is skipped. Security argument: a cached completion was already classifier-validated on its first write (the writer ran through `validate_input → check_cache miss → classifier → cache.set`), so re-running the classifier on every read is defensive duplication, not a real gate.
 
+**PLAN-0097 W2 (BP-579)** widened the Layer 2 classifier SAFE bucket with an explicit relationship/graph-discovery exemplar (`How is X connected to Y? Show me the relationship paths.`) — these queries were intermittently labelled UNSAFE despite `temperature=0.0`, causing Q8 `INPUT_REJECTED` regressions in chat-eval. The system-prompt change is paired with a new `CLASSIFIER_PROMPT_VERSION = "v3"` constant (`llm_injection_classifier.py`) so the on-disk classifier-result cache (P2 W4 T-W4-02) invalidates stale verdicts when the prompt rolls forward. The regression gate is `services/rag-chat/tests/unit/security/test_llm_injection_classifier_benign_relationships.py` — 13 mocked + 13 live-smoke parametrised cases; the live-smoke set is gated by `INTEGRATION_TEST=1` + `RAG_CHAT_DEEPINFRA_API_KEY` so it catches model drift even when the mocked suite passes.
+
+**PLAN-0097 W2 T-W2-04** adds a `DEBUG_SKIP_CLASSIFIER` env-var short-circuit at the top of `LLMInjectionClassifier.classify()`. When set truthy (`1`, `true`, `yes`), the classifier returns False immediately and the LLM call is bypassed. **Security gate**: the env-var is honoured ONLY when `APP_ENV != "production"` (read at `classify()` invocation time, not import time) so a leaked flag in a prod environment is a no-op. The chat-eval conftest sets this alongside `RAG_COMPLETION_CACHE_DISABLED=true` so eval runs measure orchestrator behaviour without paying DeepInfra latency or flaking on the L2 model's non-determinism. The unit test `TestDebugSkipClassifier.test_production_app_env_ignores_skip_flag` pins the production guard.
+
+**Chat-eval grader policy (PLAN-0097 W2 T-W2-03 / BP-580)** — `tests/validation/chat_eval/grading.py`:
+- **Tool-name equivalence (`_TOOL_EQUIVALENTS`)**: `get_fundamentals_history ↔ get_fundamentals_history_batch` and `traverse_graph ↔ get_entity_paths` are treated as equivalent for the `required_tools_any_of` check. The batch tool retrieves the same logical data; PLAN-0097 W3 wires the intent map to prefer it for ≥2-ticker questions, so penalising the model for using it would be a false negative.
+- **INPUT_REJECTED relaxation**: when the response has `error.code == "INPUT_REJECTED"`, the missing-required-tool reason is suppressed (the upstream classifier rejected the request before the model could choose any tool). The error itself still drives the USELESS verdict via the existing `result.error is not None` branch.
+- **Refusal-vs-USELESS policy**: a SHORT (`< 300` chars) refusal with NO `[Nk]` citations is USELESS; a LONG or citation-bearing answer that mentions a refusal token is the agent doing the right thing under R19 (no fabrication) and is graded by its tool/citation correctness, not by the refusal token. Documented in the `grading.py` module docstring.
+
 ```
 Input → Cache check → [hit? short-circuit ✓] → Validate → Rate limit → Load history → Release UoW
       → emit_thinking(stage)
@@ -199,8 +208,8 @@ Input → Cache check → [hit? short-circuit ✓] → Validate → Rate limit �
 | Tool | Target | Description | Since |
 |------|--------|-------------|-------|
 | `get_price_history` | S3 | OHLCV price data for a ticker | v1 |
-| `get_fundamentals_history` | S3 | Quarterly financial metrics for ONE ticker | v1 |
-| `get_fundamentals_history_batch` | S3 | **PLAN-0095 W2** — quarterly metrics for MULTIPLE tickers in ONE call (cap 25). Backed by `POST /api/v1/fundamentals/batch`; collapses N×fundamentals tool-turns into one (5-10x latency reduction on screener-then-fundamentals workflows). | v4 |
+| `get_fundamentals_history` | S3 | Quarterly financial metrics for ONE ticker. **PLAN-0097 T-W3-03** added a reciprocal "Do NOT call in a loop — use `get_fundamentals_history_batch` instead" warning so the LLM stops iterating this for multi-ticker comparisons (iter-9 chat-eval misroute). | v1 |
+| `get_fundamentals_history_batch` | S3 | **PLAN-0095 W2** — quarterly metrics for MULTIPLE tickers in ONE call (cap 25). Backed by `POST /api/v1/fundamentals/batch`; collapses N×fundamentals tool-turns into one (5-10x latency reduction on screener-then-fundamentals workflows). **PLAN-0097 T-W3-03** strengthened the description to lead with a strict directive (`**Use this tool — NOT get_fundamentals_history — when …**`) so the planner picks it on the first turn. | v4 |
 | `search_documents` | S6 | Hybrid BM25+ANN full-text search (primary text retrieval) | v1 |
 | `get_entity_graph` | S7 | Egocentric graph for an entity | v1 |
 | `traverse_graph` | S7 | Multi-hop path finding (Cypher injection guard active) | v1 |

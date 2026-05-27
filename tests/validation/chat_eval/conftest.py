@@ -79,18 +79,36 @@ from tests.validation.chat_eval.harness import (
 
 @pytest.fixture(scope="session", autouse=True)
 def _disable_completion_cache() -> Iterator[None]:
-    """Force ``RAG_COMPLETION_CACHE_DISABLED=true`` for the chat-eval session."""
+    """Force eval-mode env vars for the chat-eval session.
 
-    key = "RAG_COMPLETION_CACHE_DISABLED"
-    prior = os.environ.get(key)
-    os.environ[key] = "true"
+    Sets two env vars for the duration of the run and restores prior state
+    on teardown:
+
+    * ``RAG_COMPLETION_CACHE_DISABLED=true`` — measure cold-path behaviour
+      so regressions surface immediately rather than after the TTL
+      expires (PLAN-0095 W3 T-W3-04).
+    * ``DEBUG_SKIP_CLASSIFIER=true`` — disable the Layer 2 LLM injection
+      classifier so chat-eval runs are not flaky against DeepInfra non-
+      determinism (PLAN-0097 W2 T-W2-04 — BP-579). The classifier itself
+      is APP_ENV-gated, so this is a no-op in production; in dev/test it
+      short-circuits ``classify()`` to return False.
+    """
+
+    eval_env: dict[str, str] = {
+        "RAG_COMPLETION_CACHE_DISABLED": "true",
+        "DEBUG_SKIP_CLASSIFIER": "true",
+    }
+    priors: dict[str, str | None] = {k: os.environ.get(k) for k in eval_env}
+    for key, value in eval_env.items():
+        os.environ[key] = value
     try:
         yield
     finally:
-        if prior is None:
-            os.environ.pop(key, None)
-        else:
-            os.environ[key] = prior
+        for key, prior in priors.items():
+            if prior is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = prior
 
 
 @pytest.fixture(scope="session")

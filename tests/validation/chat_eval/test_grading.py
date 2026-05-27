@@ -363,3 +363,225 @@ class TestGraderCacheHitAllowance:
             {"required_tools_any_of": ["traverse_graph"]},
         )
         assert any("missing required tool" in r for r in grade["reasons"]), grade["reasons"]
+
+
+# ── PLAN-0097 W2 T-W2-03: tool equivalence + INPUT_REJECTED + refusal policy ──
+
+
+class TestGraderToolEquivalence:
+    """T-W2-03 (a) / BP-578: ``get_fundamentals_history_batch`` satisfies the
+    singular ``get_fundamentals_history`` requirement (and vice-versa); the
+    KG ``traverse_graph`` ↔ ``get_entity_paths`` pair is symmetric.
+
+    Without this mapping, the model is penalised for choosing the (correct)
+    batch tool when the ground-truth assertion was written against the
+    singular name.
+    """
+
+    @staticmethod
+    def _result(tool_calls: list[str]):  # type: ignore[no-untyped-def]
+        from tests.validation.chat_eval.harness import ChatRunResult, ToolCall
+
+        return ChatRunResult(
+            question="anything",
+            status_code=200,
+            latency_s=0.1,
+            answer_text="AMD Q1 2026 revenue was $24.7B [N1].",
+            tool_calls=[ToolCall(name=n) for n in tool_calls],
+            metadata={},
+            raw_events=[{"event": "token", "data": {"text": "..."}}],
+        )
+
+    def test_batch_tool_satisfies_singular_requirement(self) -> None:
+        """Calling ``get_fundamentals_history_batch`` satisfies a requirement
+        written as ``get_fundamentals_history``."""
+        from tests.validation.chat_eval.grading import grade_response
+
+        result = self._result(tool_calls=["get_fundamentals_history_batch"])
+        grade = grade_response(
+            "anything",
+            result,
+            {"required_tools_any_of": ["get_fundamentals_history"]},
+        )
+        assert not any("missing required tool" in r for r in grade["reasons"]), grade["reasons"]
+
+    def test_singular_tool_satisfies_batch_requirement(self) -> None:
+        """And vice-versa — the equivalence is symmetric."""
+        from tests.validation.chat_eval.grading import grade_response
+
+        result = self._result(tool_calls=["get_fundamentals_history"])
+        grade = grade_response(
+            "anything",
+            result,
+            {"required_tools_any_of": ["get_fundamentals_history_batch"]},
+        )
+        assert not any("missing required tool" in r for r in grade["reasons"]), grade["reasons"]
+
+    def test_get_entity_paths_satisfies_traverse_graph(self) -> None:
+        """KG alias: ``get_entity_paths`` satisfies a ``traverse_graph`` requirement."""
+        from tests.validation.chat_eval.grading import grade_response
+
+        result = self._result(tool_calls=["get_entity_paths"])
+        grade = grade_response(
+            "anything",
+            result,
+            {"required_tools_any_of": ["traverse_graph"]},
+        )
+        assert not any("missing required tool" in r for r in grade["reasons"]), grade["reasons"]
+
+    def test_unrelated_tool_still_misses(self) -> None:
+        """Regression: a tool NOT in the equivalence set still triggers the reason."""
+        from tests.validation.chat_eval.grading import grade_response
+
+        result = self._result(tool_calls=["search_documents"])
+        grade = grade_response(
+            "anything",
+            result,
+            {"required_tools_any_of": ["get_fundamentals_history"]},
+        )
+        assert any("missing required tool" in r for r in grade["reasons"]), grade["reasons"]
+
+
+class TestGraderInputRejectedRelaxesToolRequirement:
+    """T-W2-03 (b): an ``INPUT_REJECTED`` error relaxes the missing-tool reason.
+
+    The upstream classifier short-circuited before the model could choose
+    any tool. Counting INPUT_REJECTED as USELESS (via the error path) is
+    correct; ALSO adding "missing required tool" noise is double-counting
+    and obscures the real failure mode.
+    """
+
+    @staticmethod
+    def _result_input_rejected():  # type: ignore[no-untyped-def]
+        from tests.validation.chat_eval.harness import ChatRunResult
+
+        return ChatRunResult(
+            question="anything",
+            status_code=400,
+            latency_s=0.4,
+            answer_text="",
+            tool_calls=[],
+            metadata={},
+            raw_events=[],
+            error={"code": "INPUT_REJECTED", "message": "PROMPT_INJECTION"},
+        )
+
+    def test_input_rejected_suppresses_missing_tool_reason(self) -> None:
+        from tests.validation.chat_eval.grading import grade_response
+
+        grade = grade_response(
+            "anything",
+            self._result_input_rejected(),
+            {"required_tools_any_of": ["get_fundamentals_history"]},
+        )
+        # The error reason MUST be present (USELESS via error event branch)…
+        assert any("INPUT_REJECTED" in r for r in grade["reasons"]), grade["reasons"]
+        # …but the missing-tool reason MUST NOT be appended on top.
+        assert not any("missing required tool" in r for r in grade["reasons"]), grade["reasons"]
+
+    def test_input_rejected_verdict_is_useless(self) -> None:
+        """A request rejected at the classifier gate counts as USELESS."""
+        from tests.validation.chat_eval.grading import USELESS, grade_response
+
+        grade = grade_response(
+            "anything",
+            self._result_input_rejected(),
+            {"required_tools_any_of": ["get_fundamentals_history"]},
+        )
+        assert grade["verdict"] == USELESS
+
+    def test_other_error_codes_do_not_suppress_missing_tool_reason(self) -> None:
+        """Only INPUT_REJECTED relaxes the tool-call requirement.
+
+        A generic provider failure should still surface the missing-tool
+        reason — the model attempted the request and failed downstream.
+        """
+        from tests.validation.chat_eval.grading import grade_response
+        from tests.validation.chat_eval.harness import ChatRunResult
+
+        result = ChatRunResult(
+            question="anything",
+            status_code=503,
+            latency_s=1.2,
+            answer_text="",
+            tool_calls=[],
+            metadata={},
+            raw_events=[],
+            error={"code": "PROVIDER_UNAVAILABLE", "message": "DeepInfra 502"},
+        )
+        grade = grade_response(
+            "anything",
+            result,
+            {"required_tools_any_of": ["get_fundamentals_history"]},
+        )
+        assert any("missing required tool" in r for r in grade["reasons"]), grade["reasons"]
+
+
+class TestGraderRefusalPolicy:
+    """T-W2-03 (c): refusal-vs-USELESS policy is explicit and documented.
+
+    Policy (mirrored from grading.py module docstring):
+    * SHORT refusal + no citations → USELESS (agent gave up).
+    * LONG OR citing answer with refusal token → NOT a refusal (honest
+      data-gap, R19 compliance) → verdict driven by required-tools etc.
+    """
+
+    @staticmethod
+    def _result(*, answer: str, tool_calls: list[str] | None = None):  # type: ignore[no-untyped-def]
+        from tests.validation.chat_eval.harness import ChatRunResult, ToolCall
+
+        return ChatRunResult(
+            question="anything",
+            status_code=200,
+            latency_s=0.1,
+            answer_text=answer,
+            tool_calls=[ToolCall(name=n) for n in (tool_calls or [])],
+            metadata={},
+            raw_events=[{"event": "token", "data": {"text": "..."}}],
+        )
+
+    def test_short_refusal_no_citation_is_useless(self) -> None:
+        """Canonical short refusal → USELESS verdict."""
+        from tests.validation.chat_eval.grading import USELESS, grade_response
+
+        result = self._result(answer="I cannot provide that information.")
+        grade = grade_response("anything", result, {})
+        assert grade["verdict"] == USELESS
+        assert any("refusal" in r for r in grade["reasons"]), grade["reasons"]
+
+    def test_long_citing_honest_data_gap_is_not_useless(self) -> None:
+        """A long, citing answer that includes a refusal token is the agent
+        being R19-compliant — NOT a refusal. Verdict is USEFUL when the
+        required tool fired."""
+        from tests.validation.chat_eval.grading import USEFUL, grade_response
+
+        answer = (
+            "AMD Q1 2026 revenue was $24.7B [N1] per get_fundamentals_history row 0. "
+            "Net income was $6.5B [N1]. EPS was $1.25 [N1]. "
+            "I cannot provide gross margin because that field is not in the retrieved data. "
+            "Investors should consult the company filings for the full margin breakdown, "
+            "particularly given the periodicity caveats highlighted in our notes."
+        )
+        assert len(answer) >= 300
+        from tests.validation.chat_eval.harness import ChatRunResult, ToolCall
+
+        # Build with a single emitted citation so the [N1] marker is in bounds.
+        result = ChatRunResult(
+            question="anything",
+            status_code=200,
+            latency_s=0.1,
+            answer_text=answer,
+            tool_calls=[ToolCall(name="get_fundamentals_history")],
+            citations=[{"snippet": "AMD revenue $24.7B per filing"}],
+            metadata={},
+            raw_events=[{"event": "token", "data": {"text": "..."}}],
+        )
+        grade = grade_response(
+            "anything",
+            result,
+            {"required_tools_any_of": ["get_fundamentals_history"]},
+        )
+        # NOT a refusal → no USELESS reason from the refusal path.
+        assert not any("refusal" in r for r in grade["reasons"]), grade["reasons"]
+        # And since the required tool fired, the verdict is USEFUL.
+        assert grade["verdict"] == USEFUL

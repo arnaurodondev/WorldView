@@ -24,11 +24,33 @@ Verdict rubric (the gate that flows into ``test_aggregate_score.py``):
              revenue $34.6B" before AMD reports). HARMFUL > USELESS:
              a confidently wrong answer is worse than no answer.
 * USELESS  — HTTP 503 / empty answer / refused without explanation /
-             no tools were called when the question demands them.
+             no tools were called when the question demands them /
+             error event (including INPUT_REJECTED from the upstream
+             classifier — see PLAN-0097 W2 T-W2-03).
 * MARGINAL — answered with some grounding but missing a required tool,
              a citation, or a key entity mention.
 * USEFUL   — answered with required tools, mentions all required
              entities, no hallucination, citations parseable.
+
+Refusal-vs-USELESS policy (PLAN-0097 W2 T-W2-03 (c) — explicit)
+---------------------------------------------------------------
+A response that says "I cannot find evidence..." is classified by the
+intent of the agent, not by token presence:
+
+* SHORT refusal (< 300 chars) with NO ``[Nk]`` citation markers →
+  USELESS. The agent gave up without engaging with the tools.
+* LONG (≥ 300 chars) OR citation-bearing answer that also includes a
+  refusal token → NOT a refusal. The agent did the tool work and is
+  honestly reporting a data gap (R19: never fabricate). Verdict is
+  USEFUL or MARGINAL depending on whether the required tool fired.
+* INPUT_REJECTED (upstream classifier) → USELESS. The model never got
+  to attempt the question. We do NOT also add a "missing required
+  tool" reason because the request never reached tool selection.
+
+Rationale: penalising honest data-gap acknowledgements with USELESS
+discourages R19 compliance and rewards fabrication; penalising upstream
+classifier failures as MARGINAL (via missing-tool reason) hides the
+real failure mode (the classifier rejected a safe query).
 
 This module imports :class:`NumericGroundingValidator` from the rag-chat
 service if reachable; otherwise it falls back to a lightweight stub that
@@ -57,6 +79,49 @@ from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from tests.validation.chat_eval.harness import ChatRunResult
+
+
+# ---------------------------------------------------------------------------
+# PLAN-0097 W2 T-W2-03 (a) — Tool-name equivalence (BP-580).
+#
+# Background: PLAN-0095 W2 introduced batched variants of the singular
+# fundamentals tool (``get_fundamentals_history_batch``) and PLAN-0097 W3
+# wires the intent map to prefer the batch tool when the user asks about
+# ≥2 tickers. Ground-truth assertions in ``questions.yaml`` were written
+# against the singular names BEFORE the batch tools existed; the grader
+# must accept either form as satisfying a singular requirement, otherwise
+# the model is penalised for choosing the (correct) batch tool.
+#
+# Add new entries here when a new singular/batch (or other equivalent
+# alias) pair lands. The mapping is INTENT-PRESERVING: each set MUST
+# contain only tools that retrieve the same logical data.
+# ---------------------------------------------------------------------------
+_TOOL_EQUIVALENTS: dict[str, set[str]] = {
+    # PLAN-0095 W2 T-W2-01 batch endpoint — same fundamentals payload,
+    # parallelized across tickers.
+    "get_fundamentals_history": {"get_fundamentals_history", "get_fundamentals_history_batch"},
+    "get_fundamentals_history_batch": {"get_fundamentals_history", "get_fundamentals_history_batch"},
+    # PLAN-0093 KG-traversal aliases — both return path/edge data.
+    "traverse_graph": {"traverse_graph", "get_entity_paths"},
+    "get_entity_paths": {"traverse_graph", "get_entity_paths"},
+}
+
+
+def _tool_requirement_satisfied(tools_called: list[str], required_tools: list[str]) -> bool:
+    """Return True if any *required_tools* entry (or any of its equivalents)
+    appears in *tools_called*.
+
+    A singular requirement like ``get_fundamentals_history`` is satisfied
+    by either ``get_fundamentals_history`` OR
+    ``get_fundamentals_history_batch`` — both retrieve the same logical
+    data (PLAN-0097 W2 T-W2-03 / BP-580).
+    """
+    called_set = set(tools_called)
+    for req in required_tools:
+        equivalents = _TOOL_EQUIVALENTS.get(req, {req})
+        if called_set & equivalents:
+            return True
+    return False
 
 
 # ---------------------------------------------------------------------------
@@ -349,8 +414,20 @@ def grade_response(
         and str(ev["data"].get("step", "")) == "cache_hit"
         for ev in result.raw_events
     )
+    # PLAN-0097 W2 T-W2-03 (b): INPUT_REJECTED at the classifier gate also
+    # relaxes the required-tool assertion — the model never got a chance to
+    # call any tool because the upstream classifier short-circuited the
+    # request. We still count INPUT_REJECTED as USELESS (see the
+    # ``result.error`` branch below); we just don't ALSO penalize it with
+    # "missing required tool" noise that would inflate the reason list.
+    input_rejected = bool(result.error is not None and str(result.error.get("code", "")) == "INPUT_REJECTED")
     required_tools = gt.get("required_tools_any_of") or []
-    if required_tools and not cache_hit and not any(t in tools_called for t in required_tools):
+    if (
+        required_tools
+        and not cache_hit
+        and not input_rejected
+        and not _tool_requirement_satisfied(tools_called, list(required_tools))
+    ):
         reasons.append(f"missing required tool from {required_tools!r}; got {tools_called!r}")
 
     min_distinct_tools = int(gt.get("min_distinct_tools", 0))
