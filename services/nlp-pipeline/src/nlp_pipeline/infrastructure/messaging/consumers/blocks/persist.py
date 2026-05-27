@@ -131,7 +131,18 @@ async def persist_artifacts(
     await _cr.add_batch(chunks)
     await _emr.add_batch(persistable_mentions)
     if ml.pending_resolution_audit:
-        await _mrr.add_batch(ml.pending_resolution_audit)
+        # F-DB-NEW-001 (BP-587): ``mention_resolutions.mention_id`` has a FK to
+        # ``entity_mentions.mention_id``.  Sub-floor mentions are filtered out of
+        # ``entity_mentions`` above (PLAN-0093 C-2), so their accompanying
+        # resolution-audit rows have no FK target → ``ForeignKeyViolationError``
+        # → the consumer treats it as retryable → ``content.article.stored.v1``
+        # stalls indefinitely (entity_mentions=0 for 26h until detected).
+        # Mirror the chunk_entity_mention fix: only persist audit rows whose
+        # mention_id survives the floor filter.
+        _persistable_ids = {m.mention_id for m in persistable_mentions}
+        _audit_to_write = [r for r in ml.pending_resolution_audit if r.mention_id in _persistable_ids]
+        if _audit_to_write:
+            await _mrr.add_batch(_audit_to_write)
     await _desr.upsert(stats)
     ml.routing_decision.processing_path = ml.final_path
     await _rdr.add(ml.routing_decision)

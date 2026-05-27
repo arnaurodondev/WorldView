@@ -20,6 +20,7 @@ from nlp_pipeline.domain.enums import MentionClass, RoutingTier
 from nlp_pipeline.domain.models import (
     Chunk,
     EntityMention,
+    MentionResolution,
     RoutingDecision,
     Section,
 )
@@ -74,14 +75,17 @@ def _routing_decision() -> RoutingDecision:
     )
 
 
-def _ml_result(mentions: list[EntityMention]) -> MLPhaseResult:
+def _ml_result(
+    mentions: list[EntityMention],
+    audit: list[MentionResolution] | None = None,
+) -> MLPhaseResult:
     """Build an MLPhaseResult skeleton that ``persist_artifacts`` consumes."""
     rd = _routing_decision()
     return MLPhaseResult(
         final_mentions=mentions,
         routing_decision=rd,
         final_path=MagicMock(),  # processing_path enum — never inspected by these tests
-        pending_resolution_audit=[],
+        pending_resolution_audit=list(audit or []),
         extraction_result={},  # type: ignore[arg-type]
         signals=[],
     )
@@ -280,6 +284,69 @@ def test_get_unresolved_batch_with_context_includes_confidence_filter() -> None:
 
     src = inspect.getsource(EntityMentionRepository.get_unresolved_batch_with_context)
     assert "confidence >= :min_confidence" in src
+
+
+# ── F-DB-NEW-001 (BP-587): resolution-audit FK floor filter ──────────────────
+
+
+@pytest.mark.asyncio
+async def test_resolution_audit_for_sub_floor_mentions_not_persisted() -> None:
+    """F-DB-NEW-001 (BP-587): mention_resolutions rows whose ``mention_id``
+    belongs to a sub-floor mention (filtered out of ``entity_mentions``) must
+    NOT be sent to ``MentionResolutionRepository.add_batch`` — otherwise
+    PostgreSQL raises ``ForeignKeyViolationError`` on
+    ``mention_resolutions_mention_id_fkey`` and the article consumer stalls.
+
+    This regression guards the chunk_entity_mention pattern (already applied at
+    line 149) against being silently re-introduced for the audit table.
+    """
+    settings = _make_settings(min_persist_floor=0.6)
+    sub_floor = _mention(0.5)
+    above_floor = _mention(0.8)
+    audit_for_sub = MentionResolution(mention_id=sub_floor.mention_id, stage=1, score=0.0, is_winner=False)
+    audit_for_above = MentionResolution(mention_id=above_floor.mention_id, stage=1, score=0.9, is_winner=True)
+
+    entity_mention_repo = _stub_async_repo()
+    section_repo = _stub_async_repo()
+    chunk_repo = _stub_async_repo()
+    outbox_repo = _stub_async_repo()
+    routing_repo = _stub_async_repo()
+    doc_stats_repo = _stub_async_repo()
+    chunk_em_repo = _stub_async_repo()
+    mention_res_repo = _stub_async_repo()
+
+    nlp_session = AsyncMock()
+    nlp_session.execute = AsyncMock()
+
+    await persist_artifacts(
+        nlp_session=nlp_session,
+        section_repo=section_repo,
+        chunk_repo=chunk_repo,
+        outbox_repo=outbox_repo,
+        routing_decision_repo=routing_repo,
+        entity_mention_repo=entity_mention_repo,
+        doc_entity_stats_repo=doc_stats_repo,
+        chunk_entity_mention_repo=chunk_em_repo,
+        mention_resolution_repo=mention_res_repo,
+        doc_id=uuid.uuid4(),
+        sections=[],
+        stats=MagicMock(),
+        chunks=[],
+        chunk_embs=[],
+        section_embs=[],
+        pending=None,
+        gliner_mention_floor=settings.gliner_mention_floor,
+        settings=settings,
+        ml=_ml_result([sub_floor, above_floor], audit=[audit_for_sub, audit_for_above]),
+    )
+
+    # Only the audit row whose mention survived the floor filter should be
+    # written — otherwise the FK to entity_mentions cannot resolve.
+    mention_res_repo.add_batch.assert_awaited_once()
+    written_audit = mention_res_repo.add_batch.await_args.args[0]
+    written_ids = [r.mention_id for r in written_audit]
+    assert above_floor.mention_id in written_ids
+    assert sub_floor.mention_id not in written_ids
 
 
 # Unused imports kept to satisfy module load (some test-only models used by helpers).
