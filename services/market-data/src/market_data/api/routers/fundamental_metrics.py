@@ -170,9 +170,28 @@ async def screen_instruments(
         "interest_coverage",
         "net_debt_to_ebitda",
     }
+    # Wave L-3: computed OHLCV-derived metrics are addressable as sort targets too.
+    # They are stored as fundamental_metrics rows (period_type=SNAPSHOT,
+    # section=computed_returns), so the existing per-metric LATERAL JOIN handles
+    # ORDER BY when the same name appears in ``filters[].metric``. To allow
+    # ``sort_by`` to be set even when no explicit filter is present, we extend
+    # the whitelist and the router will inject a no-bound ScreenFilter so the
+    # query layer projects the column.
+    computed_sort_fields = {
+        "dist_from_52w_high_pct",
+        "dist_from_52w_low_pct",
+        "return_1m",
+        "return_3m",
+        "return_6m",
+        "return_ytd",
+        "return_1y",
+        "return_3y",
+    }
     # SQL injection guard: sort_by must be a filter metric name, "ticker", or "name"
     if body.sort_by is not None:
-        valid_sort_fields = {"ticker", "name"} | {f.metric for f in body.filters} | snap_sort_fields
+        valid_sort_fields = (
+            {"ticker", "name"} | {f.metric for f in body.filters} | snap_sort_fields | computed_sort_fields
+        )
         if body.sort_by not in valid_sort_fields:
             raise HTTPException(
                 status_code=422,
@@ -208,6 +227,53 @@ async def screen_instruments(
         )
         for f in body.filters
     ]
+
+    # Wave L-3 (T-WL3-04): expand any populated computed-metric *_min/*_max
+    # shorthand fields into ScreenFilter(metric=<name>, min/max=...) entries.
+    # Collapse across all filter entries with first non-None — same pattern as
+    # the L-2 snap field handling in query_screen. This keeps the schema
+    # ergonomic ("give me return_1y >= 0.20") while reusing the existing
+    # latest-value-per-metric JOIN machinery.
+    computed_fields = (
+        "dist_from_52w_high_pct",
+        "dist_from_52w_low_pct",
+        "return_1m",
+        "return_3m",
+        "return_6m",
+        "return_ytd",
+        "return_1y",
+        "return_3y",
+    )
+    existing_filter_metrics = {f.metric for f in screen_filters}
+    for _field in computed_fields:
+        min_attr = f"{_field}_min"
+        max_attr = f"{_field}_max"
+        _min = next(
+            (getattr(f, min_attr) for f in body.filters if getattr(f, min_attr) is not None),
+            None,
+        )
+        _max = next(
+            (getattr(f, max_attr) for f in body.filters if getattr(f, max_attr) is not None),
+            None,
+        )
+        # Also inject a no-bound filter if sort_by references the metric so the
+        # column is projected for ORDER BY.
+        _needs_for_sort = body.sort_by == _field and _field not in existing_filter_metrics
+        if _min is None and _max is None and not _needs_for_sort:
+            continue
+        if _field in existing_filter_metrics:
+            # Caller already passed an explicit filter on this metric; skip the
+            # shorthand to avoid double-AND noise.
+            continue
+        screen_filters.append(
+            ScreenFilter(
+                metric=_field,
+                min_value=_min,
+                max_value=_max,
+                period_type="SNAPSHOT",
+            )
+        )
+
     results, total = await uc.execute(
         screen_filters,
         limit=body.limit,
