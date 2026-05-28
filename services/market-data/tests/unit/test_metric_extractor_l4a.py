@@ -81,8 +81,9 @@ def test_derive_populates_all_four_l4a_fields_from_full_payload() -> None:
 
     # target price is a USD passthrough
     assert snap["analyst_target_price"] == pytest.approx(245.5)
-    # raw numeric Rating passes through unchanged
-    assert snap["analyst_consensus_rating"] == pytest.approx(2.0)
+    # Raw numeric Rating 2.0 (EODHD "Buy") flips to bullish-up 4.0 per QA
+    # finding #1 (storage convention: higher = more bullish, matches text mapping).
+    assert snap["analyst_consensus_rating"] == pytest.approx(4.0)
     # PercentInstitutions 74.3 → 0.743 fraction (audit §7 risk addressed)
     assert snap["institutional_ownership_pct"] == pytest.approx(0.743, abs=1e-9)
     # ShortPercentOfFloat 0.034 already a fraction — passthrough
@@ -218,11 +219,31 @@ def test_consensus_rating_unknown_text_returns_none() -> None:
     assert _consensus_rating("???") is None
 
 
-def test_consensus_rating_numeric_passthrough() -> None:
-    """Numeric raw values pass through unchanged (EODHD's 1-5 native scale)."""
-    assert _consensus_rating(2.0) == 2.0
-    assert _consensus_rating(2) == 2.0
-    assert _consensus_rating("3.5") == 3.5
+@pytest.mark.parametrize(
+    ("numeric_value", "expected_stored"),
+    [
+        # EODHD native scale is inverted (1 = Strong Buy, 5 = Strong Sell).
+        # Storage convention is bullish-up (5 = Strong Buy). Each EODHD
+        # numeric is flipped via ``6 - x`` so the stored value matches the
+        # text mapping above.
+        (1.0, 5.0),  # EODHD "Strong Buy" numeric → bullish 5
+        (2.0, 4.0),  # EODHD "Buy" numeric → bullish 4
+        (3.0, 3.0),  # EODHD "Hold" → 3 (midpoint, invariant under 6 - x)
+        (4.0, 2.0),  # EODHD "Sell" numeric → bearish 2
+        (5.0, 1.0),  # EODHD "Strong Sell" numeric → bearish 1
+        (2, 4.0),  # int coercion path
+        ("3.5", 2.5),  # numeric-string coercion path
+    ],
+)
+def test_consensus_rating_numeric_unified_scale(numeric_value: object, expected_stored: float) -> None:
+    """Numeric inputs on EODHD's 1-5 scale are flipped to bullish-up storage (QA finding #1)."""
+    assert _consensus_rating(numeric_value) == pytest.approx(expected_stored)
+
+
+@pytest.mark.parametrize("out_of_range", [0.5, 0.0, 5.5, 6.0, -1.0, 10.0])
+def test_consensus_rating_numeric_out_of_range_returns_none(out_of_range: float) -> None:
+    """Numeric values outside the documented EODHD 1-5 band are dropped (QA finding #1)."""
+    assert _consensus_rating(out_of_range) is None
 
 
 def test_consensus_rating_map_covers_documented_labels() -> None:
