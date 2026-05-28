@@ -351,10 +351,14 @@ shows whether `second_llm_ms` dominates.
 - `services/market-data/.claude-context.md` — pitfall on iterator-
   positional batch result mapping (BP-587 latent fix).
 - `services/rag-chat/.claude-context.md` — note per-phase timing.
-- `docs/BUG_PATTERNS.md` — **BP-589** ("batch result iterator-positional
-  row-mix latent path; bind structurally by ticker"); **BP-590**
+- `docs/BUG_PATTERNS.md` — **BP-593** ("batch result iterator-positional
+  row-mix latent path; bind structurally by ticker"); **BP-594**
   ("intra-ticker section reads serialized inside use case; parallelize
-  via asyncio.gather").
+  via asyncio.gather"). _Reservation renumbered 2026-05-27 by PLAN-0099
+  W4 T-W4-03: BP-589/BP-590 were taken by PLAN-0089 Wave K (HEAD of
+  BUG_PATTERNS.md at audit time was BP-587; HEAD at W4 fix time is
+  BP-592 because PLAN-0099 W1 T-W1-01 already filed BP-592). See
+  `docs/BUG_PATTERNS.md` numbering note._
 - `docs/plans/TRACKING.md` — PLAN-0099 row update.
 
 ---
@@ -522,11 +526,12 @@ values).
 - `docs/services/nlp-pipeline.md` — pre-persist counter contract +
   cardinality cap.
 - `.claude-context.md` for each affected service — pitfall entries.
-- `docs/BUG_PATTERNS.md` — **BP-591** ("revenue Avro field mapping
+- `docs/BUG_PATTERNS.md` — **BP-595** ("revenue Avro field mapping
   dropped in fundamentals consumer; assert JSONB non-empty on ingest");
-  **BP-592** ("AGE sync worker not invoked post-restart; reconcile
+  **BP-596** ("AGE sync worker not invoked post-restart; reconcile
   script + worker registration audit"); **BP-578 → FIXED** (mark
-  status update if T-W2-02 ships the worker).
+  status update if T-W2-02 ships the worker). _Reservation renumbered
+  2026-05-27 by PLAN-0099 W4 T-W4-03 (BP-591/BP-592 already taken)._
 - `docs/plans/TRACKING.md` — PLAN-0099 row update.
 
 ---
@@ -627,9 +632,10 @@ or nlp-pipeline depending on where the ranking lives).
 - `docs/services/content-ingestion.md` — freshness coverage note if
   T-W3-02 Branch B → PLAN-0100 row.
 - `docs/BUG_PATTERNS.md` — BP entries only if a fix ships:
-  **BP-593** (Q1 prompt-tweak class if Branch A); **BP-594** (Q2
+  **BP-597** (Q1 prompt-tweak class if Branch A); **BP-598** (Q2
   ranking class if Branch A). Numbers reserved; do not file if Branch
-  B (those become PLAN-0100 BPs instead).
+  B (those become PLAN-0100 BPs instead). _Reservation renumbered
+  2026-05-27 by PLAN-0099 W4 T-W4-03 (BP-593/BP-594 reassigned to W2)._
 - `docs/plans/TRACKING.md` — PLAN-0099 row update + PLAN-0100 row
   draft if either task lands in Branch B.
 
@@ -700,16 +706,18 @@ test red.
 ##### T-W4-03: Doc and tracking cleanups (1 commit)
 
 **Type**: docs + bookkeeping
-**Audit refs**: §13.2 (folded into compounding §5 here — file BP-589/
-              590/591/592 not BP-584; BP-584 was a draft-plan reservation
-              that PLAN-0098 W2 actually used as BP-586 per TRACKING.md
-              line 40 — confirm numbering before commit).
-- **§13.2 BP numbering reconciliation**: verify `docs/BUG_PATTERNS.md`
-  current high-water mark is **BP-587**; PLAN-0099 BPs start at
-  **BP-589** (skipping BP-588 reserved by PLAN-0098 W5 T-W5-02 which
-  was never started — if it never ships, optionally re-reserve BP-588
-  for PLAN-0099 W1 T-W1-02). Document the renumbering in a one-paragraph
-  note at the top of BUG_PATTERNS.md.
+**Audit refs**: §13.2 (folded into compounding §5 here — files renumbered
+              BP-593..BP-598 as of 2026-05-27 because PLAN-0089 Wave K
+              consumed BP-588..BP-591 and PLAN-0099 W1 T-W1-01 took BP-592
+              before this commit landed; see numbering note at the top of
+              `docs/BUG_PATTERNS.md`).
+- **§13.2 BP numbering reconciliation**: PLAN-0099 was drafted when
+  `docs/BUG_PATTERNS.md` high-water was BP-587. By the time PLAN-0099
+  W4 fix lands, PLAN-0089 Wave K filed BP-588..BP-591 and PLAN-0099
+  W1 T-W1-01 filed BP-592. Renumber all PLAN-0099 W2/W3 reservations
+  to start at BP-593 (W2: 593/594/595/596; W3 Branch A: 597/598). The
+  shipped reservation map is documented in a one-paragraph note at the
+  top of `docs/BUG_PATTERNS.md`.
 - **§13.3 Observability counter** — **MOVED to W2 T-W2-04**, not
   re-implemented here.
 - **§13.4 Upstream `tenant_id=None` source trace** — defer to PLAN-0100

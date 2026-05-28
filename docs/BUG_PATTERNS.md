@@ -6,6 +6,18 @@
 > **When you hit a runtime error**: scan the Symptom column below before debugging from scratch.
 > **After fixing a new bug**: add an entry to the appropriate category file and update this index.
 
+> **2026-05-27 — BP numbering reconciliation (PLAN-0099 W4 T-W4-03, audit §13.2)**:
+> the live high-water mark is currently **BP-592**. Concurrent-plan
+> traffic outpaced PLAN-0099's draft-time reservations (PLAN-0089
+> Wave K filed BP-588..BP-591; PLAN-0099 W1 T-W1-01 filed BP-592
+> before W4 landed). The updated PLAN-0099 reservation map is:
+> **BP-593 / BP-594 / BP-595 / BP-596** for W2 (batch row-mix follow-ups,
+> revenue Avro, AGE sync); **BP-597 / BP-598** for W3 Branch-A fixes
+> if they ship. Anyone filing a new BP in the next 72h must (a) scan
+> for the current `grep -oE "BP-[0-9]+" docs/BUG_PATTERNS.md | sort -u
+> -t- -k2,2n | tail -1` value before picking a number, and (b)
+> document the new range here if they reserve a contiguous block.
+
 ---
 
 ## Categories
