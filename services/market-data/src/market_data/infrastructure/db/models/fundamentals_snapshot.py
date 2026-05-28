@@ -74,6 +74,42 @@ class InstrumentFundamentalsSnapshotModel(Base):
     # Credit rating string — e.g. "A+", "BBB", "BB-" — from EODHD CreditRating
     credit_rating: Mapped[str | None] = mapped_column(String(10), nullable=True)
 
+    # ── Wave L-4a snapshot fields (PLAN-0089, audit 2026-05-28-wave-l4) ────────
+    #
+    # All four columns are nullable for R11 forward-compat and because the
+    # underlying EODHD JSONB sections (analyst_consensus, share_statistics) are
+    # sparse: small-cap / foreign listings frequently lack analyst coverage and
+    # institutional-holder data.
+    #
+    # UNIT CONVENTION (documented in writer + extractor):
+    #   * ``institutional_ownership_pct`` and ``short_percent`` are stored as
+    #     DECIMAL FRACTIONS (e.g. 0.743 = 74.3%, 0.034 = 3.4%) to match the
+    #     fcf_margin convention from Wave L-2. The extractor normalises the
+    #     two EODHD source fields, which use divergent units (institutional
+    #     is already a percent, short is already a fraction).
+    #   * ``analyst_consensus_rating`` is stored on the 1-5 scale documented
+    #     in the writer (higher = more bullish per task spec; differs from
+    #     raw EODHD which is 1=StrongBuy..5=StrongSell, so the extractor
+    #     applies a static text→numeric mapping when EODHD returns a string).
+    #   * ``analyst_target_price`` is stored in USD (matches EODHD raw).
+
+    # Analyst consensus target price (USD) — EODHD AnalystRatings.TargetPrice
+    analyst_target_price: Mapped[float | None] = mapped_column(Numeric(18, 4), nullable=True)
+
+    # Analyst consensus rating on a 1-5 scale (higher = more bullish per
+    # WL-4a task spec). NUMERIC(4,2) accommodates non-integer averages.
+    analyst_consensus_rating: Mapped[float | None] = mapped_column(Numeric(4, 2), nullable=True)
+
+    # Institutional ownership as a decimal fraction (e.g. 0.743 = 74.3%).
+    # EODHD source field ``SharesStats.PercentInstitutions`` is reported as a
+    # percent (e.g. 74.3), so the extractor divides by 100 before storing.
+    institutional_ownership_pct: Mapped[float | None] = mapped_column(Numeric(8, 6), nullable=True)
+
+    # Short interest as a decimal fraction of float (e.g. 0.034 = 3.4%).
+    # EODHD source field ``SharesStats.ShortPercentOfFloat`` is already a
+    # fraction, so the extractor passes it through unchanged.
+    short_percent: Mapped[float | None] = mapped_column(Numeric(8, 6), nullable=True)
+
     # ── Source periodicity tracking (PLAN-0095 T-W1-04, BP-542, migration 020) ──
     # Records which periodicity (QUARTERLY / ANNUAL) the corresponding derived
     # source row came from. Nullable because: (a) rows written before migration
