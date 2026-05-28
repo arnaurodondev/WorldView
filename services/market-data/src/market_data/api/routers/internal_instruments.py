@@ -26,8 +26,13 @@ from fastapi import APIRouter, Depends, Query, Request
 
 from market_data.api.dependencies import require_internal_jwt
 from market_data.api.schemas.instruments import (
+    OhlcvCoveredItem,
+    OhlcvCoveredResponse,
     TopByMarketCapItem,
     TopByMarketCapResponse,
+)
+from market_data.application.use_cases.get_ohlcv_covered import (
+    query_ohlcv_covered,
 )
 from market_data.application.use_cases.get_top_by_market_cap import (
     query_top_by_market_cap,
@@ -102,5 +107,60 @@ async def get_top_by_market_cap(
         total=total,
         offset=offset,
         limit=n,
+        results=results,
+    )
+
+
+@router.get(
+    "/instruments/ohlcv-covered",
+    response_model=OhlcvCoveredResponse,
+)
+async def get_ohlcv_covered(
+    request: Request,
+    limit: Annotated[
+        int,
+        Query(
+            ge=1,
+            le=5000,
+            description=(
+                "How many instruments to return per page. Clamped to [1, 5000]. "
+                "Default 1000 — most callers (market-ingestion universe loader) "
+                "want the full set and will page until exhausted."
+            ),
+        ),
+    ] = 1000,
+    offset: Annotated[
+        int,
+        Query(ge=0, description="Pagination offset; clients walk pages with offset += limit."),
+    ] = 0,
+    _: Annotated[None, Depends(require_internal_jwt)] = None,
+) -> OhlcvCoveredResponse:
+    """Return instruments with ``has_ohlcv = TRUE``, ordered by symbol ASC.
+
+    PLAN-0089 Wave L-4b. Used by market-ingestion's insider-transactions
+    universe loader to replace the hardcoded 3-ticker seed
+    (AAPL/TSLA/AMZN) with the live OHLCV-covered universe (~3000 tickers
+    at full coverage; ~24k EODHD credits/month at weekly polling).
+
+    Auth: ``X-Internal-JWT`` required (same model as get_top_by_market_cap).
+    """
+    read_factory = request.app.state.read_session_factory
+    async with read_factory() as session:
+        total, rows = await query_ohlcv_covered(session, limit=limit, offset=offset)
+
+    results = [
+        OhlcvCoveredItem(
+            id=str(row["id"]),
+            symbol=row["symbol"],
+            exchange=row["exchange"],
+            country=row.get("country"),
+            currency_code=row.get("currency_code"),
+        )
+        for row in rows
+    ]
+    return OhlcvCoveredResponse(
+        total=total,
+        offset=offset,
+        limit=limit,
         results=results,
     )
