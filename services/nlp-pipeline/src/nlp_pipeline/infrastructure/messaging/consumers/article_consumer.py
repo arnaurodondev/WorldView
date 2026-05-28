@@ -91,6 +91,7 @@ from nlp_pipeline.infrastructure.messaging.consumers.blocks.temporal_events impo
 )
 from nlp_pipeline.infrastructure.metrics.prometheus import (
     record_article_processed,
+    record_pre_persist_tenant_substituted,
     s6_embeddings_created_total,
     s6_intel_commit_failures_total,
     s6_ner_mentions_total,
@@ -126,6 +127,7 @@ if TYPE_CHECKING:
     from messaging.valkey.client import ValkeyClient  # type: ignore[import-untyped]
     from nlp_pipeline.application.ports.repositories import ChunkTextStorePort
     from nlp_pipeline.config import Settings
+    from nlp_pipeline.domain.models import EntityMention
     from nlp_pipeline.infrastructure.backpressure.controller import BackpressureController
     from nlp_pipeline.infrastructure.nlp_db.repositories.outbox import OutboxRepository as OutboxRepositoryT
     from nlp_pipeline.infrastructure.valkey.watchlist_cache import WatchlistCache
@@ -164,6 +166,34 @@ def _is_valid_uuid(s: str) -> bool:
         return True
     except (ValueError, AttributeError):
         return False
+
+
+def _infer_block_source(mention: EntityMention) -> str:
+    """Best-effort classifier mapping an offending mention back to its block.
+
+    PLAN-0099 W2 T-W2-04 instrumentation.  Used only when the pre-persist
+    safety net fires (``tenant_id is None`` at persist boundary), so this is
+    not on the hot path.  We inspect domain fields that each block stamps:
+
+    * Block 9 PROVISIONAL path → ``provisional_queue_id`` is set
+    * Block 9 resolution path  → ``resolution_outcome`` is set
+    * Block 4 NER              → only ``ner_model_id`` is set
+    * Otherwise                → "unknown" (fall-through enum value)
+
+    Block 10 (deep extraction) does not currently emit ``EntityMention`` rows
+    but the enum reserves ``"deep_extraction"`` for forward-compat.
+
+    The label vocabulary is bounded by ``PRE_PERSIST_BLOCK_SOURCES`` in
+    ``infrastructure.metrics.prometheus`` to prevent Prometheus cardinality
+    explosion.
+    """
+    if mention.provisional_queue_id is not None:
+        return "novelty_backfill"
+    if mention.resolution_outcome is not None:
+        return "entity_resolution"
+    if mention.ner_model_id is not None:
+        return "ner"
+    return "unknown"
 
 
 class _NoOpUnitOfWork:
@@ -689,7 +719,8 @@ class ArticleProcessingConsumer(ValkeyDedupMixin, BaseKafkaConsumer[None]):
             # forever (BP-575/BP-586).  We substitute ``PUBLIC_TENANT_ID`` so
             # the row writes cleanly and emit a WARN with the mention metadata
             # so a forensic analyst can identify the offending upstream block.
-            _missing_tenant: list[uuid.UUID] = [m.mention_id for m in ml.final_mentions if m.tenant_id is None]
+            _missing_mentions = [m for m in ml.final_mentions if m.tenant_id is None]
+            _missing_tenant: list[uuid.UUID] = [m.mention_id for m in _missing_mentions]
             if _missing_tenant:
                 logger.warning(  # type: ignore[no-any-return]
                     "article_consumer.pre_persist_tenant_id_substituted",
@@ -700,6 +731,14 @@ class ArticleProcessingConsumer(ValkeyDedupMixin, BaseKafkaConsumer[None]):
                     sentinel=str(PUBLIC_TENANT_ID),
                     fallback_tenant_id=str(tenant_id) if tenant_id is not None else str(PUBLIC_TENANT_ID),
                 )
+                # PLAN-0099 W2 T-W2-04: attribute each substitution to the
+                # upstream block that produced the offending mention so
+                # operators can query Prometheus and identify the dominant
+                # source of null tenant_ids (feeds PLAN-0100 §13.4 root-cause).
+                # Cardinality is bounded by the fixed enum in
+                # ``metrics.prometheus.PRE_PERSIST_BLOCK_SOURCES``.
+                for _m in _missing_mentions:
+                    record_pre_persist_tenant_substituted(_infer_block_source(_m))
                 _fallback_tenant = tenant_id if tenant_id is not None else PUBLIC_TENANT_ID
                 for m in ml.final_mentions:
                     if m.tenant_id is None:

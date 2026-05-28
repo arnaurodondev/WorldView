@@ -378,3 +378,116 @@ class TestTenantIdPropagation:
                 f"post-NER stamp must fall back to PUBLIC_TENANT_ID when "
                 f"_run_pipeline is invoked with tenant_id=None; got {m.tenant_id!r}"
             )
+
+
+# ── PLAN-0099 W2 T-W2-04 — Prom counter for substitution attribution ─────────
+
+
+class TestPrePersistTenantIdSubstitutedCounter:
+    """The pre-persist safety net MUST attribute each substitution to the
+    upstream block that produced the offending mention so operators can query
+    Prometheus and target the dominant null-tenant source for root-cause
+    remediation (PLAN-0100 §13.4).
+
+    Label cardinality is bounded by the fixed enum ``PRE_PERSIST_BLOCK_SOURCES``
+    in ``infrastructure.metrics.prometheus`` — anything else is coerced to
+    ``"unknown"``.
+    """
+
+    @pytest.mark.asyncio
+    async def test_substitution_path_increments_counter_with_block_source_label(self) -> None:
+        """A leaked mention that fires the safety net must increment the
+        counter exactly once, labelled by the inferred block source.
+
+        We construct three mentions, each with a different upstream-block
+        signature (resolution_outcome, provisional_queue_id, and a pure
+        "unknown" one with no signal at all) and assert the counter
+        increments by 1 on each of the three labels.
+        """
+        from nlp_pipeline.domain.enums import ResolutionOutcome
+        from nlp_pipeline.infrastructure.metrics.prometheus import (
+            nlp_pipeline_pre_persist_tenant_id_substituted_total,
+        )
+
+        consumer = _make_consumer()
+        doc_id = uuid.uuid4()
+        real_tenant = uuid.uuid4()
+
+        # NER-clean mention so we have a baseline pre-stamped mention.
+        ner_mention = _make_mention(doc_id, tenant_id=real_tenant)
+
+        # Block-9 entity_resolution leak — has resolution_outcome set.
+        er_mention = _make_mention(doc_id, tenant_id=None)
+        er_mention.resolution_outcome = ResolutionOutcome.AUTO_RESOLVED
+
+        # Block-9 novelty/PROVISIONAL leak — has provisional_queue_id set.
+        nb_mention = _make_mention(doc_id, tenant_id=None)
+        nb_mention.provisional_queue_id = uuid.uuid4()
+
+        # Unknown leak — no signal at all (no ner_model_id, no resolution).
+        unk_mention = _make_mention(doc_id, tenant_id=None)
+
+        ml_final_mentions = [ner_mention, er_mention, nb_mention, unk_mention]
+
+        # Snapshot counter values per label BEFORE the pipeline runs so the
+        # test is hermetic against other tests in the same process.
+        def _val(label: str) -> float:
+            return nlp_pipeline_pre_persist_tenant_id_substituted_total.labels(block_source=label)._value.get()
+
+        before = {lbl: _val(lbl) for lbl in ("ner", "entity_resolution", "novelty_backfill", "unknown")}
+
+        await _drive_pipeline(
+            consumer,
+            doc_id=doc_id,
+            tenant_id=real_tenant,
+            ner_mentions=[ner_mention],
+            ml_final_mentions=ml_final_mentions,
+        )
+
+        after = {lbl: _val(lbl) for lbl in ("ner", "entity_resolution", "novelty_backfill", "unknown")}
+
+        # Three substitutions, three different labels — each +1, "ner" untouched
+        # (NER mention was already stamped; no substitution fired for it).
+        assert after["entity_resolution"] - before["entity_resolution"] == 1
+        assert after["novelty_backfill"] - before["novelty_backfill"] == 1
+        assert after["unknown"] - before["unknown"] == 1
+        assert after["ner"] - before["ner"] == 0
+
+    @pytest.mark.asyncio
+    async def test_non_substitution_path_does_not_increment_counter(self) -> None:
+        """When every mention already has a non-None tenant_id at the persist
+        boundary, the safety net must NOT fire and the counter must NOT be
+        incremented on any label."""
+        from nlp_pipeline.infrastructure.metrics.prometheus import (
+            PRE_PERSIST_BLOCK_SOURCES,
+            nlp_pipeline_pre_persist_tenant_id_substituted_total,
+        )
+
+        consumer = _make_consumer()
+        doc_id = uuid.uuid4()
+        real_tenant = uuid.uuid4()
+
+        # NER returns mentions; post-NER stamp at _run_pipeline will set
+        # tenant_id=real_tenant on each — they reach persist clean.
+        ner_mentions = [_make_mention(doc_id, tenant_id=None) for _ in range(3)]
+
+        def _val(label: str) -> float:
+            return nlp_pipeline_pre_persist_tenant_id_substituted_total.labels(block_source=label)._value.get()
+
+        before = {lbl: _val(lbl) for lbl in PRE_PERSIST_BLOCK_SOURCES}
+
+        await _drive_pipeline(
+            consumer,
+            doc_id=doc_id,
+            tenant_id=real_tenant,
+            ner_mentions=ner_mentions,
+        )
+
+        after = {lbl: _val(lbl) for lbl in PRE_PERSIST_BLOCK_SOURCES}
+
+        # No substitution fired, so no label may have incremented.
+        for lbl in PRE_PERSIST_BLOCK_SOURCES:
+            assert after[lbl] - before[lbl] == 0, (
+                f"counter for block_source={lbl!r} unexpectedly incremented "
+                f"by {after[lbl] - before[lbl]} on the clean path"
+            )
