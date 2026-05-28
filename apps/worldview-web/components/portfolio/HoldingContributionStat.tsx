@@ -28,8 +28,7 @@
 
 import { useMemo } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { createGateway } from "@/lib/gateway";
-import { useAuth } from "@/hooks/useAuth";
+import { useApiClient } from "@/lib/api-client";
 import { qk } from "@/lib/query/keys";
 import { cn } from "@/lib/utils";
 import type { Holding, HoldingsResponse, ValueHistoryResponse } from "@/types/api";
@@ -89,16 +88,16 @@ export function HoldingContributionStat({
   instrumentId,
   period,
 }: HoldingContributionStatProps) {
-  const { accessToken } = useAuth();
+  const apiClient = useApiClient();
 
   // ── Query 1: holdings (reads from TanStack cache when parent has fetched) ─
   // WHY holdingsByPortfolio key: this is the SAME key shape usePortfolioData
   // uses (flat ["holdings", id]) so TanStack Query serves the cached copy
   // immediately — no second network request fires.
-  const { data: holdingsResp } = useQuery<HoldingsResponse>({
+  const { data: holdingsResp, isError: holdingsError } = useQuery<HoldingsResponse>({
     queryKey: qk.portfolios.holdingsByPortfolio(portfolioId),
-    queryFn: () => createGateway(accessToken!).getHoldings(portfolioId),
-    enabled: Boolean(accessToken && portfolioId),
+    queryFn: () => apiClient.getHoldings(portfolioId),
+    enabled: Boolean(portfolioId),
     staleTime: 30_000,
   });
 
@@ -107,13 +106,13 @@ export function HoldingContributionStat({
   // EquityCurveChart in PortfolioAnalyticsSection. When that chart is visible,
   // this query is already cached and the contribution stat renders instantly
   // without a separate fetch.
-  const { data: valueHistory } = useQuery<ValueHistoryResponse>({
+  const { data: valueHistory, isError: historyError } = useQuery<ValueHistoryResponse>({
     queryKey: qk.portfolios.valueHistory(portfolioId, period),
     queryFn: () =>
-      createGateway(accessToken!).getValueHistory(portfolioId, {
+      apiClient.getValueHistory(portfolioId, {
         days: periodToDays(period),
       }),
-    enabled: Boolean(accessToken && portfolioId),
+    enabled: Boolean(portfolioId),
     staleTime: 60_000,
   });
 
@@ -145,6 +144,22 @@ export function HoldingContributionStat({
     // Example: 5% weight × 2% return = 10 bps contribution.
     return { contributionBps: w * ret * 10000, weight: w };
   }, [holdingsResp, valueHistory, instrumentId]);
+
+  // ── Error state ───────────────────────────────────────────────────────────
+  // WHY a dedicated branch: a failed holdings/value-history fetch leaves the
+  // computation null, but the "—" fallback below cannot distinguish that
+  // from a successful response where the holding simply isn't in the
+  // portfolio. Surfacing the failure explicitly keeps the trader honest.
+  if (holdingsError || historyError) {
+    return (
+      <div className="flex items-center gap-2 px-3 py-1">
+        <span className="text-[10px] uppercase tracking-[0.08em] text-muted-foreground">
+          Contrib
+        </span>
+        <span className="font-mono text-[11px] text-negative">—</span>
+      </div>
+    );
+  }
 
   // ── Fallback when computation isn't possible ──────────────────────────────
   if (contributionBps == null) {

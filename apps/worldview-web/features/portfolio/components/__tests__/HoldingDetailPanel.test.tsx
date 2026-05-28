@@ -63,15 +63,24 @@ vi.mock("next/navigation", () => ({
 // unresolved promises keeps them in the "loading" state for the test duration,
 // which means we only need to test the panel's own rendering — not waiting for
 // every child query to resolve.
+const mockGateway = {
+  getRealizedPnL: vi.fn(() => new Promise(() => {})),
+  getHoldings: vi.fn(() => new Promise(() => {})),
+  getValueHistory: vi.fn(() => new Promise(() => {})),
+  getTransactions: vi.fn(() => new Promise(() => {})),
+  getEntityNews: vi.fn(() => new Promise(() => {})),
+  getHoldingLots: vi.fn(() => new Promise(() => {})),
+};
+
 vi.mock("@/lib/gateway", () => ({
-  createGateway: vi.fn(() => ({
-    getRealizedPnL: vi.fn(() => new Promise(() => {})),
-    getHoldings: vi.fn(() => new Promise(() => {})),
-    getValueHistory: vi.fn(() => new Promise(() => {})),
-    getTransactions: vi.fn(() => new Promise(() => {})),
-    getEntityNews: vi.fn(() => new Promise(() => {})),
-    getHoldingLots: vi.fn(() => new Promise(() => {})),
-  })),
+  createGateway: vi.fn(() => mockGateway),
+}));
+
+// WHY also mock api-client: child components now use useApiClient()
+// (D1 remediation). Returning the same mockGateway keeps queries hanging
+// (never-resolving promises) so the panel-render assertions still hold.
+vi.mock("@/lib/api-client", () => ({
+  useApiClient: vi.fn(() => mockGateway),
 }));
 
 // ── SUT import ───────────────────────────────────────────────────────────────

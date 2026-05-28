@@ -31,11 +31,18 @@ vi.mock("@/hooks/useAuth", () => ({
 const mockGetHoldings = vi.fn();
 const mockGetValueHistory = vi.fn();
 
+const mockGateway = {
+  getHoldings: mockGetHoldings,
+  getValueHistory: mockGetValueHistory,
+};
+
 vi.mock("@/lib/gateway", () => ({
-  createGateway: vi.fn(() => ({
-    getHoldings: mockGetHoldings,
-    getValueHistory: mockGetValueHistory,
-  })),
+  createGateway: vi.fn(() => mockGateway),
+}));
+
+// WHY also mock api-client: SUT now uses useApiClient() (D1 remediation).
+vi.mock("@/lib/api-client", () => ({
+  useApiClient: vi.fn(() => mockGateway),
 }));
 
 // ── SUT import ────────────────────────────────────────────────────────────────

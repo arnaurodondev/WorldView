@@ -40,10 +40,19 @@ vi.mock("@/hooks/useAuth", () => ({
 // or mockGetRealizedPnL.mockRejectedValue() without re-declaring.
 const mockGetRealizedPnL = vi.fn();
 
+const mockGateway = {
+  getRealizedPnL: mockGetRealizedPnL,
+};
+
 vi.mock("@/lib/gateway", () => ({
-  createGateway: vi.fn(() => ({
-    getRealizedPnL: mockGetRealizedPnL,
-  })),
+  createGateway: vi.fn(() => mockGateway),
+}));
+
+// WHY also mock api-client: the SUT now uses useApiClient() instead of
+// createGateway() (D1 remediation). The createGateway stub is kept for
+// backward compatibility with any indirect imports.
+vi.mock("@/lib/api-client", () => ({
+  useApiClient: vi.fn(() => mockGateway),
 }));
 
 // ── SUT import ───────────────────────────────────────────────────────────────

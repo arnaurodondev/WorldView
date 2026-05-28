@@ -42,10 +42,15 @@ vi.mock("next/navigation", () => ({
 // ── Gateway stub ──────────────────────────────────────────────────────────────
 const mockGetEntityNews = vi.fn();
 
+const mockGateway = { getEntityNews: mockGetEntityNews };
+
 vi.mock("@/lib/gateway", () => ({
-  createGateway: vi.fn(() => ({
-    getEntityNews: mockGetEntityNews,
-  })),
+  createGateway: vi.fn(() => mockGateway),
+}));
+
+// WHY also mock api-client: SUT now uses useApiClient() (D1 remediation).
+vi.mock("@/lib/api-client", () => ({
+  useApiClient: vi.fn(() => mockGateway),
 }));
 
 // ── SUT import ────────────────────────────────────────────────────────────────

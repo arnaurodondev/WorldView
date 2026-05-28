@@ -34,8 +34,12 @@ import { useQuery } from "@tanstack/react-query";
 import { ChevronRight } from "lucide-react";
 
 import { cn } from "@/lib/utils";
-import { createGateway } from "@/lib/gateway";
-import { useAuth } from "@/hooks/useAuth";
+// WHY useApiClient (D1 fix): the canonical hook returns a memoised Gateway
+// bound to the current access token. createGateway(accessToken) constructs a
+// new gateway on every render and re-uses the raw token plumbing — exactly
+// the pattern PRD-0089 § Frontend Architecture rules out. useApiClient also
+// throws a clear error when the provider is missing, surfacing setup bugs.
+import { useApiClient } from "@/lib/api-client";
 import { qk } from "@/lib/query/keys";
 import type { BrokerageConnection } from "@/types/api";
 
@@ -127,25 +131,24 @@ export function TransactionsBrokerageStatusBar({
   // the transactions table is immediately visible — the primary use case.
   const [expanded, setExpanded] = useState(false);
 
-  // Auth — needed to create the gateway and as part of the query enabled guard.
-  const { accessToken } = useAuth();
+  // Memoised gateway from the provider — no manual token plumbing required.
+  const apiClient = useApiClient();
 
   // ── Query: brokerage connections for this portfolio ───────────────────
   //
-  // WHY qk.brokerage.connections() key: the brokerage.* namespace is designed
-  // for connection-management queries (vs. brokerageStatus which is a per-user
-  // health-check badge). Since this bar renders per-portfolio connection detail
-  // we use the connections key so cache invalidation from ConnectedBrokeragesList
-  // mutations (sync, disconnect) also refreshes this bar automatically.
+  // WHY qk.brokerage.statusForPortfolio(portfolioId) key (D4 fix): keeps the
+  // composite key shape declared in the factory rather than composed inline.
+  // Still under the brokerage.* root so a `qc.invalidateQueries({ queryKey:
+  // qk.brokerage.all })` triggered by ConnectedBrokeragesList mutations
+  // (sync, disconnect) cascades to this bar automatically.
   //
   // WHY 60s refetchInterval: brokerage status changes asynchronously (the worker
   // processes syncs in the background). 60s polling gives near-realtime feedback
   // without hammering S9.
   const { data: connections, isLoading } = useQuery<BrokerageConnection[]>({
-    queryKey: [...qk.brokerage.connections(), portfolioId ?? ""] as const,
-    queryFn: () =>
-      createGateway(accessToken).getBrokerageConnections(portfolioId ?? undefined),
-    enabled: !!accessToken && !!portfolioId,
+    queryKey: qk.brokerage.statusForPortfolio(portfolioId),
+    queryFn: () => apiClient.getBrokerageConnections(portfolioId ?? undefined),
+    enabled: !!portfolioId,
     staleTime: 30_000,
     refetchInterval: 60_000,
   });

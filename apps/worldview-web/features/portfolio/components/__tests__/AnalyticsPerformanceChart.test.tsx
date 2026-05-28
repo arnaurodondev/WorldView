@@ -66,6 +66,14 @@ vi.mock("@/lib/gateway", () => ({
   })),
 }));
 
+// WHY stub @/lib/api-client (Wave G QA D1): component now uses useApiClient.
+vi.mock("@/lib/api-client", () => ({
+  useApiClient: vi.fn(() => ({
+    getValueHistory: mockGetValueHistory,
+    getTwr: mockGetTwr,
+  })),
+}));
+
 // ── SUT import ────────────────────────────────────────────────────────────────
 import { AnalyticsPerformanceChart } from "../AnalyticsPerformanceChart";
 

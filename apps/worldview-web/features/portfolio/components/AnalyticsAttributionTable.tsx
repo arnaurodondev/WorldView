@@ -29,8 +29,7 @@
 import { useMemo } from "react";
 import { useQuery } from "@tanstack/react-query";
 
-import { useAuth } from "@/hooks/useAuth";
-import { createGateway } from "@/lib/gateway";
+import { useApiClient } from "@/lib/api-client";
 import { qk } from "@/lib/query/keys";
 import { Skeleton } from "@/components/ui/skeleton";
 import { cn } from "@/lib/utils";
@@ -82,13 +81,14 @@ export function AnalyticsAttributionTable({
   period,
   dimension,
 }: AnalyticsAttributionTableProps) {
-  const { accessToken } = useAuth();
+  // WHY useApiClient (Wave G QA D1): provider-memoised gateway; same identity
+  // across renders so the queryFn closure stays stable.
+  const apiClient = useApiClient();
 
   const { data, isLoading, isError } = useQuery({
     queryKey: qk.portfolios.attribution(portfolioId, period, dimension),
-    queryFn: () =>
-      createGateway(accessToken).getAttribution(portfolioId, period, dimension),
-    enabled: !!accessToken && !!portfolioId,
+    queryFn: () => apiClient.getAttribution(portfolioId, period, dimension),
+    enabled: !!portfolioId,
     // WHY 5min staleTime: attribution is period-bucketed; daily snapshots mean
     // the values only change when a new snapshot runs (nightly). 5min is a
     // reasonable balance between freshness and avoiding redundant re-computation.

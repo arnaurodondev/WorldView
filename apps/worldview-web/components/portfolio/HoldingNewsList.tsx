@@ -27,8 +27,7 @@
 
 import { useQuery } from "@tanstack/react-query";
 import { useRouter } from "next/navigation";
-import { createGateway } from "@/lib/gateway";
-import { useAuth } from "@/hooks/useAuth";
+import { useApiClient } from "@/lib/api-client";
 import { qk } from "@/lib/query/keys";
 import type { RankedNewsResponse } from "@/types/api";
 
@@ -65,18 +64,19 @@ export function HoldingNewsList({
   instrumentId,
   limit = 5,
 }: HoldingNewsListProps) {
-  const { accessToken } = useAuth();
+  const apiClient = useApiClient();
   const router = useRouter();
 
-  // WHY qk.news.forEntity: this is the canonical key for per-entity news feeds.
-  // Using the factory ensures cache sharing with the IntelligenceTab news list
-  // on the instrument detail page — when the user opens the instrument page,
-  // they'll see the same cached articles without a refetch.
-  const { data, isLoading } = useQuery<RankedNewsResponse>({
-    queryKey: qk.news.forEntity(instrumentId),
-    queryFn: () =>
-      createGateway(accessToken).getEntityNews(instrumentId, { limit }),
-    enabled: Boolean(accessToken && instrumentId),
+  // WHY qk.news.holdingNewsTop (D12 remediation): the previous
+  // qk.news.forEntity(instrumentId) key collided with the IntelligenceTab
+  // news list which fetches the same entity feed with a different (larger)
+  // limit. Both consumers wrote into the same cache slot causing whichever
+  // fetched first to win. The dedicated holdingNewsTop key encodes the
+  // limit so per-holding panels cache independently from IntelligenceTab.
+  const { data, isLoading, isError } = useQuery<RankedNewsResponse>({
+    queryKey: qk.news.holdingNewsTop(instrumentId, limit),
+    queryFn: () => apiClient.getEntityNews(instrumentId, { limit }),
+    enabled: Boolean(instrumentId),
     staleTime: 300_000, // 5 min — news doesn't change second-to-second
   });
 
@@ -92,6 +92,18 @@ export function HoldingNewsList({
             <div className="h-[10px] w-24 animate-pulse rounded bg-muted" />
           </div>
         ))}
+      </div>
+    );
+  }
+
+  // ── Error state ───────────────────────────────────────────────────────────
+  // WHY a dedicated branch (per design §7): a failed news fetch should tell
+  // the user the feed is temporarily unavailable rather than silently falling
+  // through to "No recent news" which implies "no news exists for this stock".
+  if (isError) {
+    return (
+      <div className="px-3 py-2 font-mono text-[11px] text-negative">
+        News feed temporarily unavailable
       </div>
     );
   }

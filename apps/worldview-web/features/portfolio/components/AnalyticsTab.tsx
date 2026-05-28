@@ -34,6 +34,16 @@
 
 import { useState } from "react";
 import { useQueryState, parseAsString } from "nuqs";
+import { useQuery } from "@tanstack/react-query";
+
+// WHY useApiClient + qk + ExtendedRiskMetricsResponse (Wave G QA M-007):
+// AnalyticsTab now reads `as_of` from the risk-metrics response so it can
+// pass it to AnalyticsPeriodSelector for the DataFreshnessPill (design
+// spec §4.3). The query reuses the same cache entry the sidebar consumes
+// — TanStack dedups by key so this is not an extra fetch.
+import { useApiClient } from "@/lib/api-client";
+import { qk } from "@/lib/query/keys";
+import type { ExtendedRiskMetricsResponse } from "@/types/api";
 
 import { cn } from "@/lib/utils";
 import { AnalyticsPeriodSelector } from "./AnalyticsPeriodSelector";
@@ -72,12 +82,16 @@ export function AnalyticsTab({ portfolioId }: AnalyticsTabProps) {
   // ── URL state (nuqs) ──────────────────────────────────────────────────────
   // WHY parseAsString.withDefault: nuqs provides a null-safe default so the
   // component renders with "YTD" even on the first load without a URL param.
+  // WHY "period" / "benchmark" (not "analyticsPeriod" / "analyticsBm"):
+  // design §4.3 mandates deep-link URL parity with the other portfolio surfaces
+  // (Overview, Holdings) which already use `?period=` and `?benchmark=` —
+  // QA fix D2 (Wave G remediation).
   const [period, setPeriod] = useQueryState(
-    "analyticsPeriod",
+    "period",
     parseAsString.withDefault("YTD"),
   );
   const [benchmark, setBenchmark] = useQueryState(
-    "analyticsBm",
+    "benchmark",
     parseAsString.withDefault("SPY"),
   );
 
@@ -89,6 +103,21 @@ export function AnalyticsTab({ portfolioId }: AnalyticsTabProps) {
     "holding" | "sector" | "asset_class"
   >("holding");
 
+  // ── Risk-metrics query (M-007: share cache with AnalyticsRiskSidebar) ────
+  // WHY same key/staleTime as the sidebar: TanStack Query dedups requests by
+  // queryKey across the React tree. Tab + sidebar share one in-flight fetch
+  // and one cache entry; the only reason this hook exists at the tab level
+  // is to surface `as_of` for the DataFreshnessPill in the controls bar.
+  const apiClient = useApiClient();
+  const { data: riskMetricsData } = useQuery({
+    queryKey: qk.portfolios.riskMetrics(portfolioId),
+    queryFn: () => apiClient.getRiskMetrics(portfolioId),
+    enabled: !!portfolioId,
+    staleTime: 300_000,
+  });
+  const lastUpdated =
+    (riskMetricsData as ExtendedRiskMetricsResponse | undefined)?.as_of ?? null;
+
   return (
     <div className="flex flex-col gap-2 p-3">
 
@@ -97,8 +126,12 @@ export function AnalyticsTab({ portfolioId }: AnalyticsTabProps) {
           the user scrolls down through the charts. Same sticky pattern as the
           portfolio page header bar (h=[36px], z=10). */}
       <div className="flex items-center gap-3 h-[28px] sticky top-0 z-10 bg-background/95 backdrop-blur-sm py-1">
-        {/* Period pills */}
-        <AnalyticsPeriodSelector value={period} onChange={setPeriod} />
+        {/* Period pills + freshness pill (M-007) */}
+        <AnalyticsPeriodSelector
+          value={period}
+          onChange={setPeriod}
+          lastUpdated={lastUpdated}
+        />
 
         {/* Benchmark selector — v1 SPY-only (disabled, title explains why) */}
         <div className="flex items-center gap-1 ml-auto">
@@ -171,10 +204,11 @@ export function AnalyticsTab({ portfolioId }: AnalyticsTabProps) {
           <div className="text-[10px] font-mono text-muted-foreground uppercase tracking-wide mb-2">
             Risk Metrics
           </div>
-          <AnalyticsRiskSidebar
-            portfolioId={portfolioId}
-            period={period}
-          />
+          {/* WHY no period prop (Wave G QA D10): the risk-metrics endpoint is
+              lookback_days-keyed (90d default) and the qk.portfolios.riskMetrics
+              key signature is `(portfolioId)` only — passing period was unused
+              cargo. See AnalyticsRiskSidebar JSDoc for the full rationale. */}
+          <AnalyticsRiskSidebar portfolioId={portfolioId} />
         </div>
 
         {/* Attribution section */}

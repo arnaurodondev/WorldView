@@ -31,8 +31,7 @@
 import { useMemo } from "react";
 import { useQuery } from "@tanstack/react-query";
 
-import { useAuth } from "@/hooks/useAuth";
-import { createGateway } from "@/lib/gateway";
+import { useApiClient } from "@/lib/api-client";
 import { qk } from "@/lib/query/keys";
 import { Skeleton } from "@/components/ui/skeleton";
 import { cn } from "@/lib/utils";
@@ -117,20 +116,21 @@ export function AnalyticsPerformanceChart({
   period,
   benchmark,
 }: AnalyticsPerformanceChartProps) {
-  const { accessToken } = useAuth();
+  // WHY useApiClient (Wave G QA D1): provider-memoised gateway.
+  const apiClient = useApiClient();
 
   // ── Query 1: portfolio value history ─────────────────────────────────────
   // WHY qk.portfolios.valueHistory: this key is shared with AnalyticsDrawdownChart
   // on the same tab. Both components call with identical (portfolioId, period)
   // so TanStack Query serves both from a single in-flight request.
-  const { data: historyData, isLoading: historyLoading } = useQuery({
+  const { data: historyData, isLoading: historyLoading, isError: historyError } = useQuery({
     queryKey: qk.portfolios.valueHistory(portfolioId, period),
     queryFn: () =>
-      createGateway(accessToken).getValueHistory(
+      apiClient.getValueHistory(
         portfolioId,
         buildValueHistoryParams(period),
       ),
-    enabled: !!accessToken && !!portfolioId,
+    enabled: !!portfolioId,
     // WHY 60s staleTime: daily snapshots don't change intra-day. Matching
     // the EquityCurveChart staleTime keeps the cache entry fresh while the
     // user browses the analytics tab.
@@ -144,9 +144,8 @@ export function AnalyticsPerformanceChart({
   // from value-history without crashing the chart.
   const { data: twrData } = useQuery({
     queryKey: qk.portfolios.twr(portfolioId, period, benchmark),
-    queryFn: () =>
-      createGateway(accessToken).getTwr(portfolioId, period, benchmark),
-    enabled: !!accessToken && !!portfolioId,
+    queryFn: () => apiClient.getTwr(portfolioId, period, benchmark),
+    enabled: !!portfolioId,
     // WHY 5min staleTime: TWR is period-bucketed — recomputing it every 60s
     // is waste. 5min matches the gateway Cache-Control header for this endpoint.
     staleTime: 300_000,
@@ -178,6 +177,22 @@ export function AnalyticsPerformanceChart({
   }, [twrData, historyData]);
 
   const benchmarkReturn = twrData?.benchmark_return ?? null;
+
+  // ── Error state ──────────────────────────────────────────────────────────
+  // WHY inline error sized like the skeleton (Wave G QA D8/D9): the skeleton
+  // is 220px tall to prevent layout shift. The error message keeps the same
+  // height so the surrounding cards do not snap on transition into the error
+  // state.
+  if (historyError) {
+    return (
+      <div
+        role="alert"
+        className="h-[220px] flex items-center justify-center text-[11px] text-negative font-mono"
+      >
+        Couldn&apos;t load performance chart
+      </div>
+    );
+  }
 
   // ── Loading state ─────────────────────────────────────────────────────────
   if (historyLoading) {
@@ -253,7 +268,17 @@ export function AnalyticsPerformanceChart({
       {/* Main performance chart.
           WHY 220px: matches the design spec §4.3 analytics performance chart
           height. Enough vertical space to read the trend without dominating
-          the above-fold area. */}
+          the above-fold area.
+          WHY role="img" wrapper (Wave G QA D7): the SVG inside the Recharts
+          ResponsiveContainer is decorative-by-default to assistive tech because
+          it lacks a title/desc — explicitly marking the chart region as an
+          image with a descriptive aria-label surfaces the chart contents to
+          screen readers (axe-core rule scrollable-region-focusable / a11y
+          best practice for data visualisations). */}
+      <div
+        role="img"
+        aria-label={`Portfolio cumulative return vs ${benchmark} benchmark over the ${period} period`}
+      >
       <TerminalLineChart
         data={chartData}
         height={220}
@@ -276,6 +301,7 @@ export function AnalyticsPerformanceChart({
         tooltipFormatter={(v) => `${(v * 100).toFixed(2)}%`}
         showLegend={false}
       />
+      </div>
 
       {/* Legend row below chart: two colour swatches with labels.
           WHY inline legend (not Recharts Legend): Recharts Legend uses SVG

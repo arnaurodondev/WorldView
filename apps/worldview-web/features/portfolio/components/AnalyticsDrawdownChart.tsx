@@ -25,8 +25,7 @@
 import { useMemo } from "react";
 import { useQuery } from "@tanstack/react-query";
 
-import { useAuth } from "@/hooks/useAuth";
-import { createGateway } from "@/lib/gateway";
+import { useApiClient } from "@/lib/api-client";
 import { qk } from "@/lib/query/keys";
 import { TerminalAreaChart } from "@/components/charts/TerminalAreaChart";
 
@@ -113,19 +112,20 @@ export function AnalyticsDrawdownChart({
   portfolioId,
   period,
 }: AnalyticsDrawdownChartProps) {
-  const { accessToken } = useAuth();
+  // WHY useApiClient (Wave G QA D1): provider-memoised gateway.
+  const apiClient = useApiClient();
 
   // WHY qk.portfolios.valueHistory: identical key to AnalyticsPerformanceChart
   // on the same tab — TanStack Query serves this component from the warm cache
   // left by the performance chart's earlier fetch. Zero extra network calls.
-  const { data: historyData, isLoading } = useQuery({
+  const { data: historyData, isLoading, isError } = useQuery({
     queryKey: qk.portfolios.valueHistory(portfolioId, period),
     queryFn: () =>
-      createGateway(accessToken).getValueHistory(
+      apiClient.getValueHistory(
         portfolioId,
         buildValueHistoryParams(period),
       ),
-    enabled: !!accessToken && !!portfolioId,
+    enabled: !!portfolioId,
     staleTime: 60_000,
   });
 
@@ -139,6 +139,20 @@ export function AnalyticsDrawdownChart({
     () => getMaxDrawdown(drawdownSeries),
     [drawdownSeries],
   );
+
+  // ── Error state ──────────────────────────────────────────────────────────
+  // WHY 120px height (Wave G QA D8/D9): matches the skeleton/empty container
+  // height so layout doesn't shift when transitioning into the error state.
+  if (isError) {
+    return (
+      <div
+        role="alert"
+        className="h-[120px] flex items-center justify-center text-[11px] text-negative font-mono"
+      >
+        Couldn&apos;t load drawdown chart
+      </div>
+    );
+  }
 
   // ── Loading state ─────────────────────────────────────────────────────────
   if (isLoading) {
@@ -186,7 +200,13 @@ export function AnalyticsDrawdownChart({
           WHY hsl(var(--destructive)): drawdown represents loss magnitude —
           the destructive (red) colour token communicates this semantically
           without requiring a custom token. Consistent with the convention
-          used by RiskMetricsStrip's drawdown tile colour logic. */}
+          used by RiskMetricsStrip's drawdown tile colour logic.
+          WHY role="img" wrapper (Wave G QA D7): see AnalyticsPerformanceChart
+          — exposes the chart contents to assistive technology. */}
+      <div
+        role="img"
+        aria-label={`Portfolio drawdown from running peak over the ${period} period`}
+      >
       <TerminalAreaChart
         data={drawdownSeries}
         height={120}
@@ -203,6 +223,7 @@ export function AnalyticsDrawdownChart({
         tooltipFormatter={(v) => `${(v * 100).toFixed(2)}%`}
         zeroLine={true}
       />
+      </div>
     </div>
   );
 }

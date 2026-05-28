@@ -37,11 +37,15 @@ vi.mock("@/hooks/useAuth", () => ({
 }));
 
 // ── Gateway stub ──────────────────────────────────────────────────────────────
+// WHY mock @/lib/api-client (D1 fix): the SUT now uses useApiClient() instead
+// of createGateway(token). Mocking the hook directly bypasses the
+// ApiClientProvider requirement and keeps the test surface identical to before
+// — every test still drives behaviour by stubbing getBrokerageConnections.
 
 const mockGetBrokerageConnections = vi.fn();
 
-vi.mock("@/lib/gateway", () => ({
-  createGateway: vi.fn(() => ({
+vi.mock("@/lib/api-client", () => ({
+  useApiClient: vi.fn(() => ({
     getBrokerageConnections: mockGetBrokerageConnections,
   })),
 }));

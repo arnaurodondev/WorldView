@@ -30,10 +30,15 @@ vi.mock("@/hooks/useAuth", () => ({
 // ── Gateway stub ──────────────────────────────────────────────────────────────
 const mockGetTransactions = vi.fn();
 
+const mockGateway = { getTransactions: mockGetTransactions };
+
 vi.mock("@/lib/gateway", () => ({
-  createGateway: vi.fn(() => ({
-    getTransactions: mockGetTransactions,
-  })),
+  createGateway: vi.fn(() => mockGateway),
+}));
+
+// WHY also mock api-client: SUT now uses useApiClient() (D1 remediation).
+vi.mock("@/lib/api-client", () => ({
+  useApiClient: vi.fn(() => mockGateway),
 }));
 
 // ── SUT import ────────────────────────────────────────────────────────────────
@@ -139,5 +144,63 @@ describe("HoldingInstrumentTxList", () => {
       ];
       expect(typeBadges).toHaveLength(1);
     });
+  });
+
+  // ── description subline (F-004 / M-003 + M-004) ──────────────────────────
+  //
+  // WHY: the populated-description branch had no coverage. M-003 in the QA
+  // report flagged that the fixture only exercised description=null. We add
+  // both the populated path and the 1000-char truncation guarantee.
+
+  it("renders description subline with truncate + title attribute when present", async () => {
+    const respWithDesc: TransactionsResponse = {
+      ...TX_RESP,
+      transactions: [
+        { ...makeTx("tx-d1", "i-001", "DIVIDEND"), description: "Cash Dividend - AAPL" },
+      ],
+      total: 1,
+    };
+    mockGetTransactions.mockResolvedValue(respWithDesc);
+
+    render(
+      wrap(
+        <HoldingInstrumentTxList portfolioId="p-001" instrumentId="i-001" limit={5} />,
+      ),
+    );
+
+    // The description text appears in the DOM as a subline next to the amount.
+    const desc = await screen.findByText("Cash Dividend - AAPL");
+    expect(desc).toBeInTheDocument();
+    // WHY check class list: the subline must wear the truncate + max-w-[200px]
+    // utilities so long broker narratives don't blow out the 440px panel width.
+    expect(desc.className).toContain("truncate");
+    expect(desc.className).toContain("max-w-[200px]");
+    // The title attribute matches the description (used as the hover tooltip
+    // when the visible text is clipped by the max-w clamp).
+    expect(desc.getAttribute("title")).toBe("Cash Dividend - AAPL");
+  });
+
+  it("truncates the title= attribute to 500 chars (defense-in-depth, M-004)", async () => {
+    // WHY: server-side Pydantic max_length=500 is the source of truth; the
+    // client-side .slice(0, 500) protects against any unexpected backfill row
+    // that could otherwise bloat the DOM with a multi-KB title attribute.
+    const longDesc = "A".repeat(1000);
+    const respLong: TransactionsResponse = {
+      ...TX_RESP,
+      transactions: [
+        { ...makeTx("tx-long", "i-001", "BUY"), description: longDesc },
+      ],
+      total: 1,
+    };
+    mockGetTransactions.mockResolvedValue(respLong);
+
+    render(
+      wrap(
+        <HoldingInstrumentTxList portfolioId="p-001" instrumentId="i-001" limit={5} />,
+      ),
+    );
+
+    const subline = await screen.findByTitle("A".repeat(500));
+    expect(subline).toBeInTheDocument();
   });
 });

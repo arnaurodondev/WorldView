@@ -30,6 +30,13 @@ import { useAuth } from "@/hooks/useAuth";
 import { Skeleton } from "@/components/ui/skeleton";
 import { cn } from "@/lib/utils";
 import { formatPrice, formatPercent } from "@/lib/utils";
+// WHY qk import (D3 fix): replaces the inline ["holding-lots", ...] key with
+// the canonical qk.portfolios.holdingLots factory. The factory deliberately
+// omits currentPrice from the key (lot data is price-independent — only the
+// display of unrealised P&L changes per quote tick) so we pass currentPrice
+// only as a query-fn argument, not a key dimension. This eliminates cache
+// thrashing on every 15s quote update.
+import { qk } from "@/lib/query/keys";
 import type { Holding, BatchQuoteResponse } from "@/types/api";
 
 // ── Props ────────────────────────────────────────────────────────────────────
@@ -109,7 +116,13 @@ export function HoldingLotsPanel({
 
   const { data, isLoading } = useQuery({
     enabled: Boolean(portfolioId && accessToken && selectedInstrumentId),
-    queryKey: ["holding-lots", portfolioId, selectedInstrumentId, currentPrice],
+    // WHY canonical key factory (D3 fix): qk.portfolios.holdingLots nests under
+    // qk.portfolios.detail(id) so a portfolio-level cascade invalidates lot data
+    // alongside holdings/transactions. currentPrice intentionally omitted from
+    // the key (see factory comment): lot quantity/cost is immutable for a given
+    // (portfolio, instrument) pair — only the rendered unrealised display reacts
+    // to price ticks. Pricing in the key would invalidate on every 15s quote.
+    queryKey: qk.portfolios.holdingLots(portfolioId!, selectedInstrumentId!),
     queryFn: () =>
       createGateway(accessToken!).getHoldingLots(
         portfolioId!,

@@ -24,8 +24,7 @@
 // a browser-only hook — it cannot run during SSR/RSC rendering.
 
 import { useQuery } from "@tanstack/react-query";
-import { createGateway } from "@/lib/gateway";
-import { useAuth } from "@/hooks/useAuth";
+import { useApiClient } from "@/lib/api-client";
 import { qk } from "@/lib/query/keys";
 import { cn } from "@/lib/utils";
 
@@ -61,29 +60,33 @@ export function HoldingRealizedRow({
   portfolioId,
   instrumentId,
 }: HoldingRealizedRowProps) {
-  const { accessToken } = useAuth();
+  const apiClient = useApiClient();
 
-  // WHY qk.portfolios.realizedPnL(portfolioId, "YTD"): the key factory
-  // encodes both the portfolio and the period so the same query is shared
-  // across every HoldingDetailPanel open for the same portfolio. Opening
-  // AAPL then MSFT does NOT fire two separate network requests — TanStack
-  // Query deduplicates on the key, which doesn't include instrumentId
-  // (filtering happens client-side from the already-cached response).
+  // WHY include endDate in the key (D13 remediation): the YTD date range is
+  // built inside queryFn from new Date(). Without baking the end-date into
+  // the cache key, a query made at 23:59 would be served from cache the next
+  // morning even though "today" has rolled over — leaving the user looking at
+  // a stale YTD window. Encoding today's ISO date in the key forces a fresh
+  // fetch at midnight without any manual staleTime juggling.
+  //
+  // WHY toISOString (Wave G QA M-005): the previous getFullYear/getMonth/
+  // getDate trio used the browser's local timezone; a user east of UTC could
+  // tick over to "tomorrow" locally while the backend snapshot was still on
+  // yesterday's UTC date — producing a fresh cache miss that returned the
+  // same data. Using ISO UTC keeps the key boundary aligned with the
+  // backend's UTC date rollover.
+  const todayUtc = new Date().toISOString().slice(0, 10);
+  const endDate = todayUtc;
+  const startDate = `${todayUtc.slice(0, 4)}-01-01`;
+
+  // WHY qk.portfolios.realizedPnL(portfolioId, period): the key factory
+  // encodes the portfolio + period; we append endDate so midnight rollover
+  // produces a new cache slot. Opening AAPL then MSFT still shares the
+  // request (instrumentId is NOT in the key — filtering is client-side).
   const { data, isLoading, isError } = useQuery({
-    queryKey: qk.portfolios.realizedPnL(portfolioId, "YTD"),
-    queryFn: () => {
-      // Build the YTD date range: Jan 1 → today (same as defaultRealizedPnLRange).
-      const now = new Date();
-      const year = now.getFullYear();
-      const mm = String(now.getMonth() + 1).padStart(2, "0");
-      const dd = String(now.getDate()).padStart(2, "0");
-      return createGateway(accessToken!).getRealizedPnL(
-        portfolioId,
-        `${year}-01-01`,
-        `${year}-${mm}-${dd}`,
-      );
-    },
-    enabled: Boolean(accessToken && portfolioId),
+    queryKey: [...qk.portfolios.realizedPnL(portfolioId, "YTD"), endDate],
+    queryFn: () => apiClient.getRealizedPnL(portfolioId, startDate, endDate),
+    enabled: Boolean(portfolioId),
     staleTime: 60_000, // 1 min — same as useRealizedPnL hook
     retry: false,      // 404 → show "—" immediately, don't loop
   });

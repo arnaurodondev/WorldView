@@ -49,6 +49,14 @@ vi.mock("@/lib/gateway", () => ({
   })),
 }));
 
+// WHY stub @/lib/api-client (Wave G QA D1): component reads gateway via
+// useApiClient(); return the same mock so the test setup stays identical.
+vi.mock("@/lib/api-client", () => ({
+  useApiClient: vi.fn(() => ({
+    getAttribution: mockGetAttribution,
+  })),
+}));
+
 // ── SUT import ───────────────────────────────────────────────────────────────
 
 import { AnalyticsAttributionTable } from "../AnalyticsAttributionTable";

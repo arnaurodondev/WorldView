@@ -33,6 +33,15 @@ interface TerminalAreaChartProps {
   tooltipFormatter?: (v: number) => string;
   /** Draw a horizontal reference line at y=0. Default true. */
   zeroLine?: boolean;
+  /**
+   * Accessible label describing the chart contents (D7 fix).
+   *
+   * WHY optional with default: Recharts renders an SVG tree with no inherent
+   * semantic role. Wrapping it in role="img" + aria-label gives screen readers
+   * a single readable announcement. Defaults to "Chart" so the accessible name
+   * is never empty when callers haven't supplied one.
+   */
+  ariaLabel?: string;
 }
 
 const AXIS_STYLE = {
@@ -48,8 +57,12 @@ export function TerminalAreaChart({
   yTickFormatter,
   tooltipFormatter,
   zeroLine = true,
+  ariaLabel,
 }: TerminalAreaChartProps) {
   return (
+    // WHY role="img" wrapper (D7 fix): see TerminalLineChart for full rationale.
+    // Same pattern — Recharts SVG tree needs an accessible name for SR users.
+    <div role="img" aria-label={ariaLabel ?? "Chart"} className="w-full">
     <ResponsiveContainer width="100%" height={height}>
       <AreaChart data={data} margin={{ top: 4, right: 8, bottom: 0, left: 0 }}>
         <defs>
@@ -131,5 +144,6 @@ export function TerminalAreaChart({
         ))}
       </AreaChart>
     </ResponsiveContainer>
+    </div>
   );
 }

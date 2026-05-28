@@ -34,8 +34,7 @@
 
 import { useQueries } from "@tanstack/react-query";
 
-import { useAuth } from "@/hooks/useAuth";
-import { createGateway } from "@/lib/gateway";
+import { useApiClient } from "@/lib/api-client";
 import { qk } from "@/lib/query/keys";
 import { Skeleton } from "@/components/ui/skeleton";
 import { cn } from "@/lib/utils";
@@ -93,7 +92,9 @@ function computePeriodReturn(points: Array<{ value: number }> | undefined): numb
 export function AnalyticsPeriodReturnsTable({
   portfolioId,
 }: AnalyticsPeriodReturnsTableProps) {
-  const { accessToken } = useAuth();
+  // WHY useApiClient (Wave G QA D1): provider-memoised gateway shared across
+  // every queryFn in the useQueries array.
+  const apiClient = useApiClient();
 
   // WHY useQueries (D-002): fires 7 independent queries in one hook call.
   // Each entry has its own queryKey, so each period's cache entry is independent —
@@ -103,14 +104,39 @@ export function AnalyticsPeriodReturnsTable({
     queries: PERIODS.map((p) => ({
       queryKey: qk.portfolios.valueHistory(portfolioId, p.label),
       queryFn: () =>
-        createGateway(accessToken).getValueHistory(portfolioId, {
+        apiClient.getValueHistory(portfolioId, {
           ...(p.days != null ? { days: p.days } : {}),
           granularity: "1d" as const,
         }),
-      enabled: !!accessToken && !!portfolioId,
+      enabled: !!portfolioId,
       staleTime: 60_000,
+      // WHY retry: 1 — table cell gracefully degrades to "—"; preventing
+      // 21-call retry storm on transient backend (DS-005). Default retry: 3
+      // × 7 parallel queries = up to 21 concurrent S1 calls on a single
+      // 5xx hiccup; capping per-query at 1 keeps the worst-case load to
+      // 14 calls and surfaces the partial-failure state faster.
+      retry: 1,
     })),
   });
+
+  // ── Aggregate error state ────────────────────────────────────────────────
+  // WHY aggregate (Wave G QA D8/D9): when every period query fails (e.g. S9
+  // outage), surface a single inline error instead of seven empty cells. We
+  // only show the error when ALL queries fail — partial failures still let the
+  // user read the periods that did load.
+  const allErrored = results.length > 0 && results.every((r) => r.isError);
+
+  // Inline error replaces the entire table when every period failed.
+  if (allErrored) {
+    return (
+      <div
+        role="alert"
+        className="border border-border rounded-[2px] px-3 py-4 text-[11px] text-negative font-mono"
+      >
+        Couldn&apos;t load period returns
+      </div>
+    );
+  }
 
   return (
     <div className="border border-border rounded-[2px] overflow-hidden">

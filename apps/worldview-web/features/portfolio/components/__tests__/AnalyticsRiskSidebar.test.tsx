@@ -51,6 +51,16 @@ vi.mock("@/lib/gateway", () => ({
   })),
 }));
 
+// WHY also stub @/lib/api-client: Wave G QA D1 — component now reads the
+// gateway via useApiClient() rather than createGateway(accessToken). The
+// stub returns the same mocked gateway object so the mock function (and its
+// mockResolvedValue assertions) keep working unchanged.
+vi.mock("@/lib/api-client", () => ({
+  useApiClient: vi.fn(() => ({
+    getRiskMetrics: mockGetRiskMetrics,
+  })),
+}));
+
 // ── SUT import ───────────────────────────────────────────────────────────────
 
 import { AnalyticsRiskSidebar } from "../AnalyticsRiskSidebar";
@@ -102,7 +112,7 @@ describe("AnalyticsRiskSidebar", () => {
     // the entire duration of the test — the component should show skeletons.
     mockGetRiskMetrics.mockReturnValue(new Promise(() => {}));
 
-    render(wrap(<AnalyticsRiskSidebar portfolioId="p1" period="YTD" />));
+    render(wrap(<AnalyticsRiskSidebar portfolioId="p1" />));
 
     // The skeleton container must exist.
     const skeleton = screen.getByTestId("risk-sidebar-skeleton");
@@ -133,7 +143,7 @@ describe("AnalyticsRiskSidebar", () => {
       beta_vs_spy: null,
     });
 
-    render(wrap(<AnalyticsRiskSidebar portfolioId="p1" period="YTD" />));
+    render(wrap(<AnalyticsRiskSidebar portfolioId="p1" />));
 
     // WHY waitFor: TanStack Query resolves asynchronously — we must wait for
     // the data to appear before asserting.
@@ -149,7 +159,7 @@ describe("AnalyticsRiskSidebar", () => {
   it("renders formatted percentage for win_rate (0.583 → '58.3%')", async () => {
     mockGetRiskMetrics.mockResolvedValue(BASE_METRICS);
 
-    render(wrap(<AnalyticsRiskSidebar portfolioId="p1" period="YTD" />));
+    render(wrap(<AnalyticsRiskSidebar portfolioId="p1" />));
 
     await waitFor(() => {
       // win_rate = 0.583 → "58.3%" (1dp, no sign prefix per the spec).
@@ -163,7 +173,7 @@ describe("AnalyticsRiskSidebar", () => {
   it("renders formatted ratio for calmar (1.57 → '1.57')", async () => {
     mockGetRiskMetrics.mockResolvedValue(BASE_METRICS);
 
-    render(wrap(<AnalyticsRiskSidebar portfolioId="p1" period="YTD" />));
+    render(wrap(<AnalyticsRiskSidebar portfolioId="p1" />));
 
     await waitFor(() => {
       // calmar = 1.57 → "1.57" (2dp ratio, same as Sharpe/Sortino format).
@@ -172,6 +182,46 @@ describe("AnalyticsRiskSidebar", () => {
       expect(screen.getByText("1.57")).toBeInTheDocument();
       // Verify the tile label is also present.
       expect(screen.getByText("CALMAR")).toBeInTheDocument();
+    });
+  });
+
+  // Test 5 (Wave G QA F-004b): isError branch renders an inline alert.
+  // WHY: the component has an explicit isError early-return that previously
+  // had no test. A regression that removed the branch would silently fall
+  // through to the loading skeleton (looks "loading forever") — pinning the
+  // error string here ensures the failure mode stays user-visible.
+  it("renders inline error when /risk-metrics fails", async () => {
+    mockGetRiskMetrics.mockRejectedValueOnce(new Error("500 server error"));
+
+    render(wrap(<AnalyticsRiskSidebar portfolioId="p1" />));
+
+    // The exact copy from AnalyticsRiskSidebar.tsx:232. Using findByText
+    // (async) because TanStack Query resolves the rejection in a microtask.
+    const alert = await screen.findByText(/Couldn.t load risk metrics/i);
+    expect(alert).toBeInTheDocument();
+    // role="alert" ensures screen readers announce the failure immediately.
+    expect(alert).toHaveAttribute("role", "alert");
+  });
+
+  // Test 6 (Wave G QA F-004c): alpha renders with the configured format.
+  // WHY: BASE_METRICS sets alpha=0.0263 but the original tests never
+  // asserted the formatted output. Per TILES config, ALPHA uses "ratio"
+  // format (2dp, no sign prefix, no percent symbol) — matching the
+  // Sharpe/Sortino/Calmar/Beta presentation. 0.0263 → "0.03". Pinning this
+  // value protects against silent format regressions (e.g. someone
+  // changing ratio precision or accidentally switching format to percent).
+  it("renders ratio-formatted alpha (0.0263 → '0.03')", async () => {
+    mockGetRiskMetrics.mockResolvedValue(BASE_METRICS);
+
+    render(wrap(<AnalyticsRiskSidebar portfolioId="p1" />));
+
+    await waitFor(() => {
+      expect(screen.getByText("ALPHA")).toBeInTheDocument();
+      // WHY aria-label assertion: there may be multiple "0.03" strings
+      // (other ratio tiles could coincidentally produce the same value).
+      // Pinning via aria-label uniquely identifies the ALPHA tile output.
+      const tile = screen.getByLabelText("ALPHA: 0.03");
+      expect(tile).toBeInTheDocument();
     });
   });
 });

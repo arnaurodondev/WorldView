@@ -468,6 +468,20 @@ export function usePortfolioData(
     void queryClient.invalidateQueries({
       queryKey: qk.portfolios.bundle(activePortfolioId),
     });
+    // WHY cascade-invalidate qk.portfolios.detail(id) (Wave G QA F-001):
+    // Wave G added several portfolio-scoped sub-resources under the
+    // [QK_VERSION,"portfolios","detail",id,...] tree — riskMetrics,
+    // realizedPnL, valueHistory, attribution, twr, holdingTx, holdingLots,
+    // holdingValueHistory, sectorAttribution, concentration. The flat
+    // legacy keys above (holdingsByPortfolio, transactionsByPortfolio,
+    // performance, bundle) live OUTSIDE that subtree, so a position add
+    // never propagated to the new analytics surfaces — they kept serving
+    // pre-add data until staleTime expired (up to 5min). The cascade
+    // pattern documented in keys.ts:20-25 is exactly this: a single
+    // detail() invalidation matches every nested key in one shot.
+    void queryClient.invalidateQueries({
+      queryKey: qk.portfolios.detail(activePortfolioId),
+    });
   }, [queryClient, activePortfolioId, selectedPeriod]);
 
   // ── F-013: Delete portfolio mutation ──────────────────────────────────

@@ -8,13 +8,17 @@
  * PLAN-0059 F-1 — DataTable migration tests (≥3 per migrated table).
  */
 
+import type React from "react";
 import { describe, it, expect } from "vitest";
+import { render } from "@testing-library/react";
+import type { CellContext, ColumnDef } from "@tanstack/react-table";
 import {
   makeTransactionColumns,
   typeBadgeClass,
   assetClassAbbrev,
   assetClassBadgeClass,
   rowTotal,
+  type TransactionRow,
 } from "../transaction-columns";
 import type { Transaction } from "@/types/api";
 
@@ -35,6 +39,39 @@ function makeTx(overrides: Partial<Transaction> = {}): Transaction {
     notes: null,
     ...overrides,
   } as Transaction;
+}
+
+/**
+ * Render a column's cell function with a minimal CellContext stub.
+ *
+ * WHY: TanStack's CellContext carries internal table state we don't need.
+ * The ticker column's cell renderer only touches `row.original`, so we
+ * stub just that and cast through `unknown` to satisfy TS.
+ */
+function renderCell(col: ColumnDef<TransactionRow>, row: TransactionRow) {
+  const cell = col.cell as (ctx: CellContext<TransactionRow, unknown>) => unknown;
+  const ctx = { row: { original: row } } as unknown as CellContext<
+    TransactionRow,
+    unknown
+  >;
+  return render(<>{cell(ctx) as React.ReactNode}</>);
+}
+
+/** Build a TransactionRow (Transaction + runningBalance) for cell rendering. */
+function makeRow(overrides: Partial<TransactionRow> = {}): TransactionRow {
+  return {
+    ...makeTx(),
+    runningBalance: 0,
+    ...overrides,
+  } as TransactionRow;
+}
+
+/** Find the ticker column from the factory output. */
+function getTickerColumn() {
+  const cols = makeTransactionColumns();
+  const col = cols.find((c) => c.id === "ticker");
+  if (!col) throw new Error("ticker column not found");
+  return col;
 }
 
 // ── makeTransactionColumns ───────────────────────────────────────────────────
@@ -176,5 +213,41 @@ describe("rowTotal", () => {
   it("returns 0 for DIVIDEND with null amount", () => {
     const tx = makeTx({ type: "DIVIDEND", quantity: 0, price: 0, amount: null });
     expect(rowTotal(tx)).toBe(0);
+  });
+});
+
+// ── ticker column cell — description subline (F-004a) ────────────────────────
+//
+// WHY these tests: the description field (broker-supplied narrative) is
+// rendered as a 9px subline under the ticker. Coverage was missing for the
+// branch where description is populated — F-004a in the QA report.
+
+describe("ticker column — description subline", () => {
+  it("renders description as 9px subline when present", () => {
+    const col = getTickerColumn();
+    const row = makeRow({ description: "Dividend Payment - AAPL" });
+    const { getByText, getByTitle } = renderCell(col, row);
+    expect(getByText("Dividend Payment - AAPL")).toBeInTheDocument();
+    // The title= attribute is set on the subline wrapper for accessibility
+    // (hover tooltip when the text is truncated by the max-w-[160px] clamp).
+    expect(getByTitle("Dividend Payment - AAPL")).toBeInTheDocument();
+  });
+
+  it("does not render description subline when null", () => {
+    const col = getTickerColumn();
+    const row = makeRow({ description: null });
+    const { queryByText } = renderCell(col, row);
+    expect(queryByText(/Dividend Payment/)).not.toBeInTheDocument();
+  });
+
+  it("truncates the title= attribute to 500 chars (defense-in-depth, M-004)", () => {
+    // WHY: server-side Pydantic enforces max_length=500; this client-side
+    // slice is belt-and-braces against any unexpected backfill row that
+    // could otherwise bloat the DOM with a multi-KB title attribute.
+    const longDesc = "A".repeat(1000);
+    const col = getTickerColumn();
+    const row = makeRow({ description: longDesc });
+    const { getByTitle } = renderCell(col, row);
+    expect(getByTitle("A".repeat(500))).toBeInTheDocument();
   });
 });

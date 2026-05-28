@@ -229,10 +229,29 @@ export function makeTransactionColumns(
       cell: ({ row }) => {
         const enrichedTicker =
           row.original.ticker || tickerByInstrumentId?.[row.original.instrument_id] || "";
+        // WHY render description here (PRD-0089 §3 / §8.1 line 145, D5 fix):
+        // Phase 1 backend added `description` to TransactionListItem (broker-supplied
+        // narrative — e.g. "AAPL Apple Inc Common Stock"). Showing it as a 9px
+        // subline under the ticker provides context for ambiguous symbols (futures
+        // expiries, options, corporate actions) without taking a full column.
+        // truncate + title attribute keeps the row at the 20px density target.
         return (
-          <span className="font-mono text-[11px] tabular-nums text-primary font-medium">
-            {enrichedTicker || "—"}
-          </span>
+          <div className="leading-none">
+            <span className="font-mono text-[11px] tabular-nums text-primary font-medium">
+              {enrichedTicker || "—"}
+            </span>
+            {row.original.description && (
+              // WHY slice(0, 500): defense-in-depth — server-side Pydantic
+              // `max_length=500` is the source of truth; client-side slice
+              // prevents DOM bloat from any unexpected backfill row.
+              <div
+                className="text-[9px] text-muted-foreground truncate max-w-[160px] leading-none mt-0.5"
+                title={(row.original.description ?? "").slice(0, 500)}
+              >
+                {row.original.description}
+              </div>
+            )}
+          </div>
         );
       },
     },

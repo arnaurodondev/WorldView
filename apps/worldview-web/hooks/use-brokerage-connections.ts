@@ -23,6 +23,7 @@
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { createGateway } from "@/lib/gateway";
 import { useAuth } from "@/hooks/useAuth";
+import { qk } from "@/lib/query/keys";
 
 // ── Read hooks ────────────────────────────────────────────────────────────────
 
@@ -134,13 +135,13 @@ export function useDisconnectBrokerageConnection() {
     retryDelay: (attemptIndex: number) =>
       Math.min(1000 * 2 ** (attemptIndex - 1), 4000),
     onSuccess: () => {
-      // WHY invalidate with partial key: queryClient.invalidateQueries with a
-      // partial key prefix invalidates ALL queries whose key starts with
-      // ["brokerage-connections"], regardless of the portfolioId segment.
-      // This ensures both the portfolio tab view and any other views update.
-      void queryClient.invalidateQueries({
-        queryKey: ["brokerage-connections"],
-      });
+      // WHY qk.brokerage.all (Wave G QA F-001): the canonical key factory
+      // emits [QK_VERSION, "brokerage", ...] which is the prefix every
+      // brokerage-scoped query (connections, status-for-portfolio, sync
+      // errors) nests under. Invalidating the root catches the new
+      // TransactionsBrokerageStatusBar key (qk.brokerage.statusForPortfolio)
+      // which the previous flat ["brokerage-connections"] key missed.
+      void queryClient.invalidateQueries({ queryKey: qk.brokerage.all });
     },
   });
 }
@@ -170,12 +171,15 @@ export function useTriggerBrokerageSync() {
       // WHY setTimeout: give the async sync worker ~3s to pick up the task
       // before we refetch, so the user sees an updated status immediately.
       setTimeout(() => {
+        // WHY qk.brokerage.all (Wave G QA F-001): cascades to every
+        // brokerage-scoped query — connections, statusForPortfolio, and
+        // syncErrors — under one prefix.
+        void queryClient.invalidateQueries({ queryKey: qk.brokerage.all });
+        // Also explicitly invalidate sync errors — already covered by
+        // qk.brokerage.all but called separately to document intent: a
+        // fresh sync may clear or add errors.
         void queryClient.invalidateQueries({
-          queryKey: ["brokerage-connections"],
-        });
-        // Also invalidate sync errors — a fresh sync may clear or add errors
-        void queryClient.invalidateQueries({
-          queryKey: ["sync-errors"],
+          queryKey: qk.brokerage.syncErrors(),
         });
       }, 3_000);
     },

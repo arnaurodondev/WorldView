@@ -46,8 +46,13 @@ import { useQueryState } from "nuqs";
 //   2. The Back button naturally closes the panel (removes ?holding=).
 //   3. No extra useState — the URL IS the state.
 import { Skeleton } from "@/components/ui/skeleton";
-import { useAuth } from "@/hooks/useAuth";
-import { createGateway } from "@/lib/gateway";
+import { useApiClient } from "@/lib/api-client";
+// WHY qk (Wave G QA F-006): the brokerage probe below previously used an
+// inline ["brokerage-connections", portfolioId] key that did NOT cascade
+// from qk.brokerage.all — invalidations from sync/disconnect mutations
+// missed it. Switching to qk.brokerage.statusForPortfolio shares the cache
+// entry with TransactionsBrokerageStatusBar and participates in cascades.
+import { qk } from "@/lib/query/keys";
 // PRD-0089 SA-B: HoldingDetailPanel slide-over
 import { HoldingDetailPanel } from "@/features/portfolio/components/HoldingDetailPanel";
 // PLAN-0088 Wave E E-1 strips ────────────────────────────────────────────
@@ -104,7 +109,12 @@ export function HoldingsTab({
   equityPeriod,
   setEquityPeriod,
 }: HoldingsTabProps) {
-  const { accessToken } = useAuth();
+  // WHY useApiClient (not createGateway + useAuth): D1 remediation — the
+  // shared memoised gateway from the ApiClientProvider keeps a stable
+  // reference across renders so queryFn closures don't re-create the gateway
+  // on every fetch (and so any future silent-refresh of the access token
+  // automatically re-fires queries pinned to the old reference).
+  const apiClient = useApiClient();
 
   // ── PRD-0089 SA-B: URL state for the selected holding ticker ─────────────
   // WHY useQueryState("holding"): stores the selected ticker in the URL so
@@ -131,10 +141,9 @@ export function HoldingsTab({
   // a lightweight brokerage-connection probe here and only render the
   // feed when at least one connection exists. Cached for 60s.
   const { data: brokerageConnections } = useQuery({
-    enabled: Boolean(activePortfolioId && accessToken),
-    queryKey: ["brokerage-connections", activePortfolioId],
-    queryFn: () =>
-      createGateway(accessToken!).getBrokerageConnections(activePortfolioId!),
+    enabled: Boolean(activePortfolioId),
+    queryKey: qk.brokerage.statusForPortfolio(activePortfolioId),
+    queryFn: () => apiClient.getBrokerageConnections(activePortfolioId!),
     staleTime: 60_000,
   });
   // WHY ?? false (not a truthy guard): the query returns undefined while

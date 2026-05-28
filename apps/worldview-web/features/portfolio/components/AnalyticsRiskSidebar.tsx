@@ -1,7 +1,8 @@
 /**
  * features/portfolio/components/AnalyticsRiskSidebar.tsx
  *
- * WHY THIS EXISTS: The 11-tile risk sidebar is the Analytics tab's canonical
+ * WHY THIS EXISTS: The 11-tile risk sidebar (Wave G design §4.3) is the
+ * Analytics tab's canonical
  * "did I get paid for my risk?" summary. IBKR Portfolio Analyst is the reference —
  * their 10-tile header strip (Sharpe/Sortino/Beta/Alpha/Vol/MaxDD/Calmar/WinRate/
  * CAGR/Return) is the institutional standard for a risk-adjusted performance overview.
@@ -28,8 +29,7 @@
 
 import { useQuery } from "@tanstack/react-query";
 
-import { useAuth } from "@/hooks/useAuth";
-import { createGateway } from "@/lib/gateway";
+import { useApiClient } from "@/lib/api-client";
 import { qk } from "@/lib/query/keys";
 import { Skeleton } from "@/components/ui/skeleton";
 import { cn } from "@/lib/utils";
@@ -39,9 +39,6 @@ import type { ExtendedRiskMetricsResponse } from "@/types/api";
 
 export interface AnalyticsRiskSidebarProps {
   portfolioId: string;
-  /** Active analytics period — used only for cache invalidation coherence; the
-   *  risk-metrics endpoint currently ignores it (lookback_days=90 default). */
-  period: string;
 }
 
 // ── Tile config ───────────────────────────────────────────────────────────────
@@ -53,17 +50,39 @@ type MetricFormat = "ratio" | "percent" | "win_rate";
 
 interface TileConfig {
   label: string;
-  /** Key in ExtendedRiskMetricsResponse that holds the raw value. */
-  field: keyof ExtendedRiskMetricsResponse;
+  /**
+   * Key in ExtendedRiskMetricsResponse that holds the raw value.
+   *
+   * WHY widened to plain string: BENCH-TWR points at `spy_twr` which the
+   * backend has not yet shipped. The runtime lookup `metrics?.[field]`
+   * resolves to undefined → the formatter renders "—" (mirrors the CAGR /
+   * VAR 95 placeholder pattern). When the backend adds this field, the
+   * type narrows naturally. (Wave G QA F-002 alias: TWR now maps to the
+   * existing `period_return` field which IS returned by /risk-metrics.)
+   */
+  field: keyof ExtendedRiskMetricsResponse | "spy_twr";
   format: MetricFormat;
   /** When true, positive values use text-positive and negatives use text-negative. */
   signColor: boolean;
 }
 
 // WHY this exact ordering: matches the design spec §4.3 ASCII art top-to-bottom
-// order, which groups "risk-adjusted" ratios first, then raw risk numbers, then
-// return metrics at the bottom (matches IBKR Port Analyst column order).
+// order — TWR + benchmark TWR lead so the user reads "what did I make / what
+// would I have made in SPY" first, then risk-adjusted ratios, then raw risk
+// numbers, then return metrics at the bottom (matches IBKR Port Analyst column
+// order). Wave G QA: 11 tiles (was 9; +TWR, +BENCH TWR at the top).
 const TILES: TileConfig[] = [
+  // WHY TWR → period_return (Wave G QA F-002): the previous mapping used
+  // `twr_period` which /risk-metrics does not return — the tile rendered "—"
+  // permanently. `period_return` IS computed by the endpoint for the
+  // configured lookback window and is the time-weighted return for that
+  // window — semantically identical to "TWR for the lookback".
+  { label: "TWR",       field: "period_return",         format: "percent",  signColor: true  },
+  // BENCH TWR: backend does not yet compute SPY TWR for the lookback window;
+  // renders "—" until F-002-followup adds `spy_period_return` to /risk-metrics.
+  // Wave G design §4.3 keeps the tile in the grid so the layout doesn't shift
+  // when that field lands.
+  { label: "BENCH TWR", field: "spy_twr",               format: "percent",  signColor: true  },
   { label: "SHARPE",   field: "sharpe",               format: "ratio",    signColor: false },
   { label: "SORTINO",  field: "sortino",               format: "ratio",    signColor: false },
   { label: "CALMAR",   field: "calmar",                format: "ratio",    signColor: false },
@@ -72,9 +91,7 @@ const TILES: TileConfig[] = [
   { label: "BETA",     field: "beta_vs_spy",           format: "ratio",    signColor: false },
   { label: "VOL (ANN)",field: "volatility_annualized", format: "percent",  signColor: false },
   { label: "MAX DD",   field: "drawdown_max",          format: "percent",  signColor: true  },
-  { label: "VAR 95",   field: "var_95",                format: "percent",  signColor: true  },
   { label: "CAGR",     field: "cagr",                  format: "percent",  signColor: true  },
-  { label: "RETURN",   field: "period_return",         format: "percent",  signColor: true  },
 ];
 
 // ── Formatting helpers ────────────────────────────────────────────────────────
@@ -178,15 +195,25 @@ function Tile({ label, display, valueClassName }: TileProps) {
 export function AnalyticsRiskSidebar({
   portfolioId,
 }: AnalyticsRiskSidebarProps) {
-  const { accessToken } = useAuth();
+  // WHY useApiClient (Wave G QA D1): the legacy `createGateway(accessToken)`
+  // call inside queryFn re-allocated a gateway on every fetch. useApiClient
+  // returns the provider-memoised instance keyed to the current access token.
+  const apiClient = useApiClient();
 
   // WHY qk.portfolios.riskMetrics: uses the existing key shape so the 5-tile
   // RiskMetricsStrip on the overview page shares the same cache entry when the
   // user navigates to the analytics tab immediately after the overview.
-  const { data, isLoading } = useQuery({
+  //
+  // WHY no `period` argument in the key (Wave G QA D10 decision):
+  // qk.portfolios.riskMetrics has signature `(portfolioId: string)` — adding a
+  // period dimension would require changing keys.ts and the gateway. The
+  // risk-metrics endpoint itself is lookback_days-keyed (90d default) and does
+  // not vary with the analytics period selector. Removing the unused `period`
+  // prop is the less invasive fix.
+  const { data, isLoading, isError } = useQuery({
     queryKey: qk.portfolios.riskMetrics(portfolioId),
-    queryFn: () => createGateway(accessToken).getRiskMetrics(portfolioId),
-    enabled: !!accessToken && !!portfolioId,
+    queryFn: () => apiClient.getRiskMetrics(portfolioId),
+    enabled: !!portfolioId,
     // WHY 5min staleTime: risk metrics are recomputed once per daily snapshot.
     // Checking every minute is wasted computation for data that changes daily.
     staleTime: 300_000,
@@ -197,6 +224,22 @@ export function AnalyticsRiskSidebar({
   // because ExtendedRiskMetricsResponse extends RiskMetricsResponse and all
   // new fields are optional (nullable with undefined ≡ null for display logic).
   const metrics = data as ExtendedRiskMetricsResponse | undefined;
+
+  // ── Error: full-width inline message replacing the tile grid ────────────
+  // WHY full-width / replace-grid: per Wave G QA D8/D9, the user must see an
+  // explicit failure message instead of a permanently-loading skeleton. Using
+  // `text-negative` matches the app's error semantic (red); the [11px] size
+  // keeps the visual weight identical to the surrounding muted captions.
+  if (isError) {
+    return (
+      <div
+        role="alert"
+        className="text-[11px] text-negative font-mono px-2 py-1"
+      >
+        Couldn&apos;t load risk metrics
+      </div>
+    );
+  }
 
   // ── Loading: 11 skeleton tiles ────────────────────────────────────────────
   if (isLoading) {
@@ -227,7 +270,10 @@ export function AnalyticsRiskSidebar({
       {TILES.map((tile) => {
         // Read the raw value from the metrics object. Uses a generic index
         // access because TypeScript cannot narrow keyof T to number | null.
-        const raw = metrics?.[tile.field] as number | null | undefined;
+        // WHY cast through Record: TILES.field can name backend-pending keys
+        // (twr_period, spy_twr) that aren't on ExtendedRiskMetricsResponse yet.
+        // Accessing through a Record view yields undefined → "—" via fmtValue.
+        const raw = (metrics as unknown as Record<string, number | null | undefined>)?.[tile.field];
         const display = fmtValue(raw, tile.format);
         const colorClass = valueColorClass(raw, tile.signColor, tile.format);
 

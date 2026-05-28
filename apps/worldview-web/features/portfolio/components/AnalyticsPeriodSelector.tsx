@@ -16,6 +16,11 @@
 
 // WHY cn: conditional class composition without string concatenation bugs.
 import { cn } from "@/lib/utils";
+// WHY DataFreshnessPill (Wave G QA M-007): design spec §4.3 ASCII places a
+// freshness indicator immediately right of the period pills so the trader
+// can see at a glance when the analytics data was last computed. Rendered
+// inline so the controls bar height stays at 28px.
+import { DataFreshnessPill } from "@/components/primitives/DataFreshnessPill";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -24,6 +29,14 @@ export interface AnalyticsPeriodSelectorProps {
   value: string;
   /** Called with the newly selected period when a pill is clicked. */
   onChange: (p: string) => void;
+  /**
+   * Last-updated ISO 8601 timestamp from the risk-metrics endpoint's
+   * `as_of` field. When provided, renders a DataFreshnessPill to the right
+   * of the period pills (design spec §4.3). Plumbed in from AnalyticsTab
+   * which owns the risk-metrics query result. Optional so the selector
+   * still renders before the first fetch resolves.
+   */
+  lastUpdated?: string | null;
 }
 
 // ── Period list ───────────────────────────────────────────────────────────────
@@ -41,6 +54,7 @@ export type AnalyticsPeriod = (typeof PERIODS)[number];
 export function AnalyticsPeriodSelector({
   value,
   onChange,
+  lastUpdated,
 }: AnalyticsPeriodSelectorProps) {
   return (
     // WHY role="tablist" + role="tab": pill-group period selectors are
@@ -49,8 +63,9 @@ export function AnalyticsPeriodSelector({
     <div
       role="tablist"
       aria-label="Analytics period"
-      className="flex items-center gap-0.5"
+      className="flex items-center gap-2"
     >
+      <div className="flex items-center gap-0.5">
       {PERIODS.map((p) => {
         const isActive = value === p;
         return (
@@ -77,6 +92,13 @@ export function AnalyticsPeriodSelector({
           </button>
         );
       })}
+      </div>
+      {/* WHY conditional: the pill only renders once the risk-metrics
+          query has returned an as_of timestamp. Rendering an empty
+          placeholder would shift layout when the data lands. */}
+      {lastUpdated && (
+        <DataFreshnessPill lastUpdated={lastUpdated} format="absolute" />
+      )}
     </div>
   );
 }

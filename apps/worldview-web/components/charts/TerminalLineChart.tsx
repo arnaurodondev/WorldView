@@ -40,6 +40,17 @@ interface TerminalLineChartProps {
   tooltipFormatter?: (v: number) => string;
   /** Show the Recharts Legend below the chart. Default false. */
   showLegend?: boolean;
+  /**
+   * Accessible label describing the chart contents (D7 fix).
+   *
+   * WHY optional with default: Recharts renders an SVG tree with no inherent
+   * semantic role. Wrapping it in role="img" + aria-label gives screen readers
+   * a single readable announcement instead of trying (and failing) to walk the
+   * SVG. Callers should pass a concise human description ("Drawdown over the
+   * last 12 months") — when omitted we fall back to a generic "Chart" so the
+   * accessible name is never empty.
+   */
+  ariaLabel?: string;
 }
 
 // Shared axis style — Terminal Dark palette uses muted-foreground for supporting text.
@@ -57,10 +68,16 @@ export function TerminalLineChart({
   yTickFormatter,
   tooltipFormatter,
   showLegend = false,
+  ariaLabel,
 }: TerminalLineChartProps) {
   return (
-    // WHY w-full with explicit height: ResponsiveContainer needs a fixed height
-    // dimension; the parent controls width via className.
+    // WHY role="img" wrapper (D7 fix): Recharts emits a raw <svg> tree with no
+    // semantic role. Wrapping in role="img" + aria-label lets screen readers
+    // announce the chart with the caller-supplied description (e.g. "Rolling
+    // 30-day volatility"). Default "Chart" keeps the accessible name non-empty
+    // when callers haven't supplied one yet — the lint rule is satisfied and
+    // the chart still degrades gracefully.
+    <div role="img" aria-label={ariaLabel ?? "Chart"} className="w-full">
     <ResponsiveContainer width="100%" height={height}>
       <LineChart data={data} margin={{ top: 4, right: 8, bottom: 0, left: 0 }}>
         {/* WHY opacity 0.5: full-opacity grid lines dominate the data ink in
@@ -133,5 +150,6 @@ export function TerminalLineChart({
         ))}
       </LineChart>
     </ResponsiveContainer>
+    </div>
   );
 }

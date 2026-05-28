@@ -29,8 +29,7 @@
 
 import { useMemo } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { createGateway } from "@/lib/gateway";
-import { useAuth } from "@/hooks/useAuth";
+import { useApiClient } from "@/lib/api-client";
 import { qk } from "@/lib/query/keys";
 import { cn } from "@/lib/utils";
 import type { TransactionsResponse, Transaction } from "@/types/api";
@@ -88,16 +87,19 @@ export function HoldingInstrumentTxList({
   instrumentId,
   limit = 5,
 }: HoldingInstrumentTxListProps) {
-  const { accessToken } = useAuth();
+  const apiClient = useApiClient();
 
-  // WHY transactionsByPortfolio key: this is the SAME flat key shape used by
-  // usePortfolioData — TanStack Query returns the cached copy instantly when
-  // the parent HoldingsTab has already loaded transactions for this portfolio.
-  const { data, isLoading } = useQuery<TransactionsResponse>({
-    queryKey: qk.portfolios.transactionsByPortfolio(portfolioId),
-    queryFn: () =>
-      createGateway(accessToken!).getTransactions(portfolioId, { limit: 100 }),
-    enabled: Boolean(accessToken && portfolioId),
+  // WHY qk.portfolios.holdingTx(portfolioId) — no instrumentId (Wave G QA
+  // M-006): the underlying getTransactions request is identical across
+  // every instrument (portfolio-wide list with limit=100); filtering is
+  // done client-side in the useMemo below. Keying by portfolioId alone
+  // means opening AAPL → MSFT → NVDA reuses one cache entry instead of
+  // firing 3 identical S9 calls. The key still bakes in `limit: 100`
+  // semantics that distinguish it from the portfolio-wide TransactionsTable.
+  const { data, isLoading, isError } = useQuery<TransactionsResponse>({
+    queryKey: qk.portfolios.holdingTx(portfolioId),
+    queryFn: () => apiClient.getTransactions(portfolioId, { limit: 100 }),
+    enabled: Boolean(portfolioId),
     staleTime: 60_000, // 1 min — transactions don't change sub-minute
   });
 
@@ -121,6 +123,19 @@ export function HoldingInstrumentTxList({
         {Array.from({ length: limit }).map((_, i) => (
           <div key={i} className="h-[20px] w-full animate-pulse rounded bg-muted" />
         ))}
+      </div>
+    );
+  }
+
+  // ── Error state ───────────────────────────────────────────────────────────
+  // WHY explicit isError branch: without one, a failed fetch silently falls
+  // through to the empty-state copy ("No transactions") which lies to the
+  // user about whether the instrument has any history. Design §7 specifies
+  // a dedicated error string for the transactions block.
+  if (isError) {
+    return (
+      <div className="px-3 py-2 font-mono text-[11px] text-negative">
+        Transactions unavailable
       </div>
     );
   }
@@ -183,9 +198,27 @@ export function HoldingInstrumentTxList({
             </span>
           </div>
 
-          {/* Amount — right-aligned for column scanning */}
-          <div className="text-right tabular-nums text-foreground">
-            {fmtTxAmount(tx)}
+          {/* Amount — right-aligned for column scanning.
+              D6 remediation: broker-supplied `description` (when present) is
+              rendered as a 9px subline beneath the amount. This is the
+              human-readable explanation the broker attached to the fill
+              (e.g. "AAPL US 06/20 175 C @ 2.15"). Truncated with a tooltip
+              so long descriptions don't blow out the 440px panel width. */}
+          <div className="text-right">
+            <div className="font-mono tabular-nums text-[11px] text-foreground">
+              {fmtTxAmount(tx)}
+            </div>
+            {tx.description && (
+              // WHY slice(0, 500): defense-in-depth — server-side Pydantic
+              // `max_length=500` is the source of truth; client-side slice
+              // prevents DOM bloat from any unexpected backfill row.
+              <div
+                className="text-[9px] text-muted-foreground truncate max-w-[200px] ml-auto"
+                title={(tx.description ?? "").slice(0, 500)}
+              >
+                {tx.description}
+              </div>
+            )}
           </div>
         </div>
       ))}

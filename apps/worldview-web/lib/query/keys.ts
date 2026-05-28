@@ -134,8 +134,14 @@ export const qk = {
     // live price caused cache thrashing on every 15s quote tick (DS Agent F-009).
     holdingLots: (portfolioId: string, instrumentId: string) =>
       [QK_VERSION, "portfolios", "detail", portfolioId, "holding-lots", instrumentId] as const,
-    holdingTx: (portfolioId: string, instrumentId: string) =>
-      [QK_VERSION, "portfolios", "detail", portfolioId, "holding-tx", instrumentId] as const,
+    // WHY no instrumentId (Wave G QA M-006): the underlying request
+    // getTransactions(portfolioId, { limit: 100 }) is identical for every
+    // instrument — HoldingInstrumentTxList filters client-side. Including
+    // instrumentId in the key caused 3 identical S9 calls when the user
+    // opened AAPL → MSFT → NVDA panels. Single shared cache entry per
+    // portfolio now serves every per-holding panel.
+    holdingTx: (portfolioId: string) =>
+      [QK_VERSION, "portfolios", "detail", portfolioId, "holding-tx"] as const,
     holdingValueHistory: (portfolioId: string, instrumentId: string, period: string) =>
       [QK_VERSION, "portfolios", "detail", portfolioId, "holding-value-history", instrumentId, period] as const,
     attribution: (portfolioId: string, period: string, dimension: "holding" | "sector" | "asset_class") =>
@@ -164,6 +170,17 @@ export const qk = {
     all: [QK_VERSION, "brokerage"] as const,
     connections: () => [QK_VERSION, "brokerage", "connections"] as const,
     syncErrors: () => [QK_VERSION, "brokerage", "sync-errors"] as const,
+    // WHY statusForPortfolio (PRD-0089 SA-C, D4 fix):
+    // TransactionsBrokerageStatusBar previously composed an inline composite
+    // key like `[...connections(), portfolioId]`. Inline composition outside
+    // the factory mutates the canonical key shape and bypasses TS literal
+    // tuple inference. A dedicated factory keeps the key shape declared in
+    // one place. The "status-for-portfolio" segment distinguishes this
+    // per-portfolio scoped view from `connections()` (all user connections)
+    // while remaining under the brokerage.* cascade so connection mutations
+    // (sync, disconnect) still invalidate it via qk.brokerage.all.
+    statusForPortfolio: (portfolioId: string | null | undefined) =>
+      [QK_VERSION, "brokerage", "status-for-portfolio", portfolioId ?? ""] as const,
   },
 
   // ── Instruments / market data ────────────────────────────────────────────
@@ -315,6 +332,14 @@ export const qk = {
     // global news invalidation (e.g. on login/logout) clears it automatically.
     articleImpactHistory: (articleId: string) =>
       [QK_VERSION, "news", "article", articleId, "impact-history"] as const,
+    // PLAN-0093 G remediation (D12): dedicated key for HoldingNewsList.
+    // WHY separate from forEntity: the holding-detail slide-over requests a
+    // small fixed limit (default 5) while IntelligenceTab requests larger
+    // pages of the same entity feed. Encoding `limit` in the key prevents
+    // those two consumers from clobbering each other's cache entry. Nests
+    // under news.* so the global news cascade still invalidates it.
+    holdingNewsTop: (instrumentId: string, limit: number) =>
+      [QK_VERSION, "news", "holding-top", instrumentId, limit] as const,
   },
 
   // ── Screener ─────────────────────────────────────────────────────────────
