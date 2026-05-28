@@ -214,15 +214,35 @@ _CONSENSUS_RATING_MAP: dict[str, float] = {
 def _consensus_rating(raw: Any) -> float | None:
     """Return the WL-4a 1-5 consensus rating for the raw EODHD value.
 
-    Numeric inputs (int/float/Decimal/parseable string) pass through via
-    :func:`_safe_float`. Non-numeric strings are matched case-insensitively
-    against :data:`_CONSENSUS_RATING_MAP`. Anything else returns ``None``.
+    Scale convention (post-WL-4a fix, QA finding #1):
+        Stored values follow ``higher = more bullish`` on a 1-5 scale, i.e.
+        ``5 = Strong Buy``, ``1 = Strong Sell``. This matches both the
+        ``screen_field_metadata`` description ("1-5 scale (higher = more
+        bullish)") and the text-label mapping in :data:`_CONSENSUS_RATING_MAP`.
+
+    EODHD native numeric scale is INVERTED relative to our storage:
+        EODHD: ``1 = Strong Buy`` (most bullish), ``5 = Strong Sell``.
+        Storage: ``5 = Strong Buy`` (most bullish), ``1 = Strong Sell``.
+    Numeric inputs in the EODHD 1-5 range are therefore flipped via ``6 - x``
+    so the on-disk value is always coherent regardless of whether EODHD
+    delivered a numeric rating or a text label. Out-of-range numerics
+    (e.g. ``0.5``, ``6.0``, negatives) are treated as malformed and dropped.
+
+    Non-numeric strings are matched case-insensitively against
+    :data:`_CONSENSUS_RATING_MAP` (which already encodes the bullish-up
+    convention directly). Anything else returns ``None``.
     """
     # First attempt numeric coercion — covers the EODHD-default 1-5 numeric
     # case plus any string that happens to be a numeric literal ("2.5").
     numeric = _safe_float(raw)
     if numeric is not None:
-        return numeric
+        # Only accept values inside EODHD's documented 1-5 band; flip to the
+        # bullish-up storage convention. Out-of-band values are dropped to
+        # avoid corrupting the screen field (NULL is preferable to a wrong
+        # rating that would mis-rank the screener).
+        if 1.0 <= numeric <= 5.0:
+            return 6.0 - numeric
+        return None
     if isinstance(raw, str):
         # Normalise whitespace and case for the text lookup.
         key = " ".join(raw.strip().lower().split())
