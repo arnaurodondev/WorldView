@@ -11,39 +11,24 @@ dependency needed.
 
 R9: reads only from ``rag_chat_db`` (S8's own DB).
 R25: API → use case only.
-R27: uses a read-only session via ``ReadUoWDep``.
+R27: uses the canonical ``ReadOnlyDbSessionDep`` (raw read-only AsyncSession),
+mirroring ``knowledge_graph.api.internal_intelligence_rollup``. Fix for
+WL-5a QA finding #3 — replaces a previously inlined ``_get_read_session``
+helper to remove the micro-divergence from the platform standard.
 """
 
 from __future__ import annotations
 
-from collections.abc import AsyncGenerator
 from datetime import datetime
-from typing import Annotated
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter
 from pydantic import BaseModel
-from sqlalchemy.ext.asyncio import AsyncSession
 
+from rag_chat.api.dependencies import ReadOnlyDbSessionDep
 from rag_chat.application.use_cases.ai_brief_flag import GetAiBriefFlagUseCase
 
 router = APIRouter(prefix="/internal/v1", tags=["internal", "rollup"])
-
-
-# WHY a dedicated read session dep (not ReadUoWDep): the use case needs a raw
-# AsyncSession to run a small COUNT/MAX query; RagUnitOfWork wires repos for
-# threads/messages but does not expose .session. This mirrors the pattern in
-# ``get_brief_archive_dep`` (api/dependencies.py:71-98) which also reaches
-# into ``read_factory`` directly for a read-only repository.
-async def _get_read_session(request: Request) -> AsyncGenerator[AsyncSession, None]:
-    session = request.app.state.read_factory()
-    try:
-        yield session
-    finally:
-        await session.close()
-
-
-ReadSessionDep = Annotated[AsyncSession, Depends(_get_read_session)]
 
 
 class AiBriefFlagResponse(BaseModel):
@@ -60,7 +45,7 @@ class AiBriefFlagResponse(BaseModel):
 )
 async def get_ai_brief_flag(
     instrument_id: UUID,
-    session: ReadSessionDep,
+    session: ReadOnlyDbSessionDep,
 ) -> AiBriefFlagResponse:
     """Return whether any cached entity-scoped AI brief exists for ``instrument_id``.
 
