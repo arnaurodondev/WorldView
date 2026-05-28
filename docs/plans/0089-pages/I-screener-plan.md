@@ -265,6 +265,11 @@ If any check fails: stop, report, do not branch. Do not improvise.
   `"More than 14 columns will horizontally scroll past the 1440 px viewport."`
 - Threshold check: if `selectedCols.length > 14`, the footer is
   `text-warning`; otherwise `text-muted-foreground`.
+- **14-cap enforcement (Wave I-B QA #1 follow-up)**: `DEFAULT_COLUMNS` in
+  `lib/screener-columns.ts` ships exactly 14 default-visible entries
+  (`forwardPe` demoted to opt-in — correlated with trailing P/E). The
+  invariant is locked by `lib/__tests__/screener-columns.test.ts`
+  (`DEFAULT_COLUMNS.filter(c => c.visible).length === 14`).
 
 #### Block C — Page rewrite + hotkeys
 

@@ -112,7 +112,24 @@ export const DEFAULT_COLUMNS: readonly ScreenerColumn[] = Object.freeze([
   Object.freeze({ key: "pe",            label: "P/E",         sortable: true,  align: "right", formatter: "number" as const,  visible: true }),
   // PLAN-0092 Wave C: replaced revenue with revenue growth; added fwdPe, divYield, roe
   Object.freeze({ key: "revenueGrowth", label: "Rev YoY%",    sortable: true,  align: "right", formatter: "percent" as const, visible: true }),
-  Object.freeze({ key: "forwardPe",     label: "Fwd P/E",     sortable: true,  align: "right", formatter: "number" as const,  visible: true }),
+  // ── forwardPe demoted to opt-in (PRD-0089 §6.3 14-column cap, QA finding #1) ─
+  // WHY visible: false (was true in PLAN-0092 Wave C):
+  //   - PRD-0089 plan §6.3 caps default-visible columns at ≤14 above the fold at
+  //     1440×900 to hit the 240–280 visible body-cell density target (20 rows ×
+  //     12–14 cols). Wave I-B QA flagged we were shipping 15 — one over budget.
+  //   - Of the candidates, Fwd P/E is the most natural drop: it is HIGHLY
+  //     correlated with the already-visible trailing P/E (rank correlation
+  //     ~0.85 across the S&P 500 ex-loss-makers), so the marginal information
+  //     gained from showing both side-by-side is small for a general-purpose
+  //     default. P/E is the more universal "first glance" multiple.
+  //   - Forward P/E remains FIRST-CLASS: surfaced as an opt-in toggle in
+  //     ColumnSettingsPopover (Valuation group) and is the natural inclusion in
+  //     a "Compounder" or "Growth-at-a-reasonable-price" saved screen where the
+  //     user explicitly opts into forward-looking valuation.
+  //   - Regression guard: see lib/__tests__/screener-columns.test.ts —
+  //     `DEFAULT_COLUMNS.filter(c => c.visible).length === 14` is asserted to
+  //     prevent the count from drifting back up next time we add a column.
+  Object.freeze({ key: "forwardPe",     label: "Fwd P/E",     sortable: true,  align: "right", formatter: "number" as const,  visible: false }),
   Object.freeze({ key: "divYield",      label: "Div Y%",      sortable: true,  align: "right", formatter: "percent" as const, visible: true }),
   Object.freeze({ key: "roe",           label: "ROE%",        sortable: true,  align: "right", formatter: "percent" as const, visible: true }),
   Object.freeze({ key: "beta",          label: "Beta",        sortable: true,  align: "right", formatter: "number" as const,  visible: true }),
