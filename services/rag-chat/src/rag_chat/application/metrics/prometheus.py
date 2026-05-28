@@ -366,6 +366,55 @@ rag_brief_served_stale_total = Counter(
     "Times the handler served last-known-good brief instead of fresh",
 )
 
+# ── PLAN-0099 Wave A: brief-context diagnostics ──────────────────────────────
+#
+# Three metrics surface "silent partial context loss" failures (BP-599) and
+# truncation hides tail signals (BP-600):
+#   * brief_context_availability_score — 0.0 (no data) to 1.0 (all sections
+#     populated). Weighted across portfolio (highest weight) + news + events
+#     + alerts + sections that ended non-empty.  Operators alert when the
+#     histogram bucket <0.5 fires more than ~20% of the time.
+#   * brief_upstream_latency_ms{source} — per-upstream call wall time so a
+#     slow source (S1 portfolio DB replica lag, S6 retrieval timeout) is
+#     visible without grepping logs.
+#   * brief_upstream_status{source,outcome} — bounded counter (outcome ∈
+#     ok|timeout|error|empty) for at-a-glance SLO tracking.
+#   * brief_cache_outcome{cache_name,outcome} — Valkey/in-memory cache hit
+#     or miss along the brief path so cache-staleness regressions surface.
+#   * brief_low_context_refusal_total — incremented every time the
+#     context-availability score is below the configured threshold and we
+#     skip the LLM call (Wave B refusal-on-low-context behaviour).
+
+brief_context_availability_score = Histogram(
+    "brief_context_availability_score",
+    "Weighted fraction of brief context sources that returned non-empty data (0.0 to 1.0)",
+    buckets=(0.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0),
+)
+
+brief_upstream_latency_ms = Histogram(
+    "brief_upstream_latency_ms",
+    "Per-upstream call wall time (ms) during brief context gathering",
+    labelnames=["source"],  # s1_portfolio | s3_quotes | s5_alerts | s6_news | s7_events
+    buckets=(10, 25, 50, 100, 250, 500, 1000, 2500, 5000, 10000),
+)
+
+brief_upstream_status = Counter(
+    "brief_upstream_status_total",
+    "Per-upstream outcome counter for brief context gathering",
+    labelnames=["source", "outcome"],  # outcome ∈ ok|timeout|error|empty
+)
+
+brief_cache_outcome = Counter(
+    "brief_cache_outcome_total",
+    "Brief-path cache hit/miss/error counter",
+    labelnames=["cache_name", "outcome"],  # outcome ∈ hit|miss|error
+)
+
+brief_low_context_refusal_total = Counter(
+    "brief_low_context_refusal_total",
+    "Times the brief generator refused LLM call due to low context availability score",
+)
+
 # ── F-LIVE-NEW-001: entity-resolver ambiguity observability ──────────────────
 #
 # Counts the number of times ``IntelligenceHandler._resolve_entity_by_name``
@@ -381,4 +430,22 @@ rag_entity_resolver_ambiguous_total = Counter(
     "entity_resolver_ambiguous_total",
     "Entity-resolver bailed because the candidate set was ambiguous or low-quality",
     labelnames=["reason"],  # stop_word_strip | delta_below_threshold | low_top_similarity
+)
+
+# ── PLAN-0099 Wave C: agentic brief generator (experimental) ─────────────────
+brief_agentic_llm_calls_total = Counter(
+    "brief_agentic_llm_calls_total",
+    "LLM round-trips made by AgenticBriefGenerator (per generation)",
+)
+
+brief_agentic_tool_calls_total = Counter(
+    "brief_agentic_tool_calls_total",
+    "Tool invocations made by AgenticBriefGenerator (per generation)",
+    labelnames=["tool"],
+)
+
+brief_agentic_fallback_total = Counter(
+    "brief_agentic_fallback_total",
+    "Times the agentic brief generator fell back to the standard path",
+    labelnames=["reason"],  # exception | budget_exhausted | empty_response
 )

@@ -194,6 +194,15 @@ class Settings(BaseSettings):
     brief_fresh_ttl_hours: int = Field(default=30, ge=1, le=168)
     brief_last_good_ttl_days: int = Field(default=7, ge=1, le=30)
 
+    # ── Agentic brief generator (PLAN-0099 Wave C — experimental) ────────────
+    # When True, the morning-brief route uses the AgenticBriefGenerator (an
+    # iterative LLM tool-use loop) instead of the single-turn standard
+    # generator. Off by default; intended for A/B comparison only. The
+    # agentic path falls back to the standard generator on any exception or
+    # if the per-generation tool-call budget is exhausted.
+    brief_agentic_enabled: bool = False  # RAG_CHAT_BRIEF_AGENTIC_ENABLED
+    brief_agentic_max_tool_calls: int = Field(default=8, ge=1, le=32)  # RAG_CHAT_BRIEF_AGENTIC_MAX_TOOL_CALLS
+
     # ── Entity resolver tuning (F-LIVE-NEW-001) ──────────────────────────────
     # Stop-words stripped from the query string BEFORE the S7 alias fuzzy
     # match so generic English fragments ("space", "sector", "industry") do not

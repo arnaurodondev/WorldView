@@ -305,12 +305,38 @@ async def get_morning_briefing(request: Request) -> PublicBriefingResponse:
     internal_jwt = request.headers.get("X-Internal-JWT")
     set_current_jwt(internal_jwt)
     uc = _get_briefing_uc(request)
+    # PLAN-0099 Wave C: flag-gated agentic brief generator (experimental).
+    # When RAG_CHAT_BRIEF_AGENTIC_ENABLED=true we drive the iterative tool-use
+    # loop instead of the single-turn generator. The agentic path falls back
+    # to ``uc.execute_public_morning`` internally on any failure, so the
+    # response envelope is always shape-compatible with the route.
+    _settings = request.app.state.settings
     try:
-        result = await uc.execute_public_morning(
-            user_id=user_id,
-            tenant_id=tenant_id,
-            internal_jwt=internal_jwt,
-        )
+        if getattr(_settings, "brief_agentic_enabled", False):
+            from rag_chat.application.use_cases.agentic_brief_generator import AgenticBriefGenerator
+
+            _factory = request.app.state.tool_executor_factory
+            _tool_executor = _factory.for_request(
+                user_id=UUID(user_id) if user_id else None,
+                tenant_id=UUID(tenant_id) if tenant_id else None,
+                internal_jwt=internal_jwt,
+            )
+            _agentic = AgenticBriefGenerator(
+                llm_chain=request.app.state.llm_chain,
+                tool_executor=_tool_executor,
+                settings=_settings,
+                fallback=uc,
+            )
+            result = await _agentic.generate(
+                user_id=UUID(user_id),
+                tenant_id=UUID(tenant_id),
+            )
+        else:
+            result = await uc.execute_public_morning(
+                user_id=user_id,
+                tenant_id=tenant_id,
+                internal_jwt=internal_jwt,
+            )
     except RateLimitExceededError as e:
         raise HTTPException(status_code=429, detail=str(e)) from e
     except ProviderUnavailableError as e:
