@@ -94,6 +94,23 @@ class Settings(BaseSettings):
     # Hard cap on horizon — runtime clamps INITIAL_DAYS to YEARS * 365.
     auto_backfill_years: int = 10
 
+    # Fundamentals refresh worker (PLAN-0099 W2-T02).
+    # OFF by default — operators flip ``FUNDAMENTALS_REFRESH_ENABLED=true``
+    # per-deploy. When enabled, the worker re-enqueues fundamentals fetches
+    # for the configured symbol universe every N hours so freshly-reported
+    # quarters (e.g. AMD FY2026 Q1) land in ``intelligence_db`` without
+    # waiting for the slow polling policy to come round. See
+    # ``infrastructure/workers/fundamentals_refresh_worker.py`` for the loop.
+    fundamentals_refresh_enabled: bool = False
+    fundamentals_refresh_interval_hours: float = 6.0
+    fundamentals_refresh_top_n: int = 500
+    fundamentals_refresh_provider: str = "eodhd"
+    fundamentals_refresh_variant: str = "quarterly"
+    # CSV override; empty = use the worker's built-in mega-cap default list.
+    # Operators set this to a curated "top-N by market cap" snapshot from
+    # market-data once that endpoint exists (deferred to a successor plan).
+    fundamentals_refresh_symbols: str = ""
+
     # Worker
     worker_batch_size: int = 10
     worker_lease_seconds: int = 300

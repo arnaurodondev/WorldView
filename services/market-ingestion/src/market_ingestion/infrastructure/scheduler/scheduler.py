@@ -47,8 +47,16 @@ class SchedulerProcess:
         self._write_factory, self._read_factory = _build_factories(settings)
 
     def stop(self) -> None:
-        """Signal the scheduler loop to stop after the current tick."""
+        """Signal the scheduler loop to stop after the current tick.
+
+        Also stops the FundamentalsRefreshWorker (PLAN-0099 W2-T02) if it was
+        spawned, so SIGTERM tears down both loops together rather than leaving
+        the refresh worker stranded.
+        """
         self._stop_event.set()
+        worker = getattr(self, "_fundamentals_refresh_worker", None)
+        if worker is not None:
+            worker.stop()
 
     async def run(self) -> None:
         """Run the scheduler loop until ``stop()`` is called."""
@@ -63,6 +71,13 @@ class SchedulerProcess:
         # a kill-switch. Errors inside the task are swallowed in _run_startup_backfill.
         if getattr(self._settings, "auto_backfill_on_startup", False):
             self._spawn_startup_backfill()
+
+        # PLAN-0099 W2-T02: spawn the FundamentalsRefreshWorker as a fire-and-forget
+        # task so its 6-hour loop runs concurrently with the scheduler tick loop.
+        # Gated by ``fundamentals_refresh_enabled`` — off by default so this rolls
+        # out per-deploy without surprising any environment that hasn't opted in.
+        if getattr(self._settings, "fundamentals_refresh_enabled", False):
+            self._spawn_fundamentals_refresh()
 
         while not self._stop_event.is_set():
             # WHY try/except here: _tick() catches DB errors internally, but an
@@ -106,6 +121,33 @@ class SchedulerProcess:
             )
         except Exception as exc:  # — scheduler must boot regardless
             logger.exception("startup_backfill_spawn_failed", error=str(exc))
+
+    def _spawn_fundamentals_refresh(self) -> None:
+        """Detach the fundamentals-refresh loop on a background task (PLAN-0099 W2-T02).
+
+        The worker runs forever (until ``self.stop()`` is observed by the
+        scheduler — we propagate via the worker's own ``stop()`` below).
+        We stash the task handle so it isn't GC'd before completion (RUF006)
+        and propagate ``stop()`` so SIGTERM cleanly tears it down with the
+        scheduler.
+        """
+        from market_ingestion.infrastructure.workers.fundamentals_refresh_worker import (
+            FundamentalsRefreshWorker,
+        )
+
+        try:
+            worker = FundamentalsRefreshWorker(settings=self._settings)
+            # Stash the worker so stop() can tear it down (see below).
+            self._fundamentals_refresh_worker = worker
+            self._fundamentals_refresh_task = asyncio.create_task(
+                worker.run(),
+                name="fundamentals_refresh_worker",
+            )
+        except Exception as exc:  # — scheduler must boot regardless
+            logger.exception(
+                "fundamentals_refresh_spawn_failed",
+                error=str(exc),
+            )
 
     @staticmethod
     async def _run_startup_backfill(use_case) -> None:  # type: ignore[no-untyped-def]

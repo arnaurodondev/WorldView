@@ -54,6 +54,31 @@ All four processes ship in the same Docker image with different `command` overri
 
 A fifth process, **Reclaim Worker** (`reclaim_worker_main.py`), periodically resets expired-lease tasks back to `RETRY` state to prevent crashed-worker deadlock.
 
+### FundamentalsRefreshWorker (PLAN-0099 W2-T02)
+
+In-process loop spawned by `SchedulerProcess` when
+`MARKET_INGESTION_FUNDAMENTALS_REFRESH_ENABLED=true`. Every
+`FUNDAMENTALS_REFRESH_INTERVAL_HOURS` (default 6) it calls
+`TriggerIngestionUseCase` directly for each symbol in the configured
+universe (CSV via `FUNDAMENTALS_REFRESH_SYMBOLS`, capped by
+`FUNDAMENTALS_REFRESH_TOP_N`, default mega-cap list). Exponential backoff
+with jitter on `ProviderRateLimited` (HTTP 429). Off by default — exists
+to close the "FY2026 quarter missing" data freshness gap surfaced in the
+PLAN-0098 chat-eval investigation (audit §A4).
+
+Metrics: `fundamentals_refresh_attempts_total{symbol, status}` where
+`status ∈ {ok, rate_limited, error, skipped}`.
+
+Env vars:
+- `FUNDAMENTALS_REFRESH_ENABLED` (bool, default `false`) — kill switch.
+- `FUNDAMENTALS_REFRESH_INTERVAL_HOURS` (float, default `6.0`).
+- `FUNDAMENTALS_REFRESH_TOP_N` (int, default `500`, clamped to [1, 5000]).
+- `FUNDAMENTALS_REFRESH_PROVIDER` (str, default `"eodhd"`).
+- `FUNDAMENTALS_REFRESH_VARIANT` (str, default `"quarterly"`).
+- `FUNDAMENTALS_REFRESH_SYMBOLS` (CSV, default empty → built-in list).
+
+All prefixed with `MARKET_INGESTION_` in `configs/docker.env`.
+
 ---
 
 ## API Endpoints
