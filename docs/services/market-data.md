@@ -1007,7 +1007,7 @@ Backfill summary includes `scanned_rows`, `extracted_metric_rows`, `inserted_row
 |---|---|---|
 | `001` | `None` | Initial schema — core tables (securities, instruments, ohlcv_bars, quotes) |
 | `002` | `001` | Convert `ohlcv_bars` to TimescaleDB hypertable (`create_hypertable`, 1-month chunks) |
-| `003` | `002` | Add 14 fundamentals tables (period-based: income_statement, balance_sheet, etc.) |
+| `003` | `002` | Add 18 fundamentals tables (period-based: income_statement, balance_sheet, etc.). Note: of these 18 only 17 are mixin-derived; `CompanyProfileModel` is mixin-exempt (snapshot-only, no `period_type` column). Earlier docs cited "14 tables" — corrected post-PLAN-0097 W4 after migration 022 enumerated all 18 for `ANALYZE`. |
 | `004` | `003` | Add infrastructure tables (ingestion_events, failed_tasks, outbox_events) with new column schema |
 | `005` | `004` | Add 4 non-period fundamentals tables (company_profiles, highlights, institutional_holders, fund_holders, insider_transactions_snapshot); drop dividend_summary |
 | `002` (consolidated) | `001` (consolidated) | Add `fundamental_metrics` read-optimized projection table with unique constraint and indexes |
@@ -1183,7 +1183,7 @@ make test -- tests/unit/ -v
 |---|---|
 | `tests/integration/fixtures/sample_ohlcv.jsonl` | 5 valid daily OHLCV bars for `test-inst-001` |
 | `tests/integration/fixtures/sample_quotes.json` | 1 valid quote |
-| `tests/integration/fixtures/sample_fundamentals.json` | Income statement, balance sheet, valuation ratios (3 of 14 sections) |
+| `tests/integration/fixtures/sample_fundamentals.json` | Income statement, balance sheet, valuation ratios (3 of 18 sections) |
 
 ---
 
