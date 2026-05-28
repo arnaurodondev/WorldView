@@ -3,7 +3,7 @@ id: PRD-0089-WI
 title: Wave I — Screener
 prd: PRD-0089
 order: WI (ninth page wave — runs after F1 + F2 + W1; I-B gated on Wave L)
-status: I-A done (2026-05-26) / IB-L1 done (2026-05-26) / IB-L2 unblocked (Wave L-1 shipped 2026-05-25 / Wave L-2 filter/sort + migration 024 shipped 2026-05-27)
+status: I-A done (2026-05-26) / IB-L1 done (2026-05-26) / IB-L2 done (2026-05-27 — T-IB-05..09 shipped on branch feat/plan-0089-wi-b-l2)
 created: 2026-05-25
 updated: 2026-05-26
 parent_prd: docs/specs/0089-platform-page-redesign.md
@@ -478,7 +478,16 @@ pnpm --filter worldview-web exec playwright test screener
 # manual: at 1440×900, apply Country=USA → result count drops; chip visible
 ```
 
-#### Block IB-L2 — Fundamentals snapshot columns (depends on Wave L-2)
+#### Block IB-L2 — Fundamentals snapshot columns (DONE 2026-05-27)
+
+**Status**: SHIPPED on branch `feat/plan-0089-wi-b-l2`. Commits:
+- `b67a1e9e` — T-IB-05 6 numeric + credit rating columns (ag-screener-columns.tsx, lib/screener/credit-rating.ts, lib/screener-columns.ts, ColumnSettingsPopover.tsx)
+- `b021e802` — T-IB-06+07 6 range filters + credit rating multi-select (filter-state.ts, build-filters.ts, active-counts.ts, ScreenerFilterBar.tsx, FilterChipStrip.tsx, CreditRatingFilterRow.tsx, types/api.ts)
+- `5b691bc5` — T-IB-08 Vitest (29 + 23 + 25 + 23 = 100/100 PASS)
+- `8efaa455` — T-IB-09 Playwright e2e (3 specs, skip-aware under E2E_AUTH)
+- `<docs commit>` — Plan + TRACKING + .claude-context.md updates
+
+
 
 **T-IB-05** Extend `ag-screener-columns.tsx` with 6 opt-in columns
 backed by `instrument_fundamentals_snapshot`:
