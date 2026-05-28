@@ -58,6 +58,17 @@ class ScreenFilterRequest(BaseModel):
     net_debt_to_ebitda_min: float | None = None
     net_debt_to_ebitda_max: float | None = None
     credit_ratings: list[str] | None = None
+    # ── Wave L-4a snapshot column filters (PLAN-0089) ────────────────────────
+    # Mirror of ScreenFilter port fields. Decimal-fraction unit convention
+    # applies to ownership and short (e.g. 0.5 means 50%) — see port docs.
+    analyst_target_price_min: float | None = None
+    analyst_target_price_max: float | None = None
+    analyst_consensus_rating_min: float | None = None
+    analyst_consensus_rating_max: float | None = None
+    institutional_ownership_pct_min: float | None = None
+    institutional_ownership_pct_max: float | None = None
+    short_percent_min: float | None = None
+    short_percent_max: float | None = None
 
 
 class ScreenRequest(BaseModel):

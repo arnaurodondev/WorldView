@@ -31,6 +31,14 @@ _SNAP_FIELDS: tuple[str, ...] = (
     "interest_coverage",
     "net_debt_to_ebitda",
     "credit_rating",
+    # ── Wave L-4a snapshot fields (PLAN-0089) ────────────────────────────────
+    # Projected via the same LEFT JOIN as the L-2 fields above so every
+    # ``ScreenResult`` carries them when populated. Filtering/sorting on
+    # these fields is wired below alongside the L-2 ``numeric_snap_filters``.
+    "analyst_target_price",
+    "analyst_consensus_rating",
+    "institutional_ownership_pct",
+    "short_percent",
 )
 
 if TYPE_CHECKING:
@@ -324,6 +332,11 @@ async def query_screen(
         "fcf_margin",
         "interest_coverage",
         "net_debt_to_ebitda",
+        # ── Wave L-4a snapshot fields (PLAN-0089) ────────────────────────────
+        "analyst_target_price",
+        "analyst_consensus_rating",
+        "institutional_ownership_pct",
+        "short_percent",
     )
     for snap_field in numeric_snap_filters:
         min_attr = f"{snap_field}_min"

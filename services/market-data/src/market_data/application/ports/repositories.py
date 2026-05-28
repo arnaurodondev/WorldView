@@ -91,6 +91,21 @@ class ScreenFilter:
     # or better". Empty list / None = no filter. Tuples accepted to allow
     # frozen-dataclass usage from Pydantic mode='python'.
     credit_ratings: tuple[str, ...] | None = None
+    # ── Wave L-4a snapshot column filters (PLAN-0089) ────────────────────────
+    # Numeric min/max ranges against the four columns added by migration 025.
+    # ``institutional_ownership_pct`` and ``short_percent`` are stored as
+    # decimal fractions (0.0-1.0+), matching ``fcf_margin``; callers should
+    # send fractional values (e.g. 0.5 for "≥50% institutional"). Same
+    # NULL-safe semantics as L-2: instruments without a snapshot row drop
+    # out as soon as any L-4a predicate is active (``NULL >= :v`` → UNKNOWN).
+    analyst_target_price_min: float | None = None
+    analyst_target_price_max: float | None = None
+    analyst_consensus_rating_min: float | None = None
+    analyst_consensus_rating_max: float | None = None
+    institutional_ownership_pct_min: float | None = None
+    institutional_ownership_pct_max: float | None = None
+    short_percent_min: float | None = None
+    short_percent_max: float | None = None
 
 
 @dataclass(frozen=True, slots=True)
