@@ -183,3 +183,67 @@ def test_seconds_until_next_hour_alternate_target_hour() -> None:
     """COMPUTED_METRICS_REFRESH_HOUR_UTC override still routes correctly (e.g. 14h)."""
     now = datetime(2026, 5, 28, 10, 0, 0, tzinfo=UTC)
     assert _seconds_until_next_hour_utc(14, now) == 4 * 3600
+
+
+# ---------------------------------------------------------------------------
+# YTD edge case — first trading day of the calendar year
+# ---------------------------------------------------------------------------
+#
+# WHY (QA L-3 finding, non-blocking #2): the YTD anchor SQL selects the FIRST
+# bar at-or-after ``DATE_TRUNC('year', latest.bar_date)``. When ``latest`` is
+# itself the first bar of the new year (e.g. ``latest.bar_date = 2026-01-01``
+# and no earlier 2026 bar exists), the anchor LATERAL JOIN returns the SAME
+# row as ``latest``. The arithmetic becomes ``(latest.px / latest.px) - 1``
+# which is exactly ``0.0`` — mathematically correct (0% YTD on day 1) but
+# easy to mistake for a divide-by-zero or NULL bug during review.
+#
+# These tests pin the contract: ``_row_to_metric`` MUST accept ``0.0`` and
+# produce a valid ``MetricRow`` (NOT ``None``, NOT a crash). They also pin
+# the expected Day-2 behaviour where two bars exist and the ratio is real.
+# ---------------------------------------------------------------------------
+
+
+def test_ytd_edge_case_first_trading_day_of_year_returns_zero() -> None:
+    """YTD on Jan 1 (only one bar in the new year) → 0.0, NOT None.
+
+    The SQL ``(latest.px / NULLIF(anchor.px, 0)) - 1.0`` with anchor == latest
+    yields exactly 0.0. ``_row_to_metric`` must persist this as a valid metric
+    row so downstream screeners do not see a phantom NULL on Jan 1.
+    """
+    ingested_at = datetime(2026, 1, 1, 2, 0, tzinfo=UTC)
+    # Simulate the value the SQL would return: (100.0 / 100.0) - 1.0 == 0.0.
+    sql_value = (100.0 / 100.0) - 1.0
+    row = _row_to_metric("inst-jan1", date(2026, 1, 1), "return_ytd", sql_value, ingested_at)
+    assert row is not None, "Jan-1 YTD must be 0.0, not None — see QA L-3 §2"
+    assert row.value_numeric == Decimal("0.0")
+    assert row.metric == "return_ytd"
+    assert row.as_of_date == date(2026, 1, 1)
+
+
+@pytest.mark.parametrize(
+    ("jan1_close", "jan2_close", "expected_ratio"),
+    [
+        # Realistic Day-2 move: +1% gain.
+        (100.0, 101.0, 0.01),
+        # Flat day: still zero, but via a real anchor (NOT the self-anchor path).
+        (100.0, 100.0, 0.0),
+        # Loss: -2%.
+        (100.0, 98.0, -0.02),
+    ],
+)
+def test_ytd_edge_case_second_trading_day_uses_jan1_anchor(
+    jan1_close: float,
+    jan2_close: float,
+    expected_ratio: float,
+) -> None:
+    """YTD on Jan 2 (two bars in the new year) → (close_jan2 / close_jan1) - 1.
+
+    The anchor LATERAL JOIN picks the EARLIEST bar at-or-after the year start
+    (Jan 1), so latest=Jan 2 / anchor=Jan 1 produces the expected ratio.
+    """
+    ingested_at = datetime(2026, 1, 2, 2, 0, tzinfo=UTC)
+    sql_value = (jan2_close / jan1_close) - 1.0
+    row = _row_to_metric("inst-jan2", date(2026, 1, 2), "return_ytd", sql_value, ingested_at)
+    assert row is not None
+    # Decimal coerces from float string repr — compare via float() round-trip.
+    assert float(row.value_numeric) == pytest.approx(expected_ratio, abs=1e-9)
