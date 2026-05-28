@@ -79,6 +79,29 @@ class ScreenFilterRequest(BaseModel):
     # keep query plans selective and the partial index useful.
     next_earnings_within_days: int | None = Field(default=None, ge=0, le=365)
     next_dividend_within_days: int | None = Field(default=None, ge=0, le=365)
+    # ── Wave L-3: computed OHLCV-derived metric ranges ───────────────────────
+    # Shorthand for "filter on the latest value of the computed metric in
+    # fundamental_metrics with period_type=SNAPSHOT, section=computed_returns".
+    # The router expands each populated *_min/*_max pair into an existing
+    # ScreenFilter(metric=<name>, min_value=..., max_value=...) so the existing
+    # latest-value-per-instrument JOIN handles them — no new SQL shape needed.
+    # All values are fractions (NOT percent), matching the worker output convention.
+    dist_from_52w_high_pct_min: float | None = None
+    dist_from_52w_high_pct_max: float | None = None
+    dist_from_52w_low_pct_min: float | None = None
+    dist_from_52w_low_pct_max: float | None = None
+    return_1m_min: float | None = None
+    return_1m_max: float | None = None
+    return_3m_min: float | None = None
+    return_3m_max: float | None = None
+    return_6m_min: float | None = None
+    return_6m_max: float | None = None
+    return_ytd_min: float | None = None
+    return_ytd_max: float | None = None
+    return_1y_min: float | None = None
+    return_1y_max: float | None = None
+    return_3y_min: float | None = None
+    return_3y_max: float | None = None
 
 
 class ScreenRequest(BaseModel):

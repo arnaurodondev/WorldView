@@ -425,9 +425,12 @@ def _make_fields_uc(fields: list[ScreenFieldMetadata]) -> MagicMock:
 def test_get_screen_fields_route_returns_12_fields() -> None:
     """GET /screen/fields happy-path: returns list of field metadata objects.
 
-    Wave L-1/L-2 added 11 new fields (4 attribute + 7 snapshot); Wave L-4a
-    (PLAN-0089) added 4 more analyst/ownership snapshot fields; Wave L-5c
-    added 2 calendar fields, so the static set now contains 29 entries.
+    Wave L-1/L-2 added 11 new fields (4 attribute + 7 snapshot) → 23.
+    Wave L-4a (PLAN-0089) added 4 analyst/ownership snapshot fields → 27.
+    Wave L-5c added 2 calendar fields → 29.
+    Wave L-3 added 8 computed OHLCV-derived metrics → 37.
+    The test name is historical (original assertion was =12); the assertion
+    has been migrated through each L-wave per R19 (never delete tests).
     """
     from market_data.app import _get_static_screen_fields
 
@@ -439,7 +442,7 @@ def test_get_screen_fields_route_returns_12_fields() -> None:
     assert resp.status_code == 200
     body = resp.json()
     assert "fields" in body
-    assert len(body["fields"]) == 29
+    assert len(body["fields"]) == 37
     names = {f["name"] for f in body["fields"]}
     # Original fields still present
     assert "pe_ratio" in names
@@ -461,6 +464,15 @@ def test_get_screen_fields_route_returns_12_fields() -> None:
     # L-5c calendar fields
     assert "next_earnings_date" in names
     assert "next_dividend_date" in names
+    # L-3 computed OHLCV-derived metrics
+    assert "dist_from_52w_high_pct" in names
+    assert "dist_from_52w_low_pct" in names
+    assert "return_1m" in names
+    assert "return_3m" in names
+    assert "return_6m" in names
+    assert "return_ytd" in names
+    assert "return_1y" in names
+    assert "return_3y" in names
     # Every field must have name, label, type, null_fraction
     for field in body["fields"]:
         assert "name" in field
