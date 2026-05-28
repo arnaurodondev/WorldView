@@ -474,6 +474,16 @@ only — no Kafka event, no outbox row. The bump is gated on at least one
 section having been materialised (a zero-section payload does not lie about
 freshness).
 
+The repository method (`PgInstrumentRepository.touch_fundamentals_ingest_at`)
+issues the UPDATE *and* immediately `flush()`-es the session (PLAN-0101,
+**BP-610**). The flush is load-bearing: the same UoW also runs
+`_upsert_fundamentals_snapshot` inside a try/except that swallows exceptions,
+so a later snapshot-side failure would otherwise mask the touch UPDATE and
+leave the column at its previous value (live observed 0/629 non-NULL rows
+before the fix landed). Any future write that targets a tracking column in
+this service MUST follow the same flush-inside-the-repo convention so callers
+cannot forget.
+
 Operators can identify stale tickers with a single index-friendly query:
 
 ```sql

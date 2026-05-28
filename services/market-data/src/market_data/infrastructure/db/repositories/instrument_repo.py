@@ -231,12 +231,27 @@ class PgInstrumentRepository(InstrumentRepository):
 
         PLAN-0096 T-W1-02 / BP-545: called by FundamentalsConsumer on every
         successful section materialisation (same UoW as the section writes).
+
+        PLAN-0101 / BP-610: explicit ``flush()`` is required after the UPDATE so
+        the statement reaches the underlying transaction before any later
+        operation in the same UoW (notably ``_upsert_fundamentals_snapshot``)
+        could raise an exception that the consumer catches-and-swallows.
+        Without the flush the autoflush boundary moves to ``commit()``; any
+        SQLAlchemy/asyncpg failure surfaced between this call and commit() —
+        even one wrapped in a try/except higher up — would leave the touch
+        UPDATE buffered-but-never-sent, which is the silent-drop pattern that
+        produced 0/629 non-NULL rows in live (matches the BP-610 audit at
+        ``docs/audits/2026-05-28-plan-0101-bp-610-touch-at.md``). Following
+        the repo-wide convention (see ``content-store``, ``alert``,
+        ``rag-chat`` repos) the flush lives in the repository, not the
+        consumer, so callers cannot forget it.
         """
         from sqlalchemy import update
 
         await self._session.execute(
             update(InstrumentModel).where(InstrumentModel.id == id).values(last_fundamentals_ingest_at=ts)
         )
+        await self._session.flush()
 
     async def find_by_isin(self, isin: str) -> Instrument | None:
         result = await self._session.execute(select(InstrumentModel).where(InstrumentModel.isin == isin))

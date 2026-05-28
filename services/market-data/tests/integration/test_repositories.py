@@ -183,6 +183,45 @@ class TestPgInstrumentRepository:
         symbols = [i.symbol for i in results]
         assert "NVDA" in symbols
 
+    async def test_touch_fundamentals_ingest_at_persists(self, uow) -> None:
+        """PLAN-0101 / BP-610 regression.
+
+        ``touch_fundamentals_ingest_at`` must persist the new timestamp through
+        a commit boundary. Before the fix the SQLAlchemy Core ``update()`` call
+        was buffered in the session and silently dropped whenever a later
+        in-UoW op (specifically the best-effort
+        ``_upsert_fundamentals_snapshot``) raised + the consumer's try/except
+        swallowed the exception. Live observation: 0 of 629 instruments had a
+        non-NULL value despite the call wiring being correct since commit
+        ``8450666b``. The fix adds an explicit ``await self._session.flush()``
+        inside the repo method (matches the repo-wide convention in
+        ``content-store`` / ``alert`` / ``rag-chat``).
+
+        This test bumps the column, commits, then reads the row back via a
+        raw ``text()`` SELECT (bypasses ORM identity map) to assert the
+        UPDATE actually reached the database.
+        """
+        from market_data.domain.entities import Instrument
+        from sqlalchemy import text
+
+        sec_id = await self._make_security(uow)
+        instr = Instrument(security_id=sec_id, symbol="FRSH", exchange="XNAS")
+        created = await uow.instruments.upsert(instr)
+        await uow.commit()
+
+        ts = datetime(2026, 5, 28, 12, 34, 56, tzinfo=UTC)
+        await uow.instruments.touch_fundamentals_ingest_at(created.id, ts)
+        await uow.commit()
+
+        row = (
+            await uow._write().execute(  # -- test-only access to write session
+                text("SELECT last_fundamentals_ingest_at FROM instruments WHERE id = :iid"),
+                {"iid": created.id},
+            )
+        ).one()
+        assert row.last_fundamentals_ingest_at is not None
+        assert row.last_fundamentals_ingest_at == ts
+
 
 # ── OHLCV repository ──────────────────────────────────────────────────────────
 
