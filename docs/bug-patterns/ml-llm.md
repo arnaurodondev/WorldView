@@ -1011,3 +1011,40 @@ model_name: str = outputs[0].model_id              # propagate actual provider m
 - The `model_id` from `EmbeddingOutput` must always be propagated; never hardcode `"nomic-embed-text"` or any other model string at the call site.
 
 **Regression test**: `services/nlp-pipeline/tests/unit/application/use_cases/test_enhanced_chunk_search.py::TestEnhancedChunkSearchUseCase::test_chunk_search_embed_called_on_cache_miss`
+
+---
+
+## BP-599: Brief Context Gathering Silent Partial Failure (PLAN-0099 Wave A)
+
+**Service**: rag-chat (S8) — `services/rag-chat/src/rag_chat/application/use_cases/briefing_context.py`
+
+**Symptom**: Morning brief reads as "generic" — discusses earnings but lacks portfolio risk context; logs show `briefing_s1_failed` warning yet the brief is still served to the user with no surfaced indication that a source dropped out.
+
+**Root cause**: `gather_morning_context()` historically caught upstream exceptions and returned `BriefingContext` (or `None`) with empty sections; the formatter degraded silently to empty strings; the LLM still generated a brief but the user could not tell which sections had been omitted. Metrics aggregated across users hid the per-call quality regression.
+
+**Fix (PLAN-0099 Wave A)**:
+- Each upstream call (S1, S3, S5, S6, S7) is wrapped with `timed_upstream_call(source)` from `brief_diagnostics.py` so per-source latency + outcome (`ok | empty | timeout | error`) lands on `brief_upstream_latency_ms{source}` and `brief_upstream_status{source,outcome}`.
+- `compute_context_availability_score(...)` produces a weighted [0.0, 1.0] score (portfolio 2x, news / events / alerts / sections_populated 1x each) emitted on every brief generation via `brief_context_availability_score` (Histogram) plus a structlog `brief_context_availability_score` event.
+- The score is carried on `BriefingContext.context_availability_score` so the Wave B refusal-on-low-context guard can read it without re-running the gather.
+
+**Prevention**: Any use case that aggregates multiple upstream calls should expose per-source observability (latency + outcome) and a single aggregate score; never collapse a partial failure into a boolean "context loaded" without a per-source breakdown.
+
+**Regression test**: `services/rag-chat/tests/unit/application/test_brief_diagnostics.py` (score correctness + outcome classification).
+
+---
+
+## BP-600: Brief Context Truncation Hides Tail Signals (PLAN-0099 Wave A/B)
+
+**Service**: rag-chat (S8) — `services/rag-chat/src/rag_chat/application/use_cases/brief_context_formatter.py`
+
+**Symptom**: On high-volume news days (≥16 articles, ≥10 events, ≥6 alerts) the brief omits relevant tail signals (regulatory warnings, sector downturns, secondary M&A) because the formatter hard-coded `news[:8]`, `events[:6]`, `alerts[:5]`. No metric surfaced when the limit was hit.
+
+**Root cause**: Hard-coded truncation limits applied before LLM saw context; beyond-limit items (even high-relevance ones) were invisible to the brief. There was no env-var override and no near-duplicate dedup, so multiple syndicated copies of the same headline consumed slots that should have gone to distinct signals.
+
+**Fix**:
+- Wave A: emit `brief_context_availability_score` so operators can correlate low-score days with truncation events.
+- Wave B (`brief_context_formatter.py`): raise defaults to `news=12 / events=10 / alerts=8`, make them env-var configurable (`BRIEF_NEWS_LIMIT / BRIEF_EVENTS_LIMIT / BRIEF_ALERTS_LIMIT`), and dedupe near-duplicate headlines via a `_dedupe_news()` helper that keeps the highest-relevance copy.
+
+**Prevention**: Any formatter that truncates context for token budget MUST expose the limit as an env var and emit either a metric or a structlog event when the cap is hit, so operators can observe truncation pressure and adjust sizing.
+
+**Regression test**: `services/rag-chat/tests/unit/application/test_brief_diagnostics.py` + `services/rag-chat/tests/test_brief_context_formatter.py` (Wave B dedup + env-var override).

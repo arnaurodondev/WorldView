@@ -156,6 +156,12 @@ class BriefingContext:
     # Empty list for MORNING briefings (no focal entity to filter by).
     relevant_chunks: list[EnrichedChunkResult] = field(default_factory=list)
     gathered_at: datetime
+    # PLAN-0099 Wave A: weighted [0.0, 1.0] score of how much context the
+    # gatherer was able to assemble.  Downstream Wave B refusal-on-low-context
+    # uses this; defaults to 1.0 so legacy callers that build a BriefingContext
+    # without this field (tests / older code paths) keep the old behaviour
+    # (no refusal).
+    context_availability_score: float = 1.0
 
     @classmethod
     def for_morning(cls, *, user_id: UUID, tenant_id: UUID, **kwargs: Any) -> BriefingContext:

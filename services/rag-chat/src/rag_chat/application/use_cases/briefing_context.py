@@ -32,6 +32,11 @@ from rag_chat.application.models.briefing_context import (
     WatchlistItem,
 )
 from rag_chat.application.ports.upstream_clients import ChunkSearchRequest, EnrichedChunkResult
+from rag_chat.application.use_cases.brief_diagnostics import (
+    compute_context_availability_score,
+    emit_context_availability,
+    timed_upstream_call,
+)
 from rag_chat.domain.errors import ContextGatheringError, EntityNotFoundError
 
 if TYPE_CHECKING:
@@ -103,11 +108,15 @@ class BriefingContextGatherer:
         entity_ids: list[str] = []
 
         try:
-            raw_portfolio = await self._s1.get_portfolio_context(
-                UUID(user_id),
-                UUID(tenant_id),
-                x_internal_token=internal_jwt or "",
-            )
+            # PLAN-0099 Wave A: time S1 call + classify outcome for SLO dashboards.
+            async with timed_upstream_call("s1_portfolio") as s1_outcome:
+                raw_portfolio = await self._s1.get_portfolio_context(
+                    UUID(user_id),
+                    UUID(tenant_id),
+                    x_internal_token=internal_jwt or "",
+                )
+                if raw_portfolio is None:
+                    s1_outcome.mark_empty()
             if raw_portfolio is not None:
                 portfolio_snapshot = self._map_portfolio(raw_portfolio, user_id)
                 # Collect tickers for S3 batch quotes
@@ -120,25 +129,33 @@ class BriefingContextGatherer:
             portfolio_failed = True
 
         # ── 2. Parallel calls to S3, S5, S6, S7 ─────────────────────────────
-        news_coro = self._fetch_top_news(internal_jwt=internal_jwt)
+        # PLAN-0099 Wave A: each call is wrapped with ``timed_upstream_call`` so
+        # latency + outcome land in Prometheus + structlog without changing the
+        # parallel-gather shape. ``_timed`` returns a coroutine identical to the
+        # original; exceptions propagate exactly as before (gather() captures
+        # them via return_exceptions=True).
+        news_coro = _timed("s6_news", self._fetch_top_news(internal_jwt=internal_jwt))
         # PLAN-0094 follow-up: worker context uses the service-token endpoint
         # (user_id in URL); handler context uses the existing JWT-sub endpoint.
         if self._use_service_endpoint:
-            alerts_coro = self._s5.get_pending_alerts_for_user(
+            alerts_inner = self._s5.get_pending_alerts_for_user(
                 user_id,
                 tenant_id,
                 min_severity="medium",
                 x_internal_jwt=internal_jwt,
             )
         else:
-            alerts_coro = self._s5.get_pending_alerts(
+            alerts_inner = self._s5.get_pending_alerts(
                 user_id,
                 tenant_id,
                 min_severity="medium",
                 x_internal_jwt=internal_jwt,
             )
-        quotes_coro = self._s3.get_batch_quotes(instrument_ids) if instrument_ids else _empty_quotes()
-        events_coro = self._fetch_events(entity_ids) if entity_ids else _empty_events()
+        alerts_coro = _timed("s5_alerts", alerts_inner)
+        quotes_inner = self._s3.get_batch_quotes(instrument_ids) if instrument_ids else _empty_quotes()
+        quotes_coro = _timed("s3_quotes", quotes_inner)
+        events_inner = self._fetch_events(entity_ids) if entity_ids else _empty_events()
+        events_coro = _timed("s7_events", events_inner)
 
         results = await asyncio.gather(
             news_coro,
@@ -185,6 +202,27 @@ class BriefingContextGatherer:
                 "All upstream context sources failed during briefing generation",
             )
 
+        # ── 4b. PLAN-0099 Wave A: emit context-availability score ────────────
+        # ``sections_populated`` counts each non-empty section so the formatter
+        # downstream cannot quietly drop content without the score reflecting it.
+        sections_populated = sum(1 for n in (len(news_articles), len(active_alerts), len(quotes), len(events)) if n > 0)
+        availability_score = compute_context_availability_score(
+            has_portfolio=portfolio_snapshot is not None,
+            news_count=len(news_articles),
+            events_count=len(events),
+            alerts_count=len(active_alerts),
+            sections_populated=sections_populated,
+        )
+        emit_context_availability(
+            score=availability_score,
+            has_portfolio=portfolio_snapshot is not None,
+            news_count=len(news_articles),
+            events_count=len(events),
+            alerts_count=len(active_alerts),
+            sections_populated=sections_populated,
+            user_id=user_id,
+        )
+
         # ── 5. Assemble BriefingContext ──────────────────────────────────────
         return BriefingContext.for_morning(
             user_id=UUID(user_id),
@@ -195,6 +233,7 @@ class BriefingContextGatherer:
             quotes=quotes,
             recent_events=events,
             gathered_at=datetime.now(tz=UTC),
+            context_availability_score=availability_score,
         )
 
     # ── Instrument briefing context ──────────────────────────────────────────
@@ -566,6 +605,23 @@ def _map_news_articles(raw_articles: list[dict[str, Any]] | Any) -> list[NewsArt
         except (KeyError, ValueError, TypeError):
             continue
     return articles
+
+
+async def _timed(source: str, coro: Any) -> Any:
+    """Await ``coro`` inside a ``timed_upstream_call`` so latency/outcome land
+    in Prometheus + structlog.
+
+    Returned value is whatever the coroutine produced.  Empty collections /
+    empty dicts mark the outcome as ``empty`` so dashboards distinguish a
+    healthy zero-result day from a transient outage.  Exceptions propagate
+    unchanged so ``asyncio.gather(return_exceptions=True)`` still captures
+    them.
+    """
+    async with timed_upstream_call(source) as outcome:
+        result = await coro
+        if not result:
+            outcome.mark_empty()
+        return result
 
 
 async def _empty_quotes() -> dict[str, QuoteSummary]:
