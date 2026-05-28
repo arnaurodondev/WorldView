@@ -37,6 +37,7 @@ from rag_chat.api import health as health_router
 from rag_chat.api.routes import briefings as briefings_router
 from rag_chat.api.routes import chat as chat_router
 from rag_chat.api.routes import internal as internal_router
+from rag_chat.api.routes import internal_ai_brief_flag as internal_ai_brief_flag_router
 from rag_chat.api.routes import internal_costs as internal_costs_router
 from rag_chat.api.routes import proposal as proposal_router
 from rag_chat.api.routes import public_briefings as public_briefings_router
@@ -908,6 +909,7 @@ def create_app(settings: RagChatSettings | None = None) -> FastAPI:
     app.include_router(public_briefings_router.router)
     app.include_router(internal_costs_router.router)
     app.include_router(internal_router.router)
+    app.include_router(internal_ai_brief_flag_router.router)  # PLAN-0089 Wave L-5a
     app.include_router(proposal_router.router)  # PLAN-0082 Wave B: proposal confirmation
 
     return app
