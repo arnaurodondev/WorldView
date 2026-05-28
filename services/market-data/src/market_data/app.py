@@ -466,12 +466,26 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # "no asyncio.create_task in lifespan" rule per PRD-0017 §6.2.
     refresh_task = asyncio.create_task(_screen_fields_refresh_loop(write_factory, valkey_client, log))
 
+    # 8b. PLAN-0089 Wave L-4b: daily 03:00 UTC insider-90d rollup. Same R22
+    # exemption as the screen-fields warmer — it's a periodic background
+    # aggregate, not a request-bound coroutine. One hour after L-3's 02:00
+    # so we don't pile two large analytical writes on top of each other.
+    from market_data.application.use_cases.rollup_insider_90d import insider_rollup_loop
+
+    insider_rollup_hour = getattr(settings, "insider_rollup_hour_utc", 3)
+    insider_task = asyncio.create_task(
+        insider_rollup_loop(write_factory, log, target_hour_utc=insider_rollup_hour)
+    )
+
     log.info("service_started", service=settings.service_name)
     yield
 
     refresh_task.cancel()
     with contextlib.suppress(asyncio.CancelledError):
         await refresh_task
+    insider_task.cancel()
+    with contextlib.suppress(asyncio.CancelledError):
+        await insider_task
 
     eodhd_client = getattr(app.state, "eodhd_client", None)
     if eodhd_client is not None:
