@@ -98,3 +98,53 @@ def test_sse_error_event(emitter: SSEEmitter) -> None:
     data = json.loads(result["data"])
     assert data["code"] == "RATE_LIMIT_EXCEEDED"
     assert data["message"] == "Too many requests"
+
+
+# ── PLAN-0099 W1-T03: emit_done phase_timings_ms payload ────────────────────
+
+
+@pytest.mark.unit
+def test_sse_done_event_without_phase_timings(emitter: SSEEmitter) -> None:
+    """emit_done() without phase_timings keeps the legacy {"type":"done"} body.
+
+    Backwards compatibility: existing frontends only key on the ``done``
+    event name; the data body must NOT introduce required new keys.
+    """
+    result = emitter.emit_done()
+    assert result["event"] == "done"
+    data = json.loads(result["data"])
+    assert data == {"type": "done"}
+    assert "phase_timings_ms" not in data
+
+
+@pytest.mark.unit
+def test_sse_done_event_with_phase_timings(emitter: SSEEmitter) -> None:
+    """emit_done(phase_timings_ms=...) attaches the breakdown to the SSE body.
+
+    The chat-eval harness scrapes ``data.phase_timings_ms`` from artifact
+    SSE frames so it can decompose end-to-end latency into per-phase
+    buckets without parsing stderr logs.
+    """
+    timings = {
+        "check_cache": 1.2,
+        "validate_input": 35.0,
+        "load_history": 8.4,
+        "llm_tool_planning": 4200.0,
+        "tool_execution": 1500.0,
+        "llm_synthesis_streaming": 7200.0,
+        "grounding_validation": 90.0,
+        "persist_and_cache": 12.0,
+    }
+    result = emitter.emit_done(phase_timings_ms=timings)
+    assert result["event"] == "done"
+    data = json.loads(result["data"])
+    assert data["type"] == "done"
+    assert data["phase_timings_ms"] == timings
+
+
+@pytest.mark.unit
+def test_sse_done_event_with_empty_timings_omits_key(emitter: SSEEmitter) -> None:
+    """An empty dict is omitted (treated identical to None) for legacy parity."""
+    result = emitter.emit_done(phase_timings_ms={})
+    data = json.loads(result["data"])
+    assert "phase_timings_ms" not in data

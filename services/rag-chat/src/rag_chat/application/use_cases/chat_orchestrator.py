@@ -65,6 +65,7 @@ from rag_chat.application.metrics.prometheus import (
     rag_tool_use_first_turn_latency_seconds,
     record_reranker_position_change,
 )
+from rag_chat.application.observability import PhaseTimings, phase
 from rag_chat.application.use_cases.persist_chat import AssistantResponse
 from rag_chat.domain.entities.chat import ResolvedQuery  # noqa: F401 (preserved for public surface)
 from rag_chat.domain.enums import QueryIntent
@@ -453,6 +454,16 @@ class ChatOrchestratorUseCase:
         Split from execute_streaming so the try/finally in execute_streaming
         correctly wraps all yields without Python generator/finally interaction issues.
         """
+        # ── PLAN-0099 W1-T03: per-phase wall-clock instrumentation ──────────
+        # Phases tracked: ``check_cache`` (always), then on cache miss
+        # ``validate_input``, ``load_history``, ``entity_resolution``,
+        # ``llm_tool_planning`` (cumulative across iterations),
+        # ``tool_execution`` (cumulative), ``llm_synthesis_streaming``,
+        # ``grounding_validation``, ``persist_and_cache``.  Emitted as a
+        # ``chat_phase_timings_ms`` structlog event AND attached to the
+        # ``done`` SSE payload so the chat-eval harness can scrape it.
+        phases = PhaseTimings()
+
         # ── Step 0: Completion cache check (FAST PATH — PLAN-0095 W2 T-W2-03) ───
         # Cache check runs BEFORE validate_input so a cache hit short-circuits
         # the 5-8 s LLM injection classifier.
@@ -461,17 +472,24 @@ class ChatOrchestratorUseCase:
         # classifier → cache set). Re-running the classifier on every read is
         # defensive duplication, not a real gate — a poisoned message cannot
         # enter the cache unless it already passed the classifier once.
-        cached = await p.check_cache(request.message, request.thread_id)
+        async with phase("check_cache", phases):
+            cached = await p.check_cache(request.message, request.thread_id)
         if cached:
             rag_cache_hits.labels(cache_type="completion").inc()
             yield p.emitter.emit_status("cache_hit")
             yield p.emitter.emit_token(cached.get("answer", ""))
             yield p.emitter.emit_citations([])
             yield p.emitter.emit_contradictions([])
+            log.info(  # type: ignore[no-any-return]
+                "chat_phase_timings_ms",
+                phases=phases.as_dict(),
+                cache_hit=True,
+            )
             return
 
         # ── Step 1: Input validation (only on cache miss) ───────────────────────
-        validated_message = await p.validate_input(request.message)
+        async with phase("validate_input", phases):
+            validated_message = await p.validate_input(request.message)
 
         # ── Step 2: Rate limit ───────────────────────────────────────────────────
         await p.check_rate_limit(request.tenant_id)
@@ -479,12 +497,14 @@ class ChatOrchestratorUseCase:
         yield p.emitter.emit_status("loading_context")
 
         # ── Step 3: Load conversation history (UoW — read only) ─────────────────
-        conversation_history = await p.load_history(request.thread_id, request.user_id, request.tenant_id, uow)
+        async with phase("load_history", phases):
+            conversation_history = await p.load_history(request.thread_id, request.user_id, request.tenant_id, uow)
 
         yield p.emitter.emit_status("entity_resolution")
 
         # ── Step 4: Entity resolution ────────────────────────────────────────────
-        entities = await p.resolve_entities(validated_message)
+        async with phase("entity_resolution", phases):
+            entities = await p.resolve_entities(validated_message)
 
         # ── Step 5-8: Multi-turn agent loop ───────────────────────────────────────
         from rag_chat.application.pipeline.tool_executor import EntityContext
@@ -603,6 +623,12 @@ class ChatOrchestratorUseCase:
             # LLM non-streaming turn to decide next tool calls
             iter_turn_start = time.monotonic()
             try:
+                # PLAN-0099 W1-T03: ``llm_tool_planning`` accumulates ms across
+                # all loop iterations.  We can't use ``async with phase`` here
+                # because chat_with_tools is followed by exception/finally
+                # branches that must keep working; record manually instead so
+                # the existing control flow is byte-for-byte preserved.
+                _llm_planning_t0 = time.monotonic()
                 llm_response = await p.llm_chain.chat_with_tools(
                     messages,
                     tools=tool_defs if tool_defs else None,
@@ -658,6 +684,10 @@ class ChatOrchestratorUseCase:
                 # Record first-turn latency only on iteration 0 (original metric semantics).
                 if iteration == 0:
                     rag_tool_use_first_turn_latency_seconds.observe(time.monotonic() - iter_turn_start)
+                # PLAN-0099 W1-T03: accumulate per-iteration planning cost so
+                # the chat-eval harness can see total time spent in the
+                # first-LLM bucket across the whole agent loop.
+                phases.record("llm_tool_planning", (time.monotonic() - _llm_planning_t0) * 1000.0)
 
             provider_name = p.llm_chain.last_provider_name
             tool_calls: list[ToolUseBlock] = getattr(llm_response, "tool_calls", None) or []
@@ -776,6 +806,8 @@ class ChatOrchestratorUseCase:
             _fresh_results = await tool_executor.execute_all(_fresh_calls) if _fresh_calls else []
             _tool_latency = time.monotonic() - _tool_t0
             cumulative_tool_latency += _tool_latency
+            # PLAN-0099 W1-T03: accumulate cumulative tool fan-out time.
+            phases.record("tool_execution", _tool_latency * 1000.0)
 
             # Q1 fix: use per-tool latencies from the executor instead of dividing
             # total batch time by the number of tools (incorrect for concurrent execution).
@@ -1266,6 +1298,12 @@ class ChatOrchestratorUseCase:
                 if non_none_items and reranked:
                     record_reranker_position_change(non_none_items[0].item_id != reranked[0].item_id)
 
+            # PLAN-0099 W1-T03: ``llm_synthesis_streaming`` is the second-turn
+            # LLM call (post-tool synthesis). The parallel SSE-streaming agent
+            # owns the actual stream behaviour; we only record the wall-clock
+            # bracket around it.  Manual record (instead of ``async with
+            # phase``) so the existing except/finally branches are untouched.
+            _synthesis_t0 = time.monotonic()
             try:
                 async for chunk in p.llm_chain.stream_chat(
                     messages,
@@ -1297,8 +1335,18 @@ class ChatOrchestratorUseCase:
                     )
                 else:
                     log.error("tool_use_second_turn_failed", error=str(exc), partial_chars=_partial_len)  # type: ignore[no-any-return]
+                    # PLAN-0099 W1-T03: record synthesis time even on hard
+                    # failure (the failed call still consumed wall-clock).
+                    phases.record("llm_synthesis_streaming", (time.monotonic() - _synthesis_t0) * 1000.0)
+                    log.info(  # type: ignore[no-any-return]
+                        "chat_phase_timings_ms",
+                        phases=phases.as_dict(),
+                        terminated_at="llm_synthesis_streaming",
+                    )
                     yield p.emitter.emit_error("llm_second_turn_failed", "Unable to generate answer")
                     return
+            # PLAN-0099 W1-T03: synthesis succeeded (or partial-recovered).
+            phases.record("llm_synthesis_streaming", (time.monotonic() - _synthesis_t0) * 1000.0)
             provider_name = p.llm_chain.last_provider_name
 
         # ── PLAN-0093 E-2: Numeric-grounding validation ───────────────────────
@@ -1313,14 +1361,15 @@ class ChatOrchestratorUseCase:
         # 24h via the deterministic message+thread_id key).
         grounding_passed = True
         if had_tool_calls and full_text.strip():
-            full_text, grounding_passed = await self._run_grounding_validation(
-                p=p,
-                response=full_text,
-                tool_items=non_none_items,
-                messages=messages,
-                budget=budget,
-                entity_context=entity_context,
-            )
+            async with phase("grounding_validation", phases):
+                full_text, grounding_passed = await self._run_grounding_validation(
+                    p=p,
+                    response=full_text,
+                    tool_items=non_none_items,
+                    messages=messages,
+                    budget=budget,
+                    entity_context=entity_context,
+                )
 
         # ── E-7: Citation egress scrubbing ────────────────────────────────────
         # Scrub entity/article refs in the answer that were NOT grounded in any
@@ -1369,6 +1418,10 @@ class ChatOrchestratorUseCase:
         # to completion even when this generator is cancelled by the caller;
         # we still re-raise CancelledError so the outer async-gen cleanup
         # (finally blocks, audit-log finalisation) runs correctly.
+        # PLAN-0099 W1-T03: record combined persist+cache wall-clock as the
+        # ``persist_and_cache`` phase so latency tails in Postgres or Valkey
+        # are visible in the breakdown.
+        _persist_t0 = time.monotonic()
         try:
             _user_msg_id, asst_msg_id = await asyncio.shield(
                 p.persist_chat(
@@ -1414,6 +1467,8 @@ class ChatOrchestratorUseCase:
                 thread_id=str(thread_id),
                 reason="numeric_grounding_failed",
             )
+        # PLAN-0099 W1-T03: record persist+cache wall-clock (success path).
+        phases.record("persist_and_cache", (time.monotonic() - _persist_t0) * 1000.0)
 
         _total_latency_s = (datetime.now(tz=UTC) - start).total_seconds()
         rag_queries_total.labels(
@@ -1423,8 +1478,23 @@ class ChatOrchestratorUseCase:
         ).inc()
         rag_latency.labels(intent=intent.value, step="total").observe(_total_latency_s)
 
+        # PLAN-0099 W1-T03: emit the full per-phase breakdown as a structured
+        # log line AND attach it to the terminal SSE ``done`` event so the
+        # chat-eval harness (which currently scrapes ``data:`` SSE frames
+        # from artifacts) can decompose end-to-end latency without parsing
+        # stderr logs.  ``total_ms`` is the canonical end-to-end figure to
+        # compare phase-sum against in the harness reducer.
+        _phase_snapshot = phases.as_dict()
+        log.info(  # type: ignore[no-any-return]
+            "chat_phase_timings_ms",
+            phases=_phase_snapshot,
+            total_ms=int(_total_latency_s * 1000.0),
+            intent=intent.value,
+            provider=provider_name,
+        )
+
         yield p.emitter.emit_metadata(thread_id, asst_msg_id, intent.value, provider_name, latency_ms)
-        yield p.emitter.emit_done()
+        yield p.emitter.emit_done(phase_timings_ms=_phase_snapshot)
 
     async def _run_grounding_validation(
         self,

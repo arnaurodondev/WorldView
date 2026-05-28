@@ -344,6 +344,53 @@ A new env var `RAG_COMPLETION_CACHE_DISABLED` is honoured in `application/pipeli
 
 The grader (`tests/validation/chat_eval/grading.py`) now treats a cache-hit response (detected via `metadata.cache_hit` or a `status` SSE event with `step="cache_hit"`) as automatically satisfying the `required_tools_any_of` rubric — the original cold-path request fired the tools, and punishing a legitimate latency optimisation is noise.
 
+### Chat-eval acceptance gate — TTFT + TPS + relaxed E2E (PLAN-0099 W1 T-W1-03)
+
+The aggregate gate in `tests/validation/chat_eval/test_aggregate_score.py` previously enforced `median latency ≤ 30s` AND `p99 latency ≤ 60s` on end-to-end wall-clock. That signal was contaminated by tool fan-out and query complexity (a legitimate 3-tool screener-then-fundamentals query routinely takes 60–80 s and is not a UX regression). The gate has been replaced with three responsiveness-centric metrics plus a relaxed E2E watchdog:
+
+| Metric | Aggregation | Hard gate | Rationale |
+|---|---|---|---|
+| `ttft_s` (time-to-first-token) | p95 | `< 5.0 s` | Wall-clock from request submit to the FIRST SSE event whose `data` carries rendered content (`token` / `delta` / `text` / `final_answer`). Skips metadata-only frames (`status` / `thinking` / `tool_call` / `tool_result`). Captures whether the user "sees the model thinking" promptly. |
+| `tps` (tokens-per-second) | p50 | `≥ 30 tok/s` | `output_tokens / (latency_s - ttft_s)`. `output_tokens` prefers the provider usage envelope (`data.usage.output_tokens` on any event, or `metadata.usage.output_tokens`) and falls back to a `ceil(chars/4)` estimate over the joined answer when absent. Captures streaming readability. |
+| `latency_s` (end-to-end) | p99 | `< 90.0 s` | Soft watchdog: catches provider hangs / DLQ retry loops / tool stalls. Relaxed from the old 60 s gate so multi-tool queries are not unfairly punished. |
+
+The median E2E latency is now logged as a soft watchdog (`> 30 s`) but no longer fails the gate. Verdict gates (`USEFUL ≥ 6`, `HARMFUL = 0`) are unchanged. Per-question artefacts include `ttft_s`, `tps`, `output_tokens`, and a forensic `event_timings` list (`[event_kind, t_recv_us]` per SSE frame) so any gate failure is reproducible from the JSON alone. Audit: `docs/audits/2026-05-27-plan-0099-latency-metric-redesign.md`.
+
+---
+
+### Agentic brief generator (experimental, flag-gated)
+
+PLAN-0099 Wave C scaffolds an alternative morning-brief code path,
+`AgenticBriefGenerator` (`application/use_cases/agentic_brief_generator.py`),
+that drives an iterative LLM tool-use loop instead of the single-turn
+`GenerateBriefingUseCase.execute_public_morning` generator. **Off by default —
+intended for A/B comparison only.**
+
+Enable via two env vars (defaults already in
+`services/rag-chat/configs/docker.env.example`):
+
+| Env var | Default | Purpose |
+|---------|---------|---------|
+| `RAG_CHAT_BRIEF_AGENTIC_ENABLED` | `false` | Master flag. When `true`, the morning-brief route uses the agentic generator instead of the standard path. |
+| `RAG_CHAT_BRIEF_AGENTIC_MAX_TOOL_CALLS` | `8` | Hard cap on tool calls per generation. Overrun triggers fallback. |
+
+Loop shape:
+
+1. **PLAN** — the agent gets a generic "you are an institutional analyst" prompt + the OpenAI-format schemas for a 6-tool subset (`get_portfolio_news`, `get_top_movers`, `screen_universe`, `search_documents`, `get_economic_calendar`, `get_morning_brief`).
+2. **CALL / INJECT** — each `tool_call` is dispatched through the existing per-request `ToolExecutor` (same handlers chat uses), and the result is appended as a `role="tool"` message.
+3. **LOOP** — repeat until the LLM returns `finish_reason="stop"`, OR the tool-call budget is hit, OR the LLM-hop safety cap (`max_tool_calls + 2`) is reached.
+4. **ASSEMBLE** — the final text is wrapped in the same response envelope (`content` / `risk_summary` / `sections` / …) the standard generator returns, so the route layer is shape-compatible.
+
+Fallback to the standard generator is automatic on any of: **exception** in the loop, **budget_exhausted**, or **empty_response**. Each reason increments `brief_agentic_fallback_total{reason}` so dashboards can compare fallback rate vs successful agentic runs.
+
+Per-generation cost is visible via:
+
+- `brief_agentic_llm_calls_total` — total LLM round-trips
+- `brief_agentic_tool_calls_total{tool}` — per-tool invocation counter
+- `brief_agentic_fallback_total{reason}` — fallback counter
+
+The route-layer branch lives in `api/routes/public_briefings.py` (GET `/api/v1/briefings/morning`); it is a single `if settings.brief_agentic_enabled` block, so removing the experiment is a one-line revert plus deleting the module + tests.
+
 ---
 
 ## Caching Strategy
@@ -557,6 +604,37 @@ Four additional metrics were introduced in PLAN-0093 QA-7 to surface tool-use re
 `rag_reranker_position_change` — rolling gauge (window=100 queries) of the fraction of queries where the reranker's top-1 differs from the fusion top-1. Updated via `record_reranker_position_change()` after step 8 in `ChatOrchestrator`. A gauge near 0 means the reranker is redundant; near 1 means fusion ordering is unreliable.
 
 `rag_citation_accuracy` — gauge set by the weekly citation-accuracy cron (`ScoreCitationAccuracyUseCase`). Values: 0 = irrelevant snippets, 1 = direct verbatim support.
+
+### Per-Phase Timing (PLAN-0099 W1-T03)
+
+The chat orchestrator emits a `chat_phase_timings_ms` structlog event at the
+end of every `execute_streaming` run AND attaches the same dict to the
+terminal SSE `done` event's `data.phase_timings_ms` field. This lets the
+chat-eval harness decompose end-to-end latency into per-phase buckets
+without parsing stderr.
+
+Keys recorded (cumulative ms; agent-loop phases sum across iterations):
+
+| Phase key | What it covers |
+|-----------|----------------|
+| `check_cache` | Valkey completion-cache lookup (always recorded) |
+| `validate_input` | Layer 1 regex + PII scrub + Layer 2 LLM injection classifier |
+| `load_history` | UoW read of prior thread messages |
+| `entity_resolution` | S6 entity-resolution lookup |
+| `llm_tool_planning` | Cumulative non-streaming `chat_with_tools` calls (first-LLM bucket) |
+| `tool_execution` | Cumulative `tool_executor.execute_all` fan-out wall-clock |
+| `llm_synthesis_streaming` | Second-turn `stream_chat` (post-tool synthesis) |
+| `grounding_validation` | PLAN-0093 E-2 numeric-grounding pass + optional re-prompt |
+| `persist_and_cache` | Postgres persist + Valkey completion-cache write |
+
+On a cache hit only `check_cache` is recorded and the event carries
+`cache_hit=true`. On an `llm_second_turn_failed` short-circuit the event
+carries `terminated_at="llm_synthesis_streaming"` and only the phases
+observed before the failure are present. The implementation lives in
+`rag_chat.application.observability.phase_timings` (a `PhaseTimings`
+accumulator + `phase(name, timings)` async context manager — exception
+in the wrapped block still records elapsed time, so failed phases never
+silently drop out of the breakdown).
 
 ### Citation-Accuracy Cron
 

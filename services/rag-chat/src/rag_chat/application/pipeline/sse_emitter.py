@@ -135,15 +135,26 @@ class SSEEmitter:
         """Emit an error event (pipeline failure, rate limit, etc.)."""
         return {"event": "error", "data": json.dumps({"code": code, "message": message})}
 
-    def emit_done(self) -> dict[str, str]:
+    def emit_done(self, phase_timings_ms: dict[str, float] | None = None) -> dict[str, str]:
         """Emit the terminal SSE event signalling the stream is complete.
 
         WHY NEEDED: Without a ``done`` event the frontend EventSource listener has no
         reliable signal to close the connection — it relies on the server closing the
         HTTP stream, which some proxies buffer.  An explicit ``event: done`` lets the
         frontend close the EventSource immediately and mark the response as finished.
+
+        PLAN-0099 W1-T03: when ``phase_timings_ms`` is provided, the per-phase
+        wall-clock breakdown is attached to the ``done`` payload as
+        ``phase_timings_ms``.  The chat-eval harness scrapes this from the
+        artifact to decompose end-to-end latency into classifier / first-LLM /
+        tool-fanout / second-LLM / streaming buckets.  When the dict is empty
+        or None it is omitted to preserve byte-for-byte backwards
+        compatibility for callers that did not opt in.
         """
-        return {"event": "done", "data": json.dumps({"type": "done"})}
+        payload: dict[str, Any] = {"type": "done"}
+        if phase_timings_ms:
+            payload["phase_timings_ms"] = phase_timings_ms
+        return {"event": "done", "data": json.dumps(payload)}
 
     def emit_thinking(self, stage: str = "tool_classification") -> dict[str, str]:
         """Emitted immediately when the first-turn LLM call starts (PLAN-0067 §0 I-1).
