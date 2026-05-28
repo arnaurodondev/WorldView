@@ -529,6 +529,15 @@ def grade_response(
         "reasons": reasons,
         "validator_real": is_real_validator,
         "latency_s": result.latency_s,
+        # PLAN-0099 W1 T-W1-03: surface the new responsiveness metrics so
+        # the aggregate gate (and any ad-hoc grader caller) can read them
+        # without poking into the underlying ChatRunResult dataclass.
+        # ``ttft_s`` / ``tps`` are floats that may be ``nan`` when the
+        # stream had no content frame (error path); ``output_tokens`` is
+        # ``None`` when the answer was empty and no usage envelope landed.
+        "ttft_s": result.ttft_s,
+        "tps": result.tps,
+        "output_tokens": result.output_tokens,
         "status_code": result.status_code,
     }
 

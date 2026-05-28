@@ -33,6 +33,7 @@ raises ``pytest.skip(...)`` from the fixture, so collection always succeeds.
 from __future__ import annotations
 
 import json
+import math
 import os
 import time
 from dataclasses import dataclass, field
@@ -42,6 +43,41 @@ from typing import Any
 from uuid import uuid4
 
 import pytest
+
+# ---------------------------------------------------------------------------
+# PLAN-0099 W1 T-W1-03 — Latency metric redesign.
+#
+# We measure three things now:
+#   * ttft_s        — time-to-first-token: wall-clock from request submit to
+#                     the first SSE event that carries rendered content
+#                     (``token``, ``delta``, ``text``, or ``final_answer``).
+#                     Skips metadata-only frames (``status``, ``thinking``,
+#                     ``tool_call``, ``tool_result``).
+#   * output_tokens — pulled from the provider's usage envelope when present
+#                     (``metadata.usage.output_tokens`` or any event's
+#                     ``data.usage.output_tokens``), otherwise estimated
+#                     from the joined answer length using a 4-chars/token
+#                     heuristic (no tiktoken dep is in the repo).
+#   * tps           — output_tokens / (e2e_s - ttft_s) when both are valid
+#                     and e2e > ttft; else ``None``.
+#
+# The end-to-end ``latency_s`` is still recorded for diagnostics, but the
+# acceptance gate now uses TTFT-p95 + TPS-p50 + a relaxed E2E-p99 watchdog
+# (see ``test_aggregate_score.py``). Rationale: end-to-end is contaminated
+# by tool fan-out + query complexity; TTFT + TPS measure the user-facing
+# responsiveness signals directly. See:
+# ``docs/audits/2026-05-27-plan-0099-latency-metric-redesign.md``.
+# ---------------------------------------------------------------------------
+
+# Event kinds whose ``data`` payload carries USER-VISIBLE rendered content.
+# The first event whose kind is in this set defines the TTFT boundary.
+_CONTENT_EVENT_KINDS: frozenset[str] = frozenset({"token", "delta", "text", "final_answer"})
+
+# Chars-per-token estimate for the fallback path when the provider does not
+# emit a usage envelope. 4.0 is the textbook GPT-style English approximation;
+# we floor at 1 token so a degenerate one-char answer still yields a valid
+# (if pessimistic) tokens-per-second number.
+_CHARS_PER_TOKEN_FALLBACK = 4.0
 
 # ---------------------------------------------------------------------------
 # Tunables.
@@ -94,7 +130,21 @@ class ChatRunResult:
         question:     the verbatim user prompt.
         status_code:  HTTP status of the *initial* stream response (200 on
                       success, 503 on PROVIDER_UNAVAILABLE error event, etc.).
-        latency_s:    wall-clock seconds from request-out to last event.
+        latency_s:    wall-clock seconds from request-out to last event
+                      (end-to-end, diagnostic-only after PLAN-0099 W1).
+        ttft_s:       time-to-first-token in seconds — wall-clock from
+                      request submit to the FIRST SSE event whose payload
+                      carries rendered content (``token``/``delta``/``text``/
+                      ``final_answer``). ``nan`` if no content frame arrived
+                      (error event, empty stream). See module docstring.
+        tps:          tokens-per-second over the generation window
+                      (TTFT → end of stream). ``nan`` if TTFT or output_tokens
+                      could not be determined, or if the window is zero.
+        output_tokens: token count used for TPS — pulled from the provider
+                      usage envelope when present (``data.usage.output_tokens``
+                      on the final event, or ``metadata.usage.output_tokens``),
+                      otherwise estimated from joined answer text using a
+                      4-chars-per-token heuristic. ``None`` if not computed.
         answer_text:  reassembled response text (preferring final_answer
                       event over the token stream).
         tool_calls:   ordered list of ``tool_call`` events.
@@ -103,29 +153,51 @@ class ChatRunResult:
         metadata:     final metadata event payload (provider, intent, ids).
         error:        error event payload if one was emitted (else None).
         raw_events:   complete SSE event log — kept for diff / replay.
+        event_timings: ordered list of ``(event_kind, t_recv_us)`` tuples
+                      recorded harness-side as each SSE frame arrived;
+                      ``t_recv_us`` is microseconds since request submit.
+                      Used to compute TTFT / TPS and to debug stalls.
     """
 
     question: str
     status_code: int
     latency_s: float
     answer_text: str
+    ttft_s: float = float("nan")
+    tps: float = float("nan")
+    output_tokens: int | None = None
     tool_calls: list[ToolCall] = field(default_factory=list)
     citations: list[dict[str, Any]] = field(default_factory=list)
     contradictions: list[dict[str, Any]] = field(default_factory=list)
     metadata: dict[str, Any] = field(default_factory=dict)
     error: dict[str, Any] | None = None
     raw_events: list[dict[str, Any]] = field(default_factory=list)
+    event_timings: list[tuple[str, int]] = field(default_factory=list)
 
     def tools_called(self) -> list[str]:
         """Convenience: list of tool names in invocation order (may repeat)."""
         return [tc.name for tc in self.tool_calls]
 
     def to_json_dict(self) -> dict[str, Any]:
-        """Serialise to a JSON-safe dict (for the per-question artefact)."""
+        """Serialise to a JSON-safe dict (for the per-question artefact).
+
+        NaN floats are serialised as ``None`` rather than the non-compliant
+        ``NaN`` JSON token, so downstream tools (jq, JS) don't choke. The
+        ``ttft_s`` / ``tps`` / ``output_tokens`` fields are included even
+        when missing so artefact schemas stay stable across runs.
+        """
+
+        def _opt(x: float) -> float | None:
+            # Return None for NaN/inf so the JSON is RFC-8259-compliant.
+            return None if (x is None or not math.isfinite(x)) else round(float(x), 3)
+
         return {
             "question": self.question,
             "status_code": self.status_code,
             "latency_s": round(self.latency_s, 3),
+            "ttft_s": _opt(self.ttft_s),
+            "tps": _opt(self.tps),
+            "output_tokens": self.output_tokens,
             "answer_text": self.answer_text,
             "tool_calls": [{"name": tc.name, "arguments": tc.arguments} for tc in self.tool_calls],
             "citations": self.citations,
@@ -133,6 +205,8 @@ class ChatRunResult:
             "metadata": self.metadata,
             "error": self.error,
             "raw_events": self.raw_events,
+            # event_timings is forensic-only; emit as list-of-lists for JSON.
+            "event_timings": [[kind, t_us] for kind, t_us in self.event_timings],
         }
 
 
@@ -266,8 +340,14 @@ class RagChatClient:
                     # SSE format: alternating ``event: …`` / ``data: …`` / blank
                     # lines. We accumulate one event at a time via tiny state
                     # machine — no aiohttp/SSE-client dep needed.
-                    events = _read_sse_events(resp)
-                    return _events_to_result(question, status, events, time.monotonic() - start)
+                    events, timings = _read_sse_events(resp, start)
+                    return _events_to_result(
+                        question,
+                        status,
+                        events,
+                        time.monotonic() - start,
+                        timings,
+                    )
             except httpx.RequestError as exc:
                 pytest.skip(f"chat request failed: {exc}")
                 raise  # pragma: no cover — pytest.skip raises, unreachable
@@ -286,8 +366,11 @@ class RagChatClient:
 # ---------------------------------------------------------------------------
 
 
-def _read_sse_events(resp: Any) -> list[dict[str, Any]]:
-    """Convert an httpx streaming response into a list of {event, data} dicts.
+def _read_sse_events(
+    resp: Any,
+    request_start: float,
+) -> tuple[list[dict[str, Any]], list[tuple[str, int]]]:
+    """Convert an httpx streaming response into a (events, timings) pair.
 
     SSE wire format (per W3C):
       ``event: <name>\\n``
@@ -297,8 +380,17 @@ def _read_sse_events(resp: Any) -> list[dict[str, Any]]:
     ``data:`` may repeat across multiple lines (concatenated) but our emitter
     always writes a single JSON blob per event, so a simple two-line buffer
     is sufficient.
+
+    PLAN-0099 W1 T-W1-03: ``request_start`` is the ``time.monotonic()``
+    snapshot taken right before the stream POST. For every completed SSE
+    frame we record ``(event_kind, t_recv_us)`` where ``t_recv_us`` is the
+    receive-time relative to ``request_start`` in microseconds. The list
+    is returned alongside the parsed events so downstream code can compute
+    TTFT / TPS without re-walking the network. Microseconds (not seconds)
+    are used to avoid float drift on small (~10ms) gaps.
     """
     events: list[dict[str, Any]] = []
+    timings: list[tuple[str, int]] = []
     current: dict[str, str] = {}
     for raw_line in resp.iter_lines():
         # httpx >= 0.27 yields str; older yields bytes. Normalise.
@@ -309,7 +401,12 @@ def _read_sse_events(resp: Any) -> list[dict[str, Any]]:
         if line == "":
             # End of one event.
             if current:
-                events.append(_parse_event(current))
+                ev = _parse_event(current)
+                events.append(ev)
+                # Receive-time stamped when the terminator (blank line) lands;
+                # this is the most consistent definition of "frame arrived".
+                t_recv_us = int((time.monotonic() - request_start) * 1_000_000)
+                timings.append((str(ev.get("event", "")), t_recv_us))
                 current = {}
             continue
         if line.startswith("event:"):
@@ -324,8 +421,11 @@ def _read_sse_events(resp: Any) -> list[dict[str, Any]]:
         # Lines starting with ":" are comments per W3C — ignore.
     # Flush a trailing event if the server closed without the terminator.
     if current:
-        events.append(_parse_event(current))
-    return events
+        ev = _parse_event(current)
+        events.append(ev)
+        t_recv_us = int((time.monotonic() - request_start) * 1_000_000)
+        timings.append((str(ev.get("event", "")), t_recv_us))
+    return events, timings
 
 
 def _parse_event(raw: dict[str, str]) -> dict[str, Any]:
@@ -344,8 +444,17 @@ def _events_to_result(
     status_code: int,
     events: list[dict[str, Any]],
     latency_s: float,
+    event_timings: list[tuple[str, int]] | None = None,
 ) -> ChatRunResult:
-    """Fold a stream of SSE events into a single :class:`ChatRunResult`."""
+    """Fold a stream of SSE events into a single :class:`ChatRunResult`.
+
+    ``event_timings`` is a parallel list to ``events`` (same length, same
+    order) of ``(event_kind, t_recv_us)`` tuples produced by
+    :func:`_read_sse_events`. When omitted (legacy callers / unit tests
+    that construct ``events`` synthetically) TTFT and TPS are reported as
+    ``nan`` and ``None`` respectively — the existing assertions on
+    ``answer_text`` / ``tool_calls`` / ``citations`` continue to pass.
+    """
     token_buf: list[str] = []
     final_answer: str | None = None
     tool_calls: list[ToolCall] = []
@@ -353,10 +462,25 @@ def _events_to_result(
     contradictions: list[dict[str, Any]] = []
     metadata: dict[str, Any] = {}
     error: dict[str, Any] | None = None
+    timings: list[tuple[str, int]] = list(event_timings or [])
+
+    # Track the provider usage envelope if any event carries it. We accept
+    # either shape: ``data.usage.output_tokens`` (per-event, OpenAI-style)
+    # or ``metadata.usage.output_tokens`` (final metadata event). First
+    # non-None value wins; ties don't matter because at most one event
+    # type emits it in practice.
+    usage_output_tokens: int | None = None
 
     for ev in events:
         kind = ev.get("event", "")
         data = ev.get("data")
+        # Provider usage envelope sniff (any frame may carry it).
+        if isinstance(data, dict):
+            usage = data.get("usage")
+            if isinstance(usage, dict):
+                ot = usage.get("output_tokens")
+                if isinstance(ot, int) and ot >= 0 and usage_output_tokens is None:
+                    usage_output_tokens = ot
         if kind == "token" and isinstance(data, dict):
             token_buf.append(str(data.get("text", "")))
         elif kind == "final_answer" and isinstance(data, dict):
@@ -388,10 +512,29 @@ def _events_to_result(
 
     answer_text = final_answer if final_answer is not None else "".join(token_buf)
 
+    # Also accept the usage envelope from the final metadata event payload
+    # (some providers attach it there instead of per-token frames).
+    if usage_output_tokens is None:
+        meta_usage = metadata.get("usage") if isinstance(metadata, dict) else None
+        if isinstance(meta_usage, dict):
+            ot = meta_usage.get("output_tokens")
+            if isinstance(ot, int) and ot >= 0:
+                usage_output_tokens = ot
+
+    ttft_s, tps, output_tokens = _compute_ttft_and_tps(
+        timings=timings,
+        latency_s=latency_s,
+        answer_text=answer_text,
+        usage_output_tokens=usage_output_tokens,
+    )
+
     return ChatRunResult(
         question=question,
         status_code=status_code,
         latency_s=latency_s,
+        ttft_s=ttft_s,
+        tps=tps,
+        output_tokens=output_tokens,
         answer_text=answer_text,
         tool_calls=tool_calls,
         citations=citations,
@@ -399,7 +542,77 @@ def _events_to_result(
         metadata=metadata,
         error=error,
         raw_events=events,
+        event_timings=timings,
     )
+
+
+# ---------------------------------------------------------------------------
+# TTFT / TPS computation (pure — unit-testable without a live server).
+# ---------------------------------------------------------------------------
+
+
+def _estimate_tokens_from_text(text: str) -> int:
+    """Heuristic token count when the provider does not emit a usage envelope.
+
+    Repository has no tiktoken dep, so we approximate with the standard
+    ``ceil(chars / 4)`` rule — close enough for English LLM output. Floored
+    at 1 so a one-character answer still gives a finite TPS rather than
+    dividing by zero.
+    """
+    if not text:
+        return 0
+    return max(1, int(math.ceil(len(text) / _CHARS_PER_TOKEN_FALLBACK)))
+
+
+def _compute_ttft_and_tps(
+    *,
+    timings: list[tuple[str, int]],
+    latency_s: float,
+    answer_text: str,
+    usage_output_tokens: int | None,
+) -> tuple[float, float, int | None]:
+    """Return ``(ttft_s, tps, output_tokens)`` from a parsed SSE stream.
+
+    TTFT
+        First timing entry whose event kind is in :data:`_CONTENT_EVENT_KINDS`.
+        Converted from microseconds-since-request-start to seconds. ``nan``
+        when no content frame arrived (error path, empty stream, or the
+        harness was called with synthetic events lacking timings).
+
+    output_tokens
+        Provider usage envelope wins when present; otherwise we estimate
+        from the joined answer text via :func:`_estimate_tokens_from_text`.
+        ``None`` only when the answer is empty AND no usage envelope was
+        emitted (TPS then collapses to ``nan``).
+
+    TPS
+        ``output_tokens / (latency_s - ttft_s)`` when both are finite,
+        ``output_tokens > 0``, and the generation window is positive.
+        ``nan`` otherwise — the aggregate gate drops nans before
+        percentile math, so a single error-path run cannot poison the
+        median.
+    """
+    # TTFT: scan for the first content-bearing frame.
+    ttft_s = float("nan")
+    for kind, t_us in timings:
+        if kind in _CONTENT_EVENT_KINDS:
+            ttft_s = t_us / 1_000_000.0
+            break
+
+    # Output tokens: envelope wins; otherwise estimate.
+    if usage_output_tokens is not None:
+        output_tokens: int | None = usage_output_tokens
+    elif answer_text:
+        output_tokens = _estimate_tokens_from_text(answer_text)
+    else:
+        output_tokens = None
+
+    # TPS: only valid when we know both bookends of the generation window.
+    tps = float("nan")
+    if output_tokens is not None and output_tokens > 0 and math.isfinite(ttft_s) and latency_s > ttft_s:
+        tps = output_tokens / (latency_s - ttft_s)
+
+    return ttft_s, tps, output_tokens
 
 
 # ---------------------------------------------------------------------------
