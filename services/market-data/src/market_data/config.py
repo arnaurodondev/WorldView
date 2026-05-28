@@ -73,6 +73,11 @@ class Settings(BaseSettings):
     # granularity without any code change.
     intraday_source_tf: str = "1m"
 
+    # PLAN-0089 Wave L-4b — hour of UTC day at which the insider-90d rollup
+    # worker fires. Default 03:00 places it one hour after L-3's 02:00 so
+    # the two big analytical writes do not pile up.
+    insider_rollup_hour_utc: int = 3
+
     # Observability (STANDARDS.md §5 — mandatory in every service)
     service_name: str = "market-data"
     log_level: str = "INFO"

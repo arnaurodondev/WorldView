@@ -82,6 +82,29 @@ class TopByMarketCapResponse(BaseModel):
     results: list[TopByMarketCapItem]
 
 
+class OhlcvCoveredItem(BaseModel):
+    """One row in the ohlcv-covered response (PLAN-0089 Wave L-4b).
+
+    Lightweight subset of InstrumentResponse — used by market-ingestion's
+    universe-expansion call so the worker can build new policy rows.
+    """
+
+    id: str
+    symbol: str
+    exchange: str
+    country: str | None = None
+    currency_code: str | None = None
+
+
+class OhlcvCoveredResponse(BaseModel):
+    """Paginated list of instruments with ``has_ohlcv = TRUE``."""
+
+    total: int
+    offset: int
+    limit: int
+    results: list[OhlcvCoveredItem]
+
+
 class OnDemandProfileResponse(BaseModel):
     """Structured enrichment profile fetched on-demand from EODHD and DB."""
 

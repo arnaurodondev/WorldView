@@ -40,7 +40,7 @@ _SCREEN_FIELDS_REFRESH_INTERVAL_SECONDS = 6 * 3600
 
 
 def _get_static_screen_fields() -> list:
-    """Return the 25 static ScreenFieldMetadata instances (PRD-0017 §6.5, Wave L-1/L-2/L-5c)."""
+    """Return the static ScreenFieldMetadata instances (PRD-0017 §6.5, Wave L-1/L-2/L-3/L-4a/L-4b/L-5c)."""
     from market_data.domain.entities import ScreenFieldMetadata
 
     return [
@@ -437,6 +437,22 @@ def _get_static_screen_fields() -> list:
             observed_max=None,
             null_fraction=0.0,
         ),
+        # ── Wave L-4b: insider 90d rollup column ─────────────────────────────
+        # field_type='numeric' (CHECK constraint admits only 'numeric'/'text');
+        # unit='currency_compact' → frontend renders compact $1.2M / $5B.
+        # MUST stay byte-identical to migration 030's seed row — divergence
+        # makes the 6-hour refresh loop silently overwrite the migration's
+        # values. See ``.claude-context.md`` pitfall L-4b.
+        ScreenFieldMetadata(
+            name="insider_net_buy_90d",
+            label="INSIDER 90D",
+            field_type="numeric",
+            unit="currency_compact",
+            description="Trailing 90-day net dollar value of insider transactions",
+            observed_min=None,
+            observed_max=None,
+            null_fraction=0.0,
+        ),
     ]
 
 
@@ -710,15 +726,27 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # scheduled aggregator, started in lifespan, cancelled on shutdown.
     computed_metrics_task = asyncio.create_task(_computed_metrics_refresh_loop(write_factory, log))
 
+    # 8b. PLAN-0089 Wave L-4b: daily 03:00 UTC insider-90d rollup. Same R22
+    # exemption as the screen-fields warmer — it's a periodic background
+    # aggregate, not a request-bound coroutine. One hour after L-3's 02:00
+    # so we don't pile two large analytical writes on top of each other.
+    from market_data.application.use_cases.rollup_insider_90d import insider_rollup_loop
+
+    insider_rollup_hour = getattr(settings, "insider_rollup_hour_utc", 3)
+    insider_task = asyncio.create_task(insider_rollup_loop(write_factory, log, target_hour_utc=insider_rollup_hour))
+
     log.info("service_started", service=settings.service_name)
     yield
 
     refresh_task.cancel()
     computed_metrics_task.cancel()
+    insider_task.cancel()
     with contextlib.suppress(asyncio.CancelledError):
         await refresh_task
     with contextlib.suppress(asyncio.CancelledError):
         await computed_metrics_task
+    with contextlib.suppress(asyncio.CancelledError):
+        await insider_task
 
     eodhd_client = getattr(app.state, "eodhd_client", None)
     if eodhd_client is not None:

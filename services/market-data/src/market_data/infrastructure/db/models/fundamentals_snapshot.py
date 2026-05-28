@@ -110,6 +110,14 @@ class InstrumentFundamentalsSnapshotModel(Base):
     # fraction, so the extractor passes it through unchanged.
     short_percent: Mapped[float | None] = mapped_column(Numeric(8, 6), nullable=True)
 
+    # ── Wave L-4b (PLAN-0089 T-WL4B-01): insider rollup ──────────────────────
+    # Trailing-90d net dollar value of insider transactions (BUYs positive,
+    # SELLs/GIFTs negative). Computed daily by
+    # ``application/use_cases/rollup_insider_90d.py`` from rows in the
+    # ``insider_transactions`` table. NULL = "no transactions in window OR
+    # rollup has not yet run for this instrument".
+    insider_net_buy_90d: Mapped[float | None] = mapped_column(Numeric(20, 2), nullable=True)
+
     # ── Source periodicity tracking (PLAN-0095 T-W1-04, BP-542, migration 020) ──
     # Records which periodicity (QUARTERLY / ANNUAL) the corresponding derived
     # source row came from. Nullable because: (a) rows written before migration

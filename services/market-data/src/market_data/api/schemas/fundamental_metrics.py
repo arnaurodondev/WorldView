@@ -102,6 +102,12 @@ class ScreenFilterRequest(BaseModel):
     return_1y_max: float | None = None
     return_3y_min: float | None = None
     return_3y_max: float | None = None
+    # ── Wave L-4b: insider 90d rollup range filter ──────────────────────────
+    # Inclusive min/max on ``instrument_fundamentals_snapshot.insider_net_buy_90d``.
+    # Negative values are valid (net selling); the column is signed.
+    # Defaults to None for R11 forward-compat — existing callers unaffected.
+    insider_net_buy_90d_min: float | None = None
+    insider_net_buy_90d_max: float | None = None
 
 
 class ScreenRequest(BaseModel):

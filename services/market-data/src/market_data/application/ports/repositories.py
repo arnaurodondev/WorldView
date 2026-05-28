@@ -113,6 +113,9 @@ class ScreenFilter:
     # validation lives at the Pydantic schema layer (ge=0, le=365).
     next_earnings_within_days: int | None = None
     next_dividend_within_days: int | None = None
+    # Wave L-4b: insider 90d rollup range filter — negatives are valid.
+    insider_net_buy_90d_min: float | None = None
+    insider_net_buy_90d_max: float | None = None
 
 
 @dataclass(frozen=True, slots=True)

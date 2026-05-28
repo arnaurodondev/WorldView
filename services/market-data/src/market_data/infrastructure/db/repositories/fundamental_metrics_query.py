@@ -44,6 +44,8 @@ _SNAP_FIELDS: tuple[str, ...] = (
     # without an active filter.
     "next_earnings_date",
     "next_dividend_date",
+    # Wave L-4b: trailing-90d insider net dollar flow.
+    "insider_net_buy_90d",
 )
 
 if TYPE_CHECKING:
@@ -342,6 +344,8 @@ async def query_screen(
         "analyst_consensus_rating",
         "institutional_ownership_pct",
         "short_percent",
+        # Wave L-4b: trailing-90d insider net dollar flow (sortable + filterable).
+        "insider_net_buy_90d",
     )
     for snap_field in numeric_snap_filters:
         min_attr = f"{snap_field}_min"

@@ -429,6 +429,7 @@ def test_get_screen_fields_route_returns_12_fields() -> None:
     Wave L-4a (PLAN-0089) added 4 analyst/ownership snapshot fields → 27.
     Wave L-5c added 2 calendar fields → 29.
     Wave L-3 added 8 computed OHLCV-derived metrics → 37.
+    Wave L-4b added ``insider_net_buy_90d`` → 38.
     The test name is historical (original assertion was =12); the assertion
     has been migrated through each L-wave per R19 (never delete tests).
     """
@@ -442,7 +443,7 @@ def test_get_screen_fields_route_returns_12_fields() -> None:
     assert resp.status_code == 200
     body = resp.json()
     assert "fields" in body
-    assert len(body["fields"]) == 37
+    assert len(body["fields"]) == 38
     names = {f["name"] for f in body["fields"]}
     # Original fields still present
     assert "pe_ratio" in names
@@ -451,6 +452,8 @@ def test_get_screen_fields_route_returns_12_fields() -> None:
     assert "country" in names
     assert "exchange" in names
     assert "has_fundamentals" in names
+    # L-4b: insider 90d rollup
+    assert "insider_net_buy_90d" in names
     assert "has_ohlcv" in names
     # L-2 snapshot fields
     assert "eps_ttm" in names

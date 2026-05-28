@@ -187,6 +187,8 @@ async def screen_instruments(
         # soonest first, the natural reading for "next earnings" / "next div").
         "next_earnings_date",
         "next_dividend_date",
+        # Wave L-4b: insider 90d sortable column.
+        "insider_net_buy_90d",
     }
     # Wave L-3: computed OHLCV-derived metrics are addressable as sort targets too.
     # They are stored as fundamental_metrics rows (period_type=SNAPSHOT,
@@ -254,6 +256,9 @@ async def screen_instruments(
             # Wave L-5c: calendar (date) filters — schema validates 0..365.
             next_earnings_within_days=f.next_earnings_within_days,
             next_dividend_within_days=f.next_dividend_within_days,
+            # Wave L-4b: insider 90d range.
+            insider_net_buy_90d_min=f.insider_net_buy_90d_min,
+            insider_net_buy_90d_max=f.insider_net_buy_90d_max,
         )
         for f in body.filters
     ]
