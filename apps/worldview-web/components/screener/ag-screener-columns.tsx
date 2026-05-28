@@ -382,12 +382,18 @@ function CreditRatingCellRenderer({ data }: ICellRendererParams<ScreenerResult>)
   // WHY explicit className-per-tone (not template literal): Tailwind's
   // content-scan can't resolve `text-${tone}` dynamically. Listing each
   // string literally ensures the JIT compiler emits the CSS.
+  // WHY include "muted" branch defensively (QA #3): the null/empty short-circuit
+  // above means `tone` is normally never "muted" here, but the helper's union
+  // now includes it — listing the branch keeps TypeScript exhaustive and guards
+  // against future callers that route an unrated value through this renderer.
   const toneClass =
     tone === "positive"
       ? "bg-positive/10 text-positive"
       : tone === "warning"
         ? "bg-warning/10 text-warning"
-        : "bg-negative/10 text-negative";
+        : tone === "negative"
+          ? "bg-negative/10 text-negative"
+          : "text-muted-foreground";
   return (
     <span
       className={cn(
@@ -642,7 +648,7 @@ export function createAgScreenerColumns(
 
     {
       colId: "creditRating",
-      headerName: "CREDIT",
+      headerName: "CREDIT RATING",
       headerTooltip: "S&P / EODHD credit rating (AAA…D)",
       field: "credit_rating",
       // WHY non-sortable: a lexical sort would order "AA" before "BB" before

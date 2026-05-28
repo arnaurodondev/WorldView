@@ -99,14 +99,24 @@ describe("creditRatingTone — tier mapping", () => {
   });
 
   // ── Defensive cases ──────────────────────────────────────────────────────
-  it("null → negative (missing rating is risk we can't classify)", () => {
-    expect(creditRatingTone(null)).toBe("negative");
+  // WHY these assert "muted" (not "negative") — QA #3 fix:
+  //   The previous tone for null/empty/undefined was "negative" (red). That
+  //   painted unrated instruments as if they were near default — a finance
+  //   UX bug that misled compliance triage. The corrected behaviour is to
+  //   return a neutral "muted" tone, which the renderer maps to
+  //   `text-muted-foreground`. See lib/screener/credit-rating.ts.
+  it("null → muted (missing rating is unknown, not distressed)", () => {
+    expect(creditRatingTone(null)).toBe("muted");
   });
-  it("undefined → negative", () => {
-    expect(creditRatingTone(undefined)).toBe("negative");
+  it("undefined → muted", () => {
+    expect(creditRatingTone(undefined)).toBe("muted");
   });
-  it("empty string → negative", () => {
-    expect(creditRatingTone("")).toBe("negative");
+  it("empty string → muted (backend sent 'no rating on file' sentinel)", () => {
+    expect(creditRatingTone("")).toBe("muted");
+  });
+  it("whitespace-only string → muted (normalises to empty)", () => {
+    // Defensive: " " trims to "" — same UX as the empty-string case.
+    expect(creditRatingTone("   ")).toBe("muted");
   });
   it("normalises 'aa-' to 'AA-' → positive", () => {
     expect(creditRatingTone("aa-")).toBe("positive");
@@ -150,6 +160,11 @@ describe("CreditRatingCellRenderer — DOM rendering", () => {
     expect(container.textContent).toBe("—");
     const span = container.querySelector("span");
     expect(span?.className).toMatch(/text-muted-foreground/);
+    // QA #3 regression guard: the cell MUST NOT use the negative (red) tone
+    // for unrated instruments. Painting unrated bonds red implies distress
+    // and misleads compliance triage. See creditRatingTone() doc-comment.
+    expect(span?.className).not.toMatch(/text-negative/);
+    expect(span?.className).not.toMatch(/bg-negative/);
   });
 
   it("renders empty string as '—'", () => {
@@ -177,6 +192,10 @@ describe("CREDIT_RATING_VALUES", () => {
   it("each rating maps to a tone (no UnreachableRating bugs)", () => {
     for (const r of CREDIT_RATING_VALUES) {
       const tone = creditRatingTone(r);
+      // WHY no "muted" allowed here: CREDIT_RATING_VALUES contains only real
+      // S&P ratings (AAA..D). "muted" is reserved for null/empty/undefined
+      // input — i.e. "the backend told us there's no rating". A concrete
+      // rating string must always classify into a tier tone.
       expect(["positive", "warning", "negative"]).toContain(tone);
     }
   });

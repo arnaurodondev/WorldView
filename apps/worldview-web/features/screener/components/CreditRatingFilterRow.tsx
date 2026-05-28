@@ -85,12 +85,19 @@ export function CreditRatingFilterRow({ value, onChange }: CreditRatingFilterRow
             const tone = creditRatingTone(rating);
             // Same explicit-class approach as the cell renderer — Tailwind
             // JIT can't resolve `text-${tone}` strings dynamically.
+            // WHY include "muted" branch (QA #3): the helper's tone union now
+            // includes "muted" for null/empty input. CREDIT_RATING_VALUES is
+            // a closed list of real ratings (never null/empty), so this branch
+            // is unreachable in practice — but listing it keeps the mapping
+            // exhaustive and matches the cell-renderer's defensive pattern.
             const toneClass =
               tone === "positive"
                 ? "bg-positive/10 text-positive border-positive/40"
                 : tone === "warning"
                   ? "bg-warning/10 text-warning border-warning/40"
-                  : "bg-negative/10 text-negative border-negative/40";
+                  : tone === "negative"
+                    ? "bg-negative/10 text-negative border-negative/40"
+                    : "text-muted-foreground border-muted-foreground/40";
             return (
               <span
                 key={rating}

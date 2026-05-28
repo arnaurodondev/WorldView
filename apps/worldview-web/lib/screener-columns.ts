@@ -149,7 +149,7 @@ export const DEFAULT_COLUMNS: readonly ScreenerColumn[] = Object.freeze([
   // creditRating uses a custom badge renderer (no formatter). sortable=false —
   // see ag-screener-columns.tsx CreditRatingCellRenderer for the rationale
   // (lexical sort would mis-order tiers).
-  Object.freeze({ key: "creditRating",     label: "Credit",      sortable: false, align: "right",                                visible: false }),
+  Object.freeze({ key: "creditRating",     label: "Credit Rating", sortable: false, align: "right",                                visible: false }),
 ]) as readonly ScreenerColumn[];
 
 // ── Internal helpers ─────────────────────────────────────────────────────────

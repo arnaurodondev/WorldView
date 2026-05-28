@@ -31,12 +31,22 @@
  */
 
 /**
- * CreditRatingTone — the three Terminal Dark semantic tones used by the
+ * CreditRatingTone — the four Terminal Dark semantic tones used by the
  * helper. Returning a union (not a Tailwind class string directly) lets the
  * caller compose `text-${tone}` / `bg-${tone}/10` themselves, avoiding
  * Tailwind's purge-detection pitfall with dynamic class names.
+ *
+ * WHY "muted" exists (QA #3 fix):
+ *   Previously this helper returned "negative" for null/empty/unrated
+ *   instruments, which painted unrated cells RED. In a finance UX, red means
+ *   "distressed credit" — so painting unrated bonds red implies they're near
+ *   default. That's a misleading and load-bearing UX bug for compliance
+ *   analysts triaging holdings. The correct visual treatment for "we don't
+ *   know" is a neutral, low-emphasis muted-foreground colour — clearly
+ *   distinct from green/amber/red tier signals. Callers map this tone to
+ *   `text-muted-foreground` (Terminal Dark neutral token).
  */
-export type CreditRatingTone = "positive" | "warning" | "negative";
+export type CreditRatingTone = "positive" | "warning" | "negative" | "muted";
 
 // WHY a frozen Set (not an Array): O(1) membership check inside the
 // hot-path cell renderer. The set is closed (no future ratings); freezing
@@ -71,16 +81,28 @@ const _SPECULATIVE_GRADE: ReadonlySet<string> = Object.freeze(
  *   "CCC" → "negative"
  *   "D"   → "negative"      (default)
  *
- * Unknown / null / empty input → "negative" (defensive: missing rating is
- * not "no risk" — it's "risk we couldn't classify", which is worse).
+ * null / undefined / empty input → "muted" (NEW — QA #3 fix).
+ *   Previously these returned "negative", painting unrated instruments RED.
+ *   In a finance UX red == "distressed / near default", so a missing rating
+ *   was visually indistinguishable from a CCC issuer — actively misleading.
+ *   Returning a neutral "muted" tone lets the cell render with
+ *   `text-muted-foreground`, clearly signalling "no data" rather than risk.
+ *
+ * Unknown non-empty input (e.g. "XYZ") still → "negative" — that's a parse
+ *   failure on a string the backend DID send, and we'd rather flag it red
+ *   than silently mute it. The "muted" branch is reserved for the case where
+ *   the backend explicitly told us "no rating exists".
  */
 export function creditRatingTone(
   rating: string | null | undefined,
 ): CreditRatingTone {
-  if (rating == null) return "negative";
+  // WHY: null/undefined → "muted" (not "negative"). See doc-comment above.
+  if (rating == null) return "muted";
   // WHY trim+toUpperCase: EODHD sometimes returns "aa-" or " AA+ " — normalise.
   const r = rating.trim().toUpperCase();
-  if (r === "") return "negative";
+  // WHY: empty string → "muted" — the backend sent us a sentinel for "no
+  // rating on file", not a parse failure. Same UX rationale as null.
+  if (r === "") return "muted";
   if (_INVESTMENT_GRADE.has(r)) return "positive";
   if (_SPECULATIVE_GRADE.has(r)) return "warning";
   return "negative";
