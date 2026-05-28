@@ -13,9 +13,9 @@ credit_rating.
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import date, datetime
 
-from sqlalchemy import BigInteger, DateTime, ForeignKey, Numeric, String, text
+from sqlalchemy import BigInteger, Date, DateTime, ForeignKey, Numeric, String, text
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -82,6 +82,26 @@ class InstrumentFundamentalsSnapshotModel(Base):
     period_type_income: Mapped[str | None] = mapped_column(String(20), nullable=True)
     period_type_cash_flow: Mapped[str | None] = mapped_column(String(20), nullable=True)
     period_type_balance: Mapped[str | None] = mapped_column(String(20), nullable=True)
+
+    # ── Wave L-5c calendar fields (PLAN-0089, migration 028) ──────────────────
+    #
+    # Nullable DATE columns for the "calendar" screener fields. Both stay NULL
+    # for most rows until upstream data pipelines populate them:
+    #
+    #   * ``next_earnings_date`` — populated by the snapshot writer from the
+    #     ``earnings_calendar`` table (``MIN(report_date) WHERE report_date
+    #     >= CURRENT_DATE``). The L-5b worker that fills earnings_calendar
+    #     is deferred, so values stay NULL in the short term.
+    #
+    #   * ``next_dividend_date`` — populated by the snapshot writer from the
+    #     EODHD ``SplitsDividends.DividendDate`` field on every fundamentals
+    #     payload (data is available today for dividend-paying equities).
+    #
+    # Partial BTREE indexes ``ix_ifs_next_earnings_date`` /
+    # ``ix_ifs_next_dividend_date`` (migration 028) excluding NULLs make
+    # "earnings within N days" range queries cheap.
+    next_earnings_date: Mapped[date | None] = mapped_column(Date, nullable=True)
+    next_dividend_date: Mapped[date | None] = mapped_column(Date, nullable=True)
 
     # ── Metadata ──────────────────────────────────────────────────────────────
 
