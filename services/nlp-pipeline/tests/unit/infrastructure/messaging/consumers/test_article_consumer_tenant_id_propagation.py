@@ -342,3 +342,39 @@ class TestTenantIdPropagation:
         assert warn["missing_count"] == 1
         assert warn["total_mentions"] == 3
         assert str(buggy_mention.mention_id) in warn["sample_mention_ids"]
+
+    @pytest.mark.asyncio
+    async def test_post_ner_stamp_falls_back_to_public_sentinel_when_tenant_id_is_none(self) -> None:
+        """PLAN-0099 W4 T-W4-02 (audit §13.6) defence-in-depth.
+
+        The envelope-level ``process_message`` substitutes ``PUBLIC_TENANT_ID``
+        for any missing/unparseable tenant before calling ``_run_pipeline``,
+        so the post-NER stamp at line 583-590 should never see
+        ``tenant_id=None`` in production. But if a future refactor at the
+        envelope level silently breaks that precondition, the stamp must
+        still produce non-None tenant ids on every mention — otherwise the
+        whole pipeline regresses to BP-586.
+
+        We bypass the envelope and call ``_run_pipeline`` with
+        ``tenant_id=None`` directly. The post-NER stamp must coerce every
+        mention to ``PUBLIC_TENANT_ID``.
+        """
+        consumer = _make_consumer()
+        doc_id = uuid.uuid4()
+        ner_mentions = [_make_mention(doc_id, tenant_id=None) for _ in range(3)]
+
+        final_mentions = await _drive_pipeline(
+            consumer,
+            doc_id=doc_id,
+            tenant_id=None,
+            ner_mentions=ner_mentions,
+        )
+
+        # Every mention must carry the sentinel — never None, never
+        # something else (we never had a request tenant to stamp).
+        assert len(final_mentions) == 3
+        for m in final_mentions:
+            assert m.tenant_id == PUBLIC_TENANT_ID, (
+                f"post-NER stamp must fall back to PUBLIC_TENANT_ID when "
+                f"_run_pipeline is invoked with tenant_id=None; got {m.tenant_id!r}"
+            )

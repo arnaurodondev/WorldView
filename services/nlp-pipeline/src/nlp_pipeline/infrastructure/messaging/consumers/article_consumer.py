@@ -586,8 +586,18 @@ class ArticleProcessingConsumer(ValkeyDedupMixin, BaseKafkaConsumer[None]):
         # previous ``if tenant_id is not None`` guard was redundant; removing
         # it makes the intent obvious and prevents any future regression where
         # an upstream block constructs a mention with ``tenant_id=None``.
+        #
+        # PLAN-0099 W4 T-W4-02 (audit §13.6): defence-in-depth — even though
+        # the envelope-level sentinel substitution earlier in
+        # ``process_message`` guarantees ``tenant_id`` is non-None here, an
+        # upstream refactor could silently break that precondition. Falling
+        # back to ``PUBLIC_TENANT_ID`` at the stamp site preserves the
+        # NOT-NULL invariant on ``entity_mentions.tenant_id`` (migration
+        # 0020) without any reliance on the upstream guard. Cost: zero —
+        # the substitution only fires in the regression case.
+        _stamp_tenant = tenant_id or PUBLIC_TENANT_ID
         for m in mentions:
-            m.tenant_id = tenant_id
+            m.tenant_id = _stamp_tenant
         s6_ner_mentions_total.inc(len(mentions))
 
         # Blocks 5-6: Routing + suppression
