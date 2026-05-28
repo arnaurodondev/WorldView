@@ -22,9 +22,16 @@ IDEMPOTENCY:
     shares)``. EODHD does not expose a stable transaction id, so the
     natural key is the only handle.
 
-BP-590 awareness:
-  * ``_handle_message`` overridden to reset ``_current_uow`` BEFORE
-    ``is_duplicate`` lookup (per ``feedback_basekafkaconsumer_is_duplicate_ordering``).
+DEDUPLICATION PATH (not the legacy ``BaseKafkaConsumer.is_duplicate`` hook):
+  * Dedup is enforced inside ``process_message`` via
+    ``ingestion_events.create_if_not_exists(event_id, ...)`` (Postgres
+    ON CONFLICT DO NOTHING) — see the call near the top of ``process_message``.
+  * Per-message UoW reset happens in ``get_unit_of_work`` (this file,
+    around line 151), so ``_current_uow`` is always fresh and a prior
+    message's session never leaks into the next call (BP-590).
+  * Row-level idempotency is doubly enforced by the UNIQUE constraint on
+    ``(instrument_id, filer_name, transaction_date, transaction_type, shares)``
+    with ON CONFLICT DO NOTHING on every INSERT.
 """
 
 from __future__ import annotations
