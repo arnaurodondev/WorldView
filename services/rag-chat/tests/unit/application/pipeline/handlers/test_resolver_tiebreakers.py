@@ -293,3 +293,67 @@ class TestResolverStopWordsAndThresholds:
         # "stock" survives (not in this custom list); "tesla" + "the" stripped.
         assert "tesla" not in called_with.lower()
         assert "stock" in called_with.lower()
+
+    @pytest.mark.asyncio
+    async def test_two_token_ai_prefixed_canonical_resolves(self) -> None:
+        """F-CR-010: 'Ai Group' must NOT be stripped to single 'Group' token.
+
+        A5's original commit added 'ai' to the default stop-word list to fix
+        the 'AI semiconductor space -> SpaceX' false-positive. Side effect:
+        two-token Ai-prefixed real canonicals (Ai Group, Ai Holdings) get
+        reduced to one token ('Group' / 'Holdings'), which then either fails
+        alias-search outright or matches a wildly wrong entity.
+
+        After the F-CR-010 fix, 'ai' is no longer in the default stop list
+        and the query 'Ai Group' must reach S7 with BOTH tokens intact.
+        The resolver should then return the canonical id S7 surfaces (above
+        the 0.75 floor) instead of bailing via 'stop_word_strip'.
+        """
+        from rag_chat.application.pipeline.handlers.intelligence import IntelligenceHandler
+
+        s7 = AsyncMock()
+        # S7 returns an "Ai Group" canonical at a similarity well above the
+        # 0.75 floor — the exact-canonical tiebreaker also fires because
+        # the alias normalises to the query.
+        s7.resolve_entity_by_name.return_value = [
+            {"entity_id": str(_ID_A), "alias_text": "Ai Group", "similarity": 0.95},
+        ]
+        handler = IntelligenceHandler(s7=s7, entity_context=None, timeout=5.0)
+        resolved = await handler._resolve_entity_by_name("search_claims", "Ai Group")
+
+        # The canonical resolved (NOT None via stop_word_strip).
+        assert resolved == _ID_A
+        # And S7 received the full two-token query (no "ai" stripping).
+        s7.resolve_entity_by_name.assert_called_once()
+        called_with = s7.resolve_entity_by_name.call_args.args[0]
+        assert "ai" in called_with.lower()
+        assert "group" in called_with.lower()
+
+    @pytest.mark.asyncio
+    async def test_ai_semiconductor_space_still_does_not_match_spacex(self) -> None:
+        """F-CR-010 regression guard: removing 'ai' from the stop list MUST
+        NOT reintroduce the F-LIVE-NEW-001 SpaceX false-positive.
+
+        Mechanism: even though 'ai' is no longer stripped, 'space' still is,
+        and — more importantly — the 0.75 absolute similarity floor rejects
+        the SpaceX hit which surfaces at 0.62.
+        """
+        from rag_chat.application.pipeline.handlers.intelligence import IntelligenceHandler
+
+        s7 = AsyncMock()
+        s7.resolve_entity_by_name.return_value = [
+            {"entity_id": str(_ID_A), "alias_text": "SpaceX", "similarity": 0.62},
+        ]
+        handler = IntelligenceHandler(s7=s7, entity_context=None, timeout=5.0)
+        resolved = await handler._resolve_entity_by_name(
+            "search_entity_relations",
+            "AI semiconductor space",
+        )
+        # The floor still blocks the SpaceX false-positive.
+        assert resolved is None
+        # And "space" is still stripped from the query passed to S7.
+        called_with = s7.resolve_entity_by_name.call_args.args[0]
+        assert "space" not in called_with.lower()
+        assert "semiconductor" in called_with.lower()
+        # NOTE: "ai" SHOULD now survive the strip (Option A behaviour).
+        assert "ai" in called_with.lower()

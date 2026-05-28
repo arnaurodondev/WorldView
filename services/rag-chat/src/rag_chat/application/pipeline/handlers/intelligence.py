@@ -71,7 +71,12 @@ def _load_resolver_settings() -> tuple[frozenset[str], float, float]:
             "of",
             "for",
             "with",
-            "ai",
+            # F-CR-010: "ai" intentionally NOT in the stop list — stripping it
+            # broke two-token Ai-prefixed canonicals like "Ai Group" / "Ai
+            # Holdings" (collapsed to single-token "Group"/"Holdings" that
+            # failed alias-search). The 0.75 absolute similarity floor below
+            # is what now blocks the original "AI semiconductor space →
+            # SpaceX" false-positive (SpaceX surfaced at sim 0.62 << 0.75).
             "tech",
             "energy",
             "sentiment",

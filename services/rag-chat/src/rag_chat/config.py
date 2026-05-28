@@ -206,10 +206,22 @@ class Settings(BaseSettings):
     # RAG_CHAT_RESOLVER_STOP_WORDS — comma-separated list, e.g.
     #   RAG_CHAT_RESOLVER_STOP_WORDS="space,sector,industry,..."
     resolver_stop_words: str = Field(
+        # F-CR-010 (iter-10): removed "ai" from the default list. The original
+        # motivation was the "AI semiconductor space → SpaceX" false-positive,
+        # but the 0.75 absolute similarity floor + 0.15 delta gate added in the
+        # same F-LIVE-NEW-001 commit already reject that hit (SpaceX surfaced
+        # at sim 0.62, well below the floor). Keeping "ai" stripped silently
+        # broke two-token Ai-prefixed canonicals (Ai Group, Ai Holdings) by
+        # collapsing them to a single token that then failed alias-search.
+        #
+        # NOTE: "tech" and "energy" are kept for now but are similarly broad —
+        # they currently break "Tech Mahindra" and "Energy Transfer" if those
+        # canonicals ever land in the alias index. Track via F-CR-010 follow-up
+        # if those resolutions are observed failing live.
         default=(
             "space,industry,sector,market,markets,system,platform,company,companies,"
             "stocks,stock,share,shares,ticker,tickers,the,a,an,or,and,in,of,for,with,"
-            "ai,tech,energy,sentiment,rising,falling,bullish,bearish"
+            "tech,energy,sentiment,rising,falling,bullish,bearish"
         ),
         alias="RAG_CHAT_RESOLVER_STOP_WORDS",
     )
