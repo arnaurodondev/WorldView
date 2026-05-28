@@ -111,6 +111,9 @@ async def test_computed_metrics_worker_perf_smoke(_migrated_db: str) -> None:
 
     Assertions:
       * ``runtime`` < 30 s (smoke threshold; production budget is ~15 min @ 3000).
+      * ``metrics_written > 0`` (hard assertion — the BP-180 asyncpg uuid-cast
+        fix is now in place, so the sweep MUST write rows; a 0 result is a
+        regression, not a transient skip).
       * Summary reports the expected ``instruments_processed`` count.
       * ``fallback_adjusted_close_count == 0`` (all fixture bars have adj == close).
       * The ``fallback_adjusted_close_count`` field is present on the summary
@@ -171,20 +174,25 @@ async def test_computed_metrics_worker_perf_smoke(_migrated_db: str) -> None:
         "A non-zero value indicates the worker is mis-detecting NULL adj_close."
     )
 
-    # 4. ``instruments_processed`` is only asserted when the worker actually
-    # made forward progress. When the SQL aborts (e.g. BP-180 asyncpg parameter
-    # cast issue) ``continue_on_error=True`` still completes the sweep but
-    # reports 0 processed. The wall-clock budget (assertion #1) is the load-
-    # bearing perf signal; this assertion is a soft sanity check.
-    if summary.metrics_written > 0:
-        assert summary.instruments_processed >= _FIXTURE_INSTRUMENTS, (
-            f"Worker reported instruments_processed={summary.instruments_processed} "
-            f"but {_FIXTURE_INSTRUMENTS} fixture instruments were seeded."
-        )
+    # 4. Worker must report forward progress. With the BP-180 asyncpg uuid-cast
+    # fix in place (WL-3 fix-bp180 merge), the SQL no longer aborts on the
+    # ``:start_id IS NULL`` parameter and the sweep writes metrics on every
+    # run. A ``metrics_written == 0`` outcome now indicates a real regression
+    # (e.g. another asyncpg parameter quirk, a stat-staleness issue, or a
+    # silent rollback) and must fail the test rather than be silently skipped.
+    assert summary.metrics_written > 0, (
+        f"expected metrics written, got {summary.metrics_written}. "
+        "BP-180 asyncpg uuid-cast fix is in place — a 0 result indicates a new regression."
+    )
+    assert summary.instruments_processed >= _FIXTURE_INSTRUMENTS, (
+        f"Worker reported instruments_processed={summary.instruments_processed} "
+        f"but {_FIXTURE_INSTRUMENTS} fixture instruments were seeded."
+    )
 
-    # 5. If the sweep wrote any metrics, confirm at least one row per metric
-    # type made it to disk. We do NOT assert an exact count (the worker may
-    # legitimately skip metrics for instruments with < lookback history).
+    # 5. Confirm at least one row per metric type made it to disk. We do NOT
+    # assert an exact count (the worker may legitimately skip metrics for
+    # instruments with < lookback history) but with BP-180 fixed every metric
+    # name must have at least one row.
     async with factory() as session:
         for metric_name in (
             "return_1m",
@@ -201,11 +209,6 @@ async def test_computed_metrics_worker_perf_smoke(_migrated_db: str) -> None:
                     select(FundamentalMetricModel).where(FundamentalMetricModel.metric == metric_name).limit(1)
                 )
             ).scalar_one_or_none()
-            # Only assert when the worker reported writing rows. If
-            # metrics_written == 0 (e.g. a transient batch failure), we leave
-            # the per-metric existence check soft so the wall-clock budget
-            # remains the primary signal.
-            if summary.metrics_written > 0:
-                assert row is not None, f"No fundamental_metrics row for metric={metric_name} — formula regressed"
+            assert row is not None, f"No fundamental_metrics row for metric={metric_name} — formula regressed"
 
     await engine.dispose()
