@@ -78,6 +78,52 @@ export function buildScreenerFilters(f: FilterState): ScreenerFilter[] {
     }
   }
 
+  // ── Categorical / coverage (Wave I-B Block IB-L1, depends on Wave L-1) ────
+  // These four fields live on each ScreenFilterRequest (not on ScreenerRequest)
+  // and the Wave L-1 backend ANDs repeats. So we attach them to the FIRST
+  // existing filter (mirroring the sector pattern above) or synthesise a
+  // single market_capitalization filter to carry them when no metric range
+  // is set. Multi-select today sends only the first selected country /
+  // exchange — see filter-state.ts comment for the IN(...) future plan.
+  //
+  // BACKEND-TRUNCATION DISCLOSURE: lines 94–95 below take only `[0]` of the
+  // multi-select arrays because `ScreenFilterRequest.country` / `.exchange`
+  // are scalar strings in the Wave L-1 schema. We deliberately do NOT change
+  // the truncation logic here (that requires Wave L-1.1 / L-2 backend work to
+  // accept arrays). Instead, the user is informed at selection time by an
+  // amber "backend: 1 of N" badge with hover-tooltip rendered inside
+  // `features/screener/components/CountryFilterRow.tsx` and
+  // `features/screener/components/ExchangeFilterRow.tsx`. This makes the
+  // silent drop visible and explicit. Remove the badges + this note when
+  // Wave L-2 ships IN-list support and the line below sends the full array.
+  const hasCategoricalOrCoverage =
+    (f.countries && f.countries.length > 0) ||
+    (f.exchanges && f.exchanges.length > 0) ||
+    f.hasFundamentals === true ||
+    f.hasOhlcv === true;
+  if (hasCategoricalOrCoverage) {
+    const country = f.countries && f.countries.length > 0 ? f.countries[0] : undefined;
+    const exchange = f.exchanges && f.exchanges.length > 0 ? f.exchanges[0] : undefined;
+    const hasFundamentals = f.hasFundamentals === true ? true : undefined;
+    const hasOhlcv = f.hasOhlcv === true ? true : undefined;
+    const patch = {
+      ...(country !== undefined ? { country } : {}),
+      ...(exchange !== undefined ? { exchange } : {}),
+      ...(hasFundamentals !== undefined ? { has_fundamentals: hasFundamentals } : {}),
+      ...(hasOhlcv !== undefined ? { has_ohlcv: hasOhlcv } : {}),
+    };
+    if (filters.length > 0) {
+      filters[0] = { ...filters[0], ...patch };
+    } else {
+      // WHY synthetic market_capitalization carrier: identical pattern used
+      // above for the bare-sector case — S3 accepts a {metric, ...} entry
+      // with no min/max as a pure restriction filter. Keeps the request
+      // schema valid (filters[] always has at least one entry when any
+      // restriction is set).
+      filters.push({ metric: "market_capitalization", ...patch });
+    }
+  }
+
   // WHY no fallback filter when filters is empty: S3 v2 accepts filters:[] and
   // responds with the optimised "no filter" path — LEFT JOINs across key metrics
   // (market_cap, pe_ratio, beta, daily_return, revenue_usd) for ALL instruments.

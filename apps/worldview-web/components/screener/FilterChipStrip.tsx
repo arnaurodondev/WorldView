@@ -161,6 +161,40 @@ function buildChips(filters: FilterState): FilterChip[] {
     });
   }
 
+  // ── Categorical / Coverage (PRD-0089 Wave I-B Block IB-L1) ──────────────
+  // T-IB-01 adds the Country chip; T-IB-02 adds Exchange; T-IB-03 adds the
+  // two coverage chips. Each chip lives next to its row in the popover for
+  // discoverability.
+  if (filters.countries && filters.countries.length > 0) {
+    chips.push({
+      key: "countries",
+      label: `Country: ${filters.countries.join(", ")}`,
+      clear: (f) => ({ ...f, countries: undefined }),
+    });
+  }
+  if (filters.exchanges && filters.exchanges.length > 0) {
+    chips.push({
+      key: "exchanges",
+      label: `Exchange: ${filters.exchanges.join(", ")}`,
+      clear: (f) => ({ ...f, exchanges: undefined }),
+    });
+  }
+  if (filters.hasFundamentals === true) {
+    chips.push({
+      key: "hasFundamentals",
+      // Checkmark ✓ matches the plan §6.1 Block IB-L1 acceptance copy.
+      label: "Has Fundamentals ✓",
+      clear: (f) => ({ ...f, hasFundamentals: undefined }),
+    });
+  }
+  if (filters.hasOhlcv === true) {
+    chips.push({
+      key: "hasOhlcv",
+      label: "Has OHLCV ✓",
+      clear: (f) => ({ ...f, hasOhlcv: undefined }),
+    });
+  }
+
   // ── Technical ───────────────────────────────────────────────────────────
   if (filters.above50dMa) {
     chips.push({

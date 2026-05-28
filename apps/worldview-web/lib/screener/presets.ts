@@ -84,4 +84,26 @@ export const SCREENER_PRESETS: readonly ScreenerPreset[] = Object.freeze([
       roeMin: 0.10,
     },
   },
+  {
+    // PRD-0089 Wave I-B Block IB-L1 · T-IB-04.
+    // The "US Equities Only" preset is the canonical first-screen for
+    // analysts working the US universe with reliable fundamentals data —
+    // it strips out ADRs from foreign issuers, instruments domiciled
+    // elsewhere, and synthetic instruments without earnings reports.
+    // WHY countries=["USA"] not exchanges=["NYSE","NASDAQ"]: many US-listed
+    // companies trade dual-class on multiple US venues; the country code
+    // is the cleaner predicate. The Wave L-1 backend column reads from
+    // instruments.country which is the EODHD CountryISO ("USA" for any
+    // US-domiciled issuer regardless of listing exchange).
+    // WHY hasFundamentals=true: pairs naturally with US Equities — the
+    // most common follow-on filter (price-to-earnings, revenue) requires
+    // fundamentals to be populated.
+    id: "us-equities-only",
+    label: "US Equities Only",
+    filters: {
+      ...DEFAULT_FILTERS,
+      countries: ["USA"],
+      hasFundamentals: true,
+    },
+  },
 ] as const);
