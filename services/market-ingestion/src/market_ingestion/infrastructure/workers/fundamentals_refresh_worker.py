@@ -21,10 +21,11 @@ Design rationale (audit decision):
 - The script POSTs to ``/api/v1/ingest/trigger``. To avoid an unnecessary
   HTTP hop and JWT plumbing inside our own process, the worker calls
   ``TriggerIngestionUseCase`` **directly** via the existing UoW factory.
-- The worker is **OFF by default** (``FUNDAMENTALS_REFRESH_ENABLED=false``).
-  The scheduler process imports it but only spawns the loop when the flag
-  is set, so this rolls out per-deploy without auto-firing in any
-  environment until the operator opts in.
+- The worker is **ON by default** since 2026-05-28 (PLAN-0100 W4-T03;
+  rationale in ``docs/audits/2026-05-28-plan-0100-amd-freshness-diagnostics.md``).
+  Operators retain a per-deploy opt-out by setting
+  ``FUNDAMENTALS_REFRESH_ENABLED=false`` explicitly. The scheduler process
+  imports the worker and the loop spawns whenever the flag is truthy.
 
 Exponential backoff on rate limits
 ----------------------------------
@@ -49,9 +50,12 @@ from __future__ import annotations
 
 import asyncio
 import random
+import time
 from contextlib import suppress
 from typing import TYPE_CHECKING
 
+import httpx
+import jwt
 import prometheus_client as prom
 
 from market_ingestion.application.use_cases.trigger_ingestion import TriggerIngestionUseCase
@@ -86,14 +90,21 @@ fundamentals_refresh_attempts_total: prom.Counter = prom.Counter(
 
 
 # ---------------------------------------------------------------------------
-# Default symbol universe — mirrors scripts/refresh_fundamentals.py so the
-# proven contract carries over. Operators override via
-# ``FUNDAMENTALS_REFRESH_SYMBOLS`` (CSV) and cap with
-# ``FUNDAMENTALS_REFRESH_TOP_N``. The plan spec said "top-N by market cap";
-# market-ingestion's ingestion_db does NOT carry an instruments table with
-# market cap (that lives in market-data's DB and crossing service DBs would
-# violate R9). The configurable list is the architecturally-clean
-# alternative — ops can curate it from a market-data export.
+# Default symbol universe — FALLBACK ONLY (PLAN-0100 T-W5-03).
+#
+# Used in two scenarios:
+#   1. ``MARKET_INGESTION_FUNDAMENTALS_REFRESH_USE_INTERNAL_ENDPOINT=false``
+#      — operator opts out of the live top-N endpoint.
+#   2. The internal endpoint call fails (HTTP 5xx / network error). The
+#      worker logs a WARNING and falls back to this curated list so the
+#      refresh loop never stalls completely.
+#
+# Operators may still override via ``FUNDAMENTALS_REFRESH_SYMBOLS`` (CSV);
+# the override takes precedence over BOTH the endpoint and this default.
+#
+# PLAN-0099 W2-T02 originally shipped this as the only source (cross-service
+# DB read violated R9). PLAN-0100 W5 added the REST path; this list now
+# exists purely as the safety net.
 # ---------------------------------------------------------------------------
 _DEFAULT_SYMBOL_UNIVERSE: tuple[str, ...] = (
     # US mega-caps — the practical "top-N by market cap" for our eval universe.
@@ -135,7 +146,7 @@ class FundamentalsRefreshWorker:
 
     Args:
         settings: Service configuration. The worker reads:
-            - ``fundamentals_refresh_enabled`` (bool, default False) — kill switch.
+            - ``fundamentals_refresh_enabled`` (bool, default True since 2026-05-28 / PLAN-0100 W4-T03) — kill switch.
             - ``fundamentals_refresh_interval_hours`` (float, default 6.0).
             - ``fundamentals_refresh_top_n`` (int, default 500) — caps the list.
             - ``fundamentals_refresh_symbols`` (CSV string, optional override).
@@ -192,7 +203,7 @@ class FundamentalsRefreshWorker:
         if not self.enabled:
             logger.info(
                 "fundamentals_refresh_worker_disabled",
-                hint="set FUNDAMENTALS_REFRESH_ENABLED=true to enable",
+                hint="default is now ON; set FUNDAMENTALS_REFRESH_ENABLED=false only to explicitly opt out",
             )
             return
 
@@ -229,8 +240,18 @@ class FundamentalsRefreshWorker:
     # ---------------------------------------------------------------- tick
 
     async def _tick(self) -> None:
-        """Issue one refresh round for the configured symbol universe."""
-        symbols = self._resolve_symbols()
+        """Issue one refresh round for the configured symbol universe.
+
+        Symbol resolution order (PLAN-0100 T-W5-02):
+          1. CSV override (``FUNDAMENTALS_REFRESH_SYMBOLS``) — operator
+             pin, wins if set.
+          2. ``GET /internal/v1/instruments/top-by-market-cap`` on
+             market-data (when ``FUNDAMENTALS_REFRESH_USE_INTERNAL_ENDPOINT``
+             is true, the default).
+          3. The curated mega-cap CSV constant (``_DEFAULT_SYMBOL_UNIVERSE``)
+             as the last-resort fallback so the worker never stops.
+        """
+        symbols = await self._resolve_symbol_universe()
         provider_str = getattr(self._settings, "fundamentals_refresh_provider", "eodhd")
         variant_str = getattr(self._settings, "fundamentals_refresh_variant", "quarterly")
 
@@ -336,7 +357,12 @@ class FundamentalsRefreshWorker:
         return max(1, min(5000, raw))
 
     def _resolve_symbols(self) -> list[str]:
-        """Return the (capped) symbol list, applying CSV override if present."""
+        """Return the (capped) symbol list from CSV override or built-in default.
+
+        Synchronous CSV/default-list resolver. Used directly by
+        ``_resolve_symbol_universe`` as the last-resort fallback and kept
+        as a public helper for backwards-compat with existing unit tests.
+        """
         override = getattr(self._settings, "fundamentals_refresh_symbols", "")
         if override:
             parsed = [s.strip().upper() for s in str(override).split(",") if s.strip()]
@@ -347,6 +373,130 @@ class FundamentalsRefreshWorker:
         # mega-cap-first). We do NOT re-sort here; preserving input order is
         # part of the contract so backfill ops can prioritise.
         return parsed[: self._top_n()]
+
+    # ------------------------------------------------------------- W5 (PLAN-0100)
+
+    async def _resolve_symbol_universe(self) -> list[str]:
+        """Resolve symbols for the current tick (CSV → endpoint → default).
+
+        Priority order:
+          1. ``FUNDAMENTALS_REFRESH_SYMBOLS`` CSV override — operator
+             kill-switch to pin a specific list during incidents.
+          2. ``GET /internal/v1/instruments/top-by-market-cap`` on
+             market-data (when ``FUNDAMENTALS_REFRESH_USE_INTERNAL_ENDPOINT``
+             is true, the default).
+          3. The curated ``_DEFAULT_SYMBOL_UNIVERSE`` mega-cap list so the
+             worker never stops producing work even when market-data is
+             down.
+        """
+        # 1. CSV override pin — same precedence as before W5.
+        override = getattr(self._settings, "fundamentals_refresh_symbols", "")
+        if override:
+            return self._resolve_symbols()
+
+        # 2. Live top-N from market-data (off only via explicit env flip).
+        if bool(getattr(self._settings, "fundamentals_refresh_use_internal_endpoint", True)):
+            symbols = await self._fetch_top_n_symbols(self._top_n())
+            if symbols:
+                return symbols
+            # Empty list from _fetch_top_n_symbols means either the endpoint
+            # genuinely returned zero rows OR the call failed; either way
+            # we fall back to the curated list below.
+            logger.warning(
+                "fundamentals_refresh_endpoint_fallback",
+                message="market-data top-N endpoint returned no symbols; " "falling back to _DEFAULT_SYMBOL_UNIVERSE",
+            )
+
+        # 3. Fallback — curated mega-cap CSV.
+        return self._resolve_symbols()
+
+    async def _fetch_top_n_symbols(self, n: int) -> list[str]:
+        """Call market-data's ``GET /internal/v1/instruments/top-by-market-cap``.
+
+        Returns the symbol list on success, or an empty list on ANY failure
+        (network error, non-2xx, malformed JSON, empty response). The
+        empty-on-failure contract is what triggers the curated fallback in
+        ``_resolve_symbol_universe``.
+
+        Auth: signs a short-lived RS256 internal JWT using the same
+        private key S9 issues — mirrors knowledge-graph's
+        ``build_market_data_signer``. Falls back to an HS256 dev token
+        when the private key is empty (dev/test only; production
+        market-data enforces RS256 unless
+        ``MARKET_DATA_INTERNAL_JWT_SKIP_VERIFICATION=true``).
+
+        BP-235 guard: explicit ``httpx.Timeout`` is set per request — never
+        rely on the httpx 5 s default for a cross-service hop.
+        """
+        base_url = str(getattr(self._settings, "market_data_url", "http://market-data:8003")).rstrip("/")
+        url = f"{base_url}/internal/v1/instruments/top-by-market-cap"
+
+        try:
+            token = self._sign_internal_jwt()
+        except Exception:
+            logger.exception("fundamentals_refresh_jwt_sign_failed")
+            return []
+
+        headers: dict[str, str] = {}
+        if token:
+            headers["X-Internal-JWT"] = token
+
+        try:
+            async with httpx.AsyncClient(timeout=httpx.Timeout(10.0)) as client:
+                resp = await client.get(url, params={"n": n, "offset": 0}, headers=headers)
+            if resp.status_code != 200:
+                logger.warning(
+                    "fundamentals_refresh_endpoint_non_2xx",
+                    status_code=resp.status_code,
+                    url=url,
+                )
+                return []
+            payload = resp.json()
+            results = payload.get("results") or []
+            symbols = [str(row["symbol"]).strip().upper() for row in results if row.get("symbol")]
+            return symbols
+        except (httpx.HTTPError, ValueError, KeyError, TypeError):
+            logger.exception("fundamentals_refresh_endpoint_error", url=url)
+            return []
+
+    def _sign_internal_jwt(self) -> str:
+        """Sign a short-lived internal JWT for the market-data call.
+
+        Mirrors ``services/knowledge-graph/.../build_market_data_signer``.
+        Returns an HS256 dev token when no RS256 private key is configured;
+        production deployments must inject the same key S9 uses so
+        market-data's ``InternalJWTMiddleware`` accepts the request.
+        """
+        now = int(time.time())
+        payload = {
+            "iss": "worldview-gateway",
+            "sub": "system:fundamentals-refresh-worker",
+            "user_id": "00000000-0000-0000-0000-000000000000",
+            "tenant_id": "00000000-0000-0000-0000-000000000000",
+            "role": "system",
+            "iat": now,
+            "exp": now + 300,
+        }
+        # SecretStr-or-str compatibility — settings may expose either.
+        raw_key = getattr(self._settings, "internal_jwt_private_key", "")
+        if hasattr(raw_key, "get_secret_value"):
+            raw_key = raw_key.get_secret_value()
+        if raw_key:
+            from cryptography.hazmat.primitives.serialization import load_pem_private_key
+
+            private_key = load_pem_private_key(raw_key.encode(), password=None)
+            return str(
+                jwt.encode(payload, private_key, algorithm="RS256")  # type: ignore[arg-type]
+            )
+        # Dev fallback — same shared secret as the KG signer so behaviour is
+        # consistent across all worker → market-data calls in dev.
+        return str(
+            jwt.encode(
+                payload,
+                "dev-skip-verification-key-for-kg-structured-enrichment",
+                algorithm="HS256",
+            )
+        )
 
     def _compute_backoff_delay(
         self,

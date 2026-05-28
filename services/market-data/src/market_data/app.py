@@ -593,6 +593,7 @@ def create_app() -> FastAPI:
         fundamental_metrics,
         fundamentals,
         instruments,
+        internal_instruments,
         market,
         ohlcv,
         peers,
@@ -621,5 +622,9 @@ def create_app() -> FastAPI:
     # price_snapshot: internal endpoints — only S9 (api-gateway) calls these
     # via the internal JWT mechanism (PRD-0025)
     app.include_router(price_snapshot.router, prefix="/internal/v1")
+    # PLAN-0100 T-W5-01: top-N-by-market-cap internal endpoint consumed by
+    # market-ingestion's FundamentalsRefreshWorker. Same /internal/v1 prefix
+    # + same JWT-required guard as the other system-to-system routes.
+    app.include_router(internal_instruments.router, prefix="/internal/v1")
 
     return app

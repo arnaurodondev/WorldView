@@ -56,26 +56,43 @@ A fifth process, **Reclaim Worker** (`reclaim_worker_main.py`), periodically res
 
 ### FundamentalsRefreshWorker (PLAN-0099 W2-T02)
 
-In-process loop spawned by `SchedulerProcess` when
-`MARKET_INGESTION_FUNDAMENTALS_REFRESH_ENABLED=true`. Every
-`FUNDAMENTALS_REFRESH_INTERVAL_HOURS` (default 6) it calls
-`TriggerIngestionUseCase` directly for each symbol in the configured
-universe (CSV via `FUNDAMENTALS_REFRESH_SYMBOLS`, capped by
-`FUNDAMENTALS_REFRESH_TOP_N`, default mega-cap list). Exponential backoff
-with jitter on `ProviderRateLimited` (HTTP 429). Off by default — exists
-to close the "FY2026 quarter missing" data freshness gap surfaced in the
-PLAN-0098 chat-eval investigation (audit §A4).
+In-process loop spawned by `SchedulerProcess`. **Enabled by default since
+2026-05-28 per PLAN-0100 W4-T03**
+(`docs/audits/2026-05-28-plan-0100-amd-freshness-diagnostics.md` — H1
+confirmed: the AMD-Q1-FY2026 chat-eval failures traced to the original
+"OFF by default" posture). Operators opt out per-deploy with
+`MARKET_INGESTION_FUNDAMENTALS_REFRESH_ENABLED=false`.
+
+Every `FUNDAMENTALS_REFRESH_INTERVAL_HOURS` (default 6) the loop resolves
+the symbol universe and calls `TriggerIngestionUseCase` directly for each
+symbol. **Symbol-source priority (PLAN-0100 W5)**:
+
+1. `FUNDAMENTALS_REFRESH_SYMBOLS` CSV override (operator pin).
+2. `GET /internal/v1/instruments/top-by-market-cap` on market-data when
+   `FUNDAMENTALS_REFRESH_USE_INTERNAL_ENDPOINT=true` (the default). Worker
+   signs a short-lived RS256 internal JWT (HS256 dev token when no key
+   configured); HTTP failures fall through to step 3.
+3. Curated `_DEFAULT_SYMBOL_UNIVERSE` mega-cap list (fallback-only — kept
+   in the worker source so the loop never stops if market-data is down).
+
+Capped by `FUNDAMENTALS_REFRESH_TOP_N`. Exponential backoff with jitter
+on `ProviderRateLimited` (HTTP 429). Closes the "FY2026 quarter missing"
+data freshness gap surfaced in the PLAN-0098 chat-eval investigation
+(audit §A4).
 
 Metrics: `fundamentals_refresh_attempts_total{symbol, status}` where
 `status ∈ {ok, rate_limited, error, skipped}`.
 
 Env vars:
-- `FUNDAMENTALS_REFRESH_ENABLED` (bool, default `false`) — kill switch.
+- `FUNDAMENTALS_REFRESH_ENABLED` (bool, default `true` since 2026-05-28 / PLAN-0100 W4-T03) — kill switch; set to `false` to opt out.
 - `FUNDAMENTALS_REFRESH_INTERVAL_HOURS` (float, default `6.0`).
 - `FUNDAMENTALS_REFRESH_TOP_N` (int, default `500`, clamped to [1, 5000]).
 - `FUNDAMENTALS_REFRESH_PROVIDER` (str, default `"eodhd"`).
 - `FUNDAMENTALS_REFRESH_VARIANT` (str, default `"quarterly"`).
-- `FUNDAMENTALS_REFRESH_SYMBOLS` (CSV, default empty → built-in list).
+- `FUNDAMENTALS_REFRESH_SYMBOLS` (CSV, default empty → endpoint/built-in list).
+- `FUNDAMENTALS_REFRESH_USE_INTERNAL_ENDPOINT` (bool, default `true`, PLAN-0100 W5) — flip to `false` to skip the market-data endpoint and use the curated list only.
+- `MARKET_DATA_URL` (str, default `http://market-data:8003`) — base URL for the top-N endpoint.
+- `INTERNAL_JWT_PRIVATE_KEY` (SecretStr / PEM, default empty) — used to sign the JWT for the top-N call; production must inject the same key S9 uses.
 
 All prefixed with `MARKET_INGESTION_` in `configs/docker.env`.
 

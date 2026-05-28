@@ -34,6 +34,12 @@ def _settings(**overrides: Any) -> SimpleNamespace:
         "fundamentals_refresh_provider": "eodhd",
         "fundamentals_refresh_variant": "quarterly",
         "fundamentals_refresh_symbols": "",
+        # PLAN-0100 T-W5-02: default OFF in the test helper so legacy tests
+        # that exercise ``_tick`` don't trigger live HTTP calls to
+        # market-data. The W5-specific tests override this back to True.
+        "fundamentals_refresh_use_internal_endpoint": False,
+        "market_data_url": "http://market-data-test:8003",
+        "internal_jwt_private_key": "",
     }
     base.update(overrides)
     return SimpleNamespace(**base)
@@ -52,6 +58,9 @@ def _counter_value(symbol: str, status: str) -> float:
 
 @pytest.mark.asyncio
 async def test_disabled_flag_returns_immediately_without_building_infra() -> None:
+    # PLAN-0100 W4-T03: default is now ``True``. Operators retain opt-out by
+    # explicitly setting ``FUNDAMENTALS_REFRESH_ENABLED=false``; this test
+    # exercises that explicit-False path.
     worker = FundamentalsRefreshWorker(settings=_settings(fundamentals_refresh_enabled=False))
 
     # If the worker tried to build DB factories we'd see _build_factories
@@ -63,6 +72,19 @@ async def test_disabled_flag_returns_immediately_without_building_infra() -> Non
         await worker.run()  # Should return immediately; no AssertionError raised.
 
     assert worker.enabled is False
+
+
+def test_real_settings_default_enables_worker() -> None:
+    """PLAN-0100 W4-T03: the production ``Settings`` default must be ON.
+
+    Regression guard against a silent re-flip back to ``False``. Reads the
+    actual pydantic Settings class field default rather than the
+    ``SimpleNamespace`` stub used by other tests, so a future revert is
+    caught even when the test stub still says ``True``.
+    """
+    from market_ingestion.config import Settings
+
+    assert Settings.model_fields["fundamentals_refresh_enabled"].default is True
 
 
 # ---------------------------------------------------------------------------
@@ -310,6 +332,174 @@ async def test_invalid_variant_skips_tick_without_calls() -> None:
         await worker._tick()
 
     fake_use_case.execute.assert_not_awaited()
+
+
+# ---------------------------------------------------------------------------
+# T-W5-02 (PLAN-0100) — symbol-source resolution via internal market-data endpoint.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_resolve_symbol_universe_uses_endpoint_when_no_csv_override() -> None:
+    """Endpoint enabled + no CSV override → worker calls _fetch_top_n_symbols
+    and uses the returned list verbatim (does not fall back to the default CSV).
+    """
+    worker = FundamentalsRefreshWorker(
+        settings=_settings(
+            fundamentals_refresh_top_n=3,
+            fundamentals_refresh_use_internal_endpoint=True,
+        ),
+    )
+    expected = ["NVDA", "MSFT", "AAPL"]
+    with patch.object(worker, "_fetch_top_n_symbols", AsyncMock(return_value=expected)) as fetch:
+        symbols = await worker._resolve_symbol_universe()
+    assert symbols == expected
+    fetch.assert_awaited_once_with(3)
+
+
+@pytest.mark.asyncio
+async def test_resolve_symbol_universe_falls_back_to_default_when_endpoint_empty() -> None:
+    """Endpoint returns empty list → worker falls back to the curated CSV."""
+    worker = FundamentalsRefreshWorker(
+        settings=_settings(
+            fundamentals_refresh_top_n=5,
+            fundamentals_refresh_use_internal_endpoint=True,
+        ),
+    )
+    with patch.object(worker, "_fetch_top_n_symbols", AsyncMock(return_value=[])):
+        symbols = await worker._resolve_symbol_universe()
+    # Fallback list is mega-cap-first → AAPL leads, capped to 5.
+    assert symbols[0] == "AAPL"
+    assert len(symbols) == 5
+
+
+@pytest.mark.asyncio
+async def test_resolve_symbol_universe_csv_override_wins_over_endpoint() -> None:
+    """CSV override → endpoint is NOT called, override list is used."""
+    worker = FundamentalsRefreshWorker(
+        settings=_settings(
+            fundamentals_refresh_symbols="zzz,yyy,xxx",
+            fundamentals_refresh_top_n=10,
+            fundamentals_refresh_use_internal_endpoint=True,
+        )
+    )
+    with patch.object(worker, "_fetch_top_n_symbols", AsyncMock(return_value=["A", "B"])) as fetch:
+        symbols = await worker._resolve_symbol_universe()
+    assert symbols == ["ZZZ", "YYY", "XXX"]
+    fetch.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_resolve_symbol_universe_skips_endpoint_when_flag_disabled() -> None:
+    """``FUNDAMENTALS_REFRESH_USE_INTERNAL_ENDPOINT=false`` → endpoint is NOT called."""
+    worker = FundamentalsRefreshWorker(
+        settings=_settings(
+            fundamentals_refresh_use_internal_endpoint=False,
+            fundamentals_refresh_top_n=3,
+        )
+    )
+    with patch.object(worker, "_fetch_top_n_symbols", AsyncMock(return_value=["X"])) as fetch:
+        symbols = await worker._resolve_symbol_universe()
+    fetch.assert_not_awaited()
+    # Goes straight to CSV/default — default list, capped to 3.
+    assert symbols == ["AAPL", "MSFT", "NVDA"]
+
+
+@pytest.mark.asyncio
+async def test_fetch_top_n_symbols_returns_symbols_on_200() -> None:
+    """Successful HTTP call → uppercased symbols extracted from results,
+    and the worker propagates the ``X-Internal-JWT`` header.
+    """
+    import httpx as _httpx
+    from market_ingestion.infrastructure.workers import fundamentals_refresh_worker as mod
+
+    worker = FundamentalsRefreshWorker(settings=_settings())
+    fake_payload = {
+        "total": 3,
+        "offset": 0,
+        "limit": 3,
+        "results": [
+            {"symbol": "aapl", "exchange": "US", "market_cap_usd": 3e12, "id": "x", "currency_code": "USD"},
+            {"symbol": "msft", "exchange": "US", "market_cap_usd": 3e12, "id": "y", "currency_code": "USD"},
+            {"symbol": "nvda", "exchange": "US", "market_cap_usd": 3e12, "id": "z", "currency_code": "USD"},
+        ],
+    }
+    seen_headers: dict[str, str] = {}
+
+    def _handler(req: _httpx.Request) -> _httpx.Response:
+        seen_headers.update(dict(req.headers))
+        return _httpx.Response(200, json=fake_payload)
+
+    transport = _httpx.MockTransport(_handler)
+    real_async_client = _httpx.AsyncClient
+
+    def _client_factory(*args: Any, **kwargs: Any) -> _httpx.AsyncClient:
+        kwargs.setdefault("transport", transport)
+        return real_async_client(*args, **kwargs)
+
+    with patch.object(mod.httpx, "AsyncClient", _client_factory):
+        symbols = await worker._fetch_top_n_symbols(3)
+
+    assert symbols == ["AAPL", "MSFT", "NVDA"]
+    # X-Internal-JWT must be present so market-data accepts the call.
+    assert "x-internal-jwt" in {k.lower() for k in seen_headers}
+
+
+@pytest.mark.asyncio
+async def test_fetch_top_n_symbols_returns_empty_on_5xx() -> None:
+    """5xx from market-data → empty list (triggers the curated-CSV fallback)."""
+    import httpx as _httpx
+    from market_ingestion.infrastructure.workers import fundamentals_refresh_worker as mod
+
+    worker = FundamentalsRefreshWorker(settings=_settings())
+
+    def _handler(_req: _httpx.Request) -> _httpx.Response:
+        return _httpx.Response(503, json={"detail": "down"})
+
+    transport = _httpx.MockTransport(_handler)
+    real_async_client = _httpx.AsyncClient
+
+    def _client_factory(*args: Any, **kwargs: Any) -> _httpx.AsyncClient:
+        kwargs.setdefault("transport", transport)
+        return real_async_client(*args, **kwargs)
+
+    with patch.object(mod.httpx, "AsyncClient", _client_factory):
+        symbols = await worker._fetch_top_n_symbols(10)
+
+    assert symbols == []
+
+
+@pytest.mark.asyncio
+async def test_fetch_top_n_symbols_returns_empty_on_network_error() -> None:
+    """Connection error → empty list (broad except catches; no exception escapes)."""
+    import httpx as _httpx
+    from market_ingestion.infrastructure.workers import fundamentals_refresh_worker as mod
+
+    worker = FundamentalsRefreshWorker(settings=_settings())
+
+    def _handler(_req: _httpx.Request) -> _httpx.Response:
+        raise _httpx.ConnectError("connection refused")
+
+    transport = _httpx.MockTransport(_handler)
+    real_async_client = _httpx.AsyncClient
+
+    def _client_factory(*args: Any, **kwargs: Any) -> _httpx.AsyncClient:
+        kwargs.setdefault("transport", transport)
+        return real_async_client(*args, **kwargs)
+
+    with patch.object(mod.httpx, "AsyncClient", _client_factory):
+        symbols = await worker._fetch_top_n_symbols(10)
+
+    assert symbols == []
+
+
+def test_sign_internal_jwt_returns_hs256_dev_token_when_no_key() -> None:
+    """No RS256 key configured → worker emits a 3-segment HS256 dev token."""
+    worker = FundamentalsRefreshWorker(settings=_settings())  # internal_jwt_private_key=""
+    token = worker._sign_internal_jwt()
+    # JWT structure: header.payload.signature.
+    assert token.count(".") == 2
+    assert len(token) > 20
 
 
 # ---------------------------------------------------------------------------

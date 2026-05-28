@@ -61,6 +61,7 @@ or articles, perform NLP processing, manage portfolios.
 | GET | `/api/v1/market/period-movers` | Top gainers or losers — query params: `period` (`1W`/`1M`), `type` (`gainers`/`losers`), `limit` (1–50, default 10). Returns instruments sorted by period_return_pct. | — |
 | GET | `/internal/v1/price/{instrument_id}` | Price snapshot for a single instrument — cache-aside: Valkey → Quote → OHLCV fallback. Returns 404 if no data available. **Internal endpoint — S9 only.** | Valkey |
 | POST | `/internal/v1/price/batch` | Price snapshots for up to 50 instruments. Instruments with no data are silently omitted (partial results valid). **Internal endpoint — S9 only.** | Valkey |
+| GET | `/internal/v1/instruments/top-by-market-cap` | Top-N active instruments sorted by latest market capitalisation (NULLs last). Query params: `n` (1-5000, default 500), `offset` (default 0). Response: `{total, offset, limit, results:[{id,symbol,exchange,market_cap_usd,currency_code}]}`. **Internal endpoint — consumed by market-ingestion's `FundamentalsRefreshWorker` (PLAN-0100 W5).** | — |
 
 > **Note on path ordering**: Literal-segment routes (`/ohlcv/bulk`, `/quotes/latest`,
 > `/instruments/lookup`, `/instruments/on-demand-profile`) are registered **before** path-param routes
