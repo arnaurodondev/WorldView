@@ -137,6 +137,59 @@ def _most_recent_financial_row_with_period(section_data: Any) -> tuple[dict[str,
     return ({}, None)
 
 
+# ── L-4a: consensus-rating text → numeric mapping ────────────────────────────
+#
+# EODHD's ``AnalystRatings.Rating`` field is mostly numeric (1.0-5.0 with
+# 1=StrongBuy ... 5=StrongSell — see eodhd-endpoints-reference.md), but a
+# subset of feeds return a text label instead. WL-4a stores the value on a
+# 1-5 scale where HIGHER is more bullish (per the task spec, which lists
+# "Buy/Hold/Sell, map to 4.0/3.0/2.0"). This INVERTS the raw EODHD numeric
+# semantic for TEXT labels only — the column has a single readable scale
+# for downstream consumers (screener UI, narrative summaries).
+#
+# Mapping (case-insensitive, whitespace-collapsed):
+#   "Strong Buy"  -> 5.0
+#   "Buy"         -> 4.0
+#   "Hold"        -> 3.0
+#   "Sell"        -> 2.0
+#   "Strong Sell" -> 1.0
+#   (any other label) -> None (silently dropped; logged for diagnostics)
+#
+# If the raw value is numeric (Decimal/float/int or a parseable string),
+# we PASS IT THROUGH UNCHANGED because EODHD's most common encoding is the
+# 1-5 numeric scale. A raw EODHD numeric value will therefore use EODHD's
+# native scale (1=StrongBuy=most bullish). Downstream renderers should
+# inspect the value's provenance (numeric vs text-derived) only if the
+# scale mismatch matters; for screener filter ranges (min/max) the column
+# is treated as a single numeric domain and the UI sets bounds accordingly.
+_CONSENSUS_RATING_MAP: dict[str, float] = {
+    "strong buy": 5.0,
+    "buy": 4.0,
+    "hold": 3.0,
+    "sell": 2.0,
+    "strong sell": 1.0,
+}
+
+
+def _consensus_rating(raw: Any) -> float | None:
+    """Return the WL-4a 1-5 consensus rating for the raw EODHD value.
+
+    Numeric inputs (int/float/Decimal/parseable string) pass through via
+    :func:`_safe_float`. Non-numeric strings are matched case-insensitively
+    against :data:`_CONSENSUS_RATING_MAP`. Anything else returns ``None``.
+    """
+    # First attempt numeric coercion — covers the EODHD-default 1-5 numeric
+    # case plus any string that happens to be a numeric literal ("2.5").
+    numeric = _safe_float(raw)
+    if numeric is not None:
+        return numeric
+    if isinstance(raw, str):
+        # Normalise whitespace and case for the text lookup.
+        key = " ".join(raw.strip().lower().split())
+        return _CONSENSUS_RATING_MAP.get(key)
+    return None
+
+
 def derive_fundamentals_snapshot(
     *,
     highlights: dict[str, Any],
@@ -144,8 +197,10 @@ def derive_fundamentals_snapshot(
     income: dict[str, Any],
     balance: dict[str, Any],
     technicals: dict[str, Any],
+    analyst_consensus: dict[str, Any] | None = None,
+    share_statistics: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Compute all 10 snapshot fields from EODHD section data.
+    """Compute all snapshot fields from EODHD section data.
 
     Args:
         highlights:  Contents of the ``highlights`` section (flat dict).
@@ -153,6 +208,15 @@ def derive_fundamentals_snapshot(
         income:      Most-recent row from ``income_statement`` financial statement.
         balance:     Most-recent row from ``balance_sheet`` financial statement.
         technicals:  Contents of the ``technicals_snapshot`` section (flat dict).
+        analyst_consensus: Contents of the ``analyst_consensus`` section (flat
+            dict with ``TargetPrice``, ``Rating`` etc. keys). Optional because
+            the section is sparse for small-caps and non-US listings. Added
+            in WL-4a (PLAN-0089) for ``analyst_target_price`` and
+            ``analyst_consensus_rating`` extraction.
+        share_statistics: Contents of the ``share_statistics`` section (flat
+            dict with ``PercentInstitutions``, ``ShortPercentOfFloat`` etc.).
+            Same optionality rationale as ``analyst_consensus``. Added in
+            WL-4a for ``institutional_ownership_pct`` and ``short_percent``.
 
     Returns a dict with keys matching the ``instrument_fundamentals_snapshot``
     columns.  Values are Python int/float/str or None.
@@ -220,6 +284,36 @@ def derive_fundamentals_snapshot(
     # Documented limitation — always NULL until a future data provider is wired.
     credit_rating: str | None = None
 
+    # ── L-4a: analyst target price ────────────────────────────────────────────
+    # EODHD AnalystRatings.TargetPrice (USD) — the consensus price target. May
+    # also live in Highlights.WallStreetTargetPrice; we prefer AnalystRatings
+    # because it sits in the explicitly analyst-focused section. NULL when the
+    # section is missing (small-cap / foreign listings).
+    ac: dict[str, Any] = analyst_consensus or {}
+    analyst_target_price = _try_keys(ac, "TargetPrice", "targetPrice", "target_price")
+
+    # ── L-4a: analyst consensus rating ────────────────────────────────────────
+    # See ``_consensus_rating`` docstring for the unit convention. The raw
+    # value may be numeric (EODHD default 1-5 numeric scale) or a text label
+    # like "Buy" / "Hold" / "Sell" / "Strong Buy" / "Strong Sell".
+    analyst_consensus_rating = _consensus_rating(ac.get("Rating") or ac.get("rating"))
+
+    # ── L-4a: institutional ownership pct ─────────────────────────────────────
+    # SharesStats.PercentInstitutions is reported by EODHD as a PERCENT value
+    # (e.g. 74.3 means 74.3%). To stay consistent with the fcf_margin
+    # convention from L-2 (stored as a decimal fraction), we DIVIDE BY 100.
+    # Storing as a fraction lets the frontend multiply by 100 once at render
+    # time and unifies the unit convention across all WL-4a percent fields.
+    ss: dict[str, Any] = share_statistics or {}
+    inst_raw = _try_keys(ss, "PercentInstitutions", "percentInstitutions", "percent_institutions")
+    institutional_ownership_pct: float | None = inst_raw / 100.0 if inst_raw is not None else None
+
+    # ── L-4a: short percent ───────────────────────────────────────────────────
+    # SharesStats.ShortPercentOfFloat is ALREADY a decimal fraction in EODHD
+    # (e.g. 0.034 means 3.4% of float is shorted). We pass it through unchanged
+    # so the storage convention matches institutional_ownership_pct above.
+    short_percent = _try_keys(ss, "ShortPercentOfFloat", "shortPercentOfFloat", "short_percent_of_float")
+
     return {
         "eps_ttm": eps_ttm,
         "beta": beta,
@@ -231,6 +325,11 @@ def derive_fundamentals_snapshot(
         "interest_coverage": interest_coverage,
         "net_debt_to_ebitda": net_debt_to_ebitda,
         "credit_rating": credit_rating,
+        # ── L-4a (WL-4a) ──────────────────────────────────────────────────────
+        "analyst_target_price": analyst_target_price,
+        "analyst_consensus_rating": analyst_consensus_rating,
+        "institutional_ownership_pct": institutional_ownership_pct,
+        "short_percent": short_percent,
     }
 
 
@@ -242,6 +341,8 @@ _UPSERT_SQL = text("""
         eps_ttm, beta, avg_volume_30d,
         operating_cash_flow, capex, free_cash_flow, fcf_margin,
         interest_coverage, net_debt_to_ebitda, credit_rating,
+        analyst_target_price, analyst_consensus_rating,
+        institutional_ownership_pct, short_percent,
         period_type_income, period_type_cash_flow, period_type_balance,
         updated_at
     ) VALUES (
@@ -249,6 +350,8 @@ _UPSERT_SQL = text("""
         :eps_ttm, :beta, :avg_volume_30d,
         :operating_cash_flow, :capex, :free_cash_flow, :fcf_margin,
         :interest_coverage, :net_debt_to_ebitda, :credit_rating,
+        :analyst_target_price, :analyst_consensus_rating,
+        :institutional_ownership_pct, :short_percent,
         :period_type_income, :period_type_cash_flow, :period_type_balance,
         now()
     )
@@ -285,6 +388,18 @@ _UPSERT_SQL = text("""
                                instrument_fundamentals_snapshot.net_debt_to_ebitda),
         credit_rating       = COALESCE(EXCLUDED.credit_rating,
                                instrument_fundamentals_snapshot.credit_rating),
+        -- WL-4a (PLAN-0089): four new snapshot fields sourced from
+        -- analyst_consensus + share_statistics JSONB sections. COALESCE
+        -- preserves prior values when a partial re-poll omits the section
+        -- (mirrors the L-2 fcf_margin / credit_rating pattern above).
+        analyst_target_price = COALESCE(EXCLUDED.analyst_target_price,
+                               instrument_fundamentals_snapshot.analyst_target_price),
+        analyst_consensus_rating = COALESCE(EXCLUDED.analyst_consensus_rating,
+                               instrument_fundamentals_snapshot.analyst_consensus_rating),
+        institutional_ownership_pct = COALESCE(EXCLUDED.institutional_ownership_pct,
+                               instrument_fundamentals_snapshot.institutional_ownership_pct),
+        short_percent       = COALESCE(EXCLUDED.short_percent,
+                               instrument_fundamentals_snapshot.short_percent),
         -- PLAN-0095 T-W1-04 / BP-542: track which periodicity each derived
         -- metric was sourced from. COALESCE matches the policy above so a
         -- partial payload (e.g. no income_statement this cycle) does not
@@ -330,6 +445,13 @@ async def upsert_snapshot(session: AsyncSession, instrument_id: str, snap: dict[
             "interest_coverage": snap.get("interest_coverage"),
             "net_debt_to_ebitda": snap.get("net_debt_to_ebitda"),
             "credit_rating": snap.get("credit_rating"),
+            # ── WL-4a parameters (default to None so callers passing pre-WL-4a
+            # snap dicts still work — the COALESCE policy then preserves any
+            # value previously stored). ──────────────────────────────────────
+            "analyst_target_price": snap.get("analyst_target_price"),
+            "analyst_consensus_rating": snap.get("analyst_consensus_rating"),
+            "institutional_ownership_pct": snap.get("institutional_ownership_pct"),
+            "short_percent": snap.get("short_percent"),
             "period_type_income": snap.get("period_type_income"),
             "period_type_cash_flow": snap.get("period_type_cash_flow"),
             "period_type_balance": snap.get("period_type_balance"),
