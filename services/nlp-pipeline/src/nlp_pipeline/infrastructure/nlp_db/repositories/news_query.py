@@ -133,6 +133,17 @@ _TOP_NEWS_SQL = _TOP_NEWS_SQL_BASE + _TOP_NEWS_SQL_SUFFIX
 
 _ENTITY_ARTICLES_SQL = (
     "WITH entity_article_ids AS (\n"
+    # BP-606 (PLAN-0100 W1 T-W1-01): UNION two discovery paths so we capture
+    # articles whose entity linkage lives EITHER in the normalised
+    # ``entity_mentions`` table OR only in the denormalised
+    # ``chunks.entity_mentions`` JSONB column. The MSTR canary (doc has 4
+    # chunks with JSONB entity_id=MSTR but ZERO rows in the normalised table)
+    # was invisible to chat retrieval before this fix — every tool call
+    # returned ``item_count: 0`` and the LLM substituted a different ticker.
+    # See docs/audits/2026-05-27-plan-0100-q2-mstr-entity-drift-deepdive.md
+    # §2 for the full lineage analysis.
+    #
+    # Leg 1 — normalised ``entity_mentions`` table (pre-BP-606 behaviour).
     "    SELECT DISTINCT em.doc_id AS article_id\n"
     "    FROM entity_mentions em\n"
     "    WHERE em.resolved_entity_id = :entity_id\n"
@@ -149,6 +160,24 @@ _ENTITY_ARTICLES_SQL = (
     "          em.tenant_id IS NULL\n"
     "          OR em.tenant_id = CAST(:tenant_id AS UUID)\n"
     "          OR em.tenant_id = '00000000-0000-0000-0000-000000000000'::uuid\n"
+    "      )\n"
+    "    UNION\n"
+    # Leg 2 — denormalised ``chunks.entity_mentions`` JSONB containment.
+    # Uses the GIN index on ``chunks.entity_mentions`` (existing). The
+    # ``@>`` containment operator with a one-element JSONB array of
+    # ``{\"entity_id\": <uuid>}`` is GIN-indexed and matches any chunk whose
+    # entity-mention array contains an object with that entity_id.  Chunks
+    # are tenant-scoped via the ``chunks.tenant_id`` column with the same
+    # three-row-class semantics as Leg 1 (R35).
+    "    SELECT DISTINCT c.doc_id AS article_id\n"
+    "    FROM chunks c\n"
+    "    WHERE c.entity_mentions @> jsonb_build_array(\n"
+    "        jsonb_build_object('entity_id', CAST(:entity_id AS TEXT))\n"
+    "    )\n"
+    "      AND (\n"
+    "          c.tenant_id IS NULL\n"
+    "          OR c.tenant_id = CAST(:tenant_id AS UUID)\n"
+    "          OR c.tenant_id = '00000000-0000-0000-0000-000000000000'::uuid\n"
     "      )\n"
     "),\n"
     "article_windows AS (\n"
