@@ -39,7 +39,7 @@ _SCREEN_FIELDS_REFRESH_INTERVAL_SECONDS = 6 * 3600
 
 
 def _get_static_screen_fields() -> list:
-    """Return the 23 static ScreenFieldMetadata instances (PRD-0017 §6.5, Wave L-1/L-2)."""
+    """Return the 24 static ScreenFieldMetadata instances (PRD-0017 §6.5, Wave L-1/L-2/L-4b)."""
     from market_data.domain.entities import ScreenFieldMetadata
 
     return [
@@ -275,6 +275,22 @@ def _get_static_screen_fields() -> list:
             field_type="text",
             unit=None,
             description="S&P / EODHD credit rating string (e.g. AA+, BBB-)",
+            observed_min=None,
+            observed_max=None,
+            null_fraction=0.0,
+        ),
+        # ── Wave L-4b: insider 90d rollup column ─────────────────────────────
+        # field_type='numeric' (CHECK constraint admits only 'numeric'/'text');
+        # unit='currency_compact' → frontend renders compact $1.2M / $5B.
+        # MUST stay byte-identical to migration 030's seed row — divergence
+        # makes the 6-hour refresh loop silently overwrite the migration's
+        # values. See ``.claude-context.md`` pitfall L-4b.
+        ScreenFieldMetadata(
+            name="insider_net_buy_90d",
+            label="INSIDER 90D",
+            field_type="numeric",
+            unit="currency_compact",
+            description="Trailing 90-day net dollar value of insider transactions",
             observed_min=None,
             observed_max=None,
             null_fraction=0.0,

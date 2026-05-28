@@ -31,6 +31,7 @@ from market_data.infrastructure.db.models.infrastructure import (
     IngestionEventModel,
     OutboxEventModel,
 )
+from market_data.infrastructure.db.models.insider_transactions import InsiderTransactionModel
 from market_data.infrastructure.db.models.instruments import InstrumentModel
 from market_data.infrastructure.db.models.ohlcv import OHLCVBarModel
 from market_data.infrastructure.db.models.prediction_markets import (
@@ -54,6 +55,7 @@ __all__ = [
     "HighlightsModel",
     "IncomeStatementModel",
     "IngestionEventModel",
+    "InsiderTransactionModel",
     "InsiderTransactionsSnapshotModel",
     "InstitutionalHoldersModel",
     "InstrumentFundamentalsSnapshotModel",
