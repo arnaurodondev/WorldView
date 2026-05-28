@@ -125,15 +125,21 @@ def test_format_fundamentals_with_data() -> None:
 
 
 def test_format_news_caps_at_8_articles() -> None:
-    """format_news renders at most 8 articles regardless of how many are in ctx."""
+    """format_news renders at most get_news_limit() (default 12) articles.
+
+    PLAN-0099 Wave B raised the cap from 8 to 12 and made it env-var
+    overridable (RAG_CHAT_BRIEF_NEWS_LIMIT). Test name kept stable to
+    preserve git history; assertion bumped to the new default.
+    """
     formatter = _make_formatter()
 
     articles = []
-    for i in range(12):
+    # Distinct titles so _dedupe_news doesn't collapse them.
+    for i in range(20):
         a = MagicMock()
-        a.title = f"Article {i}"
+        a.title = f"Distinct article number {i} about company {i}"
         a.published_at = date(2026, 5, 1)
-        a.display_relevance_score = None
+        a.display_relevance_score = 0.5
         a.url = None
         articles.append(a)
 
@@ -141,17 +147,21 @@ def test_format_news_caps_at_8_articles() -> None:
     ctx.news_articles = articles
 
     result = formatter.format_news(ctx, citation_offset=0)
-    # Should have [c1] through [c8] but NOT [c9]
-    assert "[c8]" in result
-    assert "[c9]" not in result
+    # Default cap is 12 → [c1]..[c12] but not [c13].
+    assert "[c12]" in result
+    assert "[c13]" not in result
 
 
 def test_format_events_caps_at_6_events() -> None:
-    """format_events renders at most 6 events."""
+    """format_events renders at most get_events_limit() (default 10) events.
+
+    PLAN-0099 Wave B raised the cap from 6 to 10. Test name kept stable to
+    preserve git history; assertion bumped to the new default.
+    """
     formatter = _make_formatter()
 
     events = []
-    for i in range(10):
+    for i in range(15):
         ev = MagicMock()
         ev.event_type = f"TYPE_{i}"
         ev.event_text = "text"
@@ -162,8 +172,8 @@ def test_format_events_caps_at_6_events() -> None:
     ctx.recent_events = events
 
     result = formatter.format_events(ctx, citation_offset=0)
-    assert "[c6]" in result
-    assert "[c7]" not in result
+    assert "[c10]" in result
+    assert "[c11]" not in result
 
 
 # ── 4. test_format_empty_articles ─────────────────────────────────────────────

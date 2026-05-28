@@ -311,8 +311,18 @@ class GenerateBriefingUseCase:
         # WHY compute citation offsets here: news is [c1..cN], events are [c(N+1)..],
         # alerts are [c(N+events+1)..]. Offsets must match materialize_brief_citations
         # ordering so [cN] markers in the LLM output resolve to the correct documents.
-        news_count = len((ctx.news_articles or [])[:8]) if ctx else 0
-        events_count = len((ctx.recent_events or [])[:6]) if ctx else 0
+        # PLAN-0099 Wave B: use the env-overridable limits from the formatter so
+        # offsets stay in lock-step with what format_news / format_events emit.
+        from rag_chat.application.use_cases.brief_context_formatter import (
+            get_events_limit,
+            get_min_context_score,
+            get_news_limit,
+        )
+
+        news_cap = get_news_limit()
+        events_cap = get_events_limit()
+        news_count = len((ctx.news_articles or [])[:news_cap]) if ctx else 0
+        events_count = len((ctx.recent_events or [])[:events_cap]) if ctx else 0
         news_text = _formatter.format_news(ctx, citation_offset=0)
         events_text = _formatter.format_events(ctx, citation_offset=news_count)
         alerts_text = _formatter.format_alerts(ctx, citation_offset=news_count + events_count)
@@ -338,7 +348,83 @@ class GenerateBriefingUseCase:
                 "entity_mentions": [],
                 "citations": [],
                 "generated_at": generated_at,
+                # PLAN-0099 Wave B: all-empty is the strongest form of partial
+                # failure; mark it so the UI / cache can distinguish from a
+                # real "no signals today" brief.
+                "partial_failure": True,
+                "context_availability_score": (
+                    float(getattr(ctx, "context_availability_score", 0.0)) if ctx is not None else 0.0
+                ),
             }
+
+        # ── 3c. PLAN-0099 Wave B: refusal-on-low-context ─────────────────────
+        # When the gatherer's weighted availability score (computed across
+        # portfolio + news + events + alerts + sections_populated) falls
+        # below the configured threshold, skip the LLM call entirely.  The
+        # LLM produces noisy "generic" output on sparse context so we'd
+        # rather show a "limited data" lead built from whatever sections
+        # did populate.  Counter `brief_low_context_refusal_total` tracks
+        # how often this fires so operators can tune the threshold.
+        score = float(getattr(ctx, "context_availability_score", 1.0)) if ctx is not None else 0.0
+        min_score = get_min_context_score()
+        if min_score > 0.0 and score < min_score:
+            from rag_chat.application.metrics import prometheus as _m
+
+            _m.brief_low_context_refusal_total.inc()
+            log.warning(  # type: ignore[no-any-return]
+                "brief_low_context_refusal",
+                user_id=user_id,
+                score=score,
+                threshold=min_score,
+            )
+            populated_bits = [
+                seg
+                for seg in (
+                    ("Portfolio", portfolio_text),
+                    ("News", news_text),
+                    ("Events", events_text),
+                    ("Alerts", alerts_text),
+                    ("Market", market_text),
+                )
+                if seg[1]
+            ]
+            limited_data_message = (
+                "Limited data available today — only " + ", ".join(name for name, _ in populated_bits) + " populated."
+                if populated_bits
+                else "Limited data available today — no upstream sections populated."
+            )
+            generated_at = datetime.now(tz=UTC).isoformat()
+            return {
+                "content": limited_data_message,
+                "risk_summary": _formatter.build_morning_risk_summary(ctx),
+                "entity_mentions": _formatter.extract_entity_mentions(ctx),
+                "citations": _formatter.build_citations(ctx),
+                "generated_at": generated_at,
+                "partial_failure": True,
+                "context_availability_score": score,
+            }
+
+        # ── 3d. PLAN-0099 Wave B: partial-failure guard for high-weight sources ─
+        # If portfolio OR news (the two highest-weight sources) is empty we
+        # still generate the brief but flag it as partial so the UI/cache
+        # can show a small notice on the lead.
+        partial_failure = (not portfolio_text) or (not news_text)
+        partial_failure_notice = ""
+        if partial_failure:
+            missing: list[str] = []
+            if not portfolio_text:
+                missing.append("portfolio")
+            if not news_text:
+                missing.append("news")
+            partial_failure_notice = (
+                f" (Partial data — {', '.join(missing)} unavailable; " "showing brief based on remaining sources.)"
+            )
+            log.warning(  # type: ignore[no-any-return]
+                "brief_partial_failure",
+                user_id=user_id,
+                missing=missing,
+                score=score,
+            )
 
         prompt = MORNING_BRIEFING.render(
             safety=SAFETY_FOOTER,
@@ -494,8 +580,12 @@ class GenerateBriefingUseCase:
             "citations": citations,
             "generated_at": generated_at,
             # PLAN-0062-W4 new fields
-            "lead": lead,
+            "lead": (lead + partial_failure_notice) if (lead and partial_failure_notice) else lead,
             "confidence": confidence,
+            # PLAN-0099 Wave B: surface partial-failure + context score on the
+            # response so the UI / cache / downstream can show a notice.
+            "partial_failure": partial_failure,
+            "context_availability_score": score,
         }
 
     async def execute_public_instrument(

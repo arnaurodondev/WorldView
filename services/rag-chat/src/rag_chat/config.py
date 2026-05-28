@@ -203,6 +203,27 @@ class Settings(BaseSettings):
     brief_agentic_enabled: bool = False  # RAG_CHAT_BRIEF_AGENTIC_ENABLED
     brief_agentic_max_tool_calls: int = Field(default=8, ge=1, le=32)  # RAG_CHAT_BRIEF_AGENTIC_MAX_TOOL_CALLS
 
+    # ── Brief context truncation + low-context refusal (PLAN-0099 Wave B) ────
+    # Per-section caps applied by ``BriefContextFormatter`` before the prompt
+    # is rendered.  Defaults raised from 8/6/5 (the audit-flagged settings
+    # that hid tail signals on high-volume news days — BP-600) to 12/10/8.
+    # Adjusting upward beyond these defaults is safe up to the prompt's
+    # ~2000-token budget; bump cautiously and watch
+    # ``brief_context_availability_score`` for regressions.
+    brief_news_limit: int = Field(default=12, ge=1, le=64)  # BRIEF_NEWS_LIMIT
+    brief_events_limit: int = Field(default=10, ge=1, le=64)  # BRIEF_EVENTS_LIMIT
+    brief_alerts_limit: int = Field(default=8, ge=1, le=32)  # BRIEF_ALERTS_LIMIT
+    # Refusal-on-low-context threshold: when the gatherer's weighted score
+    # (see brief_diagnostics.compute_context_availability_score) falls below
+    # this value, the generator skips the LLM call and returns a
+    # "Limited data available today" lead built from whatever sections did
+    # populate.  Setting to 0.0 disables the refusal entirely.
+    brief_min_context_score: float = Field(default=0.3, ge=0.0, le=1.0)  # BRIEF_MIN_CONTEXT_SCORE
+    # Headline-similarity threshold for ``_dedupe_news`` — articles whose
+    # titles share a prefix or share >= this fraction of token overlap are
+    # collapsed; the highest-display_relevance_score copy wins.
+    brief_news_dedupe_threshold: float = Field(default=0.85, ge=0.0, le=1.0)
+
     # ── Entity resolver tuning (F-LIVE-NEW-001) ──────────────────────────────
     # Stop-words stripped from the query string BEFORE the S7 alias fuzzy
     # match so generic English fragments ("space", "sector", "industry") do not

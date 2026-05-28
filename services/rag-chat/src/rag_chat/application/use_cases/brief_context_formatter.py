@@ -5,6 +5,12 @@ assembly logic lives in one dedicated class rather than being scattered as modul
 level helpers. The class wraps the same helper functions that were previously
 defined at module level; their behaviour is unchanged (pure refactor).
 
+PLAN-0099 Wave B: per-section truncation limits become env-var overridable
+(``RAG_CHAT_BRIEF_NEWS_LIMIT`` / ``_EVENTS_LIMIT`` / ``_ALERTS_LIMIT``) with
+defaults raised from 8/6/5 to 12/10/8 (BP-600).  News articles are deduped
+via ``_dedupe_news()`` before truncation so syndicated copies of the same
+headline don't crowd out distinct signals.
+
 Functions / methods moved here:
   - _format_portfolio_morning → BriefContextFormatter.format_portfolio_morning
   - _format_news              → BriefContextFormatter.format_news
@@ -23,7 +29,134 @@ Functions / methods moved here:
 
 from __future__ import annotations
 
+import os
 from typing import Any
+
+# ── PLAN-0099 Wave B: env-var overridable truncation limits ─────────────────
+#
+# Module-level helpers so callers (and tests) can read the live values without
+# instantiating a Settings object.  Defaults match Settings (12/10/8) but are
+# parsed from the env vars at import time + on every call so test fixtures
+# can monkeypatch the value before invoking the formatter.
+#
+# Naming follows the audit / user-facing convention: BRIEF_NEWS_LIMIT etc.
+# The pydantic-settings env_prefix is RAG_CHAT_, so the real env var name is
+# RAG_CHAT_BRIEF_NEWS_LIMIT — both forms are accepted (RAG_CHAT_ prefix wins
+# when both are present).
+
+
+def _env_int(*names: str, default: int) -> int:
+    """Return the first env var that parses as int, else ``default``.
+
+    Tolerant of missing / empty values; non-integer strings fall through to
+    the next name so a typo in one env var doesn't crash the formatter.
+    """
+    for name in names:
+        raw = os.environ.get(name)
+        if raw is None or raw == "":
+            continue
+        try:
+            return int(raw)
+        except ValueError:
+            continue
+    return default
+
+
+def _env_float(*names: str, default: float) -> float:
+    """Mirror of ``_env_int`` for float-valued env vars."""
+    for name in names:
+        raw = os.environ.get(name)
+        if raw is None or raw == "":
+            continue
+        try:
+            return float(raw)
+        except ValueError:
+            continue
+    return default
+
+
+def get_news_limit() -> int:
+    """Resolved news article cap (default 12)."""
+    return _env_int("RAG_CHAT_BRIEF_NEWS_LIMIT", "BRIEF_NEWS_LIMIT", default=12)
+
+
+def get_events_limit() -> int:
+    """Resolved events cap (default 10)."""
+    return _env_int("RAG_CHAT_BRIEF_EVENTS_LIMIT", "BRIEF_EVENTS_LIMIT", default=10)
+
+
+def get_alerts_limit() -> int:
+    """Resolved alerts cap (default 8)."""
+    return _env_int("RAG_CHAT_BRIEF_ALERTS_LIMIT", "BRIEF_ALERTS_LIMIT", default=8)
+
+
+def get_min_context_score() -> float:
+    """Resolved refusal-on-low-context threshold (default 0.3)."""
+    return _env_float("RAG_CHAT_BRIEF_MIN_CONTEXT_SCORE", "BRIEF_MIN_CONTEXT_SCORE", default=0.3)
+
+
+def _dedupe_news(items: list[Any], threshold: float = 0.85) -> list[Any]:
+    """Drop near-duplicate news items, keeping the higher-relevance copy.
+
+    ``items`` must be a list of ``NewsArticleSummary``-shaped objects exposing
+    ``title`` (str) and ``display_relevance_score`` (float).  Two items are
+    considered duplicates when either:
+      * one title is a prefix of the other (after lower/strip), OR
+      * Jaccard similarity of their tokenised titles ≥ ``threshold``.
+
+    Stable ordering: the first occurrence's position is preserved; when a
+    duplicate is found later with a higher relevance score, the earlier copy
+    is replaced in-place so the highest-scoring representative wins.
+    """
+    if not items:
+        return []
+
+    def _tokens(title: str) -> set[str]:
+        return {tok for tok in title.lower().split() if tok}
+
+    kept: list[Any] = []
+    kept_tokens: list[set[str]] = []
+    kept_titles: list[str] = []
+
+    for item in items:
+        title = (getattr(item, "title", "") or "").strip()
+        if not title:
+            kept.append(item)
+            kept_tokens.append(set())
+            kept_titles.append("")
+            continue
+        title_lower = title.lower()
+        tokens = _tokens(title)
+        duplicate_idx: int | None = None
+        for idx, (prev_title, prev_tokens) in enumerate(zip(kept_titles, kept_tokens, strict=True)):
+            if not prev_title:
+                continue
+            # Prefix rule (catches "AAPL beats Q2" vs "AAPL beats Q2 — Reuters")
+            if title_lower.startswith(prev_title) or prev_title.startswith(title_lower):
+                duplicate_idx = idx
+                break
+            # Jaccard similarity rule
+            if tokens and prev_tokens:
+                union = tokens | prev_tokens
+                inter = tokens & prev_tokens
+                if union and len(inter) / len(union) >= threshold:
+                    duplicate_idx = idx
+                    break
+        if duplicate_idx is None:
+            kept.append(item)
+            kept_tokens.append(tokens)
+            kept_titles.append(title_lower)
+        else:
+            # Keep the higher-relevance copy in the original slot so downstream
+            # ordering (recency / relevance from upstream) is preserved.
+            existing = kept[duplicate_idx]
+            existing_score = float(getattr(existing, "display_relevance_score", 0.0) or 0.0)
+            new_score = float(getattr(item, "display_relevance_score", 0.0) or 0.0)
+            if new_score > existing_score:
+                kept[duplicate_idx] = item
+                kept_tokens[duplicate_idx] = tokens
+                kept_titles[duplicate_idx] = title_lower
+    return kept
 
 
 class BriefContextFormatter:
@@ -71,8 +204,12 @@ class BriefContextFormatter:
         """
         if ctx is None or not ctx.news_articles:
             return ""
+        # PLAN-0099 Wave B: dedupe first (so syndicated copies don't crowd
+        # out distinct signals), then truncate to the env-var limit.
+        deduped = _dedupe_news(list(ctx.news_articles))
+        limit = get_news_limit()
         lines: list[str] = []
-        for i, a in enumerate(ctx.news_articles[:8]):
+        for i, a in enumerate(deduped[:limit]):
             cn = f"[c{citation_offset + i + 1}]"
             date_str = a.published_at.strftime("%Y-%m-%d") if a.published_at else "unknown date"
             score = f" (relevance: {a.display_relevance_score:.0%})" if a.display_relevance_score else ""
@@ -90,8 +227,10 @@ class BriefContextFormatter:
         """
         if ctx is None or not ctx.active_alerts:
             return ""
+        # PLAN-0099 Wave B: limit overridable via RAG_CHAT_BRIEF_ALERTS_LIMIT.
+        limit = get_alerts_limit()
         lines: list[str] = []
-        for i, alert in enumerate(ctx.active_alerts[:5]):
+        for i, alert in enumerate(ctx.active_alerts[:limit]):
             cn = f"[c{citation_offset + i + 1}]"
             lines.append(
                 f"{cn} [{alert.severity.upper()}] {alert.alert_type}: {alert.payload.get('message', '')}",
@@ -119,8 +258,10 @@ class BriefContextFormatter:
         """
         if ctx is None or not ctx.recent_events:
             return ""
+        # PLAN-0099 Wave B: limit overridable via RAG_CHAT_BRIEF_EVENTS_LIMIT.
+        limit = get_events_limit()
         lines: list[str] = []
-        for i, ev in enumerate(ctx.recent_events[:6]):
+        for i, ev in enumerate(ctx.recent_events[:limit]):
             cn = f"[c{citation_offset + i + 1}]"
             date_str = ev.event_date.strftime("%Y-%m-%d") if ev.event_date else "unknown date"
             lines.append(f"{cn} [{date_str}] {ev.event_type}: {ev.event_text[:200]}")
