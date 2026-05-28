@@ -124,7 +124,32 @@ export const DEFAULT_COLUMNS: readonly ScreenerColumn[] = Object.freeze([
   // add column width that crowds the 12-column default layout at 1440px.
   Object.freeze({ key: "opMargin",      label: "OP MGN%",     sortable: true,  align: "right", formatter: "percent" as const, visible: false }),
   Object.freeze({ key: "evEbitda",      label: "EV/EBITDA",   sortable: true,  align: "right", formatter: "number" as const,  visible: false }),
-  Object.freeze({ key: "avgVol",        label: "Avg Vol",     sortable: true,  align: "right", formatter: "compact" as const, visible: false }),
+  // ── PRD-0089 Wave I-B Block IB-L2 (T-IB-05): fundamentals snapshot opt-ins ──
+  // WHY listed here AS WELL as in `ag-screener-columns.tsx`:
+  //   - The popover (gear ⚙ icon) reads from THIS file to show toggle rows.
+  //   - The AG-Grid columns file reads from ITSELF for the ColDef factory.
+  //   - The page maps user prefs → AG-Grid visibility via colId === key.
+  // So a column must be declared in BOTH places to (a) appear in the popover
+  // and (b) actually have a ColDef. The key field must match the colId.
+  //
+  // FORMATTER MAPPING:
+  //   - "compact"  → 50M / $1.2B style (no decimals on avg-vol, 1dp on FCF).
+  //   - "number"   → fixed 2dp (eps_ttm: 6.32) / fixed 1dp (multiples).
+  //   - "percent"  → 28.4% (FCF margin).
+  //   - "text"     → raw string (credit rating, badge-rendered by colDef).
+  // The popover doesn't use these directly today — they're recorded for the
+  // future legacy TanStack table renderer if it gets resurrected. The AG-Grid
+  // path picks its renderer per-column from ag-screener-columns.tsx.
+  Object.freeze({ key: "avgVol",           label: "Avg Vol",     sortable: true,  align: "right", formatter: "compact" as const, visible: false }),
+  Object.freeze({ key: "epsTtm",           label: "EPS (TTM)",   sortable: true,  align: "right", formatter: "number" as const,  visible: false }),
+  Object.freeze({ key: "fcf",              label: "FCF",         sortable: true,  align: "right", formatter: "compact" as const, visible: false }),
+  Object.freeze({ key: "fcfMargin",        label: "FCF Mgn%",    sortable: true,  align: "right", formatter: "percent" as const, visible: false }),
+  Object.freeze({ key: "interestCoverage", label: "Int Cov",     sortable: true,  align: "right", formatter: "number" as const,  visible: false }),
+  Object.freeze({ key: "netDebtToEbitda",  label: "ND/EBITDA",   sortable: true,  align: "right", formatter: "number" as const,  visible: false }),
+  // creditRating uses a custom badge renderer (no formatter). sortable=false —
+  // see ag-screener-columns.tsx CreditRatingCellRenderer for the rationale
+  // (lexical sort would mis-order tiers).
+  Object.freeze({ key: "creditRating",     label: "Credit",      sortable: false, align: "right",                                visible: false }),
 ]) as readonly ScreenerColumn[];
 
 // ── Internal helpers ─────────────────────────────────────────────────────────
