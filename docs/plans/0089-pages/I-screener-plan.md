@@ -3,9 +3,9 @@ id: PRD-0089-WI
 title: Wave I — Screener
 prd: PRD-0089
 order: WI (ninth page wave — runs after F1 + F2 + W1; I-B gated on Wave L)
-status: I-A done (2026-05-26) / IB-L1 done (2026-05-26) / IB-L2 unblocked (Wave L-1 shipped 2026-05-25 / Wave L-2 filter/sort + migration 024 shipped 2026-05-27)
+status: I-A done (2026-05-26) / IB-L1 done (2026-05-26) / IB-L2 unblocked (Wave L-1 shipped 2026-05-25 / Wave L-2 shipped 2026-05-27) / Wave L-4a shipped 2026-05-28 (4 of 5 IB-L4 columns); L-4b (insider 90d) deferred
 created: 2026-05-25
-updated: 2026-05-26
+updated: 2026-05-28
 parent_prd: docs/specs/0089-platform-page-redesign.md
 parent_design: docs/designs/0089/08-screener.md
 waves:
@@ -107,7 +107,8 @@ remains disabled.
 | **L-1** (~1 d) | `country`, `exchange`, `has_fundamentals`, `has_ohlcv` added to `ScreenFilter` Pydantic + `query_screen` WHERE; `screen_field_metadata` rows registered | T-IB-01 (country chip + popover row), T-IB-02 (exchange chip), T-IB-03 (coverage toggles) |
 | **L-2** (~2 d) **— shipped 2026-05-27** | `instrument_fundamentals_snapshot` LEFT JOIN in `query_screen` (shipped 2026-05-25) **plus** WHERE-clause filters and ORDER BY for the 7 snapshot fields (`avg_volume_30d`, `eps_ttm`, `free_cash_flow`, `fcf_margin`, `interest_coverage`, `net_debt_to_ebitda`, `credit_rating`); `ScreenFilterRequest` extended with 12 numeric `min`/`max` fields + `credit_ratings: list[str]`; migration `024_seed_l2_snapshot_screen_fields.py` persists the 7 `screen_field_metadata` rows idempotently; +12 unit tests in `test_screener_l1_l2.py` (25 total PASS) | T-IB-04..T-IB-09 (filter chips + opt-in columns) |
 | **L-3** (~3 d) | `ComputedMetricsBackfillWorker` → `dist_from_52w_high_pct`, `dist_from_52w_low_pct`, `return_1m`, `return_3m`, `return_6m`, `return_ytd`, `return_1y`, `return_3y` as `fundamental_metrics` rows | T-IB-10..T-IB-12 (52W distance + 1Y/YTD return columns + filter chips) |
-| **L-4** (~2 d) | Analyst / insider / ownership rollup ETLs → `analyst_target_price`, `analyst_consensus_rating`, `insider_net_buy_90d`, `institutional_ownership_pct`, `short_percent` | T-IB-13..T-IB-16 |
+| **L-4a** (~1.5 d) **— shipped 2026-05-28** | Snapshot extension for the 4 fields already ingested as EODHD JSONB: `analyst_target_price`, `analyst_consensus_rating`, `institutional_ownership_pct`, `short_percent`. Adds 4 nullable columns on `instrument_fundamentals_snapshot` (migration 025); extends `derive_fundamentals_snapshot` to read from `analyst_consensus` / `share_statistics` payload sections; normalises ownership and short to decimal fractions (matches `fcf_margin` convention); text-rating mapping (Buy=4.0, Hold=3.0, Sell=2.0, Strong Buy=5.0, Strong Sell=1.0); `ScreenFilterRequest` + `ScreenFilter` port + router whitelist extended with 8 numeric `min`/`max` fields; +17 unit tests (54 total PASS in `test_screener_l1_l2.py` + `test_metric_extractor_l4a.py`); migration cycle (up/down/up) clean. Unblocks IB-L4 T-13/14/15/16 (4 of 5 columns). | T-IB-13..T-IB-16 (4 of 5) |
+| **L-4b** (~2 d) **— deferred** | Insider transactions universe re-poll + `insider_transactions` table + consumer + 90-day rollup → `insider_net_buy_90d`. Requires new green-field consumer + table + cron + universe re-registration (audit §7.1 BLOCKER). Tracked separately; ships after L-4a/L-5. | T-IB-13..T-IB-16 (5th column, deferred) |
 | **L-5** (~3 d) | Intelligence-layer rollups (S7→S3 nightly sync) → `news_count_7d`, `llm_relevance_7d_max`, `display_relevance_7d_weighted`, `recent_contradiction_count`, `has_active_alert`, `has_ai_brief`, `next_earnings_date`, `next_dividend_date` | T-IB-17..T-IB-21 (IntelligenceFilterGroup row activations + 2 columns) |
 | **L-6** (optional, v2) | Centrality / hub score | — (v2, not in I-B) |
 | **L-7** (~1 d, defer to v2) | `POST /v1/screener/presets` server persistence | — (not in I-B; localStorage stays) |

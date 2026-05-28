@@ -261,6 +261,16 @@ CREATE TABLE instrument_fundamentals_snapshot (
     interest_coverage   NUMERIC(12, 4) NULL,
     net_debt_to_ebitda  NUMERIC(12, 4) NULL,
     credit_rating       VARCHAR(10) NULL,
+    -- ── Wave L-4a snapshot fields (PLAN-0089, migration 025) ─────────────────
+    -- analyst_consensus + share_statistics JSONB projection. Ownership and
+    -- short stored as DECIMAL FRACTIONS (e.g. 0.743 = 74.3%, 0.034 = 3.4%) to
+    -- match the fcf_margin convention. Consensus rating on a 1-5 scale where
+    -- higher = more bullish (text labels Buy/Hold/Sell map to 4.0/3.0/2.0;
+    -- numeric raw EODHD values pass through unchanged).
+    analyst_target_price        NUMERIC(18, 4) NULL,
+    analyst_consensus_rating    NUMERIC(4, 2)  NULL,
+    institutional_ownership_pct NUMERIC(8, 6)  NULL,
+    short_percent               NUMERIC(8, 6)  NULL,
     updated_at          TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 CREATE INDEX ix_fundamentals_snapshot_updated_at ON instrument_fundamentals_snapshot (updated_at);

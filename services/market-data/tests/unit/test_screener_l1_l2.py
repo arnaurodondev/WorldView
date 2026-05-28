@@ -606,3 +606,129 @@ async def test_query_screen_combined_l2_filters_with_l1_and_sort() -> None:
     assert "credit_rating" in sql_l
     assert "AA" in sql
     assert "order by" in sql_l
+
+
+# ---------------------------------------------------------------------------
+# Wave L-4a: analyst / ownership / short snapshot column filters + sorts
+# ---------------------------------------------------------------------------
+#
+# Mirror of the L-2 filter/sort tests above for the four new L-4a fields
+# (PLAN-0089). The four fields share the L-2 ``numeric_snap_filters`` code
+# path so the assertions follow the same pattern: confirm the filter value
+# is literal-bound into the WHERE clause and the column name appears in
+# the ORDER BY clause when sorted.
+
+
+@pytest.mark.asyncio
+async def test_query_screen_analyst_target_price_range_filter_adds_predicates() -> None:
+    """``analyst_target_price_{min,max}`` emit predicates on the snapshot column."""
+    session, captured = _make_capture_session()
+
+    filters = [
+        ScreenFilter(
+            metric="pe_ratio",
+            max_value=40.0,
+            analyst_target_price_min=100.0,
+            analyst_target_price_max=500.0,
+        )
+    ]
+    await query_screen(session, filters)
+
+    sql = _sql(captured[0]).lower()
+    assert "analyst_target_price" in sql
+    # Literal-bound values appear in the SQL string.
+    assert "100.0" in sql
+    assert "500.0" in sql
+
+
+@pytest.mark.asyncio
+async def test_query_screen_analyst_consensus_rating_min_filter_adds_predicate() -> None:
+    """``analyst_consensus_rating_min`` emits the expected predicate."""
+    session, captured = _make_capture_session()
+
+    filters = [ScreenFilter(metric="pe_ratio", max_value=40.0, analyst_consensus_rating_min=4.0)]
+    await query_screen(session, filters)
+
+    sql = _sql(captured[0]).lower()
+    assert "analyst_consensus_rating" in sql
+    assert "4.0" in sql
+
+
+@pytest.mark.asyncio
+async def test_query_screen_institutional_ownership_pct_range_filter_adds_predicates() -> None:
+    """``institutional_ownership_pct_{min,max}`` use the decimal-fraction convention."""
+    session, captured = _make_capture_session()
+
+    # 0.5 / 0.9 = 50% / 90% — consistent with the fraction unit convention.
+    filters = [
+        ScreenFilter(
+            metric="pe_ratio",
+            max_value=40.0,
+            institutional_ownership_pct_min=0.5,
+            institutional_ownership_pct_max=0.9,
+        )
+    ]
+    await query_screen(session, filters)
+
+    sql = _sql(captured[0]).lower()
+    assert "institutional_ownership_pct" in sql
+    assert "0.5" in sql
+    assert "0.9" in sql
+
+
+@pytest.mark.asyncio
+async def test_query_screen_short_percent_max_filter_adds_predicate() -> None:
+    """``short_percent_max`` emits the expected predicate (decimal-fraction)."""
+    session, captured = _make_capture_session()
+
+    # 0.05 = 5% — fraction convention.
+    filters = [ScreenFilter(metric="pe_ratio", max_value=40.0, short_percent_max=0.05)]
+    await query_screen(session, filters)
+
+    sql = _sql(captured[0]).lower()
+    assert "short_percent" in sql
+    assert "0.05" in sql
+
+
+@pytest.mark.asyncio
+async def test_query_screen_sort_by_analyst_target_price_orders_by_snapshot_column() -> None:
+    """``sort_by='analyst_target_price'`` produces an ORDER BY against the snapshot column."""
+    session, captured = _make_capture_session()
+
+    filters = [ScreenFilter(metric="pe_ratio", max_value=40.0)]
+    await query_screen(session, filters, sort_by="analyst_target_price", sort_order="desc")
+
+    sql = _sql(captured[0]).lower()
+    assert "order by" in sql
+    assert "analyst_target_price" in sql.split("order by", 1)[1]
+
+
+@pytest.mark.asyncio
+async def test_query_screen_sort_by_short_percent_orders_by_snapshot_column() -> None:
+    """``sort_by='short_percent'`` produces an ORDER BY against the snapshot column."""
+    session, captured = _make_capture_session()
+
+    filters = [ScreenFilter(metric="pe_ratio", max_value=40.0)]
+    await query_screen(session, filters, sort_by="short_percent", sort_order="asc")
+
+    sql = _sql(captured[0]).lower()
+    assert "order by" in sql
+    assert "short_percent" in sql.split("order by", 1)[1]
+
+
+@pytest.mark.asyncio
+async def test_query_screen_filter_branch_selects_l4a_snapshot_columns() -> None:
+    """The filter branch SELECTs the four L-4a snapshot columns alongside L-2."""
+    session, captured = _make_capture_session()
+
+    filters = [ScreenFilter(metric="pe_ratio", max_value=40.0)]
+    await query_screen(session, filters)
+
+    sql = _sql(captured[0]).lower()
+    for field in (
+        "analyst_target_price",
+        "analyst_consensus_rating",
+        "institutional_ownership_pct",
+        "short_percent",
+    ):
+        assert field in sql, f"L-4a snapshot field '{field}' missing from SQL:\n{sql}"
