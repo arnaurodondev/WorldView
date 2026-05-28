@@ -169,6 +169,11 @@ async def screen_instruments(
         "fcf_margin",
         "interest_coverage",
         "net_debt_to_ebitda",
+        # ── Wave L-4a snapshot fields (PLAN-0089) ────────────────────────────
+        "analyst_target_price",
+        "analyst_consensus_rating",
+        "institutional_ownership_pct",
+        "short_percent",
     }
     # SQL injection guard: sort_by must be a filter metric name, "ticker", or "name"
     if body.sort_by is not None:
@@ -205,6 +210,15 @@ async def screen_instruments(
             net_debt_to_ebitda_min=f.net_debt_to_ebitda_min,
             net_debt_to_ebitda_max=f.net_debt_to_ebitda_max,
             credit_ratings=tuple(f.credit_ratings) if f.credit_ratings else None,
+            # ── Wave L-4a snapshot column predicates (PLAN-0089) ─────────────
+            analyst_target_price_min=f.analyst_target_price_min,
+            analyst_target_price_max=f.analyst_target_price_max,
+            analyst_consensus_rating_min=f.analyst_consensus_rating_min,
+            analyst_consensus_rating_max=f.analyst_consensus_rating_max,
+            institutional_ownership_pct_min=f.institutional_ownership_pct_min,
+            institutional_ownership_pct_max=f.institutional_ownership_pct_max,
+            short_percent_min=f.short_percent_min,
+            short_percent_max=f.short_percent_max,
         )
         for f in body.filters
     ]

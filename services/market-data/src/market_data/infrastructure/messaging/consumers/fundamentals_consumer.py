@@ -631,9 +631,27 @@ class FundamentalsConsumer(ValkeyDedupMixin, BaseKafkaConsumer[dict]):
         snap_income, _pt_income = _most_recent_financial_row_with_period(payload.get("income_statement"))
         snap_balance, _pt_balance = _most_recent_financial_row_with_period(payload.get("balance_sheet"))
         snap_technicals = payload.get("technicals_snapshot") or {}
+        # ── WL-4a (PLAN-0089) sections ───────────────────────────────────────
+        # Two additional flat-dict sections feed the four new L-4a snapshot
+        # columns (analyst_target_price, analyst_consensus_rating,
+        # institutional_ownership_pct, short_percent). Both are sparse —
+        # small-cap and non-US listings frequently omit either or both.
+        snap_analyst_consensus = payload.get("analyst_consensus") or {}
+        snap_share_statistics = payload.get("share_statistics") or {}
 
-        # Only derive + upsert when at least one source section is present
-        if not (snap_highlights or snap_cash_flow or snap_income or snap_balance or snap_technicals):
+        # Only derive + upsert when at least one source section is present.
+        # Include the new WL-4a sections so a payload carrying ONLY analyst or
+        # ownership data (rare but possible — partial provider re-poll) still
+        # triggers the upsert.
+        if not (
+            snap_highlights
+            or snap_cash_flow
+            or snap_income
+            or snap_balance
+            or snap_technicals
+            or snap_analyst_consensus
+            or snap_share_statistics
+        ):
             return
 
         snap = derive_fundamentals_snapshot(
@@ -642,6 +660,8 @@ class FundamentalsConsumer(ValkeyDedupMixin, BaseKafkaConsumer[dict]):
             income=snap_income,
             balance=snap_balance,
             technicals=snap_technicals,
+            analyst_consensus=snap_analyst_consensus,
+            share_statistics=snap_share_statistics,
         )
         # PLAN-0095 T-W1-04 / BP-542: attach the source periodicity tags so the
         # writer persists them into instrument_fundamentals_snapshot.period_type_*.

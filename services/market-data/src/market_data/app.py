@@ -279,6 +279,51 @@ def _get_static_screen_fields() -> list:
             observed_max=None,
             null_fraction=0.0,
         ),
+        # ── Wave L-4a: analyst / ownership / short snapshot fields ────────────
+        # MUST stay in lock-step with the seed inserts in migration
+        # ``025_seed_l4a_analyst_ownership_fields.py`` — the 6-hour refresh
+        # loop UPSERTs from this list and would otherwise overwrite the
+        # migration's seeded values with divergent labels/descriptions.
+        ScreenFieldMetadata(
+            name="analyst_target_price",
+            label="ANALYST TGT",
+            field_type="numeric",
+            unit="USD",
+            description="Analyst consensus 12-month target price (USD)",
+            observed_min=None,
+            observed_max=None,
+            null_fraction=0.0,
+        ),
+        ScreenFieldMetadata(
+            name="analyst_consensus_rating",
+            label="CONSENSUS",
+            field_type="numeric",
+            unit="1-5",
+            description="Analyst consensus rating on a 1-5 scale (higher = more bullish)",
+            observed_min=None,
+            observed_max=None,
+            null_fraction=0.0,
+        ),
+        ScreenFieldMetadata(
+            name="institutional_ownership_pct",
+            label="INST OWN%",
+            field_type="numeric",
+            unit="%",
+            description="Institutional ownership as a decimal fraction of shares outstanding",
+            observed_min=None,
+            observed_max=None,
+            null_fraction=0.0,
+        ),
+        ScreenFieldMetadata(
+            name="short_percent",
+            label="SHORT %",
+            field_type="numeric",
+            unit="%",
+            description="Short interest as a decimal fraction of float",
+            observed_min=None,
+            observed_max=None,
+            null_fraction=0.0,
+        ),
     ]
 
 
