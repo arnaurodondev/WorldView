@@ -36,6 +36,20 @@ def test_sse_token_event(emitter: SSEEmitter) -> None:
 
 
 @pytest.mark.unit
+def test_sse_delta_alias_matches_token(emitter: SSEEmitter) -> None:
+    """emit_delta is wire-compatible with emit_token (PLAN-0099 W1 / BP-595).
+
+    Pins the alias contract — any future change that diverges the two would
+    break frontends that only listen for the ``token`` event kind.
+    """
+    delta = emitter.emit_delta("chunk one ")
+    token = emitter.emit_token("chunk one ")
+    assert delta == token
+    assert delta["event"] == "token"
+    assert json.loads(delta["data"])["text"] == "chunk one "
+
+
+@pytest.mark.unit
 def test_sse_citations_event(emitter: SSEEmitter) -> None:
     """emit_citations returns serialized citation list."""
     from unittest.mock import MagicMock

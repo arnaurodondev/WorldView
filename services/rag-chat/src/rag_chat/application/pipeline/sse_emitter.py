@@ -60,6 +60,18 @@ class SSEEmitter:
         """Emit a single LLM token chunk."""
         return {"event": "token", "data": json.dumps({"text": text})}
 
+    def emit_delta(self, text: str) -> dict[str, str]:
+        """Emit a streaming text chunk.
+
+        Wire-compatible alias of :meth:`emit_token` (same ``event: token``
+        SSE frame shape) so existing frontends and the chat-eval harness keep
+        working unchanged. The dedicated method name documents intent at the
+        caller site: this is one slice of a streamed answer, not necessarily
+        a single LLM token. Used by the orchestrator's per-chunk loop in the
+        "LLM answered directly" branch (PLAN-0099 W1 / BP-595).
+        """
+        return self.emit_token(text)
+
     def emit_final_answer(self, text: str) -> dict[str, str]:
         """Emit the post-validation final answer in a single event.
 

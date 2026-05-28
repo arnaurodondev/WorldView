@@ -136,6 +136,59 @@ _ARTICLE_REF_RE = re.compile(r"article:[0-9a-f-]{36}", re.IGNORECASE)
 _CITATION_MARKER_RE = re.compile(r"\[N(\d+)\]")
 
 
+# PLAN-0099 W1 / BP-595 — SSE streaming chunker.
+# The "LLM chose to answer directly" branch used to emit the entire response
+# as one ``emit_token`` event, so chat-eval observed TPS ≈ 0.087 tok/s. The
+# provider client doesn't expose a streaming iterator today (larger change),
+# but we can produce real per-chunk emission by slicing the already-buffered
+# text into word groups and emitting one event per group. Word-level (not
+# char-level) chunking keeps network overhead low while still producing
+# dozens of frames for a paragraph-length answer.
+_STREAM_WORDS_PER_CHUNK = 8
+
+
+def _chunk_text_for_streaming(text: str, words_per_chunk: int = _STREAM_WORDS_PER_CHUNK) -> list[str]:
+    """Split ``text`` into word groups suitable for per-chunk SSE emission.
+
+    Concatenating the returned chunks reproduces ``text`` character-for-character
+    (whitespace runs are preserved on the trailing edge of each chunk) — important
+    because downstream grounding validation reads the accumulated answer back from
+    the captured stream for numeric/citation checks.
+
+    Edge cases:
+      * empty / whitespace-only text returns ``[]`` (caller already gates on
+        non-empty ``direct_text``; defensive here too so a future caller can't
+        accidentally emit a zero-byte event).
+      * ``words_per_chunk <= 0`` falls back to ``_STREAM_WORDS_PER_CHUNK``
+        rather than ZeroDivisionError, so a misconfigured env var degrades
+        gracefully instead of crashing the chat turn.
+      * text without any whitespace (e.g. a single long URL) returns the whole
+        text as one chunk — better than splitting mid-token.
+    """
+    if not text:
+        return []
+    if words_per_chunk <= 0:
+        words_per_chunk = _STREAM_WORDS_PER_CHUNK
+    parts = re.split(r"(\s+)", text)
+    if not parts:
+        return [text]
+    combined: list[str] = []
+    i = 0
+    n = len(parts)
+    while i < n:
+        word = parts[i]
+        ws = parts[i + 1] if i + 1 < n else ""
+        if word or ws:
+            combined.append(word + ws)
+        i += 2
+    if not combined:
+        return [text]
+    chunks: list[str] = []
+    for start in range(0, len(combined), words_per_chunk):
+        chunks.append("".join(combined[start : start + words_per_chunk]))
+    return chunks
+
+
 def _scrub_orphan_citations(text: str, max_index: int) -> tuple[str, int]:
     """Strip any [N\\d+] marker where N > max_index. Returns (scrubbed, count).
 
@@ -711,9 +764,14 @@ class ChatOrchestratorUseCase:
                     rag_no_tool_calls_first_turn.labels(provider=provider_name).inc()
 
                 # Stream the direct text answer immediately.
+                # PLAN-0099 W1 / BP-595: emit per-chunk instead of one whole-
+                # answer event so chat-eval sees TTFT at the first chunk and
+                # TPS reflects real per-frame cadence. Wire-compatible (still
+                # ``event: token``) — frontends and the harness need no changes.
                 direct_text = getattr(llm_response, "text", "") or ""
                 if direct_text:
-                    yield p.emitter.emit_token(direct_text)
+                    for _chunk in _chunk_text_for_streaming(direct_text):
+                        yield p.emitter.emit_delta(_chunk)
                     # FIX-LIVE-Y: when iteration > 0 ends with SUBSTANTIVE
                     # direct text (e.g. after the all-tools-returned-empty
                     # graceful path), we MUST suppress the second
