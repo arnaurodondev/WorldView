@@ -266,9 +266,25 @@ async def post_fundamentals_batch(
             )
         )
 
-    pending = [task for _, task in fetch_tasks if task is not None]
-    fetch_results = await asyncio.gather(*pending, return_exceptions=True) if pending else []
-    fetch_iter = iter(fetch_results)
+    # PLAN-0099 W1 T-W1-01 (BP-592): structural ticker→outcome binding.
+    # Previously this used `fetch_iter = iter(fetch_results)` + `next(fetch_iter)`
+    # advanced only when `task is not None`. That pattern is positional: any
+    # asymmetry between iterator-consumption and the `continue` branches
+    # silently desyncs the row→ticker map (observed in chat-eval Q4 where
+    # NVDA Q3 FY2025 carried AMD's $10.3B value, `tests/validation/chat_eval/runs/20260527T154018Z/agg_q4.json`).
+    # The audit `docs/audits/2026-05-27-plan-0098-batch-rowmix-and-latency.md` §A
+    # documents the failure shape: a resolution failure mid-list combined with
+    # a later successful fetch shifts every subsequent row's outcome.
+    # The fix binds each fetch outcome to its originating ticker BEFORE the
+    # result-assembly loop so the loop can index by ticker — purely structural.
+    pending_tickers: list[str] = [ticker for ticker, task in fetch_tasks if task is not None]
+    pending_tasks = [task for _, task in fetch_tasks if task is not None]
+    fetch_results = await asyncio.gather(*pending_tasks, return_exceptions=True) if pending_tasks else []
+    # ticker → outcome (either a use-case result dict OR a BaseException). Built
+    # via `zip(..., strict=True)` so any length mismatch surfaces immediately
+    # instead of silently truncating (defence against a future asyncio.gather
+    # contract change).
+    fetch_outcome_by_ticker: dict[str, dict | BaseException] = dict(zip(pending_tickers, fetch_results, strict=True))
 
     out: dict[str, FundamentalsBatchPerTickerResult] = {}
     for (ticker, task), resolution in zip(fetch_tasks, resolutions, strict=True):
@@ -297,8 +313,10 @@ async def post_fundamentals_batch(
             out[ticker] = FundamentalsBatchPerTickerResult(status="error", reason=reason)
             continue
 
-        # Fetch was attempted — pull its result/exception from the iterator.
-        fetch_outcome = next(fetch_iter)
+        # Fetch was attempted — look up THIS ticker's outcome by name (not by
+        # iterator position). This is the load-bearing change vs the old
+        # `next(fetch_iter)` pattern (BP-592).
+        fetch_outcome = fetch_outcome_by_ticker[ticker]
         if isinstance(fetch_outcome, BaseException):
             reason = _classify(fetch_outcome)
             log.info(

@@ -501,6 +501,128 @@ def test_fundamentals_batch_classifies_timeout_as_upstream_timeout() -> None:
 # ─────────────────────────────────────────────────────────────────────────────
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# PLAN-0099 W1 T-W1-01: regression tests for batch row-mix on partial-failure
+# tickers (BP-592). Root cause: `next(fetch_iter)` over `fetch_results` only
+# advanced when `task is not None`, but `fetch_results` only contained pending
+# non-None outcomes. Any asymmetry between iterator-consumption and the
+# `continue` branches silently desynced the row→ticker map — observed in the
+# chat-eval Q4 artifact where NVDA Q3 FY2025 carried AMD's $10.3B value.
+# Audit: `docs/audits/2026-05-27-plan-0098-batch-rowmix-and-latency.md` §A.
+# Fix: bind each fetch outcome to its originating ticker via a dict BEFORE the
+# result-assembly loop — the loop then indexes by ticker, never by position.
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+def test_fundamentals_batch_mixed_resolution_outcomes() -> None:
+    """3 tickers — valid / invalid resolution / valid — each gets its OWN data.
+
+    Catches the BP-592 row-mix shape directly: the middle ticker fails
+    resolution (so no fetch task is appended for it), and the assembly loop
+    must NOT shift the third ticker's outcome onto the slot that was skipped.
+    Pre-fix this would have surfaced as the third ticker receiving the first
+    ticker's data (or vice-versa) because the iterator and the loop indices
+    drift the moment a `task is None` branch fires its `continue`.
+    """
+    # Two valid tickers with deliberately DIFFERENT period payloads so a
+    # cross-ticker bleed would be detectable by the response data itself
+    # (not just by status codes).
+    aapl_id = "00000000-0000-0000-0000-00000000aaaa"
+    nvda_id = "00000000-0000-0000-0000-00000000bbbb"
+    aapl_periods = [{"period": "Q4 2024", "period_end_date": "2024-12-31", "revenue": 111.0}]
+    nvda_periods = [{"period": "Q4 2024", "period_end_date": "2024-12-31", "revenue": 222.0}]
+    history_uc = _make_history_uc({aapl_id: aapl_periods, nvda_id: nvda_periods})
+    # The middle ticker "BADTICKER" is not registered → InstrumentNotFoundError
+    # → resolution failure → `task is None` for it → the assembly loop's
+    # `continue` MUST NOT advance the per-ticker outcome cursor for NVDA.
+    lookup_uc = _make_lookup_uc({"AAPL": aapl_id, "NVDA": nvda_id})
+    _, client = _make_batch_app(history_uc, lookup_uc)
+
+    # Order matters: putting BADTICKER between two valid tickers maximises the
+    # exposure of the iterator-positional desync (the old code would have
+    # consumed AAPL's outcome on BADTICKER's slot and then over-read for NVDA).
+    resp = client.post(
+        "/v1/fundamentals/batch",
+        json={"tickers": ["AAPL", "BADTICKER", "NVDA"], "periods": 4},
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+
+    # Each ticker's slot must carry its OWN data — not the neighbour's.
+    # The response model (`FundamentalsHistoryPeriod`) fills missing optional
+    # fields with None, so we compare on the LOAD-BEARING `revenue` field
+    # rather than the full dict equality (which would fail on the schema-added
+    # None placeholders, not on a real row-mix bug).
+    assert body["results"]["AAPL"]["status"] == "ok"
+    assert body["results"]["AAPL"]["periods"][0]["revenue"] == 111.0
+    assert body["results"]["BADTICKER"]["status"] == "error"
+    assert body["results"]["BADTICKER"]["reason"] == "invalid_ticker"
+    assert body["results"]["NVDA"]["status"] == "ok"
+    assert body["results"]["NVDA"]["periods"][0]["revenue"] == 222.0
+
+    # Load-bearing regression assertion: NVDA's revenue MUST NOT equal AAPL's
+    # revenue. Pre-fix, the iterator-shift could have caused exactly that
+    # (mirroring the chat-eval Q4 symptom where NVDA Q3 FY2025 carried AMD's
+    # $10.3B value — BP-592).
+    assert body["results"]["NVDA"]["periods"][0]["revenue"] != body["results"]["AAPL"]["periods"][0]["revenue"], (
+        "row-mix regression: ticker[2] received ticker[0]'s data — "
+        "iterator-positional desync (BP-592) has resurfaced"
+    )
+
+
+def test_fundamentals_batch_first_ticker_fetch_timeout_does_not_bleed_into_second() -> None:
+    """2 tickers, both valid resolve; the FIRST raises asyncio.TimeoutError.
+
+    Catches the second iterator-misalignment shape: when a fetch task succeeds
+    for ticker[0] but raises for ticker[1] (or vice versa), the per-ticker
+    outcome MUST land on the right ticker. The old `next(fetch_iter)` pattern
+    paired with `return_exceptions=True` would not desync HERE (gather
+    preserves input order, and both tickers contribute to `pending`), but
+    a brittle iterator-positional pattern is one refactor away from doing so.
+    This test pins the contract: ticker[1]'s OK outcome must NOT carry
+    ticker[0]'s TimeoutError reason, and vice versa.
+    """
+    aapl_id = "00000000-0000-0000-0000-00000000aaaa"
+    nvda_id = "00000000-0000-0000-0000-00000000bbbb"
+    nvda_periods = [{"period": "Q4 2024", "period_end_date": "2024-12-31", "revenue": 333.0}]
+
+    # Custom history-uc mock that raises TimeoutError ONLY for AAPL's id but
+    # returns the nvda_periods payload for NVDA's id. The per-ticker outcome
+    # MUST be routed by ticker, not by iterator position.
+    lookup_uc = _make_lookup_uc({"AAPL": aapl_id, "NVDA": nvda_id})
+
+    history_uc = MagicMock()
+
+    async def _execute(*, instrument_id, periods):  # type: ignore[no-untyped-def]
+        # Mirror the live use-case contract: raise on the first ticker, return
+        # data on the second. The order matters — pre-fix, an iterator pattern
+        # would still happen to work here because `asyncio.gather` preserves
+        # input order, but this test acts as a structural guard for any future
+        # change that breaks that invariant.
+        if str(instrument_id) == aapl_id:
+            raise TimeoutError("simulated DB timeout for AAPL")
+        return {"periods": nvda_periods}
+
+    history_uc.execute = AsyncMock(side_effect=_execute)
+    _, client = _make_batch_app(history_uc, lookup_uc)
+
+    resp = client.post(
+        "/v1/fundamentals/batch",
+        json={"tickers": ["AAPL", "NVDA"], "periods": 4},
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+
+    # AAPL gets its own typed reason — NOT NVDA's data.
+    assert body["results"]["AAPL"]["status"] == "error"
+    assert body["results"]["AAPL"]["reason"] == "upstream_timeout"
+    # Load-bearing: NVDA MUST get its own data, not the AAPL TimeoutError slot.
+    # Compare on `revenue` (schema fills other optional fields with None — see
+    # `test_fundamentals_batch_mixed_resolution_outcomes` for the rationale).
+    assert body["results"]["NVDA"]["status"] == "ok"
+    assert body["results"]["NVDA"]["periods"][0]["revenue"] == 333.0
+
+
 def test_fundamentals_batch_invalid_lookup_payload_fails_one_ticker_only() -> None:
     """A malformed lookup result is degraded to a per-ticker ``invalid_lookup``.
 
