@@ -537,6 +537,9 @@ def grade_response(
         # ``None`` when the answer was empty and no usage envelope landed.
         "ttft_s": result.ttft_s,
         "tps": result.tps,
+        # PLAN-0101 W3: synthesis-phase TPS — the gated metric. ``tps`` above
+        # is kept as a diagnostic so historical comparisons still hold.
+        "tps_streaming": result.tps_streaming,
         "output_tokens": result.output_tokens,
         "status_code": result.status_code,
     }
@@ -574,6 +577,11 @@ _REFUSAL_QUOTE_MARKERS: tuple[str, ...] = (
     "cannot",
     "[unverified]",
     "does not appear",
+    # BP-612: plural form — Q4 v1 refusal reads "the values listed for
+    # NVIDIA … do not appear in the retrieved results for AMD". Without
+    # this entry the marker scan misses the disclaimer entirely and the
+    # NVDA figures get charged to AMD.
+    "do not appear",
     "not verified",
     "not present",
     "not available",
@@ -610,9 +618,20 @@ _HONEST_QUOTE_MARKERS: tuple[str, ...] = _REFUSAL_QUOTE_MARKERS + _SPECULATIVE_Q
 
 _HONEST_QUOTE_WINDOW = 80  # chars on either side of the number match
 
+# BP-612 (PLAN-0101 Wave 3): widened window specifically for the revenue-cap
+# refusal exemption. The Q4 NVDA/AMD false-positive case had the refusal
+# marker ("do not appear in the retrieved results for AMD") sitting ~95
+# chars after the offending NVDA figure ($81.6B) — outside the default
+# ±80 window. We use a wider ±150 char window when scanning for refusal
+# markers in :func:`_mentions_revenue_above` so the disclaimer covering an
+# entire sentence/clause still exempts numbers inside it. The narrower
+# ±80 window remains the default for :func:`_is_honest_quote` to avoid
+# over-relaxing the speculative-marker (orphan-rationalisation) check.
+_HONEST_QUOTE_WINDOW_REVENUE = 150
 
-def _is_honest_quote(lower_text: str, number_idx: int) -> bool:
-    """Return True if *number_idx* sits within ±80 chars of a REFUSAL marker.
+
+def _is_honest_quote(lower_text: str, number_idx: int, *, window: int = _HONEST_QUOTE_WINDOW) -> bool:
+    """Return True if *number_idx* sits within ±*window* chars of a REFUSAL marker.
 
     ``lower_text`` must already be lower-cased so the marker scan stays
     case-insensitive without re-compiling for each call.
@@ -620,11 +639,15 @@ def _is_honest_quote(lower_text: str, number_idx: int) -> bool:
     FIX-LIVE-W: the number-cap check uses ONLY the refusal markers (not
     speculative ones) — a fabricated number followed by speculative hedge
     words ("may reflect new launches") is still fabrication.
+
+    BP-612: ``window`` is parameterised so callers (notably
+    :func:`_mentions_revenue_above`) can opt into a wider scope when the
+    refusal sentence is structurally further from the disputed number.
     """
-    start = max(0, number_idx - _HONEST_QUOTE_WINDOW)
-    end = number_idx + _HONEST_QUOTE_WINDOW
-    window = lower_text[start:end]
-    return any(marker in window for marker in _REFUSAL_QUOTE_MARKERS)
+    start = max(0, number_idx - window)
+    end = number_idx + window
+    win = lower_text[start:end]
+    return any(marker in win for marker in _REFUSAL_QUOTE_MARKERS)
 
 
 def _is_honest_rationalisation_context(lower_text: str, phrase_idx: int) -> bool:
@@ -678,12 +701,54 @@ def _mentions_revenue_above(
             kw_lower = kw.lower()
             for hit in (n.start() for n in re.finditer(re.escape(kw_lower), lower)):
                 if abs(idx - hit) < 150:
-                    # FIX-LIVE-N: honest-quote check — skip when the
-                    # number is the agent refusing rather than asserting.
-                    if _is_honest_quote(lower, idx):
+                    # BP-612 (PLAN-0101 Wave 3): the legacy ±80 char
+                    # refusal window missed the Q4 false-positive case
+                    # where the disclaimer ("do not appear in the
+                    # retrieved results for AMD") sat ~95 chars from
+                    # the NVDA figure. Widen the refusal scan to ±150
+                    # chars — same scope as the proximity check — so
+                    # the entire offending clause is in view.
+                    if _is_honest_quote(lower, idx, window=_HONEST_QUOTE_WINDOW_REVENUE):
+                        continue
+                    # BP-612 (Option 2): directional precedence guard.
+                    # An assertive "<TICKER> revenue was $XB" claim
+                    # ALWAYS places the ticker BEFORE the number. The
+                    # false-positive case has the order reversed — the
+                    # number ($81.6B) is mentioned first as part of a
+                    # NVDA recap, and "AMD" only appears later in the
+                    # refusal clause. Require the ticker hit to precede
+                    # the number within a tight ~80-char clause window.
+                    # Combined with the honest-quote exemption above
+                    # this means: skip when EITHER the refusal marker
+                    # is in scope OR the ticker does not precede the
+                    # number. Only assertive forward-order claims pass.
+                    if not _ticker_precedes_amount(lower, kw_lower, idx):
                         continue
                     return True
     return False
+
+
+# BP-612 (PLAN-0101 Wave 3): directional precedence helper.
+#
+# A genuine assertion of "<ticker> revenue $XB" places the ticker keyword
+# before the dollar figure, typically in the same clause (≤ ~80 chars).
+# When the ticker only appears AFTER the number — e.g. NVDA figures
+# recapped then "AMD" appears in a downstream refusal sentence — the
+# match is structurally incompatible with an assertive claim and should
+# be exempted from the cap. We use a tight 80-char window so multi-
+# sentence prose ("AMD revenue was $9.2B. NVIDIA reported $81.6B.")
+# does not bleed through.
+_TICKER_PRECEDES_WINDOW = 80
+
+
+def _ticker_precedes_amount(lower_text: str, ticker_kw: str, number_idx: int) -> bool:
+    """Return True if *ticker_kw* appears within ~80 chars BEFORE *number_idx*.
+
+    Both inputs must already be lower-cased.
+    """
+    start = max(0, number_idx - _TICKER_PRECEDES_WINDOW)
+    prefix = lower_text[start:number_idx]
+    return ticker_kw in prefix
 
 
 # Convenience verdict helpers for clearer test asserts.

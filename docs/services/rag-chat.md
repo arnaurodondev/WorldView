@@ -636,6 +636,15 @@ accumulator + `phase(name, timings)` async context manager — exception
 in the wrapped block still records elapsed time, so failed phases never
 silently drop out of the breakdown).
 
+**Phase-label invariant (PLAN-0101 W3)**: the exact string
+`llm_synthesis_streaming` is part of the public SSE contract. The chat-eval
+harness (`tests/validation/chat_eval/harness.py`) consumes this key from
+`done.data.phase_timings_ms` to compute the `tps_streaming` metric — the
+TPS gate in `test_aggregate_score.py` (≥ 20 tok/s p50) is defined against
+this exact label. Renaming or removing it silently regresses the metric to
+NaN and disables the gate. See
+`docs/audits/2026-05-28-plan-0101-tps-metric-redesign.md`.
+
 ### Citation-Accuracy Cron
 
 `infrastructure/jobs/citation_accuracy_cron.py` — `start_citation_accuracy_cron(use_case) → asyncio.Task` schedules a background asyncio task:

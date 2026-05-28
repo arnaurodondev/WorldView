@@ -585,3 +585,84 @@ class TestGraderRefusalPolicy:
         assert not any("refusal" in r for r in grade["reasons"]), grade["reasons"]
         # And since the required tool fired, the verdict is USEFUL.
         assert grade["verdict"] == USEFUL
+
+
+class TestBP612RevenueCapDirectionality:
+    """BP-612 — ``_mentions_revenue_above`` must be asymmetric.
+
+    Background: Q4 v1 emitted a refusal answer that explicitly listed
+    NVIDIA quarterly revenue figures ($57.0B, $68.1B, $81.6B) inside a
+    sentence stating "the values listed for NVIDIA … do not appear in
+    the retrieved results for AMD." The grader's previous ±80 char
+    honest-quote window plus direction-agnostic ticker proximity flagged
+    that as an AMD revenue > $15B assertion — a clear false positive.
+
+    These tests pin both fixes:
+      1. The ±150 char refusal window now covers the disclaimer clause.
+      2. The directional precedence guard requires the ticker keyword
+         to appear before the number within ~80 chars; reversed-order
+         co-occurrences no longer count as assertive claims.
+    """
+
+    # Verbatim answer_text from
+    # tests/validation/chat_eval/runs/20260528T143346Z/q4_v1.json — the
+    # failing fixture that surfaced BP-612. Hard-coded here so the
+    # regression travels with the test even after the runs/ directory is
+    # rotated.
+    _Q4_V1_REFUSAL_ANSWER = (
+        "I cannot provide a comparison of the revenue trajectories of NVIDIA and AMD "
+        "because the tool results returned data only for AMD, and the values listed for "
+        "NVIDIA (such as $57.0B, $68.1B, $81.6B) do not appear in the retrieved results "
+        "for AMD. Additionally, the user's request is focused on Advanced Micro Devices, "
+        "Inc. (AMD), and the provided data for NVIDIA is not applicable to this entity.\n\n"
+        "Here is the revenue data available for AMD over the last four reported quarters:\n\n"
+        "| Period | Revenue |\n"
+        "|--------|---------|\n"
+        "| Q4 FY2025 | $9.2B [get_fundamentals_history_batch row 1] |\n"
+        "| Q1 FY2026 | $10.3B [get_fundamentals_history_batch row 1] |\n"
+        "| Q2 FY2026 | $10.3B [get_fundamentals_history_batch row 1] |\n"
+        "| Q3 FY2026 | — |\n\n"
+        "No further data is available in the tool results for Q3 FY2026. Therefore, the "
+        "revenue trajectory for AMD shows flat sequential growth between Q1 and Q2 FY2026, "
+        "following an increase from Q4 FY2025.\n\n"
+        "⚠ Some numbers could not be verified against retrieved data."
+    )
+
+    def test_q4_v1_refusal_answer_is_not_flagged(self) -> None:
+        """The exact q4_v1.json answer must NOT trip the AMD > $15B cap."""
+        flagged = _mentions_revenue_above(
+            self._Q4_V1_REFUSAL_ANSWER,
+            ticker_keywords=("AMD", "Advanced Micro Devices"),
+            cap_billions=15.0,
+        )
+        assert not flagged, "regression: BP-612 refusal answer falsely flagged"
+
+    def test_assertive_amd_above_cap_is_still_flagged(self) -> None:
+        """Pin the asymmetric behaviour: a real assertive AMD > $15B claim
+        must STILL be flagged. Without this counter-test the fix could be
+        over-relaxed and silently accept fabricated assertions.
+        """
+        assertive = "AMD reported revenue of $20.5B for Q1 FY2026 across all segments."
+        flagged = _mentions_revenue_above(
+            assertive,
+            ticker_keywords=("AMD", "Advanced Micro Devices"),
+            cap_billions=15.0,
+        )
+        assert flagged, "regression: assertive AMD > $15B claim must still be flagged"
+
+    def test_reversed_order_ticker_after_number_is_not_flagged(self) -> None:
+        """Directional guard: a sentence where the number precedes the
+        ticker by more than ~80 chars (the typical multi-clause prose
+        shape that hit Q4 v1) must NOT be flagged.
+        """
+        text = (
+            "NVIDIA posted $81.6B in Q2 FY2026 revenue across data-center and gaming "
+            "segments per its 10-Q filing; the values listed for NVIDIA do not appear "
+            "in the retrieved results for AMD."
+        )
+        flagged = _mentions_revenue_above(
+            text,
+            ticker_keywords=("AMD",),
+            cap_billions=15.0,
+        )
+        assert not flagged, "regression: ticker-after-number must not assert claim"

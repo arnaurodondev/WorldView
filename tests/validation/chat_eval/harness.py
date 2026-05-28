@@ -1,5 +1,21 @@
 """HTTP harness for the rag-chat regression suite (PLAN-0093 Wave G-3 T-G-3-01).
 
+PLAN-0101 W3 — TPS metric redesign
+----------------------------------
+The original TPS formula was ``output_tokens / (latency_s - ttft_s)``. After
+PLAN-0100 W2 broadened TTFT to "first user-visible event" (which now includes
+``tool_call`` / ``status`` pills firing within ~1 s), the (e2e - ttft)
+denominator is dominated by **tool execution** (often 30-60 s), not synthesis.
+The number therefore stopped measuring stream throughput — it measures tool
+latency. The aggregate gate kept failing on legitimate tool-heavy questions.
+
+Fix (PLAN-0101 W3): emit a second metric ``tps_streaming`` computed against
+the backend-reported ``llm_synthesis_streaming`` phase wall-clock (plumbed by
+PLAN-0099 W1-T03 through ``chat_orchestrator.py`` → ``emit_done`` →
+``done.data.phase_timings_ms``). ``tps`` is preserved on the artefact for
+historical comparison but is no longer gated. See
+``docs/audits/2026-05-28-plan-0101-tps-metric-redesign.md``.
+
 This module is the single entry point every Q1..Q8 + survey test uses to fire
 a chat question and capture the full response. It does three things:
 
@@ -180,7 +196,19 @@ class ChatRunResult:
     answer_text: str
     ttft_s: float = float("nan")
     tps: float = float("nan")
+    # PLAN-0101 W3: synthesis-phase TPS. Computed as
+    # ``output_tokens / (phase_timings_ms["llm_synthesis_streaming"] / 1000)``
+    # using the backend's per-phase wall-clock from PLAN-0099 W1-T03. NaN when
+    # the ``done`` event omits ``phase_timings_ms`` (older backend, error
+    # path) or when the synthesis phase wall-clock is zero. This is the gated
+    # metric; ``tps`` above is kept as a diagnostic.
+    tps_streaming: float = float("nan")
     output_tokens: int | None = None
+    # PLAN-0101 W3: raw phase wall-clocks from ``done.data.phase_timings_ms``
+    # (PLAN-0099 W1-T03 backend plumbing). Empty dict when the backend did not
+    # surface the dict (older deploys, error paths). Kept on the artefact so
+    # offline analysis can re-derive ``tps_streaming`` from raw values.
+    phase_timings_ms: dict[str, float] = field(default_factory=dict)
     tool_calls: list[ToolCall] = field(default_factory=list)
     citations: list[dict[str, Any]] = field(default_factory=list)
     contradictions: list[dict[str, Any]] = field(default_factory=list)
@@ -212,6 +240,11 @@ class ChatRunResult:
             "latency_s": round(self.latency_s, 3),
             "ttft_s": _opt(self.ttft_s),
             "tps": _opt(self.tps),
+            # PLAN-0101 W3: new gated metric. Sits alongside ``tps`` so
+            # historical runs remain comparable; old artefacts simply omit
+            # the key and will deserialise with NaN-equivalent ``None``.
+            "tps_streaming": _opt(self.tps_streaming),
+            "phase_timings_ms": dict(self.phase_timings_ms),
             "output_tokens": self.output_tokens,
             "answer_text": self.answer_text,
             "tool_calls": [{"name": tc.name, "arguments": tc.arguments} for tc in self.tool_calls],
@@ -486,6 +519,13 @@ def _events_to_result(
     # type emits it in practice.
     usage_output_tokens: int | None = None
 
+    # PLAN-0101 W3: per-phase wall-clocks emitted by the backend on the
+    # ``done`` SSE event (see ``sse_emitter.emit_done`` +
+    # ``chat_orchestrator._phase_snapshot``). When absent (older backend,
+    # error path that did not reach ``emit_done``) we keep an empty dict and
+    # ``tps_streaming`` collapses to NaN.
+    phase_timings_ms: dict[str, float] = {}
+
     for ev in events:
         kind = ev.get("event", "")
         data = ev.get("data")
@@ -513,6 +553,18 @@ def _events_to_result(
             contradictions = data
         elif kind == "metadata" and isinstance(data, dict):
             metadata = data
+        elif kind == "done" and isinstance(data, dict):
+            # PLAN-0101 W3: harvest the per-phase wall-clock dict for
+            # ``tps_streaming``. Backend may also attach it to other frames
+            # in future; ``done`` is the authoritative carrier today.
+            pt = data.get("phase_timings_ms")
+            if isinstance(pt, dict):
+                # Cast values to float defensively — backend currently emits
+                # floats but some intermediate consumers (e.g. ujson) round
+                # to int.  Reject non-numeric entries silently.
+                for _k, _v in pt.items():
+                    if isinstance(_v, int | float) and not isinstance(_v, bool):
+                        phase_timings_ms[str(_k)] = float(_v)
         elif kind == "error" and isinstance(data, dict):
             error = data
             # Map the documented error codes to an effective HTTP status
@@ -525,7 +577,25 @@ def _events_to_result(
             elif code in {"INPUT_REJECTED"}:
                 status_code = 400
 
-    answer_text = final_answer if final_answer is not None else "".join(token_buf)
+    # BP-613 (PLAN-0101 Wave 3): answer-assembly fallback.
+    #
+    # In the Q8 isolated-vs-aggregate flake the orchestrator streamed a
+    # complete answer via ``token`` events but the final ``final_answer``
+    # event arrived with an empty payload — the harness then surfaced
+    # ``answer_text=""`` (graded USELESS) even though every token had
+    # already been observed. Token-stream contents are authoritative
+    # whenever the final-event payload is missing or shorter than the
+    # accumulated tokens. Pick the LONGER non-empty option so a truncated
+    # / empty ``final_answer`` event can never erase a streamed answer.
+    joined_tokens = "".join(token_buf)
+    if final_answer is None or not final_answer:
+        answer_text = joined_tokens
+    elif len(joined_tokens) > len(final_answer):
+        # Provider re-emitted a truncated final answer after streaming;
+        # prefer the more complete token concatenation.
+        answer_text = joined_tokens
+    else:
+        answer_text = final_answer
 
     # Also accept the usage envelope from the final metadata event payload
     # (some providers attach it there instead of per-token frames).
@@ -543,13 +613,23 @@ def _events_to_result(
         usage_output_tokens=usage_output_tokens,
     )
 
+    # PLAN-0101 W3: synthesis-phase TPS using the backend ``llm_synthesis_streaming``
+    # wall-clock. ``output_tokens`` is the same denominator-numerator that fed
+    # the legacy ``tps`` field above — only the time window changes.
+    tps_streaming = _compute_tps_streaming(
+        phase_timings_ms=phase_timings_ms,
+        output_tokens=output_tokens,
+    )
+
     return ChatRunResult(
         question=question,
         status_code=status_code,
         latency_s=latency_s,
         ttft_s=ttft_s,
         tps=tps,
+        tps_streaming=tps_streaming,
         output_tokens=output_tokens,
+        phase_timings_ms=phase_timings_ms,
         answer_text=answer_text,
         tool_calls=tool_calls,
         citations=citations,
@@ -628,6 +708,40 @@ def _compute_ttft_and_tps(
         tps = output_tokens / (latency_s - ttft_s)
 
     return ttft_s, tps, output_tokens
+
+
+# PLAN-0101 W3 — synthesis-phase TPS.
+_SYNTHESIS_PHASE_KEY = "llm_synthesis_streaming"
+
+
+def _compute_tps_streaming(
+    *,
+    phase_timings_ms: dict[str, float],
+    output_tokens: int | None,
+) -> float:
+    """Return ``output_tokens / phase_timings_ms[llm_synthesis_streaming]`` (seconds).
+
+    Returns ``nan`` when:
+
+    * the backend did not surface ``phase_timings_ms`` (older deploy, error
+      path that returned before ``emit_done``);
+    * the ``llm_synthesis_streaming`` key is absent (e.g. a refusal that
+      short-circuited before the second-turn stream began);
+    * the recorded wall-clock is zero or negative (defensive — would div/0);
+    * ``output_tokens`` is unknown or non-positive.
+
+    These collapses are semantically identical to "no data" — the aggregate
+    gate drops NaNs before taking the median (same policy as ``tps``), so a
+    single error-path run cannot poison the median in either direction.
+    """
+    if output_tokens is None or output_tokens <= 0:
+        return float("nan")
+    if not phase_timings_ms:
+        return float("nan")
+    synthesis_ms = phase_timings_ms.get(_SYNTHESIS_PHASE_KEY)
+    if synthesis_ms is None or synthesis_ms <= 0:
+        return float("nan")
+    return float(output_tokens) / (float(synthesis_ms) / 1000.0)
 
 
 # ---------------------------------------------------------------------------
