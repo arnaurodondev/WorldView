@@ -426,8 +426,8 @@ def test_get_screen_fields_route_returns_12_fields() -> None:
     """GET /screen/fields happy-path: returns list of field metadata objects.
 
     Wave L-1/L-2 added 11 new fields (4 attribute + 7 snapshot); Wave L-4a
-    (PLAN-0089) added 4 more analyst/ownership snapshot fields, so the
-    static set now contains 27 entries.
+    (PLAN-0089) added 4 more analyst/ownership snapshot fields; Wave L-5c
+    added 2 calendar fields, so the static set now contains 29 entries.
     """
     from market_data.app import _get_static_screen_fields
 
@@ -439,7 +439,7 @@ def test_get_screen_fields_route_returns_12_fields() -> None:
     assert resp.status_code == 200
     body = resp.json()
     assert "fields" in body
-    assert len(body["fields"]) == 27
+    assert len(body["fields"]) == 29
     names = {f["name"] for f in body["fields"]}
     # Original fields still present
     assert "pe_ratio" in names
@@ -458,6 +458,9 @@ def test_get_screen_fields_route_returns_12_fields() -> None:
     assert "analyst_consensus_rating" in names
     assert "institutional_ownership_pct" in names
     assert "short_percent" in names
+    # L-5c calendar fields
+    assert "next_earnings_date" in names
+    assert "next_dividend_date" in names
     # Every field must have name, label, type, null_fraction
     for field in body["fields"]:
         assert "name" in field

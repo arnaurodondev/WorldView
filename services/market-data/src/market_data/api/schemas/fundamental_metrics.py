@@ -69,6 +69,16 @@ class ScreenFilterRequest(BaseModel):
     institutional_ownership_pct_max: float | None = None
     short_percent_min: float | None = None
     short_percent_max: float | None = None
+    # ── Wave L-5c: calendar (date) field filters ─────────────────────────────
+    # Expressed as "within next N days" because a UI calendar-style range picker
+    # is much heavier than a single number-of-days input — and "earnings within
+    # 30 days" / "dividend within 14 days" maps cleanly to range queries:
+    #     WHERE col BETWEEN CURRENT_DATE AND CURRENT_DATE + INTERVAL ':n days'
+    # Validation: ge=0 disallows negative windows (would be past-only, better
+    # served by the dedicated calendar endpoints); le=365 caps at a year to
+    # keep query plans selective and the partial index useful.
+    next_earnings_within_days: int | None = Field(default=None, ge=0, le=365)
+    next_dividend_within_days: int | None = Field(default=None, ge=0, le=365)
 
 
 class ScreenRequest(BaseModel):

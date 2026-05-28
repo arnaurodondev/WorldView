@@ -1150,9 +1150,15 @@ async def test_upsert_snapshot_ohlcv_fallback_skipped_when_eodhd_provides_volume
     snap = captured_snaps[0]
     # EODHD value takes precedence — no OHLCV DB query needed
     assert snap["avg_volume_30d"] == 60_000_000
-    # The OHLCV fallback query should NOT have been called (session.execute is from _write,
-    # but since avg_volume_30d was already set, the execute block is skipped)
-    mock_session.execute.assert_not_called()
+    # The OHLCV fallback query should NOT have been called. The consumer DOES
+    # call `fetch_next_earnings_date` (Wave L-5c, queries `earnings_calendar`),
+    # so we can no longer assert `execute` was never called — instead we check
+    # that the specific OHLCV-fallback SQL string did not appear in any call.
+    # WHY scan the SQL text: AsyncMock records every call; the OHLCV fallback
+    # uniquely contains "ohlcv_bars", whereas the L-5c lookup contains
+    # "earnings_calendar".
+    ohlcv_calls = [c for c in mock_session.execute.call_args_list if "ohlcv_bars" in str(c.args[0]).lower()]
+    assert not ohlcv_calls, f"OHLCV fallback unexpectedly ran: {ohlcv_calls}"
 
 
 # ── Unit tests for fundamentals_snapshot_writer helpers ─────────────────────

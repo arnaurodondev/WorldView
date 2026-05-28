@@ -106,6 +106,13 @@ class ScreenFilter:
     institutional_ownership_pct_max: float | None = None
     short_percent_min: float | None = None
     short_percent_max: float | None = None
+    # Wave L-5c: calendar (date) field filters. "Within N days" maps to
+    # ``WHERE col BETWEEN CURRENT_DATE AND CURRENT_DATE + INTERVAL ':n days'``
+    # against the LEFT-JOINed snapshot. NULL snapshots are correctly excluded
+    # because PostgreSQL ``NULL BETWEEN ...`` evaluates to UNKNOWN. Range
+    # validation lives at the Pydantic schema layer (ge=0, le=365).
+    next_earnings_within_days: int | None = None
+    next_dividend_within_days: int | None = None
 
 
 @dataclass(frozen=True, slots=True)

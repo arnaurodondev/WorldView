@@ -133,7 +133,16 @@ async def screen_instruments_get(
                 exchange=r.exchange,
                 sector=r.sector,
                 metrics={
-                    k: (v if isinstance(v, str) else (float(v) if v is not None else None))
+                    # Wave L-5c: date values serialize to ISO-8601 strings
+                    # (``"2026-02-12"``) so they fit the response shape; the
+                    # frontend renders dates the same way it would render any
+                    # other string column. (Order matters: ``date`` must come
+                    # before ``str`` because ``date.__str__`` is *not* str.)
+                    k: (
+                        v.isoformat()
+                        if isinstance(v, date)
+                        else (v if isinstance(v, str) else (float(v) if v is not None else None))
+                    )
                     for k, v in r.metrics.items()
                 },
             )
@@ -174,6 +183,10 @@ async def screen_instruments(
         "analyst_consensus_rating",
         "institutional_ownership_pct",
         "short_percent",
+        # Wave L-5c: calendar (date) snapshot fields — sortable too (ASC =
+        # soonest first, the natural reading for "next earnings" / "next div").
+        "next_earnings_date",
+        "next_dividend_date",
     }
     # SQL injection guard: sort_by must be a filter metric name, "ticker", or "name"
     if body.sort_by is not None:
@@ -219,6 +232,9 @@ async def screen_instruments(
             institutional_ownership_pct_max=f.institutional_ownership_pct_max,
             short_percent_min=f.short_percent_min,
             short_percent_max=f.short_percent_max,
+            # Wave L-5c: calendar (date) filters — schema validates 0..365.
+            next_earnings_within_days=f.next_earnings_within_days,
+            next_dividend_within_days=f.next_dividend_within_days,
         )
         for f in body.filters
     ]
@@ -238,7 +254,16 @@ async def screen_instruments(
                 exchange=r.exchange,
                 sector=r.sector,
                 metrics={
-                    k: (v if isinstance(v, str) else (float(v) if v is not None else None))
+                    # Wave L-5c: date values serialize to ISO-8601 strings
+                    # (``"2026-02-12"``) so they fit the response shape; the
+                    # frontend renders dates the same way it would render any
+                    # other string column. (Order matters: ``date`` must come
+                    # before ``str`` because ``date.__str__`` is *not* str.)
+                    k: (
+                        v.isoformat()
+                        if isinstance(v, date)
+                        else (v if isinstance(v, str) else (float(v) if v is not None else None))
+                    )
                     for k, v in r.metrics.items()
                 },
             )

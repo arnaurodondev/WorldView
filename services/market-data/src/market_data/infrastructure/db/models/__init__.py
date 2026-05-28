@@ -5,6 +5,7 @@ declarative base, making ``Base.metadata.create_all()`` and Alembic
 autogenerate work correctly.
 """
 
+from market_data.infrastructure.db.models.earnings_calendar import EarningsCalendarModel
 from market_data.infrastructure.db.models.fundamentals import (
     AnalystConsensusModel,
     BalanceSheetModel,
@@ -47,6 +48,7 @@ __all__ = [
     "CompanyProfileModel",
     "DividendHistoryModel",
     "EarningsAnnualTrendModel",
+    "EarningsCalendarModel",
     "EarningsHistoryModel",
     "EarningsTrendModel",
     "FailedTaskModel",

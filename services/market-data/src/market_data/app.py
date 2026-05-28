@@ -39,7 +39,7 @@ _SCREEN_FIELDS_REFRESH_INTERVAL_SECONDS = 6 * 3600
 
 
 def _get_static_screen_fields() -> list:
-    """Return the 23 static ScreenFieldMetadata instances (PRD-0017 §6.5, Wave L-1/L-2)."""
+    """Return the 25 static ScreenFieldMetadata instances (PRD-0017 §6.5, Wave L-1/L-2/L-5c)."""
     from market_data.domain.entities import ScreenFieldMetadata
 
     return [
@@ -320,6 +320,33 @@ def _get_static_screen_fields() -> list:
             field_type="numeric",
             unit="%",
             description="Short interest as a decimal fraction of float",
+            observed_min=None,
+            observed_max=None,
+            null_fraction=0.0,
+        ),
+        # ── Wave L-5c: calendar (date) snapshot fields ────────────────────────
+        # LOCK-STEP with migration 028 ``_L5C_FIELDS`` — divergence would let
+        # the 6-hour refresh loop overwrite the migration's seeded rows on the
+        # next tick. ``field_type='numeric'`` because the
+        # ``ck_screen_field_metadata_field_type`` CHECK admits only
+        # ('numeric', 'text') and the UI filter is a number-of-days input
+        # (``next_earnings_within_days``).
+        ScreenFieldMetadata(
+            name="next_earnings_date",
+            label="NEXT EARN",
+            field_type="numeric",
+            unit="date",
+            description="Next scheduled earnings report date (filter accepts days-from-today)",
+            observed_min=None,
+            observed_max=None,
+            null_fraction=0.0,
+        ),
+        ScreenFieldMetadata(
+            name="next_dividend_date",
+            label="NEXT DIV",
+            field_type="numeric",
+            unit="date",
+            description="Next scheduled dividend payment date (filter accepts days-from-today)",
             observed_min=None,
             observed_max=None,
             null_fraction=0.0,
