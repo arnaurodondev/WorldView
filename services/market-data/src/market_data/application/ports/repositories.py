@@ -91,6 +91,9 @@ class ScreenFilter:
     # or better". Empty list / None = no filter. Tuples accepted to allow
     # frozen-dataclass usage from Pydantic mode='python'.
     credit_ratings: tuple[str, ...] | None = None
+    # Wave L-4b: insider 90d rollup range filter — negatives are valid.
+    insider_net_buy_90d_min: float | None = None
+    insider_net_buy_90d_max: float | None = None
 
 
 @dataclass(frozen=True, slots=True)

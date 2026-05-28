@@ -31,6 +31,8 @@ _SNAP_FIELDS: tuple[str, ...] = (
     "interest_coverage",
     "net_debt_to_ebitda",
     "credit_rating",
+    # Wave L-4b: trailing-90d insider net dollar flow.
+    "insider_net_buy_90d",
 )
 
 if TYPE_CHECKING:
@@ -324,6 +326,8 @@ async def query_screen(
         "fcf_margin",
         "interest_coverage",
         "net_debt_to_ebitda",
+        # Wave L-4b: trailing-90d insider net dollar flow (sortable + filterable).
+        "insider_net_buy_90d",
     )
     for snap_field in numeric_snap_filters:
         min_attr = f"{snap_field}_min"

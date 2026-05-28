@@ -169,6 +169,8 @@ async def screen_instruments(
         "fcf_margin",
         "interest_coverage",
         "net_debt_to_ebitda",
+        # Wave L-4b: insider 90d sortable column.
+        "insider_net_buy_90d",
     }
     # SQL injection guard: sort_by must be a filter metric name, "ticker", or "name"
     if body.sort_by is not None:
@@ -205,6 +207,9 @@ async def screen_instruments(
             net_debt_to_ebitda_min=f.net_debt_to_ebitda_min,
             net_debt_to_ebitda_max=f.net_debt_to_ebitda_max,
             credit_ratings=tuple(f.credit_ratings) if f.credit_ratings else None,
+            # Wave L-4b: insider 90d range.
+            insider_net_buy_90d_min=f.insider_net_buy_90d_min,
+            insider_net_buy_90d_max=f.insider_net_buy_90d_max,
         )
         for f in body.filters
     ]
