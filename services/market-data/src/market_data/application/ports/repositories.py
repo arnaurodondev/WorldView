@@ -91,6 +91,13 @@ class ScreenFilter:
     # or better". Empty list / None = no filter. Tuples accepted to allow
     # frozen-dataclass usage from Pydantic mode='python'.
     credit_ratings: tuple[str, ...] | None = None
+    # Wave L-5c: calendar (date) field filters. "Within N days" maps to
+    # ``WHERE col BETWEEN CURRENT_DATE AND CURRENT_DATE + INTERVAL ':n days'``
+    # against the LEFT-JOINed snapshot. NULL snapshots are correctly excluded
+    # because PostgreSQL ``NULL BETWEEN ...`` evaluates to UNKNOWN. Range
+    # validation lives at the Pydantic schema layer (ge=0, le=365).
+    next_earnings_within_days: int | None = None
+    next_dividend_within_days: int | None = None
 
 
 @dataclass(frozen=True, slots=True)

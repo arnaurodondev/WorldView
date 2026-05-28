@@ -12,7 +12,7 @@ from __future__ import annotations
 from datetime import date
 from typing import TYPE_CHECKING, Any
 
-from sqlalchemy import and_, func, select
+from sqlalchemy import and_, func, select, text
 
 from market_data.application.ports.repositories import MetricDataPoint, ScreenFilter, ScreenResult
 from market_data.domain.entities import ScreenFieldMetadata
@@ -31,6 +31,11 @@ _SNAP_FIELDS: tuple[str, ...] = (
     "interest_coverage",
     "net_debt_to_ebitda",
     "credit_rating",
+    # Wave L-5c: calendar snapshot fields — included in every projection so
+    # the screener table can render a "NEXT EARN" / "NEXT DIV" column even
+    # without an active filter.
+    "next_earnings_date",
+    "next_dividend_date",
 )
 
 if TYPE_CHECKING:
@@ -339,6 +344,36 @@ async def query_screen(
     if ratings:
         stmt = stmt.where(snap.credit_rating.in_(list(ratings)))
 
+    # ── Wave L-5c: calendar (date) window filters ────────────────────────────
+    # "Within next N days" maps to:
+    #     WHERE col BETWEEN CURRENT_DATE AND CURRENT_DATE + INTERVAL 'N days'
+    #
+    # PostgreSQL ``NULL BETWEEN x AND y`` evaluates to UNKNOWN, so rows where
+    # the snapshot column is NULL (the common case until L-5b ships) are
+    # correctly excluded — same semantic as the L-2 numeric range filters.
+    #
+    # WHY ``text()`` for the upper bound: SQLAlchemy doesn't expose a
+    # type-safe ``INTERVAL`` constructor for a bound integer at this level,
+    # and constructing ``func.cast`` would be more obscure than this
+    # parameter-bound text fragment. The value is an int validated by the
+    # Pydantic schema (ge=0, le=365) — no user-controlled string interpolation.
+    calendar_date_filters: tuple[tuple[str, str], ...] = (
+        ("next_earnings_within_days", "next_earnings_date"),
+        ("next_dividend_within_days", "next_dividend_date"),
+    )
+    for filter_attr, snap_col in calendar_date_filters:
+        days = next(
+            (getattr(f, filter_attr) for f in filters if getattr(f, filter_attr, None) is not None),
+            None,
+        )
+        if days is not None:
+            # Inclusive lower bound = today; inclusive upper bound = today + N.
+            stmt = stmt.where(getattr(snap, snap_col) >= func.current_date())
+            stmt = stmt.where(
+                getattr(snap, snap_col)
+                <= func.current_date() + text(":n_days * INTERVAL '1 day'").bindparams(n_days=days)
+            )
+
     # Sorting — column resolved from ORM attributes (no raw SQL interpolation)
     sort_col: Any
     if sort_by == "ticker":
@@ -348,6 +383,11 @@ async def query_screen(
     elif sort_by in numeric_snap_filters:
         # Wave L-2: ORDER BY snapshot.<col>; column lookup is by Python attribute
         # name (no raw SQL), so this is safe to call directly without re-validation.
+        sort_col = getattr(snap, sort_by)
+    elif sort_by in {"next_earnings_date", "next_dividend_date"}:
+        # Wave L-5c: ORDER BY snapshot calendar columns (ASC = soonest first).
+        # Reuses the same nullslast policy below — instruments with NULL
+        # calendar values sort last regardless of direction.
         sort_col = getattr(snap, sort_by)
     elif sort_by is not None:
         # metric sort: find the column from the metric subqueries
