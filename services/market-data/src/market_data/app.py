@@ -473,9 +473,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     from market_data.application.use_cases.rollup_insider_90d import insider_rollup_loop
 
     insider_rollup_hour = getattr(settings, "insider_rollup_hour_utc", 3)
-    insider_task = asyncio.create_task(
-        insider_rollup_loop(write_factory, log, target_hour_utc=insider_rollup_hour)
-    )
+    insider_task = asyncio.create_task(insider_rollup_loop(write_factory, log, target_hour_utc=insider_rollup_hour))
 
     log.info("service_started", service=settings.service_name)
     yield
