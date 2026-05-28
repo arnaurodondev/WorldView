@@ -61,9 +61,9 @@ _GROUP_ID = "market-data-insider-transactions"
 # https://eodhd.com/financial-apis/stock-market-insider-transactions/.
 # Anything else collapses into ``OTHER`` (CHECK constraint admits 4 values).
 _TYPE_MAP: dict[str, str] = {
-    "P": "BUY",     # Purchase
-    "S": "SELL",    # Sale
-    "G": "GIFT",    # Gift
+    "P": "BUY",  # Purchase
+    "S": "SELL",  # Sale
+    "G": "GIFT",  # Gift
     "BUY": "BUY",
     "SELL": "SELL",
     "GIFT": "GIFT",
@@ -180,9 +180,7 @@ class InsiderTransactionsConsumer(ValkeyDedupMixin, BaseKafkaConsumer[dict]):
             "topic": failure.topic,
             "error": str(failure.last_error),
         }
-        await self._current_uow.failed_tasks.create(
-            task_type="insider_transactions_consumer", payload=payload
-        )
+        await self._current_uow.failed_tasks.create(task_type="insider_transactions_consumer", payload=payload)
         return payload
 
     async def update_failure(self, failure: FailureInfo[dict]) -> None:
@@ -313,9 +311,7 @@ class InsiderTransactionsConsumer(ValkeyDedupMixin, BaseKafkaConsumer[dict]):
                 skipped_malformed += 1
                 continue
 
-            net = _compute_net_value(
-                shares=shares, price_per_share=price, transaction_type=tx_type
-            )
+            net = _compute_net_value(shares=shares, price_per_share=price, transaction_type=tx_type)
             rows_to_insert.append(
                 {
                     "id": common.ids.new_uuid7(),

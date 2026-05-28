@@ -92,8 +92,6 @@ class PgInsiderTransactionsRepository:
               AND net_value_usd IS NOT NULL
             """
         )
-        result = await self._session.execute(
-            sql, {"instrument_id": instrument_id, "window_start": window_start}
-        )
+        result = await self._session.execute(sql, {"instrument_id": instrument_id, "window_start": window_start})
         row = result.first()
         return Decimal(str(row[0])) if row is not None and row[0] is not None else Decimal("0")

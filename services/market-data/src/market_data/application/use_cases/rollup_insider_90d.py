@@ -16,7 +16,7 @@ WHY a single SQL statement (CTE-based) and not Python looping:
   At full universe (~3000 instruments with OHLCV) the window query is
   cheap on the (instrument_id, transaction_date DESC) index, and the
   whole rollup runs as a single transaction. Python-loop UPSERTs would
-  inflate the round-trip count by 3000×.
+  inflate the round-trip count by 3000x.
 
 SCHEDULE: ``_insider_rollup_loop`` in app.py wakes daily at
 ``INSIDER_ROLLUP_HOUR_UTC`` (default 03:00 UTC — one hour after the L-3
@@ -128,13 +128,8 @@ def _seconds_until_next_run_hour(
 
     Pure function, exported for tests.
     """
-    today_target = now.replace(
-        hour=target_hour_utc, minute=0, second=0, microsecond=0
-    )
-    if now >= today_target:
-        next_target = today_target + timedelta(days=1)
-    else:
-        next_target = today_target
+    today_target = now.replace(hour=target_hour_utc, minute=0, second=0, microsecond=0)
+    next_target = today_target + timedelta(days=1) if now >= today_target else today_target
     return max(0.0, (next_target - now).total_seconds())
 
 
@@ -164,9 +159,7 @@ async def insider_rollup_loop(
             await _do_insider_rollup(write_factory, log)
             last_run_at = datetime.now(tz=UTC)
             # Sleep until tomorrow's target hour.
-            sleep_for = _seconds_until_next_run_hour(
-                now=datetime.now(tz=UTC), target_hour_utc=target_hour_utc
-            )
+            sleep_for = _seconds_until_next_run_hour(now=datetime.now(tz=UTC), target_hour_utc=target_hour_utc)
             await asyncio.sleep(sleep_for)
         except Exception as exc:
             log.error("insider_rollup_error", error=str(exc))  # type: ignore[attr-defined]

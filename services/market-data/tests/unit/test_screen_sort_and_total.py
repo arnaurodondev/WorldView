@@ -425,8 +425,8 @@ def _make_fields_uc(fields: list[ScreenFieldMetadata]) -> MagicMock:
 def test_get_screen_fields_route_returns_12_fields() -> None:
     """GET /screen/fields happy-path: returns list of field metadata objects.
 
-    Wave L-1/L-2 added 11 new fields (4 attribute + 7 snapshot), so the
-    static set now contains 23 entries.
+    Wave L-1/L-2 added 11 new fields (4 attribute + 7 snapshot); Wave L-4b
+    added ``insider_net_buy_90d``. The static set now contains 24 entries.
     """
     from market_data.app import _get_static_screen_fields
 
@@ -438,7 +438,7 @@ def test_get_screen_fields_route_returns_12_fields() -> None:
     assert resp.status_code == 200
     body = resp.json()
     assert "fields" in body
-    assert len(body["fields"]) == 23
+    assert len(body["fields"]) == 24
     names = {f["name"] for f in body["fields"]}
     # Original fields still present
     assert "pe_ratio" in names
@@ -447,6 +447,8 @@ def test_get_screen_fields_route_returns_12_fields() -> None:
     assert "country" in names
     assert "exchange" in names
     assert "has_fundamentals" in names
+    # L-4b: insider 90d rollup
+    assert "insider_net_buy_90d" in names
     assert "has_ohlcv" in names
     # L-2 snapshot fields
     assert "eps_ttm" in names

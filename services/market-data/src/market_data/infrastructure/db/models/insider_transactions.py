@@ -80,14 +80,10 @@ class InsiderTransactionModel(Base):
     transaction_date: Mapped[date] = mapped_column(Date, nullable=False)
     transaction_type: Mapped[str] = mapped_column(String(16), nullable=False)
     shares: Mapped[Decimal] = mapped_column(Numeric(20, 4), nullable=False)
-    price_per_share: Mapped[Decimal | None] = mapped_column(
-        Numeric(20, 4), nullable=True
-    )
+    price_per_share: Mapped[Decimal | None] = mapped_column(Numeric(20, 4), nullable=True)
     # Derived = ``shares * price_per_share`` with sign negative for SELL/GIFT;
     # NULL when ``price_per_share`` is missing from the EODHD payload.
-    net_value_usd: Mapped[Decimal | None] = mapped_column(
-        Numeric(20, 2), nullable=True
-    )
+    net_value_usd: Mapped[Decimal | None] = mapped_column(Numeric(20, 2), nullable=True)
 
     source: Mapped[str] = mapped_column(
         String(32),
