@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import os
 import re
 from contextlib import asynccontextmanager
 from typing import TYPE_CHECKING
@@ -332,6 +333,103 @@ async def _screen_fields_refresh_loop(
             await asyncio.sleep(_SCREEN_FIELDS_REFRESH_RETRY_SECONDS)
 
 
+# ── PLAN-0089 Wave L-3: ComputedMetricsBackfillWorker scheduler ──────────────
+# Cadence: daily at COMPUTED_METRICS_REFRESH_HOUR_UTC (default 02:00 UTC) — chosen
+# to follow the daily OHLCV ingestion window so the 8 derived metrics reflect the
+# latest close. Skip if last successful run was < 20 hours ago: a guard against
+# duplicate work when the loop re-enters (clock drift, container restart).
+_COMPUTED_METRICS_MIN_INTERVAL_SECONDS = 20 * 3600
+_COMPUTED_METRICS_RETRY_SECONDS = 300  # 5-min back-off on failure
+_COMPUTED_METRICS_DEFAULT_HOUR_UTC = 2
+
+
+def _seconds_until_next_hour_utc(target_hour: int, now: object) -> float:
+    """Compute seconds until the next occurrence of ``target_hour:00`` UTC.
+
+    Pulled out so the loop is testable without ``asyncio.sleep`` patching.
+    ``now`` must be a timezone-aware ``datetime`` in UTC. Returns 0.0 when
+    the next slot is in the past (the caller will skip-sleep and run immediately).
+    """
+    from datetime import datetime, timedelta
+
+    assert isinstance(now, datetime)
+    candidate = now.replace(hour=target_hour, minute=0, second=0, microsecond=0)
+    if candidate <= now:
+        candidate = candidate + timedelta(days=1)
+    return float((candidate - now).total_seconds())
+
+
+async def _computed_metrics_refresh_loop(
+    write_factory: async_sessionmaker,
+    log: object,
+) -> None:
+    """Background task: run ComputedMetricsBackfillWorker daily at 02:00 UTC.
+
+    WHY scheduled instead of Kafka-driven: the 8 derived metrics
+    (52-week distance, 1M/3M/6M/YTD/1Y/3Y returns) are aggregates over the
+    full OHLCV history and have no natural per-bar trigger — a once-a-day
+    sweep after the daily ingest is the simplest correct cadence.
+
+    The hour is configurable via ``COMPUTED_METRICS_REFRESH_HOUR_UTC`` (env
+    var, 0-23, default 2). The 20-hour minimum-interval guard prevents
+    duplicate runs after a container restart inside the same daily window.
+    """
+    from common.time import utc_now  # type: ignore[import-untyped]
+    from market_data.infrastructure.db.computed_metrics_worker import (
+        run_computed_metrics_backfill,
+    )
+
+    # Read schedule hour from env once at startup. Out-of-range values fall back
+    # to the default to avoid wedging the loop on bad operator input.
+    try:
+        target_hour = int(os.getenv("COMPUTED_METRICS_REFRESH_HOUR_UTC", str(_COMPUTED_METRICS_DEFAULT_HOUR_UTC)))
+        if not (0 <= target_hour <= 23):
+            raise ValueError("hour must be 0-23")
+    except (ValueError, TypeError) as exc:
+        log.warning(  # type: ignore[attr-defined]
+            "computed_metrics_invalid_hour_using_default",
+            error=str(exc),
+            default=_COMPUTED_METRICS_DEFAULT_HOUR_UTC,
+        )
+        target_hour = _COMPUTED_METRICS_DEFAULT_HOUR_UTC
+
+    last_success_at: object | None = None  # datetime | None — kept as object for forward-ref typing
+
+    while True:
+        try:
+            now = utc_now()
+            sleep_seconds = _seconds_until_next_hour_utc(target_hour, now)
+            await asyncio.sleep(sleep_seconds)
+
+            # 20-hour minimum-interval guard. Cheap defence against the loop
+            # waking up twice in the same 24-hour window after a container restart.
+            now_after_sleep = utc_now()
+            if last_success_at is not None:
+                from datetime import datetime as _dt  # local import to keep top of file lean
+
+                assert isinstance(last_success_at, _dt)
+                delta = (now_after_sleep - last_success_at).total_seconds()
+                if delta < _COMPUTED_METRICS_MIN_INTERVAL_SECONDS:
+                    log.info(  # type: ignore[attr-defined]
+                        "computed_metrics_skip_too_recent",
+                        last_success_at=last_success_at.isoformat(),
+                        seconds_since=delta,
+                    )
+                    continue
+
+            summary = await run_computed_metrics_backfill(write_factory)
+            last_success_at = utc_now()
+            log.info(  # type: ignore[attr-defined]
+                "computed_metrics_refresh_completed",
+                instruments_processed=summary.instruments_processed,
+                metrics_written=summary.metrics_written,
+                runtime_seconds=summary.runtime_seconds,
+            )
+        except Exception as exc:
+            log.error("computed_metrics_refresh_error", error=str(exc))  # type: ignore[attr-defined]
+            await asyncio.sleep(_COMPUTED_METRICS_RETRY_SECONDS)
+
+
 class RequestIdMiddleware(BaseHTTPMiddleware):
     """Propagate X-Request-ID through the request lifecycle.
 
@@ -450,12 +548,20 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # "no asyncio.create_task in lifespan" rule per PRD-0017 §6.2.
     refresh_task = asyncio.create_task(_screen_fields_refresh_loop(write_factory, valkey_client, log))
 
+    # PLAN-0089 Wave L-3 (T-WL3-02): daily compute of 8 derived OHLCV-based metrics.
+    # Same R22 exemption rationale as the screen-fields warmer above — long-running
+    # scheduled aggregator, started in lifespan, cancelled on shutdown.
+    computed_metrics_task = asyncio.create_task(_computed_metrics_refresh_loop(write_factory, log))
+
     log.info("service_started", service=settings.service_name)
     yield
 
     refresh_task.cancel()
+    computed_metrics_task.cancel()
     with contextlib.suppress(asyncio.CancelledError):
         await refresh_task
+    with contextlib.suppress(asyncio.CancelledError):
+        await computed_metrics_task
 
     eodhd_client = getattr(app.state, "eodhd_client", None)
     if eodhd_client is not None:
