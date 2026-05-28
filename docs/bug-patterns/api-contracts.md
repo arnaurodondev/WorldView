@@ -956,3 +956,19 @@ Then use `instrument_id` (not `entity_id`) for all market-data API calls.
 **Regression test**: `tests/unit/infrastructure/workers/test_fundamentals_refresh_worker.py::TestFundamentalsRefreshWorkerS3Failure::test_successful_fetch_calls_upsert`
 
 ---
+
+## BP-595 — SSE Streaming Buffered the Entire Response Into One Frame (PLAN-0099 W1)
+
+**Service**: rag-chat (S8) — `services/rag-chat/src/rag_chat/application/use_cases/chat_orchestrator.py` ("LLM answered directly, no tool calls" branch)
+
+**Symptom**: chat-eval Q4 artifact showed `TPS ≈ 0.087 tok/s` and `TTFT ≈ end-of-generation`. Users perceived the chat UI as unresponsive — the indicator span­ned the whole LLM call before any text appeared, even though the network connection was open and SSE frames were being flushed.
+
+**Root cause**: the no-tool-calls branch called `p.emitter.emit_token(direct_text)` with the *entire* response in a single argument, so the SSE stream produced exactly one `token` event holding the full answer. The chat-eval harness computes TTFT from the first content event and TPS as `output_tokens / (e2e − ttft)`; with the one-frame shape both metrics collapsed to nonsense values, and the new `ttft_p95 < 5s` / `tps_p50 ≥ 30 tok/s` gates would have failed even on a fast provider.
+
+**Fix (PLAN-0099 W1)**: introduce module-level `_chunk_text_for_streaming(text, words_per_chunk=8)` that slices the already-buffered text into word groups while preserving whitespace runs (so concatenation round-trips exactly). The branch now does `for chunk in _chunk_text_for_streaming(direct_text): yield p.emitter.emit_delta(chunk)`. `SSEEmitter.emit_delta()` is a wire-compatible alias of `emit_token` (same `event: token`) so frontends and the chat-eval harness need no changes.
+
+**Prevention**: any callsite that yields a buffered LLM response to an SSE stream MUST iterate. A single `emit_token(whole_text)` is a regression. The `_chunk_text_for_streaming` helper is the canonical chunking primitive — do not write ad-hoc splitters that drop whitespace.
+
+**Regression test**: `services/rag-chat/tests/unit/use_cases/test_chat_orchestrator_chunk_streaming.py` (8 tests: round-trip fidelity, frame count, edge cases, whitespace preservation, invalid-input degradation) + `services/rag-chat/tests/unit/application/test_sse_emitter.py::test_sse_delta_alias_matches_token` (alias contract pin).
+
+---

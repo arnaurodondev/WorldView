@@ -163,7 +163,7 @@ unchanged — R11: never break wire format.
 | `status` | `{"step": "loading_context" \| "entity_resolution" \| "query_expansion"}` |
 | `tool_call` | `{"type": "tool_call", "tool": str, "label": str, "input": dict, "status": "running"}` — emitted before each tool executes |
 | `tool_result` | `{"type": "tool_result", "tool": str, "status": "ok" \| "error" \| "empty", "item_count": int}` — emitted after each tool completes |
-| `token` | `{"text": "..."}` — streamed LLM output chunk |
+| `token` | `{"text": "..."}` — streamed LLM output chunk. **PLAN-0099 W1 / BP-595**: the "LLM answered directly (no tool calls)" branch now emits one `token` frame per ~8-word chunk via `_chunk_text_for_streaming()` instead of one event for the whole answer (TPS ≈ 0.087 tok/s → real per-frame cadence). `SSEEmitter.emit_delta()` is a wire-compatible alias (same `event: token`) so frontends and the chat-eval harness need no changes. |
 | `citations` | `[{ref, id, title, url, source, published_at}]` |
 | `contradictions` | `[...]` |
 | `metadata` | `{thread_id, message_id, intent, provider, latency_ms}` |

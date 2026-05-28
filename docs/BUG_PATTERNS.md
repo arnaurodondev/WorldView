@@ -11,8 +11,10 @@
 > traffic outpaced PLAN-0099's draft-time reservations (PLAN-0089
 > Wave K filed BP-588..BP-591; PLAN-0099 W1 T-W1-01 filed BP-592
 > before W4 landed). The updated PLAN-0099 reservation map is:
-> **BP-593 / BP-594 / BP-595 / BP-596** for W2 (batch row-mix follow-ups,
-> revenue Avro, AGE sync); **BP-597 / BP-598** for W3 Branch-A fixes
+> **BP-595 FILED 2026-05-27** for PLAN-0099 W1 SSE chunk streaming (per the
+> audit's original tag — see `docs/audits/2026-05-27-plan-0099-latency-metric-redesign.md` §5).
+> Remaining W2 batch row-mix/revenue/AGE reservations shift to
+> **BP-593 / BP-594 / BP-596 / BP-601**; **BP-597 / BP-598** for W3 Branch-A fixes
 > if they ship. Anyone filing a new BP in the next 72h must (a) scan
 > for the current `grep -oE "BP-[0-9]+" docs/BUG_PATTERNS.md | sort -u
 > -t- -k2,2n | tail -1` value before picking a number, and (b)
@@ -34,7 +36,7 @@
 | [ML & LLM](bug-patterns/ml-llm.md) | `bug-patterns/ml-llm.md` | 27 | Ollama, GLiNER, DeepInfra, embeddings, LLM prompt patterns |
 | [Observability](bug-patterns/observability.md) | `bug-patterns/observability.md` | 9 | Prometheus, Grafana, Alertmanager, structlog, OTel |
 | [Workers & Schedulers](bug-patterns/worker-scheduler.md) | `bug-patterns/worker-scheduler.md` | 48 | task scheduling, lease patterns, backfill, watermarks, rate limiting |
-| [API & Contracts](bug-patterns/api-contracts.md) | `bug-patterns/api-contracts.md` | 38 | FastAPI, Pydantic, API contract drift, PRD assumptions, gateways |
+| [API & Contracts](bug-patterns/api-contracts.md) | `bug-patterns/api-contracts.md` | 39 | FastAPI, Pydantic, API contract drift, PRD assumptions, gateways |
 
 ---
 
