@@ -280,16 +280,17 @@ def _get_static_screen_fields() -> list:
             null_fraction=0.0,
         ),
         # ── Wave L-5c: calendar (date) snapshot fields ────────────────────────
-        # LOCK-STEP with migration 028 ``_L5C_FIELDS`` — divergence would let
-        # the 6-hour refresh loop overwrite the migration's seeded rows on the
-        # next tick. ``field_type='numeric'`` because the
-        # ``ck_screen_field_metadata_field_type`` CHECK admits only
-        # ('numeric', 'text') and the UI filter is a number-of-days input
-        # (``next_earnings_within_days``).
+        # LOCK-STEP with migration 028 ``_L5C_FIELDS`` and migration 031's
+        # UPDATE — divergence would let the 6-hour refresh loop overwrite
+        # the seeded rows on the next tick. Migration 031 widens the
+        # ``ck_screen_field_metadata_field_type`` CHECK to admit 'date', so
+        # the in-memory list can finally use the canonical type. The UI
+        # filter still consumes a number-of-days input
+        # (``next_earnings_within_days``) — only the rendering switch changes.
         ScreenFieldMetadata(
             name="next_earnings_date",
             label="NEXT EARN",
-            field_type="numeric",
+            field_type="date",
             unit="date",
             description="Next scheduled earnings report date (filter accepts days-from-today)",
             observed_min=None,
@@ -299,7 +300,7 @@ def _get_static_screen_fields() -> list:
         ScreenFieldMetadata(
             name="next_dividend_date",
             label="NEXT DIV",
-            field_type="numeric",
+            field_type="date",
             unit="date",
             description="Next scheduled dividend payment date (filter accepts days-from-today)",
             observed_min=None,
