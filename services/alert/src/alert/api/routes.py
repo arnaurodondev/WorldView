@@ -28,11 +28,13 @@ from alert.api.dependencies import (
     DbSessionDep,
     GetPendingAlertsUseCaseDep,
     HistoryUseCaseDep,
+    ReadDbSessionDep,
     SnoozeUseCaseDep,
     TenantUserDep,
 )
 from alert.api.schemas import (
     AcknowledgeAlertRequest,
+    ActiveAlertFlagResponse,
     AlertCreatedResponse,
     AlertHistoryResponse,
     AlertResponse,
@@ -41,6 +43,7 @@ from alert.api.schemas import (
     PendingAlertsResponse,
     SnoozeAlertRequest,
 )
+from alert.application.use_cases.active_alert_flag import GetActiveAlertFlagUseCase
 from alert.application.use_cases.create_alert import CreateAlertRequest as CreateAlertInput
 from alert.domain.entities import Alert
 from alert.domain.enums import AlertSeverity
@@ -213,6 +216,40 @@ async def get_pending_alerts_for_user(
         total=len(alert_responses),
         limit=limit,
         offset=offset,
+    )
+
+
+# ── REST: GET /internal/v1/instruments/{instrument_id}/active-alert-flag ──────
+# PLAN-0089 Wave L-5a T-WL5A-02: per-entity active-alert summary for the
+# screener S3-side sync worker (Wave L-5b). Aggregates across all users —
+# "active" means any non-acked, non-snoozed alert row exists for the entity.
+# Read-only (R27) → uses ReadDbSessionDep. Auth: InternalJWTMiddleware
+# already gates anything under /internal/v1 — no service-account allow-list
+# is needed here because no user-scoped data leaves the service.
+
+
+@internal_router.get(
+    "/instruments/{instrument_id}/active-alert-flag",
+    response_model=ActiveAlertFlagResponse,
+)
+async def get_active_alert_flag(
+    instrument_id: UUID,
+    session: ReadDbSessionDep,
+) -> ActiveAlertFlagResponse:
+    """Return whether any user has an active alert for ``instrument_id``.
+
+    Endpoint is non-failing: instruments with no alert rows return
+    ``has_active_alert=False`` + ``active_alert_count=0`` with HTTP 200.
+    The L-5b nightly sync worker treats absence as "no signal".
+    """
+    flag = await GetActiveAlertFlagUseCase().execute(
+        session=session,
+        instrument_id=instrument_id,
+    )
+    return ActiveAlertFlagResponse(
+        instrument_id=instrument_id,
+        has_active_alert=flag.has_active_alert,
+        active_alert_count=flag.active_alert_count,
     )
 
 

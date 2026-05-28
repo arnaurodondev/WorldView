@@ -7,6 +7,22 @@ from uuid import UUID
 
 from pydantic import BaseModel, EmailStr, Field
 
+# ── L-5a active-alert flag (PLAN-0089 Wave L-5a) ─────────────────────────────
+
+
+class ActiveAlertFlagResponse(BaseModel):
+    """Per-entity active-alert summary for the screener S3-side sync worker.
+
+    "Active" means: exists at least one ``alerts`` row whose ``entity_id``
+    matches the instrument, ``acknowledged_at IS NULL``, and
+    ``snooze_until`` is either NULL or in the past (audit §8.a option a).
+    """
+
+    instrument_id: UUID
+    has_active_alert: bool
+    active_alert_count: int = Field(ge=0)
+
+
 # ── Pending Alerts ────────────────────────────────────────────────────────────
 
 

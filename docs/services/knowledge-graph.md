@@ -263,6 +263,7 @@ The only cost is a longer-than-usual first run (full table scan instead of incre
 |--------|------|------|-------------|
 | GET | `/internal/v1/entities/{entity_id}/intelligence` | X-Internal-JWT (system) | Same as public intelligence endpoint; consumed by S8 rag-chat |
 | GET | `/internal/v1/llm-costs` | X-Internal-JWT (system) | LLM cost aggregates. Params: `period` (YYYY-MM), `provider`, `breakdown` |
+| GET | `/internal/v1/instruments/{instrument_id}/intelligence-rollup-7d` | X-Internal-JWT (system) | PLAN-0089 Wave L-5a: 7d intelligence rollup for the S3-side screener sync worker. Returns `recent_contradiction_count` (active contradictions where the instrument is subject, last 7 days). Non-failing — count=0 + 200 if absent. Sample response: `{"instrument_id":"...","recent_contradiction_count":3}` |
 
 ### `summary_authority` computed field
 

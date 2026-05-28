@@ -373,6 +373,7 @@ S10 requires these S1 internal endpoints:
 | `/internal/v1/watchlists/by-entities` | POST | Batch resolve watchers (max 100) |
 | `/internal/v1/watchlists/{watchlist_id}/entities` | GET | Entities in watchlist |
 | `/internal/v1/users/{user_id}` | GET | User profile for email delivery |
+| `/internal/v1/instruments/{instrument_id}/active-alert-flag` | GET | PLAN-0089 Wave L-5a: per-entity active-alert summary for the S3-side screener sync worker. Returns `{has_active_alert, active_alert_count}`. "Active" = any user's alert row with `acknowledged_at IS NULL` AND `(snooze_until IS NULL OR snooze_until < now())` (audit §8.a option a). Non-failing — false + 0 + 200 if no alerts. Reuses `idx_alerts_unack_unsnoozed`. |
 
 **Best-effort contract**: S1 unavailable (503, connection refused) → empty results,
 never raises. Validated by 3 contract tests.

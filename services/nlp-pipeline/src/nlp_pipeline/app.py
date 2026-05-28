@@ -30,6 +30,7 @@ from nlp_pipeline.api.routes import (
     entities,
     health,
     internal_costs,
+    internal_news_rollup,  # PLAN-0089 Wave L-5a: screener sync rollup
     news,
     search,
     signals,
@@ -314,6 +315,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(news.router)
     app.include_router(dlq.router)
     app.include_router(internal_costs.router)
+    app.include_router(internal_news_rollup.router)  # PLAN-0089 Wave L-5a
     # PLAN-0055 C-4: admin LLM replay endpoint.
     app.include_router(admin.router)
     # PLAN-0064 W6: full-text document search (stub in Wave 1, wired in Wave 3).
