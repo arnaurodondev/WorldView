@@ -781,6 +781,27 @@ export interface ScreenerFilter {
   has_ohlcv?: boolean;
   // FIX-LIVE-M / Wave L-1: GICS industry restriction (more selective than sector).
   industry?: string;
+  // ── PRD-0089 Wave L-2 attribute filters — instrument_fundamentals_snapshot ──
+  // All optional and default-undefined. The Wave L-2 backend (commit e1a0193f)
+  // accepts these on `ScreenFilterRequest` as scalar numeric ranges + a
+  // string IN-list for credit_ratings. The backend dedupes multiple filter
+  // entries (the predicate is applied once across the WHERE-clause builder)
+  // so we collapse them onto the first existing filter in build-filters.ts.
+  avg_volume_30d_min?: number;
+  avg_volume_30d_max?: number;
+  eps_ttm_min?: number;
+  eps_ttm_max?: number;
+  free_cash_flow_min?: number;
+  free_cash_flow_max?: number;
+  fcf_margin_min?: number;
+  fcf_margin_max?: number;
+  interest_coverage_min?: number;
+  interest_coverage_max?: number;
+  net_debt_to_ebitda_min?: number;
+  net_debt_to_ebitda_max?: number;
+  // credit_ratings: native IN-list — multi-select round-trips intact (no
+  // first-entry truncation as in country/exchange).
+  credit_ratings?: string[];
 }
 
 export interface ScreenerRequest {

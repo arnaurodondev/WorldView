@@ -88,6 +88,10 @@ import { IntelligenceFilterGroup } from "@/components/screener/IntelligenceFilte
 import { CountryFilterRow } from "@/features/screener/components/CountryFilterRow";
 import { ExchangeFilterRow } from "@/features/screener/components/ExchangeFilterRow";
 import { CoverageToggles } from "@/features/screener/components/CoverageToggles";
+// PRD-0089 Wave I-B Block IB-L2 (T-IB-07) — Credit-rating multi-select row.
+// Lives under the "Risk" section. No truncation badge — Wave L-2 backend
+// natively supports `credit_ratings: list[str]` IN-clause.
+import { CreditRatingFilterRow } from "@/features/screener/components/CreditRatingFilterRow";
 // PRD-0089 Wave I-A · T-IA-05: OQ-10 sector→industry cascading. The current
 // FilterState exposes a single `sector: string`, not a `sectors: string[]`
 // + `industries: string[]` pair. So the cascade is STAGED here: the helper
@@ -148,6 +152,9 @@ export function ScreenerFilterBar({
  leverage: leverageCount,
  technical: technicalCount,
  news: newsCount,
+ // PRD-0089 Wave I-B Block IB-L2: two new section badges.
+ cashFlow: cashFlowCount,
+ risk: riskCount,
  } = counts;
 
  // ── T-IA-05 cascade scaffolding (staged for Wave I-B) ────────────────────
@@ -412,6 +419,89 @@ export function ScreenerFilterBar({
  onMin={(v) => patch({ opMarginMin: v })}
  onMax={(v) => patch({ opMarginMax: v })}
  />
+ {/* PRD-0089 Wave I-B Block IB-L2 (T-IB-06): EPS (TTM) range filter.
+  * WHY lives in Profitability (not its own section): EPS is the most
+  * basic earnings-quality metric — analysts read it alongside margins.
+  * Wave L-2 backend (commit e1a0193f) wires eps_ttm_min/eps_ttm_max on
+  * ScreenFilterRequest; build-filters.ts collapses them onto the first
+  * filter. No backend-pending badge — Wave L-2 shipped 2026-05-27. */}
+ <RangeInput
+ label="EPS (TTM)"
+ tooltip="Earnings per share — trailing twelve months. Negative EPS flags loss-makers; >$5 = mature large-cap."
+ min={form.epsTtmMin} max={form.epsTtmMax}
+ minPlaceholder="e.g. 0.5"
+ maxPlaceholder="e.g. 50"
+ onMin={(v) => patch({ epsTtmMin: v })}
+ onMax={(v) => patch({ epsTtmMax: v })}
+ />
+ </div>
+ </Section>
+
+ {/* ── CASH FLOW SECTION (PRD-0089 Wave I-B Block IB-L2, T-IB-06) ── */}
+ {/* WHY a dedicated section (not folded into Profitability): cash flow is
+  * a fundamentally different lens — accountants book paper earnings via
+  * accruals, but FCF is the cold cash a company actually generates.
+  * Institutional analysts run cash-flow screens independently of margin
+  * screens. The design (08-screener.md) breaks them out the same way. */}
+ <Section title="Cash Flow" activeCount={cashFlowCount}>
+ <div className="flex flex-col gap-1.5">
+ <RangeInput
+ label="FCF"
+ tooltip="Free Cash Flow (operating cash flow − capex). Negative = cash burn; positive = self-funding business."
+ min={form.freeCashFlowMin} max={form.freeCashFlowMax}
+ minPlaceholder="e.g. 1e9"
+ maxPlaceholder="e.g. 1e11"
+ onMin={(v) => patch({ freeCashFlowMin: v })}
+ onMax={(v) => patch({ freeCashFlowMax: v })}
+ />
+ {/* WHY hint="decimal": fcf_margin is stored as a fraction (fcf/revenue)
+  * — 0.20 means 20%. Same convention as ROE / Net Margin above. */}
+ <RangeInput
+ label="FCF Margin"
+ hint="decimal"
+ tooltip="FCF ÷ revenue. Above 20% = exceptional capital efficiency (SaaS, payments); below 5% = capital-heavy or commodity."
+ min={form.fcfMarginMin} max={form.fcfMarginMax}
+ minPlaceholder="e.g. 0.05"
+ maxPlaceholder="e.g. 0.30"
+ onMin={(v) => patch({ fcfMarginMin: v })}
+ onMax={(v) => patch({ fcfMarginMax: v })}
+ />
+ </div>
+ </Section>
+
+ {/* ── RISK SECTION (PRD-0089 Wave I-B Block IB-L2, T-IB-06/07) ──── */}
+ {/* WHY a dedicated section: credit / leverage signals deserve their
+  * own collapsible group — fixed-income desks and compliance teams
+  * filter by these almost exclusively. Mixing them into Leverage
+  * (which is BACKEND_PENDING and gated behind ENABLE_PENDING_METRICS)
+  * would hide the live L-2 filters behind a feature flag. */}
+ <Section title="Risk" activeCount={riskCount}>
+ <div className="flex flex-col gap-1.5">
+ <RangeInput
+ label="Int Cov"
+ tooltip="EBIT ÷ interest expense. Below 1× = earnings can't cover the interest bill (distress); above 5× = comfortable."
+ min={form.interestCoverageMin} max={form.interestCoverageMax}
+ minPlaceholder="e.g. 1.5"
+ maxPlaceholder="e.g. 20"
+ onMin={(v) => patch({ interestCoverageMin: v })}
+ onMax={(v) => patch({ interestCoverageMax: v })}
+ />
+ <RangeInput
+ label="ND/EBITDA"
+ tooltip="(Total debt − cash) ÷ EBITDA. Negative = net cash position. >4× = highly leveraged; >6× = distressed."
+ min={form.netDebtToEbitdaMin} max={form.netDebtToEbitdaMax}
+ minPlaceholder="e.g. 0"
+ maxPlaceholder="e.g. 4"
+ onMin={(v) => patch({ netDebtToEbitdaMin: v })}
+ onMax={(v) => patch({ netDebtToEbitdaMax: v })}
+ />
+ {/* T-IB-07: discrete multi-select. Round-trips intact (IN-list). */}
+ <CreditRatingFilterRow
+ value={form.creditRatings ?? []}
+ onChange={(ratings) =>
+  patch({ creditRatings: ratings.length === 0 ? undefined : ratings })
+ }
+ />
  </div>
  </Section>
 
@@ -474,6 +564,19 @@ export function ScreenerFilterBar({
  */}
  <Section title="Technical" activeCount={technicalCount}>
  <div className="flex flex-col gap-1.5">
+ {/* PRD-0089 Wave I-B Block IB-L2 (T-IB-06): AVG VOL (30d) range. WHY
+  * Technical (not its own section): average volume is a liquidity /
+  * tradeability signal — institutional desks screen on it the same way
+  * they screen on price / 52W range. Wave L-2 backend wired live. */}
+ <RangeInput
+ label="Avg Vol 30d"
+ tooltip="Average daily trading volume over the past 30 days, in shares. Above 1M = liquid; below 100K = thin / hard to trade size."
+ min={form.avgVolume30dMin} max={form.avgVolume30dMax}
+ minPlaceholder="e.g. 1e6"
+ maxPlaceholder="e.g. 1e9"
+ onMin={(v) => patch({ avgVolume30dMin: v })}
+ onMax={(v) => patch({ avgVolume30dMax: v })}
+ />
  {/* Above 50d MA — checkbox */}
  <label className="flex items-center gap-2 h-6">
  <input
