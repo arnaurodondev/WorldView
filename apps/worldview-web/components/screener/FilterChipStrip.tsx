@@ -195,6 +195,70 @@ function buildChips(filters: FilterState): FilterChip[] {
     });
   }
 
+  // ── PRD-0089 Wave I-B Block IB-L2 — fundamentals snapshot chips ─────────
+  // WHY chips for every range: same as the rest of the file — give the user
+  // one-click dismissal of any individual filter without opening the popover.
+  if (filters.avgVolume30dMin != null || filters.avgVolume30dMax != null) {
+    chips.push({
+      key: "avgVolume30d",
+      label: rangeLabel("Avg Vol", filters.avgVolume30dMin, filters.avgVolume30dMax),
+      clear: (f) => ({ ...f, avgVolume30dMin: undefined, avgVolume30dMax: undefined }),
+    });
+  }
+  if (filters.epsTtmMin != null || filters.epsTtmMax != null) {
+    chips.push({
+      key: "epsTtm",
+      label: rangeLabel("EPS", filters.epsTtmMin, filters.epsTtmMax),
+      clear: (f) => ({ ...f, epsTtmMin: undefined, epsTtmMax: undefined }),
+    });
+  }
+  if (filters.freeCashFlowMin != null || filters.freeCashFlowMax != null) {
+    chips.push({
+      key: "freeCashFlow",
+      label: rangeLabel("FCF", filters.freeCashFlowMin, filters.freeCashFlowMax),
+      clear: (f) => ({ ...f, freeCashFlowMin: undefined, freeCashFlowMax: undefined }),
+    });
+  }
+  if (filters.fcfMarginMin != null || filters.fcfMarginMax != null) {
+    chips.push({
+      key: "fcfMargin",
+      label: rangeLabel("FCF Mgn", filters.fcfMarginMin, filters.fcfMarginMax, fmtPct),
+      clear: (f) => ({ ...f, fcfMarginMin: undefined, fcfMarginMax: undefined }),
+    });
+  }
+  if (filters.interestCoverageMin != null || filters.interestCoverageMax != null) {
+    chips.push({
+      key: "interestCoverage",
+      label: rangeLabel("Int Cov", filters.interestCoverageMin, filters.interestCoverageMax),
+      clear: (f) => ({
+        ...f,
+        interestCoverageMin: undefined,
+        interestCoverageMax: undefined,
+      }),
+    });
+  }
+  if (filters.netDebtToEbitdaMin != null || filters.netDebtToEbitdaMax != null) {
+    chips.push({
+      key: "netDebtToEbitda",
+      label: rangeLabel("ND/EBITDA", filters.netDebtToEbitdaMin, filters.netDebtToEbitdaMax),
+      clear: (f) => ({
+        ...f,
+        netDebtToEbitdaMin: undefined,
+        netDebtToEbitdaMax: undefined,
+      }),
+    });
+  }
+  if (filters.creditRatings && filters.creditRatings.length > 0) {
+    // WHY one chip for the multi-select (not N): same convention used
+    // throughout the strip — country / exchange render one chip listing
+    // values. Keeps the strip readable at high selection counts.
+    chips.push({
+      key: "creditRatings",
+      label: `Credit: ${filters.creditRatings.join(", ")}`,
+      clear: (f) => ({ ...f, creditRatings: undefined }),
+    });
+  }
+
   // ── Technical ───────────────────────────────────────────────────────────
   if (filters.above50dMa) {
     chips.push({

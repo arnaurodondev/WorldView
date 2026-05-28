@@ -211,6 +211,90 @@ describe("buildScreenerFilters — sector restriction", () => {
 
 // ── Fallback filter (empty filter list) ───────────────────────────────────────
 
+// ── PRD-0089 Wave I-B Block IB-L2 — fundamentals snapshot attribute filters ──
+
+describe("buildScreenerFilters — Wave L-2 snapshot filters (IB-L2)", () => {
+  it("attaches avg_volume_30d_min to the first filter when set", () => {
+    // WHY: same collapse pattern as the IB-L1 categorical attributes. The
+    // Wave L-2 backend (commit e1a0193f) dedupes the snapshot predicate
+    // across repeated filter entries — we therefore only need to send it
+    // on one entry. Pin the contract here so a regression that adds a
+    // second carrier filter is caught immediately.
+    const filters = buildScreenerFilters(
+      makeFilters({ peMin: 10, avgVolume30dMin: 1_000_000 }),
+    );
+    expect(filters[0].avg_volume_30d_min).toBe(1_000_000);
+  });
+
+  it("synthesises a market_cap carrier when only L-2 ranges are set", () => {
+    // WHY: when there is no other range filter, the build still has to
+    // produce a non-empty filters[] so the backend sees the L-2 attributes.
+    const filters = buildScreenerFilters(makeFilters({ epsTtmMin: 1.5 }));
+    expect(filters.length).toBe(1);
+    expect(filters[0].metric).toBe("market_capitalization");
+    expect(filters[0].eps_ttm_min).toBe(1.5);
+    // The carrier should not also carry a numeric range — it's restriction-only.
+    expect(filters[0].min_value).toBeUndefined();
+    expect(filters[0].max_value).toBeUndefined();
+  });
+
+  it("forwards all 6 numeric snap fields as scalar min/max wire fields", () => {
+    const filters = buildScreenerFilters(
+      makeFilters({
+        avgVolume30dMin: 1e6,
+        avgVolume30dMax: 1e9,
+        epsTtmMin: -5,
+        epsTtmMax: 50,
+        freeCashFlowMin: 1e8,
+        freeCashFlowMax: 1e11,
+        fcfMarginMin: 0.05,
+        fcfMarginMax: 0.5,
+        interestCoverageMin: 1.5,
+        interestCoverageMax: 20,
+        netDebtToEbitdaMin: -2,
+        netDebtToEbitdaMax: 4,
+      }),
+    );
+    const f = filters[0];
+    expect(f.avg_volume_30d_min).toBe(1e6);
+    expect(f.avg_volume_30d_max).toBe(1e9);
+    expect(f.eps_ttm_min).toBe(-5);
+    expect(f.eps_ttm_max).toBe(50);
+    expect(f.free_cash_flow_min).toBe(1e8);
+    expect(f.free_cash_flow_max).toBe(1e11);
+    expect(f.fcf_margin_min).toBe(0.05);
+    expect(f.fcf_margin_max).toBe(0.5);
+    expect(f.interest_coverage_min).toBe(1.5);
+    expect(f.interest_coverage_max).toBe(20);
+    expect(f.net_debt_to_ebitda_min).toBe(-2);
+    expect(f.net_debt_to_ebitda_max).toBe(4);
+  });
+
+  it("forwards credit_ratings as a list (multi-select round-trip)", () => {
+    // WHY a list (not first-entry only as in country/exchange): Wave L-2
+    // backend natively supports IN-list on credit_rating
+    // (fundamental_metrics_query.py:340). Pinning this protects the
+    // multi-select UX from accidentally regressing to the IB-L1 pattern.
+    const filters = buildScreenerFilters(
+      makeFilters({ creditRatings: ["AA-", "A+", "BBB-"] }),
+    );
+    expect(filters[0].credit_ratings).toEqual(["AA-", "A+", "BBB-"]);
+  });
+
+  it("does NOT emit credit_ratings when the array is empty", () => {
+    // Empty array = no filter. Sending [] to the backend would translate to
+    // "WHERE credit_rating IN ()" which is invalid SQL.
+    const filters = buildScreenerFilters(makeFilters({ creditRatings: [] }));
+    expect(filters.length).toBe(0);
+  });
+
+  it("does NOT emit ranges when the field is undefined", () => {
+    // Default state: no snapshot filter at all → empty filters[].
+    const filters = buildScreenerFilters(makeFilters());
+    expect(filters.length).toBe(0);
+  });
+});
+
 describe("buildScreenerFilters — empty filter list (S3 v2 BP-368 fix)", () => {
   it("returns empty array when all inputs are at defaults (S3 v2 accepts filters:[])", () => {
     // WHY empty: S3 v2 ScreenerRequest accepts an empty filters[] and responds

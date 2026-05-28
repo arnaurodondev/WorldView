@@ -60,7 +60,19 @@ import { BackendPendingBadge } from "@/components/ui/backend-pending-badge";
 // metadata table grows a `category` column we'll switch to it in a follow-up.
 // Any column key NOT present here falls into the "Other" bucket so we
 // silently surface new opt-in columns instead of dropping them.
-type ColCategory = "Valuation" | "Profitability" | "Technical" | "Intelligence" | "Other";
+// PRD-0089 Wave I-B Block IB-L2 (T-IB-05) extended the categories with
+// "Cash Flow" and "Risk" so the new fundamentals snapshot columns land in
+// their own buckets instead of being lumped under the existing four. The
+// design (docs/designs/0089/08-screener.md) calls the credit-rating /
+// leverage block "Risk" — keeping that terminology here.
+type ColCategory =
+  | "Valuation"
+  | "Profitability"
+  | "Cash Flow"
+  | "Technical"
+  | "Risk"
+  | "Intelligence"
+  | "Other";
 
 const COLUMN_CATEGORY: Record<string, ColCategory> = {
   ticker: "Other",
@@ -74,13 +86,25 @@ const COLUMN_CATEGORY: Record<string, ColCategory> = {
   revenueGrowth: "Profitability",
   divYield: "Valuation",
   roe: "Profitability",
-  beta: "Technical",
+  beta: "Risk",         // beta is a risk indicator (market sensitivity) — moved to Risk in I-B
   score: "Intelligence",
   range52w: "Technical",
   sparkline: "Technical",
   opMargin: "Profitability",
   evEbitda: "Valuation",
-  avgVol: "Technical",
+  avgVol: "Technical",  // volume = a technical / liquidity signal
+  // ── PRD-0089 Wave I-B Block IB-L2 (T-IB-05) new columns ──────────────────
+  // WHY each lands where it does:
+  //   - epsTtm + fcfMargin → Profitability (margin-style signals).
+  //   - fcf → Cash Flow (the new dedicated bucket).
+  //   - interestCoverage + netDebtToEbitda + creditRating → Risk (the credit
+  //     analysis tier — distress signals, leverage limits, rating compliance).
+  epsTtm: "Profitability",
+  fcf: "Cash Flow",
+  fcfMargin: "Profitability",
+  interestCoverage: "Risk",
+  netDebtToEbitda: "Risk",
+  creditRating: "Risk",
 };
 
 // WHY a set (not an array of strings): O(1) "is this backend pending?"

@@ -140,6 +140,37 @@ export interface FilterState {
   // confirms two simple switches with no "exclude" path.
   hasFundamentals?: boolean;
   hasOhlcv?: boolean;
+
+  // ── PRD-0089 Wave I-B Block IB-L2 — fundamentals snapshot ranges ─────────
+  // WHY each min/max field: Wave L-2 backend (commit e1a0193f) accepts these
+  // exact field names on `ScreenFilterRequest` as scalar floats. The frontend
+  // maps `peMin` → request body `eps_ttm_min` etc inside build-filters.ts.
+  //
+  // NO truncation badge needed (unlike IB-L1 country/exchange): each range
+  // is a single number going to a scalar backend field — no IN-list contract
+  // gap to disclose.
+  //
+  // Six numeric ranges:
+  avgVolume30dMin?: number;
+  avgVolume30dMax?: number;
+  epsTtmMin?: number;
+  epsTtmMax?: number;
+  freeCashFlowMin?: number;
+  freeCashFlowMax?: number;
+  fcfMarginMin?: number;       // decimal (0.10 = 10%) — same convention as roeMin
+  fcfMarginMax?: number;
+  interestCoverageMin?: number; // multiple (e.g. 2.0 = 2×)
+  interestCoverageMax?: number;
+  netDebtToEbitdaMin?: number;  // multiple; negative = net cash position
+  netDebtToEbitdaMax?: number;
+
+  // ── Credit rating multi-select (T-IB-07) ─────────────────────────────────
+  // WHY an array (not single value): unlike country/exchange, the Wave L-2
+  // backend natively accepts `credit_ratings: list[str]` and runs an IN(...)
+  // predicate (fundamental_metrics_query.py:340). So multi-select round-trips
+  // intact end-to-end — no badge / truncation disclosure required.
+  // Empty array OR undefined = no filter; serialise as undefined in build.
+  creditRatings?: string[];
 }
 
 /** DEFAULT_FILTERS — used by the page initial state and the Reset button. */

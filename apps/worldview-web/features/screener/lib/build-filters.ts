@@ -124,6 +124,42 @@ export function buildScreenerFilters(f: FilterState): ScreenerFilter[] {
     }
   }
 
+  // ── PRD-0089 Wave I-B Block IB-L2 (T-IB-06/07) — snapshot ranges + credit ──
+  // Wave L-2 backend (commit e1a0193f) accepts the seven new attribute
+  // fields on `ScreenFilterRequest` and dedupes their predicates across
+  // multiple repeated filter entries (see fundamental_metrics_query.py:317).
+  // Same pattern as Wave L-1: we collapse all L-2 attributes onto the FIRST
+  // existing filter (or synthesise a market_capitalization carrier if no
+  // numeric range filter is set). credit_ratings round-trips as an array —
+  // no truncation disclosure (backend natively does IN(...) on the list).
+  const l2Patch: Record<string, unknown> = {};
+  if (f.avgVolume30dMin !== undefined) l2Patch.avg_volume_30d_min = f.avgVolume30dMin;
+  if (f.avgVolume30dMax !== undefined) l2Patch.avg_volume_30d_max = f.avgVolume30dMax;
+  if (f.epsTtmMin !== undefined) l2Patch.eps_ttm_min = f.epsTtmMin;
+  if (f.epsTtmMax !== undefined) l2Patch.eps_ttm_max = f.epsTtmMax;
+  if (f.freeCashFlowMin !== undefined) l2Patch.free_cash_flow_min = f.freeCashFlowMin;
+  if (f.freeCashFlowMax !== undefined) l2Patch.free_cash_flow_max = f.freeCashFlowMax;
+  if (f.fcfMarginMin !== undefined) l2Patch.fcf_margin_min = f.fcfMarginMin;
+  if (f.fcfMarginMax !== undefined) l2Patch.fcf_margin_max = f.fcfMarginMax;
+  if (f.interestCoverageMin !== undefined) l2Patch.interest_coverage_min = f.interestCoverageMin;
+  if (f.interestCoverageMax !== undefined) l2Patch.interest_coverage_max = f.interestCoverageMax;
+  if (f.netDebtToEbitdaMin !== undefined) l2Patch.net_debt_to_ebitda_min = f.netDebtToEbitdaMin;
+  if (f.netDebtToEbitdaMax !== undefined) l2Patch.net_debt_to_ebitda_max = f.netDebtToEbitdaMax;
+  if (f.creditRatings && f.creditRatings.length > 0) {
+    l2Patch.credit_ratings = f.creditRatings;
+  }
+  if (Object.keys(l2Patch).length > 0) {
+    if (filters.length > 0) {
+      filters[0] = { ...filters[0], ...l2Patch };
+    } else {
+      // Synthetic market_capitalization carrier — same pattern as the
+      // categorical block above; S3 accepts a {metric, ...attrs} entry with
+      // no min/max as a pure restriction filter. Keeps filters[] non-empty
+      // when the only restrictions are L-2 attributes.
+      filters.push({ metric: "market_capitalization", ...l2Patch });
+    }
+  }
+
   // WHY no fallback filter when filters is empty: S3 v2 accepts filters:[] and
   // responds with the optimised "no filter" path — LEFT JOINs across key metrics
   // (market_cap, pe_ratio, beta, daily_return, revenue_usd) for ALL instruments.
