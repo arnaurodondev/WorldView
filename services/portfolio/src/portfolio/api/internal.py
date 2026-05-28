@@ -14,7 +14,7 @@ from uuid import UUID
 
 from fastapi import APIRouter, HTTPException, Request
 
-from observability.logging import get_logger  # type: ignore[import-untyped]
+from observability.logging import get_logger  # type: ignore[import-untyped]  # type: ignore[import-untyped]
 from portfolio.api.dependencies import ReadUoWDep, UoWDep
 from portfolio.api.schemas import (
     BatchEntityLookupRequest,

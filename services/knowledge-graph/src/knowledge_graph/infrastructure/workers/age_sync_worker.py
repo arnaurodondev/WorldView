@@ -41,7 +41,7 @@ from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
 
 from sqlalchemy import text
-from sqlalchemy.exc import ProgrammingError
+from sqlalchemy.exc import DBAPIError, ProgrammingError
 
 from common.time import utc_now  # type: ignore[import-untyped]
 from knowledge_graph.infrastructure.metrics.prometheus import (
@@ -79,9 +79,14 @@ _PHASE_WATERMARK_KEYS: dict[str, str] = {
 
 # Source-table watermark column per phase — used by the stall detector.
 _PHASE_SOURCE_TABLES: dict[str, tuple[str, str]] = {
-    _PHASE_ENTITIES: ("canonical_entities", "updated_at"),
-    _PHASE_RELATIONS: ("relations", "updated_at"),
-    _PHASE_TEMPORAL_EVENTS: ("temporal_events", "updated_at"),
+    # F-DB-002 (2026-05-26): schema-qualify with ``public.`` for the two tables
+    # whose unqualified names collide with AGE-internal tables in ag_catalog
+    # (``temporal_events`` and ``entity_event_exposures``). ``canonical_entities``
+    # and ``relations`` are unique to public so qualification is optional, but we
+    # qualify uniformly for clarity and defense-in-depth.
+    _PHASE_ENTITIES: ("public.canonical_entities", "updated_at"),
+    _PHASE_RELATIONS: ("public.relations", "updated_at"),
+    _PHASE_TEMPORAL_EVENTS: ("public.temporal_events", "updated_at"),
 }
 
 _AGE_GRAPH_NAME = "worldview_graph"
@@ -260,26 +265,36 @@ class AgeSyncWorker:
         relations_synced = 0
         temporal_events_synced = 0
 
-        async with self._sf() as session:
-            # T-B-1-01: bootstrap labels on first successful session before
-            # touching any MERGE — once per process lifetime.
-            if self._labels_bootstrap_pending:
-                try:
-                    await self._bootstrap_age_labels(session)
-                    self._labels_bootstrap_pending = False
-                except ProgrammingError as exc:
-                    # AGE extension itself is missing (LOAD 'age' fails) — log
-                    # and skip the whole cycle; mirrors the old F-159 path.
-                    logger.warning(  # type: ignore[no-any-return]
-                        "age_sync_age_unavailable",
-                        error=type(exc).__name__,
-                        message=(
-                            "AGE extension unavailable during label bootstrap — "
-                            "skipping sync cycle; set KNOWLEDGE_GRAPH_CYPHER_ENABLED=false to suppress"
-                        ),
-                    )
-                    return
+        # F-DB-002 (2026-05-26): bootstrap runs in its OWN session that is
+        # disposed before the phase session opens. This eliminates the
+        # ``PendingRollbackError`` that occurred when the bootstrap session's
+        # ``invalidate()`` call left a pending-rollback marker that the
+        # phase-1 ``LOAD 'age'`` hit on the very next execute. A fresh
+        # session = a fresh connection from the pool = no stale plpgsql
+        # schema cache and no pending-rollback state.
+        if self._labels_bootstrap_pending:
+            try:
+                async with self._sf() as bootstrap_session:
+                    await self._bootstrap_age_labels(bootstrap_session)
+                self._labels_bootstrap_pending = False
+            except (ProgrammingError, DBAPIError) as exc:
+                # asyncpg ``InvalidSchemaNameError`` arrives wrapped as
+                # ``DBAPIError`` (not ``ProgrammingError``); both must be
+                # caught so a benign "label already exists" does not crash
+                # the cycle. The inner loop already swallows the idempotent
+                # path via SAVEPOINT — anything that reaches here is a real
+                # AGE-extension or schema problem.
+                logger.warning(  # type: ignore[no-any-return]
+                    "age_sync_age_unavailable",
+                    error=type(exc).__name__,
+                    message=(
+                        "AGE extension unavailable during label bootstrap — "
+                        "skipping sync cycle; set KNOWLEDGE_GRAPH_CYPHER_ENABLED=false to suppress"
+                    ),
+                )
+                return
 
+        async with self._sf() as session:
             # Phase 1 — entities
             entities_synced = await self._run_phase(
                 session=session,
@@ -474,16 +489,30 @@ class AgeSyncWorker:
         ]
         await _setup_age_session(session)
         for stmt in statements:
+            # F-DB-002 (2026-05-26): each create_vlabel/create_elabel runs inside
+            # its own SAVEPOINT so a benign "label already exists" error rolls back
+            # ONLY that statement, not the whole transaction.  Without the
+            # savepoint the first DBAPIError aborts the surrounding transaction,
+            # and every subsequent statement raises ``InFailedSQLTransactionError``
+            # — which does NOT contain "already exists", so the message check
+            # below would re-raise it and bootstrap would crash with no
+            # ``TemporalEvent`` vlabel ever being created (the original 0/14,822
+            # silent-drop pattern).
+            #
+            # Also: ``asyncpg.exceptions.InvalidSchemaNameError`` is NOT a subclass
+            # of asyncpg's ``ProgrammingError``; SQLAlchemy wraps it as plain
+            # ``DBAPIError``, so we catch both classes.
             try:
-                # Static graph name + whitelist-validated labels — no user input.
-                await session.execute(text(stmt))
-            except ProgrammingError as exc:
-                # "label already exists" is the desired idempotent path.
+                async with session.begin_nested():
+                    # Static graph name + whitelist-validated labels — no user input.
+                    await session.execute(text(stmt))
+            except (ProgrammingError, DBAPIError) as exc:
                 msg = str(exc).lower()
                 if "already exists" in msg:
+                    # Idempotent success path — savepoint already rolled back.
                     continue
-                # Any other ProgrammingError (e.g. AGE extension missing) is
-                # propagated so run() can mark the cycle skipped.
+                # Any other error (e.g. AGE extension missing) is propagated
+                # so run() can mark the cycle skipped.
                 raise
         await session.commit()
         # BP-574 / PLAN-0096 W3 T-W3-01 — invalidate the underlying connection
@@ -612,7 +641,7 @@ class AgeSyncWorker:
             rows = await session.execute(
                 text(
                     "SELECT entity_id, canonical_name, entity_type, ticker, updated_at"
-                    " FROM canonical_entities"
+                    " FROM public.canonical_entities"  # F-DB-002: schema-qualify to avoid ag_catalog collision
                     " WHERE updated_at > :since"
                     " ORDER BY updated_at ASC"
                     " LIMIT :lim OFFSET :off",
@@ -661,7 +690,7 @@ class AgeSyncWorker:
                 text(
                     "SELECT relation_id, subject_entity_id, object_entity_id,"
                     "       canonical_type, COALESCE(confidence, 0.0) AS confidence, updated_at"
-                    " FROM relations"
+                    " FROM public.relations"  # F-DB-002: schema-qualify to avoid ag_catalog collision
                     " WHERE updated_at > :since"
                     # BP-539: include NULL-confidence relations (provisional evidence not yet resolved).
                     # COALESCE above maps NULL→0.0 so the AGE edge gets a valid confidence float.
@@ -725,13 +754,22 @@ class AgeSyncWorker:
         events_total = 0
         exposures_total = 0
 
-        # 1. TemporalEvent vertices — paginated
+        # 1. TemporalEvent vertices — paginated.
+        # F-DB-002 (2026-05-26): MUST schema-qualify with ``public.`` because
+        # Apache AGE installs identically-named tables (``temporal_events`` and
+        # ``entity_event_exposures``) into its own ``ag_catalog`` schema. Our
+        # session has ``search_path = ag_catalog, "$user", public`` (required
+        # for the ``cypher()`` function), so unqualified ``temporal_events``
+        # resolves to AGE's empty internal table, producing the F-DB-002
+        # silent 0/15,342 sync. Same hazard for ``entity_event_exposures``
+        # below. ``canonical_entities`` and ``relations`` are NOT affected
+        # because they only exist in ``public``.
         offset = 0
         while True:
             rows = await session.execute(
                 text(
                     "SELECT event_id, event_type, scope, region, title, confidence, updated_at"
-                    " FROM temporal_events"
+                    " FROM public.temporal_events"
                     " WHERE updated_at > :since"
                     " ORDER BY updated_at ASC, event_id ASC"
                     " LIMIT :lim OFFSET :off",
@@ -764,8 +802,12 @@ class AgeSyncWorker:
         while True:
             exp_rows = await session.execute(
                 text(
+                    # F-DB-002: schema-qualified — see comment on the
+                    # temporal_events SELECT above. ``entity_event_exposures``
+                    # also exists in ``ag_catalog`` (AGE-internal) and would
+                    # silently return 0 rows on the AGE-qualified search_path.
                     "SELECT exposure_id, event_id, entity_id, exposure_type, confidence"
-                    " FROM entity_event_exposures"
+                    " FROM public.entity_event_exposures"
                     " WHERE created_at > :since"
                     " ORDER BY created_at ASC, exposure_id ASC"
                     " LIMIT :lim OFFSET :off",

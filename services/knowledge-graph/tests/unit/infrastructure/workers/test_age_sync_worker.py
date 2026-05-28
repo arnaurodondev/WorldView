@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import asyncio
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
@@ -89,6 +90,20 @@ def _make_result(rows: list[Any], *, scalar: int | None = None) -> Any:
     return result
 
 
+def _make_nested_txn() -> Any:
+    """Build a mock SAVEPOINT context manager.
+
+    F-DB-002 (2026-05-26): the bootstrap now wraps each ``create_vlabel`` /
+    ``create_elabel`` in ``async with session.begin_nested()`` so that
+    "already exists" errors roll back only that statement, not the whole
+    transaction. Tests need an awaitable async-context-manager mock.
+    """
+    nested = AsyncMock()
+    nested.__aenter__ = AsyncMock(return_value=nested)
+    nested.__aexit__ = AsyncMock(return_value=False)
+    return nested
+
+
 def _make_session(execute_results: list[Any] | None = None) -> Any:
     """Build a mock AsyncSession with configurable execute return values."""
     session = AsyncMock()
@@ -96,6 +111,11 @@ def _make_session(execute_results: list[Any] | None = None) -> Any:
     session.__aexit__ = AsyncMock(return_value=False)
     session.commit = AsyncMock()
     session.rollback = AsyncMock()
+    # F-DB-002: each label bootstrap statement runs in its own SAVEPOINT.
+    # The default mock returns a fresh nested-txn ctx manager per call so the
+    # ``async with session.begin_nested():`` lines work even when execute()
+    # raises inside the block.
+    session.begin_nested = MagicMock(side_effect=lambda: _make_nested_txn())
 
     if execute_results is not None:
         results = [_make_result(rows) if isinstance(rows, list) else rows for rows in execute_results]
@@ -465,6 +485,7 @@ class TestLabelBootstrap:
         session.__aexit__ = AsyncMock(return_value=False)
         session.commit = AsyncMock()
         session.rollback = AsyncMock()
+        session.begin_nested = MagicMock(side_effect=lambda: _make_nested_txn())
 
         calls: list[Any] = []
 
@@ -479,6 +500,49 @@ class TestLabelBootstrap:
 
         worker = _build_worker(session, valkey)
         # Must not raise.
+        asyncio.run(worker.run())
+        assert worker._labels_bootstrap_pending is False
+
+    def test_bootstrap_swallows_dbapi_error_already_exists(self) -> None:
+        """F-DB-002 (2026-05-26) — asyncpg raises ``InvalidSchemaNameError`` for
+        "label already exists", which is NOT a subclass of asyncpg's
+        ``ProgrammingError``. SQLAlchemy therefore wraps it as ``DBAPIError``,
+        not ``ProgrammingError``. The bootstrap must catch both types so that
+        idempotent re-runs against a graph where the ``entity`` vlabel was
+        created by an earlier code path do not crash before
+        ``TemporalEvent`` is created. Without this fix, every sync cycle silently
+        crashed in bootstrap, leaving 0/14,822 temporal events synced.
+        """
+        from sqlalchemy.exc import DBAPIError
+
+        valkey = _make_valkey()
+
+        session = AsyncMock()
+        session.__aenter__ = AsyncMock(return_value=session)
+        session.__aexit__ = AsyncMock(return_value=False)
+        session.commit = AsyncMock()
+        session.rollback = AsyncMock()
+        session.begin_nested = MagicMock(side_effect=lambda: _make_nested_txn())
+
+        async def _execute(stmt: Any, params: Any = None) -> Any:
+            sql = str(stmt)
+            # Production case: ``create_vlabel('worldview_graph', 'entity')``
+            # raises ``InvalidSchemaNameError`` wrapped as ``DBAPIError`` when
+            # the label already exists (was created by an earlier seed).
+            if "create_vlabel" in sql and "entity" in sql and "TemporalEvent" not in sql:
+                raise DBAPIError(
+                    "INSERT INTO ag_label",
+                    params={},
+                    orig=Exception(
+                        "<class 'asyncpg.exceptions.InvalidSchemaNameError'>: " 'label "entity" already exists',
+                    ),
+                )
+            return _make_result([])
+
+        session.execute = AsyncMock(side_effect=_execute)
+
+        worker = _build_worker(session, valkey)
+        # Must not raise: the DBAPIError("already exists") is the idempotent path.
         asyncio.run(worker.run())
         assert worker._labels_bootstrap_pending is False
 
@@ -583,6 +647,49 @@ class TestLabelBootstrap:
         # Must not raise — invalidate failure is swallowed and logged.
         asyncio.run(worker.run())
         assert worker._labels_bootstrap_pending is False
+
+
+class TestSchemaQualification:
+    """F-DB-002 (2026-05-26) — every SQL query against the relational tables
+    MUST be schema-qualified with ``public.`` because Apache AGE installs
+    identically-named ``temporal_events`` and ``entity_event_exposures`` tables
+    into its ``ag_catalog`` schema, and our session's ``search_path`` puts
+    ``ag_catalog`` before ``public``. Without qualification the worker silently
+    queries empty AGE-internal tables and reports ``synced_count=0`` despite
+    thousands of relational rows.
+    """
+
+    def test_temporal_events_query_is_schema_qualified(self) -> None:
+        """``_sync_temporal_events`` must SELECT from ``public.temporal_events``."""
+        from knowledge_graph.infrastructure.workers import age_sync_worker as mod
+
+        source = Path(mod.__file__).read_text(encoding="utf-8")
+        # Negative assertion first — the bug was the unqualified form.
+        assert " FROM temporal_events" not in source, (
+            "F-DB-002 regression: unqualified ``FROM temporal_events`` collides "
+            "with ag_catalog.temporal_events when AGE search_path is active"
+        )
+        assert "FROM public.temporal_events" in source
+
+    def test_entity_event_exposures_query_is_schema_qualified(self) -> None:
+        """``_sync_temporal_events`` must SELECT from ``public.entity_event_exposures``."""
+        from knowledge_graph.infrastructure.workers import age_sync_worker as mod
+
+        source = Path(mod.__file__).read_text(encoding="utf-8")
+        assert " FROM entity_event_exposures" not in source, (
+            "F-DB-002 regression: unqualified ``FROM entity_event_exposures`` "
+            "collides with ag_catalog.entity_event_exposures"
+        )
+        assert "FROM public.entity_event_exposures" in source
+
+    def test_phase_source_tables_use_public_schema(self) -> None:
+        """The stall detector's source-table whitelist must use ``public.``."""
+        from knowledge_graph.infrastructure.workers.age_sync_worker import (
+            _PHASE_SOURCE_TABLES,
+        )
+
+        for phase, (table, _ts) in _PHASE_SOURCE_TABLES.items():
+            assert table.startswith("public."), f"F-DB-002: phase '{phase}' table '{table}' is not schema-qualified"
 
 
 @pytest.mark.integration
@@ -698,13 +805,13 @@ class TestAgeSyncWorkerEntities:
             if "COUNT(*)" in sql:
                 return _make_result([], scalar=0)
             # Entity SELECT
-            if "FROM canonical_entities" in sql:
+            if "FROM public.canonical_entities" in sql:
                 return _make_result([entity_row])
             # Relation SELECT
-            if "FROM relations" in sql:
+            if "FROM public.relations" in sql:
                 return _make_result([])
             # Temporal SELECTs
-            if "FROM temporal_events" in sql or "FROM entity_event_exposures" in sql:
+            if "FROM public.temporal_events" in sql or "FROM public.entity_event_exposures" in sql:
                 return _make_result([])
             # Cypher MERGEs — capture for assertion
             if "cypher" in sql and "MERGE" in sql:
@@ -748,7 +855,7 @@ class TestAgeSyncWorkerEntities:
             sql = str(stmt)
             if "COUNT(*)" in sql:
                 return _make_result([], scalar=0)
-            if "FROM canonical_entities" in sql:
+            if "FROM public.canonical_entities" in sql:
                 return _make_result([entity_row])
             return _make_result([])
 
@@ -780,11 +887,11 @@ class TestAgeSyncWorkerRelations:
             sql = str(stmt)
             if "COUNT(*)" in sql:
                 return _make_result([], scalar=0)
-            if "FROM canonical_entities" in sql:
+            if "FROM public.canonical_entities" in sql:
                 return _make_result([])
-            if "FROM relations" in sql:
+            if "FROM public.relations" in sql:
                 return _make_result([relation_row])
-            if "FROM temporal_events" in sql or "FROM entity_event_exposures" in sql:
+            if "FROM public.temporal_events" in sql or "FROM public.entity_event_exposures" in sql:
                 return _make_result([])
             if "cypher" in sql and "MERGE" in sql:
                 cypher_calls.append(sql)
@@ -814,11 +921,11 @@ class TestAgeSyncWorkerRelations:
             sql = str(stmt)
             if "COUNT(*)" in sql:
                 return _make_result([], scalar=0)
-            if "FROM canonical_entities" in sql:
+            if "FROM public.canonical_entities" in sql:
                 return _make_result([])
-            if "FROM relations" in sql:
+            if "FROM public.relations" in sql:
                 return _make_result([relation_row])
-            if "FROM temporal_events" in sql or "FROM entity_event_exposures" in sql:
+            if "FROM public.temporal_events" in sql or "FROM public.entity_event_exposures" in sql:
                 return _make_result([])
             if "cypher" in sql and "MERGE" in sql:
                 cypher_calls.append(sql)
@@ -849,11 +956,11 @@ class TestAgeSyncWorkerRelations:
             sql = str(stmt)
             if "COUNT(*)" in sql:
                 return _make_result([], scalar=0)
-            if "FROM canonical_entities" in sql:
+            if "FROM public.canonical_entities" in sql:
                 return _make_result([])
-            if "FROM relations" in sql:
+            if "FROM public.relations" in sql:
                 return _make_result([relation_row])
-            if "FROM temporal_events" in sql or "FROM entity_event_exposures" in sql:
+            if "FROM public.temporal_events" in sql or "FROM public.entity_event_exposures" in sql:
                 return _make_result([])
             return _make_result([])
 
@@ -972,13 +1079,13 @@ class TestSyncTemporalEventsPagination:
             sql = str(stmt)
             if "COUNT(*)" in sql:
                 return _make_result([], scalar=0)
-            if "FROM temporal_events" in sql:
+            if "FROM public.temporal_events" in sql:
                 temporal_selects += 1
                 # Only return the row on the FIRST SELECT, empty thereafter.
                 return _make_result([event_row] if temporal_selects == 1 else [])
-            if "FROM entity_event_exposures" in sql:
+            if "FROM public.entity_event_exposures" in sql:
                 return _make_result([])
-            if "FROM canonical_entities" in sql or "FROM relations" in sql:
+            if "FROM public.canonical_entities" in sql or "FROM public.relations" in sql:
                 return _make_result([])
             return _make_result([])
 
@@ -1011,11 +1118,11 @@ class TestSyncTemporalEventsPagination:
             sql = str(stmt)
             if "COUNT(*)" in sql:
                 return _make_result([], scalar=0)
-            if "FROM temporal_events" in sql:
+            if "FROM public.temporal_events" in sql:
                 return _make_result([event_row])
-            if "FROM entity_event_exposures" in sql:
+            if "FROM public.entity_event_exposures" in sql:
                 return _make_result([])
-            if "FROM canonical_entities" in sql or "FROM relations" in sql:
+            if "FROM public.canonical_entities" in sql or "FROM public.relations" in sql:
                 return _make_result([])
             if "TemporalEvent" in sql and "MERGE" in sql:
                 captured.append((sql, params))
@@ -1200,11 +1307,11 @@ class TestNullConfidenceRelationSync:
             sql = str(stmt)
             if "COUNT(*)" in sql:
                 return _make_result([], scalar=0)
-            if "FROM canonical_entities" in sql:
+            if "FROM public.canonical_entities" in sql:
                 return _make_result([])
-            if "FROM relations" in sql:
+            if "FROM public.relations" in sql:
                 return _make_result([relation_row])
-            if "FROM temporal_events" in sql or "FROM entity_event_exposures" in sql:
+            if "FROM public.temporal_events" in sql or "FROM public.entity_event_exposures" in sql:
                 return _make_result([])
             if "COMPETES_WITH" in sql:
                 captured.append((sql, params))

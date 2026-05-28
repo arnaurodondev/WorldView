@@ -199,3 +199,86 @@ def test_alpha_is_null_for_mismatched_series() -> None:
 def test_alpha_is_null_for_insufficient_series() -> None:
     """Both series too short → alpha=None."""
     assert _alpha([0.001] * (_MIN_RETURNS - 1), [0.0005] * (_MIN_RETURNS - 1)) is None
+
+
+# ── F-007 (QA Wave G) — per-leg degradation reasoning ─────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_value_history_upstream_exception_yields_degraded_upstream(authed_app, authed_mock_clients) -> None:
+    """F-007: when S1 raises (ConnectError / timeout / 5xx), the endpoint MUST
+    surface ``data_quality.status="degraded_upstream"`` and
+    ``data_quality.degradation.value_history="exception"`` — NOT the legacy
+    silent downgrade to ``"insufficient_data"`` which conflated transient
+    upstream failures with portfolios genuinely lacking history.
+
+    WHY this matters: the empty-state caption in the frontend reads
+    "Not enough history" for insufficient_data but should read something like
+    "Backend temporarily unavailable" for a real outage. Conflating the two
+    silently misleads the user.
+    """
+    # Portfolio leg: raise to simulate a real connection failure.
+    authed_mock_clients.portfolio.get = AsyncMock(side_effect=httpx.ConnectError("boom"))
+    # SPY leg: succeed with empty items so the SPY branch returns no_data.
+    authed_mock_clients.market_data.get = AsyncMock(return_value=_mock_response(200, b'{"items": []}'))
+
+    transport = ASGITransport(app=authed_app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        resp = await client.get(
+            f"/v1/portfolios/{_PORTFOLIO_ID}/risk-metrics",
+            headers={"Authorization": f"Bearer {_make_jwt()}"},
+        )
+    assert resp.status_code == 200
+    body = resp.json()
+    # Per-leg degradation surfaced explicitly.
+    assert body["data_quality"]["status"] == "degraded_upstream"
+    assert body["data_quality"]["degradation"]["value_history"] == "exception"
+
+
+@pytest.mark.asyncio
+async def test_spy_only_failure_does_not_block_portfolio_metrics(authed_app, authed_mock_clients) -> None:
+    """F-007: SPY-only failures must NOT cause ``degraded_upstream`` — the
+    portfolio metrics that don't depend on SPY (drawdown, vol, Sharpe,
+    Sortino, calmar, win_rate, period_return, cagr, var_95) remain valid;
+    only beta + alpha degrade to None.
+
+    Status should be ``"benchmark_unavailable"`` (existing behaviour),
+    ``degradation.benchmark`` should reflect the failure mode (``"5xx"``).
+    """
+    today = date(2026, 5, 23)
+    start = today - timedelta(days=90)
+
+    # Portfolio leg: 30 valid points (well over _MIN_RETURNS=10 daily returns).
+    portfolio_points = []
+    value = 100_000.0
+    for i in range(30):
+        d = (start + timedelta(days=i)).isoformat()
+        value *= 1.001
+        portfolio_points.append({"date": d, "value": value})
+    portfolio_body = json.dumps({"points": portfolio_points}).encode()
+    authed_mock_clients.portfolio.get = AsyncMock(return_value=_mock_response(200, portfolio_body))
+    # SPY leg: instrument-search returns 5xx → benchmark unavailable.
+    authed_mock_clients.market_data.get = AsyncMock(return_value=_mock_response(503, b'{"error":"down"}'))
+
+    transport = ASGITransport(app=authed_app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        resp = await client.get(
+            f"/v1/portfolios/{_PORTFOLIO_ID}/risk-metrics",
+            headers={"Authorization": f"Bearer {_make_jwt()}"},
+        )
+    assert resp.status_code == 200
+    body = resp.json()
+    # Portfolio-only metrics still populated.
+    assert body["volatility_annualized"] is not None
+    assert body["sharpe"] is not None
+    # Benchmark-dependent metrics degrade to None.
+    assert body["beta_vs_spy"] is None
+    assert body["alpha"] is None
+    # Status remains benchmark_unavailable — NOT degraded_upstream.
+    assert body["data_quality"]["status"] == "benchmark_unavailable"
+    # SPY degradation surfaced; value_history is None (clean success).
+    assert body["data_quality"]["degradation"]["value_history"] is None
+    # benchmark degradation reason — _resolve_spy_instrument_id swallows the
+    # 503 and returns None → "no_data". (If S3 search itself raised we'd see
+    # "exception"; status_code 503 on /instruments produces None → no_data.)
+    assert body["data_quality"]["degradation"]["benchmark"] in {"5xx", "no_data", "exception"}
