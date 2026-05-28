@@ -152,7 +152,12 @@ JOIN LATERAL (
     LIMIT 1
 ) prev ON true
 WHERE i.has_ohlcv = true
-  AND (:start_id IS NULL OR i.id > CAST(:start_id AS uuid))
+  -- BP-180: asyncpg cannot infer the type of `:start_id` when it appears as a
+  -- bare parameter on the IS NULL side of an OR (the planner sees no column
+  -- context). The cast MUST wrap both sides of the OR so asyncpg infers uuid
+  -- even when the value is None — otherwise the predicate fails silently and
+  -- the cursor scan returns zero rows (the bug this commit fixes).
+  AND (CAST(:start_id AS uuid) IS NULL OR i.id > CAST(:start_id AS uuid))
 ORDER BY i.id ASC
 LIMIT :batch_size
 OFFSET :offset
@@ -195,7 +200,7 @@ JOIN LATERAL (
       AND bar_date <= latest.bar_date
 ) window_min ON true
 WHERE i.has_ohlcv = true
-  AND (:start_id IS NULL OR i.id > CAST(:start_id AS uuid))
+  AND (CAST(:start_id AS uuid) IS NULL OR i.id > CAST(:start_id AS uuid))
 ORDER BY i.id ASC
 LIMIT :batch_size
 OFFSET :offset
@@ -234,7 +239,7 @@ JOIN LATERAL (
     LIMIT 1
 ) anchor ON true
 WHERE i.has_ohlcv = true
-  AND (:start_id IS NULL OR i.id > CAST(:start_id AS uuid))
+  AND (CAST(:start_id AS uuid) IS NULL OR i.id > CAST(:start_id AS uuid))
 ORDER BY i.id ASC
 LIMIT :batch_size
 OFFSET :offset
