@@ -535,6 +535,37 @@ Rules:
    that were clean a moment ago MUST stop, report the interference, and
    refuse to continue mutating the tree until isolation is restored.
 
+### R43: Consumer mention-construction sites MUST default null tenant_id to PUBLIC_TENANT_ID at the persist boundary
+**Why**: PLAN-0098 W2 + PLAN-0099 W4 showed that even when upstream envelopes correctly
+carry the `PUBLIC_TENANT_ID` sentinel (R40), a deep extraction path can silently drop
+or fail to propagate it — causing the downstream `NOT NULL` invariant on
+`entity_mentions.tenant_id` to fire only at the persist boundary, after hours of
+ingestion lag. BP-575 documented the original silent-drop (sentinel never reached the
+extractor); BP-586 documented the safety-net pattern that emerged in
+`article_consumer.py:585` (`_stamp_tenant = tenant_id or PUBLIC_TENANT_ID` at the
+post-NER stamp). The safety net is defense-in-depth, not a substitute for upstream
+correctness, but it MUST exist at every persist site so a future regression in the
+upstream construction path degrades to "rows attributed to PUBLIC" instead of
+"rows silently dropped or worker crashed."
+
+Rules:
+1. Every consumer / worker that constructs `EntityMention` (or any tenant-scoped row)
+   from data that originated outside its own DB MUST evaluate
+   `tenant_id = incoming_tenant_id or PUBLIC_TENANT_ID` at the persist boundary —
+   never trust that the upstream construction site populated the field.
+2. Every such substitution MUST be observable via a Prometheus counter labelled by
+   `block_source` (precedent: `nlp_pipeline_pre_persist_tenant_id_substituted_total`
+   from PLAN-0099 W2 T-W2-04) so SRE can see the safety-net firing rate and decide
+   when the upstream fix (PLAN-0100 §13.4) is overdue.
+3. The persist-boundary guard is documented as a **safety net**, not a fix — every
+   firing counter must produce a follow-up investigation issue (lineage: R40 → R41 →
+   R43) into the upstream construction site that failed to stamp the sentinel.
+
+Lineage: R40 (every tenant-scoped query MUST admit the PUBLIC_TENANT_ID sentinel) and
+R41 (AGE-DDL `rollback() + invalidate()` ordering — same "operational invariant only
+visible at the persist boundary" failure family) precede R43. The long-term fix lives
+in PLAN-0100 §13.4 (upstream `tenant_id=None` source trace).
+
 ---
 
 ## Summary Table
@@ -583,3 +614,4 @@ Rules:
 | R40 | Multi-tenancy | MUST |
 | R41 | Infrastructure | MUST |
 | R42 | Process | MUST |
+| R43 | Multi-tenancy | MUST |
