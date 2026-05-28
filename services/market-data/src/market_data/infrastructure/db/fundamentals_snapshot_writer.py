@@ -26,6 +26,8 @@ DESIGN DECISIONS:
 
 from __future__ import annotations
 
+from datetime import date as _date_cls
+from datetime import datetime
 from decimal import Decimal, InvalidOperation
 from typing import TYPE_CHECKING, Any
 
@@ -87,6 +89,44 @@ def _try_keys(data: dict[str, Any], *keys: str) -> float | None:
     return None
 
 
+# ── Date parsing helper (PLAN-0089 Wave L-5c) ────────────────────────────────
+
+
+def _safe_date(val: Any, label: str = "") -> _date_cls | None:
+    """Coerce a JSONB value to a python ``date``; return None on failure.
+
+    EODHD reports dates as ISO-8601 strings (``"2026-02-12"``). Older payloads
+    occasionally embed an ISO datetime (``"2026-02-12T00:00:00"``). Both
+    parse identically via ``datetime.fromisoformat`` (Python 3.11+ accepts
+    bare ``YYYY-MM-DD``).
+
+    NULL semantics:
+      * Empty string / None / common sentinel values → None.
+      * Already-a-date / already-a-datetime → coerced cleanly.
+      * Unparseable strings → None with a debug log (consistent with
+        ``_safe_float``'s policy of "log and continue").
+    """
+    if val is None:
+        return None
+    if isinstance(val, _date_cls) and not isinstance(val, datetime):
+        return val
+    if isinstance(val, datetime):
+        return val.date()
+    if isinstance(val, str):
+        cleaned = val.strip()
+        if cleaned.lower() in {"", "n/a", "na", "none", "null", "0000-00-00", "-"}:
+            return None
+        # Strip any trailing time portion to be defensive against EODHD
+        # mixing "2026-02-12" and "2026-02-12T00:00:00" in the same payload.
+        try:
+            return datetime.fromisoformat(cleaned).date()
+        except ValueError:
+            if label:
+                logger.debug("snapshot_writer.date_coerce_failed", label=label, raw=cleaned[:50])
+            return None
+    return None
+
+
 def _most_recent_financial_row(section_data: Any) -> dict[str, Any]:
     """Extract the most recent row from a nested financial statement section.
 
@@ -144,18 +184,24 @@ def derive_fundamentals_snapshot(
     income: dict[str, Any],
     balance: dict[str, Any],
     technicals: dict[str, Any],
+    splits_dividends: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Compute all 10 snapshot fields from EODHD section data.
+    """Compute all snapshot fields from EODHD section data.
 
     Args:
-        highlights:  Contents of the ``highlights`` section (flat dict).
-        cash_flow:   Most-recent row from ``cash_flow`` financial statement.
-        income:      Most-recent row from ``income_statement`` financial statement.
-        balance:     Most-recent row from ``balance_sheet`` financial statement.
-        technicals:  Contents of the ``technicals_snapshot`` section (flat dict).
+        highlights:       Contents of the ``highlights`` section (flat dict).
+        cash_flow:        Most-recent row from ``cash_flow`` financial statement.
+        income:           Most-recent row from ``income_statement`` financial statement.
+        balance:          Most-recent row from ``balance_sheet`` financial statement.
+        technicals:       Contents of the ``technicals_snapshot`` section (flat dict).
+        splits_dividends: Contents of the ``splits_dividends`` section (flat dict).
+                          Wave L-5c: source for ``next_dividend_date``.
+                          Optional + defaulted to ``None`` for backward
+                          compatibility — older callers that pass only the
+                          five original sections keep working.
 
     Returns a dict with keys matching the ``instrument_fundamentals_snapshot``
-    columns.  Values are Python int/float/str or None.
+    columns.  Values are Python int/float/str/date or None.
     """
     # ── EPS TTM ───────────────────────────────────────────────────────────────
     eps_ttm = _try_keys(highlights, "EarningsShare", "DilutedEpsTTM", "eps", "EPS")
@@ -220,6 +266,20 @@ def derive_fundamentals_snapshot(
     # Documented limitation — always NULL until a future data provider is wired.
     credit_rating: str | None = None
 
+    # ── Next Dividend Date (Wave L-5c) ────────────────────────────────────────
+    # EODHD ``SplitsDividends`` carries two relevant fields:
+    #   * ``DividendDate``    — next *payment* date (preferred for UI).
+    #   * ``ExDividendDate``  — next *ex-dividend* date (fallback).
+    # We prefer the payment date because the screener UX is "when does the
+    # company next pay a dividend" — but the ex-div date is a strict
+    # ordering-equivalent fallback (always within a few days of payment).
+    # ETFs / non-dividend payers / corrupt rows all resolve to None.
+    next_dividend_date: _date_cls | None = None
+    if splits_dividends:
+        next_dividend_date = _safe_date(splits_dividends.get("DividendDate"), label="DividendDate")
+        if next_dividend_date is None:
+            next_dividend_date = _safe_date(splits_dividends.get("ExDividendDate"), label="ExDividendDate")
+
     return {
         "eps_ttm": eps_ttm,
         "beta": beta,
@@ -231,7 +291,43 @@ def derive_fundamentals_snapshot(
         "interest_coverage": interest_coverage,
         "net_debt_to_ebitda": net_debt_to_ebitda,
         "credit_rating": credit_rating,
+        # Wave L-5c — populated from EODHD splits_dividends section. Earnings
+        # date is NOT populated here because it requires a DB lookup against
+        # ``earnings_calendar`` — see :func:`fetch_next_earnings_date`.
+        "next_dividend_date": next_dividend_date,
     }
+
+
+# ── Earnings calendar lookup (PLAN-0089 Wave L-5c) ───────────────────────────
+
+# Read-only SELECT against the ``earnings_calendar`` table — used by the
+# snapshot writer to populate ``instrument_fundamentals_snapshot.next_earnings_date``.
+#
+# Until Wave L-5b lands the worker that populates ``earnings_calendar`` is
+# deferred, so this query typically returns NULL today. We still wire the
+# read so that on the day L-5b ships, the screener column auto-populates
+# without any further code change.
+_NEXT_EARNINGS_SQL = text(
+    "SELECT MIN(report_date) AS next_date FROM earnings_calendar "
+    "WHERE instrument_id = :iid AND report_date >= CURRENT_DATE"
+)
+
+
+async def fetch_next_earnings_date(session: AsyncSession, instrument_id: str) -> _date_cls | None:
+    """Return the next future ``report_date`` from ``earnings_calendar``.
+
+    Returns ``None`` when no future row exists for the instrument (the
+    typical case until L-5b ships and starts populating the table).
+
+    R12: stays in the infrastructure layer — uses ``AsyncSession`` directly,
+    no domain repository indirection because this is a single-cell lookup.
+    """
+    row = (await session.execute(_NEXT_EARNINGS_SQL, {"iid": instrument_id})).one_or_none()
+    if row is None or row.next_date is None:
+        return None
+    # SQLAlchemy returns python ``date`` for PG DATE; trust the type.
+    next_date: _date_cls = row.next_date
+    return next_date
 
 
 # ── DB write helper ───────────────────────────────────────────────────────────
@@ -243,6 +339,7 @@ _UPSERT_SQL = text("""
         operating_cash_flow, capex, free_cash_flow, fcf_margin,
         interest_coverage, net_debt_to_ebitda, credit_rating,
         period_type_income, period_type_cash_flow, period_type_balance,
+        next_earnings_date, next_dividend_date,
         updated_at
     ) VALUES (
         :instrument_id,
@@ -250,6 +347,7 @@ _UPSERT_SQL = text("""
         :operating_cash_flow, :capex, :free_cash_flow, :fcf_margin,
         :interest_coverage, :net_debt_to_ebitda, :credit_rating,
         :period_type_income, :period_type_cash_flow, :period_type_balance,
+        :next_earnings_date, :next_dividend_date,
         now()
     )
     ON CONFLICT (instrument_id) DO UPDATE SET
@@ -295,6 +393,14 @@ _UPSERT_SQL = text("""
                                instrument_fundamentals_snapshot.period_type_cash_flow),
         period_type_balance   = COALESCE(EXCLUDED.period_type_balance,
                                instrument_fundamentals_snapshot.period_type_balance),
+        -- PLAN-0089 Wave L-5c: calendar fields use the same COALESCE policy as
+        -- every other field — a partial payload (no splits_dividends section,
+        -- or no earnings_calendar row this cycle) must not silently clobber
+        -- a previously-recorded value with NULL.
+        next_earnings_date  = COALESCE(EXCLUDED.next_earnings_date,
+                               instrument_fundamentals_snapshot.next_earnings_date),
+        next_dividend_date  = COALESCE(EXCLUDED.next_dividend_date,
+                               instrument_fundamentals_snapshot.next_dividend_date),
         updated_at          = now()
 """)
 
@@ -333,5 +439,9 @@ async def upsert_snapshot(session: AsyncSession, instrument_id: str, snap: dict[
             "period_type_income": snap.get("period_type_income"),
             "period_type_cash_flow": snap.get("period_type_cash_flow"),
             "period_type_balance": snap.get("period_type_balance"),
+            # Wave L-5c — both default to None, the COALESCE-based UPSERT
+            # policy preserves previously-recorded values on partial payloads.
+            "next_earnings_date": snap.get("next_earnings_date"),
+            "next_dividend_date": snap.get("next_dividend_date"),
         },
     )

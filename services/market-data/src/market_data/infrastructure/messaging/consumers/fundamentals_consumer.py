@@ -17,6 +17,7 @@ from market_data.domain.value_objects import InstrumentFlags
 from market_data.infrastructure.db.fundamentals_snapshot_writer import (
     _most_recent_financial_row_with_period,
     derive_fundamentals_snapshot,
+    fetch_next_earnings_date,
     upsert_snapshot,
 )
 from market_data.infrastructure.db.metric_extractor import extract_metrics
@@ -631,9 +632,15 @@ class FundamentalsConsumer(ValkeyDedupMixin, BaseKafkaConsumer[dict]):
         snap_income, _pt_income = _most_recent_financial_row_with_period(payload.get("income_statement"))
         snap_balance, _pt_balance = _most_recent_financial_row_with_period(payload.get("balance_sheet"))
         snap_technicals = payload.get("technicals_snapshot") or {}
+        # PLAN-0089 Wave L-5c: pass the splits_dividends section so the
+        # snapshot writer can extract ``next_dividend_date`` from EODHD
+        # ``SplitsDividends.DividendDate``. Absent on ETFs / non-payers.
+        snap_splits_dividends = payload.get("splits_dividends") or {}
 
         # Only derive + upsert when at least one source section is present
-        if not (snap_highlights or snap_cash_flow or snap_income or snap_balance or snap_technicals):
+        if not (
+            snap_highlights or snap_cash_flow or snap_income or snap_balance or snap_technicals or snap_splits_dividends
+        ):
             return
 
         snap = derive_fundamentals_snapshot(
@@ -642,6 +649,7 @@ class FundamentalsConsumer(ValkeyDedupMixin, BaseKafkaConsumer[dict]):
             income=snap_income,
             balance=snap_balance,
             technicals=snap_technicals,
+            splits_dividends=snap_splits_dividends,
         )
         # PLAN-0095 T-W1-04 / BP-542: attach the source periodicity tags so the
         # writer persists them into instrument_fundamentals_snapshot.period_type_*.
@@ -678,6 +686,22 @@ class FundamentalsConsumer(ValkeyDedupMixin, BaseKafkaConsumer[dict]):
             ).one_or_none()
             if row and row.avg_vol is not None:
                 snap = {**snap, "avg_volume_30d": int(row.avg_vol)}
+
+        # PLAN-0089 Wave L-5c: look up the next future earnings report date
+        # in the ``earnings_calendar`` table (best-effort). Until L-5b ships
+        # the worker that populates this table, the query typically returns
+        # NULL — that is correct and the COALESCE-based UPSERT preserves any
+        # previously-recorded value.
+        try:
+            next_earn = await fetch_next_earnings_date(write_session_fn(), instrument_id)
+        except Exception as exc:  # — best-effort lookup; never fail the snapshot
+            logger.debug(
+                "fundamentals_consumer.next_earnings_lookup_failed",
+                instrument_id=instrument_id,
+                error=str(exc),
+            )
+            next_earn = None
+        snap = {**snap, "next_earnings_date": next_earn}
 
         await upsert_snapshot(write_session_fn(), instrument_id, snap)
         logger.info(
