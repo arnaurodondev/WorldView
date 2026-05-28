@@ -509,6 +509,32 @@ Pre-existing code commits that reference this rule by its plan name ("R36")
 refer to this same rule — R41 is the canonical RULES.md number (R36 was
 already taken by the LLM tool-call envelope rule, see above).
 
+### R42: Parallel Claude Code sessions MUST use isolated `git worktree` checkouts
+**Why**: PLAN-0089 Wave K (2026-05-26) demonstrated that two or more Claude Code
+sessions sharing the same physical Git worktree silently corrupt each other:
+the branch silently switched three times during the wave; one session's
+`git reset HEAD~1` orphaned a sibling session's commit (recovered via reflog,
+with two tasks collapsing into a single later commit); a `git stash pop`
+injected conflict markers into four backend files an agent did not expect;
+and `TRACKING.md` edits that returned success were overwritten seconds later
+by another session. The shared `.git/index` and the shared working tree are
+the corruption surface — none of these symptoms are reproducible when each
+session has its own checkout. See BP-590.
+
+Rules:
+1. Any orchestrator (or human) launching more than one concurrent Claude
+   Code session against the same repository MUST allocate a fresh
+   `git worktree add <path> -b <branch>` per session so each agent operates
+   on a private `.git/index` and working tree.
+2. If isolation is genuinely impossible, the parallel sessions MUST serialise
+   destructive operations behind a sentinel file (e.g.
+   `.git/CLAUDE_AGENT_LOCK`) and MUST prefer `git commit` over `git stash`
+   so nothing depends on an unnamed stash entry that a sibling could pop.
+3. An agent that observes commits in `git log` it did not author, an
+   unexpected `HEAD` branch switch, or spontaneous conflict markers in files
+   that were clean a moment ago MUST stop, report the interference, and
+   refuse to continue mutating the tree until isolation is restored.
+
 ---
 
 ## Summary Table
@@ -556,3 +582,4 @@ already taken by the LLM tool-call envelope rule, see above).
 | R39 | Safety | MUST |
 | R40 | Multi-tenancy | MUST |
 | R41 | Infrastructure | MUST |
+| R42 | Process | MUST |

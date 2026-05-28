@@ -192,3 +192,11 @@ See `.claude/evals/EVAL_FRAMEWORK.md` for details.
 3. If the pattern doesn't exist, propose an ADR before implementing
 4. Prefer the simplest solution that maintains architectural invariants
 5. If stuck after 2 attempts, summarize the blocker instead of retrying blindly
+
+---
+
+## Parallel Sessions (R42 / BP-590)
+
+- If you observe commits in `git log` you did not author, an unexpected `HEAD` branch switch, or spontaneous conflict markers in files that were clean a moment ago, **STOP** and report — another agent is mutating this worktree concurrently.
+- Sibling Claude Code sessions MUST run in their own checkout: `git worktree add <path> <branch>` (one worktree per agent). Never share the working tree.
+- Prefer `git commit` over `git stash`; `git stash pop` is a frequent source of cross-session corruption (BP-590) and silent conflict markers.
