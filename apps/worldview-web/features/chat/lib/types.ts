@@ -35,6 +35,19 @@ export interface StreamingMessage {
   message_id?: string;
   /** Contradictions accumulated during this turn (Q-9 side-channel). */
   contradictions?: Array<Record<string, unknown>>;
+  /**
+   * PLAN-0100 W2 T-W2-03 — aggregate pre-tool status badge.
+   *
+   * Emitted by ``chat_orchestrator`` ONCE per turn, right after iteration-0
+   * decides which tools to call. Carries human-readable summary text such
+   * as ``"Loading get_price_history, search_news… (2 more)…"`` so the
+   * streaming bubble can show user-visible feedback within ~1-3s — long
+   * before the synthesised answer's first token arrives.
+   *
+   * Cleared (undefined) on every new ``send()`` call. The badge renders
+   * ABOVE the ``ToolCallTray`` pills; both can be visible at the same time.
+   */
+  initial_status?: string;
 }
 
 /**

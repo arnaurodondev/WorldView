@@ -407,6 +407,183 @@ _FALLBACK_ARG_PROJECTIONS: dict[tuple[str, str], Any] = {
 }
 
 
+# ── BP-604 / BP-605 (PLAN-0100 W1) — entity-drift guards ─────────────────────
+# Both helpers operate on a shared canonical-identifier set built once per turn
+# from (a) the resolved entities, (b) the entity context for the request, and
+# (c) every entity identifier the LLM has surfaced in PRIOR tool inputs. The
+# set is intentionally permissive — we union ticker / name / UUID forms — so a
+# legitimate downstream tool call that names an entity by a different field
+# than the upstream call still passes (e.g. ``search_documents(entity_tickers=
+# ["MSTR"])`` → ``get_entity_intelligence(entity_id="<MSTR-uuid>")``).
+#
+# Rejection produces a STRUCTURED tool-result with status="error", not an
+# exception — the LLM must remain able to recover with a corrected call or
+# refuse honestly to the user. See docs/audits/2026-05-27-plan-0100-q2-mstr-
+# entity-drift-deepdive.md §3 and §4 for the full failure trace.
+
+# Field names on tool inputs that carry entity identifiers (the "typed
+# fields" the guard validates). Anything else — query strings, date ranges,
+# free-text — is NOT validated; the LLM is free to vary those between turns.
+_ENTITY_TYPED_FIELDS: frozenset[str] = frozenset(
+    {"entity_id", "entity_ids", "entity_name", "entity_names", "entity_ticker", "entity_tickers"}
+)
+
+
+def _normalise_entity_identifier(value: Any) -> set[str]:
+    """Flatten any entity-identifier value into a lowercase string set.
+
+    Accepts scalars (UUID, str), lists/tuples of either, or None.  Returns an
+    empty set for unrecognised shapes so the caller never NPE-explodes on
+    malformed LLM output.  Lowercasing makes the comparison case-insensitive,
+    which matches how the entity resolver canonicalises names + tickers.
+    """
+    if value is None:
+        return set()
+    if isinstance(value, list | tuple | set):
+        out: set[str] = set()
+        for v in value:
+            out |= _normalise_entity_identifier(v)
+        return out
+    # UUID, str, anything stringable — collapse to its repr.
+    s = str(value).strip().lower()
+    return {s} if s else set()
+
+
+def _collect_question_entity_identifiers(
+    resolved_entities: list[Any],
+    entity_context: Any,
+) -> set[str]:
+    """Build the canonical id-set for the ORIGINAL question.
+
+    Combines entity_id (UUID str), canonical_name, ticker, and matched_text
+    for every resolved entity, plus the entity_context fields if present.
+    These are the only entities a fallback tool call may name without
+    triggering the BP-604 / BP-605 guards.
+    """
+    ids: set[str] = set()
+    for ent in resolved_entities:
+        ids |= _normalise_entity_identifier(getattr(ent, "entity_id", None))
+        ids |= _normalise_entity_identifier(getattr(ent, "canonical_name", None))
+        ids |= _normalise_entity_identifier(getattr(ent, "ticker", None))
+        ids |= _normalise_entity_identifier(getattr(ent, "matched_text", None))
+    if entity_context is not None:
+        ids |= _normalise_entity_identifier(getattr(entity_context, "entity_id", None))
+        ids |= _normalise_entity_identifier(getattr(entity_context, "ticker", None))
+        ids |= _normalise_entity_identifier(getattr(entity_context, "name", None))
+    return ids
+
+
+def _collect_prior_tool_entity_identifiers(prior_tool_calls: list[Any]) -> set[str]:
+    """Collect every entity identifier the LLM has already named in this turn.
+
+    Walks every prior tool call's ``input`` dict and extracts values from the
+    ``_ENTITY_TYPED_FIELDS`` keys. Used by ``_validate_fallback_tool_call``
+    to admit drift toward an entity the upstream tools legitimately surfaced
+    (e.g. a search result that introduced a peer entity into the conversation).
+    """
+    ids: set[str] = set()
+    for tc in prior_tool_calls:
+        tc_input = getattr(tc, "input", None) or {}
+        for k, v in tc_input.items():
+            if k in _ENTITY_TYPED_FIELDS:
+                ids |= _normalise_entity_identifier(v)
+    return ids
+
+
+def _validate_fallback_tool_call(
+    prior_tool_calls: list[Any],
+    this_tool_call: Any,
+    question_entity_ids: set[str],
+) -> str | None:
+    """BP-604: reject tool calls that drift to a different entity from the question.
+
+    Returns a rejection-reason string when the call references an
+    entity-typed field whose value is NOT in (question entities + prior-turn
+    entity inputs); returns ``None`` to admit the call.
+
+    The Q2 MSTR canary: after two empty ``search_documents(entity_tickers=
+    ["MSTR"])`` calls the LLM emitted ``search_claims(entity_name="ON
+    Semiconductor Corporation")`` — pure hallucination, no orchestrator
+    guard. This helper closes that hole by structurally comparing the new
+    call's entity-typed inputs against the union of (a) the resolved-entity
+    set from the user's question and (b) every entity identifier already
+    surfaced in prior tool calls.
+
+    NOTE: this is NOT raised — the caller converts the returned string into
+    a structured tool-result with status="error" so the LLM can retry with a
+    correct identifier or refuse honestly to the user.
+    """
+    this_input = getattr(this_tool_call, "input", None) or {}
+    flagged_field: str | None = None
+    flagged_value: Any = None
+    admitted = _collect_prior_tool_entity_identifiers(prior_tool_calls) | question_entity_ids
+    # Only validate fields that carry entity identifiers; query / date / source
+    # fields may legitimately vary across iterations.
+    for k, v in this_input.items():
+        if k not in _ENTITY_TYPED_FIELDS:
+            continue
+        this_ids = _normalise_entity_identifier(v)
+        if not this_ids:
+            continue
+        # Admit the call if EVERY identifier in this field overlaps with the
+        # question-or-prior set. A single drift on this field is enough to
+        # flag the whole call — partial mixes (one valid + one invented) are
+        # exactly the failure mode we want to block (Q2 introduced an
+        # entirely new entity into the conversation mid-turn).
+        if not this_ids.issubset(admitted):
+            flagged_field = k
+            flagged_value = v
+            break
+    if flagged_field is None:
+        return None
+    return (
+        f"Tool call rejected: entity '{flagged_value}' (field '{flagged_field}') "
+        "was not part of the original question and was not surfaced by any prior "
+        "tool result. Use only entities related to the question's resolved "
+        "entities, or call search_documents with the original entities first."
+    )
+
+
+def _check_entity_grounding(
+    retrieved_items: list[Any],
+    question_entity_ids: set[str],
+) -> str | None:
+    """BP-605: refuse to synthesise when retrieved items don't ground the question.
+
+    Walks every retrieved item's ``citation_meta.entity_name`` and
+    ``entity_id`` (the two fields downstream synthesis cites against). If
+    ZERO retrieved items overlap the question's entity set we return a
+    refusal string for the caller to surface to the user verbatim.
+
+    Returns ``None`` (no refusal) when:
+      * there are no question entities to check against (entity-free chat),
+      * there are no retrieved items (a different guard handles that),
+      * at least one item's entity matches a question entity.
+
+    Returns a refusal string when EVERY retrieved item references an entity
+    that does not appear in the question set — that is the Q2 fault: the
+    answer's citations were 100% about ON Semiconductor with zero MSTR
+    grounding, yet the synthesis confidently reported it as MSTR.
+    """
+    if not question_entity_ids or not retrieved_items:
+        return None
+    for item in retrieved_items:
+        # The two fields downstream synthesis cites against.
+        cm = getattr(item, "citation_meta", None)
+        item_ids: set[str] = set()
+        if cm is not None:
+            item_ids |= _normalise_entity_identifier(getattr(cm, "entity_name", None))
+        item_ids |= _normalise_entity_identifier(getattr(item, "entity_id", None))
+        if item_ids & question_entity_ids:
+            return None
+    return (
+        "I cannot find information about the entities in your question in the "
+        "retrieved results. The data returned referenced different entities, "
+        "so I will not synthesise an answer that risks attributing facts to "
+        "the wrong company. Please rephrase or check the ticker/name."
+    )
+
+
 def _build_fallback_args(
     failed_tool: str,
     alt_tool: str,
@@ -671,6 +848,17 @@ class ChatOrchestratorUseCase:
         # stable key without crashing on frozenset() of unhashable contents.
         _tool_result_cache: dict[tuple[str, frozenset[tuple[str, str]]], Any] = {}
 
+        # BP-604 (PLAN-0100 W1 T-W1-02): per-turn entity-drift guard state.
+        # ``_question_entity_ids`` is built ONCE from the resolved-entity set
+        # (entities + entity_context) and reused on every iteration.  The
+        # ``_prior_tool_calls`` list grows with every iteration's tool_calls
+        # (executed OR rejected) so the next iteration's guard admits any
+        # entity already referenced upstream.  Empty resolved-entity set
+        # disables the guard (entity-free chat — guard would be a false
+        # positive on every call).
+        _question_entity_ids: set[str] = _collect_question_entity_identifiers(list(entities), entity_context)
+        _prior_tool_calls: list[Any] = []
+
         # ── E-6: Agent loop ───────────────────────────────────────────────────
         for iteration in range(budget.max_iterations):
             # LLM non-streaming turn to decide next tool calls
@@ -792,6 +980,74 @@ class ChatOrchestratorUseCase:
 
             # ── Tool execution ────────────────────────────────────────────────
             had_tool_calls = True
+
+            # ── BP-604 (PLAN-0100 W1 T-W1-02): entity-drift guard ─────────────
+            # On iter ≥ 1 the LLM is doing FALLBACK planning — the typical
+            # failure mode is hallucinating a different entity (Q2 MSTR canary:
+            # iter-0 returned 0 rows for MSTR, iter-1 emitted
+            # ``search_claims(entity_name="ON Semiconductor Corporation")``).
+            # We screen every tool call against (question entities + prior-turn
+            # entity inputs) and convert rejected calls into structured
+            # tool-result error messages so the LLM can self-correct without
+            # crashing the loop. Only entity-typed input fields are validated;
+            # query / date / source fields may vary freely between turns.
+            #
+            # Iter-0 is exempt because the question entities have not yet been
+            # surfaced through any tool call — the LLM's first batch IS the
+            # surfacing event. Guarding iter-0 would block the first call on
+            # any entity whose canonical form differs from the user's raw
+            # spelling (e.g. "Apple" vs "Apple Inc.").
+            _rejected_tool_calls: list[tuple[Any, str]] = []
+            if iteration > 0 and _question_entity_ids:
+                _admitted_calls: list[ToolUseBlock] = []
+                for _tc in tool_calls:
+                    _reject_reason = _validate_fallback_tool_call(_prior_tool_calls, _tc, _question_entity_ids)
+                    if _reject_reason is None:
+                        _admitted_calls.append(_tc)
+                    else:
+                        _rejected_tool_calls.append((_tc, _reject_reason))
+                        log.warning(  # type: ignore[no-any-return]
+                            "tool_call_rejected_entity_drift",
+                            iteration=iteration,
+                            tool=_tc.name,
+                            field=next(
+                                (k for k in (_tc.input or {}) if k in _ENTITY_TYPED_FIELDS),
+                                None,
+                            ),
+                            request_id=str(getattr(audit, "turn_id", "") or ""),
+                        )
+                # Replace tool_calls with the admitted subset; rejected calls
+                # are injected as synthetic tool-result error messages further
+                # down (after the assistant-with-tool_calls message is built),
+                # so the LLM sees them like any other tool failure.
+                tool_calls = _admitted_calls
+
+            # Track every tool call this iteration (admitted + rejected) so the
+            # next iteration's guard can admit any entity surfaced upstream.
+            _prior_tool_calls.extend(tool_calls)
+            _prior_tool_calls.extend(_tc for _tc, _ in _rejected_tool_calls)
+
+            # ── PLAN-0100 W2 T-W2-01: aggregate tool-status badge ────────────
+            # Emit ONE summary ``status`` event right after iteration-0's LLM
+            # response, BEFORE the per-tool ``tool_call`` events. This gives
+            # the frontend a single user-visible "Loading <a>, <b>, <c>…"
+            # pill that lands within ~1-3s instead of waiting for the first
+            # synthesised content token (often 60s+ on tool-use questions).
+            #
+            # The chat-eval harness now counts this ``status`` event toward
+            # TTFT (see ``tests/validation/chat_eval/harness.py``
+            # ``_CONTENT_EVENT_KINDS``). Removing this emit will silently
+            # regress TTFT-p95 — see service .claude-context.md pitfall.
+            #
+            # Wire-compatible: the frontend already consumes ``status`` events
+            # via useChatStream; PLAN-0100 W2 T-W2-03 surfaces the text as a
+            # badge before ToolCallIndicator pills appear.
+            if iteration == 0:
+                tool_names = [tc.name for tc in tool_calls]
+                tool_summary = ", ".join(tool_names[:3])
+                if len(tool_names) > 3:
+                    tool_summary += f"… ({len(tool_names) - 3} more)"
+                yield p.emitter.emit_status(f"Loading {tool_summary}…")
 
             # PLAN-0093 QA-7 P1-1: structured trace of which tools the LLM picked
             # on this iteration. Tool *names* only — never args (PII risk) or the
@@ -1279,18 +1535,39 @@ class ChatOrchestratorUseCase:
                     _raw_id = f"call_{tc.name}_{iteration}_{_idx}"
                 _ids.append(_raw_id)
 
+            # BP-604: stable IDs for rejected calls too, so the OpenAI
+            # tool_call_id ↔ tool message bijection holds when we feed the
+            # rejection error back to the LLM.  Index offset prevents
+            # collisions with the admitted-call ids above.
+            _rejected_ids: list[str] = []
+            for _idx, (_tc, _) in enumerate(_rejected_tool_calls):
+                _raw_id = getattr(_tc, "id", "") or ""
+                if not _raw_id:
+                    _raw_id = f"call_{_tc.name}_{iteration}_rej_{_idx}"
+                _rejected_ids.append(_raw_id)
+
             messages.append(
                 {
                     "role": "assistant",
                     "content": (getattr(llm_response, "text", "") or ""),
-                    "tool_calls": [
-                        {
-                            "id": _ids[_idx],
-                            "type": "function",
-                            "function": {"name": tc.name, "arguments": json.dumps(tc.input)},
-                        }
-                        for _idx, tc in enumerate(tool_calls)
-                    ],
+                    "tool_calls": (
+                        [
+                            {
+                                "id": _ids[_idx],
+                                "type": "function",
+                                "function": {"name": tc.name, "arguments": json.dumps(tc.input)},
+                            }
+                            for _idx, tc in enumerate(tool_calls)
+                        ]
+                        + [
+                            {
+                                "id": _rejected_ids[_idx],
+                                "type": "function",
+                                "function": {"name": _tc.name, "arguments": json.dumps(_tc.input)},
+                            }
+                            for _idx, (_tc, _reason) in enumerate(_rejected_tool_calls)
+                        ]
+                    ),
                 }
             )
             _capped_context = _context_block[:_TOOL_RESULT_MAX_CHARS]
@@ -1307,6 +1584,18 @@ class ChatOrchestratorUseCase:
                         "tool_call_id": _ids[_idx],
                         "name": tc.name,
                         "content": _tool_content,
+                    }
+                )
+            # BP-604: emit a structured error tool_result for each rejected
+            # call so the LLM sees the rejection reason verbatim and can
+            # self-correct (use a question-resolved entity) or refuse honestly.
+            for _idx, (_tc, _reason) in enumerate(_rejected_tool_calls):
+                messages.append(
+                    {
+                        "role": "tool",
+                        "tool_call_id": _rejected_ids[_idx],
+                        "name": _tc.name,
+                        "content": _reason,
                     }
                 )
 
@@ -1407,6 +1696,36 @@ class ChatOrchestratorUseCase:
             phases.record("llm_synthesis_streaming", (time.monotonic() - _synthesis_t0) * 1000.0)
             provider_name = p.llm_chain.last_provider_name
 
+        # ── BP-605 (PLAN-0100 W1 T-W1-03): entity-grounding refusal ───────────
+        # Before any other synthesis check, confirm that AT LEAST ONE
+        # retrieved item references an entity from the original question.
+        # The Q2 MSTR canary: every retrieved item's ``citation_meta`` named
+        # ON Semiconductor (the drifted entity from the BP-604 fallback) and
+        # the synthesis produced a confident, well-cited answer about ON
+        # Semi attributed to a MSTR question.  When ZERO items overlap we
+        # short-circuit to a refusal string — the user gets an honest "I
+        # could not find data about <entity>" instead of a cross-wired
+        # answer indistinguishable from a valid one.
+        #
+        # Gating: only runs when tool calls occurred AND retrieved items
+        # exist AND the original question had resolved entities.  An empty
+        # question entity set disables the check (entity-free chat).  The
+        # refusal REPLACES the streamed full_text so downstream synthesis +
+        # citation passes see a coherent message; ``grounded=False`` is
+        # captured in structured logs for ops visibility.
+        grounded = True
+        if had_tool_calls and non_none_items and _question_entity_ids:
+            _grounding_refusal = _check_entity_grounding(non_none_items, _question_entity_ids)
+            if _grounding_refusal is not None:
+                log.warning(  # type: ignore[no-any-return]
+                    "entity_grounding_failed",
+                    retrieved_item_count=len(non_none_items),
+                    question_entity_count=len(_question_entity_ids),
+                    request_id=str(getattr(audit, "turn_id", "") or ""),
+                )
+                full_text = _grounding_refusal
+                grounded = False
+
         # ── PLAN-0093 E-2: Numeric-grounding validation ───────────────────────
         # Inspect the LLM answer for numbers (revenue, EPS, P/E, etc.) that
         # do not appear in any tool result within the per-FieldKind tolerance
@@ -1417,8 +1736,11 @@ class ChatOrchestratorUseCase:
         # post-loop completion-cache write so we never persist an answer
         # the validator rejected (would otherwise poison the cache for
         # 24h via the deterministic message+thread_id key).
+        # BP-605: skip the numeric grounding pass when entity grounding
+        # already short-circuited — the refusal text has no numbers to
+        # validate and the validator would either no-op or false-positive.
         grounding_passed = True
-        if had_tool_calls and full_text.strip():
+        if had_tool_calls and full_text.strip() and grounded:
             async with phase("grounding_validation", phases):
                 full_text, grounding_passed = await self._run_grounding_validation(
                     p=p,
@@ -1428,6 +1750,10 @@ class ChatOrchestratorUseCase:
                     budget=budget,
                     entity_context=entity_context,
                 )
+        elif not grounded:
+            # BP-605: never cache a refusal answer — its content is a
+            # generic message that would replay for any future failure.
+            grounding_passed = False
 
         # ── E-7: Citation egress scrubbing ────────────────────────────────────
         # Scrub entity/article refs in the answer that were NOT grounded in any

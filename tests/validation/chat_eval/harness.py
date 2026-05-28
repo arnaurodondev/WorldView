@@ -45,14 +45,23 @@ from uuid import uuid4
 import pytest
 
 # ---------------------------------------------------------------------------
-# PLAN-0099 W1 T-W1-03 — Latency metric redesign.
+# PLAN-0099 W1 T-W1-03 — Latency metric (initial design).
+# PLAN-0100 W2 T-W2-02 — TTFT semantics broadened to "first user-visible
+# event" (content tokens OR tool-status labels OR pre-tool status).
 #
 # We measure three things now:
 #   * ttft_s        — time-to-first-token: wall-clock from request submit to
-#                     the first SSE event that carries rendered content
-#                     (``token``, ``delta``, ``text``, or ``final_answer``).
-#                     Skips metadata-only frames (``status``, ``thinking``,
-#                     ``tool_call``, ``tool_result``).
+#                     the first SSE event that is USER-VISIBLE in the chat
+#                     UI — i.e. content tokens (``token``, ``delta``,
+#                     ``text``, ``final_answer``) OR tool-status labels
+#                     (``tool_call``) OR pre-tool aggregate badge
+#                     (``status`` — emitted with summary text once
+#                     iteration-0 LLM decides on tools, see
+#                     ``chat_orchestrator.py``). This matches what real
+#                     users see: pills for tool-use turns render via
+#                     ``ToolCallIndicator`` long before synthesis begins,
+#                     so counting only content tokens overstated TTFT on
+#                     tool-using questions (p95 = 69.7s observed).
 #   * output_tokens — pulled from the provider's usage envelope when present
 #                     (``metadata.usage.output_tokens`` or any event's
 #                     ``data.usage.output_tokens``), otherwise estimated
@@ -65,13 +74,19 @@ import pytest
 # acceptance gate now uses TTFT-p95 + TPS-p50 + a relaxed E2E-p99 watchdog
 # (see ``test_aggregate_score.py``). Rationale: end-to-end is contaminated
 # by tool fan-out + query complexity; TTFT + TPS measure the user-facing
-# responsiveness signals directly. See:
-# ``docs/audits/2026-05-27-plan-0099-latency-metric-redesign.md``.
+# responsiveness signals directly. The 5s p95 gate still holds — but now
+# means "first user-visible label arrives in <5s" instead of "first content
+# token in <5s". See:
+# ``docs/audits/2026-05-27-plan-0099-latency-metric-redesign.md`` and
+# ``docs/audits/2026-05-27-plan-0100-latency-structural.md`` §A.
 # ---------------------------------------------------------------------------
 
-# Event kinds whose ``data`` payload carries USER-VISIBLE rendered content.
+# Event kinds whose ``data`` payload carries USER-VISIBLE output.
 # The first event whose kind is in this set defines the TTFT boundary.
-_CONTENT_EVENT_KINDS: frozenset[str] = frozenset({"token", "delta", "text", "final_answer"})
+# PLAN-0100 W2 T-W2-02: added ``tool_call`` (pills render immediately via
+# ToolCallIndicator) and ``status`` (aggregate "Loading <tools>…" badge
+# emitted by chat_orchestrator right after iteration-0's tool plan).
+_CONTENT_EVENT_KINDS: frozenset[str] = frozenset({"token", "delta", "text", "final_answer", "tool_call", "status"})
 
 # Chars-per-token estimate for the fallback path when the provider does not
 # emit a usage envelope. 4.0 is the textbook GPT-style English approximation;

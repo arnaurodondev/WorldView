@@ -266,6 +266,73 @@ class TestToolCallsEmitted:
 
         assert "tool_call" in event_types
 
+    def test_orchestrator_emits_aggregate_status_badge_before_tool_calls(self) -> None:
+        """PLAN-0100 W2 T-W2-01: a single aggregate ``status`` event with
+        ``"Loading <a>, <b>, <c>… (N more)…"`` must be emitted right after
+        iteration-0's LLM picks tools and BEFORE the per-tool ``tool_call``
+        events. This is the FIRST user-visible feedback on tool-using
+        questions; it drives the badge in the streaming bubble and is also
+        what the chat-eval harness counts toward TTFT (see harness
+        ``_CONTENT_EVENT_KINDS``).
+        """
+        from rag_chat.application.use_cases.chat_orchestrator import ChatOrchestratorUseCase
+
+        # Four tool calls so the "…(N more)…" suffix is exercised.
+        blocks = [
+            _make_tool_use_block("get_price_history"),
+            _make_tool_use_block("search_news"),
+            _make_tool_use_block("get_entity_graph"),
+            _make_tool_use_block("get_fundamentals_history"),
+        ]
+        first_resp = _make_llm_tool_response(tool_calls=blocks)
+        pipeline = _make_pipeline(first_llm_response=first_resp)
+
+        # Capture emit_status text so we can assert on the summary copy.
+        status_calls: list[str] = []
+
+        def _emit_status(step: str) -> dict:
+            status_calls.append(step)
+            return {"event": "status", "data": json.dumps({"step": step})}
+
+        pipeline.emitter.emit_status = MagicMock(side_effect=_emit_status)
+
+        item = _make_retrieved_item()
+        executor = _make_tool_executor_mock([item])
+        factory = _make_factory_mock(executor)
+
+        orch = ChatOrchestratorUseCase(pipeline=pipeline, tool_executor_factory=factory)
+        request = _make_chat_request()
+        uow = MagicMock()
+
+        events = asyncio.run(_collect_events(orch, request, uow))
+
+        # Find the "Loading …" status emission — must include the first
+        # three tool names and the "(1 more)" suffix (4 total tools - 3 listed = 1).
+        loading_statuses = [s for s in status_calls if s.startswith("Loading ")]
+        assert loading_statuses, "expected at least one 'Loading …' status emission"
+        loading = loading_statuses[0]
+        assert "get_price_history" in loading
+        assert "search_news" in loading
+        assert "get_entity_graph" in loading
+        assert "1 more" in loading
+
+        # Ordering invariant: the aggregate status frame must arrive BEFORE
+        # the first ``tool_call`` frame, otherwise pills would beat the
+        # badge to the user and the design contract breaks.
+        sse_kinds: list[str] = []
+        for ev in events:
+            kind = ev.get("event")
+            if kind == "status":
+                data = json.loads(ev.get("data", "{}"))
+                if str(data.get("step", "")).startswith("Loading "):
+                    sse_kinds.append("status:loading")
+                else:
+                    sse_kinds.append("status:other")
+            elif kind == "tool_call":
+                sse_kinds.append("tool_call")
+        assert "status:loading" in sse_kinds
+        assert sse_kinds.index("status:loading") < sse_kinds.index("tool_call")
+
     def test_orchestrator_tool_results_emitted_after_execution(self) -> None:
         """'tool_result' SSE events are emitted after execute_all completes."""
         from rag_chat.application.use_cases.chat_orchestrator import ChatOrchestratorUseCase

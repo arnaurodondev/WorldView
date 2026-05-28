@@ -167,6 +167,7 @@ export function ChatMessageList({
             isStreaming
             activeTools={activeTools}
             intent={streaming.intent}
+            initialStatus={streaming.initial_status}
             turn={{
               // Synthetic id — the real message_id arrives via the metadata
               // SSE event; if it does, useChatStream copies it onto

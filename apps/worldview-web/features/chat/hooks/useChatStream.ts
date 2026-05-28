@@ -704,10 +704,32 @@ export function useChatStream(args: UseChatStreamArgs): UseChatStreamResult {
                 setChatError(msg);
                 setStreaming(null);
                 return;
+              } else if (eventName === "status") {
+                // PLAN-0100 W2 T-W2-03 — surface the aggregate pre-tool status
+                // badge.  S8 emits ONE ``status`` event with summary text
+                // (``"Loading get_price_history, search_news…"``) right after
+                // iteration-0 picks tools, so users see something user-visible
+                // within ~1-3s instead of waiting for synthesis (often 60s+).
+                //
+                // Earlier ``status`` events (``cache_hit``, ``loading_context``,
+                // ``entity_resolution``) are stage keywords, not user-facing
+                // copy.  We only surface payloads that look like rendered text
+                // (contain a space or punctuation), so the stage-marker
+                // payloads stay silent — preserving existing behaviour.
+                const statusText =
+                  typeof data.step === "string"
+                    ? data.step
+                    : typeof data.message === "string"
+                      ? data.message
+                      : "";
+                if (statusText && /[\s…]/.test(statusText)) {
+                  setStreaming((prev) =>
+                    prev ? { ...prev, initial_status: statusText } : prev,
+                  );
+                }
               }
-              // status — no UI action needed yet; accepted silently so the
-              // parser never throws on it. (metadata / contradictions / final_answer
-              // are now handled above per PLAN-0089 K T-03.)
+              // (metadata / contradictions / final_answer / status are all
+              // handled explicitly above per PLAN-0089 K T-03 + PLAN-0100 W2.)
             } catch {
               // Non-JSON line — keep-alive comment, blank line, etc. Skip.
             }

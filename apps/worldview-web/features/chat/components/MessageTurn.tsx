@@ -102,6 +102,18 @@ interface MessageTurnProps {
    * type model accurate.
    */
   readonly intent?: string | null;
+  /**
+   * PLAN-0100 W2 T-W2-03 — aggregate pre-tool status badge text.
+   *
+   * Sourced from ``StreamingMessage.initial_status`` (set when the SSE
+   * ``status`` event fires with summary text right after iteration-0
+   * picks tools). Renders as a tiny muted line ABOVE the ToolCallTray
+   * so users see something within ~1-3s instead of waiting for the
+   * first synthesised token.
+   *
+   * Only meaningful when ``isStreaming`` is true; finished turns clear it.
+   */
+  readonly initialStatus?: string;
 }
 
 /**
@@ -181,6 +193,7 @@ export function MessageTurn({
   onFollowUp,
   activeTools = [],
   intent,
+  initialStatus,
 }: MessageTurnProps) {
   const isAssistant = turn.role === "assistant";
   const isUser = turn.role === "user";
@@ -309,6 +322,23 @@ export function MessageTurn({
             </LazyMarkdownContent>
           )}
         </div>
+
+        {/* PLAN-0100 W2 T-W2-03 — pre-tool aggregate status badge.
+            Surfaces the ``status`` SSE event payload (e.g. "Loading
+            get_price_history, search_news…") ABOVE the tool pills.
+            This is the FIRST user-visible feedback for tool-use turns —
+            it lands within ~1-3s instead of waiting for the synthesis
+            pass (often 60s+). Only renders while streaming AND when the
+            backend emitted a free-text status (not a stage marker like
+            ``cache_hit`` / ``loading_context`` — those stay silent). */}
+        {isStreaming && initialStatus ? (
+          <div
+            data-testid="chat-initial-status"
+            className="text-[10px] text-muted-foreground"
+          >
+            {initialStatus}
+          </div>
+        ) : null}
 
         {/* ToolCallTray — only when there are tools to show. For finished
             turns S8 will eventually persist `tool_calls` on Message

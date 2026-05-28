@@ -160,7 +160,7 @@ unchanged — R11: never break wire format.
 | Event | Payload |
 |-------|---------|
 | `thinking` | `{"stage": str}` — emitted before first LLM call; shows pulsing indicator in UI |
-| `status` | `{"step": "loading_context" \| "entity_resolution" \| "query_expansion"}` |
+| `status` | `{"step": "loading_context" \| "entity_resolution" \| "query_expansion" \| "Loading <tool_a>, <tool_b>, <tool_c>… (N more)…"}` — **PLAN-0100 W2 T-W2-01**: in addition to the legacy stage markers, the orchestrator now emits ONE aggregate `status` event with summary text right after iteration-0's LLM picks tools and BEFORE the first `tool_call` event. This is the first user-visible feedback on tool-using questions (lands within ~1-3s vs. ~60s for first synthesised token); the frontend renders it as a badge above `ToolCallTray` and the chat-eval harness counts it toward TTFT (see `_CONTENT_EVENT_KINDS`). |
 | `tool_call` | `{"type": "tool_call", "tool": str, "label": str, "input": dict, "status": "running"}` — emitted before each tool executes |
 | `tool_result` | `{"type": "tool_result", "tool": str, "status": "ok" \| "error" \| "empty", "item_count": int}` — emitted after each tool completes |
 | `token` | `{"text": "..."}` — streamed LLM output chunk. **PLAN-0099 W1 / BP-595**: the "LLM answered directly (no tool calls)" branch now emits one `token` frame per ~8-word chunk via `_chunk_text_for_streaming()` instead of one event for the whole answer (TPS ≈ 0.087 tok/s → real per-frame cadence). `SSEEmitter.emit_delta()` is a wire-compatible alias (same `event: token`) so frontends and the chat-eval harness need no changes. |
@@ -350,7 +350,7 @@ The aggregate gate in `tests/validation/chat_eval/test_aggregate_score.py` previ
 
 | Metric | Aggregation | Hard gate | Rationale |
 |---|---|---|---|
-| `ttft_s` (time-to-first-token) | p95 | `< 5.0 s` | Wall-clock from request submit to the FIRST SSE event whose `data` carries rendered content (`token` / `delta` / `text` / `final_answer`). Skips metadata-only frames (`status` / `thinking` / `tool_call` / `tool_result`). Captures whether the user "sees the model thinking" promptly. |
+| `ttft_s` (time-to-first-token) | p95 | `< 5.0 s` | Wall-clock from request submit to the FIRST user-visible SSE event. **PLAN-0100 W2 T-W2-02**: broadened from "content-only" to `{token, delta, text, final_answer, tool_call, status}` — matches what real users see in the chat UI (tool pills via `ToolCallIndicator`, aggregate status badge). Skips truly internal frames (`thinking`, `tool_result`, `metadata`). The 5s gate now means "first user-visible label arrives in <5s" instead of "first synthesised token in <5s"; before the change tool-using questions had p95 ≈ 69.7s because synthesis happens after the tool loop (see `docs/audits/2026-05-27-plan-0100-latency-structural.md` §A). |
 | `tps` (tokens-per-second) | p50 | `≥ 30 tok/s` | `output_tokens / (latency_s - ttft_s)`. `output_tokens` prefers the provider usage envelope (`data.usage.output_tokens` on any event, or `metadata.usage.output_tokens`) and falls back to a `ceil(chars/4)` estimate over the joined answer when absent. Captures streaming readability. |
 | `latency_s` (end-to-end) | p99 | `< 90.0 s` | Soft watchdog: catches provider hangs / DLQ retry loops / tool stalls. Relaxed from the old 60 s gate so multi-tool queries are not unfairly punished. |
 

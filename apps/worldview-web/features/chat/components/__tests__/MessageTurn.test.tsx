@@ -102,4 +102,38 @@ describe("MessageTurn (Wave K T-07)", () => {
     // also font-mono so we expect ≥2).
     expect(monoSpans.length).toBeGreaterThanOrEqual(1);
   });
+
+  // ── PLAN-0100 W2 T-W2-03 — pre-tool aggregate status badge ────────────
+  it("renders the initial-status badge above the tool tray while streaming", () => {
+    // WHY: the orchestrator emits ONE ``status`` event with summary text
+    // (e.g. ``"Loading get_price_history, search_news…"``) right after
+    // iteration-0 picks tools.  The badge lands within ~1-3s so users see
+    // something user-visible long before the synthesised answer's first
+    // token arrives (often 60s+ on tool-use questions). This test pins
+    // the contract: when ``initialStatus`` is passed AND ``isStreaming``
+    // is true, the badge renders with the canonical testid.
+    const { getByTestId } = render(
+      <MessageTurn
+        turn={baseAssistant}
+        isStreaming
+        initialStatus="Loading get_price_history, search_news…"
+      />,
+    );
+    const badge = getByTestId("chat-initial-status");
+    expect(badge.textContent).toBe("Loading get_price_history, search_news…");
+  });
+
+  it("does NOT render the initial-status badge for completed (non-streaming) turns", () => {
+    // The badge is a transient affordance — once the turn finishes (and
+    // the message persists with its real tool_calls + answer text), the
+    // pre-tool status copy is no longer useful and must disappear.
+    const { queryByTestId } = render(
+      <MessageTurn
+        turn={baseAssistant}
+        isStreaming={false}
+        initialStatus="Loading get_price_history…"
+      />,
+    );
+    expect(queryByTestId("chat-initial-status")).toBeNull();
+  });
 });
