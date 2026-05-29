@@ -1386,15 +1386,35 @@ class ChatOrchestratorUseCase:
                                     "content": "(no matching rows returned)",
                                 }
                             )
+                        # F-LIVE-NEW-002: entity-anchored empty-result prompt.
+                        # The previous generic instruction ("no relevant
+                        # information was found") let the LLM substitute a
+                        # plausible-but-wrong company (e.g. answered a Tesla
+                        # question with ServiceNow). Anchoring on the resolved
+                        # entity by NAME + TICKER + an explicit "do not name
+                        # any other entities" guardrail cuts off the
+                        # substitution path at the prompt layer. The
+                        # EntityNameGroundingValidator (post-loop) is the
+                        # belt-and-braces backstop if the LLM still drifts.
+                        _entity_anchor_parts: list[str] = []
+                        for _ent in entities:
+                            _ent_ticker_str = f" ({_ent.ticker})" if _ent.ticker else ""
+                            _entity_anchor_parts.append(f"{_ent.canonical_name}{_ent_ticker_str}")
+                        _entity_anchor = (
+                            ", ".join(_entity_anchor_parts) if _entity_anchor_parts else "the requested entity"
+                        )
+                        # Use the first tool name as the "what was searched for"
+                        # hint — the prompt already accepts a single string slot.
+                        _tool_name_for_user = tool_calls[0].name if tool_calls else "data"
                         messages.append(
                             {
                                 "role": "user",
                                 "content": (
-                                    "The tools you called returned no data for this query "
-                                    "(the underlying datasets contain no matching rows). "
-                                    "Do NOT call more tools. Answer the user honestly that "
-                                    "no relevant information was found, and briefly explain "
-                                    "what you searched for. Keep it under 3 sentences."
+                                    f"No {_tool_name_for_user} found for {_entity_anchor}. "
+                                    f"Respond accurately stating no data was found for THIS specific entity. "
+                                    f"Do NOT call more tools. "
+                                    f"Do NOT name any other entities or substitute a different company. "
+                                    f"Keep it under 3 sentences."
                                 ),
                             }
                         )
@@ -1755,6 +1775,33 @@ class ChatOrchestratorUseCase:
             # generic message that would replay for any future failure.
             grounding_passed = False
 
+        # ── F-LIVE-NEW-002: Entity-name grounding validation ──────────────────
+        # Catches the empty-result hallucination pattern: the LLM names a
+        # company that exists nowhere in the resolved-entity set OR the
+        # tool result payloads. The check is fail-safe — false positives
+        # surface as ``[unverified]`` markers, false negatives let
+        # confident wrong answers through. Tune toward false positives.
+        #
+        # Gating: only runs when the question has resolved entities. An
+        # empty entity set means the question is open-domain (no specific
+        # company anchor) and the grounded set would be empty — every
+        # company name in the response would fail closed, flooding false
+        # positives. Mirrors the BP-605 gating on _question_entity_ids.
+        if had_tool_calls and full_text.strip() and grounded and entities:
+            full_text, entity_grounding_passed = await self._run_entity_grounding_validation(
+                p=p,
+                response=full_text,
+                resolved_entities=list(entities),
+                tool_items=non_none_items,
+                messages=messages,
+                budget=budget,
+            )
+            # If entity grounding failed and even the rewrite + banner
+            # produced text, we treat the answer as un-cacheable for the
+            # same reason as numeric grounding (poison the 24h cache).
+            if not entity_grounding_passed:
+                grounding_passed = False
+
         # ── E-7: Citation egress scrubbing ────────────────────────────────────
         # Scrub entity/article refs in the answer that were NOT grounded in any
         # tool result. This prevents the LLM from fabricating citation IDs.
@@ -2011,6 +2058,121 @@ class ChatOrchestratorUseCase:
         # better even if not perfect.
         rag_grounding_validation_total.labels(result="failed_banner").inc()
         return rewritten + "\n\n⚠ Some numbers could not be verified against retrieved data.", False
+
+    async def _run_entity_grounding_validation(
+        self,
+        *,
+        p: ChatPipeline,
+        response: str,
+        resolved_entities: list[Any],
+        tool_items: list,
+        messages: list[dict[str, Any]],
+        budget: AgentBudget,
+    ) -> tuple[str, bool]:
+        """F-LIVE-NEW-002 — entity-name grounding pass.
+
+        Sibling of :meth:`_run_grounding_validation` but for *names* rather
+        than *numbers*. Builds the grounded set from resolved entities +
+        tool-result citation metadata, runs
+        :class:`EntityNameGroundingValidator`, and on failure re-prompts
+        ONCE with the unsupported names listed.  If the rewrite still
+        contains ungrounded names, appends an ``[unverified]`` banner so
+        the user is warned the response includes names not backed by
+        retrieved data.
+
+        Returns ``(text, passed)``. ``passed=False`` whenever the banner
+        was appended OR the rewrite stream errored.
+        """
+        from rag_chat.application.services.entity_name_grounding import (
+            EntityNameGroundingValidator,
+        )
+
+        # Build the grounded entity-name set from:
+        #   (a) every resolved entity's canonical_name, ticker, and matched_text
+        #   (b) every tool-result row's citation_meta.entity_name + item_id ticker prefix
+        # We over-include intentionally so the validator's set membership
+        # check is loose (favouring false positives over false negatives).
+        grounded_names: set[str] = set()
+        for ent in resolved_entities:
+            if ent is None:
+                continue
+            for attr in ("canonical_name", "ticker", "matched_text"):
+                v = getattr(ent, attr, None)
+                if isinstance(v, str) and v:
+                    grounded_names.add(v)
+
+        tool_refs: set[str] = set()
+        for item in tool_items:
+            if item is None:
+                continue
+            cm = getattr(item, "citation_meta", None)
+            if cm is not None:
+                ent_name = getattr(cm, "entity_name", None)
+                if isinstance(ent_name, str) and ent_name:
+                    tool_refs.add(ent_name)
+            item_id = getattr(item, "item_id", None)
+            if isinstance(item_id, str) and item_id:
+                tool_refs.add(item_id)
+
+        validator = EntityNameGroundingValidator()
+        first_result = validator.validate(response, grounded_names, tool_refs)
+        if first_result.passed:
+            return response, True
+
+        # Failed first pass — log the unsupported names so an operator
+        # can grep for the ServiceNow-style regression patterns.
+        log.warning(  # type: ignore[no-any-return]
+            "entity_grounding_failed",
+            unsupported_count=len(first_result.unsupported),
+            unsupported=[{"name": u.name, "kind": u.kind.value} for u in first_result.unsupported[:10]],
+            grounded_count=len(grounded_names),
+            tool_ref_count=len(tool_refs),
+        )
+
+        # Build the rewrite re-prompt. List each ungrounded name so the
+        # LLM can either remove it or annotate it [unverified].
+        bullets = "\n".join(f"- {u.name} ({u.kind.value})" for u in first_result.unsupported)
+        rewrite_messages = [
+            *messages,
+            {"role": "assistant", "content": response},
+            {
+                "role": "user",
+                "content": (
+                    "The following entity names in your previous response cannot be found "
+                    "in tool results or the resolved entity set:\n"
+                    f"{bullets}\n\n"
+                    "Rewrite your response removing or marking each as [unverified]. "
+                    "Do not invent replacement entity names — only refer to entities that "
+                    "appear in the tool results above or in the resolved-entity map."
+                ),
+            },
+        ]
+
+        rewritten = ""
+        try:
+            async for chunk in p.llm_chain.stream_chat(
+                rewrite_messages,
+                max_tokens=budget.max_tokens_final,
+                temperature=0.0,
+            ):
+                rewritten += chunk
+        except Exception as exc:
+            log.warning("entity_grounding_rewrite_failed", error=str(exc))  # type: ignore[no-any-return]
+            return (
+                response + "\n\n⚠ Some entity references could not be verified against retrieved data.",
+                False,
+            )
+
+        # Re-validate the rewrite.
+        second_result = validator.validate(rewritten, grounded_names, tool_refs)
+        if second_result.passed:
+            return rewritten, True
+
+        # Both passes failed — append the warning banner.
+        return (
+            rewritten + "\n\n⚠ Some entity references could not be verified against retrieved data.",
+            False,
+        )
 
     async def _run_fallback_chain(
         self,
