@@ -1153,3 +1153,92 @@ source is tripped. To reset manually, delete the Valkey key `rag:cb:state:{sourc
 
 Set `RAG_CHAT_CITATION_CRON_ENABLED=false` (default). Enable only when you want
 weekly citation accuracy scoring (consumes LLM tokens).
+
+## Chat Quality Benchmark
+
+A standalone, descriptive benchmark runner that exercises `/v1/chat/stream`
+on a curated question set and writes a structured run directory for offline
+inspection. Distinct from the pytest acceptance gate in
+`tests/validation/chat_eval/`: this script does NOT gate pass/fail on
+percentiles — it captures everything (SSE events, tool calls, phase
+timings, must_not_say hits, tracebacks) so a human can diagnose regressions
+question-by-question.
+
+### Files
+
+* Catalogue: `tests/validation/chat_quality_benchmark/questions.yaml`
+  — 22 prompts across `factual_lookup`, `screener`, `relationship`,
+  `financial_data`, `news`, `comparison`, `signal`, `multilingual`,
+  `adversarial`, `refusal_premise`. Tags include `real_user`,
+  `smoke`, `aggregate`, `iter3`.
+* Runner: `scripts/run_chat_quality_benchmark.py`
+* Output: `tests/validation/chat_quality_benchmark/runs/run_<UTC-ts>/`
+
+### Running
+
+```
+.venv312/bin/python scripts/run_chat_quality_benchmark.py \
+    --base-url http://localhost:8000 \
+    --questions-file tests/validation/chat_quality_benchmark/questions.yaml \
+    --tags real_user,smoke \
+    --out-dir tests/validation/chat_quality_benchmark/runs
+```
+
+Useful flags:
+
+* `--tags A,B` — OR filter on tags (intersected with --ids).
+* `--ids id1,id2` — run specific questions only.
+* `--max-runs-per-q N` — repeat each question N times for flakiness check
+  (artifacts get a `_runK` suffix).
+* `--timeout-s` — per-request HTTP timeout (default 120s).
+
+### Output layout
+
+```
+run_<UTC-ts>/
+    _meta.json             base_url, started_at, ended_at, filters, totals
+    _summary.json          bucket_counts + category_buckets + per_question list
+    q_<id>.json            full structured artifact per question (one file)
+    q_<id>.log             human-readable event-by-event trace
+    q_<id>.error.txt       full traceback (only if the question raised)
+```
+
+`q_<id>.json` schema (top-level keys):
+
+* `id`, `prompt`, `category`, `tags`
+* `expected` — the YAML's expected_tools / entities / numeric_class /
+  min_words / max_latency_s / must_not_say (for self-contained diffing).
+* `bucket` — coarse PASS / WARN / FAIL / EXCEPTION (descriptive only,
+  not an exit-code signal).
+* `reasons` — bullet list of why a non-PASS bucket fired.
+* `heuristics` — all advisory flags (see below).
+* `result` — the full `ChatRunResult` dict including every SSE event in
+  `raw_events`, all `tool_calls`, `tool_results`, `citations`,
+  `phase_timings_ms`, etc.
+
+### Interpreting heuristics
+
+| Heuristic | Meaning |
+|-----------|---------|
+| `is_empty` | answer_text was blank after assembly |
+| `is_refusal` | matched short-refusal detector (`grading.is_refusal`) — short answer with refusal token and no citations |
+| `must_not_say_hits` | list of forbidden phrases from the YAML that appeared in the answer; non-empty drives `FAIL` |
+| `entities_missing` | expected_entities_mentioned that did not appear (case-insensitive substring) |
+| `tool_overlap_with_expected` | intersection of called vs expected tools (hint, not a gate) |
+| `missing_expected_tools` | expected tools the agent did not call |
+| `latency_s`, `ttft_s` | wall-clock E2E and time-to-first-user-visible event |
+| `phase_timings_ms` | backend-reported phase timings from the `done` SSE event |
+| `answer_meets_min_words` | True/False/None vs `expected_min_words` |
+| `latency_within_budget` | True/False/None vs `expected_max_latency_s` |
+
+Bucket derivation:
+
+* `FAIL` — non-200 / error / empty answer / forbidden phrase hit.
+* `WARN` — refusal, missing entity, short answer, slow answer, or no tools
+  called when some were expected.
+* `PASS` — none of the above.
+* `EXCEPTION` — runner blew up (traceback in `q_<id>.error.txt`).
+
+The runner always exits 0 on a completed run; non-zero only if the
+question file is missing or filters match zero questions. Use it as an
+artifact-producing job; gate pass/fail with `tests/validation/chat_eval/`.
