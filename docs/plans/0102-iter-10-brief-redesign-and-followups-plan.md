@@ -226,22 +226,33 @@ Brief for AAPL/MSFT/NVDA holder includes:
 
 ---
 
-### Wave 3 — Brief Wave C: Tape + Earnings (P2, ~8 h)
+### Wave 3 — Brief Wave C: Tape + Earnings (P2, ~8 h) — **ENDPOINTS + PORTS SHIPPED 2026-05-29**
+
+**Status**: Backend endpoints + rag-chat adapter ports landed on `feat/plan-0099-w4`. The actual brief-side wiring (calling these new clients from `briefing_context.py` / rendering in `brief_context_formatter.py`) is intentionally deferred to a **separate follow-up commit** to avoid colliding with the parallel W2 session that was actively editing those two files.
+
+Files shipped:
+- `services/market-data/src/market_data/api/routers/internal_market_tape.py` (`GET /internal/v1/market/tape`, ~280 LOC + 12 unit tests)
+- `services/market-data/src/market_data/api/routers/internal_earnings_calendar.py` (`GET /internal/v1/calendar/earnings`, ~210 LOC + 8 unit tests)
+- `services/rag-chat/src/rag_chat/infrastructure/clients/market_tape_client.py` (new adapter, ~120 LOC + 6 unit tests)
+- `services/rag-chat/src/rag_chat/infrastructure/clients/earnings_calendar_client.py` (new adapter, ~125 LOC + 7 unit tests)
+- `services/rag-chat/src/rag_chat/application/ports/upstream_clients.py` (added `MarketTapePort`, `EarningsCalendarPort`, DTOs)
 
 #### Tasks
 
 - **T-W3-01 — Futures + pre-mkt feed integration**
-  - Likely add to market-data or content-ingestion. If EODHD intraday feed available, use it; otherwise add a small futures fetcher.
+  - Shipped. Reads existing OHLCV (1d + 5m) + Quote rows; per-symbol fail-open with `session="unavailable"`; Valkey 60 s cache; 20-symbol cap.
 - **T-W3-02 — Earnings calendar endpoint**
-  - New `GET /internal/v1/calendar/earnings?from=today&to=today+7` on market-data.
-  - Pulls from existing EODHD or content-ingestion source.
-- **T-W3-03 — Render in Tape + Macro Today sections**
+  - Shipped. Reads `earnings_calendar` table joined with `instruments`; 90-day range cap; Valkey 5 min cache; fail-open empty `events: []` on DB error.
+- **T-W3-03 — Render in Tape + Macro Today sections** — **DEFERRED to a follow-up commit**
+  - The actual `briefing_context.py` + `brief_context_formatter.py` edits to call `MarketTapeClient.get_tape()` and `EarningsCalendarClient.get_earnings()` and render the new sections will land as a separate commit after W2 ships. Coordination note recorded in TRACKING.md.
 
 #### W3 acceptance gate
 
 Brief includes:
 - "S&P futures +0.3%, NASDAQ +0.5%, VIX 14.2" in Tape
 - "Earnings this week: NVDA Tue AMC, CRM Wed AMC" in Macro Today
+
+(Gate verified after T-W3-03 follow-up commit lands.)
 
 ---
 

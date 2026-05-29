@@ -885,7 +885,9 @@ def create_app() -> FastAPI:
         fundamental_metrics,
         fundamentals,
         instruments,
+        internal_earnings_calendar,
         internal_instruments,
+        internal_market_tape,
         market,
         ohlcv,
         peers,
@@ -918,5 +920,9 @@ def create_app() -> FastAPI:
     # market-ingestion's FundamentalsRefreshWorker. Same /internal/v1 prefix
     # + same JWT-required guard as the other system-to-system routes.
     app.include_router(internal_instruments.router, prefix="/internal/v1")
+    # PLAN-0102 W3 — futures/pre-mkt tape + earnings calendar endpoints
+    # used by the morning brief generator (rag-chat).
+    app.include_router(internal_market_tape.router, prefix="/internal/v1")
+    app.include_router(internal_earnings_calendar.router, prefix="/internal/v1")
 
     return app

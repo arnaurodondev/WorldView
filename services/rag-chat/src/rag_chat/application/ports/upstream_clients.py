@@ -412,6 +412,85 @@ class SectorsPort(Protocol):
     ) -> dict[UUID, SectorLabel]: ...
 
 
+# ── PLAN-0102 W3 — futures/pre-mkt tape + earnings calendar ──────────────────
+
+
+@dataclass(frozen=True)
+class MarketTapeItem:
+    """One ticker row in the tape response from market-data /internal/v1/market/tape.
+
+    ``session="unavailable"`` is the documented sentinel — callers MUST
+    branch on it before treating ``premkt_price`` as live data (a stale
+    quote can otherwise mislead the brief into showing yesterday's close
+    as a fresh pre-market level).
+    """
+
+    symbol: str
+    last_close: float | None
+    premkt_price: float | None
+    premkt_pct: float | None
+    session: str  # "pre-mkt" | "open" | "after-hours" | "closed" | "unavailable"
+
+
+@dataclass(frozen=True)
+class MarketTapeResult:
+    """Top-level shape returned by ``MarketTapePort.get_tape``."""
+
+    as_of: datetime
+    tickers: list[MarketTapeItem] = field(default_factory=list)
+
+
+@runtime_checkable
+class MarketTapePort(Protocol):
+    """Port — fetch a futures / pre-market tape snapshot for N tickers.
+
+    Returns an empty ``MarketTapeResult`` (``tickers=[]``) on any HTTP /
+    network error so callers can degrade to "no tape line" rather than
+    failing the brief.
+    """
+
+    async def get_tape(self, symbols: list[str]) -> MarketTapeResult: ...
+
+
+@dataclass(frozen=True)
+class EarningsEvent:
+    """One earnings event row in the calendar response.
+
+    Fields surface as ``None`` rather than being omitted when we do not
+    have the data — callers can render "TBD" instead of guessing.
+    """
+
+    symbol: str
+    entity_id: UUID | None
+    report_date: date
+    when: str | None  # "AMC" | "BMO" | "DMH" | None
+    period: str | None
+    consensus_eps: float | None
+    consensus_rev_usd: float | None
+
+
+@dataclass(frozen=True)
+class EarningsCalendarResult:
+    """Top-level shape returned by ``EarningsCalendarPort.get_earnings``."""
+
+    from_date: date
+    to_date: date
+    events: list[EarningsEvent] = field(default_factory=list)
+
+
+@runtime_checkable
+class EarningsCalendarPort(Protocol):
+    """Port — fetch a forward-looking earnings calendar window.
+
+    ``days_ahead`` is interpreted as ``[today, today + days_ahead]`` in UTC
+    by the adapter — the brief generator does not care about exact bounds
+    so the port stays simple. Returns an empty ``EarningsCalendarResult``
+    on any HTTP / network error.
+    """
+
+    async def get_earnings(self, days_ahead: int) -> EarningsCalendarResult: ...
+
+
 # ── Intelligence Port DTOs + Protocol (PLAN-0080 Wave A) ──────────────────────
 
 
