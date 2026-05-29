@@ -228,14 +228,17 @@ describe("ScreenerPage — structure", () => {
     ).toBeInTheDocument();
   });
 
-  it("renders all 13 column headers with ALL CAPS text", () => {
+  it("renders all 20 column headers with ALL CAPS text", () => {
     render(<ScreenerPage />, { wrapper: makeWrapper() });
     // WHY check columnheader role: ScreenerTable sets role="columnheader" on
     // each header div for screen reader accessibility.
-    // PLAN-0051: a 13th SPARK (sparkline) column was added in parallel by the
-    // mini-chart task; this test count is the canonical authoritative number.
+    // Header count tracks the AG-Grid column defs in ag-screener-columns.tsx
+    // (PRD-0089 Wave IB-L2 added 6 fundamentals snapshot columns on top of
+    // the legacy 14-column baseline). §6.3's 14-cap applies to the
+    // screener-columns.ts DEFAULT_COLUMNS subset; the AG-Grid surface is
+    // governed separately by ColumnSettingsPopover's 14-column warning.
     const headers = screen.getAllByRole("columnheader");
-    expect(headers.length).toBe(13);
+    expect(headers.length).toBe(20);
 
     // WHY spot-check specific headers: verifies no columns were silently dropped
     // or renamed during the rewrite.

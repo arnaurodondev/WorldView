@@ -36,16 +36,17 @@ describe("screener-columns lib — load / save / reset", () => {
   it("loadColumnPrefs returns defaults when localStorage is empty", () => {
     const cols = loadColumnPrefs();
     expect(cols.length).toBe(DEFAULT_COLUMNS.length);
-    // WHY not every(visible): PLAN-0092 Wave C added 3 opt-in columns (opMargin,
-    // evEbitda, avgVol) that are hidden by default. Only the 15 default-visible
-    // columns should be checked — opt-in columns ship with visible: false.
+    // WHY not every(visible): PLAN-0092 Wave C added 3 opt-in columns
+    // (opMargin, evEbitda, avgVol); PRD-0089 fh-column-count-cap demoted
+    // forwardPe to opt-in to satisfy the §6.3 14-column cap. The 14
+    // default-visible columns below are the canonical set.
     const defaultVisibleKeys = ["ticker", "name", "sector", "price", "change",
-      "marketCap", "pe", "revenueGrowth", "forwardPe", "divYield", "roe",
+      "marketCap", "pe", "revenueGrowth", "divYield", "roe",
       "beta", "score", "range52w", "sparkline"];
     const defaultVisible = cols.filter((c) => defaultVisibleKeys.includes(c.key));
     expect(defaultVisible.every((c) => c.visible)).toBe(true);
-    // Opt-in columns should be hidden by default
-    const optInKeys = ["opMargin", "evEbitda", "avgVol"];
+    // Opt-in columns should be hidden by default (forwardPe demoted per §6.3 cap)
+    const optInKeys = ["opMargin", "evEbitda", "avgVol", "forwardPe"];
     const optIn = cols.filter((c) => optInKeys.includes(c.key));
     expect(optIn.every((c) => !c.visible)).toBe(true);
   });
