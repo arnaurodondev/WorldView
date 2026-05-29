@@ -16,9 +16,24 @@ if TYPE_CHECKING:
 
 _TTL_SECONDS = 86_400  # 24 hours
 
+# Resolver-gate version — bumped whenever ``resolver_gates.py`` semantics
+# change. The completion cache key embeds this so stale answers built
+# under a prior gate (e.g. the pre-F-LIVE-NEW-003 ungated SpaceX answer)
+# are evicted on first read. Independent of the ``v3`` keyspace bump so
+# resolver changes don't require coordinating with prompt/tool changes.
+RESOLVER_VERSION = 2
+
 
 def _cache_key(message: str, thread_id: UUID | None) -> str:
-    raw = f"{message}:{thread_id}"
+    # F-LIVE-NEW-003: defensive resolver-version segment. The resolver
+    # gate logic feeds the LLM's entity map; when that logic changes the
+    # cached answer is semantically stale even though the input text is
+    # identical. We embed RESOLVER_VERSION into the key so a bump
+    # auto-evicts every prior-resolver answer on next read without
+    # depending on the deploy-token flush (which requires operator action).
+    # Bump this value on EVERY change to resolver gates / thresholds /
+    # stop-words / S6 contract.
+    raw = f"{message}:{thread_id}:r{RESOLVER_VERSION}"
     digest = hashlib.sha256(raw.encode()).hexdigest()
     # PLAN-0093 ITER-8 FIX-LL — bumped v2 → v3 to evict ITER-7-era refusal /
     # empty-tool-call answers. With FIX-JJ (classifier timeout → fail-open) and
