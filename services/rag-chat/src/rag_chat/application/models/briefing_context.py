@@ -18,7 +18,11 @@ from uuid import UUID
 from rag_chat.domain.enums import BriefingType
 
 if TYPE_CHECKING:
-    from rag_chat.application.ports.upstream_clients import EnrichedChunkResult
+    from rag_chat.application.ports.upstream_clients import (
+        EarningsCalendarResult,
+        EnrichedChunkResult,
+        MarketTapeResult,
+    )
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -230,6 +234,13 @@ class BriefingContext:
     # gather P&L) keep the old behaviour; formatter renders nothing when None.
     portfolio_pnl: PortfolioPnLSnapshot | None = None
     sector_exposure: SectorExposure | None = None
+    # PLAN-0102 W3 follow-up (T-W3-FU-01): real broad-market tape snapshot
+    # (SPY / QQQ / VIX rows with session + premkt fields) and forward-looking
+    # earnings calendar. Both default to None so any pre-W3 caller keeps the
+    # old behaviour; the formatter renders graceful "data unavailable"
+    # placeholders when set to None or empty (R9).
+    market_tape: MarketTapeResult | None = None
+    earnings_calendar: EarningsCalendarResult | None = None
 
     @classmethod
     def for_morning(cls, *, user_id: UUID, tenant_id: UUID, **kwargs: Any) -> BriefingContext:

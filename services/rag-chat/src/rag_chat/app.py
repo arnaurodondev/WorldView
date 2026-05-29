@@ -611,7 +611,27 @@ def _wire_briefing_uc(app: FastAPI, settings: RagChatSettings, valkey_client: Va
     s6 = S6Client(base_url=settings.s6_base_url, timeout=settings.upstream_timeout_seconds)
     s7 = S7Client(base_url=settings.s7_base_url, timeout=settings.upstream_timeout_seconds)
 
-    context_gatherer = BriefingContextGatherer(s1=s1, s3=s3, s5=s5, s6=s6, s7=s7)
+    # PLAN-0102 W3 follow-up (T-W3-FU-01): wire the new tape + earnings
+    # adapters. Both target the same market-data base URL as S3Client
+    # (s3_base_url already points at market-data) so we re-use it rather
+    # than introducing a new config key for a single host.
+    from rag_chat.infrastructure.clients.earnings_calendar_client import EarningsCalendarClient
+    from rag_chat.infrastructure.clients.market_tape_client import MarketTapeClient
+
+    market_tape_client = MarketTapeClient(base_url=settings.s3_base_url, timeout=settings.upstream_timeout_seconds)
+    earnings_calendar_client = EarningsCalendarClient(
+        base_url=settings.s3_base_url, timeout=settings.upstream_timeout_seconds
+    )
+
+    context_gatherer = BriefingContextGatherer(
+        s1=s1,
+        s3=s3,
+        s5=s5,
+        s6=s6,
+        s7=s7,
+        market_tape=market_tape_client,
+        earnings_calendar=earnings_calendar_client,
+    )
 
     # D-R4-004 (PLAN-0087, 2026-05-09): brief_archive was previously NOT
     # supplied to GenerateBriefingUseCase, so the use case used a

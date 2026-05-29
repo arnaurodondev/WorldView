@@ -171,7 +171,28 @@ async def _run_loop(settings: Settings) -> None:
     # (/internal/v1/users/{user_id}/alerts/pending) so a single service JWT can
     # fetch alerts for any user. The handler path (in app.py) keeps the default
     # ``use_service_endpoint=False`` so live users still go through JWT-sub scoping.
-    context_gatherer = BriefingContextGatherer(s1=s1, s3=s3, s5=s5, s6=s6, s7=s7, use_service_endpoint=True)
+    # PLAN-0102 W3 follow-up (T-W3-FU-01): wire the tape + earnings adapters
+    # for the pre-gen worker. The targets are the same market-data host as
+    # S3Client, so we re-use ``s3_base_url`` rather than introducing a new
+    # config key for a single host.
+    from rag_chat.infrastructure.clients.earnings_calendar_client import EarningsCalendarClient
+    from rag_chat.infrastructure.clients.market_tape_client import MarketTapeClient
+
+    market_tape_client = MarketTapeClient(base_url=settings.s3_base_url, timeout=settings.upstream_timeout_seconds)
+    earnings_calendar_client = EarningsCalendarClient(
+        base_url=settings.s3_base_url, timeout=settings.upstream_timeout_seconds
+    )
+
+    context_gatherer = BriefingContextGatherer(
+        s1=s1,
+        s3=s3,
+        s5=s5,
+        s6=s6,
+        s7=s7,
+        use_service_endpoint=True,
+        market_tape=market_tape_client,
+        earnings_calendar=earnings_calendar_client,
+    )
     llm_chain = _build_llm_chain(settings, valkey)
 
     # WHY brief_archive=None: persistence is an API-layer concern; the worker

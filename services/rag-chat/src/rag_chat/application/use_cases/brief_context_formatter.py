@@ -329,6 +329,113 @@ class BriefContextFormatter:
             )
         return "\n".join(lines)
 
+    def format_market_tape(self, ctx: Any) -> str:
+        """Format the broad-market tape from ``ctx.market_tape`` (PLAN-0102 W3 follow-up).
+
+        Renders one line per ticker in the format
+        ``"SPY +0.20%, QQQ +0.45%, VIX 14.2"`` using premkt_pct when present,
+        falling back to ``last_close`` for VIX-style symbols. Rows whose
+        ``session == "unavailable"`` are skipped so the user never sees a
+        stale yesterday-close as a "pre-market" level.
+
+        Graceful degradation: returns the placeholder
+        ``"Tape data unavailable (as of YYYY-MM-DD)"`` when ``ctx.market_tape``
+        is None, when every row is ``session="unavailable"``, or when the
+        tickers list is empty. The date used is ``ctx.gathered_at`` (UTC).
+        """
+        from datetime import UTC as _UTC
+        from datetime import datetime as _datetime
+
+        gathered = getattr(ctx, "gathered_at", None)
+        as_of_str: str
+        if isinstance(gathered, _datetime):
+            as_of_str = gathered.strftime("%Y-%m-%d")
+        else:
+            as_of_str = _datetime.now(tz=_UTC).strftime("%Y-%m-%d")
+
+        tape = getattr(ctx, "market_tape", None) if ctx is not None else None
+        if tape is None or not getattr(tape, "tickers", None):
+            return f"Tape data unavailable (as of {as_of_str})"
+
+        # Filter out "unavailable" rows. If ALL rows are unavailable we fall
+        # back to the same placeholder rather than printing an empty header.
+        rendered: list[str] = []
+        for row in tape.tickers:
+            session = getattr(row, "session", "") or ""
+            if session == "unavailable":
+                continue
+            symbol = getattr(row, "symbol", "?") or "?"
+            premkt_pct = getattr(row, "premkt_pct", None)
+            last_close = getattr(row, "last_close", None)
+            premkt_price = getattr(row, "premkt_price", None)
+            if premkt_pct is not None:
+                sign = "+" if premkt_pct >= 0 else ""
+                rendered.append(f"{symbol} {sign}{premkt_pct:.2f}%")
+            elif premkt_price is not None:
+                rendered.append(f"{symbol} {premkt_price:.2f}")
+            elif last_close is not None:
+                # VIX-style "no % change" — render the level only.
+                rendered.append(f"{symbol} {last_close:.2f}")
+            else:
+                # Defensive: row had no usable numeric — skip rather than
+                # render "SPY N/A" which would confuse the LLM.
+                continue
+
+        if not rendered:
+            return f"Tape data unavailable (as of {as_of_str})"
+        return "Tape: " + ", ".join(rendered)
+
+    def format_earnings_calendar(self, ctx: Any, max_days: int = 2) -> str:
+        """Format upcoming earnings within the next ``max_days`` days.
+
+        PLAN-0102 W3 follow-up (T-W3-FU-02). Reads ``ctx.earnings_calendar``
+        (an ``EarningsCalendarResult``); only events with ``report_date``
+        within ``[today, today + max_days]`` are rendered to keep the
+        "Macro Today" section forward-looking and short.
+
+        Renders one bullet per event:
+          ``- NVDA earnings 2026-06-02 AMC (consensus EPS $0.74)``
+
+        Graceful degradation: returns the empty string when no calendar is
+        attached or no events fall in the window — the brief generator
+        then keeps the legacy "no scheduled prints" placeholder upstream.
+        """
+        from datetime import UTC as _UTC
+        from datetime import datetime as _datetime
+
+        cal = getattr(ctx, "earnings_calendar", None) if ctx is not None else None
+        if cal is None or not getattr(cal, "events", None):
+            return ""
+
+        today = _datetime.now(tz=_UTC).date()
+        cutoff_day = today.toordinal() + max_days
+
+        lines: list[str] = []
+        for ev in cal.events:
+            report_date = getattr(ev, "report_date", None)
+            if report_date is None:
+                continue
+            try:
+                if report_date.toordinal() > cutoff_day:
+                    continue
+            except AttributeError:
+                continue
+            symbol = getattr(ev, "symbol", "?") or "?"
+            when = getattr(ev, "when", None) or ""
+            consensus_eps = getattr(ev, "consensus_eps", None)
+            parts = [f"{symbol} earnings {report_date.isoformat()}"]
+            if when:
+                parts.append(when)
+            line = "- " + " ".join(parts)
+            if consensus_eps is not None:
+                # Negative values are valid (a consensus loss); preserve sign.
+                line += f" (consensus EPS ${consensus_eps:.2f})"
+            lines.append(line)
+
+        if not lines:
+            return ""
+        return "Macro Today (earnings next 2 days):\n" + "\n".join(lines)
+
     def format_market_overview(self, ctx: Any) -> str:
         """Format the market overview block — Tape, Holdings, Sector heatmap.
 

@@ -423,6 +423,38 @@ R9 safe degradation: when the P&L call fails the formatter falls back to
 the legacy "Holdings (N positions): name — quantity, weight X%" line so a
 single upstream outage never produces an empty brief.
 
+### Tape + earnings calendar (PLAN-0102 W3 follow-up)
+
+The morning brief also renders two additional sections sourced from the
+market-data internal endpoints landed in PLAN-0102 W3:
+
+1. **Tape** — `GET /internal/v1/market/tape?symbols=SPY,QQQ,VIX` via
+   `MarketTapeClient.get_tape()`. The gatherer wraps it in
+   `timed_upstream_call("market_tape")`; result lands on
+   `BriefingContext.market_tape` (`MarketTapeResult`).
+   `BriefContextFormatter.format_market_tape()` renders a single line
+   `"Tape: SPY +0.20%, QQQ +0.45%, VIX 14.20"` — rows whose
+   `session == "unavailable"` are skipped, and when every row is
+   unavailable the formatter degrades to
+   `"Tape data unavailable (as of YYYY-MM-DD)"` so a stale close never
+   leaks through as a "fresh" pre-market level.
+
+2. **Macro Today — earnings** — `GET /internal/v1/calendar/earnings`
+   via `EarningsCalendarClient.get_earnings(days_ahead=7)`. The gatherer
+   wraps it in `timed_upstream_call("earnings_calendar")`; result lands
+   on `BriefingContext.earnings_calendar` (`EarningsCalendarResult`).
+   `BriefContextFormatter.format_earnings_calendar(max_days=2)` renders
+   a `Macro Today (earnings next 2 days):` block with one bullet per
+   event (`- NVDA earnings 2026-06-02 AMC (consensus EPS $0.74)`).
+   Returns the empty string when no in-window events so the existing
+   macro placeholder upstream stays.
+
+Both clients target the same market-data host as `S3Client`
+(`settings.s3_base_url`); both default to `None` in the gatherer
+constructor so unit tests and legacy code paths keep working unchanged.
+DI happens in `app.py` (handler path) and
+`infrastructure/scheduling/brief_scheduler_main.py` (pre-gen worker).
+
 ---
 
 ## Caching Strategy

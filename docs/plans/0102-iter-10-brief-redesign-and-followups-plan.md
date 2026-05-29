@@ -226,9 +226,9 @@ Brief for AAPL/MSFT/NVDA holder includes:
 
 ---
 
-### Wave 3 — Brief Wave C: Tape + Earnings (P2, ~8 h) — **ENDPOINTS + PORTS SHIPPED 2026-05-29**
+### Wave 3 — Brief Wave C: Tape + Earnings (P2, ~8 h) — **SHIPPED 2026-05-29 (follow-up landed)**
 
-**Status**: Backend endpoints + rag-chat adapter ports landed on `feat/plan-0099-w4`. The actual brief-side wiring (calling these new clients from `briefing_context.py` / rendering in `brief_context_formatter.py`) is intentionally deferred to a **separate follow-up commit** to avoid colliding with the parallel W2 session that was actively editing those two files.
+**Status**: Backend endpoints + rag-chat adapter ports landed on `feat/plan-0099-w4` (commit `b2303cee`). Brief-side wiring (the follow-up that the original W3 commit deliberately deferred) landed on the same branch on 2026-05-29: `briefing_context.py` now calls `MarketTapeClient.get_tape()` + `EarningsCalendarClient.get_earnings()` in parallel, and `brief_context_formatter.py` renders the new sections.
 
 Files shipped:
 - `services/market-data/src/market_data/api/routers/internal_market_tape.py` (`GET /internal/v1/market/tape`, ~280 LOC + 12 unit tests)
@@ -243,16 +243,18 @@ Files shipped:
   - Shipped. Reads existing OHLCV (1d + 5m) + Quote rows; per-symbol fail-open with `session="unavailable"`; Valkey 60 s cache; 20-symbol cap.
 - **T-W3-02 — Earnings calendar endpoint**
   - Shipped. Reads `earnings_calendar` table joined with `instruments`; 90-day range cap; Valkey 5 min cache; fail-open empty `events: []` on DB error.
-- **T-W3-03 — Render in Tape + Macro Today sections** — **DEFERRED to a follow-up commit**
-  - The actual `briefing_context.py` + `brief_context_formatter.py` edits to call `MarketTapeClient.get_tape()` and `EarningsCalendarClient.get_earnings()` and render the new sections will land as a separate commit after W2 ships. Coordination note recorded in TRACKING.md.
+- **T-W3-03 — Render in Tape + Macro Today sections** — **SHIPPED**
+  - `BriefingContextGatherer` gained optional `market_tape` + `earnings_calendar` constructor kwargs (defaults `None` so the 20+ legacy test fixtures keep working unchanged); new `_fetch_market_tape()` and `_fetch_earnings_calendar()` methods wrap each call in `timed_upstream_call("market_tape")` / `timed_upstream_call("earnings_calendar")`; results land on `BriefingContext.market_tape` and `BriefingContext.earnings_calendar`.
+  - `BriefContextFormatter` gained `format_market_tape()` (renders `Tape: SPY +0.20%, QQQ +0.45%, VIX 14.20`; graceful `Tape data unavailable (as of YYYY-MM-DD)` placeholder when None / all rows `session="unavailable"`) and `format_earnings_calendar(max_days=2)` (renders `Macro Today (earnings next 2 days):` block with `- NVDA earnings YYYY-MM-DD AMC (consensus EPS $0.74)`; emits empty string when no in-window events so the legacy macro placeholder upstream stays).
+  - `GenerateBriefingUseCase` composes the three segments (`tape_text + market_text + earnings_text`) and passes them as the `market_overview` template variable; no prompt-template change required.
+  - DI: `app.py` and `infrastructure/scheduling/brief_scheduler_main.py` now construct `MarketTapeClient` + `EarningsCalendarClient` against `settings.s3_base_url` (same market-data host) and pass them through.
+  - Tests: 3 new unit tests in `services/rag-chat/tests/test_brief_context_formatter.py` — premkt-pct/VIX-level rendering, all-unavailable graceful placeholder, in-window earnings event + out-of-window guard. Full rag-chat unit suite (498 tests) green.
 
 #### W3 acceptance gate
 
 Brief includes:
-- "S&P futures +0.3%, NASDAQ +0.5%, VIX 14.2" in Tape
-- "Earnings this week: NVDA Tue AMC, CRM Wed AMC" in Macro Today
-
-(Gate verified after T-W3-03 follow-up commit lands.)
+- "S&P futures +0.3%, NASDAQ +0.5%, VIX 14.2" in Tape ✅ (implemented; live verification deferred until `worldview-market-data-1` container is started — see `docs/audits/2026-05-29-plan-0103-real-user-failures.md` §Q4/Q5).
+- "Earnings this week: NVDA Tue AMC, CRM Wed AMC" in Macro Today ✅ (same caveat).
 
 ---
 

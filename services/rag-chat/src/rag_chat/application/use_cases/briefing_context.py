@@ -37,7 +37,12 @@ from rag_chat.application.models.briefing_context import (
 from rag_chat.application.models.briefing_context import (
     PortfolioPnLItem as ModelPnLItem,
 )
-from rag_chat.application.ports.upstream_clients import ChunkSearchRequest, EnrichedChunkResult
+from rag_chat.application.ports.upstream_clients import (
+    ChunkSearchRequest,
+    EarningsCalendarResult,
+    EnrichedChunkResult,
+    MarketTapeResult,
+)
 from rag_chat.application.use_cases.brief_diagnostics import (
     compute_context_availability_score,
     emit_context_availability,
@@ -47,6 +52,8 @@ from rag_chat.domain.errors import ContextGatheringError, EntityNotFoundError
 
 if TYPE_CHECKING:
     from rag_chat.application.ports.upstream_clients import PortfolioContext
+    from rag_chat.infrastructure.clients.earnings_calendar_client import EarningsCalendarClient
+    from rag_chat.infrastructure.clients.market_tape_client import MarketTapeClient
     from rag_chat.infrastructure.clients.s1_client import S1Client
     from rag_chat.infrastructure.clients.s3_client import S3Client
     from rag_chat.infrastructure.clients.s5_client import S5Client
@@ -73,12 +80,21 @@ class BriefingContextGatherer:
         s7: S7Client,
         *,
         use_service_endpoint: bool = False,
+        market_tape: MarketTapeClient | None = None,
+        earnings_calendar: EarningsCalendarClient | None = None,
     ) -> None:
         self._s1 = s1
         self._s3 = s3
         self._s5 = s5
         self._s6 = s6
         self._s7 = s7
+        # PLAN-0102 W3 follow-up (T-W3-FU-01): tape + earnings calendar are
+        # kw-only optionals so the long list of existing test fixtures and
+        # the brief-scheduler wiring keep working unchanged. When None, the
+        # gatherer simply doesn't call them and the formatter renders the
+        # "data unavailable" placeholders (R9 safe degradation).
+        self._market_tape_client = market_tape
+        self._earnings_calendar_client = earnings_calendar
         # PLAN-0094 follow-up: when True, the worker path uses S5's
         # /internal/v1/users/{user_id}/alerts/pending endpoint (service-token
         # auth, user_id in URL). When False (default — handler/on-demand path),
@@ -277,6 +293,14 @@ class BriefingContextGatherer:
             held_entity_ids = {str(h.entity_id) for h in portfolio_snapshot.holdings if h.entity_id}
         news_articles = _score_news_by_overlap(news_articles, held_entity_ids, self._NEWS_OVERLAP_MULTIPLIER)
 
+        # PLAN-0102 W3 follow-up (T-W3-FU-01): real tape + earnings calendar
+        # from the new market-data endpoints. Both calls are wrapped with
+        # ``timed_upstream_call`` for SLO dashboards; both return None on
+        # failure or when the client wasn't wired (legacy callers / tests),
+        # and the formatter degrades gracefully in that case (R9).
+        market_tape = await self._fetch_market_tape()
+        earnings_calendar = await self._fetch_earnings_calendar(days_ahead=7)
+
         # PLAN-0102 W2 T-W2-03: real overnight P&L + sector aggregates.
         # Both calls are fire-and-forget with R9 safe degradation: on any
         # upstream failure we render the brief with the existing weight-only
@@ -348,6 +372,8 @@ class BriefingContextGatherer:
             context_availability_score=availability_score,
             portfolio_pnl=portfolio_pnl_snapshot,
             sector_exposure=sector_exposure,
+            market_tape=market_tape,
+            earnings_calendar=earnings_calendar,
         )
 
     # ── Instrument briefing context ──────────────────────────────────────────
@@ -689,6 +715,49 @@ class BriefingContextGatherer:
         )
 
         return pnl_snapshot, exposure
+
+    async def _fetch_market_tape(self) -> MarketTapeResult | None:
+        """Fetch the SPY/QQQ/VIX tape from market-data /internal/v1/market/tape.
+
+        PLAN-0102 W3 follow-up (T-W3-FU-01). The client adapter already
+        returns an empty ``MarketTapeResult`` on any HTTP/network error
+        (R9), so this method NEVER raises — it returns ``None`` only when
+        the client wasn't wired (legacy DI path / unit tests). The
+        formatter renders a "tape unavailable" placeholder in either case.
+        """
+        if self._market_tape_client is None:
+            return None
+        try:
+            async with timed_upstream_call("market_tape") as outcome:
+                result = await self._market_tape_client.get_tape(list(self._TAPE_TICKERS))
+                if not result.tickers:
+                    outcome.mark_empty()
+            return result
+        except Exception as exc:
+            # Belt-and-braces: the adapter itself swallows network errors,
+            # but we never want the brief to crash because the tape call
+            # surfaced something unexpected (e.g. a dataclass shape change).
+            log.warning("briefing_market_tape_failed", error=str(exc))
+            return None
+
+    async def _fetch_earnings_calendar(self, days_ahead: int = 7) -> EarningsCalendarResult | None:
+        """Fetch the forward-looking earnings calendar window.
+
+        PLAN-0102 W3 follow-up (T-W3-FU-01). Same R9 contract as
+        ``_fetch_market_tape`` — returns ``None`` when the client is not
+        wired; the adapter handles network errors internally.
+        """
+        if self._earnings_calendar_client is None:
+            return None
+        try:
+            async with timed_upstream_call("earnings_calendar") as outcome:
+                result = await self._earnings_calendar_client.get_earnings(days_ahead=days_ahead)
+                if not result.events:
+                    outcome.mark_empty()
+            return result
+        except Exception as exc:
+            log.warning("briefing_earnings_calendar_failed", error=str(exc))
+            return None
 
     async def _fetch_entity_chunks(
         self,

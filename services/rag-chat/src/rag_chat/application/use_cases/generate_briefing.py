@@ -327,6 +327,14 @@ class GenerateBriefingUseCase:
         events_text = _formatter.format_events(ctx, citation_offset=news_count)
         alerts_text = _formatter.format_alerts(ctx, citation_offset=news_count + events_count)
         market_text = _formatter.format_market_overview(ctx)
+        # PLAN-0102 W3 follow-up (T-W3-FU-02): prepend the real broad-market
+        # tape (when available) and append upcoming earnings under a
+        # "Macro Today" subsection. Both formatters return either useful
+        # content or graceful placeholder/empty strings so we can safely
+        # concatenate without checking for None.
+        tape_text = _formatter.format_market_tape(ctx)
+        earnings_text = _formatter.format_earnings_calendar(ctx)
+        market_text = "\n".join(seg for seg in (tape_text, market_text, earnings_text) if seg)
 
         # ── 3b. Empty context guard ───────────────────────────────────────────
         # WHY: When all upstream services are unavailable or return empty data,

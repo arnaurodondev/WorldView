@@ -442,3 +442,162 @@ def test_format_market_overview_holdings_only_no_tape_section() -> None:
     assert "Tape:" not in result
     assert "Your Portfolio Today:" in result
     assert "AAPL" in result
+
+
+# ── PLAN-0102 W3 follow-up (T-W3-FU-03): tape + earnings formatters ──────────
+
+
+def test_format_market_tape_renders_premkt_pct_and_vix_level() -> None:
+    """T-W3-FU-03: synthetic MarketTapeResult renders 'SPY +0.20%, QQQ +0.45%, VIX 14.2'.
+
+    Verifies the three primary code paths in a single shot:
+      * premkt_pct present -> "SYM +X.XX%"
+      * VIX-style (last_close only, no pct) -> "VIX 14.20"
+      * any header markers ("Tape:") prefix the line so the LLM can route.
+    """
+    from datetime import UTC, datetime
+
+    from rag_chat.application.ports.upstream_clients import MarketTapeItem, MarketTapeResult
+
+    formatter = _make_formatter()
+
+    tape = MarketTapeResult(
+        as_of=datetime(2026, 5, 29, 12, 0, tzinfo=UTC),
+        tickers=[
+            MarketTapeItem(
+                symbol="SPY",
+                last_close=485.0,
+                premkt_price=486.0,
+                premkt_pct=0.20,
+                session="pre-mkt",
+            ),
+            MarketTapeItem(
+                symbol="QQQ",
+                last_close=420.0,
+                premkt_price=421.9,
+                premkt_pct=0.45,
+                session="pre-mkt",
+            ),
+            MarketTapeItem(
+                symbol="VIX",
+                last_close=14.2,
+                premkt_price=None,
+                premkt_pct=None,
+                session="closed",
+            ),
+        ],
+    )
+    ctx = MagicMock()
+    ctx.market_tape = tape
+    ctx.gathered_at = datetime(2026, 5, 29, 12, 0, tzinfo=UTC)
+
+    result = formatter.format_market_tape(ctx)
+    # WHY each substring: locks the per-row contract so a refactor that
+    # silently drops one of the three rendering paths breaks loudly.
+    assert "Tape:" in result, result
+    assert "SPY +0.20%" in result, result
+    assert "QQQ +0.45%" in result, result
+    assert "VIX 14.20" in result, result
+
+
+def test_format_market_tape_all_unavailable_renders_placeholder() -> None:
+    """T-W3-FU-03: every row session='unavailable' -> graceful 'Tape data unavailable' placeholder.
+
+    The placeholder MUST include the gathered_at date so on-call can spot
+    stale-cache regressions.  No real ticker numbers leak through.
+    """
+    from datetime import UTC, datetime
+
+    from rag_chat.application.ports.upstream_clients import MarketTapeItem, MarketTapeResult
+
+    formatter = _make_formatter()
+    tape = MarketTapeResult(
+        as_of=datetime(2026, 5, 29, 12, 0, tzinfo=UTC),
+        tickers=[
+            MarketTapeItem(
+                symbol="SPY",
+                last_close=None,
+                premkt_price=None,
+                premkt_pct=None,
+                session="unavailable",
+            ),
+            MarketTapeItem(
+                symbol="QQQ",
+                last_close=None,
+                premkt_price=None,
+                premkt_pct=None,
+                session="unavailable",
+            ),
+        ],
+    )
+    ctx = MagicMock()
+    ctx.market_tape = tape
+    ctx.gathered_at = datetime(2026, 5, 29, 12, 0, tzinfo=UTC)
+
+    result = formatter.format_market_tape(ctx)
+    assert result.startswith("Tape data unavailable"), result
+    assert "2026-05-29" in result, result
+    # Defensive: no ticker symbol bled through despite being in input rows.
+    assert "SPY" not in result, result
+
+
+def test_format_earnings_calendar_renders_event_in_window() -> None:
+    """T-W3-FU-03: NVDA earnings next-Tuesday AMC renders under 'Macro Today'.
+
+    Builds a fake event two days from "today" (UTC) so the 2-day window
+    in format_earnings_calendar accepts it, then asserts the header,
+    ticker, AMC marker, and consensus EPS all surface verbatim.
+    """
+    from datetime import UTC, date, datetime, timedelta
+
+    from rag_chat.application.ports.upstream_clients import EarningsCalendarResult, EarningsEvent
+
+    formatter = _make_formatter()
+    today = datetime.now(tz=UTC).date()
+    event_day = today + timedelta(days=2)
+    cal = EarningsCalendarResult(
+        from_date=today,
+        to_date=today + timedelta(days=7),
+        events=[
+            EarningsEvent(
+                symbol="NVDA",
+                entity_id=None,
+                report_date=event_day,
+                when="AMC",
+                period="Q1 FY2026",
+                consensus_eps=0.74,
+                consensus_rev_usd=None,
+            )
+        ],
+    )
+    ctx = MagicMock()
+    ctx.earnings_calendar = cal
+    ctx.gathered_at = datetime.now(tz=UTC)
+
+    result = formatter.format_earnings_calendar(ctx)
+    assert "Macro Today" in result, result
+    assert "NVDA" in result, result
+    assert "AMC" in result, result
+    assert "$0.74" in result, result
+    # Out-of-window guard — same calendar with the event pushed 30 days out
+    # must render NOTHING.
+    cal_far = EarningsCalendarResult(
+        from_date=today,
+        to_date=today + timedelta(days=60),
+        events=[
+            EarningsEvent(
+                symbol="NVDA",
+                entity_id=None,
+                report_date=today + timedelta(days=30),
+                when="AMC",
+                period="Q1 FY2026",
+                consensus_eps=0.74,
+                consensus_rev_usd=None,
+            )
+        ],
+    )
+    ctx_far = MagicMock()
+    ctx_far.earnings_calendar = cal_far
+    ctx_far.gathered_at = datetime.now(tz=UTC)
+    assert formatter.format_earnings_calendar(ctx_far) == "", "out-of-window event leaked through"
+    _ = date  # silence unused-import linter on platforms where the import is needed only above
