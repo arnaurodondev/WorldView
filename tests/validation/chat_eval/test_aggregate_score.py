@@ -129,13 +129,20 @@ def _percentile(values: list[float], pct: float) -> float:
     return s[lo] + (s[hi] - s[lo]) * (k - lo)
 
 
-def _finite_only(xs: list[float]) -> list[float]:
-    """Drop NaN/inf so a single error-path run cannot poison the percentiles."""
+def _finite_only(xs: list[float] | list[float | None]) -> list[float]:
+    """Drop NaN/inf so a single error-path run cannot poison the percentiles.
+
+    PLAN-0102 W4 T-W4-01: also drops ``None`` (the new ``tps_streaming``
+    "skipped" sentinel for the direct-text branch where the synthesis phase
+    did not fire). Treating ``None`` as "no data" mirrors the existing NaN
+    policy — a single skipped question must not poison the median.
+    """
     return [x for x in xs if x is not None and math.isfinite(x)]
 
 
 # PLAN-0101 W3 — pure helper, unit-testable without a live rag-chat.
-def _tps_streaming_gate_failures(tps_streaming_values: list[float]) -> list[str]:
+# PLAN-0102 W4 T-W4-01: accepts ``None`` entries (skipped questions).
+def _tps_streaming_gate_failures(tps_streaming_values: list[float | None]) -> list[str]:
     """Return the list of gate-failure strings for the TPS-streaming threshold.
 
     Empty list = gate passes (or there are no finite samples — treated as "no
@@ -164,7 +171,9 @@ def test_aggregate_score_gate(ask: Callable[..., ChatRunResult]) -> None:
     latencies: list[float] = []
     ttfts: list[float] = []
     tps_values: list[float] = []
-    tps_streaming_values: list[float] = []
+    # PLAN-0102 W4 T-W4-01: ``tps_streaming`` is ``float | None`` — ``None``
+    # means the direct-text branch fired (no synthesis stream), not a failure.
+    tps_streaming_values: list[float | None] = []
     per_question: list[dict[str, Any]] = []
 
     for q in questions:

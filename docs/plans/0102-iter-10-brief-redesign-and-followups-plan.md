@@ -243,9 +243,11 @@ Brief includes:
 
 ---
 
-### Wave 4 — `tps_streaming` NaN repair (P0, ~2 h)
+### Wave 4 — `tps_streaming` NaN repair (P0, ~2 h)  — **SHIPPED 2026-05-29**
 
 **Goal**: fix the metric that's the whole gate, AND fix the latent double-record found in PLAN-0101 code review.
+
+**Status**: SHIPPED on `feat/plan-0099-w4`. Root cause was (1) the `_compute_tps_streaming()` helper returned NaN that the JSON serialiser collapsed to `None` for both "skipped" (direct-text branch, no synthesis stream fires — typical of short factual questions) and "failed", and the gate then treated every chat-eval row uniformly. Live verification confirmed (a) `phase_timings_ms.llm_synthesis_streaming` IS recorded by the backend on tool-heavy queries — observed 13016 ms on `"Compare AAPL and NVDA fundamentals"` and 157622 ms on the MSTR query — and (b) is correctly ABSENT on direct-text-branch queries like `"What is Apple?"`. The harness now returns `float | None` from `_compute_tps_streaming()`; `None` means "no data, gate skipped". BP-618 filed for the latent double-record risk and closed by `PhaseTimings.record_once()` (strict in tests, WARN-and-sum in prod). See W4 fields in TRACKING.md PLAN-0102 row.
 
 #### Tasks
 
@@ -276,7 +278,9 @@ Chat-eval `tps_streaming_p50` is a finite number ≥ 15 tok/s.
 
 ---
 
-### Wave 5 — Grader Policy Fixes (P1, ~3 h)
+### Wave 5 — Grader Policy Fixes (P1, ~3 h)  — **SHIPPED 2026-05-29**
+
+**Status**: SHIPPED on `feat/plan-0099-w4`. All three policy gaps fixed under BP-619 (cascade). W5-01: longer-wins threshold raised to 10x so validator trims no longer trigger fallback + orphan citation marker scrubber added. W5-02: `tool_results` SSE events now captured on `ChatRunResult`; grader downgrades USELESS → MARGINAL when refusal coincides with `item_count=0`. W5-03: Q6 was actually parser-too-narrow — the model named NVIDIA / TSMC / Broadcom / AMD / Intel using company names; the test regex only matched ticker symbols. Added 11-entry `_NAME_ALIASES` map. See W5 fields in TRACKING.md PLAN-0102 row.
 
 #### Tasks
 

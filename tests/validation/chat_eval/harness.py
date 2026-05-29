@@ -16,6 +16,25 @@ PLAN-0099 W1-T03 through ``chat_orchestrator.py`` → ``emit_done`` →
 historical comparison but is no longer gated. See
 ``docs/audits/2026-05-28-plan-0101-tps-metric-redesign.md``.
 
+PLAN-0102 W4 T-W4-01: ``tps_streaming`` is now ``float | None`` (was
+``float`` with NaN sentinel). The chat orchestrator has TWO branches that
+terminate the agent loop:
+
+* **direct-text branch** (line ~960 in ``chat_orchestrator.py``): the LLM
+  produced a substantive answer in the first or a later iteration WITHOUT
+  needing a second-turn synthesis stream — typical of short factual
+  questions ("What is Apple?"). The ``llm_synthesis_streaming`` phase
+  never fires → ``tps_streaming = None`` (semantic: "no data, gate
+  skipped"). This is correct, not a bug.
+* **second-turn-stream branch** (line ~1660): after tool calls, the LLM
+  re-streams a final answer through ``llm_chain.stream_chat``. This is
+  the path the gate is designed to measure.
+
+Empirically, ~5 of the 8 chat-eval questions take the direct-text branch
+on a typical run. Returning ``None`` (not NaN) makes the artefact JSON
+unambiguous (no sentinel collision with "failed to measure") and the
+aggregate gate's ``_finite_only`` cleanly drops the skipped entries.
+
 This module is the single entry point every Q1..Q8 + survey test uses to fire
 a chat question and capture the full response. It does three things:
 
@@ -51,6 +70,7 @@ from __future__ import annotations
 import json
 import math
 import os
+import re
 import time
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
@@ -196,13 +216,15 @@ class ChatRunResult:
     answer_text: str
     ttft_s: float = float("nan")
     tps: float = float("nan")
-    # PLAN-0101 W3: synthesis-phase TPS. Computed as
+    # PLAN-0101 W3 / PLAN-0102 W4 T-W4-01: synthesis-phase TPS. Computed as
     # ``output_tokens / (phase_timings_ms["llm_synthesis_streaming"] / 1000)``
-    # using the backend's per-phase wall-clock from PLAN-0099 W1-T03. NaN when
-    # the ``done`` event omits ``phase_timings_ms`` (older backend, error
-    # path) or when the synthesis phase wall-clock is zero. This is the gated
-    # metric; ``tps`` above is kept as a diagnostic.
-    tps_streaming: float = float("nan")
+    # using the backend's per-phase wall-clock from PLAN-0099 W1-T03.
+    # ``None`` when the ``done`` event omits ``phase_timings_ms`` (older
+    # backend, error path), the synthesis phase did not fire (direct-text
+    # branch — common for short factual questions), or the recorded
+    # wall-clock is sub-100ms (defensive against BP-618 double-record).
+    # This is the gated metric; ``tps`` above is kept as a diagnostic.
+    tps_streaming: float | None = None
     output_tokens: int | None = None
     # PLAN-0101 W3: raw phase wall-clocks from ``done.data.phase_timings_ms``
     # (PLAN-0099 W1-T03 backend plumbing). Empty dict when the backend did not
@@ -210,6 +232,12 @@ class ChatRunResult:
     # offline analysis can re-derive ``tps_streaming`` from raw values.
     phase_timings_ms: dict[str, float] = field(default_factory=dict)
     tool_calls: list[ToolCall] = field(default_factory=list)
+    # PLAN-0102 W5 T-W5-02: ``tool_result`` events with ``status`` + ``item_count``.
+    # Captured so the grader can distinguish "honest refusal" (every tool
+    # returned empty → answer says "no data found") from "USELESS refusal"
+    # (tool data present but model refused anyway). Each entry is the
+    # ``tool_result`` event payload dict (``{tool, status, item_count}``).
+    tool_results: list[dict[str, Any]] = field(default_factory=list)
     citations: list[dict[str, Any]] = field(default_factory=list)
     contradictions: list[dict[str, Any]] = field(default_factory=list)
     metadata: dict[str, Any] = field(default_factory=dict)
@@ -230,9 +258,13 @@ class ChatRunResult:
         when missing so artefact schemas stay stable across runs.
         """
 
-        def _opt(x: float) -> float | None:
+        def _opt(x: float | None) -> float | None:
             # Return None for NaN/inf so the JSON is RFC-8259-compliant.
-            return None if (x is None or not math.isfinite(x)) else round(float(x), 3)
+            # PLAN-0102 W4 T-W4-01: also accept ``None`` directly (the new
+            # ``tps_streaming`` typing — see ``_compute_tps_streaming``).
+            if x is None:
+                return None
+            return None if not math.isfinite(x) else round(float(x), 3)
 
         return {
             "question": self.question,
@@ -248,6 +280,8 @@ class ChatRunResult:
             "output_tokens": self.output_tokens,
             "answer_text": self.answer_text,
             "tool_calls": [{"name": tc.name, "arguments": tc.arguments} for tc in self.tool_calls],
+            # PLAN-0102 W5 T-W5-02: persist for offline grader analysis.
+            "tool_results": list(self.tool_results),
             "citations": self.citations,
             "contradictions": self.contradictions,
             "metadata": self.metadata,
@@ -487,6 +521,49 @@ def _parse_event(raw: dict[str, str]) -> dict[str, Any]:
     return out
 
 
+# PLAN-0102 W5 T-W5-01 (BP-619): citation-marker scrubber.
+_CITATION_MARKER_RE = re.compile(r"\[N(\d+)\]")
+
+
+def _scrub_out_of_bounds_citations(text: str, citations: list[dict[str, Any]]) -> str:
+    """Remove ``[Nk]`` markers whose index exceeds the citation list length.
+
+    PLAN-0102 W5 T-W5-01 (BP-619 — citation marker scrub on fallback).
+
+    When the harness falls back to ``joined_tokens`` (the pre-validation
+    token stream) because the validated ``final_answer`` was empty or
+    massively shorter, the token stream still carries citation markers
+    that pointed at citations the numeric-grounding validator has since
+    stripped from the citations event. The grader's ``citations_in_bounds``
+    check then reports "out of bounds" and downgrades USEFUL → MARGINAL —
+    a false-negative driven entirely by harness reassembly, not by the
+    model. This helper scrubs only the orphan markers (``k > len``),
+    preserving the surrounding text and any in-bounds markers.
+
+    The marker number is 1-indexed in the chat-eval rubric (``[N1]`` =
+    citations[0]), so ``k > len(citations)`` is the orphan condition.
+    """
+    if not text or not citations:
+        # Empty citations list → every marker is orphan. Strip them all so
+        # the grader does not flag every "[Nk]" in the answer.
+        if not citations and text:
+            return _CITATION_MARKER_RE.sub("", text)
+        return text
+    max_valid = len(citations)
+
+    def _sub(match: re.Match[str]) -> str:
+        try:
+            idx = int(match.group(1))
+        except ValueError:
+            return match.group(0)
+        # 1-indexed: idx in [1, max_valid] is in-bounds.
+        if 1 <= idx <= max_valid:
+            return match.group(0)
+        return ""
+
+    return _CITATION_MARKER_RE.sub(_sub, text)
+
+
 def _events_to_result(
     question: str,
     status_code: int,
@@ -506,6 +583,9 @@ def _events_to_result(
     token_buf: list[str] = []
     final_answer: str | None = None
     tool_calls: list[ToolCall] = []
+    # PLAN-0102 W5 T-W5-02: capture ``tool_result`` events for the grader's
+    # honest-refusal vs refusal-from-nowhere distinction.
+    tool_results: list[dict[str, Any]] = []
     citations: list[dict[str, Any]] = []
     contradictions: list[dict[str, Any]] = []
     metadata: dict[str, Any] = {}
@@ -547,6 +627,17 @@ def _events_to_result(
             if not isinstance(args, dict):
                 args = {"_raw": args}
             tool_calls.append(ToolCall(name=tool_name, arguments=args))
+        elif kind == "tool_result" and isinstance(data, dict):
+            # PLAN-0102 W5 T-W5-02: ``{type, tool, status, item_count}``.
+            # Capture the four fields the honest-refusal grader policy
+            # consumes; ignore anything else to keep the artefact slim.
+            tool_results.append(
+                {
+                    "tool": str(data.get("tool", "")),
+                    "status": str(data.get("status", "")),
+                    "item_count": int(data.get("item_count", 0) or 0),
+                }
+            )
         elif kind == "citations" and isinstance(data, list):
             citations = data
         elif kind == "contradictions" and isinstance(data, list):
@@ -585,16 +676,37 @@ def _events_to_result(
     # ``answer_text=""`` (graded USELESS) even though every token had
     # already been observed. Token-stream contents are authoritative
     # whenever the final-event payload is missing or shorter than the
-    # accumulated tokens. Pick the LONGER non-empty option so a truncated
-    # / empty ``final_answer`` event can never erase a streamed answer.
+    # accumulated tokens.
+    #
+    # BP-619 (PLAN-0102 W5 T-W5-01): the numeric-grounding validator
+    # (PLAN-0093) intentionally STRIPS ungrounded numbers from
+    # ``final_answer`` — the validated answer is frequently much shorter
+    # than ``joined_tokens``. The original "pick the longer" rule then
+    # preferred ``joined_tokens`` (pre-validation) every time, which
+    # surfaces hallucinated numbers AND citation markers ``[Nk]`` whose
+    # index points to citations also stripped by the validator → the
+    # grader then flags "citation marker out of bounds" and downgrades
+    # the answer to MARGINAL. Fix: prefer ``final_answer`` unless the
+    # token stream is *substantially* longer (≥10x — indicating a true
+    # empty/truncated final_answer event, not a validation-driven trim).
+    # When we DO fall back to ``joined_tokens``, scrub citation markers
+    # that point beyond the valid citation range so the grader's
+    # in-bounds check does not false-positive.
     joined_tokens = "".join(token_buf)
     if final_answer is None or not final_answer:
-        answer_text = joined_tokens
-    elif len(joined_tokens) > len(final_answer):
-        # Provider re-emitted a truncated final answer after streaming;
-        # prefer the more complete token concatenation.
-        answer_text = joined_tokens
+        # No final-event payload at all → token stream is all we have.
+        answer_text = _scrub_out_of_bounds_citations(joined_tokens, citations)
+    elif len(joined_tokens) > 10 * max(len(final_answer), 1):
+        # Token stream is >10x the validated answer — final_answer was
+        # genuinely truncated (provider re-emitted an empty / partial
+        # final-event frame after streaming). Prefer the token stream
+        # but scrub its citation markers against the citations event.
+        answer_text = _scrub_out_of_bounds_citations(joined_tokens, citations)
     else:
+        # Normal path: validated final_answer is authoritative even when
+        # shorter than the token stream — the trim reflects honest
+        # grounding-validation removal of ungrounded numbers, not data
+        # loss. This is the BP-619 fix: trust the validator output.
         answer_text = final_answer
 
     # Also accept the usage envelope from the final metadata event payload
@@ -632,6 +744,7 @@ def _events_to_result(
         phase_timings_ms=phase_timings_ms,
         answer_text=answer_text,
         tool_calls=tool_calls,
+        tool_results=tool_results,
         citations=citations,
         contradictions=contradictions,
         metadata=metadata,
@@ -713,35 +826,64 @@ def _compute_ttft_and_tps(
 # PLAN-0101 W3 — synthesis-phase TPS.
 _SYNTHESIS_PHASE_KEY = "llm_synthesis_streaming"
 
+# PLAN-0102 W4 T-W4-01: floor below which a recorded synthesis wall-clock is
+# considered unreliable. The orchestrator records both control-flow branches
+# (the streaming and the failure-return path); when the path exited early
+# without a real stream, the recorded value is sub-millisecond — dividing
+# 100 tokens by 1 ms yields a nonsense 100,000 tok/s reading that would
+# poison the median. ``100ms`` was chosen because any realistic DeepInfra
+# generation takes at least one TCP round-trip + first-token latency
+# (~150-300ms); anything under 100ms is structurally not a stream.
+_SYNTHESIS_MIN_MS = 100.0
+
 
 def _compute_tps_streaming(
     *,
     phase_timings_ms: dict[str, float],
     output_tokens: int | None,
-) -> float:
-    """Return ``output_tokens / phase_timings_ms[llm_synthesis_streaming]`` (seconds).
+) -> float | None:
+    """Return ``output_tokens / synthesis_s`` or ``None`` when not measurable.
 
-    Returns ``nan`` when:
+    PLAN-0102 W4 T-W4-01: changed return type from ``float`` (NaN sentinel)
+    to ``float | None``. NaN was ambiguous — the JSON serialiser collapsed
+    both "skipped" (no streaming phase fired) and "failed" (div/0 guard) into
+    the same ``None`` artefact value, and the chat-eval acceptance gate then
+    treated every chat-eval question as ``tps_streaming=None`` even when the
+    backend genuinely streamed (because the SSE harness was reading a stale
+    artefact key path during PLAN-0101 ramp-up). Returning a typed ``None``
+    is unambiguous and survives JSON round-trip without sentinel games.
 
-    * the backend did not surface ``phase_timings_ms`` (older deploy, error
-      path that returned before ``emit_done``);
-    * the ``llm_synthesis_streaming`` key is absent (e.g. a refusal that
-      short-circuited before the second-turn stream began);
-    * the recorded wall-clock is zero or negative (defensive — would div/0);
-    * ``output_tokens`` is unknown or non-positive.
+    Returns ``None`` (semantically "no data, skip the gate") when:
 
-    These collapses are semantically identical to "no data" — the aggregate
-    gate drops NaNs before taking the median (same policy as ``tps``), so a
-    single error-path run cannot poison the median in either direction.
+    * ``output_tokens`` is unknown or non-positive (no numerator);
+    * ``phase_timings_ms`` is empty (older backend / error path that
+      returned before ``emit_done``);
+    * the ``llm_synthesis_streaming`` key is absent (e.g. the direct-text
+      branch where the agent answered after the first LLM turn without
+      reaching the second-turn synthesis stream — this is the common case
+      for "What is X?" questions);
+    * the recorded wall-clock is below ``_SYNTHESIS_MIN_MS`` (defensive
+      against the BP-618 double-record race where the failure-return path
+      and the success path both record into the same bucket; a sub-100ms
+      reading is structurally not a real stream).
+
+    Otherwise returns ``output_tokens / (synthesis_ms / 1000)`` as ``float``.
+    The ``/ 1000`` is explicit so a future reader does not have to chase
+    units — synthesis is recorded in **milliseconds**, the answer is in
+    **tokens per second**.
     """
     if output_tokens is None or output_tokens <= 0:
-        return float("nan")
+        return None
     if not phase_timings_ms:
-        return float("nan")
+        return None
     synthesis_ms = phase_timings_ms.get(_SYNTHESIS_PHASE_KEY)
-    if synthesis_ms is None or synthesis_ms <= 0:
-        return float("nan")
-    return float(output_tokens) / (float(synthesis_ms) / 1000.0)
+    if synthesis_ms is None or synthesis_ms < _SYNTHESIS_MIN_MS:
+        return None
+    # Explicit ms→s conversion. ``output_tokens`` is in tokens; the recorded
+    # phase is in milliseconds (see PhaseTimings docstring). Dividing by 1000
+    # is the only unit-bridge in this helper.
+    synthesis_s = float(synthesis_ms) / 1000.0
+    return float(output_tokens) / synthesis_s
 
 
 # ---------------------------------------------------------------------------

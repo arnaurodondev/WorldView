@@ -85,3 +85,47 @@ def test_phase_records_on_exception() -> None:
     assert "failing_phase" in snap
     # At least the sleep duration was recorded.
     assert snap["failing_phase"] > 2.0
+
+
+# ---------------------------------------------------------------------------
+# PLAN-0102 W4 T-W4-02 (BP-618) — record_once invariant.
+# ---------------------------------------------------------------------------
+
+
+def test_record_once_first_call_sets_value() -> None:
+    """First ``record_once`` on a fresh phase stores the value verbatim."""
+    t = PhaseTimings()
+    t.record_once("synthesis", 1234.5)
+    assert t.as_dict() == {"synthesis": pytest.approx(1234.5)}
+
+
+def test_record_once_double_call_raises_in_strict_mode(monkeypatch: pytest.MonkeyPatch) -> None:
+    """In strict mode (PHASE_TIMINGS_STRICT=1) a double-record raises.
+
+    The chat-orchestrator has two ``record`` sites for
+    ``llm_synthesis_streaming`` (success branch + failure-return branch)
+    that are mutually exclusive only by control-flow accident. If a
+    refactor breaks that, the test must fail loudly — not silently
+    double-count.
+    """
+    monkeypatch.setenv("PHASE_TIMINGS_STRICT", "1")
+    t = PhaseTimings()
+    t.record_once("synthesis", 100.0)
+    with pytest.raises(AssertionError, match="already recorded"):
+        t.record_once("synthesis", 50.0)
+
+
+def test_record_once_double_call_warns_and_sums_in_prod_mode(monkeypatch: pytest.MonkeyPatch) -> None:
+    """In prod mode (env unset) a double-record WARNs and falls back to sum.
+
+    Rationale: a metrics-only bug must never crash the user-facing chat
+    stream — but it must be VISIBLE in logs so the operator can fix it.
+    """
+    # Make sure the env var is NOT set (paranoid: other tests may have set it).
+    monkeypatch.delenv("PHASE_TIMINGS_STRICT", raising=False)
+    t = PhaseTimings()
+    t.record_once("synthesis", 100.0)
+    # Should not raise.
+    t.record_once("synthesis", 50.0)
+    # Falls back to record semantics — sums.
+    assert t.as_dict()["synthesis"] == pytest.approx(150.0)

@@ -27,8 +27,24 @@ harness can scrape it from artifacts.
 from __future__ import annotations
 
 import contextlib
+import os
 import time
 from collections.abc import AsyncIterator
+
+import structlog
+
+log = structlog.get_logger(__name__)
+
+# PLAN-0102 W4 T-W4-02: ``record_once`` strict-mode toggle.
+#
+# In test environments we want a double-record to FAIL LOUDLY (raise an
+# AssertionError) so the test suite catches the regression. In production
+# we want a WARN log + accumulate, because raising would crash the chat
+# stream over a metrics-only bug — the user-facing answer is unaffected.
+# The harness sets ``PHASE_TIMINGS_STRICT=1`` in conftest so tests assert
+# the invariant; production leaves it unset and gets the warn-and-sum
+# behaviour.
+_STRICT_ENV_VAR = "PHASE_TIMINGS_STRICT"
 
 
 class PhaseTimings:
@@ -50,6 +66,51 @@ class PhaseTimings:
     def record(self, name: str, elapsed_ms: float) -> None:
         """Add ``elapsed_ms`` to the bucket for ``name`` (creating it at 0.0)."""
         self._data[name] = self._data.get(name, 0.0) + float(elapsed_ms)
+
+    def record_once(self, name: str, elapsed_ms: float) -> None:
+        """Record ``elapsed_ms`` for ``name``, asserting no prior observation.
+
+        PLAN-0102 W4 T-W4-02 (BP-618 — phase double-record).
+
+        Some phases (notably ``llm_synthesis_streaming``) have two recording
+        sites in ``chat_orchestrator.py`` that are mutually exclusive only
+        by control-flow accident: one in the streaming-success branch
+        (~line 1716) and one in the streaming-failure ``except`` clause
+        (~line 1707) that returns immediately after recording. If a future
+        refactor breaks that mutual exclusion, ``record()`` would silently
+        sum the two readings, double-counting the synthesis wall-clock and
+        halving ``tps_streaming``. ``record_once()`` makes the invariant
+        explicit:
+
+        * **strict mode** (``PHASE_TIMINGS_STRICT=1`` — set in the test
+          conftest): raises ``AssertionError`` on the second call. Tests
+          must pin the invariant.
+        * **prod mode** (env var unset): WARN-logs the double-record (with
+          the prior value, the new value, and the phase name) and falls
+          back to ``record`` semantics so a metrics-only bug never crashes
+          the user-facing chat stream.
+        """
+        prior = self._data.get(name)
+        if prior is None:
+            self._data[name] = float(elapsed_ms)
+            return
+        # Already recorded — diagnose.
+        strict = os.environ.get(_STRICT_ENV_VAR, "").lower() in {"1", "true", "yes"}
+        if strict:
+            raise AssertionError(
+                f"phase_timings.record_once: '{name}' already recorded "
+                f"(prior={prior:.3f} ms, new={float(elapsed_ms):.3f} ms)"
+            )
+        log.warning(  # type: ignore[no-any-return]
+            "phase_timings_double_record",
+            phase=name,
+            prior_ms=round(prior, 3),
+            new_ms=round(float(elapsed_ms), 3),
+            note="record_once invariant violated; summing as fallback",
+        )
+        # Fall back to ``record`` semantics in prod so we don't crash the
+        # stream. The WARN is the alert; the metric is best-effort.
+        self._data[name] = prior + float(elapsed_ms)
 
     def as_dict(self) -> dict[str, float]:
         """Return a shallow copy of the underlying ``{name: ms}`` mapping.

@@ -496,8 +496,43 @@ def grade_response(
         useless_reasons.append(f"required HTTP 200 but got {result.status_code}")
     if not answer.strip():
         useless_reasons.append("empty answer")
+    # PLAN-0102 W5 T-W5-02: honest-refusal vs refusal-from-nowhere.
+    #
+    # The Q3 Tim Cook regression showed a USELESS verdict for an answer
+    # that correctly refused BECAUSE the upstream tool
+    # (``get_entity_intelligence``) returned ``item_count=0``. The model
+    # did the right thing under R19 (no fabrication); the grader's blanket
+    # refusal → USELESS rule penalised it anyway. Distinguish:
+    #
+    # * honest-refusal-with-evidence: the answer reads as a refusal AND
+    #   at least one captured ``tool_result`` event reports ``item_count=0``
+    #   (or ``status="empty"`` / ``"error"``). Downgrade USELESS → MARGINAL —
+    #   the answer is not maximally useful, but the model engaged honestly
+    #   with the tool data and correctly declined to fabricate.
+    # * refusal-from-nowhere: the answer reads as a refusal AND every
+    #   captured tool returned data. This is the original USELESS case.
+    #
+    # When ``tool_results`` is empty (legacy artefacts, older backend that
+    # did not emit ``tool_result`` SSE events) we fall back to the original
+    # behaviour — no downgrade, USELESS stands.
+    refusal_with_evidence = False
     if is_refusal(answer) and not gt.get("allow_empty_finding"):
-        useless_reasons.append("response reads as a refusal")
+        tool_results_list = list(result.tool_results)
+        if tool_results_list:
+            any_empty = any(
+                int(tr.get("item_count", 0) or 0) == 0 or str(tr.get("status", "")).lower() in {"empty", "error"}
+                for tr in tool_results_list
+            )
+            if any_empty:
+                # Honest data-gap acknowledgement — record as MARGINAL reason
+                # instead of USELESS.
+                refusal_with_evidence = True
+                reasons.append("honest refusal: at least one tool returned 0 items")
+            else:
+                useless_reasons.append("response reads as a refusal")
+        else:
+            # No tool_results telemetry — preserve original behaviour.
+            useless_reasons.append("response reads as a refusal")
 
     # ── Verdict assembly ─────────────────────────────────────────────────
     if harmful_reasons:
@@ -506,7 +541,7 @@ def grade_response(
     elif useless_reasons:
         verdict = "USELESS"
         reasons = useless_reasons + reasons
-    elif reasons:
+    elif reasons or refusal_with_evidence:
         verdict = "MARGINAL"
     else:
         verdict = "USEFUL"

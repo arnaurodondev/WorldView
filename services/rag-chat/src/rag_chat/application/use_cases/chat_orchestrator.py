@@ -1704,7 +1704,13 @@ class ChatOrchestratorUseCase:
                     log.error("tool_use_second_turn_failed", error=str(exc), partial_chars=_partial_len)  # type: ignore[no-any-return]
                     # PLAN-0099 W1-T03: record synthesis time even on hard
                     # failure (the failed call still consumed wall-clock).
-                    phases.record("llm_synthesis_streaming", (time.monotonic() - _synthesis_t0) * 1000.0)
+                    # PLAN-0102 W4 T-W4-02 (BP-618): ``record_once`` asserts
+                    # this phase has not already been recorded — the success
+                    # branch below is mutually exclusive (the ``return`` two
+                    # lines down guarantees we never fall through). The
+                    # invariant becomes explicit instead of control-flow
+                    # accident.
+                    phases.record_once("llm_synthesis_streaming", (time.monotonic() - _synthesis_t0) * 1000.0)
                     log.info(  # type: ignore[no-any-return]
                         "chat_phase_timings_ms",
                         phases=phases.as_dict(),
@@ -1713,7 +1719,8 @@ class ChatOrchestratorUseCase:
                     yield p.emitter.emit_error("llm_second_turn_failed", "Unable to generate answer")
                     return
             # PLAN-0099 W1-T03: synthesis succeeded (or partial-recovered).
-            phases.record("llm_synthesis_streaming", (time.monotonic() - _synthesis_t0) * 1000.0)
+            # PLAN-0102 W4 T-W4-02 (BP-618): see ``record_once`` note above.
+            phases.record_once("llm_synthesis_streaming", (time.monotonic() - _synthesis_t0) * 1000.0)
             provider_name = p.llm_chain.last_provider_name
 
         # ── BP-605 (PLAN-0100 W1 T-W1-03): entity-grounding refusal ───────────

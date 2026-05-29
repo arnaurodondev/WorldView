@@ -152,11 +152,19 @@ class TestBP613AnswerAssemblyFallback:
         )
         assert result.answer_text == "Hello world."
 
-    def test_shorter_final_answer_loses_to_longer_token_stream(self) -> None:
-        """If the provider re-emits a truncated final_answer, prefer tokens."""
+    def test_severely_truncated_final_answer_loses_to_longer_token_stream(self) -> None:
+        """If the provider re-emits a *severely* truncated final_answer
+        (≥10x shorter than tokens), prefer the token stream.
+
+        PLAN-0102 W5 T-W5-01 (BP-619): the original "any-shorter" rule was
+        relaxed to a 10x threshold so a numeric-grounding-validator trim
+        (which legitimately shortens the answer by a moderate amount) no
+        longer triggers a fallback to the unvalidated token stream.
+        """
+        long_tokens = "A complete answer with multiple sentences " * 20  # ~860 chars
         events = [
-            {"event": "token", "data": {"text": "A complete answer with multiple sentences."}},
-            {"event": "final_answer", "data": {"text": "A complete"}},  # truncated
+            {"event": "token", "data": {"text": long_tokens}},
+            {"event": "final_answer", "data": {"text": "A complete"}},  # ~10 chars
         ]
         result = _events_to_result(
             question="q",
@@ -164,7 +172,30 @@ class TestBP613AnswerAssemblyFallback:
             events=events,
             latency_s=0.5,
         )
-        assert result.answer_text == "A complete answer with multiple sentences."
+        # Fallback triggered: token stream is 86x longer than final_answer.
+        assert result.answer_text.startswith("A complete answer with multiple sentences")
+
+    def test_moderate_validator_trim_keeps_final_answer(self) -> None:
+        """PLAN-0102 W5 T-W5-01 (BP-619): the numeric-grounding validator
+        trims ungrounded numbers from the final answer. A 2-3x length
+        difference is normal and the validated (shorter) answer must win.
+        """
+        token_stream_text = "AAPL Q1 2026 revenue was $124.3B and EPS was $2.18 per filings."  # noqa: S105
+        validated = "AAPL Q1 2026 revenue was per filings."  # validator stripped numbers
+        events = [
+            {"event": "token", "data": {"text": token_stream_text}},
+            {"event": "final_answer", "data": {"text": validated}},
+        ]
+        result = _events_to_result(
+            question="q",
+            status_code=200,
+            events=events,
+            latency_s=0.5,
+        )
+        # The validated (shorter) answer wins; the unvalidated token stream
+        # with its ungrounded numbers must not leak back in.
+        assert result.answer_text == validated
+        assert "$124.3B" not in result.answer_text
 
     def test_full_final_answer_still_wins_when_present(self) -> None:
         """Regression: when final_answer is the canonical full text, use it."""
@@ -180,6 +211,60 @@ class TestBP613AnswerAssemblyFallback:
             latency_s=0.5,
         )
         assert result.answer_text == "A partial. Plus a synthesis paragraph."
+
+
+class TestCitationMarkerScrub:
+    """PLAN-0102 W5 T-W5-01 (BP-619) — orphan citation marker scrubber.
+
+    When the harness falls back to ``joined_tokens`` (the pre-validation
+    token stream) the orphan ``[Nk]`` markers (k > len(citations)) must be
+    scrubbed so the grader's in-bounds check does not false-positive.
+    """
+
+    def test_scrub_drops_out_of_bounds_marker(self) -> None:
+        """``[N7]`` against a 3-citation list → marker removed, text preserved."""
+        from tests.validation.chat_eval.harness import _scrub_out_of_bounds_citations
+
+        text = "AAPL Q1 [N1] revenue was strong [N7] per filings [N2]."
+        citations = [{"snippet": "a"}, {"snippet": "b"}, {"snippet": "c"}]
+        out = _scrub_out_of_bounds_citations(text, citations)
+        assert "[N1]" in out
+        assert "[N2]" in out
+        assert "[N7]" not in out
+
+    def test_scrub_preserves_all_in_bounds_markers(self) -> None:
+        """All markers in-range → text returned verbatim."""
+        from tests.validation.chat_eval.harness import _scrub_out_of_bounds_citations
+
+        text = "Cited [N1], cited [N2]."
+        citations = [{"snippet": "a"}, {"snippet": "b"}]
+        assert _scrub_out_of_bounds_citations(text, citations) == text
+
+    def test_scrub_strips_all_markers_when_citations_empty(self) -> None:
+        """No citations event → every marker is orphan → strip all."""
+        from tests.validation.chat_eval.harness import _scrub_out_of_bounds_citations
+
+        text = "Some claim [N1] and another [N3]."
+        out = _scrub_out_of_bounds_citations(text, [])
+        assert "[N" not in out
+
+    def test_severely_truncated_final_answer_scrubs_orphan_marker(self) -> None:
+        """End-to-end: harness fallback to long token stream with [N7]
+        marker against only 3 citations → ``answer_text`` has [N7] removed.
+        """
+        long_tokens = "AAPL revenue was strong [N7] per the screener report. " * 25
+        events = [
+            {"event": "token", "data": {"text": long_tokens}},
+            {"event": "final_answer", "data": {"text": "x"}},  # forces fallback
+            {"event": "citations", "data": [{"snippet": "a"}, {"snippet": "b"}, {"snippet": "c"}]},
+        ]
+        result = _events_to_result(
+            question="q",
+            status_code=200,
+            events=events,
+            latency_s=0.5,
+        )
+        assert "[N7]" not in result.answer_text
 
 
 class TestTPSStreamingSynthesisPhase:
@@ -199,46 +284,66 @@ class TestTPSStreamingSynthesisPhase:
         )
         assert tps == pytest.approx(30.0, abs=1e-6)
 
-    def test_missing_phase_timings_yields_nan(self) -> None:
-        """No ``phase_timings_ms`` dict (older backend, error path) → NaN."""
-        import math
+    def test_missing_phase_timings_yields_none(self) -> None:
+        """No ``phase_timings_ms`` dict (older backend, error path) → ``None``.
 
-        tps = _compute_tps_streaming(phase_timings_ms={}, output_tokens=60)
-        assert math.isnan(tps)
-
-    def test_missing_synthesis_key_yields_nan(self) -> None:
-        """Phase dict present but ``llm_synthesis_streaming`` absent (refusal
-        path) → NaN. Other phase entries are ignored.
+        PLAN-0102 W4 T-W4-01: NaN sentinel replaced by typed ``None`` so JSON
+        round-trip is unambiguous and the aggregate gate's ``_finite_only``
+        cleanly drops the entry without sentinel games.
         """
-        import math
+        tps = _compute_tps_streaming(phase_timings_ms={}, output_tokens=60)
+        assert tps is None
 
+    def test_missing_synthesis_key_yields_none(self) -> None:
+        """Phase dict present but ``llm_synthesis_streaming`` absent
+        (direct-text branch) → ``None``. Other phase entries are ignored.
+        """
         tps = _compute_tps_streaming(
             phase_timings_ms={"check_cache": 50.0, "entity_resolution": 200.0},
             output_tokens=60,
         )
-        assert math.isnan(tps)
+        assert tps is None
 
-    def test_zero_synthesis_wall_clock_yields_nan(self) -> None:
-        """Defensive divide-by-zero guard: synthesis_ms == 0 → NaN, not inf."""
-        import math
+    def test_sub_threshold_synthesis_wall_clock_yields_none(self) -> None:
+        """Defensive guard against BP-618 double-record race.
 
+        PLAN-0102 W4 T-W4-01: anything under ``_SYNTHESIS_MIN_MS`` (100ms)
+        is structurally not a real stream — DeepInfra's first-token
+        latency alone is ~150-300ms. Reading ``60 tok / 1ms = 60000 tok/s``
+        would otherwise poison the median.
+        """
         tps = _compute_tps_streaming(
             phase_timings_ms={"llm_synthesis_streaming": 0.0},
             output_tokens=60,
         )
-        assert math.isnan(tps)
+        assert tps is None
+        # And 50ms is also below floor.
+        tps = _compute_tps_streaming(
+            phase_timings_ms={"llm_synthesis_streaming": 50.0},
+            output_tokens=60,
+        )
+        assert tps is None
 
-    def test_zero_output_tokens_yields_nan(self) -> None:
-        """Zero numerator must yield NaN (no data), not 0.0 — symmetric with
-        the legacy ``tps`` policy.
-        """
-        import math
-
+    def test_zero_output_tokens_yields_none(self) -> None:
+        """Zero numerator → ``None`` (no data)."""
         tps = _compute_tps_streaming(
             phase_timings_ms={"llm_synthesis_streaming": 2000.0},
             output_tokens=0,
         )
-        assert math.isnan(tps)
+        assert tps is None
+
+    def test_explicit_ms_to_seconds_conversion(self) -> None:
+        """Pin the unit-bridge: 100 tokens / 500 ms must yield 200.0 tok/s.
+
+        Regression guard for PLAN-0102 W4 T-W4-01: ensures the ``/ 1000``
+        ms→s conversion is correct (forgetting it would yield 0.2 tok/s,
+        which would silently fail the 20 tok/s gate everywhere).
+        """
+        tps = _compute_tps_streaming(
+            phase_timings_ms={"llm_synthesis_streaming": 500.0},
+            output_tokens=100,
+        )
+        assert tps == pytest.approx(200.0, abs=1e-6)
 
     def test_events_to_result_extracts_phase_timings_from_done(self) -> None:
         """End-to-end: ``done`` event with ``phase_timings_ms`` lands on the
@@ -267,10 +372,11 @@ class TestTPSStreamingSynthesisPhase:
         assert result.phase_timings_ms == {"llm_synthesis_streaming": 2000.0}
         assert result.tps_streaming == pytest.approx(30.0, abs=1e-6)
 
-    def test_events_to_result_done_without_phase_timings_yields_nan_streaming(self) -> None:
-        """``done`` event without ``phase_timings_ms`` (older backend) → NaN."""
-        import math
+    def test_events_to_result_done_without_phase_timings_yields_none_streaming(self) -> None:
+        """``done`` event without ``phase_timings_ms`` (older backend) → ``None``.
 
+        PLAN-0102 W4 T-W4-01: NaN sentinel replaced by typed ``None``.
+        """
         events = [
             {"event": "token", "data": {"text": "Hello world."}},
             {"event": "metadata", "data": {"usage": {"output_tokens": 60}}},
@@ -283,7 +389,7 @@ class TestTPSStreamingSynthesisPhase:
             latency_s=10.0,
         )
         assert result.phase_timings_ms == {}
-        assert math.isnan(result.tps_streaming)
+        assert result.tps_streaming is None
 
 
 class TestAggregateTPSStreamingGate:
@@ -323,4 +429,26 @@ class TestAggregateTPSStreamingGate:
 
         nan = float("nan")
         failures = _tps_streaming_gate_failures([nan, nan, nan])
+        assert failures == []
+
+    def test_all_none_values_skip_the_gate(self) -> None:
+        """PLAN-0102 W4 T-W4-01: when every sample is ``None`` (no synthesis
+        phase fired anywhere — every question hit the direct-text branch),
+        the gate is informational-only — no failure raised.
+        """
+        from tests.validation.chat_eval.test_aggregate_score import _tps_streaming_gate_failures
+
+        failures = _tps_streaming_gate_failures([None, None, None])
+        assert failures == []
+
+    def test_mixed_none_and_finite_values_use_only_finite(self) -> None:
+        """PLAN-0102 W4 T-W4-01: ``None`` entries are dropped; the gate is
+        evaluated against the surviving finite samples.
+
+        Synthetic mix: 3 skipped + 2 finite values both above the 20 tok/s
+        floor → gate passes.
+        """
+        from tests.validation.chat_eval.test_aggregate_score import _tps_streaming_gate_failures
+
+        failures = _tps_streaming_gate_failures([None, 25.0, None, 30.0, None])
         assert failures == []

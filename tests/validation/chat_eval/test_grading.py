@@ -587,6 +587,68 @@ class TestGraderRefusalPolicy:
         assert grade["verdict"] == USEFUL
 
 
+class TestHonestRefusalWithEvidenceDowngrade:
+    """PLAN-0102 W5 T-W5-02 (BP-619 — honest-refusal grader policy).
+
+    A short refusal answer paired with a ``tool_result`` reporting
+    ``item_count=0`` is the agent honestly observing a tool gap, NOT a
+    USELESS refusal-from-nowhere. The grader must downgrade USELESS →
+    MARGINAL in that case. When NO ``tool_result`` events are captured
+    (legacy artefacts, older backend) the original USELESS behaviour is
+    preserved.
+    """
+
+    @staticmethod
+    def _result(answer: str, tool_results: list[dict[str, object]] | None = None):  # type: ignore[no-untyped-def]
+        from tests.validation.chat_eval.harness import ChatRunResult
+
+        return ChatRunResult(
+            question="anything",
+            status_code=200,
+            latency_s=0.1,
+            answer_text=answer,
+            tool_results=tool_results or [],
+            metadata={},
+            raw_events=[{"event": "token", "data": {"text": "..."}}],
+        )
+
+    def test_refusal_with_empty_tool_result_downgrades_to_marginal(self) -> None:
+        """Short refusal + ``item_count=0`` → MARGINAL (was USELESS)."""
+        from tests.validation.chat_eval.grading import MARGINAL, grade_response
+
+        result = self._result(
+            "I could not find information about Tim Cook in the retrieved data.",
+            tool_results=[{"tool": "get_entity_intelligence", "status": "empty", "item_count": 0}],
+        )
+        grade = grade_response("anything", result, {})
+        assert grade["verdict"] == MARGINAL, grade["reasons"]
+        # The honest-refusal reason should be present.
+        assert any("honest refusal" in r for r in grade["reasons"]), grade["reasons"]
+
+    def test_refusal_with_no_tool_results_preserves_useless(self) -> None:
+        """Short refusal + NO ``tool_result`` telemetry → original USELESS."""
+        from tests.validation.chat_eval.grading import USELESS, grade_response
+
+        result = self._result("I cannot provide that information.", tool_results=[])
+        grade = grade_response("anything", result, {})
+        assert grade["verdict"] == USELESS
+        assert any("refusal" in r for r in grade["reasons"]), grade["reasons"]
+
+    def test_refusal_with_all_populated_tools_stays_useless(self) -> None:
+        """Short refusal + every tool returned data → still USELESS."""
+        from tests.validation.chat_eval.grading import USELESS, grade_response
+
+        result = self._result(
+            "I cannot provide that information.",
+            tool_results=[
+                {"tool": "search_documents", "status": "ok", "item_count": 12},
+                {"tool": "get_entity_intelligence", "status": "ok", "item_count": 5},
+            ],
+        )
+        grade = grade_response("anything", result, {})
+        assert grade["verdict"] == USELESS
+
+
 class TestBP612RevenueCapDirectionality:
     """BP-612 — ``_mentions_revenue_above`` must be asymmetric.
 
