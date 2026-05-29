@@ -311,8 +311,104 @@ class ChatPipeline:
 
         Returns a list of ResolvedEntity objects. May return an empty list if
         S6 finds no entities (handled gracefully downstream).
+
+        F-LIVE-NEW-003 — symmetric resolver-gate
+        ----------------------------------------
+        Until this fix, this path bypassed the stop-word / 0.75 absolute
+        similarity floor / 0.15 delta-gate logic that lives on the
+        IntelligenceHandler path, so generic stop-word substrings
+        (``space``, ``delta``, ``shell``, ``block``, ``square``) leaked
+        through and bound to real public companies (SpaceX, Delta, Shell,
+        Block Inc., Square Inc.) at sim ~0.62. The LLM then surfaced
+        those entities verbatim in the system prompt's
+        ``Entities resolved from this query:`` block and hallucinated
+        claims about them.
+
+        We now post-filter the S6 result list through the shared
+        ``filter_resolver_candidates`` gate with the same thresholds the
+        IntelligenceHandler path uses. The rich tiebreaker rules
+        (same-canonical collapse, exact-canonical match, length-penalty)
+        do NOT apply here because S6's ``/entities/resolve`` does not
+        return ``alias_text`` — those rules will stay on the
+        IntelligenceHandler path which has the data.
+
+        Stop-word strip is NOT applied to the orchestrator query as a
+        whole — S6 internally does NER and already filters non-entity
+        spans. The floor + delta gates are what catch the false-positive
+        substring alias hits.
         """
-        return await self.s6_client.resolve_entities(message)
+        # Local imports keep handler/orchestrator construction cheap and
+        # avoid importing prometheus_client at module-load when these
+        # paths are unused (tests, eval harness).
+        from rag_chat.application.metrics.prometheus import (
+            rag_entity_resolver_ambiguous_total,
+        )
+        from rag_chat.application.services.resolver_gates import (
+            GatedEntity,
+            ResolverGateConfig,
+            filter_resolver_candidates,
+        )
+
+        raw_entities = await self.s6_client.resolve_entities(message)
+        if not raw_entities:
+            return raw_entities
+
+        # Reuse the IntelligenceHandler module-level resolver-settings
+        # cache so the two paths read the SAME stop-word set + thresholds.
+        # The cache is populated at import time (handler module) and falls
+        # back to a hardcoded default when Settings can't be instantiated
+        # (test envs without env vars) — exactly the symmetry we want.
+        from rag_chat.application.pipeline.handlers.intelligence import (
+            _RESOLVER_DELTA_MIN,
+            _RESOLVER_STOP_WORDS,
+            _RESOLVER_TOP_SIM_MIN,
+        )
+
+        _config = ResolverGateConfig(
+            stop_words=_RESOLVER_STOP_WORDS,
+            top_similarity_min=_RESOLVER_TOP_SIM_MIN,
+            delta_min=_RESOLVER_DELTA_MIN,
+        )
+
+        # Adapt ResolvedEntity → GatedEntity. ``confidence`` is the field
+        # S6 populates with the alias-search similarity (despite the name
+        # — see s6_client.py:47); we map it 1:1 to ``similarity``.
+        candidates = [
+            GatedEntity(
+                entity_id=str(re.entity_id),
+                canonical_name=re.canonical_name,
+                similarity=float(re.confidence),
+                payload=re,
+            )
+            for re in raw_entities
+        ]
+        accepted, rejected = filter_resolver_candidates(candidates, config=_config)
+
+        # Emit per-rejection-cause metrics so operators can monitor the
+        # gate in prod. ``source="orchestrator_s6"`` disambiguates this
+        # path from the IntelligenceHandler path which emits the same
+        # counter without a source label (kept for backward-compat).
+        # Prometheus client raises on label cardinality / registry races;
+        # swallow so a metrics hiccup never breaks the chat turn.
+        import contextlib
+
+        for r in rejected:
+            with contextlib.suppress(Exception):  # pragma: no cover — metric must never break the turn
+                rag_entity_resolver_ambiguous_total.labels(
+                    reason=r.rejection_reason,
+                ).inc()
+            log.info(  # type: ignore[no-any-return]
+                "orchestrator_resolver_gate_rejected",
+                entity_id=r.entity_id,
+                canonical_name=r.canonical_name,
+                similarity=r.similarity,
+                reason=r.rejection_reason,
+            )
+
+        # Unwrap payloads back to ResolvedEntity. The original objects
+        # are kept opaque inside GatedEntity.payload so we don't have to
+        # round-trip through the constructor and lose ticker/entity_type.
+        return [a.payload for a in accepted]
 
     # ── Step 5: Intent classification + retrieval plan ───────────────────────
 
