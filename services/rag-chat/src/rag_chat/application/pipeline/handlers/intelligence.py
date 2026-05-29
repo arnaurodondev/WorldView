@@ -189,16 +189,15 @@ class IntelligenceHandler(ToolHandler):
     def _strip_stop_words(self, query: str) -> str:
         """Return ``query`` with all-stop-word tokens removed (lowercased).
 
-        Used as a pre-filter before fuzzy alias match so generic English
-        fragments cannot bind to a canonical entity. Returns an empty
-        string when EVERY token is a stop-word — the caller treats that as
-        a resolver refusal (the query carries no entity-shaped signal).
+        F-LIVE-NEW-003: delegates to the shared ``resolver_gates``
+        module so the IntelligenceHandler path and the ChatOrchestrator
+        path apply byte-identical stop-word logic. The wrapper is kept
+        so the rich tiebreaker pipeline above continues to call a
+        bound method (no broader refactor needed).
         """
-        # Tokenise on whitespace; punctuation is stripped from each token so
-        # "AI semiconductor space." matches the stop list with a trailing dot.
-        tokens = query.lower().split()
-        kept = [t for t in tokens if t.strip(".,!?:;'\"()[]") not in self._stop_words]
-        return " ".join(kept)
+        from rag_chat.application.services.resolver_gates import strip_stop_words
+
+        return strip_stop_words(query, self._stop_words)
 
     def can_handle(self, tool_name: str) -> bool:
         return tool_name in self._HANDLED_TOOLS
