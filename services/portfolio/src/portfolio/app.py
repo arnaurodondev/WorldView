@@ -25,6 +25,7 @@ from observability.tracing import add_otel_middleware  # type: ignore[import-unt
 from portfolio.api.exception_handlers import domain_error_handler, unhandled_exception_handler
 from portfolio.api.internal import internal_router
 from portfolio.api.routes import api_router
+from portfolio.api.routes.internal_pnl import internal_pnl_router
 from portfolio.api.routes.provision import provision_router
 from portfolio.config import Settings
 from portfolio.domain.errors import DomainError
@@ -142,6 +143,16 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         market_data_url=settings.market_data_service_url,
     )
 
+    # PLAN-0102 W2 T-W2-01: recent-prices client used by the P&L endpoint.
+    # Shares the same ``market_data_http`` pool so we don't open a second
+    # connection pool to S3.
+    from portfolio.infrastructure.market_data.recent_prices_client import HttpRecentPricesClient
+
+    app.state.recent_prices_client = HttpRecentPricesClient(
+        http=market_data_http,
+        market_data_url=settings.market_data_service_url,
+    )
+
     # 8. Create outbox dispatcher
     from portfolio.infrastructure.messaging.outbox.dispatcher import create_dispatcher
 
@@ -218,6 +229,7 @@ def create_app() -> FastAPI:
     app.include_router(api_router)
     app.include_router(internal_router)
     app.include_router(provision_router)
+    app.include_router(internal_pnl_router)
 
     @app.get("/healthz")
     async def healthz() -> dict[str, str]:

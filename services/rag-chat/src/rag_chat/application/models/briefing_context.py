@@ -154,6 +154,47 @@ class FundamentalsSummary:
 
 
 @dataclass(frozen=True, kw_only=True)
+class PortfolioPnLItem:
+    """One per-holding overnight P&L row (PLAN-0102 W2 T-W2-03).
+
+    Mirrors the wire shape returned by S1's
+    ``/internal/v1/users/{user_id}/portfolio/pnl`` endpoint; we keep a
+    domain-side copy so the formatter doesn't import infrastructure DTOs.
+    """
+
+    symbol: str | None
+    entity_id: UUID | None
+    instrument_id: UUID
+    qty: float
+    last_close_usd: float | None
+    current_price_usd: float | None
+    overnight_pnl_usd: float
+    overnight_pnl_pct: float
+
+
+@dataclass(frozen=True, kw_only=True)
+class PortfolioPnLSnapshot:
+    """Full P&L bundle for one user."""
+
+    user_id: UUID
+    holdings: list[PortfolioPnLItem]
+    total_overnight_pnl_usd: float
+    total_overnight_pnl_pct: float
+
+
+@dataclass(frozen=True, kw_only=True)
+class SectorExposure:
+    """Sector aggregate — ``{sector_label: pct_of_portfolio_value}`` (PLAN-0102 W2).
+
+    Values are fractional (0.65 = 65%), summing to ≤ 1.0. Holdings whose
+    sector is unknown are bucketed into the explicit ``"Unknown"`` key so
+    the formatter can render a placeholder line without a separate flag.
+    """
+
+    by_sector: dict[str, float] = field(default_factory=dict)
+
+
+@dataclass(frozen=True, kw_only=True)
 class BriefingContext:
     """Full context bundle for AI briefing generation.
 
@@ -184,6 +225,11 @@ class BriefingContext:
     # without this field (tests / older code paths) keep the old behaviour
     # (no refusal).
     context_availability_score: float = 1.0
+    # PLAN-0102 W2 T-W2-03: real overnight P&L per holding + sector aggregates.
+    # Both default to None so legacy callers (tests / brief paths that don't
+    # gather P&L) keep the old behaviour; formatter renders nothing when None.
+    portfolio_pnl: PortfolioPnLSnapshot | None = None
+    sector_exposure: SectorExposure | None = None
 
     @classmethod
     def for_morning(cls, *, user_id: UUID, tenant_id: UUID, **kwargs: Any) -> BriefingContext:

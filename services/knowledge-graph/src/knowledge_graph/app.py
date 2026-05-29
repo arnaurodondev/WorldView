@@ -41,6 +41,7 @@ from knowledge_graph.api import (
     health,
     internal_costs,
     internal_intelligence_rollup,  # PLAN-0089 Wave L-5a: screener sync rollup
+    internal_sectors,  # PLAN-0102 W2 T-W2-02: batch sector lookup for rag-chat briefs
     narratives,  # PRD-0074 Wave D: narrative history + manual trigger
     paths,  # PLAN-0074 Wave E2: path insights API
     routes,
@@ -299,6 +300,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(dlq.router)
     app.include_router(internal_costs.router)
     app.include_router(internal_intelligence_rollup.router)  # PLAN-0089 Wave L-5a
+    app.include_router(internal_sectors.router)  # PLAN-0102 W2 T-W2-02
     app.include_router(paths.router)  # PLAN-0074 Wave E2 — path insights
     app.include_router(narratives.router)  # PRD-0074 Wave D — narrative history + manual trigger
     app.include_router(entity_refresh.router)  # REQ-003 / TASK-W0-06 — manual entity refresh trigger

@@ -348,6 +348,70 @@ class S1Port(Protocol):
         ...
 
 
+# ── PLAN-0102 W2 T-W2-03 — portfolio P&L + sectors ───────────────────────────
+
+
+@dataclass(frozen=True)
+class PortfolioPnLItem:
+    """One holding row in the S1 portfolio-pnl response."""
+
+    symbol: str | None
+    entity_id: UUID | None
+    instrument_id: UUID
+    qty: float
+    last_close_usd: float | None
+    current_price_usd: float | None
+    overnight_pnl_usd: float
+    overnight_pnl_pct: float
+
+
+@dataclass(frozen=True)
+class PortfolioPnL:
+    """Top-level shape returned by ``S1Client.get_portfolio_pnl``."""
+
+    user_id: UUID
+    holdings: list[PortfolioPnLItem] = field(default_factory=list)
+    total_overnight_pnl_usd: float = 0.0
+    total_overnight_pnl_pct: float = 0.0
+
+
+@runtime_checkable
+class PortfolioPnLPort(Protocol):
+    """Port — fetch per-holding overnight P&L from S1 via the S9 proxy.
+
+    Returns ``None`` on any HTTP / network error so callers can degrade
+    to the existing weight-only renderer in the morning brief.
+    """
+
+    async def get_portfolio_pnl(
+        self,
+        user_id: UUID,
+    ) -> PortfolioPnL | None: ...
+
+
+@dataclass(frozen=True)
+class SectorLabel:
+    """One sector/industry lookup result."""
+
+    entity_id: UUID
+    sector: str | None = None
+    industry: str | None = None
+
+
+@runtime_checkable
+class SectorsPort(Protocol):
+    """Port — batch ``{entity_id: SectorLabel}`` lookup from S7 via the S9 proxy.
+
+    Returns an empty dict on any HTTP / network error so callers can
+    degrade to "(sector unknown)" rendering in the morning brief.
+    """
+
+    async def get_sectors_for_entities(
+        self,
+        entity_ids: list[UUID],
+    ) -> dict[UUID, SectorLabel]: ...
+
+
 # ── Intelligence Port DTOs + Protocol (PLAN-0080 Wave A) ──────────────────────
 
 

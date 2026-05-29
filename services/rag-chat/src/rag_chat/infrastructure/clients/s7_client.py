@@ -20,6 +20,7 @@ from rag_chat.application.ports.upstream_clients import (
     EgocentricGraph,
     EventResult,
     RelationResult,
+    SectorLabel,
 )
 from rag_chat.infrastructure.clients.base import BaseUpstreamClient
 
@@ -362,3 +363,36 @@ class S7Client(BaseUpstreamClient):
             # Flatten relations into a list of dicts for the caller.
             results = raw.get("relations", [])  # type: ignore[assignment]
             return results
+
+    # ── PLAN-0102 W2 T-W2-03 — batch sector/industry lookup ────────────────────
+
+    async def get_sectors_for_entities(
+        self,
+        entity_ids: list[UUID],
+    ) -> dict[UUID, SectorLabel]:
+        """GET /internal/v1/entities/sectors → ``{entity_id: SectorLabel}`` map.
+
+        Returns ``{}`` on any HTTP / network error (R9 safe degradation).
+        Caller (the morning brief gatherer) treats absent ids as
+        "(sector unknown)" so a partial outage doesn't break the brief.
+        """
+        if not entity_ids:
+            return {}
+        # FastAPI multi-value query string: ``entity_ids=a&entity_ids=b...``
+        # httpx accepts a list under one key — pass it through as a dict whose
+        # value is the list of UUID strings.
+        params: dict[str, list[str]] = {"entity_ids": [str(e) for e in entity_ids]}
+        raw = await self._get("/internal/v1/entities/sectors", params=params)  # type: ignore[arg-type]
+        results = raw.get("results", [])
+        out: dict[UUID, SectorLabel] = {}
+        for row in results:
+            try:
+                eid = UUID(str(row["entity_id"]))
+            except (KeyError, ValueError):
+                continue
+            out[eid] = SectorLabel(
+                entity_id=eid,
+                sector=row.get("sector"),
+                industry=row.get("industry"),
+            )
+        return out

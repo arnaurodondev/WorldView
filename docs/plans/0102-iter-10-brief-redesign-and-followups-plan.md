@@ -189,6 +189,8 @@ Trigger a brief for a synthetic user with 5 holdings. Verify:
 
 ### Wave 2 — Brief Wave B: Real Personalisation (P1, ~12 h)
 
+**Status**: SHIPPED on `feat/plan-0099-w4` 2026-05-29 (T-W2-01..04 + T-W2-06; T-W2-05 delta-from-yesterday deferred to PLAN-0103). New endpoints live: `GET /internal/v1/users/{user_id}/portfolio/pnl` on S1 + `GET /internal/v1/entities/sectors` on S7. `BriefContextFormatter.format_portfolio_morning()` renders per-holding "AAPL +1.45% pre-mkt — +$280" lines + total P&L footer + sector mix footer; legacy weight-only fallback preserved on upstream failure. 19 new unit tests. See TRACKING.md PLAN-0102 row for full per-task LOC + test counts.
+
 **Goal**: add the two new endpoints needed for true portfolio context — overnight P&L and sector exposure.
 
 #### Tasks

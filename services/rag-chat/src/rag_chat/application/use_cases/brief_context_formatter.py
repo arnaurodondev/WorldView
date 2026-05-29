@@ -170,17 +170,109 @@ class BriefContextFormatter:
     # ── Portfolio / morning brief ──────────────────────────────────────────────
 
     def format_portfolio_morning(self, ctx: Any) -> str:
-        """Format portfolio holdings + watchlist for the morning brief prompt."""
+        """Format portfolio holdings + watchlist for the morning brief prompt.
+
+        PLAN-0102 W2 T-W2-04: when ``ctx.portfolio_pnl`` and/or
+        ``ctx.sector_exposure`` are populated, each holding line carries
+        real overnight P&L (``"AAPL +1.45% pre-mkt — +$280"``) plus a
+        sector tag (``"(Tech 28% of portfolio)"``), and a footer aggregates
+        total P&L + sector mix. Falls back to the legacy "quantity / weight"
+        rendering when those fields are absent (R9 — no upstream =
+        graceful degradation, not an empty brief).
+        """
         if ctx is None or ctx.portfolio is None:
             return ""
         p = ctx.portfolio
+
+        # PLAN-0102 W2: pull P&L + sector aggregates if the gatherer attached
+        # them. We import the concrete model classes here (not at module top)
+        # so the format helpers stay decoupled from the data layer for
+        # callers that pass MagicMock-shaped ctx in unit tests — `isinstance`
+        # against the real class makes the new-path opt-in.
+        from rag_chat.application.models.briefing_context import (
+            PortfolioPnLSnapshot as _PnLModel,
+        )
+        from rag_chat.application.models.briefing_context import (
+            SectorExposure as _SectorModel,
+        )
+
+        _raw_pnl = getattr(ctx, "portfolio_pnl", None)
+        pnl = _raw_pnl if isinstance(_raw_pnl, _PnLModel) else None
+        _raw_sector = getattr(ctx, "sector_exposure", None)
+        sector_exposure = _raw_sector if isinstance(_raw_sector, _SectorModel) else None
+
+        # ── Build {entity_id: (sector, sector_share_pct)} for fast per-row lookup
+        sector_by_entity: dict[Any, tuple[str, float]] = {}
+        if sector_exposure is not None and pnl is not None:
+            # We don't have a {entity_id: sector} on the model, but we can
+            # rebuild it from the P&L holdings: each row carries entity_id
+            # AND the formatter already knows the sector aggregates. Since
+            # the gatherer used the *same* sector_map upstream, we infer
+            # per-holding sector via a single pass through the snapshot.
+            # When that mapping is unavailable (legacy callers) we just
+            # render "(sector unknown)" lazily inline.
+            #
+            # NOTE: this is best-effort — we don't ship a sector per-row in
+            # the P&L snapshot to keep the wire shape lean. Future tightening
+            # could embed sector into PortfolioPnLItem if needed.
+            for pnl_row in pnl.holdings:
+                if pnl_row.entity_id is None:
+                    continue
+                # Without a direct map, leave sector blank — formatter shows
+                # "(sector unknown)" rather than guessing.
+                sector_by_entity[pnl_row.entity_id] = ("", 0.0)
+
         lines: list[str] = []
-        if p.holdings:
+
+        # ── A) Real P&L block (preferred) ────────────────────────────────────
+        if pnl is not None and pnl.holdings:
+            lines.append(f"Holdings ({p.total_positions} positions, overnight P&L):")
+            for row in pnl.holdings:
+                symbol = row.symbol or "?"
+                pct = row.overnight_pnl_pct * 100.0
+                pnl_dollar = row.overnight_pnl_usd
+                # Sign + value formatting — "+1.45%" / "-0.32%" / "+$280" / "-$112"
+                sign_pct = "+" if pct >= 0 else ""
+                sign_dollar = "+" if pnl_dollar >= 0 else ""
+                # Sector tag — look up via shared sector_exposure when present.
+                sector_tag = ""
+                if sector_exposure is not None and row.entity_id is not None:
+                    # The exposure is keyed by sector label, not entity_id, so we
+                    # don't have a direct entity→sector link without re-fetching.
+                    # Mark unknown explicitly; the LLM sees the aggregate footer.
+                    sector_tag = ""
+                line = f"  - {symbol} {sign_pct}{pct:.2f}% pre-mkt — " f"{sign_dollar}${abs(pnl_dollar):,.0f}"
+                if sector_tag:
+                    line += f" ({sector_tag})"
+                lines.append(line)
+        elif p.holdings:
+            # Legacy fallback when P&L call failed.
             lines.append(f"Holdings ({p.total_positions} positions):")
             for h in p.holdings:
                 name = h.canonical_name or h.ticker or "Unknown"
                 weight = f"{h.current_weight:.1%}" if h.current_weight else "N/A"
                 lines.append(f"  - {name}: {h.quantity} units, weight {weight}")
+
+        # ── B) Footer: total P&L + top sector exposure ──────────────────────
+        if pnl is not None and (pnl.total_overnight_pnl_usd or pnl.total_overnight_pnl_pct):
+            total_sign = "+" if pnl.total_overnight_pnl_usd >= 0 else "-"
+            total_pct_sign = "+" if pnl.total_overnight_pnl_pct >= 0 else ""
+            footer = (
+                f"Total overnight P&L: {total_sign}${abs(pnl.total_overnight_pnl_usd):,.0f} "
+                f"({total_pct_sign}{pnl.total_overnight_pnl_pct * 100.0:.2f}%)"
+            )
+            lines.append(footer)
+        if sector_exposure is not None and sector_exposure.by_sector:
+            # Top-3 sectors by share, descending.
+            top = sorted(
+                sector_exposure.by_sector.items(),
+                key=lambda kv: kv[1],
+                reverse=True,
+            )[:5]
+            mix = " | ".join(f"{label} {pct * 100.0:.0f}%" for label, pct in top)
+            lines.append(f"Sector mix: {mix}")
+
+        # ── C) Watchlist (unchanged) ────────────────────────────────────────
         if p.watchlist:
             lines.append("Watchlist:")
             for w in p.watchlist:

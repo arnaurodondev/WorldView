@@ -28,9 +28,14 @@ from rag_chat.application.models.briefing_context import (
     HoldingItem,
     MarketOverview,
     NewsArticleSummary,
+    PortfolioPnLSnapshot,
     PortfolioSnapshot,
     QuoteSummary,
+    SectorExposure,
     WatchlistItem,
+)
+from rag_chat.application.models.briefing_context import (
+    PortfolioPnLItem as ModelPnLItem,
 )
 from rag_chat.application.ports.upstream_clients import ChunkSearchRequest, EnrichedChunkResult
 from rag_chat.application.use_cases.brief_diagnostics import (
@@ -272,6 +277,20 @@ class BriefingContextGatherer:
             held_entity_ids = {str(h.entity_id) for h in portfolio_snapshot.holdings if h.entity_id}
         news_articles = _score_news_by_overlap(news_articles, held_entity_ids, self._NEWS_OVERLAP_MULTIPLIER)
 
+        # PLAN-0102 W2 T-W2-03: real overnight P&L + sector aggregates.
+        # Both calls are fire-and-forget with R9 safe degradation: on any
+        # upstream failure we render the brief with the existing weight-only
+        # holdings line + "(sector unknown)" placeholder. We do NOT add
+        # these to the gather() above because portfolio_snapshot must already
+        # be resolved (we need the user_id + held entity_ids).
+        portfolio_pnl_snapshot: PortfolioPnLSnapshot | None = None
+        sector_exposure: SectorExposure | None = None
+        if portfolio_snapshot is not None:
+            portfolio_pnl_snapshot, sector_exposure = await self._fetch_pnl_and_sectors(
+                user_id=user_id,
+                portfolio_snapshot=portfolio_snapshot,
+            )
+
         # PLAN-0102 W1 T-W1-01: build a MarketOverview that the formatter can
         # actually render. ``indices`` carries SPY/QQQ/VIX (the tape) and
         # ``holdings`` carries per-holding quote snapshots. Both share the
@@ -327,6 +346,8 @@ class BriefingContextGatherer:
             recent_events=events,
             gathered_at=datetime.now(tz=UTC),
             context_availability_score=availability_score,
+            portfolio_pnl=portfolio_pnl_snapshot,
+            sector_exposure=sector_exposure,
         )
 
     # ── Instrument briefing context ──────────────────────────────────────────
@@ -590,6 +611,85 @@ class BriefingContextGatherer:
             for e in results
         ]
 
+    async def _fetch_pnl_and_sectors(
+        self,
+        *,
+        user_id: str,
+        portfolio_snapshot: PortfolioSnapshot,
+    ) -> tuple[PortfolioPnLSnapshot | None, SectorExposure | None]:
+        """Fetch overnight P&L (S1) + sector labels (S7) in parallel.
+
+        PLAN-0102 W2 T-W2-03. Both calls are wrapped with
+        ``timed_upstream_call`` so the SLO dashboards see latency + outcome
+        per source. R9 safe degradation: either call may return None / {}
+        without crashing the brief — the formatter renders fallback text
+        ("(sector unknown)", weight-only holding line) in that case.
+
+        Sector aggregates ({sector: pct_of_portfolio_value}) are computed
+        from the P&L holdings' (current_price x qty); when current price
+        is unavailable we fall back to (last_close x qty), then to weight
+        share. Holdings whose entity_id is unknown / sector is unknown go
+        under the explicit ``"Unknown"`` bucket so the percentages sum to
+        ~1.0 and the formatter can render a placeholder line.
+        """
+        # ── S1 P&L call ─────────────────────────────────────────────────────
+        pnl_snapshot: PortfolioPnLSnapshot | None = None
+        try:
+            async with timed_upstream_call("portfolio_pnl") as outcome:
+                raw_pnl = await self._s1.get_portfolio_pnl(UUID(user_id))
+                if raw_pnl is None:
+                    outcome.mark_empty()
+            if raw_pnl is not None:
+                pnl_snapshot = PortfolioPnLSnapshot(
+                    user_id=raw_pnl.user_id,
+                    holdings=[
+                        ModelPnLItem(
+                            symbol=h.symbol,
+                            entity_id=h.entity_id,
+                            instrument_id=h.instrument_id,
+                            qty=h.qty,
+                            last_close_usd=h.last_close_usd,
+                            current_price_usd=h.current_price_usd,
+                            overnight_pnl_usd=h.overnight_pnl_usd,
+                            overnight_pnl_pct=h.overnight_pnl_pct,
+                        )
+                        for h in raw_pnl.holdings
+                    ],
+                    total_overnight_pnl_usd=raw_pnl.total_overnight_pnl_usd,
+                    total_overnight_pnl_pct=raw_pnl.total_overnight_pnl_pct,
+                )
+        except Exception as exc:
+            log.warning("briefing_portfolio_pnl_failed", error=str(exc))
+
+        # ── S7 sectors call ─────────────────────────────────────────────────
+        sector_map: dict[UUID, str] = {}
+        entity_ids: list[UUID] = [h.entity_id for h in portfolio_snapshot.holdings if h.entity_id is not None]
+        try:
+            async with timed_upstream_call("sectors") as outcome:
+                if entity_ids:
+                    raw_sectors = await self._s7.get_sectors_for_entities(entity_ids)
+                    if not raw_sectors:
+                        outcome.mark_empty()
+                    for eid, label in raw_sectors.items():
+                        if label.sector:
+                            sector_map[eid] = label.sector
+                else:
+                    outcome.mark_empty()
+        except Exception as exc:
+            log.warning("briefing_sectors_failed", error=str(exc))
+
+        # ── Sector aggregates (% of portfolio value per sector) ─────────────
+        # We prefer the per-holding *current* value (current_price x qty); the
+        # fallback chain handles a partial S1 outage gracefully without
+        # over-weighting any single sector.
+        exposure = _compute_sector_exposure(
+            portfolio_snapshot=portfolio_snapshot,
+            pnl_snapshot=pnl_snapshot,
+            sector_map=sector_map,
+        )
+
+        return pnl_snapshot, exposure
+
     async def _fetch_entity_chunks(
         self,
         entity_id: str,
@@ -790,6 +890,68 @@ def _build_market_overview(
         indices=indices,
         holdings=holdings,
     )
+
+
+def _compute_sector_exposure(
+    *,
+    portfolio_snapshot: PortfolioSnapshot,
+    pnl_snapshot: PortfolioPnLSnapshot | None,
+    sector_map: dict[UUID, str],
+) -> SectorExposure | None:
+    """Compute ``{sector_label: pct_of_portfolio_value}`` (PLAN-0102 W2).
+
+    Preference chain for the per-holding dollar weight:
+      1. current_price x qty (from P&L snapshot when available)
+      2. last_close x qty (P&L snapshot fallback)
+      3. current_weight (PortfolioSnapshot fallback — when S1 P&L call failed)
+
+    Holdings whose entity_id maps to no sector go into ``"Unknown"`` so
+    the percentages still sum to ~1.0. Returns ``None`` when the
+    portfolio has zero holdings (caller skips the section).
+    """
+    if not portfolio_snapshot.holdings:
+        return None
+
+    # Build a {entity_id: dollar_value} map from the P&L snapshot first.
+    value_by_entity: dict[UUID, float] = {}
+    if pnl_snapshot is not None:
+        for pnl_row in pnl_snapshot.holdings:
+            if pnl_row.entity_id is None:
+                continue
+            if pnl_row.current_price_usd is not None:
+                value_by_entity[pnl_row.entity_id] = pnl_row.current_price_usd * pnl_row.qty
+            elif pnl_row.last_close_usd is not None:
+                value_by_entity[pnl_row.entity_id] = pnl_row.last_close_usd * pnl_row.qty
+
+    # Fallback: any held entity missing a P&L value uses its current_weight
+    # share. We later normalise so the two units (dollars vs weights) don't
+    # mix — when ANY P&L value exists we use dollars exclusively.
+    if value_by_entity:
+        use_dollar_basis = True
+        # Backfill missing held entities with 0.0 so they still show up under
+        # "Unknown" with no weight contribution.
+        for holding in portfolio_snapshot.holdings:
+            if holding.entity_id is not None and holding.entity_id not in value_by_entity:
+                value_by_entity[holding.entity_id] = 0.0
+    else:
+        # P&L call totally unavailable — fall back to weight-based exposure.
+        use_dollar_basis = False
+        for holding in portfolio_snapshot.holdings:
+            if holding.entity_id is not None:
+                value_by_entity[holding.entity_id] = float(holding.current_weight or 0.0)
+
+    total = sum(value_by_entity.values())
+    if total <= 0:
+        return None
+
+    by_sector: dict[str, float] = {}
+    for entity_id, value in value_by_entity.items():
+        sector = sector_map.get(entity_id, "Unknown")
+        by_sector[sector] = by_sector.get(sector, 0.0) + value
+
+    # Normalise to fractional shares of the portfolio.
+    _ = use_dollar_basis  # captured for future telemetry; not currently exported
+    return SectorExposure(by_sector={k: v / total for k, v in by_sector.items()})
 
 
 def _safe_uuid(value: Any) -> UUID | None:

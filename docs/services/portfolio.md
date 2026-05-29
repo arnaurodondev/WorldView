@@ -138,8 +138,50 @@ appear in the UI without waiting the 4-hour cycle.
 | POST | `/internal/v1/watchlists/by-entities` | JWT | Batch resolve watchers (1-100 entity IDs) |
 | GET | `/internal/v1/watchlists/{watchlist_id}/entities` | JWT | Entity IDs in watchlist |
 | GET | `/internal/v1/users/{user_id}/portfolio/context` | JWT | Portfolio context for S8 RAG chat |
+| GET | `/internal/v1/users/{user_id}/portfolio/pnl` | JWT | Per-holding overnight P&L (PLAN-0102 W2) |
 | GET | `/internal/v1/users/{user_id}` | JWT | User profile (S10 email delivery) |
 | POST | `/internal/v1/users/provision` | JWT `role=system` | Idempotent OIDC user provisioning |
+
+#### Portfolio P&L Endpoint (PLAN-0102 W2 T-W2-01)
+
+`GET /internal/v1/users/{user_id}/portfolio/pnl` returns per-holding overnight P&L
+(dollar + percent) plus portfolio-wide aggregates so rag-chat's morning brief can
+render real performance lines like "AAPL +1.45% pre-mkt — +$280".
+
+Auth: `X-Internal-JWT` — JWT user_id must match path user_id (same shape as
+`/portfolio/context`). A `role=system` token whose `service_name` is on the
+`_SERVICE_PNL_ALLOWED` allow-list (currently `rag-chat-brief-scheduler`) may
+read any user's P&L for the brief pre-generation worker.
+
+Implementation:
+- Router: `portfolio.api.routes.internal_pnl.internal_pnl_router`.
+- Use case: `portfolio.application.use_cases.get_portfolio_pnl.GetPortfolioPnLUseCase`
+  joins holdings (read-replica) with current price + last close fetched in one
+  batch call to S3 via the `RecentPricesClient` port.
+- Adapter: `portfolio.infrastructure.market_data.recent_prices_client.HttpRecentPricesClient`
+  hits `POST /internal/v1/price/batch?include_missing=true` on market-data and
+  derives `last_close = price - price_change` per row.
+
+Cache: 60 s Valkey, key `portfolio_pnl:v1:{user_id}`.
+
+Response shape:
+```json
+{
+  "user_id": "uuid",
+  "as_of": "2026-05-29T07:00:00Z",
+  "holdings": [
+    {"symbol": "AAPL", "entity_id": "uuid", "instrument_id": "uuid",
+     "qty": 100.0, "last_close_usd": 192.50, "current_price_usd": 195.30,
+     "overnight_pnl_usd": 280.0, "overnight_pnl_pct": 0.01454}
+  ],
+  "total_overnight_pnl_usd": 530.0,
+  "total_overnight_pnl_pct": 0.01325,
+  "generated_at": "2026-05-29T07:00:00Z"
+}
+```
+
+Holdings whose S3 price row is missing surface with `null` prices and `0.0` P&L
+— a partial market-data outage degrades per-row, never failing the whole brief.
 
 #### Provision Endpoint (ProvisionUserUseCase)
 

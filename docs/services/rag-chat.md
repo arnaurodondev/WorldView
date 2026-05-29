@@ -392,6 +392,37 @@ Per-generation cost is visible via:
 
 The route-layer branch lives in `api/routes/public_briefings.py` (GET `/api/v1/briefings/morning`); it is a single `if settings.brief_agentic_enabled` block, so removing the experiment is a one-line revert plus deleting the module + tests.
 
+### Morning brief signals (PLAN-0102 W2 T-W2-03/04)
+
+`BriefingContextGatherer.gather_morning_context()` fans out two additional
+upstream calls when a portfolio snapshot is available:
+
+1. **S1 overnight P&L** — `GET /internal/v1/users/{user_id}/portfolio/pnl`
+   via `S1Client.get_portfolio_pnl()`. Returns per-holding `overnight_pnl_usd`,
+   `overnight_pnl_pct`, `last_close_usd`, `current_price_usd`, plus portfolio
+   aggregates. Wrapped in `timed_upstream_call("portfolio_pnl")` so the SLO
+   dashboards see latency + outcome.
+
+2. **S7 sector lookup** — `GET /internal/v1/entities/sectors?entity_ids=...`
+   via `S7Client.get_sectors_for_entities()`. Returns `{entity_id: SectorLabel}`
+   for the user's held entities. Wrapped in `timed_upstream_call("sectors")`.
+
+The gatherer combines both into `BriefingContext.portfolio_pnl`
+(`PortfolioPnLSnapshot`) and `BriefingContext.sector_exposure`
+(`SectorExposure` = `{sector_label: pct_of_portfolio_value}`). Both are
+optional so legacy brief paths still produce output when either call fails.
+
+`BriefContextFormatter.format_portfolio_morning()` renders:
+
+* Per-holding lines like `"AAPL +1.45% pre-mkt — +$280"` (preferred when
+  P&L snapshot is present).
+* Total overnight P&L footer: `"Total overnight P&L: +$530 (+1.32%)"`.
+* Sector mix footer: `"Sector mix: Tech 65% | Energy 18% | Financials 12%"`.
+
+R9 safe degradation: when the P&L call fails the formatter falls back to
+the legacy "Holdings (N positions): name — quantity, weight X%" line so a
+single upstream outage never produces an empty brief.
+
 ---
 
 ## Caching Strategy
