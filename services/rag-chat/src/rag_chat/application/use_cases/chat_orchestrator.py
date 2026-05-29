@@ -928,7 +928,8 @@ class ChatOrchestratorUseCase:
                 # PLAN-0099 W1-T03: accumulate per-iteration planning cost so
                 # the chat-eval harness can see total time spent in the
                 # first-LLM bucket across the whole agent loop.
-                phases.record("llm_tool_planning", (time.monotonic() - _llm_planning_t0) * 1000.0)
+                _planning_elapsed_ms = (time.monotonic() - _llm_planning_t0) * 1000.0
+                phases.record("llm_tool_planning", _planning_elapsed_ms)
 
             provider_name = p.llm_chain.last_provider_name
             tool_calls: list[ToolUseBlock] = getattr(llm_response, "tool_calls", None) or []
@@ -958,6 +959,27 @@ class ChatOrchestratorUseCase:
                 # ``event: token``) — frontends and the harness need no changes.
                 direct_text = getattr(llm_response, "text", "") or ""
                 if direct_text:
+                    # PLAN-0102 W4 T-W4-B (BP-621): record the LLM-generation
+                    # wall-clock as ``llm_direct_text_generation`` so the
+                    # chat-eval harness can compute ``tps_streaming`` for
+                    # direct-text answers. Without this, every "What is X?"
+                    # question hit the ``llm_synthesis_streaming`` floor and
+                    # returned ``tps_streaming=None`` — the streaming-TPS
+                    # gate had no data on ~100% of questions.
+                    #
+                    # The duration is THIS iteration's ``chat_with_tools``
+                    # call (already captured in ``_planning_elapsed_ms``
+                    # above); the local chunk-and-emit loop below is
+                    # microseconds of string splitting, not generation. We
+                    # record for BOTH iter-0 (pure direct-text answer, no
+                    # tools fired) and iter > 0 (FIX-LIVE-Y path: tools
+                    # fired, then a later iteration returned direct text and
+                    # we skip the second-turn stream) — in both cases this
+                    # iteration's planning call IS the generation that
+                    # produced the user-visible text. ``record_once`` so a
+                    # future loop refactor that re-enters this branch can't
+                    # silently double-count.
+                    phases.record_once("llm_direct_text_generation", _planning_elapsed_ms)
                     for _chunk in _chunk_text_for_streaming(direct_text):
                         yield p.emitter.emit_delta(_chunk)
                     # FIX-LIVE-Y: when iteration > 0 ends with SUBSTANTIVE

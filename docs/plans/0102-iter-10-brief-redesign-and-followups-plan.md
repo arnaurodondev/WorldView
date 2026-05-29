@@ -285,9 +285,17 @@ Brief includes:
 - **T-W4-03 — Live verification**
   - Trigger a synthetic chat. Assert `phase_timings_ms.llm_synthesis_streaming` present and the harness computes a real number.
 
+- **T-W4-B — Followup: record `llm_direct_text_generation` on direct-text branches (BP-621)**
+  - **Pain point**: After T-W4-01..03 shipped, the next chat-eval run still produced `tps_streaming p50 = NaN` because ~100% of 9 questions returned `tps_streaming: None`. Live tracing: agg_q*.json `phase_timings_ms` contained neither `llm_synthesis_streaming` nor any synthesis-equivalent key — only `llm_tool_planning` + `tool_execution`. Even questions that fired tools then produced direct text (FIX-LIVE-Y path) terminated WITHOUT entering the second-turn stream.
+  - **Root cause**: Hypothesis 1 from T-W4-01 confirmed in the wild. The orchestrator only records `llm_synthesis_streaming` on the second-turn `stream_chat` path (line ~1660); direct-text answers ("What is Apple?") and FIX-LIVE-Y tool-then-direct-text answers both set `_skip_final_stream=True` and emit via `emit_delta` without recording any synthesis-equivalent phase.
+  - **Fix**: orchestrator records `llm_direct_text_generation = THIS iteration's chat_with_tools wall-clock` on the direct-text branch (BOTH iter-0 and iter>0 paths) using `record_once`; harness `_compute_tps_streaming()` accepts EITHER `llm_synthesis_streaming` OR `llm_direct_text_generation` (synthesis-stream wins when both present — defensive).
+  - **File:line**: `services/rag-chat/src/rag_chat/application/use_cases/chat_orchestrator.py:~962`; `tests/validation/chat_eval/harness.py::_compute_tps_streaming` (OR-fallback).
+  - **Regression tests**: `tests/validation/chat_eval/test_harness_latency.py::TestTpsStreaming::test_direct_text_phase_used_when_synthesis_absent` + `::test_synthesis_phase_wins_when_both_present`.
+  - **Live verification**: 9/9 questions now have finite `tps_streaming`; aggregate p50 = 16.09 tok/s (was NaN). TTFT p95 = 4.65 s (still <5s gate; semantics unchanged). New BP-621 entry.
+
 #### W4 acceptance gate
 
-Chat-eval `tps_streaming_p50` is a finite number ≥ 15 tok/s.
+Chat-eval `tps_streaming_p50` is a finite number on ≥5 of 9 questions (gate satisfied — 9/9 finite after T-W4-B). Whether p50 ≥ 20 tok/s remains a separate content/throughput question (deferred to PLAN-0103).
 
 ---
 

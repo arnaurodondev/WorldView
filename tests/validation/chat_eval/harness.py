@@ -825,6 +825,15 @@ def _compute_ttft_and_tps(
 
 # PLAN-0101 W3 — synthesis-phase TPS.
 _SYNTHESIS_PHASE_KEY = "llm_synthesis_streaming"
+# PLAN-0102 W4 T-W4-B (BP-621): direct-text branch generation-phase key.
+# When the LLM answers without calling any tool (the common case for
+# "What is X?" questions), the orchestrator never reaches the second-turn
+# streaming synthesis path — ``llm_synthesis_streaming`` is absent. The
+# direct-text branch instead records the iter-0 ``chat_with_tools`` call
+# wall-clock under this key, which is the generation time we want to
+# divide ``output_tokens`` by. The harness accepts EITHER key so the
+# ``tps_streaming`` metric has data on both branches.
+_DIRECT_TEXT_PHASE_KEY = "llm_direct_text_generation"
 
 # PLAN-0102 W4 T-W4-01: floor below which a recorded synthesis wall-clock is
 # considered unreliable. The orchestrator records both control-flow branches
@@ -876,7 +885,13 @@ def _compute_tps_streaming(
         return None
     if not phase_timings_ms:
         return None
+    # PLAN-0102 W4 T-W4-B (BP-621): accept either the tool-use synthesis-stream
+    # phase OR the direct-text generation phase. Direct-text answers ("What is
+    # Apple?") never reach the second-turn streaming branch, so without this
+    # OR-fallback ~all questions returned ``tps_streaming=None``.
     synthesis_ms = phase_timings_ms.get(_SYNTHESIS_PHASE_KEY)
+    if synthesis_ms is None:
+        synthesis_ms = phase_timings_ms.get(_DIRECT_TEXT_PHASE_KEY)
     if synthesis_ms is None or synthesis_ms < _SYNTHESIS_MIN_MS:
         return None
     # Explicit ms→s conversion. ``output_tokens`` is in tokens; the recorded
@@ -954,6 +969,6 @@ def make_client_or_skip() -> RagChatClient:
     base_url = os.environ.get("RAG_CHAT_BASE_URL")
     if not base_url:
         pytest.skip(
-            "RAG_CHAT_BASE_URL not set — requires live rag-chat at " "$RAG_CHAT_BASE_URL (e.g. http://localhost:8009)"
+            "RAG_CHAT_BASE_URL not set — requires live rag-chat at $RAG_CHAT_BASE_URL (e.g. http://localhost:8009)"
         )
     return RagChatClient(base_url)

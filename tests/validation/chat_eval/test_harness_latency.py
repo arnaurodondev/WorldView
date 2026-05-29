@@ -295,14 +295,47 @@ class TestTPSStreamingSynthesisPhase:
         assert tps is None
 
     def test_missing_synthesis_key_yields_none(self) -> None:
-        """Phase dict present but ``llm_synthesis_streaming`` absent
-        (direct-text branch) → ``None``. Other phase entries are ignored.
+        """Both synthesis-stream AND direct-text keys absent → ``None``.
+
+        PLAN-0102 W4 T-W4-B (BP-621): when neither
+        ``llm_synthesis_streaming`` (tool-use branch) nor
+        ``llm_direct_text_generation`` (direct-text branch) is present,
+        we have no measurable generation window.
         """
         tps = _compute_tps_streaming(
             phase_timings_ms={"check_cache": 50.0, "entity_resolution": 200.0},
             output_tokens=60,
         )
         assert tps is None
+
+    def test_direct_text_phase_used_when_synthesis_absent(self) -> None:
+        """PLAN-0102 W4 T-W4-B (BP-621) — direct-text fallback.
+
+        Direct-text answers ("What is Apple?") never reach the
+        second-turn streaming branch, so ``llm_synthesis_streaming`` is
+        absent. The harness must fall back to
+        ``llm_direct_text_generation`` so ``tps_streaming`` is finite
+        for these questions instead of dropping out of the gate.
+        """
+        tps = _compute_tps_streaming(
+            phase_timings_ms={"llm_direct_text_generation": 500.0},
+            output_tokens=100,
+        )
+        assert tps == pytest.approx(200.0, abs=1e-6)
+
+    def test_synthesis_phase_wins_when_both_present(self) -> None:
+        """If both keys present (defensive), prefer the explicit
+        synthesis-stream key — that's the canonical second-turn measurement.
+        """
+        tps = _compute_tps_streaming(
+            phase_timings_ms={
+                "llm_synthesis_streaming": 1000.0,
+                "llm_direct_text_generation": 500.0,
+            },
+            output_tokens=100,
+        )
+        # 100 / 1.0s = 100, not 200 (would be 200 if direct-text won).
+        assert tps == pytest.approx(100.0, abs=1e-6)
 
     def test_sub_threshold_synthesis_wall_clock_yields_none(self) -> None:
         """Defensive guard against BP-618 double-record race.
