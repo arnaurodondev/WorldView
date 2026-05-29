@@ -21,6 +21,7 @@ import asyncio
 import json
 import time
 from datetime import timedelta
+from enum import Enum
 from typing import TYPE_CHECKING, Any
 from uuid import UUID
 
@@ -28,6 +29,7 @@ import jwt
 
 from common.ids import new_uuid7  # type: ignore[import-untyped]
 from common.time import utc_now  # type: ignore[import-untyped]
+from knowledge_graph.application.metrics import fundamentals_refresh_failed_total
 from knowledge_graph.application.utils.fundamentals_narrative import build_fundamentals_narrative
 from knowledge_graph.infrastructure.intelligence_db.repositories.entity_embedding_state import (
     VIEW_FUNDAMENTALS,
@@ -98,6 +100,48 @@ _BACKOFF_KEY_PREFIX = "s7:fundamentals:backoff"
 _BACKOFF_STAGE_1H_S = 3600
 _BACKOFF_STAGE_1D_S = 86400
 _BACKOFF_STAGE_7D_S = 604800
+
+
+# ── F-DB-005 (2026-05-28): structured error classes ──────────────────────────
+#
+# Replaces the silent ``reason or "unknown"`` fallback that previously hid a
+# months-old schema mismatch (488 of 811 entities classified as ``unknown``
+# actually meant ``fundamentals_missing_sections``). Every code path that
+# returns ``narrative=None`` MUST set ``failure_reason`` to one of these values.
+# The worker bumps ``fundamentals_refresh_failed_total{error_kind=...}`` so
+# ops dashboards can spot contract drift between market-data and the narrative
+# builder immediately — this is the F-DB-005 bug class.
+class FundamentalsRefreshError(str, Enum):
+    """Structured failure reasons for FundamentalsRefreshWorker.
+
+    Members:
+        EMPTY_PAYLOAD      — market-data returned 200 with empty body.
+        SCHEMA_UNPARSABLE  — body parsed but lacks the canonical ``records`` key
+                             (contract drift — market-data shape changed).
+        MISSING_SECTIONS   — ``records`` present but no usable section payloads
+                             (every metric resolved to None — the F-DB-005 bug).
+        DESERIALIZATION_ERROR — JSON decode raised.
+        TRANSPORT_ERROR    — HTTP connect/read failed before a status arrived.
+        HTTP_4XX, HTTP_5XX — market-data returned a non-2xx status (the granular
+                             code is still in the per-call log).
+    """
+
+    EMPTY_PAYLOAD = "fundamentals_empty_payload"
+    SCHEMA_UNPARSABLE = "fundamentals_schema_unparsable"
+    MISSING_SECTIONS = "fundamentals_missing_sections"
+    DESERIALIZATION_ERROR = "fundamentals_json_decode_failed"
+    TRANSPORT_ERROR = "fundamentals_transport_error"
+    HTTP_4XX = "fundamentals_http_4xx"
+    HTTP_5XX = "fundamentals_http_5xx"
+
+
+# Sections we need to walk on the canonical ``records[]`` shape returned by
+# market-data ``GET /api/v1/fundamentals/{id}``. See
+# ``docs/audits/2026-05-28-fundamentals-shape-audit.md`` Stages 3-4.
+_SECTION_HIGHLIGHTS = "highlights"
+_SECTION_INCOME_STATEMENT = "income_statement"
+_SECTION_TECHNICALS = "technicals_snapshot"
+_SECTION_COMPANY_PROFILE = "company_profile"
 
 
 def _backoff_key(ticker: str) -> str:
@@ -540,8 +584,45 @@ class FundamentalsRefreshWorker:
                         # without re-reading every per-call log line. Also
                         # bumps an aggregate counter that is surfaced in the
                         # worker_complete event.
-                        reason = result.get("failure_reason") or "unknown"
+                        # F-DB-005 (2026-05-28): the prior ``or "unknown"``
+                        # fallback hid a months-old schema mismatch (488/811
+                        # entities classified as ``unknown`` actually meant
+                        # ``fundamentals_missing_sections``). The structured
+                        # error classes in ``FundamentalsRefreshError`` are
+                        # now MANDATORY — any code path that returns
+                        # ``narrative=None`` MUST also return a non-empty
+                        # failure_reason. We loud-fail if not, so a future
+                        # regression cannot reintroduce the silent class.
+                        reason = result.get("failure_reason")
+                        if not reason:
+                            reason = "fundamentals_unclassified_failure"
+                            logger.error(  # type: ignore[no-any-return]
+                                "fundamentals_refresh_unclassified_none_narrative",
+                                entity_id=str(entity_id),
+                                ticker=result["ticker"],
+                            )
                         failure_counts[reason] = failure_counts.get(reason, 0) + 1
+                        # Per-error-class Prometheus counter (F-DB-005). Makes
+                        # the "unknown 488" class of bug impossible to ignore
+                        # in future — it will show up as a non-zero series for
+                        # ``fundamentals_schema_unparsable`` or similar. We
+                        # bucket granular HTTP statuses (``fundamentals_http_404``,
+                        # ``..._http_401``, ...) into ``http_4xx``/``http_5xx``
+                        # for the counter label so cardinality stays bounded;
+                        # the granular code is still in the structured warning
+                        # log line below.
+                        metric_label = reason
+                        if reason.startswith("fundamentals_http_"):
+                            try:
+                                _code = int(reason.rsplit("_", 1)[-1])
+                                metric_label = (
+                                    FundamentalsRefreshError.HTTP_4XX.value
+                                    if 400 <= _code < 500
+                                    else FundamentalsRefreshError.HTTP_5XX.value
+                                )
+                            except ValueError:
+                                metric_label = FundamentalsRefreshError.HTTP_5XX.value
+                        fundamentals_refresh_failed_total.labels(error_kind=metric_label).inc()
                         logger.warning(  # type: ignore[no-any-return]
                             "fundamentals_refresh_market_data_unavailable",
                             entity_id=str(entity_id),
@@ -1011,7 +1092,7 @@ ON CONFLICT DO NOTHING
                 error_type=type(exc).__name__,
                 error=str(exc),
             )
-            return None, "fundamentals_transport_error"
+            return None, FundamentalsRefreshError.TRANSPORT_ERROR.value
 
         # Mirror the per-call observability from _fetch_json so this code
         # path is not less-observable than the resolve/earnings/profile
@@ -1033,6 +1114,13 @@ ON CONFLICT DO NOTHING
             logger.error("market_data_call_server_error", **_log_fields)  # type: ignore[no-any-return]
 
         if resp.status_code != 200:
+            # Preserve the granular status_code in the structured failure_reason
+            # (kept verbatim from the pre-F-DB-005 contract — tests at
+            # test_fundamentals_refresh_worker.py:967, 1016 assert on the exact
+            # ``fundamentals_http_404`` and ``..._http_401`` strings so ops
+            # dashboards can distinguish missing-fundamentals from auth-failure
+            # without parsing the log payload). The Prometheus counter buckets
+            # by 4xx/5xx so the label cardinality stays bounded.
             return None, f"fundamentals_http_{resp.status_code}"
 
         try:
@@ -1044,20 +1132,105 @@ ON CONFLICT DO NOTHING
                 ticker=ticker,
                 error=str(exc),
             )
-            return None, "fundamentals_json_decode_failed"
+            return None, FundamentalsRefreshError.DESERIALIZATION_ERROR.value
+
+        # ── F-DB-005 FIX (2026-05-28): walk records[] by section ──────────────
+        # The endpoint returns ``{security_id, records: [{section, data, ...}]}``
+        # NOT the flat ``{revenue_usd_millions, pe_ratio, ...}`` shape the old
+        # code read. See docs/audits/2026-05-28-fundamentals-shape-audit.md
+        # Stage 3 for the canonical schema (anchored to
+        # market_data/api/schemas/fundamentals.py:24-28).
+        if not fundamentals:
+            return None, FundamentalsRefreshError.EMPTY_PAYLOAD.value
+        records = fundamentals.get("records")
+        if records is None or not isinstance(records, list):
+            return None, FundamentalsRefreshError.SCHEMA_UNPARSABLE.value
+
+        # Index records by section. Multiple records per section (one per
+        # period) are possible — we keep ALL rows so we can pick the newest
+        # one for income_statement margins.
+        sections: dict[str, list[dict[str, Any]]] = {}
+        for rec in records:
+            if not isinstance(rec, dict):
+                continue
+            section = rec.get("section")
+            if not isinstance(section, str):
+                continue
+            sections.setdefault(section, []).append(rec)
+
+        def _latest_data(section_name: str) -> dict[str, Any]:
+            """Return the ``data`` payload of the newest ``period_end`` row for
+            *section_name*, or {} if no row present. period_end is the ISO
+            timestamp string returned by market-data; lexical sort is correct
+            for ISO-8601 (newest = max)."""
+            rows = sections.get(section_name) or []
+            if not rows:
+                return {}
+            rows_sorted = sorted(rows, key=lambda r: str(r.get("period_end", "")), reverse=True)
+            top = rows_sorted[0]
+            data = top.get("data")
+            return data if isinstance(data, dict) else {}
+
+        highlights = _latest_data(_SECTION_HIGHLIGHTS)
+        income_latest = _latest_data(_SECTION_INCOME_STATEMENT)
+        technicals = _latest_data(_SECTION_TECHNICALS)
+        profile = _latest_data(_SECTION_COMPANY_PROFILE)
+
+        # Revenue: prefer Highlights.RevenueTTM (USD raw → millions); fall back
+        # to income_statement latest totalRevenue (already a quarterly figure;
+        # the narrative buckets by size, so quarterly vs TTM is acceptable for
+        # the embedding even if not strictly TTM).
+        revenue_raw = _safe_float(highlights, "RevenueTTM")
+        revenue_usd_millions: float | None = (revenue_raw / 1e6) if revenue_raw is not None else None
+        if revenue_usd_millions is None:
+            inc_rev = _get_float(income_latest, "totalRevenue", "total_revenue", "TotalRevenue")
+            if inc_rev is not None:
+                revenue_usd_millions = inc_rev / 1e6
+
+        # Margins computed from latest income_statement row.
+        total_revenue = _get_float(income_latest, "totalRevenue", "total_revenue", "TotalRevenue")
+        gross_profit = _get_float(income_latest, "grossProfit", "gross_profit", "GrossProfit")
+        net_income = _get_float(income_latest, "netIncome", "net_income", "NetIncome")
+        gross_margin_pct: float | None = None
+        net_margin_pct: float | None = None
+        if total_revenue and total_revenue != 0.0:
+            if gross_profit is not None:
+                gross_margin_pct = 100.0 * gross_profit / total_revenue
+            if net_income is not None:
+                net_margin_pct = 100.0 * net_income / total_revenue
+
+        # P/E from Highlights.
+        pe_ratio = _get_float(highlights, "PERatio", "peRatio")
+
+        # Price + 52W from technicals (preferred); fall back to highlights for
+        # tickers where market-data hasn't ingested the technicals snapshot.
+        price = _get_float(technicals, "Price") or _get_float(highlights, "Price")
+        week_52_high = _get_float(technicals, "52WeekHigh", "WeekHigh52") or _get_float(
+            highlights, "52WeekHigh", "WeekHigh52"
+        )
+        week_52_low = _get_float(technicals, "52WeekLow", "WeekLow52") or _get_float(
+            highlights, "52WeekLow", "WeekLow52"
+        )
+
+        description_val = profile.get("Description") if isinstance(profile.get("Description"), str) else None
 
         narrative = build_fundamentals_narrative(
             canonical_name=str(entity_row.get("canonical_name", ticker)),
             entity_type=str(entity_row.get("entity_type", "financial_instrument")),
-            revenue_usd_millions=_safe_float(fundamentals, "revenue_usd_millions"),
-            gross_margin_pct=_safe_float(fundamentals, "gross_margin_pct"),
-            net_margin_pct=_safe_float(fundamentals, "net_margin_pct"),
-            pe_ratio=_safe_float(fundamentals, "pe_ratio"),
-            price=_safe_float(fundamentals, "price"),
-            week_52_high=_safe_float(fundamentals, "week_52_high"),
-            week_52_low=_safe_float(fundamentals, "week_52_low"),
-            description=fundamentals.get("description"),
+            revenue_usd_millions=revenue_usd_millions,
+            gross_margin_pct=gross_margin_pct,
+            net_margin_pct=net_margin_pct,
+            pe_ratio=pe_ratio,
+            price=price,
+            week_52_high=week_52_high,
+            week_52_low=week_52_low,
+            description=description_val,
         )
+        if narrative is None:
+            # Records present but every section payload yielded None for the
+            # narrative inputs (e.g. ETF with no Highlights / Technicals).
+            # This is the structural class the old code mis-labelled "unknown".
+            return None, FundamentalsRefreshError.MISSING_SECTIONS.value
         return narrative, None
 
     async def _resolve_instrument_id(self, http: httpx.AsyncClient, ticker: str) -> UUID | None:

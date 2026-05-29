@@ -17,6 +17,115 @@ _EMB_REPO = (
 )
 
 
+def _make_fundamentals_response(
+    *,
+    security_id: str = "00000000-0000-0000-0000-000000000999",
+    revenue_ttm: float | None = 390_000_000_000.0,  # USD raw, → 390_000.0 millions
+    gross_profit: float | None = 173_000_000_000.0,
+    net_income: float | None = 98_700_000_000.0,
+    total_revenue: float | None = 390_000_000_000.0,
+    pe_ratio: float | None = 28.0,
+    price: float | None = 189.0,
+    week_52_high: float | None = 200.0,
+    week_52_low: float | None = 130.0,
+    description: str | None = None,
+) -> dict[str, object]:
+    """Build a response matching the REAL ``GET /api/v1/fundamentals/{id}`` schema.
+
+    F-DB-005 (2026-05-28): the previous fixtures (lines 144-152, 514) stubbed
+    a flat ``{revenue_usd_millions, pe_ratio, price, ...}`` shape that the
+    production endpoint NEVER returned. That mismatch hid the bug for months.
+    This helper now mirrors the canonical schema at
+    ``services/market-data/src/market_data/api/schemas/fundamentals.py:24-28``
+    so any future drift between the worker and market-data is caught by the
+    unit tests, not by ops dashboards.
+
+    Section names match the ``FundamentalsSection`` enum
+    (``services/market-data/src/market_data/domain/enums.py:63-69``). The
+    inner ``data`` dict uses EODHD's CamelCase keys (``PERatio``,
+    ``RevenueTTM``, ``totalRevenue``, ...) because market-ingestion stores
+    them verbatim — see ``docs/audits/2026-05-28-fundamentals-shape-audit.md``
+    Stage 3 for the canonical shape.
+    """
+    records: list[dict[str, object]] = []
+    highlights_data: dict[str, object] = {}
+    if revenue_ttm is not None:
+        highlights_data["RevenueTTM"] = revenue_ttm
+    if pe_ratio is not None:
+        highlights_data["PERatio"] = pe_ratio
+    if highlights_data:
+        records.append(
+            {
+                "id": "11111111-1111-1111-1111-111111111111",
+                "security_id": security_id,
+                "section": "highlights",
+                "period_end": "2026-03-31T00:00:00Z",
+                "period_type": "QUARTERLY",
+                "data": highlights_data,
+                "source": "eodhd",
+                "ingested_at": "2026-05-01T00:00:00Z",
+            }
+        )
+
+    income_data: dict[str, object] = {}
+    if total_revenue is not None:
+        income_data["totalRevenue"] = total_revenue
+    if gross_profit is not None:
+        income_data["grossProfit"] = gross_profit
+    if net_income is not None:
+        income_data["netIncome"] = net_income
+    if income_data:
+        records.append(
+            {
+                "id": "22222222-2222-2222-2222-222222222222",
+                "security_id": security_id,
+                "section": "income_statement",
+                "period_end": "2026-03-31T00:00:00Z",
+                "period_type": "QUARTERLY",
+                "data": income_data,
+                "source": "eodhd",
+                "ingested_at": "2026-05-01T00:00:00Z",
+            }
+        )
+
+    technicals_data: dict[str, object] = {}
+    if price is not None:
+        technicals_data["Price"] = price
+    if week_52_high is not None:
+        technicals_data["52WeekHigh"] = week_52_high
+    if week_52_low is not None:
+        technicals_data["52WeekLow"] = week_52_low
+    if technicals_data:
+        records.append(
+            {
+                "id": "33333333-3333-3333-3333-333333333333",
+                "security_id": security_id,
+                "section": "technicals_snapshot",
+                "period_end": "2026-05-01T00:00:00Z",
+                "period_type": "QUARTERLY",
+                "data": technicals_data,
+                "source": "eodhd",
+                "ingested_at": "2026-05-01T00:00:00Z",
+            }
+        )
+
+    if description is not None:
+        records.append(
+            {
+                "id": "44444444-4444-4444-4444-444444444444",
+                "security_id": security_id,
+                "section": "company_profile",
+                "period_end": "2026-01-01T00:00:00Z",
+                "period_type": "ANNUAL",
+                "data": {"Description": description},
+                "source": "eodhd",
+                "ingested_at": "2026-05-01T00:00:00Z",
+            }
+        )
+
+    return {"security_id": security_id, "records": records}
+
+
 def _make_session_factory(due_rows: list) -> tuple:
     """Return (session_factory, emb_repo).
 
@@ -141,15 +250,19 @@ class TestFundamentalsRefreshWorkerS3Failure:
         sf, emb_repo = _make_session_factory(due_rows)
 
         _INSTRUMENT_ID = UUID("01900000-0000-7000-8000-000000001001")
-        fundamentals_data = {
-            "revenue_usd_millions": 390000.0,
-            "gross_margin_pct": 44.5,
-            "net_margin_pct": 25.3,
-            "pe_ratio": 28.0,
-            "price": 189.0,
-            "week_52_high": 200.0,
-            "week_52_low": 130.0,
-        }
+        # F-DB-005 (2026-05-28): real ``records[]`` shape, not the flat shape
+        # the previous fixture stubbed (which never matched production).
+        fundamentals_data = _make_fundamentals_response(
+            security_id=str(_INSTRUMENT_ID),
+            revenue_ttm=390_000_000_000.0,  # → 390_000 millions
+            gross_profit=173_000_000_000.0,  # → ~44.4% gross margin
+            net_income=98_700_000_000.0,  # → ~25.3% net margin
+            total_revenue=390_000_000_000.0,
+            pe_ratio=28.0,
+            price=189.0,
+            week_52_high=200.0,
+            week_52_low=130.0,
+        )
 
         instrument_resp = MagicMock()
         instrument_resp.status_code = 200
@@ -203,7 +316,21 @@ class TestFundamentalsRefreshWorkerS3Failure:
 
         fundamentals_resp = MagicMock()
         fundamentals_resp.status_code = 200
-        fundamentals_resp.json = MagicMock(return_value={"revenue_usd_millions": 390000.0, "price": 189.0})
+        # F-DB-005 (2026-05-28): real ``records[]`` shape (was a lying flat
+        # ``{revenue_usd_millions, price}`` stub).
+        fundamentals_resp.json = MagicMock(
+            return_value=_make_fundamentals_response(
+                security_id=str(_INSTRUMENT_ID),
+                revenue_ttm=390_000_000_000.0,
+                price=189.0,
+                gross_profit=None,
+                net_income=None,
+                total_revenue=None,
+                pe_ratio=None,
+                week_52_high=None,
+                week_52_low=None,
+            )
+        )
 
         def _route_get(url: str, **_kwargs: object) -> object:
             if "/instruments/lookup" in url:
@@ -511,7 +638,20 @@ def _make_multi_entity_http(instrument_id: UUID) -> AsyncMock:
 
     fundamentals_resp = MagicMock()
     fundamentals_resp.status_code = 200
-    fundamentals_resp.json = MagicMock(return_value={"revenue_usd_millions": 100.0, "price": 50.0})
+    # F-DB-005 (2026-05-28): real ``records[]`` shape (was a lying flat stub).
+    fundamentals_resp.json = MagicMock(
+        return_value=_make_fundamentals_response(
+            security_id=str(instrument_id),
+            revenue_ttm=100_000_000.0,  # → 100 millions (small-cap)
+            price=50.0,
+            gross_profit=None,
+            net_income=None,
+            total_revenue=None,
+            pe_ratio=None,
+            week_52_high=None,
+            week_52_low=None,
+        )
+    )
 
     # 404 for earnings and profile so those paths complete quickly
     not_found_resp = MagicMock()
