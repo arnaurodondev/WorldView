@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 from decimal import Decimal
+from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 from uuid import UUID
 
@@ -105,15 +106,41 @@ def _make_s7(
     events: list[EventResult] | None = None,
     graph: EgocentricGraph | None = None,
     fail: bool = False,
+    macro_events: list[EventResult] | None = None,
 ) -> MagicMock:
-    """Create a mock S7Client with configurable responses."""
+    """Create a mock S7Client with configurable responses.
+
+    PLAN-0102 W1 T-W1-04: the gatherer now issues TWO ``search_events`` calls
+    per morning brief — one entity-scoped (portfolio earnings/analyst/corporate)
+    and one unscoped (macro/economic Fed/CPI/jobless).  This mock routes by
+    the ``entity_ids`` argument: an empty list maps to ``macro_events`` (the
+    macro slice); a non-empty list maps to ``events`` (the portfolio slice).
+    Tests can opt into the new behaviour by passing ``macro_events=...``;
+    legacy tests that only set ``events`` keep working because the macro slot
+    defaults to ``[]``.
+    """
     s7 = MagicMock()
     if fail:
         s7.search_events = AsyncMock(side_effect=RuntimeError("S7 down"))
         s7.get_egocentric_graph = AsyncMock(side_effect=RuntimeError("S7 down"))
         s7._get = AsyncMock(side_effect=RuntimeError("S7 down"))
     else:
-        s7.search_events = AsyncMock(return_value=events or [])
+        _entity_events = events or []
+        _macro_events = macro_events or []
+
+        async def _route_search_events(
+            entity_ids: list[Any] | None = None,
+            event_types: list[str] | None = None,
+            date_from: Any = None,
+            date_to: Any = None,
+            top_k: int = 20,
+        ) -> list[EventResult]:
+            # Empty entity_ids = macro call (T-W1-04 second call shape).
+            if not entity_ids:
+                return _macro_events
+            return _entity_events
+
+        s7.search_events = AsyncMock(side_effect=_route_search_events)
         s7.get_egocentric_graph = AsyncMock(
             return_value=graph or EgocentricGraph(entity_id=_ENTITY_ID),
         )
@@ -709,3 +736,230 @@ async def test_briefing_context_gatherer_defaults_to_user_endpoint() -> None:
 
     s5.get_pending_alerts.assert_called_once()
     s5.get_pending_alerts_for_user.assert_not_called()
+
+
+# ── PLAN-0102 W1 — Brief Wave A regression tests ──────────────────────────────
+
+
+def _quote(iid: str, last: str = "100.00") -> QuoteSummary:
+    """Build a synthetic QuoteSummary for the S3 batch mock."""
+    return QuoteSummary(instrument_id=iid, last=last, timestamp=datetime.now(tz=UTC))
+
+
+async def test_gather_morning_market_overview_wired_end_to_end() -> None:
+    """T-W1-01 + T-W1-02: market_overview must carry tape + holdings.
+
+    The S3 batch call returns quotes for both portfolio holdings (AAPL, MSFT)
+    AND the broad-market tape (SPY, QQQ, VIX) — all 5 symbols must appear in
+    the resulting ``MarketOverview`` so the formatter has data to render. This
+    is the regression gate for BP-614 (silent data drop).
+    """
+    s1 = _make_s1(portfolio=_sample_portfolio())
+
+    # Map ticker → synthetic instrument-id UUID so we can also assert that the
+    # S3 batch call was issued with ALL 5 instrument-ids (tape + holdings).
+    ticker_to_iid: dict[str, str] = {
+        "AAPL": "00000000-0000-0000-0000-000000000aaa",
+        "MSFT": "00000000-0000-0000-0000-000000000bbb",
+        "SPY": "00000000-0000-0000-0000-000000000ccc",
+        "QQQ": "00000000-0000-0000-0000-000000000ddd",
+        "VIX": "00000000-0000-0000-0000-000000000eee",
+    }
+
+    async def _resolve(ticker: str) -> UUID | None:
+        iid = ticker_to_iid.get(ticker)
+        return UUID(iid) if iid is not None else None
+
+    s3 = MagicMock()
+    s3.find_instrument_by_ticker = AsyncMock(side_effect=_resolve)
+    s3.get_batch_quotes = AsyncMock(
+        return_value={iid: _quote(iid, last=f"{i * 10 + 100}.00") for i, iid in enumerate(ticker_to_iid.values())},
+    )
+
+    s5 = _make_s5(alerts=_sample_alerts())
+    s6 = _make_s6(news_articles=_sample_news_raw())
+    s7 = _make_s7(events=_sample_events())
+
+    gatherer = BriefingContextGatherer(s1=s1, s3=s3, s5=s5, s6=s6, s7=s7)
+    ctx = await gatherer.gather_morning_context(_USER_ID, _TENANT_ID)
+
+    assert ctx.market_overview is not None
+    # Tape — SPY/QQQ/VIX populated
+    tape_symbols = {q.instrument_id for q in ctx.market_overview.indices}
+    assert tape_symbols == {"SPY", "QQQ", "VIX"}, tape_symbols
+    # Holdings — AAPL/MSFT populated, each tagged with its TICKER (not iid)
+    holding_symbols = {q.instrument_id for q in ctx.market_overview.holdings}
+    assert holding_symbols == {"AAPL", "MSFT"}, holding_symbols
+
+    # Verify the batch call payload included all 5 iids — proves T-W1-02
+    s3.get_batch_quotes.assert_awaited()
+    batch_arg = s3.get_batch_quotes.await_args.args[0]
+    assert set(batch_arg) == set(ticker_to_iid.values()), batch_arg
+
+
+async def test_gather_morning_formatter_sees_every_synthetic_symbol() -> None:
+    """T-W1-01 acceptance: the BriefContextFormatter must mention every symbol.
+
+    Same input as the test above, run end-to-end through the formatter to
+    prove the "data we fetch but drop" anti-pattern is closed. This is the
+    test specified verbatim in T-W1-01's regression-test section.
+    """
+    from rag_chat.application.use_cases.brief_context_formatter import BriefContextFormatter
+
+    s1 = _make_s1(portfolio=_sample_portfolio())
+    ticker_to_iid: dict[str, str] = {
+        "AAPL": "00000000-0000-0000-0000-000000000aaa",
+        "MSFT": "00000000-0000-0000-0000-000000000bbb",
+        "SPY": "00000000-0000-0000-0000-000000000ccc",
+        "QQQ": "00000000-0000-0000-0000-000000000ddd",
+        "VIX": "00000000-0000-0000-0000-000000000eee",
+    }
+
+    async def _resolve(ticker: str) -> UUID | None:
+        iid = ticker_to_iid.get(ticker)
+        return UUID(iid) if iid is not None else None
+
+    s3 = MagicMock()
+    s3.find_instrument_by_ticker = AsyncMock(side_effect=_resolve)
+    s3.get_batch_quotes = AsyncMock(
+        return_value={iid: _quote(iid, last=f"{i * 10 + 100}.00") for i, iid in enumerate(ticker_to_iid.values())},
+    )
+
+    s5 = _make_s5()
+    s6 = _make_s6(news_articles=_sample_news_raw())
+    s7 = _make_s7(events=_sample_events())
+
+    gatherer = BriefingContextGatherer(s1=s1, s3=s3, s5=s5, s6=s6, s7=s7)
+    ctx = await gatherer.gather_morning_context(_USER_ID, _TENANT_ID)
+
+    rendered = BriefContextFormatter().format_market_overview(ctx)
+    for symbol in ("AAPL", "MSFT", "SPY", "QQQ", "VIX"):
+        assert symbol in rendered, f"symbol {symbol} dropped from formatter output:\n{rendered}"
+
+
+async def test_gather_morning_news_reranked_by_portfolio_overlap() -> None:
+    """T-W1-03: news whose primary_entity_id overlaps holdings must rank higher.
+
+    Synthetic input: 3 news rows — one for AAPL (held), one for KO (not held),
+    one for MSFT (held).  All three carry the same display_relevance_score so
+    the only signal is the overlap multiplier.  The held items must surface
+    BEFORE the non-held item; the non-held item must still appear (floor).
+    """
+    held_aapl = "00000000-0000-0000-0000-000000000010"  # see _sample_portfolio
+    held_msft = "00000000-0000-0000-0000-000000000011"
+    not_held_ko = "00000000-0000-0000-0000-0000deadbeef"
+
+    raw_news = [
+        {
+            "article_id": "00000000-0000-0000-0000-000000000301",
+            "title": "Coca-Cola earnings preview (not held)",
+            "primary_entity_id": not_held_ko,
+            "display_relevance_score": 0.50,
+            "published_at": "2026-04-23T10:00:00+00:00",
+        },
+        {
+            "article_id": "00000000-0000-0000-0000-000000000302",
+            "title": "Apple supply-chain update (HELD)",
+            "primary_entity_id": held_aapl,
+            "display_relevance_score": 0.50,
+            "published_at": "2026-04-23T10:00:00+00:00",
+        },
+        {
+            "article_id": "00000000-0000-0000-0000-000000000303",
+            "title": "Microsoft Azure pricing (HELD)",
+            "primary_entity_id": held_msft,
+            "display_relevance_score": 0.50,
+            "published_at": "2026-04-23T10:00:00+00:00",
+        },
+    ]
+
+    s1 = _make_s1(portfolio=_sample_portfolio())
+    s3 = _make_s3(batch_quotes={}, instrument_id=None)
+    s5 = _make_s5()
+    s6 = _make_s6(news_articles=raw_news)
+    s7 = _make_s7()
+
+    gatherer = BriefingContextGatherer(s1=s1, s3=s3, s5=s5, s6=s6, s7=s7)
+    ctx = await gatherer.gather_morning_context(_USER_ID, _TENANT_ID)
+
+    # All three articles survived — floor preserved (non-overlap items NOT dropped).
+    assert len(ctx.news_articles) == 3
+
+    # Held items must appear BEFORE the non-held item in rank order.
+    titles_in_order = [a.title for a in ctx.news_articles]
+    assert "Coca-Cola earnings preview (not held)" in titles_in_order
+    not_held_index = titles_in_order.index("Coca-Cola earnings preview (not held)")
+    aapl_index = titles_in_order.index("Apple supply-chain update (HELD)")
+    msft_index = titles_in_order.index("Microsoft Azure pricing (HELD)")
+    assert aapl_index < not_held_index, titles_in_order
+    assert msft_index < not_held_index, titles_in_order
+
+
+async def test_gather_morning_macro_events_second_s7_call() -> None:
+    """T-W1-04: macro events without subject_entity_id must surface in the brief.
+
+    Mock S7 to return 1 portfolio-scoped earnings event AND 1 unscoped macro
+    event (Fed FOMC). Both must end up in ctx.recent_events; the portfolio
+    event tagged source_tier="portfolio", the macro event tagged "macro".
+    """
+    portfolio_events = [
+        EventResult(
+            event_id="00000000-0000-0000-0000-000000000401",
+            event_type="earnings",
+            event_text="Apple Q3 earnings",
+            subject_entity_id="00000000-0000-0000-0000-000000000010",
+            event_date="2026-04-20",
+            extraction_confidence=0.95,
+        ),
+    ]
+    macro_events = [
+        EventResult(
+            event_id="00000000-0000-0000-0000-000000000402",
+            event_type="macro",
+            event_text="FOMC interest-rate decision",
+            subject_entity_id=None,  # macro events have no subject entity
+            event_date="2026-05-29",
+            extraction_confidence=0.85,
+        ),
+    ]
+
+    s1 = _make_s1(portfolio=_sample_portfolio())
+    s3 = _make_s3(batch_quotes={}, instrument_id=_INSTRUMENT_ID)
+    s5 = _make_s5()
+    s6 = _make_s6(news_articles=[])
+    s7 = _make_s7(events=portfolio_events, macro_events=macro_events)
+
+    gatherer = BriefingContextGatherer(s1=s1, s3=s3, s5=s5, s6=s6, s7=s7)
+    ctx = await gatherer.gather_morning_context(_USER_ID, _TENANT_ID)
+
+    # Both events must surface, each tagged with its source tier.
+    tiers = sorted(e.source_tier for e in ctx.recent_events)
+    assert tiers == ["macro", "portfolio"], tiers
+
+    # The "FOMC" macro text must be retained — proves the unscoped call ran.
+    macro_texts = [e.event_text for e in ctx.recent_events if e.source_tier == "macro"]
+    assert any("FOMC" in t for t in macro_texts), macro_texts
+
+
+def test_morning_prompt_v4_contains_required_sections() -> None:
+    """T-W1-05 snapshot: the prompt MUST name all 6 sections + the word 'implication'.
+
+    Lightweight snapshot test on the rendered prompt template body.  This is a
+    regression gate against accidental edits that drop the structural spec or
+    soften the "lead with implication" instruction (the heart of the brief
+    redesign).
+    """
+    from prompts.briefing.morning import MORNING_BRIEFING
+
+    body = MORNING_BRIEFING.template
+    for section_name in (
+        "Tape",
+        "Your Portfolio Today",
+        "Macro Today",
+        "News That Matters To You",
+        "Risks + Opportunities",
+        "Bonus context",
+    ):
+        assert section_name in body, f"prompt missing required section: {section_name}"
+    assert "implication" in body, "prompt no longer instructs the LLM to lead with the implication"
+    assert MORNING_BRIEFING.version == "4.0", MORNING_BRIEFING.version

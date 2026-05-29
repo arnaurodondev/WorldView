@@ -13,6 +13,13 @@ VERSION HISTORY
         Context items are numbered [c1], [c2], … so the LLM can embed stable
         citation markers in every bullet (the 100% citation gate). Tightened to
         <=4 sections x <=4 bullets x <=140 chars per bullet.
+- 4.0 — PLAN-0102 W1 T-W1-05 (2026-05-28): "5-minute investor brief" rewrite.
+        Replaces the generic "synthesize this data" wording with an explicit
+        6-section spec (Tape, Your Portfolio Today, Macro Today, News That
+        Matters To You, Risks + Opportunities, Bonus context). Every News bullet
+        leads with the IMPLICATION for the investor, then the fact, then a
+        citation. Total cap 250 words. Audit:
+        docs/audits/2026-05-28-plan-0102-brief-redesign.md.
 """
 
 from __future__ import annotations
@@ -21,15 +28,38 @@ from prompts._base import PromptTemplate
 
 MORNING_BRIEFING = PromptTemplate(
     name="morning_briefing",
-    # Bumped 2.2 → 3.0 as part of PLAN-0062 Wave 4 citation-first redesign.
-    version="3.0",
+    # Bumped 3.0 → 4.0 as part of PLAN-0102 W1 "5-minute investor brief" rewrite.
+    version="4.0",
     description=(
-        "Morning market briefing v3.0 — LEAD + DETAILS with [cN] citation markers "
-        "for deterministic bullet-level citations (PLAN-0062-W4)"
+        "Morning market briefing v4.0 — 5-minute investor brief with 6 named "
+        "sections (Tape / Your Portfolio Today / Macro Today / News That Matters "
+        "To You / Risks + Opportunities / Bonus context); every News bullet "
+        "leads with the implication (PLAN-0102 W1)"
     ),
     template=(
-        "You are a financial intelligence analyst writing a morning market briefing.\n"
-        "Synthesize the following data into a clear, actionable structured brief.\n\n"
+        "You are writing the 5-minute morning brief for an investor about to scan it "
+        "before market open.\n"
+        "Goal: tell them what changed overnight that affects their decisions today.\n\n"
+        "You have:\n"
+        "  - Portfolio: <holdings + sector + last close>\n"
+        "  - Overnight tape: <SPY/QQQ/VIX>\n"
+        "  - Macro calendar: <events today + tomorrow>\n"
+        "  - News (pre-ranked by relevance x portfolio overlap): <list>\n\n"
+        "Output sections in this exact order:\n"
+        "  1. **Tape** — one sentence. Futures + VIX.\n"
+        "  2. **Your Portfolio Today** — bullet per material holding. Lead with implication.\n"
+        "  3. **Macro Today** — bullet list of today/tomorrow's prints.\n"
+        "  4. **News That Matters To You** — 3-5 items. Each leads with the implication "
+        "for the investor, then the fact, then [N#] citation.\n"
+        "  5. **Risks + Opportunities** — 2-3 model-generated lines synthesising signal "
+        "across the data.\n"
+        "  6. **Bonus context** — 1-2 generic high-impact items.\n\n"
+        "Rules:\n"
+        "  - Cap total at 250 words.\n"
+        "  - Cite sources [N1] [N2].\n"
+        "  - NEVER include news that doesn't connect to a holding, sector, or macro event.\n"
+        "  - On quiet days, surface 1 sector-relevant macro signal rather than padding with "
+        "irrelevant news.\n\n"
         "{safety}\n\n"
         "As of: {current_date}\n\n"
         # ── Output structure (STRICT) ─────────────────────────────────────────

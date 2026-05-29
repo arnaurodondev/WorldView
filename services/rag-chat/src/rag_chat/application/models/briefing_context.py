@@ -92,11 +92,28 @@ class QuoteSummary:
 
 @dataclass(frozen=True, kw_only=True)
 class MarketOverview:
-    """Broad market state — sector performance, top movers."""
+    """Broad market state — sector performance, top movers, tape, holdings.
 
-    sector_performance: dict[str, float]
-    top_gainers: list[dict[str, Any]]
-    top_losers: list[dict[str, Any]]
+    PLAN-0102 W1 (T-W1-01): added ``indices`` (SPY/QQQ/VIX tape) and ``holdings``
+    (per-holding quote snapshots). The pre-existing ``sector_performance`` /
+    ``top_gainers`` / ``top_losers`` fields are kept for back-compat with any
+    legacy formatter paths. ``indices`` + ``holdings`` are populated by
+    ``BriefingContextGatherer.gather_morning_context()`` from the same S3 batch
+    call so they share one network round-trip; the formatter renders all three
+    sections explicitly so live data is never silently dropped (BP-614).
+    """
+
+    sector_performance: dict[str, float] = field(default_factory=dict)
+    top_gainers: list[dict[str, Any]] = field(default_factory=list)
+    top_losers: list[dict[str, Any]] = field(default_factory=list)
+    # Tape — broad-market reference instruments (SPY / QQQ / VIX). Each entry
+    # is a ``QuoteSummary`` whose ``instrument_id`` carries the ticker symbol
+    # (not a UUID) so the formatter can render "SPY 485.20" without a lookup.
+    indices: list[QuoteSummary] = field(default_factory=list)
+    # Per-holding quote snapshots — same call as ``indices`` so we surface what
+    # we already pay to fetch. The formatter renders these inside a dedicated
+    # "Your Portfolio Today" pre-section.
+    holdings: list[QuoteSummary] = field(default_factory=list)
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -110,6 +127,11 @@ class EventSummary:
     event_date: datetime | None = None
     event_text: str
     extraction_confidence: float
+    # PLAN-0102 W1 T-W1-04: ``"portfolio"`` for entity-scoped events,
+    # ``"macro"`` for unscoped Fed/CPI/jobless rows merged from the second S7
+    # call. Empty string keeps any legacy caller that constructs EventSummary
+    # without this field working without changes.
+    source_tier: str = ""
 
 
 @dataclass(frozen=True, kw_only=True)

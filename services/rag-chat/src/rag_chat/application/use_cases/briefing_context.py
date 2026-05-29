@@ -26,6 +26,7 @@ from rag_chat.application.models.briefing_context import (
     EventSummary,
     FundamentalsSummary,
     HoldingItem,
+    MarketOverview,
     NewsArticleSummary,
     PortfolioSnapshot,
     QuoteSummary,
@@ -83,6 +84,24 @@ class BriefingContextGatherer:
 
     # ── Morning briefing context ─────────────────────────────────────────────
 
+    # PLAN-0102 W1 T-W1-02: broad-market tape symbols appended to every batch
+    # quote call so we surface overnight-tape direction (SPY/QQQ/VIX) — the
+    # data is in S3, the brief never asked for it before.
+    _TAPE_TICKERS: tuple[str, ...] = ("SPY", "QQQ", "VIX")
+
+    # PLAN-0102 W1 T-W1-04: macro event types fetched in a SECOND S7 call
+    # without entity-scope so Fed FOMC / CPI prints / jobless-claims rows
+    # (which carry NO subject_entity_id) actually surface.
+    _MACRO_EVENT_TYPES: tuple[str, ...] = ("macro", "economic")
+    # Portfolio-scoped event types — kept narrow to avoid the S7 portfolio-
+    # entity call swallowing the macro rows we now fetch separately.
+    _PORTFOLIO_EVENT_TYPES: tuple[str, ...] = ("earnings", "analyst_action", "corporate")
+
+    # PLAN-0102 W1 T-W1-03: overlap multiplier applied to news whose
+    # primary_entity_id intersects the user's held entities. Keeps generic
+    # AI news from crowding out NVDA-specific items for a holder of NVDA.
+    _NEWS_OVERLAP_MULTIPLIER: float = 1.5
+
     async def gather_morning_context(
         self,
         user_id: str,
@@ -104,7 +123,14 @@ class BriefingContextGatherer:
         # ── 1. Portfolio from S1 ─────────────────────────────────────────────
         portfolio_snapshot: PortfolioSnapshot | None = None
         portfolio_failed = False
+        # PLAN-0102 W1 T-W1-01/T-W1-02: we track BOTH the bare instrument-id
+        # list (for the S3 batch call) AND the ticker↔instrument_id mapping so
+        # we can render per-holding quotes by ticker symbol (the user-facing
+        # name) without a second lookup on the formatter side. Tape symbols
+        # (SPY/QQQ/VIX) ride the same batch call.
         instrument_ids: list[str] = []
+        holding_ticker_to_iid: dict[str, str] = {}
+        tape_ticker_to_iid: dict[str, str] = {}
         entity_ids: list[str] = []
 
         try:
@@ -121,12 +147,24 @@ class BriefingContextGatherer:
                 portfolio_snapshot = self._map_portfolio(raw_portfolio, user_id)
                 # Collect tickers for S3 batch quotes
                 tickers = [h.ticker for h in portfolio_snapshot.holdings if h.ticker]
-                instrument_ids = await self._resolve_tickers(tickers)
+                holding_ticker_to_iid = await self._resolve_ticker_map(tickers)
                 # Collect entity_ids from holdings + watchlist
                 entity_ids = self._collect_entity_ids(portfolio_snapshot)
         except Exception:
             log.warning("briefing_s1_failed", user_id=user_id)
             portfolio_failed = True
+
+        # PLAN-0102 W1 T-W1-02: resolve the broad-market tape tickers separately
+        # so a portfolio with zero holdings still gets a tape in the brief. Any
+        # resolution failure on an individual symbol is logged but does not
+        # block the rest — graceful degradation in the spirit of R9.
+        try:
+            tape_ticker_to_iid = await self._resolve_ticker_map(list(self._TAPE_TICKERS))
+        except Exception:
+            log.warning("briefing_tape_resolve_failed")
+
+        # Combined instrument_id list for the single S3 batch call.
+        instrument_ids = list({*holding_ticker_to_iid.values(), *tape_ticker_to_iid.values()})
 
         # ── 2. Parallel calls to S3, S5, S6, S7 ─────────────────────────────
         # PLAN-0099 Wave A: each call is wrapped with ``timed_upstream_call`` so
@@ -154,18 +192,40 @@ class BriefingContextGatherer:
         alerts_coro = _timed("s5_alerts", alerts_inner)
         quotes_inner = self._s3.get_batch_quotes(instrument_ids) if instrument_ids else _empty_quotes()
         quotes_coro = _timed("s3_quotes", quotes_inner)
-        events_inner = self._fetch_events(entity_ids) if entity_ids else _empty_events()
-        events_coro = _timed("s7_events", events_inner)
+        # PLAN-0102 W1 T-W1-04: TWO S7 calls — (a) entity-scoped earnings/analyst/
+        # corporate events for held names, (b) unscoped macro/economic events
+        # (Fed/CPI/jobless) which carry no subject_entity_id and were previously
+        # invisible. Both are merged in step 3 and tagged with source_tier so
+        # the formatter can group them under separate sections.
+        events_portfolio_inner = (
+            self._fetch_events(entity_ids, event_types=list(self._PORTFOLIO_EVENT_TYPES))
+            if entity_ids
+            else _empty_events()
+        )
+        events_portfolio_coro = _timed("s7_events", events_portfolio_inner)
+        events_macro_inner = self._fetch_events(
+            entity_ids=[],
+            event_types=list(self._MACRO_EVENT_TYPES),
+            days=2,
+        )
+        events_macro_coro = _timed("s7_events_macro", events_macro_inner)
 
         results = await asyncio.gather(
             news_coro,
             alerts_coro,
             quotes_coro,
-            events_coro,
+            events_portfolio_coro,
+            events_macro_coro,
             return_exceptions=True,
         )
 
-        news_result, alerts_result, quotes_result, events_result = results
+        (
+            news_result,
+            alerts_result,
+            quotes_result,
+            events_portfolio_result,
+            events_macro_result,
+        ) = results
 
         # ── 3. Map results (use empty defaults on exception) ─────────────────
         news_articles: list[NewsArticleSummary] = []
@@ -186,11 +246,43 @@ class BriefingContextGatherer:
         else:
             quotes = quotes_result  # type: ignore[assignment]
 
+        # PLAN-0102 W1 T-W1-04: merge portfolio-scoped + macro events; tag each
+        # row with its source tier ("portfolio" vs "macro") so the formatter can
+        # render them under separate "Earnings/Corporate" vs "Macro Today"
+        # headings without re-querying upstream.
         events: list[EventSummary] = []
-        if isinstance(events_result, BaseException):
-            log.warning("briefing_s7_events_failed", error=str(events_result))
+        if isinstance(events_portfolio_result, BaseException):
+            log.warning("briefing_s7_events_failed", error=str(events_portfolio_result))
         else:
-            events = events_result  # type: ignore[assignment]
+            portfolio_events: list[EventSummary] = events_portfolio_result  # type: ignore[assignment]
+            events.extend(_tag_event_source_tier(portfolio_events, "portfolio"))
+        if isinstance(events_macro_result, BaseException):
+            log.warning("briefing_s7_events_macro_failed", error=str(events_macro_result))
+        else:
+            macro_events: list[EventSummary] = events_macro_result  # type: ignore[assignment]
+            events.extend(_tag_event_source_tier(macro_events, "macro"))
+
+        # PLAN-0102 W1 T-W1-03: re-rank news so items whose primary_entity_id
+        # overlaps the user's held entities float to the top. The multiplier is
+        # additive in effect (existing relevance_score is preserved as the base
+        # ordering); we never drop non-overlap items so quiet-day briefs still
+        # surface broad signals. Stable sort keeps the original recency tiebreak.
+        held_entity_ids: set[str] = set()
+        if portfolio_snapshot is not None:
+            held_entity_ids = {str(h.entity_id) for h in portfolio_snapshot.holdings if h.entity_id}
+        news_articles = _score_news_by_overlap(news_articles, held_entity_ids, self._NEWS_OVERLAP_MULTIPLIER)
+
+        # PLAN-0102 W1 T-W1-01: build a MarketOverview that the formatter can
+        # actually render. ``indices`` carries SPY/QQQ/VIX (the tape) and
+        # ``holdings`` carries per-holding quote snapshots. Both share the
+        # single S3 batch call above; the formatter renders them as separate
+        # sections so we never silently drop the data we paid to fetch
+        # (the BP-614 anti-pattern).
+        market_overview = _build_market_overview(
+            quotes_by_iid=quotes,
+            holding_ticker_to_iid=holding_ticker_to_iid,
+            tape_ticker_to_iid=tape_ticker_to_iid,
+        )
 
         # ── 4. Check if ALL sources failed ───────────────────────────────────
         # A source counts as "failed" if it raised OR returned empty data.
@@ -231,6 +323,7 @@ class BriefingContextGatherer:
             news_articles=news_articles,
             active_alerts=active_alerts,
             quotes=quotes,
+            market_overview=market_overview,
             recent_events=events,
             gathered_at=datetime.now(tz=UTC),
             context_availability_score=availability_score,
@@ -391,16 +484,33 @@ class BriefingContextGatherer:
         )
 
     async def _resolve_tickers(self, tickers: list[str]) -> list[str]:
-        """Resolve ticker symbols to instrument UUIDs (best-effort)."""
-        instrument_ids: list[str] = []
+        """Resolve ticker symbols to instrument UUIDs (best-effort).
+
+        Kept for back-compat with existing callers that only need the bare
+        list. New callers should prefer ``_resolve_ticker_map`` so the link
+        from ticker → instrument_id is preserved (PLAN-0102 W1).
+        """
+        mapping = await self._resolve_ticker_map(tickers)
+        return list(mapping.values())
+
+    async def _resolve_ticker_map(self, tickers: list[str]) -> dict[str, str]:
+        """Resolve ticker symbols to instrument UUIDs as a ``ticker → iid`` dict.
+
+        PLAN-0102 W1 T-W1-01: the formatter must show "AAPL 195.20" not
+        "<uuid> 195.20" — so we preserve the ticker→iid link instead of
+        throwing it away. Tickers that fail to resolve are silently skipped;
+        the caller (the gatherer) tolerates a partial map and still issues a
+        batch quote call for whatever resolved.
+        """
+        mapping: dict[str, str] = {}
         for ticker in tickers:
             try:
                 iid = await self._s3.find_instrument_by_ticker(ticker)
                 if iid is not None:
-                    instrument_ids.append(str(iid))
+                    mapping[ticker] = str(iid)
             except Exception:
                 log.warning("briefing_ticker_resolve_failed", ticker=ticker)
-        return instrument_ids
+        return mapping
 
     def _collect_entity_ids(self, portfolio: PortfolioSnapshot) -> list[str]:
         """Extract all unique entity_ids from holdings and watchlist."""
@@ -451,12 +561,20 @@ class BriefingContextGatherer:
         self,
         entity_ids: list[str],
         days: int = 7,
+        event_types: list[str] | None = None,
     ) -> list[EventSummary]:
-        """Search events via S7 for the given entity_ids."""
+        """Search events via S7 for the given entity_ids (and optional types).
+
+        PLAN-0102 W1 T-W1-04: ``event_types`` is forwarded so callers can
+        narrow the result set to the portfolio-scoped or macro-scoped slice
+        in two separate calls.  ``entity_ids=[]`` is a valid input — used for
+        the macro call so Fed/CPI/jobless rows (no subject_entity_id) surface.
+        """
         date_from = datetime.now(tz=UTC) - timedelta(days=days)
         uuid_ids = [UUID(eid) for eid in entity_ids]
         results = await self._s7.search_events(
             entity_ids=uuid_ids,
+            event_types=event_types,
             date_from=date_from,
         )
         return [
@@ -568,6 +686,110 @@ class BriefingContextGatherer:
 
 
 # ── Module-level helpers ─────────────────────────────────────────────────────
+
+
+def _score_news_by_overlap(
+    items: list[NewsArticleSummary],
+    held_entity_ids: set[str],
+    multiplier: float,
+) -> list[NewsArticleSummary]:
+    """Re-rank news so items overlapping the user's holdings float to the top.
+
+    PLAN-0102 W1 T-W1-03: We have ``NewsArticleSummary.primary_entity_id`` and
+    ``PortfolioSnapshot.holdings[*].entity_id`` already; before this fix we
+    NEVER intersected them, so an NVDA holder saw the same generic AI news as
+    a KO holder.  Items whose primary entity is in the held set get their
+    relevance score multiplied by ``multiplier`` for sort purposes only — the
+    on-record ``display_relevance_score`` stays unchanged so downstream
+    cards still show the true upstream value.  Items without overlap are
+    NEVER dropped — they sink to the back so quiet-day briefs still surface.
+    """
+    if not items or not held_entity_ids or multiplier <= 1.0:
+        return items
+
+    def _sort_key(article: NewsArticleSummary) -> float:
+        base = float(article.display_relevance_score or 0.0)
+        if article.primary_entity_id and str(article.primary_entity_id) in held_entity_ids:
+            return -(base * multiplier)
+        return -base
+
+    return sorted(items, key=_sort_key)
+
+
+def _tag_event_source_tier(events: list[EventSummary], tier: str) -> list[EventSummary]:
+    """Return a copy of ``events`` with ``source_tier`` set to ``tier``.
+
+    PLAN-0102 W1 T-W1-04: ``EventSummary`` is frozen so we rebuild each row.
+    The formatter reads ``source_tier`` to bucket rows under
+    "Earnings / corporate" vs "Macro today" without re-querying upstream.
+    """
+    if not events:
+        return []
+    return [
+        EventSummary(
+            event_id=e.event_id,
+            event_type=e.event_type,
+            event_subtype=e.event_subtype,
+            subject_entity_id=e.subject_entity_id,
+            event_date=e.event_date,
+            event_text=e.event_text,
+            extraction_confidence=e.extraction_confidence,
+            source_tier=tier,
+        )
+        for e in events
+    ]
+
+
+def _build_market_overview(
+    *,
+    quotes_by_iid: dict[str, QuoteSummary],
+    holding_ticker_to_iid: dict[str, str],
+    tape_ticker_to_iid: dict[str, str],
+) -> MarketOverview:
+    """Build a fully-populated MarketOverview from the single S3 batch call.
+
+    PLAN-0102 W1 T-W1-01 / T-W1-02 (BP-614): the gatherer used to fetch
+    ``quotes_by_iid`` and feed it directly into the context, but the
+    formatter only rendered ``market_overview.sector_performance`` — so the
+    per-holding quotes were silently dropped.  This helper repackages the
+    batch into a ``MarketOverview`` with ``indices`` (SPY/QQQ/VIX tape) and
+    ``holdings`` (per-holding snapshots) — both lists carry the TICKER
+    SYMBOL in ``QuoteSummary.instrument_id`` so the formatter can render
+    "AAPL 195.20" directly with no second lookup.
+    """
+
+    def _tag(symbol: str, iid: str) -> QuoteSummary | None:
+        raw = quotes_by_iid.get(iid)
+        if raw is None:
+            return None
+        return QuoteSummary(
+            instrument_id=symbol,  # carries the ticker (display name) — NOT the iid
+            last=raw.last,
+            bid=raw.bid,
+            ask=raw.ask,
+            volume=raw.volume,
+            timestamp=raw.timestamp,
+        )
+
+    indices: list[QuoteSummary] = []
+    for symbol, iid in tape_ticker_to_iid.items():
+        tagged = _tag(symbol, iid)
+        if tagged is not None:
+            indices.append(tagged)
+
+    holdings: list[QuoteSummary] = []
+    for symbol, iid in holding_ticker_to_iid.items():
+        tagged = _tag(symbol, iid)
+        if tagged is not None:
+            holdings.append(tagged)
+
+    return MarketOverview(
+        sector_performance={},
+        top_gainers=[],
+        top_losers=[],
+        indices=indices,
+        holdings=holdings,
+    )
 
 
 def _safe_uuid(value: Any) -> UUID | None:

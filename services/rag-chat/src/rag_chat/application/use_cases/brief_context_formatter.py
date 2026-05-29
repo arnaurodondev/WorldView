@@ -238,11 +238,40 @@ class BriefContextFormatter:
         return "\n".join(lines)
 
     def format_market_overview(self, ctx: Any) -> str:
-        """Format market overview snapshot."""
+        """Format the market overview block — Tape, Holdings, Sector heatmap.
+
+        PLAN-0102 W1 T-W1-01 / T-W1-02 (BP-614): before this fix the method
+        only rendered ``sector_performance`` and the new ``indices`` /
+        ``holdings`` arrays on ``MarketOverview`` were silently dropped — the
+        gatherer paid for the S3 batch call and the prompt never saw the
+        result.  Now we render three explicit sub-sections in order:
+
+          1. Tape — SPY / QQQ / VIX (broad-market reference instruments).
+          2. Your Portfolio Today — per-holding quote line.
+          3. Sector performance — pre-existing heatmap when populated.
+
+        Each ``QuoteSummary`` in ``indices`` / ``holdings`` carries the ticker
+        symbol in ``instrument_id`` (the gatherer tags it at construction
+        time), so we can render "AAPL 195.20" directly.
+        """
         if ctx is None or ctx.market_overview is None:
             return ""
         mo = ctx.market_overview
         lines: list[str] = []
+
+        # ── 1. Tape — broad-market reference quotes ────────────────────────
+        if getattr(mo, "indices", None):
+            lines.append("Tape:")
+            for q in mo.indices:
+                lines.append(f"  - {q.instrument_id}: last {q.last}")
+
+        # ── 2. Your Portfolio Today — per-holding quote snapshots ──────────
+        if getattr(mo, "holdings", None):
+            lines.append("Your Portfolio Today:")
+            for q in mo.holdings:
+                lines.append(f"  - {q.instrument_id}: last {q.last}")
+
+        # ── 3. Sector performance heatmap (legacy field, kept for compat) ──
         if mo.sector_performance:
             lines.append("Sector performance:")
             for sector, pct in sorted(mo.sector_performance.items(), key=lambda x: -abs(x[1]))[:5]:

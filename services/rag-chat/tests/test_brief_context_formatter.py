@@ -379,3 +379,66 @@ def test_fmt_percent_invalid_returns_str() -> None:
     formatter = _make_formatter()
     result = formatter._fmt_percent("not-a-number")
     assert result == "not-a-number"
+
+
+# ── 11. PLAN-0102 W1 T-W1-01 / T-W1-02 — market overview renders tape + holdings
+
+
+def test_format_market_overview_renders_tape_and_holdings() -> None:
+    """format_market_overview must render BOTH indices (Tape) and holdings.
+
+    PLAN-0102 W1 T-W1-01 (BP-614): the old formatter only rendered
+    ``sector_performance`` and silently dropped per-holding quotes that the
+    gatherer paid to fetch. The fix populates ``MarketOverview.indices``
+    (SPY/QQQ/VIX) AND ``MarketOverview.holdings`` (per-holding quotes) — both
+    must surface in the rendered string so the prompt can see them.
+    """
+    formatter = _make_formatter()
+
+    # Each QuoteSummary stores the TICKER SYMBOL in instrument_id (the
+    # gatherer remaps the UUID → ticker before construction).
+    def _q(symbol: str, last: str) -> Any:
+        q = MagicMock()
+        q.instrument_id = symbol
+        q.last = last
+        return q
+
+    mo = MagicMock()
+    mo.indices = [_q("SPY", "485.20"), _q("QQQ", "418.10"), _q("VIX", "14.2")]
+    mo.holdings = [_q("AAPL", "195.30"), _q("MSFT", "412.80")]
+    mo.sector_performance = {}  # legacy field empty — assert it doesn't break
+
+    ctx = MagicMock()
+    ctx.market_overview = mo
+
+    result = formatter.format_market_overview(ctx)
+    # All 5 symbols from the synthetic batch must appear (this is the explicit
+    # acceptance test from PLAN-0102 W1 T-W1-01).
+    for symbol in ("SPY", "QQQ", "VIX", "AAPL", "MSFT"):
+        assert symbol in result, f"expected {symbol} in formatter output, got:\n{result}"
+    assert "Tape:" in result
+    assert "Your Portfolio Today:" in result
+
+
+def test_format_market_overview_holdings_only_no_tape_section() -> None:
+    """When ``indices`` is empty, the formatter must NOT emit the Tape header.
+
+    Quiet-day / degraded-tape path: if tape resolution failed upstream the
+    holdings section should still render without a stray empty "Tape:" line.
+    """
+    formatter = _make_formatter()
+    q = MagicMock()
+    q.instrument_id = "AAPL"
+    q.last = "195.30"
+
+    mo = MagicMock()
+    mo.indices = []
+    mo.holdings = [q]
+    mo.sector_performance = {}
+    ctx = MagicMock()
+    ctx.market_overview = mo
+
+    result = formatter.format_market_overview(ctx)
+    assert "Tape:" not in result
+    assert "Your Portfolio Today:" in result
+    assert "AAPL" in result

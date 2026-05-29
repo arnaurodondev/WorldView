@@ -82,13 +82,15 @@ class TestMorningBriefing:
             current_date="2026-04-26",
         )
         # v3.0 uses ## LEAD (not ## SUMMARY) — the two-block + divider contract holds.
+        # v4.0 (PLAN-0102 W1) keeps the same output-format block while adding the
+        # 6-section "5-minute investor brief" spec above it.
         assert "## LEAD" in result
         assert "## DETAILS" in result
         assert "literal `---` divider" in result
         # Must still forbid the redundant Morning Briefing header in the body.
         assert "Morning Briefing" in result  # appears in the forbid clause
-        # Version constant must reflect the v3.0 bump.
-        assert MORNING_BRIEFING.version == "3.0"
+        # Version constant must reflect the v4.0 bump (PLAN-0102 W1 T-W1-05).
+        assert MORNING_BRIEFING.version == "4.0"
 
 
 class TestInstrumentBriefing:

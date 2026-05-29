@@ -47,9 +47,9 @@ class TestMorningBriefingCitationInstructions:
         # is not optional. Either spelling signals the rule is enforced.
         assert "EVERY" in result or "MANDATORY" in result or "citation" in result.lower()
 
-    def test_version_is_300(self) -> None:
-        """MORNING_BRIEFING must be bumped to v3.0 for PLAN-0062-W4."""
-        assert MORNING_BRIEFING.version == "3.0"
+    def test_version_is_400(self) -> None:
+        """MORNING_BRIEFING bumped to v4.0 for PLAN-0102 W1 "5-minute investor brief"."""
+        assert MORNING_BRIEFING.version == "4.0"
 
 
 class TestInstrumentBriefingCitationInstructions:

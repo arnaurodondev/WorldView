@@ -862,6 +862,70 @@ on retry. Returns 409 on replay. Single-instance only — move to Valkey for mul
 
 ---
 
+## Morning Brief — 5-Minute Investor Brief Structure (PLAN-0102 W1)
+
+The morning brief is structured as a 5-minute investor summary, NOT a news
+aggregator. The prompt at `libs/prompts/src/prompts/briefing/morning.py` (v4.0)
+instructs the LLM to emit six named sections in this exact order:
+
+| Section | Read time | What it answers | Source data |
+|---------|-----------|-----------------|-------------|
+| 1. **Tape** | 20 s | "What did markets do overnight?" | `MarketOverview.indices` (SPY / QQQ / VIX from S3 batch) |
+| 2. **Your Portfolio Today** | 60 s | "How am I positioned into today?" | `MarketOverview.holdings` per-holding quote, **leads with implication** |
+| 3. **Macro Today** | 20 s | "What scheduled events could move me?" | `recent_events` rows tagged `source_tier="macro"` (Fed / CPI / jobless) |
+| 4. **News That Matters To You** | 120 s | "What changed overnight that affects my book?" | `news_articles` re-ranked by overlap with held entities; **each bullet leads with implication, then fact, then `[N#]`** |
+| 5. **Risks + Opportunities** | 60 s | "Where am I exposed today?" | LLM synthesises across Tape + Macro + Portfolio |
+| 6. **Bonus context** | 30 s | "What else should I know?" | 1–2 generic high-impact items |
+
+Total cap **250 words**. Citations use `[N1] [N2]` markers (the existing v3.0
+output-format block is preserved beneath the new spec so the parser, deduper,
+and citation gate continue to function).
+
+### Context-gather pipeline — what we fetch vs. what we render
+
+`BriefingContextGatherer.gather_morning_context()` runs five parallel upstream
+calls and assembles a `BriefingContext`:
+
+1. **S1 portfolio** — holdings, watchlist, total_positions. Drives ticker
+   resolution + entity_ids for the news overlap join.
+2. **S6 top news** — `GET /api/v1/news/top?hours=24&limit=30&min_display_score=0.15`,
+   then re-ranked in-process so items whose `primary_entity_id` overlaps the
+   user's held entities float to the top (1.5x multiplier; floor preserved —
+   non-overlap items NEVER dropped so quiet-day briefs still surface).
+3. **S5 pending alerts** — `medium`-or-higher severity only.
+4. **S3 batch quotes** — single call with both the holdings ticker list AND
+   the broad-market tape (`SPY`, `QQQ`, `VIX`). Result is repackaged into
+   `MarketOverview.indices` (tape) and `MarketOverview.holdings` (per-holding)
+   so the formatter can render BOTH explicitly.
+5. **S7 events — TWO calls**:
+   - **Portfolio-scoped** — `entity_ids=held, event_types=["earnings","analyst_action","corporate"]`, last 7 d.
+   - **Macro-scoped** — `entity_ids=[], event_types=["macro","economic"]`, last 2 d.
+   Merged into `recent_events`; each row tagged with `EventSummary.source_tier`
+   ("portfolio" vs "macro") so the formatter groups them under the correct heading.
+
+### Anti-pattern guard (BP-614 — silent data drop)
+
+The brief is the canonical example of "the biggest bug is data we already
+fetch but silently drop". Before PLAN-0102 W1, the gatherer fetched per-holding
+quotes from S3, populated `BriefingContext.quotes`, but `format_market_overview()`
+only rendered `MarketOverview.sector_performance` and the `market_overview`
+field was NEVER set — so live quote data went into a black hole. Rule for
+contributors:
+
+- **Any new upstream data added to the gatherer MUST be paired with a render
+  path in `BriefContextFormatter` in the same PR.** A dataclass field that no
+  formatter method reads is functionally dead data and will be silently
+  dropped at the prompt boundary.
+- The gating site is `format_market_overview()` (Tape + Holdings + sector
+  heatmap) and `format_news` / `format_events` / `format_alerts`. Audit each
+  before claiming "the new field is wired".
+
+See `docs/audits/2026-05-28-plan-0102-brief-redesign.md` for the full inventory
+of fields the brief used to drop, and `docs/BUG_PATTERNS.md` BP-614 for the
+detection / regression pattern.
+
+---
+
 ## Morning Brief — Daily Pre-Generation (PLAN-0094)
 
 PLAN-0094 W2 adds an APScheduler-driven worker (`rag-chat-brief-scheduler`
