@@ -50,7 +50,7 @@ import common.time  # type: ignore[import-untyped]
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession
 
-    from market_ingestion.config import MarketIngestionSettings
+    from market_ingestion.config import MarketIngestionSettings  # type: ignore[attr-defined]
 
 logger = structlog.get_logger(__name__)
 

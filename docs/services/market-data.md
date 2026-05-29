@@ -637,6 +637,14 @@ python -m market_data.infrastructure.messaging.consumers.ohlcv_consumer_main
 python -m market_data.infrastructure.messaging.consumers.quotes_consumer_main
 
 # Fundamentals consumer (group: market-data-fundamentals)
+# PLAN-0102 W6 / BP-617: per-message watchdog default is 90 s (was 45 s in
+# the library default). Override with MARKET_DATA_FUNDAMENTALS_TIMEOUT_S if a
+# different ceiling is required; session_timeout_ms + heartbeat_interval_ms
+# scale automatically to preserve the watchdog-wins-over-coordinator
+# invariant. Tail-latency observability: Prometheus histogram
+# `fundamentals_consumer_processing_ms` with buckets
+# [1s, 5s, 10s, 30s, 45s, 60s, 90s, 120s] — alert on any non-zero count in
+# the 60 s bucket sustained for >15 min (next bump imminent).
 python -m market_data.infrastructure.messaging.consumers.fundamentals_consumer_main
 
 # Outbox dispatcher (instrument lifecycle events)

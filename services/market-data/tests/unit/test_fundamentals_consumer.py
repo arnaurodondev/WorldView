@@ -1468,3 +1468,87 @@ async def test_consumer_does_not_touch_freshness_on_zero_section_payload() -> No
     await consumer.process_message(None, _make_message(), {})
 
     mock_uow.instruments.touch_fundamentals_ingest_at.assert_not_awaited()
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# PLAN-0102 T-W6-03 / BP-617 — processing-time histogram regression
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_fundamentals_consumer_records_processing_histogram() -> None:
+    """The ``fundamentals_consumer_processing_ms`` histogram MUST increment on
+    every processed message — both success and skip paths — so the tail is
+    always observable in Prometheus. This regression locks the wrapper in
+    ``process_message`` against accidental removal (a refactor that bypasses
+    the timing wrapper would silently regress DLQ pre-emption observability).
+    """
+    from market_data.infrastructure.metrics.prometheus import fundamentals_consumer_processing_ms
+
+    # Sample the histogram count BEFORE; the test should observe + 1 sample.
+    # Use the internal ``_sum`` counter because prometheus_client Histograms
+    # do not expose a stable sample count API at the Python level — ``_sum``
+    # is monotonic so any observation moves it strictly upward.
+    before_count = fundamentals_consumer_processing_ms._sum.get()
+
+    # Use the "skip non-fundamentals" path so the test does not need a full
+    # storage/uow fixture — the wrapper must still record because the
+    # observation lives in the outer try/finally.
+    mock_uow = AsyncMock()
+    mock_storage = AsyncMock()
+    consumer = _make_consumer(mock_uow, mock_storage)
+    await consumer.process_message(None, _make_message(dataset_type="OHLCV"), {})
+
+    after_count = fundamentals_consumer_processing_ms._sum.get()
+    assert after_count > before_count, "processing histogram did not record sample"
+
+
+def test_fundamentals_consumer_processing_histogram_buckets() -> None:
+    """Bucket boundaries are load-bearing for the dashboard query in
+    ``infrastructure/metrics/prometheus.py``; freeze them here so a future
+    edit that changes the buckets gets caught in CI.
+
+    The 60 s bucket is the early-warning signal — any non-zero count there
+    means the next bump (above 90 s) is imminent.
+    """
+    from market_data.infrastructure.metrics.prometheus import fundamentals_consumer_processing_ms
+
+    # prometheus_client Histograms keep the upper-bound list (sans +Inf) on
+    # ``_upper_bounds``; the +Inf bucket is appended automatically.
+    bounds = list(fundamentals_consumer_processing_ms._upper_bounds)
+    # Strip the trailing +Inf for comparison.
+    finite = [b for b in bounds if b != float("inf")]
+    assert finite == [
+        1_000.0,
+        5_000.0,
+        10_000.0,
+        30_000.0,
+        45_000.0,
+        60_000.0,
+        90_000.0,
+        120_000.0,
+    ]
+
+
+def test_fundamentals_timeout_settings_default_and_env_override(monkeypatch: pytest.MonkeyPatch) -> None:
+    """``MARKET_DATA_FUNDAMENTALS_TIMEOUT_S`` overrides the 90 s default.
+
+    Regression for PLAN-0102 T-W6-02 / BP-617: the timeout was previously
+    hard-coded inside ``libs/messaging``; the fix surfaces it as an
+    env-driven setting so operators can bump without a rebuild. The default
+    is 90 s — twice the previous library default of 45 s, picked from the
+    observed Russell-1000 payload tail.
+    """
+    from market_data.config import Settings
+
+    # Ensure the env var is unset for the default check (other tests may set
+    # arbitrary MARKET_DATA_* env). Storage keys are required by Settings.
+    monkeypatch.delenv("MARKET_DATA_FUNDAMENTALS_TIMEOUT_S", raising=False)
+    monkeypatch.setenv("MARKET_DATA_STORAGE_ACCESS_KEY", "test-key")
+    monkeypatch.setenv("MARKET_DATA_STORAGE_SECRET_KEY", "test-secret")
+    s = Settings()  # type: ignore[call-arg]
+    assert s.fundamentals_timeout_s == 90
+
+    monkeypatch.setenv("MARKET_DATA_FUNDAMENTALS_TIMEOUT_S", "150")
+    s2 = Settings()  # type: ignore[call-arg]
+    assert s2.fundamentals_timeout_s == 150

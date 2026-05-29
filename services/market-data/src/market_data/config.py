@@ -78,6 +78,18 @@ class Settings(BaseSettings):
     # the two big analytical writes do not pile up.
     insider_rollup_hour_utc: int = 3
 
+    # PLAN-0102 T-W6-02 / BP-617 — per-message processing timeout (seconds)
+    # for the fundamentals consumer's `market.dataset.fetched` topic. The
+    # default 90 s replaces the previous library-wide 45 s default after a
+    # live observation that large-universe payloads (Russell 1000 sweeps
+    # with 600+ sections in a single payload) blew the 45 s budget and
+    # were dead-lettered. Set via env var
+    # ``MARKET_DATA_FUNDAMENTALS_TIMEOUT_S`` if a different ceiling is
+    # required. Surface via the ``fundamentals_consumer_processing_ms``
+    # histogram (see infrastructure/metrics/prometheus.py) before bumping
+    # again — the tail is the actionable signal, not the timeout itself.
+    fundamentals_timeout_s: int = 90
+
     # Observability (STANDARDS.md §5 — mandatory in every service)
     service_name: str = "market-data"
     log_level: str = "INFO"

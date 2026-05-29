@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import re
+import time
 from datetime import UTC, date, datetime
 from typing import TYPE_CHECKING, Any, cast
 
@@ -22,6 +23,7 @@ from market_data.infrastructure.db.fundamentals_snapshot_writer import (
 )
 from market_data.infrastructure.db.metric_extractor import extract_metrics
 from market_data.infrastructure.messaging.outbox.dispatcher import EVENT_TOPIC_MAP, event_to_outbox_payload
+from market_data.infrastructure.metrics.prometheus import fundamentals_consumer_processing_ms
 from messaging.kafka.consumer.base import BaseKafkaConsumer, ConsumerConfig, FailureInfo  # type: ignore[import-untyped]
 from messaging.kafka.consumer.dedup import ValkeyDedupMixin  # type: ignore[import-untyped]
 from messaging.kafka.consumer.errors import MalformedDataError, StorageUnavailableError  # type: ignore[import-untyped]
@@ -240,7 +242,31 @@ class FundamentalsConsumer(ValkeyDedupMixin, BaseKafkaConsumer[dict]):
         value: dict[str, Any],
         headers: dict[str, str],
     ) -> None:
-        """Materialise fundamentals sections from the claim-check into the database."""
+        """Materialise fundamentals sections from the claim-check into the database.
+
+        PLAN-0102 T-W6-03 / BP-617: wall-clock wrapper that records every
+        per-message processing duration into the
+        ``fundamentals_consumer_processing_ms`` histogram so we can chart the
+        tail and pre-empt the next DLQ wave instead of discovering it post-hoc.
+        We use ``time.monotonic()`` (not ``time.time()``) so wall-clock jumps
+        (NTP step / VM resume) cannot poison the histogram. The metric is
+        recorded in BOTH success and failure paths because a 90 s timeout
+        re-raise is precisely the data point we want to capture.
+        """
+        start = time.monotonic()
+        try:
+            await self._process_message_inner(key, value, headers)
+        finally:
+            elapsed_ms = (time.monotonic() - start) * 1_000.0
+            fundamentals_consumer_processing_ms.observe(elapsed_ms)
+
+    async def _process_message_inner(
+        self,
+        key: str | None,
+        value: dict[str, Any],
+        headers: dict[str, str],
+    ) -> None:
+        """Inner processing — see ``process_message`` docstring for timing rationale."""
         dataset_type = value.get("dataset_type", "")
         if dataset_type != _DATASET_TYPE:
             return

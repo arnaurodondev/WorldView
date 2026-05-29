@@ -334,7 +334,7 @@ class InsiderTransactionsConsumer(ValkeyDedupMixin, BaseKafkaConsumer[dict]):
                 }
             )
 
-        inserted = await uow.insider_transactions.insert_batch(rows_to_insert)
+        inserted = await uow.insider_transactions.insert_batch(rows_to_insert)  # type: ignore[attr-defined]
 
         # R10: structlog only; counters are also handy for the daily worker.
         logger.info(
