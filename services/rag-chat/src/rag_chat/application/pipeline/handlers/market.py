@@ -333,6 +333,22 @@ class MarketHandler(ToolHandler):
         Fetches fundamentals highlights and latest quote in parallel for each ticker.
         R9: returns [] on missing port, invalid input, or upstream errors.
         R27: read-only — no UnitOfWork.
+
+        FQA-04 (BP-626, 2026-05-30): the previous implementation called
+        ``get_fundamentals_highlights`` which returns an EODHD-shaped dict
+        (``RevenueTTM``, ``EarningsShare``, ``MarketCapitalization``, ...).
+        The handler then looked up keys ``revenue``/``eps``/``gross_profit``
+        which are *not* present in that payload, so every fundamentals cell
+        silently rendered as nothing — the LLM filled the visible gaps with
+        ``—`` placeholders and (correctly) refused to fabricate numbers.
+        Meanwhile ``get_fundamentals_history_batch`` returns a clean
+        ``FundamentalsHistoryPeriod`` row with normalised ``revenue``/``eps``/
+        ``gross_profit``/``pe_ratio``/``market_cap`` fields. We now source
+        those metrics from the batch endpoint (periods=1 → latest quarter)
+        for the *whole ticker list in one HTTP call* and fall back to the
+        legacy highlights path *only* for tickers the batch could not
+        resolve. That gives the LLM the same numbers Q5 sees and aligns the
+        two tool paths on a single source of truth.
         """
         if self._s3 is None:
             log.warning("tool_handler_missing_port", tool="compare_entities", port="s3")
@@ -350,29 +366,45 @@ class MarketHandler(ToolHandler):
 
         t0 = time.monotonic()
 
-        async def _fetch_one(ticker: str) -> dict:
-            """Fetch fundamentals + quote for a single ticker in parallel."""
+        # ── Phase 1: latest-quarter fundamentals via the SAME endpoint that
+        # get_fundamentals_history_batch uses (FQA-04 / BP-626).  One HTTP
+        # call for all 2-4 tickers; per-ticker failures isolated upstream.
+        batch_results: dict[str, dict] = {}
+        try:
+            batch_results = await asyncio.wait_for(
+                self._s3.get_fundamentals_history_batch(tickers=tickers, periods=1),
+                timeout=self._timeout,
+            )
+        except Exception as e:
+            log.warning("compare_entities_batch_failed", error=str(e))
+            batch_results = {}
+
+        async def _fetch_per_ticker(ticker: str) -> dict:
+            """Fetch instrument_id + quote (+ highlights fallback if needed)."""
             instrument_id = await self._s3.find_instrument_by_ticker(ticker)
             if instrument_id is None:
                 return {"ticker": ticker, "error": "not_found"}
-            # Fetch fundamentals highlights and quote concurrently — independent reads
-            gather_results: list[dict | BaseException] = list(
-                await asyncio.gather(
-                    self._s3.get_fundamentals_highlights(instrument_id),
-                    self._s3.get_quote(instrument_id),
-                    return_exceptions=True,
-                )
-            )
-            funda_raw, quote_raw = gather_results[0], gather_results[1]
+            # Always pull quote — that is the freshest live price.  Highlights
+            # are only used as a fallback when the batch endpoint returned
+            # error/empty for this ticker (preserves the old behaviour for
+            # tickers without quarterly history).
+            entry = batch_results.get(ticker) or {}
+            need_highlights = entry.get("status") != "ok" or not entry.get("periods")
+            coros: list[Any] = [self._s3.get_quote(instrument_id)]
+            if need_highlights:
+                coros.append(self._s3.get_fundamentals_highlights(instrument_id))
+            raw_results = list(await asyncio.gather(*coros, return_exceptions=True))
+            quote_raw = raw_results[0]
+            highlights_raw = raw_results[1] if need_highlights and len(raw_results) > 1 else {}
             return {
                 "ticker": ticker,
-                "fundamentals": funda_raw if not isinstance(funda_raw, BaseException) else {},
                 "quote": quote_raw if not isinstance(quote_raw, BaseException) else {},
+                "highlights": highlights_raw if not isinstance(highlights_raw, BaseException) else {},
             }
 
         try:
             results = await asyncio.wait_for(
-                asyncio.gather(*[_fetch_one(t) for t in tickers], return_exceptions=True),
+                asyncio.gather(*[_fetch_per_ticker(t) for t in tickers], return_exceptions=True),
                 timeout=self._timeout,
             )
         except Exception as e:
@@ -388,30 +420,76 @@ class MarketHandler(ToolHandler):
                 lines.append(f"### {ticker_label} — data unavailable\n")
                 continue
             ticker = item["ticker"]  # type: ignore[index]
-            funda = item.get("fundamentals") or {}  # type: ignore[union-attr]
             quote = item.get("quote") or {}  # type: ignore[union-attr]
+            highlights = item.get("highlights") or {}  # type: ignore[union-attr]
+
+            # Pull the latest-quarter row from the batch result.  ``periods``
+            # is sorted ASC by date so the latest is the LAST element.  The
+            # batch endpoint guarantees ``revenue``/``eps``/``gross_profit``/
+            # ``pe_ratio``/``market_cap`` are present (nullable) on each row.
+            batch_entry = batch_results.get(ticker) or {}
+            latest_period: dict[str, Any] = {}
+            period_label: str | None = None
+            if batch_entry.get("status") == "ok":
+                periods_data = batch_entry.get("periods") or []
+                if periods_data:
+                    last = periods_data[-1]
+                    # FundamentalsHistoryPeriod is a pydantic BaseModel post-
+                    # http; the adapter passes it through as a dict.  Defensive
+                    # against either shape so a future contract tweak does not
+                    # silently re-introduce the original bug.
+                    if hasattr(last, "model_dump"):
+                        latest_period = last.model_dump()
+                    elif isinstance(last, dict):
+                        latest_period = last
+                    period_label = latest_period.get("period")
+
             lines.append(f"### {ticker}")
+            if period_label:
+                lines.append(f"  Period: {period_label}")
             if quote:
                 price = quote.get("price") or quote.get("close") or quote.get("last_price")
                 if price:
                     lines.append(f"  Price: {price}")
-            if funda:
-                for key in ("market_cap", "pe_ratio", "revenue", "gross_profit", "eps"):
-                    val = funda.get(key)
-                    if val is not None:
-                        # FIX-LIVE-DD: same problem as the screener — raw
-                        # 13-digit market caps in compare_entities output
-                        # invite the LLM to hallucinate plausible trillion/
-                        # billion labels. Pre-format numeric values for the
-                        # cap-style metrics (market_cap, revenue, gross_profit)
-                        # while leaving ratios/EPS untouched (those are
-                        # already at human scale).
-                        if key in ("market_cap", "revenue", "gross_profit"):
-                            formatted = _format_market_cap_value(val)
-                            if formatted is not None:
-                                lines.append(f"  {key.replace('_', ' ').title()}: {formatted} (raw: {val})")
-                                continue
-                        lines.append(f"  {key.replace('_', ' ').title()}: {val}")
+
+            # Metric merge priority: batch (normalised) → highlights fallback
+            # (EODHD-cased keys).  Each entry maps the rendered label to the
+            # candidate value list — first non-None wins.
+            metric_specs: list[tuple[str, list[Any]]] = [
+                (
+                    "market_cap",
+                    [latest_period.get("market_cap"), highlights.get("MarketCapitalization")],
+                ),
+                (
+                    "pe_ratio",
+                    [latest_period.get("pe_ratio"), highlights.get("PERatio")],
+                ),
+                (
+                    "revenue",
+                    [latest_period.get("revenue"), highlights.get("RevenueTTM")],
+                ),
+                (
+                    "gross_profit",
+                    [latest_period.get("gross_profit"), highlights.get("GrossProfitTTM")],
+                ),
+                (
+                    "eps",
+                    [latest_period.get("eps"), highlights.get("DilutedEpsTTM"), highlights.get("EarningsShare")],
+                ),
+            ]
+            for key, candidates in metric_specs:
+                val = next((c for c in candidates if c is not None), None)
+                if val is None:
+                    continue
+                # FIX-LIVE-DD: pre-format cap-style metrics so the LLM does not
+                # have to read 13-digit integers and hallucinate trillion/
+                # billion labels (the original screener fix, now reused here).
+                if key in ("market_cap", "revenue", "gross_profit"):
+                    formatted = _format_market_cap_value(val)
+                    if formatted is not None:
+                        lines.append(f"  {key.replace('_', ' ').title()}: {formatted} (raw: {val})")
+                        continue
+                lines.append(f"  {key.replace('_', ' ').title()}: {val}")
             lines.append("")
 
         text = "\n".join(lines)
