@@ -241,7 +241,7 @@ class BriefContextFormatter:
                     # don't have a direct entity→sector link without re-fetching.
                     # Mark unknown explicitly; the LLM sees the aggregate footer.
                     sector_tag = ""
-                line = f"  - {symbol} {sign_pct}{pct:.2f}% pre-mkt — " f"{sign_dollar}${abs(pnl_dollar):,.0f}"
+                line = f"  - {symbol} {sign_pct}{pct:.2f}% pre-mkt — {sign_dollar}${abs(pnl_dollar):,.0f}"
                 if sector_tag:
                     line += f" ({sector_tag})"
                 lines.append(line)
@@ -608,16 +608,45 @@ class BriefContextFormatter:
     # ── Risk summary ───────────────────────────────────────────────────────────
 
     def build_morning_risk_summary(self, ctx: Any) -> dict[str, Any]:
-        """Compute HHI concentration score from portfolio holdings.
+        """Compute HHI concentration score + sector breakdown.
 
         Mirrors the logic in GenerateBriefingUseCase._build_risk_summary() but
         operates on BriefingContext.portfolio rather than a raw dict.
         Returns 0.0 concentration when context or portfolio is unavailable.
+
+        FQA-03 (BP-627, 2026-05-30): ``sector_breakdown`` was hardcoded to ``{}``
+        — the risk engine had a wired sector-fetch path (S7 ``/internal/v1/
+        entities/sectors`` populates ``ctx.sector_exposure.by_sector``) but
+        the formatter never read it.  As a result every morning brief
+        showed ``concentration_score=0.0`` with no sector signal, even
+        though the upstream data was present.  We now (a) surface the
+        sector aggregates the gatherer already computed, and (b) prefer a
+        *sector-level* HHI over the holdings-level HHI when sector data is
+        available — that is the metric an analyst cares about ("65% in one
+        sector" is a true concentration risk; equal weights across 10
+        tickers in 10 different sectors should read as low risk even if
+        each weight is 10%).
         """
         concentration_score: float = 0.0
         sector_breakdown: dict[str, float] = {}
 
-        if ctx is not None and ctx.portfolio is not None and ctx.portfolio.holdings:
+        # ── Sector breakdown — surface what the gatherer already fetched ──
+        sector_exposure = getattr(ctx, "sector_exposure", None) if ctx is not None else None
+        if sector_exposure is not None and getattr(sector_exposure, "by_sector", None):
+            # Defensive copy + cast: by_sector is dict[str, float] but the
+            # values arrive as Decimals/floats from PnL aggregation.
+            sector_breakdown = {str(k): float(v) for k, v in sector_exposure.by_sector.items()}
+
+        # ── Concentration: prefer sector-HHI when sectors are present ─────
+        # The denominator normalises away the "Unknown" bucket weight so a
+        # partial sector outage does not artificially deflate the score.
+        if sector_breakdown:
+            total = sum(sector_breakdown.values())
+            if total > 0:
+                weights = [v / total for v in sector_breakdown.values()]
+                concentration_score = round(sum(w * w for w in weights), 4)
+        elif ctx is not None and ctx.portfolio is not None and ctx.portfolio.holdings:
+            # Fallback: holdings-level HHI when sectors are unavailable.
             holdings = ctx.portfolio.holdings
             total_weight = sum(float(h.current_weight or 0.0) for h in holdings)
             if total_weight > 0:

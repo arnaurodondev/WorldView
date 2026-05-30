@@ -347,9 +347,71 @@ def test_build_morning_risk_summary_single_holding_max_concentration() -> None:
 
     ctx = MagicMock()
     ctx.portfolio = portfolio
+    # No sector_exposure → falls back to holdings-level HHI
+    ctx.sector_exposure = None
 
     result = formatter.build_morning_risk_summary(ctx)
     assert result["concentration_score"] == 1.0
+
+
+# FQA-03 / BP-627 regression — build_morning_risk_summary must surface the
+# sector aggregates the gatherer already computed (was previously hardcoded
+# to {} so every morning brief reported concentration_score=0.0 with empty
+# sector_breakdown even when sector data was present in canonical_entities).
+
+
+def test_build_morning_risk_summary_populates_sector_breakdown() -> None:
+    """sector_breakdown must mirror ctx.sector_exposure.by_sector."""
+    formatter = _make_formatter()
+
+    sector_exposure = MagicMock()
+    sector_exposure.by_sector = {"Technology": 0.65, "Energy": 0.20, "Financials": 0.15}
+
+    ctx = MagicMock()
+    ctx.portfolio = None  # sector path doesn't need portfolio
+    ctx.sector_exposure = sector_exposure
+
+    result = formatter.build_morning_risk_summary(ctx)
+    # Sectors surfaced verbatim (cast to float)
+    assert result["sector_breakdown"] == {
+        "Technology": 0.65,
+        "Energy": 0.20,
+        "Financials": 0.15,
+    }
+    # Concentration is sector-HHI: 0.65² + 0.20² + 0.15² = 0.4225 + 0.04 + 0.0225
+    assert result["concentration_score"] == pytest.approx(0.485, abs=1e-3)
+
+
+def test_build_morning_risk_summary_sector_hhi_preferred_over_holdings_hhi() -> None:
+    """When sectors are available, sector-HHI overrides holdings-HHI.
+
+    10 holdings each at 10% weight across 10 different sectors should
+    report a LOW concentration_score even though every position is
+    individually 10% — what matters is sector concentration.
+    """
+    formatter = _make_formatter()
+
+    # Holdings-level HHI of 10 equal weights = 0.1 (10 * 0.1²)
+    holdings = []
+    for _ in range(10):
+        h = MagicMock()
+        h.current_weight = 0.1
+        holdings.append(h)
+    portfolio = MagicMock()
+    portfolio.holdings = holdings
+
+    # Sectors equally split across 10 buckets → sector-HHI also = 0.1
+    sector_exposure = MagicMock()
+    sector_exposure.by_sector = {f"Sector{i}": 0.1 for i in range(10)}
+
+    ctx = MagicMock()
+    ctx.portfolio = portfolio
+    ctx.sector_exposure = sector_exposure
+
+    result = formatter.build_morning_risk_summary(ctx)
+    # Sector-level HHI selected (10 equal sectors → 0.1)
+    assert result["concentration_score"] == pytest.approx(0.1, abs=1e-3)
+    assert len(result["sector_breakdown"]) == 10
 
 
 # ── 10. _fmt_usd_billions and _fmt_percent helpers ───────────────────────────
