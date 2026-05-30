@@ -105,6 +105,12 @@ class PublicBriefingResponse(BaseModel):
     # PLAN-0094 W2: signals the frontend the brief came from the last-known-good
     # cache because regeneration failed. Default False so legacy callers don't break.
     is_stale: bool = False
+    # PLAN-0103 W3 (BP-624): collapsed-view summary paragraph (1-3 sentences,
+    # ≤300 chars). Produced by the LLM under the ``## Summary`` block of the
+    # v4.2 morning prompt. Falls back to None for legacy briefs / cached
+    # pre-v4.2 responses; the frontend then renders ``summary``/``narrative``
+    # head as before so existing surfaces keep working (R11 forward-compat).
+    summary_paragraph: str | None = Field(default=None, max_length=600)
 
     @field_validator("sections", mode="before")
     @classmethod

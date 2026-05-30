@@ -55,9 +55,40 @@ class TestMorningBriefingCitationInstructions:
         # least one [N#]" rule body signals enforcement.
         assert "MANDATORY" in result or "must end with at least one" in result
 
-    def test_version_is_41(self) -> None:
-        """MORNING_BRIEFING bumped to v4.1 for PLAN-0103 W2 prompt cleanup."""
-        assert MORNING_BRIEFING.version == "4.1"
+    def test_version_is_42(self) -> None:
+        """MORNING_BRIEFING bumped to v4.2 for PLAN-0103 W3 (Summary + mandatory sections)."""
+        assert MORNING_BRIEFING.version == "4.2"
+
+    def test_contains_summary_block_instruction(self) -> None:
+        """v4.2 mandates a leading ``## Summary`` block (1-3 sentences) for the dashboard collapsed view.
+
+        FQA-01/product ask (PLAN-0103 W3 / BP-624): the dashboard renders this
+        block in the collapsed card; "Read more" expands into the 6-section
+        ``## Details`` view. The prompt must explicitly instruct both headings.
+        """
+        result = self._render()
+        assert "## Summary" in result
+        assert "## Details" in result
+
+    def test_all_six_sections_mandatory(self) -> None:
+        """All 6 sections must be present AND flagged MANDATORY in v4.2 (FQA-01 fix)."""
+        result = self._render()
+        for section in (
+            "Tape",
+            "Your Portfolio Today",
+            "Macro Today",
+            "News That Matters To You",
+            "Risks + Opportunities",
+            "Bonus context",
+        ):
+            assert section in result, f"Section '{section}' missing from prompt"
+        # The MANDATORY language must appear in the section spec (not just the
+        # citation block) so the LLM understands it cannot drop sections.
+        assert "MANDATORY" in result
+        # The placeholder fallback language must be present so the LLM has a
+        # template for what to emit when a section is empty (avoids dropping
+        # the heading entirely as in the FQA-01 sample).
+        assert "placeholder" in result.lower() or "emit ``-" in result
 
 
 class TestInstrumentBriefingCitationInstructions:

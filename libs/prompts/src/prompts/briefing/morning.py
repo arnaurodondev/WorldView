@@ -30,11 +30,27 @@ VERSION HISTORY
         ``## LEAD / --- / ## DETAILS`` template and the 4/4 caps; keeps the
         citation rules (now in a single block) and the format rules (≤250 words,
         markdown headers); the 6-section spec is the SINGLE source of truth.
-        See ``docs/audits/2026-05-29-plan-0102-phase-d-code-review.md`` §1.
-        The brief parser already degrades gracefully when the ``---`` divider
-        is absent (``brief_parser.py::split_summary_and_details`` returns
-        ``(None, full_content)`` → frontend renders the whole body as the
-        expanded view) so removing the divider does not break rendering.
+- 4.2 — PLAN-0103 W3 (2026-05-30): adds the ``## Summary`` paragraph block AND
+        promotes all 6 sections to MANDATORY. Three independent FQA findings
+        motivated the change:
+          (a) FQA-01 — live briefs were rendering only 4 of 6 sections (Risks
+              + Opportunities and Bonus context silently missing). The 4.1
+              prompt allowed sections to be omitted; the LLM took the path of
+              least resistance and produced a partial brief. v4.2 makes each
+              of the 6 section headings MANDATORY — if a section has no data
+              the LLM must still emit the heading + a single placeholder line.
+          (b) FQA-02 — Tape section regularly says "Not available" when the
+              upstream data layer is empty. The placeholder language is now
+              standardised so the parser/completeness check can identify it.
+          (c) Product ask — dashboard collapsed view should show a 1-3 line
+              synthesised paragraph, not the first section's first bullet.
+              v4.2 introduces a leading ``## Summary`` block (≤300 chars) so
+              the frontend can render a clean collapsed surface and only
+              expand to the full 6-section ``## Details`` view on "Read more".
+        Parser changes live in ``brief_parser.py::split_summary_paragraph``.
+        ``brief_parser.parse_sections_with_citations`` continues to work on
+        the ``## Details`` block — no divider is required between Summary and
+        Details (Summary is identified by its heading).
 """
 
 from __future__ import annotations
@@ -43,13 +59,14 @@ from prompts._base import PromptTemplate
 
 MORNING_BRIEFING = PromptTemplate(
     name="morning_briefing",
-    # Bumped 4.0 → 4.1 as part of PLAN-0103 W2 prompt cleanup (BP-623 sibling).
-    version="4.1",
+    # Bumped 4.1 → 4.2 as part of PLAN-0103 W3 (add Summary + make 6 sections MANDATORY).
+    version="4.2",
     description=(
-        "Morning market briefing v4.1 — 5-minute investor brief with 6 named "
-        "sections (Tape / Your Portfolio Today / Macro Today / News That Matters "
-        "To You / Risks + Opportunities / Bonus context); v4.1 deletes the "
-        "contradictory v3.0 LEAD/DETAILS template that v4.0 had retained"
+        "Morning market briefing v4.2 — adds the leading ``## Summary`` paragraph "
+        "(1-3 sentences, ≤300 chars) used by the dashboard collapsed view AND "
+        "promotes all 6 sections to MANDATORY (Tape / Your Portfolio Today / "
+        "Macro Today / News That Matters To You / Risks + Opportunities / "
+        "Bonus context) — empty sections emit a single placeholder line"
     ),
     template=(
         # ── Role + goal ───────────────────────────────────────────────────────
@@ -61,22 +78,41 @@ MORNING_BRIEFING = PromptTemplate(
         "  - Overnight tape: <SPY/QQQ/VIX>\n"
         "  - Macro calendar: <events today + tomorrow>\n"
         "  - News (pre-ranked by relevance x portfolio overlap): <list>\n\n"
-        # ── 6-section spec (SINGLE SOURCE OF TRUTH) ───────────────────────────
-        # WHY this is the only rubric: v4.0 also carried a legacy v3.0
-        # "## LEAD / --- / ## DETAILS" block with a "max 4 sections, max 4
-        # bullets" cap. The two were incompatible — the LLM had to pick one.
-        # v4.1 (PLAN-0103 W2) deletes the v3.0 block entirely; this section is
-        # now the only structural mandate. The brief parser degrades
-        # gracefully when the legacy --- divider is absent.
-        "Output sections in this exact order:\n"
-        "  1. **Tape** — one sentence. Futures + VIX.\n"
-        "  2. **Your Portfolio Today** — bullet per material holding. Lead with implication.\n"
-        "  3. **Macro Today** — bullet list of today/tomorrow's prints.\n"
-        "  4. **News That Matters To You** — 3-5 items. Each leads with the implication "
-        "for the investor, then the fact, then [N#] citation.\n"
-        "  5. **Risks + Opportunities** — 2-3 model-generated lines synthesising signal "
-        "across the data.\n"
-        "  6. **Bonus context** — 1-2 generic high-impact items.\n\n"
+        # ── Output structure (Summary + 6 mandatory sections) ─────────────────
+        # WHY a leading ``## Summary``: the dashboard renders only this block
+        # in the collapsed card; the user clicks "Read more" to expand into
+        # ``## Details``. Keeping the headings ``## Summary`` and ``## Details``
+        # gives the parser a deterministic split-point without needing a
+        # ``---`` divider (which conflicted with em-dash ranges in prose).
+        # WHY 6 sections MANDATORY: FQA-01 surfaced the LLM dropping Risks +
+        # Opportunities and Bonus context on quiet news days (the prompt said
+        # they were "expected" but not "required"). Making the section headings
+        # mandatory forces a single placeholder line on quiet days rather than
+        # a partial brief that hides whole categories.
+        "Output structure (in this exact order):\n\n"
+        "## Summary\n"
+        "<1-3 sentences synthesising the single most important takeaway for an "
+        "investor scanning this for 10 seconds. Lead with the implication for the "
+        "portfolio. ≤300 characters total. Cite [N#] if quoting a fact.>\n\n"
+        "## Details\n"
+        "All 6 sections below are MANDATORY. If a section has no data, emit the "
+        "heading and a single placeholder line (e.g. ``- No notable risks "
+        "identified today``); do NOT omit the heading. Empty sections still need "
+        "their bullet line.\n\n"
+        "  1. **Tape** — one sentence. Futures + VIX. If tape data is missing, "
+        "emit ``- Tape data unavailable``.\n"
+        "  2. **Your Portfolio Today** — bullet per material holding. Lead with "
+        "implication. If portfolio is empty, emit ``- No material holdings to report``.\n"
+        "  3. **Macro Today** — bullet list of today/tomorrow's prints. If empty, "
+        "emit ``- No scheduled macro releases today``.\n"
+        "  4. **News That Matters To You** — 3-5 items. Each leads with the "
+        "implication for the investor, then the fact, then [N#] citation. If no "
+        "relevant news, emit ``- No portfolio-relevant news in this cycle``.\n"
+        "  5. **Risks + Opportunities** — 2-3 model-generated lines synthesising "
+        "signal across the data. If nothing notable, emit ``- No notable risks "
+        "or opportunities identified today``.\n"
+        "  6. **Bonus context** — 1-2 generic high-impact items. If nothing to "
+        "add, emit ``- No additional context to flag``.\n\n"
         # ── Citation rules ────────────────────────────────────────────────────
         # WHY [N#] markers: the backend parser reads these markers to attach
         # the correct source document to each bullet. Citations are MANDATORY
@@ -88,21 +124,21 @@ MORNING_BRIEFING = PromptTemplate(
         "**Macro Today**) must end with at least one [N#] citation referencing "
         "the context item(s) it draws from.\n"
         "Use ONLY citation numbers that exist in the context (i.e. ≤ total items).\n"
-        "Do NOT use [c1]/[c2] (legacy v3.0 marker form) — only [N1]/[N2]/[N3].\n\n"
+        "Do NOT use [c1]/[c2] (legacy v3.0 marker form) — only [N1]/[N2]/[N3].\n"
+        "Placeholder lines (when a section has no data) do NOT need a citation.\n\n"
         "{safety}\n\n"
         "As of: {current_date}\n\n"
         # ── Format / hard rules ───────────────────────────────────────────────
         "## Format Rules\n"
-        "- Cap total at 250 words.\n"
+        "- Cap total brief at 250 words (Summary + Details combined).\n"
         "- Output pure markdown (no HTML tags).\n"
-        "- Use `**Section Name**` headings exactly as listed above; do NOT add an outer\n"
-        "  `# Morning Briefing` / `Date:` header — the card chrome already supplies them.\n"
+        "- Emit the literal ``## Summary`` and ``## Details`` headings exactly\n"
+        "  as written above. Inside ``## Details`` use ``**Section Name**``\n"
+        "  bold headings exactly as listed; do NOT add an outer\n"
+        "  ``# Morning Briefing`` / ``Date:`` header — the card chrome already\n"
+        "  supplies them.\n"
         "- One bullet per line, prefixed with `- `.\n"
         "- NEVER include news that doesn't connect to a holding, sector, or macro event.\n"
-        "- On quiet days, surface 1 sector-relevant macro signal rather than padding with\n"
-        "  irrelevant news.\n"
-        "- If a context section is empty, skip the entire section. Never write 'No data\n"
-        "  available' or 'not available' or 'REMOVED' / 'N/A' as a heading.\n"
         "- Do NOT compute portfolio P&L, percentage returns, or position values unless\n"
         "  they appear verbatim in the portfolio context.\n"
         "- Do NOT use phrases like 'consider', 'you should', 'it may be worth'.\n"

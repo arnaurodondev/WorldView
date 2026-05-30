@@ -260,6 +260,8 @@ async def get_morning_briefing(request: Request) -> PublicBriefingResponse:
                             confidence=result.get("confidence", 1.0),
                             lead=result.get("lead"),
                             is_stale=False,
+                            # PLAN-0103 W3 (BP-624)
+                            summary_paragraph=result.get("summary_paragraph"),
                         ).model_dump_json()
                         await valkey.set(cache_key, fresh_payload, ex=_CACHE_TTL)
                         await valkey.set(lastgood_key, fresh_payload, ex=_LASTGOOD_TTL)
@@ -369,6 +371,10 @@ async def get_morning_briefing(request: Request) -> PublicBriefingResponse:
         # PLAN-0062-W4: confidence score and lead text
         "confidence": confidence,
         "lead": lead,
+        # PLAN-0103 W3 (BP-624): collapsed-view summary paragraph from the v4.2
+        # ``## Summary`` block. None when the LLM didn't emit the heading (e.g.
+        # cached pre-v4.2 responses) — frontend handles the fallback.
+        "summary_paragraph": result.get("summary_paragraph"),
     }
 
     log.info(  # type: ignore[no-any-return]

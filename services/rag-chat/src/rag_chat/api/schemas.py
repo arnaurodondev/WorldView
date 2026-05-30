@@ -252,6 +252,10 @@ class BriefingResponse(BaseModel):
     # WHY max_length=1000: v3.0 prompt allows 1-3 sentences; on high-activity
     # days or large portfolios three dense sentences can approach 600 chars.
     lead: str | None = Field(default=None, max_length=1000)
+    # PLAN-0103 W3 (BP-624): collapsed-view summary paragraph (1-3 sentences,
+    # ≤300 chars target / 600 max). See PublicBriefingResponse for full
+    # rationale. Optional + default None preserves wire compatibility (R11).
+    summary_paragraph: str | None = Field(default=None, max_length=600)
 
     # WHY mode="before": runs prior to Pydantic's own list validation so we can
     # accept dataclass instances passed in from the use case layer.

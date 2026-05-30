@@ -86,6 +86,139 @@ class BriefParser:
         text = _ORPHAN_CITATION_RE.sub("", text)
         return text
 
+    # ── v4.2 leading Summary paragraph split ───────────────────────────────────
+    # Names of the 6 mandatory v4.2 sections — used by both the split helper
+    # (to identify where ``## Summary`` ends) and by check_section_completeness
+    # (to flag missing sections post-generation). Keep order/casing in sync
+    # with libs/prompts/src/prompts/briefing/morning.py v4.2.
+    V42_EXPECTED_SECTIONS: tuple[str, ...] = (
+        "Tape",
+        "Your Portfolio Today",
+        "Macro Today",
+        "News That Matters To You",
+        "Risks + Opportunities",
+        "Bonus context",
+    )
+
+    def split_summary_paragraph(self, content: str) -> tuple[str | None, str]:
+        """Split a v4.2 morning brief into ``(summary_paragraph, remainder)``.
+
+        The v4.2 ``MORNING_BRIEFING`` prompt instructs the LLM to emit::
+
+            ## Summary
+            <1-3 sentences>
+
+            ## Details
+            **Tape**
+            - ...
+
+        This helper looks for a ``## Summary`` heading near the top, captures
+        every non-blank line until the next ``## ``/``**`` heading, joins them
+        into a single paragraph (≤300 chars after trim), and returns the
+        remainder (the ``## Details`` block) untouched.
+
+        Graceful degradation: legacy briefs / cached pre-v4.2 responses lack
+        the ``## Summary`` heading; ``(None, content)`` is returned and the
+        downstream parser falls back to the existing narrative-only render
+        path. Frontends can use ``summary`` / first lines of ``narrative`` as
+        before — no UX regression.
+
+        WHY trim to ≤300 chars: the schema ``summary_paragraph`` field caps at
+        600 chars (defence-in-depth); we soft-cap to 300 here so the collapsed
+        dashboard card never overflows. Hard cut at sentence boundary via
+        ``_truncate_at_sentence`` so we don't leave a half-sentence dangling.
+        """
+        if not content:
+            return None, content
+
+        lines = content.splitlines()
+        # Find the "## Summary" heading (case-insensitive, tolerates "# " / "### ").
+        summary_start: int | None = None
+        for i, line in enumerate(lines[:20]):
+            # We look only in the first ~20 lines — a Summary heading deeper
+            # than that almost certainly belongs to a section body, not the
+            # leading paragraph.
+            normalised = line.strip().lower().rstrip(":")
+            if normalised in ("# summary", "## summary", "### summary", "summary"):
+                summary_start = i
+                break
+        if summary_start is None:
+            return None, content
+
+        # Walk forward, collecting non-blank lines until the next heading.
+        summary_lines: list[str] = []
+        end_idx = len(lines)
+        for j in range(summary_start + 1, len(lines)):
+            stripped = lines[j].strip()
+            if not stripped:
+                # Blank lines inside the Summary block are tolerated (the LLM
+                # sometimes wraps to a fresh paragraph); we just don't append.
+                continue
+            # A new heading marks the end of the Summary block. We recognise
+            # both ATX headings (``## Foo``) and bold-only headings (``**Foo**``)
+            # — the v4.2 prompt uses ``## Details`` for the wrapping heading
+            # and ``**Section Name**`` for the 6 inner sections.
+            if stripped.startswith(("# ", "## ", "### ")) or (stripped.startswith("**") and stripped.endswith("**")):
+                end_idx = j
+                break
+            summary_lines.append(stripped)
+
+        if not summary_lines:
+            # Heading present but no body — treat as missing.
+            return None, content
+
+        paragraph = " ".join(summary_lines).strip()
+        # Strip [cN]/[N#] citation markers — the collapsed view doesn't show
+        # citation chips, so the markers would render as raw "[N1]" noise.
+        paragraph = _CN_CITATION_RE.sub("", paragraph)
+        paragraph = re.sub(r"\[N\d+\]", "", paragraph)
+        paragraph = re.sub(r"\s{2,}", " ", paragraph).strip()
+
+        if not paragraph:
+            return None, content
+
+        # Soft cap at 300 chars (sentence-aligned) — the schema accepts up to 600
+        # but the dashboard collapsed card target is 1-3 short sentences.
+        if len(paragraph) > 300:
+            paragraph = self._truncate_at_sentence(paragraph, max_chars=300)
+
+        # Build the remainder: everything BEFORE the ``## Summary`` heading
+        # (preserved in case the LLM stuck a stray preface above it) plus
+        # everything from the next heading onwards.
+        prefix = "\n".join(lines[:summary_start]).strip()
+        suffix = "\n".join(lines[end_idx:]).strip()
+        remainder = "\n\n".join(part for part in (prefix, suffix) if part)
+        return paragraph, remainder or content
+
+    def check_section_completeness(self, content: str) -> list[str]:
+        """Return the list of v4.2 expected section names MISSING from ``content``.
+
+        Used by ``GenerateBriefingUseCase`` as a post-generation observability
+        gate: when the v4.2 prompt mandates 6 sections but the LLM only emitted
+        4, we want a structured warning + Prom counter (not a hard failure —
+        the brief is still useful, just incomplete).
+
+        Matching is case-insensitive and tolerates the v4.2 heading conventions
+        (``**Section Name**``, ``## Section Name``, ``### Section Name``).
+        """
+        if not content:
+            return list(self.V42_EXPECTED_SECTIONS)
+        haystack = content.lower()
+        missing: list[str] = []
+        for name in self.V42_EXPECTED_SECTIONS:
+            needle = name.lower()
+            # We accept either the bold form (``**name**``) OR the ATX heading
+            # form (``# name`` / ``## name`` / ``### name``). The substring check
+            # tolerates trailing punctuation (e.g. ``**Tape**:``).
+            if (
+                f"**{needle}**" not in haystack
+                and f"# {needle}" not in haystack
+                and f"## {needle}" not in haystack
+                and f"### {needle}" not in haystack
+            ):
+                missing.append(name)
+        return missing
+
     # ── v2.2 two-tier split ────────────────────────────────────────────────────
 
     @staticmethod

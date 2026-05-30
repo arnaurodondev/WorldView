@@ -114,7 +114,11 @@ older callers only read `narrative` while newer surfaces render the
     "risk_summary": dict,          # Per-position risk telemetry
     "citations": list[dict],       # [{ref, id, title, url, ...}]
     "generated_at": str,           # ISO-8601 UTC
-    "summary": str | None,         # PLAN-0048 — 1–2 sentence headline (collapsed view)
+    "summary": str | None,         # PLAN-0048 — 1–2 sentence headline (v2.2 back-compat)
+    "summary_paragraph": str | None,  # PLAN-0103 W3 (BP-624) — v4.2 ``## Summary``
+                                   # block, 1-3 sentences ≤300 chars, used by the
+                                   # dashboard collapsed view; falls back to
+                                   # `summary` then narrative head when None
     "headline": str | None,        # PLAN-0049 T-A-1-04 — top-card title (≤240 chars)
     "sections": list[dict]         # PLAN-0049 T-A-1-04 — see BriefSection shape below.
                                    # PLAN-0083 (2026-05-08): the API model declares
@@ -145,7 +149,8 @@ fields of `BriefingResponse`:
 
 | Surface | Reads | Renders via |
 |---------|-------|-------------|
-| `<MorningBriefCard>` (dashboard, expanded) | `summary` + `sections[]` + `citations[]` if `sections.length > 0`; otherwise `narrative` | structured 3-row layout *or* `<MarkdownContent>` fallback |
+| `<MorningBriefCard>` (dashboard, collapsed) | `summary_paragraph` ▸ `summary` ▸ first 3 lines of `narrative` (fallback chain) | inline markdown paragraph |
+| `<MorningBriefCard>` (dashboard, expanded) | `sections[]` + `citations[]` if `sections.length > 0`; otherwise `narrative` | structured 3-row layout *or* `<MarkdownContent>` fallback |
 | `<InstrumentAISubheader>` (instrument page header) | `narrative` only | `<MarkdownContent size="compact">` |
 | `<IntelligenceTab>` brief block (instrument page) | `narrative` only | `<MarkdownContent size="comfortable">` |
 

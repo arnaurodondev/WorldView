@@ -326,3 +326,117 @@ def test_strip_reasoning_plain_text_unchanged() -> None:
     raw = "Clean plain text with no special wrappers."
     result = parser.strip_reasoning(raw)
     assert result == raw
+
+
+# ── 13. PLAN-0103 W3 (BP-624): v4.2 ``## Summary`` paragraph split ───────────
+# These tests cover ``split_summary_paragraph`` (extracts the leading 1-3
+# sentence paragraph for the dashboard collapsed view) and
+# ``check_section_completeness`` (post-generation observability gate for the
+# 6 mandatory v4.2 sections).
+
+
+def test_split_summary_paragraph_extracts_v42_block() -> None:
+    """v4.2 brief: ``## Summary`` block is extracted as a single paragraph."""
+    parser = _make_parser()
+    content = (
+        "## Summary\n"
+        "AI infrastructure momentum continues with Dell up 40%. Volatility "
+        "remains contained ahead of NVDA earnings.\n"
+        "\n"
+        "## Details\n"
+        "**Tape**\n"
+        "- SPY +0.20%, QQQ +0.45%, VIX 14.2 [N1]\n"
+    )
+    summary, remainder = parser.split_summary_paragraph(content)
+    assert summary is not None
+    assert "Dell up 40%" in summary
+    assert "NVDA" in summary
+    assert "## Details" in remainder
+    # Summary heading must NOT appear in the remainder (it would render twice).
+    assert "## Summary" not in remainder
+
+
+def test_split_summary_paragraph_returns_none_for_legacy_brief() -> None:
+    """Legacy v4.1 (no ``## Summary`` heading) → (None, content) — back-compat."""
+    parser = _make_parser()
+    legacy = "**Tape**\n" "- SPY +0.2% [N1]\n" "**Your Portfolio Today**\n" "- AAPL flat [N2]\n"
+    summary, remainder = parser.split_summary_paragraph(legacy)
+    assert summary is None
+    assert remainder == legacy
+
+
+def test_split_summary_paragraph_strips_citation_markers() -> None:
+    """[cN]/[N#] markers must be stripped — collapsed view has no chip UI."""
+    parser = _make_parser()
+    content = (
+        "## Summary\n"
+        "Tech-heavy holdings benefit from Dell rally [N1][c3].\n"
+        "\n"
+        "## Details\n"
+        "**Tape**\n"
+        "- SPY [N1]\n"
+    )
+    summary, _ = parser.split_summary_paragraph(content)
+    assert summary is not None
+    assert "[N1]" not in summary
+    assert "[c3]" not in summary
+    # The substantive content must survive.
+    assert "Dell rally" in summary
+
+
+def test_split_summary_paragraph_caps_at_300_chars() -> None:
+    """Long summary blocks are truncated at sentence boundary ≤300 chars."""
+    parser = _make_parser()
+    long_sentence = "X" * 350
+    content = f"## Summary\n{long_sentence}. Trailing sentence.\n\n## Details\n**Tape**\n- noop\n"
+    summary, _ = parser.split_summary_paragraph(content)
+    assert summary is not None
+    assert len(summary) <= 300
+
+
+def test_check_section_completeness_all_present() -> None:
+    """When all 6 v4.2 sections are present → empty missing list."""
+    parser = _make_parser()
+    content = (
+        "## Summary\nFoo.\n\n## Details\n"
+        "**Tape**\n- a [N1]\n"
+        "**Your Portfolio Today**\n- b [N1]\n"
+        "**Macro Today**\n- c [N1]\n"
+        "**News That Matters To You**\n- d [N1]\n"
+        "**Risks + Opportunities**\n- e\n"
+        "**Bonus context**\n- f\n"
+    )
+    missing = parser.check_section_completeness(content)
+    assert missing == []
+
+
+def test_check_section_completeness_flags_fqa01_pattern() -> None:
+    """FQA-01 reproduction: 4 of 6 sections → Risks + Bonus flagged missing."""
+    parser = _make_parser()
+    fqa01_sample = (
+        "**Tape**\n- a\n"
+        "**Your Portfolio Today**\n- b\n"
+        "**Macro Today**\n- c\n"
+        "**News That Matters To You**\n- d\n"
+    )
+    missing = parser.check_section_completeness(fqa01_sample)
+    assert "Risks + Opportunities" in missing
+    assert "Bonus context" in missing
+    assert "Tape" not in missing
+
+
+def test_check_section_completeness_empty_content() -> None:
+    """Empty content → all 6 sections reported missing (defensive)."""
+    parser = _make_parser()
+    missing = parser.check_section_completeness("")
+    assert len(missing) == 6
+
+
+def test_split_summary_paragraph_handles_bold_section_heading() -> None:
+    """``**Section Name**`` heading terminates the Summary block (no ``## Details`` needed)."""
+    parser = _make_parser()
+    content = "## Summary\n" "Macro tape mixed but constructive.\n" "\n" "**Tape**\n" "- SPY [N1]\n"
+    summary, remainder = parser.split_summary_paragraph(content)
+    assert summary is not None
+    assert "Macro tape mixed" in summary
+    assert "**Tape**" in remainder

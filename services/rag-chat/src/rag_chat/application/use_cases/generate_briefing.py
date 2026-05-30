@@ -450,6 +450,37 @@ class GenerateBriefingUseCase:
             chunks.append(chunk)
         content = _parser.strip_reasoning("".join(chunks))
 
+        # ── 4a. PLAN-0103 W3: extract v4.2 ``## Summary`` paragraph ───────────
+        # The dashboard collapsed view renders this 1-3 sentence paragraph
+        # (≤300 chars) before the user clicks "Read more". Legacy briefs lack
+        # the heading; the parser returns (None, content) → frontend falls back
+        # to the existing summary/narrative head behaviour (R11 forward-compat).
+        # WHY split BEFORE the citation-aware parse: parse_sections_with_citations
+        # walks the entire content looking for the legacy ``---`` divider and
+        # would happily consume the Summary paragraph as part of a v3.0 LEAD
+        # block — yielding a confusing duplicate lead/summary pair. Stripping
+        # the Summary heading first leaves a clean Details block for the
+        # downstream section parser.
+        summary_paragraph, post_summary_content = _parser.split_summary_paragraph(content)
+
+        # ── 4a-bis. PLAN-0103 W3: section completeness observability ─────────
+        # FQA-01: the LLM intermittently dropped Risks + Opportunities and
+        # Bonus context. Emit a structured warning + Prom counter when any of
+        # the 6 v4.2 sections are missing — never fail the request (the brief
+        # is still useful with N<6 sections; operators tune the threshold).
+        missing_sections = _parser.check_section_completeness(content)
+        if missing_sections:
+            from rag_chat.application.metrics import prometheus as _prom
+
+            for _name in missing_sections:
+                _prom.brief_section_missing_total.labels(section=_name).inc()
+            log.warning(  # type: ignore[no-any-return]
+                "brief_section_missing",
+                user_id=user_id,
+                missing=missing_sections,
+                summary_present=summary_paragraph is not None,
+            )
+
         # ── 4b. PLAN-0062-W4: citation-aware parse pipeline ───────────────────
         # Build the citation index (ordered list matching [c1], [c2], … in prompt).
         context_citations = _parser.materialize_brief_citations(ctx)
@@ -465,7 +496,24 @@ class GenerateBriefingUseCase:
         # When v3.0 parse fails (old cached LLM output), try the v2.2 SUMMARY/DETAILS
         # split so the summary field still populates for existing cached briefs.
         # WHY both: during rollout, cached responses may still use the v2.2 format.
+        # WHY pass ``content`` (not ``post_summary_content``): the v2.2 split
+        # path is a back-compat surface for OLDER caches — those caches predate
+        # v4.2 and never carried a ``## Summary`` heading, so the v2.2 splitter
+        # sees the same content as before.
         summary, narrative = _parser.split_summary_and_details(content)
+        # WHY: when the v4.2 ``## Summary`` heading IS present AND the legacy
+        # v2.2 splitter did NOT also produce a summary (i.e. this really is a
+        # v4.2-shaped response, not a v2.2 ``## SUMMARY`` + ``---`` + ``## DETAILS``
+        # output that the case-insensitive v4.2 splitter happens to also match),
+        # we replace the narrative with the post-Summary remainder so the
+        # expanded view doesn't repeat the summary paragraph above its body.
+        # WHY the ``summary is None`` guard: if the v2.2 path already cleanly
+        # split into (summary, narrative-with-DETAILS-header-stripped), use that
+        # — it already does the header cleanup. Overwriting with
+        # post_summary_content would re-introduce the ``## DETAILS`` header
+        # (BP-624 regression caught by test_morning_v22_two_tier_split).
+        if summary_paragraph is not None and post_summary_content and summary is None:
+            narrative = post_summary_content
 
         # ── 5. Derive risk_summary from portfolio holdings (HHI concentration) ─
         risk_summary = _formatter.build_morning_risk_summary(ctx)
@@ -594,6 +642,10 @@ class GenerateBriefingUseCase:
             # response so the UI / cache / downstream can show a notice.
             "partial_failure": partial_failure,
             "context_availability_score": score,
+            # PLAN-0103 W3 (BP-624): collapsed-view summary paragraph (v4.2
+            # ``## Summary`` block). None for legacy responses — frontend
+            # falls back to ``summary`` / first lines of ``narrative``.
+            "summary_paragraph": summary_paragraph,
         }
 
     async def execute_public_instrument(

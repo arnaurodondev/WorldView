@@ -433,6 +433,20 @@ brief_low_context_refusal_total = Counter(
     "Times the brief generator refused LLM call due to low context availability score",
 )
 
+# PLAN-0103 W3 (BP-624): post-generation observability for the v4.2 6-section
+# completeness gate. Incremented once per missing section name on each
+# generation that did NOT honour the v4.2 prompt's "all 6 sections MANDATORY"
+# rule. Label cardinality is bounded by the V42_EXPECTED_SECTIONS tuple
+# (6 values: Tape, Your Portfolio Today, Macro Today, News That Matters To
+# You, Risks + Opportunities, Bonus context). Operators alert when a single
+# section name dominates the rate — that signals the prompt or the LLM is
+# consistently dropping that bucket.
+brief_section_missing_total = Counter(
+    "brief_section_missing_total",
+    "Per-section counter for missing v4.2 sections in generated morning briefs",
+    labelnames=["section"],
+)
+
 # ── F-LIVE-NEW-001: entity-resolver ambiguity observability ──────────────────
 #
 # Counts the number of times ``IntelligenceHandler._resolve_entity_by_name``

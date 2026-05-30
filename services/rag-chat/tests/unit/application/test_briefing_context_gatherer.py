@@ -962,7 +962,8 @@ def test_morning_prompt_v4_contains_required_sections() -> None:
     ):
         assert section_name in body, f"prompt missing required section: {section_name}"
     assert "implication" in body, "prompt no longer instructs the LLM to lead with the implication"
-    # PLAN-0103 W2 (BP-623 sibling) bumped 4.0 → 4.1: cleanup release that
-    # removed the contradictory legacy ## LEAD / --- / ## DETAILS template
-    # while preserving the 6-section spec asserted above.
-    assert MORNING_BRIEFING.version == "4.1", MORNING_BRIEFING.version
+    # PLAN-0103 W3 (BP-624) bumped 4.1 → 4.2: added the leading ``## Summary``
+    # paragraph (for the dashboard collapsed view) AND promoted all 6 sections
+    # to MANDATORY so the LLM cannot drop Risks + Opportunities / Bonus context
+    # on quiet days (FQA-01 fix).
+    assert MORNING_BRIEFING.version == "4.2", MORNING_BRIEFING.version
