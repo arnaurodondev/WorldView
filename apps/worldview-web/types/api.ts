@@ -1682,6 +1682,13 @@ export interface BriefingResponse {
   // WHY optional: pre-W2 cached responses + on-demand cold paths omit the field;
   // the frontend treats missing as `false` (no badge). See PLAN-0094 W3 T-W3-01.
   is_stale?: boolean;
+  // PLAN-0103 W3 (BP-624) — collapsed-view summary paragraph from the v4.2
+  // morning prompt's ``## Summary`` block (1-3 sentences, ≤300 chars). The
+  // dashboard MorningBriefCard renders this when present and falls back to
+  // ``summary`` / first lines of ``narrative`` otherwise (forward-compat for
+  // legacy / cached pre-v4.2 responses). Always null on instrument briefs —
+  // they don't use the v4.2 prompt.
+  summary_paragraph?: string | null;
 }
 
 /**

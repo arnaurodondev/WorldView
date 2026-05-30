@@ -309,7 +309,18 @@ export function MorningBriefCard() {
 
   const safeNarrative = stripStaleMetadata(brief?.narrative?.trim() ?? "");
   const safeSummary = stripStaleMetadata(brief?.summary?.trim() ?? "");
-  if (!brief || (!safeNarrative && !safeSummary)) {
+  // PLAN-0103 W3 (BP-624) — v4.2 morning brief carries a leading ``## Summary``
+  // paragraph (1-3 sentences) extracted server-side into ``summary_paragraph``.
+  // WHY also stripStaleMetadata: the LLM occasionally appends ``*(as of YYYY-MM-DD)*``
+  // inside the summary too; we strip those parentheticals consistently with
+  // ``safeNarrative`` / ``safeSummary`` so the collapsed view stays clean.
+  // WHY ?? "" guard: the field is optional in BriefingResponse — pre-v4.2 cached
+  // responses or instrument briefs will leave it undefined; the collapsed view
+  // then falls back to the existing summary/narrative chain.
+  const safeSummaryParagraph = stripStaleMetadata(
+    brief?.summary_paragraph?.trim() ?? "",
+  );
+  if (!brief || (!safeNarrative && !safeSummary && !safeSummaryParagraph)) {
     return (
       <div className="flex h-full flex-col">
         <MetaHeader />
@@ -355,15 +366,22 @@ export function MorningBriefCard() {
   // the work is cheap (string replace) and React rerenders on expand.
   const summaryWithLinks = linkifyEntities(safeSummary);
   const narrativeWithLinks = linkifyEntities(safeNarrative);
+  // PLAN-0103 W3 (BP-624) — also linkify the v4.2 summary paragraph so entity
+  // names render as deep-links even in the collapsed view.
+  const summaryParagraphWithLinks = linkifyEntities(safeSummaryParagraph);
 
-  // WHY fallback for collapsed view: when the v2.2 prompt's two-tier output
-  // wasn't honored (legacy cached briefs, instrument briefs, or LLM ignored
-  // the format directive), summary is null. We fall back to the narrative so
-  // the collapsed card still shows *something*. The line-clamp-3 only applies
-  // in this fallback branch — when summary IS present it's already short
-  // enough (1-2 sentences) and clamping is unnecessary.
-  const collapsedSource = summaryWithLinks || narrativeWithLinks;
-  const usingSummaryFallback = !summaryWithLinks;
+  // WHY fallback chain (v4.2 → v2.2 → narrative):
+  //   1. ``summary_paragraph`` (v4.2 ``## Summary`` block) is the preferred
+  //      collapsed-view source — purpose-built for this surface.
+  //   2. ``summary`` (v2.2 ``## SUMMARY`` block) is the back-compat tier.
+  //   3. ``narrative`` is the last-resort fallback for instrument briefs and
+  //      legacy/cached responses that lack any summary block.
+  // The line-clamp-3 only applies in the narrative-fallback branch — both
+  // summary tiers are already short enough (≤300 chars) and clamping them
+  // would risk hiding a sentence on the dashboard collapsed card.
+  const collapsedSource =
+    summaryParagraphWithLinks || summaryWithLinks || narrativeWithLinks;
+  const usingSummaryFallback = !summaryParagraphWithLinks && !summaryWithLinks;
 
   // WHY isLong on narrative (not summary): the "Read more" affordance only
   // makes sense if there's substantially more content to reveal when expanded.

@@ -136,4 +136,48 @@ describe("MorningBriefCard", () => {
       expect(link.closest("a")).toHaveAttribute("href", "/instruments/AAPL");
     });
   });
+
+  // ── PLAN-0103 W3 (BP-624): v4.2 summary_paragraph rendering ─────────────────
+  // The dashboard collapsed view should render summary_paragraph when present
+  // and fall back to narrative (clamp-3) otherwise. These tests cover both
+  // paths so a regression in either renders the legacy fallback at minimum.
+  it("renders summary_paragraph in collapsed view when present (v4.2)", async () => {
+    // WHY a fresh module mock per-test is overkill: we leverage the existing
+    // gateway mock by mutating the resolved value via setUp before render.
+    // The cleanest way without redefining the gateway mock is to import the
+    // module again and override getMorningBrief just for this test scope.
+    const gw = (await import("@/lib/gateway")) as unknown as {
+      createGateway: () => { getMorningBrief: () => Promise<unknown> };
+    };
+    const orig = gw.createGateway;
+    // Inline override: return a brief that carries summary_paragraph.
+    gw.createGateway = () => ({
+      getMorningBrief: async () => ({
+        ...mockBriefResponse,
+        summary_paragraph:
+          "Tech-heavy portfolio benefits from sustained AI infrastructure rally.",
+      }),
+    });
+    try {
+      render(<MorningBriefCard />, { wrapper });
+      await waitFor(() => {
+        expect(
+          screen.getByText(/Tech-heavy portfolio benefits/),
+        ).toBeInTheDocument();
+      });
+    } finally {
+      // Restore so other tests aren't affected (vi.mock returns a singleton).
+      gw.createGateway = orig;
+    }
+  });
+
+  it("falls back to narrative head when summary_paragraph is absent", async () => {
+    // The default mockBriefResponse has no summary_paragraph — the collapsed
+    // view must still render the narrative content (no blank card).
+    render(<MorningBriefCard />, { wrapper });
+    await waitFor(() => {
+      const matches = screen.getAllByText(/Market Update/);
+      expect(matches.length).toBeGreaterThanOrEqual(1);
+    });
+  });
 });
