@@ -487,12 +487,82 @@ tools:
         type: integer
         description: Maximum number of results (1-100). Default 20.
         required: false
+      # PLAN-0103 W1 (BP-622): fundamentals-grade metric filters. These map
+      # directly to columns in the market-data ``metric_extractor`` whitelist
+      # so the LLM can ask for "AI semis with positive YoY revenue growth"
+      # without the kwarg being silently dropped.
+      - name: revenue_growth_yoy_min
+        type: number
+        description: "Minimum quarter-over-year-ago revenue growth, e.g. 0.0 for any positive growth, 0.10 for >=10%."
+        required: false
+      - name: revenue_growth_yoy_max
+        type: number
+        description: "Maximum quarter-over-year-ago revenue growth."
+        required: false
+      - name: gross_margin_min
+        type: number
+        description: "Minimum gross margin as a decimal (e.g. 0.40 for >=40%)."
+        required: false
+      - name: gross_margin_max
+        type: number
+        description: "Maximum gross margin as a decimal."
+        required: false
+      - name: roe_min
+        type: number
+        description: "Minimum return on equity as a decimal (e.g. 0.15 for >=15%)."
+        required: false
+      - name: dividend_yield_min
+        type: number
+        description: "Minimum dividend yield as a decimal (e.g. 0.02 for >=2%)."
+        required: false
+      - name: dividend_yield_max
+        type: number
+        description: "Maximum dividend yield as a decimal."
+        required: false
     source_type: "fundamentals"
     since: "v3"
     deprecated_at: null
     example_queries:
       - "Screen for tech stocks with P/E under 20 and market cap over $10B"
       - "Find large-cap US healthcare companies"
+      - "AI semiconductor companies with market cap > $50B and positive YoY revenue growth"
+
+  # PLAN-0103 W2 — entity-anchored news feed. Closes the catalogue gap
+  # surfaced by the 2026-05-29 real-user audit (Q1: "latest news on MSTR"
+  # routed to broad search_documents and returned weak hits).
+  - name: get_entity_news
+    description: >
+      Latest news articles mentioning a specific entity (by entity_id OR ticker),
+      filtered by date range. Use this for "what's the latest on X" questions
+      where the user names a single entity. Returns up to 20 articles with title,
+      source, published_at, url, and citation metadata. PREFER over
+      search_documents when the user asks about ONE specific company / ticker —
+      this routes through the entity-anchored briefing-articles endpoint which
+      already applies per-entity relevance scoring.
+    parameters:
+      - name: entity_id
+        type: string
+        description: "Canonical entity UUID. Provide this OR ticker (entity_id wins if both given)."
+        required: false
+      - name: ticker
+        type: string
+        description: "Ticker symbol (e.g. 'MSTR'). Resolved server-side via S6 alias lookup."
+        required: false
+      - name: days_back
+        type: integer
+        description: "Look back N days (1-90). Default 14."
+        required: false
+      - name: max_results
+        type: integer
+        description: "Max articles to return (1-20). Default 10."
+        required: false
+    source_type: "news_article"
+    since: "v5"
+    deprecated_at: null
+    example_queries:
+      - "Show me the latest news on MSTR"
+      - "What's happening with NVDA this week?"
+      - "Any recent news about Tesla?"
 
   - name: get_market_movers
     description: >

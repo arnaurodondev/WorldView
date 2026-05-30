@@ -55,16 +55,21 @@ class NarrativeHandler(ToolHandler):
     async def execute(self, tool_name: str, args: dict[str, Any]) -> Any:
         from rag_chat.application.pipeline.tool_executor import ToolUseBlock
 
+        from .base import filter_kwargs_to_signature
+
         _stub = ToolUseBlock(name=tool_name, input=args)
-        if tool_name == "get_entity_narrative":
-            return await self._handle_get_entity_narrative(_stub, **args)
-        if tool_name == "get_entity_paths":
-            return await self._handle_get_entity_paths(_stub, **args)
-        if tool_name == "get_entity_health":
-            return await self._handle_get_entity_health(_stub, **args)
-        if tool_name == "get_entity_intelligence":
-            return await self._handle_get_entity_intelligence(_stub, **args)
-        raise ValueError(f"NarrativeHandler cannot handle tool: {tool_name}")
+        # BP-622 systemic fix (PLAN-0103 W1).
+        dispatch: dict[str, Any] = {
+            "get_entity_narrative": self._handle_get_entity_narrative,
+            "get_entity_paths": self._handle_get_entity_paths,
+            "get_entity_health": self._handle_get_entity_health,
+            "get_entity_intelligence": self._handle_get_entity_intelligence,
+        }
+        target = dispatch.get(tool_name)
+        if target is None:
+            raise ValueError(f"NarrativeHandler cannot handle tool: {tool_name}")
+        known, _unknown = filter_kwargs_to_signature(target, tool_name, args)
+        return await target(_stub, **known)
 
     # ── Entity ID resolver (M-1: EntityContext scope enforcement) ──────────────
 

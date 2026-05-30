@@ -22,7 +22,7 @@ import structlog
 from rag_chat.domain.entities.chat import CitationMeta, RetrievedItem
 from rag_chat.domain.enums import ItemType
 
-from .base import ToolHandler
+from .base import ToolHandler, filter_kwargs_to_signature
 
 if TYPE_CHECKING:
     from rag_chat.application.ports.upstream_clients import S3BriefPort, S3Port
@@ -121,25 +121,26 @@ class MarketHandler(ToolHandler):
         return tool_name in self._HANDLED_TOOLS
 
     async def execute(self, tool_name: str, args: dict[str, Any]) -> Any:
-        if tool_name == "get_price_history":
-            return await self._handle_get_price_history(**args)
-        if tool_name == "get_fundamentals_history":
-            return await self._handle_get_fundamentals_history(**args)
-        # PLAN-0095 W2 T-W2-02: batched fundamentals fan-out tool.
-        if tool_name == "get_fundamentals_history_batch":
-            return await self._handle_get_fundamentals_history_batch(**args)
-        if tool_name == "compare_entities":
-            return await self._handle_compare_entities(**args)
-        if tool_name == "screen_universe":
-            return await self._handle_screen_universe(**args)
-        if tool_name == "get_market_movers":
-            return await self._handle_get_market_movers(**args)
-        if tool_name == "get_economic_calendar":
-            return await self._handle_get_economic_calendar(**args)
-        if tool_name == "get_earnings_calendar":
-            return await self._handle_get_earnings_calendar(**args)
-        # Unreachable if can_handle() is checked first; guard for safety.
-        raise ValueError(f"MarketHandler cannot handle tool: {tool_name}")
+        # BP-622 systemic fix (PLAN-0103 W1): sanitise the LLM kwarg payload
+        # against each handler's actual signature BEFORE dispatch.  Unknown
+        # kwargs are logged + counted, not silently dropped or crashed.
+        dispatch: dict[str, Any] = {
+            "get_price_history": self._handle_get_price_history,
+            "get_fundamentals_history": self._handle_get_fundamentals_history,
+            # PLAN-0095 W2 T-W2-02: batched fundamentals fan-out tool.
+            "get_fundamentals_history_batch": self._handle_get_fundamentals_history_batch,
+            "compare_entities": self._handle_compare_entities,
+            "screen_universe": self._handle_screen_universe,
+            "get_market_movers": self._handle_get_market_movers,
+            "get_economic_calendar": self._handle_get_economic_calendar,
+            "get_earnings_calendar": self._handle_get_earnings_calendar,
+        }
+        target = dispatch.get(tool_name)
+        if target is None:
+            # Unreachable if can_handle() is checked first; guard for safety.
+            raise ValueError(f"MarketHandler cannot handle tool: {tool_name}")
+        known, _unknown = filter_kwargs_to_signature(target, tool_name, args)
+        return await target(**known)
 
     async def _handle_get_price_history(
         self,
@@ -446,6 +447,20 @@ class MarketHandler(ToolHandler):
         industry: str | None = None,
         region: str | None = None,
         limit: int = 20,
+        # PLAN-0103 W1 (BP-622): explicit metric-filter parameters so the
+        # LLM can ask for fundamentals-grade screens (revenue growth, gross
+        # margin, ROE, dividend yield, etc.) without the kwarg being silently
+        # dropped by the dispatch gate.  Each maps to a ScreenFilterRequest
+        # entry keyed off the matching market-data ``metric`` column —
+        # the names mirror metric_extractor.py:171 so the LLM can ask using
+        # the same vocabulary the screener API documents.
+        revenue_growth_yoy_min: float | None = None,
+        revenue_growth_yoy_max: float | None = None,
+        gross_margin_min: float | None = None,
+        gross_margin_max: float | None = None,
+        roe_min: float | None = None,
+        dividend_yield_min: float | None = None,
+        dividend_yield_max: float | None = None,
     ) -> list[RetrievedItem]:
         """Quantitative screener via S9 POST /v1/fundamentals/screen (PLAN-0081 Wave A).
 
@@ -490,6 +505,27 @@ class MarketHandler(ToolHandler):
 
         if pe_ratio_max is not None:
             filter_list.append({"metric": "pe_ratio", "max_value": pe_ratio_max, **scope})
+
+        # PLAN-0103 W1 (BP-622): fundamentals-grade metric filters. Each builds
+        # a ScreenFilterRequest entry against the corresponding column name in
+        # market_data.metric_extractor. The DB-side name (e.g.
+        # ``quarterly_revenue_growth_yoy``) is hidden from the LLM behind the
+        # friendlier ``revenue_growth_yoy_min/max`` parameter pair.
+        metric_filter_specs: list[tuple[str, float | None, float | None]] = [
+            ("quarterly_revenue_growth_yoy", revenue_growth_yoy_min, revenue_growth_yoy_max),
+            ("gross_margin", gross_margin_min, gross_margin_max),
+            ("roe", roe_min, None),
+            ("dividend_yield", dividend_yield_min, dividend_yield_max),
+        ]
+        for metric_name, mn, mx in metric_filter_specs:
+            if mn is None and mx is None:
+                continue
+            entry = {"metric": metric_name, **scope}
+            if mn is not None:
+                entry["min_value"] = mn
+            if mx is not None:
+                entry["max_value"] = mx
+            filter_list.append(entry)
 
         # If the LLM only supplied sector/industry (no numeric thresholds) we
         # still need ONE filter entry so the sector/industry predicates bind —

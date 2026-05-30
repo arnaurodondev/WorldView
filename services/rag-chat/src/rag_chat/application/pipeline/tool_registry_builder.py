@@ -747,11 +747,108 @@ def build_default_registry() -> ToolRegistry:
                     description="Maximum number of results (1-100). Default 20.",
                     required=False,
                 ),
+                # PLAN-0103 W1 (BP-622): fundamentals-grade metric filters.
+                # These map to columns in market-data's metric_extractor.
+                ParameterSpec(
+                    name="revenue_growth_yoy_min",
+                    type="number",
+                    description=(
+                        "Minimum quarter-over-year-ago revenue growth, e.g. 0.0 for any "
+                        "positive growth, 0.10 for >=10%."
+                    ),
+                    required=False,
+                ),
+                ParameterSpec(
+                    name="revenue_growth_yoy_max",
+                    type="number",
+                    description="Maximum quarter-over-year-ago revenue growth.",
+                    required=False,
+                ),
+                ParameterSpec(
+                    name="gross_margin_min",
+                    type="number",
+                    description="Minimum gross margin as a decimal (e.g. 0.40 for >=40%).",
+                    required=False,
+                ),
+                ParameterSpec(
+                    name="gross_margin_max",
+                    type="number",
+                    description="Maximum gross margin as a decimal.",
+                    required=False,
+                ),
+                ParameterSpec(
+                    name="roe_min",
+                    type="number",
+                    description="Minimum return on equity as a decimal (e.g. 0.15 for >=15%).",
+                    required=False,
+                ),
+                ParameterSpec(
+                    name="dividend_yield_min",
+                    type="number",
+                    description="Minimum dividend yield as a decimal (e.g. 0.02 for >=2%).",
+                    required=False,
+                ),
+                ParameterSpec(
+                    name="dividend_yield_max",
+                    type="number",
+                    description="Maximum dividend yield as a decimal.",
+                    required=False,
+                ),
             ],
             source_type="fundamentals",
             example_queries=[
                 "Screen for tech stocks with P/E under 20 and market cap over $10B",
                 "Find large-cap US healthcare companies",
+                "AI semiconductor companies with market cap > $50B and positive YoY revenue growth",
+            ],
+        ),
+        handler=lambda **_: None,
+    )
+
+    # PLAN-0103 W2 — entity-anchored news feed (Q1 follow-up from the
+    # 2026-05-29 real-user audit).  Routes through the per-entity
+    # /briefing-articles endpoint so the LLM gets per-entity relevance
+    # scoring instead of falling back to broad search_documents.
+    registry.register(
+        ToolSpec(
+            name="get_entity_news",
+            description=(
+                "Latest news articles mentioning a specific entity (by entity_id OR ticker), "
+                "filtered by date range. Use this for 'what's the latest on X' questions "
+                "where the user names a single entity. PREFER over search_documents when "
+                "the user asks about ONE specific company or ticker."
+            ),
+            parameters=[
+                ParameterSpec(
+                    name="entity_id",
+                    type="string",
+                    description="Canonical entity UUID. Provide this OR ticker.",
+                    required=False,
+                ),
+                ParameterSpec(
+                    name="ticker",
+                    type="string",
+                    description="Ticker symbol (e.g. 'MSTR'). Resolved server-side.",
+                    required=False,
+                ),
+                ParameterSpec(
+                    name="days_back",
+                    type="integer",
+                    description="Look back N days (1-90). Default 14.",
+                    required=False,
+                ),
+                ParameterSpec(
+                    name="max_results",
+                    type="integer",
+                    description="Max articles to return (1-20). Default 10.",
+                    required=False,
+                ),
+            ],
+            source_type="news_article",
+            example_queries=[
+                "Show me the latest news on MSTR",
+                "What's happening with NVDA this week?",
+                "Any recent news about Tesla?",
             ],
         ),
         handler=lambda **_: None,

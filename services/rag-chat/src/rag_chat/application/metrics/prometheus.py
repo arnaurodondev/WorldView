@@ -268,6 +268,24 @@ rag_tool_registry_size = Gauge(
     labelnames=["kind"],  # kind: "manifest" | "handled"
 )
 
+
+# ── PLAN-0103 W1 — BP-622 systemic kwarg-drop counter ────────────────────────
+#
+# Counts every LLM-supplied tool kwarg that the handler does NOT recognise.
+# Before this counter existed the silent drop was invisible — the call would
+# either crash with TypeError (swallowed by the executor as tool_argument_error)
+# or, where the handler used **kwargs into a downstream that ignored unknown
+# fields, fall through to a "no rows matched" answer.  Now operators can alarm
+# on a sustained rate ("LLM is asking for kwargs we don't accept; either teach
+# the handler the new param or update the tool description so the LLM stops
+# asking").  Label cardinality is bounded by tool_name x declared LLM kwargs
+# — small enough that we keep both labels for direct drill-down.
+rag_chat_tool_unknown_kwarg_total = Counter(
+    "rag_chat_tool_unknown_kwarg_total",
+    "Number of LLM-supplied tool kwargs the handler did not recognise (BP-622)",
+    labelnames=["tool_name", "kwarg"],
+)
+
 # ── E-6: Multi-turn agent loop (AgentBudget) ──────────────────────────────────
 
 rag_agent_iterations = Histogram(

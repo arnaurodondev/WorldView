@@ -204,7 +204,7 @@ Input → Cache check → [hit? short-circuit ✓] → Validate → Rate limit �
       → Re-acquire UoW → persist thread + message
 ```
 
-### Tool Catalog (23 tools — `libs/tools/src/tools/capability_manifest.yaml` v4)
+### Tool Catalog (24 tools — `libs/tools/src/tools/capability_manifest.yaml` v5)
 
 | Tool | Target | Description | Since |
 |------|--------|-------------|-------|
@@ -229,6 +229,7 @@ Input → Cache check → [hit? short-circuit ✓] → Validate → Rate limit �
 | `get_market_movers` | S9→S3 | Top gainers/losers/most-active via S9 `GET /v1/market/top-movers`. Default: gainers/1d | v3 |
 | `get_economic_calendar` | S9→S3 | Macro events (CPI, FOMC, GDP) via S9 `GET /v1/fundamentals/economic-calendar` | v3 |
 | `get_earnings_calendar` | S9→S3 | Earnings release dates + EPS via S9 `GET /v1/fundamentals/earnings-calendar` | v3 |
+| `get_entity_news` | S6 | **PLAN-0103 W2** — entity-anchored news feed: resolves `entity_id` (or `ticker`) and fetches `/api/v1/entities/{eid}/briefing-articles`. Filters by `days_back` (client-side) + `max_results`. Catalogue gap fix from 2026-05-29 real-user audit (Q1: "latest news on MSTR" previously routed to broad `search_documents`). Prefer over `search_documents` when the user asks about ONE specific company / ticker. | v5 |
 
 **v2 intelligence tools (PLAN-0080 Wave A)**: all 4 call S9-proxied endpoints (R14/R7 compliance — never S7 directly). All respect `EntityContext` scope: when the executor is bound to an entity via `ToolExecutorFactory.for_request(entity_context=...)`, the `entity_id` is auto-injected and LLM-supplied values are silently overridden (M-1 enforcement).
 
@@ -237,6 +238,8 @@ Input → Cache check → [hit? short-circuit ✓] → Validate → Rate limit �
 **Fundamentals tool behavior — periodicity contract (PLAN-0097 W1 T-W1-02, defense-in-depth)**: every row rendered by the rag-chat `MarketHandler._format_fundamentals_table` carries an explicit per-row `Periodicity` column AND an `(Periodicity: QUARTERLY)` header tag above the table. The header tag is deliberately redundant with the column so the LLM sees the contract BEFORE reading any cell value — eliminating the failure mode where a long table is summarised on the column header only and an annualised number sneaks past the row-level label. Defense-in-depth complements the source-side `period_type="QUARTERLY"` filter enforced by `GetFundamentalsHistoryUseCase` (PLAN-0097 W1 T-W1-01).
 
 All tool executions are independent; failures return empty results (safe degradation). The all-tools-failed guard prevents the second LLM turn from being called with zero context — the orchestrator short-circuits to a fallback answer in that case.
+
+**Tool kwargs forwarding policy (PLAN-0103 W1, BP-622)**: every handler `execute()` MUST sanitise the LLM payload via `filter_kwargs_to_signature` (`handlers/base.py`) before dispatching to the per-tool `_handle_*` method. Unknown kwargs are logged as `tool_unknown_kwarg` + counted in the `rag_chat_tool_unknown_kwarg_total{tool_name, kwarg}` Prometheus counter. This replaces the previous failure modes where an unknown kwarg either (a) crashed the call with `TypeError` (swallowed by the executor as `tool_argument_error`) or (b) was silently dropped by a whitelist gate (`screen_universe` lost `revenue_growth_yoy_min` for ~3 weeks before BP-622 was filed). When the LLM keeps requesting an unsupported field, operators see the drift in real time and either (a) extend the handler signature or (b) tighten the tool description so DeepSeek stops asking.
 
 ---
 

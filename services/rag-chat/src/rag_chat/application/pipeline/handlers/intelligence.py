@@ -208,21 +208,25 @@ class IntelligenceHandler(ToolHandler):
         # a dummy stub is created here so the handler signatures remain unchanged.
         from rag_chat.application.pipeline.tool_executor import ToolUseBlock
 
+        from .base import filter_kwargs_to_signature
+
         _stub = ToolUseBlock(name=tool_name, input=args)
 
-        if tool_name == "get_entity_graph":
-            return await self._handle_get_entity_graph(_stub, **args)
-        if tool_name == "traverse_graph":
-            return await self._handle_traverse_graph(_stub, **args)
-        if tool_name == "search_entity_relations":
-            return await self._handle_search_entity_relations(_stub, **args)
-        if tool_name == "search_claims":
-            return await self._handle_search_claims(_stub, **args)
-        if tool_name == "search_events":
-            return await self._handle_search_events(_stub, **args)
-        if tool_name == "get_contradictions":
-            return await self._handle_get_contradictions(_stub, **args)
-        raise ValueError(f"IntelligenceHandler cannot handle tool: {tool_name}")
+        # BP-622 systemic fix (PLAN-0103 W1): sanitise kwargs before dispatch.
+        # ``tool_call`` is reserved (supplied by us, not by the LLM).
+        dispatch: dict[str, Any] = {
+            "get_entity_graph": self._handle_get_entity_graph,
+            "traverse_graph": self._handle_traverse_graph,
+            "search_entity_relations": self._handle_search_entity_relations,
+            "search_claims": self._handle_search_claims,
+            "search_events": self._handle_search_events,
+            "get_contradictions": self._handle_get_contradictions,
+        }
+        target = dispatch.get(tool_name)
+        if target is None:
+            raise ValueError(f"IntelligenceHandler cannot handle tool: {tool_name}")
+        known, _unknown = filter_kwargs_to_signature(target, tool_name, args)
+        return await target(_stub, **known)
 
     def _sanitize_cypher_pattern(self, pattern: str | None) -> str | None:
         """Allowlist-filter a Cypher rel-type pattern to guard against prompt injection.
