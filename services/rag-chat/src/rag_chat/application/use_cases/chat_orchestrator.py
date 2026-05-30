@@ -66,6 +66,7 @@ from rag_chat.application.metrics.prometheus import (
     record_reranker_position_change,
 )
 from rag_chat.application.observability import PhaseTimings, phase
+from rag_chat.application.pipeline.transport_error import TransportErrorMarker
 from rag_chat.application.use_cases.persist_chat import AssistantResponse
 from rag_chat.domain.entities.chat import ResolvedQuery  # noqa: F401 (preserved for public surface)
 from rag_chat.domain.enums import QueryIntent
@@ -1175,8 +1176,15 @@ class ChatOrchestratorUseCase:
             tool_items = [_by_call_id.get(id(tc)) for tc in tool_calls]
 
             # Flatten results.
+            # PLAN-0103 W2 BP-623: skip TransportErrorMarker sentinels — they
+            # carry no item payload and are handled by the per-tool status
+            # branch below (status="transport_error").  Leaving them in
+            # _flat_items would crash the downstream RetrievedItem.item_type
+            # accessor.
             _flat_items: list[RetrievedItem] = []
             for _item in tool_items:
+                if isinstance(_item, TransportErrorMarker):
+                    continue
                 if isinstance(_item, list):
                     _flat_items.extend(_item)
                 elif _item is not None:
@@ -1187,6 +1195,8 @@ class ChatOrchestratorUseCase:
             # Collect entity_id / item_id / source_id from each tool result so
             # the citation scrubber knows which IDs were actually grounded.
             for _item_list in tool_items:
+                if isinstance(_item_list, TransportErrorMarker):
+                    continue
                 _items = (
                     _item_list if isinstance(_item_list, list) else ([_item_list] if _item_list is not None else [])
                 )
@@ -1250,18 +1260,36 @@ class ChatOrchestratorUseCase:
             # "no data found" answer instead of the opaque tool-failure
             # error verdict. See FIX-LIVE-Y in
             # docs/audits/2026-05-24-qa-plan-0093-phase-5c-investigation-report.md.
+            # PLAN-0103 W2 BP-623: track transport-error sentinels alongside
+            # the legacy ok/empty/error classification.  A TransportErrorMarker
+            # means the upstream is DOWN — it must NOT be reported as
+            # "empty" (which would let the LLM hallucinate "no data found"
+            # when the real situation is "I cannot reach the data source").
+            # Transport errors count as `_all_errored` so the orchestrator's
+            # all-tools-failed branch surfaces the outage to the user rather
+            # than falling through to the "all empty" graceful-no-data path.
             _all_failed = True
             _all_errored = True
+            # Per-tool transport-error payload (used a few blocks below when
+            # we build the role="tool" messages for the next LLM turn).
+            _transport_errors_by_call_id: dict[int, TransportErrorMarker] = {}
             for tc, _item in zip(tool_calls, tool_items, strict=False):
-                _item_list2 = _item if isinstance(_item, list) else ([_item] if _item is not None else [])
-                _count = len(_item_list2)
-                _status = "ok" if _count > 0 else ("empty" if _item is not None else "error")
-                if _count > 0:
-                    _all_failed = False
-                    _all_errored = False
-                elif _item is not None:
-                    # "empty" — tool ran cleanly but returned no rows
-                    _all_errored = False
+                if isinstance(_item, TransportErrorMarker):
+                    _status = "transport_error"
+                    _count = 0
+                    _transport_errors_by_call_id[id(tc)] = _item
+                    # Transport errors leave _all_failed=True and _all_errored=True
+                    # so the existing all_tools_failed branch fires below.
+                else:
+                    _item_list2 = _item if isinstance(_item, list) else ([_item] if _item is not None else [])
+                    _count = len(_item_list2)
+                    _status = "ok" if _count > 0 else ("empty" if _item is not None else "error")
+                    if _count > 0:
+                        _all_failed = False
+                        _all_errored = False
+                    elif _item is not None:
+                        # "empty" — tool ran cleanly but returned no rows
+                        _all_errored = False
                 rag_tool_call_total.labels(tool_name=tc.name, status=_status).inc()
                 # Q1 fix: use accurate per-tool latency from the executor rather than
                 # total_batch_time / n_tools (which incorrectly averages concurrent calls).
@@ -1282,7 +1310,22 @@ class ChatOrchestratorUseCase:
                         threshold_ms=2000,
                         request_id=str(getattr(audit, "turn_id", "") or ""),
                     )
-                yield p.emitter.emit_tool_result(tc.name, status=_status, item_count=_count)
+                # PLAN-0103 W2 BP-623: attach transport_error reason / status_code /
+                # elapsed_ms so the frontend (and chat-eval harness) can render
+                # "I cannot reach <upstream> right now" instead of the
+                # misleading "no data was found".
+                _te = _transport_errors_by_call_id.get(id(tc))
+                if _te is not None:
+                    yield p.emitter.emit_tool_result(
+                        tc.name,
+                        status=_status,
+                        item_count=_count,
+                        reason=_te.reason,
+                        status_code=_te.status_code,
+                        elapsed_ms=_te.elapsed_ms,
+                    )
+                else:
+                    yield p.emitter.emit_tool_result(tc.name, status=_status, item_count=_count)
 
                 # E-12: record each tool call outcome.
                 _success = _count > 0
@@ -1353,6 +1396,16 @@ class ChatOrchestratorUseCase:
                     _q_split = _q.split()
                     _q_word = _q_split[0] if _q_split else ""
 
+                    # PLAN-0103 W2 BP-623: if ANY tool transport-errored, take
+                    # the same continue-the-loop path as the "all empty"
+                    # branch BUT inject transport-error-specific content into
+                    # the role="tool" messages.  This lets the LLM produce a
+                    # truthful "I cannot reach <upstream> right now — please
+                    # retry" answer instead of either (a) the misleading
+                    # "no data was found" (current legacy behaviour when the
+                    # marker masquerades as empty) or (b) the opaque
+                    # "Unable to retrieve relevant data" error.
+                    _has_transport_error = bool(_transport_errors_by_call_id)
                     # FIX-LIVE-Y (2026-05-25): when every tool returned
                     # cleanly but with zero rows (no errors raised), this is
                     # NOT a tool failure — it is a legitimate data gap (e.g.
@@ -1366,8 +1419,10 @@ class ChatOrchestratorUseCase:
                     # graceful no-data answer on its next turn instead.
                     # ``_all_errored`` is only true when every tool actually
                     # crashed (item is None); only that case keeps the
-                    # legacy hard-error path.
-                    if not _all_errored:
+                    # legacy hard-error path.  BP-623: transport errors also
+                    # qualify (the upstream is down — surface that, don't
+                    # collapse to a generic "all tools failed" error).
+                    if not _all_errored or _has_transport_error:
                         log.info(  # type: ignore[no-any-return]
                             "all_tools_returned_empty",
                             tool_count=len(tool_calls),
@@ -1400,12 +1455,31 @@ class ChatOrchestratorUseCase:
                             }
                         )
                         for _idx, tc in enumerate(tool_calls):
+                            # BP-623: if this tool transport-errored, render a
+                            # structured failure message so the LLM does NOT
+                            # treat it as an empty result.  The orchestrator
+                            # has already emitted the SSE tool_result with
+                            # status="transport_error" + reason; this is the
+                            # symmetric LLM-side payload.
+                            _te_for_tc = _transport_errors_by_call_id.get(id(tc))
+                            if _te_for_tc is not None:
+                                _content = (
+                                    f"(transport_error: {_te_for_tc.reason}"
+                                    + (
+                                        f" status_code={_te_for_tc.status_code}"
+                                        if _te_for_tc.status_code is not None
+                                        else ""
+                                    )
+                                    + f" elapsed_ms={_te_for_tc.elapsed_ms})"
+                                )
+                            else:
+                                _content = "(no matching rows returned)"
                             messages.append(
                                 {
                                     "role": "tool",
                                     "tool_call_id": _empty_ids[_idx],
                                     "name": tc.name,
-                                    "content": "(no matching rows returned)",
+                                    "content": _content,
                                 }
                             )
                         # F-LIVE-NEW-002: entity-anchored empty-result prompt.
@@ -1428,18 +1502,42 @@ class ChatOrchestratorUseCase:
                         # Use the first tool name as the "what was searched for"
                         # hint — the prompt already accepts a single string slot.
                         _tool_name_for_user = tool_calls[0].name if tool_calls else "data"
-                        messages.append(
-                            {
-                                "role": "user",
-                                "content": (
-                                    f"No {_tool_name_for_user} found for {_entity_anchor}. "
-                                    f"Respond accurately stating no data was found for THIS specific entity. "
-                                    f"Do NOT call more tools. "
-                                    f"Do NOT name any other entities or substitute a different company. "
-                                    f"Keep it under 3 sentences."
-                                ),
-                            }
-                        )
+                        # PLAN-0103 W2 BP-623: when transport errors are
+                        # involved, instruct the LLM to tell the user about
+                        # the outage rather than fabricate a "no data found"
+                        # answer.  Surface the (sanitised) reason codes so
+                        # the user can decide whether to retry.
+                        if _has_transport_error:
+                            _te_reasons = sorted({te.reason for te in _transport_errors_by_call_id.values()})
+                            _te_tools = sorted({tc.name for tc in tool_calls if id(tc) in _transport_errors_by_call_id})
+                            messages.append(
+                                {
+                                    "role": "user",
+                                    "content": (
+                                        f"One or more upstream data sources for {_entity_anchor} are "
+                                        f"unreachable right now: tools={_te_tools} reasons={_te_reasons}. "
+                                        f"Tell the user clearly that the data source is temporarily "
+                                        f"unreachable and suggest they retry in a minute. "
+                                        f"Do NOT say 'no data was found' — that would be misleading. "
+                                        f"Do NOT call more tools. "
+                                        f"Do NOT substitute facts from training data. "
+                                        f"Keep it under 3 sentences."
+                                    ),
+                                }
+                            )
+                        else:
+                            messages.append(
+                                {
+                                    "role": "user",
+                                    "content": (
+                                        f"No {_tool_name_for_user} found for {_entity_anchor}. "
+                                        f"Respond accurately stating no data was found for THIS specific entity. "
+                                        f"Do NOT call more tools. "
+                                        f"Do NOT name any other entities or substitute a different company. "
+                                        f"Keep it under 3 sentences."
+                                    ),
+                                }
+                            )
                         # Skip soft-budget bookkeeping for this iteration —
                         # the loop continues so the LLM can emit a final
                         # graceful answer.

@@ -331,8 +331,12 @@ class SSEEmitter:
     def emit_tool_result(
         self,
         tool_name: str,
-        status: str,  # "ok" | "error" | "empty"
+        status: str,  # "ok" | "error" | "empty" | "transport_error"
         item_count: int = 0,
+        *,
+        reason: str | None = None,
+        status_code: int | None = None,
+        elapsed_ms: int | None = None,
     ) -> dict[str, str]:
         """Emit a tool_result event after execution completes (PLAN-0066 Wave H T-W10-H-04).
 
@@ -340,23 +344,43 @@ class SSEEmitter:
         support a third "empty" state (tool executed but returned no items), and added
         ``item_count`` so the frontend can show "Found 5 results" inline.
 
+        Updated in PLAN-0103 W2 (BP-623): added ``"transport_error"`` status and
+        the optional ``reason`` / ``status_code`` / ``elapsed_ms`` fields so the
+        frontend (and chat-eval harness) can distinguish a downed upstream from
+        a legitimate empty result.  ``reason`` is one of
+        ``upstream_unreachable | upstream_timeout | upstream_5xx``; the frontend
+        can surface "I cannot reach <upstream> right now — please retry" rather
+        than the misleading "No data was found".
+
         WHY ALWAYS EMITTED: the frontend spinner opened by ``tool_call`` must always
         have a corresponding close signal. Emitting on both success and failure
         ensures the UI never hangs in a loading state.
 
         Args:
             tool_name:  Internal tool name matching the prior emit_tool_call.
-            status:     "ok" | "error" | "empty". "empty" = tool ran but returned 0 items.
-            item_count: Number of items returned by the tool (0 on error/empty).
+            status:     "ok" | "error" | "empty" | "transport_error".
+            item_count: Number of items returned by the tool (0 on error/empty/transport_error).
+            reason:     transport_error reason code (None for non-transport statuses).
+            status_code:upstream HTTP status (5xx only; None otherwise).
+            elapsed_ms: wall-clock ms spent on the failing call (transport_error only).
         """
+        payload: dict[str, object] = {
+            "type": "tool_result",
+            "tool": tool_name,
+            "status": status,
+            "item_count": item_count,
+        }
+        # Only attach the optional transport-error fields when populated so
+        # the legacy SSE shape stays byte-identical for non-error tool_results
+        # (frontend snapshot tests and the chat-eval harness both pattern-match
+        # on the existing 4-key payload).
+        if reason is not None:
+            payload["reason"] = reason
+        if status_code is not None:
+            payload["status_code"] = status_code
+        if elapsed_ms is not None:
+            payload["elapsed_ms"] = elapsed_ms
         return {
             "event": "tool_result",
-            "data": json.dumps(
-                {
-                    "type": "tool_result",
-                    "tool": tool_name,
-                    "status": status,
-                    "item_count": item_count,
-                }
-            ),
+            "data": json.dumps(payload),
         }

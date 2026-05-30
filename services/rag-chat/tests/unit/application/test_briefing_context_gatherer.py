@@ -962,4 +962,7 @@ def test_morning_prompt_v4_contains_required_sections() -> None:
     ):
         assert section_name in body, f"prompt missing required section: {section_name}"
     assert "implication" in body, "prompt no longer instructs the LLM to lead with the implication"
-    assert MORNING_BRIEFING.version == "4.0", MORNING_BRIEFING.version
+    # PLAN-0103 W2 (BP-623 sibling) bumped 4.0 → 4.1: cleanup release that
+    # removed the contradictory legacy ## LEAD / --- / ## DETAILS template
+    # while preserving the 6-section spec asserted above.
+    assert MORNING_BRIEFING.version == "4.1", MORNING_BRIEFING.version

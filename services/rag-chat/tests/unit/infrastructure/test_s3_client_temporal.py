@@ -156,32 +156,52 @@ async def test_s3_get_fundamentals_history_by_ticker(httpx_mock: pytest_httpx.HT
 
 
 @pytest.mark.asyncio
-async def test_s3_get_fundamentals_history_returns_empty_on_5xx(httpx_mock: pytest_httpx.HTTPXMock) -> None:
-    """HTTP 503 → empty list, no exception raised."""
+async def test_s3_get_fundamentals_history_raises_transport_error_on_5xx(
+    httpx_mock: pytest_httpx.HTTPXMock,
+) -> None:
+    """HTTP 503 → ``UpstreamTransportError(reason="upstream_5xx")``.
+
+    PLAN-0103 W2 BP-623: this is the EXACT real-user failure mode from the
+    2026-05-29 audit — market-data was down, returned 503, the legacy path
+    collapsed to ``[]`` in 16ms, and the LLM answered "No data was found".
+    The new contract raises so the orchestrator can surface a transport_error
+    SSE event + feed the LLM a structured "upstream unreachable" message.
+    """
+    from rag_chat.infrastructure.clients.base import UpstreamTransportError
+
     httpx_mock.add_response(status_code=503)
 
     client = S3Client(base_url=_BASE)
-    result = await client.get_fundamentals_history(ticker=_MSFT)
+    with pytest.raises(UpstreamTransportError) as exc_info:
+        await client.get_fundamentals_history(ticker=_MSFT)
+    assert exc_info.value.reason == "upstream_5xx"
+    assert exc_info.value.status_code == 503
 
-    assert result == []
 
-
-# ── T6: get_ohlcv_range returns [] on timeout ────────────────────────────────
+# ── T6: get_ohlcv_range raises on timeout (BP-623) ───────────────────────────
 
 
 @pytest.mark.asyncio
-async def test_s3_get_ohlcv_range_returns_empty_on_timeout(httpx_mock: pytest_httpx.HTTPXMock) -> None:
-    """Timeout → empty list, no exception raised."""
+async def test_s3_get_ohlcv_range_raises_transport_error_on_timeout(
+    httpx_mock: pytest_httpx.HTTPXMock,
+) -> None:
+    """Timeout → ``UpstreamTransportError(reason="upstream_timeout")``.
+
+    PLAN-0103 W2 BP-623: timeouts are transport-layer failures, not empty
+    results. The base client now raises so the LLM hears about the outage.
+    """
+    from rag_chat.infrastructure.clients.base import UpstreamTransportError
+
     httpx_mock.add_exception(httpx.TimeoutException("timed out"))
 
     client = S3Client(base_url=_BASE)
-    result = await client.get_ohlcv_range(
-        from_date=date(2024, 1, 1),
-        to_date=date(2024, 3, 31),
-        ticker=_TICKER,
-    )
-
-    assert result == []
+    with pytest.raises(UpstreamTransportError) as exc_info:
+        await client.get_ohlcv_range(
+            from_date=date(2024, 1, 1),
+            to_date=date(2024, 3, 31),
+            ticker=_TICKER,
+        )
+    assert exc_info.value.reason == "upstream_timeout"
 
 
 # ── T7: find_instrument_by_ticker uses /instruments/lookup?symbol= ────────────

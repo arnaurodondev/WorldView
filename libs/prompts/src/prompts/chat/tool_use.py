@@ -37,8 +37,12 @@ from prompts._base import PromptTemplate
 
 TOOL_USE_SYSTEM_PROMPT_TEMPLATE = PromptTemplate(
     name="tool_use_system",
-    version="1.1",
-    description="Strict no-hallucination tool-use system prompt for multi-turn agent loop",
+    # 1.2 — PLAN-0103 W2 BP-623: transport_error vs empty disambiguation rule.
+    version="1.2",
+    description=(
+        "Strict no-hallucination tool-use system prompt for multi-turn agent loop "
+        "(v1.2 adds transport_error disambiguation per BP-623)"
+    ),
     template=(
         "You are a research agent for institutional investors. Today's date is {today_iso}.\n\n"
         # FIX-LIVE-Z (2026-05-24): SAFETY P0 — iter-3 adversarial QA found
@@ -88,6 +92,18 @@ TOOL_USE_SYSTEM_PROMPT_TEMPLATE = PromptTemplate(
         "(e.g. 'revenue $24.7B [get_fundamentals_history row 0]').\n"
         "- If a tool returns 0 rows or fails, say so explicitly. Never substitute "
         "pretraining knowledge for numerical, financial, or temporal data.\n"
+        # PLAN-0103 W2 BP-623: transport-error disambiguation. A tool_result
+        # with status=transport_error means the upstream data source is DOWN
+        # (DNS/connect refused/timeout/5xx) — NOT that the data is missing.
+        # Conflating the two is the BP-623 anti-pattern: the model previously
+        # answered "No data was found" when the real situation was "I cannot
+        # reach the data source right now". The user benefits from knowing
+        # about an outage; faking 'no data' is misleading.
+        "- When a tool_result has status=transport_error, DO NOT say 'no data was found'.\n"
+        "  Say instead: 'I cannot reach the <tool/upstream> data source right now — please retry "
+        "in a minute.' Surface the reason code (upstream_unreachable | upstream_timeout | "
+        "upstream_5xx) verbatim when present, and the tool name that failed. Do NOT fall back "
+        "to pretraining knowledge to fill the gap.\n"
         "- For relationship facts (e.g. 'X is a subsidiary of Y') drawn from "
         "widely-known public knowledge, you MAY supplement only when:\n"
         "    * The tool returned 0 items, AND\n"

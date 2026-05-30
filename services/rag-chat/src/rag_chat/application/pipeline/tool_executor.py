@@ -24,6 +24,8 @@ from uuid import UUID
 
 import structlog
 
+from rag_chat.infrastructure.clients.base import UpstreamTransportError
+
 from .handlers.alerts import AlertsHandler
 from .handlers.intelligence import IntelligenceHandler
 from .handlers.market import MarketHandler
@@ -35,6 +37,7 @@ from .tool_registry_builder import (  # re-exported for callers
     build_default_registry,
     validate_registry_parity,
 )
+from .transport_error import TransportErrorMarker
 
 if TYPE_CHECKING:
     from tools.tool_registry import ToolRegistry  # type: ignore[import-untyped,import-not-found]
@@ -235,7 +238,9 @@ class ToolExecutor:
     async def _handle_get_morning_brief(self, tool_call: ToolUseBlock) -> Any:
         return await self._get_news_handler()._handle_get_morning_brief(tool_call)
 
-    async def execute(self, tool_call: ToolUseBlock) -> RetrievedItem | list[RetrievedItem] | None:
+    async def execute(
+        self, tool_call: ToolUseBlock
+    ) -> RetrievedItem | list[RetrievedItem] | TransportErrorMarker | None:
         """Dispatch a single tool call to the owning domain handler.
 
         FIX-LIVE-E (2026-05-24): exceptions are CLASSIFIED before being swallowed.
@@ -247,6 +252,13 @@ class ToolExecutor:
         ``exception_type`` and ``exception_repr`` for debugging.  We still
         return None so the orchestrator's fallback chain can take over, but the
         structured log now lets us debug arg-shape mismatches without re-running.
+
+        PLAN-0103 W2 (BP-623): ``UpstreamTransportError`` (a BaseException, not
+        Exception — so per-handler ``except Exception: return []`` guards do
+        NOT swallow it) is caught here and converted into a
+        ``TransportErrorMarker`` so the orchestrator can render
+        ``status="transport_error"`` instead of conflating an outage with an
+        empty result.
         """
         if self._registry.get_spec(tool_call.name) is None:
             log.warning("unknown_tool_name", name=tool_call.name)
@@ -262,6 +274,28 @@ class ToolExecutor:
                     return result  # type: ignore[no-any-return]
             log.warning("unknown_tool_name", name=tool_call.name)
             return None
+        except UpstreamTransportError as exc:
+            # BP-623: upstream is unreachable / timing out / 5xx-erroring.
+            # Surface as a typed marker so the orchestrator can emit
+            # status="transport_error" and feed the LLM a structured tool
+            # message instead of an empty list (which would be rendered as
+            # "no data was found").
+            ms = round((time.monotonic() - t0) * 1000)
+            log.warning(
+                "tool_transport_error",
+                tool=tool_call.name,
+                reason=exc.reason,
+                status_code=exc.status_code,
+                elapsed_ms=ms,
+                path=exc.path,
+            )
+            return TransportErrorMarker(
+                tool_name=tool_call.name,
+                reason=exc.reason,
+                elapsed_ms=ms,
+                status_code=exc.status_code,
+                path=exc.path,
+            )
         except (TypeError, AttributeError) as exc:
             # Arg-shape mismatch (e.g. fallback passed keys the handler doesn't accept).
             # Distinct event tag so dashboards/log queries can isolate this class.
@@ -282,7 +316,9 @@ class ToolExecutor:
             )
             return None
 
-    async def execute_all(self, tool_calls: list[ToolUseBlock]) -> list[RetrievedItem | list[RetrievedItem] | None]:
+    async def execute_all(
+        self, tool_calls: list[ToolUseBlock]
+    ) -> list[RetrievedItem | list[RetrievedItem] | TransportErrorMarker | None]:
         """Execute up to _MAX_CONCURRENT_TOOLS calls concurrently via asyncio.gather.
 
         Per-tool wall-clock latencies are stored in ``last_per_tool_latencies_s``
@@ -302,12 +338,14 @@ class ToolExecutor:
             )
         capped = tool_calls[:_MAX_CONCURRENT_TOOLS]
 
-        async def _timed_execute(tc: ToolUseBlock) -> tuple[RetrievedItem | list[RetrievedItem] | None, float]:
+        async def _timed_execute(
+            tc: ToolUseBlock,
+        ) -> tuple[RetrievedItem | list[RetrievedItem] | TransportErrorMarker | None, float]:
             _t0 = time.monotonic()
             result = await self.execute(tc)
             return result, time.monotonic() - _t0
 
-        pairs: list[tuple[RetrievedItem | list[RetrievedItem] | None, float]] = list(
+        pairs: list[tuple[RetrievedItem | list[RetrievedItem] | TransportErrorMarker | None, float]] = list(
             await asyncio.gather(*[_timed_execute(tc) for tc in capped])
         )
         results, latencies = zip(*pairs, strict=False) if pairs else ([], [])
@@ -328,6 +366,7 @@ __all__ = [
     "ToolExecutorFactory",
     "ToolRegistryDriftError",
     "ToolUseBlock",
+    "TransportErrorMarker",
     "build_default_registry",
     "validate_registry_parity",
 ]

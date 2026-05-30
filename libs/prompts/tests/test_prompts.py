@@ -63,14 +63,22 @@ class TestMorningBriefing:
         )
         assert "Never speculate beyond the evidence provided" in result
 
-    def test_v22_two_tier_format(self) -> None:
-        """Prompt must instruct the LLM to emit a LEAD block + --- + DETAILS block.
+    def test_v41_six_section_spec(self) -> None:
+        """Prompt must instruct the LLM to emit the v4.1 six-section investor brief.
 
-        PLAN-0048 Wave A originally checked for ## SUMMARY + ## DETAILS (v2.2).
-        PLAN-0062-W4 bumped to v3.0: ## SUMMARY was renamed ## LEAD to align with
-        the new citation-first architecture. The `---` divider contract is unchanged.
-        WHY update (not delete): R19 — fix tests in place; the underlying invariant
-        (two-block structure separated by ---) still holds.
+        VERSION HISTORY (test):
+          - PLAN-0048 Wave A (v2.2): ## SUMMARY + --- + ## DETAILS.
+          - PLAN-0062-W4 (v3.0): ## SUMMARY renamed to ## LEAD, divider unchanged.
+          - PLAN-0102 W1 (v4.0): added 6-section spec ABOVE the legacy LEAD/DETAILS
+            template — the two contradicted each other; live brief followed the 6-
+            section spec but the LLM was given conflicting instructions.
+          - PLAN-0103 W2 (v4.1): DELETED the legacy LEAD/DETAILS template and the
+            "max 4 sections, max 4 bullets" caps. The 6-section spec is now the
+            single source of truth. Brief parser degrades gracefully when the
+            `---` divider is absent (returns full content as the narrative).
+
+        WHY update (not delete): R19 — the prompt is still mandating a structural
+        contract, only its shape has changed. We assert the new contract.
         """
         result = MORNING_BRIEFING.render(
             portfolio_context="",
@@ -81,16 +89,27 @@ class TestMorningBriefing:
             safety=SAFETY_FOOTER,
             current_date="2026-04-26",
         )
-        # v3.0 uses ## LEAD (not ## SUMMARY) — the two-block + divider contract holds.
-        # v4.0 (PLAN-0102 W1) keeps the same output-format block while adding the
-        # 6-section "5-minute investor brief" spec above it.
-        assert "## LEAD" in result
-        assert "## DETAILS" in result
-        assert "literal `---` divider" in result
+        # v4.1 — the 6 named sections in the exact spec order.
+        assert "**Tape**" in result
+        assert "**Your Portfolio Today**" in result
+        assert "**Macro Today**" in result
+        assert "**News That Matters To You**" in result
+        assert "**Risks + Opportunities**" in result
+        assert "**Bonus context**" in result
+        # The 250-word cap must still be enforced verbatim.
+        assert "Cap total at 250 words" in result
+        # Citations must use [N#] form; the legacy [c1] form is gone in v4.1.
+        assert "[N1]" in result and "[N2]" in result
+        # v4.1 deletions: the legacy LEAD/DETAILS template + 4/4 caps must be gone.
+        # Negative assertions guard against accidental v4.0 regression.
+        assert "## LEAD" not in result, "v4.1 must not re-introduce the legacy ## LEAD block"
+        assert "## DETAILS" not in result, "v4.1 must not re-introduce the legacy ## DETAILS block"
+        assert "Maximum 4 sections" not in result, "v4.1 deleted the 4-section cap"
+        assert "literal `---` divider" not in result, "v4.1 deleted the divider mandate"
         # Must still forbid the redundant Morning Briefing header in the body.
         assert "Morning Briefing" in result  # appears in the forbid clause
-        # Version constant must reflect the v4.0 bump (PLAN-0102 W1 T-W1-05).
-        assert MORNING_BRIEFING.version == "4.0"
+        # Version constant must reflect the v4.1 cleanup release (PLAN-0103 W2).
+        assert MORNING_BRIEFING.version == "4.1"
 
 
 class TestInstrumentBriefing:

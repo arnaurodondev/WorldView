@@ -931,8 +931,24 @@ on retry. Returns 409 on replay. Single-instance only — move to Valkey for mul
 ## Morning Brief — 5-Minute Investor Brief Structure (PLAN-0102 W1)
 
 The morning brief is structured as a 5-minute investor summary, NOT a news
-aggregator. The prompt at `libs/prompts/src/prompts/briefing/morning.py` (v4.0)
-instructs the LLM to emit six named sections in this exact order:
+aggregator. The prompt at `libs/prompts/src/prompts/briefing/morning.py` (v4.1)
+instructs the LLM to emit six named sections in this exact order.
+
+> **v4.1 cleanup release (PLAN-0103 W2, 2026-05-29)**: v4.0 carried TWO
+> incompatible rubrics — the 6-section investor brief at the top AND the
+> legacy v3.0 `## LEAD / --- / ## DETAILS` "STRICT" template (with "Maximum
+> 4 sections, maximum 4 bullets") at the bottom. The lower block
+> contradicted the upper spec on every axis (number of sections, section
+> names, bullet caps, block structure). The live brief happened to follow
+> the upper rubric, but the LLM was given conflicting instructions. v4.1
+> deletes the legacy LEAD/DETAILS template and the 4/4 caps; citation rules
+> moved to a single MANDATORY block; format rules collapsed to one bullet
+> list (≤250 words, markdown headers, `**Section Name**` headings). The
+> brief parser already degrades gracefully when the `---` divider is absent
+> (`brief_parser.split_summary_and_details` returns `(None, full_content)`)
+> so removing the divider does not break frontend rendering.
+> Audit: `docs/audits/2026-05-29-plan-0102-phase-d-code-review.md` §1.
+> Marker form migrated `[c1]` → `[N1]` (instrument brief still uses `[c1]`).
 
 | Section | Read time | What it answers | Source data |
 |---------|-----------|-----------------|-------------|
