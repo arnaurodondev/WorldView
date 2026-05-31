@@ -687,3 +687,103 @@ class TestFixLiveVMidLoopRecovery:
         assert (
             "llm_second_turn_failed" in error_codes
         ), f"Empty-partial stream_chat failure must still emit hard error; got {error_codes!r}"
+
+    def test_stream_chat_transient_429_retries_once_and_recovers(self) -> None:
+        """PLAN-0103 W15 / BP-634: a single transient 429 on the second-turn
+        stream_chat is retried once with backoff; if the retry succeeds the
+        user sees the recovered answer instead of llm_second_turn_failed.
+
+        The bug: Q4 (compare NVDA/AMD) intermittently failed because the
+        only-active provider in the chain (DeepInfra) returned 429 — the
+        fallback chain has no peer provider, so a single transient burned
+        the entire answer. The fix is to retry exactly once when no tokens
+        have been yielded yet and the error signature is transient.
+        """
+        from rag_chat.application.use_cases.chat_orchestrator import ChatOrchestratorUseCase
+
+        tool_block = _make_tool_use_block("search_documents", {"query": "compare nvda amd"})
+        iter0 = _make_llm_tool_response(tool_calls=[tool_block])
+        iter1 = _make_llm_tool_response(text="")  # forces final stream_chat
+        pipeline = _make_pipeline(first_llm_response=iter0)
+        pipeline.llm_chain.chat_with_tools = AsyncMock(side_effect=[iter0, iter1])
+
+        # First call raises a 429-shaped transient; second call streams normally.
+        recovered_chunk = "NVDA Q1 revenue 26B vs AMD 5.5B (10x). Gross margin 73% vs 53%."
+        call_count = {"n": 0}
+
+        async def _flaky_stream(messages: list, **kwargs: Any):
+            call_count["n"] += 1
+            if call_count["n"] == 1:
+                if False:  # pragma: no cover — empty-gen-with-raise idiom
+                    yield ""
+                raise RuntimeError("All LLM providers failed stream_chat (last error: 429 Too Many Requests)")
+            yield recovered_chunk
+
+        pipeline.llm_chain.stream_chat = _flaky_stream
+
+        recovered_item = _make_retrieved_item("Compare payload.")
+        factory = _make_factory_with_execute_side_effect(
+            execute_all_return=[[recovered_item]],
+            execute_side_effects=[],
+        )
+
+        orch = ChatOrchestratorUseCase(pipeline=pipeline, tool_executor_factory=factory)
+        request = _make_chat_request()
+        uow = MagicMock()
+
+        events = asyncio.run(_collect_events(orch, request, uow))
+
+        # Retry happened exactly once → 2 invocations total.
+        assert call_count["n"] == 2, f"expected 2 stream_chat attempts, got {call_count['n']}"
+        # No hard error surfaced.
+        error_codes = [json.loads(e["data"]).get("code") for e in events if e.get("event") == "error"]
+        assert (
+            "llm_second_turn_failed" not in error_codes
+        ), f"transient 429 must be retried+recovered; got {error_codes!r}"
+        # User received the recovered answer tokens.
+        token_texts = [json.loads(e["data"]).get("text", "") for e in events if e.get("event") == "token"]
+        assert any(
+            recovered_chunk in t for t in token_texts
+        ), f"recovered chunk must reach SSE token stream; got {token_texts!r}"
+
+    def test_stream_chat_non_transient_error_does_not_retry(self) -> None:
+        """PLAN-0103 W15: validation/programming errors are NOT retried — only
+        transient signatures (429/5xx/timeout/'All LLM providers failed') get
+        the second attempt. This guards against doubling latency on bugs that
+        will never recover (e.g. malformed messages payload)."""
+        from rag_chat.application.use_cases.chat_orchestrator import ChatOrchestratorUseCase
+
+        tool_block = _make_tool_use_block("search_documents", {"query": "x"})
+        iter0 = _make_llm_tool_response(tool_calls=[tool_block])
+        iter1 = _make_llm_tool_response(text="")
+        pipeline = _make_pipeline(first_llm_response=iter0)
+        pipeline.llm_chain.chat_with_tools = AsyncMock(side_effect=[iter0, iter1])
+
+        call_count = {"n": 0}
+
+        async def _hard_raise(messages: list, **kwargs: Any):
+            call_count["n"] += 1
+            if False:  # pragma: no cover
+                yield ""
+            raise ValueError("messages payload missing required field")
+
+        pipeline.llm_chain.stream_chat = _hard_raise
+
+        recovered_item = _make_retrieved_item("Payload.")
+        factory = _make_factory_with_execute_side_effect(
+            execute_all_return=[[recovered_item]],
+            execute_side_effects=[],
+        )
+
+        orch = ChatOrchestratorUseCase(pipeline=pipeline, tool_executor_factory=factory)
+        request = _make_chat_request()
+        uow = MagicMock()
+
+        events = asyncio.run(_collect_events(orch, request, uow))
+
+        # Exactly ONE attempt — non-transient errors short-circuit immediately.
+        assert call_count["n"] == 1, f"non-transient error must NOT retry; got {call_count['n']} attempts"
+        error_codes = [json.loads(e["data"]).get("code") for e in events if e.get("event") == "error"]
+        assert (
+            "llm_second_turn_failed" in error_codes
+        ), f"non-transient failure with no partial must emit hard error; got {error_codes!r}"

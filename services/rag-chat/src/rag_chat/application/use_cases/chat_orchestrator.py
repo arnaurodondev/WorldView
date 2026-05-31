@@ -1791,16 +1791,70 @@ class ChatOrchestratorUseCase:
             # bracket around it.  Manual record (instead of ``async with
             # phase``) so the existing except/finally branches are untouched.
             _synthesis_t0 = time.monotonic()
+            # PLAN-0103 W15 / BP-634: transient-error retry for the second-turn
+            # stream_chat. Live Q4 (compare NVDA/AMD) intermittently failed
+            # with ``llm_second_turn_failed`` whose actual cause was a
+            # DeepInfra 429 ("All LLM providers failed stream_chat") on the
+            # primary AND only-active provider in the chain — the fallback
+            # never triggers because all retries hit the same upstream
+            # rate-limit window. The previous code path had no retry: a single
+            # 429 burned the user-visible answer to an empty string.
+            #
+            # Strategy: attempt the stream once; if it raises BEFORE any token
+            # is yielded AND the error signature is transient (429/5xx /
+            # "All LLM providers failed" / timeout), back off ~750 ms and
+            # retry exactly once. Mid-stream failures still fall through to
+            # the existing partial-content recovery (FIX-LIVE-V) so we do not
+            # double-stream tokens. Two attempts max keeps end-to-end latency
+            # bounded (~1.5 s extra worst case).
+            _stream_attempts = 0
+            _last_exc: Exception | None = None
             try:
-                async for chunk in p.llm_chain.stream_chat(
-                    messages,
-                    max_tokens=budget.max_tokens_final,
-                    temperature=0.1,
-                ):
-                    full_text += chunk
-                    if chunk:
-                        yield p.emitter.emit_token(chunk)
-            except Exception as exc:
+                while _stream_attempts < 2:
+                    _stream_attempts += 1
+                    try:
+                        async for chunk in p.llm_chain.stream_chat(
+                            messages,
+                            max_tokens=budget.max_tokens_final,
+                            temperature=0.1,
+                        ):
+                            full_text += chunk
+                            if chunk:
+                                yield p.emitter.emit_token(chunk)
+                        _last_exc = None
+                        break  # success — exit the retry loop
+                    except Exception as inner_exc:
+                        _last_exc = inner_exc
+                        # If we already streamed substantive tokens, do NOT
+                        # retry (we would emit duplicates). Re-raise into the
+                        # outer except for partial-recovery handling.
+                        if len(full_text) > 0:
+                            raise
+                        # Only retry on transient signatures. Anything else
+                        # (e.g. validation errors) propagates immediately.
+                        _msg = str(inner_exc).lower()
+                        _is_transient = (
+                            "429" in _msg
+                            or "too many requests" in _msg
+                            or "all llm providers failed" in _msg
+                            or "timeout" in _msg
+                            or "503" in _msg
+                            or "502" in _msg
+                            or "504" in _msg
+                        )
+                        if not _is_transient or _stream_attempts >= 2:
+                            raise
+                        log.warning(  # type: ignore[no-any-return]
+                            "tool_use_second_turn_transient_retry",
+                            error=str(inner_exc),
+                            error_type=type(inner_exc).__name__,
+                            attempt=_stream_attempts,
+                        )
+                        await asyncio.sleep(0.75)
+            except Exception as exc:  # — re-classified below
+                # Preserve original exc chain for telemetry below.
+                if _last_exc is None:
+                    _last_exc = exc
                 # FIX-LIVE-V (2026-05-25): stream_chat partial-content recovery.
                 # The OpenAI SSE stream can break MID-STREAM (connection
                 # reset, DeepInfra/Llama 5xx after first chunks, JSON parse
