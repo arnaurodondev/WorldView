@@ -47,3 +47,28 @@ fundamentals_consumer_processing_ms = Histogram(
         120_000.0,
     ),
 )
+
+
+# ── Tape endpoint — per-symbol data source visibility ────────────────────────
+# PLAN-0103 W7 / BP-628: the tape endpoint serves the morning brief; when its
+# per-symbol fallback chain (intraday quote → intraday 5m bar → prior-close
+# 1d bar → unavailable) silently degrades to "unavailable", the brief drops
+# the Tape section. This counter exposes WHICH tier served each symbol so
+# the operator can see the gap (e.g. VIX permanently on "unavailable",
+# all symbols on "prior_close" overnight) without grepping logs.
+#
+# Labels:
+#   symbol  — uppercased ticker
+#   source  — intraday | prior_close | unavailable
+#
+# Dashboard query: sum by (symbol, source) (rate(
+#     tape_symbol_data_source_total[5m]
+# ))
+#
+# Alert: ``unavailable`` rate > 10% sustained for the morning briefing window
+# means we have a real ingestion gap for that symbol (vs a transient miss).
+tape_symbol_data_source = Counter(
+    "tape_symbol_data_source_total",
+    "Which fallback tier served each tape symbol (intraday/prior_close/unavailable).",
+    labelnames=("symbol", "source"),
+)

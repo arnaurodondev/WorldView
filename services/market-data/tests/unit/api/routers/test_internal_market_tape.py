@@ -198,3 +198,136 @@ def test_missing_jwt_returns_401(monkeypatch: pytest.MonkeyPatch) -> None:
     _, client = _make_app(bypass_jwt=False)
     resp = client.get("/internal/v1/market/tape?symbols=SPY")
     assert resp.status_code == 401
+
+
+# ── Two-tier fallback (PLAN-0103 W7 / BP-628) ───────────────────────────────
+
+
+def test_prior_close_fallback_when_no_intraday(monkeypatch: pytest.MonkeyPatch) -> None:
+    """No intraday data but a recent daily bar → session="prior_close".
+
+    Regression for FQA-02: the live brief was showing "Not available" for
+    SPY/QQQ/VIX whenever the request landed outside the 12 h intraday
+    window even though OHLCV daily bars were present. The resolver now
+    falls back to ``last_close`` and labels the row ``prior_close`` so the
+    brief renderer can show "SPY 521.40 (prior close)" rather than dropping
+    the Tape section.
+    """
+    _patch_resolver(
+        monkeypatch,
+        {
+            "SPY": {
+                "last_close": 521.40,
+                "premkt_price": 521.40,
+                "premkt_pct": 0.55,
+                "session": "prior_close",
+            },
+        },
+    )
+    _, client = _make_app()
+    resp = client.get("/internal/v1/market/tape?symbols=SPY")
+    assert resp.status_code == 200
+    body = resp.json()
+    row = body["tickers"][0]
+    assert row["symbol"] == "SPY"
+    assert row["session"] == "prior_close"
+    assert row["last_close"] == 521.40
+    # When session=prior_close, premkt_price MUST be a real number so the
+    # brief never renders "Not available" for symbols with OHLCV data.
+    assert row["premkt_price"] is not None
+    assert row["session"] != "unavailable"
+
+
+def test_resolve_one_uses_prior_close_when_intraday_missing(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Direct unit test on ``_resolve_one``: two daily bars + no intraday → prior_close.
+
+    Builds an in-memory fake session that returns:
+      * a known instrument_id for symbol="SPY"
+      * two daily bars (latest 521.40, prior 518.55) → day-over-day = +0.55%
+      * empty intraday + empty quote
+
+    The function must return ``session="prior_close"``, ``last_close=521.40``,
+    ``premkt_price=521.40``, ``premkt_pct ≈ 0.55``.
+    """
+    from datetime import UTC, datetime
+    from decimal import Decimal
+    from unittest.mock import AsyncMock, MagicMock
+
+    # Fake instrument_id resolution: scalar_one_or_none()
+    instrument_result = MagicMock()
+    instrument_result.scalar_one_or_none = MagicMock(return_value="instr-1")
+
+    # Fake daily-bars query: .all() returns two rows, each a tuple-like (close,)
+    daily_row_1 = MagicMock()
+    daily_row_1.__getitem__ = lambda self, i: (Decimal("521.40"),)[i]
+    daily_row_2 = MagicMock()
+    daily_row_2.__getitem__ = lambda self, i: (Decimal("518.55"),)[i]
+    daily_result = MagicMock()
+    daily_result.all = MagicMock(return_value=[daily_row_1, daily_row_2])
+
+    # Fake intraday query: .first() returns None (no intraday bar).
+    intraday_result = MagicMock()
+    intraday_result.first = MagicMock(return_value=None)
+
+    # Fake quote query: .first() returns None (no quote row).
+    quote_result = MagicMock()
+    quote_result.first = MagicMock(return_value=None)
+
+    call_results = [instrument_result, daily_result, intraday_result, quote_result]
+
+    session = MagicMock()
+    session.execute = AsyncMock(side_effect=call_results)
+
+    import asyncio
+
+    out = asyncio.run(
+        internal_market_tape._resolve_one(
+            session,
+            "SPY",
+            datetime(2026, 5, 30, 6, 0, tzinfo=UTC),
+            "pre-mkt",
+        )
+    )
+
+    assert out.session == "prior_close"
+    assert out.last_close == 521.40
+    assert out.premkt_price == 521.40
+    assert out.premkt_pct is not None
+    # (521.40 - 518.55) / 518.55 * 100 ≈ 0.5496…
+    assert abs(out.premkt_pct - 0.5496) < 0.01
+
+
+def test_resolve_one_unavailable_when_no_daily(monkeypatch: pytest.MonkeyPatch) -> None:
+    """No intraday AND no daily bars → session="unavailable" (true gap).
+
+    This is the only case where the brief should drop the row.
+    """
+    from datetime import UTC, datetime
+    from unittest.mock import AsyncMock, MagicMock
+
+    instrument_result = MagicMock()
+    instrument_result.scalar_one_or_none = MagicMock(return_value="instr-1")
+    # Empty daily-bars list.
+    daily_result = MagicMock()
+    daily_result.all = MagicMock(return_value=[])
+    intraday_result = MagicMock()
+    intraday_result.first = MagicMock(return_value=None)
+    quote_result = MagicMock()
+    quote_result.first = MagicMock(return_value=None)
+
+    session = MagicMock()
+    session.execute = AsyncMock(side_effect=[instrument_result, daily_result, intraday_result, quote_result])
+
+    import asyncio
+
+    out = asyncio.run(
+        internal_market_tape._resolve_one(
+            session,
+            "ZZZ",
+            datetime(2026, 5, 30, 6, 0, tzinfo=UTC),
+            "pre-mkt",
+        )
+    )
+    assert out.session == "unavailable"
+    assert out.last_close is None
+    assert out.premkt_price is None

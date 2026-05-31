@@ -59,6 +59,7 @@ from pydantic import BaseModel
 
 from market_data.api.dependencies import require_internal_jwt
 from market_data.domain.enums import Timeframe
+from market_data.infrastructure.metrics.prometheus import tape_symbol_data_source
 from observability.logging import get_logger  # type: ignore[import-untyped]
 
 logger = get_logger(__name__)  # type: ignore[no-any-return]
@@ -103,7 +104,12 @@ class TapeTickerResponse(BaseModel):
     last_close: float | None
     premkt_price: float | None
     premkt_pct: float | None
-    session: str  # "pre-mkt" | "open" | "after-hours" | "closed" | "unavailable"
+    # PLAN-0103 W7 added the ``"prior_close"`` sentinel: when no intraday data
+    # exists but we have at least one OHLCV daily bar we fall back to the
+    # last close as the "current" level and report day-over-day change from
+    # the previous close. The brief renders this as "SPY 521.40 (prior
+    # close)" instead of dropping the Tape section entirely.
+    session: str  # "pre-mkt" | "open" | "after-hours" | "closed" | "prior_close" | "unavailable"
 
 
 class TapeResponse(BaseModel):
@@ -169,6 +175,7 @@ async def _resolve_one(
         instrument_id = result.scalar_one_or_none()
         if instrument_id is None:
             logger.info("market_tape_symbol_unknown", symbol=symbol)
+            tape_symbol_data_source.labels(symbol=symbol.upper(), source="unavailable").inc()
             return TapeTickerResponse(
                 symbol=symbol.upper(),
                 last_close=None,
@@ -177,8 +184,12 @@ async def _resolve_one(
                 session="unavailable",
             )
 
-        # 2. Latest 1d close (look back N days for weekends/holidays).
-        # bar_date is a tz-aware DateTime — pass a datetime, not a date.
+        # 2. Latest two 1d closes (look back N days for weekends/holidays).
+        # We pull TWO bars so the prior-close fallback below can compute a
+        # day-over-day delta when no intraday data is available — without the
+        # second bar we'd have to return ``premkt_pct=None`` even though we
+        # know the day's change. ``bar_date`` is a tz-aware DateTime so we
+        # pass a datetime, not a date.
         daily_start = now - timedelta(days=_DAILY_LOOKBACK_DAYS)
         daily_stmt = (
             select(OHLCVBarModel.close)
@@ -188,10 +199,11 @@ async def _resolve_one(
                 OHLCVBarModel.bar_date >= daily_start,
             )
             .order_by(OHLCVBarModel.bar_date.desc())
-            .limit(1)
+            .limit(2)
         )
-        last_close_dec = (await session.execute(daily_stmt)).scalar_one_or_none()
-        last_close = float(last_close_dec) if last_close_dec is not None else None
+        daily_rows = (await session.execute(daily_stmt)).all()
+        last_close = float(daily_rows[0][0]) if daily_rows and daily_rows[0][0] is not None else None
+        prev_close = float(daily_rows[1][0]) if len(daily_rows) > 1 and daily_rows[1][0] is not None else None
 
         # 3. Latest 5m intraday close (covers pre-mkt + overnight futures
         #    bars if we ingest them; falls through to Quote.last otherwise).
@@ -228,29 +240,51 @@ async def _resolve_one(
         # 5. Pick the best premkt_price: intraday bar first, then fresh quote.
         premkt_price = intraday_price if intraday_price is not None else quote_price
 
-        if premkt_price is None or last_close is None or last_close == 0:
-            # We have *something* but cannot compute a delta — return what we
-            # know with an "unavailable" session tag so the brief skips it.
+        # 6. Two-tier fallback. The brief MUST get a usable level whenever we
+        #    have any daily data; "unavailable" is reserved for true gaps
+        #    (no OHLCV row at all, e.g. indices we don't model intraday).
+        if premkt_price is not None and last_close is not None and last_close != 0:
+            # Tier 1 — fresh intraday data. Compute delta vs. last close.
+            premkt_pct = (premkt_price - last_close) / last_close * 100.0
+            tape_symbol_data_source.labels(symbol=symbol.upper(), source="intraday").inc()
             return TapeTickerResponse(
                 symbol=symbol.upper(),
-                last_close=last_close,
-                premkt_price=premkt_price,
-                premkt_pct=None,
-                session="unavailable",
+                last_close=round(last_close, 4),
+                premkt_price=round(premkt_price, 4),
+                premkt_pct=round(premkt_pct, 4),
+                session=session_label,
             )
-
-        premkt_pct = (premkt_price - last_close) / last_close * 100.0
+        if last_close is not None:
+            # Tier 2 — prior close. No fresh intraday, but we have the last
+            # daily bar. Report ``premkt_price = last_close`` so callers can
+            # still render a level; pct is day-over-day if we have a prior
+            # bar, otherwise None. ``session="prior_close"`` is the contract
+            # the brief renderer keys on.
+            prior_pct: float | None = None
+            if prev_close is not None and prev_close != 0:
+                prior_pct = (last_close - prev_close) / prev_close * 100.0
+            tape_symbol_data_source.labels(symbol=symbol.upper(), source="prior_close").inc()
+            return TapeTickerResponse(
+                symbol=symbol.upper(),
+                last_close=round(last_close, 4),
+                premkt_price=round(last_close, 4),
+                premkt_pct=round(prior_pct, 4) if prior_pct is not None else None,
+                session="prior_close",
+            )
+        # Tier 3 — true gap. No intraday, no daily. Brief skips the row.
+        tape_symbol_data_source.labels(symbol=symbol.upper(), source="unavailable").inc()
         return TapeTickerResponse(
             symbol=symbol.upper(),
-            last_close=round(last_close, 4),
-            premkt_price=round(premkt_price, 4),
-            premkt_pct=round(premkt_pct, 4),
-            session=session_label,
+            last_close=None,
+            premkt_price=None,
+            premkt_pct=None,
+            session="unavailable",
         )
     except Exception as exc:
         # Per-symbol fail-open. We log at warning since this is a known
         # graceful-degradation path, not an unexpected failure mode.
         logger.warning("market_tape_symbol_error", symbol=symbol, error=str(exc))
+        tape_symbol_data_source.labels(symbol=symbol.upper(), source="unavailable").inc()
         return TapeTickerResponse(
             symbol=symbol.upper(),
             last_close=None,
