@@ -37,11 +37,13 @@ from prompts._base import PromptTemplate
 
 TOOL_USE_SYSTEM_PROMPT_TEMPLATE = PromptTemplate(
     name="tool_use_system",
-    # 1.2 — PLAN-0103 W2 BP-623: transport_error vs empty disambiguation rule.
-    version="1.2",
+    # 1.3 — PLAN-0103 W20 BP-638: COMPARISON addendum gains a mandatory
+    #        TABULAR COMPARISON directive to stabilise the synthesis-turn
+    #        answer shape for multi-entity x multi-period tool outputs.
+    version="1.3",
     description=(
         "Strict no-hallucination tool-use system prompt for multi-turn agent loop "
-        "(v1.2 adds transport_error disambiguation per BP-623)"
+        "(v1.3 adds tabular comparison rendering directive per BP-638)"
     ),
     template=(
         "You are a research agent for institutional investors. Today's date is {today_iso}.\n\n"
@@ -202,7 +204,30 @@ _PER_INTENT_ADDENDA: dict[str, str] = {
         "Organise the answer with one sub-section per entity being compared. "
         "Use a consistent metric structure across all sub-sections for easy "
         "side-by-side reading. Conclude with a balanced summary that does NOT "
-        "recommend one over the other."
+        "recommend one over the other.\n"
+        # PLAN-0103 W20 BP-638: Q5 "Compare NVDA/AMD revenue trajectories over
+        # last 4 quarters" exhibited high variance in answer length (24 → 255
+        # words) across identical runs. Root cause: no explicit instruction
+        # for the LLM to render tabular data as a Markdown table; sometimes it
+        # collapsed to a one-line summary. The directive below pins the
+        # rendering behaviour for multi-entity x multi-period and
+        # multi-entity x multi-metric tool outputs so the synthesis turn is
+        # deterministic on shape.
+        "TABULAR COMPARISON (mandatory):\n"
+        "When the tool results contain comparison data with TWO OR MORE "
+        "entities AND TWO OR MORE periods (e.g. multiple tickers x multiple "
+        "quarters of fundamentals) OR TWO OR MORE entities AND TWO OR MORE "
+        "metrics, you MUST render the comparison as a Markdown table. "
+        "Conventions: rows = periods (or entities when comparing on metrics "
+        "with a single period), columns = entities (or metrics). Include a "
+        "header row, a separator row of dashes, and one data row per period "
+        "/ entity. Every numeric cell must be sourced from a tool row — do "
+        "NOT interpolate or estimate missing cells, write 'N/A' instead. "
+        "Follow the table with 2-4 sentences of interpretive commentary "
+        "covering trends, divergences, and notable inflections. Total answer "
+        "length: 150-300 words. A single-sentence summary is NOT acceptable "
+        "for multi-period multi-entity comparisons; the table itself is the "
+        "answer, the commentary contextualises it."
     ),
     "RELATIONSHIP": (
         "\n\nRELATIONSHIP FORMAT:\n"

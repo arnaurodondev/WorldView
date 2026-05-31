@@ -141,6 +141,56 @@ class TestToolUsePromptContract:
         assert "VERBATIM" in prompt
         assert "training knowledge" in prompt
 
+    def test_comparison_addendum_contains_tabular_directive(self) -> None:
+        """PLAN-0103 W20 BP-638 regression — tabular comparison directive.
+
+        The benchmark question ``ru_nvda_amd_revenue_4q`` ("Compare the
+        revenue trajectories of NVIDIA and AMD over the last 4 quarters")
+        exhibited high variance in answer length across identical runs
+        (24 → 178 → 185 → 255 words; only 2 of 4 rendered a Markdown
+        table). Root cause: the COMPARISON addendum did not pin the
+        rendering shape for multi-entity x multi-period tool outputs, so
+        the LLM sometimes collapsed to a single-sentence summary.
+
+        This test pins the directive so a future edit cannot silently drop
+        it. The directive is wholly inside the COMPARISON addendum — other
+        intents must NOT receive it (it would distort their format).
+        """
+        today = "2026-05-30"
+        comparison = get_tool_use_system_prompt(intent="COMPARISON", today_iso=today)
+
+        # Anchor: the section header must be present so the LLM can locate
+        # the rule during synthesis.
+        assert (
+            "TABULAR COMPARISON (mandatory):" in comparison
+        ), "missing TABULAR COMPARISON directive — BP-638 fix regressed"
+
+        # The trigger conditions must be enumerated so the LLM knows when
+        # the directive applies (it should NOT force a table for every
+        # comparison — only multi-entity x multi-period or multi-metric).
+        assert "TWO OR MORE entities" in comparison
+        assert "TWO OR MORE periods" in comparison
+        assert "TWO OR MORE metrics" in comparison
+
+        # The rendering instruction must mention Markdown table mechanics so
+        # the LLM emits a parseable table (header + separator + data rows).
+        assert "Markdown table" in comparison
+        assert "header row" in comparison
+        assert "separator" in comparison or "dashes" in comparison
+
+        # Length floor so a one-sentence summary is explicitly rejected.
+        assert "150-300 words" in comparison
+        assert "single-sentence summary is NOT acceptable" in comparison
+
+        # The directive must NOT leak into other intents — that would push
+        # FACTUAL_LOOKUP / FINANCIAL_DATA / MACRO answers toward unnecessary
+        # tables and inflate length on single-entity questions.
+        for intent in ("FACTUAL_LOOKUP", "MACRO", "GENERAL", "REASONING", "PORTFOLIO"):
+            other = get_tool_use_system_prompt(intent=intent, today_iso=today)
+            assert (
+                "TABULAR COMPARISON (mandatory):" not in other
+            ), f"TABULAR COMPARISON directive leaked into {intent} addendum"
+
     def test_prompt_contains_speculative_forecast_refusal(self) -> None:
         """FIX-LIVE-Z regression — speculative-price refusal must be present.
 
