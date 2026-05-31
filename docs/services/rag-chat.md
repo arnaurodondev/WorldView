@@ -193,6 +193,8 @@ unchanged — R11: never break wire format.
 
 **PLAN-0097 W2 (BP-579)** widened the Layer 2 classifier SAFE bucket with an explicit relationship/graph-discovery exemplar (`How is X connected to Y? Show me the relationship paths.`) — these queries were intermittently labelled UNSAFE despite `temperature=0.0`, causing Q8 `INPUT_REJECTED` regressions in chat-eval. The system-prompt change is paired with a new `CLASSIFIER_PROMPT_VERSION = "v3"` constant (`llm_injection_classifier.py`) so the on-disk classifier-result cache (P2 W4 T-W4-02) invalidates stale verdicts when the prompt rolls forward. The regression gate is `services/rag-chat/tests/unit/security/test_llm_injection_classifier_benign_relationships.py` — 13 mocked + 13 live-smoke parametrised cases; the live-smoke set is gated by `INTEGRATION_TEST=1` + `RAG_CHAT_DEEPINFRA_API_KEY` so it catches model drift even when the mocked suite passes.
 
+**PLAN-0103 W13 (BP-632)** further widened the SAFE bucket with an explicit FINANCIAL-SCREENER exemplar after the chat-quality benchmark (audit `docs/audits/2026-05-31-plan-0103-final-qa-v44.md` §3.2) documented an INPUT_REJECTED [PROMPT_INJECTION] on `Screen for AI semiconductor companies with market cap above $50B and positive YoY revenue growth.` The L2 classifier latched on to `above $50B` as a data-exfiltration signal and rejected the prompt in ~0.4s — the request never reached the chat engine even though `screen_universe` is the canonical tool for exactly that ask. The fix adds a SAFE exemplar block listing five screener filter shapes (market cap, P/E, dividend, EBITDA, technical) and bumps `CLASSIFIER_PROMPT_VERSION` to `"v4"` (invalidates the on-disk classifier-result cache). Regression gate: `services/rag-chat/tests/unit/security/test_llm_injection_classifier_benign_screeners.py` — 5 mocked SAFE + 2 mocked UNSAFE asymmetric + 1 prompt-content guard + 5 live-smoke. This is the THIRD narrow-exemplar fix (FIX-LIVE-CC v2 conditional reasoning; BP-579 v3 relationship discovery; BP-632 v4 screeners) — the pattern is: an L2 false-positive surfaces a *category* of legitimate query the SAFE exemplar list never enumerated; add a verbatim exemplar from the failing audit prompt + a SAFE/UNSAFE asymmetric regression file; never tighten the UNSAFE rules to suppress the symptom.
+
 **PLAN-0097 W2 T-W2-04** adds a `DEBUG_SKIP_CLASSIFIER` env-var short-circuit at the top of `LLMInjectionClassifier.classify()`. When set truthy (`1`, `true`, `yes`), the classifier returns False immediately and the LLM call is bypassed. **Security gate**: the env-var is honoured ONLY when `APP_ENV != "production"` (read at `classify()` invocation time, not import time) so a leaked flag in a prod environment is a no-op. The chat-eval conftest sets this alongside `RAG_COMPLETION_CACHE_DISABLED=true` so eval runs measure orchestrator behaviour without paying DeepInfra latency or flaking on the L2 model's non-determinism. The unit test `TestDebugSkipClassifier.test_production_app_env_ignores_skip_flag` pins the production guard.
 
 **Chat-eval grader policy (PLAN-0097 W2 T-W2-03 / BP-580)** — `tests/validation/chat_eval/grading.py`:
@@ -234,7 +236,7 @@ Input → Cache check → [hit? short-circuit ✓] → Validate → Rate limit �
 | `get_entity_health` | S9→S7 | Entity health score, key metrics, source distribution (extracted from intelligence bundle). Endpoint: `GET /api/v1/entities/{id}/intelligence` | v2 |
 | `get_entity_intelligence` | S9→S7 | Full intelligence bundle: narrative + paths + health + relations summary. Single call for "tell me everything about X". Endpoint: `GET /api/v1/entities/{id}/intelligence` | v2 |
 | `get_morning_brief` | DB | User's latest morning brief from `user_briefs` table via `BriefArchivePort`. Read-only (R27). trust_weight=0.92 | v3 |
-| `compare_entities` | S3 | Side-by-side comparison of 2-4 tickers: fundamentals highlights + latest quote in parallel | v3 |
+| `compare_entities` | S3 | Side-by-side comparison of 2-4 tickers: fundamentals highlights + latest quote in parallel. **PLAN-0103 W14 (FQA-04 carry)**: now widens the fundamentals window to `periods=4` and selects the latest period that has `revenue + eps + gross_profit` populated for ALL compared tickers ("latest fully populated common period"). Falls back to per-ticker latest only when no common period exists. Fixes the silent-NULL pattern where ticker A had Q1 reported but ticker B's Q1 row was still pending. | v4 |
 | `screen_universe` | S9→S3 | Quantitative screener via S9 `POST /v1/fundamentals/screen`. Filter by market_cap, P/E, sector, region | v3 |
 | `get_market_movers` | S9→S3 | Top gainers/losers/most-active via S9 `GET /v1/market/top-movers`. Default: gainers/1d | v3 |
 | `get_economic_calendar` | S9→S3 | Macro events (CPI, FOMC, GDP) via S9 `GET /v1/fundamentals/economic-calendar` | v3 |
@@ -966,9 +968,31 @@ on retry. Returns 409 on replay. Single-instance only — move to Valkey for mul
 ## Morning Brief — 5-Minute Investor Brief Structure (PLAN-0102 W1)
 
 The morning brief is structured as a 5-minute investor summary, NOT a news
-aggregator. The prompt at `libs/prompts/src/prompts/briefing/morning.py` (v4.4)
+aggregator. The prompt at `libs/prompts/src/prompts/briefing/morning.py` (v4.5)
 instructs the LLM to emit a leading `## Summary` paragraph followed by six
 named sections in this exact order.
+
+> **v4.5 release (PLAN-0103 W11, 2026-05-30)**: makes the `## Summary` length
+> ADAPTIVE. v4.4's fixed `≤ 50 words` cap was the right shape for a
+> 10-position portfolio on a quiet day but truncated useful synthesis on
+> large books (30+ positions) or very active overnight sessions. v4.5
+> replaces the fixed cap with a `target ~100 words` rule + explicit size
+> bands keyed off portfolio breadth + market activity: small + quiet →
+> 30-60w; medium + normal → 80-150w; large or very active (5+ material
+> developments overnight) → up to 200w (hard cap 200w). Above 50w the
+> LLM is instructed to "mention top 1-3 holdings by P&L impact"; Example
+> A's Summary was re-shot at ~150 words to demonstrate the new shape.
+> Parser `split_summary_paragraph` cap raised 300 → 1500 chars; schema
+> field `summary_paragraph` max_length raised 600 → 1600 chars (both api
+> and application schemas). NEVER write a fixed word cap for prose that
+> must scale with the user's portfolio — anchor on a *target* + bands.
+> Tests: `libs/prompts/tests/test_prompts.py::TestMorningBriefing::test_v45_six_section_spec`
+> (asserts the adaptive language + the THREE size-band lines + version
+> bump); `tests/test_brief_parser.py::test_split_summary_paragraph_caps_at_1500_chars`
+> + `test_split_summary_paragraph_preserves_v45_adaptive_length`
+> (~1000-char Summary passes through untrimmed); rag-chat version
+> assertion bumped 4.4 → 4.5 in
+> `tests/unit/application/test_briefing_context_gatherer.py::test_morning_prompt_v4_contains_required_sections`.
 
 > **v4.4 release (PLAN-0103 W9, 2026-05-30, BP-630)**: SPLITS the single
 > 250-word cap into TWO explicit caps + per-section guidance. The v4.3
@@ -1029,10 +1053,12 @@ named sections in this exact order.
 | 5. **Risks + Opportunities** | 60 s | "Where am I exposed today?" | LLM synthesises across Tape + Macro + Portfolio |
 | 6. **Bonus context** | 30 s | "What else should I know?" | 1–2 generic high-impact items |
 
-**Word budget (v4.4)**: `## Summary` ≤ 50 words (1-3 sentences); `## Details`
-≤ 700 words total with per-section guidance (see v4.4 release note above).
-The old single 250-word global cap is GONE — it was too restrictive for the
-6-section spec and forced the LLM to drop signal. Citations use `[N1] [N2]` markers (the existing v3.0
+**Word budget (v4.5)**: `## Summary` is ADAPTIVE — target ~100 words; 30-60w
+small + quiet day; 80-150w medium + normal day; up to 200w large book or very
+active day; hard cap 200w. `## Details` ≤ 700 words total with per-section
+guidance (see v4.4 release note above). The old single 250-word global cap is
+GONE — it was too restrictive for the 6-section spec and forced the LLM to
+drop signal. Citations use `[N1] [N2]` markers (the existing v3.0
 output-format block is preserved beneath the new spec so the parser, deduper,
 and citation gate continue to function).
 

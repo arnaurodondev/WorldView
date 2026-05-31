@@ -63,8 +63,8 @@ class TestMorningBriefing:
         )
         assert "Never speculate beyond the evidence provided" in result
 
-    def test_v44_six_section_spec(self) -> None:
-        """Prompt must instruct the LLM to emit the v4.4 six-section investor brief.
+    def test_v45_six_section_spec(self) -> None:
+        """Prompt must instruct the LLM to emit the v4.5 six-section investor brief.
 
         VERSION HISTORY (test):
           - PLAN-0048 Wave A (v2.2): ## SUMMARY + --- + ## DETAILS.
@@ -82,6 +82,12 @@ class TestMorningBriefing:
           - PLAN-0103 W9 (v4.4): SPLIT the single ``250 words`` cap into a 50-word
             Summary cap + a 700-word Details cap with per-section guidance.
             The 250-word global cap was too restrictive for 6 sections.
+          - PLAN-0103 W11 (v4.5): ADAPTIVE Summary length — the fixed 50-word
+            cap from v4.4 was OK for a 10-position book on a quiet day but
+            truncated useful synthesis on large books / very active days.
+            v4.5 replaces it with a ~100-word target + size bands
+            (30-60w small+quiet, 80-150w medium+normal, up to 200w large/
+            very active). Parser cap raised 300 → 1500 chars.
 
         WHY update (not delete): R19 — the prompt is still mandating a structural
         contract, only its shape has changed. We assert the new contract.
@@ -107,9 +113,22 @@ class TestMorningBriefing:
         # the restrictive global cap.
         assert "250 words" not in result, "v4.4 deleted the 250-word global cap"
         assert "Cap total brief" not in result, "v4.4 deleted the single 'cap total brief' directive"
-        # v4.4 — the split caps must both be present verbatim.
-        # (a) Summary block: ≤ 50 words, 1-3 sentences.
-        assert "Summary block: ≤ 50 words" in result
+        # v4.5 — Summary cap is ADAPTIVE (target ~100w; 30-200w bands);
+        # Details cap unchanged from v4.4 at ≤700w.
+        # (a) Summary block: target wording + adaptive size bands.
+        assert "Summary block: target ~100 words" in result
+        assert "adapt to portfolio breadth + market activity" in result
+        # The three size bands must all be present verbatim so the LLM can
+        # cite the matching one for the current portfolio + market state.
+        assert "Small portfolio (≤10 positions)" in result
+        assert "Medium portfolio (10-30 positions)" in result
+        assert "Large portfolio (30+ positions)" in result
+        assert "Hard cap: 200 words" in result
+        # v4.4 fixed "Summary block: ≤ 50 words" wording MUST be gone — a
+        # regression would silently re-introduce the truncation problem.
+        assert (
+            "Summary block: ≤ 50 words" not in result
+        ), "v4.5 replaced the fixed 50-word Summary cap with adaptive guidance"
         # (b) Details block: ≤ 700 words across all 6 sections combined.
         assert "Details block: ≤ 700 words" in result
         # Per-section guidance signposts — at least the two highest-signal
@@ -133,11 +152,11 @@ class TestMorningBriefing:
         assert "## Summary" in result
         assert "## Details" in result
         assert "MANDATORY" in result
-        # Version constant must reflect the v4.4 release (PLAN-0103 W9).
-        # v4.4 split the 250-word cap into 50w Summary + 700w Details.
-        assert MORNING_BRIEFING.version == "4.4"
+        # Version constant must reflect the v4.5 release (PLAN-0103 W11).
+        # v4.5 made the Summary cap adaptive (target ~100w; 30-200w bands).
+        assert MORNING_BRIEFING.version == "4.5"
 
-    def test_v44_few_shot_examples_present(self) -> None:
+    def test_v45_few_shot_examples_present(self) -> None:
         """v4.3 must embed BOTH few-shot examples (rich + quiet day).
 
         WHY: the v4.2 imperative prompt alone failed in production (FQA-01
@@ -161,8 +180,14 @@ class TestMorningBriefing:
         assert "Example A — Rich day" in result
         assert "Example B — Quiet day" in result
         # Rich-day Example A must show populated bullets in every section.
-        assert "Dell up 40%" in result
+        # PLAN-0103 W11 (v4.5): Example A's Summary was re-shot at ~150 words
+        # mentioning top-3 holdings by P&L impact; the original bullets
+        # (Dell +40%, Vision Pro shipment beat) are unchanged.
+        assert "Dell +40%" in result
         assert "Vision Pro" in result
+        # v4.5 Summary must reference top holdings by P&L impact (the new
+        # "Mention top 1-3 holdings ... when summary > 50 words" guidance).
+        assert "**MSFT**" in result and "**AAPL**" in result and "**NVDA**" in result
         # Quiet-day Example B must show the placeholder pattern in action.
         assert "Quiet pre-mkt session" in result
         assert "No major economic releases scheduled" in result

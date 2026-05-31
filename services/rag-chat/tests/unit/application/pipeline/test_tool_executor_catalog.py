@@ -57,6 +57,12 @@ def _make_s3_port() -> AsyncMock:
     mock.get_ohlcv_range.return_value = []
     mock.get_fundamentals_history.return_value = []
     mock.get_fundamentals_highlights.return_value = {}
+    # PLAN-0103 W14 (FQA-04 carry): compare_entities now routes the batch
+    # endpoint through the same path as get_fundamentals_history_batch and
+    # selects the latest fully-populated common period. Default to {} so
+    # the per-ticker latest fallback engages cleanly in tests that do not
+    # care about the batch path.
+    mock.get_fundamentals_history_batch.return_value = {}
     mock.get_earnings.return_value = []
     mock.get_quote.return_value = {}
     mock.find_instrument_by_ticker.return_value = None

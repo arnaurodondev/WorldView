@@ -66,6 +66,24 @@ VERSION HISTORY
         ``brief_parser.parse_sections_with_citations`` continues to work on
         the ``## Details`` block — no divider is required between Summary and
         Details (Summary is identified by its heading).
+- 4.5 — PLAN-0103 W11 (2026-05-30): ADAPTIVE Summary length.  User feedback
+        on the v4.4 50-word Summary cap: it is fine for a 10-position book
+        on a quiet day, but a large portfolio (30+ positions) or a very
+        active overnight session needs a denser synthesis to be useful.
+        v4.5 replaces the fixed ``≤ 50 words`` cap with a target of
+        ~100 words + explicit guidance bands:
+          * Small portfolio (≤10 positions) + quiet day → 30-60 words.
+          * Medium portfolio (10-30 positions) + normal day → 80-150 words.
+          * Large portfolio (30+ positions) OR very active day
+            (5+ material developments overnight) → up to 200 words.
+        Hard cap stays at 200 words.  Example A's ``## Summary`` was
+        re-shot at ~150 words mentioning the top 3 holdings by P&L impact
+        (the new "lead with top-N holdings" guidance only fires when the
+        summary exceeds 50 words; below that the original tight single-
+        takeaway shape is preferred).  Example B's ~30-40 word summary
+        is left unchanged — it is the canonical shape for the small-+-
+        quiet case.  Parser ``split_summary_paragraph`` cap raised from
+        300 chars → 1500 chars (200 words x ~7 chars/word + headroom).
 - 4.4 — PLAN-0103 W9 (2026-05-30): SPLIT the single ``250 words`` cap into TWO
         explicit caps + per-section guidance. The v4.3 wording ``Cap total
         brief at 250 words`` was the WRONG design — 250 words is far too
@@ -93,19 +111,20 @@ from prompts._base import PromptTemplate
 
 MORNING_BRIEFING = PromptTemplate(
     name="morning_briefing",
-    # Bumped 4.3 → 4.4 as part of PLAN-0103 W9 (split the word cap correctly).
-    # The single ``250 words`` cap from v4.3 was the wrong design — a 6-section
-    # investor brief needs depth.  v4.4 splits the budget into a 50-word
-    # Summary cap (collapsed dashboard surface) and a 700-word Details cap
-    # with explicit per-section guidance so each section can carry real
-    # signal without the LLM truncating the brief.
-    version="4.4",
+    # Bumped 4.4 → 4.5 as part of PLAN-0103 W11 (adaptive Summary length).
+    # User feedback on v4.4: a fixed 50-word Summary is fine for a small
+    # portfolio on a quiet day but truncates the useful synthesis for a
+    # 30+ position book or a very active overnight session.  v4.5 replaces
+    # the fixed cap with a ~100-word target and explicit size bands keyed
+    # off portfolio breadth + market activity (hard cap 200 words).
+    version="4.5",
     description=(
-        "Morning market briefing v4.4 — v4.3 contract (## Summary + 6 mandatory "
-        "sections + few-shot Examples A/B) plus the split word budget: Summary "
-        "≤ 50 words (collapsed dashboard surface); Details ≤ 700 words total "
-        "with explicit per-section bullet/word guidance so depth isn't truncated "
-        "by a single overall cap"
+        "Morning market briefing v4.5 — v4.4 contract (## Summary + 6 mandatory "
+        "sections + few-shot Examples A/B + split word budget) plus ADAPTIVE "
+        "Summary length: target ~100 words, scaling between 30 and 200 words "
+        "based on portfolio breadth and overnight market activity (small + "
+        "quiet → 30-60w; medium + normal → 80-150w; large or very active → "
+        "up to 200w).  Details cap remains ≤ 700 words"
     ),
     template=(
         # ── Role + goal ───────────────────────────────────────────────────────
@@ -130,9 +149,11 @@ MORNING_BRIEFING = PromptTemplate(
         # a partial brief that hides whole categories.
         "Output structure (in this exact order):\n\n"
         "## Summary\n"
-        "<1-3 sentences synthesising the single most important takeaway for an "
-        "investor scanning this for 10 seconds. Lead with the implication for the "
-        "portfolio. ≤300 characters total. Cite [N#] if quoting a fact.>\n\n"
+        "<Synthesised paragraph for an investor scanning this for 10 seconds. "
+        "Lead with the implication for the portfolio. Length is ADAPTIVE — "
+        "see ``## Summary block`` guidance below for size bands (target ~100 "
+        "words; 30-200 word range depending on portfolio breadth and overnight "
+        "activity). Cite [N#] for facts.>\n\n"
         "## Details\n"
         "All 6 sections below are MANDATORY. If a section has no data, emit the "
         "heading and a single placeholder line (e.g. ``- No notable risks "
@@ -180,11 +201,20 @@ MORNING_BRIEFING = PromptTemplate(
         "The two examples below show exactly what to produce in a rich vs "
         "quiet day. Match their SHAPE, not their content.\n\n"
         # ── Example A — Rich day ──────────────────────────────────────────────
-        "### Example A — Rich day (lots of holding news + macro + risks)\n"
+        "### Example A — Rich day (lots of holding news + macro + risks, larger book)\n"
         "## Summary\n"
-        "AI infrastructure rally continues with Dell up 40% and Palantir +12% "
-        "pre-mkt — your AAPL/MSFT overweight benefits. Watch the 08:30 CPI "
-        "print; consensus 3.1% YoY.\n"
+        "AI-infrastructure rally extends overnight and tilts the book "
+        "constructive: your top three by impact — **MSFT** (+1.1% on the "
+        "Anthropic-Azure win [N3]), **AAPL** (+0.8% on the Vision Pro "
+        "shipment beat [N2]) and **NVDA** (flat but Dell's +40% AI-server "
+        "backlog [N6] re-confirms hyperscaler capex into next print) — "
+        "should add to a strong open. Watch the 08:30 CPI print "
+        "(consensus 3.1% YoY [N4]): a hot read would re-price the duration "
+        "leg and amplify drawdown given top-3 concentration at 38% of the "
+        "book. FOMC minutes at 14:00 ET could re-rate Q3-cut probability. "
+        "VIX 13.8 keeps protective puts cheap if you want to hedge AAPL "
+        "through earnings. Net: stay engaged into the open, size hedges "
+        "around CPI, do not chase Dell/Palantir extension.\n"
         "\n"
         "## Details\n"
         "**Tape**\n"
@@ -239,7 +269,15 @@ MORNING_BRIEFING = PromptTemplate(
         # truncate per-section signal. v4.4 budgets the two blocks
         # separately so the dashboard collapsed surface stays tight while
         # the expanded details view can carry real depth.
-        "## Summary block: ≤ 50 words, 1-3 sentences.\n"
+        "## Summary block: target ~100 words; adapt to portfolio breadth + market activity.\n"
+        "Guidance:\n"
+        "  - Small portfolio (≤10 positions) + quiet day: 30-60 words.\n"
+        "  - Medium portfolio (10-30 positions) + normal day: 80-150 words.\n"
+        "  - Large portfolio (30+ positions) OR very active day "
+        "(5+ material developments overnight): up to 200 words.\n"
+        "Hard cap: 200 words.\n"
+        "Lead with the single most important takeaway. Mention top 1-3 holdings "
+        "by P&L impact when summary > 50 words. Always cite [N#] for facts.\n"
         "## Details block: ≤ 700 words across all 6 sections combined. "
         "Per-section guidance: Tape ≤ 25 words (one line); "
         "Your Portfolio Today 3-6 bullets, ~20 words each; "

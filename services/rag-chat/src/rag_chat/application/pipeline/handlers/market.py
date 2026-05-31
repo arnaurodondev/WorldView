@@ -86,6 +86,111 @@ def _format_market_cap_value(value: Any) -> str | None:
     return f"{sign}${abs_n:,.0f}"
 
 
+# ── compare_entities period selection helpers (FQA-04 carry / PLAN-0103 W14) ──
+# WHY at module level: pure helpers, no MarketHandler state required, easier
+# to unit-test in isolation than instance methods.
+
+# Core metrics that MUST all be non-None for a period to count as
+# "fully populated" in the per-ticker pre-filter (PLAN-0103 W14). Chosen
+# to mirror the cells the LLM most often complains about being NULL in the
+# rendered comparison table: top-line, profitability, bottom-line.
+_COMPARE_CORE_METRICS: tuple[str, ...] = ("revenue", "eps", "gross_profit")
+
+
+def _period_is_fully_populated(period_row: Any) -> bool:
+    """Return True when the period row has revenue + EPS + gross_profit non-None.
+
+    Accepts either a pydantic ``FundamentalsHistoryPeriod`` (has
+    ``model_dump``) or the dict shape the adapter forwards. Returns False
+    on any unexpected shape so the caller can fall back gracefully — never
+    raises.
+    """
+    if period_row is None:
+        return False
+    if hasattr(period_row, "model_dump"):
+        row = period_row.model_dump()
+    elif isinstance(period_row, dict):
+        row = period_row
+    else:
+        return False
+    return all(row.get(metric) is not None for metric in _COMPARE_CORE_METRICS)
+
+
+def _select_latest_fully_populated_period(
+    tickers: list[str],
+    batch_results: dict[str, dict],
+) -> str | None:
+    """Pick the latest period present + fully-populated for ALL ``tickers``.
+
+    Algorithm:
+      1. For each ticker, build the set of period labels that are fully
+         populated (revenue + EPS + gross_profit all non-None).
+      2. Intersect those sets — these are the candidate common periods.
+      3. Return the LATEST candidate (lexicographic max works for the
+         ``YYYY-QN`` / ``YYYY-MM-DD`` shapes EODHD emits).
+      4. Return ``None`` when no common fully-populated period exists,
+         signalling the caller should fall back to per-ticker latest.
+
+    Why intersection (not "any ticker fully populated"): the comparison
+    table is read as a side-by-side grid; choosing different periods per
+    ticker hides the asymmetry behind a unified-looking row. The whole
+    fix is to make the comparison apples-to-apples.
+
+    Why "latest" lex max: EODHD period labels are ISO-ordered (``2026-Q1``,
+    ``2026-Q2``, ...; ``2026-03-31``, ``2026-06-30``, ...) so string max
+    matches date max without parsing.
+    """
+    # Defensive: batch endpoint failure may surface here as a non-dict
+    # (e.g. an unawaited coroutine from a partially-mocked test fixture).
+    # In all such cases the safe answer is "no common period" so the caller
+    # falls back to per-ticker latest.
+    if not tickers or not isinstance(batch_results, dict) or not batch_results:
+        return None
+
+    populated_sets: list[set[str]] = []
+    for ticker in tickers:
+        entry = batch_results.get(ticker) or {}
+        if not isinstance(entry, dict) or entry.get("status") != "ok":
+            return None  # one ticker missing → can't form a common period
+        periods_data = entry.get("periods") or []
+        populated: set[str] = set()
+        for row in periods_data:
+            label = (
+                row.model_dump().get("period")
+                if hasattr(row, "model_dump")
+                else (row.get("period") if isinstance(row, dict) else None)
+            )
+            if label and _period_is_fully_populated(row):
+                populated.add(label)
+        if not populated:
+            return None  # this ticker has no fully-populated period in window
+        populated_sets.append(populated)
+
+    common = set.intersection(*populated_sets) if populated_sets else set()
+    if not common:
+        return None
+    return max(common)
+
+
+def _pick_period_row(periods_data: list[Any], common_period: str | None) -> Any:
+    """Return the row matching ``common_period`` if present, else the latest row.
+
+    Accepts either pydantic-model rows or dicts. Caller is responsible for
+    coercing the result to a dict (this helper preserves the input shape so
+    the existing ``hasattr(chosen, "model_dump")`` path keeps working).
+    """
+    if common_period:
+        for row in periods_data:
+            label = (
+                row.model_dump().get("period")
+                if hasattr(row, "model_dump")
+                else (row.get("period") if isinstance(row, dict) else None)
+            )
+            if label == common_period:
+                return row
+    return periods_data[-1]
+
+
 class MarketHandler(ToolHandler):
     """Handles price, fundamentals, screener, movers, and calendar tools.
 
@@ -344,11 +449,30 @@ class MarketHandler(ToolHandler):
         Meanwhile ``get_fundamentals_history_batch`` returns a clean
         ``FundamentalsHistoryPeriod`` row with normalised ``revenue``/``eps``/
         ``gross_profit``/``pe_ratio``/``market_cap`` fields. We now source
-        those metrics from the batch endpoint (periods=1 → latest quarter)
-        for the *whole ticker list in one HTTP call* and fall back to the
-        legacy highlights path *only* for tickers the batch could not
-        resolve. That gives the LLM the same numbers Q5 sees and aligns the
-        two tool paths on a single source of truth.
+        those metrics from the batch endpoint for the *whole ticker list in
+        one HTTP call* and fall back to the legacy highlights path *only*
+        for tickers the batch could not resolve. That gives the LLM the
+        same numbers Q5 sees and aligns the two tool paths on a single
+        source of truth.
+
+        FQA-04 carry (PLAN-0103 W14, 2026-05-30): BP-626 unified the FIELD
+        NAMES but not the PERIOD WINDOW. ``compare_entities`` previously
+        fetched ``periods=1`` (latest quarter only). ``get_fundamentals_
+        history_batch`` defaults to ``periods=5``. When ticker A has the
+        latest quarter populated but ticker B's latest quarter is still
+        pending (revenue/EPS NULL because the report dropped after the
+        last EODHD sync), the latest-only window silently rendered B's
+        cells as missing while ``get_fundamentals_history_batch(periods=5)``
+        had perfectly good data 1-2 quarters back.
+
+        Fix: widen the window to ``periods=4`` (one fiscal year, matches
+        the Quote-tab Financials default) AND pick the latest period that
+        has all three core metrics (revenue, EPS, gross_profit) populated
+        for ALL tickers being compared — the "latest fully populated common
+        period". This guarantees side-by-side comparability: every column
+        shows the same fiscal quarter. Falls back to per-ticker latest when
+        no common period is fully populated (preserves the old behaviour
+        for true data-pipeline gaps rather than rendering an empty table).
         """
         if self._s3 is None:
             log.warning("tool_handler_missing_port", tool="compare_entities", port="s3")
@@ -366,18 +490,27 @@ class MarketHandler(ToolHandler):
 
         t0 = time.monotonic()
 
-        # ── Phase 1: latest-quarter fundamentals via the SAME endpoint that
+        # ── Phase 1: 4-quarter fundamentals via the SAME endpoint that
         # get_fundamentals_history_batch uses (FQA-04 / BP-626).  One HTTP
         # call for all 2-4 tickers; per-ticker failures isolated upstream.
+        # periods=4 (PLAN-0103 W14) widens the window so we can pick the
+        # latest common FULLY-POPULATED period rather than blindly trusting
+        # the freshest row — see method docstring for full rationale.
         batch_results: dict[str, dict] = {}
         try:
             batch_results = await asyncio.wait_for(
-                self._s3.get_fundamentals_history_batch(tickers=tickers, periods=1),
+                self._s3.get_fundamentals_history_batch(tickers=tickers, periods=4),
                 timeout=self._timeout,
             )
         except Exception as e:
             log.warning("compare_entities_batch_failed", error=str(e))
             batch_results = {}
+
+        # ── Phase 1b: select the latest period that has revenue + EPS +
+        # gross_profit populated for ALL tickers being compared (PLAN-0103
+        # W14). Returns None when no common fully-populated period exists,
+        # in which case we fall back to per-ticker latest below.
+        common_period = _select_latest_fully_populated_period(tickers, batch_results)
 
         async def _fetch_per_ticker(ticker: str) -> dict:
             """Fetch instrument_id + quote (+ highlights fallback if needed)."""
@@ -423,25 +556,32 @@ class MarketHandler(ToolHandler):
             quote = item.get("quote") or {}  # type: ignore[union-attr]
             highlights = item.get("highlights") or {}  # type: ignore[union-attr]
 
-            # Pull the latest-quarter row from the batch result.  ``periods``
-            # is sorted ASC by date so the latest is the LAST element.  The
-            # batch endpoint guarantees ``revenue``/``eps``/``gross_profit``/
-            # ``pe_ratio``/``market_cap`` are present (nullable) on each row.
+            # Pick the period row for this ticker. Preferred path: the
+            # ``common_period`` selected in Phase 1b — guarantees every
+            # column in the rendered table is the SAME fiscal quarter so
+            # the LLM is comparing like-for-like (FQA-04 carry / PLAN-0103
+            # W14). Fall back to the per-ticker latest only when no common
+            # fully-populated period exists for the comparison set.
+            #
+            # ``periods`` is sorted ASC by date so the latest is the LAST
+            # element. The batch endpoint guarantees ``revenue``/``eps``/
+            # ``gross_profit``/``pe_ratio``/``market_cap`` are present
+            # (nullable) on each row.
             batch_entry = batch_results.get(ticker) or {}
             latest_period: dict[str, Any] = {}
             period_label: str | None = None
             if batch_entry.get("status") == "ok":
                 periods_data = batch_entry.get("periods") or []
                 if periods_data:
-                    last = periods_data[-1]
+                    chosen = _pick_period_row(periods_data, common_period)
                     # FundamentalsHistoryPeriod is a pydantic BaseModel post-
                     # http; the adapter passes it through as a dict.  Defensive
                     # against either shape so a future contract tweak does not
                     # silently re-introduce the original bug.
-                    if hasattr(last, "model_dump"):
-                        latest_period = last.model_dump()
-                    elif isinstance(last, dict):
-                        latest_period = last
+                    if hasattr(chosen, "model_dump"):
+                        latest_period = chosen.model_dump()
+                    elif isinstance(chosen, dict):
+                        latest_period = chosen
                     period_label = latest_period.get("period")
 
             lines.append(f"### {ticker}")

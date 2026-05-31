@@ -384,14 +384,51 @@ def test_split_summary_paragraph_strips_citation_markers() -> None:
     assert "Dell rally" in summary
 
 
-def test_split_summary_paragraph_caps_at_300_chars() -> None:
-    """Long summary blocks are truncated at sentence boundary ≤300 chars."""
+def test_split_summary_paragraph_caps_at_1500_chars() -> None:
+    """Long summary blocks are truncated at sentence boundary ≤1500 chars.
+
+    PLAN-0103 W11 (v4.5): the parser cap was raised 300 → 1500 chars to
+    accommodate the new adaptive Summary length (target ~100 words; up to
+    200 words ≈ 1400 chars for large portfolios / very active days).
+    Anything below 1500 chars now passes through untrimmed; only runaway
+    summaries get cut at the nearest sentence boundary.
+    """
     parser = _make_parser()
-    long_sentence = "X" * 350
+    # Build a > 1500 char summary so the cap actually fires.
+    long_sentence = "X" * 1600
     content = f"## Summary\n{long_sentence}. Trailing sentence.\n\n## Details\n**Tape**\n- noop\n"
     summary, _ = parser.split_summary_paragraph(content)
     assert summary is not None
-    assert len(summary) <= 300
+    assert len(summary) <= 1500
+
+
+def test_split_summary_paragraph_preserves_v45_adaptive_length() -> None:
+    """A v4.5 ~150-word adaptive Summary (≈1000 chars) passes through untrimmed.
+
+    PLAN-0103 W11: the 300-char cap from v4.4 would truncate the new
+    large-portfolio / active-day Summary at the first ~50 words; the 1500-
+    char cap MUST let a realistic 1000-char summary survive intact.
+    """
+    parser = _make_parser()
+    # ~1000-char single-paragraph summary (well above old 300 cap, well
+    # below new 1500 cap). Sentence-terminated so no truncation would alter it.
+    sentence = (
+        "AI-infrastructure rally extends overnight and tilts the book constructive: "
+        "top-3 by impact MSFT AAPL NVDA should add to a strong open while CPI at "
+        "08:30 ET risks re-pricing the duration leg and amplifying drawdown given "
+        "top-3 concentration at 38% of the book.  "
+    )
+    body = (sentence * 4).strip()
+    assert 900 < len(body) < 1500  # sanity-check the test data shape
+    content = f"## Summary\n{body}\n\n## Details\n**Tape**\n- noop\n"
+    summary, _ = parser.split_summary_paragraph(content)
+    assert summary is not None
+    # The parser collapses consecutive whitespace, so the result is ~3 chars
+    # shorter than the raw input — what matters is that the cap did NOT fire
+    # (i.e. the summary is well above 300 chars and below 1500).
+    assert 900 < len(summary) <= 1500
+    # And the last sentence must still be present (no mid-sentence truncation).
+    assert summary.endswith("of the book.")
 
 
 def test_check_section_completeness_all_present() -> None:

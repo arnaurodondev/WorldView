@@ -123,10 +123,13 @@ class BriefParser:
         path. Frontends can use ``summary`` / first lines of ``narrative`` as
         before — no UX regression.
 
-        WHY trim to ≤300 chars: the schema ``summary_paragraph`` field caps at
-        600 chars (defence-in-depth); we soft-cap to 300 here so the collapsed
-        dashboard card never overflows. Hard cut at sentence boundary via
-        ``_truncate_at_sentence`` so we don't leave a half-sentence dangling.
+        WHY trim to ≤1500 chars (PLAN-0103 W11 / v4.5): the prompt now allows
+        an ADAPTIVE summary up to 200 words (was a fixed ≤50 words in v4.4),
+        which is ~1400 chars at ~7 chars/word. We soft-cap at 1500 chars to
+        leave headroom for punctuation + spaces while still preventing a
+        runaway summary from displacing the rest of the collapsed card.
+        Hard cut at sentence boundary via ``_truncate_at_sentence`` so we
+        don't leave a half-sentence dangling.
         """
         if not content:
             return None, content
@@ -177,10 +180,12 @@ class BriefParser:
         if not paragraph:
             return None, content
 
-        # Soft cap at 300 chars (sentence-aligned) — the schema accepts up to 600
-        # but the dashboard collapsed card target is 1-3 short sentences.
-        if len(paragraph) > 300:
-            paragraph = self._truncate_at_sentence(paragraph, max_chars=300)
+        # Soft cap at 1500 chars (sentence-aligned) — the v4.5 adaptive
+        # Summary can run up to 200 words (~1400 chars) for large portfolios
+        # / very active days. 1500 leaves a small headroom for punctuation +
+        # whitespace; ``_truncate_at_sentence`` keeps the cut clean.
+        if len(paragraph) > 1500:
+            paragraph = self._truncate_at_sentence(paragraph, max_chars=1500)
 
         # Build the remainder: everything BEFORE the ``## Summary`` heading
         # (preserved in case the LLM stuck a stray preface above it) plus

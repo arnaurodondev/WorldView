@@ -972,4 +972,7 @@ def test_morning_prompt_v4_contains_required_sections() -> None:
     # PLAN-0103 W9 bumped 4.3 → 4.4: SPLIT the single 250-word cap into a 50-word
     # Summary cap + a 700-word Details cap with per-section guidance — the old
     # global cap was too restrictive for 6 sections.
-    assert MORNING_BRIEFING.version == "4.4", MORNING_BRIEFING.version
+    # PLAN-0103 W11 bumped 4.4 → 4.5: ADAPTIVE Summary length (target ~100w,
+    # 30-200w bands) replacing the fixed 50-word cap that truncated synthesis
+    # on large portfolios / very active days.
+    assert MORNING_BRIEFING.version == "4.5", MORNING_BRIEFING.version
