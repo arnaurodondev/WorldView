@@ -12,6 +12,7 @@ from __future__ import annotations
 from datetime import date
 from typing import TYPE_CHECKING, Any
 
+import structlog
 from sqlalchemy import and_, func, select, text
 
 from market_data.application.ports.repositories import MetricDataPoint, ScreenFilter, ScreenResult
@@ -50,6 +51,64 @@ _SNAP_FIELDS: tuple[str, ...] = (
 
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession
+
+_log = structlog.get_logger(__name__)
+
+# PLAN-0103 W16 (BP-635, 2026-05-30): introspect the real
+# ``instrument_fundamentals_snapshot`` table to discover which of the
+# ``_SNAP_FIELDS`` columns physically exist in the deployed schema.
+#
+# WHY this guard exists: ``query_screen`` projects every entry in
+# ``_SNAP_FIELDS`` unconditionally (``getattr(snap, sf)``). When the deployed
+# DB lags the ORM (e.g. migrations 028 / 030 not yet applied — calendar
+# columns ``next_earnings_date`` / ``next_dividend_date`` and the L-4b
+# ``insider_net_buy_90d`` column missing), the generated SQL referenced
+# non-existent columns and asyncpg raised
+# ``UndefinedColumnError: column instrument_fundamentals_snapshot.next_earnings_date does not exist``,
+# which surfaced as a 500 to ``/v1/fundamentals/screen`` and triggered the
+# BP-623 honest-refusal pattern in rag-chat (see Q2 ``ru_ai_semi_screener``
+# benchmark regression, 2026-05-30 run).
+#
+# We resolve the available column set lazily once per process from the
+# AsyncSession's bind metadata. Result is cached in ``_AVAILABLE_SNAP_FIELDS``
+# until process restart, which is when migrations would have been re-applied.
+_AVAILABLE_SNAP_FIELDS: tuple[str, ...] | None = None
+
+
+async def _resolve_available_snap_fields(session: AsyncSession) -> tuple[str, ...]:
+    """Return the subset of ``_SNAP_FIELDS`` present in the live DB schema.
+
+    Lazy + memoised: first call introspects ``information_schema.columns``;
+    subsequent calls reuse the cached tuple. If introspection fails (rare —
+    permissions / unexpected schema), we fall back to the full ``_SNAP_FIELDS``
+    set and let SQL surface the error normally so we never silently mask a
+    real bug behind defensive fallback.
+    """
+    global _AVAILABLE_SNAP_FIELDS
+    if _AVAILABLE_SNAP_FIELDS is not None:
+        return _AVAILABLE_SNAP_FIELDS
+
+    try:
+        result: Any = await session.execute(
+            text(
+                "SELECT column_name FROM information_schema.columns "
+                "WHERE table_name = 'instrument_fundamentals_snapshot'"
+            )
+        )
+        present = {row[0] for row in result.all()}
+        available = tuple(sf for sf in _SNAP_FIELDS if sf in present)
+        missing = [sf for sf in _SNAP_FIELDS if sf not in present]
+        if missing:
+            _log.warning(
+                "snap_fields_missing_from_schema",
+                missing=missing,
+                available_count=len(available),
+            )
+        _AVAILABLE_SNAP_FIELDS = available
+        return available
+    except Exception as e:  # pragma: no cover — introspection failure path
+        _log.warning("snap_fields_introspect_failed", error=str(e))
+        return _SNAP_FIELDS
 
 
 async def query_timeseries(
@@ -140,6 +199,10 @@ async def query_screen(
     instr = InstrumentModel
     snap = InstrumentFundamentalsSnapshotModel
 
+    # PLAN-0103 W16 (BP-635): only project snapshot columns the deployed schema
+    # actually has. See ``_resolve_available_snap_fields`` for rationale.
+    snap_fields_available: tuple[str, ...] = await _resolve_available_snap_fields(session)
+
     if not filters:
         # No filters — return ALL instruments sorted by symbol, with the most
         # common display metrics populated via LEFT JOIN so the screener table
@@ -197,7 +260,7 @@ async def query_screen(
         ]
         for metric_name, sq in key_sqs.items():
             select_cols.append(sq.c.value_numeric.label(metric_name))
-        for sf in _SNAP_FIELDS:
+        for sf in snap_fields_available:
             select_cols.append(getattr(snap, sf).label(f"snap_{sf}"))
 
         stmt = select(*select_cols).order_by(instr.symbol.asc()).offset(offset).limit(limit)
@@ -221,7 +284,7 @@ async def query_screen(
                     **{name: getattr(row, name, None) for name in key_metrics if getattr(row, name, None) is not None},
                     **{
                         sf: getattr(row, f"snap_{sf}")
-                        for sf in _SNAP_FIELDS
+                        for sf in snap_fields_available
                         if getattr(row, f"snap_{sf}", None) is not None
                     },
                 },
@@ -291,7 +354,7 @@ async def query_screen(
     ]
     for metric_name, col in metric_columns:
         filter_select_cols.append(col.label(metric_name))
-    for sf in _SNAP_FIELDS:
+    for sf in snap_fields_available:
         filter_select_cols.append(getattr(snap, sf).label(f"snap_{sf}"))
 
     stmt = select(*filter_select_cols)
@@ -348,6 +411,11 @@ async def query_screen(
         "insider_net_buy_90d",
     )
     for snap_field in numeric_snap_filters:
+        # PLAN-0103 W16 (BP-635): skip predicates against columns the deployed
+        # schema lacks. Without this, an L-4b insider_net_buy_90d filter on a
+        # pre-030 DB would generate ``UndefinedColumnError``.
+        if snap_field not in snap_fields_available:
+            continue
         min_attr = f"{snap_field}_min"
         max_attr = f"{snap_field}_max"
         min_val = next((getattr(f, min_attr) for f in filters if getattr(f, min_attr, None) is not None), None)
@@ -379,6 +447,10 @@ async def query_screen(
         ("next_dividend_within_days", "next_dividend_date"),
     )
     for filter_attr, snap_col in calendar_date_filters:
+        # PLAN-0103 W16 (BP-635): skip if the snapshot lacks the calendar
+        # column (migration 028 not yet applied on this DB).
+        if snap_col not in snap_fields_available:
+            continue
         days = next(
             (getattr(f, filter_attr) for f in filters if getattr(f, filter_attr, None) is not None),
             None,
@@ -400,12 +472,14 @@ async def query_screen(
     elif sort_by in numeric_snap_filters:
         # Wave L-2: ORDER BY snapshot.<col>; column lookup is by Python attribute
         # name (no raw SQL), so this is safe to call directly without re-validation.
-        sort_col = getattr(snap, sort_by)
+        # PLAN-0103 W16 (BP-635): if the column is missing from the deployed
+        # schema, fall back to instrument_id sort rather than 500-ing.
+        sort_col = getattr(snap, sort_by) if sort_by in snap_fields_available else None
     elif sort_by in {"next_earnings_date", "next_dividend_date"}:
         # Wave L-5c: ORDER BY snapshot calendar columns (ASC = soonest first).
         # Reuses the same nullslast policy below — instruments with NULL
         # calendar values sort last regardless of direction.
-        sort_col = getattr(snap, sort_by)
+        sort_col = getattr(snap, sort_by) if sort_by in snap_fields_available else None
     elif sort_by is not None:
         # metric sort: find the column from the metric subqueries
         sort_col = next((col for mn, col in metric_columns if mn == sort_by), base.c.instrument_id)
@@ -432,7 +506,7 @@ async def query_screen(
         metrics_dict: dict[str, Any] = {}
         for metric_name, _ in metric_columns:
             metrics_dict[metric_name] = getattr(row, metric_name, None)
-        for sf in _SNAP_FIELDS:
+        for sf in snap_fields_available:
             v = getattr(row, f"snap_{sf}", None)
             if v is not None:
                 metrics_dict[sf] = v

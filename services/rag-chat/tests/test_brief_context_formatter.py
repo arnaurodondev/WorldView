@@ -440,6 +440,40 @@ def test_build_morning_risk_summary_real_sector_exposure_dataclass() -> None:
         assert isinstance(value, float)
 
 
+# PLAN-0103 W18 (BP-636) regression — zero-weight sector buckets
+# ("Diversified Equity: 0.0", "Unknown: 0.0") must be filtered out so
+# they never leak into the brief context shown to the operator or the LLM.
+def test_build_morning_risk_summary_filters_zero_sector_buckets() -> None:
+    """sector_breakdown drops sectors with weight ≤ 0.5%."""
+    from types import SimpleNamespace
+
+    from rag_chat.application.models.briefing_context import SectorExposure
+
+    formatter = _make_formatter()
+
+    exposure = SectorExposure(
+        by_sector={
+            "Technology": 0.5,
+            "Energy": 0.3,
+            "Diversified Equity": 0.0,  # synthetic placeholder
+            "Unknown": 0.001,  # near-zero noise (below 0.5% threshold)
+        }
+    )
+    ctx = SimpleNamespace(sector_exposure=exposure, portfolio=None)
+
+    result = formatter.build_morning_risk_summary(ctx)
+
+    # Zero / near-zero buckets must NOT appear in the output.
+    assert "Diversified Equity" not in result["sector_breakdown"]
+    assert "Unknown" not in result["sector_breakdown"]
+    # Healthy buckets are preserved verbatim.
+    assert result["sector_breakdown"] == {"Technology": 0.5, "Energy": 0.3}
+    # Concentration is still meaningful — Herfindahl over the kept buckets.
+    # 0.5² + 0.3² = 0.25 + 0.09 = 0.34, but after renormalisation by total
+    # (0.8): weights become 0.625, 0.375 → HHI = 0.390625 + 0.140625 = 0.53125.
+    assert result["concentration_score"] == pytest.approx(0.5313, abs=1e-3)
+
+
 def test_build_morning_risk_summary_sector_hhi_preferred_over_holdings_hhi() -> None:
     """When sectors are available, sector-HHI overrides holdings-HHI.
 

@@ -71,7 +71,11 @@
   expected_tools: [traverse_graph, get_entity_paths]
   expected_entities_mentioned: [OpenAI, Microsoft]
   expected_numeric_class: none
-  expected_min_words: 80
+  # PLAN-0103 W17 (2026-05-30): relationship-path answers are inherently
+  # terse ("Microsoft invested $13B in OpenAI; OpenAI is Azure-exclusive…");
+  # 80-word floor was a false-positive WARN trigger. 40 reflects the
+  # natural answer length without rewarding stub responses.
+  expected_min_words: 40
   expected_max_latency_s: 75
   must_not_say:
     - "No connection found"
@@ -207,7 +211,8 @@
   expected_tools: [traverse_graph, get_entity_paths]
   expected_entities_mentioned: [OpenAI, Microsoft]
   expected_numeric_class: none
-  expected_min_words: 80
+  # PLAN-0103 W17: see ru_openai_msft_paths — same rationale.
+  expected_min_words: 40
   expected_max_latency_s: 75
   must_not_say: []
   notes: "Sister of ru_openai_msft_paths."

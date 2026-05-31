@@ -636,6 +636,15 @@ class BriefContextFormatter:
             # Defensive copy + cast: by_sector is dict[str, float] but the
             # values arrive as Decimals/floats from PnL aggregation.
             sector_breakdown = {str(k): float(v) for k, v in sector_exposure.by_sector.items()}
+            # PLAN-0103 W18 (BP-636, 2026-05-30): drop zero / near-zero
+            # buckets ("Diversified Equity: 0.0", "Unknown: 0.0") that leak
+            # into ``by_sector`` from synthetic placeholder rows in the
+            # exposure aggregator.  These are pure noise for both the
+            # operator dashboard and the brief LLM (they confuse the
+            # concentration narrative without adding signal).  Threshold
+            # 0.005 = 0.5% — anything below that is below the rounding
+            # precision used downstream by the renderer anyway.
+            sector_breakdown = {k: v for k, v in sector_breakdown.items() if v > 0.005}
 
         # ── Concentration: prefer sector-HHI when sectors are present ─────
         # The denominator normalises away the "Unknown" bucket weight so a

@@ -44,6 +44,33 @@ async def client(app):
         yield ac
 
 
+# PLAN-0103 W16 (BP-635): the screener introspects information_schema once
+# per process to discover which snap-field columns exist. Captured-session
+# tests don't simulate that query, so the cache would default to "no
+# columns present" and strip the projection (breaking pre-existing
+# WHERE/ORDER BY assertions). Pre-fill the cache to the full ORM set here
+# so existing tests continue to assert against the complete projection.
+# Tests that specifically exercise the introspection path (see
+# test_screener_snap_field_introspection.py) reset the cache themselves.
+@pytest.fixture(autouse=True)
+def _prefill_snap_field_cache() -> None:
+    """Pre-populate the snap-field cache to the full ORM set for unit tests."""
+    try:
+        from market_data.infrastructure.db.repositories import fundamental_metrics_query as _fmq
+
+        _fmq._AVAILABLE_SNAP_FIELDS = _fmq._SNAP_FIELDS
+    except ImportError:
+        # Module not yet importable in environments without the deps loaded.
+        pass
+    yield
+    try:
+        from market_data.infrastructure.db.repositories import fundamental_metrics_query as _fmq
+
+        _fmq._AVAILABLE_SNAP_FIELDS = None
+    except ImportError:
+        pass
+
+
 @pytest.fixture
 async def e2e_live_client():
     """HTTP client pointing at the live market-data service on localhost:8003.
