@@ -55,9 +55,14 @@ class TestMorningBriefingCitationInstructions:
         # least one [N#]" rule body signals enforcement.
         assert "MANDATORY" in result or "must end with at least one" in result
 
-    def test_version_is_43(self) -> None:
-        """MORNING_BRIEFING bumped to v4.3 for PLAN-0103 W6 (few-shot examples)."""
-        assert MORNING_BRIEFING.version == "4.3"
+    def test_version_is_44(self) -> None:
+        """MORNING_BRIEFING bumped to v4.4 for PLAN-0103 W9 (word-cap split).
+
+        v4.3 added few-shot examples; v4.4 split the single 250-word cap into
+        a 50-word Summary cap + a 700-word Details cap with per-section
+        guidance (BP-630).  Asserting the current version pins prompt drift.
+        """
+        assert MORNING_BRIEFING.version == "4.4"
 
     def test_contains_few_shot_examples(self) -> None:
         """v4.3 must embed both Example A (rich day) and Example B (quiet day) markers."""

@@ -66,6 +66,25 @@ VERSION HISTORY
         ``brief_parser.parse_sections_with_citations`` continues to work on
         the ``## Details`` block — no divider is required between Summary and
         Details (Summary is identified by its heading).
+- 4.4 — PLAN-0103 W9 (2026-05-30): SPLIT the single ``250 words`` cap into TWO
+        explicit caps + per-section guidance. The v4.3 wording ``Cap total
+        brief at 250 words`` was the WRONG design — 250 words is far too
+        restrictive for a 6-section investor brief that must carry depth.
+        v4.4 splits the budget into:
+          * ``## Summary`` ≤ 50 words (1-3 sentences) — this is the
+            collapsed dashboard surface the user reads at a glance.
+          * ``## Details`` ≤ 700 words total with per-section guidance
+            (Tape ≤ 25w; Your Portfolio Today 3-6 bullets ~20w each;
+            Macro Today 1-4 bullets; News That Matters To You 3-5 bullets
+            ~25w each; Risks + Opportunities 2-3 bullets ~20w each;
+            Bonus context 1-2 bullets ~25w each). On quiet days the brief
+            naturally lands ≤ 300 words; on busy days it can use the full
+            ~700 word budget without bumping into a structural cap.
+        Examples A and B were edited to fit the new ≤ 700 words details
+        budget comfortably (no other shape change).  Parser unchanged —
+        ``split_summary_paragraph`` still soft-caps the extracted summary
+        at 300 chars for the schema field, which is a tighter constraint
+        than the 50-word prompt directive (≈300 chars = 50 short words).
 """
 
 from __future__ import annotations
@@ -74,13 +93,19 @@ from prompts._base import PromptTemplate
 
 MORNING_BRIEFING = PromptTemplate(
     name="morning_briefing",
-    # Bumped 4.2 → 4.3 as part of PLAN-0103 W6 (add few-shot examples).
-    version="4.3",
+    # Bumped 4.3 → 4.4 as part of PLAN-0103 W9 (split the word cap correctly).
+    # The single ``250 words`` cap from v4.3 was the wrong design — a 6-section
+    # investor brief needs depth.  v4.4 splits the budget into a 50-word
+    # Summary cap (collapsed dashboard surface) and a 700-word Details cap
+    # with explicit per-section guidance so each section can carry real
+    # signal without the LLM truncating the brief.
+    version="4.4",
     description=(
-        "Morning market briefing v4.3 — v4.2 contract (## Summary + 6 mandatory "
-        "sections) plus TWO few-shot examples (Example A — rich day, Example B — "
-        "quiet day) that teach the desired output shape so the LLM cannot silently "
-        "drop sections or skip the Summary block on quiet news days"
+        "Morning market briefing v4.4 — v4.3 contract (## Summary + 6 mandatory "
+        "sections + few-shot Examples A/B) plus the split word budget: Summary "
+        "≤ 50 words (collapsed dashboard surface); Details ≤ 700 words total "
+        "with explicit per-section bullet/word guidance so depth isn't truncated "
+        "by a single overall cap"
     ),
     template=(
         # ── Role + goal ───────────────────────────────────────────────────────
@@ -209,8 +234,19 @@ MORNING_BRIEFING = PromptTemplate(
         "{safety}\n\n"
         "As of: {current_date}\n\n"
         # ── Format / hard rules ───────────────────────────────────────────────
-        "## Format Rules\n"
-        "- Cap total brief at 250 words (Summary + Details combined).\n"
+        # WHY two explicit caps (v4.4): the previous single ``250 words`` cap
+        # was too restrictive for a 6-section brief — the LLM was forced to
+        # truncate per-section signal. v4.4 budgets the two blocks
+        # separately so the dashboard collapsed surface stays tight while
+        # the expanded details view can carry real depth.
+        "## Summary block: ≤ 50 words, 1-3 sentences.\n"
+        "## Details block: ≤ 700 words across all 6 sections combined. "
+        "Per-section guidance: Tape ≤ 25 words (one line); "
+        "Your Portfolio Today 3-6 bullets, ~20 words each; "
+        "Macro Today 1-4 bullets; "
+        "News That Matters To You 3-5 bullets, ~25 words each; "
+        "Risks + Opportunities 2-3 bullets; "
+        "Bonus context 1-2 bullets.\n"
         "- Output pure markdown (no HTML tags).\n"
         "- Emit the literal ``## Summary`` and ``## Details`` headings exactly\n"
         "  as written above. Inside ``## Details`` use ``**Section Name**``\n"

@@ -63,8 +63,8 @@ class TestMorningBriefing:
         )
         assert "Never speculate beyond the evidence provided" in result
 
-    def test_v42_six_section_spec(self) -> None:
-        """Prompt must instruct the LLM to emit the v4.2 six-section investor brief.
+    def test_v44_six_section_spec(self) -> None:
+        """Prompt must instruct the LLM to emit the v4.4 six-section investor brief.
 
         VERSION HISTORY (test):
           - PLAN-0048 Wave A (v2.2): ## SUMMARY + --- + ## DETAILS.
@@ -79,6 +79,9 @@ class TestMorningBriefing:
             for the dashboard collapsed view AND promoted all 6 sections to
             MANDATORY (placeholder lines on quiet sections) so the LLM cannot
             drop Risks + Opportunities / Bonus context on quiet news days (FQA-01).
+          - PLAN-0103 W9 (v4.4): SPLIT the single ``250 words`` cap into a 50-word
+            Summary cap + a 700-word Details cap with per-section guidance.
+            The 250-word global cap was too restrictive for 6 sections.
 
         WHY update (not delete): R19 — the prompt is still mandating a structural
         contract, only its shape has changed. We assert the new contract.
@@ -99,8 +102,21 @@ class TestMorningBriefing:
         assert "**News That Matters To You**" in result
         assert "**Risks + Opportunities**" in result
         assert "**Bonus context**" in result
-        # The 250-word cap must still be enforced verbatim (v4.2 phrasing).
-        assert "250 words" in result
+        # v4.4 — the single 250-word cap is GONE; replaced by the split caps below.
+        # We assert its absence so a future regression cannot silently re-introduce
+        # the restrictive global cap.
+        assert "250 words" not in result, "v4.4 deleted the 250-word global cap"
+        assert "Cap total brief" not in result, "v4.4 deleted the single 'cap total brief' directive"
+        # v4.4 — the split caps must both be present verbatim.
+        # (a) Summary block: ≤ 50 words, 1-3 sentences.
+        assert "Summary block: ≤ 50 words" in result
+        # (b) Details block: ≤ 700 words across all 6 sections combined.
+        assert "Details block: ≤ 700 words" in result
+        # Per-section guidance signposts — at least the two highest-signal
+        # sections must carry an explicit budget so the LLM can stop
+        # truncating News and Portfolio bullets at 250 words.
+        assert "Your Portfolio Today 3-6 bullets" in result
+        assert "News That Matters To You 3-5 bullets" in result
         # Citations must use [N#] form; the legacy [c1] form is gone in v4.1+.
         assert "[N1]" in result and "[N2]" in result
         # v4.1 deletions: the legacy LEAD/DETAILS template + 4/4 caps must be gone.
@@ -117,11 +133,11 @@ class TestMorningBriefing:
         assert "## Summary" in result
         assert "## Details" in result
         assert "MANDATORY" in result
-        # Version constant must reflect the v4.3 release (PLAN-0103 W6).
-        # v4.3 added few-shot examples; the v4.2 contract above still holds.
-        assert MORNING_BRIEFING.version == "4.3"
+        # Version constant must reflect the v4.4 release (PLAN-0103 W9).
+        # v4.4 split the 250-word cap into 50w Summary + 700w Details.
+        assert MORNING_BRIEFING.version == "4.4"
 
-    def test_v43_few_shot_examples_present(self) -> None:
+    def test_v44_few_shot_examples_present(self) -> None:
         """v4.3 must embed BOTH few-shot examples (rich + quiet day).
 
         WHY: the v4.2 imperative prompt alone failed in production (FQA-01

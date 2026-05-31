@@ -941,9 +941,27 @@ on retry. Returns 409 on replay. Single-instance only — move to Valkey for mul
 ## Morning Brief — 5-Minute Investor Brief Structure (PLAN-0102 W1)
 
 The morning brief is structured as a 5-minute investor summary, NOT a news
-aggregator. The prompt at `libs/prompts/src/prompts/briefing/morning.py` (v4.3)
+aggregator. The prompt at `libs/prompts/src/prompts/briefing/morning.py` (v4.4)
 instructs the LLM to emit a leading `## Summary` paragraph followed by six
 named sections in this exact order.
+
+> **v4.4 release (PLAN-0103 W9, 2026-05-30, BP-630)**: SPLITS the single
+> 250-word cap into TWO explicit caps + per-section guidance. The v4.3
+> directive `Cap total brief at 250 words` was structurally incompatible
+> with a 6-section investor brief that must carry depth — the LLM either
+> truncated News bullets (the most signal-rich section) or compressed all
+> sections to one-line skeletons.  v4.4 budgets `## Summary block: ≤ 50
+> words, 1-3 sentences` (the collapsed dashboard surface the user reads at
+> a glance) separately from `## Details block: ≤ 700 words across all 6
+> sections combined` (Tape ≤ 25 words one line; Your Portfolio Today 3-6
+> bullets ~20 words each; Macro Today 1-4 bullets; News That Matters To
+> You 3-5 bullets ~25 words each; Risks + Opportunities 2-3 bullets;
+> Bonus context 1-2 bullets). On quiet days the brief naturally lands
+> ≤ 300 words; on busy days it can use the full ~700-word details budget
+> without truncating signal. The parser's `split_summary_paragraph` still
+> soft-caps the extracted summary at 300 chars (a tighter constraint than
+> the 50-word prompt directive) so the schema invariant holds even if the
+> LLM overruns.
 
 > **v4.3 release (PLAN-0103 W6, 2026-05-30)**: adds TWO few-shot examples
 > (Example A — rich day, Example B — quiet day) that teach the LLM the
@@ -986,7 +1004,10 @@ named sections in this exact order.
 | 5. **Risks + Opportunities** | 60 s | "Where am I exposed today?" | LLM synthesises across Tape + Macro + Portfolio |
 | 6. **Bonus context** | 30 s | "What else should I know?" | 1–2 generic high-impact items |
 
-Total cap **250 words**. Citations use `[N1] [N2]` markers (the existing v3.0
+**Word budget (v4.4)**: `## Summary` ≤ 50 words (1-3 sentences); `## Details`
+≤ 700 words total with per-section guidance (see v4.4 release note above).
+The old single 250-word global cap is GONE — it was too restrictive for the
+6-section spec and forced the LLM to drop signal. Citations use `[N1] [N2]` markers (the existing v3.0
 output-format block is preserved beneath the new spec so the parser, deduper,
 and citation gate continue to function).
 

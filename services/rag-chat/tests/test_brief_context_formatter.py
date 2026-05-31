@@ -382,6 +382,64 @@ def test_build_morning_risk_summary_populates_sector_breakdown() -> None:
     assert result["concentration_score"] == pytest.approx(0.485, abs=1e-3)
 
 
+def test_build_morning_risk_summary_real_sector_exposure_dataclass() -> None:
+    """End-to-end regression: real ``SectorExposure`` dataclass → non-empty output.
+
+    PLAN-0103 W10 follow-up to BP-627: every previous regression test in
+    this module wraps the context in ``MagicMock()``, which is permissive
+    (attribute access NEVER raises and returns yet another Mock).  That
+    misses an entire class of bug — e.g. accessing ``ctx.sector_exposure``
+    via the wrong attribute name would silently pass with a Mock but blow
+    up against the real frozen dataclass.
+
+    This test constructs a REAL ``SectorExposure`` dataclass with a
+    realistic 4-sector breakdown (Technology 50%, Energy 20%, Financials
+    20%, Unknown 10% — mirrors a dev user's actual portfolio after the
+    ETF backfill from BP-629), wraps it in a minimal object exposing
+    ``sector_exposure`` + ``portfolio = None``, and asserts the formatter:
+      * surfaces all 4 sector buckets verbatim
+      * computes a sector-HHI > 0 (the bug shape from FQA-03 was
+        concentration_score == 0 even when sector data was healthy).
+    """
+    from rag_chat.application.models.briefing_context import SectorExposure
+
+    formatter = _make_formatter()
+
+    # Realistic post-backfill breakdown — what the live dev user's brief
+    # should look like once BP-627 + BP-629 + this wave's diagnostics
+    # land and the cache is warm.
+    real_exposure = SectorExposure(
+        by_sector={
+            "Information Technology": 0.50,
+            "Energy": 0.20,
+            "Financials": 0.20,
+            "Unknown": 0.10,
+        }
+    )
+
+    # SimpleNamespace gives us a real attribute lookup (not Mock's
+    # permissive __getattr__) so ``getattr(ctx, "sector_exposure", None)``
+    # exercises the actual attribute name the formatter expects.
+    from types import SimpleNamespace
+
+    ctx = SimpleNamespace(sector_exposure=real_exposure, portfolio=None)
+
+    result = formatter.build_morning_risk_summary(ctx)
+
+    # All four sector buckets must surface — empty {} was the FQA-03 bug.
+    assert set(result["sector_breakdown"].keys()) == {
+        "Information Technology",
+        "Energy",
+        "Financials",
+        "Unknown",
+    }
+    # Sector-HHI: 0.50² + 0.20² + 0.20² + 0.10² = 0.34
+    assert result["concentration_score"] == pytest.approx(0.34, abs=1e-3)
+    # Cast preserves float type (not Decimal / numpy / Mock).
+    for value in result["sector_breakdown"].values():
+        assert isinstance(value, float)
+
+
 def test_build_morning_risk_summary_sector_hhi_preferred_over_holdings_hhi() -> None:
     """When sectors are available, sector-HHI overrides holdings-HHI.
 

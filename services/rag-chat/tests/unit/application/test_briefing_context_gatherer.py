@@ -969,4 +969,7 @@ def test_morning_prompt_v4_contains_required_sections() -> None:
     # PLAN-0103 W6 bumped 4.2 → 4.3: added Example A (rich day) + Example B
     # (quiet day) few-shot demonstrations to teach the LLM the output shape,
     # paired with defensive parser-side section/summary injection.
-    assert MORNING_BRIEFING.version == "4.3", MORNING_BRIEFING.version
+    # PLAN-0103 W9 bumped 4.3 → 4.4: SPLIT the single 250-word cap into a 50-word
+    # Summary cap + a 700-word Details cap with per-section guidance — the old
+    # global cap was too restrictive for 6 sections.
+    assert MORNING_BRIEFING.version == "4.4", MORNING_BRIEFING.version
