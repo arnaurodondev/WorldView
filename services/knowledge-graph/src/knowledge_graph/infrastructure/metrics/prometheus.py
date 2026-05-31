@@ -48,6 +48,21 @@ s7_relations_upserted_total = Counter(
     "Total relation upserts performed by the hot-path write block (Block 12a).",
 )
 
+# ── PLAN-0103 W19 / BP-637: canonical_entities sector coverage ─────────────
+# Counts the number of canonical_entities rows scanned by sector-aware
+# consumers (rag-chat risk_summary, /internal/v1/sectors) whose
+# ``metadata->>'sector'`` is NULL. A non-zero baseline is expected (provisional
+# entities, just-discovered tickers awaiting their first fundamentals refresh),
+# but a growing rate alerts that ingestion is regressing — historically this
+# was the silent gap that left 1080/1108 instruments untagged because the
+# EODHD fundamentals_refresh worker wrote sector data as a graph relation
+# but never mirrored it into the metadata JSONB column.
+s7_canonical_entity_sector_unknown_total = Counter(
+    "canonical_entity_sector_unknown_total",
+    "Times a sector-aware lookup hit a canonical entity with NULL metadata.sector.",
+    ["surface"],  # 'sectors_api', 'fundamentals_refresh', etc.
+)
+
 s7_evidence_appended_total = Counter(
     "s7_evidence_appended_total",
     "Total evidence rows appended to relation_evidence_raw.",

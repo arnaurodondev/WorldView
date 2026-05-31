@@ -92,6 +92,30 @@ _ETF_TABLE: list[_EtfRow] = [
     {"ticker": "BND", "sector": "Fixed Income", "industry": "US Aggregate Bond", "asset_class": "ETF"},
     {"ticker": "AGG", "sector": "Fixed Income", "industry": "US Aggregate Bond", "asset_class": "ETF"},
     {"ticker": "TLT", "sector": "Fixed Income", "industry": "US Long Treasuries", "asset_class": "ETF"},
+    {"ticker": "SHY", "sector": "Fixed Income", "industry": "US Short Treasuries", "asset_class": "ETF"},
+    {"ticker": "LQD", "sector": "Fixed Income", "industry": "US Investment Grade Corp", "asset_class": "ETF"},
+    {"ticker": "HYG", "sector": "Fixed Income", "industry": "US High Yield Corp", "asset_class": "ETF"},
+    {"ticker": "TIP", "sector": "Fixed Income", "industry": "US TIPS", "asset_class": "ETF"},
+    # Industry / thematic — PLAN-0103 W19 (BP-637)
+    # PPA was the headline gap that triggered this wave: it's an Aerospace &
+    # Defense fund the dev user holds at ~5 %; without the curated row the
+    # morning brief reported a phantom "Unknown" bucket. We tag the sector
+    # as Industrials (GICS parent) so it aggregates with XLI rather than
+    # being a standalone slice — the brief surfaces sector-level HHI, not
+    # sub-industry-level.
+    {"ticker": "PPA", "sector": "Industrials", "industry": "Aerospace & Defense", "asset_class": "ETF"},
+    {"ticker": "ITA", "sector": "Industrials", "industry": "Aerospace & Defense", "asset_class": "ETF"},
+    {"ticker": "JETS", "sector": "Industrials", "industry": "Airlines", "asset_class": "ETF"},
+    {"ticker": "SOXX", "sector": "Information Technology", "industry": "Semiconductors", "asset_class": "ETF"},
+    {"ticker": "SMH", "sector": "Information Technology", "industry": "Semiconductors", "asset_class": "ETF"},
+    {"ticker": "IBB", "sector": "Health Care", "industry": "Biotechnology", "asset_class": "ETF"},
+    {"ticker": "KRE", "sector": "Financials", "industry": "Regional Banks", "asset_class": "ETF"},
+    {"ticker": "KWEB", "sector": "Communication Services", "industry": "China Internet", "asset_class": "ETF"},
+    {"ticker": "EFA", "sector": "Diversified Equity", "industry": "Developed-Markets ex-US", "asset_class": "ETF"},
+    {"ticker": "EEM", "sector": "Diversified Equity", "industry": "Emerging Markets", "asset_class": "ETF"},
+    {"ticker": "USO", "sector": "Commodities", "industry": "Crude Oil", "asset_class": "ETF"},
+    {"ticker": "FBTC", "sector": "Digital Assets", "industry": "Spot Bitcoin", "asset_class": "ETF"},
+    {"ticker": "ETHE", "sector": "Digital Assets", "industry": "Spot Ethereum", "asset_class": "ETF"},
 ]
 
 

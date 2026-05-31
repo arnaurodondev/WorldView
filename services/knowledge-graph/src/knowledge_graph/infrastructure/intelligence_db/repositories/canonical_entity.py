@@ -178,6 +178,47 @@ LIMIT 1
             "metadata": row[6],
         }
 
+    async def patch_metadata(self, entity_id: UUID, updates: dict[str, object]) -> None:
+        """Merge *updates* into ``canonical_entities.metadata`` (JSONB ``||``).
+
+        PLAN-0103 W19 / BP-637: the EODHD fundamentals_refresh worker already
+        wrote sector/industry data as graph relations (``is_in_sector`` /
+        ``is_in_industry``), but never mirrored those values into the
+        ``metadata`` JSONB column that the rag-chat ``risk_summary``
+        aggregator and the ``GET /internal/v1/sectors`` endpoint actually
+        read. The result was 683/1108 (~62%) of tickered canonical entities
+        with NULL ``metadata->>'sector'`` despite the data being available
+        downstream in ``relations``. This method is the write side of the
+        gap fix: it is now called from ``_write_sector_relations`` whenever
+        we successfully resolve a sector/industry, and is also used by the
+        ``scripts/backfill_canonical_sectors_*`` one-shots.
+
+        Idempotent — passing the same *updates* a second time is a no-op
+        for the aggregator (values overwrite themselves) and leaves any
+        unrelated keys (e.g. ``market_cap``) untouched.
+
+        Args:
+        ----
+            entity_id: Target canonical entity UUID.
+            updates:   Top-level keys to merge into the metadata JSONB.
+
+        """
+        # Local import to keep the read-only side of the class importable
+        # without pulling json eagerly into hot read paths.
+        import json
+
+        await self._session.execute(
+            text(
+                """
+UPDATE canonical_entities
+SET metadata = COALESCE(metadata, '{}'::jsonb) || cast(:updates AS jsonb),
+    updated_at = now()
+WHERE entity_id = :entity_id
+""",
+            ),
+            {"entity_id": str(entity_id), "updates": json.dumps(updates)},
+        )
+
     async def create_or_get(
         self,
         canonical_name: str,

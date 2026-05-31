@@ -520,6 +520,12 @@ def _make_sector_repos(sector_found: bool = True, industry_found: bool = True) -
             else (_INDUSTRY_ENTITY_ID if typ == "industry_group" and industry_found else None)
         ),
     )
+    # PLAN-0103 W19 / BP-637: _write_sector_relations now also mirrors the
+    # sector/industry into ``canonical_entities.metadata`` via
+    # ``patch_metadata``. We stub it here so every existing test continues
+    # to work, and the new ``test_sector_metadata_mirrored`` asserts the
+    # call payload.
+    entity_repo.patch_metadata = AsyncMock(return_value=None)
     return relation_repo, evidence_repo, entity_repo
 
 
@@ -562,6 +568,89 @@ class TestSectorRelationUpsert:
         assert sector_call_kwargs["canonical_type"] == "is_in_sector"
         industry_call_kwargs = relation_repo.upsert.call_args_list[1].kwargs
         assert industry_call_kwargs["canonical_type"] == "is_in_industry"
+
+    def test_sector_metadata_mirrored(self) -> None:
+        """PLAN-0103 W19 / BP-637: EODHD sector + industry mirrored into metadata.
+
+        Regression for the silent gap that left 1080/1108 tickered canonical
+        entities with NULL ``metadata->>'sector'`` even when the EODHD
+        fundamentals call had successfully classified them — the graph
+        relation got written but the JSONB column the brief actually reads
+        did not.
+        """
+        http = _make_profile_http(gic_sector="Technology")
+        # Force the JSON payload to include both Sector + Industry under
+        # the canonical EODHD names so the worker exercises both branches
+        # of the metadata patch.
+        relation_repo, evidence_repo, entity_repo = _make_sector_repos()
+        worker = _make_worker_bare()
+
+        profile_data = asyncio.run(worker._fetch_company_profile_data(http, _ENTITY_ID))
+        assert profile_data is not None
+
+        asyncio.run(
+            worker._write_sector_relations(
+                _ENTITY_ID,
+                _ENTITY_ID,
+                profile_data,
+                relation_repo,
+                evidence_repo,
+                entity_repo,
+            ),
+        )
+
+        # patch_metadata must be called exactly once with the mirrored
+        # sector + industry + asset_class keys.
+        entity_repo.patch_metadata.assert_awaited_once()
+        called_eid, called_patch = entity_repo.patch_metadata.call_args.args
+        assert called_eid == _ENTITY_ID
+        assert called_patch["sector"] == "Technology"
+        assert called_patch["industry"] == "Software & Services"
+        # asset_class="Equity" makes the rag-chat ETF fallback skip this row.
+        assert called_patch["asset_class"] == "Equity"
+
+    def test_sector_metadata_not_written_when_both_missing(self) -> None:
+        """No sector AND no industry in EODHD payload → patch_metadata NOT called.
+
+        Prevents bumping ``updated_at`` and noisy log spam for the small
+        slice of EODHD records that genuinely have neither field
+        populated (~private holdings, delisted shells).
+        """
+        http = _make_profile_http()
+        # Override the response payload: drop both sector + industry keys.
+        http.get.return_value.json = MagicMock(
+            return_value={
+                "security_id": str(_ENTITY_ID),
+                "records": [
+                    {
+                        "id": "00000000-0000-0000-0000-000000000002",
+                        "section": "company_profile",
+                        "period_end": "2024-10-01T00:00:00",
+                        "period_type": "snapshot",
+                        "data": {},  # empty — nothing to mirror
+                        "source": "eodhd",
+                        "ingested_at": "2024-10-01T00:00:00",
+                    },
+                ],
+            },
+        )
+        relation_repo, evidence_repo, entity_repo = _make_sector_repos()
+        worker = _make_worker_bare()
+
+        profile_data = asyncio.run(worker._fetch_company_profile_data(http, _ENTITY_ID))
+        assert profile_data is not None
+        asyncio.run(
+            worker._write_sector_relations(
+                _ENTITY_ID,
+                _ENTITY_ID,
+                profile_data,
+                relation_repo,
+                evidence_repo,
+                entity_repo,
+            ),
+        )
+
+        entity_repo.patch_metadata.assert_not_awaited()
 
     def test_sector_entity_not_found_skipped(self) -> None:
         """Sector/industry not in canonical_entities → no relation upsert, count=0, no error."""

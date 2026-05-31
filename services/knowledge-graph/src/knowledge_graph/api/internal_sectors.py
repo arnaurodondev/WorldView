@@ -35,6 +35,9 @@ from knowledge_graph.api.dependencies import ReadOnlyDbSessionDep
 from knowledge_graph.infrastructure.intelligence_db.repositories.canonical_entity import (
     CanonicalEntityRepository,
 )
+from knowledge_graph.infrastructure.metrics.prometheus import (
+    s7_canonical_entity_sector_unknown_total,
+)
 from observability import get_logger  # type: ignore[import-untyped]
 
 logger = get_logger(__name__)  # type: ignore[no-any-return]
@@ -158,6 +161,14 @@ async def get_sectors(
                     )
                 ):
                     sector_value = "Equity ETF"
+            # PLAN-0103 W19 / BP-637: bump a Prometheus counter every time
+            # we serve a NULL sector. Lets ops chart the canonical-entity
+            # sector coverage gap over time; a sudden bump after a deploy
+            # signals a regression in the fundamentals_refresh metadata
+            # mirror path. We tally only the post-ETF-fallback value so
+            # successful synthesis is not double-counted as unknown.
+            if sector_value is None:
+                s7_canonical_entity_sector_unknown_total.labels(surface="sectors_api").inc()
             label = SectorLabel(
                 entity_id=row["entity_id"],  # type: ignore[arg-type]
                 sector=sector_value,  # type: ignore[arg-type]

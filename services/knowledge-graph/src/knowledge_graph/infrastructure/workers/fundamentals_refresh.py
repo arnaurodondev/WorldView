@@ -962,6 +962,30 @@ ON CONFLICT DO NOTHING
         now = utc_now()
         upserted = 0
 
+        # ── PLAN-0103 W19 / BP-637: mirror EODHD sector + industry into the
+        # ``canonical_entities.metadata`` JSONB column alongside the existing
+        # relation upsert. The risk_summary aggregator (rag-chat) and the
+        # ``/internal/v1/sectors`` endpoint both read ``metadata->>'sector'``
+        # — not the graph relation — so historically 683/1108 instruments
+        # had a working ``is_in_sector`` edge but a NULL metadata.sector,
+        # causing the morning brief to silently report ``Unknown`` for the
+        # majority of tracked equities. We patch BEFORE the relation upsert
+        # so a relation_repo failure does not roll back the metadata write
+        # (they live in the same transaction — both succeed or both abort,
+        # which is the intended invariant).
+        metadata_patch: dict[str, object] = {}
+        if sector_name:
+            metadata_patch["sector"] = str(sector_name)
+        if industry_name:
+            metadata_patch["industry"] = str(industry_name)
+        if metadata_patch:
+            # ``asset_class="Equity"`` lets the rag-chat ETF fallback skip
+            # this row: only rows tagged ``ETF`` get the synthetic "Equity
+            # ETF" bucket, so an equity with a real GICS sector is always
+            # bucketed under that sector, never under the ETF catch-all.
+            metadata_patch["asset_class"] = "Equity"
+            await entity_repo.patch_metadata(entity_id, metadata_patch)
+
         # --- is_in_sector ---
         if sector_name:
             sector_entity_id = await entity_repo.find_by_name_and_type(str(sector_name), "sector")
