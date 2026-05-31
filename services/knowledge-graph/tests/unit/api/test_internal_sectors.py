@@ -171,6 +171,109 @@ async def test_sectors_endpoint_rejects_empty_entity_ids() -> None:
     assert resp.status_code == 422
 
 
+async def test_sectors_endpoint_returns_backfilled_etf_sector() -> None:
+    """PLAN-0103 W8 / BP-629 — a backfilled XLE row returns ``"Energy"``, not the fallback.
+
+    After ``scripts/backfill_etf_sectors.py --apply`` runs, ``XLE`` has
+    ``metadata->>'sector' = "Energy"``; the endpoint must surface the real
+    label rather than the generic ``"Equity ETF"`` fallback. The fallback is
+    only triggered when ``sector`` is null AND the row looks like an ETF.
+    """
+    eid = uuid4()
+    rows = [
+        {
+            "entity_id": eid,
+            "canonical_name": "Energy Select Sector SPDR® Fund",
+            "ticker": "XLE",
+            "metadata": {
+                "sector": "Energy",
+                "industry": "US Energy Sector",
+                "asset_class": "ETF",
+            },
+            "sector": "Energy",
+        },
+    ]
+    app, _ = _build_app(rows)
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        resp = await client.get(
+            "/internal/v1/entities/sectors",
+            params={"entity_ids": [str(eid)]},
+            headers=_HEADERS,
+        )
+
+    assert resp.status_code == 200, resp.text
+    data = resp.json()
+    assert len(data["results"]) == 1
+    row = data["results"][0]
+    # Real backfilled label takes precedence over the generic fallback.
+    assert row["sector"] == "Energy"
+    assert row["industry"] == "US Energy Sector"
+
+
+async def test_sectors_endpoint_etf_fallback_when_metadata_marks_asset_class() -> None:
+    """ETF row without a sector tag → endpoint synthesises ``"Equity ETF"``.
+
+    Regression for the silent-drop case: an ETF entity arrives with
+    ``asset_class="ETF"`` but no ``sector`` (because the equities
+    fundamentals pipeline never ran for funds). The endpoint must still
+    return a usable bucket so the rag-chat aggregator keeps the row.
+    """
+    eid = uuid4()
+    rows = [
+        {
+            "entity_id": eid,
+            "canonical_name": "Some ETF",
+            "ticker": "ZZZETF",
+            "metadata": {"asset_class": "ETF"},
+            "sector": None,
+        },
+    ]
+    app, _ = _build_app(rows)
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        resp = await client.get(
+            "/internal/v1/entities/sectors",
+            params={"entity_ids": [str(eid)]},
+            headers=_HEADERS,
+        )
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["results"][0]["sector"] == "Equity ETF"
+
+
+async def test_sectors_endpoint_etf_fallback_by_ticker_prefix() -> None:
+    """Well-known ETF tickers with no sector + no asset_class still get the fallback.
+
+    Covers the bootstrap case where neither the backfill script nor any
+    metadata has been written yet, but the ticker (``XLK``, ``QQQ``, …) is
+    obviously a fund.
+    """
+    eid = uuid4()
+    rows = [
+        {
+            "entity_id": eid,
+            "canonical_name": "Technology Select Sector SPDR® Fund",
+            "ticker": "XLK",
+            "metadata": {},
+            "sector": None,
+        },
+    ]
+    app, _ = _build_app(rows)
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        resp = await client.get(
+            "/internal/v1/entities/sectors",
+            params={"entity_ids": [str(eid)]},
+            headers=_HEADERS,
+        )
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["results"][0]["sector"] == "Equity ETF"
+
+
 async def test_sectors_endpoint_requires_internal_jwt() -> None:
     """No ``X-Internal-JWT`` header → 401 (middleware enforces auth)."""
     eid = uuid4()

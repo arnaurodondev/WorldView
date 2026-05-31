@@ -133,9 +133,34 @@ async def get_sectors(
             # to the dedicated column already extracted by ``get_batch``.
             metadata = row.get("metadata") or {}
             industry = metadata.get("industry") if isinstance(metadata, dict) else None
+            sector_value = row.get("sector")
+            # ── ETF fallback (PLAN-0103 W8 / BP-629) ────────────────────────────
+            # Some ETF rows have no sector tag at all because the equities
+            # fundamentals path that writes ``metadata->>'sector'`` doesn't
+            # run for funds. Without a value here the rag-chat risk
+            # aggregator silently drops the row from ``sector_breakdown``
+            # and the morning brief reports ``concentration_score=0``. To
+            # avoid that dead-end we synthesise a generic ``"Equity ETF"``
+            # bucket whenever:
+            #   * the entity declares itself an ETF in metadata
+            #     (``asset_class == "ETF"``), OR
+            #   * the canonical row has no sector AND the ticker matches a
+            #     well-known sector / index ETF prefix (XL?, ARK?, …) so we
+            #     can at least keep the row in the aggregator.
+            if sector_value is None and isinstance(metadata, dict):
+                asset_class = metadata.get("asset_class")
+                ticker = row.get("ticker")
+                if asset_class == "ETF" or (
+                    isinstance(ticker, str)
+                    and (
+                        ticker.upper().startswith(("XL", "ARK"))
+                        or ticker.upper() in {"SPY", "QQQ", "DIA", "IWM", "VOO", "VTI", "VEA", "VWO", "IBIT", "GLD"}
+                    )
+                ):
+                    sector_value = "Equity ETF"
             label = SectorLabel(
                 entity_id=row["entity_id"],  # type: ignore[arg-type]
-                sector=row.get("sector"),  # type: ignore[arg-type]
+                sector=sector_value,  # type: ignore[arg-type]
                 industry=industry,
             )
             fetched.append(label)
