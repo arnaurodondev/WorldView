@@ -55,9 +55,15 @@ class TestMorningBriefingCitationInstructions:
         # least one [N#]" rule body signals enforcement.
         assert "MANDATORY" in result or "must end with at least one" in result
 
-    def test_version_is_42(self) -> None:
-        """MORNING_BRIEFING bumped to v4.2 for PLAN-0103 W3 (Summary + mandatory sections)."""
-        assert MORNING_BRIEFING.version == "4.2"
+    def test_version_is_43(self) -> None:
+        """MORNING_BRIEFING bumped to v4.3 for PLAN-0103 W6 (few-shot examples)."""
+        assert MORNING_BRIEFING.version == "4.3"
+
+    def test_contains_few_shot_examples(self) -> None:
+        """v4.3 must embed both Example A (rich day) and Example B (quiet day) markers."""
+        result = self._render()
+        assert "Example A — Rich day" in result
+        assert "Example B — Quiet day" in result
 
     def test_contains_summary_block_instruction(self) -> None:
         """v4.2 mandates a leading ``## Summary`` block (1-3 sentences) for the dashboard collapsed view.

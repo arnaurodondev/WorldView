@@ -30,6 +30,21 @@ VERSION HISTORY
         ``## LEAD / --- / ## DETAILS`` template and the 4/4 caps; keeps the
         citation rules (now in a single block) and the format rules (≤250 words,
         markdown headers); the 6-section spec is the SINGLE source of truth.
+- 4.3 — PLAN-0103 W6 (2026-05-30): adds TWO few-shot examples (rich day +
+        quiet day) and tightens the MANDATORY language above the examples.
+        Motivation: the v4.2 live runs (audit
+        ``docs/audits/2026-05-29-plan-0103-final-qa.md``) showed the LLM
+        STILL dropping 2 of 6 sections AND silently skipping ``## Summary``
+        even though the prompt explicitly required them. Length on those
+        runs was ~150/919 tokens, so the failure was NOT a token-budget
+        issue — the model was just not following the structural contract.
+        v4.3 teaches the desired output SHAPE by example (Example A — rich
+        day, Example B — quiet day with placeholder lines), since
+        few-shot demonstration is more reliable than imperative rules for
+        structural conformance. Parser-side defensive injection (see
+        ``brief_parser.inject_missing_sections`` /
+        ``inject_missing_summary``) is the belt-and-braces guarantee that
+        the 6 sections + summary are present regardless of LLM compliance.
 - 4.2 — PLAN-0103 W3 (2026-05-30): adds the ``## Summary`` paragraph block AND
         promotes all 6 sections to MANDATORY. Three independent FQA findings
         motivated the change:
@@ -59,14 +74,13 @@ from prompts._base import PromptTemplate
 
 MORNING_BRIEFING = PromptTemplate(
     name="morning_briefing",
-    # Bumped 4.1 → 4.2 as part of PLAN-0103 W3 (add Summary + make 6 sections MANDATORY).
-    version="4.2",
+    # Bumped 4.2 → 4.3 as part of PLAN-0103 W6 (add few-shot examples).
+    version="4.3",
     description=(
-        "Morning market briefing v4.2 — adds the leading ``## Summary`` paragraph "
-        "(1-3 sentences, ≤300 chars) used by the dashboard collapsed view AND "
-        "promotes all 6 sections to MANDATORY (Tape / Your Portfolio Today / "
-        "Macro Today / News That Matters To You / Risks + Opportunities / "
-        "Bonus context) — empty sections emit a single placeholder line"
+        "Morning market briefing v4.3 — v4.2 contract (## Summary + 6 mandatory "
+        "sections) plus TWO few-shot examples (Example A — rich day, Example B — "
+        "quiet day) that teach the desired output shape so the LLM cannot silently "
+        "drop sections or skip the Summary block on quiet news days"
     ),
     template=(
         # ── Role + goal ───────────────────────────────────────────────────────
@@ -126,6 +140,72 @@ MORNING_BRIEFING = PromptTemplate(
         "Use ONLY citation numbers that exist in the context (i.e. ≤ total items).\n"
         "Do NOT use [c1]/[c2] (legacy v3.0 marker form) — only [N1]/[N2]/[N3].\n"
         "Placeholder lines (when a section has no data) do NOT need a citation.\n\n"
+        # ── Tightened MUST language (v4.3) + few-shot examples ────────────────
+        # WHY tighten + show: v4.2 imperative language alone wasn't enough — live
+        # runs (audit 2026-05-29-plan-0103-final-qa.md) showed the LLM dropping
+        # 2 of 6 sections and skipping ``## Summary`` even though the prompt
+        # required them. Few-shot examples are the most reliable lever for
+        # teaching structural conformance: the LLM imitates the SHAPE of
+        # Example A (rich day) on busy days and Example B (quiet day with
+        # placeholders) on sparse days.
+        "## Output Contract (READ BEFORE WRITING)\n"
+        "You MUST emit ALL 6 section headers AND the ``## Summary`` block — "
+        "even on quiet days. If a section has no specific items, emit ONE "
+        "single placeholder line that names the situation (see Example B). "
+        "The two examples below show exactly what to produce in a rich vs "
+        "quiet day. Match their SHAPE, not their content.\n\n"
+        # ── Example A — Rich day ──────────────────────────────────────────────
+        "### Example A — Rich day (lots of holding news + macro + risks)\n"
+        "## Summary\n"
+        "AI infrastructure rally continues with Dell up 40% and Palantir +12% "
+        "pre-mkt — your AAPL/MSFT overweight benefits. Watch the 08:30 CPI "
+        "print; consensus 3.1% YoY.\n"
+        "\n"
+        "## Details\n"
+        "**Tape**\n"
+        "- SPY +0.35%, QQQ +0.62%, VIX 13.8 — risk-on tone pre-mkt [N1]\n"
+        "**Your Portfolio Today**\n"
+        "- AAPL +0.8% pre-mkt on Vision Pro shipment beat — tailwind for your 12% weight [N2]\n"
+        "- MSFT +1.1% on Azure-AI win at Anthropic — confirms cloud capex thesis [N3]\n"
+        "- NVDA flat — no overnight news; earnings still 2 weeks out\n"
+        "**Macro Today**\n"
+        "- CPI 08:30 ET, consensus 3.1% YoY (prev 3.2%); hot print would re-price your duration risk [N4]\n"
+        "- FOMC minutes 14:00 ET — watch language on Q3 cuts [N5]\n"
+        "**News That Matters To You**\n"
+        "- Dell +40% on AI-server backlog — confirms hyperscaler capex; MSFT/AAPL beneficiaries [N6]\n"
+        "- Palantir +12% on DoD contract — adjacent to your defence sleeve [N7]\n"
+        "- Anthropic raises $65B at $965B — cloud demand tailwind for MSFT Azure [N8]\n"
+        "**Risks + Opportunities**\n"
+        "- Concentration: top-3 holdings = 38% of book; CPI surprise would amplify drawdown\n"
+        "- Opportunity: VIX 13.8 makes protective AAPL puts cheap if you want hedge through earnings\n"
+        "**Bonus context**\n"
+        "- 10Y yield 4.21% (+3bps overnight) — duration drag on growth names if it breaks 4.30% [N9]\n"
+        "\n"
+        # ── Example B — Quiet day ─────────────────────────────────────────────
+        "### Example B — Quiet day (sparse data, placeholder lines)\n"
+        "## Summary\n"
+        "Quiet pre-mkt session — no material developments overnight on your "
+        "holdings; watch for tomorrow's CPI print at 08:30.\n"
+        "\n"
+        "## Details\n"
+        "**Tape**\n"
+        "- SPY closed 521.40, QQQ 445.10, VIX 12.6 — tape data thin pre-mkt [N1]\n"
+        "**Your Portfolio Today**\n"
+        "- AAPL flat pre-mkt — no news\n"
+        "- MSFT flat pre-mkt — no news\n"
+        "**Macro Today**\n"
+        "- No major economic releases scheduled\n"
+        "**News That Matters To You**\n"
+        "- No holding-relevant news in the past 24h. See Bonus context for industry-level item.\n"
+        "**Risks + Opportunities**\n"
+        "- No notable risk signals identified today. Watch for tomorrow's CPI release.\n"
+        "**Bonus context**\n"
+        "- Anthropic raised $65B at $965B valuation — cloud capex tailwind "
+        "for hyperscalers if you re-weight to AAPL/MSFT [N2]\n"
+        "\n"
+        # ── End examples ──────────────────────────────────────────────────────
+        "Now produce the brief for the input below. Follow the shape of "
+        "Example A on busy days and Example B on quiet days.\n\n"
         "{safety}\n\n"
         "As of: {current_date}\n\n"
         # ── Format / hard rules ───────────────────────────────────────────────

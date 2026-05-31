@@ -447,6 +447,18 @@ brief_section_missing_total = Counter(
     labelnames=["section"],
 )
 
+# PLAN-0103 W6 (v4.3) — defensive injection counter.
+# Increments every time GenerateBriefingUseCase had to inject a placeholder
+# for a section the LLM omitted (paired with brief_section_missing_total —
+# the two should track 1:1 when injection is wired correctly). Section label
+# values match V42_EXPECTED_SECTIONS plus a synthetic ``__summary__`` value
+# for the synthesised summary_paragraph injection.
+brief_section_injected_total = Counter(
+    "brief_section_injected_total",
+    "Per-section counter for defensively-injected placeholder sections in morning briefs",
+    labelnames=["section"],
+)
+
 # ── F-LIVE-NEW-001: entity-resolver ambiguity observability ──────────────────
 #
 # Counts the number of times ``IntelligenceHandler._resolve_entity_by_name``

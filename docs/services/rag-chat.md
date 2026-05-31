@@ -115,10 +115,15 @@ older callers only read `narrative` while newer surfaces render the
     "citations": list[dict],       # [{ref, id, title, url, ...}]
     "generated_at": str,           # ISO-8601 UTC
     "summary": str | None,         # PLAN-0048 — 1–2 sentence headline (v2.2 back-compat)
-    "summary_paragraph": str | None,  # PLAN-0103 W3 (BP-624) — v4.2 ``## Summary``
+    "summary_paragraph": str | None,  # PLAN-0103 W3/W6 — v4.2 ``## Summary``
                                    # block, 1-3 sentences ≤300 chars, used by the
                                    # dashboard collapsed view; falls back to
-                                   # `summary` then narrative head when None
+                                   # `summary` then narrative head when None.
+                                   # GUARANTEE (W6 / v4.3): when the LLM omits
+                                   # ``## Summary``, the parser synthesises a
+                                   # "Lead headline: <first portfolio/news
+                                   # bullet>" string — never None unless the
+                                   # entire brief has no bullets at all.
     "headline": str | None,        # PLAN-0049 T-A-1-04 — top-card title (≤240 chars)
     "sections": list[dict]         # PLAN-0049 T-A-1-04 — see BriefSection shape below.
                                    # PLAN-0083 (2026-05-08): the API model declares
@@ -936,8 +941,25 @@ on retry. Returns 409 on replay. Single-instance only — move to Valkey for mul
 ## Morning Brief — 5-Minute Investor Brief Structure (PLAN-0102 W1)
 
 The morning brief is structured as a 5-minute investor summary, NOT a news
-aggregator. The prompt at `libs/prompts/src/prompts/briefing/morning.py` (v4.1)
-instructs the LLM to emit six named sections in this exact order.
+aggregator. The prompt at `libs/prompts/src/prompts/briefing/morning.py` (v4.3)
+instructs the LLM to emit a leading `## Summary` paragraph followed by six
+named sections in this exact order.
+
+> **v4.3 release (PLAN-0103 W6, 2026-05-30)**: adds TWO few-shot examples
+> (Example A — rich day, Example B — quiet day) that teach the LLM the
+> desired output shape. v4.2 imperative-only rules produced live runs that
+> still dropped 2 of 6 sections AND skipped `## Summary` even though they
+> were marked MANDATORY (audit
+> `docs/audits/2026-05-29-plan-0103-final-qa.md` FQA-01). v4.3 pairs the
+> example-driven prompt with **parser-side defensive injection** in
+> `brief_parser.inject_missing_sections` (appends placeholder lines for
+> missing sections in canonical order) and `brief_parser.inject_missing_summary`
+> (synthesises a "Lead headline: …" string from the first portfolio/news
+> bullet when the LLM omits `## Summary`). Net guarantee: **all 6 sections
+> + `summary_paragraph` are present on every `BriefingResponse` regardless
+> of LLM compliance**, with `brief_section_injected_total{section}` Prom
+> counters + `brief_defensive_injection` structlog warning surfacing how
+> often the LLM is degrading.
 
 > **v4.1 cleanup release (PLAN-0103 W2, 2026-05-29)**: v4.0 carried TWO
 > incompatible rubrics — the 6-section investor brief at the top AND the

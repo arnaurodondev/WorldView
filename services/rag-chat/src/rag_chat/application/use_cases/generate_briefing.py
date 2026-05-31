@@ -515,6 +515,49 @@ class GenerateBriefingUseCase:
         if summary_paragraph is not None and post_summary_content and summary is None:
             narrative = post_summary_content
 
+        # ── 4d. PLAN-0103 W6 (v4.3): defensive section + summary injection ────
+        # The v4.3 prompt teaches the desired shape via few-shot examples but
+        # we cannot RELY on the LLM emitting all 6 sections + ``## Summary``
+        # on every call. This belt-and-braces step guarantees the structural
+        # contract regardless of LLM compliance:
+        #   - For each missing section, append a placeholder line so the
+        #     dashboard always renders all 6 buckets.
+        #   - When the LLM omits ``## Summary``, synthesise a short lead
+        #     from the first portfolio/news bullet (NO fabrication — we
+        #     quote a bullet that already exists).
+        # Both paths bump per-section Prom counters + emit a structured
+        # ``brief_defensive_injection`` log so operators can see how often
+        # the LLM is degrading and how the parser is compensating.
+        if missing_sections:
+            from rag_chat.application.metrics import prometheus as _prom
+
+            narrative = _parser.inject_missing_sections(narrative, missing_sections)
+            for _name in missing_sections:
+                _prom.brief_section_injected_total.labels(section=_name).inc()
+
+        # Synthesise summary_paragraph from a parsed bullet when LLM omitted it.
+        # WHY use `sections` (post-backfill): they already carry only cited
+        # bullets, so the synthesised lead is grounded in a real source.
+        # WHY snapshot ``had_llm_summary``: ``inject_missing_summary`` returns
+        # the existing summary unchanged when present, so we can't infer
+        # "did we inject?" from the post-call value alone — we must compare
+        # against the pre-call value.
+        had_llm_summary = summary_paragraph is not None
+        narrative, summary_paragraph = _parser.inject_missing_summary(narrative, sections, summary_paragraph)
+        summary_injected = (not had_llm_summary) and (summary_paragraph is not None)
+        if summary_injected:
+            from rag_chat.application.metrics import prometheus as _prom
+
+            _prom.brief_section_injected_total.labels(section="__summary__").inc()
+
+        if missing_sections or summary_injected:
+            log.warning(  # type: ignore[no-any-return]
+                "brief_defensive_injection",
+                user_id=user_id,
+                injected_sections=missing_sections,
+                summary_injected=summary_injected,
+            )
+
         # ── 5. Derive risk_summary from portfolio holdings (HHI concentration) ─
         risk_summary = _formatter.build_morning_risk_summary(ctx)
 

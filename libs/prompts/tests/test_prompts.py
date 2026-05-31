@@ -117,8 +117,43 @@ class TestMorningBriefing:
         assert "## Summary" in result
         assert "## Details" in result
         assert "MANDATORY" in result
-        # Version constant must reflect the v4.2 release (PLAN-0103 W3 / BP-624).
-        assert MORNING_BRIEFING.version == "4.2"
+        # Version constant must reflect the v4.3 release (PLAN-0103 W6).
+        # v4.3 added few-shot examples; the v4.2 contract above still holds.
+        assert MORNING_BRIEFING.version == "4.3"
+
+    def test_v43_few_shot_examples_present(self) -> None:
+        """v4.3 must embed BOTH few-shot examples (rich + quiet day).
+
+        WHY: the v4.2 imperative prompt alone failed in production (FQA-01
+        documented the LLM dropping 2 of 6 sections + skipping ``## Summary``
+        even though the prompt mandated them). Few-shot demonstration is the
+        most reliable lever for teaching structural conformance — the LLM
+        imitates Example A's shape on busy days and Example B's placeholder
+        pattern on quiet days. Both example markers MUST be present in the
+        rendered prompt; regression would indicate accidental v4.2 revert.
+        """
+        result = MORNING_BRIEFING.render(
+            portfolio_context="",
+            news_context="",
+            alerts_context="",
+            market_overview="",
+            events_context="",
+            safety=SAFETY_FOOTER,
+            current_date="2026-05-30",
+        )
+        # Both example markers must appear verbatim.
+        assert "Example A — Rich day" in result
+        assert "Example B — Quiet day" in result
+        # Rich-day Example A must show populated bullets in every section.
+        assert "Dell up 40%" in result
+        assert "Vision Pro" in result
+        # Quiet-day Example B must show the placeholder pattern in action.
+        assert "Quiet pre-mkt session" in result
+        assert "No major economic releases scheduled" in result
+        assert "No notable risk signals identified today" in result
+        # The tightened output-contract heading must be present (sits above
+        # the examples and reinforces the MANDATORY contract).
+        assert "Output Contract" in result
 
 
 class TestInstrumentBriefing:

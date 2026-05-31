@@ -966,4 +966,7 @@ def test_morning_prompt_v4_contains_required_sections() -> None:
     # paragraph (for the dashboard collapsed view) AND promoted all 6 sections
     # to MANDATORY so the LLM cannot drop Risks + Opportunities / Bonus context
     # on quiet days (FQA-01 fix).
-    assert MORNING_BRIEFING.version == "4.2", MORNING_BRIEFING.version
+    # PLAN-0103 W6 bumped 4.2 → 4.3: added Example A (rich day) + Example B
+    # (quiet day) few-shot demonstrations to teach the LLM the output shape,
+    # paired with defensive parser-side section/summary injection.
+    assert MORNING_BRIEFING.version == "4.3", MORNING_BRIEFING.version

@@ -440,3 +440,98 @@ def test_split_summary_paragraph_handles_bold_section_heading() -> None:
     assert summary is not None
     assert "Macro tape mixed" in summary
     assert "**Tape**" in remainder
+
+
+# ── 14. PLAN-0103 W6 (v4.3): defensive section + summary injection ───────────
+# These tests cover ``inject_missing_sections`` (appends placeholder lines
+# for missing sections in canonical order) and ``inject_missing_summary``
+# (synthesises a short lead from the first portfolio/news bullet when LLM
+# omits the ``## Summary`` block). Both guarantee the structural contract
+# regardless of LLM compliance.
+
+
+def test_inject_missing_sections_appends_in_canonical_order() -> None:
+    """Missing sections are appended in V42_EXPECTED_SECTIONS order — not in `missing` order."""
+    parser = _make_parser()
+    # LLM only emitted 4 of 6 sections (FQA-01 pattern).
+    narrative = (
+        "**Tape**\n- SPY +0.2% [N1]\n"
+        "**Your Portfolio Today**\n- AAPL flat [N1]\n"
+        "**Macro Today**\n- No prints [N1]\n"
+        "**News That Matters To You**\n- Dell up 40% [N1]\n"
+    )
+    # Deliberately reverse the missing list to prove canonical ordering wins.
+    missing = ["Bonus context", "Risks + Opportunities"]
+    augmented = parser.inject_missing_sections(narrative, missing)
+    # Both placeholders must be present.
+    assert "**Risks + Opportunities**" in augmented
+    assert "**Bonus context**" in augmented
+    assert "No specific items today" in augmented
+    # Risks + Opportunities must appear BEFORE Bonus context (canonical order)
+    # even though `missing` listed them in reverse.
+    risks_idx = augmented.index("**Risks + Opportunities**")
+    bonus_idx = augmented.index("**Bonus context**")
+    assert risks_idx < bonus_idx, "canonical V4.2 order must win over `missing` order"
+
+
+def test_inject_missing_sections_no_op_when_all_present() -> None:
+    """Empty `missing` list → narrative returned unchanged."""
+    parser = _make_parser()
+    narrative = "**Tape**\n- SPY +0.2% [N1]\n"
+    out = parser.inject_missing_sections(narrative, [])
+    assert out == narrative
+
+
+def test_inject_missing_summary_extracts_lead_when_omitted() -> None:
+    """When LLM omits ``## Summary``, synthesise from the FIRST portfolio bullet."""
+    parser = _make_parser()
+    # Build a sections payload that mirrors what the citation-aware parser
+    # would produce — BriefSection with BriefBullet children.
+    cite = _make_citation(1)
+    sections = [
+        BriefSection(
+            title="Your Portfolio Today",
+            bullets=[
+                BriefBullet(text="AAPL +0.8% pre-mkt on Vision Pro shipment beat", citations=[cite]),
+                BriefBullet(text="MSFT flat", citations=[cite]),
+            ],
+        ),
+        BriefSection(
+            title="News That Matters To You",
+            bullets=[BriefBullet(text="Dell up 40% [N1]", citations=[cite])],
+        ),
+    ]
+    narrative_in = "**Your Portfolio Today**\n- AAPL +0.8% pre-mkt on Vision Pro shipment beat [N1]\n"
+
+    narrative_out, summary = parser.inject_missing_summary(narrative_in, sections, summary_paragraph=None)
+    # Narrative passes through unchanged (we never inject into markdown).
+    assert narrative_out == narrative_in
+    assert summary is not None
+    assert summary.startswith("Lead headline: ")
+    # The synthesised summary quotes the first portfolio bullet verbatim.
+    assert "AAPL" in summary
+    assert "Vision Pro" in summary
+    # Citation markers must be stripped from the collapsed summary.
+    assert "[N1]" not in summary
+
+
+def test_inject_missing_summary_preserves_existing_summary() -> None:
+    """When LLM already emitted a summary, return it untouched."""
+    parser = _make_parser()
+    cite = _make_citation(1)
+    sections = [
+        BriefSection(
+            title="Your Portfolio Today",
+            bullets=[BriefBullet(text="AAPL flat", citations=[cite])],
+        ),
+    ]
+    existing = "Tech rally continues into open."
+    _, out = parser.inject_missing_summary("narrative", sections, summary_paragraph=existing)
+    assert out == existing
+
+
+def test_inject_missing_summary_returns_none_when_no_bullets() -> None:
+    """No populated sections → cannot synthesise → (narrative, None)."""
+    parser = _make_parser()
+    _, out = parser.inject_missing_summary("narrative", [], summary_paragraph=None)
+    assert out is None
