@@ -493,3 +493,22 @@ brief_agentic_fallback_total = Counter(
     "Times the agentic brief generator fell back to the standard path",
     labelnames=["reason"],  # exception | budget_exhausted | empty_response
 )
+
+# ── PLAN-0103 W12 / BP-631: sector-exposure weight-source telemetry ───────────
+#
+# Tracks which tier of the weight-fallback ladder produced the dollar-weights
+# used by ``_compute_sector_exposure``. Operators can spot when the brief
+# silently degraded from the preferred per-holding live price to a coarser
+# fallback. Bounded label cardinality (4 fixed sources).
+#
+#   pnl        — preferred: P&L snapshot current_price x qty
+#   db_weight  — fallback 1: PortfolioSnapshot.current_weight
+#   quote      — fallback 2: P&L snapshot last_close x qty (no current)
+#   equal      — last resort: equal-weight 1/N when neither P&L nor weights
+#                exist (PLAN-0103 W12 / BP-631 — prevents empty risk_summary
+#                when the P&L endpoint is unreachable AND DB weights are NULL)
+brief_sector_exposure_weight_source = Counter(
+    "brief_sector_exposure_weight_source",
+    "Weight tier that produced the sector-exposure aggregation",
+    labelnames=["source"],  # pnl | db_weight | quote | equal
+)

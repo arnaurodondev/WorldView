@@ -967,50 +967,93 @@ def _compute_sector_exposure(
     pnl_snapshot: PortfolioPnLSnapshot | None,
     sector_map: dict[UUID, str],
 ) -> SectorExposure | None:
-    """Compute ``{sector_label: pct_of_portfolio_value}`` (PLAN-0102 W2).
+    """Compute ``{sector_label: pct_of_portfolio_value}`` (PLAN-0102 W2 / PLAN-0103 W12).
 
-    Preference chain for the per-holding dollar weight:
-      1. current_price x qty (from P&L snapshot when available)
-      2. last_close x qty (P&L snapshot fallback)
-      3. current_weight (PortfolioSnapshot fallback — when S1 P&L call failed)
+    Weight-fallback ladder (preferred → last resort):
+      1. ``pnl``       — current_price x qty (P&L snapshot)
+      2. ``quote``     — last_close   x qty (P&L snapshot, no current)
+      3. ``db_weight`` — ``current_weight`` from PortfolioSnapshot
+      4. ``equal``     — equal-weight 1/N across all known holdings (PLAN-0103
+                         W12 / BP-631; ensures HHI computable even when both
+                         the P&L endpoint and DB weights are unavailable)
 
     Holdings whose entity_id maps to no sector go into ``"Unknown"`` so
-    the percentages still sum to ~1.0. Returns ``None`` when the
+    the percentages still sum to ~1.0. Returns ``None`` only when the
     portfolio has zero holdings (caller skips the section).
     """
+    # Local import to avoid widening the module's hot-path import set in test
+    # fixtures that don't need Prometheus initialised.
+    from rag_chat.application.metrics.prometheus import (
+        brief_sector_exposure_weight_source,
+    )
+
     if not portfolio_snapshot.holdings:
         return None
 
-    # Build a {entity_id: dollar_value} map from the P&L snapshot first.
+    # ── Tier 1+2: P&L snapshot (pnl / quote) ─────────────────────────────────
     value_by_entity: dict[UUID, float] = {}
+    weight_source: str = "equal"  # overridden below; default = last-resort tier
+    saw_current = False
+    saw_last_close_only = False
     if pnl_snapshot is not None:
         for pnl_row in pnl_snapshot.holdings:
             if pnl_row.entity_id is None:
                 continue
             if pnl_row.current_price_usd is not None:
                 value_by_entity[pnl_row.entity_id] = pnl_row.current_price_usd * pnl_row.qty
+                saw_current = True
             elif pnl_row.last_close_usd is not None:
                 value_by_entity[pnl_row.entity_id] = pnl_row.last_close_usd * pnl_row.qty
+                saw_last_close_only = True
 
-    # Fallback: any held entity missing a P&L value uses its current_weight
-    # share. We later normalise so the two units (dollars vs weights) don't
-    # mix — when ANY P&L value exists we use dollars exclusively.
     if value_by_entity:
-        use_dollar_basis = True
-        # Backfill missing held entities with 0.0 so they still show up under
-        # "Unknown" with no weight contribution.
+        # Backfill any held entity missing a P&L row with 0.0 so it still
+        # appears under "Unknown" without skewing dollar denominator.
         for holding in portfolio_snapshot.holdings:
             if holding.entity_id is not None and holding.entity_id not in value_by_entity:
                 value_by_entity[holding.entity_id] = 0.0
+        weight_source = "pnl" if saw_current else "quote" if saw_last_close_only else "pnl"
     else:
-        # P&L call totally unavailable — fall back to weight-based exposure.
-        use_dollar_basis = False
+        # ── Tier 3: PortfolioSnapshot.current_weight (DB weight) ─────────────
         for holding in portfolio_snapshot.holdings:
             if holding.entity_id is not None:
                 value_by_entity[holding.entity_id] = float(holding.current_weight or 0.0)
 
+        if sum(value_by_entity.values()) > 0:
+            weight_source = "db_weight"
+        else:
+            # ── Tier 4: equal-weight 1/N last resort (PLAN-0103 W12 / BP-631) ─
+            # Used when P&L is unreachable AND DB weights are NULL/zero
+            # (common in dev/seed data — current_weight is rarely populated
+            # outside the snapshot worker). At minimum the brief gets a
+            # computable HHI = 1/N instead of an empty risk_summary.
+            value_by_entity = {}
+            holdings_with_eid = [h for h in portfolio_snapshot.holdings if h.entity_id is not None]
+            n = len(holdings_with_eid)
+            if n == 0:
+                # No holdings carry an entity_id — nothing to aggregate by
+                # sector. Caller still skips the section, matching pre-W12
+                # behaviour for portfolios whose holdings are all unresolved.
+                return None
+            equal_weight = 1.0 / n
+            for holding in holdings_with_eid:
+                assert holding.entity_id is not None  # narrowed by the filter above
+                value_by_entity[holding.entity_id] = equal_weight
+            weight_source = "equal"
+
+    # Emit telemetry. Bounded cardinality (4 fixed values). Operators chart
+    # this counter to detect silent degradation (e.g. sudden spike in
+    # ``equal`` means the P&L endpoint regressed — see BP-631).
+    import contextlib
+
+    with contextlib.suppress(Exception):  # pragma: no cover — never crash on metric emission
+        brief_sector_exposure_weight_source.labels(source=weight_source).inc()
+
     total = sum(value_by_entity.values())
     if total <= 0:
+        # Should be unreachable given the equal-weight fallback above always
+        # yields total = 1.0 when at least one holding has an entity_id, but
+        # we keep the guard so a future code change can't silently divide-by-zero.
         return None
 
     by_sector: dict[str, float] = {}
@@ -1019,7 +1062,6 @@ def _compute_sector_exposure(
         by_sector[sector] = by_sector.get(sector, 0.0) + value
 
     # Normalise to fractional shares of the portfolio.
-    _ = use_dollar_basis  # captured for future telemetry; not currently exported
     return SectorExposure(by_sector={k: v / total for k, v in by_sector.items()})
 
 

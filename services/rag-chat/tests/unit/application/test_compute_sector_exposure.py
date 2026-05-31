@@ -204,6 +204,60 @@ def test_sector_exposure_falls_back_to_weights_when_pnl_unavailable() -> None:
     assert exposure.by_sector["Tech"] == pytest.approx(1.0, abs=1e-6)
 
 
+def test_sector_exposure_equal_weight_when_pnl_and_db_weights_unavailable() -> None:
+    """PLAN-0103 W12 / BP-631 — equal-weight 1/N last-resort fallback.
+
+    Scenario: rag-chat brief generation hits a portfolio whose S1 P&L endpoint
+    returned None (transport error / 404) AND whose ``current_weight`` column
+    is NULL on every holding (common in dev seed data — the snapshot worker
+    is the only writer). Prior to BP-631 this produced ``sector_exposure=None``
+    → empty ``risk_summary`` → blank "Risk & Exposure" section in the brief.
+
+    Expected: the helper falls back to equal-weighting all holdings (1/N each).
+    For 5 sector-resolved holdings → 5 sectors, each at 0.20 → HHI = 0.20 → the
+    formatter renders a non-empty concentration_score downstream.
+    """
+    eids = [uuid4() for _ in range(5)]
+    portfolio = PortfolioSnapshot(
+        user_id=uuid4(),
+        holdings=[
+            HoldingItem(
+                ticker=f"T{i}",
+                entity_id=eids[i],
+                canonical_name=f"Holding {i}",
+                quantity=Decimal("10"),
+                current_weight=None,  # BP-517: column rarely populated in dev
+            )
+            for i in range(5)
+        ],
+        watchlist=[],
+        total_positions=5,
+    )
+    sector_map = {
+        eids[0]: "Tech",
+        eids[1]: "Energy",
+        eids[2]: "Healthcare",
+        eids[3]: "Financials",
+        eids[4]: "Industrials",
+    }
+
+    exposure = _compute_sector_exposure(
+        portfolio_snapshot=portfolio,
+        pnl_snapshot=None,  # P&L endpoint unreachable
+        sector_map=sector_map,
+    )
+
+    assert exposure is not None, "equal-weight fallback must surface a non-None SectorExposure"
+    assert len(exposure.by_sector) == 5, "5 distinct sectors expected"
+    for sector_pct in exposure.by_sector.values():
+        # 1/5 = 0.20 (every holding gets equal weight, every holding maps to a
+        # distinct sector → each sector_pct == 1/N).
+        assert sector_pct == pytest.approx(0.20, abs=1e-6)
+    # HHI (concentration score) = sum(w_i^2) = 5 * 0.20^2 = 0.20 for this
+    # synthetic portfolio. The brief formatter computes HHI downstream, so we
+    # assert the weights here and let the formatter test cover the HHI shape.
+
+
 def test_sector_exposure_returns_none_for_empty_portfolio() -> None:
     """Zero holdings → returns None (caller skips the section)."""
     portfolio = PortfolioSnapshot(

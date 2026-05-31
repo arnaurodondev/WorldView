@@ -436,6 +436,31 @@ R9 safe degradation: when the P&L call fails the formatter falls back to
 the legacy "Holdings (N positions): name — quantity, weight X%" line so a
 single upstream outage never produces an empty brief.
 
+#### Sector-exposure weight-fallback ladder (PLAN-0103 W12 / BP-631)
+
+`_compute_sector_exposure()` (`application/use_cases/briefing_context.py`)
+computes `{sector: pct_of_portfolio_value}` from a 4-tier ladder. Each tier
+is tried in order; the first that yields a positive total wins. Telemetry
+counter `brief_sector_exposure_weight_source{source}` (defined in
+`application/metrics/prometheus.py`) increments with the winning tier so
+operators can detect silent degradation (a spike in `equal` means the P&L
+upstream regressed).
+
+| Tier | Source label | Input | When it fires |
+|------|--------------|-------|---------------|
+| 1 | `pnl` | `pnl_snapshot.current_price_usd * qty` | Preferred — live P&L + live quotes |
+| 2 | `quote` | `pnl_snapshot.last_close_usd * qty` | P&L row exists but no current quote |
+| 3 | `db_weight` | `PortfolioSnapshot.current_weight` | P&L endpoint unreachable + DB weights populated |
+| 4 | `equal` | `1.0 / N` per held entity | Last resort: no P&L AND no DB weights (BP-631) |
+
+Tier 4 ensures the brief NEVER ends up with an empty `risk_summary` on a
+non-empty portfolio. Without it, dev seed data (where `current_weight` is
+typically NULL — BP-517) plus a transient P&L outage would silently
+collapse `sector_breakdown` to `{}` and `concentration_score` to None,
+exactly the failure shape audit `docs/audits/2026-05-31-plan-0103-final-qa-v44.md`
+§4 caught (BP-631). For a 5-holding equal-weight portfolio Tier 4 gives
+HHI = 1/N = 0.20 — a computable concentration metric instead of nothing.
+
 ### Tape + earnings calendar (PLAN-0102 W3 follow-up)
 
 The morning brief also renders two additional sections sourced from the

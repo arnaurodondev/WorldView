@@ -183,6 +183,22 @@ Response shape:
 Holdings whose S3 price row is missing surface with `null` prices and `0.0` P&L
 — a partial market-data outage degrades per-row, never failing the whole brief.
 
+**Verification (BP-631)**: any time `internal_pnl_router` is touched OR the portfolio
+service is redeployed, validate the route is mounted on the running container with:
+
+```bash
+docker exec worldview-portfolio-1 python -c "from portfolio.app import create_app; \
+  app=create_app(); print([r.path for r in app.routes if 'pnl' in r.path])"
+```
+
+The list MUST contain `/internal/v1/users/{user_id}/portfolio/pnl`. An empty list
+means the image is stale — rebuild + recreate (`docker compose -f infra/compose/
+docker-compose.yml up -d --no-deps --force-recreate portfolio`). Failure mode: the
+endpoint returns the FastAPI-default `{"detail":"Not Found"}` body — NOT the use
+case's `{"detail":"User <id> not found ..."}` body. Mismatch between body shapes
+distinguishes "route absent" from "auth/lookup failure" — chase the body, not just
+the status code.
+
 #### Provision Endpoint (ProvisionUserUseCase)
 
 4-step idempotent logic per PRD-0025 §3.3:
