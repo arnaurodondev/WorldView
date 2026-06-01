@@ -1256,6 +1256,18 @@ class MarketHandler(ToolHandler):
             if snap_dy is not None:
                 with contextlib.suppress(TypeError, ValueError):
                     snap_lines.append(f"  Dividend Yield: {float(snap_dy):.4f}")
+            # PLAN-0104 W30 / BP-649: forward P/E + PEG ratio. Emitted only
+            # when non-None — missing snapshot fields are NEVER rendered as
+            # "—", because tool_use.py v1.5 instructs the LLM to refuse
+            # rather than fabricate when a snapshot field is absent.
+            snap_fpe = current_snapshot.get("forward_pe")
+            if snap_fpe is not None:
+                with contextlib.suppress(TypeError, ValueError):
+                    snap_lines.append(f"  Forward P/E: {float(snap_fpe):.2f}x")
+            snap_peg = current_snapshot.get("peg_ratio")
+            if snap_peg is not None:
+                with contextlib.suppress(TypeError, ValueError):
+                    snap_lines.append(f"  PEG Ratio: {float(snap_peg):.2f}")
             if snap_lines:
                 as_of = current_snapshot.get("as_of") or "unknown"
                 source = current_snapshot.get("source") or "highlights"

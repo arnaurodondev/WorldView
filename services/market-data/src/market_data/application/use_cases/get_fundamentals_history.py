@@ -320,6 +320,13 @@ class GetFundamentalsHistoryUseCase:
                 "market_cap_usd": _safe_float(highlights_data.get("MarketCapitalization")),
                 "price_to_book": _safe_float(highlights_data.get("PriceBookMRQ")),
                 "dividend_yield": _safe_float(highlights_data.get("DividendYield")),
+                # PLAN-0104 W30 / BP-649: forward valuation metrics were
+                # already parsed by metric_extractor but dropped on the way
+                # out of the use case. Surface them now so the rag-chat
+                # snapshot renderer (handlers/market.py) can answer
+                # "forward P/E" / "PEG" questions without fabrication.
+                "forward_pe": _safe_float(highlights_data.get("ForwardPE")),
+                "peg_ratio": _safe_float(highlights_data.get("PEGRatio")),
                 # ``period_end`` is a tz-aware datetime; expose just the date
                 # portion so the API model (date field) accepts it cleanly.
                 "as_of": most_recent_hl.period_end.date(),

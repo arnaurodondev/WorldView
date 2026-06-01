@@ -54,7 +54,31 @@ _INTENT_KEYWORDS: dict[QueryIntent, list[str]] = {
     QueryIntent.COMPARISON: ["compare", " vs ", "versus", "difference between", "better than"],
     QueryIntent.REASONING: ["why", "reason", "explain", "cause", "because", "how come"],
     QueryIntent.RELATIONSHIP: ["supply chain", "subsidiaries", "owns", "acquired", "parent company"],
-    QueryIntent.FINANCIAL_DATA: ["price", "p/e", "revenue", "earnings", "ratio", "ebitda"],
+    # PLAN-0104 W30 / BP-650: include forward-valuation vocabulary so questions
+    # like "What's AAPL forward P/E?" or "Is TSLA overvalued?" route to
+    # FINANCIAL_DATA (and therefore trigger get_fundamentals_history's
+    # CurrentSnapshot path) instead of falling through to GENERAL, where no
+    # tool is called and the LLM refuses for lack of context. The dict is
+    # ordered + first-match-wins (see KeywordHeuristicClassifier.classify),
+    # so we keep existing specific intents (PORTFOLIO, COMPARISON, REASONING,
+    # RELATIONSHIP) ahead of FINANCIAL_DATA — "compare TSLA vs AAPL forward
+    # P/E" still routes to COMPARISON as today.
+    QueryIntent.FINANCIAL_DATA: [
+        "price",
+        "p/e",
+        "revenue",
+        "earnings",
+        "ratio",
+        "ebitda",
+        "forward p/e",
+        "forward pe",
+        "peg",
+        "valuation",
+        "expensive",
+        "cheap",
+        "overvalued",
+        "undervalued",
+    ],
     QueryIntent.SIGNAL_INTEL: ["news", "announced", "filed", "reported", "allegations"],
     QueryIntent.GENERAL: ["what is", "define", "how does", "tell me about", "explain what"],
     # FACTUAL_LOOKUP is the default — no keywords needed

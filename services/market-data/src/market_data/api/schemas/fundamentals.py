@@ -122,6 +122,14 @@ class CurrentSnapshot(BaseModel):
     market_cap_usd: float | None = None
     price_to_book: float | None = None
     dividend_yield: float | None = None
+    # PLAN-0104 W30 / BP-649: forward P/E + PEG ratio. The EODHD HIGHLIGHTS
+    # section already populates ForwardPE and PEGRatio scalars; pre-W30 the
+    # CurrentSnapshot schema dropped them so a "What's AAPL forward P/E?"
+    # question had no path to a grounded answer even when the LLM correctly
+    # routed to FINANCIAL_DATA. Both nullable: not every issuer reports
+    # forward estimates (e.g. early-stage tickers with no analyst coverage).
+    forward_pe: float | None = None
+    peg_ratio: float | None = None
     # ISO date of the snapshot row in the HIGHLIGHTS section. None when the
     # use case could not resolve a definitive ``period_end`` for the most
     # recent highlights record.
