@@ -601,21 +601,67 @@ def _check_entity_grounding(
         # PLAN-0103 W26 / BP-644: text-token fallback for items whose
         # citation_meta was not populated by the handler. Cheap: lowercase +
         # whole-word check against the first 2000 chars.
-        if text_match_tokens:
-            item_text = getattr(item, "text", None)
-            if isinstance(item_text, str) and item_text:
-                snippet = item_text[:2000].lower()
-                # Whole-word match via simple delimiter walk so "AAPL" does
-                # not match "AA" but does match "AAPL," or "AAPL:" etc.
-                for tok in text_match_tokens:
-                    idx = snippet.find(tok)
-                    while idx != -1:
-                        left_ok = idx == 0 or not snippet[idx - 1].isalnum()
-                        right_idx = idx + len(tok)
-                        right_ok = right_idx == len(snippet) or not snippet[right_idx].isalnum()
-                        if left_ok and right_ok:
+        item_text = getattr(item, "text", None)
+        snippet: str | None = None
+        if isinstance(item_text, str) and item_text:
+            snippet = item_text[:2000].lower()
+        if text_match_tokens and snippet is not None:
+            # Whole-word match via simple delimiter walk so "AAPL" does
+            # not match "AA" but does match "AAPL," or "AAPL:" etc.
+            for tok in text_match_tokens:
+                idx = snippet.find(tok)
+                while idx != -1:
+                    left_ok = idx == 0 or not snippet[idx - 1].isalnum()
+                    right_idx = idx + len(tok)
+                    right_ok = right_idx == len(snippet) or not snippet[right_idx].isalnum()
+                    if left_ok and right_ok:
+                        return None
+                    idx = snippet.find(tok, idx + 1)
+        # PLAN-0104 W29 / BP-644 ext: opposite-direction match. The
+        # one-way fallback above misses cases where the question carries
+        # only canonical names ({"tesla", "tesla inc"}) but the tool
+        # item's rendered text uses the TICKER ("TSLA quarterly
+        # fundamentals..."). Extract uppercase ticker-shaped tokens
+        # (1-5 letters, common ticker length) from the ORIGINAL casing
+        # of item.text, lowercase them, and look for any of them as a
+        # substring of any question entity id (or vice-versa). The
+        # substring check (rather than equality) handles "tesla" vs
+        # "tesla inc" without admitting wrong companies — an unrelated
+        # MSFT ticker still produces "msft" which is not a substring of
+        # "apple" / "apple inc" / any UUID.
+        if isinstance(item_text, str) and item_text:
+            raw_text = item_text[:2000]
+            tickers_in_text = {t.lower() for t in re.findall(r"\b[A-Z]{1,5}\b", raw_text)}
+            for ticker in tickers_in_text:
+                for qid in question_entity_ids:
+                    # Equality covers exact ticker match in question ids.
+                    if ticker == qid:
+                        return None
+                    # Substring check: only accept when the ticker
+                    # appears as a WORD inside a multi-word qid (e.g.
+                    # "tsla" inside "tsla inc"), or when a qid token is
+                    # a prefix/suffix of the ticker. We guard against
+                    # accidental matches by requiring the ticker to be
+                    # the FULL qid OR a whole word within qid (delimited
+                    # by non-alnum or string edge).
+                    if len(ticker) >= 2 and ticker in qid:
+                        idx2 = qid.find(ticker)
+                        left_ok2 = idx2 == 0 or not qid[idx2 - 1].isalnum()
+                        right_idx2 = idx2 + len(ticker)
+                        right_ok2 = right_idx2 == len(qid) or not qid[right_idx2].isalnum()
+                        if left_ok2 and right_ok2:
                             return None
-                        idx = snippet.find(tok, idx + 1)
+            # Also check citation_meta.entity_name as a substring relation
+            # with question ids. Helps when handler set entity_name="Tesla
+            # Inc" but question canonical was just "tesla".
+            if cm is not None:
+                cm_name = getattr(cm, "entity_name", None)
+                if isinstance(cm_name, str) and cm_name:
+                    cm_lower = cm_name.strip().lower()
+                    if len(cm_lower) >= 3:
+                        for qid in question_entity_ids:
+                            if len(qid) >= 3 and (cm_lower in qid or qid in cm_lower):
+                                return None
     return (
         "I cannot find information about the entities in your question in the "
         "retrieved results. The data returned referenced different entities, "
@@ -1957,10 +2003,22 @@ class ChatOrchestratorUseCase:
         if had_tool_calls and non_none_items and _question_entity_ids:
             _grounding_refusal = _check_entity_grounding(non_none_items, _question_entity_ids)
             if _grounding_refusal is not None:
+                # PLAN-0104 W29: log the actual ids so we can diagnose
+                # future false-positives (TSLA-style: question carries
+                # canonical names but tool items only carry tickers).
+                _item_id_summaries = [str(getattr(_it, "item_id", None) or "")[:80] for _it in non_none_items[:10]]
+                _item_entity_names = []
+                for _it in non_none_items[:10]:
+                    _cm = getattr(_it, "citation_meta", None)
+                    _en = getattr(_cm, "entity_name", None) if _cm is not None else None
+                    _item_entity_names.append(_en if isinstance(_en, str) else None)
                 log.warning(  # type: ignore[no-any-return]
                     "entity_grounding_failed",
                     retrieved_item_count=len(non_none_items),
                     question_entity_count=len(_question_entity_ids),
+                    question_ids=sorted(_question_entity_ids),
+                    item_ids=_item_id_summaries,
+                    item_entity_names=_item_entity_names,
                     request_id=str(getattr(audit, "turn_id", "") or ""),
                 )
                 full_text = _grounding_refusal
