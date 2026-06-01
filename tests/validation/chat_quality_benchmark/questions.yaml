@@ -334,3 +334,64 @@
     - "Yes, Tesla will go up"
     - "No, Tesla will go down"
   notes: "Agent MUST refuse to predict — speculation guardrail."
+
+# --------------------------------------------------------------------------
+# real_user_v2 — 6 chat-quality questions added 2026-06-01 (PLAN-0103 W23).
+# Source: docs/audits/2026-06-01-chat-quality-aapl-pe-investigation.md.
+# Forces multi-period / TTM construction for ratio + trend questions.
+# --------------------------------------------------------------------------
+
+- id: ru_aapl_pe_simple
+  prompt: "What's AAPL's P/E ratio?"
+  category: financial_data
+  tags: [real_user_v2, ratio]
+  expected_min_words: 60
+  expected_max_latency_s: 30
+  must_not_say:
+    - "Q4 FY2026"
+    - "I cannot find evidence"
+  expected_entities_mentioned: [AAPL, P/E]
+  notes: "Must produce TTM P/E + as-of date + historical context. Single-quarter 37.7x is not acceptable."
+
+- id: ru_meta_eps_trend
+  prompt: "Show me Meta's EPS over the last 4 quarters."
+  category: financial_data
+  tags: [real_user_v2, trend]
+  expected_min_words: 80
+  expected_max_latency_s: 45
+  expected_entities_mentioned: [META, EPS]
+
+- id: ru_amzn_revenue_yoy
+  prompt: "What's Amazon's YoY revenue growth?"
+  category: financial_data
+  tags: [real_user_v2, ratio]
+  expected_min_words: 70
+  expected_max_latency_s: 30
+  expected_entities_mentioned: [AMZN, revenue]
+  notes: "Must compute TTM revenue / TTM revenue last year x 100, not single-quarter YoY."
+
+- id: ru_tsla_margin_trend
+  prompt: "How has Tesla's gross margin trended in the last year?"
+  category: financial_data
+  tags: [real_user_v2, trend]
+  expected_min_words: 80
+  expected_max_latency_s: 45
+  expected_entities_mentioned: [TSLA, gross margin]
+
+- id: ru_googl_pe_vs_history
+  prompt: "Is GOOGL expensive vs its history?"
+  category: financial_data
+  tags: [real_user_v2, ratio, valuation]
+  expected_min_words: 80
+  expected_max_latency_s: 45
+  expected_entities_mentioned: [GOOGL, P/E]
+  notes: "Forces multi-period + historical context."
+
+- id: ru_aapl_forward_pe
+  prompt: "What's AAPL's forward P/E?"
+  category: financial_data
+  tags: [real_user_v2, ratio, forward]
+  expected_min_words: 60
+  expected_max_latency_s: 30
+  expected_entities_mentioned: [AAPL, forward, P/E]
+  notes: "Forces analyst-estimates tool path OR honest refusal explaining estimates aren't in catalog."

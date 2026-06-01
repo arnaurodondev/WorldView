@@ -331,7 +331,54 @@ class MarketHandler(ToolHandler):
             log.warning("tool_no_data", tool="get_fundamentals_history", ticker=ticker)
             return None
 
-        table = self._format_fundamentals_table(ticker, data)
+        # PLAN-0103 W24 / BP-639: phantom-row guard.
+        #
+        # If a row comes back with EVERY flow metric (revenue, eps, net_income,
+        # ebitda) null/missing, treat it as if the upstream returned no data.
+        # WHY: market-data's filter (PLAN-0103 W22) already drops EODHD's
+        # future-dated placeholders before they reach us, but defence-in-depth
+        # matters — any future schema drift that lets a phantom row through
+        # would otherwise be quoted by the LLM as if it were real (audit
+        # ``docs/audits/2026-06-01-chat-quality-aapl-pe-investigation.md``;
+        # symmetric to the batch fix landed as BP-626 / PLAN-0103 W4).
+        #
+        # We intentionally use the FLOW metrics only — not pe_ratio/market_cap,
+        # which are TTM snapshot fields injected into every row regardless of
+        # whether the per-period row itself has data (see PLAN-0104 / BP-640
+        # TODO in the market-data use case).
+        flow_keys = ("revenue", "eps", "net_income", "ebitda")
+
+        def _is_phantom_row(row: object) -> bool:
+            d = row.model_dump() if hasattr(row, "model_dump") else (row if isinstance(row, dict) else {})
+            return all(d.get(k) in (None, "", "None") for k in flow_keys)
+
+        non_phantom = []
+        for row in data:
+            if _is_phantom_row(row):
+                period_end = (row.get("period_end_date") if isinstance(row, dict) else None) or "?"
+                log.info(
+                    "tool_phantom_row_dropped",
+                    tool="get_fundamentals_history",
+                    symbol=ticker,
+                    period_end=period_end,
+                )
+                continue
+            non_phantom.append(row)
+
+        if not non_phantom:
+            # All rows were phantoms — surface no-data so the LLM knows to
+            # refuse rather than fabricate. ``item_count=0`` is conveyed by
+            # returning None (the orchestrator increments item_count only for
+            # non-None returns).
+            log.warning(
+                "tool_no_data",
+                tool="get_fundamentals_history",
+                ticker=ticker,
+                reason="all_rows_phantom",
+            )
+            return None
+
+        table = self._format_fundamentals_table(ticker, non_phantom)
         return RetrievedItem.create(
             item_id=f"tool:fundamentals:{ticker}",
             item_type=ItemType.financial,

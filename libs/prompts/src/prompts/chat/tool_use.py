@@ -40,10 +40,17 @@ TOOL_USE_SYSTEM_PROMPT_TEMPLATE = PromptTemplate(
     # 1.3 — PLAN-0103 W20 BP-638: COMPARISON addendum gains a mandatory
     #        TABULAR COMPARISON directive to stabilise the synthesis-turn
     #        answer shape for multi-entity x multi-period tool outputs.
-    version="1.3",
+    # 1.4 — PLAN-0103 W23 BP-639: FINANCIAL_DATA addendum gains a mandatory
+    #        RATIO-OR-TTM directive forcing periods >= 5 + TTM construction
+    #        for valuation/profitability ratios and TTM metrics. Root cause:
+    #        single-period ratio answers (P/E = 37.7x from a single quarter
+    #        snapshot, missing the TTM aggregation step) were fabricating
+    #        values when EODHD's future-dated placeholder leaked through.
+    version="1.4",
     description=(
         "Strict no-hallucination tool-use system prompt for multi-turn agent loop "
-        "(v1.3 adds tabular comparison rendering directive per BP-638)"
+        "(v1.4 adds RATIO-OR-TTM directive forcing periods >= 5 + TTM construction "
+        "per BP-639; v1.3 adds tabular comparison rendering directive per BP-638)"
     ),
     template=(
         "You are a research agent for institutional investors. Today's date is {today_iso}.\n\n"
@@ -247,7 +254,28 @@ _PER_INTENT_ADDENDA: dict[str, str] = {
         "When the user asks for YoY (year-over-year) or QoQ "
         "(quarter-over-quarter) growth, request periods >= 5 so the "
         "prior-period comparison quarter is included. For multi-quarter "
-        "trend questions, default to periods=6."
+        "trend questions, default to periods=6.\n\n"
+        # PLAN-0103 W23 BP-639: RATIO-OR-TTM directive. The chat-quality
+        # benchmark question "What's AAPL's P/E ratio?" was answered with
+        # a fabricated "37.7x" sourced from a single-quarter snapshot
+        # because (a) the agent picked periods=1 and (b) the use case
+        # returned EODHD's future-dated placeholder row whose every metric
+        # was null. Forcing periods >= 5 + explicit TTM construction
+        # eliminates both failure modes — the LLM cannot quote a snapshot
+        # ratio without aggregating 4 quarters of flow metrics first, and
+        # an absent quarter forces refusal rather than fabrication.
+        "RATIO-OR-TTM QUESTIONS (mandatory):\n"
+        "When the user asks about a valuation/profitability ratio (P/E, EV/EBITDA, ROE, ROIC,\n"
+        "FCF margin, gross margin, operating margin) OR a trailing-twelve-month metric\n"
+        "(TTM revenue, TTM EPS, TTM FCF, YoY growth), you MUST:\n"
+        "  - Set `periods >= 5` on get_fundamentals_history(_batch) so the latest 4 quarters\n"
+        "    can be summed for a TTM calculation plus 1 prior period for trend context.\n"
+        "  - Compute TTM explicitly when needed: TTM EPS = sum of last 4 quarterly EPS.\n"
+        "  - Quote the as-of date of the most recent reported quarter (NOT today's date).\n"
+        "  - When possible, compare the current ratio to its 5-year median or peer average.\n"
+        "  - Refuse rather than fabricate if any of the last 4 quarters is missing.\n"
+        'Single-period ratio answers ("P/E is X" without TTM construction + as-of date)\n'
+        "are NOT acceptable for FINANCIAL_DATA intent."
     ),
     "MACRO": (
         "\n\nMACRO FORMAT:\n"

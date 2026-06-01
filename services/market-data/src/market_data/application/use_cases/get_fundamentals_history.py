@@ -168,8 +168,69 @@ class GetFundamentalsHistoryUseCase:
         # present, else None — that is correct, not a bug).
         driver_records = earnings_records if selected_period_type == PeriodType.QUARTERLY else income_records
 
+        # PLAN-0103 W22 / BP-639: drop EODHD's future-dated pre-report
+        # placeholder rows.
+        #
+        # WHY: EODHD's EARNINGS_HISTORY section pre-emits a row for the next
+        # scheduled report date with NULL EPS so the column structure is
+        # stable for downstream consumers. After DESC-sort + slice [:1] these
+        # placeholders win, the downstream LLM sees a "row" with every metric
+        # as "—" and FABRICATES values (audit
+        # ``2026-06-01-chat-quality-aapl-pe-investigation.md`` — AAPL P/E
+        # fabricated as 37.7x because the only returned row was the
+        # 2026-06-30 placeholder with EPS=NULL).
+        #
+        # Defensive predicate: a row is a "future placeholder" only if BOTH
+        # (a) ``period_end`` is strictly in the future relative to today
+        # (UTC), AND (b) the driver metric for the section is null. For
+        # QUARTERLY (earnings_history) the driver metric is ``epsActual``;
+        # for ANNUAL (income_statement) the driver metric is
+        # ``totalRevenue``/``revenue``. We do NOT drop a legitimately-late
+        # filing that lacks an unrelated optional field, only the
+        # all-null-driver placeholder pattern.
+        from datetime import UTC as _UTC
+        from datetime import datetime as _datetime
+
+        today_utc = _datetime.now(tz=_UTC).date()
+
+        def _is_future_placeholder(rec: object) -> bool:
+            # rec.period_end is a tz-aware datetime; comparing dates is
+            # sufficient (we don't care about intraday for "is this in the
+            # future").
+            pe_date = rec.period_end.date()  # type: ignore[attr-defined]
+            if pe_date <= today_utc:
+                return False
+            data = rec.data if isinstance(rec.data, dict) else {}  # type: ignore[attr-defined]
+            if selected_period_type == PeriodType.QUARTERLY:
+                driver_value = data.get("epsActual")
+            else:
+                driver_value = data.get("totalRevenue") or data.get("revenue")
+            return driver_value is None or driver_value == "" or driver_value == "None"
+
+        filtered_driver_records = []
+        for rec in driver_records:
+            if _is_future_placeholder(rec):
+                log.info(
+                    "fundamentals_future_placeholder_dropped",
+                    symbol=ticker,
+                    period_end=rec.period_end.strftime("%Y-%m-%d"),
+                    period_type=selected_period_type.value,
+                )
+                continue
+            filtered_driver_records.append(rec)
+
+        # TODO PLAN-0104: SNAPSHOT FIELD INJECTION (BP-640) — ``pe_ratio``
+        # and ``market_cap`` below are sourced from HIGHLIGHTS (TTM
+        # snapshot) but are injected into EVERY per-period row. The LLM has
+        # been observed quoting a 37.7x TTM P/E as if it were the P/E for a
+        # specific quarter. The fix is to either (a) move these to a
+        # separate snapshot block in the response, or (b) clear them on
+        # every row except the most recent and add an explicit
+        # ``snapshot_as_of`` field. Out of scope for W22; tracked
+        # separately.
+
         # Sort driver records by period_end DESC then slice
-        sorted_records = sorted(driver_records, key=lambda r: r.period_end, reverse=True)
+        sorted_records = sorted(filtered_driver_records, key=lambda r: r.period_end, reverse=True)
         selected = sorted_records[:periods]
         # Re-sort ASC for response ordering
         selected = list(reversed(selected))

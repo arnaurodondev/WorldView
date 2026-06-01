@@ -191,6 +191,64 @@ class TestToolUsePromptContract:
                 "TABULAR COMPARISON (mandatory):" not in other
             ), f"TABULAR COMPARISON directive leaked into {intent} addendum"
 
+    def test_financial_data_addendum_contains_ratio_or_ttm_directive(self) -> None:
+        """PLAN-0103 W23 BP-639 regression — RATIO-OR-TTM directive.
+
+        The benchmark question "What's AAPL's P/E ratio?" was answered with
+        a fabricated 37.7x sourced from a single-quarter snapshot because
+        the agent picked periods=1 and never aggregated TTM EPS. The
+        FINANCIAL_DATA addendum now forces periods >= 5 + explicit TTM
+        construction for ratio/TTM questions, and an as-of date for the
+        most recent reported quarter. This test pins those rules so a
+        future edit cannot silently drop them.
+        """
+        prompt = get_tool_use_system_prompt(
+            intent="FINANCIAL_DATA",
+            today_iso="2026-06-01",
+        )
+
+        # Section anchor — the LLM must be able to locate the rule.
+        assert "RATIO-OR-TTM" in prompt, "missing RATIO-OR-TTM section header — BP-639 fix regressed"
+
+        # The periods >= 5 directive must be present so the LLM cannot
+        # request a single-period snapshot and call the resulting ratio
+        # a "TTM P/E".
+        assert "periods >= 5" in prompt, "missing periods >= 5 directive"
+
+        # TTM construction language must be explicit so the LLM knows to
+        # sum the trailing 4 quarters rather than quote one.
+        assert "TTM EPS = sum of last 4 quarterly EPS" in prompt, "missing explicit TTM EPS construction formula"
+
+        # Single-period rejection must be explicit so a model that ignores
+        # the periods directive still knows the answer shape is invalid.
+        assert "Single-period ratio answers" in prompt
+        assert "NOT acceptable" in prompt
+
+        # As-of date is required so the answer cannot float between
+        # quarters.
+        assert "as-of date" in prompt
+
+        # Refusal directive — fabrication is explicitly worse than refusal
+        # for ratio questions.
+        assert "Refuse rather than fabricate" in prompt
+
+        # The directive must NOT leak into intents where it would distort
+        # the format (e.g. MACRO answers, factual lookups). The addendum
+        # body owns this rule; other intents must not see it.
+        for intent in ("MACRO", "FACTUAL_LOOKUP", "GENERAL", "PORTFOLIO"):
+            other = get_tool_use_system_prompt(intent=intent, today_iso="2026-06-01")
+            assert "RATIO-OR-TTM" not in other, f"RATIO-OR-TTM directive leaked into {intent} addendum"
+
+    def test_prompt_template_version_is_at_least_1_4(self) -> None:
+        """The prompt template version must be bumped when the addendum changes.
+
+        PLAN-0103 W23 BP-639 bumped 1.3 → 1.4. The version string anchors
+        observability — every chat turn logs the prompt version, so a
+        silent revert would be detectable in telemetry. Pinning the floor
+        also catches accidental downgrades during merges.
+        """
+        assert TOOL_USE_SYSTEM_PROMPT_TEMPLATE.version >= "1.4"
+
     def test_prompt_contains_speculative_forecast_refusal(self) -> None:
         """FIX-LIVE-Z regression — speculative-price refusal must be present.
 
