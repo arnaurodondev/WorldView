@@ -1,6 +1,6 @@
--- F-DB-005 — Long-skip ``entity_embedding_state`` rows whose ticker is not in
--- ``market_data_db.instruments`` (active or not). These canonicals were
--- created by S6's enrichment path but never reached market-ingestion, so the
+-- F-DB-006 — Long-skip ``entity_embedding_state`` rows whose ticker is not in
+-- ``market_data_db.instruments`` at all. These canonicals were created by S6's
+-- enrichment path but never reached market-ingestion, so the
 -- FundamentalsRefreshWorker can NEVER refresh them — every cycle the lookup
 -- 404s, the entity is reported as ``instrument_lookup_failed`` (312/cycle in
 -- iter-11), and a worker slot is wasted.
@@ -22,6 +22,15 @@
 -- ``dblink`` is not available, fall back to the two-step approach in the
 -- audit doc (dump the lists to /tmp, diff, then drive the UPDATE from a
 -- temp-table).
+--
+-- NOTE (F-DB-006, 2026-05-28): The original committed version of this script
+-- filtered ``WHERE active = true`` on the remote ``instruments`` query, but
+-- the current ``market_data_db.instruments`` schema has no ``active`` (or
+-- ``is_active``) column. The active/delisted indicator lives elsewhere
+-- (``has_fundamentals``/``has_ohlcv`` capability flags), and the audit intent
+-- was always "ticker not present at all" (see line 2: "active or not").
+-- Removing the bogus predicate restores the intended semantics and unblocks
+-- ops re-runs.
 
 \set ON_ERROR_STOP on
 
@@ -30,9 +39,9 @@ CREATE EXTENSION IF NOT EXISTS dblink;
 
 BEGIN;
 
--- Stage 1: assemble the set of FI canonicals whose ticker has NO matching
--- ``active=true`` row in ``market_data_db.instruments``. We use a temp table
--- so the UPDATE below has a clean set even if dblink's keepalive churns.
+-- Stage 1: assemble the set of FI canonicals whose ticker has NO matching row
+-- in ``market_data_db.instruments`` at all. We use a temp table so the UPDATE
+-- below has a clean set even if dblink's keepalive churns.
 CREATE TEMP TABLE _data_gap_entities AS
 SELECT ce.entity_id
 FROM canonical_entities ce
@@ -42,7 +51,7 @@ WHERE ce.entity_type = 'financial_instrument'
     SELECT 1
     FROM dblink(
       'host=postgres port=5432 user=postgres password=postgres dbname=market_data_db',
-      'SELECT symbol FROM instruments WHERE active = true'
+      'SELECT symbol FROM instruments'
     ) AS m(symbol text)
     WHERE m.symbol = ce.ticker
   );
