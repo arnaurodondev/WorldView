@@ -242,12 +242,81 @@ class TestToolUsePromptContract:
     def test_prompt_template_version_is_at_least_1_4(self) -> None:
         """The prompt template version must be bumped when the addendum changes.
 
-        PLAN-0103 W23 BP-639 bumped 1.3 → 1.4. The version string anchors
-        observability — every chat turn logs the prompt version, so a
-        silent revert would be detectable in telemetry. Pinning the floor
-        also catches accidental downgrades during merges.
+        PLAN-0103 W23 BP-639 bumped 1.3 → 1.4. PLAN-0104 W31 BP-651
+        bumped 1.5 → 1.6 (4-section ANSWER STRUCTURE + VALUATION-CONTEXT
+        composition). The version string anchors observability — every
+        chat turn logs the prompt version, so a silent revert would be
+        detectable in telemetry. Pinning the floor also catches
+        accidental downgrades during merges.
         """
-        assert TOOL_USE_SYSTEM_PROMPT_TEMPLATE.version >= "1.4"
+        assert TOOL_USE_SYSTEM_PROMPT_TEMPLATE.version >= "1.6"
+
+    def test_financial_data_addendum_contains_answer_structure_directive(self) -> None:
+        """PLAN-0104 W31 BP-651 regression — 4-section ANSWER STRUCTURE.
+
+        Round 3 benchmark answers for FINANCIAL_DATA averaged 27-78 words
+        because the SNAPSHOT-VS-PERIODS exemplar was a one-liner and the
+        LLM mimicked it. v1.6 mandates a 4-section structure with a
+        120-250-word floor. This test pins the section headers + length
+        floor + "not acceptable" rejection wording so a future edit
+        cannot silently collapse the structure back to a one-liner.
+        """
+        prompt = get_tool_use_system_prompt(
+            intent="FINANCIAL_DATA",
+            today_iso="2026-06-01",
+        )
+        # Top-level section anchor.
+        assert "ANSWER STRUCTURE (mandatory for FINANCIAL_DATA):" in prompt
+        # All four sub-section headers must be enumerated verbatim.
+        assert "**Headline**" in prompt
+        assert "**Supporting Data**" in prompt
+        assert "**Context**" in prompt
+        assert "**Interpretation & Caveats**" in prompt
+        # Length floor — anchors the rejection of one-liners.
+        assert "120-250 words" in prompt
+        # Explicit single-paragraph rejection so the LLM cannot
+        # rationalise a terse answer as "the question was short".
+        assert "single-paragraph headline-only answer is NOT acceptable" in prompt
+        # The directive must NOT leak into other intents — it would
+        # distort MACRO/FACTUAL_LOOKUP/PORTFOLIO answers.
+        for intent in ("MACRO", "FACTUAL_LOOKUP", "GENERAL", "PORTFOLIO", "COMPARISON"):
+            other = get_tool_use_system_prompt(intent=intent, today_iso="2026-06-01")
+            assert (
+                "ANSWER STRUCTURE (mandatory for FINANCIAL_DATA):" not in other
+            ), f"ANSWER STRUCTURE directive leaked into {intent} addendum"
+
+    def test_financial_data_addendum_contains_valuation_context_rule(self) -> None:
+        """PLAN-0104 W31 BP-651 regression — VALUATION-CONTEXT composition.
+
+        Round 3 Q5 ("Is AAPL expensive relative to history?") succeeded
+        only by luck — the agent serialised three sequential tool calls.
+        v1.6 names the three complementary tools and mandates a single
+        parallel planning turn. This test pins the rule so a future edit
+        cannot silently drop the parallelism mandate.
+        """
+        prompt = get_tool_use_system_prompt(
+            intent="FINANCIAL_DATA",
+            today_iso="2026-06-01",
+        )
+        # Section anchor.
+        assert "VALUATION CONTEXT (composition rule):" in prompt
+        # Trigger keywords must be enumerated so the LLM recognises the
+        # question class.
+        for trigger in ("expensive", "cheap", "overvalued", "undervalued"):
+            assert trigger in prompt, f"missing VALUATION-CONTEXT trigger keyword '{trigger}'"
+        # The three tools must be named verbatim.
+        assert "get_fundamentals_history" in prompt
+        assert "get_price_history" in prompt
+        assert "search_documents" in prompt
+        # Parallelism mandate — the core of the rule.
+        assert "in\nparallel" in prompt or "in parallel" in prompt
+        assert "Do not call them sequentially" in prompt
+        # Must not leak into other intents.
+        for intent in ("MACRO", "FACTUAL_LOOKUP", "GENERAL", "PORTFOLIO", "COMPARISON"):
+            other = get_tool_use_system_prompt(intent=intent, today_iso="2026-06-01")
+            assert (
+                "VALUATION CONTEXT (composition rule):" not in other
+            ), f"VALUATION-CONTEXT rule leaked into {intent} addendum"
 
     def test_prompt_contains_speculative_forecast_refusal(self) -> None:
         """FIX-LIVE-Z regression — speculative-price refusal must be present.

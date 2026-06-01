@@ -54,11 +54,22 @@ TOOL_USE_SYSTEM_PROMPT_TEMPLATE = PromptTemplate(
     #        questions because the per-period pe_ratio cells were empty —
     #        the live P/E now lives in its own block with an explicit
     #        as-of date.
-    version="1.5",
+    # 1.6 — PLAN-0104 W31 BP-651: FINANCIAL_DATA addendum gains a mandatory
+    #        4-section ANSWER STRUCTURE (Headline / Supporting Data table /
+    #        Context / Interpretation+Caveats, 120-250 words) plus a
+    #        VALUATION-CONTEXT composition rule for parallel
+    #        fundamentals + price_history + search_documents fan-out on
+    #        "expensive/cheap/overvalued" questions. Also replaces the
+    #        single-line SNAPSHOT-VS-PERIODS example with a pointer to the
+    #        new 4-section structure (the old one-liner trained the LLM to
+    #        be terse — Round 3 benchmark answers averaged 27-78 words).
+    version="1.6",
     description=(
         "Strict no-hallucination tool-use system prompt for multi-turn agent loop "
-        "(v1.5 adds SNAPSHOT-VS-PERIODS rule per BP-640; v1.4 adds RATIO-OR-TTM "
-        "directive per BP-639; v1.3 adds tabular comparison rendering directive per BP-638)"
+        "(v1.6 adds 4-section ANSWER STRUCTURE + VALUATION-CONTEXT composition "
+        "per BP-651; v1.5 adds SNAPSHOT-VS-PERIODS rule per BP-640; v1.4 adds "
+        "RATIO-OR-TTM directive per BP-639; v1.3 adds tabular comparison "
+        "rendering directive per BP-638)"
     ),
     template=(
         "You are a research agent for institutional investors. Today's date is {today_iso}.\n\n"
@@ -300,8 +311,9 @@ _PER_INTENT_ADDENDA: dict[str, str] = {
         "(live P/E, current EV/EBITDA, current market cap, current\n"
         "price-to-book, current dividend yield), read the value from the\n"
         "`Current Snapshot` block of the tool result and quote it together\n"
-        "with the snapshot's as-of date verbatim. Example: 'AAPL P/E is\n"
-        "30.4x as-of 2026-06-01 [get_fundamentals_history Current Snapshot].'\n"
+        "with the snapshot's as-of date verbatim.\n"
+        "Example: When asked \"What's AAPL's P/E?\" the answer should follow\n"
+        "the 4-section ANSWER STRUCTURE below — never a single sentence.\n"
         "When the user asks about a TIME SERIES (last N quarters,\n"
         "quarterly trend, YoY growth, QoQ change), read from the period\n"
         "rows ONLY. Do NOT quote the snapshot in a time-series answer.\n"
@@ -312,7 +324,51 @@ _PER_INTENT_ADDENDA: dict[str, str] = {
         "tool result (the upstream HIGHLIGHTS section was empty for this\n"
         "issuer), refuse rather than fabricate — say 'no current snapshot\n"
         "available for <ticker>' and offer the period-trend answer\n"
-        "instead."
+        "instead.\n\n"
+        # PLAN-0104 W31 BP-651: ANSWER STRUCTURE. Round 3 benchmark
+        # answers for FINANCIAL_DATA questions averaged 27-78 words
+        # because the SNAPSHOT-VS-PERIODS exemplar above was a single
+        # sentence — the LLM mimicked it. This mandates a 4-section
+        # structure (headline + supporting table + context + caveats)
+        # with a 120-250-word floor so the synthesis turn cannot
+        # collapse into a one-liner even when the user question is
+        # short. Missing sections must be stated explicitly rather
+        # than silently omitted.
+        "ANSWER STRUCTURE (mandatory for FINANCIAL_DATA):\n"
+        "Every FINANCIAL_DATA answer MUST have FOUR sections, in this exact order:\n\n"
+        "1. **Headline** (1-2 sentences): direct answer + as-of date + tool citation.\n"
+        '   Example: "AAPL\'s TTM P/E is 30.4x as of 2026-06-01 [get_fundamentals_history Current Snapshot]."\n\n'
+        "2. **Supporting Data** (Markdown table): underlying components used to derive\n"
+        "   the headline value. For P/E: price, TTM EPS, share count. For YoY growth:\n"
+        "   current-period value, year-ago value, computed delta. For trend: 4-8 periods\n"
+        "   in a table with each row citing its source.\n\n"
+        "3. **Context** (2-4 sentences): pick whichever applies:\n"
+        "   (a) historical comparison vs entity's own range if get_fundamentals_history\n"
+        "       returned ≥8 periods,\n"
+        "   (b) peer comparison if compare_entities was called,\n"
+        '   (c) explicit "no historical baseline retrieved" if neither.\n\n'
+        "4. **Interpretation & Caveats** (2-3 sentences): plain-language read of whether\n"
+        "   the metric is high/low relative to the context block. Mention data-quality\n"
+        "   caveats (forward vs trailing, single-quarter vs TTM, missing periods). Do NOT\n"
+        "   make directional predictions.\n\n"
+        "A single-paragraph headline-only answer is NOT acceptable, even when the user\n"
+        "question is short. Target length: 120-250 words. If you cannot fill a section\n"
+        "because data is missing, state explicitly which data is missing rather than\n"
+        "omitting the section.\n\n"
+        # PLAN-0104 W31 BP-651: VALUATION-CONTEXT composition rule.
+        # Round 3 Q5 ("Is AAPL expensive relative to history?") only
+        # succeeded by luck — the agent serialised three sequential
+        # calls instead of fanning out. This rule names the three
+        # complementary tools (fundamentals + price_history +
+        # search_documents) and mandates a single parallel planning
+        # turn so latency stays bounded and the answer has all three
+        # ingredients available at synthesis time.
+        "VALUATION CONTEXT (composition rule):\n"
+        'When the user asks whether a stock is "expensive", "cheap", "overvalued",\n'
+        '"undervalued", or compares a current ratio to history, call THREE tools in\n'
+        "parallel (one planning turn): get_fundamentals_history (for the ratio +\n"
+        "historical periods), get_price_history (for normalisation context), and\n"
+        "search_documents (for catalyst/news context). Do not call them sequentially."
     ),
     "MACRO": (
         "\n\nMACRO FORMAT:\n"
