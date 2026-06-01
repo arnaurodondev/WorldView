@@ -48,6 +48,14 @@ export interface StreamingMessage {
    * ABOVE the ``ToolCallTray`` pills; both can be visible at the same time.
    */
   initial_status?: string;
+  /**
+   * PLAN-0103 W21 (BP-642) — set to ``true`` once the backend's
+   * ``final_answer`` SSE event has rewritten ``text`` with a post-grounding
+   * (numeric-corrected) version. The UI uses this flag to render a small
+   * "✓ grounded" badge so the user understands the answer they're reading
+   * was refined post-stream (rather than glitching mid-answer).
+   */
+  grounded?: boolean;
 }
 
 /**

@@ -935,4 +935,106 @@ describe("useChatStream", () => {
 
     expect(result.current.activeTools).toHaveLength(0);
   });
+
+  // ── PLAN-0103 W21 (BP-642) — final_answer honor regression ────────────────
+  //
+  // The backend's PLAN-0093 numeric-grounding pass can rewrite the
+  // synthesised text post-stream and emit it as a ``final_answer`` SSE event.
+  // Before this fix the hook had ``void data;`` for final_answer, so the
+  // assistant Message persisted with the UN-grounded streamed tokens — the
+  // user saw the wrong (hallucinated) answer in chat history.
+  //
+  // The test emits a token stream with the hallucinated text, then a
+  // final_answer event with the corrected text, then [DONE]. After the
+  // stream ends the persisted assistant message MUST carry the corrected
+  // final_answer text, NOT the un-grounded token stream.
+  it("final_answer SSE event replaces streamed tokens in the persisted message", async () => {
+    const frames = [
+      'data: {"text":"Apple P/E is 37.7x as of Q4 FY2026"}\n',
+      'event: final_answer\ndata: {"type":"final_answer","text":"I cannot find evidence that Apple\'s P/E ratio is 37.7x."}\n',
+      "data: [DONE]\n",
+    ];
+    const { reader } = makeReader(frames);
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      statusText: "OK",
+      body: { getReader: () => reader },
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { args } = makeArgs();
+    const { result } = renderHook(() => useChatStream(args));
+
+    await act(async () => {
+      await result.current.send("What's Apple's P/E?");
+    });
+
+    // The streaming bubble is cleared on done. The persisted assistant
+    // Message must carry the GROUNDED text, not the streamed tokens.
+    expect(result.current.streaming).toBeNull();
+    expect(result.current.localMessages).toHaveLength(2);
+    const assistant = result.current.localMessages[1] as {
+      role: string;
+      content: string;
+    };
+    expect(assistant.role).toBe("assistant");
+    expect(assistant.content).toBe(
+      "I cannot find evidence that Apple's P/E ratio is 37.7x.",
+    );
+    // Critical regression check: the un-grounded streamed text MUST NOT
+    // leak into the persisted message.
+    expect(assistant.content).not.toContain("37.7x as of Q4");
+  });
+
+  // ── PLAN-0103 W21 (FIX-A3) — stage-marker status visibility ──────────────
+  //
+  // Backend emits ``status`` events with stage keywords like
+  // ``loading_context`` and ``entity_resolution`` during the slow pre-token
+  // phase. Before this fix the hook filtered them out (no space → dropped).
+  // Now we map known keywords through STAGE_LABEL_MAP and surface them as
+  // streaming.initial_status so the UI can render progress feedback.
+  it("status SSE event with stage keyword maps to a human-readable label", async () => {
+    const ar = makeAbortableReader();
+    const fetchMock = vi.fn().mockImplementation((_url, init: RequestInit) => {
+      init.signal?.addEventListener("abort", () => ar.controller.abort());
+      return Promise.resolve({
+        ok: true,
+        status: 200,
+        statusText: "OK",
+        body: { getReader: () => ar.reader },
+      });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { args } = makeArgs();
+    const { result } = renderHook(() => useChatStream(args));
+
+    let sendPromise!: Promise<void>;
+    act(() => {
+      sendPromise = result.current.send("question");
+    });
+
+    // Emit a stage-marker status payload (single keyword, no space).
+    await act(async () => {
+      ar.pushChunk(
+        'event: status\ndata: {"step":"entity_resolution"}\n',
+      );
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    await waitFor(() => {
+      expect(result.current.streaming?.initial_status).toBe(
+        "Resolving entities…",
+      );
+    });
+
+    // Cleanly end the stream so the act() sendPromise resolves.
+    await act(async () => {
+      ar.pushChunk("data: [DONE]\n");
+      ar.finish();
+      await sendPromise;
+    });
+  });
 });

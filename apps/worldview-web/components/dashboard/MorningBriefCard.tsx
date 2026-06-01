@@ -570,7 +570,60 @@ export function MorningBriefCard() {
                 {collapsedSource}
               </ReactMarkdown>
             </div>
-          ) : brief.sections && brief.sections.length > 0 ? (
+          ) : (
+            // ── Expanded view ──────────────────────────────────────────
+            // PLAN-0103 W21 (BP-641) — render the v4.2 ``summary_paragraph``
+            // as a leading "lead" block at the top of the expanded view BEFORE
+            // ``<StructuredBrief>`` (and before the narrative fallback). The
+            // collapsed view already surfaces this paragraph (lines 380-384);
+            // omitting it in the expanded view meant a user clicking "Read
+            // more" lost the executive summary entirely — the structured
+            // sections render directly under the header chrome with no lead.
+            //
+            // WHY render ABOVE StructuredBrief AND ABOVE narrative fallback:
+            // both expanded branches benefit from the lead — when ``sections``
+            // is populated the paragraph sets context for the bullet sections;
+            // when sections is empty (narrative fallback) the paragraph still
+            // anchors the long-form prose with a 1-2 sentence overview.
+            //
+            // WHY summaryParagraphWithLinks (not safeSummaryParagraph): use
+            // the same memoised, entity-linkified value the collapsed view
+            // uses so citation [N#] markers and entity name → deep-link
+            // replacements work consistently across both views.
+            //
+            // WHY italic muted-foreground + border-bottom: a visual treatment
+            // distinct from regular body prose. The italic + reduced opacity
+            // signals "this is a summary/lead, not the main content"; the
+            // thin border separates the lead from the sections / narrative
+            // that follow without adding noise.
+            //
+            // WHY fall through cleanly when null: pre-v4.2 cached responses
+            // and instrument briefs leave ``summary_paragraph`` undefined.
+            // The ``&& summaryParagraphWithLinks`` guard renders nothing in
+            // that case — existing tests asserting ``brief-narrative`` /
+            // ``structured-brief`` markers remain valid because we only ADD
+            // an optional sibling block, we don't replace either branch.
+            <>
+              {summaryParagraphWithLinks && (
+                <div
+                  data-testid="brief-summary-paragraph"
+                  className="mb-1.5 border-b border-border/40 pb-1.5 text-[11px] italic leading-[1.4] text-muted-foreground [&>*:first-child]:mt-0 [&_p]:mb-0"
+                >
+                  <ReactMarkdown
+                    remarkPlugins={REMARK_PLUGINS}
+                    components={{
+                      a: ({ href, children }) => (
+                        <Link href={href ?? "#"} className="text-primary">
+                          {children}
+                        </Link>
+                      ),
+                    }}
+                  >
+                    {summaryParagraphWithLinks}
+                  </ReactMarkdown>
+                </div>
+              )}
+              {brief.sections && brief.sections.length > 0 ? (
             // ── Expanded view (structured): PLAN-0062-W4 T-W4-E-01 ──
             // WHY StructuredBrief (not inline map): the shared StructuredBrief
             // component handles BriefBullet citation chips, confidence badge,
@@ -632,6 +685,8 @@ export function MorningBriefCard() {
                 {narrativeWithLinks}
               </ReactMarkdown>
             </div>
+          )}
+            </>
           )}
 
           {/* ── Top Stories chip strip ─────────────────────────────────────

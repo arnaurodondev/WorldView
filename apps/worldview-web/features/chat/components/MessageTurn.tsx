@@ -114,6 +114,14 @@ interface MessageTurnProps {
    * Only meaningful when ``isStreaming`` is true; finished turns clear it.
    */
   readonly initialStatus?: string;
+  /**
+   * PLAN-0103 W21 (BP-642) — when ``true`` the streamed text has been
+   * replaced by the backend's post-grounding ``final_answer`` rewrite.
+   * Renders a small "✓ grounded" badge next to the streaming bubble so
+   * the user knows the answer they're reading was refined post-stream.
+   * Only meaningful while ``isStreaming`` is true.
+   */
+  readonly grounded?: boolean;
 }
 
 /**
@@ -194,6 +202,7 @@ export function MessageTurn({
   activeTools = [],
   intent,
   initialStatus,
+  grounded,
 }: MessageTurnProps) {
   const isAssistant = turn.role === "assistant";
   const isUser = turn.role === "user";
@@ -334,9 +343,27 @@ export function MessageTurn({
         {isStreaming && initialStatus ? (
           <div
             data-testid="chat-initial-status"
-            className="text-[10px] text-muted-foreground"
+            className="animate-pulse text-[10px] italic text-muted-foreground"
           >
             {initialStatus}
+          </div>
+        ) : null}
+
+        {/* PLAN-0103 W21 (BP-642) — "grounded" badge.
+            Rendered when the streaming bubble has been rewritten by the
+            backend's PLAN-0093 numeric-grounding pass (``final_answer`` SSE
+            event). Signals to the user that the answer text they're reading
+            is the corrected, post-grounding version — not the un-grounded
+            streamed tokens. WHY only when isStreaming: once the turn
+            finalises, the persisted Message carries grounded markers via
+            the metadata strip; the streaming-only badge avoids a flash of
+            redundant chrome on the post-stream Message render. */}
+        {isStreaming && grounded ? (
+          <div
+            data-testid="chat-grounded-badge"
+            className="text-[10px] text-emerald-500"
+          >
+            ✓ grounded
           </div>
         ) : null}
 

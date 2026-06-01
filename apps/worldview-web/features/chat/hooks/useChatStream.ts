@@ -58,6 +58,28 @@ import type {
 // component, not the other way round.
 import type { ToolCallState } from "@/features/chat/components/ToolCallIndicator";
 
+// ── Stage label map (PLAN-0103 W21, FIX-A3) ──────────────────────────────────
+//
+// S8 emits ``status`` and ``thinking`` SSE events with single-keyword stage
+// markers during the slow pre-token phase (cache lookup, entity resolution,
+// tool classification). These are NOT user-facing copy on the wire, but the
+// frontend needs to surface SOMETHING during the 10-30s gap before the first
+// token — otherwise the user perceives a frozen UI (see audit §3.2).
+//
+// We translate each known stage keyword to a short human-readable phrase
+// here. Unknown stage keywords are ignored so a backend that adds a new
+// marker doesn't accidentally spam the UI with raw enum values.
+const STAGE_LABEL_MAP: Record<string, string> = {
+  loading_context: "Loading context…",
+  entity_resolution: "Resolving entities…",
+  tool_classification: "Choosing tools…",
+  llm_tool_planning: "Planning tools…",
+  cache_hit: "Using cached context…",
+  cache_miss: "Building context…",
+  synthesis: "Composing answer…",
+  grounding: "Grounding numbers…",
+};
+
 // ── Public hook contract ──────────────────────────────────────────────────────
 
 /**
@@ -496,15 +518,27 @@ export function useChatStream(args: UseChatStreamArgs): UseChatStreamResult {
               // ToolCallIndicator in the streaming bubble.
 
               if (eventName === "thinking") {
-                // `thinking` — the LLM is classifying the query and deciding
-                // which tools to invoke. No UI state change needed here; the
-                // typing indicator (shown when streaming.text === "") already
-                // signals "I'm working on it". Future: could set a global
-                // "Thinking..." banner if desired.
-                // WHY no-op: the TypingIndicator already covers the blank-stream
-                // phase. Adding a separate "thinking" indicator would duplicate
-                // the feedback and add visual noise.
-                void data; // suppress "unused" lint warning
+                // PLAN-0103 W21 (FIX-A3) — surface stage markers from `thinking`
+                // events through the same STAGE_LABEL_MAP used by `status`.
+                // S8 emits ``thinking { stage: "tool_classification" }`` during
+                // the LLM tool-planning phase (often 10s+ on slow upstream
+                // providers); the previous no-op left the user staring at a
+                // blank typing indicator. Now the streaming bubble shows
+                // "Choosing tools…" or whichever stage maps from the keyword.
+                const stage =
+                  typeof data.stage === "string"
+                    ? data.stage
+                    : typeof data.step === "string"
+                      ? data.step
+                      : "";
+                if (stage) {
+                  const label = STAGE_LABEL_MAP[stage] ?? "";
+                  if (label) {
+                    setStreaming((prev) =>
+                      prev ? { ...prev, initial_status: label } : prev,
+                    );
+                  }
+                }
               } else if (eventName === "tool_call") {
                 // `tool_call` — a specific tool has been invoked. The data shape
                 // from S8 SSEEmitter (W11-3):
@@ -603,8 +637,18 @@ export function useChatStream(args: UseChatStreamArgs): UseChatStreamResult {
                   finalContent += chunk;
                   // Functional update: prev may have been replaced by a
                   // concurrent setState (e.g. cancel() racing the read loop).
+                  // PLAN-0103 W21 (FIX-A3) — clear initial_status on first
+                  // token: once real answer text is flowing the stage label
+                  // is no longer informative and would compete with the
+                  // streamed prose.
                   setStreaming((prev) =>
-                    prev ? { ...prev, text: prev.text + chunk } : prev,
+                    prev
+                      ? {
+                          ...prev,
+                          text: prev.text + chunk,
+                          initial_status: undefined,
+                        }
+                      : prev,
                   );
                 }
               } else if (eventName === "citations") {
@@ -691,11 +735,37 @@ export function useChatStream(args: UseChatStreamArgs): UseChatStreamResult {
                   );
                 }
               } else if (eventName === "final_answer") {
-                // PLAN-0089 K T-03: S8 emits a `final_answer` event after the last
-                // token. The token stream itself is already complete by then, so
-                // there is nothing for the UI to do — we acknowledge silently to
-                // suppress the legacy "unknown event" log path.
-                void data;
+                // PLAN-0103 W21 (BP-642) — HONOR the post-stream rewrite.
+                //
+                // Under PLAN-0093 numeric-grounding the backend re-runs the
+                // synthesised answer through a grounding pass that may rewrite
+                // hallucinated numbers (e.g. token stream "P/E is 37.7x" →
+                // final_answer "I cannot find evidence for that figure"). The
+                // hook MUST replace both ``finalContent`` (used by finalize()
+                // when persisting the assistant Message) AND the streaming
+                // bubble text so the user sees the corrected, grounded answer
+                // — not the un-grounded streamed tokens.
+                //
+                // WHY check ``data.text``: S8 emits ``{ "type": "final_answer",
+                // "text": "..." }``. Older event shapes used ``content``; we
+                // accept either for forward compatibility.
+                //
+                // WHY ``grounded`` flag on StreamingMessage: surfacing a small
+                // ``✓ grounded`` badge in the UI tells the user the answer
+                // they're reading was refined post-stream (so they don't think
+                // the bubble glitched mid-answer when the text changes).
+                const finalText =
+                  typeof data.text === "string"
+                    ? data.text
+                    : typeof data.content === "string"
+                      ? (data.content as string)
+                      : "";
+                if (finalText) {
+                  finalContent = finalText;
+                  setStreaming((prev) =>
+                    prev ? { ...prev, text: finalText, grounded: true } : prev,
+                  );
+                }
               } else if (eventName === "error") {
                 const msg =
                   typeof data.message === "string"
@@ -705,27 +775,42 @@ export function useChatStream(args: UseChatStreamArgs): UseChatStreamResult {
                 setStreaming(null);
                 return;
               } else if (eventName === "status") {
-                // PLAN-0100 W2 T-W2-03 — surface the aggregate pre-tool status
-                // badge.  S8 emits ONE ``status`` event with summary text
-                // (``"Loading get_price_history, search_news…"``) right after
-                // iteration-0 picks tools, so users see something user-visible
-                // within ~1-3s instead of waiting for synthesis (often 60s+).
+                // PLAN-0103 W21 (FIX-A3) — surface ALL stage markers.
                 //
-                // Earlier ``status`` events (``cache_hit``, ``loading_context``,
-                // ``entity_resolution``) are stage keywords, not user-facing
-                // copy.  We only surface payloads that look like rendered text
-                // (contain a space or punctuation), so the stage-marker
-                // payloads stay silent — preserving existing behaviour.
+                // The PLAN-0100 W2 implementation silently dropped stage-marker
+                // payloads (``loading_context``, ``entity_resolution``,
+                // ``cache_hit``, ``tool_classification`` etc.) because the
+                // ``/[\s…]/`` filter required a space or ellipsis. On slow
+                // tool-planning turns (~11-12s) the user saw a frozen typing
+                // indicator with no signal that work was happening — the
+                // first user-visible status only arrived AFTER tool selection.
+                //
+                // Fix: map known stage keywords to human-readable copy via
+                // ``STAGE_LABEL_MAP``. Multi-word payloads (already
+                // user-facing) flow through as-is. The streaming bubble now
+                // shows progress within ~200ms of send().
+                //
+                // WHY put the map inside the hook (not lib/): the mapping is
+                // tightly coupled to the SSE wire contract S8 emits — moving
+                // it elsewhere risks the map and consumer drifting apart.
                 const statusText =
                   typeof data.step === "string"
                     ? data.step
                     : typeof data.message === "string"
                       ? data.message
                       : "";
-                if (statusText && /[\s…]/.test(statusText)) {
-                  setStreaming((prev) =>
-                    prev ? { ...prev, initial_status: statusText } : prev,
-                  );
+                if (statusText) {
+                  // Multi-word payloads (contain a space or ellipsis) flow
+                  // through verbatim. Single-keyword stage markers get mapped
+                  // to user-facing copy.
+                  const label = /[\s…]/.test(statusText)
+                    ? statusText
+                    : (STAGE_LABEL_MAP[statusText] ?? "");
+                  if (label) {
+                    setStreaming((prev) =>
+                      prev ? { ...prev, initial_status: label } : prev,
+                    );
+                  }
                 }
               }
               // (metadata / contradictions / final_answer / status are all
