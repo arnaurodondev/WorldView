@@ -124,7 +124,7 @@ class ProcessedEventsCleanupWorker:
                 ),
                 {"cutoff": cutoff, "batch": self._batch_size},
             )
-            deleted = result.rowcount or 0
+            deleted = result.rowcount or 0  # type: ignore[attr-defined]
             total_deleted += deleted
             batches += 1
             await session.commit()

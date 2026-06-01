@@ -93,7 +93,7 @@ async def run_insider_rollup_once(session: AsyncSession) -> dict[str, int]:
         """
     )
     result = await session.execute(sql, {"window_start": window_start})
-    affected = result.rowcount if result.rowcount is not None and result.rowcount >= 0 else 0
+    affected = result.rowcount if result.rowcount is not None and result.rowcount >= 0 else 0  # type: ignore[attr-defined]
     return {"instruments": int(affected), "window_days": _WINDOW_DAYS}
 
 

@@ -169,7 +169,7 @@ class EntityRefreshConsumer(BaseKafkaConsumer[None]):
                 {"entity_id": str(entity_id), "view_types": list(view_types)},
             )
             await session.commit()
-            rows = result.rowcount if result.rowcount is not None else 0
+            rows = result.rowcount if result.rowcount is not None else 0  # type: ignore[attr-defined]
 
         logger.info(  # type: ignore[no-any-return]
             "entity_refresh_processed",

@@ -78,8 +78,8 @@ def _extract_pdf_text(file_bytes: bytes) -> str:
     import io
 
     try:
-        from pdfminer.high_level import (
-            extract_text as pdfminer_extract,  # type: ignore[import-untyped,import-not-found]
+        from pdfminer.high_level import (  # type: ignore[import-untyped,import-not-found]
+            extract_text as pdfminer_extract,
         )
 
         return pdfminer_extract(io.BytesIO(file_bytes))  # type: ignore[no-any-return]
