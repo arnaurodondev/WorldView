@@ -46,11 +46,19 @@ TOOL_USE_SYSTEM_PROMPT_TEMPLATE = PromptTemplate(
     #        single-period ratio answers (P/E = 37.7x from a single quarter
     #        snapshot, missing the TTM aggregation step) were fabricating
     #        values when EODHD's future-dated placeholder leaked through.
-    version="1.4",
+    # 1.5 — PLAN-0103 W25 BP-640: FINANCIAL_DATA addendum gains a SNAPSHOT-
+    #        VS-PERIODS section teaching the LLM to read live valuation
+    #        ratios (current P/E, EV/EBITDA, market cap) from the new
+    #        ``Current Snapshot`` block and historical operating metrics
+    #        from the period rows. Pre-1.5 the agent refused AAPL/GOOGL P/E
+    #        questions because the per-period pe_ratio cells were empty —
+    #        the live P/E now lives in its own block with an explicit
+    #        as-of date.
+    version="1.5",
     description=(
         "Strict no-hallucination tool-use system prompt for multi-turn agent loop "
-        "(v1.4 adds RATIO-OR-TTM directive forcing periods >= 5 + TTM construction "
-        "per BP-639; v1.3 adds tabular comparison rendering directive per BP-638)"
+        "(v1.5 adds SNAPSHOT-VS-PERIODS rule per BP-640; v1.4 adds RATIO-OR-TTM "
+        "directive per BP-639; v1.3 adds tabular comparison rendering directive per BP-638)"
     ),
     template=(
         "You are a research agent for institutional investors. Today's date is {today_iso}.\n\n"
@@ -275,7 +283,36 @@ _PER_INTENT_ADDENDA: dict[str, str] = {
         "  - When possible, compare the current ratio to its 5-year median or peer average.\n"
         "  - Refuse rather than fabricate if any of the last 4 quarters is missing.\n"
         'Single-period ratio answers ("P/E is X" without TTM construction + as-of date)\n'
-        "are NOT acceptable for FINANCIAL_DATA intent."
+        "are NOT acceptable for FINANCIAL_DATA intent.\n\n"
+        # PLAN-0103 W25 BP-640: SNAPSHOT-VS-PERIODS directive.
+        # ``get_fundamentals_history`` (and the batch variant) now returns
+        # TWO distinct blocks in its tool result:
+        #   (1) a Markdown period table with revenue/EPS/net_income per
+        #       quarter (historical flow metrics);
+        #   (2) a "Current Snapshot (as-of YYYY-MM-DD, source: highlights)"
+        #       block with live P/E, EV/EBITDA, market cap, etc.
+        # Pre-W25 the live P/E was injected into every period row, which
+        # caused the LLM to either quote the TTM ratio as a quarterly
+        # figure (fabrication) or refuse because the per-period cell
+        # appeared empty. The two blocks now make the semantics explicit.
+        "SNAPSHOT VS PERIODS (mandatory):\n"
+        "When the user asks about a CURRENT valuation/profitability ratio\n"
+        "(live P/E, current EV/EBITDA, current market cap, current\n"
+        "price-to-book, current dividend yield), read the value from the\n"
+        "`Current Snapshot` block of the tool result and quote it together\n"
+        "with the snapshot's as-of date verbatim. Example: 'AAPL P/E is\n"
+        "30.4x as-of 2026-06-01 [get_fundamentals_history Current Snapshot].'\n"
+        "When the user asks about a TIME SERIES (last N quarters,\n"
+        "quarterly trend, YoY growth, QoQ change), read from the period\n"
+        "rows ONLY. Do NOT quote the snapshot in a time-series answer.\n"
+        "When the user asks about a TTM metric (TTM revenue, TTM EPS,\n"
+        "TTM FCF), prefer computing it from the last 4 period rows; only\n"
+        "fall back to the snapshot field when the period rows are\n"
+        "incomplete. If the `Current Snapshot` block is absent from the\n"
+        "tool result (the upstream HIGHLIGHTS section was empty for this\n"
+        "issuer), refuse rather than fabricate — say 'no current snapshot\n"
+        "available for <ticker>' and offer the period-trend answer\n"
+        "instead."
     ),
     "MACRO": (
         "\n\nMACRO FORMAT:\n"

@@ -219,15 +219,26 @@ class GetFundamentalsHistoryUseCase:
                 continue
             filtered_driver_records.append(rec)
 
-        # TODO PLAN-0104: SNAPSHOT FIELD INJECTION (BP-640) — ``pe_ratio``
-        # and ``market_cap`` below are sourced from HIGHLIGHTS (TTM
-        # snapshot) but are injected into EVERY per-period row. The LLM has
-        # been observed quoting a 37.7x TTM P/E as if it were the P/E for a
-        # specific quarter. The fix is to either (a) move these to a
-        # separate snapshot block in the response, or (b) clear them on
-        # every row except the most recent and add an explicit
-        # ``snapshot_as_of`` field. Out of scope for W22; tracked
-        # separately.
+        # PLAN-0103 W25 / BP-640: snapshot-vs-period-row P/E injection fix.
+        #
+        # The HIGHLIGHTS section is a single live/TTM snapshot — there is no
+        # per-period stream of PERatio/MarketCapitalization. Pre-W25 we
+        # injected ``highlights_data['PERatio']`` into EVERY period row's
+        # ``pe_ratio`` field, which caused the AAPL P/E benchmark question
+        # (and GOOGL P/E in Round 2) to fail two different ways:
+        #   * If the answer cell came back populated the LLM quoted the TTM
+        #     P/E as if it were the row's quarterly P/E (fabrication).
+        #   * If the row had been dropped by W22's future-placeholder filter
+        #     the LLM refused — because the only remaining rows had revenue/
+        #     EPS populated but ``pe_ratio`` empty (per-period P/E doesn't
+        #     exist as a fundamentals concept).
+        #
+        # Fix: build a separate ``current_snapshot`` block (see route handler
+        # + ``CurrentSnapshot`` schema) and STOP injecting snapshot fields
+        # into per-period rows. Periods keep flow/operating metrics ONLY.
+        # The snapshot lives as a sibling field in the response so the LLM
+        # can cleanly choose "current P/E?" → snapshot vs "quarterly trend?"
+        # → periods.
 
         # Sort driver records by period_end DESC then slice
         sorted_records = sorted(filtered_driver_records, key=lambda r: r.period_end, reverse=True)
@@ -274,17 +285,46 @@ class GetFundamentalsHistoryUseCase:
                     "revenue": _safe_float(inc.get("totalRevenue") or inc.get("revenue")),
                     "gross_profit": _safe_float(inc.get("grossProfit")),
                     "net_income": _safe_float(inc.get("netIncome")),
-                    # EPS from earnings section
                     "eps": _safe_float(data.get("epsActual") or data.get("eps")),
-                    # PE ratio and market cap from highlights (TTM, not per-period).
-                    # The TTM-ness of these two fields is documented at the call
-                    # site that consumes them (rag-chat MarketHandler). They are
-                    # snapshot ratios, not flow metrics, so cannot be confused
-                    # with revenue/net_income even if a model misreads them.
-                    "pe_ratio": _safe_float(highlights_data.get("PERatio")),
-                    "market_cap": _safe_float(highlights_data.get("MarketCapitalization")),
+                    # PLAN-0103 W25 / BP-640: ``pe_ratio`` and ``market_cap``
+                    # are NULL on every period row. The TTM snapshot lives in
+                    # the sibling ``current_snapshot`` block. Per-row fields
+                    # remain in the schema for forward compatibility but no
+                    # longer carry snapshot leakage that the LLM could quote
+                    # as a per-period figure.
+                    "pe_ratio": None,
+                    "market_cap": None,
                 }
             )
+
+        # PLAN-0103 W25 / BP-640: build the live-valuation snapshot block.
+        # ``most_recent`` (computed above) is the latest HIGHLIGHTS row by
+        # ``period_end``; ``highlights_data`` is its raw dict.  We populate
+        # whichever EODHD keys are present and leave the rest as None — the
+        # CurrentSnapshot schema is fully nullable so partial coverage (ETFs,
+        # newly-listed issuers) is rendered honestly rather than fabricated.
+        #
+        # ``as_of`` is the ``period_end`` of the source highlights row. EODHD
+        # stamps these with the date the snapshot was captured; we expose it
+        # so the LLM can quote "P/E as-of YYYY-MM-DD" instead of inventing
+        # "today". When the section had zero rows, ``current_snapshot`` is
+        # None and downstream callers handle that as "no snapshot available".
+        current_snapshot: dict | None = None
+        if highlights_records:
+            most_recent_hl = max(highlights_records, key=lambda r: r.period_end)
+            current_snapshot = {
+                "pe_ratio": _safe_float(highlights_data.get("PERatio")),
+                "ev_ebitda": _safe_float(
+                    highlights_data.get("EVToEBITDA") or highlights_data.get("EnterpriseValueEbitda")
+                ),
+                "market_cap_usd": _safe_float(highlights_data.get("MarketCapitalization")),
+                "price_to_book": _safe_float(highlights_data.get("PriceBookMRQ")),
+                "dividend_yield": _safe_float(highlights_data.get("DividendYield")),
+                # ``period_end`` is a tz-aware datetime; expose just the date
+                # portion so the API model (date field) accepts it cleanly.
+                "as_of": most_recent_hl.period_end.date(),
+                "source": "highlights",
+            }
 
         # FIX-LIVE-P observability: if the caller advertised the user's requested
         # quarter and that quarter is NOT in the returned periods, emit a
@@ -305,7 +345,13 @@ class GetFundamentalsHistoryUseCase:
                     available_quarters=available[:5],
                 )
 
-        return {"periods": result_periods, "period_count": len(result_periods)}
+        return {
+            "periods": result_periods,
+            "period_count": len(result_periods),
+            # PLAN-0103 W25 / BP-640: TTM/live snapshot block — None when the
+            # HIGHLIGHTS section was empty for this instrument.
+            "current_snapshot": current_snapshot,
+        }
 
 
 def _period_label(

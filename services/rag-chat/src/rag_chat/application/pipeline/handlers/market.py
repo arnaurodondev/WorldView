@@ -319,17 +319,49 @@ class MarketHandler(ToolHandler):
             )
             period_type_norm = "quarterly"
 
-        data = await asyncio.wait_for(
-            self._s3.get_fundamentals_history(
-                ticker=ticker,
-                periods=periods,
-                period_type=period_type_norm,
-            ),
-            timeout=self._timeout,
-        )
-        if not data:
+        # PLAN-0103 W25 / BP-640: prefer the snapshot-aware accessor when
+        # the adapter implements it AND the response is well-formed. Test
+        # doubles based on AsyncMock auto-spawn every attribute (so a plain
+        # ``hasattr`` check passes even on legacy mocks); we therefore
+        # ALSO require the returned value to be a dict with the new
+        # ``periods``/``current_snapshot`` keys. Anything else falls back
+        # to the legacy ``get_fundamentals_history`` list shape so existing
+        # tests + adapters don't churn.
+        current_snapshot: dict | None = None
+        data: list | None = None
+        snap_method = getattr(self._s3, "get_fundamentals_history_with_snapshot", None)
+        if snap_method is not None:
+            bundle = await asyncio.wait_for(
+                snap_method(
+                    ticker=ticker,
+                    periods=periods,
+                    period_type=period_type_norm,
+                ),
+                timeout=self._timeout,
+            )
+            if isinstance(bundle, dict) and "periods" in bundle:
+                periods_field = bundle.get("periods", [])
+                if isinstance(periods_field, list):
+                    data = periods_field
+                snap = bundle.get("current_snapshot")
+                current_snapshot = snap if isinstance(snap, dict) else None
+        if data is None:
+            data = await asyncio.wait_for(
+                self._s3.get_fundamentals_history(
+                    ticker=ticker,
+                    periods=periods,
+                    period_type=period_type_norm,
+                ),
+                timeout=self._timeout,
+            )
+        if not data and current_snapshot is None:
             log.warning("tool_no_data", tool="get_fundamentals_history", ticker=ticker)
             return None
+        # Narrow ``data`` to ``list`` for mypy + downstream iteration. Either
+        # the snapshot-aware path populated it, or the legacy fallback did,
+        # or we returned None above — the assertion is structural.
+        if data is None:
+            data = []
 
         # PLAN-0103 W24 / BP-639: phantom-row guard.
         #
@@ -378,13 +410,30 @@ class MarketHandler(ToolHandler):
             )
             return None
 
-        table = self._format_fundamentals_table(ticker, non_phantom)
+        table = self._format_fundamentals_table(
+            ticker,
+            non_phantom,
+            current_snapshot=current_snapshot,
+        )
         return RetrievedItem.create(
             item_id=f"tool:fundamentals:{ticker}",
             item_type=ItemType.financial,
             text=table[:_TOOL_RESULT_MAX_CHARS],
             score=0.88,
             trust_weight=0.90,
+            # PLAN-0103 W26 / BP-644: bind the entity_name so the BP-605
+            # entity-grounding guard (chat_orchestrator._check_entity_grounding)
+            # can match this item to the question's ticker. Pre-W26 the
+            # singular handler set no citation_meta, so a TSLA-only question
+            # whose only retrieved item was this fundamentals tool result
+            # would false-positive the BP-605 refusal.
+            citation_meta=CitationMeta(
+                title=f"Fundamentals: {ticker}",
+                url=None,
+                source_name="fundamentals",
+                published_at=None,
+                entity_name=ticker,
+            ),
         )
 
     async def _handle_get_fundamentals_history_batch(
@@ -442,10 +491,16 @@ class MarketHandler(ToolHandler):
             status = entry.get("status")
             if status == "ok":
                 periods_data = entry.get("periods") or []
-                if not periods_data:
+                # PLAN-0103 W25 / BP-640: forward the per-ticker snapshot
+                # block when the batch endpoint surfaced it. Pre-W25 entries
+                # had no snapshot field so this defaults to None → table
+                # renderer omits the section.
+                snap = entry.get("current_snapshot")
+                snap_dict = snap if isinstance(snap, dict) else None
+                if not periods_data and snap_dict is None:
                     text = f"{ticker}: no quarterly fundamentals available"
                 else:
-                    text = self._format_fundamentals_table(ticker, periods_data)
+                    text = self._format_fundamentals_table(ticker, periods_data, current_snapshot=snap_dict)
             else:
                 reason = entry.get("reason") or "unknown"
                 text = f"{ticker}: data unavailable — {reason}"
@@ -1127,6 +1182,7 @@ class MarketHandler(ToolHandler):
         self,
         ticker: str,
         periods: list[dict[str, Any]],
+        current_snapshot: dict[str, Any] | None = None,
     ) -> str:
         """Format quarterly fundamentals as a markdown table.
 
@@ -1166,4 +1222,43 @@ class MarketHandler(ToolHandler):
             # default than leaving the cell blank.
             periodicity = p.get("period_type") or "QUARTERLY"
             rows.append(f"| {period_label} | {periodicity} | {rev} | {ni} | {eps} | {pe} |")
-        return header + "\n".join(rows)
+        table = header + "\n".join(rows)
+
+        # PLAN-0103 W25 / BP-640: snapshot block — emitted AFTER the period
+        # table so the LLM cannot conflate the two. The block is rendered as
+        # a small markdown subsection with explicit "as-of <date>" and
+        # source="highlights" labels. Every field is opt-in: missing values
+        # are omitted entirely rather than rendered as "—", because the
+        # ratio-or-TTM prompt rule (tool_use.py v1.5) tells the LLM to
+        # refuse rather than fabricate when a snapshot field is missing.
+        if current_snapshot:
+            snap_lines: list[str] = []
+            import contextlib
+
+            snap_pe = current_snapshot.get("pe_ratio")
+            if snap_pe is not None:
+                with contextlib.suppress(TypeError, ValueError):
+                    snap_lines.append(f"  P/E (TTM): {float(snap_pe):.2f}x")
+            snap_ev = current_snapshot.get("ev_ebitda")
+            if snap_ev is not None:
+                with contextlib.suppress(TypeError, ValueError):
+                    snap_lines.append(f"  EV/EBITDA: {float(snap_ev):.2f}x")
+            snap_mc = current_snapshot.get("market_cap_usd")
+            if snap_mc is not None:
+                snap_mc_fmt = _format_market_cap_value(snap_mc)
+                if snap_mc_fmt is not None:
+                    snap_lines.append(f"  Market Cap: {snap_mc_fmt} (raw: {snap_mc})")
+            snap_pb = current_snapshot.get("price_to_book")
+            if snap_pb is not None:
+                with contextlib.suppress(TypeError, ValueError):
+                    snap_lines.append(f"  Price/Book: {float(snap_pb):.2f}x")
+            snap_dy = current_snapshot.get("dividend_yield")
+            if snap_dy is not None:
+                with contextlib.suppress(TypeError, ValueError):
+                    snap_lines.append(f"  Dividend Yield: {float(snap_dy):.4f}")
+            if snap_lines:
+                as_of = current_snapshot.get("as_of") or "unknown"
+                source = current_snapshot.get("source") or "highlights"
+                snap_header = f"\n\n### {ticker} Current Snapshot (as-of {as_of}, source: {source})\n"
+                table = table + snap_header + "\n".join(snap_lines)
+        return table

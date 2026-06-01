@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import date, datetime
 from typing import Any
 
 from pydantic import BaseModel
@@ -93,13 +93,60 @@ class FundamentalsHistoryPeriod(BaseModel):
     market_cap: float | None = None
 
 
+# PLAN-0103 W25 / BP-640: snapshot-vs-period-row P/E injection fix.
+# WHY a SIBLING field (not per-row): the EODHD HIGHLIGHTS section is a single
+# TTM/live valuation snapshot (one current PERatio + MarketCapitalization +
+# EV/EBITDA + ...), not a per-period stream. Pre-W25 the use case injected
+# ``pe_ratio`` and ``market_cap`` into EVERY period row, so the LLM either
+# (a) confidently quoted the TTM P/E as if it were the row's quarterly P/E
+# (fabrication), or (b) refused because the per-period cell looked empty in
+# its own mental model. Surfacing the snapshot once, with an explicit
+# ``as_of`` date and source, lets the LLM cleanly separate "current P/E"
+# answers (read snapshot) from "quarterly trend" answers (read periods).
+#
+# All fields are nullable: not every issuer reports every ratio (e.g. ETFs
+# rarely surface a PERatio; tiny-cap stocks omit EV/EBITDA). A missing
+# ``as_of`` falls back to ``None`` — the renderer can then either omit the
+# block entirely or label it "as-of date unknown".
+class CurrentSnapshot(BaseModel):
+    """Single live-valuation snapshot drawn from EODHD HIGHLIGHTS.
+
+    Mirrors the as-of-today TTM block on the API page. Separate from
+    ``FundamentalsHistoryPeriod`` because the snapshot semantics (current
+    valuation) are fundamentally different from period semantics (historical
+    operating metrics). See BP-640 / PLAN-0103 W25.
+    """
+
+    pe_ratio: float | None = None
+    ev_ebitda: float | None = None
+    market_cap_usd: float | None = None
+    price_to_book: float | None = None
+    dividend_yield: float | None = None
+    # ISO date of the snapshot row in the HIGHLIGHTS section. None when the
+    # use case could not resolve a definitive ``period_end`` for the most
+    # recent highlights record.
+    as_of: date | None = None
+    # Provenance marker so the LLM (and the rag-chat handler) can cite the
+    # source verbatim. Always ``"highlights"`` today; reserved field for
+    # forward compatibility with a future blended snapshot.
+    source: str = "highlights"
+
+
 class FundamentalsHistoryResponse(BaseModel):
-    """Response for GET /api/v1/fundamentals/history (temporal RAG PLAN-0066 Wave G)."""
+    """Response for GET /api/v1/fundamentals/history (temporal RAG PLAN-0066 Wave G).
+
+    PLAN-0103 W25 / BP-640: now exposes ``current_snapshot`` (CurrentSnapshot |
+    None) as a SIBLING of ``periods``. The snapshot holds the TTM/live
+    valuation metrics that previously bled into every period row. Periods
+    keep flow/operating metrics ONLY. None when no HIGHLIGHTS record exists
+    for the instrument.
+    """
 
     instrument_id: str
     ticker: str
     periods: list[FundamentalsHistoryPeriod]
     period_count: int
+    current_snapshot: CurrentSnapshot | None = None
 
 
 # PLAN-0095 W2 T-W2-01: batch fundamentals history.
@@ -129,11 +176,16 @@ class FundamentalsBatchPerTickerResult(BaseModel):
     Per-ticker failures NEVER fail the overall batch — see ``return_exceptions=True``
     in the route handler. The shape is intentionally flat so callers can iterate
     ``response.results.items()`` without branching on missing keys.
+
+    PLAN-0103 W25 / BP-640: ``current_snapshot`` mirrors the singular endpoint's
+    new sibling field so multi-ticker LLM workflows can surface live valuation
+    ratios without a second HTTP round-trip.
     """
 
     status: str  # Literal["ok", "error"] — kept str for FastAPI/OpenAPI simplicity
     periods: list[FundamentalsHistoryPeriod] | None = None
     reason: str | None = None
+    current_snapshot: CurrentSnapshot | None = None
 
 
 class FundamentalsBatchResponse(BaseModel):

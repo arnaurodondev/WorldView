@@ -312,6 +312,29 @@ class S3Port(Protocol):
         """
         ...
 
+    # PLAN-0103 W25 / BP-640: snapshot-aware variant of get_fundamentals_history.
+    # WHY a sibling (not a flag on the legacy method): the existing call sites +
+    # tests bind to the ``list[dict]`` return shape. Adding a second method
+    # preserves the contract while letting handlers that need the TTM/live
+    # snapshot (for "What's AAPL's P/E?" questions) read both pieces from one
+    # HTTP call.
+    async def get_fundamentals_history_with_snapshot(
+        self,
+        *,
+        periods: int = 8,
+        instrument_id: str | None = None,
+        ticker: str | None = None,
+        isin: str | None = None,
+        period_type: str = "quarterly",
+    ) -> dict:
+        """Return ``{"periods": [...], "current_snapshot": dict | None}``.
+
+        Snapshot is None when the upstream HIGHLIGHTS section was empty for
+        the instrument. Returns ``{"periods": [], "current_snapshot": None}``
+        on any HTTP or network error (R9 safe degradation).
+        """
+        ...
+
     # PLAN-0095 W2 T-W2-02: batch fundamentals fan-out in one HTTP call.
     # WHY: collapses the rag-chat screener → N x fundamentals tool-turn cascade
     # into one tool call. See ``get_fundamentals_history_batch`` handler in

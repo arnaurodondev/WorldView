@@ -556,10 +556,25 @@ def _check_entity_grounding(
     ZERO retrieved items overlap the question's entity set we return a
     refusal string for the caller to surface to the user verbatim.
 
+    PLAN-0103 W26 / BP-644: the guard also matches the question entity
+    tokens against the item's rendered ``text`` field. This closes a false-
+    positive seen in Round 2 of the chat benchmark: the TSLA gross-margin
+    question refused because the singular ``get_fundamentals_history``
+    handler did not set ``citation_meta.entity_name`` on its RetrievedItem.
+    The ticker IS present in the rendered Markdown table header (and the
+    item_id), so we admit any item whose text contains a question token —
+    accepting a small false-negative rate (an item whose body happens to
+    mention the ticker incidentally) in exchange for not refusing valid
+    single-ticker queries. The text scan is bounded: we only check the
+    first 2000 characters and we require a WHOLE-WORD match using a simple
+    delimiter walk so a substring like "AAPL" in "AAPL_HISTORY" passes but
+    a substring like "AA" in "AAPL" does not.
+
     Returns ``None`` (no refusal) when:
       * there are no question entities to check against (entity-free chat),
       * there are no retrieved items (a different guard handles that),
-      * at least one item's entity matches a question entity.
+      * at least one item's entity matches a question entity (citation_meta,
+        entity_id, OR text token match).
 
     Returns a refusal string when EVERY retrieved item references an entity
     that does not appear in the question set — that is the Q2 fault: the
@@ -568,6 +583,12 @@ def _check_entity_grounding(
     """
     if not question_entity_ids or not retrieved_items:
         return None
+    # Pre-compute the lowercase question-token set once. We only consider
+    # alphanumeric tokens >= 2 chars so a stray lowercased "a" in an item's
+    # text does not satisfy the grounding check. Ticker symbols (TSLA, AAPL,
+    # GOOGL) and lowercased canonical names (tesla, apple inc.) survive this
+    # cutoff comfortably.
+    text_match_tokens = {tok for tok in question_entity_ids if len(tok) >= 2 and tok.isascii()}
     for item in retrieved_items:
         # The two fields downstream synthesis cites against.
         cm = getattr(item, "citation_meta", None)
@@ -577,6 +598,24 @@ def _check_entity_grounding(
         item_ids |= _normalise_entity_identifier(getattr(item, "entity_id", None))
         if item_ids & question_entity_ids:
             return None
+        # PLAN-0103 W26 / BP-644: text-token fallback for items whose
+        # citation_meta was not populated by the handler. Cheap: lowercase +
+        # whole-word check against the first 2000 chars.
+        if text_match_tokens:
+            item_text = getattr(item, "text", None)
+            if isinstance(item_text, str) and item_text:
+                snippet = item_text[:2000].lower()
+                # Whole-word match via simple delimiter walk so "AAPL" does
+                # not match "AA" but does match "AAPL," or "AAPL:" etc.
+                for tok in text_match_tokens:
+                    idx = snippet.find(tok)
+                    while idx != -1:
+                        left_ok = idx == 0 or not snippet[idx - 1].isalnum()
+                        right_idx = idx + len(tok)
+                        right_ok = right_idx == len(snippet) or not snippet[right_idx].isalnum()
+                        if left_ok and right_ok:
+                            return None
+                        idx = snippet.find(tok, idx + 1)
     return (
         "I cannot find information about the entities in your question in the "
         "retrieved results. The data returned referenced different entities, "

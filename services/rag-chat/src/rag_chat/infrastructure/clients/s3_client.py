@@ -141,6 +141,42 @@ class S3Client(BaseUpstreamClient):
         level. The default "quarterly" is the safer fallback and matches the
         legacy pre-F-LIVE-P contract for any caller that has not yet been
         updated.
+
+        PLAN-0103 W25 / BP-640: callers that need the TTM/live snapshot must
+        use ``get_fundamentals_history_with_snapshot`` (returns a structured
+        dict with both ``periods`` and ``current_snapshot``). This method
+        keeps the legacy ``list[dict]`` shape so existing tests + callers
+        that only need period rows aren't churned.
+        """
+        bundle = await self.get_fundamentals_history_with_snapshot(
+            periods=periods,
+            instrument_id=instrument_id,
+            ticker=ticker,
+            isin=isin,
+            period_type=period_type,
+        )
+        return bundle.get("periods", []) or []
+
+    async def get_fundamentals_history_with_snapshot(
+        self,
+        *,
+        periods: int = 8,
+        instrument_id: str | None = None,
+        ticker: str | None = None,
+        isin: str | None = None,
+        period_type: str = "quarterly",
+    ) -> dict:
+        """GET /api/v1/fundamentals/history → ``{"periods": [...], "current_snapshot": {...} | None}``.
+
+        PLAN-0103 W25 / BP-640: snapshot-aware accessor. Returns the full
+        response shape so the rag-chat tool handler can surface the live
+        valuation snapshot (live P/E, EV/EBITDA, market cap, as_of date) to
+        the LLM. The TTM snapshot lives in HIGHLIGHTS and is a SINGLE row,
+        not a per-period stream — see ``CurrentSnapshot`` schema for the
+        rationale.
+
+        Returns ``{"periods": [], "current_snapshot": None}`` on any HTTP or
+        network error (R9 safe degradation).
         """
         params: dict[str, str] = {"periods": str(periods), "period_type": period_type}
         if instrument_id:
@@ -151,10 +187,13 @@ class S3Client(BaseUpstreamClient):
             params["symbol"] = ticker
 
         result = await self._get("/api/v1/fundamentals/history", params=params)
-        if isinstance(result, dict):
-            periods_data = result.get("periods", [])
-            return periods_data if isinstance(periods_data, list) else []
-        return []
+        if not isinstance(result, dict):
+            return {"periods": [], "current_snapshot": None}
+        periods_data = result.get("periods", [])
+        periods_list = periods_data if isinstance(periods_data, list) else []
+        snap = result.get("current_snapshot")
+        snap_dict = snap if isinstance(snap, dict) else None
+        return {"periods": periods_list, "current_snapshot": snap_dict}
 
     # PLAN-0095 W2 T-W2-02: batch adapter. Mirrors the contract in
     # ``S3Port.get_fundamentals_history_batch`` and POSTs to S9-proxied

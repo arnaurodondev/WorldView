@@ -20,6 +20,7 @@ from market_data.api.dependencies import (
     get_lookup_instrument_uc,
 )
 from market_data.api.schemas.fundamentals import (
+    CurrentSnapshot,
     FundamentalsBatchPerTickerResult,
     FundamentalsBatchRequest,
     FundamentalsBatchResponse,
@@ -142,11 +143,17 @@ async def get_fundamentals_history(
         period_type=period_type,
     )
 
+    # PLAN-0103 W25 / BP-640: surface the TTM/live snapshot as a sibling field.
+    # The use case returns ``current_snapshot`` as a plain dict (or None when
+    # HIGHLIGHTS was empty); the schema model performs the field validation.
+    snapshot_dict = data.get("current_snapshot")
+    current_snapshot = CurrentSnapshot(**snapshot_dict) if snapshot_dict else None
     return FundamentalsHistoryResponse(
         instrument_id=instrument.id,
         ticker=instrument.symbol,
         periods=[FundamentalsHistoryPeriod(**p) for p in data["periods"]],
         period_count=data["period_count"],
+        current_snapshot=current_snapshot,
     )
 
 
@@ -332,9 +339,15 @@ async def post_fundamentals_batch(
 
         periods_raw = fetch_outcome.get("periods", []) if isinstance(fetch_outcome, dict) else []
         periods_list = periods_raw if isinstance(periods_raw, list) else []
+        # PLAN-0103 W25 / BP-640: forward the use case's current_snapshot so
+        # the batch consumer (rag-chat MarketHandler batch path) can render
+        # live valuation ratios without a second HTTP round-trip.
+        snap_dict = fetch_outcome.get("current_snapshot") if isinstance(fetch_outcome, dict) else None
+        snap_model = CurrentSnapshot(**snap_dict) if snap_dict else None
         out[ticker] = FundamentalsBatchPerTickerResult(
             status="ok",
             periods=[FundamentalsHistoryPeriod(**p) for p in periods_list],
+            current_snapshot=snap_model,
         )
 
     return FundamentalsBatchResponse(results=out)
