@@ -27,6 +27,13 @@
 - **W33** — Replace word-count benchmark heuristics with **quality-based grading**: an LLM-judge rubric over (a) which tools were called, (b) whether tool outputs were correctly cited, (c) whether the answer is well-framed vs the question's depth, (d) whether refusals are appropriate when data is missing. Short answers to shallow questions are OK; long answers required only for genuinely deep multi-tool questions.
 - **W34** — Fix the pre-existing rag-chat unit-test collection `ModuleNotFoundError: No module named 'tools'` (13 test files). Critical for future agents to validate work.
 
+## Round 5 patches (post-bench 2026-06-02, surfaced by run_20260602T012842Z)
+
+- **W35 — `query_fundamentals` envelope alignment** (P0): the new W32 tool's response wraps snapshot values inside `metrics_by_period` / `snapshot` blocks that `numeric_grounding._flatten_tool_values` doesn't recognise as `tool:fundamentals:<TICKER>` item ids. Result: when LLM cites `37.73x` from `query_fundamentals` snapshot, validator marks it unsupported → defeatist banner fires → W31 structured answer clobbered. Fix: ensure the rag-chat handler renders `query_fundamentals` output with the same RetrievedItem id format (`tool:fundamentals:<TICKER>`) and includes the snapshot fields in `citation_meta` so numeric_grounding's entity-tag pool matches.
+- **W36 — investigate `llm_second_turn_failed` empty answers** (P0): Q3 AMZN and Q5 GOOGL returned empty text after successful tool calls. Need to dive into `worldview-rag-chat-1` container logs for the second-turn LLM exception, identify the root cause (timeout? provider 5xx? context-window overflow on long tool results?), and patch.
+- **W37 — W29 ticker extraction across new envelope** (P0): the two-way fallback added in W29 doesn't catch TSLA when the tool output is from `query_fundamentals` because the ticker-shaped token regex doesn't see "TSLA" in the new payload format. Audit `_check_entity_grounding` against both `get_fundamentals_history` and `query_fundamentals` output shapes and harmonise.
+- **W38 — judge rubric refresh** (P1): `tests/validation/chat_quality_benchmark/questions.yaml` `expected_tools` lists need `query_fundamentals` added as an equivalent for `get_fundamentals_history`/`get_fundamentals_snapshot` so the judge doesn't penalise the LLM for picking the new unified tool.
+
 ---
 
 ## Waves
