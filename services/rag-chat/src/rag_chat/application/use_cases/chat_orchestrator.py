@@ -429,6 +429,21 @@ _ENTITY_TYPED_FIELDS: frozenset[str] = frozenset(
     {"entity_id", "entity_ids", "entity_name", "entity_names", "entity_ticker", "entity_tickers"}
 )
 
+# PLAN-0104 W37: tool-input fields used by ``query_fundamentals`` (and several
+# sibling market-data tools) to carry a ticker symbol. These names ARE entity
+# identifiers in practice but are NOT in the BP-604 ``_ENTITY_TYPED_FIELDS``
+# allowlist (BP-604 keeps a tighter scope so query/date/free-text fields don't
+# trip the drift guard). For BP-605 grounding purposes we need a slightly
+# broader view: a ticker the LLM chose in THIS turn's tool inputs is
+# admissible evidence that an item whose ``citation_meta.entity_name`` IS
+# that ticker is related to the question. Round 4 TSLA fault:
+# ``query_fundamentals(ticker="TSLA")`` → item.citation_meta.entity_name="TSLA"
+# → question entities {"tesla", "tesla, inc.", <uuid>} (resolver did not
+# populate ``ticker``) → existing substring/ticker fallbacks could not bridge
+# "tsla" ↔ "tesla" → false refusal. Pulling "TSLA" from the prior tool call
+# bridges the gap without weakening BP-604.
+_TICKER_LIKE_FIELDS: frozenset[str] = frozenset({"ticker", "tickers", "symbol", "symbols"})
+
 
 def _normalise_entity_identifier(value: Any) -> set[str]:
     """Flatten any entity-identifier value into a lowercase string set.
@@ -545,9 +560,83 @@ def _validate_fallback_tool_call(
     )
 
 
+def _build_second_turn_fallback_answer(
+    question: str,
+    tool_names: list[str],
+    retrieved_items: list[Any],
+) -> str:
+    """PLAN-0104 W36 / BP-NEW: build a degraded but useful answer for the user
+    when the second-turn LLM synthesis fails or returns an empty stream.
+
+    Failure modes covered (Round 4 chat benchmark, run_20260602T012842Z):
+
+    * Q3 ``ru_amzn_revenue_yoy`` — ``stream_chat`` raised post-tool with
+      ``full_text == ""`` → orchestrator emitted ``llm_second_turn_failed``
+      and the user saw an empty answer.
+    * Q5 ``ru_googl_pe_vs_history`` — ``stream_chat`` completed normally
+      yielding ZERO chunks → ``full_text == ""``, no exception raised, but
+      the ``final_answer`` event carried an empty string.
+
+    Both cases had successful tool execution upstream — the data was there,
+    only the synthesis call failed silently. The user-visible contract is
+    "you always get SOME text, even degraded", not "empty answer or hard
+    error". This helper returns a short message that:
+
+    1. Acknowledges the question succeeded at the data layer (tools ran).
+    2. Lists which tools returned data so the user can re-ask if needed.
+    3. Includes up to 2 short snippets from the highest-ranked retrieved
+       items so the answer is not content-free.
+
+    The text is intentionally generic (no LLM-generated numbers) so the
+    numeric/entity grounding validators that run downstream do not
+    false-positive on hallucinated figures.
+    """
+    # Deduplicate while preserving order so users see the tools that ran.
+    seen_tools: set[str] = set()
+    unique_tools: list[str] = []
+    for name in tool_names:
+        if name and name not in seen_tools:
+            seen_tools.add(name)
+            unique_tools.append(name)
+
+    tool_phrase = ", ".join(unique_tools) if unique_tools else "the available data sources"
+
+    # Pull up to two short text snippets from the top-ranked items. Truncate
+    # aggressively (140 chars) so we surface a useful hint without leaking
+    # long raw payloads into the UI.
+    snippets: list[str] = []
+    for item in retrieved_items[:5]:
+        text = getattr(item, "text", None)
+        if not isinstance(text, str):
+            continue
+        text = text.strip()
+        if not text:
+            continue
+        if len(text) > 140:
+            text = text[:137].rstrip() + "..."
+        snippets.append(f"- {text}")
+        if len(snippets) >= 2:
+            break
+
+    parts = [
+        f"I retrieved data for your question using {tool_phrase}, but the "
+        "language model could not produce a final summary right now (the "
+        "synthesis step failed or returned no text)."
+    ]
+    if snippets:
+        parts.append("Highlights from the retrieved data:")
+        parts.extend(snippets)
+    parts.append(
+        "Please retry the question in a moment; the underlying data is "
+        "available and the failure is upstream of the data pipeline."
+    )
+    return "\n".join(parts)
+
+
 def _check_entity_grounding(
     retrieved_items: list[Any],
     question_entity_ids: set[str],
+    prior_tool_calls: list[Any] | None = None,
 ) -> str | None:
     """BP-605: refuse to synthesise when retrieved items don't ground the question.
 
@@ -583,6 +672,28 @@ def _check_entity_grounding(
     """
     if not question_entity_ids or not retrieved_items:
         return None
+    # PLAN-0104 W37: extract every ticker / symbol / entity-id the LLM
+    # used in PRIOR tool inputs THIS turn. The W29 substring fallback
+    # could not bridge "tsla" (item) ↔ "tesla" (question) because they
+    # share no substring. The LLM's own tool call carries the canonical
+    # bridge: it called ``query_fundamentals(ticker="TSLA")`` because it
+    # read "Tesla" in the question. We trust that mapping for grounding
+    # because (a) BP-604 already validated the call at iter>0, and (b)
+    # at iter 0 the planner had ONLY the question + tool list, so the
+    # ticker IS the planner's interpretation of the question. A false
+    # positive (LLM hallucinates wrong ticker, items match) is bounded
+    # by the existing entity-resolver pre-pass that rewrites mis-typed
+    # tickers; the false negative (refusing valid single-ticker queries)
+    # is what is breaking the live benchmark right now.
+    llm_chosen_ids: set[str] = set()
+    if prior_tool_calls:
+        for tc in prior_tool_calls:
+            tc_input = getattr(tc, "input", None) or {}
+            if not isinstance(tc_input, dict):
+                continue
+            for k, v in tc_input.items():
+                if k in _ENTITY_TYPED_FIELDS or k in _TICKER_LIKE_FIELDS:
+                    llm_chosen_ids |= _normalise_entity_identifier(v)
     # Pre-compute the lowercase question-token set once. We only consider
     # alphanumeric tokens >= 2 chars so a stray lowercased "a" in an item's
     # text does not satisfy the grounding check. Ticker symbols (TSLA, AAPL,
@@ -597,6 +708,15 @@ def _check_entity_grounding(
             item_ids |= _normalise_entity_identifier(getattr(cm, "entity_name", None))
         item_ids |= _normalise_entity_identifier(getattr(item, "entity_id", None))
         if item_ids & question_entity_ids:
+            return None
+        # PLAN-0104 W37: LLM-chosen-id fallback. If the item's
+        # citation_meta.entity_name (or entity_id) matches a ticker /
+        # symbol the LLM passed to a prior tool call in THIS turn, admit
+        # the item. Covers the query_fundamentals(ticker="TSLA") case
+        # where the question entity set is {"tesla", "tesla, inc."} and
+        # the item's entity_name is "TSLA" — neither side is a substring
+        # of the other but BOTH are anchored to the same LLM tool call.
+        if llm_chosen_ids and item_ids & llm_chosen_ids:
             return None
         # PLAN-0103 W26 / BP-644: text-token fallback for items whose
         # citation_meta was not populated by the handler. Cheap: lowercase +
@@ -920,6 +1040,13 @@ class ChatOrchestratorUseCase:
         cumulative_tool_latency = 0.0
         had_tool_calls = False
         iteration_count = 0
+        # PLAN-0104 W36 / BP-NEW: accumulate every tool name that actually
+        # produced a tool_result across the whole agent loop. We need this in
+        # the second-turn synthesis fallback to tell the user WHICH data
+        # sources succeeded when the LLM summary call fails / yields zero
+        # chunks. Kept as a flat list (not a set) so the order matches the
+        # call order; the helper deduplicates while preserving order.
+        _executed_tool_names: list[str] = []
         # FIX-LIVE-Y: skip-final-stream flag (declared at function scope so
         # the late ``if had_tool_calls and not _skip_final_stream`` guard sees
         # it whether or not the inner branch ran). See FIX-LIVE-Y comments
@@ -1375,6 +1502,10 @@ class ChatOrchestratorUseCase:
                     elif _item is not None:
                         # "empty" — tool ran cleanly but returned no rows
                         _all_errored = False
+                # PLAN-0104 W36 / BP-NEW: track every tool actually invoked so
+                # the second-turn synthesis fallback can name the data sources
+                # that produced results when the LLM summary call fails.
+                _executed_tool_names.append(tc.name)
                 rag_tool_call_total.labels(tool_name=tc.name, status=_status).inc()
                 # Q1 fix: use accurate per-tool latency from the executor rather than
                 # total_batch_time / n_tools (which incorrectly averages concurrent calls).
@@ -1960,27 +2091,67 @@ class ChatOrchestratorUseCase:
                         partial_chars=_partial_len,
                     )
                 else:
-                    log.error("tool_use_second_turn_failed", error=str(exc), partial_chars=_partial_len)  # type: ignore[no-any-return]
-                    # PLAN-0099 W1-T03: record synthesis time even on hard
-                    # failure (the failed call still consumed wall-clock).
-                    # PLAN-0102 W4 T-W4-02 (BP-618): ``record_once`` asserts
-                    # this phase has not already been recorded — the success
-                    # branch below is mutually exclusive (the ``return`` two
-                    # lines down guarantees we never fall through). The
-                    # invariant becomes explicit instead of control-flow
-                    # accident.
-                    phases.record_once("llm_synthesis_streaming", (time.monotonic() - _synthesis_t0) * 1000.0)
-                    log.info(  # type: ignore[no-any-return]
-                        "chat_phase_timings_ms",
-                        phases=phases.as_dict(),
-                        terminated_at="llm_synthesis_streaming",
+                    # PLAN-0104 W36 / BP-NEW: instead of emitting the hard
+                    # ``llm_second_turn_failed`` error and returning an empty
+                    # answer (Round 4 Q3 ``ru_amzn_revenue_yoy``: tool ran,
+                    # 11.6s latency, user saw nothing) we synthesise a
+                    # degraded but useful answer from the data we ALREADY
+                    # retrieved. The tools succeeded; only the LLM summary
+                    # turn failed. The error is preserved in structured
+                    # logs for ops visibility; the user gets a coherent
+                    # message listing which data sources ran and a couple
+                    # of snippets from the top items so the answer is not
+                    # content-free.
+                    log.error(  # type: ignore[no-any-return]
+                        "tool_use_second_turn_failed",
+                        error=str(exc),
+                        partial_chars=_partial_len,
+                        fallback="degraded_synthesis",
                     )
-                    yield p.emitter.emit_error("llm_second_turn_failed", "Unable to generate answer")
-                    return
+                    _items_for_fallback = reranked or non_none_items
+                    full_text = _build_second_turn_fallback_answer(
+                        question=request.message,
+                        tool_names=_executed_tool_names,
+                        retrieved_items=_items_for_fallback,
+                    )
+                    # Stream the fallback so the SSE client still receives
+                    # tokens (otherwise the UI sees a final_answer event
+                    # with no preceding token stream, which some clients
+                    # treat as an error).
+                    for _chunk in _chunk_text_for_streaming(full_text):
+                        yield p.emitter.emit_token(_chunk)
             # PLAN-0099 W1-T03: synthesis succeeded (or partial-recovered).
             # PLAN-0102 W4 T-W4-02 (BP-618): see ``record_once`` note above.
             phases.record_once("llm_synthesis_streaming", (time.monotonic() - _synthesis_t0) * 1000.0)
             provider_name = p.llm_chain.last_provider_name
+
+            # PLAN-0104 W36 / BP-NEW: zero-chunk recovery. Round 4 Q5
+            # ``ru_googl_pe_vs_history`` exposed a silent failure mode where
+            # ``stream_chat`` completes without raising but yields ZERO
+            # chunks (provider returns an empty stream — observed with
+            # DeepInfra after long tool batches at ~56s total latency).
+            # The previous code path treated this as "success" and emitted
+            # a ``final_answer`` event with an empty string; the user saw
+            # nothing. Now we treat it the same as a hard synthesis failure
+            # and substitute the degraded answer so the user always gets
+            # SOME text. Telemetry tags the case as ``zero_chunk`` so ops
+            # can distinguish it from the exception path above.
+            if not full_text.strip():
+                log.error(  # type: ignore[no-any-return]
+                    "tool_use_second_turn_failed",
+                    error="stream_chat returned zero chunks",
+                    partial_chars=0,
+                    fallback="degraded_synthesis",
+                    cause="zero_chunk",
+                )
+                _items_for_fallback = reranked or non_none_items
+                full_text = _build_second_turn_fallback_answer(
+                    question=request.message,
+                    tool_names=_executed_tool_names,
+                    retrieved_items=_items_for_fallback,
+                )
+                for _chunk in _chunk_text_for_streaming(full_text):
+                    yield p.emitter.emit_token(_chunk)
 
         # ── BP-605 (PLAN-0100 W1 T-W1-03): entity-grounding refusal ───────────
         # Before any other synthesis check, confirm that AT LEAST ONE
@@ -2001,7 +2172,7 @@ class ChatOrchestratorUseCase:
         # captured in structured logs for ops visibility.
         grounded = True
         if had_tool_calls and non_none_items and _question_entity_ids:
-            _grounding_refusal = _check_entity_grounding(non_none_items, _question_entity_ids)
+            _grounding_refusal = _check_entity_grounding(non_none_items, _question_entity_ids, _prior_tool_calls)
             if _grounding_refusal is not None:
                 # PLAN-0104 W29: log the actual ids so we can diagnose
                 # future false-positives (TSLA-style: question carries

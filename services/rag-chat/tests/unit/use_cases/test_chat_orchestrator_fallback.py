@@ -654,9 +654,18 @@ class TestFixLiveVMidLoopRecovery:
         token_texts = [json.loads(e["data"]).get("text", "") for e in events if e.get("event") == "token"]
         assert any(big_chunk_1 in t for t in token_texts), token_texts
 
-    def test_stream_chat_failure_with_no_partial_still_emits_hard_error(self) -> None:
-        """If stream_chat raises BEFORE emitting any (or only trivial) text, the
-        hard error contract is preserved so the client can fall back gracefully."""
+    def test_stream_chat_failure_with_no_partial_produces_degraded_fallback(self) -> None:
+        """PLAN-0104 W36 / BP-NEW: when stream_chat raises BEFORE emitting any
+        text AND we have tool data, the orchestrator must NOT surface the hard
+        ``llm_second_turn_failed`` error to the user. Instead it builds a
+        degraded answer from the retrieved items so the user always sees SOME
+        text, naming the tools that succeeded (Round 4 Q3 ``ru_amzn_revenue_yoy``
+        regression).
+
+        Predecessor contract (deleted): empty-partial failure emitted
+        ``llm_second_turn_failed`` and a 503 to API consumers — user saw
+        ``answer_text=""``. This was the symptom that triggered W36.
+        """
         from rag_chat.application.use_cases.chat_orchestrator import ChatOrchestratorUseCase
 
         tool_block = _make_tool_use_block("search_documents", {"query": "x"})
@@ -664,6 +673,9 @@ class TestFixLiveVMidLoopRecovery:
         iter1 = _make_llm_tool_response(text="")
         pipeline = _make_pipeline(first_llm_response=iter0)
         pipeline.llm_chain.chat_with_tools = AsyncMock(side_effect=[iter0, iter1])
+        pipeline.emitter.emit_final_answer = MagicMock(
+            side_effect=lambda text: {"event": "final_answer", "data": json.dumps({"text": text})}
+        )
 
         async def _instant_raise(messages: list, **kwargs: Any):
             if False:  # pragma: no cover — empty async gen with raise
@@ -672,7 +684,7 @@ class TestFixLiveVMidLoopRecovery:
 
         pipeline.llm_chain.stream_chat = _instant_raise
 
-        recovered_item = _make_retrieved_item("Payload.")
+        recovered_item = _make_retrieved_item("Amazon Q3 revenue 158B (+13% YoY).")
         factory = _make_factory_with_execute_side_effect(
             execute_all_return=[[recovered_item]],
             execute_side_effects=[],
@@ -683,10 +695,30 @@ class TestFixLiveVMidLoopRecovery:
         uow = MagicMock()
 
         events = asyncio.run(_collect_events(orch, request, uow))
+
+        # No hard error reaches the user — the fallback path absorbs it.
         error_codes = [json.loads(e["data"]).get("code") for e in events if e.get("event") == "error"]
+        assert "llm_second_turn_failed" not in error_codes, (
+            f"PLAN-0104 W36: empty-partial failure must produce a degraded answer, "
+            f"not the hard error; got {error_codes!r}"
+        )
+
+        # Tokens reached the SSE stream — the user sees the fallback message.
+        token_texts = [json.loads(e["data"]).get("text", "") for e in events if e.get("event") == "token"]
+        joined = "".join(token_texts)
+        assert "search_documents" in joined, f"fallback must name the tool that ran; got {joined!r}"
         assert (
-            "llm_second_turn_failed" in error_codes
-        ), f"Empty-partial stream_chat failure must still emit hard error; got {error_codes!r}"
+            "could not produce a final summary" in joined
+        ), f"fallback must explain the synthesis failure; got {joined!r}"
+
+        # The final_answer event carries non-empty text — this is the contract
+        # the chat-quality benchmark checks via ``answer_text``.
+        final_events = [e for e in events if e.get("event") == "final_answer"]
+        assert final_events, "expected a final_answer event"
+        final_payload = json.loads(final_events[-1]["data"])
+        assert final_payload.get(
+            "text", ""
+        ).strip(), f"final_answer must be non-empty in the fallback path; got {final_payload!r}"
 
     def test_stream_chat_transient_429_retries_once_and_recovers(self) -> None:
         """PLAN-0103 W15 / BP-634: a single transient 429 on the second-turn
@@ -781,9 +813,17 @@ class TestFixLiveVMidLoopRecovery:
 
         events = asyncio.run(_collect_events(orch, request, uow))
 
-        # Exactly ONE attempt — non-transient errors short-circuit immediately.
+        # Exactly ONE attempt — non-transient errors short-circuit immediately
+        # (no retry doubling latency on bugs that will never recover).
         assert call_count["n"] == 1, f"non-transient error must NOT retry; got {call_count['n']} attempts"
+
+        # PLAN-0104 W36 / BP-NEW: post-W36 the user no longer sees the hard
+        # ``llm_second_turn_failed`` error — the fallback synthesises a
+        # degraded answer from the prior tool results. The "no retry"
+        # guarantee above is the load-bearing assertion for this test; the
+        # error-surfacing contract moved to the W36 fallback tests.
         error_codes = [json.loads(e["data"]).get("code") for e in events if e.get("event") == "error"]
-        assert (
-            "llm_second_turn_failed" in error_codes
-        ), f"non-transient failure with no partial must emit hard error; got {error_codes!r}"
+        assert "llm_second_turn_failed" not in error_codes, (
+            f"PLAN-0104 W36: even non-transient stream_chat errors now flow into the "
+            f"degraded-fallback path; got {error_codes!r}"
+        )
