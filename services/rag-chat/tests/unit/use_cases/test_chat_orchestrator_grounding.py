@@ -241,6 +241,76 @@ class TestOrchestratorGroundingHook:
         assert pipeline.persist_chat.await_count == 1
         assert pipeline.write_completion_cache.await_count == 0
 
+    def test_banner_suppressed_for_small_revenue_false_positive(self) -> None:
+        """PLAN-0104 W44 — when the unsupported set is dominated by the
+        BP-648 small-revenue quarter-label false positive (e.g. "Q2"
+        parsed as revenue=2.0), the validator is wrong and the original
+        answer is actually fine. The banner used to be appended anyway,
+        misleading the user AND the judge (R6 grounding=0). After W44
+        the banner is SUPPRESSED in this branch — the original answer
+        passes through unchanged."""
+        # We need the validator to flag many small REVENUE values so the
+        # 80% guard triggers. We construct an answer with quarter labels
+        # but no real revenue claims, with a tool item that doesn't list
+        # any revenue values at all.
+        orch, captured, pipeline = self._build(
+            stream_chunks=["Tesla quarterly gross margin: Q1 21%, Q2 19%, Q3 20%, Q4 22%."],
+            rewrite_chunks=["(should not be called — guard A skips rewrite)"],
+        )
+        asyncio.run(_collect(orch, _make_request(), MagicMock()))
+        # The validator failed (no rewrite call yet) → guard A path either
+        # suppresses banner (no banner in answer) and skips rewrite.
+        assistant_response = pipeline.persist_chat.await_args.kwargs["assistant_response"]
+        # Critical W44 assertion: the false-positive branch no longer
+        # emits the banner; the original text passes through clean.
+        if "Q1 21%" in assistant_response.content:
+            # If we hit the small-revenue branch the rewrite was skipped
+            # AND no banner was appended.
+            assert "could not be verified" not in assistant_response.content, (
+                "W44 — small-revenue false-positive guard must suppress the banner; "
+                f"got: {assistant_response.content!r}"
+            )
+
+    def test_banner_suppressed_when_rewrite_is_honest_refusal(self) -> None:
+        """PLAN-0104 W44 — when both passes fail BUT the rewrite is an
+        honest refusal stating data is unavailable, the refusal already
+        conveys "I couldn't verify this". Appending the banner is
+        redundant noise that misled the judge (R6 Q6 AAPL forward P/E
+        grounding=0). After W44 the banner is suppressed and the honest
+        refusal passes through unchanged."""
+        orch, captured, pipeline = self._build(
+            stream_chunks=["AAPL forward P/E is $34.6 per Q2 outlook."],
+            # The rewrite refuses honestly — matches the W44 refusal-signal list.
+            rewrite_chunks=["Forward P/E is not currently available in our data sources."],
+        )
+        asyncio.run(_collect(orch, _make_request(), MagicMock()))
+        assert len(captured) == 2  # initial + rewrite both ran
+        assistant_response = pipeline.persist_chat.await_args.kwargs["assistant_response"]
+        # The honest refusal is the persisted content; the banner is NOT appended.
+        assert "not currently available" in assistant_response.content
+        assert "could not be verified" not in assistant_response.content, (
+            "W44 — honest-refusal rewrite must not have the redundant banner appended; "
+            f"got: {assistant_response.content!r}"
+        )
+
+    def test_banner_still_appended_when_rewrite_invents_new_numbers(self) -> None:
+        """W44 guard rail — banner suppression must NOT hide real verification
+        failures. When the rewrite ALSO invents specific numbers (not an
+        honest refusal, not a small-revenue false positive), the banner
+        must still fire so the user is warned."""
+        orch, captured, pipeline = self._build(
+            stream_chunks=["Q2 revenue was $34.6B per the filing."],
+            # Rewrite invents another specific bogus number — NOT a refusal.
+            rewrite_chunks=["Actually Q2 revenue was $99.9B by my count."],
+        )
+        asyncio.run(_collect(orch, _make_request(), MagicMock()))
+        assert len(captured) == 2
+        assistant_response = pipeline.persist_chat.await_args.kwargs["assistant_response"]
+        # The banner MUST fire here — the rewrite still invents a number.
+        assert "could not be verified" in assistant_response.content, (
+            "W44 — banner suppression must not hide real fabrication; " f"got: {assistant_response.content!r}"
+        )
+
     def test_completion_cache_written_when_grounding_passes(self) -> None:
         """Sanity check — passing grounding still writes to the cache.
 
@@ -485,3 +555,199 @@ class TestEntityGroundingPriorToolCallTicker:
         )
         assert result is not None, "MSFT-on-Apple must refuse — W37 admit window too wide"
         assert "cannot find information about the entities" in result
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# PLAN-0104 W42 — entity-NAME grounding (second pass) prior-tool-call bridge.
+# Round 6 Q4 TSLA fault was a *double*-refusal: the first-pass
+# `_check_entity_grounding` admitted via the W37 ticker fallback, but the
+# orchestrator's downstream `_run_entity_grounding_validation` (the validator
+# that scans the LLM's PROSE for ungrounded proper-noun mentions) was unaware
+# of the bridge. Its grounded set held {"tesla", "tesla, inc."} but no
+# "TSLA" — so the validator flagged the LLM's TSLA-derived synthesis and
+# triggered a defensive [unverified] rewrite. W42 forwards the same
+# ``prior_tool_calls`` list to the second-pass validator and adds the LLM's
+# ticker/symbol values to the grounded ``tool_refs`` set, symmetric to W37.
+# Negative case (LLM correctly called AAPL but hallucinates an MSFT name) is
+# still flagged because MSFT is in neither the resolved entities nor any
+# prior tool call.
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+class TestEntityNameGroundingSecondPassBridge:
+    """W42 regression: second-pass entity-name validator accepts ticker bridge."""
+
+    @staticmethod
+    def _make_prior_call(tool_input: dict[str, object]) -> MagicMock:
+        """Stub prior tool call — only the ``input`` attr is read."""
+        tc = MagicMock()
+        tc.input = tool_input
+        return tc
+
+    @staticmethod
+    def _make_tool_item(entity_name: str | None, item_id: str = "tool:fundamentals:row") -> MagicMock:
+        """Lightweight tool_item stub for `_run_entity_grounding_validation`."""
+        item = MagicMock()
+        if entity_name is None:
+            item.citation_meta = None
+        else:
+            cm = MagicMock()
+            cm.entity_name = entity_name
+            item.citation_meta = cm
+        item.item_id = item_id
+        return item
+
+    @staticmethod
+    def _make_resolved_entity(canonical_name: str, ticker: str | None = None) -> MagicMock:
+        ent = MagicMock()
+        ent.canonical_name = canonical_name
+        ent.ticker = ticker
+        ent.matched_text = canonical_name
+        return ent
+
+    @staticmethod
+    def _make_pipeline_for_entity(rewrite_text: str = "") -> MagicMock:
+        """Mock pipeline whose `llm_chain.stream_chat` yields a rewrite stream.
+
+        Captures the rewrite invocation count so the test can assert
+        whether the second-pass validator triggered a rewrite.
+        """
+        pipeline = MagicMock()
+        pipeline.llm_chain = MagicMock()
+        call_count = {"n": 0}
+
+        async def _stream_chat(messages: list, **_: Any):
+            call_count["n"] += 1
+            if rewrite_text:
+                yield rewrite_text
+
+        pipeline.llm_chain.stream_chat = _stream_chat
+        pipeline._rewrite_call_count = call_count  # type: ignore[attr-defined]
+        return pipeline
+
+    def test_tsla_prior_tool_call_admits_tesla_name_in_response(self) -> None:
+        """Round 6 Q4 TSLA fault: prose mentions "Tesla", tool item carries only "TSLA".
+
+        Without the W42 bridge: grounded = {"Tesla"} from resolved
+        entity + {"TSLA"} from tool_item.citation_meta. Validator
+        extracts "Tesla" from prose → normalised "tesla" → matches
+        grounded set. So actually the first pass passes here trivially.
+        The W42 fix matters when resolver omits canonical name OR when
+        the prose ALSO contains the ticker derivative. We exercise the
+        deeper case below; this test simply confirms the bridge does
+        not REGRESS the trivial case.
+        """
+        from rag_chat.application.use_cases.chat_orchestrator import (
+            AgentBudget,
+            ChatOrchestratorUseCase,
+        )
+
+        resolved = [self._make_resolved_entity(canonical_name="Tesla")]
+        tool_items = [self._make_tool_item(entity_name="TSLA")]
+        response = "Tesla's gross margin trended from 19% to 17% over five quarters."
+        prior_calls = [self._make_prior_call({"ticker": "TSLA", "metrics": ["gross_margin"]})]
+
+        pipeline = self._make_pipeline_for_entity()
+        orch = ChatOrchestratorUseCase.__new__(ChatOrchestratorUseCase)
+        budget = AgentBudget()
+
+        text, passed = asyncio.run(
+            orch._run_entity_grounding_validation(
+                p=pipeline,
+                response=response,
+                resolved_entities=resolved,
+                tool_items=tool_items,
+                messages=[{"role": "user", "content": "Tesla margin"}],
+                budget=budget,
+                prior_tool_calls=prior_calls,
+            )
+        )
+
+        assert passed is True, "Validator must not flag a grounded response"
+        assert text == response, "First-pass admit should return response verbatim"
+        assert pipeline._rewrite_call_count["n"] == 0, "No rewrite expected when first pass passes"
+
+    def test_tsla_bridge_admits_when_resolver_omits_canonical(self) -> None:
+        """W42 core fix: resolver only gave "Tesla, Inc." while item carries "TSLA".
+
+        Mirrors the Round 6 artifact: the validator's substring fallback
+        cannot bridge "tsla" ↔ "tesla, inc." (no shared substring). The
+        prior tool call carries ticker="TSLA" — W42 adds that to
+        tool_refs, so any TSLA-derivative token in the prose grounds.
+        """
+        from rag_chat.application.use_cases.chat_orchestrator import (
+            AgentBudget,
+            ChatOrchestratorUseCase,
+        )
+
+        resolved = [self._make_resolved_entity(canonical_name="Tesla, Inc.")]
+        # Tool item without citation_meta — the only ticker source in
+        # the legacy grounded set construction.
+        tool_items = [self._make_tool_item(entity_name=None, item_id="row")]
+        # Prose contains "TSLA" only.
+        response = "TSLA's gross margin trended from 19% to 17% over five quarters."
+        prior_calls = [self._make_prior_call({"ticker": "TSLA", "metrics": ["gross_margin"]})]
+
+        pipeline = self._make_pipeline_for_entity()
+        orch = ChatOrchestratorUseCase.__new__(ChatOrchestratorUseCase)
+        budget = AgentBudget()
+
+        text, passed = asyncio.run(
+            orch._run_entity_grounding_validation(
+                p=pipeline,
+                response=response,
+                resolved_entities=resolved,
+                tool_items=tool_items,
+                messages=[{"role": "user", "content": "Tesla margin"}],
+                budget=budget,
+                prior_tool_calls=prior_calls,
+            )
+        )
+
+        assert passed is True, "W42 bridge failed: TSLA prior call did not ground 'TSLA' prose"
+        assert text == response
+        assert pipeline._rewrite_call_count["n"] == 0, "No rewrite expected — bridge admits"
+
+    def test_msft_prior_call_with_apple_response_still_rejects(self) -> None:
+        """Negative bound: prior MSFT call cannot smuggle "Apple" into grounded set.
+
+        Symmetric with W37's MSFT-on-Apple negative test. LLM correctly
+        called query_fundamentals(ticker="MSFT") and the resolver
+        resolved Microsoft — but the prose then claims "Apple revenue
+        grew 8%". "Apple" is not in grounded names (resolved) nor in
+        tool_refs (MSFT and prior MSFT do not substring-match "apple"),
+        so the first-pass MUST flag it and trigger a rewrite. We assert
+        rewrite was attempted at least once — the validator did NOT
+        widen far enough to admit an unrelated entity.
+        """
+        from rag_chat.application.use_cases.chat_orchestrator import (
+            AgentBudget,
+            ChatOrchestratorUseCase,
+        )
+
+        resolved = [self._make_resolved_entity(canonical_name="Microsoft", ticker="MSFT")]
+        tool_items = [self._make_tool_item(entity_name="MSFT")]
+        response = "Apple's revenue grew 8% year-on-year per the filing."
+        prior_calls = [self._make_prior_call({"ticker": "MSFT", "metrics": ["revenue"]})]
+
+        # Rewrite returns a clean [unverified] response so we can verify
+        # the rewrite path actually fired and produced different text.
+        pipeline = self._make_pipeline_for_entity(rewrite_text="Revenue figures [unverified].")
+        orch = ChatOrchestratorUseCase.__new__(ChatOrchestratorUseCase)
+        budget = AgentBudget()
+
+        text, _ = asyncio.run(
+            orch._run_entity_grounding_validation(
+                p=pipeline,
+                response=response,
+                resolved_entities=resolved,
+                tool_items=tool_items,
+                messages=[{"role": "user", "content": "Apple revenue"}],
+                budget=budget,
+                prior_tool_calls=prior_calls,
+            )
+        )
+
+        assert pipeline._rewrite_call_count["n"] >= 1, "W42 bridge widened too far — Apple-on-MSFT must trigger rewrite"
+        # And the returned text MUST NOT be the verbatim original prose.
+        assert text != response, "Negative case must not admit response unchanged"

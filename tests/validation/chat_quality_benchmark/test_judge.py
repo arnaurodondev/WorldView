@@ -392,3 +392,180 @@ def test_rubric_from_question_handles_missing_block():
     assert r.expected_tools == []
     assert r.expected_depth == "medium"
     assert r.appropriate_refusal_ok is False
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# PLAN-0104 W44 — grounding-dimension banner calibration regression tests.
+#
+# Round 6 surfaced four false-positive grounding=0 scores triggered by the
+# judge mis-reading transparency features (banner, [unverified] tags, W36
+# fallback, honest refusals) as fabrication signals. The judge prompt now
+# explicitly enumerates these as SPECIAL CASES. These tests pin both the
+# prompt language AND the parser preserving the higher scores the prompt
+# now permits.
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+def test_judge_system_prompt_includes_banner_special_cases():
+    """Pin the W44 special-case language so a future rewrite that drops
+    the banner / [unverified] / W36-fallback / honest-refusal guidance
+    breaks this test loudly rather than silently regressing R6 scores."""
+    from chat_quality_judge import _SYSTEM_PROMPT
+
+    assert "SPECIAL CASES" in _SYSTEM_PROMPT
+    # Banner case — the prompt may wrap mid-phrase, so check fragments.
+    assert "verified against retrieved data" in _SYSTEM_PROMPT
+    assert "TRANSPARENCY" in _SYSTEM_PROMPT
+    # [unverified] tag case
+    assert "[unverified]" in _SYSTEM_PROMPT
+    # W36 fallback case — same wrap caveat; check the distinctive tail.
+    assert "final summary" in _SYSTEM_PROMPT
+    assert "degraded-mode fallback" in _SYSTEM_PROMPT.lower() or "DEGRADED" in _SYSTEM_PROMPT
+    # Honest refusal grounding case
+    assert "honest refusal" in _SYSTEM_PROMPT.lower()
+
+
+def test_judge_grounded_body_with_banner_scores_high():
+    """W44 case 1 — body claims are grounded; banner appended automatically
+    by the W28 path is a TRANSPARENCY feature, not fabrication. A well
+    behaved judge awards grounding ≥20 (the parser must not clamp it down
+    when the LLM reads the prompt correctly)."""
+    inp = _make_input(
+        prompt="How has Tesla's gross margin trended?",
+        rubric=Rubric(
+            expected_tools=["query_fundamentals"],
+            expected_depth="medium",
+            appropriate_refusal_ok=False,
+        ),
+        answer_text=(
+            "Tesla's gross margin trended upward from 16.31% in Q1 2025 to "
+            "21.08% in Q1 2026.\n\n"
+            "⚠ Some numbers could not be verified against retrieved data."
+        ),
+        tool_calls=[{"name": "query_fundamentals", "arguments": {"ticker": "TSLA"}}],
+        tool_results=[{"tool": "query_fundamentals", "status": "ok", "item_count": 1}],
+    )
+
+    def mock_llm(*, system: str, user: str) -> str:
+        return json.dumps(
+            {
+                "tool_use": {"score": 25, "reason": "ok"},
+                # Judge reads SPECIAL CASE — banner is transparency, body grounded
+                "grounding": {"score": 22, "reason": "body claims trace to tool; banner neutral"},
+                "framing": {"score": 25, "reason": "ok"},
+                "refusal_judgment": {"score": 25, "reason": "N/A"},
+                "notes": "banner is transparency",
+            }
+        )
+
+    result = judge_answer(inp, llm=mock_llm)
+    assert result["dimensions"]["grounding"]["score"] >= 20
+
+
+def test_judge_invented_value_not_in_tool_results_scores_low():
+    """W44 calibration counterpart — the special-case language must NOT
+    become a free pass. A LLM that invents a specific value absent from
+    tool_results must still be allowed to score grounding low (<10)."""
+    inp = _make_input(
+        prompt="What is AAPL's P/E ratio?",
+        rubric=Rubric(
+            expected_tools=["query_fundamentals"],
+            required_facts=["pe_ratio_value"],
+            expected_depth="shallow",
+            appropriate_refusal_ok=False,
+        ),
+        # P/E of 99.9x is not in any tool result — pure fabrication.
+        answer_text="Apple's P/E ratio is 99.9x as of today.",
+        tool_calls=[{"name": "query_fundamentals", "arguments": {"ticker": "AAPL"}}],
+        tool_results=[{"tool": "query_fundamentals", "status": "ok", "item_count": 1}],
+    )
+
+    def mock_llm(*, system: str, user: str) -> str:
+        return json.dumps(
+            {
+                "tool_use": {"score": 25, "reason": "ok"},
+                "grounding": {"score": 5, "reason": "99.9 not in tool_results, fabricated"},
+                "framing": {"score": 20, "reason": ""},
+                "refusal_judgment": {"score": 25, "reason": "N/A"},
+                "notes": "fabricated",
+            }
+        )
+
+    result = judge_answer(inp, llm=mock_llm)
+    assert result["dimensions"]["grounding"]["score"] < 10
+
+
+def test_judge_honest_refusal_with_appropriate_refusal_ok_scores_grounding_high():
+    """W44 case 3 — honest refusal under appropriate_refusal_ok=true is
+    NOT fabrication. The judge must be able to award grounding ≥20."""
+    inp = _make_input(
+        prompt="What is AAPL's forward P/E?",
+        rubric=Rubric(
+            expected_tools=["query_fundamentals"],
+            expected_depth="shallow",
+            appropriate_refusal_ok=True,
+        ),
+        answer_text="Forward P/E is not currently available in our data sources.",
+        tool_calls=[{"name": "query_fundamentals", "arguments": {"ticker": "AAPL"}}],
+        # tool returned no data → refusal is supported.
+        tool_results=[{"tool": "query_fundamentals", "status": "ok", "item_count": 0}],
+    )
+
+    def mock_llm(*, system: str, user: str) -> str:
+        return json.dumps(
+            {
+                "tool_use": {"score": 25, "reason": "right tool tried"},
+                # Honest refusal supported by items=0 → grounding 20-25
+                "grounding": {"score": 22, "reason": "refusal supported by tool missing-coverage"},
+                "framing": {"score": 25, "reason": "concise refusal"},
+                "refusal_judgment": {"score": 25, "reason": "rubric permits + items=0"},
+                "notes": "honest refusal",
+            }
+        )
+
+    result = judge_answer(inp, llm=mock_llm)
+    assert result["dimensions"]["grounding"]["score"] >= 20
+
+
+def test_judge_w36_fallback_scored_on_highlights_not_absence():
+    """W44 case 4 — the W36 synthesis-fallback message ("I retrieved data
+    ... the language model could not produce a final summary right now")
+    is a DEGRADED-MODE FALLBACK, not fabrication. Grounding should be
+    judged on the highlights it does include, NOT penalised for the
+    absence of analysis (that is a framing concern)."""
+    inp = _make_input(
+        prompt="What does GOOGL look like fundamentally?",
+        rubric=Rubric(
+            expected_tools=["query_fundamentals"],
+            expected_depth="medium",
+            appropriate_refusal_ok=False,
+        ),
+        answer_text=(
+            "I retrieved data from 1 tool, but the language model could not "
+            "produce a final summary right now.\n\n"
+            "Highlights:\n"
+            "- Alphabet revenue $96.4B (Q1 2026)\n"
+            "- Cited from tool: query_fundamentals(GOOGL)"
+        ),
+        tool_calls=[{"name": "query_fundamentals", "arguments": {"ticker": "GOOGL"}}],
+        tool_results=[{"tool": "query_fundamentals", "status": "ok", "item_count": 1}],
+    )
+
+    def mock_llm(*, system: str, user: str) -> str:
+        return json.dumps(
+            {
+                "tool_use": {"score": 25, "reason": "right tool"},
+                # Highlights cite tool_results → grounding 18-25; absence of
+                # analysis is a framing concern, NOT grounding.
+                "grounding": {"score": 20, "reason": "highlights cite tool; fallback is not fabrication"},
+                # Framing IS where the missing analysis costs — not grounding.
+                "framing": {"score": 12, "reason": "medium-depth Q got degraded-mode highlights"},
+                "refusal_judgment": {"score": 25, "reason": "N/A — not a refusal"},
+                "notes": "W36 fallback",
+            }
+        )
+
+    result = judge_answer(inp, llm=mock_llm)
+    assert result["dimensions"]["grounding"]["score"] >= 18
+    # And framing — not grounding — absorbs the depth penalty.
+    assert result["dimensions"]["framing"]["score"] < result["dimensions"]["grounding"]["score"]

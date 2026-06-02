@@ -79,9 +79,18 @@ def _make_budget() -> Any:
 
 
 class TestRewriteSkippedForSingleDigitRevenue:
-    """W28-5 guard A — skip rewrite when >=80% unsupported is small REVENUE."""
+    """W28-5 guard A — skip rewrite when >=80% unsupported is small REVENUE.
 
-    def test_eight_of_ten_single_digit_revenue_skips_rewrite(self) -> None:
+    PLAN-0104 W44 amendment: the banner is now SUPPRESSED in this branch
+    because the small-revenue pattern is a validator FALSE POSITIVE (BP-648)
+    — the original answer is actually fine. Appending the banner was
+    misleading the judge into scoring grounding=0 (R6) and the user into
+    distrusting an actually-correct answer. The test now pins the
+    suppressed-banner behaviour; the rewrite is still skipped (the value
+    of the guard is unchanged).
+    """
+
+    def test_eight_of_ten_single_digit_revenue_skips_rewrite_and_suppresses_banner(self) -> None:
         from rag_chat.application.services.numeric_grounding import FieldKind
 
         # 8 small-revenue + 2 EPS = 80% ratio → should hit the guard.
@@ -114,9 +123,10 @@ class TestRewriteSkippedForSingleDigitRevenue:
 
         # Validator called exactly once — rewrite was skipped.
         assert v_inst.validate.call_count == 1
-        assert passed is False
-        assert original_response in text
-        assert "could not be verified" in text
+        # W44 — original returned UNCHANGED (passed=True flag, no banner).
+        assert passed is True
+        assert text == original_response
+        assert "could not be verified" not in text
 
 
 class TestDefeatistRewriteRejected:

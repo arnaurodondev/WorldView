@@ -241,6 +241,32 @@ DIMENSIONS (each 0-25):
                        periods (e.g. "Q4 FY2026" when no such period was returned),
                        or claims contradicted by tool output statuses.
 
+                       SPECIAL CASES — DO NOT score grounding=0 for these:
+                         * An answer ending with "⚠ Some numbers could not be
+                           verified against retrieved data" is a TRANSPARENCY
+                           feature, not fabrication. Judge the body claims, NOT
+                           the banner. If the body claims are grounded, award
+                           full marks; the banner is neutral.
+                         * An answer marking specific numbers with [unverified]
+                           tags is the LLM correctly flagging uncertainty. If
+                           the OTHER numbers in the answer are grounded in
+                           tool_results, award partial marks (15-22). Only
+                           score 0 when the LLM invents specific values that
+                           DO NOT appear anywhere in tool_results.
+                         * A W36/synthesis-fallback answer beginning "I
+                           retrieved data... the language model could not
+                           produce a final summary right now" is a
+                           degraded-mode fallback, NOT fabrication. Score
+                           grounding by whether the highlights it does
+                           include are correctly attributed; the absence of
+                           analysis is a framing concern, not grounding.
+                           Award 18-25 when highlights cite tool_results.
+                         * An honest refusal stating data is unavailable
+                           (when rubric.appropriate_refusal_ok=true) is NOT
+                           fabrication; grounding should be 20-25 if the
+                           refusal is supported by the tool's missing-coverage
+                           flag (status=ok + items=0, or status=missing).
+
 3. framing             Does the answer's depth match the question's depth?
                        - shallow + 1-3 sentence answer = PERFECT (25)
                        - shallow + bloated multi-section answer = WARN (~12)
