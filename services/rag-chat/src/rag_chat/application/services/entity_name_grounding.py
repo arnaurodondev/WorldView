@@ -264,6 +264,41 @@ _STOP_NOUNS: frozenset[str] = frozenset(
         "Quarter",
         "Year",
         "Annual",
+        # ── PLAN-0104 W47: discourse / framing tokens that appear ─
+        # Title-cased at sentence start and have been observed to
+        # falsely trip the COMPANY regex (Round 7 v2 TSLA — "Here"
+        # was extracted from the sentence "Here is the quarterly
+        # progression" and routed into the refusal text as an
+        # unresolved entity). Each token below MUST be a word that
+        # has no business being a company reference in financial
+        # prose. Over-listing is preferred (BAD = false negative).
+        "Here",
+        "There",
+        "Now",
+        "Then",
+        "Thus",
+        "However",
+        "Therefore",
+        "Meanwhile",
+        "Overall",
+        "Based",
+        "Additionally",
+        "Furthermore",
+        "Finally",
+        "Notably",
+        "Specifically",
+        "Indeed",
+        "Indeed",
+        "First",
+        "Second",
+        "Third",
+        "Next",
+        "Last",
+        "Latest",
+        "Recent",
+        "Recently",
+        "Previously",
+        "Currently",
         # ── Financial nouns that are commonly Title-Cased ────────
         "Revenue",
         "Earnings",
@@ -351,9 +386,23 @@ def _normalize(token: str) -> str:
     are kept so ``Apple Inc`` and ``Apple Inc.`` both match if either
     form appears in the grounded set. The grounded-set builder is
     expected to add multiple variants.
+
+    PLAN-0104 W47: trailing English possessive ``'s`` (e.g. "Tesla's",
+    "Apple's") is stripped so the possessive form matches the canonical
+    grounded entry. Without this, the COMPANY regex captures "Tesla's"
+    verbatim and the post-strip lookup against {"tesla", "tsla"} misses,
+    routing a normal possessive into the rewrite refusal payload as if it
+    were a hallucinated entity (Round 7 v2 TSLA failure mode).
     """
     t = token.strip().lstrip("$")
-    return re.sub(r"\s+", " ", t).lower()
+    t = re.sub(r"\s+", " ", t).lower()
+    # Drop English possessive suffix — both the curly and straight apostrophe
+    # forms appear in LLM output.
+    for suf in ("’s", "'s"):  # noqa: RUF001 — curly + straight apostrophe
+        if t.endswith(suf):
+            t = t[: -len(suf)]
+            break
+    return t
 
 
 def _build_normalized_grounded_set(grounded_entity_names: Iterable[str]) -> set[str]:

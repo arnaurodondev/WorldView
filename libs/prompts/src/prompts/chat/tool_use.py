@@ -73,13 +73,28 @@ TOOL_USE_SYSTEM_PROMPT_TEMPLATE = PromptTemplate(
     #        saw the LLM fabricate "17.24% / 21.08%" period values when
     #        the underlying tool returned different periods.  Both
     #        failure modes are addressed by an explicit refusal contract.
-    version="1.7",
+    # 1.8 — PLAN-0104 W47: FINANCIAL_DATA addendum gains a mandatory
+    #        PARTIAL DATA RULE that REBALANCES the MISSING-METRIC RULE.
+    #        Round 7 v2 Q5 (GOOGL "expensive vs history?") refused with
+    #        "tool responses do not contain sufficient information"
+    #        despite get_fundamentals_history returning 1 item with a
+    #        populated period table — the LLM treated a single partial
+    #        failure (price_history error + search_documents transport
+    #        error) as full unavailability. The PARTIAL DATA RULE makes
+    #        explicit that any data is better than refusal: if a metric
+    #        the user asked for is present in ANY period or in the
+    #        snapshot, you MUST report it and caveat the rest. The
+    #        MISSING-METRIC RULE still applies for the narrow case where
+    #        the SPECIFIC requested metric is entirely absent — its
+    #        anti-fabrication property is preserved.
+    version="1.8",
     description=(
         "Strict no-hallucination tool-use system prompt for multi-turn agent loop "
-        "(v1.7 adds MISSING-METRIC RULE per PLAN-0104 W39; v1.6 adds 4-section "
-        "ANSWER STRUCTURE + VALUATION-CONTEXT composition per BP-651; v1.5 adds "
-        "SNAPSHOT-VS-PERIODS rule per BP-640; v1.4 adds RATIO-OR-TTM directive "
-        "per BP-639; v1.3 adds tabular comparison rendering directive per BP-638)"
+        "(v1.8 adds PARTIAL DATA RULE per PLAN-0104 W47; v1.7 adds MISSING-METRIC "
+        "RULE per PLAN-0104 W39; v1.6 adds 4-section ANSWER STRUCTURE + "
+        "VALUATION-CONTEXT composition per BP-651; v1.5 adds SNAPSHOT-VS-PERIODS "
+        "rule per BP-640; v1.4 adds RATIO-OR-TTM directive per BP-639; v1.3 adds "
+        "tabular comparison rendering directive per BP-638)"
     ),
     template=(
         "You are a research agent for institutional investors. Today's date is {today_iso}.\n\n"
@@ -408,7 +423,36 @@ _PER_INTENT_ADDENDA: dict[str, str] = {
         "pretraining knowledge to fill the gap. Conversely, if a metric IS present\n"
         "in the snapshot or any period row (rendered as '<metric>: <value>'), you\n"
         "MUST quote that value verbatim — do NOT refuse on the grounds that the\n"
-        "tool 'returned no valid data'; the labelled cell IS the data."
+        "tool 'returned no valid data'; the labelled cell IS the data.\n\n"
+        # PLAN-0104 W47: PARTIAL DATA RULE — the rebalance to MISSING-METRIC.
+        # Round 7 v2 Q5 (GOOGL) showed the LLM refusing because two of three
+        # parallel tools failed (get_price_history error + search_documents
+        # transport_error), even though get_fundamentals_history returned a
+        # populated period table. The behaviour conflated "some component
+        # failed" with "the requested metric is unavailable". This rule
+        # makes explicit the asymmetry: tool failures degrade ANSWER QUALITY,
+        # they do NOT justify refusal so long as the SPECIFIC metric the
+        # user asked for is present in at least one returned tool result.
+        "PARTIAL DATA RULE (mandatory):\n"
+        "If at least ONE tool returned data containing the metric the user asked\n"
+        "for (even one period, snapshot-only, or peer data without history), you\n"
+        "MUST provide what you can. Do NOT refuse just because a COMPLEMENTARY\n"
+        "tool errored, returned 0 rows, or reported transport_error. Compose the\n"
+        "answer using the 4-section ANSWER STRUCTURE:\n"
+        "  - Headline: based on what IS available.\n"
+        "  - Supporting Data: table of the rows that DID return.\n"
+        "  - Context: explicitly state which COMPLEMENTARY data was unavailable\n"
+        '    (e.g. "price history was unavailable — historical valuation context\n'
+        '    is therefore limited to fundamentals trend").\n'
+        "  - Interpretation & Caveats: caveat the partial nature, but DO NOT say\n"
+        '    "cannot determine" or "cannot answer" when the requested metric IS\n'
+        "    present in retrieved data.\n"
+        "Scope clarification: the MISSING-METRIC RULE above applies ONLY when the\n"
+        "SPECIFIC metric the user asked for is itself entirely absent from every\n"
+        "tool result. If the user asked for gross margin and ANY period row shows\n"
+        "a gross_margin value, you MUST report the trend across whatever periods\n"
+        "are present; you may NOT refuse on the grounds that 'not enough periods\n"
+        "were retrieved'."
     ),
     "MACRO": (
         "\n\nMACRO FORMAT:\n"

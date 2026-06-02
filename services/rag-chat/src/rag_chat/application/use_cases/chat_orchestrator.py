@@ -2693,21 +2693,45 @@ class ChatOrchestratorUseCase:
             tool_ref_count=len(tool_refs),
         )
 
-        # Build the rewrite re-prompt. List each ungrounded name so the
-        # LLM can either remove it or annotate it [unverified].
-        bullets = "\n".join(f"- {u.name} ({u.kind.value})" for u in first_result.unsupported)
+        # PLAN-0104 W47: rewrite prompt now uses a STRUCTURED JSON array of
+        # candidate names instead of a free-text bulleted list. Round 7 v2
+        # Q4 (TSLA gross margin) revealed the bullet form trained the LLM
+        # to ECHO sentence fragments back into the refusal text — when the
+        # regex extracted "Tesla's" and "Here" as COMPANY candidates the
+        # rewrite produced a refusal saying it "cannot find Tesla's or Here
+        # in the resolved entity set", overwriting a correct streamed
+        # answer. The JSON-array shape (a) discourages the LLM from quoting
+        # tokens verbatim in the prose, and (b) makes the unsupported set a
+        # programmatic input rather than a narrative cue. We also tag the
+        # block as INTERNAL_VALIDATION so the LLM knows not to surface the
+        # list to the user.
+        import json as _json
+
+        candidate_list = _json.dumps(
+            [{"token": u.name, "kind": u.kind.value} for u in first_result.unsupported],
+            ensure_ascii=False,
+        )
         rewrite_messages = [
             *messages,
             {"role": "assistant", "content": response},
             {
                 "role": "user",
                 "content": (
-                    "The following entity names in your previous response cannot be found "
-                    "in tool results or the resolved entity set:\n"
-                    f"{bullets}\n\n"
-                    "Rewrite your response removing or marking each as [unverified]. "
-                    "Do not invent replacement entity names — only refer to entities that "
-                    "appear in the tool results above or in the resolved-entity map."
+                    "INTERNAL_VALIDATION (do not surface verbatim to the user): the "
+                    "post-response grounding validator extracted the following candidate "
+                    "names from your previous answer that did NOT match the resolved "
+                    "entity set or any tool result citation. The list MAY contain false "
+                    "positives such as sentence fragments, possessives, or common prose "
+                    "tokens — ignore those; only act on genuine entity references.\n\n"
+                    f"unsupported_candidates_json = {candidate_list}\n\n"
+                    "Rewrite your response so every COMPANY or TICKER reference appears "
+                    "in either the resolved-entity map or a tool result above. If a "
+                    "genuinely unsupported entity remains, either remove it or annotate "
+                    "it inline as [unverified]. Do NOT enumerate the JSON list back to "
+                    "the user. Do NOT introduce a refusal preamble when the underlying "
+                    "tool results DO contain the metric the user asked for — preserve "
+                    "the substantive content of your previous answer and only adjust the "
+                    "entity references."
                 ),
             },
         ]

@@ -120,3 +120,42 @@ class TestEntityNameGroundingValidator:
 
         assert _classify_kind("TSLA") is NameKind.TICKER
         assert _classify_kind("Tesla Inc") is NameKind.COMPANY
+
+    def test_possessive_tesla_apostrophe_s_matches_grounded_tesla(self) -> None:
+        """PLAN-0104 W47 regression — possessive ``Tesla's`` must NOT be flagged.
+
+        Round 7 v2 Q4 (TSLA gross-margin trend) failed because the COMPANY
+        regex captured ``Tesla's`` (with the apostrophe-S) and the lookup
+        against ``{"tesla","tsla"}`` missed.  The validator then routed the
+        possessive into the rewrite prompt's unsupported-candidate list,
+        and the LLM dutifully echoed it in a refusal text overwriting a
+        correct streamed answer.  After v1.8 ``_normalize`` strips trailing
+        ``'s`` so the possessive form normalises to the canonical entity.
+        """
+        result = self.v.validate(
+            response="Tesla's gross margin trended up steadily over the year.",
+            grounded_entity_names={"Tesla", "TSLA"},
+            tool_result_entity_refs=set(),
+        )
+        assert result.passed, [u.name for u in result.unsupported]
+
+    def test_discourse_token_here_not_flagged(self) -> None:
+        """PLAN-0104 W47 regression — ``Here`` is a discourse marker, not an entity.
+
+        Round 7 v2 Q4 streamed "Here is the quarterly progression…" and the
+        sentence-leading ``Here`` was captured as a COMPANY candidate by
+        the title-cased regex.  v1.8 adds the discourse-token expansion to
+        the stop-noun list so framing words at sentence start drop out
+        before set-membership lookup.
+        """
+        result = self.v.validate(
+            response="Tesla's gross margin has improved. Here is the trend: Q1 16.31%, Q2 17.24%.",
+            grounded_entity_names={"Tesla", "TSLA"},
+            tool_result_entity_refs=set(),
+        )
+        # Both "Tesla's" (via apostrophe-S normalisation) and "Here" (via
+        # discourse stop-noun) must drop out; the candidate set must NOT
+        # produce a refusal.
+        assert result.passed, [u.name for u in result.unsupported]
+        # And specifically, "Here" must not appear as a candidate at all.
+        assert not any(u.normalized == "here" for u in result.unsupported)
