@@ -96,6 +96,54 @@ async def test_query_fundamentals_returns_none_on_upstream_timeout() -> None:
 
 
 @pytest.mark.asyncio
+async def test_query_fundamentals_envelope_aligned_with_numeric_grounding() -> None:
+    """PLAN-0104 W35 / BP-NEW: RetrievedItem envelope matches numeric_grounding.
+
+    The W28-3 ``_TOOL_PREFIX_TICKER_RE`` matcher in
+    ``rag_chat.application.services.numeric_grounding`` extracts the
+    ticker from ``tool:<lowercase_name>:<UPPERCASE_TICKER>`` item ids.
+    The handler MUST emit:
+
+      * ``item_id == "tool:fundamentals:<TICKER>"`` (upper-cased
+        ticker, no ``_query`` suffix — same shape as
+        ``_handle_get_fundamentals_history``).
+      * ``citation_meta.entity_name == <TICKER>`` (upper-cased), so
+        the validator's third-tier entity-tag fallback also returns
+        the same ticker.
+      * The snapshot block exposing ratios like ``pe_ratio: 37.73x``
+        verbatim, so the validator's text-scan path picks them up.
+    """
+    s3 = AsyncMock()
+    s3.query_fundamentals = AsyncMock(
+        return_value={
+            "metrics_by_period": [],
+            # Lower-case ticker on input to verify the handler upper-cases it.
+            "snapshot": {
+                "pe_ratio": 37.73,
+                "forward_pe": 27.80,
+                "as_of": "2026-06-01",
+                "source": "highlights",
+            },
+            "coverage": {"pe_ratio": "ok", "forward_pe": "ok"},
+        }
+    )
+    handler = _make_handler(s3)
+    result = await handler._handle_query_fundamentals(
+        ticker="aapl",  # LOWER-case input — must be normalised to AAPL.
+        metrics=["pe_ratio", "forward_pe"],
+        periods=0,
+    )
+    assert result is not None
+    # Envelope shape: aligns with the W28-3 prefix matcher.
+    assert result.item_id == "tool:fundamentals:AAPL"
+    assert result.citation_meta.entity_name == "AAPL"
+    # Snapshot ratios rendered with the "Nx" suffix the classifier
+    # picks up as RATIO via the "ratio" / "pe" context keywords.
+    assert "pe_ratio: 37.73x" in result.text
+    assert "forward_pe: 27.80x" in result.text
+
+
+@pytest.mark.asyncio
 async def test_query_fundamentals_flags_missing_metric_in_coverage_line() -> None:
     """Missing-coverage metric is surfaced in the rendered text."""
     s3 = AsyncMock()

@@ -453,3 +453,63 @@ class TestClassifyNumberQuarterGuard:
         # so context-keyword routing still classifies as REVENUE.
         kind = classify_number(3.0, "3", "q1 2026 revenue: 3 billion")
         assert kind is FieldKind.REVENUE
+
+
+# ── PLAN-0104 W35 / BP-NEW: query_fundamentals envelope alignment ────────────
+
+
+class TestQueryFundamentalsEnvelopeEndToEnd:
+    """End-to-end regression: ``query_fundamentals`` row + AAPL P/E claim → PASS.
+
+    Reproduces the AAPL Q1 path that previously failed under W28's
+    defeatist-rewrite guards: the LLM's structured answer cited
+    ``[query_fundamentals row 0]``, the validator could not pair the
+    quoted ``37.73x`` against the snapshot block because the envelope
+    (``item_id`` + ``citation_meta.entity_name``) used a different
+    pattern from ``get_fundamentals_history``. W35 aligns the two so
+    the entity tag resolves to ``"aapl"`` for both and the snapshot
+    value is matched.
+    """
+
+    def setup_method(self) -> None:
+        self.v = NumericGroundingValidator()
+
+    def test_aapl_pe_ratio_matches_snapshot_via_query_fundamentals(self) -> None:
+        # Tool result text mirrors what ``_handle_query_fundamentals``
+        # renders after W35: ``tool:fundamentals:<TICKER>`` item id and
+        # a snapshot block exposing ``pe_ratio: 37.73x``.
+        snapshot_text = (
+            "## AAPL fundamentals query\n"
+            "Coverage: pe_ratio=ok, forward_pe=ok\n"
+            "\n### AAPL Snapshot (as-of 2026-06-01, source: highlights)\n"
+            "  pe_ratio: 37.73x\n"
+            "  forward_pe: 27.80x\n"
+        )
+        row = _TaggedRow(text=snapshot_text, item_id="tool:fundamentals:AAPL")
+        # LLM response using the canonical ``[N1]`` citation marker
+        # (which the validator strips). The defeatist-rewrite-triggering
+        # ``[query_fundamentals row 0]`` form is a presentation concern;
+        # what matters here is that the 37.73x in the response matches
+        # the 37.73 in the snapshot and the entity tag is "aapl" on
+        # both sides.
+        response = "Apple (AAPL) trades at a P/E ratio of 37.73x [N1]."
+        result = self.v.validate(response, [row])
+        # The 37.73 number must NOT appear in unsupported.
+        ratio_failures = [
+            u for u in result.unsupported if u.field_kind is FieldKind.RATIO and abs(u.value - 37.73) < 0.5
+        ]
+        assert not ratio_failures, f"Expected 37.73 to be grounded, got: {result.unsupported}"
+
+    def test_get_fundamentals_history_pattern_still_works(self) -> None:
+        """Sibling tool uses the same ``tool:fundamentals:<TICKER>`` pattern.
+
+        Don't regress ``_handle_get_fundamentals_history`` — same id
+        shape must continue to ground a P/E ratio against a tool row.
+        """
+        snapshot_text = "AAPL pe_ratio: 37.73x"
+        row = _TaggedRow(text=snapshot_text, item_id="tool:fundamentals:AAPL")
+        result = self.v.validate("AAPL P/E is 37.73x.", [row])
+        ratio_failures = [
+            u for u in result.unsupported if u.field_kind is FieldKind.RATIO and abs(u.value - 37.73) < 0.5
+        ]
+        assert not ratio_failures, result.unsupported

@@ -603,19 +603,38 @@ class MarketHandler(ToolHandler):
             log.warning("tool_no_data", tool="query_fundamentals", ticker=ticker)
             return None
 
-        text = self._format_query_fundamentals(ticker, metrics, rows, snapshot, coverage)
+        # PLAN-0104 W35 / BP-NEW: align the envelope with
+        # ``_handle_get_fundamentals_history`` so numeric_grounding can
+        # entity-tag this row the same way.
+        #
+        # 1. ``item_id`` uses the ``tool:fundamentals:<TICKER>`` pattern
+        #    (no ``_query`` suffix) — this matches the W28-3 prefix
+        #    matcher AND keeps the two fundamentals tools in the same
+        #    per-entity candidate pool. We force ``ticker.upper()``
+        #    because the LLM occasionally lower-cases the symbol when
+        #    quoting it back, and ``_TOOL_PREFIX_TICKER_RE`` requires
+        #    ``[A-Z]{1,5}`` after the prefix.
+        # 2. ``citation_meta.entity_name`` is also upper-cased so the
+        #    fallback path in ``_entity_tag_for`` (step 3) returns a
+        #    consistent lower-case ticker.
+        # 3. The snapshot block already exposes ``pe_ratio: 37.73x`` /
+        #    ``forward_pe: 27.80x`` / ``peg_ratio: 2.15`` etc. (see
+        #    ``_format_query_fundamentals`` below); the validator's
+        #    text-scan path picks those up via ``classify_number``.
+        upper_ticker = ticker.upper()
+        text = self._format_query_fundamentals(upper_ticker, metrics, rows, snapshot, coverage)
         return RetrievedItem.create(
-            item_id=f"tool:fundamentals_query:{ticker}",
+            item_id=f"tool:fundamentals:{upper_ticker}",
             item_type=ItemType.financial,
             text=text[:_TOOL_RESULT_MAX_CHARS],
             score=0.88,
             trust_weight=0.90,
             citation_meta=CitationMeta(
-                title=f"Fundamentals query: {ticker}",
+                title=f"Fundamentals query: {upper_ticker}",
                 url=None,
                 source_name="fundamentals",
                 published_at=None,
-                entity_name=ticker,
+                entity_name=upper_ticker,
             ),
         )
 
