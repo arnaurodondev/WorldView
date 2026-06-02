@@ -59,6 +59,7 @@ from uuid import uuid4
 _REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(_REPO_ROOT))
 sys.path.insert(0, str(_REPO_ROOT / "tests" / "validation"))
+sys.path.insert(0, str(_REPO_ROOT / "scripts"))
 
 # isort: off
 from chat_eval.grading import is_refusal  # noqa: E402
@@ -67,6 +68,13 @@ from chat_eval.harness import (  # noqa: E402
     RagChatClient,
     _events_to_result,
     _read_sse_events,
+)
+from chat_quality_judge import (  # noqa: E402
+    JudgeInput,
+    Rubric,
+    build_input_from_artifact,
+    judge_answer,
+    summarise_judge_records,
 )
 
 # isort: on
@@ -244,8 +252,16 @@ def write_question_artifacts(
     heur: dict[str, Any],
     bucket: str,
     reasons: list[str],
+    judge_result: dict[str, Any] | None = None,
 ) -> None:
-    """Write q_<id>.json + q_<id>.log to the run directory."""
+    """Write q_<id>.json + q_<id>.log to the run directory.
+
+    ``judge_result`` (PLAN-0104 W33) is the LLM-judge verdict for this Q. When
+    present it is stored under the ``judge`` key alongside the legacy
+    ``heuristics`` / ``bucket`` fields — both are kept so consumers can
+    compare quality-based grading against the prior word-count heuristic
+    during the rollout.
+    """
     json_path = out_dir / f"{slot}.json"
     log_path = out_dir / f"{slot}.log"
 
@@ -262,9 +278,13 @@ def write_question_artifacts(
             "max_latency_s": q.get("expected_max_latency_s"),
             "must_not_say": q.get("must_not_say") or [],
         },
+        # Legacy heuristic verdict — kept for backward compat (PLAN-0104 W33).
         "bucket": bucket,
         "reasons": reasons,
         "heuristics": heur,
+        # New LLM-judge rubric verdict (PLAN-0104 W33). None when judge skipped.
+        "rubric": Rubric.from_question(q).to_dict(),
+        "judge": judge_result,
         "result": result.to_json_dict(),
     }
     json_path.write_text(json.dumps(payload, indent=2, sort_keys=True))
@@ -406,7 +426,88 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p.add_argument("--concurrency", type=int, default=1, help="Currently sequential (>=1 reserved for future).")
     p.add_argument("--max-runs-per-q", type=int, default=1, help="Repeat each question N times for flakiness check.")
     p.add_argument("--timeout-s", type=float, default=120.0, help="Per-request HTTP timeout.")
+    # PLAN-0104 W33 — LLM-judge integration.
+    p.add_argument(
+        "--judge",
+        action="store_true",
+        help="Run the LLM-judge rubric (PLAN-0104 W33) per question. Requires DEEPINFRA_API_KEY.",
+    )
+    p.add_argument(
+        "--judge-only",
+        action="store_true",
+        help="Offline re-grade an existing --runs-dir without rerunning chat calls.",
+    )
+    p.add_argument(
+        "--runs-dir",
+        default="",
+        help="When --judge-only is set, the existing run directory to re-grade in place.",
+    )
     return p.parse_args(argv)
+
+
+def _regrade_existing_run(runs_dir: Path) -> int:
+    """Offline re-grade — read every ``q_<id>.json`` in ``runs_dir`` and add a
+    fresh ``judge`` block + write ``_judge_summary.json``.
+
+    Why this exists (PLAN-0104 W33): the chat call is expensive (LLM + 8+
+    backend services) but the LLM-judge is a single short API call. We want
+    to iterate on the rubric / prompt without rerunning the chat. This mode
+    consumes only the captured artefacts, so it is also CI-safe.
+
+    The legacy ``bucket`` + ``heuristics`` blocks are preserved untouched —
+    we only overwrite the ``judge`` and ``rubric`` keys.
+    """
+    if not runs_dir.is_dir():
+        print(f"ERROR: --runs-dir does not exist: {runs_dir}", file=sys.stderr)
+        return 2
+
+    # Load the original questions.yaml so we can look up each Q's rubric.
+    # We trust the slot's ``id`` field over filename so renamed runs still work.
+    q_files = sorted(runs_dir.glob("q_*.json"))
+    if not q_files:
+        print(f"ERROR: no q_*.json files in {runs_dir}", file=sys.stderr)
+        return 2
+
+    questions_path = (_REPO_ROOT / "tests/validation/chat_quality_benchmark/questions.yaml").resolve()
+    by_id = {q.get("id"): q for q in load_questions(questions_path) if q.get("id")}
+
+    print(f"=== offline re-grade ===\nruns_dir : {runs_dir}\nfiles    : {len(q_files)}\n")
+    judge_records: list[dict[str, Any]] = []
+    for qf in q_files:
+        try:
+            payload = json.loads(qf.read_text())
+        except json.JSONDecodeError as exc:
+            print(f"  SKIP {qf.name} (malformed JSON: {exc})")
+            continue
+        q_id = payload.get("id")
+        q_spec = by_id.get(q_id) or {}
+        # Merge stored prompt back into q_spec so prompt drift in yaml never
+        # silently degrades grading — the saved prompt is what was actually
+        # asked.
+        q_spec = {**q_spec, "prompt": payload.get("prompt") or q_spec.get("prompt")}
+        result_dict = payload.get("result") or {}
+        judge_input = build_input_from_artifact(q_spec, result_dict)
+        judge_result = judge_answer(judge_input)
+        payload["rubric"] = Rubric.from_question(q_spec).to_dict()
+        payload["judge"] = judge_result
+        qf.write_text(json.dumps(payload, indent=2, sort_keys=True))
+        judge_records.append({"id": q_id, "slot": qf.stem, **judge_result})
+        v, s = judge_result.get("verdict"), judge_result.get("score")
+        print(f"  {q_id:<35} judge={v} score={s}")
+
+    judge_summary = {
+        "schema_version": 1,
+        "per_question": judge_records,
+        **summarise_judge_records(judge_records),
+    }
+    (runs_dir / "_judge_summary.json").write_text(json.dumps(judge_summary, indent=2, sort_keys=True))
+    agg = summarise_judge_records(judge_records)
+    print()
+    print(f"verdicts  : {agg['verdict_counts']}")
+    print(f"score_avg : {agg['score_avg']}")
+    print(f"dim_avg   : {agg['dimension_avg']}")
+    print(f"summary   : {runs_dir / '_judge_summary.json'}")
+    return 0
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -416,6 +517,15 @@ def main(argv: list[str] | None = None) -> int:
     if not questions_path.is_file():
         print(f"ERROR: questions file not found: {questions_path}", file=sys.stderr)
         return 2
+
+    # PLAN-0104 W33 — offline re-grade mode. Skip the chat client entirely;
+    # read existing q_<id>.json artefacts and overwrite them with the new
+    # ``judge`` block + a freshly-written ``_judge_summary.json``.
+    if args.judge_only:
+        if not args.runs_dir:
+            print("ERROR: --judge-only requires --runs-dir <path>", file=sys.stderr)
+            return 2
+        return _regrade_existing_run(Path(args.runs_dir).resolve())
 
     all_questions = load_questions(questions_path)
     tags = [t.strip() for t in args.tags.split(",") if t.strip()] or None
@@ -443,6 +553,8 @@ def main(argv: list[str] | None = None) -> int:
     per_q_records: list[dict[str, Any]] = []
     bucket_counts = {"PASS": 0, "WARN": 0, "FAIL": 0, "EXCEPTION": 0}
     category_buckets: dict[str, dict[str, int]] = {}
+    # PLAN-0104 W33 — per-Q judge records, aggregated into _judge_summary.json.
+    judge_records: list[dict[str, Any]] = []
 
     try:
         for idx, q in enumerate(filtered):
@@ -454,6 +566,20 @@ def main(argv: list[str] | None = None) -> int:
                     result = client.ask(q.get("prompt") or "")
                     heur = compute_heuristics(q, result)
                     bucket, reasons = derive_pass_fail(heur)
+                    # PLAN-0104 W33 — call the LLM judge per-Q when --judge is
+                    # set. We grade after the chat call so a judge failure
+                    # never affects the captured chat artefact.
+                    judge_result: dict[str, Any] | None = None
+                    if args.judge:
+                        judge_input = JudgeInput(
+                            prompt=q.get("prompt") or "",
+                            rubric=Rubric.from_question(q),
+                            answer_text=result.answer_text or "",
+                            tool_calls=[{"name": tc.name, "arguments": tc.arguments} for tc in result.tool_calls],
+                            tool_results=list(result.tool_results),
+                        )
+                        judge_result = judge_answer(judge_input)
+                        judge_records.append({"id": q_id, "slot": slot, **judge_result})
                     write_question_artifacts(
                         out_dir=out_dir,
                         slot=slot,
@@ -462,6 +588,7 @@ def main(argv: list[str] | None = None) -> int:
                         heur=heur,
                         bucket=bucket,
                         reasons=reasons,
+                        judge_result=judge_result,
                     )
                     bucket_counts[bucket] = bucket_counts.get(bucket, 0) + 1
                     cb = category_buckets.setdefault(category, {"PASS": 0, "WARN": 0, "FAIL": 0, "EXCEPTION": 0})
@@ -485,11 +612,18 @@ def main(argv: list[str] | None = None) -> int:
                             "is_empty": heur["is_empty"],
                         }
                     )
+                    # PLAN-0104 W33 — append the judge verdict to the per-Q
+                    # console line so the operator sees rubric grading inline.
+                    judge_suffix = ""
+                    if judge_result is not None:
+                        v = judge_result.get("verdict")
+                        s = judge_result.get("score")
+                        judge_suffix = f" | judge={v} score={s}"
                     print(
                         f"[{idx + 1:>2}/{len(filtered)}] {q_id:<35} {bucket:<5} "
                         f"latency={heur['latency_s']:>5.1f}s words={heur['word_count']:>4} "
                         f"tools={','.join(heur['distinct_tools_called']) or '-'} "
-                        f"{'; '.join(reasons) if reasons else ''}"
+                        f"{'; '.join(reasons) if reasons else ''}{judge_suffix}"
                     )
                 except Exception as exc:  # — script-level catch-all
                     write_error_file(out_dir, slot, exc)
@@ -531,11 +665,24 @@ def main(argv: list[str] | None = None) -> int:
     }
     (out_dir / "_summary.json").write_text(json.dumps(summary, indent=2, sort_keys=True))
 
+    # PLAN-0104 W33 — emit the judge aggregate when --judge was used.
+    if args.judge:
+        judge_summary = {
+            "schema_version": 1,
+            "per_question": judge_records,
+            **summarise_judge_records(judge_records),
+        }
+        (out_dir / "_judge_summary.json").write_text(json.dumps(judge_summary, indent=2, sort_keys=True))
+
     print()
     print("=== summary ===")
     print(f"buckets   : {bucket_counts}")
     for cat, counts in sorted(category_buckets.items()):
         print(f"  {cat:<20} {counts}")
+    if args.judge and judge_records:
+        agg = summarise_judge_records(judge_records)
+        print(f"judge     : verdicts={agg['verdict_counts']} score_avg={agg['score_avg']}")
+        print(f"            dimension_avg={agg['dimension_avg']}")
     print(f"artifacts : {out_dir}")
     return 0
 

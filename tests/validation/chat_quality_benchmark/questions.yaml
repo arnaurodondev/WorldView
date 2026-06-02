@@ -352,6 +352,15 @@
     - "I cannot find evidence"
   expected_entities_mentioned: [AAPL, P/E]
   notes: "Must produce TTM P/E + as-of date + historical context. Single-quarter 37.7x is not acceptable."
+  # PLAN-0104 W33 LLM-judge rubric. Length is NOT a criterion — the judge
+  # scores tool routing, grounding (does the P/E trace to a tool output?),
+  # framing (shallow Q → short answer is fine), and refusal appropriateness.
+  rubric:
+    expected_tools: [get_fundamentals_history, get_fundamentals_snapshot, query_fundamentals]
+    required_facts: [pe_ratio_value, as_of_date_or_period]
+    forbidden_facts: [fabricated_period, single_quarter_passed_off_as_ttm]
+    expected_depth: shallow
+    appropriate_refusal_ok: false
 
 - id: ru_meta_eps_trend
   prompt: "Show me Meta's EPS over the last 4 quarters."
@@ -360,6 +369,12 @@
   expected_min_words: 80
   expected_max_latency_s: 45
   expected_entities_mentioned: [META, EPS]
+  rubric:
+    expected_tools: [get_fundamentals_history]
+    required_facts: [eps_per_quarter, four_quarters_or_trend]
+    forbidden_facts: [fabricated_eps_values]
+    expected_depth: medium
+    appropriate_refusal_ok: false
 
 - id: ru_amzn_revenue_yoy
   prompt: "What's Amazon's YoY revenue growth?"
@@ -369,6 +384,12 @@
   expected_max_latency_s: 30
   expected_entities_mentioned: [AMZN, revenue]
   notes: "Must compute TTM revenue / TTM revenue last year x 100, not single-quarter YoY."
+  rubric:
+    expected_tools: [get_fundamentals_history]
+    required_facts: [yoy_growth_pct, period_basis]
+    forbidden_facts: [single_quarter_passed_off_as_yoy]
+    expected_depth: shallow
+    appropriate_refusal_ok: false
 
 - id: ru_tsla_margin_trend
   prompt: "How has Tesla's gross margin trended in the last year?"
@@ -377,6 +398,12 @@
   expected_min_words: 80
   expected_max_latency_s: 45
   expected_entities_mentioned: [TSLA, gross margin]
+  rubric:
+    expected_tools: [get_fundamentals_history]
+    required_facts: [gross_margin_per_period, trend_direction]
+    forbidden_facts: [fabricated_margin_values]
+    expected_depth: medium
+    appropriate_refusal_ok: false
 
 - id: ru_googl_pe_vs_history
   prompt: "Is GOOGL expensive vs its history?"
@@ -386,6 +413,12 @@
   expected_max_latency_s: 45
   expected_entities_mentioned: [GOOGL, P/E]
   notes: "Forces multi-period + historical context."
+  rubric:
+    expected_tools: [get_fundamentals_history, search_documents]
+    required_facts: [current_pe, historical_pe_context, expensive_or_cheap_verdict]
+    forbidden_facts: [verdict_without_historical_comparison]
+    expected_depth: deep
+    appropriate_refusal_ok: false
 
 - id: ru_aapl_forward_pe
   prompt: "What's AAPL's forward P/E?"
@@ -395,3 +428,12 @@
   expected_max_latency_s: 30
   expected_entities_mentioned: [AAPL, forward, P/E]
   notes: "Forces analyst-estimates tool path OR honest refusal explaining estimates aren't in catalog."
+  # Refusal is acceptable IFF the catalog truly doesn't expose forward-PE.
+  # The judge will check whether the refusal cites tool_results showing
+  # missing data, vs. blanketly refusing without trying.
+  rubric:
+    expected_tools: [get_fundamentals_history, get_fundamentals_snapshot]
+    required_facts: [forward_pe_value_or_honest_unavailable]
+    forbidden_facts: [fabricated_forward_pe, blanket_refusal_without_lookup]
+    expected_depth: shallow
+    appropriate_refusal_ok: true

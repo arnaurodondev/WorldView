@@ -1,0 +1,331 @@
+{
+  "bucket": "WARN",
+  "category": "financial_data",
+  "expected": {
+    "entities": [
+      "AAPL",
+      "P/E"
+    ],
+    "max_latency_s": 30,
+    "min_words": 60,
+    "must_not_say": [
+      "Q4 FY2026",
+      "I cannot find evidence"
+    ],
+    "numeric_class": null,
+    "tools": []
+  },
+  "heuristics": {
+    "answer_meets_min_words": false,
+    "char_count": 198,
+    "citation_count": 0,
+    "contradiction_count": 0,
+    "distinct_tools_called": [
+      "get_fundamentals_history"
+    ],
+    "entities_mentioned": [
+      "AAPL",
+      "P/E"
+    ],
+    "entities_missing": [],
+    "error": null,
+    "expected_tools": [],
+    "is_empty": false,
+    "is_refusal": false,
+    "latency_s": 7.897,
+    "latency_within_budget": true,
+    "missing_expected_tools": [],
+    "must_not_say_hits": [],
+    "output_tokens": 50,
+    "phase_timings_ms": {
+      "check_cache": 12.15349999256432,
+      "entity_resolution": 353.15500100841746,
+      "grounding_validation": 14.58220899803564,
+      "llm_direct_text_generation": 3269.4070850266144,
+      "llm_tool_planning": 6002.120045013726,
+      "load_history": 169.9772080173716,
+      "persist_and_cache": 59.40083402674645,
+      "tool_execution": 179.84199995407835,
+      "validate_input": 625.5964590236545
+    },
+    "status_code": 200,
+    "tool_call_count": 1,
+    "tool_calls_summary": [
+      {
+        "arguments_keys": [
+          "ticker"
+        ],
+        "tool": "get_fundamentals_history"
+      }
+    ],
+    "tool_overlap_with_expected": [],
+    "tool_result_count": 1,
+    "tool_results_summary": [
+      {
+        "item_count": 1,
+        "status": "ok",
+        "tool": "get_fundamentals_history"
+      }
+    ],
+    "ttft_s": 0.751,
+    "word_count": 27
+  },
+  "id": "ru_aapl_pe_simple",
+  "judge": {
+    "dimensions": {
+      "framing": null,
+      "grounding": null,
+      "refusal_judgment": null,
+      "tool_use": null
+    },
+    "notes": "Judge LLM not configured (set DEEPINFRA_API_KEY).",
+    "raw_response": null,
+    "score": null,
+    "verdict": "SKIPPED"
+  },
+  "prompt": "What's AAPL's P/E ratio?",
+  "reasons": [
+    "short_answer words=27"
+  ],
+  "result": {
+    "answer_text": "Apple's (AAPL) current P/E ratio is 37.73x as of 2026-06-01 [get_fundamentals_history Current Snapshot]. This is a trailing twelve-month (TTM) valuation metric based on the latest reported earnings.",
+    "citations": [],
+    "contradictions": [],
+    "error": null,
+    "event_timings": [
+      [
+        "status",
+        751308
+      ],
+      [
+        "status",
+        910266
+      ],
+      [
+        "thinking",
+        1264363
+      ],
+      [
+        "status",
+        4020554
+      ],
+      [
+        "tool_call",
+        4020839
+      ],
+      [
+        "tool_result",
+        4201097
+      ],
+      [
+        "token",
+        7794698
+      ],
+      [
+        "token",
+        7794791
+      ],
+      [
+        "token",
+        7809149
+      ],
+      [
+        "token",
+        7809294
+      ],
+      [
+        "final_answer",
+        7809434
+      ],
+      [
+        "citations",
+        7809720
+      ],
+      [
+        "contradictions",
+        7814811
+      ],
+      [
+        "metadata",
+        7872308
+      ],
+      [
+        "done",
+        7872504
+      ]
+    ],
+    "latency_s": 7.897,
+    "metadata": {
+      "intent": "FINANCIAL_DATA",
+      "latency_ms": 7714,
+      "message_id": "019e8563-a298-7cfd-9b42-714728674355",
+      "provider": "",
+      "thread_id": "98e35df4-51e3-4e98-8f29-e74ea5bff337"
+    },
+    "output_tokens": 50,
+    "phase_timings_ms": {
+      "check_cache": 12.15349999256432,
+      "entity_resolution": 353.15500100841746,
+      "grounding_validation": 14.58220899803564,
+      "llm_direct_text_generation": 3269.4070850266144,
+      "llm_tool_planning": 6002.120045013726,
+      "load_history": 169.9772080173716,
+      "persist_and_cache": 59.40083402674645,
+      "tool_execution": 179.84199995407835,
+      "validate_input": 625.5964590236545
+    },
+    "question": "What's AAPL's P/E ratio?",
+    "raw_events": [
+      {
+        "data": {
+          "step": "loading_context"
+        },
+        "event": "status"
+      },
+      {
+        "data": {
+          "step": "entity_resolution"
+        },
+        "event": "status"
+      },
+      {
+        "data": {
+          "stage": "tool_classification"
+        },
+        "event": "thinking"
+      },
+      {
+        "data": {
+          "step": "Loading get_fundamentals_history\u2026"
+        },
+        "event": "status"
+      },
+      {
+        "data": {
+          "input": {
+            "ticker": "AAPL"
+          },
+          "label": "Fetching fundamentals...",
+          "status": "running",
+          "tool": "get_fundamentals_history",
+          "type": "tool_call"
+        },
+        "event": "tool_call"
+      },
+      {
+        "data": {
+          "item_count": 1,
+          "status": "ok",
+          "tool": "get_fundamentals_history",
+          "type": "tool_result"
+        },
+        "event": "tool_result"
+      },
+      {
+        "data": {
+          "text": "Apple's (AAPL) current P/E ratio is 37.73x as "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "of 2026-06-01 [get_fundamentals_history Current Snapshot]. This is a "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "trailing twelve-month (TTM) valuation metric based on the "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "latest reported earnings."
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "Apple's (AAPL) current P/E ratio is 37.73x as of 2026-06-01 [get_fundamentals_history Current Snapshot]. This is a trailing twelve-month (TTM) valuation metric based on the latest reported earnings."
+        },
+        "event": "final_answer"
+      },
+      {
+        "data": [],
+        "event": "citations"
+      },
+      {
+        "data": [],
+        "event": "contradictions"
+      },
+      {
+        "data": {
+          "intent": "FINANCIAL_DATA",
+          "latency_ms": 7714,
+          "message_id": "019e8563-a298-7cfd-9b42-714728674355",
+          "provider": "",
+          "thread_id": "98e35df4-51e3-4e98-8f29-e74ea5bff337"
+        },
+        "event": "metadata"
+      },
+      {
+        "data": {
+          "phase_timings_ms": {
+            "check_cache": 12.15349999256432,
+            "entity_resolution": 353.15500100841746,
+            "grounding_validation": 14.58220899803564,
+            "llm_direct_text_generation": 3269.4070850266144,
+            "llm_tool_planning": 6002.120045013726,
+            "load_history": 169.9772080173716,
+            "persist_and_cache": 59.40083402674645,
+            "tool_execution": 179.84199995407835,
+            "validate_input": 625.5964590236545
+          },
+          "type": "done"
+        },
+        "event": "done"
+      }
+    ],
+    "status_code": 200,
+    "tool_calls": [
+      {
+        "arguments": {
+          "ticker": "AAPL"
+        },
+        "name": "get_fundamentals_history"
+      }
+    ],
+    "tool_results": [
+      {
+        "item_count": 1,
+        "status": "ok",
+        "tool": "get_fundamentals_history"
+      }
+    ],
+    "tps": 6.997,
+    "tps_streaming": 15.293,
+    "ttft_s": 0.751
+  },
+  "rubric": {
+    "appropriate_refusal_ok": false,
+    "expected_depth": "shallow",
+    "expected_tools": [
+      "get_fundamentals_history",
+      "get_fundamentals_snapshot",
+      "query_fundamentals"
+    ],
+    "forbidden_facts": [
+      "fabricated_period",
+      "single_quarter_passed_off_as_ttm"
+    ],
+    "required_facts": [
+      "pe_ratio_value",
+      "as_of_date_or_period"
+    ]
+  },
+  "tags": [
+    "real_user_v2",
+    "ratio"
+  ]
+}

@@ -1,0 +1,415 @@
+{
+  "bucket": "WARN",
+  "category": "financial_data",
+  "expected": {
+    "entities": [
+      "META",
+      "EPS"
+    ],
+    "max_latency_s": 45,
+    "min_words": 80,
+    "must_not_say": [],
+    "numeric_class": null,
+    "tools": []
+  },
+  "heuristics": {
+    "answer_meets_min_words": false,
+    "char_count": 390,
+    "citation_count": 1,
+    "contradiction_count": 0,
+    "distinct_tools_called": [
+      "get_fundamentals_history"
+    ],
+    "entities_mentioned": [
+      "META",
+      "EPS"
+    ],
+    "entities_missing": [],
+    "error": null,
+    "expected_tools": [],
+    "is_empty": false,
+    "is_refusal": false,
+    "latency_s": 27.09,
+    "latency_within_budget": true,
+    "missing_expected_tools": [],
+    "must_not_say_hits": [],
+    "output_tokens": 98,
+    "phase_timings_ms": {
+      "check_cache": 1.338625035714358,
+      "entity_resolution": 430.99245795747265,
+      "grounding_validation": 1.2720410013571382,
+      "llm_direct_text_generation": 21820.290758972988,
+      "llm_tool_planning": 24497.409967938438,
+      "load_history": 5.413874983787537,
+      "persist_and_cache": 21.83899999363348,
+      "tool_execution": 97.20145800383762,
+      "validate_input": 1683.7251259712502
+    },
+    "status_code": 200,
+    "tool_call_count": 1,
+    "tool_calls_summary": [
+      {
+        "arguments_keys": [
+          "period_type",
+          "periods",
+          "ticker"
+        ],
+        "tool": "get_fundamentals_history"
+      }
+    ],
+    "tool_overlap_with_expected": [],
+    "tool_result_count": 1,
+    "tool_results_summary": [
+      {
+        "item_count": 1,
+        "status": "ok",
+        "tool": "get_fundamentals_history"
+      }
+    ],
+    "ttft_s": 1.726,
+    "word_count": 78
+  },
+  "id": "ru_meta_eps_trend",
+  "judge": {
+    "dimensions": {
+      "framing": null,
+      "grounding": null,
+      "refusal_judgment": null,
+      "tool_use": null
+    },
+    "notes": "Judge LLM not configured (set DEEPINFRA_API_KEY).",
+    "raw_response": null,
+    "score": null,
+    "verdict": "SKIPPED"
+  },
+  "prompt": "Show me Meta's EPS over the last 4 quarters.",
+  "reasons": [
+    "short_answer words=78"
+  ],
+  "result": {
+    "answer_text": "Here is Meta's (META) EPS over the last four quarters:\n\n| Period | EPS | Source |\n|--------|-----|--------|\n| Q3 FY2025 | $7. | [1] |\n| Q4 FY2025 | $7. | [1] |\n| Q1 FY2026 | $8.88 | [1] |\n| Q2 FY2026 | $7.31 | [1] |\n\nThe data shows quarterly earnings per share as reported in the company's financial statements. The most recent quarter (Q2 FY2026) ended on 2026-06-01, with an EPS of $7.31.",
+    "citations": [
+      {
+        "confidence": 0.88,
+        "entity_name": "META",
+        "id": "tool:fundamentals:META",
+        "item_type": "financial",
+        "published_at": null,
+        "ref": 1,
+        "source_name": "fundamentals",
+        "title": "Fundamentals: META",
+        "url": null
+      }
+    ],
+    "contradictions": [],
+    "error": null,
+    "event_timings": [
+      [
+        "status",
+        1725721
+      ],
+      [
+        "status",
+        1726458
+      ],
+      [
+        "thinking",
+        2158187
+      ],
+      [
+        "status",
+        4837782
+      ],
+      [
+        "tool_call",
+        4838543
+      ],
+      [
+        "tool_result",
+        4936635
+      ],
+      [
+        "token",
+        27052042
+      ],
+      [
+        "token",
+        27052065
+      ],
+      [
+        "token",
+        27052135
+      ],
+      [
+        "token",
+        27052143
+      ],
+      [
+        "token",
+        27052151
+      ],
+      [
+        "token",
+        27052158
+      ],
+      [
+        "token",
+        27052165
+      ],
+      [
+        "token",
+        27052171
+      ],
+      [
+        "token",
+        27054140
+      ],
+      [
+        "token",
+        27054400
+      ],
+      [
+        "final_answer",
+        27054718
+      ],
+      [
+        "citations",
+        27054780
+      ],
+      [
+        "contradictions",
+        27062179
+      ],
+      [
+        "metadata",
+        27079436
+      ],
+      [
+        "done",
+        27079467
+      ]
+    ],
+    "latency_s": 27.09,
+    "metadata": {
+      "intent": "FINANCIAL_DATA",
+      "latency_ms": 27027,
+      "message_id": "019e8564-0ca3-7614-b603-713ad4d39189",
+      "provider": "",
+      "thread_id": "52144473-f7ea-4884-adb7-9a2c93bd8333"
+    },
+    "output_tokens": 98,
+    "phase_timings_ms": {
+      "check_cache": 1.338625035714358,
+      "entity_resolution": 430.99245795747265,
+      "grounding_validation": 1.2720410013571382,
+      "llm_direct_text_generation": 21820.290758972988,
+      "llm_tool_planning": 24497.409967938438,
+      "load_history": 5.413874983787537,
+      "persist_and_cache": 21.83899999363348,
+      "tool_execution": 97.20145800383762,
+      "validate_input": 1683.7251259712502
+    },
+    "question": "Show me Meta's EPS over the last 4 quarters.",
+    "raw_events": [
+      {
+        "data": {
+          "step": "loading_context"
+        },
+        "event": "status"
+      },
+      {
+        "data": {
+          "step": "entity_resolution"
+        },
+        "event": "status"
+      },
+      {
+        "data": {
+          "stage": "tool_classification"
+        },
+        "event": "thinking"
+      },
+      {
+        "data": {
+          "step": "Loading get_fundamentals_history\u2026"
+        },
+        "event": "status"
+      },
+      {
+        "data": {
+          "input": {
+            "period_type": "quarterly",
+            "periods": 4,
+            "ticker": "META"
+          },
+          "label": "Fetching fundamentals...",
+          "status": "running",
+          "tool": "get_fundamentals_history",
+          "type": "tool_call"
+        },
+        "event": "tool_call"
+      },
+      {
+        "data": {
+          "item_count": 1,
+          "status": "ok",
+          "tool": "get_fundamentals_history",
+          "type": "tool_result"
+        },
+        "event": "tool_result"
+      },
+      {
+        "data": {
+          "text": "Here is Meta's (META) EPS over the last "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "four quarters:\n\n| Period | EPS | Source "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "|\n|--------|-----|--------|\n| Q3 FY2025 | $7.14 | "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "[1] |\n| Q4 FY2025 | $7.25 | "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "[1] |\n| Q1 FY2026 | $8.88 | "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "[1] |\n| Q2 FY2026 | $7.31 | "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "[1] |\n\nThe data shows quarterly earnings per "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "share as reported in the company's financial statements. "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "The most recent quarter (Q2 FY2026) ended on "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "2026-06-01, with an EPS of $7.31."
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "Here is Meta's (META) EPS over the last four quarters:\n\n| Period | EPS | Source |\n|--------|-----|--------|\n| Q3 FY2025 | $7. | [1] |\n| Q4 FY2025 | $7. | [1] |\n| Q1 FY2026 | $8.88 | [1] |\n| Q2 FY2026 | $7.31 | [1] |\n\nThe data shows quarterly earnings per share as reported in the company's financial statements. The most recent quarter (Q2 FY2026) ended on 2026-06-01, with an EPS of $7.31."
+        },
+        "event": "final_answer"
+      },
+      {
+        "data": [
+          {
+            "confidence": 0.88,
+            "entity_name": "META",
+            "id": "tool:fundamentals:META",
+            "item_type": "financial",
+            "published_at": null,
+            "ref": 1,
+            "source_name": "fundamentals",
+            "title": "Fundamentals: META",
+            "url": null
+          }
+        ],
+        "event": "citations"
+      },
+      {
+        "data": [],
+        "event": "contradictions"
+      },
+      {
+        "data": {
+          "intent": "FINANCIAL_DATA",
+          "latency_ms": 27027,
+          "message_id": "019e8564-0ca3-7614-b603-713ad4d39189",
+          "provider": "",
+          "thread_id": "52144473-f7ea-4884-adb7-9a2c93bd8333"
+        },
+        "event": "metadata"
+      },
+      {
+        "data": {
+          "phase_timings_ms": {
+            "check_cache": 1.338625035714358,
+            "entity_resolution": 430.99245795747265,
+            "grounding_validation": 1.2720410013571382,
+            "llm_direct_text_generation": 21820.290758972988,
+            "llm_tool_planning": 24497.409967938438,
+            "load_history": 5.413874983787537,
+            "persist_and_cache": 21.83899999363348,
+            "tool_execution": 97.20145800383762,
+            "validate_input": 1683.7251259712502
+          },
+          "type": "done"
+        },
+        "event": "done"
+      }
+    ],
+    "status_code": 200,
+    "tool_calls": [
+      {
+        "arguments": {
+          "period_type": "quarterly",
+          "periods": 4,
+          "ticker": "META"
+        },
+        "name": "get_fundamentals_history"
+      }
+    ],
+    "tool_results": [
+      {
+        "item_count": 1,
+        "status": "ok",
+        "tool": "get_fundamentals_history"
+      }
+    ],
+    "tps": 3.864,
+    "tps_streaming": 4.491,
+    "ttft_s": 1.726
+  },
+  "rubric": {
+    "appropriate_refusal_ok": false,
+    "expected_depth": "medium",
+    "expected_tools": [
+      "get_fundamentals_history"
+    ],
+    "forbidden_facts": [
+      "fabricated_eps_values"
+    ],
+    "required_facts": [
+      "eps_per_quarter",
+      "four_quarters_or_trend"
+    ]
+  },
+  "tags": [
+    "real_user_v2",
+    "trend"
+  ]
+}

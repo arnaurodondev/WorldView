@@ -1,0 +1,106 @@
+{
+  "dimension_avg": {
+    "framing": null,
+    "grounding": null,
+    "refusal_judgment": null,
+    "tool_use": null
+  },
+  "n_records": 6,
+  "per_question": [
+    {
+      "dimensions": {
+        "framing": null,
+        "grounding": null,
+        "refusal_judgment": null,
+        "tool_use": null
+      },
+      "id": "ru_aapl_forward_pe",
+      "notes": "Judge LLM not configured (set DEEPINFRA_API_KEY).",
+      "raw_response": null,
+      "score": null,
+      "slot": "q_ru_aapl_forward_pe",
+      "verdict": "SKIPPED"
+    },
+    {
+      "dimensions": {
+        "framing": null,
+        "grounding": null,
+        "refusal_judgment": null,
+        "tool_use": null
+      },
+      "id": "ru_aapl_pe_simple",
+      "notes": "Judge LLM not configured (set DEEPINFRA_API_KEY).",
+      "raw_response": null,
+      "score": null,
+      "slot": "q_ru_aapl_pe_simple",
+      "verdict": "SKIPPED"
+    },
+    {
+      "dimensions": {
+        "framing": null,
+        "grounding": null,
+        "refusal_judgment": null,
+        "tool_use": null
+      },
+      "id": "ru_amzn_revenue_yoy",
+      "notes": "Judge LLM not configured (set DEEPINFRA_API_KEY).",
+      "raw_response": null,
+      "score": null,
+      "slot": "q_ru_amzn_revenue_yoy",
+      "verdict": "SKIPPED"
+    },
+    {
+      "dimensions": {
+        "framing": null,
+        "grounding": null,
+        "refusal_judgment": null,
+        "tool_use": null
+      },
+      "id": "ru_googl_pe_vs_history",
+      "notes": "Judge LLM not configured (set DEEPINFRA_API_KEY).",
+      "raw_response": null,
+      "score": null,
+      "slot": "q_ru_googl_pe_vs_history",
+      "verdict": "SKIPPED"
+    },
+    {
+      "dimensions": {
+        "framing": null,
+        "grounding": null,
+        "refusal_judgment": null,
+        "tool_use": null
+      },
+      "id": "ru_meta_eps_trend",
+      "notes": "Judge LLM not configured (set DEEPINFRA_API_KEY).",
+      "raw_response": null,
+      "score": null,
+      "slot": "q_ru_meta_eps_trend",
+      "verdict": "SKIPPED"
+    },
+    {
+      "dimensions": {
+        "framing": null,
+        "grounding": null,
+        "refusal_judgment": null,
+        "tool_use": null
+      },
+      "id": "ru_tsla_margin_trend",
+      "notes": "Judge LLM not configured (set DEEPINFRA_API_KEY).",
+      "raw_response": null,
+      "score": null,
+      "slot": "q_ru_tsla_margin_trend",
+      "verdict": "SKIPPED"
+    }
+  ],
+  "schema_version": 1,
+  "score_avg": null,
+  "score_max": null,
+  "score_min": null,
+  "verdict_counts": {
+    "ERROR": 0,
+    "FAIL": 0,
+    "PASS": 0,
+    "SKIPPED": 6,
+    "WARN": 0
+  }
+}
