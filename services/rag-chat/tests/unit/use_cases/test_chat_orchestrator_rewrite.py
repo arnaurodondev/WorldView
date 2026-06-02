@@ -217,3 +217,153 @@ class TestDefeatistRewriteRejected:
         # guard does not fire and the second validate pass accepts it.
         assert passed is True
         assert text == long_rewrite
+
+
+# ── PLAN-0104 W50 — banner suppression on full citation coverage ─────────────
+
+
+class TestW50FullCitationCoverageHelper:
+    """W50 helper unit tests — ``_answer_has_full_citation_coverage``.
+
+    The helper is intentionally conservative: True only when every numeric
+    token is within ±200 chars of a ``[tool_name row N]`` / ``[tool_name]``
+    citation. We pin the success and failure modes so the orchestrator's
+    last-line banner suppression cannot drift silently.
+    """
+
+    def test_full_coverage_with_per_number_citations(self) -> None:
+        from rag_chat.application.use_cases.chat_orchestrator import (
+            _answer_has_full_citation_coverage,
+        )
+
+        text = (
+            "AAPL P/E is 37.73x [query_fundamentals row 0]. "
+            "Revenue last quarter was $84.7B [get_fundamentals_history row 7]. "
+            "EPS came in at $2.18 [query_fundamentals row 0]."
+        )
+        assert _answer_has_full_citation_coverage(text) is True
+
+    def test_missing_citation_on_one_number_returns_false(self) -> None:
+        from rag_chat.application.use_cases.chat_orchestrator import (
+            _answer_has_full_citation_coverage,
+        )
+
+        # Last sentence has a bare number with no citation anywhere within
+        # the ±200 char window. Helper must return False.
+        text = (
+            "AAPL P/E is 37.73x [query_fundamentals row 0]. "
+            + (" filler " * 60)
+            + "Mystery growth was 42.5%."  # uncited and far from prior cite
+        )
+        assert _answer_has_full_citation_coverage(text) is False
+
+    def test_no_numeric_tokens_returns_false(self) -> None:
+        from rag_chat.application.use_cases.chat_orchestrator import (
+            _answer_has_full_citation_coverage,
+        )
+
+        # Conservative behaviour: text with no numbers does NOT trigger
+        # banner suppression — the helper returns False so the legacy path
+        # decides what to do.
+        assert _answer_has_full_citation_coverage("Some prose with no numbers.") is False
+
+    def test_empty_text_returns_false(self) -> None:
+        from rag_chat.application.use_cases.chat_orchestrator import (
+            _answer_has_full_citation_coverage,
+        )
+
+        assert _answer_has_full_citation_coverage("") is False
+
+
+class TestW50BannerSuppressionOnFullCoverage:
+    """W50 integration: ``_run_grounding_validation`` suppresses the
+    banner when both passes fail but the rewrite body is fully cited.
+
+    Round 8 Q5 GOOGL: every number had a ``[query_fundamentals row 0]`` or
+    ``[get_fundamentals_history row 7]`` citation yet the validator's numeric
+    matcher mis-classified unit-suffixed values, emitting the banner. With
+    W50 the helper rescues this case.
+    """
+
+    def test_both_passes_fail_but_full_coverage_suppresses_banner(self) -> None:
+        from rag_chat.application.services.numeric_grounding import FieldKind
+
+        unsupported = (
+            _FakeUnsupported(value=181.5e9, field_kind=FieldKind.REVENUE),
+            _FakeUnsupported(value=7.14, field_kind=FieldKind.EPS),
+        )
+        first = _FakeResult(passed=False, unsupported=unsupported)
+        second = _FakeResult(passed=False, unsupported=unsupported)
+
+        orch = _make_orchestrator()
+        original_response = "Apple revenue."
+        fully_cited_rewrite = (
+            "Apple Q3 revenue was $181.5B [get_fundamentals_history row 7] "
+            "and EPS came in at $7.14 [query_fundamentals row 0]. "
+            "Operating margin held at 30.2% [query_fundamentals row 0]."
+        )
+        pipeline = _make_pipeline_with_stream(rewrite_text=fully_cited_rewrite)
+
+        with patch(
+            "rag_chat.application.services.numeric_grounding.NumericGroundingValidator",
+        ) as v_cls:
+            v_inst = v_cls.return_value
+            v_inst.validate.side_effect = [first, second]
+
+            text, passed = asyncio.run(
+                orch._run_grounding_validation(
+                    p=pipeline,
+                    response=original_response,
+                    tool_items=[],
+                    messages=[],
+                    budget=_make_budget(),
+                )
+            )
+
+        # W50: full citation coverage → no banner, treat as grounded.
+        assert passed is True
+        assert text == fully_cited_rewrite
+        assert "could not be verified" not in text
+
+    def test_both_passes_fail_without_coverage_appends_banner(self) -> None:
+        """Negative path: when the rewrite body is NOT fully cited, the legacy
+        banner-append behaviour is preserved (true fabrications still warned)."""
+        from rag_chat.application.services.numeric_grounding import FieldKind
+
+        unsupported = (
+            _FakeUnsupported(value=181.5e9, field_kind=FieldKind.REVENUE),
+            _FakeUnsupported(value=7.14, field_kind=FieldKind.EPS),
+        )
+        first = _FakeResult(passed=False, unsupported=unsupported)
+        second = _FakeResult(passed=False, unsupported=unsupported)
+
+        orch = _make_orchestrator()
+        original_response = "Apple revenue."
+        # Rewrite mixes a cited number with an uncited one — no full coverage.
+        partially_cited_rewrite = (
+            "Apple Q3 revenue was $181.5B [get_fundamentals_history row 7]. "
+            + (" filler " * 60)
+            + "EPS came in at $7.14 and net income was $25B."  # uncited tail
+        )
+        pipeline = _make_pipeline_with_stream(rewrite_text=partially_cited_rewrite)
+
+        with patch(
+            "rag_chat.application.services.numeric_grounding.NumericGroundingValidator",
+        ) as v_cls:
+            v_inst = v_cls.return_value
+            v_inst.validate.side_effect = [first, second]
+
+            text, passed = asyncio.run(
+                orch._run_grounding_validation(
+                    p=pipeline,
+                    response=original_response,
+                    tool_items=[],
+                    messages=[],
+                    budget=_make_budget(),
+                )
+            )
+
+        # Legacy path: banner appended because helper returned False.
+        assert passed is False
+        assert "could not be verified" in text
+        assert partially_cited_rewrite in text

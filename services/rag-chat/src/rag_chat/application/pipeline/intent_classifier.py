@@ -63,16 +63,59 @@ _INTENT_KEYWORDS: dict[QueryIntent, list[str]] = {
     # so we keep existing specific intents (PORTFOLIO, COMPARISON, REASONING,
     # RELATIONSHIP) ahead of FINANCIAL_DATA — "compare TSLA vs AAPL forward
     # P/E" still routes to COMPARISON as today.
+    # PLAN-0104 W49 / BP-XXX: extend FINANCIAL_DATA triggers to cover bare-ratio
+    # questions ("What's AAPL's P/E?"), margin questions ("Tesla's gross margin
+    # trend?"), cash-flow questions ("Microsoft's FCF?"), and growth questions
+    # ("Amazon's YoY revenue growth?"). Round 8 benchmark showed the LLM
+    # classifier mis-routing these to GENERAL, which skips the FINANCIAL_DATA
+    # addendum (4-section ANSWER STRUCTURE from W31) and produces one-liners.
+    # First-match-wins ordering keeps PORTFOLIO/COMPARISON/REASONING/
+    # RELATIONSHIP ahead of FINANCIAL_DATA so "compare X vs Y margins" still
+    # routes to COMPARISON.
     QueryIntent.FINANCIAL_DATA: [
+        # Price + raw fundamentals
         "price",
-        "p/e",
         "revenue",
         "earnings",
-        "ratio",
         "ebitda",
+        # Ratio names (W30 + W49)
+        "p/e",
+        "pe ratio",
+        "price-to-earnings",
+        "ratio",
         "forward p/e",
         "forward pe",
         "peg",
+        "ev/ebitda",
+        "ev to ebitda",
+        "p/b",
+        "price-to-book",
+        "p/s",
+        "price-to-sales",
+        "dividend yield",
+        "payout ratio",
+        "roe",
+        "roa",
+        "roi",
+        # Margins (W49)
+        "gross margin",
+        "operating margin",
+        "net margin",
+        "ebitda margin",
+        "profit margin",
+        # Cash flow (W49)
+        "free cash flow",
+        "fcf",
+        "cash flow",
+        "capex",
+        # Growth (W49)
+        "revenue growth",
+        "eps growth",
+        "yoy growth",
+        "qoq growth",
+        # Per-share metric
+        "eps",
+        # W30 valuation-stance vocabulary
         "valuation",
         "expensive",
         "cheap",
@@ -118,6 +161,21 @@ _CLASSIFICATION_PROMPT = (
     '- "What is TSLA\'s current P/E ratio?" ->'
     ' {{"intent":"FINANCIAL_DATA","sub_questions":[],'
     '"rephrased_query":"What is Tesla\'s current price-to-earnings ratio?"}}\n'
+    # PLAN-0104 W49: bare-ratio / margin / cash-flow / growth questions about a
+    # specific entity MUST classify as FINANCIAL_DATA so the snapshot/history
+    # toolchain fires and the 4-section ANSWER STRUCTURE addendum is included.
+    "- \"What's AAPL's P/E ratio?\" ->"
+    ' {{"intent":"FINANCIAL_DATA","sub_questions":[],'
+    '"rephrased_query":"What is Apple\'s current P/E ratio?"}}\n'
+    '- "Show me Meta\'s EPS over the last 4 quarters." ->'
+    ' {{"intent":"FINANCIAL_DATA","sub_questions":[],'
+    '"rephrased_query":"What is Meta\'s diluted EPS for the last 4 quarters?"}}\n'
+    "- \"What's Amazon's YoY revenue growth?\" ->"
+    ' {{"intent":"FINANCIAL_DATA","sub_questions":[],'
+    '"rephrased_query":"What is Amazon\'s year-over-year revenue growth?"}}\n'
+    '- "How has Tesla\'s gross margin trended in the last year?" ->'
+    ' {{"intent":"FINANCIAL_DATA","sub_questions":[],'
+    '"rephrased_query":"What is Tesla\'s gross margin trend over the trailing four quarters?"}}\n'
     '- "How do interest rates affect stock prices?" ->'
     ' {{"intent":"GENERAL","sub_questions":[],'
     '"rephrased_query":"How do interest rate changes affect equity valuations?"}}\n'
