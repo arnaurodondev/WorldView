@@ -262,3 +262,200 @@ async def test_stream_chat_no_fallback_when_primary_succeeds() -> None:
     # Exactly one upstream call — fallback must NOT trigger on the happy path.
     assert [c["model"] for c in calls] == ["primary/ok-model"]
     await client.aclose()
+
+
+# ── PLAN-0104 W46 / BP-NEW ────────────────────────────────────────────────────
+# Same-provider model fallback when the primary model raises a retriable error
+# (HTTP 429 / 5xx / timeout) BEFORE yielding any chunk.  Root cause: Round 7 v2
+# Q1 ``ru_aapl_pe_simple`` (second-turn 429 chain-exhaustion → W36 fallback)
+# and Q2 ``ru_meta_eps_trend`` (first-turn 429 chain-exhaustion → empty answer).
+# Curl reproduction: rotating the DeepInfra key (2026-06-02) tightened the
+# per-model rate limit on Qwen3-235B specifically; Llama-3.1-8B on the same
+# key was unaffected.  The adapter now retries on the configured fallback
+# model for retriable errors in BOTH ``chat_with_tools`` (first turn) and
+# ``stream_chat`` (second turn), not only on the zero-chunk path covered by W43.
+
+
+@pytest.mark.asyncio
+async def test_stream_chat_falls_back_on_429_from_primary() -> None:
+    """Primary 429 before any chunk -> adapter retries on the fallback model.
+
+    This covers W46 for the second-turn path: when the chain has only DeepInfra
+    wired, a 429 on Qwen3-235B should not propagate as ``RuntimeError`` to the
+    orchestrator's W36 fallback — the lighter Llama model on the SAME key
+    almost always answers immediately.
+    """
+    calls: list[dict] = []
+
+    def _handler(request: httpx.Request) -> httpx.Response:
+        import json as _json
+
+        body = _json.loads(request.content)
+        calls.append({"model": body["model"]})
+        if body["model"] == "primary/rate-limited-model":
+            return httpx.Response(429, content=b'{"error":"rate_limited"}')
+        return httpx.Response(200, content=_sse_with_content("recovered answer"))
+
+    transport = httpx.MockTransport(_handler)
+    client = httpx.AsyncClient(transport=transport)
+    adapter = DeepInfraCompletionAdapter(
+        api_key="x",
+        model="primary/rate-limited-model",
+        http_client=client,
+        stream_chat_fallback_model="fallback/light-chat-model",
+    )
+
+    chunks = [c async for c in adapter.stream_chat([{"role": "user", "content": "hi"}])]
+    assert "".join(chunks) == "recovered answer"
+    assert [c["model"] for c in calls] == [
+        "primary/rate-limited-model",
+        "fallback/light-chat-model",
+    ]
+    await client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_stream_chat_propagates_non_retriable_error_without_fallback() -> None:
+    """4xx auth/validation errors propagate immediately — fallback wouldn't help.
+
+    A 401 on the primary means the API key is wrong; the fallback model would
+    just 401 too.  We must NOT double the upstream cost on misconfiguration.
+    """
+    calls: list[dict] = []
+
+    def _handler(request: httpx.Request) -> httpx.Response:
+        import json as _json
+
+        body = _json.loads(request.content)
+        calls.append({"model": body["model"]})
+        return httpx.Response(401, content=b'{"error":"unauthorized"}')
+
+    transport = httpx.MockTransport(_handler)
+    client = httpx.AsyncClient(transport=transport)
+    adapter = DeepInfraCompletionAdapter(
+        api_key="x",
+        model="primary/auth-broken",
+        http_client=client,
+        stream_chat_fallback_model="fallback/light-chat-model",
+    )
+
+    with pytest.raises(httpx.HTTPStatusError):
+        async for _ in adapter.stream_chat([{"role": "user", "content": "hi"}]):
+            pass
+    # Only ONE upstream call — fallback must NOT trigger on 401.
+    assert [c["model"] for c in calls] == ["primary/auth-broken"]
+    await client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_chat_with_tools_falls_back_on_429_from_primary() -> None:
+    """First-turn 429 on the primary -> adapter retries on the fallback model.
+
+    This is the W46 fix for Q2 ``ru_meta_eps_trend``: previously the chain
+    exhausted its retry budget on the rate-limited primary and the orchestrator
+    emitted ``llm_first_turn_failed`` with an empty answer.  After W46 the
+    in-adapter fallback recovers the call on the same key.
+    """
+    calls: list[dict] = []
+
+    def _handler(request: httpx.Request) -> httpx.Response:
+        import json as _json
+
+        body = _json.loads(request.content)
+        calls.append({"model": body["model"]})
+        if body["model"] == "primary/rate-limited-model":
+            return httpx.Response(429, content=b'{"error":"rate_limited"}')
+        return httpx.Response(
+            200,
+            json={
+                "choices": [
+                    {
+                        "message": {"content": "recovered", "tool_calls": []},
+                        "finish_reason": "stop",
+                    }
+                ],
+                "usage": {"prompt_tokens": 1, "completion_tokens": 1},
+            },
+        )
+
+    transport = httpx.MockTransport(_handler)
+    client = httpx.AsyncClient(transport=transport)
+    adapter = DeepInfraCompletionAdapter(
+        api_key="x",
+        model="primary/rate-limited-model",
+        http_client=client,
+        stream_chat_fallback_model="fallback/light-chat-model",
+    )
+
+    resp = await adapter.chat_with_tools(messages=[{"role": "user", "content": "hi"}])
+    assert resp.text == "recovered"
+    assert [c["model"] for c in calls] == [
+        "primary/rate-limited-model",
+        "fallback/light-chat-model",
+    ]
+    await client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_chat_with_tools_propagates_non_retriable_error() -> None:
+    """4xx auth on first-turn must propagate — fallback wouldn't help."""
+    calls: list[dict] = []
+
+    def _handler(request: httpx.Request) -> httpx.Response:
+        import json as _json
+
+        body = _json.loads(request.content)
+        calls.append({"model": body["model"]})
+        return httpx.Response(401, content=b'{"error":"unauthorized"}')
+
+    transport = httpx.MockTransport(_handler)
+    client = httpx.AsyncClient(transport=transport)
+    adapter = DeepInfraCompletionAdapter(
+        api_key="x",
+        model="primary/auth-broken",
+        http_client=client,
+        stream_chat_fallback_model="fallback/light-chat-model",
+    )
+
+    with pytest.raises(httpx.HTTPStatusError):
+        await adapter.chat_with_tools(messages=[{"role": "user", "content": "hi"}])
+    assert [c["model"] for c in calls] == ["primary/auth-broken"]
+    await client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_chat_with_tools_no_fallback_when_primary_succeeds() -> None:
+    """Happy path: one upstream call, fallback model is never touched."""
+    calls: list[dict] = []
+
+    def _handler(request: httpx.Request) -> httpx.Response:
+        import json as _json
+
+        body = _json.loads(request.content)
+        calls.append({"model": body["model"]})
+        return httpx.Response(
+            200,
+            json={
+                "choices": [
+                    {
+                        "message": {"content": "primary answer", "tool_calls": []},
+                        "finish_reason": "stop",
+                    }
+                ],
+                "usage": {"prompt_tokens": 1, "completion_tokens": 1},
+            },
+        )
+
+    transport = httpx.MockTransport(_handler)
+    client = httpx.AsyncClient(transport=transport)
+    adapter = DeepInfraCompletionAdapter(
+        api_key="x",
+        model="primary/ok-model",
+        http_client=client,
+        stream_chat_fallback_model="fallback/light-chat-model",
+    )
+
+    resp = await adapter.chat_with_tools(messages=[{"role": "user", "content": "hi"}])
+    assert resp.text == "primary answer"
+    assert [c["model"] for c in calls] == ["primary/ok-model"]
+    await client.aclose()

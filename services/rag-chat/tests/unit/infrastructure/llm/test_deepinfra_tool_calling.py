@@ -287,6 +287,12 @@ async def test_deepinfra_chat_with_tools_timeout_raises_named_error() -> None:
         http_client=mock_client,
         timeout=30.0,
         chat_with_tools_timeout=0.05,  # 50ms — guarantees the timeout fires
+        # W46: disable the same-provider model fallback so this test isolates
+        # the FIX-LIVE-X timeout-message contract for the primary model.  The
+        # W46 fallback behaviour (retry on Llama on timeout) has dedicated
+        # tests in test_deepinfra_adapter.py — we don't want that path active
+        # here because the mock client would hang the fallback model too.
+        stream_chat_fallback_model=None,
     )
 
     with pytest.raises(TimeoutError) as excinfo:

@@ -24,6 +24,31 @@ log = structlog.get_logger(__name__)  # type: ignore[no-any-return]
 _DEFAULT_MODEL = "deepseek-ai/DeepSeek-R1-Distill-Llama-70B"
 _BASE_URL = "https://api.deepinfra.com/v1/openai"
 
+# PLAN-0104 W46 / BP-NEW: HTTP statuses that indicate a transient condition on
+# the *model* (rate-limit / upstream gateway) — worth retrying on the configured
+# fallback model on the SAME provider before propagating to the chain.  4xx auth
+# / validation errors and 500s on the wire are NOT in this set because they
+# would just recur on the fallback model.
+_FALLBACK_RETRIABLE_HTTP_STATUS: frozenset[int] = frozenset({429, 502, 503, 504})
+
+
+def _is_retriable_chat_failure(exc: BaseException) -> bool:
+    """Return True when an in-adapter model fallback could plausibly recover.
+
+    Conservative on purpose: only timeouts, connect/read errors, and the
+    retriable HTTP status codes above qualify.  Anything else (KeyError,
+    ValueError, NotImplementedError, 4xx auth) bypasses the fallback and
+    propagates so the orchestrator surfaces the real misconfiguration
+    instead of doubling the upstream cost.
+    """
+    if isinstance(exc, TimeoutError):
+        return True
+    if isinstance(exc, httpx.ConnectError | httpx.ReadError | httpx.RemoteProtocolError):
+        return True
+    if isinstance(exc, httpx.HTTPStatusError):
+        return exc.response.status_code in _FALLBACK_RETRIABLE_HTTP_STATUS
+    return False
+
 
 class DeepInfraCompletionAdapter:
     """Stream token chunks from DeepInfra (OpenAI-compat API).
@@ -186,20 +211,32 @@ class DeepInfraCompletionAdapter:
         WHY stream=False: tool_call deltas in streaming mode require reassembling
         JSON arguments across multiple chunks; non-streaming is simpler and the
         latency difference is negligible for tool-use turns (typically <2 s).
-        """
-        payload: dict[str, object] = {
-            "model": self._model,
-            "messages": messages,
-            "stream": False,
-            "max_tokens": max_tokens,
-            "temperature": temperature,
-        }
-        if tools:
-            # OpenAI format: list of {"type": "function", "function": {...}}
-            payload["tools"] = tools
-            payload["tool_choice"] = "auto"
 
-        async def _do_request() -> LLMToolResponse:
+        PLAN-0104 W46 / BP-NEW (first-turn rate-limit recovery):
+        Round 7 v2 hit DeepInfra 429s on the Qwen3-235B primary model that
+        survived the in-chain retry budget (2 attempts x ~3s).  The chain then
+        raised ``RuntimeError`` and the orchestrator emitted
+        ``llm_first_turn_failed`` even though a smaller, far less rate-limited
+        model on the SAME key (Llama-3.1-8B at 8x lower cost) would have
+        succeeded.  When ``self._stream_chat_fallback_model`` is configured and
+        the primary call fails with a retriable error (429 / 5xx / timeout),
+        we retry once on the fallback model before propagating.  Non-retriable
+        errors (4xx auth/validation) propagate immediately — they would just
+        recur on the fallback.
+        """
+
+        async def _do_request(model: str) -> LLMToolResponse:
+            payload: dict[str, object] = {
+                "model": model,
+                "messages": messages,
+                "stream": False,
+                "max_tokens": max_tokens,
+                "temperature": temperature,
+            }
+            if tools:
+                # OpenAI format: list of {"type": "function", "function": {...}}
+                payload["tools"] = tools
+                payload["tool_choice"] = "auto"
             resp = await self._client.post(
                 f"{_BASE_URL}/chat/completions",
                 json=payload,
@@ -226,18 +263,36 @@ class DeepInfraCompletionAdapter:
                 usage=usage,
             )
 
-        # FIX-LIVE-X (2026-05-25): wrap TimeoutError so the failure surfaces
-        # with a non-empty error message in provider_chat_with_tools_failed
-        # logs (str(TimeoutError()) is "" by default — which is why the Q6
-        # failure was a black box until this fix).
+        async def _call(model: str) -> LLMToolResponse:
+            # FIX-LIVE-X (2026-05-25): wrap TimeoutError so the failure surfaces
+            # with a non-empty error message in provider_chat_with_tools_failed
+            # logs (str(TimeoutError()) is "" by default — which is why the Q6
+            # failure was a black box until this fix).
+            try:
+                return await asyncio.wait_for(_do_request(model), timeout=self._chat_with_tools_timeout)
+            except TimeoutError as exc:
+                raise TimeoutError(
+                    f"deepinfra chat_with_tools timed out after {self._chat_with_tools_timeout}s "
+                    f"(model={model}, n_messages={len(messages)}, "
+                    f"n_tools={len(tools) if tools else 0})"
+                ) from exc
+
         try:
-            return await asyncio.wait_for(_do_request(), timeout=self._chat_with_tools_timeout)
-        except TimeoutError as exc:
-            raise TimeoutError(
-                f"deepinfra chat_with_tools timed out after {self._chat_with_tools_timeout}s "
-                f"(model={self._model}, n_messages={len(messages)}, "
-                f"n_tools={len(tools) if tools else 0})"
-            ) from exc
+            return await _call(self._model)
+        except Exception as exc:
+            fallback_model = self._stream_chat_fallback_model
+            if not fallback_model or fallback_model == self._model or not _is_retriable_chat_failure(exc):
+                raise
+            log.warning(  # type: ignore[no-any-return]
+                "deepinfra_chat_with_tools_model_fallback",
+                primary_model=self._model,
+                fallback_model=fallback_model,
+                n_messages=len(messages),
+                n_tools=len(tools) if tools else 0,
+                reason=type(exc).__name__,
+                error=str(exc) or repr(exc),
+            )
+            return await _call(fallback_model)
 
     async def _stream_chat_one_model(
         self,
@@ -314,30 +369,52 @@ class DeepInfraCompletionAdapter:
         as the primary stream completes (one extra event-loop tick).
         """
         primary_chunks: list[str] = []
-        async for chunk in self._stream_chat_one_model(
-            messages,
-            model=self._model,
-            max_tokens=max_tokens,
-            temperature=temperature,
-        ):
-            primary_chunks.append(chunk)
+        # PLAN-0104 W46: track whether the primary failed mid-setup (e.g. 429
+        # on raise_for_status) vs completed empty (zero-chunk).  Both paths
+        # now feed the same in-adapter fallback so the orchestrator never sees
+        # a raw 429 from the synthesis turn when a cheaper model is configured.
+        _primary_exc: BaseException | None = None
+        try:
+            async for chunk in self._stream_chat_one_model(
+                messages,
+                model=self._model,
+                max_tokens=max_tokens,
+                temperature=temperature,
+            ):
+                primary_chunks.append(chunk)
+        except Exception as exc:
+            _primary_exc = exc
 
         if primary_chunks:
+            # Got at least one token from the primary — emit and finish.
+            # We DON'T fall back mid-stream because partial tokens cannot be
+            # rewound on the wire (would emit duplicates to the client).
             for chunk in primary_chunks:
                 yield chunk
             return
 
-        # Zero-chunk primary stream — retry once on the fallback model if configured.
         fallback_model = self._stream_chat_fallback_model
         if not fallback_model or fallback_model == self._model:
+            # No fallback configured; propagate any captured exception so the
+            # provider chain sees the real failure mode (W40 zero-chunk guard
+            # + W36 degraded-synthesis still catch this downstream).
+            if _primary_exc is not None:
+                raise _primary_exc
             return
+
+        # If the primary raised something non-retriable (4xx auth, KeyError,
+        # NotImplementedError, ...), the fallback model would not help.
+        # Propagate so the chain can fall over to the next provider instead.
+        if _primary_exc is not None and not _is_retriable_chat_failure(_primary_exc):
+            raise _primary_exc
 
         log.warning(  # type: ignore[no-any-return]
             "deepinfra_stream_chat_model_fallback",
             primary_model=self._model,
             fallback_model=fallback_model,
             n_messages=len(messages),
-            reason="zero_chunk_primary",
+            reason=(type(_primary_exc).__name__ if _primary_exc is not None else "zero_chunk_primary"),
+            error=(str(_primary_exc) or repr(_primary_exc)) if _primary_exc is not None else "",
         )
         async for chunk in self._stream_chat_one_model(
             messages,
