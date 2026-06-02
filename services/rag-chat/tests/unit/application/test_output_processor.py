@@ -110,3 +110,46 @@ def test_output_empty_input(processor: OutputProcessor) -> None:
     answer, citations = processor.process("", [])
     assert answer == ""
     assert citations == []
+
+
+# ── PLAN-0104 W28-1 / BP-645 regression tests ────────────────────────────────
+#
+# The bare-citation stripper used to swallow the post-decimal digits of
+# values like $7.14 (matching "14" as a citation), turning "$7.14" into
+# "$7.". The (?<!\.) lookbehind below guards every numeric form that has
+# a decimal in front of a 1-30 integer.
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize(
+    "raw",
+    [
+        "EPS was $7.14 this quarter [1].",
+        "EPS was $5.11 this quarter [1].",
+        "Price was $1.10 [1].",
+        "Margin grew 0.25% [1].",
+        "Multiple expanded to 1.10x [1].",
+        "In Q3 2026 revenue rose [1].",
+    ],
+)
+def test_output_preserves_decimal_values(processor: OutputProcessor, raw: str) -> None:
+    """Decimal-fragment digits (e.g. the .14 in $7.14) must not be stripped."""
+    items = [_item()]
+    answer, _ = processor.process(raw, items)
+    # Identify the literal numeric token we want preserved.
+    for token in ("$7.14", "$5.11", "$1.10", "0.25%", "1.10x", "Q3 2026"):
+        if token in raw:
+            assert token in answer, f"Token {token!r} was stripped from {answer!r}"
+            break
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("bare", ["1", "12", "30"])
+def test_output_strips_bare_citation_integers(processor: OutputProcessor, bare: str) -> None:
+    """Bare citation-range integers NOT wrapped in [N] are still stripped."""
+    items = [_item()]
+    raw = f"Apple grew strongly {bare} this quarter [1]."
+    answer, _ = processor.process(raw, items)
+    # The bare digit should be gone; the bracketed [1] citation survives.
+    assert f" {bare} " not in answer
+    assert "[1]" in answer

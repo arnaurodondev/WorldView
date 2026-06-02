@@ -393,3 +393,63 @@ class TestRationalisationDetection:
         result = self.v.validate(text, [])
         prose_failures = [u for u in result.unsupported if u.field_kind is FieldKind.PROSE]
         assert len(prose_failures) == 1, prose_failures
+
+
+# ── PLAN-0104 W28-3/W28-4 regression tests ────────────────────────────────────
+
+
+class TestEntityTagForToolPrefix:
+    """W28-3 / BP-646 — `tool:<name>:<TICKER>` item_ids must yield a ticker tag."""
+
+    def test_tool_prefix_extracts_ticker(self) -> None:
+        from rag_chat.application.services.numeric_grounding import _entity_tag_for
+
+        @dataclass
+        class _Row:
+            item_id: str
+
+        assert _entity_tag_for(_Row(item_id="tool:fundamentals:AMZN")) == "amzn"
+        assert _entity_tag_for(_Row(item_id="tool:price_history:NVDA")) == "nvda"
+
+    def test_bare_ticker_underscore_still_works(self) -> None:
+        from rag_chat.application.services.numeric_grounding import _entity_tag_for
+
+        @dataclass
+        class _Row:
+            item_id: str
+
+        assert _entity_tag_for(_Row(item_id="AAPL_2026Q1")) == "aapl"
+
+    def test_unknown_form_returns_empty(self) -> None:
+        from rag_chat.application.services.numeric_grounding import _entity_tag_for
+
+        @dataclass
+        class _Row:
+            item_id: str
+
+        assert _entity_tag_for(_Row(item_id="random-id-9999")) == ""
+
+
+class TestClassifyNumberQuarterGuard:
+    """W28-4 / BP-647 — bare "Q2" / "Q3" digits must NOT classify as REVENUE."""
+
+    def test_quarter_digit_with_revenue_context_returns_unknown(self) -> None:
+        # Context as it would be seen by the classifier (already lower-cased).
+        # "Q2 2026 revenue" → token "2", value=2.
+        kind = classify_number(2.0, "2", "q2 2026 revenue: $10b")
+        assert kind is FieldKind.UNKNOWN
+
+    def test_q3_label_returns_unknown(self) -> None:
+        kind = classify_number(3.0, "3", "q3 2026 revenue rose")
+        assert kind is FieldKind.UNKNOWN
+
+    def test_real_revenue_still_revenue(self) -> None:
+        # No Q-prefix: a value of 10B with revenue context still classifies.
+        kind = classify_number(10.0e9, "$10B", "revenue of $10b last quarter")
+        assert kind is FieldKind.REVENUE
+
+    def test_quarter_only_triggers_with_matching_q_digit(self) -> None:
+        # Context mentions Q1 but token is "3" — guard should NOT fire,
+        # so context-keyword routing still classifies as REVENUE.
+        kind = classify_number(3.0, "3", "q1 2026 revenue: 3 billion")
+        assert kind is FieldKind.REVENUE

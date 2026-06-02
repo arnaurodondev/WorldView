@@ -51,6 +51,9 @@ _BARE_CITATION_INT_RE = re.compile(
     r"(?<!\[)"  # not preceded by [ (not already a citation)
     r"(?<!\$)"  # not preceded by $ (not a currency value)
     r"(?<!\d)"  # not preceded by digit (not mid-number like "2024")
+    r"(?<!\.)"  # PLAN-0104 W28-1 / BP-645: not preceded by '.' — guards the
+    # post-decimal digits of "$7.14", "0.25%", "1.10x" so we don't strip
+    # the "14"/"11" half of a decimal as a phantom bare citation.
     r"\b([1-9]|[12]\d|30)\b"  # integers 1-30 (citation-range only)
     r"(?!\])"  # not followed by ] (not an existing citation)
     r"(?!\d)"  # not followed by digit (not a year)

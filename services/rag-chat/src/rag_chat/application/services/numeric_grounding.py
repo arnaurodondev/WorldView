@@ -280,6 +280,25 @@ def classify_number(
     if not has_currency and not suffix and value == int(value) and int(value) in _YEAR_RANGE:
         return FieldKind.YEAR
 
+    # ── PLAN-0104 W28-4 / BP-647 — quarter-label guard ─────────────────
+    # Bare small integers that look like quarter labels (e.g. "Q2"
+    # extracted as the digit "2") must NOT fall through into the
+    # REVENUE classifier just because the surrounding context contains
+    # the word "revenue" ("Q2 2026 revenue:" hits revenue 7+ times in
+    # benchmark traces). If the raw token has no currency / no suffix /
+    # no decimal, and the context contains a Q<digit> token matching
+    # the integer value, treat it as a quarter label → UNKNOWN.
+    if (
+        not has_currency
+        and not has_pct
+        and not suffix
+        and "." not in raw_token
+        and value == int(value)
+        and 1 <= int(value) <= 4
+        and re.search(rf"\bq{int(value)}\b", context)
+    ):
+        return FieldKind.UNKNOWN
+
     # ── Context keyword routing ────────────────────────────────────────
     # Order matters — "P/E ratio" beats "ratio" alone, "EPS" beats
     # "earnings" so EPS doesn't get classified as REVENUE.
@@ -384,6 +403,13 @@ class ToolValue:
 # letters, optionally followed by a dot+letter exchange suffix.
 _ITEM_ID_TICKER_RE = re.compile(r"^([A-Z]{1,5}(?:\.[A-Z]{1,2})?)[_\-]")
 
+# PLAN-0104 W28-3 / BP-646 — match the trailing ticker of namespaced
+# tool item_ids like ``tool:fundamentals:AMZN`` or
+# ``tool:price_history:NVDA``. Without this matcher the entity-tag
+# falls through to "" and the validator's per-entity candidate pool
+# bleeds across questions in the same conversation.
+_TOOL_PREFIX_TICKER_RE = re.compile(r"^tool:[a-z_]+:([A-Z]{1,5}(?:\.[A-Z]{1,2})?)\b")
+
 
 def _entity_tag_for(raw: Any) -> str:
     """Extract an entity tag from a tool-result row, best-effort.
@@ -409,6 +435,12 @@ def _entity_tag_for(raw: Any) -> str:
     if item_id is None and isinstance(raw, dict):
         item_id = raw.get("item_id")
     if isinstance(item_id, str) and item_id:
+        # PLAN-0104 W28-3: namespaced "tool:<name>:<TICKER>" form first,
+        # because the bare _ITEM_ID_TICKER_RE expects an underscore/dash
+        # separator and would not match the colon-separated form.
+        m_tool = _TOOL_PREFIX_TICKER_RE.match(item_id)
+        if m_tool:
+            return m_tool.group(1).lower()
         m = _ITEM_ID_TICKER_RE.match(item_id)
         if m:
             return m.group(1).lower()

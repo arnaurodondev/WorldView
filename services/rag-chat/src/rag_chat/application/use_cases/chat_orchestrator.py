@@ -2269,6 +2269,28 @@ class ChatOrchestratorUseCase:
             ],
         )
 
+        # PLAN-0104 W28-5 / BP-648 — Guard A: skip rewrite when the unsupported
+        # set is dominated by quarter-label-style false positives. When >=80% of
+        # unsupported items are REVENUE-classified with value<100 (i.e. "Q2"
+        # parsed as revenue=2.0), the validator is mis-classifying and the
+        # rewrite turn will tell the LLM to remove correct numbers. Skip
+        # rewrite entirely and append the banner to the original.
+        from rag_chat.application.services.numeric_grounding import FieldKind
+
+        _total = len(first_result.unsupported)
+        if _total > 0:
+            _small_rev = sum(
+                1 for u in first_result.unsupported if u.field_kind == FieldKind.REVENUE and abs(u.value) < 100
+            )
+            if _small_rev / _total >= 0.8:
+                log.warning(  # type: ignore[no-any-return]
+                    "numeric_grounding_rewrite_skipped_small_revenue",
+                    small_rev_ratio=_small_rev / _total,
+                    total=_total,
+                )
+                rag_grounding_validation_total.labels(result="failed_banner").inc()
+                return response + "\n\n⚠ Some numbers could not be verified against retrieved data.", False
+
         # Build the rewrite re-prompt. We list each unsupported number
         # with the closest tool value so the LLM can either correct or
         # mark it [unverified].
@@ -2321,6 +2343,21 @@ class ChatOrchestratorUseCase:
                 rewritten += chunk
         except Exception as exc:
             log.warning("numeric_grounding_rewrite_failed", error=str(exc))  # type: ignore[no-any-return]
+            rag_grounding_validation_total.labels(result="failed_banner").inc()
+            return response + "\n\n⚠ Some numbers could not be verified against retrieved data.", False
+
+        # PLAN-0104 W28-5 / BP-648 — Guard B: reject defeatist short rewrites.
+        # When the rewrite starts with a refusal phrase AND is shorter than the
+        # original, the LLM has chosen to give up rather than fix numbers. Prefer
+        # the original (with banner) so the user keeps the useful content.
+        _r_strip = rewritten.lstrip()
+        _refusal_prefixes = ("I cannot", "I am unable", "I'm unable", "I can't")
+        if any(_r_strip.startswith(p) for p in _refusal_prefixes) and len(rewritten) < len(response):
+            log.warning(  # type: ignore[no-any-return]
+                "numeric_grounding_rewrite_rejected_defeatist",
+                rewrite_len=len(rewritten),
+                response_len=len(response),
+            )
             rag_grounding_validation_total.labels(result="failed_banner").inc()
             return response + "\n\n⚠ Some numbers could not be verified against retrieved data.", False
 
