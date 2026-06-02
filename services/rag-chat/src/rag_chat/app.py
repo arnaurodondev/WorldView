@@ -234,6 +234,10 @@ def _wire_orchestrator(app: FastAPI, settings: RagChatSettings, valkey_client: V
                 # 5-tool message stack) timed out before HTTP dispatch and the
                 # error surfaced as a blank `llm_first_turn_failed` to the user.
                 chat_with_tools_timeout=settings.deepinfra_tool_call_timeout_seconds,
+                # PLAN-0104 W43 / BP-NEW: same-provider model fallback on
+                # zero-chunk SSE.  Empty string disables (W40 chain failover +
+                # W36 degraded-synthesis fallback still apply).
+                stream_chat_fallback_model=settings.deepinfra_stream_chat_fallback_model or None,
             )
         )
     if _openrouter_api_key:

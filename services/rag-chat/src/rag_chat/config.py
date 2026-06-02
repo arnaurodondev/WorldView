@@ -93,6 +93,17 @@ class Settings(BaseSettings):
     # Default raised to 90s; lowered in tests via env var when needed.
     deepinfra_tool_call_timeout_seconds: float = 90.0  # RAG_CHAT_DEEPINFRA_TOOLCALL_TIMEOUT
 
+    # PLAN-0104 W43 / BP-NEW: same-provider model fallback for second-turn
+    # synthesis.  When DeepInfra returns HTTP 200 + empty SSE (zero content
+    # frames) on a long multi-tool synthesis with the primary completion
+    # model, the adapter retries once with this lighter chat model on the
+    # SAME provider.  Required because most live deployments only have the
+    # DeepInfra key wired (W40 cross-provider failover is a no-op).  Set
+    # to "" via env var to disable.
+    deepinfra_stream_chat_fallback_model: str = (
+        "meta-llama/Meta-Llama-3.1-8B-Instruct"  # RAG_CHAT_DEEPINFRA_STREAM_FALLBACK_MODEL
+    )
+
     # FIX-LIVE-EE (2026-05-25): Provider-chain exponential backoff for the
     # iteration-0 chat_with_tools turn. Q4 v1 + similar queries surfaced a
     # transient DeepInfra failure rate of 60-100% under chained-test load (5x

@@ -12,6 +12,7 @@ import logging
 from typing import TYPE_CHECKING
 from unittest.mock import AsyncMock
 
+import httpx
 import pytest
 import structlog
 from rag_chat.infrastructure.llm.deepinfra_adapter import DeepInfraCompletionAdapter
@@ -130,3 +131,134 @@ def test_openrouter_tool_call_bad_json_redacts_raw_arguments(caplog) -> None:
     assert len(result) == 1
     assert result[0].input == {}
     _assert_redacted(caplog.records)
+
+
+# ── PLAN-0104 W43 / BP-NEW ────────────────────────────────────────────────────
+# Same-provider model fallback when the primary completion model returns an
+# empty SSE stream on second-turn synthesis.  Root cause: Round 6 Q5
+# ``ru_googl_pe_vs_history`` — DeepInfra responded 200 OK + immediate
+# ``data: [DONE]`` (no content frames) after a ~56s multi-tool call against
+# the Qwen3-235B primary.  W40 cross-provider failover could not help because
+# the live stack only has DeepInfra wired.  The adapter now transparently
+# retries with a lighter chat model on the SAME provider before raising.
+
+
+def _sse_done_only() -> bytes:
+    """SSE body that reproduces the zero-chunk failure mode (just [DONE])."""
+    return b"data: [DONE]\n\n"
+
+
+def _sse_with_content(text: str) -> bytes:
+    """SSE body that yields a single content delta then [DONE]."""
+    import json as _json
+
+    frame = {"choices": [{"delta": {"content": text}}]}
+    return f"data: {_json.dumps(frame)}\n\ndata: [DONE]\n\n".encode()
+
+
+@pytest.mark.asyncio
+async def test_stream_chat_falls_back_to_secondary_model_on_zero_chunk() -> None:
+    """Primary model emits no content frames → adapter retries on the fallback model.
+
+    This is the W43 regression: the primary (Qwen3-235B in prod) returned a
+    200 OK + [DONE]-only SSE; without this fix the orchestrator's W36 path
+    would have synthesised a degraded answer.  With the fix we recover a real
+    LLM answer by retrying the SAME provider with the lighter fallback model.
+    """
+    calls: list[dict] = []
+
+    def _handler(request: httpx.Request) -> httpx.Response:
+        # Record which model each request used so we can assert the fallback
+        # was actually attempted with the alternate model id.
+        import json as _json
+
+        body = _json.loads(request.content)
+        calls.append({"model": body["model"]})
+        if body["model"] == "primary/zero-chunk-model":
+            # Primary: 200 OK + [DONE] only, no content frames — reproduces
+            # the live failure mode observed against Qwen3-235B.
+            return httpx.Response(200, content=_sse_done_only())
+        # Secondary: returns a real answer.
+        return httpx.Response(200, content=_sse_with_content("recovered answer"))
+
+    transport = httpx.MockTransport(_handler)
+    client = httpx.AsyncClient(transport=transport)
+    adapter = DeepInfraCompletionAdapter(
+        api_key="x",
+        model="primary/zero-chunk-model",
+        http_client=client,
+        stream_chat_fallback_model="fallback/light-chat-model",
+    )
+
+    chunks: list[str] = []
+    async for chunk in adapter.stream_chat([{"role": "user", "content": "hi"}]):
+        chunks.append(chunk)
+
+    # Adapter must have retried — two HTTP requests, second with fallback model.
+    assert [c["model"] for c in calls] == [
+        "primary/zero-chunk-model",
+        "fallback/light-chat-model",
+    ]
+    # The user-visible stream must carry the secondary model's content.
+    assert "".join(chunks) == "recovered answer"
+    await client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_stream_chat_no_fallback_when_disabled() -> None:
+    """``stream_chat_fallback_model=None`` preserves legacy zero-chunk behaviour.
+
+    We rely on this so the chain-level W40 + orchestrator-level W36 paths
+    remain testable in isolation and so operators can opt out via env var.
+    """
+    calls: list[dict] = []
+
+    def _handler(request: httpx.Request) -> httpx.Response:
+        import json as _json
+
+        body = _json.loads(request.content)
+        calls.append({"model": body["model"]})
+        return httpx.Response(200, content=_sse_done_only())
+
+    transport = httpx.MockTransport(_handler)
+    client = httpx.AsyncClient(transport=transport)
+    adapter = DeepInfraCompletionAdapter(
+        api_key="x",
+        model="primary/zero-chunk-model",
+        http_client=client,
+        stream_chat_fallback_model=None,
+    )
+
+    chunks = [c async for c in adapter.stream_chat([{"role": "user", "content": "hi"}])]
+    # Exactly one HTTP request, zero recovered chunks → W40/W36 still owns recovery.
+    assert chunks == []
+    assert len(calls) == 1
+    await client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_stream_chat_no_fallback_when_primary_succeeds() -> None:
+    """Happy path: primary model yields content → no retry, latency unchanged."""
+    calls: list[dict] = []
+
+    def _handler(request: httpx.Request) -> httpx.Response:
+        import json as _json
+
+        body = _json.loads(request.content)
+        calls.append({"model": body["model"]})
+        return httpx.Response(200, content=_sse_with_content("primary answer"))
+
+    transport = httpx.MockTransport(_handler)
+    client = httpx.AsyncClient(transport=transport)
+    adapter = DeepInfraCompletionAdapter(
+        api_key="x",
+        model="primary/ok-model",
+        http_client=client,
+        stream_chat_fallback_model="fallback/light-chat-model",
+    )
+
+    chunks = [c async for c in adapter.stream_chat([{"role": "user", "content": "hi"}])]
+    assert "".join(chunks) == "primary answer"
+    # Exactly one upstream call — fallback must NOT trigger on the happy path.
+    assert [c["model"] for c in calls] == ["primary/ok-model"]
+    await client.aclose()

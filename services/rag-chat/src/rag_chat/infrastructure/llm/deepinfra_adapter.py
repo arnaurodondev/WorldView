@@ -59,10 +59,23 @@ class DeepInfraCompletionAdapter:
         timeout: float = 30.0,
         chat_with_tools_timeout: float | None = None,
         thinking: bool = True,
+        stream_chat_fallback_model: str | None = "meta-llama/Meta-Llama-3.1-8B-Instruct",
     ) -> None:
         self._api_key = api_key
         self._model = model
         self.model_id: str = model  # expose for orchestrator model tracking
+        # PLAN-0104 W43 / BP-NEW: alternate model used for second-turn synthesis
+        # when the primary returns a zero-chunk SSE.  Root cause: Q5
+        # ``ru_googl_pe_vs_history`` — DeepInfra returned HTTP 200 OK + a
+        # ``data: [DONE]`` frame with no ``content`` deltas after a ~56s
+        # multi-tool synthesis call against ``Qwen/Qwen3-235B-A22B-Instruct-2507``.
+        # The provider chain only has DeepInfra wired in this deployment
+        # (no OpenRouter / Ollama keys for the live stack), so W40's
+        # cross-provider failover never triggered.  By retrying the SAME
+        # provider with a smaller, non-reasoning model we recover useful
+        # answers without requiring extra API keys.  Set to ``None`` to
+        # disable (legacy behaviour).
+        self._stream_chat_fallback_model = stream_chat_fallback_model
         self._timeout = timeout
         # FIX-LIVE-X (2026-05-25): split timeout so the heavier chat-with-tools
         # second turn isn't bound by the 30s stream() default.  If the caller
@@ -226,22 +239,22 @@ class DeepInfraCompletionAdapter:
                 f"n_tools={len(tools) if tools else 0})"
             ) from exc
 
-    async def stream_chat(
+    async def _stream_chat_one_model(
         self,
         messages: list[dict],
         *,
-        max_tokens: int = 1024,
-        temperature: float = 0.2,
+        model: str,
+        max_tokens: int,
+        temperature: float,
     ) -> AsyncIterator[str]:
-        """Stream the final answer turn from an OpenAI-format messages list.
+        """Run a single stream_chat call against a specific model.
 
-        WHY a separate method from stream(): stream() takes a raw prompt string
-        and wraps it in a single-message list internally.  stream_chat() accepts
-        a full conversation history (including injected tool results) so the model
-        sees the complete context when producing its final answer.
+        Extracted so ``stream_chat`` can transparently retry against a
+        secondary model (PLAN-0104 W43) without duplicating the SSE-parsing
+        loop.
         """
         payload: dict[str, object] = {
-            "model": self._model,
+            "model": model,
             "messages": messages,
             "stream": True,
             "max_tokens": max_tokens,
@@ -266,6 +279,73 @@ class DeepInfraCompletionAdapter:
                         yield delta
                 except (json.JSONDecodeError, KeyError, IndexError):
                     continue
+
+    async def stream_chat(
+        self,
+        messages: list[dict],
+        *,
+        max_tokens: int = 1024,
+        temperature: float = 0.2,
+    ) -> AsyncIterator[str]:
+        """Stream the final answer turn from an OpenAI-format messages list.
+
+        WHY a separate method from stream(): stream() takes a raw prompt string
+        and wraps it in a single-message list internally.  stream_chat() accepts
+        a full conversation history (including injected tool results) so the model
+        sees the complete context when producing its final answer.
+
+        PLAN-0104 W43 / BP-NEW (zero-chunk same-provider model failover):
+        Some long multi-tool second-turn calls against the primary completion
+        model (Qwen3-235B at the time of writing) return HTTP 200 with an
+        empty SSE — zero ``data: {...}`` content frames before ``[DONE]``.
+        Cross-provider failover (W40) cannot help here because most deployments
+        only have DeepInfra wired in the live stack.  When ``self._stream_chat_fallback_model``
+        is set, we transparently retry the request once against that alternate
+        model on the SAME provider before raising.  The W40 chain-level
+        zero-chunk guard + W36 degraded-synthesis fallback remain in place as
+        outer safety nets — this layer just gives them a far better shot at
+        recovering a real LLM answer.
+
+        We materialise the primary stream into a buffer because the OpenAI SSE
+        API does not allow rewinding: if we yielded tokens piecemeal we could
+        only detect "zero chunks" once iteration finished, at which point the
+        caller would already have committed to an empty stream.  Latency is
+        unaffected on the happy path — we yield the buffered tokens as soon
+        as the primary stream completes (one extra event-loop tick).
+        """
+        primary_chunks: list[str] = []
+        async for chunk in self._stream_chat_one_model(
+            messages,
+            model=self._model,
+            max_tokens=max_tokens,
+            temperature=temperature,
+        ):
+            primary_chunks.append(chunk)
+
+        if primary_chunks:
+            for chunk in primary_chunks:
+                yield chunk
+            return
+
+        # Zero-chunk primary stream — retry once on the fallback model if configured.
+        fallback_model = self._stream_chat_fallback_model
+        if not fallback_model or fallback_model == self._model:
+            return
+
+        log.warning(  # type: ignore[no-any-return]
+            "deepinfra_stream_chat_model_fallback",
+            primary_model=self._model,
+            fallback_model=fallback_model,
+            n_messages=len(messages),
+            reason="zero_chunk_primary",
+        )
+        async for chunk in self._stream_chat_one_model(
+            messages,
+            model=fallback_model,
+            max_tokens=max_tokens,
+            temperature=temperature,
+        ):
+            yield chunk
 
     async def aclose(self) -> None:
         await self._client.aclose()
