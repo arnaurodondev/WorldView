@@ -256,6 +256,135 @@ def test_judge_query_fundamentals_treated_as_equivalent_to_singular_tools():
     assert result["score"] == 100
 
 
+def test_judge_any_of_full_marks_when_one_expected_tool_called():
+    """PLAN-0104 W41 regression — expected_tools is an EQUIVALENCE SET.
+
+    Round 5 v2 Q1 (AAPL P/E) listed three equivalent tools — the agent
+    called only `query_fundamentals` (one of them) and the judge
+    erroneously scored tool_use=0 with the reason "did not call any of
+    the expected tools". The system prompt now makes the any-of rule
+    explicit, and a well-behaved mock LLM (faithful to the rubric)
+    must award 25. We pin both:
+
+    1. The system prompt explicitly contains the any-of language so
+       a future rewrite that drops it breaks this test.
+    2. The score is preserved (no hidden clamping) when the LLM
+       correctly returns 25 for an any-of match.
+    """
+    from chat_quality_judge import _SYSTEM_PROMPT  # (test-local import)
+
+    # (1) Pin the any-of phrasing in the system prompt.
+    assert "EQUIVALENCE SET" in _SYSTEM_PROMPT
+    assert "at least one" in _SYSTEM_PROMPT.lower() or "at least ONE" in _SYSTEM_PROMPT
+    assert "appropriate-refusal exemption" in _SYSTEM_PROMPT.lower()
+
+    # (2) any-of: only one of three expected tools was called → 25.
+    inp = _make_input(
+        prompt="What is Apple's current P/E ratio?",
+        rubric=Rubric(
+            expected_tools=[
+                "get_fundamentals_history",
+                "get_fundamentals_snapshot",
+                "query_fundamentals",
+            ],
+            required_facts=["pe_ratio_value"],
+            expected_depth="shallow",
+            appropriate_refusal_ok=False,
+        ),
+        answer_text="Apple's P/E is 37.7x (TTM, 2026-06-01).",
+        tool_calls=[{"name": "query_fundamentals", "arguments": {"ticker": "AAPL"}}],
+        tool_results=[{"tool": "query_fundamentals", "status": "ok", "item_count": 1}],
+    )
+
+    def mock_llm(*, system: str, user: str) -> str:
+        # A judge that respects the any-of rule awards 25.
+        return json.dumps(
+            {
+                "tool_use": {"score": 25, "reason": "query_fundamentals is in expected_tools"},
+                "grounding": {"score": 25, "reason": "ok"},
+                "framing": {"score": 25, "reason": "ok"},
+                "refusal_judgment": {"score": 25, "reason": "N/A"},
+                "notes": "any-of satisfied",
+            }
+        )
+
+    result = judge_answer(inp, llm=mock_llm)
+    assert result["dimensions"]["tool_use"]["score"] == 25
+    assert result["verdict"] == "PASS"
+
+
+def test_judge_wrong_tool_still_scores_low():
+    """PLAN-0104 W41 — any-of must not become a free pass. A clearly
+    wrong tool (e.g. search_documents for a price-history question)
+    must still allow the judge to score tool_use low. We mock an
+    LLM that recognises the wrong-tool case and verify the parser
+    preserves a low score."""
+
+    inp = _make_input(
+        prompt="What was AAPL's closing price each day last week?",
+        rubric=Rubric(
+            expected_tools=["get_price_history", "get_ohlcv"],
+            expected_depth="shallow",
+            appropriate_refusal_ok=False,
+        ),
+        answer_text="Apple traded sideways last week per recent news.",
+        tool_calls=[{"name": "search_documents", "arguments": {"q": "AAPL"}}],
+        tool_results=[{"tool": "search_documents", "status": "ok", "item_count": 3}],
+    )
+
+    def mock_llm(*, system: str, user: str) -> str:
+        return json.dumps(
+            {
+                "tool_use": {"score": 5, "reason": "called search_documents instead of price tool"},
+                "grounding": {"score": 10, "reason": "no real prices"},
+                "framing": {"score": 15, "reason": ""},
+                "refusal_judgment": {"score": 25, "reason": "N/A"},
+                "notes": "wrong tool",
+            }
+        )
+
+    result = judge_answer(inp, llm=mock_llm)
+    assert result["dimensions"]["tool_use"]["score"] < 10
+
+
+def test_judge_appropriate_refusal_does_not_penalise_tool_use():
+    """PLAN-0104 W41 — when rubric.appropriate_refusal_ok=true AND the
+    tool result is empty AND the agent refuses, tool_use must not be
+    docked for the refusal itself. The agent did the right thing by
+    not fabricating. We assert the parser preserves a 25 the LLM
+    legitimately returns for the routing portion of tool_use."""
+
+    inp = _make_input(
+        prompt="What is AAPL's forward P/E?",
+        rubric=Rubric(
+            expected_tools=["query_fundamentals"],
+            expected_depth="shallow",
+            appropriate_refusal_ok=True,
+        ),
+        answer_text="Forward P/E is not currently available in our data sources.",
+        tool_calls=[{"name": "query_fundamentals", "arguments": {"ticker": "AAPL", "metrics": ["forward_pe"]}}],
+        tool_results=[{"tool": "query_fundamentals", "status": "ok", "item_count": 0}],
+    )
+
+    def mock_llm(*, system: str, user: str) -> str:
+        # A judge respecting the appropriate-refusal exemption awards 25
+        # for tool_use — the expected tool WAS called, and the refusal
+        # is the right behaviour given the empty result.
+        return json.dumps(
+            {
+                "tool_use": {"score": 25, "reason": "expected tool called; refusal appropriate"},
+                "grounding": {"score": 25, "reason": "no fabricated number"},
+                "framing": {"score": 25, "reason": "shallow Q + concise refusal"},
+                "refusal_judgment": {"score": 25, "reason": "rubric permits + items=0"},
+                "notes": "honest refusal",
+            }
+        )
+
+    result = judge_answer(inp, llm=mock_llm)
+    assert result["dimensions"]["tool_use"]["score"] == 25
+    assert result["verdict"] == "PASS"
+
+
 def test_rubric_from_question_handles_missing_block():
     """Defensive: a question with no `rubric:` block returns sane defaults."""
 

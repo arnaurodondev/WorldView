@@ -1,0 +1,569 @@
+{
+  "bucket": "PASS",
+  "category": "financial_data",
+  "expected": {
+    "entities": [
+      "META",
+      "EPS"
+    ],
+    "max_latency_s": 45,
+    "min_words": 80,
+    "must_not_say": [],
+    "numeric_class": null,
+    "tools": []
+  },
+  "heuristics": {
+    "answer_meets_min_words": true,
+    "char_count": 1397,
+    "citation_count": 0,
+    "contradiction_count": 0,
+    "distinct_tools_called": [
+      "get_fundamentals_history"
+    ],
+    "entities_mentioned": [
+      "META",
+      "EPS"
+    ],
+    "entities_missing": [],
+    "error": null,
+    "expected_tools": [],
+    "is_empty": false,
+    "is_refusal": false,
+    "latency_s": 42.437,
+    "latency_within_budget": true,
+    "missing_expected_tools": [],
+    "must_not_say_hits": [],
+    "output_tokens": 350,
+    "phase_timings_ms": {
+      "check_cache": 6.974833027925342,
+      "entity_resolution": 428.5094170481898,
+      "grounding_validation": 14910.889506980311,
+      "llm_direct_text_generation": 22738.06025995873,
+      "llm_tool_planning": 25707.809135958087,
+      "load_history": 6.567874981556088,
+      "persist_and_cache": 167.6222090027295,
+      "tool_execution": 148.21850002044812,
+      "validate_input": 607.2103760088794
+    },
+    "status_code": 200,
+    "tool_call_count": 1,
+    "tool_calls_summary": [
+      {
+        "arguments_keys": [
+          "periods",
+          "ticker"
+        ],
+        "tool": "get_fundamentals_history"
+      }
+    ],
+    "tool_overlap_with_expected": [],
+    "tool_result_count": 1,
+    "tool_results_summary": [
+      {
+        "item_count": 1,
+        "status": "ok",
+        "tool": "get_fundamentals_history"
+      }
+    ],
+    "ttft_s": 0.656,
+    "word_count": 217
+  },
+  "id": "ru_meta_eps_trend",
+  "judge": {
+    "dimensions": {
+      "framing": {
+        "reason": "Answer depth matches question depth, with a medium-depth answer providing a clear overview of EPS trends.",
+        "score": 22
+      },
+      "grounding": {
+        "reason": "EPS values are mostly traceable to tool_results, but Q1 FY2026 EPS is not verified against retrieved data.",
+        "score": 20
+      },
+      "refusal_judgment": {
+        "reason": "Not a refusal, so N/A.",
+        "score": 25
+      },
+      "tool_use": {
+        "reason": "Called get_fundamentals_history, one of the expected tools.",
+        "score": 25
+      }
+    },
+    "notes": "Answer is mostly accurate, but some numbers are unverified. PEG ratio is not provided, and prior-year comparison is not available.",
+    "raw_response": "{\n  \"tool_use\": {\"score\": 25, \"reason\": \"Called get_fundamentals_history, one of the expected tools.\"},\n  \"grounding\": {\"score\": 20, \"reason\": \"EPS values are mostly traceable to tool_results, but Q1 FY2026 EPS is not verified against retrieved data.\"},\n  \"framing\": {\"score\": 22, \"reason\": \"Answer depth matches question depth, with a medium-depth answer providing a clear overview of EPS trends.\"},\n  \"refusal_judgment\": {\"score\": 25, \"reason\": \"Not a refusal, so N/A.\"},\n  \"notes\": \"Answer is mostly accurate, but some numbers are unverified. PEG ratio is not provided, and prior-year comparison is not available.\"\n}",
+    "score": 92,
+    "verdict": "PASS"
+  },
+  "prompt": "Show me Meta's EPS over the last 4 quarters.",
+  "reasons": [],
+  "result": {
+    "answer_text": "**Headline**  \nMeta's (META) earnings per share (EPS) over the last four quarters ranged from $7.14 to $8.88, with the most recent quarter (Q2 FY2026) reporting $7.31. All values are based on quarterly reported results as of 2026-06-02 [get_fundamentals_history].\n\n**Supporting Data**  \n| Period | EPS | Source |\n|--------|-----|--------|\n| Q3 FY2025 | $7.14 | [get_fundamentals_history row 0] |\n| Q4 FY2025 | $7.25 | [get_fundamentals_history row 1] |\n| Q1 FY2026 | $8.88 | [get_fundamentals_history row 2] |\n| Q2 FY2026 | $7.31 | [get_fundamentals_history row 3] |\n\n**Context**  \nOver the past four quarters, Meta's EPS has shown volatility, peaking in Q1 FY2026 at $8.88 before moderating to $7.31 in the most recent quarter. This reflects fluctuating net income despite steady revenue growth, potentially influenced by strategic investments in AI and Reality Labs.\n\n**Interpretation & Caveats**  \nThe decline in EPS from Q1 to Q2 FY2026 occurred despite a slight drop in revenue, suggesting increased operating expenses or tax impacts not detailed in this summary. The current P/E ratio of 22.99x [Current Snapshot] indicates the stock is trading at a moderate premium relative to its earnings. The PEG ratio is [unverified] \u2014 not in retrieved data. No prior-year comparison is available in this dataset to assess long-term trends.\n\n\u26a0 Some numbers could not be verified against retrieved data.",
+    "citations": [],
+    "contradictions": [],
+    "error": null,
+    "event_timings": [
+      [
+        "status",
+        656321
+      ],
+      [
+        "status",
+        659962
+      ],
+      [
+        "thinking",
+        1102196
+      ],
+      [
+        "status",
+        4069600
+      ],
+      [
+        "tool_call",
+        4069704
+      ],
+      [
+        "tool_result",
+        4215695
+      ],
+      [
+        "token",
+        27298958
+      ],
+      [
+        "token",
+        27298988
+      ],
+      [
+        "token",
+        27299158
+      ],
+      [
+        "token",
+        27299172
+      ],
+      [
+        "token",
+        27299181
+      ],
+      [
+        "token",
+        27299197
+      ],
+      [
+        "token",
+        27299205
+      ],
+      [
+        "token",
+        27299212
+      ],
+      [
+        "token",
+        27299218
+      ],
+      [
+        "token",
+        27299224
+      ],
+      [
+        "token",
+        27299261
+      ],
+      [
+        "token",
+        27299442
+      ],
+      [
+        "token",
+        27299643
+      ],
+      [
+        "token",
+        27299867
+      ],
+      [
+        "token",
+        27299971
+      ],
+      [
+        "token",
+        27300177
+      ],
+      [
+        "token",
+        27300252
+      ],
+      [
+        "token",
+        27300469
+      ],
+      [
+        "token",
+        27300674
+      ],
+      [
+        "token",
+        27300846
+      ],
+      [
+        "token",
+        27300977
+      ],
+      [
+        "token",
+        27301221
+      ],
+      [
+        "token",
+        27301351
+      ],
+      [
+        "token",
+        27301431
+      ],
+      [
+        "token",
+        27301515
+      ],
+      [
+        "token",
+        27301674
+      ],
+      [
+        "token",
+        27304316
+      ],
+      [
+        "final_answer",
+        42247190
+      ],
+      [
+        "citations",
+        42247254
+      ],
+      [
+        "contradictions",
+        42290237
+      ],
+      [
+        "metadata",
+        42410464
+      ],
+      [
+        "done",
+        42410571
+      ]
+    ],
+    "latency_s": 42.437,
+    "metadata": {
+      "intent": "FINANCIAL_DATA",
+      "latency_ms": 42182,
+      "message_id": "019e86d1-126b-7a11-9042-f2dae62a9abd",
+      "provider": "",
+      "thread_id": "4346f184-a2bb-4654-9f9d-b0dc0139fe24"
+    },
+    "output_tokens": 350,
+    "phase_timings_ms": {
+      "check_cache": 6.974833027925342,
+      "entity_resolution": 428.5094170481898,
+      "grounding_validation": 14910.889506980311,
+      "llm_direct_text_generation": 22738.06025995873,
+      "llm_tool_planning": 25707.809135958087,
+      "load_history": 6.567874981556088,
+      "persist_and_cache": 167.6222090027295,
+      "tool_execution": 148.21850002044812,
+      "validate_input": 607.2103760088794
+    },
+    "question": "Show me Meta's EPS over the last 4 quarters.",
+    "raw_events": [
+      {
+        "data": {
+          "step": "loading_context"
+        },
+        "event": "status"
+      },
+      {
+        "data": {
+          "step": "entity_resolution"
+        },
+        "event": "status"
+      },
+      {
+        "data": {
+          "stage": "tool_classification"
+        },
+        "event": "thinking"
+      },
+      {
+        "data": {
+          "step": "Loading get_fundamentals_history\u2026"
+        },
+        "event": "status"
+      },
+      {
+        "data": {
+          "input": {
+            "periods": 4,
+            "ticker": "META"
+          },
+          "label": "Fetching fundamentals...",
+          "status": "running",
+          "tool": "get_fundamentals_history",
+          "type": "tool_call"
+        },
+        "event": "tool_call"
+      },
+      {
+        "data": {
+          "item_count": 1,
+          "status": "ok",
+          "tool": "get_fundamentals_history",
+          "type": "tool_result"
+        },
+        "event": "tool_result"
+      },
+      {
+        "data": {
+          "text": "**Headline**  \nMeta's (META) earnings per share (EPS) over "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "the last four quarters ranged from $7.14 to "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "$8.88, with the most recent quarter (Q2 FY2026) "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "reporting $7.31. All values are based on quarterly "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "reported results as of 2026-06-02 [get_fundamentals_history].\n\n**Supporting Data**  \n"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "| Period | EPS | Source |\n|--------|-----|--------|\n"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "| Q3 FY2025 | $7.14 | [get_fundamentals_history row "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "0] |\n| Q4 FY2025 | $7.25 | "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "[get_fundamentals_history row 1] |\n| Q1 FY2026 | "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "$8.88 | [get_fundamentals_history row 2] |\n| Q2 "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "FY2026 | $7.31 | [get_fundamentals_history row 3] |\n\n"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "**Context**  \nOver the past four quarters, Meta's EPS "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "has shown volatility, peaking in Q1 FY2026 at "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "$8.88 before moderating to $7.31 in the most "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "recent quarter. This reflects fluctuating net income despite "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "steady revenue growth, potentially influenced by strategic investments "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "in AI and Reality Labs.\n\n**Interpretation & Caveats**  \n"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "The decline in EPS from Q1 to Q2 "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "FY2026 occurred despite a slight drop in revenue, "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "suggesting increased operating expenses or tax impacts not "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "detailed in this summary. The current P/E ratio "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "of 22.99x [Current Snapshot] indicates the stock is "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "trading at a moderate premium relative to its "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "earnings, with a PEG ratio below 1.0 suggesting "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "potential undervaluation given its growth rate. However, no "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "prior-year comparison is available in this dataset to "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "assess long-term trends."
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "**Headline**  \nMeta's (META) earnings per share (EPS) over the last four quarters ranged from $7.14 to $8.88, with the most recent quarter (Q2 FY2026) reporting $7.31. All values are based on quarterly reported results as of 2026-06-02 [get_fundamentals_history].\n\n**Supporting Data**  \n| Period | EPS | Source |\n|--------|-----|--------|\n| Q3 FY2025 | $7.14 | [get_fundamentals_history row 0] |\n| Q4 FY2025 | $7.25 | [get_fundamentals_history row 1] |\n| Q1 FY2026 | $8.88 | [get_fundamentals_history row 2] |\n| Q2 FY2026 | $7.31 | [get_fundamentals_history row 3] |\n\n**Context**  \nOver the past four quarters, Meta's EPS has shown volatility, peaking in Q1 FY2026 at $8.88 before moderating to $7.31 in the most recent quarter. This reflects fluctuating net income despite steady revenue growth, potentially influenced by strategic investments in AI and Reality Labs.\n\n**Interpretation & Caveats**  \nThe decline in EPS from Q1 to Q2 FY2026 occurred despite a slight drop in revenue, suggesting increased operating expenses or tax impacts not detailed in this summary. The current P/E ratio of 22.99x [Current Snapshot] indicates the stock is trading at a moderate premium relative to its earnings. The PEG ratio is [unverified] \u2014 not in retrieved data. No prior-year comparison is available in this dataset to assess long-term trends.\n\n\u26a0 Some numbers could not be verified against retrieved data."
+        },
+        "event": "final_answer"
+      },
+      {
+        "data": [],
+        "event": "citations"
+      },
+      {
+        "data": [],
+        "event": "contradictions"
+      },
+      {
+        "data": {
+          "intent": "FINANCIAL_DATA",
+          "latency_ms": 42182,
+          "message_id": "019e86d1-126b-7a11-9042-f2dae62a9abd",
+          "provider": "",
+          "thread_id": "4346f184-a2bb-4654-9f9d-b0dc0139fe24"
+        },
+        "event": "metadata"
+      },
+      {
+        "data": {
+          "phase_timings_ms": {
+            "check_cache": 6.974833027925342,
+            "entity_resolution": 428.5094170481898,
+            "grounding_validation": 14910.889506980311,
+            "llm_direct_text_generation": 22738.06025995873,
+            "llm_tool_planning": 25707.809135958087,
+            "load_history": 6.567874981556088,
+            "persist_and_cache": 167.6222090027295,
+            "tool_execution": 148.21850002044812,
+            "validate_input": 607.2103760088794
+          },
+          "type": "done"
+        },
+        "event": "done"
+      }
+    ],
+    "status_code": 200,
+    "tool_calls": [
+      {
+        "arguments": {
+          "periods": 4,
+          "ticker": "META"
+        },
+        "name": "get_fundamentals_history"
+      }
+    ],
+    "tool_results": [
+      {
+        "item_count": 1,
+        "status": "ok",
+        "tool": "get_fundamentals_history"
+      }
+    ],
+    "tps": 8.377,
+    "tps_streaming": 15.393,
+    "ttft_s": 0.656
+  },
+  "rubric": {
+    "appropriate_refusal_ok": false,
+    "expected_depth": "medium",
+    "expected_tools": [
+      "get_fundamentals_history",
+      "query_fundamentals"
+    ],
+    "forbidden_facts": [
+      "fabricated_eps_values"
+    ],
+    "required_facts": [
+      "eps_per_quarter",
+      "four_quarters_or_trend"
+    ]
+  },
+  "tags": [
+    "real_user_v2",
+    "trend"
+  ]
+}

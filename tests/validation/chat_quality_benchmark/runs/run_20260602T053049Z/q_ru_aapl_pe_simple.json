@@ -1,0 +1,330 @@
+{
+  "bucket": "WARN",
+  "category": "financial_data",
+  "expected": {
+    "entities": [
+      "AAPL",
+      "P/E"
+    ],
+    "max_latency_s": 30,
+    "min_words": 60,
+    "must_not_say": [
+      "Q4 FY2026",
+      "I cannot find evidence"
+    ],
+    "numeric_class": null,
+    "tools": []
+  },
+  "heuristics": {
+    "answer_meets_min_words": false,
+    "char_count": 118,
+    "citation_count": 0,
+    "contradiction_count": 0,
+    "distinct_tools_called": [
+      "query_fundamentals"
+    ],
+    "entities_mentioned": [
+      "AAPL",
+      "P/E"
+    ],
+    "entities_missing": [],
+    "error": null,
+    "expected_tools": [],
+    "is_empty": false,
+    "is_refusal": false,
+    "latency_s": 13.091,
+    "latency_within_budget": true,
+    "missing_expected_tools": [],
+    "must_not_say_hits": [],
+    "output_tokens": 30,
+    "phase_timings_ms": {
+      "check_cache": 3.6071250215172768,
+      "entity_resolution": 248.49666701629758,
+      "grounding_validation": 2940.530502004549,
+      "llm_direct_text_generation": 6357.87387797609,
+      "llm_tool_planning": 8195.768753939774,
+      "load_history": 130.7435830240138,
+      "persist_and_cache": 53.573874989524484,
+      "tool_execution": 108.91245899256319,
+      "validate_input": 685.0960010197014
+    },
+    "status_code": 200,
+    "tool_call_count": 1,
+    "tool_calls_summary": [
+      {
+        "arguments_keys": [
+          "metrics",
+          "ticker"
+        ],
+        "tool": "query_fundamentals"
+      }
+    ],
+    "tool_overlap_with_expected": [],
+    "tool_result_count": 1,
+    "tool_results_summary": [
+      {
+        "item_count": 1,
+        "status": "ok",
+        "tool": "query_fundamentals"
+      }
+    ],
+    "ttft_s": 0.815,
+    "word_count": 20
+  },
+  "id": "ru_aapl_pe_simple",
+  "judge": {
+    "dimensions": {
+      "framing": {
+        "reason": "Shallow question deserves shallow answer",
+        "score": 25
+      },
+      "grounding": {
+        "reason": "Answer contains fabricated claim (no valid data) despite tool returning status=ok",
+        "score": 0
+      },
+      "refusal_judgment": {
+        "reason": "Refusal is wrongful because tool_results contain the requested data",
+        "score": 0
+      },
+      "tool_use": {
+        "reason": "Called query_fundamentals, one of the expected tools",
+        "score": 25
+      }
+    },
+    "notes": "Refusal is incorrect because the tool returned valid data, but the agent failed to extract the P/E ratio.",
+    "raw_response": "{\n  \"tool_use\": {\"score\": 25, \"reason\": \"Called query_fundamentals, one of the expected tools\"},\n  \"grounding\": {\"score\": 0, \"reason\": \"Answer contains fabricated claim (no valid data) despite tool returning status=ok\"},\n  \"framing\": {\"score\": 25, \"reason\": \"Shallow question deserves shallow answer\"},\n  \"refusal_judgment\": {\"score\": 0, \"reason\": \"Refusal is wrongful because tool_results contain the requested data\"},\n  \"notes\": \"Refusal is incorrect because the tool returned valid data, but the agent failed to extract the P/E ratio.\"\n}",
+    "score": 50,
+    "verdict": "FAIL"
+  },
+  "prompt": "What's AAPL's P/E ratio?",
+  "reasons": [
+    "short_answer words=20"
+  ],
+  "result": {
+    "answer_text": "I cannot find the P/E ratio for AAPL in the tool results. [query_fundamentals] returned no valid data for this metric.",
+    "citations": [],
+    "contradictions": [],
+    "error": null,
+    "event_timings": [
+      [
+        "status",
+        815404
+      ],
+      [
+        "status",
+        940545
+      ],
+      [
+        "thinking",
+        1191120
+      ],
+      [
+        "status",
+        3032825
+      ],
+      [
+        "tool_call",
+        3032992
+      ],
+      [
+        "tool_result",
+        3142240
+      ],
+      [
+        "token",
+        10072472
+      ],
+      [
+        "token",
+        10072504
+      ],
+      [
+        "final_answer",
+        12985191
+      ],
+      [
+        "citations",
+        12985242
+      ],
+      [
+        "contradictions",
+        12991489
+      ],
+      [
+        "metadata",
+        13041693
+      ],
+      [
+        "done",
+        13041839
+      ]
+    ],
+    "latency_s": 13.091,
+    "metadata": {
+      "intent": "GENERAL",
+      "latency_ms": 12868,
+      "message_id": "019e86d0-5bf7-7440-9805-fa699c40cd1f",
+      "provider": "",
+      "thread_id": "6e844097-6877-4200-a016-cd4d5b48dbec"
+    },
+    "output_tokens": 30,
+    "phase_timings_ms": {
+      "check_cache": 3.6071250215172768,
+      "entity_resolution": 248.49666701629758,
+      "grounding_validation": 2940.530502004549,
+      "llm_direct_text_generation": 6357.87387797609,
+      "llm_tool_planning": 8195.768753939774,
+      "load_history": 130.7435830240138,
+      "persist_and_cache": 53.573874989524484,
+      "tool_execution": 108.91245899256319,
+      "validate_input": 685.0960010197014
+    },
+    "question": "What's AAPL's P/E ratio?",
+    "raw_events": [
+      {
+        "data": {
+          "step": "loading_context"
+        },
+        "event": "status"
+      },
+      {
+        "data": {
+          "step": "entity_resolution"
+        },
+        "event": "status"
+      },
+      {
+        "data": {
+          "stage": "tool_classification"
+        },
+        "event": "thinking"
+      },
+      {
+        "data": {
+          "step": "Loading query_fundamentals\u2026"
+        },
+        "event": "status"
+      },
+      {
+        "data": {
+          "input": {
+            "metrics": [
+              "pe_ratio"
+            ],
+            "ticker": "AAPL"
+          },
+          "label": "query_fundamentals...",
+          "status": "running",
+          "tool": "query_fundamentals",
+          "type": "tool_call"
+        },
+        "event": "tool_call"
+      },
+      {
+        "data": {
+          "item_count": 1,
+          "status": "ok",
+          "tool": "query_fundamentals",
+          "type": "tool_result"
+        },
+        "event": "tool_result"
+      },
+      {
+        "data": {
+          "text": "Apple's (AAPL) P/E ratio is 37.73x [query_fundamentals row "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "0]."
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "I cannot find the P/E ratio for AAPL in the tool results. [query_fundamentals] returned no valid data for this metric."
+        },
+        "event": "final_answer"
+      },
+      {
+        "data": [],
+        "event": "citations"
+      },
+      {
+        "data": [],
+        "event": "contradictions"
+      },
+      {
+        "data": {
+          "intent": "GENERAL",
+          "latency_ms": 12868,
+          "message_id": "019e86d0-5bf7-7440-9805-fa699c40cd1f",
+          "provider": "",
+          "thread_id": "6e844097-6877-4200-a016-cd4d5b48dbec"
+        },
+        "event": "metadata"
+      },
+      {
+        "data": {
+          "phase_timings_ms": {
+            "check_cache": 3.6071250215172768,
+            "entity_resolution": 248.49666701629758,
+            "grounding_validation": 2940.530502004549,
+            "llm_direct_text_generation": 6357.87387797609,
+            "llm_tool_planning": 8195.768753939774,
+            "load_history": 130.7435830240138,
+            "persist_and_cache": 53.573874989524484,
+            "tool_execution": 108.91245899256319,
+            "validate_input": 685.0960010197014
+          },
+          "type": "done"
+        },
+        "event": "done"
+      }
+    ],
+    "status_code": 200,
+    "tool_calls": [
+      {
+        "arguments": {
+          "metrics": [
+            "pe_ratio"
+          ],
+          "ticker": "AAPL"
+        },
+        "name": "query_fundamentals"
+      }
+    ],
+    "tool_results": [
+      {
+        "item_count": 1,
+        "status": "ok",
+        "tool": "query_fundamentals"
+      }
+    ],
+    "tps": 2.444,
+    "tps_streaming": 4.719,
+    "ttft_s": 0.815
+  },
+  "rubric": {
+    "appropriate_refusal_ok": false,
+    "expected_depth": "shallow",
+    "expected_tools": [
+      "get_fundamentals_history",
+      "get_fundamentals_snapshot",
+      "query_fundamentals"
+    ],
+    "forbidden_facts": [
+      "fabricated_period",
+      "single_quarter_passed_off_as_ttm"
+    ],
+    "required_facts": [
+      "pe_ratio_value",
+      "as_of_date_or_period"
+    ]
+  },
+  "tags": [
+    "real_user_v2",
+    "ratio"
+  ]
+}

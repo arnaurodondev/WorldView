@@ -200,9 +200,41 @@ missing AND the question's rubric marks `appropriate_refusal_ok=true`.
 DIMENSIONS (each 0-25):
 
 1. tool_use            How well did the agent route the question to the right
-                       tools? Did it call at least one expected tool? Did it
-                       avoid calling clearly irrelevant tools? Missing every
-                       expected tool when data exists is a strong negative.
+                       tools?
+
+                       SCORING RULE (any-of semantics — read carefully):
+                         * `rubric.expected_tools` is an EQUIVALENCE SET. Any
+                           single tool from the list is sufficient for FULL
+                           MARKS. Award 25 if AT LEAST ONE tool from
+                           `expected_tools` was called.
+                         * Do NOT deduct points for failing to call the OTHER
+                           tools in the equivalence set — they are alternatives,
+                           not a checklist. Example: expected_tools=[A, B, C]
+                           and the agent called only A → 25 (not "missed B and
+                           C, score 8").
+                         * Award lower scores only when ZERO tools from
+                           `expected_tools` were called.
+                         * Deduct meaningfully only when the tool that WAS
+                           called is clearly wrong for the question (e.g. user
+                           asked about price history but the agent only called
+                           `search_documents`).
+                         * WORKED EXAMPLE — DO NOT DEVIATE: if
+                           expected_tools = ["get_fundamentals_history",
+                           "get_fundamentals_snapshot", "query_fundamentals"]
+                           and the trace shows ONE call to
+                           `query_fundamentals(...)`, then tool_use = 25.
+                           A reason like "did not call any of the expected
+                           tools" is FACTUALLY WRONG in this case — the
+                           agent called one of them. You MUST score 25 and
+                           write a reason consistent with that fact.
+                         * Appropriate-refusal exemption: when
+                           `rubric.appropriate_refusal_ok=true` AND the
+                           tool_results show empty/missing data AND the answer
+                           is a refusal, do NOT penalise tool_use for the
+                           refusal itself — refusing instead of fabricating is
+                           the correct behaviour. The tool_use score should
+                           reflect routing quality (was the right tool tried?),
+                           not whether the agent ultimately answered.
 
 2. grounding           Are quantitative claims (numbers, dates, names) traceable
                        to tool_results? Penalise fabricated numbers, fabricated

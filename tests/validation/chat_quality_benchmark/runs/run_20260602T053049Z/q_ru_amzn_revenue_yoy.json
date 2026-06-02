@@ -1,0 +1,571 @@
+{
+  "bucket": "WARN",
+  "category": "financial_data",
+  "expected": {
+    "entities": [
+      "AMZN",
+      "revenue"
+    ],
+    "max_latency_s": 30,
+    "min_words": 70,
+    "must_not_say": [],
+    "numeric_class": null,
+    "tools": []
+  },
+  "heuristics": {
+    "answer_meets_min_words": true,
+    "char_count": 1481,
+    "citation_count": 0,
+    "contradiction_count": 0,
+    "distinct_tools_called": [
+      "get_fundamentals_history"
+    ],
+    "entities_mentioned": [
+      "AMZN",
+      "revenue"
+    ],
+    "entities_missing": [],
+    "error": null,
+    "expected_tools": [],
+    "is_empty": false,
+    "is_refusal": false,
+    "latency_s": 33.175,
+    "latency_within_budget": false,
+    "missing_expected_tools": [],
+    "must_not_say_hits": [],
+    "output_tokens": 371,
+    "phase_timings_ms": {
+      "check_cache": 4.049999988637865,
+      "entity_resolution": 289.39454100327566,
+      "grounding_validation": 11974.670546944253,
+      "llm_direct_text_generation": 17461.39471704373,
+      "llm_tool_planning": 19950.710760022048,
+      "load_history": 7.8490409650839865,
+      "persist_and_cache": 16.168208967428654,
+      "tool_execution": 125.90500002261251,
+      "validate_input": 445.82516700029373
+    },
+    "status_code": 200,
+    "tool_call_count": 1,
+    "tool_calls_summary": [
+      {
+        "arguments_keys": [
+          "periods",
+          "ticker"
+        ],
+        "tool": "get_fundamentals_history"
+      }
+    ],
+    "tool_overlap_with_expected": [],
+    "tool_result_count": 1,
+    "tool_results_summary": [
+      {
+        "item_count": 1,
+        "status": "ok",
+        "tool": "get_fundamentals_history"
+      }
+    ],
+    "ttft_s": 0.486,
+    "word_count": 222
+  },
+  "id": "ru_amzn_revenue_yoy",
+  "judge": {
+    "dimensions": {
+      "framing": {
+        "reason": "Answer is shallow, but multi-section structured, matching the question's depth.",
+        "score": 20
+      },
+      "grounding": {
+        "reason": "Quantitative claims are mostly traceable to tool_results, but some numbers (e.g. P/E ratio) could not be verified against retrieved data.",
+        "score": 20
+      },
+      "refusal_judgment": {
+        "reason": "Not a refusal, so N/A.",
+        "score": 25
+      },
+      "tool_use": {
+        "reason": "Called get_fundamentals_history, one of the expected tools.",
+        "score": 25
+      }
+    },
+    "notes": "Answer is mostly well-structured, but some numbers could not be verified against retrieved data, and the P/E ratio is not directly supported by the tool results.",
+    "raw_response": "{\n  \"tool_use\": {\n    \"score\": 25,\n    \"reason\": \"Called get_fundamentals_history, one of the expected tools.\"\n  },\n  \"grounding\": {\n    \"score\": 20,\n    \"reason\": \"Quantitative claims are mostly traceable to tool_results, but some numbers (e.g. P/E ratio) could not be verified against retrieved data.\"\n  },\n  \"framing\": {\n    \"score\": 20,\n    \"reason\": \"Answer is shallow, but multi-section structured, matching the question's depth.\"\n  },\n  \"refusal_judgment\": {\n    \"score\": 25,\n    \"reason\": \"Not a refusal, so N/A.\"\n  },\n  \"notes\": \"Answer is mostly well-structured, but some numbers could not be verified against retrieved data, and the P/E ratio is not directly supported by the tool results.\"\n}",
+    "score": 90,
+    "verdict": "PASS"
+  },
+  "prompt": "What's Amazon's YoY revenue growth?",
+  "reasons": [
+    "slow latency_s=33.175"
+  ],
+  "result": {
+    "answer_text": "1. **Headline**  \nAmazon's (AMZN) year-over-year (YoY) revenue growth for Q2 2026 is 12.8%, calculated from quarterly revenue of $181.5B compared to $160.9B in Q2 2025 [get_fundamentals_history row 1].\n\n2. **Supporting Data**  \n| Metric | Value | Unit | Period | As-of Date | Source |\n|--------|-------|------|--------|------------|--------|\n| Revenue (Q2 2026) | 181.5 | B | Q2 2026 | 2026-06-02 | get_fundamentals_history row  |\n| Revenue (Q2 2025) | 160.9 | B | Q2 2025 | 2025-06-02 | get_fundamentals_history row 0 |\n| YoY Growth | 12.8 | % | Q2 2026 | 2026-06-02 | Computed from get_fundamentals_history |\n\n3. **Context**  \nThe YoY revenue growth of 12.8% reflects continued strong performance, building on growth from prior quarters. Amazon's current P/E ratio of 31.65x [get_fundamentals_history Current Snapshot] suggests the market is pricing in sustained growth expectations. This growth rate is consistent with recent trends, indicating resilience in both e-commerce and cloud (AWS) segments.\n\n4. **Interpretation & Caveats**  \nThe 12.8% YoY growth is a positive signal, particularly in a high-interest-rate environment. However, the figure is based on a single quarter's comparison; a longer trend analysis would provide more robust context. Revenue growth is a key metric for Amazon, and this result aligns with its historical performance. Data quality is high, sourced directly from reported fundamentals.\n\n\u26a0 Some numbers could not be verified against retrieved data.",
+    "citations": [],
+    "contradictions": [],
+    "error": null,
+    "event_timings": [
+      [
+        "status",
+        485552
+      ],
+      [
+        "status",
+        490804
+      ],
+      [
+        "thinking",
+        782818
+      ],
+      [
+        "status",
+        3273881
+      ],
+      [
+        "tool_call",
+        3275835
+      ],
+      [
+        "tool_result",
+        3398410
+      ],
+      [
+        "token",
+        21162749
+      ],
+      [
+        "token",
+        21162772
+      ],
+      [
+        "token",
+        21162829
+      ],
+      [
+        "token",
+        21162837
+      ],
+      [
+        "token",
+        21162843
+      ],
+      [
+        "token",
+        21162849
+      ],
+      [
+        "token",
+        21162855
+      ],
+      [
+        "token",
+        21169782
+      ],
+      [
+        "token",
+        21170032
+      ],
+      [
+        "token",
+        21170177
+      ],
+      [
+        "token",
+        21170407
+      ],
+      [
+        "token",
+        21170505
+      ],
+      [
+        "token",
+        21170740
+      ],
+      [
+        "token",
+        21170943
+      ],
+      [
+        "token",
+        21171234
+      ],
+      [
+        "token",
+        21171329
+      ],
+      [
+        "token",
+        21171561
+      ],
+      [
+        "token",
+        21171736
+      ],
+      [
+        "token",
+        21171972
+      ],
+      [
+        "token",
+        21172105
+      ],
+      [
+        "token",
+        21172278
+      ],
+      [
+        "token",
+        21172472
+      ],
+      [
+        "token",
+        21172781
+      ],
+      [
+        "token",
+        21173095
+      ],
+      [
+        "token",
+        21173200
+      ],
+      [
+        "token",
+        21173367
+      ],
+      [
+        "token",
+        21176419
+      ],
+      [
+        "final_answer",
+        33151738
+      ],
+      [
+        "citations",
+        33151827
+      ],
+      [
+        "contradictions",
+        33156116
+      ],
+      [
+        "metadata",
+        33167652
+      ],
+      [
+        "done",
+        33167690
+      ]
+    ],
+    "latency_s": 33.175,
+    "metadata": {
+      "intent": "FINANCIAL_DATA",
+      "latency_ms": 33120,
+      "message_id": "019e86d1-bab7-726a-b18b-95023ab280d4",
+      "provider": "",
+      "thread_id": "346f97a6-9995-48bc-9584-06526ace2a7d"
+    },
+    "output_tokens": 371,
+    "phase_timings_ms": {
+      "check_cache": 4.049999988637865,
+      "entity_resolution": 289.39454100327566,
+      "grounding_validation": 11974.670546944253,
+      "llm_direct_text_generation": 17461.39471704373,
+      "llm_tool_planning": 19950.710760022048,
+      "load_history": 7.8490409650839865,
+      "persist_and_cache": 16.168208967428654,
+      "tool_execution": 125.90500002261251,
+      "validate_input": 445.82516700029373
+    },
+    "question": "What's Amazon's YoY revenue growth?",
+    "raw_events": [
+      {
+        "data": {
+          "step": "loading_context"
+        },
+        "event": "status"
+      },
+      {
+        "data": {
+          "step": "entity_resolution"
+        },
+        "event": "status"
+      },
+      {
+        "data": {
+          "stage": "tool_classification"
+        },
+        "event": "thinking"
+      },
+      {
+        "data": {
+          "step": "Loading get_fundamentals_history\u2026"
+        },
+        "event": "status"
+      },
+      {
+        "data": {
+          "input": {
+            "periods": 2,
+            "ticker": "AMZN"
+          },
+          "label": "Fetching fundamentals...",
+          "status": "running",
+          "tool": "get_fundamentals_history",
+          "type": "tool_call"
+        },
+        "event": "tool_call"
+      },
+      {
+        "data": {
+          "item_count": 1,
+          "status": "ok",
+          "tool": "get_fundamentals_history",
+          "type": "tool_result"
+        },
+        "event": "tool_result"
+      },
+      {
+        "data": {
+          "text": "1. **Headline**  \nAmazon's (AMZN) year-over-year (YoY) revenue growth "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "for Q2 2026 is 12.8%, calculated from quarterly "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "revenue of $181.5B compared to $160.9B in Q2 "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "2025 [get_fundamentals_history row 1].\n\n2. **Supporting Data**  \n| "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "Metric | Value | Unit | Period | "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "As-of Date | Source |\n|--------|-------|------|--------|------------|--------|\n| Revenue "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "(Q2 2026) | 181.5 | B | Q2 "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "2026 | 2026-06-02 | get_fundamentals_history row 1 |\n"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "| Revenue (Q2 2025) | 160.9 | B "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "| Q2 2025 | 2025-06-02 | get_fundamentals_history row "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "0 |\n| YoY Growth | 12.8 | "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "% | Q2 2026 | 2026-06-02 | Computed "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "from get_fundamentals_history |\n\n3. **Context**  \nThe YoY revenue "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "growth of 12.8% reflects continued strong performance, building "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "on growth from prior quarters. Amazon's current P/E "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "ratio of 31.65x [get_fundamentals_history Current Snapshot] suggests the "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "market is pricing in sustained growth expectations. This "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "growth rate is consistent with recent trends, indicating "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "resilience in both e-commerce and cloud (AWS) segments.\n\n"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "4. **Interpretation & Caveats**  \nThe 12.8% YoY growth "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "is a positive signal, particularly in a high-interest-rate "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "environment. However, the figure is based on a "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "single quarter's comparison; a longer trend analysis would "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "provide more robust context. Revenue growth is a "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "key metric for Amazon, and this result aligns "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "with its historical performance. Data quality is high, "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "sourced directly from reported fundamentals."
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "1. **Headline**  \nAmazon's (AMZN) year-over-year (YoY) revenue growth for Q2 2026 is 12.8%, calculated from quarterly revenue of $181.5B compared to $160.9B in Q2 2025 [get_fundamentals_history row 1].\n\n2. **Supporting Data**  \n| Metric | Value | Unit | Period | As-of Date | Source |\n|--------|-------|------|--------|------------|--------|\n| Revenue (Q2 2026) | 181.5 | B | Q2 2026 | 2026-06-02 | get_fundamentals_history row  |\n| Revenue (Q2 2025) | 160.9 | B | Q2 2025 | 2025-06-02 | get_fundamentals_history row 0 |\n| YoY Growth | 12.8 | % | Q2 2026 | 2026-06-02 | Computed from get_fundamentals_history |\n\n3. **Context**  \nThe YoY revenue growth of 12.8% reflects continued strong performance, building on growth from prior quarters. Amazon's current P/E ratio of 31.65x [get_fundamentals_history Current Snapshot] suggests the market is pricing in sustained growth expectations. This growth rate is consistent with recent trends, indicating resilience in both e-commerce and cloud (AWS) segments.\n\n4. **Interpretation & Caveats**  \nThe 12.8% YoY growth is a positive signal, particularly in a high-interest-rate environment. However, the figure is based on a single quarter's comparison; a longer trend analysis would provide more robust context. Revenue growth is a key metric for Amazon, and this result aligns with its historical performance. Data quality is high, sourced directly from reported fundamentals.\n\n\u26a0 Some numbers could not be verified against retrieved data."
+        },
+        "event": "final_answer"
+      },
+      {
+        "data": [],
+        "event": "citations"
+      },
+      {
+        "data": [],
+        "event": "contradictions"
+      },
+      {
+        "data": {
+          "intent": "FINANCIAL_DATA",
+          "latency_ms": 33120,
+          "message_id": "019e86d1-bab7-726a-b18b-95023ab280d4",
+          "provider": "",
+          "thread_id": "346f97a6-9995-48bc-9584-06526ace2a7d"
+        },
+        "event": "metadata"
+      },
+      {
+        "data": {
+          "phase_timings_ms": {
+            "check_cache": 4.049999988637865,
+            "entity_resolution": 289.39454100327566,
+            "grounding_validation": 11974.670546944253,
+            "llm_direct_text_generation": 17461.39471704373,
+            "llm_tool_planning": 19950.710760022048,
+            "load_history": 7.8490409650839865,
+            "persist_and_cache": 16.168208967428654,
+            "tool_execution": 125.90500002261251,
+            "validate_input": 445.82516700029373
+          },
+          "type": "done"
+        },
+        "event": "done"
+      }
+    ],
+    "status_code": 200,
+    "tool_calls": [
+      {
+        "arguments": {
+          "periods": 2,
+          "ticker": "AMZN"
+        },
+        "name": "get_fundamentals_history"
+      }
+    ],
+    "tool_results": [
+      {
+        "item_count": 1,
+        "status": "ok",
+        "tool": "get_fundamentals_history"
+      }
+    ],
+    "tps": 11.349,
+    "tps_streaming": 21.247,
+    "ttft_s": 0.486
+  },
+  "rubric": {
+    "appropriate_refusal_ok": false,
+    "expected_depth": "shallow",
+    "expected_tools": [
+      "get_fundamentals_history",
+      "query_fundamentals"
+    ],
+    "forbidden_facts": [
+      "single_quarter_passed_off_as_yoy"
+    ],
+    "required_facts": [
+      "yoy_growth_pct",
+      "period_basis"
+    ]
+  },
+  "tags": [
+    "real_user_v2",
+    "ratio"
+  ]
+}

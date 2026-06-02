@@ -1,0 +1,530 @@
+{
+  "bucket": "WARN",
+  "category": "financial_data",
+  "expected": {
+    "entities": [
+      "GOOGL",
+      "P/E"
+    ],
+    "max_latency_s": 45,
+    "min_words": 80,
+    "must_not_say": [],
+    "numeric_class": null,
+    "tools": []
+  },
+  "heuristics": {
+    "answer_meets_min_words": false,
+    "char_count": 520,
+    "citation_count": 0,
+    "contradiction_count": 0,
+    "distinct_tools_called": [
+      "get_fundamentals_history",
+      "get_price_history",
+      "search_documents"
+    ],
+    "entities_mentioned": [
+      "GOOGL",
+      "P/E"
+    ],
+    "entities_missing": [],
+    "error": null,
+    "expected_tools": [],
+    "is_empty": false,
+    "is_refusal": false,
+    "latency_s": 30.141,
+    "latency_within_budget": true,
+    "missing_expected_tools": [],
+    "must_not_say_hits": [],
+    "output_tokens": 130,
+    "phase_timings_ms": {
+      "check_cache": 3.3831250038929284,
+      "entity_resolution": 345.27749998960644,
+      "grounding_validation": 1.2020000140182674,
+      "llm_synthesis_streaming": 4362.10204398958,
+      "llm_tool_planning": 22815.31959294807,
+      "load_history": 2.9920419910922647,
+      "persist_and_cache": 22.321333992294967,
+      "tool_execution": 1319.9313340010121,
+      "validate_input": 531.07520804042
+    },
+    "status_code": 200,
+    "tool_call_count": 3,
+    "tool_calls_summary": [
+      {
+        "arguments_keys": [
+          "period_type",
+          "periods",
+          "ticker"
+        ],
+        "tool": "get_fundamentals_history"
+      },
+      {
+        "arguments_keys": [
+          "from_date",
+          "interval",
+          "ticker",
+          "to_date"
+        ],
+        "tool": "get_price_history"
+      },
+      {
+        "arguments_keys": [
+          "date_from",
+          "date_to",
+          "entity_tickers"
+        ],
+        "tool": "search_documents"
+      }
+    ],
+    "tool_overlap_with_expected": [],
+    "tool_result_count": 3,
+    "tool_results_summary": [
+      {
+        "item_count": 1,
+        "status": "ok",
+        "tool": "get_fundamentals_history"
+      },
+      {
+        "item_count": 0,
+        "status": "error",
+        "tool": "get_price_history"
+      },
+      {
+        "item_count": 0,
+        "status": "empty",
+        "tool": "search_documents"
+      }
+    ],
+    "ttft_s": 0.579,
+    "word_count": 77
+  },
+  "id": "ru_googl_pe_vs_history",
+  "judge": {
+    "dimensions": {
+      "framing": {
+        "reason": "The answer's depth matches the question's depth, which is deep.",
+        "score": 25
+      },
+      "grounding": {
+        "reason": "No quantitative claims are made, but the answer is a refusal, and the tool_results show empty/missing data.",
+        "score": 0
+      },
+      "refusal_judgment": {
+        "reason": "The refusal is not correct, as the tool_results show empty/missing data, but the rubric.appropriate_refusal_ok is false.",
+        "score": 0
+      },
+      "tool_use": {
+        "reason": "Called get_fundamentals_history, which is in the expected_tools list.",
+        "score": 25
+      }
+    },
+    "notes": "The answer is a refusal, but it's not correct, as the tool_results show empty/missing data. The agent should have provided a more informative refusal or attempted to synthesize the data.",
+    "raw_response": "{\n  \"tool_use\": {\"score\": 25, \"reason\": \"Called get_fundamentals_history, which is in the expected_tools list.\"},\n  \"grounding\": {\"score\": 0, \"reason\": \"No quantitative claims are made, but the answer is a refusal, and the tool_results show empty/missing data.\"},\n  \"framing\": {\"score\": 25, \"reason\": \"The answer's depth matches the question's depth, which is deep.\"},\n  \"refusal_judgment\": {\"score\": 0, \"reason\": \"The refusal is not correct, as the tool_results show empty/missing data, but the rubric.appropriate_refusal_ok is false.\"},\n  \"notes\": \"The answer is a refusal, but it's not correct, as the tool_results show empty/missing data. The agent should have provided a more informative refusal or attempted to synthesize the data.\"\n}",
+    "score": 50,
+    "verdict": "FAIL"
+  },
+  "prompt": "Is GOOGL expensive vs its history?",
+  "reasons": [
+    "short_answer words=77"
+  ],
+  "result": {
+    "answer_text": "I retrieved data for your question using get_fundamentals_history, get_price_history, search_documents, but the language model could not produce a final summary right now (the synthesis step failed or returned no text).\nHighlights from the retrieved data:\n- GOOGL quarterly fundamentals (Periodicity: QUARTERLY)\n| Period | Periodicity | Revenue | Net Income | EPS | P/E |\n|--------|-------------...\nPlease retry the question in a moment; the underlying data is available and the failure is upstream of the data pipeline.",
+    "citations": [],
+    "contradictions": [],
+    "error": null,
+    "event_timings": [
+      [
+        "status",
+        579015
+      ],
+      [
+        "status",
+        581822
+      ],
+      [
+        "thinking",
+        927504
+      ],
+      [
+        "status",
+        13214865
+      ],
+      [
+        "tool_call",
+        13216384
+      ],
+      [
+        "tool_result",
+        13597484
+      ],
+      [
+        "tool_call",
+        19498084
+      ],
+      [
+        "tool_result",
+        19514992
+      ],
+      [
+        "tool_call",
+        24836467
+      ],
+      [
+        "tool_result",
+        25737000
+      ],
+      [
+        "token",
+        30100786
+      ],
+      [
+        "token",
+        30100893
+      ],
+      [
+        "token",
+        30101213
+      ],
+      [
+        "token",
+        30101377
+      ],
+      [
+        "token",
+        30101523
+      ],
+      [
+        "token",
+        30101695
+      ],
+      [
+        "token",
+        30101861
+      ],
+      [
+        "token",
+        30101923
+      ],
+      [
+        "token",
+        30102870
+      ],
+      [
+        "token",
+        30103057
+      ],
+      [
+        "final_answer",
+        30103388
+      ],
+      [
+        "citations",
+        30103452
+      ],
+      [
+        "contradictions",
+        30110098
+      ],
+      [
+        "metadata",
+        30129521
+      ],
+      [
+        "done",
+        30129612
+      ]
+    ],
+    "latency_s": 30.141,
+    "metadata": {
+      "intent": "FINANCIAL_DATA",
+      "latency_ms": 30061,
+      "message_id": "019e86d2-99c7-7ebe-bdab-cce33a1bddc2",
+      "provider": "",
+      "thread_id": "6749b661-9c06-4bda-a624-15c8220d5044"
+    },
+    "output_tokens": 130,
+    "phase_timings_ms": {
+      "check_cache": 3.3831250038929284,
+      "entity_resolution": 345.27749998960644,
+      "grounding_validation": 1.2020000140182674,
+      "llm_synthesis_streaming": 4362.10204398958,
+      "llm_tool_planning": 22815.31959294807,
+      "load_history": 2.9920419910922647,
+      "persist_and_cache": 22.321333992294967,
+      "tool_execution": 1319.9313340010121,
+      "validate_input": 531.07520804042
+    },
+    "question": "Is GOOGL expensive vs its history?",
+    "raw_events": [
+      {
+        "data": {
+          "step": "loading_context"
+        },
+        "event": "status"
+      },
+      {
+        "data": {
+          "step": "entity_resolution"
+        },
+        "event": "status"
+      },
+      {
+        "data": {
+          "stage": "tool_classification"
+        },
+        "event": "thinking"
+      },
+      {
+        "data": {
+          "step": "Loading get_fundamentals_history\u2026"
+        },
+        "event": "status"
+      },
+      {
+        "data": {
+          "input": {
+            "period_type": "quarterly",
+            "periods": 8,
+            "ticker": "GOOGL"
+          },
+          "label": "Fetching fundamentals...",
+          "status": "running",
+          "tool": "get_fundamentals_history",
+          "type": "tool_call"
+        },
+        "event": "tool_call"
+      },
+      {
+        "data": {
+          "item_count": 1,
+          "status": "ok",
+          "tool": "get_fundamentals_history",
+          "type": "tool_result"
+        },
+        "event": "tool_result"
+      },
+      {
+        "data": {
+          "input": {
+            "from_date": "2024-06-02",
+            "interval": "week",
+            "ticker": "GOOGL",
+            "to_date": "2026-06-02"
+          },
+          "label": "Fetching price history...",
+          "status": "running",
+          "tool": "get_price_history",
+          "type": "tool_call"
+        },
+        "event": "tool_call"
+      },
+      {
+        "data": {
+          "item_count": 0,
+          "status": "error",
+          "tool": "get_price_history",
+          "type": "tool_result"
+        },
+        "event": "tool_result"
+      },
+      {
+        "data": {
+          "input": {
+            "date_from": "2025-06-02",
+            "date_to": "2026-06-02",
+            "entity_tickers": [
+              "GOOGL"
+            ]
+          },
+          "label": "Searching documents...",
+          "status": "running",
+          "tool": "search_documents",
+          "type": "tool_call"
+        },
+        "event": "tool_call"
+      },
+      {
+        "data": {
+          "item_count": 0,
+          "status": "empty",
+          "tool": "search_documents",
+          "type": "tool_result"
+        },
+        "event": "tool_result"
+      },
+      {
+        "data": {
+          "text": "I retrieved data for your question using get_fundamentals_history, "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "get_price_history, search_documents, but the language model could not "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "produce a final summary right now (the synthesis "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "step failed or returned no text).\nHighlights from "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "the retrieved data:\n- GOOGL quarterly fundamentals (Periodicity: "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "QUARTERLY)\n| Period | Periodicity | Revenue | "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "Net Income | EPS | P/E |\n|--------|-------------...\n"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "Please retry the question in a moment; the "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "underlying data is available and the failure is "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "upstream of the data pipeline."
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "I retrieved data for your question using get_fundamentals_history, get_price_history, search_documents, but the language model could not produce a final summary right now (the synthesis step failed or returned no text).\nHighlights from the retrieved data:\n- GOOGL quarterly fundamentals (Periodicity: QUARTERLY)\n| Period | Periodicity | Revenue | Net Income | EPS | P/E |\n|--------|-------------...\nPlease retry the question in a moment; the underlying data is available and the failure is upstream of the data pipeline."
+        },
+        "event": "final_answer"
+      },
+      {
+        "data": [],
+        "event": "citations"
+      },
+      {
+        "data": [],
+        "event": "contradictions"
+      },
+      {
+        "data": {
+          "intent": "FINANCIAL_DATA",
+          "latency_ms": 30061,
+          "message_id": "019e86d2-99c7-7ebe-bdab-cce33a1bddc2",
+          "provider": "",
+          "thread_id": "6749b661-9c06-4bda-a624-15c8220d5044"
+        },
+        "event": "metadata"
+      },
+      {
+        "data": {
+          "phase_timings_ms": {
+            "check_cache": 3.3831250038929284,
+            "entity_resolution": 345.27749998960644,
+            "grounding_validation": 1.2020000140182674,
+            "llm_synthesis_streaming": 4362.10204398958,
+            "llm_tool_planning": 22815.31959294807,
+            "load_history": 2.9920419910922647,
+            "persist_and_cache": 22.321333992294967,
+            "tool_execution": 1319.9313340010121,
+            "validate_input": 531.07520804042
+          },
+          "type": "done"
+        },
+        "event": "done"
+      }
+    ],
+    "status_code": 200,
+    "tool_calls": [
+      {
+        "arguments": {
+          "period_type": "quarterly",
+          "periods": 8,
+          "ticker": "GOOGL"
+        },
+        "name": "get_fundamentals_history"
+      },
+      {
+        "arguments": {
+          "from_date": "2024-06-02",
+          "interval": "week",
+          "ticker": "GOOGL",
+          "to_date": "2026-06-02"
+        },
+        "name": "get_price_history"
+      },
+      {
+        "arguments": {
+          "date_from": "2025-06-02",
+          "date_to": "2026-06-02",
+          "entity_tickers": [
+            "GOOGL"
+          ]
+        },
+        "name": "search_documents"
+      }
+    ],
+    "tool_results": [
+      {
+        "item_count": 1,
+        "status": "ok",
+        "tool": "get_fundamentals_history"
+      },
+      {
+        "item_count": 0,
+        "status": "error",
+        "tool": "get_price_history"
+      },
+      {
+        "item_count": 0,
+        "status": "empty",
+        "tool": "search_documents"
+      }
+    ],
+    "tps": 4.398,
+    "tps_streaming": 29.802,
+    "ttft_s": 0.579
+  },
+  "rubric": {
+    "appropriate_refusal_ok": false,
+    "expected_depth": "deep",
+    "expected_tools": [
+      "get_fundamentals_history",
+      "query_fundamentals",
+      "search_documents"
+    ],
+    "forbidden_facts": [
+      "verdict_without_historical_comparison"
+    ],
+    "required_facts": [
+      "current_pe",
+      "historical_pe_context",
+      "expensive_or_cheap_verdict"
+    ]
+  },
+  "tags": [
+    "real_user_v2",
+    "ratio",
+    "valuation"
+  ]
+}
