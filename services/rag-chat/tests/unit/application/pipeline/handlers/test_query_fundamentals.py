@@ -144,6 +144,87 @@ async def test_query_fundamentals_envelope_aligned_with_numeric_grounding() -> N
 
 
 @pytest.mark.asyncio
+async def test_query_fundamentals_renders_not_available_for_none_snapshot_fields() -> None:
+    """PLAN-0104 W39: snapshot rendering must label EVERY requested metric
+    explicitly — populated as ``<metric>: <value>``, missing as
+    ``<metric>: not available``.  Pre-W39 None fields were silently
+    dropped, which let the LLM (Q1 AAPL artifact) interpret an absent
+    line as "no data returned" and refuse despite a populated pe_ratio
+    living one section above.
+    """
+    s3 = AsyncMock()
+    s3.query_fundamentals = AsyncMock(
+        return_value={
+            "metrics_by_period": [],
+            "snapshot": {
+                "pe_ratio": 37.73,
+                "forward_pe": None,  # explicitly None — must render as "not available"
+                "peg_ratio": None,
+                "as_of": "2026-06-02",
+                "source": "highlights",
+            },
+            "coverage": {"pe_ratio": "ok", "forward_pe": "missing", "peg_ratio": "missing"},
+        }
+    )
+    handler = _make_handler(s3)
+    result = await handler._handle_query_fundamentals(
+        ticker="AAPL",
+        metrics=["pe_ratio", "forward_pe", "peg_ratio"],
+        periods=0,
+    )
+    assert result is not None
+    text = result.text
+    # Populated metric uses the verbatim labelled form.
+    assert "pe_ratio: 37.73x" in text
+    # Missing metrics MUST appear as explicit "not available" rather than
+    # being silently skipped.
+    assert "forward_pe: not available" in text
+    assert "peg_ratio: not available" in text
+
+
+@pytest.mark.asyncio
+async def test_query_fundamentals_per_period_block_uses_not_available_label() -> None:
+    """PLAN-0104 W39: the per-period explicit listing must call out None cells
+    as ``<metric>: not available`` so the grounding-rewrite pass cannot
+    mis-classify a populated cell as missing on adjacent rows.
+    """
+    s3 = AsyncMock()
+    s3.query_fundamentals = AsyncMock(
+        return_value={
+            "metrics_by_period": [
+                {
+                    "period_end": "2025-12-31",
+                    "period_label": "Q4 2025",
+                    "period_type": "QUARTERLY",
+                    "gross_margin": 0.18,
+                },
+                {
+                    "period_end": "2026-03-31",
+                    "period_label": "Q1 2026",
+                    "period_type": "QUARTERLY",
+                    "gross_margin": None,
+                },
+            ],
+            "snapshot": None,
+            "coverage": {"gross_margin": "partial"},
+        }
+    )
+    handler = _make_handler(s3)
+    result = await handler._handle_query_fundamentals(
+        ticker="TSLA",
+        metrics=["gross_margin"],
+        periods=2,
+    )
+    assert result is not None
+    text = result.text
+    # Per-period explicit-label block present.
+    assert "Per-period metric listing" in text
+    # Populated cell is rendered verbatim, missing cell is explicit.
+    assert "gross_margin: 18.00%" in text
+    assert "gross_margin: not available" in text
+
+
+@pytest.mark.asyncio
 async def test_query_fundamentals_flags_missing_metric_in_coverage_line() -> None:
     """Missing-coverage metric is surfaced in the rendered text."""
     s3 = AsyncMock()

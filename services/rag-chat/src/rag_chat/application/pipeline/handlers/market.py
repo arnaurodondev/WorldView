@@ -680,7 +680,13 @@ class MarketHandler(ToolHandler):
                     for m in displayed:
                         v = row.get(m)
                         if v is None:
-                            cells.append("—")
+                            # PLAN-0104 W39: previously rendered "—" which the
+                            # LLM (8B-class) sometimes silently skipped or
+                            # mis-aligned with adjacent columns.  Explicit
+                            # "not available" matches the prompt's MISSING-
+                            # METRIC RULE vocabulary so the LLM knows to
+                            # refuse on this cell rather than fabricate.
+                            cells.append("not available")
                         elif isinstance(v, float):
                             # Margins are fractions; render as percentage so
                             # the LLM does not quote "0.44" as a P/E ratio.
@@ -697,31 +703,76 @@ class MarketHandler(ToolHandler):
                         else:
                             cells.append(str(v))
                     out.append(f"| {period} | {ptype} | " + " | ".join(cells) + " |")
+                # PLAN-0104 W39: per-period explicit-label block emitted AFTER
+                # the table.  WHY: Q1 AAPL benchmark (run_20260602T053049Z)
+                # showed the LLM initially streamed the correct value but the
+                # grounding-rewrite step then reframed the snapshot as
+                # "no valid data".  An explicit "<metric>: <value>" listing
+                # per row anchors the cell value to its label so the
+                # grounding pass cannot mis-classify a populated cell as
+                # missing.
+                out.append("")
+                out.append(f"### {ticker} — Per-period metric listing")
+                for row in rows:
+                    period = row.get("period_label") or row.get("period_end") or "?"
+                    out.append(f"- {period}:")
+                    for m in displayed:
+                        v = row.get(m)
+                        if v is None:
+                            out.append(f"    - {m}: not available")
+                        elif isinstance(v, float):
+                            if m.endswith("_margin") or m == "fcf_yield":
+                                out.append(f"    - {m}: {v * 100:.2f}%")
+                            elif abs(v) >= 1e9:
+                                fmt = _format_market_cap_value(v)
+                                out.append(f"    - {m}: {fmt if fmt is not None else v}")
+                            else:
+                                out.append(f"    - {m}: {v:.2f}")
+                        else:
+                            out.append(f"    - {m}: {v}")
         if snapshot:
             # Snapshot is opt-in — render only when present and there's at
             # least one non-meta field populated.
+            #
+            # PLAN-0104 W39: render EVERY requested snapshot metric (including
+            # ones that came back None) as an explicit "<metric>: <value>" or
+            # "<metric>: not available" line.  Pre-W39 we silently dropped
+            # None fields, which let the LLM (Q1 AAPL artifact) interpret an
+            # absent line as "no data returned" and refuse despite a populated
+            # pe_ratio living one section above.  The explicit per-metric
+            # label kills that ambiguity.
             as_of = snapshot.get("as_of") or "unknown"
             source = snapshot.get("source") or "highlights"
-            snap_lines = [f"\n### {ticker} Snapshot (as-of {as_of}, source: {source})"]
+            snap_lines = [f"\n### {ticker} — Current Snapshot (as-of {as_of}, source: {source})"]
             any_populated = False
             for m in metrics:
-                v = snapshot.get(m)
+                # Skip metadata fields that live in the snapshot dict but are
+                # not user-facing metrics.
+                if m in {"as_of", "source"}:
+                    continue
+                v = snapshot.get(m) if isinstance(snapshot, dict) else None
                 if v is None:
+                    snap_lines.append(f"- {m}: not available")
                     continue
                 any_populated = True
                 if isinstance(v, float):
                     if m.endswith("_margin") or m == "fcf_yield" or m == "dividend_yield":
-                        snap_lines.append(f"  {m}: {v * 100:.2f}%")
+                        snap_lines.append(f"- {m}: {v * 100:.2f}%")
                     elif abs(v) >= 1e9:
                         fmt = _format_market_cap_value(v)
-                        snap_lines.append(f"  {m}: {fmt if fmt is not None else v} (raw: {v})")
+                        snap_lines.append(f"- {m}: {fmt if fmt is not None else v} (raw: {v})")
                     elif m.endswith("_ratio") or m in {"forward_pe", "pe_ratio", "ev_ebitda", "price_to_book"}:
-                        snap_lines.append(f"  {m}: {v:.2f}x")
+                        snap_lines.append(f"- {m}: {v:.2f}x")
                     else:
-                        snap_lines.append(f"  {m}: {v:.2f}")
+                        snap_lines.append(f"- {m}: {v:.2f}")
                 else:
-                    snap_lines.append(f"  {m}: {v}")
-            if any_populated:
+                    snap_lines.append(f"- {m}: {v}")
+            # Always emit the snapshot block when ANY requested metric is
+            # listed (populated OR explicitly "not available"), so the LLM
+            # always sees the as-of date + per-metric labelling — never an
+            # empty subsection that could be misread as "tool returned
+            # nothing".
+            if any_populated or len(snap_lines) > 1:
                 out.extend(snap_lines)
         return "\n".join(out)
 

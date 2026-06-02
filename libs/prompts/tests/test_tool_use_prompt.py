@@ -249,7 +249,36 @@ class TestToolUsePromptContract:
         detectable in telemetry. Pinning the floor also catches
         accidental downgrades during merges.
         """
-        assert TOOL_USE_SYSTEM_PROMPT_TEMPLATE.version >= "1.6"
+        assert TOOL_USE_SYSTEM_PROMPT_TEMPLATE.version >= "1.7"
+
+    def test_financial_data_addendum_contains_missing_metric_rule(self) -> None:
+        """PLAN-0104 W39 regression — MISSING-METRIC RULE.
+
+        Round 5 v2 Q1 (AAPL P/E) and Q4 (TSLA gross margin) both showed
+        the LLM either (a) refusing despite a populated cell or (b)
+        fabricating values for absent ones.  v1.7 adds an explicit
+        refusal contract anchored on the "not available" rendering
+        vocabulary the handler now emits.  This test pins the rule text
+        so a future edit cannot silently weaken it.
+        """
+        prompt = get_tool_use_system_prompt(
+            intent="FINANCIAL_DATA",
+            today_iso="2026-06-01",
+        )
+        assert "MISSING-METRIC RULE (mandatory):" in prompt
+        # The rendering vocabulary the handler emits ("not available")
+        # MUST appear in the refusal contract so the LLM can match.
+        assert "not available" in prompt
+        # Explicit forbiddance of fabrication / pretraining fill.
+        assert "must NOT estimate, interpolate, or invent values" in prompt
+        assert "must NOT use\npretraining knowledge to fill the gap" in prompt
+        # Anti-false-refusal directive (the Q1 AAPL failure mode):
+        # a labelled cell IS the data, do NOT refuse on it.
+        assert "labelled cell IS the data" in prompt
+        # Directive must NOT leak into other intents.
+        for intent in ("MACRO", "FACTUAL_LOOKUP", "GENERAL", "PORTFOLIO", "COMPARISON"):
+            other = get_tool_use_system_prompt(intent=intent, today_iso="2026-06-01")
+            assert "MISSING-METRIC RULE" not in other, f"MISSING-METRIC RULE leaked into {intent} addendum"
 
     def test_financial_data_addendum_contains_answer_structure_directive(self) -> None:
         """PLAN-0104 W31 BP-651 regression — 4-section ANSWER STRUCTURE.

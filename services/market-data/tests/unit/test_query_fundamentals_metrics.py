@@ -223,6 +223,100 @@ async def test_unknown_metric_flagged_missing_not_500() -> None:
 
 
 @pytest.mark.asyncio
+async def test_revenue_request_auto_includes_derived_margins() -> None:
+    """PLAN-0104 W39: a bare ``revenue`` request also surfaces the three margin
+    derivations when their components are available — so "TSLA revenue trend"
+    questions get gross/operating/net margin context without an extra round-trip.
+    """
+    inst = _instrument()
+    p1 = datetime(2025, 12, 31, tzinfo=UTC)
+    p2 = datetime(2026, 3, 31, tzinfo=UTC)
+    earnings = [
+        _record(FundamentalsSection.EARNINGS_HISTORY, p1, {"reportDate": "2026-02-01", "epsActual": 1.95}),
+        _record(FundamentalsSection.EARNINGS_HISTORY, p2, {"reportDate": "2026-05-01", "epsActual": 2.01}),
+    ]
+    income = [
+        _record(
+            FundamentalsSection.INCOME_STATEMENT,
+            p1,
+            {
+                "totalRevenue": 100_000_000_000,
+                "grossProfit": 44_000_000_000,
+                "operatingIncome": 30_000_000_000,
+                "netIncome": 25_000_000_000,
+            },
+        ),
+        _record(
+            FundamentalsSection.INCOME_STATEMENT,
+            p2,
+            {
+                "totalRevenue": 110_000_000_000,
+                "grossProfit": 50_000_000_000,
+                "operatingIncome": 35_000_000_000,
+                "netIncome": 28_000_000_000,
+            },
+        ),
+    ]
+    uow = _uow(
+        {
+            FundamentalsSection.EARNINGS_HISTORY: earnings,
+            FundamentalsSection.INCOME_STATEMENT: income,
+        },
+        inst,
+    )
+    uc = QueryFundamentalsUseCase(uow)
+    out = await uc.execute(
+        instrument_id=uuid4(),
+        metrics=["revenue"],
+        periods=2,
+        include_snapshot=False,
+    )
+    rows = out["metrics_by_period"]
+    assert len(rows) == 2
+    # Revenue still present (caller asked for it).
+    assert rows[0]["revenue"] == 100_000_000_000
+    # Auto-added derivations: gross_margin / operating_margin / net_margin.
+    assert rows[0]["gross_margin"] == pytest.approx(0.44)
+    assert rows[0]["operating_margin"] == pytest.approx(0.30)
+    assert rows[0]["net_margin"] == pytest.approx(0.25)
+    assert rows[1]["gross_margin"] == pytest.approx(0.4545, rel=1e-3)
+    # Coverage flags the auto-added margins too.
+    assert out["coverage"]["gross_margin"] == "ok"
+    assert out["coverage"]["operating_margin"] == "ok"
+    assert out["coverage"]["net_margin"] == "ok"
+
+
+@pytest.mark.asyncio
+async def test_revenue_auto_margins_none_when_components_missing() -> None:
+    """PLAN-0104 W39: when revenue is present but gross_profit/operating_income/
+    net_income are absent, the auto-added margin cells are None (not fabricated).
+    """
+    inst = _instrument()
+    p1 = datetime(2026, 3, 31, tzinfo=UTC)
+    earnings = [_record(FundamentalsSection.EARNINGS_HISTORY, p1, {"reportDate": "2026-05-01", "epsActual": 2.0})]
+    # Revenue only — no gross_profit / operating_income / net_income.
+    income = [_record(FundamentalsSection.INCOME_STATEMENT, p1, {"totalRevenue": 100_000_000_000})]
+    uow = _uow(
+        {FundamentalsSection.EARNINGS_HISTORY: earnings, FundamentalsSection.INCOME_STATEMENT: income},
+        inst,
+    )
+    uc = QueryFundamentalsUseCase(uow)
+    out = await uc.execute(
+        instrument_id=uuid4(),
+        metrics=["revenue"],
+        periods=1,
+        include_snapshot=False,
+    )
+    row = out["metrics_by_period"][0]
+    assert row["revenue"] == 100_000_000_000
+    # Margins MUST be None — never fabricated from a missing dependency.
+    assert row["gross_margin"] is None
+    assert row["operating_margin"] is None
+    assert row["net_margin"] is None
+    assert out["coverage"]["gross_margin"] == "missing"
+
+
+@pytest.mark.asyncio
 async def test_snapshot_includes_as_of_when_highlights_present() -> None:
     """include_snapshot=True with a HIGHLIGHTS row stamps as_of + source."""
     inst = _instrument()

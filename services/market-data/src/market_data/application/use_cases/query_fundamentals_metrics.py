@@ -209,6 +209,23 @@ class QueryFundamentalsUseCase:
         if not metrics:
             return {"metrics_by_period": [], "snapshot": None, "coverage": {}}
 
+        # PLAN-0104 W39: when the caller asks for ``revenue`` (a very common
+        # trend question), auto-include the three margin derivations so the
+        # LLM can compose a "margin trend" answer without an extra round-trip.
+        # WHY only when revenue is requested: revenue is the denominator for
+        # all three margins, so we know the row will already need to load it.
+        # WHY only add margins (not all derived): a "revenue trend" question
+        # naturally invites margin context, but auto-loading EPS / ratios on
+        # every revenue call would bloat the response.  We skip the auto-add
+        # if the caller already passed any of the three explicitly.
+        auto_margins: list[str] = []
+        if "revenue" in metrics:
+            for derived in ("gross_margin", "operating_margin", "net_margin"):
+                if derived not in metrics:
+                    auto_margins.append(derived)
+        # Cheap copy so the caller's list is not mutated under their feet.
+        metrics = list(metrics) + auto_margins
+
         period_type_norm = (period_type or "quarterly").upper()
         if period_type_norm not in {"QUARTERLY", "ANNUAL"}:
             period_type_norm = "QUARTERLY"

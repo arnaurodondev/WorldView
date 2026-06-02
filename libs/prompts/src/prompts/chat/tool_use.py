@@ -63,13 +63,23 @@ TOOL_USE_SYSTEM_PROMPT_TEMPLATE = PromptTemplate(
     #        single-line SNAPSHOT-VS-PERIODS example with a pointer to the
     #        new 4-section structure (the old one-liner trained the LLM to
     #        be terse — Round 3 benchmark answers averaged 27-78 words).
-    version="1.6",
+    # 1.7 — PLAN-0104 W39: FINANCIAL_DATA addendum gains a mandatory
+    #        MISSING-METRIC RULE forbidding fabrication when a metric
+    #        renders as "not available" / "missing" / "—" / absent.
+    #        Root cause: Round 5 v2 Q1 (AAPL P/E) saw the LLM stream the
+    #        correct value, then collapse to "I cannot find the P/E ratio"
+    #        on the grounding-rewrite pass when the pe_ratio cell was
+    #        formatted ambiguously.  Round 5 v2 Q4 (TSLA gross margin)
+    #        saw the LLM fabricate "17.24% / 21.08%" period values when
+    #        the underlying tool returned different periods.  Both
+    #        failure modes are addressed by an explicit refusal contract.
+    version="1.7",
     description=(
         "Strict no-hallucination tool-use system prompt for multi-turn agent loop "
-        "(v1.6 adds 4-section ANSWER STRUCTURE + VALUATION-CONTEXT composition "
-        "per BP-651; v1.5 adds SNAPSHOT-VS-PERIODS rule per BP-640; v1.4 adds "
-        "RATIO-OR-TTM directive per BP-639; v1.3 adds tabular comparison "
-        "rendering directive per BP-638)"
+        "(v1.7 adds MISSING-METRIC RULE per PLAN-0104 W39; v1.6 adds 4-section "
+        "ANSWER STRUCTURE + VALUATION-CONTEXT composition per BP-651; v1.5 adds "
+        "SNAPSHOT-VS-PERIODS rule per BP-640; v1.4 adds RATIO-OR-TTM directive "
+        "per BP-639; v1.3 adds tabular comparison rendering directive per BP-638)"
     ),
     template=(
         "You are a research agent for institutional investors. Today's date is {today_iso}.\n\n"
@@ -381,7 +391,24 @@ _PER_INTENT_ADDENDA: dict[str, str] = {
         "FCF yield, consensus EPS, dividend yield), use `query_fundamentals` "
         "with an explicit `metrics=[...]` list — not `get_fundamentals_history`. "
         "Always read its Coverage line: refuse to quote any metric flagged "
-        "'missing'."
+        "'missing'.\n\n"
+        # PLAN-0104 W39: explicit refusal contract for absent metric cells.
+        # Two failure modes drive this rule:
+        #   (Q1 AAPL) the LLM streamed pe_ratio=37.73 correctly, then the
+        #   grounding-rewrite pass collapsed it to "I cannot find the P/E
+        #   ratio" because the snapshot cell formatting was ambiguous;
+        #   (Q4 TSLA) the LLM fabricated 17.24%/21.08% gross-margin period
+        #   values when the underlying tool returned different periods.
+        # The rule below makes both behaviours forbidden in plain text.
+        "MISSING-METRIC RULE (mandatory):\n"
+        "If a metric you need is rendered as 'not available', 'missing', '—', or absent\n"
+        "from both the snapshot AND every per-period row, you MUST refuse with:\n"
+        '"<metric> data is not available for <ticker> in the retrieved tool results."\n'
+        "You must NOT estimate, interpolate, or invent values. You must NOT use\n"
+        "pretraining knowledge to fill the gap. Conversely, if a metric IS present\n"
+        "in the snapshot or any period row (rendered as '<metric>: <value>'), you\n"
+        "MUST quote that value verbatim — do NOT refuse on the grounds that the\n"
+        "tool 'returned no valid data'; the labelled cell IS the data."
     ),
     "MACRO": (
         "\n\nMACRO FORMAT:\n"
