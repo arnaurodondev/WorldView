@@ -18,9 +18,14 @@
 
 ## Non-goals
 
-- New tools (`get_consensus_estimates`, `get_valuation_ratios`, `get_margin_history`) — deferred to PLAN-0105 if Round 4 benchmark warrants.
 - Frontend changes.
 - DB migrations.
+
+## Added scope (post-W31, user-directed 2026-06-01)
+
+- **W32** — One **unified** `query_fundamentals` tool (parameterised over metrics/periods/aggregation) replacing the per-metric handler proliferation. Underlying source is the same fundamentals table; one tool with a typed argument schema is preferable to N narrow tools.
+- **W33** — Replace word-count benchmark heuristics with **quality-based grading**: an LLM-judge rubric over (a) which tools were called, (b) whether tool outputs were correctly cited, (c) whether the answer is well-framed vs the question's depth, (d) whether refusals are appropriate when data is missing. Short answers to shallow questions are OK; long answers required only for genuinely deep multi-tool questions.
+- **W34** — Fix the pre-existing rag-chat unit-test collection `ModuleNotFoundError: No module named 'tools'` (13 test files). Critical for future agents to validate work.
 
 ---
 
