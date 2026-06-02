@@ -64,3 +64,16 @@ repos:
         # regex patterns.
         types: [text]
         pass_filenames: true
+
+      # PLAN-0104 W45 (BP-NEW post-leak 2026-06-02): block API-key-shaped
+      # strings in staged additions. Reads `git diff --cached` directly so
+      # it sees only what is about to enter history. Append
+      # `# pragma: allowlist-secret` on a line to opt out (use sparingly,
+      # only for test fixtures with obviously fake values).
+      - id: secret-scan
+        name: Reject staged secrets (API keys, tokens)
+        entry: scripts/hooks/secret-scan.sh
+        language: script
+        # No filenames needed — the hook reads `git diff --cached` itself.
+        pass_filenames: false
+        always_run: true
