@@ -1,0 +1,154 @@
+{
+  "bucket_counts": {
+    "EXCEPTION": 0,
+    "FAIL": 0,
+    "PASS": 0,
+    "WARN": 6
+  },
+  "category_buckets": {
+    "financial_data": {
+      "EXCEPTION": 0,
+      "FAIL": 0,
+      "PASS": 0,
+      "WARN": 6
+    }
+  },
+  "per_question": [
+    {
+      "bucket": "WARN",
+      "category": "financial_data",
+      "entities_mentioned": [
+        "AAPL",
+        "P/E"
+      ],
+      "entities_missing": [],
+      "id": "ru_aapl_pe_simple",
+      "is_empty": false,
+      "is_refusal": false,
+      "latency_s": 13.908,
+      "missing_expected_tools": [],
+      "must_not_say_hits": [],
+      "reasons": [
+        "short_answer words=8"
+      ],
+      "slot": "q_ru_aapl_pe_simple",
+      "tool_overlap_with_expected": [],
+      "ttft_s": 0.693,
+      "word_count": 8
+    },
+    {
+      "bucket": "WARN",
+      "category": "financial_data",
+      "entities_mentioned": [
+        "META",
+        "EPS"
+      ],
+      "entities_missing": [],
+      "id": "ru_meta_eps_trend",
+      "is_empty": false,
+      "is_refusal": false,
+      "latency_s": 16.473,
+      "missing_expected_tools": [],
+      "must_not_say_hits": [],
+      "reasons": [
+        "short_answer words=51"
+      ],
+      "slot": "q_ru_meta_eps_trend",
+      "tool_overlap_with_expected": [],
+      "ttft_s": 1.62,
+      "word_count": 51
+    },
+    {
+      "bucket": "WARN",
+      "category": "financial_data",
+      "entities_mentioned": [
+        "revenue"
+      ],
+      "entities_missing": [
+        "AMZN"
+      ],
+      "id": "ru_amzn_revenue_yoy",
+      "is_empty": false,
+      "is_refusal": false,
+      "latency_s": 82.813,
+      "missing_expected_tools": [],
+      "must_not_say_hits": [],
+      "reasons": [
+        "missing_entities=['AMZN']",
+        "slow latency_s=82.813"
+      ],
+      "slot": "q_ru_amzn_revenue_yoy",
+      "tool_overlap_with_expected": [],
+      "ttft_s": 0.482,
+      "word_count": 232
+    },
+    {
+      "bucket": "WARN",
+      "category": "financial_data",
+      "entities_mentioned": [
+        "TSLA",
+        "gross margin"
+      ],
+      "entities_missing": [],
+      "id": "ru_tsla_margin_trend",
+      "is_empty": false,
+      "is_refusal": false,
+      "latency_s": 54.557,
+      "missing_expected_tools": [],
+      "must_not_say_hits": [],
+      "reasons": [
+        "short_answer words=66",
+        "slow latency_s=54.557"
+      ],
+      "slot": "q_ru_tsla_margin_trend",
+      "tool_overlap_with_expected": [],
+      "ttft_s": 0.653,
+      "word_count": 66
+    },
+    {
+      "bucket": "WARN",
+      "category": "financial_data",
+      "entities_mentioned": [
+        "GOOGL",
+        "P/E"
+      ],
+      "entities_missing": [],
+      "id": "ru_googl_pe_vs_history",
+      "is_empty": false,
+      "is_refusal": false,
+      "latency_s": 117.345,
+      "missing_expected_tools": [],
+      "must_not_say_hits": [],
+      "reasons": [
+        "slow latency_s=117.345"
+      ],
+      "slot": "q_ru_googl_pe_vs_history",
+      "tool_overlap_with_expected": [],
+      "ttft_s": 0.59,
+      "word_count": 192
+    },
+    {
+      "bucket": "WARN",
+      "category": "financial_data",
+      "entities_mentioned": [
+        "AAPL",
+        "forward",
+        "P/E"
+      ],
+      "entities_missing": [],
+      "id": "ru_aapl_forward_pe",
+      "is_empty": false,
+      "is_refusal": false,
+      "latency_s": 17.384,
+      "missing_expected_tools": [],
+      "must_not_say_hits": [],
+      "reasons": [
+        "short_answer words=23"
+      ],
+      "slot": "q_ru_aapl_forward_pe",
+      "tool_overlap_with_expected": [],
+      "ttft_s": 0.65,
+      "word_count": 23
+    }
+  ]
+}

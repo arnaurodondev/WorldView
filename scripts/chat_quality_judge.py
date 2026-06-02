@@ -306,6 +306,18 @@ DIMENSIONS (each 0-25):
                        Length alone is NEVER the criterion — match to question.
 
 4. refusal_judgment    DECISION TREE — APPLY LITERALLY, NO INTERPRETATION:
+                       Step 0 (HARD PRE-EMPTION): If the answer contains a
+                               phrase with the word "would" suggesting more
+                               data/time/context would help (e.g. "would be
+                               required", "would help", "would be needed",
+                               "would be ideal", "would improve") AND the
+                               answer contains substantive analysis (specific
+                               numbers, citations, multi-paragraph synthesis),
+                               score = 25 and STOP. The "would"-phrase is a
+                               WOULD-HELP HEDGE, never a refusal. A reason
+                               containing the substring "would be required"
+                               as evidence of a refusal is FACTUALLY WRONG
+                               and forbidden.
                        Step 1: Search the answer for ANY of the refusal phrases
                                listed below. If you find ZERO refusal phrases,
                                score = 25 and STOP. Reason MUST say
@@ -326,6 +338,23 @@ DIMENSIONS (each 0-25):
                          score for ANY reason starting with "no refusal phrase"
                          or "does not contain any refusal" is 25 — full marks.
 
+                       PRE-EMPTION RULE — read BEFORE matching refusal phrases:
+                         If the answer contains BOTH substantive analysis
+                         (specific numbers, citations like [tool_name row N],
+                         multi-paragraph synthesis) AND a phrase containing
+                         the word "would" (e.g. "would be required", "would
+                         help", "would be needed", "would be ideal"), the
+                         "would"-phrase is a WOULD-HELP HEDGE (see below) and
+                         is NOT a refusal — even if it superficially overlaps
+                         with refusal-phrase wording. Score refusal_judgment=25
+                         and STOP. Do NOT also try to match a refusal phrase.
+
+                         Specifically: "X would be required/needed/helpful"
+                         is NEVER a refusal phrase. It is a polite suggestion
+                         of what would IMPROVE the answer. A reason like
+                         "Contains refusal phrase 'would be required'" is
+                         FACTUALLY WRONG and forbidden.
+
                        REFUSAL PHRASES (case-insensitive substring search):
                          * "I cannot find/provide/determine/answer/give"
                          * "I am unable to" / "I'm unable to"
@@ -334,6 +363,49 @@ DIMENSIONS (each 0-25):
                          * "the tool results do not contain"
                          * "no data was returned" / "no results were returned"
                          * "not currently available in our data sources"
+
+                       NOTE: None of the refusal phrases above contain the
+                       word "would". If the only candidate refusal phrase you
+                       can find in the answer contains "would", you have a
+                       WOULD-HELP HEDGE, not a refusal. Score 25.
+
+                       WOULD-HELP HEDGING (NOT a refusal — explicitly excluded):
+                         Phrases that politely suggest what would IMPROVE or
+                         REFINE the answer are NOT refusals when the answer body
+                         already contains substantive analysis:
+                           * "A longer time series would be required/needed/helpful"
+                           * "More data would help/be helpful/strengthen"
+                           * "Additional context would improve"
+                           * "For a more precise assessment, X would be required"
+                           * "Further analysis would be useful"
+                           * "More granular data would be ideal"
+
+                         These phrases acknowledge a limitation of the data
+                         WITHOUT refusing to answer. If the answer contains
+                         substantive analysis (numbers, citations, multi-
+                         paragraph synthesis) AND the only "refusal-like"
+                         phrasing is a would-help hedge, score
+                         refusal_judgment=25 (no refusal detected).
+
+                         A "I cannot answer" refusal IS a refusal. A "more data
+                         would help me answer better" suggestion IS NOT a
+                         refusal.
+
+                         WORKED EXAMPLE (pin verbatim — Q5 GOOGL R10):
+                           Answer: "Google has a P/E of 28.99x [query_fundamentals
+                           row 0]... Revenue has increased from $69.1B to
+                           $96.5B... For a more precise assessment of whether
+                           this multiple is high or low relative to history, a
+                           longer time series of P/E ratios would be required.
+                           However, given the company's sustained revenue and
+                           profit growth, the current valuation appears aligned
+                           with its performance trajectory."
+
+                           Correct verdict: refusal_judgment=25 (not a refusal —
+                           answer is substantive + the "would be required"
+                           phrase is a would-help hedge, not a refusal phrase).
+                           A reason like "Contains refusal phrase 'would be
+                           required'" is FACTUALLY WRONG.
 
                        Hedging / interpretive language is NOT a refusal:
                          * "However, ..." / "Based on ..." / "While ..." —

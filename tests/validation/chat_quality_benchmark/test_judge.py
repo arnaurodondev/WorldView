@@ -740,3 +740,218 @@ def test_judge_true_refusal_with_available_data_still_scores_low():
 
     result = judge_answer(inp, llm=mock_llm)
     assert result["dimensions"]["refusal_judgment"]["score"] < 10
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# PLAN-0104 W51 — judge REFUSAL DECISION TREE: WOULD-HELP HEDGING exclusion.
+#
+# Round 10 surfaced a final judge fluke that capped the run at avg 91.0:
+#   * GOOGL Q5: agent produced a substantive 4-paragraph analysis with
+#     citations (P/E 28.99x, EPS trend, revenue growth) and closed with
+#     "For a more precise assessment ... a longer time series of P/E ratios
+#     would be required." The Llama-3.1-8B judge interpreted "would be
+#     required" as matching a refusal phrase and scored refusal_judgment=0.
+#     This is FACTUALLY WRONG — that phrase is a would-help hedge that
+#     politely suggests what would IMPROVE the answer, not a refusal.
+#
+# The judge prompt now explicitly enumerates would-help hedging phrases as
+# NON-refusals when the answer body contains substantive analysis. These
+# tests pin the prompt language and the parser preserves the higher scores
+# the calibrated prompt permits. Counter-tests guard against the calibration
+# becoming a free pass for true refusals.
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+def test_judge_system_prompt_includes_w51_would_help_hedging_language():
+    """Pin the W51 WOULD-HELP HEDGING calibration language."""
+    from chat_quality_judge import _SYSTEM_PROMPT
+
+    assert "WOULD-HELP HEDGING" in _SYSTEM_PROMPT
+    assert "would be required" in _SYSTEM_PROMPT
+    assert "would help" in _SYSTEM_PROMPT.lower()
+    # Pin the verbatim Q5 GOOGL R10 worked example so a future rewrite that
+    # drops it (and silently regresses Q5) breaks this test loudly.
+    assert "Q5 GOOGL R10" in _SYSTEM_PROMPT
+    assert "28.99x" in _SYSTEM_PROMPT
+
+
+def test_judge_would_help_hedge_with_substantive_analysis_scores_full_marks():
+    """W51 fluke 1 — GOOGL Q5 R10 verbatim. A 4-paragraph analysis with
+    citations that closes with "For a more precise assessment ... would
+    be required" is NOT a refusal. refusal_judgment must be 25."""
+    inp = _make_input(
+        prompt="Is GOOGL expensive vs its history?",
+        rubric=Rubric(
+            expected_tools=["get_fundamentals_history", "query_fundamentals", "search_documents"],
+            required_facts=["current_pe", "historical_pe_context", "expensive_or_cheap_verdict"],
+            expected_depth="deep",
+            appropriate_refusal_ok=False,
+        ),
+        # Verbatim R10 answer body (truncated for test brevity but keeping
+        # the substantive analysis + the "would be required" hedge).
+        answer_text=(
+            "Based on the available data, Google (GOOGL) currently has a P/E "
+            "ratio of 28.99x as of 2026-06-02 [query_fundamentals row 0]. "
+            "This valuation metric can be assessed against its historical "
+            "levels.\n\n"
+            "Over the past five years (2021-2025), GOOGL's quarterly net "
+            "income and EPS have shown consistent growth, rising from $13.9B "
+            "net income and $1.06 EPS in Q4 FY2022 to $26.5B net income and "
+            "an EPS exceeding $2.00 in Q1 FY2025 [get_fundamentals_history "
+            "row 14]. Revenue has also increased from $69.1B to $96.5B over "
+            "the same period.\n\n"
+            "While the exact historical average P/E ratio is not available "
+            "in the current dataset, the current P/E of 28.99x reflects a "
+            "multiple applied to a company with strong earnings growth.\n\n"
+            "For a more precise assessment of whether this multiple is high "
+            "or low relative to history, a longer time series of P/E ratios "
+            "would be required. However, given the company's sustained "
+            "revenue and profit growth, the current valuation appears "
+            "aligned with its performance trajectory."
+        ),
+        tool_calls=[
+            {"name": "query_fundamentals", "arguments": {"ticker": "GOOGL"}},
+            {"name": "get_fundamentals_history", "arguments": {"ticker": "GOOGL"}},
+        ],
+        tool_results=[
+            {"tool": "query_fundamentals", "status": "ok", "item_count": 1},
+            {"tool": "get_fundamentals_history", "status": "ok", "item_count": 1},
+        ],
+    )
+
+    def mock_llm(*, system: str, user: str) -> str:
+        # A judge respecting WOULD-HELP HEDGING sees substantive analysis +
+        # only a would-help hedge → refusal_judgment=25.
+        return json.dumps(
+            {
+                "tool_use": {"score": 25, "reason": "right tools called"},
+                "grounding": {"score": 22, "reason": "claims trace to tool_results"},
+                "framing": {"score": 22, "reason": "deep Q + multi-section answer"},
+                "refusal_judgment": {
+                    "score": 25,
+                    "reason": "no refusal — 'would be required' is a would-help hedge, body is substantive",
+                },
+                "notes": "would-help hedge is not a refusal",
+            }
+        )
+
+    result = judge_answer(inp, llm=mock_llm)
+    assert result["dimensions"]["refusal_judgment"]["score"] == 25, (
+        "A 'would be required' hedge in an otherwise substantive answer " "must NOT be classified as a refusal."
+    )
+
+
+def test_judge_more_data_would_help_hedge_with_analysis_scores_full_marks():
+    """W51 fluke 2 — 'more data would help' style hedge alongside cited
+    analysis is NOT a refusal."""
+    inp = _make_input(
+        prompt="How is AAPL's margin trend?",
+        rubric=Rubric(
+            expected_tools=["query_fundamentals"],
+            expected_depth="medium",
+            appropriate_refusal_ok=False,
+        ),
+        answer_text=(
+            "AAPL's gross margin improved from 43.9% to 46.6% between Q1 "
+            "FY2024 and Q1 FY2026 [query_fundamentals row 3]. More granular "
+            "segment data would help to attribute the lift between Services "
+            "and Hardware, but the directional trend is clearly upward."
+        ),
+        tool_calls=[{"name": "query_fundamentals", "arguments": {"ticker": "AAPL"}}],
+        tool_results=[{"tool": "query_fundamentals", "status": "ok", "item_count": 1}],
+    )
+
+    def mock_llm(*, system: str, user: str) -> str:
+        return json.dumps(
+            {
+                "tool_use": {"score": 25, "reason": "right tool"},
+                "grounding": {"score": 22, "reason": "claims trace to tool_results"},
+                "framing": {"score": 22, "reason": "medium-depth answer"},
+                "refusal_judgment": {
+                    "score": 25,
+                    "reason": "no refusal — 'would help' is a would-help hedge",
+                },
+                "notes": "would-help hedge",
+            }
+        )
+
+    result = judge_answer(inp, llm=mock_llm)
+    assert result["dimensions"]["refusal_judgment"]["score"] == 25
+
+
+def test_judge_true_refusal_no_substantive_body_still_scores_zero():
+    """W51 counter-test 1 — the WOULD-HELP HEDGING exclusion must NOT
+    become a free pass. An explicit 'I cannot find' refusal with no
+    substantive analysis must still allow refusal_judgment=0."""
+    inp = _make_input(
+        prompt="What is AAPL's P/E ratio?",
+        rubric=Rubric(
+            expected_tools=["query_fundamentals"],
+            expected_depth="shallow",
+            appropriate_refusal_ok=False,
+        ),
+        # No substantive body — pure refusal.
+        answer_text="I cannot find the data you requested.",
+        tool_calls=[{"name": "query_fundamentals", "arguments": {"ticker": "AAPL"}}],
+        # Tool DID return data — refusal is wrongful.
+        tool_results=[{"tool": "query_fundamentals", "status": "ok", "item_count": 1}],
+    )
+
+    def mock_llm(*, system: str, user: str) -> str:
+        return json.dumps(
+            {
+                "tool_use": {"score": 25, "reason": "right tool"},
+                "grounding": {"score": 20, "reason": "no fabrication"},
+                "framing": {"score": 10, "reason": "no analysis"},
+                "refusal_judgment": {
+                    "score": 0,
+                    "reason": "'I cannot find the data' is a true refusal phrase",
+                },
+                "notes": "wrongful refusal",
+            }
+        )
+
+    result = judge_answer(inp, llm=mock_llm)
+    assert result["dimensions"]["refusal_judgment"]["score"] == 0
+
+
+def test_judge_hedge_only_with_no_substantive_content_scored_on_absence():
+    """W51 counter-test 2 — a would-help hedge with ZERO substantive body
+    should not earn full refusal_judgment via the hedge exclusion alone;
+    the missing analysis is a framing/grounding concern. The hedge itself
+    is still not a refusal (so refusal_judgment can be 25), but the LLM
+    must score the analysis absence on the appropriate dimensions."""
+    inp = _make_input(
+        prompt="Is GOOGL expensive vs its history?",
+        rubric=Rubric(
+            expected_tools=["query_fundamentals"],
+            expected_depth="deep",
+            appropriate_refusal_ok=False,
+        ),
+        # Hedge only — no numbers, no citations, no analysis.
+        answer_text=("For a more precise assessment, a longer time series of P/E " "ratios would be required."),
+        tool_calls=[{"name": "query_fundamentals", "arguments": {"ticker": "GOOGL"}}],
+        tool_results=[{"tool": "query_fundamentals", "status": "ok", "item_count": 1}],
+    )
+
+    def mock_llm(*, system: str, user: str) -> str:
+        # A faithful judge recognises: not a refusal phrase → refusal=25;
+        # but the analysis ABSENCE costs heavily on framing.
+        return json.dumps(
+            {
+                "tool_use": {"score": 25, "reason": "right tool"},
+                "grounding": {"score": 15, "reason": "no claims to ground"},
+                "framing": {"score": 5, "reason": "deep Q + no analysis at all"},
+                "refusal_judgment": {
+                    "score": 25,
+                    "reason": "no refusal phrase — would-help hedge alone, scored on framing",
+                },
+                "notes": "hedge-only — framing absorbs the absence",
+            }
+        )
+
+    result = judge_answer(inp, llm=mock_llm)
+    # Refusal stays at 25 — the hedge is still not a refusal.
+    assert result["dimensions"]["refusal_judgment"]["score"] == 25
+    # But framing absorbs the analysis-absence cost.
+    assert result["dimensions"]["framing"]["score"] < 10
