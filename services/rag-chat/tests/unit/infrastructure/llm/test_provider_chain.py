@@ -102,6 +102,25 @@ def _make_failing_provider(name: str) -> MagicMock:
     return provider
 
 
+def _make_empty_stream_provider(name: str) -> MagicMock:
+    """A provider whose stream_chat completes WITHOUT raising and WITHOUT yielding.
+
+    Models the silent-empty-stream failure mode observed against DeepInfra
+    on long second-turn tool synthesis (PLAN-0104 W40 / Q5 GOOGL).
+    """
+    provider = MagicMock()
+    provider.name = name
+    provider.model_id = name
+
+    async def _stream_chat(messages: list, **kw: object) -> AsyncIterator[str]:
+        # Intentionally yield nothing — provider returns HTTP 200 OK but empty SSE.
+        return
+        yield  # pragma: no cover — needed to make this an async generator
+
+    provider.stream_chat = _stream_chat
+    return provider
+
+
 def _make_ok_provider(name: str, *, response_text: str = "ok") -> MagicMock:
     """A provider that returns a successful LLMToolResponse / single text chunk."""
     provider = MagicMock()
@@ -311,3 +330,65 @@ async def test_not_implemented_error_does_not_increment_failed_counter() -> None
     )
     # The chain must have fallen through to the second provider.
     assert resp.text == "ok"
+
+
+# ---------------------------------------------------------------------------
+# PLAN-0104 W40 — empty-stream root cause: zero-chunk completion triggers
+# provider chain fallover instead of silent success.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_stream_chat_zero_chunks_triggers_fallover(caplog) -> None:
+    """Primary yields zero chunks but does NOT raise -> chain must fall over.
+
+    Regression for Q5 GOOGL ``ru_googl_pe_vs_history`` (run_20260602T053049Z):
+    DeepInfra returned HTTP 200 OK with an empty SSE stream on the second-turn
+    synthesis after 3 tool calls. Previously the chain treated this as success
+    (the inner generator simply finished), the orchestrator saw zero tokens,
+    and only the W36 degraded-synthesis fallback rescued the user. The chain
+    must now treat zero-chunk completion the same as an exception when a next
+    provider is available, and increment ``rag_provider_fallback`` accordingly.
+    """
+    empty = _make_empty_stream_provider("deepinfra")
+    openrouter = _make_ok_provider("openrouter", response_text="fallback-token")
+    valkey = _make_valkey()
+    chain = LLMProviderChain(providers=[empty, openrouter], valkey=valkey)
+
+    before = _counter_sample(
+        "rag_provider_fallback_total",
+        {"from_provider": "deepinfra", "to_provider": "openrouter"},
+    )
+
+    with caplog.at_level("WARNING"):
+        chunks = [c async for c in chain.stream_chat([{"role": "user", "content": "hi"}])]
+
+    after = _counter_sample(
+        "rag_provider_fallback_total",
+        {"from_provider": "deepinfra", "to_provider": "openrouter"},
+    )
+    # Fallback metric must have incremented (proves chain treated zero-chunk
+    # completion as a failure, not as silent success).
+    assert after - before == pytest.approx(1.0)
+    # Secondary provider's chunk must have reached the caller.
+    assert chunks == ["fallback-token"]
+    # Structured log must name the zero-chunk failure mode for ops dashboards.
+    assert any("provider_returned_empty_stream" in record.getMessage() for record in caplog.records)
+
+
+@pytest.mark.asyncio
+async def test_stream_chat_zero_chunks_last_provider_raises() -> None:
+    """If the LAST (only) provider yields zero chunks, the chain must raise.
+
+    The orchestrator's W36 ``zero_chunk`` branch is preserved as the final
+    safety net — it catches this exception and synthesises the degraded
+    answer.  We are NOT replacing W36; we are ensuring the chain exhausts
+    every provider before falling back to the degraded path.
+    """
+    empty = _make_empty_stream_provider("deepinfra")
+    valkey = _make_valkey()
+    chain = LLMProviderChain(providers=[empty], valkey=valkey)
+
+    with pytest.raises(RuntimeError):
+        # Consume the generator to surface the raised exception.
+        [c async for c in chain.stream_chat([{"role": "user", "content": "hi"}])]

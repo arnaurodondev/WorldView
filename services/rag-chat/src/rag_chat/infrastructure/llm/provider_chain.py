@@ -424,11 +424,58 @@ class LLMProviderChain:
         for i, provider in enumerate(self._providers):
             if getattr(provider, "name", "") == "ollama":
                 continue
+            # PLAN-0104 W40 / BP-NEW (zero-chunk root cause for Q5 GOOGL pe_vs_history):
+            # DeepInfra occasionally returns HTTP 200 OK with an empty SSE stream
+            # (no ``data:`` content frames before ``[DONE]``) on long multi-tool
+            # second-turn synthesis.  The previous behaviour treated this as
+            # success — the chain ``return``ed, the orchestrator saw zero
+            # tokens, and only the W36 degraded-synthesis fallback rescued the
+            # user.  This is structurally wrong: a zero-chunk completion is
+            # indistinguishable from a hard failure for the user, and the
+            # provider chain has other healthy providers that could answer.
+            #
+            # Fix: track whether ANY chunk was yielded. If a provider's stream
+            # completes with zero chunks AND there is another provider to try,
+            # treat it as a failure (log, increment the same fallback metric
+            # as the exception path, continue the loop). If we already yielded
+            # at least one chunk, mid-stream retry would emit duplicates — so
+            # we still ``return`` and let the orchestrator's partial-recovery
+            # path handle truncated answers.  If we are on the LAST provider
+            # and got zero chunks, we raise: the orchestrator's W36
+            # ``zero_chunk`` branch still catches this and synthesises the
+            # degraded answer (safety net preserved, not replaced).
+            _chunk_count = 0
             try:
                 async for chunk in provider.stream_chat(messages, **kwargs):  # type: ignore[union-attr,attr-defined]
+                    _chunk_count += 1
                     yield chunk
+                if _chunk_count == 0:
+                    # Look for the next non-Ollama provider; if one exists,
+                    # treat zero-chunk completion as a failure and fall over.
+                    _has_next = any(getattr(p, "name", "") != "ollama" for p in self._providers[i + 1 :])
+                    if _has_next:
+                        log.warning(  # type: ignore[no-any-return]
+                            "provider_returned_empty_stream",
+                            provider=provider.name,
+                            error="zero chunks yielded",
+                        )
+                        rag_provider_unavail.labels(provider=provider.name).inc()
+                        _next = next(p for p in self._providers[i + 1 :] if getattr(p, "name", "") != "ollama")
+                        rag_provider_fallback.labels(
+                            from_provider=provider.name,
+                            to_provider=_next.name,
+                        ).inc()
+                        continue  # try next provider
+                    # No next provider — raise so the orchestrator's W36
+                    # ``zero_chunk`` branch synthesises the degraded answer.
+                    raise RuntimeError(f"Provider {provider.name} returned empty stream (zero chunks)")
                 return  # success — stop iterating providers
             except Exception as exc:
+                # If we already yielded chunks, propagate the exception so the
+                # orchestrator's partial-recovery path (FIX-LIVE-V) decides
+                # whether to keep the partial answer.
+                if _chunk_count > 0:
+                    raise
                 log.warning(  # type: ignore[no-any-return]
                     "provider_failed",
                     provider=provider.name,
