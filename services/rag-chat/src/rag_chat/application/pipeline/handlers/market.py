@@ -204,6 +204,8 @@ class MarketHandler(ToolHandler):
             "get_fundamentals_history",
             # PLAN-0095 W2 T-W2-02: batch sibling of get_fundamentals_history.
             "get_fundamentals_history_batch",
+            # PLAN-0104 W32: unified parameterised fundamentals query.
+            "query_fundamentals",
             "compare_entities",
             "screen_universe",
             "get_market_movers",
@@ -234,6 +236,8 @@ class MarketHandler(ToolHandler):
             "get_fundamentals_history": self._handle_get_fundamentals_history,
             # PLAN-0095 W2 T-W2-02: batched fundamentals fan-out tool.
             "get_fundamentals_history_batch": self._handle_get_fundamentals_history_batch,
+            # PLAN-0104 W32: unified parameterised fundamentals query.
+            "query_fundamentals": self._handle_query_fundamentals,
             "compare_entities": self._handle_compare_entities,
             "screen_universe": self._handle_screen_universe,
             "get_market_movers": self._handle_get_market_movers,
@@ -530,6 +534,177 @@ class MarketHandler(ToolHandler):
             ok_count=sum(1 for t in ticker_list if (results.get(t) or {}).get("status") == "ok"),
         )
         return out
+
+    async def _handle_query_fundamentals(
+        self,
+        ticker: str,
+        metrics: list[str] | None = None,
+        periods: int = 8,
+        period_type: str = "quarterly",
+        include_snapshot: bool = True,
+    ) -> RetrievedItem | None:
+        """Fetch a parameterised metric projection (PLAN-0104 W32).
+
+        Calls the unified ``POST /api/v1/fundamentals/query`` endpoint and
+        formats the result as a compact markdown block that lists each
+        metric's coverage flag, the per-period series (when periods > 0),
+        and the snapshot scalars (when present). The coverage block lets
+        the LLM see at a glance which metrics are reliable ("ok"), which
+        need a caveat ("partial"), and which to refuse on ("missing")
+        rather than fabricating from a half-empty series.
+
+        R9: returns None on invalid input or upstream timeout (no fake row).
+        R27: read-only.
+        """
+        if not ticker or not metrics:
+            log.warning("tool_invalid_param", tool="query_fundamentals", reason="missing_ticker_or_metrics")
+            return None
+
+        period_type_norm = (period_type or "quarterly").strip().lower()
+        if period_type_norm not in {"quarterly", "annual"}:
+            log.warning(
+                "tool_invalid_param",
+                tool="query_fundamentals",
+                param="period_type",
+                value=period_type,
+                fallback="quarterly",
+            )
+            period_type_norm = "quarterly"
+
+        query_method = getattr(self._s3, "query_fundamentals", None)
+        if query_method is None:
+            log.warning("tool_handler_missing_method", tool="query_fundamentals")
+            return None
+
+        try:
+            bundle = await asyncio.wait_for(
+                query_method(
+                    ticker=ticker,
+                    metrics=metrics,
+                    periods=periods,
+                    period_type=period_type_norm,
+                    include_snapshot=include_snapshot,
+                ),
+                timeout=self._timeout,
+            )
+        except Exception as e:
+            log.warning("tool_failed", tool="query_fundamentals", error=str(e), ticker=ticker)
+            return None
+
+        if not isinstance(bundle, dict):
+            log.warning("tool_no_data", tool="query_fundamentals", ticker=ticker)
+            return None
+
+        rows: list[dict[str, Any]] = bundle.get("metrics_by_period") or []  # type: ignore[assignment]
+        snapshot: dict[str, Any] | None = bundle.get("snapshot")
+        coverage: dict[str, str] = bundle.get("coverage") or {}
+
+        if not rows and not snapshot:
+            log.warning("tool_no_data", tool="query_fundamentals", ticker=ticker)
+            return None
+
+        text = self._format_query_fundamentals(ticker, metrics, rows, snapshot, coverage)
+        return RetrievedItem.create(
+            item_id=f"tool:fundamentals_query:{ticker}",
+            item_type=ItemType.financial,
+            text=text[:_TOOL_RESULT_MAX_CHARS],
+            score=0.88,
+            trust_weight=0.90,
+            citation_meta=CitationMeta(
+                title=f"Fundamentals query: {ticker}",
+                url=None,
+                source_name="fundamentals",
+                published_at=None,
+                entity_name=ticker,
+            ),
+        )
+
+    def _format_query_fundamentals(
+        self,
+        ticker: str,
+        metrics: list[str],
+        rows: list[dict[str, Any]],
+        snapshot: dict[str, Any] | None,
+        coverage: dict[str, str],
+    ) -> str:
+        """Render the unified query response as a compact markdown block.
+
+        Layout::
+
+            ## TICKER fundamentals query
+            Coverage: metric=flag, metric=flag, ...
+            [per-period table when rows]
+            [snapshot section when snapshot]
+        """
+        out: list[str] = [f"## {ticker} fundamentals query"]
+        if coverage:
+            cov_str = ", ".join(f"{m}={coverage.get(m, 'missing')}" for m in metrics)
+            out.append(f"Coverage: {cov_str}")
+        if rows:
+            # Build a markdown table whose columns are exactly the requested
+            # metrics that have at least one non-null value AND are present
+            # on the rows (so derived metrics are included automatically).
+            # Per-period flow metrics may have no value if all periods were
+            # null — we still keep the column so the LLM sees the gap rather
+            # than silently dropping it.
+            displayed = [m for m in metrics if any(m in r for r in rows)]
+            if displayed:
+                header = "| Period | Periodicity | " + " | ".join(displayed) + " |"
+                divider = "|" + "|".join(["-" * 8] * (2 + len(displayed))) + "|"
+                out.append("")
+                out.append(header)
+                out.append(divider)
+                for row in rows:
+                    period = row.get("period_label") or row.get("period_end") or "?"
+                    ptype = row.get("period_type") or "QUARTERLY"
+                    cells = []
+                    for m in displayed:
+                        v = row.get(m)
+                        if v is None:
+                            cells.append("—")
+                        elif isinstance(v, float):
+                            # Margins are fractions; render as percentage so
+                            # the LLM does not quote "0.44" as a P/E ratio.
+                            if m.endswith("_margin") or m == "fcf_yield":
+                                cells.append(f"{v * 100:.2f}%")
+                            elif abs(v) >= 1e9:
+                                # Cap-style raw amount → defer to the same
+                                # B/M formatter so the LLM does not have to
+                                # parse 13-digit integers (FIX-LIVE-DD).
+                                fmt = _format_market_cap_value(v)
+                                cells.append(fmt if fmt is not None else f"{v}")
+                            else:
+                                cells.append(f"{v:.2f}")
+                        else:
+                            cells.append(str(v))
+                    out.append(f"| {period} | {ptype} | " + " | ".join(cells) + " |")
+        if snapshot:
+            # Snapshot is opt-in — render only when present and there's at
+            # least one non-meta field populated.
+            as_of = snapshot.get("as_of") or "unknown"
+            source = snapshot.get("source") or "highlights"
+            snap_lines = [f"\n### {ticker} Snapshot (as-of {as_of}, source: {source})"]
+            any_populated = False
+            for m in metrics:
+                v = snapshot.get(m)
+                if v is None:
+                    continue
+                any_populated = True
+                if isinstance(v, float):
+                    if m.endswith("_margin") or m == "fcf_yield" or m == "dividend_yield":
+                        snap_lines.append(f"  {m}: {v * 100:.2f}%")
+                    elif abs(v) >= 1e9:
+                        fmt = _format_market_cap_value(v)
+                        snap_lines.append(f"  {m}: {fmt if fmt is not None else v} (raw: {v})")
+                    elif m.endswith("_ratio") or m in {"forward_pe", "pe_ratio", "ev_ebitda", "price_to_book"}:
+                        snap_lines.append(f"  {m}: {v:.2f}x")
+                    else:
+                        snap_lines.append(f"  {m}: {v:.2f}")
+                else:
+                    snap_lines.append(f"  {m}: {v}")
+            if any_populated:
+                out.extend(snap_lines)
+        return "\n".join(out)
 
     async def _handle_compare_entities(
         self,

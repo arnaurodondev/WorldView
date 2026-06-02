@@ -368,7 +368,20 @@ _PER_INTENT_ADDENDA: dict[str, str] = {
         '"undervalued", or compares a current ratio to history, call THREE tools in\n'
         "parallel (one planning turn): get_fundamentals_history (for the ratio +\n"
         "historical periods), get_price_history (for normalisation context), and\n"
-        "search_documents (for catalyst/news context). Do not call them sequentially."
+        "search_documents (for catalyst/news context). Do not call them sequentially.\n\n"
+        # PLAN-0104 W32: pointer to the unified query_fundamentals tool. The
+        # legacy get_fundamentals_history only exposes a fixed 6-column
+        # projection (revenue/eps/net-income/...); for non-standard metrics
+        # (gross margin, forward P/E, PEG, EV/EBITDA, FCF yield, consensus
+        # EPS) the LLM must pick query_fundamentals instead, OR it will see
+        # "—" cells and incorrectly conclude the data is missing.
+        "NON-STANDARD METRICS:\n"
+        "When the user asks for a metric beyond revenue/EPS/net-income/P-E "
+        "(e.g. gross margin, operating margin, forward P/E, PEG, EV/EBITDA, "
+        "FCF yield, consensus EPS, dividend yield), use `query_fundamentals` "
+        "with an explicit `metrics=[...]` list — not `get_fundamentals_history`. "
+        "Always read its Coverage line: refuse to quote any metric flagged "
+        "'missing'."
     ),
     "MACRO": (
         "\n\nMACRO FORMAT:\n"

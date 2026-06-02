@@ -223,6 +223,49 @@ class S3Client(BaseUpstreamClient):
         results = raw.get("results", {})
         return results if isinstance(results, dict) else {}
 
+    # PLAN-0104 W32: unified query_fundamentals adapter.
+    # WHY a separate method (not an overload of get_fundamentals_history): the
+    # new endpoint accepts an open metric list and returns per-metric coverage
+    # flags. The contract is intentionally distinct so the legacy method's
+    # list[dict] callers do not have to handle a new richer shape.
+    async def query_fundamentals(
+        self,
+        *,
+        ticker: str,
+        metrics: list[str],
+        periods: int = 8,
+        period_type: str = "quarterly",
+        include_snapshot: bool = True,
+    ) -> dict:
+        """POST /api/v1/fundamentals/query → typed metric projection (PLAN-0104 W32).
+
+        Returns ``{"metrics_by_period": [], "snapshot": None, "coverage": {}}``
+        on any HTTP / network error (R9 safe degradation). The route handler
+        rejects empty metric lists with 422; we forward the contract upstream
+        rather than client-side validate (consistent with how the batch
+        adapter handles the 25-ticker cap).
+        """
+        if not ticker or not metrics:
+            return {"metrics_by_period": [], "snapshot": None, "coverage": {}}
+        body = {
+            "symbol": ticker,
+            "metrics": metrics,
+            "periods": periods,
+            "period_type": period_type,
+            "include_snapshot": include_snapshot,
+        }
+        raw = await self._post("/api/v1/fundamentals/query", body)
+        if not isinstance(raw, dict):
+            return {"metrics_by_period": [], "snapshot": None, "coverage": {}}
+        rows = raw.get("metrics_by_period", [])
+        snap = raw.get("snapshot")
+        coverage = raw.get("coverage", {})
+        return {
+            "metrics_by_period": rows if isinstance(rows, list) else [],
+            "snapshot": snap if isinstance(snap, dict) else None,
+            "coverage": coverage if isinstance(coverage, dict) else {},
+        }
+
     async def get_batch_quotes(self, instrument_ids: list[str]) -> dict[str, QuoteSummary]:
         """POST /api/v1/quotes/batch -> dict of instrument_id -> QuoteSummary.
 

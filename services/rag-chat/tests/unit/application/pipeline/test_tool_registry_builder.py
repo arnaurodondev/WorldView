@@ -62,8 +62,9 @@ def test_default_registry_has_zero_drift() -> None:
     # PLAN-0095 W2 T-W2-02 bumped the count from 22 → 23 by adding
     # ``get_fundamentals_history_batch`` alongside the singular variant.
     # PLAN-0103 W2 bumped 23 → 24 by adding ``get_entity_news``.
-    assert sizes["manifest"] == 24, (
-        f"Expected 24 platform tools, got {sizes['manifest']}. "
+    # PLAN-0104 W32 bumped 24 → 25 by adding ``query_fundamentals``.
+    assert sizes["manifest"] == 25, (
+        f"Expected 25 platform tools, got {sizes['manifest']}. "
         "If a tool was intentionally added/removed, update this assertion."
     )
 

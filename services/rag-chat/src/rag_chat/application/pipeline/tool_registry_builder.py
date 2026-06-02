@@ -1036,6 +1036,95 @@ def build_default_registry() -> ToolRegistry:
         handler=lambda **_: None,
     )
 
+    # PLAN-0104 W32: unified parameterised fundamentals query.
+    # WHY a SEPARATE tool (not a flag on get_fundamentals_history): the OpenAI
+    # tool-calling schema cannot express "this method takes a metric list AND
+    # returns a polymorphic shape" without confusing the LLM. Keeping the
+    # legacy 6-column tool (revenue/eps/net_income/...) for simple lookups
+    # and this rich tool for non-standard metrics matches how the LLM
+    # actually reasons — it picks the tool whose advertised columns match
+    # the user's question vocabulary.
+    registry.register(
+        ToolSpec(
+            name="query_fundamentals",
+            description=(
+                "Parameterised fundamentals query for a SINGLE ticker. Use this — "
+                "NOT `get_fundamentals_history` — when the user asks about metrics "
+                "BEYOND the standard revenue/EPS/net-income/P-E triple. Examples: "
+                "gross margin, operating margin, net margin, forward P/E, PEG ratio, "
+                "EV/EBITDA, EV/Revenue, FCF yield, consensus EPS for current or "
+                "next year, quarterly revenue/earnings growth YoY, ROE, dividend "
+                "yield. You declare the metric list and the tool returns both a "
+                "per-period series AND a TTM/live snapshot block, with a "
+                "per-metric coverage flag (ok | partial | missing) so you know "
+                "which values are safe to quote and which to caveat or refuse on. "
+                "Always read the Coverage line before quoting a metric — if it "
+                "says 'missing', refuse rather than fabricate."
+            ),
+            parameters=[
+                ParameterSpec(
+                    name="ticker",
+                    type="string",
+                    description="Stock ticker symbol (e.g. 'AAPL')",
+                    required=True,
+                ),
+                ParameterSpec(
+                    name="metrics",
+                    type="array",
+                    description=(
+                        "List of canonical metric names to fetch. Supported: "
+                        "revenue, gross_profit, operating_income, net_income, ebit, "
+                        "ebitda, eps, cost_of_revenue, research_development, "
+                        "operating_cash_flow, capital_expenditures, free_cash_flow, "
+                        "gross_margin, operating_margin, net_margin, ebitda_margin, "
+                        "pe_ratio, forward_pe, peg_ratio, ev_ebitda, ev_revenue, "
+                        "price_to_book, price_to_sales_ttm, market_cap, ebitda_ttm, "
+                        "revenue_ttm, gross_profit_ttm, eps_ttm, diluted_eps_ttm, "
+                        "dividend_yield, dividend_share, book_value, roe_ttm, "
+                        "roa_ttm, operating_margin_ttm, profit_margin_ttm, "
+                        "quarterly_revenue_growth_yoy, quarterly_earnings_growth_yoy, "
+                        "consensus_eps_curr_quarter, consensus_eps_next_quarter, "
+                        "consensus_eps_curr_year, consensus_eps_next_year, "
+                        "wall_street_target_price, fcf_yield. Unknown names are "
+                        "flagged 'missing' in coverage rather than rejected."
+                    ),
+                    required=True,
+                ),
+                ParameterSpec(
+                    name="periods",
+                    type="integer",
+                    description=(
+                        "Number of per-period rows to return (0-20). Default 8. "
+                        "Pass 0 to get the snapshot only (no historical series)."
+                    ),
+                    required=False,
+                ),
+                ParameterSpec(
+                    name="period_type",
+                    type="string",
+                    description=(
+                        'Periodicity: "quarterly" (default) or "annual". Anything ' 'else falls back to "quarterly".'
+                    ),
+                    required=False,
+                ),
+                ParameterSpec(
+                    name="include_snapshot",
+                    type="boolean",
+                    description="Include the TTM/live snapshot block (default true).",
+                    required=False,
+                ),
+            ],
+            source_type="fundamentals",
+            example_queries=[
+                "What's AAPL's forward P/E and PEG ratio?",
+                "Show TSLA's gross margin trend over the last 8 quarters",
+                "Get NVDA's consensus EPS for current and next year",
+                "Compare AMZN's operating margin and FCF yield",
+            ],
+        ),
+        handler=lambda **_: None,
+    )
+
     registry.register(
         ToolSpec(
             name="create_alert",

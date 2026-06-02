@@ -205,3 +205,86 @@ class FundamentalsBatchResponse(BaseModel):
     """
 
     results: dict[str, FundamentalsBatchPerTickerResult]
+
+
+# ── PLAN-0104 W32: unified query_fundamentals tool ──────────────────────────
+# WHY a new schema family (not an overload of FundamentalsHistoryResponse): the
+# unified query exposes a parameterised metric set + per-metric coverage flags.
+# Rather than retrofit nullable columns onto the existing typed schema, we keep
+# the rich-but-flexible new shape additive so the legacy endpoint contract is
+# untouched.
+class FundamentalsQueryRequest(BaseModel):
+    """Request body for POST /v1/fundamentals/query.
+
+    Identifier priority mirrors ``GET /fundamentals/history``: instrument_id >
+    isin > symbol. At least one must be present.
+
+    ``metrics`` is the list of canonical metric names the caller wants. See
+    ``query_fundamentals_metrics.KNOWN_METRICS`` for the supported vocabulary
+    (revenue, gross_margin, forward_pe, peg_ratio, ev_ebitda, fcf_yield,
+    consensus_eps_curr_year, ...). Unknown names are echoed back in
+    ``coverage`` as ``"missing"`` rather than rejected so the LLM can speculate
+    without 422'ing the request.
+
+    ``periods`` controls the per-period axis length; 0 returns snapshot-only.
+    """
+
+    instrument_id: str | None = None
+    symbol: str | None = None
+    isin: str | None = None
+    metrics: list[str]
+    periods: int = 8
+    period_type: str = "quarterly"
+    include_snapshot: bool = True
+
+
+class FundamentalsQueryPeriodRow(BaseModel):
+    """One period row in a fundamentals_query response.
+
+    Shape is intentionally open (``model_config["extra"] = "allow"`` via
+    ``BaseModel.Config``) — the columns are determined by the caller's
+    ``metrics`` list. Only ``period_end`` / ``period_label`` / ``period_type``
+    are fixed.
+    """
+
+    model_config = {"extra": "allow"}
+
+    period_end: str
+    period_label: str
+    period_type: str
+
+
+class FundamentalsQuerySnapshot(BaseModel):
+    """Snapshot block in a fundamentals_query response.
+
+    Open-shape mirror of FundamentalsQueryPeriodRow — populated columns
+    depend on which snapshot metrics the caller asked for. ``as_of`` and
+    ``source`` are emitted only when ``include_snapshot=True`` AND the
+    underlying HIGHLIGHTS row was found.
+    """
+
+    model_config = {"extra": "allow"}
+
+    as_of: str | None = None
+    source: str | None = None
+
+
+class FundamentalsQueryResponse(BaseModel):
+    """Response for POST /v1/fundamentals/query (PLAN-0104 W32).
+
+    Shape::
+
+        {
+          "instrument_id": "...",
+          "ticker": "AAPL",
+          "metrics_by_period": [{period_end, period_label, period_type, <metric>: <val>, ...}],
+          "snapshot": {<metric>: <val>, ..., as_of, source} | None,
+          "coverage": {<metric>: "ok"|"partial"|"missing"}
+        }
+    """
+
+    instrument_id: str
+    ticker: str
+    metrics_by_period: list[FundamentalsQueryPeriodRow]
+    snapshot: FundamentalsQuerySnapshot | None = None
+    coverage: dict[str, str]

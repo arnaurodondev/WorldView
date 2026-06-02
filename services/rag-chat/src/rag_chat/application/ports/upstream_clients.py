@@ -353,6 +353,28 @@ class S3Port(Protocol):
         """
         ...
 
+    # PLAN-0104 W32: parameterised metric query (unified query_fundamentals).
+    # WHY a new method (not flag on get_fundamentals_history): the response
+    # shape is open (metric set is caller-defined) and carries per-metric
+    # coverage flags, neither of which fit the legacy contract.
+    async def query_fundamentals(
+        self,
+        *,
+        ticker: str,
+        metrics: list[str],
+        periods: int = 8,
+        period_type: str = "quarterly",
+        include_snapshot: bool = True,
+    ) -> dict:
+        """POST /api/v1/fundamentals/query → typed projection over caller-named metrics.
+
+        Returns ``{"metrics_by_period": [...], "snapshot": dict | None,
+        "coverage": dict[str, str]}`` on success. Returns ``{"metrics_by_period":
+        [], "snapshot": None, "coverage": {}}`` on any HTTP/network error
+        (R9 safe degradation).
+        """
+        ...
+
 
 @runtime_checkable
 class S1Port(Protocol):

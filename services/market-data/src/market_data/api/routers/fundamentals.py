@@ -18,6 +18,7 @@ from market_data.api.dependencies import (
     get_fundamentals_section_uc,
     get_fundamentals_snapshot_uc,
     get_lookup_instrument_uc,
+    get_query_fundamentals_uc,
 )
 from market_data.api.schemas.fundamentals import (
     CurrentSnapshot,
@@ -26,6 +27,10 @@ from market_data.api.schemas.fundamentals import (
     FundamentalsBatchResponse,
     FundamentalsHistoryPeriod,
     FundamentalsHistoryResponse,
+    FundamentalsQueryPeriodRow,
+    FundamentalsQueryRequest,
+    FundamentalsQueryResponse,
+    FundamentalsQuerySnapshot,
     FundamentalsRecordResponse,
     FundamentalsResponse,
     FundamentalsSnapshotResponse,
@@ -351,6 +356,62 @@ async def post_fundamentals_batch(
         )
 
     return FundamentalsBatchResponse(results=out)
+
+
+# PLAN-0104 W32: unified query_fundamentals endpoint.
+# IMPORTANT: registered BEFORE /fundamentals/{instrument_id} catch-all so the
+# literal "/fundamentals/query" wins first-match against the UUID regex.
+@router.post("/fundamentals/query", response_model=FundamentalsQueryResponse)
+async def post_fundamentals_query(
+    body: FundamentalsQueryRequest,
+    uc: Annotated[Any, Depends(get_query_fundamentals_uc)] = ...,  # type: ignore[assignment]
+    lookup_uc: Annotated[InstrumentLookupUseCase, Depends(get_lookup_instrument_uc)] = ...,  # type: ignore[assignment]
+) -> FundamentalsQueryResponse:
+    """Parameterised fundamentals projection over a metric registry.
+
+    PLAN-0104 W32. Returns the requested metric set as both a per-period
+    series AND a TTM/live snapshot, with per-metric coverage flags. Designed
+    for rag-chat's ``query_fundamentals`` tool which needs richer metrics
+    (gross margin, forward P/E, PEG, EV/EBITDA, consensus EPS, FCF yield)
+    than the 6-column ``get_fundamentals_history`` projection exposes.
+
+    Additive: the legacy ``GET /fundamentals/history`` is unchanged.
+    """
+    if body.instrument_id is None and body.symbol is None and body.isin is None:
+        raise HTTPException(
+            status_code=400,
+            detail="At least one of instrument_id, symbol, or isin is required",
+        )
+    if not body.metrics:
+        raise HTTPException(status_code=422, detail="metrics list must not be empty")
+
+    try:
+        result = await lookup_uc.execute(
+            id=body.instrument_id,
+            isin=body.isin,
+            symbol=body.symbol,
+        )
+    except InstrumentNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    instrument = result.instrument
+    data = await uc.execute(
+        instrument_id=UUID(instrument.id),
+        metrics=body.metrics,
+        periods=body.periods,
+        period_type=body.period_type,
+        include_snapshot=body.include_snapshot,
+    )
+
+    snapshot_dict = data.get("snapshot")
+    snapshot_model = FundamentalsQuerySnapshot(**snapshot_dict) if snapshot_dict else None
+    return FundamentalsQueryResponse(
+        instrument_id=instrument.id,
+        ticker=instrument.symbol,
+        metrics_by_period=[FundamentalsQueryPeriodRow(**row) for row in data["metrics_by_period"]],
+        snapshot=snapshot_model,
+        coverage=data["coverage"],
+    )
 
 
 # NOTE: /fundamentals/{instrument_id}/snapshot MUST be registered before

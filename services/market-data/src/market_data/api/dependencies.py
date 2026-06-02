@@ -219,6 +219,13 @@ def get_fundamentals_history_uc(uow: ReadOnlyUnitOfWork = Depends(get_read_uow))
     return GetFundamentalsHistoryUseCase(uow)
 
 
+# PLAN-0104 W32: parameterised fundamentals projection use case.
+def get_query_fundamentals_uc(uow: ReadOnlyUnitOfWork = Depends(get_read_uow)) -> Any:
+    from market_data.application.use_cases.query_fundamentals_metrics import QueryFundamentalsUseCase
+
+    return QueryFundamentalsUseCase(uow)
+
+
 # ── Fundamentals use case deps ────────────────────────────────────────────────
 
 

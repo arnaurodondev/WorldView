@@ -92,10 +92,11 @@ class TestRegistryParameterCoverage:
     def test_registry_has_all_22_tools(self) -> None:
         # PLAN-0095 W2 T-W2-02 bumped the count to 23 (added
         # ``get_fundamentals_history_batch``). PLAN-0103 W2 added
-        # ``get_entity_news`` → 24. Method name kept for grep parity.
+        # ``get_entity_news`` → 24. PLAN-0104 W32 added ``query_fundamentals``
+        # → 25. Method name kept for grep parity.
         registry = build_default_registry()
         names = {s.name for s in registry.all_specs()}
-        assert len(names) == 24, f"Expected 24 tools, got {len(names)}: {sorted(names)}"
+        assert len(names) == 25, f"Expected 25 tools, got {len(names)}: {sorted(names)}"
 
     def test_every_audit_placeholder_tool_now_carries_params_or_is_zero_param(self) -> None:
         """D-R1-002: 18 placeholder tools were filled in; 3 intentionally zero-arg."""
@@ -156,9 +157,10 @@ class TestProductionRegistryToolDefinitions:
     def test_returns_22_definitions(self) -> None:
         # PLAN-0095 W2 T-W2-02: 23 after adding get_fundamentals_history_batch.
         # PLAN-0103 W2: 24 after adding get_entity_news.
+        # PLAN-0104 W32: 25 after adding query_fundamentals.
         registry = build_default_registry()
         defs = registry.to_tool_definitions()
-        assert len(defs) == 24
+        assert len(defs) == 25
 
     def test_every_definition_has_openai_envelope(self) -> None:
         registry = build_default_registry()
@@ -203,6 +205,8 @@ class TestProductionRegistryToolDefinitions:
             "get_fundamentals_history_batch",
             # PLAN-0103 W2
             "get_entity_news",
+            # PLAN-0104 W32
+            "query_fundamentals",
         }
         assert names == expected, f"Missing: {expected - names}; Extra: {names - expected}"
 
