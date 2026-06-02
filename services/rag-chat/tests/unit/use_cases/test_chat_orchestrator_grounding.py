@@ -366,3 +366,122 @@ class TestEntityGroundingTwoWayFallback:
 
         item = _make_grounding_item(text="Some unrelated text.", entity_name=None)
         assert _check_entity_grounding([item], set()) is None
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# PLAN-0104 W37 — query_fundamentals envelope: prior-tool-call ticker fallback.
+# Round 4 TSLA (q_ru_tsla_margin_trend) refused even after W26 + W29 because:
+#   - question entities = {"tesla", "tesla, inc.", <uuid>} (resolver omitted
+#     ticker on this run);
+#   - the only retrieved item came from query_fundamentals with
+#     citation_meta.entity_name="TSLA" and rendered text "## TSLA fundamentals
+#     query…";
+#   - the W29 substring rules required "tsla" ⊂ "tesla" (or v.v.) and
+#     "tsla" ⊂ "tesla, inc." — neither holds.
+# W37 widens the admission criteria by trusting the LLM's tool input ticker
+# for THIS turn: query_fundamentals(ticker="TSLA") + item.entity_name="TSLA"
+# = consistent → admit. The negative bound (unrelated MSFT data on an Apple
+# question) MUST still refuse because the prior_tool_calls set then contains
+# "msft" but the question entities do not — we still require an intersection
+# anchor with question_entity_ids elsewhere in the function, OR we admit only
+# when the LLM's chosen identifier is the SAME as the item's identifier (i.e.
+# tool-call consistency, not question consistency). See implementation: the
+# W37 path admits only when item_ids ∩ llm_chosen_ids ≠ ∅. That admits TSLA
+# (item=TSLA, prior=TSLA) AND would admit MSFT-on-Apple if the LLM hallucinated
+# the ticker — the trade-off is documented in the function docstring.
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+class TestEntityGroundingPriorToolCallTicker:
+    """W37 regression: query_fundamentals envelope bridges ticker ↔ canonical."""
+
+    @staticmethod
+    def _make_call(tool_input: dict[str, object]) -> MagicMock:
+        """Stub for a prior tool call — only the ``input`` attr is read."""
+        tc = MagicMock()
+        tc.input = tool_input
+        return tc
+
+    def test_query_fundamentals_tsla_admits_via_prior_tool_call(self) -> None:
+        """The Round 4 TSLA fault: prior tool call carries the canonical bridge.
+
+        Pass path (NEW): item.citation_meta.entity_name="TSLA" → item_ids
+        = {"tsla"}; prior_tool_calls = [query_fundamentals(ticker="TSLA")]
+        → llm_chosen_ids = {"tsla"}. item_ids ∩ llm_chosen_ids = {"tsla"}
+        → admit. The text-token & substring paths still cannot bridge
+        "tsla" ↔ "tesla, inc." so W37 is the only path here.
+        """
+        from rag_chat.application.use_cases.chat_orchestrator import _check_entity_grounding
+
+        item = _make_grounding_item(
+            text=(
+                "## TSLA fundamentals query\n"
+                "Coverage: gross_margin=ok\n"
+                "| Period | Periodicity | gross_margin |\n"
+                "| Q1 2025 | QUARTERLY | 16.31% |"
+            ),
+            entity_name="TSLA",
+        )
+        prior_calls = [
+            self._make_call(
+                {
+                    "metrics": ["gross_margin"],
+                    "period_type": "quarterly",
+                    "periods": 5,
+                    "ticker": "TSLA",
+                }
+            )
+        ]
+        # Question entities mirror the resolver output observed in the
+        # Round 4 artifact (no ticker, lowercase canonical names only).
+        result = _check_entity_grounding(
+            [item],
+            {"tesla", "tesla, inc."},
+            prior_tool_calls=prior_calls,
+        )
+        assert result is None, "W37 prior-tool-call fallback failed to admit TSLA"
+
+    def test_unrelated_ticker_still_refuses_without_prior_call(self) -> None:
+        """Negative bound: MSFT data on Apple question with NO prior call → refuse.
+
+        Mirrors the existing two-way-fallback negative test. The W37 path
+        only fires when prior_tool_calls is non-empty, so an empty list
+        falls back to the prior behaviour: refuse on no overlap.
+        """
+        from rag_chat.application.use_cases.chat_orchestrator import _check_entity_grounding
+
+        item = _make_grounding_item(
+            text="## MSFT fundamentals query\n| Q1 | revenue | 65.0B |",
+            entity_name="MSFT",
+        )
+        # Apple question, MSFT item, no prior tool call passed (default).
+        result = _check_entity_grounding([item], {"apple", "apple inc"})
+        assert result is not None, "Expected refusal for MSFT data on Apple question"
+        assert "cannot find information about the entities" in result
+
+    def test_apple_question_with_msft_item_still_refuses(self) -> None:
+        """Mainline negative: healthy planner called AAPL, stray MSFT item refuses.
+
+        The realistic false-positive scenario the task pins:
+          - question = "How has Apple's revenue trended?"
+          - LLM correctly called query_fundamentals(ticker="AAPL")
+          - somehow an MSFT item leaked into retrieved_items (cache bleed,
+            handler bug, etc.)
+        The MSFT item has neither a citation_meta match against {"apple",
+        "apple inc"} NOR against the LLM-chosen ticker set {"aapl"}. W37
+        must refuse so we never silently attribute MSFT facts to Apple.
+        """
+        from rag_chat.application.use_cases.chat_orchestrator import _check_entity_grounding
+
+        item = _make_grounding_item(
+            text="## MSFT fundamentals query\n| Q1 | revenue | 65.0B |",
+            entity_name="MSFT",
+        )
+        prior_calls = [self._make_call({"ticker": "AAPL", "metrics": ["revenue"]})]
+        result = _check_entity_grounding(
+            [item],
+            {"apple", "apple inc"},
+            prior_tool_calls=prior_calls,
+        )
+        assert result is not None, "MSFT-on-Apple must refuse — W37 admit window too wide"
+        assert "cannot find information about the entities" in result

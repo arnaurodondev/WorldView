@@ -370,7 +370,9 @@
   expected_max_latency_s: 45
   expected_entities_mentioned: [META, EPS]
   rubric:
-    expected_tools: [get_fundamentals_history]
+    # PLAN-0104 W38: query_fundamentals is the W32 unified replacement for
+    # the singular get_fundamentals_* tools; the LLM may pick either.
+    expected_tools: [get_fundamentals_history, query_fundamentals]
     required_facts: [eps_per_quarter, four_quarters_or_trend]
     forbidden_facts: [fabricated_eps_values]
     expected_depth: medium
@@ -385,7 +387,8 @@
   expected_entities_mentioned: [AMZN, revenue]
   notes: "Must compute TTM revenue / TTM revenue last year x 100, not single-quarter YoY."
   rubric:
-    expected_tools: [get_fundamentals_history]
+    # PLAN-0104 W38: query_fundamentals is the W32 unified equivalent.
+    expected_tools: [get_fundamentals_history, query_fundamentals]
     required_facts: [yoy_growth_pct, period_basis]
     forbidden_facts: [single_quarter_passed_off_as_yoy]
     expected_depth: shallow
@@ -399,7 +402,8 @@
   expected_max_latency_s: 45
   expected_entities_mentioned: [TSLA, gross margin]
   rubric:
-    expected_tools: [get_fundamentals_history]
+    # PLAN-0104 W38: query_fundamentals is the W32 unified equivalent.
+    expected_tools: [get_fundamentals_history, query_fundamentals]
     required_facts: [gross_margin_per_period, trend_direction]
     forbidden_facts: [fabricated_margin_values]
     expected_depth: medium
@@ -414,7 +418,9 @@
   expected_entities_mentioned: [GOOGL, P/E]
   notes: "Forces multi-period + historical context."
   rubric:
-    expected_tools: [get_fundamentals_history, search_documents]
+    # PLAN-0104 W38: query_fundamentals is the W32 unified equivalent of
+    # get_fundamentals_history.
+    expected_tools: [get_fundamentals_history, query_fundamentals, search_documents]
     required_facts: [current_pe, historical_pe_context, expensive_or_cheap_verdict]
     forbidden_facts: [verdict_without_historical_comparison]
     expected_depth: deep
@@ -432,7 +438,9 @@
   # The judge will check whether the refusal cites tool_results showing
   # missing data, vs. blanketly refusing without trying.
   rubric:
-    expected_tools: [get_fundamentals_history, get_fundamentals_snapshot]
+    # PLAN-0104 W38: query_fundamentals is the W32 unified equivalent of
+    # both singular get_fundamentals_* tools.
+    expected_tools: [get_fundamentals_history, get_fundamentals_snapshot, query_fundamentals]
     required_facts: [forward_pe_value_or_honest_unavailable]
     forbidden_facts: [fabricated_forward_pe, blanket_refusal_without_lookup]
     expected_depth: shallow

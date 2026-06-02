@@ -176,6 +176,86 @@ def test_summarise_judge_records_computes_dimension_averages():
     assert agg["dimension_avg"]["tool_use"] == 16.0  # (22 + 10) / 2
 
 
+def test_judge_query_fundamentals_treated_as_equivalent_to_singular_tools():
+    """PLAN-0104 W38 regression — query_fundamentals ≡ get_fundamentals_*.
+
+    Round 4 Q4 (TSLA gross margin) called ``query_fundamentals`` but the
+    rubric only listed ``get_fundamentals_history`` so the judge scored
+    tool_use=0 with the reason "instead called 'query_fundamentals' which
+    is not in the expected tools list". After W38 the rubric lists BOTH
+    (and the system prompt already says "at least one"), so a correct
+    query_fundamentals call must be awarded the full 25 without penalty.
+
+    Two things are pinned here:
+      1. The user prompt the judge sees actually contains the unified
+         tool name in the "Expected tools (hint)" line. If a future
+         refactor drops ``expected_tools`` from the prompt builder this
+         test breaks.
+      2. The parser preserves the 25 score the LLM returns when it
+         recognises the equivalence — i.e. no clamping / re-scoring
+         hidden in ``judge_answer``.
+    """
+    from chat_quality_judge import _build_user_prompt  # (test-local import)
+
+    inp = _make_input(
+        prompt="How has Tesla's gross margin trended in the last year?",
+        rubric=Rubric(
+            # The W38 rubric: both the singular AND unified tool are valid.
+            expected_tools=["get_fundamentals_history", "query_fundamentals"],
+            required_facts=["gross_margin_per_period", "trend_direction"],
+            expected_depth="medium",
+            appropriate_refusal_ok=False,
+        ),
+        answer_text=(
+            "Tesla's gross margin trended upward from 16.31% in Q1 2025 to "
+            "21.08% in Q1 2026, a steady improvement across five quarters."
+        ),
+        tool_calls=[
+            {
+                "name": "query_fundamentals",
+                "arguments": {
+                    "ticker": "TSLA",
+                    "metrics": ["gross_margin"],
+                    "period_type": "quarterly",
+                    "periods": 5,
+                },
+            }
+        ],
+        tool_results=[{"tool": "query_fundamentals", "status": "ok", "item_count": 1}],
+    )
+
+    # (1) Prompt contains BOTH tool names so the LLM can recognise the
+    # equivalence rather than penalising the unified call.
+    user_prompt = _build_user_prompt(inp)
+    assert "query_fundamentals" in user_prompt
+    assert "get_fundamentals_history" in user_prompt
+
+    # (2) An LLM that correctly awards 25 for the equivalence is not
+    # silently clamped by the parser. We mock the LLM to return the
+    # equivalence-aware score.
+    def mock_llm(*, system: str, user: str) -> str:
+        return json.dumps(
+            {
+                "tool_use": {
+                    "score": 25,
+                    "reason": "query_fundamentals is in expected_tools list",
+                },
+                "grounding": {"score": 25, "reason": "all numbers from tool result"},
+                "framing": {"score": 25, "reason": "medium depth, trend covered"},
+                "refusal_judgment": {"score": 25, "reason": "N/A — not a refusal"},
+                "notes": "Unified tool accepted as equivalent.",
+            }
+        )
+
+    result = judge_answer(inp, llm=mock_llm)
+    assert result["dimensions"]["tool_use"]["score"] == 25, (
+        "Judge must preserve a 25 tool_use score when LLM accepts the "
+        "query_fundamentals ≡ get_fundamentals_history equivalence."
+    )
+    assert result["verdict"] == "PASS"
+    assert result["score"] == 100
+
+
 def test_rubric_from_question_handles_missing_block():
     """Defensive: a question with no `rubric:` block returns sane defaults."""
 
