@@ -241,6 +241,37 @@ DIMENSIONS (each 0-25):
                        periods (e.g. "Q4 FY2026" when no such period was returned),
                        or claims contradicted by tool output statuses.
 
+                       VALUE EXTRACTION — MANDATORY CHECK BEFORE SCORING <10:
+                         The TOOL TRACE you receive is a COMPACT SUMMARY of the
+                         form `call N: <tool>(args) -> status=<s> items=<k>`. It
+                         does NOT include the raw payload (snapshot rows, per-
+                         period tables, coverage flags) — those values stayed
+                         on the agent's side. This means you CANNOT verify a
+                         specific number against the trace, only against the
+                         tool's stated success/coverage.
+                         RULES:
+                           * `status=ok` + `items>=1` is STRONG EVIDENCE that the
+                             tool returned the requested metric. A quantitative
+                             claim matching the tool's purpose (e.g. asked for
+                             pe_ratio, answer says "P/E is 37.73x") is PRESUMED
+                             GROUNDED. Award grounding 20-25.
+                           * Only score grounding<10 when one of these is true:
+                               (a) the trace shows `status=missing` / `items=0`
+                                   for the relevant tool AND the answer cites a
+                                   specific number anyway;
+                               (b) the answer cites a period or entity OUTSIDE
+                                   the tool's stated scope (e.g. claims Q4 FY2026
+                                   when only 8 quarterly rows were requested and
+                                   that quarter falls outside the natural window);
+                               (c) the answer cites a metric the tool was not
+                                   asked for (e.g. claims forward_pe when only
+                                   pe_ratio was queried).
+                           * "Value not present in tool_results" is NOT a valid
+                             grounding=0 reason when `status=ok items>=1` —
+                             the value IS in the payload, you just don't see it.
+                             Use status+item_count as your evidence, not absence
+                             of the number from the compact trace.
+
                        SPECIAL CASES — DO NOT score grounding=0 for these:
                          * An answer ending with "⚠ Some numbers could not be
                            verified against retrieved data" is a TRANSPARENCY
@@ -274,12 +305,70 @@ DIMENSIONS (each 0-25):
                        - deep + one-line answer = FAIL (<10)
                        Length alone is NEVER the criterion — match to question.
 
-4. refusal_judgment    If the answer is a refusal:
-                         - rubric.appropriate_refusal_ok=true AND tool_results
-                           show empty/missing data → 25 (correct refusal).
-                         - rubric.appropriate_refusal_ok=false OR tool_results
-                           contain the requested data → 0-5 (wrongful refusal).
-                       If the answer is NOT a refusal: score 25 (N/A).
+4. refusal_judgment    DECISION TREE — APPLY LITERALLY, NO INTERPRETATION:
+                       Step 1: Search the answer for ANY of the refusal phrases
+                               listed below. If you find ZERO refusal phrases,
+                               score = 25 and STOP. Reason MUST say
+                               "no refusal phrase present — N/A". Do NOT score
+                               0 even if the answer is short, weak, or missing
+                               analysis — those are framing/grounding concerns,
+                               NOT refusal_judgment. There is no "but" clause:
+                               no refusal phrase ⇒ score 25 unconditionally.
+                       Step 2: If you found a refusal phrase, check
+                               rubric.appropriate_refusal_ok and the tool
+                               status. Score per the SCORING rules below.
+
+                       WORKED EXAMPLE — DO NOT DEVIATE:
+                         Answer: "The current P/E ratio for AAPL is 37.73x."
+                         → contains zero refusal phrases → score 25.
+                         Reason "answer does not contain any refusal phrases
+                         but ..." is WRONG and self-contradictory. The correct
+                         score for ANY reason starting with "no refusal phrase"
+                         or "does not contain any refusal" is 25 — full marks.
+
+                       REFUSAL PHRASES (case-insensitive substring search):
+                         * "I cannot find/provide/determine/answer/give"
+                         * "I am unable to" / "I'm unable to"
+                         * "data is not available" / "data is missing"
+                         * "the requested information is not available"
+                         * "the tool results do not contain"
+                         * "no data was returned" / "no results were returned"
+                         * "not currently available in our data sources"
+
+                       Hedging / interpretive language is NOT a refusal:
+                         * "However, ..." / "Based on ..." / "While ..." —
+                           these introduce nuance, not refusal.
+                         * "Analyst reports suggest" / "may suggest" /
+                           "some analysts note" — these are interpretation.
+                         * "The answer depends on" / "In summary" — framing,
+                           not refusal.
+                         * A transparency banner like "⚠ Some numbers could
+                           not be verified against retrieved data" appended
+                           to an otherwise full answer is NOT a refusal.
+
+                       SCORING:
+                         * DEFAULT: refusal_judgment = 25. Only deviate from
+                           25 when you can quote a refusal phrase from the
+                           answer in your reason field. If your reason says
+                           "no refusal phrases" or "provides substantive data"
+                           or anything similar, the correct score is 25 — not
+                           0. A reason that contradicts the score is a bug.
+                         * If the answer contains substantive data/analysis
+                           (citations, numbers, tables, multi-paragraph
+                           synthesis) AND does NOT contain any refusal phrase
+                           above → refusal_judgment is N/A → score 25 (full
+                           marks). It is FACTUALLY WRONG to score this as
+                           "incorrect refusal" — the answer IS NOT a refusal.
+                         * If the answer IS a refusal (matches a refusal
+                           phrase) AND rubric.appropriate_refusal_ok=true AND
+                           tool_results show empty/missing data → score 25.
+                         * If the answer IS a refusal AND
+                           (rubric.appropriate_refusal_ok=false OR tool_results
+                           contain the requested data, e.g. status=ok items>=1)
+                           → score 0-5 (wrongful refusal).
+                         * If unsure whether the answer is a refusal, default
+                           to N/A → score 25. The penalty is reserved for
+                           CLEAR refusals that ignore available data.
 
 OUTPUT — strict JSON object, no markdown, with keys:
 {

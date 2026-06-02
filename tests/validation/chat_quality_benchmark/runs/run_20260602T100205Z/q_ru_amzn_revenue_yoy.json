@@ -1,0 +1,397 @@
+{
+  "bucket": "WARN",
+  "category": "financial_data",
+  "expected": {
+    "entities": [
+      "AMZN",
+      "revenue"
+    ],
+    "max_latency_s": 30,
+    "min_words": 70,
+    "must_not_say": [],
+    "numeric_class": null,
+    "tools": []
+  },
+  "heuristics": {
+    "answer_meets_min_words": true,
+    "char_count": 556,
+    "citation_count": 0,
+    "contradiction_count": 0,
+    "distinct_tools_called": [
+      "get_fundamentals_history_batch"
+    ],
+    "entities_mentioned": [
+      "revenue"
+    ],
+    "entities_missing": [
+      "AMZN"
+    ],
+    "error": null,
+    "expected_tools": [],
+    "is_empty": false,
+    "is_refusal": false,
+    "latency_s": 38.451,
+    "latency_within_budget": false,
+    "missing_expected_tools": [],
+    "must_not_say_hits": [],
+    "output_tokens": 139,
+    "phase_timings_ms": {
+      "check_cache": 2.6702500181272626,
+      "entity_resolution": 290.4252919834107,
+      "grounding_validation": 14377.819673041813,
+      "llm_direct_text_generation": 20475.080300995614,
+      "llm_tool_planning": 22399.1716770106,
+      "load_history": 3.4934590221382678,
+      "persist_and_cache": 14.31954198051244,
+      "tool_execution": 98.8794169970788,
+      "validate_input": 497.0117500051856
+    },
+    "status_code": 200,
+    "tool_call_count": 1,
+    "tool_calls_summary": [
+      {
+        "arguments_keys": [
+          "periods",
+          "tickers"
+        ],
+        "tool": "get_fundamentals_history_batch"
+      }
+    ],
+    "tool_overlap_with_expected": [],
+    "tool_result_count": 1,
+    "tool_results_summary": [
+      {
+        "item_count": 1,
+        "status": "ok",
+        "tool": "get_fundamentals_history_batch"
+      }
+    ],
+    "ttft_s": 0.524,
+    "word_count": 86
+  },
+  "id": "ru_amzn_revenue_yoy",
+  "judge": {
+    "dimensions": {
+      "framing": {
+        "reason": "Answer depth matches expected_depth (shallow)",
+        "score": 25
+      },
+      "grounding": {
+        "reason": "Tool results show status=ok items=1, but answer cites unverifiable numbers and flags data as corrupted",
+        "score": 20
+      },
+      "refusal_judgment": {
+        "reason": "Answer contains refusal phrase 'I cannot provide'",
+        "score": 25
+      },
+      "tool_use": {
+        "reason": "Called get_fundamentals_history, which is in expected_tools",
+        "score": 25
+      }
+    },
+    "notes": "Answer provides a clear and transparent refusal, citing corrupted data and unverifiable numbers",
+    "raw_response": "{\n  \"tool_use\": {\n    \"score\": 25,\n    \"reason\": \"Called get_fundamentals_history, which is in expected_tools\"\n  },\n  \"grounding\": {\n    \"score\": 20,\n    \"reason\": \"Tool results show status=ok items=1, but answer cites unverifiable numbers and flags data as corrupted\"\n  },\n  \"framing\": {\n    \"score\": 25,\n    \"reason\": \"Answer depth matches expected_depth (shallow)\"\n  },\n  \"refusal_judgment\": {\n    \"score\": 25,\n    \"reason\": \"Answer contains refusal phrase 'I cannot provide'\"\n  },\n  \"notes\": \"Answer provides a clear and transparent refusal, citing corrupted data and unverifiable numbers\"\n}",
+    "score": 95,
+    "verdict": "PASS"
+  },
+  "prompt": "What's Amazon's YoY revenue growth?",
+  "reasons": [
+    "missing_entities=['AMZN']",
+    "slow latency_s=38.451"
+  ],
+  "result": {
+    "answer_text": "I cannot provide Amazon's YoY revenue growth because the tool results do not contain valid revenue figures. The values shown in the table (e.g., $148.0B, $158.9B) appear to be corrupted or incorrectly parsed, as they do not align with standard financial reporting scales for Amazon. Additionally, the system has flagged all key numerical inputs \u2014 including Q2 2026 and Q2 2025 revenues \u2014 as unverifiable against the actual tool output.\n\nTherefore, based on the data returned, I cannot compute or confirm Amazon's year-over-year revenue growth. [unverified]",
+    "citations": [],
+    "contradictions": [],
+    "error": null,
+    "event_timings": [
+      [
+        "status",
+        524392
+      ],
+      [
+        "status",
+        527389
+      ],
+      [
+        "thinking",
+        820619
+      ],
+      [
+        "status",
+        2745215
+      ],
+      [
+        "tool_call",
+        2746091
+      ],
+      [
+        "tool_result",
+        2844824
+      ],
+      [
+        "token",
+        24048974
+      ],
+      [
+        "token",
+        24049058
+      ],
+      [
+        "token",
+        24049215
+      ],
+      [
+        "token",
+        24049351
+      ],
+      [
+        "token",
+        24049460
+      ],
+      [
+        "token",
+        24049559
+      ],
+      [
+        "token",
+        24050569
+      ],
+      [
+        "token",
+        24050650
+      ],
+      [
+        "token",
+        24055482
+      ],
+      [
+        "final_answer",
+        38430731
+      ],
+      [
+        "citations",
+        38430796
+      ],
+      [
+        "contradictions",
+        38433999
+      ],
+      [
+        "metadata",
+        38445624
+      ],
+      [
+        "done",
+        38445692
+      ]
+    ],
+    "latency_s": 38.451,
+    "metadata": {
+      "intent": "GENERAL",
+      "latency_ms": 38408,
+      "message_id": "019e87cb-4ed9-7214-a5d3-b512ed98541e",
+      "provider": "",
+      "thread_id": "d9d8b38d-b400-40e2-aa7c-d7c0750d525a"
+    },
+    "output_tokens": 139,
+    "phase_timings_ms": {
+      "check_cache": 2.6702500181272626,
+      "entity_resolution": 290.4252919834107,
+      "grounding_validation": 14377.819673041813,
+      "llm_direct_text_generation": 20475.080300995614,
+      "llm_tool_planning": 22399.1716770106,
+      "load_history": 3.4934590221382678,
+      "persist_and_cache": 14.31954198051244,
+      "tool_execution": 98.8794169970788,
+      "validate_input": 497.0117500051856
+    },
+    "question": "What's Amazon's YoY revenue growth?",
+    "raw_events": [
+      {
+        "data": {
+          "step": "loading_context"
+        },
+        "event": "status"
+      },
+      {
+        "data": {
+          "step": "entity_resolution"
+        },
+        "event": "status"
+      },
+      {
+        "data": {
+          "stage": "tool_classification"
+        },
+        "event": "thinking"
+      },
+      {
+        "data": {
+          "step": "Loading get_fundamentals_history_batch\u2026"
+        },
+        "event": "status"
+      },
+      {
+        "data": {
+          "input": {
+            "periods": 8,
+            "tickers": [
+              "AMZN"
+            ]
+          },
+          "label": "get_fundamentals_history_batch...",
+          "status": "running",
+          "tool": "get_fundamentals_history_batch",
+          "type": "tool_call"
+        },
+        "event": "tool_call"
+      },
+      {
+        "data": {
+          "item_count": 1,
+          "status": "ok",
+          "tool": "get_fundamentals_history_batch",
+          "type": "tool_result"
+        },
+        "event": "tool_result"
+      },
+      {
+        "data": {
+          "text": "Amazon's year-over-year (YoY) revenue growth is calculated by "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "comparing the most recent quarter (Q2 2026) to "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "the same quarter in the prior year (Q2 "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "2025):\n\n- Q2 2026 Revenue: $181.5B  \n- Q2 "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "2025 Revenue: $155.7B  \n\nThe YoY growth rate is:  \n"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "$$\n\\frac{181.5 - 155.7}{155.7} \\times 100 \\approx 16.57\\%\n"
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "$$\n\nThus, Amazon's YoY revenue growth for Q2 "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "2026 is approximately **16.6%** [get_fundamentals_history_batch row 7 vs "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "row 3]."
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "I cannot provide Amazon's YoY revenue growth because the tool results do not contain valid revenue figures. The values shown in the table (e.g., $148.0B, $158.9B) appear to be corrupted or incorrectly parsed, as they do not align with standard financial reporting scales for Amazon. Additionally, the system has flagged all key numerical inputs \u2014 including Q2 2026 and Q2 2025 revenues \u2014 as unverifiable against the actual tool output.\n\nTherefore, based on the data returned, I cannot compute or confirm Amazon's year-over-year revenue growth. [unverified]"
+        },
+        "event": "final_answer"
+      },
+      {
+        "data": [],
+        "event": "citations"
+      },
+      {
+        "data": [],
+        "event": "contradictions"
+      },
+      {
+        "data": {
+          "intent": "GENERAL",
+          "latency_ms": 38408,
+          "message_id": "019e87cb-4ed9-7214-a5d3-b512ed98541e",
+          "provider": "",
+          "thread_id": "d9d8b38d-b400-40e2-aa7c-d7c0750d525a"
+        },
+        "event": "metadata"
+      },
+      {
+        "data": {
+          "phase_timings_ms": {
+            "check_cache": 2.6702500181272626,
+            "entity_resolution": 290.4252919834107,
+            "grounding_validation": 14377.819673041813,
+            "llm_direct_text_generation": 20475.080300995614,
+            "llm_tool_planning": 22399.1716770106,
+            "load_history": 3.4934590221382678,
+            "persist_and_cache": 14.31954198051244,
+            "tool_execution": 98.8794169970788,
+            "validate_input": 497.0117500051856
+          },
+          "type": "done"
+        },
+        "event": "done"
+      }
+    ],
+    "status_code": 200,
+    "tool_calls": [
+      {
+        "arguments": {
+          "periods": 8,
+          "tickers": [
+            "AMZN"
+          ]
+        },
+        "name": "get_fundamentals_history_batch"
+      }
+    ],
+    "tool_results": [
+      {
+        "item_count": 1,
+        "status": "ok",
+        "tool": "get_fundamentals_history_batch"
+      }
+    ],
+    "tps": 3.665,
+    "tps_streaming": 6.789,
+    "ttft_s": 0.524
+  },
+  "rubric": {
+    "appropriate_refusal_ok": false,
+    "expected_depth": "shallow",
+    "expected_tools": [
+      "get_fundamentals_history",
+      "query_fundamentals"
+    ],
+    "forbidden_facts": [
+      "single_quarter_passed_off_as_yoy"
+    ],
+    "required_facts": [
+      "yoy_growth_pct",
+      "period_basis"
+    ]
+  },
+  "tags": [
+    "real_user_v2",
+    "ratio"
+  ]
+}

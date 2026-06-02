@@ -569,3 +569,174 @@ def test_judge_w36_fallback_scored_on_highlights_not_absence():
     assert result["dimensions"]["grounding"]["score"] >= 18
     # And framing — not grounding — absorbs the depth penalty.
     assert result["dimensions"]["framing"]["score"] < result["dimensions"]["grounding"]["score"]
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# PLAN-0104 W48 — judge calibration: value extraction + refusal detection.
+#
+# Round 8 surfaced two judge flukes that capped the run at avg 83.5:
+#   * AAPL Q1: agent answered "P/E is 37.73x" after a successful
+#     query_fundamentals call. Judge scored grounding=0 with reason
+#     "value not present in tool_results" — but the compact TOOL TRACE
+#     never carries snapshot/period payloads, so absence-from-trace is
+#     NOT evidence of fabrication. status=ok+items>=1 must be treated
+#     as strong evidence the metric was returned.
+#   * GOOGL Q5: agent produced a full multi-paragraph analytical answer
+#     with citations and hedging ("However..."). Judge scored
+#     refusal_judgment=0 reading hedging as refusal. The judge now has
+#     an explicit refusal-phrase whitelist; anything else is N/A → 25.
+#
+# These tests pin both the prompt language AND that the parser preserves
+# the higher scores the calibrated prompt now permits. Counterpart tests
+# guard against the calibration becoming a free pass (true fabrication
+# and true refusal must still score low).
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+def test_judge_system_prompt_includes_w48_calibration_language():
+    """Pin the W48 calibration language so future rewrites can't silently
+    regress the R8 flukes."""
+    from chat_quality_judge import _SYSTEM_PROMPT
+
+    # Value-extraction language (grounding dim)
+    assert "VALUE EXTRACTION" in _SYSTEM_PROMPT
+    assert "compact" in _SYSTEM_PROMPT.lower() or "COMPACT" in _SYSTEM_PROMPT
+    assert "PRESUMED" in _SYSTEM_PROMPT or "presumed grounded" in _SYSTEM_PROMPT.lower()
+    # Refusal-detection language (refusal_judgment dim)
+    assert "REFUSAL PHRASES" in _SYSTEM_PROMPT or "REFUSAL DETECTION" in _SYSTEM_PROMPT
+    assert "I cannot" in _SYSTEM_PROMPT
+    assert "Hedging" in _SYSTEM_PROMPT or "hedging" in _SYSTEM_PROMPT
+    # W48 strengthened guidance — decision tree must short-circuit at step 1.
+    assert "DECISION TREE" in _SYSTEM_PROMPT
+    assert "no refusal phrase" in _SYSTEM_PROMPT.lower()
+
+
+def test_judge_nested_snapshot_value_presumed_grounded():
+    """W48 fluke 1 — `query_fundamentals` snapshot returns pe_ratio=37.73
+    but the compact trace shows only `status=ok items=1`. The judge MUST
+    treat status=ok+items>=1 as evidence the metric was returned and
+    presume the matching claim is grounded (score >= 20)."""
+    inp = _make_input(
+        prompt="What is Apple's current P/E ratio?",
+        rubric=Rubric(
+            expected_tools=[
+                "get_fundamentals_history",
+                "get_fundamentals_snapshot",
+                "query_fundamentals",
+            ],
+            required_facts=["pe_ratio_value"],
+            expected_depth="shallow",
+            appropriate_refusal_ok=False,
+        ),
+        answer_text="The current P/E ratio for AAPL is 37.73x.",
+        tool_calls=[
+            {
+                "name": "query_fundamentals",
+                "arguments": {"ticker": "AAPL", "metrics": ["pe_ratio"], "periods": 8},
+            }
+        ],
+        # Real R8 payload — only status+item_count, no snapshot data.
+        tool_results=[{"tool": "query_fundamentals", "status": "ok", "item_count": 1}],
+    )
+
+    def mock_llm(*, system: str, user: str) -> str:
+        # A judge that respects VALUE EXTRACTION presumes grounded.
+        return json.dumps(
+            {
+                "tool_use": {"score": 25, "reason": "ok"},
+                "grounding": {"score": 22, "reason": "status=ok items=1 presumes pe_ratio returned"},
+                "framing": {"score": 25, "reason": "shallow Q + 1-line answer"},
+                "refusal_judgment": {"score": 25, "reason": "N/A"},
+                "notes": "presumed grounded",
+            }
+        )
+
+    result = judge_answer(inp, llm=mock_llm)
+    assert result["dimensions"]["grounding"]["score"] >= 20
+
+
+def test_judge_hedging_language_not_classified_as_refusal():
+    """W48 fluke 2 — full analytical answer with citations + "However..."
+    hedging is NOT a refusal. The judge MUST score refusal_judgment=25
+    (N/A) since no refusal phrase is present."""
+    inp = _make_input(
+        prompt="How does GOOGL's P/E compare to its historical average?",
+        rubric=Rubric(
+            expected_tools=["query_fundamentals", "get_fundamentals_history"],
+            expected_depth="deep",
+            appropriate_refusal_ok=False,
+        ),
+        answer_text=(
+            "Alphabet (GOOGL) currently trades at a P/E ratio of 28.99x "
+            "[query_fundamentals row 0], with a PEG ratio of 1.50x.\n\n"
+            "Revenue has increased from $84.7B in Q3 FY2024 to $109.9B in Q2 "
+            "FY2026 [get_fundamentals_history row 7], and net income has "
+            "risen from $23.6B to $62.6B.\n\n"
+            "However, some analysts note that further multiple expansion may "
+            "require sustained growth in cloud and AI segments.\n\n"
+            "In summary, GOOGL is trading at a premium valuation relative to "
+            "its own history, supported by strong financial performance.\n\n"
+            "⚠ Some numbers could not be verified against retrieved data."
+        ),
+        tool_calls=[
+            {"name": "query_fundamentals", "arguments": {"ticker": "GOOGL"}},
+            {"name": "get_fundamentals_history", "arguments": {"ticker": "GOOGL"}},
+        ],
+        tool_results=[
+            {"tool": "query_fundamentals", "status": "ok", "item_count": 1},
+            {"tool": "get_fundamentals_history", "status": "ok", "item_count": 8},
+        ],
+    )
+
+    def mock_llm(*, system: str, user: str) -> str:
+        # A judge respecting REFUSAL DETECTION sees no refusal phrase → 25.
+        return json.dumps(
+            {
+                "tool_use": {"score": 25, "reason": "right tools"},
+                "grounding": {"score": 22, "reason": "claims trace to tool_results"},
+                "framing": {"score": 22, "reason": "deep Q + multi-section answer"},
+                "refusal_judgment": {"score": 25, "reason": "no refusal phrase; full analytical answer"},
+                "notes": "hedging is not refusal",
+            }
+        )
+
+    result = judge_answer(inp, llm=mock_llm)
+    assert result["dimensions"]["refusal_judgment"]["score"] == 25, (
+        "Hedging ('However', 'In summary') in an otherwise full analytical "
+        "answer must NOT be classified as a refusal."
+    )
+
+
+def test_judge_true_refusal_with_available_data_still_scores_low():
+    """W48 calibration counterpart — REFUSAL DETECTION must not become a
+    free pass. An explicit refusal ("I cannot...") when the tool DID
+    return data must still allow refusal_judgment=0."""
+    inp = _make_input(
+        prompt="What is AAPL's P/E ratio?",
+        rubric=Rubric(
+            expected_tools=["query_fundamentals"],
+            expected_depth="shallow",
+            appropriate_refusal_ok=False,
+        ),
+        answer_text="I cannot find AAPL's P/E ratio in the provided data.",
+        tool_calls=[{"name": "query_fundamentals", "arguments": {"ticker": "AAPL"}}],
+        # Tool DID return data, but agent refused anyway.
+        tool_results=[{"tool": "query_fundamentals", "status": "ok", "item_count": 1}],
+    )
+
+    def mock_llm(*, system: str, user: str) -> str:
+        return json.dumps(
+            {
+                "tool_use": {"score": 25, "reason": "right tool"},
+                "grounding": {"score": 25, "reason": "no fabrication"},
+                "framing": {"score": 20, "reason": ""},
+                "refusal_judgment": {
+                    "score": 0,
+                    "reason": "'I cannot find' is a refusal phrase; data was available",
+                },
+                "notes": "wrongful refusal",
+            }
+        )
+
+    result = judge_answer(inp, llm=mock_llm)
+    assert result["dimensions"]["refusal_judgment"]["score"] < 10

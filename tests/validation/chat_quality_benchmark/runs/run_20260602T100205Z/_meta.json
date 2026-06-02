@@ -1,0 +1,13 @@
+{
+  "base_url": "http://localhost:8000",
+  "ended_at": "2026-06-02T10:07:59.342880+00:00",
+  "ids_filter": null,
+  "max_runs_per_q": 1,
+  "questions_file": "/Users/arnaurodon/Projects/University/final_thesis/worldview/tests/validation/chat_quality_benchmark/questions.yaml",
+  "started_at": "2026-06-02T10:02:05.797986+00:00",
+  "tags_filter": [
+    "real_user_v2"
+  ],
+  "total_questions": 6,
+  "total_runs": 6
+}

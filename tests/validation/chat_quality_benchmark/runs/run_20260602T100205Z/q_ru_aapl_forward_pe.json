@@ -1,0 +1,339 @@
+{
+  "bucket": "WARN",
+  "category": "financial_data",
+  "expected": {
+    "entities": [
+      "AAPL",
+      "forward",
+      "P/E"
+    ],
+    "max_latency_s": 30,
+    "min_words": 60,
+    "must_not_say": [],
+    "numeric_class": null,
+    "tools": []
+  },
+  "heuristics": {
+    "answer_meets_min_words": false,
+    "char_count": 134,
+    "citation_count": 0,
+    "contradiction_count": 0,
+    "distinct_tools_called": [
+      "query_fundamentals"
+    ],
+    "entities_mentioned": [
+      "AAPL",
+      "forward",
+      "P/E"
+    ],
+    "entities_missing": [],
+    "error": null,
+    "expected_tools": [],
+    "is_empty": false,
+    "is_refusal": false,
+    "latency_s": 8.06,
+    "latency_within_budget": true,
+    "missing_expected_tools": [],
+    "must_not_say_hits": [],
+    "output_tokens": 34,
+    "phase_timings_ms": {
+      "check_cache": 3.616000001784414,
+      "entity_resolution": 148.75820802990347,
+      "grounding_validation": 0.10674999793991446,
+      "llm_direct_text_generation": 3428.810835001059,
+      "llm_tool_planning": 6512.701877974905,
+      "load_history": 23.06758298072964,
+      "persist_and_cache": 4.2997500277124345,
+      "tool_execution": 42.20266698393971,
+      "validate_input": 447.80583400279284
+    },
+    "status_code": 200,
+    "tool_call_count": 1,
+    "tool_calls_summary": [
+      {
+        "arguments_keys": [
+          "metrics",
+          "ticker"
+        ],
+        "tool": "query_fundamentals"
+      }
+    ],
+    "tool_overlap_with_expected": [],
+    "tool_result_count": 1,
+    "tool_results_summary": [
+      {
+        "item_count": 1,
+        "status": "ok",
+        "tool": "query_fundamentals"
+      }
+    ],
+    "ttft_s": 0.472,
+    "word_count": 21
+  },
+  "id": "ru_aapl_forward_pe",
+  "judge": {
+    "dimensions": {
+      "framing": {
+        "reason": "Shallow answer matches expected depth",
+        "score": 25
+      },
+      "grounding": {
+        "reason": "Answer cites tool_results: missing status for forward_pe metric",
+        "score": 25
+      },
+      "refusal_judgment": {
+        "reason": "Contains refusal phrase 'not currently available in the data sources' and tool_results show empty/missing data",
+        "score": 25
+      },
+      "tool_use": {
+        "reason": "Called query_fundamentals, one of the expected tools",
+        "score": 25
+      }
+    },
+    "notes": "Answer is a refusal, but it's an honest one supported by tool_results, so no penalty for refusal_judgment",
+    "raw_response": "{\n  \"tool_use\": {\"score\": 25, \"reason\": \"Called query_fundamentals, one of the expected tools\"},\n  \"grounding\": {\"score\": 25, \"reason\": \"Answer cites tool_results: missing status for forward_pe metric\"},\n  \"framing\": {\"score\": 25, \"reason\": \"Shallow answer matches expected depth\"},\n  \"refusal_judgment\": {\"score\": 25, \"reason\": \"Contains refusal phrase 'not currently available in the data sources' and tool_results show empty/missing data\"},\n  \"notes\": \"Answer is a refusal, but it's an honest one supported by tool_results, so no penalty for refusal_judgment\"\n}",
+    "score": 100,
+    "verdict": "PASS"
+  },
+  "prompt": "What's AAPL's forward P/E?",
+  "reasons": [
+    "short_answer words=21"
+  ],
+  "result": {
+    "answer_text": "AAPL's forward P/E is not currently available in the data sources. The fundamentals query returned a \"missing\" status for this metric.",
+    "citations": [],
+    "contradictions": [],
+    "error": null,
+    "event_timings": [
+      [
+        "status",
+        472021
+      ],
+      [
+        "status",
+        493747
+      ],
+      [
+        "thinking",
+        643098
+      ],
+      [
+        "status",
+        3728474
+      ],
+      [
+        "tool_call",
+        3728948
+      ],
+      [
+        "tool_result",
+        3770301
+      ],
+      [
+        "token",
+        8053192
+      ],
+      [
+        "token",
+        8053226
+      ],
+      [
+        "token",
+        8053523
+      ],
+      [
+        "final_answer",
+        8053555
+      ],
+      [
+        "citations",
+        8054081
+      ],
+      [
+        "contradictions",
+        8054148
+      ],
+      [
+        "metadata",
+        8058304
+      ],
+      [
+        "done",
+        8058352
+      ]
+    ],
+    "latency_s": 8.06,
+    "metadata": {
+      "intent": "GENERAL",
+      "latency_ms": 8035,
+      "message_id": "019e87cd-d523-72f7-bf9c-6ccbd592015d",
+      "provider": "",
+      "thread_id": "cf270c54-31a8-4d0a-98db-81ed178db024"
+    },
+    "output_tokens": 34,
+    "phase_timings_ms": {
+      "check_cache": 3.616000001784414,
+      "entity_resolution": 148.75820802990347,
+      "grounding_validation": 0.10674999793991446,
+      "llm_direct_text_generation": 3428.810835001059,
+      "llm_tool_planning": 6512.701877974905,
+      "load_history": 23.06758298072964,
+      "persist_and_cache": 4.2997500277124345,
+      "tool_execution": 42.20266698393971,
+      "validate_input": 447.80583400279284
+    },
+    "question": "What's AAPL's forward P/E?",
+    "raw_events": [
+      {
+        "data": {
+          "step": "loading_context"
+        },
+        "event": "status"
+      },
+      {
+        "data": {
+          "step": "entity_resolution"
+        },
+        "event": "status"
+      },
+      {
+        "data": {
+          "stage": "tool_classification"
+        },
+        "event": "thinking"
+      },
+      {
+        "data": {
+          "step": "Loading query_fundamentals\u2026"
+        },
+        "event": "status"
+      },
+      {
+        "data": {
+          "input": {
+            "metrics": [
+              "forward_pe"
+            ],
+            "ticker": "AAPL"
+          },
+          "label": "query_fundamentals...",
+          "status": "running",
+          "tool": "query_fundamentals",
+          "type": "tool_call"
+        },
+        "event": "tool_call"
+      },
+      {
+        "data": {
+          "item_count": 1,
+          "status": "ok",
+          "tool": "query_fundamentals",
+          "type": "tool_result"
+        },
+        "event": "tool_result"
+      },
+      {
+        "data": {
+          "text": "AAPL's forward P/E is not currently available in "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "the data sources. The fundamentals query returned a "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "\"missing\" status for this metric."
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "AAPL's forward P/E is not currently available in the data sources. The fundamentals query returned a \"missing\" status for this metric."
+        },
+        "event": "final_answer"
+      },
+      {
+        "data": [],
+        "event": "citations"
+      },
+      {
+        "data": [],
+        "event": "contradictions"
+      },
+      {
+        "data": {
+          "intent": "GENERAL",
+          "latency_ms": 8035,
+          "message_id": "019e87cd-d523-72f7-bf9c-6ccbd592015d",
+          "provider": "",
+          "thread_id": "cf270c54-31a8-4d0a-98db-81ed178db024"
+        },
+        "event": "metadata"
+      },
+      {
+        "data": {
+          "phase_timings_ms": {
+            "check_cache": 3.616000001784414,
+            "entity_resolution": 148.75820802990347,
+            "grounding_validation": 0.10674999793991446,
+            "llm_direct_text_generation": 3428.810835001059,
+            "llm_tool_planning": 6512.701877974905,
+            "load_history": 23.06758298072964,
+            "persist_and_cache": 4.2997500277124345,
+            "tool_execution": 42.20266698393971,
+            "validate_input": 447.80583400279284
+          },
+          "type": "done"
+        },
+        "event": "done"
+      }
+    ],
+    "status_code": 200,
+    "tool_calls": [
+      {
+        "arguments": {
+          "metrics": [
+            "forward_pe"
+          ],
+          "ticker": "AAPL"
+        },
+        "name": "query_fundamentals"
+      }
+    ],
+    "tool_results": [
+      {
+        "item_count": 1,
+        "status": "ok",
+        "tool": "query_fundamentals"
+      }
+    ],
+    "tps": 4.481,
+    "tps_streaming": 9.916,
+    "ttft_s": 0.472
+  },
+  "rubric": {
+    "appropriate_refusal_ok": true,
+    "expected_depth": "shallow",
+    "expected_tools": [
+      "get_fundamentals_history",
+      "get_fundamentals_snapshot",
+      "query_fundamentals"
+    ],
+    "forbidden_facts": [
+      "fabricated_forward_pe",
+      "blanket_refusal_without_lookup"
+    ],
+    "required_facts": [
+      "forward_pe_value_or_honest_unavailable"
+    ]
+  },
+  "tags": [
+    "real_user_v2",
+    "ratio",
+    "forward"
+  ]
+}

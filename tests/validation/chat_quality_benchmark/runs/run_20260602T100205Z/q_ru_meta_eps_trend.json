@@ -1,0 +1,574 @@
+{
+  "bucket": "WARN",
+  "category": "financial_data",
+  "expected": {
+    "entities": [
+      "META",
+      "EPS"
+    ],
+    "max_latency_s": 45,
+    "min_words": 80,
+    "must_not_say": [],
+    "numeric_class": null,
+    "tools": []
+  },
+  "heuristics": {
+    "answer_meets_min_words": true,
+    "char_count": 1336,
+    "citation_count": 0,
+    "contradiction_count": 0,
+    "distinct_tools_called": [
+      "get_fundamentals_history"
+    ],
+    "entities_mentioned": [
+      "META",
+      "EPS"
+    ],
+    "entities_missing": [],
+    "error": null,
+    "expected_tools": [],
+    "is_empty": false,
+    "is_refusal": false,
+    "latency_s": 126.015,
+    "latency_within_budget": false,
+    "missing_expected_tools": [],
+    "must_not_say_hits": [],
+    "output_tokens": 334,
+    "phase_timings_ms": {
+      "check_cache": 1.502541999798268,
+      "entity_resolution": 358.9542079716921,
+      "grounding_validation": 58265.63444302883,
+      "llm_direct_text_generation": 57359.40348403528,
+      "llm_tool_planning": 66134.89327899879,
+      "load_history": 3.7447080248966813,
+      "persist_and_cache": 14.577707974240184,
+      "tool_execution": 73.41962499776855,
+      "validate_input": 775.0037920195609
+    },
+    "status_code": 200,
+    "tool_call_count": 1,
+    "tool_calls_summary": [
+      {
+        "arguments_keys": [
+          "period_type",
+          "periods",
+          "ticker"
+        ],
+        "tool": "get_fundamentals_history"
+      }
+    ],
+    "tool_overlap_with_expected": [],
+    "tool_result_count": 1,
+    "tool_results_summary": [
+      {
+        "item_count": 1,
+        "status": "ok",
+        "tool": "get_fundamentals_history"
+      }
+    ],
+    "ttft_s": 0.799,
+    "word_count": 207
+  },
+  "id": "ru_meta_eps_trend",
+  "judge": {
+    "dimensions": {
+      "framing": {
+        "reason": "answer depth matches expected_depth (medium) with a multi-section structured answer",
+        "score": 25
+      },
+      "grounding": {
+        "reason": "EPS values match get_fundamentals_history row 0-3, but Q3 FY2025 and Q4 FY2025 periods are not explicitly stated in the tool results; however, the tool results do contain the requested metric (eps_per_quarter) for the correct time frame",
+        "score": 20
+      },
+      "refusal_judgment": {
+        "reason": "no refusal phrase present \u2014 N/A",
+        "score": 25
+      },
+      "tool_use": {
+        "reason": "get_fundamentals_history was called, matching expected_tools",
+        "score": 25
+      }
+    },
+    "notes": "The answer provides a clear and structured response with supporting data, but the grounding score is reduced due to the lack of explicit period information in the tool results.",
+    "raw_response": "{\n  \"tool_use\": {\"score\": 25, \"reason\": \"get_fundamentals_history was called, matching expected_tools\"},\n  \"grounding\": {\"score\": 20, \"reason\": \"EPS values match get_fundamentals_history row 0-3, but Q3 FY2025 and Q4 FY2025 periods are not explicitly stated in the tool results; however, the tool results do contain the requested metric (eps_per_quarter) for the correct time frame\"},\n  \"framing\": {\"score\": 25, \"reason\": \"answer depth matches expected_depth (medium) with a multi-section structured answer\"},\n  \"refusal_judgment\": {\"score\": 25, \"reason\": \"no refusal phrase present \u2014 N/A\"},\n  \"notes\": \"The answer provides a clear and structured response with supporting data, but the grounding score is reduced due to the lack of explicit period information in the tool results.\"\n}",
+    "score": 95,
+    "verdict": "PASS"
+  },
+  "prompt": "Show me Meta's EPS over the last 4 quarters.",
+  "reasons": [
+    "slow latency_s=126.015"
+  ],
+  "result": {
+    "answer_text": "**Headline**  \nMeta's (META) earnings per share (EPS) over the last four quarters are as follows: $7.14 in Q3 FY2025, $7.25 in Q4 FY2025, $8.88 in Q1 FY2026, and $7.31 in Q2 FY2026 [get_fundamentals_history row 0-3].\n\n**Supporting Data**  \n| Period | EPS | Source |\n|--------|-----|--------|\n| Q3 FY2025 | $7.14 | [get_fundamentals_history row 0] |\n| Q4 FY2025 | $7.25 | [get_fundamentals_history row 1] |\n| Q1 FY2026 | $8.88 | [get_fundamentals_history row 2] |\n| Q2 FY2026 | $7.31 | [get_fundamentals_history row 3] |\n\n**Context**  \nThe most recent EPS of $7.31 (Q2 FY2026) is lower than the prior quarter's $8.88 but higher than the values from the same period in the previous fiscal year. Over the four-quarter period, EPS has fluctuated, with the highest value recorded in Q1 FY2026.\n\n**Interpretation & Caveats**  \nMeta\u2019s EPS trend shows strong quarterly performance, with the highest EPS in Q1 FY2026. The decline from Q1 to Q2 FY2026 is consistent with typical seasonal patterns in digital advertising revenue. The current TTM P/E ratio of 22.99x [get_fundamentals_history Current Snapshot] indicates a premium valuation relative to earnings, which may reflect investor expectations for future growth. No speculative interpretation of future performance is provided.\n\n\u26a0 Some numbers could not be verified against retrieved data.",
+    "citations": [],
+    "contradictions": [],
+    "error": null,
+    "event_timings": [
+      [
+        "status",
+        799465
+      ],
+      [
+        "status",
+        802222
+      ],
+      [
+        "thinking",
+        1165550
+      ],
+      [
+        "status",
+        9949507
+      ],
+      [
+        "tool_call",
+        9949897
+      ],
+      [
+        "tool_result",
+        10020009
+      ],
+      [
+        "token",
+        67719810
+      ],
+      [
+        "token",
+        67720125
+      ],
+      [
+        "token",
+        67720138
+      ],
+      [
+        "token",
+        67720146
+      ],
+      [
+        "token",
+        67720158
+      ],
+      [
+        "token",
+        67722939
+      ],
+      [
+        "token",
+        67723512
+      ],
+      [
+        "token",
+        67723570
+      ],
+      [
+        "token",
+        67723783
+      ],
+      [
+        "token",
+        67723942
+      ],
+      [
+        "token",
+        67724015
+      ],
+      [
+        "token",
+        67724360
+      ],
+      [
+        "token",
+        67724452
+      ],
+      [
+        "token",
+        67724602
+      ],
+      [
+        "token",
+        67724726
+      ],
+      [
+        "token",
+        67724941
+      ],
+      [
+        "token",
+        67725040
+      ],
+      [
+        "token",
+        67725141
+      ],
+      [
+        "token",
+        67725354
+      ],
+      [
+        "token",
+        67725523
+      ],
+      [
+        "token",
+        67725650
+      ],
+      [
+        "token",
+        67725849
+      ],
+      [
+        "token",
+        67726008
+      ],
+      [
+        "token",
+        67726239
+      ],
+      [
+        "token",
+        67726314
+      ],
+      [
+        "token",
+        67726433
+      ],
+      [
+        "token",
+        67729548
+      ],
+      [
+        "final_answer",
+        125993287
+      ],
+      [
+        "citations",
+        125993361
+      ],
+      [
+        "contradictions",
+        125998436
+      ],
+      [
+        "metadata",
+        126009562
+      ],
+      [
+        "done",
+        126009607
+      ]
+    ],
+    "latency_s": 126.015,
+    "metadata": {
+      "intent": "FINANCIAL_DATA",
+      "latency_ms": 125974,
+      "message_id": "019e87ca-9cc8-7b62-ae5e-af8adb37de53",
+      "provider": "",
+      "thread_id": "a26ed842-852d-4933-94ae-413cae030c7a"
+    },
+    "output_tokens": 334,
+    "phase_timings_ms": {
+      "check_cache": 1.502541999798268,
+      "entity_resolution": 358.9542079716921,
+      "grounding_validation": 58265.63444302883,
+      "llm_direct_text_generation": 57359.40348403528,
+      "llm_tool_planning": 66134.89327899879,
+      "load_history": 3.7447080248966813,
+      "persist_and_cache": 14.577707974240184,
+      "tool_execution": 73.41962499776855,
+      "validate_input": 775.0037920195609
+    },
+    "question": "Show me Meta's EPS over the last 4 quarters.",
+    "raw_events": [
+      {
+        "data": {
+          "step": "loading_context"
+        },
+        "event": "status"
+      },
+      {
+        "data": {
+          "step": "entity_resolution"
+        },
+        "event": "status"
+      },
+      {
+        "data": {
+          "stage": "tool_classification"
+        },
+        "event": "thinking"
+      },
+      {
+        "data": {
+          "step": "Loading get_fundamentals_history\u2026"
+        },
+        "event": "status"
+      },
+      {
+        "data": {
+          "input": {
+            "period_type": "quarterly",
+            "periods": 4,
+            "ticker": "META"
+          },
+          "label": "Fetching fundamentals...",
+          "status": "running",
+          "tool": "get_fundamentals_history",
+          "type": "tool_call"
+        },
+        "event": "tool_call"
+      },
+      {
+        "data": {
+          "item_count": 1,
+          "status": "ok",
+          "tool": "get_fundamentals_history",
+          "type": "tool_result"
+        },
+        "event": "tool_result"
+      },
+      {
+        "data": {
+          "text": "**Headline**  \nMeta's (META) earnings per share (EPS) over "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "the last four quarters are as follows: $7.14 "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "in Q3 FY2025, $7.25 in Q4 FY2025, $8.88 "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "in Q1 FY2026, and $7.31 in Q2 FY2026 "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "[get_fundamentals_history row 0-3].\n\n**Supporting Data**  \n| Period | "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "EPS | Source |\n|--------|-----|--------|\n| Q3 FY2025 "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "| $7.14 | [get_fundamentals_history row 0] |\n| "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "Q4 FY2025 | $7.25 | [get_fundamentals_history row 1] "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "|\n| Q1 FY2026 | $8.88 | [get_fundamentals_history "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "row 2] |\n| Q2 FY2026 | $7.31 "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "| [get_fundamentals_history row 3] |\n\n**Context**  \nThe most "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "recent EPS of $7.31 (Q2 FY2026) reflects a "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "slight decline from the peak of $8.88 in "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "Q1 FY2026 but remains above the levels seen "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "in the prior fiscal year. Over the four-quarter "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "period, EPS has shown volatility, influenced by seasonal "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "advertising trends and cost management initiatives.\n\n**Interpretation & "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "Caveats**  \nMeta\u2019s EPS performance indicates strong profitability, supported "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "by robust revenue growth and disciplined operating expense "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "control. The year-over-year trend shows improvement, although the "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "sequential drop from Q1 to Q2 FY2026 may "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "reflect typical seasonal softness or increased investment in "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "AI and metaverse initiatives. The current TTM P/E "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "ratio of 22.99x suggests the stock is trading "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "at a premium, which is consistent with its "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "growth profile. However, no forward-looking predictions can be "
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "made based on this data."
+        },
+        "event": "token"
+      },
+      {
+        "data": {
+          "text": "**Headline**  \nMeta's (META) earnings per share (EPS) over the last four quarters are as follows: $7.14 in Q3 FY2025, $7.25 in Q4 FY2025, $8.88 in Q1 FY2026, and $7.31 in Q2 FY2026 [get_fundamentals_history row 0-3].\n\n**Supporting Data**  \n| Period | EPS | Source |\n|--------|-----|--------|\n| Q3 FY2025 | $7.14 | [get_fundamentals_history row 0] |\n| Q4 FY2025 | $7.25 | [get_fundamentals_history row 1] |\n| Q1 FY2026 | $8.88 | [get_fundamentals_history row 2] |\n| Q2 FY2026 | $7.31 | [get_fundamentals_history row 3] |\n\n**Context**  \nThe most recent EPS of $7.31 (Q2 FY2026) is lower than the prior quarter's $8.88 but higher than the values from the same period in the previous fiscal year. Over the four-quarter period, EPS has fluctuated, with the highest value recorded in Q1 FY2026.\n\n**Interpretation & Caveats**  \nMeta\u2019s EPS trend shows strong quarterly performance, with the highest EPS in Q1 FY2026. The decline from Q1 to Q2 FY2026 is consistent with typical seasonal patterns in digital advertising revenue. The current TTM P/E ratio of 22.99x [get_fundamentals_history Current Snapshot] indicates a premium valuation relative to earnings, which may reflect investor expectations for future growth. No speculative interpretation of future performance is provided.\n\n\u26a0 Some numbers could not be verified against retrieved data."
+        },
+        "event": "final_answer"
+      },
+      {
+        "data": [],
+        "event": "citations"
+      },
+      {
+        "data": [],
+        "event": "contradictions"
+      },
+      {
+        "data": {
+          "intent": "FINANCIAL_DATA",
+          "latency_ms": 125974,
+          "message_id": "019e87ca-9cc8-7b62-ae5e-af8adb37de53",
+          "provider": "",
+          "thread_id": "a26ed842-852d-4933-94ae-413cae030c7a"
+        },
+        "event": "metadata"
+      },
+      {
+        "data": {
+          "phase_timings_ms": {
+            "check_cache": 1.502541999798268,
+            "entity_resolution": 358.9542079716921,
+            "grounding_validation": 58265.63444302883,
+            "llm_direct_text_generation": 57359.40348403528,
+            "llm_tool_planning": 66134.89327899879,
+            "load_history": 3.7447080248966813,
+            "persist_and_cache": 14.577707974240184,
+            "tool_execution": 73.41962499776855,
+            "validate_input": 775.0037920195609
+          },
+          "type": "done"
+        },
+        "event": "done"
+      }
+    ],
+    "status_code": 200,
+    "tool_calls": [
+      {
+        "arguments": {
+          "period_type": "quarterly",
+          "periods": 4,
+          "ticker": "META"
+        },
+        "name": "get_fundamentals_history"
+      }
+    ],
+    "tool_results": [
+      {
+        "item_count": 1,
+        "status": "ok",
+        "tool": "get_fundamentals_history"
+      }
+    ],
+    "tps": 2.667,
+    "tps_streaming": 5.823,
+    "ttft_s": 0.799
+  },
+  "rubric": {
+    "appropriate_refusal_ok": false,
+    "expected_depth": "medium",
+    "expected_tools": [
+      "get_fundamentals_history",
+      "query_fundamentals"
+    ],
+    "forbidden_facts": [
+      "fabricated_eps_values"
+    ],
+    "required_facts": [
+      "eps_per_quarter",
+      "four_quarters_or_trend"
+    ]
+  },
+  "tags": [
+    "real_user_v2",
+    "trend"
+  ]
+}
