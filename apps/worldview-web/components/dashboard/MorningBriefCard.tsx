@@ -533,33 +533,11 @@ export function MorningBriefCard() {
                   </ReactMarkdown>
                 </div>
               )}
-            // WHY StructuredBrief (not inline map): the shared StructuredBrief
-            // component handles BriefBullet citation chips, confidence badge,
-            // lead rendering, and variant-specific layout. Using it here means
-            // any citation-gate improvements are reflected across all four
-            // surfaces simultaneously rather than requiring 4 separate edits.
-            //
-            // WHY variant="full": this is the fully expanded card view — use the
-            // maximum-fidelity layout with citation chips per bullet, lead block,
-            // and confidence badge when confidence is low.
-            //
-            // WHY data-testid via StructuredBrief: StructuredBrief emits
-            // data-testid="structured-brief" and data-testid="brief-section" per
-            // section — satisfying the PLAN-0049 T-D-4-06 E2E assertion that
-            // "EITHER ≥1 brief-section OR a brief-narrative is rendered after
-            // expansion". The marker set is a superset of the old inline markers.
-            // PLAN-0066 Wave F T-W10-F-03: briefId + token for BulletFeedback.
-            // briefId is optional — null/undefined suppresses feedback widgets.
-            //
-            // ISSUE-2: Filter out LLM "REMOVED" placeholder sections.
-            // WHY filter here: some LLM completions emit "REMOVED" as a literal
-            // section heading instead of omitting the section entirely (prompt
-            // artifact — the model has seen training data where sections were
-            // marked REMOVED rather than deleted). Rendering such a section
-            // shows a confusing empty-looking heading with no bullets.
-            // Filter at the call-site (not inside StructuredBrief) so the
-            // shared component stays agnostic of this prompt quirk and the
-            // filtered list is not mistaken for a logic error in the renderer.
+            {/* StructuredBrief renders the shared bullet/citation/confidence layout;
+                variant=full = expanded card view; data-testid emitted by the component
+                satisfies the PLAN-0049 T-D-4-06 E2E assertion. PLAN-0066 Wave F adds
+                briefId+token for BulletFeedback widgets (briefId null/undefined disables).
+                Filtering out LLM REMOVED placeholder sections is a prompt-quirk workaround. */}
             <StructuredBrief
               lead={brief.lead}
               sections={

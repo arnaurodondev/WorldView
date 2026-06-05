@@ -87,7 +87,11 @@ def _build_canonical_response() -> dict[str, object]:
 
 
 @pytest.mark.asyncio
-async def test_worker_parses_real_fundamentals_response_shape() -> None:
+async def test_worker_parses_real_fundamentals_response_shape() -> None:  # type: ignore[no-untyped-def]
+    # Cross-service import skip: market-data may not be installed in the
+    # knowledge-graph CI job's venv. The test is only meaningful when both
+    # services are installable (e.g. when the contract job runs).
+    pytest.importorskip("market_data.api.schemas.fundamentals")
     """The worker MUST produce a non-None narrative + None failure_reason for the
     canonical market-data response.
 

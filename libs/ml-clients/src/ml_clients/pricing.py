@@ -177,9 +177,7 @@ MODEL_PRICING: dict[str, ModelPricing] = {
     # rather than silently returning 0. Operators see the warning + know to
     # add real pricing when adoption grows.
     "gpt-4o-mini": ModelPricing.UNKNOWN("gpt-4o-mini", notes="OpenAI; pending operator override"),
-    "claude-3-5-sonnet": ModelPricing.UNKNOWN(
-        "claude-3-5-sonnet", notes="Anthropic; pending operator override"
-    ),
+    "claude-3-5-sonnet": ModelPricing.UNKNOWN("claude-3-5-sonnet", notes="Anthropic; pending operator override"),
     "gemini-3.1-flash-lite": ModelPricing(
         model_id="gemini-3.1-flash-lite",
         input_per_million=Decimal("0.075"),

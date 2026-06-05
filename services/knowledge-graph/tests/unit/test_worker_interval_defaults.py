@@ -101,6 +101,10 @@ class TestPriceImpactRetryBackoff:
 
     def test_mint_retry_delays_match_audit(self) -> None:
         """5s/15s/45s exponential backoff (4 attempts incl. immediate first)."""
+        # Cross-service import: nlp-pipeline may not be installed in this venv.
+        import pytest as _pt
+
+        _pt.importorskip("nlp_pipeline.infrastructure.http.market_data_client")
         from nlp_pipeline.infrastructure.http.market_data_client import (
             _TOKEN_MINT_RETRY_DELAYS,
         )

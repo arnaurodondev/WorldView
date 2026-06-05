@@ -17,8 +17,11 @@ import httpx
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
+    from uuid import UUID
 
     from observability.metrics import MLMetrics  # type: ignore[import-untyped]
+
+    from rag_chat.application.ports.cost_recorder import CostRecorder
 import structlog
 from tools.types import LLMToolResponse, ToolUseBlock  # type: ignore[import-untyped]
 
@@ -89,6 +92,7 @@ class DeepInfraCompletionAdapter:
         thinking: bool = True,
         stream_chat_fallback_model: str | None = "deepseek-ai/DeepSeek-V4-Flash",
         metrics: MLMetrics | None = None,
+        cost_recorder: CostRecorder | None = None,
     ) -> None:
         self._api_key = api_key
         self._model = model
@@ -126,6 +130,60 @@ class DeepInfraCompletionAdapter:
         # observability lib's MLMetrics dataclass is duck-typed against here so
         # no hard dependency on the adapter side.
         self._metrics = metrics
+        # PLAN-0107 Agent-B follow-up: optional CostRecorder. When None, the
+        # adapter behaves exactly as before (no-op cost path). When wired, every
+        # successful LLM call extracts ``usage`` from the response and emits a
+        # ``record()`` event so the Prometheus cost counter + llm_usage_log +
+        # threads.estimated_cost_usd all receive the real Decimal cost.
+        self._cost_recorder = cost_recorder
+
+    async def _record_cost(
+        self,
+        *,
+        thread_id: UUID | None,
+        model_id: str,
+        usage: dict | None,
+        call_site: str,
+    ) -> None:
+        """Forward usage tokens to the injected CostRecorder. Defence-in-depth no-op on errors.
+
+        WHY this lives in the adapter (not provider_chain): each provider has a
+        different ``usage`` envelope shape. Centralising the extraction here keeps
+        the chain transport-agnostic. The recorder itself is already fault-tolerant
+        but we wrap again so a recorder regression NEVER affects the chat path.
+        """
+        if self._cost_recorder is None:
+            return
+        # DeepInfra / OpenAI-compat returns usage = {prompt_tokens, completion_tokens, total_tokens}.
+        # When the provider omits the field (rare), still emit record() with
+        # zeros so the call_site is visible (we want to spot missing-usage paths).
+        if not usage:
+            log.debug(  # type: ignore[no-any-return]
+                "cost_recorder_no_usage",
+                call_site=call_site,
+                model_id=model_id,
+                provider="deepinfra",
+            )
+            tokens_in = 0
+            tokens_out = 0
+        else:
+            tokens_in = int(usage.get("prompt_tokens", 0) or 0)
+            tokens_out = int(usage.get("completion_tokens", 0) or 0)
+        try:
+            await self._cost_recorder.record(
+                thread_id=thread_id,
+                model_id=model_id,
+                tokens_in=tokens_in,
+                tokens_out=tokens_out,
+                call_site=call_site,
+            )
+        except Exception as exc:  # pragma: no cover — defensive
+            log.debug(  # type: ignore[no-any-return]
+                "cost_record_failed",
+                call_site=call_site,
+                model_id=model_id,
+                error=str(exc),
+            )
 
     def _record_ml_call(self, operation: str, status: str, latency_s: float, model: str | None = None) -> None:
         """Best-effort recording of ML-API metrics; no-op when ``self._metrics`` is None.
@@ -228,6 +286,7 @@ class DeepInfraCompletionAdapter:
         *,
         max_tokens: int = 1024,
         temperature: float = 0.2,
+        thread_id: UUID | None = None,
     ) -> LLMToolResponse:
         """Non-streaming structured call — returns text OR tool_calls.
 
@@ -328,8 +387,24 @@ class DeepInfraCompletionAdapter:
                 self._record_ml_call("chat_with_tools", "error", time.perf_counter() - fb_start, model=fallback_model)
                 raise
             self._record_ml_call("chat_with_tools", "success", time.perf_counter() - fb_start, model=fallback_model)
+            # PLAN-0107 Agent-B: capture cost on the fallback model — model_id MUST
+            # reflect the ACTUAL model that served the request (not the requested
+            # primary) so per-model attribution is correct.
+            await self._record_cost(
+                thread_id=thread_id,
+                model_id=fallback_model,
+                usage=fb_result.usage,
+                call_site="tool_loop_iter",
+            )
             return fb_result
         self._record_ml_call("chat_with_tools", "success", time.perf_counter() - start, model=self._model)
+        # PLAN-0107 Agent-B: capture cost on the primary model success path.
+        await self._record_cost(
+            thread_id=thread_id,
+            model_id=self._model,
+            usage=result.usage,
+            call_site="tool_loop_iter",
+        )
         return result
 
     async def _stream_chat_one_model(
@@ -339,12 +414,20 @@ class DeepInfraCompletionAdapter:
         model: str,
         max_tokens: int,
         temperature: float,
+        usage_sink: dict | None = None,
     ) -> AsyncIterator[str]:
         """Run a single stream_chat call against a specific model.
 
         Extracted so ``stream_chat`` can transparently retry against a
         secondary model (PLAN-0104 W43) without duplicating the SSE-parsing
         loop.
+
+        PLAN-0107 Agent-B: when ``usage_sink`` is provided, the final SSE chunk's
+        ``usage`` dict (delivered when ``stream_options.include_usage=true``) is
+        mutated into the sink so the caller can drive the cost recorder once the
+        stream completes. The sink is a mutable dict passed by the caller — we
+        can't return values from an async generator, so a mutation channel is
+        the canonical workaround.
         """
         payload: dict[str, object] = {
             "model": model,
@@ -353,6 +436,12 @@ class DeepInfraCompletionAdapter:
             "max_tokens": max_tokens,
             "temperature": temperature,
         }
+        # PLAN-0107 Agent-B: opt into per-stream usage emission. OpenAI / DeepInfra
+        # include a final SSE chunk with ``choices=[]`` and a populated ``usage``
+        # block when this flag is set. Without it, streaming responses never
+        # carry token counts and the cost recorder would always log zeros.
+        if usage_sink is not None:
+            payload["stream_options"] = {"include_usage": True}
         async with self._client.stream(
             "POST",
             f"{_BASE_URL}/chat/completions",
@@ -367,7 +456,16 @@ class DeepInfraCompletionAdapter:
                     break
                 try:
                     chunk = json.loads(data)
-                    delta = chunk["choices"][0]["delta"].get("content", "")
+                    # PLAN-0107 Agent-B: usage may arrive on a chunk with no
+                    # ``choices`` (final summary frame) OR alongside the last
+                    # content delta. Capture whenever present.
+                    if usage_sink is not None and chunk.get("usage"):
+                        usage_sink.update(chunk["usage"])
+                    choices = chunk.get("choices") or []
+                    if not choices:
+                        # Final usage-only chunk — no content to yield.
+                        continue
+                    delta = choices[0].get("delta", {}).get("content", "")
                     if delta:
                         yield delta
                 except (json.JSONDecodeError, KeyError, IndexError):
