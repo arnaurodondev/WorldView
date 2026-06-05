@@ -84,7 +84,7 @@ class DeepInfraCompletionAdapter:
         timeout: float = 30.0,
         chat_with_tools_timeout: float | None = None,
         thinking: bool = True,
-        stream_chat_fallback_model: str | None = "meta-llama/Meta-Llama-3.1-8B-Instruct",
+        stream_chat_fallback_model: str | None = "deepseek-ai/DeepSeek-V4-Flash",
     ) -> None:
         self._api_key = api_key
         self._model = model
@@ -93,7 +93,7 @@ class DeepInfraCompletionAdapter:
         # when the primary returns a zero-chunk SSE.  Root cause: Q5
         # ``ru_googl_pe_vs_history`` — DeepInfra returned HTTP 200 OK + a
         # ``data: [DONE]`` frame with no ``content`` deltas after a ~56s
-        # multi-tool synthesis call against ``Qwen/Qwen3-235B-A22B-Instruct-2507``.
+        # multi-tool synthesis call against ``deepseek-ai/DeepSeek-V4-Flash-Thinking``.
         # The provider chain only has DeepInfra wired in this deployment
         # (no OpenRouter / Ollama keys for the live stack), so W40's
         # cross-provider failover never triggered.  By retrying the SAME

@@ -57,7 +57,7 @@ from typing import Any, Protocol
 # Default judge model — Llama 3.1 8B Instruct is cheap, fast, and good enough
 # at structured-JSON grading. We pin a specific revision via env var when
 # stronger judgement is required (e.g. for thesis evaluation runs).
-_DEFAULT_JUDGE_MODEL = "meta-llama/Meta-Llama-3.1-8B-Instruct"
+_DEFAULT_JUDGE_MODEL = "deepseek-ai/DeepSeek-V4-Flash"
 _DEFAULT_BASE_URL = "https://api.deepinfra.com/v1/openai"
 
 # Dimension keys and the max score each one carries. The runner stores

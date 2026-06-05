@@ -130,7 +130,7 @@ class Settings(BaseSettings):
     # Qwen3-235B-A22B-Instruct-2507: $0.071/$0.10 per 1M tokens; 250k context >> 24k max extraction window.
     extraction_api_key: SecretStr = SecretStr("")  # NLP_PIPELINE_EXTRACTION_API_KEY (DEF-019)
     extraction_api_base_url: str = "https://api.deepinfra.com/v1/openai"  # NLP_PIPELINE_EXTRACTION_API_BASE_URL
-    extraction_api_model_id: str = "Qwen/Qwen3-235B-A22B-Instruct-2507"  # NLP_PIPELINE_EXTRACTION_API_MODEL_ID
+    extraction_api_model_id: str = "Qwen/Qwen3.5-9B"  # NLP_PIPELINE_EXTRACTION_API_MODEL_ID
 
     # GLiNER: when set, use the HTTP adapter (containerised GLiNER server).
     # Leave empty to fall back to GLiNERLocalAdapter (in-process model).
@@ -233,7 +233,7 @@ class Settings(BaseSettings):
     # ArticleRelevanceScoringWorker — DeepInfra provider (optional override)
     # When set, worker uses OpenAI-compatible chat completions instead of Ollama.
     # Model options (availability depends on DeepInfra account tier):
-    #   meta-llama/Meta-Llama-3.1-8B-Instruct  (confirmed available, ~100-200ms)
+    #   deepseek-ai/DeepSeek-V4-Flash  (confirmed available, ~100-200ms)
     #   Qwen/Qwen2.5-0.5B-Instruct             (smaller, faster — upgrade account to unlock)
     #   Qwen/Qwen2.5-1.5B-Instruct             (medium — upgrade account to unlock)
     relevance_scoring_api_key: SecretStr = SecretStr("")  # NLP_PIPELINE_RELEVANCE_SCORING_API_KEY (DEF-019)
@@ -242,7 +242,7 @@ class Settings(BaseSettings):
     # Confirmed available: Meta-Llama-3.1-8B-Instruct-Turbo (~100-200ms GPU,
     # ~$0.02/M tokens — still cheap enough for per-article relevance scoring).
     # RELEVANCE_SCORING_API_MODEL_ID
-    relevance_scoring_api_model_id: str = "meta-llama/Meta-Llama-3.1-8B-Instruct-Turbo"
+    relevance_scoring_api_model_id: str = "Qwen/Qwen3.5-0.8B"
     # Per-component weights for display_relevance_score = 0.5*market + 0.4*llm + 0.1*routing
     s6_display_weight_market: float = 0.50  # S6_DISPLAY_WEIGHT_MARKET
     s6_display_weight_llm: float = 0.40  # S6_DISPLAY_WEIGHT_LLM
@@ -269,7 +269,7 @@ class Settings(BaseSettings):
     # Confirmed available: Meta-Llama-3.1-8B-Instruct-Turbo — sufficient for
     # the one-mention-at-a-time entity disambiguation prompt shape.
     # UNRESOLVED_RESOLUTION_API_MODEL_ID
-    unresolved_resolution_api_model_id: str = "meta-llama/Meta-Llama-3.1-8B-Instruct-Turbo"
+    unresolved_resolution_api_model_id: str = "Qwen/Qwen3.5-0.8B"
 
     # LLM usage logging (PLAN-0033)
     llm_usage_log_enabled: bool = True

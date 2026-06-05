@@ -90,7 +90,7 @@ class Settings(BaseSettings):
     # KNOWLEDGE_GRAPH_DEEPINFRA_API_KEY — set via secret; empty = extraction chain skips DeepInfra
     deepinfra_api_key: SecretStr = SecretStr("")  # DEF-005: SecretStr prevents key leakage in tracebacks
     # KNOWLEDGE_GRAPH_DEEPINFRA_EXTRACTION_MODEL_ID
-    deepinfra_extraction_model_id: str = "Qwen/Qwen3-235B-A22B-Instruct-2507"
+    deepinfra_extraction_model_id: str = "deepseek-ai/DeepSeek-V4-Flash-Thinking"
     # KNOWLEDGE_GRAPH_DEEPINFRA_EXTRACTION_BASE_URL
     deepinfra_extraction_base_url: str = "https://api.deepinfra.com/v1/openai"
     # KNOWLEDGE_GRAPH_DEEPINFRA_EXTRACTION_CONCURRENCY
@@ -180,8 +180,8 @@ class Settings(BaseSettings):
     # source of truth so that env-var changes actually take effect.
     # Fallback aligned to Meta-Llama-3.1-8B-Instruct-Turbo per ADR-0073-006 (Qwen/Qwen3-32B
     # was the previous default but is not on the project's DeepInfra account allow-list).
-    description_deepinfra_model_id: str = "Qwen/Qwen3-235B-A22B-Instruct-2507"
-    description_deepinfra_fallback_model_id: str = "meta-llama/Meta-Llama-3.1-8B-Instruct-Turbo"
+    description_deepinfra_model_id: str = "deepseek-ai/DeepSeek-V4-Flash-Thinking"
+    description_deepinfra_fallback_model_id: str = "Qwen/Qwen3.5-9B"
     description_deepinfra_concurrency: int = 4
 
     # Market data service (used by Worker 13D-3 and Worker 13J)
@@ -193,7 +193,7 @@ class Settings(BaseSettings):
     # Worker 13D-3: Narrative generation LLM model (PRD-0074 Wave C)
     # Uses Meta-Llama-3.1-8B-Instruct (confirmed available on this DeepInfra account).
     # Falls back to template-v1 when llm_client is None or model call fails.
-    narrative_llm_model_id: str = "meta-llama/Meta-Llama-3.1-8B-Instruct"
+    narrative_llm_model_id: str = "deepseek-ai/DeepSeek-V4-Flash"
 
     # Worker 13J — Structured Enrichment (PRD-0073)
     #
@@ -245,8 +245,8 @@ class Settings(BaseSettings):
     # When the primary extraction chain (DeepInfra → Ollama) is exhausted,
     # SummaryWorker makes one additional attempt via Gemini 2.5 Flash Lite.
     # "gemini" activates the fallback; "none" disables it.
-    summary_fallback_provider: str = "gemini"  # KNOWLEDGE_GRAPH_SUMMARY_FALLBACK_PROVIDER
-    summary_fallback_model_id: str = "gemini-2.5-flash-lite"  # KNOWLEDGE_GRAPH_SUMMARY_FALLBACK_MODEL_ID
+    summary_fallback_provider: str = "deepinfra"  # KNOWLEDGE_GRAPH_SUMMARY_FALLBACK_PROVIDER
+    summary_fallback_model_id: str = "deepseek-ai/DeepSeek-V4-Flash"  # KNOWLEDGE_GRAPH_SUMMARY_FALLBACK_MODEL_ID
 
     # Wave A-2 / DEF-022: embedding model tracking
     # Recorded alongside every relation_summaries.summary_embedding write so we
@@ -283,7 +283,7 @@ class Settings(BaseSettings):
 
     # Path Insight Worker (PLAN-0074 Wave E1)
     # Model ID for Wave E2 LLM explanations (stored but not used in E1).
-    path_insight_explanation_model_id: str = "meta-llama/Meta-Llama-3.1-8B-Instruct"
+    path_insight_explanation_model_id: str = "deepseek-ai/DeepSeek-V4-Flash"
     # Stable worker instance ID — overridable via env var for testing and to ensure
     # disjoint SKIP LOCKED sets when running multiple containers.
     # Default: generated at process start (uuid4 as string, overridden at startup).

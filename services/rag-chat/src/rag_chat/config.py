@@ -64,7 +64,7 @@ class Settings(BaseSettings):
     # DeepInfra account. Confirmed available: Meta-Llama-3.1-8B-Instruct-Turbo
     # (~100-200ms GPU, 8B param, ~$0.02/M tokens — sufficient for a 1-token
     # intent decision and the same model used for classification across S6/S8).
-    deepinfra_classification_model: str = "meta-llama/Meta-Llama-3.1-8B-Instruct-Turbo"
+    deepinfra_classification_model: str = "Qwen/Qwen3.5-9B"
 
     # ── External reranker (Cohere — replaces bge-reranker-v2-m3 Ollama) ───────
     # WHY: bge-reranker-v2-m3 is not in the Ollama registry (ollama pull fails),
@@ -80,7 +80,7 @@ class Settings(BaseSettings):
 
     # ── Completion model config (PRD-0016 §6.2, T-B-2-01) ────────────────────
     completion_provider: str = "deepinfra"  # RAG_CHAT_COMPLETION_PROVIDER
-    completion_model: str = "Qwen/Qwen3-235B-A22B-Instruct-2507"  # RAG_CHAT_COMPLETION_MODEL
+    completion_model: str = "deepseek-ai/DeepSeek-V4-Flash-Thinking"  # RAG_CHAT_COMPLETION_MODEL
     # OpenRouter fallback model — configurable independently from the DeepInfra primary.
     openrouter_completion_model: str = "deepseek/deepseek-r1-distill-qwen-32b"  # RAG_CHAT_OPENROUTER_COMPLETION_MODEL
 
@@ -101,7 +101,7 @@ class Settings(BaseSettings):
     # DeepInfra key wired (W40 cross-provider failover is a no-op).  Set
     # to "" via env var to disable.
     deepinfra_stream_chat_fallback_model: str = (
-        "meta-llama/Meta-Llama-3.1-8B-Instruct"  # RAG_CHAT_DEEPINFRA_STREAM_FALLBACK_MODEL
+        "deepseek-ai/DeepSeek-V4-Flash"  # RAG_CHAT_DEEPINFRA_STREAM_FALLBACK_MODEL
     )
 
     # FIX-LIVE-EE (2026-05-25): Provider-chain exponential backoff for the
@@ -173,7 +173,7 @@ class Settings(BaseSettings):
     # A-006: configurable citation judge model so production can use a cheaper/faster
     # model than the main completion model.  Default matches the classification model
     # (8B Instruct — confirmed available on the DeepInfra account in MEMORY.md).
-    citation_judge_model: str = "meta-llama/Meta-Llama-3.1-8B-Instruct"  # RAG_CHAT_CITATION_JUDGE_MODEL
+    citation_judge_model: str = "deepseek-ai/DeepSeek-V4-Flash"  # RAG_CHAT_CITATION_JUDGE_MODEL
     citation_min_samples: int = Field(default=10, ge=1, le=500)  # RAG_CHAT_CITATION_MIN_SAMPLES
     citation_call_timeout_s: float = Field(default=15.0, gt=0.0, le=120.0)  # RAG_CHAT_CITATION_CALL_TIMEOUT_S
     citation_run_budget_s: float = Field(default=600.0, gt=0.0)  # RAG_CHAT_CITATION_RUN_BUDGET_S

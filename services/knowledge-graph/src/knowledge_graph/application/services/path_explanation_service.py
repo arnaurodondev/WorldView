@@ -33,7 +33,7 @@ logger = get_logger(__name__)  # type: ignore[no-any-return]
 _MAX_TOKENS = 200
 
 # Fallback model ID used when the injected model_id is empty.
-_FALLBACK_MODEL_ID = "meta-llama/Meta-Llama-3.1-8B-Instruct"
+_FALLBACK_MODEL_ID = "deepseek-ai/DeepSeek-V4-Flash"
 
 
 class PathExplanationService:
@@ -47,7 +47,7 @@ class PathExplanationService:
             (ml_clients ``ExtractionClient`` protocol).  When ``None`` the
             service is effectively a no-op (returns without calling the LLM).
         model_id:    LLM model ID string (e.g.
-            ``"meta-llama/Meta-Llama-3.1-8B-Instruct"``).
+            ``"deepseek-ai/DeepSeek-V4-Flash"``).
 
     """
 
