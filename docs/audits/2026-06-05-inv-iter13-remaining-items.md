@@ -161,14 +161,49 @@ This is the systemic fix for the F-INFRA-008/009 class. Without it, every future
 - Uses Alpha Vantage fallback (≤200 free-tier calls/day) if EODHD JSONB sections are empty
 
 ### Caveat from INV-C
-If EODHD JSONB itself is empty for AMD/MSFT/GOOG, operator must run `scripts/refresh_fundamentals.py` first to pull fresh EODHD payloads. INV-C couldn't query `fundamental_metrics` per-ticker row counts because postgres was down at investigation time.
+If EODHD JSONB itself is empty for AMD/MSFT/GOOG, operator must pull fresh EODHD payloads first. INV-C couldn't query `fundamental_metrics` per-ticker row counts because postgres was down at investigation time.
 
-### Recommended runbook
-1. `docker exec worldview-postgres-1 psql -U postgres -d market_data_db -c "SELECT i.symbol, COUNT(*) FROM instruments i LEFT JOIN fundamental_metrics fm USING (instrument_id) WHERE i.symbol IN ('AAPL','MSFT','GOOGL','AMD','NVDA','TSLA') GROUP BY i.symbol"` — see current coverage
-2. If coverage is 0 for any of {AMD, MSFT, GOOG}: `python services/market-ingestion/scripts/refresh_fundamentals.py --symbols AMD,MSFT,GOOG` (pulls raw EODHD)
-3. Then: `python services/market-ingestion/scripts/backfill_fundamentals.py` (decomposes JSONB → fundamental_metrics rows)
-4. Verify: re-run the SELECT above; expect non-zero per ticker
-5. Re-run iter-13 Q19/Q22/Q23 chat-eval; refusals should flip to USEFUL responses
+### Runbook execution log — 2026-06-05 (post-investigation)
+
+**Live verification confirmed no backfill needed.** Coverage was already populated by the regular scheduler (last ingest 2026-06-03 04:11–04:15 UTC, two days before iter-13 QA):
+
+| Symbol | Total rows | QUARTERLY | ANNUAL | SNAPSHOT | Latest quarterly |
+|--------|-----------:|----------:|-------:|---------:|------------------|
+| AAPL   |       8002 |      6053 |   1590 |      356 | 2026-03-31       |
+| AMD    |       8025 |      6114 |   1617 |      294 | 2026-03-31       |
+| AMZN   |       6454 |      4927 |   1222 |      302 | 2026-03-31       |
+| BRK.B  |       6816 |      5151 |   1407 |      258 | 2026-03-31       |
+| GOOGL  |       5146 |      3802 |   1023 |      318 | 2026-03-31       |
+| JPM    |       7585 |      5791 |   1481 |      310 | 2026-03-31       |
+| META   |       3611 |      2565 |    729 |      314 | 2026-03-31       |
+| MSFT   |       7976 |      6079 |   1576 |      318 | 2026-03-31       |
+| NVDA   |       5826 |      4379 |   1126 |      318 | 2026-04-30       |
+| TSLA   |       4163 |      3054 |    804 |      302 | 2026-03-31       |
+
+AMD revenue Q1 FY2026 confirmed in DB: `revenue = 10,253,000,000`. MSFT = `82,886,000,000`. GOOGL = `109,896,000,000`. **Iter-13 REFUSAL on fundamentals queries was NOT a data-coverage gap** — it is a retrieval / synthesis-path issue in rag-chat (consistent with F-NEW-015 root-cause).
+
+### Runbook corrections (discovered during live execution)
+
+1. **Coverage query has SQL bugs** — `instruments` PK is `id` not `instrument_id`, and `fundamental_metrics` uses `as_of_date` not `period_end`. Also `period_type` values are uppercase (`QUARTERLY`/`ANNUAL`/`SNAPSHOT`/`daily`), not lowercase. Corrected query:
+   ```bash
+   docker exec worldview-postgres-1 psql -U postgres -d market_data_db -c "
+     SELECT i.symbol, COUNT(fm.*) AS total,
+            COUNT(fm.*) FILTER (WHERE fm.period_type='QUARTERLY') AS quarterly,
+            MAX(fm.as_of_date) FILTER (WHERE fm.period_type='QUARTERLY') AS latest_quarterly
+     FROM instruments i LEFT JOIN fundamental_metrics fm ON fm.instrument_id = i.id
+     WHERE i.symbol IN ('AAPL','MSFT','GOOGL','AMZN','META','NVDA','TSLA','AMD','BRK.B','JPM')
+     GROUP BY i.symbol ORDER BY i.symbol"
+   ```
+2. **`scripts/refresh_fundamentals.py` does NOT exist** in `services/market-ingestion/scripts/` (only `backfill_fundamentals.py` is present). Step 2 of the original runbook is unrunnable as written. If raw EODHD payloads need refreshing, the production path is the live S2 `market-ingestion-scheduler` + `market-ingestion-worker`, not a standalone CLI. Document the actual mechanism before recommending it.
+3. **`backfill_fundamentals.py` has no `--symbols` flag** — only `--export-coverage=<path.csv>`. The full top-100 list is hardcoded as `TOP_EQUITY_SYMBOLS` (line 87). Per-ticker backfill requires editing that list or running the full set.
+4. **Postgres was Exited (0)** at start of run; runbook should include `docker start worldview-postgres-1 worldview-market-ingestion-worker-1 && sleep 8 && docker exec worldview-postgres-1 pg_isready -U postgres` as step 0.
+
+### Updated runbook
+0. `docker start worldview-postgres-1 worldview-market-ingestion-worker-1 && sleep 8` — ensure DB + worker up
+1. Run the corrected coverage query above
+2. If any of {AMD, MSFT, GOOGL} has zero QUARTERLY rows OR `latest_quarterly` is >6 months old: trigger fundamentals re-ingest via the live S2 worker (start `worldview-market-ingestion-scheduler-1` and let it pick up the schedule), or run the full top-100 backfill via `docker exec worldview-market-ingestion-worker-1 python services/market-ingestion/scripts/backfill_fundamentals.py`
+3. Verify: re-run the coverage query; expect non-zero QUARTERLY rows per ticker
+4. Re-run iter-13 Q19/Q22/Q23 chat-eval; **if refusals persist with data present, the root cause is rag-chat retrieval, not data coverage** (see F-NEW-015)
 
 ---
 

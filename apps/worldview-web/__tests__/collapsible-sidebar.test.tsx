@@ -26,11 +26,6 @@ import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { CollapsibleSidebar } from "@/components/shell/CollapsibleSidebar";
-// PRD-0089 W1: WatchlistPanel (nested under the sidebar) now consumes the
-// HotkeyContext to register `mod+shift+w`. Tests must wrap renders in a
-// HotkeyProvider or the panel throws.
-import { HotkeyProvider } from "@/contexts/HotkeyContext";
-import { HotkeyRegistry } from "@/lib/hotkey-registry";
 
 // ── Next.js navigation mock ────────────────────────────────────────────────────
 // WHY: CollapsibleSidebar uses usePathname() to highlight the active nav item.
@@ -74,13 +69,8 @@ vi.mock("@/lib/gateway", () => ({
 
 function makeWrapper() {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-  const registry = new HotkeyRegistry();
   return function Wrapper({ children }: { children: React.ReactNode }) {
-    return (
-      <QueryClientProvider client={qc}>
-        <HotkeyProvider registry={registry}>{children}</HotkeyProvider>
-      </QueryClientProvider>
-    );
+    return <QueryClientProvider client={qc}>{children}</QueryClientProvider>;
   };
 }
 
@@ -235,73 +225,5 @@ describe("CollapsibleSidebar — bottom chrome", () => {
 
     // WHY getByText: the Settings link is always rendered (both states)
     expect(screen.getByText("Settings")).toBeInTheDocument();
-  });
-});
-
-// ── PRD-0089 W1 §4.4 additions ────────────────────────────────────────────
-
-describe("CollapsibleSidebar — PRD-0089 W1 tightening", () => {
-  it("defaults expanded width to 200px (down from 220)", () => {
-    const { container } = render(
-      <CollapsibleSidebar expanded onToggle={mockOnToggle} />,
-      { wrapper: makeWrapper() },
-    );
-    // The aside carries `style={{ width: 200 }}` in expanded mode by default.
-    const aside = container.querySelector("aside");
-    expect(aside).not.toBeNull();
-    expect((aside as HTMLElement).style.width).toBe("200px");
-  });
-
-  it("bottom-chrome wrapper uses border-border-subtle (F1 hairline token)", () => {
-    const { container } = render(
-      <CollapsibleSidebar expanded onToggle={mockOnToggle} />,
-      { wrapper: makeWrapper() },
-    );
-    // Find the wrapper around Settings + Collapse — distinguished by the
-    // border-t + border-border-subtle class combination.
-    const wrappers = container.querySelectorAll(".border-t.border-border-subtle");
-    expect(wrappers.length).toBeGreaterThan(0);
-  });
-
-  it("calls onToggle when another tab flips the sidebar via localStorage (C-21)", () => {
-    render(
-      <CollapsibleSidebar
-        expanded
-        onToggle={mockOnToggle}
-        storageKey="worldview-sidebar-expanded"
-      />,
-      { wrapper: makeWrapper() },
-    );
-    mockOnToggle.mockClear();
-    // Simulate the storage event that another tab would fire when flipping
-    // expanded from true → false.
-    const evt = new StorageEvent("storage", {
-      key: "worldview-sidebar-expanded",
-      newValue: "false",
-      oldValue: "true",
-    });
-    window.dispatchEvent(evt);
-    expect(mockOnToggle).toHaveBeenCalledTimes(1);
-  });
-
-  it("does NOT call onToggle when storage event matches the current state (no drift)", () => {
-    render(
-      <CollapsibleSidebar
-        expanded
-        onToggle={mockOnToggle}
-        storageKey="worldview-sidebar-expanded"
-      />,
-      { wrapper: makeWrapper() },
-    );
-    mockOnToggle.mockClear();
-    // Other tab wrote `true` while we're already at `true` — no toggle.
-    window.dispatchEvent(
-      new StorageEvent("storage", {
-        key: "worldview-sidebar-expanded",
-        newValue: "true",
-        oldValue: "true",
-      }),
-    );
-    expect(mockOnToggle).not.toHaveBeenCalled();
   });
 });

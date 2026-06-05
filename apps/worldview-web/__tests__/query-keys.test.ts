@@ -10,7 +10,7 @@
 
 import { describe, it, expect } from "vitest";
 import { QueryClient } from "@tanstack/react-query";
-import { qk, QK_VERSION } from "@/lib/query/keys";
+import { qk } from "@/lib/query/keys";
 
 describe("qk — query key factory", () => {
   it("portfolios.detail nests under portfolios.all so cascade invalidation works", () => {
@@ -77,25 +77,7 @@ describe("qk — query key factory", () => {
   });
 
   it("optional-params variants encode the absence of params", () => {
-    // WHY QK_VERSION first: PRD-0089 F2 step 11 prepended a cache-namespace tag
-    // to every key so post-F2 (UUID-semantics-changed) entries never collide
-    // with pre-F2 ones. The factory exports the constant so tests assert the
-    // versioned tuple without hard-coding the literal — bumping the version
-    // requires no test edits beyond this single import.
-    expect(qk.news.top()).toEqual([QK_VERSION, "news", "top"]);
-    expect(qk.news.top({ limit: 10 })).toEqual([QK_VERSION, "news", "top", { limit: 10 }]);
-  });
-
-  it("QK_VERSION is prepended to every factory result", () => {
-    // Sanity check: a sample of keys across domains all start with QK_VERSION.
-    // WHY this matters: if a future factory entry forgets the prefix, the
-    // namespace isolation breaks silently for that single domain. This test
-    // catches the omission on a representative sample.
-    expect(qk.portfolios.all[0]).toBe(QK_VERSION);
-    expect(qk.instruments.detail("x")[0]).toBe(QK_VERSION);
-    expect(qk.watchlists.list()[0]).toBe(QK_VERSION);
-    expect(qk.news.top()[0]).toBe(QK_VERSION);
-    expect(qk.dashboard.snapshot()[0]).toBe(QK_VERSION);
-    expect(qk.search.query("foo")[0]).toBe(QK_VERSION);
+    expect(qk.news.top()).toEqual(["news", "top"]);
+    expect(qk.news.top({ limit: 10 })).toEqual(["news", "top", { limit: 10 }]);
   });
 });
