@@ -262,7 +262,9 @@ class TestProvisionalEnrichmentWorkerPostCommitOrdering:
 
         captured_calls: list[dict] = []
 
-        async def _capture_append(topic: str, partition_key: str, payload_avro: bytes) -> None:
+        async def _capture_append(
+            topic: str, partition_key: str, payload_avro: bytes, event_id: object = None, **_kw: object
+        ) -> None:
             captured_calls.append({"topic": topic, "partition_key": partition_key, "payload_avro": payload_avro})
 
         with (
@@ -308,7 +310,9 @@ class TestProvisionalEnrichmentWorkerPostCommitOrdering:
 
         partition_keys_appended: list[str] = []
 
-        async def _capture_append(topic: str, partition_key: str, payload_avro: bytes) -> None:
+        async def _capture_append(
+            topic: str, partition_key: str, payload_avro: bytes, event_id: object = None, **_kw: object
+        ) -> None:
             partition_keys_appended.append(partition_key)
 
         # Phase 2: extract returns profiles for both rows
@@ -1231,7 +1235,9 @@ class TestPhase3PerRowSessionIsolation:
 
         outbox_partition_keys: list[str] = []
 
-        async def _capture_append(topic: str, partition_key: str, payload_avro: bytes) -> None:
+        async def _capture_append(
+            topic: str, partition_key: str, payload_avro: bytes, event_id: object = None, **_kw: object
+        ) -> None:
             outbox_partition_keys.append(partition_key)
 
         worker = ProvisionalEnrichmentWorker(factory, AsyncMock())

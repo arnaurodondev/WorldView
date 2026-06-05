@@ -155,9 +155,27 @@ class TestFundamentalsRefreshWorkerS3Failure:
         instrument_resp.status_code = 200
         instrument_resp.json = MagicMock(return_value={"id": str(_INSTRUMENT_ID), "symbol": "AAPL"})
 
+        # F-DB-005 schema: {security_id, records: [{section, data, period_end}]}.
         fundamentals_resp = MagicMock()
         fundamentals_resp.status_code = 200
-        fundamentals_resp.json = MagicMock(return_value=fundamentals_data)
+        fundamentals_resp.json = MagicMock(
+            return_value={
+                "security_id": str(_INSTRUMENT_ID),
+                "records": [
+                    {
+                        "section": "highlights",
+                        "period_end": "2024-09-30T00:00:00",
+                        "data": {
+                            "RevenueTTM": 390000000000.0,  # 390B raw → 390000 millions
+                            "PERatio": 28.0,
+                            "Price": 189.0,
+                            "52WeekHigh": 200.0,
+                            "52WeekLow": 130.0,
+                        },
+                    },
+                ],
+            }
+        )
 
         def _route_get(url: str, **_kwargs: object) -> object:
             if "/instruments/lookup" in url:
@@ -201,9 +219,21 @@ class TestFundamentalsRefreshWorkerS3Failure:
         instrument_resp.status_code = 200
         instrument_resp.json = MagicMock(return_value={"id": str(_INSTRUMENT_ID), "symbol": "AAPL"})
 
+        # F-DB-005 schema.
         fundamentals_resp = MagicMock()
         fundamentals_resp.status_code = 200
-        fundamentals_resp.json = MagicMock(return_value={"revenue_usd_millions": 390000.0, "price": 189.0})
+        fundamentals_resp.json = MagicMock(
+            return_value={
+                "security_id": str(_INSTRUMENT_ID),
+                "records": [
+                    {
+                        "section": "highlights",
+                        "period_end": "2024-09-30T00:00:00",
+                        "data": {"RevenueTTM": 390000000000.0, "Price": 189.0},
+                    },
+                ],
+            }
+        )
 
         def _route_get(url: str, **_kwargs: object) -> object:
             if "/instruments/lookup" in url:
@@ -489,9 +519,21 @@ def _make_multi_entity_http(instrument_id: UUID) -> AsyncMock:
     instrument_resp.status_code = 200
     instrument_resp.json = MagicMock(return_value={"id": str(instrument_id), "symbol": "TEST"})
 
+    # F-DB-005 schema.
     fundamentals_resp = MagicMock()
     fundamentals_resp.status_code = 200
-    fundamentals_resp.json = MagicMock(return_value={"revenue_usd_millions": 100.0, "price": 50.0})
+    fundamentals_resp.json = MagicMock(
+        return_value={
+            "security_id": str(instrument_id),
+            "records": [
+                {
+                    "section": "highlights",
+                    "period_end": "2024-09-30T00:00:00",
+                    "data": {"RevenueTTM": 100000000.0, "Price": 50.0},
+                },
+            ],
+        }
+    )
 
     # 404 for earnings and profile so those paths complete quickly
     not_found_resp = MagicMock()

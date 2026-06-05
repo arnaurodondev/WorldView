@@ -65,7 +65,7 @@ async def test_ohlcv_proxy_requires_auth(app, mock_clients) -> None:
     """GET /v1/ohlcv/{id} without auth → 401; downstream never called."""
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as client:
-        resp = await client.get("/v1/ohlcv/instr-1")
+        resp = await client.get("/v1/ohlcv/00000000-0000-0000-0000-000000000001")
 
     assert resp.status_code == 401
     mock_clients.market_data.get.assert_not_called()
@@ -81,7 +81,7 @@ async def test_ohlcv_proxy_forwards_query_params(authed_app, authed_mock_clients
     transport = ASGITransport(app=authed_app)
     async with AsyncClient(transport=transport, base_url="http://test") as client:
         resp = await client.get(
-            "/v1/ohlcv/instr-1",
+            "/v1/ohlcv/00000000-0000-0000-0000-000000000001",
             params={"period": "1d", "from": "2026-01-01"},
             headers={"Authorization": f"Bearer {_make_jwt()}"},
         )
@@ -102,14 +102,14 @@ async def test_ohlcv_proxy_authenticated(authed_app, authed_mock_clients) -> Non
     transport = ASGITransport(app=authed_app)
     async with AsyncClient(transport=transport, base_url="http://test") as client:
         resp = await client.get(
-            "/v1/ohlcv/instr-1",
+            "/v1/ohlcv/00000000-0000-0000-0000-000000000001",
             headers={"Authorization": f"Bearer {_make_jwt()}"},
         )
 
     assert resp.status_code == 200
     authed_mock_clients.market_data.get.assert_called_once()
     call_args = authed_mock_clients.market_data.get.call_args[0]
-    assert "/api/v1/ohlcv/instr-1" in call_args[0]
+    assert "/api/v1/ohlcv/00000000-0000-0000-0000-000000000001" in call_args[0]
 
 
 # ── Quotes ───────────────────────────────────────────────────────────────────
@@ -130,7 +130,7 @@ async def test_quotes_single_proxy_fallback(authed_app, authed_mock_clients) -> 
             return _mock_response(404, b'{"detail": "not found"}')
         # legacy quote path
         legacy = (
-            b'{"instrument_id": "instr-1", "last": "150.0", "bid": null,'
+            b'{"instrument_id": "00000000-0000-0000-0000-000000000001", "last": "150.0", "bid": null,'
             b' "ask": null, "volume": null, "timestamp": "2026-04-24T00:00:00Z",'
             b' "updated_at": "2026-04-24T00:00:00Z"}'
         )
@@ -141,7 +141,7 @@ async def test_quotes_single_proxy_fallback(authed_app, authed_mock_clients) -> 
     transport = ASGITransport(app=authed_app)
     async with AsyncClient(transport=transport, base_url="http://test") as client:
         resp = await client.get(
-            "/v1/quotes/instr-1",
+            "/v1/quotes/00000000-0000-0000-0000-000000000001",
             headers={"Authorization": f"Bearer {_make_jwt()}"},
         )
 
@@ -149,8 +149,8 @@ async def test_quotes_single_proxy_fallback(authed_app, authed_mock_clients) -> 
     # Two calls: first to PriceSnapshot (404), then to legacy quote endpoint
     assert authed_mock_clients.market_data.get.call_count == 2
     calls = [c[0][0] for c in authed_mock_clients.market_data.get.call_args_list]
-    assert any("/internal/v1/price/instr-1" in c for c in calls)
-    assert any("/api/v1/quotes/instr-1" in c for c in calls)
+    assert any("/internal/v1/price/00000000-0000-0000-0000-000000000001" in c for c in calls)
+    assert any("/api/v1/quotes/00000000-0000-0000-0000-000000000001" in c for c in calls)
 
 
 @pytest.mark.asyncio
@@ -164,7 +164,7 @@ async def test_quotes_single_proxy_price_snapshot(authed_app, authed_mock_client
     import json
 
     snapshot = {
-        "instrument_id": "instr-1",
+        "instrument_id": "00000000-0000-0000-0000-000000000001",
         "symbol": "AAPL",
         "exchange": "US",
         "price": "150.00",
@@ -185,7 +185,7 @@ async def test_quotes_single_proxy_price_snapshot(authed_app, authed_mock_client
     transport = ASGITransport(app=authed_app)
     async with AsyncClient(transport=transport, base_url="http://test") as client:
         resp = await client.get(
-            "/v1/quotes/instr-1",
+            "/v1/quotes/00000000-0000-0000-0000-000000000001",
             headers={"Authorization": f"Bearer {_make_jwt()}"},
         )
 
@@ -217,7 +217,7 @@ async def test_quotes_batch_body_forwarded(authed_app, authed_mock_clients) -> N
 
     authed_mock_clients.market_data.post = AsyncMock(side_effect=_side_effect)
 
-    body = b'{"instrument_ids": ["instr-1", "instr-2"]}'
+    body = b'{"instrument_ids": ["00000000-0000-0000-0000-000000000001", "00000000-0000-0000-0000-000000000002"]}'
     transport = ASGITransport(app=authed_app)
     async with AsyncClient(transport=transport, base_url="http://test") as client:
         resp = await client.post(
@@ -246,7 +246,7 @@ async def test_fundamentals_proxy_unauthenticated(app, mock_clients) -> None:
     """GET /v1/fundamentals/{id} without auth → 401."""
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as client:
-        resp = await client.get("/v1/fundamentals/instr-1")
+        resp = await client.get("/v1/fundamentals/00000000-0000-0000-0000-000000000001")
 
     assert resp.status_code == 401
     mock_clients.market_data.get.assert_not_called()
@@ -262,7 +262,7 @@ async def test_fundamentals_proxy_forwards_params(authed_app, authed_mock_client
     transport = ASGITransport(app=authed_app)
     async with AsyncClient(transport=transport, base_url="http://test") as client:
         resp = await client.get(
-            "/v1/fundamentals/instr-1",
+            "/v1/fundamentals/00000000-0000-0000-0000-000000000001",
             params={"fields": "pe_ratio"},
             headers={"Authorization": f"Bearer {_make_jwt()}"},
         )
@@ -272,7 +272,7 @@ async def test_fundamentals_proxy_forwards_params(authed_app, authed_mock_client
     assert call_kwargs["params"].get("fields") == "pe_ratio"
     # Verify downstream path includes instrument_id
     call_args = authed_mock_clients.market_data.get.call_args[0]
-    assert "/api/v1/fundamentals/instr-1" in call_args[0]
+    assert "/api/v1/fundamentals/00000000-0000-0000-0000-000000000001" in call_args[0]
 
 
 # ── Entity Graph + Contradictions ────────────────────────────────────────────
@@ -315,10 +315,13 @@ async def test_entity_graph_depth_param(authed_app, authed_mock_clients) -> None
     # (ge=1, le=3) for AGE Cypher multi-hop traversal. depth>1 is forwarded; depth=1
     # is omitted (S7 default) to avoid a redundant param on the common case.
     # The `limit` param IS always forwarded (defaulting to 40 when not provided).
-    authed_mock_clients.knowledge_graph.get.assert_called_once()
-    call_kwargs = authed_mock_clients.knowledge_graph.get.call_args[1]
-    assert "depth" in call_kwargs["params"], "depth must be forwarded to S7 when >1 (ISSUE-5)"
-    assert call_kwargs["params"]["depth"] == "2", "depth value must be forwarded as string"
+    # BP-S9-GRAPH-001: depth>1 triggers a second depth=1 merge call (2 calls total).
+    assert authed_mock_clients.knowledge_graph.get.call_count >= 1
+    # Use the FIRST call (the primary depth>1 request) for the depth assertion.
+    primary_call_kwargs = authed_mock_clients.knowledge_graph.get.call_args_list[0][1]
+    assert "depth" in primary_call_kwargs["params"], "depth must be forwarded to S7 when >1 (ISSUE-5)"
+    assert primary_call_kwargs["params"]["depth"] == "2", "depth value must be forwarded as string"
+    call_kwargs = primary_call_kwargs
     assert "limit" in call_kwargs["params"], "limit is always forwarded to S7"
     call_args = authed_mock_clients.knowledge_graph.get.call_args[0]
     assert f"/api/v1/entities/{entity_id}/graph" in call_args[0]
@@ -433,7 +436,7 @@ async def test_ohlcv_proxy_downstream_500(authed_app, authed_mock_clients) -> No
     transport = ASGITransport(app=authed_app)
     async with AsyncClient(transport=transport, base_url="http://test") as client:
         resp = await client.get(
-            "/v1/ohlcv/instr-1",
+            "/v1/ohlcv/00000000-0000-0000-0000-000000000001",
             headers={"Authorization": f"Bearer {_make_jwt()}"},
         )
 
