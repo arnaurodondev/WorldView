@@ -2853,14 +2853,45 @@ class ChatOrchestratorUseCase:
             },
         ]
 
-        rewritten = ""
+        # F-NEW-015 Option B — defence-in-depth timeout. The synthesis loop
+        # already has its own (90s) outer budget, but a slow/hung rewrite
+        # stream can consume the whole budget on its own. Bound the rewrite
+        # at the configured ceiling (default 15s) and fall back to the
+        # original synthesised text + banner so the user still receives the
+        # substantive answer.  Configurable via
+        # ``RAG_CHAT_ENTITY_GROUNDING_REWRITE_TIMEOUT_SECONDS``.
+        from rag_chat.config import Settings as _RagChatSettings
+
         try:
+            _rewrite_timeout = _RagChatSettings().entity_grounding_rewrite_timeout_seconds  # type: ignore[call-arg]
+        except Exception:
+            # Settings construction failed (missing env var, etc.) — fall
+            # back to the audit-recommended default of 15s.
+            _rewrite_timeout = 15.0
+
+        async def _drain_rewrite() -> str:
+            buf = ""
             async for chunk in p.llm_chain.stream_chat(
                 rewrite_messages,
                 max_tokens=budget.max_tokens_final,
                 temperature=0.0,
             ):
-                rewritten += chunk
+                buf += chunk
+            return buf
+
+        rewritten = ""
+        try:
+            rewritten = await asyncio.wait_for(_drain_rewrite(), timeout=_rewrite_timeout)
+        except TimeoutError:
+            log.warning(  # type: ignore[no-any-return]
+                "entity_grounding_rewrite_timeout",
+                timeout_s=_rewrite_timeout,
+                original_unsupported=[u.name for u in first_result.unsupported[:10]],
+            )
+            return (
+                response + "\n\n⚠ Some entity references could not be verified (validator timeout).",
+                False,
+            )
         except Exception as exc:
             log.warning("entity_grounding_rewrite_failed", error=str(exc))  # type: ignore[no-any-return]
             return (

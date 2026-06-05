@@ -907,3 +907,80 @@ class TestScreenerToolResultGrounding:
 
         assert passed is True
         assert pipeline._rewrite_call_count["n"] == 0
+
+
+class TestEntityGroundingRewriteTimeout:
+    """F-NEW-015 Option B — rewrite stream_chat bounded by configurable timeout."""
+
+    def test_grounding_rewrite_timeout_returns_banner(self) -> None:
+        """A hung rewrite stream must surface the timeout banner + log warning.
+
+        Reproduces the 90s end-to-end timeout from iter-13: the rewrite
+        stream hangs indefinitely → ``asyncio.wait_for`` fires → we
+        return the original response with the validator-timeout banner
+        so the user still receives the substantive answer.
+        """
+        from rag_chat.application.use_cases.chat_orchestrator import (
+            AgentBudget,
+            ChatOrchestratorUseCase,
+        )
+
+        # A resolver that returns an unrelated entity guarantees the
+        # validator flags the prose's "APPLE" mention → triggers the
+        # rewrite path → which then hangs.
+        resolved_ent = MagicMock()
+        resolved_ent.canonical_name = "Microsoft"
+        resolved_ent.ticker = "MSFT"
+        resolved_ent.matched_text = "Microsoft"
+
+        tool_item = MagicMock()
+        tool_item.text = "MSFT revenue payload."
+        tool_item.item_id = "tool:fundamentals:MSFT"
+        cm = MagicMock()
+        cm.entity_name = "MSFT"
+        tool_item.citation_meta = cm
+        del tool_item.ticker
+        del tool_item.canonical_name
+        del tool_item.entity_name
+
+        response = "Apple revenue grew 8% per the latest filing."
+
+        # Pipeline whose stream_chat hangs forever.
+        pipeline = MagicMock()
+        pipeline.llm_chain = MagicMock()
+
+        async def _hang(messages: list, **_: Any):
+            await asyncio.sleep(60)  # well past the 0.1s test timeout
+            if False:
+                yield ""  # pragma: no cover
+
+        pipeline.llm_chain.stream_chat = _hang
+
+        # Force a tiny timeout so the test runs in <0.5s.
+        import os
+
+        prev = os.environ.get("RAG_CHAT_ENTITY_GROUNDING_REWRITE_TIMEOUT_SECONDS")
+        os.environ["RAG_CHAT_ENTITY_GROUNDING_REWRITE_TIMEOUT_SECONDS"] = "0.1"
+        try:
+            orch = ChatOrchestratorUseCase.__new__(ChatOrchestratorUseCase)
+            budget = AgentBudget()
+            text, passed = asyncio.run(
+                orch._run_entity_grounding_validation(
+                    p=pipeline,
+                    response=response,
+                    resolved_entities=[resolved_ent],
+                    tool_items=[tool_item],
+                    messages=[{"role": "user", "content": "Apple revenue"}],
+                    budget=budget,
+                    prior_tool_calls=None,
+                )
+            )
+        finally:
+            if prev is None:
+                os.environ.pop("RAG_CHAT_ENTITY_GROUNDING_REWRITE_TIMEOUT_SECONDS", None)
+            else:
+                os.environ["RAG_CHAT_ENTITY_GROUNDING_REWRITE_TIMEOUT_SECONDS"] = prev
+
+        assert passed is False, "Timeout path must mark grounding as failed"
+        assert "validator timeout" in text, "Timeout banner must be appended to original response"
+        assert text.startswith(response), "Original response text must be preserved verbatim"

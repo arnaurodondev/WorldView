@@ -178,6 +178,16 @@ class Settings(BaseSettings):
     citation_call_timeout_s: float = Field(default=15.0, gt=0.0, le=120.0)  # RAG_CHAT_CITATION_CALL_TIMEOUT_S
     citation_run_budget_s: float = Field(default=600.0, gt=0.0)  # RAG_CHAT_CITATION_RUN_BUDGET_S
 
+    # F-NEW-015 Option B — defence-in-depth timeout for the entity-grounding
+    # rewrite path. Iter-13 produced a 90s end-to-end timeout because the
+    # rewrite stream_chat ran unbounded (15-60s per invocation, combined with
+    # the prior synthesis budget). Default 15s aligns with the ceiling
+    # identified by the iter-13 investigation. When this fires the original
+    # synthesised response is returned with an [unverified] banner so the
+    # user still gets the substantive answer.  Override via
+    # RAG_CHAT_ENTITY_GROUNDING_REWRITE_TIMEOUT_SECONDS.
+    entity_grounding_rewrite_timeout_seconds: float = Field(default=15.0, gt=0.0, le=120.0)
+
     # ── Trust scoring weights (PLAN-0079 Wave C) ─────────────────────────────
     # The TrustScorer formula is additive:
     #   trust = w_source * source_authority + w_corroboration * corr_factor + w_extraction * extr_factor
