@@ -20,6 +20,8 @@ if TYPE_CHECKING:
     from collections.abc import AsyncIterator
 
     from tools.types import LLMToolResponse  # type: ignore[import-untyped]
+
+    from observability.metrics import MLMetrics  # type: ignore[import-untyped]
 import structlog
 
 log = structlog.get_logger(__name__)  # type: ignore[no-any-return]
@@ -44,11 +46,17 @@ class OllamaCompletionAdapter:
         *,
         http_client: httpx.AsyncClient | None = None,
         timeout: float = 60.0,
+        metrics: MLMetrics | None = None,
     ) -> None:
         self._base_url = base_url.rstrip("/")
         self._model = model
         self._timeout = timeout
         self._client = http_client or httpx.AsyncClient(timeout=timeout)
+        # Optional MLMetrics — Ollama doesn't currently surface chat_with_tools
+        # (it raises NotImplementedError), so the metric is wired but won't
+        # tick unless stream-level instrumentation is added in future.  Stored
+        # eagerly so a later patch can flip the switch without re-touching app.py.
+        self._metrics = metrics
 
     async def stream(
         self,

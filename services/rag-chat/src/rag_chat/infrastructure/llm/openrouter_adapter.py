@@ -8,12 +8,15 @@ from __future__ import annotations
 
 import asyncio
 import json
+import time
 from typing import TYPE_CHECKING
 
 import httpx
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
+
+    from observability.metrics import MLMetrics  # type: ignore[import-untyped]
 import structlog
 from tools.types import LLMToolResponse, ToolUseBlock  # type: ignore[import-untyped]
 
@@ -43,6 +46,7 @@ class OpenRouterCompletionAdapter:
         *,
         http_client: httpx.AsyncClient | None = None,
         timeout: float = 30.0,
+        metrics: MLMetrics | None = None,
     ) -> None:
         self._api_key = api_key
         self._model = model
@@ -51,6 +55,19 @@ class OpenRouterCompletionAdapter:
             headers={"Authorization": f"Bearer {api_key}"},
             timeout=timeout,
         )
+        # Optional MLMetrics — see DeepInfra adapter / observability.metrics for
+        # the schema (ml_api_requests_total, ml_api_latency_seconds, ...).
+        self._metrics = metrics
+
+    def _record_ml_call(self, operation: str, status: str, latency_s: float) -> None:
+        """Best-effort Prometheus update; no-op when metrics is None."""
+        if self._metrics is None:
+            return
+        try:
+            self._metrics.ml_api_requests_total.labels(model_id=self._model, operation=operation, status=status).inc()
+            self._metrics.ml_api_latency_seconds.labels(model_id=self._model, operation=operation).observe(latency_s)
+        except Exception:  # pragma: no cover — defensive
+            log.debug("ml_metrics_record_failed", operation=operation, status=status)  # type: ignore[no-any-return]
 
     async def stream(
         self,
@@ -171,7 +188,14 @@ class OpenRouterCompletionAdapter:
                 usage=usage,
             )
 
-        return await asyncio.wait_for(_do_request(), timeout=self._timeout)
+        start = time.perf_counter()
+        try:
+            result = await asyncio.wait_for(_do_request(), timeout=self._timeout)
+        except Exception:
+            self._record_ml_call("chat_with_tools", "error", time.perf_counter() - start)
+            raise
+        self._record_ml_call("chat_with_tools", "success", time.perf_counter() - start)
+        return result
 
     async def stream_chat(
         self,

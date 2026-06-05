@@ -47,6 +47,7 @@ from rag_chat.infrastructure.middleware.internal_jwt import InternalJWTMiddlewar
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator, Awaitable, Callable
+    from datetime import datetime
 
 _VALID_REQUEST_ID_RE = re.compile(r"^[a-zA-Z0-9\-]{1,64}$")
 
@@ -143,7 +144,11 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # Uses read_factory (R23: read-only use case → ReadOnlyUnitOfWork equivalent).
     app.state.citation_cron_task = None
     if settings.citation_cron_enabled:
-        _wire_citation_cron(app, settings, read_factory, log)
+        # MN-1: pass the valkey client so the cron can guard its immediate
+        # first run against crashloop replays (skip if last successful run
+        # was < 1h ago). Valkey is wired in step 4 above so it's always
+        # available here.
+        _wire_citation_cron(app, settings, read_factory, log, valkey_client)
 
     # 9. InternalJWTMiddleware — fetch JWKS from S9 (PRD-0025)
     jwt_mw = InternalJWTMiddleware(
@@ -176,6 +181,13 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
 def _wire_orchestrator(app: FastAPI, settings: RagChatSettings, valkey_client: ValkeyClient) -> None:
     """Build and attach the ChatPipeline and ChatOrchestratorUseCase to app.state."""
+    # PLAN-0107 / rag-chat-ml-metrics: build (or fetch the cached) MLMetrics
+    # singleton for ``rag-chat``.  All ml-clients adapters that accept a
+    # ``metrics=`` kwarg are wired against this single instance below so the
+    # Grafana dashboard panels (``rag_chat_ml_api_*``) receive real series.
+    from rag_chat.application.metrics.ml_clients import build_ml_metrics
+
+    ml_metrics = build_ml_metrics(settings.service_name)
 
     from rag_chat.application.caching.completion_cache import CompletionCache
     from rag_chat.application.caching.rate_limiter import RateLimiter
@@ -238,6 +250,9 @@ def _wire_orchestrator(app: FastAPI, settings: RagChatSettings, valkey_client: V
                 # zero-chunk SSE.  Empty string disables (W40 chain failover +
                 # W36 degraded-synthesis fallback still apply).
                 stream_chat_fallback_model=settings.deepinfra_stream_chat_fallback_model or None,
+                # rag-chat-ml-metrics: feed chat_with_tools latency/requests/
+                # status into ``rag_chat_ml_api_*`` so the Grafana panels light up.
+                metrics=ml_metrics,
             )
         )
     if _openrouter_api_key:
@@ -247,10 +262,17 @@ def _wire_orchestrator(app: FastAPI, settings: RagChatSettings, valkey_client: V
             OpenRouterCompletionAdapter(
                 api_key=_openrouter_api_key,
                 model=settings.openrouter_completion_model,  # RAG_CHAT_OPENROUTER_COMPLETION_MODEL
+                metrics=ml_metrics,  # rag-chat-ml-metrics: dashboard wiring
             )
         )
     # Ollama is always the emergency fallback
-    providers.append(OllamaCompletionAdapter(base_url=settings.ollama_base_url, model=settings.ollama_completion_model))
+    providers.append(
+        OllamaCompletionAdapter(
+            base_url=settings.ollama_base_url,
+            model=settings.ollama_completion_model,
+            metrics=ml_metrics,  # rag-chat-ml-metrics: dashboard wiring
+        )
+    )
 
     # PLAN-0052 QA-R6: wire the session-scoped usage logger so every successful
     # or failed LLM call writes a cost row to rag_chat_db.llm_usage_log.
@@ -288,7 +310,11 @@ def _wire_orchestrator(app: FastAPI, settings: RagChatSettings, valkey_client: V
         from ml_clients.adapters.jina_embedding import JinaEmbeddingAdapter  # type: ignore[import-not-found]
         from ml_clients.dataclasses import EmbeddingInput  # type: ignore[import-not-found]
 
-        _jina = JinaEmbeddingAdapter(api_key=_jina_api_key, task="retrieval.query")
+        # metrics=ml_metrics enables rag_chat_ml_api_{requests_total,latency_seconds,
+        # tokens_in_total,estimated_cost_usd_total} updates inside the adapter's
+        # finally block (jina_embedding.py ~L137).  Without this kwarg the
+        # adapter's `if self._metrics:` guard short-circuits silently.
+        _jina = JinaEmbeddingAdapter(api_key=_jina_api_key, task="retrieval.query", metrics=ml_metrics)
 
         class _JinaEmbeddingAdapter:
             """Thin wrapper around JinaEmbeddingAdapter matching the embed(text) -> list[float] protocol."""
@@ -559,9 +585,22 @@ def _wire_orchestrator(app: FastAPI, settings: RagChatSettings, valkey_client: V
     )
     app.state.tool_executor_factory = tool_executor_factory  # expose for tests / health checks
 
+    # PLAN-0107: AgentBudget sourced from env (Settings) rather than dataclass
+    # defaults so ops can tune the ReAct soft budgets per-environment without
+    # redeploying. The dataclass defaults (90s / 3 errors) are kept as the
+    # last-line fallback when Settings has not been touched. Other fields
+    # (max_iterations, max_tokens_*) are still dataclass defaults — they are
+    # less sensitive to env tuning and have not been observed limiting prod.
+    from rag_chat.application.use_cases.chat_orchestrator import AgentBudget
+
+    _agent_budget = AgentBudget(
+        max_tool_latency_s=settings.chat_max_tool_latency_s,
+        max_consecutive_errors=settings.chat_max_consecutive_errors,
+    )
     orchestrator = ChatOrchestratorUseCase(
         pipeline=pipeline,
         tool_executor_factory=tool_executor_factory,
+        budget=_agent_budget,
         # E-12: pass write_factory so ChatAuditLogger can flush to chat_audit_log.
         write_factory=app.state.write_factory,
     )
@@ -709,6 +748,13 @@ def _wire_citation_cron(
     # Resolve provider client (L4).
     _deepinfra_api_key = settings.deepinfra_api_key.get_secret_value() if settings.deepinfra_api_key else None
 
+    # rag-chat-ml-metrics: judge runs on the daily cron — wiring the metrics
+    # here makes the judge's request rate / failure rate / model latency
+    # visible on the same ``rag_chat_ml_api_*`` series the dashboard queries.
+    from rag_chat.application.metrics.ml_clients import build_ml_metrics
+
+    _judge_metrics = build_ml_metrics(settings.service_name)
+
     if settings.citation_judge_provider == "deepinfra" and _deepinfra_api_key:
         from rag_chat.infrastructure.llm.deepinfra_adapter import DeepInfraCompletionAdapter
 
@@ -718,6 +764,7 @@ def _wire_citation_cron(
         provider_client: Any = DeepInfraCompletionAdapter(
             api_key=_deepinfra_api_key,
             model=settings.citation_judge_model,  # RAG_CHAT_CITATION_JUDGE_MODEL
+            metrics=_judge_metrics,
         )
     else:
         # Ollama fallback (or explicit citation_judge_provider="ollama").
@@ -726,6 +773,7 @@ def _wire_citation_cron(
         provider_client = OllamaCompletionAdapter(
             base_url=settings.ollama_base_url,
             model=settings.ollama_completion_model,
+            metrics=_judge_metrics,
         )
         if settings.citation_judge_provider == "deepinfra" and not _deepinfra_api_key:
             log.warning(  # type: ignore[no-any-return]
@@ -736,6 +784,7 @@ def _wire_citation_cron(
     judge = CitationJudgeAdapter(
         provider_client,
         timeout_s=settings.citation_call_timeout_s,
+        metrics=_judge_metrics,
     )
 
     # R23: message repository uses read_factory (read-only session).
@@ -747,11 +796,19 @@ def _wire_citation_cron(
         def __init__(self, session_factory: Any) -> None:
             self._session_factory = session_factory
 
-        async def sample_recent_with_citations(self, n: int) -> list:  # type: ignore[override]
+        async def sample_recent_with_citations(  # type: ignore[override]
+            self,
+            n: int,
+            # MN-7: tightened from `Any` to `datetime | None` to surface
+            # callers that forget the kwarg at type-check time. The SQL
+            # adapter now raises if `since is None`, so this annotation is
+            # informational — runtime enforcement lives in the adapter.
+            since: datetime | None = None,
+        ) -> list:
             session = self._session_factory()
             try:
                 repo = SqlAlchemyMessageRepository(session)
-                return await repo.sample_recent_with_citations(n)
+                return await repo.sample_recent_with_citations(n, since=since)
             finally:
                 await session.close()
 

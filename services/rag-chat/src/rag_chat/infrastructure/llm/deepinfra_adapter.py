@@ -10,12 +10,15 @@ from __future__ import annotations
 
 import asyncio
 import json
+import time
 from typing import TYPE_CHECKING
 
 import httpx
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
+
+    from observability.metrics import MLMetrics  # type: ignore[import-untyped]
 import structlog
 from tools.types import LLMToolResponse, ToolUseBlock  # type: ignore[import-untyped]
 
@@ -85,6 +88,7 @@ class DeepInfraCompletionAdapter:
         chat_with_tools_timeout: float | None = None,
         thinking: bool = True,
         stream_chat_fallback_model: str | None = "deepseek-ai/DeepSeek-V4-Flash",
+        metrics: MLMetrics | None = None,
     ) -> None:
         self._api_key = api_key
         self._model = model
@@ -118,6 +122,26 @@ class DeepInfraCompletionAdapter:
             headers={"Authorization": f"Bearer {api_key}"},
             timeout=httpx.Timeout(_client_timeout),
         )
+        # When ``metrics`` is None the helper methods short-circuit; the
+        # observability lib's MLMetrics dataclass is duck-typed against here so
+        # no hard dependency on the adapter side.
+        self._metrics = metrics
+
+    def _record_ml_call(self, operation: str, status: str, latency_s: float, model: str | None = None) -> None:
+        """Best-effort recording of ML-API metrics; no-op when ``self._metrics`` is None.
+
+        Wraps every Prometheus call in a broad except so a metrics misconfig
+        can never break a chat turn — the dashboard not lighting up is the
+        worst-case outcome here.
+        """
+        if self._metrics is None:
+            return
+        try:
+            mid = model or self._model
+            self._metrics.ml_api_requests_total.labels(model_id=mid, operation=operation, status=status).inc()
+            self._metrics.ml_api_latency_seconds.labels(model_id=mid, operation=operation).observe(latency_s)
+        except Exception:  # pragma: no cover — defensive
+            log.debug("ml_metrics_record_failed", operation=operation, status=status)  # type: ignore[no-any-return]
 
     async def stream(
         self,
@@ -277,9 +301,14 @@ class DeepInfraCompletionAdapter:
                     f"n_tools={len(tools) if tools else 0})"
                 ) from exc
 
+        # Wrap the call so we record one Prometheus sample per attempt — both
+        # the primary-model attempt and the fallback-model attempt (if any) are
+        # counted independently with the proper ``model_id`` label.
+        start = time.perf_counter()
         try:
-            return await _call(self._model)
+            result = await _call(self._model)
         except Exception as exc:
+            self._record_ml_call("chat_with_tools", "error", time.perf_counter() - start, model=self._model)
             fallback_model = self._stream_chat_fallback_model
             if not fallback_model or fallback_model == self._model or not _is_retriable_chat_failure(exc):
                 raise
@@ -292,7 +321,16 @@ class DeepInfraCompletionAdapter:
                 reason=type(exc).__name__,
                 error=str(exc) or repr(exc),
             )
-            return await _call(fallback_model)
+            fb_start = time.perf_counter()
+            try:
+                fb_result = await _call(fallback_model)
+            except Exception:
+                self._record_ml_call("chat_with_tools", "error", time.perf_counter() - fb_start, model=fallback_model)
+                raise
+            self._record_ml_call("chat_with_tools", "success", time.perf_counter() - fb_start, model=fallback_model)
+            return fb_result
+        self._record_ml_call("chat_with_tools", "success", time.perf_counter() - start, model=self._model)
+        return result
 
     async def _stream_chat_one_model(
         self,

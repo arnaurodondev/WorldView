@@ -16,7 +16,6 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 from prometheus_client import CollectorRegistry  # type: ignore[import-untyped]
-
 from rag_chat.application.metrics.ml_clients import build_ml_metrics
 
 
