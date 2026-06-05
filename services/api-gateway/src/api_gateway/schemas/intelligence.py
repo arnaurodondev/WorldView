@@ -21,6 +21,29 @@ from uuid import UUID
 from pydantic import BaseModel, ConfigDict, Field
 
 
+class SentimentDataPoint(BaseModel):
+    """One date point in the entity sentiment timeseries (PLAN-0091 T-A-2-02)."""
+
+    model_config = ConfigDict(extra="allow")
+
+    date: str  # YYYY-MM-DD
+    article_count: int = 0
+    avg_relevance: float | None = None
+    positive_ratio: float | None = None  # 0-1
+    negative_ratio: float | None = None  # 0-1
+    avg_impact_score: float | None = None
+
+
+class EntitySentimentTimeseriesResponse(BaseModel):
+    """Response for GET /v1/entities/{id}/sentiment-timeseries (PLAN-0091 T-A-2-02)."""
+
+    model_config = ConfigDict(extra="allow")
+
+    entity_id: str
+    days: int = 90
+    points: list[SentimentDataPoint] = []
+
+
 class ConfidenceTrendPoint(BaseModel):
     """One point in the 90-day rolling confidence trend series."""
 

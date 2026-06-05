@@ -316,6 +316,7 @@
 | BP-319 | Stale Docker Image Blocks Alembic Upgrade After New Migration Added | Config & Docker | [bug-patterns/config-docker.md](bug-patterns/config-docker.md#bp-319) |
 | BP-320 | Docker Compose v5 `up -d` Leaves Services in `Created` State | Config & Docker | [bug-patterns/config-docker.md](bug-patterns/config-docker.md#bp-320) |
 | BP-321 | Grafana Alloy Service Filter Omits New Container: Logs Silently Dropped | Observability | [bug-patterns/observability.md](bug-patterns/observability.md#bp-321) |
+| BP-652 | Grafana Provisioned Datasource UID Drift: All Dashboards "No Data" — `datasources.yml` without pinned `uid:` makes Grafana auto-generate random UIDs (e.g. `PBFA97CFB590B2093`), but dashboard JSONs reference `"uid": "prometheus"` verbatim, so every panel renders "No data". Fix: pin `uid: prometheus\|loki\|tempo` in each datasource entry, restart Grafana (upsert-by-name updates UID in place). | Observability | [bug-patterns/observability.md](bug-patterns/observability.md#bp-652) |
 | BP-322 | `json.dumps(..., default=str)` Stringifies Pydantic Models: Cache Round-Trip Bre... | Database & ORM | [bug-patterns/database-orm.md](bug-patterns/database-orm.md#bp-322) |
 | BP-323 | CSP `style-src` Missing Nonce Silently Blocks All Stylesheets (Safari + Next.js ... | Auth & Security | [bug-patterns/auth-security.md](bug-patterns/auth-security.md#bp-323) |
 | BP-324 | LLM Adapter Optimistic Assumption: Plan Adds Application-Layer Feature, Adapter ... | ML & LLM | [bug-patterns/ml-llm.md](bug-patterns/ml-llm.md#bp-324) |

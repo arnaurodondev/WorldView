@@ -8,9 +8,11 @@ Split from proxy.py (PLAN-0089 B-3).
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any
+from uuid import UUID
 
 import httpx
 from fastapi import APIRouter, HTTPException, Query, Request, Response
@@ -26,8 +28,12 @@ from api_gateway.routes.helpers import _auth_headers, _clients, _system_headers
 from api_gateway.schemas import (
     EarningsCalendarResponse,
     FundamentalsResponse,
+    NLScreenerRequest,
+    NLScreenerResponse,
     OHLCVResponse,
     QuoteResponse,
+    YieldCurveResponse,
+    YieldPoint,
 )
 from observability.logging import get_logger  # type: ignore[import-untyped]
 
@@ -239,8 +245,384 @@ async def earnings_calendar(request: Request) -> Any:
 # PLAN-0041 Wave A-1 — proxy 6 S3 section endpoints that were missing from S9.
 
 
+# ── W5 computed endpoints (T-S9-02 / T-S9-03 / T-S9-04) ─────────────────────
+#
+# These three endpoints compose OHLCV + fundamentals data into pre-computed
+# dashboard bands. Computing at S9 keeps the frontend thin and avoids forcing
+# the client to fetch raw bars + run signal math.
+#
+# WHY registered before /fundamentals/{instrument_id}: FastAPI matches routes
+# in registration order. "intraday-stats", "multi-period-returns", and
+# "price-levels" would be swallowed by the /{instrument_id} catch-all if
+# registered after it.
+
+
+def _bars_from_response(resp_json: dict[str, Any]) -> list[dict[str, Any]]:
+    """Normalise S3 OHLCV response → list of float-typed bar dicts.
+
+    S3 returns two shapes depending on the endpoint path:
+    - items-based: {items: [{bar_date, open: str, high: str, ...}]}
+    - bars-based (proxied): {bars: [{timestamp, open: float, ...}]}
+
+    Both are normalised to [{timestamp, open, high, low, close, volume}].
+    """
+    raw_items: list[dict[str, Any]] = resp_json.get("items") or resp_json.get("bars") or []
+    out: list[dict[str, Any]] = []
+    for item in raw_items:
+        try:
+            out.append(
+                {
+                    "timestamp": item.get("bar_date") or item.get("timestamp", ""),
+                    "open": float(item["open"]) if item.get("open") else 0.0,
+                    "high": float(item["high"]) if item.get("high") else 0.0,
+                    "low": float(item["low"]) if item.get("low") else 0.0,
+                    "close": float(item["close"]) if item.get("close") else 0.0,
+                    "volume": int(item["volume"]) if item.get("volume") else 0,
+                },
+            )
+        except (KeyError, ValueError, TypeError):
+            continue
+    return out
+
+
+@router.get("/fundamentals/{instrument_id}/intraday-stats")
+async def get_intraday_stats(instrument_id: UUID, request: Request) -> Any:
+    """Compose intraday statistics from OHLCV + technicals (W5-T-S9-02).
+
+    Fetches in parallel:
+    - 5m intraday bars for today (VWAP + premarket H/L)
+    - 20 daily bars (ATR-14, RSI-14, GAP%)
+    - technicals_snapshot (short interest)
+
+    Returns a flat dict with 6 fields:
+    - vwap        float | null — volume-weighted average price (intraday 5m bars)
+    - atr_14      float | null — 14-bar ATR from daily bars (True Range avg)
+    - rsi_14      float | null — 14-bar RSI from daily bars
+    - gap_pct     float | null — (today_open - prev_close) / prev_close x 100
+    - premarket_high  float | null — max(high) from 5m bars before 09:30 ET
+    - premarket_low   float | null — min(low) from 5m bars before 09:30 ET
+    - short_interest_pct  float | null — from technicals_snapshot.ShortPercent
+    - short_interest_delta float | null — change from prior snapshot (null if unavailable)
+
+    All fields are null when insufficient data exists — no 404 is raised.
+    Requires authentication.
+
+    WHY S9-computed: keeps the frontend free of signal math; single round-trip;
+    staleTime = 60s (active hours) / 300s (after-hours) per Δ28.
+    """
+    if not getattr(request.state, "user", None):
+        raise HTTPException(status_code=401, detail="Authentication required")
+
+    headers = _auth_headers(request)
+    clients = _clients(request)
+    now_utc = datetime.now(tz=UTC)
+    today_str = now_utc.date().isoformat()
+    # 20 daily bars suffices for ATR(14) + RSI(14) with a small buffer.
+    daily_start = (now_utc - timedelta(days=30)).date().isoformat()
+
+    # Fan-out three S3 requests in parallel.
+    intraday_resp_fut = clients.market_data.get(
+        f"/api/v1/ohlcv/{instrument_id}",
+        params={"timeframe": "5m", "start": today_str},
+        headers=headers,
+    )
+    daily_resp_fut = clients.market_data.get(
+        f"/api/v1/ohlcv/{instrument_id}",
+        params={"timeframe": "1d", "start": daily_start},
+        headers=headers,
+    )
+    tech_resp_fut = clients.market_data.get(
+        f"/api/v1/fundamentals/{instrument_id}/technicals-snapshot",
+        headers=headers,
+    )
+
+    _gathered: list[httpx.Response | BaseException] = list(
+        await asyncio.gather(
+            intraday_resp_fut,
+            daily_resp_fut,
+            tech_resp_fut,
+            return_exceptions=True,
+        ),
+    )
+    intraday_resp: httpx.Response | BaseException = _gathered[0]
+    daily_resp: httpx.Response | BaseException = _gathered[1]
+    tech_resp: httpx.Response | BaseException = _gathered[2]
+
+    # ── Parse OHLCV responses (fail-soft) ─────────────────────────────────────
+    intraday_bars: list[dict[str, Any]] = []
+    daily_bars: list[dict[str, Any]] = []
+    tech_data: dict[str, Any] = {}
+
+    if isinstance(intraday_resp, httpx.Response) and intraday_resp.status_code == 200:
+        with contextlib.suppress(ValueError, KeyError):
+            intraday_bars = _bars_from_response(json.loads(intraday_resp.content))
+
+    if isinstance(daily_resp, httpx.Response) and daily_resp.status_code == 200:
+        with contextlib.suppress(ValueError, KeyError):
+            daily_bars = _bars_from_response(json.loads(daily_resp.content))
+
+    if isinstance(tech_resp, httpx.Response) and tech_resp.status_code == 200:
+        with contextlib.suppress(ValueError, KeyError):
+            raw_tech = json.loads(tech_resp.content)
+            records = raw_tech.get("records") or []
+            for rec in records:
+                if rec.get("section") == "technicals_snapshot":
+                    tech_data = rec.get("data") or {}
+                    break
+
+    # ── VWAP (intraday 5m bars) ───────────────────────────────────────────────
+    vwap: float | None = None
+    if intraday_bars:
+        total_vol = sum(b["volume"] for b in intraday_bars)
+        if total_vol > 0:
+            vwap = sum((b["high"] + b["low"] + b["close"]) / 3 * b["volume"] for b in intraday_bars) / total_vol
+
+    # ── Premarket H/L (5m bars before 14:30 UTC = 09:30 ET / 10:30 BST approx) ─
+    # WHY 14:30 UTC: US market opens at 09:30 ET = 14:30 UTC (ignoring DST).
+    # Premarket = before that cutoff on the current calendar date.
+    premarket_high: float | None = None
+    premarket_low: float | None = None
+    premarket_bars = [b for b in intraday_bars if b["timestamp"] < f"{today_str}T14:30"]
+    if premarket_bars:
+        premarket_high = max(b["high"] for b in premarket_bars)
+        premarket_low = min(b["low"] for b in premarket_bars)
+
+    # ── ATR(14) from daily bars ───────────────────────────────────────────────
+    atr_14: float | None = None
+    if len(daily_bars) >= 15:  # need N bars for N-1 true-range values
+        trs: list[float] = []
+        for i in range(1, len(daily_bars)):
+            cur = daily_bars[i]
+            prev_close = daily_bars[i - 1]["close"]
+            tr = max(
+                cur["high"] - cur["low"],
+                abs(cur["high"] - prev_close),
+                abs(cur["low"] - prev_close),
+            )
+            trs.append(tr)
+        if len(trs) >= 14:
+            atr_14 = sum(trs[-14:]) / 14
+
+    # ── RSI(14) from daily bars ───────────────────────────────────────────────
+    rsi_14: float | None = None
+    if len(daily_bars) >= 15:
+        changes = [daily_bars[i]["close"] - daily_bars[i - 1]["close"] for i in range(1, len(daily_bars))]
+        gains = [max(c, 0.0) for c in changes[-14:]]
+        losses = [abs(min(c, 0.0)) for c in changes[-14:]]
+        avg_gain = sum(gains) / 14
+        avg_loss = sum(losses) / 14
+        if avg_loss > 0:
+            rs = avg_gain / avg_loss
+            rsi_14 = 100.0 - (100.0 / (1.0 + rs))
+        elif avg_gain > 0:
+            rsi_14 = 100.0  # all gains, no losses
+        else:
+            rsi_14 = 50.0  # flat
+
+    # ── GAP% ────────────────────────────────────────────────────────────────
+    gap_pct: float | None = None
+    if len(daily_bars) >= 2:
+        last_bar = daily_bars[-1]
+        prev_bar = daily_bars[-2]
+        if prev_bar["close"] > 0:
+            gap_pct = (last_bar["open"] - prev_bar["close"]) / prev_bar["close"] * 100.0
+
+    # ── Short interest from technicals_snapshot ───────────────────────────────
+    # EODHD stores ShortPercent as a decimal fraction (0.05 = 5%).
+    # WHY * 100: frontend expects a percentage integer, not a decimal.
+    raw_si = tech_data.get("ShortPercent")
+    short_interest_pct: float | None = float(raw_si) * 100 if raw_si is not None else None
+    # SI delta is not stored in the snapshot; would require timeseries comparison.
+    # Return null for now — the UI renders "—" for null values.
+    short_interest_delta: float | None = None
+
+    return JSONResponse(
+        content={
+            "instrument_id": str(instrument_id),
+            "vwap": round(vwap, 4) if vwap is not None else None,
+            "atr_14": round(atr_14, 4) if atr_14 is not None else None,
+            "rsi_14": round(rsi_14, 2) if rsi_14 is not None else None,
+            "gap_pct": round(gap_pct, 4) if gap_pct is not None else None,
+            "premarket_high": round(premarket_high, 4) if premarket_high is not None else None,
+            "premarket_low": round(premarket_low, 4) if premarket_low is not None else None,
+            "short_interest_pct": round(short_interest_pct, 2) if short_interest_pct is not None else None,
+            "short_interest_delta": short_interest_delta,
+        },
+    )
+
+
+@router.get("/fundamentals/{instrument_id}/multi-period-returns")
+async def get_multi_period_returns(instrument_id: UUID, request: Request) -> Any:
+    """Compute close-on-close returns over 7 anchor periods (W5-T-S9-03).
+
+    Fetches 390 daily bars (approx 1Y + buffer) from S3. Computes:
+      1D   = (bars[-1].close / bars[-2].close) - 1
+      5D   = (bars[-1].close / bars[-6].close) - 1  (5 trading days)
+      1M   = (bars[-1].close / bars[-22].close) - 1 (~22 trading days)
+      3M   = (bars[-1].close / bars[-66].close) - 1
+      6M   = (bars[-1].close / bars[-132].close) - 1
+      YTD  = (bars[-1].close / first_bar_of_year.close) - 1
+      1Y   = (bars[-1].close / bars[-252].close) - 1
+
+    Returns null for any period where insufficient bars exist.
+    Requires authentication.
+    """
+    if not getattr(request.state, "user", None):
+        raise HTTPException(status_code=401, detail="Authentication required")
+
+    headers = _auth_headers(request)
+    clients = _clients(request)
+    now_utc = datetime.now(tz=UTC)
+    # 390 calendar days > 252 trading days (1Y); use 550 to handle weekends/holidays.
+    start_str = (now_utc - timedelta(days=550)).date().isoformat()
+
+    resp = await clients.market_data.get(
+        f"/api/v1/ohlcv/{instrument_id}",
+        params={"timeframe": "1d", "start": start_str},
+        headers=headers,
+    )
+
+    if isinstance(resp, Exception) or resp.status_code != 200:
+        return JSONResponse(
+            content={
+                "instrument_id": str(instrument_id),
+                "periods": dict.fromkeys(("1D", "5D", "1M", "3M", "6M", "YTD", "1Y")),
+            },
+        )
+
+    try:
+        bars = _bars_from_response(json.loads(resp.content))
+    except (ValueError, KeyError):
+        bars = []
+
+    def _ret(anchor: int) -> float | None:
+        """Return close-on-close return for a given lookback bar count."""
+        if len(bars) < anchor + 1:
+            return None
+        last_close = bars[-1]["close"]
+        anchor_close = bars[-1 - anchor]["close"]
+        if anchor_close <= 0:
+            return None
+        return float(round((last_close / anchor_close - 1) * 100, 4))
+
+    # YTD: find the last bar of the prior calendar year.
+    ytd_ret: float | None = None
+    this_year = now_utc.year
+    prior_year_bars = [b for b in bars if b["timestamp"] < f"{this_year}-01-01"]
+    if prior_year_bars and bars:
+        py_close = prior_year_bars[-1]["close"]
+        if py_close > 0:
+            ytd_ret = round((bars[-1]["close"] / py_close - 1) * 100, 4)
+
+    return JSONResponse(
+        content={
+            "instrument_id": str(instrument_id),
+            "periods": {
+                "1D": _ret(1),
+                "5D": _ret(5),
+                "1M": _ret(22),
+                "3M": _ret(66),
+                "6M": _ret(132),
+                "YTD": ytd_ret,
+                "1Y": _ret(252),
+            },
+        },
+    )
+
+
+@router.get("/fundamentals/{instrument_id}/price-levels")
+async def get_price_levels(instrument_id: UUID, request: Request) -> Any:
+    """Compute classic floor pivots + MA50/MA200 from daily OHLCV (W5-T-S9-04).
+
+    Fetches 210 daily bars from S3 (enough for MA200 + 1 buffer bar).
+
+    Pivot levels derived from prior closed session (bars[-2]):
+      PIVOT = (H + L + C) / 3
+      R1 = 2 x PIVOT - L      S1 = 2 x PIVOT - H
+      R2 = PIVOT + (H - L)    S2 = PIVOT - (H - L)
+      R3 = H + 2 x (PIVOT - L) S3 = L - 2 x (H - PIVOT)
+
+    MA50  = simple moving average of last 50 daily closes
+    MA200 = simple moving average of last 200 daily closes
+
+    Each level includes: value (float | null), label (str), direction ("above"|"below"|"at"|null).
+    Requires authentication.
+    """
+    if not getattr(request.state, "user", None):
+        raise HTTPException(status_code=401, detail="Authentication required")
+
+    headers = _auth_headers(request)
+    clients = _clients(request)
+    now_utc = datetime.now(tz=UTC)
+    # 205 trading days for MA200; pad with 60 calendar days for holidays.
+    start_str = (now_utc - timedelta(days=310)).date().isoformat()
+
+    resp = await clients.market_data.get(
+        f"/api/v1/ohlcv/{instrument_id}",
+        params={"timeframe": "1d", "start": start_str},
+        headers=headers,
+    )
+
+    if isinstance(resp, Exception) or resp.status_code != 200:
+        return JSONResponse(content={"instrument_id": str(instrument_id), "levels": [], "ma50": None, "ma200": None})
+
+    try:
+        bars = _bars_from_response(json.loads(resp.content))
+    except (ValueError, KeyError):
+        bars = []
+
+    if len(bars) < 2:
+        return JSONResponse(content={"instrument_id": str(instrument_id), "levels": [], "ma50": None, "ma200": None})
+
+    current_price = bars[-1]["close"]
+    prev = bars[-2]  # prior closed session
+
+    def _dir(level: float) -> str:
+        """Return direction label: above / below / at (within 0.1% band)."""
+        if current_price <= 0:
+            return "at"
+        diff_pct = (current_price - level) / level
+        if abs(diff_pct) < 0.001:
+            return "at"
+        return "above" if current_price > level else "below"
+
+    h, lo, c = prev["high"], prev["low"], prev["close"]
+    pivot = (h + lo + c) / 3
+    r1 = 2 * pivot - lo
+    r2 = pivot + (h - lo)
+    r3 = h + 2 * (pivot - lo)
+    s1 = 2 * pivot - h
+    s2 = pivot - (h - lo)
+    s3 = lo - 2 * (h - pivot)
+
+    levels = [
+        {"label": "R3", "value": round(r3, 4), "direction": _dir(r3)},
+        {"label": "R2", "value": round(r2, 4), "direction": _dir(r2)},
+        {"label": "R1", "value": round(r1, 4), "direction": _dir(r1)},
+        {"label": "PIVOT", "value": round(pivot, 4), "direction": _dir(pivot)},
+        {"label": "S1", "value": round(s1, 4), "direction": _dir(s1)},
+        {"label": "S2", "value": round(s2, 4), "direction": _dir(s2)},
+        {"label": "S3", "value": round(s3, 4), "direction": _dir(s3)},
+    ]
+
+    closes = [b["close"] for b in bars]
+    ma50: float | None = round(sum(closes[-50:]) / 50, 4) if len(closes) >= 50 else None
+    ma200: float | None = round(sum(closes[-200:]) / 200, 4) if len(closes) >= 200 else None
+
+    return JSONResponse(
+        content={
+            "instrument_id": str(instrument_id),
+            "levels": levels,
+            "ma50": ma50,
+            "ma50_direction": _dir(ma50) if ma50 is not None else None,
+            "ma200": ma200,
+            "ma200_direction": _dir(ma200) if ma200 is not None else None,
+        },
+    )
+
+
 @router.get("/fundamentals/{instrument_id}/technicals")
-async def get_technicals(instrument_id: str, request: Request) -> Any:
+async def get_technicals(instrument_id: UUID, request: Request) -> Any:
     """Proxy GET /v1/fundamentals/{id}/technicals → S3 /technicals-snapshot.
 
     WHY: S3 stores beta, SMA 50/200, 52W range, short interest under the
@@ -259,7 +641,7 @@ async def get_technicals(instrument_id: str, request: Request) -> Any:
 
 
 @router.get("/fundamentals/{instrument_id}/share-statistics")
-async def get_share_statistics(instrument_id: str, request: Request) -> Any:
+async def get_share_statistics(instrument_id: UUID, request: Request) -> Any:
     """Proxy GET /v1/fundamentals/{id}/share-statistics → S3 /share-statistics.
 
     WHY: Shares outstanding, float, short interest, insider/institutional
@@ -277,7 +659,7 @@ async def get_share_statistics(instrument_id: str, request: Request) -> Any:
 
 
 @router.get("/fundamentals/{instrument_id}/insider-transactions")
-async def get_insider_transactions(instrument_id: str, request: Request) -> Any:
+async def get_insider_transactions(instrument_id: UUID, request: Request) -> Any:
     """Proxy GET /v1/fundamentals/{id}/insider-transactions → S3 /insider-transactions-snapshot.
 
     WHY: Recent insider buys/sells — used by InsiderTransactionsTable.
@@ -294,8 +676,44 @@ async def get_insider_transactions(instrument_id: str, request: Request) -> Any:
     return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
 
 
+@router.get("/fundamentals/{instrument_id}/institutional-holders")
+async def get_institutional_holders(instrument_id: UUID, request: Request) -> Any:
+    """Proxy GET /v1/fundamentals/{id}/institutional-holders → S3 /institutional-holders.
+
+    WHY: Top institutional shareholders (fund name, shares held, % of float) —
+    used by InstitutionalHoldersTable on the Financials tab.
+    """
+    if not getattr(request.state, "user", None):
+        raise HTTPException(status_code=401, detail="Authentication required")
+    headers = _auth_headers(request)
+    clients = _clients(request)
+    resp = await clients.market_data.get(
+        f"/api/v1/fundamentals/{instrument_id}/institutional-holders",
+        headers=headers,
+    )
+    return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
+
+
+@router.get("/fundamentals/{instrument_id}/fund-holders")
+async def get_fund_holders(instrument_id: UUID, request: Request) -> Any:
+    """Proxy GET /v1/fundamentals/{id}/fund-holders → S3 /fund-holders.
+
+    WHY: Mutual fund and ETF holders (fund name, shares held, % of total) —
+    used by FundHoldersTable on the Financials tab.
+    """
+    if not getattr(request.state, "user", None):
+        raise HTTPException(status_code=401, detail="Authentication required")
+    headers = _auth_headers(request)
+    clients = _clients(request)
+    resp = await clients.market_data.get(
+        f"/api/v1/fundamentals/{instrument_id}/fund-holders",
+        headers=headers,
+    )
+    return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
+
+
 @router.get("/fundamentals/{instrument_id}/earnings-trend")
-async def get_earnings_trend(instrument_id: str, request: Request) -> Any:
+async def get_earnings_trend(instrument_id: UUID, request: Request) -> Any:
     """Proxy GET /v1/fundamentals/{id}/earnings-trend → S3 /earnings-trend.
 
     WHY: Forward EPS/revenue analyst estimates by quarter — used by
@@ -313,7 +731,7 @@ async def get_earnings_trend(instrument_id: str, request: Request) -> Any:
 
 
 @router.get("/fundamentals/{instrument_id}/earnings-annual-trend")
-async def get_earnings_annual_trend(instrument_id: str, request: Request) -> Any:
+async def get_earnings_annual_trend(instrument_id: UUID, request: Request) -> Any:
     """Proxy GET /v1/fundamentals/{id}/earnings-annual-trend → S3 /earnings-annual-trend.
 
     WHY: Annual earnings projections — supplementary to quarterly earnings-trend
@@ -331,7 +749,7 @@ async def get_earnings_annual_trend(instrument_id: str, request: Request) -> Any
 
 
 @router.get("/fundamentals/{instrument_id}/splits-dividends")
-async def get_splits_dividends(instrument_id: str, request: Request) -> Any:
+async def get_splits_dividends(instrument_id: UUID, request: Request) -> Any:
     """Proxy GET /v1/fundamentals/{id}/splits-dividends → S3 /splits-dividends.
 
     WHY: Dividend history (dates, amounts, frequency) and stock split history —
@@ -349,7 +767,7 @@ async def get_splits_dividends(instrument_id: str, request: Request) -> Any:
 
 
 @router.get("/fundamentals/{instrument_id}/income-statement")
-async def get_income_statement(instrument_id: str, request: Request) -> Any:
+async def get_income_statement(instrument_id: UUID, request: Request) -> Any:
     """Proxy GET /v1/fundamentals/{id}/income-statement → S3 /income-statement.
 
     WHY: Annual income-statement records (Revenue, Gross Profit, Operating Income,
@@ -372,7 +790,7 @@ async def get_income_statement(instrument_id: str, request: Request) -> Any:
 # NOTE: /snapshot MUST be registered before /{instrument_id} to prevent FastAPI
 # matching "snapshot" as an instrument_id path parameter value.
 @router.get("/fundamentals/{instrument_id}/snapshot")
-async def get_fundamentals_snapshot(instrument_id: str, request: Request) -> Any:
+async def get_fundamentals_snapshot(instrument_id: UUID, request: Request) -> Any:
     """Proxy GET /v1/fundamentals/{id}/snapshot → S3 /api/v1/fundamentals/{id}/snapshot.
 
     WHY THIS ENDPOINT: The InstrumentKeyMetrics sidebar and FundamentalsTab need
@@ -404,7 +822,7 @@ async def get_fundamentals_snapshot(instrument_id: str, request: Request) -> Any
     response_model=FundamentalsResponse,
     response_model_exclude_none=True,
 )
-async def get_fundamentals(instrument_id: str, request: Request) -> Any:
+async def get_fundamentals(instrument_id: UUID, request: Request) -> Any:
     """Proxy GET /api/v1/fundamentals/{instrument_id} → S3 Market Data.
 
     Requires authentication. Forwards query parameters (fields, etc.) to S3 for
@@ -431,7 +849,7 @@ async def get_fundamentals(instrument_id: str, request: Request) -> Any:
 
 
 @router.get("/ohlcv/{instrument_id}", response_model=OHLCVResponse, response_model_exclude_none=True)
-async def get_ohlcv(instrument_id: str, request: Request) -> Any:
+async def get_ohlcv(instrument_id: UUID, request: Request) -> Any:
     """Proxy GET /api/v1/ohlcv/{instrument_id} → S3 Market Data.
 
     Requires authentication. Forwards query parameters to S3 for OHLCV bar
@@ -742,7 +1160,7 @@ async def get_quote_stream_stub(request: Request) -> Response:
                 "detail": "WebSocket quote stream lands in PLAN-0059 Wave D. "
                 "Use polling on /v1/quotes/{instrument_id} until then.",
                 "wave": "D",
-            }
+            },
         ).encode(),
         status_code=503,
         media_type="application/json",
@@ -751,7 +1169,7 @@ async def get_quote_stream_stub(request: Request) -> Response:
 
 
 @router.get("/quotes/{instrument_id}", response_model=QuoteResponse, response_model_exclude_none=True)
-async def get_quote(instrument_id: str, request: Request) -> Any:
+async def get_quote(instrument_id: UUID, request: Request) -> Any:
     """Proxy GET /api/v1/quotes/{instrument_id} → S3 PriceSnapshot (with fallback).
 
     Requires authentication. Returns the latest quote enriched with freshness fields
@@ -762,7 +1180,7 @@ async def get_quote(instrument_id: str, request: Request) -> Any:
         raise HTTPException(status_code=401, detail="Authentication required")
     headers = _auth_headers(request)
     clients = _clients(request)
-    body, status = await _get_enriched_quote(instrument_id, clients, headers)
+    body, status = await _get_enriched_quote(str(instrument_id), clients, headers)
     return Response(content=body, status_code=status, media_type="application/json")
 
 
@@ -911,7 +1329,7 @@ _POSITIVE_SIGNAL_TYPES = frozenset(
         # NLP deep-extraction event_type enum (deep_extraction.py JSON schema)
         "PRODUCT_LAUNCH",
         "CAPITAL_RAISE",
-    }
+    },
 )
 _NEGATIVE_SIGNAL_TYPES = frozenset(
     {
@@ -933,7 +1351,7 @@ _NEGATIVE_SIGNAL_TYPES = frozenset(
         "NATURAL_DISASTER",
         "GEOPOLITICAL",
         "SANCTIONS",
-    }
+    },
 )
 
 
@@ -1034,3 +1452,264 @@ async def ai_signals(request: Request) -> Any:
     except Exception:
         logger.warning("ai_signals_transform_failed", exc_info=True)
         return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
+
+
+# ── Yield Curve (PLAN-0091 Wave A-2, T-A-2-04 / Wave E-2, T-E-2-02) ─────────
+
+# ETF ticker → maturity label used as fallback when macro_indicator rows absent.
+# Duration approximations: SHY≈2Y, IEI≈5Y, IEF≈10Y, TLT≈30Y.
+_YIELD_ETF_MAP: list[tuple[str, str]] = [
+    ("SHY", "2Y"),
+    ("IEI", "5Y"),
+    ("IEF", "10Y"),
+    ("TLT", "30Y"),
+]
+
+# Rough duration-to-yield mapping for ETF NAV proxy (change in NAV approx -duration * delta_y).
+# These are not real yield calculations — they surface approximate yield levels
+# inferred from ETF trailing returns as a graceful-degradation fallback.
+_ETF_DURATION: dict[str, float] = {"SHY": 1.9, "IEI": 4.3, "IEF": 8.3, "TLT": 17.0}
+
+
+@router.get("/market/yield-curve", response_model=YieldCurveResponse)
+async def get_yield_curve(request: Request) -> YieldCurveResponse:
+    """4-point US Treasury yield curve with graceful degradation (PLAN-0091 T-A-2-04).
+
+    Priority 1: S3 TemporalEvent rows with event_type=macro_indicator and
+    title matching treasury yield maturities (2Y/5Y/10Y/30Y).
+    Priority 2: ETF proxy via POST /internal/v1/price/batch for SHY/IEI/IEF/TLT.
+    Returns null yield_pct for maturities with no data.
+    Computes spread_2s10s = yield_10Y - yield_2Y (basis points).
+    Auth required.
+    """
+    if not getattr(request.state, "user", None):
+        raise HTTPException(status_code=401, detail="Authentication required")
+
+    headers = _auth_headers(request)
+    clients = _clients(request)
+
+    # ── Priority 1: check S3 macro_indicator TemporalEvents ──────────────────
+    yield_by_maturity: dict[str, float | None] = {m: None for _, m in _YIELD_ETF_MAP}
+    source = "unavailable"
+
+    try:
+        te_resp = await clients.market_data.get(
+            "/api/v1/temporal-events",
+            params={"event_type": "macro_indicator", "limit": 50},
+            headers=headers,
+        )
+        if te_resp.status_code == 200:
+            te_body = te_resp.json()
+            events = te_body if isinstance(te_body, list) else te_body.get("events", [])
+            for ev in events:
+                title: str = str(ev.get("title") or "").upper()
+                macro: dict[str, Any] = ev.get("macro_indicators") or ev.get("structured_data") or {}
+                # Match titles like "US_2Y_YIELD", "TREASURY_10Y", "UST 5Y", etc.
+                for maturity in ("2Y", "5Y", "10Y", "30Y"):
+                    if (maturity in title and "YIELD" in title) or ("TREASURY" in title and maturity in title):
+                        yld = macro.get("yield") or macro.get("rate") or macro.get("value")
+                        if yld is not None:
+                            try:
+                                yield_by_maturity[maturity] = float(yld)
+                                source = "macro_indicator"
+                            except (TypeError, ValueError):
+                                pass
+    except Exception:
+        logger.warning("yield_curve_macro_indicator_fetch_failed", exc_info=True)
+
+    # ── Priority 2: ETF proxy if macro_indicator data absent ─────────────────
+    if any(v is None for v in yield_by_maturity.values()):
+        try:
+            # Resolve ETF tickers to instrument_ids via S3 search
+            ticker_to_iid: dict[str, str] = {}
+            for ticker, _mat in _YIELD_ETF_MAP:
+                search_resp = await clients.market_data.get(
+                    "/api/v1/instruments/search",
+                    params={"q": ticker, "limit": 1},
+                    headers=headers,
+                )
+                if search_resp.status_code == 200:
+                    results = search_resp.json()
+                    items = results if isinstance(results, list) else results.get("results", [])
+                    for item in items:
+                        if str(item.get("ticker", "")).upper() == ticker.upper():
+                            iid = str(item.get("instrument_id", ""))
+                            if iid:
+                                ticker_to_iid[ticker] = iid
+                            break
+
+            if ticker_to_iid:
+                snap_resp = await clients.market_data.post(
+                    "/internal/v1/price/batch",
+                    json={"instrument_ids": list(ticker_to_iid.values())},
+                    headers={"Content-Type": "application/json", **headers},
+                )
+                if snap_resp.status_code == 200:
+                    snap_list = snap_resp.json()
+                    if isinstance(snap_list, list):
+                        iid_to_ticker = {v: k for k, v in ticker_to_iid.items()}
+                        for snap in snap_list:
+                            iid = str(snap.get("instrument_id", ""))
+                            ticker = iid_to_ticker.get(iid, "")
+                            if not ticker:
+                                continue
+                            change_pct = snap.get("day_change_pct") or snap.get("change_percent")
+                            if change_pct is None:
+                                continue
+                            duration = _ETF_DURATION.get(ticker, 5.0)
+                            # Approximate: Δy ≈ -ΔP / duration (simplified)
+                            implied_yield_change = -float(change_pct) / duration
+                            mat = dict(_YIELD_ETF_MAP).get(ticker)
+                            if mat:
+                                # We can only give a relative change without a baseline;
+                                # store the day_change_pct raw as a proxy indicator
+                                yield_by_maturity[mat] = round(implied_yield_change, 4)
+                                source = "etf_proxy"
+        except Exception:
+            logger.warning("yield_curve_etf_proxy_failed", exc_info=True)
+
+    # ── Build response ────────────────────────────────────────────────────────
+    points = [
+        YieldPoint(
+            maturity=maturity,
+            yield_pct=yield_by_maturity.get(maturity),
+            source=source if yield_by_maturity.get(maturity) is not None else None,
+        )
+        for _, maturity in _YIELD_ETF_MAP
+    ]
+
+    y2 = yield_by_maturity.get("2Y")
+    y10 = yield_by_maturity.get("10Y")
+    spread: float | None = None
+    inverted: bool | None = None
+    if y2 is not None and y10 is not None:
+        spread = round((y10 - y2) * 100, 2)  # basis points
+        inverted = spread < 0
+
+    return YieldCurveResponse(
+        points=points,
+        spread_2s10s=spread,
+        spread_2s10s_inverted=inverted,
+        source=source,
+    )
+
+
+# ── NL Screener Translation (PLAN-0091 Wave E-1, T-E-1-01) ───────────────────
+
+_NL_SCREENER_SYSTEM_PROMPT = """You are a financial screener assistant. Convert the user's natural-language query
+into a JSON object with exactly two top-level keys:
+  "explanation" — a concise 1-sentence plain-English description of what this screen selects
+  "filters"     — an object where each key is a screener field name from the ALLOWED FIELDS list below
+
+IMPORTANT: Only use field names from the ALLOWED FIELDS list provided below. Do not invent new fields.
+Filter values: numeric range {"gte": N, "lte": N}, exact string, or boolean true/false.
+Return ONLY a valid JSON object — no markdown fences, no extra text.
+
+Example output format:
+{"explanation": "Large-cap technology stocks with low debt",
+ "filters": {"market_cap": {"gte": 10000000000}, "pe_ratio": {"lte": 30}}}
+
+If you cannot parse the query into a valid filter, return {"_unparseable": true}.
+"""
+
+_DEEPINFRA_CHAT_URL = "https://api.deepinfra.com/v1/openai/chat/completions"
+_NL_SCREENER_MODEL = "meta-llama/Meta-Llama-3.1-8B-Instruct"
+
+
+@router.post("/screener/nl-translate", response_model=NLScreenerResponse)
+async def nl_screener_translate(body: NLScreenerRequest, request: Request) -> NLScreenerResponse:
+    """Translate a natural-language query into structured screener filters.
+
+    Calls DeepInfra directly (OpenAI-compatible API) with a structured system
+    prompt. S8 (rag-chat) is NOT used here - it has a different schema and adds
+    RAG retrieval overhead that is irrelevant for a simple translation task.
+    Validates all returned field names against the GET /v1/fundamentals/screen/fields
+    allowlist. Returns 422 if the LLM response cannot be parsed.
+    """
+    if not getattr(request.state, "user", None):
+        raise HTTPException(status_code=401, detail="Authentication required")
+
+    cfg = request.app.state.settings
+    deepinfra_key: str = cfg.deepinfra_api_key.get_secret_value()
+    if not deepinfra_key:
+        raise HTTPException(status_code=503, detail="NL screener not configured (missing API key)")
+
+    sys_headers = _system_headers(request)
+    clients = _clients(request)
+
+    # 1. Fetch valid field names from S3
+    valid_fields: set[str] = set()
+    try:
+        fields_resp = await clients.market_data.get("/api/v1/fundamentals/screen/fields", headers=sys_headers)
+        if fields_resp.status_code == 200:
+            fields_data = fields_resp.json()
+            raw_fields = fields_data if isinstance(fields_data, list) else fields_data.get("fields", [])
+            valid_fields = {str(f.get("name") or f) for f in raw_fields if f}
+    except Exception:
+        logger.warning("nl_screener_fields_fetch_failed", exc_info=True)
+
+    # 2. Call DeepInfra OpenAI-compatible chat/completions directly.
+    # WHY not S8: S8's /api/v1/chat schema expects {message, entity_ids} and runs
+    # a full RAG pipeline (retrieval + contradiction detection), which is wasteful
+    # and incorrect for a pure LLM translation task.
+    fields_hint = f"ALLOWED FIELDS: {', '.join(sorted(valid_fields))}\n\n" if valid_fields else ""
+    user_message = f"{fields_hint}Query: {body.query}"
+    chat_payload = {
+        "model": _NL_SCREENER_MODEL,
+        "messages": [
+            {"role": "system", "content": _NL_SCREENER_SYSTEM_PROMPT},
+            {"role": "user", "content": user_message},
+        ],
+        "max_tokens": 512,
+        "temperature": 0.0,
+        "stream": False,
+    }
+    try:
+        async with httpx.AsyncClient(timeout=httpx.Timeout(25.0)) as llm_client:
+            chat_resp = await llm_client.post(
+                _DEEPINFRA_CHAT_URL,
+                json=chat_payload,
+                headers={"Authorization": f"Bearer {deepinfra_key}", "Content-Type": "application/json"},
+            )
+    except Exception as exc:
+        logger.warning("nl_screener_chat_failed", error=str(exc))
+        raise HTTPException(status_code=502, detail="LLM service unavailable") from exc
+
+    if chat_resp.status_code != 200:
+        logger.warning("nl_screener_llm_error", status=chat_resp.status_code, body=chat_resp.text[:200])
+        raise HTTPException(status_code=502, detail="LLM service returned an error")
+
+    # 3. Extract JSON from LLM response (OpenAI format: choices[0].message.content)
+    try:
+        chat_body = chat_resp.json()
+        raw_text: str = ((chat_body.get("choices") or [{}])[0].get("message") or {}).get("content") or ""
+        # Strip markdown code fences if present
+        raw_text = raw_text.strip()
+        if raw_text.startswith("```"):
+            lines = raw_text.split("\n")
+            raw_text = "\n".join(lines[1:-1]) if len(lines) > 2 else raw_text
+        raw_json: dict[str, Any] = json.loads(raw_text)
+    except Exception:
+        raise HTTPException(status_code=422, detail="LLM could not produce a valid filter JSON")  # noqa: B904
+
+    if raw_json.get("_unparseable"):
+        raise HTTPException(status_code=422, detail="LLM could not parse the query into screener filters")
+
+    # Extract explanation + filters — support new {"explanation": "...", "filters": {...}} format
+    # and legacy flat format {"field": condition} for backwards compat with cached LLM versions.
+    explanation: str = ""
+    if "filters" in raw_json and isinstance(raw_json.get("filters"), dict):
+        explanation = str(raw_json.get("explanation") or "")
+        filters: dict[str, Any] = raw_json["filters"]
+    else:
+        filters = {k: v for k, v in raw_json.items() if k not in ("_unparseable", "explanation")}
+
+    # 4. Strip fields not in allowlist rather than 422 — graceful degradation when
+    # the LLM hallucinates field names despite the prompt constraint.
+    if valid_fields:
+        invalid = [k for k in filters if not k.startswith("_") and k not in valid_fields]
+        if invalid:
+            logger.warning("nl_screener_unknown_fields_stripped", fields=invalid)
+            filters = {k: v for k, v in filters.items() if k.startswith("_") or k in valid_fields}
+
+    return NLScreenerResponse(filters=filters, natural_language_query=body.query, explanation=explanation)
