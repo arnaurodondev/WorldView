@@ -135,14 +135,14 @@
     },
     {
       "type": "stat",
-      "title": "Response Cache Hit Rate",
-      "description": "s2_eodhd_cache_hits_total / (hits + misses) — high hit rate = fewer live EODHD calls",
+      "title": "Response Cache Hit Rate (NOT INSTRUMENTED)",
+      "description": "STUB: cache metrics are not yet emitted by market-ingestion. No s2_mi_provider_cache_* family exists. Pending instrumentation work; query left as-is so it surfaces as missing rather than silently 0.",
       "datasource": { "type": "prometheus", "uid": "prometheus" },
       "gridPos": { "h": 4, "w": 6, "x": 18, "y": 1 },
       "targets": [
         {
           "expr": "rate(s2_eodhd_cache_hits_total[5m]) / clamp_min(rate(s2_eodhd_cache_hits_total[5m]) + rate(s2_eodhd_cache_misses_total[5m]), 0.001) * 100",
-          "legendFormat": "Hit Rate %",
+          "legendFormat": "Hit Rate % (no data — not instrumented)",
           "refId": "A"
         }
       ],
@@ -174,7 +174,7 @@
     {
       "type": "stat",
       "title": "Circuit Breaker State",
-      "description": "max(s2_eodhd_circuit_breaker_state) — 0=CLOSED (healthy), 1=OPEN (blocking), 2=HALF_OPEN (probing)",
+      "description": "max(s2_eodhd_circuit_breaker_state) — 0=CLOSED, 1=OPEN, 2=HALF_OPEN. NOTE: gauge is defined in application/metrics/eodhd.py but has no .set() callsite — the breaker state is never written to Prometheus (separate bug). Panel will read 0/no-data until wired.",
       "datasource": { "type": "prometheus", "uid": "prometheus" },
       "gridPos": { "h": 4, "w": 6, "x": 0, "y": 10 },
       "targets": [
@@ -250,12 +250,12 @@
     {
       "type": "timeseries",
       "title": "API Requests Rate by Endpoint & Tier",
-      "description": "rate(s2_eodhd_requests_total[5m]) — labeled by endpoint, status_code, symbol_tier",
+      "description": "rate(s2_mi_provider_requests_total{provider=\"eodhd\"}[5m]) — generic provider mixin metric, labeled by endpoint, status_code, symbol_tier",
       "datasource": { "type": "prometheus", "uid": "prometheus" },
       "gridPos": { "h": 8, "w": 12, "x": 0, "y": 15 },
       "targets": [
         {
-          "expr": "rate(s2_eodhd_requests_total[5m])",
+          "expr": "rate(s2_mi_provider_requests_total{provider=\"eodhd\"}[5m])",
           "legendFormat": "{{endpoint}} [{{symbol_tier}}] {{status_code}}",
           "refId": "A"
         }
@@ -268,12 +268,12 @@
     {
       "type": "timeseries",
       "title": "HTTP 429 (Rate-Limited) Rate",
-      "description": "rate(s2_eodhd_rate_limited_total[5m]) — labeled by endpoint",
+      "description": "rate(s2_mi_provider_rate_limited_total{provider=\"eodhd\"}[5m]) — generic provider mixin metric, labeled by endpoint",
       "datasource": { "type": "prometheus", "uid": "prometheus" },
       "gridPos": { "h": 8, "w": 12, "x": 12, "y": 15 },
       "targets": [
         {
-          "expr": "rate(s2_eodhd_rate_limited_total[5m])",
+          "expr": "rate(s2_mi_provider_rate_limited_total{provider=\"eodhd\"}[5m])",
           "legendFormat": "429 {{endpoint}}",
           "refId": "A"
         }
@@ -290,17 +290,17 @@
     {
       "type": "timeseries",
       "title": "Request Latency P50 / P95 by Endpoint",
-      "description": "histogram_quantile on s2_eodhd_request_duration_seconds — labeled by endpoint",
+      "description": "histogram_quantile on s2_mi_provider_request_duration_seconds_bucket{provider=\"eodhd\"} — generic provider mixin metric, labeled by endpoint",
       "datasource": { "type": "prometheus", "uid": "prometheus" },
       "gridPos": { "h": 8, "w": 24, "x": 0, "y": 23 },
       "targets": [
         {
-          "expr": "histogram_quantile(0.5, sum by (le) (rate(s2_eodhd_request_duration_seconds_bucket[5m])))",
+          "expr": "histogram_quantile(0.5, sum by (le) (rate(s2_mi_provider_request_duration_seconds_bucket{provider=\"eodhd\"}[5m])))",
           "legendFormat": "P50 {{endpoint}}",
           "refId": "A"
         },
         {
-          "expr": "histogram_quantile(0.95, sum by (le) (rate(s2_eodhd_request_duration_seconds_bucket[5m])))",
+          "expr": "histogram_quantile(0.95, sum by (le) (rate(s2_mi_provider_request_duration_seconds_bucket{provider=\"eodhd\"}[5m])))",
           "legendFormat": "P95 {{endpoint}}",
           "refId": "B"
         }
