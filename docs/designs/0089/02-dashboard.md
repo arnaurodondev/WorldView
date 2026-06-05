@@ -6,10 +6,9 @@
 > (c) what changed since last login. Current dashboard fails (b) and is too
 > spaced for (a)/(c).
 
-Status: **revised** (2026-05-22 iter-2 — PLAN-0091: yield curve cell, TopOfPortfolio tab strip, RiskMetricsPanel tab)
+Status: **proposed**
 Author: agent-dashboard
 Date: 2026-05-19
-Revised: 2026-05-22 (revise-prd audit — R-001..R-006 + E-01..E-05 applied)
 Shared tokens: see `_INDEX.md` §"Shared design tokens" — all sizes/colors below
 reference that scale. No new tokens introduced.
 
@@ -125,7 +124,7 @@ Pending that doc, this is the working catalogue from grep of widgets +
 | Holdings for portfolio | `S9 GET /v1/portfolios/{id}/holdings` | `Holding[]` w/ qty, avg_cost, instrument_id | YES (but only `qty` rendered) |
 | Live quotes (batch) | `S9 POST /v1/quotes/batch` | `{ [iid]: Quote }` w/ price, day_change, day_change_pct | YES |
 | Portfolio performance series | `S9 GET /v1/portfolios/{id}/performance?period=` | `{ points: [{t, value}] }` | YES (sparkline) |
-| Portfolio KPIs (computed client-side — no dedicated summary endpoint) | Composed from: `S9 GET /v1/portfolio/{id}/bundle` (holdings + value_history) + `S9 POST /v1/quotes/batch` (live prices) + `S9 GET /v1/portfolios/{id}/exposure` (cash balance) | NLV=Σ(qty×price), cost=Σ(qty×avg_cost), unrealPnl=NLV−cost, dayPnl=Σ(qty×quote.day_change), cash=exposure.cash, MTD%=(NLV−first_of_month_value)/first_of_month_value, YTD%=(NLV−jan1_value)/jan1_value | **NO — `GET /v1/portfolios/{id}/summary` does NOT exist and is NOT needed. All 8 KPIs are computable from the three endpoints above. The W2 `usePortfolioMetrics` hook already computes NLV/unrealized/day. MTD/YTD require slicing value_history snapshots.** |
+| Portfolio KPIs (NEW — not currently surfaced) | `S9 GET /v1/portfolios/{id}/summary` | `{ total_value, cost_basis, unrealized_pnl, unrealized_pnl_pct, day_pnl, day_pnl_pct, mtd_pnl_pct, ytd_pnl_pct, cash_balance }` | **NO — backend has it (PortfolioSummaryService); widget does not consume it** |
 | Top movers (universe) | `S9 GET /v1/market/top-movers?bucket=gainers\|losers&limit=` | `Mover[]` w/ ticker, %chg, price, sector | YES |
 | Sector heatmap | `S9 GET /v1/market/heatmap?period=` | `Sector[]` w/ name, market_cap, day_change_pct | YES |
 | Market snapshot (indices) | `S9 POST /v1/quotes/batch` for SPY/QQQ/DIA/VIX/TLT/UUP/GLD/BTCUSD | `Quote[]` | YES (MarketSnapshotWidget — currently only 4 tickers) |
@@ -133,96 +132,15 @@ Pending that doc, this is the working catalogue from grep of widgets +
 | Prediction markets | `S9 GET /v1/signals/prediction-markets` | `PredictionMarket[]` w/ question, yes_pct, volume_usd | YES |
 | Economic calendar | `S9 GET /api/v1/fundamentals/economic-calendar` | `EconomicEvent[]` w/ name, country, importance, scheduled_at, actual, forecast, previous | YES |
 | Earnings calendar | `S9 GET /v1/fundamentals/earnings-calendar` | `EarningsEvent[]` w/ ticker, when (BMO/AMC), eps_est, eps_actual, revenue_est | YES |
-| Portfolio-relevant news | `S9 GET /v1/news/top?entity_ids={ids}&limit=10` — backend-filtered by holding entity_ids (E-03; previously client-side filtered from limit=20) | `RankedArticle[]` | YES (PortfolioNewsWidget) |
-| Alerts (recent) | SSE stream + `S9 GET /v1/alerts/pending` | `Alert[]` w/ severity, title, ticker, ts | YES |
+| Portfolio-relevant news | `S9 GET /v1/news/top?limit=20` filtered client-side | `RankedArticle[]` | YES (PortfolioNewsWidget) |
+| Alerts (recent) | SSE stream + `S9 GET /api/v1/alerts?acknowledged=false&limit=` | `Alert[]` w/ severity, title, ticker, ts | YES |
 | Watchlist (in shell, not dashboard) | `S9 GET /v1/watchlists` | — | (handled by `01-global-shell.md`) |
 | Dashboard snapshot warm-up | `S9 GET /v1/dashboard/snapshot` | bundled cache prime | YES (prefetcher) |
-| Yield curve (2Y/5Y/10Y/30Y + 2s10s spread) | `S9 GET /v1/market/yield-curve` | `YieldCurveResponse` w/ points[], spread_2s10s, spread_2s10s_inverted | **NO — NEW endpoint (PLAN-0091 Wave A-2, T-A-2-04)** |
-| Portfolio sector attribution | `S9 GET /v1/portfolios/{id}/sector-attribution` | `PortfolioSectorAttributionResponse` w/ sectors[], total_value, as_of | **NO — NEW endpoint (PLAN-0091 Wave A-2, T-A-2-03)** |
-| Portfolio risk metrics | `S9 GET /v1/portfolios/{id}/risk-metrics` | `RiskMetricsResponse` w/ sharpe, sortino, beta, volatility, max_drawdown | **YES — already live in S9; not yet displayed on dashboard** |
-| Portfolio concentration | `S9 GET /v1/portfolios/{id}/concentration` | `ConcentrationResponse` w/ hhi, top_positions, label | **YES — already live in S9; not yet displayed on dashboard** |
-
-### 3.1 Portfolio KPI data strategy (R-001 resolution)
-
-`GET /v1/portfolios/{id}/summary` does **not** exist and does not need to be built.
-All 8 KPI values for the TopOfPortfolio widget are derivable from existing endpoints:
-
-| KPI | Source |
-|---|---|
-| NLV | Σ(holding.quantity × live_price) — from bundle holdings + batch quotes |
-| Cost basis | Σ(holding.quantity × holding.average_cost) — from bundle |
-| Cash balance | `exposure.cash` — from `GET /v1/portfolios/{id}/exposure` |
-| Unrealized P&L | NLV − cost_basis (computed) |
-| Unrealized P&L % | (NLV − cost) / cost × 100 (computed) |
-| Day P&L | Σ(holding.quantity × quote.day_change) — from batch quotes |
-| MTD % | (NLV − first_of_month_value) / first_of_month_value — slice value_history |
-| YTD % | (NLV − jan_1_value) / jan_1_value — slice value_history |
-
-**Data fetch strategy**: Use `GET /v1/portfolio/{id}/bundle` as the primary call (returns
-portfolio metadata, holdings, and value_history in one round-trip). Issue
-`POST /v1/quotes/batch` for live prices and `GET /v1/portfolios/{id}/exposure` for
-current cash. The W2 `usePortfolioMetrics` hook already implements NLV/unrealized/day P&L;
-extend it to slice value_history for MTD/YTD.
-
-**Per-portfolio model**: KPIs are scoped to the **selected portfolio** (one at a time via
-the `[Demo · Live · Paper ▾]` dropdown). They are NOT aggregated across all portfolios.
-Selecting a different portfolio re-fetches bundle + exposure for that `portfolio_id`.
-
-### 3.2 Yield curve cell data strategy (PLAN-0091 T-F-3-02 / T-A-2-04)
-
-The 9th Market Strip cell, labelled `YIELDS (2s10s)`, surfaces Treasury yield data via
-`GET /v1/market/yield-curve` — a new S9 composition endpoint from PLAN-0091 Wave A-2.
-
-| Field | Value | Source |
-|---|---|---|
-| 2Y yield | `4.71%` | `points[].yield_pct` where `maturity = "2Y"` |
-| 10Y yield | `4.57%` | `points[].yield_pct` where `maturity = "10Y"` |
-| 2s10s spread | `-14bps` | `spread_2s10s` field (pre-computed by S9; = 10Y − 2Y in bps) |
-| Inversion flag | true/false | `spread_2s10s_inverted` — drives `text-negative` colouring |
-
-**Visual rendering**: Spread shown in `text-negative` when inverted (`spread_2s10s < 0`),
-`text-positive` when the curve is steep (`spread_2s10s > 0`). When yield data is unavailable
-(S9 returns 503 or any maturity has `yield_pct: null`), the cell displays `—` without
-crashing the strip. The cell never shows a sparkline — only the three text values.
-
-**Query key**: `qk.yieldCurve()` → `["market","yield-curve"]` (NEW in keys.ts).
-**staleTime**: 60 s. **refetchInterval**: 60 s.
-
----
-
-### 3.3 TopOfPortfolio tab strip data strategy (PLAN-0091 T-F-3-03)
-
-The R3 right-side panel gains a tab strip above the content area. Five tabs drive which
-component fills the right panel:
-
-| Tab | Component | Endpoint | Status | Lazy? |
-|---|---|---|---|---|
-| KPIs | `PortfolioKpiStrip` (already left panel) | composited — no extra call | always visible in left panel | N/A |
-| POSITIONS | `PortfolioPositionsTable` | composited from bundle + quotes | default tab | no |
-| RISK | `RiskMetricsPanel` | `GET /v1/portfolios/{id}/risk-metrics` | already live in S9 | yes — fetch on first activation |
-| CONCENTRATION | `ConcentrationWidget` | `GET /v1/portfolios/{id}/concentration` | already live in S9 | yes — fetch on first activation |
-| SECTORS | `SectorAttributionWidget` | `GET /v1/portfolios/{id}/sector-attribution` | NEW endpoint (PLAN-0091 Wave A-2, T-A-2-03) | yes — fetch on first activation |
-
-**Default tab**: POSITIONS — preserves existing muscle memory. Switching tabs does not
-cause a layout shift; the right panel is a fixed-height region (132px content) regardless
-of active tab.
-
-**KPIs tab note**: The KPI strip always renders in the left panel regardless of which
-right-side tab is active. The `[KPIs]` tab in the strip switches the right panel to show
-the full 8-cell KPI grid in a larger format when a user wants more detail; the left strip
-always remains visible.
-
-**Cross-reference**: `RiskMetricsPanel` full component spec is in `03-portfolio-overview.md`.
-The dashboard renders it via the RISK tab without duplicating the spec. See §11 E-08 below
-for the integration note.
-
----
 
 **Data the user explicitly mentioned as missing or under-surfaced**:
-- *"User positions not clearly displayed"* → `GET /v1/portfolio/{id}/bundle`
-  (holdings + value_history) + `POST /v1/quotes/batch` + `GET /v1/portfolios/{id}/exposure`
-  (cash). All endpoints exist — see §3.1 for KPI derivation. The widget just doesn't
-  render most of it.
+- *"User positions not clearly displayed"* → `GET /v1/portfolios/{id}/holdings`
+  + `POST /v1/quotes/batch` + `GET /v1/portfolios/{id}/summary`. All three exist.
+  The widget just doesn't render most of it.
 - Morning Brief is already visible but takes too much vertical real estate
   collapsed (~120-160px). New design caps it at 96px collapsed (header + 2-line
   summary + chip strip on one row).
@@ -261,7 +179,7 @@ intentional, gives `min-h-0` overflow a buffer.
 | # | Span | Content | Height |
 |---|------|---------|--------|
 | R1 | col 1-12 | Morning Brief                                                     | 96  |
-| R2 | col 1-12 | Market Strip (8 ticker cells + 1 YIELDS cell, 9 cells total)      | 96  |
+| R2 | col 1-12 | Market Strip (8 ticker cells inline)                              | 96  |
 | R3 | col 1-12 | **Top of Portfolio** (KPI strip · positions table · perf sparkline) | 156 |
 | R4 | col 1-3 / 4-6 / 7-9 / 10-12 | Gainers · Losers · AI Signals · Predictions | 156 |
 | R5 | col 1-4 / 5-8 / 9-12 | Sector Heatmap · Earnings · Economic Calendar           | 156 |
@@ -274,23 +192,20 @@ within 864px (8px slack, accounts for sub-pixel rounding).
 
 ```
 ┌──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
-│ Generated 2026-05-22 07:14 UTC      MORNING BRIEFING               [7 new] [Discuss] [Read more ▸]                          │ R1 96px
+│ Generated 2026-05-19 07:14 UTC      MORNING BRIEFING               [7 new] [Discuss] [Read more ▸]                          │ R1 96px
 │ Fed minutes confirm hawkish hold; semis sell off on TSMC capex cut. NVDA -3.1% pre-mkt. Treasury yields curve-steepen.       │
 │ [BLOOMBERG.COM · Fed minutes signal …] [REUTERS.COM · TSMC trims …] [FT.COM · Semis correction …]                            │
 ├──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┤
-│ SPX +0.42%▁▂▅ │ NDX +0.61%▁▃▇ │ DJI -0.12%▆▃▁ │ RUT +0.38%▁▂▄ │ VIX  -2.1%▇▅▁ │ TNX +0.02%▁▁▂ │ DXY  -0.3%▆▅▃ │ BTC +1.8%▁▃▆ │ YIELDS (2s10s) │ R2 96px
-│ 4 982.14      │ 17 412.8      │ 38 244.0      │  2 041.3      │ 14.82         │  4.412        │ 103.42        │ 61 240       │ 2Y 4.71%      │
-│               │               │               │               │               │               │               │              │ 10Y 4.57%     │
-│               │               │               │               │               │               │               │              │ -14bps ↓      │
+│ SPX   4 982.14  +0.42%▁▂▃▅▆ │ NDX 17 412.8 +0.61%▁▃▅▇▆ │ DJI 38 244 -0.12%▆▅▃▂▁ │ VIX 14.82 -2.1%▇▅▃▁▁ │ ...4 more cells   │ R2 96px
 ├──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┤
 │ ── TOP OF PORTFOLIO ───────────────────────────────────────────────────────────────────────────  [Demo · Live · Paper ▾]   │ R3
-│ NLV  $1 248 312   Day P&L  +$3 142 (+0.25%)  YTD  +8.97%  ┃ [KPIs] [POSITIONS] [RISK] [CONCENTRATION] [SECTORS]           │ 156px
-│ Cost $1 102 850   Unr P&L +$145 462 (+13.2%) MTD  +1.82%  ┃ ─────────────────────────────────────────────────────────────  │
-│ Cash $   42 800   Cash%           3.4%                     ┃ TICKER QTY    AVG     MKT     MKT VAL    UNR P&L    DAY P&L  WT│
-│ ── 1D · 5D · 1M · 3M · YTD ── ▁▂▃▄▅▆▇█▇▆▅▄▃▂▁            ┃ NVDA   180  412.10  398.22   71 679.6  -2 498 ↓   -512 ↓  5.7%│
-│   ↑ sparkline 130×40 (perf series, from value_history)     ┃ AAPL   240  168.90  182.41   43 778.4  +3 242 ↑   +120 ↑  3.5%│
-│                                                            ┃ MSFT   120  402.10  418.66   50 239.2  +1 987 ↑   +482 ↑  4.0%│
-│                                                            ┃ ... 5 more holdings (scroll) — [View all ▸]                    │
+│ NLV  $1 248 312      Day P&L  +$3 142 (+0.25%)   ┃ TICKER QTY    AVG     MKT     MKT VAL    UNR P&L      DAY P&L   WEIGHT  │ 156px
+│ Cost $1 102 850      Unr P&L +$145 462 (+13.19%) ┃ NVDA   180  412.10  398.22   71 679.6   -2 498.40 ↓  -512.20 ↓  5.74%   │
+│ Cash $   42 800      MTD     +1.82%              ┃ AAPL   240  168.90  182.41   43 778.4   +3 242.40 ↑  +120.60 ↑  3.51%   │
+│ ─── 1D · 5D · 1M · 3M · YTD ─── ▁▂▃▄▅▆▇█▇▆▅▄▃▂▁ ┃ MSFT   120  402.10  418.66   50 239.2   +1 987.20 ↑  +482.40 ↑  4.02%   │
+│  ↑ sparkline 130x40 (perf series)               ┃ ANTH   500   84.20   91.15   45 575.0   +3 475.00 ↑  +210.00 ↑  3.65%   │
+│                                                  ┃ TSLA    60  198.40  212.80   12 768.0   +  864.00 ↑  +  18.00 ↑  1.02%   │
+│                                                  ┃ ... 5 more holdings (scroll) — [View all ▸]                              │
 ├──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┤
 │ GAINERS ▲                  │ LOSERS ▼                  │ AI SIGNALS                │ PREDICTIONS                            │ R4
 │ TICK   PRICE   %CHG  VOL   │ TICK   PRICE   %CHG  VOL  │ TICK  SCORE  DIR  HORIZON │ MARKET                  YES   24H  VOL │ 156px
@@ -299,16 +214,16 @@ within 864px (8px slack, accounts for sub-pixel rounding).
 │ COIN   312.50 + 9.4% 22.0M │ LRCX   934.12  -2.5%  4.2M│ COIN  +0.62  ↑   1W       │ Trump wins 2028         52%  +3  $5.1M│
 │ ... 4 more rows scroll     │ ... 4 more rows scroll    │ ... 4 more rows scroll    │ ... 4 more rows scroll                │
 ├──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┤
-│ SECTOR HEATMAP (1D)         │ EARNINGS TODAY [● My holdings]│ ECONOMIC CALENDAR                                              │ R5
-│ ┌──────┬───────┬──────┐    │ TICK   TIME EPS-EST  ACT  │ TIME COUNTRY EVENT                  IMPORTANCE FORE ACT  PREV     │ 156px
-│ │ TECH │ COMM. │ FIN. │    │ NVDA   AMC  $5.12    --   │ 08:30 US      Initial Jobless Claims  ●●●     220k --   210k    │
+│ SECTOR HEATMAP (1D)         │ EARNINGS TODAY            │ ECONOMIC CALENDAR                                                  │ R5
+│ ┌──────┬───────┬──────┐    │ TICK   TIME EPS-EST ACT   │ TIME COUNTRY EVENT                  IMPORTANCE FORE ACT  PREV     │ 156px
+│ │ TECH │ COMM. │ FIN. │    │ NVDA   AMC  $5.12   --    │ 08:30 US      Initial Jobless Claims  ●●●     220k --   210k    │
 │ │+1.2% │+0.8%  │-0.3% │    │ ANET   BMO  $1.92  $2.04▲ │ 10:00 US      Existing Home Sales     ●●      3.95M --  3.96M   │
-│ ├──────┼───────┼──────┤    │ DLTR   BMO  $1.55    --   │ 14:00 US      FOMC Minutes            ●●●●    --   --   --      │
-│ │ CONS.│ ENERGY│HLTH. │    │ TGT    BMO  $2.06    --   │ 16:30 JP      CPI YoY (Apr)          ●●●     2.7% --   2.6%    │
+│ ├──────┼───────┼──────┤    │ DLTR   BMO  $1.55   --    │ 14:00 US      FOMC Minutes            ●●●●    --   --   --      │
+│ │ CONS.│ ENERGY│HLTH. │    │ TGT    BMO  $2.06   --    │ 16:30 JP      CPI YoY (Apr)          ●●●     2.7% --   2.6%    │
 │ │+0.4% │ -1.1% │+0.6% │    │ ... 6 more rows scroll    │ ... 8 more rows scroll                                          │
-│ └──────┴───────┴──────┘    │ (● = filter to my holdings)│                                                                 │
+│ └──────┴───────┴──────┘    │                           │                                                                  │
 ├──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┤
-│ PORTFOLIO NEWS (entity ●)   │ ALERTS (LIVE)             │ TOP NEWS                                                          │ R6
+│ PORTFOLIO NEWS              │ ALERTS (LIVE)             │ TOP NEWS                                                          │ R6
 │ NVDA  3m ago  TSMC capex…   │ HIGH  NVDA  -3% pre-mkt   │ Fed minutes confirm hawkish hold (Reuters · 4m)                   │ 156px
 │ AAPL  18m ago Buyback ann.  │ MED   ANET  earnings beat │ TSMC Q1 revenue tops est, capex cut (Bloomberg · 12m)             │
 │ MSFT  41m ago Copilot rev…  │ LOW   AAPL  buyback news  │ Boeing 737 MAX 7 cert delayed (FT · 26m)                           │
@@ -318,7 +233,7 @@ within 864px (8px slack, accounts for sub-pixel rounding).
 ```
 
 ### Visible cell count above the fold (1440×864)
-- Market strip R2: 9 cells × 3 metric facets (last, %, spread/sparkline) = **27 cells** (8 standard tickers + 1 YIELDS cell)
+- Market strip R2: 8 cells × 3 metric facets (last, %, sparkline) = **24 cells**
 - Top of Portfolio R3: 8 KPI cells + (positions table: 5 rows × 7 cols) = **43 cells**
 - Movers R4: 4 widgets × (5 rows × 4 cols avg) = **80 cells**
 - Context R5: 3 widgets × (5 rows × ~5 cols avg) = **75 cells**
@@ -331,82 +246,6 @@ widget (was 8 cells in current widget, now 43).
 
 ---
 
-### R3 Top of Portfolio — tab strip detail (PLAN-0091 T-F-3-03)
-
-The right side of R3 has a tab strip along its top edge:
-`[KPIs]  [POSITIONS]  [RISK]  [CONCENTRATION]  [SECTORS]`
-Strip height: 22px. Content region below: 132px (no layout shift between tabs).
-
-```
-┌── TOP OF PORTFOLIO ──────────────────────────────────────────────────────────────┐
-│ NLV $1 248 312  Day +$3 142  ┃ [KPIs] [POSITIONS ●] [RISK] [CONCENTR.] [SECTORS] │
-│ Cost $1 102 850  MTD +1.82%  ┃ ──────────────────────────────────────────────── │
-│ Unr P&L +$145 462  YTD 8.97% ┃ TICKER QTY  AVG    MKT   MKT VAL  UNR P&L   WT   │
-│ Cash $42 800  Cash%  3.4%    ┃ NVDA   180 412.10 398.22  71 679  -2 498 ↓  5.7%  │
-│ ── 1D · sparkline · YTD ──   ┃ AAPL   240 168.90 182.41  43 778  +3 242 ↑  3.5%  │
-│                              ┃ MSFT   120 402.10 418.66  50 239  +1 987 ↑  4.0%  │
-│                              ┃ ... scroll ────────────────── [View all ▸]         │
-└──────────────────────────────┴──────────────────────────────────────────────────────┘
-```
-
-**Tab definitions**:
-
-| Tab | Component | Data source | Lazy? |
-|---|---|---|---|
-| `[KPIs]` | `PortfolioKpiStrip` (expanded view) | composited — no extra call | no |
-| `[POSITIONS]` | `PortfolioPositionsTable` (default) | bundle + batch quotes | no |
-| `[RISK]` | `RiskMetricsPanel` | `GET /v1/portfolios/{id}/risk-metrics` (live in S9) | yes |
-| `[CONCENTRATION]` | `ConcentrationWidget` | `GET /v1/portfolios/{id}/concentration` (live in S9) | yes |
-| `[SECTORS]` | `SectorAttributionWidget` | `GET /v1/portfolios/{id}/sector-attribution` (NEW — T-A-2-03) | yes |
-
-**RISK tab wireframe** (2×3 grid, 22px rows, monospaced numeric cells):
-
-```
-RISK METRICS                                    [90D · 180D · 1Y ▾]
-SHARPE    SORTINO   BETA vs SPY   VOLATILITY   MAX DRAWDOWN
-  1.24      1.87       0.82          18.4%        -12.3%
-CURRENT DRAWDOWN   DATA QUALITY   AS OF
-      -4.1%              OK      2026-05-22
-```
-
-Negative values (Max Drawdown, Current Drawdown) in `text-negative`.
-Empty state when `data_quality = "insufficient_data"`: "Insufficient data — min 10 trading days required".
-Full component spec: `03-portfolio-overview.md` §RiskMetricsPanel (do NOT duplicate here).
-
-**CONCENTRATION tab wireframe**:
-
-```
-CONCENTRATION                          HHI: 1,240  MODERATE
-TOP 5 BY WEIGHT
-NVDA  ████████████░░░░░░░   5.7%
-AAPL  ████████░░░░░░░░░░░   3.5%
-MSFT  ████████░░░░░░░░░░░   4.0%
-ANTH  ███████░░░░░░░░░░░░   3.7%
-TSLA  ██░░░░░░░░░░░░░░░░░   1.0%
-```
-
-HHI colour: `< 1000` = `text-muted-foreground`, `1000–2500` = `text-warning`, `> 2500` = `text-negative`.
-
-**SECTORS tab wireframe** (NEW endpoint PLAN-0091 T-A-2-03):
-
-```
-SECTORS                                  as of 2026-05-22 16:00
-TECHNOLOGY      ████████████████░░░░  32.4%  +$1 240 ↑
-FINANCIALS      ████████████░░░░░░░░  24.1%  +$  480 ↑
-CONSUMER CYCL.  ████████░░░░░░░░░░░░  18.7%  -$  210 ↓
-HEALTHCARE      █████░░░░░░░░░░░░░░░  14.2%  +$   90 ↑
-ENERGY          ████░░░░░░░░░░░░░░░░  10.6%  -$  340 ↓
-```
-
-`prices_stale: true` → `text-warning` "prices as of prior close" at 9px below header.
-Bar width proportional to `weight_pct`. Day P&L coloured `text-positive` / `text-negative`.
-
-**Tab strip style**: active = `border-b-2 border-primary text-foreground font-medium`;
-inactive = `text-muted-foreground text-[10px] uppercase tracking-[0.08em]`.
-Default tab: `"positions"`. Tab choice persisted in `sessionStorage` keyed by `portfolioId`.
-
----
-
 ## 5. Component breakdown
 
 All new/changed files. ✚ = new, ✱ = renamed/major rewrite, ☐ = unchanged.
@@ -415,39 +254,30 @@ All new/changed files. ✚ = new, ✱ = renamed/major rewrite, ☐ = unchanged.
 |------|--------|-------|---------|-------|
 | `app/(app)/dashboard/page.tsx` | ✱ | ~120 | Top-level grid container, row spans | none (server component) |
 | `components/dashboard/MorningBriefCard.tsx` | ☐ | ~640 | Brief (slight CSS-only changes: h-6 header→h-5, smaller bottom chip strip) | none |
-| `components/dashboard/MarketStrip.tsx` | ✚ | ~220 | R2 — 9 cell market strip (8 tickers + 1 YIELDS cell; replaces `MarketSnapshotWidget`) | `tickers?: string[]` (default 8); yield cell always appended |
-| `components/portfolio/TopOfPortfolio.tsx` | ✚ | ~360 | R3 — full portfolio widget. Left side: `PortfolioKpiStrip` + `PortfolioPerfSparkline`. Right side: tab strip switching between POSITIONS, RISK, CONCENTRATION, SECTORS panels. | `portfolioId?: string` |
-| `components/portfolio/PortfolioTabStrip.tsx` | ✚ | ~80 | Tab strip rendered across the top of the right side of R3 — five tabs: KPIs / POSITIONS / RISK / CONCENTRATION / SECTORS. Active tab highlighted with `border-b-2 border-primary`. | `activeTab: PortfolioTab`, `onTabChange: (tab: PortfolioTab) => void` |
-| `components/portfolio/RiskMetricsPanel.tsx` | ✚ | ~120 | RISK tab content — Sharpe / Sortino / Beta / Volatility / Max Drawdown / Current Drawdown in 2×3 grid at 22px rows. Period chips 90D / 180D / 1Y. Source: `GET /v1/portfolios/{id}/risk-metrics`. | `portfolioId: string` |
-| `components/portfolio/ConcentrationWidget.tsx` | ✚ | ~100 | CONCENTRATION tab content — HHI badge + label + top-5 position weight bars. Source: `GET /v1/portfolios/{id}/concentration`. | `portfolioId: string` |
-| `components/portfolio/SectorAttributionWidget.tsx` | ✚ | ~120 | SECTORS tab content — horizontal bars: sector name + weight% + day P&L. Sorted by weight descending. Source: `GET /v1/portfolios/{id}/sector-attribution` (NEW — PLAN-0091 Wave A-2). | `portfolioId: string` |
+| `components/dashboard/MarketStrip.tsx` | ✚ | ~180 | R2 — 8 cell market strip (replaces `MarketSnapshotWidget`) | `tickers?: string[]` (default 8) |
+| `components/portfolio/TopOfPortfolio.tsx` | ✚ | ~280 | R3 — full portfolio widget. Two children: `PortfolioKpiStrip` + `PortfolioPositionsTable` + `PortfolioPerfSparkline` | `portfolioId?: string` |
 | `components/portfolio/PortfolioKpiStrip.tsx` | ✚ | ~90 | NLV / Cost / Cash / Day P&L / Unr P&L / MTD / YTD — 8 metric cells in 2×4 grid | `summary: PortfolioSummaryDto` |
-| `components/portfolio/PortfolioPositionsTable.tsx` | ✚ | ~160 | 5 visible rows × 7 cols (ticker, qty, avg, mkt, mkt val, unr P&L, day P&L, weight) — scroll for more. Use W2 `AssetTypeBadge` in TICKER column (E-02) | `holdings: HoldingWithQuote[]`, `maxRows?: number = 10` |
-| `components/portfolio/PortfolioPerfSparkline.tsx` | ✚ | ~70 | 1D/5D/1M/3M/YTD period chips + sparkline (130×40) — **base on W2 `PerformanceChartPanel` (E-01)** | `series: PerfPoint[]`, `period: Period` |
+| `components/portfolio/PortfolioPositionsTable.tsx` | ✚ | ~160 | 5 visible rows × 7 cols (ticker, qty, avg, mkt, mkt val, unr P&L, day P&L, weight) — scroll for more | `holdings: HoldingWithQuote[]`, `maxRows?: number = 10` |
+| `components/portfolio/PortfolioPerfSparkline.tsx` | ✚ | ~70 | 1D/5D/1M/3M/YTD period chips + sparkline (130×40) | `series: PerfPoint[]`, `period: Period` |
 | `components/dashboard/GainersWidget.tsx` | ✚ | ~120 | R4 col 1 — 6-row gainers table (split from current `MoversWidgetTabs` MARKET tab) | `limit?: number = 8` |
 | `components/dashboard/LosersWidget.tsx` | ✚ | ~120 | R4 col 2 — 6-row losers table | `limit?: number = 8` |
 | `components/dashboard/AiSignalsWidget.tsx` | ☐ | ~150 | R4 col 3 — unchanged | none |
 | `components/dashboard/PredictionMarketsWidget.tsx` | ✱ | ~200 | R4 col 4 — same data, denser 22px row table | none |
 | `components/dashboard/SectorHeatmapWidget.tsx` | ✱ | ~250 | R5 col 1 — treemap (existing, slight CSS density) | none |
-| `components/dashboard/EarningsCalendarWidget.tsx` | ✱ | ~200 | R5 col 2 — adds "My holdings" toggle chip (E-04); filters by portfolio tickers when active | `portfolioTickers?: Set<string>` |
+| `components/dashboard/EarningsCalendarWidget.tsx` | ☐ | ~180 | R5 col 2 — unchanged | none |
 | `components/dashboard/EconomicCalendar.tsx` | ☐ | ~180 | R5 col 3 — unchanged | none |
-| `components/dashboard/PortfolioNewsWidget.tsx` | ✱ | ~200 | R6 col 1 — switches to backend `entity_ids=` filter (E-03); drops client-side filtering | `entityIds: string[]` |
+| `components/dashboard/PortfolioNewsWidget.tsx` | ☐ | ~200 | R6 col 1 — unchanged | none |
 | `components/dashboard/RecentAlerts.tsx` | ✱ | ~180 | R6 col 2 — adds severity dots column; otherwise unchanged | none |
 | `components/dashboard/TopNewsWidget.tsx` | ✚ | ~140 | R6 col 3 — global top news (split from PortfolioNewsWidget; portfolio one stays filtered) | `limit?: number = 12` |
 | `components/dashboard/MoversWidgetTabs.tsx` | DELETE | — | Replaced by separate Gainers + Losers widgets | — |
 | `components/dashboard/MarketSnapshotWidget.tsx` | DELETE | — | Replaced by `MarketStrip` | — |
 | `components/dashboard/PortfolioSummary.tsx` | DELETE | — | Replaced by `TopOfPortfolio` | — |
 
-### Shared primitives required
-- `components/ui/sparkline.tsx` (**✚ NEW — must create** — 60×20px and 130×40px variants)
-- `components/ui/data-table.tsx` (**✚ NEW — must create** — used by all R4/R5/R6 tables; 22px rows, monospaced numeric cells)
-- `components/ui/severity-dot.tsx` (**✚ NEW — must create** — HIGH=text-negative, MED=text-warning, LOW=text-muted-foreground)
-- `components/ui/period-tabs.tsx` (**✚ NEW — must create** — 1D/5D/1M/3M/YTD chip strip)
-
-### W2 components available for reuse (saves ~2 days of duplicate work)
-- `components/portfolio/PerformanceChartPanel.tsx` — period tabs + sparkline already shipped in W2; use as `PortfolioPerfSparkline` base (E-01)
-- `components/portfolio/AssetTypeBadge.tsx` — equity/crypto/ETF chip with correct palette colors; use in `PortfolioPositionsTable` TICKER column (E-02)
-- `components/portfolio/SemanticHoldingsTable.tsx` — W2 holdings table; different column set but reusable styling patterns
+### Shared primitives reused
+- `components/ui/sparkline.tsx` (existing)
+- `components/ui/data-table.tsx` (existing — used by all R4/R5/R6 tables)
+- `components/ui/severity-dot.tsx` (existing — for alerts)
+- `components/ui/period-tabs.tsx` (existing — 1D/5D/1M/3M/YTD)
 
 ---
 
@@ -468,7 +298,7 @@ All new/changed files. ✚ = new, ✱ = renamed/major rewrite, ☐ = unchanged.
 
 ### Row heights
 - R1 (Morning Brief): **96px** total — h-5 header (20px) + ~70px content + 6px padding
-- R2 (Market Strip): **96px** — h-5 group label (20px) + 9 cells (8 tickers + YIELDS) in 76px content area, each cell h-[68px]
+- R2 (Market Strip): **96px** — h-5 group label (20px) + 8 ticker cells in 76px content area, each cell h-[68px]
 - R3 (Top of Portfolio): **156px** — h-5 title bar + 132px content + p-2
 - R4/R5/R6: **156px** — h-5 panel header + 5 rows × 22px + 22px footer/scroll affordance + p-1
 
@@ -514,11 +344,6 @@ All new/changed files. ✚ = new, ✱ = renamed/major rewrite, ☐ = unchanged.
 - `/` — open global search (handled by shell)
 - `?` — show hotkey cheat sheet (handled by shell)
 
-> **Implementation note**: All 6 dashboard-scoped hotkeys (`b`, `r`, `g g`, `g l`, `g p`,
-> `1–5`) must be registered via `useHotkeyScope('dashboard')` in `app/(app)/dashboard/page.tsx`.
-> None are currently registered in `hotkey-registry.ts`. The chord keys (`g g`, `g l`, `g p`)
-> require a 2-keystroke chord listener (300ms window between keys).
-
 ### Hover behaviour
 - Ticker cells (any widget): underline + cursor-pointer; clicking navigates to
   `/instruments/{instrument_id}` (NOT `/instruments/{ticker}` — see ADR-F-12)
@@ -547,7 +372,7 @@ Each widget must implement three explicit states, each at the correct height
 | Widget | Loading | Error | Empty |
 |---|---|---|---|
 | MorningBriefCard | 5-line skeleton at brief height | "Brief generating…" + retry (503) / "Brief unavailable" + retry | "AI brief unavailable — system initializing" (already present) |
-| MarketStrip | 9 cell skeletons (ticker stub + grey bar) | Per-cell "—" + tooltip "quote unavailable"; YIELDS cell shows "—" when `GET /v1/market/yield-curve` is unavailable (503 graceful degradation) | (impossible — defaults hardcoded) |
+| MarketStrip | 8 cell skeletons (ticker stub + grey bar) | Per-cell "—" + tooltip "quote unavailable" | (impossible — defaults hardcoded) |
 | TopOfPortfolio | KPI strip skeleton + 5 ghost rows | "Portfolio unavailable — retry" with button | "No portfolio connected — [Connect brokerage ▸]" link to /settings/brokerage |
 | PortfolioKpiStrip | 8 shimmer cells | hide widget, log error | "—" in every value cell |
 | PortfolioPositionsTable | 5 ghost rows | "Positions unavailable" | "No positions — open one to see it here" |
@@ -560,9 +385,6 @@ Each widget must implement three explicit states, each at the correct height
 | PortfolioNewsWidget | 6 ghost rows | "News unavailable" | "No news for your positions" |
 | RecentAlerts | 6 ghost rows | "Alerts offline (SSE disconnected)" + reconnect indicator | "No unack alerts" |
 | TopNewsWidget | 12 ghost rows | "News unavailable" | "No news available" |
-| RiskMetricsPanel (RISK tab) | 6 shimmer cells (2×3 grid) | "Risk data unavailable" + retry | "Insufficient data (min 10 trading days required)" |
-| ConcentrationWidget (CONCENTRATION tab) | HHI skeleton + 5 ghost bars | "Concentration data unavailable" | "No positions" |
-| SectorAttributionWidget (SECTORS tab) | 5 ghost rows at 22px | "Sector data unavailable" | "No sector data available" |
 
 ---
 
@@ -574,30 +396,22 @@ keys use the proposed `qk.*` from `lib/query/keys.ts`.
 | Resource | queryKey | staleTime | refetchInterval | Reused by |
 |---|---|---|---|---|
 | Morning brief | `qk.briefMorning()` → `["brief","morning"]` | 30 min | — | only dashboard |
-| Brief diff | `qk.briefDiff(briefId)` → `["brief","diff",briefId]` **(NEW in keys.ts)** | 5 min | — | dashboard only |
+| Brief diff | `qk.briefDiff(briefId)` | 5 min | — | dashboard only |
 | Portfolios | `qk.portfolios()` → `["portfolios"]` | 5 min | — | portfolio pages |
-| Portfolio bundle | `qk.portfolioBundle(id)` → `["portfolio","bundle",id]` **(NEW in keys.ts)** | 30 s | 60 s | dashboard + portfolio overview |
-| Portfolio exposure | `qk.portfolioExposure(id)` → `["portfolio","exposure",id]` **(NEW in keys.ts)** | 30 s | 30 s (market hours) | dashboard + portfolio overview |
-| Portfolio value history | `qk.portfolioValueHistory(id)` → `["portfolio","value-history",id]` **(NEW in keys.ts)** | 5 min | — | dashboard + portfolio overview (for MTD/YTD) |
+| Portfolio summary | `qk.portfolioSummary(id)` → `["portfolio","summary",id]` | 30 s | 30 s (during market hours) | portfolio overview |
 | Holdings | `qk.holdings(id)` → `["holdings",id]` | 30 s | 60 s | portfolio overview |
-| Batch quotes | `qk.quotesBatch(ids)` → `["quotes","batch",sortedIds]` **(NEW in keys.ts)** | 5 s | 15 s during market hours | every page |
-| Portfolio perf | `qk.portfolioPerf(id, period)` → `["portfolio","perf",id,period]` **(NEW in keys.ts)** | 5 min | — | portfolio overview |
+| Batch quotes | `qk.quotesBatch(ids)` → `["quotes","batch",sortedIds]` | 5 s | 15 s during market hours | every page |
+| Portfolio perf | `qk.portfolioPerf(id, period)` → `["portfolio","perf",id,period]` | 5 min | — | portfolio overview |
 | Top movers (gainers) | `qk.topMovers("gainers",20)` | 60 s | 60 s | screener |
 | Top movers (losers) | `qk.topMovers("losers",20)` | 60 s | 60 s | screener |
 | AI signals | `qk.aiSignals(6)` | 5 min | — | workspace |
 | Predictions | `qk.predictions("all",10)` | 5 min | — | workspace |
 | Sector heatmap | `qk.sectorHeatmap("1D")` | 60 s | 60 s | screener |
-| Earnings calendar | `qk.earningsCalendar()` **(NEW in keys.ts)** | 5 min | — | calendar page |
+| Earnings calendar | `qk.earningsCalendar()` | 5 min | — | calendar page |
 | Economic calendar | `qk.economicCalendar()` | 5 min | — | calendar page |
-| Top news | `qk.topNews(20)` **(NEW in keys.ts)** | 2 min | 2 min | news pages |
-| Alerts pending | `qk.alertsPending(10)` **(NEW in keys.ts — endpoint: GET /v1/alerts/pending)** | 30 s | SSE + 30 s poll | alerts page |
-| Dashboard snapshot warmup | `qk.dashboardSnapshot()` **(NEW in keys.ts)** | — | — | dashboard only |
-| Yield curve | `qk.yieldCurve()` → `["market","yield-curve"]` **(NEW in keys.ts)** | 60 s | 60 s | dashboard only |
-| Portfolio risk metrics | `qk.riskMetrics(id)` → `["portfolio","risk-metrics",id]` **(NEW in keys.ts)** | 5 min | — | dashboard + portfolio overview |
-| Portfolio concentration | `qk.concentration(id)` → `["portfolio","concentration",id]` **(NEW in keys.ts)** | 30 s | — | dashboard + portfolio overview |
-| Portfolio sector attribution | `qk.sectorAttribution(id)` → `["portfolio","sector-attribution",id]` **(NEW in keys.ts)** | 30 s | — | dashboard + portfolio overview |
-
-> Keys marked `(NEW in keys.ts)` must be added to `apps/worldview-web/lib/query/keys.ts` before use.
+| Top news | `qk.topNews(20)` | 2 min | 2 min | news pages |
+| Alerts pending | `qk.alertsPending(10)` | 30 s | SSE + 30 s poll | alerts page |
+| Dashboard snapshot warmup | `qk.dashboardSnapshot()` | — | — | dashboard only |
 
 **Dedup opportunities** (resources used by 2+ pages — share cache):
 - `qk.portfolios()`, `qk.holdings(id)`, `qk.quotesBatch(ids)` — used by 6+ pages
@@ -660,9 +474,8 @@ Pros:
   money" alone. Closes the gap from current 8.
 - Single contiguous region — no eye-saccade between three separated widgets.
 - Mirrors Bloomberg PORT, IBKR Mosaic Portfolio panel, Koyfin Dashboard.
-- All data already available via `GET /v1/portfolio/{id}/bundle` (holdings +
-  value_history) + `POST /v1/quotes/batch` + `GET /v1/portfolios/{id}/exposure`
-  (cash) — see §3.1 for full KPI derivation strategy.
+- All data already available (`/v1/portfolios/{id}/summary` + `/holdings` +
+  `/quotes/batch` + `/performance`).
 
 Cons:
 - R3 spans col 1-12, can't be reordered with neighbours. Reservations: user
@@ -780,90 +593,11 @@ per-row query split).
    ▎thick left border only (more Bloomberg-amber-rail authentic)? Proposal:
    left rail only — 3px `border-l-primary`, removes 6px of yellow chrome on
    top/right/bottom.
-8. **Backend data inventory file**: ~~this doc was written before
+8. **Backend data inventory file**: this doc was written before
    `00-backend-data-inventory.md` exists. When agent-data-audit returns,
    reconcile every "Currently used?" column entry against the actual
-   endpoint catalogue.~~ **RESOLVED** (2026-05-22 revise-prd audit):
-   14/15 endpoints verified; corrections applied in §3 (portfolio summary strategy,
-   alerts path). No further reconciliation needed.
-
----
-
-## 11. Enhancements (post-revision additions)
-
-### E-01 — Reuse W2 `PerformanceChartPanel` for `PortfolioPerfSparkline`
-
-`apps/worldview-web/components/portfolio/PerformanceChartPanel.tsx` shipped in W2
-with period-tabs (1D/5D/1M/3M/YTD) + a performance sparkline using the same
-`GET /v1/portfolios/{id}/performance` endpoint. `PortfolioPerfSparkline` should
-**extend or wrap** this component rather than reimplementing it. Saves ~70 lines.
-
-### E-02 — Reuse W2 `AssetTypeBadge` in positions table
-
-`apps/worldview-web/components/portfolio/AssetTypeBadge.tsx` shipped in W2.
-Use it in `PortfolioPositionsTable` TICKER column to show equity/ETF/crypto chip
-alongside the ticker symbol. Zero additional backend data required — instrument
-type is already in the holdings response.
-
-### E-03 — Backend news filtering for `PortfolioNewsWidget`
-
-`GET /v1/news/top` supports an `entity_ids=` query parameter on the backend.
-The current design does client-side filtering (fetches 20 articles, filters by
-holding tickers). Switch to backend filtering: pass `entity_ids` of all held
-instruments. Reduces network payload from 20 articles to 5-8 relevant ones.
-Implementation: resolve `entity_id` from holdings (already present in
-`HoldingResponse.entity_id`) → pass to `GET /v1/news/top?entity_ids=...`.
-
-### E-04 — Earnings calendar portfolio filter toggle
-
-Add a "My holdings" toggle chip to `EarningsCalendarWidget`. When active,
-filter the earnings events to only tickers held in the selected portfolio.
-The portfolio tickers are already fetched for R3 — no additional API calls.
-Implementation: compare `EarningsEvent.ticker` against `Set<string>` of
-holding tickers derived from the bundle query.
-
-### E-05 — Market Strip full 8-ticker list
-
-The design specifies 8 tickers (SPX, NDX, DJI, RUT, VIX, TNX, DXY, BTC) but
-the current `MarketSnapshotWidget` only queries 4 (SPY/QQQ/DIA/VIX). The new
-`MarketStrip` must hit `POST /v1/quotes/batch` with all 8 symbols. Verify that
-the batch endpoint accepts non-equity instruments (VIX, TNX/TLT, DXY/UUP,
-BTCUSD) — use the ETF proxies (TLT for 10Y, UUP for DXY) if futures/indices
-are not supported.
-
-### E-06 — `MorningBriefCard` confirmed unchanged
-
-Verified (2026-05-22): `MorningBriefCard` post-PLAN-0062-W4 already renders at
-96px collapsed height with `h-5` header and bottom chip strip. §5 status `☐` is
-correct — no CSS or logic changes required.
-
-### E-07 — YIELDS cell graceful degradation (PLAN-0091 T-F-3-02)
-
-The `MarketStrip` YIELDS cell calls `GET /v1/market/yield-curve` (new endpoint,
-PLAN-0091 Wave A-2, T-A-2-04). When the endpoint returns 503 or a maturity has
-`yield_pct: null`, the cell renders `—` for the affected value and does NOT crash
-the rest of the strip. The remaining 8 ticker cells are unaffected.
-
-`qk.yieldCurve()` → `["market","yield-curve"]`: `staleTime: 60s`, `refetchInterval: 60s`.
-A `YieldCurveCell` sub-component within `MarketStrip.tsx` manages its own
-loading/error/empty state at the same `h-[68px]` height as the other ticker cells.
-
-**Spread colour logic**:
-- `spread_2s10s_inverted === true` → `text-negative`
-- `spread_2s10s > 0` → `text-positive`
-- `spread_2s10s === null` → `text-muted-foreground`, displayed value `—`
-
-### E-08 — `RiskMetricsPanel` in dashboard context (PLAN-0091 T-B-1-01)
-
-`RiskMetricsPanel` is accessible via the RISK tab in the `TopOfPortfolio` tab
-strip (see §4 "R3 Top of Portfolio — tab strip detail"). The dashboard mounts it
-at 132px content-region height within R3.
-
-Full component spec and API contract: `03-portfolio-overview.md` §RiskMetricsPanel.
-Do NOT duplicate the spec here. Dashboard-specific integration notes:
-- `portfolioId` prop derived from `[Demo · Live · Paper ▾]` dropdown
-- `qk.riskMetrics(portfolioId)` lazily initialised on first RISK tab activation
-- `lookback` chip state (90D/180D/1Y) is component-local; does not sync to URL
+   endpoint catalogue. If any cited endpoint differs in name/shape, patch
+   this doc.
 
 ---
 

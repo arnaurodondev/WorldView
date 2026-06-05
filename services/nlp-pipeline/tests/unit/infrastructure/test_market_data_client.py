@@ -20,11 +20,9 @@ _SYMBOL = "AAPL"
 # PLAN-0052 platform-QA round 4 (2026-05-01): client now resolves ticker
 # → instrument_id before fetching OHLCV. Use a deterministic UUID so the
 # tests can predict the second URL.
-# PLAN-0073 B-1: /instruments/symbol/{ticker} was removed; use the unified
-# /instruments/lookup?symbol= endpoint. Response field is "id", not "instrument_id".
 _RESOLVED_ID = "550e8400-e29b-41d4-a716-446655440000"
-_RESOLVE_URL = f"http://market-data:8003/api/v1/instruments/lookup?symbol={_SYMBOL}"
-_RESOLVE_RESPONSE = {"id": _RESOLVED_ID, "symbol": _SYMBOL, "exchange": "US", "is_active": True}
+_RESOLVE_URL = f"http://market-data:8003/api/v1/instruments/symbol/{_SYMBOL}"
+_RESOLVE_RESPONSE = {"instrument_id": _RESOLVED_ID, "ticker": _SYMBOL}
 
 
 @pytest.fixture(autouse=True)

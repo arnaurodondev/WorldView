@@ -1,67 +1,69 @@
 /**
- * components/instrument/quote/QuoteTab.tsx — Quote tab orchestrator (W5-T-25)
+ * components/instrument/quote/QuoteTab.tsx — Quote tab orchestrator (PLAN-0090 T-B-04).
  *
  * WHY THIS EXISTS (PRD-0088 §6.7 / PLAN-0090 T-B-04):
- *   The Instrument Detail redesign gives traders a Bloomberg-grade Quote tab:
- *   chart + strips on the left (minmax(0,1fr)); right rail 320px/380px fixed.
- *   This orchestrator owns ONLY the layout wiring — no domain logic.
+ *   The Instrument Detail redesign replaces the legacy `OverviewLayout` blob
+ *   with a 3-tab structure (Quote / Financials / Intelligence). The Quote tab
+ *   is the trader's first impression: chart on the left (60%), Finviz-density
+ *   metrics table on the right (40%). This orchestrator owns ONLY the layout
+ *   wiring — no data fetching, no domain logic. Children own their own
+ *   queries via TanStack Query (chart fetches OHLCV; MetricsTable uses
+ *   `useMetricsTableData`).
  *
- * W5-T-06 layout pivot: root changed from `flex` to CSS Grid with fixed
- *   right-rail width (320px/380px). This is the T-25 full wiring pass that
- *   adds all new W5 components into the two grid columns.
+ * WHY THE ORCHESTRATOR IS THIN:
+ *   - Children are independently testable (chart, strip, metrics each have
+ *     their own props/hooks).
+ *   - Re-renders in one half cannot force a re-render of the other half
+ *     (React reconciliation stops at the flex boundary because each child
+ *     subscribes to its own query).
+ *   - The 60/40 split is a single source of truth in this file — future
+ *     A/B experiments can flip widths without touching children.
  *
- * LEFT COLUMN (chart side):
- *   1. OHLCVChart                  — OHLCV candlestick + toolbars
- *   2. MultiPeriodReturnsStrip     — 7-period return band (data-table-grid)
- *   3. IntradayStatsBand           — VWAP/ATR/RSI/GAP/PREM/SI (data-table-grid)
- *   4. SessionStatsStrip           — O/H/L/V from last 1D bar
+ * WHY SessionStatsStrip pulls O/H/L/V/VWAP from cache HERE (not inside the
+ *   strip itself): the integrated `SessionStatsStrip` from T-B-01 is a pure
+ *   display component (props-only, no `useQuery`). To honour PLAN-0090's
+ *   "strip reads from cache" pattern WITHOUT duplicating its data contract,
+ *   the orchestrator does the cache lookup and feeds the last-bar O/H/L/V
+ *   in as props. The lookup uses `enabled: false` so we never trigger a
+ *   network fetch — we only read whatever OHLCVChart has already cached
+ *   under `qk.instruments.ohlcv(instrumentId, "1D")`.
  *
- * RIGHT COLUMN (scrollable rail):
- *   1. MetricsTable                — 24-cell grid + 52W + ownership + MA + analyst
- *   2. CompanyAboutCard            — sector/industry/HQ/founded/description
- *   3. InsiderActivityList         — top-5 insider transactions (from bundle)
- *   4. EarningsMiniList            — last-4 annual EPS records
- *   5. RelatedHeadlinesList        — top-5 entity-tagged news
- *   6. BottomTripleStrip           — Peers | PriceLevels | WhatsMoving
+ * LINE LIMIT: orchestrator exemption per PRD §FR-7 — soft cap 200, hard cap
+ *   300. Targeting < 200.
  *
- * DATA WIRING:
- *   - useQuoteSidebarData: peers, intradayStats, multiPeriodReturns, priceLevels,
- *     ownership, earningsHistory (6 parallel TanStack Query calls).
- *   - Strips (left) and mini-cards (right) receive data + isLoading via props.
- *   - SessionStatsStrip reads from OHLCV cache (enabled:false, no extra fetch).
- *   - Bundle fields (insider, top_news, instrument, fundamentals) passed as props.
- *
- * ORCHESTRATOR EXEMPTION: soft cap 200 LOC, hard cap 300 per PRD §FR-7.
+ * DESIGN REFERENCE: docs/specs/0088-instrument-detail-page-ground-up-redesign.md §6.7;
+ *                   docs/plans/0090-instrument-detail-page-redesign-plan.md T-B-04.
  */
 
 "use client";
+// WHY "use client": we call `useQuery` from TanStack Query to peek into the
+// client-side cache for the last OHLCV bar. That hook only works in the
+// browser. The chart and metrics components are also client components, so
+// promoting this orchestrator to "use client" keeps the boundary clean.
 
-import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { useEffect, useMemo } from "react";
+import { useQuery } from "@tanstack/react-query";
 
 import { qk } from "@/lib/query/keys";
 import { OHLCVChart } from "@/components/instrument/chart/OHLCVChart";
 import { SessionStatsStrip } from "@/components/instrument/SessionStatsStrip";
 import { MetricsTable } from "@/components/instrument/quote/metrics/MetricsTable";
-import { MultiPeriodReturnsStrip } from "@/components/instrument/quote/strips/MultiPeriodReturnsStrip";
-import { IntradayStatsBand } from "@/components/instrument/quote/strips/IntradayStatsBand";
-import { CompanyAboutCard } from "@/components/instrument/quote/about/CompanyAboutCard";
-import { InsiderActivityList } from "@/components/instrument/quote/insider/InsiderActivityList";
-import { EarningsMiniList } from "@/components/instrument/quote/earnings/EarningsMiniList";
-import { RelatedHeadlinesList } from "@/components/instrument/quote/news/RelatedHeadlinesList";
-import { BottomTripleStrip } from "@/components/instrument/quote/bottom/BottomTripleStrip";
-import { useQuoteSidebarData } from "@/components/instrument/hooks/useQuoteSidebarData";
-import type {
-  Fundamentals,
-  Instrument,
-  OHLCVBar,
-  OHLCVResponse,
-  Quote,
-  FundamentalsSectionResponse,
-  RankedNewsResponse,
-} from "@/types/api";
+import type { Fundamentals, OHLCVBar, OHLCVResponse, Quote } from "@/types/api";
 
 // ── Props ────────────────────────────────────────────────────────────────────
+//
+// WHY these four props specifically:
+//   - `instrumentId`: the S3 instrument_id is the cache key shared by all
+//     four data sources (chart, snapshot, technicals, share-stats).
+//   - `entityId`: reserved for Wave D deep-links (e.g. "Open in Intelligence"
+//     CTA). Not used today; kept so the parent doesn't need a refactor when
+//     we wire the cross-tab navigation in PLAN-0090 Wave D.
+//   - `fundamentals` + `quote`: passed through from the page-bundle so
+//     MetricsTable can render the static rows (market cap, beta, etc.) on
+//     first paint without awaiting its own queries — those queries still
+//     fire to refresh the technicals / share-stats rows after mount.
+//   - `initialBars`: lets OHLCVChart show the last 30d 1D bars instantly on
+//     first paint (from the page-bundle seed), avoiding the chart skeleton
+//     flash for the common case.
 
 export interface QuoteTabProps {
   /** S3 instrument_id — shared cache key for chart + metrics. */
@@ -74,152 +76,111 @@ export interface QuoteTabProps {
   readonly quote: Quote | null;
   /** Last 30d 1D bars from the page-bundle, used to skip the chart skeleton. */
   readonly initialBars?: OHLCVBar[];
-  /** Page-bundle Instrument (for CompanyAboutCard). */
-  readonly instrument?: Instrument | null;
-  /** Page-bundle insider transactions (for InsiderActivityList). */
-  readonly insiderData?: FundamentalsSectionResponse | null;
-  /** Page-bundle top news (for RelatedHeadlinesList + WhatsMovingStrip). */
-  readonly topNews?: RankedNewsResponse | null;
 }
 
 // ── Constants ────────────────────────────────────────────────────────────────
+//
+// WHY hard-code "1D": SessionStatsStrip only renders the CURRENT SESSION's
+// stats, which by definition come from the 1D timeframe's last bar. Higher
+// timeframes (1W/1M) would aggregate multiple sessions and mis-label the
+// strip. If the user switches OHLCVChart to a different timeframe, that's
+// fine — the chart owns its own state; the strip below stays anchored to
+// today's session.
 
-// WHY hard-code "1D": SessionStatsStrip shows current session stats from the
-// 1D timeframe's last bar. Higher timeframes aggregate multiple sessions.
 const STRIP_TIMEFRAME = "1D" as const;
 
 // ── Component ────────────────────────────────────────────────────────────────
 
 export function QuoteTab({
   instrumentId,
-  entityId,
+  entityId: _entityId, // Reserved for Wave D; underscore-prefix avoids lint warn.
   fundamentals,
   quote,
   initialBars,
-  instrument,
-  insiderData,
-  topNews,
 }: QuoteTabProps) {
-  const qc = useQueryClient();
-
-  // ── Read last OHLCV bar from cache for SessionStatsStrip ─────────────────
-  // WHY `enabled: false`: passive subscriber — OHLCVChart owns the fetch.
+  // ── Read last OHLCV bar from cache for SessionStatsStrip ───────────────
+  // WHY `enabled: false`: we never want this hook to issue a network request.
+  // It is a passive subscriber. OHLCVChart owns the active fetch under the
+  // same queryKey, so whatever it has loaded (initialBars first, then a
+  // freshened fetch) is what we read here. The strip therefore always
+  // reflects the chart's freshest data without duplicating the fetch.
+  //
+  // WHY fall back to `initialBars`: on the very first render before the
+  // chart has hydrated the query cache, `cachedOhlcv` is undefined. The
+  // page-bundle's `initialBars` is the only source available — using it
+  // avoids a "—" flash on every page load for the common case.
   const { data: cachedOhlcv } = useQuery<OHLCVResponse>({
     queryKey: qk.instruments.ohlcv(instrumentId, STRIP_TIMEFRAME),
     enabled: false,
   });
 
+  // Prefer the cached bars (live), then fall back to bundle-seeded bars.
+  // WHY array-tail access (not findLast): bars are timestamp-ascending per
+  // the S9 OHLCVResponse contract — the last index is the most recent bar.
   const bars: readonly OHLCVBar[] = cachedOhlcv?.bars ?? initialBars ?? [];
   const lastBar = bars.length > 0 ? bars[bars.length - 1] : null;
 
+  // WHY narrow to `lastBar?.x ?? null`: SessionStatsStrip's prop contract
+  // is `number | null` (not undefined). Coercing here keeps the strip's
+  // type surface clean and avoids defensive checks inside the strip.
   const stripProps = {
     open: lastBar?.open ?? null,
     high: lastBar?.high ?? null,
     low: lastBar?.low ?? null,
     volume: lastBar?.volume ?? null,
+    // VWAP is intentionally omitted: the OHLCVBar shape (timestamp/o/h/l/c/v)
+    // does not include VWAP — only intraday feeds expose it. The strip's
+    // `vwap` prop is optional, so leaving it off hides the column cleanly.
   };
 
-  // WHY lastBarTs: intradayStats queryKey includes the last bar timestamp so a
-  // new 5m candle invalidates only intradayStats, not peers / levels (Δ28).
-  const lastBarTs = lastBar?.timestamp;
-
-  // ── Parallel sidebar data (6 queries) ────────────────────────────────────
-  const sidebar = useQuoteSidebarData(instrumentId, lastBarTs);
-
-  // ── Shift+R: cascade-invalidate all qk.instruments.detail(id) sub-keys (Δ38) ──
-  // WHY window-scoped + modifier guard: same pattern as OHLCVChart timeframe
-  // chords. Fires only when Shift held and key is "R"; ignores modifier combos.
-  const instrumentIdForEffect = useMemo(() => instrumentId, [instrumentId]);
-  useEffect(() => {
-    const handler = (e: KeyboardEvent) => {
-      if (!e.shiftKey || e.key !== "R") return;
-      const target = e.target as HTMLElement | null;
-      if (target?.tagName === "INPUT" || target?.tagName === "TEXTAREA" || target?.isContentEditable) return;
-      void qc.invalidateQueries({ queryKey: qk.instruments.detail(instrumentIdForEffect) });
-    };
-    window.addEventListener("keydown", handler);
-    return () => window.removeEventListener("keydown", handler);
-  }, [qc, instrumentIdForEffect]);
-
   return (
-    // CSS Grid (T-06 layout pivot, Δ31): left = minmax(0,1fr); right = 320px/380px.
-    <div className="grid grid-cols-[minmax(0,1fr)_320px] xl:grid-cols-[minmax(0,1fr)_380px] h-full overflow-hidden p-0">
-
-      {/* ── LEFT: chart + strips ──────────────────────────────────────────── */}
-      <div className="flex flex-col min-w-0 overflow-hidden">
+    // WHY `flex flex-row h-full overflow-hidden`:
+    //   - `h-full`: fill the tab content slot defined by InstrumentPageClient
+    //     (which sets `flex-1 min-h-0 overflow-hidden` on the tab container).
+    //   - `overflow-hidden`: each half owns its own scroll container; the
+    //     orchestrator must never scroll as a unit (would break sticky chart
+    //     and metrics independence).
+    //   - `flex-row`: explicit horizontal layout — even though `flex` defaults
+    //     to row, naming it makes the responsive intent obvious.
+    <div className="flex flex-row h-full overflow-hidden">
+      {/* ── LEFT: chart + session stats (60%) ─────────────────────────────
+       * WHY `flex-1 min-w-0`: `flex-1` gives the chart the remaining space
+       * after the metrics column claims its fixed 40%. `min-w-0` is critical
+       * — without it, flex children default to `min-width: auto` and the
+       * chart canvas would force the parent to overflow on narrow viewports.
+       *
+       * WHY `flex flex-col`: stacks the chart on top of the 22px session
+       * strip. The chart fills the remaining vertical space; the strip
+       * sits at the bottom at its fixed 22px height.
+       */}
+      <div className="flex flex-col min-w-0 flex-1">
         {/* Chart fills remaining vertical space inside the left column. */}
         <div className="flex-1 min-h-0 overflow-hidden">
-          {/* WHY entityId forwarded: OHLCVChart passes it to TAOverlayPanel for the
-              SENTI chip. QuoteTab receives entityId from the page bundle (KG entity_id). */}
-          <OHLCVChart instrumentId={instrumentId} initialBars={initialBars} entityId={entityId} />
+          <OHLCVChart instrumentId={instrumentId} initialBars={initialBars} />
         </div>
-
-        {/* Multi-period returns strip (7 periods, data-table-grid 20px). */}
-        <MultiPeriodReturnsStrip
-          data={sidebar.multiPeriodReturns}
-          isLoading={sidebar.isLoading}
-        />
-
-        {/* Intraday stats band (VWAP/ATR/RSI/GAP/PREM/SI, data-table-grid 20px). */}
-        <IntradayStatsBand
-          data={sidebar.intradayStats}
-          isLoading={sidebar.isLoading}
-        />
-
-        {/* Session O/H/L/V strip — 20px, reads last 1D bar from OHLCV cache. */}
+        {/* Session O/H/L/V strip below the chart — 22px tall, fixed. */}
         <SessionStatsStrip {...stripProps} />
       </div>
 
-      {/* ── RIGHT: scrollable metrics rail ───────────────────────────────────
-       * WHY overflow-y-auto: metrics table exceeds viewport height on 1080p.
-       * The right column scrolls independently, keeping the chart locked.
-       * WHY border-l border-border: 1px vertical hairline rule.
+      {/* ── RIGHT: metrics table (40%) ────────────────────────────────────
+       * WHY `w-[40%] flex-shrink-0`: exact 40% width per PRD-0088 §6.7. The
+       * `flex-shrink-0` guarantee prevents the column from being squeezed
+       * if the chart canvas asks for more space — the metrics column has
+       * the higher information density, so it must hold its width.
+       *
+       * WHY `border-l border-border`: subtle 1px vertical rule separates
+       * the two halves; matches the divider style used throughout the
+       * Bloomberg-density UI.
+       *
+       * WHY `overflow-y-auto`: the metrics table is taller than the viewport
+       * on smaller laptops — the right column owns its own scroll bar so
+       * the chart and strip stay locked while the user scrolls metrics.
        */}
-      {/* WHY min-h-0: grid item default min-height=auto lets content expand past the
-          grid track, making overflow-y-auto a no-op. min-h-0 caps the track height. */}
-      <div className="border-l border-border overflow-y-auto flex flex-col min-h-0">
-        {/* Statistics (MetricsTable with 3x MetricGrid4Col + trailing rows). */}
+      <div className="w-[40%] flex-shrink-0 border-l border-border overflow-y-auto">
         <MetricsTable
           instrumentId={instrumentId}
           fundamentals={fundamentals}
           quote={quote}
-        />
-
-        {/* Company About: sector/industry/HQ/founded/description. */}
-        <CompanyAboutCard
-          instrument={instrument ?? null}
-        />
-
-        {/* Insider Activity: top-5 from bundle.insider (zero extra fetch). */}
-        <InsiderActivityList
-          data={insiderData}
-        />
-
-        {/* Annual EPS: last-4 annual records from earningsHistory query. */}
-        <EarningsMiniList
-          data={sidebar.earningsHistory}
-          isLoading={sidebar.isLoading}
-        />
-
-        {/* Related Headlines: top-5 from top_news bundle seed. */}
-        <RelatedHeadlinesList
-          data={topNews}
-        />
-
-        {/* Bottom triple strip: Peers | PriceLevels | WhatsMoving.
-            WHY no mt-auto wrapper (Δ42 density fix): mt-auto pushed the strip to
-            the bottom of the overflow-y-auto container, making it fall below the
-            fold when the content above it exceeded ~780px at 900px viewport. The
-            strip must be in-flow and visible above-fold for the Δ42 density gate. */}
-        <BottomTripleStrip
-          peers={sidebar.peers}
-          priceLevels={sidebar.priceLevels}
-          topNews={topNews}
-          currentPrice={quote?.price}
-          isLoadingPeers={sidebar.errors.peers ? undefined : sidebar.isLoading}
-          isLoadingLevels={sidebar.errors.priceLevels ? undefined : sidebar.isLoading}
-          isErrorPeers={sidebar.errors.peers}
-          isErrorLevels={sidebar.errors.priceLevels}
         />
       </div>
     </div>

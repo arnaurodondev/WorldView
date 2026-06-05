@@ -88,24 +88,16 @@ log = logging.getLogger("replay_kg_extraction")
 # WHY hardcoded: the seed file (scripts/seed_demo_data.py) declares the same
 # set; duplicating here keeps the script runnable without importing service
 # code. Source of truth: scripts/seed_demo_data.py:_FINNHUB_SOURCES.
-#
-# PLAN-0089 F2 Step 12: the OLD ``11111111-...`` legacy entity_id namespace
-# has been DROPPED. Each ticker now uses the unified UUIDv7 in the
-# ``01900000-...-000000001NNN`` range matching the seed map in
-# scripts/seed_demo_data.py (the suffix index is keyed by ticker
-# alphabetical ordering, NOT by the legacy insertion order):
-#   AAPL → 1001, MSFT → 1002, GOOGL → 1003, TSLA → 1004, AMZN → 1005,
-#   NVDA → 1006, META → 1007, JPM → 1008.
 DEMO_ENTITIES: list[tuple[str, str, str]] = [
     # (entity_id, canonical_name, ticker_for_log)
-    ("01900000-0000-7000-8000-000000001001", "Apple Inc.", "AAPL"),
-    ("01900000-0000-7000-8000-000000001002", "Microsoft Corporation", "MSFT"),
-    ("01900000-0000-7000-8000-000000001006", "NVIDIA Corporation", "NVDA"),
-    ("01900000-0000-7000-8000-000000001005", "Amazon.com Inc", "AMZN"),
-    ("01900000-0000-7000-8000-000000001004", "Tesla Inc", "TSLA"),
-    ("01900000-0000-7000-8000-000000001003", "Alphabet Inc Class A", "GOOGL"),
-    ("01900000-0000-7000-8000-000000001007", "Meta Platforms Inc.", "META"),
-    ("01900000-0000-7000-8000-000000001008", "JPMorgan Chase & Co", "JPM"),
+    ("11111111-0001-7000-8000-000000000001", "Apple Inc.", "AAPL"),
+    ("11111111-0002-7000-8000-000000000001", "Microsoft Corporation", "MSFT"),
+    ("11111111-0003-7000-8000-000000000001", "NVIDIA Corporation", "NVDA"),
+    ("11111111-0004-7000-8000-000000000001", "Amazon.com Inc", "AMZN"),
+    ("11111111-0005-7000-8000-000000000001", "Tesla Inc", "TSLA"),
+    ("11111111-0006-7000-8000-000000000001", "Alphabet Inc Class A", "GOOGL"),
+    ("11111111-0007-7000-8000-000000000001", "Meta Platforms Inc.", "META"),
+    ("11111111-0008-7000-8000-000000000001", "JPMorgan Chase & Co", "JPM"),
 ]
 
 

@@ -61,15 +61,8 @@ export function InstrumentHeader({ instrument, quote, fundamentals }: Instrument
   return (
     // WHY sticky top-0 z-30: the header must stay pinned during scroll.
     // z-30 sits above tab content (z-10) but below modal overlays (z-50).
-    // h-[36px] = 36px exactly (Tailwind: 9 × 4px = 36px) per spec §6.4.
-    /* WHY data-testid (PRD-0089 F2 step 9): Playwright e2e specs assert on a
-       single selector that targets either the header or the InstrumentNotFound
-       primitive — "page rendered successfully" without coupling the test to
-       the internal DOM structure. See e2e/instrument-url-special-chars.spec.ts. */
-    <header
-      data-testid="instrument-header"
-      className="sticky top-0 z-30 flex h-[36px] items-center gap-4 border-b border-border bg-background px-3"
-    >
+    // h-9 = 36px exactly (Tailwind: 9 × 4px = 36px) per spec §6.4.
+    <header className="sticky top-0 z-30 flex h-9 items-center gap-4 border-b border-border bg-background px-3">
       {/* ── Left cluster: back button + ticker + exchange + company name ── */}
       <button
         type="button"
@@ -93,14 +86,6 @@ export function InstrumentHeader({ instrument, quote, fundamentals }: Instrument
       <span className="max-w-[200px] truncate text-[11px] text-muted-foreground">
         {instrument?.name ?? ""}
       </span>
-      {/* WHY gics_sector micro-pill (T-13, Δ — §6.4): adds sector context to
-          the sticky header without requiring a scroll to the About card.
-          text-[10px] uppercase: F1 floor (Δ2). No rounded-* (Δ3). */}
-      {instrument?.gics_sector && (
-        <span className="text-[10px] uppercase tracking-wide text-muted-foreground/60 shrink-0">
-          {instrument.gics_sector}
-        </span>
-      )}
 
       {/* ── Right cluster: price + change + CAP/VOL/P/E + range bar + badge ── */}
       {/* WHY ml-auto: pushes the entire right cluster against the right edge

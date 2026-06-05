@@ -7,13 +7,6 @@
  *   an IntersectionObserver sentinel that calls fetchNextPage()).
  * DATA SOURCE: GET /v1/news/entity/{id} — S6 NLP-pipeline ranked feed.
  * DESIGN REFERENCE: PRD-0088 News tab section, PLAN-0090 T-A-03.
- *
- * PROP NAMING (PRD-0089 F2 step 11 / §6.5):
- *   This hook is hosted under `components/instrument/hooks/` and serves the
- *   tradable instrument detail page exclusively. Post-F2 the canonical ID for
- *   any tradable context is `instrument_id`, so the parameter is named
- *   `instrumentId`. Cross-kind hooks (entity graph, intelligence) keep
- *   `entityId` because they can reference persons, events, sectors, etc.
  */
 
 "use client";
@@ -43,27 +36,22 @@ const PAGE_SIZE = 20;
 // WHY filters live only in queryKey: EntityNewsParams does not yet accept
 //   sentiment/timeRange — wiring them at the API level is a future change;
 //   the cache identity already differentiates per-filter combinations.
-// WHY `instrumentId` (not `entityId`): PRD-0089 F2 unified the tradable ID
-//   namespace — the page-bundle URL slug, parent route param, and S9 endpoint
-//   all key off `instrument_id`. The news/entity/{id} endpoint accepts an
-//   instrument id for tradable contexts (and a non-tradable entity_id for
-//   cross-kind callers, which this hook does not serve).
 export function useEntityNewsInfinite(
-  instrumentId: string,
+  entityId: string,
   filters: EntityNewsFilters = {},
 ) {
   const token = useAccessToken();
   return useInfiniteQuery({
-    queryKey: qk.news.forEntity(instrumentId, filters),
+    queryKey: qk.news.forEntity(entityId, filters),
     initialPageParam: 0,
     queryFn: ({ pageParam }) =>
-      createGateway(token).getEntityNews(instrumentId, {
+      createGateway(token).getEntityNews(entityId, {
         limit: PAGE_SIZE,
         offset: (pageParam as number) * PAGE_SIZE,
       }),
     getNextPageParam: (lastPage, allPages) =>
       lastPage.articles.length === PAGE_SIZE ? allPages.length : undefined,
     staleTime: 5 * 60 * 1000,
-    enabled: !!instrumentId,
+    enabled: !!entityId,
   });
 }

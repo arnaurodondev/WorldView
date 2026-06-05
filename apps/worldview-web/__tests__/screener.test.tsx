@@ -25,7 +25,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { render, screen, waitFor, act, within } from "@testing-library/react";
+import { render, screen, waitFor, act } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 // PLAN-0059 C-6: ScreenerPage uses nuqs URL state (sector + capTier).
@@ -124,23 +124,6 @@ vi.mock("@/lib/gateway", () => ({
   },
 }));
 
-// ── ApiClient hook mock ───────────────────────────────────────────────────────
-// NLScreenerInput uses useApiClient() (memoised gateway). Return the same
-// gateway instance that @/lib/gateway mock provides so translateNLScreenerQuery
-// is available without an ApiClientProvider in the test tree.
-vi.mock("@/lib/api-client", () => ({
-  useApiClient: vi.fn(() => ({
-    runScreener: vi.fn().mockResolvedValue({ results: [], total: 0, offset: 0, limit: 50 }),
-    translateNLScreenerQuery: vi.fn().mockResolvedValue({
-      explanation: "Mocked NL result",
-      filters: {},
-    }),
-    refreshToken: vi.fn(),
-    logout: vi.fn(),
-  })),
-  ApiClientProvider: ({ children }: { children: React.ReactNode }) => children,
-}));
-
 // ── Auth mock ─────────────────────────────────────────────────────────────────
 vi.mock("@/hooks/useAuth", () => ({
   useAuth: vi.fn(() => ({
@@ -216,7 +199,7 @@ describe("HeatCell", () => {
 describe("ScreenerPage — structure", () => {
   it("renders the page heading", () => {
     render(<ScreenerPage />, { wrapper: makeWrapper() });
-    expect(screen.getByRole("heading", { name: /screener/i })).toBeInTheDocument();
+    expect(screen.getByText("Instrument Screener")).toBeInTheDocument();
   });
 
   it("renders the filter toggle button", () => {
@@ -228,17 +211,14 @@ describe("ScreenerPage — structure", () => {
     ).toBeInTheDocument();
   });
 
-  it("renders all 20 column headers with ALL CAPS text", () => {
+  it("renders all 13 column headers with ALL CAPS text", () => {
     render(<ScreenerPage />, { wrapper: makeWrapper() });
     // WHY check columnheader role: ScreenerTable sets role="columnheader" on
     // each header div for screen reader accessibility.
-    // Header count tracks the AG-Grid column defs in ag-screener-columns.tsx
-    // (PRD-0089 Wave IB-L2 added 6 fundamentals snapshot columns on top of
-    // the legacy 14-column baseline). §6.3's 14-cap applies to the
-    // screener-columns.ts DEFAULT_COLUMNS subset; the AG-Grid surface is
-    // governed separately by ColumnSettingsPopover's 14-column warning.
+    // PLAN-0051: a 13th SPARK (sparkline) column was added in parallel by the
+    // mini-chart task; this test count is the canonical authoritative number.
     const headers = screen.getAllByRole("columnheader");
-    expect(headers.length).toBe(20);
+    expect(headers.length).toBe(13);
 
     // WHY spot-check specific headers: verifies no columns were silently dropped
     // or renamed during the rewrite.
@@ -474,17 +454,15 @@ describe("ScreenerPage — Wave B filter sections (PLAN-0051)", () => {
 
     await user.click(screen.getByRole("button", { name: /toggle screener filters/i }));
 
-    // WHY within(filterRegion): the ScreenerHeader preset bar also contains a "Growth"
-    // chip (aria-pressed), which would cause getByRole("button", { name: /growth/i })
-    // to match two elements. Scoping to the filter region avoids the ambiguity.
-    const filterRegion = screen.getByRole("region", { name: /screener filters/i });
-
-    expect(within(filterRegion).getByRole("button", { name: /valuation/i })).toBeInTheDocument();
-    expect(within(filterRegion).getByRole("button", { name: /profitability/i })).toBeInTheDocument();
-    expect(within(filterRegion).getByRole("button", { name: /growth/i })).toBeInTheDocument();
-    expect(within(filterRegion).getByRole("button", { name: /leverage/i })).toBeInTheDocument();
-    expect(within(filterRegion).getByRole("button", { name: /technical/i })).toBeInTheDocument();
-    expect(within(filterRegion).getByRole("button", { name: /news & signals/i })).toBeInTheDocument();
+    // Each section's header is rendered as a button (clickable to expand/collapse).
+    // We assert every section name is present so a future rename or accidental
+    // removal triggers a test failure.
+    expect(screen.getByRole("button", { name: /valuation/i })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /profitability/i })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /growth/i })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /leverage/i })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /technical/i })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /news & signals/i })).toBeInTheDocument();
   });
 
   it("Valuation section is expanded by default and shows P/E inputs", async () => {

@@ -67,11 +67,7 @@ async def get_jwks(request: Request) -> JSONResponse:
 _ALLOWED_SERVICE_NAMES: frozenset[str] = frozenset(
     {
         "nlp-pipeline-price-impact",
-        # PLAN-0094 W2 follow-up: rag-chat brief pre-generation worker needs an
-        # internal JWT to call S1/S5/S6/S7 internal endpoints. Without this entry
-        # the worker generated empty briefs (silent failure — BP-303 variant).
-        "rag-chat-brief-scheduler",
-    },
+    }
 )
 
 

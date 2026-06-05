@@ -101,12 +101,12 @@ To register a new service caller:
 Collapses the instrument-detail page's overview-tab waterfall into a single
 HTTP request. Behavior:
 
-> **Post-F2 (PRD-0089, [ADR-F-16](../architecture/decisions/ADR-F-16-instrument-entity-id-unification.md))**: the historic Phase-1 → Phase-2 re-read (which resolved KG `entity_id` from `overview.instrument.instrument_id`) is gone. ~148 LOC deleted from `clients.py::get_instrument_page_bundle`. A single canonical UUID is used throughout; the bundle's `resolve_security_id(identifier)` accepts either a ticker or a UUID at the URL boundary. The two-phase fan-out is retained only for latency (composition of independent calls).
-
 - **Composition** — two-phase `asyncio.gather`:
-  - Phase 1: `get_company_overview` (parallelises 5 calls).
-  - Phase 2: full `/api/v1/fundamentals/{id}` + `/technicals-snapshot` +
-    `/insider-transactions-snapshot` + S6 `/api/v1/news/entity/{id}?limit=5`. The same id is used in both phases (post-F2: `entity_id == instrument_id`).
+  - Phase 1: `get_company_overview` (which itself parallelises 5 calls and
+    resolves the KG `entity_id`).
+  - Phase 2 (uses Phase-1's resolved `entity_id`): full
+    `/api/v1/fundamentals/{id}` + `/technicals-snapshot` +
+    `/insider-transactions-snapshot` + S6 `/api/v1/news/entity/{entity_id}?limit=5`.
 - **Per-call failures degrade gracefully** — failed sub-resources return
   `null` in the response. The bundle still returns 200 so the FE renders
   partial UIs rather than seeing a 5xx.
@@ -210,7 +210,6 @@ preferable to all-or-nothing for dashboard widgets.
 | GET | `/v1/entities/{entity_id}/narratives` | Paginated narrative version history. Query params: `limit`, `cursor` (PLAN-0074 Wave G) | Yes |
 | POST | `/v1/entities/{entity_id}/narratives/generate` | Manually trigger narrative generation. Proxy-layer rate limit: 1 req/hr/entity/user via `set_nx` (BP-200). Returns 202. (PLAN-0074 Wave G) | Yes |
 | GET | `/v1/entities/{entity_id}/paths` | Pre-computed multi-hop opportunity paths. Valkey-cached 5 min. Query params: `limit`, `min_score`, `min_hops`, `max_hops` (PLAN-0074 Wave G) | Yes |
-| GET | `/v1/entities/{entity_id}/sentiment-timeseries` | Daily sentiment aggregates for SENTI chart overlay (PLAN-0091 T-A-2-02). Query param: `days` (1-365, default 90). Proxies to S6 NLP. Returns `{entity_id, days, points: [{date, article_count, avg_relevance, positive_ratio, negative_ratio, avg_impact_score}]}`. All metric fields nullable. | Yes |
 
 ### Entity-Context Chat Endpoints (→ S8 RAG-Chat)
 
@@ -413,34 +412,10 @@ The `_auth_headers()` helper in `routes/proxy.py` no longer forwards `X-Tenant-I
 
 ## Rate Limiting
 
-PLAN-0094 W1 moved all four rate-limit buckets behind env vars (previously
-three of the four were hard-coded literals). Operators can now tune every
-bucket from `worldview-gitops/env/{dev,prod}/api-gateway.env` without a
-code change. The user-bucket default was bumped from 1000 → **2000** to
-match expected production load for multi-panel workspace usage.
-
-| Bucket | Default | Env var | Key prefix | Notes |
-|--------|---------|---------|------------|-------|
-| **Authenticated (user)** | `2000` req/min | `API_GATEWAY_RATE_LIMIT_REQUESTS` | `rl:v1:user:{user_id}` | Default raised from 1000 → 2000 (PLAN-0094) — a single dashboard page-load fires 4+ parallel OHLCV calls + 6+ panel queries. |
-| **Financial mutation** | `20` req/min | `API_GATEWAY_RATE_LIMIT_FINANCIAL_MUTATION_REQUESTS` | shares user bucket but uses tighter limit | Tighter sub-tier for `POST/PUT/DELETE` on `/v1/transactions`, `/v1/brokerage`, `/v1/portfolios`. Prevents runaway trade-write loops. |
-| **Unauthenticated (IP)** | `20` req/min | `API_GATEWAY_RATE_LIMIT_UNAUTHENTICATED_REQUESTS` | `rl:v1:ip:{sha256(ip)[:16]}` | Strict per-IP cap for any unauthenticated traffic. |
-| **Public feedback (IP)** | `120` req/min | `API_GATEWAY_RATE_LIMIT_PUBLIC_FEEDBACK_REQUESTS` | `rl:v1:fbk:{sha256(ip)[:16]}` | Generous per-IP cap for `/v1/feedback/*` — public form that may be hit repeatedly from the same IP behind shared NAT (PLAN-0052 fix). |
-
+- **Authenticated**: 300 req/min per `user_id` (key: `rl:v1:user:{user_id}`) — raised from 100 to accommodate multi-panel workspace usage where a single page load may fire 4+ parallel OHLCV calls
+- **Unauthenticated**: 20 req/min per IP hash (key: `rl:v1:ip:{sha256(ip)[:16]}`)
 - **Fail-closed (D-001)**: If Valkey is unavailable, reject requests with 503 (previously fail-open; changed to fail-closed per security audit decision D-001 on 2026-04-18)
 - 429 responses include `Retry-After` header
-- The window is shared across all four buckets via `API_GATEWAY_RATE_LIMIT_WINDOW_SECONDS` (default `60`).
-
-### Outbound: `active_users` Valkey sorted-set (PLAN-0094 W1)
-
-On every successful internal-JWT validation, `OIDCAuthMiddleware`
-populates a global Valkey sorted-set so the rag-chat morning-brief
-pre-generation worker (S8) can identify users worth pre-generating for.
-
-- **Key**: `active_users` (global — no tenant prefix).
-- **Operation**: `ZADD active_users <unix_ts> <user_id>` (sliding window — repeat auth updates the score).
-- **Failure mode**: ZADD errors are caught and logged at WARN; the auth path returns normally. A Valkey hiccup must NEVER 503 a successful user.
-- **Probabilistic prune**: with probability ~1/1000 per request, S9 runs `ZREMRANGEBYSCORE active_users 0 (now − 30*86400)` to drop entries older than 30 days. 30 days is well above the maximum eligibility window the worker uses (cap 90 days; default 7).
-- **Reader**: S8 — see `docs/services/rag-chat.md` § "Morning Brief — Daily Pre-Generation (PLAN-0094)".
 
 ---
 
@@ -497,11 +472,8 @@ All env vars are prefixed with `API_GATEWAY_`:
 | `RAG_CHAT_URL` | `http://localhost:8008` | No | S8 URL |
 | `ALERT_URL` | `http://localhost:8010` | No | S10 HTTP URL |
 | `ALERT_WS_URL` | `ws://localhost:8010` | No | S10 WebSocket base URL (separate from HTTP URL for WS routing) |
-| `RATE_LIMIT_REQUESTS` | `2000` | No | Per-user authenticated bucket (req/min). Default raised from 1000 → 2000 by PLAN-0094 W1 for multi-panel workspace load. |
-| `RATE_LIMIT_FINANCIAL_MUTATION_REQUESTS` | `20` | No | Tighter sub-tier for POST/PUT/DELETE on `/v1/transactions`, `/v1/brokerage`, `/v1/portfolios` (PLAN-0094 W1). |
-| `RATE_LIMIT_UNAUTHENTICATED_REQUESTS` | `20` | No | Per-IP unauthenticated bucket (req/min) (PLAN-0094 W1; was hard-coded `20`). |
-| `RATE_LIMIT_PUBLIC_FEEDBACK_REQUESTS` | `120` | No | Per-IP cap for `/v1/feedback/*` (req/min) (PLAN-0094 W1; was hard-coded `120`). |
-| `RATE_LIMIT_WINDOW_SECONDS` | `60` | No | Shared rate-limit window across all four buckets. |
+| `RATE_LIMIT_REQUESTS` | `300` | No | Authenticated rate limit per minute (raised from 100 for multi-panel workspace) |
+| `RATE_LIMIT_WINDOW_SECONDS` | `60` | No | Rate limit window |
 | `CORS_ORIGINS` | `http://localhost:5173,http://localhost:3001` | No | Comma-separated allowed origins (SEC-008: port 3001 is worldview-web, not 3000) |
 | `APP_ENV` | `development` | No | Environment guard: `development`, `staging`, or `production`. When `production`, `POST /v1/auth/dev-login` returns 403 regardless of OIDC config. |
 | `DEV_ADMIN_EMAILS` | `""` | No | Comma-separated emails that receive `role=admin` in dev-login JWTs (dev/staging only; ignored when `APP_ENV=production`) |
@@ -626,9 +598,7 @@ The `/v1/auth/callback` handler sanitizes `error` and `error_description` query 
 | GET | `/v1/portfolios/{id}/risk-metrics` | Drawdown, volatility, Sharpe, Sortino, beta vs SPY. Pure S9 composition over S1 value-history + S3 SPY OHLCV. Query param: `lookback_days` (10-3650, default 90). All metrics independently nullable. | Yes |
 
 **Response fields**: `drawdown_max`, `drawdown_current`, `volatility_annualized`, `sharpe`,
-`sortino`, `beta_vs_spy`, `calmar`, `win_rate`, `alpha`, `period_return`, `cagr`, `var_95`, `n_returns`, `as_of`, `lookback_window`, `data_quality`.
-
-Wave G additions: `calmar` (annualised_return / |drawdown_max|), `win_rate` (fraction of positive daily returns [0,1]), `alpha` (portfolio_ann_return − spy_ann_return), `period_return` ((final − initial) / initial; null when < 2 points or initial ≤ 0), `cagr` ((final/initial)^(365.25/lookback_days) − 1; null when < 2 points or endpoints ≤ 0), `var_95` (5th-percentile daily return — negative for losses; null when < 10 returns). All six are null on contamination, on insufficient history, or when mathematically undefined.
+`sortino`, `beta_vs_spy`, `n_returns`, `as_of`, `lookback_window`, `data_quality`.
 
 **`data_quality.status` values**:
 - `ok` — sufficient data and SPY available
@@ -644,8 +614,7 @@ Wave G additions: `calmar` (annualised_return / |drawdown_max|), `win_rate` (fra
 | DELETE | `/v1/portfolios/{id}` | Archive portfolio | Yes |
 | GET | `/v1/portfolios/{id}/holding-lots` | FIFO lot breakdown per instrument | Yes |
 | GET | `/v1/portfolios/{id}/concentration` | Sector/asset class concentration | Yes |
-| GET | `/v1/portfolios/{id}/sector-attribution` | Live-priced GICS sector breakdown with day P&L (PLAN-0091 T-A-2-03). Returns `{portfolio_id, buckets: [{sector, holding_count, market_value, sector_weight_pct, sector_day_pnl}], covered_pct, prices_stale?}` | Yes |
-| GET | `/v1/portfolios/{id}/performance` | Period return: `{return_pct, return_abs, covered_pct}` for `period ∈ {1D, 1W, 1M}` (query param `period`). Does NOT compute Calmar or win-rate. S9 composition: holdings from S1 + OHLCV from S3. | Yes |
+| GET | `/v1/portfolios/{id}/performance` | Performance metrics (Calmar, win-rate) | Yes |
 | GET | `/v1/portfolios/{id}/transactions` | Transactions nested under portfolio | Yes |
 
 **Transaction note**: `GET /v1/transactions` forwards `portfolio_id` as `X-Portfolio-ID`

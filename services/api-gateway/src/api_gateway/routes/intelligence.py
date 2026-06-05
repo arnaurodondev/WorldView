@@ -9,11 +9,10 @@ Split from proxy.py (PLAN-0089 B-3).
 
 from __future__ import annotations
 
-import json
 from typing import Any
 from uuid import UUID
 
-from fastapi import APIRouter, HTTPException, Path, Query, Request, Response
+from fastapi import APIRouter, HTTPException, Query, Request, Response
 
 from api_gateway.routes.helpers import _auth_headers, _clients
 from api_gateway.schemas import PredictionMarket, PredictionMarketsListResponse
@@ -61,15 +60,7 @@ def _transform_graph_response(raw: dict[str, Any]) -> dict[str, Any]:
                 # WHY ticker: PeerComparisonPanel needs ticker to look up S3
                 # fundamentals (entity_id ≠ instrument_id; resolved by ticker).
                 "ticker": center.get("ticker") or "",
-                # B-01 (Block I T-25): description and sector are optional fields
-                # from S7 EntitySummary. Included here so the frontend type contract
-                # is stable — InlineSelectionPanel may render them if present.
-                "description": center.get("description") or None,
-                "sector": center.get("sector") or None,
-                # T-A-1-03 (PLAN-0091): from canonical_entities.metadata JSONB via S7.
-                "industry": center.get("industry") or None,
-                "market_cap": center.get("market_cap") or None,
-            },
+            }
         )
 
     for eid, entity_data in entities.items():
@@ -83,13 +74,7 @@ def _transform_graph_response(raw: dict[str, Any]) -> dict[str, Any]:
                 "type": entity_data.get("entity_type") or "unknown",
                 "size": 1,
                 "ticker": entity_data.get("ticker") or "",
-                # B-01: description and sector forwarded if S7 provides them.
-                "description": entity_data.get("description") or None,
-                "sector": entity_data.get("sector") or None,
-                # T-A-1-03 (PLAN-0091): industry + market_cap from S7 EntitySummary.
-                "industry": entity_data.get("industry") or None,
-                "market_cap": entity_data.get("market_cap") or None,
-            },
+            }
         )
 
     # Build edges from S7 relations; skip any relation missing required fields
@@ -105,18 +90,6 @@ def _transform_graph_response(raw: dict[str, Any]) -> dict[str, Any]:
         tgt = str(rel.get("object_entity_id") or "")
         if not rel_id or not src or not tgt:
             continue
-        # WHY direction: asymmetric relation types (employs, has_executive, acquired_by,
-        # subsidiary_of, supplier_of, regulates) are semantically different depending on
-        # which entity is the subject vs object. "outbound" = center entity is the
-        # subject (the initiating/owning side); "inbound" = center entity is the object
-        # (the receiving side); "lateral" = edge between two non-center entities (depth>1).
-        if entity_id and src == entity_id:
-            direction = "outbound"
-        elif entity_id and tgt == entity_id:
-            direction = "inbound"
-        else:
-            direction = "lateral"
-
         edges.append(
             {
                 "id": rel_id,
@@ -130,37 +103,8 @@ def _transform_graph_response(raw: dict[str, Any]) -> dict[str, Any]:
                 # snippets in the Top Relations panel without a second API call.
                 "relation_summary": rel.get("relation_summary"),  # str | None
                 "evidence_snippets": rel.get("evidence_snippets") or [],  # list[str]
-                # B-02 (Block I T-25): decay_class drives edge opacity in the sigma
-                # edgeReducer (PERMANENT/DURABLE=1.0, SLOW/MEDIUM=0.7, FAST/EPHEMERAL=0.4).
-                # None when S7 omits it — frontend defaults to MEDIUM opacity.
-                "decay_class": rel.get("decay_class") or None,  # str | None
-                "direction": direction,  # "outbound" | "inbound" | "lateral"
-                # T-A-1-02 (PLAN-0091): temporal validity fields from S7 confidence_breakdown.
-                "valid_from": str(rel["valid_from"]) if rel.get("valid_from") else None,
-                "valid_to": str(rel["valid_to"]) if rel.get("valid_to") else None,
-                "confidence_stale": bool(rel.get("confidence_stale") or False),
-            },
+            }
         )
-
-    # WHY filter orphan edges: S7 may include relations whose endpoints are not
-    # present in the `entities` dict (e.g. entities filtered by confidence threshold
-    # or missing from canonical_entities). These produce dangling edges that sigma
-    # renders as "orphan" nodes with no visual connections — very confusing.
-    # Filter BEFORE filtering orphan nodes so the node filter sees accurate edge data.
-    node_id_set = {n["id"] for n in nodes}
-    edges = [e for e in edges if e["source"] in node_id_set and e["target"] in node_id_set]
-
-    # WHY filter orphan nodes: at depth=2 S7's CypherNeighborhoodUseCase correctly
-    # discovers depth-2 neighbor_ids via AGE Cypher, but `relation_repo.list_for_entity`
-    # only returns direct (depth=1) relations of the center entity. Result: depth-2
-    # nodes arrive in `entities` but have no connecting edges in `relations`. These
-    # render as isolated floating nodes — worse than not showing them.
-    # Keep the center node unconditionally (it is the page anchor).
-    edge_endpoints: set[str] = set()
-    for e in edges:
-        edge_endpoints.add(e["source"])
-        edge_endpoints.add(e["target"])
-    nodes = [n for n in nodes if n["id"] == entity_id or n["id"] in edge_endpoints]
 
     return {"entity_id": entity_id, "nodes": nodes, "edges": edges}
 
@@ -172,9 +116,7 @@ async def get_entity_graph(
     limit: int = Query(default=40, ge=1, le=200),
     depth: int = Query(default=1, ge=1, le=3),
     confidence_breakdown: bool = Query(default=False),
-    focus_node: str | None = Query(default=None, max_length=36),
-    min_confidence: float | None = Query(default=None, ge=0.0, le=1.0),
-    semantic_mode: str | None = Query(default=None, max_length=20),
+    focus_node: str | None = Query(default=None),
 ) -> Any:
     """Proxy GET /api/v1/entities/{entity_id}/graph → S7 Knowledge Graph.
 
@@ -221,24 +163,22 @@ async def get_entity_graph(
     headers = _auth_headers(request)
     clients = _clients(request)
 
-    # Build params: all forwarded values are typed FastAPI Query params — no raw_params.
-    # WHY no raw_params forwarding: unvalidated query strings allow any string (including
-    # injection payloads) to reach S7. Typed params get 422 from FastAPI before any I/O.
+    # Build params: forward known S7 params explicitly so the intent of each
+    # forwarded param is clear and log noise from unknown params is avoided.
+    raw_params = dict(request.query_params)
     s7_params: dict[str, str] = {"limit": str(limit)}
-    if min_confidence is not None:
-        s7_params["min_confidence"] = str(min_confidence)
-    if semantic_mode is not None:
-        s7_params["semantic_mode"] = semantic_mode
+    if "min_confidence" in raw_params:
+        s7_params["min_confidence"] = raw_params["min_confidence"]
+    if "semantic_mode" in raw_params:
+        s7_params["semantic_mode"] = raw_params["semantic_mode"]
     # ISSUE-5 (2026-05-10): forward depth to S7 which supports AGE Cypher multi-hop
     # traversal. depth=1 is S7's default (SQL query) so only send when >1 to avoid
     # a redundant param on the common case. depth>1 requires KNOWLEDGE_GRAPH_CYPHER_ENABLED.
     if depth > 1:
         s7_params["depth"] = str(depth)
-    # T-A-1-02 (PLAN-0091): always request confidence_breakdown=true so S7
-    # populates valid_from/valid_to/confidence_stale on every RelationResponse.
-    # Ignore the client-supplied confidence_breakdown param — we always want
-    # the full breakdown to forward temporal edge fields to the frontend.
-    s7_params["confidence_breakdown"] = "true"
+    # PLAN-0074 Wave G: forward confidence_breakdown and focus_node (Wave D additions).
+    if confidence_breakdown:
+        s7_params["confidence_breakdown"] = "true"
     if focus_node is not None:
         s7_params["focus_node"] = focus_node
 
@@ -250,69 +190,19 @@ async def get_entity_graph(
     # Pass non-2xx responses through unchanged (404 = entity not found, etc.)
     if resp.status_code >= 400:
         return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
+    import json as _json
 
     raw: dict[str, Any] = resp.json()
     transformed = _transform_graph_response(raw)
-
-    # WHY merge depth=1 when depth>1 (BP-S9-GRAPH-001):
-    # S7's CypherNeighborhoodUseCase uses AGE to discover depth-N neighbor IDs,
-    # then fetches those entities from SQL. At depth=2, AGE fills its LIMIT with
-    # second-order entities, and the `relations` list only contains the center's
-    # direct (depth=1) relations. After orphan-filtering, the depth=2 graph ends up
-    # with fewer connected nodes than depth=1, which is counter-intuitive and broken.
-    # Fix: always re-fetch depth=1 (fast SQL, no AGE) and merge its nodes+edges into
-    # the higher-depth result. The union is then orphan-filtered by _transform_graph_response.
-    if depth > 1:
-        # WHY share filter params (F-205): min_confidence and semantic_mode from
-        # the caller apply to all depths — omitting them from the depth=1 merge
-        # call would surface lower-quality edges than the primary call filtered out.
-        depth1_params: dict[str, str] = {"limit": str(limit)}
-        if min_confidence is not None:
-            depth1_params["min_confidence"] = str(min_confidence)
-        if semantic_mode is not None:
-            depth1_params["semantic_mode"] = semantic_mode
-        depth1_resp = await clients.knowledge_graph.get(
-            f"/api/v1/entities/{entity_id}/graph",
-            params=depth1_params,  # no depth param → depth=1 SQL path
-            headers=headers,
-        )
-        if depth1_resp.status_code == 200:
-            raw1: dict[str, Any] = depth1_resp.json()
-            t1 = _transform_graph_response(raw1)
-            # Merge: take union of nodes and edges; deduplicate by id.
-            existing_node_ids = {n["id"] for n in transformed["nodes"]}
-            existing_edge_ids = {e["id"] for e in transformed["edges"]}
-            for n in t1["nodes"]:
-                if n["id"] not in existing_node_ids:
-                    transformed["nodes"].append(n)
-                    existing_node_ids.add(n["id"])
-            for e in t1["edges"]:
-                if e["id"] not in existing_edge_ids:
-                    transformed["edges"].append(e)
-                    existing_edge_ids.add(e["id"])
-            # Re-apply orphan filter after merge (new edges may validate previously-
-            # orphan nodes, and new nodes may validate previously-orphan edges).
-            node_id_set2 = {n["id"] for n in transformed["nodes"]}
-            transformed["edges"] = [
-                e for e in transformed["edges"] if e["source"] in node_id_set2 and e["target"] in node_id_set2
-            ]
-            edge_eps2: set[str] = set()
-            for e in transformed["edges"]:
-                edge_eps2.add(e["source"])
-                edge_eps2.add(e["target"])
-            transformed["nodes"] = [
-                n for n in transformed["nodes"] if n["id"] == str(entity_id) or n["id"] in edge_eps2
-            ]
-
     return Response(
-        content=json.dumps(transformed).encode(),
+        content=_json.dumps(transformed).encode(),
         status_code=resp.status_code,
         media_type="application/json",
     )
 
 
 @router.get("/entities/{entity_id}/contradictions")
-async def get_entity_contradictions(entity_id: UUID, request: Request) -> Any:
+async def get_entity_contradictions(entity_id: str, request: Request) -> Any:
     """Proxy GET /api/v1/entities/{entity_id}/contradictions → S7 Knowledge Graph.
 
     Requires authentication. Returns detected contradictions for the entity.
@@ -386,7 +276,7 @@ async def get_entity_intelligence(
     entity_id: UUID,
     request: Request,
     confidence_breakdown: bool = Query(default=False),
-    focus_node: str | None = Query(default=None, max_length=36),
+    focus_node: str | None = Query(default=None),
 ) -> Any:
     """Proxy GET /api/v1/entities/{entity_id}/intelligence → S7 Knowledge Graph.
 
@@ -415,9 +305,7 @@ async def get_entity_intelligence(
 
     user = request.state.user
     tenant_id: str = str(user.get("tenant_id", ""))
-    # Include forwarded params in the cache key so different param combinations
-    # are not served the same cached response (e.g. confidence_breakdown=true vs false).
-    cache_key = f"intel:{tenant_id}:{entity_id}:{int(confidence_breakdown)}:{focus_node or ''}"
+    cache_key = f"intel:{tenant_id}:{entity_id}"
     valkey = getattr(request.app.state, "valkey", None)
 
     # ── Cache hit check ─────────────────────────────────────────────────────
@@ -550,85 +438,6 @@ async def trigger_entity_narrative_generation(
     clients = _clients(request)
     resp = await clients.knowledge_graph.post(
         f"/api/v1/entities/{entity_id}/narratives/generate",
-        headers=headers,
-    )
-    return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
-
-
-# ── Entity refresh trigger (REQ-003 / TASK-W0-06) ─────────────────────────────
-
-
-@router.post(
-    "/entities/{entity_id}/refresh",
-    status_code=202,
-    summary="Manually trigger entity re-enrichment (REQ-003)",
-)
-async def trigger_entity_refresh(
-    entity_id: UUID,
-    request: Request,
-) -> Any:
-    """Proxy ``POST /api/v1/entities/{entity_id}/refresh`` → S7.
-
-    Body (forwarded verbatim)::
-
-        {"refresh_type": "description" | "narrative" | "all"}   (default "all")
-
-    Rate-limited to one request per entity+tenant+user per hour at the S9
-    proxy layer (in addition to the identical rate limit enforced by S7).
-    Defence-in-depth — same posture as ``trigger_entity_narrative_generation``.
-
-    Rate-limit key: ``entity_refresh_proxy:<tenant_id>:<entity_id>:<user_id>``
-    BP-200: uses ``set_nx(key, "1", ex=3600)`` — NOT ``set(..., nx=True)``.
-
-    - 202: refresh queued (job_id returned).
-    - 401: missing/invalid authentication.
-    - 404: entity_id not found in canonical_entities.
-    - 422: invalid refresh_type or malformed UUID.
-    - 429: rate limit hit — ``Retry-After: 3600`` header included.
-    """
-    if not getattr(request.state, "user", None):
-        raise HTTPException(status_code=401, detail="Authentication required")
-
-    user = request.state.user
-    tenant_id: str = str(user.get("tenant_id", ""))
-    user_id: str = str(user.get("user_id") or user.get("sub", "anonymous"))
-
-    # ── Proxy-layer rate limit (BP-200) ─────────────────────────────────────
-    valkey = getattr(request.app.state, "valkey", None)
-    if valkey is not None:
-        rl_key = f"entity_refresh_proxy:{tenant_id}:{entity_id}:{user_id}"
-        try:
-            allowed = await valkey.set_nx(rl_key, "1", ex=3600)
-            if not allowed:
-                raise HTTPException(
-                    status_code=429,
-                    detail="Rate limit: one entity refresh per hour.",
-                    headers={"Retry-After": "3600"},
-                )
-        except HTTPException:
-            raise
-        except Exception:
-            # Fail-open: Valkey error → allow the request through.
-            logger.warning("entity_refresh_proxy_rl_failed", entity_id=str(entity_id))
-
-    # ── Forward the JSON body verbatim to S7 ────────────────────────────────
-    # Reading the body once (FastAPI accepts None content-type bodies); falling
-    # back to an empty dict when the client sent no body — S7 will default
-    # refresh_type to "all".
-    try:
-        body_bytes: bytes = await request.body()
-    except Exception:
-        body_bytes = b""
-
-    headers = _auth_headers(request)
-    # Preserve Content-Type so S7 deserialises the body correctly when present.
-    if body_bytes:
-        headers.setdefault("Content-Type", request.headers.get("Content-Type", "application/json"))
-
-    clients = _clients(request)
-    resp = await clients.knowledge_graph.post(
-        f"/api/v1/entities/{entity_id}/refresh",
-        content=body_bytes if body_bytes else None,
         headers=headers,
     )
     return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
@@ -791,11 +600,7 @@ async def get_prediction_market_categories(request: Request) -> Any:
     response_model=PredictionMarket,
     response_model_exclude_none=True,
 )
-async def get_prediction_market(
-    market_id: str = Path(..., min_length=1, max_length=80, pattern=r"^[\w\-\.]+$"),
-    *,
-    request: Request,
-) -> Any:
+async def get_prediction_market(market_id: str, request: Request) -> Any:
     """Proxy GET /api/v1/prediction-markets/{id} → S3 Market Data.
 
     Requires authentication. S3 returns 404 if the market_id is unknown.
@@ -817,11 +622,7 @@ async def get_prediction_market(
 
 
 @router.get("/signals/prediction-markets/{market_id}/history")
-async def get_prediction_market_history(
-    market_id: str = Path(..., min_length=1, max_length=80, pattern=r"^[\w\-\.]+$"),
-    *,
-    request: Request,
-) -> Any:
+async def get_prediction_market_history(market_id: str, request: Request) -> Any:
     """Proxy GET /api/v1/prediction-markets/{id}/history → S3 Market Data.
 
     Requires authentication. Forwards from/to/limit query params.
@@ -833,34 +634,6 @@ async def get_prediction_market_history(
     resp = await clients.market_data.get(
         f"/api/v1/prediction-markets/{market_id}/history",
         params=dict(request.query_params),
-        headers=headers,
-    )
-    return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
-
-
-# ── Entity Sentiment Timeseries (PLAN-0091 Wave A-2 / E-2, T-A-2-02) ─────────
-
-
-@router.get("/entities/{entity_id}/sentiment-timeseries")
-async def get_entity_sentiment_timeseries(
-    entity_id: UUID,
-    request: Request,
-    days: int = Query(default=90, ge=1, le=365),
-) -> Any:
-    """Proxy GET /api/v1/entities/{entity_id}/sentiment-timeseries → S6 NLP Pipeline.
-
-    Returns daily sentiment and relevance aggregates for the entity over the
-    requested window. The S6 route (PLAN-0091 Wave E-1) is the authoritative
-    source; this gateway endpoint simply proxies and forwards auth headers.
-    Returns 401 if unauthenticated, 502 if S6 is unavailable.
-    """
-    if not getattr(request.state, "user", None):
-        raise HTTPException(status_code=401, detail="Authentication required")
-    headers = _auth_headers(request)
-    clients = _clients(request)
-    resp = await clients.nlp_pipeline.get(
-        f"/api/v1/entities/{entity_id}/sentiment-timeseries",
-        params={"days": days},
         headers=headers,
     )
     return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")

@@ -5,13 +5,7 @@
  * contradictions panel.
  */
 
-import type {
-  EntityGraph,
-  ContradictionsResponse,
-  EntityPublic,
-  SimilarEntitiesResponse,
-} from "@/types/api";
-import type { NarrativeHistoryPage } from "@/types/intelligence";
+import type { EntityGraph, ContradictionsResponse, EntityPublic } from "@/types/api";
 import { apiFetch, GatewayError } from "./_client";
 
 export function createKnowledgeGraphApi(t: string | undefined) {
@@ -62,12 +56,18 @@ export function createKnowledgeGraphApi(t: string | undefined) {
       // depth slider controls how many relations are returned — more relations =
       // more neighbor nodes visible = feels "deeper". True multi-hop would require
       // the Cypher traversal endpoint (feature-flagged, not in S9 currently).
-      // S9 caps depth at le=3 (FastAPI Query validation); the UI slider also
-      // enforces max=3. depth=1 uses SQL aggregation; depth=2/3 use AGE Cypher.
+      // PLAN-0088 P0-8 (2026-05-10): each slider step now actually moves the
+      // requested edge count. The previous ladder topped out at 50 and silently
+      // ignored slider values 4 and 5 (Slider min=1 max=5), so dragging the
+      // slider past 3 had no visible effect on the graph. The S9 gateway cap was
+      // also lifted from 50→200 in the same change so depth=5 can deliver up
+      // to 160 edges when the underlying KG supports it.
       // depth=1 → limit=15  (compact sidebar SVG, N+1 latency concern)
       // depth=2 → limit=40  (Intelligence tab default, sigma.js WebGL comfort)
       // depth=3 → limit=80
-      const limitByDepth: Record<number, number> = { 1: 15, 2: 40, 3: 80 };
+      // depth=4 → limit=120
+      // depth=5 → limit=160 (analyst "show me everything" extreme)
+      const limitByDepth: Record<number, number> = { 1: 15, 2: 40, 3: 80, 4: 120, 5: 160 };
       const limit = limitByDepth[depth] ?? 40;
 
       // WHY min_confidence for depth=1: sidebar SVG should show only high-quality
@@ -157,86 +157,6 @@ export function createKnowledgeGraphApi(t: string | undefined) {
       } catch (err) {
         // WHY catch here: 404 means enrichment has not run yet — not an error the
         // caller needs to handle.  All other errors propagate normally.
-        if (err instanceof GatewayError && err.status === 404) return null;
-        throw err;
-      }
-    },
-
-    /**
-     * getEntityContradictions — alias for getContradictions (W7 T-20).
-     *
-     * WHY alias: W7 component code uses `gateway.getEntityContradictions(id)` for
-     * naming consistency with other entity-scoped methods. Both call the same
-     * endpoint so the cache key and response shape are identical.
-     */
-    getEntityContradictions(entityId: string): Promise<ContradictionsResponse | null> {
-      return this.getContradictions(entityId);
-    },
-
-    /**
-     * getSimilarEntities — ANN embedding similarity search for an entity.
-     *
-     * WHY POST (not GET): the request carries a JSON body with entity_id,
-     * top_k, min_score, include_competitors_only — too many params for a
-     * clean GET query string. S9 proxies this to S7 which uses pgvector
-     * cosine distance on the entity narrative embeddings.
-     *
-     * WHY this lives in knowledge-graph.ts (not content.ts or intelligence.ts):
-     * S9's content.py proxies it but the underlying data source is S7 Knowledge
-     * Graph — entity embeddings are computed and stored there. Keeping the client
-     * method alongside getEntityGraph/getEntityDetail gives a consistent entity
-     * API surface for component developers.
-     *
-     * Returns null on 404 (entity not found) or 422 (no embedding computed yet).
-     *
-     * @param entityId - The source entity UUID for the similarity search
-     * @param topK     - Max results (default 5 for the EntitySimilarityPanel list)
-     * @param minScore - Min ANN cosine similarity 0-1 (default 0.0 = all results)
-     */
-    async getSimilarEntities(
-      entityId: string,
-      topK = 5,
-      minScore = 0.0,
-    ): Promise<SimilarEntitiesResponse | null> {
-      try {
-        return await apiFetch<SimilarEntitiesResponse>("/v1/entities/similar", {
-          method: "POST",
-          // WHY JSON body: S9/S7 expect SimilarEntitiesRequest shape
-          // {entity_id, top_k, min_score}. These don't fit a GET query string
-          // because entity_id is a UUID that must not be percent-encoded in a
-          // path param for this POST endpoint.
-          body: { entity_id: entityId, top_k: topK, min_score: minScore },
-          token: t,
-        });
-      } catch (err) {
-        // 404 = entity not in KG yet; 422 = embedding not computed yet — both
-        // are expected for newly ingested instruments. Return null so the
-        // EntitySimilarityPanel shows an empty state, not an error banner.
-        if (err instanceof GatewayError && (err.status === 404 || err.status === 422)) {
-          return null;
-        }
-        throw err;
-      }
-    },
-
-    /**
-     * getNarratives — first page of narrative version history (W7 T-21).
-     *
-     * WHY non-infinite (not cursor-paginated): NarrativeHistoryDisclosure renders
-     * a collapsed Accordion that shows at most ~10 versions before the user needs
-     * to visit the full history page. Loading only the first page (default 20
-     * versions) avoids the complexity of useInfiniteQuery inside a disclosure.
-     * The full pagination is available via useEntityNarrativeHistory.
-     *
-     * Returns null when the entity has no narrative history yet (404).
-     */
-    async getNarratives(entityId: string): Promise<NarrativeHistoryPage | null> {
-      try {
-        return await apiFetch<NarrativeHistoryPage>(
-          `/v1/entities/${encodeURIComponent(entityId)}/narratives`,
-          { token: t },
-        );
-      } catch (err) {
         if (err instanceof GatewayError && err.status === 404) return null;
         throw err;
       }

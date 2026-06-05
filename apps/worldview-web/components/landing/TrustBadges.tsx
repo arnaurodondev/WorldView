@@ -38,7 +38,7 @@ export function TrustBadges() {
               key={s.name}
               className="flex items-baseline gap-2 text-foreground"
             >
-              <span className="font-mono text-[16px] font-semibold tracking-tight">
+              <span className="font-mono text-base font-semibold tracking-tight">
                 {s.name}
               </span>
               <span className="hidden text-[10px] uppercase tracking-wider text-muted-foreground/60 sm:inline">

@@ -61,10 +61,6 @@ import { StructuredBrief } from "@/components/brief/StructuredBrief";
 import { BriefDiffBadge } from "@/features/dashboard/components/BriefDiffBadge";
 import { BriefRating } from "@/features/dashboard/components/BriefRating";
 import { useBriefChatSeed } from "@/features/dashboard/hooks/useBriefChatSeed";
-// PLAN-0094 W3 T-W3-01: format the stale-brief generated_at timestamp using the
-// repo-wide timestamp helper so the badge date style matches the rest of the
-// dashboard (DESIGN_SYSTEM §6.4 "short" format → "May 19, 2026").
-import { useFormattedTimestamp } from "@/lib/hooks/useFormattedTimestamp";
 
 // QA-iter1: hoist remark plugins to module scope. Inline `[remarkGfm]`
 // passed as a prop creates a NEW array reference on every render, which
@@ -147,11 +143,6 @@ export function MorningBriefCard() {
   // a component function — useQueryClient grabs the client from React context.
   const queryClient = useQueryClient();
 
-  // PLAN-0094 W3 T-W3-01: pre-format the stale-brief generated_at label here so
-  // the hook ordering stays stable across renders (React rule-of-hooks — never
-  // call a hook conditionally). When `brief` is undefined the helper returns
-  // "—" which is harmless because the badge only renders when is_stale=true.
-
   // WHY useQuery: TanStack Query handles caching, refetching, error retries,
   // and deduplication automatically. The queryKey ensures the cache is keyed
   // per endpoint (not per component instance).
@@ -175,24 +166,6 @@ export function MorningBriefCard() {
     retry: 2,
     retryDelay: 10_000,
   });
-
-  // PLAN-0094 W3 T-W3-01: format the stale-brief generated_at timestamp using
-  // the repo "short" format ("May 19, 2026"). Hook MUST run on every render so
-  // we read `brief?.generated_at` (the hook tolerates undefined and returns
-  // "—"); the formatted value is only consumed by the badge below when
-  // `is_stale === true`.
-  const staleGeneratedAtLabel = useFormattedTimestamp(
-    // We deliberately reach into the (possibly undefined) brief here — the hook
-    // is null-safe and we want a stable hook ordering above the early returns.
-    // brief is defined after the loading/error/empty guards; before them the
-    // hook still fires (returns "—") which is fine because the badge isn't
-    // mounted until brief is non-null.
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    (typeof brief !== "undefined" && brief !== null ? brief.generated_at : null) as
-      | string
-      | null,
-    "short",
-  );
 
   // FR-1.4: Schedule a one-shot cache invalidation at the next 00:00 UTC so
   // the brief refreshes automatically when a new one is generated at midnight.
@@ -309,18 +282,7 @@ export function MorningBriefCard() {
 
   const safeNarrative = stripStaleMetadata(brief?.narrative?.trim() ?? "");
   const safeSummary = stripStaleMetadata(brief?.summary?.trim() ?? "");
-  // PLAN-0103 W3 (BP-624) — v4.2 morning brief carries a leading ``## Summary``
-  // paragraph (1-3 sentences) extracted server-side into ``summary_paragraph``.
-  // WHY also stripStaleMetadata: the LLM occasionally appends ``*(as of YYYY-MM-DD)*``
-  // inside the summary too; we strip those parentheticals consistently with
-  // ``safeNarrative`` / ``safeSummary`` so the collapsed view stays clean.
-  // WHY ?? "" guard: the field is optional in BriefingResponse — pre-v4.2 cached
-  // responses or instrument briefs will leave it undefined; the collapsed view
-  // then falls back to the existing summary/narrative chain.
-  const safeSummaryParagraph = stripStaleMetadata(
-    brief?.summary_paragraph?.trim() ?? "",
-  );
-  if (!brief || (!safeNarrative && !safeSummary && !safeSummaryParagraph)) {
+  if (!brief || (!safeNarrative && !safeSummary)) {
     return (
       <div className="flex h-full flex-col">
         <MetaHeader />
@@ -351,13 +313,7 @@ export function MorningBriefCard() {
     (brief.entity_mentions ?? []).reduce((acc, mention) => {
       if (!mention.name) return acc;
       const regex = new RegExp(`\\b${escapeRegex(mention.name)}\\b`, "g");
-      // PRD-0089 F2 step 11 (§6.6): ticker-first URL — BriefingEntityMention
-      // carries `ticker | null`. Non-tradable mentions (sectors, events) fall
-      // back to entity_id; middleware resolves either. The displayed link
-      // text stays as `mention.name` so the analyst still sees the entity
-      // name in the prose; only the href changes.
-      const slug = mention.ticker || mention.entity_id;
-      return acc.replace(regex, `[${mention.name}](/instruments/${slug})`);
+      return acc.replace(regex, `[${mention.name}](/instruments/${mention.entity_id})`);
     }, text);
 
   // WHY two parallel pipelines: summary is the collapsed-view source and
@@ -366,22 +322,15 @@ export function MorningBriefCard() {
   // the work is cheap (string replace) and React rerenders on expand.
   const summaryWithLinks = linkifyEntities(safeSummary);
   const narrativeWithLinks = linkifyEntities(safeNarrative);
-  // PLAN-0103 W3 (BP-624) — also linkify the v4.2 summary paragraph so entity
-  // names render as deep-links even in the collapsed view.
-  const summaryParagraphWithLinks = linkifyEntities(safeSummaryParagraph);
 
-  // WHY fallback chain (v4.2 → v2.2 → narrative):
-  //   1. ``summary_paragraph`` (v4.2 ``## Summary`` block) is the preferred
-  //      collapsed-view source — purpose-built for this surface.
-  //   2. ``summary`` (v2.2 ``## SUMMARY`` block) is the back-compat tier.
-  //   3. ``narrative`` is the last-resort fallback for instrument briefs and
-  //      legacy/cached responses that lack any summary block.
-  // The line-clamp-3 only applies in the narrative-fallback branch — both
-  // summary tiers are already short enough (≤300 chars) and clamping them
-  // would risk hiding a sentence on the dashboard collapsed card.
-  const collapsedSource =
-    summaryParagraphWithLinks || summaryWithLinks || narrativeWithLinks;
-  const usingSummaryFallback = !summaryParagraphWithLinks && !summaryWithLinks;
+  // WHY fallback for collapsed view: when the v2.2 prompt's two-tier output
+  // wasn't honored (legacy cached briefs, instrument briefs, or LLM ignored
+  // the format directive), summary is null. We fall back to the narrative so
+  // the collapsed card still shows *something*. The line-clamp-3 only applies
+  // in this fallback branch — when summary IS present it's already short
+  // enough (1-2 sentences) and clamping is unnecessary.
+  const collapsedSource = summaryWithLinks || narrativeWithLinks;
+  const usingSummaryFallback = !summaryWithLinks;
 
   // WHY isLong on narrative (not summary): the "Read more" affordance only
   // makes sense if there's substantially more content to reveal when expanded.
@@ -511,24 +460,6 @@ export function MorningBriefCard() {
         </div>
       </div>
 
-      {/* ── PLAN-0094 W3 T-W3-01: stale-brief badge ─────────────────────────
-          When the backend served the last-known-good brief (`is_stale=true`)
-          instead of regenerating, we surface a small subdued line so the user
-          knows they're looking at the previous day's content. The same badge
-          carries the generated_at date so they can judge how out of date it is.
-          We render the badge inline directly below the chrome header, OUTSIDE
-          the scrollable text area, so it never scrolls away with the brief
-          content. Pre-W2 responses and fresh-cache hits omit is_stale (treated
-          as false), which means no badge — zero impact on existing visuals. */}
-      {brief.is_stale && (
-        <div
-          data-testid="brief-stale-badge"
-          className="flex h-4 shrink-0 items-center border-b border-border/40 px-1 text-[9px] text-muted-foreground"
-        >
-          Previous day&apos;s brief — {staleGeneratedAtLabel}
-        </div>
-      )}
-
       {/* ── Text area: flex-1 so it fills remaining Row 1 height ────────────── */}
       <div className="flex-1 overflow-auto px-1 py-0.5">
         {/* WHY shared ReactMarkdown classes: both collapsed and expanded use the
@@ -570,60 +501,7 @@ export function MorningBriefCard() {
                 {collapsedSource}
               </ReactMarkdown>
             </div>
-          ) : (
-            // ── Expanded view ──────────────────────────────────────────
-            // PLAN-0103 W21 (BP-641) — render the v4.2 ``summary_paragraph``
-            // as a leading "lead" block at the top of the expanded view BEFORE
-            // ``<StructuredBrief>`` (and before the narrative fallback). The
-            // collapsed view already surfaces this paragraph (lines 380-384);
-            // omitting it in the expanded view meant a user clicking "Read
-            // more" lost the executive summary entirely — the structured
-            // sections render directly under the header chrome with no lead.
-            //
-            // WHY render ABOVE StructuredBrief AND ABOVE narrative fallback:
-            // both expanded branches benefit from the lead — when ``sections``
-            // is populated the paragraph sets context for the bullet sections;
-            // when sections is empty (narrative fallback) the paragraph still
-            // anchors the long-form prose with a 1-2 sentence overview.
-            //
-            // WHY summaryParagraphWithLinks (not safeSummaryParagraph): use
-            // the same memoised, entity-linkified value the collapsed view
-            // uses so citation [N#] markers and entity name → deep-link
-            // replacements work consistently across both views.
-            //
-            // WHY italic muted-foreground + border-bottom: a visual treatment
-            // distinct from regular body prose. The italic + reduced opacity
-            // signals "this is a summary/lead, not the main content"; the
-            // thin border separates the lead from the sections / narrative
-            // that follow without adding noise.
-            //
-            // WHY fall through cleanly when null: pre-v4.2 cached responses
-            // and instrument briefs leave ``summary_paragraph`` undefined.
-            // The ``&& summaryParagraphWithLinks`` guard renders nothing in
-            // that case — existing tests asserting ``brief-narrative`` /
-            // ``structured-brief`` markers remain valid because we only ADD
-            // an optional sibling block, we don't replace either branch.
-            <>
-              {summaryParagraphWithLinks && (
-                <div
-                  data-testid="brief-summary-paragraph"
-                  className="mb-1.5 border-b border-border/40 pb-1.5 text-[11px] italic leading-[1.4] text-muted-foreground [&>*:first-child]:mt-0 [&_p]:mb-0"
-                >
-                  <ReactMarkdown
-                    remarkPlugins={REMARK_PLUGINS}
-                    components={{
-                      a: ({ href, children }) => (
-                        <Link href={href ?? "#"} className="text-primary">
-                          {children}
-                        </Link>
-                      ),
-                    }}
-                  >
-                    {summaryParagraphWithLinks}
-                  </ReactMarkdown>
-                </div>
-              )}
-              {brief.sections && brief.sections.length > 0 ? (
+          ) : brief.sections && brief.sections.length > 0 ? (
             // ── Expanded view (structured): PLAN-0062-W4 T-W4-E-01 ──
             // WHY StructuredBrief (not inline map): the shared StructuredBrief
             // component handles BriefBullet citation chips, confidence badge,
@@ -685,8 +563,6 @@ export function MorningBriefCard() {
                 {narrativeWithLinks}
               </ReactMarkdown>
             </div>
-          )}
-            </>
           )}
 
           {/* ── Top Stories chip strip ─────────────────────────────────────

@@ -29,8 +29,9 @@ import { redirect } from "next/navigation";
 // and is entirely transparent to SEO crawlers — no client-side JS needed.
 
 export default function BrokeragePage() {
-  // WHY /portfolio/transactions: W2 moved the Transactions tab to its own route.
-  // The old /portfolio?tab=transactions param no longer works after tabs were removed
-  // in PRD-0089 W2 §4.19. /portfolio/transactions is the new canonical destination.
-  redirect("/portfolio/transactions");
+  // WHY ?tab=transactions: the brokerage connections panel lives inside the
+  // Transactions tab on /portfolio. The tab=transactions param opens the
+  // correct tab immediately so the user lands on the connection status view
+  // they were likely trying to reach.
+  redirect("/portfolio?tab=transactions");
 }

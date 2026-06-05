@@ -59,12 +59,9 @@ class MarketDatasetFetchedMapper:
             "canonical_ref_sha256": event.canonical_ref.sha256,
             "canonical_ref_byte_length": event.canonical_ref.byte_length,
             "canonical_ref_mime_type": event.canonical_ref.mime_type,
-            # Metadata (3 — includes BP-492 is_backfill gate flag)
+            # Metadata (2)
             "canonical_schema_version": event.canonical_schema_version,
             "row_count": event.row_count if event.row_count else None,
-            # BP-492: lets S3 consumers (and any downstream alerter) distinguish
-            # live data from a historical backfill so alert fan-out can be skipped.
-            "is_backfill": event.is_backfill,
         }
 
     @staticmethod

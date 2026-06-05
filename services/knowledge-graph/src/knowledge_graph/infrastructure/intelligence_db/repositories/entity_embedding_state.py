@@ -173,34 +173,16 @@ ON CONFLICT (entity_id, view_type) DO NOTHING
         """
         # 0 means "unlimited" — use a practical ceiling to avoid unbounded scans.
         effective_limit = limit if limit > 0 else 100_000
-        # PLAN-0093 T-C-4-02 (F-REF-004 / F-REF-005): prioritise rows whose
-        # embedding column is NULL. These are the rows that have been "stuck"
-        # — they were scheduled for refresh but the previous attempt never
-        # produced an embedding (e.g. ML provider down, source_text NULL).
-        # Without this ordering they sit behind the queue of routine refreshes
-        # forever. ``(embedding IS NULL) DESC`` makes the boolean TRUE (=1)
-        # sort first, then we fall back to FIFO ``next_refresh_at`` within each
-        # bucket so non-stuck rows still drain in age order.
-        #
-        # PLAN-0093 T-C-4-03 (F-REF-003 / F-DB-005): when querying the
-        # ``fundamentals_ohlcv`` view type, additionally restrict to
-        # entity_type='financial_instrument'. Audit 2026-05-23 found 2,197
-        # stale rows for non-equity types (product/event/macro_indicator)
-        # which by definition have no OHLCV data and can never be embedded.
-        # Without the filter the worker burns cycles + retries on rows that
-        # will permanently stay NULL.
-        entity_type_filter = "  AND ce.entity_type = 'financial_instrument'\n" if view_type == VIEW_FUNDAMENTALS else ""
         result = await self._session.execute(
-            text(f"""
+            text("""
 SELECT ees.entity_id, ees.source_hash, ees.source_text, ce.canonical_name,
-       ce.entity_type, ce.ticker, ce.isin, ce.exchange,
-       ees.model_id IS NOT NULL AS has_embedding
+       ce.entity_type, ce.ticker, ce.isin, ce.exchange
 FROM entity_embedding_state ees
 JOIN canonical_entities ce ON ce.entity_id = ees.entity_id
 WHERE ees.view_type       = :view_type
   AND ees.next_refresh_at IS NOT NULL
   AND ees.next_refresh_at  < now()
-{entity_type_filter}ORDER BY (ees.embedding IS NULL) DESC, ees.next_refresh_at
+ORDER BY ees.next_refresh_at
 LIMIT :limit
 FOR UPDATE OF ees SKIP LOCKED
 """),
@@ -217,7 +199,6 @@ FOR UPDATE OF ees SKIP LOCKED
                 "ticker": r[5],
                 "isin": r[6],
                 "exchange": r[7],
-                "has_embedding": bool(r[8]),
             }
             for r in rows
         ]

@@ -63,12 +63,11 @@ type SectorPeriod = "1D" | "1W" | "1M";
 const MIN_WEIGHT = 0.05;
 
 /**
- * TILE_HEIGHT_PX — fixed tile height. Reduced to 48px so two wrap rows fit
- * inside Row 2's ~130px height cap (2×48 + 20px header + 4px gaps = 120px).
- * The previous 56px caused the second row to be clipped by overflow-hidden
- * on the Row 2 container (F-2 bug fix).
+ * TILE_HEIGHT_PX — fixed tile height. Locked at 56px so wrap rows are
+ * predictable and the widget fits within Row 2's 130px allowance even when
+ * 11 sectors wrap into 2 rows.
  */
-const TILE_HEIGHT_PX = 48;
+const TILE_HEIGHT_PX = 56;
 
 /**
  * GAP_PX — flex gap between tiles. We subtract this from `flex-basis` below
@@ -272,7 +271,7 @@ export function SectorHeatmapWidget() {
               // Equal-width skeletons (1/8 ≈ 12.5%) approximate the loaded
               // layout closely enough that there is no visible jump when
               // real tiles render.
-              className="min-h-[48px]"
+              className="min-h-[56px]"
               style={{
                 height: `${TILE_HEIGHT_PX}px`,
                 flexBasis: `calc(${100 / 8}% - ${GAP_PX}px)`,
@@ -305,23 +304,17 @@ export function SectorHeatmapWidget() {
         // FR-1.7 MED-005: replace flex-wrap with CSS grid auto-fit so tiles
         // reflow cleanly at any viewport width without the sub-pixel overflow
         // that occasionally pushed the last column past the container edge at
-        // 1280px (B-2-03). `auto-fit` + `minmax(55px, 1fr)` means:
-        //   - Each tile is at least 55px wide (sector abbreviations are ≤6
-        //     chars at 9px mono font — fits comfortably in 55px).
-        //   - At the ~395px widget width (col-span-4 of 12), 7 columns fit →
-        //     14 sectors (11 GICS + ETF/Crypto/Macro) wrap into exactly 2 rows
-        //     (2×48 + 20px header = 116px, inside the 130px Row 2 budget).
-        //     Previous minmax(60px) gave 6 cols → ceil(14/6)=3 rows → 164px,
-        //     clipping the last 2 sectors via overflow-hidden.
+        // 1280px (B-2-03). `auto-fit` + `minmax(120px, 1fr)` means:
+        //   - Each tile is at least 120px wide (enough for "HEALTH" + "+1.23%").
         //   - Tiles grow to fill remaining space equally (1fr).
         //   - The browser auto-computes the column count from the container
-        //     width — no hardcoded column count that breaks when sector count
-        //     changes (ETF/Crypto/Macro added = 14 total, not the original 11).
+        //     width — no hardcoded "11 columns" that breaks at non-standard
+        //     resolutions or when the number of GICS sectors changes.
         // WHY gap-0.5 (2px): matches the previous flex gap; tight enough for
         // the Bloomberg "dense grid" aesthetic without hairline-seam ambiguity.
         <div
           className="grid gap-0.5 flex-1 px-0.5 py-0"
-          style={{ gridTemplateColumns: "repeat(auto-fit, minmax(55px, 1fr))" }}
+          style={{ gridTemplateColumns: "repeat(auto-fit, minmax(120px, 1fr))" }}
         >
           {sectorTiles.map(({ sector, weight }) => (
             <SectorTile
@@ -352,7 +345,7 @@ export function SectorHeatmapWidget() {
  */
 function SectorTile({
   sector,
-  weight: _weight,
+  weight,
   relatedMovers,
 }: {
   sector: HeatmapSector;
@@ -388,7 +381,7 @@ function SectorTile({
           className={cn(
             // Base layout: vertical stack, centred horizontally, vertically
             // centred on a fixed-height tile.
-            "flex min-h-[48px] flex-col items-center justify-center px-1",
+            "flex min-h-[56px] flex-col items-center justify-center px-1",
             // Color encoding: bg-positive/N or bg-negative/N at 4 magnitude steps.
             colorClassFor(changePct),
             // Foreground colour: kept neutral so the *background* tint carries
@@ -460,12 +453,9 @@ function SectorTile({
             </div>
           ) : (
             topMovers.map((mover) => {
-              // PRD-0089 F2 step 11 (§6.6): ticker-first URL. F2 superseded
-              // ADR-F-12 — `entity_id === instrument_id` (M-017), so the
-              // analyst-facing ticker is the canonical URL slug. ticker is
-              // always populated on Mover rows; UUID is a defensive fallback
-              // that the middleware would 301-resolve back to ticker form.
-              const navId = mover.ticker || mover.entity_id || mover.instrument_id;
+              // ADR-F-12: prefer entity_id for navigation; fall back to
+              // instrument_id since S9's overview endpoint accepts either.
+              const navId = mover.entity_id ?? mover.instrument_id;
               return (
                 <button
                   key={mover.instrument_id}
@@ -501,18 +491,12 @@ function SectorTile({
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 /**
- * abbreviateSector — compress sector names to 4-7 chars for tile labels.
+ * abbreviateSector — compress GICS sector names to 4-7 chars for tile labels.
  *
- * WHY: sector names from the DB (Yahoo Finance / EODHD naming convention)
- * like "Consumer Cyclical" don't fit in a narrow tile. The abbreviations
- * match conventions used across the worldview UI.
- *
- * WHY Yahoo Finance names (not GICS canonical): the DB stores Yahoo Finance /
- * EODHD sector labels ("Consumer Cyclical", "Financial Services", etc.), NOT
- * GICS 2.0 standard names ("Consumer Discretionary", "Financials"). Using
- * GICS keys caused ~8 sectors to fall through to the 6-char slice fallback,
- * and "Consumer Cyclical" + "Consumer Defensive" both sliced to "Consum" —
- * producing duplicate tile labels (F-2 bug fix).
+ * WHY: GICS canonical names like "Information Technology" or "Consumer
+ * Discretionary" don't fit in a narrow tile (especially for a flat sector
+ * floored to MIN_WEIGHT width). The abbreviations match conventions used
+ * across the worldview UI (and lib/sectors.ts pill labels for consistency).
  */
 function abbreviateSector(name: string): string {
   // WHY title-case strings (not UPPER): the tile already has a CSS
@@ -520,20 +504,17 @@ function abbreviateSector(name: string): string {
   // the underlying DOM text matchable by tests / a11y tools (e.g.
   // `screen.getByText("Tech")`) while CSS handles the visual uppercase.
   const map: Record<string, string> = {
-    "Technology": "Tech",
-    "Healthcare": "Health",
-    "Consumer Cyclical": "Discr",
-    "Consumer Defensive": "Staple",
+    "Information Technology": "Tech",
+    "Health Care": "Health",
+    "Consumer Discretionary": "Discr",
+    "Consumer Staples": "Staple",
     "Communication Services": "Comm",
-    "Financial Services": "Fins",
-    "Industrials": "Indus",
-    "Basic Materials": "Mat",
+    Financials: "Fins",
+    Industrials: "Indus",
+    Materials: "Mat",
     "Real Estate": "REIT",
-    "Utilities": "Util",
-    "Energy": "Energy",
-    "Crypto": "Crypto",
-    "ETF": "ETF",
-    "Macro": "Macro",
+    Utilities: "Util",
+    Energy: "Energy",
   };
   return map[name] ?? name.slice(0, 6);
 }

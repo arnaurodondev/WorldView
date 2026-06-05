@@ -183,7 +183,7 @@ export function TimePicker({
           <SelectTrigger
             className={cn(
               "w-48 font-mono",
-              density === "compact" ? "h-7 text-[11px]" : "h-[36px] text-[12px]",
+              density === "compact" ? "h-7 text-[11px]" : "h-9 text-[12px]",
             )}
           >
             <SelectValue placeholder="Timezone" />

@@ -129,33 +129,18 @@ function SectorTile({ sector, cellWidth }: { sector: HeatmapSector; cellWidth: n
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 function abbreviateSector(name: string): string {
-  // WHY Yahoo Finance/DB names as keys (not GICS canonical): the DB stores Yahoo
-  // Finance sector labels ("Technology", "Consumer Cyclical", etc.), NOT GICS 2.0
-  // standard names. Legacy GICS aliases kept as fallback so any stale data still
-  // maps cleanly rather than showing raw first-word truncation (F-2 fix).
   const abbreviations: Record<string, string> = {
-    // DB/Yahoo Finance names (primary — what the API actually returns)
-    "Technology": "Tech",
-    "Healthcare": "Health",
-    "Consumer Cyclical": "Cons Disc",
-    "Consumer Defensive": "Cons Stpl",
-    "Communication Services": "Comm Svcs",
-    "Financial Services": "Fins",
-    "Industrials": "Indus",
-    "Basic Materials": "Matls",
-    "Real Estate": "RE",
-    "Utilities": "Util",
-    "Energy": "Energy",
-    "Crypto": "Crypto",
-    "ETF": "ETF",
-    "Macro": "Macro",
-    // GICS canonical aliases (legacy fallback for any pre-migration data)
     "Information Technology": "Tech",
     "Health Care": "Health",
     "Consumer Discretionary": "Cons Disc",
     "Consumer Staples": "Cons Stpl",
+    "Communication Services": "Comm Svcs",
     Financials: "Fins",
+    Industrials: "Indus",
     Materials: "Matls",
+    "Real Estate": "RE",
+    Utilities: "Util",
+    Energy: "Energy",
   };
   // Fallback uses first-word slice to avoid mid-word cuts ("Telecommunications" → "Telecommun").
   return abbreviations[name] ?? name.split(" ")[0]!.slice(0, 9);

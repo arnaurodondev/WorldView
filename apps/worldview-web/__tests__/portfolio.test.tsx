@@ -1,33 +1,37 @@
 /**
- * __tests__/portfolio.test.tsx — Unit tests for the Portfolio overview page
+ * __tests__/portfolio.test.tsx — Unit tests for the Portfolio page
  *
- * WHY THIS FILE EXISTS: The portfolio page is the primary P&L view. Tests verify
- * that the W2 overview layout renders the expected content.
- *
- * W2 CHANGE: tabs are removed (PRD-0089 W2 §4.19). Holdings, transactions and
- * watchlists are now on separate routes. This file covers the /portfolio overview:
- *   - Holdings data renders
- *   - KPI strip renders with labels
- *   - AAPL and MSFT holding tickers appear in the table
- *   - RecentActivityStrip renders BUY/SELL transactions inline (no tab switch)
+ * WHY THIS EXISTS: The portfolio page is a data-dense, multi-tab page with
+ * several async data loads. Tests verify that each tab renders the expected
+ * content and that styling invariants (BUY=green, SELL=red) are upheld.
  *
  * WHY MOCK GATEWAY: We control exactly what data each query returns.
  * Without mocks, tests would depend on a live S9 instance and be flaky.
  *
+ * WHAT IS TESTED:
+ *   1. Holdings tab renders after data loads
+ *   2. Transactions tab shows transaction data
+ *   3. Watchlist tab renders with member data
+ *   4. BUY transaction styled with correct (positive/green) class
+ *   5. SELL transaction styled with correct (negative/red) class
+ *
  * DATA SOURCE: Mocked gateway client — controlled, deterministic
- * DESIGN REFERENCE: PRD-0028 §6.5 Portfolio, PRD-0089 W2 §4.19
+ * DESIGN REFERENCE: PRD-0028 §6.5 Portfolio
  */
 
 import { describe, it, expect, vi } from "vitest";
 import { render, screen, waitFor } from "@testing-library/react";
-// PLAN-0059 C-6: PortfolioPage reads URL state via nuqs (active period).
-// The testing adapter provides a stub router so the hooks don't crash.
+// PLAN-0059 C-6: PortfolioPage now reads URL state via nuqs (active tab +
+// equity period). The testing adapter provides a stub router so the hooks
+// don't crash; empty searchParams gives the documented defaults.
 import { NuqsTestingAdapter } from "nuqs/adapters/testing";
+import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import PortfolioPage from "@/app/(app)/portfolio/page";
 
 // ── Next.js navigation mock ────────────────────────────────────────────────────
-// WHY: PortfolioPage calls useRouter().push() for hotkeys.
+// WHY: PortfolioPage calls useRouter().push() for row clicks.
+// In unit tests the App Router is not mounted — mock to avoid "invariant" error.
 vi.mock("next/navigation", () => ({
   useRouter: vi.fn(() => ({
     push: vi.fn(),
@@ -39,6 +43,7 @@ vi.mock("next/navigation", () => ({
 }));
 
 // ── Auth mock ────────────────────────────────────────────────────────────────
+// WHY: PortfolioPage calls useAuth() to get the access token for S9 requests.
 vi.mock("@/hooks/useAuth", () => ({
   useAuth: vi.fn(() => ({
     accessToken: "test-token",
@@ -57,8 +62,11 @@ vi.mock("@/hooks/useAuth", () => ({
 }));
 
 // ── Gateway mock ──────────────────────────────────────────────────────────────
+// WHY: We return deterministic sample data so assertions are stable.
+// All six queries the page makes are mocked here.
 vi.mock("@/lib/gateway", () => ({
   createGateway: vi.fn(() => ({
+    // Query 1: portfolios list — single portfolio
     getPortfolios: vi.fn().mockResolvedValue([
       {
         portfolio_id: "port-1",
@@ -70,6 +78,7 @@ vi.mock("@/lib/gateway", () => ({
       },
     ]),
 
+    // Query 2: holdings — two positions
     getHoldings: vi.fn().mockResolvedValue({
       portfolio_id: "port-1",
       holdings: [
@@ -108,6 +117,7 @@ vi.mock("@/lib/gateway", () => ({
       total_unrealised_pnl_pct: 0.0479,
     }),
 
+    // Query 3: batch quotes for holdings
     getBatchQuotes: vi.fn().mockResolvedValue({
       quotes: {
         "ins-aapl": {
@@ -131,6 +141,7 @@ vi.mock("@/lib/gateway", () => ({
       },
     }),
 
+    // Query 4: transactions — one BUY, one SELL
     getTransactions: vi.fn().mockResolvedValue({
       transactions: [
         {
@@ -138,12 +149,10 @@ vi.mock("@/lib/gateway", () => ({
           portfolio_id: "port-1",
           instrument_id: "ins-aapl",
           ticker: "AAPL",
-          asset_class: "equity",
           type: "BUY" as const,
           quantity: 10,
           price: 170.0,
           fee: 1.0,
-          amount: null,
           currency: "USD",
           executed_at: "2026-03-01T10:00:00Z",
           notes: null,
@@ -153,12 +162,10 @@ vi.mock("@/lib/gateway", () => ({
           portfolio_id: "port-1",
           instrument_id: "ins-nvda",
           ticker: "NVDA",
-          asset_class: "equity",
           type: "SELL" as const,
           quantity: 3,
           price: 820.0,
           fee: 1.5,
-          amount: null,
           currency: "USD",
           executed_at: "2026-03-15T14:30:00Z",
           notes: null,
@@ -169,6 +176,7 @@ vi.mock("@/lib/gateway", () => ({
       limit: 100,
     }),
 
+    // Query 5: watchlists
     getWatchlists: vi.fn().mockResolvedValue([
       {
         watchlist_id: "wl-1",
@@ -182,21 +190,21 @@ vi.mock("@/lib/gateway", () => ({
             name: "NVIDIA Corporation",
             added_at: "2026-04-10T09:00:00Z",
           },
+          {
+            entity_id: "ent-amd",
+            instrument_id: "ins-amd",
+            ticker: "AMD",
+            name: "Advanced Micro Devices",
+            added_at: "2026-04-12T09:00:00Z",
+          },
         ],
-        member_count: 1,
+        member_count: 2,
         created_at: "2026-04-10T09:00:00Z",
         updated_at: "2026-04-12T09:00:00Z",
       },
     ]),
 
-    getBrokerageConnections: vi.fn().mockResolvedValue([]),
-    getPortfolioBundle: vi.fn().mockRejectedValue(new Error("404")),
-    getPortfolioPerformance: vi.fn().mockRejectedValue(new Error("no data")),
-    getRealizedPnL: vi.fn().mockRejectedValue(new Error("no data")),
-    getCompanyOverview: vi.fn().mockResolvedValue(null),
-    getBatchOhlcvBars: vi.fn().mockResolvedValue({ results: [] }),
-    getExposure: vi.fn().mockRejectedValue(new Error("no data")),
-
+    // Auth plumbing (required by AuthContext refresh logic)
     refreshToken: vi.fn().mockResolvedValue({
       access_token: "test-token",
       user: {
@@ -222,6 +230,13 @@ vi.mock("@/lib/gateway", () => ({
 
 // ── Test helpers ──────────────────────────────────────────────────────────────
 
+/**
+ * makeQueryClient — fresh QueryClient per test with retries disabled
+ *
+ * WHY retry: false: TanStack Query retries failed queries by default.
+ * In unit tests this causes tests to hang waiting for retry delays.
+ * With retry: false, errors surface immediately.
+ */
 function makeQueryClient() {
   return new QueryClient({
     defaultOptions: {
@@ -230,6 +245,10 @@ function makeQueryClient() {
   });
 }
 
+/**
+ * wrapper — React tree provider for all tests
+ * WHY: TanStack Query useQuery() requires QueryClientProvider in the tree.
+ */
 function wrapper({ children }: { children: React.ReactNode }) {
   const qc = makeQueryClient();
   return (
@@ -241,12 +260,27 @@ function wrapper({ children }: { children: React.ReactNode }) {
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
-describe("PortfolioPage — W2 overview (no tabs)", () => {
+describe("PortfolioPage — Holdings tab", () => {
+  it("renders 'Holdings' tab trigger as a role=tab element", async () => {
+    render(<PortfolioPage />, { wrapper });
+
+    // WHY waitFor: the component starts in loading state, then queries resolve.
+    // We use role="tab" to uniquely target the tab trigger, not the CardTitle.
+    await waitFor(() => {
+      // getByRole("tab", {name:...}) uniquely matches the TabsTrigger button
+      expect(screen.getByRole("tab", { name: "Holdings" })).toBeInTheDocument();
+    });
+  });
+
   it("renders holding tickers after data loads", async () => {
     render(<PortfolioPage />, { wrapper });
 
     await waitFor(() => {
-      // AAPL should be visible in the holdings table (W2 renders inline, no tab switch).
+      // Holdings tab is active by default — AAPL should be visible.
+      // PLAN-0088 Wave E: AAPL now legitimately appears in multiple places
+      // (table cell + HoldingLotsPanel ticker dropdown option + PositionBarHeat
+      // bar label). getAllByText asserts the same intent — at least one
+      // occurrence of the ticker is rendered — without restricting how many.
       expect(screen.getAllByText("AAPL").length).toBeGreaterThan(0);
     });
   });
@@ -255,40 +289,120 @@ describe("PortfolioPage — W2 overview (no tabs)", () => {
     render(<PortfolioPage />, { wrapper });
 
     await waitFor(() => {
+      // Same multi-render rationale as the AAPL test above.
       expect(screen.getAllByText("MSFT").length).toBeGreaterThan(0);
     });
   });
 
-  it("renders KPI strip with Total Value label", async () => {
+  it("renders P&L summary tiles", async () => {
     render(<PortfolioPage />, { wrapper });
 
     await waitFor(() => {
+      // WHY check for "Total Value" label:
+      // The PnlSummaryRow component renders this as a KPI tile header.
       expect(screen.getByText("Total Value")).toBeInTheDocument();
     });
   });
+});
 
-  it("has no Holdings/Transactions/Watchlist tab buttons (W2 removed tabs)", async () => {
+describe("PortfolioPage — Transactions tab", () => {
+  it("renders 'Transactions' tab trigger as a role=tab element", async () => {
     render(<PortfolioPage />, { wrapper });
 
-    // Wait for load to complete
     await waitFor(() => {
-      expect(screen.getAllByText("AAPL").length).toBeGreaterThan(0);
+      // role=tab uniquely targets the TabsTrigger button, not the CardTitle
+      expect(screen.getByRole("tab", { name: "Transactions" })).toBeInTheDocument();
     });
-
-    // WHY role=tab: the old tabs used <TabsTrigger> which has role="tab".
-    // W2 removes all <Tabs> from the page — no elements with role="tab" should exist.
-    expect(screen.queryByRole("tab", { name: "Holdings" })).not.toBeInTheDocument();
-    expect(screen.queryByRole("tab", { name: "Transactions" })).not.toBeInTheDocument();
-    expect(screen.queryByRole("tab", { name: "Watchlist" })).not.toBeInTheDocument();
   });
 
-  it("renders Recent Activity strip (RecentActivityStrip replaces RecentActivityFeed)", async () => {
+  it("renders BUY transaction with positive color class after switching tabs", async () => {
+    // WHY userEvent (not .click()): Radix UI TabsTrigger listens to pointer events.
+    // jsdom's .click() fires only the click event; userEvent.click() fires the full
+    // pointer event sequence (pointerdown, pointerup, click) which Radix requires.
+    const user = userEvent.setup();
+    const { container } = render(<PortfolioPage />, { wrapper });
+
+    // Wait for the page to fully render (tab triggers appear when portfolios load)
+    await waitFor(() => {
+      expect(screen.getByRole("tab", { name: "Transactions" })).toBeInTheDocument();
+    });
+
+    // Click the Transactions tab trigger with userEvent (fires pointer events)
+    await user.click(screen.getByRole("tab", { name: "Transactions" }));
+
+    // Wait for transaction data to appear in the now-active tab panel
+    await waitFor(() => {
+      // The BUY transaction type cell should be visible
+      const buyEl = container.querySelector('[data-testid="tx-type-tx-1"]');
+      expect(buyEl).toBeInTheDocument();
+      // WHY check for text-positive: this is the spec-mandated positive color
+      // (Bloomberg Dark positive teal), applied by cn() in TransactionsTable
+      expect(buyEl?.className).toContain("text-positive");
+    });
+  });
+
+  it("renders SELL transaction with negative color class", async () => {
+    const user = userEvent.setup();
+    const { container } = render(<PortfolioPage />, { wrapper });
+
+    await waitFor(() => {
+      expect(screen.getByRole("tab", { name: "Transactions" })).toBeInTheDocument();
+    });
+
+    // Switch to Transactions tab with userEvent
+    await user.click(screen.getByRole("tab", { name: "Transactions" }));
+
+    await waitFor(() => {
+      const sellEl = container.querySelector('[data-testid="tx-type-tx-2"]');
+      expect(sellEl).toBeInTheDocument();
+      // WHY check for text-negative: this is the spec-mandated negative color
+      // (Bloomberg Dark negative red), applied when type === "SELL"
+      expect(sellEl?.className).toContain("text-negative");
+    });
+  });
+});
+
+describe("PortfolioPage — Watchlist tab", () => {
+  it("renders 'Watchlist' tab trigger as a role=tab element", async () => {
     render(<PortfolioPage />, { wrapper });
 
     await waitFor(() => {
-      // WHY "Recent Activity": the RecentActivityStrip header label (§4.14).
-      // This asserts the W2 activity strip is mounted below the holdings table.
-      expect(screen.getByText("Recent Activity")).toBeInTheDocument();
+      // role=tab uniquely targets the TabsTrigger button, not the CardTitle
+      expect(screen.getByRole("tab", { name: "Watchlist" })).toBeInTheDocument();
+    });
+  });
+
+  it("renders watchlist member tickers after switching tabs", async () => {
+    // WHY userEvent: same reason as Transactions tab — Radix needs pointer events
+    const user = userEvent.setup();
+    render(<PortfolioPage />, { wrapper });
+
+    await waitFor(() => {
+      expect(screen.getByRole("tab", { name: "Watchlist" })).toBeInTheDocument();
+    });
+
+    // Switch to Watchlist tab using the role=tab trigger
+    await user.click(screen.getByRole("tab", { name: "Watchlist" }));
+
+    await waitFor(() => {
+      // NVDA is in the mock watchlist — should render in the active tab panel
+      expect(screen.getByText("NVDA")).toBeInTheDocument();
+    });
+  });
+
+  it("renders watchlist name after data loads", async () => {
+    const user = userEvent.setup();
+    render(<PortfolioPage />, { wrapper });
+
+    await waitFor(() => {
+      expect(screen.getByRole("tab", { name: "Watchlist" })).toBeInTheDocument();
+    });
+
+    await user.click(screen.getByRole("tab", { name: "Watchlist" }));
+
+    await waitFor(() => {
+      // "Tech Watch" is the mock watchlist name shown in CardTitle
+      expect(screen.getByText("Tech Watch")).toBeInTheDocument();
     });
   });
 });

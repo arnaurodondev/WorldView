@@ -121,15 +121,15 @@ export function ForceUpdateBanner({
   if (!outOfDate) return null;
 
   return (
-    // PRD-0089 W1 §4.11 / C-25 — the banner now renders as a full-width
-    // h-6 (24px) notice ABOVE the TopBar so it pushes the rest of the
-    // shell down rather than floating above page content. F1 lock: no
-    // border-radius, no box-shadow. role=status + aria-live=polite still
-    // give assistive tech a non-disruptive announcement.
+    // WHY h-7 (28px) sticky bottom-right banner: institutional terminal
+    // density — full-width banners eat data real-estate. A right-aligned
+    // 28px chip pinned just above the StatusBar is visible without
+    // pushing tables down. WHY warning token (advisory amber): signals
+    // "update available", not destructive — errors use negative/destructive.
     <div
       role="status"
       aria-live="polite"
-      className="flex h-6 shrink-0 items-center justify-center gap-2 border-b border-warning/40 bg-warning/[0.08] px-3 font-mono text-[11px] text-warning"
+      className="fixed bottom-7 right-3 z-40 flex h-7 items-center gap-2 rounded-[2px] border border-warning/40 bg-warning/[0.08] px-3 font-mono text-[11px] text-warning shadow-[0_0_0_1px_rgba(0,0,0,0.4)]"
     >
       <RefreshCw className="h-3 w-3" aria-hidden />
       <span className="uppercase tracking-[0.06em]">New version available</span>
@@ -140,7 +140,7 @@ export function ForceUpdateBanner({
         // `true` argument is non-standard but ignored by browsers that
         // dropped it; behaviour is "best effort hard reload".
         onClick={() => window.location.reload()}
-        className="ml-1 border border-warning/60 px-1.5 py-0.5 text-[10px] uppercase tracking-[0.06em] hover:bg-warning/15"
+        className="ml-1 rounded-[2px] border border-warning/60 px-1.5 py-0.5 text-[10px] uppercase tracking-[0.06em] hover:bg-warning/15"
       >
         Reload
       </button>

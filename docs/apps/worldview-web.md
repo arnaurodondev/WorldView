@@ -831,8 +831,7 @@ Chord shortcuts (e.g., `g d` for dashboard) are handled by `hooks/useChordHotkey
 | ADR-F-04 | Dark mode only — `class="dark"` permanent on `<html>`; no toggle |
 | ADR-F-06 | `/(app)/*` protected route group — auth guard in group layout |
 | ADR-F-07 | Workspace layout in localStorage — user-customizable grid persists across sessions |
-| ~~ADR-F-12~~ | ~~`entity_id` ≠ `instrument_id` — distinct UUIDs; S9 `GET /v1/instruments/{id}/context` resolves both~~ **Superseded by ADR-F-16** |
-| ADR-F-16 | Instrument / Entity ID unification — single UUID per tradable security (`entity_id == instrument_id` for `entity_type = 'financial_instrument'`); non-tradable kinds keep independent `entity_id`. Ticker-first URLs (`/instruments/${TICKER}`) with case-canonical 301 + alias 301 middleware. See `docs/architecture/decisions/ADR-F-16-instrument-entity-id-unification.md` |
+| ADR-F-12 | `entity_id` ≠ `instrument_id` — distinct UUIDs; S9 `GET /v1/instruments/{id}/context` resolves both |
 | ADR-F-14 | HeatCell for % change values — 7-step colour scale for data-heavy tables |
 | ADR-F-15 | IBM Plex Mono for ALL numbers — single highest-impact change for professional appearance |
 

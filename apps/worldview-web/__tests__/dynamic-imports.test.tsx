@@ -113,16 +113,6 @@ vi.mock("@/hooks/useAuth", () => ({
   useAuth: vi.fn(() => ({ accessToken: "test-token", user: null })),
 }));
 
-// ── ApiClientProvider mock ────────────────────────────────────────────────────
-// WHY: TAOverlayPanel (now rendered inside OHLCVChart) calls useEntitySentimentTimeseries
-// which calls useAccessToken — that hook requires an <ApiClientProvider> ancestor.
-// Mocking the module replaces the context check with a no-op token return.
-vi.mock("@/lib/api-client", () => ({
-  useAccessToken: vi.fn(() => "test-token"),
-  ApiClientProvider: ({ children }: { children: React.ReactNode }) => <>{children}</>,
-  apiFetch: vi.fn().mockResolvedValue(null),
-}));
-
 // ── Router mock ──────────────────────────────────────────────────────────────
 // WHY: EntityGraphPanel uses useRouter for node click navigation.
 vi.mock("next/navigation", () => ({

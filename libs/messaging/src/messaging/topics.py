@@ -38,12 +38,6 @@ GRAPH_STATE_CHANGED = "graph.state.changed.v1"
 #   new entity narrative version is generated; consumed by NarrativeRefreshKafkaConsumer
 #   to trigger immediate narrative embedding refresh without waiting for hourly poll.
 ENTITY_NARRATIVE_GENERATED = "entity.narrative.generated.v1"
-# entity.refresh.v1 — emitted by S7 TriggerEntityRefreshUseCase when a user
-#   manually triggers POST /api/v1/entities/{id}/refresh; consumed by S6
-#   EntityRefreshConsumer to mark entity_embedding_state rows as due, which
-#   causes S7 DefinitionRefreshWorker to re-fetch the description on the next
-#   cycle (REQ-003 / TASK-W0-06).
-ENTITY_REFRESH = "entity.refresh.v1"
 
 # ── Prediction market domain (S4 / S3) ────────────────────────────────────────
 MARKET_PREDICTION = "market.prediction.v1"

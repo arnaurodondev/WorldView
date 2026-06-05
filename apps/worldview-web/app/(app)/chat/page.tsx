@@ -1,255 +1,239 @@
 /**
- * app/(app)/chat/page.tsx — Intelligence / Chat page (PLAN-0089 K T-20.5 rewrite)
+ * app/(app)/chat/page.tsx — Intelligence / Chat page
  *
- * Research-grade RAG chat. Persistent threads survive across sessions so the
- * analyst can build on prior context. This file is the composition root for
- * Wave K's new flat-turn experience — three columns (thread rail | message
- * column | context rail). PLAN-0089 K T-20.5 dropped the file from ~1200 LOC
- * to ~330 by extracting every visual / state-machine concern into dedicated
- * components under `features/chat/`. The page now owns only:
- *   1. Auth + URL-param resolution (entity_id → ticker).
- *   2. Thread CRUD (list / select / rename / delete / create).
- *   3. Composition of the Wave K components inside `<ChatLayout>`.
+ * WHY THIS EXISTS: Full-featured RAG (Retrieval-Augmented Generation) chat for
+ * research-grade market intelligence queries. Unlike the AskAiPanel floating window
+ * (single-shot questions), this page maintains persistent conversation threads so
+ * analysts can build on prior context ("Earlier you said NVDA had a margin headwind.
+ * How does that compare to AMD's guidance?"). Thread history persists across sessions.
  *
- * SSE streaming + slash-command parsing + tool-call demux live in
- * `useChatStream`. The page just calls `send()` and reads view state.
+ * WHY TWO-COLUMN LAYOUT (thread list | chat):
+ * Mirrors the established UX pattern from Slack, Claude, and Bloomberg's Chat panel.
+ * Analysts create multiple focused threads (AAPL earnings, Fed expectations, sector
+ * rotation thesis) and switch between them without losing context.
  *
- * DATA SOURCES (all via S9): GET /v1/threads, GET /v1/threads/:id,
- *   PATCH /v1/threads/:id, POST /v1/chat/stream.
- * DESIGN: docs/designs/0089/10-chat-ai.md §3 (3-col layout) + §5 (flat turn).
+ * WHY SSE STREAMING (not request/response):
+ * LLM responses take 2–8 seconds to generate. Streaming tokens to the UI creates
+ * the "typewriter" effect — users start reading before generation completes.
+ * For a finance terminal, perceived latency matters enormously.
+ *
+ * WHY POST + fetch() (not EventSource):
+ * The SSE endpoint requires a POST body { question, thread_id }.
+ * EventSource only supports GET requests and cannot send a POST body.
+ * We use fetch() + response.body.getReader() to consume the SSE stream manually.
+ *
+ * WHY crypto.randomUUID() for new threads (not POST first):
+ * We optimistically assign a thread_id client-side so streaming can begin
+ * immediately without a round-trip to create the thread first. The first POST
+ * /chat/stream creates the thread server-side if it doesn't exist.
+ *
+ * PLAN-0051 WAVE E (T-E-5-01..07) ADDS:
+ *   - Slash commands (/quote, /portfolio, /news, /watchlist, /alerts, /screener)
+ *     with autocomplete popover and inline structured cards.
+ *   - MarkdownContent rendering for assistant messages (tables, code copy).
+ *   - Thread search box above the sidebar list (200ms debounced).
+ *   - Citation bar (red/yellow/green) with hover tooltip and anchor scroll.
+ *   - Context-aware starter questions when ?entity_id= present.
+ *   - Inline rename (double-click sidebar title) — PATCH /v1/threads/{id}.
+ *   - Markdown export of the conversation (download .md file).
+ *
+ * WHO USES IT: Authenticated users at /chat
+ * DATA SOURCES:
+ *   GET   /api/v1/threads          — thread list
+ *   GET   /api/v1/threads/:id      — thread with full message history
+ *   PATCH /api/v1/threads/:id      — rename (PLAN-0051 T-E-5-06)
+ *   POST  /api/v1/chat/stream      — SSE streaming response
+ * DESIGN REFERENCE: PRD-0028 §6.5 Chat page (layout §6.3, spec §6.5.9)
  */
 
 "use client";
-// "use client" because TanStack Query subscriptions, useChatStream's SSE
-// reader, useDebugFlag's search-params read, and the ⌘D chord all need the
-// browser runtime.
+// WHY "use client": Heavy interactive state — streaming SSE via fetch + ReadableStream,
+// message list with auto-scroll, thread selection, keyboard shortcuts (Enter to send,
+// Shift+Enter for newline), inline rename input, debounced search. All require browser
+// APIs unavailable in Server Components.
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { useSearchParams } from "next/navigation";
-import { Download } from "lucide-react";
+import { useRouter, useSearchParams } from "next/navigation";
+import {
+  Download,
+  MessageSquare,
+  Plus,
+  Search,
+  Send,
+} from "lucide-react";
 
-import { createGateway, GatewayError } from "@/lib/gateway";
+import { createGateway } from "@/lib/gateway";
 import { useAuth } from "@/hooks/useAuth";
-// WHY qk.chat.*: removes inline queryKey arrays and the accessToken-in-key
-// anti-pattern that caused cache thrashing on OIDC rotation.
+// WHY qk: removes inline queryKey arrays and the accessToken-in-key anti-pattern.
+// Including accessToken in a queryKey causes cache thrashing when the token
+// rotates (OIDC refresh every ~30min) — old cache entries are orphaned and
+// every rotation fires an unnecessary refetch. Auth is enforced by `enabled:
+// !!accessToken`; the token itself need not be part of the cache identity.
 import { qk } from "@/lib/query/keys";
+import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
+import { Skeleton } from "@/components/ui/skeleton";
+import { ScrollArea } from "@/components/ui/scroll-area";
+import { SlashCommandAutocomplete } from "@/components/chat/SlashCommandAutocomplete";
 import { downloadThread } from "@/lib/chat/export-thread";
-import { filterCommands, type SlashCommand } from "@/lib/chat/slash-commands";
 import type { Thread, Message } from "@/types/api";
 
-// ── Wave K components (Block B/C/D/E/F) — single source of truth ─────────────
-import { ChatLayout } from "@/features/chat/components/ChatLayout";
-import { ThreadRail } from "@/features/chat/components/ThreadRail";
-import { ChatMessageList } from "@/features/chat/components/ChatMessageList";
-import { ChatComposer, type ChatComposerHandle } from "@/features/chat/components/ChatComposer";
-import { ChatEmptyState } from "@/features/chat/components/ChatEmptyState";
-import { ChatErrorBanner, type ChatError } from "@/features/chat/components/ChatErrorBanner";
-import { ChatContextRail } from "@/features/chat/components/ChatContextRail";
-import { ToolTraceDrawer, useToolTraceChord } from "@/features/chat/components/ToolTraceDrawer";
-import { useDebugFlag } from "@/features/chat/hooks/useDebugFlag";
-import { ActionConfirmModal } from "@/features/chat/components/ActionConfirmModal";
-import { useChatStream } from "@/features/chat/hooks/useChatStream";
+// ── PLAN-0059 E-3 partial — extracted sub-components + types + helpers ───────
+// The chat page held 7 inline render components + 2 type aliases + a starter-
+// questions helper (~430 LOC of the original 1,332). They now live under
+// `features/chat/`. The streamChat / abort / SSE handling stays in this
+// page — extracting it would require another careful pass and is the
+// remaining E-3 work tracked as E-3-followup.
+import {
+  TypingIndicator,
+  MessageBubble,
+  StreamingBubble,
+} from "@/features/chat/components/MessageBubble";
+import { SlashTurnBlock } from "@/features/chat/components/SlashTurnBlock";
+import { ThreadItem } from "@/features/chat/components/ThreadItem";
 import {
   PLACEHOLDER_THREAD_TITLE,
-  PORTFOLIO_STARTER_QUESTIONS,
   STARTER_QUESTIONS,
+  PORTFOLIO_STARTER_QUESTIONS,
   entityStarters,
 } from "@/features/chat/lib/starters";
+import { MarketContextBanner } from "@/components/chat/MarketContextBanner";
+import { useChatStream } from "@/features/chat/hooks/useChatStream";
+// PLAN-0082 Wave B: write-action confirmation modal.
+// WHY imported here (not at component file boundary): the modal needs
+// `accessToken` from the page's `useAuth()` call and the `pendingAction` /
+// `clearPendingAction` values from `useChatStream`. Both live at this page
+// level, so the modal is wired here rather than inside a sub-component.
+import { ActionConfirmModal } from "@/features/chat/components/ActionConfirmModal";
 
-/**
- * UUID regex used to discriminate `?entity_id=` URL values: a UUIDv7 needs a
- * resolve-to-ticker round-trip; anything else is treated as a literal ticker
- * (legacy callers that pass tickers directly).
- */
-const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-
-// Common English short tokens that match the all-caps ticker shape but are
-// definitely not investable tickers. Used by the entity-chip heuristic that
-// derives related tickers from user-typed message text.
-const TICKER_BLOCKLIST = new Set([
-  "I", "A", "AN", "THE", "AND", "OR", "NOT", "FOR", "OF", "IN",
-  "ON", "AT", "TO", "BY", "BE", "DO", "IF", "UP", "NO", "VS",
-  "AI", "US", "UK", "EU", "Q", "S", "W", "E", "N", "M",
-]);
-
-// ── Page component ────────────────────────────────────────────────────────────
+// ── Main page component ───────────────────────────────────────────────────────
 
 export default function ChatPage() {
   const { accessToken } = useAuth();
   const queryClient = useQueryClient();
-  const searchParams = useSearchParams();
 
-  // ── URL param: ?entity_id= → ticker (QA-iter1 MAJ-5) ───────────────────────
-  // UUID values get a getCompanyOverview round-trip; non-UUID values are
-  // treated as the ticker verbatim (legacy callers). N-MIN-1: never expose
-  // the raw UUID in the UI — render "Loading…" while resolving.
+  // ── Entity context from URL param ─────────────────────────────────────────
+  const searchParams = useSearchParams();
+  // PLAN-0052 platform-QA round 5: router for the 401 re-auth CTA below.
+  const router = useRouter();
   const entityIdFromUrl = searchParams.get("entity_id");
-  const looksLikeUuid = !!entityIdFromUrl && UUID_RE.test(entityIdFromUrl);
+
+  // QA-iter1 MAJ-5: ?entity_id= carries a UUID, not a ticker. The earlier
+  // draft displayed it verbatim, producing strings like "What's the latest
+  // news on 2c8e3a7f-…?". We resolve UUID → ticker via the company-overview
+  // endpoint (which accepts an instrument_id OR an entity_id and returns the
+  // canonical ticker). If the value isn't a UUID we fall through to using
+  // the raw string as the "ticker" (legacy behaviour, used by tests today).
+  const looksLikeUuid =
+    !!entityIdFromUrl &&
+    /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(
+      entityIdFromUrl,
+    );
   const { data: resolvedEntity } = useQuery({
+    // WHY qk.chat.entityResolve: avoids the old inline ["chat-entity-resolve", id]
+    // literal. Lives under the chat.* namespace so a chat-wide invalidation
+    // (e.g. on logout) clears this cache entry too.
     queryKey: qk.chat.entityResolve(entityIdFromUrl ?? ""),
+    // Only fetch when the URL value parses as a UUID — otherwise we already
+    // have a usable label and would waste a round-trip.
     enabled: !!accessToken && looksLikeUuid,
-    queryFn: () => createGateway(accessToken).getCompanyOverview(entityIdFromUrl as string),
+    queryFn: () =>
+      createGateway(accessToken).getCompanyOverview(entityIdFromUrl as string),
     staleTime: 5 * 60_000,
   });
+  // Resolved ticker (UUID-resolved when possible) OR the raw URL value when
+  // it wasn't a UUID OR null when there's no entity context.
   const entityTicker = useMemo<string | null>(() => {
     if (!entityIdFromUrl) return null;
-    if (looksLikeUuid) return resolvedEntity?.instrument?.ticker ?? null;
+    if (looksLikeUuid) {
+      // Wait for the resolve to complete; fall back to null until then so
+      // we don't briefly flash "What's the latest news on 2c8e3a7f-…".
+      return resolvedEntity?.instrument?.ticker ?? null;
+    }
     return entityIdFromUrl;
   }, [entityIdFromUrl, looksLikeUuid, resolvedEntity]);
 
-  // ── Local state ────────────────────────────────────────────────────────────
-  const [activeThreadId, setActiveThreadIdState] = useState<string | null>(null);
+  // ── Thread list state ──────────────────────────────────────────────────────
+  const [activeThreadId, setActiveThreadId] = useState<string | null>(null);
   const [input, setInput] = useState("");
-  // PLAN-0102 W2 BP-FIX: Track thread IDs minted on the client (via
-  // crypto.randomUUID) that have NOT YET been persisted server-side.
-  //
-  // WHY THIS EXISTS: Before this fix, `handleNewChat` and `useChatStream.send`
-  // both call `setActiveThreadId(crypto.randomUUID())` immediately so the
-  // streaming response can be filed under a stable id.  TanStack Query then
-  // sees `activeThreadId` change and fires `GET /v1/threads/{id}` BEFORE the
-  // first user message has been persisted by rag-chat — the backend has never
-  // heard of this id, so it returns 404 and the UI flashes a generic error
-  // banner.  The 404 in the user's report came from exactly this race.
-  //
-  // WHY a Set (not a bool flag): the user can click "New chat" multiple times
-  // in a row before any of those threads gets persisted, so we may have more
-  // than one ephemeral id in flight.  A Set models that cleanly.
-  //
-  // WHY useRef + state mirror: the ref is what the gateway-error swallow logic
-  // reads (avoids a stale-closure race when the query fires a millisecond
-  // after the setState dispatch).  The state mirror is what re-renders the
-  // page so `enabled` flips when the id transitions from ephemeral to
-  // persisted.  Both stay in sync via the `markEphemeral` / `markPersisted`
-  // helpers below.
-  const ephemeralThreadIdsRef = useRef<Set<string>>(new Set());
-  const [ephemeralVersion, setEphemeralVersion] = useState(0);
-  const markEphemeral = useCallback((id: string) => {
-    ephemeralThreadIdsRef.current.add(id);
-    setEphemeralVersion((v) => v + 1);
-  }, []);
-  const markPersisted = useCallback((id: string) => {
-    if (ephemeralThreadIdsRef.current.delete(id)) {
-      setEphemeralVersion((v) => v + 1);
-    }
-  }, []);
-  // WHY a wrapper around setActiveThreadIdState: useChatStream calls
-  // setActiveThreadId() when it mints a new thread on the first message of a
-  // brand-new session (no prior `handleNewChat`).  We need to mark that id as
-  // ephemeral too — otherwise the same race re-appears.  Detect "this id is
-  // new to us" by comparing against the current activeThreadId; anything that
-  // is neither the current id nor present in `threads` (the server list) is
-  // assumed to be a fresh client-side mint.
-  const setActiveThreadId = useCallback(
-    (id: string) => {
-      // Defer the threads-list lookup to render time; here we just need to
-      // know whether this id was generated by us.  If it doesn't equal the
-      // current id and the caller is `useChatStream.send`, we conservatively
-      // mark it ephemeral — `markPersisted` runs once the backend confirms
-      // it on the next `refetchThreads`.
-      setActiveThreadIdState((prev) => {
-        if (prev !== id) {
-          // Only mark ephemeral when the id is not already known to the
-          // server (avoids redundantly suppressing a real thread fetch).
-          const known = threadsRef.current?.some((t) => t.thread_id === id);
-          if (!known) markEphemeral(id);
-        }
-        return id;
-      });
-    },
-    [markEphemeral],
-  );
-  // Stable ref to the threads list — read by setActiveThreadId without
-  // forcing the callback to re-bind every time the list refetches.
-  const threadsRef = useRef<Thread[] | undefined>(undefined);
-  // Imperative focus() handle on the composer textarea — used after a slash
-  // command pick so the user can keep typing immediately.
-  const composerRef = useRef<ChatComposerHandle | null>(null);
-  // ToolTraceDrawer (Q-8): ⌘D chord registered only when ?debug=1 is on URL.
-  const [traceDrawerOpen, setTraceDrawerOpen] = useState(false);
-  const isDebug = useDebugFlag();
-  useToolTraceChord(isDebug, setTraceDrawerOpen);
 
-  // ── TanStack Query subscriptions ───────────────────────────────────────────
+  // ── Thread search (T-E-5-03) ──────────────────────────────────────────────
+  // WHY two states: `searchInput` reacts immediately to typing (controlled
+  // input); `searchQuery` is the debounced value that drives filtering. This
+  // is the textbook pattern — avoids re-rendering the list on every keystroke.
+  const [searchInput, setSearchInput] = useState("");
+  const [searchQuery, setSearchQuery] = useState("");
+
+  // ── Refs ───────────────────────────────────────────────────────────────────
+  const messagesEndRef = useRef<HTMLDivElement>(null);
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
+  // PLAN-0053 T-F-6-05: preserve thread sidebar scroll across refetches.
+  // Without this, every threads refetch rebuilds the list DOM and the
+  // sidebar springs back to the top — disorienting when the user has
+  // scrolled to find an older thread. We capture scrollTop just before
+  // the refetch invalidation and restore it once the new list is mounted.
+  const sidebarScrollRef = useRef<HTMLDivElement>(null);
+  const savedScrollTopRef = useRef<number>(0);
+
+  // ── Data fetching ──────────────────────────────────────────────────────────
+
   const {
     data: threads,
     isLoading: threadsLoading,
     error: threadsError,
     refetch: refetchThreads,
   } = useQuery<Thread[]>({
+    // WHY qk.chat.threads() (was ["threads", accessToken]):
+    // accessToken in the key caused cache thrashing on every 30-min OIDC
+    // token rotation — the old entry became orphaned and a new fetch fired
+    // even though the user's identity hadn't changed. Auth is enforced by
+    // `enabled: !!accessToken`; the token itself need not be part of the
+    // cache identity. See PLAN-0070 D-1 T-D-1-03.
     queryKey: qk.chat.threads(),
     queryFn: () => createGateway(accessToken).getThreads(),
     enabled: !!accessToken,
     staleTime: 30_000,
   });
 
-  // Keep the threads ref synced for setActiveThreadId's "is this id new?" check.
-  // WHY useEffect (not useMemo): we read threads in an event-handler context
-  // (the setState updater inside setActiveThreadId), so a ref is the safe
-  // way to bridge render data into imperative code without re-binding.
-  useEffect(() => {
-    threadsRef.current = threads;
-  }, [threads]);
-
-  // Once the threads list refresh shows our ephemeral id is now server-known,
-  // promote it out of the ephemeral set so future renders fetch its detail.
-  useEffect(() => {
-    if (!threads || ephemeralThreadIdsRef.current.size === 0) return;
-    for (const id of Array.from(ephemeralThreadIdsRef.current)) {
-      if (threads.some((t) => t.thread_id === id)) {
-        markPersisted(id);
-      }
-    }
-  }, [threads, markPersisted]);
-
-  // PLAN-0102 W2 BP-FIX: gate the per-thread fetch on "thread is persisted".
-  // The query stays disabled while the id is still ephemeral (client-minted
-  // but never sent to rag-chat), avoiding the 404 spike documented in the
-  // user report.  The `ephemeralVersion` read is what makes React re-evaluate
-  // `enabled` once the set mutates.
-  const isEphemeralActive =
-    !!activeThreadId && ephemeralThreadIdsRef.current.has(activeThreadId);
-  void ephemeralVersion; // dependency tracking only
-
-  const { data: activeThread, isLoading: threadLoading } = useQuery<Thread>({
+  const {
+    data: activeThread,
+    isLoading: threadLoading,
+  } = useQuery<Thread>({
+    // WHY qk.chat.thread(id) (was ["thread", id, accessToken]):
+    // Same accessToken-in-key anti-pattern as above. Also: staleTime was 0,
+    // which forced a full refetch every time the chat panel re-rendered
+    // (e.g. on streaming state transitions). 30s staleTime means TanStack
+    // Query returns the cached thread instantly while the background refetch
+    // runs — preventing the "blank message list on re-mount" flash.
     queryKey: qk.chat.thread(activeThreadId ?? ""),
-    queryFn: async () => {
-      try {
-        return await createGateway(accessToken).getThread(activeThreadId!);
-      } catch (err) {
-        // Defensive: even with the ephemeral gate above, a stale localStorage
-        // entry / browser-back navigation / cache-restore could land us on a
-        // thread id the backend has since deleted.  Treat 404 as "thread does
-        // not exist yet" — return an empty in-memory stub so the message
-        // column renders gracefully instead of showing the error banner.
-        if (err instanceof GatewayError && err.status === 404) {
-          // Mark as ephemeral so we stop hammering the endpoint.
-          markEphemeral(activeThreadId!);
-          return {
-            thread_id: activeThreadId!,
-            title: null,
-            owner_id: "",
-            messages: [],
-            created_at: new Date().toISOString(),
-            updated_at: new Date().toISOString(),
-          } satisfies Thread;
-        }
-        throw err;
-      }
-    },
-    enabled: !!accessToken && !!activeThreadId && !isEphemeralActive,
+    queryFn: () => createGateway(accessToken).getThread(activeThreadId!),
+    enabled: !!accessToken && !!activeThreadId,
     staleTime: 30_000,
   });
 
-  // ── SSE chat stream — useChatStream owns send/abort/parse; page wires it. ─
+  // ── SSE chat stream ───────────────────────────────────────────────────────
+  // PLAN-0059 E-3 follow-up: the entire send/stream/abort lifecycle moved to
+  // `useChatStream`. The page just wires the inputs (auth token, active
+  // thread id, refetcher) and reads the resulting view state.
   const {
     localMessages,
     setLocalMessages,
     streaming,
     chatError,
     isStreaming,
+    // PLAN-0067 W11-5: activeTools drives the ToolCallIndicator inside StreamingBubble.
+    // Populated by tool_call SSE events, cleared on done/cancel.
     activeTools,
+    // PLAN-0082 Wave B: pending write-action confirmation (create_alert, etc.).
+    // pendingAction is non-null when the backend emits a ``pending_action`` SSE event.
+    // clearPendingAction is passed to ActionConfirmModal as `onDismiss`.
     pendingAction,
     clearPendingAction,
     send,
@@ -259,32 +243,119 @@ export default function ChatPage() {
     accessToken,
     activeThreadId,
     setActiveThreadId,
-    refetchThreads: () => void refetchThreads(),
+    refetchThreads: () => {
+      void refetchThreads();
+    },
   });
 
-  // FR-5.1 (HIGH-010): sync authoritative thread history → localMessages
-  // whenever the TanStack query resolves. The hook's isStreamingRef blocks
-  // concurrent send() calls, so this is safe even just after a stream ends.
+  // ── Effects ────────────────────────────────────────────────────────────────
+
+  // Sync activeThread messages into localMessages when the thread query succeeds.
+  // STAYS AT PAGE LEVEL: this depends on TanStack Query data (`activeThread`)
+  // which is owned by the page. The hook only manages transient streaming
+  // state — historical messages come from the server cache.
+  // FR-5.1 (HIGH-010): removed `&& !streaming` guard.
+  // The original guard prevented history from syncing when a stream just
+  // completed — exactly when the authoritative server messages should land.
+  // The ref-based `isStreamingRef` in `useChatStream` already blocks concurrent
+  // `send()` calls; this effect only replaces the optimistic log with the
+  // settled server state, which is always safe to do.
   useEffect(() => {
     if (activeThread && activeThread.thread_id === activeThreadId) {
       setLocalMessages(activeThread.messages);
     }
   }, [activeThread, activeThreadId, setLocalMessages]);
 
+  // Auto-scroll to bottom on new tokens / messages.
+  useEffect(() => {
+    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+  }, [localMessages, streaming?.text]);
+
+  // Debounce searchInput → searchQuery (200ms per task spec).
+  useEffect(() => {
+    const handle = setTimeout(() => setSearchQuery(searchInput), 200);
+    return () => clearTimeout(handle);
+  }, [searchInput]);
+
+  // PLAN-0053 T-F-6-05: capture+restore sidebar scroll across thread refetches.
+  //
+  // STRATEGY: the actual scroll container is the Radix ScrollArea Viewport,
+  // not the content div the ref points at. We walk up the tree to find the
+  // closest element with `data-radix-scroll-area-viewport`. Capturing scroll
+  // events on a ref (cheap, no re-render) preserves performance for long
+  // lists; restoring after every refetch keeps the user's position stable.
+  //
+  // WHY a ref + native scroll listener: updating React state on every scroll
+  // event would re-render the entire sidebar and tank performance for long
+  // thread lists. The ref pattern is the canonical fix.
+  useEffect(() => {
+    const inner = sidebarScrollRef.current;
+    if (!inner) return;
+    const viewport = inner.closest<HTMLElement>(
+      "[data-radix-scroll-area-viewport]",
+    );
+    if (!viewport) return;
+    const handleScroll = () => {
+      savedScrollTopRef.current = viewport.scrollTop;
+    };
+    viewport.addEventListener("scroll", handleScroll, { passive: true });
+    return () => viewport.removeEventListener("scroll", handleScroll);
+  }, []);
+
+  // Restore scrollTop after every refetch (when `threads` identity changes).
+  useEffect(() => {
+    const inner = sidebarScrollRef.current;
+    if (!inner) return;
+    const viewport = inner.closest<HTMLElement>(
+      "[data-radix-scroll-area-viewport]",
+    );
+    if (!viewport) return;
+    if (savedScrollTopRef.current > 0) {
+      viewport.scrollTop = savedScrollTopRef.current;
+    }
+  }, [threads]);
+
+  // ── Derived: filtered threads ─────────────────────────────────────────────
+
+  /**
+   * filteredThreads — apply the search filter (case-insensitive substring
+   * match against title + last assistant message snippet).
+   *
+   * WHY include the last message: users frequently remember a phrase from
+   * the answer ("...that NVDA report on Hopper...") even when they don't
+   * remember what they titled the thread.
+   */
+  const filteredThreads = useMemo(() => {
+    if (!threads) return undefined;
+    if (!searchQuery.trim()) return threads;
+    const needle = searchQuery.trim().toLowerCase();
+    return threads.filter((t) => {
+      const title = (t.title ?? "").toLowerCase();
+      // WHY check messages[]: the API may return summary message text via
+      // last_msg_at and we can also peek at the messages tuple when present.
+      const msgText = t.messages
+        ?.map((m) => m.content)
+        .join(" ")
+        .toLowerCase() ?? "";
+      return title.includes(needle) || msgText.includes(needle);
+    });
+  }, [threads, searchQuery]);
+
   // ── Handlers ───────────────────────────────────────────────────────────────
+
   const handleNewChat = useCallback(() => {
     const newId = crypto.randomUUID();
-    // BP-FIX: mark the freshly-minted id as ephemeral BEFORE we set it active
-    // so the activeThread query never fires `GET /v1/threads/{newId}` until
-    // rag-chat has persisted the thread (i.e. after the first message).
-    markEphemeral(newId);
-    setActiveThreadIdState(newId);
+    setActiveThreadId(newId);
+    // resetForThread aborts in-flight stream + clears messages/error in the hook.
     resetForThread();
     setInput("");
-  }, [resetForThread, markEphemeral]);
+    setTimeout(() => textareaRef.current?.focus(), 50);
+  }, [resetForThread]);
 
   const handleSelectThread = useCallback(
     (threadId: string) => {
+      // resetForThread aborts the active stream so its tokens don't bleed
+      // into the newly-selected thread's log.
       resetForThread();
       setActiveThreadId(threadId);
       setInput("");
@@ -298,50 +369,73 @@ export default function ChatPage() {
       try {
         await createGateway(accessToken).deleteThread(threadId);
         if (activeThreadId === threadId) {
-          // WHY setActiveThreadIdState (raw setter, not the wrapper):
-          // the wrapper signature expects a string id (used by useChatStream
-          // when minting a fresh id).  Clearing on delete uses the raw
-          // setter — there is no new id to mark ephemeral.
-          setActiveThreadIdState(null);
-          // Also drop the deleted id from the ephemeral set if it was there.
-          markPersisted(threadId);
+          setActiveThreadId(null);
+          // Hook owns the messages + streaming bubble for the active thread.
           resetForThread();
         }
         void refetchThreads();
       } catch {
-        // Silently fail — the thread may already be gone.
+        // Silently fail — the thread may already be gone
       }
     },
-    [accessToken, activeThreadId, refetchThreads, resetForThread, markPersisted],
+    [accessToken, activeThreadId, refetchThreads, resetForThread],
   );
 
-  // Optimistic rename (PLAN-0051 T-E-5-06): PATCH cache → server → rollback.
+  /**
+   * handleRenameThread — optimistic title update + rollback on PATCH error.
+   *
+   * PLAN-0051 T-E-5-06.
+   *
+   * WHY optimistic via setQueryData: TanStack Query's cache for the threads
+   * list is the single source of truth for the sidebar. Patching the cache
+   * directly avoids a flicker between "old title" and "new title via
+   * refetch". On error we restore the previous snapshot.
+   */
   const handleRenameThread = useCallback(
     async (threadId: string, newTitle: string) => {
       const prev = queryClient.getQueryData<Thread[]>(qk.chat.threads());
+      // Optimistic: patch the cache.
       if (prev) {
         queryClient.setQueryData<Thread[]>(
           qk.chat.threads(),
-          prev.map((t) => (t.thread_id === threadId ? { ...t, title: newTitle } : t)),
+          prev.map((t) =>
+            t.thread_id === threadId ? { ...t, title: newTitle } : t,
+          ),
         );
       }
       try {
         await createGateway(accessToken).updateThread(threadId, { title: newTitle });
+        // Refresh from authoritative server state once the PATCH resolves.
         void refetchThreads();
       } catch (err) {
-        if (prev) queryClient.setQueryData(qk.chat.threads(), prev);
+        // Rollback on failure.
+        if (prev) {
+          queryClient.setQueryData(qk.chat.threads(), prev);
+        }
         throw err;
       }
     },
     [accessToken, queryClient, refetchThreads],
   );
 
-  // Export the active thread as Markdown. Slash turns become synthetic user
-  // Messages — their cards have no value in a `.md` file.
+  /**
+   * handleExport — download the active thread as a markdown file.
+   *
+   * PLAN-0051 T-E-5-07.
+   *
+   * WHY assemble from current state (not a re-fetch): the user just saw
+   * the messages in localMessages — exporting exactly what they see is the
+   * principle of least surprise. We filter out SlashTurn entries because
+   * they aren't real Messages on the server side (their cards are
+   * client-rendered). For the export, the user's typed slash command is
+   * preserved as a "User" message; the card is omitted (re-rendering it
+   * server-side has no value in a markdown file).
+   */
   const handleExport = useCallback(() => {
     if (!activeThread) return;
     const messageList: Message[] = localMessages.flatMap((entry): Message[] => {
       if ("kind" in entry && entry.kind === "slash") {
+        // Convert the slash echo into a synthetic User Message for the export.
         return [
           {
             message_id: entry.message_id,
@@ -358,8 +452,13 @@ export default function ChatPage() {
     downloadThread(activeThread, messageList);
   }, [activeThread, localMessages]);
 
-  // Clear the textarea the moment the user hits Enter (UX expectation), then
-  // delegate to the hook's send().
+  /**
+   * handleSend — page-side wrapper around `useChatStream.send`.
+   *
+   * The hook owns the slash-command branch + LLM SSE flow. Here we only
+   * pull the current input, clear it (UX expectation: the textarea empties
+   * the moment the user hits Enter), then delegate.
+   */
   const handleSend = useCallback(async () => {
     const question = input.trim();
     if (!question) return;
@@ -367,211 +466,544 @@ export default function ChatPage() {
     await send(question);
   }, [input, send]);
 
-  // P2C-3 related-ticker chips: scan user messages for ticker-shaped tokens
-  // (1–5 char all-caps, blocklist filtered) and surface up to 5 as chips
-  // above the textarea. Chips append `$TICKER` to the input.
-  const relatedChips = useMemo(() => {
+  function handleKeyDown(e: React.KeyboardEvent<HTMLTextAreaElement>) {
+    if (e.key === "Enter" && !e.shiftKey) {
+      e.preventDefault();
+      void handleSend();
+    }
+  }
+
+  // ── P2C-3: Entity Quick-Chips — derived from current thread messages ─────
+  //
+  // WHY extract from message content: the thread data has no structured
+  // `context_entities` field today. We scan user messages for capitalized
+  // 1–5 char strings (standard ticker format) as a lightweight proxy.
+  // This gives the analyst one-click pivoting to instruments already
+  // mentioned in the thread without retyping. Bloomberg Terminal convention:
+  // entity chips appear above the command line for entities in context.
+  //
+  // WHY user messages only (not assistant): assistant messages contain tickers
+  // too, but also many false positives (e.g. "The SEC filed an 8-K about GHJ"
+  // where "SEC" and "GHJ" are not investable tickers). User messages are where
+  // the analyst explicitly named the instruments they care about.
+  //
+  // WHY max 5: limited chip rail space in the 320px input footer. 5 chips
+  // fit comfortably without wrapping to a second row or crowding the textarea.
+  const activeEntityChips = useMemo<string[]>(() => {
     if (!activeThreadId || localMessages.length === 0) return [];
+
     const TICKER_RE = /\b([A-Z]{1,5})\b/g;
+    // Common English words that match the pattern but aren't tickers.
+    const SKIP = new Set([
+      "I", "A", "AN", "THE", "AND", "OR", "NOT", "FOR", "OF", "IN",
+      "ON", "AT", "TO", "BY", "BE", "DO", "IF", "UP", "NO", "VS",
+      "AI", "US", "UK", "EU", "Q", "S", "W", "E", "N", "M",
+    ]);
+
     const seen = new Set<string>();
     for (const entry of localMessages) {
-      if ("kind" in entry) continue; // skip slash turns
+      // Only scan user messages — assistant messages have too many false positives.
+      if ("kind" in entry) continue; // slash turn
       const msg = entry as { role: string; content: string };
       if (msg.role !== "user") continue;
       let m: RegExpExecArray | null;
       const re = new RegExp(TICKER_RE.source, "g");
       while ((m = re.exec(msg.content)) !== null) {
         const tok = m[1];
-        if (!TICKER_BLOCKLIST.has(tok) && tok.length >= 2) seen.add(tok);
+        if (!SKIP.has(tok) && tok.length >= 2) {
+          seen.add(tok);
+        }
       }
     }
+
+    // Also surface the entity from the URL param if resolved.
     if (entityTicker) seen.add(entityTicker);
-    return Array.from(seen)
-      .slice(0, 5)
-      // Append "$TICKER" with a leading space so chips don't glue to the
-      // previous word; trimEnd guards against double spaces.
-      .map((ticker) => ({
-        ticker,
-        onPick: () =>
-          setInput((prev) => {
-            const trimmed = prev.trimEnd();
-            return trimmed ? `${trimmed} $${ticker}` : `$${ticker}`;
-          }),
-      }));
+
+    return [...seen].slice(0, 5);
   }, [activeThreadId, localMessages, entityTicker]);
 
-  // Slash-command autocomplete. Commands with an arg get a trailing space so
-  // the user can type the argument immediately; arg-less commands are
-  // dropped inline. filterCommands stays imported as a future hook.
+  /**
+   * appendToInput — append a string to the current textarea value.
+   *
+   * WHY a named helper (not inline onClick): the same append logic is
+   * needed both by entity chips and potentially by other future chip types
+   * (e.g. /news slash command shortcut). Naming it makes tests cleaner.
+   *
+   * WHY trim then re-add space: avoids double-spaces when the input already
+   * ends with a space, but also avoids gluing the appended text to the last
+   * word (e.g. "about AAPL$MSFT" instead of "about AAPL $MSFT").
+   */
+  const appendToInput = useCallback((suffix: string) => {
+    setInput((prev) => {
+      const trimmed = prev.trimEnd();
+      return trimmed ? `${trimmed}${suffix}` : suffix.trimStart();
+    });
+    // Re-focus the textarea so the user can keep typing immediately after
+    // clicking a chip — avoids a two-step click-then-click-textarea flow.
+    setTimeout(() => textareaRef.current?.focus(), 0);
+  }, []);
+
+  // ── Derived state ──────────────────────────────────────────────────────────
+
+  const isSendDisabled = !input.trim() || isStreaming || !accessToken;
   const showAutocomplete = input.trimStart().startsWith("/") && !input.includes("\n");
-  const autocomplete = showAutocomplete
-    ? {
-        visible: true,
-        query: input,
-        onPick: (cmd: SlashCommand) => {
-          setInput(`/${cmd.name}${cmd.argSpec ? " " : ""}`);
-          composerRef.current?.focus();
-        },
-      }
-    : undefined;
-  void filterCommands;
 
-  // Last assistant turn — fed to the trace drawer for ⌘D introspection.
-  const selectedTurn = useMemo<Message | null>(() => {
-    for (let i = localMessages.length - 1; i >= 0; i -= 1) {
-      const e = localMessages[i];
-      if (!("kind" in e) && (e as Message).role === "assistant") return e as Message;
-    }
-    return null;
-  }, [localMessages]);
+  // ── Render ────────────────────────────────────────────────────────────────
 
-  // Error banner: 401 → auth variant; everything else → generic.
-  const chatErrorForBanner: ChatError | null = useMemo(() => {
-    if (!chatError) return null;
-    const lower = chatError.toLowerCase();
-    if (lower.includes("401") || lower.includes("unauthor")) return { kind: "auth" };
-    return { kind: "generic", message: chatError };
-  }, [chatError]);
-
-  // In-thread starter-questions grid (entity-aware).
-  const starterGrid = useMemo(() => {
-    const list = entityTicker ? entityStarters(entityTicker) : STARTER_QUESTIONS;
-    return list.map((q) => (entityTicker ? q : q.replace("[TICKER]", entityTicker ?? "[TICKER]")));
-  }, [entityTicker]);
-
-  // Empty-state starter pick: pre-fill input then create the thread.
-  const handlePickStarter = useCallback(
-    (prompt: string) => {
-      setInput(prompt);
-      handleNewChat();
-    },
-    [handleNewChat],
-  );
-
-  // Three named slots in <ChatLayout> — the layout owns the 3-col grid + ⌘\ chord.
   return (
-    <>
-      <ChatLayout
-        threadRail={
-          <ThreadRail
-            threads={threads}
-            activeThreadId={activeThreadId}
-            isLoading={threadsLoading}
-            error={threadsError}
-            onRetry={() => void refetchThreads()}
-            onNewChat={handleNewChat}
-            onSelect={handleSelectThread}
-            onDelete={handleDeleteThread}
-            onRename={handleRenameThread}
-          />
-        }
-        messageColumn={
-          <>
-            {/* Welcome panel when no thread is selected. */}
-            {!activeThreadId ? (
-              <ChatEmptyState
-                starters={PORTFOLIO_STARTER_QUESTIONS}
-                onPickStarter={handlePickStarter}
-                onNewChat={handleNewChat}
-              />
-            ) : (
-              <>
-                {/* Active-thread header: title + Export button. */}
-                <div className="flex items-center justify-between border-b border-border px-3 py-1.5">
-                  <p className="min-w-0 flex-1 truncate text-[12px] font-semibold text-foreground">
-                    {activeThread?.title ?? PLACEHOLDER_THREAD_TITLE}
-                  </p>
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    onClick={handleExport}
-                    disabled={!activeThread || localMessages.length === 0}
-                    className="h-7 gap-1 border-border px-2 text-xs"
-                    aria-label="Export thread as Markdown"
-                  >
-                    <Download className="h-3 w-3" strokeWidth={1.5} />
-                    Export
-                  </Button>
-                </div>
+    <div className="flex h-full overflow-hidden">
+      {/* ════════════════ LEFT PANEL — Thread List ════════════════ */}
+      {/* Density bundle 2026-05-09: w-[280px] → w-[224px] (= w-56). The 280px
+          sidebar was inherited from a consumer-chatbot layout (Slack/Claude)
+          but on a terminal the message column is the high-density surface and
+          deserves the extra 56px of horizontal real estate. 224px still fits
+          the "New chat" button + search box + 11px thread title without
+          truncating the dev seed titles. */}
+      <aside
+        className="flex w-[224px] shrink-0 flex-col border-r border-border bg-background"
+        aria-label="Chat thread list"
+      >
+        {/* PLAN-0071 P2C-1: market session status strip — grounds the
+            intelligence panel in real market context so analysts know
+            at a glance whether they're in live-session or planning mode. */}
+        <MarketContextBanner />
 
-                {/* Auth-aware error banner above the list. */}
-                {chatErrorForBanner ? (
-                  <div className="px-3 pt-2">
-                    <ChatErrorBanner error={chatErrorForBanner} />
-                  </div>
-                ) : null}
+        {/* Header + New Chat button */}
+        {/* Density bundle 2026-05-09: px-4 py-3 → px-3 py-2; text-sm → text-[11px]
+            uppercase tracking-wide so the "Threads" label matches the rest of
+            the platform's terminal section labels (e.g. WatchlistPanel, Alerts). */}
+        <div className="flex items-center justify-between border-b border-border px-3 py-2">
+          <div className="flex items-center gap-1.5">
+            <MessageSquare className="h-3.5 w-3.5 text-primary" strokeWidth={1.5} />
+            <span className="text-[11px] font-semibold uppercase tracking-[0.08em] text-foreground">
+              Threads
+            </span>
+          </div>
+          <Button
+            size="sm"
+            variant="outline"
+            onClick={handleNewChat}
+            className="h-7 gap-1 border-primary/30 px-2 text-xs text-primary hover:bg-primary/10"
+            aria-label="Start new chat"
+          >
+            <Plus className="h-3 w-3" strokeWidth={1.5} />
+            New chat
+          </Button>
+        </div>
 
-                {/* Flat message column (auto-scroll + streaming projection live in the list). */}
-                <ChatMessageList
-                  messages={localMessages}
-                  streaming={streaming}
-                  activeTools={activeTools}
-                  threadLoading={threadLoading}
-                  emptyState={
-                    <div className="grid grid-cols-2 gap-2 p-3">
-                      {starterGrid.map((q, i) => (
-                        <button
-                          key={i}
-                          type="button"
-                          className="rounded-[2px] border border-border bg-card cursor-pointer p-3 text-left hover:border-primary/40 hover:bg-muted/40 text-[11px] leading-relaxed text-foreground transition-colors duration-0"
-                          onClick={() => setInput(q)}
-                        >
-                          {q}
-                        </button>
-                      ))}
-                    </div>
-                  }
-                />
+        {/* Thread search box (T-E-5-03) — debounced 200ms via effect above */}
+        <div className="border-b border-border/40 p-2">
+          <div className="relative">
+            <Search className="absolute left-2 top-1/2 h-3 w-3 -translate-y-1/2 text-muted-foreground" strokeWidth={1.5} />
+            <input
+              type="search"
+              value={searchInput}
+              onChange={(e) => setSearchInput(e.target.value)}
+              placeholder="Search threads…"
+              aria-label="Search threads"
+              className={cn(
+                "w-full rounded-[2px] border border-border bg-muted",
+                "pl-7 pr-2 py-1.5 text-xs text-foreground",
+                "placeholder:text-muted-foreground",
+                "focus:outline-none focus:ring-1 focus:ring-primary",
+              )}
+            />
+          </div>
+        </div>
 
-                <ChatComposer
-                  ref={composerRef}
-                  value={input}
-                  onChange={setInput}
-                  onSend={() => void handleSend()}
-                  onCancel={handleCancelStream}
-                  isStreaming={isStreaming}
-                  canSend={!!accessToken}
-                  entityContext={
-                    entityIdFromUrl
-                      ? {
-                          label:
-                            entityTicker ?? (looksLikeUuid ? "Loading…" : entityIdFromUrl),
-                        }
-                      : undefined
-                  }
-                  relatedChips={relatedChips}
-                  autocomplete={autocomplete}
-                />
-              </>
+        {/* Thread list body */}
+        {/* PLAN-0053 T-F-6-05: ref attached to the inner content div. The
+            useEffect below walks up to the Radix ScrollArea Viewport (which
+            is the actual scroll container) by reading the
+            `[data-radix-scroll-area-viewport]` attribute on the parent. Direct
+            ref on the content gives a stable handle without forking
+            scroll-area.tsx. */}
+        <ScrollArea className="flex-1">
+          <div ref={sidebarScrollRef} className="space-y-0.5 p-2">
+            {threadsLoading && (
+              <div className="space-y-1.5 p-1" aria-label="Loading threads">
+                {[...Array(5)].map((_, i) => (
+                  <Skeleton key={i} className="h-8 w-full rounded-[2px]" />
+                ))}
+              </div>
             )}
-          </>
-        }
-        contextRail={
-          <ChatContextRail
-            threadId={activeThreadId ?? ""}
-            messages={localMessages.filter((e): e is Message => !("kind" in e))}
-            activeEntity={
-              entityIdFromUrl
-                ? { id: entityIdFromUrl, ticker: entityTicker ?? null }
-                : null
-            }
-          />
-        }
-      />
 
-      {/* PLAN-0082 Wave B write-action confirmation modal (portal'd to body). */}
+            {threadsError && !threadsLoading && (
+              // PLAN-0052 platform-QA round 5 (2026-05-01): better thread-list
+              // error UX. The previous banner just said "Failed to load
+              // threads, check your connection" which was misleading the most
+              // common cause was a 401 from a lapsed JWT (no auto-refresh).
+              // Detect 401 specifically and surface a Re-authenticate CTA;
+              // for everything else fall back to the generic message + Retry.
+              <div className="rounded-[2px] border border-destructive/30 bg-destructive/10 p-3 text-xs text-destructive">
+                {(() => {
+                  const msg = (threadsError as Error)?.message ?? "";
+                  const is401 =
+                    msg.includes("401") ||
+                    msg.toLowerCase().includes("unauthor");
+                  return is401 ? (
+                    <>
+                      <p className="font-medium">Your session expired.</p>
+                      <p className="mt-1">
+                        Sign in again to load your conversations.
+                      </p>
+                      <button
+                        type="button"
+                        onClick={() => router.push("/login?redirect_to=/chat")}
+                        className="mt-2 rounded-[2px] border border-destructive/40 px-2 py-1 text-[11px] font-medium hover:bg-destructive/20"
+                      >
+                        Sign in
+                      </button>
+                    </>
+                  ) : (
+                    <>
+                      <p>Failed to load threads. Check your connection.</p>
+                      <button
+                        type="button"
+                        onClick={() => void refetchThreads()}
+                        className="mt-2 rounded-[2px] border border-destructive/40 px-2 py-1 text-[11px] font-medium hover:bg-destructive/20"
+                      >
+                        Retry
+                      </button>
+                    </>
+                  );
+                })()}
+              </div>
+            )}
+
+            {!threadsLoading && !threadsError && (!threads || threads.length === 0) && (
+              <p className="px-3 py-3 text-xs text-muted-foreground">
+                No conversations yet. Click &ldquo;New chat&rdquo; to begin.
+              </p>
+            )}
+
+            {/* WHY filteredThreads (was threads): the search box narrows the
+                list client-side. When search is empty filteredThreads === threads. */}
+            {filteredThreads?.length === 0 && threads && threads.length > 0 && (
+              <p className="px-3 py-3 text-xs text-muted-foreground">
+                No threads match &ldquo;{searchQuery}&rdquo;.
+              </p>
+            )}
+
+            {filteredThreads?.map((thread) => (
+              <ThreadItem
+                key={thread.thread_id}
+                thread={thread}
+                isActive={thread.thread_id === activeThreadId}
+                onSelect={handleSelectThread}
+                onDelete={handleDeleteThread}
+                onRename={handleRenameThread}
+              />
+            ))}
+          </div>
+        </ScrollArea>
+      </aside>
+
+      {/* ════════════════ PLAN-0082 Wave B — Action Confirm Modal ════════════ */}
+      {/* WHY outside the right panel div: Radix Dialog uses a Portal to render
+          the overlay + content at the document body level. Placing this inside
+          the layout div would still work (Portal escapes the DOM hierarchy), but
+          keeping it as a sibling to the panels makes the render tree clearer —
+          the modal is not a child of either panel; it floats above both. */}
       <ActionConfirmModal
         pendingAction={pendingAction}
         accessToken={accessToken}
         onDismiss={clearPendingAction}
       />
 
-      {/* Q-8 debug drawer — component self-gates on ?debug=1. */}
-      <ToolTraceDrawer
-        open={traceDrawerOpen}
-        onClose={() => setTraceDrawerOpen(false)}
-        turn={selectedTurn}
-      />
-    </>
+      {/* ════════════════ RIGHT PANEL — Chat Area ════════════════ */}
+      <div className="flex flex-1 flex-col overflow-hidden">
+        {/* Welcome / empty state — PLAN-0071 P2C-4: analyst-specific copy
+            replaces the generic chatbot welcome. The two-line hierarchy
+            (label + description) mirrors Bloomberg COMMAND BAR prompt
+            style — short imperative, then scope clarification. */}
+        {!activeThreadId && (
+          // WHY p-3 (was p-4): the empty-state welcome is rendered inside an
+          // already-bounded panel; 12px padding keeps the welcome text close
+          // to the surrounding panel chrome instead of floating in 16px ports.
+          <div className="flex flex-1 flex-col items-center justify-center gap-3 bg-background p-3 text-center">
+            <div className="space-y-1">
+              <p className="font-mono text-[10px] font-semibold uppercase tracking-[0.10em] text-muted-foreground">
+                Analyst Intelligence
+              </p>
+              <p className="max-w-[280px] text-[11px] leading-relaxed text-muted-foreground">
+                Research-grade Q&A on earnings, SEC filings, macro, and your
+                portfolio — grounded in real source documents, not hallucination.
+              </p>
+            </div>
+
+            {/* PLAN-0071 P2C-2: portfolio-scoped starter questions shown in
+                the no-thread-selected panel. Analysts landing here have no
+                active entity context — portfolio-level questions surface the
+                most immediately useful research directions. */}
+            <div className="mt-1 grid w-full max-w-[440px] grid-cols-2 gap-1.5">
+              {PORTFOLIO_STARTER_QUESTIONS.map((q, i) => (
+                <button
+                  key={i}
+                  type="button"
+                  onClick={() => {
+                    // Pre-fill the input state first — the textarea is not
+                    // mounted yet (activeThreadId is null), but setInput just
+                    // sets React state. When handleNewChat() sets activeThreadId
+                    // and the input area mounts, it will read the already-set value.
+                    setInput(q);
+                    handleNewChat();
+                  }}
+                  className="rounded-[2px] border border-border bg-card p-2.5 text-left text-[10px] leading-relaxed text-foreground hover:border-primary/40 hover:bg-muted/40 transition-colors duration-0"
+                >
+                  {q}
+                </button>
+              ))}
+            </div>
+
+            <Button
+              size="sm"
+              onClick={handleNewChat}
+              className="gap-1.5 bg-primary text-primary-foreground hover:bg-primary/90"
+            >
+              <Plus className="h-3.5 w-3.5" strokeWidth={1.5} />
+              New conversation
+            </Button>
+          </div>
+        )}
+
+        {activeThreadId && (
+          <>
+            {/* Thread header — title + Export button.
+                WHY a header strip (T-E-5-07): the export button needs a
+                conventional resting place; a dedicated row above the messages
+                also reinforces the active thread title at the top of the panel.
+                WHY px-3 (was px-4 py-2): matches the TopBar/sub-header
+                12-px horizontal rhythm — pass-2 polish defect 1G. */}
+            <div className="flex items-center justify-between border-b border-border px-3 py-1.5">
+              {/* Density bundle 2026-05-09: text-sm (14px) → text-[12px] for the
+                  thread title; py-2 → py-1.5 to match TopBar rhythm. The thread
+                  title is a header label, not data — 12px keeps it readable
+                  while pulling it closer to the surrounding 11px text scale. */}
+              <div className="min-w-0 flex-1">
+                <p className="truncate text-[12px] font-semibold text-foreground">
+                  {activeThread?.title ?? PLACEHOLDER_THREAD_TITLE}
+                </p>
+              </div>
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={handleExport}
+                disabled={!activeThread || localMessages.length === 0}
+                className="h-7 gap-1 border-border px-2 text-xs"
+                aria-label="Export thread as Markdown"
+              >
+                <Download className="h-3 w-3" strokeWidth={1.5} />
+                Export
+              </Button>
+            </div>
+
+            {/* Message list */}
+            {/* Density bundle 2026-05-09: gap-3 → gap-2 between messages.
+                Tighter inter-message gap reduces wasted vertical real estate
+                without losing message-boundary clarity (each bubble has its
+                own bg + rounded corners). */}
+            <ScrollArea className="flex-1 bg-background">
+              <div className="flex flex-col gap-2 p-3">
+                {/* WHY p-3 (was p-4): terminal-density reading area; matches
+                    the post-F3 chat empty-state padding. Pass-2 defect 1G. */}
+                {threadLoading && (
+                  <div className="space-y-4" aria-label="Loading messages">
+                    {[...Array(3)].map((_, i) => (
+                      <Skeleton
+                        key={i}
+                        className={`h-16 w-2/3 rounded-[2px] ${
+                          i % 2 === 0 ? "self-end" : "self-start"
+                        }`}
+                      />
+                    ))}
+                  </div>
+                )}
+
+                {/* Starter questions — entity-aware (T-E-5-05) */}
+                {!threadLoading && localMessages.length === 0 && !streaming && (
+                  <div
+                    className={cn(
+                      "grid gap-2 p-3",
+                      // WHY 2 cols for 4 entity starters and 6 generic ones
+                      // alike: same visual rhythm regardless of count.
+                      "grid-cols-2",
+                    )}
+                  >
+                    {(entityTicker ? entityStarters(entityTicker) : STARTER_QUESTIONS).map(
+                      (q, i) => {
+                        // For generic starters we substitute [TICKER] with
+                        // the URL ticker if available (legacy behaviour
+                        // preserved). Entity starters already have the ticker
+                        // baked in.
+                        const display = entityTicker
+                          ? q
+                          : q.replace("[TICKER]", entityTicker ?? "[TICKER]");
+                        return (
+                          <button
+                            key={i}
+                            type="button"
+                            className={cn(
+                              "rounded-[2px] border border-border bg-card",
+                              "cursor-pointer p-3 text-left",
+                              "hover:border-primary/40 hover:bg-muted/40",
+                              "text-[11px] leading-relaxed text-foreground",
+                              "transition-colors duration-0",
+                            )}
+                            onClick={() => setInput(display)}
+                          >
+                            {display}
+                          </button>
+                        );
+                      },
+                    )}
+                  </div>
+                )}
+
+                {/* Render messages + slash turns */}
+                {localMessages.map((entry) => {
+                  if ("kind" in entry && entry.kind === "slash") {
+                    return <SlashTurnBlock key={entry.message_id} turn={entry} />;
+                  }
+                  const msg = entry as Message;
+                  return <MessageBubble key={msg.message_id} message={msg} />;
+                })}
+
+                {/* In-flight SSE stream */}
+                {/* FR-5.5 (MED-012): always render StreamingBubble when streaming is
+                    non-null. StreamingBubble already handles the "no text yet" case
+                    internally via ToolCallIndicator (shows tool spinners while
+                    streaming.text === ""). The TypingIndicator fallback was redundant
+                    and caused a brief flash between tool events and text arrival. */}
+                {streaming ? (
+                  // Pass activeTools so ToolCallIndicator renders above the streaming text.
+                  // WHY: during multi-tool responses the tool indicators appear first,
+                  // then text flows in below them once S8 starts generating.
+                  <StreamingBubble streaming={streaming} activeTools={activeTools} />
+                ) : null}
+
+                {chatError && (
+                  <div className="rounded-[2px] border border-destructive/30 bg-destructive/10 p-3 text-xs text-destructive">
+                    {chatError}
+                  </div>
+                )}
+
+                <div ref={messagesEndRef} />
+              </div>
+            </ScrollArea>
+
+            {/* ── Input area ─────────────────────────────────────────────── */}
+            <div className="border-t border-border bg-background p-3">
+              {entityIdFromUrl && (
+                <div className="mb-2 flex items-center gap-2 border-b border-border/40 pb-2">
+                  <span className="rounded-[2px] bg-primary/10 px-2 py-0.5 font-mono text-[11px] text-primary">
+                    {/* QA-iter2 N-MIN-1: never expose the raw UUID in the
+                       chrome — fall back to "Loading…" while the entity
+                       resolves and to "—" if resolution fails outright. */}
+                    Context: {entityTicker ?? (looksLikeUuid ? "Loading…" : entityIdFromUrl)}
+                  </span>
+                  <span className="text-[10px] text-muted-foreground">
+                    questions will focus on this entity
+                  </span>
+                </div>
+              )}
+
+              {isStreaming && (
+                <div className="mb-2 flex justify-center">
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    onClick={handleCancelStream}
+                    className="h-7 border-destructive/30 px-3 text-xs text-destructive hover:bg-destructive/10"
+                  >
+                    Stop generating
+                  </Button>
+                </div>
+              )}
+
+              {/* P2C-3: Entity quick-chips — visible in active threads that
+                  have at least one user message mentioning a ticker.
+                  WHY entity chips: quick-pivot to related instruments. Clicking
+                  a chip appends "$TICKER" to the input so analysts can ask
+                  follow-up questions about mentioned entities without retyping.
+                  Bloomberg Terminal convention: quick-select chips for entities
+                  in context appear above the command line. */}
+              {activeEntityChips.length > 0 && !showAutocomplete && (
+                <div className="mb-2 flex flex-wrap items-center gap-1">
+                  {/* WHY "Related:" label: makes the chip rail self-explanatory
+                      to analysts who haven't seen it before. Without a label the
+                      row of mono chips could be mistaken for keyboard shortcuts. */}
+                  <span className="font-mono text-[9px] uppercase tracking-[0.08em] text-muted-foreground/60">
+                    Related:
+                  </span>
+                  {activeEntityChips.map((ticker) => (
+                    <button
+                      key={ticker}
+                      type="button"
+                      onClick={() => appendToInput(` $${ticker}`)}
+                      title={`Add ${ticker} to query`}
+                      // WHY rounded-[2px]: terminal 2px radius rule.
+                      // WHY tabular-nums: ticker characters are numbers/letters at
+                      // a uniform width — tabular-nums prevents layout shift when
+                      // the chip content changes (e.g. on thread switch).
+                      className="rounded-[2px] border border-border/70 bg-muted/30 px-1.5 py-0.5 font-mono text-[10px] tabular-nums text-foreground transition-colors hover:border-primary/50 hover:text-primary"
+                    >
+                      {ticker}
+                    </button>
+                  ))}
+                </div>
+              )}
+
+              {/* Slash command autocomplete — visible while typing /... */}
+              {showAutocomplete && (
+                <SlashCommandAutocomplete
+                  query={input}
+                  onPick={(cmd) => {
+                    // Fill the input with the verb and a trailing space so the
+                    // user can type args. For arg-less commands the trailing
+                    // space is harmless and Enter submits immediately.
+                    setInput(`/${cmd.name}${cmd.argSpec ? " " : ""}`);
+                    textareaRef.current?.focus();
+                  }}
+                />
+              )}
+
+              <div className="flex items-end gap-2">
+                <textarea
+                  ref={textareaRef}
+                  value={input}
+                  onChange={(e) => setInput(e.target.value)}
+                  onKeyDown={handleKeyDown}
+                  placeholder="Ask about markets, companies, news…  Type / for commands. (Enter to send, Shift+Enter for newline)"
+                  rows={2}
+                  disabled={isStreaming}
+                  maxLength={2000}
+                  // Density bundle 2026-05-09: textarea text-sm (14px) →
+                  // text-[12px] to align with the rest of the chat surface
+                  // density. The 14px size felt like a consumer-app input.
+                  className="flex-1 resize-none rounded-[2px] border border-border bg-muted px-3 py-2 text-[12px] text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-primary disabled:cursor-not-allowed disabled:bg-[hsl(var(--disabled-bg))] disabled:text-[hsl(var(--disabled-foreground))] disabled:border-[hsl(var(--disabled-border))]"
+                  aria-label="Chat message input"
+                />
+
+                <Button
+                  onClick={() => void handleSend()}
+                  disabled={isSendDisabled}
+                  className="h-10 w-10 shrink-0 bg-primary p-0 text-primary-foreground hover:bg-primary/90 disabled:opacity-40"
+                  aria-label="Send message"
+                >
+                  <Send className="h-4 w-4" strokeWidth={1.5} />
+                </Button>
+              </div>
+
+              {input.length > 1500 && (
+                <p className="mt-1 font-mono text-[10px] text-muted-foreground">
+                  {input.length} / 2000
+                </p>
+              )}
+            </div>
+          </>
+        )}
+      </div>
+    </div>
   );
 }

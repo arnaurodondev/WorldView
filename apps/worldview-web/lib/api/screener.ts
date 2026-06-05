@@ -3,7 +3,6 @@
  */
 
 import type {
-  NLScreenerResponse,
   ScreenerField,
   ScreenerRequest,
   ScreenerResponse,
@@ -35,66 +34,9 @@ export function createScreenerApi(t: string | undefined) {
      * `sector → gics_sector` here in the gateway client so the UI types
      * line up. `entity_id` is computed as a Worldview-conventional
      * `entity-{ticker-lc}` slug when the backend doesn't provide one
-     * (matches the IndexStrip / GlobalSearch fallback convention) so
+     * (matches the IndexTicker / GlobalSearch fallback convention) so
      * row-click navigation lands on the correct entity page.
      */
-    /**
-     * translateNLScreenerQuery — POST /v1/screener/nl-translate
-     * Converts a natural-language query ("profitable tech stocks under $50") into a
-     * structured { filters, explanation } object the screener can apply directly.
-     * Returns `explanation` (LLM-generated 1-sentence description) + `filters` map.
-     * PLAN-0092 Wave A.
-     */
-    translateNLScreenerQuery(query: string): Promise<NLScreenerResponse> {
-      return apiFetch<NLScreenerResponse>("/v1/screener/nl-translate", {
-        method: "POST",
-        body: { query },
-        token: t,
-      });
-    },
-
-    /**
-     * getScreenerCount — debounced live-count probe.
-     *
-     * PRD-0089 Wave I-A · T-IA-11.
-     *
-     * WHY a dedicated method (not `runScreener` with `limit: 1`): callers
-     * MUST only receive `{ total }` — never the row payload. Hard-coding
-     * `limit: 1` here means a future `runScreener` callsite cannot
-     * accidentally drop pagination and end up making a count-only query
-     * that returns a single row to render. Returning a stripped object
-     * keeps the TanStack Query selector tiny (just an integer).
-     *
-     * WHY limit=1 (not 0): the backend `POST /v1/fundamentals/screen`
-     * historically interprets `limit: 0` as "all rows" on some adapters.
-     * `limit: 1` is the safe minimum that guarantees a single-row scan.
-     *
-     * USED BY: the screener live-count hook (debounced 250 ms while the
-     * user edits filters in the popover, before they click Apply).
-     */
-    async getScreenerCount(
-      request: ScreenerRequest,
-    ): Promise<{ total: number }> {
-      // WHY spread + override: callers pass the full ScreenerRequest from the
-      // popover; we keep their filters but force-cap `limit` to 1 so the
-      // response stays a single row regardless of what the popover sent.
-      const probe: ScreenerRequest = { ...request, limit: 1, offset: 0 };
-      const raw = await apiFetch<{ total?: number; results?: unknown[] }>(
-        "/v1/fundamentals/screen",
-        { method: "POST", body: probe, token: t },
-      );
-      // WHY fall back to results.length: not all backend versions echo
-      // `total` when the result set is < limit. The count probe must still
-      // surface a number rather than NaN so the UI badge can render.
-      const total =
-        typeof raw.total === "number"
-          ? raw.total
-          : Array.isArray(raw.results)
-            ? raw.results.length
-            : 0;
-      return { total };
-    },
-
     async runScreener(request: ScreenerRequest): Promise<ScreenerResponse> {
       // WHY GET for no-filter case: the POST screener uses INNER JOIN on each
       // filter metric, which excludes instruments that lack that metric's data.
@@ -140,7 +82,7 @@ export function createScreenerApi(t: string | undefined) {
           // PLAN-0052: synthesize entity_id from ticker when the backend
           // doesn't provide one. ADR-F-12 says entity_id is the canonical
           // navigation key for /instruments/[entityId]; the GlobalSearch
-          // + IndexStrip chips already use this `entity-{ticker-lc}`
+          // + IndexTicker chips already use this `entity-{ticker-lc}`
           // convention, so the screener row click now lands on a real
           // page instead of /instruments/undefined.
           // BP-330: entity_id falls back to the raw instrument_id string so
@@ -170,18 +112,6 @@ export function createScreenerApi(t: string | undefined) {
           market_impact_score: num(
             row["market_impact_score"] ?? metrics["market_impact_score"],
           ),
-          // PLAN-0092 Wave C: new default + opt-in metric columns
-          forward_pe: num(row["forward_pe"] ?? metrics["forward_pe"]),
-          dividend_yield: num(row["dividend_yield"] ?? metrics["dividend_yield"]),
-          revenue_growth_yoy: num(row["revenue_growth_yoy"] ?? metrics["revenue_growth_yoy"]),
-          roe: num(row["roe"] ?? metrics["roe"] ?? metrics["return_on_equity"]),
-          operating_margin_ttm: num(
-            row["operating_margin_ttm"] ?? metrics["operating_margin_ttm"],
-          ),
-          enterprise_value_ebitda: num(
-            row["enterprise_value_ebitda"] ?? metrics["enterprise_value_ebitda"],
-          ),
-          avg_volume_30d: num(row["avg_volume_30d"] ?? metrics["avg_volume_30d"]),
         } as unknown as ScreenerResult;
       });
       return {

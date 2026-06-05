@@ -168,7 +168,7 @@ export default function SettingsDataPage() {
       {/* ── Retention ───────────────────────────────────────────────── */}
       <Card className="border-border/60 bg-card">
         <CardHeader className="pb-3">
-          <CardTitle className="flex items-center gap-2 text-[14px] font-medium text-foreground">
+          <CardTitle className="flex items-center gap-2 text-sm font-medium text-foreground">
             <History className="h-4 w-4 text-primary" aria-hidden="true" strokeWidth={1.5} />
             History retention
           </CardTitle>
@@ -182,7 +182,7 @@ export default function SettingsDataPage() {
           {/* Chat retention — wired to PreferencesContext (FR-6.2 / CRIT-003) */}
           <div className="flex items-start justify-between gap-4 rounded-[2px] border border-border/40 bg-card/30 p-3">
             <div className="min-w-0 flex-1">
-              <Label htmlFor="chat-retention" className="text-[14px] font-medium text-foreground">
+              <Label htmlFor="chat-retention" className="text-sm font-medium text-foreground">
                 Chat history
               </Label>
               <p className="mt-0.5 text-xs text-muted-foreground">
@@ -214,7 +214,7 @@ export default function SettingsDataPage() {
           {/* Search retention — wired to same context field (FR-6.5) */}
           <div className="flex items-start justify-between gap-4 rounded-[2px] border border-border/40 bg-card/30 p-3">
             <div className="min-w-0 flex-1">
-              <Label htmlFor="search-retention" className="text-[14px] font-medium text-foreground">
+              <Label htmlFor="search-retention" className="text-sm font-medium text-foreground">
                 Search & view history
               </Label>
               <p className="mt-0.5 text-xs text-muted-foreground">
@@ -254,7 +254,7 @@ export default function SettingsDataPage() {
       {/* ── Export ──────────────────────────────────────────────────── */}
       <Card className="border-border/60 bg-card">
         <CardHeader className="pb-3">
-          <CardTitle className="flex items-center gap-2 text-[14px] font-medium text-foreground">
+          <CardTitle className="flex items-center gap-2 text-sm font-medium text-foreground">
             <Download className="h-4 w-4 text-primary" aria-hidden="true" strokeWidth={1.5} />
             Export your data
           </CardTitle>
@@ -266,7 +266,7 @@ export default function SettingsDataPage() {
         <CardContent>
           <div className="flex items-center justify-between gap-3 rounded-[2px] border border-border/40 bg-card/30 p-3">
             <div className="min-w-0">
-              <p className="text-[14px] font-medium text-foreground">Request data export</p>
+              <p className="text-sm font-medium text-foreground">Request data export</p>
               <p className="mt-0.5 text-xs text-muted-foreground">
                 We&apos;ll email you a download link. JSON + CSV format.
               </p>
@@ -281,7 +281,7 @@ export default function SettingsDataPage() {
       {/* ── Delete account ──────────────────────────────────────────── */}
       <Card className="border-destructive/40 bg-card">
         <CardHeader className="pb-3">
-          <CardTitle className="flex items-center gap-2 text-[14px] font-medium text-destructive">
+          <CardTitle className="flex items-center gap-2 text-sm font-medium text-destructive">
             <FileWarning className="h-4 w-4" aria-hidden="true" strokeWidth={1.5} />
             Delete account
           </CardTitle>
@@ -293,7 +293,7 @@ export default function SettingsDataPage() {
         <CardContent>
           <div className="space-y-3 rounded-[2px] border border-destructive/30 bg-destructive/5 p-3">
             <div>
-              <p className="text-[14px] font-medium text-foreground">What gets deleted</p>
+              <p className="text-sm font-medium text-foreground">What gets deleted</p>
               <ul className="mt-1.5 list-disc space-y-0.5 pl-5 text-xs text-muted-foreground">
                 <li>All portfolios, watchlists, and saved screener configurations</li>
                 <li>Brokerage connections and synced transactions</li>

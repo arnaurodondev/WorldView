@@ -4,7 +4,6 @@ Block 13D-3: Worker 13D-3 calls this use case per entity.
 
 Pipeline:
   1. Load entity context (READ session — R27 read replica).
-     Includes top-3 recent article claims from intelligence_db.claims for grounding.
   2. Build input_snapshot + compute snapshot_hash.
   3. Idempotency check via narrative_repo.find_by_input_snapshot.
   4. Sanitize LLM inputs via prompts.knowledge.alias.sanitize_description.
@@ -12,6 +11,9 @@ Pipeline:
   6. Compute health_score (data_completeness*0.4 + evidence_freshness*0.3 + density*0.3).
   7. Persist via WRITE session: narrative_repo.insert_and_promote + outbox event.
   8. Increment Prometheus metrics.
+
+NOTE: S5 articles are NOT fetched in this wave (articles=[]).  The HTTP client
+for cross-service calls will be added in a later wave.
 """
 
 from __future__ import annotations
@@ -263,14 +265,12 @@ class GenerateNarrativeUseCase:
             await narrative_repo_w.insert_and_promote(version, write_session, health_score=health_score)
 
             # Build and publish outbox event (Avro-serialized)
-            narrative_event_id = new_uuid7()  # type: ignore[no-any-return]
-            event_payload = self._build_outbox_event(version, reason, event_id=narrative_event_id)
+            event_payload = self._build_outbox_event(version, reason)
             outbox_repo = OutboxRepository(write_session)
             await outbox_repo.append(
                 topic=_ENTITY_NARRATIVE_GENERATED_TOPIC,
                 partition_key=str(entity_id),
                 payload_avro=event_payload,
-                event_id=narrative_event_id,
             )
 
             await write_session.commit()
@@ -348,23 +348,6 @@ LIMIT 5
             )
             contra_rows = contra_result.fetchall()
 
-            # Top-3 most recent non-neutral claims for grounding context.
-            # Claims are extracted from ingested articles (intelligence_db.claims)
-            # and represent the highest-signal factual assertions about the entity.
-            # Using them prevents hallucination by anchoring the LLM to verified facts
-            # (PRD-0074 anti-hallucination hardening, 2026-05-23).
-            claims_result = await session.execute(
-                text("""
-SELECT claim_text FROM claims
-WHERE subject_entity_id = CAST(:entity_id AS uuid)
-  AND polarity != 'neutral'
-ORDER BY created_at DESC
-LIMIT 3
-"""),
-                {"entity_id": str(entity_id)},
-            )
-            claim_rows = claims_result.fetchall()
-
         relations = [
             {
                 "relation_id": str(row[0]),
@@ -386,10 +369,6 @@ LIMIT 3
             for row in contra_rows
         ]
 
-        # Extract claim_text strings from the result rows.
-        # claim_text is the first (and only) column selected.
-        claims: list[str] = [str(row[0]) for row in claim_rows if row[0]]
-
         return {
             "entity": {
                 "entity_id": str(entity_row[0]),
@@ -400,9 +379,6 @@ LIMIT 3
             "relations": relations,
             "articles": [],  # NOTE: S5 HTTP client not implemented in Wave C
             "contradictions": contradictions,
-            # Top-3 recent non-neutral claims from intelligence_db.claims.
-            # Populated by the extraction pipeline; empty list when no claims exist.
-            "claims": claims,
         }
 
     def _build_snapshot(self, entity_ctx: dict[str, Any]) -> tuple[dict[str, Any], str]:
@@ -417,9 +393,6 @@ LIMIT 3
             "relations": entity_ctx["relations"],
             "articles": [],
             "contradictions": entity_ctx["contradictions"],
-            # Include claims in the snapshot so that new claims arriving after the
-            # last generation trigger a fresh narrative (idempotency key changes).
-            "claims": entity_ctx.get("claims", []),
         }
         canonical_json = json.dumps(snapshot, sort_keys=True, default=str)
         snapshot_hash = hashlib.sha256(canonical_json.encode()).hexdigest()
@@ -503,8 +476,7 @@ LIMIT 3
             relations,
             entity_ctx.get("contradictions", []),
         )
-        claims = entity_ctx.get("claims", [])
-        prompt = self._build_prompt(entity_name, entity_type, clean_relations, clean_contradictions, claims)
+        prompt = self._build_prompt(entity_name, entity_type, clean_relations, clean_contradictions)
 
         # PLAN-0088 P0-7: free-form narrative chat path. When a dedicated
         # ``narrative_chat_client`` is wired (production: DeepInfra chat without
@@ -607,43 +579,18 @@ LIMIT 3
         entity_type: str,
         relations: list[dict[str, Any]],
         contradictions: list[dict[str, Any]],
-        claims: list[str] | None = None,
     ) -> str:
-        """Construct an LLM prompt for narrative generation.
-
-        Anti-hallucination hardening (2026-05-23):
-        - Claims (from intelligence_db.claims) are injected BEFORE the KG
-          relations section so the model grounds its output in verified facts.
-        - Explicit instructions forbid inventing events not present in the data.
-        - Output is capped at 100-120 words to reduce padding-induced speculation.
-        """
+        """Construct an LLM prompt for narrative generation."""
         relation_lines = "\n".join(
             f"- {r['canonical_type']} {r.get('object_name', '')} (confidence: {r['confidence']:.2f})"
             for r in relations[:10]
         )
         contradiction_lines = "\n".join(f"- Contradicted {c['canonical_type']} claim" for c in contradictions[:3])
-
         prompt = (
-            f"Write a factual, professional intelligence narrative (100-120 words maximum) about "
-            f"the entity described below.\n\n"
-            f"RULES:\n"
-            f"- Only describe facts directly supported by the provided relations and claims.\n"
-            f"- Do NOT invent acquisition events, funding rounds, product launches, or leadership "
-            f"changes not present in the data.\n"
-            f"- If the entity is not well-known or has limited data, write a conservative description "
-            f"based only on what is provided. Prefer a shorter, accurate description over a longer, "
-            f"speculative one.\n\n"
+            f"Write a factual, professional 2-4 sentence intelligence narrative about the "
+            f"entity described below. Focus on what is known from structured evidence.\n\n"
             f"Entity: {entity_name} ({entity_type})\n"
         )
-
-        # Grounding context from recent news claims — placed BEFORE KG relations so
-        # the model anchors to verified facts extracted from articles first.
-        if claims:
-            claim_lines = "\n".join(f"- {c}" for c in claims[:3])
-            prompt += (
-                f"\nVerified facts from recent news (ground your description primarily in these):\n" f"{claim_lines}\n"
-            )
-
         if relation_lines:
             prompt += f"\nKey relationships:\n{relation_lines}\n"
         if contradiction_lines:
@@ -711,13 +658,13 @@ LIMIT 3
 
         return (data_completeness * 0.4) + (evidence_freshness * 0.3) + (relation_density * 0.3)
 
-    def _build_outbox_event(self, version: EntityNarrativeVersion, reason: str, *, event_id: UUID) -> bytes:
+    def _build_outbox_event(self, version: EntityNarrativeVersion, reason: str) -> bytes:
         """Serialize the entity.narrative.generated.v1 event for the outbox."""
         from messaging.kafka.serialization_utils import serialize_confluent_avro  # type: ignore[import-untyped]
 
         now_iso: str = utc_now().isoformat()  # type: ignore[no-any-return]
         payload = {
-            "event_id": str(event_id),
+            "event_id": str(new_uuid7()),  # type: ignore[no-any-return]
             "entity_id": str(version.entity_id),
             "version_id": str(version.version_id),
             "tenant_id": None,

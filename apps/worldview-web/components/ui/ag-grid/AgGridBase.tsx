@@ -12,8 +12,6 @@ import type {
   GridReadyEvent,
   GetRowIdParams,
   RowClickedEvent,
-  CellMouseOverEvent,
-  CellMouseOutEvent,
   CellContextMenuEvent,
   SortChangedEvent,
 } from "ag-grid-community";
@@ -34,10 +32,6 @@ export interface AgGridBaseProps<TData extends object> {
   onColumnStateChanged?: () => void;
   /** When true, suppresses the browser's native right-click context menu. */
   preventDefaultOnContextMenu?: boolean;
-  /** Fires when the cursor enters a cell. Use to show row-level action overlays. */
-  onCellMouseOver?: (params: CellMouseOverEvent<TData>) => void;
-  /** Fires when the cursor leaves a cell. Use to hide row-level action overlays. */
-  onCellMouseOut?: (params: CellMouseOutEvent<TData>) => void;
   /**
    * WHY pinnedBottomRowData: AG Grid renders pinned rows inside the grid DOM,
    * keeping them in sync with column widths, pinning, and horizontal scroll
@@ -46,20 +40,6 @@ export interface AgGridBaseProps<TData extends object> {
    * the TICKER column is pinned left.
    */
   pinnedBottomRowData?: TData[];
-  /**
-   * Row height in pixels. Defaults to 28 (terminal-standard).
-   * PRD-0089 W2 §4.8: the holdings table uses 20px density to fit more
-   * positions above the fold without scrolling.
-   */
-  rowHeight?: number;
-  /**
-   * AG Grid context — arbitrary data passed to every cell renderer via
-   * params.context. Use this to inject external data (e.g. holdingsSeries
-   * for SparklineCellRenderer) without prop-drilling through each ColDef.
-   * WHY Record<string, unknown>: keeps AgGridBase generic; callers cast to
-   * their own typed context interface inside the cell renderer.
-   */
-  context?: Record<string, unknown>;
 }
 
 /**
@@ -93,10 +73,6 @@ export function AgGridBase<TData extends object>({
   onColumnStateChanged,
   preventDefaultOnContextMenu,
   pinnedBottomRowData,
-  rowHeight = 28,
-  context,
-  onCellMouseOver,
-  onCellMouseOut,
 }: AgGridBaseProps<TData>) {
   const colStateHandler = onColumnStateChanged;
 
@@ -113,8 +89,7 @@ export function AgGridBase<TData extends object>({
         rowData={rowData}
         columnDefs={columnDefs}
         pinnedBottomRowData={pinnedBottomRowData}
-        context={context}
-        rowHeight={rowHeight}
+        rowHeight={28}
         headerHeight={28}
         groupHeaderHeight={22}
         getRowId={getRowId}
@@ -131,8 +106,6 @@ export function AgGridBase<TData extends object>({
         onColumnResized={colStateHandler ? () => colStateHandler() : undefined}
         onColumnVisible={colStateHandler ? () => colStateHandler() : undefined}
         onColumnMoved={colStateHandler ? () => colStateHandler() : undefined}
-        onCellMouseOver={onCellMouseOver}
-        onCellMouseOut={onCellMouseOut}
         preventDefaultOnContextMenu={preventDefaultOnContextMenu}
         enableCellTextSelection={true}
         defaultColDef={{

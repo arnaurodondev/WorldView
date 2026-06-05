@@ -58,50 +58,6 @@ s6_intel_commit_failures_total = prometheus_client.Counter(
     "that require message re-delivery for provisional-entity-queue recovery.",
 )
 
-# ── Pre-persist tenant_id substitution (PLAN-0099 W2 T-W2-04) ─────────────────
-# Defence-in-depth instrumentation for the pre-persist safety net at
-# ``article_consumer._run_pipeline``: every time an ``EntityMention`` reaches
-# the persist boundary with ``tenant_id=None``, the consumer substitutes the
-# request-scoped tenant (or ``PUBLIC_TENANT_ID`` as last-resort) so the row
-# clears the ``NOT NULL`` constraint on ``entity_mentions.tenant_id``.  This
-# counter attributes each substitution to the upstream block that produced
-# the offending mention so PLAN-0100 §13.4 root-cause work can target the
-# dominant source.  Label cardinality is bounded by a fixed enum:
-#   - "ner"               — pure Block 4 NER output (only ner_model_id set)
-#   - "entity_resolution" — Block 9 stamped resolution_outcome
-#   - "novelty_backfill"  — Block 9 PROVISIONAL path (provisional_queue_id set)
-#   - "deep_extraction"   — Block 10 (reserved; extraction doesn't currently
-#                           emit EntityMention rows but kept for forward-compat)
-#   - "unknown"           — no signal — fall-through label, NOT free-form
-nlp_pipeline_pre_persist_tenant_id_substituted_total = prometheus_client.Counter(
-    "nlp_pipeline_pre_persist_tenant_id_substituted_total",
-    "Times the pre-persist safety net substituted tenant_id on an EntityMention "
-    "that arrived at the persist boundary with tenant_id=None (BP-575/BP-586). "
-    "Labelled by the inferred upstream block source.",
-    ["block_source"],
-)
-
-# Fixed enum of allowed block_source label values — referenced from the
-# consumer's classifier helper. Keep in sync with the docstring above.
-PRE_PERSIST_BLOCK_SOURCES: tuple[str, ...] = (
-    "ner",
-    "entity_resolution",
-    "novelty_backfill",
-    "deep_extraction",
-    "unknown",
-)
-
-
-def record_pre_persist_tenant_substituted(block_source: str) -> None:
-    """Increment the pre-persist tenant_id substitution counter.
-
-    ``block_source`` MUST be one of ``PRE_PERSIST_BLOCK_SOURCES``.  Anything
-    else is silently coerced to ``"unknown"`` to enforce bounded cardinality.
-    """
-    label = block_source if block_source in PRE_PERSIST_BLOCK_SOURCES else "unknown"
-    nlp_pipeline_pre_persist_tenant_id_substituted_total.labels(block_source=label).inc()
-
-
 s6_ollama_queue_depth_current = prometheus_client.Gauge(
     "s6_ollama_queue_depth_current",
     "Current number of in-flight Ollama inference requests (backpressure depth)",

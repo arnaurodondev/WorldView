@@ -355,7 +355,7 @@ Items are tiered by impact:
 
 ### 7.1 S-003 — Pre-existing leaked DeepInfra API key in audit MD files
 
-**What**: The live DeepInfra API key `***REDACTED-LEAKED-KEY-ROTATED-2026-06-02***` is committed in `docs/audits/2026-04-27-investigation-model-externalization-and-ui-validation.md:26` and `docs/audits/2026-04-28-qa-observability-full-audit.md:109`. Pre-existing (not introduced by PLAN-0057).
+**What**: The live DeepInfra API key `xVi3qIVR8yPnu7DnP36GdFs2brm9GivI` is committed in `docs/audits/2026-04-27-investigation-model-externalization-and-ui-validation.md:26` and `docs/audits/2026-04-28-qa-observability-full-audit.md:109`. Pre-existing (not introduced by PLAN-0057).
 
 #### Option A: Rotate the key; redact in audit files; consider history rewrite
 1. Rotate immediately at the DeepInfra console.

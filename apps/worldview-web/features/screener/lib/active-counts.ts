@@ -44,13 +44,6 @@ export interface SectionActiveCounts {
   leverage: number;
   technical: number;
   news: number;
-  // PRD-0089 Wave I-B Block IB-L2: two new section badges. The "Cash Flow"
-  // section hosts the FCF + FCF margin ranges; "Risk" hosts the leverage /
-  // coverage / credit-rating filters (interest coverage, net debt/EBITDA,
-  // credit ratings multi-select). Added here rather than folded into
-  // "profitability" so the badge counts match the section the user sees.
-  cashFlow: number;
-  risk: number;
 }
 
 /**
@@ -76,10 +69,7 @@ export function countActiveFiltersByGroup(
       rangeCount(form.roeMin, form.roeMax) +
       rangeCount(form.grossMarginMin, form.grossMarginMax) +
       rangeCount(form.netMarginMin, form.netMarginMax) +
-      rangeCount(form.opMarginMin, form.opMarginMax) +
-      // PRD-0089 IB-L2: EPS (TTM) is an earnings-quality signal that belongs
-      // with the other profitability ranges in the Profitability section.
-      rangeCount(form.epsTtmMin, form.epsTtmMax),
+      rangeCount(form.opMarginMin, form.opMarginMax),
 
     growth:
       rangeCount(form.revGrowthMin, form.revGrowthMax) +
@@ -94,31 +84,12 @@ export function countActiveFiltersByGroup(
       rangeCount(form.rsiMin, form.rsiMax) +
       (isSet(form.volumeRatioMin) ? 1 : 0) +
       (isSet(form.distFrom52wHighMax) ? 1 : 0) +
-      (isSet(form.distFrom52wLowMin) ? 1 : 0) +
-      // PRD-0089 IB-L2: AVG VOL (30d) is a liquidity / volume signal
-      // and lives in the Technical section.
-      rangeCount(form.avgVolume30dMin, form.avgVolume30dMax),
+      (isSet(form.distFrom52wLowMin) ? 1 : 0),
 
     news:
       (isSet(form.newsVelocity7dMin) ? 1 : 0) +
       rangeCount(form.controversyMin, form.controversyMax) +
       (isSet(form.recentEarningsDays) ? 1 : 0) +
       (isSet(form.insiderActivity) ? 1 : 0),
-
-    // ── PRD-0089 Wave I-B Block IB-L2 — Cash Flow section ────────────────
-    // FCF (absolute USD range) + FCF margin (% range). AVG VOL lives in the
-    // Technical section (it's a liquidity / volume signal) — NOT here.
-    cashFlow:
-      rangeCount(form.freeCashFlowMin, form.freeCashFlowMax) +
-      rangeCount(form.fcfMarginMin, form.fcfMarginMax),
-
-    // ── PRD-0089 Wave I-B Block IB-L2 — Risk section ─────────────────────
-    // Interest coverage, net debt / EBITDA, and credit-rating multi-select.
-    // The credit-rating chip counts once if any rating is selected (not
-    // once per rating); that matches how the chip strip renders it.
-    risk:
-      rangeCount(form.interestCoverageMin, form.interestCoverageMax) +
-      rangeCount(form.netDebtToEbitdaMin, form.netDebtToEbitdaMax) +
-      (form.creditRatings && form.creditRatings.length > 0 ? 1 : 0),
   };
 }

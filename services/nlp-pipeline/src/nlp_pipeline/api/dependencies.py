@@ -16,14 +16,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 # a body-level import. This satisfies LAYER-API-NO-MODULE-LEVEL-INFRA without
 # the runtime NameError that previously blocked the TYPE_CHECKING approach.
 from nlp_pipeline.application.ports.entity_mention import EntityMentionRepositoryPort
-from nlp_pipeline.application.ports.repositories import (
-    DocumentSourceMetadataRepository,
-    NewsQueryPort,
-    SignalsQueryPort,
-)
+from nlp_pipeline.application.ports.repositories import NewsQueryPort, SignalsQueryPort
 from nlp_pipeline.application.use_cases.dlq_admin import DLQAdminUseCase
 from nlp_pipeline.application.use_cases.enhanced_chunk_search import EnhancedChunkSearchUseCase
-from nlp_pipeline.application.use_cases.get_entity_sentiment_timeseries import GetEntitySentimentTimeseriesUseCase
 from nlp_pipeline.application.use_cases.query_entity_resolver import QueryEntityResolverUseCase
 from nlp_pipeline.application.use_cases.search_documents import SearchDocumentsUseCase
 
@@ -206,15 +201,12 @@ def get_chunk_search_use_case(
     # spec default of 1.5 when the setting is absent (older configs).
     settings = getattr(request.app.state, "settings", None)
     lexical_boost = float(getattr(settings, "hybrid_lexical_boost", 1.5)) if settings is not None else 1.5
-    # embedding_client is set on app.state at startup (app.py:179); pass it
-    # through so query_text searches can embed the query without a pre-computed vector.
-    embedding_client = getattr(request.app.state, "embedding_client", None)
     return EnhancedChunkSearchUseCase(
         chunk_ann_repo=ChunkANNRepository(nlp_session),
         source_metadata_repo=SQLAlchemyDocumentSourceMetadataRepository(nlp_session),
         canonical_entity_repo=CanonicalEntityRepository(intel_session),
         valkey=raw_valkey,
-        embedding_client=embedding_client,
+        embedding_client=None,
         chunk_text_store=chunk_text_store,
         lexical_boost=lexical_boost,
     )
@@ -265,58 +257,3 @@ def get_search_documents_use_case(
 
 
 SearchDocumentsUseCaseDep = Annotated[SearchDocumentsUseCase, Depends(get_search_documents_use_case)]
-
-
-def get_sentiment_timeseries_repo(
-    session: Annotated[AsyncSession, Depends(get_read_nlp_session)],  # R27: read replica
-) -> DocumentSourceMetadataRepository:
-    """Build SQLAlchemyDocumentSourceMetadataRepository backed by the read replica (R27)."""
-    from nlp_pipeline.infrastructure.nlp_db.repositories.document_source_metadata import (
-        SQLAlchemyDocumentSourceMetadataRepository,
-    )
-
-    return SQLAlchemyDocumentSourceMetadataRepository(session)
-
-
-SentimentTimeseriesRepoDep = Annotated[DocumentSourceMetadataRepository, Depends(get_sentiment_timeseries_repo)]
-
-
-def get_entity_sentiment_timeseries_use_case(
-    repo: Annotated[DocumentSourceMetadataRepository, Depends(get_sentiment_timeseries_repo)],
-) -> GetEntitySentimentTimeseriesUseCase:
-    """Build GetEntitySentimentTimeseriesUseCase for the current request.
-
-    Uses the read replica session (R27) via get_sentiment_timeseries_repo.
-    """
-    return GetEntitySentimentTimeseriesUseCase(repo)
-
-
-SentimentTimeseriesUseCaseDep = Annotated[
-    GetEntitySentimentTimeseriesUseCase,
-    Depends(get_entity_sentiment_timeseries_use_case),
-]
-
-
-async def require_internal_jwt(request: Request) -> None:
-    """Belt-and-suspenders auth check on top of InternalJWTMiddleware.
-
-    In production (skip_verification=False), InternalJWTMiddleware sets
-    ``request.state.internal_jwt`` in its ``_post_validate`` hook after
-    successful RS256 signature verification.  This dependency asserts that
-    attribute is present, giving a second layer of protection if the middleware
-    is ever misconfigured (e.g. removed from app.py without updating routes).
-
-    In dev/E2E mode (skip_verification=True), the middleware decodes the token
-    without signature verification and does NOT call ``_post_validate``, so
-    ``internal_jwt`` is not set.  We detect this via the
-    ``_internal_jwt_skip_verification`` app.state flag and allow the request
-    through — the middleware has already validated the token shape.
-    """
-    skip = getattr(request.app.state, "_internal_jwt_skip_verification", False)
-    if skip:
-        return
-    if getattr(request.state, "internal_jwt", None) is None:
-        raise HTTPException(status_code=401, detail="X-Internal-JWT header required")
-
-
-InternalJwtAuthDep = Annotated[None, Depends(require_internal_jwt)]

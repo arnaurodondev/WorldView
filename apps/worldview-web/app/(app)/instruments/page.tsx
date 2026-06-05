@@ -126,13 +126,13 @@ export default function InstrumentsPage() {
 
       {/* ── Page heading ─────────────────────────────────────────────────── */}
       {/*
-       * WHY 36px header (h-[36px]): consistent with other terminal page headers.
+       * WHY 36px header (h-9): consistent with other terminal page headers.
        * Keeps the page chrome minimal so the table gets maximum vertical space.
        * WHY "INSTRUMENTS" label: differentiates this browse page from /screener
        * ("INSTRUMENT SCREENER"). Users navigating from the sidebar land here and
        * immediately understand they're on the browse page, not the advanced screener.
        */}
-      <div className="flex h-[36px] shrink-0 items-center border-b border-border px-3">
+      <div className="flex h-9 shrink-0 items-center border-b border-border px-3">
         {/* WHY font-mono: ADR-F-15 — all page-level labels use IBM Plex Mono */}
         <h1 className="text-[11px] uppercase tracking-[0.08em] text-muted-foreground font-mono">
           Instruments
@@ -158,7 +158,7 @@ export default function InstrumentsPage() {
        * is deliberately simpler than the full screener to keep the interaction model
        * lightweight and familiar (Google-style search rather than SQL-style filter).
        */}
-      <div className="flex h-[36px] shrink-0 items-center gap-2 border-b border-border px-3">
+      <div className="flex h-9 shrink-0 items-center gap-2 border-b border-border px-3">
         {/* Search icon — decorative, left-anchored */}
         <Search className="h-[14px] w-[14px] shrink-0 text-muted-foreground/60" aria-hidden />
 
@@ -218,12 +218,7 @@ export default function InstrumentsPage() {
           ariaLabel="Instruments browser"
           isLoading={isLoading}
           emptyMessage="No instruments found. Try a different search term."
-          // PRD-0089 F2 step 11 (§6.6): ticker-first URL. ScreenerResult
-          // guarantees ticker as a non-null string; fall back to UUID only if
-          // the row payload is malformed (middleware resolves UUID → ticker).
-          onRowClick={(row) =>
-            router.push(`/instruments/${row.ticker || row.instrument_id}`)
-          }
+          onRowClick={(row) => router.push(`/instruments/${row.entity_id}`)}
           virtualize
         />
       </div>

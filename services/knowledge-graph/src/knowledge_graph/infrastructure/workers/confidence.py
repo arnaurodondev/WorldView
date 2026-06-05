@@ -183,9 +183,7 @@ class ConfidenceWorker:
                 # T-B-01: populate valid_from + relation_period_type from
                 # earliest evidence date in same transaction as confidence update.
                 valid_from = await ev_repo.get_earliest_evidence_date(  # type: ignore[attr-defined]
-                    subject_id,
-                    object_id,
-                    ctype,
+                    subject_id, object_id, ctype
                 )
                 if valid_from is not None:
                     # Derive period type from valid_to on the relation row.

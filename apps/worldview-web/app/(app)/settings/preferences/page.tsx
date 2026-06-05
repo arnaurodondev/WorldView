@@ -75,7 +75,7 @@ export default function SettingsPreferencesPage() {
       {/* Density */}
       <Card className="border-border/60 bg-card">
         <CardHeader className="pb-3">
-          <CardTitle className="text-[14px] font-medium text-foreground">
+          <CardTitle className="text-sm font-medium text-foreground">
             Display density
           </CardTitle>
           <CardDescription className="text-xs">
@@ -101,7 +101,7 @@ export default function SettingsPreferencesPage() {
                   className="h-3 w-3 cursor-pointer accent-primary"
                 />
                 <div className="flex-1">
-                  <span className="text-[14px] font-medium text-foreground">{d.label}</span>
+                  <span className="text-sm font-medium text-foreground">{d.label}</span>
                   <span
                     id={`density-${d.value}-hint`}
                     className="ml-2 text-[11px] text-muted-foreground"
@@ -118,7 +118,7 @@ export default function SettingsPreferencesPage() {
       {/* Currency */}
       <Card className="border-border/60 bg-card">
         <CardHeader className="pb-3">
-          <CardTitle className="text-[14px] font-medium text-foreground">
+          <CardTitle className="text-sm font-medium text-foreground">
             Default currency
           </CardTitle>
           <CardDescription className="text-xs">
@@ -154,7 +154,7 @@ export default function SettingsPreferencesPage() {
       {/* Timezone */}
       <Card className="border-border/60 bg-card">
         <CardHeader className="pb-3">
-          <CardTitle className="text-[14px] font-medium text-foreground">
+          <CardTitle className="text-sm font-medium text-foreground">
             Default timezone
           </CardTitle>
           <CardDescription className="text-xs">
@@ -191,7 +191,7 @@ export default function SettingsPreferencesPage() {
           zone" treatment with destructive border. */}
       <Card className="border-destructive/40 bg-card">
         <CardHeader className="pb-3">
-          <CardTitle className="text-[14px] font-medium text-foreground">
+          <CardTitle className="text-sm font-medium text-foreground">
             Danger zone
           </CardTitle>
           <CardDescription className="text-xs">

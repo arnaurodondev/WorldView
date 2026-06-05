@@ -61,11 +61,11 @@ export function Step({ title, children }: StepProps) {
   return (
     <div>
       {title ? (
-        <h4 className="mb-2 mt-0 text-[14px] font-semibold text-foreground">
+        <h4 className="mb-2 mt-0 text-sm font-semibold text-foreground">
           {title}
         </h4>
       ) : null}
-      <div className="text-[14px] text-muted-foreground [&>p:last-child]:mb-0 [&>p]:mb-2 leading-relaxed">
+      <div className="text-sm text-muted-foreground [&>p:last-child]:mb-0 [&>p]:mb-2 leading-relaxed">
         {children}
       </div>
     </div>

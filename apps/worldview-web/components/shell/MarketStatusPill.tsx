@@ -101,8 +101,8 @@ export function MarketStatusPill() {
       {/* Popover: per-exchange breakdown */}
       <PopoverContent className="w-80 p-0" align="end">
         <div className="border-b border-border px-4 py-3">
-          {/* WHY text-[13px] (was text-[14px]=14px): popover panel title uses 13px
-              per the Bloomberg panel title standard; text-[14px] is consumer-app scale */}
+          {/* WHY text-[13px] (was text-sm=14px): popover panel title uses 13px
+              per the Bloomberg panel title standard; text-sm is consumer-app scale */}
           <h3 className="text-[13px] font-semibold uppercase tracking-[0.04em] text-foreground">Exchange Hours</h3>
           {/* WHY text-[10px] (was text-xs=12px): subtitle/caption label uses
               10px per the Bloomberg metadata typography standard */}

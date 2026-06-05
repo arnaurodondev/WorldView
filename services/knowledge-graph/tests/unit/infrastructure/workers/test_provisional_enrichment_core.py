@@ -286,11 +286,7 @@ class TestRetryTransitionExponentialBackoff:
 
         with structlog.testing.capture_logs() as captured:
             out = await core.apply_retry_transition(
-                session,
-                _QUEUE_ID,
-                max_retries=5,
-                base_retry_minutes=2,
-                max_retry_minutes=1440,
+                session, _QUEUE_ID, max_retries=5, base_retry_minutes=2, max_retry_minutes=1440
             )
 
         assert out is False  # not terminal
@@ -321,11 +317,7 @@ class TestRetryTransitionExponentialBackoff:
 
         with structlog.testing.capture_logs() as captured:
             await core.apply_retry_transition(
-                session,
-                _QUEUE_ID,
-                max_retries=10,
-                base_retry_minutes=2,
-                max_retry_minutes=1440,
+                session, _QUEUE_ID, max_retries=10, base_retry_minutes=2, max_retry_minutes=1440
             )
 
         log_events = [e for e in captured if e.get("event") == "provisional_enrichment_retry_transition"]
@@ -354,11 +346,7 @@ class TestRetryTransitionExponentialBackoff:
 
         with structlog.testing.capture_logs() as captured:
             await core.apply_retry_transition(
-                session,
-                _QUEUE_ID,
-                max_retries=999,
-                base_retry_minutes=2,
-                max_retry_minutes=1440,
+                session, _QUEUE_ID, max_retries=999, base_retry_minutes=2, max_retry_minutes=1440
             )
 
         log_events = [e for e in captured if e.get("event") == "provisional_enrichment_retry_transition"]
@@ -603,7 +591,7 @@ class TestPersistEnrichment:
             side_effect=[
                 {"entity_id": _EXISTING_OTHER_ID},  # 'apple' already maps elsewhere → skip
                 None,  # 'aapl inc.' clean → insert
-            ],
+            ]
         )
         profile = {
             "canonical_name": "Apple Inc.",
@@ -744,13 +732,13 @@ class TestEntityTypeNormalisation:
     """persist_enrichment normalises entity_type before any DB write."""
 
     async def test_valid_entity_type_passes_unchanged(self) -> None:
-        """A canonical type is stored as-is (financial_instrument is canonical)."""
+        """A canonical type is stored as-is."""
         from knowledge_graph.infrastructure.workers import provisional_enrichment_core as core
 
         session, repos = _make_persist_session()
         profile = {
             "canonical_name": "Apple Inc.",
-            "entity_type": "financial_instrument",
+            "entity_type": "company",
             "ticker": None,
             "isin": None,
             "aliases": [],
@@ -758,10 +746,7 @@ class TestEntityTypeNormalisation:
 
         with _patch_persist_repos(repos):
             await core.persist_enrichment(
-                session=session,
-                queue_id=_QUEUE_ID,
-                mention_text="Apple Inc.",
-                profile=profile,
+                session=session, queue_id=_QUEUE_ID, mention_text="Apple Inc.", profile=profile
             )
 
         # DEF-014 / Wave A-1: persist_enrichment uses create_or_get (atomic
@@ -770,11 +755,7 @@ class TestEntityTypeNormalisation:
         repos.canonical_create_or_get.assert_awaited_once()
 
     async def test_uppercase_entity_type_normalised(self) -> None:
-        """entity_type='ORGANIZATION' → alias-mapped to 'unknown' (BP-523).
-
-        Migration 0039 remaps 'organization' → 'unknown' in the DB.  The code
-        must apply the same mapping so no CheckViolationError occurs at insert time.
-        """
+        """entity_type='ORGANIZATION' → normalised to 'organization' (valid)."""
         from knowledge_graph.infrastructure.workers import provisional_enrichment_core as core
 
         session, repos = _make_persist_session()
@@ -783,20 +764,23 @@ class TestEntityTypeNormalisation:
         with _patch_persist_repos(repos):
             await core.persist_enrichment(session=session, queue_id=_QUEUE_ID, mention_text="Fed", profile=profile)
 
-        # No warning logged — ORGANIZATION is in the alias map (→ 'unknown').
+        # No warning logged — ORGANIZATION normalises to a valid type
         # DEF-014 / Wave A-1: assert against the new create_or_get call site.
         repos.canonical_create_or_get.assert_awaited_once()
 
-        # Verify that the alias-mapped entity_type ('unknown') was actually passed to
+        # Verify that the normalised entity_type ('organization') was actually passed to
         # entity_repo.create_or_get(), not the raw uppercased value ('ORGANIZATION').
+        # CanonicalEntityRepository.create_or_get(canonical_name, entity_type, *, ...) —
+        # entity_type is passed as a keyword argument (see infrastructure/intelligence_db/
+        # repositories/canonical_entity.py).
         call_kwargs = repos.canonical_create_or_get.call_args.kwargs
-        assert call_kwargs["entity_type"] == "unknown", (
-            f"Expected alias-mapped entity_type='unknown' (BP-523), got {call_kwargs['entity_type']!r}. "
-            "Check that _ENTITY_TYPE_ALIASES maps 'organization' → 'unknown'."
+        assert call_kwargs["entity_type"] == "organization", (
+            f"Expected normalised entity_type='organization', got {call_kwargs['entity_type']!r}. "
+            "Check that _norm_type lowercasing is applied before the DB write."
         )
 
-    async def test_alias_corp_normalised_to_financial_instrument(self) -> None:
-        """entity_type='corp' → alias-mapped to 'financial_instrument' (BP-523, no warning)."""
+    async def test_alias_corp_normalised_to_company(self) -> None:
+        """entity_type='corp' → alias-mapped to 'company' (valid, no warning)."""
         from knowledge_graph.infrastructure.workers import provisional_enrichment_core as core
 
         session, repos = _make_persist_session()
@@ -804,30 +788,24 @@ class TestEntityTypeNormalisation:
 
         with _patch_persist_repos(repos):
             await core.persist_enrichment(
-                session=session,
-                queue_id=_QUEUE_ID,
-                mention_text="Acme Corp",
-                profile=profile,
+                session=session, queue_id=_QUEUE_ID, mention_text="Acme Corp", profile=profile
             )
 
         # DEF-014 / Wave A-1: assert against the new create_or_get call site.
         repos.canonical_create_or_get.assert_awaited_once()
 
-        # Verify that the alias-mapped entity_type ('financial_instrument') was used.
-        # 'corp' is in _ENTITY_TYPE_ALIASES → 'financial_instrument' (BP-523 update;
-        # previously mapped to 'company' which is no longer a canonical kind).
+        # Verify that the alias-mapped entity_type ('company') was actually used in the
+        # DB create_or_get call, not the raw LLM-invented value ('corp').
+        # 'corp' is in _ENTITY_TYPE_ALIASES → 'company'; this assertion would catch a
+        # regression where the alias lookup is bypassed or the wrong variable is passed.
         call_kwargs = repos.canonical_create_or_get.call_args.kwargs
-        assert call_kwargs["entity_type"] == "financial_instrument", (
-            f"Expected alias-mapped entity_type='financial_instrument', got {call_kwargs['entity_type']!r}. "
-            "Check that _ENTITY_TYPE_ALIASES maps 'corp' → 'financial_instrument' (BP-523)."
+        assert call_kwargs["entity_type"] == "company", (
+            f"Expected alias-mapped entity_type='company', got {call_kwargs['entity_type']!r}. "
+            "Check that _ENTITY_TYPE_ALIASES lookup result is used, not the raw 'corp' value."
         )
 
-    async def test_unknown_entity_type_defaults_to_unknown(self) -> None:
-        """entity_type='conglomerate' → invalid; stored as 'unknown' with warning (BP-523).
-
-        The fallback was previously 'other', which is not in the DB CHECK constraint.
-        After BP-523 it must fall back to 'unknown'.
-        """
+    async def test_unknown_entity_type_defaults_to_other(self) -> None:
+        """entity_type='conglomerate' → invalid; stored as 'other' with warning."""
         import structlog.testing
         from knowledge_graph.infrastructure.workers import provisional_enrichment_core as core
 
@@ -844,10 +822,7 @@ class TestEntityTypeNormalisation:
         with structlog.testing.capture_logs() as captured:
             with _patch_persist_repos(repos):
                 await core.persist_enrichment(
-                    session=session,
-                    queue_id=_QUEUE_ID,
-                    mention_text="MegaCorp",
-                    profile=profile,
+                    session=session, queue_id=_QUEUE_ID, mention_text="MegaCorp", profile=profile
                 )
             log_output = list(captured)
 
@@ -857,101 +832,6 @@ class TestEntityTypeNormalisation:
         assert any(
             e.get("event") == "provisional_enrichment_invalid_entity_type" for e in warning_events
         ), f"Expected warning not found. Captured events: {log_output}"
-        # BP-523: fallback must be 'unknown', not 'other' (which is not in the DB CHECK).
-        call_kwargs = repos.canonical_create_or_get.call_args.kwargs
-        assert call_kwargs["entity_type"] == "unknown", (
-            f"Expected fallback entity_type='unknown' (BP-523), got {call_kwargs['entity_type']!r}. "
-            "Ensure the fallback block sets entity_type = 'unknown', not 'other'."
-        )
-
-    async def test_organization_mention_class_resolves_to_unknown(self) -> None:
-        """BP-523: 'organization' mention class must produce entity_type='unknown'.
-
-        Migration 0039 maps 'organization' → 'unknown' in the DB CHECK constraint.
-        The code must do the same so no CheckViolationError fires at insert time.
-        """
-        from knowledge_graph.infrastructure.workers import provisional_enrichment_core as core
-
-        session, repos = _make_persist_session()
-        profile = {
-            "canonical_name": "Acme NGO",
-            "entity_type": "organization",
-            "ticker": None,
-            "isin": None,
-            "aliases": [],
-        }
-
-        with _patch_persist_repos(repos):
-            await core.persist_enrichment(session=session, queue_id=_QUEUE_ID, mention_text="Acme NGO", profile=profile)
-
-        call_kwargs = repos.canonical_create_or_get.call_args.kwargs
-        assert (
-            call_kwargs["entity_type"] == "unknown"
-        ), f"BP-523: 'organization' must map to 'unknown'; got {call_kwargs['entity_type']!r}"
-
-    async def test_british_spelling_organisation_resolves_to_unknown(self) -> None:
-        """BP-523: British-spelling 'organisation' alias must also resolve to 'unknown'.
-
-        Some LLM variants return 'organisation' (British English); the alias map
-        must route this correctly so the DB CHECK constraint is never violated.
-        """
-        from knowledge_graph.infrastructure.workers import provisional_enrichment_core as core
-
-        session, repos = _make_persist_session()
-        profile = {
-            "canonical_name": "UK Regulator",
-            "entity_type": "organisation",  # British spelling
-            "ticker": None,
-            "isin": None,
-            "aliases": [],
-        }
-
-        with _patch_persist_repos(repos):
-            await core.persist_enrichment(
-                session=session,
-                queue_id=_QUEUE_ID,
-                mention_text="UK Regulator",
-                profile=profile,
-            )
-
-        call_kwargs = repos.canonical_create_or_get.call_args.kwargs
-        assert (
-            call_kwargs["entity_type"] == "unknown"
-        ), f"BP-523: 'organisation' (British spelling) must map to 'unknown'; got {call_kwargs['entity_type']!r}"
-
-    async def test_fully_invalid_type_fallback_is_unknown_not_other(self) -> None:
-        """BP-523: the invalid-type fallback must be 'unknown', not 'other'.
-
-        'other' is not in the DB CHECK constraint (migration 0039).  Any LLM
-        value that is neither in _VALID_ENTITY_TYPES nor in _ENTITY_TYPE_ALIASES
-        must fall back to 'unknown' — not 'other'.
-        """
-        from knowledge_graph.infrastructure.workers import provisional_enrichment_core as core
-
-        session, repos = _make_persist_session()
-        profile = {
-            "canonical_name": "Weird Entity",
-            "entity_type": "conglomerate",  # not in aliases or valid set
-            "ticker": None,
-            "isin": None,
-            "aliases": [],
-        }
-
-        with _patch_persist_repos(repos):
-            await core.persist_enrichment(
-                session=session,
-                queue_id=_QUEUE_ID,
-                mention_text="Weird Entity",
-                profile=profile,
-            )
-
-        call_kwargs = repos.canonical_create_or_get.call_args.kwargs
-        assert (
-            call_kwargs["entity_type"] == "unknown"
-        ), f"BP-523: invalid-type fallback must be 'unknown' (not 'other'); got {call_kwargs['entity_type']!r}"
-        assert (
-            call_kwargs["entity_type"] != "other"
-        ), "BP-523: 'other' is not in the DB CHECK constraint — fallback must be 'unknown'"
 
 
 # ---------------------------------------------------------------------------
@@ -1020,10 +900,10 @@ class TestContextSnippetInjectionGuard:
         assert len(captured_inputs) == 1
         context_passed = captured_inputs[0].context  # type: ignore[attr-defined]
         assert context_passed.startswith(
-            "<article_context>",
+            "<article_context>"
         ), f"context must be wrapped with <article_context> opening tag; got: {context_passed!r}"
         assert context_passed.endswith(
-            "</article_context>",
+            "</article_context>"
         ), f"context must be wrapped with </article_context> closing tag; got: {context_passed!r}"
         assert (
             snippet in context_passed

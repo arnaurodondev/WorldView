@@ -58,28 +58,6 @@ import type {
 // component, not the other way round.
 import type { ToolCallState } from "@/features/chat/components/ToolCallIndicator";
 
-// ── Stage label map (PLAN-0103 W21, FIX-A3) ──────────────────────────────────
-//
-// S8 emits ``status`` and ``thinking`` SSE events with single-keyword stage
-// markers during the slow pre-token phase (cache lookup, entity resolution,
-// tool classification). These are NOT user-facing copy on the wire, but the
-// frontend needs to surface SOMETHING during the 10-30s gap before the first
-// token — otherwise the user perceives a frozen UI (see audit §3.2).
-//
-// We translate each known stage keyword to a short human-readable phrase
-// here. Unknown stage keywords are ignored so a backend that adds a new
-// marker doesn't accidentally spam the UI with raw enum values.
-const STAGE_LABEL_MAP: Record<string, string> = {
-  loading_context: "Loading context…",
-  entity_resolution: "Resolving entities…",
-  tool_classification: "Choosing tools…",
-  llm_tool_planning: "Planning tools…",
-  cache_hit: "Using cached context…",
-  cache_miss: "Building context…",
-  synthesis: "Composing answer…",
-  grounding: "Grounding numbers…",
-};
-
 // ── Public hook contract ──────────────────────────────────────────────────────
 
 /**
@@ -415,28 +393,12 @@ export function useChatStream(args: UseChatStreamArgs): UseChatStreamResult {
         // final assistant message once the stream ends.
         let pendingCitations: Message["citations"] = [];
 
-        // ── PLAN-0089 K Block A T-03: Q-9 turn-scoped state ──────────────────
-        // WHY captured as locals (not React state): these are consumed exactly
-        // once when the turn finalises. Keeping them off React state avoids
-        // unnecessary re-renders during the token stream.
-        let pendingMetadata: {
-          intent?: string;
-          provider?: string;
-          model?: string;
-          latency_ms?: number;
-          message_id?: string;
-        } = {};
-        let pendingContradictions: Array<Record<string, unknown>> = [];
-
         // Helper: finalise the stream and promote the bubble to a message.
         const finalize = (interrupted = false) => {
           setStreaming(null);
           if (finalContent || pendingCitations.length > 0) {
             const assistantMessage: Message = {
-              // WHY prefer server-supplied message_id: if S8's `metadata` event
-              // carried a message_id we use it so client + server agree on the
-              // canonical id for future references (feedback, fallback_of).
-              message_id: pendingMetadata.message_id ?? crypto.randomUUID(),
+              message_id: crypto.randomUUID(),
               thread_id: threadId,
               role: "assistant",
               content: interrupted
@@ -444,12 +406,6 @@ export function useChatStream(args: UseChatStreamArgs): UseChatStreamResult {
                 : finalContent,
               created_at: new Date().toISOString(),
               citations: pendingCitations,
-              // Q-9 metadata copy-through — all optional, undefined when absent.
-              provider: pendingMetadata.provider,
-              model: pendingMetadata.model,
-              latency_ms: pendingMetadata.latency_ms,
-              contradictions:
-                pendingContradictions.length > 0 ? pendingContradictions : undefined,
             };
             setLocalMessages((prev) => [...prev, assistantMessage]);
           }
@@ -518,41 +474,21 @@ export function useChatStream(args: UseChatStreamArgs): UseChatStreamResult {
               // ToolCallIndicator in the streaming bubble.
 
               if (eventName === "thinking") {
-                // PLAN-0103 W21 (FIX-A3) — surface stage markers from `thinking`
-                // events through the same STAGE_LABEL_MAP used by `status`.
-                // S8 emits ``thinking { stage: "tool_classification" }`` during
-                // the LLM tool-planning phase (often 10s+ on slow upstream
-                // providers); the previous no-op left the user staring at a
-                // blank typing indicator. Now the streaming bubble shows
-                // "Choosing tools…" or whichever stage maps from the keyword.
-                const stage =
-                  typeof data.stage === "string"
-                    ? data.stage
-                    : typeof data.step === "string"
-                      ? data.step
-                      : "";
-                if (stage) {
-                  const label = STAGE_LABEL_MAP[stage] ?? "";
-                  if (label) {
-                    setStreaming((prev) =>
-                      prev ? { ...prev, initial_status: label } : prev,
-                    );
-                  }
-                }
+                // `thinking` — the LLM is classifying the query and deciding
+                // which tools to invoke. No UI state change needed here; the
+                // typing indicator (shown when streaming.text === "") already
+                // signals "I'm working on it". Future: could set a global
+                // "Thinking..." banner if desired.
+                // WHY no-op: the TypingIndicator already covers the blank-stream
+                // phase. Adding a separate "thinking" indicator would duplicate
+                // the feedback and add visual noise.
+                void data; // suppress "unused" lint warning
               } else if (eventName === "tool_call") {
                 // `tool_call` — a specific tool has been invoked. The data shape
                 // from S8 SSEEmitter (W11-3):
-                //   { type: "tool_call", tool: string, label: string, input: {}, status: "running",
-                //     is_fallback?: bool, fallback_of?: string }   // PLAN-0089 K Q-9
-                // We only use `tool`, `label`, `status`, and the optional fallback
-                // flags for rendering.
-                const tc = data as {
-                  tool?: string;
-                  label?: string;
-                  status?: string;
-                  is_fallback?: boolean;
-                  fallback_of?: string;
-                };
+                //   { type: "tool_call", tool: string, label: string, input: {}, status: "running" }
+                // We only use `tool`, `label`, and `status` for rendering.
+                const tc = data as { tool?: string; label?: string; status?: string };
                 if (tc.tool && tc.label) {
                   setActiveTools((prev) => [
                     // Replace any existing entry for the same tool name (idempotent).
@@ -563,9 +499,6 @@ export function useChatStream(args: UseChatStreamArgs): UseChatStreamResult {
                       name: tc.tool as string,
                       label: tc.label as string,
                       status: "running",
-                      // PLAN-0089 K T-03: forward fallback signal to view-model.
-                      is_fallback: tc.is_fallback,
-                      fallback_of: tc.fallback_of,
                     },
                   ]);
                 }
@@ -637,18 +570,8 @@ export function useChatStream(args: UseChatStreamArgs): UseChatStreamResult {
                   finalContent += chunk;
                   // Functional update: prev may have been replaced by a
                   // concurrent setState (e.g. cancel() racing the read loop).
-                  // PLAN-0103 W21 (FIX-A3) — clear initial_status on first
-                  // token: once real answer text is flowing the stage label
-                  // is no longer informative and would compete with the
-                  // streamed prose.
                   setStreaming((prev) =>
-                    prev
-                      ? {
-                          ...prev,
-                          text: prev.text + chunk,
-                          initial_status: undefined,
-                        }
-                      : prev,
+                    prev ? { ...prev, text: prev.text + chunk } : prev,
                   );
                 }
               } else if (eventName === "citations") {
@@ -666,8 +589,8 @@ export function useChatStream(args: UseChatStreamArgs): UseChatStreamResult {
                 // CitationList component renders KG citations as plain text (no
                 // <a> tag) when url is null/undefined.
                 if (Array.isArray(data)) {
-                  pendingCitations = data
-                    .filter((c): c is Record<string, unknown> => {
+                  pendingCitations = data.filter(
+                    (c): c is NonNullable<Message["citations"]>[number] => {
                       if (typeof c !== "object" || c === null) return false;
                       const url = (c as Record<string, unknown>).url;
                       // Accept citations without a URL (knowledge-graph sources).
@@ -678,92 +601,7 @@ export function useChatStream(args: UseChatStreamArgs): UseChatStreamResult {
                         typeof url === "string" &&
                         /^(https?:|mailto:)/i.test(url)
                       );
-                    })
-                    // PLAN-0089 K T-03: map CitationV2.id → legacy Citation.article_id
-                    // so existing legacy consumers keep working. Read order: c.id wins
-                    // (canonical going forward), fall back to c.article_id when the
-                    // backend still emits the legacy shape. Cast at the boundary
-                    // because Message.citations is still typed as the legacy Citation[].
-                    .map((c) => {
-                      const id =
-                        typeof c.id === "string"
-                          ? c.id
-                          : typeof c.article_id === "string"
-                            ? c.article_id
-                            : "";
-                      // WHY cast via unknown: the runtime object carries the
-                      // CitationV2 superset (title/url/source/relevance_score
-                      // plus kind), but Message.citations is still typed as the
-                      // legacy Citation shape (PLAN-0089-K-FU migrates the type).
-                      // The double cast is the standard TS escape hatch here.
-                      return { ...c, article_id: id, id } as unknown as NonNullable<
-                        Message["citations"]
-                      >[number];
-                    });
-                }
-              } else if (eventName === "metadata") {
-                // PLAN-0089 K T-03 — Q-9 turn metadata.
-                // Shape from S8 SSEEmitter.emit_metadata:
-                //   { intent, provider, model, latency_ms, message_id }
-                // We collect into pendingMetadata; finalize() copies it onto the
-                // persisted Message so the side rail can render "served by X in Yms"
-                // without an extra round-trip.
-                const md = data as Record<string, unknown>;
-                pendingMetadata = {
-                  intent: typeof md.intent === "string" ? md.intent : undefined,
-                  provider: typeof md.provider === "string" ? md.provider : undefined,
-                  model: typeof md.model === "string" ? md.model : undefined,
-                  latency_ms:
-                    typeof md.latency_ms === "number" ? md.latency_ms : undefined,
-                  message_id:
-                    typeof md.message_id === "string" ? md.message_id : undefined,
-                };
-                // Mirror onto the streaming bubble so any live indicator that wants
-                // to read provider/latency mid-stream can do so without a re-fetch.
-                setStreaming((prev) =>
-                  prev ? { ...prev, ...pendingMetadata } : prev,
-                );
-              } else if (eventName === "contradictions") {
-                // PLAN-0089 K T-03 — KG-sourced contradictions for the side rail.
-                // Shape: an array of records, opaque to the hook (the side rail
-                // renders them generically). We accept any array; the rendering
-                // layer is responsible for shape validation.
-                if (Array.isArray(data)) {
-                  pendingContradictions = data as Array<Record<string, unknown>>;
-                  setStreaming((prev) =>
-                    prev ? { ...prev, contradictions: pendingContradictions } : prev,
-                  );
-                }
-              } else if (eventName === "final_answer") {
-                // PLAN-0103 W21 (BP-642) — HONOR the post-stream rewrite.
-                //
-                // Under PLAN-0093 numeric-grounding the backend re-runs the
-                // synthesised answer through a grounding pass that may rewrite
-                // hallucinated numbers (e.g. token stream "P/E is 37.7x" →
-                // final_answer "I cannot find evidence for that figure"). The
-                // hook MUST replace both ``finalContent`` (used by finalize()
-                // when persisting the assistant Message) AND the streaming
-                // bubble text so the user sees the corrected, grounded answer
-                // — not the un-grounded streamed tokens.
-                //
-                // WHY check ``data.text``: S8 emits ``{ "type": "final_answer",
-                // "text": "..." }``. Older event shapes used ``content``; we
-                // accept either for forward compatibility.
-                //
-                // WHY ``grounded`` flag on StreamingMessage: surfacing a small
-                // ``✓ grounded`` badge in the UI tells the user the answer
-                // they're reading was refined post-stream (so they don't think
-                // the bubble glitched mid-answer when the text changes).
-                const finalText =
-                  typeof data.text === "string"
-                    ? data.text
-                    : typeof data.content === "string"
-                      ? (data.content as string)
-                      : "";
-                if (finalText) {
-                  finalContent = finalText;
-                  setStreaming((prev) =>
-                    prev ? { ...prev, text: finalText, grounded: true } : prev,
+                    },
                   );
                 }
               } else if (eventName === "error") {
@@ -774,47 +612,9 @@ export function useChatStream(args: UseChatStreamArgs): UseChatStreamResult {
                 setChatError(msg);
                 setStreaming(null);
                 return;
-              } else if (eventName === "status") {
-                // PLAN-0103 W21 (FIX-A3) — surface ALL stage markers.
-                //
-                // The PLAN-0100 W2 implementation silently dropped stage-marker
-                // payloads (``loading_context``, ``entity_resolution``,
-                // ``cache_hit``, ``tool_classification`` etc.) because the
-                // ``/[\s…]/`` filter required a space or ellipsis. On slow
-                // tool-planning turns (~11-12s) the user saw a frozen typing
-                // indicator with no signal that work was happening — the
-                // first user-visible status only arrived AFTER tool selection.
-                //
-                // Fix: map known stage keywords to human-readable copy via
-                // ``STAGE_LABEL_MAP``. Multi-word payloads (already
-                // user-facing) flow through as-is. The streaming bubble now
-                // shows progress within ~200ms of send().
-                //
-                // WHY put the map inside the hook (not lib/): the mapping is
-                // tightly coupled to the SSE wire contract S8 emits — moving
-                // it elsewhere risks the map and consumer drifting apart.
-                const statusText =
-                  typeof data.step === "string"
-                    ? data.step
-                    : typeof data.message === "string"
-                      ? data.message
-                      : "";
-                if (statusText) {
-                  // Multi-word payloads (contain a space or ellipsis) flow
-                  // through verbatim. Single-keyword stage markers get mapped
-                  // to user-facing copy.
-                  const label = /[\s…]/.test(statusText)
-                    ? statusText
-                    : (STAGE_LABEL_MAP[statusText] ?? "");
-                  if (label) {
-                    setStreaming((prev) =>
-                      prev ? { ...prev, initial_status: label } : prev,
-                    );
-                  }
-                }
               }
-              // (metadata / contradictions / final_answer / status are all
-              // handled explicitly above per PLAN-0089 K T-03 + PLAN-0100 W2.)
+              // status, contradictions, metadata — no UI action needed yet;
+              // accepted silently so the parser never throws on them.
             } catch {
               // Non-JSON line — keep-alive comment, blank line, etc. Skip.
             }

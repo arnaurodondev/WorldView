@@ -49,22 +49,11 @@ class TestSignalWeights:
         total = sum(SIGNAL_WEIGHTS.values())
         assert abs(total - 1.0) < 1e-9, f"Weights sum to {total}, expected 1.0"
 
-    def test_five_signals_after_plan0093_c1(self) -> None:
-        """PLAN-0093 C-1: dropped watchlist, novelty, price_impact → 5 live signals."""
-        assert len(SIGNAL_WEIGHTS) == 5
+    def test_eight_signals(self) -> None:
+        assert len(SIGNAL_WEIGHTS) == 8
 
     def test_all_positive(self) -> None:
         assert all(v > 0 for v in SIGNAL_WEIGHTS.values())
-
-    def test_removed_signals_not_in_weights(self) -> None:
-        """PLAN-0093 C-1: the 3 dead signals are explicitly removed from SIGNAL_WEIGHTS."""
-        for dead in ("watchlist", "novelty", "price_impact"):
-            assert dead not in SIGNAL_WEIGHTS, f"Dead signal '{dead}' still in SIGNAL_WEIGHTS"
-
-    def test_only_live_signals_in_weights(self) -> None:
-        """PLAN-0093 C-1: SIGNAL_WEIGHTS contains exactly the 5 live signals."""
-        expected = {"entity_density", "source_reliability", "recency", "document_type", "extraction_yield"}
-        assert set(SIGNAL_WEIGHTS.keys()) == expected
 
 
 @pytest.mark.unit
@@ -101,9 +90,9 @@ class TestTierAssignment:
         """Edge case: exactly 0.20 should be LIGHT, not SUPPRESS."""
         assert _assign_tier(0.20) == RoutingTier.LIGHT
 
-    def test_edge_at_075(self) -> None:
-        """PLAN-0093 C-1: TIER_DEEP raised to 0.75 — edge case must be DEEP, not MEDIUM."""
-        assert _assign_tier(0.75) == RoutingTier.DEEP
+    def test_edge_at_070(self) -> None:
+        """Edge case: exactly 0.70 should be DEEP, not MEDIUM."""
+        assert _assign_tier(0.70) == RoutingTier.DEEP
 
 
 @pytest.mark.unit
@@ -222,29 +211,28 @@ class TestComputeRoutingScore:
             mentions=mentions,
             section_count=6,
             source_trust_weight=0.92,
+            novelty_score=0.90,
+            watched_entity_ids=frozenset([entity_id]),
         )
         assert decision.routing_tier == RoutingTier.DEEP
-        # PLAN-0093 C-1: feature_scores now has 5 keys (was 8)
-        assert len(decision.feature_scores) == 5
+        assert len(decision.feature_scores) == 8
 
     def test_suppress_tier_low_signal(self) -> None:
-        # PLAN-0093 C-1: with the v2 weight scheme even a low-signal article scores
-        # ~0.20 (LIGHT) when document_type defaults to 0.50. To hit SUPPRESS we
-        # need an unknown source_type AND zero source_trust.
         decision = compute_routing_score(
             doc_id=uuid.uuid4(),
             decision_id=uuid.uuid4(),
             source_type="manual",
-            published_at=_now() - timedelta(hours=500),  # very old → recency ≈ 0
+            published_at=_now() - timedelta(hours=500),  # very old
             extracted_at=_now(),
             mentions=[],  # no mentions
             section_count=0,
-            source_trust_weight=0.0,  # no trust at all
+            source_trust_weight=0.50,
+            novelty_score=0.0,
+            watched_entity_ids=frozenset(),
         )
         assert decision.routing_tier == RoutingTier.SUPPRESS
 
-    def test_feature_scores_dict_has_5_keys(self) -> None:
-        """PLAN-0093 C-1: feature_scores now has 5 keys (dropped 3 dead signals)."""
+    def test_feature_scores_dict_has_8_keys(self) -> None:
         decision = compute_routing_score(
             doc_id=uuid.uuid4(),
             decision_id=uuid.uuid4(),
@@ -254,8 +242,10 @@ class TestComputeRoutingScore:
             mentions=[],
             section_count=3,
             source_trust_weight=0.60,
+            novelty_score=0.50,
+            watched_entity_ids=frozenset(),
         )
-        assert len(decision.feature_scores) == 5
+        assert len(decision.feature_scores) == 8
 
     def test_composite_score_clamped_to_0_1(self) -> None:
         decision = compute_routing_score(
@@ -267,62 +257,131 @@ class TestComputeRoutingScore:
             mentions=[_mention(MentionClass.ORGANIZATION) for _ in range(20)],
             section_count=20,
             source_trust_weight=1.0,
+            novelty_score=1.0,
+            watched_entity_ids=frozenset(),
         )
         assert 0.0 <= decision.composite_score <= 1.0
 
-    # ── PLAN-0093 C-1 specific tests ────────────────────────────────────────
-
-    def test_composite_score_sums_to_one_when_all_signals_max(self) -> None:
-        """PLAN-0093 C-1: all 5 live signals at 1.0 → composite == 1.0 exactly.
-
-        Constructed inputs that push every live signal to its maximum:
-          - entity_density: 15+ ORG mentions → 1.0
-          - source_reliability: 1.0 directly
-          - recency: published_at very recent → exp(0) = 1.0
-          - document_type: sec_8k → 0.95 (close to max; max key value < 1.0 by design)
-          - extraction_yield: 20+ mentions + 8+ sections → 1.0
-
-        Since the max document_type signal is 0.95 (not 1.0), we compute the
-        expected composite analytically rather than asserting exact 1.0.
-        """
-        mentions = [_mention(MentionClass.ORGANIZATION) for _ in range(20)]
+    def test_price_impact_zero_when_not_provided(self) -> None:
+        """Omitting price_impact_score defaults to 0.0 in feature_scores."""
         decision = compute_routing_score(
             doc_id=uuid.uuid4(),
             decision_id=uuid.uuid4(),
-            source_type="sec_8k",  # 0.95
-            published_at=_now(),
+            source_type="eodhd_news",
+            published_at=None,
             extracted_at=_now(),
-            mentions=mentions,
-            section_count=10,
-            source_trust_weight=1.0,
+            mentions=[],
+            section_count=2,
+            source_trust_weight=0.50,
+            novelty_score=0.50,
+            watched_entity_ids=frozenset(),
         )
-        # Expected: 0.35*1.0 + 0.30*1.0 + 0.15*1.0 + 0.10*0.95 + 0.10*1.0 = 0.995
-        assert abs(decision.composite_score - 0.995) < 1e-9
-        assert 0.0 <= decision.composite_score <= 1.0
+        assert decision.feature_scores["price_impact"] == 0.0
 
-    def test_removed_signals_not_in_function_signature(self) -> None:
-        """PLAN-0093 C-1: the 3 dead kwargs are removed from the function signature."""
-        import inspect
+    def test_price_impact_included_in_composite(self) -> None:
+        """price_impact_score=1.0 increases composite by approximately 0.10 (weight * 1.0)."""
+        base = compute_routing_score(
+            doc_id=uuid.uuid4(),
+            decision_id=uuid.uuid4(),
+            source_type="eodhd_news",
+            published_at=None,
+            extracted_at=_now(),
+            mentions=[],
+            section_count=2,
+            source_trust_weight=0.50,
+            novelty_score=0.50,
+            watched_entity_ids=frozenset(),
+            price_impact_score=0.0,
+        )
+        with_impact = compute_routing_score(
+            doc_id=uuid.uuid4(),
+            decision_id=uuid.uuid4(),
+            source_type="eodhd_news",
+            published_at=None,
+            extracted_at=_now(),
+            mentions=[],
+            section_count=2,
+            source_trust_weight=0.50,
+            novelty_score=0.50,
+            watched_entity_ids=frozenset(),
+            price_impact_score=1.0,
+        )
+        diff = with_impact.composite_score - base.composite_score
+        assert abs(diff - 0.10) < 1e-9
 
-        sig = inspect.signature(compute_routing_score)
-        for dead_kwarg in ("novelty_score", "watched_entity_ids", "price_impact_score"):
-            assert (
-                dead_kwarg not in sig.parameters
-            ), f"Dead kwarg '{dead_kwarg}' still present in compute_routing_score signature"
+    def test_price_impact_clamped_below_zero(self) -> None:
+        """Negative price_impact_score is clamped to 0.0."""
+        decision = compute_routing_score(
+            doc_id=uuid.uuid4(),
+            decision_id=uuid.uuid4(),
+            source_type="eodhd_news",
+            published_at=None,
+            extracted_at=_now(),
+            mentions=[],
+            section_count=2,
+            source_trust_weight=0.50,
+            novelty_score=0.50,
+            watched_entity_ids=frozenset(),
+            price_impact_score=-0.5,
+        )
+        assert decision.feature_scores["price_impact"] == 0.0
 
-    def test_routing_tier_thresholds_updated(self) -> None:
-        """PLAN-0093 C-1: tier thresholds recalibrated for the new composite ceiling.
+    def test_price_impact_clamped_above_one(self) -> None:
+        """price_impact_score > 1.0 is clamped to 1.0."""
+        decision = compute_routing_score(
+            doc_id=uuid.uuid4(),
+            decision_id=uuid.uuid4(),
+            source_type="eodhd_news",
+            published_at=None,
+            extracted_at=_now(),
+            mentions=[],
+            section_count=2,
+            source_trust_weight=0.50,
+            novelty_score=0.50,
+            watched_entity_ids=frozenset(),
+            price_impact_score=1.5,
+        )
+        assert decision.feature_scores["price_impact"] == 1.0
 
-        TIER_DEEP bumped from 0.70 → 0.75 because the live-signal ceiling rose
-        from ~0.65 to ~0.90+ after dropping the 3 dead signals.
-        """
-        from nlp_pipeline.application.blocks.routing import TIER_DEEP, TIER_LIGHT, TIER_MEDIUM
+    def test_weights_sum_to_one_after_rebalance(self) -> None:
+        """Explicit rebalance check: new weights still sum to exactly 1.0."""
+        from nlp_pipeline.application.blocks.routing import SIGNAL_WEIGHTS
 
-        assert TIER_DEEP == 0.75
-        assert TIER_MEDIUM == 0.45
-        assert TIER_LIGHT == 0.20
-        # Ordering invariant — must always hold for _assign_tier to work
-        assert TIER_DEEP > TIER_MEDIUM > TIER_LIGHT > 0.0
+        total = sum(SIGNAL_WEIGHTS.values())
+        assert abs(total - 1.0) < 1e-9
+
+    def test_price_impact_partial_value(self) -> None:
+        """price_impact_score=0.5 is stored as-is in feature_scores."""
+        decision = compute_routing_score(
+            doc_id=uuid.uuid4(),
+            decision_id=uuid.uuid4(),
+            source_type="eodhd_news",
+            published_at=None,
+            extracted_at=_now(),
+            mentions=[],
+            section_count=2,
+            source_trust_weight=0.50,
+            novelty_score=0.50,
+            watched_entity_ids=frozenset(),
+            price_impact_score=0.5,
+        )
+        assert decision.feature_scores["price_impact"] == 0.5
+
+    def test_feature_scores_contains_price_impact_key(self) -> None:
+        """feature_scores dict must include the 'price_impact' key."""
+        decision = compute_routing_score(
+            doc_id=uuid.uuid4(),
+            decision_id=uuid.uuid4(),
+            source_type="finnhub_news",
+            published_at=None,
+            extracted_at=_now(),
+            mentions=[],
+            section_count=1,
+            source_trust_weight=0.60,
+            novelty_score=0.40,
+            watched_entity_ids=frozenset(),
+        )
+        assert "price_impact" in decision.feature_scores
 
     def test_sec_edgar_minimum_medium_tier(self) -> None:
         """sec_edgar docs with low entity density must be upgraded from LIGHT to MEDIUM.
@@ -341,8 +400,11 @@ class TestComputeRoutingScore:
             mentions=[],  # no entity mentions — worst-case entity density
             section_count=2,
             source_trust_weight=0.90,  # from migration 0039
+            novelty_score=0.70,
+            watched_entity_ids=frozenset(),
+            price_impact_score=0.0,
         )
-        # Composite stays in LIGHT band absent the override; authoritative upgrade lifts it.
+        # Composite will be ~0.42 (LIGHT without override), must be upgraded to MEDIUM
         assert decision.routing_tier == RoutingTier.MEDIUM
 
     def test_non_authoritative_source_not_upgraded(self) -> None:
@@ -356,6 +418,8 @@ class TestComputeRoutingScore:
             mentions=[],
             section_count=0,
             source_trust_weight=0.55,
+            novelty_score=0.10,
+            watched_entity_ids=frozenset(),
         )
         # newsapi_news is not in the authoritative-source set — stays LIGHT or SUPPRESS
         assert decision.routing_tier in {RoutingTier.LIGHT, RoutingTier.SUPPRESS}

@@ -70,7 +70,7 @@ SELECT template_name,
 FROM path_templates
 WHERE enabled = TRUE
 ORDER BY template_name
-"""),
+""")
                 )
                 rows = result.fetchall()
 
@@ -85,7 +85,7 @@ ORDER BY template_name
                         "template_name": str(row[0]),
                         "entity_type_sequence": [str(e) for e in ets],
                         "relation_type_sequence": [str(r) for r in rts],
-                    },
+                    }
                 )
 
             self._cache = templates

@@ -1,52 +1,49 @@
 /**
- * components/instrument/financials/FinancialsTab.tsx — Tab orchestrator (T-25 W3 extension)
+ * components/instrument/financials/FinancialsTab.tsx — Tab orchestrator (T-C-03)
  *
  * WHY THIS EXISTS: PRD-0088 / PLAN-0090 introduces a new "Financials" tab on the
  * instrument detail page. This component is the top-level layout owner: it
- * assembles all building blocks into the 2-column Finviz/Bloomberg-grade view
- * described in §6.8 of the spec.
+ * assembles the four building blocks delivered in earlier sub-tasks into the
+ * 2-column Finviz/Bloomberg-grade view described in §6.8 of the spec.
  *
  * LAYOUT (full tab height):
- *   ┌──────────────────────────────────────────────────────┬───────────┐
- *   │ DenseMetricsGrid (40 cells, 6-col)                   │ Analyst   │
- *   │ IncomeStatementTable (A/Q toggle via p chord)        │ Sidebar   │
- *   │ EarningsBarChart (64px)                              │  (7       │
- *   │ PeerComparisonTable (5 peers + self)                 │  panels,  │
- *   │ InsiderTransactionsTable (8 rows)                    │  240px    │
- *   │ InstitutionalHoldersTable (10 rows)                  │  sticky)  │
- *   │ FundHoldersTable (10 rows)                           │           │
- *   │ ↕ scrollable                                         │           │
- *   └──────────────────────────────────────────────────────┴───────────┘
+ *   ┌──────────────────────────────────────────────┬────────────────┐
+ *   │ FlatMetricsGrid (T-C-01)                     │ AnalystSidebar │
+ *   │ ────────────────────────────────────────     │  (T-C-03)      │
+ *   │ IncomeStatementTable (T-C-02)                │                │
+ *   │ EarningsBarChart    (T-C-02)                 │   280px wide   │
+ *   │ ↕ scrollable                                 │   sticky       │
+ *   └──────────────────────────────────────────────┴────────────────┘
  *
  * WHY `flex flex-row h-full overflow-hidden`: PLAN-0090 specifies a fixed
  * full-height tab with the LEFT column scrolling independently and the RIGHT
- * sidebar staying pinned.
+ * sidebar staying pinned (analysts compare metrics scrolled deep in the income
+ * statement against the consensus target — the target should never disappear).
  *
- * WHY useFinancialsSidebarData: T-04 loads 4 slow-changing resources (insider,
- * institutional, fund, peers) independently of the main tab data. The hook
- * fires 4 parallel queries; data is prop-drilled to the table components.
+ * WHY useFinancialsTabData (single hook, not 3 hooks): T-A-03 consolidates the
+ * three required fetches (key metrics, income statement, analyst consensus)
+ * into one hook so the tab renders coherent data — no row-level shimmer with
+ * the metrics resolved but the income statement still loading. The hook also
+ * dedupes the underlying TanStack Query keys with sibling components.
  *
  * WHO USES IT: InstrumentPageClient.tsx — wired into the "financials" tab.
- * DATA SOURCE: useFinancialsTabData + useFinancialsSidebarData + splits-dividends.
+ * DATA SOURCE: useFinancialsTabData(instrumentId) → S9 /v1/fundamentals/* +
+ *              /v1/income-statement/* (see hook for exact wiring).
  */
 
 "use client";
-// WHY "use client": hooks (useQuery, useState, useEffect) require the browser runtime.
+// WHY "use client": the hook uses useQuery (TanStack Query) which requires the
+// browser runtime. Marking the orchestrator client-side avoids forcing every
+// presentational child to opt-in individually.
 
-import { useState, useEffect } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useFinancialsTabData } from "@/components/instrument/hooks/useFinancialsTabData";
-import { useFinancialsSidebarData } from "@/components/instrument/hooks/useFinancialsSidebarData";
-import { DenseMetricsGrid } from "@/components/instrument/financials/DenseMetricsGrid";
+import { FlatMetricsGrid } from "@/components/instrument/financials/FlatMetricsGrid";
 import { IncomeStatementTable } from "@/components/instrument/financials/IncomeStatementTable";
 import { EarningsBarChart } from "@/components/instrument/financials/EarningsBarChart";
-import { PeerComparisonTable } from "@/components/instrument/financials/PeerComparisonTable";
-import { InsiderTransactionsTable } from "@/components/instrument/financials/InsiderTransactionsTable";
-import { InstitutionalHoldersTable } from "@/components/instrument/financials/InstitutionalHoldersTable";
-import { FundHoldersTable } from "@/components/instrument/financials/FundHoldersTable";
-import { FundamentalsTimeseriesChart } from "@/components/instrument/financials/FundamentalsTimeseriesChart";
 import { AnalystSidebar } from "@/components/instrument/financials/AnalystSidebar";
-import { useApiClient } from "@/lib/api-client";
+import { createGateway } from "@/lib/gateway";
+import { useAccessToken } from "@/lib/api-client";
 import { qk } from "@/lib/query/keys";
 
 // ── Props ─────────────────────────────────────────────────────────────────────
@@ -58,59 +55,41 @@ export interface FinancialsTabProps {
   // The page-bundle in InstrumentPageClient supplies both — we receive the
   // instrument_id here.
   readonly instrumentId: string;
-  /**
-   * KG entity UUID (resolved from the page-bundle in InstrumentPageClient).
-   * WHY optional: FinancialsTab is reusable outside the full page shell where
-   * the bundle may not yet be available. When absent, PeerComparisonTable
-   * disables the COMPETITORS tab and shows a "KG entity not linked" message.
-   */
-  readonly entityId?: string;
 }
 
 // ── Component ─────────────────────────────────────────────────────────────────
 
-export function FinancialsTab({ instrumentId, entityId }: FinancialsTabProps) {
-  // ── Period toggle state (p chord) ─────────────────────────────────────────
-  // WHY local state (not URL param): period choice is ephemeral — analysts
-  // switch between annual/quarterly within a session but don't bookmark it.
-  // Keeping it in local state avoids URL pollution and router navigation cost.
-  const [periodType, setPeriodType] = useState<"ANNUAL" | "QUARTERLY">("ANNUAL");
-
-  // WHY listen for wv:financials-period-toggle event: InstrumentTabs.tsx fires
-  // this event when the user presses `p` while on the Financials tab. Custom
-  // events let InstrumentTabs remain unaware of FinancialsTab internals — same
-  // pattern as the `b`/`d` chords for brief/desc toggle in QuoteTab.
-  useEffect(() => {
-    const handler = () =>
-      setPeriodType((prev) => (prev === "ANNUAL" ? "QUARTERLY" : "ANNUAL"));
-    window.addEventListener("wv:financials-period-toggle", handler);
-    return () => window.removeEventListener("wv:financials-period-toggle", handler);
-  }, []);
-
-  // ── Tab data ──────────────────────────────────────────────────────────────
-  // T-A-03: six sub-resources bundled in one hook for coherent loading.
+export function FinancialsTab({ instrumentId }: FinancialsTabProps) {
+  // T-A-03 actual return shape: { fundamentals, snapshot, incomeStatement,
+  // earningsHistory, technicals, shareStats, isLoading }. The hook composes
+  // the six sub-resources behind a single isLoading gate so the tab renders
+  // coherently. IncomeStatementTable and EarningsBarChart are self-fetching
+  // (they call into the same query keys), so we don't need to thread their
+  // data through — TanStack dedupes on the shared keys.
   const { fundamentals, snapshot, technicals, shareStats } =
     useFinancialsTabData(instrumentId);
 
-  // T-04: 4 sidebar-specific slow-changing resources (24h stale).
-  const { insiderData, institutionalData, fundHoldersData, peersData } =
-    useFinancialsSidebarData(instrumentId);
-
   // WHY a dedicated splits-dividends fetch (not bundled in useFinancialsTabData):
   // splits-dividends is rarely-changing (filing-cadence) — 24h staleTime works.
-  const gateway = useApiClient();
+  // We keep this query co-located with the consumer rather than spreading another
+  // 6th field through the multi-tab hook contract. Audit 2026-05-19: previously
+  // the dividends prop was hardcoded to null, hiding EX-DIV / PAY-DATE.
+  const token = useAccessToken();
   const { data: splitsDivResp } = useQuery({
     queryKey: qk.instruments.splitsDividends(instrumentId),
-    queryFn: () => gateway.getSplitsDividends(instrumentId),
+    queryFn: () => createGateway(token).getSplitsDividends(instrumentId),
     staleTime: 24 * 60 * 60 * 1000,
     enabled: !!instrumentId,
   });
 
   // WHY extract from FundamentalsSectionResponse: useFinancialsTabData's
-  // `technicals` and `shareStats` come back as section envelopes; DenseMetricsGrid
-  // expects the typed inner data shapes.
+  // `technicals` and `shareStats` come back as section envelopes; FlatMetricsGrid
+  // expects the typed inner data shapes. Pull `records[0].data` defensively —
+  // an empty section is rendered as null, MetricCell handles the "—" placeholder.
   const technicalsData = technicals?.records?.[0]?.data ?? null;
   const shareStatsData = shareStats?.records?.[0]?.data ?? null;
+  // Splits/dividends data — extract typed PascalCase fields (ExDividendDate,
+  // DividendDate) from records[0].data per the EODHD-verbatim section convention.
   const dividendsData = splitsDivResp?.records?.[0]?.data
     ? (splitsDivResp.records[0].data as {
         ExDividendDate?: string | null;
@@ -128,9 +107,10 @@ export function FinancialsTab({ instrumentId, entityId }: FinancialsTabProps) {
           explicit min-width or they refuse to shrink and force the parent to
           grow (causing horizontal overflow). */}
       <div className="flex min-w-0 flex-1 flex-col overflow-y-auto">
-        {/* Block 1: 40-cell 6-col DenseMetricsGrid. Always at the top —
-            gives analysts the snapshot before drilling into multi-year history. */}
-        <DenseMetricsGrid
+        {/* Block 1: flat key-metrics grid. Always at the top — gives analysts
+            the snapshot they need before drilling into multi-year history. */}
+        <FlatMetricsGrid
+          instrumentId={instrumentId}
           fundamentals={fundamentals ?? null}
           snapshot={snapshot ?? null}
           // eslint-disable-next-line @typescript-eslint/no-explicit-any -- envelope→typed cast (see WHY note above)
@@ -140,53 +120,32 @@ export function FinancialsTab({ instrumentId, entityId }: FinancialsTabProps) {
           dividends={dividendsData}
         />
 
-        {/* Block 2: income statement — annual (5 cols) or quarterly (8 cols),
-            controlled by p chord firing wv:financials-period-toggle. */}
-        <IncomeStatementTable
-          instrumentId={instrumentId}
-          periodType={periodType}
-        />
+        {/* Block 2: full income-statement table. WHY self-fetch (no props): the
+            child component reads /v1/income-statement/{id} via its own useQuery;
+            staleTime=24h means it joins the in-flight request fired by the
+            useFinancialsTabData hook with no extra round-trip. */}
+        <IncomeStatementTable instrumentId={instrumentId} />
 
-        {/* Block 3: annual EPS beat/miss bar chart (64px, surprise chips). */}
+        {/* Block 3: annual earnings bar chart — self-fetching for the same
+            reason as IncomeStatementTable. */}
         <EarningsBarChart instrumentId={instrumentId} />
-
-        {/* Block 3b: 11-metric historical trend chart (PLAN-0092 Wave B).
-            WHY after EarningsBarChart: EPS chart shows the bottom line; the
-            timeseries chart shows how valuation multiples have moved alongside
-            earnings — the natural next question an analyst asks. */}
-        <FundamentalsTimeseriesChart instrumentId={instrumentId} />
-
-        {/* Block 4: 5-peer + self comparison table with COMPETITORS toggle.
-            WHY pass entityId: the COMPETITORS tab uses the KG entity UUID
-            (not instrument_id) to call getSimilarEntities on the knowledge-graph
-            service. entityId is optional — when absent the COMPETITORS tab is
-            disabled with an explanatory message so the PEERS tab keeps working. */}
-        <PeerComparisonTable
-          peersData={peersData}
-          instrumentId={instrumentId}
-          fundamentals={fundamentals ?? null}
-          entityId={entityId}
-        />
-
-        {/* Block 5: insider transactions — 8 most-recent Form 4 filings. */}
-        <InsiderTransactionsTable
-          insiderData={insiderData}
-          ticker={fundamentals?.ticker ?? null}
-        />
-
-        {/* Block 6: top 10 institutional shareholders. */}
-        <InstitutionalHoldersTable institutionalData={institutionalData} />
-
-        {/* Block 7: top 10 mutual fund / ETF holders. */}
-        <FundHoldersTable fundHoldersData={fundHoldersData} />
       </div>
 
-      {/* ── Right column — fixed 240px sidebar (T-24: narrowed from 280px). */}
-      <div className="w-[240px] shrink-0">
+      {/* ── Right column — fixed 280px sidebar.
+          WHY w-[280px] shrink-0: locked width per spec; shrink-0 prevents the
+          flex parent from shrinking the sidebar when the left column has
+          unusually long content. */}
+      <div className="w-[280px] shrink-0">
         <AnalystSidebar
-          instrumentId={instrumentId}
-          fundamentals={fundamentals ?? null}
-          snapshot={snapshot ?? null}
+          // WHY pull from fundamentals (not snapshot): analyst counts live on
+          // Fundamentals (analyst_*_count fields). targetPrice → analyst_target_price.
+          strongBuy={fundamentals?.analyst_strong_buy_count ?? null}
+          buy={fundamentals?.analyst_buy_count ?? null}
+          hold={fundamentals?.analyst_hold_count ?? null}
+          sell={fundamentals?.analyst_sell_count ?? null}
+          strongSell={fundamentals?.analyst_strong_sell_count ?? null}
+          targetPrice={fundamentals?.analyst_target_price ?? null}
+          updatedAt={fundamentals?.updated_at ?? null}
         />
       </div>
     </div>

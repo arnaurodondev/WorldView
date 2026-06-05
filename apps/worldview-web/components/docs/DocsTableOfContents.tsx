@@ -72,7 +72,7 @@ export function DocsTableOfContents({ headings }: DocsTableOfContentsProps) {
     <aside
       aria-label="On this page"
       // QA iter-1 (design POLISH): top-16 matches the sticky nav (was top-20).
-      className="sticky top-16 max-h-[calc(100vh-5rem)] overflow-y-auto text-[14px]"
+      className="sticky top-16 max-h-[calc(100vh-5rem)] overflow-y-auto text-sm"
     >
       <p className="mb-3 font-mono text-[10px] uppercase tracking-[0.16em] text-muted-foreground/70">
         On this page

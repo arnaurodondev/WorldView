@@ -38,23 +38,9 @@
 // inherits the directive so it can pass props through without extra boundary.
 
 import { useQuery } from "@tanstack/react-query";
-import { useQueryState } from "nuqs";
-// WHY useQueryState (nuqs): the selected holding is stored in the URL query
-// string (?holding=AAPL). This means:
-//   1. The panel state survives a browser refresh — the trader's context is
-//      preserved if they copy the URL or reopen a tab.
-//   2. The Back button naturally closes the panel (removes ?holding=).
-//   3. No extra useState — the URL IS the state.
 import { Skeleton } from "@/components/ui/skeleton";
-import { useApiClient } from "@/lib/api-client";
-// WHY qk (Wave G QA F-006): the brokerage probe below previously used an
-// inline ["brokerage-connections", portfolioId] key that did NOT cascade
-// from qk.brokerage.all — invalidations from sync/disconnect mutations
-// missed it. Switching to qk.brokerage.statusForPortfolio shares the cache
-// entry with TransactionsBrokerageStatusBar and participates in cascades.
-import { qk } from "@/lib/query/keys";
-// PRD-0089 SA-B: HoldingDetailPanel slide-over
-import { HoldingDetailPanel } from "@/features/portfolio/components/HoldingDetailPanel";
+import { useAuth } from "@/hooks/useAuth";
+import { createGateway } from "@/lib/gateway";
 // PLAN-0088 Wave E E-1 strips ────────────────────────────────────────────
 import { CashRow } from "@/components/portfolio/CashRow";
 import { ConcentrationStrip } from "@/components/portfolio/ConcentrationStrip";
@@ -109,41 +95,17 @@ export function HoldingsTab({
   equityPeriod,
   setEquityPeriod,
 }: HoldingsTabProps) {
-  // WHY useApiClient (not createGateway + useAuth): D1 remediation — the
-  // shared memoised gateway from the ApiClientProvider keeps a stable
-  // reference across renders so queryFn closures don't re-create the gateway
-  // on every fetch (and so any future silent-refresh of the access token
-  // automatically re-fires queries pinned to the old reference).
-  const apiClient = useApiClient();
-
-  // ── PRD-0089 SA-B: URL state for the selected holding ticker ─────────────
-  // WHY useQueryState("holding"): stores the selected ticker in the URL so
-  // the panel survives a browser refresh and the Back button closes it.
-  // Default is null (panel hidden). When the user clicks a holdings row we
-  // call setSelectedHolding(row.ticker); a second click or Escape → null.
-  const [selectedHolding, setSelectedHolding] = useQueryState("holding");
-
-  /**
-   * findHoldingByTicker — look up the enriched Holding by ticker string.
-   *
-   * WHY a helper (not inline): used in two places (the <HoldingDetailPanel>
-   * prop and a future "is this row active?" highlight check). A helper keeps
-   * the JSX readable.
-   *
-   * Returns null when the ticker isn't found (e.g., after holdings reload).
-   */
-  function findHoldingByTicker(ticker: string) {
-    return enrichedHoldings.find((h) => h.ticker === ticker) ?? null;
-  }
+  const { accessToken } = useAuth();
 
   // PLAN-0088 E-1: gate RecentActivityFeed on a broker connection. The
   // audit (§1 row 5) flagged it as empty-state for paper-traders. We do
   // a lightweight brokerage-connection probe here and only render the
   // feed when at least one connection exists. Cached for 60s.
   const { data: brokerageConnections } = useQuery({
-    enabled: Boolean(activePortfolioId),
-    queryKey: qk.brokerage.statusForPortfolio(activePortfolioId),
-    queryFn: () => apiClient.getBrokerageConnections(activePortfolioId!),
+    enabled: Boolean(activePortfolioId && accessToken),
+    queryKey: ["brokerage-connections", activePortfolioId],
+    queryFn: () =>
+      createGateway(accessToken!).getBrokerageConnections(activePortfolioId!),
     staleTime: 60_000,
   });
   // WHY ?? false (not a truthy guard): the query returns undefined while
@@ -192,17 +154,6 @@ export function HoldingsTab({
             ]),
           )}
           totalValue={kpi.totalValue}
-          // PRD-0089 SA-B: when a row is clicked, open the HoldingDetailPanel
-          // by storing the ticker in the URL query state (?holding=AAPL).
-          // A second click on the same row closes the panel (toggle behaviour).
-          onSelectHolding={(ticker) => {
-            // Toggle: if this ticker is already selected, deselect it.
-            if (selectedHolding === ticker) {
-              void setSelectedHolding(null);
-            } else {
-              void setSelectedHolding(ticker);
-            }
-          }}
         />
       </div>
 
@@ -262,27 +213,6 @@ export function HoldingsTab({
           portfolioId={activePortfolioId}
           period={equityPeriod}
           onPeriodChange={setEquityPeriod}
-        />
-      )}
-
-      {/* ── PRD-0089 SA-B: HoldingDetailPanel slide-over ────────────────────
-          Rendered unconditionally so TanStack Query inside the panel keeps
-          its cache warm even when the panel is "hidden" (translate-x-full).
-          The panel self-hides when `holding === null` via CSS transform, NOT
-          by unmounting — this avoids cache invalidation on every open/close.
-          WHY activePortfolioId guard: the panel queries by portfolioId; if no
-          portfolio is active (shouldn't happen in normal flow) we don't render
-          it to avoid a query with an empty portfolioId string. */}
-      {activePortfolioId && (
-        <HoldingDetailPanel
-          portfolioId={activePortfolioId}
-          holding={
-            selectedHolding
-              ? findHoldingByTicker(selectedHolding)
-              : null
-          }
-          onClose={() => void setSelectedHolding(null)}
-          period={equityPeriod}
         />
       )}
     </div>

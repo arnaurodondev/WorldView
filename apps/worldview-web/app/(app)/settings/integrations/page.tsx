@@ -170,7 +170,7 @@ export default function SettingsIntegrationsPage() {
       {/* ── Brokerage ────────────────────────────────────────────────── */}
       <Card className="border-border/60 bg-card">
         <CardHeader className="pb-3">
-          <CardTitle className="flex items-center gap-2 text-[14px] font-medium text-foreground">
+          <CardTitle className="flex items-center gap-2 text-sm font-medium text-foreground">
             <Briefcase className="h-4 w-4 text-primary" aria-hidden="true" strokeWidth={1.5} />
             Brokerage accounts
           </CardTitle>
@@ -189,7 +189,7 @@ export default function SettingsIntegrationsPage() {
                 TT
               </div>
               <div className="min-w-0">
-                <p className="text-[14px] font-medium text-foreground">TastyTrade</p>
+                <p className="text-sm font-medium text-foreground">TastyTrade</p>
                 <p className="mt-0.5 text-xs text-muted-foreground">
                   Read-only positions, holdings and transaction history.
                 </p>
@@ -225,7 +225,7 @@ export default function SettingsIntegrationsPage() {
       {/* ── Slack ────────────────────────────────────────────────────── */}
       <Card className="border-border/60 bg-card">
         <CardHeader className="pb-3">
-          <CardTitle className="flex items-center gap-2 text-[14px] font-medium text-foreground">
+          <CardTitle className="flex items-center gap-2 text-sm font-medium text-foreground">
             <MessageSquare className="h-4 w-4 text-primary" aria-hidden="true" strokeWidth={1.5} />
             Slack alert delivery
           </CardTitle>
@@ -243,7 +243,7 @@ export default function SettingsIntegrationsPage() {
                 SL
               </div>
               <div className="min-w-0">
-                <p className="text-[14px] font-medium text-foreground">Slack</p>
+                <p className="text-sm font-medium text-foreground">Slack</p>
                 <p className="mt-0.5 text-xs text-muted-foreground">
                   {slackConnected
                     ? "Connected to workspace acme-capital.slack.com — channel #worldview-alerts."
@@ -275,7 +275,7 @@ export default function SettingsIntegrationsPage() {
       {/* ── Email digest ─────────────────────────────────────────────── */}
       <Card className="border-border/60 bg-card">
         <CardHeader className="pb-3">
-          <CardTitle className="flex items-center gap-2 text-[14px] font-medium text-foreground">
+          <CardTitle className="flex items-center gap-2 text-sm font-medium text-foreground">
             <Mail className="h-4 w-4 text-primary" aria-hidden="true" strokeWidth={1.5} />
             Email digest
           </CardTitle>
@@ -286,7 +286,7 @@ export default function SettingsIntegrationsPage() {
         <CardContent>
           <div className="flex items-center justify-between gap-3 rounded-[2px] border border-border/40 bg-card/30 p-3">
             <div className="min-w-0">
-              <p className="text-[14px] font-medium text-foreground">Daily morning brief</p>
+              <p className="text-sm font-medium text-foreground">Daily morning brief</p>
               <p className="mt-0.5 text-xs text-muted-foreground">
                 Delivered at 07:00 in your local timezone, every market day.
               </p>
@@ -308,7 +308,7 @@ export default function SettingsIntegrationsPage() {
         <CardHeader className="pb-3">
           <div className="flex items-start justify-between gap-3">
             <div>
-              <CardTitle className="flex items-center gap-2 text-[14px] font-medium text-foreground">
+              <CardTitle className="flex items-center gap-2 text-sm font-medium text-foreground">
                 <Webhook className="h-4 w-4 text-primary" aria-hidden="true" strokeWidth={1.5} />
                 Outbound webhooks
               </CardTitle>

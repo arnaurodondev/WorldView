@@ -23,9 +23,6 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { createGateway } from "@/lib/gateway";
 import { useAuth } from "@/hooks/useAuth";
 import { cn } from "@/lib/utils";
-// BP-497 / HR-060 (2026-05-21): central qk.* factory so this widget
-// shares the cache with the sidebar watchlist + dashboard widgets.
-import { qk } from "@/lib/query/keys";
 
 // ── Formatting helpers ─────────────────────────────────────────────────────────
 
@@ -51,7 +48,7 @@ export function WorkspaceWatchlistWidget() {
 
   // Step 1: Fetch watchlists to get the ticker list
   const { data: watchlists, isLoading: wlLoading } = useQuery({
-    queryKey: qk.watchlists.list(),
+    queryKey: ["watchlists"],
     queryFn: () => createGateway(accessToken).getWatchlists(),
     enabled: !!accessToken,
     // WHY 30s: watchlist membership changes infrequently — 30s is more than fresh enough
@@ -72,7 +69,7 @@ export function WorkspaceWatchlistWidget() {
   // WHY entity_ids as IDs: getBatchQuotes takes entity_ids (not instrument_ids)
   // and returns quotes keyed by entity_id (matching WatchlistPanel.tsx pattern).
   const { data: quotesResp, isLoading: quotesLoading } = useQuery({
-    queryKey: qk.quotes.batch(entityIds),
+    queryKey: ["batch-quotes", entityIds],
     queryFn: () => createGateway(accessToken).getBatchQuotes(entityIds),
     enabled: !!accessToken && entityIds.length > 0,
     // WHY staleTime 0 + refetchInterval 30000: prices must always be treated as
@@ -151,11 +148,7 @@ export function WorkspaceWatchlistWidget() {
           // entirely by row height — py-0 is explicit to override any Tailwind base.
           <Link
             key={entityId}
-            // PRD-0089 F2 step 11 (§6.6): ticker-first URL — `ticker` is the
-            // visible label on this row so the URL stays in sync. Falls back
-            // to the UUID when ticker is null (pending resolution); middleware
-            // 301s to canonical ticker once resolved.
-            href={`/instruments/${ticker || entityId}`}
+            href={`/instruments/${entityId}`}
             className="flex items-center px-2 h-[22px] hover:bg-muted/40 text-foreground"
           >
             {/* Ticker — monospace, left-aligned */}

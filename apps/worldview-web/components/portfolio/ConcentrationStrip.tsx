@@ -115,7 +115,7 @@ export function ConcentrationStrip({ portfolioId }: ConcentrationStripProps) {
         </span>
         <span
           className={cn(
-            "ml-1 px-1.5 py-px border text-[9px] uppercase tracking-[0.06em]",
+            "ml-1 px-1.5 py-px rounded-sm border text-[9px] uppercase tracking-[0.06em]",
             styles.chip,
           )}
         >

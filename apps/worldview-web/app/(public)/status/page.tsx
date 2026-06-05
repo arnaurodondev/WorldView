@@ -126,7 +126,7 @@ function MonitorPill({ monitor }: { monitor: MonitorSummary }) {
         <div className="flex items-center gap-2">
           <StatusIcon status={monitor.status} />
           {/* Use component_label (Sam-facing), NOT friendly_name (internal) */}
-          <span className="text-[14px] font-medium text-foreground">
+          <span className="text-sm font-medium text-foreground">
             {monitor.component_label}
           </span>
         </div>
@@ -190,7 +190,7 @@ function IncidentBanner({ incidents }: { incidents: Incident[] }) {
         return (
           <div
             key={i}
-            className={`rounded-[2px] border px-4 py-3 text-[14px] ${bg}`}
+            className={`rounded-[2px] border px-4 py-3 text-sm ${bg}`}
           >
             <div className="flex items-baseline gap-2">
               <span aria-hidden>{icon}</span>
@@ -231,15 +231,15 @@ export default async function StatusPage() {
     <main className="mx-auto max-w-2xl px-4 py-12">
       {/* Page header */}
       <div className="mb-8 text-center">
-        <h1 className="text-[20px] font-semibold text-foreground">System Status</h1>
-        <p className="mt-1 text-[14px] text-muted-foreground">
+        <h1 className="text-xl font-semibold text-foreground">System Status</h1>
+        <p className="mt-1 text-sm text-muted-foreground">
           Worldview platform uptime — last 30 days
         </p>
         {/* Overall status badge */}
         <div className="mt-4 flex items-center justify-center gap-2">
           <StatusIcon status={worstStatus} />
           <span
-            className="text-[16px] font-medium text-foreground"
+            className="text-base font-medium text-foreground"
             // aria-live so screen readers announce status on page load
             aria-live="polite"
           >
@@ -253,7 +253,7 @@ export default async function StatusPage() {
 
       {/* Monitor pills grid */}
       {data.monitors.length === 0 ? (
-        <p className="text-center text-[14px] text-muted-foreground">
+        <p className="text-center text-sm text-muted-foreground">
           No monitors configured yet.
         </p>
       ) : (

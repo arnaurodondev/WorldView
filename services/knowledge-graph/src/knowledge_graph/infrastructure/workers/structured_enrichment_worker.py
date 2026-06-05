@@ -88,14 +88,7 @@ class StructuredEnrichmentWorker:
         aborted_due_to_retryables = False
 
         while True:
-            # PLAN-0093 T-C-4-01 (F-DB-ENRICHMENT-001): use the atomic
-            # claim-and-increment so attempts advances exactly once per real
-            # processing attempt — even if the worker crashes mid-enrichment
-            # OR two workers race on the same entity. The old SELECT-then-
-            # later-UPDATE flow let attempts get stuck at 0 forever (audit
-            # 2026-05-23 found 1,790 of 5,230 entities had attempts=0 + no
-            # enriched_at).
-            entities = await self._adapter.claim_for_enrichment(batch_size=_BATCH_SIZE)
+            entities = await self._adapter.list_unenriched(batch_size=_BATCH_SIZE)
             if not entities:
                 break
 
@@ -124,11 +117,7 @@ class StructuredEnrichmentWorker:
                     # F-A07 / F-P2-02: retryable outcome metrics.
                     s7_enrichment_entities_total.labels(entity_type=entity.entity_type, outcome="retryable").inc()
                     s7_enrichment_sweep_entities_processed_total.labels(outcome="retryable").inc()
-                    # PLAN-0093 T-C-4-01: rollback the claim-time increment so
-                    # retryable failures don't burn an attempt (preserves the
-                    # pre-existing semantic that transient errors are not
-                    # evidence of unfixable entity state).
-                    await self._decrement_attempts(entity.entity_id)
+                    # Do NOT increment attempts — retryable errors are transient.
                     if consecutive_retryable >= _MAX_CONSECUTIVE_RETRYABLE:
                         # F-X04: bail out — tomorrow's run will pick up the
                         # remaining queue.  This protects EODHD's 100k/day quota
@@ -156,10 +145,7 @@ class StructuredEnrichmentWorker:
                     # F-A07 / F-P2-02: fatal outcome metrics.
                     s7_enrichment_entities_total.labels(entity_type=entity.entity_type, outcome="fatal").inc()
                     s7_enrichment_sweep_entities_processed_total.labels(outcome="fatal").inc()
-                    # PLAN-0093 T-C-4-01: do NOT call _increment_attempts here —
-                    # claim_for_enrichment already bumped the counter at claim time.
-                    # Calling it again would double-charge the entity and exhaust
-                    # the 3-attempt budget after just 2 real failures.
+                    await self._increment_attempts(entity.entity_id)
 
             if aborted_due_to_retryables:
                 break
@@ -174,12 +160,7 @@ class StructuredEnrichmentWorker:
         )
 
     async def _increment_attempts(self, entity_id: object) -> None:
-        """Open a short-lived session to increment enrichment_attempts.
-
-        Kept for backwards-compatibility with callers outside the sweep loop
-        (e.g. one-off remediation scripts). The sweep loop itself no longer
-        calls this — claim_for_enrichment handles the +1 atomically at claim.
-        """
+        """Open a short-lived session to increment enrichment_attempts."""
         from uuid import UUID
 
         try:
@@ -189,23 +170,6 @@ class StructuredEnrichmentWorker:
         except Exception:
             logger.error(  # type: ignore[no-any-return]
                 "structured_enrichment_worker_increment_failed",
-                entity_id=str(entity_id),
-                exc_info=True,
-            )
-
-    async def _decrement_attempts(self, entity_id: object) -> None:
-        """PLAN-0093 T-C-4-01: rollback a claim-time increment after a
-        RetryableEnrichmentError so transient failures don't burn an attempt.
-        """
-        from uuid import UUID
-
-        try:
-            async with self._sf() as session:
-                await self._adapter.decrement_attempts(UUID(str(entity_id)), session)
-                await session.commit()
-        except Exception:
-            logger.error(  # type: ignore[no-any-return]
-                "structured_enrichment_worker_decrement_failed",
                 entity_id=str(entity_id),
                 exc_info=True,
             )

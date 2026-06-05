@@ -22,19 +22,7 @@ from fastapi import FastAPI, Request, Response
 from fastapi.responses import JSONResponse
 from starlette.middleware.base import BaseHTTPMiddleware
 
-from nlp_pipeline.api.routes import (
-    admin,
-    analytics,
-    dlq,
-    embed,
-    entities,
-    health,
-    internal_costs,
-    internal_news_rollup,  # PLAN-0089 Wave L-5a: screener sync rollup
-    news,
-    search,
-    signals,
-)
+from nlp_pipeline.api.routes import admin, dlq, embed, entities, health, internal_costs, news, search, signals
 from nlp_pipeline.api.routes.search_documents import router as search_documents_router
 from nlp_pipeline.config import Settings
 from nlp_pipeline.infrastructure.intelligence_db.session import (
@@ -42,12 +30,7 @@ from nlp_pipeline.infrastructure.intelligence_db.session import (
 )
 from nlp_pipeline.infrastructure.middleware.internal_jwt import InternalJWTMiddleware
 from nlp_pipeline.infrastructure.nlp_db.session import _build_nlp_factories
-from observability import (  # type: ignore[import-untyped]
-    assert_app_env_or_die,
-    configure_logging,
-    get_logger,
-    register_error_handlers,
-)
+from observability import configure_logging, get_logger, register_error_handlers  # type: ignore[import-untyped]
 from observability.metrics import (  # type: ignore[import-untyped]
     add_prometheus_middleware,
     create_metrics,
@@ -92,12 +75,6 @@ async def _expire_stale_embeddings(
     Sets ``expires_at = now()`` on any ``chunk_embeddings`` / ``section_embeddings``
     rows whose ``model_id`` does not match ``config.embedding_model_id``.
     The EmbeddingRetryWorker will re-generate them on its next cycle.
-
-    F-013: ``config.embedding_model_id`` MUST match the ``model_id`` string the
-    active embedding adapter writes into ``EmbeddingOutput.model_id`` at ingestion
-    time.  For the DeepInfra adapter that is ``config.embedding_api_model_id``
-    (``"BAAI/bge-large-en-v1.5"``); for the Ollama adapter it is ``"bge-large"``.
-    A mismatch inverts the logic: correct rows get expired and stale rows are kept.
     """
     import structlog
     from sqlalchemy import text
@@ -151,13 +128,6 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         json=settings.log_json,
     )
     log = get_logger("nlp_pipeline.app")  # type: ignore[no-any-return]
-
-    # 1b. Boot-time security guard (PLAN-0093 Wave A-1 / F-LOG-JWT-001).
-    # Refuses to start when JWT verification is disabled AND APP_ENV is unset.
-    assert_app_env_or_die(
-        service_name=settings.service_name,
-        internal_jwt_skip_verification=settings.internal_jwt_skip_verification,
-    )
 
     # 2. Tracing (conditional)
     if settings.otlp_endpoint:
@@ -315,11 +285,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(news.router)
     app.include_router(dlq.router)
     app.include_router(internal_costs.router)
-    app.include_router(internal_news_rollup.router)  # PLAN-0089 Wave L-5a
     # PLAN-0055 C-4: admin LLM replay endpoint.
     app.include_router(admin.router)
     # PLAN-0064 W6: full-text document search (stub in Wave 1, wired in Wave 3).
     app.include_router(search_documents_router)
-    app.include_router(analytics.router)
 
     return app

@@ -143,15 +143,6 @@ vi.mock("@/hooks/useAuth", () => ({
   })),
 }));
 
-// ── Mock: api-client (TAOverlayPanel useAccessToken) ──────────────────────────
-// WHY: TAOverlayPanel is now rendered inside OHLCVChart and calls useAccessToken
-// which requires an <ApiClientProvider> ancestor. Mocking prevents the context error.
-vi.mock("@/lib/api-client", () => ({
-  useAccessToken: vi.fn(() => "test-token"),
-  ApiClientProvider: ({ children }: { children: React.ReactNode }) => <>{children}</>,
-  apiFetch: vi.fn().mockResolvedValue(null),
-}));
-
 // ── Mock: instrument-context (IDB ops only) ────────────────────────────────────
 
 vi.mock("@/lib/instrument-context", async () => {

@@ -156,62 +156,6 @@ support parameterized labels); they are validated against a 28-label whitelist
 **R27 exception**: Cypher queries use a write session because AGE requires `LOAD 'age'` which
 is not supported by read-replica connections.
 
-#### AGE label bootstrap (PLAN-0096 W3 / BP-574)
-
-`AgeSyncWorker._bootstrap_age_labels` runs once per worker process startup and creates every
-vlabel + elabel the sync worker will write to (2 vlabels + every value in `_VALID_EDGE_LABELS`).
-It MUST invalidate the underlying SQLAlchemy connection after the bootstrap `commit()`:
-
-```python
-await session.commit()
-await self._invalidate_session_connection(session)
-```
-
-PostgreSQL's plpgsql engine (which backs `ag_catalog.cypher()`) caches the label catalog on
-each physical connection at first lookup. If the bootstrap and the phase MERGEs share the
-*same* connection, the freshly-created `TemporalEvent` vlabel is invisible to the phase MERGE,
-which then silently no-ops on every row. This produced the original 0/14,822 silent-drop bug
-(see `docs/audits/2026-05-26-age-temporal-event-sync-investigation.md`).
-
-The invalidate is best-effort — a failure here is logged as `age_sync_session_invalidate_failed`
-but does not abort the cycle (worst case: phase MERGEs fall back to the pre-fix path).
-
-If you discover an existing live deployment whose AGE `TemporalEvent` count is still well
-below the SQL `temporal_events` count, drain the backlog with the reconciliation script:
-
-```bash
-# Dry-run first to confirm scope.
-python scripts/reconcile_age_temporal_events.py --dry-run
-
-# Real drain — idempotent; safe to re-run.
-python scripts/reconcile_age_temporal_events.py
-```
-
-#### Recovering from AGE undercount
-
-If the Apache AGE shadow graph reports far fewer rows than the relational source tables
-(e.g. 0 `TemporalEvent` vertices, missing `EVENT_EXPOSES` edges, ~30 % relation coverage),
-the most likely cause is a missing label bootstrap or a stale per-phase watermark.
-
-**Symptoms**
-- `s7_age_sync_phase_stalled_total{phase=...}` keeps incrementing
-- AGE counts (`SELECT count(*) FROM cypher('worldview_graph', $$ MATCH (n) RETURN n $$) ...`)
-  are well below `SELECT count(*) FROM canonical_entities` / `relations` / `temporal_events`
-- Logs show `age_sync_phase_failed` for one or more phases
-
-**Fix** — reset all four AGE watermark keys so the next worker cycle does a full resync:
-
-```bash
-./scripts/ops/reset_age_watermark.sh
-```
-
-The script deletes the legacy `s7:age:sync:watermark` key plus the three per-phase keys
-(`...:entities`, `...:relations`, `...:temporal_events`). On the next cycle the worker
-re-runs the label bootstrap (idempotent) and re-MERGEs every row from epoch.
-
-**Safety** — AGE MERGE is idempotent; re-syncing already-synced rows produces no duplicates.
-The only cost is a longer-than-usual first run (full table scan instead of incremental).
-
 ---
 
 ## API Endpoints
@@ -263,8 +207,6 @@ The only cost is a longer-than-usual first run (full table scan instead of incre
 |--------|------|------|-------------|
 | GET | `/internal/v1/entities/{entity_id}/intelligence` | X-Internal-JWT (system) | Same as public intelligence endpoint; consumed by S8 rag-chat |
 | GET | `/internal/v1/llm-costs` | X-Internal-JWT (system) | LLM cost aggregates. Params: `period` (YYYY-MM), `provider`, `breakdown` |
-| GET | `/internal/v1/instruments/{instrument_id}/intelligence-rollup-7d` | X-Internal-JWT (system) | PLAN-0089 Wave L-5a: 7d intelligence rollup for the S3-side screener sync worker. Returns `recent_contradiction_count` (active contradictions where the instrument is subject, last 7 days). Non-failing — count=0 + 200 if absent. Sample response: `{"instrument_id":"...","recent_contradiction_count":3}` |
-| GET | `/internal/v1/entities/sectors?entity_ids=...` | X-Internal-JWT | PLAN-0102 W2 T-W2-02: batch sector/industry lookup. Up to 100 entity ids; returns `{results: [{entity_id, sector, industry}]}`. Missing rows silently omitted; cached 1 h per entity in Valkey. Used by rag-chat morning brief gatherer to render sector-exposure aggregates. **ETF fallback (PLAN-0103 W8 / BP-629)**: when `canonical_entities.metadata->>'sector'` is NULL but the row is recognisably an ETF (`metadata.asset_class == "ETF"` OR ticker matches a well-known ETF prefix like `XL*`, `ARK*`, or one of `SPY/QQQ/DIA/IWM/VOO/VTI/VEA/VWO/IBIT/GLD`), the endpoint synthesises a generic `"Equity ETF"` sector so the rag-chat risk aggregator never silently drops the row. Real backfilled sector labels (e.g. `XLE → Energy`) take precedence — apply via `scripts/backfill_etf_sectors.py --apply` after ingesting new ETF holdings. **EODHD-equity mirror (PLAN-0103 W19 / BP-637)**: `_write_sector_relations` in `fundamentals_refresh.py` now ALSO patches `canonical_entities.metadata.{sector, industry, asset_class}` via `CanonicalEntityRepository.patch_metadata` whenever EODHD returns GICS classifications — previously the GICS data lived only in the `is_in_sector` / `is_in_industry` relation edges, leaving 1080 of 1108 tickered entities with NULL `metadata.sector` despite the data being available in the graph. To backfill historical rows after a clean DB import or relation re-seed, run `scripts/backfill_canonical_sectors_from_relations.py --apply` (zero EODHD calls — pure DB copy from existing relation rows). Operators can monitor residual coverage via `canonical_entity_sector_unknown_total{surface="sectors_api"}` (Prometheus counter, bumped on every NULL sector served by this endpoint). |
 
 ### `summary_authority` computed field
 
@@ -376,8 +318,7 @@ S7 uses **two session factories** (R23 dual-factory pattern, R27 read/write spli
 
 | Table | Partitioning | Purpose |
 |-------|-------------|---------|
-| `canonical_entities` | — | Resolved entity registry (shared with S6). `entity_type` is the kind discriminator with an 11-value CHECK constraint (`financial_instrument, person, event, sector, industry, macro_indicator, place, product, index, currency, unknown`). For `entity_type = 'financial_instrument'`, `entity_id` equals `market_data.instruments.id` (M-017, enforced by integration test). See [ADR-F-16](../architecture/decisions/ADR-F-16-instrument-entity-id-unification.md). |
-| `ticker_aliases` | — | Historical-ticker → current-canonical-entity map. Populated by ops on ticker change events (e.g. FB → META). Used by the S9 alias-resolution path; empty at v1 per `no_backfill`. Forever retention. |
+| `canonical_entities` | — | Resolved entity registry (shared with S6) |
 | `entity_aliases` | — | Alias index with `alias_type` (EXACT, TICKER, ISIN, CUSIP, FIGI, LEI, NAME) |
 | `entity_embedding_state` | — | Multi-view 1024-dim embeddings; 3 rows per entity (definition, narrative, fundamentals_ohlcv) |
 | `entity_narrative_versions` | — | Version-controlled LLM-generated entity narratives |
@@ -793,12 +734,6 @@ tick.
     provisional entities with name variations can insert as new rows even when a matching
     `financial_instrument` entity exists. Fix requires removing the partial predicate and
     adding a pre-insert `class_aware_canonical_match()` lookup.
-
-12. **`temporal_events.exposed_entities=[]` is valid** (DP-F001): Macro events (CPI prints, FOMC
-    decisions, sanctions announcements) legitimately arrive with zero company participants, and
-    `TemporalEventConsumer` accepts them. This is the intentional counterpart to S6's enriched-event
-    filtering — see `docs/services/nlp-pipeline.md` "Intentional asymmetry" and
-    `docs/audits/2026-05-24-investigation-qa-open-items.md` DP-F001.
 
 ---
 

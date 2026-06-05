@@ -2,7 +2,7 @@
 
 > **Category**: config-docker
 > **Description**: pydantic-settings, Docker images, Docker Compose, env var loading, Makefile targets, Dockerfile patterns
-> **Count**: 27 patterns
+> **Count**: 26 patterns
 > **Back to index**: [BUG_PATTERNS.md](../BUG_PATTERNS.md)
 
 ---
@@ -1035,41 +1035,3 @@ docker compose up -d worldview-web    # restart with new image
 **Reference**: 2026-05-11 portfolio/instrument frontend bug fix batch — QA agent built image 87s before fix agents finished writing OHLCVChart.tsx.
 
 ---
-
----
-
-### BP-528: `docker restart` does not swap container image after `docker compose build`
-
-**Category**: Config & Docker
-**Severity**: HIGH
-**First seen**: 2026-05-23
-**Services**: All multi-container services (nlp-pipeline, knowledge-graph, rag-chat)
-
-**Symptoms**:
-- Code fixes committed and images rebuilt successfully, but running containers still execute old code
-- Logs show old function signatures, missing fields, or pre-fix behaviour despite successful build
-- `docker inspect <container> --format '{{.Image}}'` shows a different image SHA than `docker images <name>:latest`
-
-**Root cause**:
-`docker restart` sends SIGTERM + SIGKILL to the existing container and restarts it — but the container was created from the old image and its filesystem layer is still pinned to that image. Building a new image with `docker compose build` does not automatically update running container definitions. The container must be re-created (not just restarted) to pick up the new image.
-
-**Fix**:
-```bash
-# Wrong — restarts same container/image
-docker restart worldview-nlp-pipeline-article-consumer-1
-
-# Correct — recreates the container from the new image
-docker compose up -d --force-recreate --no-build <service-name>
-
-# Or for all containers of a service:
-docker compose up -d --force-recreate --no-build \
-  nlp-pipeline nlp-pipeline-article-consumer nlp-pipeline-dispatcher ...
-```
-After force-recreate, some containers may end up in "Created" state rather than running (if the compose profile doesn't auto-start them); use `docker start <name>` to start them manually.
-
-**Prevention**:
-- After any `docker compose build`, always use `docker compose up -d --force-recreate --no-build` (not `docker restart`) to deploy new images to running containers.
-- In multi-agent workflows, the "rebuild" step must explicitly use `--force-recreate`; do not delegate image deployment to plain `docker restart`.
-- Verify deployment by checking container start time (`docker ps`) and/or grepping startup logs for a known-new log line.
-
-**Regression test**: N/A (operational process)

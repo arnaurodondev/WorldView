@@ -211,7 +211,7 @@ async def trigger_narrative_generation(
                 entity_id=entity_id,
                 tenant_id=tenant_id,
                 reason=NarrativeGenerationReason.MANUAL_TRIGGER.value,
-            ),
+            )
         )
 
     return NarrativeGenerateTriggerResponse(

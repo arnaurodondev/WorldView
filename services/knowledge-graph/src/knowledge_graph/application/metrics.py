@@ -48,15 +48,3 @@ s7_enrichment_relations_seeded_total = Counter(
     "Total structural relations seeded by Worker 13J, by canonical_type.",
     ["canonical_type"],
 )
-
-# F-DB-005 (2026-05-28): per-error-class counter for FundamentalsRefreshWorker.
-# Replaces the silent ``or "unknown"`` fallback at fundamentals_refresh.py:543.
-# ``error_kind`` is one of the values in ``FundamentalsRefreshError`` (see the
-# worker module). A non-zero ``schema_unparsable`` or ``missing_sections`` count
-# means the worker is hitting a contract drift between market-data and the
-# narrative builder — i.e. exactly the F-DB-005 bug class.
-fundamentals_refresh_failed_total = Counter(
-    "fundamentals_refresh_failed_total",
-    "FundamentalsRefreshWorker failures by structured error class.",
-    ["error_kind"],
-)

@@ -15,7 +15,7 @@ const Checkbox = React.forwardRef<
     className={cn(
       // PLAN-0059 W0 fix F-002 (2026-04-30): see Switch comment — `!` prefix
       // ensures disabled state overrides data-[state=checked] styles for AA contrast.
-      "grid place-content-center peer h-4 w-4 shrink-0 border border-primary ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:!bg-[hsl(var(--disabled-bg))] disabled:!border-[hsl(var(--disabled-border))] disabled:!text-[hsl(var(--disabled-foreground))] data-[state=checked]:bg-primary data-[state=checked]:text-primary-foreground",
+      "grid place-content-center peer h-4 w-4 shrink-0 rounded-sm border border-primary ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:!bg-[hsl(var(--disabled-bg))] disabled:!border-[hsl(var(--disabled-border))] disabled:!text-[hsl(var(--disabled-foreground))] data-[state=checked]:bg-primary data-[state=checked]:text-primary-foreground",
       className
     )}
     {...props}

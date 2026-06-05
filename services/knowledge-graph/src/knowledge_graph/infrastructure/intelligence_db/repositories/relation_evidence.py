@@ -43,7 +43,7 @@ class RelationEvidenceRepository(RelationEvidenceRepositoryPort):
         evidence_date: datetime,
         *,
         canonical_type: str | None = None,
-        polarity: str = "neutral",
+        polarity: str = "positive",
         claim_id: UUID | None = None,
         chunk_id: UUID | None = None,
         is_backfill: bool = False,
@@ -60,23 +60,7 @@ class RelationEvidenceRepository(RelationEvidenceRepositoryPort):
         T-B-03: ``source_name`` and ``source_type`` are NULL-safe new columns
         added by migration MIG-EVIDENCE-SOURCE (Wave A T-A-05).  Both default to
         NULL when not provided.
-
-        PLAN-0093 B-3 T-B-3-02: ``claim_id`` and ``chunk_id`` are now
-        application-required (migration 0047 makes both columns NOT NULL).
-        We raise ``ValueError`` at the writer boundary rather than waiting
-        for the DB NotNullViolation so the failure mode is obvious in
-        application logs and never reaches asyncpg.
         """
-        if claim_id is None:
-            raise ValueError(
-                "relation_evidence_raw.claim_id is NOT NULL (migration 0047); "
-                "writer must pass a real claim_id captured from the prior _insert_claim call"
-            )
-        if chunk_id is None:
-            raise ValueError(
-                "relation_evidence_raw.chunk_id is NOT NULL (migration 0047); "
-                "writer must propagate chunk_id from the enriched-event envelope"
-            )
         result = await self._session.execute(
             text("""
 INSERT INTO relation_evidence_raw (

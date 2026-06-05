@@ -28,7 +28,8 @@
 // WHY "use client": useQuery requires React context.
 
 import { useQuery } from "@tanstack/react-query";
-import { useApiClient } from "@/lib/api-client";
+import { createGateway } from "@/lib/gateway";
+import { useAuth } from "@/hooks/useAuth";
 import { Skeleton } from "@/components/ui/skeleton";
 
 interface EarningsBarChartProps {
@@ -42,10 +43,6 @@ interface EarningsAnnualRecord {
   date?: string | null;
   epsActual?: number | null;
   epsEstimate?: number | null;
-  // WHY surprisePercent: EODHD earnings_history records carry surprisePercent
-  // (e.g. 4.2 = 4.2% beat). Rendered as a small chip per bar. Null-safe —
-  // all bars render without chip when none of the records have a surprise value.
-  surprisePercent?: number | null;
 }
 
 // WHY hex (not CSS vars): SVG `fill`/`stroke` attributes don't resolve CSS vars.
@@ -55,11 +52,10 @@ const COLOR_BEAT_STROKE  = "#26A69A";
 const COLOR_MISS_FILL    = "#EF535040"; // 25% red — miss
 const COLOR_MISS_STROKE  = "#EF5350";
 
-// Chart viewbox: 480×64 (W3-T-11 shrinks from 80px to 64px to free vertical
-// space for the PeerComparisonTable below. preserveAspectRatio="none" lets
-// the SVG stretch horizontally to whatever the container provides).
+// Chart viewbox: 480×80 (T-C-02 spec calls for 80px height; preserveAspectRatio
+// = "none" lets the SVG stretch horizontally to whatever the container provides).
 const VIEW_W = 480;
-const VIEW_H = 64;
+const VIEW_H = 80;
 const M_TOP = 4;
 const M_BOTTOM = 12;  // room for the FY labels at the foot
 const M_LEFT = 8;
@@ -77,15 +73,15 @@ function formatFY(dateStr: string): string {
 }
 
 export function EarningsBarChart({ instrumentId }: EarningsBarChartProps) {
-  const gateway = useApiClient();
+  const { accessToken } = useAuth();
 
   // WHY staleTime 24h: annual EPS records update only on quarterly earnings
   // releases. Matches T-A-03 useFinancialsTabData policy → TanStack dedupes
   // when both this component and the hook are mounted with the same key.
   const { data, isLoading } = useQuery({
     queryKey: ["earnings-history", instrumentId],
-    queryFn: () => gateway.getEarningsHistory(instrumentId),
-    enabled: !!instrumentId,
+    queryFn: () => createGateway(accessToken).getEarningsHistory(instrumentId),
+    enabled: !!accessToken && !!instrumentId,
     staleTime: 24 * 60 * 60 * 1000,
   });
 
@@ -94,14 +90,14 @@ export function EarningsBarChart({ instrumentId }: EarningsBarChartProps) {
   const chartData = (data?.records ?? [])
     .map((rec) => {
       const d = rec.data as EarningsAnnualRecord | undefined;
-      return { date: d?.date ?? "", actual: d?.epsActual ?? null, estimate: d?.epsEstimate ?? null, surprise: d?.surprisePercent ?? null };
+      return { date: d?.date ?? "", actual: d?.epsActual ?? null, estimate: d?.epsEstimate ?? null };
     })
     .filter((d) => !!d.date)
     .sort((a, b) => a.date.localeCompare(b.date))
     .slice(-4)
-    .map((d) => ({ label: formatFY(d.date), actual: d.actual, estimate: d.estimate, surprise: d.surprise }));
+    .map((d) => ({ label: formatFY(d.date), actual: d.actual, estimate: d.estimate }));
 
-  if (isLoading) return <Skeleton className="h-[64px] rounded-none" />;
+  if (isLoading) return <Skeleton className="h-[80px] rounded-[2px]" />;
   // Empty state hidden per T-C-02 spec — no chart rendered if no data.
   if (chartData.length === 0) return null;
 
@@ -170,22 +166,6 @@ export function EarningsBarChart({ instrumentId }: EarningsBarChartProps) {
                 strokeWidth={1}
                 strokeDasharray="2 2"
               />
-            )}
-            {/* EPS surprise % chip — rendered above the bar when surprisePercent
-                is non-null. WHY null-safe (only renders when value present):
-                not all instruments have consensus estimates, so missing chips
-                are expected — not an error state. */}
-            {d.surprise != null && (
-              <text
-                x={xCenter(i)}
-                y={d.actual != null ? Math.max(M_TOP + 9, yFor(Math.max(d.actual, 0)) - 2) : M_TOP + 9}
-                fill={d.surprise >= 0 ? COLOR_BEAT_STROKE : COLOR_MISS_STROKE}
-                fontSize={7}
-                fontFamily="monospace"
-                textAnchor="middle"
-              >
-                {d.surprise > 0 ? "+" : ""}{d.surprise.toFixed(1)}%
-              </text>
             )}
             {/* FY label at foot of bar — kept under each column rather than only
                 first/last because 4 labels comfortably fit at 9px monospace. */}

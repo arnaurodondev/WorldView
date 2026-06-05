@@ -41,8 +41,6 @@ export interface EnrichedHoldingRow {
   pnlPct: number;
   weight: number;
   sector: string | null;
-  /** Normalised asset class string fed to AssetTypeBadgeCellRenderer (e.g. "equity", "etf"). */
-  assetClass: string;
   dayChange: number | null;
   dayChangePct: number | null;
   /** position-level day P&L = dayChange (per share) × quantity */

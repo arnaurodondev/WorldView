@@ -33,7 +33,7 @@ logger = get_logger(__name__)  # type: ignore[no-any-return]
 _MAX_TOKENS = 200
 
 # Fallback model ID used when the injected model_id is empty.
-_FALLBACK_MODEL_ID = "deepseek-ai/DeepSeek-V4-Flash"
+_FALLBACK_MODEL_ID = "meta-llama/Meta-Llama-3.1-8B-Instruct"
 
 
 class PathExplanationService:
@@ -47,7 +47,7 @@ class PathExplanationService:
             (ml_clients ``ExtractionClient`` protocol).  When ``None`` the
             service is effectively a no-op (returns without calling the LLM).
         model_id:    LLM model ID string (e.g.
-            ``"deepseek-ai/DeepSeek-V4-Flash"``).
+            ``"meta-llama/Meta-Llama-3.1-8B-Instruct"``).
 
     """
 
@@ -149,26 +149,9 @@ class PathExplanationService:
         # _llm is typed as object to avoid a hard dependency on ml_clients at
         # import time.  The actual runtime object implements ExtractionClient.
         result = await self._llm.extract(inp)  # type: ignore[union-attr]
-        # FIX-LIVE-C / F-LIVE-006-A: ``ExtractionOutput`` exposes ``result`` (the
-        # parsed structured payload, usually a ``dict``) and ``raw_response`` (the
-        # raw LLM text). The previous code read ``result.output`` which does not
-        # exist on the real dataclass — every call raised ``AttributeError`` and
-        # was silently swallowed by the outer ``try/except`` in
-        # ``generate_explanation`` (only the ``path_explanation_failed`` log line
-        # survived), producing 12,910 NULL ``llm_explanation`` rows.
-        # Defensive multi-fallback: structured ``result`` first (dict / str),
-        # then ``raw_response`` as the last-resort text.
-        if result is None:
+        if result is None or not result.output:
             return ""
-        payload = getattr(result, "result", None) or {}
-        text: str | None = None
-        if isinstance(payload, dict):
-            text = payload.get("explanation") or payload.get("text") or payload.get("output")
-        elif isinstance(payload, str):
-            text = payload
-        if not text:
-            text = getattr(result, "raw_response", "") or ""
-        return str(text).strip()
+        return str(result.output).strip()
 
     def _build_prompt(
         self,

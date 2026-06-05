@@ -132,14 +132,7 @@ async def test_rate_limit_user_id_key() -> None:
     valkey.expire = AsyncMock()
 
     app = _make_minimal_app()
-    app.add_middleware(
-        RateLimitMiddleware,
-        valkey_client=valkey,
-        max_requests=100,
-        financial_mutation_limit=20,
-        unauthenticated_limit=20,
-        public_feedback_limit=120,
-    )
+    app.add_middleware(RateLimitMiddleware, valkey_client=valkey, max_requests=100)
     # Inject user state via a simple middleware
     from starlette.middleware.base import BaseHTTPMiddleware
 
@@ -167,14 +160,7 @@ async def test_rate_limit_ip_hash_key() -> None:
     valkey.expire = AsyncMock()
 
     app = _make_minimal_app()
-    app.add_middleware(
-        RateLimitMiddleware,
-        valkey_client=valkey,
-        max_requests=100,
-        financial_mutation_limit=20,
-        unauthenticated_limit=20,
-        public_feedback_limit=120,
-    )
+    app.add_middleware(RateLimitMiddleware, valkey_client=valkey, max_requests=100)
 
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as client:
@@ -199,14 +185,7 @@ async def test_rate_limit_returns_503_when_valkey_none() -> None:
     app = _make_minimal_app()
     # Ensure app.state.valkey is None (no Valkey)
     app.state.valkey = None
-    app.add_middleware(
-        RateLimitMiddleware,
-        valkey_client=None,
-        max_requests=100,
-        financial_mutation_limit=20,
-        unauthenticated_limit=20,
-        public_feedback_limit=120,
-    )
+    app.add_middleware(RateLimitMiddleware, valkey_client=None, max_requests=100)
 
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as client:
@@ -829,14 +808,7 @@ async def test_rate_limit_ip_bucket_no_auth_header() -> None:
     app.state.oidc_config = None
     # Order: last-added = outermost. RateLimit must run AFTER OIDCAuth so it
     # sees the initialised request.state.user.
-    app.add_middleware(
-        RateLimitMiddleware,
-        valkey_client=valkey,
-        max_requests=100,
-        financial_mutation_limit=20,
-        unauthenticated_limit=20,
-        public_feedback_limit=120,
-    )
+    app.add_middleware(RateLimitMiddleware, valkey_client=valkey, max_requests=100)
     app.add_middleware(OIDCAuthMiddleware)
 
     transport = ASGITransport(app=app)
@@ -862,7 +834,7 @@ async def test_rate_limit_ip_bucket_malformed_jwt(rsa_keypair) -> None:
     from api_gateway.middleware import OIDCAuthMiddleware, RateLimitMiddleware
     from api_gateway.oidc import rsa_key_id
 
-    _private_key, public_key = rsa_keypair
+    private_key, public_key = rsa_keypair
     kid = rsa_key_id(public_key)
 
     # Forge a token signed with a DIFFERENT key (bad signature)
@@ -909,14 +881,7 @@ async def test_rate_limit_ip_bucket_malformed_jwt(rsa_keypair) -> None:
     app.state.oidc_config = oidc_config
     app.state.valkey = None
 
-    app.add_middleware(
-        RateLimitMiddleware,
-        valkey_client=valkey,
-        max_requests=100,
-        financial_mutation_limit=20,
-        unauthenticated_limit=20,
-        public_feedback_limit=120,
-    )
+    app.add_middleware(RateLimitMiddleware, valkey_client=valkey, max_requests=100)
     app.add_middleware(OIDCAuthMiddleware)
 
     transport = ASGITransport(app=app)
@@ -988,14 +953,7 @@ async def test_rate_limit_ip_bucket_expired_jwt(rsa_keypair) -> None:
     app.state.oidc_config = oidc_config
     app.state.valkey = None
 
-    app.add_middleware(
-        RateLimitMiddleware,
-        valkey_client=valkey,
-        max_requests=100,
-        financial_mutation_limit=20,
-        unauthenticated_limit=20,
-        public_feedback_limit=120,
-    )
+    app.add_middleware(RateLimitMiddleware, valkey_client=valkey, max_requests=100)
     app.add_middleware(OIDCAuthMiddleware)
 
     transport = ASGITransport(app=app)
@@ -1068,14 +1026,7 @@ async def test_rate_limit_user_bucket_valid_jwt(rsa_keypair) -> None:
     app.state.oidc_config = oidc_config
     app.state.valkey = None
 
-    app.add_middleware(
-        RateLimitMiddleware,
-        valkey_client=valkey,
-        max_requests=100,
-        financial_mutation_limit=20,
-        unauthenticated_limit=20,
-        public_feedback_limit=120,
-    )
+    app.add_middleware(RateLimitMiddleware, valkey_client=valkey, max_requests=100)
     app.add_middleware(OIDCAuthMiddleware)
 
     transport = ASGITransport(app=app)
@@ -1114,14 +1065,7 @@ async def test_rate_limit_missing_user_attr_no_attribute_error() -> None:
     # IMPORTANT: do NOT add OIDCAuthMiddleware — simulates the regression case
     # where some new code path bypasses it. RateLimitMiddleware must remain
     # safe even in that scenario.
-    app.add_middleware(
-        RateLimitMiddleware,
-        valkey_client=valkey,
-        max_requests=100,
-        financial_mutation_limit=20,
-        unauthenticated_limit=20,
-        public_feedback_limit=120,
-    )
+    app.add_middleware(RateLimitMiddleware, valkey_client=valkey, max_requests=100)
 
     import api_gateway.middleware as _mw
 
@@ -1167,14 +1111,7 @@ async def test_rate_limit_two_unauth_requests_same_ip_share_bucket() -> None:
     valkey.expire = AsyncMock()
 
     app = _make_minimal_app()
-    app.add_middleware(
-        RateLimitMiddleware,
-        valkey_client=valkey,
-        max_requests=100,
-        financial_mutation_limit=20,
-        unauthenticated_limit=20,
-        public_feedback_limit=120,
-    )
+    app.add_middleware(RateLimitMiddleware, valkey_client=valkey, max_requests=100)
 
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as client:
@@ -1219,14 +1156,7 @@ async def test_rate_limit_user_non_dict_value_falls_through_to_ip() -> None:
             request.state.user = "not-a-dict"  # bogus
             return await call_next(request)
 
-    app.add_middleware(
-        RateLimitMiddleware,
-        valkey_client=valkey,
-        max_requests=100,
-        financial_mutation_limit=20,
-        unauthenticated_limit=20,
-        public_feedback_limit=120,
-    )
+    app.add_middleware(RateLimitMiddleware, valkey_client=valkey, max_requests=100)
     app.add_middleware(InjectBogusUserMiddleware)
 
     transport = ASGITransport(app=app)

@@ -26,6 +26,7 @@ from knowledge_graph.api.dependencies import (
     EntityGraphReposDep,
 )
 from knowledge_graph.api.schemas import (
+    EntitySummary,
     GraphNeighborhoodResponse,
     GraphStatsResponse,
     RelationResponse,
@@ -61,9 +62,15 @@ def _summary_authority(confidence: float | None, evidence_count: int) -> float:
     return round(confidence * math.log1p(evidence_count), 6)
 
 
-# PLAN-0093 B-4 T-B-4-02 / F-607: identical body lived in api/cypher.py too.
-# Single source of truth lives in _entity_summary; both routes now import it.
-from knowledge_graph.api._entity_summary import entity_summary_from_row as _entity_summary  # noqa: E402
+def _entity_summary(row: dict[str, object]) -> EntitySummary:
+    return EntitySummary(
+        entity_id=row["entity_id"],  # type: ignore[arg-type]
+        canonical_name=str(row["canonical_name"]),
+        entity_type=str(row["entity_type"]),
+        isin=str(row["isin"]) if row.get("isin") else None,
+        ticker=str(row["ticker"]) if row.get("ticker") else None,
+        exchange=str(row["exchange"]) if row.get("exchange") else None,
+    )
 
 
 def _relation_response(
@@ -83,12 +90,6 @@ def _relation_response(
     snippets = row.get("evidence_snippets")
     summary = row.get("relation_summary")
 
-    # PLAN-0093 B-4 T-B-4-01: GetEntityGraphUseCase stamps "outgoing" /
-    # "incoming" onto each row dict.  Forward it through the schema so the
-    # frontend can render arrows without re-comparing subject/object IDs.
-    raw_direction = row.get("direction")
-    direction: str | None = str(raw_direction) if isinstance(raw_direction, str) else None
-
     # Base fields — always present
     resp = RelationResponse(
         relation_id=row["relation_id"],  # type: ignore[arg-type]
@@ -105,7 +106,6 @@ def _relation_response(
         latest_evidence_at=row["latest_evidence_at"],  # type: ignore[arg-type]
         evidence_snippets=list(snippets) if snippets else [],  # type: ignore[arg-type, call-overload]
         relation_summary=str(summary) if summary else None,
-        direction=direction,
     )
 
     if not confidence_breakdown:
@@ -135,8 +135,6 @@ def _relation_response(
         latest_evidence_at=resp.latest_evidence_at,
         evidence_snippets=resp.evidence_snippets,
         relation_summary=resp.relation_summary,
-        # PLAN-0093 B-4 T-B-4-01: propagate direction through the breakdown path too.
-        direction=resp.direction,
         # Wave D T-D-02: confidence breakdown fields
         support=support,
         corroboration=corroboration,
@@ -174,7 +172,7 @@ async def get_entities_batch(
                 "canonical_name": str(row["canonical_name"]) if row.get("canonical_name") else None,
             }
             for row in rows
-        ],
+        ]
     }
 
 
@@ -224,7 +222,7 @@ async def resolve_entity_by_name(
                 "similarity": h["similarity"],
             }
             for h in hits
-        ],
+        ]
     }
 
 

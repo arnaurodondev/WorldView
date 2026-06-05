@@ -248,22 +248,6 @@ class EnrichedArticleConsumer(ValkeyDedupMixin, BaseKafkaConsumer[None]):
         source_name: str | None = value.get("source_name")
         source_type_str: str | None = value.get("source_type")
 
-        # F-401/F-501: use the article's publish date as claim created_at so
-        # claims land in the correct monthly partition and participate in the
-        # 90-day contradiction window.  published_at is nullable in the Avro
-        # schema; fall back to None (materialize_graph uses _DETERMINISTIC_CREATED_AT_FALLBACK).
-        _published_at_raw: str | None = value.get("published_at")
-        article_published_at: datetime | None = None
-        if _published_at_raw is not None:
-            try:
-                article_published_at = datetime.fromisoformat(_published_at_raw).replace(tzinfo=UTC)
-            except (ValueError, TypeError):
-                logger.warning(  # type: ignore[no-any-return]
-                    "enriched_consumer_bad_published_at",
-                    doc_id=str(doc_id),
-                    value_type=type(_published_at_raw).__name__,
-                )
-
         if source_name is None:
             logger.warning(  # type: ignore[no-any-return]
                 "evidence_source_metadata_missing",
@@ -351,9 +335,6 @@ class EnrichedArticleConsumer(ValkeyDedupMixin, BaseKafkaConsumer[None]):
                 # T-B-03: propagate resolved source metadata into evidence rows.
                 source_name=source_name,
                 source_type_metadata=source_type_str,
-                # F-401/F-501: thread published_at so claims land in the
-                # correct monthly partition (not all in 2024-01 sentinel).
-                article_published_at=article_published_at,
             )
 
             # ----------------------------------------------------------
@@ -512,7 +493,7 @@ def _parse_raw_relations(data: list[dict[str, Any]]) -> list[RawRelation]:
                     object_entity_id=UUID(d["object_entity_id"]),
                     raw_type=d["raw_type"],
                     # PLAN-0062 F-019: collapse out-of-vocabulary polarities.
-                    polarity=_normalize_polarity(d.get("polarity"), default="neutral"),
+                    polarity=_normalize_polarity(d.get("polarity"), default="positive"),
                     extraction_confidence=float(d.get("extraction_confidence", 0.5)),
                     source_trust_weight=float(d.get("source_trust_weight", 1.0)),
                     evidence_date=_parse_dt(d.get("evidence_date")),
@@ -523,11 +504,6 @@ def _parse_raw_relations(data: list[dict[str, Any]]) -> list[RawRelation]:
                     chunk_id=UUID(d["chunk_id"]) if d.get("chunk_id") else None,
                     # PLAN-0062 F-019: cap pathological evidence text length.
                     evidence_text=_truncate_text_field(d.get("evidence_text"), field_name="evidence_text"),
-                    # BP-521: carry entity-type hints when the upstream message
-                    # includes them; used by materialize_graph to normalize
-                    # has_executive/employs direction without a DB lookup.
-                    subject_entity_type=d.get("subject_entity_type"),
-                    object_entity_type=d.get("object_entity_type"),
                 ),
             )
         # PLAN-0062 F-021: split into typed handlers — drop the ``data=`` echo

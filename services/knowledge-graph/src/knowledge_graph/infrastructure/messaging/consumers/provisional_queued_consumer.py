@@ -27,7 +27,6 @@ import json
 from typing import TYPE_CHECKING, Any, Protocol
 from uuid import UUID
 
-from common.ids import new_uuid7  # type: ignore[import-untyped]
 from knowledge_graph.infrastructure.metrics.prometheus import s7_provisional_queue_stuck_total
 from knowledge_graph.infrastructure.workers import provisional_enrichment_core as core
 from messaging.kafka.consumer.base import (  # type: ignore[import-untyped]
@@ -114,13 +113,6 @@ class ProvisionalQueuedConsumer(ValkeyDedupMixin, BaseKafkaConsumer[None]):
         # silently use the defaults regardless of ops configuration.
         base_retry_minutes: int = 2,
         max_retry_minutes: int = 1440,
-        # PRD-0089 F2 §4.3: optional S2 lookup port. The hot-path consumer
-        # forwards it to ``core.persist_enrichment`` so tradable provisional
-        # entities anchor on the existing instrument_id (M-017). When the
-        # port is None the consumer behaves exactly as before — tradable
-        # rows are minted with a fresh UUID. The scheduler wiring passes the
-        # MarketDataLookupAdapter when an internal JWT signer is configured.
-        market_data_lookup: Any | None = None,
     ) -> None:
         super().__init__(config)
         self._sf = session_factory
@@ -136,8 +128,6 @@ class ProvisionalQueuedConsumer(ValkeyDedupMixin, BaseKafkaConsumer[None]):
         # become arguments to ``core.apply_retry_transition``.
         self._base_retry_minutes = base_retry_minutes
         self._max_retry_minutes = max_retry_minutes
-        # F2 §4.3 — stash the lookup port for forwarding into persist_enrichment.
-        self._market_data_lookup = market_data_lookup
         if direct_producer is None:
             logger.warning(  # type: ignore[no-any-return]
                 "provisional_queued_consumer_no_producer",
@@ -252,10 +242,6 @@ WHERE queue_id = :queue_id
                         profile=profile,
                         embedding=embedding,
                         embed_model_id=self._embed_model_id,
-                        # F2 §4.3 — share the same M-017 anchoring path as the
-                        # polling worker; returns None when S2 has no row yet
-                        # so the existing _retry helper applies the deferral.
-                        market_data_lookup=self._market_data_lookup,
                     )
                     if entity_id:
                         await session.execute(
@@ -307,11 +293,10 @@ WHERE queue_id = :queue_id
         # ── Step 5: emit entity.dirtied.v1 after successful commit ──────────
         if entity_id and self._producer:
             try:
-                dirtied_event_id = new_uuid7()  # type: ignore[no-any-return]
                 self._producer.produce_bytes(
                     topic=self._dirtied_topic,
                     key=str(entity_id).encode(),
-                    value=core._build_dirtied_event(entity_id, event_id=dirtied_event_id),
+                    value=core._build_dirtied_event(entity_id),
                 )
             except Exception:
                 logger.warning(  # type: ignore[no-any-return]

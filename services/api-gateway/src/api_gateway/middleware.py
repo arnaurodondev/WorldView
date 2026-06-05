@@ -2,80 +2,17 @@
 
 from __future__ import annotations
 
-import asyncio
 import hashlib
-import random
-import time
 from typing import TYPE_CHECKING, Any, cast
 
 import jwt
 from fastapi import FastAPI, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
-from prometheus_client import REGISTRY, Counter
 from starlette.middleware.base import BaseHTTPMiddleware
 
 from observability import get_logger  # type: ignore[import-untyped]
 
 logger = get_logger(__name__)  # type: ignore[no-any-return]
-
-# ── FIX-LIVE-D (PLAN-0093 Phase 5c, F-LIVE-005C-VALKEY) ───────────────────────
-#
-# Counter for rate-limiter degradation events. Q5/Q6/Q7 of the live chat-eval
-# all returned HTTP 503 with 5-13ms latency because RateLimitMiddleware fail-
-# closed instantly when Valkey hiccuped mid-run — no retry, no metric, no
-# structured event for observability. This counter feeds a Grafana alert on
-# rate_limiter degradation so we never have to investigate from a single 503
-# again.
-#
-# Label ``fallback_action`` values:
-#   - "retry_succeeded": first Valkey op raised but the retry succeeded → 200
-#   - "503_after_retry": both attempts failed → 503 returned
-#   - "503_no_retry":    Valkey client is None (lifespan never connected)
-#                        OR a non-transient error (e.g. auth) — no retry made
-#
-# Registered at import time on the global REGISTRY (single logical counter per
-# process). The duplicate-registration guard mirrors the pattern used in
-# libs/observability/src/observability/metrics.py for KAFKA_CONSUMER_MESSAGES,
-# so tests that reload modules or isolate registries don't crash on import.
-try:
-    RATE_LIMITING_UNAVAILABLE = Counter(
-        "rate_limiting_unavailable_total",
-        "Rate-limiter degraded to fail-closed (Valkey unavailable).",
-        labelnames=("fallback_action",),
-    )
-except ValueError:
-    _existing = REGISTRY._names_to_collectors.get("rate_limiting_unavailable_total")
-    if _existing is None:
-        raise
-    RATE_LIMITING_UNAVAILABLE = _existing  # type: ignore[assignment]
-
-# Transient network/timeout exception classes we will retry on. Anything else
-# (e.g. ResponseError from an AUTH failure, programmer errors) is NOT
-# transient — retrying just delays the inevitable 503 while burning CPU. We
-# import redis exception classes lazily inside a try/except so test
-# environments without a real redis install don't fail at module load.
-_VALKEY_TRANSIENT_EXCEPTIONS: tuple[type[BaseException], ...]
-try:
-    from redis.exceptions import (  # type: ignore[import-untyped]
-        ConnectionError as _RedisConnectionError,
-    )
-    from redis.exceptions import (
-        TimeoutError as _RedisTimeoutError,
-    )
-
-    _VALKEY_TRANSIENT_EXCEPTIONS = (
-        _RedisConnectionError,
-        _RedisTimeoutError,
-        ConnectionError,
-        TimeoutError,
-        asyncio.TimeoutError,
-    )
-except Exception:  # — best effort: redis missing in some test contexts
-    _VALKEY_TRANSIENT_EXCEPTIONS = (
-        ConnectionError,
-        TimeoutError,
-        asyncio.TimeoutError,
-    )
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -98,7 +35,7 @@ _AUTH_SKIP_PATHS: frozenset[str] = frozenset(
         "/v1/health",
         "/metrics",
         "/internal/jwks",
-    ],
+    ]
 )
 
 
@@ -211,9 +148,6 @@ class OIDCAuthMiddleware(BaseHTTPMiddleware):
                             # dev-login or the gateway), so we trust that value.
                             user_data.setdefault("role", payload.get("role", "user"))
                             request.state.user = user_data
-                            # PLAN-0094 W1: record active user for daily-brief eligibility
-                            valkey_for_tracking = getattr(request.app.state, "valkey", None)
-                            await _record_active_user(valkey_for_tracking, user_data.get("user_id", ""))
                     except jwt.InvalidTokenError:
                         pass  # Expected: token was not meant for internal validation
                     except Exception:
@@ -309,8 +243,6 @@ class OIDCAuthMiddleware(BaseHTTPMiddleware):
             # at the IdP and we must reflect that immediately.
             user_data_oidc["role"] = oidc_role
             request.state.user = user_data_oidc
-            # PLAN-0094 W1: record active user for daily-brief eligibility
-            await _record_active_user(valkey, user_data_oidc.get("user_id", ""))
 
         except jwt.InvalidTokenError:
             # Expected path: invalid/expired OIDC token — user gets no auth context.
@@ -407,45 +339,10 @@ _FINANCIAL_MUTATION_PREFIXES: tuple[str, ...] = (
     "/v1/brokerage",  # POST brokerage connections, trigger sync
     "/v1/portfolios",  # POST rebalance, PUT/DELETE portfolio entries
 )
-# PLAN-0094 W1: ``_FINANCIAL_MUTATION_LIMIT`` removed — limit is env-driven via
-# ``Settings.rate_limit_financial_mutation_requests`` and threaded through
-# RateLimitMiddleware's keyword-only ``financial_mutation_limit`` arg.
-
-
-# ── Active-user tracking (PLAN-0094 W1 / Option A) ────────────────────────────
-# Global Valkey sorted-set ``active_users`` records the last successful-auth
-# timestamp for every user_id. ZADD on every successful auth (this file);
-# ZRANGEBYSCORE in rag-chat's brief pre-generation worker (W2). Score = unix
-# seconds. Member = stringified user_id. Re-ZADD updates the score (sliding
-# window — newest activity wins).
-_ACTIVE_USERS_KEY = "active_users"
-_ACTIVE_USERS_PRUNE_AGE_SECONDS = 30 * 86400  # 30d >> default 7d window
-_ACTIVE_USERS_PRUNE_PROBABILITY = 0.001  # ~1/1000 requests; idempotent maintenance
-
-
-async def _record_active_user(valkey: Any, user_id: str) -> None:
-    """Best-effort ZADD to ``active_users`` on successful authentication.
-
-    Swallows Valkey errors (logged at warning) — the auth path is hot and must
-    never 503 on a Valkey hiccup. The brief pre-gen worker (W2) is tolerant of
-    missed records (next successful auth re-adds the user).
-    """
-    if valkey is None or not user_id:
-        return
-    try:
-        await valkey.zadd(_ACTIVE_USERS_KEY, {str(user_id): int(time.time())})
-        # Probabilistic prune so the set doesn't grow unbounded.
-        # random.random() is a non-crypto sampler for an idempotent
-        # maintenance task; S311 doesn't apply here.
-        if random.random() < _ACTIVE_USERS_PRUNE_PROBABILITY:  # noqa: S311
-            cutoff = int(time.time()) - _ACTIVE_USERS_PRUNE_AGE_SECONDS
-            await valkey.zremrangebyscore(_ACTIVE_USERS_KEY, 0, cutoff)
-    except Exception as exc:
-        logger.warning(  # type: ignore[no-any-return]
-            "active_users_zadd_failed",
-            error=str(exc),
-            error_type=type(exc).__name__,
-        )
+# Strict limit for financial mutations (POST/PUT/DELETE on the paths above).
+# 20/min allows ~1 transaction create every 3 seconds — generous for manual
+# entry but tight enough to stop accidental loops or misbehaving clients.
+_FINANCIAL_MUTATION_LIMIT = 20
 
 
 class RateLimitMiddleware(BaseHTTPMiddleware):
@@ -466,19 +363,11 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         valkey_client: Any,  # redis.asyncio.Redis | None
         max_requests: int = 100,
         window_seconds: int = 60,
-        *,
-        financial_mutation_limit: int,
-        unauthenticated_limit: int,
-        public_feedback_limit: int,
     ) -> None:
         super().__init__(app)
         self.valkey = valkey_client
         self.max_requests = max_requests
         self.window_seconds = window_seconds
-        # PLAN-0094 W1: 3 sibling limits, keyword-only so misordered call sites fail loudly.
-        self.financial_mutation_limit = financial_mutation_limit
-        self.unauthenticated_limit = unauthenticated_limit
-        self.public_feedback_limit = public_feedback_limit
 
     async def dispatch(self, request: Request, call_next: Callable) -> Response:
         # F-05: Skip rate limiting for health probes, metrics, and internal endpoints.
@@ -492,17 +381,9 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         valkey = getattr(request.app.state, "valkey", None) or self.valkey
         if valkey is None:
             # D-001: Fail-closed — return 503 when Valkey is unavailable.
-            # FIX-LIVE-D: increment the degradation counter with the
-            # "503_no_retry" label so Grafana can distinguish lifespan-time
-            # Valkey miss from a per-request hiccup. Without this label split
-            # every 503 looks the same and we can't tell whether the gateway
-            # never connected to Valkey at startup (operator config issue) or
-            # Valkey is mid-flap during normal traffic (infra issue).
-            RATE_LIMITING_UNAVAILABLE.labels(fallback_action="503_no_retry").inc()
             logger.warning(  # type: ignore[no-any-return]
                 "rate_limiting_unavailable",
                 path=str(request.url.path),
-                reason="valkey_client_none",
             )
             return Response(
                 content='{"detail":"Service temporarily unavailable"}',
@@ -559,7 +440,7 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
                 # up to 20 transaction writes per minute while simultaneously
                 # firing 300 read requests for charts / screener / KG data.
                 key = f"rl:v1:fin:{user['user_id']}"
-                limit = self.financial_mutation_limit
+                limit = _FINANCIAL_MUTATION_LIMIT
             else:
                 key = f"rl:v1:user:{user['user_id']}"
                 limit = self.max_requests
@@ -571,116 +452,49 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
                 # eat the global 20/min budget for the same IP. Different
                 # key prefix ensures the two counters don't collide.
                 key = f"rl:v1:ip-fb:{ip_hash}"
-                limit = self.public_feedback_limit
+                limit = 120
             else:
                 key = f"rl:v1:ip:{ip_hash}"
-                limit = self.unauthenticated_limit
+                limit = 20  # stricter limit for unauthenticated
 
-        # FIX-LIVE-D (PLAN-0093 Phase 5c, F-LIVE-005C-VALKEY): retry-with-
-        # backoff around the Valkey op. Phase 5c live chat-eval Q5/Q6/Q7 all
-        # 503'd in 5-13ms because a single transient Valkey hiccup mid-run
-        # caused this middleware to fail-closed instantly. We now retry ONCE
-        # with a 50ms backoff on network-class exceptions before failing.
-        # Auth errors and other non-transient failures skip the retry — they
-        # will never recover in 50ms and the extra round-trip just delays the
-        # 503 while consuming CPU under load.
-        current: int | None = None
-        last_exc: BaseException | None = None
-        max_attempts = 2  # 1 original + 1 retry
-        retry_backoff_seconds = 0.05  # 50ms
-        for attempt in range(1, max_attempts + 1):
-            try:
-                current = await valkey.incr(key)
-                # Only set EXPIRE when the key is brand-new (current == 1).
-                # Setting it on every request would reset the TTL on each hit,
-                # allowing a sustained flow to never expire and permanently
-                # bypass the limit. If a crash occurred between INCR and
-                # EXPIRE on a previous request the key is already present
-                # (current > 1) but has no TTL; the next new window (new key
-                # from fresh INCR) will set the TTL correctly.
-                if current == 1:
-                    await valkey.expire(key, self.window_seconds)
-                last_exc = None
-                # FIX-LIVE-D: if this was a retry success, record the win
-                # so Grafana can show "retries are saving us" alongside the
-                # raw 503 rate. Without this the success path is silent and
-                # operators can't tell the resilience patch is doing its job.
-                if attempt > 1:
-                    RATE_LIMITING_UNAVAILABLE.labels(fallback_action="retry_succeeded").inc()
-                    logger.info(  # type: ignore[no-any-return]
-                        "valkey_op_retry_succeeded",
-                        path=str(request.url.path),
-                        valkey_retry_attempt=attempt,
-                    )
-                break
-            except _VALKEY_TRANSIENT_EXCEPTIONS as exc:
-                # Transient — eligible for retry. Log every attempt so we can
-                # see flap rate in logs even if no request ultimately 503s.
-                last_exc = exc
-                logger.warning(  # type: ignore[no-any-return]
-                    "valkey_op_failed",
-                    path=str(request.url.path),
-                    valkey_retry_attempt=attempt,
-                    error=str(exc),
-                    error_type=type(exc).__name__,
-                    transient=True,
-                )
-                if attempt < max_attempts:
-                    await asyncio.sleep(retry_backoff_seconds)
-                    continue
-                # Exhausted retries — fall through to 503 branch below.
-            except Exception as exc:
-                # Non-transient (auth, programmer error, schema mismatch).
-                # Do NOT retry — the failure won't heal in 50ms and we want
-                # the 503 immediately so the upstream caller surfaces it.
-                last_exc = exc
-                logger.warning(  # type: ignore[no-any-return]
-                    "valkey_op_failed",
-                    path=str(request.url.path),
-                    valkey_retry_attempt=attempt,
-                    error=str(exc),
-                    error_type=type(exc).__name__,
-                    transient=False,
-                )
-                RATE_LIMITING_UNAVAILABLE.labels(fallback_action="503_no_retry").inc()
+        try:
+            current = await valkey.incr(key)
+            # Only set EXPIRE when the key is brand-new (current == 1). Setting
+            # it on every request would reset the TTL on each hit, allowing a
+            # sustained flow to never expire and permanently bypass the limit.
+            # If a crash occurred between INCR and EXPIRE on a previous request
+            # the key is already present (current > 1) but has no TTL; the next
+            # new window (new key from fresh INCR) will set the TTL correctly.
+            if current == 1:
+                await valkey.expire(key, self.window_seconds)
+            if current > limit:
+                # PLAN-0052 platform-QA fix: include Retry-After header so
+                # clients (and the user) know when to retry. We use the
+                # window length as a conservative upper bound — the actual
+                # remaining time is window_seconds minus elapsed-in-window,
+                # but Valkey doesn't surface the elapsed cheaply enough to
+                # justify the extra round-trip per 429.
                 return Response(
-                    content='{"detail":"Service temporarily unavailable"}',
-                    status_code=503,
+                    content='{"detail":"Rate limit exceeded"}',
+                    status_code=429,
                     media_type="application/json",
+                    headers={
+                        "Retry-After": str(self.window_seconds),
+                        "X-RateLimit-Limit": str(limit),
+                        "X-RateLimit-Remaining": "0",
+                    },
                 )
-
-        if last_exc is not None:
-            # D-001: Fail-closed — Valkey operation failure returns 503 only
-            # AFTER the retry budget is exhausted. The metric label
-            # "503_after_retry" lets operators distinguish a single hiccup
-            # (would have 503'd before this patch) from a sustained outage
-            # (will 503 even with the retry).
-            RATE_LIMITING_UNAVAILABLE.labels(fallback_action="503_after_retry").inc()
+        except Exception:
+            # D-001: Fail-closed — Valkey operation failure returns 503.
+            logger.warning(  # type: ignore[no-any-return]
+                "rate_limiting_unavailable",
+                reason="valkey_operation_failed",
+                path=str(request.url.path),
+            )
             return Response(
                 content='{"detail":"Service temporarily unavailable"}',
                 status_code=503,
                 media_type="application/json",
-            )
-
-        # current is guaranteed non-None here (loop succeeded). The narrowing
-        # via assert keeps mypy happy without a type-ignore.
-        assert current is not None  # — invariant from loop above
-        if current > limit:
-            # PLAN-0052 platform-QA fix: include Retry-After header so
-            # clients (and the user) know when to retry. We use the
-            # window length as a conservative upper bound — the actual
-            # remaining time is window_seconds minus elapsed-in-window,
-            # but Valkey doesn't surface the elapsed cheaply enough to
-            # justify the extra round-trip per 429.
-            return Response(
-                content='{"detail":"Rate limit exceeded"}',
-                status_code=429,
-                media_type="application/json",
-                headers={
-                    "Retry-After": str(self.window_seconds),
-                    "X-RateLimit-Limit": str(limit),
-                    "X-RateLimit-Remaining": "0",
-                },
             )
 
         return cast("Response", await call_next(request))
@@ -699,7 +513,7 @@ def add_cors(app: FastAPI, origins: str) -> None:
     if "*" in origin_list:
         raise ValueError(
             "CORS misconfiguration: allow_origins=['*'] with allow_credentials=True "
-            "is rejected by browsers. Set explicit origins in API_GATEWAY_CORS_ORIGINS.",
+            "is rejected by browsers. Set explicit origins in API_GATEWAY_CORS_ORIGINS."
         )
     app.add_middleware(
         CORSMiddleware,

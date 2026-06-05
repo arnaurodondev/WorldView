@@ -112,40 +112,31 @@ class EntityMentionRepository:
         lookback_days: int = 90,
         *,
         lock: bool = True,
-        min_confidence: float = 0.6,
     ) -> list[EntityMentionModel]:
         """Fetch unresolved mentions for re-resolution, with optional row-level lock.
 
         Uses ``FOR UPDATE SKIP LOCKED`` so concurrent worker instances never
         process the same mention (BP-001 / R22 process isolation).
 
-        PLAN-0093 C-2 (F-NPL-005 defense-in-depth): filter out sub-floor mentions
-        (confidence < ``min_confidence``) at read time as well. After C-2 the
-        persistence path already rejects them, but the WHERE clause guards against
-        residual legacy rows AND any future writer that forgets the floor.
-
         Args:
         ----
-            batch_size:     Maximum rows to fetch.
-            lookback_days:  Only consider mentions created within this many days.
-            lock:           Whether to acquire FOR UPDATE SKIP LOCKED (default True).
-                            Set False in read-only tests.
-            min_confidence: Minimum GLiNER score for the row to be considered.
-                            Should match ``settings.min_persist_floor`` (default 0.6).
+            batch_size:    Maximum rows to fetch.
+            lookback_days: Only consider mentions created within this many days.
+            lock:          Whether to acquire FOR UPDATE SKIP LOCKED (default True).
+                           Set False in read-only tests.
 
         """
         _base_sql = """
                 SELECT *
                 FROM entity_mentions
                 WHERE resolution_outcome = 'unresolved'
-                  AND confidence >= :min_confidence
                   AND created_at >= now() - make_interval(days => :days)
                 ORDER BY created_at ASC
                 LIMIT :limit"""
         _lock_sql = "\n                FOR UPDATE SKIP LOCKED"
         result = await self._session.execute(
             text(_base_sql + (_lock_sql if lock else "")),
-            {"days": lookback_days, "limit": batch_size, "min_confidence": min_confidence},
+            {"days": lookback_days, "limit": batch_size},
         )
         rows = result.fetchall()
         # Re-load as ORM objects for attribute access (needed by worker)
@@ -165,7 +156,6 @@ class EntityMentionRepository:
         lookback_days: int = 90,
         *,
         lock: bool = True,
-        min_confidence: float = 0.6,
     ) -> list[UnresolvedMentionWithContext]:
         """Fetch unresolved mentions with surrounding domain context.
 
@@ -202,19 +192,17 @@ class EntityMentionRepository:
         # JOIN in this SELECT because PostgreSQL forbids FOR UPDATE on rows
         # produced by an outer join — so we lock entity_mentions only, then
         # hydrate context in a second non-locking query.
-        # PLAN-0093 C-2: defense-in-depth confidence filter (see get_unresolved_batch).
         _base_sql = """
                 SELECT mention_id
                 FROM entity_mentions
                 WHERE resolution_outcome = 'unresolved'
-                  AND confidence >= :min_confidence
                   AND created_at >= now() - make_interval(days => :days)
                 ORDER BY created_at ASC
                 LIMIT :limit"""
         _lock_sql = "\n                FOR UPDATE SKIP LOCKED"
         result = await self._session.execute(
             text(_base_sql + (_lock_sql if lock else "")),
-            {"days": lookback_days, "limit": batch_size, "min_confidence": min_confidence},
+            {"days": lookback_days, "limit": batch_size},
         )
         rows = result.fetchall()
         if not rows:

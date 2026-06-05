@@ -28,14 +28,14 @@ export default function PrivacyPolicyPage() {
         ← Back
       </Link>
 
-      <h1 className="mt-4 text-[24px] font-semibold tracking-tight">Privacy</h1>
-      <p className="mt-2 text-[14px] text-muted-foreground">
+      <h1 className="mt-4 text-2xl font-semibold tracking-tight">Privacy</h1>
+      <p className="mt-2 text-sm text-muted-foreground">
         Last updated: 2026-05-01
       </p>
 
-      <div className="mt-8 space-y-6 text-[14px] leading-relaxed">
+      <div className="mt-8 space-y-6 text-sm leading-relaxed">
         <section>
-          <h2 className="mb-2 text-[16px] font-semibold">What we store on your device</h2>
+          <h2 className="mb-2 text-base font-semibold">What we store on your device</h2>
           <p>
             Worldview uses your browser&apos;s local storage to keep you signed
             in and remember your preferences. We do not set marketing
@@ -64,7 +64,7 @@ export default function PrivacyPolicyPage() {
         </section>
 
         <section>
-          <h2 className="mb-2 text-[16px] font-semibold">Server-side data</h2>
+          <h2 className="mb-2 text-base font-semibold">Server-side data</h2>
           <p>
             Authentication is handled by your identity provider (Zitadel).
             Your portfolio, watchlists, alert rules, and chat history are
@@ -76,7 +76,7 @@ export default function PrivacyPolicyPage() {
         </section>
 
         <section>
-          <h2 className="mb-2 text-[16px] font-semibold">Your rights</h2>
+          <h2 className="mb-2 text-base font-semibold">Your rights</h2>
           <p>
             Under GDPR and equivalent regimes you have the right to access,
             correct, export, and delete your personal data. Contact{" "}
@@ -91,7 +91,7 @@ export default function PrivacyPolicyPage() {
         </section>
 
         <section>
-          <h2 className="mb-2 text-[16px] font-semibold">This page</h2>
+          <h2 className="mb-2 text-base font-semibold">This page</h2>
           <p className="text-muted-foreground">
             This is a minimum-viable disclosure surface (PLAN-0059 I-6).
             A complete privacy policy will replace this page before broader

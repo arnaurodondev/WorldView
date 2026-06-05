@@ -147,29 +147,6 @@ async def _enqueue_enriched(
     if _hallucinated > 0:
         s6_extraction_entity_ref_hallucinated_total.inc(_hallucinated)
 
-    # F-005 (BP-521): build entity_type_by_id from the resolved/provisional
-    # mentions so _build_raw_relations can stamp each relation dict with
-    # subject_entity_type / object_entity_type.  The KG direction-normalization
-    # guard in graph_write.py:462-488 only fires when these fields are non-None
-    # — without them the entire BP-521 swap path is dead code and ~73% of
-    # has_executive / employs relations land inverted (person→company).
-    #
-    # We use mention_class.value as a proxy for the canonical entity_type.
-    # The critical value is "person" (MentionClass.PERSON.value == "person")
-    # which is exactly what graph_write.py checks for direction normalization.
-    # Other MentionClass values (organization, financial_institution, …) are
-    # all != "person" so the swap guard works correctly for all cases.
-    #
-    # The dict covers BOTH resolved and provisional mentions so provisional
-    # relations (entity_provisional=True) also get correct type hints.
-    entity_type_by_id: dict[str, str] = {}
-    for m in mentions:
-        mention_type = m.mention_class.value if hasattr(m.mention_class, "value") else str(m.mention_class)
-        if m.resolved_entity_id is not None:
-            entity_type_by_id[str(m.resolved_entity_id)] = mention_type
-        if m.provisional_queue_id is not None:
-            entity_type_by_id[str(m.provisional_queue_id)] = mention_type
-
     # SA-3 fix (2026-05-10): pass published_at so each relation row gets
     # evidence_date = published_at (or None → KG falls back to utc_now()).
     raw_relations = _build_raw_relations(
@@ -177,7 +154,6 @@ async def _enqueue_enriched(
         entity_id_by_ref,
         provisional_refs,
         published_at=published_at,
-        entity_type_by_id=entity_type_by_id,
     )
     raw_events = _build_raw_events(extraction_result.get("events", []), entity_id_by_ref, provisional_refs)
     raw_claims = _build_raw_claims(extraction_result.get("claims", []), entity_id_by_ref, provisional_refs)
@@ -229,7 +205,6 @@ def _build_raw_relations(
     provisional_refs: set[str],
     *,
     published_at: datetime | None = None,
-    entity_type_by_id: dict[str, str] | None = None,
 ) -> list[dict[str, Any]]:
     """Convert LLM extraction relations into the dict format S7 expects.
 
@@ -243,15 +218,6 @@ def _build_raw_relations(
     SA-3 fix (2026-05-10): ``published_at`` is now included in each relation dict as
     ``evidence_date``.  KG's ``_parse_dt`` falls back to ``now()`` when the field is
     absent, which stamps all rows with today's date and breaks the confidence trend chart.
-
-    F-005 / BP-521 fix (2026-05-22): ``entity_type_by_id`` maps entity_id → entity_type
-    string (using mention_class.value as a proxy). When present, each output dict gets
-    ``subject_entity_type`` and ``object_entity_type`` populated. The KG consumer reads
-    these fields at ``enriched_consumer.py:510-511`` and passes them to the
-    ``RawRelation`` dataclass; the direction-normalization guard in
-    ``graph_write.py:462-488`` uses them to swap inverted has_executive / employs
-    relations (person→company) to the canonical direction (company→person).
-    Without this fix, the type hints are always None and the swap is dead code.
     """
     # ISO string once — all rows in this batch share the same article date
     evidence_date_iso: str | None = published_at.isoformat() if published_at else None
@@ -290,12 +256,6 @@ def _build_raw_relations(
                 "provisional_queue_id": provisional_qid,
                 # SA-3 (2026-05-10): carry article publication date into each relation row.
                 "evidence_date": evidence_date_iso,
-                # F-005 / BP-521 (2026-05-22): entity type hints for KG direction
-                # normalization. Uses mention_class.value (e.g. "person") as the
-                # entity type proxy. None when entity_type_by_id is not provided
-                # (tests that call _build_raw_relations directly without the dict).
-                "subject_entity_type": entity_type_by_id.get(subject_id) if entity_type_by_id else None,
-                "object_entity_type": entity_type_by_id.get(object_id) if entity_type_by_id else None,
             }
         )
     return result

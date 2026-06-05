@@ -325,105 +325,144 @@ All 4 queries auto-deduped by TanStack Query if other components fetch the same 
 ### 6.8 Tab 2: Financials
 
 **File**: `components/instrument/financials/FinancialsTab.tsx`
-**Layout**: `flex flex-row h-full overflow-hidden` — left column scrolls, right sidebar is sticky.
+**Layout**: `flex gap-0` full height
 
-> **Iteration note**: This section supersedes the original 3-column flat grid design. The shipped Wave C implementation (PLAN-0090 T-C-01..C-03) is the v1 baseline; the spec below describes the target state. Full rationale and ASCII wireframe: `docs/designs/0089/06-instrument-financials.md`.
+#### 6.8.1 Main Content (calc(100% - 280px))
 
-#### 6.8.1 Left Column (flex-1, scrollable)
+**File**: `components/instrument/financials/FlatMetricsGrid.tsx`
+**Style**: `flex-1 min-w-0 overflow-y-auto p-4`
+**Structure**: A `<dl>` grid with `grid-cols-3 gap-x-6 gap-y-0`
 
-**Outer**: `flex-1 min-w-0 overflow-y-auto` — hosts all left-column blocks stacked vertically.
+Each metric cell (`MetricCell.tsx`):
+```
+<dt>  LABEL [10px, uppercase, muted]  </dt>
+<dd>  VALUE [11px, mono, tabular-nums, colored]  </dd>
+```
+Height: 36px per cell (label 14px + value 22px with gap).
 
----
+**Group separator**: Full-width `<div>` spanning 3 columns: `h-[1px] bg-border/30 col-span-3 my-3` + inline group label `text-[10px] uppercase tracking-widest text-muted-foreground/50`.
 
-**Block 1: DenseMetricsGrid** (`components/instrument/financials/DenseMetricsGrid.tsx`)
+**Complete FlatMetricsGrid specification** (45 metrics across 8 groups):
 
-A Finviz-style **6-column snapshot grid** — no header rows, sections delimited by a 2px left-border accent on each section's first cell. The root `<div>` wears `data-table-grid="dense"` (F1 §16.3) which drives `--row-h: 18px` and `--cell-px: 6px`.
+**Group 1: VALUATION**
+| Metric | Field | Source |
+|--------|-------|--------|
+| P/E Ratio | `fundamentals.pe_ratio` | Fundamentals |
+| Forward P/E | `fundamentals.forward_pe` | Fundamentals |
+| Price/Sales | `fundamentals.price_to_sales` | Fundamentals |
+| Price/Book | `fundamentals.price_to_book` | Fundamentals |
+| EV/EBITDA | `fundamentals.ev_to_ebitda` | Fundamentals |
+| Market Cap | `fundamentals.market_cap` | Fundamentals |
 
-- **Grid**: `grid grid-cols-6 gap-x-3 gap-y-0` with 8 section rows (rows 1–8) + 1 shorts sub-row (row 9)
-- **Cell component**: F1 primitive `components/primitives/MetricCell` (no dedicated `DenseMetricCell` needed — height from CSS var)
-- **Density target**: 40 cells + 8 empty trailing slots = 48 grid positions → ~144px total at 18px/row
-- **Removed from v1 grid** (cells that were always null or belong on Quote tab): INT COVERAGE, CREDIT RATING, DAY RETURN, RSI(14), ATR(14) — these either have no data or are technicals better shown on the Quote tab chart panel
+**Group 2: PROFITABILITY**
+| Metric | Field | Source |
+|--------|-------|--------|
+| Gross Margin | `fundamentals.gross_margin` | Fundamentals |
+| Operating Margin | `fundamentals.operating_margin` | Fundamentals |
+| Net Margin | `fundamentals.net_margin` | Fundamentals |
+| ROE | `fundamentals.roe` | Fundamentals |
+| ROA | `fundamentals.roa` | Fundamentals |
+| FCF Margin | `snapshot.fcf_margin` | FundamentalsSnapshot |
 
-**Complete DenseMetricsGrid row specification** (40 data cells across 8 section rows):
+**Group 3: GROWTH**
+| Metric | Field | Source |
+|--------|-------|--------|
+| Revenue (YoY) | `fundamentals.revenue_growth_yoy` | Fundamentals |
+| Earnings (YoY) | `fundamentals.earnings_growth_yoy` | Fundamentals |
+| EPS TTM | `snapshot.eps_ttm` | FundamentalsSnapshot |
 
-| Row | Section | Col 1 | Col 2 | Col 3 | Col 4 | Col 5 | Col 6 |
-|-----|---------|-------|-------|-------|-------|-------|-------|
-| 1 | VALUATION | MKT CAP `formatMarketCap` | P/E `formatRatio` peClass | FWD P/E `formatRatio` peClass | P/B `formatRatio` | P/S `formatRatio` | EV/EBITDA `formatRatio` |
-| 2 | PROFITABILITY | GROSS MGN `formatPercent` signClass | OP MGN `formatPercent` signClass | NET MGN `formatPercent` signClass | ROE `formatPercent` roeClass | ROA `formatPercent` signClass | EPS TTM `formatPrice` signClass |
-| 3 | GROWTH | REV YoY `formatPercent` signClass | EPS YoY `formatPercent` signClass | FCF MGN `formatPercent` signClass | *(empty)* | *(empty)* | *(empty)* |
-| 4 | BALANCE SHEET | DEBT/EQ `formatRatio` deClass | CURRENT R `formatRatio` | QUICK R `formatRatio` | ND/EBITDA `formatRatio` | *(empty)* | *(empty)* |
-| 5 | CASH FLOW | OP CF `formatMarketCap` | CAPEX `formatMarketCap` abs() | FCF `formatMarketCap` signClass | *(empty)* | *(empty)* | *(empty)* |
-| 6 | DIVIDENDS | DIV YIELD `formatPercent` | PAYOUT `formatPercent` | EX-DIV `formatDate` | PAY DATE `formatDate` | *(empty)* | *(empty)* |
-| 7 | OWNERSHIP | SHARES OUT `formatMarketCap` | FLOAT `formatMarketCap` | %INSIDERS `formatPercent` ÷100 | %INST `formatPercent` ÷100 | *(empty)* | *(empty)* |
-| 8 | TECHNICALS | BETA `toFixed(2)` | 52W HIGH `formatPrice` | 52W LOW `formatPrice` | 50DMA `formatPrice` | 200DMA `formatPrice` | AVG VOL `formatVolume` |
-| 9 | *(sub-row 8)* | SHRT SHRS `formatMarketCap` | SHRT RATIO `formatRatio` | SHRT % `formatPercent` | *(empty)* | *(empty)* | *(empty)* |
+**Group 4: BALANCE SHEET**
+| Metric | Field | Source |
+|--------|-------|--------|
+| Debt/Equity | `fundamentals.debt_to_equity` | Fundamentals |
+| Current Ratio | `fundamentals.current_ratio` | Fundamentals |
+| Quick Ratio | `fundamentals.quick_ratio` | Fundamentals |
+| Interest Coverage | `snapshot.interest_coverage` | FundamentalsSnapshot |
+| Net Debt/EBITDA | `snapshot.net_debt_to_ebitda` | FundamentalsSnapshot |
 
-**Field path notes** (EODHD verbatim PascalCase for section records):
-- `shareStats.SharesOutstanding`, `shareStats.SharesFloat`, `shareStats.PercentInsiders` (÷100 before formatPercent), `shareStats.PercentInstitutions` (÷100)
-- `technicals["52WeekHigh"]`, `technicals["52WeekLow"]`, `technicals["50DayMA"]`, `technicals["200DayMA"]`, `technicals.SharesShort`, `technicals.ShortRatio`, `technicals.ShortPercent`
+**Group 5: CASH FLOW**
+| Metric | Field | Source |
+|--------|-------|--------|
+| Operating CF | `snapshot.operating_cash_flow` | FundamentalsSnapshot |
+| CapEx | `snapshot.capex` | FundamentalsSnapshot |
+| Free Cash Flow | `snapshot.free_cash_flow` | FundamentalsSnapshot |
 
-**Empty trailing cells**: render `<div className="h-[18px]"/>` (invisible placeholder, preserves grid alignment).
+**Group 6: DIVIDENDS**
+| Metric | Field | Source |
+|--------|-------|--------|
+| Dividend Yield | `fundamentals.dividend_yield` | Fundamentals |
+| Payout Ratio | `fundamentals.payout_ratio` | Fundamentals |
 
----
+**Group 7: OWNERSHIP**
+| Metric | Field | Source |
+|--------|-------|--------|
+| Shares Outstanding | `shareStats.shares_outstanding` | ShareStatisticsData |
+| Float | `shareStats.shares_float` | ShareStatisticsData |
+| Institutional Own% | `shareStats.percent_institutions` | ShareStatisticsData |
+| Insider Own% | `shareStats.percent_insiders` | ShareStatisticsData |
+| Short % | `technicals.short_percent` | TechnicalsData |
+| Short Ratio | `technicals.short_ratio` | TechnicalsData |
 
-**Block 2: IncomeStatementTable** (`components/instrument/financials/IncomeStatementTable.tsx`)
+**Group 8: TECHNICALS**
+| Metric | Field | Source |
+|--------|-------|--------|
+| Beta | `snapshot.beta` | FundamentalsSnapshot |
+| 52W High | `fundamentals.week_52_high` | Fundamentals |
+| 52W Low | `fundamentals.week_52_low` | Fundamentals |
+| MA 50 | `technicals["50_day_ma"]` | TechnicalsData |
+| MA 200 | `technicals["200_day_ma"]` | TechnicalsData |
+| RSI(14) | computed client-side | OHLCV bars (1D, last 14 periods) |
+| ATR(14) | computed client-side | OHLCV bars (1D, last 14 periods) |
 
-5-column P&L table: FY (year) · Revenue · Gross Profit · EBIT · Net Income · EPS. Last 4 annual periods shown by default. Annual/Quarterly toggle via `p` / `P` hotkey (NOT `q` — that chord is reserved for tab switch). Sparkline trend column on the right of each row using F1 primitive `components/primitives/Sparkline` (`width={40} height={12} trend="auto"`).
-
-- Row height: 20px (`data-table-grid` default)
-- Column headers: 10px ALL CAPS
-- Annual periods: 4; Quarterly periods: 8 (last 8 quarters, columns expand to 9 total)
-- staleTime: 24h
-
----
-
-**Block 3: EarningsBarChart** (`components/instrument/financials/EarningsBarChart.tsx`)
-
-EPS beat/miss history. Height: 64px. Each bar shows actual (solid) + estimate (outlined). Beat = `bg-positive`, miss = `bg-negative`. EPS surprise % chip per bar (from `earnings-annual-trend.surprise_percent` — guard: hide chip if all null). FY labels below each bar.
-
----
-
-**Block 4: PeerComparisonTable** (`components/instrument/financials/PeerComparisonTable.tsx`)
-
-Self + 5 peers × 9 columns: MKT CAP · P/E · FWD P/E · ROE · NET MGN · DEBT/EQ · DIV YIELD · REV YoY · 1Y RETURN. Self-row highlighted `bg-muted/30`. Peer row click → `router.push('/instruments/' + peer.ticker)`. 1Y return computed client-side from `/v1/ohlcv/batch` (`close[last] / close[first] - 1`, guard on `bars.length ≥ 252` else "—"). Data from `GET /v1/instruments/{id}/peers?n=5` (new endpoint — see §6.12).
-
----
-
-**Block 5: InsiderTransactionsTable** (`components/instrument/financials/InsiderTransactionsTable.tsx`)
-
-Last 8 insider transactions. Columns: DATE · INSIDER · ROLE · TYPE · SHARES · VALUE · POST-TX. Data from `GET /v1/fundamentals/{id}/insider-transactions` (uses existing `qk.instruments.ownership(id)` key — page-bundle seeds this). "View all" link → `/instruments/{TICKER}/insiders` stub route. Hidden when result is empty.
-
----
-
-**Block 6: InstitutionalHoldersTable** (`components/instrument/financials/InstitutionalHoldersTable.tsx`)
-
-Top 10 institutional holders. Columns: HOLDER · SHARES · % OUT · VALUE · Δ QoQ. Data from `GET /v1/fundamentals/{id}/institutional-holders` (new S9 proxy route — see §6.12). Hidden when result is empty.
-
----
-
-#### 6.8.2 Right Sidebar (240px, sticky)
-
-**File**: `components/instrument/financials/AnalystSidebar.tsx` (rewritten as 7-panel shell)
-**Style**: `w-[240px] shrink-0 border-l border-border overflow-y-auto flex flex-col`
-
-The sidebar is composed of 7 stacked panels (total ~768px in 840px viewport, ~70px scroll buffer). Each panel is a self-contained sub-component under `components/instrument/financials/sidebar/`.
-
-| Panel | File | Height est. | Source |
-|-------|------|------------|--------|
-| `AnalystConsensusPanel` | `sidebar/AnalystConsensusPanel.tsx` | ~76px | `fundamentals.analyst_*_count` (5 buckets) |
-| `TargetPricePanel` | `sidebar/TargetPricePanel.tsx` | ~64px | `fundamentals.analyst_target_price` + `quote.price` (shows "▲ +X% vs current") |
-| `RevisionsPanel` | `sidebar/RevisionsPanel.tsx` | ~80px | Deferred to v1.1 (S3 needs 30-day snapshot history). v1 shows `—` placeholders. |
-| `TargetsByAnalystPanel` | `sidebar/TargetsByAnalystPanel.tsx` | ~180px | `GET /v1/fundamentals/{id}/analyst-targets-by-firm` (pending EODHD tier check). v1 falls back to "Individual firm targets pending data provider upgrade." |
-| `BeatMissHistoryPanel` | `sidebar/BeatMissHistoryPanel.tsx` | ~88px | `earnings-trend` endpoint (quarterly, last 8Q) — NOT `earnings-annual-trend`. F1 Sparkline primitive. |
-| `AIBriefPanel` | `sidebar/AIBriefPanel.tsx` | ~140px | `GET /v1/briefings/instrument/{entityId}` — lazy-generate: on 404 fire POST then poll every 30s × 5 attempts. Cache key: `qk.briefings.instrument(id)` (no `:{user_id}` suffix per DISCUSS-7). |
-| `CompanySnapshotPanel` | `sidebar/CompanySnapshotPanel.tsx` | ~140px | `fundamentals` General section: `description`, `gics_sector`, `gics_industry`, `General.FullTimeEmployees`, `General.AddressData.City/Country`. 4-line truncated description, expandable. |
-
-**Data fetching split**:
+**Client-side RSI/ATR computation** (`lib/technicals.ts` — new utility file):
 ```typescript
-// Primary: shared with grid blocks
-const { fundamentals, snapshot, technicals, shareStats } = useFinancialsTabData(instrumentId)
-// Sidebar: separate hook to avoid bloating the primary hook
-const { brief, intelligence } = useFinancialsSidebarData(instrumentId, entityId)
+// RSI(14): 100 - (100 / (1 + avgGain/avgLoss)) over last 14 periods
+export function computeRSI(bars: OHLCVBar[], period = 14): number | null
+
+// ATR(14): avg(max(H-L, |H-prevC|, |L-prevC|)) over last 14 periods
+export function computeATR(bars: OHLCVBar[], period = 14): number | null
+```
+These computations use the 1D OHLCV bars already fetched for the chart. No additional API calls.
+
+**Below the FlatMetricsGrid** (inside the same scrollable column):
+
+`IncomeStatementTable.tsx` — 4-year annual table (`getIncomeStatement(instrumentId)`, staleTime: 24h):
+- Columns: FY (year), Revenue, Gross Profit, EBIT, Net Income, EPS
+- All values: `font-mono tabular-nums text-[11px]`, right-aligned
+- Row height: 22px
+- Column headers: 10px ALL CAPS
+
+`EarningsBarChart.tsx` — EPS beat/miss history (`getEarningsHistory(instrumentId)`, staleTime: 24h):
+- Compact bar chart: 6–8 bars, 80px height
+- Each bar: actual EPS (solid), estimate EPS (outlined). Beat = `bg-positive`, miss = `bg-negative`
+- X-axis labels: fiscal year short form (e.g., "FY23")
+
+#### 6.8.2 Right Sidebar (280px, sticky)
+
+**File**: `components/instrument/financials/AnalystSidebar.tsx`
+**Style**: `w-[280px] flex-shrink-0 border-l border-border flex flex-col overflow-y-auto`
+
+**Analyst Consensus section**:
+- Header: `ANALYST CONSENSUS` (10px, px-3 py-1.5)
+- Buy / Hold / Sell counts as stacked mini bar: `flex gap-0` with colored segments
+- `"28 Buy · 10 Hold · 2 Sell"` text below in `text-[10px] font-mono`
+- Target price: `$240.00` in `text-[13px] font-mono font-semibold`
+- Target range: `$180.00 – $280.00` in `text-[10px] font-mono text-muted-foreground`
+- Number of analysts: `"Based on 40 analysts"` in `text-[10px] text-muted-foreground`
+
+**Data timestamp**:
+- `text-[10px] text-muted-foreground px-3 py-2` bottom
+- "Data as of {updated_at formatted as 'May 19, 2026'}"
+
+**Data fetching in FinancialsTab**:
+```typescript
+const { data: fundamentals } = useFundamentals(instrumentId)    // 5min stale
+const { data: snapshot }     = useFundamentalsSnapshot(instrumentId) // 10min stale
+const { data: shareStats }   = useShareStatistics(instrumentId) // 1hr stale
+const { data: technicals }   = useTechnicals(instrumentId)      // 5min stale
+const { data: incomeStmt }   = useIncomeStatement(instrumentId) // 24hr stale
+const { data: earningsHistory } = useEarningsHistory(instrumentId)  // 24hr stale
+const ohlcvBars              = useOHLCVBars(instrumentId, "1D")  // from cache, for RSI/ATR
 ```
 
 ---
@@ -688,32 +727,24 @@ lib/
 
 ### 6.12 API Endpoints Used
 
-Mostly existing S9 endpoints. The Financials tab iter-2 design adds 4 new backend routes (marked **NEW**).
+All existing S9 endpoints. Zero new backend work required.
 
 | Endpoint | Used By | staleTime | Notes |
 |----------|---------|-----------|-------|
 | `GET /v1/instruments/{id}/page-bundle` | Page entry | 5min | Primes 5 child caches |
-| `GET /v1/ohlcv/{id}?timeframe=1D` | OHLCVChart | 1min | Also provides OHLCV for RSI/ATR on Quote tab |
-| `POST /v1/ohlcv/batch` | PeerComparisonTable | 30min | Multi-instrument batch; compute 1Y return client-side |
+| `GET /v1/ohlcv/{id}?timeframe=1D` | OHLCVChart | 1min | Also provides OHLCV for RSI/ATR |
 | `GET /v1/quotes/{id}` | LiveQuoteBadge | 30s | Price freshness check |
-| `GET /v1/fundamentals/{id}` | FinancialsTab | 30min | Main fundamentals (DenseMetricsGrid + sidebar) |
-| `GET /v1/fundamentals/{id}/snapshot` | QuoteTab + FinancialsTab | 30min | EPS TTM, Beta, FCF, interest coverage |
-| `GET /v1/fundamentals/{id}/technicals` | QuoteTab + FinancialsTab | 30min | MA50, MA200, short %, short ratio |
+| `GET /v1/fundamentals/{id}` | FinancialsTab | 5min | Main fundamentals (FlatMetricsGrid) |
+| `GET /v1/fundamentals/{id}/snapshot` | QuoteTab + FinancialsTab | 10min | EPS TTM, Beta, FCF, interest coverage |
+| `GET /v1/fundamentals/{id}/technicals` | QuoteTab + FinancialsTab | 5min | MA50, MA200, short %, short ratio |
 | `GET /v1/fundamentals/{id}/share-statistics` | QuoteTab + FinancialsTab | 1hr | Float, shares outstanding, own% |
 | `GET /v1/fundamentals/{id}/income-statement` | FinancialsTab | 24hr | 4-year income statement table |
-| `GET /v1/fundamentals/{id}/earnings-annual-trend` | FinancialsTab | 24hr | EarningsBarChart EPS history |
-| `GET /v1/fundamentals/{id}/earnings-trend` | FinancialsTab sidebar | 24hr | BeatMissHistoryPanel (quarterly, last 8Q) |
-| `GET /v1/fundamentals/{id}/insider-transactions` | InsiderTransactionsTable | 24hr | Uses existing `qk.instruments.ownership(id)` key |
-| `GET /v1/fundamentals/{id}/splits-dividends` | DenseMetricsGrid | 24hr | ExDividendDate, DividendDate |
-| `GET /v1/fundamentals/{id}/institutional-holders` | InstitutionalHoldersTable | 24hr | **NEW S9 proxy route required** (~15 LOC in `routers/fundamentals.py`) |
-| `GET /v1/fundamentals/{id}/fund-holders` | InstitutionalHoldersTable | 24hr | **NEW S9 proxy route required** |
-| `GET /v1/instruments/{id}/peers?n=5` | PeerComparisonTable | 24hr | **NEW S9 endpoint** — top-N peers by market cap in same `gics_industry` (~30 LOC) |
-| `GET /v1/fundamentals/{id}/analyst-targets-by-firm` | TargetsByAnalystPanel | 30min | **NEW S9 endpoint** — per-firm targets from EODHD `AnalystRatings.*`; falls back gracefully if not yet available |
+| `GET /v1/fundamentals/{id}/earnings-annual-trend` | FinancialsTab | 24hr | EPS beat/miss history |
 | `GET /v1/news/entity/{entityId}?limit=20&offset=N` | IntelligenceTab | 5min | Paginated entity news |
 | `GET /v1/entities/{entityId}/graph?depth=N` | IntelligenceTab | 5min | Entity graph nodes + edges |
 | `GET /v1/entities/{entityId}/intelligence` | IntelligenceTab | 5min | Health score, narrative |
 | `GET /v1/entities/{entityId}/contradictions` | IntelligenceTab | 5min | Contradiction cards |
-| `GET /v1/briefings/instrument/{entityId}` | AiBriefBanner + FinancialsTab sidebar + IntelligenceTab | 30s | AI brief; lazy-generate on 404 then poll; cache key has NO `:{user_id}` suffix |
+| `GET /v1/briefings/instrument/{entityId}` | AiBriefBanner + IntelligenceTab | 10min | AI brief text |
 
 ---
 

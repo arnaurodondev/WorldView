@@ -161,7 +161,7 @@ export function EntityChatPanel({ entityId: _entityId }: EntityChatPanelProps) {
 
   return (
     <div
-      className="flex flex-col bg-background border-t border-border transition-color-and-opacity duration-200"
+      className="flex flex-col bg-background border-t border-border transition-all duration-200"
       style={{ height: panelHeight }}
       aria-label="Entity-scoped chat panel"
     >
@@ -303,7 +303,7 @@ export function EntityChatPanel({ entityId: _entityId }: EntityChatPanelProps) {
           // WHY disabled when empty: avoids empty API calls. isStreaming guard
           // prevents double-submitting while a response is arriving.
           disabled={!input.trim() || isStreaming}
-          className="h-[36px] px-3 shrink-0"
+          className="h-9 px-3 shrink-0"
           aria-label="Send message"
         >
           <Send className="h-3.5 w-3.5" strokeWidth={1.5} />

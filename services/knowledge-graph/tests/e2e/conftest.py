@@ -138,20 +138,17 @@ def e2e_app(e2e_settings: Settings, e2e_session_factory: async_sessionmaker[Asyn
     return app
 
 
-@pytest.fixture()
+@pytest.fixture
 async def e2e_client(e2e_app) -> AsyncGenerator[AsyncClient, None]:
     """ASGI-transport AsyncClient pointing at the e2e app."""
     transport = ASGITransport(app=e2e_app)
     async with AsyncClient(
-        transport=transport,
-        base_url="http://test",
-        timeout=30.0,
-        headers={"X-Internal-JWT": _INTERNAL_JWT},
+        transport=transport, base_url="http://test", timeout=30.0, headers={"X-Internal-JWT": _INTERNAL_JWT}
     ) as ac:
         yield ac
 
 
-@pytest.fixture()
+@pytest.fixture
 def admin_headers() -> dict[str, str]:
     """Request headers carrying the e2e admin token."""
     return {"X-Admin-Token": _E2E_ADMIN_TOKEN}
@@ -160,7 +157,7 @@ def admin_headers() -> dict[str, str]:
 # ── Direct DB session ─────────────────────────────────────────────────────────
 
 
-@pytest.fixture()
+@pytest.fixture
 async def e2e_db_session(e2e_session_factory: async_sessionmaker[AsyncSession]) -> AsyncGenerator[AsyncSession, None]:
     """Direct AsyncSession for white-box seeding and assertions.
 

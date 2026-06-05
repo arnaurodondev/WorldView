@@ -213,9 +213,7 @@ class TestGraphRouteEvidenceSnippets:
 
         with patch.object(_routes_mod, "GetEntityGraphUseCase", _SpyUseCase):
             async with AsyncClient(
-                transport=ASGITransport(app=app),
-                base_url="http://test",
-                headers=_HEADERS,
+                transport=ASGITransport(app=app), base_url="http://test", headers=_HEADERS
             ) as client:
                 resp = await client.get(f"/api/v1/entities/{_ENTITY_ID}/graph?evidence_snippets_limit=2")
 
@@ -357,7 +355,7 @@ class TestGraphRouteDepthParameter:
                     "isin": None,
                     "ticker": "MSFT",
                     "exchange": "NASDAQ",
-                },
+                }
             },
         )
 
@@ -424,7 +422,7 @@ class TestGraphRouteDepthParameter:
                     "evidence_count": 1,
                     "first_evidence_at": now,
                     "latest_evidence_at": now,
-                },
+                }
             ],
             neighbor_rows={
                 str(neighbor_id): {
@@ -434,7 +432,7 @@ class TestGraphRouteDepthParameter:
                     "isin": None,
                     "ticker": "RIVN",
                     "exchange": "NASDAQ",
-                },
+                }
             },
         )
 
@@ -447,78 +445,3 @@ class TestGraphRouteDepthParameter:
         assert response.relations[0].relation_summary is None
         assert str(neighbor_id) in response.entities
         assert response.entities[str(neighbor_id)].ticker == "RIVN"
-
-
-class TestEntitySummaryDescriptionAndSector:
-    """F-101: EntitySummary must forward description and sector from entity rows."""
-
-    async def test_center_description_populated_when_entity_row_has_description(self) -> None:
-        """center node description is non-null when entity_row includes description."""
-        from httpx import ASGITransport, AsyncClient
-
-        entity_row_with_desc = {
-            "entity_id": _ENTITY_ID,
-            "canonical_name": "Apple Inc.",
-            "entity_type": "company",
-            "isin": None,
-            "ticker": "AAPL",
-            "exchange": "NASDAQ",
-            # F-101: description comes from canonical_entities.description column
-            "description": "Apple Inc. designs, manufactures, and markets consumer electronics.",
-            "sector": "Technology",
-        }
-        app = _make_app(entity_row=entity_row_with_desc, relation_rows=[])
-
-        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test", headers=_HEADERS) as client:
-            resp = await client.get(f"/api/v1/entities/{_ENTITY_ID}/graph")
-
-        assert resp.status_code == 200
-        center = resp.json()["center"]
-        assert center["description"] == "Apple Inc. designs, manufactures, and markets consumer electronics."
-        assert center["sector"] == "Technology"
-
-    async def test_center_description_null_when_absent_from_entity_row(self) -> None:
-        """center node description is null when entity_row has no description key."""
-        from httpx import ASGITransport, AsyncClient
-
-        # Row without description/sector — simulates old-style rows that pre-date F-101
-        app = _make_app(entity_row=_entity_row(), relation_rows=[])
-
-        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test", headers=_HEADERS) as client:
-            resp = await client.get(f"/api/v1/entities/{_ENTITY_ID}/graph")
-
-        assert resp.status_code == 200
-        center = resp.json()["center"]
-        assert center["description"] is None
-        assert center["sector"] is None
-
-    async def test_neighbor_description_populated_via_entities_map(self) -> None:
-        """Neighbor nodes carry description/sector when entity batch row includes them."""
-        from httpx import ASGITransport, AsyncClient
-
-        neighbor_id = _OBJ_ID
-        neighbor_row = {
-            "entity_id": neighbor_id,
-            "canonical_name": "Microsoft Corp.",
-            "entity_type": "company",
-            "isin": None,
-            "ticker": "MSFT",
-            "exchange": "NASDAQ",
-            "description": "Microsoft Corporation develops software and cloud services.",
-            "sector": "Technology",
-        }
-        app = _make_app(
-            entity_row=_entity_row(),
-            relation_rows=[_relation_row()],
-            entities_map={str(neighbor_id): neighbor_row},
-        )
-
-        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test", headers=_HEADERS) as client:
-            resp = await client.get(f"/api/v1/entities/{_ENTITY_ID}/graph")
-
-        assert resp.status_code == 200
-        entities = resp.json()["entities"]
-        assert str(neighbor_id) in entities
-        neighbor = entities[str(neighbor_id)]
-        assert neighbor["description"] == "Microsoft Corporation develops software and cloud services."
-        assert neighbor["sector"] == "Technology"

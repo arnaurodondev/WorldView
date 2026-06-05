@@ -72,7 +72,7 @@ class TestNarrativeGenerationWorkerBatch:
                 _E1: True,
                 _E2: RuntimeError("LLM timeout"),
                 _E3: False,
-            },
+            }
         )
         result = asyncio.run(worker.run_batch([_E1, _E2, _E3]))
 
@@ -88,7 +88,7 @@ class TestNarrativeGenerationWorkerBatch:
             execute_results={
                 _E1: ValueError("DB error"),
                 _E2: ValueError("DB error"),
-            },
+            }
         )
         result = asyncio.run(worker.run_batch([_E1, _E2]))
 

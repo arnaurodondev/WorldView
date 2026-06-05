@@ -36,7 +36,7 @@
 // WHY "use client": uses useState for local edit buffer, dispatches drag
 // events, and reads/writes localStorage via the columns helpers.
 
-import { Fragment, useEffect, useState } from "react";
+import { useEffect, useState } from "react";
 import { Settings2, GripVertical, RotateCcw, Check } from "lucide-react";
 import {
   Popover,
@@ -49,74 +49,6 @@ import {
   resetColumnPrefs,
 } from "@/lib/screener-columns";
 import { cn } from "@/lib/utils";
-// PRD-0089 Wave I-A · T-IA-08: backend-pending marker for columns whose
-// underlying field isn't in the screener fields allowlist yet.
-import { BackendPendingBadge } from "@/components/ui/backend-pending-badge";
-
-// ── T-IA-08 category map ─────────────────────────────────────────────────────
-// WHY a static category map (not derived from `field_type`): the screener
-// columns metadata lives in `lib/screener-columns.ts` which doesn't expose a
-// category field today. Hardcoding the map here is pragmatic; if/when the
-// metadata table grows a `category` column we'll switch to it in a follow-up.
-// Any column key NOT present here falls into the "Other" bucket so we
-// silently surface new opt-in columns instead of dropping them.
-// PRD-0089 Wave I-B Block IB-L2 (T-IB-05) extended the categories with
-// "Cash Flow" and "Risk" so the new fundamentals snapshot columns land in
-// their own buckets instead of being lumped under the existing four. The
-// design (docs/designs/0089/08-screener.md) calls the credit-rating /
-// leverage block "Risk" — keeping that terminology here.
-type ColCategory =
-  | "Valuation"
-  | "Profitability"
-  | "Cash Flow"
-  | "Technical"
-  | "Risk"
-  | "Intelligence"
-  | "Other";
-
-const COLUMN_CATEGORY: Record<string, ColCategory> = {
-  ticker: "Other",
-  name: "Other",
-  sector: "Other",
-  price: "Other",
-  change: "Technical",
-  marketCap: "Valuation",
-  pe: "Valuation",
-  forwardPe: "Valuation",
-  revenueGrowth: "Profitability",
-  divYield: "Valuation",
-  roe: "Profitability",
-  beta: "Risk",         // beta is a risk indicator (market sensitivity) — moved to Risk in I-B
-  score: "Intelligence",
-  range52w: "Technical",
-  sparkline: "Technical",
-  opMargin: "Profitability",
-  evEbitda: "Valuation",
-  avgVol: "Technical",  // volume = a technical / liquidity signal
-  // ── PRD-0089 Wave I-B Block IB-L2 (T-IB-05) new columns ──────────────────
-  // WHY each lands where it does:
-  //   - epsTtm + fcfMargin → Profitability (margin-style signals).
-  //   - fcf → Cash Flow (the new dedicated bucket).
-  //   - interestCoverage + netDebtToEbitda + creditRating → Risk (the credit
-  //     analysis tier — distress signals, leverage limits, rating compliance).
-  epsTtm: "Profitability",
-  fcf: "Cash Flow",
-  fcfMargin: "Profitability",
-  interestCoverage: "Risk",
-  netDebtToEbitda: "Risk",
-  creditRating: "Risk",
-};
-
-// WHY a set (not an array of strings): O(1) "is this backend pending?"
-// lookup inside the render loop. Today the set is empty — every opt-in
-// column we ship is already backed by a live field. Wave L-2..L-5 columns
-// will be added to this set as they ship behind a Wave-L track gate.
-const BACKEND_PENDING_KEYS: ReadonlySet<string> = new Set<string>();
-
-// WHY 14 (not 12 or 16): the 1440 px viewport (the platform's design target)
-// fits ~14 dense screener columns before the AG-Grid horizontal scroll bar
-// surfaces. Past that, columns clip — see plan §6.3 density re-check.
-const MAX_VISIBLE_COLUMNS = 14;
 
 // ── Props ────────────────────────────────────────────────────────────────────
 
@@ -253,81 +185,34 @@ export function ColumnSettingsPopover({
           </p>
         )}
         <ul role="list" aria-label="Column visibility and order">
-          {columns.map((col, idx) => {
-            // T-IA-08 grouping: render a category header ABOVE the first
-            // row of each category. WHY this approach (instead of N <ul>s):
-            // keeping ONE <ul> preserves the HTML5 drag-drop ordering across
-            // categories — users can drag "Score" from Intelligence into
-            // Technical and the splice index math still works.
-            const category = COLUMN_CATEGORY[col.key] ?? "Other";
-            const prevCategory = idx > 0
-              ? (COLUMN_CATEGORY[columns[idx - 1]!.key] ?? "Other")
-              : null;
-            const showHeader = prevCategory !== category;
-            const isPending = BACKEND_PENDING_KEYS.has(col.key);
-
-            return (
-              // WHY Fragment with key: React requires keys on list children;
-              // we render TWO elements per iteration (optional header + row).
-              <Fragment key={col.key}>
-                {showHeader && (
-                  // WHY a non-draggable <li> (not <h4>): keeps the row inside
-                  // the same <ul> so screen readers walk the headers and
-                  // the column rows in document order.
-                  <li
-                    role="presentation"
-                    className="px-1 pt-1.5 pb-0.5 text-[9px] uppercase tracking-[0.08em] font-mono text-muted-foreground/70 select-none cursor-default"
-                  >
-                    {category}
-                  </li>
-                )}
-                <li
-                  draggable
-                  onDragStart={(e) => handleDragStart(idx, e)}
-                  onDragOver={handleDragOver}
-                  onDrop={() => handleDrop(idx)}
-                  className={cn(
-                    "flex items-center gap-1 px-1 py-1 rounded-[2px] cursor-move text-[11px]",
-                    "hover:bg-white/[0.04]",
-                    dragIdx === idx && "opacity-50",
-                  )}
-                >
-                  <GripVertical className="h-3 w-3 text-muted-foreground shrink-0" aria-hidden strokeWidth={1.5} />
-                  {/* WHY <label> wrapping checkbox + text: bigger click target */}
-                  <label className="flex flex-1 items-center gap-2 cursor-pointer min-w-0">
-                    <input
-                      type="checkbox"
-                      checked={col.visible}
-                      onChange={() => handleToggle(idx)}
-                      className="h-3 w-3 accent-primary shrink-0"
-                      aria-label={`Toggle ${col.label} column visibility`}
-                    />
-                    <span className="truncate text-foreground">{col.label}</span>
-                  </label>
-                  {/* T-IA-08: badge for columns whose backend field isn't
-                   *  in the allowlist yet. Today the set is empty; Wave L
-                   *  tracks will add keys. */}
-                  {isPending && <BackendPendingBadge text="L-pending" />}
-                </li>
-              </Fragment>
-            );
-          })}
+          {columns.map((col, idx) => (
+            <li
+              key={col.key}
+              draggable
+              onDragStart={(e) => handleDragStart(idx, e)}
+              onDragOver={handleDragOver}
+              onDrop={() => handleDrop(idx)}
+              className={cn(
+                "flex items-center gap-1 px-1 py-1 rounded-[2px] cursor-move text-[11px]",
+                "hover:bg-white/[0.04]",
+                dragIdx === idx && "opacity-50",
+              )}
+            >
+              <GripVertical className="h-3 w-3 text-muted-foreground shrink-0" aria-hidden strokeWidth={1.5} />
+              {/* WHY <label> wrapping checkbox + text: bigger click target */}
+              <label className="flex flex-1 items-center gap-2 cursor-pointer min-w-0">
+                <input
+                  type="checkbox"
+                  checked={col.visible}
+                  onChange={() => handleToggle(idx)}
+                  className="h-3 w-3 accent-primary shrink-0"
+                  aria-label={`Toggle ${col.label} column visibility`}
+                />
+                <span className="truncate text-foreground">{col.label}</span>
+              </label>
+            </li>
+          ))}
         </ul>
-        {/* T-IA-08 footer warning. WHY two states (muted vs warning): the
-         *  same line stays in place so the user always sees the rule; only
-         *  the colour escalates once the threshold is breached. */}
-        <p
-          role="note"
-          className={cn(
-            "mt-1 px-1 pb-0.5 text-[9px] font-mono leading-snug",
-            columns.filter((c) => c.visible).length > MAX_VISIBLE_COLUMNS
-              ? "text-warning"
-              : "text-muted-foreground",
-          )}
-        >
-          More than {MAX_VISIBLE_COLUMNS} columns will horizontally scroll past
-          the 1440 px viewport.
-        </p>
       </PopoverContent>
     </Popover>
   );

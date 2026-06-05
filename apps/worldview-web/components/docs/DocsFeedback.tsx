@@ -76,7 +76,7 @@ export function DocsFeedback({ pageUrl }: DocsFeedbackProps) {
     return (
       <div
         role="status"
-        className="mt-8 rounded-[2px] border border-positive/30 bg-positive/5 px-4 py-3 text-[14px] text-foreground"
+        className="mt-8 rounded-[2px] border border-positive/30 bg-positive/5 px-4 py-3 text-sm text-foreground"
       >
         Thanks for your feedback. We&apos;ll use it to improve this page.
       </div>
@@ -141,7 +141,7 @@ export function DocsFeedback({ pageUrl }: DocsFeedbackProps) {
             onChange={(e) => setComment(e.target.value)}
             rows={3}
             maxLength={1000}
-            className="w-full rounded-[2px] border border-border/60 bg-background px-3 py-2 text-[14px] text-foreground outline-none focus:border-primary/60"
+            className="w-full rounded-[2px] border border-border/60 bg-background px-3 py-2 text-sm text-foreground outline-none focus:border-primary/60"
           />
           {error ? (
             <p className="text-xs text-destructive">{error}</p>

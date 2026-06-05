@@ -40,7 +40,7 @@ const TooltipContent = React.forwardRef<
         // WHY max-w-[220px]: long tooltip copy wraps neatly without exceeding
         // the screener filter column width.
         "z-50 max-w-[220px] rounded-[2px] bg-card border border-border/80 px-2 py-1.5",
-        "text-[10px] font-mono leading-relaxed text-foreground/80 ",
+        "text-[10px] font-mono leading-relaxed text-foreground/80 shadow-md",
         "animate-in fade-in-0 zoom-in-95",
         "data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=closed]:zoom-out-95",
         "data-[side=bottom]:slide-in-from-top-2 data-[side=left]:slide-in-from-right-2",

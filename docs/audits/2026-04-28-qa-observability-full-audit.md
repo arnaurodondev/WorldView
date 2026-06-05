@@ -106,7 +106,7 @@ The platform is **not production-ready for observability** in its current state.
 - **Confidence**: HIGH
 - **Flagged by**: Security
 - **File**: `services/nlp-pipeline/configs/docker.env`
-- **Issue**: The live DeepInfra API key (`***REDACTED-LEAKED-KEY-ROTATED-2026-06-02***`) appears four times in committed config files. Comment says "worldview-gitops is PRIVATE — secrets are safe here" — this is security by obscurity. Git history permanently retains keys even after rotation. A private repo leak, supply-chain compromise, or accidental fork exposes this key.
+- **Issue**: The live DeepInfra API key (`xVi3qIVR8yPnu7DnP36GdFs2brm9GivI`) appears four times in committed config files. Comment says "worldview-gitops is PRIVATE — secrets are safe here" — this is security by obscurity. Git history permanently retains keys even after rotation. A private repo leak, supply-chain compromise, or accidental fork exposes this key.
 - **Suggestion**: Rotate the key immediately. Replace all values with `<set-via-fetch-secrets>`. Add `git-secrets` or `truffleHog` as a pre-commit hook. Use `scripts/fetch-secrets.sh` to inject at deploy time.
 - **Auto-fixable**: NO (key rotation required)
 

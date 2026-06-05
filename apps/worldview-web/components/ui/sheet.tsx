@@ -57,7 +57,7 @@ const sheetVariants = cva(
   cn(
     "fixed z-50 gap-4 bg-background p-3",
     "transition ease-in-out",
-    "data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:duration-200 data-[state=open]:duration-200",
+    "data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:duration-300 data-[state=open]:duration-500",
   ),
   {
     variants: {
@@ -128,8 +128,8 @@ const SheetTitle = React.forwardRef<
 >(({ className, ...props }, ref) => (
   <SheetPrimitive.Title
     ref={ref}
-    // WHY text-[13px] uppercase tracking-[0.04em] (was text-[16px] tracking-tight):
-    // Bloomberg terminal panel/drawer titles use 13px ALL-CAPS — "text-[16px]" (16px)
+    // WHY text-[13px] uppercase tracking-[0.04em] (was text-base tracking-tight):
+    // Bloomberg terminal panel/drawer titles use 13px ALL-CAPS — "text-base" (16px)
     // is consumer-app scale and "tracking-tight" conflicts with the uppercase
     // terminal aesthetic. 13px uppercase matches the instrument header ticker style.
     className={cn("text-[13px] font-semibold uppercase tracking-[0.04em] text-foreground", className)}

@@ -27,7 +27,6 @@ from knowledge_graph.infrastructure.intelligence_db.repositories.outbox import (
     OutboxRepository,
 )
 from messaging.topics import ENTITY_DIRTIED as _ENTITY_DIRTIED_TOPIC  # type: ignore[import-untyped]
-from messaging.topics import ENTITY_REFRESH as _ENTITY_REFRESH_TOPIC  # type: ignore[import-untyped]
 from observability import get_logger  # type: ignore[import-untyped]
 
 if TYPE_CHECKING:
@@ -53,10 +52,6 @@ _ALLOWED_TOPICS = frozenset(
         TOPIC_RELATION_PROPOSED,
         TOPIC_ENTITY_CANONICAL_CREATED,
         _TOPIC_ENTITY_NARRATIVE_GENERATED,
-        # REQ-003 / TASK-W0-06: TriggerEntityRefreshUseCase writes
-        # entity.refresh.v1 events via the outbox; without this entry the
-        # dispatcher would mark every event as failed (BP-147).
-        _ENTITY_REFRESH_TOPIC,
     },
 )
 

@@ -266,7 +266,7 @@ export default function SettingsSecurityPage() {
       {/* ── 1. Two-factor authentication ──────────────────────────────── */}
       <Card className="border-border/60 bg-card">
         <CardHeader className="pb-3">
-          <CardTitle className="flex items-center gap-2 text-[14px] font-medium text-foreground">
+          <CardTitle className="flex items-center gap-2 text-sm font-medium text-foreground">
             <ShieldCheck className="h-4 w-4 text-primary" aria-hidden="true" strokeWidth={1.5} />
             Two-factor authentication
           </CardTitle>
@@ -280,7 +280,7 @@ export default function SettingsSecurityPage() {
             <div className="min-w-0 flex-1">
               <Label
                 htmlFor="mfa-switch"
-                className="block text-[14px] font-medium text-foreground"
+                className="block text-sm font-medium text-foreground"
               >
                 Enable two-factor authentication
               </Label>
@@ -316,7 +316,7 @@ export default function SettingsSecurityPage() {
       {/* ── 2. Password change ────────────────────────────────────────── */}
       <Card className="border-border/60 bg-card">
         <CardHeader className="pb-3">
-          <CardTitle className="flex items-center gap-2 text-[14px] font-medium text-foreground">
+          <CardTitle className="flex items-center gap-2 text-sm font-medium text-foreground">
             <KeyRound className="h-4 w-4 text-primary" aria-hidden="true" strokeWidth={1.5} />
             Change password
           </CardTitle>
@@ -393,7 +393,7 @@ export default function SettingsSecurityPage() {
         <CardHeader className="pb-3">
           <div className="flex items-start justify-between gap-3">
             <div>
-              <CardTitle className="flex items-center gap-2 text-[14px] font-medium text-foreground">
+              <CardTitle className="flex items-center gap-2 text-sm font-medium text-foreground">
                 <Monitor className="h-4 w-4 text-primary" aria-hidden="true" strokeWidth={1.5} />
                 Active sessions
               </CardTitle>
@@ -447,7 +447,7 @@ export default function SettingsSecurityPage() {
                   )}
                   <div className="min-w-0">
                     <div className="flex items-center gap-2">
-                      <p className="text-[14px] font-medium text-foreground">{s.device}</p>
+                      <p className="text-sm font-medium text-foreground">{s.device}</p>
                       {s.current && (
                         <Badge
                           variant="outline"
@@ -486,7 +486,7 @@ export default function SettingsSecurityPage() {
       {/* ── 4. Recent sign-in audit ───────────────────────────────────── */}
       <Card className="border-border/60 bg-card">
         <CardHeader className="pb-3">
-          <CardTitle className="flex items-center gap-2 text-[14px] font-medium text-foreground">
+          <CardTitle className="flex items-center gap-2 text-sm font-medium text-foreground">
             <Clock className="h-4 w-4 text-primary" aria-hidden="true" strokeWidth={1.5} />
             Recent sign-ins
           </CardTitle>

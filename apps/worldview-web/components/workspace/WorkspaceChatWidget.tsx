@@ -278,7 +278,7 @@ export function WorkspaceChatWidget() {
           disabled={isStreaming}
           aria-label="Chat input"
           // WHY h-7 (28px): §0.7 compact input inside a filter/tool bar.
-          // NOT h-[36px] (36px) — that size is for the main chat page input, not workspace.
+          // NOT h-9 (36px) — that size is for the main chat page input, not workspace.
           className="flex-1 h-7 rounded-[2px] border border-border bg-background px-2 text-[11px] text-foreground placeholder:text-muted-foreground/60 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-primary focus-visible:ring-offset-0 disabled:bg-[hsl(var(--disabled-bg))] disabled:text-[hsl(var(--disabled-foreground))] disabled:border-[hsl(var(--disabled-border))]"
         />
         <button

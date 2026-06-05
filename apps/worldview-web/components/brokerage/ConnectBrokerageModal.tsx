@@ -117,13 +117,13 @@ export function ConnectBrokerageModal({
           <div className="flex items-center gap-2">
             {/* Link icon communicates "connecting two things" */}
             <Link2 className="h-4 w-4 text-primary" aria-hidden="true" />
-            {/* WHY no text-[16px] override: DialogTitle now renders at text-[13px] uppercase
-                by default — removing the text-[16px] (16px) override gives the correct
+            {/* WHY no text-base override: DialogTitle now renders at text-[13px] uppercase
+                by default — removing the text-base (16px) override gives the correct
                 terminal-grade size for brokerage connection dialog titles */}
             <DialogTitle>Connect Brokerage Account</DialogTitle>
           </div>
-          {/* WHY no text-[14px] override: DialogDescription base class handles text-[10px] per
-              the terminal density standard — text-[14px] (14px) here was consumer-app scale */}
+          {/* WHY no text-sm override: DialogDescription base class handles text-[10px] per
+              the terminal density standard — text-sm (14px) here was consumer-app scale */}
           <DialogDescription>
             Import your transaction history automatically. SnapTrade connects to
             25+ brokerages including IBKR, Robinhood, Fidelity, and Schwab.

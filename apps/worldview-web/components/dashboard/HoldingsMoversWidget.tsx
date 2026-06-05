@@ -41,10 +41,6 @@ import { AlertTriangle } from "lucide-react";
 
 import { createGateway } from "@/lib/gateway";
 import { useAuth } from "@/hooks/useAuth";
-// QA A-F-001/F-002 (2026-05-21): central query-key factory + shared
-// active-portfolio resolution helper.
-import { qk } from "@/lib/query/keys";
-import { useResolvedPortfolioId } from "@/hooks/useResolvedPortfolioId";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { InlineEmptyState } from "@/components/data/InlineEmptyState";
@@ -78,28 +74,24 @@ export function HoldingsMoversWidget() {
   const router = useRouter();
   const [period, setPeriod] = useState<Period>("1D");
 
-  // ── 1. Fetch portfolios — central qk.portfolios.list() so this widget
-  //     shares the cache with PortfolioSwitcher / usePortfolioMetrics
-  //     (QA A-F-001 2026-05-21 — pre-fix this used its own bare key and
-  //     fired a duplicate /v1/portfolios on every Dashboard render).
+  // ── 1. Fetch portfolios — pick the first as "active" ──────────────────
+  // WHY first by created_at: matches the WatchlistMovers "default
+  // watchlist" heuristic — there is no `is_default` flag, so the oldest
+  // portfolio approximates the user's main book.
   const { data: portfolios, isLoading: portfoliosLoading, isError: portfoliosError, refetch: refetchPortfolios } = useQuery({
-    queryKey: qk.portfolios.list(),
+    queryKey: ["dashboard-holdings-movers-portfolios"],
     queryFn: () => createGateway(accessToken).getPortfolios(),
     enabled: !!accessToken,
     staleTime: 60_000,
   });
 
-  // QA A-F-002 (2026-05-21): respect the chip selection. Pre-fix this
-  // widget picked the oldest portfolio by created_at — ignoring the
-  // user's PortfolioSwitcher pick. The shared resolver hook now follows
-  // the chip first; falls back to portfolios[0] when no selection (the
-  // old "oldest-by-created_at" heuristic is dropped — portfolios[0] is
-  // what every other widget uses).
-  const resolvedPortfolioId = useResolvedPortfolioId(portfolios);
   const firstPortfolio = useMemo(() => {
     if (!portfolios || portfolios.length === 0) return null;
-    return portfolios.find((p) => p.portfolio_id === resolvedPortfolioId) ?? null;
-  }, [portfolios, resolvedPortfolioId]);
+    const sorted = [...portfolios].sort(
+      (a, b) => Date.parse(a.created_at) - Date.parse(b.created_at),
+    );
+    return sorted[0] ?? null;
+  }, [portfolios]);
 
   // ── 2. Holdings ────────────────────────────────────────────────────────
   const { data: holdingsResp, isLoading: holdingsLoading } = useQuery({
@@ -347,10 +339,7 @@ export function HoldingsMoversWidget() {
                   key={`g-${m.instrumentId}`}
                   mover={m}
                   side="gainer"
-                  // PRD-0089 F2 step 11 (§6.6): ticker-first URL.
-                  onClick={() =>
-                    router.push(`/instruments/${m.ticker || m.instrumentId}`)
-                  }
+                  onClick={() => router.push(`/instruments/${m.instrumentId}`)}
                 />
               ))}
               {gainers.length === 0 && (
@@ -365,10 +354,7 @@ export function HoldingsMoversWidget() {
                   key={`l-${m.instrumentId}`}
                   mover={m}
                   side="loser"
-                  // PRD-0089 F2 step 11 (§6.6): ticker-first URL.
-                  onClick={() =>
-                    router.push(`/instruments/${m.ticker || m.instrumentId}`)
-                  }
+                  onClick={() => router.push(`/instruments/${m.instrumentId}`)}
                 />
               ))}
               {losers.length === 0 && (

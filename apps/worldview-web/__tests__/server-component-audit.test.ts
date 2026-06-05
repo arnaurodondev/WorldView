@@ -30,10 +30,11 @@ const APP_ROOT = join(__dirname, "..");
  */
 const PURE_SERVER_COMPONENTS = [
   // ── features/chat ─────────────────────────────────────────────────────────
-  // CitationList + MessageBubble were deleted in PLAN-0089 K Block I (T-22) —
-  // their Wave-K replacements (CitationStrip / MessageTurn) are Client
-  // Components by design (hover state, click handlers). Entries removed
-  // because walk() throws ENOENT on missing files.
+  // CitationList: renders <a> anchor pills only — no hooks, no events.
+  "features/chat/components/CitationList.tsx",
+  // MessageBubble: static JSX layout. CitationBar + MarkdownContent are Client
+  // Components rendered as children — Server Components CAN do this.
+  "features/chat/components/MessageBubble.tsx",
   // SlashTurnBlock: pure layout wrapper around SlashCommandCard (a Client Component).
   "features/chat/components/SlashTurnBlock.tsx",
 

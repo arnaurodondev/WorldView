@@ -62,15 +62,9 @@ export type SortableKey =
   | "change"
   | "marketCap"
   | "pe"
-  | "revenueGrowth"
-  | "forwardPe"
-  | "divYield"
-  | "roe"
+  | "revenue"
   | "beta"
-  | "score"
-  | "opMargin"
-  | "evEbitda"
-  | "avgVol";
+  | "score";
 
 // ── Internal helpers ──────────────────────────────────────────────────────────
 
@@ -100,19 +94,12 @@ export const COLUMN_PIXEL_WIDTHS: Record<string, number> = {
   change: 70,
   marketCap: 80,
   pe: 60,
-  // PLAN-0092 Wave C: new default columns
-  revenueGrowth: 70,
-  forwardPe: 65,
-  divYield: 65,
-  roe: 60,
+  revenue: 80,
   beta: 55,
   score: 70,
   range52w: 100,
+  volume: 80,
   sparkline: 70,
-  // Opt-in columns
-  opMargin: 70,
-  evEbitda: 75,
-  avgVol: 80,
 };
 
 /**
@@ -124,15 +111,9 @@ const HEADER_TITLES: Partial<Record<string, string>> = {
   pe: "Price-to-Earnings Ratio (TTM)",
   score: "Market Impact Score (0–1)",
   range52w: "52-Week Price Range (backend pending)",
+  volume: "Average Volume (backend pending)",
   sparkline: "30-day Price Trend",
   beta: "Beta vs S&P 500",
-  revenueGrowth: "Revenue Growth Year-over-Year (%)",
-  forwardPe: "Forward P/E (NTM EPS estimate)",
-  divYield: "Annual Dividend Yield (%)",
-  roe: "Return on Equity (%)",
-  opMargin: "Operating Margin TTM (%)",
-  evEbitda: "Enterprise Value / EBITDA",
-  avgVol: "30-Day Average Daily Volume",
 };
 
 // ── Column factory ────────────────────────────────────────────────────────────
@@ -288,72 +269,19 @@ export function createScreenerColumns(
       ),
     },
 
-    // ── REVENUE YoY% (replaces REVENUE — PLAN-0092 Wave C) ─────────────────
+    // ── REVENUE ─────────────────────────────────────────────────────────────
     {
-      id: "revenueGrowth",
-      accessorFn: (row) => row.revenue_growth_yoy ?? undefined,
+      id: "revenue",
+      accessorFn: (row) => row.revenue ?? undefined,
       sortUndefined: "last",
-      size: COLUMN_PIXEL_WIDTHS.revenueGrowth,
+      size: COLUMN_PIXEL_WIDTHS.revenue,
       enableSorting: true,
-      header: () => <span title={HEADER_TITLES.revenueGrowth}>REV YoY%</span>,
-      cell: ({ row }) => {
-        const v = row.original.revenue_growth_yoy;
-        if (v == null) return <span className="font-mono text-[11px] tabular-nums text-muted-foreground">—</span>;
-        const pct = Math.abs(v) < 2 ? v * 100 : v;
-        const isPos = pct > 0;
-        return (
-          <span className={cn("font-mono text-[11px] tabular-nums", isPos ? "text-positive" : "text-negative")}>
-            {pct >= 0 ? "+" : ""}{pct.toFixed(1)}%
-          </span>
-        );
-      },
-    },
-
-    // ── FWD P/E ─────────────────────────────────────────────────────────────
-    {
-      id: "forwardPe",
-      accessorFn: (row) => row.forward_pe ?? undefined,
-      sortUndefined: "last",
-      size: COLUMN_PIXEL_WIDTHS.forwardPe,
-      enableSorting: true,
-      header: () => <span title={HEADER_TITLES.forwardPe}>FWD P/E</span>,
+      header: () => <span>REVENUE</span>,
       cell: ({ row }) => (
         <span className="font-mono text-[11px] tabular-nums text-foreground">
-          {row.original.forward_pe != null ? row.original.forward_pe.toFixed(1) : "—"}
+          {row.original.revenue != null ? formatCap(row.original.revenue) : "—"}
         </span>
       ),
-    },
-
-    // ── DIV YIELD ───────────────────────────────────────────────────────────
-    {
-      id: "divYield",
-      accessorFn: (row) => row.dividend_yield ?? undefined,
-      sortUndefined: "last",
-      size: COLUMN_PIXEL_WIDTHS.divYield,
-      enableSorting: true,
-      header: () => <span title={HEADER_TITLES.divYield}>DIV Y%</span>,
-      cell: ({ row }) => {
-        const v = row.original.dividend_yield;
-        if (v == null) return <span className="font-mono text-[11px] tabular-nums text-muted-foreground">—</span>;
-        const pct = Math.abs(v) < 2 ? v * 100 : v;
-        return <span className="font-mono text-[11px] tabular-nums text-foreground">{pct.toFixed(2)}%</span>;
-      },
-    },
-
-    // ── ROE% ─────────────────────────────────────────────────────────────────
-    {
-      id: "roe",
-      accessorFn: (row) => row.roe ?? undefined,
-      sortUndefined: "last",
-      size: COLUMN_PIXEL_WIDTHS.roe,
-      enableSorting: true,
-      header: () => <span title={HEADER_TITLES.roe}>ROE%</span>,
-      cell: ({ row }) => {
-        const v = row.original.roe;
-        if (v == null) return <span className="font-mono text-[11px] tabular-nums text-muted-foreground">—</span>;
-        const pct = Math.abs(v) < 2 ? v * 100 : v;
-        return <span className="font-mono text-[11px] tabular-nums text-foreground">{pct.toFixed(1)}%</span>;
-      },
     },
 
     // ── BETA ────────────────────────────────────────────────────────────────
@@ -422,6 +350,23 @@ export function createScreenerColumns(
       ),
     },
 
+    // ── VOLUME ──────────────────────────────────────────────────────────────
+    {
+      id: "volume",
+      // WHY no accessorFn: backend-pending field.
+      size: COLUMN_PIXEL_WIDTHS.volume,
+      enableSorting: false,
+      header: () => <span title={HEADER_TITLES.volume}>VOLUME</span>,
+      cell: () => (
+        <span
+          className="font-mono text-[11px] tabular-nums text-muted-foreground"
+          title="Backend pending"
+        >
+          —
+        </span>
+      ),
+    },
+
     // ── SPARKLINE ───────────────────────────────────────────────────────────
     {
       id: "sparkline",
@@ -437,61 +382,6 @@ export function createScreenerColumns(
           bars={sparklines[row.original.instrument_id]}
           ariaLabel={`${row.original.ticker} 30-day price trend`}
         />
-      ),
-    },
-
-    // ── OPT-IN columns — hidden by default; user reveals via ⚙ popover ────────
-
-    // ── OP MGN% ─────────────────────────────────────────────────────────────
-    {
-      id: "opMargin",
-      accessorFn: (row) => row.operating_margin_ttm ?? undefined,
-      sortUndefined: "last",
-      size: COLUMN_PIXEL_WIDTHS.opMargin,
-      enableSorting: true,
-      header: () => <span title={HEADER_TITLES.opMargin}>OP MGN%</span>,
-      cell: ({ row }) => {
-        const v = row.original.operating_margin_ttm;
-        if (v == null) return <span className="font-mono text-[11px] tabular-nums text-muted-foreground">—</span>;
-        const pct = Math.abs(v) < 2 ? v * 100 : v;
-        const isPos = pct > 0;
-        return (
-          <span className={cn("font-mono text-[11px] tabular-nums", isPos ? "text-positive" : "text-negative")}>
-            {pct.toFixed(1)}%
-          </span>
-        );
-      },
-    },
-
-    // ── EV/EBITDA ───────────────────────────────────────────────────────────
-    {
-      id: "evEbitda",
-      accessorFn: (row) => row.enterprise_value_ebitda ?? undefined,
-      sortUndefined: "last",
-      size: COLUMN_PIXEL_WIDTHS.evEbitda,
-      enableSorting: true,
-      header: () => <span title={HEADER_TITLES.evEbitda}>EV/EBITDA</span>,
-      cell: ({ row }) => (
-        <span className="font-mono text-[11px] tabular-nums text-foreground">
-          {row.original.enterprise_value_ebitda != null
-            ? row.original.enterprise_value_ebitda.toFixed(1)
-            : "—"}
-        </span>
-      ),
-    },
-
-    // ── AVG VOL ─────────────────────────────────────────────────────────────
-    {
-      id: "avgVol",
-      accessorFn: (row) => row.avg_volume_30d ?? undefined,
-      sortUndefined: "last",
-      size: COLUMN_PIXEL_WIDTHS.avgVol,
-      enableSorting: true,
-      header: () => <span title={HEADER_TITLES.avgVol}>AVG VOL</span>,
-      cell: ({ row }) => (
-        <span className="font-mono text-[11px] tabular-nums text-foreground">
-          {row.original.avg_volume_30d != null ? formatCap(row.original.avg_volume_30d) : "—"}
-        </span>
       ),
     },
   ];

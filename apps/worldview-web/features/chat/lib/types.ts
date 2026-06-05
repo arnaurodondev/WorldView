@@ -22,40 +22,6 @@ export interface StreamingMessage {
   text: string;
   /** Whether the stream is still open (controls blinking cursor visibility). */
   active: boolean;
-  // ── PLAN-0089 K Block A T-03 — Q-9 metadata fields ────────────────────────
-  // WHY optional + on StreamingMessage: the `metadata` SSE event arrives
-  // before the answer is finalised; we accumulate provider/model/latency on
-  // the streaming bubble and copy them onto the persisted Message in
-  // finalize() so the side rail can show "served by deepinfra/deepseek-r1
-  // in 1.2s" without an extra round-trip.
-  intent?: string;
-  provider?: string;
-  model?: string;
-  latency_ms?: number;
-  message_id?: string;
-  /** Contradictions accumulated during this turn (Q-9 side-channel). */
-  contradictions?: Array<Record<string, unknown>>;
-  /**
-   * PLAN-0100 W2 T-W2-03 — aggregate pre-tool status badge.
-   *
-   * Emitted by ``chat_orchestrator`` ONCE per turn, right after iteration-0
-   * decides which tools to call. Carries human-readable summary text such
-   * as ``"Loading get_price_history, search_news… (2 more)…"`` so the
-   * streaming bubble can show user-visible feedback within ~1-3s — long
-   * before the synthesised answer's first token arrives.
-   *
-   * Cleared (undefined) on every new ``send()`` call. The badge renders
-   * ABOVE the ``ToolCallTray`` pills; both can be visible at the same time.
-   */
-  initial_status?: string;
-  /**
-   * PLAN-0103 W21 (BP-642) — set to ``true`` once the backend's
-   * ``final_answer`` SSE event has rewritten ``text`` with a post-grounding
-   * (numeric-corrected) version. The UI uses this flag to render a small
-   * "✓ grounded" badge so the user understands the answer they're reading
-   * was refined post-stream (rather than glitching mid-answer).
-   */
-  grounded?: boolean;
 }
 
 /**

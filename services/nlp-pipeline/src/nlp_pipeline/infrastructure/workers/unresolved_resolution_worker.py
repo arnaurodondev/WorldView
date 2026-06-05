@@ -321,21 +321,15 @@ class UnresolvedResolutionWorker:
         async with self._nlp_sf() as session:
             repo = _em.EntityMentionRepository(session)
             bundles: list[_em.UnresolvedMentionWithContext]
-            # PLAN-0093 C-2 (defense-in-depth): forward min_persist_floor so the
-            # resolver never wastes LLM cycles on sub-floor mentions even if a
-            # future writer regressed the persistence-side filter.
-            min_conf = self._settings.min_persist_floor
             if hasattr(repo, "get_unresolved_batch_with_context"):
                 bundles = await repo.get_unresolved_batch_with_context(
                     batch_size=batch_size,
                     lookback_days=lookback_days,
-                    min_confidence=min_conf,
                 )
             else:  # pragma: no cover — backwards-compat shim for legacy mocks
                 plain = await repo.get_unresolved_batch(
                     batch_size=batch_size,
                     lookback_days=lookback_days,
-                    min_confidence=min_conf,
                 )
                 bundles = [_em.UnresolvedMentionWithContext(mention=m, context_sentence=None) for m in plain]
             if not bundles:
@@ -590,7 +584,7 @@ class UnresolvedResolutionWorker:
             logger.debug(
                 "unresolved_enqueue_conflict_skipped",
                 mention_id=str(mention.mention_id),
-                surface_hash=hashlib.sha256((mention.mention_text or "").encode()).hexdigest()[:16],
+                surface=mention.mention_text,
             )
             return None
 

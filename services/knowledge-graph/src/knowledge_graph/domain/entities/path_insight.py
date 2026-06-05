@@ -59,22 +59,7 @@ class PathInsight:
     Invariants (enforced in ``__post_init__``):
     - ``hop_count == len(path_edges)``
     - ``2 <= hop_count <= 5``
-    - ``composite_score`` is in [0.0, 1.0]
-
-    Scoring formula (PathScorer):
-      raw       = h*0.4 + d*0.35 + s*0.25 + (0.1 if template_match else 0)
-      composite = min(raw / (1 + hub_penalty), 1.0)  [rounded to 6 dp]
-
-    The ``composite_score`` formula cross-check was removed in 2026-05-23 to
-    accommodate the hub-penalty extension without requiring the invariant to
-    be aware of every scoring coefficient.  The guarantee is now that
-    ``composite_score`` is in [0, 1] and produced by PathScorer — callers
-    must not set it to an arbitrary value.
-
-    Hub penalty field (2026-05-23):
-      ``hub_penalty`` is a float in [0, 1] that down-weights paths through
-      high-degree hub nodes.  Defaults to 0.0 for rows loaded from DB that
-      were scored before this field was introduced.
+    - ``composite_score`` is consistent with the formula within 1e-5 tolerance.
     """
 
     insight_id: UUID
@@ -90,14 +75,11 @@ class PathInsight:
     template_match: str | None = None
     llm_explanation: str | None = None
     explanation_model: str | None = None
-    # Hub penalty applied during scoring (2026-05-23).  Defaults to 0.0 so
-    # existing rows loaded from DB without a hub_penalty column remain valid.
-    hub_penalty: float = 0.0
 
     def __post_init__(self) -> None:
         # Invariant: hop_count must equal the number of edges.
         if self.hop_count != len(self.path_edges):
-            msg = f"PathInsight.hop_count={self.hop_count} does not match len(path_edges)={len(self.path_edges)}"
+            msg = f"PathInsight.hop_count={self.hop_count} does not match " f"len(path_edges)={len(self.path_edges)}"
             raise ValueError(msg)
 
         # Invariant: hop range [2, 5].
@@ -106,16 +88,16 @@ class PathInsight:
             raise ValueError(msg)
 
         # Invariant: composite_score is consistent with the formula.
-        # Hub penalty (2026-05-23): formula now divides by (1 + hub_penalty).
-        # hub_penalty defaults to 0.0 so legacy rows and tests without hub_penalty
-        # continue to use the original formula (no change when hub_penalty=0).
-        raw = (
-            self.harmonic_score * 0.4
-            + self.diversity_score * 0.35
-            + self.surprise_score * 0.25
-            + (0.1 if self.template_match else 0.0)
+        expected = round(
+            min(
+                self.harmonic_score * 0.4
+                + self.diversity_score * 0.35
+                + self.surprise_score * 0.25
+                + (0.1 if self.template_match else 0.0),
+                1.0,
+            ),
+            6,
         )
-        expected = round(min(raw / (1.0 + self.hub_penalty), 1.0), 6)
         if abs(self.composite_score - expected) > 1e-5:
             msg = (
                 f"PathInsight.composite_score={self.composite_score!r} does not match "
@@ -151,7 +133,7 @@ class PathInsightJob:
             )
             raise ValueError(msg)
         if self.claimed_by is None and self.status == PathJobStatus.RUNNING:
-            msg = "PathInsightJob.status=RUNNING but claimed_by is None; a running job must have claimed_by set"
+            msg = "PathInsightJob.status=RUNNING but claimed_by is None; " "a running job must have claimed_by set"
             raise ValueError(msg)
 
         # Invariant: retry_count <= 3.

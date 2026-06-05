@@ -139,26 +139,13 @@ export async function apiFetch<T>(
     throw new GatewayError(response.status, detail);
   }
 
-  // Handle no-body responses: 204 No Content (truly empty body).
-  // WHY 202 excluded: some 202 endpoints (e.g. POST /briefings/instrument/{id}/generate)
-  // return a JSON body (status="queued"/status="cached"). Skipping body parsing for 202
-  // would return undefined and crash the caller on first field access. We instead attempt
-  // to parse the 202 body and fall back to undefined only when parsing fails (empty body).
-  if (response.status === 204) {
+  // Handle no-body responses: 204 No Content and 202 Accepted (async job queued).
+  // WHY include 202: POST endpoints that queue async jobs (e.g., narrative generation)
+  // return 202 with no body. Attempting response.json() on a null/empty body throws
+  // a SyntaxError. We return undefined (cast to T) because the caller (e.g.,
+  // useTriggerNarrativeGeneration) types the result as void.
+  if (response.status === 204 || response.status === 202) {
     return undefined as unknown as T;
-  }
-
-  // WHY try/catch on await response.json(): some 202 responses legitimately have no body
-  // (e.g. older background-job endpoints). Attempting json() on an empty body throws
-  // SyntaxError; we return undefined gracefully so callers that type the result as void
-  // continue to work without change. Callers expecting a 202 body (e.g. GenerateBriefResponse)
-  // get the parsed object when the body is present.
-  if (response.status === 202) {
-    try {
-      return (await response.json()) as T;
-    } catch {
-      return undefined as unknown as T;
-    }
   }
 
   return response.json() as Promise<T>;

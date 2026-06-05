@@ -274,13 +274,6 @@ export const actionRegistry = new ActionRegistry();
 
 // ── NAVIGATE ──────────────────────────────────────────────────────────────────
 
-// PRD-0089 F2 step 11 (§6.6): all instrument-navigation actions below use the
-// ticker-first URL form. Every row context shape (Holding/Screener/Watchlist)
-// carries a `ticker` field, and the new instrument slug `[ticker]` accepts
-// either a ticker symbol or a UUID — the middleware 301s lowercase / alias /
-// UUID forms to the canonical uppercase ticker. We keep a UUID fallback so
-// these actions still work on a row where ticker is somehow empty.
-
 actionRegistry.register({
   id: "navigate.instrument-detail",
   label: "Open Instrument Detail",
@@ -290,7 +283,7 @@ actionRegistry.register({
   mnemonic: "D",
   run({ row, navigate }) {
     if (!row) return;
-    navigate?.(`/instruments/${encodeURIComponent(row.ticker || row.entityId)}`);
+    navigate?.(`/instruments/${encodeURIComponent(row.entityId)}`);
   },
 });
 
@@ -303,7 +296,7 @@ actionRegistry.register({
   mnemonic: "G",
   run({ row, navigate }) {
     if (!row) return;
-    navigate?.(`/instruments/${encodeURIComponent(row.ticker || row.entityId)}?tab=chart`);
+    navigate?.(`/instruments/${encodeURIComponent(row.entityId)}?tab=chart`);
   },
 });
 
@@ -316,7 +309,7 @@ actionRegistry.register({
   mnemonic: "N",
   run({ row, navigate }) {
     if (!row) return;
-    navigate?.(`/instruments/${encodeURIComponent(row.ticker || row.entityId)}?tab=news`);
+    navigate?.(`/instruments/${encodeURIComponent(row.entityId)}?tab=news`);
   },
 });
 
@@ -333,7 +326,7 @@ actionRegistry.register({
   mnemonic: "E",
   run({ row, navigate }) {
     if (!row) return;
-    navigate?.(`/instruments/${encodeURIComponent(row.ticker || row.entityId)}?tab=financials`);
+    navigate?.(`/instruments/${encodeURIComponent(row.entityId)}?tab=financials`);
   },
 });
 
@@ -638,41 +631,6 @@ actionRegistry.register({
 // ── VIEW ──────────────────────────────────────────────────────────────────────
 
 actionRegistry.register({
-  id: "view.tax-lots",
-  label: "View Tax Lots",
-  description:
-    "Open the Holdings Lots panel for this instrument on the Analytics page.",
-  category: "View",
-  // WHY "row" scope only: tax lots are a per-holding concept — the action
-  // only makes sense when a specific holding row has been right-clicked.
-  // WHY "page:/portfolio" scope: lots are only meaningful inside the portfolio
-  // context (you cannot view lots for a screener result that you don't hold).
-  scopes: ["row", "page:/portfolio"],
-  // WHY mnemonic "L": "L" for Lots; no other row-level action claims it.
-  mnemonic: "L",
-  // WHY visible guard on holding kind: the "View Tax Lots" item should not
-  // appear in the context menu when right-clicking a watchlist or screener row
-  // where there is no actual holding behind it (no lots to show).
-  visible({ row }) {
-    return row?.kind === "holding";
-  },
-  run({ row, navigate }) {
-    if (!row || row.kind !== "holding") return;
-    // Navigate to the portfolio analytics page (which renders HoldingLotsPanel).
-    // WHY query param `ticker`: HoldingLotsPanel selects the initial instrument
-    // via the largest-position heuristic by default. Passing `ticker` lets the
-    // analytics page pre-select the right-clicked holding so the user lands
-    // directly on the requested lot breakdown.
-    // WHY analytics sub-route: HoldingLotsPanel is rendered on /portfolio/analytics
-    // (alongside DayPnLDistribution, RealizedPnLSparkline, etc.) so the holdings
-    // table on /portfolio stays at 1-screen density (PRD-0089 W2 §4.21).
-    navigate?.(
-      `/portfolio/analytics?ticker=${encodeURIComponent(row.ticker)}`,
-    );
-  },
-});
-
-actionRegistry.register({
   id: "view.compare-chart",
   label: "Compare on Chart",
   description: "Add this instrument to the chart comparison overlay.",
@@ -695,8 +653,7 @@ actionRegistry.register({
   mnemonic: "F",
   run({ row, navigate }) {
     if (!row) return;
-    // PRD-0089 F2 step 11 (§6.6): ticker-first URL.
-    navigate?.(`/instruments/${encodeURIComponent(row.ticker || row.entityId)}?tab=fundamentals`);
+    navigate?.(`/instruments/${encodeURIComponent(row.entityId)}?tab=fundamentals`);
   },
 });
 
@@ -708,8 +665,7 @@ actionRegistry.register({
   scopes: ["row"],
   run({ row, navigate }) {
     if (!row) return;
-    // PRD-0089 F2 step 11 (§6.6): ticker-first URL.
-    navigate?.(`/instruments/${encodeURIComponent(row.ticker || row.entityId)}?tab=filings`);
+    navigate?.(`/instruments/${encodeURIComponent(row.entityId)}?tab=filings`);
   },
 });
 
@@ -722,8 +678,7 @@ actionRegistry.register({
   mnemonic: "R",
   run({ row, navigate }) {
     if (!row) return;
-    // PRD-0089 F2 step 11 (§6.6): ticker-first URL.
-    navigate?.(`/instruments/${encodeURIComponent(row.ticker || row.entityId)}?tab=ratings`);
+    navigate?.(`/instruments/${encodeURIComponent(row.entityId)}?tab=ratings`);
   },
 });
 

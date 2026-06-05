@@ -6,7 +6,6 @@
  */
 
 import type {
-  ArticleImpactHistoryResponse,
   ClusterArticlesResponse,
   NewsResponse,
   RankedNewsResponse,
@@ -21,17 +20,12 @@ export function createNewsApi(t: string | undefined) {
      * getTopNews — ranked news feed by composite relevance/impact score (PRD-0026)
      * Used by: Dashboard WatchlistNews, Alerts/News page → Top Today tab
      *
-     * WHY token sent (BP-545): S9 rate-limits unauthenticated requests far more
-     * aggressively than authenticated ones. Sending the token places the request
-     * in the user's own rate-limit bucket, preventing 429s on the dashboard when
-     * multiple tabs or rapid refetches occur.
+     * WHY no auth: news/top is a public endpoint — no personal data involved.
      * WHY RankedNewsResponse: S6 NLP Pipeline (not S5 Content Store) now serves
      * this endpoint, returning the richer RankedArticle shape with multi-window
      * price impact scores and LLM relevance scores. Proxy retargeted in Wave 7.
-     * WHY tickers param: pass comma-separated portfolio tickers so S9 can server-side
-     * filter to portfolio-relevant articles before returning the ranked feed.
      *
-     * @param params - TopNewsParams (hours, limit, offset, min_display_score, routing_tier, tickers)
+     * @param params - TopNewsParams (hours, limit, offset, min_display_score, routing_tier)
      */
     getTopNews(params: TopNewsParams = {}): Promise<RankedNewsResponse> {
       const qs = new URLSearchParams(
@@ -41,7 +35,7 @@ export function createNewsApi(t: string | undefined) {
           .filter(([, v]) => v != null)
           .map(([k, v]) => [k, String(v)]),
       ).toString();
-      return apiFetch<RankedNewsResponse>(`/v1/news/top${qs ? `?${qs}` : ""}`, { token: t });
+      return apiFetch<RankedNewsResponse>(`/v1/news/top${qs ? `?${qs}` : ""}`);
     },
 
     /**
@@ -90,46 +84,6 @@ export function createNewsApi(t: string | undefined) {
      */
     getClusterArticles(clusterId: string): Promise<ClusterArticlesResponse> {
       return apiFetch<ClusterArticlesResponse>(`/v1/news/cluster/${encodeURIComponent(clusterId)}`);
-    },
-
-    /**
-     * getArticleImpactHistory — 4-window price-impact scores for a single article.
-     *
-     * WHY this exists: the ArticleImpactDrawer (PLAN-0091 C-2) shows analysts
-     * whether a news article moved the stock price in the 0/1/2/5 trading days
-     * after publication — this is the "did the market react?" signal that justifies
-     * paying attention to the article. Without it, analysts can't distinguish a
-     * high-relevance article that moved the market from one that didn't.
-     *
-     * WHY requires auth: S9 enforces tenant scoping via X-Internal-JWT so one
-     * user can't see another tenant's price-impact computations.
-     *
-     * Returns null on 404 (article not yet scored by the labelling worker).
-     *
-     * @param articleId - The article UUID (from RankedArticle.article_id)
-     */
-    async getArticleImpactHistory(articleId: string): Promise<ArticleImpactHistoryResponse | null> {
-      // WHY GatewayError import: impact-history returns 404 when the
-      // PriceImpactLabellingWorker hasn't processed this article yet.
-      // The drawer should show an empty state, not throw to the error boundary.
-      try {
-        return await apiFetch<ArticleImpactHistoryResponse>(
-          `/v1/articles/${encodeURIComponent(articleId)}/impact-history`,
-          { token: t },
-        );
-      } catch (err: unknown) {
-        // Inline the 404 check rather than importing GatewayError to keep
-        // this file's import surface minimal (news.ts has no other error handling).
-        if (
-          typeof err === "object" &&
-          err !== null &&
-          "status" in err &&
-          (err as { status: number }).status === 404
-        ) {
-          return null;
-        }
-        throw err;
-      }
     },
   };
 }

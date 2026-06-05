@@ -48,15 +48,10 @@ class Settings(BaseSettings):
     schema_registry_url: str = "http://localhost:8081"
     kafka_consumer_group: str = "nlp-pipeline-group"
     kafka_watchlist_consumer_group: str = "nlp-watchlist-group"
-    # REQ-003 / TASK-W0-06: dedicated consumer group for entity.refresh.v1 so
-    # the manual refresh path runs independently of the main article pipeline.
-    kafka_entity_refresh_consumer_group: str = "nlp-entity-refresh-group"
 
     # Topics (consumed)
     topic_article_stored: str = "content.article.stored.v1"
     topic_watchlist_updated: str = "portfolio.watchlist.updated.v1"
-    # REQ-003 / TASK-W0-06: manual entity refresh event from S7.
-    topic_entity_refresh: str = "entity.refresh.v1"
 
     # Topics (produced)
     topic_article_enriched: str = "nlp.article.enriched.v1"
@@ -90,13 +85,7 @@ class Settings(BaseSettings):
 
     # Ollama / ML endpoints
     ollama_base_url: str = "http://localhost:11434"
-    # F-013: MUST match the model_id string returned by the active embedding adapter.
-    # DeepInfra (provider="deepinfra") returns "BAAI/bge-large-en-v1.5" (embedding_api_model_id).
-    # Ollama (provider="ollama") returns "bge-large" (the pull name used in the container).
-    # _expire_stale_embeddings() compares chunk_embeddings.model_id against this value —
-    # a mismatch will expire all CORRECT chunks and keep all stale ones (backwards expiry).
-    # Default here is the DeepInfra value since EMBEDDING_PROVIDER defaults to "deepinfra" in docker.env.
-    embedding_model_id: str = "BAAI/bge-large-en-v1.5"
+    embedding_model_id: str = "bge-large"
     ner_model_id: str = "urchade/gliner_large-v2.1"
     extraction_model_id: str = "qwen2.5:7b-instruct"
 
@@ -130,7 +119,7 @@ class Settings(BaseSettings):
     # Qwen3-235B-A22B-Instruct-2507: $0.071/$0.10 per 1M tokens; 250k context >> 24k max extraction window.
     extraction_api_key: SecretStr = SecretStr("")  # NLP_PIPELINE_EXTRACTION_API_KEY (DEF-019)
     extraction_api_base_url: str = "https://api.deepinfra.com/v1/openai"  # NLP_PIPELINE_EXTRACTION_API_BASE_URL
-    extraction_api_model_id: str = "Qwen/Qwen3.5-9B"  # NLP_PIPELINE_EXTRACTION_API_MODEL_ID
+    extraction_api_model_id: str = "Qwen/Qwen3-235B-A22B-Instruct-2507"  # NLP_PIPELINE_EXTRACTION_API_MODEL_ID
 
     # GLiNER: when set, use the HTTP adapter (containerised GLiNER server).
     # Leave empty to fall back to GLiNERLocalAdapter (in-process model).
@@ -146,27 +135,10 @@ class Settings(BaseSettings):
     # chunks.entity_mentions JSONB (avoids index bloat from low-confidence noise).
     gliner_mention_floor: float = 0.6
 
-    # PLAN-0093 C-2 (F-NPL-005): minimum GLiNER confidence required to PERSIST a
-    # mention row to the entity_mentions table (audited table consumed by the
-    # resolution cascade + downstream workers). Without this floor, ~26% of all
-    # entity_mentions rows historically had score < 0.6 — the chunks.entity_mentions
-    # JSONB cache already used gliner_mention_floor to suppress them, but the table
-    # writer did not. This brings the table writer into parity. Override via
-    # NLP_PIPELINE_MIN_PERSIST_FLOOR.
-    min_persist_floor: float = 0.6
-
-    # RC-1 fix: minimum word count for articles to enter the NLP pipeline.
-    # Articles below this threshold are stub headlines (Finnhub ~91% stub rate,
-    # SEC Edgar ~52%) that carry no relational signal but consume NER + embedding
-    # capacity. Configurable via NLP_PIPELINE_MIN_WORD_COUNT (default 50).
-    min_word_count: int = 50
-
-    # Routing tier thresholds (PRD §6.7 Block 5, PLAN-0093 C-1 recalibration)
-    # PLAN-0093 C-1: now that the 3 dead signals (watchlist/novelty/price_impact)
-    # are dropped, the live-signal composite ceiling rises from ~0.65 to ~0.90+.
-    # Thresholds bumped accordingly to preserve DEEP/MEDIUM/LIGHT proportions.
-    routing_tier_deep: float = 0.75  # score >= this → DEEP processing
-    routing_tier_medium: float = 0.45  # score >= this → MEDIUM processing
+    # Routing tier thresholds (PRD §6.7 Block 5)
+    routing_tier_deep: float = 0.70  # score >= this → DEEP processing
+    # Lowered from 0.45: watchlist signal fires post-resolution, effective max without it is ~0.44
+    routing_tier_medium: float = 0.35  # score >= this → MEDIUM processing
     routing_tier_light: float = 0.20  # score >= this → LIGHT processing
 
     # Entity resolution thresholds (PRD §6.7 Block 9)
@@ -233,7 +205,7 @@ class Settings(BaseSettings):
     # ArticleRelevanceScoringWorker — DeepInfra provider (optional override)
     # When set, worker uses OpenAI-compatible chat completions instead of Ollama.
     # Model options (availability depends on DeepInfra account tier):
-    #   deepseek-ai/DeepSeek-V4-Flash  (confirmed available, ~100-200ms)
+    #   meta-llama/Meta-Llama-3.1-8B-Instruct  (confirmed available, ~100-200ms)
     #   Qwen/Qwen2.5-0.5B-Instruct             (smaller, faster — upgrade account to unlock)
     #   Qwen/Qwen2.5-1.5B-Instruct             (medium — upgrade account to unlock)
     relevance_scoring_api_key: SecretStr = SecretStr("")  # NLP_PIPELINE_RELEVANCE_SCORING_API_KEY (DEF-019)
@@ -242,7 +214,7 @@ class Settings(BaseSettings):
     # Confirmed available: Meta-Llama-3.1-8B-Instruct-Turbo (~100-200ms GPU,
     # ~$0.02/M tokens — still cheap enough for per-article relevance scoring).
     # RELEVANCE_SCORING_API_MODEL_ID
-    relevance_scoring_api_model_id: str = "Qwen/Qwen3.5-0.8B"
+    relevance_scoring_api_model_id: str = "meta-llama/Meta-Llama-3.1-8B-Instruct-Turbo"
     # Per-component weights for display_relevance_score = 0.5*market + 0.4*llm + 0.1*routing
     s6_display_weight_market: float = 0.50  # S6_DISPLAY_WEIGHT_MARKET
     s6_display_weight_llm: float = 0.40  # S6_DISPLAY_WEIGHT_LLM
@@ -269,7 +241,7 @@ class Settings(BaseSettings):
     # Confirmed available: Meta-Llama-3.1-8B-Instruct-Turbo — sufficient for
     # the one-mention-at-a-time entity disambiguation prompt shape.
     # UNRESOLVED_RESOLUTION_API_MODEL_ID
-    unresolved_resolution_api_model_id: str = "Qwen/Qwen3.5-0.8B"
+    unresolved_resolution_api_model_id: str = "meta-llama/Meta-Llama-3.1-8B-Instruct-Turbo"
 
     # LLM usage logging (PLAN-0033)
     llm_usage_log_enabled: bool = True

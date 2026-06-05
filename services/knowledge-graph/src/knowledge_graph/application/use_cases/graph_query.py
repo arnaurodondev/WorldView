@@ -90,8 +90,7 @@ class GetEntityGraphUseCase:
             # propagating a 500 — the entity and relation data is still valid.
             try:
                 evidence_map = await evidence_repo.get_evidence_snippets_batch(
-                    relation_ids,
-                    limit_per_relation=evidence_limit,
+                    relation_ids, limit_per_relation=evidence_limit
                 )
             except Exception:
                 _log.warning(
@@ -117,15 +116,6 @@ class GetEntityGraphUseCase:
                 rid = r.get("relation_id")
                 r["evidence_snippets"] = evidence_map.get(rid, []) if isinstance(rid, UUID) else []  # type: ignore[index]
                 r["relation_summary"] = summary_map.get(rid) if isinstance(rid, UUID) else None  # type: ignore[index]
-
-        # PLAN-0093 B-4 T-B-4-01 (F-KG-103 / QW-3): stamp ``direction`` on every
-        # relation row so the frontend can render the arrow without re-doing the
-        # subject/object comparison.  "outgoing" means the queried ``entity_id``
-        # is the subject (edge points OUT); "incoming" means it is the object
-        # (edge points IN).  Stamped here in the use case (not the route) so
-        # every API surface returning relation rows gets the same field.
-        for r in relation_rows:
-            r["direction"] = "outgoing" if r.get("subject_entity_id") == entity_id else "incoming"
 
         return entity_row, relation_rows, entities_map
 

@@ -83,7 +83,7 @@ export function AlertDetailSheet({ alert, open, onClose, onAck, onSnooze }: Aler
             in DESIGN_SYSTEM §2 (sticky 24-40px header strip per panel). */}
         <SheetHeader className="border-b border-border px-4 py-2.5">
           {/* WHY no extra className: SheetTitle now applies text-[13px] uppercase tracking-[0.04em]
-              by default — the old text-[14px] (14px) override is replaced by the base style.
+              by default — the old text-sm (14px) override is replaced by the base style.
               The ticker/entity name here is fine at 13px uppercase (it's the sheet header title). */}
           <SheetTitle>
             {/* WHY the ticker (when present) leads — it's the primary identifier
@@ -154,21 +154,14 @@ export function AlertDetailSheet({ alert, open, onClose, onAck, onSnooze }: Aler
                 />
               )}
 
-              {alert.ticker && (
+              {alert.entity_id && (
                 <DetailRow
                   label="Related"
                   value={
                     // WHY <Link> (not <a>): Next.js client-side nav avoids a
                     // full page reload — keeps Sheet animation snappy on close.
-                    // WHY guarded on `alert.ticker` (not `alert.entity_id`):
-                    // PRD-0089 F2 §6.6 — post-F2 the URL slug is the ticker
-                    // only. A bare UUID would hit a guaranteed 404. Alerts on
-                    // non-tradable entities (macro events, sectors) lack a
-                    // ticker, so we simply omit the row instead of serving a
-                    // dead link. encodeURIComponent guards multi-class tickers
-                    // (BRK.B, BF/B, …).
                     <Link
-                      href={`/instruments/${encodeURIComponent(alert.ticker)}`}
+                      href={`/instruments/${encodeURIComponent(alert.entity_id)}`}
                       className="text-primary underline-offset-2 hover:underline"
                     >
                       View instrument →
@@ -271,15 +264,10 @@ function SuggestedActions({ alert }: { alert: Alert }) {
   const hasInstrument = hasEntity && Boolean(alert.ticker || (alert.payload?.ticker as string | undefined));
   const entityId = alert.entity_id;
 
-  /** Navigate to /instrument/{ticker}. Disabled when no instrument. */
+  /** Navigate to /instrument/{entity_id}. Disabled when no instrument. */
   function handleViewInstrument() {
     if (!hasInstrument || !entityId) return;
-    // PRD-0089 F2 step 11 (§6.6): prefer ticker (from the alert row or its
-    // payload). Falls back to UUID; middleware resolves either form. The
-    // hasInstrument guard above only allows navigation when ticker exists.
-    const ticker =
-      alert.ticker || (alert.payload?.ticker as string | undefined);
-    router.push(`/instruments/${encodeURIComponent(ticker || entityId)}`);
+    router.push(`/instruments/${encodeURIComponent(entityId)}`);
   }
 
   /**

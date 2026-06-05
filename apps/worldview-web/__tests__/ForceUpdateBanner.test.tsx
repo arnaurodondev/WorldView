@@ -106,32 +106,4 @@ describe("<ForceUpdateBanner />", () => {
       value: originalLocation,
     });
   });
-
-  // QA F-013 (2026-05-21): W1.1 G-001 relocated the banner from a
-  // fixed bottom-right chip to an in-flow h-6 sticky notice above the
-  // TopBar. Without these assertions, someone could re-introduce the
-  // old `fixed bottom-7 right-3 rounded-[2px]` layout and the F1
-  // sharp-corner / above-shell-chrome contract would silently regress.
-  describe("layout (W1.1 G-001)", () => {
-    it("renders as h-6 in-flow (NOT fixed bottom-right) when active", async () => {
-      fetchSpy
-        .mockResolvedValueOnce(ok({ buildId: "v1" }))
-        .mockResolvedValue(ok({ buildId: "v2" }));
-      render(<ForceUpdateBanner pollIntervalMs={POLL} />);
-      const banner = await waitFor(() => screen.getByRole("status"));
-      expect(banner.className).toMatch(/\bh-6\b/);
-      expect(banner.className).not.toMatch(/\bfixed\b/);
-      expect(banner.className).not.toMatch(/bottom-7|right-3/);
-    });
-
-    it("carries no border-radius (F1 sharp-corner lock — C-04)", async () => {
-      fetchSpy
-        .mockResolvedValueOnce(ok({ buildId: "v1" }))
-        .mockResolvedValue(ok({ buildId: "v2" }));
-      render(<ForceUpdateBanner pollIntervalMs={POLL} />);
-      const banner = await waitFor(() => screen.getByRole("status"));
-      expect(banner.className).not.toMatch(/rounded-\[2px\]/);
-      expect(banner.className).not.toMatch(/rounded-(sm|md|lg|xl|2xl)/);
-    });
-  });
 });

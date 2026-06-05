@@ -17,7 +17,6 @@ from unittest.mock import AsyncMock, MagicMock
 from uuid import uuid4
 
 import pytest
-from ml_clients.dataclasses import ExtractionOutput  # type: ignore[import-untyped]
 
 pytestmark = pytest.mark.unit
 
@@ -38,20 +37,8 @@ def _make_edges(n: int = 1) -> list:
 
 
 def _make_extraction_result(text: str) -> MagicMock:
-    """Build a mock that matches the real ``ExtractionOutput`` shape.
-
-    FIX-LIVE-C / INV-LIVE-A meta-finding: the previous tests used a bare
-    ``MagicMock()`` which auto-generates *any* attribute on access, masking
-    real attribute-name bugs. We now constrain the mock with
-    ``spec=ExtractionOutput`` so a future rename of ``result`` /
-    ``raw_response`` immediately breaks the test instead of silently passing.
-    The service reads ``result.result["explanation"]`` first and falls back
-    to ``result.raw_response``; we populate both fields with the same text
-    so all extraction codepaths return ``text``.
-    """
-    result = MagicMock(spec=ExtractionOutput)
-    result.result = {"explanation": text}
-    result.raw_response = text
+    result = MagicMock()
+    result.output = text
     return result
 
 
@@ -176,13 +163,9 @@ class TestPathExplanationServiceLLMCall:
         mock_repo.update_explanation = AsyncMock()
 
         mock_llm = AsyncMock()
-        # Return empty output. We use ``spec=ExtractionOutput`` so the mock
-        # only exposes real fields; if the service ever reaches for an
-        # unrelated attribute, AttributeError will surface immediately instead
-        # of returning another auto-generated MagicMock.
-        empty_result = MagicMock(spec=ExtractionOutput)
-        empty_result.result = {}
-        empty_result.raw_response = ""
+        # Return empty output.
+        empty_result = MagicMock()
+        empty_result.output = ""
         mock_llm.extract = AsyncMock(return_value=empty_result)
 
         service = PathExplanationService(

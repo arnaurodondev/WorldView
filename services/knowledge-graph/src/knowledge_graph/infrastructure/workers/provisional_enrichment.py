@@ -41,7 +41,6 @@ from uuid import UUID
 
 import httpx
 
-from common.ids import new_uuid7  # type: ignore[import-untyped]
 from knowledge_graph.infrastructure.intelligence_db.repositories.outbox import OutboxRepository
 from knowledge_graph.infrastructure.metrics.prometheus import (
     s7_provisional_enrichment_failed_total,
@@ -57,7 +56,6 @@ if TYPE_CHECKING:
     from ml_clients.usage_log import LlmUsageLogProtocol  # type: ignore[import-untyped]
     from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-    from knowledge_graph.application.ports.market_data_lookup_port import MarketDataLookupPort
     from knowledge_graph.infrastructure.llm.fallback_chain import FallbackChainClient
 
 logger = get_logger(__name__)  # type: ignore[no-any-return]
@@ -118,7 +116,7 @@ _NOISE_BLOCKLIST: frozenset[str] = frozenset(
         "sector",
         "industry",
         "index",
-    },
+    }
 )
 
 # Layer 2: cheap binary classifier model (fast, low cost vs. full DeepSeek extraction).
@@ -201,16 +199,6 @@ class ProvisionalEnrichmentWorker:
         # leverage it for purely-read diagnostic queries) and store it without
         # changing behaviour today.  See PLAN-0076 §B-5 T-B5-05.
         read_session_factory: Any = None,
-        # PRD-0089 F2 §4.3: optional S2 lookup port. When provided AND the
-        # provisional entity is a tradable instrument with a ticker, the
-        # worker anchors the new canonical_entities row on the existing
-        # market_data.instruments.id rather than minting a fresh UUID
-        # (M-017 enforcement). When the instrument is not yet in S2 the
-        # promotion is deferred via the existing _apply_retry path so the
-        # row eventually transitions to status='failed' after max_retries.
-        # Kept optional so unit tests that never exercise the tradable path
-        # do not need to inject a stub.
-        market_data_lookup: MarketDataLookupPort | None = None,
     ) -> None:
         self._sf = session_factory
         # Read factory wired for future use; current path is atomic read+write
@@ -247,9 +235,6 @@ class ProvisionalEnrichmentWorker:
         # Single shared client per worker instance; re-created lazily so tests
         # that never call run() do not incur connection overhead.
         self._noise_http_client: httpx.AsyncClient | None = None
-        # PRD-0089 F2 §4.3 — S2 lookup port; None disables the M-017 anchor
-        # path (used by tests that focus on noise/extraction behaviour).
-        self._market_data_lookup = market_data_lookup
 
     async def run(self) -> None:
         """Enrich pending provisional entity queue entries.
@@ -387,7 +372,7 @@ WHERE queue_id = ANY(CAST(:ids AS uuid[]))
                     return (queue_id, mention_text, mention_class, context_snippet, retry_count, None, None)
 
         enrichment_results: list[tuple[UUID, str, str, str, int, dict[str, Any] | None, list[float] | None]] = list(
-            await asyncio.gather(*[_enrich_one(r) for r in pending_rows]),
+            await asyncio.gather(*[_enrich_one(r) for r in pending_rows])
         )
 
         # ── Phase 3: Write results — one fresh session PER ROW ──────────────
@@ -474,12 +459,10 @@ WHERE queue_id = :queue_id
                 async with self._sf() as outbox_session:
                     outbox_repo = OutboxRepository(outbox_session)
                     for dirty_id in entity_ids_to_dirty:
-                        dirty_event_id = new_uuid7()  # type: ignore[no-any-return]
                         await outbox_repo.append(
                             topic=self._dirtied_topic,
                             partition_key=str(dirty_id),
-                            payload_avro=core._build_dirtied_event(dirty_id, event_id=dirty_event_id),
-                            event_id=dirty_event_id,
+                            payload_avro=core._build_dirtied_event(dirty_id),
                         )
                     await outbox_session.commit()
                 logger.info(  # type: ignore[no-any-return]
@@ -586,15 +569,7 @@ WHERE status = 'processing'
         profile: dict[str, Any],
         embedding: list[float] | None = None,
     ) -> UUID | None:
-        """Delegate to core.persist_enrichment.
-
-        F2 §4.3: forwards the optional ``market_data_lookup`` so tradable
-        provisional entities anchor on the existing instrument_id. When the
-        delegate returns None for a tradable + ticker case it means S2 has no
-        row yet — the run() loop's existing ``_apply_retry`` branch picks up
-        the None return and applies exponential backoff, eventually
-        transitioning to terminal status='failed' at max_retries.
-        """
+        """Delegate to core.persist_enrichment (session-only, no HTTP calls)."""
         return await core.persist_enrichment(
             session=session,
             queue_id=queue_id,
@@ -602,7 +577,6 @@ WHERE status = 'processing'
             profile=profile,
             embedding=embedding,
             embed_model_id=self._embed_model_id,
-            market_data_lookup=self._market_data_lookup,
         )
 
     async def _extract_entity_profile(

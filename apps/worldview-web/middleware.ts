@@ -1,55 +1,41 @@
 /**
- * middleware.ts — Edge middleware: instrument-URL canonicalisation + per-request CSP nonce
+ * middleware.ts — Per-request nonce-based CSP
  *
- * Two responsibilities (running in this order on every matched request):
+ * PLAN-0059 Wave I-6 hardening: replaces the static `'unsafe-inline'` script-src
+ * directive (in next.config.ts) with a per-request nonce. Inline scripts that
+ * Next.js 15 App Router emits (React hydration payload, dynamic imports) are
+ * authorised by the matching `nonce-{N}` directive; everything else is rejected.
  *
- * 1. INSTRUMENT URL CANONICALISATION (PRD-0089 F2 step 9)
- *    `/instruments/{slug}` is the analyst-facing canonical URL. The slug is
- *    a ticker (e.g. `AAPL`). This middleware enforces a single normal form
- *    so caches, share-links, and the browser history are deterministic.
- *      a. Lowercase → 301 redirect to uppercase. `/instruments/aapl` →
- *         `/instruments/AAPL`. WHY 301 (permanent): the analyst-facing
- *         canonical form never changes, and browsers / CDNs may cache the
- *         redirect — desired behaviour.
- *      b. Stripped index prefix. EODHD-style index tickers carry a leading
- *         `^` (e.g. `^GSPC` for the S&P 500). The `^` character requires
- *         URL-encoding (%5E) which is ugly in share-links. We strip it on
- *         entry — `/instruments/^GSPC` (or its encoded form
- *         `/instruments/%5EGSPC`) 301-redirects to `/instruments/GSPC`.
- *      c. Legacy ticker alias 301 (DEFERRED — see TODO below). Today the
- *         backend `resolve_security_id` already accepts both aliases and
- *         canonical tickers transparently, and the page-bundle endpoint
- *         returns 404 for true unknowns (which triggers the
- *         <InstrumentNotFound/> primitive). Surfacing the canonical-ticker
- *         301 in the URL bar is a UX nicety, not a correctness requirement.
- *         Wiring it from middleware requires an UNAUTHENTICATED S9 alias
- *         endpoint (today's resolver is authenticated). When that endpoint
- *         exists the wiring is a single `fetch` + a redirect early-return.
+ * WHY this matters: `'unsafe-inline'` lets ANY injected `<script>` tag execute,
+ * which defeats the primary purpose of CSP. A per-request nonce with
+ * `strict-dynamic` lets the legitimate Next.js runtime emit and its dynamically
+ * imported children but blocks attacker-injected script tags.
  *
- *    Constraints:
- *      - Edge runtime (fast, no Node-only APIs).
- *      - No infinite-loop risk: lowercase→uppercase fires only when the
- *        input strictly differs from `input.toUpperCase()` AND only when
- *        the path starts with `/instruments/`. The redirect target is
- *        always uppercase so a second pass through middleware on the same
- *        URL skips the redirect branch.
- *      - Special characters (`BRK.B`, `BF.B`, `RDS.A`) are valid path
- *        segments and are NOT redirected (they're already uppercase).
+ * IMPLEMENTATION (per Next.js docs):
+ * https://nextjs.org/docs/app/building-your-application/configuring/content-security-policy
  *
- * 2. PER-REQUEST CSP NONCE (PLAN-0059 Wave I-6 — unchanged from before)
- *    Same as the previous middleware: generate 16 random bytes per request,
- *    inject as a base64 nonce into both the request `x-nonce` header (read
- *    by server components that emit inline <script> tags) and the response
- *    `Content-Security-Policy` header.
+ *   1. Generate 16 random bytes per request, base64-encode as the nonce.
+ *   2. Inject the nonce into BOTH the request headers (so server components
+ *      can read it via `headers().get("x-nonce")` and pass to inline <script>
+ *      tags they emit) AND the response Content-Security-Policy header.
+ *   3. `strict-dynamic` lets the nonced scripts dynamically load further
+ *      modules without each one needing its own nonce.
+ *   4. Style-src has both `'unsafe-inline'` (Tailwind JIT inline <style>)
+ *      AND `'nonce-N'`. Next.js 15 auto-adds the nonce attribute to every
+ *      <link rel="stylesheet"> when x-nonce is set. Safari blocks these
+ *      stylesheets unless style-src also contains the matching nonce-source —
+ *      it does NOT fall back to 'self' when a nonce attribute is present.
+ *      Without 'nonce-N' in style-src the entire page renders unstyled.
  *
- * COVERAGE (matcher below): every page route except static assets and the
- * Next.js internals. Login + dashboard + API routes all run through here.
+ * PERFORMANCE: middleware adds ~0.3ms per request for the nonce generation
+ * + header copy. Negligible at the request scale we run.
+ *
+ * COVERAGE (matcher below): every route except static assets and the Next.js
+ * internals. Login + dashboard + API routes all run through here.
  */
 
 import { NextResponse } from "next/server";
 import type { NextRequest } from "next/server";
-
-// ── Nonce config ─────────────────────────────────────────────────────────────
 
 // Bytes of randomness for the nonce. 16 → 128 bits, well above the 64-bit
 // floor recommended by OWASP for CSP nonces.
@@ -66,79 +52,6 @@ function generateNonce(): string {
   return btoa(s);
 }
 
-// ── Instrument URL canonicalisation ──────────────────────────────────────────
-
-// WHY a precise pattern (not just `startsWith("/instruments/")`): we only
-// want to canonicalise the dynamic-route slug (the segment AFTER /instruments/),
-// not the list page itself (`/instruments`) and not deeper sub-paths
-// (`/instruments/AAPL/something`). The regex captures group 1 = slug,
-// group 2 = trailing remainder (preserved verbatim).
-//
-// Example match table:
-//   /instruments              → no match (list page, leave it alone)
-//   /instruments/             → no match (would be empty slug — let Next.js 404)
-//   /instruments/aapl         → match, slug="aapl"
-//   /instruments/BRK.B        → match, slug="BRK.B"
-//   /instruments/^GSPC        → match, slug="^GSPC"
-//   /instruments/%5EGSPC      → match, slug="%5EGSPC" (we decode below)
-//   /instruments/AAPL/news    → match, slug="AAPL", remainder="/news"
-const INSTRUMENT_PATH_RE = /^\/instruments\/([^/]+)(\/.*)?$/;
-
-/**
- * Canonicalise an instrument URL path. Returns the canonical form, or
- * `null` if the input is already canonical (caller should not redirect).
- *
- * Rules (in order):
- *   1. Decode percent-encoded slug (URL bar form `%5E` → `^`).
- *   2. Strip leading `^` (index ticker prefix).
- *   3. Uppercase.
- * If the resulting slug differs from the input slug, return the new path
- * (preserving query string + trailing path). Otherwise return null.
- *
- * WHY pure / exported: lets the Vitest unit test exercise the logic
- * without spinning up a NextRequest. Edge code stays trivial to test.
- */
-export function canonicaliseInstrumentPath(pathname: string): string | null {
-  const m = INSTRUMENT_PATH_RE.exec(pathname);
-  if (!m) return null;
-  const originalSlug = m[1];
-  const remainder = m[2] ?? "";
-
-  // Decode the slug first so `^` and `.` round-trip correctly. We catch
-  // decode failures defensively — a malformed `%XX` triplet shouldn't
-  // crash the middleware; we fall through with the raw slug.
-  let decoded: string;
-  try {
-    decoded = decodeURIComponent(originalSlug);
-  } catch {
-    decoded = originalSlug;
-  }
-
-  // Strip leading caret (index prefix). WHY strip not separate-route:
-  // documented in commit body — the F2 plan offered either approach;
-  // strip-`^` keeps the routing surface to a single `/instruments/[ticker]`
-  // and avoids creating a parallel `/indices/[ticker]` tree that would
-  // duplicate the InstrumentPageClient orchestration. Indices ARE
-  // instruments (kind=index) — they share quote, fundamentals, and
-  // intelligence panels. Future: if/when the page-bundle returns a
-  // `kind=index` flag and the UI diverges meaningfully (e.g. no insider
-  // transactions), we can introduce `/indices/[ticker]` as a thin
-  // re-export at that point.
-  const withoutCaret = decoded.startsWith("^") ? decoded.slice(1) : decoded;
-
-  const upper = withoutCaret.toUpperCase();
-
-  // If the canonical form matches the original slug verbatim, there is
-  // nothing to do. We compare against `originalSlug` (not `decoded`) so a
-  // pathname containing `%5E` is treated as non-canonical and redirected
-  // to its decoded uppercase form.
-  if (upper === originalSlug) return null;
-
-  return `/instruments/${upper}${remainder}`;
-}
-
-// ── Main middleware ──────────────────────────────────────────────────────────
-
 // Log every inbound request so Docker logs (`docker logs worldview-worldview-web-1`)
 // show access traffic. Uses console.warn because production builds strip
 // console.log (next.config.ts removeConsole) but preserve warn + error.
@@ -152,33 +65,6 @@ function logRequest(request: NextRequest): void {
 
 export function middleware(request: NextRequest): NextResponse {
   logRequest(request);
-
-  // ── Stage 1: instrument URL canonicalisation ──────────────────────────────
-  // WHY this runs FIRST: a 301 is a terminal response — no point computing a
-  // nonce + CSP header for a response the browser will immediately discard.
-  //
-  // TODO (PRD-0089 F2 follow-up): wire legacy-alias 301 redirects. Requires an
-  // UNAUTHENTICATED `GET /v1/instruments/aliases/{ticker}` endpoint on S9 that
-  // returns `{canonical_ticker: "META"}` for inputs like `FB`. Today the
-  // resolver lives behind OIDC auth (resolution.py uses ServiceClients which
-  // require a bearer JWT) so we cannot fetch from middleware without leaking
-  // tokens. Until that endpoint ships, the canonical-ticker 301 manifests one
-  // hop later: page-bundle resolves the alias on the server and the UI
-  // continues to show the legacy ticker in the URL — not wrong, just less
-  // pretty.
-  const canonical = canonicaliseInstrumentPath(request.nextUrl.pathname);
-  if (canonical !== null) {
-    // WHY new URL(...) clone: preserves the search string + hash unchanged.
-    // We only mutate `pathname`; everything else passes through.
-    const redirectUrl = new URL(request.nextUrl.toString());
-    redirectUrl.pathname = canonical;
-    // WHY 301 (permanent): the canonical form is permanent. CDNs and
-    // browsers may cache the redirect — that's the desired behaviour
-    // because it cuts a round-trip on subsequent visits to the same URL.
-    return NextResponse.redirect(redirectUrl, 301);
-  }
-
-  // ── Stage 2: CSP nonce ────────────────────────────────────────────────────
   const nonce = generateNonce();
 
   // The CSP header. Differences from the previous next.config.ts version:

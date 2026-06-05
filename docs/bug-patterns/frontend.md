@@ -1011,8 +1011,6 @@ The component called `new Date(event.event_date)` which received `undefined`, th
 
 ## BP-373 — Screener Navigation: `row.entity_id` Undefined → `/instruments/undefined`
 
-**Status**: **RESOLVED by F2 wave of PRD-0089** (2026-05-20). See [ADR-F-16](../architecture/decisions/ADR-F-16-instrument-entity-id-unification.md). Post-F2, all instrument navigation uses **ticker URLs** (`/instruments/${ticker}`) with a Next.js middleware that case-canonicalizes and resolves aliases. The dual-id ambiguity that this BP guarded against no longer exists. Pattern preserved for context.
-
 **Context**: `app/(app)/screener/page.tsx`, portfolio/watchlist navigation.
 
 **Symptom**: Clicking a screener row navigates to `/instruments/undefined` or `/instruments/null`. Instrument detail page immediately shows "not found" or fails to load.
@@ -1029,8 +1027,6 @@ The component called `new Date(event.event_date)` which received `undefined`, th
 
 ## BP-374 — Page-Bundle Fundamentals: KG entity_id Passed to Market-Data Endpoints → 404
 
-**Status**: **RESOLVED by F2 wave of PRD-0089** (2026-05-20). See [ADR-F-16](../architecture/decisions/ADR-F-16-instrument-entity-id-unification.md). The 145-LOC Phase 1 → Phase 2 re-read logic in `services/api-gateway/src/api_gateway/clients.py::get_instrument_page_bundle` has been deleted entirely. Post-F2 a single canonical UUID is used in both phases; the bundle composes `resolve_security_id(identifier)` once at the URL boundary. Pattern preserved for context.
-
 **Context**: `services/api-gateway/src/api_gateway/clients.py`, `get_instrument_page_bundle`.
 
 **Symptom**: Instrument detail page shows all fundamentals as "—". Bundle returns `fundamentals: null`.
@@ -1041,7 +1037,7 @@ The component called `new Date(event.event_date)` which received `undefined`, th
 
 **Prevention**:
 - In composite bundle endpoints, always extract the authoritative service-specific ID from Phase 1 response before using it in Phase 2 calls.
-- ~~ADR-F-12: entity_id ≠ instrument_id. Market-data endpoints require `instrument_id`; KG endpoints require `entity_id`.~~ **Superseded by [ADR-F-16](../architecture/decisions/ADR-F-16-instrument-entity-id-unification.md)** (2026-05-20): for `entity_type = 'financial_instrument'`, `entity_id == instrument_id`. Non-tradable kinds (persons, events, sectors) keep an independent `entity_id` only.
+- ADR-F-12: entity_id ≠ instrument_id. Market-data endpoints require `instrument_id`; KG endpoints require `entity_id`.
 
 ---
 

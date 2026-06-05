@@ -225,24 +225,6 @@ class KnowledgeGraphScheduler:
             next_run_time=datetime.now(tz=UTC) + timedelta(seconds=90),  # fire 90s after boot
         )
 
-        # PathExplanationBatchWorker: sweep path_insights for rows with
-        # llm_explanation IS NULL and generate explanations in bulk (Task 1/3).
-        # Fires 3 minutes after boot so the seeder + path_insight_worker have
-        # a chance to run first, then every ``path_explanation_cycle_minutes``
-        # (default 20 min after FIX-LIVE-HH2 tuning, down from 30 min).
-        fn_exp_batch = self._resolve_job("path_explanation_batch")
-        # Cast to int so MagicMock settings in unit tests still produce a real interval.
-        _exp_cycle_minutes: int = int(getattr(self._settings, "path_explanation_cycle_minutes", 20) or 20)
-        self._scheduler.add_job(
-            fn_exp_batch,
-            "interval",
-            minutes=_exp_cycle_minutes,
-            id="worker_path_explanation_batch",
-            max_instances=1,
-            coalesce=True,
-            next_run_time=datetime.now(tz=UTC) + timedelta(seconds=180),  # fire 3 min after boot
-        )
-
     def _resolve_job(self, name: str) -> Any:
         """Return the real worker.run if available, otherwise a no-op stub."""
         worker = self._workers.get(name)
@@ -428,30 +410,6 @@ def build_workers(
         description_client = _build_description_client(settings, valkey_client)
         embed_model = settings.embedding_model_id
         embed_batch_limit = settings.worker_embedding_batch_limit
-
-        # PRD-0089 F2 step 5 wiring (formerly deferred — see BP-495 /
-        # F2-DEFERRED-FOLLOWUPS.md).  ProvisionalEnrichmentWorker needs an
-        # S2 lookup port so that when a provisional entity carries a
-        # tradable ticker it can adopt the existing market-data
-        # ``instrument_id`` instead of minting a fresh UUID (M-017 at
-        # promotion time).  We build a dedicated MarketDataClient here
-        # rather than sharing the StructuredEnrichmentWorker's client —
-        # that client is scoped to ``_add_structured_enrichment_worker``
-        # and GC'd at the end of its function body.  Sharing would
-        # require a wider refactor; building a second small client is
-        # the minimum-risk wiring.
-        from knowledge_graph.infrastructure.http.market_data_client import MarketDataClient
-        from knowledge_graph.infrastructure.http.market_data_lookup_adapter import MarketDataLookupAdapter
-
-        _provisional_md_client = MarketDataClient(
-            base_url=settings.market_data_internal_url,
-            internal_jwt=build_market_data_signer(settings),
-        )
-        _provisional_lookup = MarketDataLookupAdapter(_provisional_md_client)
-        workers.setdefault("_aux_aclose", []).append(
-            ("provisional_enrichment_market_data_client", _provisional_md_client.aclose),
-        )
-
         # PLAN-0057 A-5 / F-CRIT-03: thread the cost logger into workers that
         # explicitly accept it.  ``DefinitionRefreshWorker`` already exposes
         # ``usage_logger`` (used by GeminiDescriptionAdapter); the new
@@ -485,10 +443,6 @@ def build_workers(
                     force_regen_batch_size=settings.summary_worker_force_regen_batch_size,
                     read_session_factory=_read_factory,
                     gemini_extraction_client=gemini_extraction_client,
-                    # PLAN-0093 D-3 T-D-3-02: raise to 5 concurrent LLM calls
-                    # per cycle so a 50-row batch drains in roughly the same
-                    # wall time as the previous 20-row sequential batch.
-                    concurrency=5,
                 ),
                 "definition_embedding": def_worker,
                 "narrative_embedding": NarrativeRefreshWorker(
@@ -508,16 +462,9 @@ def build_workers(
                     # issues a cryptographically verifiable JWT for market-data calls.
                     # Falls back to HS256 dev token when the key is absent.
                     internal_jwt_private_key_pem=getattr(
-                        settings,
-                        "internal_jwt_private_key",
-                        type("_", (), {"get_secret_value": lambda _: ""})(),
+                        settings, "internal_jwt_private_key", type("_", (), {"get_secret_value": lambda _: ""})()
                     ).get_secret_value(),
                     read_session_factory=_read_factory,
-                    # PLAN-0093 D-2 (T-D-2-01): pass the same Valkey client used
-                    # by the AGE sync worker for per-ticker backoff state.  When
-                    # Valkey is not wired (unit-test path) the worker simply
-                    # never backs off — behaviour is identical to pre-D-2.
-                    valkey_client=valkey_client,
                 ),
                 "provisional_enrichment": ProvisionalEnrichmentWorker(
                     write_session_factory,
@@ -536,12 +483,6 @@ def build_workers(
                     # outage does not cause every retry sweep to re-hit the API.
                     base_retry_minutes=settings.provisional_enrichment_base_retry_minutes,
                     max_retry_minutes=settings.provisional_enrichment_max_retry_minutes,
-                    # PRD-0089 F2 step 5: tradable promotion now defers when
-                    # S2 has no matching instrument row.  Falls back to None
-                    # silently if MarketDataClient construction fails — the
-                    # worker treats absent port as "M-017 enforcement off" so
-                    # we preserve the pre-F2 behaviour as a safe-default.
-                    market_data_lookup=_provisional_lookup,
                     read_session_factory=_read_factory,
                 ),
                 "embedding_refresh": EmbeddingRefreshWorker(
@@ -562,7 +503,7 @@ def build_workers(
     # PLAN-0074 Wave E1: PathInsightSeeder — registered unconditionally so the
     # scheduler cron stub works even when AGE is not fully configured.
     # The seeder only needs the DB session factory (no LLM dependency).
-    _add_path_insight_workers(workers, settings, write_session_factory, llm_client=llm_client)
+    _add_path_insight_workers(workers, settings, write_session_factory)
 
     return workers
 
@@ -571,21 +512,13 @@ def _add_path_insight_workers(
     workers: dict[str, Any],
     settings: Settings,
     write_session_factory: Any,
-    llm_client: Any | None = None,
 ) -> None:
-    """Wire PathInsightSeeder and PathExplanationBatchWorker into the workers dict.
-
-    PathInsightSeeder (PLAN-0074 Wave E1):
-      Runs nightly + on startup to enqueue hub entity jobs. No LLM dependency.
-
-    PathExplanationBatchWorker (2026-05-23, Wave E2):
-      Sweeps path_insights for rows with llm_explanation IS NULL and generates
-      explanations in bulk.  Wired unconditionally — PathExplanationService is
-      a no-op when llm_client is None so the scheduler job is always registered.
+    """Wire PathInsightSeeder into the workers dict (PLAN-0074 Wave E1).
 
     PathInsightWorker runs as a standalone process (docker-compose
-    ``path-insight-worker`` service) — NOT registered here as a scheduler
-    cron job because it runs continuously.
+    ``path-insight-worker`` service) — it is NOT registered here as a
+    scheduler cron job because it runs continuously rather than on a
+    fixed interval.  Only the seeder gets a scheduler entry.
     """
     from knowledge_graph.infrastructure.workers.path_insight_seeder import PathInsightSeeder
 
@@ -594,76 +527,6 @@ def _add_path_insight_workers(
     # wrap the seeder with a run() alias pointing to seed_hub_entities.
     seeder.run = seeder.seed_hub_entities  # type: ignore[attr-defined]
     workers["path_insight_seeder"] = seeder
-
-    # PathExplanationBatchWorker: sweep existing path_insights rows that have
-    # llm_explanation IS NULL.  Handles both:
-    #   - Paths created before Wave E2 (12,689 rows in production as of 2026-05-23).
-    #   - New paths created by PathInsightWorker after hub-penalty re-scoring.
-    from knowledge_graph.infrastructure.intelligence_db.repositories.path_insight_repository import (
-        PathInsightRepository,
-    )
-    from knowledge_graph.infrastructure.workers.path_explanation_batch_worker import PathExplanationBatchWorker
-
-    _exp_service = _build_explanation_service(
-        write_session_factory,
-        llm_client=llm_client,
-        model_id=getattr(settings, "narrative_llm_model_id", "meta-llama/Meta-Llama-3.1-8B-Instruct"),
-        repo_class=PathInsightRepository,
-    )
-    # Cast to int so that MagicMock settings in tests don't break asyncio.Semaphore.
-    _exp_batch_size: int = int(getattr(settings, "path_explanation_batch_size", 200) or 200)
-    _exp_concurrency: int = int(getattr(settings, "path_explanation_concurrency", 5) or 5)
-    workers["path_explanation_batch"] = PathExplanationBatchWorker(
-        session_factory=write_session_factory,
-        explanation_service=_exp_service,
-        batch_size=_exp_batch_size,
-        concurrency=_exp_concurrency,
-    )
-
-
-def _build_explanation_service(
-    session_factory: Any,
-    *,
-    llm_client: Any | None,
-    model_id: str,
-    repo_class: Any,
-) -> Any:
-    """Build a PathExplanationService with a session-factory-aware repo adapter.
-
-    PathExplanationService.update_explanation() needs a write session.  We wrap
-    the repo in an adapter that opens its own session for each write so no
-    session leaks across LLM calls (3-phase pattern).
-    """
-    from knowledge_graph.application.services.path_explanation_service import PathExplanationService
-
-    class _SessionBoundRepoAdapter:
-        """Repo adapter that opens a fresh write session for each update_explanation call."""
-
-        def __init__(self, sf: Any, repo_cls: Any) -> None:
-            self._sf = sf
-            self._repo_cls = repo_cls
-
-        async def update_explanation(
-            self,
-            insight_id: Any,
-            llm_explanation: str,
-            explanation_model: str,
-        ) -> None:
-            async with self._sf() as session:
-                repo = self._repo_cls(session)
-                await repo.update_explanation(
-                    insight_id=insight_id,
-                    llm_explanation=llm_explanation,
-                    explanation_model=explanation_model,
-                )
-                await session.commit()
-
-    repo_adapter = _SessionBoundRepoAdapter(session_factory, repo_class)
-    return PathExplanationService(
-        path_insight_repo=repo_adapter,  # type: ignore[arg-type]
-        llm_client=llm_client,
-        model_id=model_id,
-    )
 
 
 def build_market_data_signer(settings: Settings) -> Any:
@@ -762,12 +625,11 @@ class _EntityDirtiedProducerAdapter:
         # Lazy import keeps ``messaging.*`` and the heavy serializer cost out
         # of the application/domain import paths; this code path runs only at
         # most once per entity so the import overhead is irrelevant.
-        from common.ids import new_uuid7  # type: ignore[import-untyped]
         from knowledge_graph.infrastructure.workers.provisional_enrichment_core import (
             _build_dirtied_event,
         )
 
-        value = _build_dirtied_event(entity_id, dirty_reason=reason, event_id=new_uuid7())
+        value = _build_dirtied_event(entity_id, dirty_reason=reason)
         self._dp.produce_bytes(
             topic=self._topic,
             key=str(entity_id).encode(),
@@ -890,22 +752,9 @@ def _add_structured_enrichment_worker(
 def _build_description_client(settings: Settings, valkey_client: Any | None = None) -> Any:
     """Construct the EntityDescriptionClient based on ``KNOWLEDGE_GRAPH_DESCRIPTION_PROVIDER``.
 
-    Provider values:
-    - ``"deepinfra"`` → ``ChainedDescriptionAdapter([DeepInfraDescriptionAdapter, GeminiDescriptionAdapter?])``
-                        DeepInfra (Qwen3-235B-A22B) is primary; Gemini is wired as fallback when
-                        ``KNOWLEDGE_GRAPH_GEMINI_API_KEY`` is also set.  When the DeepInfra key
-                        is unset, falls through to Gemini-only (PLAN-0095 W4 T-W4-03) so the
-                        chain still produces descriptions instead of silently going Null.
-    - ``"gemini"``    → ``GeminiDescriptionAdapter`` alone (gemini-3.1-flash-lite).  When the
-                        Gemini key is unset, falls back to DeepInfra if its key IS set
-                        (PLAN-0095 W4 T-W4-03 — avoids 59.5% NULL company descriptions in live
-                        when an operator forgot to flip ``description_provider`` after rotating
-                        the Gemini secret).
+    - ``"deepinfra"`` → ``DeepInfraDescriptionAdapter`` (Qwen3-235B-A22B primary, Qwen3-32B fallback).
+    - ``"gemini"``    → ``GeminiDescriptionAdapter`` (gemini-3.1-flash-lite).
     - anything else  → ``NullDescriptionAdapter`` (no external calls; fallback template always used).
-
-    Chain ordering (BP-RC8 + PLAN-0095 W4 T-W4-03):
-        provider=deepinfra:  DeepInfra → Gemini? → deterministic stub
-        provider=gemini:     Gemini → DeepInfra? → deterministic stub
 
     Args:
     ----
@@ -920,127 +769,31 @@ def _build_description_client(settings: Settings, valkey_client: Any | None = No
     provider = settings.description_provider.lower()
 
     if provider == "deepinfra":
-        deepinfra_key = settings.deepinfra_api_key.get_secret_value()  # DEF-005
-        if not deepinfra_key:
-            # PLAN-0095 W4 T-W4-03: instead of going straight to Null, try Gemini
-            # if its key is set. This preserves description coverage when the
-            # DeepInfra key is missing/rotated.
-            gemini_key_fallback = settings.gemini_api_key.get_secret_value()
-            if gemini_key_fallback:
-                logger.warning(  # type: ignore[no-any-return]
-                    "description_client_deepinfra_key_missing_using_gemini_fallback",
-                    message=(
-                        "KNOWLEDGE_GRAPH_DEEPINFRA_API_KEY is empty; " "using Gemini-only chain (PLAN-0095 W4 T-W4-03)."
-                    ),
-                )
-                from ml_clients.adapters.chained_description import (
-                    ChainedDescriptionAdapter,  # type: ignore[import-untyped]
-                )
-                from ml_clients.adapters.gemini_description import (
-                    GeminiDescriptionAdapter,  # type: ignore[import-untyped]
-                )
-
-                gemini_semaphore = asyncio.Semaphore(settings.description_gemini_concurrency)
-                return ChainedDescriptionAdapter(
-                    [
-                        GeminiDescriptionAdapter(
-                            api_key=gemini_key_fallback,
-                            semaphore=gemini_semaphore,
-                            cost_tracker=valkey_client,
-                            max_monthly_usd=settings.description_max_monthly_usd,
-                        )
-                    ]
-                )
+        api_key = settings.deepinfra_api_key.get_secret_value()  # DEF-005
+        if not api_key:
             logger.warning(  # type: ignore[no-any-return]
                 "description_client_deepinfra_key_missing",
                 message="KNOWLEDGE_GRAPH_DEEPINFRA_API_KEY is empty; falling back to NullDescriptionAdapter",
             )
             return NullDescriptionAdapter()
 
-        from ml_clients.adapters.chained_description import ChainedDescriptionAdapter  # type: ignore[import-untyped]
         from ml_clients.adapters.deepinfra_description import (
             DeepInfraDescriptionAdapter,  # type: ignore[import-untyped]
         )
 
-        deepinfra_semaphore = asyncio.Semaphore(settings.description_deepinfra_concurrency)
-        deepinfra_adapter = DeepInfraDescriptionAdapter(
-            api_key=deepinfra_key,
+        semaphore = asyncio.Semaphore(settings.description_deepinfra_concurrency)
+        return DeepInfraDescriptionAdapter(
+            api_key=api_key,
             primary_model_id=settings.description_deepinfra_model_id,
             fallback_model_id=settings.description_deepinfra_fallback_model_id,
-            semaphore=deepinfra_semaphore,
+            semaphore=semaphore,
             cost_tracker=valkey_client,
             max_monthly_usd=settings.description_max_monthly_usd,
         )
 
-        # Wire Gemini as fallback 1 when its key is also configured (BP-RC8).
-        # If GEMINI_API_KEY is empty the chain is [DeepInfra] only — Gemini is
-        # skipped entirely rather than producing a noisy "key missing" warning on
-        # every worker cycle.
-        chain: list[Any] = [deepinfra_adapter]
-        gemini_key = settings.gemini_api_key.get_secret_value()
-        if gemini_key:
-            from ml_clients.adapters.gemini_description import (
-                GeminiDescriptionAdapter,  # type: ignore[import-untyped]
-            )
-
-            gemini_semaphore = asyncio.Semaphore(settings.description_gemini_concurrency)
-            chain.append(
-                GeminiDescriptionAdapter(
-                    api_key=gemini_key,
-                    semaphore=gemini_semaphore,
-                    cost_tracker=valkey_client,
-                    max_monthly_usd=settings.description_max_monthly_usd,
-                )
-            )
-            logger.info(  # type: ignore[no-any-return]
-                "description_client_chain_built",
-                chain=["DeepInfraDescriptionAdapter", "GeminiDescriptionAdapter"],
-            )
-        else:
-            logger.info(  # type: ignore[no-any-return]
-                "description_client_chain_built",
-                chain=["DeepInfraDescriptionAdapter"],
-                note="GEMINI_API_KEY unset; Gemini fallback disabled",
-            )
-
-        return ChainedDescriptionAdapter(chain)
-
     if provider == "gemini":
-        gemini_key = settings.gemini_api_key.get_secret_value()
-        if not gemini_key:
-            # PLAN-0095 W4 T-W4-03: cascade to DeepInfra if its key is set
-            # rather than going straight to Null.  The audit found 59.5% of
-            # company descriptions were NULL in production because operators
-            # had ``description_provider=gemini`` configured but the Gemini key
-            # was missing — and there was no fallback path.
-            deepinfra_key_fallback = settings.deepinfra_api_key.get_secret_value()
-            if deepinfra_key_fallback:
-                logger.warning(  # type: ignore[no-any-return]
-                    "description_client_gemini_key_missing_using_deepinfra_fallback",
-                    message=(
-                        "KNOWLEDGE_GRAPH_GEMINI_API_KEY is empty; " "using DeepInfra chain (PLAN-0095 W4 T-W4-03)."
-                    ),
-                )
-                from ml_clients.adapters.chained_description import (
-                    ChainedDescriptionAdapter,  # type: ignore[import-untyped]
-                )
-                from ml_clients.adapters.deepinfra_description import (
-                    DeepInfraDescriptionAdapter,  # type: ignore[import-untyped]
-                )
-
-                deepinfra_semaphore = asyncio.Semaphore(settings.description_deepinfra_concurrency)
-                return ChainedDescriptionAdapter(
-                    [
-                        DeepInfraDescriptionAdapter(
-                            api_key=deepinfra_key_fallback,
-                            primary_model_id=settings.description_deepinfra_model_id,
-                            fallback_model_id=settings.description_deepinfra_fallback_model_id,
-                            semaphore=deepinfra_semaphore,
-                            cost_tracker=valkey_client,
-                            max_monthly_usd=settings.description_max_monthly_usd,
-                        )
-                    ]
-                )
+        api_key = settings.gemini_api_key.get_secret_value()
+        if not api_key:
             logger.warning(  # type: ignore[no-any-return]
                 "description_client_gemini_key_missing",
                 message="KNOWLEDGE_GRAPH_GEMINI_API_KEY is empty; falling back to NullDescriptionAdapter",
@@ -1051,7 +804,7 @@ def _build_description_client(settings: Settings, valkey_client: Any | None = No
 
         semaphore = asyncio.Semaphore(settings.description_gemini_concurrency)
         return GeminiDescriptionAdapter(
-            api_key=gemini_key,
+            api_key=api_key,
             semaphore=semaphore,
             cost_tracker=valkey_client,
             max_monthly_usd=settings.description_max_monthly_usd,

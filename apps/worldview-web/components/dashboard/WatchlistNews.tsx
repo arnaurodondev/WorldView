@@ -58,7 +58,7 @@ export function WatchlistNews() {
   // issue, not a user error. Muted text is professional; red looks broken.
   if (isError) {
     return (
-      // WHY text-[11px]: terminal data rows use 11px density — text-[14px] (14px) is consumer app scale (Bloomberg convention)
+      // WHY text-[11px]: terminal data rows use 11px density — text-sm (14px) is consumer app scale (Bloomberg convention)
       <p className="text-[11px] text-muted-foreground">
         News feed unavailable — articles will appear once the content pipeline runs.
       </p>
@@ -70,7 +70,7 @@ export function WatchlistNews() {
   // ── Empty state ────────────────────────────────────────────────────────────
   if (articles.length === 0) {
     return (
-      // WHY text-[11px]: terminal data rows use 11px density — text-[14px] (14px) is consumer app scale (Bloomberg convention)
+      // WHY text-[11px]: terminal data rows use 11px density — text-sm (14px) is consumer app scale (Bloomberg convention)
       <p className="text-[11px] text-muted-foreground">No recent news</p>
     );
   }

@@ -1,215 +1,75 @@
 /**
- * GraphColumn — middle column of Intelligence tab (PRD-0088 §6.9 / W7 T-06 / T-18).
- * Renders: StructuredBrief → GraphStats strip → GraphToolbar → sigma.js entity graph.
+ * GraphColumn — PLAN-0090 T-D-04 — middle column of Intelligence tab (PRD-0088 §6.9).
+ * Renders: FULL AI brief → GraphToolbar → sigma.js entity graph.
  * Owns depth + typeFilters; `selectedNodeId` lives in the parent IntelligenceTab.
- *
- * WHY DEPTH-ADAPTIVE TIMEOUT (T-06):
- * AGE Cypher traversal cost is roughly O(degree^depth). Depth=1 finishes in <500ms;
- * depth=2 in 1–4s; depth=3 in 4–8s on cold cache. A flat 3s timeout killed depth=3
- * before it had a chance to return. The new map gives depth=1 a 1.5s ceiling
- * (anything slower is a bug), depth=2 a 4s budget, depth=3 an 8s budget.
- *
- * WHY StructuredBrief (replacing MarkdownContent):
- * StructuredBrief renders the structured lead + section bullets with citation chips
- * that the W4 LLM pipeline already emits. Raw MarkdownContent over brief.narrative
- * lost the citation context entirely; analysts want to know which claims are sourced.
- *
- * WHY CLIENT-SIDE LATENCY:
- * S9 does not expose a backend-measured latency field on BriefingResponse. We
- * measure round-trip time client-side with performance.now() so the footer strip
- * shows the analyst how stale/fast the data is ("312 ms" vs "cached" feel).
- *
- * WHY GRAPH HOTKEYS (T-18):
- * 1/2/3 for depth, r for refresh, Esc to clear selection, g to reset view.
- * Registered under scope="page" so they only fire when the Intelligence tab
- * is active (IntelligenceTab pushes "page" scope on mount).
+ * WHY 3 s timeout: AGE Cypher at depth=3 commonly takes 4-8 s on cold cache;
+ * > 3 s leaves the analyst on a blank canvas. Abort → typed GRAPH_TIMEOUT error.
  */
 
 "use client";
-// WHY "use client": useState, useRef, useEffect, useQuery — all browser-only.
 
-import { useEffect, useMemo, useRef, useState, useCallback } from "react";
-import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useEffect, useMemo, useState } from "react";
+import { useQuery } from "@tanstack/react-query";
 import dynamic from "next/dynamic";
 import { RefreshCw } from "lucide-react";
-import { useApiClient } from "@/lib/api-client";
+import { useAuth } from "@/hooks/useAuth";
+import { createGateway } from "@/lib/gateway";
 import { qk } from "@/lib/query/keys";
-import { useHotkeyScope } from "@/contexts/HotkeyContext";
 import { GraphToolbar } from "@/components/instrument/graph/GraphToolbar";
 import { EntityGraphErrorBoundary } from "@/components/instrument/EntityGraphErrorBoundary";
-import { StructuredBrief } from "@/components/brief/StructuredBrief";
-import { formatDateTime } from "@/lib/utils";
-import { GraphStats } from "./GraphStats";
+import { MarkdownContent } from "@/components/ui/markdown-content";
 import type { BriefingResponse, EntityGraph as EntityGraphData } from "@/types/api";
-import type { SelectedEdgeInfo } from "@/components/instrument/EntityGraph";
-import type { SelectedNodeInfo } from "@/components/instrument/intelligence/InlineSelectionPanel";
 
-// WHY ssr:false: EntityGraph uses sigma.js (WebGL) — cannot run in Node.js.
+// WHY ssr:false: EntityGraph uses sigma.js (WebGL) which needs a browser.
 const EntityGraph = dynamic(
   () => import("@/components/instrument/EntityGraph").then((m) => ({ default: m.EntityGraph })),
-  {
-    ssr: false,
-    loading: () => (
-      <div className="flex h-full items-center justify-center">
-        <RefreshCw className="h-4 w-4 animate-spin text-muted-foreground" strokeWidth={1.5} />
-      </div>
-    ),
-  },
+  { ssr: false, loading: () => <div className="flex h-full items-center justify-center"><RefreshCw className="h-4 w-4 animate-spin text-muted-foreground" strokeWidth={1.5} /></div> },
 );
 
 const BRIEF_STALE_MS = 10 * 60 * 1000;
 const GRAPH_STALE_MS = 10 * 60 * 1000;
-
-// WHY per-depth budget: AGE traversal cost grows exponentially with depth.
-// depth=1 budget is tight (any real delay = cold cache or infrastructure issue).
-// depth=3 gets 8s because it's an advanced, expensive query.
-const GRAPH_TIMEOUT_MS: Record<number, number> = { 1: 1500, 2: 4000, 3: 8000 };
+const GRAPH_TIMEOUT_MS = 3000;
 
 export interface GraphColumnProps {
-  readonly entityId: string;
-  readonly selectedNodeId: string | null;
-  /**
-   * Called when node selection changes. Receives full node info on select, null on deselect.
-   * The toggle (clicking the same node deselects) is handled internally in GraphColumn:
-   * if the clicked id matches selectedNodeId, onNodeChange(null) fires.
-   */
-  readonly onNodeChange?: (info: SelectedNodeInfo | null) => void;
-  /** Called when user clicks an edge in the sigma canvas. */
-  readonly onEdgeSelect?: (info: SelectedEdgeInfo) => void;
+  entityId: string;
+  selectedNodeId: string | null;
+  onNodeSelect: (nodeId: string | null) => void;
 }
 
-export function GraphColumn({ entityId, selectedNodeId, onNodeChange, onEdgeSelect }: GraphColumnProps) {
-  const gateway = useApiClient();
-  const queryClient = useQueryClient();
+export function GraphColumn({ entityId, selectedNodeId, onNodeSelect }: GraphColumnProps) {
+  const { accessToken } = useAuth();
   const [depth, setDepth] = useState<number>(2);
   const [typeFilters, setTypeFilters] = useState<string[]>([]);
-  // WHY ref for latency: we measure performance.now() inside the queryFn
-  // closure (browser-only) and need to read it in the data-change effect
-  // without causing a re-render every fetch cycle.
-  const graphFetchStartRef = useRef<number>(0);
-  const [graphLatencyMs, setGraphLatencyMs] = useState<number | null>(null);
 
   const { data: brief } = useQuery<BriefingResponse>({
     queryKey: qk.instruments.brief(entityId),
-    queryFn: () => gateway.getInstrumentBrief(entityId),
-    enabled: !!entityId,
+    queryFn: () => createGateway(accessToken).getInstrumentBrief(entityId),
+    enabled: !!accessToken && !!entityId,
     staleTime: BRIEF_STALE_MS,
-    // WHY retry: false — brief 404s for instruments without a generated brief
-    // (common for newly-added tickers). Retrying would hammer S8 LLM.
-    retry: false,
+    retry: false, // brief 404s for cold instruments; retry just hammers LLM
   });
 
-  // WHY AbortController inside queryFn: chain TanStack's unmount abort signal
-  // AND add our depth-adaptive deadline. When the AbortController fires we
-  // translate the error to a typed "GRAPH_TIMEOUT" string so the UI can show
-  // a specific fallback rather than a generic "Something went wrong".
-  const {
-    data: graphData,
-    isLoading: graphLoading,
-    isError,
-    error: graphErr,
-  } = useQuery<EntityGraphData | null>({
+  // WHY AbortController inside queryFn: chain TanStack's unmount signal and add
+  // our 3 s deadline. Abort is translated to a typed Error for the UI.
+  const { data: graphData, isLoading: graphLoading, isError, error: graphErr } = useQuery<EntityGraphData | null>({
     queryKey: qk.instruments.entityGraph(entityId, depth),
     queryFn: async ({ signal }) => {
-      graphFetchStartRef.current = performance.now();
-      const timeout = GRAPH_TIMEOUT_MS[depth] ?? 4000;
       const ctrl = new AbortController();
       signal?.addEventListener("abort", () => ctrl.abort());
-      const timer = setTimeout(() => ctrl.abort(), timeout);
-      try {
-        return await gateway.getEntityGraph(entityId, depth);
-      } catch (err) {
-        if (ctrl.signal.aborted) throw new Error("GRAPH_TIMEOUT");
-        throw err;
-      } finally {
-        clearTimeout(timer);
-      }
+      const timer = setTimeout(() => ctrl.abort(), GRAPH_TIMEOUT_MS);
+      try { return await createGateway(accessToken).getEntityGraph(entityId, depth); }
+      catch (err) { if (ctrl.signal.aborted) throw new Error("GRAPH_TIMEOUT"); throw err; }
+      finally { clearTimeout(timer); }
     },
-    enabled: !!entityId,
+    enabled: !!accessToken && !!entityId,
     staleTime: GRAPH_STALE_MS,
     retry: 0,
   });
 
-  // WHY useEffect for latency: TanStack Query v5 removed onSuccess callbacks.
-  // We react to `graphData` change in an effect instead.
-  useEffect(() => {
-    if (graphData !== undefined) {
-      setGraphLatencyMs(Math.round(performance.now() - graphFetchStartRef.current));
-    }
+  // WHY reset selection on entity change: a stale id from a previous entity
+  // would point at a node that no longer exists in the new graph.
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [graphData]);
-
-  // WHY belt-and-suspenders: IntelligenceTab's useEffect([entityId]) is the canonical
-  // reset (clears selectedNodeInfo + selectedEdge + visualHighlightNodeId). This
-  // secondary call is idempotent (null→null is a no-op) and guards against future
-  // refactors that move the canonical reset out of IntelligenceTab.
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  useEffect(() => { onNodeChange?.(null); }, [entityId]);
-
-  // ── Graph hotkeys (T-18) ──────────────────────────────────────────────────
-  const { registry } = useHotkeyScope();
-
-  const handleRefresh = useCallback(() => {
-    void queryClient.invalidateQueries({ queryKey: qk.instruments.entityGraph(entityId, depth) });
-  }, [queryClient, entityId, depth]);
-
-  // g → reset view: clear type filters + deselect node (return to overview).
-  const handleResetView = useCallback(() => {
-    setTypeFilters([]);
-    onNodeChange?.(null);
-  }, [onNodeChange]);
-
-  useEffect(() => {
-    const un1 = registry.register({
-      id: "intelligence.graph.depth1",
-      chord: "1",
-      scope: "page",
-      group: "View",
-      label: "Graph depth 1",
-      handler: (e) => { e.preventDefault(); setDepth(1); },
-    });
-    const un2 = registry.register({
-      id: "intelligence.graph.depth2",
-      chord: "2",
-      scope: "page",
-      group: "View",
-      label: "Graph depth 2",
-      handler: (e) => { e.preventDefault(); setDepth(2); },
-    });
-    const un3 = registry.register({
-      id: "intelligence.graph.depth3",
-      chord: "3",
-      scope: "page",
-      group: "View",
-      label: "Graph depth 3",
-      handler: (e) => { e.preventDefault(); setDepth(3); },
-    });
-    const unR = registry.register({
-      id: "intelligence.graph.refresh",
-      chord: "r",
-      scope: "page",
-      group: "Action",
-      label: "Refresh graph",
-      handler: (e) => { e.preventDefault(); handleRefresh(); },
-    });
-    const unG = registry.register({
-      id: "intelligence.graph.reset",
-      chord: "g",
-      scope: "page",
-      group: "View",
-      label: "Reset graph view",
-      handler: (e) => { e.preventDefault(); handleResetView(); },
-    });
-    const unEsc = registry.register({
-      id: "intelligence.graph.esc",
-      chord: "escape",
-      scope: "page",
-      group: "Navigation",
-      label: "Clear node selection",
-      handler: (e) => { e.preventDefault(); onNodeChange?.(null); },
-    });
-    return () => { un1(); un2(); un3(); unR(); unG(); unEsc(); };
-  }, [registry, handleRefresh, handleResetView, onNodeChange]);
+  useEffect(() => { onNodeSelect(null); }, [entityId]);
 
   const availableEntityTypes = useMemo<string[]>(() => {
     if (!graphData?.nodes?.length) return [];
@@ -221,118 +81,36 @@ export function GraphColumn({ entityId, selectedNodeId, onNodeChange, onEdgeSele
   const filteredGraph = useMemo<EntityGraphData | null>(() => {
     if (!graphData) return null;
     if (typeFilters.length === 0) return graphData;
-    const nodes = graphData.nodes.filter(
-      (n) => typeFilters.includes(n.type) || n.id === graphData.entity_id,
-    );
+    const nodes = graphData.nodes.filter((n) => typeFilters.includes(n.type) || n.id === graphData.entity_id);
     const keep = new Set(nodes.map((n) => n.id));
     const edges = graphData.edges.filter((e) => keep.has(e.source) && keep.has(e.target));
     return { ...graphData, nodes, edges };
   }, [graphData, typeFilters]);
 
-  // WHY adapter: EntityGraph fires (id, label, type, degree, edges).
-  // Toggle detection: if clicked id === selectedNodeId, fire onNodeChange(null) to deselect;
-  // otherwise fire onNodeChange with the full SelectedNodeInfo for InlineSelectionPanel.
-  const handleNodeClick = (
-    id: string,
-    label: string,
-    nodeType: string,
-    degree: number,
-    edges: Array<{ label: string; weight: number; neighborId: string; neighborLabel: string }>,
-    description: string | null,
-    sector: string | null,
-  ) => {
-    if (selectedNodeId === id) {
-      // Same node clicked again — deselect
-      onNodeChange?.(null);
-    } else {
-      onNodeChange?.({ id, label, type: nodeType, degree, edges, description, sector });
-    }
-  };
+  // WHY adapter: collapse EntityGraph's 5-tuple to (id). Click-same deselects.
+  const handleNodeClick = (id: string) => onNodeSelect(selectedNodeId === id ? null : id);
   const isTimeout = isError && graphErr instanceof Error && graphErr.message === "GRAPH_TIMEOUT";
-
-  const hasBriefContent = !!(brief?.lead || (brief?.sections && brief.sections.length > 0));
 
   return (
     <div className="flex flex-col h-full overflow-hidden">
-      {/* ── AI Brief (StructuredBrief replaces raw MarkdownContent) ───────── */}
-      {hasBriefContent && brief && (
+      {brief?.narrative && (
         <div className="mx-3 mt-3 p-3 bg-card border border-border/50 rounded-[2px]">
-          <div className="mb-1.5 flex items-baseline justify-between">
-            <span className="text-[10px] font-mono uppercase tracking-[0.08em] text-muted-foreground">
-              Intelligence Brief
-            </span>
+          <div className="mb-2 flex items-baseline justify-between">
+            <span className="text-[10px] font-mono uppercase tracking-[0.08em] text-muted-foreground">Intelligence Brief</span>
+            <span className="font-mono text-[10px] tabular-nums text-muted-foreground">{new Date(brief.generated_at).toISOString().slice(0, 16).replace("T", " ")} UTC</span>
           </div>
-          {/* WHY variant="compact": the brief panel is narrow (center column, ~600px).
-              Compact omits the confidence badge and uses tighter typography. */}
-          <StructuredBrief
-            sections={brief.sections}
-            lead={brief.lead}
-            confidence={brief.confidence}
-            variant="compact"
-          />
-          {/* WHY brief footer strip: the analyst needs to know when the brief was
-              generated (freshness) and how long the fetch took (performance signal).
-              generated_at comes from S8; latencyMs is client-side measured. */}
-          <span className="mt-1.5 block text-[9px] font-mono text-muted-foreground">
-            {formatDateTime(brief.generated_at)}{" "}
-            · {graphLatencyMs !== null ? `${graphLatencyMs} ms` : "—"}
-          </span>
+          <div className="text-[11px] leading-[1.6] text-foreground/80"><MarkdownContent size="compact">{brief.narrative}</MarkdownContent></div>
         </div>
       )}
-
-      {/* ── Graph stats strip (node count, edge count, depth, latency) ─────── */}
-      <div className="mx-3 mt-2">
-        <GraphStats
-          nodeCount={filteredGraph?.nodes?.length ?? 0}
-          edgeCount={filteredGraph?.edges?.length ?? 0}
-          depth={depth}
-          latencyMs={graphLatencyMs}
-        />
-      </div>
-
-      {/* ── Toolbar (depth buttons + type filter) ─────────────────────────── */}
-      <div className="mx-3 mt-1">
-        <GraphToolbar
-          depth={depth}
-          onDepthChange={setDepth}
-          selectedEntityTypes={typeFilters}
-          onEntityTypesChange={setTypeFilters}
-          availableEntityTypes={availableEntityTypes}
-        />
-      </div>
-
-      {/* ── Sigma graph canvas ────────────────────────────────────────────── */}
+      <div className="mx-3 mt-2"><GraphToolbar depth={depth} onDepthChange={setDepth} selectedEntityTypes={typeFilters} onEntityTypesChange={setTypeFilters} availableEntityTypes={availableEntityTypes} /></div>
       <div className="flex-1 min-h-0 mx-3 mb-3 mt-2 border border-border/40 rounded-[2px] overflow-hidden">
-        {graphLoading && (
-          <div className="flex h-full items-center justify-center">
-            <RefreshCw className="h-4 w-4 animate-spin text-muted-foreground" strokeWidth={1.5} />
-          </div>
-        )}
-        {isTimeout && (
-          <div className="flex h-full items-center justify-center px-6 text-center text-[11px] text-muted-foreground">
-            Graph timed out at depth {depth}. Try depth 1 or 2.
-          </div>
-        )}
+        {graphLoading && <div className="flex h-full items-center justify-center"><RefreshCw className="h-4 w-4 animate-spin text-muted-foreground" strokeWidth={1.5} /></div>}
+        {isTimeout && <div className="flex h-full items-center justify-center px-6 text-center text-[11px] text-muted-foreground">Graph timed out at depth {depth}. Try depth 1 or 2.</div>}
         {!graphLoading && !isTimeout && filteredGraph && filteredGraph.nodes.length > 0 && (
-          <EntityGraphErrorBoundary>
-            <EntityGraph
-              data={filteredGraph}
-              centerEntityId={entityId}
-              selectedNodeId={selectedNodeId}
-              onNodeClick={handleNodeClick}
-              onEdgeClick={onEdgeSelect}
-            />
-          </EntityGraphErrorBoundary>
+          <EntityGraphErrorBoundary><EntityGraph data={filteredGraph} centerEntityId={entityId} onNodeClick={handleNodeClick} /></EntityGraphErrorBoundary>
         )}
         {!graphLoading && !isTimeout && filteredGraph && filteredGraph.nodes.length === 0 && (
-          <div className="flex h-full items-center justify-center px-6 text-center text-[11px] text-muted-foreground">
-            No entities match the current type filter.
-          </div>
-        )}
-        {!graphLoading && !isTimeout && !filteredGraph && !isError && (
-          <div className="flex h-full items-center justify-center px-6 text-center text-[11px] text-muted-foreground">
-            No graph data available.
-          </div>
+          <div className="flex h-full items-center justify-center px-6 text-center text-[11px] text-muted-foreground">No entities match the current type filter.</div>
         )}
       </div>
     </div>

@@ -120,9 +120,9 @@ export function BriefEntityPill({
           // menu would close it otherwise if we only tracked the button's events).
           onMouseEnter={() => setShowMenu(true)}
           onMouseLeave={() => setShowMenu(false)}
-          // WHY absolute + z-20 + : overlaid without affecting card layout.
+          // WHY absolute + z-20 + shadow-md: overlaid without affecting card layout.
           // z-20 to sit above the card content and any citation chips.
-          className="absolute left-0 top-full z-20 mt-0.5 min-w-[160px] rounded border border-border bg-card p-1 "
+          className="absolute left-0 top-full z-20 mt-0.5 min-w-[160px] rounded border border-border bg-card p-1 shadow-md"
         >
           <button
             onClick={() => void handleCreateAlert()}

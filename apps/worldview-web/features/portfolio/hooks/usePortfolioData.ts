@@ -35,14 +35,8 @@
 // only TanStack Query), and useCallback closures over setState. None of that
 // runs in a server component.
 
-import { useMemo, useCallback } from "react";
+import { useState, useMemo, useCallback } from "react";
 import { useQuery, useQueryClient, useMutation } from "@tanstack/react-query";
-// WHY useActivePortfolio: the W1 PortfolioSwitcher writes portfolio selections to
-// ActivePortfolioContext. usePortfolioData must read from the same context so the
-// portfolio page re-renders when the user switches portfolios via the TopBar chip.
-// Previously used local useState which was invisible to the context — switching
-// portfolios in the TopBar had no effect on the portfolio page (F-DS-001, QA 2026-05-21).
-import { useActivePortfolio } from "@/contexts/ActivePortfolioContext";
 
 import { createGateway } from "@/lib/gateway";
 // WHY qk: all queryKey literals must go through the central factory so
@@ -164,13 +158,12 @@ export function usePortfolioData(
   const { accessToken, selectedPeriod = "1D" } = args;
   const queryClient = useQueryClient();
 
-  // WHY context (not local useState): the TopBar PortfolioSwitcher writes to
-  // ActivePortfolioContext when the user clicks a portfolio. Reading from the
-  // same context means this hook re-renders instantly when the switcher fires.
-  // Local useState was invisible to the context — the page never re-fetched
-  // holdings for the newly selected portfolio (F-DS-001, QA 2026-05-21).
-  const { activePortfolioId: contextPortfolioId, setActivePortfolio: setSelectedPortfolioId } =
-    useActivePortfolio();
+  // WHY selectedPortfolioId in state (not URL): switching portfolios is
+  // ephemeral. The URL always shows /portfolio regardless of which portfolio
+  // is active.
+  const [selectedPortfolioId, setSelectedPortfolioId] = useState<string | null>(
+    null,
+  );
 
   // ── Query 1: portfolio list ────────────────────────────────────────────
   // WHY qk.portfolios.all: the root ["portfolios"] key; invalidating it
@@ -199,13 +192,11 @@ export function usePortfolioData(
     });
   }, [portfolios]);
 
-  // WHY derived (not stored): context provides the selection; fall back to the
-  // first portfolio (ROOT by sort order) when context is null or points to a
-  // portfolio that no longer exists (e.g. after deletion).
+  // WHY derived activePortfolioId (not stored): default = sortedPortfolios[0]
+  // (= ROOT once it lands in S1's response). Selecting a portfolio updates
+  // selectedPortfolioId. Storing both would cause a double-render on init.
   const activePortfolioId =
-    (contextPortfolioId && sortedPortfolios?.some((p) => p.portfolio_id === contextPortfolioId))
-      ? contextPortfolioId
-      : sortedPortfolios?.[0]?.portfolio_id ?? null;
+    selectedPortfolioId ?? sortedPortfolios?.[0]?.portfolio_id ?? null;
   const activePortfolio = sortedPortfolios?.find(
     (p) => p.portfolio_id === activePortfolioId,
   );
@@ -468,20 +459,6 @@ export function usePortfolioData(
     void queryClient.invalidateQueries({
       queryKey: qk.portfolios.bundle(activePortfolioId),
     });
-    // WHY cascade-invalidate qk.portfolios.detail(id) (Wave G QA F-001):
-    // Wave G added several portfolio-scoped sub-resources under the
-    // [QK_VERSION,"portfolios","detail",id,...] tree — riskMetrics,
-    // realizedPnL, valueHistory, attribution, twr, holdingTx, holdingLots,
-    // holdingValueHistory, sectorAttribution, concentration. The flat
-    // legacy keys above (holdingsByPortfolio, transactionsByPortfolio,
-    // performance, bundle) live OUTSIDE that subtree, so a position add
-    // never propagated to the new analytics surfaces — they kept serving
-    // pre-add data until staleTime expired (up to 5min). The cascade
-    // pattern documented in keys.ts:20-25 is exactly this: a single
-    // detail() invalidation matches every nested key in one shot.
-    void queryClient.invalidateQueries({
-      queryKey: qk.portfolios.detail(activePortfolioId),
-    });
   }, [queryClient, activePortfolioId, selectedPeriod]);
 
   // ── F-013: Delete portfolio mutation ──────────────────────────────────
@@ -512,8 +489,6 @@ export function usePortfolioData(
       // If we just deleted the active one, fall back to whichever portfolio
       // sortedPortfolios?.[0] resolves to next render (typically root).
       if (activePortfolioId === deletedId) {
-        // Reset context selection so the page falls back to the first surviving
-        // portfolio (sortedPortfolios[0]) rather than keeping a stale deleted id.
         setSelectedPortfolioId(null);
       }
     },
@@ -522,7 +497,7 @@ export function usePortfolioData(
   return {
     portfolios,
     sortedPortfolios,
-    selectedPortfolioId: contextPortfolioId,
+    selectedPortfolioId,
     setSelectedPortfolioId,
     activePortfolioId,
     activePortfolio,

@@ -50,7 +50,6 @@ or articles, perform NLP processing, manage portfolios.
 | GET | `/api/v1/fundamentals/{instrument_id}/snapshot` | Pre-computed derived metrics snapshot — returns one flat row from `instrument_fundamentals_snapshot` table (eps_ttm, beta, avg_volume_30d, operating_cash_flow, capex, free_cash_flow, fcf_margin, interest_coverage, net_debt_to_ebitda, credit_rating, updated_at). Always 200 — all fields null for un-backfilled instruments. PLAN-0050 Wave D. | — |
 | GET | `/api/v1/fundamentals/timeseries` | Metric timeseries — query params: `instrument_id`, `metric`, `start_date`, `end_date`, `period_type`, `limit`. Returns 422 if `start_date > end_date`. | — |
 | POST | `/api/v1/fundamentals/screen` | Screen instruments by metric thresholds (AND logic) — JSON body: `filters[]` (each filter may include `metric`, `min_value`, `max_value`, `period_type`, `sector`), `limit` (default 50, max 200), `offset` (max 5000), `sort_by` (metric name, `ticker`, or `name`; validated whitelist — SQL injection guard), `sort_order` (`asc`/`desc`). Response includes `ticker`, `name`, `exchange`, `sector` fields + `total` (COUNT(*) OVER()). | — |
-| POST | `/api/v1/fundamentals/batch` | **PLAN-0095 W2 T-W2-01** — batch quarterly fundamentals history for many tickers in one HTTP call. Body: `{tickers: list[str] (cap 25), periods: int = 5}`. **PLAN-0097 T-W3-02** split execution into two explicit `asyncio.gather` phases (resolve → fetch) so per-phase error classification is unambiguous; lookups run concurrently regardless of N. **PLAN-0097 T-W3-04** replaced raw `str(exc)` in `reason` with one of four typed codes — `invalid_ticker`, `upstream_timeout`, `upstream_404`, `upstream_error` — and routes full exception detail to structlog only (BP-582). Response: `{results: {ticker: {status: "ok"\|"error", periods?, reason?}}}`. Returns 422 if `len(tickers) > 25`. | — |
 | GET | `/api/v1/fundamentals/metrics/{instrument_id}` | List available metric names for an instrument | — |
 | GET | `/api/v1/securities` | List securities — query params: `figi`, `isin`, `limit`, `offset` (paginated DB scan when unfiltered) | — |
 | GET | `/api/v1/securities/{security_id}` | Security detail by FIGI or ISIN | — |
@@ -61,9 +60,6 @@ or articles, perform NLP processing, manage portfolios.
 | GET | `/api/v1/market/period-movers` | Top gainers or losers — query params: `period` (`1W`/`1M`), `type` (`gainers`/`losers`), `limit` (1–50, default 10). Returns instruments sorted by period_return_pct. | — |
 | GET | `/internal/v1/price/{instrument_id}` | Price snapshot for a single instrument — cache-aside: Valkey → Quote → OHLCV fallback. Returns 404 if no data available. **Internal endpoint — S9 only.** | Valkey |
 | POST | `/internal/v1/price/batch` | Price snapshots for up to 50 instruments. Instruments with no data are silently omitted (partial results valid). **Internal endpoint — S9 only.** | Valkey |
-| GET | `/internal/v1/instruments/top-by-market-cap` | Top-N active instruments sorted by latest market capitalisation (NULLs last). Query params: `n` (1-5000, default 500), `offset` (default 0). Response: `{total, offset, limit, results:[{id,symbol,exchange,market_cap_usd,currency_code}]}`. **Internal endpoint — consumed by market-ingestion's `FundamentalsRefreshWorker` (PLAN-0100 W5).** | — |
-| GET | `/internal/v1/market/tape` | Futures / pre-market tape snapshot. Query param: `symbols=SPY,QQQ,VIX` (CSV, max 20, case-insensitive). Response: `{as_of, tickers:[{symbol,last_close,premkt_price,premkt_pct,session}]}`. `session` is one of `pre-mkt`/`open`/`after-hours`/`closed`/`prior_close`/`unavailable`. **Two-tier fallback (PLAN-0103 W7 / BP-628)**: tier 1 uses intraday 5m bar or fresh `quote.last`; tier 2 falls back to the most recent `ohlcv_bars` daily close with `session="prior_close"` and day-over-day change from the previous daily bar; `session="unavailable"` is reserved for true gaps (no OHLCV row at all). Per-symbol Prom counter `tape_symbol_data_source_total{symbol,source}` exposes which tier served each request. **Never 500s** — per-symbol errors degrade to `session="unavailable"`. **Internal endpoint — consumed by rag-chat brief generator (PLAN-0102 W3).** | Valkey 60s |
-| GET | `/internal/v1/calendar/earnings` | Forward-looking earnings calendar. Query params: `from=YYYY-MM-DD&to=YYYY-MM-DD` (range cap 90 days). Reads the EODHD-sourced `earnings_calendar` table joined with `instruments`. Response: `{from, to, events:[{symbol,entity_id,report_date,when,period,consensus_eps,consensus_rev_usd}]}`. `when` is `BMO`/`AMC`/`DMH`/`null`. Fail-open on DB error (empty events, not 500). **Internal endpoint — consumed by rag-chat brief generator (PLAN-0102 W3).** | Valkey 5m |
 
 > **Note on path ordering**: Literal-segment routes (`/ohlcv/bulk`, `/quotes/latest`,
 > `/instruments/lookup`, `/instruments/on-demand-profile`) are registered **before** path-param routes
@@ -79,36 +75,6 @@ or articles, perform NLP processing, manage portfolios.
 >
 > `/metrics` is exposed by the `observability.metrics.add_prometheus_middleware` middleware,
 > not a registered router endpoint.
-
----
-
-## Symbol Resolution (PLAN-0093 T-C-3-01, 2026-05-23)
-
-Audit 2026-05-23 (F-NPL-FUNDAMENTALS-001) flagged that `PriceImpactLabellingWorker`
-and `fundamentals_refresh` were hitting `market-data/api/v1/instruments/symbol/<TICKER>`
-and getting 404 for every ticker (AAPL, MSFT, NVDA, ...) → `article_impact_windows`
-stayed empty + `fundamentals_ohlcv` embeddings stayed NULL.
-
-**Investigation outcome: (A) — the correct symbol-resolver endpoint already exists.**
-
-| | |
-|---|---|
-| **Endpoint** | `GET /api/v1/instruments/lookup` |
-| **Arg shape** | `?symbol={ticker}` (one of `symbol` / `isin` / `id` is required) |
-| **Auth** | `X-Internal-JWT` required (workers mint one via `POST /internal/v1/service-token`) |
-| **200 body** | `{"id": "<uuid>", "symbol": "...", "exchange": "...", "is_active": true}` (with `?extra_info=true`, additionally returns `name`, `isin`, `sector`, `industry`, `country`, `currency_code`, `description`) |
-| **404** | `{"detail": "Instrument not found"}` — ticker has no row in `instruments` |
-| **400** | When none of `symbol`/`isin`/`id` is supplied |
-| **Source** | `services/market-data/src/market_data/api/routers/instruments.py` (function `lookup_instrument`) |
-| **Use case** | `services/market-data/src/market_data/application/use_cases/lookup_instrument.py` (`InstrumentLookupUseCase.execute`) |
-
-The legacy `GET /api/v1/instruments/symbol/{ticker}` and `GET /api/v1/instruments/{id}`
-routes were **removed by PLAN-0073 B-1** and now return 404. The audit-cited 404 storm
-was caused by the workers still pointing at the legacy paths. Both workers
-(`nlp-pipeline.../market_data_client.py:_resolve_instrument_id` and
-`knowledge-graph.../fundamentals_refresh.py`) were already migrated to
-`/instruments/lookup?symbol=` before this audit but the workers' Valkey skip-set
-was missing — see PLAN-0093 T-C-3-02 (7-day backoff on persistent 404s).
 
 ---
 
@@ -263,16 +229,6 @@ CREATE TABLE instrument_fundamentals_snapshot (
     interest_coverage   NUMERIC(12, 4) NULL,
     net_debt_to_ebitda  NUMERIC(12, 4) NULL,
     credit_rating       VARCHAR(10) NULL,
-    -- ── Wave L-4a snapshot fields (PLAN-0089, migration 025) ─────────────────
-    -- analyst_consensus + share_statistics JSONB projection. Ownership and
-    -- short stored as DECIMAL FRACTIONS (e.g. 0.743 = 74.3%, 0.034 = 3.4%) to
-    -- match the fcf_margin convention. Consensus rating on a 1-5 scale where
-    -- higher = more bullish (text labels Buy/Hold/Sell map to 4.0/3.0/2.0;
-    -- numeric raw EODHD values pass through unchanged).
-    analyst_target_price        NUMERIC(18, 4) NULL,
-    analyst_consensus_rating    NUMERIC(4, 2)  NULL,
-    institutional_ownership_pct NUMERIC(8, 6)  NULL,
-    short_percent               NUMERIC(8, 6)  NULL,
     updated_at          TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 CREATE INDEX ix_fundamentals_snapshot_updated_at ON instrument_fundamentals_snapshot (updated_at);
@@ -420,112 +376,6 @@ All consumers extend `BaseKafkaConsumer[dict]` from `libs/messaging`. They:
 
 **Snapshot UPSERT COALESCE policy (PLAN-0050 QA iter-2 F-Q2-03)**: The `ON CONFLICT DO UPDATE` clause in `_UPSERT_SQL` uses `COALESCE(EXCLUDED.col, instrument_fundamentals_snapshot.col)` for all 10 nullable metric columns (`eps_ttm`, `beta`, `avg_volume_30d`, `operating_cash_flow`, `capex`, `free_cash_flow`, `fcf_margin`, `interest_coverage`, `net_debt_to_ebitda`, `credit_rating`). This prevents a partial EODHD re-poll (e.g., missing cash-flow section) from silently overwriting previously-valid data with NULL. `updated_at` is always refreshed unconditionally via `now()` regardless of which sections were present. A poll that provides no new data for a column simply preserves the existing value.
 
-#### Period-type contract
-
-Fundamentals section tables (`income_statements`, `balance_sheets`,
-`cash_flow_statements`) store both QUARTERLY and ANNUAL rows under the same
-section enum, distinguished by the `period_type` column. The repository
-read helper `query_fundamentals` accepts an optional `period_type` filter:
-
-- **`income_statement`** — the use case (`GetFundamentalsHistoryUseCase`)
-  MUST pass `period_type=PeriodType.QUARTERLY` explicitly (PLAN-0095 T-W1-02).
-  The repo deliberately does **not** apply a default here so that future
-  callers needing ANNUAL rows are forced to be explicit.
-- **`balance_sheet`** and **`cash_flow`** — the repo defaults to
-  `PeriodType.QUARTERLY` when the caller passes `None` (PLAN-0096 T-W1-01,
-  **BP-546**). This is a defensive default: there are no current direct
-  callers for these sections, but any future caller would otherwise silently
-  inherit the mixed-periodicity trap that BP-540 / BP-543 fixed for income
-  statement. Pass `period_type=PeriodType.ANNUAL` explicitly to query annual
-  rows.
-- **`highlights`** — TTM-only by EODHD contract; intentionally **not**
-  filtered by `period_type`. The `GetFundamentalsHistoryUseCase` only reads
-  TTM-safe scalar fields (`PERatio`, `MarketCapitalization`) from this
-  section, and every row in the use-case response carries an explicit
-  `period_type="QUARTERLY"` label so downstream consumers (rag-chat tool
-  layer, LLM grounding) can never quote a TTM number as a quarterly figure
-  without seeing the mismatch. See PLAN-0097 T-W1-01 / **BP-577**.
-
-##### Contract summary (PLAN-0097 W4 T-W4-05)
-
-The cumulative period-type contract across PLAN-0095 / PLAN-0096 / PLAN-0097
-is:
-
-1. **Every fundamentals read MUST be deterministic with respect to
-   periodicity.** Callers either pass `period_type` explicitly or rely on a
-   repository default that is documented in the function docstring. A read
-   path that silently mixes QUARTERLY and ANNUAL rows is a P0 data-integrity
-   bug (BP-540, BP-543, BP-546).
-2. **Repository defaults are defensive, not implicit.** The repo defaults
-   `balance_sheet` and `cash_flow` to QUARTERLY because the EODHD pipeline
-   ingests both periodicities into the same table and an unfiltered query
-   would interleave them. New section tables MUST adopt the same
-   defensive-default pattern unless they only ever store one periodicity.
-3. **Every row leaving the use-case layer carries an explicit `period_type`
-   field.** This is the second line of defense — even if a future bug
-   reintroduces interleaving at the repo, the downstream consumer (rag-chat
-   tool layer, frontend cards, LLM grounding payloads) sees the label and
-   either filters or surfaces the mismatch.
-4. **TTM-only sections (`highlights`, `valuation_ratios`) MUST label their
-   rows as the dominant periodicity** so a TTM number is never quoted as a
-   quarterly figure without the label disagreeing visibly. See PLAN-0097
-   T-W1-01.
-5. **Rule R20 — fundamentals queries MUST specify `period_type` explicitly
-   or accept a documented repo default** is codified in `RULES.md`
-   (R20-companion: PLAN-0097 W4 added the contract; the rule itself
-   remains the union of R20 + the docs above). The repo unit tests in
-   `services/market-data/tests/unit/test_query_fundamentals.py` enforce the
-   default for every section.
-
-#### Freshness tracking
-
-Every successful `FundamentalsConsumer` cycle bumps
-`instruments.last_fundamentals_ingest_at` inside the **same UoW** as the
-section writes (PLAN-0096 T-W1-02, **BP-545**). The column is observational
-only — no Kafka event, no outbox row. The bump is gated on at least one
-section having been materialised (a zero-section payload does not lie about
-freshness).
-
-The repository method (`PgInstrumentRepository.touch_fundamentals_ingest_at`)
-issues the UPDATE *and* immediately `flush()`-es the session (PLAN-0101,
-**BP-610**). The flush is load-bearing: the same UoW also runs
-`_upsert_fundamentals_snapshot` inside a try/except that swallows exceptions,
-so a later snapshot-side failure would otherwise mask the touch UPDATE and
-leave the column at its previous value (live observed 0/629 non-NULL rows
-before the fix landed). Any future write that targets a tracking column in
-this service MUST follow the same flush-inside-the-repo convention so callers
-cannot forget.
-
-Operators can identify stale tickers with a single index-friendly query:
-
-```sql
-SELECT symbol FROM instruments
- WHERE last_fundamentals_ingest_at < NOW() - INTERVAL '7 days'
-    OR last_fundamentals_ingest_at IS NULL;
-```
-
-`NULL` means "never ingested" (e.g., the row was seeded by the
-OHLCV/quotes consumer before fundamentals arrived) and should typically be
-treated as "stale" by freshness alerts.
-
-**No active refresh worker (BP-578)**: there is currently no scheduled
-worker polling EODHD for new fundamentals — refresh is opportunistic and
-depends on the market-ingestion scheduler / external triggers. Until a
-proper `FundamentalsRefreshWorker` lands (deferred to PLAN-0098), use
-`scripts/refresh_fundamentals.py` to fan out
-`POST /api/v1/ingest/trigger` calls for a configurable ticker set:
-
-```bash
-MARKET_INGESTION_URL=http://localhost:8084 \
-  python scripts/refresh_fundamentals.py --tickers AMD,NVDA
-```
-
-The script accepts `--dry-run`, custom ticker lists, and a `--provider`
-override. See its module docstring for the full operational contract and
-the 2026-05-27 audit
-(`docs/audits/2026-05-27-plan-0097-data-integrity-investigation.md` Part B)
-for the underlying freshness-gap analysis.
-
 **Quote NULL semantics (D-004)**: `Quote.bid`, `.ask`, `.last`, `.volume` are `Decimal | None` / `int | None`. `NULL` means "no data available"; `Decimal("0")` means "zero trading activity". `CanonicalQuote.from_dict()` and the quote repo both preserve `None` — no coercion to zero.
 
 The UoW is accessed via `self._current_uow` which is set by the base class before
@@ -639,14 +489,6 @@ python -m market_data.infrastructure.messaging.consumers.ohlcv_consumer_main
 python -m market_data.infrastructure.messaging.consumers.quotes_consumer_main
 
 # Fundamentals consumer (group: market-data-fundamentals)
-# PLAN-0102 W6 / BP-617: per-message watchdog default is 90 s (was 45 s in
-# the library default). Override with MARKET_DATA_FUNDAMENTALS_TIMEOUT_S if a
-# different ceiling is required; session_timeout_ms + heartbeat_interval_ms
-# scale automatically to preserve the watchdog-wins-over-coordinator
-# invariant. Tail-latency observability: Prometheus histogram
-# `fundamentals_consumer_processing_ms` with buckets
-# [1s, 5s, 10s, 30s, 45s, 60s, 90s, 120s] — alert on any non-zero count in
-# the 60 s bucket sustained for >15 min (next bump imminent).
 python -m market_data.infrastructure.messaging.consumers.fundamentals_consumer_main
 
 # Outbox dispatcher (instrument lifecycle events)
@@ -775,7 +617,7 @@ are auto-populated at construction time.
 |-------|-------------|-----------------|----------------|---------|
 | `InstrumentCreated` | `market.instrument.created` | 3 | `instrument_id`, `security_id`, `symbol`, `exchange`, `name`, `description`, `isin`, `cusip`, `figi`, `lei`, `primary_ticker` | Fundamentals materialised — first time `has_fundamentals` flips True with a real EODHD `Name`. v3 adds the four EODHD identifier fields (PLAN-0057 Wave C-1). |
 | `InstrumentUpdated` | `market.instrument.updated` | 1 | `instrument_id`, `symbol`, `exchange`, `has_ohlcv`, `has_quotes`, `has_fundamentals` | Capability flag transitions OTHER than first-fundamentals. |
-| `InstrumentDiscovered` | `market.instrument.discovered.v1` | 1 | `instrument_id`, `symbol`, `exchange`, `entity_id` (≡ `instrument_id` per M-017 / [ADR-F-16](../architecture/decisions/ADR-F-16-instrument-entity-id-unification.md)) | OHLCV / Quotes saw a previously-unknown symbol; KG seeds a lightweight placeholder canonical from this event (PLAN-0057 Wave D-2). Post-F2: the KG consumer inserts `canonical_entities.entity_id = event.instrument_id` directly (no fresh UUID minted). |
+| `InstrumentDiscovered` | `market.instrument.discovered.v1` | 1 | `instrument_id`, `symbol`, `exchange`, `entity_id` (= instrument_id) | OHLCV / Quotes saw a previously-unknown symbol; KG seeds a lightweight placeholder canonical from this event (PLAN-0057 Wave D-2). |
 
 ### Usage Example
 
@@ -981,10 +823,6 @@ Each table stores one period-specific snapshot of one fundamentals section:
 | Growth | Quarterly earnings growth YoY | `quarterly_earnings_growth_yoy` | decimal | `highlights` |
 | Cap | Market capitalization | `market_capitalization` | USD | `highlights` |
 | Risk | Beta | `beta` | ratio | `technicals_snapshot` |
-| Performance | 1M / 3M / 6M / YTD / 1Y / 3Y return | `return_1m`, `return_3m`, `return_6m`, `return_ytd`, `return_1y`, `return_3y` | fraction (0.05 = 5%) | computed from `ohlcv_bars` |
-| Technical | Distance from 52-week high / low | `dist_from_52w_high_pct`, `dist_from_52w_low_pct` | fraction (-0.10 = 10% below high) | computed from `ohlcv_bars` |
-
-**Wave L-3 computed metrics (PLAN-0089, shipped 2026-05-28)**: the 8 performance/technical rows above are produced by `ComputedMetricsBackfillWorker` (`market_data.infrastructure.db.computed_metrics_worker`) — 8 LATERAL-JOIN SQL passes against `ohlcv_bars` with `COALESCE(adjusted_close, close)` fallback (counter logged at WARNING when nonzero). Persisted as `fundamental_metrics` rows with `period_type='SNAPSHOT'`, `section='computed_returns'`. Scheduled daily at 02:00 UTC by `_computed_metrics_refresh_loop` in `app.py` (configurable via `COMPUTED_METRICS_REFRESH_HOUR_UTC` env, 0-23; 20-hour minimum-interval guard). Screener API: `POST /v1/fundamentals/screen` accepts 16 shorthand `*_min`/`*_max` fields per `ScreenFilterRequest` (e.g. `return_1y_min: 0.20`); router expands them into `ScreenFilter(metric=…, period_type='SNAPSHOT')` entries. All 8 names accepted as `sort_by` — a no-bound `ScreenFilter` is injected when `sort_by` references a computed metric not in `filters` to ensure the column is projected for `ORDER BY`. Migration `029_seed_l3_computed_metrics_fields.py` seeds the 8 `screen_field_metadata` rows (`field_type='numeric'`, `unit='percent_1'`); byte-equality with `_get_static_screen_fields()` enforced by `test_l3_migration_lockstep.py` (the 6-hour refresh loop overwrites the seed otherwise).
 
 **Documented gaps** (PLAN-0051 T-B-2-01) — frontend renders these inputs as `disabled` with a "Backend pending" badge; fix tracked in `docs/audits/2026-04-29-screener-metric-gap.md`:
 
@@ -1042,17 +880,12 @@ Backfill summary includes `scanned_rows`, `extracted_metric_rows`, `inserted_row
 |---|---|---|
 | `001` | `None` | Initial schema — core tables (securities, instruments, ohlcv_bars, quotes) |
 | `002` | `001` | Convert `ohlcv_bars` to TimescaleDB hypertable (`create_hypertable`, 1-month chunks) |
-| `003` | `002` | Add 18 fundamentals tables (period-based: income_statement, balance_sheet, etc.). Note: of these 18 only 17 are mixin-derived; `CompanyProfileModel` is mixin-exempt (snapshot-only, no `period_type` column). Earlier docs cited "14 tables" — corrected post-PLAN-0097 W4 after migration 022 enumerated all 18 for `ANALYZE`. |
+| `003` | `002` | Add 14 fundamentals tables (period-based: income_statement, balance_sheet, etc.) |
 | `004` | `003` | Add infrastructure tables (ingestion_events, failed_tasks, outbox_events) with new column schema |
 | `005` | `004` | Add 4 non-period fundamentals tables (company_profiles, highlights, institutional_holders, fund_holders, insider_transactions_snapshot); drop dividend_summary |
 | `002` (consolidated) | `001` (consolidated) | Add `fundamental_metrics` read-optimized projection table with unique constraint and indexes |
 | `003` (consolidated) | `002` (consolidated) | Add `lowercase_outbox_status` migration |
 | `004` (consolidated) | `003` (consolidated) | Add `screen_field_metadata` table (PRD-0017 Wave B-1) |
-| `019` | `018` | Add composite `(instrument_id, period_end_date)` indexes on 18 fundamentals section tables (PLAN-0095 T-W1-03) — 30-100x speedup on `query_fundamentals` history reads |
-| `020` | `019` | Snapshot `period_type` columns |
-| `021` | `020` | Add `instruments.last_fundamentals_ingest_at` (PLAN-0096 T-W1-02, BP-545) |
-| `022` | `021` | `ANALYZE` the 18 fundamentals tables post-019 so the planner picks the composite indexes immediately (PLAN-0097 T-W3-01, **BP-581**). Wrapped in `op.get_context().autocommit_block()` because ANALYZE cannot execute inside a transaction. Downgrade is documented no-op. |
-| `023` | `022` | Idempotent re-application of 019's composite indexes via `CREATE INDEX IF NOT EXISTS` (PLAN-0097 T-W4-02) |
 
 > **Note**: Migrations 001–005 were consolidated into a single `001` initial schema.
 > The `fundamental_metrics` migration is `002` relative to the consolidated `001`.
@@ -1218,7 +1051,7 @@ make test -- tests/unit/ -v
 |---|---|
 | `tests/integration/fixtures/sample_ohlcv.jsonl` | 5 valid daily OHLCV bars for `test-inst-001` |
 | `tests/integration/fixtures/sample_quotes.json` | 1 valid quote |
-| `tests/integration/fixtures/sample_fundamentals.json` | Income statement, balance sheet, valuation ratios (3 of 18 sections) |
+| `tests/integration/fixtures/sample_fundamentals.json` | Income statement, balance sheet, valuation ratios (3 of 14 sections) |
 
 ---
 

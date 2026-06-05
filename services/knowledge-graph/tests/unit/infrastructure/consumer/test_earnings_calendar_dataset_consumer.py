@@ -447,7 +447,7 @@ class TestEarningsCalendarConsumerStorageErrors:
     def test_transient_storage_exception_propagates(self) -> None:
         """Transient storage error re-raised so BaseKafkaConsumer does NOT commit offset."""
         consumer, event_repo, exposure_repo, entity_repo = _make_consumer(
-            storage_error=RuntimeError("minio connection refused"),
+            storage_error=RuntimeError("minio connection refused")
         )
 
         with (

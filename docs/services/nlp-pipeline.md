@@ -116,37 +116,24 @@ Key behaviours:
 
 ### Block 5 — Routing Score
 
-#### Routing signal v2 (PLAN-0093 Sub-Plan C, 2026-05-23)
-
-Audit 2026-05-23 (F-NPL-003/004/006, F-NPL-ROUTING-001) found that 3 of the original
-8 signals were permanently zero in the current single-pass routing architecture:
-
-| Dropped signal | Reason it always fired 0.0 |
-|---|---|
-| `watchlist` | Checks `mention.resolved_entity_id`, but routing runs BEFORE entity resolution |
-| `novelty` | Hardcoded to `1.0` at the call site — MinHash novelty runs AFTER routing |
-| `price_impact` | Sourced from `article_impact_windows` which is empty (F-NPL-FUNDAMENTALS-001) |
-
-PLAN-0093 C-1 drops these signals from `compute_routing_score()` and re-weights the
-remaining 5 so they still sum to exactly 1.0 (enforced by module-level assertion).
-Re-adding the dropped signals would require implementing two-pass routing
-(route → resolve → re-route); deferred to a follow-up plan.
-
-#### Active signal weights (v2)
+Computes a composite routing score from 8 weighted signals. Weights sum to exactly 1.0 (enforced
+by a module-level assertion):
 
 | Signal | Weight | Data source |
 |--------|--------|-------------|
-| `entity_density` | 0.35 | Block 4 mention count / section count |
-| `source_reliability` | 0.30 | `source_trust_weights` table |
-| `recency` | 0.15 | `published_at` age |
-| `document_type` | 0.10 | Source type (filings > news) |
-| `extraction_yield` | 0.10 | Prior LLM extraction quality for this source |
+| `entity_density` | 0.25 | Block 4 mention count / section count |
+| `source_reliability` | 0.20 | `source_trust_weights` table |
+| `novelty` | 0.15 | Block 8 MinHash similarity |
+| `recency` | 0.10 | `published_at` age |
+| `watchlist` | 0.10 | Valkey SET `nlp:v1:watched_entities` (best-effort, 0.0 on failure) |
+| `price_impact` | 0.10 | `article_impact_windows` (0.0 when not yet labelled) |
+| `document_type` | 0.05 | Source type (filings > news) |
+| `extraction_yield` | 0.05 | Prior LLM extraction quality for this source |
 
-Routing tier boundaries (recalibrated for the v2 ceiling — the live-signal max is
-now ~0.90+ vs ~0.65 in v1):
-- `DEEP` ≥ 0.75 (was 0.70)
-- `MEDIUM` ≥ 0.45 (was 0.35)
-- `LIGHT` ≥ 0.20 (unchanged)
+Routing tier boundaries:
+- `DEEP` ≥ 0.70
+- `MEDIUM` ≥ 0.35 (lowered from 0.45 — watchlist signal fires post-resolution)
+- `LIGHT` ≥ 0.20
 - `SUPPRESS` < 0.20
 
 ### Block 6 — Suppression Gate
@@ -240,13 +227,11 @@ Runs on MEDIUM and DEEP tier only. Uses `Qwen/Qwen3-235B-A22B-Instruct-2507` via
 | GET | `/api/v1/entities` | — | Search entities by mention text |
 | GET | `/api/v1/entities/{id}` | — | Entity detail with resolution statistics |
 | GET | `/api/v1/entities/{id}/articles` | — | Articles mentioning entity with `display_relevance_score`, `sentiment`, `impact_score`. Params: `start_date`, `end_date`, `order_by` |
-| GET | `/api/v1/entities/{id}/sentiment-timeseries` | X-Internal-JWT | Daily sentiment aggregates (article_count, avg_relevance, positive_ratio, negative_ratio, avg_impact_score). Params: `days` [1–365, default 90]. PLAN-0091 WIP. |
 | POST | `/api/v1/entities/resolve` | — | Query-time 5-stage entity resolution |
 | POST | `/api/v1/search/chunks` | — | ANN chunk/section search with entity facets and citation metadata |
 | POST | `/api/v1/vector-search` | — | Semantic section/chunk search (legacy) |
 | GET | `/api/v1/search/documents` | X-Internal-JWT | Full-text search across articles + EDGAR with entity facets. Params: `q`, `entity_id` (multi), `scope`, `source_type`, `date_from`, `date_to`, `date_preset`, `page`, `page_size` |
 | GET | `/internal/v1/llm-costs` | X-Internal-JWT (system) | LLM cost aggregates. Params: `period` (YYYY-MM), `provider`, `breakdown` |
-| GET | `/internal/v1/instruments/{instrument_id}/news-rollup-7d` | X-Internal-JWT (system) | PLAN-0089 Wave L-5a: 7d news rollup for the S3-side screener sync worker. Returns `news_count_7d`, `llm_relevance_7d_max`, `display_relevance_7d_weighted`. Non-failing — instruments with no recent articles return zeros/nulls + 200. Sample response: `{"instrument_id":"...","news_count_7d":7,"llm_relevance_7d_max":0.82,"display_relevance_7d_weighted":0.65}` |
 | POST | `/api/v1/reprocess/{article_id}` | X-Admin-Token | Re-enqueue article for reprocessing |
 | GET | `/admin/dlq` | X-Admin-Token | List open DLQ entries |
 | GET | `/admin/dlq/{id}` | X-Admin-Token | Get single DLQ entry |
@@ -276,43 +261,6 @@ Three fallback branches (tracked by Prometheus counter `news_display_score_path_
 | `content.article.stored.v1` | `nlp-pipeline-group` | Trigger NLP enrichment — at-least-once; manual offset commit after all DB writes |
 | `portfolio.watchlist.updated.v1` | `nlp-watchlist-group` | SADD / SREM on Valkey SET `nlp:v1:watched_entities` for Block 5 signal |
 
-#### Legacy article handling (PLAN-0096 W4 — BP-575)
-
-Pre-PLAN-0086 Wave A-1 `content.article.stored.v1` payloads do not carry a
-`tenant_id` field.  Migration `nlp_pipeline/alembic/versions/0020_entity_mentions_tenant_not_null.py`
-added a `NOT NULL` constraint on `entity_mentions.tenant_id`, which caused
-every such legacy message to crash on INSERT.  Because the consumer's
-exception handler classifies `IntegrityError` as retryable, the Kafka
-offset never advanced — the 2026-05-26 audit measured **94 messages stuck
-in flight** with `entity_mentions` row count zero for >24h, while the
-`content.article.stored.v1.dlq` topic stayed empty (no fan-out fires until
-a single message exceeds max-retries, which never happens for fully-stuck
-batches).
-
-The fix:
-
-1. `ArticleProcessingConsumer.process_message` substitutes
-   `common.ids.PUBLIC_TENANT_ID` (`00000000-0000-0000-0000-000000000000`)
-   when both the Kafka headers and the Avro payload omit `tenant_id`.
-2. The substitution emits a structured WARN
-   `article_consumer.legacy_tenant_id_sentinel_applied` with
-   `article_id`, `topic`, `partition`, `offset`, and the sentinel UUID so
-   operators can quantify legacy passthrough in dashboards.
-3. New code MUST stamp `tenant_id` on every emitted payload.  The sentinel
-   exists exclusively to drain the in-flight backlog and protect against
-   future producer bugs — never as a substitute for real tenant
-   propagation.
-
-Operator tooling:
-
-- `scripts/replay_stuck_articles.py` — inspects per-partition lag for the
-  consumer group and peeks the actual payloads to confirm the legacy
-  shape.  Idempotent; safe to re-run.  See `--dry-run` for read-only
-  mode.
-- `infra/prometheus/rules/nlp_pipeline_retry_storm.yml` — fires
-  `NlpPipelineRetryStorm` when the topic has a non-zero backlog AND
-  consumption rate is zero for >10 min.
-
 ### Produced
 
 | Topic | Event | Key | Via | Avro Schema |
@@ -321,21 +269,6 @@ Operator tooling:
 | `nlp.signal.detected.v1` | `NlpSignalDetected` | `doc_id` | Outbox (`nlp_db`) | `nlp.signal.detected.v1.avsc` |
 | `entity.provisional.queued.v1` | `EntityProvisionalQueued` | `entity_id` | Outbox (`nlp_db`) | `entity.provisional.queued.v1.avsc` |
 | `intelligence.temporal_event.v1` | temporal event | — | Outbox (`nlp_db`) | `intelligence.temporal_event.v1.avsc` |
-
-#### Intentional asymmetry: enriched vs. temporal event filtering (DP-F001)
-
-The two produced event families filter unresolved entity mentions differently — by design.
-`nlp.article.enriched.v1` carries `raw_relations_json`, `raw_events_json`, and `raw_claims_json`
-payloads built by `_build_raw_*` in `infrastructure/messaging/consumers/blocks/enriched_event.py`.
-Those builders drop any mention that resolves to neither a canonical entity nor a provisional
-queue id, because the downstream graph writer (S7 Block 12) would have no entity to anchor the
-edge to. `intelligence.temporal_event.v1` does the opposite: it emits every detected event
-regardless of how many participants the resolver tied to canonical entities. Macro events such
-as CPI prints, FOMC decisions, and sanctions announcements legitimately have zero company
-participants, and S7's `TemporalEventConsumer` accepts `exposed_entities=[]` without rejection.
-This asymmetry is intentional — flagged DP-F001 in
-`docs/audits/2026-05-24-investigation-qa-open-items.md` so future QA passes do not re-open it
-as a bug.
 
 #### Key schema fields — `nlp.article.enriched.v1`
 
@@ -506,8 +439,8 @@ All environment variables use the prefix `NLP_PIPELINE_`. Loaded by `pydantic-se
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `NLP_PIPELINE_ROUTING_TIER_DEEP` | `0.75` | DEEP tier lower bound (PLAN-0093 C-1: was 0.70 in v1 formula) |
-| `NLP_PIPELINE_ROUTING_TIER_MEDIUM` | `0.45` | MEDIUM tier lower bound (PLAN-0093 C-1: was 0.35 in v1 formula) |
+| `NLP_PIPELINE_ROUTING_TIER_DEEP` | `0.70` | DEEP tier lower bound |
+| `NLP_PIPELINE_ROUTING_TIER_MEDIUM` | `0.35` | MEDIUM tier lower bound |
 | `NLP_PIPELINE_ROUTING_TIER_LIGHT` | `0.20` | LIGHT tier lower bound |
 | `NLP_PIPELINE_ENTITY_RESOLUTION_AUTO_RESOLVE_THRESHOLD` | `0.72` | Auto-resolve above this |
 | `NLP_PIPELINE_ENTITY_RESOLUTION_PROVISIONAL_THRESHOLD` | `0.45` | Provisional queue threshold |
@@ -597,60 +530,6 @@ symbols. The rare-token analyzer in Block 5 uses this to distinguish genuine tic
 - **Exponential backoff on Valkey failure**: `min(2^n × 60, 300)` seconds.
 - **Staleness**: at most `canonical_tickers_refresh_interval_s` seconds (default 10 minutes).
 - **Source**: `intelligence_db.canonical_entities WHERE entity_type='financial_instrument' AND ticker IS NOT NULL`
-
----
-
-## Worker Startup Race + Provider Key Wiring (PLAN-0096 W2)
-
-Two cold-start failure modes have been hardened against silent worker
-starvation. Together they close the deferred PLAN-0095 W4 tail
-(T-W4-02 + T-W4-04) flagged by the FIX-LIVE-GG investigation.
-
-### MarketDataClient JWT-mint backoff (BP-562)
-
-`PriceImpactLabellingWorker` constructs a `MarketDataClient` at process
-startup. The client mints an `X-Internal-JWT` via S9 (`POST /v1/auth/dev-login`
-or `POST /internal/v1/service-token` when a service-account token is wired).
-During a fresh `docker compose up` the worker may boot ahead of api-gateway,
-and the first mint surfaces `httpx.ConnectError` ("connection refused").
-
-The client retries the mint up to **4 attempts** with exponential backoff
-delays of `(0s, 5s, 15s, 45s)` — total grace window ~65s, which matches the
-compose `service_healthy` envelope for every dependency. After exhaustion
-the client returns `None` rather than raising, so the caller falls through
-to the legacy "no header → 401 → warn-and-skip" path instead of crashing
-the worker loop.
-
-Tests pin both the success-after-retry and give-up-after-exhaustion
-contracts in
-`services/nlp-pipeline/tests/unit/infrastructure/test_market_data_client_jwt_backoff.py`
-(asyncio.sleep is patched out so the suite still runs in milliseconds).
-
-### Relevance-scoring provider key (BP-563)
-
-`ArticleRelevanceScoringWorker` branches on `api_key`:
-- non-empty → DeepInfra `/chat/completions` (~100-200ms GPU)
-- empty → Ollama `/api/generate` (~5-10s CPU, OOM-prone on the dev box)
-
-When `NLP_PIPELINE_RELEVANCE_SCORING_API_KEY` is left empty in `docker.env`,
-the worker silently falls back to Ollama. On the live stack Ollama is not
-always available, which manifests as relevance-scoring starvation
-(0 articles scored per cycle) without any error in the worker logs.
-
-`services/nlp-pipeline/configs/docker.env` now exports a non-empty
-`NLP_PIPELINE_RELEVANCE_SCORING_API_KEY` (same DeepInfra account secret
-used by every other nlp-pipeline worker), and `docker.env.example`
-documents the contract for new operators. The provider-selection
-contract is pinned by unit tests in
-`services/nlp-pipeline/tests/unit/infrastructure/workers/test_article_relevance_scoring_worker.py::TestProviderSelectionContract`
-so a regression in the env wiring fails fast under `pytest`.
-
-Verification on a live stack:
-
-```bash
-docker compose exec nlp-pipeline-relevance-scoring env | grep RELEVANCE_SCORING
-# Expect NLP_PIPELINE_RELEVANCE_SCORING_API_KEY to be a non-empty value.
-```
 
 ---
 

@@ -90,7 +90,7 @@ class Settings(BaseSettings):
     # KNOWLEDGE_GRAPH_DEEPINFRA_API_KEY — set via secret; empty = extraction chain skips DeepInfra
     deepinfra_api_key: SecretStr = SecretStr("")  # DEF-005: SecretStr prevents key leakage in tracebacks
     # KNOWLEDGE_GRAPH_DEEPINFRA_EXTRACTION_MODEL_ID
-    deepinfra_extraction_model_id: str = "deepseek-ai/DeepSeek-V4-Flash-Thinking"
+    deepinfra_extraction_model_id: str = "Qwen/Qwen3-235B-A22B-Instruct-2507"
     # KNOWLEDGE_GRAPH_DEEPINFRA_EXTRACTION_BASE_URL
     deepinfra_extraction_base_url: str = "https://api.deepinfra.com/v1/openai"
     # KNOWLEDGE_GRAPH_DEEPINFRA_EXTRACTION_CONCURRENCY
@@ -111,26 +111,17 @@ class Settings(BaseSettings):
     confidence_contradiction_top_k: int = 3
 
     # Worker intervals (seconds)
-    # FIX-LIVE-GG (2026-05-25, INV-LIVE-GG cluster 2): lowered SummaryWorker,
-    # EmbeddingRefresh and FundamentalsRefresh intervals to drain the
-    # worker-starvation backlog that surfaced in iter-5 SLO failures
-    # (``test_summary_coverage`` 7%, ``test_definition_embedding_coverage``
-    # 10%, ``test_fundamentals_ohlcv_embedding_coverage`` 0/2405).  With 5
-    # LLM-bound workers sharing one asyncio loop and ~60 s LLM calls per
-    # batch, the old 3600/7200/10800 s cadences burned <2% of wall time on
-    # work — far too sparse to keep up with ingestion.  Overridable via
-    # ``KNOWLEDGE_GRAPH_WORKER_*_INTERVAL_S`` env vars (see docker.env).
     worker_confidence_interval_s: int = 900  # 15 min
     worker_contradiction_interval_s: int = 1800  # 30 min
-    worker_summary_interval_s: int = 600  # FIX-LIVE-GG: was 3600 (60 min); now 10 min
+    worker_summary_interval_s: int = 3600  # 60 min
     # Worker 13B: relation_evidence_raw → relation_evidence promotion (SA-2).
     # Runs every 5 minutes so freshly processed NLP batches are promotable
     # within one short window.
     worker_evidence_promote_interval_s: int = 300  # 5 min
     worker_definition_refresh_interval_s: int = 3600  # 60 min
     worker_narrative_refresh_interval_s: int = 3600  # 60 min
-    worker_fundamentals_refresh_interval_s: int = 300  # FIX-LIVE-GG: was 7200 (2 h); now 5 min
-    worker_embedding_refresh_interval_s: int = 300  # FIX-LIVE-GG: was 10800 (3 h); now 5 min
+    worker_fundamentals_refresh_interval_s: int = 7200  # 2 h
+    worker_embedding_refresh_interval_s: int = 10800  # 3 h
     worker_partition_interval_s: int = 86400  # 24 h (also runs at startup)
     # Dedicated provisional enrichment worker controls (PLAN-0061 T-A-1/A-3/A-4)
     # interval: 300s = 5 min catch-up sweep; hot path handled by entity.provisional.queued.v1 consumer (Wave E)
@@ -141,14 +132,9 @@ class Settings(BaseSettings):
     worker_provisional_enrichment_max_retries: int = 5  # terminal 'failed' after N failures
 
     # Embedding worker batch controls (PLAN perf-fix)
-    # 0 = all due entities per cycle (drain the full queue in one cycle).
-    # FIX-LIVE-GG (2026-05-25): default raised from 0->200 alongside the new
-    # 300 s EmbeddingRefresh cadence so each cycle is sized to a single
-    # DeepInfra embed batch (``_EMBED_CHUNK_SIZE=200`` in embedding_refresh.py)
-    # — prevents one cycle from issuing many sequential embed calls and
-    # blocking the asyncio loop for the other 4 workers.  Set to ``0`` only
-    # when tuning a fresh deployment that needs a full backlog drain.
-    worker_embedding_batch_limit: int = 200  # KNOWLEDGE_GRAPH_WORKER_EMBEDDING_BATCH_LIMIT
+    # 0 = all due entities per cycle (recommended — lets workers drain the full queue).
+    # Set to a positive integer to cap the batch size for rate-limited environments.
+    worker_embedding_batch_limit: int = 0  # KNOWLEDGE_GRAPH_WORKER_EMBEDDING_BATCH_LIMIT
 
     # SummaryWorker force-regeneration (ARCH-008).
     # When > 0, force-regenerate this many stale summaries per cycle regardless of evidence
@@ -180,8 +166,8 @@ class Settings(BaseSettings):
     # source of truth so that env-var changes actually take effect.
     # Fallback aligned to Meta-Llama-3.1-8B-Instruct-Turbo per ADR-0073-006 (Qwen/Qwen3-32B
     # was the previous default but is not on the project's DeepInfra account allow-list).
-    description_deepinfra_model_id: str = "deepseek-ai/DeepSeek-V4-Flash-Thinking"
-    description_deepinfra_fallback_model_id: str = "Qwen/Qwen3.5-9B"
+    description_deepinfra_model_id: str = "Qwen/Qwen3-235B-A22B-Instruct-2507"
+    description_deepinfra_fallback_model_id: str = "meta-llama/Meta-Llama-3.1-8B-Instruct-Turbo"
     description_deepinfra_concurrency: int = 4
 
     # Market data service (used by Worker 13D-3 and Worker 13J)
@@ -193,7 +179,7 @@ class Settings(BaseSettings):
     # Worker 13D-3: Narrative generation LLM model (PRD-0074 Wave C)
     # Uses Meta-Llama-3.1-8B-Instruct (confirmed available on this DeepInfra account).
     # Falls back to template-v1 when llm_client is None or model call fails.
-    narrative_llm_model_id: str = "deepseek-ai/DeepSeek-V4-Flash"
+    narrative_llm_model_id: str = "meta-llama/Meta-Llama-3.1-8B-Instruct"
 
     # Worker 13J — Structured Enrichment (PRD-0073)
     #
@@ -245,8 +231,8 @@ class Settings(BaseSettings):
     # When the primary extraction chain (DeepInfra → Ollama) is exhausted,
     # SummaryWorker makes one additional attempt via Gemini 2.5 Flash Lite.
     # "gemini" activates the fallback; "none" disables it.
-    summary_fallback_provider: str = "deepinfra"  # KNOWLEDGE_GRAPH_SUMMARY_FALLBACK_PROVIDER
-    summary_fallback_model_id: str = "deepseek-ai/DeepSeek-V4-Flash"  # KNOWLEDGE_GRAPH_SUMMARY_FALLBACK_MODEL_ID
+    summary_fallback_provider: str = "gemini"  # KNOWLEDGE_GRAPH_SUMMARY_FALLBACK_PROVIDER
+    summary_fallback_model_id: str = "gemini-2.5-flash-lite"  # KNOWLEDGE_GRAPH_SUMMARY_FALLBACK_MODEL_ID
 
     # Wave A-2 / DEF-022: embedding model tracking
     # Recorded alongside every relation_summaries.summary_embedding write so we
@@ -266,24 +252,9 @@ class Settings(BaseSettings):
     provisional_enrichment_base_retry_minutes: int = 2
     provisional_enrichment_max_retry_minutes: int = 1440
 
-    # PathExplanationBatchWorker controls (2026-05-23, Wave E2; tuned 2026-05-25 by FIX-LIVE-HH2;
-    # cycle dropped 20->12 by PLAN-0095 W4 T-W4-01 on 2026-05-26).
-    # batch_size: rows fetched per scheduler tick (ordered by composite_score DESC).
-    # concurrency: max parallel LLM calls within a single tick.
-    # cycle_minutes: how often the scheduler fires the worker.
-    # Tuning (INV-LIVE-HH-2 Option 4): 200->300 batch, 5->7 concurrency, 30->20 min cycle =
-    # 3.15x throughput (400 rows/hr -> 1266 rows/hr). 4710-row backlog drain time
-    # drops from ~12h to ~3.7h.
-    # PLAN-0095 W4 (2026-05-26): cycle 20->12 min adds another 1.67x ticks/hr
-    # (3 ticks/hr -> 5 ticks/hr) to drain the iter-9 path-insight backlog. Combined
-    # throughput projection: 300 * 7 / 12 = 175 rows/min effective.
-    path_explanation_batch_size: int = 300  # KNOWLEDGE_GRAPH_PATH_EXPLANATION_BATCH_SIZE
-    path_explanation_concurrency: int = 7  # KNOWLEDGE_GRAPH_PATH_EXPLANATION_CONCURRENCY
-    path_explanation_cycle_minutes: int = 12  # KNOWLEDGE_GRAPH_PATH_EXPLANATION_CYCLE_MINUTES
-
     # Path Insight Worker (PLAN-0074 Wave E1)
     # Model ID for Wave E2 LLM explanations (stored but not used in E1).
-    path_insight_explanation_model_id: str = "deepseek-ai/DeepSeek-V4-Flash"
+    path_insight_explanation_model_id: str = "meta-llama/Meta-Llama-3.1-8B-Instruct"
     # Stable worker instance ID — overridable via env var for testing and to ensure
     # disjoint SKIP LOCKED sets when running multiple containers.
     # Default: generated at process start (uuid4 as string, overridden at startup).

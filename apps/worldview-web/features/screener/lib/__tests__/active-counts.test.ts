@@ -89,9 +89,6 @@ describe("countActiveFiltersByGroup", () => {
       leverage: 0,
       technical: 0,
       news: 0,
-      // PRD-0089 Wave I-B Block IB-L2: two new section badges.
-      cashFlow: 0,
-      risk: 0,
     });
   });
 
@@ -157,51 +154,6 @@ describe("countActiveFiltersByGroup", () => {
     expect(c.news).toBe(0);
   });
 
-  // ── PRD-0089 Wave I-B Block IB-L2 — new section coverage ────────────────
-
-  it("cashFlow: counts FCF + FCF margin range filters", () => {
-    const form: FilterState = {
-      ...DEFAULT_FILTERS,
-      freeCashFlowMin: 1e8,   // 1
-      freeCashFlowMax: 1e10,  // 1 → total 2
-      fcfMarginMin: 0.05,     // 1
-    };
-    expect(countActiveFiltersByGroup(form).cashFlow).toBe(3);
-  });
-
-  it("risk: counts Int Cov + ND/EBITDA + creditRatings (once if any selected)", () => {
-    const form: FilterState = {
-      ...DEFAULT_FILTERS,
-      interestCoverageMin: 1.5,        // 1
-      netDebtToEbitdaMin: -2,
-      netDebtToEbitdaMax: 4,           // 2 → total 3
-      creditRatings: ["AA-", "A+"],    // 1 → total 4
-    };
-    expect(countActiveFiltersByGroup(form).risk).toBe(4);
-  });
-
-  it("risk: creditRatings counts 0 when array is empty", () => {
-    const form: FilterState = { ...DEFAULT_FILTERS, creditRatings: [] };
-    expect(countActiveFiltersByGroup(form).risk).toBe(0);
-  });
-
-  it("EPS (TTM) folds into Profitability (not Risk / Cash Flow)", () => {
-    // EPS sits in the Profitability section. Pinning here protects against
-    // a future refactor that moves it without updating the badge.
-    const form: FilterState = { ...DEFAULT_FILTERS, epsTtmMin: 0.5 };
-    const c = countActiveFiltersByGroup(form);
-    expect(c.profitability).toBe(1);
-    expect(c.cashFlow).toBe(0);
-    expect(c.risk).toBe(0);
-  });
-
-  it("AVG VOL 30d folds into Technical (liquidity signal — not Cash Flow)", () => {
-    const form: FilterState = { ...DEFAULT_FILTERS, avgVolume30dMin: 1e6 };
-    const c = countActiveFiltersByGroup(form);
-    expect(c.technical).toBe(1);
-    expect(c.cashFlow).toBe(0);
-  });
-
   it("does not count the search/sector/capTier top-row fields against any section", () => {
     // These sit OUTSIDE the collapsible section badges by design.
     const form: FilterState = {
@@ -211,15 +163,6 @@ describe("countActiveFiltersByGroup", () => {
       capTier: "LARGE",
     };
     const c = countActiveFiltersByGroup(form);
-    expect(
-      c.valuation +
-        c.profitability +
-        c.growth +
-        c.leverage +
-        c.technical +
-        c.news +
-        c.cashFlow +
-        c.risk,
-    ).toBe(0);
+    expect(c.valuation + c.profitability + c.growth + c.leverage + c.technical + c.news).toBe(0);
   });
 });

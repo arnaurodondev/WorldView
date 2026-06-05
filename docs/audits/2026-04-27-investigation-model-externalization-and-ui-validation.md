@@ -23,7 +23,7 @@ Three questions investigated:
 | 100% `deepinfra_intent_classifier_fallback` warnings | rag-chat logs (pre-fix) | qwen3:0.6b timeout on every call |
 | `ollama pull bge-reranker-v2-m3` → "file does not exist" | Container shell | bge-reranker-v2-m3 not in Ollama registry |
 | No `JinaEmbeddingAdapter` or `CohereRerankAdapter` in `libs/ml-clients/` | File listing | Neither had been externalized; only recommended |
-| `RAG_CHAT_DEEPINFRA_API_KEY=***REDACTED-LEAKED-KEY-ROTATED-2026-06-02***` set | docker.env | Existing key usable for classification |
+| `RAG_CHAT_DEEPINFRA_API_KEY=xVi3qIVR8yPnu7DnP36GdFs2brm9GivI` set | docker.env | Existing key usable for classification |
 | `NLP_PIPELINE_EXTRACTION_API_MODEL_ID=meta-llama/Meta-Llama-3.1-8B-Instruct` | S6 container env | Confirmed working DeepInfra model |
 | `meta-llama/Meta-Llama-3.2-3B-Instruct` → 404 on DeepInfra | Live test | Model doesn't exist under that name |
 | `meta-llama/Meta-Llama-3.1-8B-Instruct` → 200 OK × 3 | Live test post-fix | Correct model, working |

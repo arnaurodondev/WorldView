@@ -1,38 +1,51 @@
 /**
- * IntelligenceTab — W7 T-16 — orchestrator for the Intelligence tab.
+ * IntelligenceTab — PLAN-0090 T-D-04 — orchestrator for the Intelligence tab.
  *
- * WHY THIS EXISTS (PRD-0089 §6.9):
- * The Intelligence tab is a 3-column grid (14-col base, 4+5+5):
- *   left   (col-span-4) : <NewsColumn />          — dense 18px news rail
- *   center (col-span-5) : <GraphColumn />          — brief + sigma.js graph
- *                       + <InlineSelectionPanel /> — node/edge detail below graph
- *   right  (col-span-5) : <ContextPanel />         — entity overview (always)
+ * WHY THIS EXISTS (PRD-0088 §6.9):
+ * The new Intelligence tab is a 3-column grid:
+ *   left  (col-span-3) : <NewsColumn />          — news rail
+ *   center(col-span-6) : <GraphColumn />          — brief + graph
+ *   right (col-span-3) : <ContextPanel />         — entity / node detail
  *
- * WHY 4+5+5 (was 4+7+3):
- * User feedback: right rail too narrow for 5 data blocks; graph occupied 50%
- * which left the overview panel cramped at 21%. New split: graph at 35.7%,
- * right rail at 35.7% — right rail gets meaningful extra horizontal space.
+ * The previous IntelligenceTab.tsx (sibling file at ../IntelligenceTab.tsx) was a
+ * single ~1330-line component that stacked summary cards, the graph and filters,
+ * the brief and contradictions all in one vertical scroll. That mode does not
+ * fit the redesign — the new layout puts the three views side-by-side so the
+ * analyst can read news while exploring the graph and inspecting a node without
+ * losing context.
  *
- * SELECTION STATE — `selectedNodeId` and `selectedEdgeInfo` are lifted here so
- * InlineSelectionPanel (center) and GraphColumn (center) share a single source
- * of truth. ContextPanel (right) always renders entity-overview mode.
+ * STATE OWNERSHIP — the only state in this file is `selectedNodeId: string|null`.
+ * It is owned here (and not inside GraphColumn) so the right-hand ContextPanel
+ * can read it AND the center GraphColumn can reflect it. Hoisting selection up
+ * to the smallest common parent is the canonical React pattern; it also keeps
+ * the children fully presentational and trivially testable.
  *
- * HOTKEY SCOPE — IntelligenceTab pushes the "page" scope on mount and pops
- * it on unmount. This activates the j/k/Enter news bindings (T-17) and the
- * 1/2/3/g/r/Esc graph bindings (T-18).
+ * DATA FETCHING — this file is intentionally a thin layout. All gateway calls
+ * live inside the children (GraphColumn owns brief+graph; NewsColumn owns
+ * articles; ContextPanel owns entity detail). Past versions co-fetched here
+ * and prop-drilled — that approach made the cache shape implicit and broke
+ * whenever a child added a new field.
+ *
+ * WHY only `entityId` (instrumentId removed): every downstream child consumes
+ * the KG entity id (S9 routes are entity-scoped). The instrumentId from the
+ * page bundle is already cached by TanStack Query at the layout level so the
+ * children that need it (e.g. quote/financials) read it independently.
  */
 
 "use client";
-// WHY "use client": useState + useEffect + useHotkeyScope require the browser.
+// WHY "use client": useState plus useQuery-driven children all require the
+// React client runtime. The whole tab is a client island.
 
-import { useState, useEffect, useCallback } from "react";
-import { useHotkeyScope } from "@/contexts/HotkeyContext";
+import { useState } from "react";
 import { NewsColumn } from "./news/NewsColumn";
 import { GraphColumn } from "./graph/GraphColumn";
 import { ContextPanel } from "./context/ContextPanel";
-import { InlineSelectionPanel } from "./InlineSelectionPanel";
-import type { SelectedNodeInfo } from "./InlineSelectionPanel";
-import type { SelectedEdgeInfo } from "@/components/instrument/EntityGraph";
+
+// ── Props ────────────────────────────────────────────────────────────────────
+//
+// WHY just entityId: see file header. The page-bundle hook already caches the
+// instrument-level data so children that need an instrumentId can pull it from
+// the query cache without prop-drilling.
 
 export interface IntelligenceTabProps {
   /** Authoritative KG entity_id for the instrument being viewed. */
@@ -40,102 +53,49 @@ export interface IntelligenceTabProps {
 }
 
 export function IntelligenceTab({ entityId }: IntelligenceTabProps) {
-  // WHY two separate selection slots: node and edge are mutually exclusive.
-  // Selecting a node clears edge; selecting an edge clears node.
-  const [selectedNodeInfo, setSelectedNodeInfo] = useState<SelectedNodeInfo | null>(null);
-  const [selectedEdgeInfo, setSelectedEdgeInfo] = useState<SelectedEdgeInfo | null>(null);
-  // WHY separate visualHighlightNodeId: ContextPanel row clicks (TopRelationsBlock)
-  // need to highlight a node in sigma WITHOUT opening InlineSelectionPanel — the
-  // right-rail click lacks full node data (label, edges list) required to render
-  // the panel. selectedNodeInfo drives InlineSelectionPanel; this drives sigma only.
-  const [visualHighlightNodeId, setVisualHighlightNodeId] = useState<string | null>(null);
-
-  // Derived: sigma receives whichever ID is active — full selection takes priority.
-  const selectedNodeId = selectedNodeInfo?.id ?? visualHighlightNodeId;
-
-  const handleNodeChange = useCallback((info: SelectedNodeInfo | null) => {
-    // null = deselect; non-null = new selection (toggle logic is now in GraphColumn).
-    setSelectedNodeInfo(info);
-    setSelectedEdgeInfo(null);
-    setVisualHighlightNodeId(null); // graph-click supersedes any right-rail highlight
-  }, []);
-
-  const handleEdgeClick = useCallback((info: SelectedEdgeInfo) => {
-    setSelectedEdgeInfo(info);
-    setSelectedNodeInfo(null);
-    setVisualHighlightNodeId(null);
-  }, []);
-
-  const handleClearSelection = useCallback(() => {
-    setSelectedNodeInfo(null);
-    setSelectedEdgeInfo(null);
-    setVisualHighlightNodeId(null);
-  }, []);
-
-  // Reset selection when entity changes (stale selection from prior entity would
-  // point at nodes that don't exist in the new graph payload).
-  useEffect(() => {
-    setSelectedNodeInfo(null);
-    setSelectedEdgeInfo(null);
-    setVisualHighlightNodeId(null);
-  }, [entityId]);
-
-  // Push "page" scope so j/k/Enter (news) and 1/2/3/g/r/Esc (graph) bindings
-  // are active while this tab is mounted. Pop on unmount / tab switch.
-  const { pushScope, popScope } = useHotkeyScope();
-  useEffect(() => {
-    pushScope("page");
-    return () => popScope("page");
-  }, [pushScope, popScope]);
+  // ── Selected-node state (lifted up) ───────────────────────────────────────
+  // WHY useState here (not inside GraphColumn): the right-hand ContextPanel
+  // needs to know which node is selected to toggle between "entity overview"
+  // and "node detail" modes. Lifting selection up to the smallest common
+  // parent keeps the two children in sync without a context provider.
+  const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
 
   return (
-    // WHY grid-cols-14 4+5+5: W7 §3 layout, revised to widen right rail.
-    // Literal class so JIT scanner picks it up.
-    // h-full + overflow-hidden lock the tab to the parent's scroll context;
-    // each column owns its own overflow independently.
-    <div className="grid grid-cols-14 h-full overflow-hidden">
-      {/* ── LEFT: dense news rail (4/14 ≈ 28.6%) ──────────────────────────
-          Unchanged from W7 initial implementation. */}
-      <div className="col-span-4 overflow-y-auto border-r border-border">
-        <NewsColumn instrumentId={entityId} />
+    // WHY grid grid-cols-12: PRD-0088 §6.9 specifies a 12-column layout where
+    // the news rail is 3/12 (≈25%), the graph is 6/12 (50%), and the context
+    // rail is 3/12. h-full + overflow-hidden lock the tab to the parent box
+    // (InstrumentPageClient's `<div className="flex-1 min-h-0 overflow-hidden">`).
+    // Each column then owns its own scroll context.
+    <div className="grid grid-cols-12 h-full overflow-hidden">
+      {/* ── LEFT: news rail (3/12) ──────────────────────────────────────────
+          overflow-y-auto so the article list scrolls inside this column
+          without lifting the whole tab. border-r separates from the graph. */}
+      <div className="col-span-3 overflow-y-auto border-r border-border">
+        <NewsColumn entityId={entityId} />
       </div>
 
-      {/* ── CENTER: graph + inline detail below (5/14 ≈ 35.7%) ─────────────
-          Flex column: GraphColumn takes flex-1 (all remaining vertical),
-          InlineSelectionPanel takes fixed 180px below when active. */}
-      <div className="col-span-5 flex flex-col border-r border-border overflow-hidden">
-        <div className="flex-1 min-h-0 overflow-hidden">
-          <GraphColumn
-            entityId={entityId}
-            selectedNodeId={selectedNodeId}
-            onNodeChange={handleNodeChange}
-            onEdgeSelect={handleEdgeClick}
-          />
-        </div>
-        <InlineSelectionPanel
-          selectedNode={selectedNodeInfo}
-          selectedEdge={selectedEdgeInfo}
-          onClear={handleClearSelection}
+      {/* ── CENTER: graph + brief (6/12) ────────────────────────────────────
+          GraphColumn manages its own internal layout (brief on top, toolbar,
+          graph fills remaining height) so this slot is just `flex flex-col`. */}
+      <div className="col-span-6 flex flex-col">
+        <GraphColumn
+          entityId={entityId}
+          selectedNodeId={selectedNodeId}
+          onNodeSelect={setSelectedNodeId}
         />
       </div>
 
-      {/* ── RIGHT: entity overview (5/14 ≈ 35.7%) — always overview mode ───
-          WHY always overview: node/edge detail is now in InlineSelectionPanel
-          below the graph. The right rail is persistently useful context
-          (top relations, path insights, contradictions, narrative history)
-          rather than switching away when the analyst clicks a node. */}
-      <div className="col-span-5 overflow-y-auto">
+      {/* ── RIGHT: context panel (3/12) ────────────────────────────────────
+          When selectedNodeId === null → entity-overview mode.
+          When selectedNodeId !== null → node-detail mode + Back to overview.
+          The panel does its own data fetching for entity detail and graph,
+          keyed by entityId — see components/instrument/intelligence/context/
+          ContextPanel.tsx for the canonical implementation contract. */}
+      <div className="col-span-3 overflow-y-auto border-l border-border">
         <ContextPanel
           entityId={entityId}
-          onNodeSelect={(nodeId) => {
-            // WHY visualHighlightNodeId (not selectedNodeInfo): TopRelationsBlock
-            // row clicks only have a nodeId, not the full edges list needed to
-            // render InlineSelectionPanel. Use the visual-only highlight slot so
-            // sigma shows the yellow ring without opening the detail panel.
-            setVisualHighlightNodeId(nodeId);
-            setSelectedNodeInfo(null);
-            setSelectedEdgeInfo(null);
-          }}
+          selectedNodeId={selectedNodeId}
+          onClearSelection={() => setSelectedNodeId(null)}
         />
       </div>
     </div>

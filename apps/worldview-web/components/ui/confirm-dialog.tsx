@@ -172,8 +172,8 @@ export function ConfirmDialog({
         className="max-w-sm"
       >
         <DialogHeader>
-          {/* WHY no text-[16px] override: DialogTitle now renders at text-[13px] uppercase
-              by default — removing the text-[16px] (16px) override is correct; the base
+          {/* WHY no text-base override: DialogTitle now renders at text-[13px] uppercase
+              by default — removing the text-base (16px) override is correct; the base
               style is the right terminal-grade size for confirmation dialog titles */}
           <DialogTitle>{title}</DialogTitle>
           {/* WHY always render Description (never sr-only): unlike destructive-button.tsx

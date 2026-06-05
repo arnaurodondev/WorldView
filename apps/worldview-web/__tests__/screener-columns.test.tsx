@@ -69,14 +69,12 @@ function makeCellContext(row: ScreenerResult): CellContext<ScreenerResult, unkno
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
 describe("createScreenerColumns — column count", () => {
-  it("creates exactly 18 column definitions", () => {
+  it("creates exactly 13 column definitions", () => {
     const cols = createScreenerColumns({});
-    // WHY 18 (PLAN-0092 Wave C): 15 default-visible (ticker, name, sector, price,
-    // change, marketCap, pe, revenueGrowth, forwardPe, divYield, roe, beta, score,
-    // range52w, sparkline) + 3 opt-in hidden (opMargin, evEbitda, avgVol).
-    // A count mismatch means a column was accidentally removed or added — both
-    // break the terminal-density layout and trigger a QA alert.
-    expect(cols).toHaveLength(18);
+    // WHY 13: ticker, name, sector, price, change, marketCap, pe, revenue, beta,
+    // score, range52w, volume, sparkline. A count mismatch means a column was
+    // accidentally removed or added — both break the terminal-density layout.
+    expect(cols).toHaveLength(13);
   });
 
   it("includes all expected column IDs", () => {

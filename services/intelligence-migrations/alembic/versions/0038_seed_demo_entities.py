@@ -9,7 +9,7 @@ WHY THIS MIGRATION EXISTS:
   instrument deep-dive surface (B5).  Audit R3 / R4 / F2 found a series of
   demo-critical canonicals MISSING from intelligence_db.canonical_entities:
 
-    - OpenAI, Anthropic       (private AI labs, no public ticker)
+    - OpenAI, Anthropic       (organisations, no ticker)
     - COIN (Coinbase)         (financial_instrument)
     - NFLX (Netflix)          (financial_instrument)
     - INTC (Intel)            (financial_instrument)
@@ -31,30 +31,6 @@ WHAT THIS MIGRATION DOES:
   Post-demo: revert via ``downgrade()`` which DELETEs the seeded rows by id
   prefix.  The IDs use ``0195daad-d001-...`` (prefix 'd001' for "demo seed
   Wave 0") so they are trivially identifiable in queries.
-
-ENTITY_TYPE MAPPING (PLAN-0089 F2 Step 1 follow-up):
-  Migration 0039 (added after this migration in the same wave) installs a
-  CHECK constraint that restricts ``entity_type`` to 11 canonical values:
-    'financial_instrument', 'person', 'event', 'sector', 'industry',
-    'macro_indicator', 'place', 'product', 'index', 'currency', 'unknown'
-
-  This migration originally inserted OpenAI and Anthropic with the legacy
-  value ``'organization'`` — NOT in the canonical set, so a fresh
-  ``alembic upgrade head`` would fail at 0039 with a check-constraint
-  violation. Mapping decisions:
-
-    - OpenAI    : 'organization' → 'unknown'
-        (private AI lab; no ticker; not tradable; doesn't fit
-        'financial_instrument', 'person', 'event', 'sector', 'industry',
-        'macro_indicator', 'place', 'product', 'index', or 'currency'.
-        Falls into the 'unknown' catch-all per migration 0039 comment.)
-    - Anthropic : 'organization' → 'unknown'
-        (same reasoning as OpenAI: private PBC, no ticker, no other
-        canonical bucket fits.)
-
-  Per-row decisions are inline-commented in _DEMO_SEEDS below. All other
-  rows are already ``'financial_instrument'`` (public-equity tickers) and
-  require no change.
 """
 
 from __future__ import annotations
@@ -73,22 +49,17 @@ depends_on = None
 
 # (canonical_name, entity_type, ticker, exchange, description, aliases[])
 _DEMO_SEEDS: list[tuple[str, str, str | None, str | None, str, list[str]]] = [
-    # OpenAI: private AI lab; no public ticker; no other canonical bucket fits.
-    # Mapped 'organization' → 'unknown' (PLAN-0089 F2 Step 1 follow-up, see file
-    # docstring for the full mapping rationale).
     (
         "OpenAI",
-        "unknown",
+        "organization",
         None,
         None,
         "American AI research and deployment organization, creator of GPT family models, ChatGPT, and DALL·E. Founded 2015.",
         ["OpenAI", "Open AI", "OAI"],
     ),
-    # Anthropic: private PBC; no public ticker; same reasoning as OpenAI.
-    # Mapped 'organization' → 'unknown'.
     (
         "Anthropic",
-        "unknown",
+        "organization",
         None,
         None,
         "American AI safety and research company, creator of the Claude family of large language models. Founded 2021.",
@@ -159,19 +130,6 @@ def _norm(text: str) -> str:
 
 
 def upgrade() -> None:
-    # ── BUG-A / fresh-DB bring-up fix ────────────────────────────────────────
-    # Migration 0021 adds ``ck_canonical_entity_type`` with an allowed-values
-    # list that does NOT include ``'unknown'``. The demo seed rows below
-    # (OpenAI, Anthropic) insert with ``entity_type='unknown'`` so the
-    # constraint must not be active when these INSERTs run. The next
-    # migration (0039) drops + replaces the constraint with the new
-    # ``ck_canonical_entities_entity_type`` that DOES include ``'unknown'``,
-    # but on a fresh DB 0039 has not yet run when 0038 fires. Defensively
-    # drop the legacy constraint here. Idempotent: ``IF EXISTS`` is a no-op
-    # for prod DBs whose ordering already dropped it via some other path.
-    # Migration 0039 re-adds the new constraint after this seed completes.
-    op.execute("ALTER TABLE canonical_entities DROP CONSTRAINT IF EXISTS ck_canonical_entity_type")
-
     canonical_rows: list[str] = []
     alias_rows: list[str] = []
 
@@ -217,16 +175,6 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    # NOTE: The legacy ``ck_canonical_entity_type`` constraint dropped at the
-    # top of upgrade() (BUG-A fix) is intentionally NOT restored here.
-    # Migration 0039 owns the canonical constraint state — it drops the
-    # legacy ``ck_canonical_entity_type`` (singular) and installs the new
-    # ``ck_canonical_entities_entity_type`` (plural) with ``'unknown'`` in
-    # the allowed list. Restoring the legacy constraint here would
-    # contradict 0039's contract and would not actually be reachable in a
-    # normal downgrade chain (downgrade flows from head → 0038 already
-    # passes through 0039's downgrade first).
-    #
     # Delete by metadata->>seed_source for safety (also catches any operator
     # who hand-applied the seed via psql).
     op.execute("DELETE FROM entity_aliases WHERE source = 'seed:PLAN-0087'")

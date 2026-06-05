@@ -146,23 +146,6 @@ async def main() -> None:
         group_id=settings.kafka_consumer_group_provisional_queued,
         topics=[settings.kafka_topic_provisional_queued],
     )
-
-    # PRD-0089 F2 step 5: hot-path M-017 enforcement.  We construct a
-    # MarketDataClient + MarketDataLookupAdapter here so tradable promotions
-    # in this consumer also adopt the existing instrument_id instead of
-    # minting a fresh UUID.  See scheduler.py for the polling-worker
-    # equivalent.  ``aclose`` runs at consumer shutdown alongside the
-    # other auxiliary resources.
-    from knowledge_graph.infrastructure.http.market_data_client import MarketDataClient
-    from knowledge_graph.infrastructure.http.market_data_lookup_adapter import MarketDataLookupAdapter
-    from knowledge_graph.infrastructure.scheduler.scheduler import build_market_data_signer
-
-    md_client = MarketDataClient(
-        base_url=settings.market_data_internal_url,
-        internal_jwt=build_market_data_signer(settings),
-    )
-    md_lookup = MarketDataLookupAdapter(md_client)
-
     consumer = ProvisionalQueuedConsumer(
         config=config,
         session_factory=write_factory,
@@ -177,7 +160,6 @@ async def main() -> None:
         # function defaults (2 / 1440) regardless of ops configuration.
         base_retry_minutes=settings.provisional_enrichment_base_retry_minutes,
         max_retry_minutes=settings.provisional_enrichment_max_retry_minutes,
-        market_data_lookup=md_lookup,
     )
 
     try:
@@ -196,12 +178,6 @@ async def main() -> None:
     else:
         log.info("provisional_queued_consumer_stopped")
     finally:
-        # F2 step 5 — close the market-data lookup client first; it owns an
-        # httpx pool that will leak warnings on interpreter shutdown
-        # otherwise.  Errors here are intentionally swallowed so a closed-
-        # client teardown does not mask a real prior exception.
-        with contextlib.suppress(Exception):
-            await md_client.aclose()
         await valkey.close()
         await engine.dispose()
 

@@ -47,8 +47,7 @@ export interface MetricsTableData {
 //   until all three resolve (every row mixes fields from multiple sources).
 export function useMetricsTableData(instrumentId: string): MetricsTableData {
   const token = useAccessToken();
-  // WHY !!token: same auth-race guard as useInstrumentBrief (see that hook for rationale).
-  const enabled = !!instrumentId && !!token;
+  const enabled = !!instrumentId;
 
   // DEFAULT_STALE.fundamentals (1hr): full Fundamentals (highlights + valuation_ratios +
   // analyst_consensus + technicals_snapshot merged into the flat Fundamentals shape).

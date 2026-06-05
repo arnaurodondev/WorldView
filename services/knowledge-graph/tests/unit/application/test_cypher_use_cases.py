@@ -152,7 +152,7 @@ class TestCypherPathUseCase:
             if len(args) >= 2 and isinstance(args[1], dict) and "params" in args[1]:
                 pytest.fail(
                     "execute() must NOT pass a {'params': ...} dict — "
-                    "entity_ids are embedded as UUID literals (BP-459-C / BP-450)",
+                    "entity_ids are embedded as UUID literals (BP-459-C / BP-450)"
                 )
 
     async def test_raises_timeout_error_on_db_exception(self) -> None:
@@ -182,7 +182,7 @@ class TestCypherPathUseCase:
                 mock_result,  # SET search_path
                 mock_result,  # SET LOCAL statement_timeout
                 Exception("canceling statement due to statement timeout"),
-            ],
+            ]
         )
 
         with pytest.raises(CypherTimeoutError):

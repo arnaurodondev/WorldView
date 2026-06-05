@@ -281,7 +281,7 @@ class TestPathInsightWorker:
         asyncio.run(worker._claim_batch())
         assert claimed_batch_sizes == [7]
 
-    @pytest.mark.asyncio()
+    @pytest.mark.asyncio
     async def test_parallel_workers_claim_disjoint_sets(self) -> None:
         """Two concurrent worker instances claim disjoint job sets.
 

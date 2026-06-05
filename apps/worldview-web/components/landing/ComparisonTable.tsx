@@ -171,7 +171,7 @@ export function ComparisonTable() {
           </p>
           <h2
             id="compare-heading"
-            className="text-[30px] font-semibold tracking-tight text-foreground sm:text-[36px]"
+            className="text-3xl font-semibold tracking-tight text-foreground sm:text-4xl"
           >
             Feature parity, side by side.
           </h2>
@@ -185,7 +185,7 @@ export function ComparisonTable() {
           ← Scroll to compare →
         </p>
         <div className="overflow-x-auto rounded-[2px] border border-border/40 bg-card">
-          <table className="w-full min-w-[760px] text-left text-[14px]">
+          <table className="w-full min-w-[760px] text-left text-sm">
             <caption className="sr-only">
               Worldview compared to Bloomberg, Interactive Brokers,
               TradingView, and Finviz across nine features and estimated

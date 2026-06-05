@@ -121,56 +121,6 @@ export interface FilterState {
   controversyMax?: number; // CLIENT_FILTER TODO
   recentEarningsDays?: 7 | 30; // CLIENT_FILTER TODO (S3 earnings calendar)
   insiderActivity?: "BUYING" | "SELLING" | "BOTH"; // CLIENT_FILTER TODO (S4 insider)
-
-  // ── Categorical / coverage (SERVER_SIDE — PRD-0089 Wave I-B Block IB-L1) ───
-  // WHY arrays even though the backend currently single-valued: the UI
-  // exposes a multi-select combobox + regional preset chips (NA/EU/APAC/EM)
-  // that expand to many ISO3 codes. We store the full set in state so the
-  // FilterChipStrip can render "Country: USA, DEU, GBR ×" and so a future
-  // backend `country IN (...)` upgrade is a one-line build-filters change.
-  // Today buildScreenerFilters() forwards only the FIRST entry because the
-  // backend ANDs repeated country/exchange filters (see Wave L-1 query
-  // implementation in fundamental_metrics_query.py:302-311).
-  countries?: string[]; // ISO 3-letter codes (e.g. ["USA","DEU"])
-  exchanges?: string[]; // Exchange codes (e.g. ["NASDAQ","NYSE"])
-  // Coverage toggles — tri-state via "undefined = ignore" + boolean. The
-  // current Wave L-1 backend ignores `false`-meaning-exclude semantics; we
-  // therefore only emit `true` to the wire (require coverage) and treat the
-  // off-state as "don't filter". The design (08-screener.md §Coverage)
-  // confirms two simple switches with no "exclude" path.
-  hasFundamentals?: boolean;
-  hasOhlcv?: boolean;
-
-  // ── PRD-0089 Wave I-B Block IB-L2 — fundamentals snapshot ranges ─────────
-  // WHY each min/max field: Wave L-2 backend (commit e1a0193f) accepts these
-  // exact field names on `ScreenFilterRequest` as scalar floats. The frontend
-  // maps `peMin` → request body `eps_ttm_min` etc inside build-filters.ts.
-  //
-  // NO truncation badge needed (unlike IB-L1 country/exchange): each range
-  // is a single number going to a scalar backend field — no IN-list contract
-  // gap to disclose.
-  //
-  // Six numeric ranges:
-  avgVolume30dMin?: number;
-  avgVolume30dMax?: number;
-  epsTtmMin?: number;
-  epsTtmMax?: number;
-  freeCashFlowMin?: number;
-  freeCashFlowMax?: number;
-  fcfMarginMin?: number;       // decimal (0.10 = 10%) — same convention as roeMin
-  fcfMarginMax?: number;
-  interestCoverageMin?: number; // multiple (e.g. 2.0 = 2×)
-  interestCoverageMax?: number;
-  netDebtToEbitdaMin?: number;  // multiple; negative = net cash position
-  netDebtToEbitdaMax?: number;
-
-  // ── Credit rating multi-select (T-IB-07) ─────────────────────────────────
-  // WHY an array (not single value): unlike country/exchange, the Wave L-2
-  // backend natively accepts `credit_ratings: list[str]` and runs an IN(...)
-  // predicate (fundamental_metrics_query.py:340). So multi-select round-trips
-  // intact end-to-end — no badge / truncation disclosure required.
-  // Empty array OR undefined = no filter; serialise as undefined in build.
-  creditRatings?: string[];
 }
 
 /** DEFAULT_FILTERS — used by the page initial state and the Reset button. */

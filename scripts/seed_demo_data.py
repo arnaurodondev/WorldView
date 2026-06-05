@@ -80,13 +80,7 @@ CONTENT_INGESTION_DB_URL = os.environ.get(
 
 # Deterministic entity UUIDs for intelligence_db canonical_entities.
 # WHY deterministic: idempotent ON CONFLICT DO NOTHING requires stable PKs.
-#
-# PLAN-0089 F2 Step 8 (M-017): the OLD parallel "11111111-..." entity_id
-# namespace has been DROPPED. Each tradable security now has ONE canonical
-# UUID shared across canonical_entities.entity_id, market_data_db.instruments.id,
-# and portfolio_db.instruments.{id,entity_id}. The UUID pattern below
-# (01900000-...-000000001NNN) matches the value seeded for the corresponding
-# instrument row in scripts/seed-dev-data.sh — keep them in lock-step.
+# Prefix "11111111" visually distinguishes demo entities from real UUIDv7 IDs.
 INSTRUMENTS: list[dict] = [
     {
         "ticker": "AAPL",
@@ -98,8 +92,7 @@ INSTRUMENTS: list[dict] = [
         "country": "US",
         "currency": "USD",
         "isin": "US0378331005",
-        # F2: entity_id == market_data_db.instruments.id for AAPL (M-017 invariant)
-        "entity_id": "01900000-0000-7000-8000-000000001001",
+        "entity_id": "11111111-0001-7000-8000-000000000001",  # stable KG entity UUID
         "description": (
             "Apple Inc. designs, manufactures, and markets smartphones, personal computers, "
             "tablets, wearables, and accessories worldwide. The Company sells its products "
@@ -135,8 +128,7 @@ INSTRUMENTS: list[dict] = [
         "country": "US",
         "currency": "USD",
         "isin": "US5949181045",
-        # F2: entity_id == market_data_db.instruments.id for MSFT
-        "entity_id": "01900000-0000-7000-8000-000000001002",
+        "entity_id": "11111111-0002-7000-8000-000000000001",
         "description": (
             "Microsoft Corporation develops, licenses, and supports software, services, devices, "
             "and solutions worldwide. The company's Productivity and Business Processes segment "
@@ -172,8 +164,7 @@ INSTRUMENTS: list[dict] = [
         "country": "US",
         "currency": "USD",
         "isin": "US67066G1040",
-        # F2: entity_id == market_data_db.instruments.id for NVDA
-        "entity_id": "01900000-0000-7000-8000-000000001006",
+        "entity_id": "11111111-0003-7000-8000-000000000001",
         "description": (
             "NVIDIA Corporation provides graphics, computing and networking solutions globally. "
             "Its two segments are Graphics and Compute & Networking. The company's products "
@@ -209,8 +200,7 @@ INSTRUMENTS: list[dict] = [
         "country": "US",
         "currency": "USD",
         "isin": "US0231351067",
-        # F2: entity_id == market_data_db.instruments.id for AMZN
-        "entity_id": "01900000-0000-7000-8000-000000001005",
+        "entity_id": "11111111-0004-7000-8000-000000000001",
         "description": (
             "Amazon.com Inc. engages in the retail sale of consumer products and subscriptions "
             "through online and physical stores in North America and internationally. It also "
@@ -246,8 +236,7 @@ INSTRUMENTS: list[dict] = [
         "country": "US",
         "currency": "USD",
         "isin": "US88160R1014",
-        # F2: entity_id == market_data_db.instruments.id for TSLA
-        "entity_id": "01900000-0000-7000-8000-000000001004",
+        "entity_id": "11111111-0005-7000-8000-000000000001",
         "description": (
             "Tesla, Inc. designs, develops, manufactures, leases, and sells electric vehicles, "
             "energy generation and storage systems, and related services. The company also offers "
@@ -283,8 +272,7 @@ INSTRUMENTS: list[dict] = [
         "country": "US",
         "currency": "USD",
         "isin": "US02079K3059",
-        # F2: entity_id == market_data_db.instruments.id for GOOGL
-        "entity_id": "01900000-0000-7000-8000-000000001003",
+        "entity_id": "11111111-0006-7000-8000-000000000001",
         "description": (
             "Alphabet Inc. provides various products and platforms worldwide through Google Search, "
             "YouTube, Google Maps, Google Play, Chrome, Android, and Google Cloud. Its segments "
@@ -320,8 +308,7 @@ INSTRUMENTS: list[dict] = [
         "country": "US",
         "currency": "USD",
         "isin": "US30303M1027",
-        # F2: entity_id == market_data_db.instruments.id for META
-        "entity_id": "01900000-0000-7000-8000-000000001007",
+        "entity_id": "11111111-0007-7000-8000-000000000001",
         "description": (
             "Meta Platforms, Inc. develops products that enable people to connect and share "
             "through mobile devices, PCs, virtual reality headsets, and wearables worldwide. "
@@ -357,8 +344,7 @@ INSTRUMENTS: list[dict] = [
         "country": "US",
         "currency": "USD",
         "isin": "US46625H1005",
-        # F2: entity_id == market_data_db.instruments.id for JPM
-        "entity_id": "01900000-0000-7000-8000-000000001008",
+        "entity_id": "11111111-0008-7000-8000-000000000001",
         "description": (
             "JPMorgan Chase & Co. operates as a financial services company worldwide. "
             "Its Consumer & Community Banking segment offers deposit and investment products, "
@@ -386,157 +372,143 @@ INSTRUMENTS: list[dict] = [
     },
 ]
 
-# Additional KG entities (non-instrument) for richer graph rendering.
-#
-# PLAN-0089 F2 Step 8: UUIDs moved to the "01900000-...-000000003NNN" range
-# (distinct from instruments at "...001NNN" and tenants/users at "...0000NNN").
-# entity_type rewritten from legacy "concept" to canonical values from the
-# migration 0039 CHECK constraint. "Semiconductor Industry" naturally maps to
-# 'industry'; the broader theme entities (AI, Cloud Computing, EV, Digital
-# Advertising) have no exact match in the 11-value enum, so they fall back to
-# 'unknown' (the explicit catch-all for upstream theme/concept extraction that
-# has not yet been mapped to a stricter discriminator).
+# Additional KG entities (non-instrument) for richer graph rendering
 KG_EXTRA_ENTITIES: list[dict] = [
     {
-        "entity_id": "01900000-0000-7000-8000-000000003001",
+        "entity_id": "11111111-0101-7000-8000-000000000001",
         "canonical_name": "Artificial Intelligence",
-        "entity_type": "unknown",
+        "entity_type": "concept",
         "ticker": None,
         "exchange": None,
     },
     {
-        "entity_id": "01900000-0000-7000-8000-000000003002",
+        "entity_id": "11111111-0102-7000-8000-000000000001",
         "canonical_name": "Semiconductor Industry",
-        "entity_type": "industry",
+        "entity_type": "concept",
         "ticker": None,
         "exchange": None,
     },
     {
-        "entity_id": "01900000-0000-7000-8000-000000003003",
+        "entity_id": "11111111-0103-7000-8000-000000000001",
         "canonical_name": "Cloud Computing",
-        "entity_type": "unknown",
+        "entity_type": "concept",
         "ticker": None,
         "exchange": None,
     },
     {
-        "entity_id": "01900000-0000-7000-8000-000000003004",
+        "entity_id": "11111111-0104-7000-8000-000000000001",
         "canonical_name": "Electric Vehicles",
-        "entity_type": "unknown",
+        "entity_type": "concept",
         "ticker": None,
         "exchange": None,
     },
     {
-        "entity_id": "01900000-0000-7000-8000-000000003005",
+        "entity_id": "11111111-0105-7000-8000-000000000001",
         "canonical_name": "Digital Advertising",
-        "entity_type": "unknown",
+        "entity_type": "concept",
         "ticker": None,
         "exchange": None,
     },
 ]
 
-# KG relations between demo entities.
+# KG relations between demo entities
 # (subject_entity_id, canonical_type, object_entity_id, decay_class, confidence)
-#
-# PLAN-0089 F2 Step 8: all subject/object UUIDs use the unified namespace.
-# Tradable instruments live at "01900000-...-000000001NNN" (matching
-# market_data_db.instruments.id); theme entities live at
-# "01900000-...-000000003NNN" (KG_EXTRA_ENTITIES above).
 KG_RELATIONS: list[tuple] = [
-    # AAPL → MSFT (compete); AAPL → AI theme
-    ("01900000-0000-7000-8000-000000001001", "COMPETES_WITH", "01900000-0000-7000-8000-000000001002", "SLOW", 0.85),
+    # AAPL relations
+    ("11111111-0001-7000-8000-000000000001", "COMPETES_WITH", "11111111-0002-7000-8000-000000000001", "SLOW", 0.85),
     (
-        "01900000-0000-7000-8000-000000001001",
+        "11111111-0001-7000-8000-000000000001",
         "EXPOSED_TO_THEME",
-        "01900000-0000-7000-8000-000000003001",
+        "11111111-0101-7000-8000-000000000001",
         "MEDIUM",
         0.80,
     ),
-    # MSFT → AI, MSFT → Cloud
+    # MSFT relations
     (
-        "01900000-0000-7000-8000-000000001002",
+        "11111111-0002-7000-8000-000000000001",
         "EXPOSED_TO_THEME",
-        "01900000-0000-7000-8000-000000003001",
+        "11111111-0101-7000-8000-000000000001",
         "MEDIUM",
         0.95,
     ),
     (
-        "01900000-0000-7000-8000-000000001002",
+        "11111111-0002-7000-8000-000000000001",
         "EXPOSED_TO_THEME",
-        "01900000-0000-7000-8000-000000003003",
+        "11111111-0103-7000-8000-000000000001",
         "MEDIUM",
         0.90,
     ),
-    # NVDA → AI, NVDA → Semi, NVDA → SUPPLIER_OF AAPL
+    # NVDA relations
     (
-        "01900000-0000-7000-8000-000000001006",
+        "11111111-0003-7000-8000-000000000001",
         "EXPOSED_TO_THEME",
-        "01900000-0000-7000-8000-000000003001",
+        "11111111-0101-7000-8000-000000000001",
         "MEDIUM",
         0.98,
     ),
-    ("01900000-0000-7000-8000-000000001006", "EXPOSED_TO_THEME", "01900000-0000-7000-8000-000000003002", "SLOW", 0.92),
-    ("01900000-0000-7000-8000-000000001006", "SUPPLIER_OF", "01900000-0000-7000-8000-000000001001", "SLOW", 0.75),
-    # AMZN → Cloud; AMZN COMPETES_WITH MSFT
+    ("11111111-0003-7000-8000-000000000001", "EXPOSED_TO_THEME", "11111111-0102-7000-8000-000000000001", "SLOW", 0.92),
+    ("11111111-0003-7000-8000-000000000001", "SUPPLIER_OF", "11111111-0001-7000-8000-000000000001", "SLOW", 0.75),
+    # AMZN relations
     (
-        "01900000-0000-7000-8000-000000001005",
+        "11111111-0004-7000-8000-000000000001",
         "EXPOSED_TO_THEME",
-        "01900000-0000-7000-8000-000000003003",
+        "11111111-0103-7000-8000-000000000001",
         "MEDIUM",
         0.93,
     ),
-    ("01900000-0000-7000-8000-000000001005", "COMPETES_WITH", "01900000-0000-7000-8000-000000001002", "SLOW", 0.80),
-    # TSLA → EV theme, TSLA → AI theme
+    ("11111111-0004-7000-8000-000000000001", "COMPETES_WITH", "11111111-0002-7000-8000-000000000001", "SLOW", 0.80),
+    # TSLA relations
     (
-        "01900000-0000-7000-8000-000000001004",
+        "11111111-0005-7000-8000-000000000001",
         "EXPOSED_TO_THEME",
-        "01900000-0000-7000-8000-000000003004",
+        "11111111-0104-7000-8000-000000000001",
         "MEDIUM",
         0.95,
     ),
     (
-        "01900000-0000-7000-8000-000000001004",
+        "11111111-0005-7000-8000-000000000001",
         "EXPOSED_TO_THEME",
-        "01900000-0000-7000-8000-000000003001",
+        "11111111-0101-7000-8000-000000000001",
         "MEDIUM",
         0.70,
     ),
-    # GOOGL → AI, GOOGL → Ads; GOOGL COMPETES_WITH MSFT
+    # GOOGL relations
     (
-        "01900000-0000-7000-8000-000000001003",
+        "11111111-0006-7000-8000-000000000001",
         "EXPOSED_TO_THEME",
-        "01900000-0000-7000-8000-000000003001",
+        "11111111-0101-7000-8000-000000000001",
         "MEDIUM",
         0.90,
     ),
     (
-        "01900000-0000-7000-8000-000000001003",
+        "11111111-0006-7000-8000-000000000001",
         "EXPOSED_TO_THEME",
-        "01900000-0000-7000-8000-000000003005",
+        "11111111-0105-7000-8000-000000000001",
         "MEDIUM",
         0.88,
     ),
-    ("01900000-0000-7000-8000-000000001003", "COMPETES_WITH", "01900000-0000-7000-8000-000000001002", "SLOW", 0.82),
-    # META → AI, META → Ads; META COMPETES_WITH GOOGL
+    ("11111111-0006-7000-8000-000000000001", "COMPETES_WITH", "11111111-0002-7000-8000-000000000001", "SLOW", 0.82),
+    # META relations
     (
-        "01900000-0000-7000-8000-000000001007",
+        "11111111-0007-7000-8000-000000000001",
         "EXPOSED_TO_THEME",
-        "01900000-0000-7000-8000-000000003001",
+        "11111111-0101-7000-8000-000000000001",
         "MEDIUM",
         0.85,
     ),
     (
-        "01900000-0000-7000-8000-000000001007",
+        "11111111-0007-7000-8000-000000000001",
         "EXPOSED_TO_THEME",
-        "01900000-0000-7000-8000-000000003005",
+        "11111111-0105-7000-8000-000000000001",
         "MEDIUM",
         0.95,
     ),
-    ("01900000-0000-7000-8000-000000001007", "COMPETES_WITH", "01900000-0000-7000-8000-000000001003", "SLOW", 0.88),
-    # JPM → AI (low exposure — banks consume AI for risk modeling)
+    ("11111111-0007-7000-8000-000000000001", "COMPETES_WITH", "11111111-0006-7000-8000-000000000001", "SLOW", 0.88),
+    # JPM relations
     (
-        "01900000-0000-7000-8000-000000001008",
+        "11111111-0008-7000-8000-000000000001",
         "EXPOSED_TO_THEME",
-        "01900000-0000-7000-8000-000000003001",
+        "11111111-0101-7000-8000-000000000001",
         "MEDIUM",
         0.60,
     ),

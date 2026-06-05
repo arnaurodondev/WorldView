@@ -258,13 +258,15 @@ test.describe("Color-contrast: authenticated routes (auth mocked)", () => {
   test("/instruments/[id] — zero color-contrast violations (excluding pre-existing design exceptions)", async ({
     page,
   }) => {
-    // WHY ticker URL (F2 step 13): instruments route is keyed by ticker post-PLAN-0089-F2.
-    // The shell renders muted-foreground labels regardless of whether the entity exists —
-    // S9 returns {} (mocked). AAPL is the canonical seeded demo instrument.
+    // WHY placeholder UUID: the instruments route renders the shell with muted-foreground
+    // labels regardless of whether the entity exists — S9 returns {} (mocked).
     // WHY comment on excluded: .text-muted-foreground/50 nav labels and the AI
     // assistant button are excluded at the runColorContrastCheck level (pre-existing
     // design exceptions documented at the top of this file).
-    const results = await runColorContrastCheck(page, "/instruments/AAPL");
+    const results = await runColorContrastCheck(
+      page,
+      "/instruments/00000000-0000-7000-8000-000000000001",
+    );
     if (results.violations.length > 0) {
       console.error(
         "color-contrast violations on /instruments/[id]:",

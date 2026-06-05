@@ -19,10 +19,9 @@
  *   benefit — the user is just slicing what's already loaded. Client-side
  *   filtering also gives instant feedback (zero latency).
  *
- * WHY ROUTING_TIER BADGE: The tier (LIGHT/MEDIUM/DEEP) tells traders at
+ * WHY ROUTING_TIER BADGE: The tier (LIGHT/MEDIUM/HIGH/DEEP) tells traders at
  * a glance how significant the S6 pipeline ranked the article — no need to
- * parse a score number. (HIGH is a legacy v1 value retained in the filter
- * union for backward-compat with any stored URL state; backend now emits DEEP.)
+ * parse a score number.
  *
  * WHO USES IT: app/(app)/dashboard/page.tsx (Row 4, col-span-3)
  * DATA SOURCE: S9 GET /v1/news/top via createGateway().getTopNews({ limit: 20 })
@@ -37,9 +36,6 @@ import { useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { createGateway } from "@/lib/gateway";
 import { useAuth } from "@/hooks/useAuth";
-// QA A-F-001/F-002 (2026-05-21): shared selection contract.
-import { qk } from "@/lib/query/keys";
-import { useResolvedPortfolioId } from "@/hooks/useResolvedPortfolioId";
 import { Skeleton } from "@/components/ui/skeleton";
 import { InlineEmptyState } from "@/components/data/InlineEmptyState";
 import { AlertTriangle } from "lucide-react";
@@ -51,12 +47,9 @@ import type { RankedArticle } from "@/types/api";
 // ── Types ────────────────────────────────────────────────────────────────────
 
 type SortMode = "impact" | "date";
-// Tier filter values normalized to upper case. Backend (S6) only ever emits
-// "DEEP" / "MEDIUM" / "LIGHT" — see services/nlp-pipeline/.../routing.py
-// RoutingTier enum and the routing_decisions_final_tier_chk DB constraint.
-// "HIGH" is retained in the union for backward-compat with any URL state that
-// still references the (never-emitted) legacy frontend label; the filter that
-// selects it will simply match zero rows.
+// Tier filter values normalized to upper case (S6 returns "DEEP" / "HIGH" /
+// "MEDIUM" / "LIGHT" but with occasional case drift). Including the literal
+// strings here pins the contract.
 const ALL_TIERS = ["LIGHT", "MEDIUM", "HIGH", "DEEP"] as const;
 type Tier = (typeof ALL_TIERS)[number];
 
@@ -77,24 +70,39 @@ export function PortfolioNewsWidget() {
   // include/exclude check O(1).
   const [activeTiers, setActiveTiers] = useState<Set<Tier>>(new Set());
 
-  // ── 1. Holdings — must come first so portfolioTickers is ready before the news query ──
-  // WHY pull from holdings vs watchlists: this widget is "Portfolio News" — the
+  // ── 1. Top news ─────────────────────────────────────────────────────────
+  const { data, isLoading, isError, refetch } = useQuery({
+    queryKey: ["dashboard-portfolio-news"],
+    // PLAN-0050 T-F-6-02 / PLAN-0053 T-D-4-01: limit=20 keeps the filter
+    // candidate pool deep enough that a tier or ticker filter doesn't
+    // empty the widget on most days.
+    queryFn: () => createGateway(accessToken).getTopNews({ limit: 20 }),
+    enabled: !!accessToken,
+    // WHY 5min: S9 now caches /v1/news/top for 120s in Valkey, so cold
+    // requests are already fast. 5min frontend staleTime avoids polling
+    // the cache more than once per session, reducing server load.
+    staleTime: 5 * 60_000,
+    refetchInterval: 5 * 60_000,
+  });
+
+  // ── 2. Holdings — populates the ticker filter dropdown ─────────────────
+  // We only need ticker strings, so we don't refetch this often. WHY pull
+  // from holdings vs watchlists: this widget is "Portfolio News" — the
   // filter universe should match the portfolio universe.
-  // QA A-F-001 (2026-05-21): central qk.portfolios.list() shares cache
-  // with PortfolioSwitcher / usePortfolioMetrics. Pre-fix this used its
-  // own per-widget bare key and triggered a duplicate /v1/portfolios.
   const { data: portfolios } = useQuery({
-    queryKey: qk.portfolios.list(),
+    queryKey: ["dashboard-portfolio-news-portfolios"],
     queryFn: () => createGateway(accessToken).getPortfolios(),
     enabled: !!accessToken,
     staleTime: 5 * 60_000,
   });
 
-  // QA A-F-002 (2026-05-21): respect the PortfolioSwitcher chip selection
-  // (pre-fix this widget picked the oldest-by-created_at portfolio
-  // unconditionally). The shared resolver picks the chip's selection
-  // first; falls back to portfolios[0] when none selected.
-  const firstPortfolioId = useResolvedPortfolioId(portfolios);
+  const firstPortfolioId = useMemo(() => {
+    if (!portfolios || portfolios.length === 0) return null;
+    const sorted = [...portfolios].sort(
+      (a, b) => Date.parse(a.created_at) - Date.parse(b.created_at),
+    );
+    return sorted[0]?.portfolio_id ?? null;
+  }, [portfolios]);
 
   const { data: holdingsResp } = useQuery({
     queryKey: ["dashboard-portfolio-news-holdings", firstPortfolioId],
@@ -111,36 +119,6 @@ export function PortfolioNewsWidget() {
     }
     return Array.from(set).sort();
   }, [holdingsResp]);
-
-  // WHY portfolioTickers: derive a comma-separated string from tickerOptions to pass
-  // to the backend. When the portfolio has no holdings (tickerOptions empty), this
-  // returns undefined, which the backend treats as "no filter" (global ranked feed).
-  const portfolioTickers = useMemo(
-    () => (tickerOptions.length > 0 ? tickerOptions.join(",") : undefined),
-    [tickerOptions],
-  );
-
-  // ── 2. Top news — declared AFTER portfolioTickers to avoid TDZ ReferenceError ──
-  // WHY tickers: server-side filtering returns only portfolio-relevant articles (BP-545 fix 2).
-  // Client-side ticker filter refines within the returned set. When portfolio has no holdings,
-  // tickers=undefined falls back to the global ranked feed.
-  // WHY portfolioTickers in queryKey: cache is per-portfolio so different portfolios
-  // don't share a stale news cache. On first render portfolioTickers=undefined (holdings
-  // not yet loaded) → first fetch uses global feed → once holdings load the key changes
-  // and a new fetch fires with the correct tickers. This is correct expected behavior.
-  const { data, isLoading, isError, refetch } = useQuery({
-    queryKey: ["dashboard-portfolio-news", portfolioTickers],
-    // PLAN-0050 T-F-6-02 / PLAN-0053 T-D-4-01: limit=20 keeps the filter
-    // candidate pool deep enough that a tier or ticker filter doesn't
-    // empty the widget on most days.
-    queryFn: () => createGateway(accessToken).getTopNews({ limit: 20, tickers: portfolioTickers }),
-    enabled: !!accessToken,
-    // WHY 5min: S9 now caches /v1/news/top for 120s in Valkey, so cold
-    // requests are already fast. 5min frontend staleTime avoids polling
-    // the cache more than once per session, reducing server load.
-    staleTime: 5 * 60_000,
-    refetchInterval: 5 * 60_000,
-  });
 
   // ── 3. Filter + sort articles ──────────────────────────────────────────
   const articles = useMemo(() => {

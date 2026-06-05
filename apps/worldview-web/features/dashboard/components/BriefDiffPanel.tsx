@@ -46,7 +46,7 @@ export function BriefDiffPanel({ diff, onClose }: BriefDiffPanelProps) {
       // WHY max-h-[60vh] overflow-y-auto: when the diff has many bullets (6+ new + removed),
       // the unconstrained panel extends off-screen. Capping at 60vh with scroll keeps it
       // fully readable without pushing it past the viewport boundary.
-      className="z-10 mt-1 w-72 max-h-[60vh] overflow-y-auto rounded-[2px] border border-border bg-card p-3 text-[11px] "
+      className="z-10 mt-1 w-72 max-h-[60vh] overflow-y-auto rounded-[2px] border border-border bg-card p-3 text-[11px] shadow-md"
       data-testid="brief-diff-panel"
     >
       {/* ── Delta summary ───────────────────────────────────────────────── */}

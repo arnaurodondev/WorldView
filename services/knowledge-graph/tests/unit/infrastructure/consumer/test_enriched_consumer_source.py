@@ -132,7 +132,7 @@ def _canonicalize_returning_none() -> object:
             decay_class=None,
             decay_alpha=None,
             base_confidence=None,
-        ),
+        )
     )
 
 

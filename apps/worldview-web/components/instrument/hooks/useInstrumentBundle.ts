@@ -19,14 +19,13 @@ import { qk } from "@/lib/query/keys";
 
 // WHY staleTime 5min: bundle holds slow-moving data (fundamentals, top news).
 // Fresh enough during market hours, long enough to avoid tab-switch refetches.
-// WHY !!entityId && !!token: empty id during route hydration would 404; null token
-// during auth-context race would 401 — both are prevented at the enabled gate.
+// WHY !!entityId gate: empty id during route hydration would 404 on S9.
 export function useInstrumentBundle(entityId: string) {
   const token = useAccessToken();
   return useQuery({
     queryKey: qk.instruments.pageBundle(entityId),
     queryFn: () => createGateway(token).getInstrumentPageBundle(entityId),
     staleTime: 5 * 60 * 1000,
-    enabled: !!entityId && !!token,
+    enabled: !!entityId,
   });
 }

@@ -28,28 +28,6 @@ class PortfolioResponse(BaseModel):
     tenant_id: str | None = None
 
 
-class SectorBucket(BaseModel):
-    """One sector row in a portfolio sector attribution response."""
-
-    model_config = ConfigDict(extra="allow")
-
-    sector: str
-    holding_count: int = 0
-    market_value: float = 0.0
-    sector_weight_pct: float = 0.0  # weight as 0-100
-    sector_day_pnl: float = 0.0  # unrealised day P&L in portfolio currency
-
-
-class PortfolioSectorAttributionResponse(BaseModel):
-    """Response for GET /v1/portfolios/{id}/sector-attribution."""
-
-    model_config = ConfigDict(extra="allow")
-
-    portfolio_id: str
-    buckets: list[SectorBucket] = []
-    covered_pct: float = 0.0  # fraction of portfolio (by market value) with sector data
-
-
 class PortfolioBundleResponse(BaseModel):
     """Portfolio page bundle — all data needed for the portfolio page initial load.
 

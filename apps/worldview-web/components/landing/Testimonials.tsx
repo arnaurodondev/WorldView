@@ -47,11 +47,11 @@ export function Testimonials() {
           </p>
           <h2
             id="scenarios-heading"
-            className="text-[30px] font-semibold tracking-tight text-foreground sm:text-[36px]"
+            className="text-3xl font-semibold tracking-tight text-foreground sm:text-4xl"
           >
             Three traders. Three workflows.
           </h2>
-          <p className="mt-3 text-[14px] text-muted-foreground">
+          <p className="mt-3 text-sm text-muted-foreground">
             We built this as a thesis project, not a marketed launch — these
             are the personas the system targets, written as scenarios rather
             than fake testimonials.
@@ -64,7 +64,7 @@ export function Testimonials() {
               key={s.persona}
               className="flex flex-col rounded-[2px] border border-border/40 bg-card p-6"
             >
-              <blockquote className="mb-5 flex-1 text-[14px] leading-relaxed text-foreground">
+              <blockquote className="mb-5 flex-1 text-sm leading-relaxed text-foreground">
                 <span className="text-primary">&ldquo;</span>
                 {s.quote}
                 <span className="text-primary">&rdquo;</span>

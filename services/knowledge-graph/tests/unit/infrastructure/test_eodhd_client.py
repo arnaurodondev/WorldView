@@ -12,7 +12,7 @@ import pytest
 pytestmark = pytest.mark.unit
 
 
-@pytest.mark.unit()
+@pytest.mark.unit
 def test_eodhd_client_raises_import_error() -> None:
     """Importing the tombstoned EODHD client module must raise ImportError."""
     module_name = "knowledge_graph.infrastructure.eodhd.client"

@@ -53,36 +53,6 @@ from contracts import ContentSourceType, IngestionTaskStatus
 | `ContentSourceType` | `eodhd`, `sec_edgar`, `finnhub`, `newsapi`, `manual` | S4 (producer), S5 (consumer) |
 | `IngestionTaskStatus` | `pending`, `claimed`, `running`, `succeeded`, `retry`, `failed` | S2, S4 scheduler-worker lifecycle |
 
-### Pagination Models (`contracts.pagination`) — opt-in
-
-Reusable pagination request/response shapes. Services may adopt these
-incrementally to replace per-service `limit`/`offset` schemas (REF-003 /
-TASK-W4-07). Existing per-service pagination continues to work
-unchanged — no forced migration.
-
-```python
-from contracts import PaginatedResponse, PaginationParams
-
-@router.get("/items")
-async def list_items(p: PaginationParams = Depends()) -> PaginatedResponse[ItemOut]:
-    rows, total = await repo.list(limit=p.limit, offset=p.offset)
-    return PaginatedResponse[ItemOut](
-        items=rows,
-        total=total,
-        limit=p.limit,
-        offset=p.offset,
-        has_more=(p.offset + len(rows)) < total,
-    )
-```
-
-| Class | Fields | Notes |
-|-------|--------|-------|
-| `PaginationParams` | `limit` (default 20, 1–200), `offset` (default 0, ≥0) | Pydantic v2 BaseModel. Cap of 200 prevents unbounded queries. |
-| `PaginatedResponse[T]` | `items: list[T]`, `total: int`, `limit`, `offset`, `has_more: bool` | Generic. `has_more` is caller-computed (defaults to `False`). |
-
-Cursor-based pagination is intentionally out of scope; if needed later
-it will land as a separate variant in this module.
-
 ### Canonical Market Data Models (`contracts.canonical`)
 
 All models are frozen dataclasses with `from_dict(cls, d)` and `to_dict(self)`.

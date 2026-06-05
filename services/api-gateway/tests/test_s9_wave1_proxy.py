@@ -22,10 +22,6 @@ pytestmark = pytest.mark.unit
 _JWT_SECRET = "test-secret"  # noqa: S105
 _JWT_PAYLOAD = {"sub": "user-1", "tenant_id": "t-1", "exp": 9999999999}
 
-# WHY valid UUID: instrument_id path params are now UUID-typed (F-010 security fix).
-# FastAPI auto-validates and returns 422 for non-UUID values before route logic runs.
-_INSTRUMENT_UUID = "11111111-1111-1111-1111-111111111111"
-
 
 def _make_jwt() -> str:
     return jwt.encode(_JWT_PAYLOAD, _JWT_SECRET, algorithm="HS256")
@@ -69,7 +65,7 @@ async def test_ohlcv_proxy_requires_auth(app, mock_clients) -> None:
     """GET /v1/ohlcv/{id} without auth → 401; downstream never called."""
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as client:
-        resp = await client.get(f"/v1/ohlcv/{_INSTRUMENT_UUID}")
+        resp = await client.get("/v1/ohlcv/instr-1")
 
     assert resp.status_code == 401
     mock_clients.market_data.get.assert_not_called()
@@ -85,7 +81,7 @@ async def test_ohlcv_proxy_forwards_query_params(authed_app, authed_mock_clients
     transport = ASGITransport(app=authed_app)
     async with AsyncClient(transport=transport, base_url="http://test") as client:
         resp = await client.get(
-            f"/v1/ohlcv/{_INSTRUMENT_UUID}",
+            "/v1/ohlcv/instr-1",
             params={"period": "1d", "from": "2026-01-01"},
             headers={"Authorization": f"Bearer {_make_jwt()}"},
         )
@@ -106,14 +102,14 @@ async def test_ohlcv_proxy_authenticated(authed_app, authed_mock_clients) -> Non
     transport = ASGITransport(app=authed_app)
     async with AsyncClient(transport=transport, base_url="http://test") as client:
         resp = await client.get(
-            f"/v1/ohlcv/{_INSTRUMENT_UUID}",
+            "/v1/ohlcv/instr-1",
             headers={"Authorization": f"Bearer {_make_jwt()}"},
         )
 
     assert resp.status_code == 200
     authed_mock_clients.market_data.get.assert_called_once()
     call_args = authed_mock_clients.market_data.get.call_args[0]
-    assert f"/api/v1/ohlcv/{_INSTRUMENT_UUID}" in call_args[0]
+    assert "/api/v1/ohlcv/instr-1" in call_args[0]
 
 
 # ── Quotes ───────────────────────────────────────────────────────────────────
@@ -145,7 +141,7 @@ async def test_quotes_single_proxy_fallback(authed_app, authed_mock_clients) -> 
     transport = ASGITransport(app=authed_app)
     async with AsyncClient(transport=transport, base_url="http://test") as client:
         resp = await client.get(
-            f"/v1/quotes/{_INSTRUMENT_UUID}",
+            "/v1/quotes/instr-1",
             headers={"Authorization": f"Bearer {_make_jwt()}"},
         )
 
@@ -153,8 +149,8 @@ async def test_quotes_single_proxy_fallback(authed_app, authed_mock_clients) -> 
     # Two calls: first to PriceSnapshot (404), then to legacy quote endpoint
     assert authed_mock_clients.market_data.get.call_count == 2
     calls = [c[0][0] for c in authed_mock_clients.market_data.get.call_args_list]
-    assert any(f"/internal/v1/price/{_INSTRUMENT_UUID}" in c for c in calls)
-    assert any(f"/api/v1/quotes/{_INSTRUMENT_UUID}" in c for c in calls)
+    assert any("/internal/v1/price/instr-1" in c for c in calls)
+    assert any("/api/v1/quotes/instr-1" in c for c in calls)
 
 
 @pytest.mark.asyncio
@@ -189,7 +185,7 @@ async def test_quotes_single_proxy_price_snapshot(authed_app, authed_mock_client
     transport = ASGITransport(app=authed_app)
     async with AsyncClient(transport=transport, base_url="http://test") as client:
         resp = await client.get(
-            f"/v1/quotes/{_INSTRUMENT_UUID}",
+            "/v1/quotes/instr-1",
             headers={"Authorization": f"Bearer {_make_jwt()}"},
         )
 
@@ -250,7 +246,7 @@ async def test_fundamentals_proxy_unauthenticated(app, mock_clients) -> None:
     """GET /v1/fundamentals/{id} without auth → 401."""
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as client:
-        resp = await client.get(f"/v1/fundamentals/{_INSTRUMENT_UUID}")
+        resp = await client.get("/v1/fundamentals/instr-1")
 
     assert resp.status_code == 401
     mock_clients.market_data.get.assert_not_called()
@@ -266,7 +262,7 @@ async def test_fundamentals_proxy_forwards_params(authed_app, authed_mock_client
     transport = ASGITransport(app=authed_app)
     async with AsyncClient(transport=transport, base_url="http://test") as client:
         resp = await client.get(
-            f"/v1/fundamentals/{_INSTRUMENT_UUID}",
+            "/v1/fundamentals/instr-1",
             params={"fields": "pe_ratio"},
             headers={"Authorization": f"Bearer {_make_jwt()}"},
         )
@@ -276,7 +272,7 @@ async def test_fundamentals_proxy_forwards_params(authed_app, authed_mock_client
     assert call_kwargs["params"].get("fields") == "pe_ratio"
     # Verify downstream path includes instrument_id
     call_args = authed_mock_clients.market_data.get.call_args[0]
-    assert f"/api/v1/fundamentals/{_INSTRUMENT_UUID}" in call_args[0]
+    assert "/api/v1/fundamentals/instr-1" in call_args[0]
 
 
 # ── Entity Graph + Contradictions ────────────────────────────────────────────
@@ -314,383 +310,23 @@ async def test_entity_graph_depth_param(authed_app, authed_mock_clients) -> None
         )
 
     assert resp.status_code == 200
-    # ISSUE-5 fix (2026-05-10): depth IS now forwarded to S7.
-    # BP-S9-GRAPH-001 (depth>1 merge): the handler makes TWO S7 calls when depth>1 —
-    # the primary call with the requested depth, then a depth=1 SQL call to merge in
-    # direct-neighbor edges (AGE only returns depth-N neighbors but the `relations` list
-    # is always depth=1, so depth=2 graphs had no edges without the merge).
-    # call_args_list[0] = primary (depth=2), call_args_list[1] = merge (depth=1).
-    assert authed_mock_clients.knowledge_graph.get.call_count == 2
-    first_call_kwargs = authed_mock_clients.knowledge_graph.get.call_args_list[0][1]
-    assert "depth" in first_call_kwargs["params"], "depth must be forwarded to S7 when >1 (ISSUE-5)"
-    assert first_call_kwargs["params"]["depth"] == "2", "depth value must be forwarded as string"
-    assert "limit" in first_call_kwargs["params"], "limit is always forwarded to S7"
-    first_call_args = authed_mock_clients.knowledge_graph.get.call_args_list[0][0]
-    assert f"/api/v1/entities/{entity_id}/graph" in first_call_args[0]
-    # Second call is the depth=1 merge — must NOT include depth param.
-    second_call_kwargs = authed_mock_clients.knowledge_graph.get.call_args_list[1][1]
-    assert "depth" not in second_call_kwargs["params"], "merge call must use SQL path (no depth)"
+    # ISSUE-5 fix (2026-05-10): depth IS now forwarded to S7. The previous behaviour
+    # stripped depth because the comment in proxy.py was wrong — S7 has a depth param
+    # (ge=1, le=3) for AGE Cypher multi-hop traversal. depth>1 is forwarded; depth=1
+    # is omitted (S7 default) to avoid a redundant param on the common case.
+    # The `limit` param IS always forwarded (defaulting to 40 when not provided).
+    authed_mock_clients.knowledge_graph.get.assert_called_once()
+    call_kwargs = authed_mock_clients.knowledge_graph.get.call_args[1]
+    assert "depth" in call_kwargs["params"], "depth must be forwarded to S7 when >1 (ISSUE-5)"
+    assert call_kwargs["params"]["depth"] == "2", "depth value must be forwarded as string"
+    assert "limit" in call_kwargs["params"], "limit is always forwarded to S7"
+    call_args = authed_mock_clients.knowledge_graph.get.call_args[0]
+    assert f"/api/v1/entities/{entity_id}/graph" in call_args[0]
     # Verify response is transformed to EntityGraph format (not raw S7 shape)
     body = resp.json()
     assert "entity_id" in body
     assert "nodes" in body
     assert "edges" in body
-
-
-@pytest.mark.asyncio
-async def test_transform_graph_response_orphan_filter() -> None:
-    """_transform_graph_response strips orphan edges and orphan nodes.
-
-    F-001: the orphan filter logic is pure and testable without an HTTP stack.
-    Two cases:
-    (a) an edge referencing an entity_id absent from the nodes dict is removed
-    (b) a node that only appeared as an edge endpoint — now removed — becomes
-        orphaned and is also removed (unless it is the center entity).
-    """
-    from api_gateway.routes.intelligence import _transform_graph_response
-
-    center_id = "00000000-0000-0000-0000-000000000001"
-    connected_id = "00000000-0000-0000-0000-000000000002"
-    ghost_id = "00000000-0000-0000-0000-000000000099"  # in entities but in no relation
-
-    s7_payload = {
-        "center": {"entity_id": center_id, "canonical_name": "Center Co.", "entity_type": "company"},
-        "relations": [
-            {
-                "relation_id": "rel-1",
-                "subject_entity_id": center_id,
-                "object_entity_id": connected_id,
-                "canonical_type": "competes_with",
-                "confidence": 0.8,
-                "decay_class": "DURABLE",
-                "relation_summary": None,
-            },
-            # Edge whose object is absent from entities dict → must be filtered out.
-            {
-                "relation_id": "rel-ghost",
-                "subject_entity_id": center_id,
-                "object_entity_id": ghost_id,
-                "canonical_type": "partner_of",
-                "confidence": 0.7,
-                "decay_class": "MEDIUM",
-                "relation_summary": None,
-            },
-        ],
-        "entities": {
-            connected_id: {"entity_id": connected_id, "canonical_name": "Connected Co.", "entity_type": "company"},
-            # ghost_id deliberately absent — simulates AGE returning entity_id not in entities dict.
-        },
-    }
-
-    result = _transform_graph_response(s7_payload)
-
-    node_ids = {n["id"] for n in result["nodes"]}
-    edge_ids = {e["id"] for e in result["edges"]}
-
-    # Center must always be present.
-    assert center_id in node_ids
-    # Connected node (has a valid edge) must be present.
-    assert connected_id in node_ids
-    # Ghost id was absent from entities dict → its edge and itself must be absent.
-    assert ghost_id not in node_ids
-    assert "rel-ghost" not in edge_ids
-    # Valid edge must remain.
-    assert "rel-1" in edge_ids
-
-
-@pytest.mark.asyncio
-async def test_transform_graph_b01_optional_fields_on_nodes() -> None:
-    """_transform_graph_response propagates B-01 optional fields on center and neighbor nodes.
-
-    F-007: ticker, description, sector are forwarded from S7 EntitySummary so
-    the frontend InlineSelectionPanel and PeerComparisonPanel can use them
-    without a second API call.  None is the correct sentinel when the field is
-    absent — NOT an empty string.
-    """
-    from api_gateway.routes.intelligence import _transform_graph_response
-
-    center_id = "00000000-0000-0000-0000-000000000001"
-    neighbor_id = "00000000-0000-0000-0000-000000000002"
-
-    s7_payload = {
-        "center": {
-            "entity_id": center_id,
-            "canonical_name": "Apple Inc.",
-            "entity_type": "company",
-            "ticker": "AAPL",
-            "description": "Technology company.",
-            "sector": "Technology",
-        },
-        "relations": [
-            {
-                "relation_id": "rel-1",
-                "subject_entity_id": center_id,
-                "object_entity_id": neighbor_id,
-                "canonical_type": "competes_with",
-                "confidence": 0.85,
-            }
-        ],
-        "entities": {
-            neighbor_id: {
-                "entity_id": neighbor_id,
-                "canonical_name": "Microsoft Corp.",
-                "entity_type": "company",
-                "ticker": "MSFT",
-                "description": "Software company.",
-                "sector": "Technology",
-            }
-        },
-    }
-
-    result = _transform_graph_response(s7_payload)
-
-    nodes_by_id = {n["id"]: n for n in result["nodes"]}
-
-    # Center node B-01 fields
-    center_node = nodes_by_id[center_id]
-    assert center_node["ticker"] == "AAPL", "center ticker must be forwarded"
-    assert center_node["description"] == "Technology company.", "center description must be forwarded"
-    assert center_node["sector"] == "Technology", "center sector must be forwarded"
-
-    # Neighbor node B-01 fields
-    neighbor_node = nodes_by_id[neighbor_id]
-    assert neighbor_node["ticker"] == "MSFT", "neighbor ticker must be forwarded"
-    assert neighbor_node["description"] == "Software company.", "neighbor description must be forwarded"
-    assert neighbor_node["sector"] == "Technology", "neighbor sector must be forwarded"
-
-
-@pytest.mark.asyncio
-async def test_transform_graph_b01_optional_fields_absent_when_missing() -> None:
-    """_transform_graph_response sets description and sector to None when S7 omits them.
-
-    F-007: optional B-01 fields must be None (not empty string) when absent —
-    the frontend type contract uses null/undefined to conditionally render panels.
-    ticker defaults to empty string (non-nullable in the frontend type).
-    """
-    from api_gateway.routes.intelligence import _transform_graph_response
-
-    center_id = "00000000-0000-0000-0000-000000000010"
-    neighbor_id = "00000000-0000-0000-0000-000000000011"
-
-    s7_payload = {
-        "center": {
-            "entity_id": center_id,
-            "canonical_name": "No-Meta Corp.",
-            "entity_type": "company",
-            # ticker, description, sector intentionally absent
-        },
-        "relations": [
-            {
-                "relation_id": "rel-nm",
-                "subject_entity_id": center_id,
-                "object_entity_id": neighbor_id,
-                "canonical_type": "partner_of",
-                "confidence": 0.7,
-            }
-        ],
-        "entities": {
-            neighbor_id: {
-                "entity_id": neighbor_id,
-                "canonical_name": "Also No Meta.",
-                "entity_type": "company",
-                # B-01 fields absent
-            }
-        },
-    }
-
-    result = _transform_graph_response(s7_payload)
-    nodes_by_id = {n["id"]: n for n in result["nodes"]}
-
-    center_node = nodes_by_id[center_id]
-    assert center_node["description"] is None, "description must be None when absent from S7"
-    assert center_node["sector"] is None, "sector must be None when absent from S7"
-    assert center_node["ticker"] == "", "ticker must default to empty string when absent"
-
-    neighbor_node = nodes_by_id[neighbor_id]
-    assert neighbor_node["description"] is None
-    assert neighbor_node["sector"] is None
-    assert neighbor_node["ticker"] == ""
-
-
-@pytest.mark.asyncio
-async def test_transform_graph_edge_decay_class_forwarded() -> None:
-    """_transform_graph_response forwards decay_class from S7 relation to edge.
-
-    F-007 / B-02: decay_class drives edge opacity in the sigma edgeReducer
-    (PERMANENT/DURABLE=1.0, SLOW/MEDIUM=0.7, FAST/EPHEMERAL=0.4).
-    When S7 omits it the edge must carry decay_class=None so the frontend
-    falls back to MEDIUM opacity without raising a KeyError.
-    """
-    from api_gateway.routes.intelligence import _transform_graph_response
-
-    center_id = "00000000-0000-0000-0000-000000000020"
-    neighbor_a = "00000000-0000-0000-0000-000000000021"
-    neighbor_b = "00000000-0000-0000-0000-000000000022"
-
-    s7_payload = {
-        "center": {"entity_id": center_id, "canonical_name": "Center", "entity_type": "company"},
-        "relations": [
-            {
-                "relation_id": "rel-durable",
-                "subject_entity_id": center_id,
-                "object_entity_id": neighbor_a,
-                "canonical_type": "owns",
-                "confidence": 0.9,
-                "decay_class": "DURABLE",
-            },
-            {
-                "relation_id": "rel-no-decay",
-                "subject_entity_id": center_id,
-                "object_entity_id": neighbor_b,
-                "canonical_type": "partner_of",
-                "confidence": 0.6,
-                # decay_class intentionally absent
-            },
-        ],
-        "entities": {
-            neighbor_a: {"entity_id": neighbor_a, "canonical_name": "Neighbor A", "entity_type": "company"},
-            neighbor_b: {"entity_id": neighbor_b, "canonical_name": "Neighbor B", "entity_type": "company"},
-        },
-    }
-
-    result = _transform_graph_response(s7_payload)
-    edges_by_id = {e["id"]: e for e in result["edges"]}
-
-    # decay_class present in S7 → forwarded to edge
-    assert edges_by_id["rel-durable"]["decay_class"] == "DURABLE"
-    # decay_class absent in S7 → None on edge (not missing key, not empty string)
-    assert "decay_class" in edges_by_id["rel-no-decay"], "decay_class key must always be present on edge"
-    assert edges_by_id["rel-no-decay"]["decay_class"] is None
-
-
-@pytest.mark.asyncio
-async def test_transform_graph_edge_direction_outbound_inbound_lateral() -> None:
-    """_transform_graph_response sets direction=outbound/inbound/lateral correctly.
-
-    F-007: direction encodes the semantic role of center vs endpoint:
-    - outbound: center is the subject (the initiating/owning side)
-    - inbound: center is the object (the receiving side)
-    - lateral: neither endpoint is the center (depth>1 cross-edges)
-    """
-    from api_gateway.routes.intelligence import _transform_graph_response
-
-    center_id = "00000000-0000-0000-0000-000000000030"
-    neighbor_a = "00000000-0000-0000-0000-000000000031"
-    neighbor_b = "00000000-0000-0000-0000-000000000032"
-
-    s7_payload = {
-        "center": {"entity_id": center_id, "canonical_name": "Center", "entity_type": "company"},
-        "relations": [
-            # center→neighbor_a: outbound (center is subject)
-            {
-                "relation_id": "rel-out",
-                "subject_entity_id": center_id,
-                "object_entity_id": neighbor_a,
-                "canonical_type": "employs",
-                "confidence": 0.9,
-            },
-            # neighbor_b→center: inbound (center is object)
-            {
-                "relation_id": "rel-in",
-                "subject_entity_id": neighbor_b,
-                "object_entity_id": center_id,
-                "canonical_type": "acquired_by",
-                "confidence": 0.8,
-            },
-            # neighbor_a→neighbor_b: lateral (neither endpoint is center)
-            {
-                "relation_id": "rel-lat",
-                "subject_entity_id": neighbor_a,
-                "object_entity_id": neighbor_b,
-                "canonical_type": "partner_of",
-                "confidence": 0.7,
-            },
-        ],
-        "entities": {
-            neighbor_a: {"entity_id": neighbor_a, "canonical_name": "Neighbor A", "entity_type": "company"},
-            neighbor_b: {"entity_id": neighbor_b, "canonical_name": "Neighbor B", "entity_type": "company"},
-        },
-    }
-
-    result = _transform_graph_response(s7_payload)
-    edges_by_id = {e["id"]: e for e in result["edges"]}
-
-    assert edges_by_id["rel-out"]["direction"] == "outbound", "center as subject → direction must be outbound"
-    assert edges_by_id["rel-in"]["direction"] == "inbound", "center as object → direction must be inbound"
-    assert edges_by_id["rel-lat"]["direction"] == "lateral", "neither endpoint is center → direction must be lateral"
-
-
-@pytest.mark.asyncio
-async def test_entity_graph_depth1_merge_with_real_data(authed_app, authed_mock_clients) -> None:
-    """depth>1 merge integrates depth=1 nodes+edges into the primary result.
-
-    F-002: the previous test used empty payloads so the merge loop never ran.
-    This test uses payloads where depth=2 returns only a depth-2 orphan node
-    and depth=1 returns the connected neighbor — verifying that after merge the
-    depth-1 neighbor and its edge are present in the final response.
-    """
-    entity_id = "00000000-0000-0000-0000-000000000001"
-    depth2_entity = "00000000-0000-0000-0000-000000000002"
-    depth1_entity = "00000000-0000-0000-0000-000000000003"
-
-    # depth=2 primary call: returns a depth-2 node with NO relations (AGE bug).
-    depth2_payload = {
-        "center": {"entity_id": entity_id, "canonical_name": "Center", "entity_type": "company"},
-        "relations": [],  # no edges → depth2_entity becomes an orphan after filter
-        "entities": {
-            depth2_entity: {"entity_id": depth2_entity, "canonical_name": "Depth2 Co.", "entity_type": "company"},
-        },
-    }
-    # depth=1 merge call: returns the direct neighbor with 1 edge.
-    depth1_payload = {
-        "center": {"entity_id": entity_id, "canonical_name": "Center", "entity_type": "company"},
-        "relations": [
-            {
-                "relation_id": "rel-d1",
-                "subject_entity_id": entity_id,
-                "object_entity_id": depth1_entity,
-                "canonical_type": "employs",
-                "confidence": 0.9,
-                "decay_class": "PERMANENT",
-                "relation_summary": None,
-            }
-        ],
-        "entities": {
-            depth1_entity: {"entity_id": depth1_entity, "canonical_name": "Depth1 Co.", "entity_type": "company"},
-        },
-    }
-
-    def _make_resp(payload: dict) -> MagicMock:
-        r = MagicMock(spec=httpx.Response)
-        r.status_code = 200
-        r.json.return_value = payload
-        return r
-
-    authed_mock_clients.knowledge_graph.get = AsyncMock(
-        side_effect=[_make_resp(depth2_payload), _make_resp(depth1_payload)]
-    )
-
-    transport = ASGITransport(app=authed_app)
-    async with AsyncClient(transport=transport, base_url="http://test") as client:
-        resp = await client.get(
-            f"/v1/entities/{entity_id}/graph",
-            params={"depth": "2"},
-            headers={"Authorization": f"Bearer {_make_jwt()}"},
-        )
-
-    assert resp.status_code == 200
-    body = resp.json()
-    node_ids = {n["id"] for n in body["nodes"]}
-    edge_ids = {e["id"] for e in body["edges"]}
-
-    # Center must always be present.
-    assert entity_id in node_ids
-    # depth=1 entity must be present after merge (it has a valid edge).
-    assert depth1_entity in node_ids
-    # depth=2 entity had no edges → orphan filter removes it even after merge.
-    assert depth2_entity not in node_ids
-    # The depth=1 edge must be present.
-    assert "rel-d1" in edge_ids
 
 
 @pytest.mark.asyncio
@@ -797,7 +433,7 @@ async def test_ohlcv_proxy_downstream_500(authed_app, authed_mock_clients) -> No
     transport = ASGITransport(app=authed_app)
     async with AsyncClient(transport=transport, base_url="http://test") as client:
         resp = await client.get(
-            f"/v1/ohlcv/{_INSTRUMENT_UUID}",
+            "/v1/ohlcv/instr-1",
             headers={"Authorization": f"Bearer {_make_jwt()}"},
         )
 

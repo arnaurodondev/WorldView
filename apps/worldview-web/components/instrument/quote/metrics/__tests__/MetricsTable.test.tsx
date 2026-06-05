@@ -2,18 +2,16 @@
  * components/instrument/quote/metrics/__tests__/MetricsTable.test.tsx
  *
  * WHY THIS EXISTS: MetricsTable is the right-rail Statistics panel
- * (PRD-0088 §6.7.2 / PLAN-0090 §T-B-03) — 24 metric cells (3 × MetricGrid4Col)
- * + ownership rows + analyst bar + target row.
+ * (PRD-0088 §6.7.2 / PLAN-0090 §T-B-03) — 26 rows + 5 dividers stitched
+ * from four S9 sub-resources. PLAN-0090 §T-B-05 pins ONE smoke contract
+ * on the table itself:
  *
- * W5-T-15 refactor: the first 24 rows replaced by 3 × MetricGrid4Col blocks
- * (VALUATION / MARGINS / LEVERAGE+YIELD — 8 cells each). Labels are now
- * abbreviated to fit 4-col layout (e.g. "MKT CAP" not "MARKET CAP").
- *
- * Tests pin:
- *   1. test_MetricsTable_renders_MKT_CAP_label
- *      The first VALUATION cell "MKT CAP" must appear in the DOM — cheapest
- *      "table mounted and rendered" sanity check. (Replaces pre-W5 "MARKET CAP"
- *      assertion; label shortened for 4-col density layout.)
+ *   1. test_MetricsTable_renders_MARKET_CAP_label
+ *      The first VALUATION row label "MARKET CAP" must be present in the
+ *      DOM. That is the cheapest possible "did the table mount and render
+ *      its labels" sanity check; threshold colouring + per-row formatting
+ *      are covered by the unit tests on MetricRow, WeekRangeBar, and
+ *      AnalystMiniBar (and by integration tests downstream).
  *
  * WHY mock useMetricsTableData (not the gateway): the hook is the single
  * data dependency MetricsTable has (PLAN-0090 forbids inline useQuery).
@@ -42,14 +40,15 @@ vi.mock("@/components/instrument/hooks/useMetricsTableData", () => ({
 import { MetricsTable } from "@/components/instrument/quote/metrics/MetricsTable";
 
 describe("MetricsTable", () => {
-  it("renders the MKT CAP label in the VALUATION block (W5-T-15: 4-col grid)", () => {
+  it("renders the MARKET CAP label in the VALUATION section", () => {
     // WHY pass null fundamentals/quote: this is the "no data loaded yet"
     // path. Every value renders "—" but every static LABEL must still
     // appear — labels are the structural skeleton of the table.
     render(<MetricsTable instrumentId="i-1" fundamentals={null} quote={null} />);
-    // WHY "MKT CAP" (not "MARKET CAP"): W5-T-15 shortened the label to fit
-    // the 4-col MetricGrid4Col layout (90px cells at 11px font). The old
-    // single-column MetricRow used "MARKET CAP" which no longer exists.
-    expect(screen.getByText("MKT CAP")).toBeInTheDocument();
+    // WHY exact string "MARKET CAP" (uppercase): MetricLabel renders the
+    // text uppercase via CSS, but the literal string passed in is already
+    // "MARKET CAP" (see MetricsTable.tsx). getByText matches the raw text
+    // content, which preserves the uppercase form.
+    expect(screen.getByText("MARKET CAP")).toBeInTheDocument();
   });
 });

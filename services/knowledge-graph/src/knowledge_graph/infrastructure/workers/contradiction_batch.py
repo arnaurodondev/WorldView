@@ -21,8 +21,6 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from sqlalchemy import text
-
 from common.time import utc_now  # type: ignore[import-untyped]
 from observability import get_logger  # type: ignore[import-untyped]
 
@@ -69,18 +67,6 @@ class ContradictionBatchWorker:
             contra_repo = ContradictionRepository(session)
             rel_repo = RelationRepository(session)
 
-            # One-time cleanup: remove broken links inserted by pre-fix runs where
-            # relation_evidence_id was incorrectly set to claim_id instead of the
-            # corresponding raw_id from relation_evidence_raw.  These orphaned rows
-            # never surface in read queries (which JOIN on raw_id) and violate the
-            # semantic intent of the FK.  Idempotent — safe to run every cycle.
-            await session.execute(
-                text("""
-DELETE FROM relation_contradiction_links
-WHERE relation_evidence_id NOT IN (SELECT raw_id FROM relation_evidence_raw)
-"""),
-            )
-
             # Fetch a batch of non-neutral claims to examine
             candidates = await contra_repo.fetch_claims_for_batch_scan(  # type: ignore[attr-defined]
                 limit=_BATCH_LIMIT,
@@ -89,10 +75,6 @@ WHERE relation_evidence_id NOT IN (SELECT raw_id FROM relation_evidence_raw)
 
             for claim in candidates:
                 claim_id = claim["claim_id"]  # type: ignore[assignment]
-                # raw_id from relation_evidence_raw — required as the FK value for
-                # relation_contradiction_links.relation_evidence_id.  May be None
-                # when the claim has no corresponding relation_evidence_raw row.
-                raw_id = claim.get("relation_evidence_raw_id")
                 subject_id = claim["subject_entity_id"]  # type: ignore[assignment]
                 claim_type = str(claim["claim_type"])
                 polarity = str(claim["polarity"])
@@ -111,20 +93,10 @@ WHERE relation_evidence_id NOT IN (SELECT raw_id FROM relation_evidence_raw)
                     opp_confidence = float(opp["extraction_confidence"])  # type: ignore[arg-type]
                     strength = min(confidence, opp_confidence)
 
-                    if raw_id is None:
-                        # No relation_evidence_raw row for this claim — cannot satisfy
-                        # the FK constraint on relation_evidence_id → raw_id.  Skip.
-                        logger.debug(  # type: ignore[no-any-return]
-                            "contradiction_worker_skip_no_raw_id",
-                            claim_id=str(claim_id),
-                        )
-                        continue
-
                     now = utc_now()  # type: ignore[no-any-return]
-                    # insert_link uses ON CONFLICT DO NOTHING — idempotent.
-                    # FIXED: pass raw_id (relation_evidence_raw.raw_id), NOT claim_id.
+                    # insert_link uses ON CONFLICT DO NOTHING — idempotent
                     await contra_repo.insert_link(
-                        relation_evidence_id=raw_id,  # type: ignore[arg-type]
+                        relation_evidence_id=claim_id,  # type: ignore[arg-type]
                         claim_id=opp_claim_id,  # type: ignore[arg-type]
                         contradiction_type="polarity_conflict",
                         strength=strength,

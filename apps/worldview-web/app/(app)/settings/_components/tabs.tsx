@@ -86,7 +86,7 @@ export function ProfileTab({ user }: ProfileTabProps) {
   return (
     <Card className="border-border/60 bg-card">
       <CardHeader className="pb-3">
-        <CardTitle className="text-[14px] font-medium text-foreground">
+        <CardTitle className="text-sm font-medium text-foreground">
           Profile information
         </CardTitle>
         <CardDescription className="text-xs">
@@ -101,12 +101,12 @@ export function ProfileTab({ user }: ProfileTabProps) {
               src={user?.avatar_url ?? undefined}
               alt={user?.name ?? "User avatar"}
             />
-            <AvatarFallback className="bg-primary/20 text-[16px] font-medium text-primary">
+            <AvatarFallback className="bg-primary/20 text-base font-medium text-primary">
               {getInitials(user?.name ?? null)}
             </AvatarFallback>
           </Avatar>
           <div>
-            <p className="text-[14px] font-medium text-foreground">
+            <p className="text-sm font-medium text-foreground">
               {user?.name ?? "—"}
             </p>
             <p className="text-xs text-muted-foreground">{user?.email ?? "—"}</p>
@@ -145,7 +145,7 @@ export function NotificationsTab() {
   return (
     <Card className="border-border/60 bg-card">
       <CardHeader className="pb-3">
-        <CardTitle className="text-[14px] font-medium text-foreground">
+        <CardTitle className="text-sm font-medium text-foreground">
           Notification preferences
         </CardTitle>
         <CardDescription className="text-xs">
@@ -172,7 +172,7 @@ export function NotificationsTab() {
               <div className="space-y-0.5">
                 <Label
                   htmlFor={notif.id}
-                  className="cursor-pointer text-[14px] font-medium text-foreground"
+                  className="cursor-pointer text-sm font-medium text-foreground"
                 >
                   {notif.label}
                 </Label>
@@ -205,7 +205,7 @@ export function AppearanceTab() {
     <div className="space-y-4">
       <Card className="border-border/60 bg-card">
         <CardHeader className="pb-3">
-          <CardTitle className="text-[14px] font-medium text-foreground">Theme</CardTitle>
+          <CardTitle className="text-sm font-medium text-foreground">Theme</CardTitle>
           <CardDescription className="text-xs">
             Display mode and color scheme settings
           </CardDescription>
@@ -213,7 +213,7 @@ export function AppearanceTab() {
         <CardContent className="space-y-4">
           <div className="flex items-center justify-between gap-4">
             <div className="space-y-0.5">
-              <Label className="text-[14px] font-medium text-foreground">Dark mode</Label>
+              <Label className="text-sm font-medium text-foreground">Dark mode</Label>
               <p className="text-xs text-muted-foreground">
                 Permanently enabled — Worldview is a finance terminal designed
                 for extended dark-environment sessions.
@@ -245,7 +245,7 @@ export function AppearanceTab() {
 
       <Card className="border-border/60 bg-card">
         <CardHeader className="pb-3">
-          <CardTitle className="text-[14px] font-medium text-foreground">
+          <CardTitle className="text-sm font-medium text-foreground">
             Reading preferences
           </CardTitle>
           <CardDescription className="text-xs">
@@ -257,7 +257,7 @@ export function AppearanceTab() {
             <div className="space-y-0.5">
               <Label
                 htmlFor="news-link-target"
-                className="text-[14px] font-medium text-foreground"
+                className="text-sm font-medium text-foreground"
               >
                 Open news in a new tab
               </Label>
@@ -277,7 +277,7 @@ export function AppearanceTab() {
 
       <Card className="border-border/60 bg-card">
         <CardHeader className="pb-3">
-          <CardTitle className="text-[14px] font-medium text-foreground">
+          <CardTitle className="text-sm font-medium text-foreground">
             Color palette
           </CardTitle>
           <CardDescription className="text-xs">

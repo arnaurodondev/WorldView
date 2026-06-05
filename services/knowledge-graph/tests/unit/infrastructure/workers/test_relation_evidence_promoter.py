@@ -488,7 +488,7 @@ class TestRelationEvidencePromoterQualityGate:
         sf, *_ = _make_session_factory([], gated_quality_count=4)
 
         with patch(
-            "knowledge_graph.infrastructure.workers.relation_evidence_promoter.kg_evidence_quality_gated_total",
+            "knowledge_graph.infrastructure.workers.relation_evidence_promoter.kg_evidence_quality_gated_total"
         ) as mock_counter:
             asyncio.run(RelationEvidencePromoterWorker(sf).run())
 
@@ -505,7 +505,7 @@ class TestRelationEvidencePromoterQualityGate:
         sf, *_ = _make_session_factory([_make_fetch_row(0)], gated_quality_count=0)
 
         with patch(
-            "knowledge_graph.infrastructure.workers.relation_evidence_promoter.kg_evidence_quality_gated_total",
+            "knowledge_graph.infrastructure.workers.relation_evidence_promoter.kg_evidence_quality_gated_total"
         ) as mock_counter:
             asyncio.run(RelationEvidencePromoterWorker(sf).run())
 

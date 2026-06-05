@@ -62,10 +62,10 @@ export function Footer() {
       <div className="mx-auto max-w-7xl px-6 py-16 lg:px-8">
         {/* QA iter-1 (a11y m4): added md:grid-cols-3 so the footer doesn't
             stay 2-col + tall at 768–1023px tablet width. 2 → 3 → 5 cols. */}
-        <div className="grid grid-cols-2 gap-[40px] md:grid-cols-3 lg:grid-cols-5">
+        <div className="grid grid-cols-2 gap-10 md:grid-cols-3 lg:grid-cols-5">
           {/* Brand column — wider than the other 4 to match logo + tagline */}
           <div className="col-span-2 lg:col-span-1">
-            <p className="mb-2 font-mono text-[16px] font-semibold tracking-tight text-foreground">
+            <p className="mb-2 font-mono text-base font-semibold tracking-tight text-foreground">
               Worldview
             </p>
             <p className="mb-4 text-xs text-muted-foreground">

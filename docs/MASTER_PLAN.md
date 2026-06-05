@@ -1,6 +1,6 @@
 # Worldview -- Master Plan
 
-> **Version**: 2.4 | **Date**: 2026-05-20
+> **Version**: 2.3 | **Date**: 2026-05-17
 > **Status**: Active | **Owner**: Arnau Rodon
 > **Single source of truth** for the entire platform architecture.
 
@@ -116,9 +116,9 @@ S1 ──portfolio.watchlist.updated.v1──► S10
 | S3 | **Market Data** | 8003 | `market_data_db` (TimescaleDB) | ✅ Mature | Materialize OHLCV/quotes/fundamentals; 30 query API routes |
 | S4 | **Content Ingestion** | 8004 | `content_ingestion_db` | ✅ Mature | Poll EODHD news, SEC EDGAR, Finnhub, NewsAPI; MinIO bronze |
 | S5 | **Content Store** | 8005 | `content_store_db` | ✅ Mature | HTML cleaning, 3-stage dedup, canonical IDs, MinIO silver |
-| S6 | **NLP Pipeline** | 8006 | `nlp_db` + `intelligence_db` | ✅ Mature | 8-block enrichment: NER, routing, embedding, entity resolution, LLM extraction. Full-text document search (`GET /api/v1/search/documents`) — tsvector GIN on chunks.tsv_english, entity facets via S7 batch, recency×source blend ranking (PLAN-0064 W6) · PLAN-0093 C-1 (routing v2 — dropped watchlist/novelty/price_impact, weights rebalanced) + B-3 (entity_mentions tenant_id NOT NULL + gliner_mention_floor) |
-| S7 | **Knowledge Graph** | 8007 | `intelligence_db` | 🔄 In-progress | Relation canonicalization, graph materialization, async workers · PLAN-0093 B-1 (AGE bootstrap), B-2 (relations FK + sentinel seed), D-1 (atomic enrichment_attempts), D-3 (SummaryWorker catchup + per-row attempt tracking) |
-| S8 | **RAG / Chat** | 8008 | `rag_db` | 🔄 In-progress | Hybrid retrieval (ANN+BM25+KG+SQL via RRF; hybrid default for entity-anchored intents — PLAN-0063 W5-3), HyDE, graph-enriched context, contradiction detection, LLM fallback chain, streaming SSE, citations, retrieval quality metrics + weekly citation-accuracy cron (W5-5) · PLAN-0093 E-Wave (intent inference, NumericGroundingValidator with per-FieldKind tolerance, 4 KG tools name resolution, multi-tool fallback, citation validation) |
+| S6 | **NLP Pipeline** | 8006 | `nlp_db` + `intelligence_db` | ✅ Mature | 8-block enrichment: NER, routing, embedding, entity resolution, LLM extraction. Full-text document search (`GET /api/v1/search/documents`) — tsvector GIN on chunks.tsv_english, entity facets via S7 batch, recency×source blend ranking (PLAN-0064 W6) |
+| S7 | **Knowledge Graph** | 8007 | `intelligence_db` | 🔄 In-progress | Relation canonicalization, graph materialization, async workers |
+| S8 | **RAG / Chat** | 8008 | `rag_db` | 🔄 In-progress | Hybrid retrieval (ANN+BM25+KG+SQL via RRF; hybrid default for entity-anchored intents — PLAN-0063 W5-3), HyDE, graph-enriched context, contradiction detection, LLM fallback chain, streaming SSE, citations, retrieval quality metrics + weekly citation-accuracy cron (W5-5) |
 | S9 | **API Gateway** | 8000 | None (stateless) | 🔄 In-progress | BFF entry point, auth, rate limiting, caching, CORS |
 | S10 | **Alert Service** | 8010 | `alert_db` | ✅ Mature | Fan-out alerts via WebSocket, watchlist resolution, dedup, REST API, health, metrics |
 | -- | **intelligence-migrations** | -- | `intelligence_db` (DDL owner) | 🔄 In-progress | Init container: DDL, seeds, exits after completion |
@@ -242,7 +242,6 @@ All Kafka events carry: `event_id` (UUIDv7), `event_type` (`domain.entity.verb_p
 - **Claim-Check**: Large payloads in MinIO; events carry `(bucket, key, content_type, etag)` pointers.
 - **Idempotent Consumers**: Check `event_id` against processed-events table. Use `INSERT ON CONFLICT DO NOTHING`.
 - **Dead-Letter via Status Column**: Failed events stay in `outbox_events` with `status='dead_letter'`.
-- **Unified Identity for Tradable Securities (M-017)**: For every Kafka payload referencing a tradable security, `entity_id == instrument_id`. The same UUID is `market_data.instruments.id`, `intelligence_db.canonical_entities.entity_id` (where `entity_type = 'financial_instrument'`), and the value carried on every event. Non-tradable kinds (`person`, `event`, `sector`, `industry`, `macro_indicator`, `place`, `product`, `index`, `currency`, `unknown`) keep an independent `entity_id` with no market-data counterpart. CI enforces the invariant via `services/knowledge-graph/tests/integration/test_m017_invariant.py`. See [ADR-F-16](architecture/decisions/ADR-F-16-instrument-entity-id-unification.md) (supersedes ADR-F-12).
 
 ### 7.4 Avro Schema Policy
 
@@ -264,10 +263,6 @@ Schemas as `.avsc` files in `infra/kafka/schemas/` and per-service `infrastructu
 | `nlp_db` | S6 | pgvector | sections, chunks, entity_mentions, chunk_embeddings, section_embeddings, routing_decisions, outbox_events |
 | `intelligence_db` | intelligence-migrations (DDL); S6+S7 (r/w) | pgvector | canonical_entities, entity_aliases, relations (8x hash-partitioned), relation_evidence_raw, relation_summaries, article_claims, contradictions |
 | `alert_db` | S10 | -- | alert_subscriptions, alerts, pending_alerts, alert_dedup, outbox_events |
-
-> **Market-data fundamentals query contract**: section tables mix QUARTERLY+ANNUAL rows under the same enum value; callers MUST pin the periodicity. See `docs/services/market-data.md` §"Period-type contract" and §"Freshness tracking" (PLAN-0095 / PLAN-0096, BP-540 / BP-543 / BP-545 / BP-546).
->
-> **PLAN-0097 cross-references**: (a) S3 period-type contract is codified end-to-end in `docs/services/market-data.md` §"Period-type contract" — every read pins periodicity and every use-case row carries an explicit `period_type` label (BP-577); (b) S3 batch fundamentals endpoint `POST /v1/fundamentals/batch` parallelises ticker resolution + section loads via `asyncio.gather` for the rag-chat multi-ticker tool path (PLAN-0097 W3 T-W3-02); (c) S7 AGE-bootstrap pattern (label DDL + commit + rollback + connection invalidate) is codified as RULES.md R41 (PLAN-0097 W4 T-W4-03, BP-574).
 
 ### 8.2 MinIO Object Store
 

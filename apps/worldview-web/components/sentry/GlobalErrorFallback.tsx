@@ -55,7 +55,7 @@ export function GlobalErrorFallback() {
       ].join(" ")}
     >
       {/* Primary message — intentionally short; no stack trace visible to user */}
-      <p className="text-[14px] text-muted-foreground">
+      <p className="text-sm text-muted-foreground">
         Something went wrong. The error has been reported.
       </p>
 

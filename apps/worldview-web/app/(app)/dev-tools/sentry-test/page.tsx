@@ -62,15 +62,15 @@ export default function SentryTestPage() {
 
   return (
     <div
-      className="flex min-h-screen flex-col items-center justify-center gap-[24px] font-mono"
+      className="flex min-h-screen flex-col items-center justify-center gap-6 font-mono"
       data-testid="sentry-test-page"
     >
       {/* Page heading — clearly dev-only so no confusion if someone navigates here */}
-      <h1 className="text-[18px] font-semibold text-muted-foreground">
+      <h1 className="text-lg font-semibold text-muted-foreground">
         Sentry Smoke Test (dev only)
       </h1>
 
-      <p className="max-w-sm text-center text-[14px] text-muted-foreground">
+      <p className="max-w-sm text-center text-sm text-muted-foreground">
         Click the button to throw a synthetic error. It should appear in the
         Sentry dashboard within ~60 seconds. The page will also show the{" "}
         <code className="text-xs">GlobalErrorFallback</code> component.
@@ -80,7 +80,7 @@ export default function SentryTestPage() {
       <button
         onClick={triggerSentryError}
         className={[
-          "rounded border border-destructive px-4 py-2 text-[14px] text-destructive",
+          "rounded border border-destructive px-4 py-2 text-sm text-destructive",
           "hover:bg-destructive hover:text-destructive-foreground",
           "transition-colors duration-150",
           "focus:outline-none focus-visible:ring-1 focus-visible:ring-ring",

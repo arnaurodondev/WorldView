@@ -37,9 +37,6 @@ def _make_settings(topic: str = "intelligence.temporal_event.v1") -> MagicMock:
     """Minimal settings stub — only topic_temporal_event is read."""
     s = MagicMock()
     s.topic_temporal_event = topic
-    # RC-1: disable stub filter in these tests — they use placeholder text
-    # and are not testing the word-count gate.
-    s.min_word_count = 0
     return s
 
 

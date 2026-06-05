@@ -174,7 +174,7 @@ function Metric({ label, value }: { label: string; value: string }) {
   return (
     <div>
       <div className="text-[10px] uppercase text-muted-foreground">{label}</div>
-      {/* WHY text-[13px] not text-[18px]: terminal density — text-[18px] (18px) is
+      {/* WHY text-[13px] not text-lg: terminal density — text-lg (18px) is
           consumer-app sizing; Bloomberg NPS strips use compact 13px mono values. */}
       <div className="mt-0.5 font-mono text-[13px] tabular-nums text-foreground">
         {value}
@@ -353,7 +353,7 @@ export default function AdminFeedbackPage() {
   };
 
   if (isLoading) {
-    // WHY p-3 text-[11px]: terminal density — p-8 text-[14px] looks consumer-app;
+    // WHY p-3 text-[11px]: terminal density — p-8 text-sm looks consumer-app;
     // all other loading states in the shell use compact sizing.
     return <div className="p-3 text-[11px] font-mono text-muted-foreground">Loading…</div>;
   }
@@ -385,7 +385,7 @@ export default function AdminFeedbackPage() {
     <div className="mx-auto max-w-7xl p-3">
       <header className="mb-4 flex items-end justify-between">
         <div>
-          {/* WHY text-[13px] not text-[24px]: terminal density — headers in Bloomberg
+          {/* WHY text-[13px] not text-2xl: terminal density — headers in Bloomberg
               panels use compact 12-13px, not 24px consumer-app headings. */}
           <h1 className="text-[13px] font-semibold tracking-tight font-mono">Admin: Feedback</h1>
           <p className="mt-1 text-xs text-muted-foreground">
