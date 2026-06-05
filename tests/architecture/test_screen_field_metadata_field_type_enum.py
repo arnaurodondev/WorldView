@@ -33,7 +33,7 @@ import pytest
 # Repo root resolved relative to this file (worldview/tests/architecture/).
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 SCAN_ROOTS = (REPO_ROOT / "services", REPO_ROOT / "libs")
-ALLOWED_FIELD_TYPES = frozenset({"numeric", "text"})
+ALLOWED_FIELD_TYPES = frozenset({"numeric", "text", "date"})  # migration 031 widened CHECK to admit 'date'
 
 
 def _iter_python_files() -> list[Path]:
