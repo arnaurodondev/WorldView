@@ -460,6 +460,15 @@ class BaseOutboxDispatcher(ABC):
         if success:
             await uow.outbox.mark_published(record.id)
             self._metrics.outbox_dispatched_total.inc()
+            # PLAN-0099 W4: increment the per-topic produced counter so the
+            # kafka-pipeline Grafana dashboard's produce-rate panels render
+            # data.  Matches the dashboard query name
+            # ``<namespace>_kafka_messages_produced_total{topic=...}``.
+            # Fail-open: a metric increment must never break dispatch.
+            import contextlib
+
+            with contextlib.suppress(Exception):
+                self._metrics.kafka_messages_produced_total.labels(topic=record.topic).inc()
             logger.info(
                 "outbox_record_published",
                 record_id=record.id,
