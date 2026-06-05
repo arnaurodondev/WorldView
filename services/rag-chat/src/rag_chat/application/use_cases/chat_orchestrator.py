@@ -510,6 +510,15 @@ _ENTITY_TYPED_FIELDS: frozenset[str] = frozenset(
 # bridges the gap without weakening BP-604.
 _TICKER_LIKE_FIELDS: frozenset[str] = frozenset({"ticker", "tickers", "symbol", "symbols"})
 
+# F-NEW-015 Option A — extract ticker-like tokens from tool result text bodies.
+# Targets the screener row format ``  NVDA — NVIDIA Corp | MCap: ...`` and the
+# movers/compare equivalents. We accept 1-6 uppercase letters with an optional
+# dot suffix (BRK.A, BF.B) anchored on word boundaries. Lowercased prose words
+# and 7+ letter ALL-CAPS shouts are excluded. Falls into the validator's loose
+# substring/alias matcher downstream — over-inclusion is acceptable, false
+# refusals are not.
+_TOOL_TEXT_TICKER_RE = re.compile(r"\b([A-Z]{1,6}(?:\.[A-Z])?)\b")
+
 
 def _normalise_entity_identifier(value: Any) -> set[str]:
     """Flatten any entity-identifier value into a lowercase string set.
@@ -2742,6 +2751,32 @@ class ChatOrchestratorUseCase:
             item_id = getattr(item, "item_id", None)
             if isinstance(item_id, str) and item_id:
                 tool_refs.add(item_id)
+            # F-NEW-015 Option A: many tool results (screener, movers, compare,
+            # fundamentals_batch) return their entity references ONLY in the
+            # rendered ``text`` body — they don't surface as structured attrs.
+            # Iter-12 Q6 reproduced this: ``screen_universe`` returned
+            # NVDA/AMD/AVGO/MRVL inline as ``  TICKER — Name | MCap: ...``
+            # rows but ``citation_meta.entity_name`` was None and there is no
+            # ``item.ticker`` field — so the validator's grounded set lacked
+            # them and the synthesised answer triggered a full grounding
+            # rewrite (+15-60s, ~90s timeout). We also probe the direct
+            # ``ticker`` / ``canonical_name`` / ``entity_name`` attributes for
+            # forward-compatibility with tools that DO carry structured refs.
+            for attr in ("ticker", "canonical_name", "entity_name"):
+                v = getattr(item, attr, None)
+                if isinstance(v, str) and v:
+                    tool_refs.add(v)
+            # Text-body extraction: pull any TICKER-LIKE uppercase tokens
+            # from screener / movers / compare list rows. We restrict to
+            # 1-6 uppercase letters and dot-allowed (BRK.A) to avoid
+            # snagging unrelated prose words like "WHEN" / "BUT".  The
+            # ``EntityNameGroundingValidator`` already has substring + alias
+            # tolerance, so over-inclusion here is safe — false positives
+            # only reduce false-refusal rates.
+            text_body = getattr(item, "text", None)
+            if isinstance(text_body, str) and text_body:
+                for match in _TOOL_TEXT_TICKER_RE.findall(text_body):
+                    tool_refs.add(match)
 
         # PLAN-0104 W42: bridge LLM-chosen tickers/symbols into the
         # grounded set. Same authoritative signal as W37 in

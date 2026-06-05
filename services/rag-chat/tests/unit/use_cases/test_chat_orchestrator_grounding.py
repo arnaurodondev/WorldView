@@ -751,3 +751,159 @@ class TestEntityNameGroundingSecondPassBridge:
         assert pipeline._rewrite_call_count["n"] >= 1, "W42 bridge widened too far — Apple-on-MSFT must trigger rewrite"
         # And the returned text MUST NOT be the verbatim original prose.
         assert text != response, "Negative case must not admit response unchanged"
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# F-NEW-015 — tool-result entity grounding (Option A) + rewrite timeout (Option B)
+#
+# Iter-12 Q6 was a false PASS: a degraded fast-fail path bypassed synthesis, so
+# the grounding rewrite never fired. Iter-13 unblocked the screener path → full
+# synthesis → grounding rewrite fired at chat_orchestrator.py:2823 because
+# screener-returned tickers (NVDA/AMD/AVGO/MRVL) were not in the resolved-
+# entity set. They WERE in the tool result text body — but the previous
+# tool_refs extraction only looked at ``citation_meta.entity_name`` and
+# ``item_id``, missing the inline ticker rows. Option A widens the grounded
+# set to include text-body tickers; Option B bounds the rewrite at 15s.
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+class TestScreenerToolResultGrounding:
+    """F-NEW-015 Option A — screener-returned tickers must enter grounded set."""
+
+    @staticmethod
+    def _make_screener_item(text: str) -> MagicMock:
+        """Mirror the actual RetrievedItem screener emits from market.py:1166."""
+        item = MagicMock()
+        item.text = text
+        item.item_id = "tool:screener:results"
+        cm = MagicMock()
+        cm.entity_name = None  # screener leaves this None (see handlers/market.py:1177)
+        item.citation_meta = cm
+        # Explicitly ensure structured ticker/canonical_name attrs are not
+        # present — MagicMock would otherwise auto-create them. ``spec=[]``
+        # is impractical here, so we just delete the ones we probe.
+        del item.ticker
+        del item.canonical_name
+        del item.entity_name
+        return item
+
+    @staticmethod
+    def _make_resolved_entity(canonical_name: str, ticker: str | None = None) -> MagicMock:
+        ent = MagicMock()
+        ent.canonical_name = canonical_name
+        ent.ticker = ticker
+        ent.matched_text = canonical_name
+        return ent
+
+    @staticmethod
+    def _make_pipeline_for_entity(rewrite_text: str = "") -> MagicMock:
+        pipeline = MagicMock()
+        pipeline.llm_chain = MagicMock()
+        call_count = {"n": 0}
+
+        async def _stream_chat(messages: list, **_: Any):
+            call_count["n"] += 1
+            if rewrite_text:
+                yield rewrite_text
+
+        pipeline.llm_chain.stream_chat = _stream_chat
+        pipeline._rewrite_call_count = call_count  # type: ignore[attr-defined]
+        return pipeline
+
+    def test_screener_result_tickers_added_to_grounded_set(self) -> None:
+        """Screener text body tickers (NVDA, AMD) must reach the validator's grounded set.
+
+        The synthesised response references the screener-returned tickers
+        directly. Before F-NEW-015 the validator's grounded_names + tool_refs
+        sets did NOT contain NVDA/AMD (only ``tool:screener:results`` from
+        the item_id) → first pass flagged both → rewrite fired → 15-60s
+        latency. After Option A: tool_refs contains NVDA + AMD + AVGO + MRVL
+        extracted from the text body → first pass passes → no rewrite.
+        """
+        from rag_chat.application.use_cases.chat_orchestrator import (
+            AgentBudget,
+            ChatOrchestratorUseCase,
+        )
+
+        # Verbatim format produced by ``_handle_screen_universe`` (handlers/market.py:1132-1156).
+        screener_text = (
+            "## Screener Results (4 instruments)\n"
+            "  NVDA — NVIDIA Corp | MCap: $3.10T (raw: 3100000000000) | P/E: 65\n"
+            "  AMD — Advanced Micro Devices | MCap: $260B (raw: 260000000000) | P/E: 45\n"
+            "  AVGO — Broadcom Inc | MCap: $720B (raw: 720000000000) | P/E: 55\n"
+            "  MRVL — Marvell Technology | MCap: $80B (raw: 80000000000) | P/E: 40"
+        )
+        tool_items = [self._make_screener_item(screener_text)]
+        # The user asked an open-domain "top semis by market cap" question;
+        # resolver attached a single sector-level entity but no ticker.
+        resolved = [self._make_resolved_entity(canonical_name="Semiconductors")]
+        response = (
+            "The top semiconductor names by market cap are NVDA at $3.1T, "
+            "AVGO at $720B, AMD at $260B, and MRVL at $80B."
+        )
+
+        pipeline = self._make_pipeline_for_entity()
+        orch = ChatOrchestratorUseCase.__new__(ChatOrchestratorUseCase)
+        budget = AgentBudget()
+
+        text, passed = asyncio.run(
+            orch._run_entity_grounding_validation(
+                p=pipeline,
+                response=response,
+                resolved_entities=resolved,
+                tool_items=tool_items,
+                messages=[{"role": "user", "content": "Top semis by market cap"}],
+                budget=budget,
+                prior_tool_calls=None,
+            )
+        )
+
+        assert passed is True, "Option A: screener text-body tickers must ground the response"
+        assert text == response, "First-pass admit must return response verbatim"
+        assert (
+            pipeline._rewrite_call_count["n"] == 0
+        ), "Rewrite must NOT fire — Option A bug regressed: screener tickers not in grounded set"
+
+    def test_structured_ticker_attr_admits_response(self) -> None:
+        """Tools that DO expose ``item.ticker`` directly must also feed the grounded set.
+
+        Future tools may carry structured ticker fields. The extraction
+        loop probes ``ticker`` / ``canonical_name`` / ``entity_name`` on
+        the item itself (separate from ``citation_meta.entity_name``).
+        """
+        from rag_chat.application.use_cases.chat_orchestrator import (
+            AgentBudget,
+            ChatOrchestratorUseCase,
+        )
+
+        item = MagicMock()
+        item.text = "Some payload without inline tickers."
+        item.item_id = "tool:custom:row"
+        cm = MagicMock()
+        cm.entity_name = None
+        item.citation_meta = cm
+        item.ticker = "NVDA"
+        item.canonical_name = "NVIDIA Corporation"
+        item.entity_name = "NVIDIA"
+
+        resolved = [self._make_resolved_entity(canonical_name="Semiconductors")]
+        response = "NVDA leads with $3.1T market cap."
+
+        pipeline = self._make_pipeline_for_entity()
+        orch = ChatOrchestratorUseCase.__new__(ChatOrchestratorUseCase)
+        budget = AgentBudget()
+
+        text, passed = asyncio.run(
+            orch._run_entity_grounding_validation(
+                p=pipeline,
+                response=response,
+                resolved_entities=resolved,
+                tool_items=[item],
+                messages=[{"role": "user", "content": "NVDA cap"}],
+                budget=budget,
+                prior_tool_calls=None,
+            )
+        )
+
+        assert passed is True
+        assert pipeline._rewrite_call_count["n"] == 0
