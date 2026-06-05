@@ -109,13 +109,10 @@ def upgrade() -> None:
 def downgrade() -> None:
     """Drop seed row, snapshot column, then the insider_transactions table."""
     op.execute(
-        sa.text(
-            "DELETE FROM screen_field_metadata WHERE field_name = :field_name"
-        ).bindparams(field_name="insider_net_buy_90d")
+        sa.text("DELETE FROM screen_field_metadata WHERE field_name = :field_name").bindparams(
+            field_name="insider_net_buy_90d"
+        )
     )
-    op.execute(
-        "ALTER TABLE instrument_fundamentals_snapshot "
-        "DROP COLUMN IF EXISTS insider_net_buy_90d"
-    )
+    op.execute("ALTER TABLE instrument_fundamentals_snapshot " "DROP COLUMN IF EXISTS insider_net_buy_90d")
     op.execute("DROP INDEX IF EXISTS ix_insider_transactions_instrument_date")
     op.execute("DROP TABLE IF EXISTS insider_transactions")

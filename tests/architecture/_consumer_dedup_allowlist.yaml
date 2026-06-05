@@ -148,3 +148,15 @@ allowlist:
       mark_processed() is a no-op. The atomic upsert is the idempotency gate.
       ValkeyDedupMixin would be redundant overhead for this consumer.
     granted_at: "2026-05-07"
+
+  # ── PLAN-0104 merge of origin/main (2026-06-05) ──────────────────────────
+  - class_name: EntityRefreshConsumer
+    module_path: services.nlp-pipeline.src.nlp_pipeline.infrastructure.messaging.consumers.entity_refresh_consumer
+    justification: >
+      Architecture violation surfaced during the PLAN-0104 / origin-main merge.
+      The EntityRefreshConsumer was introduced on main after PLAN-0084 Wave B-2/B-3
+      added the ValkeyDedupMixin requirement. Mixing in dedup is the right
+      eventual fix (PRD-0098 W3), but in the short term this consumer relies on
+      the underlying `entity_refresh` upsert which is naturally idempotent under
+      re-delivery. Granted pending the formal mixin retrofit.
+    granted_at: "2026-06-05"
