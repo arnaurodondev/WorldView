@@ -452,7 +452,20 @@ _PER_INTENT_ADDENDA: dict[str, str] = {
         "tool result. If the user asked for gross margin and ANY period row shows\n"
         "a gross_margin value, you MUST report the trend across whatever periods\n"
         "are present; you may NOT refuse on the grounds that 'not enough periods\n"
-        "were retrieved'."
+        "were retrieved'.\n\n"
+        # NEW-018 (PLAN-0093 iter-14b): the LLM was paraphrasing fiscal-period
+        # labels — tool returned "Q2 FY2026" for AAPL 2026-03-31 (correct per
+        # Apple's Sep fiscal-year-end), LLM synthesised "Q3 FY2026" by
+        # re-deriving from the date and assuming a calendar fiscal year.
+        # Verbatim-copy rule eliminates the recompute path entirely.
+        "FISCAL-PERIOD LABEL RULE (mandatory):\n"
+        "When a tool result includes a period label (e.g. 'Q4 FY2025', 'Q1 FY2026',\n"
+        "'FY2024'), you MUST quote it VERBATIM. Do NOT recompute the fiscal quarter\n"
+        "from the period_end date — fiscal-year-end months vary by issuer (Apple = Sep,\n"
+        "Microsoft = Jun, AMD = Dec) and the tool has already applied the correct\n"
+        "convention. Re-deriving by calendar quarter is a known fabrication path.\n"
+        "If the tool returns a calendar-style label (e.g. 'Q1 2026') without 'FY',\n"
+        "preserve that exact form too — do not promote it to fiscal notation."
     ),
     "MACRO": (
         "\n\nMACRO FORMAT:\n"

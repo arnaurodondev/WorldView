@@ -14,6 +14,20 @@ from ulid import ULID
 # first principles by any reader who knows the input parts.
 _WORLDVIEW_NS = uuid.UUID("6ba7b810-9dad-11d1-80b4-00c04fd430c8")
 
+# Public / legacy-passthrough tenant sentinel.
+#
+# Used as a fallback tenant_id for messages that predate multi-tenant
+# stamping (PLAN-0086 Wave A-1) and therefore arrive on Kafka without a
+# ``tenant_id`` field in the Avro payload or headers. Without this sentinel
+# every such legacy message fails the NOT NULL constraint added in nlp_pipeline
+# migration 0020 and stalls the article consumer in a tight retry loop
+# (BP-575 / PLAN-0096 Wave 4). The value is deliberately the all-zero UUID
+# so it is trivially recognisable in dumps and queries.
+#
+# Do NOT use this for new code that has a real tenant on hand — it exists
+# solely to drain in-flight pre-migration backlogs without DLQ-ing them.
+PUBLIC_TENANT_ID: uuid.UUID = uuid.UUID("00000000-0000-0000-0000-000000000000")
+
 
 def new_uuid() -> uuid.UUID:
     """Generate a new random UUID v4."""

@@ -76,6 +76,11 @@ class EntitySummary(BaseModel):
     isin: str | None = None
     ticker: str | None = None
     exchange: str | None = None
+    # F-101: surface description + sector to S9 so the frontend can render
+    # the rich entity sidebar without an extra round-trip. Optional with
+    # default=None for back-compat with older row shapes (BP-148 pattern).
+    description: str | None = None
+    sector: str | None = None
 
 
 # ── Relation ────────────────────────────────────────────────────────────────

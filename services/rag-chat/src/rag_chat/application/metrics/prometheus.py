@@ -117,6 +117,14 @@ rag_injection_blocked_layer2 = Counter(
     "Number of prompt injection attempts blocked by Layer 2 LLM semantic classifier",
 )
 
+# NEW-016: Layer 2 classifier returned empty/unparseable content (e.g. reasoning
+# model consumed max_tokens on chain-of-thought). We fail-open and emit this
+# counter so operators see classifier dead-spots before they block real users.
+rag_injection_classifier_indeterminate = Counter(
+    "rag_injection_classifier_indeterminate_total",
+    "Layer 2 classifier returned indeterminate output (empty/unparseable); failed open",
+)
+
 # ── Context management (PRD-0016 §13) ────────────────────────────────────────
 
 rag_chunk_cache_hits = Counter(
@@ -178,9 +186,23 @@ def record_reranker_position_change(top_changed: bool) -> None:
 
 # ── Citation accuracy (PLAN-0063 W5-5 T-W5-5-02, PLAN-0084 A-1) ─────────────
 
-rag_citation_accuracy = Gauge(
-    "rag_citation_accuracy",
-    "Mean citation accuracy score from weekly LLM-as-judge (0=irrelevant … 1=direct)",
+# PLAN-0107 follow-up: the legacy ``rag_citation_accuracy`` gauge has been
+# removed. It was dual-emitted with ``rag_citation_accuracy_24h`` during the
+# PLAN-0099 W4 transition window, but no Grafana panel or external consumer
+# ever referenced it (the new ``infra/grafana/dashboards/rag-chat.json``
+# panel queries ``rag_citation_accuracy_24h`` directly), so the alias has
+# been deleted cleanly. If you arrive here looking for the legacy name in a
+# stored Grafana panel JSON, switch the query to ``rag_citation_accuracy_24h``.
+
+# Cadence-explicit gauge — the metric name encodes the 24h
+# dedup-by-(message_id, citation.id) cron schedule so operators don't have to
+# read the help text to know what window the value covers.
+rag_citation_accuracy_24h = Gauge(
+    "rag_citation_accuracy_24h",
+    (
+        "Mean citation accuracy from the daily 24h LLM-as-judge cron "
+        "(dedup by (message_id, citation.id)); 0=irrelevant … 1=direct"
+    ),
 )
 
 # PLAN-0084 A-1 T-A-1-04: per-call failure counter for the citation judge cron.

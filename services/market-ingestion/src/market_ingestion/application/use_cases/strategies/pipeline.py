@@ -392,6 +392,11 @@ async def commit_transaction(
                 canonical_schema_version=1,
                 row_count=row_count,
                 task_id=task.id,
+                # BUG-009 / BP-492: propagate backfill flag — tasks with an
+                # explicit ``range_start`` are historical replays and downstream
+                # consumers (S5 market-data) must distinguish them from live
+                # ticks so they don't overwrite the live high-water mark.
+                is_backfill=task.range_start is not None,
             )
             await uow.outbox.add(events=[event])
         else:

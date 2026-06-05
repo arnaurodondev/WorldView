@@ -60,7 +60,16 @@ class RelationEvidenceRepository(RelationEvidenceRepositoryPort):
         T-B-03: ``source_name`` and ``source_type`` are NULL-safe new columns
         added by migration MIG-EVIDENCE-SOURCE (Wave A T-A-05).  Both default to
         NULL when not provided.
+
+        PLAN-0093 B-3 T-B-3-02: ``claim_id`` and ``chunk_id`` are NOT NULL in
+        the ``relation_evidence_raw`` schema (migration 0028). Surface the
+        constraint at the writer so callers get a fast ``ValueError`` instead
+        of an opaque IntegrityError at commit time.
         """
+        if claim_id is None:
+            raise ValueError("claim_id is NOT NULL on relation_evidence_raw (PLAN-0093 B-3)")
+        if chunk_id is None:
+            raise ValueError("chunk_id is NOT NULL on relation_evidence_raw (PLAN-0093 B-3)")
         result = await self._session.execute(
             text("""
 INSERT INTO relation_evidence_raw (

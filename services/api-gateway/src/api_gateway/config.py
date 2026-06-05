@@ -70,8 +70,13 @@ class Settings(BaseSettings):
     # OHLCV timeseries calls (one per workspace panel) plus screener + KG graph + news.
     # 100 req/60s was too tight for multi-panel workspace usage → 429s on timeseries.
     # Unauthenticated tier stays at 20 req/60s (enforced in RateLimitMiddleware).
-    rate_limit_requests: int = 300
+    rate_limit_requests: int = 2000
     rate_limit_window_seconds: int = 60
+    # PLAN-0094 W1: per-tier limits read by RateLimitMiddleware.
+    # Defaults match production env values in worldview-gitops.
+    rate_limit_financial_mutation_requests: int = 30
+    rate_limit_unauthenticated_requests: int = 20
+    rate_limit_public_feedback_requests: int = 10
 
     # CORS
     # SEC-008: Port 3001 is the worldview-web frontend.  Port 3000 is unused and

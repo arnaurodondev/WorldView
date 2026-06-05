@@ -415,3 +415,26 @@ class TestToolUsePromptContract:
             # them.
             for forbidden in ("will go up", "will go down", "will rise", "will fall"):
                 assert forbidden in prompt, f"intent={intent}: forbidden phrase '{forbidden}' missing from enumeration"
+
+    def test_financial_data_addendum_contains_fiscal_period_label_rule(self) -> None:
+        """NEW-018 (PLAN-0093 iter-14b): verbatim fiscal-period label rule.
+
+        Iter-14b found the LLM recomputing fiscal quarters from period_end
+        dates assuming a calendar fiscal year — AAPL 2026-03-31 was
+        reported as "Q3 FY2026" (calendar) instead of the tool-returned
+        "Q2 FY2026" (Sep fiscal year-end). The verbatim-copy rule
+        eliminates the recompute path. This test pins the rule so a
+        future edit cannot silently drop the verbatim mandate.
+        """
+        prompt = get_tool_use_system_prompt(
+            intent="FINANCIAL_DATA",
+            today_iso="2026-06-01",
+        )
+        # Section anchor.
+        assert "FISCAL-PERIOD LABEL RULE (mandatory):" in prompt
+        # The verbatim-copy directive.
+        assert "quote it VERBATIM" in prompt
+        # The recompute prohibition.
+        assert "Do NOT recompute the fiscal quarter" in prompt
+        # Issuer-specific examples so the LLM recognises non-calendar FY-ends.
+        assert "Apple" in prompt and "Microsoft" in prompt

@@ -578,4 +578,67 @@ class TestClassifierPromptVersion:
         assert "CLASSIFIER_PROMPT_VERSION" in mod.__all__
 
 
+class TestNEW016ReasoningModelFailOpen:
+    """NEW-016 (PLAN-0093 iter-14b): Qwen3.5-9B reasoning regression.
+
+    When max_tokens=64 is consumed by chain-of-thought, message.content
+    returns empty but message.reasoning_content is populated. Pre-fix:
+    fail-closed → 100% block rate on cache-cold paths. Post-fix:
+    fail-open with rag_injection_classifier_indeterminate metric.
+    """
+
+    def test_empty_content_with_reasoning_fails_open(self) -> None:
+        from rag_chat.application.security.llm_injection_classifier import LLMInjectionClassifier
+
+        classifier = LLMInjectionClassifier(api_key="test-key-123")
+
+        response = MagicMock()
+        response.json = MagicMock(
+            return_value={
+                "choices": [
+                    {
+                        "message": {
+                            "content": "",
+                            "reasoning_content": (
+                                "The user is asking about Q1 FY2026 revenue, " "this is a financial query..."
+                            ),
+                        }
+                    }
+                ]
+            }
+        )
+        response.raise_for_status = MagicMock()
+
+        mock_client = AsyncMock()
+        mock_client.post = AsyncMock(return_value=response)
+        mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+        mock_client.__aexit__ = AsyncMock(return_value=False)
+
+        with patch("httpx.AsyncClient", return_value=mock_client):
+            result = asyncio.run(classifier.classify("What was AMD revenue in Q1 FY2026?"))
+
+        assert result is False, "Reasoning-only response must fail-open, not block the user"
+
+    def test_payload_includes_enable_thinking_false(self) -> None:
+        """The DeepInfra payload must disable Qwen3 thinking mode."""
+        from rag_chat.application.security.llm_injection_classifier import LLMInjectionClassifier
+
+        classifier = LLMInjectionClassifier(api_key="test-key-123")
+        captured: dict = {}
+
+        async def _capture_post(url: str, json: dict) -> MagicMock:  # type: ignore[no-untyped-def]
+            captured.update(json)
+            return _make_httpx_response("SAFE")
+
+        mock_client = AsyncMock()
+        mock_client.post = AsyncMock(side_effect=_capture_post)
+        mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+        mock_client.__aexit__ = AsyncMock(return_value=False)
+
+        with patch("httpx.AsyncClient", return_value=mock_client):
+            asyncio.run(classifier.classify("benign message"))
+
+        assert captured.get("chat_template_kwargs") == {"enable_thinking": False}
+
+
 # Needed for MagicMock usage above

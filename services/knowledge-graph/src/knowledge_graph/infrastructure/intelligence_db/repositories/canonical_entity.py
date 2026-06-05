@@ -62,9 +62,13 @@ WHERE entity_id = :entity_id
         """
         if not entity_ids:
             return []
+        # F-101: include description + metadata->>'sector' so EntitySummary
+        # carries the rich fields and the internal sectors endpoint can
+        # resolve sector without a second round-trip.
         result = await self._session.execute(
             text("""
-SELECT entity_id, canonical_name, entity_type, isin, ticker, exchange, metadata
+SELECT entity_id, canonical_name, entity_type, isin, ticker, exchange,
+       metadata, description, metadata->>'sector' AS sector
 FROM canonical_entities
 WHERE entity_id = ANY(:ids)
 """),
@@ -79,6 +83,8 @@ WHERE entity_id = ANY(:ids)
                 "ticker": row[4],
                 "exchange": row[5],
                 "metadata": row[6],
+                "description": row[7],
+                "sector": row[8],
             }
             for row in result.fetchall()
         ]

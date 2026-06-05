@@ -135,6 +135,12 @@ class Settings(BaseSettings):
     # chunks.entity_mentions JSONB (avoids index bloat from low-confidence noise).
     gliner_mention_floor: float = 0.6
 
+    # PLAN-0093 C-2 (F-NPL-005): minimum GLiNER confidence to PERSIST a mention
+    # to the entity_mentions table. Separate from gliner_mention_floor so the
+    # JSONB cache and table can be tuned independently. Override via env
+    # NLP_PIPELINE_MIN_PERSIST_FLOOR.
+    min_persist_floor: float = 0.6
+
     # Routing tier thresholds (PRD §6.7 Block 5)
     routing_tier_deep: float = 0.70  # score >= this → DEEP processing
     # Lowered from 0.45: watchlist signal fires post-resolution, effective max without it is ~0.44

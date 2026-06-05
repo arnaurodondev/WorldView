@@ -120,6 +120,11 @@ def _enriched_message(
                 "object_entity_id": obj,
                 "raw_type": "employs",
                 "extraction_confidence": 0.85,
+                # PLAN-0093 B-3: claim_id + chunk_id are NOT NULL on
+                # relation_evidence_raw; the writer rejects None to surface
+                # the schema constraint at the call site. Fixture sets both.
+                "claim_id": str(uuid4()),
+                "chunk_id": str(uuid4()),
             },
         ],
         "raw_events": [],
