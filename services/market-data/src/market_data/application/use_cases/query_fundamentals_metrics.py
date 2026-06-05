@@ -321,8 +321,13 @@ class QueryFundamentalsUseCase:
         for rec in selected:
             period_key = rec.period_end.strftime("%Y-%m-%d")
             data = rec.data if isinstance(rec.data, dict) else {}
-            report_date = data.get("reportDate") or data.get("date") or period_key
-            label = _period_label(str(report_date), fiscal_year_end_month=fye, ticker=ticker)
+            # F-NEW-013: derive the quarter label from ``period_end`` (the
+            # fiscal period the data COVERS) — NOT from ``reportDate`` / ``date``
+            # (the SEC filing date, which lands ~1 month later and shifts every
+            # label by one quarter for issuers whose filing spills into the
+            # next calendar quarter). Mirrors the matching fix in
+            # ``get_fundamentals_history.execute``.
+            label = _period_label(period_key, fiscal_year_end_month=fye, ticker=ticker)
             row: dict[str, Any] = {
                 "period_end": period_key,
                 "period_label": label,

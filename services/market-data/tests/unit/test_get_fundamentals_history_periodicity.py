@@ -332,3 +332,74 @@ async def test_amd_q1_fy2026_returns_10_253B_not_34_639B() -> None:
     )
     # Defensive: explicitly assert we did NOT return the famous bug value.
     assert period["revenue"] != pytest.approx(34_639_000_000.0)
+
+
+@pytest.mark.asyncio
+async def test_period_label_uses_period_end_not_filing_date() -> None:
+    """F-NEW-013 regression: ``_period_label`` MUST be derived from
+    ``period_end`` (the fiscal period the data COVERS) and never from
+    ``reportDate`` / ``date`` (the SEC FILING date — typically ~1 month
+    AFTER the quarter ends).
+
+    Pre-fix bug: the call site passed
+    ``data.get("reportDate") or data.get("date") or period_key`` to
+    ``_period_label``. For issuers whose 10-Q filing date spilled into the
+    NEXT calendar (and fiscal) quarter — the common case — every label
+    shifted by exactly one quarter. Universal blast radius (every issuer,
+    not just AAPL).
+
+    Concrete pin: AAPL FY2025 Q4 has period_end=2025-09-28 (fiscal Sept-
+    end) and reportDate=2025-10-31. Pre-fix the helper got "2025-10-31"
+    (calendar month=10, AAPL fy_end=9 → "Q1 FY2026"). Post-fix the helper
+    gets "2025-09-28" (calendar month=9, fy_end=9 → "Q4 FY2025").
+
+    Verifying the label is "Q4 FY2025" pins both: the call site uses
+    period_end AND the helper applies fiscal-year arithmetic correctly.
+    """
+    instrument = _make_instrument(symbol="AAPL", fy_end=9)
+
+    # Single earnings row for AAPL Q4 FY2025 where reportDate spans into
+    # the NEXT fiscal quarter — the pre-fix mislabel trigger.
+    earnings = _make_record(
+        FundamentalsSection.EARNINGS_HISTORY,
+        period_end_iso="2025-09-28",
+        period_type=PeriodType.QUARTERLY,
+        data={
+            "reportDate": "2025-10-31",  # SEC filing date — 33 days after period_end
+            "epsActual": "1.65",
+        },
+    )
+
+    uow = MagicMock()
+    uow.instruments_read = MagicMock()
+    uow.instruments_read.find_by_id = AsyncMock(return_value=instrument)
+    uow.fundamentals_read = MagicMock()
+
+    async def _find(
+        _iid: str,
+        section: FundamentalsSection,
+        period_type: PeriodType | None = None,
+    ) -> list[FundamentalsRecord]:
+        if section == FundamentalsSection.EARNINGS_HISTORY:
+            return [earnings]
+        # No income / highlights needed to assert the label.
+        return []
+
+    uow.fundamentals_read.find_by_section = AsyncMock(side_effect=_find)
+
+    uc = GetFundamentalsHistoryUseCase(uow=uow)
+    result = await uc.execute(instrument_id=uuid4(), periods=4)
+
+    assert result["period_count"] == 1
+    period = result["periods"][0]
+    # period_end_date is the data-coverage date, unchanged by the fix.
+    assert period["period_end_date"] == "2025-09-28"
+    # CRITICAL: the label corresponds to period_end (Q4 FY2025), NOT to
+    # the filing date 2025-10-31 (which would yield "Q1 FY2026").
+    assert period["period"] == "Q4 FY2025", (
+        f"F-NEW-013 regression: expected 'Q4 FY2025' (derived from "
+        f"period_end=2025-09-28) but got {period['period']!r}. If this is "
+        f"'Q1 FY2026' the call site has regressed to using reportDate."
+    )
+    # Defensive: the famous bug value must never appear.
+    assert period["period"] != "Q1 FY2026"

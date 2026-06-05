@@ -257,13 +257,18 @@ class GetFundamentalsHistoryUseCase:
             if selected_period_type == PeriodType.ANNUAL and not inc:
                 inc = data
 
-            # Attempt to build a human-readable period label from the report date.
+            # F-NEW-013: derive the quarter label from `period_end` (the fiscal
+            # period the data COVERS) — NOT from `reportDate`/`date` (the FILING
+            # date, which lands ~1 month later and shifts every label by one
+            # quarter for issuers whose filing spills into the next calendar
+            # quarter — universal blast radius pre-fix). `_period_label`'s
+            # docstring explicitly says it expects period_end as input; the bug
+            # was at the call site, not in the helper.
             # FIX-LIVE-P: pass fiscal_year_end_month so issuers with non-calendar
             # fiscal years (NVDA=1, AAPL=9, MSFT=6) get correctly labelled fiscal
             # quarters instead of calendar quarters.
-            report_date = data.get("reportDate") or data.get("date") or period_key
             period_label = _period_label(
-                str(report_date),
+                period_key,
                 fiscal_year_end_month=fiscal_year_end_month,
                 ticker=ticker,
             )
