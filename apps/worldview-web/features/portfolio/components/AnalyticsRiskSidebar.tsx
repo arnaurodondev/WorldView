@@ -273,13 +273,13 @@ export function AnalyticsRiskSidebar({
         // WHY cast through Record: TILES.field can name backend-pending keys
         // (twr_period, spy_twr) that aren't on ExtendedRiskMetricsResponse yet.
         // Accessing through a Record view yields undefined → "—" via fmtValue.
-        const raw = (metrics as unknown as Record<string, number | null | undefined>)?.[tile.field];
+        const raw = (metrics as unknown as Record<string, number | null | undefined>)?.[String(tile.field)];
         const display = fmtValue(raw, tile.format);
         const colorClass = valueColorClass(raw, tile.signColor, tile.format);
 
         return (
           <Tile
-            key={tile.field}
+            key={String(tile.field)}
             label={tile.label}
             display={display}
             valueClassName={colorClass}

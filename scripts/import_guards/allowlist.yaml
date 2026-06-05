@@ -194,6 +194,51 @@ allowlist:
       for DI wiring only. Business logic lives in BriefFeedbackUseCase. The pattern
       matches the existing chat.py allowlist entry in this file.
 
+  # The internal_market_tape router imports three SQLAlchemy model classes
+  # (InstrumentModel, OHLCVBarModel, QuoteModel) and one Prometheus metric
+  # inside function bodies (_resolve_one and the route handler) to keep the
+  # router import-time light. The route is a narrow internal read-only endpoint
+  # that joins three small lookup tables to produce the morning-brief tape
+  # response. The query is too lightweight (and route-specific) to justify a
+  # dedicated use case. Pattern mirrors the search_documents and chat.py
+  # precedents already in this allowlist.
+  # Tracked in: PLAN-0103 W7 (market-data internal tape endpoint).
+  - rule_id: IG-LAYER-002
+    path: "services/market-data/src/market_data/api/routers/internal_market_tape.py"
+    reason: >
+      Model and Prometheus metric imports are local (inside _resolve_one and
+      route handler bodies) for a narrow internal read-only endpoint. No
+      business logic — only a join across three lookup tables for brief
+      generation. Same lazy-import pattern as search_documents.py.
+
+  # The internal_earnings_calendar router imports two SQLAlchemy model classes
+  # (EarningsCalendarModel, InstrumentModel) inside the route handler body to
+  # serve a read-only internal endpoint that joins earnings calendar to
+  # instruments for the brief pipeline. The query is straightforward enough
+  # that a dedicated use case would add ceremony without benefit. Pattern
+  # mirrors the internal_market_tape and search_documents precedents.
+  # Tracked in: PLAN-0103 W3 (market-data earnings calendar endpoint).
+  - rule_id: IG-LAYER-002
+    path: "services/market-data/src/market_data/api/routers/internal_earnings_calendar.py"
+    reason: >
+      Model imports are local (inside route handler body) for a read-only
+      internal endpoint. No business logic — only a join between earnings
+      events and instruments for the brief pipeline. Same lazy-import pattern
+      as internal_market_tape.py.
+
+  # The peers router imports two SQLAlchemy model classes (FundamentalMetricModel,
+  # InstrumentModel) inside the route handler body to resolve peer instruments
+  # by sector/industry and compute change_pct / return_1y from fundamentals.
+  # Read-only endpoint backed by a Valkey cache (R27). The handler comment
+  # explicitly documents WHY the imports are inside the body (IG-LAYER-002 / R16).
+  # Tracked in: PLAN-0103 (market-data peers endpoint).
+  - rule_id: IG-LAYER-002
+    path: "services/market-data/src/market_data/api/routers/peers.py"
+    reason: >
+      Model imports are local (inside route handler body) for a read-only
+      peers endpoint. No business logic — only fundamental-metric lookup and
+      cache-aside read. Same lazy-import pattern as internal_market_tape.py.
+
   # ─── Service-level utility scripts ─────────────────────────────────────
   # Standalone scripts in services/*/scripts/ are init-container or CLI
   # utilities — they may use stdlib patterns for minimal dependencies.

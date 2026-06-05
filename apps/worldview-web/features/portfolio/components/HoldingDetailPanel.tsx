@@ -252,8 +252,6 @@ export function HoldingDetailPanel({
               // currentPrice from the quotes map is passed as undefined here;
               // HoldingLotsPanel uses it as an optional enrichment.
               quotes={{}}
-              defaultInstrumentId={holding.instrument_id}
-              variant="narrow"
             />
           </div>
         )}
