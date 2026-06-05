@@ -14,6 +14,8 @@ from market_data.application.use_cases.rollup_insider_90d import (
     _seconds_until_next_run_hour,
 )
 
+pytestmark = pytest.mark.unit
+
 # ── _seconds_until_next_run_hour ───────────────────────────────────────────
 
 

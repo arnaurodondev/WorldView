@@ -24,8 +24,6 @@ from uuid import UUID
 
 import structlog
 
-from rag_chat.infrastructure.clients.base import UpstreamTransportError
-
 from .handlers.alerts import AlertsHandler
 from .handlers.intelligence import IntelligenceHandler
 from .handlers.market import MarketHandler
@@ -37,7 +35,7 @@ from .tool_registry_builder import (  # re-exported for callers
     build_default_registry,
     validate_registry_parity,
 )
-from .transport_error import TransportErrorMarker
+from .transport_error import TransportErrorMarker, UpstreamTransportError
 
 if TYPE_CHECKING:
     from tools.tool_registry import ToolRegistry  # type: ignore[import-untyped,import-not-found]

@@ -550,19 +550,6 @@ class FakeNotificationPreferencesRepository(NotificationPreferencesRepository):
         self._store[prefs.tenant_id] = prefs
 
 
-class FakeNotificationPreferencesRepository(NotificationPreferencesRepository):
-    """In-memory notification preferences store keyed by tenant_id."""
-
-    def __init__(self) -> None:
-        self._store: dict[object, NotificationPreferences] = {}
-
-    async def get(self, tenant_id: object) -> NotificationPreferences | None:
-        return self._store.get(tenant_id)
-
-    async def upsert(self, prefs: NotificationPreferences) -> None:  # type: ignore[override]
-        self._store[prefs.tenant_id] = prefs
-
-
 class FakeAlertPreferenceRepository(AlertPreferenceRepository):
     """In-memory alert preference store keyed by (user_id, alert_type)."""
 

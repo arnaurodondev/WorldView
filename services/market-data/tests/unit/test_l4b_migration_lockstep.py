@@ -16,6 +16,10 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
+pytestmark = pytest.mark.unit
+
 
 def _load_migration_source() -> str:
     """Load migration 030 source as a string for textual byte-equality checks."""

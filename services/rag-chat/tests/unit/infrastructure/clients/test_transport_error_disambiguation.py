@@ -32,6 +32,8 @@ from rag_chat.infrastructure.clients.base import (
     UpstreamTransportError,
 )
 
+pytestmark = pytest.mark.unit
+
 
 def _make_client(handler: httpx.MockTransport) -> BaseUpstreamClient:
     """Build a BaseUpstreamClient pointed at an httpx MockTransport.

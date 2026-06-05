@@ -59,7 +59,6 @@ from pydantic import BaseModel
 
 from market_data.api.dependencies import require_internal_jwt
 from market_data.domain.enums import Timeframe
-from market_data.infrastructure.metrics.prometheus import tape_symbol_data_source
 from observability.logging import get_logger  # type: ignore[import-untyped]
 
 logger = get_logger(__name__)  # type: ignore[no-any-return]
@@ -160,6 +159,7 @@ async def _resolve_one(
     from market_data.infrastructure.db.models.instruments import InstrumentModel
     from market_data.infrastructure.db.models.ohlcv import OHLCVBarModel
     from market_data.infrastructure.db.models.quotes import QuoteModel
+    from market_data.infrastructure.metrics.prometheus import tape_symbol_data_source
 
     try:
         # 1. Resolve symbol → instrument_id. We pick the first US-listed

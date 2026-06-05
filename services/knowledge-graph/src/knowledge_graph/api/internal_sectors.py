@@ -32,12 +32,6 @@ from fastapi import APIRouter, HTTPException, Query, Request, status
 from pydantic import BaseModel
 
 from knowledge_graph.api.dependencies import ReadOnlyDbSessionDep
-from knowledge_graph.infrastructure.intelligence_db.repositories.canonical_entity import (
-    CanonicalEntityRepository,
-)
-from knowledge_graph.infrastructure.metrics.prometheus import (
-    s7_canonical_entity_sector_unknown_total,
-)
 from observability import get_logger  # type: ignore[import-untyped]
 
 logger = get_logger(__name__)  # type: ignore[no-any-return]
@@ -96,6 +90,17 @@ async def get_sectors(
     degradation). The caller can detect them by comparing requested ids
     against returned ids.
     """
+    # Lazy infrastructure imports (IG-LAYER-002 / API-MODULE-LEVEL-INFRA):
+    # the api/ layer must not import from infrastructure/ at module load —
+    # the imports live inside the handler body so the router file stays
+    # infrastructure-free at import time.
+    from knowledge_graph.infrastructure.intelligence_db.repositories.canonical_entity import (
+        CanonicalEntityRepository,
+    )
+    from knowledge_graph.infrastructure.metrics.prometheus import (
+        s7_canonical_entity_sector_unknown_total,
+    )
+
     if not entity_ids:
         raise HTTPException(status_code=400, detail="entity_ids must not be empty")
 

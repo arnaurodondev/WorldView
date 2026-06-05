@@ -30,6 +30,8 @@ from rag_chat.application.pipeline.tool_executor import ToolExecutor, ToolUseBlo
 from rag_chat.application.pipeline.transport_error import TransportErrorMarker
 from rag_chat.infrastructure.clients.base import UpstreamTransportError
 
+pytestmark = pytest.mark.unit
+
 # ── Test doubles ─────────────────────────────────────────────────────────────
 
 

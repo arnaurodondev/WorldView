@@ -25,6 +25,8 @@ from rag_chat.application.use_cases.agentic_brief_generator import (
     _wrap_envelope,
 )
 
+pytestmark = pytest.mark.unit
+
 # ── Tiny fake types matching the libs/tools types.py shape ───────────────────
 # WHY local fakes (not real types): keeps the test self-contained and lets us
 # poke ``finish_reason`` / ``has_tool_calls`` without importing the full lib.

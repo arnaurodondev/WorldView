@@ -22,6 +22,8 @@ from market_ingestion.infrastructure.workers.fundamentals_refresh_worker import 
     fundamentals_refresh_attempts_total,
 )
 
+pytestmark = pytest.mark.unit
+
 
 def _settings(**overrides: Any) -> SimpleNamespace:
     """Build a minimal settings stub. ``SimpleNamespace`` is enough because the

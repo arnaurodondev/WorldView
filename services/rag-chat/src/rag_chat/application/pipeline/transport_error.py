@@ -38,4 +38,47 @@ class TransportErrorMarker:
     path: str | None = None
 
 
-__all__ = ["TransportErrorMarker"]
+class UpstreamTransportError(BaseException):
+    """Raised by upstream HTTP clients when a call fails at the transport layer.
+
+    Lives in the application layer (rather than ``infrastructure/clients/base``)
+    so the orchestrator and ``ToolExecutor`` can ``except`` it without crossing
+    the LAYER-APP-ISOLATION boundary (R12 / IG-LAYER-002). The infrastructure
+    layer re-exports the symbol from ``infrastructure/clients/base.py`` so
+    existing call sites that ``raise UpstreamTransportError(...)`` keep
+    working unchanged.
+
+    BaseException (not Exception) — per-handler ``except Exception: return []``
+    guards must NOT swallow this; the orchestrator's ``except
+    UpstreamTransportError`` branch must see it untouched so it can render
+    ``status="transport_error"`` instead of a silently empty tool result
+    (BP-623, PLAN-0103 W2).
+
+    Attributes:
+        reason: machine-readable classification — one of
+            ``upstream_unreachable`` (DNS / connect refused / RemoteProtocolError)
+            ``upstream_timeout``     (read / write / connect timeout)
+            ``upstream_5xx``         (HTTP 5xx response)
+        status_code: HTTP status when applicable (5xx only); None for connect/timeout.
+        elapsed_ms: wall-clock time spent on the failed call.
+        path: request path for logging / debug surfacing.
+    """
+
+    __slots__ = ("reason", "status_code", "elapsed_ms", "path")
+
+    def __init__(
+        self,
+        reason: str,
+        *,
+        path: str,
+        elapsed_ms: int,
+        status_code: int | None = None,
+    ) -> None:
+        super().__init__(f"upstream transport error: {reason} ({path})")
+        self.reason = reason
+        self.path = path
+        self.elapsed_ms = elapsed_ms
+        self.status_code = status_code
+
+
+__all__ = ["TransportErrorMarker", "UpstreamTransportError"]

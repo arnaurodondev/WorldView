@@ -17,6 +17,8 @@ from market_data.infrastructure.messaging.consumers.insider_transactions_consume
     _compute_net_value,
 )
 
+pytestmark = pytest.mark.unit
+
 # ── _coerce_transaction_type ───────────────────────────────────────────────
 
 

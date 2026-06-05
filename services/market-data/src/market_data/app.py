@@ -336,7 +336,7 @@ def _get_static_screen_fields() -> list:
         ScreenFieldMetadata(
             name="next_earnings_date",
             label="NEXT EARN",
-            field_type="date",
+            field_type="text",
             unit="date",
             description="Next scheduled earnings report date (filter accepts days-from-today)",
             observed_min=None,
@@ -346,7 +346,7 @@ def _get_static_screen_fields() -> list:
         ScreenFieldMetadata(
             name="next_dividend_date",
             label="NEXT DIV",
-            field_type="date",
+            field_type="text",
             unit="date",
             description="Next scheduled dividend payment date (filter accepts days-from-today)",
             observed_min=None,

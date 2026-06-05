@@ -23,12 +23,15 @@ import time
 import httpx
 import structlog  # type: ignore[import-untyped]
 
-logger = structlog.get_logger(__name__)  # type: ignore[no-any-return]
-
-
-# ── Transport-error escape hatch ─────────────────────────────────────────────
+# ``UpstreamTransportError`` lives in the application layer so that the
+# orchestrator and ``ToolExecutor`` can ``except`` it without crossing the
+# LAYER-APP-ISOLATION boundary (R12 / IG-LAYER-002). Re-exported here so
+# existing infrastructure call sites that ``raise UpstreamTransportError``
+# (and external callers that import it from ``infrastructure/clients/base``)
+# keep working unchanged. See ``application/pipeline/transport_error.py``
+# for the actual class definition.
 #
-# WHY BaseException (not Exception): every tool handler in
+# WHY the class is a BaseException (not Exception): every tool handler in
 # ``rag_chat/application/pipeline/handlers/*`` wraps upstream calls in
 # ``try/except Exception: return []`` for R9 safe-degradation.  If
 # ``UpstreamTransportError`` inherited from ``Exception``, those guards would
@@ -37,41 +40,9 @@ logger = structlog.get_logger(__name__)  # type: ignore[no-any-return]
 # bypasses ``except Exception`` (same mechanism used by KeyboardInterrupt and
 # SystemExit) but is still caught by the executor's explicit
 # ``except UpstreamTransportError`` branch.
+from rag_chat.application.pipeline.transport_error import UpstreamTransportError
 
-
-class UpstreamTransportError(BaseException):
-    """Raised when an upstream HTTP call fails at the transport layer.
-
-    Carries enough structured detail for the orchestrator to render an
-    informative ``tool_result`` SSE event AND a structured ``role="tool"``
-    message that lets the LLM disambiguate "upstream down" from "200 OK,
-    empty list".
-
-    Attributes:
-        reason: machine-readable classification — one of:
-            ``upstream_unreachable`` (DNS / connect refused / RemoteProtocolError)
-            ``upstream_timeout``     (read / write / connect timeout)
-            ``upstream_5xx``         (HTTP 5xx response)
-        status_code: HTTP status when applicable (5xx only); None for connect/timeout.
-        elapsed_ms: wall-clock time spent on the failed call.
-        path: request path for logging / debug surfacing.
-    """
-
-    __slots__ = ("reason", "status_code", "elapsed_ms", "path")
-
-    def __init__(
-        self,
-        reason: str,
-        *,
-        path: str,
-        elapsed_ms: int,
-        status_code: int | None = None,
-    ) -> None:
-        super().__init__(f"upstream transport error: {reason} ({path})")
-        self.reason = reason
-        self.path = path
-        self.elapsed_ms = elapsed_ms
-        self.status_code = status_code
+logger = structlog.get_logger(__name__)  # type: ignore[no-any-return]
 
 
 def _raise_transport_error_from_httpx(
