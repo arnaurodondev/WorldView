@@ -236,7 +236,7 @@ services:
     env_file:
       - ../../services/portfolio/configs/docker.env
     command: ["alembic", "upgrade", "head"]
-    restart: "no"
+    restart: "on-failure:5"
 
   # ── Portfolio service ────────────────────────────────────────────────────────
   portfolio:
@@ -381,7 +381,7 @@ services:
     env_file:
       - ../../services/market-ingestion/configs/docker.env
     command: ["alembic", "-c", "alembic.ini", "upgrade", "head"]
-    restart: "no"
+    restart: "on-failure:5"
 
   # ── Market ingestion service ─────────────────────────────────────────────────
   market-ingestion:
@@ -657,7 +657,7 @@ services:
     env_file:
       - ../../services/content-ingestion/configs/docker.env
     command: ["alembic", "upgrade", "head"]
-    restart: "no"
+    restart: "on-failure:5"
 
   # API server
   content-ingestion:
@@ -775,7 +775,7 @@ services:
     env_file:
       - ../../services/market-data/configs/docker.env
     command: ["alembic", "upgrade", "head"]
-    restart: "no"
+    restart: "on-failure:5"
 
   market-data:
     build:
@@ -956,7 +956,7 @@ services:
     env_file:
       - ../../services/content-store/configs/docker.env
     command: ["alembic", "upgrade", "head"]
-    restart: "no"
+    restart: "on-failure:5"
 
   content-store:
     build:
@@ -1187,7 +1187,7 @@ services:
     env_file:
       - ../../services/nlp-pipeline/configs/docker.env
     command: ["alembic", "upgrade", "head"]
-    restart: "no"
+    restart: "on-failure:5"
 
   nlp-pipeline:
     build:
@@ -1816,7 +1816,7 @@ services:
     env_file:
       - ../../services/alert/configs/docker.env
     command: ["alembic", "upgrade", "head"]
-    restart: "no"
+    restart: "on-failure:5"
 
   alert:
     build:
@@ -1948,7 +1948,7 @@ services:
     env_file:
       - ../../services/rag-chat/configs/docker.env
     command: ["alembic", "upgrade", "head"]
-    restart: "no"
+    restart: "on-failure:5"
 
   rag-chat:
     build:
