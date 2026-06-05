@@ -59,6 +59,44 @@ export type LogEntry = Message | SlashTurn;
  * (entity_id, condition, threshold, severity).  The frontend sends these
  * back in the request body of POST /api/v1/chat/proposals/{id}/confirm.
  */
+/**
+ * AgentIterationEvent — received from the ``agent_iteration`` SSE event emitted
+ * by S8 (rag-chat) at every transition of the tool-calling loop.
+ *
+ * WHY THIS EXISTS (PLAN-0099 W4 UX fix):
+ * Today the chat appears to "hang" between tool batches. The flow for a slow
+ * research query looks like:
+ *   0-8s    tool spinners visible (good)
+ *   8-16s   SILENT — LLM is reasoning over iter-1 results (looks broken)
+ *   16-24s  SILENT — LLM is reasoning over iter-2 results (looks broken)
+ *   24-30s  synthesis stream begins
+ * The new `agent_iteration` event fills those silent gaps with an
+ * always-visible progress strip ("Step 2 of 8 · Reasoning over 4 results…").
+ *
+ * WHY 3 STAGES (not free-text):
+ * A bounded enum lets the frontend pick a stable icon + copy for each phase
+ * without parsing backend strings. Adding a 4th stage requires a coordinated
+ * BE/FE change — desirable: it forces us to think about the UX of the new
+ * transition.
+ *
+ * EMIT TIMING (per Agent A's backend contract):
+ *   - BEFORE iter 0's LLM call → stage="planning_tools", iteration=0
+ *   - BEFORE iter N>0's LLM call → stage="reasoning_over_results", iteration=N
+ *   - BEFORE the synthesis streaming call → stage="synthesizing"
+ */
+export interface AgentIterationEvent {
+  /** 0-indexed iteration number within the tool loop. */
+  iteration: number;
+  /** Loop budget ceiling — drives the "Step N of M" copy. */
+  max_iterations: number;
+  /** Bounded stage enum; component switches icon + label on this. */
+  stage: "planning_tools" | "reasoning_over_results" | "synthesizing";
+  /** Running cumulative count of tools completed so far in this turn. */
+  tools_completed_total: number;
+  /** Wall-clock milliseconds since the loop started — drives the elapsed chip. */
+  elapsed_ms: number;
+}
+
 export interface PendingActionEvent {
   /** Server-generated UUID — sent back as the path param on confirm. */
   proposal_id: string;

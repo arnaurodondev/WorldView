@@ -20,6 +20,7 @@ from typing import TYPE_CHECKING, Any, Protocol
 
 import httpx
 import structlog
+from prompts.classification.intent import INTENT_CLASSIFICATION
 
 from rag_chat.domain.enums import QueryIntent
 
@@ -148,68 +149,15 @@ _INTENT_KEYWORDS: dict[QueryIntent, list[str]] = {
 }
 
 # ── Classification prompt ──────────────────────────────────────────────────────
-
-_CLASSIFICATION_PROMPT = (
-    "You are a query intent classifier for a financial intelligence system.\n"
-    "Classify the query into exactly one of: FACTUAL_LOOKUP, RELATIONSHIP, SIGNAL_INTEL,\n"
-    "FINANCIAL_DATA, COMPARISON, REASONING, PORTFOLIO, GENERAL.\n"
-    "\n"
-    "Use GENERAL for ambiguous, educational, or open-ended questions not tied to a specific\n"
-    "entity or financial metric. Use FACTUAL_LOOKUP when a specific named entity is targeted.\n"
-    "For COMPARISON queries with multiple entities, extract sub_questions (one per entity).\n"
-    "For REASONING queries, rephrase as a standalone question using conversation context.\n"
-    "\n"
-    "Examples:\n"
-    '- "Who is Apple\'s CEO?" ->'
-    ' {{"intent":"FACTUAL_LOOKUP","sub_questions":[],'
-    '"rephrased_query":"Who is the CEO of Apple Inc.?"}}\n'
-    '- "Why is Apple\'s margin declining?" ->'
-    ' {{"intent":"REASONING","sub_questions":[],'
-    '"rephrased_query":"Why is Apple\'s gross margin declining?"}}\n'
-    '- "Compare TSLA vs RIVN margins" ->'
-    ' {{"intent":"COMPARISON","sub_questions":["What are Tesla\'s margins?",'
-    '"What are Rivian\'s margins?"],"rephrased_query":"Compare TSLA and RIVN margins."}}\n'
-    '- "What risks affect my holdings?" ->'
-    ' {{"intent":"PORTFOLIO","sub_questions":[],'
-    '"rephrased_query":"What risks affect my portfolio holdings?"}}\n'
-    '- "What is Apple\'s relationship with TSMC?" ->'
-    ' {{"intent":"RELATIONSHIP","sub_questions":[],'
-    '"rephrased_query":"What is Apple\'s supply chain relationship with TSMC?"}}\n'
-    '- "Latest news on Nvidia?" ->'
-    ' {{"intent":"SIGNAL_INTEL","sub_questions":[],'
-    '"rephrased_query":"What are recent news and announcements about Nvidia?"}}\n'
-    '- "What is TSLA\'s current P/E ratio?" ->'
-    ' {{"intent":"FINANCIAL_DATA","sub_questions":[],'
-    '"rephrased_query":"What is Tesla\'s current price-to-earnings ratio?"}}\n'
-    # PLAN-0104 W49: bare-ratio / margin / cash-flow / growth questions about a
-    # specific entity MUST classify as FINANCIAL_DATA so the snapshot/history
-    # toolchain fires and the 4-section ANSWER STRUCTURE addendum is included.
-    "- \"What's AAPL's P/E ratio?\" ->"
-    ' {{"intent":"FINANCIAL_DATA","sub_questions":[],'
-    '"rephrased_query":"What is Apple\'s current P/E ratio?"}}\n'
-    '- "Show me Meta\'s EPS over the last 4 quarters." ->'
-    ' {{"intent":"FINANCIAL_DATA","sub_questions":[],'
-    '"rephrased_query":"What is Meta\'s diluted EPS for the last 4 quarters?"}}\n'
-    "- \"What's Amazon's YoY revenue growth?\" ->"
-    ' {{"intent":"FINANCIAL_DATA","sub_questions":[],'
-    '"rephrased_query":"What is Amazon\'s year-over-year revenue growth?"}}\n'
-    '- "How has Tesla\'s gross margin trended in the last year?" ->'
-    ' {{"intent":"FINANCIAL_DATA","sub_questions":[],'
-    '"rephrased_query":"What is Tesla\'s gross margin trend over the trailing four quarters?"}}\n'
-    # F-NEW-014: size & capital structure category (market cap, EV, shares
-    # outstanding, book value, net debt, beta, ROIC, float) routes to FINANCIAL_DATA.
-    '- "What is Apple\'s market capitalization?" ->'
-    ' {{"intent":"FINANCIAL_DATA","sub_questions":[],'
-    '"rephrased_query":"What is Apple\'s current market capitalization?"}}\n'
-    '- "How do interest rates affect stock prices?" ->'
-    ' {{"intent":"GENERAL","sub_questions":[],'
-    '"rephrased_query":"How do interest rate changes affect equity valuations?"}}\n'
-    "\n"
-    "Query: {message}\n"
-    "Conversation context: {history}\n"
-    "Resolved entities: {entities}\n"
-    'Respond with JSON only: {{"intent": "...", "sub_questions": [...], "rephrased_query": "..."}}\n'
-)
+# Phase 2B (2026-06-05): the inline prompt body previously lived here. It is
+# now the single source of truth in ``libs/prompts/classification/intent.py``
+# (``INTENT_CLASSIFICATION``). The version-bumped (v2.1) template carries
+# every example that used to be inline PLUS the priority-rules block, so
+# behaviour is monotonically richer. We keep a thin module alias so callers
+# inside this file read like before, and we record the template identifier
+# on every classify() log line for drift detection across deploys.
+_CLASSIFICATION_TEMPLATE = INTENT_CLASSIFICATION
+_INTENT_CLASSIFIER_PROMPT_ID = INTENT_CLASSIFICATION.identifier()
 
 _VALID_INTENTS: frozenset[str] = frozenset(q.value for q in QueryIntent)
 
@@ -285,7 +233,10 @@ class OllamaIntentClassifier:
         Returns ``(intent, sub_questions, rephrased_query)``.
         Falls back to the keyword heuristic if Ollama is unavailable.
         """
-        prompt = _CLASSIFICATION_PROMPT.format(
+        # Render via the shared PromptTemplate so every call site logs the
+        # exact prompt identifier (name@version#hash) it used. ``render``
+        # raises if any required parameter is missing — we pass all three.
+        prompt = _CLASSIFICATION_TEMPLATE.render(
             message=message,
             history=json.dumps(conversation_history[-6:]),
             entities=json.dumps(
@@ -319,6 +270,10 @@ class OllamaIntentClassifier:
                 "ollama_intent_classifier_fallback",
                 model=self._model,
                 msg_len=len(message),
+                # Drift detection: stamps the exact prompt the call would have
+                # used (name@version#hash). Lets dashboards correlate fallback
+                # rates with prompt rollouts.
+                intent_classifier_prompt=_INTENT_CLASSIFIER_PROMPT_ID,
             )
             return self._fallback.classify(message)
         finally:
@@ -390,7 +345,10 @@ class DeepInfraIntentClassifier:
         Returns ``(intent, sub_questions, rephrased_query)``.
         Falls back to keyword heuristic if DeepInfra is unavailable.
         """
-        prompt = _CLASSIFICATION_PROMPT.format(
+        # Render via the shared PromptTemplate so every call site logs the
+        # exact prompt identifier (name@version#hash) it used. ``render``
+        # raises if any required parameter is missing — we pass all three.
+        prompt = _CLASSIFICATION_TEMPLATE.render(
             message=message,
             history=json.dumps(conversation_history[-6:]),
             entities=json.dumps(
@@ -441,6 +399,8 @@ class DeepInfraIntentClassifier:
                 "deepinfra_intent_classifier_fallback",
                 model=self._model,
                 msg_len=len(message),
+                # Drift detection identifier — same purpose as the Ollama path.
+                intent_classifier_prompt=_INTENT_CLASSIFIER_PROMPT_ID,
             )
             return self._fallback.classify(message)
         finally:

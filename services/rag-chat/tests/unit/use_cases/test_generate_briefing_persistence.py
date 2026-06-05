@@ -251,7 +251,7 @@ async def test_section_missing_metric_fires_for_partial_brief() -> None:
     fqa01_output = (
         "## Summary\nTech rally continues.\n\n"
         "## Details\n"
-        "**Tape**\n- SPY +0.2% [N1]\n"
+        "**Market Snapshot**\n- SPY +0.2% [N1]\n"
         "**Your Portfolio Today**\n- AAPL flat [N1]\n"
         "**Macro Today**\n- No prints today [N1]\n"
         "**News That Matters To You**\n- Dell up 40% [N1]\n"
@@ -266,7 +266,7 @@ async def test_section_missing_metric_fires_for_partial_brief() -> None:
 
     before_risks = _count("Risks + Opportunities")
     before_bonus = _count("Bonus context")
-    before_tape = _count("Tape")
+    before_tape = _count("Market Snapshot")
 
     import datetime as _dt
 
@@ -288,12 +288,12 @@ async def test_section_missing_metric_fires_for_partial_brief() -> None:
 
     after_risks = _count("Risks + Opportunities")
     after_bonus = _count("Bonus context")
-    after_tape = _count("Tape")
+    after_tape = _count("Market Snapshot")
 
     assert after_risks == before_risks + 1.0, "Risks + Opportunities should be flagged missing"
     assert after_bonus == before_bonus + 1.0, "Bonus context should be flagged missing"
-    # Tape was present → no increment
-    assert after_tape == before_tape, "Tape was present and should NOT increment"
+    # Market Snapshot was present → no increment
+    assert after_tape == before_tape, "Market Snapshot was present and should NOT increment"
 
 
 @pytest.mark.asyncio
@@ -302,7 +302,7 @@ async def test_summary_paragraph_surfaced_on_response() -> None:
     v42_output = (
         "## Summary\nDell rally and Palantir surge highlight AI momentum.\n\n"
         "## Details\n"
-        "**Tape**\n- SPY +0.2% [N1]\n"
+        "**Market Snapshot**\n- SPY +0.2% [N1]\n"
         "**Your Portfolio Today**\n- AAPL flat [N1]\n"
         "**Macro Today**\n- No prints [N1]\n"
         "**News That Matters To You**\n- Dell up 40% [N1]\n"
@@ -349,7 +349,7 @@ async def test_brief_defensive_injection_fires_for_partial_brief() -> None:
     # Partial output: 4 sections, no ``## Summary`` block — the exact pattern
     # that motivated the v4.3 + injection fix.
     partial_output = (
-        "**Tape**\n- SPY +0.2% [N1]\n"
+        "**Market Snapshot**\n- SPY +0.2% [N1]\n"
         "**Your Portfolio Today**\n- AAPL flat pre-mkt [N1]\n"
         "**Macro Today**\n- No prints [N1]\n"
         "**News That Matters To You**\n- Dell up 40% [N1]\n"

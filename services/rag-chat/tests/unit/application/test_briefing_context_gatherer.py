@@ -953,7 +953,7 @@ def test_morning_prompt_v4_contains_required_sections() -> None:
 
     body = MORNING_BRIEFING.template
     for section_name in (
-        "Tape",
+        "Market Snapshot",
         "Your Portfolio Today",
         "Macro Today",
         "News That Matters To You",
@@ -975,4 +975,8 @@ def test_morning_prompt_v4_contains_required_sections() -> None:
     # PLAN-0103 W11 bumped 4.4 → 4.5: ADAPTIVE Summary length (target ~100w,
     # 30-200w bands) replacing the fixed 50-word cap that truncated synthesis
     # on large portfolios / very active days.
-    assert MORNING_BRIEFING.version == "4.5", MORNING_BRIEFING.version
+    # v4.6: renamed "Tape" → "Market Snapshot" for clarity to retail/prosumer
+    # readers; raised Details cap 700→1200 with soft 30-50w bullets (up to 100w
+    # when context demands depth) so the LLM can give a full causal explanation
+    # without bumping the per-bullet word ceiling.
+    assert MORNING_BRIEFING.version == "4.6", MORNING_BRIEFING.version

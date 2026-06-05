@@ -52,6 +52,13 @@ import { safeFormatClockTime } from "@/lib/utils";
 // the tool-use phase (before token chunks arrive). Imported here because
 // StreamingBubble owns the "in-flight assistant response" visual region.
 import { ToolCallIndicator, type ToolCallState } from "./ToolCallIndicator";
+// PLAN-0099 W4: AgentIterationProgress is the always-visible strip that fills
+// the silent gaps between tool batches (planning → reasoning → synthesizing).
+// It is COMPLEMENTARY to ToolCallIndicator (per-tool spinners) — the strip
+// tells the user what the AGENT is doing right now; the indicators tell them
+// what TOOLS have run. Both can be visible simultaneously.
+import { AgentIterationProgress } from "./AgentIterationProgress";
+import type { AgentIterationEvent } from "@/features/chat/lib/types";
 
 /**
  * TypingIndicator — animated three-dot bubble shown while SSE stream is
@@ -193,9 +200,20 @@ interface StreamingBubbleProps {
    * Empty array (default) when the response is a plain non-tool-use answer.
    */
   activeTools?: ToolCallState[];
+  /**
+   * Latest `agent_iteration` event from useChatStream.iterationEvent (PLAN-0099 W4).
+   * Null until the first event arrives; the AgentIterationProgress component
+   * renders nothing in that case, so a plain non-tool-use response (which
+   * never emits agent_iteration) shows no strip at all.
+   */
+  iterationEvent?: AgentIterationEvent | null;
 }
 
-export function StreamingBubble({ streaming, activeTools = [] }: StreamingBubbleProps) {
+export function StreamingBubble({
+  streaming,
+  activeTools = [],
+  iterationEvent = null,
+}: StreamingBubbleProps) {
   return (
     <div className="flex flex-col items-start gap-1">
       <div className="flex max-w-[70%] items-end gap-2">
@@ -216,6 +234,17 @@ export function StreamingBubble({ streaming, activeTools = [] }: StreamingBubble
            * ToolCallIndicator returns null when activeTools is empty, so there
            * is no visual impact on non-tool-use responses.
            */}
+          {/*
+           * PLAN-0099 W4: AgentIterationProgress sits ABOVE ToolCallIndicator.
+           * Ordering rationale:
+           *   1. Agent stage strip (this) — "what the agent is doing right now"
+           *   2. Per-tool indicators (next) — "which tools ran and their status"
+           *   3. Streamed answer text (below) — the actual response
+           * The strip stays visible through silent gaps where activeTools may
+           * be empty (between tool batches while the LLM reasons over results),
+           * so it is the ONLY always-on signal in those windows.
+           */}
+          <AgentIterationProgress event={iterationEvent} />
           <ToolCallIndicator tools={activeTools} />
           <LazyMarkdownContent size="compact">{streaming.text}</LazyMarkdownContent>
           {streaming.active && (

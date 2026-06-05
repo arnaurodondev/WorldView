@@ -106,19 +106,29 @@ class AgentBudget:
     Field defaults are tuned for the production workload:
       - max_tokens_per_iter=2048: enough for a tool-call decision + reasoning
       - max_tokens_final=8000: generous budget for a well-cited final answer
-      - max_tool_latency_s=30.0: cumulative wall-clock across all tool rounds
+      - max_tool_latency_s=90.0: cumulative wall-clock across all tool rounds.
+        PLAN-0107 raised this from 30.0 → 90.0 because deep multi-round
+        financial-research queries (e.g. TSLA-vs-NVDA fundamentals compare)
+        regularly burn 30-60s across rerank + 3-4 tool calls. The dataclass
+        default is the ENV-overridable upper bound; production wires the
+        value from ``Settings.chat_max_tool_latency_s`` (env var
+        ``RAG_CHAT_MAX_TOOL_LATENCY_S``).
       - max_per_tool_s=30.0: per-tool asyncio.wait_for (handled in executor)
       - max_iterations=8: allows up to 8 tool rounds before forcing an answer
-      - max_consecutive_errors=2: 2 rounds of all-fail → surrender (avoids
-        the model retrying a broken tool indefinitely)
+      - max_consecutive_errors=3: 3 rounds of all-fail → surrender. PLAN-0107
+        raised this from 2 → 3 because the legitimate ReAct fallback chain
+        (search_documents → search_claims → get_entity_intelligence) can
+        legitimately consume 2 consecutive empty rounds before recovery.
+        Sourced from ``Settings.chat_max_consecutive_errors`` (env var
+        ``RAG_CHAT_MAX_CONSECUTIVE_ERRORS``).
     """
 
     max_tokens_per_iter: int = 2048
     max_tokens_final: int = 8000
-    max_tool_latency_s: float = 30.0
+    max_tool_latency_s: float = 90.0  # PLAN-0107: env-configurable via Settings.chat_max_tool_latency_s
     max_per_tool_s: float = 30.0
     max_iterations: int = 8
-    max_consecutive_errors: int = 2
+    max_consecutive_errors: int = 3  # PLAN-0107: env-configurable via Settings.chat_max_consecutive_errors
 
 
 # ── E-7: Citation egress helpers ─────────────────────────────────────────────
@@ -1147,8 +1157,41 @@ class ChatOrchestratorUseCase:
         _question_entity_ids: set[str] = _collect_question_entity_identifiers(list(entities), entity_context)
         _prior_tool_calls: list[Any] = []
 
+        # ── PLAN-0107: ReAct iteration progress instrumentation ──────────────
+        # ``_loop_start_monotonic`` anchors the ``elapsed_ms`` field on every
+        # ``agent_iteration`` SSE event so the frontend sees TIME-SINCE-LOOP-
+        # START rather than time-since-request (the cache/validate/load-history
+        # phases above are excluded so a slow ReAct loop is not masked by a
+        # fast cache check).
+        # ``_tools_completed_total`` is the cumulative count of tool results
+        # captured across the whole loop. We piggyback on ``_executed_tool_names``
+        # which is already incremented for every tool the executor returned a
+        # value for — same counting policy, no double-bookkeeping.
+        _loop_start_monotonic = time.monotonic()
+
+        def _agent_iteration_elapsed_ms() -> int:
+            """Return ms since the tool loop started — used by every agent_iteration emit."""
+            return int((time.monotonic() - _loop_start_monotonic) * 1000.0)
+
         # ── E-6: Agent loop ───────────────────────────────────────────────────
         for iteration in range(budget.max_iterations):
+            # PLAN-0107: emit per-iteration progress event BEFORE the
+            # chat_with_tools planning call so the frontend has a visible
+            # "iteration N starting" tick even when the LLM takes 5-10s to
+            # decide on the next batch. Stage = "planning_tools" for iter 0
+            # (the LLM is choosing its first batch from scratch), and
+            # "reasoning_over_results" for iter > 0 (the LLM is reasoning over
+            # the prior iteration's tool results to decide whether to fan out
+            # again or stop). Field shape is pinned by the frontend consumer
+            # contract — see SSEEmitter.emit_agent_iteration docstring.
+            yield p.emitter.emit_agent_iteration(
+                iteration=iteration,
+                max_iterations=budget.max_iterations,
+                stage="planning_tools" if iteration == 0 else "reasoning_over_results",
+                tools_completed_total=len(_executed_tool_names),
+                elapsed_ms=_agent_iteration_elapsed_ms(),
+            )
+
             # LLM non-streaming turn to decide next tool calls
             iter_turn_start = time.monotonic()
             try:
@@ -1169,6 +1212,12 @@ class ChatOrchestratorUseCase:
                     # the right escape hatch when we already have prior tool
                     # results to synthesise from.
                     retry=iteration == 0,
+                    # PLAN-0107: forward thread_id to the provider chain so the
+                    # cost-capture layer (Agent B) can attribute the per-call
+                    # token cost to the right chat thread. The receiving side
+                    # accepts ``thread_id`` as an optional kwarg; current adapters
+                    # ignore unknown kwargs via **kwargs forwarding.
+                    thread_id=request.thread_id,
                 )
             except Exception as exc:
                 # FIX-LIVE-V (2026-05-25): mid-loop chat_with_tools failure
@@ -2069,6 +2118,21 @@ class ChatOrchestratorUseCase:
         # Grounding validation still runs (separate ``had_tool_calls`` guard
         # below) because the tool data IS in the messages history.
         if had_tool_calls and not _skip_final_stream:
+            # PLAN-0107: emit the ``synthesizing`` progress event right before
+            # the post-loop streaming call so the frontend can flip its
+            # progress label from "Reasoning…" to "Writing the final answer…".
+            # ``iteration`` carries the number of loop iterations actually
+            # completed (NOT budget.max_iterations) so the UI can correctly
+            # render "Step N/M — synthesising…" instead of always claiming
+            # the cap was reached.
+            yield p.emitter.emit_agent_iteration(
+                iteration=iteration_count,
+                max_iterations=budget.max_iterations,
+                stage="synthesizing",
+                tools_completed_total=len(_executed_tool_names),
+                elapsed_ms=_agent_iteration_elapsed_ms(),
+            )
+
             # Rerank + build final prompt if we haven't done so yet.
             if non_none_items and not reranked:
                 _type_counts = _Counter(item.item_type.value for item in non_none_items)
@@ -2108,6 +2172,8 @@ class ChatOrchestratorUseCase:
                             messages,
                             max_tokens=budget.max_tokens_final,
                             temperature=0.1,
+                            # PLAN-0107: forward thread_id for cost-capture (Agent B).
+                            thread_id=request.thread_id,
                         ):
                             full_text += chunk
                             if chunk:

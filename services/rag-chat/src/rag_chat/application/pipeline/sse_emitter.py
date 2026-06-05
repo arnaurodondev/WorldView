@@ -168,6 +168,71 @@ class SSEEmitter:
             payload["phase_timings_ms"] = phase_timings_ms
         return {"event": "done", "data": json.dumps(payload)}
 
+    def emit_agent_iteration(
+        self,
+        *,
+        iteration: int,
+        max_iterations: int,
+        stage: str,
+        tools_completed_total: int,
+        elapsed_ms: int,
+    ) -> dict[str, str]:
+        """Emit a per-iteration ReAct-loop progress event (PLAN-0107).
+
+        WHY: the multi-round tool loop can take 30-90s on heavy financial
+        questions (3-5 tool calls + reranks + synthesis). Before this event
+        the frontend showed only ``thinking`` → ``tool_call`` → ``tool_result``
+        spinners and had no signal between iterations, so the UI looked
+        frozen during the brief LLM-planning gap between tool batches. The
+        ``agent_iteration`` event fires immediately before each
+        ``chat_with_tools`` planning call AND immediately before the final
+        synthesis stream, giving the frontend a 1-3 events-per-second pulse
+        the user can render as "Step 2/8 — reasoning over 4 results...".
+
+        Wire shape (the frontend consumer is implemented against this exact
+        contract — DO NOT change field names without coordinating with
+        ``apps/worldview-web``):
+
+            event: agent_iteration
+            data: {
+              "iteration": int,             # 0-indexed loop counter
+              "max_iterations": int,        # AgentBudget.max_iterations
+              "stage": "planning_tools"     # iter 0: choosing first tools
+                     | "reasoning_over_results"  # iter N>0: reasoning over results
+                     | "synthesizing",      # AFTER loop: final stream
+              "tools_completed_total": int, # cumulative tool exec count this turn
+              "elapsed_ms": int             # ms since the tool-loop started
+            }
+
+        Args:
+            iteration:            0-indexed iteration number for ``planning_tools``
+                                  and ``reasoning_over_results``. For
+                                  ``synthesizing`` it should be the actual
+                                  iteration count completed.
+            max_iterations:       Hard cap from AgentBudget.max_iterations.
+            stage:                One of the three string literals above.
+            tools_completed_total:Running cumulative count of tools whose
+                                  results were captured across all iterations
+                                  so far.
+            elapsed_ms:           Wall-clock ms since the tool-loop started
+                                  (NOT since request arrival — the cache /
+                                  validate / load-history phases are excluded
+                                  so the frontend shows real ReAct progress
+                                  rather than fixed startup overhead).
+        """
+        return {
+            "event": "agent_iteration",
+            "data": json.dumps(
+                {
+                    "iteration": iteration,
+                    "max_iterations": max_iterations,
+                    "stage": stage,
+                    "tools_completed_total": tools_completed_total,
+                    "elapsed_ms": elapsed_ms,
+                }
+            ),
+        }
+
     def emit_thinking(self, stage: str = "tool_classification") -> dict[str, str]:
         """Emitted immediately when the first-turn LLM call starts (PLAN-0067 §0 I-1).
 

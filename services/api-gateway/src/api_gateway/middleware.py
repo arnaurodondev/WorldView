@@ -28,8 +28,8 @@ if TYPE_CHECKING:
 # Labelled by ``fallback_action`` so Grafana can distinguish "single hiccup we
 # recovered from" from "sustained outage" vs "non-transient (auth/config) error".
 try:
-    from prometheus_client import Counter as _PromCounter
     from prometheus_client import REGISTRY as _PROM_REGISTRY
+    from prometheus_client import Counter as _PromCounter
 
     # Idempotent registration — pytest reuses the global REGISTRY across tests,
     # and pytest-cov may import this module twice. If the counter already exists,

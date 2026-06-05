@@ -23,6 +23,7 @@ from typing import TYPE_CHECKING
 from uuid import UUID
 
 import httpx
+from prompts.classification.article_relevance import ARTICLE_RELEVANCE_SCORER  # type: ignore[import-untyped]
 from sqlalchemy import text
 
 from observability import get_logger  # type: ignore[import-untyped]
@@ -38,33 +39,21 @@ _RELEVANCE_PROMPT_VERSION: str = "v1"
 
 logger = get_logger(__name__)  # type: ignore[no-any-return]
 
-# Prompt sent to the LLM for relevance scoring + sentiment classification.
+# Phase 2C (2026-06-05): the static instruction block lives in libs/prompts as
+# ``ARTICLE_RELEVANCE_SCORER`` so it gets a content-hash, semver, and shared
+# identifier across services. We resolve it ONCE at import time via .render()
+# (no parameters) so the hot path stays a single string concat, byte-identical
+# to the legacy ``_SYSTEM_PROMPT`` constant.
 #
-# F-Q1-07 fix (PLAN-0050 QA iter-1): appended "sentiment" field extraction to
-# the SAME LLM call so we write both llm_relevance_score and sentiment in one
-# round-trip rather than adding a separate SentimentClassifierWorker.
-# The sentiment token set is constrained to four values so the LLM cannot
-# hallucinate a non-enum value — the writer validates before persisting.
-# Adding "sentiment" alongside (not instead of) "score" keeps the relevance
-# scoring contract (PRD-0026 §6.5) unchanged.
-_SYSTEM_PROMPT = (
-    "You are a financial news relevance assessor. "
-    "Rate the market impact of this news article from 0.0 to 1.0.\n"
-    "0.0 = completely irrelevant (celebrity news, sports, weather)\n"
-    "0.3 = mildly relevant (broad economy, far sector)\n"
-    "0.6 = moderately relevant (sector news, indirect exposure)\n"
-    "0.9 = highly relevant (direct earnings, M&A, regulatory action)\n"
-    "1.0 = critical (halted trading, major earnings miss, bankruptcy)\n"
-    "If the title is absent, vague, or ambiguous, return score 0.3 as a conservative default.\n"
-    "Also classify the market sentiment: "
-    '"positive" (good news for investors), '
-    '"negative" (bad news for investors), '
-    '"neutral" (factual/no clear direction), '
-    '"mixed" (contains both positive and negative signals).\n'
-    "Respond with ONLY valid JSON: "
-    '{"score": <float 0.0-1.0>, "reason": "<max 10 words in English>", '
-    '"sentiment": "positive"|"negative"|"neutral"|"mixed"}'
-)
+# F-Q1-07 lineage (PLAN-0050 QA iter-1): the prompt asks for sentiment in the
+# SAME LLM call as relevance scoring so both fields are written in one
+# round-trip rather than via a separate worker. The sentiment token set is
+# constrained to four values so the LLM cannot hallucinate a non-enum value —
+# the writer validates before persisting.
+_SYSTEM_PROMPT = ARTICLE_RELEVANCE_SCORER.render()
+# Stable identifier (``name@version#content_hash``) for structlog so log
+# consumers can correlate scoring outcomes back to the exact prompt text.
+_RELEVANCE_PROMPT_ID = ARTICLE_RELEVANCE_SCORER.identifier()
 
 # Valid sentiment enum values — reject anything the LLM hallucinates.
 _VALID_SENTIMENTS = frozenset({"positive", "negative", "neutral", "mixed"})
@@ -172,6 +161,9 @@ class ArticleRelevanceScoringWorker:
             "relevance_scoring_cycle_done",
             articles_scored=len(scored),
             articles_fetched=len(articles),
+            # Phase 2C: identifier (name@version#hash) of the system prompt so
+            # log consumers can correlate scoring drift to a prompt revision.
+            prompt_id=_RELEVANCE_PROMPT_ID,
         )
         return len(scored)
 

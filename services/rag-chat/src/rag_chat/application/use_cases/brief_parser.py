@@ -92,7 +92,7 @@ class BriefParser:
     # (to flag missing sections post-generation). Keep order/casing in sync
     # with libs/prompts/src/prompts/briefing/morning.py v4.2.
     V42_EXPECTED_SECTIONS: tuple[str, ...] = (
-        "Tape",
+        "Market Snapshot",
         "Your Portfolio Today",
         "Macro Today",
         "News That Matters To You",

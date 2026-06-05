@@ -101,8 +101,9 @@ class TestMorningBriefing:
             safety=SAFETY_FOOTER,
             current_date="2026-04-26",
         )
-        # v4.2 — the 6 named sections in the exact spec order.
-        assert "**Tape**" in result
+        # v4.2/v4.6 — the 6 named sections in the exact spec order
+        # (v4.6 renamed "Tape" → "Market Snapshot" for clarity to non-floor-trader users).
+        assert "**Market Snapshot**" in result
         assert "**Your Portfolio Today**" in result
         assert "**Macro Today**" in result
         assert "**News That Matters To You**" in result
@@ -129,8 +130,8 @@ class TestMorningBriefing:
         assert (
             "Summary block: ≤ 50 words" not in result
         ), "v4.5 replaced the fixed 50-word Summary cap with adaptive guidance"
-        # (b) Details block: ≤ 700 words across all 6 sections combined.
-        assert "Details block: ≤ 700 words" in result
+        # (b) Details block: ≤ 1200 words across all 6 sections combined (v4.6 raised from 700w).
+        assert "Details block: ≤ 1200 words" in result
         # Per-section guidance signposts — at least the two highest-signal
         # sections must carry an explicit budget so the LLM can stop
         # truncating News and Portfolio bullets at 250 words.
@@ -152,9 +153,9 @@ class TestMorningBriefing:
         assert "## Summary" in result
         assert "## Details" in result
         assert "MANDATORY" in result
-        # Version constant must reflect the v4.5 release (PLAN-0103 W11).
-        # v4.5 made the Summary cap adaptive (target ~100w; 30-200w bands).
-        assert MORNING_BRIEFING.version == "4.5"
+        # Version constant must reflect the v4.6 release: "Tape" → "Market Snapshot"
+        # rename + soft bullet caps (30-50w target, up to 100w when needed).
+        assert MORNING_BRIEFING.version == "4.6"
 
     def test_v45_few_shot_examples_present(self) -> None:
         """v4.3 must embed BOTH few-shot examples (rich + quiet day).
@@ -226,3 +227,169 @@ class TestPromptVersions:
     def test_versions_are_semver(self) -> None:
         for pt in [MORNING_BRIEFING, INSTRUMENT_BRIEFING]:
             assert re.match(r"\d+\.\d+", pt.version), f"{pt.name} version is not semver-like: {pt.version}"
+
+
+# --------------------------------------------------------------------------
+# MN-4 / QA F-005 — base-class enhancement tests (PLAN-0099-W4).
+#
+# Three new contracts on PromptTemplate that are NOT exercised by the older
+# happy-path tests above:
+#   1) Semver validation rejects malformed version strings at import time.
+#   2) content_hash changes when the template body changes by even one char.
+#   3) The brace guard rejects undeclared {placeholder} slots so a literal
+#      JSON example can never silently swallow a parameter substitution.
+# --------------------------------------------------------------------------
+
+
+class TestSemverValidation:
+    """Constructor rejects non-semver version strings (fail-loud at import)."""
+
+    @pytest.mark.parametrize(
+        "bad_version",
+        [
+            "v1",  # leading 'v' — common typo but not semver
+            "1",  # missing MINOR
+            "1.0.0-rc1",  # pre-release suffix explicitly disallowed
+            "1.x",  # placeholder digit
+            "",  # empty string
+        ],
+    )
+    def test_invalid_semver_rejected(self, bad_version: str) -> None:
+        # WHY: a version typo in a prompt definition file would only surface
+        # at the first LLM call site. Failing at import time prevents broken
+        # rubrics from making it into a long-running judge run.
+        with pytest.raises(ValueError, match="semver"):
+            PromptTemplate(
+                name="bad",
+                version=bad_version,
+                description="d",
+                template="ok",
+                parameters=frozenset(),
+            )
+
+    def test_valid_semver_accepted(self) -> None:
+        # Both MAJOR.MINOR and MAJOR.MINOR.PATCH must work — the regex
+        # explicitly opts into both forms.
+        for good in ("1.0", "1.2.3", "10.20", "0.1.0"):
+            pt = PromptTemplate(
+                name="ok",
+                version=good,
+                description="d",
+                template="t",
+                parameters=frozenset(),
+            )
+            assert pt.version == good
+
+
+class TestContentHash:
+    """A single-character edit to the template body must flip content_hash."""
+
+    def test_content_hash_changes_when_body_edited(self) -> None:
+        # Build two templates identical in every field EXCEPT one char in the
+        # body. If content_hash collides, the eval pipeline cannot detect
+        # silent prompt drift between two judge runs of the same name+version.
+        pt_a = PromptTemplate(
+            name="drift",
+            version="1.0",
+            description="d",
+            template="Hello world.",
+            parameters=frozenset(),
+        )
+        pt_b = PromptTemplate(
+            name="drift",
+            version="1.0",
+            description="d",
+            template="Hello world!",  # ← single-char diff (period -> exclamation)
+            parameters=frozenset(),
+        )
+        assert pt_a.content_hash != pt_b.content_hash
+        # And both must be the expected 12-char sha256 prefix length.
+        assert len(pt_a.content_hash) == 12
+        assert len(pt_b.content_hash) == 12
+
+    def test_content_hash_stable_for_identical_body(self) -> None:
+        # Sanity floor — two byte-equal templates produce the same hash even
+        # when the wrapping metadata (name, version) differs.
+        pt_a = PromptTemplate(
+            name="a",
+            version="1.0",
+            description="d1",
+            template="same body",
+            parameters=frozenset(),
+        )
+        pt_b = PromptTemplate(
+            name="b",
+            version="2.5",
+            description="d2",
+            template="same body",
+            parameters=frozenset(),
+        )
+        assert pt_a.content_hash == pt_b.content_hash
+
+
+class TestBraceGuard:
+    """MN-5 — undeclared {placeholder} slots and unescaped braces are rejected."""
+
+    def test_undeclared_placeholder_rejected(self) -> None:
+        # ``{name}`` is a slot but ``parameters`` is empty — must fail at
+        # construction with a clear "undeclared placeholder" message.
+        with pytest.raises(ValueError, match="undeclared placeholder"):
+            PromptTemplate(
+                name="guard",
+                version="1.0",
+                description="d",
+                template="Hello {name}!",
+                parameters=frozenset(),  # ← intentionally missing 'name'
+            )
+
+    def test_declared_placeholder_accepted(self) -> None:
+        # Mirror of the test above — the SAME template with the correct
+        # parameter set must construct + render cleanly. Guards against an
+        # over-eager guard rejecting legitimate templates.
+        pt = PromptTemplate(
+            name="guard",
+            version="1.0",
+            description="d",
+            template="Hello {name}!",
+            parameters=frozenset({"name"}),
+        )
+        assert pt.render(name="Alice") == "Hello Alice!"
+
+    def test_escaped_braces_accepted(self) -> None:
+        # Doubled braces represent literal { / } in str.format_map. A JSON
+        # example block in a prompt body uses this form — must be accepted
+        # with NO declared parameters, and .render() must collapse them.
+        pt = PromptTemplate(
+            name="json_example",
+            version="1.0",
+            description="d",
+            template='Reply: {{"score": 25}}',
+            parameters=frozenset(),
+        )
+        assert pt.render() == 'Reply: {"score": 25}'
+
+    def test_unbalanced_single_brace_rejected(self) -> None:
+        # A lone ``{`` or ``}`` makes string.Formatter().parse raise
+        # ValueError; the guard wraps it in a guidance message that points
+        # the author at the escape syntax. We accept either the wrapped
+        # "unescaped brace" message OR the inner parser message.
+        with pytest.raises(ValueError, match="brace|Single"):
+            PromptTemplate(
+                name="bad_brace",
+                version="1.0",
+                description="d",
+                template="Stray { brace.",
+                parameters=frozenset(),
+            )
+
+    def test_positional_placeholder_rejected(self) -> None:
+        # Positional ``{}`` slots are forbidden — named placeholders only,
+        # so the substitution intent is always explicit + grep-able.
+        with pytest.raises(ValueError, match="positional|undeclared|brace"):
+            PromptTemplate(
+                name="pos",
+                version="1.0",
+                description="d",
+                template="Hello {}!",
+                parameters=frozenset(),
+            )

@@ -118,6 +118,36 @@ class Settings(BaseSettings):
     provider_retry_attempts: int = Field(default=2, ge=0, le=5)  # RAG_CHAT_PROVIDER_RETRY_ATTEMPTS
     provider_retry_backoff_base: float = Field(default=1.0, gt=0.0, le=10.0)  # RAG_CHAT_PROVIDER_RETRY_BACKOFF_BASE
 
+    # ── PLAN-0107 — Agent loop soft-budget knobs (env-configurable) ──────────
+    #
+    # WHY env-configurable: pre-PLAN-0107 these were hardcoded inside the
+    # ``AgentBudget`` dataclass (max_tool_latency_s=30.0, max_consecutive_errors=2).
+    # Live chat-eval runs showed those defaults systematically starved deep,
+    # multi-round financial-research queries: a single TSLA-vs-NVDA compare
+    # easily burned 30s across rerank + 3-4 tool calls, and 2 consecutive
+    # all-fail rounds was too eager to surrender when the LLM was making
+    # legitimate fallback attempts (e.g. screener → search_documents → claims).
+    # The new defaults (90s / 3 errors) align with the FIX-LIVE-X DeepInfra
+    # tool-call timeout (90s) and give the ReAct loop one extra retry budget
+    # before surrendering. Env vars let ops dial these per-environment without
+    # a redeploy.
+    #
+    # ``chat_max_tool_latency_s``: CUMULATIVE wall-clock across all tool
+    # rounds in a single turn. When the sum exceeds this we inject a
+    # surrender message and stop the loop. RAG_CHAT_MAX_TOOL_LATENCY_S.
+    chat_max_tool_latency_s: float = Field(
+        default=90.0,
+        validation_alias="RAG_CHAT_MAX_TOOL_LATENCY_S",
+    )
+    # ``chat_max_consecutive_errors``: number of back-to-back iterations where
+    # EVERY tool returned None/empty before the orchestrator gives up. Set to
+    # 3 (was 2) so the LLM has one extra retry budget before surrender.
+    # RAG_CHAT_MAX_CONSECUTIVE_ERRORS.
+    chat_max_consecutive_errors: int = Field(
+        default=3,
+        validation_alias="RAG_CHAT_MAX_CONSECUTIVE_ERRORS",
+    )
+
     # ── Auth (PRD-0025): RS256 internal JWT via api-gateway JWKS ─────────────
     api_gateway_url: str = "http://api-gateway:8000"
 
@@ -163,9 +193,9 @@ class Settings(BaseSettings):
     cb_cool_down_seconds: int = Field(default=120, ge=10, le=3600)  # RAG_CHAT_CB_COOL_DOWN_SECONDS
     cb_probe_ttl_seconds: int = Field(default=5, ge=1, le=30)  # RAG_CHAT_CB_PROBE_TTL_SECONDS
 
-    # ── Citation accuracy cron (PLAN-0084 A-1) ────────────────────────────────
-    # Set RAG_CHAT_CITATION_CRON_ENABLED=true to activate the weekly LLM-judge
-    # cron that populates the rag_citation_accuracy Prometheus gauge.
+    # ── Citation accuracy cron (PLAN-0084 A-1, PLAN-0107) ─────────────────────
+    # Set RAG_CHAT_CITATION_CRON_ENABLED=true to activate the daily LLM-judge
+    # cron that populates the rag_citation_accuracy_24h Prometheus gauge.
     # Disabled by default to avoid unintended ~$0.50/run LLM cost on first deploy
     # (L5: flag-controlled rollout — same pattern as internal_jwt_skip_verification).
     citation_cron_enabled: bool = False  # RAG_CHAT_CITATION_CRON_ENABLED

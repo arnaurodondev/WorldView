@@ -74,6 +74,46 @@ def test_sse_citations_event(emitter: SSEEmitter) -> None:
 
 
 @pytest.mark.unit
+def test_sse_citations_event_never_emits_text_field(emitter: SSEEmitter) -> None:
+    """SSE projection MUST NOT include Citation.text — backend-only field (BP-NEW PLAN-0099 W4).
+
+    The domain Citation gained a `text` attribute that stores the full retrieved
+    chunk payload so the citation-judge cron can score grounding against the
+    actual text (not just the headline). This field is deliberately omitted from
+    the SSE wire shape because:
+      (a) it would balloon SSE bytes by ~500 tokens per citation;
+      (b) the frontend keeps the "Read ↗" link affordance unchanged.
+
+    This test guards the omission — a future refactor that naively adds
+    `"text": c.text` to emit_citations would regress the contract.
+    """
+    from rag_chat.domain.entities.conversation import Citation as RealCitation
+
+    real_citation = RealCitation(
+        ref=1,
+        item_type="chunk",
+        id=str(uuid4()),
+        title="Apple 10-K",
+        url=None,
+        source_name="SEC",
+        published_at=datetime(2024, 1, 1, tzinfo=UTC),
+        entity_name="Apple Inc",
+        confidence=0.90,
+        text="A very long chunk of text that should NEVER leak to the frontend SSE.",
+    )
+
+    result = emitter.emit_citations([real_citation])
+    payload = json.loads(result["data"])
+    # Single-citation payload should contain the existing 9 keys and ZERO text.
+    assert "text" not in payload[0], (
+        "SSE citations event leaked Citation.text — this is a backend-only field, "
+        "intentionally NOT projected to the frontend wire shape."
+    )
+    # And the omitted value really was set on the source object (sanity check).
+    assert real_citation.text is not None
+
+
+@pytest.mark.unit
 def test_sse_contradictions_event(emitter: SSEEmitter) -> None:
     """emit_contradictions returns serialized contradiction list."""
     from rag_chat.domain.entities.conversation import ContradictionRef
@@ -162,3 +202,43 @@ def test_sse_done_event_with_empty_timings_omits_key(emitter: SSEEmitter) -> Non
     result = emitter.emit_done(phase_timings_ms={})
     data = json.loads(result["data"])
     assert "phase_timings_ms" not in data
+
+
+# ─── PLAN-0107: emit_agent_iteration ────────────────────────────────────────
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize(
+    "stage",
+    ["planning_tools", "reasoning_over_results", "synthesizing"],
+)
+def test_sse_agent_iteration_event_shape(emitter: SSEEmitter, stage: str) -> None:
+    """emit_agent_iteration produces the exact JSON contract agreed with the frontend.
+
+    The frontend consumer in apps/worldview-web matches on these EXACT field
+    names. Any change here is a wire-breaking change that must be coordinated
+    cross-repo. Parametrised across all three legal stage strings so a typo
+    in any one of them surfaces immediately.
+    """
+    result = emitter.emit_agent_iteration(
+        iteration=2,
+        max_iterations=8,
+        stage=stage,
+        tools_completed_total=5,
+        elapsed_ms=12345,
+    )
+    assert result["event"] == "agent_iteration"
+    data = json.loads(result["data"])
+    # Exact field set — guards against accidental extra/missing keys.
+    assert set(data.keys()) == {
+        "iteration",
+        "max_iterations",
+        "stage",
+        "tools_completed_total",
+        "elapsed_ms",
+    }
+    assert data["iteration"] == 2
+    assert data["max_iterations"] == 8
+    assert data["stage"] == stage
+    assert data["tools_completed_total"] == 5
+    assert data["elapsed_ms"] == 12345

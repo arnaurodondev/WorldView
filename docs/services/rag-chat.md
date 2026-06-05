@@ -447,7 +447,7 @@ All env vars use prefix `RAG_CHAT_`.
 | `RAG_CHAT_TRUST_W_SOURCE` | `0.4` | No | Trust formula weight for source authority |
 | `RAG_CHAT_TRUST_W_CORROBORATION` | `0.1` | No | Trust formula weight for corroboration factor |
 | `RAG_CHAT_TRUST_W_EXTRACTION` | `0.1` | No | Trust formula weight for extraction confidence |
-| `RAG_CHAT_CITATION_CRON_ENABLED` | `false` | No | Enable weekly citation accuracy cron (costs LLM tokens) |
+| `RAG_CHAT_CITATION_CRON_ENABLED` | `false` | No | Enable citation accuracy cron (costs LLM tokens). Cadence is **DAILY 03:00 UTC** over the **last 24h** of messages (PLAN-0107; was weekly Sunday + 7d window) |
 | `RAG_CHAT_CITATION_JUDGE_PROVIDER` | `deepinfra` | No | `deepinfra` or `ollama` |
 | `RAG_CHAT_CITATION_JUDGE_MODEL` | `meta-llama/Meta-Llama-3.1-8B-Instruct` | No | Model for citation accuracy scoring |
 | `RAG_CHAT_CITATION_MIN_SAMPLES` | `10` | No | Min messages required to emit gauge (1-500) |
@@ -478,7 +478,7 @@ All env vars use prefix `RAG_CHAT_`.
 | `rag_retrieval_score_distribution` | histogram | `source` |
 | `rag_source_contribution_total` | counter | `source` |
 | `rag_reranker_position_change` | gauge | — |
-| `rag_citation_accuracy` | gauge | — |
+| `rag_citation_accuracy_24h` | gauge | — |
 | `rag_citation_accuracy_call_failures_total` | counter | `reason` |
 | `rag_circuit_breaker_open` | gauge | `source` |
 | `rag_tool_call_total` | counter | `tool_name`, `status` |
@@ -493,20 +493,26 @@ All env vars use prefix `RAG_CHAT_`.
 
 `rag_reranker_position_change` — rolling gauge (window=100 queries) of the fraction of queries where the reranker's top-1 differs from the fusion top-1. Updated via `record_reranker_position_change()` after step 8 in `ChatOrchestrator`. A gauge near 0 means the reranker is redundant; near 1 means fusion ordering is unreliable.
 
-`rag_citation_accuracy` — gauge set by the weekly citation-accuracy cron (`ScoreCitationAccuracyUseCase`). Values: 0 = irrelevant snippets, 1 = direct verbatim support.
+`rag_citation_accuracy_24h` — **canonical** gauge (PLAN-0107) set by the **daily** citation-accuracy cron (`ScoreCitationAccuracyUseCase`). Values: 0 = irrelevant snippets, 1 = direct verbatim support. Sample window: last 24h of assistant messages. Surfaced as the "Citation Accuracy (24h)" stat panel in `infra/grafana/dashboards/rag-chat.json` (PLAN-0107 follow-up). The legacy `rag_citation_accuracy` alias was removed in the same revision — it was dual-emitted during the PLAN-0099 W4 transition window but no Grafana panel or external consumer ever scraped it.
 
 ### Citation-Accuracy Cron
 
 `infrastructure/jobs/citation_accuracy_cron.py` — `start_citation_accuracy_cron(use_case) → asyncio.Task` schedules a background asyncio task:
-- **First run**: immediately on startup (gauge populated within minutes of first deployment)
-- **Recurring**: weekly, Sunday 03:00 UTC
+- **First run**: immediately on startup (gauge populated within minutes of first deployment) — only if no `last_run_at` is recorded in Valkey
+- **Recurring (PLAN-0107)**: **DAILY at 03:00 UTC** (was weekly Sunday 03:00 UTC). Cadence + sample window were paired in PLAN-0107 so a daily run scores the last 24h of messages.
+- **Crashloop guard (PLAN-0107)**: a Valkey-backed `last_run_at` key with a 1h grace window prevents repeated runs if the service is restart-looping (each run burns DeepInfra tokens).
 
 `application/use_cases/score_citation_accuracy.py` — `ScoreCitationAccuracyUseCase`:
-1. Calls `MessageRepository.sample_recent_with_citations(n=50)` — random sample from last 7 days, assistant-role messages, non-empty `citations` JSONB
-2. For each message, `iter_cited_claims(msg)` extracts `(sentence, "c{N}")` pairs from `[cN]` inline markers, or `(full_content, "c{ref}")` for plain-chat messages
-3. For each pair, calls `LLMJudgePort.score_citation(claim=, snippet=)` where `snippet = cite.title or ""`
-4. Normalises raw 0–3 scores to [0, 1] (÷3), drops invalid responses
-5. Sets `rag_citation_accuracy` gauge; returns 0.0 if fewer than 10 samples
+1. Calls `MessageRepository.sample_recent_with_citations(n=50, since=now-24h)` — random sample from the **last 24 hours** (PLAN-0107; was 7 days), assistant-role messages, non-empty `citations` JSONB.
+2. For each message, `iter_cited_claims(msg)` extracts `(sentence, "c{N}")` pairs from `[cN]` inline markers, or `(full_content, "c{ref}")` for plain-chat messages.
+3. **Dedup (PLAN-0107)**: `(message_id, citation.id)` is the dedup key — the same chunk cited under different `[cN]` refs within one message scores ONCE; the same chunk reused across two messages still scores twice (by design).
+4. For each pair, calls `LLMJudgePort.score_citation(claim=, snippet=, judge_prompt_id=...)`. **Snippet upgrade (PLAN-0107)**: `snippet = cite.text` (chunk text persisted in the `citations` JSONB up to ~2500 chars), falling back to `cite.title` for legacy records where `text` is `None`. `judge_prompt_id = "citation_judge@<version>#<hash>"` is persisted on each artefact (`q_<id>.json`) so saved outputs are unambiguously linked to the rubric text that produced them.
+5. Normalises raw 0–3 scores to [0, 1] (÷3), drops invalid responses.
+6. Sets the `rag_citation_accuracy_24h` gauge; returns 0.0 if fewer than `RAG_CHAT_CITATION_MIN_SAMPLES` samples. (The legacy `rag_citation_accuracy` alias was removed in the PLAN-0107 follow-up cleanup — see metrics list above.)
+
+**Schema note (PLAN-0107)**: `Citation` domain entity now carries a `text: str | None` field that is persisted to the `citations` JSONB column for the judge but **NEVER sent to the frontend** — the SSE projection layer strips it before emitting the `citations` event (regression-pinned by `test_sse_citations_event_never_emits_text_field`).
+
+**Migration `0008_*` (PLAN-0107)**: adds the partial index `ix_messages_role_created_partial ON messages (role, created_at DESC) WHERE citations IS NOT NULL` to support the new `since`-filtered query in the cron.
 
 **PLAN-0084 A-1 hardening (wire-up + prompt fence + error isolation):**
 
@@ -852,4 +858,5 @@ source is tripped. To reset manually, delete the Valkey key `rag:cb:state:{sourc
 ### Disable Citation Cron
 
 Set `RAG_CHAT_CITATION_CRON_ENABLED=false` (default). Enable only when you want
-weekly citation accuracy scoring (consumes LLM tokens).
+daily citation accuracy scoring (consumes LLM tokens). PLAN-0107 switched the
+cadence from weekly Sunday → DAILY 03:00 UTC and the sample window from 7 days → 24 hours.

@@ -54,6 +54,15 @@ import re
 from dataclasses import dataclass, field
 from typing import Any, Protocol
 
+# Import the canonical judge prompt from libs/prompts. The prompt has no
+# parameters, but we now use .render() (not .template) because v1.1 escapes
+# the literal JSON braces in the OUTPUT example block as ``{{`` / ``}}`` to
+# satisfy the brace guard (MN-5). .render() with no kwargs collapses them
+# back to single braces, producing text byte-identical to the v1.0 inlined
+# _SYSTEM_PROMPT. The PromptTemplate wrapper still gives us versioning,
+# content_hash, and identifier() for artefact persistence.
+from prompts.evaluation import CHAT_QUALITY_JUDGE
+
 # Default judge model — Llama 3.1 8B Instruct is cheap, fast, and good enough
 # at structured-JSON grading. We pin a specific revision via env var when
 # stronger judgement is required (e.g. for thesis evaluation runs).
@@ -190,267 +199,14 @@ def _build_default_llm(*, api_key: str | None, model: str, base_url: str) -> Jud
 # --------------------------------------------------------------------------
 
 
-_SYSTEM_PROMPT = """You are a strict quality grader for a financial-research chat agent.
-
-Grade ONE answer on FOUR dimensions, each 0-25, based ONLY on the inputs supplied.
-Be calibrated: shallow questions deserve concise answers; deep questions deserve
-multi-section answers; refusals can be PERFECT scores when the data is genuinely
-missing AND the question's rubric marks `appropriate_refusal_ok=true`.
-
-DIMENSIONS (each 0-25):
-
-1. tool_use            How well did the agent route the question to the right
-                       tools?
-
-                       SCORING RULE (any-of semantics — read carefully):
-                         * `rubric.expected_tools` is an EQUIVALENCE SET. Any
-                           single tool from the list is sufficient for FULL
-                           MARKS. Award 25 if AT LEAST ONE tool from
-                           `expected_tools` was called.
-                         * Do NOT deduct points for failing to call the OTHER
-                           tools in the equivalence set — they are alternatives,
-                           not a checklist. Example: expected_tools=[A, B, C]
-                           and the agent called only A → 25 (not "missed B and
-                           C, score 8").
-                         * Award lower scores only when ZERO tools from
-                           `expected_tools` were called.
-                         * Deduct meaningfully only when the tool that WAS
-                           called is clearly wrong for the question (e.g. user
-                           asked about price history but the agent only called
-                           `search_documents`).
-                         * WORKED EXAMPLE — DO NOT DEVIATE: if
-                           expected_tools = ["get_fundamentals_history",
-                           "get_fundamentals_snapshot", "query_fundamentals"]
-                           and the trace shows ONE call to
-                           `query_fundamentals(...)`, then tool_use = 25.
-                           A reason like "did not call any of the expected
-                           tools" is FACTUALLY WRONG in this case — the
-                           agent called one of them. You MUST score 25 and
-                           write a reason consistent with that fact.
-                         * Appropriate-refusal exemption: when
-                           `rubric.appropriate_refusal_ok=true` AND the
-                           tool_results show empty/missing data AND the answer
-                           is a refusal, do NOT penalise tool_use for the
-                           refusal itself — refusing instead of fabricating is
-                           the correct behaviour. The tool_use score should
-                           reflect routing quality (was the right tool tried?),
-                           not whether the agent ultimately answered.
-
-2. grounding           Are quantitative claims (numbers, dates, names) traceable
-                       to tool_results? Penalise fabricated numbers, fabricated
-                       periods (e.g. "Q4 FY2026" when no such period was returned),
-                       or claims contradicted by tool output statuses.
-
-                       VALUE EXTRACTION — MANDATORY CHECK BEFORE SCORING <10:
-                         The TOOL TRACE you receive is a COMPACT SUMMARY of the
-                         form `call N: <tool>(args) -> status=<s> items=<k>`. It
-                         does NOT include the raw payload (snapshot rows, per-
-                         period tables, coverage flags) — those values stayed
-                         on the agent's side. This means you CANNOT verify a
-                         specific number against the trace, only against the
-                         tool's stated success/coverage.
-                         RULES:
-                           * `status=ok` + `items>=1` is STRONG EVIDENCE that the
-                             tool returned the requested metric. A quantitative
-                             claim matching the tool's purpose (e.g. asked for
-                             pe_ratio, answer says "P/E is 37.73x") is PRESUMED
-                             GROUNDED. Award grounding 20-25.
-                           * Only score grounding<10 when one of these is true:
-                               (a) the trace shows `status=missing` / `items=0`
-                                   for the relevant tool AND the answer cites a
-                                   specific number anyway;
-                               (b) the answer cites a period or entity OUTSIDE
-                                   the tool's stated scope (e.g. claims Q4 FY2026
-                                   when only 8 quarterly rows were requested and
-                                   that quarter falls outside the natural window);
-                               (c) the answer cites a metric the tool was not
-                                   asked for (e.g. claims forward_pe when only
-                                   pe_ratio was queried).
-                           * "Value not present in tool_results" is NOT a valid
-                             grounding=0 reason when `status=ok items>=1` —
-                             the value IS in the payload, you just don't see it.
-                             Use status+item_count as your evidence, not absence
-                             of the number from the compact trace.
-
-                       SPECIAL CASES — DO NOT score grounding=0 for these:
-                         * An answer ending with "⚠ Some numbers could not be
-                           verified against retrieved data" is a TRANSPARENCY
-                           feature, not fabrication. Judge the body claims, NOT
-                           the banner. If the body claims are grounded, award
-                           full marks; the banner is neutral.
-                         * An answer marking specific numbers with [unverified]
-                           tags is the LLM correctly flagging uncertainty. If
-                           the OTHER numbers in the answer are grounded in
-                           tool_results, award partial marks (15-22). Only
-                           score 0 when the LLM invents specific values that
-                           DO NOT appear anywhere in tool_results.
-                         * A W36/synthesis-fallback answer beginning "I
-                           retrieved data... the language model could not
-                           produce a final summary right now" is a
-                           degraded-mode fallback, NOT fabrication. Score
-                           grounding by whether the highlights it does
-                           include are correctly attributed; the absence of
-                           analysis is a framing concern, not grounding.
-                           Award 18-25 when highlights cite tool_results.
-                         * An honest refusal stating data is unavailable
-                           (when rubric.appropriate_refusal_ok=true) is NOT
-                           fabrication; grounding should be 20-25 if the
-                           refusal is supported by the tool's missing-coverage
-                           flag (status=ok + items=0, or status=missing).
-
-3. framing             Does the answer's depth match the question's depth?
-                       - shallow + 1-3 sentence answer = PERFECT (25)
-                       - shallow + bloated multi-section answer = WARN (~12)
-                       - deep + multi-section structured answer = PERFECT (25)
-                       - deep + one-line answer = FAIL (<10)
-                       Length alone is NEVER the criterion — match to question.
-
-4. refusal_judgment    DECISION TREE — APPLY LITERALLY, NO INTERPRETATION:
-                       Step 0 (HARD PRE-EMPTION): If the answer contains a
-                               phrase with the word "would" suggesting more
-                               data/time/context would help (e.g. "would be
-                               required", "would help", "would be needed",
-                               "would be ideal", "would improve") AND the
-                               answer contains substantive analysis (specific
-                               numbers, citations, multi-paragraph synthesis),
-                               score = 25 and STOP. The "would"-phrase is a
-                               WOULD-HELP HEDGE, never a refusal. A reason
-                               containing the substring "would be required"
-                               as evidence of a refusal is FACTUALLY WRONG
-                               and forbidden.
-                       Step 1: Search the answer for ANY of the refusal phrases
-                               listed below. If you find ZERO refusal phrases,
-                               score = 25 and STOP. Reason MUST say
-                               "no refusal phrase present — N/A". Do NOT score
-                               0 even if the answer is short, weak, or missing
-                               analysis — those are framing/grounding concerns,
-                               NOT refusal_judgment. There is no "but" clause:
-                               no refusal phrase ⇒ score 25 unconditionally.
-                       Step 2: If you found a refusal phrase, check
-                               rubric.appropriate_refusal_ok and the tool
-                               status. Score per the SCORING rules below.
-
-                       WORKED EXAMPLE — DO NOT DEVIATE:
-                         Answer: "The current P/E ratio for AAPL is 37.73x."
-                         → contains zero refusal phrases → score 25.
-                         Reason "answer does not contain any refusal phrases
-                         but ..." is WRONG and self-contradictory. The correct
-                         score for ANY reason starting with "no refusal phrase"
-                         or "does not contain any refusal" is 25 — full marks.
-
-                       PRE-EMPTION RULE — read BEFORE matching refusal phrases:
-                         If the answer contains BOTH substantive analysis
-                         (specific numbers, citations like [tool_name row N],
-                         multi-paragraph synthesis) AND a phrase containing
-                         the word "would" (e.g. "would be required", "would
-                         help", "would be needed", "would be ideal"), the
-                         "would"-phrase is a WOULD-HELP HEDGE (see below) and
-                         is NOT a refusal — even if it superficially overlaps
-                         with refusal-phrase wording. Score refusal_judgment=25
-                         and STOP. Do NOT also try to match a refusal phrase.
-
-                         Specifically: "X would be required/needed/helpful"
-                         is NEVER a refusal phrase. It is a polite suggestion
-                         of what would IMPROVE the answer. A reason like
-                         "Contains refusal phrase 'would be required'" is
-                         FACTUALLY WRONG and forbidden.
-
-                       REFUSAL PHRASES (case-insensitive substring search):
-                         * "I cannot find/provide/determine/answer/give"
-                         * "I am unable to" / "I'm unable to"
-                         * "data is not available" / "data is missing"
-                         * "the requested information is not available"
-                         * "the tool results do not contain"
-                         * "no data was returned" / "no results were returned"
-                         * "not currently available in our data sources"
-
-                       NOTE: None of the refusal phrases above contain the
-                       word "would". If the only candidate refusal phrase you
-                       can find in the answer contains "would", you have a
-                       WOULD-HELP HEDGE, not a refusal. Score 25.
-
-                       WOULD-HELP HEDGING (NOT a refusal — explicitly excluded):
-                         Phrases that politely suggest what would IMPROVE or
-                         REFINE the answer are NOT refusals when the answer body
-                         already contains substantive analysis:
-                           * "A longer time series would be required/needed/helpful"
-                           * "More data would help/be helpful/strengthen"
-                           * "Additional context would improve"
-                           * "For a more precise assessment, X would be required"
-                           * "Further analysis would be useful"
-                           * "More granular data would be ideal"
-
-                         These phrases acknowledge a limitation of the data
-                         WITHOUT refusing to answer. If the answer contains
-                         substantive analysis (numbers, citations, multi-
-                         paragraph synthesis) AND the only "refusal-like"
-                         phrasing is a would-help hedge, score
-                         refusal_judgment=25 (no refusal detected).
-
-                         A "I cannot answer" refusal IS a refusal. A "more data
-                         would help me answer better" suggestion IS NOT a
-                         refusal.
-
-                         WORKED EXAMPLE (pin verbatim — Q5 GOOGL R10):
-                           Answer: "Google has a P/E of 28.99x [query_fundamentals
-                           row 0]... Revenue has increased from $69.1B to
-                           $96.5B... For a more precise assessment of whether
-                           this multiple is high or low relative to history, a
-                           longer time series of P/E ratios would be required.
-                           However, given the company's sustained revenue and
-                           profit growth, the current valuation appears aligned
-                           with its performance trajectory."
-
-                           Correct verdict: refusal_judgment=25 (not a refusal —
-                           answer is substantive + the "would be required"
-                           phrase is a would-help hedge, not a refusal phrase).
-                           A reason like "Contains refusal phrase 'would be
-                           required'" is FACTUALLY WRONG.
-
-                       Hedging / interpretive language is NOT a refusal:
-                         * "However, ..." / "Based on ..." / "While ..." —
-                           these introduce nuance, not refusal.
-                         * "Analyst reports suggest" / "may suggest" /
-                           "some analysts note" — these are interpretation.
-                         * "The answer depends on" / "In summary" — framing,
-                           not refusal.
-                         * A transparency banner like "⚠ Some numbers could
-                           not be verified against retrieved data" appended
-                           to an otherwise full answer is NOT a refusal.
-
-                       SCORING:
-                         * DEFAULT: refusal_judgment = 25. Only deviate from
-                           25 when you can quote a refusal phrase from the
-                           answer in your reason field. If your reason says
-                           "no refusal phrases" or "provides substantive data"
-                           or anything similar, the correct score is 25 — not
-                           0. A reason that contradicts the score is a bug.
-                         * If the answer contains substantive data/analysis
-                           (citations, numbers, tables, multi-paragraph
-                           synthesis) AND does NOT contain any refusal phrase
-                           above → refusal_judgment is N/A → score 25 (full
-                           marks). It is FACTUALLY WRONG to score this as
-                           "incorrect refusal" — the answer IS NOT a refusal.
-                         * If the answer IS a refusal (matches a refusal
-                           phrase) AND rubric.appropriate_refusal_ok=true AND
-                           tool_results show empty/missing data → score 25.
-                         * If the answer IS a refusal AND
-                           (rubric.appropriate_refusal_ok=false OR tool_results
-                           contain the requested data, e.g. status=ok items>=1)
-                           → score 0-5 (wrongful refusal).
-                         * If unsure whether the answer is a refusal, default
-                           to N/A → score 25. The penalty is reserved for
-                           CLEAR refusals that ignore available data.
-
-OUTPUT — strict JSON object, no markdown, with keys:
-{
-  "tool_use":        {"score": <0-25>, "reason": "<≤200 char>"},
-  "grounding":       {"score": <0-25>, "reason": "<≤200 char>"},
-  "framing":         {"score": <0-25>, "reason": "<≤200 char>"},
-  "refusal_judgment":{"score": <0-25>, "reason": "<≤200 char>"},
-  "notes":           "<≤400 char overall comment>"
-}
-"""
+# Use the canonical PromptTemplate from libs/prompts. v1.1 of the prompt
+# escapes the literal JSON braces in the OUTPUT example as ``{{`` / ``}}``,
+# so we now go through .render() — str.format_map collapses them back to
+# single braces and the rendered text is byte-identical to the v1.0 inlined
+# _SYSTEM_PROMPT. The PromptTemplate wrapper still gives us version +
+# content_hash + identifier() for artefact persistence
+# (judge_prompt_id in q_<id>.json + _judge_summary.json).
+_SYSTEM_PROMPT = CHAT_QUALITY_JUDGE.render()
 
 
 def _build_user_prompt(inp: JudgeInput) -> str:
@@ -515,6 +271,11 @@ def judge_answer(
             base_url=os.environ.get("CHAT_JUDGE_BASE_URL", _DEFAULT_BASE_URL),
         )
 
+    # Stable identifier for the rubric that produced this verdict — persisted
+    # alongside every result (including SKIPPED/ERROR) so a year-old artefact
+    # can be traced to the exact prompt body that graded it.
+    judge_prompt_id = CHAT_QUALITY_JUDGE.identifier()
+
     if llm is None:
         # No API key + no injected LLM → return a sentinel so the report
         # can clearly show "judge was not run" rather than a fake 0.
@@ -524,6 +285,7 @@ def judge_answer(
             "dimensions": {k: None for k in DIMENSION_KEYS},
             "notes": "Judge LLM not configured (set DEEPINFRA_API_KEY).",
             "raw_response": None,
+            "judge_prompt_id": judge_prompt_id,
         }
 
     user_prompt = _build_user_prompt(inp)
@@ -536,10 +298,11 @@ def judge_answer(
             "dimensions": {k: None for k in DIMENSION_KEYS},
             "notes": f"Judge call failed: {exc!r}",
             "raw_response": None,
+            "judge_prompt_id": judge_prompt_id,
         }
 
     parsed = _parse_judge_response(raw)
-    return _finalise_verdict(parsed, raw_response=raw)
+    return _finalise_verdict(parsed, raw_response=raw, judge_prompt_id=judge_prompt_id)
 
 
 def _parse_judge_response(raw: str) -> dict[str, Any]:
@@ -559,7 +322,7 @@ def _parse_judge_response(raw: str) -> dict[str, Any]:
     return obj if isinstance(obj, dict) else {}
 
 
-def _finalise_verdict(parsed: dict[str, Any], *, raw_response: str) -> dict[str, Any]:
+def _finalise_verdict(parsed: dict[str, Any], *, raw_response: str, judge_prompt_id: str) -> dict[str, Any]:
     """Compute verdict + total score from parsed dimensions.
 
     Score-clamping logic:
@@ -598,6 +361,7 @@ def _finalise_verdict(parsed: dict[str, Any], *, raw_response: str) -> dict[str,
         "dimensions": dimensions,
         "notes": str(parsed.get("notes", ""))[:600],
         "raw_response": raw_response,
+        "judge_prompt_id": judge_prompt_id,
     }
 
 
@@ -660,4 +424,9 @@ def summarise_judge_records(records: list[dict[str, Any]]) -> dict[str, Any]:
         "score_min": min(scored_totals) if scored_totals else None,
         "dimension_avg": {k: _avg(v) for k, v in dim_totals.items()},
         "n_records": len(records),
+        # The rubric identifier is the same for every record in a single run
+        # (all records were graded by CHAT_QUALITY_JUDGE). We surface it once at
+        # the summary level so dashboards/exports can pivot on judge version
+        # without scanning per-question payloads.
+        "judge_prompt_id": CHAT_QUALITY_JUDGE.identifier(),
     }

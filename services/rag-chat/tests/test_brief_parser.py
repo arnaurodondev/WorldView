@@ -344,7 +344,7 @@ def test_split_summary_paragraph_extracts_v42_block() -> None:
         "remains contained ahead of NVDA earnings.\n"
         "\n"
         "## Details\n"
-        "**Tape**\n"
+        "**Market Snapshot**\n"
         "- SPY +0.20%, QQQ +0.45%, VIX 14.2 [N1]\n"
     )
     summary, remainder = parser.split_summary_paragraph(content)
@@ -359,7 +359,7 @@ def test_split_summary_paragraph_extracts_v42_block() -> None:
 def test_split_summary_paragraph_returns_none_for_legacy_brief() -> None:
     """Legacy v4.1 (no ``## Summary`` heading) → (None, content) — back-compat."""
     parser = _make_parser()
-    legacy = "**Tape**\n" "- SPY +0.2% [N1]\n" "**Your Portfolio Today**\n" "- AAPL flat [N2]\n"
+    legacy = "**Market Snapshot**\n" "- SPY +0.2% [N1]\n" "**Your Portfolio Today**\n" "- AAPL flat [N2]\n"
     summary, remainder = parser.split_summary_paragraph(legacy)
     assert summary is None
     assert remainder == legacy
@@ -373,7 +373,7 @@ def test_split_summary_paragraph_strips_citation_markers() -> None:
         "Tech-heavy holdings benefit from Dell rally [N1][c3].\n"
         "\n"
         "## Details\n"
-        "**Tape**\n"
+        "**Market Snapshot**\n"
         "- SPY [N1]\n"
     )
     summary, _ = parser.split_summary_paragraph(content)
@@ -396,7 +396,7 @@ def test_split_summary_paragraph_caps_at_1500_chars() -> None:
     parser = _make_parser()
     # Build a > 1500 char summary so the cap actually fires.
     long_sentence = "X" * 1600
-    content = f"## Summary\n{long_sentence}. Trailing sentence.\n\n## Details\n**Tape**\n- noop\n"
+    content = f"## Summary\n{long_sentence}. Trailing sentence.\n\n## Details\n**Market Snapshot**\n- noop\n"
     summary, _ = parser.split_summary_paragraph(content)
     assert summary is not None
     assert len(summary) <= 1500
@@ -420,7 +420,7 @@ def test_split_summary_paragraph_preserves_v45_adaptive_length() -> None:
     )
     body = (sentence * 4).strip()
     assert 900 < len(body) < 1500  # sanity-check the test data shape
-    content = f"## Summary\n{body}\n\n## Details\n**Tape**\n- noop\n"
+    content = f"## Summary\n{body}\n\n## Details\n**Market Snapshot**\n- noop\n"
     summary, _ = parser.split_summary_paragraph(content)
     assert summary is not None
     # The parser collapses consecutive whitespace, so the result is ~3 chars
@@ -436,7 +436,7 @@ def test_check_section_completeness_all_present() -> None:
     parser = _make_parser()
     content = (
         "## Summary\nFoo.\n\n## Details\n"
-        "**Tape**\n- a [N1]\n"
+        "**Market Snapshot**\n- a [N1]\n"
         "**Your Portfolio Today**\n- b [N1]\n"
         "**Macro Today**\n- c [N1]\n"
         "**News That Matters To You**\n- d [N1]\n"
@@ -451,7 +451,7 @@ def test_check_section_completeness_flags_fqa01_pattern() -> None:
     """FQA-01 reproduction: 4 of 6 sections → Risks + Bonus flagged missing."""
     parser = _make_parser()
     fqa01_sample = (
-        "**Tape**\n- a\n"
+        "**Market Snapshot**\n- a\n"
         "**Your Portfolio Today**\n- b\n"
         "**Macro Today**\n- c\n"
         "**News That Matters To You**\n- d\n"
@@ -459,7 +459,7 @@ def test_check_section_completeness_flags_fqa01_pattern() -> None:
     missing = parser.check_section_completeness(fqa01_sample)
     assert "Risks + Opportunities" in missing
     assert "Bonus context" in missing
-    assert "Tape" not in missing
+    assert "Market Snapshot" not in missing
 
 
 def test_check_section_completeness_empty_content() -> None:
@@ -472,11 +472,11 @@ def test_check_section_completeness_empty_content() -> None:
 def test_split_summary_paragraph_handles_bold_section_heading() -> None:
     """``**Section Name**`` heading terminates the Summary block (no ``## Details`` needed)."""
     parser = _make_parser()
-    content = "## Summary\n" "Macro tape mixed but constructive.\n" "\n" "**Tape**\n" "- SPY [N1]\n"
+    content = "## Summary\n" "Macro tape mixed but constructive.\n" "\n" "**Market Snapshot**\n" "- SPY [N1]\n"
     summary, remainder = parser.split_summary_paragraph(content)
     assert summary is not None
     assert "Macro tape mixed" in summary
-    assert "**Tape**" in remainder
+    assert "**Market Snapshot**" in remainder
 
 
 # ── 14. PLAN-0103 W6 (v4.3): defensive section + summary injection ───────────
@@ -492,7 +492,7 @@ def test_inject_missing_sections_appends_in_canonical_order() -> None:
     parser = _make_parser()
     # LLM only emitted 4 of 6 sections (FQA-01 pattern).
     narrative = (
-        "**Tape**\n- SPY +0.2% [N1]\n"
+        "**Market Snapshot**\n- SPY +0.2% [N1]\n"
         "**Your Portfolio Today**\n- AAPL flat [N1]\n"
         "**Macro Today**\n- No prints [N1]\n"
         "**News That Matters To You**\n- Dell up 40% [N1]\n"
@@ -514,7 +514,7 @@ def test_inject_missing_sections_appends_in_canonical_order() -> None:
 def test_inject_missing_sections_no_op_when_all_present() -> None:
     """Empty `missing` list → narrative returned unchanged."""
     parser = _make_parser()
-    narrative = "**Tape**\n- SPY +0.2% [N1]\n"
+    narrative = "**Market Snapshot**\n- SPY +0.2% [N1]\n"
     out = parser.inject_missing_sections(narrative, [])
     assert out == narrative
 

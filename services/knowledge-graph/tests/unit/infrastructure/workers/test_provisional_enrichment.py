@@ -791,9 +791,8 @@ class TestDirtiedEventPayload:
             _build_dirtied_event,
         )
 
-        from messaging.kafka.serialization_utils import deserialize_confluent_avro  # type: ignore[import-untyped]
-
         from common.ids import new_uuid7  # type: ignore[import-untyped]
+        from messaging.kafka.serialization_utils import deserialize_confluent_avro  # type: ignore[import-untyped]
 
         entity_id = _ENTITY_ID
         # PLAN-0093: _build_dirtied_event requires explicit event_id so the

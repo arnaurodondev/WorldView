@@ -155,6 +155,11 @@ class OutputProcessor:
                     published_at=item.citation_meta.published_at,
                     entity_name=item.citation_meta.entity_name,
                     confidence=item.score,
+                    # Persist the full retrieved-chunk text into the Citation
+                    # so the citation-judge cron can score grounding against the
+                    # actual payload (BP-NEW PLAN-0099 W4). Stripped before SSE
+                    # by emit_citations so the frontend wire shape is unchanged.
+                    text=item.text,
                 )
             )
 

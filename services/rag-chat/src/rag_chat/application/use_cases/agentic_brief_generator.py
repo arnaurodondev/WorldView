@@ -33,6 +33,7 @@ from typing import TYPE_CHECKING, Any, Protocol
 from uuid import UUID
 
 import structlog
+from prompts.briefing.agentic_plan import AGENTIC_BRIEF_PLAN
 
 from rag_chat.application.metrics.prometheus import (
     brief_agentic_fallback_total,
@@ -106,16 +107,12 @@ class AgenticBriefGenerator:
         engineering; this scaffold only proves the wiring.
     """
 
-    # WHY a short planning prompt: a longer, opinionated prompt would diverge
-    # from the eventually-shipped Wave A+B prompt. Keep it generic until A/B
-    # tells us the agentic loop actually pays for itself.
-    _PLAN_PROMPT = (
-        "You are an institutional research analyst preparing a morning brief "
-        "for a user's portfolio. Use the available tools to gather portfolio "
-        "news, top movers, and macro events relevant to today's session. "
-        "After you have enough context, write a concise multi-paragraph brief "
-        "with a clear lead and key takeaways. Cite sources using [c1], [c2], ..."
-    )
+    # Phase 2B (2026-06-05): the planning prompt body lives in
+    # ``libs/prompts/briefing/agentic_plan.py`` (``AGENTIC_BRIEF_PLAN``) for
+    # content-addressable versioning + drift detection. The module-level
+    # alias here keeps the existing class-internal call site readable.
+    _PLAN_PROMPT = AGENTIC_BRIEF_PLAN.template
+    _PLAN_PROMPT_ID = AGENTIC_BRIEF_PLAN.identifier()
 
     def __init__(
         self,
@@ -156,6 +153,9 @@ class AgenticBriefGenerator:
                 "brief_agentic_budget_exhausted",
                 user_id=str(user_id),
                 max_tool_calls=max_tool_calls,
+                # Drift detection: tag the prompt identifier so dashboards
+                # can correlate budget-exhaustion rate with prompt rollouts.
+                briefing_plan_prompt=self._PLAN_PROMPT_ID,
             )
             return await self._fallback.execute_public_morning(
                 user_id=str(user_id),
@@ -170,6 +170,7 @@ class AgenticBriefGenerator:
                 user_id=str(user_id),
                 error=str(exc) or repr(exc),
                 error_type=type(exc).__name__,
+                briefing_plan_prompt=self._PLAN_PROMPT_ID,
             )
             return await self._fallback.execute_public_morning(
                 user_id=str(user_id),

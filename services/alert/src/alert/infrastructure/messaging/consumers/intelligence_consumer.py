@@ -90,8 +90,14 @@ class IntelligenceConsumer(BaseKafkaConsumer[None]):
         fanout_use_case: AlertFanoutUseCase,
         *,
         dedup_client: Any | None = None,
+        metrics_namespace: str | None = "alert",
     ) -> None:
-        super().__init__(config)
+        # Force the metrics namespace to the service name (default "alert") so
+        # the emitted Prometheus series match alert-service.json which queries
+        # `alert_kafka_messages_consumed_total`. Without this override the
+        # BaseKafkaConsumer falls back to `config.group_id` (e.g.
+        # "alert-intelligence-consumer"), silently breaking the dashboard panel.
+        super().__init__(config, metrics_namespace=metrics_namespace)
         self._fanout = fanout_use_case
         self._dedup_client = dedup_client
         self._dedup_prefix = f"s10:dedup:{config.group_id}"

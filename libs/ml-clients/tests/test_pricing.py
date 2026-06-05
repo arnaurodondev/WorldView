@@ -88,7 +88,9 @@ def test_pricing_matrix_contains_core_in_use_models() -> None:
 def test_model_pricing_is_frozen() -> None:
     """ModelPricing instances are immutable — accidental mutation must raise."""
     entry = MODEL_PRICING["meta-llama/Meta-Llama-3.1-8B-Instruct"]
-    with pytest.raises(Exception):  # noqa: BLE001 — FrozenInstanceError is fine
+    from dataclasses import FrozenInstanceError
+
+    with pytest.raises(FrozenInstanceError):
         entry.input_per_million = Decimal("999")  # type: ignore[misc]
 
 

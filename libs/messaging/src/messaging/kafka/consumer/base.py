@@ -237,7 +237,15 @@ class BaseKafkaConsumer(ABC, Generic[TFailure]):
     Args:
         config: Consumer configuration.
         metrics: Pre-created :class:`~observability.metrics.ServiceMetrics`.
-            If *None*, a default registry is created for the consumer group.
+            If *None*, metrics are created using *metrics_namespace* (or, if not
+            provided, falling back to ``config.group_id``).
+        metrics_namespace: Optional override for the Prometheus namespace prefix
+            used when *metrics* is None. Service-level wirings should pass the
+            service name (e.g. ``"alert"``) so emitted series match per-service
+            Grafana dashboards (e.g. ``alert_kafka_messages_consumed_total``).
+            When None (default), the legacy ``config.group_id`` is used as the
+            namespace — backwards compatible with consumers that have not yet
+            opted into the override.
     """
 
     def __init__(
@@ -246,9 +254,14 @@ class BaseKafkaConsumer(ABC, Generic[TFailure]):
         metrics: ServiceMetrics | None = None,
         backpressure_policy: BackpressurePolicy | None = None,
         dlq_emitter: DLQEmitterProtocol | None = None,
+        *,
+        metrics_namespace: str | None = None,
     ) -> None:
         self._config = config
-        self._metrics = metrics or _create_metrics(config.group_id)
+        # Default to group_id for backwards compatibility; allow service wirings
+        # to override so dashboards keyed on `<service>_kafka_messages_consumed_total`
+        # actually match the emitted series (see alert-service.json).
+        self._metrics = metrics or _create_metrics(metrics_namespace or config.group_id)
         self._consumer: Any = None  # confluent_kafka.Consumer, assigned in _init_kafka
         self._stop_event = asyncio.Event()
         # Running count of dead-letters sent; crashes the consumer when it

@@ -278,6 +278,11 @@ def _ser_citations(items: tuple[Citation, ...]) -> Any:
             "published_at": c.published_at.isoformat() if c.published_at else None,
             "entity_name": c.entity_name,
             "confidence": c.confidence,
+            # text is the full chunk payload — persisted for the citation-judge
+            # cron only, NOT projected to SSE/UI. JSONB accepts the new key
+            # without a migration; legacy rows simply lack the key and
+            # _deser_citations defaults text=None.
+            "text": c.text,
         }
         for c in items
     ]
@@ -299,6 +304,9 @@ def _deser_citations(data: Any) -> tuple[Citation, ...]:
             published_at=datetime.fromisoformat(item["published_at"]) if item.get("published_at") else None,
             entity_name=item.get("entity_name"),
             confidence=item.get("confidence"),
+            # .get() default None preserves legacy rows that pre-date the text
+            # field — they round-trip cleanly with text=None.
+            text=item.get("text"),
         )
         for item in data
     )

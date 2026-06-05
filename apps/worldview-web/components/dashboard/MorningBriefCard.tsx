@@ -503,6 +503,36 @@ export function MorningBriefCard() {
             </div>
           ) : brief.sections && brief.sections.length > 0 ? (
             // ── Expanded view (structured): PLAN-0062-W4 T-W4-E-01 ──
+            // WHY render the summary above the structured view: the v4.2+
+            // prompt produces a ``## Summary`` paragraph that is the single
+            // best 10-second synthesis of the brief. Previously the expanded
+            // view jumped straight to the 6 sections, so a user clicking
+            // "Read more" *lost* the summary they had been reading in the
+            // collapsed card. Keeping the summary visible at the top of the
+            // expanded view preserves context, matches the v4.x design
+            // (Summary + Details), and adds no extra height when summary is
+            // null (legacy/cached briefs).
+            // We render the summary via ReactMarkdown (not StructuredBrief.lead)
+            // because (a) brief.lead is the v3.0 LEAD field which is distinct
+            // from v4.x summary, and (b) summary may contain markdown links
+            // produced by linkifyEntities() above.
+            <>
+              {summaryWithLinks && (
+                <div className="mb-2 border-b border-border/40 pb-2 [&>*:first-child]:mt-0 [&>*:last-child]:mb-0">
+                  <ReactMarkdown
+                    remarkPlugins={REMARK_PLUGINS}
+                    components={{
+                      a: ({ href, children }) => (
+                        <Link href={href ?? "#"} className="text-primary">
+                          {children}
+                        </Link>
+                      ),
+                    }}
+                  >
+                    {summaryWithLinks}
+                  </ReactMarkdown>
+                </div>
+              )}
             // WHY StructuredBrief (not inline map): the shared StructuredBrief
             // component handles BriefBullet citation chips, confidence badge,
             // lead rendering, and variant-specific layout. Using it here means
@@ -543,13 +573,33 @@ export function MorningBriefCard() {
               briefId={brief.id ?? undefined}
               token={accessToken ?? undefined}
             />
+            </>
           ) : (
             // ── Expanded view (fallback): brief.narrative as raw markdown ──
             // Used when sections[] is empty (parser couldn't structure the
-            // narrative) — same look as before PLAN-0049.
+            // narrative) — same look as before PLAN-0049, plus the summary
+            // header so the user keeps the synthesis context they were
+            // reading in the collapsed view (see structured branch above for
+            // the rationale).
             // WHY data-testid="brief-narrative" (T-D-4-06): see the section
             // marker above for the rationale.
             <div data-testid="brief-narrative">
+              {summaryWithLinks && (
+                <div className="mb-2 border-b border-border/40 pb-2 [&>*:first-child]:mt-0 [&>*:last-child]:mb-0">
+                  <ReactMarkdown
+                    remarkPlugins={REMARK_PLUGINS}
+                    components={{
+                      a: ({ href, children }) => (
+                        <Link href={href ?? "#"} className="text-primary">
+                          {children}
+                        </Link>
+                      ),
+                    }}
+                  >
+                    {summaryWithLinks}
+                  </ReactMarkdown>
+                </div>
+              )}
               <ReactMarkdown
                 remarkPlugins={REMARK_PLUGINS}
                 components={{

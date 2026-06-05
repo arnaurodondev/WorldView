@@ -74,6 +74,25 @@ result = pt.render(name="Alice", role="analyst")
 - Extra `kwargs` beyond `self.parameters` are silently ignored.
 - The template itself is frozen (immutable after creation).
 
+### Versioning & content hashing (PLAN-0107)
+
+`PromptTemplate` now enforces a semver-shaped version and computes a content
+hash of the template body at construction time. Both surface through a single
+`identifier()` accessor used by judge artefacts, log lines, and evaluation
+output filenames.
+
+| Attribute / method | Description |
+|--------------------|-------------|
+| `version` (str) | Validated against `MAJOR.MINOR[.PATCH]` at construction — `"v1.2"` or non-semver strings raise `ValueError`. Bump MAJOR on incompatible rubric / prompt-shape changes, MINOR on additive changes, PATCH on wording-only fixes. |
+| `content_hash` (str) | First 12 hex chars of `sha256(template.encode("utf-8"))`. Computed in `__post_init__` and frozen on the dataclass. Detects silent template-body edits that forget to bump `version` — two prompts that share a version but differ in body will have different hashes. |
+| `identifier()` (method) | Returns `"<name>@<version>#<content_hash>"`, e.g. `"citation_judge@1.0#a1b2c3d4e5f6"`. This string is persisted on every judge call artefact (`q_<id>.json` carries `judge_prompt_id = template.identifier()`), so eval outputs are unambiguously linked to the exact rubric text that produced them. Also emitted in structlog as the `prompt_id` field on prompt-related events. |
+
+**Why content hashes matter**: a prompt body edit that forgets to bump `version`
+is otherwise invisible — eval artefacts produced before and after the edit
+appear identical in metadata even though they were scored against different
+rubrics. The 12-char sha256 prefix is short enough for log lines yet collision-
+resistant for the realistic universe of prompt versions per service.
+
 ### `SAFETY_FOOTER` (constant)
 
 ```python
@@ -105,32 +124,54 @@ from prompts.briefing.instrument import INSTRUMENT_BRIEFING
 ```python
 from prompts.chat.intent import INTENT_SYSTEM_PORTFOLIO, INTENT_SYSTEM_MARKET, ...
 from prompts.chat.safety import CHAT_SAFETY
+from prompts.chat.safety_classifier import INJECTION_SAFETY_CLASSIFIER  # PLAN-0107
 ```
 
 | Template | Parameters | Used by |
 |----------|-----------|---------|
 | `INTENT_SYSTEM_*` (8 intent-specific templates) | Varies per intent | S8 `PromptBuilder` |
 | `CHAT_SAFETY` | — | S8 `PromptBuilder` |
+| `INJECTION_SAFETY_CLASSIFIER` (v4.0) | `query` | S8 `LLMInjectionClassifier` — PLAN-0107 moved out of inline string in `llm_injection_classifier.py` |
 
 ### Classification Prompts (`prompts.classification`)
 
 ```python
 from prompts.classification.intent import INTENT_CLASSIFICATION
+from prompts.classification.article_relevance import ARTICLE_RELEVANCE_SCORER  # PLAN-0107
 ```
 
 | Template | Parameters | Used by |
 |----------|-----------|---------|
-| `INTENT_CLASSIFICATION` | `intents`, `question` | S8 `OllamaIntentClassifier` |
+| `INTENT_CLASSIFICATION` (v2.1, PLAN-0107) | `intents`, `question` | S8 `IntentClassifier`. PLAN-0107 consolidated W49 + F-NEW-014 examples and priority rules into a single source of truth — previously the prompt existed both inline in `intent_classifier.py` and in libs/prompts and the two had diverged. |
+| `ARTICLE_RELEVANCE_SCORER` (v1.0, PLAN-0107) | (per template) | S6 `ArticleRelevanceScoringWorker` |
+
+### Evaluation Prompts (`prompts.evaluation`, PLAN-0107)
+
+```python
+from prompts.evaluation.chat_quality import CHAT_QUALITY_JUDGE
+from prompts.evaluation.citation_judge import CITATION_JUDGE
+```
+
+| Template | Parameters | Used by |
+|----------|-----------|---------|
+| `CHAT_QUALITY_JUDGE` | `question`, `answer`, `rubric` | `scripts/chat_quality_judge.py` — LLM-as-judge over chat-eval transcripts |
+| `CITATION_JUDGE` | `claim`, `snippet` | S8 `ScoreCitationAccuracyUseCase` (via `CitationJudgeAdapter`) — daily citation-accuracy cron (PLAN-0107) |
+
+Both judge templates carry `version` + `content_hash` so the `judge_prompt_id =
+template.identifier()` written to each evaluation artefact (`q_<id>.json`)
+unambiguously links the scored output to the exact rubric text used.
 
 ### Extraction Prompts (`prompts.extraction`)
 
 ```python
 from prompts.extraction.deep import DEEP_EXTRACTION
+from prompts.extraction.entity_mention_classification import SYSTEM_TEMPLATE, USER_TEMPLATE  # PLAN-0107
 ```
 
 | Template | Parameters | Used by |
 |----------|-----------|---------|
 | `DEEP_EXTRACTION` | `entities`, `text` | S6 Block 10 `deep_extraction.py` |
+| `entity_mention_classification` (system + user) | (per template) | S6 entity-mention classification — PLAN-0107 moved out of inline strings |
 
 ### Knowledge Prompts (`prompts.knowledge`)
 
@@ -139,6 +180,7 @@ from prompts.knowledge.summary import RELATION_SUMMARY
 from prompts.knowledge.entity_profile import ENTITY_PROFILE
 from prompts.knowledge.alias import ALIAS_GENERATION
 from prompts.knowledge.entity_enrichment import SYSTEM_PROMPT, build_entity_enrichment_prompt
+from prompts.knowledge.narrative_prose import NARRATIVE_PROSE  # PLAN-0107
 ```
 
 | Template / function | Parameters | Used by |
@@ -148,6 +190,17 @@ from prompts.knowledge.entity_enrichment import SYSTEM_PROMPT, build_entity_enri
 | `ALIAS_GENERATION` | `name`, `ticker` | S7 Consumer 13D-4 `instrument_consumer.py` |
 | `SYSTEM_PROMPT` (module-level constant) | — | S7 Worker 13J enrichment — system turn only |
 | `build_entity_enrichment_prompt(entity_name, entity_type, context_hint)` | — | S7 Worker 13J — builds user turn |
+| `NARRATIVE_PROSE` (PLAN-0107) | (per template) | S7 NarrativeGenerationWorker — moved out of inline string |
+
+### Briefing Prompts — agentic scaffold (`prompts.briefing.agentic_plan`, PLAN-0107)
+
+```python
+from prompts.briefing.agentic_plan import AGENTIC_BRIEF_PLAN
+```
+
+| Template | Parameters | Used by |
+|----------|-----------|---------|
+| `AGENTIC_BRIEF_PLAN` (v0.1, scaffold) | (per template) | S8 `AgenticBriefGenerator` — EXPERIMENTAL, off by default (`RAG_CHAT_BRIEF_AGENTIC_ENABLED=false`) |
 
 **`build_entity_enrichment_prompt` sanitizes `entity_name`** — strips ASCII control
 characters and angle brackets via `sanitize_entity_name()` to prevent prompt
@@ -188,24 +241,33 @@ HyDE generates a passage to embed for retrieval, not for display to users.
 ```
 libs/prompts/src/prompts/
 ├── __init__.py              — Re-exports PromptTemplate, SAFETY_FOOTER
-├── _base.py                 — PromptTemplate dataclass
+├── _base.py                 — PromptTemplate dataclass (semver-validated version,
+│                              12-char sha256 content_hash, identifier())
 ├── _safety.py               — SAFETY_FOOTER constant
 ├── briefing/
 │   ├── morning.py           — MORNING_BRIEFING
-│   └── instrument.py        — INSTRUMENT_BRIEFING
+│   ├── instrument.py        — INSTRUMENT_BRIEFING
+│   └── agentic_plan.py      — AGENTIC_BRIEF_PLAN (PLAN-0107, scaffold v0.1)
 ├── chat/
 │   ├── intent.py            — 8 intent-specific system prompts
-│   └── safety.py            — CHAT_SAFETY
+│   ├── safety.py            — CHAT_SAFETY
+│   └── safety_classifier.py — INJECTION_SAFETY_CLASSIFIER v4.0 (PLAN-0107)
 ├── classification/
-│   └── intent.py            — INTENT_CLASSIFICATION
+│   ├── intent.py            — INTENT_CLASSIFICATION v2.1 (PLAN-0107 consolidated)
+│   └── article_relevance.py — ARTICLE_RELEVANCE_SCORER v1.0 (PLAN-0107)
 ├── description/
 │   └── entity.py            — ENTITY_DESCRIPTION (XML-wrapped)
+├── evaluation/              — PLAN-0107 (LLM-as-judge rubrics)
+│   ├── chat_quality.py      — CHAT_QUALITY_JUDGE
+│   └── citation_judge.py    — CITATION_JUDGE
 ├── extraction/
-│   └── deep.py              — DEEP_EXTRACTION
+│   ├── deep.py                              — DEEP_EXTRACTION
+│   └── entity_mention_classification.py     — system + user templates (PLAN-0107)
 ├── knowledge/
 │   ├── alias.py             — ALIAS_GENERATION
 │   ├── entity_enrichment.py — SYSTEM_PROMPT + build_entity_enrichment_prompt()
 │   ├── entity_profile.py    — ENTITY_PROFILE
+│   ├── narrative_prose.py   — NARRATIVE_PROSE (PLAN-0107)
 │   └── summary.py           — RELATION_SUMMARY
 └── retrieval/
     └── hyde.py              — HYDE_EXPANSION

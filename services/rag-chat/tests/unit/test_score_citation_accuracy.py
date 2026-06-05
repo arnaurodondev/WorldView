@@ -105,13 +105,42 @@ class TestScoreCitationAccuracyUseCase:
 
     @pytest.mark.asyncio
     async def test_score_citation_accuracy_insufficient_samples_logs_warning(
-        self, caplog: pytest.LogCaptureFixture
+        self,
+        caplog: pytest.LogCaptureFixture,
     ) -> None:
-        """Only 5 samples (< 10 minimum) → returns 0.0 without crashing."""
+        """Only 5 samples (< 10 minimum) → returns 0.0 and logs daily-cadence warning.
+
+        QA F-007 (PLAN-0099 W4): assert the structured log carries
+        ``window_hours=24`` AND ``cadence="daily"`` so dashboards/alerts can
+        differentiate the 24h-window quiet-day case from any future variant.
+        """
         msgs = [_msg("Claim [c1].", (_cite(1),)) for _ in range(5)]
         uc = self._make_uc(msgs)
-        result = await uc.execute()
+
+        # Capture structlog warning events via a patched module-level logger.
+        # structlog routes through its own pipeline so caplog (stdlib) alone
+        # does not catch the event.
+        events: list[dict[str, object]] = []
+
+        def _capture(event: str, **kwargs: object) -> None:
+            events.append({"event": event, **kwargs})
+
+        with patch(
+            "rag_chat.application.use_cases.score_citation_accuracy.log",
+            warning=_capture,
+            info=lambda *a, **kw: None,
+            debug=lambda *a, **kw: None,
+        ):
+            result = await uc.execute()
+
         assert result == 0.0
+        match = next(
+            (e for e in events if e.get("event") == "citation_accuracy_insufficient_samples_24h"),
+            None,
+        )
+        assert match is not None, f"expected insufficient_samples_24h log; got {events}"
+        assert match.get("window_hours") == 24
+        assert match.get("cadence") == "daily"
 
     @pytest.mark.asyncio
     async def test_score_citation_accuracy_no_samples_returns_zero(self) -> None:
@@ -122,7 +151,14 @@ class TestScoreCitationAccuracyUseCase:
 
     @pytest.mark.asyncio
     async def test_score_citation_accuracy_emits_gauge(self) -> None:
-        """After execution the rag_citation_accuracy gauge reflects the mean score."""
+        """After execution the rag_citation_accuracy_24h gauge reflects the mean score.
+
+        Updated PLAN-0107 follow-up: the test previously read the legacy
+        ``rag_citation_accuracy`` gauge. That alias was removed (it had zero
+        Grafana / external consumers), and the use case now emits only the
+        canonical ``rag_citation_accuracy_24h``. The assertion is otherwise
+        unchanged — same mean, same expected value.
+        """
         from prometheus_client import REGISTRY
 
         msgs = [_msg("Revenue beat [c1].", (_cite(1, title="AAPL Q4 Earnings"),)) for _ in range(20)]
@@ -131,11 +167,28 @@ class TestScoreCitationAccuracyUseCase:
 
         gauge_value: float | None = None
         for m in REGISTRY.collect():
-            if m.name == "rag_citation_accuracy":
+            if m.name == "rag_citation_accuracy_24h":
                 for s in m.samples:
                     gauge_value = s.value
         assert gauge_value is not None
         assert abs(gauge_value - 1.0) < 1e-4  # 3/3 = 1.0
+
+    @pytest.mark.asyncio
+    async def test_legacy_rag_citation_accuracy_gauge_is_removed(self) -> None:
+        """Regression guard: the legacy `rag_citation_accuracy` gauge must NOT
+        be present in the registry (PLAN-0107 follow-up cleanup). A future
+        revert that re-introduces dual-emit would silently degrade the
+        Grafana dashboards we built against `_24h`.
+        """
+        from prometheus_client import REGISTRY
+
+        # Trigger one execution so any gauge that the use case would emit
+        # is registered.
+        msgs = [_msg("x [c1].", (_cite(1),)) for _ in range(20)]
+        await self._make_uc(msgs, judge_return="3").execute()
+
+        legacy_present = any(m.name == "rag_citation_accuracy" for m in REGISTRY.collect())
+        assert not legacy_present, "legacy rag_citation_accuracy gauge must remain removed"
 
     @pytest.mark.asyncio
     async def test_judge_returns_invalid_response_skipped(self) -> None:
@@ -210,10 +263,17 @@ class TestSanitise:
 
 class TestRubricFencing:
     def test_rubric_fences_both_claim_and_snippet(self) -> None:
-        """_CITATION_RUBRIC wraps claim in <<<CLAIM …>>> and snippet in <<<SNIPPET …>>>."""
-        from rag_chat.application.use_cases.score_citation_accuracy import _CITATION_RUBRIC
+        """CITATION_JUDGE wraps claim in <<<CLAIM …>>> and snippet in <<<SNIPPET …>>>.
 
-        prompt = _CITATION_RUBRIC.format(claim="my_claim_text", snippet="my_snippet_text")
+        PLAN-0099 W4 moved the inline ``_CITATION_RUBRIC`` constant into
+        ``libs/prompts/src/prompts/evaluation/citation_judge.py`` as
+        ``CITATION_JUDGE``. This test was updated (per R19, never delete) to
+        render via the shared PromptTemplate; the fencing semantics are
+        unchanged.
+        """
+        from prompts.evaluation import CITATION_JUDGE
+
+        prompt = CITATION_JUDGE.render(claim="my_claim_text", snippet="my_snippet_text")
         assert "<<<CLAIM START>>>" in prompt
         assert "<<<CLAIM END>>>" in prompt
         assert "<<<SNIPPET START>>>" in prompt
@@ -306,3 +366,97 @@ class TestScoreCitationAccuracyUseCaseHardened:
         result = await uc.execute()
         # Returned 0.0 because no scores completed
         assert result == 0.0
+
+
+# ── Dedup semantics (PLAN-0099 W4 M-2/M-3) ────────────────────────────────────
+
+
+class TestDedup:
+    """Verify dedup key is ``(message_id, citation.id)`` not ``(message_id, ref)``.
+
+    Same chunk (citation.id) cited under different refs in one message → judge
+    called once. Same chunk across two messages → judge called twice (per-message
+    independence). Same chunk same ref in one message → judge called once.
+    """
+
+    def _make_uc(self, messages: list[Message], judge_return: str = "2") -> object:
+        from rag_chat.application.use_cases.score_citation_accuracy import ScoreCitationAccuracyUseCase
+
+        repo = MagicMock()
+        repo.sample_recent_with_citations = AsyncMock(return_value=messages)
+        judge = MagicMock()
+        judge.score_citation = AsyncMock(return_value=judge_return)
+        # min_samples=1 so the dedup branch is exercised with a small fixture.
+        return (
+            ScoreCitationAccuracyUseCase(message_repo=repo, llm_judge=judge, min_samples=1),
+            judge,
+        )
+
+    @pytest.mark.asyncio
+    async def test_same_chunk_same_ref_in_one_message_scores_once(self) -> None:
+        """Two sentences in one message both cite [c1] (same id, same ref) → 1 judge call."""
+        cite = _cite(1)
+        msg = _msg("First fact [c1]. Second fact [c1].", (cite,))
+        uc, judge = self._make_uc([msg])
+        await uc.execute()  # type: ignore[attr-defined]
+        assert judge.score_citation.await_count == 1
+
+    @pytest.mark.asyncio
+    async def test_same_chunk_different_refs_in_one_message_scores_once(self) -> None:
+        """[c1] and [c5] both point to the same citation.id within one message → 1 call.
+
+        Two Citation rows are declared with the same `id` but different ref numbers
+        (this is the realistic shape when an agent multi-step-retrieves and the
+        same chunk surfaces under two different refs).
+        """
+        shared_id = str(uuid4())
+        cite1 = Citation(ref=1, item_type="chunk", id=shared_id, title="T1")
+        cite5 = Citation(ref=5, item_type="chunk", id=shared_id, title="T1")
+        msg = _msg("A [c1]. B [c5].", (cite1, cite5))
+        uc, judge = self._make_uc([msg])
+        await uc.execute()  # type: ignore[attr-defined]
+        assert judge.score_citation.await_count == 1
+
+    @pytest.mark.asyncio
+    async def test_same_chunk_across_two_messages_scores_twice(self) -> None:
+        """Two messages each citing the same citation.id → 2 judge calls (per-message indep)."""
+        shared_id = str(uuid4())
+        cite_a = Citation(ref=1, item_type="chunk", id=shared_id, title="T1")
+        cite_b = Citation(ref=1, item_type="chunk", id=shared_id, title="T1")
+        msg1 = _msg("Claim [c1].", (cite_a,))
+        msg2 = _msg("Other claim [c1].", (cite_b,))
+        uc, judge = self._make_uc([msg1, msg2])
+        await uc.execute()  # type: ignore[attr-defined]
+        assert judge.score_citation.await_count == 2
+
+
+# ── Since-window kwarg (PLAN-0099 W4 M-4) ─────────────────────────────────────
+
+
+class TestSinceWindow:
+    """Use case must pass a ``since`` ~24h before utc_now to the repository."""
+
+    @pytest.mark.asyncio
+    async def test_execute_passes_24h_since_to_repo(self) -> None:
+        from datetime import timedelta
+
+        from rag_chat.application.use_cases.score_citation_accuracy import ScoreCitationAccuracyUseCase
+
+        from common.time import utc_now  # type: ignore[import-untyped]
+
+        repo = MagicMock()
+        repo.sample_recent_with_citations = AsyncMock(return_value=[])
+        judge = MagicMock()
+        judge.score_citation = AsyncMock(return_value="2")
+
+        uc = ScoreCitationAccuracyUseCase(message_repo=repo, llm_judge=judge)
+        await uc.execute()
+
+        # Capture the kwargs the use case actually sent to the repo.
+        assert repo.sample_recent_with_citations.await_count == 1
+        call_kwargs = repo.sample_recent_with_citations.await_args.kwargs
+        assert "since" in call_kwargs, f"expected `since` kwarg; got {call_kwargs}"
+        since = call_kwargs["since"]
+        now = utc_now()
+        # Accept a generous (23h, 25h) band to absorb test-runtime jitter.
+        assert timedelta(hours=23) <= (now - since) <= timedelta(hours=25)

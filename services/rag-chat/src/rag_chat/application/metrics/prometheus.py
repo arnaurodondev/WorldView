@@ -534,3 +534,21 @@ brief_sector_exposure_weight_source = Counter(
     "Weight tier that produced the sector-exposure aggregation",
     labelnames=["source"],  # pnl | db_weight | quote | equal
 )
+
+# ── PLAN-0107 follow-up (agent-B + manual fix-up): per-call LLM USD cost ──────
+#
+# NO Counter is defined here. The cost counter
+# ``rag_chat_ml_api_estimated_cost_usd_total{model_id}`` is already registered
+# by the shared observability lib via ``build_ml_metrics("rag-chat")`` at app
+# startup (see ``application/metrics/ml_clients.py`` + the wiring inside
+# ``create_app`` in ``app.py``). The Grafana panel id=6 in
+# ``infra/grafana/dashboards/rag-chat.json`` queries that observability-lib
+# counter directly.
+#
+# Agent B initially tried to declare a SECOND Counter here with an extra
+# ``call_site`` label, but the duplicate registration (same name + different
+# label schema) raises ``ValueError: Duplicated timeseries in
+# CollectorRegistry``. The fix-up routes the ``CostRecorder`` through the
+# observability-lib singleton instead. Per-``call_site`` breakdown is still
+# captured for analysis — but in the ``llm_usage_log`` DB table, NOT in
+# Prometheus — keeping metric cardinality bounded.

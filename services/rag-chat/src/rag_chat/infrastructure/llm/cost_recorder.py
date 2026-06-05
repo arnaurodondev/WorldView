@@ -29,12 +29,10 @@ from typing import TYPE_CHECKING
 import structlog
 from ml_clients.pricing import compute_cost  # type: ignore[import-untyped]
 
-from rag_chat.application.metrics.prometheus import (
-    rag_chat_ml_api_estimated_cost_usd_total,
-)
+from rag_chat.application.metrics.ml_clients import build_ml_metrics
 
 if TYPE_CHECKING:
-    from collections.abc import Awaitable, Callable
+    from collections.abc import Callable
     from uuid import UUID
 
     from sqlalchemy.ext.asyncio import AsyncSession
@@ -86,7 +84,7 @@ class PrometheusAndDbCostRecorder:
         #    visible in the metric (operators can spot the unknown pricing).
         try:
             cost = compute_cost(model_id, tokens_in, tokens_out)
-        except Exception as exc:  # noqa: BLE001 — must never propagate
+        except Exception as exc:  # — must never propagate
             log.warning(  # type: ignore[no-any-return]
                 "cost_recorder_pricing_failed",
                 model_id=model_id,
@@ -95,16 +93,22 @@ class PrometheusAndDbCostRecorder:
             )
             cost = Decimal("0")
 
-        # 2. Increment the Prometheus counter. prometheus_client accepts
-        #    float only — convert from Decimal at the boundary. Float-drift
-        #    here is acceptable because Prometheus is approximate by design;
-        #    the DB column keeps the exact Decimal.
+        # 2. Increment the shared observability-lib cost counter
+        #    ``rag_chat_ml_api_estimated_cost_usd_total{model_id}``. We route
+        #    through the singleton ``build_ml_metrics()`` accessor so the
+        #    instance is the SAME one registered by ``create_app`` — no
+        #    duplicate-registration risk. ``call_site`` is intentionally NOT
+        #    a label here (it would balloon cardinality and clash with the
+        #    Grafana dashboard's existing queries that only group by
+        #    model_id). Per-call_site analysis lives in the ``llm_usage_log``
+        #    DB table instead — exact attribution with no metric blowup.
+        #    prometheus_client accepts float only — convert from Decimal at
+        #    the boundary; the DB column keeps the exact Decimal.
         try:
-            rag_chat_ml_api_estimated_cost_usd_total.labels(
+            build_ml_metrics().ml_api_estimated_cost_usd_total.labels(
                 model_id=model_id,
-                call_site=call_site,
             ).inc(float(cost))
-        except Exception as exc:  # noqa: BLE001 — must never propagate
+        except Exception as exc:  # — must never propagate
             log.warning(  # type: ignore[no-any-return]
                 "cost_recorder_metric_failed",
                 model_id=model_id,
@@ -125,7 +129,7 @@ class PrometheusAndDbCostRecorder:
                 call_site=call_site,
                 cost=cost,
             )
-        except Exception as exc:  # noqa: BLE001 — must never propagate
+        except Exception as exc:  # — must never propagate
             log.warning(  # type: ignore[no-any-return]
                 "cost_recorder_db_failed",
                 model_id=model_id,

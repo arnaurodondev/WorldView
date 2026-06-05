@@ -55,7 +55,7 @@ class TestMorningBriefingCitationInstructions:
         # least one [N#]" rule body signals enforcement.
         assert "MANDATORY" in result or "must end with at least one" in result
 
-    def test_version_is_45(self) -> None:
+    def test_version_is_46(self) -> None:
         """MORNING_BRIEFING bumped to v4.5 for PLAN-0103 W11 (adaptive Summary length).
 
         v4.3 added few-shot examples; v4.4 split the single 250-word cap into
@@ -65,7 +65,7 @@ class TestMorningBriefingCitationInstructions:
         breadth + market activity) to fix truncation on large books / very
         active days. Asserting the current version pins prompt drift.
         """
-        assert MORNING_BRIEFING.version == "4.5"
+        assert MORNING_BRIEFING.version == "4.6"
 
     def test_contains_few_shot_examples(self) -> None:
         """v4.3 must embed both Example A (rich day) and Example B (quiet day) markers."""
@@ -88,7 +88,7 @@ class TestMorningBriefingCitationInstructions:
         """All 6 sections must be present AND flagged MANDATORY in v4.2 (FQA-01 fix)."""
         result = self._render()
         for section in (
-            "Tape",
+            "Market Snapshot",
             "Your Portfolio Today",
             "Macro Today",
             "News That Matters To You",

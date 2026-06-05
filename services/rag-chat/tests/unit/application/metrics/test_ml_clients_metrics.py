@@ -18,6 +18,8 @@ import pytest
 from prometheus_client import CollectorRegistry  # type: ignore[import-untyped]
 from rag_chat.application.metrics.ml_clients import build_ml_metrics
 
+pytestmark = pytest.mark.unit
+
 
 def _label_names(metric: Any) -> list[str]:
     """Extract Prometheus label names from a Counter / Histogram regardless of version.

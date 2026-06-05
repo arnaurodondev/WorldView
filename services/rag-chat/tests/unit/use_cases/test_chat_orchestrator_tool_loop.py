@@ -105,6 +105,23 @@ def _make_pipeline(
     pipeline.emitter.emit_error = MagicMock(
         side_effect=lambda code, msg: {"event": "error", "data": json.dumps({"code": code, "message": msg})}
     )
+    # PLAN-0107: emit_agent_iteration produces a per-iteration progress event.
+    # Mock returns a dict matching the on-the-wire shape so list-of-events tests
+    # can pattern-match on stage strings without de-serialising JSON.
+    pipeline.emitter.emit_agent_iteration = MagicMock(
+        side_effect=lambda *, iteration, max_iterations, stage, tools_completed_total, elapsed_ms: {
+            "event": "agent_iteration",
+            "data": json.dumps(
+                {
+                    "iteration": iteration,
+                    "max_iterations": max_iterations,
+                    "stage": stage,
+                    "tools_completed_total": tools_completed_total,
+                    "elapsed_ms": elapsed_ms,
+                }
+            ),
+        }
+    )
 
     return pipeline
 
@@ -659,15 +676,54 @@ class TestAllToolsFailed:
 
 class TestAgentBudget:
     def test_agent_budget_defaults(self) -> None:
-        """AgentBudget has correct default values."""
+        """AgentBudget has correct default values.
+
+        PLAN-0107 raised ``max_tool_latency_s`` from 30.0 → 90.0 and
+        ``max_consecutive_errors`` from 2 → 3 so deep multi-round financial
+        research queries no longer surrender prematurely. The new defaults
+        align with the FIX-LIVE-X DeepInfra tool-call timeout (90s) and the
+        ReAct fallback chain length (3 alt tools).
+        """
         from rag_chat.application.use_cases.chat_orchestrator import AgentBudget
 
         budget = AgentBudget()
         assert budget.max_tokens_per_iter == 2048
         assert budget.max_tokens_final == 8000
         assert budget.max_iterations == 8
-        assert budget.max_consecutive_errors == 2
-        assert budget.max_tool_latency_s == 30.0
+        assert budget.max_consecutive_errors == 3
+        assert budget.max_tool_latency_s == 90.0
+
+    def test_agent_budget_sourced_from_settings(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """PLAN-0107: app wiring constructs AgentBudget from env-overridable Settings.
+
+        Overriding ``RAG_CHAT_MAX_TOOL_LATENCY_S=120`` must produce a budget
+        with ``max_tool_latency_s == 120.0`` when the wiring layer reads the
+        Settings object. This pins the contract between ``Settings`` and
+        ``AgentBudget`` — if a future refactor accidentally drops the wiring,
+        this test catches it before the env var becomes a silent no-op.
+        """
+        # Use a real Settings object so we exercise the validation_alias.
+        # database_url is required at construction time — supply a dummy.
+        monkeypatch.setenv("RAG_CHAT_DATABASE_URL", "postgresql+asyncpg://x:y@localhost:5432/test")
+        monkeypatch.setenv("RAG_CHAT_MAX_TOOL_LATENCY_S", "120")
+        monkeypatch.setenv("RAG_CHAT_MAX_CONSECUTIVE_ERRORS", "5")
+
+        from rag_chat.application.use_cases.chat_orchestrator import AgentBudget
+        from rag_chat.config import Settings
+
+        settings = Settings()
+        # Sanity check that Settings picked up the env override.
+        assert settings.chat_max_tool_latency_s == 120.0
+        assert settings.chat_max_consecutive_errors == 5
+
+        # Replicate the wiring constructed in app.py::_wire_orchestrator —
+        # this is the exact construction site under test.
+        budget = AgentBudget(
+            max_tool_latency_s=settings.chat_max_tool_latency_s,
+            max_consecutive_errors=settings.chat_max_consecutive_errors,
+        )
+        assert budget.max_tool_latency_s == 120.0
+        assert budget.max_consecutive_errors == 5
 
     def test_orchestrator_accepts_budget_param(self) -> None:
         """ChatOrchestratorUseCase accepts an AgentBudget parameter."""
@@ -964,3 +1020,81 @@ class TestPendingActionJsonWarning:
         # triage the malformed upstream payload.
         assert "pending_id" in combined, f"warning missing pending_id key: {combined!r}"
         assert "error" in combined, f"warning missing error key: {combined!r}"
+
+
+# ---------------------------------------------------------------------------
+# PLAN-0107: agent_iteration SSE progress events
+# ---------------------------------------------------------------------------
+
+
+class TestAgentIterationEvents:
+    """Pin the per-iteration SSE event stage progression (PLAN-0107).
+
+    The frontend consumer is implemented against this exact contract; any
+    change to the stage strings (``planning_tools`` / ``reasoning_over_results``
+    / ``synthesizing``) must be coordinated with apps/worldview-web.
+    """
+
+    def test_agent_iteration_stages_emitted_in_order(self) -> None:
+        """First iter emits ``planning_tools``; iter > 0 emits ``reasoning_over_results``;
+        post-loop synthesis emits ``synthesizing``.
+
+        Sets up a two-tool-round loop (iter 0 tools → iter 1 tools → iter 2
+        direct answer) so we see at minimum the planning_tools + one
+        reasoning_over_results event. Because iter 2 ends with a direct text
+        answer the synthesis stream is skipped (_skip_final_stream=True), so
+        ``synthesizing`` will NOT appear in that path — we exercise it in the
+        second sub-test below.
+        """
+        from rag_chat.application.use_cases.chat_orchestrator import AgentBudget, ChatOrchestratorUseCase
+
+        tool_block_a = _make_tool_use_block("get_price_history")
+        tool_block_b = _make_tool_use_block("search_documents")
+        # iter 2 returns no tool_calls AND empty text — forces the post-loop
+        # stream_chat path (which emits ``synthesizing``).
+        empty_finish = _make_llm_tool_response(text="", tool_calls=[])
+        call_count = [0]
+
+        async def _chat_with_tools(messages, tools=None, **kwargs):
+            call_count[0] += 1
+            if call_count[0] == 1:
+                return _make_llm_tool_response(tool_calls=[tool_block_a])
+            if call_count[0] == 2:
+                return _make_llm_tool_response(tool_calls=[tool_block_b])
+            return empty_finish
+
+        pipeline = _make_pipeline()
+        pipeline.llm_chain.chat_with_tools = _chat_with_tools
+
+        item = _make_retrieved_item()
+        executor = _make_tool_executor_mock([item])
+        factory = _make_factory_mock(executor)
+
+        budget = AgentBudget(max_iterations=8)
+        orch = ChatOrchestratorUseCase(pipeline=pipeline, tool_executor_factory=factory, budget=budget)
+        request = _make_chat_request()
+        uow = MagicMock()
+
+        events = asyncio.run(_collect_events(orch, request, uow))
+        iter_events = [json.loads(e["data"]) for e in events if e.get("event") == "agent_iteration"]
+
+        # Two loop iterations → planning_tools + reasoning_over_results.
+        # The third loop iteration (iter=2) also emits a reasoning event
+        # BEFORE the chat_with_tools call that returns the empty finish — so
+        # we expect at least 3 events in total, ending with synthesizing.
+        stages = [e["stage"] for e in iter_events]
+        assert "planning_tools" in stages
+        assert "reasoning_over_results" in stages
+        # synthesizing fires because the loop ends with empty text + no tools
+        # (no _skip_final_stream shortcut), so the post-loop stream_chat is
+        # exercised.
+        assert stages[-1] == "synthesizing", f"expected synthesizing last, got {stages!r}"
+
+        # Field-shape sanity check on the first event (iter 0 / planning).
+        first = iter_events[0]
+        assert first["iteration"] == 0
+        assert first["max_iterations"] == 8
+        assert first["stage"] == "planning_tools"
+        assert first["tools_completed_total"] == 0  # no tools have run yet
+        assert isinstance(first["elapsed_ms"], int)
+        assert first["elapsed_ms"] >= 0

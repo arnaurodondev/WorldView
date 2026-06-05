@@ -235,6 +235,10 @@ export default function ChatPage() {
     // clearPendingAction is passed to ActionConfirmModal as `onDismiss`.
     pendingAction,
     clearPendingAction,
+    // PLAN-0099 W4: latest agent_iteration event — drives the always-visible
+    // AgentIterationProgress strip inside the StreamingBubble. Eliminates the
+    // perceived hang between tool batches on multi-iteration research queries.
+    iterationEvent,
     send,
     cancel: handleCancelStream,
     resetForThread,
@@ -878,7 +882,18 @@ export default function ChatPage() {
                   // Pass activeTools so ToolCallIndicator renders above the streaming text.
                   // WHY: during multi-tool responses the tool indicators appear first,
                   // then text flows in below them once S8 starts generating.
-                  <StreamingBubble streaming={streaming} activeTools={activeTools} />
+                  <StreamingBubble
+                    streaming={streaming}
+                    activeTools={activeTools}
+                    /*
+                     * PLAN-0099 W4: pass the latest agent_iteration event so the
+                     * always-visible progress strip stays alive through the silent
+                     * gaps between tool batches (planning → reasoning → synthesis).
+                     * Null until the first event arrives, then non-null until the
+                     * stream completes — the strip handles its own visibility.
+                     */
+                    iterationEvent={iterationEvent}
+                  />
                 ) : null}
 
                 {chatError && (
