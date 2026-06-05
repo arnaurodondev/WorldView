@@ -35,9 +35,7 @@ try:
     # and pytest-cov may import this module twice. If the counter already exists,
     # reuse it rather than crashing the import.
     if "rate_limiting_unavailable_total" in _PROM_REGISTRY._names_to_collectors:
-        _RATE_LIMIT_UNAVAILABLE_COUNTER = _PROM_REGISTRY._names_to_collectors[
-            "rate_limiting_unavailable_total"
-        ]
+        _RATE_LIMIT_UNAVAILABLE_COUNTER = _PROM_REGISTRY._names_to_collectors["rate_limiting_unavailable_total"]
     else:
         _RATE_LIMIT_UNAVAILABLE_COUNTER = _PromCounter(
             "rate_limiting_unavailable_total",

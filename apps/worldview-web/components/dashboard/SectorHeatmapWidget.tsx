@@ -345,7 +345,7 @@ export function SectorHeatmapWidget() {
  */
 function SectorTile({
   sector,
-  weight,
+  weight: _weight,
   relatedMovers,
 }: {
   sector: HeatmapSector;

@@ -92,7 +92,6 @@ import type { Thread, Message } from "@/types/api";
 // page — extracting it would require another careful pass and is the
 // remaining E-3 work tracked as E-3-followup.
 import {
-  TypingIndicator,
   MessageBubble,
   StreamingBubble,
 } from "@/features/chat/components/MessageBubble";
