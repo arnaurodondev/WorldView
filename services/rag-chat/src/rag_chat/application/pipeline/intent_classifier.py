@@ -121,6 +121,26 @@ _INTENT_KEYWORDS: dict[QueryIntent, list[str]] = {
         "cheap",
         "overvalued",
         "undervalued",
+        # F-NEW-014 (2026-06-05): size & capital structure category — 9 of 14
+        # phrasings previously routed to GENERAL (market cap, EV, shares
+        # outstanding, book value, net debt, beta, ROIC, float, institutional
+        # ownership). Bare "ev" intentionally excluded (false-positive on
+        # "every", "Tesla EV", "events"); only ratio forms admitted.
+        "market cap",  # catches "market capitalization" via prefix
+        "enterprise value",
+        "ev/revenue",
+        "ev/sales",
+        "shares outstanding",
+        "book value",
+        "net debt",
+        "net cash",
+        "beta",  # finance-chat context; "beta version" risk acceptable
+        "roic",  # acronym; no English word contains "roic"
+        "return on invested capital",
+        "float",  # finance-chat context; "floating point" risk acceptable
+        "insider ownership",
+        "institutional ownership",
+        "peg ratio",  # explicit phrasing in addition to existing "peg"
     ],
     QueryIntent.SIGNAL_INTEL: ["news", "announced", "filed", "reported", "allegations"],
     QueryIntent.GENERAL: ["what is", "define", "how does", "tell me about", "explain what"],
@@ -176,6 +196,11 @@ _CLASSIFICATION_PROMPT = (
     '- "How has Tesla\'s gross margin trended in the last year?" ->'
     ' {{"intent":"FINANCIAL_DATA","sub_questions":[],'
     '"rephrased_query":"What is Tesla\'s gross margin trend over the trailing four quarters?"}}\n'
+    # F-NEW-014: size & capital structure category (market cap, EV, shares
+    # outstanding, book value, net debt, beta, ROIC, float) routes to FINANCIAL_DATA.
+    '- "What is Apple\'s market capitalization?" ->'
+    ' {{"intent":"FINANCIAL_DATA","sub_questions":[],'
+    '"rephrased_query":"What is Apple\'s current market capitalization?"}}\n'
     '- "How do interest rates affect stock prices?" ->'
     ' {{"intent":"GENERAL","sub_questions":[],'
     '"rephrased_query":"How do interest rate changes affect equity valuations?"}}\n'
