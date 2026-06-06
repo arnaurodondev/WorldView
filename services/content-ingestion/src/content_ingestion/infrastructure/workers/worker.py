@@ -387,6 +387,16 @@ class WorkerProcess:
                 valkey=self._valkey,
                 daily_limit=settings.newsapi_daily_limit,
             )
+        elif source_type_val == "eodhd_ticker_news":
+            # PLAN-0106 C-1: EODHDTickerNewsAdapter manages its own httpx
+            # client per-request (no shared client needed) and reads the API
+            # key directly from settings.  Return early — no client/rate-limiter
+            # plumbing required.
+            from content_ingestion.infrastructure.adapters.eodhd_ticker_news.adapter import (
+                EODHDTickerNewsAdapter,
+            )
+
+            return EODHDTickerNewsAdapter(settings=settings)
         else:
             raise AdapterError(f"Unknown source type: {source_type_val}")
 

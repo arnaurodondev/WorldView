@@ -13,6 +13,7 @@ from typing import TYPE_CHECKING, Any
 
 from content_ingestion.domain.entities import SourceType
 from content_ingestion.infrastructure.adapters.eodhd.adapter import EODHDAdapter
+from content_ingestion.infrastructure.adapters.eodhd_ticker_news.adapter import EODHDTickerNewsAdapter
 from content_ingestion.infrastructure.adapters.finnhub.adapter import FinnhubAdapter
 from content_ingestion.infrastructure.adapters.newsapi.adapter import NewsAPIAdapter
 from content_ingestion.infrastructure.adapters.sec_edgar.adapter import SECEdgarAdapter
@@ -49,6 +50,9 @@ def _startup_offset_seconds(source_name: str, interval_seconds: int) -> int:
 
 ADAPTER_REGISTRY: dict[SourceType, type[SourceAdapter]] = {
     SourceType.EODHD: EODHDAdapter,
+    # PLAN-0106 C-1: per-ticker EODHD news adapter — one Source row per equity
+    # ticker, created automatically by TickerNewsSymbolSyncWorker.
+    SourceType.EODHD_TICKER_NEWS: EODHDTickerNewsAdapter,
     SourceType.SEC_EDGAR: SECEdgarAdapter,
     SourceType.FINNHUB: FinnhubAdapter,
     SourceType.NEWSAPI: NewsAPIAdapter,
