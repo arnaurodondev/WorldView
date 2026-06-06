@@ -82,16 +82,46 @@
         "includeAll": false,
         "query": "debug,info,warning,error,critical",
         "options": [
-          { "text": "debug", "value": "debug", "selected": false },
-          { "text": "info", "value": "info", "selected": true },
-          { "text": "warning", "value": "warning", "selected": true },
-          { "text": "error", "value": "error", "selected": true },
-          { "text": "critical", "value": "critical", "selected": true }
+          {
+            "text": "debug",
+            "value": "debug",
+            "selected": false
+          },
+          {
+            "text": "info",
+            "value": "info",
+            "selected": true
+          },
+          {
+            "text": "warning",
+            "value": "warning",
+            "selected": true
+          },
+          {
+            "text": "error",
+            "value": "error",
+            "selected": true
+          },
+          {
+            "text": "critical",
+            "value": "critical",
+            "selected": true
+          }
         ],
         "current": {
           "selected": true,
-          "text": ["info", "warning", "error", "critical"],
-          "value": ["info", "warning", "error", "critical"]
+          "text": [
+            "info",
+            "warning",
+            "error",
+            "critical"
+          ],
+          "value": [
+            "info",
+            "warning",
+            "error",
+            "critical"
+          ]
         }
       },
       {
@@ -111,7 +141,12 @@
       "type": "row",
       "title": "Log Volume Overview",
       "collapsed": false,
-      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 0 },
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 0
+      },
       "id": 100,
       "panels": []
     },
@@ -123,12 +158,21 @@
         "type": "loki",
         "uid": "loki"
       },
-      "gridPos": { "h": 6, "w": 12, "x": 0, "y": 1 },
+      "gridPos": {
+        "h": 6,
+        "w": 12,
+        "x": 0,
+        "y": 1
+      },
       "targets": [
         {
           "expr": "sum(count_over_time({container=~\"$service\"} [1m])) by (container)",
           "legendFormat": "{{container}}",
-          "refId": "A"
+          "refId": "A",
+          "datasource": {
+            "type": "loki",
+            "uid": "loki"
+          }
         }
       ],
       "fieldConfig": {
@@ -164,12 +208,21 @@
         "type": "loki",
         "uid": "loki"
       },
-      "gridPos": { "h": 6, "w": 12, "x": 12, "y": 1 },
+      "gridPos": {
+        "h": 6,
+        "w": 12,
+        "x": 12,
+        "y": 1
+      },
       "targets": [
         {
           "expr": "sum(count_over_time({container=~\"$service\"} |= \"error\" [1m])) by (container)",
           "legendFormat": "{{container}}",
-          "refId": "A"
+          "refId": "A",
+          "datasource": {
+            "type": "loki",
+            "uid": "loki"
+          }
         }
       ],
       "fieldConfig": {
@@ -205,7 +258,12 @@
       "type": "row",
       "title": "Log Stream",
       "collapsed": false,
-      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 7 },
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 7
+      },
       "id": 101,
       "panels": []
     },
@@ -217,11 +275,20 @@
         "type": "loki",
         "uid": "loki"
       },
-      "gridPos": { "h": 16, "w": 24, "x": 0, "y": 8 },
+      "gridPos": {
+        "h": 16,
+        "w": 24,
+        "x": 0,
+        "y": 8
+      },
       "targets": [
         {
           "expr": "{container=~\"$service\"} | json | level=~\"$level\" |= \"$search\" | line_format \"{{.timestamp}} [{{.level}}] {{.service}}: {{.event}}\"",
-          "refId": "A"
+          "refId": "A",
+          "datasource": {
+            "type": "loki",
+            "uid": "loki"
+          }
         }
       ],
       "options": {
@@ -236,7 +303,12 @@
       "type": "row",
       "title": "Error Details",
       "collapsed": false,
-      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 24 },
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 24
+      },
       "id": 102,
       "panels": []
     },
@@ -248,11 +320,20 @@
         "type": "loki",
         "uid": "loki"
       },
-      "gridPos": { "h": 10, "w": 24, "x": 0, "y": 25 },
+      "gridPos": {
+        "h": 10,
+        "w": 24,
+        "x": 0,
+        "y": 25
+      },
       "targets": [
         {
           "expr": "{container=~\"$service\"} | json | level=\"error\" |= \"$search\"",
-          "refId": "A"
+          "refId": "A",
+          "datasource": {
+            "type": "loki",
+            "uid": "loki"
+          }
         }
       ],
       "options": {

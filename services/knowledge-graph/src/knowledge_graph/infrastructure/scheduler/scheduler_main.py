@@ -45,17 +45,11 @@ async def main() -> None:
     log = get_logger("knowledge_graph.scheduler_main")  # type: ignore[no-any-return]
     log.info("scheduler_starting", service="knowledge-graph")
 
-    # FIX-LIVE-C / F-LIVE-006-B: expose Prometheus gauges
-    # (``path_insight_explanation_pending_total``, ``relation_summary_backlog``,
-    # ``summary_worker_stuck_relations_total``) on :9108 so Prometheus can
-    # scrape worker metrics from this container. The scheduler runs as a
-    # standalone process without a FastAPI app, so it never started a
-    # ``/metrics`` HTTP server — every worker gauge was set in-process but
-    # invisible to Prometheus.
-    from prometheus_client import start_http_server
-
-    start_http_server(9108)
-    log.info("scheduler_metrics_server_started", port=9108)
+    # Phase 1 of worker-metrics rollout replaced the legacy
+    # `prometheus_client.start_http_server(9108)` call with the shared ASGI
+    # helper (see `metrics_handle = start_metrics_server(...)` below). The
+    # historical call has been removed — leaving both produced a double-bind
+    # on port 9108 (EADDRINUSE) that crashed the scheduler in a restart loop.
 
     stop_event = asyncio.Event()
 

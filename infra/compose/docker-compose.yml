@@ -116,14 +116,27 @@ services:
       KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
       KAFKA_CLUSTER_ID: MkU3OEVBNTcwNTJENDM2Qk
       CLUSTER_ID: MkU3OEVBNTcwNTJENDM2Qk
+      # BP-NNN: Single-node KRaft (broker+controller in one JVM) saturates the
+      # QuorumController event queue during cold-restart with many partitions.
+      # ~250+ partition-leader-election events flood the queue, the broker's
+      # own heartbeat to the in-process controller times out (default 4500ms),
+      # controller marks broker dead, triggers re-election → loop. Raising the
+      # heartbeat/session/election budgets gives cold-start enough headroom.
+      KAFKA_CONTROLLER_QUORUM_REQUEST_TIMEOUT_MS: 30000
+      KAFKA_CONTROLLER_QUORUM_ELECTION_TIMEOUT_MS: 30000
+      KAFKA_BROKER_HEARTBEAT_INTERVAL_MS: 5000
+      KAFKA_BROKER_SESSION_TIMEOUT_MS: 30000
     volumes:
       - kafka_data:/var/lib/kafka/data
     healthcheck:
       test: ["CMD", "kafka-broker-api-versions", "--bootstrap-server", "localhost:9092"]
       interval: 15s
-      timeout: 10s
-      retries: 5
-      start_period: 30s
+      # Tuned for single-node KRaft cold-restart load (see KAFKA_CONTROLLER_* above).
+      # Original 10s timeout × 5 retries × 30s start_period = ~75s tolerance
+      # was insufficient when 250+ partitions need leader election on startup.
+      timeout: 30s
+      retries: 10
+      start_period: 300s
 
   schema-registry:
     image: confluentinc/cp-schema-registry:7.6.0
