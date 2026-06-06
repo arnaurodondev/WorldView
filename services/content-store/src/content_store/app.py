@@ -7,6 +7,8 @@ per R22 — see ``dispatcher_main.py`` and ``article_consumer_main.py`` under
 
 from __future__ import annotations
 
+import asyncio
+import contextlib
 import re
 from contextlib import asynccontextmanager
 from typing import TYPE_CHECKING
@@ -21,7 +23,7 @@ from content_store.api.health import router as health_router
 from content_store.config import Settings
 from content_store.infrastructure.db.session import _build_factories
 from content_store.infrastructure.middleware.internal_jwt import InternalJWTMiddleware
-from observability import configure_logging, get_logger  # type: ignore[import-untyped]
+from observability import assert_app_env_or_die, configure_logging, get_logger  # type: ignore[import-untyped]
 from observability.metrics import add_prometheus_middleware, create_metrics  # type: ignore[import-untyped]
 from observability.sentry import SentrySettings, init_sentry  # type: ignore[import-untyped]
 from observability.tracing import add_otel_middleware, configure_tracing  # type: ignore[import-untyped]
@@ -71,6 +73,13 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         json=settings.log_json,
     )
     log = get_logger("content_store.app")
+
+    # 1b. Boot-time security guard (PLAN-0093 Wave A-1 / F-LOG-JWT-001).
+    # Refuses to start when JWT verification is disabled AND APP_ENV is unset.
+    assert_app_env_or_die(
+        service_name=settings.service_name,
+        internal_jwt_skip_verification=settings.internal_jwt_skip_verification,
+    )
 
     # 2. Tracing config (optional — middleware already registered in create_app)
     if settings.otlp_endpoint:
@@ -123,11 +132,27 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     if jwt_middleware is not None:
         await jwt_middleware.startup()
 
+    # 7. Background gauge updater — polls outbox / DLQ counts every 30 s so
+    # the Grafana content-pipeline panels for backlog depth keep refreshing.
+    # Uses the read-replica factory when available so the periodic COUNT(*)
+    # never contends with write traffic.
+    from content_store.infrastructure.metrics.gauge_updater import gauge_update_loop
+
+    gauge_task = asyncio.create_task(gauge_update_loop(read_factory))
+    app.state.gauge_task = gauge_task
+
     log.info("service_started", service=settings.service_name, port=settings.port)
 
     yield
 
-    # Graceful shutdown — dispose DB engine(s) and Valkey
+    # Graceful shutdown — cancel the gauge task before disposing engines,
+    # otherwise the in-flight query would race the engine teardown.
+    gauge_task.cancel()
+    # Both branches are intentional: CancelledError is the expected exit path,
+    # and any other exception during shutdown should not block engine disposal.
+    with contextlib.suppress(asyncio.CancelledError, Exception):
+        await gauge_task
+
     await engine.dispose()
     if read_engine is not engine:
         await read_engine.dispose()

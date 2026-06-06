@@ -18,12 +18,17 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import os
 import signal
 import sys
 from uuid import UUID
 
 from common.ids import new_uuid7  # type: ignore[import-untyped]
-from observability import configure_logging, get_logger  # type: ignore[import-untyped]
+from observability import (  # type: ignore[import-untyped]
+    configure_logging,
+    get_logger,
+    start_metrics_server,
+)
 
 logger = get_logger(__name__)  # type: ignore[no-any-return]
 
@@ -41,6 +46,13 @@ async def main() -> None:
 
     log = get_logger("knowledge_graph.path_insight_worker_main")  # type: ignore[no-any-return]
     log.info("path_insight_worker_starting")
+
+    # Phase 3 worker-metrics rollout — expose Prometheus /metrics so the
+    # path_insight_* and summary_worker_stuck gauges are scrape-able.
+    metrics_handle = start_metrics_server(
+        service_name="knowledge-graph-path-insight-worker",
+        port=int(os.environ.get("METRICS_PORT", "9100")),
+    )
 
     # Determine stable instance UUID (env-overridable for testing).
     raw_instance_id = settings.path_insight_worker_instance_id  # type: ignore[attr-defined]
@@ -106,6 +118,8 @@ async def main() -> None:
         if read_engine is not engine:
             with contextlib.suppress(Exception):
                 await read_engine.dispose()
+        with contextlib.suppress(Exception):
+            await metrics_handle.aclose()
 
     log.info("path_insight_worker_stopped")
 

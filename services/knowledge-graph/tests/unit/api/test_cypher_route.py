@@ -83,25 +83,25 @@ def _make_app(*, cypher_enabled: bool = False, entity_exists: bool = True):
 # ── Fixtures ──────────────────────────────────────────────────────────────────
 
 
-@pytest.fixture
+@pytest.fixture()
 def disabled_app():
     """App with cypher disabled (default)."""
     return _make_app(cypher_enabled=False)
 
 
-@pytest.fixture
+@pytest.fixture()
 def enabled_app():
     """App with cypher enabled and entity found."""
     return _make_app(cypher_enabled=True, entity_exists=True)
 
 
-@pytest.fixture
+@pytest.fixture()
 def enabled_no_entity_app():
     """App with cypher enabled but entity not found."""
     return _make_app(cypher_enabled=True, entity_exists=False)
 
 
-@pytest.fixture
+@pytest.fixture()
 async def cypher_client(disabled_app):
     """ASGI client using the cypher-disabled app.
 
@@ -419,7 +419,6 @@ class TestCypherNeighborhoodEnabled:
         """Placeholder: neighborhood response includes temporal_events key."""
         # Tested above in test_neighborhood_returns_200_with_center; this confirms
         # the key is present (covered).
-        pass
 
 
 # ── Cypher injection prevention (BP-091) ─────────────────────────────────────

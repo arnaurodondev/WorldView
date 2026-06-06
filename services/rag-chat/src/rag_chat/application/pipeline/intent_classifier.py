@@ -20,10 +20,12 @@ from typing import TYPE_CHECKING, Any, Protocol
 
 import httpx
 import structlog
+from prompts.classification.intent import INTENT_CLASSIFICATION
 
 from rag_chat.domain.enums import QueryIntent
 
 if TYPE_CHECKING:
+    from rag_chat.application.ports.cost_recorder import CostRecorder
     from rag_chat.domain.entities.chat import ResolvedEntity
 
 
@@ -54,55 +56,109 @@ _INTENT_KEYWORDS: dict[QueryIntent, list[str]] = {
     QueryIntent.COMPARISON: ["compare", " vs ", "versus", "difference between", "better than"],
     QueryIntent.REASONING: ["why", "reason", "explain", "cause", "because", "how come"],
     QueryIntent.RELATIONSHIP: ["supply chain", "subsidiaries", "owns", "acquired", "parent company"],
-    QueryIntent.FINANCIAL_DATA: ["price", "p/e", "revenue", "earnings", "ratio", "ebitda"],
+    # PLAN-0104 W30 / BP-650: include forward-valuation vocabulary so questions
+    # like "What's AAPL forward P/E?" or "Is TSLA overvalued?" route to
+    # FINANCIAL_DATA (and therefore trigger get_fundamentals_history's
+    # CurrentSnapshot path) instead of falling through to GENERAL, where no
+    # tool is called and the LLM refuses for lack of context. The dict is
+    # ordered + first-match-wins (see KeywordHeuristicClassifier.classify),
+    # so we keep existing specific intents (PORTFOLIO, COMPARISON, REASONING,
+    # RELATIONSHIP) ahead of FINANCIAL_DATA — "compare TSLA vs AAPL forward
+    # P/E" still routes to COMPARISON as today.
+    # PLAN-0104 W49 / BP-XXX: extend FINANCIAL_DATA triggers to cover bare-ratio
+    # questions ("What's AAPL's P/E?"), margin questions ("Tesla's gross margin
+    # trend?"), cash-flow questions ("Microsoft's FCF?"), and growth questions
+    # ("Amazon's YoY revenue growth?"). Round 8 benchmark showed the LLM
+    # classifier mis-routing these to GENERAL, which skips the FINANCIAL_DATA
+    # addendum (4-section ANSWER STRUCTURE from W31) and produces one-liners.
+    # First-match-wins ordering keeps PORTFOLIO/COMPARISON/REASONING/
+    # RELATIONSHIP ahead of FINANCIAL_DATA so "compare X vs Y margins" still
+    # routes to COMPARISON.
+    QueryIntent.FINANCIAL_DATA: [
+        # Price + raw fundamentals
+        "price",
+        "revenue",
+        "earnings",
+        "ebitda",
+        # Ratio names (W30 + W49)
+        "p/e",
+        "pe ratio",
+        "price-to-earnings",
+        "ratio",
+        "forward p/e",
+        "forward pe",
+        "peg",
+        "ev/ebitda",
+        "ev to ebitda",
+        "p/b",
+        "price-to-book",
+        "p/s",
+        "price-to-sales",
+        "dividend yield",
+        "payout ratio",
+        "roe",
+        "roa",
+        "roi",
+        # Margins (W49)
+        "gross margin",
+        "operating margin",
+        "net margin",
+        "ebitda margin",
+        "profit margin",
+        # Cash flow (W49)
+        "free cash flow",
+        "fcf",
+        "cash flow",
+        "capex",
+        # Growth (W49)
+        "revenue growth",
+        "eps growth",
+        "yoy growth",
+        "qoq growth",
+        # Per-share metric
+        "eps",
+        # W30 valuation-stance vocabulary
+        "valuation",
+        "expensive",
+        "cheap",
+        "overvalued",
+        "undervalued",
+        # F-NEW-014 (2026-06-05): size & capital structure category — 9 of 14
+        # phrasings previously routed to GENERAL (market cap, EV, shares
+        # outstanding, book value, net debt, beta, ROIC, float, institutional
+        # ownership). Bare "ev" intentionally excluded (false-positive on
+        # "every", "Tesla EV", "events"); only ratio forms admitted.
+        "market cap",  # catches "market capitalization" via prefix
+        "enterprise value",
+        "ev/revenue",
+        "ev/sales",
+        "shares outstanding",
+        "book value",
+        "net debt",
+        "net cash",
+        "beta",  # finance-chat context; "beta version" risk acceptable
+        "roic",  # acronym; no English word contains "roic"
+        "return on invested capital",
+        "float",  # finance-chat context; "floating point" risk acceptable
+        "insider ownership",
+        "institutional ownership",
+        "peg ratio",  # explicit phrasing in addition to existing "peg"
+    ],
     QueryIntent.SIGNAL_INTEL: ["news", "announced", "filed", "reported", "allegations"],
     QueryIntent.GENERAL: ["what is", "define", "how does", "tell me about", "explain what"],
     # FACTUAL_LOOKUP is the default — no keywords needed
 }
 
 # ── Classification prompt ──────────────────────────────────────────────────────
-
-_CLASSIFICATION_PROMPT = (
-    "You are a query intent classifier for a financial intelligence system.\n"
-    "Classify the query into exactly one of: FACTUAL_LOOKUP, RELATIONSHIP, SIGNAL_INTEL,\n"
-    "FINANCIAL_DATA, COMPARISON, REASONING, PORTFOLIO, GENERAL.\n"
-    "\n"
-    "Use GENERAL for ambiguous, educational, or open-ended questions not tied to a specific\n"
-    "entity or financial metric. Use FACTUAL_LOOKUP when a specific named entity is targeted.\n"
-    "For COMPARISON queries with multiple entities, extract sub_questions (one per entity).\n"
-    "For REASONING queries, rephrase as a standalone question using conversation context.\n"
-    "\n"
-    "Examples:\n"
-    '- "Who is Apple\'s CEO?" ->'
-    ' {{"intent":"FACTUAL_LOOKUP","sub_questions":[],'
-    '"rephrased_query":"Who is the CEO of Apple Inc.?"}}\n'
-    '- "Why is Apple\'s margin declining?" ->'
-    ' {{"intent":"REASONING","sub_questions":[],'
-    '"rephrased_query":"Why is Apple\'s gross margin declining?"}}\n'
-    '- "Compare TSLA vs RIVN margins" ->'
-    ' {{"intent":"COMPARISON","sub_questions":["What are Tesla\'s margins?",'
-    '"What are Rivian\'s margins?"],"rephrased_query":"Compare TSLA and RIVN margins."}}\n'
-    '- "What risks affect my holdings?" ->'
-    ' {{"intent":"PORTFOLIO","sub_questions":[],'
-    '"rephrased_query":"What risks affect my portfolio holdings?"}}\n'
-    '- "What is Apple\'s relationship with TSMC?" ->'
-    ' {{"intent":"RELATIONSHIP","sub_questions":[],'
-    '"rephrased_query":"What is Apple\'s supply chain relationship with TSMC?"}}\n'
-    '- "Latest news on Nvidia?" ->'
-    ' {{"intent":"SIGNAL_INTEL","sub_questions":[],'
-    '"rephrased_query":"What are recent news and announcements about Nvidia?"}}\n'
-    '- "What is TSLA\'s current P/E ratio?" ->'
-    ' {{"intent":"FINANCIAL_DATA","sub_questions":[],'
-    '"rephrased_query":"What is Tesla\'s current price-to-earnings ratio?"}}\n'
-    '- "How do interest rates affect stock prices?" ->'
-    ' {{"intent":"GENERAL","sub_questions":[],'
-    '"rephrased_query":"How do interest rate changes affect equity valuations?"}}\n'
-    "\n"
-    "Query: {message}\n"
-    "Conversation context: {history}\n"
-    "Resolved entities: {entities}\n"
-    'Respond with JSON only: {{"intent": "...", "sub_questions": [...], "rephrased_query": "..."}}\n'
-)
+# Phase 2B (2026-06-05): the inline prompt body previously lived here. It is
+# now the single source of truth in ``libs/prompts/classification/intent.py``
+# (``INTENT_CLASSIFICATION``). The version-bumped (v2.1) template carries
+# every example that used to be inline PLUS the priority-rules block, so
+# behaviour is monotonically richer. We keep a thin module alias so callers
+# inside this file read like before, and we record the template identifier
+# on every classify() log line for drift detection across deploys.
+_CLASSIFICATION_TEMPLATE = INTENT_CLASSIFICATION
+_INTENT_CLASSIFIER_PROMPT_ID = INTENT_CLASSIFICATION.identifier()
 
 _VALID_INTENTS: frozenset[str] = frozenset(q.value for q in QueryIntent)
 
@@ -160,12 +216,21 @@ class OllamaIntentClassifier:
         *,
         http_client: httpx.AsyncClient | None = None,
         usage_logger: _UsageLogProtocol | None = None,
+        cost_recorder: CostRecorder | None = None,
     ) -> None:
         self._ollama_url = ollama_base_url.rstrip("/")
         self._model = model
         self._client = http_client or httpx.AsyncClient()
         self._fallback = KeywordHeuristicClassifier()
         self._usage_logger = usage_logger
+        # PLAN-0107 follow-up: per-call USD cost recorder. Coexists with the
+        # ``usage_logger`` above — different responsibilities. The usage_logger
+        # writes to ``llm_usage_log`` with cost=0 (legacy DB audit); the cost
+        # recorder writes the SAME table with real Decimal cost + bumps the
+        # Prometheus counter that powers Grafana panel id=6. Both are kept so
+        # the schema-shape of legacy log rows is preserved while the new path
+        # populates the cost column for the first time.
+        self._cost_recorder = cost_recorder
 
     async def classify(
         self,
@@ -178,7 +243,10 @@ class OllamaIntentClassifier:
         Returns ``(intent, sub_questions, rephrased_query)``.
         Falls back to the keyword heuristic if Ollama is unavailable.
         """
-        prompt = _CLASSIFICATION_PROMPT.format(
+        # Render via the shared PromptTemplate so every call site logs the
+        # exact prompt identifier (name@version#hash) it used. ``render``
+        # raises if any required parameter is missing — we pass all three.
+        prompt = _CLASSIFICATION_TEMPLATE.render(
             message=message,
             history=json.dumps(conversation_history[-6:]),
             entities=json.dumps(
@@ -212,6 +280,10 @@ class OllamaIntentClassifier:
                 "ollama_intent_classifier_fallback",
                 model=self._model,
                 msg_len=len(message),
+                # Drift detection: stamps the exact prompt the call would have
+                # used (name@version#hash). Lets dashboards correlate fallback
+                # rates with prompt rollouts.
+                intent_classifier_prompt=_INTENT_CLASSIFIER_PROMPT_ID,
             )
             return self._fallback.classify(message)
         finally:
@@ -230,6 +302,31 @@ class OllamaIntentClassifier:
                         error_code=error_code,
                     )
                 )
+            # PLAN-0107 follow-up: emit per-call USD cost. ``thread_id=None``
+            # because intent classification fires BEFORE the thread context is
+            # resolved in the orchestrator — per-conversation aggregation
+            # happens for tool_loop_iter / synthesis call sites instead.
+            # Defensive try/except: a recorder failure must NEVER prevent
+            # the classifier from returning a result (the recorder itself is
+            # also fire-and-forget, but the create_task wrapper is the second
+            # line of defence in case construction synchronously raises).
+            if self._cost_recorder is not None:
+                try:
+                    asyncio.create_task(  # noqa: RUF006
+                        self._cost_recorder.record(
+                            thread_id=None,
+                            model_id=self._model,
+                            tokens_in=tokens_in,
+                            tokens_out=tokens_out,
+                            call_site="intent_classifier",
+                        )
+                    )
+                except Exception as exc:  # pragma: no cover — defence in depth
+                    log.warning(  # type: ignore[no-any-return]
+                        "intent_classifier_cost_recorder_failed",
+                        model=self._model,
+                        error=str(exc),
+                    )
 
 
 # ── DeepInfra-backed classifier ───────────────────────────────────────────────
@@ -264,6 +361,7 @@ class DeepInfraIntentClassifier:
         http_client: httpx.AsyncClient | None = None,
         timeout: float = 10.0,
         usage_logger: _UsageLogProtocol | None = None,
+        cost_recorder: CostRecorder | None = None,
     ) -> None:
         self._api_key = api_key
         self._model = model
@@ -271,6 +369,9 @@ class DeepInfraIntentClassifier:
         self._timeout = timeout
         self._fallback = KeywordHeuristicClassifier()
         self._usage_logger = usage_logger
+        # PLAN-0107 follow-up: see OllamaIntentClassifier — same dual-write
+        # design. cost_recorder=None preserves the pre-PLAN-0107 behaviour.
+        self._cost_recorder = cost_recorder
 
     async def classify(
         self,
@@ -283,7 +384,10 @@ class DeepInfraIntentClassifier:
         Returns ``(intent, sub_questions, rephrased_query)``.
         Falls back to keyword heuristic if DeepInfra is unavailable.
         """
-        prompt = _CLASSIFICATION_PROMPT.format(
+        # Render via the shared PromptTemplate so every call site logs the
+        # exact prompt identifier (name@version#hash) it used. ``render``
+        # raises if any required parameter is missing — we pass all three.
+        prompt = _CLASSIFICATION_TEMPLATE.render(
             message=message,
             history=json.dumps(conversation_history[-6:]),
             entities=json.dumps(
@@ -334,6 +438,8 @@ class DeepInfraIntentClassifier:
                 "deepinfra_intent_classifier_fallback",
                 model=self._model,
                 msg_len=len(message),
+                # Drift detection identifier — same purpose as the Ollama path.
+                intent_classifier_prompt=_INTENT_CLASSIFIER_PROMPT_ID,
             )
             return self._fallback.classify(message)
         finally:
@@ -352,6 +458,27 @@ class DeepInfraIntentClassifier:
                         error_code=error_code,
                     )
                 )
+            # PLAN-0107 follow-up: per-call USD cost. thread_id=None — same
+            # reasoning as the Ollama classifier (classification fires before
+            # the orchestrator binds the thread). Fire-and-forget via
+            # create_task so the classifier returns immediately.
+            if self._cost_recorder is not None:
+                try:
+                    asyncio.create_task(  # noqa: RUF006
+                        self._cost_recorder.record(
+                            thread_id=None,
+                            model_id=self._model,
+                            tokens_in=tokens_in,
+                            tokens_out=tokens_out,
+                            call_site="intent_classifier",
+                        )
+                    )
+                except Exception as exc:  # pragma: no cover — defence in depth
+                    log.warning(  # type: ignore[no-any-return]
+                        "intent_classifier_cost_recorder_failed",
+                        model=self._model,
+                        error=str(exc),
+                    )
 
 
 # ── Response parser ────────────────────────────────────────────────────────────

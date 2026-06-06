@@ -163,7 +163,7 @@ class TestMacroIndicatorConsumerHappyPath:
             direct_producer=producer,
         )
         consumer._storage.get_bytes = AsyncMock(
-            return_value=_make_envelope(_GDP_PAYLOAD, "macro_indicator", "USA.gdp_current_usd")
+            return_value=_make_envelope(_GDP_PAYLOAD, "macro_indicator", "USA.gdp_current_usd"),
         )
 
         with patch(_ENTITY_REPO, return_value=entity_repo):
@@ -184,7 +184,7 @@ class TestMacroIndicatorConsumerHappyPath:
         producer = MagicMock()
         consumer, entity_repo, _ = _make_consumer(old_hash=None, direct_producer=producer)
         consumer._storage.get_bytes = AsyncMock(
-            return_value=_make_envelope(_GDP_PAYLOAD, "macro_indicator", "USA.gdp_current_usd")
+            return_value=_make_envelope(_GDP_PAYLOAD, "macro_indicator", "USA.gdp_current_usd"),
         )
 
         with patch(_ENTITY_REPO, return_value=entity_repo):
@@ -202,7 +202,7 @@ class TestMacroIndicatorConsumerHappyPath:
         """session.commit() called when metadata is updated."""
         consumer, entity_repo, session = _make_consumer(old_hash=None)
         consumer._storage.get_bytes = AsyncMock(
-            return_value=_make_envelope(_GDP_PAYLOAD, "macro_indicator", "USA.gdp_current_usd")
+            return_value=_make_envelope(_GDP_PAYLOAD, "macro_indicator", "USA.gdp_current_usd"),
         )
 
         with patch(_ENTITY_REPO, return_value=entity_repo):
@@ -231,7 +231,7 @@ class TestMacroIndicatorConsumerNoChange:
             direct_producer=producer,
         )
         consumer._storage.get_bytes = AsyncMock(
-            return_value=_make_envelope(_GDP_PAYLOAD, "macro_indicator", "USA.gdp_current_usd")
+            return_value=_make_envelope(_GDP_PAYLOAD, "macro_indicator", "USA.gdp_current_usd"),
         )
 
         with patch(_ENTITY_REPO, return_value=entity_repo):
@@ -302,7 +302,7 @@ class TestMacroIndicatorConsumerIso3Mapping:
         """USA → US mapping used for entity lookup."""
         consumer, entity_repo, _ = _make_consumer(old_hash=None)
         consumer._storage.get_bytes = AsyncMock(
-            return_value=_make_envelope(_GDP_PAYLOAD, "macro_indicator", "USA.gdp_current_usd")
+            return_value=_make_envelope(_GDP_PAYLOAD, "macro_indicator", "USA.gdp_current_usd"),
         )
 
         with patch(_ENTITY_REPO, return_value=entity_repo):
@@ -313,7 +313,7 @@ class TestMacroIndicatorConsumerIso3Mapping:
     def test_gbr_mapped_to_gb(self) -> None:
         consumer, entity_repo, _ = _make_consumer(old_hash=None)
         consumer._storage.get_bytes = AsyncMock(
-            return_value=_make_envelope(_GDP_PAYLOAD, "macro_indicator", "GBR.gdp_current_usd")
+            return_value=_make_envelope(_GDP_PAYLOAD, "macro_indicator", "GBR.gdp_current_usd"),
         )
 
         with patch(_ENTITY_REPO, return_value=entity_repo):
@@ -322,7 +322,7 @@ class TestMacroIndicatorConsumerIso3Mapping:
                     None,
                     _make_message(symbol="GBR.gdp_current_usd", key="macro_indicator/gbr/gdp.ndjson"),
                     {},
-                )
+                ),
             )
 
         entity_repo.find_country_entity.assert_awaited_once_with("GB")
@@ -331,7 +331,7 @@ class TestMacroIndicatorConsumerIso3Mapping:
         """Unknown ISO3 code falls back to first 2 chars for entity lookup."""
         consumer, entity_repo, _ = _make_consumer(old_hash=None)
         consumer._storage.get_bytes = AsyncMock(
-            return_value=_make_envelope(_GDP_PAYLOAD, "macro_indicator", "ZAF.gdp_current_usd")
+            return_value=_make_envelope(_GDP_PAYLOAD, "macro_indicator", "ZAF.gdp_current_usd"),
         )
 
         with patch(_ENTITY_REPO, return_value=entity_repo):
@@ -353,7 +353,7 @@ class TestMacroIndicatorConsumerMissingCountry:
             direct_producer=producer,
         )
         consumer._storage.get_bytes = AsyncMock(
-            return_value=_make_envelope(_GDP_PAYLOAD, "macro_indicator", "USA.gdp_current_usd")
+            return_value=_make_envelope(_GDP_PAYLOAD, "macro_indicator", "USA.gdp_current_usd"),
         )
 
         with patch(_ENTITY_REPO, return_value=entity_repo):
@@ -372,7 +372,7 @@ class TestMacroIndicatorConsumerEmptyPayload:
         """Empty payload list → no DB calls."""
         consumer, entity_repo, _ = _make_consumer()
         consumer._storage.get_bytes = AsyncMock(
-            return_value=_make_envelope([], "macro_indicator", "USA.gdp_current_usd")
+            return_value=_make_envelope([], "macro_indicator", "USA.gdp_current_usd"),
         )
 
         with patch(_ENTITY_REPO, return_value=entity_repo):
@@ -385,7 +385,7 @@ class TestMacroIndicatorConsumerEmptyPayload:
         """Symbol with no dot → unparseable → no DB calls."""
         consumer, entity_repo, _ = _make_consumer()
         consumer._storage.get_bytes = AsyncMock(
-            return_value=_make_envelope(_GDP_PAYLOAD, "macro_indicator", "NODOTSYMBOL")
+            return_value=_make_envelope(_GDP_PAYLOAD, "macro_indicator", "NODOTSYMBOL"),
         )
 
         with patch(_ENTITY_REPO, return_value=entity_repo):
@@ -394,7 +394,7 @@ class TestMacroIndicatorConsumerEmptyPayload:
                     None,
                     _make_message(symbol="NODOTSYMBOL"),
                     {},
-                )
+                ),
             )
 
         entity_repo.find_country_entity.assert_not_awaited()
@@ -434,7 +434,7 @@ class TestMacroIndicatorConsumerNoProducer:
         """Update proceeds even without a direct_producer configured."""
         consumer, entity_repo, _ = _make_consumer(old_hash=None, direct_producer=None)
         consumer._storage.get_bytes = AsyncMock(
-            return_value=_make_envelope(_GDP_PAYLOAD, "macro_indicator", "USA.gdp_current_usd")
+            return_value=_make_envelope(_GDP_PAYLOAD, "macro_indicator", "USA.gdp_current_usd"),
         )
 
         with patch(_ENTITY_REPO, return_value=entity_repo):
@@ -453,7 +453,7 @@ class TestMacroIndicatorConsumerPrometheus:
 
         consumer, entity_repo, _ = _make_consumer(old_hash=None)
         consumer._storage.get_bytes = AsyncMock(
-            return_value=_make_envelope(_GDP_PAYLOAD, "macro_indicator", "USA.gdp_current_usd")
+            return_value=_make_envelope(_GDP_PAYLOAD, "macro_indicator", "USA.gdp_current_usd"),
         )
 
         before = s7_macro_indicator_updates_total.labels(country="US")._value.get()
@@ -475,7 +475,7 @@ class TestMacroIndicatorConsumerPrometheus:
 
         consumer, entity_repo, _ = _make_consumer(old_hash=existing_hash, stored_macro_data=merged)
         consumer._storage.get_bytes = AsyncMock(
-            return_value=_make_envelope(_GDP_PAYLOAD, "macro_indicator", "USA.gdp_current_usd")
+            return_value=_make_envelope(_GDP_PAYLOAD, "macro_indicator", "USA.gdp_current_usd"),
         )
 
         before = s7_macro_indicator_updates_total.labels(country="US")._value.get()

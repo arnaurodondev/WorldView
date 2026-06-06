@@ -20,7 +20,11 @@ from uuid import UUID
 import httpx
 import structlog  # type: ignore[import-untyped]
 
-from rag_chat.application.ports.upstream_clients import PortfolioContext
+from rag_chat.application.ports.upstream_clients import (
+    PortfolioContext,
+    PortfolioPnL,
+    PortfolioPnLItem,
+)
 from rag_chat.infrastructure.clients.base import BaseUpstreamClient
 
 if TYPE_CHECKING:
@@ -139,3 +143,69 @@ class S1Client(BaseUpstreamClient):
             logger.warning("s1_cache_write_error", error=str(exc))
 
         return ctx
+
+    # ── PLAN-0102 W2 T-W2-03 — overnight P&L ────────────────────────────────────
+
+    async def get_portfolio_pnl(self, user_id: UUID) -> PortfolioPnL | None:
+        """GET /internal/v1/users/{user_id}/portfolio/pnl.
+
+        Returns ``None`` on any HTTP / network error — callers should
+        gracefully degrade to the existing weight-only brief rendering.
+
+        S1 caches the response for 60 s server-side, so we do NOT add a
+        client-side Valkey cache here (would just compound TTL drift).
+        Auth: X-Internal-JWT lifted from the request ContextVar (same
+        pattern as ``get_portfolio_context``).
+        """
+        from rag_chat.infrastructure.clients.auth_context import get_current_jwt
+
+        headers: dict[str, str] = {}
+        jwt = get_current_jwt()
+        if jwt:
+            headers["X-Internal-JWT"] = jwt
+
+        path = f"/internal/v1/users/{user_id}/portfolio/pnl"
+        try:
+            resp = await self._client.get(path, headers=headers)
+            resp.raise_for_status()
+            raw: dict = resp.json()
+        except httpx.TimeoutException:
+            logger.warning("upstream_timeout", path=path)
+            return None
+        except httpx.HTTPStatusError as exc:
+            logger.warning("upstream_http_error", path=path, status=exc.response.status_code)
+            return None
+        except httpx.RequestError as exc:
+            logger.warning("upstream_request_error", path=path, error=str(exc))
+            return None
+
+        # Hand-roll the mapping because we want to swallow per-row schema drift
+        # rather than crashing the brief if S1 adds a forward-compat field.
+        items: list[PortfolioPnLItem] = []
+        for h in raw.get("holdings", []) or []:
+            try:
+                items.append(
+                    PortfolioPnLItem(
+                        symbol=h.get("symbol"),
+                        entity_id=UUID(h["entity_id"]) if h.get("entity_id") else None,
+                        instrument_id=UUID(h["instrument_id"]),
+                        qty=float(h.get("qty", 0.0)),
+                        last_close_usd=(float(h["last_close_usd"]) if h.get("last_close_usd") is not None else None),
+                        current_price_usd=(
+                            float(h["current_price_usd"]) if h.get("current_price_usd") is not None else None
+                        ),
+                        overnight_pnl_usd=float(h.get("overnight_pnl_usd", 0.0)),
+                        overnight_pnl_pct=float(h.get("overnight_pnl_pct", 0.0)),
+                    ),
+                )
+            except (KeyError, ValueError, TypeError):
+                # Single-row malformed payload should not crash the brief.
+                logger.warning("s1_pnl_row_parse_error", path=path)
+                continue
+
+        return PortfolioPnL(
+            user_id=UUID(raw.get("user_id", str(user_id))),
+            holdings=items,
+            total_overnight_pnl_usd=float(raw.get("total_overnight_pnl_usd", 0.0)),
+            total_overnight_pnl_pct=float(raw.get("total_overnight_pnl_pct", 0.0)),
+        )

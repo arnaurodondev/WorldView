@@ -547,10 +547,13 @@ async def materialize_graph(
         from messaging.kafka.serialization_utils import serialize_confluent_avro  # type: ignore[import-untyped]
 
         state_bytes = serialize_confluent_avro(_GRAPH_STATE_CHANGED_SCHEMA_PATH, state_payload)
+        # Outbox requires an explicit event_id for idempotent replay (see
+        # OutboxRepository.append). A UUID7 is monotonic + unique per call.
         await outbox_repo.append(
             topic=TOPIC_GRAPH_STATE_CHANGED,
             partition_key=primary_entity_id,
             payload_avro=state_bytes,
+            event_id=new_uuid7(),
         )
 
     return MaterializationSummary(

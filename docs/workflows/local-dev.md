@@ -115,6 +115,8 @@ Some services have additional dependencies:
 
 All of these are started by `make dev` (or `docker compose --profile infra up -d`).
 
+> **Ollama + embedding-retry-worker (DP-F005)**: `nlp-pipeline-embedding-retry-worker` no longer declares a hard `depends_on: ollama` because the primary embedding path is DeepInfra (`NLP_PIPELINE_EMBEDDING_PROVIDER=deepinfra`). If you unset `NLP_PIPELINE_EMBEDDING_API_KEY` for offline local dev, start Ollama manually (`docker compose --profile infra up -d ollama ollama-init`) before this worker, otherwise its fallback embedding path will fail.
+
 ### Service Port Map
 
 | Service | Port | Database |

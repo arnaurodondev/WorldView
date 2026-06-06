@@ -38,9 +38,12 @@ honest and reproducible.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import math
 import statistics
+import uuid as _uuid
+from dataclasses import dataclass, field
 from datetime import UTC, date, datetime, timedelta
 from typing import TYPE_CHECKING, Any, cast
 
@@ -119,6 +122,12 @@ _MIN_RETURNS = 10
 # so we don't have to hard-code an instrument UUID (which differs per
 # environment).
 _SPY_SYMBOL = "SPY"
+
+# F-007: value_history error_reason values that represent a TRUE upstream
+# failure (not an empty-but-healthy portfolio). When the portfolio leg
+# reports one of these, data_quality.status flips to "degraded_upstream"
+# instead of the legacy silent "insufficient_data" downgrade.
+_UPSTREAM_VH_FAILURE: frozenset[str] = frozenset({"5xx", "4xx", "timeout", "exception"})
 
 
 # ── Helpers (clients + auth headers — mirrors proxy.py) ──────────────────────
@@ -254,6 +263,125 @@ def _sortino(returns: list[float]) -> float | None:
     return (mean_ret * _TRADING_DAYS_PER_YEAR - _RISK_FREE_RATE) / downside_dev
 
 
+def _calmar(returns: list[float], drawdown_max: float | None) -> float | None:
+    """Calmar = annualised_return / abs(drawdown_max).
+
+    Returns None if drawdown_max is None, zero, or insufficient returns.
+    Calmar measures return per unit of maximum drawdown risk — a portfolio
+    with 20% annualised return and 10% max drawdown has Calmar = 2.0.
+    """
+    if len(returns) < _MIN_RETURNS:
+        return None
+    # WHY abs(...) < epsilon (not == 0.0): IEEE-754 equality catches both
+    # +0.0 and -0.0, but a sub-normal float like -1e-300 would slip past
+    # the equality check and produce an absurd calmar (e.g. 10^298). The
+    # epsilon guard rejects any drawdown so small it's economically meaningless
+    # — drawdowns below 1bp (1e-4) aren't real either, so 1e-12 is conservative.
+    if drawdown_max is None or abs(drawdown_max) < 1e-12:
+        return None
+    mean_ret = statistics.fmean(returns)
+    return (mean_ret * _TRADING_DAYS_PER_YEAR) / abs(drawdown_max)
+
+
+def _win_rate(returns: list[float]) -> float | None:
+    """Fraction of positive daily returns.
+
+    Returns None if len(returns) < _MIN_RETURNS. A win rate of 0.58 means
+    58% of trading days had positive portfolio returns — a useful proxy for
+    the consistency of the strategy independent of magnitude.
+    """
+    if len(returns) < _MIN_RETURNS:
+        return None
+    return sum(1 for r in returns if r > 0) / len(returns)
+
+
+def _alpha(portfolio_returns: list[float], spy_returns: list[float]) -> float | None:
+    """Alpha = annualised_portfolio_return - annualised_spy_return.
+
+    Uses the same aligned series as beta so the comparison is apples-to-apples
+    (only dates where both portfolio and SPY have returns are included).
+    Returns None if either series is too short or lengths diverge.
+    """
+    if len(portfolio_returns) < _MIN_RETURNS or len(spy_returns) < _MIN_RETURNS:
+        return None
+    # WHY defensive length-mismatch guard: the route always passes series
+    # derived from _align_by_date() so lengths are guaranteed equal at the
+    # callsite. If a future caller invokes _alpha() with unaligned series
+    # this guard prevents a silently-wrong fmean comparison rather than
+    # returning a meaningless number.
+    if len(portfolio_returns) != len(spy_returns):
+        return None
+    p_ann = statistics.fmean(portfolio_returns) * _TRADING_DAYS_PER_YEAR
+    s_ann = statistics.fmean(spy_returns) * _TRADING_DAYS_PER_YEAR
+    return p_ann - s_ann
+
+
+def _period_return(values: list[float]) -> float | None:
+    """Total return over the window: ``(final - initial) / initial``.
+
+    Returns ``None`` when fewer than 2 data points are available or the
+    initial value is non-positive (the ratio is undefined / would explode).
+    Sign convention: positive = gain, negative = loss. The frontend renders
+    the value as a percentage.
+    """
+    if len(values) < 2:
+        return None
+    initial = values[0]
+    if initial <= 0:
+        return None
+    return (values[-1] - initial) / initial
+
+
+def _cagr(values: list[float], lookback_days: int) -> float | None:
+    """Compound Annual Growth Rate: ``(V_T / V_0) ** (365.25 / lookback_days) - 1``.
+
+    Uses ``365.25`` (calendar days, accounting for leap years) because the
+    lookback window is expressed in calendar days, not trading days — the
+    ``_TRADING_DAYS_PER_YEAR`` (252) constant is only correct when the
+    exponent base is also in trading days.
+
+    Returns ``None`` when fewer than 2 points are available, the initial
+    value is non-positive, or ``lookback_days <= 0`` (the exponent is
+    undefined). Also returns ``None`` if the final value is non-positive —
+    the math would yield a complex number for the fractional root.
+    """
+    if len(values) < 2 or lookback_days <= 0:
+        return None
+    initial = values[0]
+    final = values[-1]
+    if initial <= 0 or final <= 0:
+        return None
+    # WHY explicit float(): ``a ** b`` widens to Any under mypy's stub for
+    # int/float exponentiation; the cast pins the return type so the helper
+    # stays ``float | None`` without a ``# type: ignore``.
+    return float((final / initial) ** (365.25 / lookback_days) - 1)
+
+
+def _var_95(returns: list[float]) -> float | None:
+    """Historical Value-at-Risk at 95% confidence.
+
+    Returns the empirical 5th-percentile of the daily-return series — i.e.
+    the loss threshold such that on 95% of days the portfolio does no worse
+    than this. Sign convention matches the rest of this file: negative for
+    losses (e.g. ``-0.023`` means "5% of days lose at least 2.3%"). The
+    frontend takes responsibility for formatting (sign flip / abs).
+
+    Returns ``None`` if the series has fewer than ``_MIN_RETURNS`` (10)
+    points — the percentile estimate would be too noisy to publish.
+
+    Implementation note: ``statistics.quantiles(returns, n=20)`` partitions
+    the series into 20 equal-frequency buckets; index ``[0]`` is the 5th
+    percentile. This matches numpy's ``percentile(r, 5, method='inclusive')``
+    closely enough for our purposes and avoids the numpy dependency.
+    """
+    if len(returns) < _MIN_RETURNS:
+        return None
+    # statistics.quantiles with n=20 returns 19 cut points at the 5%, 10%, ..., 95%
+    # marks. Index 0 is the 5th-percentile cut.
+    cuts = statistics.quantiles(returns, n=20, method="inclusive")
+    return cuts[0]
+
+
 def _beta(portfolio_returns: list[float], spy_returns: list[float]) -> float | None:
     """β = cov(r_p, r_spy) / var(r_spy).
 
@@ -298,6 +426,27 @@ def _align_by_date(
 # ── Downstream fetchers ──────────────────────────────────────────────────────
 
 
+# F-007: track per-leg degradation reason so the route can distinguish a true
+# "insufficient_data" (portfolio genuinely has few snapshots) from a 5xx /
+# timeout / exception on the upstream call. Without this the frontend's
+# empty-state caption is misleading — every failure mode reads the same way.
+@dataclass
+class _LegResult:
+    """Outcome of a single downstream fetch leg.
+
+    error_reason values:
+        None        — fetch succeeded; ``series`` carries the rows
+        "5xx"       — upstream returned a 5xx HTTP status
+        "4xx"       — upstream returned a non-404 4xx HTTP status
+        "timeout"   — request timed out (httpx.TimeoutException)
+        "exception" — any other transport / parse exception
+        "no_data"   — fetch succeeded but result is empty (no SPY id, no points)
+    """
+
+    series: list[tuple[date, float]] = field(default_factory=list)
+    error_reason: str | None = None
+
+
 async def _fetch_value_history(
     clients: ServiceClients,
     portfolio_id: str,
@@ -305,12 +454,16 @@ async def _fetch_value_history(
     from_date: date,
     to_date: date,
     headers: dict[str, str],
-) -> list[tuple[date, float]]:
+) -> _LegResult:
     """Pull (date, total_value) pairs from S1 over the requested range.
 
-    Returns ``[]`` on any non-200 response so the caller can degrade
-    gracefully — risk metrics for a portfolio with no snapshots are
-    correctly nulled out by the insufficient-history guard.
+    Returns a ``_LegResult`` whose ``error_reason`` distinguishes between a
+    genuine empty series (``"no_data"``) and an upstream failure (``"5xx"`` /
+    ``"4xx"`` / ``"timeout"`` / ``"exception"``). The 404 path still raises
+    ``_BareEnvelopeError`` (caller converts to JSONResponse) so the API hands
+    the frontend a clean "not found" envelope rather than confusing empty
+    metrics. Any other failure becomes a non-None ``error_reason`` so the
+    route can surface ``data_quality.degradation`` honestly.
     """
     resp = await clients.portfolio.get(
         f"/api/v1/portfolios/{portfolio_id}/value-history",
@@ -339,11 +492,15 @@ async def _fetch_value_history(
             portfolio_id=portfolio_id,
             status=resp.status_code,
         )
-        return []
+        # F-007: classify the failure so the route can surface
+        # data_quality.degradation.value_history rather than silently
+        # collapsing every upstream failure into "insufficient_data".
+        reason = "5xx" if resp.status_code >= 500 else "4xx"
+        return _LegResult(series=[], error_reason=reason)
     try:
         body = resp.json()
     except Exception:
-        return []
+        return _LegResult(series=[], error_reason="exception")
     points = body.get("points") or []
     out: list[tuple[date, float]] = []
     for p in points:
@@ -353,7 +510,9 @@ async def _fetch_value_history(
         except Exception:  # noqa: S112 — malformed-row skip is intentional and not actionable
             continue
         out.append((d, v))
-    return out
+    # F-007: empty result on a 200 is "no_data" (portfolio truly has no
+    # snapshots); a non-empty list is the success path.
+    return _LegResult(series=out, error_reason=None if out else "no_data")
 
 
 async def _resolve_spy_instrument_id(
@@ -407,15 +566,19 @@ async def _fetch_spy_ohlcv(
     from_date: date,
     to_date: date,
     headers: dict[str, str],
-) -> list[tuple[date, float]]:
+) -> _LegResult:
     """Pull SPY (date, close) pairs from S3 over the requested range.
 
-    Returns ``[]`` on any failure — same graceful-degradation rule as
-    ``_fetch_value_history``.
+    Returns a ``_LegResult`` distinguishing benchmark failure modes (5xx /
+    timeout / no_data) so the route can render
+    ``data_quality.degradation.benchmark`` honestly. SPY failures NEVER block
+    the portfolio leg — they degrade beta/alpha to None and the caller
+    transitions ``data_quality.status`` to ``"benchmark_unavailable"`` (or
+    ``"degraded_upstream"`` when both legs error).
     """
     spy_id = await _resolve_spy_instrument_id(clients, headers)
     if spy_id is None:
-        return []
+        return _LegResult(series=[], error_reason="no_data")
     try:
         resp = await clients.market_data.get(
             f"/api/v1/ohlcv/{spy_id}",
@@ -427,16 +590,17 @@ async def _fetch_spy_ohlcv(
             headers=headers,
         )
     except Exception:
-        return []
+        return _LegResult(series=[], error_reason="exception")
     if resp.status_code != 200:
-        return []
+        reason = "5xx" if resp.status_code >= 500 else "4xx"
+        return _LegResult(series=[], error_reason=reason)
     try:
         body = resp.json()
     except Exception:
-        return []
+        return _LegResult(series=[], error_reason="exception")
     items = body.get("items") if isinstance(body, dict) else body
     if not isinstance(items, list):
-        return []
+        return _LegResult(series=[], error_reason="no_data")
     out: list[tuple[date, float]] = []
     for bar in items:
         if not isinstance(bar, dict):
@@ -449,7 +613,7 @@ async def _fetch_spy_ohlcv(
         out.append((d, close))
     # OHLCV may be returned newest-first; sort ascending so alignment works.
     out.sort(key=lambda t: t[0])
-    return out
+    return _LegResult(series=out, error_reason=None if out else "no_data")
 
 
 # ── Route ────────────────────────────────────────────────────────────────────
@@ -476,36 +640,70 @@ async def get_risk_metrics(
     """
     if not getattr(request.state, "user", None):
         raise HTTPException(status_code=401, detail="Authentication required")
+    try:
+        _uuid.UUID(portfolio_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail="Invalid portfolio_id — must be a UUID") from exc
 
     today = datetime.now(tz=UTC).date()
     start = today - timedelta(days=lookback_days)
     clients = _clients(request)
 
-    # 1. Portfolio value history (uses the user's JWT — value-history is
-    #    tenant-scoped and 404s if not owned by the caller). The fetcher
-    #    raises ``_BareEnvelopeError`` on a downstream 404 — we convert that
-    #    to a bare-envelope JSONResponse here so the body matches the rest
-    #    of the portfolio domain's error contract (F-006, QA iter-2).
+    # 1+2. Portfolio value history (uses the user's JWT — value-history is
+    #      tenant-scoped and 404s if not owned by the caller) and SPY OHLCV
+    #      (public reference data, system JWT) in parallel.
+    #
+    # WHY asyncio.gather: the two fetches have NO data dependency — the
+    # portfolio series is keyed by portfolio_id and the SPY series is
+    # benchmark reference data. Running sequentially makes tail-latency
+    # S1_RTT + S3_RTT + S3_search_RTT; running in parallel collapses it to
+    # max(S1_RTT, S3_RTT + S3_search_RTT). F-005 (QA Wave G).
+    #
+    # The portfolio leg may raise ``_BareEnvelopeError`` on 404 (clean
+    # "not found" envelope). ``return_exceptions=True`` keeps that
+    # exception object instead of unwinding gather; we re-raise after
+    # destructuring so the 404 still becomes a JSONResponse. SPY exceptions
+    # ALWAYS degrade to an empty series (per existing contract).
     user_headers = _user_headers(request)
-    try:
-        portfolio_series = await _fetch_value_history(
+    sys_headers = _system_headers(request)
+    portfolio_result, spy_result = await asyncio.gather(
+        _fetch_value_history(
             clients,
             portfolio_id,
             from_date=start,
             to_date=today,
             headers=user_headers,
-        )
-    except _BareEnvelopeError as bare_exc:
-        return bare_exc.to_response()
-
-    # 2. SPY OHLCV — public reference data, system JWT is sufficient.
-    sys_headers = _system_headers(request)
-    spy_series = await _fetch_spy_ohlcv(
-        clients,
-        from_date=start,
-        to_date=today,
-        headers=sys_headers,
+        ),
+        _fetch_spy_ohlcv(
+            clients,
+            from_date=start,
+            to_date=today,
+            headers=sys_headers,
+        ),
+        return_exceptions=True,
     )
+
+    # Portfolio leg: re-raise the 404 envelope; otherwise unpack or degrade.
+    if isinstance(portfolio_result, _BareEnvelopeError):
+        return portfolio_result.to_response()
+    if isinstance(portfolio_result, BaseException):
+        # Any other exception → degrade to empty + "exception" reason.
+        logger.warning("risk_metrics_value_history_exception", exc_info=portfolio_result)
+        portfolio_leg = _LegResult(series=[], error_reason="exception")
+    else:
+        portfolio_leg = portfolio_result
+
+    # SPY leg: exceptions ALWAYS degrade (matches existing contract).
+    if isinstance(spy_result, BaseException):
+        logger.warning("risk_metrics_spy_exception", exc_info=spy_result)
+        spy_leg = _LegResult(series=[], error_reason="exception")
+    else:
+        spy_leg = spy_result
+
+    portfolio_series = portfolio_leg.series
+    spy_series = spy_leg.series
+    value_history_error_reason = portfolio_leg.error_reason
+    spy_error_reason = spy_leg.error_reason
 
     # 3. Compute metrics on the portfolio series alone (drawdown / vol /
     #    sharpe / sortino don't need SPY).
@@ -528,20 +726,46 @@ async def get_risk_metrics(
         sharpe = _sharpe(portfolio_returns)
         sortino = _sortino(portfolio_returns)
 
-    # 4. Beta — needs aligned-by-date returns from both series.
+    # 4. Beta and Alpha — both need aligned-by-date returns from portfolio + SPY.
     beta_vs_spy: float | None
+    alpha: float | None
+    # WHY track aligned returns outside the if-block: _alpha needs the same
+    # aligned series as _beta. Capturing them here avoids a second alignment call.
+    _aligned_p_returns: list[float] = []
+    _aligned_s_returns: list[float] = []
     if insufficient or not spy_series:
         beta_vs_spy = None
+        alpha = None
     else:
         # Align values, THEN compute returns (so r_t for both series
         # corresponds to the same calendar date pair).
         p_aligned, s_aligned = _align_by_date(portfolio_series, spy_series)
         if len(p_aligned) < _MIN_RETURNS + 1:
             beta_vs_spy = None
+            alpha = None
         else:
-            p_returns = _daily_returns(p_aligned)
-            s_returns = _daily_returns(s_aligned)
-            beta_vs_spy = _beta(p_returns, s_returns)
+            _aligned_p_returns = _daily_returns(p_aligned)
+            _aligned_s_returns = _daily_returns(s_aligned)
+            beta_vs_spy = _beta(_aligned_p_returns, _aligned_s_returns)
+            alpha = _alpha(_aligned_p_returns, _aligned_s_returns)
+
+    # 5. Calmar and Win Rate — derived from portfolio returns alone.
+    # WHY no explicit insufficient guard here: both _calmar and _win_rate
+    # check len(returns) < _MIN_RETURNS internally and return None — and
+    # drawdown_max is already None when insufficient (set in step 3 above).
+    calmar = _calmar(portfolio_returns, drawdown_max)
+    win_rate = _win_rate(portfolio_returns)
+
+    # 5b. ARCH-F002: period_return, cagr, var_95 — derived from the raw
+    # portfolio_values / portfolio_returns series. period_return and cagr
+    # use the full value series (they care about endpoints, not returns)
+    # so they degrade independently — a 2-point series gives a valid
+    # period_return even though every return-based metric is null.
+    # var_95 follows the same _MIN_RETURNS gate as Sharpe/Sortino since
+    # it's a percentile of the return distribution.
+    period_return: float | None = _period_return(portfolio_values)
+    cagr: float | None = _cagr(portfolio_values, lookback_days)
+    var_95: float | None = _var_95(portfolio_returns)
 
     # F-014 / F-015: surface ``as_of``, ``lookback_window``, and a
     # ``data_quality`` block so the frontend knows *why* a metric is
@@ -575,6 +799,12 @@ async def get_risk_metrics(
     has_contaminated_zero = len(portfolio_values) >= 2 and len(anomaly_zero_indices) > 0 and max(portfolio_values) > 0.0
     anomaly_details: dict[str, Any] = {}
 
+    # F-007: classify "real upstream degradation" (5xx / timeout / exception
+    # on the value-history leg) separately from a portfolio that genuinely
+    # has too few snapshots. The legacy "insufficient_data" status conflated
+    # the two and produced a misleading empty-state caption.
+    value_history_degraded_upstream = value_history_error_reason in _UPSTREAM_VH_FAILURE
+
     if has_contaminated_zero:
         data_quality_status = "data_anomaly_detected"
         anomaly_details = {
@@ -590,6 +820,19 @@ async def get_risk_metrics(
         sharpe = None
         sortino = None
         beta_vs_spy = None
+        calmar = None
+        win_rate = None
+        alpha = None
+        # ARCH-F002: same suppression discipline for the three new metrics —
+        # the underlying series is contaminated so any value would be misleading.
+        period_return = None
+        cagr = None
+        var_95 = None
+    elif value_history_degraded_upstream:
+        # F-007: portfolio leg upstream-failed (5xx/4xx/timeout/exception).
+        # Distinct from "insufficient_data" — the frontend can show a
+        # transient-error caption instead of "not enough history".
+        data_quality_status = "degraded_upstream"
     elif insufficient or len(portfolio_returns) < _MIN_RETURNS:
         data_quality_status = "insufficient_data"
     elif not spy_series:
@@ -606,6 +849,16 @@ async def get_risk_metrics(
         "sharpe": sharpe,
         "sortino": sortino,
         "beta_vs_spy": beta_vs_spy,
+        # Wave G additions — computed from already-fetched data (no extra
+        # downstream calls). See docs/designs/0089/04-portfolio-detail.md §3.6.
+        "calmar": calmar,  # annualised_return / abs(drawdown_max); None when no drawdown
+        "win_rate": win_rate,  # fraction of positive daily returns [0, 1]
+        "alpha": alpha,  # portfolio_annualised_return - spy_annualised_return
+        # ARCH-F002 additions — AnalyticsRiskSidebar tiles (VAR 95 / CAGR /
+        # RETURN). Same nulling discipline as the siblings above.
+        "period_return": period_return,  # (final - initial) / initial; None when < 2 points
+        "cagr": cagr,  # (final/initial) ** (365.25 / lookback_days) - 1
+        "var_95": var_95,  # 5th-percentile daily return (negative for losses)
         "n_returns": len(portfolio_returns),
         # When the metric was computed (UTC ISO-8601). Lets the frontend
         # cache-bust intelligently if it ever wants to compare against a
@@ -623,6 +876,14 @@ async def get_risk_metrics(
             # indices so an operator can see at a glance which dates need
             # rewriting via the snapshot-recompute backfill (F-305 path).
             **({"details": anomaly_details} if anomaly_details else {}),
+            # F-007: per-leg degradation map — additive, forward-compatible.
+            # Frontend can read this to render a precise empty-state caption
+            # ("upstream error" vs "no history yet" vs "benchmark down"). Old
+            # clients that don't read the field continue to work.
+            "degradation": {
+                "value_history": value_history_error_reason,
+                "benchmark": spy_error_reason,
+            },
         },
     }
 

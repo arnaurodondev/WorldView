@@ -88,6 +88,9 @@ class FakeUserRepo(UserRepository):
     async def find_by_email_with_conflicting_external_id(self, email, current_sub):
         return None
 
+    async def find_by_id_any_tenant(self, user_id):
+        return self._user if self._user.id == user_id else None
+
 
 class FakePortfolioRepo(PortfolioRepository):
     def __init__(self, portfolio: Portfolio) -> None:
@@ -118,6 +121,12 @@ class FakePortfolioRepo(PortfolioRepository):
     # PLAN-0046 Wave 4 / T-46-4-03 — required by abstract base.
     async def list_active_root(self):
         return []
+
+    # REQ-002a — required by abstract base.
+    async def find_by_idempotency_key(self, tenant_id, idempotency_key):
+        if self._portfolio.idempotency_key == idempotency_key and self._portfolio.tenant_id == tenant_id:
+            return self._portfolio
+        return None
 
 
 class FakeInstrumentRepo(InstrumentRepository):

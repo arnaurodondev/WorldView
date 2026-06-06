@@ -461,3 +461,109 @@ describe("Chat page — entity context badge", () => {
     expect(screen.queryByText(/Context:/i)).not.toBeInTheDocument();
   });
 });
+
+// ── Tests: Ephemeral thread 404 guard (PLAN-0102 W2 regression) ───────────────
+
+/**
+ * REGRESSION TESTS for the "GET /api/v1/threads/{id} → 404" flash documented
+ * in the 2026-05-28 user report.  Before the fix, clicking "New chat" minted
+ * a client-side UUID, dropped it into `setActiveThreadId`, and TanStack Query
+ * immediately fired `getThread(newId)`.  rag-chat had never heard of the id,
+ * returned 404, and the chat page surfaced a generic error banner — even
+ * though the user had not yet typed a message.
+ *
+ * The fix introduces an ephemeral-id set that gates the per-thread fetch
+ * until the threads list refresh proves the id is server-known (i.e. after
+ * the first SSE stream completes and rag-chat persists the row).  Defensive
+ * 404 handling in the queryFn covers stale-localStorage / browser-back paths
+ * where a thread id appears live but the backend has since dropped it.
+ */
+describe("Chat page — ephemeral thread 404 guard", () => {
+  beforeEach(() => {
+    uuidCounter = 0;
+    vi.clearAllMocks();
+  });
+
+  it("does not call getThread for a freshly-minted client-side thread id", async () => {
+    // Spy on the gateway: getThread must NOT be invoked between clicking
+    // "New chat" and the first user message (i.e. while the id is ephemeral).
+    const { createGateway } = await import("@/lib/gateway");
+    const getThreadSpy = vi.fn().mockResolvedValue({
+      thread_id: "should-not-be-fetched",
+      title: null,
+      owner_id: "user-1",
+      messages: [],
+      created_at: "2026-05-28T00:00:00Z",
+      updated_at: "2026-05-28T00:00:00Z",
+    });
+    vi.mocked(createGateway).mockReturnValue({
+      getThreads: vi.fn().mockResolvedValue(SAMPLE_THREADS),
+      getThread: getThreadSpy,
+      deleteThread: vi.fn(),
+      // WHY cast: the full Gateway type has dozens of methods; we only need
+      // the three the page calls in this code path.  Standard partial-mock
+      // pattern in this file (see "empty state" test above).
+    } as unknown as ReturnType<typeof createGateway>);
+
+    await renderChatPage();
+
+    // Wait for the page to settle (threads list resolved).
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: /start new chat/i })).toBeInTheDocument();
+    });
+
+    // Click "New chat" — this mints a client-side UUID via crypto.randomUUID
+    // (mock-uuid-1) and sets it as the active thread id.
+    fireEvent.click(screen.getByRole("button", { name: /start new chat/i }));
+
+    // Confirm the composer rendered (active thread is set).
+    await waitFor(() => {
+      expect(
+        screen.getByRole("textbox", { name: /chat message input/i }),
+      ).toBeInTheDocument();
+    });
+
+    // The ephemeral id is "mock-uuid-1" — it must NOT appear in any
+    // getThread call.  We give the query a tick to settle so that any
+    // racing fetch would have been observed.
+    await new Promise((r) => setTimeout(r, 50));
+    for (const call of getThreadSpy.mock.calls) {
+      expect(call[0]).not.toBe("mock-uuid-1");
+    }
+  });
+
+  it("does not surface a chat error when getThread returns 404", async () => {
+    // Simulate the stale-localStorage path: the page boots with an
+    // already-selected thread id that the backend no longer knows about.
+    // The queryFn's defensive 404 catch must convert that into a benign
+    // empty-thread stub instead of letting the error banner render.
+    const { createGateway, GatewayError } = await import("@/lib/gateway");
+    vi.mocked(createGateway).mockReturnValue({
+      getThreads: vi.fn().mockResolvedValue(SAMPLE_THREADS),
+      // First click on the existing thread id will fire getThread — it
+      // returns 404 (thread was deleted server-side).
+      getThread: vi.fn().mockRejectedValue(new GatewayError(404, "Not Found")),
+      deleteThread: vi.fn(),
+    } as unknown as ReturnType<typeof createGateway>);
+
+    await renderChatPage();
+
+    // Pick an existing thread from the sidebar — this is the path that
+    // produces the 404 in the wild (id is on the threads list at boot but
+    // the per-thread endpoint says it's gone).
+    await waitFor(() => {
+      expect(screen.getByText("NVDA Q4 earnings analysis")).toBeInTheDocument();
+    });
+    fireEvent.click(screen.getByText("NVDA Q4 earnings analysis"));
+
+    // Give TanStack Query and the catch branch a tick to run.
+    await new Promise((r) => setTimeout(r, 50));
+
+    // The error banner should NOT render — 404 is a benign state.
+    // WHY queryByRole + null check: the ChatErrorBanner is wired to
+    // chatErrorForBanner; if 404 wasn't swallowed, an alert role surfaces.
+    // We additionally assert no "request failed" copy made it onto the page.
+    expect(screen.queryByText(/request failed/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/server error/i)).not.toBeInTheDocument();
+  });
+});

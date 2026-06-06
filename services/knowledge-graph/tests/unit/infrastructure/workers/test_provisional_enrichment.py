@@ -262,7 +262,9 @@ class TestProvisionalEnrichmentWorkerPostCommitOrdering:
 
         captured_calls: list[dict] = []
 
-        async def _capture_append(topic: str, partition_key: str, payload_avro: bytes) -> None:
+        async def _capture_append(
+            topic: str, partition_key: str, payload_avro: bytes, event_id: object = None, **_kw: object
+        ) -> None:
             captured_calls.append({"topic": topic, "partition_key": partition_key, "payload_avro": payload_avro})
 
         with (
@@ -308,7 +310,9 @@ class TestProvisionalEnrichmentWorkerPostCommitOrdering:
 
         partition_keys_appended: list[str] = []
 
-        async def _capture_append(topic: str, partition_key: str, payload_avro: bytes) -> None:
+        async def _capture_append(
+            topic: str, partition_key: str, payload_avro: bytes, event_id: object = None, **_kw: object
+        ) -> None:
             partition_keys_appended.append(partition_key)
 
         # Phase 2: extract returns profiles for both rows
@@ -787,10 +791,13 @@ class TestDirtiedEventPayload:
             _build_dirtied_event,
         )
 
+        from common.ids import new_uuid7  # type: ignore[import-untyped]
         from messaging.kafka.serialization_utils import deserialize_confluent_avro  # type: ignore[import-untyped]
 
         entity_id = _ENTITY_ID
-        raw = _build_dirtied_event(entity_id)
+        # PLAN-0093: _build_dirtied_event requires explicit event_id so the
+        # outbox row is idempotent on replay. UUID7 is monotonic + unique.
+        raw = _build_dirtied_event(entity_id, event_id=new_uuid7())
 
         # Must start with Confluent magic byte 0x00
         assert raw[:1] == b"\x00", "Expected Confluent-Avro wire format (magic byte 0x00)"
@@ -1227,7 +1234,9 @@ class TestPhase3PerRowSessionIsolation:
 
         outbox_partition_keys: list[str] = []
 
-        async def _capture_append(topic: str, partition_key: str, payload_avro: bytes) -> None:
+        async def _capture_append(
+            topic: str, partition_key: str, payload_avro: bytes, event_id: object = None, **_kw: object
+        ) -> None:
             outbox_partition_keys.append(partition_key)
 
         worker = ProvisionalEnrichmentWorker(factory, AsyncMock())

@@ -176,6 +176,23 @@ class Settings(BaseSettings):
     polymarket: PolymarketProviderSettings = PolymarketProviderSettings()
     http_client: HTTPClientSettings = HTTPClientSettings()
 
+    # ── Ticker-news sync worker (PLAN-0106 Wave C-2) ─────────────────────────
+    # TickerNewsSymbolSyncWorker creates one ``eodhd_ticker_news`` Source row per
+    # instrument returned by market-data every ``ticker_news_sync_interval_hours``
+    # hours. The kill-switch is ON by default so fresh deploys immediately
+    # bootstrap per-ticker source rows from the instrument universe.
+    ticker_news_sync_enabled: bool = True
+    ticker_news_sync_interval_hours: float = 6.0
+
+    # ── Internal JWT (for worker → market-data cross-service calls) ───────────
+    # Must match the RS256 private key used by S9 (api-gateway).  When empty
+    # (dev/CI), the worker falls back to an HS256 dev token accepted by
+    # market-data's ``internal_jwt_skip_verification=true`` dev mode.
+    internal_jwt_private_key: SecretStr = SecretStr("")
+
+    # ── Market-data service URL (for worker cross-service calls) ─────────────
+    market_data_url: str = "http://market-data:8003"
+
     # ── Observability (STANDARDS.md §5 — mandatory in every service) ─────────
     service_name: str = "content-ingestion"
     log_level: str = "INFO"

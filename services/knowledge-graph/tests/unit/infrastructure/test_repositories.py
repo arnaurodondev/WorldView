@@ -60,7 +60,7 @@ class TestRelationRepository:
                 decay_class="DURABLE",
                 decay_alpha=0.000950,
                 base_confidence=0.70,
-            )
+            ),
         )
         assert isinstance(result, UUID)
         assert session.execute.call_count == 2
@@ -91,7 +91,7 @@ class TestRelationRepository:
                 decay_class="DURABLE",
                 decay_alpha=0.000950,
                 base_confidence=0.70,
-            )
+            ),
         )
         first_call_sql = str(session.execute.call_args_list[0][0][0])
         assert "advisory" in first_call_sql.lower()
@@ -121,11 +121,57 @@ class TestRelationRepository:
                 decay_class="DURABLE",
                 decay_alpha=0.000950,
                 base_confidence=0.70,
-            )
+            ),
         )
         # The INSERT SQL (second call) must not mention partition_key
         insert_sql = str(session.execute.call_args_list[1][0][0])
         assert "partition_key" not in insert_sql
+
+    def test_upsert_includes_explicit_confidence_value(self) -> None:
+        """PLAN-0093 B-2 T-B-2-04: confidence is an explicit INSERT column.
+
+        Migration 0046 adds a server_default = base_confidence so omitting
+        confidence still produces a NOT-NULL value, but the application
+        writer is required to set it EXPLICITLY so the invariant is visible
+        in the SQL and reviewers immediately see what value is being stored.
+        """
+        import asyncio
+
+        from knowledge_graph.infrastructure.intelligence_db.repositories.relation import (
+            RelationRepository,
+        )
+
+        session = AsyncMock()
+        lock_result = MagicMock()
+        lock_result.fetchone.return_value = None
+        upsert_result = MagicMock()
+        upsert_result.fetchone.return_value = (str(uuid4()),)
+        session.execute = AsyncMock(side_effect=[lock_result, upsert_result])
+
+        repo = RelationRepository(session)
+        asyncio.run(
+            repo.upsert(
+                subject_entity_id=uuid4(),
+                object_entity_id=uuid4(),
+                canonical_type="employs",
+                semantic_mode="RELATION_STATE",
+                decay_class="DURABLE",
+                decay_alpha=0.000950,
+                base_confidence=0.70,
+            ),
+        )
+        insert_sql = str(session.execute.call_args_list[1][0][0])
+        # The column list must include ``confidence`` (not just confidence_stale).
+        # We search for the token between commas/parens to avoid false-positives
+        # from "confidence_stale" matches.
+        assert ", confidence," in insert_sql or "confidence, " in insert_sql, (
+            "expected ``confidence`` column in INSERT — got:\n" + insert_sql
+        )
+        # And the VALUES side must reference :base_confidence twice (one for
+        # the base_confidence column, one for the confidence column).
+        assert (
+            insert_sql.count(":base_confidence") >= 2
+        ), "expected :base_confidence to be bound for both base_confidence and confidence columns"
 
 
 # ---------------------------------------------------------------------------
@@ -152,7 +198,11 @@ class TestRelationEvidenceRepository:
                 extraction_confidence=0.85,
                 source_trust_weight=0.90,
                 evidence_date=_NOW,
-            )
+                # PLAN-0093 B-3 T-B-3-02: claim_id + chunk_id are NOT NULL
+                # (migration 0047).  Writer raises ValueError when omitted.
+                claim_id=uuid4(),
+                chunk_id=uuid4(),
+            ),
         )
         sql = str(session.execute.call_args_list[0][0][0])
         assert "partition_key" not in sql
@@ -175,9 +225,59 @@ class TestRelationEvidenceRepository:
                 extraction_confidence=0.85,
                 source_trust_weight=0.90,
                 evidence_date=_NOW,
-            )
+                claim_id=uuid4(),
+                chunk_id=uuid4(),
+            ),
         )
         assert result == raw_id
+
+    def test_insert_raw_rejects_missing_claim_id(self) -> None:
+        """PLAN-0093 B-3 T-B-3-02: omitting claim_id raises ValueError at the writer."""
+        import asyncio
+
+        from knowledge_graph.infrastructure.intelligence_db.repositories.relation_evidence import (
+            RelationEvidenceRepository,
+        )
+
+        session = _make_session(fetchone_return=(str(uuid4()),))
+        repo = RelationEvidenceRepository(session)
+        with pytest.raises(ValueError, match="claim_id is NOT NULL"):
+            asyncio.run(
+                repo.insert_raw(
+                    subject_entity_id=uuid4(),
+                    object_entity_id=uuid4(),
+                    source_document_id=uuid4(),
+                    extraction_confidence=0.85,
+                    source_trust_weight=0.90,
+                    evidence_date=_NOW,
+                    # claim_id omitted
+                    chunk_id=uuid4(),
+                ),
+            )
+
+    def test_insert_raw_rejects_missing_chunk_id(self) -> None:
+        """PLAN-0093 B-3 T-B-3-02: omitting chunk_id raises ValueError at the writer."""
+        import asyncio
+
+        from knowledge_graph.infrastructure.intelligence_db.repositories.relation_evidence import (
+            RelationEvidenceRepository,
+        )
+
+        session = _make_session(fetchone_return=(str(uuid4()),))
+        repo = RelationEvidenceRepository(session)
+        with pytest.raises(ValueError, match="chunk_id is NOT NULL"):
+            asyncio.run(
+                repo.insert_raw(
+                    subject_entity_id=uuid4(),
+                    object_entity_id=uuid4(),
+                    source_document_id=uuid4(),
+                    extraction_confidence=0.85,
+                    source_trust_weight=0.90,
+                    evidence_date=_NOW,
+                    claim_id=uuid4(),
+                    # chunk_id omitted
+                ),
+            )
 
 
 # ---------------------------------------------------------------------------
@@ -211,7 +311,7 @@ class TestRelationSummaryRepository:
                 model_id="llama3",
                 prompt_template_id=uuid4(),
                 generation_trigger="stale",
-            )
+            ),
         )
         assert session.execute.call_count == 2
         update_sql = str(session.execute.call_args_list[0][0][0])
@@ -240,7 +340,7 @@ class TestContradictionRepository:
                 subject_entity_id=uuid4(),
                 claim_type="analyst_rating",
                 polarity="neutral",
-            )
+            ),
         )
         assert result == []
         # Session should NOT have been called (short-circuit)
@@ -261,7 +361,7 @@ class TestContradictionRepository:
                 subject_entity_id=uuid4(),
                 claim_type="analyst_rating",
                 polarity="positive",
-            )
+            ),
         )
         # SQL uses parameterized :window_days (not hardcoded literal)
         sql = str(session.execute.call_args_list[0][0][0])
@@ -284,7 +384,7 @@ class TestContradictionRepository:
                 subject_entity_id=uuid4(),
                 claim_type="analyst_rating",
                 polarity="positive",
-            )
+            ),
         )
         params = session.execute.call_args_list[0][0][1]
         assert params["opposite_polarity"] == "negative"
@@ -311,7 +411,8 @@ class TestOutboxRepository:
                 topic="graph.state.changed.v1",
                 partition_key="entity-123",
                 payload_avro=b"avro-bytes",
-            )
+                event_id=event_id,
+            ),
         )
         assert result == event_id
 
@@ -606,7 +707,8 @@ class TestCanonicalEntityRepositoryGetBatch:
         )
 
         eid = uuid4()
-        row = (str(eid), "Apple Inc.", "financial_instrument", "US0378331005", "AAPL", "NASDAQ", None)
+        # F-101: row now has 9 columns (added description at [7] and sector at [8])
+        row = (str(eid), "Apple Inc.", "financial_instrument", "US0378331005", "AAPL", "NASDAQ", None, None, None)
 
         session = _make_session(fetchall_return=[row])
         repo = CanonicalEntityRepository(session)
@@ -627,10 +729,11 @@ class TestCanonicalEntityRepositoryGetBatch:
         )
 
         ids = [uuid4(), uuid4(), uuid4()]
+        # F-101: each row has 9 columns — description at [7], sector at [8]
         rows = [
-            (str(ids[0]), "Corp A", "financial_instrument", None, "A", "NYSE", None),
-            (str(ids[1]), "Corp B", "financial_instrument", None, "B", "NYSE", None),
-            (str(ids[2]), "Corp C", "financial_instrument", None, "C", "NYSE", None),
+            (str(ids[0]), "Corp A", "financial_instrument", None, "A", "NYSE", None, None, None),
+            (str(ids[1]), "Corp B", "financial_instrument", None, "B", "NYSE", None, None, None),
+            (str(ids[2]), "Corp C", "financial_instrument", None, "C", "NYSE", None, None, None),
         ]
 
         session = _make_session(fetchall_return=rows)
@@ -653,7 +756,8 @@ class TestCanonicalEntityRepositoryGetBatch:
         existing_id = uuid4()
         missing_id = uuid4()
 
-        row = (str(existing_id), "Only One Corp", "financial_instrument", None, "OOC", "NYSE", None)
+        # F-101: row has 9 columns — description at [7], sector at [8]
+        row = (str(existing_id), "Only One Corp", "financial_instrument", None, "OOC", "NYSE", None, None, None)
         session = _make_session(fetchall_return=[row])
         repo = CanonicalEntityRepository(session)
 
@@ -706,7 +810,7 @@ class TestEntityEmbeddingStateUpsertCoalesce:
                 source_text="text",
                 source_hash="hash",
                 next_refresh_at=_NOW,
-            )
+            ),
         )
 
         call_sql = str(session.execute.call_args[0][0])
@@ -733,7 +837,7 @@ class TestEntityEmbeddingStateUpsertCoalesce:
                 source_text="text",
                 source_hash="hash",
                 next_refresh_at=_NOW,
-            )
+            ),
         )
 
         call_sql = str(session.execute.call_args[0][0])

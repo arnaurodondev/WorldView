@@ -21,9 +21,18 @@ Wiring:
 
 from __future__ import annotations
 
+from prompts.knowledge.narrative_prose import NARRATIVE_PROSE  # type: ignore[import-untyped]
+
 from observability import get_logger  # type: ignore[import-untyped]
 
 logger = get_logger(__name__)  # type: ignore[no-any-return]
+
+# Phase 2C (2026-06-05): the static system prompt now lives in libs/prompts as
+# ``NARRATIVE_PROSE`` so its content_hash + semver can be referenced from log
+# lines / artefacts. Resolved once at import; rendering has zero parameters
+# and produces byte-identical text to the legacy inline string.
+_NARRATIVE_SYSTEM_PROMPT = NARRATIVE_PROSE.render()
+_NARRATIVE_PROMPT_ID = NARRATIVE_PROSE.identifier()
 
 
 class DeepInfraNarrativeChatClient:
@@ -63,15 +72,9 @@ class DeepInfraNarrativeChatClient:
             messages=[
                 # System message anchors the model in a journalistic-prose voice.
                 # Without this anchor the 8B model occasionally emits JSON or
-                # repeats the prompt header verbatim.
-                {
-                    "role": "system",
-                    "content": (
-                        "You are a financial intelligence analyst. Given a structured "
-                        "entity profile, write a concise factual 2-4 sentence narrative. "
-                        "Output ONLY the narrative prose — no JSON, no preamble, no headers."
-                    ),
-                },
+                # repeats the prompt header verbatim. Sourced from libs/prompts
+                # (NARRATIVE_PROSE) so the text is content-addressable.
+                {"role": "system", "content": _NARRATIVE_SYSTEM_PROMPT},
                 {"role": "user", "content": prompt},
             ],
             # NOT json_object: narrative prose is plain text.
@@ -80,6 +83,15 @@ class DeepInfraNarrativeChatClient:
         )
         msg = response.choices[0].message
         text: str = msg.content or ""
+        # Phase 2C: log prompt identifier so any drift in narrative quality can
+        # be tied back to the exact prompt revision used. Debug-level keeps
+        # the noise low on the hot path.
+        logger.debug(
+            "narrative_chat_call_done",
+            model_id=self._model_id,
+            prompt_id=_NARRATIVE_PROMPT_ID,
+            response_chars=len(text),
+        )
         return text.strip()
 
     async def aclose(self) -> None:

@@ -18,6 +18,8 @@ from fastapi import Depends, HTTPException, Request
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator
 
+    from sqlalchemy.ext.asyncio import AsyncSession
+
     from rag_chat.infrastructure.db.repositories.brief_archive_repository import BriefArchiveRepository
     from rag_chat.infrastructure.db.unit_of_work import RagUnitOfWork
 
@@ -36,6 +38,27 @@ async def get_read_uow(request: Request) -> AsyncGenerator[RagUnitOfWork, None]:
 
     async with _RagUoW(request.app.state.read_factory) as uow:
         yield uow
+
+
+async def get_readonly_session(request: Request) -> AsyncGenerator[AsyncSession, None]:
+    """Yield a raw read-only AsyncSession from the read-replica factory (R27).
+
+    PLAN-0089 Wave L-5a QA finding #3 (2026-05-28): canonical alignment with
+    the knowledge-graph ``ReadOnlyDbSessionDep`` pattern. Use this dep when a
+    route's use case needs a raw AsyncSession (e.g. a small COUNT/MAX query)
+    rather than the full ``RagUnitOfWork`` thread/message repository bundle.
+
+    WHY a session-level dep (not RagUnitOfWork): RagUnitOfWork wires
+    thread/message repositories internally and does not expose a public
+    ``.session`` property. For one-off read queries that bypass those
+    repositories, a raw session is the right granularity — matches the KG
+    service's pattern verbatim and removes the per-route ad-hoc helper.
+    """
+    session = request.app.state.read_factory()
+    try:
+        yield session
+    finally:
+        await session.close()
 
 
 async def get_auth_context(request: Request) -> tuple[UUID, UUID]:
@@ -65,6 +88,10 @@ async def get_auth_context(request: Request) -> tuple[UUID, UUID]:
 # at module level (IG-LAYER-002 / R25).
 UoWDep = Annotated[Any, Depends(get_uow)]
 ReadUoWDep = Annotated[Any, Depends(get_read_uow)]
+# WL-5a QA finding #3: canonical raw read-only session dep, mirroring
+# knowledge_graph.api.dependencies.ReadOnlyDbSessionDep. Use for routes
+# whose use case needs a raw AsyncSession (not the full UoW bundle).
+ReadOnlyDbSessionDep = Annotated[Any, Depends(get_readonly_session)]
 AuthContextDep = Annotated[tuple[UUID, UUID], Depends(get_auth_context)]
 
 

@@ -27,7 +27,7 @@ def _make_session() -> AsyncMock:
     return session
 
 
-@pytest.mark.unit
+@pytest.mark.unit()
 class TestKgUsageLogRepository:
     def test_satisfies_llm_usage_log_protocol(self) -> None:
         """LlmUsageLogRepository must be an instance of LlmUsageLogProtocol (R16)."""

@@ -18,7 +18,14 @@ What it does:
        - ``isin          = NULL``
        - ``metadata      = {"source":"discovered","needs_fundamentals_enrichment":true,
                             "discovered_at":"<iso>"}``
-       - ON CONFLICT (entity_id) DO NOTHING — idempotent on replay.
+       - ON CONFLICT (entity_id) DO UPDATE SET ticker, exchange, canonical_name,
+         updated_at — idempotent on replay AND keeps the canonical row in
+         sync with the latest discovered metadata (PLAN-0089 F2 M-017
+         enforcement).  Note: ``metadata`` is intentionally NOT overwritten on
+         conflict so that downstream enrichment from
+         ``InstrumentEntityConsumer`` (which sets the real ``Name`` from EODHD
+         fundamentals) is not clobbered by a replay of the lightweight
+         discovered event.
   2. Insert EXACT alias for ``symbol`` (idempotent via the partial UNIQUE
      index ``uidx_entity_aliases_entity_norm_type``).
   3. Insert TICKER alias for ``symbol`` (same).
@@ -124,7 +131,7 @@ class InstrumentDiscoveredConsumer(BaseKafkaConsumer[None]):
 
             raise MalformedDataError(
                 "market.instrument.discovered.v1: missing or empty 'symbol' — "
-                "cannot create lightweight canonical without a placeholder name"
+                "cannot create lightweight canonical without a placeholder name",
             )
         symbol = str(symbol_raw).strip()
         exchange = value.get("exchange")
@@ -157,13 +164,25 @@ class InstrumentDiscoveredConsumer(BaseKafkaConsumer[None]):
             # the table's gen_random_uuid() default.  Setting entity_id explicitly is
             # essential so the existing InstrumentEntityConsumer can find this row
             # later via entity_repo.get(instrument_id) (idempotency lookup keyed by
-            # primary key).  ON CONFLICT (entity_id) DO NOTHING keeps replays cheap
-            # and prevents overwriting an already-enriched canonical.
+            # primary key).
+            #
+            # PLAN-0089 F2 M-017 enforcement (step 4): the conflict clause now
+            # DOES UPDATE the lightweight columns (ticker / exchange /
+            # canonical_name) so that a re-delivery with corrected metadata
+            # propagates to the canonical row.  ``metadata`` is *not* part of
+            # the SET list — once the downstream InstrumentEntityConsumer has
+            # enriched it from EODHD (clearing ``needs_fundamentals_enrichment``),
+            # a replay must not regress that state.  ``updated_at`` is bumped
+            # so downstream consumers can detect the change.
             await session.execute(
                 text("""
 INSERT INTO canonical_entities (entity_id, canonical_name, entity_type, ticker, exchange, isin, metadata)
 VALUES (:entity_id, :canonical_name, 'financial_instrument', :ticker, :exchange, NULL, :metadata)
-ON CONFLICT (entity_id) DO NOTHING
+ON CONFLICT (entity_id) DO UPDATE SET
+  ticker = EXCLUDED.ticker,
+  exchange = EXCLUDED.exchange,
+  canonical_name = EXCLUDED.canonical_name,
+  updated_at = now()
 """),
                 {
                     "entity_id": str(instrument_id),

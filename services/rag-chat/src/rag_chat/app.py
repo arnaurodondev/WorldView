@@ -20,7 +20,12 @@ from fastapi import FastAPI, Request, Response
 from starlette.middleware.base import BaseHTTPMiddleware
 
 from messaging.valkey.client import ValkeyClient  # type: ignore[import-untyped]
-from observability import configure_logging, get_logger, register_error_handlers  # type: ignore[import-untyped]
+from observability import (  # type: ignore[import-untyped]
+    assert_app_env_or_die,
+    configure_logging,
+    get_logger,
+    register_error_handlers,
+)
 from observability.metrics import (  # type: ignore[import-untyped]
     add_prometheus_middleware,
     create_metrics,
@@ -32,6 +37,7 @@ from rag_chat.api import health as health_router
 from rag_chat.api.routes import briefings as briefings_router
 from rag_chat.api.routes import chat as chat_router
 from rag_chat.api.routes import internal as internal_router
+from rag_chat.api.routes import internal_ai_brief_flag as internal_ai_brief_flag_router
 from rag_chat.api.routes import internal_costs as internal_costs_router
 from rag_chat.api.routes import proposal as proposal_router
 from rag_chat.api.routes import public_briefings as public_briefings_router
@@ -41,6 +47,7 @@ from rag_chat.infrastructure.middleware.internal_jwt import InternalJWTMiddlewar
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator, Awaitable, Callable
+    from datetime import datetime
 
 _VALID_REQUEST_ID_RE = re.compile(r"^[a-zA-Z0-9\-]{1,64}$")
 
@@ -76,6 +83,15 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     )
     log = get_logger("rag_chat.app")  # type: ignore[no-any-return]
 
+    # 1b. Boot-time security guard (PLAN-0093 Wave A-1 / F-LOG-JWT-001).
+    # Refuses to start when JWT verification is disabled AND APP_ENV is unset.
+    # This belongs BEFORE every other lifespan step so a misconfigured
+    # container can never start accepting requests, even on the health endpoint.
+    assert_app_env_or_die(
+        service_name=settings.service_name,
+        internal_jwt_skip_verification=settings.internal_jwt_skip_verification,
+    )
+
     # 2. Tracing — conditional
     if settings.otlp_endpoint:
         configure_tracing(
@@ -98,6 +114,12 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # 4. Valkey client
     valkey_client = ValkeyClient(url=settings.valkey_url)
     app.state.valkey = valkey_client
+
+    # 4b. Deploy-version cache flush (PLAN-0097 W4 T-W4-04).
+    # When ``RAG_CACHE_DEPLOY_TOKEN`` changes between deploys, flush the
+    # completion cache so a new prompt/version is never served a stale answer.
+    # See ``_maybe_flush_completion_cache`` for the full contract.
+    await _maybe_flush_completion_cache(valkey_client, settings.cache_deploy_token, log)
 
     # 5. Provider negative cache
     app.state.provider_cache = {}  # type: ignore[assignment]
@@ -122,7 +144,11 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # Uses read_factory (R23: read-only use case → ReadOnlyUnitOfWork equivalent).
     app.state.citation_cron_task = None
     if settings.citation_cron_enabled:
-        _wire_citation_cron(app, settings, read_factory, log)
+        # MN-1: pass the valkey client so the cron can guard its immediate
+        # first run against crashloop replays (skip if last successful run
+        # was < 1h ago). Valkey is wired in step 4 above so it's always
+        # available here.
+        _wire_citation_cron(app, settings, read_factory, log, valkey_client)  # type: ignore[call-arg]
 
     # 9. InternalJWTMiddleware — fetch JWKS from S9 (PRD-0025)
     jwt_mw = InternalJWTMiddleware(
@@ -155,11 +181,17 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
 def _wire_orchestrator(app: FastAPI, settings: RagChatSettings, valkey_client: ValkeyClient) -> None:
     """Build and attach the ChatPipeline and ChatOrchestratorUseCase to app.state."""
+    # PLAN-0107 / rag-chat-ml-metrics: build (or fetch the cached) MLMetrics
+    # singleton for ``rag-chat``.  All ml-clients adapters that accept a
+    # ``metrics=`` kwarg are wired against this single instance below so the
+    # Grafana dashboard panels (``rag_chat_ml_api_*``) receive real series.
+    from rag_chat.application.metrics.ml_clients import build_ml_metrics
+
+    ml_metrics = build_ml_metrics(settings.service_name)
 
     from rag_chat.application.caching.completion_cache import CompletionCache
     from rag_chat.application.caching.rate_limiter import RateLimiter
     from rag_chat.application.pipeline.circuit_breaker import SourceCircuitBreaker
-    from rag_chat.application.pipeline.fusion import FusionPipeline, GraphEnricher
     from rag_chat.application.pipeline.hyde_expander import HydeExpander
     from rag_chat.application.pipeline.intent_classifier import (
         DeepInfraIntentClassifier,
@@ -201,6 +233,16 @@ def _wire_orchestrator(app: FastAPI, settings: RagChatSettings, valkey_client: V
     _cohere_api_key = settings.cohere_api_key.get_secret_value() if settings.cohere_api_key else None
     _jina_api_key = settings.jina_api_key.get_secret_value() if settings.jina_api_key else None
 
+    # PLAN-0107 Agent-B + fix-up: instantiate the shared CostRecorder once and
+    # inject it into every LLM adapter. The recorder is fault-tolerant by
+    # construction (record() never raises) so a single instance is safe to
+    # share across adapters + the citation judge.
+    from rag_chat.infrastructure.llm.cost_recorder import PrometheusAndDbCostRecorder
+
+    # Use app.state.write_factory — set during the DB-init lifespan step above.
+    cost_recorder = PrometheusAndDbCostRecorder(write_session_factory=app.state.write_factory)
+    app.state.cost_recorder = cost_recorder
+
     providers: list[Any] = []
     if _deepinfra_api_key:
         from rag_chat.infrastructure.llm.deepinfra_adapter import DeepInfraCompletionAdapter
@@ -209,6 +251,19 @@ def _wire_orchestrator(app: FastAPI, settings: RagChatSettings, valkey_client: V
             DeepInfraCompletionAdapter(
                 api_key=_deepinfra_api_key,
                 model=settings.completion_model,  # RAG_CHAT_COMPLETION_MODEL
+                # FIX-LIVE-X (2026-05-25): explicit tool-call budget. Previously
+                # bound to the 30s default; Q6's second turn (Qwen3-235B with a
+                # 5-tool message stack) timed out before HTTP dispatch and the
+                # error surfaced as a blank `llm_first_turn_failed` to the user.
+                chat_with_tools_timeout=settings.deepinfra_tool_call_timeout_seconds,
+                # PLAN-0104 W43 / BP-NEW: same-provider model fallback on
+                # zero-chunk SSE.  Empty string disables (W40 chain failover +
+                # W36 degraded-synthesis fallback still apply).
+                stream_chat_fallback_model=settings.deepinfra_stream_chat_fallback_model or None,
+                # rag-chat-ml-metrics: feed chat_with_tools latency/requests/
+                # status into ``rag_chat_ml_api_*`` so the Grafana panels light up.
+                metrics=ml_metrics,
+                cost_recorder=cost_recorder,  # PLAN-0107: per-call USD cost
             )
         )
     if _openrouter_api_key:
@@ -218,10 +273,19 @@ def _wire_orchestrator(app: FastAPI, settings: RagChatSettings, valkey_client: V
             OpenRouterCompletionAdapter(
                 api_key=_openrouter_api_key,
                 model=settings.openrouter_completion_model,  # RAG_CHAT_OPENROUTER_COMPLETION_MODEL
+                metrics=ml_metrics,  # rag-chat-ml-metrics: dashboard wiring
+                cost_recorder=cost_recorder,  # PLAN-0107: per-call USD cost
             )
         )
     # Ollama is always the emergency fallback
-    providers.append(OllamaCompletionAdapter(base_url=settings.ollama_base_url, model=settings.ollama_completion_model))
+    providers.append(
+        OllamaCompletionAdapter(
+            base_url=settings.ollama_base_url,
+            model=settings.ollama_completion_model,
+            metrics=ml_metrics,  # rag-chat-ml-metrics: dashboard wiring
+            cost_recorder=cost_recorder,  # PLAN-0107: per-call USD cost (≈$0 for local)
+        )
+    )
 
     # PLAN-0052 QA-R6: wire the session-scoped usage logger so every successful
     # or failed LLM call writes a cost row to rag_chat_db.llm_usage_log.
@@ -230,7 +294,16 @@ def _wire_orchestrator(app: FastAPI, settings: RagChatSettings, valkey_client: V
     from rag_chat.infrastructure.db.usage_log_factory import SessionScopedRagUsageLogger
 
     usage_logger = SessionScopedRagUsageLogger(session_factory=app.state.write_factory)
-    llm_chain = LLMProviderChain(providers=providers, valkey=valkey_client, usage_logger=usage_logger)
+    # FIX-LIVE-EE (2026-05-25): wire iter-0 retry config from settings. Default
+    # 2 attempts / 1.0s exponential base yields 1s+2s extra latency in the
+    # worst case before falling back to OpenRouter — well within Q4-class SLOs.
+    llm_chain = LLMProviderChain(
+        providers=providers,
+        valkey=valkey_client,
+        usage_logger=usage_logger,
+        retry_attempts=settings.provider_retry_attempts,
+        retry_backoff_base=settings.provider_retry_backoff_base,
+    )
 
     # Embedding: provider selection via RAG_CHAT_JINA_API_KEY.
     #   - jina_api_key set  → use JinaEmbeddingAdapter directly (1024-dim, ~100-300ms REST)
@@ -250,7 +323,11 @@ def _wire_orchestrator(app: FastAPI, settings: RagChatSettings, valkey_client: V
         from ml_clients.adapters.jina_embedding import JinaEmbeddingAdapter  # type: ignore[import-not-found]
         from ml_clients.dataclasses import EmbeddingInput  # type: ignore[import-not-found]
 
-        _jina = JinaEmbeddingAdapter(api_key=_jina_api_key, task="retrieval.query")
+        # metrics=ml_metrics enables rag_chat_ml_api_{requests_total,latency_seconds,
+        # tokens_in_total,estimated_cost_usd_total} updates inside the adapter's
+        # finally block (jina_embedding.py ~L137).  Without this kwarg the
+        # adapter's `if self._metrics:` guard short-circuits silently.
+        _jina = JinaEmbeddingAdapter(api_key=_jina_api_key, task="retrieval.query", metrics=ml_metrics)
 
         class _JinaEmbeddingAdapter:
             """Thin wrapper around JinaEmbeddingAdapter matching the embed(text) -> list[float] protocol."""
@@ -320,12 +397,18 @@ def _wire_orchestrator(app: FastAPI, settings: RagChatSettings, valkey_client: V
             api_key=_deepinfra_api_key,
             model=settings.deepinfra_classification_model,
             usage_logger=usage_logger,
+            # PLAN-0107 follow-up: per-call USD cost emit (call_site="intent_classifier").
+            cost_recorder=cost_recorder,
         )
     else:
         classifier = OllamaIntentClassifier(
             ollama_base_url=settings.ollama_base_url,
             model=settings.ollama_classification_model,
             usage_logger=usage_logger,
+            # PLAN-0107 follow-up: same recorder so the Grafana panel sees both
+            # providers under one metric name; per-row attribution in
+            # llm_usage_log via the call_site column.
+            cost_recorder=cost_recorder,
         )
 
     # ── Reranker selection (PLAN-0052 platform-QA round 5) ──────────────────
@@ -341,13 +424,24 @@ def _wire_orchestrator(app: FastAPI, settings: RagChatSettings, valkey_client: V
     #      falls back" for the bge-reranker-v2-m3 model name; useful only if
     #      an operator manually `ollama pull`s a working reranker model.
     if _deepinfra_api_key:
-        reranker: Any = DeepInfraReranker(api_key=_deepinfra_api_key)
+        # PLAN-0107 follow-up parity: DeepInfra reranker is token-billed using
+        # the real ``input_tokens`` from the API response. Pricing matrix entry:
+        # ``Qwen/Qwen3-Reranker-0.6B`` at $0.02 per M input tokens.
+        reranker: Any = DeepInfraReranker(api_key=_deepinfra_api_key, cost_recorder=cost_recorder)  # type: ignore[call-arg]
     elif _cohere_api_key:
-        reranker = CohereReranker(api_key=_cohere_api_key)
+        # PLAN-0107 follow-up: Cohere bills per-call ($0.002/search). The
+        # cost_recorder routes through the per_call_usd branch in pricing.py
+        # so each rerank call records the flat fee under call_site="reranker".
+        reranker = CohereReranker(api_key=_cohere_api_key, cost_recorder=cost_recorder)
     else:
-        reranker = BGEReranker(
+        # PLAN-0107 follow-up parity: BGE/Ollama is local (cost $0) but we
+        # still pass the recorder so call_site="reranker" fires — lets ops
+        # spot when the chain has degraded to the local fallback (Ollama
+        # bge-reranker-v2-m3 is missing from the registry in most envs).
+        reranker = BGEReranker(  # type: ignore[call-arg]
             ollama_base_url=settings.ollama_base_url,
             model=settings.ollama_reranker_model,
+            cost_recorder=cost_recorder,
         )
 
     # PLAN-0063 W5-1-00: extract shared components so RetrieveOnlyUseCase can
@@ -365,9 +459,11 @@ def _wire_orchestrator(app: FastAPI, settings: RagChatSettings, valkey_client: V
     _llm_classifier = LLMInjectionClassifier(
         api_key=_deepinfra_api_key,
         model=settings.deepinfra_classification_model,
+        # PLAN-0107 follow-up: per-call USD cost emit (call_site="safety_classifier").
+        cost_recorder=cost_recorder,
     )
 
-    _plan_builder = RetrievalPlanBuilder(cypher_enabled=settings.cypher_enabled)
+    _plan_builder = RetrievalPlanBuilder()
     _hyde = HydeExpander(
         llm_provider=providers[0],
         embedding_client=embedding_client,
@@ -430,8 +526,6 @@ def _wire_orchestrator(app: FastAPI, settings: RagChatSettings, valkey_client: V
         s6_client=s6,
         hyde=_hyde,
         embedder=embedding_client,
-        graph_enricher=GraphEnricher(),
-        fusion=FusionPipeline(),
         reranker=reranker,
         llm_chain=llm_chain,
         persistence=ChatPersistenceUseCase(),
@@ -444,7 +538,11 @@ def _wire_orchestrator(app: FastAPI, settings: RagChatSettings, valkey_client: V
     # tool handlers (search_documents, get_entity_graph, traverse_graph, etc.)
     # execute against real S6/S7/S1 adapters instead of returning [] silently.
     # The s6/s7/s3/s1 instances are created above in this function scope.
-    from rag_chat.application.pipeline.tool_executor import ToolExecutorFactory, build_default_registry
+    from rag_chat.application.pipeline.tool_executor import (
+        ToolExecutorFactory,
+        build_default_registry,
+        validate_registry_parity,
+    )
     from rag_chat.infrastructure.clients.brief_archive_read_adapter import BriefArchiveReadAdapter
     from rag_chat.infrastructure.clients.s3_brief_client import S3BriefClient
     from rag_chat.infrastructure.clients.s7_intelligence_client import S7IntelligenceClient
@@ -484,6 +582,27 @@ def _wire_orchestrator(app: FastAPI, settings: RagChatSettings, valkey_client: V
     app.state.s10_client = s10_client  # PLAN-0082 Wave B
 
     tool_registry = build_default_registry()
+
+    # PLAN-0093 QA P0-1 — startup manifest ↔ handler parity check.
+    # Fail-fast: ToolRegistryDriftError is intentionally NOT caught here so a
+    # misconfigured deploy cannot serve traffic with a silent dormant tool
+    # (this is the GraphEnricher follow-up: a tool listed in the YAML but
+    # missing a handler would otherwise only surface mid-conversation when
+    # the LLM tried to call it).
+    from rag_chat.application.metrics.prometheus import rag_tool_registry_size
+
+    _tool_registry_sizes = validate_registry_parity(tool_registry)
+    rag_tool_registry_size.labels(kind="manifest").set(_tool_registry_sizes["manifest"])
+    rag_tool_registry_size.labels(kind="handled").set(_tool_registry_sizes["handled"])
+    # WHY local logger: _wire_orchestrator does not have the lifespan-scoped
+    # ``log`` binding, so we obtain a module logger here.  structlog.get_logger
+    # is the project-mandated entry point (R10 — never stdlib logging).
+    get_logger("rag_chat.app").info(  # type: ignore[no-any-return]
+        "tool_registry_loaded",
+        manifest_count=_tool_registry_sizes["manifest"],
+        handled_count=_tool_registry_sizes["handled"],
+    )
+
     tool_executor_factory = ToolExecutorFactory(
         registry=tool_registry,
         s3=s3,
@@ -498,9 +617,22 @@ def _wire_orchestrator(app: FastAPI, settings: RagChatSettings, valkey_client: V
     )
     app.state.tool_executor_factory = tool_executor_factory  # expose for tests / health checks
 
+    # PLAN-0107: AgentBudget sourced from env (Settings) rather than dataclass
+    # defaults so ops can tune the ReAct soft budgets per-environment without
+    # redeploying. The dataclass defaults (90s / 3 errors) are kept as the
+    # last-line fallback when Settings has not been touched. Other fields
+    # (max_iterations, max_tokens_*) are still dataclass defaults — they are
+    # less sensitive to env tuning and have not been observed limiting prod.
+    from rag_chat.application.use_cases.chat_orchestrator import AgentBudget
+
+    _agent_budget = AgentBudget(
+        max_tool_latency_s=settings.chat_max_tool_latency_s,
+        max_consecutive_errors=settings.chat_max_consecutive_errors,
+    )
     orchestrator = ChatOrchestratorUseCase(
         pipeline=pipeline,
         tool_executor_factory=tool_executor_factory,
+        budget=_agent_budget,
         # E-12: pass write_factory so ChatAuditLogger can flush to chat_audit_log.
         write_factory=app.state.write_factory,
     )
@@ -554,7 +686,27 @@ def _wire_briefing_uc(app: FastAPI, settings: RagChatSettings, valkey_client: Va
     s6 = S6Client(base_url=settings.s6_base_url, timeout=settings.upstream_timeout_seconds)
     s7 = S7Client(base_url=settings.s7_base_url, timeout=settings.upstream_timeout_seconds)
 
-    context_gatherer = BriefingContextGatherer(s1=s1, s3=s3, s5=s5, s6=s6, s7=s7)
+    # PLAN-0102 W3 follow-up (T-W3-FU-01): wire the new tape + earnings
+    # adapters. Both target the same market-data base URL as S3Client
+    # (s3_base_url already points at market-data) so we re-use it rather
+    # than introducing a new config key for a single host.
+    from rag_chat.infrastructure.clients.earnings_calendar_client import EarningsCalendarClient
+    from rag_chat.infrastructure.clients.market_tape_client import MarketTapeClient
+
+    market_tape_client = MarketTapeClient(base_url=settings.s3_base_url, timeout=settings.upstream_timeout_seconds)
+    earnings_calendar_client = EarningsCalendarClient(
+        base_url=settings.s3_base_url, timeout=settings.upstream_timeout_seconds
+    )
+
+    context_gatherer = BriefingContextGatherer(
+        s1=s1,
+        s3=s3,
+        s5=s5,
+        s6=s6,
+        s7=s7,
+        market_tape=market_tape_client,
+        earnings_calendar=earnings_calendar_client,
+    )
 
     # D-R4-004 (PLAN-0087, 2026-05-09): brief_archive was previously NOT
     # supplied to GenerateBriefingUseCase, so the use case used a
@@ -628,6 +780,13 @@ def _wire_citation_cron(
     # Resolve provider client (L4).
     _deepinfra_api_key = settings.deepinfra_api_key.get_secret_value() if settings.deepinfra_api_key else None
 
+    # rag-chat-ml-metrics: judge runs on the daily cron — wiring the metrics
+    # here makes the judge's request rate / failure rate / model latency
+    # visible on the same ``rag_chat_ml_api_*`` series the dashboard queries.
+    from rag_chat.application.metrics.ml_clients import build_ml_metrics
+
+    _judge_metrics = build_ml_metrics(settings.service_name)
+
     if settings.citation_judge_provider == "deepinfra" and _deepinfra_api_key:
         from rag_chat.infrastructure.llm.deepinfra_adapter import DeepInfraCompletionAdapter
 
@@ -637,6 +796,7 @@ def _wire_citation_cron(
         provider_client: Any = DeepInfraCompletionAdapter(
             api_key=_deepinfra_api_key,
             model=settings.citation_judge_model,  # RAG_CHAT_CITATION_JUDGE_MODEL
+            metrics=_judge_metrics,
         )
     else:
         # Ollama fallback (or explicit citation_judge_provider="ollama").
@@ -645,6 +805,7 @@ def _wire_citation_cron(
         provider_client = OllamaCompletionAdapter(
             base_url=settings.ollama_base_url,
             model=settings.ollama_completion_model,
+            metrics=_judge_metrics,
         )
         if settings.citation_judge_provider == "deepinfra" and not _deepinfra_api_key:
             log.warning(  # type: ignore[no-any-return]
@@ -655,6 +816,10 @@ def _wire_citation_cron(
     judge = CitationJudgeAdapter(
         provider_client,
         timeout_s=settings.citation_call_timeout_s,
+        metrics=_judge_metrics,
+        # PLAN-0107 follow-up: route judge calls through the shared CostRecorder.
+        # call_site label = "citation_judge"; thread_id=None (batch cron job).
+        cost_recorder=app.state.cost_recorder,
     )
 
     # R23: message repository uses read_factory (read-only session).
@@ -666,11 +831,19 @@ def _wire_citation_cron(
         def __init__(self, session_factory: Any) -> None:
             self._session_factory = session_factory
 
-        async def sample_recent_with_citations(self, n: int) -> list:  # type: ignore[override]
+        async def sample_recent_with_citations(  # type: ignore[override]
+            self,
+            n: int,
+            # MN-7: tightened from `Any` to `datetime | None` to surface
+            # callers that forget the kwarg at type-check time. The SQL
+            # adapter now raises if `since is None`, so this annotation is
+            # informational — runtime enforcement lives in the adapter.
+            since: datetime | None = None,
+        ) -> list:
             session = self._session_factory()
             try:
                 repo = SqlAlchemyMessageRepository(session)
-                return await repo.sample_recent_with_citations(n)
+                return await repo.sample_recent_with_citations(n, since=since)
             finally:
                 await session.close()
 
@@ -708,6 +881,94 @@ def _wire_citation_cron(
         "citation_cron_started",
         provider=settings.citation_judge_provider,
         timeout_s=settings.citation_call_timeout_s,
+    )
+
+
+# ─── Deploy-version cache flush (PLAN-0097 W4 T-W4-04) ───────────────────────
+
+# Valkey key remembering the last-seen RAG_CACHE_DEPLOY_TOKEN. Versioned with
+# the same ``rag:v1:`` prefix as the rest of the rag-chat keyspace.
+_DEPLOY_TOKEN_KEY = "rag:v1:cache:deploy_token"  # noqa: S105 — Valkey key, not a credential
+
+# Pattern matching every completion-cache entry across cache-key versions.
+# ``rag:v3:completion:*`` is the current keyspace (completion_cache.py); the
+# ``v*`` wildcard also rescues stale keys from any previous major-version bump
+# that may still be sitting in Valkey.
+_COMPLETION_CACHE_PATTERN = "rag:v*:completion:*"
+
+
+async def _maybe_flush_completion_cache(
+    valkey_client: ValkeyClient,
+    deploy_token: str,
+    log: Any,
+) -> None:
+    """Flush stale completion-cache entries when the deploy token changes.
+
+    Contract (PLAN-0097 W4 T-W4-04):
+      • ``deploy_token == ""``           → feature disabled, no-op.
+      • Stored token == ``deploy_token`` → cache still valid, no-op.
+      • Stored token != ``deploy_token`` (or unset) → call
+        ``valkey.delete_pattern("rag:v*:completion:*")`` to drop every
+        completion-cache entry, then persist the new token.
+
+    All Valkey errors are swallowed and logged at WARNING — a Valkey outage
+    must never block service startup. Worst case: stale cache lingers until
+    the next successful startup with this hook + a token change.
+    """
+    if not deploy_token:
+        # Disabled — operator has not opted in. Nothing to do.
+        return
+
+    try:
+        previous = await valkey_client.get(_DEPLOY_TOKEN_KEY)
+    except Exception as exc:
+        log.warning(  # type: ignore[no-any-return]
+            "deploy_token_read_failed",
+            error=type(exc).__name__,
+            message="skipping cache flush — Valkey GET on deploy-token key failed",
+        )
+        return
+
+    if previous == deploy_token:
+        # Token unchanged — cache is still semantically valid.
+        log.debug(  # type: ignore[no-any-return]
+            "deploy_token_unchanged",
+            token=deploy_token,
+        )
+        return
+
+    # Token changed (or first observation) — flush + persist.
+    try:
+        removed = await valkey_client.delete_pattern(_COMPLETION_CACHE_PATTERN)
+    except Exception as exc:
+        log.warning(  # type: ignore[no-any-return]
+            "completion_cache_flush_failed",
+            error=type(exc).__name__,
+            previous=previous,
+            new=deploy_token,
+            message="cache flush aborted — Valkey SCAN/DEL failed",
+        )
+        return
+
+    try:
+        await valkey_client.set(_DEPLOY_TOKEN_KEY, deploy_token)
+    except Exception as exc:
+        log.warning(  # type: ignore[no-any-return]
+            "deploy_token_persist_failed",
+            error=type(exc).__name__,
+            new=deploy_token,
+            message=(
+                "cache flushed but token not persisted; next startup will flush "
+                "again (idempotent but wastes one cache warmup)"
+            ),
+        )
+        return
+
+    log.info(  # type: ignore[no-any-return]
+        "completion_cache_flushed_on_deploy",
+        previous=previous,
+        new=deploy_token,
+        removed=removed,
     )
 
 
@@ -764,6 +1025,7 @@ def create_app(settings: RagChatSettings | None = None) -> FastAPI:
     app.include_router(public_briefings_router.router)
     app.include_router(internal_costs_router.router)
     app.include_router(internal_router.router)
+    app.include_router(internal_ai_brief_flag_router.router)  # PLAN-0089 Wave L-5a
     app.include_router(proposal_router.router)  # PLAN-0082 Wave B: proposal confirmation
 
     return app

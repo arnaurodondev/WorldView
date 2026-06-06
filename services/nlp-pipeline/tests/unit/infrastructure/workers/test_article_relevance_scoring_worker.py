@@ -477,3 +477,92 @@ class TestUsageLoggerThreading:
         assert kwargs["tokens_in"] > 0
         assert kwargs["latency_ms"] >= 0
         assert kwargs["doc_id"] == _DOC_ID
+
+
+# ── PLAN-0096 W2 T-W2-02: provider-selection contract ────────────────────────
+
+
+class TestProviderSelectionContract:
+    """PLAN-0096 W2 T-W2-02 (deferred PLAN-0095 T-W4-04) — verify the worker
+    selects the external (DeepInfra) provider whenever ``api_key`` is set,
+    and only silently falls back to Ollama when it is empty.
+
+    Background: when ``NLP_PIPELINE_RELEVANCE_SCORING_API_KEY`` was missing
+    from ``docker.env``, the worker defaulted to Ollama; Ollama on a CPU
+    container takes 5-10s per article and frequently OOM-killed under load,
+    starving relevance scoring entirely (BP-563). These tests pin the
+    selection contract so a future regression in the env wiring is caught
+    by unit tests, not by live-stack triage.
+    """
+
+    @pytest.mark.asyncio
+    async def test_constructs_deepinfra_provider_when_api_key_set(self) -> None:
+        """``api_key`` non-empty → ``scoring_cycle`` calls the DeepInfra
+        OpenAI-compatible ``/chat/completions`` endpoint, NOT Ollama's
+        ``/api/generate``. This pins the env-var wiring contract: as long
+        as docker.env exports ``NLP_PIPELINE_RELEVANCE_SCORING_API_KEY``
+        with a non-empty value, the worker must use the external provider.
+        """
+        articles = [(_DOC_ID, "Apple Q4 earnings", "NEWS")]
+        factory, _ = _make_session_factory(articles)
+
+        # Minimal OpenAI-style response so the worker's parse path succeeds
+        # and the test asserts on URL routing rather than score handling.
+        openai_resp = {"choices": [{"message": {"content": json.dumps({"score": 0.7, "reason": "ok"})}}]}
+        resp_mock = MagicMock()
+        resp_mock.json.return_value = openai_resp
+        resp_mock.raise_for_status = MagicMock()
+
+        with patch(_PATCH_HTTPX) as mock_cls:
+            client_mock = AsyncMock()
+            client_mock.post = AsyncMock(return_value=resp_mock)
+            ctx = MagicMock()
+            ctx.__aenter__ = AsyncMock(return_value=client_mock)
+            ctx.__aexit__ = AsyncMock(return_value=False)
+            mock_cls.return_value = ctx
+
+            worker = ArticleRelevanceScoringWorker(
+                nlp_session_factory=factory,
+                ollama_url="http://ollama:11434",
+                model="qwen3:0.6b",  # Ollama fallback model — should NOT be called
+                batch_size=10,
+                timeout_seconds=5,
+                cycle_seconds=1,
+                # Non-empty api_key simulates a healthy
+                # NLP_PIPELINE_RELEVANCE_SCORING_API_KEY wiring.
+                api_key="env-wired-deepinfra-key",
+                api_base_url="https://api.deepinfra.com/v1/openai",
+                api_model_id="meta-llama/Meta-Llama-3.1-8B-Instruct-Turbo",
+            )
+            await worker.scoring_cycle()
+
+        # The single POST must hit DeepInfra, not Ollama.
+        call_url = client_mock.post.call_args[0][0]
+        assert "chat/completions" in call_url, f"Expected DeepInfra /chat/completions, got {call_url}"
+        assert "api/generate" not in call_url, f"MUST NOT fall back to Ollama when api_key set, got {call_url}"
+
+    @pytest.mark.asyncio
+    async def test_falls_back_to_ollama_only_when_api_key_empty(self) -> None:
+        """Defensive sibling assertion: empty ``api_key`` is the ONLY
+        condition that triggers Ollama. If anyone ever inverts the
+        ``if self._api_key:`` predicate this test fails loudly.
+        """
+        articles = [(_DOC_ID, "NVDA news", "NEWS")]
+        factory, _ = _make_session_factory(articles)
+        body = json.dumps({"response": json.dumps({"score": 0.5, "reason": "fallback"})})
+
+        with _mock_http_client(body) as client_mock:
+            worker = ArticleRelevanceScoringWorker(
+                nlp_session_factory=factory,
+                ollama_url="http://ollama:11434",
+                model="qwen3:0.6b",
+                batch_size=10,
+                timeout_seconds=5,
+                cycle_seconds=1,
+                api_key="",  # explicit empty — Ollama fallback path
+            )
+            await worker.scoring_cycle()
+
+        call_url = client_mock.post.call_args[0][0]
+        assert "api/generate" in call_url
+        assert "chat/completions" not in call_url

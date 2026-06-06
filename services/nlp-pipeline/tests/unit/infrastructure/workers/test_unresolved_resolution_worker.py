@@ -24,12 +24,19 @@ from nlp_pipeline.infrastructure.nlp_db.repositories.entity_mention import (
     UnresolvedMentionWithContext,
 )
 from nlp_pipeline.infrastructure.workers.unresolved_resolution_worker import (
-    _CLASSIFICATION_PROMPT_TEMPLATE,
     _CLASSIFICATION_SYSTEM_PROMPT,
     UnresolvedResolutionWorker,
     WorkerStats,
 )
+from prompts.extraction.entity_mention_classification import (
+    ENTITY_MENTION_CLASSIFIER_USER,
+)
 from pydantic import SecretStr
+
+# Phase 2C (2026-06-05): the user-turn template moved from a private worker
+# constant into libs/prompts.  Keep a local alias to preserve the existing
+# snapshot/format assertions below without touching their bodies.
+_CLASSIFICATION_PROMPT_TEMPLATE = ENTITY_MENTION_CLASSIFIER_USER.template
 
 
 def _wrap(mentions: list[Any], context: str | None = None) -> list[UnresolvedMentionWithContext]:

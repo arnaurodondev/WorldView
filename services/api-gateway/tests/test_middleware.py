@@ -19,6 +19,13 @@ def _make_app(valkey_mock, max_requests: int = 3, extra_routes: bool = False) ->
         valkey_client=valkey_mock,
         max_requests=max_requests,
         window_seconds=60,
+        # F-TEST-001..008: PLAN-0094 W1 added three keyword-only sibling limits
+        # to RateLimitMiddleware.  Pass test defaults that match the production
+        # config values in api_gateway.config.Settings (20/20/120) so the test
+        # buckets behave like prod for skip-path / threshold cases.
+        financial_mutation_limit=20,
+        unauthenticated_limit=20,
+        public_feedback_limit=120,
     )
 
     @app.get("/test")

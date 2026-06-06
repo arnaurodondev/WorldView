@@ -50,3 +50,30 @@ repos:
         language: python
         files: '\.avsc$'
         pass_filenames: true
+
+      # PLAN-0099 W4 T-W4-01 (audit §13.1): block residual stash/merge
+      # markers in any staged file. Complements the upstream
+      # `check-merge-conflict` hook by also catching the `Updated
+      # upstream` / `Stashed changes` wording produced by `git stash pop`.
+      - id: scrub-stash-markers
+        name: Reject residual stash/merge conflict markers
+        entry: scripts/hooks/scrub_stash_markers.sh
+        language: script
+        # Apply to every text file; binary files are skipped by `grep`
+        # naturally because their content does not match anchored
+        # regex patterns.
+        types: [text]
+        pass_filenames: true
+
+      # PLAN-0104 W45 (BP-NEW post-leak 2026-06-02): block API-key-shaped
+      # strings in staged additions. Reads `git diff --cached` directly so
+      # it sees only what is about to enter history. Append
+      # `# pragma: allowlist-secret` on a line to opt out (use sparingly,
+      # only for test fixtures with obviously fake values).
+      - id: secret-scan
+        name: Reject staged secrets (API keys, tokens)
+        entry: scripts/hooks/secret-scan.sh
+        language: script
+        # No filenames needed — the hook reads `git diff --cached` itself.
+        pass_filenames: false
+        always_run: true

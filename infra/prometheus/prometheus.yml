@@ -40,6 +40,15 @@ scrape_configs:
       - targets: ["content-store:8005"]
     metrics_path: /metrics
 
+  # PLAN-0028 worker-metrics rollout phase 1 — pilot worker scrape.
+  # The content-ingestion-worker exposes the shared start_metrics_server
+  # ASGI app on :9100 (no host port, only compose-network reachable).
+  - job_name: "content-ingestion-worker"
+    static_configs:
+      - targets: ["content-ingestion-worker:9100"]
+    metrics_path: /metrics
+    scrape_interval: 15s
+
   - job_name: "api-gateway"
     static_configs:
       - targets: ["api-gateway:8000"]
@@ -55,6 +64,15 @@ scrape_configs:
       - targets: ["knowledge-graph:8007"]
     metrics_path: /metrics
 
+  # FIX-LIVE-C / F-LIVE-006-B: scheduler is a separate process (R22) without
+  # a FastAPI app — it exposes its prometheus_client gauges on :9108 via
+  # ``start_http_server`` so backlog metrics (path_insight_explanation_pending_total,
+  # relation_summary_backlog, summary_worker_stuck_relations_total) are scraped.
+  - job_name: "knowledge-graph-scheduler"
+    static_configs:
+      - targets: ["knowledge-graph-scheduler:9108"]
+    metrics_path: /metrics
+
   - job_name: "rag-chat"
     static_configs:
       - targets: ["rag-chat:8008"]
@@ -64,6 +82,46 @@ scrape_configs:
     static_configs:
       - targets: ["alert:8010"]
     metrics_path: /metrics
+
+  # ── Outbox dispatchers (Phase 2 worker-metrics) ────────────────────────
+  # Each dispatcher runs as an independent process (R22) without a FastAPI
+  # app and exposes prometheus_client counters on :9100 via the shared
+  # ``start_metrics_server`` helper from libs/observability.
+  - job_name: "portfolio-dispatcher"
+    static_configs:
+      - targets: ["portfolio-dispatcher:9100"]
+    metrics_path: /metrics
+    scrape_interval: 15s
+
+  - job_name: "content-ingestion-dispatcher"
+    static_configs:
+      - targets: ["content-ingestion-dispatcher:9100"]
+    metrics_path: /metrics
+    scrape_interval: 15s
+
+  - job_name: "content-store-dispatcher"
+    static_configs:
+      - targets: ["content-store-dispatcher:9100"]
+    metrics_path: /metrics
+    scrape_interval: 15s
+
+  - job_name: "nlp-pipeline-dispatcher"
+    static_configs:
+      - targets: ["nlp-pipeline-dispatcher:9100"]
+    metrics_path: /metrics
+    scrape_interval: 15s
+
+  - job_name: "market-ingestion-dispatcher"
+    static_configs:
+      - targets: ["market-ingestion-dispatcher:9100"]
+    metrics_path: /metrics
+    scrape_interval: 15s
+
+  - job_name: "knowledge-graph-dispatcher"
+    static_configs:
+      - targets: ["knowledge-graph-dispatcher:9100"]
+    metrics_path: /metrics
+    scrape_interval: 15s
 
   # ── Observability stack self-monitoring ────────────────────────────────
   # Without these, Loki/Tempo/AlertManager outages are undetectable — no
@@ -95,6 +153,165 @@ scrape_configs:
   - job_name: "valkey"
     static_configs:
       - targets: ["redis_exporter:9121"]
+    metrics_path: /metrics
+
+  # ── Phase 3 worker /metrics endpoints (port 9100) ─────────────────────────
+  # These are non-HTTP background workers/consumers that now expose Prometheus
+  # /metrics via the `start_metrics_server` helper from libs/observability.
+  - job_name: "alert-intelligence-consumer"
+    static_configs:
+      - targets: ["alert-intelligence-consumer:9100"]
+    metrics_path: /metrics
+
+  - job_name: "market-ingestion-worker"
+    static_configs:
+      - targets: ["market-ingestion-worker:9100"]
+    metrics_path: /metrics
+
+  - job_name: "portfolio-brokerage-sync"
+    static_configs:
+      - targets: ["portfolio-brokerage-sync:9100"]
+    metrics_path: /metrics
+
+  - job_name: "knowledge-graph-path-insight-worker"
+    static_configs:
+      - targets: ["knowledge-graph-path-insight-worker:9100"]
+    metrics_path: /metrics
+
+  - job_name: "knowledge-graph-provisional-queued-consumer"
+    static_configs:
+      - targets: ["knowledge-graph-provisional-queued-consumer:9100"]
+    metrics_path: /metrics
+
+  # ── Phase 3b worker /metrics endpoints (port 9100) ────────────────────────
+  - job_name: "content-store-consumer"
+    static_configs:
+      - targets: ["content-store-consumer:9100"]
+    metrics_path: /metrics
+
+  - job_name: "content-store-dedup-consumer"
+    static_configs:
+      - targets: ["content-store-dedup-consumer:9100"]
+    metrics_path: /metrics
+
+  - job_name: "nlp-pipeline-article-consumer"
+    static_configs:
+      - targets: ["nlp-pipeline-article-consumer:9100"]
+    metrics_path: /metrics
+
+  - job_name: "nlp-pipeline-watchlist-consumer"
+    static_configs:
+      - targets: ["nlp-pipeline-watchlist-consumer:9100"]
+    metrics_path: /metrics
+
+  - job_name: "nlp-pipeline-document-deletion-consumer"
+    static_configs:
+      - targets: ["nlp-pipeline-document-deletion-consumer:9100"]
+    metrics_path: /metrics
+
+  - job_name: "nlp-pipeline-embedding-retry-worker"
+    static_configs:
+      - targets: ["nlp-pipeline-embedding-retry-worker:9100"]
+    metrics_path: /metrics
+
+  - job_name: "nlp-pipeline-unresolved-resolution-worker"
+    static_configs:
+      - targets: ["nlp-pipeline-unresolved-resolution-worker:9100"]
+    metrics_path: /metrics
+
+  - job_name: "nlp-pipeline-price-impact-worker"
+    static_configs:
+      - targets: ["nlp-pipeline-price-impact-worker:9100"]
+    metrics_path: /metrics
+
+  - job_name: "nlp-pipeline-relevance-scoring"
+    static_configs:
+      - targets: ["nlp-pipeline-relevance-scoring:9100"]
+    metrics_path: /metrics
+
+  - job_name: "knowledge-graph-enriched-consumer"
+    static_configs:
+      - targets: ["knowledge-graph-enriched-consumer:9100"]
+    metrics_path: /metrics
+
+  - job_name: "knowledge-graph-fundamentals-consumer"
+    static_configs:
+      - targets: ["knowledge-graph-fundamentals-consumer:9100"]
+    metrics_path: /metrics
+
+  - job_name: "knowledge-graph-entity-consumer"
+    static_configs:
+      - targets: ["knowledge-graph-entity-consumer:9100"]
+    metrics_path: /metrics
+
+  - job_name: "knowledge-graph-instrument-consumer"
+    static_configs:
+      - targets: ["knowledge-graph-instrument-consumer:9100"]
+    metrics_path: /metrics
+
+  - job_name: "knowledge-graph-temporal-event-consumer"
+    static_configs:
+      - targets: ["knowledge-graph-temporal-event-consumer:9100"]
+    metrics_path: /metrics
+
+  - job_name: "knowledge-graph-economic-events-dataset-consumer"
+    static_configs:
+      - targets: ["knowledge-graph-economic-events-dataset-consumer:9100"]
+    metrics_path: /metrics
+
+  - job_name: "knowledge-graph-earnings-calendar-dataset-consumer"
+    static_configs:
+      - targets: ["knowledge-graph-earnings-calendar-dataset-consumer:9100"]
+    metrics_path: /metrics
+
+  - job_name: "knowledge-graph-macro-indicator-dataset-consumer"
+    static_configs:
+      - targets: ["knowledge-graph-macro-indicator-dataset-consumer:9100"]
+    metrics_path: /metrics
+
+  - job_name: "knowledge-graph-insider-transactions-dataset-consumer"
+    static_configs:
+      - targets: ["knowledge-graph-insider-transactions-dataset-consumer:9100"]
+    metrics_path: /metrics
+
+  - job_name: "market-data-fundamentals-consumer"
+    static_configs:
+      - targets: ["market-data-fundamentals-consumer:9100"]
+    metrics_path: /metrics
+
+  - job_name: "market-data-quotes-consumer"
+    static_configs:
+      - targets: ["market-data-quotes-consumer:9100"]
+    metrics_path: /metrics
+
+  - job_name: "market-data-prediction-market-consumer"
+    static_configs:
+      - targets: ["market-data-prediction-market-consumer:9100"]
+    metrics_path: /metrics
+
+  - job_name: "market-data-intraday-resampling-consumer"
+    static_configs:
+      - targets: ["market-data-intraday-resampling-consumer:9100"]
+    metrics_path: /metrics
+
+  - job_name: "market-ingestion-scheduler"
+    static_configs:
+      - targets: ["market-ingestion-scheduler:9100"]
+    metrics_path: /metrics
+
+  - job_name: "portfolio-snapshot-worker"
+    static_configs:
+      - targets: ["portfolio-snapshot-worker:9100"]
+    metrics_path: /metrics
+
+  - job_name: "alert-watchlist-consumer"
+    static_configs:
+      - targets: ["alert-watchlist-consumer:9100"]
+    metrics_path: /metrics
+
+  - job_name: "alert-email-scheduler"
+    static_configs:
+      - targets: ["alert-email-scheduler:9100"]
     metrics_path: /metrics
 
   # ── Pushgateway — synthetic monitor probe results ─────────────────────────

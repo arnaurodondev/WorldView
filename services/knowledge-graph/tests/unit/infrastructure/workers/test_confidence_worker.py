@@ -98,10 +98,10 @@ class TestConfidenceWorkerRun:
 
         with (
             patch(
-                "knowledge_graph.infrastructure.intelligence_db.repositories.relation.RelationRepository"
+                "knowledge_graph.infrastructure.intelligence_db.repositories.relation.RelationRepository",
             ) as MockRelRepo,
             patch(
-                "knowledge_graph.infrastructure.intelligence_db.repositories.relation_evidence.RelationEvidenceRepository"
+                "knowledge_graph.infrastructure.intelligence_db.repositories.relation_evidence.RelationEvidenceRepository",
             ) as MockEvRepo,
             patch("knowledge_graph.infrastructure.intelligence_db.repositories.contradiction.ContradictionRepository"),
         ):

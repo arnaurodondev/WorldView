@@ -1,31 +1,15 @@
-"""Per-request internal JWT propagation via asyncio ContextVar.
+"""Backward-compatible re-export of the JWT ContextVar.
 
-WHY CONTEXTVAR: S6Client and S7Client are singleton objects created at startup.
-They cannot carry per-request state directly. Python's ContextVar propagates
-correctly across asyncio Task boundaries — each request gets its own context.
-
-The InternalJWTMiddleware sets the ContextVar after validating the incoming JWT.
-BaseUpstreamClient reads it and adds X-Internal-JWT to all outgoing calls.
-This pattern avoids threading request state through every method signature.
+The canonical module is now ``rag_chat.application.auth_context`` (moved
+in F-ARCH-001 to satisfy LAYER-APP-ISOLATION — the application-layer worker
+needs to import the setter, and the application layer must not depend on
+infrastructure). This shim keeps the original import path working for the
+many api routes, infrastructure clients, and tests that still import from
+the old location.
 """
 
 from __future__ import annotations
 
-import contextvars
+from rag_chat.application.auth_context import get_current_jwt, set_current_jwt
 
-# Holds the X-Internal-JWT token for the current request.
-# Default None means "no JWT set" (e.g., health checks, startup probes).
-_current_internal_jwt: contextvars.ContextVar[str | None] = contextvars.ContextVar(
-    "_current_internal_jwt",
-    default=None,
-)
-
-
-def set_current_jwt(token: str | None) -> None:
-    """Set the internal JWT for the current async context (call from middleware)."""
-    _current_internal_jwt.set(token)
-
-
-def get_current_jwt() -> str | None:
-    """Get the internal JWT for the current async context (call from clients)."""
-    return _current_internal_jwt.get()
+__all__ = ["get_current_jwt", "set_current_jwt"]

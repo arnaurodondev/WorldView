@@ -293,10 +293,12 @@ WHERE queue_id = :queue_id
         # ── Step 5: emit entity.dirtied.v1 after successful commit ──────────
         if entity_id and self._producer:
             try:
+                from common.ids import new_uuid7  # type: ignore[import-untyped]
+
                 self._producer.produce_bytes(
                     topic=self._dirtied_topic,
                     key=str(entity_id).encode(),
-                    value=core._build_dirtied_event(entity_id),
+                    value=core._build_dirtied_event(entity_id, event_id=new_uuid7()),
                 )
             except Exception:
                 logger.warning(  # type: ignore[no-any-return]

@@ -111,10 +111,10 @@ class TestTemporalEventConsumerMessageMapping:
 
         with (
             patch(
-                "knowledge_graph.infrastructure.messaging.consumers.temporal_event_consumer.TemporalEventRepository"
+                "knowledge_graph.infrastructure.messaging.consumers.temporal_event_consumer.TemporalEventRepository",
             ) as MockTE,
             patch(
-                "knowledge_graph.infrastructure.messaging.consumers.temporal_event_consumer.EntityEventExposureRepository"
+                "knowledge_graph.infrastructure.messaging.consumers.temporal_event_consumer.EntityEventExposureRepository",
             ) as MockEE,
         ):
             mock_te = AsyncMock()
@@ -143,10 +143,10 @@ class TestTemporalEventConsumerMessageMapping:
 
         with (
             patch(
-                "knowledge_graph.infrastructure.messaging.consumers.temporal_event_consumer.TemporalEventRepository"
+                "knowledge_graph.infrastructure.messaging.consumers.temporal_event_consumer.TemporalEventRepository",
             ) as MockTE,
             patch(
-                "knowledge_graph.infrastructure.messaging.consumers.temporal_event_consumer.EntityEventExposureRepository"
+                "knowledge_graph.infrastructure.messaging.consumers.temporal_event_consumer.EntityEventExposureRepository",
             ),
         ):
             mock_te = AsyncMock()
@@ -172,10 +172,10 @@ class TestTemporalEventConsumerMessageMapping:
 
         with (
             patch(
-                "knowledge_graph.infrastructure.messaging.consumers.temporal_event_consumer.TemporalEventRepository"
+                "knowledge_graph.infrastructure.messaging.consumers.temporal_event_consumer.TemporalEventRepository",
             ) as MockTE,
             patch(
-                "knowledge_graph.infrastructure.messaging.consumers.temporal_event_consumer.EntityEventExposureRepository"
+                "knowledge_graph.infrastructure.messaging.consumers.temporal_event_consumer.EntityEventExposureRepository",
             ),
         ):
             mock_te = AsyncMock()
@@ -204,10 +204,10 @@ class TestTemporalEventConsumerEmptyStringConversions:
 
         with (
             patch(
-                "knowledge_graph.infrastructure.messaging.consumers.temporal_event_consumer.TemporalEventRepository"
+                "knowledge_graph.infrastructure.messaging.consumers.temporal_event_consumer.TemporalEventRepository",
             ) as MockTE,
             patch(
-                "knowledge_graph.infrastructure.messaging.consumers.temporal_event_consumer.EntityEventExposureRepository"
+                "knowledge_graph.infrastructure.messaging.consumers.temporal_event_consumer.EntityEventExposureRepository",
             ),
         ):
             mock_te = AsyncMock()
@@ -227,10 +227,10 @@ class TestTemporalEventConsumerEmptyStringConversions:
 
         with (
             patch(
-                "knowledge_graph.infrastructure.messaging.consumers.temporal_event_consumer.TemporalEventRepository"
+                "knowledge_graph.infrastructure.messaging.consumers.temporal_event_consumer.TemporalEventRepository",
             ) as MockTE,
             patch(
-                "knowledge_graph.infrastructure.messaging.consumers.temporal_event_consumer.EntityEventExposureRepository"
+                "knowledge_graph.infrastructure.messaging.consumers.temporal_event_consumer.EntityEventExposureRepository",
             ),
         ):
             mock_te = AsyncMock()
@@ -250,10 +250,10 @@ class TestTemporalEventConsumerEmptyStringConversions:
 
         with (
             patch(
-                "knowledge_graph.infrastructure.messaging.consumers.temporal_event_consumer.TemporalEventRepository"
+                "knowledge_graph.infrastructure.messaging.consumers.temporal_event_consumer.TemporalEventRepository",
             ) as MockTE,
             patch(
-                "knowledge_graph.infrastructure.messaging.consumers.temporal_event_consumer.EntityEventExposureRepository"
+                "knowledge_graph.infrastructure.messaging.consumers.temporal_event_consumer.EntityEventExposureRepository",
             ),
         ):
             mock_te = AsyncMock()
@@ -274,10 +274,10 @@ class TestTemporalEventConsumerEmptyStringConversions:
 
         with (
             patch(
-                "knowledge_graph.infrastructure.messaging.consumers.temporal_event_consumer.TemporalEventRepository"
+                "knowledge_graph.infrastructure.messaging.consumers.temporal_event_consumer.TemporalEventRepository",
             ) as MockTE,
             patch(
-                "knowledge_graph.infrastructure.messaging.consumers.temporal_event_consumer.EntityEventExposureRepository"
+                "knowledge_graph.infrastructure.messaging.consumers.temporal_event_consumer.EntityEventExposureRepository",
             ),
         ):
             mock_te = AsyncMock()
@@ -297,10 +297,10 @@ class TestTemporalEventConsumerEmptyStringConversions:
 
         with (
             patch(
-                "knowledge_graph.infrastructure.messaging.consumers.temporal_event_consumer.TemporalEventRepository"
+                "knowledge_graph.infrastructure.messaging.consumers.temporal_event_consumer.TemporalEventRepository",
             ) as MockTE,
             patch(
-                "knowledge_graph.infrastructure.messaging.consumers.temporal_event_consumer.EntityEventExposureRepository"
+                "knowledge_graph.infrastructure.messaging.consumers.temporal_event_consumer.EntityEventExposureRepository",
             ),
         ):
             mock_te = AsyncMock()
@@ -333,10 +333,10 @@ class TestTemporalEventConsumerExposures:
 
         with (
             patch(
-                "knowledge_graph.infrastructure.messaging.consumers.temporal_event_consumer.TemporalEventRepository"
+                "knowledge_graph.infrastructure.messaging.consumers.temporal_event_consumer.TemporalEventRepository",
             ) as MockTE,
             patch(
-                "knowledge_graph.infrastructure.messaging.consumers.temporal_event_consumer.EntityEventExposureRepository"
+                "knowledge_graph.infrastructure.messaging.consumers.temporal_event_consumer.EntityEventExposureRepository",
             ) as MockEE,
         ):
             mock_te = AsyncMock()
@@ -361,13 +361,13 @@ class TestTemporalEventConsumerExposures:
 
         with (
             patch(
-                "knowledge_graph.infrastructure.messaging.consumers.temporal_event_consumer.TemporalEventRepository"
+                "knowledge_graph.infrastructure.messaging.consumers.temporal_event_consumer.TemporalEventRepository",
             ) as MockTE,
             patch(
-                "knowledge_graph.infrastructure.messaging.consumers.temporal_event_consumer.EntityEventExposureRepository"
+                "knowledge_graph.infrastructure.messaging.consumers.temporal_event_consumer.EntityEventExposureRepository",
             ) as MockEE,
             patch(
-                "knowledge_graph.infrastructure.messaging.consumers.temporal_event_consumer._get_entity_type"
+                "knowledge_graph.infrastructure.messaging.consumers.temporal_event_consumer._get_entity_type",
             ) as mock_get_type,
         ):
             mock_te = AsyncMock()
@@ -391,10 +391,10 @@ class TestTemporalEventConsumerExposures:
 
         with (
             patch(
-                "knowledge_graph.infrastructure.messaging.consumers.temporal_event_consumer.TemporalEventRepository"
+                "knowledge_graph.infrastructure.messaging.consumers.temporal_event_consumer.TemporalEventRepository",
             ) as MockTE,
             patch(
-                "knowledge_graph.infrastructure.messaging.consumers.temporal_event_consumer.EntityEventExposureRepository"
+                "knowledge_graph.infrastructure.messaging.consumers.temporal_event_consumer.EntityEventExposureRepository",
             ) as MockEE,
         ):
             mock_te = AsyncMock()
@@ -427,10 +427,10 @@ class TestTemporalEventConsumerGlobalScope:
 
         with (
             patch(
-                "knowledge_graph.infrastructure.messaging.consumers.temporal_event_consumer.TemporalEventRepository"
+                "knowledge_graph.infrastructure.messaging.consumers.temporal_event_consumer.TemporalEventRepository",
             ) as MockTE,
             patch(
-                "knowledge_graph.infrastructure.messaging.consumers.temporal_event_consumer.EntityEventExposureRepository"
+                "knowledge_graph.infrastructure.messaging.consumers.temporal_event_consumer.EntityEventExposureRepository",
             ) as MockEE,
             patch(
                 "knowledge_graph.infrastructure.messaging.consumers.temporal_event_consumer._get_entity_type",
@@ -464,10 +464,10 @@ class TestTemporalEventConsumerGlobalScope:
 
         with (
             patch(
-                "knowledge_graph.infrastructure.messaging.consumers.temporal_event_consumer.TemporalEventRepository"
+                "knowledge_graph.infrastructure.messaging.consumers.temporal_event_consumer.TemporalEventRepository",
             ) as MockTE,
             patch(
-                "knowledge_graph.infrastructure.messaging.consumers.temporal_event_consumer.EntityEventExposureRepository"
+                "knowledge_graph.infrastructure.messaging.consumers.temporal_event_consumer.EntityEventExposureRepository",
             ) as MockEE,
             patch(
                 "knowledge_graph.infrastructure.messaging.consumers.temporal_event_consumer._get_entity_type",
@@ -495,10 +495,10 @@ class TestTemporalEventConsumerGlobalScope:
 
         with (
             patch(
-                "knowledge_graph.infrastructure.messaging.consumers.temporal_event_consumer.TemporalEventRepository"
+                "knowledge_graph.infrastructure.messaging.consumers.temporal_event_consumer.TemporalEventRepository",
             ) as MockTE,
             patch(
-                "knowledge_graph.infrastructure.messaging.consumers.temporal_event_consumer.EntityEventExposureRepository"
+                "knowledge_graph.infrastructure.messaging.consumers.temporal_event_consumer.EntityEventExposureRepository",
             ) as MockEE,
             patch(
                 "knowledge_graph.infrastructure.messaging.consumers.temporal_event_consumer._get_entity_type",
@@ -526,10 +526,10 @@ class TestTemporalEventConsumerGlobalScope:
 
         with (
             patch(
-                "knowledge_graph.infrastructure.messaging.consumers.temporal_event_consumer.TemporalEventRepository"
+                "knowledge_graph.infrastructure.messaging.consumers.temporal_event_consumer.TemporalEventRepository",
             ) as MockTE,
             patch(
-                "knowledge_graph.infrastructure.messaging.consumers.temporal_event_consumer.EntityEventExposureRepository"
+                "knowledge_graph.infrastructure.messaging.consumers.temporal_event_consumer.EntityEventExposureRepository",
             ) as MockEE,
             patch(
                 "knowledge_graph.infrastructure.messaging.consumers.temporal_event_consumer._get_entity_type",
@@ -573,10 +573,10 @@ class TestTemporalEventConsumerGlobalScope:
 
         with (
             patch(
-                "knowledge_graph.infrastructure.messaging.consumers.temporal_event_consumer.TemporalEventRepository"
+                "knowledge_graph.infrastructure.messaging.consumers.temporal_event_consumer.TemporalEventRepository",
             ) as MockTE,
             patch(
-                "knowledge_graph.infrastructure.messaging.consumers.temporal_event_consumer.EntityEventExposureRepository"
+                "knowledge_graph.infrastructure.messaging.consumers.temporal_event_consumer.EntityEventExposureRepository",
             ) as MockEE,
             patch(
                 "knowledge_graph.infrastructure.messaging.consumers.temporal_event_consumer._get_entity_type",

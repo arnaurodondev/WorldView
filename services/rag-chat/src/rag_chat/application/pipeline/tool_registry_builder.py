@@ -6,7 +6,55 @@ All callers import build_default_registry from tool_executor (re-exported there)
 
 from __future__ import annotations
 
+from typing import Any, cast
+
 from tools.tool_registry import ToolRegistry  # type: ignore[import-untyped,import-not-found]
+
+
+class ToolRegistryDriftError(RuntimeError):
+    """Raised at startup when the YAML manifest and handler registry disagree.
+
+    Fail-fast guard (PLAN-0093 QA P0-1, GraphEnricher dormant-tool follow-up):
+    a tool that exists in the manifest with no registered handler — or vice
+    versa — would otherwise only surface when the LLM tried to call it and
+    the user saw an opaque "tool unavailable" message.  Raising at boot
+    guarantees the orchestrator can never serve traffic while in this state.
+    """
+
+
+def validate_registry_parity(registry: ToolRegistry) -> dict[str, int]:
+    """Compare the YAML manifest against the registered handler set.
+
+    Returns the sizes ``{"manifest": N, "handled": M}`` for caller-side
+    metric emission.  Raises :class:`ToolRegistryDriftError` if either side
+    has an orphan — a tool in the manifest with no handler, or a registered
+    handler with no manifest entry.
+
+    The manifest is loaded via :meth:`ToolRegistry.load_manifest` (the same
+    loader the architecture tests use), so a single source of truth is
+    consulted both for parity here and for the R29 sync test.
+    """
+    manifest_doc = registry.load_manifest()
+    # The manifest schema is ``{"version": str, "tools": [{"name": str, ...}, ...]}``.
+    # We cast through Any because ``load_manifest`` returns ``dict[str, Any]`` and
+    # the entries are heterogeneous dicts.
+    tools_list = cast("list[dict[str, Any]]", manifest_doc.get("tools", []))
+    manifest_tools = {entry["name"] for entry in tools_list}
+    handled_tools = {spec.name for spec in registry.all_specs()}
+
+    # Orphan in manifest = YAML advertises a tool that no handler is registered for.
+    # Orphan in handlers = registry has a handler that the YAML manifest does not
+    # describe (so the LLM would never be told it exists).
+    orphan_in_manifest = manifest_tools - handled_tools
+    orphan_in_handlers = handled_tools - manifest_tools
+
+    if orphan_in_manifest or orphan_in_handlers:
+        raise ToolRegistryDriftError(
+            "Tool registry drift detected. "
+            f"In manifest only: {sorted(orphan_in_manifest)}. "
+            f"Handled only: {sorted(orphan_in_handlers)}."
+        )
+    return {"manifest": len(manifest_tools), "handled": len(handled_tools)}
 
 
 def build_default_registry() -> ToolRegistry:
@@ -72,9 +120,17 @@ def build_default_registry() -> ToolRegistry:
         ToolSpec(
             name="get_fundamentals_history",
             description=(
+                # PLAN-0097 T-W3-03: reciprocal anti-pattern callout. Iter-9
+                # chat-eval showed the LLM looping this singular tool for
+                # multi-ticker comparisons; the warning routes those cases to
+                # `get_fundamentals_history_batch` (5-10x faster).
                 "Fetches quarterly fundamental metrics (revenue, gross profit, net income, "
-                "EPS, P/E ratio, market cap) for a ticker over N periods. Use when the user "
-                "asks about revenue trends, EPS growth, or multi-quarter financial performance."
+                "EPS, P/E ratio, market cap) for a SINGLE ticker over N periods. Use when the "
+                "user asks about revenue trends, EPS growth, or multi-quarter financial "
+                "performance for ONE company. "
+                "**Do NOT call this in a loop over multiple tickers — use "
+                "`get_fundamentals_history_batch` instead.** Calling this tool N times in "
+                "sequence is 5-10x slower than one batch call and is a tool-selection bug."
             ),
             parameters=[
                 ParameterSpec(
@@ -86,7 +142,21 @@ def build_default_registry() -> ToolRegistry:
                 ParameterSpec(
                     name="periods",
                     type="integer",
-                    description="Number of quarters to return (1-20). Default 8.",
+                    description="Number of periods to return (1-20). Default 8.",
+                    required=False,
+                ),
+                # F-LIVE-P (2026-05-26): explicit periodicity selector. The LLM
+                # almost always wants quarterly, so we keep that as the default
+                # and document the rare annual case in the description. The
+                # handler validates and falls back to "quarterly" on anything
+                # outside the allowlist.
+                ParameterSpec(
+                    name="period_type",
+                    type="string",
+                    description=(
+                        'Periodicity of returned rows. Allowed values: "quarterly" '
+                        '(default), "annual". Any other value falls back to "quarterly".'
+                    ),
                     required=False,
                 ),
             ],
@@ -157,14 +227,19 @@ def build_default_registry() -> ToolRegistry:
             name="get_entity_graph",
             description=(
                 "Retrieves the egocentric knowledge graph for a SINGLE named entity — its immediate "
-                "neighbours, relationships, and confidence scores. Use for questions about ONE entity "
-                "like 'who are X's partners', 'what are X's subsidiaries', 'who does X compete with'. "
-                "For questions about the relationship BETWEEN two entities (e.g. 'how is X connected to Y', "
-                "'what is the relation between X and Y'), use traverse_graph instead — it is designed "
-                "for cross-entity path finding and is more reliable for two-entity queries. "
-                "If this tool returns empty or sparse results for a well-known entity, you may supplement "
-                "with training knowledge but MUST label it 'Based on public knowledge: …' — never invent "
-                "confidence scores or graph metadata."
+                "neighbours, relationships, and confidence scores. Use ONLY for explicit structural "
+                "questions about ONE entity's direct neighbours: 'who are X's partners', 'what are "
+                "X's subsidiaries', 'what board seats does X hold'. "
+                "DO NOT use for: (1) peer / competitor / 'who does X compete with' questions — the KG "
+                "is sparse on competitor_of edges and will return empty; use get_entity_intelligence "
+                "(returns relations_summary + narrative) or compare_entities for those. "
+                "(2) biographical or career-history questions about people ('what did X do before Y') "
+                "— use get_entity_intelligence for narrative. "
+                "(3) the relationship BETWEEN two named entities — use traverse_graph or "
+                "get_entity_paths for cross-entity path finding. "
+                "If this tool returns empty or sparse results for a well-known entity, you may "
+                "supplement with training knowledge but MUST label it 'Based on public knowledge: …' "
+                "— never invent confidence scores or graph metadata."
             ),
             parameters=[
                 ParameterSpec(
@@ -201,12 +276,19 @@ def build_default_registry() -> ToolRegistry:
         ToolSpec(
             name="traverse_graph",
             description=(
-                "Finds paths between two entities in the knowledge graph via multi-hop traversal. "
-                "USE THIS TOOL when asked 'what is the relation between X and Y', 'how is X connected "
-                "to Y', 'is X related to Y', or any question involving TWO named entities. "
-                "Provide start_entity AND target_entity (e.g. start_entity='Apple', target_entity='Anthropic'). "
-                "Also useful for indirect chains (shared investors, board-member chains, 3+ hops). "
-                "Returns direct and indirect paths with relation types and confidence scores."
+                "Finds paths between TWO named entities in the knowledge graph via multi-hop "
+                "traversal. USE THIS TOOL ONLY when the question names two entities explicitly: "
+                "'what is the relation between X and Y', 'how is X connected to Y', 'is X related "
+                "to Y', 'shared board members of X and Y', 'is X an investor in Y'. "
+                "Provide BOTH start_entity AND target_entity (e.g. start_entity='Apple', "
+                "target_entity='Anthropic'). Also useful for indirect chains (shared investors, "
+                "board-member chains, 3+ hops). Returns direct and indirect paths with relation "
+                "types and confidence scores. "
+                "DO NOT use for: (1) single-entity peer / competitor / 'who are X's rivals' questions "
+                "— there is no second entity to traverse toward; use get_entity_intelligence or "
+                "compare_entities. (2) biographical / 'before joining Apple' questions — use "
+                "get_entity_intelligence. (3) pre-ranked top-N paths anchored on one entity — use "
+                "get_entity_paths (no target needed; cheaper and pre-computed)."
             ),
             parameters=[
                 ParameterSpec(name="start_entity", type="string", description="Starting entity name", required=True),
@@ -454,10 +536,15 @@ def build_default_registry() -> ToolRegistry:
         ToolSpec(
             name="get_entity_paths",
             description=(
-                "Retrieves top-N pre-computed multi-hop relationship paths anchored on an entity, "
-                "ranked by composite_score. Use when the user asks about indirect connections, "
-                "how entities are linked through intermediaries, or wants to explore the entity's "
-                "broader network relationships."
+                "Retrieves top-N PRE-COMPUTED multi-hop relationship paths anchored on a SINGLE "
+                "entity, ranked by composite_score (S7 path-insight pipeline). Use when the user "
+                "asks 'what are the most important relationships of X', 'show me X's network', "
+                "'top connections for X' — one anchor, no specific target. "
+                "DO NOT use for: (1) two-entity 'how is X connected to Y' questions — use "
+                "traverse_graph (live AGE walk between the two names). (2) full intelligence "
+                "bundles (narrative + relations + health) — use get_entity_intelligence which "
+                "wraps this tool plus the others in one call. (3) direct neighbours / 'who are "
+                "X's partners' structural lookups — use get_entity_graph."
             ),
             parameters=[
                 ParameterSpec(
@@ -516,10 +603,18 @@ def build_default_registry() -> ToolRegistry:
         ToolSpec(
             name="get_entity_intelligence",
             description=(
-                "Retrieves the full intelligence bundle for an entity — combining narrative, "
-                "relationship paths, health score, and relations summary in a single call. "
-                'Use when the user asks for a comprehensive overview or says "tell me everything '
-                'about X". Prefer this over calling individual intelligence tools separately.'
+                "Retrieves the FULL intelligence bundle for a single entity — combining narrative "
+                "summary, top relationship paths, health score, and relations_summary (peers, "
+                "competitors, partners) in ONE call. PREFER this tool whenever the user asks: "
+                "(1) for a comprehensive overview, 'tell me everything about X', 'what's going on "
+                "with X'; (2) BIOGRAPHICAL or career-history questions about people / executives — "
+                "'what did Tim Cook do before Apple', 'who is Sam Altman', 'background on Lisa Su' "
+                "— the narrative section covers career timeline; (3) PEER / competitor / 'who does "
+                "X compete with' questions — the relations_summary surfaces competitor / partner "
+                "buckets even when KG competitor_of edges are sparse. "
+                "DO NOT use for: (1) two-entity 'how is X connected to Y' — use traverse_graph. "
+                "(2) raw structural neighbour lists with relation_type filters — use get_entity_graph. "
+                "(3) side-by-side numeric comparison of 2+ tickers — use compare_entities."
             ),
             parameters=[
                 ParameterSpec(
@@ -569,9 +664,16 @@ def build_default_registry() -> ToolRegistry:
         ToolSpec(
             name="compare_entities",
             description=(
-                "Side-by-side comparison of 2-4 financial entities: fundamentals highlights "
-                "(market cap, P/E, revenue, EPS) and latest price quote. Use when the user "
-                "asks to compare multiple stocks or companies against each other."
+                "FINANCIAL side-by-side comparison of 2-4 stock tickers: fundamentals highlights "
+                "(market cap, P/E, revenue, EPS) and latest price quote — one row per ticker. "
+                "Use when the user asks 'compare AAPL and MSFT', 'how does NVDA stack up vs AMD', "
+                "'which of {A, B, C} has the higher P/E'. This is a FINANCIAL tool — output is "
+                "numeric metrics, not relationships or narrative. "
+                "DO NOT use for: (1) relationship questions between the two tickers ('is X "
+                "connected to Y', 'do they share board members') — use traverse_graph. "
+                "(2) qualitative narrative / 'which is the better business' — use "
+                "get_entity_intelligence per entity. (3) historical time-series for one entity — "
+                "use get_fundamentals_history."
             ),
             parameters=[
                 ParameterSpec(
@@ -595,8 +697,9 @@ def build_default_registry() -> ToolRegistry:
             name="screen_universe",
             description=(
                 "Quantitative screener — filters the instrument universe by market cap, P/E ratio, "
-                "sector, and region. Use when the user asks to screen, filter, or find stocks "
-                "that meet specific fundamental criteria."
+                "sector, industry, and region. Use when the user asks to screen, filter, or find "
+                "stocks that meet specific fundamental criteria. For AI-chip / semiconductor "
+                "queries, set sector='Technology' AND industry='Semiconductors' (GICS taxonomy)."
             ),
             parameters=[
                 ParameterSpec(
@@ -623,6 +726,15 @@ def build_default_registry() -> ToolRegistry:
                     description="Sector filter (e.g. 'Technology', 'Healthcare')",
                     required=False,
                 ),
+                # FIX-LIVE-M (2026-05-24): GICS industry filter — more specific than
+                # sector. "AI chip" / "semiconductor" queries need industry='Semiconductors'
+                # (sector='Technology' alone returns too many irrelevant SaaS/IT names).
+                ParameterSpec(
+                    name="industry",
+                    type="string",
+                    description="Industry filter (e.g. 'Semiconductors', 'Cloud Computing')",
+                    required=False,
+                ),
                 ParameterSpec(
                     name="region",
                     type="string",
@@ -635,11 +747,108 @@ def build_default_registry() -> ToolRegistry:
                     description="Maximum number of results (1-100). Default 20.",
                     required=False,
                 ),
+                # PLAN-0103 W1 (BP-622): fundamentals-grade metric filters.
+                # These map to columns in market-data's metric_extractor.
+                ParameterSpec(
+                    name="revenue_growth_yoy_min",
+                    type="number",
+                    description=(
+                        "Minimum quarter-over-year-ago revenue growth, e.g. 0.0 for any "
+                        "positive growth, 0.10 for >=10%."
+                    ),
+                    required=False,
+                ),
+                ParameterSpec(
+                    name="revenue_growth_yoy_max",
+                    type="number",
+                    description="Maximum quarter-over-year-ago revenue growth.",
+                    required=False,
+                ),
+                ParameterSpec(
+                    name="gross_margin_min",
+                    type="number",
+                    description="Minimum gross margin as a decimal (e.g. 0.40 for >=40%).",
+                    required=False,
+                ),
+                ParameterSpec(
+                    name="gross_margin_max",
+                    type="number",
+                    description="Maximum gross margin as a decimal.",
+                    required=False,
+                ),
+                ParameterSpec(
+                    name="roe_min",
+                    type="number",
+                    description="Minimum return on equity as a decimal (e.g. 0.15 for >=15%).",
+                    required=False,
+                ),
+                ParameterSpec(
+                    name="dividend_yield_min",
+                    type="number",
+                    description="Minimum dividend yield as a decimal (e.g. 0.02 for >=2%).",
+                    required=False,
+                ),
+                ParameterSpec(
+                    name="dividend_yield_max",
+                    type="number",
+                    description="Maximum dividend yield as a decimal.",
+                    required=False,
+                ),
             ],
             source_type="fundamentals",
             example_queries=[
                 "Screen for tech stocks with P/E under 20 and market cap over $10B",
                 "Find large-cap US healthcare companies",
+                "AI semiconductor companies with market cap > $50B and positive YoY revenue growth",
+            ],
+        ),
+        handler=lambda **_: None,
+    )
+
+    # PLAN-0103 W2 — entity-anchored news feed (Q1 follow-up from the
+    # 2026-05-29 real-user audit).  Routes through the per-entity
+    # /briefing-articles endpoint so the LLM gets per-entity relevance
+    # scoring instead of falling back to broad search_documents.
+    registry.register(
+        ToolSpec(
+            name="get_entity_news",
+            description=(
+                "Latest news articles mentioning a specific entity (by entity_id OR ticker), "
+                "filtered by date range. Use this for 'what's the latest on X' questions "
+                "where the user names a single entity. PREFER over search_documents when "
+                "the user asks about ONE specific company or ticker."
+            ),
+            parameters=[
+                ParameterSpec(
+                    name="entity_id",
+                    type="string",
+                    description="Canonical entity UUID. Provide this OR ticker.",
+                    required=False,
+                ),
+                ParameterSpec(
+                    name="ticker",
+                    type="string",
+                    description="Ticker symbol (e.g. 'MSTR'). Resolved server-side.",
+                    required=False,
+                ),
+                ParameterSpec(
+                    name="days_back",
+                    type="integer",
+                    description="Look back N days (1-90). Default 14.",
+                    required=False,
+                ),
+                ParameterSpec(
+                    name="max_results",
+                    type="integer",
+                    description="Max articles to return (1-20). Default 10.",
+                    required=False,
+                ),
+            ],
+            source_type="news_article",
+            example_queries=[
+                "Show me the latest news on MSTR",
+                "What's happening with NVDA this week?",
+                "Any recent news about Tesla?",
             ],
         ),
         handler=lambda **_: None,
@@ -771,6 +980,146 @@ def build_default_registry() -> ToolRegistry:
             example_queries=[
                 "Show me my active alerts",
                 "What alerts do I have set up?",
+            ],
+        ),
+        handler=lambda **_: None,
+    )
+
+    # PLAN-0095 W2 T-W2-02: batched fundamentals fan-out tool.
+    # WHY a separate tool (not an overload of get_fundamentals_history): tool
+    # arguments cannot be array-OR-string in the OpenAI tool-calling schema
+    # without forcing the LLM to wrap singletons in a list every time, which
+    # ITER-7 evals showed it gets wrong ~30% of the time. A dedicated batch
+    # tool lets the model keep using the singular tool for one-shot lookups
+    # and the batch tool only when it has 2+ tickers — which matches its
+    # actual reasoning pattern (deciding-up-front vs. exploring-one).
+    registry.register(
+        ToolSpec(
+            name="get_fundamentals_history_batch",
+            description=(
+                # PLAN-0097 T-W3-03: strict imperative directive at the top.
+                # Soft phrasing ("use this when comparing") was insufficient —
+                # iter-9 chat-eval showed the LLM still iterated the singular
+                # tool. Bold "**Use this tool — NOT ...**" forces tool selection
+                # on the first turn.
+                "**Use this tool — NOT `get_fundamentals_history` — when the user mentions "
+                "2 or more tickers, OR when you have a list of tickers from a screener "
+                "result, OR when comparing multiple companies.** Calling "
+                "`get_fundamentals_history` in a loop is 5-10x slower and is a "
+                "tool-selection bug. "
+                "Fetches quarterly fundamental metrics (revenue, gross profit, net income, "
+                "EPS, P/E, market cap) for MULTIPLE tickers in a single call. "
+                "Returns a per-ticker dict {ticker: {status: ok|error, periods?, "
+                "reason?}}; partial failures (unknown ticker, missing data) do not fail the "
+                "whole batch. Cap: 25 tickers per call."
+            ),
+            parameters=[
+                ParameterSpec(
+                    name="tickers",
+                    type="array",
+                    description='List of stock tickers to fetch (e.g. ["AAPL", "MSFT", "NVDA"]). Max 25.',
+                    required=True,
+                ),
+                ParameterSpec(
+                    name="periods",
+                    type="integer",
+                    description="Number of quarters per ticker (1-20). Default 5.",
+                    required=False,
+                ),
+            ],
+            source_type="fundamentals",
+            example_queries=[
+                "Compare revenue growth of AAPL, MSFT, GOOG, AMZN, META",
+                "Get the last 4 quarters of fundamentals for the top 5 AI chip stocks",
+            ],
+        ),
+        handler=lambda **_: None,
+    )
+
+    # PLAN-0104 W32: unified parameterised fundamentals query.
+    # WHY a SEPARATE tool (not a flag on get_fundamentals_history): the OpenAI
+    # tool-calling schema cannot express "this method takes a metric list AND
+    # returns a polymorphic shape" without confusing the LLM. Keeping the
+    # legacy 6-column tool (revenue/eps/net_income/...) for simple lookups
+    # and this rich tool for non-standard metrics matches how the LLM
+    # actually reasons — it picks the tool whose advertised columns match
+    # the user's question vocabulary.
+    registry.register(
+        ToolSpec(
+            name="query_fundamentals",
+            description=(
+                "Parameterised fundamentals query for a SINGLE ticker. Use this — "
+                "NOT `get_fundamentals_history` — when the user asks about metrics "
+                "BEYOND the standard revenue/EPS/net-income/P-E triple. Examples: "
+                "gross margin, operating margin, net margin, forward P/E, PEG ratio, "
+                "EV/EBITDA, EV/Revenue, FCF yield, consensus EPS for current or "
+                "next year, quarterly revenue/earnings growth YoY, ROE, dividend "
+                "yield. You declare the metric list and the tool returns both a "
+                "per-period series AND a TTM/live snapshot block, with a "
+                "per-metric coverage flag (ok | partial | missing) so you know "
+                "which values are safe to quote and which to caveat or refuse on. "
+                "Always read the Coverage line before quoting a metric — if it "
+                "says 'missing', refuse rather than fabricate."
+            ),
+            parameters=[
+                ParameterSpec(
+                    name="ticker",
+                    type="string",
+                    description="Stock ticker symbol (e.g. 'AAPL')",
+                    required=True,
+                ),
+                ParameterSpec(
+                    name="metrics",
+                    type="array",
+                    description=(
+                        "List of canonical metric names to fetch. Supported: "
+                        "revenue, gross_profit, operating_income, net_income, ebit, "
+                        "ebitda, eps, cost_of_revenue, research_development, "
+                        "operating_cash_flow, capital_expenditures, free_cash_flow, "
+                        "gross_margin, operating_margin, net_margin, ebitda_margin, "
+                        "pe_ratio, forward_pe, peg_ratio, ev_ebitda, ev_revenue, "
+                        "price_to_book, price_to_sales_ttm, market_cap, ebitda_ttm, "
+                        "revenue_ttm, gross_profit_ttm, eps_ttm, diluted_eps_ttm, "
+                        "dividend_yield, dividend_share, book_value, roe_ttm, "
+                        "roa_ttm, operating_margin_ttm, profit_margin_ttm, "
+                        "quarterly_revenue_growth_yoy, quarterly_earnings_growth_yoy, "
+                        "consensus_eps_curr_quarter, consensus_eps_next_quarter, "
+                        "consensus_eps_curr_year, consensus_eps_next_year, "
+                        "wall_street_target_price, fcf_yield. Unknown names are "
+                        "flagged 'missing' in coverage rather than rejected."
+                    ),
+                    required=True,
+                ),
+                ParameterSpec(
+                    name="periods",
+                    type="integer",
+                    description=(
+                        "Number of per-period rows to return (0-20). Default 8. "
+                        "Pass 0 to get the snapshot only (no historical series)."
+                    ),
+                    required=False,
+                ),
+                ParameterSpec(
+                    name="period_type",
+                    type="string",
+                    description=(
+                        'Periodicity: "quarterly" (default) or "annual". Anything ' 'else falls back to "quarterly".'
+                    ),
+                    required=False,
+                ),
+                ParameterSpec(
+                    name="include_snapshot",
+                    type="boolean",
+                    description="Include the TTM/live snapshot block (default true).",
+                    required=False,
+                ),
+            ],
+            source_type="fundamentals",
+            example_queries=[
+                "What's AAPL's forward P/E and PEG ratio?",
+                "Show TSLA's gross margin trend over the last 8 quarters",
+                "Get NVDA's consensus EPS for current and next year",
+                "Compare AMZN's operating margin and FCF yield",
             ],
         ),
         handler=lambda **_: None,

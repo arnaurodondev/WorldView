@@ -16,14 +16,25 @@ class TestContentSourceType:
         assert issubclass(ContentSourceType, StrEnum)
 
     def test_all_values(self) -> None:
-        expected = {"eodhd", "sec_edgar", "finnhub", "newsapi", "manual", "polymarket", "tenant_upload"}
+        # PLAN-0106: EODHD_TICKER_NEWS added as a dedicated ticker-news adapter.
+        expected = {
+            "eodhd",
+            "eodhd_ticker_news",
+            "sec_edgar",
+            "finnhub",
+            "newsapi",
+            "manual",
+            "polymarket",
+            "tenant_upload",
+        }
         assert {v.value for v in ContentSourceType} == expected
 
     def test_member_count(self) -> None:
-        assert len(ContentSourceType) == 7
+        assert len(ContentSourceType) == 8
 
     def test_string_comparison(self) -> None:
         assert ContentSourceType.EODHD == "eodhd"
+        assert ContentSourceType.EODHD_TICKER_NEWS == "eodhd_ticker_news"
         assert ContentSourceType.SEC_EDGAR == "sec_edgar"
         assert ContentSourceType.FINNHUB == "finnhub"
         assert ContentSourceType.NEWSAPI == "newsapi"

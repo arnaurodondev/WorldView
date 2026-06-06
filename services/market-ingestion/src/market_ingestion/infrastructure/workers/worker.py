@@ -86,7 +86,15 @@ class WorkerProcess:
                 _DEFAULT_LEASE_SECONDS,
             )
         )
-        idle_sleep_value = idle_sleep_seconds if idle_sleep_seconds is not None else _IDLE_SLEEP_SECONDS
+        # Honor explicit constructor arg first (used by integration tests for
+        # fast polling); otherwise read `worker_idle_sleep_seconds` from settings
+        # so CI/E2E can override via env var (R12 — E2E task-progression fix);
+        # fall back to the module-level production default.
+        idle_sleep_value = (
+            idle_sleep_seconds
+            if idle_sleep_seconds is not None
+            else getattr(settings, "worker_idle_sleep_seconds", _IDLE_SLEEP_SECONDS)
+        )
 
         self._settings = settings
         import common.ids

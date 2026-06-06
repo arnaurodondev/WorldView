@@ -10,6 +10,8 @@ from __future__ import annotations
 import dataclasses
 from typing import TYPE_CHECKING, Any
 
+from messaging.kafka_config import apply_base_rdkafka_config
+
 if TYPE_CHECKING:
     from confluent_kafka import SerializingProducer
     from confluent_kafka.schema_registry.avro import AvroSerializer
@@ -40,17 +42,26 @@ class KafkaProducerConfig:
     delivery_timeout_ms: int = 30_000
 
     def to_dict(self) -> dict[str, Any]:
-        """Return Confluent-compatible config dict."""
-        return {
-            "bootstrap.servers": self.bootstrap_servers,
-            "acks": self.acks,
-            "enable.idempotence": self.enable_idempotence,
-            "compression.type": self.compression_type,
-            "linger.ms": self.linger_ms,
-            "batch.size": self.batch_size,
-            "retries": self.retries,
-            "delivery.timeout.ms": self.delivery_timeout_ms,
-        }
+        """Return Confluent-compatible config dict.
+
+        PLAN-0093 Wave A-2 (F-LOG-003): the rdkafka base config
+        (``broker.address.ttl=30000`` + ``broker.address.family=v4``) is
+        merged in first via :func:`apply_base_rdkafka_config`, then the
+        producer's own keys are spread on top so a future per-producer
+        override still wins.
+        """
+        return apply_base_rdkafka_config(
+            {
+                "bootstrap.servers": self.bootstrap_servers,
+                "acks": self.acks,
+                "enable.idempotence": self.enable_idempotence,
+                "compression.type": self.compression_type,
+                "linger.ms": self.linger_ms,
+                "batch.size": self.batch_size,
+                "retries": self.retries,
+                "delivery.timeout.ms": self.delivery_timeout_ms,
+            }
+        )
 
 
 @dataclasses.dataclass

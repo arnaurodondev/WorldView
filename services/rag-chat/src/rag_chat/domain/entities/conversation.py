@@ -25,6 +25,14 @@ class Citation:
     published_at: datetime | None = None
     entity_name: str | None = None
     confidence: float | None = None
+    # Full chunk text — populated by the output processor so the citation-judge
+    # cron can score grounding against the actual retrieval payload instead of
+    # the title (BP-NEW PLAN-0099 W4). Intentionally NOT projected onto the
+    # SSE/UI schema (rag_chat.api.schemas.Citation, sse_emitter.emit_citations):
+    # the frontend keeps the "Read ↗" link experience and avoids ballooning
+    # SSE bytes. Persisted in the messages.citations JSONB column (no DDL
+    # needed; JSONB accepts new keys automatically).
+    text: str | None = None
 
 
 @dataclass(frozen=True)

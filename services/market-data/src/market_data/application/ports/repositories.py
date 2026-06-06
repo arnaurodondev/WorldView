@@ -18,7 +18,7 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from datetime import date, datetime
 from decimal import Decimal
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from market_data.domain.entities import (
@@ -31,7 +31,7 @@ if TYPE_CHECKING:
         ScreenFieldMetadata,
         Security,
     )
-    from market_data.domain.enums import FundamentalsSection, Timeframe
+    from market_data.domain.enums import FundamentalsSection, PeriodType, Timeframe
     from market_data.domain.value_objects import InstrumentFlags
 
 # ── Read-side query result types ─────────────────────────────────────────────
@@ -56,6 +56,66 @@ class ScreenFilter:
     max_value: float | None = None
     period_type: str | None = None
     sector: str | None = None
+    # FIX-LIVE-M (2026-05-24): industry filter (GICS taxonomy). NVDA/AMD/AVGO
+    # are sector=Technology, industry=Semiconductors — sector alone is too broad
+    # for "AI chip" / "semiconductor" queries from the screen_universe tool.
+    industry: str | None = None
+    # Wave L-1: instrument-attribute filters (non-metric, WHERE on instruments table)
+    country: str | None = None
+    exchange: str | None = None
+    has_fundamentals: bool | None = None
+    has_ohlcv: bool | None = None
+    # Wave L-2: instrument_fundamentals_snapshot column filters.
+    # Numeric min/max (inclusive) for the six snapshot metrics; equality/IN
+    # for credit_rating (string). All fields default to None so existing
+    # callers keep working (R11 forward-compat).
+    # Applied as WHERE predicates against the LEFT-JOINed snapshot table —
+    # ``... WHERE snapshot.eps_ttm >= :min AND snapshot.eps_ttm <= :max``.
+    # NULL snapshots (no row for instrument) fail every numeric predicate
+    # because PostgreSQL ``NULL >= :v`` evaluates to UNKNOWN, so instruments
+    # without a snapshot are correctly excluded when any L-2 filter is active.
+    avg_volume_30d_min: float | None = None
+    avg_volume_30d_max: float | None = None
+    eps_ttm_min: float | None = None
+    eps_ttm_max: float | None = None
+    free_cash_flow_min: float | None = None
+    free_cash_flow_max: float | None = None
+    fcf_margin_min: float | None = None
+    fcf_margin_max: float | None = None
+    interest_coverage_min: float | None = None
+    interest_coverage_max: float | None = None
+    net_debt_to_ebitda_min: float | None = None
+    net_debt_to_ebitda_max: float | None = None
+    # credit_rating accepts a list of rating strings (IN predicate) —
+    # callers can pass ["AAA", "AA+", "AA", "AA-"] to filter "AA-bracket
+    # or better". Empty list / None = no filter. Tuples accepted to allow
+    # frozen-dataclass usage from Pydantic mode='python'.
+    credit_ratings: tuple[str, ...] | None = None
+    # ── Wave L-4a snapshot column filters (PLAN-0089) ────────────────────────
+    # Numeric min/max ranges against the four columns added by migration 025.
+    # ``institutional_ownership_pct`` and ``short_percent`` are stored as
+    # decimal fractions (0.0-1.0+), matching ``fcf_margin``; callers should
+    # send fractional values (e.g. 0.5 for "≥50% institutional"). Same
+    # NULL-safe semantics as L-2: instruments without a snapshot row drop
+    # out as soon as any L-4a predicate is active (``NULL >= :v`` → UNKNOWN).
+    analyst_target_price_min: float | None = None
+    analyst_target_price_max: float | None = None
+    analyst_consensus_rating_min: float | None = None
+    analyst_consensus_rating_max: float | None = None
+    institutional_ownership_pct_min: float | None = None
+    institutional_ownership_pct_max: float | None = None
+    short_percent_min: float | None = None
+    short_percent_max: float | None = None
+    # Wave L-5c: calendar (date) field filters. "Within N days" maps to
+    # ``WHERE col BETWEEN CURRENT_DATE AND CURRENT_DATE + INTERVAL ':n days'``
+    # against the LEFT-JOINed snapshot. NULL snapshots are correctly excluded
+    # because PostgreSQL ``NULL BETWEEN ...`` evaluates to UNKNOWN. Range
+    # validation lives at the Pydantic schema layer (ge=0, le=365).
+    next_earnings_within_days: int | None = None
+    next_dividend_within_days: int | None = None
+    # Wave L-4b: insider 90d rollup range filter — negatives are valid.
+    insider_net_buy_90d_min: float | None = None
+    insider_net_buy_90d_max: float | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -63,7 +123,7 @@ class ScreenResult:
     """One instrument matching the screen criteria."""
 
     instrument_id: str
-    metrics: dict[str, Decimal | None]
+    metrics: dict[str, Any]
     ticker: str | None = None
     name: str | None = None
     exchange: str | None = None
@@ -151,6 +211,16 @@ class InstrumentRepository(ABC):
     @abstractmethod
     async def update_metadata(self, id: str, metadata: dict[str, str | None]) -> None:  # noqa: A002
         """Update instrument metadata fields (name, isin, sector, etc.), ignoring None-valued keys."""
+
+    @abstractmethod
+    async def touch_fundamentals_ingest_at(self, id: str, ts: datetime) -> None:  # noqa: A002
+        """Update ``last_fundamentals_ingest_at`` for the instrument identified by ``id``.
+
+        PLAN-0096 T-W1-02 / BP-545: the FundamentalsConsumer calls this on
+        every successful section materialisation (same UoW, no outbox) so the
+        column reflects the most-recent successful ingest time. Operators
+        query the column to identify stale tickers.
+        """
 
     @abstractmethod
     async def find_by_isin(self, isin: str) -> Instrument | None:
@@ -471,8 +541,20 @@ class FundamentalsReadRepository(ABC):
         self,
         instrument_id: str,
         section: FundamentalsSection,
+        period_type: PeriodType | None = None,
     ) -> list[FundamentalsRecord]:
-        """Return all fundamentals records for the given instrument and section."""
+        """Return all fundamentals records for the given instrument and section.
+
+        PLAN-0095 T-W1-01: ``period_type`` is an optional periodicity filter.
+        When supplied, only rows whose ``period_type`` column matches the given
+        value are returned. Default ``None`` preserves backward compatibility
+        and returns all periodicities (the original behaviour).
+
+        WHY this matters: income_statement / balance_sheet / cash_flow tables
+        store both QUARTERLY and ANNUAL rows at the same ``period_end_date``;
+        without this filter callers that want one periodicity can silently
+        receive the other (BP-559, AMD/NVDA Q1 numbers 4-5x too large).
+        """
 
 
 # ── Read-side fundamental metrics query port ─────────────────────────────────

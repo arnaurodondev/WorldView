@@ -50,6 +50,13 @@ COMPOSE_BASELINE: dict[tuple[str, str], str] = {
     ("market-data", "intraday_resampling_consumer_main"): (
         "Add market-data intraday resampling consumer container — follow-up plan"
     ),
+    # Surfaced during 2026-06-05 merge of origin/main into PLAN-0104 branch.
+    # market-data insider-transactions consumer (Wave H-2 from PLAN-0085) ships
+    # without a dedicated compose service; runs under fundamentals-consumer
+    # container today. Tracked as a follow-up to split out the worker.
+    ("market-data", "insider_transactions_consumer_main"): (
+        "Add market-data insider-transactions consumer container — follow-up plan"
+    ),
     ("knowledge-graph", "structured_enrichment_consumer_main"): (
         "Add KG structured-enrichment consumer container — follow-up plan (PRD-0073)"
     ),

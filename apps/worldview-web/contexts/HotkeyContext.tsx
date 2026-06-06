@@ -65,6 +65,15 @@ export interface HotkeyScopeContextValue {
   readonly activeScopes: ReadonlySet<HotkeyScope>;
   readonly pushScope: (scope: HotkeyScope) => void;
   readonly popScope: (scope: HotkeyScope) => void;
+  /**
+   * resetScopes — collapse every active scope back to the singleton ["global"]
+   * baseline. Required by the logout flow per PRD-0089 W1 plan C-28: when the
+   * user signs out, any modal/drawer/popover that pushed a scope should be
+   * cleared synchronously so the next user (or the same user on re-login) does
+   * not inherit a poisoned scope stack. Ref-counted internals are cleared in
+   * one operation — no need to walk the count map.
+   */
+  readonly resetScopes: () => void;
   /** The registry instance bound to this provider — exposed for tests + advanced use. */
   readonly registry: HotkeyRegistry;
 }
@@ -127,6 +136,17 @@ export function HotkeyProvider({
     }
   }, []);
 
+  const resetScopes = useCallback(() => {
+    // PRD-0089 W1 C-28: collapse the entire ref-counted stack and re-seed with
+    // only "global". The safety-net useEffect below re-pushes "global" if it
+    // happens to be missing, but we set it explicitly here so the next render
+    // already reflects the cleared state.
+    const counts = scopeCountsRef.current;
+    counts.clear();
+    counts.set("global", 1);
+    setActiveScopes(new Set(["global"]));
+  }, []);
+
   // The "global" scope is always on. If the consumer accidentally pops it, we
   // re-add it on the next render. This is a safety net — the API doesn't
   // expose a way to deliberately lose "global".
@@ -137,8 +157,8 @@ export function HotkeyProvider({
   }, [activeScopes, pushScope]);
 
   const value = useMemo<HotkeyScopeContextValue>(
-    () => ({ activeScopes, pushScope, popScope, registry }),
-    [activeScopes, pushScope, popScope, registry],
+    () => ({ activeScopes, pushScope, popScope, resetScopes, registry }),
+    [activeScopes, pushScope, popScope, resetScopes, registry],
   );
 
   return (

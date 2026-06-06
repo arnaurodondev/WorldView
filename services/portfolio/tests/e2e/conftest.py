@@ -38,24 +38,35 @@ _DB_URL = os.getenv(
 # not running (no JWKS available), the middleware decodes the JWT WITHOUT signature
 # verification, so any structurally-valid JWT works.
 # Override via PORTFOLIO_E2E_INTERNAL_JWT when the gateway is running.
-def _make_e2e_system_jwt() -> str:
-    """Generate a structurally-valid JWT with role=system for E2E tests."""
+#
+# Note: ``tenant_id``/``sub`` MUST be valid UUID strings — the route handlers
+# call ``UUID(str(request.state.tenant_id))`` and a non-UUID value raises
+# ValueError → 500 (CI failure pattern observed pre-fix). Tests that seed
+# their own tenant/user should use ``make_e2e_jwt(tenant_id, user_id)`` so
+# the JWT's tenant matches the seeded row.
+def make_e2e_jwt(tenant_id: str, user_id: str, role: str = "system") -> str:
+    """Generate a structurally-valid JWT for E2E tests bound to a tenant + user."""
     import time
 
     import jwt as _jwt
 
     payload = {
         "iss": "worldview-gateway",
-        "sub": "e2e-system-user",
-        "tenant_id": "e2e-tenant",
-        "role": "system",
+        "sub": user_id,
+        "tenant_id": tenant_id,
+        "role": role,
         "iat": int(time.time()),
         "exp": int(time.time()) + 3600,
     }
     return _jwt.encode(payload, "e2e-test-secret", algorithm="HS256")
 
 
-_INTERNAL_JWT = os.getenv("PORTFOLIO_E2E_INTERNAL_JWT", "") or _make_e2e_system_jwt()
+# Backwards-compat: a default JWT with throwaway UUIDs so tests that don't
+# need a DB-seeded tenant still get a structurally-valid token.
+_INTERNAL_JWT = os.getenv("PORTFOLIO_E2E_INTERNAL_JWT", "") or make_e2e_jwt(
+    tenant_id="00000000-0000-0000-0000-0000000000e2",
+    user_id="00000000-0000-0000-0000-0000000000e3",
+)
 
 
 @pytest.fixture

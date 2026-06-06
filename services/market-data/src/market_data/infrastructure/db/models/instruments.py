@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
-from sqlalchemy import Boolean, ForeignKey, String, UniqueConstraint, text
+from datetime import datetime
+
+from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, String, UniqueConstraint, text
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -40,3 +42,13 @@ class InstrumentModel(TimestampMixin, Base):
     industry: Mapped[str | None] = mapped_column(String(100), nullable=True)
     country: Mapped[str | None] = mapped_column(String(3), nullable=True)
     currency_code: Mapped[str | None] = mapped_column(String(3), nullable=True)
+    # FIX-LIVE-P (migration 018): month (1-12) of the fiscal-year end. Used to
+    # compute fiscal-quarter labels in GetFundamentalsHistoryUseCase for issuers
+    # whose fiscal year is not calendar-aligned (NVDA=1, AAPL=9, MSFT=6).
+    fiscal_year_end_month: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # PLAN-0096 T-W1-02 / BP-545: timestamp of the most recent successful
+    # fundamentals UPSERT for this instrument. Bumped by FundamentalsConsumer
+    # inside the same UoW as the section writes; remains NULL for instruments
+    # that have never received fundamentals data. Operators query this column
+    # to identify stale tickers (see migration 021).
+    last_fundamentals_ingest_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)

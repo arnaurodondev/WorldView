@@ -11,6 +11,7 @@ from typing import TYPE_CHECKING
 
 import structlog
 
+from rag_chat.application.metrics.prometheus import rag_pipeline_stage_input_size
 from rag_chat.domain.entities.conversation import Citation
 
 if TYPE_CHECKING:
@@ -50,6 +51,9 @@ _BARE_CITATION_INT_RE = re.compile(
     r"(?<!\[)"  # not preceded by [ (not already a citation)
     r"(?<!\$)"  # not preceded by $ (not a currency value)
     r"(?<!\d)"  # not preceded by digit (not mid-number like "2024")
+    r"(?<!\.)"  # PLAN-0104 W28-1 / BP-645: not preceded by '.' — guards the
+    # post-decimal digits of "$7.14", "0.25%", "1.10x" so we don't strip
+    # the "14"/"11" half of a decimal as a phantom bare citation.
     r"\b([1-9]|[12]\d|30)\b"  # integers 1-30 (citation-range only)
     r"(?!\])"  # not followed by ] (not an existing citation)
     r"(?!\d)"  # not followed by digit (not a year)
@@ -96,6 +100,8 @@ class OutputProcessor:
             raw_output:       Raw streaming output accumulated from LLM.
             retrieved_items:  Items in the order they were presented in the prompt (index 0 = [1]).
         """
+        rag_pipeline_stage_input_size.labels(stage="output_processor").observe(len(retrieved_items))
+
         # 1. Strip reasoning blocks
         text = _THINK_RE.sub("", raw_output).strip()
 
@@ -149,6 +155,11 @@ class OutputProcessor:
                     published_at=item.citation_meta.published_at,
                     entity_name=item.citation_meta.entity_name,
                     confidence=item.score,
+                    # Persist the full retrieved-chunk text into the Citation
+                    # so the citation-judge cron can score grounding against the
+                    # actual payload (BP-NEW PLAN-0099 W4). Stripped before SSE
+                    # by emit_citations so the frontend wire shape is unchanged.
+                    text=item.text,
                 )
             )
 

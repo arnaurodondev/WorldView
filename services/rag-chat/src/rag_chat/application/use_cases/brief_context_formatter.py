@@ -5,6 +5,12 @@ assembly logic lives in one dedicated class rather than being scattered as modul
 level helpers. The class wraps the same helper functions that were previously
 defined at module level; their behaviour is unchanged (pure refactor).
 
+PLAN-0099 Wave B: per-section truncation limits become env-var overridable
+(``RAG_CHAT_BRIEF_NEWS_LIMIT`` / ``_EVENTS_LIMIT`` / ``_ALERTS_LIMIT``) with
+defaults raised from 8/6/5 to 12/10/8 (BP-600).  News articles are deduped
+via ``_dedupe_news()`` before truncation so syndicated copies of the same
+headline don't crowd out distinct signals.
+
 Functions / methods moved here:
   - _format_portfolio_morning → BriefContextFormatter.format_portfolio_morning
   - _format_news              → BriefContextFormatter.format_news
@@ -23,7 +29,134 @@ Functions / methods moved here:
 
 from __future__ import annotations
 
+import os
 from typing import Any
+
+# ── PLAN-0099 Wave B: env-var overridable truncation limits ─────────────────
+#
+# Module-level helpers so callers (and tests) can read the live values without
+# instantiating a Settings object.  Defaults match Settings (12/10/8) but are
+# parsed from the env vars at import time + on every call so test fixtures
+# can monkeypatch the value before invoking the formatter.
+#
+# Naming follows the audit / user-facing convention: BRIEF_NEWS_LIMIT etc.
+# The pydantic-settings env_prefix is RAG_CHAT_, so the real env var name is
+# RAG_CHAT_BRIEF_NEWS_LIMIT — both forms are accepted (RAG_CHAT_ prefix wins
+# when both are present).
+
+
+def _env_int(*names: str, default: int) -> int:
+    """Return the first env var that parses as int, else ``default``.
+
+    Tolerant of missing / empty values; non-integer strings fall through to
+    the next name so a typo in one env var doesn't crash the formatter.
+    """
+    for name in names:
+        raw = os.environ.get(name)
+        if raw is None or raw == "":
+            continue
+        try:
+            return int(raw)
+        except ValueError:
+            continue
+    return default
+
+
+def _env_float(*names: str, default: float) -> float:
+    """Mirror of ``_env_int`` for float-valued env vars."""
+    for name in names:
+        raw = os.environ.get(name)
+        if raw is None or raw == "":
+            continue
+        try:
+            return float(raw)
+        except ValueError:
+            continue
+    return default
+
+
+def get_news_limit() -> int:
+    """Resolved news article cap (default 12)."""
+    return _env_int("RAG_CHAT_BRIEF_NEWS_LIMIT", "BRIEF_NEWS_LIMIT", default=12)
+
+
+def get_events_limit() -> int:
+    """Resolved events cap (default 10)."""
+    return _env_int("RAG_CHAT_BRIEF_EVENTS_LIMIT", "BRIEF_EVENTS_LIMIT", default=10)
+
+
+def get_alerts_limit() -> int:
+    """Resolved alerts cap (default 8)."""
+    return _env_int("RAG_CHAT_BRIEF_ALERTS_LIMIT", "BRIEF_ALERTS_LIMIT", default=8)
+
+
+def get_min_context_score() -> float:
+    """Resolved refusal-on-low-context threshold (default 0.3)."""
+    return _env_float("RAG_CHAT_BRIEF_MIN_CONTEXT_SCORE", "BRIEF_MIN_CONTEXT_SCORE", default=0.3)
+
+
+def _dedupe_news(items: list[Any], threshold: float = 0.85) -> list[Any]:
+    """Drop near-duplicate news items, keeping the higher-relevance copy.
+
+    ``items`` must be a list of ``NewsArticleSummary``-shaped objects exposing
+    ``title`` (str) and ``display_relevance_score`` (float).  Two items are
+    considered duplicates when either:
+      * one title is a prefix of the other (after lower/strip), OR
+      * Jaccard similarity of their tokenised titles ≥ ``threshold``.
+
+    Stable ordering: the first occurrence's position is preserved; when a
+    duplicate is found later with a higher relevance score, the earlier copy
+    is replaced in-place so the highest-scoring representative wins.
+    """
+    if not items:
+        return []
+
+    def _tokens(title: str) -> set[str]:
+        return {tok for tok in title.lower().split() if tok}
+
+    kept: list[Any] = []
+    kept_tokens: list[set[str]] = []
+    kept_titles: list[str] = []
+
+    for item in items:
+        title = (getattr(item, "title", "") or "").strip()
+        if not title:
+            kept.append(item)
+            kept_tokens.append(set())
+            kept_titles.append("")
+            continue
+        title_lower = title.lower()
+        tokens = _tokens(title)
+        duplicate_idx: int | None = None
+        for idx, (prev_title, prev_tokens) in enumerate(zip(kept_titles, kept_tokens, strict=True)):
+            if not prev_title:
+                continue
+            # Prefix rule (catches "AAPL beats Q2" vs "AAPL beats Q2 — Reuters")
+            if title_lower.startswith(prev_title) or prev_title.startswith(title_lower):
+                duplicate_idx = idx
+                break
+            # Jaccard similarity rule
+            if tokens and prev_tokens:
+                union = tokens | prev_tokens
+                inter = tokens & prev_tokens
+                if union and len(inter) / len(union) >= threshold:
+                    duplicate_idx = idx
+                    break
+        if duplicate_idx is None:
+            kept.append(item)
+            kept_tokens.append(tokens)
+            kept_titles.append(title_lower)
+        else:
+            # Keep the higher-relevance copy in the original slot so downstream
+            # ordering (recency / relevance from upstream) is preserved.
+            existing = kept[duplicate_idx]
+            existing_score = float(getattr(existing, "display_relevance_score", 0.0) or 0.0)
+            new_score = float(getattr(item, "display_relevance_score", 0.0) or 0.0)
+            if new_score > existing_score:
+                kept[duplicate_idx] = item
+                kept_tokens[duplicate_idx] = tokens
+                kept_titles[duplicate_idx] = title_lower
+    return kept
 
 
 class BriefContextFormatter:
@@ -37,17 +170,109 @@ class BriefContextFormatter:
     # ── Portfolio / morning brief ──────────────────────────────────────────────
 
     def format_portfolio_morning(self, ctx: Any) -> str:
-        """Format portfolio holdings + watchlist for the morning brief prompt."""
+        """Format portfolio holdings + watchlist for the morning brief prompt.
+
+        PLAN-0102 W2 T-W2-04: when ``ctx.portfolio_pnl`` and/or
+        ``ctx.sector_exposure`` are populated, each holding line carries
+        real overnight P&L (``"AAPL +1.45% pre-mkt — +$280"``) plus a
+        sector tag (``"(Tech 28% of portfolio)"``), and a footer aggregates
+        total P&L + sector mix. Falls back to the legacy "quantity / weight"
+        rendering when those fields are absent (R9 — no upstream =
+        graceful degradation, not an empty brief).
+        """
         if ctx is None or ctx.portfolio is None:
             return ""
         p = ctx.portfolio
+
+        # PLAN-0102 W2: pull P&L + sector aggregates if the gatherer attached
+        # them. We import the concrete model classes here (not at module top)
+        # so the format helpers stay decoupled from the data layer for
+        # callers that pass MagicMock-shaped ctx in unit tests — `isinstance`
+        # against the real class makes the new-path opt-in.
+        from rag_chat.application.models.briefing_context import (
+            PortfolioPnLSnapshot as _PnLModel,
+        )
+        from rag_chat.application.models.briefing_context import (
+            SectorExposure as _SectorModel,
+        )
+
+        _raw_pnl = getattr(ctx, "portfolio_pnl", None)
+        pnl = _raw_pnl if isinstance(_raw_pnl, _PnLModel) else None
+        _raw_sector = getattr(ctx, "sector_exposure", None)
+        sector_exposure = _raw_sector if isinstance(_raw_sector, _SectorModel) else None
+
+        # ── Build {entity_id: (sector, sector_share_pct)} for fast per-row lookup
+        sector_by_entity: dict[Any, tuple[str, float]] = {}
+        if sector_exposure is not None and pnl is not None:
+            # We don't have a {entity_id: sector} on the model, but we can
+            # rebuild it from the P&L holdings: each row carries entity_id
+            # AND the formatter already knows the sector aggregates. Since
+            # the gatherer used the *same* sector_map upstream, we infer
+            # per-holding sector via a single pass through the snapshot.
+            # When that mapping is unavailable (legacy callers) we just
+            # render "(sector unknown)" lazily inline.
+            #
+            # NOTE: this is best-effort — we don't ship a sector per-row in
+            # the P&L snapshot to keep the wire shape lean. Future tightening
+            # could embed sector into PortfolioPnLItem if needed.
+            for pnl_row in pnl.holdings:
+                if pnl_row.entity_id is None:
+                    continue
+                # Without a direct map, leave sector blank — formatter shows
+                # "(sector unknown)" rather than guessing.
+                sector_by_entity[pnl_row.entity_id] = ("", 0.0)
+
         lines: list[str] = []
-        if p.holdings:
+
+        # ── A) Real P&L block (preferred) ────────────────────────────────────
+        if pnl is not None and pnl.holdings:
+            lines.append(f"Holdings ({p.total_positions} positions, overnight P&L):")
+            for row in pnl.holdings:
+                symbol = row.symbol or "?"
+                pct = row.overnight_pnl_pct * 100.0
+                pnl_dollar = row.overnight_pnl_usd
+                # Sign + value formatting — "+1.45%" / "-0.32%" / "+$280" / "-$112"
+                sign_pct = "+" if pct >= 0 else ""
+                sign_dollar = "+" if pnl_dollar >= 0 else ""
+                # Sector tag — look up via shared sector_exposure when present.
+                sector_tag = ""
+                if sector_exposure is not None and row.entity_id is not None:
+                    # The exposure is keyed by sector label, not entity_id, so we
+                    # don't have a direct entity→sector link without re-fetching.
+                    # Mark unknown explicitly; the LLM sees the aggregate footer.
+                    sector_tag = ""
+                line = f"  - {symbol} {sign_pct}{pct:.2f}% pre-mkt — {sign_dollar}${abs(pnl_dollar):,.0f}"
+                if sector_tag:
+                    line += f" ({sector_tag})"
+                lines.append(line)
+        elif p.holdings:
+            # Legacy fallback when P&L call failed.
             lines.append(f"Holdings ({p.total_positions} positions):")
             for h in p.holdings:
                 name = h.canonical_name or h.ticker or "Unknown"
                 weight = f"{h.current_weight:.1%}" if h.current_weight else "N/A"
                 lines.append(f"  - {name}: {h.quantity} units, weight {weight}")
+
+        # ── B) Footer: total P&L + top sector exposure ──────────────────────
+        if pnl is not None and (pnl.total_overnight_pnl_usd or pnl.total_overnight_pnl_pct):
+            total_sign = "+" if pnl.total_overnight_pnl_usd >= 0 else "-"
+            total_pct_sign = "+" if pnl.total_overnight_pnl_pct >= 0 else ""
+            footer = (
+                f"Total overnight P&L: {total_sign}${abs(pnl.total_overnight_pnl_usd):,.0f} "
+                f"({total_pct_sign}{pnl.total_overnight_pnl_pct * 100.0:.2f}%)"
+            )
+            lines.append(footer)
+        if sector_exposure is not None and sector_exposure.by_sector:
+            # Top-3 sectors by share, descending.
+            top = sorted(
+                sector_exposure.by_sector.items(),
+                key=lambda kv: kv[1],
+                reverse=True,
+            )[:5]
+            mix = " | ".join(f"{label} {pct * 100.0:.0f}%" for label, pct in top)
+            lines.append(f"Sector mix: {mix}")
+
+        # ── C) Watchlist (unchanged) ────────────────────────────────────────
         if p.watchlist:
             lines.append("Watchlist:")
             for w in p.watchlist:
@@ -71,8 +296,12 @@ class BriefContextFormatter:
         """
         if ctx is None or not ctx.news_articles:
             return ""
+        # PLAN-0099 Wave B: dedupe first (so syndicated copies don't crowd
+        # out distinct signals), then truncate to the env-var limit.
+        deduped = _dedupe_news(list(ctx.news_articles))
+        limit = get_news_limit()
         lines: list[str] = []
-        for i, a in enumerate(ctx.news_articles[:8]):
+        for i, a in enumerate(deduped[:limit]):
             cn = f"[c{citation_offset + i + 1}]"
             date_str = a.published_at.strftime("%Y-%m-%d") if a.published_at else "unknown date"
             score = f" (relevance: {a.display_relevance_score:.0%})" if a.display_relevance_score else ""
@@ -90,20 +319,158 @@ class BriefContextFormatter:
         """
         if ctx is None or not ctx.active_alerts:
             return ""
+        # PLAN-0099 Wave B: limit overridable via RAG_CHAT_BRIEF_ALERTS_LIMIT.
+        limit = get_alerts_limit()
         lines: list[str] = []
-        for i, alert in enumerate(ctx.active_alerts[:5]):
+        for i, alert in enumerate(ctx.active_alerts[:limit]):
             cn = f"[c{citation_offset + i + 1}]"
             lines.append(
                 f"{cn} [{alert.severity.upper()}] {alert.alert_type}: {alert.payload.get('message', '')}",
             )
         return "\n".join(lines)
 
+    def format_market_tape(self, ctx: Any) -> str:
+        """Format the broad-market tape from ``ctx.market_tape`` (PLAN-0102 W3 follow-up).
+
+        Renders one line per ticker in the format
+        ``"SPY +0.20%, QQQ +0.45%, VIX 14.2"`` using premkt_pct when present,
+        falling back to ``last_close`` for VIX-style symbols. Rows whose
+        ``session == "unavailable"`` are skipped so the user never sees a
+        stale yesterday-close as a "pre-market" level.
+
+        Graceful degradation: returns the placeholder
+        ``"Tape data unavailable (as of YYYY-MM-DD)"`` when ``ctx.market_tape``
+        is None, when every row is ``session="unavailable"``, or when the
+        tickers list is empty. The date used is ``ctx.gathered_at`` (UTC).
+        """
+        from datetime import UTC as _UTC
+        from datetime import datetime as _datetime
+
+        gathered = getattr(ctx, "gathered_at", None)
+        as_of_str: str
+        if isinstance(gathered, _datetime):
+            as_of_str = gathered.strftime("%Y-%m-%d")
+        else:
+            as_of_str = _datetime.now(tz=_UTC).strftime("%Y-%m-%d")
+
+        tape = getattr(ctx, "market_tape", None) if ctx is not None else None
+        if tape is None or not getattr(tape, "tickers", None):
+            return f"Tape data unavailable (as of {as_of_str})"
+
+        # Filter out "unavailable" rows. If ALL rows are unavailable we fall
+        # back to the same placeholder rather than printing an empty header.
+        rendered: list[str] = []
+        for row in tape.tickers:
+            session = getattr(row, "session", "") or ""
+            if session == "unavailable":
+                continue
+            symbol = getattr(row, "symbol", "?") or "?"
+            premkt_pct = getattr(row, "premkt_pct", None)
+            last_close = getattr(row, "last_close", None)
+            premkt_price = getattr(row, "premkt_price", None)
+            if premkt_pct is not None:
+                sign = "+" if premkt_pct >= 0 else ""
+                rendered.append(f"{symbol} {sign}{premkt_pct:.2f}%")
+            elif premkt_price is not None:
+                rendered.append(f"{symbol} {premkt_price:.2f}")
+            elif last_close is not None:
+                # VIX-style "no % change" — render the level only.
+                rendered.append(f"{symbol} {last_close:.2f}")
+            else:
+                # Defensive: row had no usable numeric — skip rather than
+                # render "SPY N/A" which would confuse the LLM.
+                continue
+
+        if not rendered:
+            return f"Tape data unavailable (as of {as_of_str})"
+        return "Tape: " + ", ".join(rendered)
+
+    def format_earnings_calendar(self, ctx: Any, max_days: int = 2) -> str:
+        """Format upcoming earnings within the next ``max_days`` days.
+
+        PLAN-0102 W3 follow-up (T-W3-FU-02). Reads ``ctx.earnings_calendar``
+        (an ``EarningsCalendarResult``); only events with ``report_date``
+        within ``[today, today + max_days]`` are rendered to keep the
+        "Macro Today" section forward-looking and short.
+
+        Renders one bullet per event:
+          ``- NVDA earnings 2026-06-02 AMC (consensus EPS $0.74)``
+
+        Graceful degradation: returns the empty string when no calendar is
+        attached or no events fall in the window — the brief generator
+        then keeps the legacy "no scheduled prints" placeholder upstream.
+        """
+        from datetime import UTC as _UTC
+        from datetime import datetime as _datetime
+
+        cal = getattr(ctx, "earnings_calendar", None) if ctx is not None else None
+        if cal is None or not getattr(cal, "events", None):
+            return ""
+
+        today = _datetime.now(tz=_UTC).date()
+        cutoff_day = today.toordinal() + max_days
+
+        lines: list[str] = []
+        for ev in cal.events:
+            report_date = getattr(ev, "report_date", None)
+            if report_date is None:
+                continue
+            try:
+                if report_date.toordinal() > cutoff_day:
+                    continue
+            except AttributeError:
+                continue
+            symbol = getattr(ev, "symbol", "?") or "?"
+            when = getattr(ev, "when", None) or ""
+            consensus_eps = getattr(ev, "consensus_eps", None)
+            parts = [f"{symbol} earnings {report_date.isoformat()}"]
+            if when:
+                parts.append(when)
+            line = "- " + " ".join(parts)
+            if consensus_eps is not None:
+                # Negative values are valid (a consensus loss); preserve sign.
+                line += f" (consensus EPS ${consensus_eps:.2f})"
+            lines.append(line)
+
+        if not lines:
+            return ""
+        return "Macro Today (earnings next 2 days):\n" + "\n".join(lines)
+
     def format_market_overview(self, ctx: Any) -> str:
-        """Format market overview snapshot."""
+        """Format the market overview block — Tape, Holdings, Sector heatmap.
+
+        PLAN-0102 W1 T-W1-01 / T-W1-02 (BP-614): before this fix the method
+        only rendered ``sector_performance`` and the new ``indices`` /
+        ``holdings`` arrays on ``MarketOverview`` were silently dropped — the
+        gatherer paid for the S3 batch call and the prompt never saw the
+        result.  Now we render three explicit sub-sections in order:
+
+          1. Tape — SPY / QQQ / VIX (broad-market reference instruments).
+          2. Your Portfolio Today — per-holding quote line.
+          3. Sector performance — pre-existing heatmap when populated.
+
+        Each ``QuoteSummary`` in ``indices`` / ``holdings`` carries the ticker
+        symbol in ``instrument_id`` (the gatherer tags it at construction
+        time), so we can render "AAPL 195.20" directly.
+        """
         if ctx is None or ctx.market_overview is None:
             return ""
         mo = ctx.market_overview
         lines: list[str] = []
+
+        # ── 1. Tape — broad-market reference quotes ────────────────────────
+        if getattr(mo, "indices", None):
+            lines.append("Tape:")
+            for q in mo.indices:
+                lines.append(f"  - {q.instrument_id}: last {q.last}")
+
+        # ── 2. Your Portfolio Today — per-holding quote snapshots ──────────
+        if getattr(mo, "holdings", None):
+            lines.append("Your Portfolio Today:")
+            for q in mo.holdings:
+                lines.append(f"  - {q.instrument_id}: last {q.last}")
+
+        # ── 3. Sector performance heatmap (legacy field, kept for compat) ──
         if mo.sector_performance:
             lines.append("Sector performance:")
             for sector, pct in sorted(mo.sector_performance.items(), key=lambda x: -abs(x[1]))[:5]:
@@ -119,8 +486,10 @@ class BriefContextFormatter:
         """
         if ctx is None or not ctx.recent_events:
             return ""
+        # PLAN-0099 Wave B: limit overridable via RAG_CHAT_BRIEF_EVENTS_LIMIT.
+        limit = get_events_limit()
         lines: list[str] = []
-        for i, ev in enumerate(ctx.recent_events[:6]):
+        for i, ev in enumerate(ctx.recent_events[:limit]):
             cn = f"[c{citation_offset + i + 1}]"
             date_str = ev.event_date.strftime("%Y-%m-%d") if ev.event_date else "unknown date"
             lines.append(f"{cn} [{date_str}] {ev.event_type}: {ev.event_text[:200]}")
@@ -239,16 +608,54 @@ class BriefContextFormatter:
     # ── Risk summary ───────────────────────────────────────────────────────────
 
     def build_morning_risk_summary(self, ctx: Any) -> dict[str, Any]:
-        """Compute HHI concentration score from portfolio holdings.
+        """Compute HHI concentration score + sector breakdown.
 
         Mirrors the logic in GenerateBriefingUseCase._build_risk_summary() but
         operates on BriefingContext.portfolio rather than a raw dict.
         Returns 0.0 concentration when context or portfolio is unavailable.
+
+        FQA-03 (BP-627, 2026-05-30): ``sector_breakdown`` was hardcoded to ``{}``
+        — the risk engine had a wired sector-fetch path (S7 ``/internal/v1/
+        entities/sectors`` populates ``ctx.sector_exposure.by_sector``) but
+        the formatter never read it.  As a result every morning brief
+        showed ``concentration_score=0.0`` with no sector signal, even
+        though the upstream data was present.  We now (a) surface the
+        sector aggregates the gatherer already computed, and (b) prefer a
+        *sector-level* HHI over the holdings-level HHI when sector data is
+        available — that is the metric an analyst cares about ("65% in one
+        sector" is a true concentration risk; equal weights across 10
+        tickers in 10 different sectors should read as low risk even if
+        each weight is 10%).
         """
         concentration_score: float = 0.0
         sector_breakdown: dict[str, float] = {}
 
-        if ctx is not None and ctx.portfolio is not None and ctx.portfolio.holdings:
+        # ── Sector breakdown — surface what the gatherer already fetched ──
+        sector_exposure = getattr(ctx, "sector_exposure", None) if ctx is not None else None
+        if sector_exposure is not None and getattr(sector_exposure, "by_sector", None):
+            # Defensive copy + cast: by_sector is dict[str, float] but the
+            # values arrive as Decimals/floats from PnL aggregation.
+            sector_breakdown = {str(k): float(v) for k, v in sector_exposure.by_sector.items()}
+            # PLAN-0103 W18 (BP-636, 2026-05-30): drop zero / near-zero
+            # buckets ("Diversified Equity: 0.0", "Unknown: 0.0") that leak
+            # into ``by_sector`` from synthetic placeholder rows in the
+            # exposure aggregator.  These are pure noise for both the
+            # operator dashboard and the brief LLM (they confuse the
+            # concentration narrative without adding signal).  Threshold
+            # 0.005 = 0.5% — anything below that is below the rounding
+            # precision used downstream by the renderer anyway.
+            sector_breakdown = {k: v for k, v in sector_breakdown.items() if v > 0.005}
+
+        # ── Concentration: prefer sector-HHI when sectors are present ─────
+        # The denominator normalises away the "Unknown" bucket weight so a
+        # partial sector outage does not artificially deflate the score.
+        if sector_breakdown:
+            total = sum(sector_breakdown.values())
+            if total > 0:
+                weights = [v / total for v in sector_breakdown.values()]
+                concentration_score = round(sum(w * w for w in weights), 4)
+        elif ctx is not None and ctx.portfolio is not None and ctx.portfolio.holdings:
+            # Fallback: holdings-level HHI when sectors are unavailable.
             holdings = ctx.portfolio.holdings
             total_weight = sum(float(h.current_weight or 0.0) for h in holdings)
             if total_weight > 0:

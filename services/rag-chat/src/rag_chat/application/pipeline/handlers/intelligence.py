@@ -29,12 +29,76 @@ from .base import ToolHandler
 
 if TYPE_CHECKING:
     from rag_chat.application.pipeline.tool_executor import EntityContext, ToolUseBlock
-    from rag_chat.application.ports.upstream_clients import S7Port
+    from rag_chat.application.ports.upstream_clients import S6Port, S7Port
 
 log = structlog.get_logger(__name__)  # type: ignore[no-any-return]
 
 # Maximum characters for tool result text injected into LLM context.
 _TOOL_RESULT_MAX_CHARS = 4000
+
+
+def _load_resolver_settings() -> tuple[frozenset[str], float, float]:
+    """Load resolver stop-words + similarity thresholds from rag_chat.config.
+
+    Lazy + best-effort: if Settings cannot be instantiated (e.g. running under
+    a minimal unit-test harness without env vars) we fall back to a hard-coded
+    default. The fallback mirrors the Settings default so the tuning surface
+    is identical across both code paths.
+    """
+    _fallback_words = frozenset(
+        {
+            "space",
+            "industry",
+            "sector",
+            "market",
+            "markets",
+            "system",
+            "platform",
+            "company",
+            "companies",
+            "stocks",
+            "stock",
+            "share",
+            "shares",
+            "ticker",
+            "tickers",
+            "the",
+            "a",
+            "an",
+            "or",
+            "and",
+            "in",
+            "of",
+            "for",
+            "with",
+            # F-CR-010: "ai" intentionally NOT in the stop list — stripping it
+            # broke two-token Ai-prefixed canonicals like "Ai Group" / "Ai
+            # Holdings" (collapsed to single-token "Group"/"Holdings" that
+            # failed alias-search). The 0.75 absolute similarity floor below
+            # is what now blocks the original "AI semiconductor space →
+            # SpaceX" false-positive (SpaceX surfaced at sim 0.62 << 0.75).
+            "tech",
+            "energy",
+            "sentiment",
+            "rising",
+            "falling",
+            "bullish",
+            "bearish",
+        }
+    )
+    try:
+        from rag_chat.config import Settings  # local import to keep test imports cheap
+
+        s = Settings()  # type: ignore[call-arg]
+        words = frozenset(w.strip().lower() for w in s.resolver_stop_words.split(",") if w.strip())
+        return words, float(s.resolver_similarity_delta_min), float(s.resolver_top_similarity_min)
+    except Exception:  # pragma: no cover — defensive fallback
+        return _fallback_words, 0.15, 0.75
+
+
+# Module-level cache (recomputed on first use). Tests can override the
+# handler's instance attributes directly to inject custom values.
+_RESOLVER_STOP_WORDS, _RESOLVER_DELTA_MIN, _RESOLVER_TOP_SIM_MIN = _load_resolver_settings()
 
 # Allowlist of Cypher relationship type tokens accepted from LLM input.
 # WHY: traverse_graph accepts a cypher_pattern string; we must guard against
@@ -95,11 +159,45 @@ class IntelligenceHandler(ToolHandler):
         # Accepted here so ToolExecutorFactory can pass a uniform kwarg set to
         # all handlers without per-handler conditionals.
         s7_intel: object | None = None,
+        # PLAN-0093 E-4 T-E-4-01: optional S6Port for embed_text — used by
+        # search_entity_relations to issue a real query embedding instead of
+        # a 1024-dim zero vector (F-RAG-004). None falls back to zero vec.
+        # Reinstated after FIX-LIVE-O dropped this parameter during the
+        # tiebreaker rewrite, which broke the ToolExecutorFactory call site
+        # (TypeError: unexpected keyword argument 's6') AND silently
+        # regressed search_entity_relations ranking back to zero-vector ANN.
+        s6: S6Port | None = None,
+        # F-LIVE-NEW-001: configurable resolver tuning. Tests inject custom
+        # values; production reads from settings via the module-level cache.
+        stop_words: frozenset[str] | None = None,
+        similarity_delta_min: float | None = None,
+        top_similarity_min: float | None = None,
     ) -> None:
         self._s7 = s7
         self._entity_context = entity_context
         self._timeout = timeout
+        self._s6 = s6
         # s7_intel intentionally unused; accepted to keep factory call uniform.
+        self._stop_words: frozenset[str] = stop_words if stop_words is not None else _RESOLVER_STOP_WORDS
+        self._similarity_delta_min: float = (
+            similarity_delta_min if similarity_delta_min is not None else _RESOLVER_DELTA_MIN
+        )
+        self._top_similarity_min: float = (
+            top_similarity_min if top_similarity_min is not None else _RESOLVER_TOP_SIM_MIN
+        )
+
+    def _strip_stop_words(self, query: str) -> str:
+        """Return ``query`` with all-stop-word tokens removed (lowercased).
+
+        F-LIVE-NEW-003: delegates to the shared ``resolver_gates``
+        module so the IntelligenceHandler path and the ChatOrchestrator
+        path apply byte-identical stop-word logic. The wrapper is kept
+        so the rich tiebreaker pipeline above continues to call a
+        bound method (no broader refactor needed).
+        """
+        from rag_chat.application.services.resolver_gates import strip_stop_words
+
+        return strip_stop_words(query, self._stop_words)
 
     def can_handle(self, tool_name: str) -> bool:
         return tool_name in self._HANDLED_TOOLS
@@ -110,21 +208,25 @@ class IntelligenceHandler(ToolHandler):
         # a dummy stub is created here so the handler signatures remain unchanged.
         from rag_chat.application.pipeline.tool_executor import ToolUseBlock
 
+        from .base import filter_kwargs_to_signature
+
         _stub = ToolUseBlock(name=tool_name, input=args)
 
-        if tool_name == "get_entity_graph":
-            return await self._handle_get_entity_graph(_stub, **args)
-        if tool_name == "traverse_graph":
-            return await self._handle_traverse_graph(_stub, **args)
-        if tool_name == "search_entity_relations":
-            return await self._handle_search_entity_relations(_stub, **args)
-        if tool_name == "search_claims":
-            return await self._handle_search_claims(_stub, **args)
-        if tool_name == "search_events":
-            return await self._handle_search_events(_stub, **args)
-        if tool_name == "get_contradictions":
-            return await self._handle_get_contradictions(_stub, **args)
-        raise ValueError(f"IntelligenceHandler cannot handle tool: {tool_name}")
+        # BP-622 systemic fix (PLAN-0103 W1): sanitise kwargs before dispatch.
+        # ``tool_call`` is reserved (supplied by us, not by the LLM).
+        dispatch: dict[str, Any] = {
+            "get_entity_graph": self._handle_get_entity_graph,
+            "traverse_graph": self._handle_traverse_graph,
+            "search_entity_relations": self._handle_search_entity_relations,
+            "search_claims": self._handle_search_claims,
+            "search_events": self._handle_search_events,
+            "get_contradictions": self._handle_get_contradictions,
+        }
+        target = dispatch.get(tool_name)
+        if target is None:
+            raise ValueError(f"IntelligenceHandler cannot handle tool: {tool_name}")
+        known, _unknown = filter_kwargs_to_signature(target, tool_name, args)
+        return await target(_stub, **known)
 
     def _sanitize_cypher_pattern(self, pattern: str | None) -> str | None:
         """Allowlist-filter a Cypher rel-type pattern to guard against prompt injection.
@@ -166,10 +268,125 @@ class IntelligenceHandler(ToolHandler):
         )
         if use_context and self._entity_context is not None:
             return self._entity_context.entity_id
-        candidates = await self._s7.resolve_entity_by_name(entity_name, limit=3)
+
+        # F-LIVE-NEW-001: strip generic stop-words BEFORE the fuzzy match so
+        # phrases like "AI semiconductor space" cannot collide with SpaceX on
+        # a partial-substring alias hit. If stripping leaves the query too
+        # short (≤ 2 chars) the resolver bails out — the remaining tokens are
+        # not specific enough to identify a single canonical entity.
+        stripped = self._strip_stop_words(entity_name)
+        if len(stripped.strip()) <= 2:
+            from rag_chat.application.metrics.prometheus import (
+                rag_entity_resolver_ambiguous_total,
+            )
+
+            rag_entity_resolver_ambiguous_total.labels(reason="stop_word_strip").inc()
+            log.warning(
+                "tool_entity_unresolved",
+                tool=tool_name,
+                entity_name=entity_name,
+                stripped=stripped,
+                reason="all_stop_words_after_strip",
+            )
+            return None
+        search_query = stripped if stripped != entity_name.lower() else entity_name
+        candidates = await self._s7.resolve_entity_by_name(search_query, limit=3)
         if not candidates:
             log.warning("tool_entity_unresolved", tool=tool_name, entity_name=entity_name, reason="no_alias_match")
             return None
+        # FIX-LIVE-O — ambiguity gate + three tiebreakers.
+        # When the top two candidates are within 0.10 similarity of each
+        # other the resolution is statistically ambiguous (e.g. "Apple"
+        # → Apple Inc. vs Apple Computer Holdings). Naively returning the
+        # top candidate has caused the agent to pull tool data for the
+        # wrong entity; refusing outright loses queries where the top
+        # candidates are noise aliases of the SAME canonical, or where one
+        # candidate is the canonical-name exact match. Apply three rules
+        # in order before declaring ambiguous:
+        #   1. Same-canonical collapse — top-K all share entity_id → take
+        #      the highest-similarity row.
+        #   2. Exact canonical-name match — alias_text (suffix-stripped)
+        #      equals the query → wins even with lower similarity. Fixes
+        #      the Tesla case where "Teslas"(0.625) outranks "Tesla Inc"
+        #      (0.600) on raw embedding similarity.
+        #   3. Length-penalty fallback — clear length-distance winner.
+        # F-LIVE-NEW-001: low-top-similarity floor BEFORE the delta gate so
+        # candidates that all sit below the absolute threshold are rejected
+        # even when their relative spread is large. Catches the SpaceX case
+        # where top-1 sat at ~0.62 on a noisy substring match.
+        try:
+            top_sim_value = float(candidates[0].get("similarity", 0.0))
+        except (TypeError, ValueError):
+            top_sim_value = 0.0
+        if top_sim_value < self._top_similarity_min:
+            # Exact canonical-name match is allowed to skip the floor — a
+            # perfect alias hit on a low-confidence row should still resolve.
+            # We check ALL top-K (not just candidates[0]) because the canonical
+            # row often has a slightly lower similarity than a noisy plural
+            # alias (the Tesla case from FIX-LIVE-O).
+            query_norm = self._normalize_canonical(entity_name)
+            exact = False
+            if query_norm:
+                for _c in candidates[:3]:
+                    if self._normalize_canonical(str(_c.get("alias_text") or "")) == query_norm:
+                        exact = True
+                        break
+            if not exact:
+                from rag_chat.application.metrics.prometheus import (
+                    rag_entity_resolver_ambiguous_total,
+                )
+
+                rag_entity_resolver_ambiguous_total.labels(reason="low_top_similarity").inc()
+                log.warning(
+                    "tool_entity_unresolved",
+                    tool=tool_name,
+                    entity_name=entity_name,
+                    top_similarity=top_sim_value,
+                    threshold=self._top_similarity_min,
+                    reason="top_similarity_below_threshold",
+                )
+                return None
+        if len(candidates) >= 2:
+            try:
+                top_sim = float(candidates[0].get("similarity", 0.0))
+                second_sim = float(candidates[1].get("similarity", 0.0))
+                if (top_sim - second_sim) < self._similarity_delta_min:
+                    tiebreak_winner = self._apply_resolver_tiebreakers(
+                        tool_name=tool_name,
+                        entity_name=entity_name,
+                        candidates=candidates,
+                    )
+                    if tiebreak_winner is not None:
+                        return tiebreak_winner
+                    from rag_chat.application.metrics.prometheus import (
+                        rag_entity_resolver_ambiguous_total,
+                    )
+
+                    rag_entity_resolver_ambiguous_total.labels(reason="delta_below_threshold").inc()
+                    log.warning(
+                        "tool_entity_ambiguous",
+                        tool=tool_name,
+                        entity_name=entity_name,
+                        top_two=[
+                            {
+                                "entity_id": str(candidates[0].get("entity_id")),
+                                "similarity": top_sim,
+                                "alias_text": candidates[0].get("alias_text"),
+                            },
+                            {
+                                "entity_id": str(candidates[1].get("entity_id")),
+                                "similarity": second_sim,
+                                "alias_text": candidates[1].get("alias_text"),
+                            },
+                        ],
+                        delta_min=self._similarity_delta_min,
+                        reason="similarity_delta_below_threshold",
+                    )
+                    return None
+            except (TypeError, ValueError):
+                # Malformed similarity score — fall through to legacy
+                # behaviour (use top candidate) rather than crash.
+                pass
         try:
             entity_id = UUID(str(candidates[0]["entity_id"]))
         except (ValueError, KeyError):
@@ -189,6 +406,164 @@ class IntelligenceHandler(ToolHandler):
             similarity=candidates[0].get("similarity"),
         )
         return entity_id
+
+    # Canonical-suffix tokens stripped before exact-name comparison so
+    # "Tesla" matches "Tesla Inc", "Apple Corp", etc. Kept short on
+    # purpose — broader fuzzy matching belongs in S7's alias index, not here.
+    _CANONICAL_SUFFIXES: tuple[str, ...] = (
+        " inc",
+        " inc.",
+        " corp",
+        " corp.",
+        " corporation",
+        " ltd",
+        " ltd.",
+        " limited",
+        " co",
+        " co.",
+        " company",
+        " plc",
+        " sa",
+        " ag",
+        " nv",
+        " holdings",
+        " group",
+    )
+
+    @staticmethod
+    def _normalize_canonical(text: str | None) -> str:
+        """Lower-case + strip a trailing canonical company suffix.
+
+        Used only by the exact-canonical tiebreaker — we DO NOT use this
+        for the primary alias match (S7's embedding ANN handles that).
+        """
+        if text is None:
+            return ""
+        t = text.strip().lower()
+        for suffix in IntelligenceHandler._CANONICAL_SUFFIXES:
+            if t.endswith(suffix):
+                t = t[: -len(suffix)].rstrip()
+                break
+        return t
+
+    def _apply_resolver_tiebreakers(
+        self,
+        *,
+        tool_name: str,
+        entity_name: str,
+        candidates: list[dict[str, Any]],
+    ) -> UUID | None:
+        """Apply FIX-LIVE-O tiebreakers when |Δsim| < 0.10 between top candidates.
+
+        Returns the chosen entity UUID when a rule fires, else None (caller
+        will fall back to the legacy ambiguous-bail path). Whenever a rule
+        fires we emit a structured ``entity_resolution_tiebreaker_applied``
+        event so the resolution is auditable.
+        """
+        # Look at the same top-K window the ambiguity gate already considered.
+        # We cap at 3 candidates (the request limit) but stay defensive.
+        topk = candidates[:3]
+
+        # --- Rule 1: same-canonical collapse ---------------------------------
+        # All top-K candidates share the same entity_id → not actually
+        # ambiguous; pick the highest-similarity row (which is candidates[0]
+        # because S7 returns them sorted DESC by similarity).
+        try:
+            ids = [str(c.get("entity_id")) for c in topk if c.get("entity_id") is not None]
+        except Exception:  # pragma: no cover — defensive
+            ids = []
+        if len(ids) >= 2 and len(set(ids)) == 1:
+            try:
+                winner_id = UUID(ids[0])
+            except ValueError:
+                return None
+            log.info(
+                "entity_resolution_tiebreaker_applied",
+                tool=tool_name,
+                entity_name=entity_name,
+                rule="same_canonical_collapse",
+                resolved_entity_id=str(winner_id),
+                num_candidates=len(topk),
+            )
+            return winner_id
+
+        # --- Rule 2: exact canonical-name match ------------------------------
+        # If any candidate's alias_text (normalised: lower-case + canonical
+        # suffix stripped) equals the query string (same normalisation), it
+        # wins even when its similarity score is lower than a noisy alias.
+        query_norm = self._normalize_canonical(entity_name)
+        if query_norm:
+            for cand in topk:
+                alias = cand.get("alias_text")
+                if alias is None:
+                    continue
+                if self._normalize_canonical(str(alias)) == query_norm:
+                    try:
+                        winner_id = UUID(str(cand["entity_id"]))
+                    except (ValueError, KeyError, TypeError):
+                        continue
+                    log.info(
+                        "entity_resolution_tiebreaker_applied",
+                        tool=tool_name,
+                        entity_name=entity_name,
+                        rule="exact_canonical_name",
+                        resolved_entity_id=str(winner_id),
+                        winning_alias_text=str(alias),
+                        winning_similarity=cand.get("similarity"),
+                    )
+                    return winner_id
+
+        # --- Rule 3: length-penalty fallback ---------------------------------
+        # Last-resort tiebreaker: prefer a candidate whose alias_text length
+        # is CLEARLY closer to the query length than the current top pick.
+        # Conservative gates so this can't silently regress genuinely
+        # ambiguous queries:
+        #   * best candidate must be at least 2 chars closer than the top
+        #     candidate (strict gap), AND
+        #   * best candidate must be within 3 chars of the query length
+        #     (i.e. it must actually look like a near-exact alias).
+        # When neither rule 1 nor rule 2 disambiguates and rule 3 doesn't
+        # fire either, the resolver falls through to the legacy "ambiguous"
+        # path and refuses to resolve.
+        query_len = len(entity_name.strip())
+        top_alias = candidates[0].get("alias_text")
+        top_diff = abs(len(str(top_alias)) - query_len) if top_alias is not None else None
+        best_idx: int | None = None
+        best_diff: int | None = top_diff
+        for idx, cand in enumerate(topk[1:], start=1):
+            alias = cand.get("alias_text")
+            if alias is None:
+                continue
+            diff = abs(len(str(alias)) - query_len)
+            if best_diff is None or diff < best_diff:
+                best_diff = diff
+                best_idx = idx
+        len_gap_min = 2  # best must be at least 2 chars closer than top
+        len_near_exact = 3  # AND within 3 chars of the query length
+        if (
+            best_idx is not None
+            and best_diff is not None
+            and top_diff is not None
+            and (top_diff - best_diff) >= len_gap_min
+            and best_diff <= len_near_exact
+        ):
+            cand = topk[best_idx]
+            try:
+                winner_id = UUID(str(cand["entity_id"]))
+            except (ValueError, KeyError, TypeError):
+                return None
+            log.info(
+                "entity_resolution_tiebreaker_applied",
+                tool=tool_name,
+                entity_name=entity_name,
+                rule="length_penalty",
+                resolved_entity_id=str(winner_id),
+                winning_alias_text=str(cand.get("alias_text")),
+                winning_similarity=cand.get("similarity"),
+            )
+            return winner_id
+
+        return None
 
     async def _handle_get_entity_graph(
         self,
@@ -357,11 +732,21 @@ class IntelligenceHandler(ToolHandler):
         if self._s7 is None:
             log.warning("tool_handler_missing_port", tool="search_entity_relations", port="s7")
             return []
-        entity_id = self._require_context_entity("search_entity_relations", entity_name)
+        entity_id = await self._resolve_entity_by_name("search_entity_relations", entity_name)
         if entity_id is None:
             return []
-        # Use a zero embedding as placeholder — S7 will fall back to entity_id filter
-        placeholder_embedding: list[float] = [0.0] * 1024
+        # PLAN-0093 E-4 T-E-4-01: real query embedding instead of a 1024-dim
+        # zero vector. The old placeholder made S7 fall back to a non-ranked
+        # entity_id filter — the LLM got back the same top-K regardless of
+        # the user's actual question. We use ``relation_type`` (when supplied)
+        # + entity_name as the embedding text so the ANN search ranks by
+        # semantic relevance to e.g. "Microsoft acquisitions" not just
+        # "any Microsoft edge". Restored after FIX-LIVE-O regression.
+        embedding_query = f"{relation_type} {entity_name}".strip() if relation_type else entity_name
+        if self._s6 is not None:
+            placeholder_embedding: list[float] = await self._s6.embed_text(embedding_query)
+        else:
+            placeholder_embedding = [0.0] * 1024
 
         t0 = time.monotonic()
         try:
@@ -426,7 +811,7 @@ class IntelligenceHandler(ToolHandler):
         if self._s7 is None:
             log.warning("tool_handler_missing_port", tool="search_claims", port="s7")
             return []
-        entity_id = self._require_context_entity("search_claims", entity_name)
+        entity_id = await self._resolve_entity_by_name("search_claims", entity_name)
         if entity_id is None:
             return []
         claim_types = [claim_type] if claim_type else None
@@ -501,7 +886,7 @@ class IntelligenceHandler(ToolHandler):
         if self._s7 is None:
             log.warning("tool_handler_missing_port", tool="search_events", port="s7")
             return []
-        entity_id = self._require_context_entity("search_events", entity_name)
+        entity_id = await self._resolve_entity_by_name("search_events", entity_name)
         if entity_id is None:
             return []
         event_types = [event_type] if event_type else None
@@ -572,7 +957,7 @@ class IntelligenceHandler(ToolHandler):
         if self._s7 is None:
             log.warning("tool_handler_missing_port", tool="get_contradictions", port="s7")
             return []
-        entity_id = self._require_context_entity("get_contradictions", entity_name)
+        entity_id = await self._resolve_entity_by_name("get_contradictions", entity_name)
         if entity_id is None:
             return []
 

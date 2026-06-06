@@ -14,6 +14,12 @@ from ml_clients.dataclasses import (
 )
 from ml_clients.description_client import EntityDescriptionClient, NullDescriptionAdapter
 from ml_clients.errors import FatalError, RetryableError
+from ml_clients.fallback import (
+    FallbackEmbeddingClient,
+    FallbackExtractionClient,
+    FallbackNERClient,
+)
+from ml_clients.pricing import MODEL_PRICING, ModelPricing, compute_cost
 from ml_clients.protocols import EmbeddingClient, ExtractionClient, NERClient
 from ml_clients.usage_log import LlmCallUsage, LlmUsageLogProtocol
 
@@ -26,16 +32,22 @@ __all__ = [
     "ExtractionClient",
     "ExtractionInput",
     "ExtractionOutput",
+    "FallbackEmbeddingClient",
+    "FallbackExtractionClient",
+    "FallbackNERClient",
     "FatalError",
     "GeminiDescriptionAdapter",
+    "MODEL_PRICING",
     "LlmCallUsage",
     "LlmUsageLogProtocol",
     "MLClientsSettings",
+    "ModelPricing",
     "NERClient",
     "NERInput",
     "NEROutput",
     "NullDescriptionAdapter",
     "RetryableError",
+    "compute_cost",
     "estimate_cost",
     "estimate_tokens_from_text",
 ]

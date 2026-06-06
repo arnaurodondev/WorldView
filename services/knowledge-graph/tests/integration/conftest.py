@@ -74,7 +74,7 @@ def _is_schema_applied(engine_url: str) -> bool:
         conn = await asyncpg.connect(engine_url.replace("postgresql+asyncpg://", "postgresql://"))
         try:
             result = await conn.fetchval(
-                "SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = 'relations')"
+                "SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = 'relations')",
             )
             return bool(result)
         finally:
@@ -96,7 +96,7 @@ def db_url() -> str:
     return TEST_DB_URL
 
 
-@pytest.fixture
+@pytest.fixture()
 async def db_engine(db_url: str):
     """Session-scoped engine; skips if DB/schema not available."""
     if not _is_db_available():
@@ -108,7 +108,7 @@ async def db_engine(db_url: str):
     try:
         async with engine.begin() as conn:
             result = await conn.execute(
-                text("SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = 'relations')")
+                text("SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = 'relations')"),
             )
             schema_ok = result.scalar()
         if not schema_ok:
@@ -122,12 +122,12 @@ async def db_engine(db_url: str):
     await engine.dispose()
 
 
-@pytest.fixture
+@pytest.fixture()
 async def session_factory(db_engine) -> async_sessionmaker[AsyncSession]:
     return async_sessionmaker(db_engine, expire_on_commit=False)
 
 
-@pytest.fixture
+@pytest.fixture()
 async def db_session(session_factory) -> AsyncGenerator[AsyncSession, None]:
     async with session_factory() as session:
         yield session
@@ -160,7 +160,7 @@ async def _clean_tables(db_engine):
 # ── Valkey fixture ────────────────────────────────────────────────────────────
 
 
-@pytest.fixture
+@pytest.fixture()
 async def valkey_client():
     try:
         from messaging.valkey import create_valkey_client_from_url  # type: ignore[import-untyped]
@@ -175,14 +175,14 @@ async def valkey_client():
 # ── Mock ML / LLM fixtures ────────────────────────────────────────────────────
 
 
-@pytest.fixture
+@pytest.fixture()
 def mock_embedding_client() -> MagicMock:
     client = MagicMock()
     client.embed = AsyncMock(return_value=[[0.0] * 1024])
     return client
 
 
-@pytest.fixture
+@pytest.fixture()
 def mock_llm_client() -> MagicMock:
     client = MagicMock()
     client.extract = AsyncMock(return_value={"relations": [], "claims": [], "events": []})

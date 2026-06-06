@@ -70,6 +70,9 @@ def _build_factories(
     """
     _check_alembic_guard()
 
+    # BP-502: application_name surfaces this service in pg_stat_activity for
+    # connection debugging; pool_recycle=300 defends against stale DNS sockets.
+    _connect_args: dict[str, object] = {"server_settings": {"application_name": "knowledge-graph"}}
     write_engine = create_async_engine(
         settings.database_url.get_secret_value(),
         echo=False,
@@ -77,6 +80,8 @@ def _build_factories(
         pool_pre_ping=True,
         pool_size=settings.db_pool_size,
         max_overflow=settings.db_max_overflow,
+        pool_recycle=300,
+        connect_args=_connect_args,
     )
     write_factory: async_sessionmaker[AsyncSession] = async_sessionmaker(
         bind=write_engine,
@@ -110,6 +115,8 @@ def _build_factories(
             pool_pre_ping=True,
             pool_size=settings.db_pool_size_read,
             max_overflow=settings.db_max_overflow_read,
+            pool_recycle=300,
+            connect_args=_connect_args,
             execution_options={"postgresql_readonly": True, "no_parameters": False},
         )
         read_factory = async_sessionmaker(
@@ -147,6 +154,8 @@ def create_intelligence_session_factory(
         pool_pre_ping=True,
         pool_size=10,
         max_overflow=20,
+        pool_recycle=300,
+        connect_args={"server_settings": {"application_name": "knowledge-graph"}},
     )
     factory: async_sessionmaker[AsyncSession] = async_sessionmaker(
         bind=engine,
@@ -180,6 +189,8 @@ def create_readonly_session_factory(
         pool_pre_ping=True,
         pool_size=20,
         max_overflow=30,
+        pool_recycle=300,
+        connect_args={"server_settings": {"application_name": "knowledge-graph"}},
         execution_options={"postgresql_readonly": True, "no_parameters": False},
     )
     factory: async_sessionmaker[AsyncSession] = async_sessionmaker(

@@ -84,7 +84,10 @@ async def test_create_feedback_persists_with_redaction() -> None:
     cmd = _make_create_cmd(
         description="Auth failed: Bearer abcdef0123456789ABCDEFGH",
     )
-    rec = await CreateFeedbackSubmissionUseCase().execute(cmd, uow)
+    # REQ-002d: use case now returns CreateFeedbackSubmissionResult.
+    result = await CreateFeedbackSubmissionUseCase().execute(cmd, uow)
+    rec = result.record
+    assert result.created is True
     # Description must be redacted at the use-case layer.
     assert "abcdef0123456789ABCDEFGH" not in rec.description
     assert "[REDACTED:" in rec.description
@@ -100,7 +103,7 @@ async def test_create_feedback_redacts_console_logs_recursively() -> None:
             {"level": "info", "msg": "ok", "ctx": {"email": "leaked@x.com"}},
         ],
     )
-    rec = await CreateFeedbackSubmissionUseCase().execute(cmd, uow)
+    rec = (await CreateFeedbackSubmissionUseCase().execute(cmd, uow)).record
     flat = str(rec.console_logs)
     assert "abcdef0123456789ABCDEFGH" not in flat
     # Email regex catches it inside nested dict.
@@ -110,7 +113,7 @@ async def test_create_feedback_redacts_console_logs_recursively() -> None:
 async def test_create_feedback_anonymous_with_email_works() -> None:
     uow = FakeUnitOfWork()
     cmd = _make_create_cmd(user_id=None, email="anon@example.com")
-    rec = await CreateFeedbackSubmissionUseCase().execute(cmd, uow)
+    rec = (await CreateFeedbackSubmissionUseCase().execute(cmd, uow)).record
     assert rec.user_id is None
     assert rec.email == "anon@example.com"
 
@@ -176,7 +179,8 @@ async def test_get_feedback_not_found_raises() -> None:
 async def test_update_feedback_changes_status_and_tags() -> None:
     uow = FakeUnitOfWork()
     cmd = _make_create_cmd()
-    rec = await CreateFeedbackSubmissionUseCase().execute(cmd, uow)
+    # REQ-002d: unwrap result.
+    rec = (await CreateFeedbackSubmissionUseCase().execute(cmd, uow)).record
 
     updated = await UpdateFeedbackSubmissionUseCase().execute(
         UpdateFeedbackSubmissionCommand(
@@ -210,7 +214,7 @@ async def test_update_feedback_not_found_raises() -> None:
 async def test_delete_feedback_removes_row() -> None:
     uow = FakeUnitOfWork()
     cmd = _make_create_cmd()
-    rec = await CreateFeedbackSubmissionUseCase().execute(cmd, uow)
+    rec = (await CreateFeedbackSubmissionUseCase().execute(cmd, uow)).record
     await DeleteFeedbackSubmissionUseCase().execute(rec.id, rec.tenant_id, uow)
     with pytest.raises(FeedbackSubmissionNotFoundError):
         await GetFeedbackSubmissionUseCase().execute(rec.id, rec.tenant_id, uow)
@@ -504,3 +508,60 @@ async def test_five_sequential_votes_yield_count_five() -> None:
         )
         final_count = rec.vote_count
     assert final_count == 5
+
+
+# ── REQ-002d: idempotent POST /v1/feedback/submissions ───────────────────────
+
+
+async def test_create_feedback_idempotency_key_replay_returns_same_row() -> None:
+    """REQ-002d — same key + same body returns the original record."""
+    uow = FakeUnitOfWork()
+    key = str(uuid4())
+    base = _make_create_cmd()
+    cmd = CreateFeedbackSubmissionCommand(**{**base.__dict__, "idempotency_key": key})
+
+    result1 = await CreateFeedbackSubmissionUseCase().execute(cmd, uow)
+    result2 = await CreateFeedbackSubmissionUseCase().execute(cmd, uow)
+
+    assert result1.created is True
+    assert result2.created is False
+    assert result1.record.id == result2.record.id
+    # Only one row persisted.
+    items, total = await uow.feedback_submissions.list(cmd.tenant_id, limit=10, offset=0)
+    assert total == 1
+
+
+async def test_create_feedback_idempotency_key_different_body_conflicts() -> None:
+    """REQ-002d — same key + different body → IdempotencyConflictError (409)."""
+    from portfolio.domain.errors import IdempotencyConflictError
+
+    uow = FakeUnitOfWork()
+    key = str(uuid4())
+    base = _make_create_cmd()
+    cmd_a = CreateFeedbackSubmissionCommand(**{**base.__dict__, "idempotency_key": key})
+    await CreateFeedbackSubmissionUseCase().execute(cmd_a, uow)
+
+    # Different kind — caller is reusing the key for a different request.
+    cmd_b = CreateFeedbackSubmissionCommand(**{**base.__dict__, "kind": "ux", "idempotency_key": key})
+    with pytest.raises(IdempotencyConflictError):
+        await CreateFeedbackSubmissionUseCase().execute(cmd_b, uow)
+
+
+async def test_create_feedback_invalid_idempotency_key_raises() -> None:
+    """REQ-002d — non-UUID key → IdempotencyKeyInvalidError (422)."""
+    from portfolio.domain.errors import IdempotencyKeyInvalidError
+
+    uow = FakeUnitOfWork()
+    base = _make_create_cmd()
+    cmd = CreateFeedbackSubmissionCommand(**{**base.__dict__, "idempotency_key": "not-a-uuid"})
+    with pytest.raises(IdempotencyKeyInvalidError):
+        await CreateFeedbackSubmissionUseCase().execute(cmd, uow)
+
+
+async def test_create_feedback_no_idempotency_key_is_backcompat() -> None:
+    """REQ-002d — missing header keeps non-idempotent behaviour, still 201."""
+    uow = FakeUnitOfWork()
+    cmd = _make_create_cmd()
+    result = await CreateFeedbackSubmissionUseCase().execute(cmd, uow)
+    assert result.created is True
+    assert result.record.idempotency_key is None

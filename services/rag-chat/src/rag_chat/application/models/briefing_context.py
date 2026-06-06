@@ -9,13 +9,20 @@ All types are frozen (immutable) and kw_only for explicit construction.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from decimal import Decimal
-from typing import Any
+from typing import TYPE_CHECKING, Any
 from uuid import UUID
 
 from rag_chat.domain.enums import BriefingType
+
+if TYPE_CHECKING:
+    from rag_chat.application.ports.upstream_clients import (
+        EarningsCalendarResult,
+        EnrichedChunkResult,
+        MarketTapeResult,
+    )
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -89,11 +96,28 @@ class QuoteSummary:
 
 @dataclass(frozen=True, kw_only=True)
 class MarketOverview:
-    """Broad market state — sector performance, top movers."""
+    """Broad market state — sector performance, top movers, tape, holdings.
 
-    sector_performance: dict[str, float]
-    top_gainers: list[dict[str, Any]]
-    top_losers: list[dict[str, Any]]
+    PLAN-0102 W1 (T-W1-01): added ``indices`` (SPY/QQQ/VIX tape) and ``holdings``
+    (per-holding quote snapshots). The pre-existing ``sector_performance`` /
+    ``top_gainers`` / ``top_losers`` fields are kept for back-compat with any
+    legacy formatter paths. ``indices`` + ``holdings`` are populated by
+    ``BriefingContextGatherer.gather_morning_context()`` from the same S3 batch
+    call so they share one network round-trip; the formatter renders all three
+    sections explicitly so live data is never silently dropped (BP-614).
+    """
+
+    sector_performance: dict[str, float] = field(default_factory=dict)
+    top_gainers: list[dict[str, Any]] = field(default_factory=list)
+    top_losers: list[dict[str, Any]] = field(default_factory=list)
+    # Tape — broad-market reference instruments (SPY / QQQ / VIX). Each entry
+    # is a ``QuoteSummary`` whose ``instrument_id`` carries the ticker symbol
+    # (not a UUID) so the formatter can render "SPY 485.20" without a lookup.
+    indices: list[QuoteSummary] = field(default_factory=list)
+    # Per-holding quote snapshots — same call as ``indices`` so we surface what
+    # we already pay to fetch. The formatter renders these inside a dedicated
+    # "Your Portfolio Today" pre-section.
+    holdings: list[QuoteSummary] = field(default_factory=list)
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -107,6 +131,11 @@ class EventSummary:
     event_date: datetime | None = None
     event_text: str
     extraction_confidence: float
+    # PLAN-0102 W1 T-W1-04: ``"portfolio"`` for entity-scoped events,
+    # ``"macro"`` for unscoped Fed/CPI/jobless rows merged from the second S7
+    # call. Empty string keeps any legacy caller that constructs EventSummary
+    # without this field working without changes.
+    source_tier: str = ""
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -129,6 +158,47 @@ class FundamentalsSummary:
 
 
 @dataclass(frozen=True, kw_only=True)
+class PortfolioPnLItem:
+    """One per-holding overnight P&L row (PLAN-0102 W2 T-W2-03).
+
+    Mirrors the wire shape returned by S1's
+    ``/internal/v1/users/{user_id}/portfolio/pnl`` endpoint; we keep a
+    domain-side copy so the formatter doesn't import infrastructure DTOs.
+    """
+
+    symbol: str | None
+    entity_id: UUID | None
+    instrument_id: UUID
+    qty: float
+    last_close_usd: float | None
+    current_price_usd: float | None
+    overnight_pnl_usd: float
+    overnight_pnl_pct: float
+
+
+@dataclass(frozen=True, kw_only=True)
+class PortfolioPnLSnapshot:
+    """Full P&L bundle for one user."""
+
+    user_id: UUID
+    holdings: list[PortfolioPnLItem]
+    total_overnight_pnl_usd: float
+    total_overnight_pnl_pct: float
+
+
+@dataclass(frozen=True, kw_only=True)
+class SectorExposure:
+    """Sector aggregate — ``{sector_label: pct_of_portfolio_value}`` (PLAN-0102 W2).
+
+    Values are fractional (0.65 = 65%), summing to ≤ 1.0. Holdings whose
+    sector is unknown are bucketed into the explicit ``"Unknown"`` key so
+    the formatter can render a placeholder line without a separate flag.
+    """
+
+    by_sector: dict[str, float] = field(default_factory=dict)
+
+
+@dataclass(frozen=True, kw_only=True)
 class BriefingContext:
     """Full context bundle for AI briefing generation.
 
@@ -148,7 +218,29 @@ class BriefingContext:
     recent_events: list[EventSummary]
     entity_graph: EntityGraphSnapshot | None = None
     fundamentals: FundamentalsSummary | None = None
+    # ANN-retrieved chunks from SEC filings / earnings transcripts / analyst
+    # reports for the focal entity.  Only populated for INSTRUMENT briefings.
+    # Empty list for MORNING briefings (no focal entity to filter by).
+    relevant_chunks: list[EnrichedChunkResult] = field(default_factory=list)
     gathered_at: datetime
+    # PLAN-0099 Wave A: weighted [0.0, 1.0] score of how much context the
+    # gatherer was able to assemble.  Downstream Wave B refusal-on-low-context
+    # uses this; defaults to 1.0 so legacy callers that build a BriefingContext
+    # without this field (tests / older code paths) keep the old behaviour
+    # (no refusal).
+    context_availability_score: float = 1.0
+    # PLAN-0102 W2 T-W2-03: real overnight P&L per holding + sector aggregates.
+    # Both default to None so legacy callers (tests / brief paths that don't
+    # gather P&L) keep the old behaviour; formatter renders nothing when None.
+    portfolio_pnl: PortfolioPnLSnapshot | None = None
+    sector_exposure: SectorExposure | None = None
+    # PLAN-0102 W3 follow-up (T-W3-FU-01): real broad-market tape snapshot
+    # (SPY / QQQ / VIX rows with session + premkt fields) and forward-looking
+    # earnings calendar. Both default to None so any pre-W3 caller keeps the
+    # old behaviour; the formatter renders graceful "data unavailable"
+    # placeholders when set to None or empty (R9).
+    market_tape: MarketTapeResult | None = None
+    earnings_calendar: EarningsCalendarResult | None = None
 
     @classmethod
     def for_morning(cls, *, user_id: UUID, tenant_id: UUID, **kwargs: Any) -> BriefingContext:

@@ -285,3 +285,47 @@ describe("AppLayout — auth guard", () => {
     expect(mockRouterReplace).not.toHaveBeenCalled();
   });
 });
+
+// ── PRD-0089 W1 §4.11 additions ───────────────────────────────────────────
+
+describe("AppLayout — PRD-0089 W1 shell additions", () => {
+  beforeEach(() => {
+    mockUseAuth.mockReturnValue({
+      isLoading: false,
+      isAuthenticated: true,
+      accessToken: "eyJhbGciOiJSUzI1NiJ9.t.sig",
+      user: {
+        user_id: "u",
+        tenant_id: "t",
+        email: "trader@fund.com",
+        name: "Trader",
+        avatar_url: null,
+      },
+      setTokens: vi.fn(),
+      logout: vi.fn(),
+    });
+  });
+
+  it("renders the skip-to-content link as the first focusable child (C-27)", () => {
+    render(
+      <AppLayout>
+        <div data-testid="protected-child" />
+      </AppLayout>,
+      { wrapper: makeWrapper },
+    );
+    const skipLink = screen.getByRole("link", { name: /Skip to main content/i });
+    expect(skipLink).toBeInTheDocument();
+    expect(skipLink).toHaveAttribute("href", "#main");
+  });
+
+  it("renders the main region with id='main' as the skip-link target", () => {
+    const { container } = render(
+      <AppLayout>
+        <div data-testid="protected-child" />
+      </AppLayout>,
+      { wrapper: makeWrapper },
+    );
+    const main = container.querySelector("main#main");
+    expect(main).not.toBeNull();
+  });
+});

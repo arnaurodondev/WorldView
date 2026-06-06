@@ -28,22 +28,31 @@ from api_gateway.schemas.intelligence import (
     ConfidenceBreakdownPublic,
     ConfidenceTrendPoint,
     EntityIntelligencePublic,
+    EntitySentimentTimeseriesResponse,
     NarrativeVersionPublic,
+    SentimentDataPoint,
     SourceSharePublic,
 )
+from api_gateway.schemas.market import YieldCurveResponse, YieldPoint
 from api_gateway.schemas.narratives import NarrativeListResponse, NarrativeTriggerResponse
-from api_gateway.schemas.news import NewsArticle, NewsTopResponse
+from api_gateway.schemas.news import ArticleImpactHistoryResponse, ImpactWindow, NewsArticle, NewsTopResponse
 from api_gateway.schemas.paths import EntityPathsResponse, PathEdgePublic, PathInsightPublic, PathNodePublic
-from api_gateway.schemas.portfolios import PortfolioBundleResponse, PortfolioResponse
+from api_gateway.schemas.portfolios import (
+    PortfolioBundleResponse,
+    PortfolioResponse,
+    PortfolioSectorAttributionResponse,
+    SectorBucket,
+)
 from api_gateway.schemas.prediction_markets import (
     PredictionMarket,
     PredictionMarketsListResponse,
 )
-from api_gateway.schemas.screener import ScreenerResponse, ScreenerResultItem
+from api_gateway.schemas.screener import NLScreenerRequest, NLScreenerResponse, ScreenerResponse, ScreenerResultItem
 from api_gateway.schemas.watchlists import WatchlistResponse
 
 __all__ = [
     "AlertResponse",
+    "ArticleImpactHistoryResponse",
     "ConfidenceBreakdownPublic",
     "ConfidenceTrendPoint",
     "DashboardSnapshotResponse",
@@ -52,10 +61,14 @@ __all__ = [
     "EntityContextChatRequest",
     "EntityIntelligencePublic",
     "EntityPathsResponse",
+    "EntitySentimentTimeseriesResponse",
     "FundamentalsRecord",
     "FundamentalsResponse",
+    "ImpactWindow",
     "InstrumentSearchResult",
     "Meta",
+    "NLScreenerRequest",
+    "NLScreenerResponse",
     "NarrativeListResponse",
     "NarrativeTriggerResponse",
     "NarrativeVersionPublic",
@@ -68,11 +81,16 @@ __all__ = [
     "PathNodePublic",
     "PortfolioBundleResponse",
     "PortfolioResponse",
+    "PortfolioSectorAttributionResponse",
     "PredictionMarket",
     "PredictionMarketsListResponse",
     "QuoteResponse",
     "ScreenerResponse",
     "ScreenerResultItem",
+    "SectorBucket",
+    "SentimentDataPoint",
     "SourceSharePublic",
     "WatchlistResponse",
+    "YieldCurveResponse",
+    "YieldPoint",
 ]

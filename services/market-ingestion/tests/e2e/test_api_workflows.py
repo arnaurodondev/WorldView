@@ -191,17 +191,22 @@ async def test_backfill_single_day_one_chunk(e2e_client: AsyncClient) -> None:
 
 
 async def test_backfill_exceeds_max_chunks_returns_422(e2e_client: AsyncClient) -> None:
-    """POST /api/v1/ingest/backfill requesting >100 chunks returns 422."""
-    # 3100 days / 30 day chunks = 104 chunks — exceeds the 100-chunk cap
+    """POST /api/v1/ingest/backfill requesting >500 chunks returns 422.
+
+    PLAN-0055 A-1 bumped ``_MAX_CHUNKS`` from 100 → 500 to support 10-year
+    daily horizons. To still exercise the cap we now use a tight
+    ``chunk_days=1`` over ~1.6 years, which yields ~600 chunks — well past
+    the 500-chunk ceiling.
+    """
     resp = await e2e_client.post(
         "/api/v1/ingest/backfill",
         json={
             "provider": "eodhd",
             "symbol": f"E2E_HUGE_{int(time.time())}",
-            "start_date": "2015-01-01",
-            "end_date": "2023-07-01",
+            "start_date": "2022-01-01",
+            "end_date": "2023-09-30",  # 637 days → 637 chunks @ chunk_days=1
             "timeframe": "1d",
-            "chunk_days": 30,
+            "chunk_days": 1,
         },
         headers=_AUTH_HEADERS,
     )

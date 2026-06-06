@@ -259,6 +259,30 @@ class InstrumentResolutionTransientError(DomainError):
     error_code = "INSTRUMENT_RESOLUTION_TRANSIENT"
 
 
+class BrokerageSyncSymbolNotFoundError(EntityNotFoundError):
+    """Raised when a brokerage activity references a ticker that S2 (market-data)
+    confirms (via HTTP 404) does not exist on the platform.
+
+    PRD-0089 F2 §4.4 — the SnapTrade adapter / brokerage-sync worker no longer
+    consults the legacy ``InstrumentRef.entity_id`` bridge field or carries a
+    DB-first then S3-fallback dual path. The single canonical lookup is the
+    S2 REST client. When S2 returns 404 this exception is raised so the worker
+    can record a ``SyncErrorType.UNKNOWN_INSTRUMENT`` row and continue. The
+    distinct exception class (rather than a None return) keeps the resolution
+    contract self-documenting and makes the unknown-vs-transient split explicit
+    at the call site.
+    """
+
+    error_code = "BROKERAGE_SYNC_SYMBOL_NOT_FOUND"
+
+    def __init__(self, symbol: str) -> None:
+        super().__init__(
+            f"Brokerage sync could not resolve symbol to instrument: {symbol!r}",
+            details={"symbol": symbol},
+        )
+        self.symbol = symbol
+
+
 # ── Feedback (PLAN-0052 Wave D) ────────────────────────────────────────────────
 
 

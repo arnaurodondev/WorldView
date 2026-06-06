@@ -17,6 +17,33 @@ if TYPE_CHECKING:
 
 logger = structlog.get_logger(__name__)
 
+# ── PLAN-0093 Wave A-2 (F-LOG-003): cross-service Kafka consumer metric ──────
+#
+# A SINGLE global counter (not per-service-namespaced) so a Grafana
+# "consumer stalled" alert can pivot across every consumer in one expression:
+#
+#   rate(kafka_consumer_messages_consumed_total[5m]) == 0
+#
+# Per-service ``<svc>_kafka_messages_consumed_total`` counters already exist
+# on ``ServiceMetrics`` and continue to be incremented — this new counter is
+# additive and lives next to them.  Registered at import time on the global
+# REGISTRY because there is only ever one logical counter per process.  We
+# guard against duplicate registration in case a test isolates the registry
+# or re-imports the module under test.
+try:
+    KAFKA_CONSUMER_MESSAGES = Counter(
+        "kafka_consumer_messages_consumed_total",
+        "Total Kafka messages consumed by this client (cross-service rollup).",
+        labelnames=("service", "topic", "consumer_group"),
+    )
+except ValueError:
+    # Already registered (re-import in same process / test reload).  Look it
+    # up from the registry so callers always get the same instance.
+    _existing = REGISTRY._names_to_collectors.get("kafka_consumer_messages_consumed_total")
+    if _existing is None:
+        raise
+    KAFKA_CONSUMER_MESSAGES = _existing  # type: ignore[assignment]
+
 # Cache for ServiceMetrics registered in the global REGISTRY, keyed by service_name.
 # Prevents duplicate-registration errors when the same service name is used more than
 # once in the same process (common in test suites that instantiate consumers repeatedly).

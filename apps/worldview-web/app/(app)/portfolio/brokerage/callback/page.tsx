@@ -168,7 +168,7 @@ export default function BrokerageCallbackPage() {
           aria-label="Activating brokerage connection"
         />
         <div className="text-center">
-          <p className="text-sm font-medium text-foreground">
+          <p className="text-[14px] font-medium text-foreground">
             Activating your brokerage connection…
           </p>
           <p className="mt-1 text-xs text-muted-foreground">
@@ -188,10 +188,10 @@ export default function BrokerageCallbackPage() {
           aria-hidden="true"
         />
         <div className="text-center">
-          <p className="text-base font-semibold text-foreground">
+          <p className="text-[16px] font-semibold text-foreground">
             Brokerage account connected successfully!
           </p>
-          <p className="mt-1 text-sm text-muted-foreground">
+          <p className="mt-1 text-[14px] text-muted-foreground">
             Your transaction history will begin syncing shortly.
             New transactions will be imported automatically.
           </p>
@@ -217,10 +217,10 @@ export default function BrokerageCallbackPage() {
         aria-hidden="true"
       />
       <div className="text-center">
-        <p className="text-base font-semibold text-foreground">
+        <p className="text-[16px] font-semibold text-foreground">
           Connection failed
         </p>
-        <p className="mt-1 text-sm text-muted-foreground">
+        <p className="mt-1 text-[14px] text-muted-foreground">
           {errorMessage ?? "An unexpected error occurred. Please try again."}
         </p>
       </div>

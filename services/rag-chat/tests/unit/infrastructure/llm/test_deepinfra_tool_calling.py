@@ -226,3 +226,82 @@ def test_deepinfra_adapter_is_instance_of_llm_chat_provider() -> None:
 
     # isinstance check works because LlmChatProvider is @runtime_checkable
     assert isinstance(adapter, LlmChatProvider)
+
+
+# ---------------------------------------------------------------------------
+# FIX-LIVE-X: tool-call timeout config + explicit TimeoutError surfacing
+# ---------------------------------------------------------------------------
+
+
+def test_deepinfra_chat_with_tools_timeout_defaults_to_90s() -> None:
+    """Without an override, the chat-with-tools budget is the FIX-LIVE-X default (90s).
+
+    The previous 30s shared timeout caused Q6 second-turn calls to time out
+    silently when the Qwen3-235B completion model received a multi-tool
+    message stack. The default budget must give the model headroom even when
+    the generic stream() timeout is left at 30s.
+    """
+    mock_client = AsyncMock()
+    adapter = DeepInfraCompletionAdapter(
+        api_key="test-key",
+        model="any",
+        http_client=mock_client,
+        timeout=30.0,  # generic streaming timeout
+    )
+    assert adapter._chat_with_tools_timeout >= 90.0
+
+
+def test_deepinfra_chat_with_tools_explicit_override() -> None:
+    """An explicit chat_with_tools_timeout argument is honoured verbatim."""
+    mock_client = AsyncMock()
+    adapter = DeepInfraCompletionAdapter(
+        api_key="test-key",
+        model="any",
+        http_client=mock_client,
+        timeout=5.0,
+        chat_with_tools_timeout=42.0,
+    )
+    assert adapter._chat_with_tools_timeout == 42.0
+
+
+@pytest.mark.asyncio
+async def test_deepinfra_chat_with_tools_timeout_raises_named_error() -> None:
+    """When the call exceeds the budget, the raised TimeoutError has a non-empty message.
+
+    The previous str(TimeoutError()) == "" produced a silent
+    `provider_chat_with_tools_failed` log with `error=""`. The adapter must
+    raise a TimeoutError whose message names the model + the budget so the
+    operator can route the alert without crawling tracebacks.
+    """
+    import asyncio
+
+    # Make the post coroutine hang past the budget.
+    async def _hang(*_a: object, **_kw: object) -> None:
+        await asyncio.sleep(5)
+
+    mock_client = AsyncMock()
+    mock_client.post = _hang  # type: ignore[assignment]
+    adapter = DeepInfraCompletionAdapter(
+        api_key="test-key",
+        model="qwen-test",
+        http_client=mock_client,
+        timeout=30.0,
+        chat_with_tools_timeout=0.05,  # 50ms — guarantees the timeout fires
+        # W46: disable the same-provider model fallback so this test isolates
+        # the FIX-LIVE-X timeout-message contract for the primary model.  The
+        # W46 fallback behaviour (retry on Llama on timeout) has dedicated
+        # tests in test_deepinfra_adapter.py — we don't want that path active
+        # here because the mock client would hang the fallback model too.
+        stream_chat_fallback_model=None,
+    )
+
+    with pytest.raises(TimeoutError) as excinfo:
+        await adapter.chat_with_tools(
+            [{"role": "user", "content": "ping"}],
+            tools=_SAMPLE_TOOLS,
+        )
+
+    msg = str(excinfo.value)
+    assert msg, "TimeoutError must carry a non-empty message (FIX-LIVE-X)"
+    assert "qwen-test" in msg
+    assert "0.05" in msg

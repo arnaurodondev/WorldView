@@ -36,9 +36,12 @@ from knowledge_graph.api import (
     cypher,
     dlq,
     entities,
+    entity_refresh,  # REQ-003 / PLAN-0099 W0: manual entity-refresh trigger
     events,
     health,
     internal_costs,
+    internal_intelligence_rollup,  # PLAN-0099 W0: 7d contradiction rollup
+    internal_sectors,  # PLAN-0093 B-? / WL: per-entity sector lookup
     narratives,  # PRD-0074 Wave D: narrative history + manual trigger
     paths,  # PLAN-0074 Wave E2: path insights API
     routes,
@@ -256,5 +259,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(internal_costs.router)
     app.include_router(paths.router)  # PLAN-0074 Wave E2 — path insights
     app.include_router(narratives.router)  # PRD-0074 Wave D — narrative history + manual trigger
+    # PLAN-0099 W0 + WL: manual entity refresh, 7d intelligence rollup,
+    # per-entity sector lookup (consumed by S3 screener sync + S9 brief).
+    app.include_router(entity_refresh.router)
+    app.include_router(internal_intelligence_rollup.router)
+    app.include_router(internal_sectors.router)
 
     return app

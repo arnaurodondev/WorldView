@@ -5,9 +5,11 @@ Handles raw HTTP communication, pagination, and error mapping.
 
 from __future__ import annotations
 
+import time
 from typing import TYPE_CHECKING, Any
 
 from content_ingestion.domain.exceptions import AdapterError
+from content_ingestion.infrastructure.metrics.prometheus import record_fetch_attempt
 from observability import get_logger  # type: ignore[import-untyped]
 
 if TYPE_CHECKING:
@@ -76,14 +78,31 @@ class EODHDClient:
         if to_date:
             params["to"] = to_date
 
-        response = await self._http.get(self._base_url, params=params)
+        # Per-attempt Prometheus instrumentation (BP-174: dashboard panels
+        # were "No data" because s4_fetches_total had no live call sites).
+        # We time the HTTP call and label the outcome (success/error/rate_limited)
+        # in a try/finally so duration is always observed even on exception.
+        start = time.monotonic()
+        status_label = "success"
+        try:
+            response = await self._http.get(self._base_url, params=params)
 
-        if response.status_code == 429:
-            msg = "EODHD rate limit exceeded (HTTP 429)"
-            raise AdapterError(msg)
-        if response.status_code >= 400:
-            msg = f"EODHD API error: HTTP {response.status_code}"
-            raise AdapterError(msg)
+            if response.status_code == 429:
+                status_label = "rate_limited"
+                msg = "EODHD rate limit exceeded (HTTP 429)"
+                raise AdapterError(msg)
+            if response.status_code >= 400:
+                status_label = "error"
+                msg = f"EODHD API error: HTTP {response.status_code}"
+                raise AdapterError(msg)
+        except AdapterError:
+            raise
+        except Exception:
+            # Network / timeout / DNS — counts as error attempt.
+            status_label = "error"
+            raise
+        finally:
+            record_fetch_attempt("eodhd", status_label, time.monotonic() - start)
 
         data = response.json()
         if not isinstance(data, list):

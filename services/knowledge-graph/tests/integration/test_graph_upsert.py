@@ -31,7 +31,7 @@ async def _create_entity(session, name: str, entity_type: str = "organization") 
     return await repo.create(canonical_name=name, entity_type=entity_type)
 
 
-@pytest.mark.integration
+@pytest.mark.integration()
 async def test_relation_upsert_creates_new_row(session_factory) -> None:
     """First upsert creates exactly one row."""
     async with session_factory() as session:
@@ -62,7 +62,7 @@ async def test_relation_upsert_creates_new_row(session_factory) -> None:
         assert result.scalar() == 1
 
 
-@pytest.mark.integration
+@pytest.mark.integration()
 async def test_relation_upsert_idempotent(session_factory) -> None:
     """Repeated upsert on same triple does NOT create duplicates; increments evidence_count."""
     async with session_factory() as session:
@@ -112,7 +112,7 @@ async def test_relation_upsert_idempotent(session_factory) -> None:
     assert row[1] is True, "confidence_stale should be True after upsert"
 
 
-@pytest.mark.integration
+@pytest.mark.integration()
 async def test_different_triples_create_separate_rows(session_factory) -> None:
     """Different (subject, type, object) triples create separate relation rows."""
     async with session_factory() as session:

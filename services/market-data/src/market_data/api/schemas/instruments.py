@@ -58,6 +58,53 @@ class InstrumentLookupDetailResponse(InstrumentLookupResponse):
     description: str | None = None
 
 
+class TopByMarketCapItem(BaseModel):
+    """One row in the top-N-by-market-cap response.
+
+    ``market_cap_usd`` is the latest known capitalisation from
+    ``fundamental_metrics`` (metric=``market_capitalization``); may be
+    ``None`` for newly-listed instruments that have not yet been ingested.
+    """
+
+    id: str
+    symbol: str
+    exchange: str
+    market_cap_usd: float | None = None
+    currency_code: str | None = None
+
+
+class TopByMarketCapResponse(BaseModel):
+    """Paginated list of instruments sorted by latest market cap (desc)."""
+
+    total: int
+    offset: int
+    limit: int
+    results: list[TopByMarketCapItem]
+
+
+class OhlcvCoveredItem(BaseModel):
+    """One row in the ohlcv-covered response (PLAN-0089 Wave L-4b).
+
+    Lightweight subset of InstrumentResponse — used by market-ingestion's
+    universe-expansion call so the worker can build new policy rows.
+    """
+
+    id: str
+    symbol: str
+    exchange: str
+    country: str | None = None
+    currency_code: str | None = None
+
+
+class OhlcvCoveredResponse(BaseModel):
+    """Paginated list of instruments with ``has_ohlcv = TRUE``."""
+
+    total: int
+    offset: int
+    limit: int
+    results: list[OhlcvCoveredItem]
+
+
 class OnDemandProfileResponse(BaseModel):
     """Structured enrichment profile fetched on-demand from EODHD and DB."""
 

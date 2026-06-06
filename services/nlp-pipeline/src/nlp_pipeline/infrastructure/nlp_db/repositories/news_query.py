@@ -64,7 +64,7 @@ _DISPLAY_SCORE_CASE = """\
 # Flow C — global top news (PRD-0026 §6.7 Flow C)
 # ---------------------------------------------------------------------------
 
-_TOP_NEWS_SQL = (
+_TOP_NEWS_SQL_BASE = (
     "WITH article_market_impact AS (\n" + _WINDOW_PIVOT_FRAGMENT + "    GROUP BY article_id\n"
     """),
 article_primary_entity AS (
@@ -118,11 +118,14 @@ LEFT JOIN article_primary_entity ape ON ape.article_id = c.doc_id
 WHERE (
     CAST(:min_display_score AS DOUBLE PRECISION) IS NULL
     OR c.display_relevance_score >= CAST(:min_display_score AS DOUBLE PRECISION)
+)"""
 )
-ORDER BY display_relevance_score DESC, published_at DESC
-LIMIT :limit OFFSET :offset
-"""
-)
+
+# Suffix appended after any optional per-request clauses (e.g. ticker filter).
+_TOP_NEWS_SQL_SUFFIX = "\nORDER BY display_relevance_score DESC, published_at DESC\nLIMIT :limit OFFSET :offset\n"
+
+# Backwards-compat alias: existing tests that import _TOP_NEWS_SQL continue to work.
+_TOP_NEWS_SQL = _TOP_NEWS_SQL_BASE + _TOP_NEWS_SQL_SUFFIX
 
 # ---------------------------------------------------------------------------
 # Flow D — entity articles (PRD-0026 §6.7 Flow D)
@@ -130,10 +133,52 @@ LIMIT :limit OFFSET :offset
 
 _ENTITY_ARTICLES_SQL = (
     "WITH entity_article_ids AS (\n"
+    # BP-606 (PLAN-0100 W1 T-W1-01): UNION two discovery paths so we capture
+    # articles whose entity linkage lives EITHER in the normalised
+    # ``entity_mentions`` table OR only in the denormalised
+    # ``chunks.entity_mentions`` JSONB column. The MSTR canary (doc has 4
+    # chunks with JSONB entity_id=MSTR but ZERO rows in the normalised table)
+    # was invisible to chat retrieval before this fix — every tool call
+    # returned ``item_count: 0`` and the LLM substituted a different ticker.
+    # See docs/audits/2026-05-27-plan-0100-q2-mstr-entity-drift-deepdive.md
+    # §2 for the full lineage analysis.
+    #
+    # Leg 1 — normalised ``entity_mentions`` table (pre-BP-606 behaviour).
     "    SELECT DISTINCT em.doc_id AS article_id\n"
     "    FROM entity_mentions em\n"
     "    WHERE em.resolved_entity_id = :entity_id\n"
-    "      AND (em.tenant_id IS NULL OR em.tenant_id = CAST(:tenant_id AS UUID))\n"
+    # R35 (PLAN-0097 W4 T-W4-01): include three row classes for every tenant query:
+    #   1) legacy NULL-tenant rows (pre-PLAN-0096 W4 backfill)
+    #   2) rows owned by the requesting tenant
+    #   3) rows owned by the PUBLIC_TENANT_ID sentinel
+    #      (00000000-0000-0000-0000-000000000000) — assigned by the article
+    #      consumer when tenant resolution fails (BP-575). Without this third
+    #      OR-leg, every PUBLIC_TENANT_ID row is invisible to authenticated
+    #      callers and only reachable by anonymous queries — exactly the
+    #      population that we want to surface to every tenant.
+    "      AND (\n"
+    "          em.tenant_id IS NULL\n"
+    "          OR em.tenant_id = CAST(:tenant_id AS UUID)\n"
+    "          OR em.tenant_id = '00000000-0000-0000-0000-000000000000'::uuid\n"
+    "      )\n"
+    "    UNION\n"
+    # Leg 2 — denormalised ``chunks.entity_mentions`` JSONB containment.
+    # Uses the GIN index on ``chunks.entity_mentions`` (existing). The
+    # ``@>`` containment operator with a one-element JSONB array of
+    # ``{\"entity_id\": <uuid>}`` is GIN-indexed and matches any chunk whose
+    # entity-mention array contains an object with that entity_id.  Chunks
+    # are tenant-scoped via the ``chunks.tenant_id`` column with the same
+    # three-row-class semantics as Leg 1 (R35).
+    "    SELECT DISTINCT c.doc_id AS article_id\n"
+    "    FROM chunks c\n"
+    "    WHERE c.entity_mentions @> jsonb_build_array(\n"
+    "        jsonb_build_object('entity_id', CAST(:entity_id AS TEXT))\n"
+    "    )\n"
+    "      AND (\n"
+    "          c.tenant_id IS NULL\n"
+    "          OR c.tenant_id = CAST(:tenant_id AS UUID)\n"
+    "          OR c.tenant_id = '00000000-0000-0000-0000-000000000000'::uuid\n"
+    "      )\n"
     "),\n"
     "article_windows AS (\n"
     + _WINDOW_PIVOT_FRAGMENT
@@ -250,18 +295,35 @@ class SqlaNewsQueryRepo(NewsQueryPort):
         offset: int,
         min_display_score: float | None,
         routing_tier: str | None,
+        tickers: list[str] | None = None,
     ) -> tuple[list[RankedArticleData], int]:
-        """Execute Flow C: 3-CTE global top-news query (PRD-0026 §6.7)."""
+        """Execute Flow C: 3-CTE global top-news query (PRD-0026 §6.7).
+
+        When ``tickers`` is supplied the query is narrowed to articles whose
+        ``primary_entity_symbol`` is in the provided list via ``= ANY(:tickers)``.
+        asyncpg maps a Python ``list[str]`` to ``text[]`` automatically, which is
+        compatible with the ``= ANY(...)`` operator.
+        """
+        # Build SQL dynamically: append the optional ticker filter between the base
+        # CTE body and the ORDER BY / LIMIT suffix so the WHERE clause stays clean.
+        ticker_clause = "\nAND ape.primary_entity_symbol = ANY(:tickers)" if tickers else ""
+        full_sql = _TOP_NEWS_SQL_BASE + ticker_clause + _TOP_NEWS_SQL_SUFFIX
+
         # BP-069: pass None directly; IS NULL checks in SQL handle nullable params correctly.
+        params: dict[str, object] = {
+            "hours": hours,
+            "routing_tier": routing_tier,
+            "min_display_score": min_display_score,
+            "limit": limit,
+            "offset": offset,
+        }
+        if tickers:
+            # asyncpg handles a Python list as text[] for = ANY() without extra casting.
+            params["tickers"] = tickers
+
         result = await self._session.execute(
-            text(_TOP_NEWS_SQL),
-            {
-                "hours": hours,
-                "routing_tier": routing_tier,
-                "min_display_score": min_display_score,
-                "limit": limit,
-                "offset": offset,
-            },
+            text(full_sql),
+            params,
         )
         rows = result.all()
         if not rows:

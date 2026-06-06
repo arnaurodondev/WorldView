@@ -13,13 +13,19 @@ from fastapi import FastAPI, Request, Response
 from fastapi.responses import Response as FastAPIResponse
 from starlette.middleware.base import BaseHTTPMiddleware
 
-from observability import configure_logging, configure_tracing, get_logger  # type: ignore[import-untyped]
+from observability import (  # type: ignore[import-untyped]
+    assert_app_env_or_die,
+    configure_logging,
+    configure_tracing,
+    get_logger,
+)
 from observability.metrics import add_prometheus_middleware, create_metrics  # type: ignore[import-untyped]
 from observability.sentry import SentrySettings, init_sentry  # type: ignore[import-untyped]
 from observability.tracing import add_otel_middleware  # type: ignore[import-untyped]
 from portfolio.api.exception_handlers import domain_error_handler, unhandled_exception_handler
 from portfolio.api.internal import internal_router
 from portfolio.api.routes import api_router
+from portfolio.api.routes.internal_pnl import internal_pnl_router
 from portfolio.api.routes.provision import provision_router
 from portfolio.config import Settings
 from portfolio.domain.errors import DomainError
@@ -67,6 +73,14 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         service_name=settings.service_name,
         level=settings.log_level,
         json=settings.log_json,
+    )
+
+    # 1b. Boot-time security guard (PLAN-0093 Wave A-1 / F-LOG-JWT-001).
+    # Refuses to start when JWT verification is disabled AND APP_ENV is unset,
+    # so a misconfigured container can never start accepting requests.
+    assert_app_env_or_die(
+        service_name=settings.service_name,
+        internal_jwt_skip_verification=settings.internal_jwt_skip_verification,
     )
 
     # 2. Tracing config (optional — middleware already registered in create_app)
@@ -125,6 +139,16 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     market_data_http = _httpx.AsyncClient(timeout=10.0)
     app.state.market_data_http = market_data_http
     app.state.current_price_client = HttpCurrentPriceClient(
+        http=market_data_http,
+        market_data_url=settings.market_data_service_url,
+    )
+
+    # PLAN-0102 W2 T-W2-01: recent-prices client used by the P&L endpoint.
+    # Shares the same ``market_data_http`` pool so we don't open a second
+    # connection pool to S3.
+    from portfolio.infrastructure.market_data.recent_prices_client import HttpRecentPricesClient
+
+    app.state.recent_prices_client = HttpRecentPricesClient(
         http=market_data_http,
         market_data_url=settings.market_data_service_url,
     )
@@ -205,6 +229,7 @@ def create_app() -> FastAPI:
     app.include_router(api_router)
     app.include_router(internal_router)
     app.include_router(provision_router)
+    app.include_router(internal_pnl_router)
 
     @app.get("/healthz")
     async def healthz() -> dict[str, str]:

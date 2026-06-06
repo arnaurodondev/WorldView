@@ -87,6 +87,8 @@ node_modules/
 # Test output
 test-results/
 out.txt
+tests/validation/chat_eval/runs/
+tests/validation/chat_quality_benchmark/runs/
 
 # Non-project directories
 SF_trip/

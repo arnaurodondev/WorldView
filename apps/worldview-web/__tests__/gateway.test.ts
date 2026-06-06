@@ -558,16 +558,18 @@ describe("createGateway() — ranked news (PRD-0026)", () => {
     expect(calledUrl).toContain("routing_tier=DEEP");
   });
 
-  it("getTopNews() does not send Authorization header (public endpoint)", async () => {
-    // WHY: news/top is public — no token required. Sending one is harmless but
-    // tests ensure we don't accidentally gate it behind auth.
+  it("getTopNews() sends Authorization header when token is available (BP-545)", async () => {
+    // WHY: BP-545 — S9 rate-limits unauthenticated requests far more aggressively
+    // than authenticated ones. Sending the token places the request in the user's
+    // own rate-limit bucket, preventing 429s on the dashboard. Endpoint remains
+    // readable without auth (no 401), but always pass the token when available.
     const spy = mockFetch(200, { articles: [], total: 0 });
     const gw = createGateway("my-token");
     await gw.getTopNews({ limit: 5 });
 
     const calledInit = (spy.mock.calls[0] as [string, RequestInit])[1];
     const headers = calledInit?.headers as Record<string, string>;
-    expect(headers?.["Authorization"]).toBeUndefined();
+    expect(headers?.["Authorization"]).toBe("Bearer my-token");
   });
 
   it("getEntityNews() places entity_id in the URL path (not as a query param)", async () => {

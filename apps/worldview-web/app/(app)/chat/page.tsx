@@ -92,7 +92,6 @@ import type { Thread, Message } from "@/types/api";
 // page — extracting it would require another careful pass and is the
 // remaining E-3 work tracked as E-3-followup.
 import {
-  TypingIndicator,
   MessageBubble,
   StreamingBubble,
 } from "@/features/chat/components/MessageBubble";
@@ -164,6 +163,18 @@ export default function ChatPage() {
   const [activeThreadId, setActiveThreadId] = useState<string | null>(null);
   const [input, setInput] = useState("");
 
+  // PLAN-0103 W3: ephemeral thread ids — client-minted UUIDs that don't yet
+  // exist on the backend. When the user clicks "New chat" we mint a UUID for
+  // SSE correlation, but firing getThread(id) before any message has been sent
+  // produces a 404 + chat error banner. Track these ids here so the per-thread
+  // useQuery can be disabled until the first send promotes the id to a real
+  // server-side row (cleared when the threads list refetch sees it).
+  const [ephemeralThreadIds, setEphemeralThreadIds] = useState<Set<string>>(
+    () => new Set(),
+  );
+  const isEphemeralActive =
+    !!activeThreadId && ephemeralThreadIds.has(activeThreadId);
+
   // ── Thread search (T-E-5-03) ──────────────────────────────────────────────
   // WHY two states: `searchInput` reacts immediately to typing (controlled
   // input); `searchQuery` is the debounced value that drives filtering. This
@@ -214,7 +225,10 @@ export default function ChatPage() {
     // runs — preventing the "blank message list on re-mount" flash.
     queryKey: qk.chat.thread(activeThreadId ?? ""),
     queryFn: () => createGateway(accessToken).getThread(activeThreadId!),
-    enabled: !!accessToken && !!activeThreadId,
+    // PLAN-0103 W3: hold the fetch back for ephemeral (client-minted) ids —
+    // see ephemeralThreadIds above. The id is only "real" once the threads
+    // list refetch sees it (or the first SSE round-trip completes).
+    enabled: !!accessToken && !!activeThreadId && !isEphemeralActive,
     staleTime: 30_000,
   });
 
@@ -236,6 +250,10 @@ export default function ChatPage() {
     // clearPendingAction is passed to ActionConfirmModal as `onDismiss`.
     pendingAction,
     clearPendingAction,
+    // PLAN-0099 W4: latest agent_iteration event — drives the always-visible
+    // AgentIterationProgress strip inside the StreamingBubble. Eliminates the
+    // perceived hang between tool batches on multi-iteration research queries.
+    iterationEvent,
     send,
     cancel: handleCancelStream,
     resetForThread,
@@ -265,6 +283,23 @@ export default function ChatPage() {
       setLocalMessages(activeThread.messages);
     }
   }, [activeThread, activeThreadId, setLocalMessages]);
+
+  // PLAN-0103 W3: promote ephemeral ids once the threads list refresh sees
+  // them. After this clears, the per-thread useQuery becomes enabled and the
+  // historical messages back-fill normally.
+  useEffect(() => {
+    if (!threads || ephemeralThreadIds.size === 0) return;
+    const known = new Set(threads.map((t) => t.thread_id));
+    let changed = false;
+    const next = new Set(ephemeralThreadIds);
+    for (const id of ephemeralThreadIds) {
+      if (known.has(id)) {
+        next.delete(id);
+        changed = true;
+      }
+    }
+    if (changed) setEphemeralThreadIds(next);
+  }, [threads, ephemeralThreadIds]);
 
   // Auto-scroll to bottom on new tokens / messages.
   useEffect(() => {
@@ -345,6 +380,14 @@ export default function ChatPage() {
 
   const handleNewChat = useCallback(() => {
     const newId = crypto.randomUUID();
+    // PLAN-0103 W3: mark as ephemeral so the per-thread useQuery stays
+    // disabled until the backend acknowledges the id (first SSE completion
+    // promotes it via the threads list refetch).
+    setEphemeralThreadIds((prev) => {
+      const next = new Set(prev);
+      next.add(newId);
+      return next;
+    });
     setActiveThreadId(newId);
     // resetForThread aborts in-flight stream + clears messages/error in the hook.
     resetForThread();
@@ -879,7 +922,18 @@ export default function ChatPage() {
                   // Pass activeTools so ToolCallIndicator renders above the streaming text.
                   // WHY: during multi-tool responses the tool indicators appear first,
                   // then text flows in below them once S8 starts generating.
-                  <StreamingBubble streaming={streaming} activeTools={activeTools} />
+                  <StreamingBubble
+                    streaming={streaming}
+                    activeTools={activeTools}
+                    /*
+                     * PLAN-0099 W4: pass the latest agent_iteration event so the
+                     * always-visible progress strip stays alive through the silent
+                     * gaps between tool batches (planning → reasoning → synthesis).
+                     * Null until the first event arrives, then non-null until the
+                     * stream completes — the strip handles its own visibility.
+                     */
+                    iterationEvent={iterationEvent}
+                  />
                 ) : null}
 
                 {chatError && (

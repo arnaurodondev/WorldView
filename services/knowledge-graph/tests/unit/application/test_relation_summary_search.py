@@ -65,7 +65,7 @@ class TestRelationSummarySearchUseCase:
             RelationSummarySearchUseCase().execute(
                 repo=repo,
                 query_embedding=_EMBEDDING,
-            )
+            ),
         )
 
         assert len(result) == 1
@@ -85,7 +85,7 @@ class TestRelationSummarySearchUseCase:
                 repo=repo,
                 query_embedding=_EMBEDDING,
                 entity_ids=[entity_id],
-            )
+            ),
         )
 
         call_kwargs = repo.search_by_embedding.call_args.kwargs
@@ -104,7 +104,7 @@ class TestRelationSummarySearchUseCase:
                 repo=repo,
                 query_embedding=_EMBEDDING,
                 min_confidence=0.70,
-            )
+            ),
         )
 
         call_kwargs = repo.search_by_embedding.call_args.kwargs
@@ -123,7 +123,7 @@ class TestRelationSummarySearchUseCase:
                 repo=repo,
                 query_embedding=_EMBEDDING,
                 relation_types=["EMPLOYS"],
-            )
+            ),
         )
 
         call_kwargs = repo.search_by_embedding.call_args.kwargs
@@ -142,7 +142,7 @@ class TestRelationSummarySearchUseCase:
                 repo=repo,
                 query_embedding=_EMBEDDING,
                 semantic_mode="RELATION_STATE",
-            )
+            ),
         )
 
         call_kwargs = repo.search_by_embedding.call_args.kwargs
@@ -161,7 +161,7 @@ class TestRelationSummarySearchUseCase:
                 repo=repo,
                 query_embedding=_EMBEDDING,
                 top_k=5,
-            )
+            ),
         )
 
         call_kwargs = repo.search_by_embedding.call_args.kwargs

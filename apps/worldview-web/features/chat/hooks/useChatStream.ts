@@ -46,6 +46,7 @@ import { parseInput } from "@/lib/chat/slash-commands";
 import { parseSSELine } from "@/lib/sse-parser";
 import type { Message } from "@/types/api";
 import type {
+  AgentIterationEvent,
   LogEntry,
   PendingActionEvent,
   SlashTurn,
@@ -139,6 +140,22 @@ export interface UseChatStreamResult {
   pendingAction: PendingActionEvent | null;
   /** Clear the pending action (called by ActionConfirmModal on dismiss or after confirm). */
   clearPendingAction: () => void;
+  /**
+   * Latest `agent_iteration` SSE event (PLAN-0099 W4) — drives the always-visible
+   * AgentIterationProgress strip during multi-iteration tool loops.
+   *
+   * - Null in the initial state (no event received yet) — strip is hidden.
+   * - Set on every `agent_iteration` SSE event (planning_tools →
+   *   reasoning_over_results → synthesizing) — strip stays visible through
+   *   the silent gaps between tool batches.
+   * - Cleared to null when the stream completes/cancels/errors — strip
+   *   disappears alongside the rest of the streaming chrome.
+   *
+   * WHY a single "latest" event (not a history array): the UI only renders
+   * the current stage. Keeping just the latest avoids unbounded memory growth
+   * on long research queries and matches the at-a-glance UX the strip needs.
+   */
+  iterationEvent: AgentIterationEvent | null;
   /** Trigger the slash-command branch or the SSE LLM call for `question`. */
   send: (question: string) => Promise<void>;
   /** Abort an in-flight stream. Safe to call when nothing is streaming. */
@@ -181,6 +198,12 @@ export function useChatStream(args: UseChatStreamArgs): UseChatStreamResult {
   // WHY state (not ref): the page must re-render when this changes so the
   // modal appears/disappears. A ref would not trigger a re-render.
   const [pendingAction, setPendingAction] = useState<PendingActionEvent | null>(null);
+  // `iterationEvent` — latest agent_iteration event (PLAN-0099 W4).
+  // WHY state (not ref): the AgentIterationProgress component reads this via
+  // props; React must re-render the strip whenever the stage/iteration/elapsed
+  // values change. A ref would not trigger that re-render and the strip would
+  // appear frozen — defeating the entire "no perceived hang" goal.
+  const [iterationEvent, setIterationEvent] = useState<AgentIterationEvent | null>(null);
 
   // ── Refs ────────────────────────────────────────────────────────────────
   // `abortRef` holds the AbortController for the in-flight request so that
@@ -233,6 +256,10 @@ export function useChatStream(args: UseChatStreamArgs): UseChatStreamResult {
     // would stay frozen on screen with spinners. Clearing them on cancel
     // ensures no stale tool state persists after the stream is aborted.
     setActiveTools([]);
+    // PLAN-0099 W4: clear the agent-iteration strip too — otherwise it would
+    // remain visible after cancellation showing a stale "Reasoning over…"
+    // label that no longer reflects reality.
+    setIterationEvent(null);
   }, []);
 
   /**
@@ -258,6 +285,9 @@ export function useChatStream(args: UseChatStreamArgs): UseChatStreamResult {
     // persist across thread switches — the proposal_id is scoped to the
     // thread that generated it. If the user switches threads, dismiss the modal.
     setPendingAction(null);
+    // PLAN-0099 W4: agent-iteration progress is scoped to a single turn; a
+    // thread switch must reset it so the new thread starts with a clean strip.
+    setIterationEvent(null);
   }, []);
 
   /**
@@ -336,6 +366,11 @@ export function useChatStream(args: UseChatStreamArgs): UseChatStreamResult {
       };
       setLocalMessages((prev) => [...prev, userMessage]);
       setChatError(null);
+      // PLAN-0099 W4: clear any previous iteration event from the prior turn
+      // BEFORE the new request fires. Without this, the strip would briefly
+      // show the previous turn's stage (e.g. "Writing answer…") until the
+      // first agent_iteration event of the new turn arrives.
+      setIterationEvent(null);
 
       const controller = new AbortController();
       abortRef.current = controller;
@@ -452,6 +487,11 @@ export function useChatStream(args: UseChatStreamArgs): UseChatStreamResult {
             // states in sync (both reset together at stream end).
             if (eventName === "done") {
               setActiveTools([]);
+              // PLAN-0099 W4: clear the iteration strip on clean stream end.
+              // The streaming bubble is being promoted to a final MessageBubble;
+              // the progress strip MUST disappear at the same time or it would
+              // hover next to a settled answer (misleading "still working" cue).
+              setIterationEvent(null);
               finalize();
               return;
             }
@@ -461,6 +501,9 @@ export function useChatStream(args: UseChatStreamArgs): UseChatStreamResult {
               // WHY clear here too: same reason as the `done` event handler above.
               // Both end-of-stream paths must reset tool indicators.
               setActiveTools([]);
+              // PLAN-0099 W4: same reasoning — clear the iteration strip on
+              // legacy [DONE] sentinel so both end-of-stream paths agree.
+              setIterationEvent(null);
               finalize();
               return;
             }
@@ -473,7 +516,47 @@ export function useChatStream(args: UseChatStreamArgs): UseChatStreamResult {
               // tool-use phase (before any token chunks arrive). They drive
               // ToolCallIndicator in the streaming bubble.
 
-              if (eventName === "thinking") {
+              if (eventName === "agent_iteration") {
+                // PLAN-0099 W4: agent loop transition event. Fired by S8 at
+                // every loop boundary (planning → reasoning → synthesis) so
+                // the frontend can render a progress strip that NEVER goes
+                // blank between tool batches.
+                //
+                // Wire shape (frozen with Agent A's backend contract):
+                //   { iteration: number, max_iterations: number,
+                //     stage: "planning_tools"|"reasoning_over_results"|"synthesizing",
+                //     tools_completed_total: number, elapsed_ms: number }
+                //
+                // WHY a minimal type-narrowing block (not zod): the wire schema
+                // is owned by S8 and exercised by integration tests there. A
+                // shape mismatch here surfaces as a missing strip (graceful
+                // degradation) rather than a thrown error — we deliberately do
+                // not bring down the entire stream over a malformed iter event.
+                const ie = data as {
+                  iteration?: number;
+                  max_iterations?: number;
+                  stage?: AgentIterationEvent["stage"];
+                  tools_completed_total?: number;
+                  elapsed_ms?: number;
+                };
+                if (
+                  typeof ie.iteration === "number" &&
+                  typeof ie.max_iterations === "number" &&
+                  (ie.stage === "planning_tools" ||
+                    ie.stage === "reasoning_over_results" ||
+                    ie.stage === "synthesizing") &&
+                  typeof ie.tools_completed_total === "number" &&
+                  typeof ie.elapsed_ms === "number"
+                ) {
+                  setIterationEvent({
+                    iteration: ie.iteration,
+                    max_iterations: ie.max_iterations,
+                    stage: ie.stage,
+                    tools_completed_total: ie.tools_completed_total,
+                    elapsed_ms: ie.elapsed_ms,
+                  });
+                }
+              } else if (eventName === "thinking") {
                 // `thinking` — the LLM is classifying the query and deciding
                 // which tools to invoke. No UI state change needed here; the
                 // typing indicator (shown when streaming.text === "") already
@@ -611,6 +694,11 @@ export function useChatStream(args: UseChatStreamArgs): UseChatStreamResult {
                     : "Stream error from server";
                 setChatError(msg);
                 setStreaming(null);
+                // PLAN-0099 W4: clear progress strip on server-emitted error
+                // so we don't leave a stale "Reasoning over…" strip hovering
+                // above the error banner.
+                setIterationEvent(null);
+                setActiveTools([]);
                 return;
               }
               // status, contradictions, metadata — no UI action needed yet;
@@ -630,9 +718,15 @@ export function useChatStream(args: UseChatStreamArgs): UseChatStreamResult {
         // streaming bubble.
         if (err instanceof Error && err.name === "AbortError") {
           setStreaming(null);
+          // PLAN-0099 W4: abort path must also clear the iteration strip; cancel()
+          // already does this for user-initiated aborts, but unmount/race paths
+          // also land here. Belt-and-braces clearing avoids a leaked strip.
+          setIterationEvent(null);
           return;
         }
         setStreaming(null);
+        // PLAN-0099 W4: clear strip on the error fallback path too.
+        setIterationEvent(null);
         // WHY map to generic message: raw err.message can contain internal
         // hostnames, HTTP response bodies, or status text leaked by reverse
         // proxies. These would surface in error-monitoring SDKs (Sentry, Datadog)
@@ -683,6 +777,8 @@ export function useChatStream(args: UseChatStreamArgs): UseChatStreamResult {
     // The chat page reads this to render ActionConfirmModal when non-null.
     pendingAction,
     clearPendingAction,
+    // PLAN-0099 W4: latest agent_iteration event for the AgentIterationProgress strip.
+    iterationEvent,
     send,
     cancel,
     resetForThread,

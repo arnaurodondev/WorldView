@@ -119,3 +119,31 @@ class TestS5Client:
 
         result = await client.get_pending_alerts("user1", "tenant1")
         assert result == []
+
+    # ── PLAN-0094 follow-up: service-caller endpoint ──────────────────────
+    async def test_get_pending_alerts_for_user_calls_internal_path(self) -> None:
+        """The service-token method must hit /internal/v1/users/{user_id}/alerts/pending."""
+        captured_paths: list[str] = []
+
+        def capture_req(req: httpx.Request) -> httpx.Response:
+            captured_paths.append(req.url.path)
+            return httpx.Response(200, json={"alerts": []})
+
+        transport = httpx.MockTransport(capture_req)
+        client = S5Client.__new__(S5Client)
+        client._client = httpx.AsyncClient(transport=transport, base_url="http://test")
+        client._internal_jwt = "svc-jwt"
+
+        user_id = "11111111-2222-3333-4444-555555555555"
+        await client.get_pending_alerts_for_user(user_id, "tenant1")
+        assert captured_paths == [f"/internal/v1/users/{user_id}/alerts/pending"]
+
+    async def test_get_pending_alerts_for_user_returns_empty_on_403(self) -> None:
+        """Forbidden (allow-list mismatch) must degrade to [] — never raise."""
+        transport = httpx.MockTransport(lambda req: httpx.Response(403, json={"detail": "denied"}))
+        client = S5Client.__new__(S5Client)
+        client._client = httpx.AsyncClient(transport=transport, base_url="http://test")
+        client._internal_jwt = "svc-jwt"
+
+        result = await client.get_pending_alerts_for_user("user1", "tenant1")
+        assert result == []

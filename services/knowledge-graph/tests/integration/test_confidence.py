@@ -13,7 +13,7 @@ from knowledge_graph.domain.errors import ConfidenceBoundsViolation
 from knowledge_graph.domain.models import ConfidenceComponents
 
 
-@pytest.mark.integration
+@pytest.mark.integration()
 def test_confidence_final_bounded_lower() -> None:
     """confidence clamped to 0 when formula would yield negative."""
     cc = ConfidenceComponents(
@@ -25,7 +25,7 @@ def test_confidence_final_bounded_lower() -> None:
     cc.validate()  # should not raise
 
 
-@pytest.mark.integration
+@pytest.mark.integration()
 def test_confidence_final_bounded_upper() -> None:
     cc = ConfidenceComponents(
         support=0.95,
@@ -36,7 +36,7 @@ def test_confidence_final_bounded_upper() -> None:
     cc.validate()
 
 
-@pytest.mark.integration
+@pytest.mark.integration()
 def test_confidence_corroboration_cap_violation() -> None:
     """corroboration > 0.20 must raise ConfidenceBoundsViolation."""
     cc = ConfidenceComponents(
@@ -49,7 +49,7 @@ def test_confidence_corroboration_cap_violation() -> None:
         cc.validate()
 
 
-@pytest.mark.integration
+@pytest.mark.integration()
 def test_confidence_contradiction_cap_violation() -> None:
     """contradiction > 0.60 must raise ConfidenceBoundsViolation."""
     cc = ConfidenceComponents(
@@ -62,7 +62,7 @@ def test_confidence_contradiction_cap_violation() -> None:
         cc.validate()
 
 
-@pytest.mark.integration
+@pytest.mark.integration()
 def test_confidence_final_out_of_range_raises() -> None:
     """final outside [0, 1] must raise."""
     cc = ConfidenceComponents(
@@ -75,7 +75,7 @@ def test_confidence_final_out_of_range_raises() -> None:
         cc.validate()
 
 
-@pytest.mark.integration
+@pytest.mark.integration()
 async def test_confidence_mark_updated_persists(session_factory) -> None:
     """mark_confidence_updated persists the new confidence value to intelligence_db."""
     from knowledge_graph.infrastructure.intelligence_db.repositories.canonical_entity import (

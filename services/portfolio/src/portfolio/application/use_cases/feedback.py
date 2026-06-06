@@ -58,6 +58,18 @@ class CreateFeedbackSubmissionCommand:
     screenshot_url: str | None
     page_url: str | None
     user_agent: str | None
+    # REQ-002d (TASK-W0-05): caller-supplied ``Idempotency-Key`` header. On
+    # replay we return the original record with 200 instead of inserting a
+    # duplicate. NULL when the header is absent (back-compat for older clients).
+    idempotency_key: str | None = None
+
+
+@dataclass(frozen=True)
+class CreateFeedbackSubmissionResult:
+    """Use-case result so the route can pick 201 (new) vs 200 (replay)."""
+
+    record: FeedbackSubmissionRecord
+    created: bool
 
 
 @dataclass(frozen=True)
@@ -153,7 +165,41 @@ class CreateFeedbackSubmissionUseCase:
         self,
         cmd: CreateFeedbackSubmissionCommand,
         uow: UnitOfWork,
-    ) -> FeedbackSubmissionRecord:
+    ) -> CreateFeedbackSubmissionResult:
+        # ── REQ-002d: idempotency-key validation + replay lookup ──────────────
+        idem_uuid: UUID | None = None
+        if cmd.idempotency_key is not None:
+            try:
+                idem_uuid = UUID(cmd.idempotency_key)
+            except (ValueError, AttributeError) as exc:
+                from portfolio.domain.errors import IdempotencyKeyInvalidError
+
+                raise IdempotencyKeyInvalidError(
+                    f"idempotency_key must be a valid UUID: {exc}",
+                ) from exc
+            existing = await uow.feedback_submissions.find_by_idempotency_key(
+                cmd.tenant_id,
+                idem_uuid,
+            )
+            if existing is not None:
+                # Same key + materially different body → 409. Compare the
+                # user-visible fields the route already validated against.
+                # We do NOT compare console_logs / screenshot_url since those
+                # are noisy and the request body is the primary contract.
+                if (
+                    existing.kind != cmd.kind
+                    or existing.severity != cmd.severity
+                    or existing.user_id != cmd.user_id
+                    or existing.email != cmd.email
+                ):
+                    from portfolio.domain.errors import IdempotencyConflictError
+
+                    raise IdempotencyConflictError(
+                        f"Idempotency key {cmd.idempotency_key!r} already used " "with a different request body",
+                    )
+                # Idempotent replay — return the original record verbatim.
+                return CreateFeedbackSubmissionResult(record=existing, created=False)
+
         # Redact PII / secrets before they hit the DB. We redact:
         #   * description — free text from the user
         #   * console_logs — captured browser logs (often contain Bearer tokens)
@@ -183,16 +229,41 @@ class CreateFeedbackSubmissionUseCase:
             assigned_to=None,
             created_at=now,
             updated_at=now,
+            # REQ-002d: stamp the key so concurrent replays can resolve back.
+            idempotency_key=idem_uuid,
         )
         await uow.feedback_submissions.add(record)
-        await uow.commit()
+
+        # REQ-002d: catch the TOCTOU race where two concurrent same-key
+        # requests both pass ``find_by_idempotency_key`` and collide on the
+        # partial unique index at commit. The second resolves back to the
+        # original row and returns ``created=False``.
+        from sqlalchemy.exc import IntegrityError
+
+        try:
+            await uow.commit()
+        except IntegrityError as exc:
+            await uow.rollback()
+            if idem_uuid is not None:
+                existing = await uow.feedback_submissions.find_by_idempotency_key(
+                    cmd.tenant_id,
+                    idem_uuid,
+                )
+                if existing is not None:
+                    return CreateFeedbackSubmissionResult(record=existing, created=False)
+            from portfolio.domain.errors import IdempotencyConflictError
+
+            raise IdempotencyConflictError(
+                f"Concurrent idempotency conflict on key {cmd.idempotency_key!r}; retry the request.",
+            ) from exc
+
         logger.info(  # type: ignore[no-any-return]
             "feedback_submission_created",
             submission_id=str(record.id),
             kind=record.kind,
             anonymous=record.user_id is None,
         )
-        return record
+        return CreateFeedbackSubmissionResult(record=record, created=True)
 
 
 class ListFeedbackSubmissionsUseCase:

@@ -29,3 +29,12 @@ class InvalidObjectKeyError(StorageError, ValueError):
     Inherits from both :class:`StorageError` and :exc:`ValueError` so that
     callers can catch either depending on their context.
     """
+
+
+class ETagMismatchError(StorageError):
+    """Raised when an object's actual ETag does not match the caller's expected ETag.
+
+    Used by claim-check consumers that store the producer's ETag alongside the
+    object pointer and want to verify the object has not been overwritten or
+    corrupted between produce and consume.
+    """

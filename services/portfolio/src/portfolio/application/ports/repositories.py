@@ -106,6 +106,17 @@ class UserRepository(ABC):
         """
         ...
 
+    @abstractmethod
+    async def find_by_id_any_tenant(self, user_id: UUID) -> User | None:
+        """Look up a user by ID without a tenant filter.
+
+        PLAN-0094 follow-up: needed by service-token callers (rag-chat brief
+        pre-generation worker) that hold a system identity but no specific
+        tenant. Use this sparingly — every user-scoped read should normally
+        pass through the tenant filter for multi-tenant isolation.
+        """
+        ...
+
 
 class PortfolioRepository(ABC):
     @abstractmethod
@@ -161,6 +172,22 @@ class PortfolioRepository(ABC):
 
         PLAN-0046 Wave 3 / T-46-3-03. Powers the holdings/transactions
         fan-out for ROOT portfolios.
+        """
+        ...
+
+    @abstractmethod
+    async def find_by_idempotency_key(
+        self,
+        tenant_id: UUID,
+        idempotency_key: UUID,
+    ) -> Portfolio | None:
+        """Return the portfolio created earlier with this idempotency key.
+
+        REQ-002a. Used by ``CreatePortfolioUseCase`` to honour mutation
+        idempotency: on a replay of the same ``Idempotency-Key`` header,
+        we look up the previously-created row and return it with 200
+        instead of inserting a duplicate. Tenant-scoped so a leaked key
+        from another tenant cannot cross-resolve.
         """
         ...
 
@@ -402,6 +429,21 @@ class WatchlistMemberRepository(ABC):
 
     @abstractmethod
     async def delete(self, watchlist_id: UUID, entity_id: UUID) -> None: ...
+
+    @abstractmethod
+    async def find_by_idempotency_key(
+        self,
+        watchlist_id: UUID,
+        idempotency_key: UUID,
+    ) -> WatchlistMember | None:
+        """Return the member created earlier with this idempotency key.
+
+        REQ-002b. Replays of the same ``Idempotency-Key`` header should
+        return the original row with 200 instead of inserting a second
+        member. Scoped by watchlist_id (the watchlist row already carries
+        tenant_id, so cross-tenant cross-resolution is impossible).
+        """
+        ...
 
 
 class AlertPreferenceRepository(ABC):

@@ -380,6 +380,10 @@ services:
     environment:
       # Short HTTP timeout so the worker fails-fast on EODHD rate-limits in CI
       MARKET_INGESTION_PROVIDER_HTTP_TIMEOUT_SECONDS: "5"
+      # Fast idle-poll so newly-triggered tasks are claimed within the test's
+      # 30 s deadline even when the queue has accumulated retrying tasks from
+      # prior tests in the same E2E session (R12 — E2E task-progression fix).
+      MARKET_INGESTION_WORKER_IDLE_SLEEP_SECONDS: "1.0"
     command: ["python", "-m", "market_ingestion.infrastructure.workers.worker_main"]
     healthcheck:
       test: ["CMD", "python", "-c", "import sys; sys.exit(0)"]
@@ -986,6 +990,26 @@ services:
     env_file:
       - ../../services/nlp-pipeline/configs/docker.env
     command: ["python", "-m", "nlp_pipeline.infrastructure.messaging.consumers.watchlist_consumer_main"]
+    restart: on-failure
+    healthcheck:
+      test: ["CMD", "python", "-c", "import sys; sys.exit(0)"]
+      interval: 15s
+      timeout: 3s
+      retries: 3
+      start_period: 5s
+
+  nlp-pipeline-entity-refresh-consumer:
+    # REQ-003 / TASK-W0-06 — see prod compose for the full rationale.
+    build:
+      context: ../..
+      dockerfile: services/nlp-pipeline/Dockerfile
+    profiles: [intelligence-test, all]
+    depends_on:
+      kafka-init:
+        condition: service_completed_successfully
+    env_file:
+      - ../../services/nlp-pipeline/configs/docker.env
+    command: ["python", "-m", "nlp_pipeline.infrastructure.messaging.consumers.entity_refresh_consumer_main"]
     restart: on-failure
     healthcheck:
       test: ["CMD", "python", "-c", "import sys; sys.exit(0)"]

@@ -35,7 +35,13 @@ export function createNewsApi(t: string | undefined) {
           .filter(([, v]) => v != null)
           .map(([k, v]) => [k, String(v)]),
       ).toString();
-      return apiFetch<RankedNewsResponse>(`/v1/news/top${qs ? `?${qs}` : ""}`);
+      // BP-545: forward the bearer token when present so authenticated
+      // requests land in the caller's S9 rate-limit bucket instead of the
+      // (much tighter) anonymous bucket. Endpoint stays publicly readable.
+      return apiFetch<RankedNewsResponse>(
+        `/v1/news/top${qs ? `?${qs}` : ""}`,
+        { token: t },
+      );
     },
 
     /**

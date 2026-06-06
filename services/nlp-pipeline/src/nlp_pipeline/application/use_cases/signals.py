@@ -249,10 +249,13 @@ class GetTopNewsUseCase:
         offset: int,
         min_display_score: float | None,
         routing_tier: str | None,
+        tickers: list[str] | None = None,
     ) -> tuple[list[RankedArticleData], int]:
         """Return articles ranked by display_relevance_score.
 
         Delegates entirely to the port — the 3-CTE SQL computes all scores at query time.
+        When ``tickers`` is provided the result set is narrowed to articles whose
+        primary entity symbol is in the list.
         """
         return await repo.get_top_news(
             hours=hours,
@@ -260,6 +263,7 @@ class GetTopNewsUseCase:
             offset=offset,
             min_display_score=min_display_score,
             routing_tier=routing_tier,
+            tickers=tickers,
         )
 
 

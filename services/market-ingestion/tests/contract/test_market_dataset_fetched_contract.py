@@ -85,3 +85,28 @@ def test_market_dataset_envelope_contract_values() -> None:
     assert payload["event_id"]
     assert payload["occurred_at"]
     assert payload["task_id"]
+
+
+# ── BUG-009 / BP-492: forward-compat for the new `is_backfill` field ─────────
+
+
+def test_avro_schema_declares_is_backfill_field_with_default_false() -> None:
+    """The Avro schema must declare is_backfill with a literal `false` default.
+
+    R11 requires the field to be appended with a default — any consumer that
+    has not yet upgraded must keep decoding old payloads.
+    """
+    schema_path = _repo_root() / "infra" / "kafka" / "schemas" / "market.dataset.fetched.avsc"
+    schema = json.loads(schema_path.read_text(encoding="utf-8"))
+    is_backfill_field = next((f for f in schema["fields"] if f["name"] == "is_backfill"), None)
+    assert is_backfill_field is not None, "is_backfill field missing from Avro schema"
+    assert is_backfill_field["type"] == "boolean"
+    assert is_backfill_field["default"] is False
+
+
+def test_market_dataset_payload_contains_is_backfill_flag() -> None:
+    """Mapper output carries is_backfill so the Avro wire bytes include the flag."""
+    event = _sample_event()
+    payload = MarketDatasetFetchedMapper.to_avro_dict(event)
+    assert "is_backfill" in payload
+    assert payload["is_backfill"] is False  # _sample_event() does not pass is_backfill

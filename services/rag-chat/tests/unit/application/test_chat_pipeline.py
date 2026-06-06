@@ -47,8 +47,6 @@ def _make_pipeline(**overrides: Any) -> ChatPipeline:
         "hyde": MagicMock(),
         "embedder": MagicMock(),
         "retrieval": MagicMock(),
-        "graph_enricher": MagicMock(),
-        "fusion": MagicMock(),
         "reranker": MagicMock(),
         "llm_chain": MagicMock(),
         "persistence": MagicMock(),
@@ -130,6 +128,41 @@ class TestCheckCache:
         result = await pipeline.check_cache("novel query no one has asked", None)
 
         assert result is None
+
+    # PLAN-0095 W3 T-W3-04: env-var bypass for chat-eval sessions.
+    @pytest.mark.asyncio
+    async def test_check_cache_disabled_via_env_var(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """``RAG_COMPLETION_CACHE_DISABLED=true`` returns None without touching the cache."""
+        cache = MagicMock()
+        # If the bypass works, .get must NEVER be awaited — set up to detect a leak.
+        cache.get = AsyncMock(return_value={"answer": "would-be-cached"})
+        pipeline = _make_pipeline(cache=cache)
+
+        monkeypatch.setenv("RAG_COMPLETION_CACHE_DISABLED", "true")
+        result = await pipeline.check_cache("anything", _FAKE_THREAD_ID)
+
+        assert result is None
+        cache.get.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_check_cache_env_var_case_and_whitespace_tolerant(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Bypass tolerates ``" TRUE "`` / ``"True"``; other values fall through."""
+        cache = MagicMock()
+        cache.get = AsyncMock(return_value=None)
+        pipeline = _make_pipeline(cache=cache)
+
+        # Truthy variants → bypass active.
+        for val in (" TRUE ", "True", "true"):
+            monkeypatch.setenv("RAG_COMPLETION_CACHE_DISABLED", val)
+            assert await pipeline.check_cache("q", None) is None
+        cache.get.assert_not_called()
+
+        # Non-truthy values must fall through to the cache.
+        for val in ("", "false", "0", "yes"):
+            monkeypatch.setenv("RAG_COMPLETION_CACHE_DISABLED", val)
+            cache.get.reset_mock()
+            await pipeline.check_cache("q", None)
+            cache.get.assert_called_once()
 
 
 # ── Step 2: check_rate_limit ──────────────────────────────────────────────────
@@ -376,33 +409,6 @@ class TestRetrieve:
         assert len(result) == 2
         # Each distinct item_type.value should produce one .labels().observe() call
         assert mock_metric.labels.call_count == 2
-
-
-# ── Steps 6-7: enrich_and_fuse ───────────────────────────────────────────────
-
-
-class TestEnrichAndFuse:
-    def test_enrich_and_fuse(self) -> None:
-        """Chains graph_enricher.enrich then fusion.process."""
-        fake_items = [MagicMock(), MagicMock()]
-        enriched_items = [MagicMock()]
-        fused_items = [MagicMock()]
-
-        graph_enricher = MagicMock()
-        graph_enricher.enrich = MagicMock(return_value=enriched_items)
-
-        fusion = MagicMock()
-        fusion.process = MagicMock(return_value=fused_items)
-
-        pipeline = _make_pipeline(graph_enricher=graph_enricher, fusion=fusion)
-
-        result = pipeline.enrich_and_fuse(fake_items)
-
-        # graph_enricher receives the input items and [] for relation_results.
-        graph_enricher.enrich.assert_called_once_with(fake_items, [])
-        # fusion receives the enriched output.
-        fusion.process.assert_called_once_with(enriched_items)
-        assert result == fused_items
 
 
 # ── Step 8: rerank_items ──────────────────────────────────────────────────────
@@ -686,7 +692,7 @@ class TestChatPipelineStructure:
             pipeline.validator = MagicMock()  # type: ignore[misc]
 
     def test_has_all_step_methods(self) -> None:
-        """All 16 step methods are present on ChatPipeline."""
+        """All 15 step methods are present on ChatPipeline."""
         expected_methods = [
             "validate_input",
             "check_cache",
@@ -697,7 +703,6 @@ class TestChatPipelineStructure:
             "expand_query",
             "embed_query",
             "retrieve",
-            "enrich_and_fuse",
             "rerank_items",
             "build_prompt",
             "stream_llm",

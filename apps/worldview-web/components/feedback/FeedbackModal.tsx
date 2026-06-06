@@ -319,7 +319,7 @@ export function FeedbackModal({
                     onChange={(e) =>
                       setSeverity(e.target.value as FeedbackSeverity)
                     }
-                    className="mt-1 w-full rounded-[2px] border border-border bg-background p-2 text-sm focus:outline-none focus:ring-1 focus:ring-primary"
+                    className="mt-1 w-full rounded-[2px] border border-border bg-background p-2 text-[14px] focus:outline-none focus:ring-1 focus:ring-primary"
                   >
                     <option value="low">Low — minor inconvenience</option>
                     <option value="medium">Medium — some users impacted</option>
@@ -339,7 +339,7 @@ export function FeedbackModal({
                       onChange={(e) => setFeatureTitle(e.target.value.slice(0, 200))}
                       maxLength={200}
                       placeholder="One-line summary"
-                      className="mt-1 w-full rounded-[2px] border border-border bg-background p-2 text-sm focus:outline-none focus:ring-1 focus:ring-primary"
+                      className="mt-1 w-full rounded-[2px] border border-border bg-background p-2 text-[14px] focus:outline-none focus:ring-1 focus:ring-primary"
                     />
                   </label>
                   <label className="block">
@@ -348,7 +348,7 @@ export function FeedbackModal({
                       value={featureCategory}
                       onChange={(e) => setFeatureCategory(e.target.value.slice(0, 50))}
                       placeholder="e.g. Portfolio, Charts, Alerts"
-                      className="mt-1 w-full rounded-[2px] border border-border bg-background p-2 text-sm focus:outline-none focus:ring-1 focus:ring-primary"
+                      className="mt-1 w-full rounded-[2px] border border-border bg-background p-2 text-[14px] focus:outline-none focus:ring-1 focus:ring-primary"
                     />
                   </label>
                 </>
@@ -372,7 +372,7 @@ export function FeedbackModal({
                         ? "What problem does it solve? Who would use it?"
                         : "Tell us more…"
                   }
-                  className="mt-1 w-full rounded-[2px] border border-border bg-background p-2 text-sm focus:outline-none focus:ring-1 focus:ring-primary"
+                  className="mt-1 w-full rounded-[2px] border border-border bg-background p-2 text-[14px] focus:outline-none focus:ring-1 focus:ring-primary"
                 />
                 <span className="mt-1 block text-right text-[10px] tabular-nums text-muted-foreground">
                   {description.length} / 5000
@@ -388,7 +388,7 @@ export function FeedbackModal({
                     value={email}
                     onChange={(e) => setEmail(e.target.value)}
                     placeholder="you@example.com"
-                    className="mt-1 w-full rounded-[2px] border border-border bg-background p-2 text-sm focus:outline-none focus:ring-1 focus:ring-primary"
+                    className="mt-1 w-full rounded-[2px] border border-border bg-background p-2 text-[14px] focus:outline-none focus:ring-1 focus:ring-primary"
                   />
                   <span className="mt-1 block text-[10px] text-muted-foreground">
                     Required for anonymous submissions so we can follow up.

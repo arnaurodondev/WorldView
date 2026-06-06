@@ -13,6 +13,8 @@ Usage::
 from __future__ import annotations
 
 import asyncio
+import contextlib
+import os
 
 from alert.config import Settings
 from alert.infrastructure.clients.s1_client import S1Client
@@ -21,7 +23,11 @@ from alert.infrastructure.clients.s8_client import S8BriefingClient
 from alert.infrastructure.db.session import create_session_factory
 from alert.infrastructure.email import build_email_provider
 from alert.infrastructure.email.scheduler import EmailScheduler
-from observability import configure_logging, get_logger  # type: ignore[import-untyped]
+from observability import (  # type: ignore[import-untyped]
+    configure_logging,
+    get_logger,
+    start_metrics_server,
+)
 
 
 async def _run_loop(settings: Settings) -> None:
@@ -32,6 +38,12 @@ async def _run_loop(settings: Settings) -> None:
         json=settings.log_json,
     )
     log = get_logger("alert.scheduler_main")  # type: ignore[no-any-return]
+
+    # Phase 3 worker-metrics rollout — expose Prometheus /metrics.
+    metrics_handle = start_metrics_server(
+        service_name="alert-email-scheduler",
+        port=int(os.environ.get("METRICS_PORT", "9100")),
+    )
 
     engine, session_factory = create_session_factory(settings)
     email_provider = build_email_provider(settings)
@@ -72,6 +84,8 @@ async def _run_loop(settings: Settings) -> None:
         await s3_client.close()
         await s8_client.close()
         await engine.dispose()
+        with contextlib.suppress(Exception):
+            await metrics_handle.aclose()
         log.info("email_scheduler_stopped")  # type: ignore[no-any-return]
 
 

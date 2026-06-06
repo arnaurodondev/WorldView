@@ -48,7 +48,7 @@ RETURNING claim_id
     return uuid.UUID(str(row[0]))  # type: ignore[index]
 
 
-@pytest.mark.integration
+@pytest.mark.integration()
 async def test_opposing_claims_form_contradiction_link(session_factory) -> None:
     """Two opposing non-neutral claims on the same subject/type yield a contradiction link."""
     async with session_factory() as session:
@@ -114,7 +114,7 @@ RETURNING raw_id
     assert len(active) >= 1, "Contradiction link should be active after insertion"
 
 
-@pytest.mark.integration
+@pytest.mark.integration()
 async def test_neutral_polarity_does_not_contradict(session_factory) -> None:
     """find_opposing_claims returns empty list for neutral polarity."""
     async with session_factory() as session:
@@ -137,7 +137,7 @@ async def test_neutral_polarity_does_not_contradict(session_factory) -> None:
     assert opposites == [], "Neutral polarity should never return opposing claims"
 
 
-@pytest.mark.integration
+@pytest.mark.integration()
 async def test_contradiction_link_idempotent(session_factory) -> None:
     """insert_link with ON CONFLICT DO NOTHING returns same link_id on repeat."""
     from common.time import utc_now  # type: ignore[import-untyped]

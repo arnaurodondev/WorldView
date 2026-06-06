@@ -17,16 +17,20 @@ Security notes:
 from __future__ import annotations
 
 import asyncio
+import contextlib
+import hashlib
+import os
 import time
-import urllib.parse
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from typing import TYPE_CHECKING
+from uuid import UUID
 
 import httpx
 import jwt as pyjwt
+from sqlalchemy import text
 
-from observability import get_logger  # type: ignore[import-untyped]
+from observability import get_logger, start_metrics_server  # type: ignore[import-untyped]
 from portfolio.application.ports.brokerage_client import SnapTradeUser
 from portfolio.application.use_cases.record_transaction import RecordTransactionCommand, RecordTransactionUseCase
 from portfolio.application.use_cases.upsert_holdings_from_snapshot import (
@@ -36,7 +40,12 @@ from portfolio.application.use_cases.upsert_holdings_from_snapshot import (
 )
 from portfolio.domain.entities.brokerage_sync_error import BrokerageTransactionSyncError
 from portfolio.domain.enums import SyncErrorType, TransactionDirection, TransactionType
-from portfolio.domain.errors import BrokerageApiError, IdempotencyConflictError, InstrumentResolutionTransientError
+from portfolio.domain.errors import (
+    BrokerageApiError,
+    BrokerageSyncSymbolNotFoundError,
+    IdempotencyConflictError,
+    InstrumentResolutionTransientError,
+)
 from portfolio.infrastructure.db.unit_of_work import SqlAlchemyUnitOfWork
 from portfolio.infrastructure.metrics.prometheus import (
     BROKERAGE_SYNC_CYCLE_DURATION,
@@ -48,6 +57,7 @@ if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
     from portfolio.application.ports.brokerage_client import IBrokerageClient, SnapTradeActivity, SnapTradePosition
+    from portfolio.application.ports.instrument_lookup_client import IInstrumentLookupClient
     from portfolio.config import Settings
     from portfolio.domain.entities.brokerage_connection import BrokerageConnection
     from portfolio.domain.entities.instrument import InstrumentRef
@@ -67,10 +77,85 @@ _TYPE_MAP: dict[str, tuple[TransactionType, TransactionDirection]] = {
     "SELL": (TransactionType.SELL, TransactionDirection.OUTFLOW),
     "DIV": (TransactionType.DIVIDEND, TransactionDirection.INFLOW),
     "DIVIDEND": (TransactionType.DIVIDEND, TransactionDirection.INFLOW),
+    # NOTE: FEE / INTEREST intentionally absent — they are cash-only activities
+    # (no instrument_id) and are intercepted by _CASH_ACTIVITY_TYPES before this
+    # map is consulted. They will be added here once the transactions table
+    # supports nullable instrument_id (BP-501).
 }
 
+# ── Cash-only activity types (BP-501) ────────────────────────────────────────
+#
+# FEE and INTEREST come from SnapTrade without a tradable symbol. The current
+# transactions schema has instrument_id NOT NULL, so they cannot be recorded
+# yet. Intercept them before the instrument-lookup step so they don't produce
+# UNSUPPORTED_TYPE sync errors in the brokerage panel — they are expected, not
+# failures. A future schema change (nullable instrument_id + cash tx support)
+# will remove this set and add the types to _TYPE_MAP.
+_CASH_ACTIVITY_TYPES: frozenset[str] = frozenset({"FEE", "INTEREST"})
 
-def _system_jwt_headers() -> dict[str, str]:
+
+# ── BUG-003 / TASK-W1-03 ─────────────────────────────────────────────────────
+#
+# Per-connection advisory lock helpers. Two worker replicas can otherwise iterate
+# the same active ``BrokerageConnection`` concurrently and double-record
+# activities before the snapshot upsert at the end of ``_sync_connection``
+# stabilises — visible to the user as inflated holdings for 5-60s, or
+# permanently if the snapshot fetch fails after the partial replay.
+#
+# We use ``pg_try_advisory_xact_lock`` (non-blocking, auto-released on
+# COMMIT/ROLLBACK) keyed off a deterministic 63-bit int derived from the
+# connection UUID. ``hashlib.blake2b`` is used instead of Python's built-in
+# ``hash()`` because the latter is randomised per process (PYTHONHASHSEED),
+# which would defeat cross-replica coordination.
+#
+# Scoping: the lock must be held INSIDE the same Postgres transaction that
+# performs the writes. The simplest minimal-refactor approach (which preserves
+# BP-057's "no SnapTrade calls while a write UoW is open" rule for the
+# inner work-UoWs) is to open ONE outermost "lock UoW" at the start of
+# ``_sync_connection`` whose only job is to hold the advisory lock for the
+# duration of the per-connection sync. The lock UoW is never committed —
+# ``__aexit__`` rolls it back which releases the xact-scoped lock cleanly.
+
+
+def _connection_lock_key(connection_id: UUID) -> int:
+    """Derive a deterministic 63-bit positive int from a connection UUID.
+
+    PostgreSQL bigint is signed 64-bit; we mask to 63 bits to guarantee a
+    positive value (some PG clients log negative advisory keys oddly). The
+    use of blake2b — not ``hash()`` — is required: built-in ``hash()`` is
+    randomised across processes when ``PYTHONHASHSEED`` is not set, which
+    would cause two replicas to derive DIFFERENT lock keys for the same
+    connection and the advisory lock would not coordinate them.
+    """
+    digest = hashlib.blake2b(str(connection_id).encode("utf-8"), digest_size=8).digest()
+    return int.from_bytes(digest, "big") & 0x7FFF_FFFF_FFFF_FFFF
+
+
+async def _try_acquire_connection_lock(uow: SqlAlchemyUnitOfWork, connection_id: UUID) -> bool:  # type: ignore[type-arg]
+    """Attempt non-blocking advisory lock for ``connection_id`` on ``uow``'s txn.
+
+    Returns ``True`` if acquired, ``False`` if another worker already holds it.
+    The lock is automatically released when ``uow``'s transaction ends
+    (commit OR rollback) — callers do not need to release it explicitly.
+
+    Lives as a module-level helper (not a UoW method) because the lock is a
+    worker-specific concern; adding it to the UoW would leak infrastructure
+    detail into every other call site that doesn't need it.
+    """
+    lock_key = _connection_lock_key(connection_id)
+    # Access the underlying session via the private attribute. The UoW does not
+    # expose a public ``session`` accessor and we'd rather not widen the
+    # public interface for this single use case.
+    session = uow._session  # intentional: see comment above
+    assert session is not None, "UoW must be entered before acquiring a lock"
+    result = await session.execute(
+        text("SELECT pg_try_advisory_xact_lock(:key)"),
+        {"key": lock_key},
+    )
+    return bool(result.scalar())
+
+
+def _system_jwt_headers(settings: Settings) -> dict[str, str]:
     """Generate X-Internal-JWT for service-to-service calls to market-data.
 
     WHY: Market-data uses InternalJWTMiddleware which requires X-Internal-JWT on
@@ -91,7 +176,7 @@ def _system_jwt_headers() -> dict[str, str]:
             "iat": now,
             "exp": now + 86400,
         },
-        "dev-skip-verification-key-for-brokerage-sync-worker",
+        settings.brokerage_sync_jwt_secret.get_secret_value(),
         algorithm="HS256",
     )
     return {"X-Internal-JWT": token}
@@ -110,12 +195,18 @@ class BrokerageTransactionSyncWorker:
         brokerage_client: IBrokerageClient,
         settings: Settings,
         cipher: Fernet | None = None,
+        instrument_lookup: IInstrumentLookupClient | None = None,
     ) -> None:
         self._session_factory = session_factory
         self._brokerage_client = brokerage_client
         self._settings = settings
         self._cipher = cipher
         self._http_client: httpx.AsyncClient | None = None
+        # PRD-0089 F2 §4.4 — single canonical symbol→instrument_id resolver.
+        # ``None`` means "construct one lazily from the worker's httpx client".
+        # Tests inject a fake directly; production wires HttpInstrumentLookupClient
+        # in main() once the shared httpx client is available.
+        self._instrument_lookup: IInstrumentLookupClient | None = instrument_lookup
 
     # ── Public entry points ───────────────────────────────────────────────────
 
@@ -125,8 +216,22 @@ class BrokerageTransactionSyncWorker:
             "brokerage_sync_worker_started",
             cycle_seconds=self._settings.brokerage_sync_cycle_seconds,
         )
-        async with httpx.AsyncClient(timeout=10.0, headers=_system_jwt_headers()) as http_client:
+        async with httpx.AsyncClient(timeout=10.0, headers=_system_jwt_headers(self._settings)) as http_client:
             self._http_client = http_client
+            # If no lookup client was injected, build the production HTTP adapter
+            # against the shared httpx client. Tests inject a fake at __init__ time
+            # so this branch is a no-op there. Constructed here (not in __init__)
+            # so the adapter shares the same connection pool / auth headers as the
+            # rest of the worker.
+            if self._instrument_lookup is None:
+                from portfolio.infrastructure.market_data.instrument_lookup_client import (
+                    HttpInstrumentLookupClient,
+                )
+
+                self._instrument_lookup = HttpInstrumentLookupClient(
+                    http=http_client,
+                    market_data_url=self._settings.market_data_service_url,
+                )
             while True:
                 # PLAN-0052 platform-QA round 4 (2026-05-01): bounded
                 # exponential backoff retry. Previously ONE transient
@@ -186,6 +291,37 @@ class BrokerageTransactionSyncWorker:
 
         Opens a fresh UoW per connection to keep transactions short (BP-057).
         Always passes snaptrade_cipher so encrypted secrets are decrypted (R-001).
+
+        BUG-003 / TASK-W1-03: per-connection advisory lock — if another worker
+        replica is already syncing the same ``connection.id`` we return
+        immediately and let the next cycle pick it up. This is non-blocking
+        (``pg_try_advisory_xact_lock``) so two replicas never queue or
+        double-count holdings during the snapshot-upsert reconciliation window.
+        """
+        # ── Per-connection advisory lock ─────────────────────────────────────
+        # The outer UoW exists only to hold the xact-scoped lock for the
+        # duration of this method. We deliberately do NOT call ``commit()`` on
+        # it: ``__aexit__`` will rollback (no writes were issued on this UoW
+        # anyway) which releases the lock cleanly.
+        async with SqlAlchemyUnitOfWork(  # type: ignore[call-arg]
+            self._session_factory,
+            snaptrade_cipher=self._cipher,
+        ) as lock_uow:
+            acquired = await _try_acquire_connection_lock(lock_uow, connection.id)
+            if not acquired:
+                logger.info(  # type: ignore[no-any-return]
+                    "brokerage_sync_skipped_lock_held",
+                    connection_id=str(connection.id),
+                )
+                return
+            await self._do_sync_connection(connection)
+
+    async def _do_sync_connection(self, connection: BrokerageConnection) -> None:
+        """Inner per-connection sync — runs under the caller's advisory lock.
+
+        Extracted from ``_sync_connection`` so the lock-scoping context manager
+        stays compact and the existing sync semantics (multiple inner UoWs,
+        BP-057 ordering) remain unchanged inside this method.
         """
         # Determine date range
         today = datetime.now(tz=UTC).date()
@@ -308,7 +444,7 @@ class BrokerageTransactionSyncWorker:
                 except InstrumentResolutionTransientError:
                     # Skip transient resolution failures — next sync will retry.
                     continue
-                if instrument is None:
+                except BrokerageSyncSymbolNotFoundError:
                     # Unknown symbol — skip; we don't error-record positions
                     # the same way we do activities (positions are an overview).
                     continue
@@ -320,6 +456,21 @@ class BrokerageTransactionSyncWorker:
                         currency=pos.currency or "USD",
                     ),
                 )
+
+            # BP-500: Guard — if the broker returned positions but ALL failed
+            # instrument resolution, calling the use case with resolved=[] would
+            # delete every existing holding (the use case treats "absent from
+            # snapshot = closed position"). This happens when S2 doesn't know a
+            # symbol yet (seeding gap). Skip the upsert so existing holdings
+            # survive; the next sync will retry after instruments are seeded.
+            if all_positions and not resolved:
+                logger.warning(  # type: ignore[no-any-return]
+                    "brokerage_sync_snapshot_all_unresolved",
+                    connection_id=str(connection.id),
+                    portfolio_id=str(connection.portfolio_id),
+                    total_positions=len(all_positions),
+                )
+                return
 
             await UpsertHoldingsFromSnapshotUseCase().execute(
                 UpsertHoldingsFromSnapshotCommand(
@@ -338,6 +489,15 @@ class BrokerageTransactionSyncWorker:
     ) -> None:
         """Process a single SnapTrade activity into a transaction record."""
         from common.ids import new_uuid  # type: ignore[import-untyped]
+
+        # 0. Cash-only activity types — silently skip, no sync error.
+        # BP-501: FEE/INTEREST have no instrument_id; transactions.instrument_id
+        # is NOT NULL so they can't be recorded until the schema supports cash
+        # transactions. Skipping without an error record keeps the brokerage
+        # panel clean — these are expected, not failures.
+        if activity.activity_type.upper() in _CASH_ACTIVITY_TYPES:
+            BROKERAGE_SYNC_TRANSACTIONS_TOTAL.labels(status="skipped", error_type="cash_activity").inc()
+            return
 
         # 1. Type check
         mapping = _TYPE_MAP.get(activity.activity_type.upper())
@@ -368,13 +528,14 @@ class BrokerageTransactionSyncWorker:
 
         # 3. Instrument resolution
         #
-        # Two distinct failure modes must be told apart (F-007):
-        #   a) Genuine 404 → market-data does not know this symbol → UNKNOWN_INSTRUMENT
-        #   b) S3 network exception or 5xx → transient outage → API_ERROR
+        # PRD-0089 F2 §4.4 — single canonical S2 lookup. Two distinct failure
+        # modes still need to be told apart (F-007):
+        #   a) Genuine 404 → S2 does not know this symbol → UNKNOWN_INSTRUMENT
+        #   b) Network exception or 5xx → transient outage → API_ERROR
         #
-        # _resolve_instrument() returns None only for (a); it raises
-        # InstrumentResolutionTransientError for (b).  This prevents a brief
-        # S3 outage from flooding brokerage_sync_errors with UNKNOWN_INSTRUMENT
+        # _resolve_instrument() raises BrokerageSyncSymbolNotFoundError for (a)
+        # and InstrumentResolutionTransientError for (b). This prevents a brief
+        # S2 outage from flooding brokerage_sync_errors with UNKNOWN_INSTRUMENT
         # records that look identical to real missing instruments.
         try:
             instrument = await self._resolve_instrument(activity.symbol, uow)
@@ -390,8 +551,7 @@ class BrokerageTransactionSyncWorker:
             )
             BROKERAGE_SYNC_TRANSACTIONS_TOTAL.labels(status="skipped", error_type="api_error").inc()
             return
-
-        if instrument is None:
+        except BrokerageSyncSymbolNotFoundError:
             await uow.brokerage_sync_errors.save(
                 BrokerageTransactionSyncError(
                     id=new_uuid(),
@@ -454,61 +614,45 @@ class BrokerageTransactionSyncWorker:
         self,
         symbol: str,
         uow: SqlAlchemyUnitOfWork,  # type: ignore[type-arg]
-    ) -> InstrumentRef | None:
-        """Resolve instrument by symbol — first DB, then S3 (market-data) fallback."""
-        # Primary: local DB lookup (case-insensitive)
-        instrument = await uow.instruments.get_by_symbol(symbol)
-        if instrument is not None:
-            return instrument
+    ) -> InstrumentRef:
+        """Resolve a SnapTrade symbol to a canonical ``InstrumentRef`` via S2.
 
-        # Fallback: call market-data service (S3)
-        if self._http_client is None:
-            return None
+        PRD-0089 F2 §4.4 — single canonical path. The legacy DB-first +
+        S3-fallback dual-path was deleted along with the ``InstrumentRef.entity_id``
+        bridge-field branch: post-F2 the canonical UUID lives in S2's
+        ``instruments`` table (M-017 invariant: ``canonical_entities.entity_id ==
+        instruments.id`` for tradable kinds).
 
-        # R-002: URL-encode symbol — SnapTrade tickers can contain '.', '/', etc.
-        encoded_symbol = urllib.parse.quote(symbol, safe="")
-        try:
-            response = await self._http_client.get(
-                f"{self._settings.market_data_service_url}/api/v1/instruments/symbol/{encoded_symbol}",
-            )
-        except Exception as exc:
-            # Network error (timeout, DNS failure, connection refused, etc.) —
-            # raise a transient error so the caller records API_ERROR, not
-            # UNKNOWN_INSTRUMENT.  The instrument may be perfectly valid; S3 is
-            # just temporarily unreachable.
+        Behaviour contract:
+
+        * S2 returns 200 → return the populated ``InstrumentRef``.
+        * S2 returns 404 → raise ``BrokerageSyncSymbolNotFoundError``. The caller
+          maps this to a ``SyncErrorType.UNKNOWN_INSTRUMENT`` row and continues.
+        * Anything else (timeout, 5xx, malformed payload) → propagate
+          ``InstrumentResolutionTransientError`` from the lookup client. The
+          caller maps this to ``SyncErrorType.API_ERROR`` so genuine 404s and
+          transient outages remain distinguishable in the sync-error table.
+
+        The ``uow`` parameter is unused (kept on the signature so existing call
+        sites continue to compile while wave F2 is in flight) — instrument
+        persistence is owned by the InstrumentDiscoveredConsumer, not by the
+        sync worker. The worker is a pure read-through resolver.
+        """
+        if self._instrument_lookup is None:
+            # Defensive: this should never happen in production (run() wires the
+            # client before sync_cycle is called) and tests inject a fake
+            # explicitly. We surface the misconfiguration as a transient error so
+            # the cycle skips rather than hard-crashes the worker process.
             raise InstrumentResolutionTransientError(
-                f"Transient instrument resolution failure for symbol: {symbol!r} "
-                f"— market-data service unreachable ({type(exc).__name__})",
-            ) from exc
-
-        if response.status_code == 404:
-            # S3 confirmed the symbol does not exist on this platform → genuine unknown.
-            return None
-
-        if response.status_code != 200:
-            # 5xx / 429 / etc. — transient infrastructure failure, not a genuine 404.
-            raise InstrumentResolutionTransientError(
-                f"Transient instrument resolution failure for symbol: {symbol!r} "
-                f"— market-data service unavailable (HTTP {response.status_code})",
+                f"Instrument-lookup client not configured for symbol: {symbol!r}",
             )
 
-        data = response.json()
-        from common.ids import new_uuid  # type: ignore[import-untyped]
-        from common.time import utc_now  # type: ignore[import-untyped]
-        from portfolio.domain.entities.instrument import InstrumentRef
-
-        instrument = InstrumentRef(
-            id=new_uuid(),
-            symbol=data.get("symbol", symbol),
-            exchange=data.get("exchange", ""),
-            name=data.get("name"),
-            currency=data.get("currency"),
-            asset_class=data.get("asset_class"),
-            entity_id=None,
-            source_event_id=new_uuid(),  # placeholder — no Kafka event backing S3 resolution
-            synced_at=utc_now(),
-        )
-        instrument = await uow.instruments.upsert(instrument)
+        instrument = await self._instrument_lookup.lookup_by_ticker(symbol)
+        if instrument is None:
+            # S2 confirmed the symbol does not exist on this platform → genuine
+            # unknown. Raise the dedicated exception so the caller can route the
+            # outcome to UNKNOWN_INSTRUMENT without inspecting None semantics.
+            raise BrokerageSyncSymbolNotFoundError(symbol=symbol)
         return instrument
 
 
@@ -527,6 +671,13 @@ async def main() -> None:
         service_name="portfolio-brokerage-sync-worker",
         level=settings.log_level,
         json=settings.log_json,
+    )
+
+    # Phase 3 worker-metrics rollout — expose Prometheus /metrics so the
+    # BROKERAGE_SYNC_* counters/gauges become scrape-able.
+    metrics_handle = start_metrics_server(
+        service_name="portfolio-brokerage-sync",
+        port=int(os.environ.get("METRICS_PORT", "9100")),
     )
 
     # R-001: Build Fernet cipher so encrypted snaptrade_user_secret is decrypted.
@@ -550,7 +701,11 @@ async def main() -> None:
         settings=settings,
         cipher=cipher,
     )
-    await worker.run()
+    try:
+        await worker.run()
+    finally:
+        with contextlib.suppress(Exception):
+            await metrics_handle.aclose()
 
 
 if __name__ == "__main__":

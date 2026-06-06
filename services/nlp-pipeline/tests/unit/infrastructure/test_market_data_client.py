@@ -20,9 +20,11 @@ _SYMBOL = "AAPL"
 # PLAN-0052 platform-QA round 4 (2026-05-01): client now resolves ticker
 # → instrument_id before fetching OHLCV. Use a deterministic UUID so the
 # tests can predict the second URL.
+# PLAN-0073 B-1: /instruments/symbol/{ticker} was removed; use the unified
+# /instruments/lookup?symbol= endpoint. Response field is "id", not "instrument_id".
 _RESOLVED_ID = "550e8400-e29b-41d4-a716-446655440000"
-_RESOLVE_URL = f"http://market-data:8003/api/v1/instruments/symbol/{_SYMBOL}"
-_RESOLVE_RESPONSE = {"instrument_id": _RESOLVED_ID, "ticker": _SYMBOL}
+_RESOLVE_URL = f"http://market-data:8003/api/v1/instruments/lookup?symbol={_SYMBOL}"
+_RESOLVE_RESPONSE = {"id": _RESOLVED_ID, "symbol": _SYMBOL, "exchange": "US", "is_active": True}
 
 
 @pytest.fixture(autouse=True)
@@ -242,18 +244,15 @@ class TestMarketDataClientInternalJWT:
         login_calls = [r for r in httpx_mock.get_requests() if "dev-login" in str(r.url)]
         assert len(login_calls) == 1
 
+    @pytest.mark.httpx_mock(assert_all_requests_were_expected=False, assert_all_responses_were_requested=False)
     @pytest.mark.asyncio
     async def test_falls_back_to_no_header_when_gateway_unreachable(self, httpx_mock: pytest_httpx.HTTPXMock) -> None:
         """If dev-login fails, fall back to unauthenticated request (preserve 401-and-warn)."""
-        # Two 503 mocks: _get_internal_jwt is called once before ticker-resolve
-        # and once before OHLCV fetch; each failed mint leaves _token=None so the
-        # cache is not populated and both calls hit the endpoint.
-        httpx_mock.add_response(
-            method="POST",
-            url="http://api-gateway:8000/v1/auth/dev-login",
-            status_code=503,
-            text="gateway down",
-        )
+        # _get_internal_jwt is called once before ticker-resolve and once before
+        # OHLCV fetch; each invocation now retries up to len(_TOKEN_MINT_RETRY_DELAYS)
+        # times (4 attempts) before falling back to no header. CI pytest_httpx is
+        # stricter than local, so opt into permissive matching for this test only
+        # via @pytest.mark.httpx_mock — every 503 attempt is then expected.
         httpx_mock.add_response(
             method="POST",
             url="http://api-gateway:8000/v1/auth/dev-login",

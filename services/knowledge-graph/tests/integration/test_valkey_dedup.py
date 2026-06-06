@@ -12,7 +12,7 @@ import uuid
 import pytest
 
 
-@pytest.mark.integration
+@pytest.mark.integration()
 async def test_entity_refresh_dedup_prevents_requeue() -> None:
     """Entity queued within 30-min window should not be re-queued."""
     import fakeredis.aioredis as fakeredis
@@ -35,7 +35,7 @@ async def test_entity_refresh_dedup_prevents_requeue() -> None:
     await fake_redis.aclose()
 
 
-@pytest.mark.integration
+@pytest.mark.integration()
 async def test_entity_refresh_dedup_key_expires() -> None:
     """After the TTL expires the key no longer exists (logical test)."""
     import fakeredis.aioredis as fakeredis
@@ -57,7 +57,7 @@ async def test_entity_refresh_dedup_key_expires() -> None:
     await fake_redis.aclose()
 
 
-@pytest.mark.integration
+@pytest.mark.integration()
 async def test_valkey_client_fixture(valkey_client) -> None:
     """Valkey client (if available) should respond to ping."""
     try:

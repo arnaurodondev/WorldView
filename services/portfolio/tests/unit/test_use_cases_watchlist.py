@@ -186,7 +186,8 @@ async def test_add_member_success_writes_outbox_event(
 ) -> None:
     entity_id = uuid4()
     uc = AddWatchlistMemberUseCase()
-    member = await uc.execute(
+    # REQ-002b: use case now returns ``AddWatchlistMemberResult`` (member + created flag).
+    result = await uc.execute(
         AddWatchlistMemberCommand(
             tenant_id=tenant.id,
             watchlist_id=watchlist.id,
@@ -196,22 +197,28 @@ async def test_add_member_success_writes_outbox_event(
         uow,
         NoOpWatchlistCache(),
     )
-    assert member.entity_id == entity_id
+    assert result.created is True
+    assert result.member.entity_id == entity_id
     events = uow.outbox.events_by_type("watchlist.item_added")
     assert len(events) == 1
     assert events[0].payload["entity_id"] == str(entity_id)
 
 
 @pytest.mark.asyncio
-async def test_add_member_duplicate_raises(
+async def test_add_member_duplicate_returns_existing(
     uow: FakeUnitOfWork,
     tenant: Tenant,
     user: User,
     watchlist: Watchlist,
 ) -> None:
+    """REQ-002b: adding the same (watchlist_id, entity_id) twice is naturally
+    idempotent — the second call returns the existing member with
+    ``created=False`` (mapped to HTTP 200 by the route) instead of the
+    previous 409 ``WatchlistMemberAlreadyExistsError``.
+    """
     entity_id = uuid4()
     uc = AddWatchlistMemberUseCase()
-    await uc.execute(
+    result1 = await uc.execute(
         AddWatchlistMemberCommand(
             tenant_id=tenant.id,
             watchlist_id=watchlist.id,
@@ -220,16 +227,21 @@ async def test_add_member_duplicate_raises(
         ),
         uow,
     )
-    with pytest.raises(WatchlistMemberAlreadyExistsError):
-        await uc.execute(
-            AddWatchlistMemberCommand(
-                tenant_id=tenant.id,
-                watchlist_id=watchlist.id,
-                owner_id=user.id,
-                entity_id=entity_id,
-            ),
-            uow,
-        )
+    result2 = await uc.execute(
+        AddWatchlistMemberCommand(
+            tenant_id=tenant.id,
+            watchlist_id=watchlist.id,
+            owner_id=user.id,
+            entity_id=entity_id,
+        ),
+        uow,
+    )
+    assert result2.created is False
+    assert result2.member.id == result1.member.id
+    # Outbox event must be emitted only once — the duplicate add path is a
+    # no-op replay and must not produce a second WatchlistItemAdded event.
+    events = uow.outbox.events_by_type("watchlist.item_added")
+    assert len(events) == 1
 
 
 @pytest.mark.asyncio
@@ -537,7 +549,8 @@ async def test_add_member_resolves_ticker_name_from_local_instrument(
     uow.seed_instrument(instrument)
 
     uc = AddWatchlistMemberUseCase()
-    member = await uc.execute(
+    # REQ-002b: unwrap the result wrapper.
+    result = await uc.execute(
         AddWatchlistMemberCommand(
             tenant_id=tenant.id,
             watchlist_id=watchlist.id,
@@ -546,6 +559,7 @@ async def test_add_member_resolves_ticker_name_from_local_instrument(
         ),
         uow,
     )
+    member = result.member
 
     assert member.ticker == "AAPL"
     assert member.name == "Apple Inc."
@@ -562,7 +576,8 @@ async def test_add_member_persists_null_when_no_local_instrument(
     """If no local instrument matches the entity_id, the add still succeeds
     and the denormalised fields stay None (best-effort resolution)."""
     uc = AddWatchlistMemberUseCase()
-    member = await uc.execute(
+    # REQ-002b: unwrap the result wrapper.
+    result = await uc.execute(
         AddWatchlistMemberCommand(
             tenant_id=tenant.id,
             watchlist_id=watchlist.id,
@@ -571,6 +586,7 @@ async def test_add_member_persists_null_when_no_local_instrument(
         ),
         uow,
     )
+    member = result.member
     assert member.ticker is None
     assert member.name is None
     assert member.instrument_id is None
@@ -694,3 +710,170 @@ async def test_list_members_pagination_respects_limit_and_offset(
     )
     assert page.total == 3
     assert len(page.members) == 2
+
+
+# ── REQ-002b: idempotent POST /v1/watchlists/{id}/members ────────────────────
+
+
+@pytest.mark.asyncio
+async def test_add_member_idempotency_key_replay_returns_same_row(
+    uow: FakeUnitOfWork,
+    tenant: Tenant,
+    user: User,
+    watchlist: Watchlist,
+) -> None:
+    """REQ-002b — replay with the same key + same entity returns the original member.
+
+    The second call MUST resolve via ``find_by_idempotency_key`` (NOT via the
+    natural-duplicate path) so ``created=False`` is surfaced and no second
+    outbox event is emitted.
+    """
+    from portfolio.application.use_cases.watchlist import (
+        AddWatchlistMemberCommand,
+        AddWatchlistMemberUseCase,
+    )
+
+    key = str(uuid4())
+    entity_id = uuid4()
+    uc = AddWatchlistMemberUseCase()
+    cmd = AddWatchlistMemberCommand(
+        tenant_id=tenant.id,
+        watchlist_id=watchlist.id,
+        owner_id=user.id,
+        entity_id=entity_id,
+        idempotency_key=key,
+    )
+    result1 = await uc.execute(cmd, uow)
+    result2 = await uc.execute(cmd, uow)
+
+    assert result1.created is True
+    assert result2.created is False
+    assert result1.member.id == result2.member.id
+    # Single outbox event — replay must not emit again.
+    events = uow.outbox.events_by_type("watchlist.item_added")
+    assert len(events) == 1
+
+
+@pytest.mark.asyncio
+async def test_add_member_idempotency_key_different_entity_conflicts(
+    uow: FakeUnitOfWork,
+    tenant: Tenant,
+    user: User,
+    watchlist: Watchlist,
+) -> None:
+    """REQ-002b — same key + DIFFERENT entity_id → IdempotencyConflictError (409)."""
+    from portfolio.application.use_cases.watchlist import (
+        AddWatchlistMemberCommand,
+        AddWatchlistMemberUseCase,
+    )
+    from portfolio.domain.errors import IdempotencyConflictError
+
+    key = str(uuid4())
+    uc = AddWatchlistMemberUseCase()
+    await uc.execute(
+        AddWatchlistMemberCommand(
+            tenant_id=tenant.id,
+            watchlist_id=watchlist.id,
+            owner_id=user.id,
+            entity_id=uuid4(),
+            idempotency_key=key,
+        ),
+        uow,
+    )
+    with pytest.raises(IdempotencyConflictError):
+        await uc.execute(
+            AddWatchlistMemberCommand(
+                tenant_id=tenant.id,
+                watchlist_id=watchlist.id,
+                owner_id=user.id,
+                entity_id=uuid4(),  # different entity
+                idempotency_key=key,  # same key
+            ),
+            uow,
+        )
+
+
+@pytest.mark.asyncio
+async def test_add_member_invalid_idempotency_key_raises(
+    uow: FakeUnitOfWork,
+    tenant: Tenant,
+    user: User,
+    watchlist: Watchlist,
+) -> None:
+    """REQ-002b — non-UUID key → IdempotencyKeyInvalidError (422)."""
+    from portfolio.application.use_cases.watchlist import (
+        AddWatchlistMemberCommand,
+        AddWatchlistMemberUseCase,
+    )
+    from portfolio.domain.errors import IdempotencyKeyInvalidError
+
+    uc = AddWatchlistMemberUseCase()
+    with pytest.raises(IdempotencyKeyInvalidError):
+        await uc.execute(
+            AddWatchlistMemberCommand(
+                tenant_id=tenant.id,
+                watchlist_id=watchlist.id,
+                owner_id=user.id,
+                entity_id=uuid4(),
+                idempotency_key="not-a-uuid",
+            ),
+            uow,
+        )
+
+
+@pytest.mark.asyncio
+async def test_add_member_ownership_check_runs_before_idempotency_lookup(
+    uow: FakeUnitOfWork,
+    tenant: Tenant,
+    user: User,
+    watchlist: Watchlist,
+) -> None:
+    """Post-audit security MED #2 — ownership check must run BEFORE
+    ``find_by_idempotency_key`` so an attacker who guesses (watchlist_id,
+    idempotency_key) cannot replay-leak another tenant's member data.
+
+    Combined entropy ~244 bits makes the attack practically infeasible,
+    but defense-in-depth ordering is mandatory — the call site MUST 404
+    on ownership mismatch BEFORE consulting the idempotency table.
+    """
+    from portfolio.application.use_cases.watchlist import (
+        AddWatchlistMemberCommand,
+        AddWatchlistMemberUseCase,
+    )
+
+    # Pre-seed an idempotency replay row for this watchlist.
+    # If the new ordering is correct, the wrong-owner attempt MUST 404
+    # WITHOUT ever calling find_by_idempotency_key on this row.
+    key = str(uuid4())
+    seeded_entity = uuid4()
+    uc = AddWatchlistMemberUseCase()
+    await uc.execute(
+        AddWatchlistMemberCommand(
+            tenant_id=tenant.id,
+            watchlist_id=watchlist.id,
+            owner_id=user.id,
+            entity_id=seeded_entity,
+            idempotency_key=key,
+        ),
+        uow,
+    )
+
+    # Wrong-owner replay: same watchlist_id + same idempotency_key but
+    # different owner_id. Must raise an ownership error (AuthorizationError
+    # OR WatchlistNotFoundError — both fire INSIDE _fetch_watchlist_for_owner
+    # which now runs BEFORE find_by_idempotency_key). The seeded member
+    # MUST NOT be returned. Either exception class proves the invariant.
+    from portfolio.domain.errors import AuthorizationError
+
+    attacker_owner = uuid4()
+    with pytest.raises((WatchlistNotFoundError, AuthorizationError)):
+        await uc.execute(
+            AddWatchlistMemberCommand(
+                tenant_id=tenant.id,
+                watchlist_id=watchlist.id,
+                owner_id=attacker_owner,
+                entity_id=uuid4(),
+                idempotency_key=key,
+            ),
+            uow,
+        )

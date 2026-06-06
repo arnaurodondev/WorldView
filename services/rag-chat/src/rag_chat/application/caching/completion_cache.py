@@ -16,11 +16,35 @@ if TYPE_CHECKING:
 
 _TTL_SECONDS = 86_400  # 24 hours
 
+# Resolver-gate version — bumped whenever ``resolver_gates.py`` semantics
+# change. The completion cache key embeds this so stale answers built
+# under a prior gate (e.g. the pre-F-LIVE-NEW-003 ungated SpaceX answer)
+# are evicted on first read. Independent of the ``v3`` keyspace bump so
+# resolver changes don't require coordinating with prompt/tool changes.
+RESOLVER_VERSION = 2
+
 
 def _cache_key(message: str, thread_id: UUID | None) -> str:
-    raw = f"{message}:{thread_id}"
+    # F-LIVE-NEW-003: defensive resolver-version segment. The resolver
+    # gate logic feeds the LLM's entity map; when that logic changes the
+    # cached answer is semantically stale even though the input text is
+    # identical. We embed RESOLVER_VERSION into the key so a bump
+    # auto-evicts every prior-resolver answer on next read without
+    # depending on the deploy-token flush (which requires operator action).
+    # Bump this value on EVERY change to resolver gates / thresholds /
+    # stop-words / S6 contract.
+    raw = f"{message}:{thread_id}:r{RESOLVER_VERSION}"
     digest = hashlib.sha256(raw.encode()).hexdigest()
-    return f"rag:v1:completion:{digest}"
+    # PLAN-0093 ITER-8 FIX-LL — bumped v2 → v3 to evict ITER-7-era refusal /
+    # empty-tool-call answers. With FIX-JJ (classifier timeout → fail-open) and
+    # FIX-PP (news.py date_to alias) the previously-cached "I cannot find
+    # evidence" / "0 edges returned" responses for Q1/Q3/Q5/Q7 are stale: those
+    # queries now proceed to real tool calls. Canonical rule: bump this prefix
+    # on EVERY prompt / validator / tool-schema / security-path change that
+    # affects answer quality, so stale poisoned entries cannot be served.
+    # History: v1 → v2 = FIX-LIVE-A (Phase 5c F-LIVE-008 numeric grounding).
+    # See docs/audits/2026-05-24-qa-plan-0093-phase-5c-investigation-report.md.
+    return f"rag:v3:completion:{digest}"
 
 
 class CompletionCache:

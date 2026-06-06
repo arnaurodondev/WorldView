@@ -234,3 +234,166 @@ async def test_null_archive_default_no_errors() -> None:
     # Assert: response returned normally
     assert isinstance(result, dict)
     assert "generated_at" in result
+
+
+# ── PLAN-0103 W3 (BP-624): completeness check fires on missing sections ──────
+
+
+@pytest.mark.asyncio
+async def test_section_missing_metric_fires_for_partial_brief() -> None:
+    """When the LLM emits only 4 of 6 v4.2 sections, brief_section_missing_total increments.
+
+    Reproduces the FQA-01 pattern (Tape, Your Portfolio Today, Macro Today,
+    News That Matters To You present; Risks + Opportunities and Bonus context
+    missing) and asserts the Prom counter increments for the two missing
+    section names.
+    """
+    fqa01_output = (
+        "## Summary\nTech rally continues.\n\n"
+        "## Details\n"
+        "**Market Snapshot**\n- SPY +0.2% [N1]\n"
+        "**Your Portfolio Today**\n- AAPL flat [N1]\n"
+        "**Macro Today**\n- No prints today [N1]\n"
+        "**News That Matters To You**\n- Dell up 40% [N1]\n"
+    )
+
+    from rag_chat.application.metrics import prometheus as _prom
+
+    # Snapshot baseline counts so the test is order-independent.
+    def _count(section: str) -> float:
+        # _value.get() reads the live counter value for a label combination.
+        return _prom.brief_section_missing_total.labels(section=section)._value.get()
+
+    before_risks = _count("Risks + Opportunities")
+    before_bonus = _count("Bonus context")
+    before_tape = _count("Market Snapshot")
+
+    import datetime as _dt
+
+    _fixed_ts = _dt.datetime(2026, 5, 30, 12, 0, 0, tzinfo=_dt.UTC)
+    _fixed_id = UUID("00000000-0000-0000-0000-000000000002")
+    with (
+        patch("common.ids.new_uuid7", return_value=_fixed_id),
+        patch("common.time.utc_now", return_value=_fixed_ts),
+    ):
+        uc = GenerateBriefingUseCase(
+            llm_chain=_make_llm_chain(output=fqa01_output),
+            valkey=_make_valkey(),
+            context_gatherer=_make_context_gatherer_with_news(),
+        )
+        await uc.execute_public_morning(
+            user_id=_USER_ID,
+            tenant_id=_TENANT_ID,
+        )
+
+    after_risks = _count("Risks + Opportunities")
+    after_bonus = _count("Bonus context")
+    after_tape = _count("Market Snapshot")
+
+    assert after_risks == before_risks + 1.0, "Risks + Opportunities should be flagged missing"
+    assert after_bonus == before_bonus + 1.0, "Bonus context should be flagged missing"
+    # Market Snapshot was present → no increment
+    assert after_tape == before_tape, "Market Snapshot was present and should NOT increment"
+
+
+@pytest.mark.asyncio
+async def test_summary_paragraph_surfaced_on_response() -> None:
+    """v4.2 ``## Summary`` block is parsed and surfaced as ``summary_paragraph`` on the result."""
+    v42_output = (
+        "## Summary\nDell rally and Palantir surge highlight AI momentum.\n\n"
+        "## Details\n"
+        "**Market Snapshot**\n- SPY +0.2% [N1]\n"
+        "**Your Portfolio Today**\n- AAPL flat [N1]\n"
+        "**Macro Today**\n- No prints [N1]\n"
+        "**News That Matters To You**\n- Dell up 40% [N1]\n"
+        "**Risks + Opportunities**\n- No risks\n"
+        "**Bonus context**\n- None\n"
+    )
+    import datetime as _dt
+
+    _fixed_ts = _dt.datetime(2026, 5, 30, 12, 0, 0, tzinfo=_dt.UTC)
+    _fixed_id = UUID("00000000-0000-0000-0000-000000000003")
+    with (
+        patch("common.ids.new_uuid7", return_value=_fixed_id),
+        patch("common.time.utc_now", return_value=_fixed_ts),
+    ):
+        uc = GenerateBriefingUseCase(
+            llm_chain=_make_llm_chain(output=v42_output),
+            valkey=_make_valkey(),
+            context_gatherer=_make_context_gatherer_with_news(),
+        )
+        result = await uc.execute_public_morning(
+            user_id=_USER_ID,
+            tenant_id=_TENANT_ID,
+        )
+
+    assert result.get("summary_paragraph") is not None
+    assert "Dell rally" in result["summary_paragraph"]
+
+
+# ── PLAN-0103 W6 (v4.3): defensive injection wiring ─────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_brief_defensive_injection_fires_for_partial_brief() -> None:
+    """When LLM emits 4 of 6 sections AND omits ``## Summary``, defensive injection fires.
+
+    Reproduces the FQA-01 silent-drop pattern and asserts:
+      * brief_section_injected_total increments for each missing section.
+      * brief_section_injected_total{section="__summary__"} increments for
+        the synthesised summary.
+      * The result payload now carries placeholder lines for the missing
+        sections AND a non-null summary_paragraph (synthesised from the
+        first portfolio/news bullet).
+    """
+    # Partial output: 4 sections, no ``## Summary`` block — the exact pattern
+    # that motivated the v4.3 + injection fix.
+    partial_output = (
+        "**Market Snapshot**\n- SPY +0.2% [N1]\n"
+        "**Your Portfolio Today**\n- AAPL flat pre-mkt [N1]\n"
+        "**Macro Today**\n- No prints [N1]\n"
+        "**News That Matters To You**\n- Dell up 40% [N1]\n"
+    )
+
+    from rag_chat.application.metrics import prometheus as _prom
+
+    def _count_inj(section: str) -> float:
+        return _prom.brief_section_injected_total.labels(section=section)._value.get()
+
+    before_risks = _count_inj("Risks + Opportunities")
+    before_bonus = _count_inj("Bonus context")
+    before_summary = _count_inj("__summary__")
+
+    import datetime as _dt
+
+    _fixed_ts = _dt.datetime(2026, 5, 30, 12, 0, 0, tzinfo=_dt.UTC)
+    _fixed_id = UUID("00000000-0000-0000-0000-000000000004")
+    with (
+        patch("common.ids.new_uuid7", return_value=_fixed_id),
+        patch("common.time.utc_now", return_value=_fixed_ts),
+    ):
+        uc = GenerateBriefingUseCase(
+            llm_chain=_make_llm_chain(output=partial_output),
+            valkey=_make_valkey(),
+            context_gatherer=_make_context_gatherer_with_news(),
+        )
+        result = await uc.execute_public_morning(
+            user_id=_USER_ID,
+            tenant_id=_TENANT_ID,
+        )
+
+    # Counters must have incremented for each defensively-injected slot.
+    assert _count_inj("Risks + Opportunities") == before_risks + 1.0
+    assert _count_inj("Bonus context") == before_bonus + 1.0
+    assert _count_inj("__summary__") == before_summary + 1.0
+
+    # The narrative must now carry the injected placeholder section headings.
+    narrative = result.get("content") or ""
+    assert "**Risks + Opportunities**" in narrative
+    assert "**Bonus context**" in narrative
+    assert "No specific items today" in narrative
+
+    # summary_paragraph must be synthesised (LLM omitted ``## Summary``).
+    summary_paragraph = result.get("summary_paragraph")
+    assert summary_paragraph is not None
+    assert summary_paragraph.startswith("Lead headline: ")

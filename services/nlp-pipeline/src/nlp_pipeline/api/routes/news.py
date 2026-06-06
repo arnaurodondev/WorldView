@@ -66,12 +66,22 @@ async def get_top_news(
         pattern="^(LIGHT|MEDIUM|DEEP)$",
         description="Filter by effective routing tier",
     ),
+    tickers: str | None = Query(
+        default=None,
+        description="Comma-separated ticker symbols to filter by primary entity (e.g. AAPL,MSFT)",
+    ),
 ) -> RankedNewsResponse:
     """Return globally top-ranked articles within a rolling time window.
 
     Articles are ranked by ``display_relevance_score`` (DESC), a composite of
     market price impact, LLM relevance, and routing score computed at query time.
+
+    When ``tickers`` is supplied only articles whose primary entity symbol matches
+    one of the given tickers are returned; symbols are normalised to upper-case.
     """
+    # Split and normalise the comma-separated ticker string into a deduplicated list.
+    # Empty string / whitespace-only tokens are dropped so "AAPL, ,MSFT" → ["AAPL", "MSFT"].
+    ticker_list: list[str] | None = [t.strip().upper() for t in tickers.split(",") if t.strip()] if tickers else None
     articles, total = await GetTopNewsUseCase().execute(
         repo=repo,
         hours=hours,
@@ -79,6 +89,7 @@ async def get_top_news(
         offset=offset,
         min_display_score=min_display_score,
         routing_tier=routing_tier,
+        tickers=ticker_list,
     )
     return RankedNewsResponse(
         articles=[_to_response(a) for a in articles],

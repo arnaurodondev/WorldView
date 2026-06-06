@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import Any
 from uuid import UUID
 
-from fastapi import APIRouter, BackgroundTasks, HTTPException, Query, Request, status
+from fastapi import APIRouter, BackgroundTasks, Header, HTTPException, Query, Request, status
 
 from observability import get_logger  # type: ignore[import-untyped]
 from portfolio.api.dependencies import ReadUoWDep, UoWDep
@@ -366,18 +366,37 @@ async def trigger_brokerage_sync(
     request: Request,
     background_tasks: BackgroundTasks,
     uow: ReadUoWDep,  # read-only ownership check (R27)
+    # REQ-002c (TASK-W0-04): optional ``Idempotency-Key`` header. The
+    # underlying ``BrokerageTransactionSyncWorker`` is already DB-idempotent
+    # via the per-transaction ``external_ref`` dedup, so the only thing we
+    # need to suppress on the HTTP side is enqueuing duplicate background
+    # sync tasks within a short window. We use Valkey for that — a DB table
+    # would be overkill for a 5-minute TTL guard.
+    idempotency_key: str | None = Header(None, alias="Idempotency-Key"),
 ) -> dict[str, str]:
     """Trigger an immediate background sync for a single active or errored brokerage connection.
 
     Returns 202 immediately — the sync runs asynchronously via FastAPI BackgroundTasks.
     Rate-limited at 30 req/min (same limit as other brokerage endpoints in S9).
 
+    Idempotency (REQ-002c):
+        When an ``Idempotency-Key`` header is supplied, a Valkey lock keyed by
+        ``brokerage_sync_trigger:{tenant_id}:{connection_id}:{key}`` is set
+        with a 300-second TTL. A second request with the same key within that
+        window returns 202 with ``status="already_queued"`` and does NOT
+        enqueue a second background task. The worker is already idempotent at
+        the per-transaction level via ``external_ref``, so missing the key
+        only means the user sees redundant work, not duplicate writes.
+
     Status codes:
-        202 — sync started (connection is ACTIVE or ERROR)
+        202 — sync started (connection is ACTIVE or ERROR); ``status`` field
+              is ``"syncing"`` for a fresh trigger and ``"already_queued"``
+              for an idempotent replay within the 5-minute window.
         401 — missing or invalid auth claims
         403 — connection belongs to a different user
         404 — connection_id not found in this tenant
-        422 — connection is DISCONNECTED or PENDING (cannot sync)
+        422 — connection is DISCONNECTED or PENDING (cannot sync), or the
+              idempotency key is not a valid UUID.
     """
     from portfolio.domain.enums import ConnectionStatus
 
@@ -388,6 +407,17 @@ async def trigger_brokerage_sync(
         conn_uuid = UUID(connection_id)
     except ValueError as exc:
         raise HTTPException(status_code=422, detail="Invalid connection_id format") from exc
+
+    # REQ-002c: validate the idempotency key shape early — same UUID guard as
+    # the other idempotent mutations to keep the API contract uniform.
+    if idempotency_key is not None:
+        try:
+            UUID(idempotency_key)
+        except (ValueError, AttributeError) as exc:
+            raise HTTPException(
+                status_code=422,
+                detail="Idempotency-Key must be a valid UUID",
+            ) from exc
 
     # Ownership check — use read replica (R27); we only need to verify the
     # connection exists and belongs to this user before scheduling the task.
@@ -406,6 +436,37 @@ async def trigger_brokerage_sync(
             status_code=422,
             detail="Connection is not active — cannot sync",
         )
+
+    # REQ-002c: Valkey-backed trigger dedup. Key shape includes tenant_id
+    # (multi-tenant isolation), connection_id (per-connection bucket) and the
+    # caller-supplied key. TTL is 300 s — long enough to absorb retried POSTs
+    # from network blips but short enough that a genuine new request 5 minutes
+    # later still goes through.
+    if idempotency_key is not None:
+        valkey_client = getattr(request.app.state, "valkey_client", None)
+        if valkey_client is not None:
+            key = f"brokerage_sync_trigger:{tenant_id}:{conn_uuid}:{idempotency_key}"
+            # ``set_nx`` returns True on first-write, False if the key already
+            # exists. Atomic NX prevents the TOCTOU race between GET + SET
+            # that a check-then-set pattern would have.
+            try:
+                acquired = await valkey_client.set_nx(key, "1", ex=300)
+            except Exception as exc:  # — Valkey is best-effort here
+                # If Valkey is unavailable we fall back to "no dedup" rather
+                # than failing the user's sync request. The worker layer is
+                # still idempotent at the transaction level.
+                logger.warning(
+                    "brokerage_sync_idempotency_valkey_error",
+                    connection_id=connection_id,
+                    error=str(exc),
+                )
+                acquired = True
+            if not acquired:
+                return {
+                    "status": "already_queued",
+                    "connection_id": connection_id,
+                    "idempotency_key": idempotency_key,
+                }
 
     # Schedule the sync as a FastAPI background task — returns 202 immediately.
     background_tasks.add_task(_run_single_sync, request.app.state, connection)

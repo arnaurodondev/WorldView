@@ -23,6 +23,7 @@ from typing import TYPE_CHECKING
 from uuid import UUID
 
 import httpx
+from prompts.classification.article_relevance import ARTICLE_RELEVANCE_SCORER  # type: ignore[import-untyped]
 from sqlalchemy import text
 
 from observability import get_logger  # type: ignore[import-untyped]
@@ -38,33 +39,21 @@ _RELEVANCE_PROMPT_VERSION: str = "v1"
 
 logger = get_logger(__name__)  # type: ignore[no-any-return]
 
-# Prompt sent to the LLM for relevance scoring + sentiment classification.
+# Phase 2C (2026-06-05): the static instruction block lives in libs/prompts as
+# ``ARTICLE_RELEVANCE_SCORER`` so it gets a content-hash, semver, and shared
+# identifier across services. We resolve it ONCE at import time via .render()
+# (no parameters) so the hot path stays a single string concat, byte-identical
+# to the legacy ``_SYSTEM_PROMPT`` constant.
 #
-# F-Q1-07 fix (PLAN-0050 QA iter-1): appended "sentiment" field extraction to
-# the SAME LLM call so we write both llm_relevance_score and sentiment in one
-# round-trip rather than adding a separate SentimentClassifierWorker.
-# The sentiment token set is constrained to four values so the LLM cannot
-# hallucinate a non-enum value — the writer validates before persisting.
-# Adding "sentiment" alongside (not instead of) "score" keeps the relevance
-# scoring contract (PRD-0026 §6.5) unchanged.
-_SYSTEM_PROMPT = (
-    "You are a financial news relevance assessor. "
-    "Rate the market impact of this news article from 0.0 to 1.0.\n"
-    "0.0 = completely irrelevant (celebrity news, sports, weather)\n"
-    "0.3 = mildly relevant (broad economy, far sector)\n"
-    "0.6 = moderately relevant (sector news, indirect exposure)\n"
-    "0.9 = highly relevant (direct earnings, M&A, regulatory action)\n"
-    "1.0 = critical (halted trading, major earnings miss, bankruptcy)\n"
-    "If the title is absent, vague, or ambiguous, return score 0.3 as a conservative default.\n"
-    "Also classify the market sentiment: "
-    '"positive" (good news for investors), '
-    '"negative" (bad news for investors), '
-    '"neutral" (factual/no clear direction), '
-    '"mixed" (contains both positive and negative signals).\n'
-    "Respond with ONLY valid JSON: "
-    '{"score": <float 0.0-1.0>, "reason": "<max 10 words in English>", '
-    '"sentiment": "positive"|"negative"|"neutral"|"mixed"}'
-)
+# F-Q1-07 lineage (PLAN-0050 QA iter-1): the prompt asks for sentiment in the
+# SAME LLM call as relevance scoring so both fields are written in one
+# round-trip rather than via a separate worker. The sentiment token set is
+# constrained to four values so the LLM cannot hallucinate a non-enum value —
+# the writer validates before persisting.
+_SYSTEM_PROMPT = ARTICLE_RELEVANCE_SCORER.render()
+# Stable identifier (``name@version#content_hash``) for structlog so log
+# consumers can correlate scoring outcomes back to the exact prompt text.
+_RELEVANCE_PROMPT_ID = ARTICLE_RELEVANCE_SCORER.identifier()
 
 # Valid sentiment enum values — reject anything the LLM hallucinates.
 _VALID_SENTIMENTS = frozenset({"positive", "negative", "neutral", "mixed"})
@@ -156,9 +145,15 @@ class ArticleRelevanceScoringWorker:
         # PLAN-0055 C-2: dual-write. Legacy UPDATE keeps the news read path
         # working until Wave C-3 wires the materialized view; the append-only
         # INSERT establishes the audit trail going forward.
+        # PLAN-0093 T-C-3-03 (F-NPL-008): in the same write session, also pull
+        # max(impact_score) from article_impact_windows per doc and persist it
+        # into document_source_metadata.impact_score (PRD-0026 §6.5 — the
+        # market-impact component of display_relevance_score). Writes NULL
+        # when no windows exist yet (article < 25h old or unmapped ticker).
         model_id_for_provenance = self._api_model_id if self._api_key else self._model
         async with self._nlp_sf() as session:
             await self._write_scores(session, scored)
+            await self._write_impact_scores(session, [doc_id for doc_id, *_ in scored])
             await self._append_provenance(session, scored, model_id_for_provenance)
             await session.commit()
 
@@ -166,6 +161,9 @@ class ArticleRelevanceScoringWorker:
             "relevance_scoring_cycle_done",
             articles_scored=len(scored),
             articles_fetched=len(articles),
+            # Phase 2C: identifier (name@version#hash) of the system prompt so
+            # log consumers can correlate scoring drift to a prompt revision.
+            prompt_id=_RELEVANCE_PROMPT_ID,
         )
         return len(scored)
 
@@ -419,6 +417,40 @@ class ArticleRelevanceScoringWorker:
                 error=str(exc),
                 exc_info=True,
             )
+
+    @staticmethod
+    async def _write_impact_scores(
+        session: AsyncSession,
+        doc_ids: list[UUID],
+    ) -> None:
+        """PLAN-0093 T-C-3-03 (F-NPL-008): populate ``document_source_metadata.impact_score``.
+
+        For each doc_id, compute MAX(impact_score) across all article_impact_windows
+        rows (already normalised to [0, 1] by PriceImpactLabellingWorker) and write
+        it back. Articles with no impact_windows row stay NULL — per PRD-0026 §6.5
+        the display formula uses ``IS NULL`` to drop the market-impact term out of
+        the weighted average. Writing 0.0 would conflate "no data yet" with
+        "labelled zero-impact" and skew the fallback branches.
+
+        Implemented as a single UPDATE … FROM (SELECT … GROUP BY) so the cost is
+        one round-trip regardless of batch size.
+        """
+        if not doc_ids:
+            return
+        stmt = text(
+            """
+            UPDATE document_source_metadata dsm
+            SET impact_score = sub.max_impact
+            FROM (
+                SELECT article_id AS doc_id, MAX(impact_score) AS max_impact
+                FROM article_impact_windows
+                WHERE article_id = ANY(:doc_ids)
+                GROUP BY article_id
+            ) AS sub
+            WHERE dsm.doc_id = sub.doc_id
+            """,
+        )
+        await session.execute(stmt, {"doc_ids": [str(d) for d in doc_ids]})
 
     @staticmethod
     async def _write_scores(

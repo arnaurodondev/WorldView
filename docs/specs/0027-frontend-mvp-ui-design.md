@@ -1366,6 +1366,9 @@ See `docs/ui/frontend-migration.md` §1.
 
 ### ADR-F-12: entity_id ≠ instrument_id — Resolution via S9 Composition (NEW)
 
+> **🔻 SUPERSEDED by [ADR-F-16](../architecture/decisions/ADR-F-16-instrument-entity-id-unification.md) on 2026-05-20 (PRD-0089 F2 wave).**
+> Post-F2: for `entity_type = 'financial_instrument'`, `entity_id == instrument_id` (M-017 invariant, enforced in CI). Non-tradable kinds (persons, events, sectors) keep an independent `entity_id`. Frontend URLs use tickers (`/instruments/${TICKER}`), not UUIDs. The original ADR text below is preserved for historical context.
+
 **Context**: S3 uses `instrument_id` (UUID) as primary key for trading instruments. S7 uses `entity_id` (UUID) as primary key for canonical knowledge graph entities. S1 `InstrumentRef` bridges them via `entity_id: UUID | null` field (populated by S6 entity resolution pipeline, nullable).
 
 **Decision**: `instrument_id` and `entity_id` are **distinct UUIDs** from different namespaces. They are NOT unified. Making them equal would break S7 (which has entities for persons, funds, events — not just financial instruments).

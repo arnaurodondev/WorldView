@@ -116,14 +116,27 @@ services:
       KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
       KAFKA_CLUSTER_ID: MkU3OEVBNTcwNTJENDM2Qk
       CLUSTER_ID: MkU3OEVBNTcwNTJENDM2Qk
+      # BP-NNN: Single-node KRaft (broker+controller in one JVM) saturates the
+      # QuorumController event queue during cold-restart with many partitions.
+      # ~250+ partition-leader-election events flood the queue, the broker's
+      # own heartbeat to the in-process controller times out (default 4500ms),
+      # controller marks broker dead, triggers re-election → loop. Raising the
+      # heartbeat/session/election budgets gives cold-start enough headroom.
+      KAFKA_CONTROLLER_QUORUM_REQUEST_TIMEOUT_MS: 30000
+      KAFKA_CONTROLLER_QUORUM_ELECTION_TIMEOUT_MS: 30000
+      KAFKA_BROKER_HEARTBEAT_INTERVAL_MS: 5000
+      KAFKA_BROKER_SESSION_TIMEOUT_MS: 30000
     volumes:
       - kafka_data:/var/lib/kafka/data
     healthcheck:
       test: ["CMD", "kafka-broker-api-versions", "--bootstrap-server", "localhost:9092"]
       interval: 15s
-      timeout: 10s
-      retries: 5
-      start_period: 30s
+      # Tuned for single-node KRaft cold-restart load (see KAFKA_CONTROLLER_* above).
+      # Original 10s timeout × 5 retries × 30s start_period = ~75s tolerance
+      # was insufficient when 250+ partitions need leader election on startup.
+      timeout: 30s
+      retries: 10
+      start_period: 300s
 
   schema-registry:
     image: confluentinc/cp-schema-registry:7.6.0
@@ -236,7 +249,7 @@ services:
     env_file:
       - ../../services/portfolio/configs/docker.env
     command: ["alembic", "upgrade", "head"]
-    restart: "no"
+    restart: "on-failure:5"
 
   # ── Portfolio service ────────────────────────────────────────────────────────
   portfolio:
@@ -265,6 +278,7 @@ services:
       timeout: 5s
       start_period: 20s
       retries: 3
+    restart: unless-stopped
 
   # ── Portfolio outbox dispatcher ──────────────────────────────────────────────
   portfolio-dispatcher:
@@ -284,6 +298,7 @@ services:
     env_file:
       - ../../services/portfolio/configs/docker.env
     command: ["python", "-m", "portfolio.infrastructure.messaging.outbox.dispatcher_main"]
+    expose: ["9100"]
     restart: on-failure
     healthcheck:
       test: ["CMD", "python", "-c", "import os; os.kill(1, 0)"]
@@ -335,6 +350,7 @@ services:
     environment:
       - PORTFOLIO_MARKET_DATA_SERVICE_URL=${PORTFOLIO_MARKET_DATA_SERVICE_URL:-http://market-data:8003}
     command: ["python", "-m", "portfolio.workers.portfolio_snapshot_worker"]
+    expose: ["9100"]
     restart: on-failure
     healthcheck:
       test: ["CMD", "python", "-c", "import os; os.kill(1, 0)"]
@@ -361,6 +377,7 @@ services:
       - SNAPTRADE_SECRET_ENCRYPTION_KEY=${SNAPTRADE_SECRET_ENCRYPTION_KEY:-}
       - PORTFOLIO_MARKET_DATA_SERVICE_URL=${PORTFOLIO_MARKET_DATA_SERVICE_URL:-http://market-data:8003}
     command: ["python", "-m", "portfolio.workers.brokerage_sync_worker"]
+    expose: ["9100"]
     restart: on-failure
     healthcheck:
       test: ["CMD", "python", "-c", "import os; os.kill(1, 0)"]
@@ -381,7 +398,7 @@ services:
     env_file:
       - ../../services/market-ingestion/configs/docker.env
     command: ["alembic", "-c", "alembic.ini", "upgrade", "head"]
-    restart: "no"
+    restart: "on-failure:5"
 
   # ── Market ingestion service ─────────────────────────────────────────────────
   market-ingestion:
@@ -414,6 +431,7 @@ services:
       timeout: 5s
       start_period: 15s
       retries: 3
+    restart: unless-stopped
 
   # ── Market ingestion scheduler ───────────────────────────────────────────────
   market-ingestion-scheduler:
@@ -427,6 +445,7 @@ services:
     env_file:
       - ../../services/market-ingestion/configs/docker.env
     command: ["python", "-m", "market_ingestion.infrastructure.scheduler.scheduler_main"]
+    expose: ["9100"]
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "python", "-c", "import os; os.kill(1, 0)"]
@@ -449,6 +468,7 @@ services:
     env_file:
       - ../../services/market-ingestion/configs/docker.env
     command: ["python", "-m", "market_ingestion.infrastructure.workers.worker_main"]
+    expose: ["9100"]
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "python", "-c", "import os; os.kill(1, 0)"]
@@ -475,6 +495,7 @@ services:
     env_file:
       - ../../services/market-ingestion/configs/docker.env
     command: ["python", "-m", "market_ingestion.infrastructure.messaging.outbox.dispatcher_main"]
+    expose: ["9100"]
     restart: on-failure
     healthcheck:
       test: ["CMD", "python", "-c", "import os; os.kill(1, 0)"]
@@ -585,7 +606,7 @@ services:
       tempo:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "wget", "--spider", "-q", "http://localhost:12345/ready"]
+      test: ["CMD-SHELL", "test -f /proc/1/exe"]
       interval: 15s
       timeout: 5s
       retries: 3
@@ -657,7 +678,7 @@ services:
     env_file:
       - ../../services/content-ingestion/configs/docker.env
     command: ["alembic", "upgrade", "head"]
-    restart: "no"
+    restart: "on-failure:5"
 
   # API server
   content-ingestion:
@@ -691,6 +712,7 @@ services:
       timeout: 5s
       retries: 3
       start_period: 30s
+    restart: unless-stopped
 
   # Scheduler process — evaluates sources and creates tasks
   content-ingestion-scheduler:
@@ -727,6 +749,12 @@ services:
       minio:
         condition: service_healthy
     restart: unless-stopped
+    # PLAN-0028 worker-metrics phase 1: expose the /metrics + /healthz
+    # endpoint so Prometheus (and any in-network healthcheck) can scrape
+    # this background worker.  ``expose`` keeps the port unreachable from
+    # the host while making it routable inside the compose network.
+    expose:
+      - "9100"
     # Scale: docker compose up --scale content-ingestion-worker=3
     healthcheck:
       test: ["CMD", "python", "-c", "import os; os.kill(1, 0)"]
@@ -742,6 +770,7 @@ services:
       dockerfile: services/content-ingestion/Dockerfile
     profiles: [infra, all]
     command: ["python", "-m", "content_ingestion.infrastructure.messaging.outbox.dispatcher_main"]
+    expose: ["9100"]
     env_file:
       - ../../services/content-ingestion/configs/docker.env
     depends_on:
@@ -775,7 +804,7 @@ services:
     env_file:
       - ../../services/market-data/configs/docker.env
     command: ["alembic", "upgrade", "head"]
-    restart: "no"
+    restart: "on-failure:5"
 
   market-data:
     build:
@@ -805,6 +834,7 @@ services:
       timeout: 5s
       start_period: 20s
       retries: 3
+    restart: unless-stopped
 
   market-data-dispatcher:
     build:
@@ -867,6 +897,7 @@ services:
     env_file:
       - ../../services/market-data/configs/docker.env
     command: ["python", "-m", "market_data.infrastructure.messaging.consumers.quotes_consumer_main"]
+    expose: ["9100"]
     restart: on-failure
     healthcheck:
       test: ["CMD", "python", "-c", "import os; os.kill(1, 0)"]
@@ -890,6 +921,7 @@ services:
     env_file:
       - ../../services/market-data/configs/docker.env
     command: ["python", "-m", "market_data.infrastructure.messaging.consumers.fundamentals_consumer_main"]
+    expose: ["9100"]
     restart: on-failure
     healthcheck:
       test: ["CMD", "python", "-c", "import os; os.kill(1, 0)"]
@@ -913,6 +945,7 @@ services:
     env_file:
       - ../../services/market-data/configs/docker.env
     command: ["python", "-m", "market_data.infrastructure.messaging.consumers.prediction_market_consumer_main"]
+    expose: ["9100"]
     restart: on-failure
     healthcheck:
       test: ["CMD", "python", "-c", "import os; os.kill(1, 0)"]
@@ -936,6 +969,7 @@ services:
     env_file:
       - ../../services/market-data/configs/docker.env
     command: ["python", "-m", "market_data.infrastructure.messaging.consumers.intraday_resampling_consumer_main"]
+    expose: ["9100"]
     restart: on-failure
     healthcheck:
       test: ["CMD", "python", "-c", "import os; os.kill(1, 0)"]
@@ -956,7 +990,7 @@ services:
     env_file:
       - ../../services/content-store/configs/docker.env
     command: ["alembic", "upgrade", "head"]
-    restart: "no"
+    restart: "on-failure:5"
 
   content-store:
     build:
@@ -986,6 +1020,7 @@ services:
       timeout: 5s
       start_period: 30s
       retries: 3
+    restart: unless-stopped
 
   content-store-dispatcher:
     build:
@@ -1002,6 +1037,7 @@ services:
     env_file:
       - ../../services/content-store/configs/docker.env
     command: ["python", "-m", "content_store.infrastructure.messaging.outbox.dispatcher_main"]
+    expose: ["9100"]
     restart: on-failure
     healthcheck:
       test: ["CMD", "python", "-c", "import os; os.kill(1, 0)"]
@@ -1029,6 +1065,7 @@ services:
     env_file:
       - ../../services/content-store/configs/docker.env
     command: ["python", "-m", "content_store.infrastructure.messaging.consumers.article_consumer_main"]
+    expose: ["9100"]
     restart: on-failure
     healthcheck:
       test: ["CMD", "python", "-c", "import os; os.kill(1, 0)"]
@@ -1057,6 +1094,7 @@ services:
     env_file:
       - ../../services/content-store/configs/docker.env
     command: ["python", "-m", "content_store.infrastructure.messaging.consumers.stored_article_dedup_consumer_main"]
+    expose: ["9100"]
     restart: on-failure
     healthcheck:
       test: ["CMD", "python", "-c", "import os; os.kill(1, 0)"]
@@ -1187,7 +1225,7 @@ services:
     env_file:
       - ../../services/nlp-pipeline/configs/docker.env
     command: ["alembic", "upgrade", "head"]
-    restart: "no"
+    restart: "on-failure:5"
 
   nlp-pipeline:
     build:
@@ -1219,6 +1257,7 @@ services:
       timeout: 5s
       start_period: 45s
       retries: 3
+    restart: unless-stopped
 
   nlp-pipeline-dispatcher:
     build:
@@ -1235,6 +1274,7 @@ services:
     env_file:
       - ../../services/nlp-pipeline/configs/docker.env
     command: ["python", "-m", "nlp_pipeline.infrastructure.messaging.outbox.dispatcher_main"]
+    expose: ["9100"]
     restart: on-failure
     healthcheck:
       test: ["CMD", "python", "-c", "import os; os.kill(1, 0)"]
@@ -1268,6 +1308,7 @@ services:
     env_file:
       - ../../services/nlp-pipeline/configs/docker.env
     command: ["python", "-m", "nlp_pipeline.infrastructure.messaging.consumers.article_consumer_main"]
+    expose: ["9100"]
     restart: on-failure
     healthcheck:
       test: ["CMD", "python", "-c", "import os; os.kill(1, 0)"]
@@ -1289,6 +1330,7 @@ services:
     env_file:
       - ../../services/nlp-pipeline/configs/docker.env
     command: ["python", "-m", "nlp_pipeline.infrastructure.messaging.consumers.watchlist_consumer_main"]
+    expose: ["9100"]
     restart: on-failure
     healthcheck:
       test: ["CMD", "python", "-c", "import os; os.kill(1, 0)"]
@@ -1312,6 +1354,35 @@ services:
     env_file:
       - ../../services/nlp-pipeline/configs/docker.env
     command: ["python", "-m", "nlp_pipeline.infrastructure.messaging.consumers.document_deletion_consumer_main"]
+    expose: ["9100"]
+    restart: on-failure
+    healthcheck:
+      test: ["CMD", "python", "-c", "import os; os.kill(1, 0)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+
+  # REQ-003 / TASK-W0-06: consumes entity.refresh.v1 events from S7's
+  # TriggerEntityRefreshUseCase and marks entity_embedding_state rows as
+  # due (next_refresh_at = now()). Without this container running, the
+  # manual /api/v1/entities/{entity_id}/refresh endpoint publishes to
+  # Kafka but is never consumed → silent no-op.
+  # NOTE: was accidentally dropped in the PLAN-0089 merge; restored here.
+  nlp-pipeline-entity-refresh-consumer:
+    build:
+      context: ../..
+      dockerfile: services/nlp-pipeline/Dockerfile
+    profiles: [infra, all]
+    depends_on:
+      nlp-pipeline-migrate:
+        condition: service_completed_successfully
+      kafka-init:
+        condition: service_completed_successfully
+    env_file:
+      - ../../services/nlp-pipeline/configs/docker.env
+    command: ["python", "-m", "nlp_pipeline.infrastructure.messaging.consumers.entity_refresh_consumer_main"]
+    expose: ["9100"]
     restart: on-failure
     healthcheck:
       test: ["CMD", "python", "-c", "import os; os.kill(1, 0)"]
@@ -1333,6 +1404,7 @@ services:
     env_file:
       - ../../services/nlp-pipeline/configs/docker.env
     command: ["python", "-m", "nlp_pipeline.workers.price_impact_labelling_worker"]
+    expose: ["9100"]
     restart: on-failure
     healthcheck:
       test: ["CMD", "python", "-c", "import os; os.kill(1, 0)"]
@@ -1354,6 +1426,7 @@ services:
     env_file:
       - ../../services/nlp-pipeline/configs/docker.env
     command: ["python", "-m", "nlp_pipeline.workers.article_relevance_scoring_worker"]
+    expose: ["9100"]
     restart: on-failure
     healthcheck:
       test: ["CMD", "python", "-c", "import os; os.kill(1, 0)"]
@@ -1377,6 +1450,7 @@ services:
     env_file:
       - ../../services/nlp-pipeline/configs/docker.env
     command: ["python", "-m", "nlp_pipeline.workers.unresolved_resolution_worker_main"]
+    expose: ["9100"]
     restart: on-failure
     healthcheck:
       test: ["CMD", "python", "-c", "import sys; sys.exit(0)"]
@@ -1405,6 +1479,7 @@ services:
     env_file:
       - ../../services/nlp-pipeline/configs/docker.env
     command: ["python", "-m", "nlp_pipeline.workers.embedding_retry_worker_main"]
+    expose: ["9100"]
     restart: on-failure
     healthcheck:
       test: ["CMD", "python", "-c", "import os; os.kill(1, 0)"]
@@ -1443,6 +1518,7 @@ services:
       timeout: 5s
       start_period: 45s
       retries: 3
+    restart: unless-stopped
 
   knowledge-graph-dispatcher:
     build:
@@ -1459,6 +1535,7 @@ services:
     env_file:
       - ../../services/knowledge-graph/configs/docker.env
     command: ["python", "-m", "knowledge_graph.infrastructure.messaging.outbox.dispatcher_main"]
+    expose: ["9100"]
     restart: on-failure
     healthcheck:
       test: ["CMD", "python", "-c", "import os; os.kill(1, 0)"]
@@ -1505,6 +1582,7 @@ services:
     env_file:
       - ../../services/knowledge-graph/configs/docker.env
     command: ["python", "-m", "knowledge_graph.infrastructure.messaging.consumers.enriched_consumer_main"]
+    expose: ["9100"]
     restart: on-failure
     healthcheck:
       test: ["CMD", "python", "-c", "import os; os.kill(1, 0)"]
@@ -1535,6 +1613,7 @@ services:
     env_file:
       - ../../services/knowledge-graph/configs/docker.env
     command: ["python", "-m", "knowledge_graph.infrastructure.messaging.consumers.provisional_queued_consumer_main"]
+    expose: ["9100"]
     restart: on-failure
     healthcheck:
       test: ["CMD", "python", "-c", "import os; os.kill(1, 0)"]
@@ -1560,6 +1639,7 @@ services:
     env_file:
       - ../../services/knowledge-graph/configs/docker.env
     command: ["python", "-m", "knowledge_graph.infrastructure.messaging.consumers.entity_consumer_main"]
+    expose: ["9100"]
     restart: on-failure
     healthcheck:
       test: ["CMD", "python", "-c", "import os; os.kill(1, 0)"]
@@ -1585,6 +1665,7 @@ services:
     env_file:
       - ../../services/knowledge-graph/configs/docker.env
     command: ["python", "-m", "knowledge_graph.infrastructure.messaging.consumers.fundamentals_consumer_main"]
+    expose: ["9100"]
     restart: on-failure
     healthcheck:
       test: ["CMD", "python", "-c", "import os; os.kill(1, 0)"]
@@ -1610,6 +1691,7 @@ services:
     env_file:
       - ../../services/knowledge-graph/configs/docker.env
     command: ["python", "-m", "knowledge_graph.infrastructure.messaging.consumers.instrument_consumer_main"]
+    expose: ["9100"]
     restart: on-failure
     healthcheck:
       test: ["CMD", "python", "-c", "import os; os.kill(1, 0)"]
@@ -1670,6 +1752,7 @@ services:
     env_file:
       - ../../services/knowledge-graph/configs/docker.env
     command: ["python", "-m", "knowledge_graph.infrastructure.messaging.consumers.temporal_event_consumer_main"]
+    expose: ["9100"]
     restart: on-failure
     healthcheck:
       test: ["CMD", "python", "-c", "import os; os.kill(1, 0)"]
@@ -1695,6 +1778,7 @@ services:
     env_file:
       - ../../services/knowledge-graph/configs/docker.env
     command: ["python", "-m", "knowledge_graph.infrastructure.messaging.consumers.economic_events_dataset_consumer_main"]
+    expose: ["9100"]
     restart: on-failure
     healthcheck:
       test: ["CMD", "python", "-c", "import os; os.kill(1, 0)"]
@@ -1720,6 +1804,7 @@ services:
     env_file:
       - ../../services/knowledge-graph/configs/docker.env
     command: ["python", "-m", "knowledge_graph.infrastructure.messaging.consumers.macro_indicator_dataset_consumer_main"]
+    expose: ["9100"]
     restart: on-failure
     healthcheck:
       test: ["CMD", "python", "-c", "import os; os.kill(1, 0)"]
@@ -1745,6 +1830,7 @@ services:
     env_file:
       - ../../services/knowledge-graph/configs/docker.env
     command: ["python", "-m", "knowledge_graph.infrastructure.messaging.consumers.insider_transactions_dataset_consumer_main"]
+    expose: ["9100"]
     restart: on-failure
     healthcheck:
       test: ["CMD", "python", "-c", "import os; os.kill(1, 0)"]
@@ -1771,6 +1857,7 @@ services:
     env_file:
       - ../../services/knowledge-graph/configs/docker.env
     command: ["python", "-m", "knowledge_graph.infrastructure.messaging.consumers.earnings_calendar_dataset_consumer_main"]
+    expose: ["9100"]
     restart: on-failure
     healthcheck:
       test: ["CMD", "python", "-c", "import os; os.kill(1, 0)"]
@@ -1796,6 +1883,7 @@ services:
     env_file:
       - ../../services/knowledge-graph/configs/docker.env
     command: ["python", "-m", "knowledge_graph.infrastructure.workers.path_insight_worker_main"]
+    expose: ["9100"]
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "python", "-c", "import os; os.kill(1, 0)"]
@@ -1816,7 +1904,7 @@ services:
     env_file:
       - ../../services/alert/configs/docker.env
     command: ["alembic", "upgrade", "head"]
-    restart: "no"
+    restart: "on-failure:5"
 
   alert:
     build:
@@ -1844,6 +1932,7 @@ services:
       timeout: 5s
       start_period: 30s
       retries: 3
+    restart: unless-stopped
 
   alert-dispatcher:
     build:
@@ -1885,6 +1974,7 @@ services:
     env_file:
       - ../../services/alert/configs/docker.env
     command: ["python", "-m", "alert.infrastructure.messaging.consumers.intelligence_consumer_main"]
+    expose: ["9100"]
     restart: on-failure
     healthcheck:
       test: ["CMD", "python", "-c", "import os; os.kill(1, 0)"]
@@ -1906,6 +1996,7 @@ services:
     env_file:
       - ../../services/alert/configs/docker.env
     command: ["python", "-m", "alert.infrastructure.messaging.consumers.watchlist_consumer_main"]
+    expose: ["9100"]
     restart: on-failure
     healthcheck:
       test: ["CMD", "python", "-c", "import os; os.kill(1, 0)"]
@@ -1927,6 +2018,7 @@ services:
     env_file:
       - ../../services/alert/configs/docker.env
     command: ["python", "-m", "alert.infrastructure.email.scheduler_main"]
+    expose: ["9100"]
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "python", "-c", "import os; os.kill(1, 0)"]
@@ -1948,7 +2040,7 @@ services:
     env_file:
       - ../../services/rag-chat/configs/docker.env
     command: ["alembic", "upgrade", "head"]
-    restart: "no"
+    restart: "on-failure:5"
 
   rag-chat:
     build:
@@ -1979,6 +2071,35 @@ services:
       timeout: 5s
       start_period: 30s
       retries: 3
+    restart: unless-stopped
+
+  # PLAN-0094: pre-generates morning briefs on a 1h interval for all active
+  # users. Exposes Prometheus metrics on port 9100 (rag_brief_pregeneration_*).
+  # NOTE: was accidentally dropped in the PLAN-0089 merge; restored here.
+  rag-chat-brief-scheduler:
+    build:
+      context: ../..
+      dockerfile: services/rag-chat/Dockerfile
+    profiles: [infra, all]
+    depends_on:
+      rag-chat-migrate:
+        condition: service_completed_successfully
+      valkey:
+        condition: service_healthy
+      api-gateway:
+        condition: service_healthy
+    env_file:
+      - ../../services/rag-chat/configs/docker.env
+    ports:
+      - "9100:9100"
+    command: ["python", "-m", "rag_chat.infrastructure.scheduling.brief_scheduler_main"]
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import os; os.kill(1, 0)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
 
   # ── API Gateway (S9) — stateless reverse proxy + auth ─────────────────────────
   api-gateway:
@@ -2004,6 +2125,7 @@ services:
       timeout: 5s
       start_period: 20s
       retries: 3
+    restart: unless-stopped
 
   # ── Worldview Web (Next.js 15 frontend) ────────────────────────────────────
   # Canonical production frontend. Talks exclusively to S9 API Gateway via
@@ -2028,6 +2150,7 @@ services:
       timeout: 5s
       start_period: 20s
       retries: 3
+    restart: unless-stopped
 
   # ── Pushgateway — receives metrics pushed by synthetic monitor ─────────────────
   # WHY pushgateway: Prometheus scrapes metrics by polling a /metrics endpoint.

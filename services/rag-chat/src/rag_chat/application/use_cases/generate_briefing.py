@@ -311,12 +311,30 @@ class GenerateBriefingUseCase:
         # WHY compute citation offsets here: news is [c1..cN], events are [c(N+1)..],
         # alerts are [c(N+events+1)..]. Offsets must match materialize_brief_citations
         # ordering so [cN] markers in the LLM output resolve to the correct documents.
-        news_count = len((ctx.news_articles or [])[:8]) if ctx else 0
-        events_count = len((ctx.recent_events or [])[:6]) if ctx else 0
+        # PLAN-0099 Wave B: use the env-overridable limits from the formatter so
+        # offsets stay in lock-step with what format_news / format_events emit.
+        from rag_chat.application.use_cases.brief_context_formatter import (
+            get_events_limit,
+            get_min_context_score,
+            get_news_limit,
+        )
+
+        news_cap = get_news_limit()
+        events_cap = get_events_limit()
+        news_count = len((ctx.news_articles or [])[:news_cap]) if ctx else 0
+        events_count = len((ctx.recent_events or [])[:events_cap]) if ctx else 0
         news_text = _formatter.format_news(ctx, citation_offset=0)
         events_text = _formatter.format_events(ctx, citation_offset=news_count)
         alerts_text = _formatter.format_alerts(ctx, citation_offset=news_count + events_count)
         market_text = _formatter.format_market_overview(ctx)
+        # PLAN-0102 W3 follow-up (T-W3-FU-02): prepend the real broad-market
+        # tape (when available) and append upcoming earnings under a
+        # "Macro Today" subsection. Both formatters return either useful
+        # content or graceful placeholder/empty strings so we can safely
+        # concatenate without checking for None.
+        tape_text = _formatter.format_market_tape(ctx)
+        earnings_text = _formatter.format_earnings_calendar(ctx)
+        market_text = "\n".join(seg for seg in (tape_text, market_text, earnings_text) if seg)
 
         # ── 3b. Empty context guard ───────────────────────────────────────────
         # WHY: When all upstream services are unavailable or return empty data,
@@ -338,7 +356,83 @@ class GenerateBriefingUseCase:
                 "entity_mentions": [],
                 "citations": [],
                 "generated_at": generated_at,
+                # PLAN-0099 Wave B: all-empty is the strongest form of partial
+                # failure; mark it so the UI / cache can distinguish from a
+                # real "no signals today" brief.
+                "partial_failure": True,
+                "context_availability_score": (
+                    float(getattr(ctx, "context_availability_score", 0.0)) if ctx is not None else 0.0
+                ),
             }
+
+        # ── 3c. PLAN-0099 Wave B: refusal-on-low-context ─────────────────────
+        # When the gatherer's weighted availability score (computed across
+        # portfolio + news + events + alerts + sections_populated) falls
+        # below the configured threshold, skip the LLM call entirely.  The
+        # LLM produces noisy "generic" output on sparse context so we'd
+        # rather show a "limited data" lead built from whatever sections
+        # did populate.  Counter `brief_low_context_refusal_total` tracks
+        # how often this fires so operators can tune the threshold.
+        score = float(getattr(ctx, "context_availability_score", 1.0)) if ctx is not None else 0.0
+        min_score = get_min_context_score()
+        if min_score > 0.0 and score < min_score:
+            from rag_chat.application.metrics import prometheus as _m
+
+            _m.brief_low_context_refusal_total.inc()
+            log.warning(  # type: ignore[no-any-return]
+                "brief_low_context_refusal",
+                user_id=user_id,
+                score=score,
+                threshold=min_score,
+            )
+            populated_bits = [
+                seg
+                for seg in (
+                    ("Portfolio", portfolio_text),
+                    ("News", news_text),
+                    ("Events", events_text),
+                    ("Alerts", alerts_text),
+                    ("Market", market_text),
+                )
+                if seg[1]
+            ]
+            limited_data_message = (
+                "Limited data available today — only " + ", ".join(name for name, _ in populated_bits) + " populated."
+                if populated_bits
+                else "Limited data available today — no upstream sections populated."
+            )
+            generated_at = datetime.now(tz=UTC).isoformat()
+            return {
+                "content": limited_data_message,
+                "risk_summary": _formatter.build_morning_risk_summary(ctx),
+                "entity_mentions": _formatter.extract_entity_mentions(ctx),
+                "citations": _formatter.build_citations(ctx),
+                "generated_at": generated_at,
+                "partial_failure": True,
+                "context_availability_score": score,
+            }
+
+        # ── 3d. PLAN-0099 Wave B: partial-failure guard for high-weight sources ─
+        # If portfolio OR news (the two highest-weight sources) is empty we
+        # still generate the brief but flag it as partial so the UI/cache
+        # can show a small notice on the lead.
+        partial_failure = (not portfolio_text) or (not news_text)
+        partial_failure_notice = ""
+        if partial_failure:
+            missing: list[str] = []
+            if not portfolio_text:
+                missing.append("portfolio")
+            if not news_text:
+                missing.append("news")
+            partial_failure_notice = (
+                f" (Partial data — {', '.join(missing)} unavailable; " "showing brief based on remaining sources.)"
+            )
+            log.warning(  # type: ignore[no-any-return]
+                "brief_partial_failure",
+                user_id=user_id,
+                missing=missing,
+                score=score,
+            )
 
         prompt = MORNING_BRIEFING.render(
             safety=SAFETY_FOOTER,
@@ -356,6 +450,37 @@ class GenerateBriefingUseCase:
             chunks.append(chunk)
         content = _parser.strip_reasoning("".join(chunks))
 
+        # ── 4a. PLAN-0103 W3: extract v4.2 ``## Summary`` paragraph ───────────
+        # The dashboard collapsed view renders this 1-3 sentence paragraph
+        # (≤300 chars) before the user clicks "Read more". Legacy briefs lack
+        # the heading; the parser returns (None, content) → frontend falls back
+        # to the existing summary/narrative head behaviour (R11 forward-compat).
+        # WHY split BEFORE the citation-aware parse: parse_sections_with_citations
+        # walks the entire content looking for the legacy ``---`` divider and
+        # would happily consume the Summary paragraph as part of a v3.0 LEAD
+        # block — yielding a confusing duplicate lead/summary pair. Stripping
+        # the Summary heading first leaves a clean Details block for the
+        # downstream section parser.
+        summary_paragraph, post_summary_content = _parser.split_summary_paragraph(content)
+
+        # ── 4a-bis. PLAN-0103 W3: section completeness observability ─────────
+        # FQA-01: the LLM intermittently dropped Risks + Opportunities and
+        # Bonus context. Emit a structured warning + Prom counter when any of
+        # the 6 v4.2 sections are missing — never fail the request (the brief
+        # is still useful with N<6 sections; operators tune the threshold).
+        missing_sections = _parser.check_section_completeness(content)
+        if missing_sections:
+            from rag_chat.application.metrics import prometheus as _prom
+
+            for _name in missing_sections:
+                _prom.brief_section_missing_total.labels(section=_name).inc()
+            log.warning(  # type: ignore[no-any-return]
+                "brief_section_missing",
+                user_id=user_id,
+                missing=missing_sections,
+                summary_present=summary_paragraph is not None,
+            )
+
         # ── 4b. PLAN-0062-W4: citation-aware parse pipeline ───────────────────
         # Build the citation index (ordered list matching [c1], [c2], … in prompt).
         context_citations = _parser.materialize_brief_citations(ctx)
@@ -371,7 +496,67 @@ class GenerateBriefingUseCase:
         # When v3.0 parse fails (old cached LLM output), try the v2.2 SUMMARY/DETAILS
         # split so the summary field still populates for existing cached briefs.
         # WHY both: during rollout, cached responses may still use the v2.2 format.
+        # WHY pass ``content`` (not ``post_summary_content``): the v2.2 split
+        # path is a back-compat surface for OLDER caches — those caches predate
+        # v4.2 and never carried a ``## Summary`` heading, so the v2.2 splitter
+        # sees the same content as before.
         summary, narrative = _parser.split_summary_and_details(content)
+        # WHY: when the v4.2 ``## Summary`` heading IS present AND the legacy
+        # v2.2 splitter did NOT also produce a summary (i.e. this really is a
+        # v4.2-shaped response, not a v2.2 ``## SUMMARY`` + ``---`` + ``## DETAILS``
+        # output that the case-insensitive v4.2 splitter happens to also match),
+        # we replace the narrative with the post-Summary remainder so the
+        # expanded view doesn't repeat the summary paragraph above its body.
+        # WHY the ``summary is None`` guard: if the v2.2 path already cleanly
+        # split into (summary, narrative-with-DETAILS-header-stripped), use that
+        # — it already does the header cleanup. Overwriting with
+        # post_summary_content would re-introduce the ``## DETAILS`` header
+        # (BP-624 regression caught by test_morning_v22_two_tier_split).
+        if summary_paragraph is not None and post_summary_content and summary is None:
+            narrative = post_summary_content
+
+        # ── 4d. PLAN-0103 W6 (v4.3): defensive section + summary injection ────
+        # The v4.3 prompt teaches the desired shape via few-shot examples but
+        # we cannot RELY on the LLM emitting all 6 sections + ``## Summary``
+        # on every call. This belt-and-braces step guarantees the structural
+        # contract regardless of LLM compliance:
+        #   - For each missing section, append a placeholder line so the
+        #     dashboard always renders all 6 buckets.
+        #   - When the LLM omits ``## Summary``, synthesise a short lead
+        #     from the first portfolio/news bullet (NO fabrication — we
+        #     quote a bullet that already exists).
+        # Both paths bump per-section Prom counters + emit a structured
+        # ``brief_defensive_injection`` log so operators can see how often
+        # the LLM is degrading and how the parser is compensating.
+        if missing_sections:
+            from rag_chat.application.metrics import prometheus as _prom
+
+            narrative = _parser.inject_missing_sections(narrative, missing_sections)
+            for _name in missing_sections:
+                _prom.brief_section_injected_total.labels(section=_name).inc()
+
+        # Synthesise summary_paragraph from a parsed bullet when LLM omitted it.
+        # WHY use `sections` (post-backfill): they already carry only cited
+        # bullets, so the synthesised lead is grounded in a real source.
+        # WHY snapshot ``had_llm_summary``: ``inject_missing_summary`` returns
+        # the existing summary unchanged when present, so we can't infer
+        # "did we inject?" from the post-call value alone — we must compare
+        # against the pre-call value.
+        had_llm_summary = summary_paragraph is not None
+        narrative, summary_paragraph = _parser.inject_missing_summary(narrative, sections, summary_paragraph)
+        summary_injected = (not had_llm_summary) and (summary_paragraph is not None)
+        if summary_injected:
+            from rag_chat.application.metrics import prometheus as _prom
+
+            _prom.brief_section_injected_total.labels(section="__summary__").inc()
+
+        if missing_sections or summary_injected:
+            log.warning(  # type: ignore[no-any-return]
+                "brief_defensive_injection",
+                user_id=user_id,
+                injected_sections=missing_sections,
+                summary_injected=summary_injected,
+            )
 
         # ── 5. Derive risk_summary from portfolio holdings (HHI concentration) ─
         risk_summary = _formatter.build_morning_risk_summary(ctx)
@@ -494,8 +679,16 @@ class GenerateBriefingUseCase:
             "citations": citations,
             "generated_at": generated_at,
             # PLAN-0062-W4 new fields
-            "lead": lead,
+            "lead": (lead + partial_failure_notice) if (lead and partial_failure_notice) else lead,
             "confidence": confidence,
+            # PLAN-0099 Wave B: surface partial-failure + context score on the
+            # response so the UI / cache / downstream can show a notice.
+            "partial_failure": partial_failure,
+            "context_availability_score": score,
+            # PLAN-0103 W3 (BP-624): collapsed-view summary paragraph (v4.2
+            # ``## Summary`` block). None for legacy responses — frontend
+            # falls back to ``summary`` / first lines of ``narrative``.
+            "summary_paragraph": summary_paragraph,
         }
 
     async def execute_public_instrument(

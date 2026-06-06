@@ -367,13 +367,20 @@ class TestBuildDescriptionClient:
         assert isinstance(client, NullDescriptionAdapter)
 
     def test_gemini_provider_with_empty_key_returns_null_adapter(self) -> None:
-        """description_provider='gemini' with empty API key falls back to NullDescriptionAdapter."""
+        """provider='gemini' with BOTH keys empty falls back to NullDescriptionAdapter.
+
+        PLAN-0095 W4 T-W4-03: gemini-empty + deepinfra-present now uses the
+        DeepInfra chain (covered by a separate test). This case keeps the Null
+        guard pinned for the all-empty path so an operator who clears every
+        key still gets the deterministic stub instead of a crash.
+        """
         from knowledge_graph.infrastructure.scheduler.scheduler import _build_description_client
         from ml_clients.description_client import NullDescriptionAdapter  # type: ignore[import-untyped]
 
         settings = MagicMock()
         settings.description_provider = "gemini"
         settings.gemini_api_key.get_secret_value.return_value = ""
+        settings.deepinfra_api_key.get_secret_value.return_value = ""  # T-W4-03
 
         client = _build_description_client(settings)
         assert isinstance(client, NullDescriptionAdapter)

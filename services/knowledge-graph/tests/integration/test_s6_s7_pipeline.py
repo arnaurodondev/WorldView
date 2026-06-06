@@ -30,7 +30,7 @@ from knowledge_graph.infrastructure.intelligence_db.repositories.relation_eviden
 from sqlalchemy import text
 
 
-@pytest.mark.integration
+@pytest.mark.integration()
 async def test_s6_s7_pipeline_relation_written(session_factory) -> None:
     """materialize_graph writes a relation row and a graph.state.changed.v1 outbox entry."""
 
@@ -104,14 +104,14 @@ WHERE subject_entity_id = :sub AND object_entity_id = :obj
     # Verify outbox entry for graph.state.changed.v1
     async with session_factory() as session:
         result = await session.execute(
-            text("SELECT COUNT(*) FROM outbox_events WHERE topic = 'graph.state.changed.v1'")
+            text("SELECT COUNT(*) FROM outbox_events WHERE topic = 'graph.state.changed.v1'"),
         )
         outbox_count = result.scalar()
 
     assert outbox_count >= 1, "Expected graph.state.changed.v1 outbox entry"
 
 
-@pytest.mark.integration
+@pytest.mark.integration()
 async def test_s6_s7_pipeline_unknown_type_stages_evidence(session_factory) -> None:
     """Relations with canonical_type=None still stage evidence_raw row (for later resolution)."""
 

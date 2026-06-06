@@ -127,9 +127,62 @@ describe("MorningBriefCard", () => {
 
     await waitFor(() => {
       // WHY check for link: entity mentions are replaced with Next.js Link components
-      // that navigate to the instrument detail page
+      // that navigate to the instrument detail page.
+      // PRD-0089 F2 step 11 (§6.6): URLs are ticker-first now. The fixture
+      // provides `ticker: "AAPL"` so the rendered href is `/instruments/AAPL`
+      // (not the legacy `/instruments/ent-1` UUID form). The link text
+      // remains "Apple" — only the href changed.
       const link = screen.getByText("Apple");
-      expect(link.closest("a")).toHaveAttribute("href", "/instruments/ent-1");
+      expect(link.closest("a")).toHaveAttribute("href", "/instruments/AAPL");
+    });
+  });
+
+  // ── PLAN-0103 W3 (BP-624): v4.2 summary_paragraph rendering ─────────────────
+  // The dashboard collapsed view should render summary_paragraph when present
+  // and fall back to narrative (clamp-3) otherwise. These tests cover both
+  // paths so a regression in either renders the legacy fallback at minimum.
+  it("renders summary_paragraph in collapsed view when present (v4.2)", async () => {
+    // WHY a fresh module mock per-test is overkill: we leverage the existing
+    // gateway mock by mutating the resolved value via setUp before render.
+    // The cleanest way without redefining the gateway mock is to import the
+    // module again and override getMorningBrief just for this test scope.
+    const gw = (await import("@/lib/gateway")) as unknown as {
+      createGateway: () => { getMorningBrief: () => Promise<unknown> };
+    };
+    const orig = gw.createGateway;
+    // Inline override: return a brief that carries summary_paragraph.
+    gw.createGateway = () => ({
+      getMorningBrief: async () => ({
+        ...mockBriefResponse,
+        // PLAN-0103 W3 (BP-624): the v4.2 contract was renamed from
+        // `summary_paragraph` to `summary` to match BriefingResponse — the
+        // component reads `brief.summary`. Provide both for forward-compat.
+        summary:
+          "Tech-heavy portfolio benefits from sustained AI infrastructure rally.",
+        summary_paragraph:
+          "Tech-heavy portfolio benefits from sustained AI infrastructure rally.",
+      }),
+    });
+    try {
+      render(<MorningBriefCard />, { wrapper });
+      await waitFor(() => {
+        expect(
+          screen.getByText(/Tech-heavy portfolio benefits/),
+        ).toBeInTheDocument();
+      });
+    } finally {
+      // Restore so other tests aren't affected (vi.mock returns a singleton).
+      gw.createGateway = orig;
+    }
+  });
+
+  it("falls back to narrative head when summary_paragraph is absent", async () => {
+    // The default mockBriefResponse has no summary_paragraph — the collapsed
+    // view must still render the narrative content (no blank card).
+    render(<MorningBriefCard />, { wrapper });
+    await waitFor(() => {
+      const matches = screen.getAllByText(/Market Update/);
+      expect(matches.length).toBeGreaterThanOrEqual(1);
     });
   });
 });

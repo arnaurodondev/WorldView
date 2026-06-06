@@ -94,10 +94,65 @@ class Settings(BaseSettings):
     # Hard cap on horizon — runtime clamps INITIAL_DAYS to YEARS * 365.
     auto_backfill_years: int = 10
 
+    # Fundamentals refresh worker (PLAN-0099 W2-T02; default flipped ON 2026-05-28
+    # per PLAN-0100 W4-T03). When enabled the worker re-enqueues fundamentals
+    # fetches for the configured symbol universe every N hours so freshly-reported
+    # quarters (e.g. AMD FY2026 Q1) land in ``intelligence_db`` without waiting
+    # for the slow polling policy to come round. See
+    # ``infrastructure/workers/fundamentals_refresh_worker.py`` for the loop.
+    #
+    # WHY DEFAULT ON (2026-05-28): the AMD-Q1-FY2026 freshness diagnostics
+    # (``docs/audits/2026-05-28-plan-0100-amd-freshness-diagnostics.md``)
+    # confirmed H1 — the worker shipping OFF by default in PLAN-0099 W2-T02
+    # caused 4/6 Q4 chat-eval variants to fail because no automated path was
+    # keeping AMD's fundamentals on a refresh cadence. Flipping the default to
+    # ``True`` aligns the deployed behaviour with the only correct production
+    # posture; operators retain a per-deploy opt-out by setting the env var
+    # ``FUNDAMENTALS_REFRESH_ENABLED=false`` explicitly. BP-608 documents the
+    # general anti-pattern of shipping a scheduled worker disabled by default.
+    fundamentals_refresh_enabled: bool = True
+    fundamentals_refresh_interval_hours: float = 6.0
+
+    # InstrumentPolicySyncWorker (PLAN-0106 Wave D-1): periodically queries
+    # market-data for all US/CC instruments and creates Alpaca 1m polling
+    # policies for any symbol not already covered.  Runs every 6 hours by
+    # default so newly-listed symbols gain intraday coverage within a day.
+    # Set INSTRUMENT_POLICY_SYNC_ENABLED=false to disable without redeploying.
+    instrument_policy_sync_enabled: bool = True
+    instrument_policy_sync_interval_hours: float = 6.0
+    fundamentals_refresh_top_n: int = 500
+    fundamentals_refresh_provider: str = "eodhd"
+    fundamentals_refresh_variant: str = "quarterly"
+    # CSV override; empty = use the worker's built-in mega-cap default list.
+    # Operators set this to pin a specific universe during incidents. Wins
+    # over the live top-N endpoint (PLAN-0100 W5) when non-empty so ops
+    # always have a kill-switch.
+    fundamentals_refresh_symbols: str = ""
+
+    # PLAN-0100 T-W5-02: when True (default) the worker calls market-data's
+    # ``GET /internal/v1/instruments/top-by-market-cap`` to refresh its
+    # symbol universe each tick. Flip to False to keep the worker on the
+    # static ``_DEFAULT_SYMBOL_UNIVERSE`` only — useful as a one-shot
+    # operator kill-switch if the endpoint regresses.
+    fundamentals_refresh_use_internal_endpoint: bool = True
+    # Base URL of market-data — same host the EODHD adapters do NOT call;
+    # this is for the internal top-N endpoint specifically.
+    market_data_url: str = "http://market-data:8003"
+    # RS256 private key used to sign internal JWTs (PEM). Empty in dev →
+    # worker signs an HS256 dev token instead; production market-data
+    # rejects HS256 unless ``MARKET_DATA_INTERNAL_JWT_SKIP_VERIFICATION=true``.
+    internal_jwt_private_key: SecretStr = SecretStr("")
+
     # Worker
     worker_batch_size: int = 10
     worker_lease_seconds: int = 300
     worker_concurrency: int = 4
+    # Idle-poll cadence: how long the worker sleeps when ClaimTasksUseCase
+    # returns 0 rows. Defaults to 5 s for production back-pressure. CI/E2E
+    # overrides this to 1 s so manually-triggered tasks are picked up within
+    # the test's 30 s deadline even after the queue has accumulated prior
+    # work from earlier tests (R12 — E2E task-progression fix).
+    worker_idle_sleep_seconds: float = 5.0
     provider_http_timeout_seconds: float = 30.0
 
     # Dispatcher

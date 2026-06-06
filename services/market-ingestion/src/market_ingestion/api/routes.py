@@ -85,7 +85,15 @@ async def readyz(
     all_ok = True
 
     # F-003B: JWKS public key must be loaded before accepting traffic.
-    if getattr(request.app.state, "_internal_jwt_public_key", None) is None:
+    # Exception (dev/test): when InternalJWTMiddleware is in skip_verification
+    # mode the public key is intentionally absent — the middleware sets
+    # ``app.state._internal_jwt_skip_verification = True`` so readyz can
+    # distinguish "intentionally absent" from "failed to fetch". Matches
+    # portfolio/app.py readyz pattern.
+    skip_jwt = getattr(request.app.state, "_internal_jwt_skip_verification", False)
+    if skip_jwt:
+        checks["jwks"] = "skipped"
+    elif getattr(request.app.state, "_internal_jwt_public_key", None) is None:
         checks["jwks"] = "not_loaded"
         all_ok = False
     else:

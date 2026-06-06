@@ -30,7 +30,8 @@ from rag_chat.application.use_cases.update_thread import UpdateThreadUseCase
 from rag_chat.domain.errors import ThreadNotFoundError
 
 if TYPE_CHECKING:
-    from rag_chat.domain.entities.conversation import Citation, ConversationThread, Message
+    from rag_chat.domain.entities.chat import ResolvedEntity
+    from rag_chat.domain.entities.conversation import Citation, ContradictionRef, ConversationThread, Message
 
 router = APIRouter(prefix="/api/v1/threads", tags=["threads"])
 
@@ -51,7 +52,39 @@ def _citation_to_dict(c: Citation) -> dict[str, Any]:
     }
 
 
+def _contradiction_to_dict(c: ContradictionRef) -> dict[str, Any]:
+    """Serialise a ContradictionRef domain value-object to a plain dict.
+
+    WHY keep this in the route layer: the domain object must not know about
+    API serialisation concerns (R25 / domain layer independence).
+    """
+    return {
+        "claim_type": c.claim_type,
+        "strength": c.strength,
+        "sides": list(c.sides),
+    }
+
+
+def _resolved_entity_to_dict(e: ResolvedEntity) -> dict[str, Any]:
+    """Serialise a ResolvedEntity domain value-object to a plain dict."""
+    return {
+        "entity_id": str(e.entity_id),
+        "canonical_name": e.canonical_name,
+        "entity_type": e.entity_type,
+        "confidence": e.confidence,
+        "matched_text": e.matched_text,
+        "ticker": e.ticker,
+    }
+
+
 def _msg_to_response(msg: Message) -> MessageResponse:
+    """Convert a domain Message to a wire-format MessageResponse.
+
+    Q-9: populates the extended observability fields (provider, model,
+    latency_ms, resolved_entities, retrieval_plan, contradictions).
+    Legacy rows have these as None — the response fields default to None
+    so no breakage occurs (R11 forward-compatibility).
+    """
     return MessageResponse(
         message_id=msg.message_id,
         role=msg.role.value,
@@ -59,6 +92,21 @@ def _msg_to_response(msg: Message) -> MessageResponse:
         intent=msg.intent.value if msg.intent else None,
         citations=[_citation_to_dict(c) for c in msg.citations],
         created_at=msg.created_at,
+        # Q-9 extended fields — pass through directly from the domain entity.
+        provider=msg.provider,
+        model=msg.model,
+        latency_ms=msg.latency_ms,
+        # Convert domain tuples to list[dict] for JSON serialisation;
+        # keep as None (not []) when the tuple is empty to signal "never set".
+        resolved_entities=(
+            [_resolved_entity_to_dict(e) for e in msg.resolved_entities] if msg.resolved_entities else None
+        ),
+        # retrieval_plan is stored as raw JSONB; the domain entity carries it
+        # as None (no dedicated domain type yet — stored/returned as-is).
+        retrieval_plan=None,  # not yet surfaced on the domain Message entity
+        contradictions=(
+            [_contradiction_to_dict(c) for c in msg.contradiction_refs] if msg.contradiction_refs else None
+        ),
     )
 
 

@@ -29,33 +29,49 @@ _BASE = "http://testservice"
 
 
 @pytest.mark.asyncio
-async def test_s6_client_resolve_returns_empty_on_timeout(
+async def test_s6_client_resolve_raises_transport_error_on_timeout(
     httpx_mock: pytest_httpx.HTTPXMock,
 ) -> None:
-    """Timeout on POST /api/v1/entities/resolve → empty list, no exception raised."""
+    """Timeout on POST /api/v1/entities/resolve → ``UpstreamTransportError``.
+
+    PLAN-0103 W2 BP-623 contract change: the legacy ``return []`` behaviour
+    conflated outages with empty results. The base client now RAISES
+    ``UpstreamTransportError(reason="upstream_timeout")``; the executor
+    catches it and returns a ``TransportErrorMarker`` so the LLM can say
+    "I cannot reach the upstream right now" instead of "no data was found".
+    """
+    from rag_chat.infrastructure.clients.base import UpstreamTransportError
+
     httpx_mock.add_exception(httpx.TimeoutException("timeout"))
 
     client = S6Client(base_url=_BASE)
-    result = await client.resolve_entities("Apple earnings Q3")
-
-    assert result == []
+    with pytest.raises(UpstreamTransportError) as exc_info:
+        await client.resolve_entities("Apple earnings Q3")
+    assert exc_info.value.reason == "upstream_timeout"
 
 
 # ── T2: S7 search_claims returns empty list on 5xx ────────────────────────────
 
 
 @pytest.mark.asyncio
-async def test_s7_client_claims_returns_empty_on_5xx(
+async def test_s7_client_claims_raises_transport_error_on_5xx(
     httpx_mock: pytest_httpx.HTTPXMock,
 ) -> None:
-    """HTTP 503 on POST /api/v1/claims/search → empty list, no exception raised."""
+    """HTTP 503 on POST /api/v1/claims/search → ``UpstreamTransportError``.
+
+    PLAN-0103 W2 BP-623: 5xx now classifies as ``upstream_5xx`` so the
+    orchestrator surfaces an outage, not an empty result.
+    """
+    from rag_chat.infrastructure.clients.base import UpstreamTransportError
+
     httpx_mock.add_response(status_code=503)
 
     entity_id = uuid4()
     client = S7Client(base_url=_BASE)
-    result = await client.search_claims(entity_ids=[entity_id])
-
-    assert result == []
+    with pytest.raises(UpstreamTransportError) as exc_info:
+        await client.search_claims(entity_ids=[entity_id])
+    assert exc_info.value.reason == "upstream_5xx"
+    assert exc_info.value.status_code == 503
 
 
 # ── T3: S1 portfolio context served from Valkey cache on second call ──────────
@@ -102,20 +118,30 @@ async def test_s1_client_portfolio_ctx_cached(
 
 
 @pytest.mark.asyncio
-async def test_s7_cypher_501_returns_empty(
+async def test_s7_cypher_501_raises_transport_error(
     httpx_mock: pytest_httpx.HTTPXMock,
 ) -> None:
-    """HTTP 501 (feature disabled) on POST /api/v1/graph/cypher → empty list, no exception."""
+    """HTTP 501 (feature disabled) → ``UpstreamTransportError`` (5xx family).
+
+    PLAN-0103 W2 BP-623: 501 is in the 5xx server-error class; the base
+    client now promotes it to ``upstream_5xx`` so the orchestrator emits
+    ``status=transport_error`` instead of conflating it with an empty
+    result. The "feature disabled" interpretation is preserved in the
+    structured log + the LLM is told the source is unreachable.
+    """
+    from rag_chat.infrastructure.clients.base import UpstreamTransportError
+
     httpx_mock.add_response(status_code=501)
 
     client = S7Client(base_url=_BASE)
-    result = await client.cypher_traverse(
-        cypher="MATCH (n) RETURN n LIMIT 5",
-        params={},
-        max_results=5,
-    )
-
-    assert result == []
+    with pytest.raises(UpstreamTransportError) as exc_info:
+        await client.cypher_traverse(
+            cypher="MATCH (n) RETURN n LIMIT 5",
+            params={},
+            max_results=5,
+        )
+    assert exc_info.value.reason == "upstream_5xx"
+    assert exc_info.value.status_code == 501
 
 
 # ── T5: S7 cypher_traverse posts to /neighborhood endpoint (B-4 regression) ──

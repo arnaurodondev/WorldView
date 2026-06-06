@@ -242,6 +242,39 @@ class TestGetTopNewsEndpoint:
         assert data["articles"] == []
         assert data["total"] == 0
 
+    @pytest.mark.asyncio
+    async def test_get_top_news_tickers_forwarded_as_list(self) -> None:
+        """?tickers=AAPL,MSFT is split and forwarded to the repo as tickers=["AAPL", "MSFT"]."""
+        repo = _make_news_repo()
+        app = _make_news_app(repo)
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+            await client.get("/api/v1/news/top", params={"tickers": "AAPL,MSFT"})
+
+        call_kwargs = repo.get_top_news.call_args.kwargs
+        assert call_kwargs["tickers"] == ["AAPL", "MSFT"]
+
+    @pytest.mark.asyncio
+    async def test_get_top_news_tickers_normalised_to_uppercase(self) -> None:
+        """Lower-case ticker symbols are normalised to upper-case before repo call."""
+        repo = _make_news_repo()
+        app = _make_news_app(repo)
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+            await client.get("/api/v1/news/top", params={"tickers": "aapl,msft"})
+
+        call_kwargs = repo.get_top_news.call_args.kwargs
+        assert call_kwargs["tickers"] == ["AAPL", "MSFT"]
+
+    @pytest.mark.asyncio
+    async def test_get_top_news_no_tickers_passes_none(self) -> None:
+        """When tickers param is absent the repo is called with tickers=None (global feed)."""
+        repo = _make_news_repo()
+        app = _make_news_app(repo)
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+            await client.get("/api/v1/news/top")
+
+        call_kwargs = repo.get_top_news.call_args.kwargs
+        assert call_kwargs["tickers"] is None
+
 
 # ---------------------------------------------------------------------------
 # GET /api/v1/entities/{entity_id}/articles

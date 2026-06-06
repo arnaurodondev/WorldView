@@ -3,11 +3,12 @@
 from __future__ import annotations
 
 from datetime import datetime
+from decimal import Decimal
 from typing import TYPE_CHECKING, Any
 from uuid import UUID
 
 import sqlalchemy as sa
-from sqlalchemy import DateTime, ForeignKey, Index, Text
+from sqlalchemy import DateTime, ForeignKey, Index, Numeric, Text
 from sqlalchemy.dialects.postgresql import ARRAY
 from sqlalchemy.dialects.postgresql import UUID as PgUUID  # noqa: N811
 from sqlalchemy.orm import Mapped, mapped_column, relationship
@@ -64,6 +65,27 @@ class ThreadModel(Base):
     seed_brief_id: Mapped[UUID | None] = mapped_column(
         PgUUID(as_uuid=True),
         ForeignKey("user_briefs.id", ondelete="SET NULL"),
+        nullable=True,
+        default=None,
+    )
+    # PLAN-0107 follow-up (agent-B): cumulative USD cost of every LLM call
+    # made on behalf of this thread (tool-loop iterations + synthesis +
+    # intent + safety + judge). Bumped atomically by
+    # ``PrometheusAndDbCostRecorder._persist`` via a single UPDATE so two
+    # concurrent message turns never race to lose an update.
+    #
+    # WHY Numeric(12, 6) (not Float): cost is money — we accumulate small
+    # Decimal values across hundreds of calls per conversation. Float would
+    # drift; Numeric preserves exact precision matching the Decimal type
+    # returned by ``compute_cost`` from ``libs/ml-clients/pricing.py``.
+    #
+    # WHY nullable + default None: existing rows pre-date the column and
+    # cannot be backfilled (we never recorded cost before this column
+    # existed). The recorder uses ``COALESCE(estimated_cost_usd, 0) + :cost``
+    # in its UPDATE so the first turn on a legacy thread initialises the
+    # value from NULL cleanly.
+    estimated_cost_usd: Mapped[Decimal | None] = mapped_column(
+        Numeric(12, 6),
         nullable=True,
         default=None,
     )

@@ -96,3 +96,17 @@ class SqlAlchemyUserRepository(UserRepository):
         )
         row = result.scalar_one_or_none()
         return self._to_entity(row) if row else None
+
+    async def find_by_id_any_tenant(self, user_id: UUID) -> User | None:
+        """Look up a user by ID without a tenant filter.
+
+        PLAN-0094 follow-up: needed by service-token callers (rag-chat brief
+        pre-generation worker) that hold a system identity but no specific
+        tenant. Use this sparingly — every user-scoped read should normally
+        pass through the tenant filter for multi-tenant isolation.
+        """
+        result = await self._session.execute(
+            select(UserModel).where(UserModel.id == user_id),
+        )
+        row = result.scalar_one_or_none()
+        return self._to_entity(row) if row else None

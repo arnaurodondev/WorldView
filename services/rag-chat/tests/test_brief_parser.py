@@ -326,3 +326,249 @@ def test_strip_reasoning_plain_text_unchanged() -> None:
     raw = "Clean plain text with no special wrappers."
     result = parser.strip_reasoning(raw)
     assert result == raw
+
+
+# ── 13. PLAN-0103 W3 (BP-624): v4.2 ``## Summary`` paragraph split ───────────
+# These tests cover ``split_summary_paragraph`` (extracts the leading 1-3
+# sentence paragraph for the dashboard collapsed view) and
+# ``check_section_completeness`` (post-generation observability gate for the
+# 6 mandatory v4.2 sections).
+
+
+def test_split_summary_paragraph_extracts_v42_block() -> None:
+    """v4.2 brief: ``## Summary`` block is extracted as a single paragraph."""
+    parser = _make_parser()
+    content = (
+        "## Summary\n"
+        "AI infrastructure momentum continues with Dell up 40%. Volatility "
+        "remains contained ahead of NVDA earnings.\n"
+        "\n"
+        "## Details\n"
+        "**Market Snapshot**\n"
+        "- SPY +0.20%, QQQ +0.45%, VIX 14.2 [N1]\n"
+    )
+    summary, remainder = parser.split_summary_paragraph(content)
+    assert summary is not None
+    assert "Dell up 40%" in summary
+    assert "NVDA" in summary
+    assert "## Details" in remainder
+    # Summary heading must NOT appear in the remainder (it would render twice).
+    assert "## Summary" not in remainder
+
+
+def test_split_summary_paragraph_returns_none_for_legacy_brief() -> None:
+    """Legacy v4.1 (no ``## Summary`` heading) → (None, content) — back-compat."""
+    parser = _make_parser()
+    legacy = "**Market Snapshot**\n" "- SPY +0.2% [N1]\n" "**Your Portfolio Today**\n" "- AAPL flat [N2]\n"
+    summary, remainder = parser.split_summary_paragraph(legacy)
+    assert summary is None
+    assert remainder == legacy
+
+
+def test_split_summary_paragraph_strips_citation_markers() -> None:
+    """[cN]/[N#] markers must be stripped — collapsed view has no chip UI."""
+    parser = _make_parser()
+    content = (
+        "## Summary\n"
+        "Tech-heavy holdings benefit from Dell rally [N1][c3].\n"
+        "\n"
+        "## Details\n"
+        "**Market Snapshot**\n"
+        "- SPY [N1]\n"
+    )
+    summary, _ = parser.split_summary_paragraph(content)
+    assert summary is not None
+    assert "[N1]" not in summary
+    assert "[c3]" not in summary
+    # The substantive content must survive.
+    assert "Dell rally" in summary
+
+
+def test_split_summary_paragraph_caps_at_1500_chars() -> None:
+    """Long summary blocks are truncated at sentence boundary ≤1500 chars.
+
+    PLAN-0103 W11 (v4.5): the parser cap was raised 300 → 1500 chars to
+    accommodate the new adaptive Summary length (target ~100 words; up to
+    200 words ≈ 1400 chars for large portfolios / very active days).
+    Anything below 1500 chars now passes through untrimmed; only runaway
+    summaries get cut at the nearest sentence boundary.
+    """
+    parser = _make_parser()
+    # Build a > 1500 char summary so the cap actually fires.
+    long_sentence = "X" * 1600
+    content = f"## Summary\n{long_sentence}. Trailing sentence.\n\n## Details\n**Market Snapshot**\n- noop\n"
+    summary, _ = parser.split_summary_paragraph(content)
+    assert summary is not None
+    assert len(summary) <= 1500
+
+
+def test_split_summary_paragraph_preserves_v45_adaptive_length() -> None:
+    """A v4.5 ~150-word adaptive Summary (≈1000 chars) passes through untrimmed.
+
+    PLAN-0103 W11: the 300-char cap from v4.4 would truncate the new
+    large-portfolio / active-day Summary at the first ~50 words; the 1500-
+    char cap MUST let a realistic 1000-char summary survive intact.
+    """
+    parser = _make_parser()
+    # ~1000-char single-paragraph summary (well above old 300 cap, well
+    # below new 1500 cap). Sentence-terminated so no truncation would alter it.
+    sentence = (
+        "AI-infrastructure rally extends overnight and tilts the book constructive: "
+        "top-3 by impact MSFT AAPL NVDA should add to a strong open while CPI at "
+        "08:30 ET risks re-pricing the duration leg and amplifying drawdown given "
+        "top-3 concentration at 38% of the book.  "
+    )
+    body = (sentence * 4).strip()
+    assert 900 < len(body) < 1500  # sanity-check the test data shape
+    content = f"## Summary\n{body}\n\n## Details\n**Market Snapshot**\n- noop\n"
+    summary, _ = parser.split_summary_paragraph(content)
+    assert summary is not None
+    # The parser collapses consecutive whitespace, so the result is ~3 chars
+    # shorter than the raw input — what matters is that the cap did NOT fire
+    # (i.e. the summary is well above 300 chars and below 1500).
+    assert 900 < len(summary) <= 1500
+    # And the last sentence must still be present (no mid-sentence truncation).
+    assert summary.endswith("of the book.")
+
+
+def test_check_section_completeness_all_present() -> None:
+    """When all 6 v4.2 sections are present → empty missing list."""
+    parser = _make_parser()
+    content = (
+        "## Summary\nFoo.\n\n## Details\n"
+        "**Market Snapshot**\n- a [N1]\n"
+        "**Your Portfolio Today**\n- b [N1]\n"
+        "**Macro Today**\n- c [N1]\n"
+        "**News That Matters To You**\n- d [N1]\n"
+        "**Risks + Opportunities**\n- e\n"
+        "**Bonus context**\n- f\n"
+    )
+    missing = parser.check_section_completeness(content)
+    assert missing == []
+
+
+def test_check_section_completeness_flags_fqa01_pattern() -> None:
+    """FQA-01 reproduction: 4 of 6 sections → Risks + Bonus flagged missing."""
+    parser = _make_parser()
+    fqa01_sample = (
+        "**Market Snapshot**\n- a\n"
+        "**Your Portfolio Today**\n- b\n"
+        "**Macro Today**\n- c\n"
+        "**News That Matters To You**\n- d\n"
+    )
+    missing = parser.check_section_completeness(fqa01_sample)
+    assert "Risks + Opportunities" in missing
+    assert "Bonus context" in missing
+    assert "Market Snapshot" not in missing
+
+
+def test_check_section_completeness_empty_content() -> None:
+    """Empty content → all 6 sections reported missing (defensive)."""
+    parser = _make_parser()
+    missing = parser.check_section_completeness("")
+    assert len(missing) == 6
+
+
+def test_split_summary_paragraph_handles_bold_section_heading() -> None:
+    """``**Section Name**`` heading terminates the Summary block (no ``## Details`` needed)."""
+    parser = _make_parser()
+    content = "## Summary\n" "Macro tape mixed but constructive.\n" "\n" "**Market Snapshot**\n" "- SPY [N1]\n"
+    summary, remainder = parser.split_summary_paragraph(content)
+    assert summary is not None
+    assert "Macro tape mixed" in summary
+    assert "**Market Snapshot**" in remainder
+
+
+# ── 14. PLAN-0103 W6 (v4.3): defensive section + summary injection ───────────
+# These tests cover ``inject_missing_sections`` (appends placeholder lines
+# for missing sections in canonical order) and ``inject_missing_summary``
+# (synthesises a short lead from the first portfolio/news bullet when LLM
+# omits the ``## Summary`` block). Both guarantee the structural contract
+# regardless of LLM compliance.
+
+
+def test_inject_missing_sections_appends_in_canonical_order() -> None:
+    """Missing sections are appended in V42_EXPECTED_SECTIONS order — not in `missing` order."""
+    parser = _make_parser()
+    # LLM only emitted 4 of 6 sections (FQA-01 pattern).
+    narrative = (
+        "**Market Snapshot**\n- SPY +0.2% [N1]\n"
+        "**Your Portfolio Today**\n- AAPL flat [N1]\n"
+        "**Macro Today**\n- No prints [N1]\n"
+        "**News That Matters To You**\n- Dell up 40% [N1]\n"
+    )
+    # Deliberately reverse the missing list to prove canonical ordering wins.
+    missing = ["Bonus context", "Risks + Opportunities"]
+    augmented = parser.inject_missing_sections(narrative, missing)
+    # Both placeholders must be present.
+    assert "**Risks + Opportunities**" in augmented
+    assert "**Bonus context**" in augmented
+    assert "No specific items today" in augmented
+    # Risks + Opportunities must appear BEFORE Bonus context (canonical order)
+    # even though `missing` listed them in reverse.
+    risks_idx = augmented.index("**Risks + Opportunities**")
+    bonus_idx = augmented.index("**Bonus context**")
+    assert risks_idx < bonus_idx, "canonical V4.2 order must win over `missing` order"
+
+
+def test_inject_missing_sections_no_op_when_all_present() -> None:
+    """Empty `missing` list → narrative returned unchanged."""
+    parser = _make_parser()
+    narrative = "**Market Snapshot**\n- SPY +0.2% [N1]\n"
+    out = parser.inject_missing_sections(narrative, [])
+    assert out == narrative
+
+
+def test_inject_missing_summary_extracts_lead_when_omitted() -> None:
+    """When LLM omits ``## Summary``, synthesise from the FIRST portfolio bullet."""
+    parser = _make_parser()
+    # Build a sections payload that mirrors what the citation-aware parser
+    # would produce — BriefSection with BriefBullet children.
+    cite = _make_citation(1)
+    sections = [
+        BriefSection(
+            title="Your Portfolio Today",
+            bullets=[
+                BriefBullet(text="AAPL +0.8% pre-mkt on Vision Pro shipment beat", citations=[cite]),
+                BriefBullet(text="MSFT flat", citations=[cite]),
+            ],
+        ),
+        BriefSection(
+            title="News That Matters To You",
+            bullets=[BriefBullet(text="Dell up 40% [N1]", citations=[cite])],
+        ),
+    ]
+    narrative_in = "**Your Portfolio Today**\n- AAPL +0.8% pre-mkt on Vision Pro shipment beat [N1]\n"
+
+    narrative_out, summary = parser.inject_missing_summary(narrative_in, sections, summary_paragraph=None)
+    # Narrative passes through unchanged (we never inject into markdown).
+    assert narrative_out == narrative_in
+    assert summary is not None
+    assert summary.startswith("Lead headline: ")
+    # The synthesised summary quotes the first portfolio bullet verbatim.
+    assert "AAPL" in summary
+    assert "Vision Pro" in summary
+    # Citation markers must be stripped from the collapsed summary.
+    assert "[N1]" not in summary
+
+
+def test_inject_missing_summary_preserves_existing_summary() -> None:
+    """When LLM already emitted a summary, return it untouched."""
+    parser = _make_parser()
+    cite = _make_citation(1)
+    sections = [
+        BriefSection(
+            title="Your Portfolio Today",
+            bullets=[BriefBullet(text="AAPL flat", citations=[cite])],
+        ),
+    ]
+    existing = "Tech rally continues into open."
+    _, out = parser.inject_missing_summary("narrative", sections, summary_paragraph=existing)
+    assert out == existing
+
+
+def test_inject_missing_summary_returns_none_when_no_bullets() -> None:
+    """No populated sections → cannot synthesise → (narrative, None)."""
+    parser = _make_parser()
+    _, out = parser.inject_missing_summary("narrative", [], summary_paragraph=None)
+    assert out is None

@@ -31,6 +31,8 @@
 import { useQuery } from "@tanstack/react-query";
 import { createGateway } from "@/lib/gateway";
 import { useAuth } from "@/hooks/useAuth";
+import { qk } from "@/lib/query/keys";
+import { useResolvedPortfolioId } from "@/hooks/useResolvedPortfolioId";
 
 /** Snapshot of the user's portfolio at a moment in time, for the TopBar rail. */
 export interface PortfolioMetrics {
@@ -69,16 +71,23 @@ export const HOLDINGS_REFETCH_MS = 30_000;
 export function usePortfolioMetrics(): PortfolioMetrics {
   const { accessToken, isAuthenticated } = useAuth();
 
-  // WHY share the EXACT query key with PortfolioSummary and the dashboard:
-  // TanStack Query dedupes by key, so multiple consumers of this hook share a
-  // single HTTP fetch. Changing the key here would silently double-fire queries.
+  // QA A-F-001 (2026-05-21) — migrate from the bare ["portfolios"] key to
+  // the central qk.portfolios.list() factory. PortfolioSwitcher (W1.1
+  // F-002) already uses the factory; the bare key here was forking the
+  // cache, causing TWO /v1/portfolios fetches per authenticated page
+  // render instead of one.
   const { data: portfoliosData } = useQuery({
-    queryKey: ["portfolios"],
+    queryKey: qk.portfolios.list(),
     queryFn: () => createGateway(accessToken).getPortfolios(),
     enabled: !!accessToken && isAuthenticated,
     staleTime: 60_000,
   });
-  const firstPortfolioId = portfoliosData?.[0]?.portfolio_id;
+
+  // Resolve effective portfolio id via the shared helper so this hook and
+  // every other portfolio-scoped widget use ONE selection contract
+  // (active-portfolio context first, fallback to portfolios[0], guard
+  // against stale persisted ids that no longer exist).
+  const firstPortfolioId = useResolvedPortfolioId(portfoliosData);
 
   const { data: holdingsResp, isLoading: holdingsLoading } = useQuery({
     queryKey: ["holdings", firstPortfolioId],
@@ -91,7 +100,11 @@ export function usePortfolioMetrics(): PortfolioMetrics {
 
   // The 15s window is a deliberate, plan-mandated cadence (T-A-1-02).
   const { data: navQuotes } = useQuery({
-    queryKey: ["holdings-quotes", navInstrumentIds],
+    // WHY qk.portfolios.holdingsQuotesByIds (not inline array): the factory sorts
+    // the IDs so [A,B] and [B,A] share the same cache entry — prevents orphaned
+    // cache entries when the holdings API returns instruments in different order
+    // across fetches (F-DS-002, QA 2026-05-21).
+    queryKey: qk.portfolios.holdingsQuotesByIds(navInstrumentIds),
     queryFn: () => createGateway(accessToken).getBatchQuotes(navInstrumentIds),
     enabled: navInstrumentIds.length > 0 && !!accessToken && isAuthenticated,
     staleTime: QUOTE_REFETCH_MS,

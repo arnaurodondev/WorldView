@@ -16,10 +16,16 @@ Responsibilities:
 from __future__ import annotations
 
 import asyncio
+import contextlib
+import os
 import signal
 import sys
 
-from observability import configure_logging, get_logger  # type: ignore[import-untyped]
+from observability import (  # type: ignore[import-untyped]
+    configure_logging,
+    get_logger,
+    start_metrics_server,
+)
 
 logger = get_logger(__name__)  # type: ignore[no-any-return]
 
@@ -41,6 +47,13 @@ async def main() -> None:
 
     log = get_logger("nlp_pipeline.relevance_scoring_worker_main")  # type: ignore[no-any-return]
     log.info("relevance_scoring_worker_starting")
+
+    # Phase 3 worker-metrics rollout — expose Prometheus /metrics on a
+    # dedicated port so the worker's counters/gauges become scrape-able.
+    metrics_handle = start_metrics_server(
+        service_name="nlp-pipeline-relevance-scoring-worker",
+        port=int(os.environ.get("METRICS_PORT", "9100")),
+    )
 
     stop_event = asyncio.Event()
 
@@ -113,6 +126,8 @@ async def main() -> None:
             await refresh_task
 
     await nlp_engine.dispose()
+    with contextlib.suppress(Exception):
+        await metrics_handle.aclose()
     log.info("relevance_scoring_worker_stopped")
 
 

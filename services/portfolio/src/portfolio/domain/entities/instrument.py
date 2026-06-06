@@ -15,7 +15,12 @@ class InstrumentRef:
     """Read-only reference to a financial instrument, sourced from market.instrument events.
 
     ``source_event_id`` is retained to enable idempotent consumer re-processing.
-    ``entity_id`` links to the KG canonical entity when available; not a cross-service FK (R7).
+    ``entity_id`` is retained for backward compatibility with pre-F2 event
+    payloads and existing callers (PRD-0089 F2 §6.4 — no breaking field
+    removal in v1). Post-F2 the M-017 invariant guarantees
+    ``entity_id == instruments.id`` for tradable kinds, so this field is now
+    semantically redundant with ``id`` and may be removed in a follow-up wave
+    once all callers are reconciled. Not a cross-service FK (R7).
     """
 
     symbol: str

@@ -83,10 +83,19 @@ class AlertsHandler(ToolHandler):
         return tool_name in self._HANDLED_TOOLS
 
     async def execute(self, tool_name: str, args: dict[str, Any]) -> Any:
+        from .base import filter_kwargs_to_signature
+
         if tool_name == "get_alerts":
+            # get_alerts takes no args; still run the filter so any LLM-supplied
+            # noise is logged rather than crashing the call.
+            filter_kwargs_to_signature(self._handle_get_alerts, tool_name, args)
             return await self._handle_get_alerts()
         if tool_name == "create_alert":
-            return await self._handle_create_alert(**args)
+            # create_alert already accepts **_ as a defensive catch-all; the
+            # helper still emits the metric/log for visibility but returns
+            # every key as known (so the **_ contract is preserved).
+            known, _unknown = filter_kwargs_to_signature(self._handle_create_alert, tool_name, args)
+            return await self._handle_create_alert(**known)
         raise ValueError(f"AlertsHandler cannot handle tool: {tool_name}")
 
     # ── S10 read handler ───────────────────────────────────────────────────────

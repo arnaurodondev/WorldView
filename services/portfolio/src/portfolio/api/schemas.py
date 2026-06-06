@@ -191,6 +191,13 @@ class TransactionListItem(BaseModel):
     asset_class: str | None = None
     executed_at: datetime
     external_ref: str | None = None
+    # P2-E: broker-supplied human-readable description (e.g. "Dividend Payment - AAPL").
+    # Not populated for all brokers or activity types. None when omitted by SnapTrade.
+    # F-003 (QA Wave G): bound description length at 500 chars — a malicious upstream
+    # broker could otherwise push a 100KB+ string that bloats every /transactions
+    # response and breaks the React table layout. 500 chars covers all real
+    # SnapTrade descriptions we've observed in production.
+    description: Annotated[str, StringConstraints(max_length=500)] | None = None
     created_at: datetime
 
     @field_serializer("quantity", "price", "fees")

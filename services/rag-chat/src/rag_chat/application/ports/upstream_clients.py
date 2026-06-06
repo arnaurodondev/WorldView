@@ -160,6 +160,26 @@ class S6Port(Protocol):
         """ANN chunk search → ranked list of enriched chunk results."""
         ...
 
+    # PLAN-0093 Wave E-4: explicit embed_text + resolve_entity_by_ticker
+    # methods on the port so the orchestrator can hit them without
+    # cracking open ChunkSearchRequest just to get a vector.
+    async def embed_text(self, text: str) -> list[float]:
+        """POST /api/v1/embed → 1024-dim BGE embedding for ``text``.
+
+        Returns a zero vector on transport error so callers can fall
+        through to a text-only path (BP-183-class behaviour).
+        """
+        ...
+
+    async def resolve_entity_by_ticker(self, ticker: str) -> UUID | None:
+        """Resolve a ticker symbol (e.g. "AAPL") to its entity_id.
+
+        Returns None when no match is found. Implementations should
+        log a structured warning ``ticker_unresolved`` on misses so
+        operators can spot bulk failures.
+        """
+        ...
+
 
 @runtime_checkable
 class S7Port(Protocol):
@@ -277,11 +297,81 @@ class S3Port(Protocol):
         instrument_id: str | None = None,
         ticker: str | None = None,
         isin: str | None = None,
+        period_type: str = "quarterly",
     ) -> list[dict]:
-        """Return quarterly earnings-based fundamentals via GET /api/v1/fundamentals/history.
+        """Return earnings-based fundamentals via GET /api/v1/fundamentals/history.
+
+        ``period_type`` (F-LIVE-P, 2026-05-26): ``"quarterly"`` (default) or
+        ``"annual"``. The default matches the historical caller contract and
+        the LLM's near-universal ask; passing ``"annual"`` returns annual
+        income-statement rows. Mixing is no longer possible at the upstream
+        layer.
 
         Returns ``[]`` on any HTTP or network error (R9 safe degradation).
         At least one of instrument_id, ticker, or isin should be provided.
+        """
+        ...
+
+    # PLAN-0103 W25 / BP-640: snapshot-aware variant of get_fundamentals_history.
+    # WHY a sibling (not a flag on the legacy method): the existing call sites +
+    # tests bind to the ``list[dict]`` return shape. Adding a second method
+    # preserves the contract while letting handlers that need the TTM/live
+    # snapshot (for "What's AAPL's P/E?" questions) read both pieces from one
+    # HTTP call.
+    async def get_fundamentals_history_with_snapshot(
+        self,
+        *,
+        periods: int = 8,
+        instrument_id: str | None = None,
+        ticker: str | None = None,
+        isin: str | None = None,
+        period_type: str = "quarterly",
+    ) -> dict:
+        """Return ``{"periods": [...], "current_snapshot": dict | None}``.
+
+        Snapshot is None when the upstream HIGHLIGHTS section was empty for
+        the instrument. Returns ``{"periods": [], "current_snapshot": None}``
+        on any HTTP or network error (R9 safe degradation).
+        """
+        ...
+
+    # PLAN-0095 W2 T-W2-02: batch fundamentals fan-out in one HTTP call.
+    # WHY: collapses the rag-chat screener → N x fundamentals tool-turn cascade
+    # into one tool call. See ``get_fundamentals_history_batch`` handler in
+    # ``rag_chat.application.pipeline.handlers.market``.
+    async def get_fundamentals_history_batch(
+        self,
+        *,
+        tickers: list[str],
+        periods: int = 5,
+    ) -> dict[str, dict]:
+        """Return per-ticker fundamentals via POST /api/v1/fundamentals/batch.
+
+        Returns ``{}`` on any HTTP or network error (R9 safe degradation).
+        On success returns the parsed ``results`` map keyed by the original
+        ticker — each value is ``{"status": "ok"|"error", "periods"?, "reason"?}``.
+        """
+        ...
+
+    # PLAN-0104 W32: parameterised metric query (unified query_fundamentals).
+    # WHY a new method (not flag on get_fundamentals_history): the response
+    # shape is open (metric set is caller-defined) and carries per-metric
+    # coverage flags, neither of which fit the legacy contract.
+    async def query_fundamentals(
+        self,
+        *,
+        ticker: str,
+        metrics: list[str],
+        periods: int = 8,
+        period_type: str = "quarterly",
+        include_snapshot: bool = True,
+    ) -> dict:
+        """POST /api/v1/fundamentals/query → typed projection over caller-named metrics.
+
+        Returns ``{"metrics_by_period": [...], "snapshot": dict | None,
+        "coverage": dict[str, str]}`` on success. Returns ``{"metrics_by_period":
+        [], "snapshot": None, "coverage": {}}`` on any HTTP/network error
+        (R9 safe degradation).
         """
         ...
 
@@ -301,6 +391,149 @@ class S1Port(Protocol):
         Results are cached in Valkey for 300 s.
         """
         ...
+
+
+# ── PLAN-0102 W2 T-W2-03 — portfolio P&L + sectors ───────────────────────────
+
+
+@dataclass(frozen=True)
+class PortfolioPnLItem:
+    """One holding row in the S1 portfolio-pnl response."""
+
+    symbol: str | None
+    entity_id: UUID | None
+    instrument_id: UUID
+    qty: float
+    last_close_usd: float | None
+    current_price_usd: float | None
+    overnight_pnl_usd: float
+    overnight_pnl_pct: float
+
+
+@dataclass(frozen=True)
+class PortfolioPnL:
+    """Top-level shape returned by ``S1Client.get_portfolio_pnl``."""
+
+    user_id: UUID
+    holdings: list[PortfolioPnLItem] = field(default_factory=list)
+    total_overnight_pnl_usd: float = 0.0
+    total_overnight_pnl_pct: float = 0.0
+
+
+@runtime_checkable
+class PortfolioPnLPort(Protocol):
+    """Port — fetch per-holding overnight P&L from S1 via the S9 proxy.
+
+    Returns ``None`` on any HTTP / network error so callers can degrade
+    to the existing weight-only renderer in the morning brief.
+    """
+
+    async def get_portfolio_pnl(
+        self,
+        user_id: UUID,
+    ) -> PortfolioPnL | None: ...
+
+
+@dataclass(frozen=True)
+class SectorLabel:
+    """One sector/industry lookup result."""
+
+    entity_id: UUID
+    sector: str | None = None
+    industry: str | None = None
+
+
+@runtime_checkable
+class SectorsPort(Protocol):
+    """Port — batch ``{entity_id: SectorLabel}`` lookup from S7 via the S9 proxy.
+
+    Returns an empty dict on any HTTP / network error so callers can
+    degrade to "(sector unknown)" rendering in the morning brief.
+    """
+
+    async def get_sectors_for_entities(
+        self,
+        entity_ids: list[UUID],
+    ) -> dict[UUID, SectorLabel]: ...
+
+
+# ── PLAN-0102 W3 — futures/pre-mkt tape + earnings calendar ──────────────────
+
+
+@dataclass(frozen=True)
+class MarketTapeItem:
+    """One ticker row in the tape response from market-data /internal/v1/market/tape.
+
+    ``session="unavailable"`` is the documented sentinel — callers MUST
+    branch on it before treating ``premkt_price`` as live data (a stale
+    quote can otherwise mislead the brief into showing yesterday's close
+    as a fresh pre-market level).
+    """
+
+    symbol: str
+    last_close: float | None
+    premkt_price: float | None
+    premkt_pct: float | None
+    session: str  # "pre-mkt" | "open" | "after-hours" | "closed" | "unavailable"
+
+
+@dataclass(frozen=True)
+class MarketTapeResult:
+    """Top-level shape returned by ``MarketTapePort.get_tape``."""
+
+    as_of: datetime
+    tickers: list[MarketTapeItem] = field(default_factory=list)
+
+
+@runtime_checkable
+class MarketTapePort(Protocol):
+    """Port — fetch a futures / pre-market tape snapshot for N tickers.
+
+    Returns an empty ``MarketTapeResult`` (``tickers=[]``) on any HTTP /
+    network error so callers can degrade to "no tape line" rather than
+    failing the brief.
+    """
+
+    async def get_tape(self, symbols: list[str]) -> MarketTapeResult: ...
+
+
+@dataclass(frozen=True)
+class EarningsEvent:
+    """One earnings event row in the calendar response.
+
+    Fields surface as ``None`` rather than being omitted when we do not
+    have the data — callers can render "TBD" instead of guessing.
+    """
+
+    symbol: str
+    entity_id: UUID | None
+    report_date: date
+    when: str | None  # "AMC" | "BMO" | "DMH" | None
+    period: str | None
+    consensus_eps: float | None
+    consensus_rev_usd: float | None
+
+
+@dataclass(frozen=True)
+class EarningsCalendarResult:
+    """Top-level shape returned by ``EarningsCalendarPort.get_earnings``."""
+
+    from_date: date
+    to_date: date
+    events: list[EarningsEvent] = field(default_factory=list)
+
+
+@runtime_checkable
+class EarningsCalendarPort(Protocol):
+    """Port — fetch a forward-looking earnings calendar window.
+
+    ``days_ahead`` is interpreted as ``[today, today + days_ahead]`` in UTC
+    by the adapter — the brief generator does not care about exact bounds
+    so the port stays simple. Returns an empty ``EarningsCalendarResult``
+    on any HTTP / network error.
+    """
+
+    async def get_earnings(self, days_ahead: int) -> EarningsCalendarResult: ...
 
 
 # ── Intelligence Port DTOs + Protocol (PLAN-0080 Wave A) ──────────────────────

@@ -9,6 +9,11 @@ import pytest
 # before Settings() is instantiated in create_app() or any test fixture.
 os.environ.setdefault("MARKET_DATA_STORAGE_ACCESS_KEY", "minioadmin-test")
 os.environ.setdefault("MARKET_DATA_STORAGE_SECRET_KEY", "minioadmin-test")
+# PLAN-0093 T-A-1-03: the new observability.assert_app_env_or_die() boot guard
+# aborts startup when ``internal_jwt_skip_verification`` is True and APP_ENV is
+# unset.  Tests routinely enable skip_verification, so pin APP_ENV=test here
+# before any settings/create_app() call so test runs do not trip the guard.
+os.environ.setdefault("APP_ENV", "test")
 from httpx import ASGITransport, AsyncClient
 from market_data.app import create_app
 
@@ -37,6 +42,33 @@ async def client(app):
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as ac:
         yield ac
+
+
+# PLAN-0103 W16 (BP-635): the screener introspects information_schema once
+# per process to discover which snap-field columns exist. Captured-session
+# tests don't simulate that query, so the cache would default to "no
+# columns present" and strip the projection (breaking pre-existing
+# WHERE/ORDER BY assertions). Pre-fill the cache to the full ORM set here
+# so existing tests continue to assert against the complete projection.
+# Tests that specifically exercise the introspection path (see
+# test_screener_snap_field_introspection.py) reset the cache themselves.
+@pytest.fixture(autouse=True)
+def _prefill_snap_field_cache() -> None:
+    """Pre-populate the snap-field cache to the full ORM set for unit tests."""
+    try:
+        from market_data.infrastructure.db.repositories import fundamental_metrics_query as _fmq
+
+        _fmq._AVAILABLE_SNAP_FIELDS = _fmq._SNAP_FIELDS
+    except ImportError:
+        # Module not yet importable in environments without the deps loaded.
+        pass
+    yield
+    try:
+        from market_data.infrastructure.db.repositories import fundamental_metrics_query as _fmq
+
+        _fmq._AVAILABLE_SNAP_FIELDS = None
+    except ImportError:
+        pass
 
 
 @pytest.fixture

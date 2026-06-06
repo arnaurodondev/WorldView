@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import date, datetime
 from typing import Any
 
 from pydantic import BaseModel
@@ -80,6 +80,11 @@ class FundamentalsHistoryPeriod(BaseModel):
 
     period: str  # human-readable label, e.g. "Q1 2026"
     period_end_date: str  # "YYYY-MM-DD"
+    # F-LIVE-P (2026-05-26): explicit periodicity label per row. The use case
+    # filters the SQL to a single period_type, so by construction every row
+    # in a single response shares the same value. Exposing it here lets the
+    # rag-chat tool layer surface the contract to the LLM (BP-577 defense).
+    period_type: str = "QUARTERLY"
     revenue: float | None = None
     gross_profit: float | None = None
     net_income: float | None = None
@@ -88,10 +93,198 @@ class FundamentalsHistoryPeriod(BaseModel):
     market_cap: float | None = None
 
 
+# PLAN-0103 W25 / BP-640: snapshot-vs-period-row P/E injection fix.
+# WHY a SIBLING field (not per-row): the EODHD HIGHLIGHTS section is a single
+# TTM/live valuation snapshot (one current PERatio + MarketCapitalization +
+# EV/EBITDA + ...), not a per-period stream. Pre-W25 the use case injected
+# ``pe_ratio`` and ``market_cap`` into EVERY period row, so the LLM either
+# (a) confidently quoted the TTM P/E as if it were the row's quarterly P/E
+# (fabrication), or (b) refused because the per-period cell looked empty in
+# its own mental model. Surfacing the snapshot once, with an explicit
+# ``as_of`` date and source, lets the LLM cleanly separate "current P/E"
+# answers (read snapshot) from "quarterly trend" answers (read periods).
+#
+# All fields are nullable: not every issuer reports every ratio (e.g. ETFs
+# rarely surface a PERatio; tiny-cap stocks omit EV/EBITDA). A missing
+# ``as_of`` falls back to ``None`` — the renderer can then either omit the
+# block entirely or label it "as-of date unknown".
+class CurrentSnapshot(BaseModel):
+    """Single live-valuation snapshot drawn from EODHD HIGHLIGHTS.
+
+    Mirrors the as-of-today TTM block on the API page. Separate from
+    ``FundamentalsHistoryPeriod`` because the snapshot semantics (current
+    valuation) are fundamentally different from period semantics (historical
+    operating metrics). See BP-640 / PLAN-0103 W25.
+    """
+
+    pe_ratio: float | None = None
+    ev_ebitda: float | None = None
+    market_cap_usd: float | None = None
+    price_to_book: float | None = None
+    dividend_yield: float | None = None
+    # PLAN-0104 W30 / BP-649: forward P/E + PEG ratio. The EODHD HIGHLIGHTS
+    # section already populates ForwardPE and PEGRatio scalars; pre-W30 the
+    # CurrentSnapshot schema dropped them so a "What's AAPL forward P/E?"
+    # question had no path to a grounded answer even when the LLM correctly
+    # routed to FINANCIAL_DATA. Both nullable: not every issuer reports
+    # forward estimates (e.g. early-stage tickers with no analyst coverage).
+    forward_pe: float | None = None
+    peg_ratio: float | None = None
+    # ISO date of the snapshot row in the HIGHLIGHTS section. None when the
+    # use case could not resolve a definitive ``period_end`` for the most
+    # recent highlights record.
+    as_of: date | None = None
+    # Provenance marker so the LLM (and the rag-chat handler) can cite the
+    # source verbatim. Always ``"highlights"`` today; reserved field for
+    # forward compatibility with a future blended snapshot.
+    source: str = "highlights"
+
+
 class FundamentalsHistoryResponse(BaseModel):
-    """Response for GET /api/v1/fundamentals/history (temporal RAG PLAN-0066 Wave G)."""
+    """Response for GET /api/v1/fundamentals/history (temporal RAG PLAN-0066 Wave G).
+
+    PLAN-0103 W25 / BP-640: now exposes ``current_snapshot`` (CurrentSnapshot |
+    None) as a SIBLING of ``periods``. The snapshot holds the TTM/live
+    valuation metrics that previously bled into every period row. Periods
+    keep flow/operating metrics ONLY. None when no HIGHLIGHTS record exists
+    for the instrument.
+    """
 
     instrument_id: str
     ticker: str
     periods: list[FundamentalsHistoryPeriod]
     period_count: int
+    current_snapshot: CurrentSnapshot | None = None
+
+
+# PLAN-0095 W2 T-W2-01: batch fundamentals history.
+# WHY a batch endpoint: rag-chat's screener → fundamentals workflow currently
+# fans out N sequential ``get_fundamentals_history`` tool calls through the
+# LLM. Each turn is a ~7-8 s LLM round-trip plus a use-case query; for 5
+# tickers that's 5 turns. A single batch tool call collapses that into one
+# turn so the LLM never has to deliberate between successive fundamentals
+# pulls — measured 5-10x latency reduction on agg_q6.
+class FundamentalsBatchRequest(BaseModel):
+    """Request body for POST /v1/fundamentals/batch.
+
+    ``tickers`` is capped at 25 entries to bound worst-case fan-out latency
+    (25 concurrent ``GetFundamentalsHistoryUseCase.execute`` calls per request);
+    requests above the cap return HTTP 422 from the route's manual length check.
+    """
+
+    tickers: list[str]
+    periods: int = 5
+
+
+class FundamentalsBatchPerTickerResult(BaseModel):
+    """Per-ticker result inside a batch response.
+
+    ``status="ok"`` populates ``periods`` (and leaves ``reason`` as ``None``);
+    ``status="error"`` populates ``reason`` (and leaves ``periods`` as ``None``).
+    Per-ticker failures NEVER fail the overall batch — see ``return_exceptions=True``
+    in the route handler. The shape is intentionally flat so callers can iterate
+    ``response.results.items()`` without branching on missing keys.
+
+    PLAN-0103 W25 / BP-640: ``current_snapshot`` mirrors the singular endpoint's
+    new sibling field so multi-ticker LLM workflows can surface live valuation
+    ratios without a second HTTP round-trip.
+    """
+
+    status: str  # Literal["ok", "error"] — kept str for FastAPI/OpenAPI simplicity
+    periods: list[FundamentalsHistoryPeriod] | None = None
+    reason: str | None = None
+    current_snapshot: CurrentSnapshot | None = None
+
+
+class FundamentalsBatchResponse(BaseModel):
+    """Response for POST /v1/fundamentals/batch.
+
+    ``results`` is keyed by the ORIGINAL ticker the caller supplied (preserves
+    case so the caller can correlate with its own state) — NOT by the canonical
+    instrument symbol returned from the lookup use case.
+    """
+
+    results: dict[str, FundamentalsBatchPerTickerResult]
+
+
+# ── PLAN-0104 W32: unified query_fundamentals tool ──────────────────────────
+# WHY a new schema family (not an overload of FundamentalsHistoryResponse): the
+# unified query exposes a parameterised metric set + per-metric coverage flags.
+# Rather than retrofit nullable columns onto the existing typed schema, we keep
+# the rich-but-flexible new shape additive so the legacy endpoint contract is
+# untouched.
+class FundamentalsQueryRequest(BaseModel):
+    """Request body for POST /v1/fundamentals/query.
+
+    Identifier priority mirrors ``GET /fundamentals/history``: instrument_id >
+    isin > symbol. At least one must be present.
+
+    ``metrics`` is the list of canonical metric names the caller wants. See
+    ``query_fundamentals_metrics.KNOWN_METRICS`` for the supported vocabulary
+    (revenue, gross_margin, forward_pe, peg_ratio, ev_ebitda, fcf_yield,
+    consensus_eps_curr_year, ...). Unknown names are echoed back in
+    ``coverage`` as ``"missing"`` rather than rejected so the LLM can speculate
+    without 422'ing the request.
+
+    ``periods`` controls the per-period axis length; 0 returns snapshot-only.
+    """
+
+    instrument_id: str | None = None
+    symbol: str | None = None
+    isin: str | None = None
+    metrics: list[str]
+    periods: int = 8
+    period_type: str = "quarterly"
+    include_snapshot: bool = True
+
+
+class FundamentalsQueryPeriodRow(BaseModel):
+    """One period row in a fundamentals_query response.
+
+    Shape is intentionally open (``model_config["extra"] = "allow"`` via
+    ``BaseModel.Config``) — the columns are determined by the caller's
+    ``metrics`` list. Only ``period_end`` / ``period_label`` / ``period_type``
+    are fixed.
+    """
+
+    model_config = {"extra": "allow"}
+
+    period_end: str
+    period_label: str
+    period_type: str
+
+
+class FundamentalsQuerySnapshot(BaseModel):
+    """Snapshot block in a fundamentals_query response.
+
+    Open-shape mirror of FundamentalsQueryPeriodRow — populated columns
+    depend on which snapshot metrics the caller asked for. ``as_of`` and
+    ``source`` are emitted only when ``include_snapshot=True`` AND the
+    underlying HIGHLIGHTS row was found.
+    """
+
+    model_config = {"extra": "allow"}
+
+    as_of: str | None = None
+    source: str | None = None
+
+
+class FundamentalsQueryResponse(BaseModel):
+    """Response for POST /v1/fundamentals/query (PLAN-0104 W32).
+
+    Shape::
+
+        {
+          "instrument_id": "...",
+          "ticker": "AAPL",
+          "metrics_by_period": [{period_end, period_label, period_type, <metric>: <val>, ...}],
+          "snapshot": {<metric>: <val>, ..., as_of, source} | None,
+          "coverage": {<metric>: "ok"|"partial"|"missing"}
+        }
+    """
+
+    instrument_id: str
+    ticker: str
+    metrics_by_period: list[FundamentalsQueryPeriodRow]
+    snapshot: FundamentalsQuerySnapshot | None = None
+    coverage: dict[str, str]

@@ -19,23 +19,48 @@ if TYPE_CHECKING:
 
     from content_store.application.ports.repositories import DedupHashRepositoryPort
 
-# UTM and tracking parameters to strip from URLs
+# UTM and tracking parameters to strip from URLs.
+#
+# Source list: ClearURLs project (https://rules2.clearurls.xyz/) — the canonical
+# community-maintained registry of advertising / analytics / share-tracking URL
+# parameters. We cherry-pick the subset that:
+#   1. Is observed in real news-syndication / social-share URLs, AND
+#   2. Has no semantic effect on the article content the URL resolves to.
+#
+# Adding to this list improves Stage B normalized-hash dedup recall (BUG-006 /
+# TASK-W2-01) because near-duplicate URLs that differ ONLY in tracking params
+# would otherwise hash to different canonical forms and slip past dedup.
+#
+# Keep alphabetically sorted for readability and to make future additions easy
+# to review in a diff.
 _TRACKING_PARAMS = frozenset(
     {
-        "utm_source",
-        "utm_medium",
-        "utm_campaign",
-        "utm_term",
-        "utm_content",
-        "fbclid",
-        "gclid",
-        "gclsrc",
-        "dclid",
-        "msclkid",
-        "mc_cid",
-        "mc_eid",
-        "ref",
-        "referrer",
+        "_ga",  # Google Analytics cross-domain linker
+        "_gl",  # Google Analytics cross-domain linker (modern variant)
+        "_hsenc",  # HubSpot email engagement token
+        "_hsmi",  # HubSpot email message id
+        "dclid",  # Google Display Click Identifier
+        "fbclid",  # Facebook click identifier
+        "gclid",  # Google Ads click identifier
+        "gclsrc",  # Google Ads click source
+        "igshid",  # Instagram share id
+        "mc_cid",  # Mailchimp campaign id
+        "mc_eid",  # Mailchimp subscriber/email id
+        "msclkid",  # Microsoft Ads click identifier
+        "oly_anon_id",  # Omeda anonymous visitor id
+        "oly_enc_id",  # Omeda encrypted visitor id
+        "ref",  # Generic referrer tag
+        "referrer",  # Generic referrer tag (long form)
+        "s_cid",  # Adobe SiteCatalyst campaign id
+        "utm_campaign",  # UTM campaign name
+        "utm_content",  # UTM ad/content variant
+        "utm_medium",  # UTM medium (email/social/cpc/...)
+        "utm_source",  # UTM traffic source
+        "utm_term",  # UTM paid-search keyword
+        "vero_conv",  # Vero conversion id
+        "vero_id",  # Vero subscriber id
+        "wickedid",  # WickedReports click id
+        "yclid",  # Yandex Ads click identifier
     }
 )
 

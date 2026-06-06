@@ -28,6 +28,7 @@ PLAN-0066 Wave C (T-W10-C-01, T-W10-C-02):
 
 from __future__ import annotations
 
+from datetime import UTC, datetime, timedelta
 from typing import Annotated, Any, Literal
 from uuid import UUID
 
@@ -50,6 +51,11 @@ log = structlog.get_logger(__name__)  # type: ignore[no-any-return]
 
 # Cache TTL: 24 hours — briefings are expensive (LLM call) and stable within a day.
 _CACHE_TTL = 86400
+# PLAN-0094 W2: last-known-good key TTL — 7 days by default (gives a wide
+# enough fallback window that a user away on a long weekend still has a brief
+# to read on Monday morning).  Mirrors ``brief_last_good_ttl_days`` setting;
+# this constant is the seconds equivalent.
+_LASTGOOD_TTL = 7 * 86400
 
 
 # ── PLAN-0066 Wave B: history response schemas ────────────────────────────────
@@ -150,8 +156,15 @@ async def get_morning_briefing(request: Request) -> PublicBriefingResponse:
     # WHY v2: PLAN-0062-W4 changed BriefSection.bullets from list[str] to
     # list[BriefBullet]. Cached pre-W4 responses must not be served to W4+ clients.
     cache_key = f"briefing:morning:v2:{user_id}"
+    # PLAN-0094 W2: last-known-good fallback key.  Populated by the brief
+    # pre-generation worker AND on every successful on-demand generation, so
+    # users always have a brief to fall back to if a future regen fails.
+    lastgood_key = f"briefing:morning:lastgood:{user_id}"
 
-    # ── Check Valkey cache ────────────────────────────────────────────────────
+    # ── Lookup chain (PLAN-0094 W2) ───────────────────────────────────────────
+    # 1. Fresh cache hit → return immediately with is_stale=False.
+    # 2. Lastgood hit    → return with is_stale=True, fire-and-forget regen.
+    # 3. Cold user       → existing on-demand path (block + 503 on failure).
     if valkey is not None:
         try:
             cached = await valkey.get(cache_key)
@@ -162,23 +175,170 @@ async def get_morning_briefing(request: Request) -> PublicBriefingResponse:
                 # breaks when sections are stored as Python repr strings (BP-319).
                 resp = PublicBriefingResponse.model_validate_json(raw)
                 resp.cached = True
+                resp.is_stale = False
                 return resp
         except Exception as e:
-            # Cache miss or deserialization failure — proceed to generation.
+            # Cache miss or deserialization failure — proceed to lastgood / generation.
             log.warning("briefing_cache_read_failed", error=str(e), key=cache_key)  # type: ignore[no-any-return]
+
+        # ── Step 2: last-known-good fallback ──────────────────────────────────
+        # Read the lastgood key; if present, serve as stale and schedule a
+        # best-effort background regeneration so the next request can hit fresh.
+        try:
+            lastgood = await valkey.get(lastgood_key)
+            if lastgood:
+                raw_lg = lastgood.decode("utf-8") if isinstance(lastgood, bytes) else lastgood
+                stale_resp = PublicBriefingResponse.model_validate_json(raw_lg)
+                stale_resp.cached = True
+                stale_resp.is_stale = True
+                # Observability — count stale serves separately so ops can spot
+                # a sustained regen-failure pattern.
+                try:
+                    from rag_chat.application.metrics.prometheus import rag_brief_served_stale_total
+
+                    rag_brief_served_stale_total.inc()
+                except Exception:  # pragma: no cover  # noqa: S110 — metrics import never fails in practice
+                    pass
+                log.info(  # type: ignore[no-any-return]
+                    "brief_served_stale",
+                    user_id=user_id,
+                    lastgood_generated_at=getattr(stale_resp, "generated_at", None),
+                )
+                # Fire-and-forget background regen.  We DO NOT await — the user
+                # gets the stale response immediately.  ``asyncio.create_task``
+                # schedules the coroutine; exceptions inside it are swallowed
+                # by the helper below (we don't want a background failure to
+                # surface anywhere that could affect the request).
+                #
+                # F-CR-003 fix (PLAN-0093 iter-9 QA): we MUST NOT call
+                # ``set_current_jwt(bg_jwt)`` here in the parent request scope.
+                # ``asyncio.create_task`` copies the current Context at task
+                # creation time — if we set the ContextVar before creating the
+                # task, the background JWT bleeds into anything that touches
+                # this Context (other code in this handler, future handler
+                # extensions, test isolation, etc.).  Instead we pass ``bg_jwt``
+                # as an explicit positional arg to the coroutine and the
+                # coroutine sets the ContextVar inside its OWN task context —
+                # which is isolated by asyncio task boundaries.
+                bg_jwt = request.headers.get("X-Internal-JWT")
+                uc_for_bg = _get_briefing_uc(request)
+
+                async def _background_regen(jwt_for_bg: str | None) -> None:
+                    """Best-effort regeneration — never raises, just logs.
+
+                    WHY a closure that takes ``jwt_for_bg`` as an explicit arg:
+                    F-CR-003 (PLAN-0094 iter-9 QA) — calling
+                    ``set_current_jwt`` in the parent handler scope before
+                    ``asyncio.create_task`` leaked the JWT into the parent
+                    request's context.  Setting the ContextVar INSIDE the task
+                    coroutine confines it to the background task's own Context
+                    copy.
+                    """
+                    # Set the ContextVar inside the background task's own
+                    # Context — never touch the parent request's Context.
+                    from rag_chat.infrastructure.clients.auth_context import (
+                        set_current_jwt as _set_jwt_bg,
+                    )
+
+                    _set_jwt_bg(jwt_for_bg)
+                    try:
+                        result = await uc_for_bg.execute_public_morning(
+                            user_id=user_id,
+                            tenant_id=tenant_id,
+                            internal_jwt=jwt_for_bg,
+                        )
+                        # Re-cache both keys so the next request hits fresh.
+                        fresh_payload = PublicBriefingResponse(
+                            narrative=result.get("content", ""),
+                            risk_summary=result.get("risk_summary", {}),
+                            citations=result.get("citations", []),
+                            generated_at=result["generated_at"],
+                            cached=False,
+                            entity_id=None,
+                            summary=result.get("summary"),
+                            sections=result.get("sections", []),
+                            confidence=result.get("confidence", 1.0),
+                            lead=result.get("lead"),
+                            is_stale=False,
+                            # PLAN-0103 W3 (BP-624)
+                            summary_paragraph=result.get("summary_paragraph"),
+                        ).model_dump_json()
+                        await valkey.set(cache_key, fresh_payload, ex=_CACHE_TTL)
+                        await valkey.set(lastgood_key, fresh_payload, ex=_LASTGOOD_TTL)
+                        log.info(  # type: ignore[no-any-return]
+                            "brief_background_regen_succeeded",
+                            user_id=user_id,
+                        )
+                    except Exception as exc:
+                        log.warning(  # type: ignore[no-any-return]
+                            "brief_background_regen_failed",
+                            user_id=user_id,
+                            error=str(exc),
+                        )
+
+                # asyncio.create_task() requires a running event loop, which we
+                # have inside this async handler.  The task is not stored
+                # anywhere — best-effort fire-and-forget is the contract.
+                import asyncio as _asyncio
+
+                _asyncio.create_task(_background_regen(bg_jwt))  # noqa: RUF006
+                return stale_resp
+        except Exception as e:
+            log.warning(  # type: ignore[no-any-return]
+                "briefing_lastgood_read_failed",
+                error=str(e),
+                key=lastgood_key,
+            )
 
     # ── Generate briefing via use case ────────────────────────────────────────
     # WHY execute_public_morning() not execute(): the morning route must use the
     # portfolio-aware path that invokes BriefingContextGatherer (S1/S3/S5/S6/S7),
     # renders the MORNING_BRIEFING prompt, and returns content/risk_summary/citations.
     # Calling execute() here would use the email brief path with no frontend context.
+    #
+    # WHY set_current_jwt here: InternalJWTMiddleware sets the ContextVar when it
+    # validates the incoming JWT.  However, some code paths (e.g. tests that bypass
+    # the middleware, or future background-task execution) do not go through the
+    # middleware.  Explicitly setting the ContextVar here before any upstream HTTP
+    # call is made guarantees that BaseUpstreamClient._get()/_post() — which read
+    # get_current_jwt() — always have a valid token for S6/S7 calls (prevents 401).
+    from rag_chat.infrastructure.clients.auth_context import set_current_jwt
+
+    internal_jwt = request.headers.get("X-Internal-JWT")
+    set_current_jwt(internal_jwt)
     uc = _get_briefing_uc(request)
+    # PLAN-0099 Wave C: flag-gated agentic brief generator (experimental).
+    # When RAG_CHAT_BRIEF_AGENTIC_ENABLED=true we drive the iterative tool-use
+    # loop instead of the single-turn generator. The agentic path falls back
+    # to ``uc.execute_public_morning`` internally on any failure, so the
+    # response envelope is always shape-compatible with the route.
+    _settings = request.app.state.settings
     try:
-        result = await uc.execute_public_morning(
-            user_id=user_id,
-            tenant_id=tenant_id,
-            internal_jwt=request.headers.get("X-Internal-JWT"),
-        )
+        if getattr(_settings, "brief_agentic_enabled", False):
+            from rag_chat.application.use_cases.agentic_brief_generator import AgenticBriefGenerator
+
+            _factory = request.app.state.tool_executor_factory
+            _tool_executor = _factory.for_request(
+                user_id=UUID(user_id) if user_id else None,
+                tenant_id=UUID(tenant_id) if tenant_id else None,
+                internal_jwt=internal_jwt,
+            )
+            _agentic = AgenticBriefGenerator(
+                llm_chain=request.app.state.llm_chain,
+                tool_executor=_tool_executor,
+                settings=_settings,
+                fallback=uc,
+            )
+            result = await _agentic.generate(
+                user_id=UUID(user_id),
+                tenant_id=UUID(tenant_id),
+            )
+        else:
+            result = await uc.execute_public_morning(
+                user_id=user_id,
+                tenant_id=tenant_id,
+                internal_jwt=internal_jwt,
+            )
     except RateLimitExceededError as e:
         raise HTTPException(status_code=429, detail=str(e)) from e
     except ProviderUnavailableError as e:
@@ -211,6 +371,10 @@ async def get_morning_briefing(request: Request) -> PublicBriefingResponse:
         # PLAN-0062-W4: confidence score and lead text
         "confidence": confidence,
         "lead": lead,
+        # PLAN-0103 W3 (BP-624): collapsed-view summary paragraph from the v4.2
+        # ``## Summary`` block. None when the LLM didn't emit the heading (e.g.
+        # cached pre-v4.2 responses) — frontend handles the fallback.
+        "summary_paragraph": result.get("summary_paragraph"),
     }
 
     log.info(  # type: ignore[no-any-return]
@@ -226,9 +390,13 @@ async def get_morning_briefing(request: Request) -> PublicBriefingResponse:
     # WHY model_dump_json: avoids json.dumps(..., default=str) which stringifies
     # Pydantic models (BriefSection, BriefBullet) to repr strings that cannot be
     # re-deserialized on cache read (BP-319).
+    # PLAN-0094 W2: also write the lastgood key so a future regen failure has
+    # a known-good payload to fall back on.
     if valkey is not None:
         try:
-            await valkey.set(cache_key, resp.model_dump_json(), ex=_CACHE_TTL)
+            payload_json = resp.model_dump_json()
+            await valkey.set(cache_key, payload_json, ex=_CACHE_TTL)
+            await valkey.set(lastgood_key, payload_json, ex=_LASTGOOD_TTL)
         except Exception as e:
             log.warning("briefing_cache_write_failed", error=str(e), key=cache_key)  # type: ignore[no-any-return]
 
@@ -251,8 +419,12 @@ async def get_instrument_briefing(entity_id: str, request: Request) -> PublicBri
     user_id = _extract_user_id(request)
     tenant_id = _extract_tenant_id(request)  # noqa: F841 — reserved for future cache-key scope
     valkey = _get_valkey(request)
-    # WHY v2: PLAN-0062-W4 cache key bump — see morning briefing comment above.
-    cache_key = f"briefing:instrument:v2:{entity_id}:{user_id}"
+    # WHY no user_id suffix (T-S8-06 / W5 Δ12): instrument briefs are entity-scoped,
+    # not user-scoped — the same brief is valid for all users viewing the same entity.
+    # Dropping the user_id suffix means a single Valkey entry serves all concurrent
+    # viewers, cutting cache misses by ~N users per entity per day. Stale-user-brief
+    # isolation is preserved by the morning briefing (which retains the user_id key).
+    cache_key = f"briefing:instrument:v2:{entity_id}"
 
     # ── Check Valkey cache ────────────────────────────────────────────────────
     if valkey is not None:
@@ -272,6 +444,13 @@ async def get_instrument_briefing(entity_id: str, request: Request) -> PublicBri
     # assembles S7 graph + S3 fundamentals + S6 news, and renders the v3.0
     # INSTRUMENT_BRIEFING prompt.  Calling execute() here would use the
     # portfolio/email brief path with no entity context (PRD-0030 bug fix).
+    #
+    # WHY set_current_jwt here: same rationale as get_morning_briefing — ensures
+    # BaseUpstreamClient._get()/_post() calls to S6/S7 always carry the JWT even
+    # when code paths bypass InternalJWTMiddleware (e.g. tests, background tasks).
+    from rag_chat.infrastructure.clients.auth_context import set_current_jwt
+
+    set_current_jwt(request.headers.get("X-Internal-JWT"))
     uc = _get_briefing_uc(request)
     try:
         result = await uc.execute_public_instrument(entity_id=entity_id)
@@ -339,6 +518,153 @@ async def get_instrument_briefing(entity_id: str, request: Request) -> PublicBri
             log.warning("briefing_cache_write_failed", error=str(e), key=cache_key)  # type: ignore[no-any-return]
 
     return instr_resp
+
+
+# ── W5 T-S8-05: lazy-generate endpoint ───────────────────────────────────────
+
+
+class GenerateBriefResponse(BaseModel):
+    """Response for POST /api/v1/briefings/instrument/{entity_id}/generate.
+
+    status:
+      "cached"  — a valid brief is already in Valkey; returned immediately (HTTP 200).
+      "queued"  — no cached brief; generation was started (HTTP 202).
+
+    WHY brief_id optional: when status="queued", no brief exists yet.
+    The caller should poll GET /v1/briefings/instrument/{entity_id} until the brief
+    appears (Δ27 lazy-generate contract).
+    """
+
+    status: Literal["cached", "queued"]
+    brief_id: str | None = None
+    entity_id: str
+
+
+@router.post("/briefings/instrument/{entity_id}/generate", status_code=200)
+async def generate_instrument_brief(
+    entity_id: str,
+    request: Request,
+) -> Any:
+    """Idempotent lazy-generate endpoint (W5-T-S8-05, Δ27).
+
+    Flow:
+      1. Check Valkey for a cached brief (key: briefing:instrument:v2:{entity_id}).
+         If found → return 200 + status="cached" + brief_id (avoids re-generation).
+      2. Rate-limit: 60 POST calls per user per clock hour via Valkey INCR counter.
+         On excess → 429 + Retry-After header with seconds until next hour.
+      3. Enqueue generation via GenerateBriefingUseCase.execute_public_instrument().
+         If generation fails (503) → propagate. If entity not found (404) → propagate.
+      4. Cache the result (briefing:instrument:v2:{entity_id}) for 24h.
+      5. Return 202 + status="queued" if the brief was newly generated.
+
+    WHY idempotent: multiple simultaneous page loads should not trigger parallel
+    LLM calls for the same entity. The Valkey cache acts as a natural dedup gate.
+
+    WHY 200 (not 201) when cached: the brief was NOT created by this request.
+    FastAPI is configured with status_code=200; cached path returns 200 via Response,
+    queued path returns 202 by raising a response override.
+
+    Auth: InternalJWTMiddleware enforces X-Internal-JWT (PRD-0025).
+    """
+    import math
+
+    user_id = _extract_user_id(request)
+    valkey = _get_valkey(request)
+    cache_key = f"briefing:instrument:v2:{entity_id}"
+
+    # ── Step 1: Cache hit (return 200 immediately) ────────────────────────────
+    if valkey is not None:
+        try:
+            cached = await valkey.get(cache_key)
+            if cached:
+                raw = cached.decode("utf-8") if isinstance(cached, bytes) else cached
+                cached_resp = PublicBriefingResponse.model_validate_json(raw)
+                return GenerateBriefResponse(
+                    status="cached",
+                    brief_id=getattr(cached_resp, "id", None) and str(cached_resp.id),  # type: ignore[attr-defined]
+                    entity_id=entity_id,
+                )
+        except Exception as exc:
+            log.warning("generate_brief_cache_read_failed", entity_id=entity_id, error=str(exc))  # type: ignore[no-any-return]
+
+    # ── Step 2: Rate limit (60 calls per user per clock hour) ────────────────
+    # WHY clock-hour (not rolling window): simpler implementation; acceptable
+    # granularity for a 60/hr quota that resets predictably on the hour.
+    if valkey is not None:
+        now_utc = datetime.now(tz=UTC)
+        hour_bucket = now_utc.strftime("%Y%m%d%H")
+        rate_key = f"brief_gen_rate:{user_id}:{hour_bucket}"
+        try:
+            count = await valkey.incr(rate_key)
+            # WHY EXPIRE only on first increment: avoids resetting TTL on every call.
+            if count == 1:
+                await valkey.expire(rate_key, 3600)
+            if count > 60:
+                # Compute seconds until next full hour boundary.
+                next_hour = now_utc.replace(minute=0, second=0, microsecond=0, tzinfo=UTC) + timedelta(hours=1)
+                retry_after = math.ceil((next_hour - now_utc).total_seconds())
+                raise HTTPException(
+                    status_code=429,
+                    detail=f"Brief generation quota exceeded (60/hour). Retry after {retry_after}s.",
+                    headers={"Retry-After": str(retry_after)},
+                )
+        except HTTPException:
+            raise
+        except Exception as exc:
+            # Fail-open: if Valkey is down, allow generation (prefer availability over strict throttling).
+            log.warning("generate_brief_rate_check_failed", user_id=user_id, error=str(exc))  # type: ignore[no-any-return]
+
+    # ── Step 3: Generate briefing ─────────────────────────────────────────────
+    uc = _get_briefing_uc(request)
+    try:
+        result = await uc.execute_public_instrument(entity_id=entity_id)
+    except RateLimitExceededError as exc:
+        raise HTTPException(status_code=429, detail=str(exc)) from exc
+    except ProviderUnavailableError as exc:
+        raise HTTPException(status_code=503, detail="Briefing generation unavailable") from exc
+    except EntityNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=f"Invalid entity_id: {entity_id}") from exc
+    except Exception as exc:
+        log.error("generate_brief_failed", entity_id=entity_id, error=str(exc))  # type: ignore[no-any-return]
+        raise HTTPException(status_code=503, detail="Briefing generation unavailable") from exc
+
+    # ── Step 4: Cache the newly generated brief ───────────────────────────────
+    response_data = {
+        "narrative": result.get("content", result.get("narrative", "")),
+        "risk_summary": result.get("risk_summary") or {},
+        "citations": result.get("citations", []),
+        "generated_at": result["generated_at"],
+        "cached": False,
+        "entity_id": entity_id,
+        "sections": result.get("sections", []),
+        "confidence": result.get("confidence", 1.0),
+        "lead": result.get("lead"),
+    }
+    new_resp = PublicBriefingResponse(**response_data)
+    if valkey is not None:
+        try:
+            await valkey.set(cache_key, new_resp.model_dump_json(), ex=_CACHE_TTL)
+        except Exception as exc:
+            log.warning("generate_brief_cache_write_failed", entity_id=entity_id, error=str(exc))  # type: ignore[no-any-return]
+
+    log.info("generate_instrument_brief_queued", entity_id=entity_id, user_id=user_id)  # type: ignore[no-any-return]
+
+    # ── Step 5: Return 202 (newly generated) ─────────────────────────────────
+    # WHY 202 via raise: FastAPI's status_code=200 is set at the route level.
+    # To return 202 for the queued case we need a Response object. We use
+    # JSONResponse here to bypass the default Pydantic serialisation.
+    from fastapi.responses import JSONResponse as _JSONResp
+
+    return _JSONResp(  # type: ignore[return-value]
+        status_code=202,
+        content=GenerateBriefResponse(
+            status="queued",
+            brief_id=None,
+            entity_id=entity_id,
+        ).model_dump(),
+    )
 
 
 # ── PLAN-0066 Wave B: brief history endpoint ──────────────────────────────────

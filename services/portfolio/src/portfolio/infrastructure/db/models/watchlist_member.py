@@ -31,3 +31,6 @@ class WatchlistMemberModel(Base):
     name: Mapped[str | None] = mapped_column(String(255), nullable=True, default=None)
     instrument_id: Mapped[uuid.UUID | None] = mapped_column(PGUUID(as_uuid=True), nullable=True, default=None)
     added_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    # REQ-002b (migration 0019): nullable idempotency key. Uniqueness enforced
+    # by partial index ``uq_watchlist_members_watchlist_idempotency_key``.
+    idempotency_key: Mapped[uuid.UUID | None] = mapped_column(PGUUID(as_uuid=True), nullable=True, default=None)

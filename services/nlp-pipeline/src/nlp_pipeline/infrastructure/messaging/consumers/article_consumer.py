@@ -31,7 +31,7 @@ from typing import TYPE_CHECKING, Any, ClassVar
 
 import common.ids  # type: ignore[import-untyped]
 import common.time  # type: ignore[import-untyped]
-from common.ids import uuid5_from_parts  # type: ignore[import-untyped]
+from common.ids import PUBLIC_TENANT_ID, uuid5_from_parts  # type: ignore[import-untyped]
 from messaging.kafka.consumer.base import (  # type: ignore[import-untyped]
     BaseKafkaConsumer,
     ConsumerConfig,
@@ -51,6 +51,7 @@ from nlp_pipeline.application.blocks.suppression import (
     should_generate_chunk_embeddings,
     should_run_deep_extraction,
 )
+from nlp_pipeline.domain.enums import ProcessingPath
 from nlp_pipeline.infrastructure.intelligence_db.repositories.canonical_entity import (
     CanonicalEntityRepository,
 )
@@ -90,6 +91,7 @@ from nlp_pipeline.infrastructure.messaging.consumers.blocks.temporal_events impo
 )
 from nlp_pipeline.infrastructure.metrics.prometheus import (
     record_article_processed,
+    record_pre_persist_tenant_substituted,
     s6_embeddings_created_total,
     s6_intel_commit_failures_total,
     s6_ner_mentions_total,
@@ -125,6 +127,7 @@ if TYPE_CHECKING:
     from messaging.valkey.client import ValkeyClient  # type: ignore[import-untyped]
     from nlp_pipeline.application.ports.repositories import ChunkTextStorePort
     from nlp_pipeline.config import Settings
+    from nlp_pipeline.domain.models import EntityMention
     from nlp_pipeline.infrastructure.backpressure.controller import BackpressureController
     from nlp_pipeline.infrastructure.nlp_db.repositories.outbox import OutboxRepository as OutboxRepositoryT
     from nlp_pipeline.infrastructure.valkey.watchlist_cache import WatchlistCache
@@ -163,6 +166,34 @@ def _is_valid_uuid(s: str) -> bool:
         return True
     except (ValueError, AttributeError):
         return False
+
+
+def _infer_block_source(mention: EntityMention) -> str:
+    """Best-effort classifier mapping an offending mention back to its block.
+
+    PLAN-0099 W2 T-W2-04 instrumentation.  Used only when the pre-persist
+    safety net fires (``tenant_id is None`` at persist boundary), so this is
+    not on the hot path.  We inspect domain fields that each block stamps:
+
+    * Block 9 PROVISIONAL path → ``provisional_queue_id`` is set
+    * Block 9 resolution path  → ``resolution_outcome`` is set
+    * Block 4 NER              → only ``ner_model_id`` is set
+    * Otherwise                → "unknown" (fall-through enum value)
+
+    Block 10 (deep extraction) does not currently emit ``EntityMention`` rows
+    but the enum reserves ``"deep_extraction"`` for forward-compat.
+
+    The label vocabulary is bounded by ``PRE_PERSIST_BLOCK_SOURCES`` in
+    ``infrastructure.metrics.prometheus`` to prevent Prometheus cardinality
+    explosion.
+    """
+    if mention.provisional_queue_id is not None:
+        return "novelty_backfill"
+    if mention.resolution_outcome is not None:
+        return "entity_resolution"
+    if mention.ner_model_id is not None:
+        return "ner"
+    return "unknown"
 
 
 class _NoOpUnitOfWork:
@@ -450,11 +481,31 @@ class ArticleProcessingConsumer(ValkeyDedupMixin, BaseKafkaConsumer[None]):
         correlation_id: str | None = value.get("correlation_id") or None
         source_name: str | None = value.get("source_name")
 
+        # ── Tenant resolution with legacy-passthrough sentinel (PLAN-0096 W4) ──
+        # Pre-PLAN-0086 Avro payloads have no ``tenant_id`` field.  Migration
+        # 0020 added ``NOT NULL`` on ``entity_mentions.tenant_id``; without a
+        # sentinel, every legacy message dies on the INSERT, the consumer's
+        # exception handler treats it as retryable, offsets never commit,
+        # and the topic stalls (BP-575).  Substitute ``PUBLIC_TENANT_ID``
+        # for any missing / unparseable tenant so the row inserts cleanly
+        # and the offset advances — the row is still identifiable in
+        # forensics because the sentinel is the all-zero UUID.
         raw_tenant = headers.get("tenant_id") or value.get("tenant_id") or None
         tenant_id: uuid.UUID | None = None
         if raw_tenant:
             with contextlib.suppress(ValueError, AttributeError):
                 tenant_id = uuid.UUID(str(raw_tenant))
+        if tenant_id is None:
+            tenant_id = PUBLIC_TENANT_ID
+            logger.warning(  # type: ignore[no-any-return]
+                "article_consumer.legacy_tenant_id_sentinel_applied",
+                article_id=str(doc_id),
+                topic=_TOPIC,
+                partition=headers.get("__partition"),
+                offset=headers.get("__offset"),
+                raw_tenant=raw_tenant,
+                sentinel=str(PUBLIC_TENANT_ID),
+            )
 
         raw_published = value.get("published_at")
         published_at: datetime | None = None
@@ -519,11 +570,34 @@ class ArticleProcessingConsumer(ValkeyDedupMixin, BaseKafkaConsumer[None]):
         # Block 3: Sectioning
         text = await self._download_article(minio_key)
         word_count: int = len(text.split())
+
+        # RC-1: stub-article filter — skip articles below the minimum word count.
+        # Finnhub (~91% stub rate) and SEC Edgar (~52% stub rate) frequently emit
+        # headline-only records that have no relational signal but consume NER,
+        # embedding, and LLM extraction budget. The word count is computed on the
+        # raw downloaded text (not the message envelope field) because the envelope
+        # field may be absent or stale for older events. Early return prevents all
+        # downstream blocks from running; the document remains in content_store but
+        # is not indexed in the NLP pipeline.
+        if word_count < self._settings.min_word_count:  # type: ignore[attr-defined]
+            logger.info(  # type: ignore[no-any-return]
+                "article_consumer.stub_filtered",
+                doc_id=str(doc_id),
+                word_count=word_count,
+                min_word_count=self._settings.min_word_count,  # type: ignore[attr-defined]
+                source_type=source_type,
+            )
+            return
+
         sections = section_document(doc_id, text, source_type)
         if tenant_id is not None:
             sections = [dataclasses.replace(s, tenant_id=tenant_id) for s in sections]
 
-        # Block 4: NER + deterministic mention IDs (PLAN-0084 B-3)
+        # Block 4: NER + deterministic mention IDs (PLAN-0084 B-3).
+        # PLAN-0093 B-3 T-B-3-04: pass tenant_id through so EntityMention is
+        # constructed with it (avoids the post-construction stamp going
+        # missing in any future refactor).  The explicit post-construction
+        # stamp below is retained as a belt-and-braces safeguard.
         mentions, stats = await run_ner_block(
             doc_id=doc_id,
             sections=sections,
@@ -532,17 +606,35 @@ class ArticleProcessingConsumer(ValkeyDedupMixin, BaseKafkaConsumer[None]):
             batch_size=self._settings.gliner_batch_size,
             ner_model_id=self._settings.ner_model_id,
             section_token_limit=self._settings.gliner_section_token_limit,
+            tenant_id=tenant_id,
         )
         for _i, m in enumerate(mentions):
             m.mention_id = uuid.UUID(uuid5_from_parts(str(doc_id), str(_i), m.mention_text.lower().strip()))
-        if tenant_id is not None:
-            for m in mentions:
-                m.tenant_id = tenant_id
+        # PLAN-0098 W2 T-W2-01 (BP-586): unconditional stamp.  ``tenant_id`` is
+        # guaranteed non-None at this point (sentinel ``PUBLIC_TENANT_ID`` is
+        # substituted for legacy/missing tenants in ``process_message``).  The
+        # previous ``if tenant_id is not None`` guard was redundant; removing
+        # it makes the intent obvious and prevents any future regression where
+        # an upstream block constructs a mention with ``tenant_id=None``.
+        #
+        # PLAN-0099 W4 T-W4-02 (audit §13.6): defence-in-depth — even though
+        # the envelope-level sentinel substitution earlier in
+        # ``process_message`` guarantees ``tenant_id`` is non-None here, an
+        # upstream refactor could silently break that precondition. Falling
+        # back to ``PUBLIC_TENANT_ID`` at the stamp site preserves the
+        # NOT-NULL invariant on ``entity_mentions.tenant_id`` (migration
+        # 0020) without any reliance on the upstream guard. Cost: zero —
+        # the substitution only fires in the regression case.
+        _stamp_tenant = tenant_id or PUBLIC_TENANT_ID
+        for m in mentions:
+            m.tenant_id = _stamp_tenant
         s6_ner_mentions_total.inc(len(mentions))
 
         # Blocks 5-6: Routing + suppression
-        watched_ids = await self._watchlist.get_all_watched()
-        price_impact = await self._fetch_price_impact(doc_id)
+        # PLAN-0093 C-1: watched_ids + price_impact no longer feed compute_routing_score
+        # (the 3 dead signals are dropped). watched_ids is still fetched downstream for
+        # other features, so we keep the call. price_impact lookup is dropped here — it
+        # was always returning 0.0 anyway (article_impact_windows is empty until C-3).
         routing_decision = compute_routing_score(
             doc_id=doc_id,
             decision_id=uuid.UUID(uuid5_from_parts(str(doc_id), "routing_decision")),
@@ -552,9 +644,6 @@ class ArticleProcessingConsumer(ValkeyDedupMixin, BaseKafkaConsumer[None]):
             mentions=mentions,
             section_count=len(sections),
             source_trust_weight=_DEFAULT_SOURCE_TRUST,
-            novelty_score=1.0,
-            watched_entity_ids=watched_ids,
-            price_impact_score=price_impact,
             tier_deep=self._settings.routing_tier_deep,
             tier_medium=self._settings.routing_tier_medium,
             tier_light=self._settings.routing_tier_light,
@@ -620,6 +709,41 @@ class ArticleProcessingConsumer(ValkeyDedupMixin, BaseKafkaConsumer[None]):
                 _canonical_repo=canonical_entity_repo,
                 _mention_resolution_repo=mention_resolution_repo,
             )
+            # ── Pre-persist tenant_id safety net (PLAN-0098 W2 T-W2-01) ──
+            # Defence-in-depth against any current or future code path that
+            # constructs an ``EntityMention`` without propagating ``tenant_id``
+            # (e.g. entity resolution, deep extraction, novelty backfill).  The
+            # ``entity_mentions.tenant_id`` column is ``NOT NULL`` (migration
+            # 0020); a single mention with ``tenant_id=None`` fails the INSERT,
+            # the exception is treated as retryable, and the topic stalls
+            # forever (BP-575/BP-586).  We substitute ``PUBLIC_TENANT_ID`` so
+            # the row writes cleanly and emit a WARN with the mention metadata
+            # so a forensic analyst can identify the offending upstream block.
+            _missing_mentions = [m for m in ml.final_mentions if m.tenant_id is None]
+            _missing_tenant: list[uuid.UUID] = [m.mention_id for m in _missing_mentions]
+            if _missing_tenant:
+                logger.warning(  # type: ignore[no-any-return]
+                    "article_consumer.pre_persist_tenant_id_substituted",
+                    doc_id=str(doc_id),
+                    missing_count=len(_missing_tenant),
+                    total_mentions=len(ml.final_mentions),
+                    sample_mention_ids=[str(mid) for mid in _missing_tenant[:5]],
+                    sentinel=str(PUBLIC_TENANT_ID),
+                    fallback_tenant_id=str(tenant_id) if tenant_id is not None else str(PUBLIC_TENANT_ID),
+                )
+                # PLAN-0099 W2 T-W2-04: attribute each substitution to the
+                # upstream block that produced the offending mention so
+                # operators can query Prometheus and identify the dominant
+                # source of null tenant_ids (feeds PLAN-0100 §13.4 root-cause).
+                # Cardinality is bounded by the fixed enum in
+                # ``metrics.prometheus.PRE_PERSIST_BLOCK_SOURCES``.
+                for _m in _missing_mentions:
+                    record_pre_persist_tenant_substituted(_infer_block_source(_m))
+                _fallback_tenant = tenant_id if tenant_id is not None else PUBLIC_TENANT_ID
+                for m in ml.final_mentions:
+                    if m.tenant_id is None:
+                        m.tenant_id = _fallback_tenant
+
             # persist_artifacts writes only DB rows; event emission is below
             # so tests can patch _enqueue_enriched etc. at article_consumer.
             # Pass pre-built repos so tests can patch them at article_consumer.
@@ -646,40 +770,63 @@ class ArticleProcessingConsumer(ValkeyDedupMixin, BaseKafkaConsumer[None]):
             )
 
             # ── Outbox event emission (all within the open nlp_s transaction) ──
-            await _enqueue_enriched(
-                outbox_repo=outbox_repo,
-                settings=self._settings,
-                doc_id=doc_id,
-                source_type=source_type,
-                source_name=source_name,
-                published_at=published_at,
-                is_backfill=is_backfill,
-                routing_decision=routing_decision,
-                sections=sections,
-                chunks=chunks,
-                mentions=final_mentions,
-                extraction_result=ml.extraction_result,
-                correlation_id=correlation_id,
-                extraction_model_id=(
-                    self._settings.extraction_model_id if should_run_deep_extraction(ml.final_path) else None
-                ),
-            )
-            if ml.signals:
-                await _enqueue_signal_events(
+            # W1-01 (BUG-001): SUPPRESS-tier articles (ProcessingPath.HALT) must NOT
+            # emit nlp.article.enriched.v1 — S7 would consume an empty document and
+            # pollute the knowledge graph with dead-weight relations from zero-
+            # extraction documents.  We also skip signal events and temporal events
+            # because both require extraction output that does not exist on HALT
+            # (deep extraction is gated by should_run_deep_extraction(HALT)==False
+            # so ml.extraction_result["events"] is empty and ml.signals is empty).
+            # Block 8 (price-impact labelling) is a SEPARATE worker (see
+            # workers/price_impact_labelling_worker.py) and still runs against the
+            # routing_decisions row written by persist_artifacts above — this gate
+            # only affects the three outbox emissions below.
+            if ml.final_path == ProcessingPath.HALT:
+                tier_value = (
+                    routing_decision.routing_tier.value
+                    if hasattr(routing_decision.routing_tier, "value")
+                    else routing_decision.routing_tier
+                )
+                logger.info(  # type: ignore[no-any-return]
+                    "article_suppressed_skipping_enriched_event",
+                    doc_id=str(doc_id),
+                    routing_tier=tier_value,
+                )
+            else:
+                await _enqueue_enriched(
                     outbox_repo=outbox_repo,
                     settings=self._settings,
-                    signals=ml.signals,
                     doc_id=doc_id,
+                    source_type=source_type,
+                    source_name=source_name,
+                    published_at=published_at,
                     is_backfill=is_backfill,
+                    routing_decision=routing_decision,
+                    sections=sections,
+                    chunks=chunks,
+                    mentions=final_mentions,
+                    extraction_result=ml.extraction_result,
                     correlation_id=correlation_id,
+                    extraction_model_id=(
+                        self._settings.extraction_model_id if should_run_deep_extraction(ml.final_path) else None
+                    ),
                 )
-            await _maybe_emit_temporal_events(
-                outbox_repo=outbox_repo,
-                settings=self._settings,
-                doc_id=doc_id,
-                published_at=published_at,
-                ml=ml,
-            )
+                if ml.signals:
+                    await _enqueue_signal_events(
+                        outbox_repo=outbox_repo,
+                        settings=self._settings,
+                        signals=ml.signals,
+                        doc_id=doc_id,
+                        is_backfill=is_backfill,
+                        correlation_id=correlation_id,
+                    )
+                await _maybe_emit_temporal_events(
+                    outbox_repo=outbox_repo,
+                    settings=self._settings,
+                    doc_id=doc_id,
+                    published_at=published_at,
+                    ml=ml,
+                )
             if tenant_id is not None:
                 await _enqueue_document_ready(
                     outbox_repo=outbox_repo,

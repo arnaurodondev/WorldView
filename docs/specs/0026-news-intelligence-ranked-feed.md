@@ -12,7 +12,7 @@
 
 Worldview's intelligence pipeline has accumulated three distinct relevance signals for news articles:
 
-1. **Routing score** (`routing_decisions.composite_score`) — a composite of 8 signals (entity density, source reliability, novelty, recency, watchlist, price impact, document type, extraction yield) computed in real-time at ingestion. Designed to route articles to the correct NLP processing tier (LIGHT/MEDIUM/DEEP), not for user display.
+1. **Routing score** (`routing_decisions.composite_score`) — originally a composite of 8 signals (entity density, source reliability, novelty, recency, watchlist, price impact, document type, extraction yield) computed in real-time at ingestion. **Routing signal v2 (PLAN-0093 Sub-Plan C Wave C-1, 2026-05-23): the `novelty`, `watchlist`, and `price_impact` signals were dropped** because they could never fire in single-pass routing — novelty/watchlist depend on outputs (MinHash, entity resolution) that run AFTER routing, and `price_impact` sourced from an empty `article_impact_windows` table. The remaining 5 signals (entity density, source reliability, recency, document type, extraction yield) are re-weighted to sum to 1.0. Re-adding the dropped signals requires implementing two-pass routing first. See `docs/services/nlp-pipeline.md#block-5--routing-score` for the active weight table.
 
 2. **Market impact score** (`article_price_impacts.impact_score`) — retrospective correlation between article publication and stock price movement. A factual, ground-truth signal, but carries a mandatory 25h lag (needs next-day OHLCV). Currently stored in a single-window flat table; no temporal granularity.
 

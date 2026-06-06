@@ -8,6 +8,15 @@ from uuid import UUID
 
 from pydantic import BaseModel, Field, field_validator
 
+# F-ARCH-001 (QA-PLAN-0093 iter-9): PublicBriefingResponse moved to the
+# application layer so the morning-brief pre-generation worker can import it
+# without violating LAYER-APP-ISOLATION (R25). Re-exported here so all API
+# routes, tests, and external callers continue to import it from this module.
+from rag_chat.application.schemas import (
+    PublicBriefingResponse,
+    _coerce_sections_to_dicts,
+)
+
 # WHY import from domain: BriefCitation/BriefBullet/BriefSection are domain
 # value objects used by the application-layer use case (generate_briefing.py).
 # Defining them here would force the use case to import from api (LAYER-APP-
@@ -24,76 +33,16 @@ from pydantic import BaseModel, Field, field_validator
 # and reader in routes/public_briefings.py.
 from rag_chat.domain.brief import BriefBullet, BriefCitation, BriefSection
 
-__all__ = ["BriefBullet", "BriefCitation", "BriefSection"]
+__all__ = [
+    "BriefBullet",
+    "BriefCitation",
+    "BriefSection",
+    "PublicBriefingResponse",
+]
 
 
-def _normalize_legacy_citation_keys(section: dict[str, Any]) -> dict[str, Any]:
-    """Rewrite legacy ``source_id`` citation keys to canonical ``document_id``.
-
-    WHY this helper exists (QA-PLAN-0083 F-001 / Data Platform): when the
-    response model is rehydrated from a Valkey cache blob via
-    ``model_validate_json``, sections come through as plain dicts and the
-    ``BriefCitation.from_dict`` legacy-alias handling is bypassed (we never
-    invoke ``from_dict`` on the cache-read path). If a cached blob still
-    contains ``source_id`` keys (theoretically possible during a long
-    rolling deploy from pre-PLAN-0062-W4 code), they would leak through to
-    the wire response. This walker converts ``source_id → document_id`` on
-    every citation so the API response contract is uniform regardless of
-    cache vintage.
-
-    Behaviour: if BOTH ``document_id`` and ``source_id`` are present, the
-    canonical ``document_id`` wins (matching ``BriefCitation.from_dict``);
-    the legacy key is dropped from the output dict.
-    """
-    bullets = section.get("bullets")
-    if not isinstance(bullets, list):
-        return section
-    for bullet in bullets:
-        if not isinstance(bullet, dict):
-            continue
-        cits = bullet.get("citations")
-        if not isinstance(cits, list):
-            continue
-        for cit in cits:
-            if not isinstance(cit, dict):
-                continue
-            if "source_id" in cit:
-                # Canonical key wins if both are present; otherwise promote.
-                if "document_id" not in cit:
-                    cit["document_id"] = cit["source_id"]
-                del cit["source_id"]
-    return section
-
-
-def _coerce_sections_to_dicts(value: Any) -> list[dict[str, Any]]:
-    """Normalise ``sections`` input to ``list[dict]`` for JSON serialisation.
-
-    WHY this helper: callers historically construct ``BriefingResponse(sections=[BriefSection(...)])``
-    passing dataclass instances. After PLAN-0083, the response model stores
-    ``list[dict]`` so JSON round-trip via ``model_dump_json`` / ``model_validate_json``
-    keeps working. This validator accepts EITHER dataclass instances or plain
-    dicts (cache reads come back as dicts after JSON parse) and emits dicts.
-
-    Legacy alias normalisation: dict-shaped entries pass through
-    ``_normalize_legacy_citation_keys`` so any cached blob that still carries
-    ``source_id`` (pre-PLAN-0062-W4 vintage) is rewritten to ``document_id``
-    before reaching the wire (QA-PLAN-0083 F-001 / Data Platform).
-    """
-    if value is None:
-        return []
-    out: list[dict[str, Any]] = []
-    for item in value:
-        if isinstance(item, BriefSection):
-            # WHY to_dict: domain dataclass → JSON-serialisable dict per
-            # PLAN-0083 §3 Pattern 1 (preferred over arbitrary_types_allowed).
-            out.append(item.to_dict())
-        elif isinstance(item, dict):
-            # Already a dict (e.g. legacy parser output, cache read) — normalise
-            # citation keys before passing through.
-            out.append(_normalize_legacy_citation_keys(item))
-        else:
-            raise TypeError(f"sections entries must be BriefSection or dict, got {type(item).__name__}")
-    return out
+# NOTE: ``_normalize_legacy_citation_keys`` and ``_coerce_sections_to_dicts``
+# are imported above from ``rag_chat.application.schemas`` (F-ARCH-001 move).
 
 
 # ── Request schemas ───────────────────────────────────────────────────────────
@@ -190,12 +139,34 @@ class CreateThreadResponse(BaseModel):
 
 
 class MessageResponse(BaseModel):
+    """Serialised message returned in thread history responses.
+
+    Q-9: Extended with optional debug/observability fields that are already
+    persisted in the ``messages`` table.  All new fields default to ``None``
+    so responses for legacy rows (NULL columns) remain valid (R11: forward-
+    compatible schema changes).
+    """
+
     message_id: UUID
     role: str
     content: str
     intent: str | None
     citations: list[dict[str, Any]]
     created_at: datetime
+    # Q-9: fields persisted in the DB but previously omitted from the history
+    # API.  All nullable — legacy rows (pre-Q-9) have NULL in these columns.
+    # WHY None default (not empty list): returning None vs [] distinguishes
+    # "never populated" from "populated with zero items"; clients can guard on
+    # ``is not None`` if they want to render debug panels.
+    provider: str | None = None
+    model: str | None = None
+    latency_ms: int | None = None
+    resolved_entities: list[dict[str, Any]] | None = None
+    retrieval_plan: dict[str, Any] | None = None
+    # WHY "contradictions" (not "contradiction_refs"): the DB column is
+    # ``contradiction_refs`` but the API surface uses the friendlier name
+    # ``contradictions``, matching EntityContextChatResponse and ChatResponse.
+    contradictions: list[dict[str, Any]] | None = None
 
 
 class ThreadSummaryResponse(BaseModel):
@@ -281,6 +252,13 @@ class BriefingResponse(BaseModel):
     # WHY max_length=1000: v3.0 prompt allows 1-3 sentences; on high-activity
     # days or large portfolios three dense sentences can approach 600 chars.
     lead: str | None = Field(default=None, max_length=1000)
+    # PLAN-0103 W3 (BP-624): collapsed-view summary paragraph.
+    # PLAN-0103 W11 (v4.5): max_length bumped 600 → 1600 to accommodate the
+    # adaptive Summary length (target ~100 words, up to 200 words for large
+    # portfolios / very active days ≈ 1400 chars; 1600 leaves headroom).
+    # See PublicBriefingResponse for full rationale. Optional + default None
+    # preserves wire compatibility (R11).
+    summary_paragraph: str | None = Field(default=None, max_length=1600)
 
     # WHY mode="before": runs prior to Pydantic's own list validation so we can
     # accept dataclass instances passed in from the use case layer.
@@ -291,49 +269,6 @@ class BriefingResponse(BaseModel):
 
 
 # ── Public briefing schemas (PLAN-0029 T-2-01) ───────────────────────────────
-
-
-class PublicBriefingResponse(BaseModel):
-    """Response for GET /api/v1/briefings/* (called via S9 proxy).
-
-    Extends BriefingResponse with ``cached`` flag and optional ``entity_id``
-    to indicate cache hits and instrument-specific briefings.
-
-    PLAN-0048 Wave A added ``summary`` (1-2 sentence headline) — emitted by the
-    v2.2 MORNING_BRIEFING prompt's ``## SUMMARY`` block and consumed by the
-    frontend MorningBriefCard collapsed view. ``None`` on legacy/instrument
-    briefs (forward-compatible).
-
-    PLAN-0062-W4 added ``confidence`` and ``lead`` — same semantics as
-    BriefingResponse. Both default to safe values for backward compatibility.
-    """
-
-    # PLAN-0066 Wave F: expose the DB id of the persisted brief so the frontend
-    # can use it in feedback and alert-prefill POST requests. Optional because
-    # cached responses generated before the archive write-path was wired (Wave A)
-    # won't have this field. The frontend guards on ``brief_id is not None`` before
-    # rendering feedback widgets.
-    id: str | None = None
-    narrative: str
-    risk_summary: dict[str, Any] = {}
-    citations: list[dict[str, Any]] = []
-    generated_at: str
-    cached: bool = False
-    entity_id: str | None = None
-    # WHY default None: instrument briefs and any cached responses generated
-    # before v2.2 will lack this field. The frontend treats None as "no two-tier
-    # output available — render clamp-3 of narrative as before".
-    summary: str | None = None
-    # WHY list[dict[str, Any]]: see BriefingResponse.sections comment above.
-    sections: list[dict[str, Any]] = Field(default_factory=list)
-    # WHY default=1.0: safe fallback; no amber warning badge shown when all
-    # cached briefs lack this field after the first deploy.
-    confidence: float = Field(default=1.0, ge=0.0, le=1.0)
-    # WHY max_length=1000: mirrors BriefingResponse.lead — 1-3 sentences fit
-    # comfortably within 1000 chars even on dense financial-domain prose.
-    lead: str | None = Field(default=None, max_length=1000)
-
-    @field_validator("sections", mode="before")
-    @classmethod
-    def _validate_sections(cls, v: Any) -> list[dict[str, Any]]:
-        return _coerce_sections_to_dicts(v)
+# PublicBriefingResponse moved to ``rag_chat.application.schemas`` (F-ARCH-001
+# / LAYER-APP-ISOLATION). Re-exported at the top of this module so all imports
+# from ``rag_chat.api.schemas`` continue to work unchanged.

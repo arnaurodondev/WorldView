@@ -18,7 +18,11 @@ import signal
 import sys
 from typing import Any
 
-from observability import configure_logging, get_logger  # type: ignore[import-untyped]
+from observability import (  # type: ignore[import-untyped]
+    configure_logging,
+    get_logger,
+    start_metrics_server,
+)
 
 logger = get_logger(__name__)  # type: ignore[no-any-return]
 
@@ -41,6 +45,12 @@ async def main() -> None:
     log = get_logger("knowledge_graph.scheduler_main")  # type: ignore[no-any-return]
     log.info("scheduler_starting", service="knowledge-graph")
 
+    # Phase 1 of worker-metrics rollout replaced the legacy
+    # `prometheus_client.start_http_server(9108)` call with the shared ASGI
+    # helper (see `metrics_handle = start_metrics_server(...)` below). The
+    # historical call has been removed — leaving both produced a double-bind
+    # on port 9108 (EADDRINUSE) that crashed the scheduler in a restart loop.
+
     stop_event = asyncio.Event()
 
     def _handle_signal(sig: int) -> None:
@@ -50,6 +60,17 @@ async def main() -> None:
     loop = asyncio.get_running_loop()
     for sig in (signal.SIGTERM, signal.SIGINT):
         loop.add_signal_handler(sig, _handle_signal, sig)
+
+    # PLAN-0028 worker-metrics rollout phase 1: replace the historical
+    # ad-hoc ``prometheus_client.start_http_server(9108)`` call with the
+    # shared ASGI helper so this scheduler also exposes /healthz and
+    # cleanly shuts down with the rest of the asyncio loop.  Port 9108
+    # is preserved for backwards compatibility with the existing
+    # Prometheus scrape job.
+    metrics_handle = start_metrics_server(
+        service_name="knowledge-graph-scheduler",
+        port=9108,
+    )
 
     # DEF-034 (Wave B-5): bind both engines + factories so the read replica is
     # threaded into ``build_workers`` and disposed in the teardown block below.
@@ -203,6 +224,12 @@ async def main() -> None:
     finally:
         with contextlib.suppress(Exception):
             await scheduler.stop()
+        # Stop the metrics ASGI server before disposing engines so its
+        # background task does not outlive the process loop.  aclose()
+        # is best-effort — its failure must not mask the original
+        # shutdown reason.
+        with contextlib.suppress(Exception):
+            await metrics_handle.aclose()
         await engine.dispose()
         # DEF-034 (Wave B-5): dispose the read-replica engine alongside the
         # write engine.  Suppressed because a teardown failure must never

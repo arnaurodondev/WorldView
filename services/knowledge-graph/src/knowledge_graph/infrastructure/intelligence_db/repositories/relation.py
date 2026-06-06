@@ -64,12 +64,12 @@ class RelationRepository(RelationRepositoryPort):
 INSERT INTO relations (
     subject_entity_id, canonical_type, object_entity_id,
     semantic_mode, decay_class, decay_alpha, base_confidence,
-    confidence_stale, summary_stale,
+    confidence, confidence_stale, summary_stale,
     first_evidence_at, latest_evidence_at, evidence_count
 ) VALUES (
     :subject_entity_id, :canonical_type, :object_entity_id,
     :semantic_mode, :decay_class, :decay_alpha, :base_confidence,
-    true, true,
+    :base_confidence, true, true,
     now(), now(), 1
 )
 ON CONFLICT (subject_entity_id, canonical_type, object_entity_id) DO UPDATE SET

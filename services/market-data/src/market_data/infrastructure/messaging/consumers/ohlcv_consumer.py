@@ -8,6 +8,7 @@ from decimal import Decimal
 from typing import TYPE_CHECKING, Any, cast
 
 from contracts.canonical.ohlcv import CanonicalOHLCVBar  # type: ignore[import-untyped]
+from market_data.domain._ticker_normalize import _normalize_ticker
 from market_data.domain.entities import Instrument, OHLCVBar, Security
 from market_data.domain.enums import Provider, Timeframe
 from market_data.domain.events import InstrumentDiscovered, InstrumentUpdated
@@ -161,7 +162,10 @@ class OHLCVConsumer(ValkeyDedupMixin, BaseKafkaConsumer[dict]):
 
         bucket = value["canonical_ref_bucket"]
         object_key = value["canonical_ref_key"]
-        symbol = value["symbol"]
+        # PLAN-0089 F2 step 7: canonicalise ticker at the ingestion boundary so
+        # the DB only ever holds the dot-form (BRK.B, not BRK-B/BRK/B).  Read
+        # paths intentionally do NOT renormalise — they trust the DB form.
+        symbol = _normalize_ticker(value["symbol"])
         exchange = value.get("exchange") or ""
         provider_str = value.get("provider", "unknown")
         timeframe_str = value.get("timeframe") or "1d"

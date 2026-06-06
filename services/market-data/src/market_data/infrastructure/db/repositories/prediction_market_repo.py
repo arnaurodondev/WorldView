@@ -209,7 +209,20 @@ class PgPredictionMarketRepository(PredictionMarketRepository):
             params["query_like"] = f"%{safe_query}%"
 
         where_sql = (" WHERE " + " AND ".join(predicates)) if predicates else ""
-        full_sql = base + where_sql + " ORDER BY m.updated_at DESC LIMIT :limit OFFSET :offset"
+        # WHY COALESCE(volume_24h, 0) DESC first: surfaces active/liquid markets
+        # (high-volume = recently traded, real price discovery). Previous
+        # updated_at DESC sorted by ingestion-crawler touch time — stale 900-day
+        # markets were bumped by metadata refreshes, flooding the dashboard with
+        # noise at 1%Y/99%N fixed prices. close_time ASC as secondary key shows
+        # nearest-to-resolving markets first within the same volume tier, giving
+        # the widget a useful "urgency" signal on ties (e.g. two $100k markets:
+        # one closes in 3d, the other in 30d — show the 3d one first).
+        full_sql = (
+            base
+            + where_sql
+            + " ORDER BY COALESCE(latest.volume_24h, 0) DESC, m.close_time ASC, m.updated_at DESC"
+            + " LIMIT :limit OFFSET :offset"
+        )
 
         result = await self._session.execute(text(full_sql).bindparams(**params))
         rows = result.fetchall()

@@ -187,6 +187,21 @@ class DocumentSourceMetadataRepository(ABC):
         """Return metadata keyed by doc_id; only present doc_ids are included."""
         ...
 
+    @abstractmethod
+    async def get_entity_sentiment_timeseries(
+        self,
+        entity_id: UUID,
+        days: int,
+        tenant_id: str | None = None,
+    ) -> list[dict[str, object]]:
+        """Return daily sentiment aggregates for an entity over the last N days.
+
+        Each element has: date (str YYYY-MM-DD), article_count (int),
+        avg_relevance (float|None), positive_ratio (float|None),
+        negative_ratio (float|None), avg_impact_score (float|None).
+        """
+        ...
+
 
 # ── PriceImpact repository port ───────────────────────────────────────────────
 
@@ -305,6 +320,7 @@ class NewsQueryPort(ABC):
         offset: int,
         min_display_score: float | None,
         routing_tier: str | None,
+        tickers: list[str] | None = None,
     ) -> tuple[list[RankedArticleData], int]:
         """Return top-N globally ranked articles within the given hour window.
 
@@ -317,6 +333,8 @@ class NewsQueryPort(ABC):
             offset: Pagination offset.
             min_display_score: Exclude articles below this score (``None`` = no filter).
             routing_tier: Filter by effective routing tier (``None`` = all tiers).
+            tickers: Optional list of ticker symbols to filter by primary entity
+                (e.g. ``["AAPL", "MSFT"]``). ``None`` = no ticker filter (global feed).
 
         Returns:
             ``(articles, total_count)`` — total_count is computed before LIMIT/OFFSET.

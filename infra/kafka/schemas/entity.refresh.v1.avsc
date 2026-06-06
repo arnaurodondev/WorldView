@@ -1,0 +1,15 @@
+{
+  "type": "record",
+  "name": "EntityRefreshV1",
+  "namespace": "com.worldview.intelligence",
+  "doc": "Emitted by S7 TriggerEntityRefreshUseCase (POST /api/v1/entities/{id}/refresh) when a user manually requests entity re-enrichment. Consumed by S6 EntityRefreshConsumer to mark entity_embedding_state rows as due for refresh, which triggers S7 DefinitionRefreshWorker on its next cycle. All fields have defaults for forward-compatibility (R11).",
+  "fields": [
+    {"name": "event_id",             "type": "string", "default": "",    "doc": "UUIDv7 event identifier"},
+    {"name": "schema_version",       "type": "int",    "default": 1,     "doc": "Schema version for forward-compat tracking"},
+    {"name": "occurred_at",          "type": "string", "default": "",    "doc": "ISO-8601 UTC timestamp when the refresh was requested"},
+    {"name": "tenant_id",            "type": "string", "default": "",    "doc": "Tenant UUID, empty when not scoped"},
+    {"name": "entity_id",            "type": "string", "default": "",    "doc": "Canonical entity UUID to refresh (also Kafka key)"},
+    {"name": "triggered_by_user_id", "type": "string", "default": "",    "doc": "User-ID who triggered the refresh (audit / rate-limit attribution)"},
+    {"name": "refresh_type",         "type": "string", "default": "all", "doc": "description | narrative | all"}
+  ]
+}

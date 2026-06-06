@@ -1,0 +1,98 @@
+"""PLAN-0103 W26 / BP-644 — entity-grounding guard text-token fallback.
+
+Round 2 chat benchmark Q4 (TSLA gross margin) refused because the singular
+``get_fundamentals_history`` handler did not set ``citation_meta.entity_name``
+on its RetrievedItem. The BP-605 guard saw an empty entity-id set and
+short-circuited to a refusal — the exact "data returned referenced different
+entities" Round 2 fingerprint.
+
+W26 ships two complementary fixes:
+  * the singular handler now binds ``entity_name=<ticker>`` on the item
+    (regression covered in test_fundamentals_snapshot.py);
+  * the guard now ALSO scans each item's ``text`` for whole-word matches of
+    any question entity token, so items rendered without a citation_meta
+    (legacy handlers, future tools) still pass the grounding check when the
+    ticker is visible in the rendered output.
+
+These tests pin BOTH halves so a future revert of either path is caught.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+from typing import Any
+
+import pytest
+from rag_chat.application.use_cases.chat_orchestrator import _check_entity_grounding
+
+pytestmark = pytest.mark.unit
+
+
+@dataclass
+class _FakeItem:
+    """Minimal stand-in for ``RetrievedItem`` — only the attrs the guard reads."""
+
+    text: str = ""
+    entity_id: str | None = None
+    citation_meta: Any = None
+
+
+def test_item_with_no_citation_meta_passes_when_text_has_question_token() -> None:
+    """The TSLA gross-margin regression: text-only match must admit the item."""
+    item = _FakeItem(
+        text=(
+            "TSLA quarterly fundamentals (Periodicity: QUARTERLY)\n"
+            "| Period | Revenue | EPS |\n"
+            "| Q1 FY2026 | $25.5B | 0.73 |"
+        ),
+        entity_id=None,
+        citation_meta=None,
+    )
+    result = _check_entity_grounding([item], {"tsla"})
+    assert result is None, "text-token fallback failed to admit a valid TSLA item"
+
+
+def test_unrelated_item_still_refused() -> None:
+    """Defence: an item with neither metadata nor text mention must refuse.
+
+    Pre-W26 this returned a refusal too, so the test pins the failure-mode
+    boundary remains unchanged.
+    """
+    item = _FakeItem(
+        text="NVDA quarterly fundamentals\n| Q1 FY2026 | $44.0B |",
+        entity_id="nvda-uuid",
+        citation_meta=None,
+    )
+    result = _check_entity_grounding([item], {"tsla"})
+    assert result is not None
+    assert "different entities" in result
+
+
+def test_substring_match_does_not_admit() -> None:
+    """Whole-word check: "TS" should NOT match because of the 2-char floor.
+
+    But "TSLA" inside "TSLA," or "TSLA:" SHOULD match. We pin both halves.
+    """
+    # 2-char tokens are allowed in principle, but "ts" inside "Costco" must
+    # not satisfy the guard because of the whole-word boundary check.
+    item_bad = _FakeItem(text="Costco fundamentals — COSTCO")
+    assert _check_entity_grounding([item_bad], {"ts"}) is not None
+
+    # Whole-word match with punctuation boundary is fine.
+    item_good = _FakeItem(text="Snapshot: TSLA, AAPL, MSFT compared.")
+    assert _check_entity_grounding([item_good], {"tsla"}) is None
+
+
+def test_citation_meta_match_still_wins_first() -> None:
+    """Forward-compat: citation_meta path remains the primary admission rule."""
+
+    @dataclass
+    class _CM:
+        entity_name: str | None = None
+
+    item = _FakeItem(
+        text="some unrelated text",  # text would refuse on its own
+        entity_id=None,
+        citation_meta=_CM(entity_name="TSLA"),
+    )
+    assert _check_entity_grounding([item], {"tsla"}) is None

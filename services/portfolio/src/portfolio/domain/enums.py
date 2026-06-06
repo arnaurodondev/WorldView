@@ -53,6 +53,10 @@ class TransactionType(StrEnum):
     DEPOSIT = "DEPOSIT"
     WITHDRAWAL = "WITHDRAWAL"
     FEE = "FEE"
+    # BP-501: Cash interest earned on idle brokerage cash (SnapTrade INTEREST).
+    # Not a security transaction — no instrument_id required (recorded
+    # against a portfolio-level cash holding, direction=INFLOW).
+    INTEREST = "INTEREST"
 
 
 class TransactionDirection(StrEnum):

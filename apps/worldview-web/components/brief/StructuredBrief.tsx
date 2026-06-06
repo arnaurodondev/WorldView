@@ -172,11 +172,16 @@ export function LeadProse({
         : // "inline" — single line, truncated
           "truncate text-[11px] leading-none text-foreground/90";
 
-  // WHY strip [cN]: the backend intentionally keeps [cN] markers in the lead
-  // field for inline display, but the frontend uses citation chips on bullets
-  // instead of inline superscripts. Raw "[c6][c7]" leaks into the rendered
-  // text when no chip rendering is wired to the lead block.
-  const cleanLead = lead.replace(/\[c\d+\]/g, "").replace(/\s{2,}/g, " ").trim();
+  // WHY strip [cN] AND [N#]: the v3.0 prompt used [cN] markers; v4.0+ uses
+  // [N#]. The lead/bullet text carries them as raw markers — the frontend
+  // renders citation chips below the text, so these inline markers are pure
+  // noise and previously leaked as literal "[N1]" / "[N7]" in the rendered
+  // output (only [cN] was being stripped). Strip both forms here.
+  const cleanLead = lead
+    .replace(/\s*\[c\d+\]/g, "")
+    .replace(/\s*\[N\d+\]/g, "")
+    .replace(/\s{2,}/g, " ")
+    .trim();
 
   return (
     // WHY border-l: visual signal that the lead is the primary takeaway from
@@ -481,14 +486,18 @@ function BriefBulletItem({
     // the opacity-0 BulletFeedback would never become visible on hover.
     <li className={`${bulletClass} group`}>
       <span>
-        {/* PLAN-0087 F-LLM-016 defense-in-depth: strip stray [cN] / [c1][c2]
-            citation placeholders that the prompt cleanup in services/rag-chat
-            (generate_briefing.py) is supposed to scrub server-side. The frontend
-            has its own CitationChips row, so any [cN] left in `bullet.text` is
-            visual leakage — never useful, sometimes the literal placeholder
-            "[cN]" itself when the LLM mis-formats. We collapse the surrounding
-            whitespace too so a stripped marker doesn't leave a double-space. */}
-        {bullet.text.replace(/\s*\[c\d+\]/g, "").replace(/\s{2,}/g, " ").trim()}
+        {/* Strip stray [cN] (v3.0 marker form) AND [N#] (v4.0+ marker form)
+            from the rendered bullet text. The frontend renders citation chips
+            below the bullet (see CitationChips), so inline markers are always
+            pure visual noise. Earlier versions only stripped [cN] which left
+            the live v4.x [N1]/[N7]/[N10] markers leaking through to the user
+            (the case the 2026-06-05 brief paste surfaced). Collapse double
+            spaces left by the removal so we don't leave a gap. */}
+        {bullet.text
+          .replace(/\s*\[c\d+\]/g, "")
+          .replace(/\s*\[N\d+\]/g, "")
+          .replace(/\s{2,}/g, " ")
+          .trim()}
         {/* PLAN-0066 Wave F T-W10-F-03: thumbs up/down feedback on hover.
             WHY only in "full" + briefId: compact/inline variants are space-constrained
             (workspace panels, chat bubbles) where feedback buttons are intrusive.

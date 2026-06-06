@@ -488,3 +488,97 @@ async def test_instrument_citations_from_context() -> None:
     for c in citations:
         assert "source_id" in c
         assert "title" in c
+
+
+# ── Test: PLAN-0099 Wave B refusal-on-low-context ────────────────────────────
+
+
+async def test_morning_refuses_when_context_availability_score_below_threshold(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Score < BRIEF_MIN_CONTEXT_SCORE → skip LLM, return limited-data lead."""
+    # Build a sparse context — only the portfolio is populated (score ≈ 0.5
+    # without sections_populated; with our test setup the score we set wins).
+    monkeypatch.setenv("RAG_CHAT_BRIEF_MIN_CONTEXT_SCORE", "0.5")
+    # Populate one tiny news item so the all-empty guard doesn't pre-empt the
+    # refusal path; the low score (0.1 < threshold 0.5) is what triggers
+    # refusal.
+    sparse_ctx = BriefingContext.for_morning(
+        user_id=UUID(_USER_ID),
+        tenant_id=UUID(_TENANT_ID),
+        portfolio=None,
+        news_articles=[
+            NewsArticleSummary(
+                article_id=UUID("00000000-0000-0000-0000-000000000020"),
+                title="Single thin signal",
+                url=None,
+                published_at=datetime(2026, 4, 23, tzinfo=UTC),
+                source_type="news",
+                display_relevance_score=0.5,
+            )
+        ],
+        active_alerts=[],
+        quotes={},
+        recent_events=[],
+        gathered_at=datetime.now(tz=UTC),
+        context_availability_score=0.1,
+    )
+    # If the LLM is invoked the test will see "LLM CONTENT"; the refusal path
+    # must NOT call the chain.
+    llm = MagicMock()
+    llm.stream = MagicMock(side_effect=AssertionError("LLM must not be invoked"))
+    valkey = _make_valkey()
+    gatherer = _make_context_gatherer(morning_ctx=sparse_ctx)
+
+    uc = GenerateBriefingUseCase(llm_chain=llm, valkey=valkey, context_gatherer=gatherer)
+    result = await uc.execute_public_morning(_USER_ID, _TENANT_ID)
+
+    assert result["partial_failure"] is True
+    assert "Limited data available today" in result["content"]
+    assert result["context_availability_score"] == 0.1
+
+
+# ── Test: PLAN-0099 Wave B partial-failure guard ─────────────────────────────
+
+
+async def test_morning_partial_failure_marks_response_when_portfolio_missing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """No portfolio (high-weight source) → partial_failure=True + lead notice."""
+    monkeypatch.setenv("RAG_CHAT_BRIEF_MIN_CONTEXT_SCORE", "0.0")  # disable refusal
+    ctx_no_portfolio = BriefingContext.for_morning(
+        user_id=UUID(_USER_ID),
+        tenant_id=UUID(_TENANT_ID),
+        portfolio=None,  # critical source missing
+        news_articles=[
+            NewsArticleSummary(
+                article_id=UUID("00000000-0000-0000-0000-000000000020"),
+                title="Market Update",
+                url=None,
+                published_at=datetime(2026, 4, 23, tzinfo=UTC),
+                source_type="news",
+                display_relevance_score=0.85,
+            )
+        ],
+        active_alerts=[],
+        quotes={},
+        recent_events=[],
+        gathered_at=datetime.now(tz=UTC),
+        context_availability_score=0.5,
+    )
+    llm = _make_llm_chain(
+        "## LEAD\n\nMarkets continue to move on macro signals [c1].\n---\n\n"
+        "## DETAILS\n\n### News\n\n- Market update bullet [c1]\n"
+    )
+    valkey = _make_valkey()
+    gatherer = _make_context_gatherer(morning_ctx=ctx_no_portfolio)
+
+    uc = GenerateBriefingUseCase(llm_chain=llm, valkey=valkey, context_gatherer=gatherer)
+    result = await uc.execute_public_morning(_USER_ID, _TENANT_ID)
+
+    assert result["partial_failure"] is True
+    # The lead (if produced by the LLM parse) should carry the notice; the
+    # field can also be None on legacy LLM output — we only assert the flag
+    # so the test is robust to v3.0 parse path changes.
+    if result.get("lead"):
+        assert "Partial data" in result["lead"]

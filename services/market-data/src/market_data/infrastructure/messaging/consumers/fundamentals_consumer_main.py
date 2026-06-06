@@ -12,10 +12,15 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import os
 import signal
 import sys
 
-from observability import configure_logging, get_logger  # type: ignore[import-untyped]
+from observability import (  # type: ignore[import-untyped]
+    configure_logging,
+    get_logger,
+    start_metrics_server,
+)
 
 logger = get_logger(__name__)  # type: ignore[no-any-return]
 
@@ -38,6 +43,13 @@ async def main() -> None:
     )
     log = get_logger("market_data.fundamentals_consumer_main")  # type: ignore[no-any-return]
     log.info("fundamentals_consumer_starting", service=settings.service_name)
+
+    # Phase 3 worker-metrics rollout — expose Prometheus /metrics on a
+    # dedicated port so the worker's counters/gauges become scrape-able.
+    metrics_handle = start_metrics_server(
+        service_name="market-data-fundamentals-consumer",
+        port=int(os.environ.get("METRICS_PORT", "9100")),
+    )
 
     stop_event = asyncio.Event()
 
@@ -70,6 +82,20 @@ async def main() -> None:
 
     valkey = create_valkey_client_from_url(settings.valkey_url)
 
+    # PLAN-0102 T-W6-02 / BP-617: bump the per-message watchdog timeout to
+    # ``settings.fundamentals_timeout_s`` (default 90 s, env override via
+    # ``MARKET_DATA_FUNDAMENTALS_TIMEOUT_S``). The library default of 45 s
+    # was dead-lettering Russell-1000-scale payloads that ship 600+ sections
+    # in one message.
+    #
+    # Invariant (see libs/messaging/.../consumer/base.py): the watchdog
+    # MUST be strictly less than ``session_timeout_ms`` so the dead-letter
+    # path wins the race against the Kafka group coordinator. Scale both
+    # together: session 2x watchdog, heartbeat ~1/3 of session per librdkafka
+    # guidance.
+    timeout_s = settings.fundamentals_timeout_s
+    session_timeout_ms = max(60_000, (timeout_s + 30) * 1_000)
+    heartbeat_interval_ms = session_timeout_ms // 3
     consumer = FundamentalsConsumer(
         uow_factory=uow_factory,
         object_storage=object_storage,
@@ -77,6 +103,9 @@ async def main() -> None:
             bootstrap_servers=settings.kafka_bootstrap_servers,
             group_id="market-data-fundamentals",
             topics=["market.dataset.fetched"],
+            message_processing_timeout_s=timeout_s,
+            session_timeout_ms=session_timeout_ms,
+            heartbeat_interval_ms=heartbeat_interval_ms,
         ),
         dedup_client=valkey,
     )
@@ -100,6 +129,10 @@ async def main() -> None:
         if read_engine is not write_engine:
             await read_engine.dispose()
         log.info("fundamentals_consumer_stopped")
+
+        # Stop the Prometheus metrics HTTP server cleanly.
+        with contextlib.suppress(Exception):
+            await metrics_handle.aclose()
 
 
 if __name__ == "__main__":

@@ -4,7 +4,7 @@ Endpoints:
   GET  /api/v1/fundamentals/{id}/highlights  -> fundamentals highlights
   GET  /api/v1/fundamentals/{id}/earnings    -> earnings history
   GET  /api/v1/quotes/{id}                   -> latest price quote
-  GET  /api/v1/instruments/symbol/{ticker}   -> ticker -> instrument UUID
+  GET  /api/v1/instruments/lookup?symbol=     -> ticker -> instrument UUID
   POST /api/v1/quotes/batch                  -> batch price quotes
   GET  /api/v1/ohlcv/bars                    -> OHLCV bars (PLAN-0066 Wave G)
   GET  /api/v1/fundamentals/history          -> quarterly history (PLAN-0066 Wave G)
@@ -59,11 +59,16 @@ class S3Client(BaseUpstreamClient):
         return await self._get(f"/api/v1/quotes/{instrument_id}")
 
     async def find_instrument_by_ticker(self, ticker: str) -> UUID | None:
-        """GET /api/v1/instruments/symbol/{ticker} → instrument UUID or None.
+        """GET /api/v1/instruments/lookup?symbol={ticker} → instrument UUID or None.
+
+        WHY lookup not symbol/{ticker}: the market-data service exposes
+        /instruments/lookup?symbol= (query param) not /instruments/symbol/{ticker}
+        (path param). Using the wrong path returns 404 on every call, silently
+        breaking financial context in instrument briefings (BP-XXX).
 
         Returns ``None`` on timeout, 404, or any HTTP error.
         """
-        raw = await self._get(f"/api/v1/instruments/symbol/{ticker}")
+        raw = await self._get("/api/v1/instruments/lookup", params={"symbol": ticker})
         if not raw:
             return None
         # Market-data InstrumentResponse uses "id" not "instrument_id"
@@ -121,6 +126,7 @@ class S3Client(BaseUpstreamClient):
         instrument_id: str | None = None,
         ticker: str | None = None,
         isin: str | None = None,
+        period_type: str = "quarterly",
     ) -> list[dict]:
         """GET /api/v1/fundamentals/history → list of period dicts (PLAN-0066 Wave G).
 
@@ -129,8 +135,50 @@ class S3Client(BaseUpstreamClient):
         Safe degradation: returns [] on any HTTP or network error (R9).
 
         Identifier priority: instrument_id > isin > ticker.
+
+        F-LIVE-P (2026-05-26): ``period_type`` ("quarterly"/"annual") is
+        forwarded as a query param so the upstream filter is applied at SQL
+        level. The default "quarterly" is the safer fallback and matches the
+        legacy pre-F-LIVE-P contract for any caller that has not yet been
+        updated.
+
+        PLAN-0103 W25 / BP-640: callers that need the TTM/live snapshot must
+        use ``get_fundamentals_history_with_snapshot`` (returns a structured
+        dict with both ``periods`` and ``current_snapshot``). This method
+        keeps the legacy ``list[dict]`` shape so existing tests + callers
+        that only need period rows aren't churned.
         """
-        params: dict[str, str] = {"periods": str(periods)}
+        bundle = await self.get_fundamentals_history_with_snapshot(
+            periods=periods,
+            instrument_id=instrument_id,
+            ticker=ticker,
+            isin=isin,
+            period_type=period_type,
+        )
+        return bundle.get("periods", []) or []
+
+    async def get_fundamentals_history_with_snapshot(
+        self,
+        *,
+        periods: int = 8,
+        instrument_id: str | None = None,
+        ticker: str | None = None,
+        isin: str | None = None,
+        period_type: str = "quarterly",
+    ) -> dict:
+        """GET /api/v1/fundamentals/history → ``{"periods": [...], "current_snapshot": {...} | None}``.
+
+        PLAN-0103 W25 / BP-640: snapshot-aware accessor. Returns the full
+        response shape so the rag-chat tool handler can surface the live
+        valuation snapshot (live P/E, EV/EBITDA, market cap, as_of date) to
+        the LLM. The TTM snapshot lives in HIGHLIGHTS and is a SINGLE row,
+        not a per-period stream — see ``CurrentSnapshot`` schema for the
+        rationale.
+
+        Returns ``{"periods": [], "current_snapshot": None}`` on any HTTP or
+        network error (R9 safe degradation).
+        """
+        params: dict[str, str] = {"periods": str(periods), "period_type": period_type}
         if instrument_id:
             params["instrument_id"] = instrument_id
         elif isin:
@@ -139,10 +187,84 @@ class S3Client(BaseUpstreamClient):
             params["symbol"] = ticker
 
         result = await self._get("/api/v1/fundamentals/history", params=params)
-        if isinstance(result, dict):
-            periods_data = result.get("periods", [])
-            return periods_data if isinstance(periods_data, list) else []
-        return []
+        if not isinstance(result, dict):
+            return {"periods": [], "current_snapshot": None}
+        periods_data = result.get("periods", [])
+        periods_list = periods_data if isinstance(periods_data, list) else []
+        snap = result.get("current_snapshot")
+        snap_dict = snap if isinstance(snap, dict) else None
+        return {"periods": periods_list, "current_snapshot": snap_dict}
+
+    # PLAN-0095 W2 T-W2-02: batch adapter. Mirrors the contract in
+    # ``S3Port.get_fundamentals_history_batch`` and POSTs to S9-proxied
+    # ``/api/v1/fundamentals/batch``. Returns ``{}`` on any error so the
+    # caller's handler can render a "data unavailable" RetrievedItem instead
+    # of bubbling an exception into the tool executor.
+    async def get_fundamentals_history_batch(
+        self,
+        *,
+        tickers: list[str],
+        periods: int = 5,
+    ) -> dict[str, dict]:
+        """POST /api/v1/fundamentals/batch → per-ticker results dict.
+
+        R9 safe degradation: returns ``{}`` on timeout, HTTP error, or
+        unexpected response shape. The route handler bounds tickers at 25;
+        callers that pass more will get a 422 surfaced as ``{}`` here.
+        """
+        if not tickers:
+            return {}
+        raw = await self._post(
+            "/api/v1/fundamentals/batch",
+            {"tickers": tickers, "periods": periods},
+        )
+        if not isinstance(raw, dict):
+            return {}
+        results = raw.get("results", {})
+        return results if isinstance(results, dict) else {}
+
+    # PLAN-0104 W32: unified query_fundamentals adapter.
+    # WHY a separate method (not an overload of get_fundamentals_history): the
+    # new endpoint accepts an open metric list and returns per-metric coverage
+    # flags. The contract is intentionally distinct so the legacy method's
+    # list[dict] callers do not have to handle a new richer shape.
+    async def query_fundamentals(
+        self,
+        *,
+        ticker: str,
+        metrics: list[str],
+        periods: int = 8,
+        period_type: str = "quarterly",
+        include_snapshot: bool = True,
+    ) -> dict:
+        """POST /api/v1/fundamentals/query → typed metric projection (PLAN-0104 W32).
+
+        Returns ``{"metrics_by_period": [], "snapshot": None, "coverage": {}}``
+        on any HTTP / network error (R9 safe degradation). The route handler
+        rejects empty metric lists with 422; we forward the contract upstream
+        rather than client-side validate (consistent with how the batch
+        adapter handles the 25-ticker cap).
+        """
+        if not ticker or not metrics:
+            return {"metrics_by_period": [], "snapshot": None, "coverage": {}}
+        body = {
+            "symbol": ticker,
+            "metrics": metrics,
+            "periods": periods,
+            "period_type": period_type,
+            "include_snapshot": include_snapshot,
+        }
+        raw = await self._post("/api/v1/fundamentals/query", body)
+        if not isinstance(raw, dict):
+            return {"metrics_by_period": [], "snapshot": None, "coverage": {}}
+        rows = raw.get("metrics_by_period", [])
+        snap = raw.get("snapshot")
+        coverage = raw.get("coverage", {})
+        return {
+            "metrics_by_period": rows if isinstance(rows, list) else [],
+            "snapshot": snap if isinstance(snap, dict) else None,
+            "coverage": coverage if isinstance(coverage, dict) else {},
+        }
 
     async def get_batch_quotes(self, instrument_ids: list[str]) -> dict[str, QuoteSummary]:
         """POST /api/v1/quotes/batch -> dict of instrument_id -> QuoteSummary.

@@ -48,6 +48,11 @@ class SchedulerProcess:
     def stop(self) -> None:
         """Signal the scheduler loop to stop after the current tick."""
         self._stop_event.set()
+        # PLAN-0106 C-2: also tear down the ticker-news sync worker when the
+        # scheduler receives SIGTERM so both loops exit cleanly together.
+        worker = getattr(self, "_ticker_news_sync_worker", None)
+        if worker is not None:
+            worker.stop()
 
     async def run(self) -> None:
         """Run the scheduler loop until ``stop()`` is called."""
@@ -56,6 +61,19 @@ class SchedulerProcess:
             tick_interval_seconds=self._tick_interval,
             max_tasks_per_tick=self._max_tasks_per_tick,
         )
+
+        # PLAN-0106 B-1: advisory warning at startup for any configured source
+        # whose provider API key is missing from the environment.  Non-fatal —
+        # the scheduler continues; sources that lack keys will produce HTTP 401
+        # errors at fetch time and land in RETRY/FAILED.
+        self._warn_on_missing_api_keys()
+
+        # PLAN-0106 C-2: spawn the TickerNewsSymbolSyncWorker as a fire-and-
+        # forget background task alongside the scheduler tick loop.  Gated by
+        # ``ticker_news_sync_enabled`` (default ON) so operators retain a
+        # kill-switch via the env var.
+        if getattr(self._settings, "ticker_news_sync_enabled", True):
+            self._spawn_ticker_news_sync()
 
         # PLAN-0055 B-1: one-shot config-drift detection at startup. WARNs (does
         # not fail) for any source whose live config_hash differs from the snapshot
@@ -160,6 +178,63 @@ class SchedulerProcess:
             )
         except Exception as exc:
             logger.error("scheduler_tick_error", error=str(exc))
+
+    def _warn_on_missing_api_keys(self) -> None:
+        """Log advisory warnings for any provider whose API key is not set.
+
+        PLAN-0106 B-1 — called once at startup, before the first tick.
+        Non-fatal: the scheduler continues; sources whose keys are absent will
+        produce HTTP 401/403 errors at fetch time and land in RETRY/FAILED.
+
+        Provider → settings attribute mapping:
+          - eodhd        → settings.eodhd_api_key
+          - finnhub      → settings.finnhub_api_key
+          - newsapi      → settings.newsapi_key
+          - sec_edgar    → (no key required — uses User-Agent only)
+          - polymarket   → (no key required — public Gamma API)
+        """
+        providers_to_check = [
+            ("eodhd", "eodhd_api_key"),
+            ("finnhub", "finnhub_api_key"),
+            ("newsapi", "newsapi_key"),
+        ]
+        for source_type, field_name in providers_to_check:
+            raw = getattr(self._settings, field_name, "")
+            # SecretStr-or-plain-str compatibility — config.py declares these as
+            # plain ``str`` fields, but a future migration may switch to SecretStr.
+            if hasattr(raw, "get_secret_value"):
+                raw = raw.get_secret_value()
+            if not raw:
+                logger.warning(
+                    "source_api_key_missing",
+                    source_type=source_type,
+                    settings_field=field_name,
+                    hint=f"set the corresponding env var (e.g. CONTENT_INGESTION_{field_name.upper()})",
+                )
+
+    def _spawn_ticker_news_sync(self) -> None:
+        """Detach the TickerNewsSymbolSyncWorker on a background asyncio task.
+
+        PLAN-0106 C-2 — mirrors the ``_spawn_fundamentals_refresh`` pattern in
+        market-ingestion's SchedulerProcess.  The worker's 6-hour loop runs
+        concurrently with the scheduler tick loop and is torn down cleanly when
+        ``stop()`` propagates via the worker's own ``stop()`` call.
+
+        The task handle is stashed on ``self`` so it is not garbage-collected
+        before the event loop ends (RUF006 guard).
+        """
+        from content_ingestion.infrastructure.workers.ticker_news_sync_worker import (
+            TickerNewsSymbolSyncWorker,
+        )
+
+        worker = TickerNewsSymbolSyncWorker(settings=self._settings)
+        # Stash so stop() can call worker.stop() on SIGTERM.
+        self._ticker_news_sync_worker = worker
+        self._ticker_news_sync_task: asyncio.Task[None] = asyncio.create_task(
+            worker.run(),
+            name="ticker_news_sync_worker",
+        )
+        logger.info("ticker_news_sync_worker_spawned")
 
 
 async def _run_scheduler() -> None:

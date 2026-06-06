@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import os
 import re
 from contextlib import asynccontextmanager
 from typing import TYPE_CHECKING
@@ -14,7 +15,12 @@ from fastapi import FastAPI, Request, Response
 from starlette.middleware.base import BaseHTTPMiddleware
 
 from market_data.infrastructure.middleware.internal_jwt import InternalJWTMiddleware
-from observability import configure_logging, get_logger, register_error_handlers  # type: ignore[import-untyped]
+from observability import (  # type: ignore[import-untyped]
+    assert_app_env_or_die,
+    configure_logging,
+    get_logger,
+    register_error_handlers,
+)
 from observability.metrics import add_prometheus_middleware, create_metrics  # type: ignore[import-untyped]
 from observability.sentry import SentrySettings, init_sentry  # type: ignore[import-untyped]
 from observability.tracing import add_otel_middleware, configure_tracing  # type: ignore[import-untyped]
@@ -34,7 +40,7 @@ _SCREEN_FIELDS_REFRESH_INTERVAL_SECONDS = 6 * 3600
 
 
 def _get_static_screen_fields() -> list:
-    """Return the 12 static ScreenFieldMetadata instances (PRD-0017 §6.5)."""
+    """Return the static ScreenFieldMetadata instances (PRD-0017 §6.5, Wave L-1/L-2/L-3/L-4a/L-4b/L-5c)."""
     from market_data.domain.entities import ScreenFieldMetadata
 
     return [
@@ -158,6 +164,296 @@ def _get_static_screen_fields() -> list:
             observed_max=None,
             null_fraction=0.0,
         ),
+        # ── Wave L-1: instrument-attribute filters ────────────────────────────
+        ScreenFieldMetadata(
+            name="country",
+            label="Country",
+            field_type="text",
+            unit=None,
+            description="ISO 3-letter country code (e.g. USA, GBR)",
+            observed_min=None,
+            observed_max=None,
+            null_fraction=0.0,
+        ),
+        ScreenFieldMetadata(
+            name="exchange",
+            label="Exchange",
+            field_type="text",
+            unit=None,
+            description="Exchange code (e.g. NASDAQ, NYSE, LSE)",
+            observed_min=None,
+            observed_max=None,
+            null_fraction=0.0,
+        ),
+        # PLAN-0098 W3 BP-585: booleans stored as 0/1 numeric for constraint compatibility
+        # (ck_screen_field_metadata_field_type CHECK admits only 'numeric'/'text').
+        ScreenFieldMetadata(
+            name="has_fundamentals",
+            label="Has Fundamentals",
+            field_type="numeric",
+            unit=None,
+            description="Instrument has at least one fundamentals data point",
+            observed_min=None,
+            observed_max=None,
+            null_fraction=0.0,
+        ),
+        # PLAN-0098 W3 BP-585: booleans stored as 0/1 numeric for constraint compatibility
+        # (ck_screen_field_metadata_field_type CHECK admits only 'numeric'/'text').
+        ScreenFieldMetadata(
+            name="has_ohlcv",
+            label="Has OHLCV",
+            field_type="numeric",
+            unit=None,
+            description="Instrument has at least one OHLCV bar",
+            observed_min=None,
+            observed_max=None,
+            null_fraction=0.0,
+        ),
+        # ── Wave L-2: snapshot display metrics ────────────────────────────────
+        ScreenFieldMetadata(
+            name="eps_ttm",
+            label="EPS (TTM)",
+            field_type="numeric",
+            unit="USD",
+            description="Earnings per share — trailing twelve months",
+            observed_min=None,
+            observed_max=None,
+            null_fraction=0.0,
+        ),
+        ScreenFieldMetadata(
+            name="avg_volume_30d",
+            label="Avg Volume 30d",
+            field_type="numeric",
+            unit="shares",
+            description="Average daily trading volume over the past 30 days",
+            observed_min=None,
+            observed_max=None,
+            null_fraction=0.0,
+        ),
+        ScreenFieldMetadata(
+            name="free_cash_flow",
+            label="Free Cash Flow",
+            field_type="numeric",
+            unit="USD",
+            description="Operating cash flow minus capital expenditures",
+            observed_min=None,
+            observed_max=None,
+            null_fraction=0.0,
+        ),
+        ScreenFieldMetadata(
+            name="fcf_margin",
+            label="FCF Margin",
+            field_type="numeric",
+            unit="%",
+            description="Free cash flow as a percentage of revenue",
+            observed_min=None,
+            observed_max=None,
+            null_fraction=0.0,
+        ),
+        ScreenFieldMetadata(
+            name="interest_coverage",
+            label="Interest Coverage",
+            field_type="numeric",
+            unit="x",
+            description="EBIT divided by interest expense",
+            observed_min=None,
+            observed_max=None,
+            null_fraction=0.0,
+        ),
+        ScreenFieldMetadata(
+            name="net_debt_to_ebitda",
+            label="Net Debt/EBITDA",
+            field_type="numeric",
+            unit="x",
+            description="(Total debt - cash) / EBITDA; negative = net cash position",
+            observed_min=None,
+            observed_max=None,
+            null_fraction=0.0,
+        ),
+        ScreenFieldMetadata(
+            name="credit_rating",
+            label="Credit Rating",
+            field_type="text",
+            unit=None,
+            description="S&P / EODHD credit rating string (e.g. AA+, BBB-)",
+            observed_min=None,
+            observed_max=None,
+            null_fraction=0.0,
+        ),
+        # ── Wave L-4a: analyst / ownership / short snapshot fields ────────────
+        # MUST stay in lock-step with the seed inserts in migration
+        # ``025_seed_l4a_analyst_ownership_fields.py`` — the 6-hour refresh
+        # loop UPSERTs from this list and would otherwise overwrite the
+        # migration's seeded values with divergent labels/descriptions.
+        ScreenFieldMetadata(
+            name="analyst_target_price",
+            label="ANALYST TGT",
+            field_type="numeric",
+            unit="USD",
+            description="Analyst consensus 12-month target price (USD)",
+            observed_min=None,
+            observed_max=None,
+            null_fraction=0.0,
+        ),
+        ScreenFieldMetadata(
+            name="analyst_consensus_rating",
+            label="CONSENSUS",
+            field_type="numeric",
+            unit="1-5",
+            description="Analyst consensus rating on a 1-5 scale (higher = more bullish)",
+            observed_min=None,
+            observed_max=None,
+            null_fraction=0.0,
+        ),
+        ScreenFieldMetadata(
+            name="institutional_ownership_pct",
+            label="INST OWN%",
+            field_type="numeric",
+            unit="%",
+            description="Institutional ownership as a decimal fraction of shares outstanding",
+            observed_min=None,
+            observed_max=None,
+            null_fraction=0.0,
+        ),
+        ScreenFieldMetadata(
+            name="short_percent",
+            label="SHORT %",
+            field_type="numeric",
+            unit="%",
+            description="Short interest as a decimal fraction of float",
+            observed_min=None,
+            observed_max=None,
+            null_fraction=0.0,
+        ),
+        # ── Wave L-5c: calendar (date) snapshot fields ────────────────────────
+        # LOCK-STEP with migration 028 ``_L5C_FIELDS`` and migration 031's
+        # UPDATE — divergence would let the 6-hour refresh loop overwrite
+        # the seeded rows on the next tick. Migration 031 widens the
+        # ``ck_screen_field_metadata_field_type`` CHECK to admit 'date', so
+        # the in-memory list can finally use the canonical type. The UI
+        # filter still consumes a number-of-days input
+        # (``next_earnings_within_days``) — only the rendering switch changes.
+        ScreenFieldMetadata(
+            name="next_earnings_date",
+            label="NEXT EARN",
+            field_type="date",
+            unit="date",
+            description="Next scheduled earnings report date (filter accepts days-from-today)",
+            observed_min=None,
+            observed_max=None,
+            null_fraction=0.0,
+        ),
+        ScreenFieldMetadata(
+            name="next_dividend_date",
+            label="NEXT DIV",
+            field_type="date",
+            unit="date",
+            description="Next scheduled dividend payment date (filter accepts days-from-today)",
+            observed_min=None,
+            observed_max=None,
+            null_fraction=0.0,
+        ),
+        # ── Wave L-3: computed OHLCV-derived metrics ─────────────────────────
+        # LOCK-STEP: these 8 rows MUST be byte-identical to the rows in
+        # alembic/versions/029_seed_l3_computed_metrics_fields.py. Divergence
+        # causes the 6h refresh loop to silently overwrite the migration's
+        # values. See services/market-data/.claude-context.md pitfall L-3.
+        ScreenFieldMetadata(
+            name="dist_from_52w_high_pct",
+            label="52W%↑",
+            field_type="numeric",
+            unit="percent_1",
+            description="Distance from 52-week high as a fraction (e.g. -0.10 = 10% below)",
+            observed_min=None,
+            observed_max=None,
+            null_fraction=0.0,
+        ),
+        ScreenFieldMetadata(
+            name="dist_from_52w_low_pct",
+            label="52W%↓",
+            field_type="numeric",
+            unit="percent_1",
+            description="Distance from 52-week low as a fraction (e.g. 0.25 = 25% above)",
+            observed_min=None,
+            observed_max=None,
+            null_fraction=0.0,
+        ),
+        ScreenFieldMetadata(
+            name="return_1m",
+            label="1M RTN",
+            field_type="numeric",
+            unit="percent_1",
+            description="1-month total return as a fraction",
+            observed_min=None,
+            observed_max=None,
+            null_fraction=0.0,
+        ),
+        ScreenFieldMetadata(
+            name="return_3m",
+            label="3M RTN",
+            field_type="numeric",
+            unit="percent_1",
+            description="3-month total return as a fraction",
+            observed_min=None,
+            observed_max=None,
+            null_fraction=0.0,
+        ),
+        ScreenFieldMetadata(
+            name="return_6m",
+            label="6M RTN",
+            field_type="numeric",
+            unit="percent_1",
+            description="6-month total return as a fraction",
+            observed_min=None,
+            observed_max=None,
+            null_fraction=0.0,
+        ),
+        ScreenFieldMetadata(
+            name="return_ytd",
+            label="YTD RTN",
+            field_type="numeric",
+            unit="percent_1",
+            description="Year-to-date total return as a fraction",
+            observed_min=None,
+            observed_max=None,
+            null_fraction=0.0,
+        ),
+        ScreenFieldMetadata(
+            name="return_1y",
+            label="1Y RTN",
+            field_type="numeric",
+            unit="percent_1",
+            description="1-year total return as a fraction",
+            observed_min=None,
+            observed_max=None,
+            null_fraction=0.0,
+        ),
+        ScreenFieldMetadata(
+            name="return_3y",
+            label="3Y RTN",
+            field_type="numeric",
+            unit="percent_1",
+            description="3-year total return as a fraction",
+            observed_min=None,
+            observed_max=None,
+            null_fraction=0.0,
+        ),
+        # ── Wave L-4b: insider 90d rollup column ─────────────────────────────
+        # field_type='numeric' (CHECK constraint admits only 'numeric'/'text');
+        # unit='currency_compact' → frontend renders compact $1.2M / $5B.
+        # MUST stay byte-identical to migration 030's seed row — divergence
+        # makes the 6-hour refresh loop silently overwrite the migration's
+        # values. See ``.claude-context.md`` pitfall L-4b.
+        ScreenFieldMetadata(
+            name="insider_net_buy_90d",
+            label="INSIDER 90D",
+            field_type="numeric",
+            unit="currency_compact",
+            description="Trailing 90-day net dollar value of insider transactions",
+            observed_min=None,
+            observed_max=None,
+            null_fraction=0.0,
+        ),
     ]
 
 
@@ -211,6 +507,103 @@ async def _screen_fields_refresh_loop(
             await asyncio.sleep(_SCREEN_FIELDS_REFRESH_RETRY_SECONDS)
 
 
+# ── PLAN-0089 Wave L-3: ComputedMetricsBackfillWorker scheduler ──────────────
+# Cadence: daily at COMPUTED_METRICS_REFRESH_HOUR_UTC (default 02:00 UTC) — chosen
+# to follow the daily OHLCV ingestion window so the 8 derived metrics reflect the
+# latest close. Skip if last successful run was < 20 hours ago: a guard against
+# duplicate work when the loop re-enters (clock drift, container restart).
+_COMPUTED_METRICS_MIN_INTERVAL_SECONDS = 20 * 3600
+_COMPUTED_METRICS_RETRY_SECONDS = 300  # 5-min back-off on failure
+_COMPUTED_METRICS_DEFAULT_HOUR_UTC = 2
+
+
+def _seconds_until_next_hour_utc(target_hour: int, now: object) -> float:
+    """Compute seconds until the next occurrence of ``target_hour:00`` UTC.
+
+    Pulled out so the loop is testable without ``asyncio.sleep`` patching.
+    ``now`` must be a timezone-aware ``datetime`` in UTC. Returns 0.0 when
+    the next slot is in the past (the caller will skip-sleep and run immediately).
+    """
+    from datetime import datetime, timedelta
+
+    assert isinstance(now, datetime)
+    candidate = now.replace(hour=target_hour, minute=0, second=0, microsecond=0)
+    if candidate <= now:
+        candidate = candidate + timedelta(days=1)
+    return float((candidate - now).total_seconds())
+
+
+async def _computed_metrics_refresh_loop(
+    write_factory: async_sessionmaker,
+    log: object,
+) -> None:
+    """Background task: run ComputedMetricsBackfillWorker daily at 02:00 UTC.
+
+    WHY scheduled instead of Kafka-driven: the 8 derived metrics
+    (52-week distance, 1M/3M/6M/YTD/1Y/3Y returns) are aggregates over the
+    full OHLCV history and have no natural per-bar trigger — a once-a-day
+    sweep after the daily ingest is the simplest correct cadence.
+
+    The hour is configurable via ``COMPUTED_METRICS_REFRESH_HOUR_UTC`` (env
+    var, 0-23, default 2). The 20-hour minimum-interval guard prevents
+    duplicate runs after a container restart inside the same daily window.
+    """
+    from common.time import utc_now  # type: ignore[import-untyped]
+    from market_data.infrastructure.db.computed_metrics_worker import (
+        run_computed_metrics_backfill,
+    )
+
+    # Read schedule hour from env once at startup. Out-of-range values fall back
+    # to the default to avoid wedging the loop on bad operator input.
+    try:
+        target_hour = int(os.getenv("COMPUTED_METRICS_REFRESH_HOUR_UTC", str(_COMPUTED_METRICS_DEFAULT_HOUR_UTC)))
+        if not (0 <= target_hour <= 23):
+            raise ValueError("hour must be 0-23")
+    except (ValueError, TypeError) as exc:
+        log.warning(  # type: ignore[attr-defined]
+            "computed_metrics_invalid_hour_using_default",
+            error=str(exc),
+            default=_COMPUTED_METRICS_DEFAULT_HOUR_UTC,
+        )
+        target_hour = _COMPUTED_METRICS_DEFAULT_HOUR_UTC
+
+    last_success_at: object | None = None  # datetime | None — kept as object for forward-ref typing
+
+    while True:
+        try:
+            now = utc_now()
+            sleep_seconds = _seconds_until_next_hour_utc(target_hour, now)
+            await asyncio.sleep(sleep_seconds)
+
+            # 20-hour minimum-interval guard. Cheap defence against the loop
+            # waking up twice in the same 24-hour window after a container restart.
+            now_after_sleep = utc_now()
+            if last_success_at is not None:
+                from datetime import datetime as _dt  # local import to keep top of file lean
+
+                assert isinstance(last_success_at, _dt)
+                delta = (now_after_sleep - last_success_at).total_seconds()
+                if delta < _COMPUTED_METRICS_MIN_INTERVAL_SECONDS:
+                    log.info(  # type: ignore[attr-defined]
+                        "computed_metrics_skip_too_recent",
+                        last_success_at=last_success_at.isoformat(),
+                        seconds_since=delta,
+                    )
+                    continue
+
+            summary = await run_computed_metrics_backfill(write_factory)
+            last_success_at = utc_now()
+            log.info(  # type: ignore[attr-defined]
+                "computed_metrics_refresh_completed",
+                instruments_processed=summary.instruments_processed,
+                metrics_written=summary.metrics_written,
+                runtime_seconds=summary.runtime_seconds,
+            )
+        except Exception as exc:
+            log.error("computed_metrics_refresh_error", error=str(exc))  # type: ignore[attr-defined]
+            await asyncio.sleep(_COMPUTED_METRICS_RETRY_SECONDS)
+
+
 class RequestIdMiddleware(BaseHTTPMiddleware):
     """Propagate X-Request-ID through the request lifecycle.
 
@@ -248,6 +641,13 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         json=settings.log_json,
     )
     log = get_logger("market_data.app")
+
+    # 1b. Boot-time security guard (PLAN-0093 Wave A-1 / F-LOG-JWT-001).
+    # Refuses to start when JWT verification is disabled AND APP_ENV is unset.
+    assert_app_env_or_die(
+        service_name=settings.service_name,
+        internal_jwt_skip_verification=settings.internal_jwt_skip_verification,
+    )
 
     # 2. Internal JWT middleware startup — fetch JWKS from S9 (PRD-0025)
     jwt_middleware = InternalJWTMiddleware(
@@ -322,12 +722,32 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # "no asyncio.create_task in lifespan" rule per PRD-0017 §6.2.
     refresh_task = asyncio.create_task(_screen_fields_refresh_loop(write_factory, valkey_client, log))
 
+    # PLAN-0089 Wave L-3 (T-WL3-02): daily compute of 8 derived OHLCV-based metrics.
+    # Same R22 exemption rationale as the screen-fields warmer above — long-running
+    # scheduled aggregator, started in lifespan, cancelled on shutdown.
+    computed_metrics_task = asyncio.create_task(_computed_metrics_refresh_loop(write_factory, log))
+
+    # 8b. PLAN-0089 Wave L-4b: daily 03:00 UTC insider-90d rollup. Same R22
+    # exemption as the screen-fields warmer — it's a periodic background
+    # aggregate, not a request-bound coroutine. One hour after L-3's 02:00
+    # so we don't pile two large analytical writes on top of each other.
+    from market_data.application.use_cases.rollup_insider_90d import insider_rollup_loop
+
+    insider_rollup_hour = getattr(settings, "insider_rollup_hour_utc", 3)
+    insider_task = asyncio.create_task(insider_rollup_loop(write_factory, log, target_hour_utc=insider_rollup_hour))
+
     log.info("service_started", service=settings.service_name)
     yield
 
     refresh_task.cancel()
+    computed_metrics_task.cancel()
+    insider_task.cancel()
     with contextlib.suppress(asyncio.CancelledError):
         await refresh_task
+    with contextlib.suppress(asyncio.CancelledError):
+        await computed_metrics_task
+    with contextlib.suppress(asyncio.CancelledError):
+        await insider_task
 
     eodhd_client = getattr(app.state, "eodhd_client", None)
     if eodhd_client is not None:
@@ -387,7 +807,15 @@ def create_app() -> FastAPI:
         all_ok = True
 
         # F-003B: JWKS public key must be loaded before accepting traffic.
-        if getattr(app.state, "_internal_jwt_public_key", None) is None:
+        # Exception (dev/test): when InternalJWTMiddleware is in
+        # skip_verification mode the public key is intentionally absent — the
+        # middleware sets ``app.state._internal_jwt_skip_verification = True``
+        # so readyz can distinguish "intentionally absent" from "failed to
+        # fetch". Matches portfolio/app.py:222.
+        skip_jwt = getattr(app.state, "_internal_jwt_skip_verification", False)
+        if skip_jwt:
+            checks["jwks"] = "skipped"
+        elif getattr(app.state, "_internal_jwt_public_key", None) is None:
             checks["jwks"] = "not_loaded"
             all_ok = False
         else:
@@ -457,8 +885,12 @@ def create_app() -> FastAPI:
         fundamental_metrics,
         fundamentals,
         instruments,
+        internal_earnings_calendar,
+        internal_instruments,
+        internal_market_tape,
         market,
         ohlcv,
+        peers,
         prediction_markets,
         price_snapshot,
         quotes,
@@ -474,11 +906,23 @@ def create_app() -> FastAPI:
     app.include_router(fundamental_metrics.router, prefix="/api/v1")
     app.include_router(fundamentals.router, prefix="/api/v1")
     app.include_router(securities.router, prefix="/api/v1")
+    # peers: /instruments/{id}/peers — registered after instruments.router to
+    # keep the literal /peers sub-path distinct from the UUID catch-all.
+    # W5-T-S2-01: top-N market-cap peers in same GICS industry.
+    app.include_router(peers.router, prefix="/api/v1")
     # prediction_markets: /prediction-markets/{market_id}/history registered
     # before /{market_id} inside the router to avoid path-param conflicts
     app.include_router(prediction_markets.router, prefix="/api/v1")
     # price_snapshot: internal endpoints — only S9 (api-gateway) calls these
     # via the internal JWT mechanism (PRD-0025)
     app.include_router(price_snapshot.router, prefix="/internal/v1")
+    # PLAN-0100 T-W5-01: top-N-by-market-cap internal endpoint consumed by
+    # market-ingestion's FundamentalsRefreshWorker. Same /internal/v1 prefix
+    # + same JWT-required guard as the other system-to-system routes.
+    app.include_router(internal_instruments.router, prefix="/internal/v1")
+    # PLAN-0102 W3 — futures/pre-mkt tape + earnings calendar endpoints
+    # used by the morning brief generator (rag-chat).
+    app.include_router(internal_market_tape.router, prefix="/internal/v1")
+    app.include_router(internal_earnings_calendar.router, prefix="/internal/v1")
 
     return app

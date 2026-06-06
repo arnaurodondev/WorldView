@@ -102,19 +102,71 @@ export interface ScreenerColumn {
  *   - Users can hide it via the settings popover if they prefer pure data.
  */
 export const DEFAULT_COLUMNS: readonly ScreenerColumn[] = Object.freeze([
-  Object.freeze({ key: "ticker",     label: "Ticker",     sortable: true,  align: "left",  formatter: "text" as const,    visible: true }),
-  Object.freeze({ key: "name",       label: "Name",       sortable: true,  align: "left",  formatter: "text" as const,    visible: true }),
-  Object.freeze({ key: "sector",     label: "Sector",     sortable: true,  align: "left",  formatter: "text" as const,    visible: true }),
-  Object.freeze({ key: "price",      label: "Price",      sortable: true,  align: "right", formatter: "price" as const,   visible: true }),
-  Object.freeze({ key: "change",     label: "Chg%",       sortable: true,  align: "right", formatter: "percent" as const, visible: true }),
-  Object.freeze({ key: "marketCap",  label: "Mkt Cap",    sortable: true,  align: "right", formatter: "compact" as const, visible: true }),
-  Object.freeze({ key: "pe",         label: "P/E",        sortable: true,  align: "right", formatter: "number" as const,  visible: true }),
-  Object.freeze({ key: "revenue",    label: "Revenue",    sortable: true,  align: "right", formatter: "compact" as const, visible: true }),
-  Object.freeze({ key: "beta",       label: "Beta",       sortable: true,  align: "right", formatter: "number" as const,  visible: true }),
-  Object.freeze({ key: "score",      label: "Score",      sortable: true,  align: "right",                                  visible: true }),
-  Object.freeze({ key: "range52w",   label: "52W Range",  sortable: false, align: "right",                                  visible: true }),
-  Object.freeze({ key: "volume",     label: "Volume",     sortable: false, align: "right", formatter: "compact" as const, visible: true }),
-  Object.freeze({ key: "sparkline",  label: "Trend (30d)", sortable: false, align: "right",                                 visible: true }),
+  // ── Default-visible columns ─────────────────────────────────────────────────
+  Object.freeze({ key: "ticker",        label: "Ticker",      sortable: true,  align: "left",  formatter: "text" as const,    visible: true }),
+  Object.freeze({ key: "name",          label: "Name",        sortable: true,  align: "left",  formatter: "text" as const,    visible: true }),
+  Object.freeze({ key: "sector",        label: "Sector",      sortable: true,  align: "left",  formatter: "text" as const,    visible: true }),
+  Object.freeze({ key: "price",         label: "Price",       sortable: true,  align: "right", formatter: "price" as const,   visible: true }),
+  Object.freeze({ key: "change",        label: "Chg%",        sortable: true,  align: "right", formatter: "percent" as const, visible: true }),
+  Object.freeze({ key: "marketCap",     label: "Mkt Cap",     sortable: true,  align: "right", formatter: "compact" as const, visible: true }),
+  Object.freeze({ key: "pe",            label: "P/E",         sortable: true,  align: "right", formatter: "number" as const,  visible: true }),
+  // PLAN-0092 Wave C: replaced revenue with revenue growth; added fwdPe, divYield, roe
+  Object.freeze({ key: "revenueGrowth", label: "Rev YoY%",    sortable: true,  align: "right", formatter: "percent" as const, visible: true }),
+  // ── forwardPe demoted to opt-in (PRD-0089 §6.3 14-column cap, QA finding #1) ─
+  // WHY visible: false (was true in PLAN-0092 Wave C):
+  //   - PRD-0089 plan §6.3 caps default-visible columns at ≤14 above the fold at
+  //     1440×900 to hit the 240–280 visible body-cell density target (20 rows ×
+  //     12–14 cols). Wave I-B QA flagged we were shipping 15 — one over budget.
+  //   - Of the candidates, Fwd P/E is the most natural drop: it is HIGHLY
+  //     correlated with the already-visible trailing P/E (rank correlation
+  //     ~0.85 across the S&P 500 ex-loss-makers), so the marginal information
+  //     gained from showing both side-by-side is small for a general-purpose
+  //     default. P/E is the more universal "first glance" multiple.
+  //   - Forward P/E remains FIRST-CLASS: surfaced as an opt-in toggle in
+  //     ColumnSettingsPopover (Valuation group) and is the natural inclusion in
+  //     a "Compounder" or "Growth-at-a-reasonable-price" saved screen where the
+  //     user explicitly opts into forward-looking valuation.
+  //   - Regression guard: see lib/__tests__/screener-columns.test.ts —
+  //     `DEFAULT_COLUMNS.filter(c => c.visible).length === 14` is asserted to
+  //     prevent the count from drifting back up next time we add a column.
+  Object.freeze({ key: "forwardPe",     label: "Fwd P/E",     sortable: true,  align: "right", formatter: "number" as const,  visible: false }),
+  Object.freeze({ key: "divYield",      label: "Div Y%",      sortable: true,  align: "right", formatter: "percent" as const, visible: true }),
+  Object.freeze({ key: "roe",           label: "ROE%",        sortable: true,  align: "right", formatter: "percent" as const, visible: true }),
+  Object.freeze({ key: "beta",          label: "Beta",        sortable: true,  align: "right", formatter: "number" as const,  visible: true }),
+  Object.freeze({ key: "score",         label: "Score",       sortable: true,  align: "right",                                visible: true }),
+  Object.freeze({ key: "range52w",      label: "52W Range",   sortable: false, align: "right",                                visible: true }),
+  Object.freeze({ key: "sparkline",     label: "Trend (30d)", sortable: false, align: "right",                                visible: true }),
+  // ── Opt-in columns (hidden by default — user reveals via ⚙ popover) ─────────
+  // WHY hidden by default: these metrics are valuable for specific strategies but
+  // add column width that crowds the 12-column default layout at 1440px.
+  Object.freeze({ key: "opMargin",      label: "OP MGN%",     sortable: true,  align: "right", formatter: "percent" as const, visible: false }),
+  Object.freeze({ key: "evEbitda",      label: "EV/EBITDA",   sortable: true,  align: "right", formatter: "number" as const,  visible: false }),
+  // ── PRD-0089 Wave I-B Block IB-L2 (T-IB-05): fundamentals snapshot opt-ins ──
+  // WHY listed here AS WELL as in `ag-screener-columns.tsx`:
+  //   - The popover (gear ⚙ icon) reads from THIS file to show toggle rows.
+  //   - The AG-Grid columns file reads from ITSELF for the ColDef factory.
+  //   - The page maps user prefs → AG-Grid visibility via colId === key.
+  // So a column must be declared in BOTH places to (a) appear in the popover
+  // and (b) actually have a ColDef. The key field must match the colId.
+  //
+  // FORMATTER MAPPING:
+  //   - "compact"  → 50M / $1.2B style (no decimals on avg-vol, 1dp on FCF).
+  //   - "number"   → fixed 2dp (eps_ttm: 6.32) / fixed 1dp (multiples).
+  //   - "percent"  → 28.4% (FCF margin).
+  //   - "text"     → raw string (credit rating, badge-rendered by colDef).
+  // The popover doesn't use these directly today — they're recorded for the
+  // future legacy TanStack table renderer if it gets resurrected. The AG-Grid
+  // path picks its renderer per-column from ag-screener-columns.tsx.
+  Object.freeze({ key: "avgVol",           label: "Avg Vol",     sortable: true,  align: "right", formatter: "compact" as const, visible: false }),
+  Object.freeze({ key: "epsTtm",           label: "EPS (TTM)",   sortable: true,  align: "right", formatter: "number" as const,  visible: false }),
+  Object.freeze({ key: "fcf",              label: "FCF",         sortable: true,  align: "right", formatter: "compact" as const, visible: false }),
+  Object.freeze({ key: "fcfMargin",        label: "FCF Mgn%",    sortable: true,  align: "right", formatter: "percent" as const, visible: false }),
+  Object.freeze({ key: "interestCoverage", label: "Int Cov",     sortable: true,  align: "right", formatter: "number" as const,  visible: false }),
+  Object.freeze({ key: "netDebtToEbitda",  label: "ND/EBITDA",   sortable: true,  align: "right", formatter: "number" as const,  visible: false }),
+  // creditRating uses a custom badge renderer (no formatter). sortable=false —
+  // see ag-screener-columns.tsx CreditRatingCellRenderer for the rationale
+  // (lexical sort would mis-order tiers).
+  Object.freeze({ key: "creditRating",     label: "Credit Rating", sortable: false, align: "right",                                visible: false }),
 ]) as readonly ScreenerColumn[];
 
 // ── Internal helpers ─────────────────────────────────────────────────────────

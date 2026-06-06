@@ -238,4 +238,40 @@ make monitoring-down && make monitoring
 
 ---
 
+## BP-652 — Grafana Provisioned Datasource UID Drift: All Dashboards "No Data"
+
+**Context**: `infra/grafana/provisioning/datasources/datasources.yml` declares Prometheus, Loki, and Tempo datasources but does not pin the `uid` field. On first boot Grafana auto-generates random UIDs (e.g. `PBFA97CFB590B2093`). Every dashboard JSON under `infra/grafana/dashboards/*.json` references its datasources by static lowercase UIDs — `"datasource": { "type": "prometheus", "uid": "prometheus" }`. The dashboard refs dangle and every panel renders **"No data"** even though Prometheus is healthy and scraping.
+
+**Symptoms**:
+- All Grafana dashboards show "No data" on every panel
+- `GET /api/v1/targets` on Prometheus shows targets healthy
+- `up` query on Prometheus returns data
+- `GET /api/datasources` on Grafana returns datasources with random uppercase UIDs (`PBFA97CFB590B2093`) instead of the expected lowercase `prometheus`/`loki`/`tempo`
+
+### Root cause
+
+`datasources.yml` without `uid:` causes Grafana to mint a random UID per datasource. Dashboard JSONs are static and cannot adapt — they encode UIDs verbatim. There is no warning at provisioning time; the failure surfaces only when a user opens a dashboard.
+
+### Fix
+
+Pin the `uid` field in every datasource entry:
+```yaml
+datasources:
+  - name: Prometheus
+    uid: prometheus           # ← MUST match dashboard refs
+    type: prometheus
+    url: http://prometheus:9090
+```
+
+After editing, restart Grafana: `docker compose restart grafana`. Provisioning upserts by name, so the existing datasource gets its UID updated in place — no datasource deletion required.
+
+### Prevention
+
+- Treat datasource `uid` as a contract between provisioning YAML and dashboard JSON. Both sides must use the same lowercase string.
+- CI check candidate: `jq` over all dashboard JSONs to extract distinct `datasource.uid` values and assert each appears as a `uid:` in `datasources.yml`.
+- When adding a new datasource, set its `uid` in the provisioning YAML BEFORE referencing it from a dashboard.
+
+
+---
+
 ---

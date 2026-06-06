@@ -581,7 +581,7 @@ async def run_backfill(
       field when the destination DB has the source columns (migration 013).
     """
     try:
-        import asyncpg  # type: ignore[import-not-found]
+        import asyncpg  # type: ignore[import-not-found,import-untyped]
     except ImportError:
         log.error("backfill.asyncpg_missing", msg="pip install asyncpg")
         sys.exit(1)

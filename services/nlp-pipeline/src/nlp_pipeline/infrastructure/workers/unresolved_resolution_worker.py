@@ -26,6 +26,10 @@ from typing import TYPE_CHECKING, Protocol
 from uuid import UUID
 
 import httpx
+from prompts.extraction.entity_mention_classification import (  # type: ignore[import-untyped]
+    ENTITY_MENTION_CLASSIFIER_SYSTEM,
+    ENTITY_MENTION_CLASSIFIER_USER,
+)
 
 from messaging.kafka.schema_paths import get_schema_path  # type: ignore[import-untyped]
 from nlp_pipeline.domain.enums import MentionClass, ResolutionOutcome
@@ -126,99 +130,21 @@ _ELIGIBLE_CLASSES: frozenset[str] = frozenset(
 
 _NON_ENTITY_NOISE_REASON = "non_entity_creating_class"
 
-# PLAN-0057 Wave B-3 / F-CRIT-05 — original fix; PLAN-0072 T-72-1-05 hardening.
+# Phase 2C (2026-06-05): the classifier prompts now live in libs/prompts
+# (``ENTITY_MENTION_CLASSIFIER_SYSTEM`` + ``ENTITY_MENTION_CLASSIFIER_USER``).
+# We resolve the static system block once at import time via .render() so the
+# hot path is still a single concat — byte-identical to the legacy constant.
 #
-# The previous prompt asked whether a mention "would have its own Wikipedia
-# article", which the LLM interpreted strictly: it rejected legitimate
-# financial entities such as subsidiaries, ETFs, lesser-known regulators,
-# and central banks of small jurisdictions.  Audit findings showed recall
-# on subsidiaries/ETFs/regulators sat around ~40% under the old prompt.
-#
-# The replacement template is finance-domain specific:
-#   • spells out *what counts* as an entity (companies, subsidiaries,
-#     business units, funds/ETFs, indices, vehicles, regulators, central
-#     banks, government bodies, supra-national institutions, named persons,
-#     named financial products);
-#   • spells out *what counts as noise* with explicit negative examples for
-#     the classes that leaked through in production (PLAN-0072 audit):
-#     pronouns, generic roles, financial jargon, media-outlet attribution;
-#   • adds a ``confidence`` field (0.0-1.0) to the output schema; callers
-#     treat confidence < 0.7 as noise even when is_entity=true;
-#   • shows five worked examples (two positive, three negative) covering
-#     the exact failure modes the audits flagged;
-#   • takes both ``surface`` (the lexical mention) and ``context`` (the
-#     surrounding domain text — pulled from the document/section title via
-#     ``EntityMentionRepository.get_unresolved_batch_with_context``) so the
-#     LLM can disambiguate ambiguous surfaces (e.g. "MAS" alone is unclear,
-#     but "Singapore central bank press release | Rate decision" → MAS is
-#     clearly the Monetary Authority of Singapore).
-#
-# Both Ollama (_phase2_llm_classify_local) and DeepInfra
-# (_phase2_llm_classify_external) call sites use this single template.
-# Static instruction block — identical across every call. Sent as the system role
-# for external (DeepInfra) requests so DeepInfra's prompt_cache can reuse the KV
-# tensors for this prefix, paying tokens only for the dynamic SURFACE/CONTEXT part.
-_CLASSIFICATION_SYSTEM_PROMPT = (
-    "You are classifying a candidate entity mention extracted from a "
-    "financial-news or filing pipeline. Decide whether the SURFACE refers "
-    "to a real, named entity worth tracking in a market-intelligence "
-    "knowledge graph.\n"
-    "\n"
-    "Treat as ENTITY (is_entity=true) any of:\n"
-    "  - public or private company, subsidiary, or business unit\n"
-    "  - investable fund, ETF, mutual fund, index, or other named "
-    "investable vehicle\n"
-    "  - regulator, central bank, government body, ministry, or "
-    "supra-national institution (IMF, ECB, BIS, etc.)\n"
-    "  - named person (executive, regulator, politician, analyst)\n"
-    "  - named financial product (specific bond series, named index, "
-    "named option product, etc.)\n"
-    "\n"
-    "Treat as NOISE (is_entity=false) any of:\n"
-    '  - pronouns and generic anaphora ("he", "she", "they", "it", "we", '
-    '"the company", "the firm")\n'
-    "  - generic roles or groups without a specific referent "
-    '("analysts", "management", "investors", "executives", "regulators", '
-    '"shareholders")\n'
-    "  - financial jargon that names a concept, not a trackable entity "
-    '("constant currency", "organic growth", "market share", "guidance")\n'
-    "  - media-outlet names when used as attribution rather than as the "
-    'subject of a relation ("Bloomberg", "Reuters", "Seeking Alpha", '
-    '"The Motley Fool", "CNBC", "MarketWatch")\n'
-    "  - pure number, date, or ticker fragments without context "
-    '("Q3", "10-K", "FY24")\n'
-    '  - common-noun event words ("merger", "earnings", "IPO")\n'
-    "  - misparsed sentence fragments or partial phrases\n"
-    "\n"
-    "Worked examples:\n"
-    '  - surface="iShares Core S&P 500 ETF", '
-    'context="The iShares Core S&P 500 ETF (IVV) saw inflows of $1.2B." '
-    '→ {"is_entity": true, "confidence": 0.98, "reason": "named investable fund"}\n'
-    '  - surface="MAS", '
-    'context="Singapore\'s MAS raised the benchmark rate by 25bps." '
-    '→ {"is_entity": true, "confidence": 0.95, "reason": "Monetary Authority of Singapore — regulator"}\n'
-    '  - surface="analysts", '
-    'context="Analysts said the company would miss guidance." '
-    '→ {"is_entity": false, "confidence": 0.98, "reason": "generic role, not a named entity"}\n'
-    '  - surface="constant currency", '
-    'context="Revenue grew 8% on a constant currency basis." '
-    '→ {"is_entity": false, "confidence": 0.97, "reason": "financial jargon, not a trackable entity"}\n'
-    '  - surface="Q3", '
-    'context="Q3 revenue rose 8% year-over-year." '
-    '→ {"is_entity": false, "confidence": 0.99, "reason": "calendar fragment, not a named entity"}\n'
-    "\n"
-    "Respond with a single JSON object ONLY (no prose, no code fences). "
-    'Schema: {"is_entity": <true|false>, "confidence": <0.0-1.0>, "reason": "<short rationale>"}'
-)
-
-# Dynamic suffix template — only the per-mention variable part.
-# The Ollama path assembles the full prompt as:
-#   _CLASSIFICATION_SYSTEM_PROMPT + "\n\n" + _CLASSIFICATION_PROMPT_TEMPLATE.format(...)
-# The external (DeepInfra) path sends _CLASSIFICATION_SYSTEM_PROMPT as the system
-# role and a formatted version of this template as the user role.
-# Kept as a standalone string (not concatenated with the system prompt) so that
-# str.format() never encounters the JSON-example curly braces in the system prompt.
-_CLASSIFICATION_PROMPT_TEMPLATE = 'SURFACE: "{surface}"\nCONTEXT: "{context}"'
+# Lineage (PLAN-0057 Wave B-3 / F-CRIT-05 + PLAN-0072 T-72-1-05): the prompt
+# replaced an earlier "would have its own Wikipedia article" formulation that
+# silently dropped subsidiaries / ETFs / lesser-known regulators (~40% recall).
+# The current finance-domain version spells out positive + negative class
+# examples and adds a confidence threshold (<0.7 → noise) at the call site.
+# Both the Ollama and DeepInfra paths share the same prompt text.
+_CLASSIFICATION_SYSTEM_PROMPT = ENTITY_MENTION_CLASSIFIER_SYSTEM.render()
+# Stable identifier (name@version#hash) for structlog — lets log consumers
+# correlate classification drift to a prompt revision.
+_CLASSIFICATION_PROMPT_ID = ENTITY_MENTION_CLASSIFIER_SYSTEM.identifier()
 
 # SQL for enqueuing a newly-discovered entity mention into intelligence_db for
 # S7 ProvisionalEnrichmentWorker to process. ON CONFLICT DO NOTHING is idempotent:
@@ -351,6 +277,9 @@ class UnresolvedResolutionWorker:
             entity_created=stats.entity_created,
             noise=stats.noise,
             errors=stats.errors,
+            # Phase 2C: identifier (name@version#hash) of the classifier system
+            # prompt so log consumers can pin a cycle to a prompt revision.
+            prompt_id=_CLASSIFICATION_PROMPT_ID,
         )
         return WorkerStats(
             processed=stats.processed,
@@ -681,7 +610,14 @@ class UnresolvedResolutionWorker:
         # previously bare double-quotes in surface or context could break the
         # prompt structure (e.g. surface='say "hello"' would yield an
         # un-terminated string literal inside the turn text).
-        user_turn = "SURFACE: " + json.dumps(surface[:200]) + "\nCONTEXT: " + json.dumps(context_text)
+        # Phase 2C: shape now lives in ``ENTITY_MENTION_CLASSIFIER_USER``; the
+        # caller still owns the json.dumps escaping (the template inlines the
+        # rendered values verbatim, so the escaped output keeps its outer
+        # double-quotes and the prompt is byte-identical to the legacy build).
+        user_turn = ENTITY_MENTION_CLASSIFIER_USER.render(
+            surface=json.dumps(surface[:200]),
+            context=json.dumps(context_text),
+        )
 
         # _CLASSIFICATION_SYSTEM_PROMPT is the static prefix for the Ollama path.
         # Prepend it to the dynamic user turn to build the full single-prompt string.

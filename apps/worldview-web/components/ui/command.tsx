@@ -57,7 +57,7 @@ const CommandInput = React.forwardRef<
     <CommandPrimitive.Input
       ref={ref}
       className={cn(
-        "flex h-9 w-full rounded-[2px] bg-transparent py-3 text-sm outline-none",
+        "flex h-[36px] w-full rounded-[2px] bg-transparent py-3 text-[14px] outline-none",
         // PLAN-0059 W0 F-VISUAL-027: explicit tokens (was opacity-50)
         "placeholder:text-muted-foreground disabled:cursor-not-allowed disabled:text-[hsl(var(--disabled-foreground))]",
         className,
@@ -89,7 +89,7 @@ const CommandEmpty = React.forwardRef<
 >(({ className, ...props }, ref) => (
   <CommandPrimitive.Empty
     ref={ref}
-    className={cn("py-6 text-center text-sm text-muted-foreground", className)}
+    className={cn("py-6 text-center text-[14px] text-muted-foreground", className)}
     {...props}
   />
 ));
@@ -125,7 +125,7 @@ const CommandItem = React.forwardRef<
   <CommandPrimitive.Item
     ref={ref}
     className={cn(
-      "relative flex cursor-pointer select-none items-center rounded-[2px] px-2 py-1.5 text-sm outline-none",
+      "relative flex cursor-pointer select-none items-center rounded-[2px] px-2 py-1.5 text-[14px] outline-none",
       "aria-selected:bg-accent aria-selected:text-accent-foreground",
       "data-[disabled]:pointer-events-none data-[disabled]:opacity-50",
       className,

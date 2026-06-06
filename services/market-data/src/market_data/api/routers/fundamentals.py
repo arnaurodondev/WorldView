@@ -6,9 +6,11 @@ Fundamentals records are stored per instrument in the DB.
 
 from __future__ import annotations
 
+import asyncio
 from typing import Annotated, Any
 from uuid import UUID
 
+import structlog
 from fastapi import APIRouter, Depends, HTTPException, Path, Query
 
 from market_data.api.dependencies import (
@@ -16,10 +18,19 @@ from market_data.api.dependencies import (
     get_fundamentals_section_uc,
     get_fundamentals_snapshot_uc,
     get_lookup_instrument_uc,
+    get_query_fundamentals_uc,
 )
 from market_data.api.schemas.fundamentals import (
+    CurrentSnapshot,
+    FundamentalsBatchPerTickerResult,
+    FundamentalsBatchRequest,
+    FundamentalsBatchResponse,
     FundamentalsHistoryPeriod,
     FundamentalsHistoryResponse,
+    FundamentalsQueryPeriodRow,
+    FundamentalsQueryRequest,
+    FundamentalsQueryResponse,
+    FundamentalsQuerySnapshot,
     FundamentalsRecordResponse,
     FundamentalsResponse,
     FundamentalsSnapshotResponse,
@@ -30,6 +41,28 @@ from market_data.application.use_cases.query_fundamentals import GetFundamentals
 from market_data.domain.entities import FundamentalsRecord
 from market_data.domain.enums import FundamentalsSection
 from market_data.domain.errors import InstrumentNotFoundError
+
+log = structlog.get_logger(__name__)
+
+# PLAN-0095 W2: bound the batch fan-out so a hostile or buggy caller can't
+# saturate the use-case worker pool with 1000 concurrent fundamentals queries.
+# 25 is the worst-case rag-chat screener result count after FIX-LIVE-T clamping;
+# above that, the LLM is no longer comparing — it's listing.
+_BATCH_TICKER_CAP = 25
+
+# PLAN-0097 T-W3-04: typed reason codes for batch per-ticker failures.
+# Module-scope constants (ruff N806 forbids function-scope ALL_CAPS names).
+# Importable for regression tests that assert against the literal strings.
+_REASON_INVALID_TICKER = "invalid_ticker"
+_REASON_UPSTREAM_TIMEOUT = "upstream_timeout"
+_REASON_UPSTREAM_404 = "upstream_404"
+_REASON_UPSTREAM_ERROR = "upstream_error"
+# PLAN-0098 W4 T-W4-02: per-ticker error code for the rare case where the
+# lookup adapter returns a structurally malformed payload (no ``instrument``,
+# ``instrument.id`` is None, or the id is not a valid UUID string). Distinct
+# from ``invalid_ticker`` (which says "we asked, got InstrumentNotFoundError")
+# so post-mortem dashboards can spot contract drift vs genuine bad tickers.
+_REASON_INVALID_LOOKUP = "invalid_lookup"
 
 router = APIRouter(tags=["fundamentals"])
 
@@ -72,6 +105,12 @@ async def get_fundamentals_history(
     symbol: Annotated[str | None, Query(min_length=1, max_length=20)] = None,
     isin: Annotated[str | None, Query(min_length=12, max_length=12)] = None,
     periods: int = Query(default=8, ge=1, le=40),
+    # F-LIVE-P (2026-05-26): explicit periodicity selector. The "quarterly"
+    # default matches the rag-chat tool's near-universal ask and is the safer
+    # choice — backwards-compatible with older callers that omit the param
+    # (which used to receive a mix and could see the FY2025 annual row
+    # quoted as Q1 FY2026, the $34.639B AMD bug).
+    period_type: Annotated[str, Query(pattern=r"^(quarterly|annual|QUARTERLY|ANNUAL)$")] = "quarterly",
     uc: Annotated[GetFundamentalsHistoryUseCase, Depends(get_fundamentals_history_uc)] = ...,  # type: ignore[assignment]
     lookup_uc: Annotated[InstrumentLookupUseCase, Depends(get_lookup_instrument_uc)] = ...,  # type: ignore[assignment]
 ) -> FundamentalsHistoryResponse:
@@ -106,13 +145,272 @@ async def get_fundamentals_history(
     data = await uc.execute(
         instrument_id=UUID(instrument.id),
         periods=periods,
+        period_type=period_type,
     )
 
+    # PLAN-0103 W25 / BP-640: surface the TTM/live snapshot as a sibling field.
+    # The use case returns ``current_snapshot`` as a plain dict (or None when
+    # HIGHLIGHTS was empty); the schema model performs the field validation.
+    snapshot_dict = data.get("current_snapshot")
+    current_snapshot = CurrentSnapshot(**snapshot_dict) if snapshot_dict else None
     return FundamentalsHistoryResponse(
         instrument_id=instrument.id,
         ticker=instrument.symbol,
         periods=[FundamentalsHistoryPeriod(**p) for p in data["periods"]],
         period_count=data["period_count"],
+        current_snapshot=current_snapshot,
+    )
+
+
+# PLAN-0095 W2 T-W2-01: POST /fundamentals/batch — multi-ticker fan-out.
+# IMPORTANT: registered before /fundamentals/{instrument_id} catch-all so
+# FastAPI's first-match wins on "/fundamentals/batch" (the UUID pattern on
+# {instrument_id} would otherwise 422 the literal "batch" string, which is
+# correct but wastes a request).
+@router.post("/fundamentals/batch", response_model=FundamentalsBatchResponse)
+async def post_fundamentals_batch(
+    body: FundamentalsBatchRequest,
+    uc: Annotated[GetFundamentalsHistoryUseCase, Depends(get_fundamentals_history_uc)] = ...,  # type: ignore[assignment]
+    lookup_uc: Annotated[InstrumentLookupUseCase, Depends(get_lookup_instrument_uc)] = ...,  # type: ignore[assignment]
+) -> FundamentalsBatchResponse:
+    """Return quarterly fundamentals history for many tickers in one call.
+
+    PLAN-0095 W2 T-W2-01. Designed for rag-chat's screener → fundamentals
+    workflow: one HTTP call replaces N sequential LLM turns. Per-ticker
+    failures (unknown ticker, transient DB error, etc.) are isolated via
+    ``return_exceptions=True`` so a single bad ticker never poisons the batch.
+
+    Response shape:
+
+        {
+          "results": {
+            "AAPL": {"status": "ok", "periods": [...]},
+            "BADTICKER": {"status": "error", "reason": "..."},
+            ...
+          }
+        }
+
+    The caller correlates by ORIGINAL ticker (preserves case) so it does not
+    need to remember the canonical instrument symbol.
+    """
+    # Hard cap to bound worst-case latency / DB load. Returning 422 (not 400)
+    # to match FastAPI's convention for body-validation failures.
+    if len(body.tickers) > _BATCH_TICKER_CAP:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Too many tickers: {len(body.tickers)} > cap {_BATCH_TICKER_CAP}",
+        )
+
+    # ──────────────────────────────────────────────────────────────────────
+    # PLAN-0097 T-W3-02: explicit two-phase parallelisation.
+    # PLAN-0097 T-W3-04: typed reason codes (str(exc) never leaks to body).
+    #
+    # Phase split (resolve → fetch) makes per-phase error classification
+    # unambiguous and gives structlog a precise `phase=` field. Concurrency
+    # within each phase is preserved via asyncio.gather; end-to-end latency
+    # is equivalent to the previous interleaved scheme when both phases are
+    # I/O-bound (audit §4 lines 145-160).
+    # ──────────────────────────────────────────────────────────────────────
+
+    def _classify(exc: BaseException) -> str:
+        """Map a raised exception to one of the four sanitised reason codes."""
+        # InstrumentNotFoundError → unambiguously "we don't know this ticker".
+        if isinstance(exc, InstrumentNotFoundError):
+            return _REASON_INVALID_TICKER
+        # asyncio.TimeoutError aliases the builtin TimeoutError in 3.11+; we
+        # use the union form for forward-compat with older callers.
+        if isinstance(exc, TimeoutError | asyncio.TimeoutError):
+            return _REASON_UPSTREAM_TIMEOUT
+        # HTTP-shaped errors from an upstream client — check 404 specifically
+        # so the LLM can render "no data" vs "transient error".
+        status = getattr(exc, "status_code", None) or getattr(exc, "status", None)
+        if status == 404:
+            return _REASON_UPSTREAM_404
+        # Default bucket for anything else (asyncpg errors, KeyError on bad
+        # payload shape, etc.) — full exception detail is structlog-only.
+        return _REASON_UPSTREAM_ERROR
+
+    # ── Phase 1: resolve every ticker → instrument concurrently ───────────
+    resolutions = await asyncio.gather(
+        *[lookup_uc.execute(symbol=ticker) for ticker in body.tickers],
+        return_exceptions=True,
+    )
+
+    # ── Phase 2: fetch fundamentals concurrently for every resolved id ────
+    # ``fetch_tasks`` is a parallel array of (ticker, task-or-None) pairs so
+    # we can re-thread results back to their original ticker preserving order.
+    # Per-ticker errors here are captured as ``invalid_lookup`` slots so a
+    # malformed resolution payload from a downstream contract change (e.g.
+    # ``result.instrument`` becoming None, or ``id`` returning a non-UUID
+    # string) fails ONLY that ticker rather than 500-ing the whole batch.
+    # PLAN-0098 W4 T-W4-02 (code-review §10.1 P2 defensiveness).
+    fetch_tasks: list[tuple[str, asyncio.Task[dict] | None]] = []
+    # Per-ticker resolution failures keyed by ticker so the result-assembly
+    # loop below can surface them with the right ``reason`` code without
+    # re-deriving them from the raw exception (which was already classified).
+    resolution_overrides: dict[str, str] = {}
+    for ticker, resolution in zip(body.tickers, resolutions, strict=True):
+        if isinstance(resolution, BaseException):
+            fetch_tasks.append((ticker, None))
+            continue
+        try:
+            # Defensive: ``instrument`` or ``instrument.id`` could be None,
+            # and ``UUID(...)`` raises ValueError/AttributeError/TypeError on
+            # malformed values. We catch the union so a contract regression in
+            # the lookup adapter degrades to a per-ticker error, not a 500.
+            instrument_id = UUID(resolution.instrument.id)
+        except (AttributeError, TypeError, ValueError) as exc:
+            log.info(
+                "fundamentals_batch_per_ticker_error",
+                ticker=ticker,
+                phase="resolve",
+                error=type(exc).__name__,
+                error_detail=str(exc),
+                reason=_REASON_INVALID_LOOKUP,
+            )
+            resolution_overrides[ticker] = _REASON_INVALID_LOOKUP
+            fetch_tasks.append((ticker, None))
+            continue
+        fetch_tasks.append(
+            (
+                ticker,
+                asyncio.ensure_future(uc.execute(instrument_id=instrument_id, periods=body.periods)),
+            )
+        )
+
+    # PLAN-0099 W1 T-W1-01 (BP-592): structural ticker→outcome binding.
+    # Previously this used `fetch_iter = iter(fetch_results)` + `next(fetch_iter)`
+    # advanced only when `task is not None`. That pattern is positional: any
+    # asymmetry between iterator-consumption and the `continue` branches
+    # silently desyncs the row→ticker map (observed in chat-eval Q4 where
+    # NVDA Q3 FY2025 carried AMD's $10.3B value, `tests/validation/chat_eval/runs/20260527T154018Z/agg_q4.json`).
+    # The audit `docs/audits/2026-05-27-plan-0098-batch-rowmix-and-latency.md` §A
+    # documents the failure shape: a resolution failure mid-list combined with
+    # a later successful fetch shifts every subsequent row's outcome.
+    # The fix binds each fetch outcome to its originating ticker BEFORE the
+    # result-assembly loop so the loop can index by ticker — purely structural.
+    pending_tickers: list[str] = [ticker for ticker, task in fetch_tasks if task is not None]
+    pending_tasks = [task for _, task in fetch_tasks if task is not None]
+    fetch_results = await asyncio.gather(*pending_tasks, return_exceptions=True) if pending_tasks else []
+    # ticker → outcome (either a use-case result dict OR a BaseException). Built
+    # via `zip(..., strict=True)` so any length mismatch surfaces immediately
+    # instead of silently truncating (defence against a future asyncio.gather
+    # contract change).
+    fetch_outcome_by_ticker: dict[str, dict | BaseException] = dict(zip(pending_tickers, fetch_results, strict=True))
+
+    out: dict[str, FundamentalsBatchPerTickerResult] = {}
+    for (ticker, task), resolution in zip(fetch_tasks, resolutions, strict=True):
+        # Resolution-phase failure → no fetch was attempted. Two sources:
+        #   (a) lookup_uc.execute raised → resolution is BaseException;
+        #   (b) UUID parse on a malformed resolution payload → recorded in
+        #       ``resolution_overrides`` (PLAN-0098 W4 T-W4-02 defensiveness).
+        if task is None:
+            override = resolution_overrides.get(ticker)
+            if override is not None:
+                # (b) Already logged at the catch site; just emit the slot.
+                out[ticker] = FundamentalsBatchPerTickerResult(status="error", reason=override)
+                continue
+            # (a) The gather invariant holds for the non-override branch.
+            assert isinstance(resolution, BaseException)
+            reason = _classify(resolution)
+            # Full exception detail to structlog ONLY — never to the response.
+            log.info(
+                "fundamentals_batch_per_ticker_error",
+                ticker=ticker,
+                phase="resolve",
+                error=type(resolution).__name__,
+                error_detail=str(resolution),
+                reason=reason,
+            )
+            out[ticker] = FundamentalsBatchPerTickerResult(status="error", reason=reason)
+            continue
+
+        # Fetch was attempted — look up THIS ticker's outcome by name (not by
+        # iterator position). This is the load-bearing change vs the old
+        # `next(fetch_iter)` pattern (BP-592).
+        fetch_outcome = fetch_outcome_by_ticker[ticker]
+        if isinstance(fetch_outcome, BaseException):
+            reason = _classify(fetch_outcome)
+            log.info(
+                "fundamentals_batch_per_ticker_error",
+                ticker=ticker,
+                phase="fetch",
+                error=type(fetch_outcome).__name__,
+                error_detail=str(fetch_outcome),
+                reason=reason,
+            )
+            out[ticker] = FundamentalsBatchPerTickerResult(status="error", reason=reason)
+            continue
+
+        periods_raw = fetch_outcome.get("periods", []) if isinstance(fetch_outcome, dict) else []
+        periods_list = periods_raw if isinstance(periods_raw, list) else []
+        # PLAN-0103 W25 / BP-640: forward the use case's current_snapshot so
+        # the batch consumer (rag-chat MarketHandler batch path) can render
+        # live valuation ratios without a second HTTP round-trip.
+        snap_dict = fetch_outcome.get("current_snapshot") if isinstance(fetch_outcome, dict) else None
+        snap_model = CurrentSnapshot(**snap_dict) if snap_dict else None
+        out[ticker] = FundamentalsBatchPerTickerResult(
+            status="ok",
+            periods=[FundamentalsHistoryPeriod(**p) for p in periods_list],
+            current_snapshot=snap_model,
+        )
+
+    return FundamentalsBatchResponse(results=out)
+
+
+# PLAN-0104 W32: unified query_fundamentals endpoint.
+# IMPORTANT: registered BEFORE /fundamentals/{instrument_id} catch-all so the
+# literal "/fundamentals/query" wins first-match against the UUID regex.
+@router.post("/fundamentals/query", response_model=FundamentalsQueryResponse)
+async def post_fundamentals_query(
+    body: FundamentalsQueryRequest,
+    uc: Annotated[Any, Depends(get_query_fundamentals_uc)] = ...,  # type: ignore[assignment]
+    lookup_uc: Annotated[InstrumentLookupUseCase, Depends(get_lookup_instrument_uc)] = ...,  # type: ignore[assignment]
+) -> FundamentalsQueryResponse:
+    """Parameterised fundamentals projection over a metric registry.
+
+    PLAN-0104 W32. Returns the requested metric set as both a per-period
+    series AND a TTM/live snapshot, with per-metric coverage flags. Designed
+    for rag-chat's ``query_fundamentals`` tool which needs richer metrics
+    (gross margin, forward P/E, PEG, EV/EBITDA, consensus EPS, FCF yield)
+    than the 6-column ``get_fundamentals_history`` projection exposes.
+
+    Additive: the legacy ``GET /fundamentals/history`` is unchanged.
+    """
+    if body.instrument_id is None and body.symbol is None and body.isin is None:
+        raise HTTPException(
+            status_code=400,
+            detail="At least one of instrument_id, symbol, or isin is required",
+        )
+    if not body.metrics:
+        raise HTTPException(status_code=422, detail="metrics list must not be empty")
+
+    try:
+        result = await lookup_uc.execute(
+            id=body.instrument_id,
+            isin=body.isin,
+            symbol=body.symbol,
+        )
+    except InstrumentNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    instrument = result.instrument
+    data = await uc.execute(
+        instrument_id=UUID(instrument.id),
+        metrics=body.metrics,
+        periods=body.periods,
+        period_type=body.period_type,
+        include_snapshot=body.include_snapshot,
+    )
+
+    snapshot_dict = data.get("snapshot")
+    snapshot_model = FundamentalsQuerySnapshot(**snapshot_dict) if snapshot_dict else None
+    return FundamentalsQueryResponse(
+        instrument_id=instrument.id,
+        ticker=instrument.symbol,
+        metrics_by_period=[FundamentalsQueryPeriodRow(**row) for row in data["metrics_by_period"]],
+        snapshot=snapshot_model,
+        coverage=data["coverage"],
     )
 
 

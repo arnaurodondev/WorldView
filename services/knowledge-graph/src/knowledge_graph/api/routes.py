@@ -26,7 +26,6 @@ from knowledge_graph.api.dependencies import (
     EntityGraphReposDep,
 )
 from knowledge_graph.api.schemas import (
-    EntitySummary,
     GraphNeighborhoodResponse,
     GraphStatsResponse,
     RelationResponse,
@@ -62,15 +61,10 @@ def _summary_authority(confidence: float | None, evidence_count: int) -> float:
     return round(confidence * math.log1p(evidence_count), 6)
 
 
-def _entity_summary(row: dict[str, object]) -> EntitySummary:
-    return EntitySummary(
-        entity_id=row["entity_id"],  # type: ignore[arg-type]
-        canonical_name=str(row["canonical_name"]),
-        entity_type=str(row["entity_type"]),
-        isin=str(row["isin"]) if row.get("isin") else None,
-        ticker=str(row["ticker"]) if row.get("ticker") else None,
-        exchange=str(row["exchange"]) if row.get("exchange") else None,
-    )
+# PLAN-0093 B-4 T-B-4-02 / F-607: this used to be a local helper duplicated
+# from cypher.py. Both surfaces now share the canonical helper in
+# api/_entity_summary so the two routes can never diverge again.
+from knowledge_graph.api._entity_summary import entity_summary_from_row as _entity_summary  # noqa: E402
 
 
 def _relation_response(

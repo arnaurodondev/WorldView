@@ -30,3 +30,7 @@ class WatchlistMember:
     ticker: str | None = None
     name: str | None = None
     instrument_id: UUID | None = None
+    # REQ-002b: caller-supplied ``Idempotency-Key`` (UUID). NULL for legacy
+    # rows + callers that don't send the header. Partial unique index on
+    # (watchlist_id, idempotency_key) enforces uniqueness only when set.
+    idempotency_key: UUID | None = None

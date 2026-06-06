@@ -19,7 +19,7 @@ schema change.
 
 from __future__ import annotations
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class ScreenerResultItem(BaseModel):
@@ -44,6 +44,24 @@ class ScreenerResultItem(BaseModel):
     # the metrics dict. Using extra="allow" means any future metric key on the
     # metrics dict passes through without a schema change.
     metrics: dict[str, float | None] | None = None
+
+
+class NLScreenerRequest(BaseModel):
+    """Request body for POST /v1/screener/nl-translate (PLAN-0091 Wave E-1)."""
+
+    model_config = ConfigDict(extra="allow")
+
+    query: str = Field(min_length=1, max_length=500)  # natural-language screening query
+
+
+class NLScreenerResponse(BaseModel):
+    """Structured screener filter object parsed from the LLM response."""
+
+    model_config = ConfigDict(extra="allow")
+
+    filters: dict[str, object] = {}  # field → value/range; keys validated against /screen/fields
+    natural_language_query: str = ""  # echo of the original query
+    explanation: str = ""  # LLM-generated 1-sentence plain-English description of the screen
 
 
 class ScreenerResponse(BaseModel):

@@ -30,6 +30,7 @@ from market_data.infrastructure.db.repositories.fundamental_metrics_repo import 
 from market_data.infrastructure.db.repositories.fundamentals_read_repo import PgFundamentalsReadRepository
 from market_data.infrastructure.db.repositories.fundamentals_repo import PgFundamentalsRepository
 from market_data.infrastructure.db.repositories.ingestion_event_repo import PgIngestionEventRepository
+from market_data.infrastructure.db.repositories.insider_transactions_repo import PgInsiderTransactionsRepository
 from market_data.infrastructure.db.repositories.instrument_repo import PgInstrumentRepository
 from market_data.infrastructure.db.repositories.ohlcv_repo import PgOHLCVRepository
 from market_data.infrastructure.db.repositories.outbox_event_repo import PgOutboxEventRepository
@@ -104,6 +105,9 @@ class SqlAlchemyUnitOfWork(UnitOfWork):
         self._outbox_events_repo: PgOutboxEventRepository | None = None
         self._prediction_markets_repo: PgPredictionMarketRepository | None = None
         self._prediction_market_snapshots_repo: PgPredictionMarketSnapshotRepository | None = None
+        # PLAN-0089 Wave L-4b: per-transaction insider feed (separate from the
+        # fundamentals-embedded snapshot, see insider_transactions table).
+        self._insider_transactions_repo: PgInsiderTransactionsRepository | None = None
 
     # ── context manager ───────────────────────────────────────────────────────
 
@@ -253,6 +257,17 @@ class SqlAlchemyUnitOfWork(UnitOfWork):
     def outbox(self) -> OutboxEventRepository:
         """Alias for ``outbox_events`` — satisfies ``UnitOfWorkWithOutboxProtocol``."""
         return self.outbox_events
+
+    @property
+    def insider_transactions(self) -> PgInsiderTransactionsRepository:
+        """Insider-transactions repo (Wave L-4b) — write session.
+
+        Used by both the InsiderTransactionsConsumer (insert_batch) and the
+        daily ``rollup_insider_90d`` worker (sum_window_usd).
+        """
+        if self._insider_transactions_repo is None:
+            self._insider_transactions_repo = PgInsiderTransactionsRepository(self._write())
+        return self._insider_transactions_repo
 
     @property
     def prediction_markets(self) -> PredictionMarketRepository:

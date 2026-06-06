@@ -71,6 +71,41 @@ def test_routes_registered() -> None:
     assert "/api/v1/securities" in routes
 
 
+def test_static_screen_fields_have_constraint_compatible_field_type() -> None:
+    """Every static ScreenFieldMetadata must have field_type in {'numeric','text','date'}.
+
+    Regression test for BP-585 (PLAN-0098 W3): the DB check constraint
+    `ck_screen_field_metadata_field_type` only allows the admitted values.
+    Previously `has_fundamentals` and `has_ohlcv` used 'boolean', which caused
+    a CheckViolation every ~60s during the periodic refresh.
+
+    WL-5c QA finding #2 (2026-05-28, migration 031): the admitted set was
+    widened to include ``'date'`` for the L-5c calendar fields
+    (``next_earnings_date`` / ``next_dividend_date``) so the UI rendering
+    switch can pick a calendar widget instead of a numeric input.
+    """
+    from market_data.app import _get_static_screen_fields
+
+    fields = _get_static_screen_fields()
+    assert fields, "expected at least one static screen field"
+    for field in fields:
+        assert field.field_type in {"numeric", "text", "date"}, (
+            f"field {field.name!r} has invalid field_type={field.field_type!r} "
+            "(must be 'numeric', 'text', or 'date' per ck_screen_field_metadata_field_type)"
+        )
+
+    # WL-5c QA finding #2: the two calendar fields MUST now use the canonical
+    # 'date' field_type so the UI can render a calendar widget rather than a
+    # plain number. Lock-step with migration 031's UPDATE.
+    by_name = {f.name: f for f in fields}
+    for date_field in ("next_earnings_date", "next_dividend_date"):
+        assert date_field in by_name, f"missing expected L-5c field {date_field!r}"
+        assert by_name[date_field].field_type == "date", (
+            f"WL-5c QA finding #2 regression: {date_field!r} must use "
+            f"field_type='date', got {by_name[date_field].field_type!r}"
+        )
+
+
 def test_readyz_returns_503_when_db_down() -> None:
     """GET /readyz returns 503 when the DB is unreachable.
 

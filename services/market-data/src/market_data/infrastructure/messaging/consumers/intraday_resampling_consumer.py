@@ -19,6 +19,7 @@ from typing import TYPE_CHECKING, Any, cast
 
 from contracts.canonical.ohlcv import CanonicalOHLCVBar  # type: ignore[import-untyped]
 from market_data.application.use_cases.resample_ohlcv import ResampledOHLCVUseCase
+from market_data.domain._ticker_normalize import _normalize_ticker
 from market_data.domain.entities import OHLCVBar
 from market_data.domain.enums import Timeframe
 from market_data.domain.value_objects import ProviderPriority
@@ -207,7 +208,12 @@ class IntradayResamplingConsumer(ValkeyDedupMixin, BaseKafkaConsumer[dict]):
             )
             return
 
-        symbol = value.get("symbol", "")
+        # PLAN-0089 F2 step 7: canonicalise ticker so the lookup uses the same
+        # dot-form that ohlcv_consumer / quotes_consumer used when writing the
+        # instrument row.  This consumer does not itself create instruments,
+        # but if it received "BRK-B" while the row was written as "BRK.B" the
+        # lookup would miss and resampling would silently skip the bar.
+        symbol = _normalize_ticker(value.get("symbol", ""))
         exchange = value.get("exchange") or ""
 
         # ── Resolve instrument_id from symbol + exchange ───────────────────────

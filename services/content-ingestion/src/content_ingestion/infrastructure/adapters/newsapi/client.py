@@ -6,9 +6,11 @@ Daily quota is tracked in Valkey.
 
 from __future__ import annotations
 
+import time
 from typing import TYPE_CHECKING, Any
 
 from content_ingestion.domain.exceptions import AdapterError, QuotaExhaustedError
+from content_ingestion.infrastructure.metrics.prometheus import record_fetch_attempt
 from observability import get_logger  # type: ignore[import-untyped]
 
 if TYPE_CHECKING:
@@ -114,14 +116,29 @@ class NewsAPIClient:
         if from_date:
             params["from"] = from_date
 
-        response = await self._http.get(self._base_url, params=params, headers=headers)
+        # Per-attempt Prometheus instrumentation (BP-174 fix; mirrors the
+        # EODHD client). status_label is mutated inside try/except so the
+        # finally block records the correct outcome label.
+        start = time.monotonic()
+        status_label = "success"
+        try:
+            response = await self._http.get(self._base_url, params=params, headers=headers)
 
-        if response.status_code == 429:
-            msg = "NewsAPI rate limit exceeded (HTTP 429)"
-            raise AdapterError(msg)
-        if response.status_code >= 400:
-            msg = f"NewsAPI error: HTTP {response.status_code}"
-            raise AdapterError(msg)
+            if response.status_code == 429:
+                status_label = "rate_limited"
+                msg = "NewsAPI rate limit exceeded (HTTP 429)"
+                raise AdapterError(msg)
+            if response.status_code >= 400:
+                status_label = "error"
+                msg = f"NewsAPI error: HTTP {response.status_code}"
+                raise AdapterError(msg)
+        except AdapterError:
+            raise
+        except Exception:
+            status_label = "error"
+            raise
+        finally:
+            record_fetch_attempt("newsapi", status_label, time.monotonic() - start)
 
         data = response.json()
         if not isinstance(data, dict):

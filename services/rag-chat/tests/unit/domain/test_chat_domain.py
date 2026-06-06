@@ -129,7 +129,14 @@ class TestDateRange:
 
 class TestQueryIntent:
     def test_all_8_values_accessible(self) -> None:
-        """All 8 QueryIntent values are present (7 original + GENERAL added in PRD-0016)."""
+        """All 10 QueryIntent values are present (7 original + GENERAL +
+        MACRO + CONTRADICTION).
+
+        MACRO was added in PLAN-0093 Wave E-1 so the macro/calendar tool
+        family has its own per-intent prompt and rerank weight bucket.
+        CONTRADICTION was added in PLAN-0093 ITER-9 (F-LIVE-O) so
+        "what contradicts X" questions route to a dedicated prompt.
+        """
         from rag_chat.domain.enums import QueryIntent
 
         expected = {
@@ -141,6 +148,8 @@ class TestQueryIntent:
             "REASONING",
             "PORTFOLIO",
             "GENERAL",  # added PRD-0016 Wave A-1
+            "MACRO",  # added PLAN-0093 Wave E-1
+            "CONTRADICTION",  # added PLAN-0093 ITER-9 (F-LIVE-O)
         }
         actual = {v.value for v in QueryIntent}
         assert actual == expected

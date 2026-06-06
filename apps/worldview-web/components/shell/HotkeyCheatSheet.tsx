@@ -157,13 +157,13 @@ export function HotkeyCheatSheet() {
         role="dialog"
         aria-label="Keyboard shortcuts"
         aria-modal="true"
-        className="mt-12 w-full max-w-2xl overflow-hidden rounded-[2px] border border-border bg-card text-foreground shadow-xl"
+        className="mt-12 w-full max-w-2xl overflow-hidden rounded-[2px] border border-border bg-card text-foreground "
         onClick={(e) => e.stopPropagation()}
       >
         {/* Header */}
         <div className="flex items-center justify-between gap-3 border-b border-border px-4 py-2.5">
           <div className="flex flex-col">
-            <h2 className="text-sm font-semibold">Keyboard shortcuts</h2>
+            <h2 className="text-[14px] font-semibold">Keyboard shortcuts</h2>
             <p className="text-[10px] text-muted-foreground">
               Auto-derived from the live registry — every shortcut listed here is wired.
             </p>

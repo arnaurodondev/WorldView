@@ -21,6 +21,8 @@ from rag_chat.infrastructure.db.repositories.thread_repository import (
 )
 
 if TYPE_CHECKING:
+    from datetime import datetime
+
     from sqlalchemy.ext.asyncio import AsyncSession
 
 
@@ -65,16 +67,32 @@ class SqlAlchemyMessageRepository(MessageRepository):
         rows.sort(key=lambda r: r.created_at)
         return [_row_to_entity(row) for row in rows]
 
-    async def sample_recent_with_citations(self, n: int) -> list[Message]:
-        """Return up to *n* recent assistant messages that have citations, sampled randomly from last 7 days."""
-        from datetime import UTC, datetime, timedelta
+    async def sample_recent_with_citations(self, n: int, since: datetime | None = None) -> list[Message]:
+        """Return up to *n* recent assistant messages that have citations.
 
-        cutoff = datetime.now(tz=UTC) - timedelta(days=7)
+        ``since`` is REQUIRED for the SQL adapter (PLAN-0099 W4 MN-6). The port
+        keeps ``since: datetime | None = None`` for testability (in-memory
+        fakes can ignore the window), but the production SQL adapter rejects
+        None with an explicit error rather than silently falling back to a
+        7-day window — the prior fallback was dead code (the only live caller,
+        ``ScoreCitationAccuracyUseCase``, always passes a 24h cutoff) and a
+        silent fallback would mask config regressions if a new caller forgets
+        to pass ``since``.
+        """
+        # MN-6 / R7: replace the deprecated stdlib datetime.now(tz=UTC) shim
+        # with the canonical common.time.utc_now(). The fallback branch is
+        # gone — callers MUST pass ``since``.
+        if since is None:
+            raise ValueError(
+                "sample_recent_with_citations requires a `since` datetime — "
+                "the SQL adapter no longer falls back to a 7-day window "
+                "(PLAN-0099 W4 MN-6)."
+            )
         result = await self._session.execute(
             select(MessageModel)
             .where(
                 MessageModel.role == "assistant",
-                MessageModel.created_at >= cutoff,
+                MessageModel.created_at >= since,
                 MessageModel.citations.isnot(None),
                 func.jsonb_array_length(MessageModel.citations) > 0,
             )

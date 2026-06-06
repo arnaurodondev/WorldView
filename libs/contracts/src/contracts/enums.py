@@ -19,6 +19,7 @@ class ContentSourceType(StrEnum):
     """
 
     EODHD = "eodhd"
+    EODHD_TICKER_NEWS = "eodhd_ticker_news"
     SEC_EDGAR = "sec_edgar"
     FINNHUB = "finnhub"
     NEWSAPI = "newsapi"

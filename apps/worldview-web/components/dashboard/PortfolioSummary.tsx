@@ -30,6 +30,12 @@ import { useAuth } from "@/hooks/useAuth";
 import { Skeleton } from "@/components/ui/skeleton";
 import { cn, formatPrice, formatPercent, priceChangeClass } from "@/lib/utils";
 import { QUOTE_REFETCH_MS } from "@/hooks/usePortfolioMetrics";
+// QA A-F-001/F-002 (2026-05-21): central query-key factory + shared
+// active-portfolio resolution so this widget shares the cache with
+// PortfolioSwitcher / usePortfolioMetrics AND respects the user's chip
+// selection.
+import { qk } from "@/lib/query/keys";
+import { useResolvedPortfolioId } from "@/hooks/useResolvedPortfolioId";
 
 // WHY local Period type: avoids importing a global enum just for three values
 // — the dashboard only ever toggles 1D/1W/1M and Bloomberg's panel-header
@@ -49,13 +55,20 @@ export function PortfolioSummary() {
 
   // ── Query 1: portfolio list ────────────────────────────────────────────────
   const { data: portfolios, isLoading: portfoliosLoading } = useQuery({
-    queryKey: ["portfolios"],
+    queryKey: qk.portfolios.list(),
     queryFn: () => createGateway(accessToken).getPortfolios(),
     enabled: !!accessToken,
     staleTime: 60_000, // WHY 60s: portfolios rarely change during the day
   });
 
-  const firstPortfolio = portfolios?.[0];
+  // QA A-F-002 (2026-05-21): respect the PortfolioSwitcher chip selection.
+  // Pre-fix this widget always picked portfolios[0], so toggling the chip
+  // flipped the TopBar but left this card showing the first portfolio's
+  // data — half-shipped W1.1 F-002.
+  const resolvedPortfolioId = useResolvedPortfolioId(portfolios);
+  const firstPortfolio = portfolios?.find(
+    (p) => p.portfolio_id === resolvedPortfolioId,
+  );
 
   // ── Query 2: holdings for first portfolio ─────────────────────────────────
   const { data: holdingsResp, isLoading: holdingsLoading } = useQuery({
@@ -234,14 +247,13 @@ export function PortfolioSummary() {
     performance?.return_pct != null ? performance.return_pct : totalUnrealisedPnlPct;
   const isPnlPositive = headlinePnl >= 0;
 
-  // ── Top 4 holdings by current value ───────────────────────────────────────
+  // Show all holdings sorted by current value — container is overflow-auto so it scrolls.
   const topHoldings = [...holdings]
     .sort((a, b) => {
       const aVal = (quotes[a.instrument_id]?.price ?? a.average_cost) * a.quantity;
       const bVal = (quotes[b.instrument_id]?.price ?? b.average_cost) * b.quantity;
       return bVal - aVal;
-    })
-    .slice(0, 4);
+    });
 
   return (
     // WHY bg-background: other dashboard widgets (SectorHeatmap, TopMovers, etc.)
@@ -318,10 +330,10 @@ export function PortfolioSummary() {
               single line with column-aligned digits.
               WHY min-w-0: required so flex shrinking can kick in if the
               widget container ever narrows below the value's intrinsic width.
-              WHY text-xl (was text-2xl): 24px is too large for a dashboard
-              widget. text-xl (20px) keeps the value prominent without
+              WHY text-[20px] (was text-[24px]): 24px is too large for a dashboard
+              widget. text-[20px] (20px) keeps the value prominent without
               dominating the small panel. */}
-          <p className="min-w-0 flex-1 whitespace-nowrap font-mono text-xl font-semibold tabular-nums text-foreground">
+          <p className="min-w-0 flex-1 whitespace-nowrap font-mono text-[20px] font-semibold tabular-nums text-foreground">
             {/* WHY "~" prefix: standard financial convention for "approximately".
                 Shown when one or more prices are delayed, stale, or unavailable.
                 Bloomberg uses this same convention on delayed portfolios.
@@ -343,11 +355,11 @@ export function PortfolioSummary() {
               WHY shrink-0 + whitespace-nowrap: the P&L is the secondary metric
               but must remain fully readable; we'd rather the value (above)
               shrink/truncate than have the P&L break across lines.
-              WHY text-sm (14px): smaller than the value (20px) to establish
+              WHY text-[14px] (14px): smaller than the value (20px) to establish
               hierarchy — the user's eye lands on total value first, P&L
               second. */}
           <div
-            className={`flex shrink-0 items-center gap-1 whitespace-nowrap text-sm ${priceChangeClass(headlinePnlPct)}`}
+            className={`flex shrink-0 items-center gap-1 whitespace-nowrap text-[14px] ${priceChangeClass(headlinePnlPct)}`}
           >
             {isPnlPositive ? (
               <TrendingUp className="h-3 w-3 shrink-0" />
@@ -453,19 +465,13 @@ export function PortfolioSummary() {
         })}
       </div>
 
-      {/* Link to full portfolio */}
-      {holdings.length > 4 && (
-        // T-B-2-06: truncate + px-2 prevents long counts (e.g., "+46 more")
-        // from overflowing the widget on narrow viewports. The redundant
-        // " → View all" suffix is dropped because the entire row is the
-        // click target — duplicating affordance language adds noise.
-        <Link
-          href="/portfolio"
-          className="mt-2 block truncate px-2 text-center text-xs text-muted-foreground hover:text-foreground"
-        >
-          +{holdings.length - 4} more
-        </Link>
-      )}
+      {/* Link to full portfolio page */}
+      <Link
+        href="/portfolio"
+        className="mt-2 block truncate px-2 text-center text-[10px] text-muted-foreground/60 hover:text-foreground"
+      >
+        View portfolio →
+      </Link>
 
       {/* Close inner content wrapper (flex-1 overflow-auto px-2 py-1) */}
       </div>

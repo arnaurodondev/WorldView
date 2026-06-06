@@ -1,0 +1,41 @@
+# PLAN-0093 Wave G-3 — 75-query weak-point survey matrix.
+#
+# 5 tickers × 5 metric families × 3 question variants = 75 queries.
+# Used by tests/validation/chat_eval/test_weak_point_survey.py to drive
+# a broad sweep over the chat assistant and report per-(ticker, metric,
+# variant) outcomes.
+#
+# Metric family → friendly phrase used in question templates:
+#   REVENUE         → "revenue"
+#   EPS             → "earnings per share"
+#   RATIO           → "P/E ratio"
+#   HEADCOUNT       → "employee count"
+#   CORPORATE_ACTION → "most recent stock split, dividend, or buyback"
+
+tickers:
+  - AAPL
+  - NVDA
+  - AMD
+  - TSM
+  - "BRK.B"
+
+metric_families:
+  - id: REVENUE
+    label: revenue
+  - id: EPS
+    label: earnings per share
+  - id: RATIO
+    label: P/E ratio
+  - id: HEADCOUNT
+    label: employee count
+  - id: CORPORATE_ACTION
+    label: most recent stock split, dividend, or buyback
+
+# Variant templates — {ticker} and {metric} are substituted at runtime.
+variants:
+  - id: v1_single
+    template: "What is {ticker}'s {metric}?"
+  - id: v2_compare
+    template: "Compare {ticker} and AAPL on {metric}."
+  - id: v3_trend
+    template: "Show me {ticker}'s {metric} over the last 4 quarters."

@@ -2,7 +2,9 @@
 
 Samples 50 recent assistant messages, extracts [cN]-annotated claim spans,
 and uses an LLM judge to score each claim-snippet pair on a 0-3 rubric.
-The normalised mean is emitted as the `rag_citation_accuracy` gauge.
+The normalised mean is emitted as the `rag_citation_accuracy_24h` gauge
+(PLAN-0107 canonical; the legacy `rag_citation_accuracy` alias was removed
+after the PLAN-0099 W4 transition window since no consumer scraped it).
 
 PLAN-0084 A-1 changes:
 - T-A-1-03: `_sanitise` helper fences inputs against prompt injection (F-S01).
@@ -15,12 +17,20 @@ from __future__ import annotations
 import asyncio
 import re
 from collections.abc import Iterator
+from datetime import timedelta
 from typing import TYPE_CHECKING
+from uuid import UUID
 
 import structlog
 
+# Use the canonical citation-judge rubric from libs/prompts so version +
+# content_hash + identifier() are persisted alongside every Prometheus
+# emission and structlog event for audit trace linkage.
+from prompts.evaluation import CITATION_JUDGE
+
+from common.time import utc_now  # type: ignore[import-untyped]
 from rag_chat.application.metrics.prometheus import (
-    rag_citation_accuracy,
+    rag_citation_accuracy_24h,
     rag_citation_accuracy_call_failures_total,
 )
 from rag_chat.domain.errors import LLMJudgeTimeoutError
@@ -45,7 +55,11 @@ _SENTENCE_SEP_RE = re.compile(r"(?<=[.!?])\s+")
 # Truncation prevents token-budget exhaustion and reduces attack surface for
 # injection payloads embedded in long articles.
 _MAX_CLAIM_CHARS = 1024
-_MAX_SNIPPET_CHARS = 1024
+# 500 tokens ≈ 150-300 words ≈ 2500 chars upper bound for typical English prose.
+# Raised from 1024 once chunk text (not just title) is fed to the judge — chunk
+# snippets are full retrieval payloads, not headlines, and truncating at 1024
+# would clip mid-sentence for every chunk over ~200 words.
+_MAX_SNIPPET_CHARS = 2500
 
 # F-S01: Tokens that could break the rubric delimiters or override instructions.
 # If found the token is replaced with [REDACTED] and a warning is logged.
@@ -69,32 +83,12 @@ def _sanitise(text: str, max_chars: int) -> str:
     return truncated
 
 
-# Prompt injection defence: explicit delimiters fence the {claim} and {snippet}
-# substitution slots so the judge model cannot be overridden by adversarial content.
-# The <<<CLAIM …>>> / <<<SNIPPET …>>> frame is chosen because it is visually
-# distinct from prose and is included in _INJECTION_TOKENS so any attempt to
-# embed the same frame inside the inputs is redacted by _sanitise() before
-# formatting (F-S01: belt-and-braces approach).
-_CITATION_RUBRIC = """\
-You are evaluating whether a snippet supports a chat assistant's claim.
-The claim may be a direct quote OR a synthesis/paraphrase of multiple sources.
-
-<<<CLAIM START>>>
-{claim}
-<<<CLAIM END>>>
-
-<<<SNIPPET START>>>
-{snippet}
-<<<SNIPPET END>>>
-
-Score the snippet's support of the claim on this 0-3 scale:
-- 0: Snippet is irrelevant to the claim
-- 1: Snippet is tangentially related but does not support the specific claim
-- 2: Snippet supports the claim — EITHER directly OR by supporting a paraphrase
-     or synthesis of which this claim is a faithful summary.
-- 3: Snippet directly answers/contains the claim verbatim or near-verbatim.
-
-Respond with ONLY a single digit 0, 1, 2, or 3."""
+# Prompt injection defence: the {claim} and {snippet} substitution slots inside
+# CITATION_JUDGE.template are fenced by explicit <<<CLAIM …>>> / <<<SNIPPET …>>>
+# delimiters so the judge model cannot be overridden by adversarial content.
+# The same delimiters are listed in _INJECTION_TOKENS above so any attempt to
+# embed the framing inside the inputs is redacted by _sanitise() BEFORE
+# CITATION_JUDGE.render(...) is called (F-S01: belt-and-braces approach).
 
 
 def iter_cited_claims(msg: Message) -> Iterator[tuple[str, str]]:
@@ -125,9 +119,11 @@ def iter_cited_claims(msg: Message) -> Iterator[tuple[str, str]]:
 class ScoreCitationAccuracyUseCase:
     """Sample recent assistant messages and judge each cited claim via LLM.
 
-    Emits the `rag_citation_accuracy` Gauge with the mean normalised score.
-    Uses `citation.title` as the snippet proxy — adequate for MVP; a richer
-    snippet field (full chunk text) can be added in a later wave.
+    Emits the `rag_citation_accuracy_24h` Gauge with the mean normalised
+    score (PLAN-0107 canonical; the legacy `rag_citation_accuracy` alias
+    was removed in the follow-up cleanup — no consumers scraped it).
+    Uses `citation.text` (chunk text persisted in JSONB, PLAN-0107) as the
+    snippet, falling back to `citation.title` for legacy records.
 
     PLAN-0084 A-1 T-A-1-04 additions:
     - ``LLMJudgeTimeoutError`` and provider exceptions are caught per-pair and
@@ -153,17 +149,41 @@ class ScoreCitationAccuracyUseCase:
         self._run_budget_s = run_budget_s
 
     async def execute(self) -> float:
-        """Score citations and return the mean accuracy (0-1). Returns 0.0 on failure."""
-        samples = await self._repo.sample_recent_with_citations(n=50)
+        """Score citations and return the mean accuracy (0-1). Returns 0.0 on failure.
+
+        Daily-cron addition (PLAN-0099 W4): sampling is restricted to the last
+        24h via the ``since`` kwarg so the gauge tracks recent quality drift
+        rather than a 7-day rolling average. The use case dedups
+        ``(message_id, citation.id)`` pairs so the same chunk cited under
+        different refs within ONE message scores once (realistic when agents
+        do multi-step retrieval and the same source surfaces twice). The
+        same chunk cited across TWO messages still scores twice — by design,
+        because each message is an independent answer event.
+        """
+        # 24h window — the cron runs daily so this lines up with one cron tick
+        # without overlap. The repo port keeps ``since=None`` as the legacy
+        # "no window" behaviour for callers that haven't migrated yet.
+        since = utc_now() - timedelta(hours=24)
+        samples = await self._repo.sample_recent_with_citations(n=50, since=since)
         if len(samples) < self._min_samples:
+            # Dedicated log key for the 24h-window case so operators can grep
+            # for genuinely-quiet days vs misconfigured cron schedules.
             log.warning(  # type: ignore[no-any-return]
-                "citation_accuracy_insufficient_samples",
+                "citation_accuracy_insufficient_samples_24h",
                 n=len(samples),
                 min_required=self._min_samples,
+                window_hours=24,
+                # cadence label so dashboards correlate quiet-day warnings with
+                # the 24h cron schedule (PLAN-0099 W4 QA F-007).
+                cadence="daily",
             )
             return 0.0
 
         scores: list[float] = []
+        # Dedup set — (message_id, citation.id) tuples already scored.
+        # Same chunk cited under different refs within one message scores once.
+        # Same chunk across two messages still scores twice — by design.
+        seen: set[tuple[UUID, str]] = set()
 
         async def _score_all() -> None:
             for msg in samples:
@@ -173,17 +193,31 @@ class ScoreCitationAccuracyUseCase:
                         ref_num = int(ref_num_str)
                     except ValueError:
                         continue
+                    # Resolve the actual Citation BEFORE building the dedup key
+                    # so we can key on its stable `id` (chunk identity) rather
+                    # than the ref number (which the LLM assigns per-message).
                     cite = next((c for c in msg.citations if c.ref == ref_num), None)
                     if cite is None:
                         continue
-                    snippet = cite.title or ""
+                    # Dedup AFTER ref-resolution so non-existent refs (typos in
+                    # the LLM output) don't poison the seen-set. Key uses
+                    # citation.id so two refs pointing to the same chunk within
+                    # one message score once.
+                    dedup_key = (msg.message_id, cite.id)
+                    if dedup_key in seen:
+                        continue
+                    seen.add(dedup_key)
+                    # Prefer chunk text (full payload) over title (headline).
+                    # Falls back to title for legacy citations persisted before
+                    # the Citation.text field was added (BP-NEW PLAN-0099 W4).
+                    snippet = cite.text or cite.title or ""
 
                     # T-A-1-03: sanitise both inputs before building the prompt.
                     safe_claim = _sanitise(claim_text, _MAX_CLAIM_CHARS)
                     safe_snippet = _sanitise(snippet, _MAX_SNIPPET_CHARS)
-                    # Build the full fenced prompt here so CitationJudgeAdapter
-                    # receives a ready-to-send string (transport only, no logic).
-                    prompt = _CITATION_RUBRIC.format(claim=safe_claim, snippet=safe_snippet)
+                    # Build the full fenced prompt from the libs/prompts template
+                    # so version+content_hash propagate to the log line below.
+                    prompt = CITATION_JUDGE.render(claim=safe_claim, snippet=safe_snippet)
 
                     try:
                         # A-002: snippet param removed from LLMJudgePort.score_citation —
@@ -228,11 +262,20 @@ class ScoreCitationAccuracyUseCase:
             )
 
         mean = sum(scores) / len(scores) if scores else 0.0
-        rag_citation_accuracy.set(mean)
+        # PLAN-0107 follow-up: legacy ``rag_citation_accuracy`` gauge removed
+        # (was dual-emitted during the W4 transition; no Grafana / external
+        # consumer ever scraped it). ``rag_citation_accuracy_24h`` is now the
+        # sole canonical gauge — see infra/grafana/dashboards/rag-chat.json
+        # for the dashboard panel.
+        rag_citation_accuracy_24h.set(mean)
         log.info(  # type: ignore[no-any-return]
             "citation_accuracy_scored",
             n_samples=len(samples),
             n_claims=len(scores),
             mean=round(mean, 4),
+            # judge_prompt_id ties the gauge value to a specific rubric body.
+            # When the rubric is bumped in libs/prompts the hash changes, which
+            # lets log-correlation queries diff "before vs after" cleanly.
+            judge_prompt_id=CITATION_JUDGE.identifier(),
         )
         return mean

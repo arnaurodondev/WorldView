@@ -158,6 +158,6 @@ def build_jwks_response(public_key: RSAPublicKey, kid: str) -> dict[str, Any]:
                 "kid": kid,
                 "n": _int_to_b64url(n),
                 "e": _int_to_b64url(e),
-            }
-        ]
+            },
+        ],
     }

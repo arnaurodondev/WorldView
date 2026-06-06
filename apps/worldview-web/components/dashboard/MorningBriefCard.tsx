@@ -313,7 +313,11 @@ export function MorningBriefCard() {
     (brief.entity_mentions ?? []).reduce((acc, mention) => {
       if (!mention.name) return acc;
       const regex = new RegExp(`\\b${escapeRegex(mention.name)}\\b`, "g");
-      return acc.replace(regex, `[${mention.name}](/instruments/${mention.entity_id})`);
+      // PRD-0089 F2 §6.6: prefer ticker-first URLs (`/instruments/AAPL`) when
+      // the mention carries a ticker; fall back to the UUID form for entities
+      // without a ticker (e.g. private companies, macro topics).
+      const slug = (mention as { ticker?: string | null }).ticker ?? mention.entity_id;
+      return acc.replace(regex, `[${mention.name}](/instruments/${slug})`);
     }, text);
 
   // WHY two parallel pipelines: summary is the collapsed-view source and
@@ -503,33 +507,41 @@ export function MorningBriefCard() {
             </div>
           ) : brief.sections && brief.sections.length > 0 ? (
             // ── Expanded view (structured): PLAN-0062-W4 T-W4-E-01 ──
-            // WHY StructuredBrief (not inline map): the shared StructuredBrief
-            // component handles BriefBullet citation chips, confidence badge,
-            // lead rendering, and variant-specific layout. Using it here means
-            // any citation-gate improvements are reflected across all four
-            // surfaces simultaneously rather than requiring 4 separate edits.
-            //
-            // WHY variant="full": this is the fully expanded card view — use the
-            // maximum-fidelity layout with citation chips per bullet, lead block,
-            // and confidence badge when confidence is low.
-            //
-            // WHY data-testid via StructuredBrief: StructuredBrief emits
-            // data-testid="structured-brief" and data-testid="brief-section" per
-            // section — satisfying the PLAN-0049 T-D-4-06 E2E assertion that
-            // "EITHER ≥1 brief-section OR a brief-narrative is rendered after
-            // expansion". The marker set is a superset of the old inline markers.
-            // PLAN-0066 Wave F T-W10-F-03: briefId + token for BulletFeedback.
-            // briefId is optional — null/undefined suppresses feedback widgets.
-            //
-            // ISSUE-2: Filter out LLM "REMOVED" placeholder sections.
-            // WHY filter here: some LLM completions emit "REMOVED" as a literal
-            // section heading instead of omitting the section entirely (prompt
-            // artifact — the model has seen training data where sections were
-            // marked REMOVED rather than deleted). Rendering such a section
-            // shows a confusing empty-looking heading with no bullets.
-            // Filter at the call-site (not inside StructuredBrief) so the
-            // shared component stays agnostic of this prompt quirk and the
-            // filtered list is not mistaken for a logic error in the renderer.
+            // WHY render the summary above the structured view: the v4.2+
+            // prompt produces a ``## Summary`` paragraph that is the single
+            // best 10-second synthesis of the brief. Previously the expanded
+            // view jumped straight to the 6 sections, so a user clicking
+            // "Read more" *lost* the summary they had been reading in the
+            // collapsed card. Keeping the summary visible at the top of the
+            // expanded view preserves context, matches the v4.x design
+            // (Summary + Details), and adds no extra height when summary is
+            // null (legacy/cached briefs).
+            // We render the summary via ReactMarkdown (not StructuredBrief.lead)
+            // because (a) brief.lead is the v3.0 LEAD field which is distinct
+            // from v4.x summary, and (b) summary may contain markdown links
+            // produced by linkifyEntities() above.
+            <>
+              {summaryWithLinks && (
+                <div className="mb-2 border-b border-border/40 pb-2 [&>*:first-child]:mt-0 [&>*:last-child]:mb-0">
+                  <ReactMarkdown
+                    remarkPlugins={REMARK_PLUGINS}
+                    components={{
+                      a: ({ href, children }) => (
+                        <Link href={href ?? "#"} className="text-primary">
+                          {children}
+                        </Link>
+                      ),
+                    }}
+                  >
+                    {summaryWithLinks}
+                  </ReactMarkdown>
+                </div>
+              )}
+            {/* StructuredBrief renders the shared bullet/citation/confidence layout;
+                variant=full = expanded card view; data-testid emitted by the component
+                satisfies the PLAN-0049 T-D-4-06 E2E assertion. PLAN-0066 Wave F adds
+                briefId+token for BulletFeedback widgets (briefId null/undefined disables).
+                Filtering out LLM REMOVED placeholder sections is a prompt-quirk workaround. */}
             <StructuredBrief
               lead={brief.lead}
               sections={
@@ -543,13 +555,33 @@ export function MorningBriefCard() {
               briefId={brief.id ?? undefined}
               token={accessToken ?? undefined}
             />
+            </>
           ) : (
             // ── Expanded view (fallback): brief.narrative as raw markdown ──
             // Used when sections[] is empty (parser couldn't structure the
-            // narrative) — same look as before PLAN-0049.
+            // narrative) — same look as before PLAN-0049, plus the summary
+            // header so the user keeps the synthesis context they were
+            // reading in the collapsed view (see structured branch above for
+            // the rationale).
             // WHY data-testid="brief-narrative" (T-D-4-06): see the section
             // marker above for the rationale.
             <div data-testid="brief-narrative">
+              {summaryWithLinks && (
+                <div className="mb-2 border-b border-border/40 pb-2 [&>*:first-child]:mt-0 [&>*:last-child]:mb-0">
+                  <ReactMarkdown
+                    remarkPlugins={REMARK_PLUGINS}
+                    components={{
+                      a: ({ href, children }) => (
+                        <Link href={href ?? "#"} className="text-primary">
+                          {children}
+                        </Link>
+                      ),
+                    }}
+                  >
+                    {summaryWithLinks}
+                  </ReactMarkdown>
+                </div>
+              )}
               <ReactMarkdown
                 remarkPlugins={REMARK_PLUGINS}
                 components={{

@@ -122,7 +122,7 @@ class TestFinalScore:
                 embedding_repo=embedding_repo,
                 relation_repo=relation_repo,  # type: ignore[arg-type]
                 entity_id=query_id,
-            )
+            ),
         )
 
         assert len(results) == 1
@@ -156,7 +156,7 @@ class TestFinalScore:
                 embedding_repo=embedding_repo,
                 relation_repo=relation_repo,  # type: ignore[arg-type]
                 entity_id=query_id,
-            )
+            ),
         )
 
         assert results[0].final_score == pytest.approx(1.0)
@@ -184,7 +184,7 @@ class TestFinalScore:
                 embedding_repo=embedding_repo,
                 relation_repo=relation_repo,  # type: ignore[arg-type]
                 entity_id=query_id,
-            )
+            ),
         )
 
         assert results[0].final_score == pytest.approx(0.70)
@@ -214,7 +214,7 @@ class TestErrorPaths:
                     embedding_repo=embedding_repo,
                     relation_repo=relation_repo,  # type: ignore[arg-type]
                     entity_id=uuid4(),
-                )
+                ),
             )
 
     def test_similar_entities_embedding_not_available(self) -> None:
@@ -234,7 +234,7 @@ class TestErrorPaths:
                     embedding_repo=embedding_repo,
                     relation_repo=relation_repo,  # type: ignore[arg-type]
                     entity_id=query_id,
-                )
+                ),
             )
 
     def test_similar_entities_empty_ann_results(self) -> None:
@@ -252,7 +252,7 @@ class TestErrorPaths:
                 embedding_repo=embedding_repo,
                 relation_repo=relation_repo,  # type: ignore[arg-type]
                 entity_id=query_id,
-            )
+            ),
         )
 
         assert results == []
@@ -295,7 +295,7 @@ class TestFiltersAndSort:
                 relation_repo=relation_repo,  # type: ignore[arg-type]
                 entity_id=query_id,
                 min_score=0.6,
-            )
+            ),
         )
 
         assert len(results) == 1
@@ -332,7 +332,7 @@ class TestFiltersAndSort:
                 relation_repo=relation_repo,  # type: ignore[arg-type]
                 entity_id=query_id,
                 include_competitors_only=True,
-            )
+            ),
         )
 
         assert len(results) == 1
@@ -361,7 +361,7 @@ class TestFiltersAndSort:
                 relation_repo=relation_repo,  # type: ignore[arg-type]
                 entity_id=query_id,
                 top_k=2,
-            )
+            ),
         )
 
         assert len(results) == 2
@@ -395,7 +395,7 @@ class TestFiltersAndSort:
                 embedding_repo=embedding_repo,
                 relation_repo=relation_repo,  # type: ignore[arg-type]
                 entity_id=query_id,
-            )
+            ),
         )
 
         assert results[0].final_score >= results[1].final_score

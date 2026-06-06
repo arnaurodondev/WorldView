@@ -50,6 +50,9 @@ def _build_factories(
         owns both engines for disposal on shutdown.  When no separate read
         replica is configured, ``read_engine is write_engine``.
     """
+    # BP-502: application_name surfaces this service in pg_stat_activity for
+    # connection debugging; pool_recycle=300 defends against stale DNS sockets.
+    _connect_args: dict[str, object] = {"server_settings": {"application_name": "content-ingestion"}}
     write_engine = create_async_engine(
         settings.db_url.get_secret_value(),
         echo=False,
@@ -57,6 +60,8 @@ def _build_factories(
         pool_pre_ping=True,
         pool_size=10,
         max_overflow=20,
+        pool_recycle=300,
+        connect_args=_connect_args,
     )
     write_factory: async_sessionmaker[AsyncSession] = async_sessionmaker(
         write_engine,
@@ -77,6 +82,8 @@ def _build_factories(
             pool_pre_ping=True,
             pool_size=20,
             max_overflow=30,
+            pool_recycle=300,
+            connect_args=_connect_args,
         )
         read_factory = async_sessionmaker(read_engine, expire_on_commit=False)
 

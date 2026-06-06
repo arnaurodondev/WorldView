@@ -109,7 +109,7 @@ export function BrokerageConnectionCard({
     // not shadows or large rounded corners.
     <div className="border border-border rounded-[2px] overflow-hidden">
       {/* ── Card header ──────────────────────────────────────────────────── */}
-      <div className="flex h-9 items-center gap-2 px-3 border-b border-border bg-card">
+      <div className="flex h-[36px] items-center gap-2 px-3 border-b border-border bg-card">
         {/* Status dot */}
         <span className={cn("h-1.5 w-1.5 rounded-full shrink-0", dot)} aria-hidden />
 

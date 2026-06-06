@@ -23,6 +23,7 @@ from typing import TYPE_CHECKING, Literal
 
 import structlog
 
+from market_data.domain._ticker_normalize import _normalize_ticker
 from market_data.domain.errors import EodhRateLimitError, InstrumentNotFoundError  # noqa: F401
 
 if TYPE_CHECKING:
@@ -138,14 +139,27 @@ class OnDemandProfileUseCase:
         if not any([ticker, isin]):
             raise ValueError("At least one of ticker or isin must be provided")
 
-        # SSRF validation before any external call
-        upper_ticker = ticker.upper() if ticker else None
+        # SSRF validation before any external call.
+        # Order matters:
+        #   1. Validate the RAW (uppercased) input against TICKER_PATTERN.  We
+        #      must do this BEFORE normalization because `_normalize_ticker`
+        #      collapses `/` and `-` to `.`, which would let a path-traversal
+        #      payload like `../../etc/passwd` survive validation (it becomes
+        #      `......ETC.PASSWD`, all chars in the regex's allowed set).
+        #   2. PLAN-0089 F2 step 7: only after the input is known-safe do we
+        #      normalize to the canonical dot-form (BRK-B / brk.b / BRK/B →
+        #      BRK.B) so the DB lookup hits the row that the Kafka consumers
+        #      wrote under the canonical form.
+        raw_upper_ticker = ticker.upper() if ticker else None
         upper_isin = isin.upper() if isin else None
 
-        if upper_ticker:
-            _validate_ticker(upper_ticker)
+        if raw_upper_ticker:
+            _validate_ticker(raw_upper_ticker)
         if upper_isin:
             _validate_isin(upper_isin)
+
+        # Normalize AFTER validation succeeded.
+        upper_ticker = _normalize_ticker(raw_upper_ticker) if raw_upper_ticker else None
 
         # ── Phase 1: DB lookup (open + close session) ────────────────────────
         snapshot = await self._phase1_lookup(upper_ticker, upper_isin)
@@ -175,6 +189,11 @@ class OnDemandProfileUseCase:
         general = eodhd_data.get("General", {})
         description = general.get("Description") or None
         eodhd_sector = general.get("Sector") or None
+        # WHY ETF fallback: EODHD General.Sector is absent for ETF/FUND instruments —
+        # the field simply does not exist in their fundamentals response. Without this
+        # fallback every ETF holding shows "Unknown" in the sector bar (BP-508).
+        if eodhd_sector is None and general.get("Type", "").upper() in ("ETF", "FUND", "MUTUAL FUND"):
+            eodhd_sector = "ETF"
         eodhd_industry = general.get("Industry") or None
         eodhd_country = general.get("CountryISO") or None
         eodhd_isin = general.get("ISIN") or None

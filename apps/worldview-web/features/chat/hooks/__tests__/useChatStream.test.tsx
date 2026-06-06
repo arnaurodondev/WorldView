@@ -784,4 +784,132 @@ describe("useChatStream", () => {
 
     expect(result.current.activeTools).toHaveLength(0);
   });
+
+  // ── PLAN-0099 W4: agent_iteration SSE event ───────────────────────────────
+  //
+  // These tests pin the wire-format contract for the new event and the
+  // visibility semantics of `iterationEvent` (set on each event, cleared on
+  // every end-of-stream path: done / [DONE] / cancel / resetForThread / error).
+
+  it("agent_iteration SSE event populates iterationEvent state", async () => {
+    const frames = [
+      'event: agent_iteration\ndata: {"iteration":0,"max_iterations":8,"stage":"planning_tools","tools_completed_total":0,"elapsed_ms":12}\n',
+      "data: [DONE]\n",
+    ];
+    const { reader } = makeReader(frames);
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      statusText: "OK",
+      body: { getReader: () => reader },
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { args } = makeArgs();
+    const { result } = renderHook(() => useChatStream(args));
+
+    await act(async () => {
+      await result.current.send("research nvda");
+    });
+
+    // After [DONE]: iterationEvent must be cleared (strip should not persist
+    // alongside the settled answer bubble).
+    expect(result.current.iterationEvent).toBeNull();
+  });
+
+  it("agent_iteration event is visible mid-stream before done arrives", async () => {
+    // Uses the abortable reader so we can observe the pre-done state.
+    const ar = makeAbortableReader();
+    const fetchMock = vi.fn().mockImplementation((_url, init: RequestInit) => {
+      init.signal?.addEventListener("abort", () => ar.controller.abort());
+      return Promise.resolve({
+        ok: true,
+        status: 200,
+        statusText: "OK",
+        body: { getReader: () => ar.reader },
+      });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { args } = makeArgs();
+    const { result } = renderHook(() => useChatStream(args));
+
+    let sendPromise!: Promise<void>;
+    act(() => {
+      sendPromise = result.current.send("question");
+    });
+
+    // Push a planning_tools event.
+    await act(async () => {
+      ar.pushChunk(
+        'event: agent_iteration\ndata: {"iteration":0,"max_iterations":8,"stage":"planning_tools","tools_completed_total":0,"elapsed_ms":50}\n',
+      );
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    await waitFor(() => {
+      expect(result.current.iterationEvent).not.toBeNull();
+      expect(result.current.iterationEvent?.stage).toBe("planning_tools");
+    });
+
+    // Then a synthesizing event — state should update to the latest.
+    await act(async () => {
+      ar.pushChunk(
+        'event: agent_iteration\ndata: {"iteration":3,"max_iterations":8,"stage":"synthesizing","tools_completed_total":5,"elapsed_ms":17400}\n',
+      );
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    await waitFor(() => {
+      expect(result.current.iterationEvent?.stage).toBe("synthesizing");
+      expect(result.current.iterationEvent?.iteration).toBe(3);
+      expect(result.current.iterationEvent?.tools_completed_total).toBe(5);
+      expect(result.current.iterationEvent?.elapsed_ms).toBe(17400);
+    });
+
+    // Finish the stream cleanly so we don't leak a pending read.
+    await act(async () => {
+      ar.pushChunk("data: [DONE]\n");
+      ar.finish();
+      await sendPromise;
+    });
+
+    // After [DONE] the strip must be cleared (parent unmounts the bubble).
+    expect(result.current.iterationEvent).toBeNull();
+  });
+
+  it("malformed agent_iteration data is ignored (graceful degradation)", async () => {
+    // A backend-side schema mismatch should NOT crash the stream — the strip
+    // simply does not update. Other event types (tokens, done) continue to flow.
+    const frames = [
+      // Missing required fields (stage is an unknown enum value).
+      'event: agent_iteration\ndata: {"iteration":0,"max_iterations":8,"stage":"unknown_stage","tools_completed_total":0,"elapsed_ms":0}\n',
+      'data: {"text":"hi"}\n',
+      "data: [DONE]\n",
+    ];
+    const { reader } = makeReader(frames);
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({
+        ok: true,
+        status: 200,
+        statusText: "OK",
+        body: { getReader: () => reader },
+      }),
+    );
+
+    const { args } = makeArgs();
+    const { result } = renderHook(() => useChatStream(args));
+
+    await act(async () => {
+      await result.current.send("question");
+    });
+
+    // iterationEvent never got set (malformed data was ignored), and the
+    // streaming bubble still completed successfully — assistant message exists.
+    expect(result.current.iterationEvent).toBeNull();
+    expect(result.current.localMessages).toHaveLength(2);
+  });
 });

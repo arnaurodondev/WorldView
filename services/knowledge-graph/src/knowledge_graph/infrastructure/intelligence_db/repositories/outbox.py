@@ -42,22 +42,38 @@ class OutboxRepository(OutboxRepositoryPort):
         topic: str,
         partition_key: str,
         payload_avro: bytes,
+        *,
+        event_id: UUID,
     ) -> UUID:
-        """Append an outbox event within the current transaction."""
+        """Append an outbox event within the current transaction.
+
+        ``event_id`` must be supplied by the caller and should be derived
+        deterministically from the triggering Kafka message (e.g. the same UUID
+        embedded in the Avro payload's ``event_id`` field).  This ensures that
+        consumer replays (crash recovery, rebalance) insert the same outbox row
+        rather than duplicating the downstream Kafka event.
+
+        ``ON CONFLICT (event_id) DO NOTHING`` makes the insert idempotent:
+        a second replay with the same event_id is silently swallowed.
+        """
         result = await self._session.execute(
             text("""
-INSERT INTO outbox_events (topic, partition_key, payload_avro, status)
-VALUES (:topic, :partition_key, :payload_avro, 'pending')
+INSERT INTO outbox_events (event_id, topic, partition_key, payload_avro, status)
+VALUES (:event_id, :topic, :partition_key, :payload_avro, 'pending')
+ON CONFLICT (event_id) DO NOTHING
 RETURNING event_id
 """),
             {
+                "event_id": str(event_id),
                 "topic": topic,
                 "partition_key": partition_key,
                 "payload_avro": payload_avro,
             },
         )
         row = result.fetchone()
-        return UUID(str(row[0]))  # type: ignore[index]
+        # ON CONFLICT DO NOTHING returns no row on a duplicate — return the
+        # caller-supplied event_id so the call site always gets a stable UUID.
+        return UUID(str(row[0])) if row else event_id  # type: ignore[index]
 
     async def fetch_pending(
         self,

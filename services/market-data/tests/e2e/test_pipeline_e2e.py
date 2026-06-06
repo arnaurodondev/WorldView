@@ -194,10 +194,20 @@ async def test_instrument_flags_promoted_by_data_ingest(
     await instr_repo.update_flags(instr_id, InstrumentFlags(has_ohlcv=True, has_quotes=True))
     await e2e_db_session.commit()
 
-    resp = await e2e_client.get(f"/api/v1/instruments/{instr_id}")
+    # NOTE: there is intentionally no ``GET /api/v1/instruments/{id}`` route
+    # (reverted in commit 50dab515; see ``test_old_symbol_endpoint_removed``).
+    # The canonical way to verify per-instrument flags is the list endpoint
+    # which returns ``InstrumentResponse`` items with the full ``flags``
+    # block; we filter to the seeded instrument by id.
+    resp = await e2e_client.get(
+        "/api/v1/instruments",
+        params={"has_ohlcv": "true", "has_quotes": "true", "limit": 1000},
+    )
     assert resp.status_code == 200, resp.text
     body = resp.json()
-    flags = body["flags"]
+    match = next((item for item in body["items"] if item["id"] == str(instr_id)), None)
+    assert match is not None, f"Seeded instrument {instr_id} missing from filtered list: {body}"
+    flags = match["flags"]
     assert flags["has_ohlcv"] is True, f"has_ohlcv should be True: {flags}"
     assert flags["has_quotes"] is True, f"has_quotes should be True: {flags}"
 

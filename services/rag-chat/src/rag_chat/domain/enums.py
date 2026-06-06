@@ -16,6 +16,16 @@ class QueryIntent(StrEnum):
     REASONING = "REASONING"
     RELATIONSHIP = "RELATIONSHIP"
     SIGNAL_INTEL = "SIGNAL_INTEL"
+    # PLAN-0093 Wave E-1: dedicated intent for macro/calendar queries so the
+    # per-intent rerank weights and prompt addendum can differentiate macro
+    # questions ("ECB meeting next week") from generic factual lookups.
+    MACRO = "MACRO"
+    # F-LIVE-O (PLAN-0093 ITER-9): dedicated intent for "what contradicts X"
+    # questions. The classifier previously routed these to GENERAL because the
+    # LLM tooling signal alone is insufficient — the question text contains the
+    # strongest signal ("contradict", "bear case", "argue against") and is
+    # checked before tool-call inference in ``infer_intent``.
+    CONTRADICTION = "CONTRADICTION"
 
 
 class ItemType(StrEnum):

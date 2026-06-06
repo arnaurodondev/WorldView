@@ -57,6 +57,12 @@ def _make_s3_port() -> AsyncMock:
     mock.get_ohlcv_range.return_value = []
     mock.get_fundamentals_history.return_value = []
     mock.get_fundamentals_highlights.return_value = {}
+    # PLAN-0103 W14 (FQA-04 carry): compare_entities now routes the batch
+    # endpoint through the same path as get_fundamentals_history_batch and
+    # selects the latest fully-populated common period. Default to {} so
+    # the per-ticker latest fallback engages cleanly in tests that do not
+    # care about the batch path.
+    mock.get_fundamentals_history_batch.return_value = {}
     mock.get_earnings.return_value = []
     mock.get_quote.return_value = {}
     mock.find_instrument_by_ticker.return_value = None
@@ -404,11 +410,14 @@ class TestScreenUniverse:
         assert item.trust_weight == pytest.approx(0.80)
         assert item.citation_meta is not None
         assert item.citation_meta.source_name == "screener"
-        # Verify filters were forwarded
+        # Verify filters were forwarded as a ScreenRequest-shaped payload
+        # (FIX-LIVE-T): sector/industry live INSIDE each filter entry, not at
+        # the top level. With no numeric thresholds we inject a no-op
+        # market_capitalization >= 0 so the sector predicate binds.
         s3_brief.screen_instruments.assert_awaited_once()
         call_args = s3_brief.screen_instruments.call_args[0][0]
-        assert call_args["sector"] == "Technology"
         assert call_args["limit"] == 20
+        assert call_args["filters"] == [{"metric": "market_capitalization", "min_value": 0, "sector": "Technology"}]
 
     @pytest.mark.asyncio
     async def test_upstream_raises_returns_empty(self) -> None:
@@ -427,6 +436,163 @@ class TestScreenUniverse:
         await handler._handle_screen_universe(limit=9999)
         call_args = s3_brief.screen_instruments.call_args[0][0]
         assert call_args["limit"] == 100
+
+    @pytest.mark.asyncio
+    async def test_industry_filter_propagates(self) -> None:
+        """FIX-LIVE-M + FIX-LIVE-T: industry kwarg surfaces inside the ScreenRequest filter entry.
+
+        GICS-tagged tickers (NVDA, AMD, AVGO) live under sector='Technology',
+        industry='Semiconductors'. The LLM must be able to target the narrower
+        bucket; the handler must therefore pass the kwarg through *inside* the
+        filter entry (ScreenFilterRequest), not at body-level — the latter
+        silently drops on the ScreenRequest schema.
+        """
+        s3_brief = _make_s3_brief_port(screen_result={"instruments": [{"ticker": "NVDA"}]})
+        handler = _make_market_handler(s3_brief=s3_brief)
+        await handler._handle_screen_universe(
+            sector="Technology",
+            industry="Semiconductors",
+            market_cap_min=50_000_000_000,
+            limit=10,
+        )
+        call_args = s3_brief.screen_instruments.call_args[0][0]
+        assert call_args["limit"] == 10
+        assert call_args["filters"] == [
+            {
+                "metric": "market_capitalization",
+                "min_value": 50_000_000_000,
+                "sector": "Technology",
+                "industry": "Semiconductors",
+            }
+        ]
+
+    @pytest.mark.asyncio
+    async def test_industry_not_set_when_none(self) -> None:
+        """When industry kwarg is omitted, the key is absent from every filter entry.
+
+        Mirrors the existing sector/region pattern — None values are dropped so
+        S9 doesn't receive a literal ``industry=null`` in the request body.
+        """
+        s3_brief = _make_s3_brief_port(screen_result={"instruments": [{"ticker": "AAPL"}]})
+        handler = _make_market_handler(s3_brief=s3_brief)
+        await handler._handle_screen_universe(sector="Technology")
+        call_args = s3_brief.screen_instruments.call_args[0][0]
+        for entry in call_args["filters"]:
+            assert "industry" not in entry
+
+    @pytest.mark.asyncio
+    async def test_payload_matches_screen_request_schema(self) -> None:
+        """FIX-LIVE-T regression: payload must be ScreenRequest-shaped.
+
+        The market-data ``POST /v1/fundamentals/screen`` endpoint validates the
+        body against ``ScreenRequest(filters: list[ScreenFilterRequest], limit, ...)``.
+        Top-level ``sector``/``industry``/``market_cap_min`` are unknown fields
+        that pydantic silently drops, which caused Q6 to receive 50 unrelated
+        tickers (Healthcare, Industrials, …) instead of the AI-semi bucket.
+
+        This test pins the wire format so a regression to flat-dict-style
+        forwarding fails fast.
+        """
+        s3_brief = _make_s3_brief_port(screen_result={"instruments": [{"ticker": "NVDA"}]})
+        handler = _make_market_handler(s3_brief=s3_brief)
+        await handler._handle_screen_universe(
+            sector="Technology",
+            industry="Semiconductors",
+            market_cap_min=50_000_000_000,
+            pe_ratio_max=30.0,
+            limit=25,
+        )
+        payload = s3_brief.screen_instruments.call_args[0][0]
+        # Only the documented body-level keys.
+        assert set(payload.keys()) == {"filters", "limit"}
+        assert payload["limit"] == 25
+        # Per-filter keys must come from ScreenFilterRequest only.
+        allowed_keys = {"metric", "min_value", "max_value", "sector", "industry", "period_type"}
+        for entry in payload["filters"]:
+            assert set(entry.keys()).issubset(allowed_keys), entry
+            assert "metric" in entry  # required field
+            assert entry.get("sector") == "Technology"
+            assert entry.get("industry") == "Semiconductors"
+        # market_cap and pe_ratio filters present.
+        metrics = {e["metric"] for e in payload["filters"]}
+        assert "market_capitalization" in metrics
+        assert "pe_ratio" in metrics
+
+    @pytest.mark.asyncio
+    async def test_numeric_market_cap_is_formatted(self) -> None:
+        """FIX-LIVE-DD regression: raw numeric market caps must be rendered.
+
+        Q6 ("Find AI semiconductors above $50B") failed because the
+        screener emitted ``MCap: 5230000000000`` and the 8B-parameter
+        chat model hallucinated plausible trillion-magnitude strings
+        ($5.23T for NVDA) which the numeric-grounding validator then
+        flagged as unsupported. The handler must now render BOTH a
+        human-friendly ``$X.XXT`` label AND the raw integer (preserved
+        so the validator's tolerance check still binds against either
+        form). This test pins the wire format.
+        """
+        s3_brief = _make_s3_brief_port(
+            screen_result={
+                "instruments": [
+                    {"ticker": "NVDA", "name": "NVIDIA Corp.", "market_cap": 3_600_000_000_000},
+                    {"ticker": "AMD", "name": "AMD", "market_cap": 240_000_000_000},
+                    {"ticker": "MU", "name": "Micron", "market_cap": 130_000_000_000},
+                ]
+            }
+        )
+        handler = _make_market_handler(s3_brief=s3_brief)
+        result = await handler._handle_screen_universe(
+            sector="Technology",
+            industry="Semiconductors",
+            market_cap_min=50_000_000_000,
+        )
+        assert len(result) == 1
+        text = result[0].text
+        # Formatted labels (LLM-friendly) must appear verbatim.
+        assert "MCap: $3.60T" in text, text
+        assert "MCap: $240.00B" in text, text
+        assert "MCap: $130.00B" in text, text
+        # Raw integers must be preserved so the numeric-grounding
+        # validator can still tolerance-match `$3.60T` ↔ 3_600_000_000_000.
+        assert "3600000000000" in text
+        assert "240000000000" in text
+
+    @pytest.mark.asyncio
+    async def test_legacy_string_market_cap_passthrough(self) -> None:
+        """Backward compatibility: pre-formatted string caps stay verbatim.
+
+        Some upstream/mock paths supply ``market_cap: "3T"`` (a legacy
+        display label). The formatter MUST NOT mangle these — only
+        numeric inputs are reformatted.
+        """
+        s3_brief = _make_s3_brief_port(
+            screen_result={
+                "instruments": [
+                    {"ticker": "AAPL", "name": "Apple Inc.", "market_cap": "3T"},
+                ]
+            }
+        )
+        handler = _make_market_handler(s3_brief=s3_brief)
+        result = await handler._handle_screen_universe()
+        text = result[0].text
+        # Legacy string is passed through unchanged.
+        assert "MCap: 3T" in text
+        # Must NOT have been wrapped in raw/formatted parentheses.
+        assert "(raw: 3T)" not in text
+
+    @pytest.mark.asyncio
+    async def test_no_filters_no_scope_emits_empty_filter_list(self) -> None:
+        """When no kwargs are given, send ``filters: []`` (no-filter path).
+
+        This preserves the legacy "show first N instruments" behaviour for
+        callers that pass no constraints — the ScreenRequest schema accepts
+        ``min_length=0`` for filters precisely so this works.
+        """
+        s3_brief = _make_s3_brief_port(screen_result={"instruments": [{"ticker": "AAPL"}]})
+        handler = _make_market_handler(s3_brief=s3_brief)
+        await handler._handle_screen_universe()
+        payload = s3_brief.screen_instruments.call_args[0][0]
+        assert payload == {"filters": [], "limit": 20}
 
 
 # ── get_market_movers tests ───────────────────────────────────────────────────
@@ -637,3 +803,75 @@ class TestGetEarningsCalendar:
         handler = _make_market_handler(s3_brief=s3_brief)
         result = await handler._handle_get_earnings_calendar()
         assert result == []
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# PLAN-0095 W2 T-W2-02: get_fundamentals_history_batch handler tests.
+# Mocks the S3Port batch method; verifies routing of ok/error per ticker,
+# the empty-input guard, and the upstream-error R9 fallback.
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+class TestHandleGetFundamentalsHistoryBatch:
+    """Tests for _handle_get_fundamentals_history_batch on MarketHandler."""
+
+    @pytest.mark.asyncio
+    async def test_get_fundamentals_history_batch_tool_calls_batch_endpoint(self) -> None:
+        """Happy path: mocks S3 batch port, asserts POST shape + per-ticker RetrievedItems."""
+        s3 = _make_s3_port()
+        # Mixed result: 2 ok, 1 error — proves partial-failure rendering.
+        s3.get_fundamentals_history_batch = AsyncMock(
+            return_value={
+                "AAPL": {
+                    "status": "ok",
+                    "periods": [{"period": "Q4 2024", "revenue": 100.0, "eps": 2.0}],
+                },
+                "NVDA": {
+                    "status": "ok",
+                    "periods": [{"period": "Q4 2024", "revenue": 50.0, "eps": 1.0}],
+                },
+                "BADTICKER": {"status": "error", "reason": "Instrument not found"},
+            }
+        )
+        handler = _make_market_handler(s3=s3)
+
+        result = await handler._handle_get_fundamentals_history_batch(
+            tickers=["aapl", "nvda", "badticker"],  # lowercase to exercise normalisation
+            periods=4,
+        )
+
+        # Three RetrievedItem rows, one per ticker (case-normalised to upper).
+        assert isinstance(result, list)
+        assert len(result) == 3
+        ids = {item.item_id for item in result}
+        assert ids == {
+            "tool:fundamentals_batch:AAPL",
+            "tool:fundamentals_batch:NVDA",
+            "tool:fundamentals_batch:BADTICKER",
+        }
+        # Verify the port was called with normalised upper-case tickers + the same periods.
+        s3.get_fundamentals_history_batch.assert_awaited_once_with(
+            tickers=["AAPL", "NVDA", "BADTICKER"],
+            periods=4,
+        )
+        # Error ticker renders a clear unavailability message instead of crashing.
+        bad = next(item for item in result if "BADTICKER" in item.item_id)
+        assert "unavailable" in bad.text.lower()
+        assert "Instrument not found" in bad.text
+
+    @pytest.mark.asyncio
+    async def test_empty_tickers_returns_empty_list(self) -> None:
+        """Empty input → R9 degradation, no port call attempted."""
+        s3 = _make_s3_port()
+        s3.get_fundamentals_history_batch = AsyncMock()
+        handler = _make_market_handler(s3=s3)
+        assert await handler._handle_get_fundamentals_history_batch(tickers=[]) == []
+        s3.get_fundamentals_history_batch.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_upstream_raises_returns_empty_list(self) -> None:
+        """Upstream raises → returns [] (R9), does not propagate."""
+        s3 = _make_s3_port()
+        s3.get_fundamentals_history_batch = AsyncMock(side_effect=RuntimeError("boom"))
+        handler = _make_market_handler(s3=s3)
+        assert await handler._handle_get_fundamentals_history_batch(tickers=["AAPL"]) == []

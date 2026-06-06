@@ -24,6 +24,59 @@ if TYPE_CHECKING:
 # Paths that bypass OIDC auth and rate limiting entirely.
 # F-01: /health and /ready removed — only /healthz and /readyz exist on the health router.
 # PLAN-0088 P2-D (2026-05-10): /v1/health added as external uptime monitor alias.
+# PLAN-0094 W1 / FIX-LIVE-D: Prometheus counter for rate-limit Valkey degradation.
+# Labelled by ``fallback_action`` so Grafana can distinguish "single hiccup we
+# recovered from" from "sustained outage" vs "non-transient (auth/config) error".
+try:
+    from prometheus_client import REGISTRY as _PROM_REGISTRY
+    from prometheus_client import Counter as _PromCounter
+
+    # Idempotent registration — pytest reuses the global REGISTRY across tests,
+    # and pytest-cov may import this module twice. If the counter already exists,
+    # reuse it rather than crashing the import.
+    if "rate_limiting_unavailable_total" in _PROM_REGISTRY._names_to_collectors:
+        _RATE_LIMIT_UNAVAILABLE_COUNTER = _PROM_REGISTRY._names_to_collectors["rate_limiting_unavailable_total"]
+    else:
+        _RATE_LIMIT_UNAVAILABLE_COUNTER = _PromCounter(
+            "rate_limiting_unavailable_total",
+            "Rate-limit middleware Valkey degradation events",
+            ["fallback_action"],
+        )
+except Exception:  # — prometheus_client missing in some test contexts
+    _RATE_LIMIT_UNAVAILABLE_COUNTER = None  # type: ignore[assignment]
+
+
+# Transient Valkey errors worth retrying once (50ms backoff). Anything outside
+# this allowlist (auth, ResponseError, programmer bugs) fails fast — retrying
+# won't heal it within 50ms.
+_VALKEY_TRANSIENT_EXCEPTIONS: tuple[type[BaseException], ...] = (
+    ConnectionError,
+    TimeoutError,
+)
+
+
+async def _record_active_user(valkey: Any, user_id: str) -> None:
+    """PLAN-0094 W1: best-effort write ``user_id`` to the ``active_users`` ZSET.
+
+    Score = unix-seconds. Wave W2's daily-brief worker reads this set to
+    decide which users have been active in the eligibility window. The write
+    is BEST-EFFORT — a Valkey failure must NEVER 503 a successful auth.
+    """
+    import time as _time
+
+    try:
+        await valkey.zadd("active_users", {user_id: int(_time.time())})
+    except Exception as exc:
+        # Structured warning — operators grep "active_users_zadd_failed" to
+        # diagnose missing eligibility entries. ``error_type`` carries the
+        # exception class name so degraded modes are distinguishable.
+        logger.warning(
+            "active_users_zadd_failed",
+            user_id=user_id,
+            error_type=type(exc).__name__,
+        )
+
+
 _AUTH_SKIP_PATHS: frozenset[str] = frozenset(
     [
         "/v1/auth/login",
@@ -148,6 +201,15 @@ class OIDCAuthMiddleware(BaseHTTPMiddleware):
                             # dev-login or the gateway), so we trust that value.
                             user_data.setdefault("role", payload.get("role", "user"))
                             request.state.user = user_data
+                            # PLAN-0094 W1: best-effort ZADD into active_users.
+                            # Guarded by ``valkey is not None`` because the helper
+                            # path may run before app.state.valkey is wired in
+                            # test contexts. ``user_id`` falls back to the JWT
+                            # ``sub`` when no Valkey cache hit was found.
+                            if valkey is not None:
+                                _uid = user_data.get("user_id") or sub
+                                if _uid:
+                                    await _record_active_user(valkey, _uid)
                     except jwt.InvalidTokenError:
                         pass  # Expected: token was not meant for internal validation
                     except Exception:
@@ -363,11 +425,20 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         valkey_client: Any,  # redis.asyncio.Redis | None
         max_requests: int = 100,
         window_seconds: int = 60,
+        # PLAN-0094 W1: sub-tier limits read from constructor (previously
+        # module-level constants). Tests pin this contract; production wires
+        # them from Settings via env-driven config in worldview-gitops.
+        financial_mutation_limit: int = _FINANCIAL_MUTATION_LIMIT,
+        unauthenticated_limit: int = 20,
+        public_feedback_limit: int = 120,
     ) -> None:
         super().__init__(app)
         self.valkey = valkey_client
         self.max_requests = max_requests
         self.window_seconds = window_seconds
+        self.financial_mutation_limit = financial_mutation_limit
+        self.unauthenticated_limit = unauthenticated_limit
+        self.public_feedback_limit = public_feedback_limit
 
     async def dispatch(self, request: Request, call_next: Callable) -> Response:
         # F-05: Skip rate limiting for health probes, metrics, and internal endpoints.
@@ -440,7 +511,7 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
                 # up to 20 transaction writes per minute while simultaneously
                 # firing 300 read requests for charts / screener / KG data.
                 key = f"rl:v1:fin:{user['user_id']}"
-                limit = _FINANCIAL_MUTATION_LIMIT
+                limit = self.financial_mutation_limit
             else:
                 key = f"rl:v1:user:{user['user_id']}"
                 limit = self.max_requests
@@ -452,13 +523,36 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
                 # eat the global 20/min budget for the same IP. Different
                 # key prefix ensures the two counters don't collide.
                 key = f"rl:v1:ip-fb:{ip_hash}"
-                limit = 120
+                limit = self.public_feedback_limit
             else:
                 key = f"rl:v1:ip:{ip_hash}"
-                limit = 20  # stricter limit for unauthenticated
+                limit = self.unauthenticated_limit  # stricter limit for unauthenticated
 
+        # FIX-LIVE-D: 1-retry-with-50ms-backoff on transient Valkey errors.
+        # On the first attempt we capture the exception; if it's in the
+        # transient allowlist we sleep 50ms and try once more. Non-transient
+        # errors (auth, ResponseError, RuntimeError) fail-fast without retry.
+        import asyncio as _asyncio
+
+        current: int | None = None
+        retry_used = False
         try:
-            current = await valkey.incr(key)
+            try:
+                current = await valkey.incr(key)
+            except _VALKEY_TRANSIENT_EXCEPTIONS:
+                logger.warning(
+                    "valkey_op_failed",
+                    valkey_retry_attempt=1,
+                    path=str(request.url.path),
+                )
+                await _asyncio.sleep(0.05)
+                retry_used = True
+                current = await valkey.incr(key)
+            if retry_used and _RATE_LIMIT_UNAVAILABLE_COUNTER is not None:
+                # First attempt failed but retry succeeded — operators should
+                # see this distinct from "sustained outage" so they can decide
+                # whether the hiccup warrants paging.
+                _RATE_LIMIT_UNAVAILABLE_COUNTER.labels(fallback_action="retry_succeeded").inc()  # type: ignore[attr-defined]
             # Only set EXPIRE when the key is brand-new (current == 1). Setting
             # it on every request would reset the TTL on each hit, allowing a
             # sustained flow to never expire and permanently bypass the limit.
@@ -467,7 +561,7 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
             # new window (new key from fresh INCR) will set the TTL correctly.
             if current == 1:
                 await valkey.expire(key, self.window_seconds)
-            if current > limit:
+            if current > limit:  # type: ignore[operator]
                 # PLAN-0052 platform-QA fix: include Retry-After header so
                 # clients (and the user) know when to retry. We use the
                 # window length as a conservative upper bound — the actual
@@ -484,11 +578,19 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
                         "X-RateLimit-Remaining": "0",
                     },
                 )
-        except Exception:
+        except Exception as exc:
             # D-001: Fail-closed — Valkey operation failure returns 503.
+            # FIX-LIVE-D: distinguish "transient after retry" vs "non-transient"
+            # by inspecting whether the exception class is in the transient
+            # allowlist. The counter label drives Grafana paging decisions.
+            is_transient = isinstance(exc, _VALKEY_TRANSIENT_EXCEPTIONS)
+            label = "503_after_retry" if is_transient else "503_no_retry"
+            if _RATE_LIMIT_UNAVAILABLE_COUNTER is not None:
+                _RATE_LIMIT_UNAVAILABLE_COUNTER.labels(fallback_action=label).inc()  # type: ignore[attr-defined]
             logger.warning(  # type: ignore[no-any-return]
                 "rate_limiting_unavailable",
                 reason="valkey_operation_failed",
+                fallback_action=label,
                 path=str(request.url.path),
             )
             return Response(

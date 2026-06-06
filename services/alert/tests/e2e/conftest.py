@@ -25,6 +25,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 from alert.api import dlq, health, routes
 from alert.infrastructure.db.models import Base
+from alert.infrastructure.middleware.internal_jwt import InternalJWTMiddleware
 from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy import text
@@ -43,6 +44,17 @@ _E2E_DB_URL = os.getenv(
 _E2E_ADMIN_TOKEN = os.getenv("ALERT_E2E_ADMIN_TOKEN", "e2e-admin-token")
 
 
+import uuid as _uuid
+
+# UUIDs used by the e2e harness. ``CurrentUserIdDep`` parses ``request.state.user_id``
+# as a UUID, so the JWT ``sub`` claim and ``tenant_id`` MUST be valid UUID strings.
+E2E_USER_ID = str(_uuid.uuid4())  # importable: tests seed alerts for this user
+E2E_TENANT_ID = str(_uuid.uuid4())
+# Backwards-compat aliases (legacy single-underscore consumers in this module).
+_E2E_USER_ID = E2E_USER_ID
+_E2E_TENANT_ID = E2E_TENANT_ID
+
+
 def _make_e2e_system_jwt() -> str:
     """Generate a HS256 JWT accepted by InternalJWTMiddleware in skip_verification mode."""
     import time
@@ -51,8 +63,8 @@ def _make_e2e_system_jwt() -> str:
 
     payload = {
         "iss": "worldview-gateway",
-        "sub": "e2e-system-user",
-        "tenant_id": "e2e-tenant",
+        "sub": _E2E_USER_ID,
+        "tenant_id": _E2E_TENANT_ID,
         "role": "system",
         "iat": int(time.time()),
         "exp": int(time.time()) + 3600,
@@ -159,6 +171,17 @@ async def e2e_app(e2e_session_factory: async_sessionmaker[AsyncSession]) -> Fast
     app.include_router(routes.router)
     app.include_router(dlq.router)
 
+    # InternalJWTMiddleware populates request.state.user_id / tenant_id from the
+    # ``X-Internal-JWT`` header. CurrentUserIdDep raises 401 without it. Use
+    # ``skip_verification=True`` (PRD-0025 test-only path) so the e2e harness does
+    # not need a real RS256 signing key + JWKS endpoint.
+    app.add_middleware(
+        InternalJWTMiddleware,
+        jwks_url="http://e2e-no-jwks",
+        skip_verification=True,
+        jti_replay_check_enabled=False,
+    )
+
     settings = MagicMock()
     settings.admin_token = _E2E_ADMIN_TOKEN
 
@@ -222,7 +245,20 @@ _TABLES_TO_TRUNCATE = [
 
 @pytest.fixture(autouse=True)
 async def _clean_tables(e2e_engine: AsyncEngine) -> AsyncGenerator[None, None]:
-    """Truncate all alert_db tables after each test for isolation."""
+    """Truncate all alert_db tables BEFORE and after each test for isolation.
+
+    Cleanup-before guards against cross-test DB pollution from earlier runs
+    (CI shared DB, stale Docker volume, or a prior crashed test that skipped
+    teardown). Without this, ``test_pending_alerts_tenant_isolation`` flakes
+    when an earlier test left a pending row for E2E_USER_ID, because the
+    JWT-derived GET still sees those leftovers.
+    """
+    try:
+        async with e2e_engine.begin() as conn:
+            for table in _TABLES_TO_TRUNCATE:
+                await conn.execute(text(f"TRUNCATE {table} CASCADE"))
+    except Exception:  # noqa: S110
+        pass
     yield
     try:
         async with e2e_engine.begin() as conn:

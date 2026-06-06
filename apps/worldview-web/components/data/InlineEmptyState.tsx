@@ -6,7 +6,7 @@
  * This component provides a dense, single-line empty indicator that keeps the panel
  * height stable while communicating "no data available."
  *
- * WHY text-xs py-3 (not text-sm p-8): Bloomberg panels show a single muted line
+ * WHY text-xs py-3 (not text-[14px] p-8): Bloomberg panels show a single muted line
  * at the bottom of a table when there are no rows — not a full-page centered
  * illustration. The padding reserves just enough space for the message to breathe
  * without inflating the panel.

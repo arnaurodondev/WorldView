@@ -51,6 +51,10 @@ def _mock_settings(**overrides: object) -> MagicMock:
     s.storage_secret_key = MagicMock(get_secret_value=lambda: "secret")
     s.kafka_bootstrap_servers = "localhost:9092"
     s.valkey_url = "redis://localhost:6379/0"
+    # PLAN-0102 T-W6-02 / BP-617: integer typed so consumer_main's arithmetic
+    # (session_timeout_ms = max(60_000, (timeout_s + 30) * 1_000)) works under
+    # a MagicMock Settings stub. Default mirrors Settings().fundamentals_timeout_s.
+    s.fundamentals_timeout_s = 90
     for k, v in overrides.items():
         setattr(s, k, v)
     return s

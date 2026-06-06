@@ -107,6 +107,15 @@ class Settings(BaseSettings):
     brokerage_sync_history_days: int = 730  # 2 years initial import
     # S3 (market-data) URL for instrument resolution fallback in BrokerageTransactionSyncWorker
     market_data_service_url: str = "http://market-data:8003"
+    # WHY SecretStr: the HS256 signing key for internal dev-mode JWTs must not
+    # be logged or exposed in stack traces. In production this field is irrelevant
+    # because market-data uses RS256 JWKS verification (skip_verification=False);
+    # the HS256 path is only reachable in dev where skip_verification=True.
+    # Set PORTFOLIO_BROKERAGE_SYNC_JWT_SECRET in your .env to override the default.
+    # The default is deliberately long and non-guessable so that if someone
+    # accidentally enables skip_verification in a staging env it's still not trivially
+    # forgeable. (F-SEC-002, QA 2026-05-21)
+    brokerage_sync_jwt_secret: SecretStr = SecretStr("dev-only-brokerage-sync-jwt-secret-NOT-FOR-PRODUCTION")
 
     # Feedback subsystem (PLAN-0052 Wave D)
     # Screenshot URLs are stored as S3 keys / pre-signed URLs; the upload itself

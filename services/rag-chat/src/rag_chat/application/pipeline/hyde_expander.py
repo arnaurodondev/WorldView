@@ -19,6 +19,7 @@ from typing import TYPE_CHECKING
 import structlog
 from prompts.retrieval.hyde import HYDE_EXPANSION  # type: ignore[import-untyped]
 
+from rag_chat.application.metrics.prometheus import rag_pipeline_stage_input_size
 from rag_chat.domain.enums import QueryIntent
 
 if TYPE_CHECKING:
@@ -75,6 +76,9 @@ class HydeExpander:
         - *intent* is not in the HyDE-eligible set (FINANCIAL_DATA, COMPARISON, PORTFOLIO)
         - Any LLM or embedding error occurs (graceful degradation per §9.1)
         """
+        # Observe 1 item entering the hyde stage (single query per call).
+        rag_pipeline_stage_input_size.labels(stage="hyde").observe(1)
+
         if intent not in _HYDE_INTENTS:
             return None, None
 

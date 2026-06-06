@@ -109,8 +109,8 @@ export default function FeedbackPublicPage() {
   return (
     <div className="mx-auto max-w-3xl px-6 py-8">
       <header className="mb-6">
-        <h1 className="text-2xl font-semibold tracking-tight">Feature roadmap</h1>
-        <p className="mt-1 text-sm text-muted-foreground">
+        <h1 className="text-[24px] font-semibold tracking-tight">Feature roadmap</h1>
+        <p className="mt-1 text-[14px] text-muted-foreground">
           Vote for features you&apos;d like to see, or suggest something new.
         </p>
       </header>
@@ -160,16 +160,16 @@ export default function FeedbackPublicPage() {
 
       {/* List */}
       {isLoading && (
-        <p className="text-sm text-muted-foreground">Loading roadmap…</p>
+        <p className="text-[14px] text-muted-foreground">Loading roadmap…</p>
       )}
       {isError && (
-        <p className="text-sm text-destructive" role="alert">
+        <p className="text-[14px] text-destructive" role="alert">
           Failed to load feature requests.
         </p>
       )}
       {!isLoading && !isError && items.length === 0 && (
         <div className="rounded-[2px] border border-border bg-card/50 p-8 text-center">
-          <p className="text-sm text-muted-foreground">
+          <p className="text-[14px] text-muted-foreground">
             No feature requests yet. Be the first to suggest one.
           </p>
           {/* PLAN-0052 Wave E platform-QA fix (2026-05-01): the empty state
@@ -217,7 +217,7 @@ export default function FeedbackPublicPage() {
             {/* Body */}
             <div className="min-w-0 flex-1">
               <div className="flex items-center gap-2">
-                <h3 className="text-sm font-semibold text-foreground">
+                <h3 className="text-[14px] font-semibold text-foreground">
                   {item.title}
                 </h3>
                 <span

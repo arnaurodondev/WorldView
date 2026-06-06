@@ -29,7 +29,12 @@ from api_gateway.routes.health import router as health_router
 from api_gateway.routes.internal import router as internal_router
 from api_gateway.routes.risk_metrics import router as risk_metrics_router
 from messaging.valkey import ValkeyClient, create_valkey_client_from_url  # type: ignore[import-untyped]
-from observability import configure_logging, get_logger, register_error_handlers  # type: ignore[import-untyped]
+from observability import (  # type: ignore[import-untyped]
+    assert_app_env_or_die,
+    configure_logging,
+    get_logger,
+    register_error_handlers,
+)
 from observability.metrics import add_prometheus_middleware, create_metrics  # type: ignore[import-untyped]
 from observability.sentry import SentrySettings, init_sentry  # type: ignore[import-untyped]
 from observability.tracing import add_otel_middleware, configure_tracing  # type: ignore[import-untyped]
@@ -76,6 +81,16 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         json=settings.log_json,
     )
     logger = get_logger("api_gateway.app")
+
+    # 1b. Boot-time security guard (PLAN-0093 Wave A-1 / F-LOG-JWT-001).
+    # api-gateway issues JWTs (it does not consume them) so it has no
+    # ``internal_jwt_skip_verification`` setting; we pass ``False`` to make
+    # the call a no-op for the gateway while keeping the lifespan pattern
+    # uniform across every service for grep-ability and audit consistency.
+    assert_app_env_or_die(
+        service_name=settings.service_name,
+        internal_jwt_skip_verification=False,
+    )
 
     # 2. Tracing config (optional)
     if settings.otlp_endpoint:
@@ -175,15 +190,38 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     app.state.clients = clients
 
     # 7. Valkey (fail-open: rate limiting degrades gracefully if unavailable)
+    # FIX-LIVE-D (PLAN-0093 Phase 5c, F-LIVE-005C-VALKEY): emit a structured
+    # ``valkey_health`` event with the ping result + latency so we have a
+    # scrape-friendly anchor for "Valkey was healthy at boot" in logs. This
+    # complements the per-request ``valkey_op_failed`` event in middleware.py
+    # and the ``rate_limiting_unavailable_total`` counter so the next time
+    # Valkey hiccups we have boot-time baseline + per-request flap trail.
     valkey: ValkeyClient | None = None
+    _valkey_t0 = asyncio.get_event_loop().time()
     try:
         valkey = create_valkey_client_from_url(settings.valkey_url)
         await valkey.ping()
         app.state.valkey = valkey
+        _valkey_latency_ms = round((asyncio.get_event_loop().time() - _valkey_t0) * 1000, 2)
         logger.info("valkey_connected", url=settings.valkey_url)
+        logger.info(
+            "valkey_health",
+            status="healthy",
+            ping_latency_ms=_valkey_latency_ms,
+            url=settings.valkey_url,
+        )
     except Exception as exc:
         app.state.valkey = None
+        _valkey_latency_ms = round((asyncio.get_event_loop().time() - _valkey_t0) * 1000, 2)
         logger.warning("valkey_unavailable", error=str(exc), detail="rate limiting disabled")
+        logger.warning(
+            "valkey_health",
+            status="unhealthy",
+            ping_latency_ms=_valkey_latency_ms,
+            url=settings.valkey_url,
+            error=str(exc),
+            error_type=type(exc).__name__,
+        )
 
     logger.info("service_started", service=settings.service_name)
     yield
@@ -213,9 +251,14 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     # responses are still processed by middleware layers (e.g. Prometheus timing).
     register_error_handlers(app)
 
-    # Middleware registration order (Starlette: last added = outermost for requests)
-    # Request order: RequestId → SecurityHeaders → Prometheus → OTel → CORS → RateLimit → OIDCAuth → InternalJWT
-    # InternalJWT innermost (after OIDCAuth) so request.state.user is set before JWT issuance.
+    # Middleware registration order (Starlette: last added = outermost for requests).
+    # Registration order (top→bottom below): RequestId → SecurityHeaders → Prometheus
+    # → OTel → CORS → RateLimit → InternalJWT → OIDCAuth.
+    # Actual REQUEST-time order is the REVERSE of registration:
+    #   OIDCAuth → InternalJWT → RateLimit → CORS → OTel → Prometheus → SecurityHeaders → RequestId.
+    # OIDCAuth runs FIRST at request time (it's added LAST below) so request.state.user
+    # is populated before any downstream middleware (notably RateLimitMiddleware which
+    # reads it for the per-user vs per-IP bucket decision).
     app.add_middleware(RequestIdMiddleware)
     app.add_middleware(SecurityHeadersMiddleware)
     metrics = create_metrics(service_name=settings.service_name)
@@ -230,6 +273,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         valkey_client=None,  # replaced by app.state.valkey at lifespan
         max_requests=settings.rate_limit_requests,
         window_seconds=settings.rate_limit_window_seconds,
+        # PLAN-0094 W1: 3 sibling limits, env-driven via worldview-gitops.
+        financial_mutation_limit=settings.rate_limit_financial_mutation_requests,
+        unauthenticated_limit=settings.rate_limit_unauthenticated_requests,
+        public_feedback_limit=settings.rate_limit_public_feedback_requests,
     )
     # OIDCAuth must run before InternalJWT: OIDCAuth validates token + sets request.state.user;
     # InternalJWT then signs and attaches X-Internal-JWT using that user state.

@@ -68,7 +68,7 @@ class TestPolarityRules:
                 is_backfill=False,
                 contradiction_repo=contra_repo,
                 outbox_repo=_make_outbox_repo(),
-            )
+            ),
         )
         assert result == []
         contra_repo.find_opposing_claims.assert_not_called()
@@ -90,7 +90,7 @@ class TestPolarityRules:
                 is_backfill=False,
                 contradiction_repo=contra_repo,
                 outbox_repo=_make_outbox_repo(),
-            )
+            ),
         )
         contra_repo.find_opposing_claims.assert_called_once()
 
@@ -110,7 +110,7 @@ class TestPolarityRules:
                 is_backfill=False,
                 contradiction_repo=_make_contradiction_repo(opposing=[]),
                 outbox_repo=_make_outbox_repo(),
-            )
+            ),
         )
         assert result == []
 
@@ -139,7 +139,7 @@ class TestWindowParam:
                 window_days=90,
                 contradiction_repo=contra_repo,
                 outbox_repo=_make_outbox_repo(),
-            )
+            ),
         )
         call_kwargs = contra_repo.find_opposing_claims.call_args.kwargs
         assert call_kwargs["window_days"] == 90
@@ -168,7 +168,7 @@ class TestContradictionLinkAndOutbox:
                 is_backfill=False,
                 contradiction_repo=contra_repo,
                 outbox_repo=_make_outbox_repo(),
-            )
+            ),
         )
         contra_repo.insert_link.assert_called_once()
 
@@ -189,7 +189,7 @@ class TestContradictionLinkAndOutbox:
                 is_backfill=False,
                 contradiction_repo=_make_contradiction_repo(opposing=[_opposing_claim()]),
                 outbox_repo=outbox,
-            )
+            ),
         )
         outbox.append.assert_called_once()
         topic = outbox.append.call_args.kwargs["topic"]
@@ -213,7 +213,7 @@ class TestContradictionLinkAndOutbox:
                 is_backfill=False,
                 contradiction_repo=contra_repo,
                 outbox_repo=_make_outbox_repo(),
-            )
+            ),
         )
         kwargs = contra_repo.insert_link.call_args.kwargs
         assert kwargs["strength"] == pytest.approx(0.60)  # min(0.80, 0.60)
@@ -235,7 +235,7 @@ class TestContradictionLinkAndOutbox:
                 is_backfill=True,
                 contradiction_repo=_make_contradiction_repo(opposing=[_opposing_claim()]),
                 outbox_repo=outbox,
-            )
+            ),
         )
         # PLAN-0062 Wave C: payload is now Confluent-Avro on the wire.
         from knowledge_graph.application.blocks.contradiction import _CONTRADICTION_SCHEMA_PATH
@@ -264,7 +264,7 @@ class TestContradictionLinkAndOutbox:
                 is_backfill=False,
                 contradiction_repo=contra_repo,
                 outbox_repo=_make_outbox_repo(),
-            )
+            ),
         )
         assert len(results) == 2
         assert contra_repo.insert_link.call_count == 2

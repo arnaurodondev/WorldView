@@ -317,6 +317,42 @@ def test_screen_sector_filter_forwarded() -> None:
     assert captured_filters[1].sector is None
 
 
+def test_screen_industry_filter_forwarded() -> None:
+    """FIX-LIVE-M: industry field in a filter is forwarded as ScreenFilter.industry.
+
+    GICS industry (e.g. 'Semiconductors') is required to disambiguate sector queries
+    like "AI chip companies" — sector='Technology' alone is too broad.
+    """
+    captured_filters: list = []
+
+    async def _capture(filters, *, limit=50, offset=0, sort_by=None, sort_order="asc"):  # type: ignore[misc]
+        captured_filters.extend(filters)
+        return ([], 0)
+
+    mock_uc = MagicMock()
+    mock_uc.execute = AsyncMock(side_effect=_capture)
+    _, client = _make_app(mock_screen_uc=mock_uc)
+
+    client.post(
+        "/api/v1/fundamentals/screen",
+        json={
+            "filters": [
+                {
+                    "metric": "pe_ratio",
+                    "max_value": 30.0,
+                    "sector": "Technology",
+                    "industry": "Semiconductors",
+                },
+                {"metric": "roe_ttm", "min_value": 0.15},
+            ]
+        },
+    )
+    assert len(captured_filters) == 2
+    assert captured_filters[0].sector == "Technology"
+    assert captured_filters[0].industry == "Semiconductors"
+    assert captured_filters[1].industry is None
+
+
 def test_screen_no_results_returns_empty() -> None:
     """No matching instruments → count=0, total=0, results=[]."""
     _, client = _make_app(mock_screen_uc=_make_screen_uc([]))

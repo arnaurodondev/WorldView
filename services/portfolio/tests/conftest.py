@@ -14,6 +14,9 @@ os.environ.setdefault("PORTFOLIO_STORAGE_SECRET_KEY", "minioadmin-test")
 # Skip RS256 JWT verification in tests — no JWKS server runs in CI (BP-134).
 # InternalJWTMiddleware will accept any well-formed JWT without signature check.
 os.environ.setdefault("PORTFOLIO_INTERNAL_JWT_SKIP_VERIFICATION", "true")
+# PLAN-0093 T-A-1-03: pair the skip flag with APP_ENV=test so the new
+# observability.assert_app_env_or_die() lifespan guard does not abort tests.
+os.environ.setdefault("APP_ENV", "test")
 from httpx import ASGITransport, AsyncClient
 from portfolio.app import create_app
 

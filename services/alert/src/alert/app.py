@@ -22,7 +22,12 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from alert.api import dlq, email_routes, health, routes
 from alert.config import Settings
 from alert.infrastructure.middleware.internal_jwt import InternalJWTMiddleware
-from observability import configure_logging, get_logger, register_error_handlers  # type: ignore[import-untyped]
+from observability import (  # type: ignore[import-untyped]
+    assert_app_env_or_die,
+    configure_logging,
+    get_logger,
+    register_error_handlers,
+)
 from observability.metrics import add_prometheus_middleware, create_metrics  # type: ignore[import-untyped]
 from observability.sentry import SentrySettings, init_sentry  # type: ignore[import-untyped]
 from observability.tracing import add_otel_middleware, configure_tracing  # type: ignore[import-untyped]
@@ -63,6 +68,13 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         json=settings.log_json,
     )
     log = get_logger("alert.app")  # type: ignore[no-any-return]
+
+    # 1aa. Boot-time security guard (PLAN-0093 Wave A-1 / F-LOG-JWT-001).
+    # Refuses to start when JWT verification is disabled AND APP_ENV is unset.
+    assert_app_env_or_die(
+        service_name=settings.service_name,
+        internal_jwt_skip_verification=settings.internal_jwt_skip_verification,
+    )
 
     # 1a. InternalJWT middleware startup — fetch JWKS from S9 (PRD-0025 T-D-1-08).
     # BP-159: serving instance created by add_middleware() wraps the inner stack, so
@@ -192,6 +204,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     # Routers
     app.include_router(health.router)
     app.include_router(routes.router)
+    # PLAN-0094 follow-up: /internal/v1/* — service-caller endpoints.
+    app.include_router(routes.internal_router)
     app.include_router(dlq.router)
     app.include_router(email_routes.router)
 

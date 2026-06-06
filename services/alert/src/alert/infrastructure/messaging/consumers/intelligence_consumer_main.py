@@ -17,10 +17,15 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import os
 import signal
 import sys
 
-from observability import configure_logging, get_logger  # type: ignore[import-untyped]
+from observability import (  # type: ignore[import-untyped]
+    configure_logging,
+    get_logger,
+    start_metrics_server,
+)
 
 logger = get_logger(__name__)  # type: ignore[no-any-return]
 
@@ -52,6 +57,14 @@ async def main() -> None:
 
     log = get_logger("alert.intelligence_consumer_main")  # type: ignore[no-any-return]
     log.info("intelligence_consumer_starting", service="alert")
+
+    # Phase 3 worker-metrics rollout — expose Prometheus /metrics on a dedicated
+    # port so non-HTTP worker processes are scrape-able alongside the FastAPI
+    # services.  Defaults to 9100; container compose entry exposes the same port.
+    metrics_handle = start_metrics_server(
+        service_name="alert-intelligence-consumer",
+        port=int(os.environ.get("METRICS_PORT", "9100")),
+    )
 
     stop_event = asyncio.Event()
 
@@ -145,6 +158,9 @@ async def main() -> None:
         await entity_resolver.close()
         await valkey.close()
         await _engine.dispose()
+        # Stop the Prometheus metrics HTTP server cleanly.
+        with contextlib.suppress(Exception):
+            await metrics_handle.aclose()
 
 
 if __name__ == "__main__":

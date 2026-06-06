@@ -86,6 +86,323 @@ class BriefParser:
         text = _ORPHAN_CITATION_RE.sub("", text)
         return text
 
+    # ── v4.2 leading Summary paragraph split ───────────────────────────────────
+    # Names of the 6 mandatory v4.2 sections — used by both the split helper
+    # (to identify where ``## Summary`` ends) and by check_section_completeness
+    # (to flag missing sections post-generation). Keep order/casing in sync
+    # with libs/prompts/src/prompts/briefing/morning.py v4.2.
+    V42_EXPECTED_SECTIONS: tuple[str, ...] = (
+        "Market Snapshot",
+        "Your Portfolio Today",
+        "Macro Today",
+        "News That Matters To You",
+        "Risks + Opportunities",
+        "Bonus context",
+    )
+
+    def split_summary_paragraph(self, content: str) -> tuple[str | None, str]:
+        """Split a v4.2 morning brief into ``(summary_paragraph, remainder)``.
+
+        The v4.2 ``MORNING_BRIEFING`` prompt instructs the LLM to emit::
+
+            ## Summary
+            <1-3 sentences>
+
+            ## Details
+            **Tape**
+            - ...
+
+        This helper looks for a ``## Summary`` heading near the top, captures
+        every non-blank line until the next ``## ``/``**`` heading, joins them
+        into a single paragraph (≤300 chars after trim), and returns the
+        remainder (the ``## Details`` block) untouched.
+
+        Graceful degradation: legacy briefs / cached pre-v4.2 responses lack
+        the ``## Summary`` heading; ``(None, content)`` is returned and the
+        downstream parser falls back to the existing narrative-only render
+        path. Frontends can use ``summary`` / first lines of ``narrative`` as
+        before — no UX regression.
+
+        WHY trim to ≤1500 chars (PLAN-0103 W11 / v4.5): the prompt now allows
+        an ADAPTIVE summary up to 200 words (was a fixed ≤50 words in v4.4),
+        which is ~1400 chars at ~7 chars/word. We soft-cap at 1500 chars to
+        leave headroom for punctuation + spaces while still preventing a
+        runaway summary from displacing the rest of the collapsed card.
+        Hard cut at sentence boundary via ``_truncate_at_sentence`` so we
+        don't leave a half-sentence dangling.
+        """
+        if not content:
+            return None, content
+
+        lines = content.splitlines()
+        # Find the "## Summary" heading (case-insensitive, tolerates "# " / "### ").
+        summary_start: int | None = None
+        for i, line in enumerate(lines[:20]):
+            # We look only in the first ~20 lines — a Summary heading deeper
+            # than that almost certainly belongs to a section body, not the
+            # leading paragraph.
+            normalised = line.strip().lower().rstrip(":")
+            if normalised in ("# summary", "## summary", "### summary", "summary"):
+                summary_start = i
+                break
+        if summary_start is None:
+            return None, content
+
+        # Walk forward, collecting non-blank lines until the next heading.
+        summary_lines: list[str] = []
+        end_idx = len(lines)
+        for j in range(summary_start + 1, len(lines)):
+            stripped = lines[j].strip()
+            if not stripped:
+                # Blank lines inside the Summary block are tolerated (the LLM
+                # sometimes wraps to a fresh paragraph); we just don't append.
+                continue
+            # A new heading marks the end of the Summary block. We recognise
+            # both ATX headings (``## Foo``) and bold-only headings (``**Foo**``)
+            # — the v4.2 prompt uses ``## Details`` for the wrapping heading
+            # and ``**Section Name**`` for the 6 inner sections.
+            if stripped.startswith(("# ", "## ", "### ")) or (stripped.startswith("**") and stripped.endswith("**")):
+                end_idx = j
+                break
+            summary_lines.append(stripped)
+
+        if not summary_lines:
+            # Heading present but no body — treat as missing.
+            return None, content
+
+        paragraph = " ".join(summary_lines).strip()
+        # Strip [cN]/[N#] citation markers — the collapsed view doesn't show
+        # citation chips, so the markers would render as raw "[N1]" noise.
+        paragraph = _CN_CITATION_RE.sub("", paragraph)
+        paragraph = re.sub(r"\[N\d+\]", "", paragraph)
+        paragraph = re.sub(r"\s{2,}", " ", paragraph).strip()
+
+        if not paragraph:
+            return None, content
+
+        # Soft cap at 1500 chars (sentence-aligned) — the v4.5 adaptive
+        # Summary can run up to 200 words (~1400 chars) for large portfolios
+        # / very active days. 1500 leaves a small headroom for punctuation +
+        # whitespace; ``_truncate_at_sentence`` keeps the cut clean.
+        if len(paragraph) > 1500:
+            paragraph = self._truncate_at_sentence(paragraph, max_chars=1500)
+
+        # Build the remainder: everything BEFORE the ``## Summary`` heading
+        # (preserved in case the LLM stuck a stray preface above it) plus
+        # everything from the next heading onwards.
+        prefix = "\n".join(lines[:summary_start]).strip()
+        suffix = "\n".join(lines[end_idx:]).strip()
+        remainder = "\n\n".join(part for part in (prefix, suffix) if part)
+        return paragraph, remainder or content
+
+    # ── PLAN-0103 W6 (v4.3) — defensive parser-side injection ─────────────────
+    # WHY exist at all: the v4.3 prompt teaches the LLM the desired shape via
+    # few-shot examples, but we cannot RELY on the LLM emitting all 6 sections
+    # + ``## Summary`` on every call (the audit on 2026-05-29 documented the
+    # silent-drop pattern). These helpers add placeholder lines for missing
+    # sections and synthesise a short summary paragraph from the first
+    # populated bullet — guaranteeing the structural contract regardless of
+    # LLM compliance. Per product directive, we DO NOT fabricate content:
+    # placeholder lines explicitly say "No specific items today" and the
+    # synthesised summary quotes a bullet that already exists.
+    _PLACEHOLDER_LINE = "- No specific items today."
+
+    def inject_missing_sections(self, narrative: str, missing: list[str]) -> str:
+        """Append placeholder section headings for any v4.2/v4.3 sections missing.
+
+        Appends each missing section to ``narrative`` in canonical order (the
+        order defined by ``V42_EXPECTED_SECTIONS``) so the output keeps a
+        consistent shape regardless of which sections the LLM dropped.
+
+        Returns the augmented narrative (unchanged when ``missing`` is empty).
+
+        WHY canonical order (not the order in ``missing``): the dashboard
+        expects sections to render in the spec order; injecting in the order
+        the parser reported them would interleave Bonus context above Risks
+        + Opportunities for example. Iterating ``V42_EXPECTED_SECTIONS`` and
+        filtering by ``missing`` preserves the spec order.
+
+        WHY ``**Section Name**`` (not ``## Section Name``): the v4.2 prompt
+        uses bold inline headings inside ``## Details`` — matching that style
+        keeps the rendered markdown homogenous (the legacy ATX-heading style
+        would render as larger H2 cards in the frontend).
+        """
+        if not missing:
+            return narrative
+
+        missing_set = {name.lower() for name in missing}
+        parts: list[str] = [narrative.rstrip()] if narrative else []
+        for canonical in self.V42_EXPECTED_SECTIONS:
+            if canonical.lower() in missing_set:
+                parts.append(f"\n\n**{canonical}**\n{self._PLACEHOLDER_LINE}")
+        return "".join(parts).strip()
+
+    def _extract_first_bullet_from_section(self, narrative: str, target_section: str) -> str | None:
+        """Scan ``narrative`` for the first bullet under ``**target_section**``.
+
+        Used by ``inject_missing_summary`` as a fallback when the structured
+        ``sections`` list is empty (e.g. the v4.2/v4.3 brief has no ``---``
+        divider, so the v3.0 citation-aware parser returns []). Walks line by
+        line, finds the target section heading, then returns the first
+        ``- `` / ``* `` / ``• `` bullet beneath it.
+
+        Returns None when the section is absent or has no bullets.
+        """
+        if not narrative or not target_section:
+            return None
+        lines = narrative.splitlines()
+        in_target = False
+        for line in lines:
+            stripped = line.strip()
+            if not stripped:
+                continue
+            # Detect a section heading — bold form ``**Name**`` or ATX ``## Name``.
+            is_heading = (stripped.startswith("**") and stripped.endswith("**")) or stripped.startswith(
+                ("# ", "## ", "### ")
+            )
+            if is_heading:
+                # Strip ``**`` and ATX markers for comparison.
+                normalised = stripped.strip("*").lstrip("# ").strip().rstrip(":").lower()
+                in_target = normalised == target_section.lower()
+                continue
+            if in_target and stripped.startswith(("- ", "* ", "• ")):
+                return stripped[2:].strip()
+        return None
+
+    def inject_missing_summary(
+        self,
+        narrative: str,
+        sections: list[Any],
+        summary_paragraph: str | None,
+    ) -> tuple[str, str | None]:
+        """Synthesise a ``summary_paragraph`` from the first populated bullet when LLM omitted it.
+
+        Returns ``(narrative_unchanged, summary_paragraph)``. The narrative is
+        returned untouched (the synthesised summary lives only on the response
+        payload — we never INSERT a ``## Summary`` block into the markdown
+        narrative because that would render twice in the expanded view).
+
+        Selection rule (no fabrication):
+          1. Prefer the FIRST bullet from "Your Portfolio Today".
+          2. Then the FIRST bullet from "News That Matters To You".
+          3. Else the FIRST bullet from any populated section.
+          4. If no bullet at all → return ``(narrative, None)``.
+
+        The chosen bullet text is prefixed with ``"Lead headline: "`` so the
+        collapsed card surface signals to the user that this is the
+        first-bullet fallback, not a model-authored synthesis. We strip any
+        ``[N#]``/``[cN]`` citation markers since the collapsed view has no
+        chip UI. The result is capped at 300 chars (sentence-aligned).
+        """
+        # If the LLM already produced a summary, nothing to do.
+        if summary_paragraph:
+            return narrative, summary_paragraph
+
+        # Walk sections to find a usable lead bullet.
+        priority = ("Your Portfolio Today", "News That Matters To You")
+        chosen_bullet: str | None = None
+
+        # First pass: priority sections.
+        for target in priority:
+            for sec in sections:
+                title = getattr(sec, "title", None) or (sec.get("title") if isinstance(sec, dict) else None)
+                if not title or title.strip().lower() != target.lower():
+                    continue
+                bullets = getattr(sec, "bullets", None) or (sec.get("bullets") if isinstance(sec, dict) else None) or []
+                for bullet in bullets:
+                    text = (
+                        getattr(bullet, "text", None)
+                        or (bullet.get("text") if isinstance(bullet, dict) else None)
+                        or (bullet if isinstance(bullet, str) else None)
+                    )
+                    if text:
+                        chosen_bullet = text
+                        break
+                if chosen_bullet:
+                    break
+            if chosen_bullet:
+                break
+
+        # Second pass: any populated section.
+        if not chosen_bullet:
+            for sec in sections:
+                bullets = getattr(sec, "bullets", None) or (sec.get("bullets") if isinstance(sec, dict) else None) or []
+                for bullet in bullets:
+                    text = (
+                        getattr(bullet, "text", None)
+                        or (bullet.get("text") if isinstance(bullet, dict) else None)
+                        or (bullet if isinstance(bullet, str) else None)
+                    )
+                    if text:
+                        chosen_bullet = text
+                        break
+                if chosen_bullet:
+                    break
+
+        # Fallback: structured sections may be empty for v4.2/v4.3 briefs
+        # (no ``---`` divider → v3.0 citation parser returns []). Scan the
+        # raw narrative markdown for the first bullet under a priority
+        # section heading.
+        if not chosen_bullet:
+            for target in priority:
+                chosen_bullet = self._extract_first_bullet_from_section(narrative, target)
+                if chosen_bullet:
+                    break
+        # Last resort: scan ANY ``- ``/``* `` bullet in the narrative.
+        if not chosen_bullet and narrative:
+            for line in narrative.splitlines():
+                stripped = line.strip()
+                if stripped.startswith(("- ", "* ", "• ")):
+                    body = stripped[2:].strip()
+                    if body and not body.lower().startswith("no "):  # skip placeholder lines
+                        chosen_bullet = body
+                        break
+
+        if not chosen_bullet:
+            return narrative, None
+
+        # Strip citation markers — collapsed view doesn't render chips.
+        cleaned = _CN_CITATION_RE.sub("", chosen_bullet)
+        cleaned = re.sub(r"\[N\d+\]", "", cleaned)
+        cleaned = re.sub(r"\s{2,}", " ", cleaned).strip().lstrip("-* •").strip()
+
+        if not cleaned:
+            return narrative, None
+
+        synthesised = f"Lead headline: {cleaned}"
+        if len(synthesised) > 300:
+            synthesised = self._truncate_at_sentence(synthesised, max_chars=300)
+        return narrative, synthesised
+
+    def check_section_completeness(self, content: str) -> list[str]:
+        """Return the list of v4.2 expected section names MISSING from ``content``.
+
+        Used by ``GenerateBriefingUseCase`` as a post-generation observability
+        gate: when the v4.2 prompt mandates 6 sections but the LLM only emitted
+        4, we want a structured warning + Prom counter (not a hard failure —
+        the brief is still useful, just incomplete).
+
+        Matching is case-insensitive and tolerates the v4.2 heading conventions
+        (``**Section Name**``, ``## Section Name``, ``### Section Name``).
+        """
+        if not content:
+            return list(self.V42_EXPECTED_SECTIONS)
+        haystack = content.lower()
+        missing: list[str] = []
+        for name in self.V42_EXPECTED_SECTIONS:
+            needle = name.lower()
+            # We accept either the bold form (``**name**``) OR the ATX heading
+            # form (``# name`` / ``## name`` / ``### name``). The substring check
+            # tolerates trailing punctuation (e.g. ``**Tape**:``).
+            if (
+                f"**{needle}**" not in haystack
+                and f"# {needle}" not in haystack
+                and f"## {needle}" not in haystack
+                and f"### {needle}" not in haystack
+            ):
+                missing.append(name)
+        return missing
+
     # ── v2.2 two-tier split ────────────────────────────────────────────────────
 
     @staticmethod

@@ -16,7 +16,7 @@ if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession
 
     from market_data.domain.entities import FundamentalsRecord
-    from market_data.domain.enums import FundamentalsSection
+    from market_data.domain.enums import FundamentalsSection, PeriodType
 
 
 class PgFundamentalsReadRepository(FundamentalsReadRepository):
@@ -29,6 +29,16 @@ class PgFundamentalsReadRepository(FundamentalsReadRepository):
         self,
         instrument_id: str,
         section: FundamentalsSection,
+        period_type: PeriodType | None = None,
     ) -> list[FundamentalsRecord]:
-        """Return all fundamentals records for the given instrument and section."""
-        return await query_fundamentals(self._session, security_id=instrument_id, section=section)
+        """Return all fundamentals records for the given instrument and section.
+
+        PLAN-0095 T-W1-01: ``period_type`` is an optional periodicity filter
+        forwarded straight through to :func:`query_fundamentals`.
+        """
+        return await query_fundamentals(
+            self._session,
+            security_id=instrument_id,
+            section=section,
+            period_type=period_type,
+        )

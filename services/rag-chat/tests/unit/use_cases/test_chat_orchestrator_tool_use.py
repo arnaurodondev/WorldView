@@ -271,15 +271,18 @@ class TestOrchestratorToolUsePath:
         Verifies: _TOOL_RESULT_MAX_CHARS = 4000 cap is applied before injection
         into messages for the next LLM iteration.
 
-        E-6: In the multi-turn loop, context is injected between iterations. The
-        long context block must be capped at 4000 chars when injected as a user message.
+        FIX-LIVE-J (2026-05-24): tool results are now injected as one
+        ``role="tool"`` message per call (OpenAI / DeepInfra spec) with a
+        matching ``tool_call_id``.  The first such message carries the full
+        aggregated context block — that's where the 4000-char cap applies.
         """
         from rag_chat.application.use_cases.chat_orchestrator import ChatOrchestratorUseCase
 
         block = _make_tool_use_block("get_price_history")
         pipeline = _make_pipeline()
 
-        captured_user_content: list[str] = []
+        captured_tool_content: list[str] = []
+        captured_tool_ids: list[str] = []
         call_n = [0]
 
         # Return a very long context block from build_prompt.
@@ -288,11 +291,12 @@ class TestOrchestratorToolUsePath:
 
         async def _two_call_capture(messages: list, tools=None, **kwargs: Any):
             call_n[0] += 1
-            # Capture user messages with tool results in the second call
+            # Capture tool-role messages on the second call (post-injection).
             if call_n[0] == 2:
                 for msg in messages:
-                    if msg.get("role") == "user" and "Here is the data" in str(msg.get("content", "")):
-                        captured_user_content.append(msg["content"])
+                    if msg.get("role") == "tool":
+                        captured_tool_content.append(str(msg.get("content", "")))
+                        captured_tool_ids.append(str(msg.get("tool_call_id", "")))
             if call_n[0] == 1:
                 return _make_llm_tool_response(tool_calls=[block])
             return _make_llm_tool_response(text="Answer.", tool_calls=[])
@@ -306,13 +310,16 @@ class TestOrchestratorToolUsePath:
         orch = ChatOrchestratorUseCase(pipeline=pipeline, tool_executor_factory=factory)
         asyncio.run(_collect(orch, _make_request(), MagicMock()))
 
-        # If we captured the user message with tool results, verify the context was capped.
-        if captured_user_content:
-            content = captured_user_content[0]
-            # "A" * 10000 must not appear; capped at 4000
-            assert "A" * 10001 not in content
-            # Some A's should be present (the capped portion)
-            assert "A" in content
+        # Spec invariants: exactly one tool message per tool call, each with a
+        # non-empty tool_call_id; the first carries the (capped) context.
+        assert captured_tool_content, "expected role='tool' message(s) in second-turn payload"
+        assert all(
+            tid for tid in captured_tool_ids
+        ), f"every role='tool' message must carry a tool_call_id; got {captured_tool_ids!r}"
+        # "A" * 10000 must not appear verbatim; capped at 4000.
+        assert "A" * 10001 not in captured_tool_content[0]
+        # The capped portion must still contain "A" (sanity that we didn't strip everything).
+        assert "A" in captured_tool_content[0]
 
 
 # ---------------------------------------------------------------------------
@@ -418,3 +425,56 @@ class TestSSEToolResultItemCount:
             data = json.loads(event["data"])
             assert isinstance(data["status"], str)
             assert data["status"] == status
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# PLAN-0095 W2 T-W2-03: classifier ↔ cache reorder.
+# Cache check now runs BEFORE validate_input so a cache hit short-circuits
+# the 5-8 s LLM injection classifier on the 15% cache-hit fast path.
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+class TestChatPipelineCacheBeforeClassifier:
+    def test_chat_pipeline_cache_hit_skips_classifier(self) -> None:
+        """Cache HIT → validate_input is NOT invoked (latency fast-path).
+
+        WHY this matters: validate_input runs the LLM injection classifier
+        (Layer 2) which takes 5-8 s on DeepInfra. For the ~15% of requests
+        that are cache hits, that latency is pure waste — the cached response
+        was already classifier-validated on its first write.
+        """
+        from rag_chat.application.use_cases.chat_orchestrator import ChatOrchestratorUseCase
+
+        pipeline = _make_pipeline()
+        # Force a cache HIT — return a payload with an answer.
+        pipeline.check_cache = AsyncMock(return_value={"answer": "cached answer"})
+
+        orch = ChatOrchestratorUseCase(pipeline=pipeline)
+        events = asyncio.run(_collect(orch, _make_request(), MagicMock()))
+
+        # The classifier (validate_input) MUST NOT be invoked on cache hit.
+        pipeline.validate_input.assert_not_called()
+        # Cache check WAS invoked.
+        pipeline.check_cache.assert_called_once()
+        # The cached payload's "answer" was streamed to the client.
+        token_events = [e for e in events if e.get("event") == "token"]
+        assert any("cached answer" in str(e.get("data", "")) for e in token_events)
+
+    def test_chat_pipeline_cache_miss_still_runs_classifier(self) -> None:
+        """Cache MISS → validate_input runs as normal (fall-through to slow path).
+
+        Confirms the reorder did not weaken the classifier on the miss path —
+        the only path that ever sees raw user input.
+        """
+        from rag_chat.application.use_cases.chat_orchestrator import ChatOrchestratorUseCase
+
+        pipeline = _make_pipeline()
+        # Force a cache MISS (default in _make_pipeline already returns None).
+        pipeline.check_cache = AsyncMock(return_value=None)
+
+        orch = ChatOrchestratorUseCase(pipeline=pipeline)
+        asyncio.run(_collect(orch, _make_request(), MagicMock()))
+
+        # Both must have been called exactly once.
+        pipeline.check_cache.assert_called_once()
+        pipeline.validate_input.assert_called_once()

@@ -1150,9 +1150,15 @@ async def test_upsert_snapshot_ohlcv_fallback_skipped_when_eodhd_provides_volume
     snap = captured_snaps[0]
     # EODHD value takes precedence — no OHLCV DB query needed
     assert snap["avg_volume_30d"] == 60_000_000
-    # The OHLCV fallback query should NOT have been called (session.execute is from _write,
-    # but since avg_volume_30d was already set, the execute block is skipped)
-    mock_session.execute.assert_not_called()
+    # The OHLCV fallback query should NOT have been called. The consumer DOES
+    # call `fetch_next_earnings_date` (Wave L-5c, queries `earnings_calendar`),
+    # so we can no longer assert `execute` was never called — instead we check
+    # that the specific OHLCV-fallback SQL string did not appear in any call.
+    # WHY scan the SQL text: AsyncMock records every call; the OHLCV fallback
+    # uniquely contains "ohlcv_bars", whereas the L-5c lookup contains
+    # "earnings_calendar".
+    ohlcv_calls = [c for c in mock_session.execute.call_args_list if "ohlcv_bars" in str(c.args[0]).lower()]
+    assert not ohlcv_calls, f"OHLCV fallback unexpectedly ran: {ohlcv_calls}"
 
 
 # ── Unit tests for fundamentals_snapshot_writer helpers ─────────────────────
@@ -1405,3 +1411,144 @@ async def test_upsert_snapshot_partial_payload_preserves_existing_values() -> No
     assert params_2["interest_coverage"] is None
     assert params_2["net_debt_to_ebitda"] is None
     assert params_2["credit_rating"] is None
+
+
+# ── PLAN-0096 T-W1-02 / BP-545: per-instrument freshness column ──────────────
+
+
+@pytest.mark.asyncio
+async def test_consumer_sets_last_fundamentals_ingest_at() -> None:
+    """On a successful section materialisation the consumer must bump
+    ``instruments.last_fundamentals_ingest_at`` via the InstrumentRepository
+    port (PLAN-0096 T-W1-02 / BP-545). Same UoW as the section writes — no
+    outbox event, no second transaction."""
+    instrument = _make_instrument()
+    mock_uow = AsyncMock()
+    mock_uow.instruments.find_by_symbol_exchange = AsyncMock(return_value=instrument)
+    mock_uow.instruments.touch_fundamentals_ingest_at = AsyncMock()
+    mock_uow.fundamentals.upsert_income_statement = AsyncMock()
+
+    raw = _make_fundamentals_json(["income_statement"])
+    mock_storage = AsyncMock()
+    mock_storage.get_bytes = AsyncMock(return_value=raw)
+
+    consumer = _make_consumer(mock_uow, mock_storage)
+    await consumer.process_message(None, _make_message(), {})
+
+    # Exactly one touch call, against the right instrument, with a tz-aware
+    # datetime close to "now".
+    mock_uow.instruments.touch_fundamentals_ingest_at.assert_awaited_once()
+    call = mock_uow.instruments.touch_fundamentals_ingest_at.call_args
+    assert call.args[0] == instrument.id
+    ts = call.args[1]
+    assert isinstance(ts, datetime)
+    assert ts.tzinfo is not None
+    # Within 5 s of now — proves utc_now() (not a stale timestamp).
+    assert abs((datetime.now(tz=UTC) - ts).total_seconds()) < 5.0
+
+
+@pytest.mark.asyncio
+async def test_consumer_does_not_touch_freshness_on_zero_section_payload() -> None:
+    """If section_count == 0 (e.g. payload contained only company_profile —
+    which is handled separately for instrument metadata enrichment but does
+    NOT count as a section here, or payload had only unknown keys) the
+    freshness column MUST NOT be bumped. Lying about freshness on a no-op
+    cycle defeats the purpose of the column."""
+    instrument = _make_instrument()
+    mock_uow = AsyncMock()
+    mock_uow.instruments.find_by_symbol_exchange = AsyncMock(return_value=instrument)
+    mock_uow.instruments.touch_fundamentals_ingest_at = AsyncMock()
+
+    # Payload with no known section keys → section_count stays 0.
+    raw = json.dumps({"unknown_section": {"x": 1}}).encode()
+    mock_storage = AsyncMock()
+    mock_storage.get_bytes = AsyncMock(return_value=raw)
+
+    consumer = _make_consumer(mock_uow, mock_storage)
+    await consumer.process_message(None, _make_message(), {})
+
+    mock_uow.instruments.touch_fundamentals_ingest_at.assert_not_awaited()
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# PLAN-0102 T-W6-03 / BP-617 — processing-time histogram regression
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_fundamentals_consumer_records_processing_histogram() -> None:
+    """The ``fundamentals_consumer_processing_ms`` histogram MUST increment on
+    every processed message — both success and skip paths — so the tail is
+    always observable in Prometheus. This regression locks the wrapper in
+    ``process_message`` against accidental removal (a refactor that bypasses
+    the timing wrapper would silently regress DLQ pre-emption observability).
+    """
+    from market_data.infrastructure.metrics.prometheus import fundamentals_consumer_processing_ms
+
+    # Sample the histogram count BEFORE; the test should observe + 1 sample.
+    # Use the internal ``_sum`` counter because prometheus_client Histograms
+    # do not expose a stable sample count API at the Python level — ``_sum``
+    # is monotonic so any observation moves it strictly upward.
+    before_count = fundamentals_consumer_processing_ms._sum.get()
+
+    # Use the "skip non-fundamentals" path so the test does not need a full
+    # storage/uow fixture — the wrapper must still record because the
+    # observation lives in the outer try/finally.
+    mock_uow = AsyncMock()
+    mock_storage = AsyncMock()
+    consumer = _make_consumer(mock_uow, mock_storage)
+    await consumer.process_message(None, _make_message(dataset_type="OHLCV"), {})
+
+    after_count = fundamentals_consumer_processing_ms._sum.get()
+    assert after_count > before_count, "processing histogram did not record sample"
+
+
+def test_fundamentals_consumer_processing_histogram_buckets() -> None:
+    """Bucket boundaries are load-bearing for the dashboard query in
+    ``infrastructure/metrics/prometheus.py``; freeze them here so a future
+    edit that changes the buckets gets caught in CI.
+
+    The 60 s bucket is the early-warning signal — any non-zero count there
+    means the next bump (above 90 s) is imminent.
+    """
+    from market_data.infrastructure.metrics.prometheus import fundamentals_consumer_processing_ms
+
+    # prometheus_client Histograms keep the upper-bound list (sans +Inf) on
+    # ``_upper_bounds``; the +Inf bucket is appended automatically.
+    bounds = list(fundamentals_consumer_processing_ms._upper_bounds)
+    # Strip the trailing +Inf for comparison.
+    finite = [b for b in bounds if b != float("inf")]
+    assert finite == [
+        1_000.0,
+        5_000.0,
+        10_000.0,
+        30_000.0,
+        45_000.0,
+        60_000.0,
+        90_000.0,
+        120_000.0,
+    ]
+
+
+def test_fundamentals_timeout_settings_default_and_env_override(monkeypatch: pytest.MonkeyPatch) -> None:
+    """``MARKET_DATA_FUNDAMENTALS_TIMEOUT_S`` overrides the 90 s default.
+
+    Regression for PLAN-0102 T-W6-02 / BP-617: the timeout was previously
+    hard-coded inside ``libs/messaging``; the fix surfaces it as an
+    env-driven setting so operators can bump without a rebuild. The default
+    is 90 s — twice the previous library default of 45 s, picked from the
+    observed Russell-1000 payload tail.
+    """
+    from market_data.config import Settings
+
+    # Ensure the env var is unset for the default check (other tests may set
+    # arbitrary MARKET_DATA_* env). Storage keys are required by Settings.
+    monkeypatch.delenv("MARKET_DATA_FUNDAMENTALS_TIMEOUT_S", raising=False)
+    monkeypatch.setenv("MARKET_DATA_STORAGE_ACCESS_KEY", "test-key")
+    monkeypatch.setenv("MARKET_DATA_STORAGE_SECRET_KEY", "test-secret")
+    s = Settings()  # type: ignore[call-arg]
+    assert s.fundamentals_timeout_s == 90
+
+    monkeypatch.setenv("MARKET_DATA_FUNDAMENTALS_TIMEOUT_S", "150")
+    s2 = Settings()  # type: ignore[call-arg]
+    assert s2.fundamentals_timeout_s == 150

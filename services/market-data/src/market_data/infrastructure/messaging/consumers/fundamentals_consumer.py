@@ -4,22 +4,26 @@ from __future__ import annotations
 
 import json
 import re
+import time
 from datetime import UTC, date, datetime
 from typing import TYPE_CHECKING, Any, cast
 
 from sqlalchemy import text
 
+from market_data.domain._ticker_normalize import _normalize_ticker
 from market_data.domain.entities import FundamentalsRecord, Instrument, Security
 from market_data.domain.enums import FundamentalsSection, PeriodType
 from market_data.domain.events import InstrumentCreated
 from market_data.domain.value_objects import InstrumentFlags
 from market_data.infrastructure.db.fundamentals_snapshot_writer import (
-    _most_recent_financial_row,
+    _most_recent_financial_row_with_period,
     derive_fundamentals_snapshot,
+    fetch_next_earnings_date,
     upsert_snapshot,
 )
 from market_data.infrastructure.db.metric_extractor import extract_metrics
 from market_data.infrastructure.messaging.outbox.dispatcher import EVENT_TOPIC_MAP, event_to_outbox_payload
+from market_data.infrastructure.metrics.prometheus import fundamentals_consumer_processing_ms
 from messaging.kafka.consumer.base import BaseKafkaConsumer, ConsumerConfig, FailureInfo  # type: ignore[import-untyped]
 from messaging.kafka.consumer.dedup import ValkeyDedupMixin  # type: ignore[import-untyped]
 from messaging.kafka.consumer.errors import MalformedDataError, StorageUnavailableError  # type: ignore[import-untyped]
@@ -238,7 +242,31 @@ class FundamentalsConsumer(ValkeyDedupMixin, BaseKafkaConsumer[dict]):
         value: dict[str, Any],
         headers: dict[str, str],
     ) -> None:
-        """Materialise fundamentals sections from the claim-check into the database."""
+        """Materialise fundamentals sections from the claim-check into the database.
+
+        PLAN-0102 T-W6-03 / BP-617: wall-clock wrapper that records every
+        per-message processing duration into the
+        ``fundamentals_consumer_processing_ms`` histogram so we can chart the
+        tail and pre-empt the next DLQ wave instead of discovering it post-hoc.
+        We use ``time.monotonic()`` (not ``time.time()``) so wall-clock jumps
+        (NTP step / VM resume) cannot poison the histogram. The metric is
+        recorded in BOTH success and failure paths because a 90 s timeout
+        re-raise is precisely the data point we want to capture.
+        """
+        start = time.monotonic()
+        try:
+            await self._process_message_inner(key, value, headers)
+        finally:
+            elapsed_ms = (time.monotonic() - start) * 1_000.0
+            fundamentals_consumer_processing_ms.observe(elapsed_ms)
+
+    async def _process_message_inner(
+        self,
+        key: str | None,
+        value: dict[str, Any],
+        headers: dict[str, str],
+    ) -> None:
+        """Inner processing — see ``process_message`` docstring for timing rationale."""
         dataset_type = value.get("dataset_type", "")
         if dataset_type != _DATASET_TYPE:
             return
@@ -268,7 +296,9 @@ class FundamentalsConsumer(ValkeyDedupMixin, BaseKafkaConsumer[dict]):
 
         bucket = value["canonical_ref_bucket"]
         object_key = value["canonical_ref_key"]
-        symbol = value["symbol"]
+        # PLAN-0089 F2 step 7: canonicalise ticker at the ingestion boundary.
+        # See market_data.domain._ticker_normalize for rationale.
+        symbol = _normalize_ticker(value["symbol"])
         exchange = value.get("exchange") or ""
         provider_str = value.get("provider", "unknown")
 
@@ -577,6 +607,14 @@ class FundamentalsConsumer(ValkeyDedupMixin, BaseKafkaConsumer[dict]):
             sections_processed=section_count,
         )
 
+        # PLAN-0096 T-W1-02 / BP-545: bump per-instrument fundamentals freshness
+        # column inside the same UoW as the section writes. Only bump when at
+        # least one section was actually processed — a malformed payload that
+        # produced zero rows should not lie about freshness. No outbox event:
+        # the column is observational, not a domain event.
+        if section_count > 0:
+            await uow.instruments.touch_fundamentals_ingest_at(instrument_id, ingested_at)
+
         # ── F-Q1-03: UPSERT instrument_fundamentals_snapshot ──────────────────
         # WHY here (not in a separate consumer): the snapshot is a derived
         # projection of section data already present in `payload`.  Computing
@@ -612,13 +650,40 @@ class FundamentalsConsumer(ValkeyDedupMixin, BaseKafkaConsumer[dict]):
         without touching the DB.
         """
         snap_highlights = payload.get("highlights") or {}
-        snap_cash_flow = _most_recent_financial_row(payload.get("cash_flow"))
-        snap_income = _most_recent_financial_row(payload.get("income_statement"))
-        snap_balance = _most_recent_financial_row(payload.get("balance_sheet"))
+        # PLAN-0095 T-W1-04 / BP-542: capture which periodicity each source row
+        # came from so the snapshot writer can record it in the new
+        # ``period_type_*`` columns. ``_most_recent_financial_row_with_period``
+        # returns ``(row, "ANNUAL" | "QUARTERLY" | None)``.
+        snap_cash_flow, _pt_cash_flow = _most_recent_financial_row_with_period(payload.get("cash_flow"))
+        snap_income, _pt_income = _most_recent_financial_row_with_period(payload.get("income_statement"))
+        snap_balance, _pt_balance = _most_recent_financial_row_with_period(payload.get("balance_sheet"))
         snap_technicals = payload.get("technicals_snapshot") or {}
+        # ── WL-4a (PLAN-0089) sections ───────────────────────────────────────
+        # Two additional flat-dict sections feed the four new L-4a snapshot
+        # columns (analyst_target_price, analyst_consensus_rating,
+        # institutional_ownership_pct, short_percent). Both are sparse —
+        # small-cap and non-US listings frequently omit either or both.
+        snap_analyst_consensus = payload.get("analyst_consensus") or {}
+        snap_share_statistics = payload.get("share_statistics") or {}
+        # PLAN-0089 Wave L-5c: pass the splits_dividends section so the
+        # snapshot writer can extract ``next_dividend_date`` from EODHD
+        # ``SplitsDividends.DividendDate``. Absent on ETFs / non-payers.
+        snap_splits_dividends = payload.get("splits_dividends") or {}
 
-        # Only derive + upsert when at least one source section is present
-        if not (snap_highlights or snap_cash_flow or snap_income or snap_balance or snap_technicals):
+        # Only derive + upsert when at least one source section is present.
+        # Include the new WL-4a + L-5c sections so a payload carrying ONLY
+        # analyst, ownership, or calendar data (rare but possible — partial
+        # provider re-poll) still triggers the upsert.
+        if not (
+            snap_highlights
+            or snap_cash_flow
+            or snap_income
+            or snap_balance
+            or snap_technicals
+            or snap_analyst_consensus
+            or snap_share_statistics
+            or snap_splits_dividends
+        ):
             return
 
         snap = derive_fundamentals_snapshot(
@@ -627,7 +692,18 @@ class FundamentalsConsumer(ValkeyDedupMixin, BaseKafkaConsumer[dict]):
             income=snap_income,
             balance=snap_balance,
             technicals=snap_technicals,
+            analyst_consensus=snap_analyst_consensus,
+            share_statistics=snap_share_statistics,
+            splits_dividends=snap_splits_dividends,
         )
+        # PLAN-0095 T-W1-04 / BP-542: attach the source periodicity tags so the
+        # writer persists them into instrument_fundamentals_snapshot.period_type_*.
+        snap = {
+            **snap,
+            "period_type_income": _pt_income,
+            "period_type_cash_flow": _pt_cash_flow,
+            "period_type_balance": _pt_balance,
+        }
         # Access write session via concrete UoW — we are inside the
         # infrastructure layer; the cast is safe here (SLF001).
         write_session_fn = getattr(uow, "_write", None)
@@ -655,6 +731,22 @@ class FundamentalsConsumer(ValkeyDedupMixin, BaseKafkaConsumer[dict]):
             ).one_or_none()
             if row and row.avg_vol is not None:
                 snap = {**snap, "avg_volume_30d": int(row.avg_vol)}
+
+        # PLAN-0089 Wave L-5c: look up the next future earnings report date
+        # in the ``earnings_calendar`` table (best-effort). Until L-5b ships
+        # the worker that populates this table, the query typically returns
+        # NULL — that is correct and the COALESCE-based UPSERT preserves any
+        # previously-recorded value.
+        try:
+            next_earn = await fetch_next_earnings_date(write_session_fn(), instrument_id)
+        except Exception as exc:  # — best-effort lookup; never fail the snapshot
+            logger.debug(
+                "fundamentals_consumer.next_earnings_lookup_failed",
+                instrument_id=instrument_id,
+                error=str(exc),
+            )
+            next_earn = None
+        snap = {**snap, "next_earnings_date": next_earn}
 
         await upsert_snapshot(write_session_fn(), instrument_id, snap)
         logger.info(

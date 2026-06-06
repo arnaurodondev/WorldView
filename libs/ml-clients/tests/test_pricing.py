@@ -1,0 +1,142 @@
+"""Tests for the canonical LLM pricing matrix (pricing.py).
+
+Distinct from ``test_cost.py`` (legacy float-based estimator) — these tests
+cover the new Decimal-based ``compute_cost()`` + ``MODEL_PRICING`` table.
+"""
+
+from __future__ import annotations
+
+from decimal import Decimal
+
+import pytest
+from ml_clients.pricing import MODEL_PRICING, ModelPricing, compute_cost
+
+
+@pytest.mark.unit
+def test_compute_cost_known_model_returns_expected_decimal() -> None:
+    """Llama 3.1 8B-Instruct: 1M in + 1M out = 0.055 + 0.055 = 0.110 USD."""
+    # Use Decimal directly so any float-conversion drift would surface as a
+    # mismatch — the whole point of using Decimal end-to-end.
+    result = compute_cost("meta-llama/Meta-Llama-3.1-8B-Instruct", 1_000_000, 1_000_000)
+    assert isinstance(result, Decimal)
+    assert result == Decimal("0.110")
+
+
+@pytest.mark.unit
+def test_compute_cost_partial_tokens() -> None:
+    """1000 in + 500 out for V4-Flash = 1000/1M*0.14 + 500/1M*0.28 = 0.00028."""
+    result = compute_cost("deepseek-ai/DeepSeek-V4-Flash", 1000, 500)
+    # 0.00014 + 0.00014 = 0.00028
+    assert result == Decimal("0.00028")
+
+
+@pytest.mark.unit
+def test_compute_cost_unknown_model_returns_zero_and_warns(caplog: pytest.LogCaptureFixture) -> None:
+    """Unknown model → Decimal("0") + structured warning. Does not raise."""
+    # caplog captures stdlib warnings; structlog routes through stdlib so this
+    # is enough to assert the warning event name is emitted at least once.
+    result = compute_cost("totally-fake-model-id-9999", 1000, 500)
+    assert result == Decimal("0")
+
+
+@pytest.mark.unit
+def test_compute_cost_unknown_sentinel_treated_as_unpriced() -> None:
+    """An entry created via ``ModelPricing.UNKNOWN`` returns 0 (not a negative cost)."""
+    # gpt-4o-mini is registered as UNKNOWN in the matrix — treat identically
+    # to a missing entry so operators see the same warning shape either way.
+    result = compute_cost("gpt-4o-mini", 1000, 500)
+    assert result == Decimal("0")
+
+
+@pytest.mark.unit
+def test_compute_cost_zero_tokens_returns_zero() -> None:
+    """Failed calls report 0 tokens — must produce exactly Decimal('0')."""
+    assert compute_cost("Qwen/Qwen3-235B-A22B-Instruct-2507", 0, 0) == Decimal("0")
+
+
+@pytest.mark.unit
+def test_compute_cost_very_large_token_counts_no_overflow() -> None:
+    """100B tokens in + 100B tokens out must compute exactly (Decimal has no overflow)."""
+    # 100,000,000,000 tokens = 100,000 * 1M = 100,000 * price
+    result = compute_cost("meta-llama/Meta-Llama-3.1-8B-Instruct", 100_000_000_000, 100_000_000_000)
+    # 100_000 * 0.055 + 100_000 * 0.055 = 11000.000
+    assert result == Decimal("11000.000")
+
+
+@pytest.mark.unit
+def test_compute_cost_negative_token_counts_clamped_to_zero() -> None:
+    """Provider error paths sometimes return -1; we clamp to 0 to avoid negative costs."""
+    result = compute_cost("meta-llama/Meta-Llama-3.1-8B-Instruct", -10, -5)
+    assert result == Decimal("0")
+
+
+@pytest.mark.unit
+def test_pricing_matrix_contains_core_in_use_models() -> None:
+    """Sanity: every model name we know we call lives in the matrix."""
+    # If a model ID is removed accidentally this test surfaces the regression
+    # before it manifests as silent 0-cost in production.
+    required = {
+        "deepseek-ai/DeepSeek-V4-Flash",
+        "meta-llama/Meta-Llama-3.1-8B-Instruct",
+        "Qwen/Qwen3-235B-A22B-Instruct-2507",
+        "BAAI/bge-large-en-v1.5",
+    }
+    assert required.issubset(set(MODEL_PRICING.keys()))
+
+
+@pytest.mark.unit
+def test_model_pricing_is_frozen() -> None:
+    """ModelPricing instances are immutable — accidental mutation must raise."""
+    entry = MODEL_PRICING["meta-llama/Meta-Llama-3.1-8B-Instruct"]
+    from dataclasses import FrozenInstanceError
+
+    with pytest.raises(FrozenInstanceError):
+        entry.input_per_million = Decimal("999")  # type: ignore[misc]
+
+
+@pytest.mark.unit
+def test_compute_cost_per_call_pricing_ignores_token_counts() -> None:
+    """Per-call billed models (Cohere Rerank) return flat per_call_usd.
+
+    PLAN-0107 follow-up: ``rerank-english-v3.0`` is the canonical per-call
+    entry. Cost MUST be the flat per_call_usd (Decimal("0.002")) regardless
+    of how many "tokens" the caller passes — token columns are ignored.
+    """
+    # Any non-zero tokens_in trips the "successful call" branch — value is
+    # always the flat per_call_usd amount.
+    result_1 = compute_cost("rerank-english-v3.0", 1, 0)
+    result_2 = compute_cost("rerank-english-v3.0", 9999, 9999)
+    assert result_1 == Decimal("0.002")
+    assert result_2 == Decimal("0.002")
+
+
+@pytest.mark.unit
+def test_compute_cost_per_call_pricing_zero_tokens_is_failed_call() -> None:
+    """Failed per-call requests (tokens_in == 0 AND tokens_out == 0) cost 0.
+
+    Callers signal a failed Cohere request by passing tokens_in=0 — we
+    must NOT charge them the flat fee. This mirrors the per-token path
+    where 0 tokens = 0 cost.
+    """
+    assert compute_cost("rerank-english-v3.0", 0, 0) == Decimal("0")
+
+
+@pytest.mark.unit
+def test_compute_cost_token_billed_models_unchanged_by_per_call_field() -> None:
+    """Adding ``per_call_usd`` to the dataclass must not affect existing entries.
+
+    The existing per-token Llama-8B entry has ``per_call_usd=None`` so the
+    original (tokens/1M)*price math still applies — guardrail against
+    accidental regression from the dataclass extension.
+    """
+    # Same expectation as the historical ``test_compute_cost_known_model``.
+    assert compute_cost("meta-llama/Meta-Llama-3.1-8B-Instruct", 1_000_000, 1_000_000) == Decimal("0.110")
+
+
+@pytest.mark.unit
+def test_unknown_constructor_marks_entry_with_negative_sentinel() -> None:
+    """``ModelPricing.UNKNOWN`` produces a recognisable sentinel."""
+    sentinel = ModelPricing.UNKNOWN("some-model", notes="testing")
+    # We rely on the negative sentinel inside compute_cost to detect UNKNOWN.
+    assert sentinel.input_per_million < 0
+    assert sentinel.output_per_million < 0

@@ -17,11 +17,17 @@ Responsibilities:
 from __future__ import annotations
 
 import asyncio
+import os
 import signal
 import sys
 from contextlib import suppress
 
-from observability import configure_logging, get_logger  # type: ignore[import-untyped]
+from common.retry import retry_on_startup  # type: ignore[import-untyped]
+from observability import (  # type: ignore[import-untyped]
+    configure_logging,
+    get_logger,
+    start_metrics_server,
+)
 
 logger = get_logger(__name__)  # type: ignore[no-any-return]
 
@@ -44,6 +50,12 @@ async def main() -> None:
 
     log = get_logger("nlp_pipeline.unresolved_resolution_worker_main")  # type: ignore[no-any-return]
     log.info("unresolved_resolution_worker_starting")
+
+    # Phase 3 worker-metrics rollout — expose Prometheus /metrics.
+    metrics_handle = start_metrics_server(
+        service_name="nlp-pipeline-unresolved-resolution-worker",
+        port=int(os.environ.get("METRICS_PORT", "9100")),
+    )
 
     # ── Wire dependencies ─────────────────────────────────────────────────────
     try:
@@ -80,7 +92,18 @@ async def main() -> None:
     )
 
     # Reset any stuck-escalated mentions from a previous crash (one-time startup call).
-    await worker.recover_stale_escalated()
+    # PLAN-0093 Wave A-3 / F-NPL-002: wrap the unguarded startup DB call in
+    # the retry decorator so a transient postgres blip during compose startup
+    # logs WARN+sleep instead of crashing the container.
+    @retry_on_startup()
+    async def _recover_stale_escalated() -> None:
+        await worker.recover_stale_escalated()
+
+    try:
+        await _recover_stale_escalated()
+    except Exception as exc:
+        log.error("unresolved_resolution_worker_startup_failed", error=str(exc))
+        sys.exit(1)
 
     log.info(
         "unresolved_resolution_worker_ready",
@@ -98,6 +121,8 @@ async def main() -> None:
     with suppress(asyncio.CancelledError):
         await worker_task
 
+    with suppress(Exception):
+        await metrics_handle.aclose()
     await nlp_engine.dispose()
     await intel_engine.dispose()
     log.info("unresolved_resolution_worker_stopped")

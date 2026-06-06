@@ -33,6 +33,81 @@ class ScreenFilterRequest(BaseModel):
     max_value: float | None = None
     period_type: str | None = None
     sector: str | None = None
+    # FIX-LIVE-M (2026-05-24): GICS industry filter (e.g. "Semiconductors").
+    # Sector alone is too broad for queries like "AI chip companies".
+    industry: str | None = None
+    # Wave L-1: instrument-attribute filters (applied as WHERE on instruments table)
+    country: str | None = None
+    exchange: str | None = None
+    has_fundamentals: bool | None = None
+    has_ohlcv: bool | None = None
+    # ── Wave L-2: instrument_fundamentals_snapshot column filters ────────────
+    # All fields are optional/default-None for R11 forward-compatibility.
+    # Numeric min/max are inclusive ranges; credit_ratings is an IN list.
+    # Mirrors ScreenFilter port (application/ports/repositories.py).
+    avg_volume_30d_min: float | None = None
+    avg_volume_30d_max: float | None = None
+    eps_ttm_min: float | None = None
+    eps_ttm_max: float | None = None
+    free_cash_flow_min: float | None = None
+    free_cash_flow_max: float | None = None
+    fcf_margin_min: float | None = None
+    fcf_margin_max: float | None = None
+    interest_coverage_min: float | None = None
+    interest_coverage_max: float | None = None
+    net_debt_to_ebitda_min: float | None = None
+    net_debt_to_ebitda_max: float | None = None
+    credit_ratings: list[str] | None = None
+    # ── Wave L-4a snapshot column filters (PLAN-0089) ────────────────────────
+    # Mirror of ScreenFilter port fields. Decimal-fraction unit convention
+    # applies to ownership and short (e.g. 0.5 means 50%) — see port docs.
+    analyst_target_price_min: float | None = None
+    analyst_target_price_max: float | None = None
+    analyst_consensus_rating_min: float | None = None
+    analyst_consensus_rating_max: float | None = None
+    institutional_ownership_pct_min: float | None = None
+    institutional_ownership_pct_max: float | None = None
+    short_percent_min: float | None = None
+    short_percent_max: float | None = None
+    # ── Wave L-5c: calendar (date) field filters ─────────────────────────────
+    # Expressed as "within next N days" because a UI calendar-style range picker
+    # is much heavier than a single number-of-days input — and "earnings within
+    # 30 days" / "dividend within 14 days" maps cleanly to range queries:
+    #     WHERE col BETWEEN CURRENT_DATE AND CURRENT_DATE + INTERVAL ':n days'
+    # Validation: ge=0 disallows negative windows (would be past-only, better
+    # served by the dedicated calendar endpoints); le=365 caps at a year to
+    # keep query plans selective and the partial index useful.
+    next_earnings_within_days: int | None = Field(default=None, ge=0, le=365)
+    next_dividend_within_days: int | None = Field(default=None, ge=0, le=365)
+    # ── Wave L-3: computed OHLCV-derived metric ranges ───────────────────────
+    # Shorthand for "filter on the latest value of the computed metric in
+    # fundamental_metrics with period_type=SNAPSHOT, section=computed_returns".
+    # The router expands each populated *_min/*_max pair into an existing
+    # ScreenFilter(metric=<name>, min_value=..., max_value=...) so the existing
+    # latest-value-per-instrument JOIN handles them — no new SQL shape needed.
+    # All values are fractions (NOT percent), matching the worker output convention.
+    dist_from_52w_high_pct_min: float | None = None
+    dist_from_52w_high_pct_max: float | None = None
+    dist_from_52w_low_pct_min: float | None = None
+    dist_from_52w_low_pct_max: float | None = None
+    return_1m_min: float | None = None
+    return_1m_max: float | None = None
+    return_3m_min: float | None = None
+    return_3m_max: float | None = None
+    return_6m_min: float | None = None
+    return_6m_max: float | None = None
+    return_ytd_min: float | None = None
+    return_ytd_max: float | None = None
+    return_1y_min: float | None = None
+    return_1y_max: float | None = None
+    return_3y_min: float | None = None
+    return_3y_max: float | None = None
+    # ── Wave L-4b: insider 90d rollup range filter ──────────────────────────
+    # Inclusive min/max on ``instrument_fundamentals_snapshot.insider_net_buy_90d``.
+    # Negative values are valid (net selling); the column is signed.
+    # Defaults to None for R11 forward-compat — existing callers unaffected.
+    insider_net_buy_90d_min: float | None = None
+    insider_net_buy_90d_max: float | None = None
 
 
 class ScreenRequest(BaseModel):
@@ -63,7 +138,8 @@ class ScreenInstrumentResponse(BaseModel):
     name: str | None = None
     exchange: str | None = None
     sector: str | None = None
-    metrics: dict[str, float | None]
+    # WHY float | str | None: numeric metrics are float; credit_rating is a string.
+    metrics: dict[str, float | str | None]
 
 
 class ScreenResponse(BaseModel):

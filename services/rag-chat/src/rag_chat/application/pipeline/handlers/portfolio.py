@@ -54,7 +54,11 @@ class PortfolioHandler(ToolHandler):
         return tool_name in self._HANDLED_TOOLS
 
     async def execute(self, tool_name: str, args: dict[str, Any]) -> Any:
+        from .base import filter_kwargs_to_signature
+
         if tool_name == "get_portfolio_context":
+            # No accepted kwargs — log/count any that the LLM emits anyway.
+            filter_kwargs_to_signature(self._handle_get_portfolio_context, tool_name, args)
             return await self._handle_get_portfolio_context()
         raise ValueError(f"PortfolioHandler cannot handle tool: {tool_name}")
 

@@ -95,8 +95,13 @@ def _make_use_case(
     valkey.get = AsyncMock(side_effect=_valkey_get)
     valkey.set = AsyncMock()
 
+    from ml_clients.dataclasses import EmbeddingOutput  # type: ignore[import-not-found]
+
+    _embed_output = [
+        EmbeddingOutput(embedding=embed_result or _DUMMY_VEC, model_id="BAAI/bge-large-en-v1.5", dimension=1024)
+    ]
     emb_client = MagicMock()
-    emb_client.embed = AsyncMock(return_value=embed_result or _DUMMY_VEC)
+    emb_client.embed = AsyncMock(return_value=_embed_output)
 
     return EnhancedChunkSearchUseCase(
         chunk_ann_repo=ann_repo,
@@ -220,7 +225,11 @@ class TestEnhancedChunkSearchUseCase:
             query_embedding=None,
         )
 
-        uc._emb.embed.assert_called_once_with("apple q3 revenue")  # type: ignore[attr-defined]
+        from ml_clients.dataclasses import EmbeddingInput  # type: ignore[import-not-found]
+
+        uc._emb.embed.assert_called_once_with(  # type: ignore[attr-defined]
+            [EmbeddingInput(text="apple q3 revenue", model_id="BAAI/bge-large-en-v1.5")]
+        )
         uc._valkey.set.assert_called_once()  # type: ignore[attr-defined]
         set_args = uc._valkey.set.call_args  # type: ignore[attr-defined]
         assert set_args.kwargs.get("ex") == 3600 or set_args.args[2] == 3600

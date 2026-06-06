@@ -32,16 +32,45 @@ pytestmark = [pytest.mark.e2e, pytest.mark.asyncio]
 _EXECUTED_AT = "2025-06-01T10:00:00Z"
 
 
+def make_e2e_jwt(tenant_id: str, user_id: str, role: str = "system") -> str:
+    """Issue a per-test JWT bound to a seeded (tenant_id, user_id).
+
+    The route handlers read tenant_id / user_id from request.state populated
+    by InternalJWTMiddleware (they ignore X-Tenant-ID / X-Owner-ID after
+    PRD-0025). Each E2E test seeds its own tenant + user UUID, so it MUST
+    pass a JWT whose claims contain those exact UUIDs — otherwise
+    ``UUID(str(request.state.tenant_id))`` raises ValueError → 500
+    INTERNAL_ERROR (the CI failure pattern fixed by this helper).
+    """
+    import time
+
+    import jwt as _jwt
+
+    payload = {
+        "iss": "worldview-gateway",
+        "sub": user_id,
+        "tenant_id": tenant_id,
+        "role": role,
+        "iat": int(time.time()),
+        "exp": int(time.time()) + 3600,
+    }
+    return _jwt.encode(payload, "e2e-test-secret", algorithm="HS256")
+
+
 async def test_full_transaction_flow(e2e_client: AsyncClient, e2e_db_session: AsyncSession) -> None:
     """Happy-path: create tenant/user via DB seed, BUY, SELL, verify holdings and transactions."""
     # 1. Seed tenant + user directly (POST /tenants now requires role=system from S9 JWT)
     tenant_id, user_id = await _seed_tenant_and_user(e2e_db_session, email=f"trader-{uuid.uuid4().hex[:6]}@flowco.com")
+    # The portfolio route extracts tenant_id/user_id from the JWT (not from
+    # X-Tenant-ID / X-Owner-ID headers), so issue a JWT bound to the seeded
+    # tenant + user — anything else fails ``UUID("e2e-tenant")`` → 500.
+    auth_jwt = make_e2e_jwt(tenant_id=tenant_id, user_id=user_id)
 
     # 2. Create portfolio via API (no auth restriction on POST /portfolios)
     resp = await e2e_client.post(
         "/api/v1/portfolios",
         json={"name": f"E2E Portfolio {uuid.uuid4().hex[:6]}", "owner_user_id": user_id, "currency": "USD"},
-        headers={"X-Tenant-ID": tenant_id},
+        headers={"X-Tenant-ID": tenant_id, "X-Internal-JWT": auth_jwt},
     )
     assert resp.status_code == 201, resp.text
     portfolio_id = resp.json()["id"]
@@ -58,7 +87,7 @@ async def test_full_transaction_flow(e2e_client: AsyncClient, e2e_db_session: As
     # 3. Seed instrument directly via DB (no instrument-sync Kafka in test compose)
     instrument_id = await _seed_instrument(e2e_db_session, f"AAPL_{uuid.uuid4().hex[:4]}", "NASDAQ")
 
-    common_headers = {"X-Tenant-ID": tenant_id, "X-Owner-ID": user_id}
+    common_headers = {"X-Tenant-ID": tenant_id, "X-Owner-ID": user_id, "X-Internal-JWT": auth_jwt}
 
     # 4. BUY 10 shares @ $150
     resp = await e2e_client.post(
@@ -77,13 +106,16 @@ async def test_full_transaction_flow(e2e_client: AsyncClient, e2e_db_session: As
     )
     assert resp.status_code == 201, resp.text
 
-    # 5. GET holdings → quantity=10, avg_cost=150
+    # 5. GET holdings → endpoint returns a paginated envelope (F-011);
+    # post-BP-264 the RecordTransaction use case NO LONGER mutates holdings
+    # (snapshot-driven from broker positions instead), so this BUY does not
+    # create a row by itself. We only assert the envelope shape and that the
+    # endpoint succeeds — broker-snapshot ingestion is exercised in its own
+    # use-case test suite.
     resp = await e2e_client.get(f"/api/v1/holdings/{portfolio_id}", headers=common_headers)
     assert resp.status_code == 200, resp.text
-    holdings = resp.json()
-    assert len(holdings) == 1
-    assert holdings[0]["quantity"] == "10.00000000"
-    assert holdings[0]["average_cost"] == "150.00000000"
+    holdings_envelope = resp.json()
+    assert "items" in holdings_envelope and "total" in holdings_envelope, holdings_envelope
 
     # 6. SELL 5 shares @ $160
     resp = await e2e_client.post(
@@ -102,12 +134,12 @@ async def test_full_transaction_flow(e2e_client: AsyncClient, e2e_db_session: As
     )
     assert resp.status_code == 201, resp.text
 
-    # 7. GET holdings → quantity=5
+    # 7. GET holdings → still paginated envelope; see comment above for the
+    # BP-264 rationale (transactions no longer mutate holdings).
     resp = await e2e_client.get(f"/api/v1/holdings/{portfolio_id}", headers=common_headers)
     assert resp.status_code == 200, resp.text
-    holdings = resp.json()
-    assert len(holdings) == 1
-    assert holdings[0]["quantity"] == "5.00000000"
+    holdings_envelope = resp.json()
+    assert "items" in holdings_envelope and "total" in holdings_envelope, holdings_envelope
 
     # 8. GET transactions → paginated payload with 2 records
     resp = await e2e_client.get(
@@ -164,7 +196,8 @@ async def test_duplicate_portfolio_name_rejected(e2e_client: AsyncClient, e2e_db
     """POST /portfolios with duplicate name for same owner returns 409 or 422."""
     tenant_id, user_id = await _seed_tenant_and_user(e2e_db_session, email=f"dup-{uuid.uuid4().hex[:6]}@dupco.com")
     name = f"DupPortfolio-{uuid.uuid4().hex[:6]}"
-    headers = {"X-Tenant-ID": tenant_id}
+    # JWT bound to seeded tenant — route reads tenant_id from JWT, not header.
+    headers = {"X-Tenant-ID": tenant_id, "X-Internal-JWT": make_e2e_jwt(tenant_id, user_id)}
 
     resp = await e2e_client.post(
         "/api/v1/portfolios",
@@ -182,16 +215,25 @@ async def test_duplicate_portfolio_name_rejected(e2e_client: AsyncClient, e2e_db
 
 
 async def test_sell_exceeding_holdings_rejected(e2e_client: AsyncClient, e2e_db_session: AsyncSession) -> None:
-    """SELL more than held quantity returns 409 or 422 (InsufficientHoldingsError)."""
+    """SELL > holdings is now ACCEPTED (post-BP-264).
+
+    Pre-BP-264 the use case enforced ``Holding.apply_delta`` which raised
+    ``InsufficientHoldingsError``. PLAN-0046 made holdings snapshot-driven
+    from broker positions, so transactions are now history-only and do not
+    mutate holdings — therefore over-selling cannot be detected at record
+    time. The test is kept to lock in the new contract; it now asserts the
+    transaction is accepted (201).
+    """
     tenant_id, user_id = await _seed_tenant_and_user(e2e_db_session, email=f"sell-{uuid.uuid4().hex[:6]}@sellco.com")
+    auth_jwt = make_e2e_jwt(tenant_id=tenant_id, user_id=user_id)
     resp = await e2e_client.post(
         "/api/v1/portfolios",
         json={"name": f"SellPort-{uuid.uuid4().hex[:6]}", "owner_user_id": user_id, "currency": "USD"},
-        headers={"X-Tenant-ID": tenant_id},
+        headers={"X-Tenant-ID": tenant_id, "X-Internal-JWT": auth_jwt},
     )
     portfolio_id = resp.json()["id"]
     instrument_id = await _seed_instrument(e2e_db_session, f"SELL_{uuid.uuid4().hex[:4]}", "NYSE")
-    headers = {"X-Tenant-ID": tenant_id, "X-Owner-ID": user_id}
+    headers = {"X-Tenant-ID": tenant_id, "X-Owner-ID": user_id, "X-Internal-JWT": auth_jwt}
 
     await e2e_client.post(
         "/api/v1/transactions",
@@ -222,23 +264,25 @@ async def test_sell_exceeding_holdings_rejected(e2e_client: AsyncClient, e2e_db_
         },
         headers=headers,
     )
-    assert resp.status_code in (409, 422), f"Expected business rule rejection, got {resp.status_code}: {resp.text}"
+    # Post-BP-264: history-only transactions, no holdings validation here.
+    assert resp.status_code == 201, f"Expected 201 (history-only), got {resp.status_code}: {resp.text}"
 
 
 async def test_archive_portfolio(e2e_client: AsyncClient, e2e_db_session: AsyncSession) -> None:
     """DELETE /portfolios/{id} transitions portfolio to ARCHIVED status."""
     tenant_id, user_id = await _seed_tenant_and_user(e2e_db_session, email=f"arch-{uuid.uuid4().hex[:6]}@archco.com")
+    auth_jwt = make_e2e_jwt(tenant_id=tenant_id, user_id=user_id)
     resp = await e2e_client.post(
         "/api/v1/portfolios",
         json={"name": f"ToArchive-{uuid.uuid4().hex[:6]}", "owner_user_id": user_id, "currency": "USD"},
-        headers={"X-Tenant-ID": tenant_id},
+        headers={"X-Tenant-ID": tenant_id, "X-Internal-JWT": auth_jwt},
     )
     assert resp.status_code == 201
     portfolio_id = resp.json()["id"]
 
     resp = await e2e_client.delete(
         f"/api/v1/portfolios/{portfolio_id}",
-        headers={"X-Tenant-ID": tenant_id, "X-Owner-ID": user_id},
+        headers={"X-Tenant-ID": tenant_id, "X-Owner-ID": user_id, "X-Internal-JWT": auth_jwt},
     )
     assert resp.status_code in (200, 204), f"Expected archive success, got {resp.status_code}: {resp.text}"
 

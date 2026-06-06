@@ -62,6 +62,17 @@ async def chat(
     from rag_chat.domain.entities.chat import ChatContext, ChatRequest
 
     tenant_id, user_id = auth
+
+    # WHY set_current_jwt here: InternalJWTMiddleware sets the ContextVar when it
+    # validates the incoming JWT, but the ContextVar can be empty by the time async
+    # tool handlers (e.g. S7Client.get_contradictions) call BaseUpstreamClient._get(),
+    # causing outbound X-Internal-JWT to be missing and downstream services to 401.
+    # Explicitly setting the ContextVar here mirrors the canonical pattern used by
+    # entity_context_chat() and public_briefings (FIX-LIVE-K+L).
+    from rag_chat.infrastructure.clients.auth_context import set_current_jwt
+
+    set_current_jwt(request.headers.get("X-Internal-JWT"))
+
     chat_req = ChatRequest(
         message=request_body.message,
         context=ChatContext(entity_ids=tuple(request_body.entity_ids)),
@@ -115,6 +126,16 @@ async def chat_stream(
     from rag_chat.domain.entities.chat import ChatContext, ChatRequest
 
     tenant_id, user_id = auth
+
+    # WHY set_current_jwt here: same rationale as POST /api/v1/chat — the JWT
+    # ContextVar must be populated before any async tool handler invokes
+    # BaseUpstreamClient, otherwise the outbound X-Internal-JWT header is missing
+    # and downstream calls (S6/S7) return 401. Mirrors entity_context_chat() and
+    # public_briefings (FIX-LIVE-K+L).
+    from rag_chat.infrastructure.clients.auth_context import set_current_jwt
+
+    set_current_jwt(request.headers.get("X-Internal-JWT"))
+
     chat_req = ChatRequest(
         message=request_body.message,
         context=ChatContext(entity_ids=tuple(request_body.entity_ids)),
@@ -148,7 +169,14 @@ async def chat_stream(
             except ProviderUnavailableError as e:
                 yield emitter.emit_error("PROVIDER_UNAVAILABLE", str(e))
             except Exception as e:
-                log.error("stream_internal_error", error=type(e).__name__)  # type: ignore[no-any-return]
+                import traceback as _tb
+
+                log.error(  # type: ignore[no-any-return]
+                    "stream_internal_error",
+                    error=type(e).__name__,
+                    detail=repr(e),
+                    traceback=_tb.format_exc(),
+                )
                 yield emitter.emit_error("INTERNAL_ERROR", "An internal error occurred")
 
     return EventSourceResponse(event_generator())
