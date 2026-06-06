@@ -39,9 +39,7 @@ depends_on = None
 
 def upgrade() -> None:
     # Raw SQL form — see module docstring for why we avoid op.add_column here.
-    op.execute(
-        "ALTER TABLE threads ADD COLUMN IF NOT EXISTS estimated_cost_usd NUMERIC(12, 6) NULL"
-    )
+    op.execute("ALTER TABLE threads ADD COLUMN IF NOT EXISTS estimated_cost_usd NUMERIC(12, 6) NULL")
 
 
 def downgrade() -> None:
