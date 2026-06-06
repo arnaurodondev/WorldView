@@ -118,7 +118,7 @@ class CitationJudgeAdapter(LLMJudgePort):
         """Best-effort cost emit; defence-in-depth no-op on errors."""
         if self._cost_recorder is None:
             return
-        model_id: str = getattr(self._provider, "model_id", None) or getattr(self._provider, "_model", "unknown")
+        model_id: str = getattr(self._provider, "model_id", None) or getattr(self._provider, "_model", "unknown")  # type: ignore[assignment]
         # len/4 approximation — accurate within ~20% for English prose, which is
         # adequate for an observability gauge (DB-side llm_usage_log carries
         # exact values when the provider returns usage).
@@ -145,7 +145,7 @@ class CitationJudgeAdapter(LLMJudgePort):
             return
         # Inspect the provider for its model id; fall back to "unknown" so the
         # series still increments rather than silently dropping.
-        model_id: str = getattr(self._provider, "model_id", None) or getattr(self._provider, "_model", "unknown")
+        model_id: str = getattr(self._provider, "model_id", None) or getattr(self._provider, "_model", "unknown")  # type: ignore[assignment]
         try:
             self._metrics.ml_api_requests_total.labels(model_id=model_id, operation=operation, status=status).inc()
             self._metrics.ml_api_latency_seconds.labels(model_id=model_id, operation=operation).observe(latency_s)

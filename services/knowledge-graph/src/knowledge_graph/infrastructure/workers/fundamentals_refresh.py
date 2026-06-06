@@ -984,7 +984,7 @@ ON CONFLICT DO NOTHING
             # ETF" bucket, so an equity with a real GICS sector is always
             # bucketed under that sector, never under the ETF catch-all.
             metadata_patch["asset_class"] = "Equity"
-            await entity_repo.patch_metadata(entity_id, metadata_patch)
+            await entity_repo.patch_metadata(entity_id, metadata_patch)  # type: ignore[attr-defined]
 
         # --- is_in_sector ---
         if sector_name:

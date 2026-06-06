@@ -61,8 +61,8 @@ async def main() -> None:
 
     config = ConsumerConfig(
         bootstrap_servers=settings.kafka_bootstrap_servers,
-        group_id=settings.kafka_entity_refresh_consumer_group,
-        topics=[settings.topic_entity_refresh],
+        group_id=settings.kafka_entity_refresh_consumer_group,  # type: ignore[attr-defined]
+        topics=[settings.topic_entity_refresh],  # type: ignore[attr-defined]
     )
     consumer = EntityRefreshConsumer(
         config=config,

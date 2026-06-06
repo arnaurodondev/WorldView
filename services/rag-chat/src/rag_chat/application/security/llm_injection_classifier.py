@@ -242,7 +242,7 @@ class LLMInjectionClassifier:
                 asyncio.create_task(  # noqa: RUF006
                     self._cost_recorder.record(
                         thread_id=None,
-                        model_id=self._model,
+                        model_id=self._model,  # type: ignore[arg-type]
                         tokens_in=_tokens_in,
                         tokens_out=_tokens_out,
                         call_site="safety_classifier",

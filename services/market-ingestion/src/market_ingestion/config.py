@@ -112,6 +112,14 @@ class Settings(BaseSettings):
     # general anti-pattern of shipping a scheduled worker disabled by default.
     fundamentals_refresh_enabled: bool = True
     fundamentals_refresh_interval_hours: float = 6.0
+
+    # InstrumentPolicySyncWorker (PLAN-0106 Wave D-1): periodically queries
+    # market-data for all US/CC instruments and creates Alpaca 1m polling
+    # policies for any symbol not already covered.  Runs every 6 hours by
+    # default so newly-listed symbols gain intraday coverage within a day.
+    # Set INSTRUMENT_POLICY_SYNC_ENABLED=false to disable without redeploying.
+    instrument_policy_sync_enabled: bool = True
+    instrument_policy_sync_interval_hours: float = 6.0
     fundamentals_refresh_top_n: int = 500
     fundamentals_refresh_provider: str = "eodhd"
     fundamentals_refresh_variant: str = "quarterly"

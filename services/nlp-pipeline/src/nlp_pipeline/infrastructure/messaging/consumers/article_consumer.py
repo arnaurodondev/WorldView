@@ -579,12 +579,12 @@ class ArticleProcessingConsumer(ValkeyDedupMixin, BaseKafkaConsumer[None]):
         # field may be absent or stale for older events. Early return prevents all
         # downstream blocks from running; the document remains in content_store but
         # is not indexed in the NLP pipeline.
-        if word_count < self._settings.min_word_count:
+        if word_count < self._settings.min_word_count:  # type: ignore[attr-defined]
             logger.info(  # type: ignore[no-any-return]
                 "article_consumer.stub_filtered",
                 doc_id=str(doc_id),
                 word_count=word_count,
-                min_word_count=self._settings.min_word_count,
+                min_word_count=self._settings.min_word_count,  # type: ignore[attr-defined]
                 source_type=source_type,
             )
             return

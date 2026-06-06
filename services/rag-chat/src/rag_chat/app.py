@@ -148,7 +148,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         # first run against crashloop replays (skip if last successful run
         # was < 1h ago). Valkey is wired in step 4 above so it's always
         # available here.
-        _wire_citation_cron(app, settings, read_factory, log, valkey_client)
+        _wire_citation_cron(app, settings, read_factory, log, valkey_client)  # type: ignore[call-arg]
 
     # 9. InternalJWTMiddleware — fetch JWKS from S9 (PRD-0025)
     jwt_mw = InternalJWTMiddleware(
@@ -397,12 +397,18 @@ def _wire_orchestrator(app: FastAPI, settings: RagChatSettings, valkey_client: V
             api_key=_deepinfra_api_key,
             model=settings.deepinfra_classification_model,
             usage_logger=usage_logger,
+            # PLAN-0107 follow-up: per-call USD cost emit (call_site="intent_classifier").
+            cost_recorder=cost_recorder,
         )
     else:
         classifier = OllamaIntentClassifier(
             ollama_base_url=settings.ollama_base_url,
             model=settings.ollama_classification_model,
             usage_logger=usage_logger,
+            # PLAN-0107 follow-up: same recorder so the Grafana panel sees both
+            # providers under one metric name; per-row attribution in
+            # llm_usage_log via the call_site column.
+            cost_recorder=cost_recorder,
         )
 
     # ── Reranker selection (PLAN-0052 platform-QA round 5) ──────────────────
@@ -418,13 +424,24 @@ def _wire_orchestrator(app: FastAPI, settings: RagChatSettings, valkey_client: V
     #      falls back" for the bge-reranker-v2-m3 model name; useful only if
     #      an operator manually `ollama pull`s a working reranker model.
     if _deepinfra_api_key:
-        reranker: Any = DeepInfraReranker(api_key=_deepinfra_api_key)
+        # PLAN-0107 follow-up parity: DeepInfra reranker is token-billed using
+        # the real ``input_tokens`` from the API response. Pricing matrix entry:
+        # ``Qwen/Qwen3-Reranker-0.6B`` at $0.02 per M input tokens.
+        reranker: Any = DeepInfraReranker(api_key=_deepinfra_api_key, cost_recorder=cost_recorder)  # type: ignore[call-arg]
     elif _cohere_api_key:
-        reranker = CohereReranker(api_key=_cohere_api_key)
+        # PLAN-0107 follow-up: Cohere bills per-call ($0.002/search). The
+        # cost_recorder routes through the per_call_usd branch in pricing.py
+        # so each rerank call records the flat fee under call_site="reranker".
+        reranker = CohereReranker(api_key=_cohere_api_key, cost_recorder=cost_recorder)
     else:
-        reranker = BGEReranker(
+        # PLAN-0107 follow-up parity: BGE/Ollama is local (cost $0) but we
+        # still pass the recorder so call_site="reranker" fires — lets ops
+        # spot when the chain has degraded to the local fallback (Ollama
+        # bge-reranker-v2-m3 is missing from the registry in most envs).
+        reranker = BGEReranker(  # type: ignore[call-arg]
             ollama_base_url=settings.ollama_base_url,
             model=settings.ollama_reranker_model,
+            cost_recorder=cost_recorder,
         )
 
     # PLAN-0063 W5-1-00: extract shared components so RetrieveOnlyUseCase can
@@ -442,6 +459,8 @@ def _wire_orchestrator(app: FastAPI, settings: RagChatSettings, valkey_client: V
     _llm_classifier = LLMInjectionClassifier(
         api_key=_deepinfra_api_key,
         model=settings.deepinfra_classification_model,
+        # PLAN-0107 follow-up: per-call USD cost emit (call_site="safety_classifier").
+        cost_recorder=cost_recorder,
     )
 
     _plan_builder = RetrievalPlanBuilder()

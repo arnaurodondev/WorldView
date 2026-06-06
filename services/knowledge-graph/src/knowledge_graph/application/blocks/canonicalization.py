@@ -176,7 +176,7 @@ async def canonicalize_relation_type(
         _RELATION_TYPE_PROPOSED_SCHEMA_PATH,
         proposal_payload,
     )
-    await outbox_repo.append(
+    await outbox_repo.append(  # type: ignore[call-arg]
         topic=TOPIC_RELATION_PROPOSED,
         partition_key=str(subject_entity_id),
         payload_avro=payload_avro_bytes,

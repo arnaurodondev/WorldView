@@ -159,7 +159,7 @@ async def detect_and_record_contradictions(
             "is_backfill": is_backfill,
             "correlation_id": correlation_id,
         }
-        await outbox_repo.append(
+        await outbox_repo.append(  # type: ignore[call-arg]
             topic=TOPIC_CONTRADICTION,
             partition_key=str(subject_entity_id),
             payload_avro=serialize_confluent_avro(_CONTRADICTION_SCHEMA_PATH, contradiction_payload),

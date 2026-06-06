@@ -43,7 +43,7 @@ try:
             ["fallback_action"],
         )
 except Exception:  # — prometheus_client missing in some test contexts
-    _RATE_LIMIT_UNAVAILABLE_COUNTER = None
+    _RATE_LIMIT_UNAVAILABLE_COUNTER = None  # type: ignore[assignment]
 
 
 # Transient Valkey errors worth retrying once (50ms backoff). Anything outside
@@ -552,7 +552,7 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
                 # First attempt failed but retry succeeded — operators should
                 # see this distinct from "sustained outage" so they can decide
                 # whether the hiccup warrants paging.
-                _RATE_LIMIT_UNAVAILABLE_COUNTER.labels(fallback_action="retry_succeeded").inc()
+                _RATE_LIMIT_UNAVAILABLE_COUNTER.labels(fallback_action="retry_succeeded").inc()  # type: ignore[attr-defined]
             # Only set EXPIRE when the key is brand-new (current == 1). Setting
             # it on every request would reset the TTL on each hit, allowing a
             # sustained flow to never expire and permanently bypass the limit.
@@ -561,7 +561,7 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
             # new window (new key from fresh INCR) will set the TTL correctly.
             if current == 1:
                 await valkey.expire(key, self.window_seconds)
-            if current > limit:
+            if current > limit:  # type: ignore[operator]
                 # PLAN-0052 platform-QA fix: include Retry-After header so
                 # clients (and the user) know when to retry. We use the
                 # window length as a conservative upper bound — the actual
@@ -586,7 +586,7 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
             is_transient = isinstance(exc, _VALKEY_TRANSIENT_EXCEPTIONS)
             label = "503_after_retry" if is_transient else "503_no_retry"
             if _RATE_LIMIT_UNAVAILABLE_COUNTER is not None:
-                _RATE_LIMIT_UNAVAILABLE_COUNTER.labels(fallback_action=label).inc()
+                _RATE_LIMIT_UNAVAILABLE_COUNTER.labels(fallback_action=label).inc()  # type: ignore[attr-defined]
             logger.warning(  # type: ignore[no-any-return]
                 "rate_limiting_unavailable",
                 reason="valkey_operation_failed",
