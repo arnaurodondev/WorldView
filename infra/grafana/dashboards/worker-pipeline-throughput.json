@@ -1,0 +1,239 @@
+{
+  "__inputs": [],
+  "__requires": [
+    { "type": "grafana", "id": "grafana", "name": "Grafana", "version": "10.0.0" },
+    { "type": "datasource", "id": "prometheus", "name": "Prometheus", "version": "1.0.0" }
+  ],
+  "annotations": { "list": [] },
+  "description": "Surfaces previously-invisible worker counters from Agent II audit: KG path-insight queue, KG provisional queue, portfolio brokerage sync, market-data consumers (phase 4 of worker-metrics rollout)",
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 1,
+  "id": null,
+  "links": [],
+  "panels": [
+    {
+      "id": 1,
+      "title": "KG Path-Insight Queue",
+      "type": "row",
+      "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 0 },
+      "panels": []
+    },
+    {
+      "id": 2,
+      "title": "Path-Insight Explanation Pending",
+      "description": "knowledge-graph path-insight worker queue depth — values >0 sustained = backlog",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 1 },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "path_insight_explanation_pending_total",
+          "legendFormat": "{{job}}",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": { "drawStyle": "line", "lineWidth": 1, "fillOpacity": 10 },
+          "unit": "short",
+          "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }, { "color": "yellow", "value": 50 }, { "color": "red", "value": 200 }] }
+        },
+        "overrides": []
+      },
+      "options": { "tooltip": { "mode": "multi", "sort": "desc" }, "legend": { "displayMode": "list", "placement": "bottom", "calcs": [] } }
+    },
+    {
+      "id": 3,
+      "title": "Summary Worker Stuck Relations",
+      "description": "knowledge-graph SummaryWorker — relations stuck in pending state (BP-407)",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 1 },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "summary_worker_stuck_relations_total",
+          "legendFormat": "{{job}}",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": { "drawStyle": "line", "lineWidth": 1, "fillOpacity": 10 },
+          "unit": "short",
+          "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }, { "color": "red", "value": 1 }] }
+        },
+        "overrides": []
+      },
+      "options": { "tooltip": { "mode": "multi", "sort": "desc" }, "legend": { "displayMode": "list", "placement": "bottom", "calcs": [] } }
+    },
+    {
+      "id": 4,
+      "title": "KG Provisional Queue",
+      "type": "row",
+      "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 9 },
+      "panels": []
+    },
+    {
+      "id": 5,
+      "title": "S7 Provisional Queue Stuck",
+      "description": "s7_provisional_queue_stuck_total — provisional entities not yet enriched (sustained high values indicate enricher stall)",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 10 },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "s7_provisional_queue_stuck_total",
+          "legendFormat": "{{job}}",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": { "drawStyle": "line", "lineWidth": 1, "fillOpacity": 10 },
+          "unit": "short",
+          "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }, { "color": "yellow", "value": 50 }, { "color": "red", "value": 200 }] }
+        },
+        "overrides": []
+      },
+      "options": { "tooltip": { "mode": "multi", "sort": "desc" }, "legend": { "displayMode": "list", "placement": "bottom", "calcs": [] } }
+    },
+    {
+      "id": 6,
+      "title": "S7 Provisional Enrichment Failures",
+      "description": "rate(s7_provisional_enrichment_failed_total[5m]) — DeepInfra/Ollama enrichment failures",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 10 },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "rate(s7_provisional_enrichment_failed_total[5m])",
+          "legendFormat": "{{job}} {{reason}}",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": { "drawStyle": "line", "lineWidth": 1, "fillOpacity": 10 },
+          "unit": "ops",
+          "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }, { "color": "red", "value": 0.1 }] }
+        },
+        "overrides": []
+      },
+      "options": { "tooltip": { "mode": "multi", "sort": "desc" }, "legend": { "displayMode": "list", "placement": "bottom", "calcs": [] } }
+    },
+    {
+      "id": 7,
+      "title": "Portfolio — Brokerage Sync",
+      "type": "row",
+      "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 18 },
+      "panels": []
+    },
+    {
+      "id": 8,
+      "title": "Brokerage Sync Transactions/sec",
+      "description": "rate(brokerage_sync_transactions_total[5m]) — TastyTrade/SnapTrade sync throughput",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 19 },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "rate(brokerage_sync_transactions_total[5m])",
+          "legendFormat": "{{job}} {{provider}}",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": { "drawStyle": "line", "lineWidth": 1, "fillOpacity": 10 },
+          "unit": "ops"
+        },
+        "overrides": []
+      },
+      "options": { "tooltip": { "mode": "multi", "sort": "desc" }, "legend": { "displayMode": "list", "placement": "bottom", "calcs": [] } }
+    },
+    {
+      "id": 9,
+      "title": "Brokerage Sync Cycle Duration (P95)",
+      "description": "histogram_quantile(0.95, brokerage_sync_cycle_duration_seconds) — full sync cycle latency",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 19 },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "histogram_quantile(0.95, sum by (le) (rate(brokerage_sync_cycle_duration_seconds_bucket[5m])))",
+          "legendFormat": "p95",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": { "drawStyle": "line", "lineWidth": 1, "fillOpacity": 10 },
+          "unit": "s",
+          "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }, { "color": "yellow", "value": 30 }, { "color": "red", "value": 120 }] }
+        },
+        "overrides": []
+      },
+      "options": { "tooltip": { "mode": "multi", "sort": "desc" }, "legend": { "displayMode": "list", "placement": "bottom", "calcs": [] } }
+    },
+    {
+      "id": 10,
+      "title": "Market-Data Consumers",
+      "type": "row",
+      "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 27 },
+      "panels": []
+    },
+    {
+      "id": 11,
+      "title": "Kafka Messages Consumed/sec (all worker/consumer jobs)",
+      "description": "rate(<svc>_kafka_messages_consumed_total[5m]) — captures the various per-service consumed counters via metric regex",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 10, "w": 24, "x": 0, "y": 28 },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "sum by (job, topic) (rate({__name__=~\".*kafka_messages_consumed_total\", job=~\".*-(worker|dispatcher|consumer|scheduler)\"}[5m]))",
+          "legendFormat": "{{job}} {{topic}}",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": { "drawStyle": "line", "lineWidth": 1, "fillOpacity": 10 },
+          "unit": "ops"
+        },
+        "overrides": []
+      },
+      "options": { "tooltip": { "mode": "multi", "sort": "desc" }, "legend": { "displayMode": "list", "placement": "bottom", "calcs": [] } }
+    }
+  ],
+  "refresh": "30s",
+  "schemaVersion": 39,
+  "tags": ["worldview", "workers", "throughput"],
+  "templating": { "list": [] },
+  "time": { "from": "now-1h", "to": "now" },
+  "timepicker": {},
+  "timezone": "browser",
+  "title": "Worldview — Worker Pipeline Throughput",
+  "uid": "worldview-worker-pipeline-throughput",
+  "version": 1,
+  "weekStart": ""
+}

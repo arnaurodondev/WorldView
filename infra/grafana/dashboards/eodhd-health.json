@@ -309,6 +309,53 @@
         "defaults": { "unit": "s" },
         "overrides": []
       }
+    },
+    {
+      "type": "row",
+      "title": "Worker-side observability",
+      "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 31 },
+      "panels": []
+    },
+    {
+      "type": "timeseries",
+      "title": "EODHD Provider Call Rate (API + worker containers)",
+      "description": "rate(s2_mi_provider_requests_total{provider=\"eodhd\"}[5m]) — no job filter so both market-data API and market-ingestion-worker scrape jobs resolve",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 32 },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "sum by (job, endpoint, status) (rate(s2_mi_provider_requests_total{provider=\"eodhd\"}[5m]))",
+          "legendFormat": "{{job}} {{endpoint}} {{status}}",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": { "unit": "ops", "color": { "mode": "palette-classic" }, "custom": { "fillOpacity": 10 } },
+        "overrides": []
+      },
+      "options": { "legend": { "calcs": [], "displayMode": "list", "placement": "bottom" }, "tooltip": { "mode": "multi", "sort": "desc" } }
+    },
+    {
+      "type": "timeseries",
+      "title": "EODHD Provider Errors (by job)",
+      "description": "Separates API-side vs worker-side error attribution via the job label",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 32 },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "sum by (job) (rate(s2_mi_provider_errors_total{provider=\"eodhd\"}[5m]))",
+          "legendFormat": "{{job}}",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": { "unit": "ops", "color": { "mode": "palette-classic" }, "custom": { "fillOpacity": 10 } },
+        "overrides": []
+      },
+      "options": { "legend": { "calcs": [], "displayMode": "list", "placement": "bottom" }, "tooltip": { "mode": "multi", "sort": "desc" } }
     }
   ]
 }
