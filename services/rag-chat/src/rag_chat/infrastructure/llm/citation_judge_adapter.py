@@ -24,7 +24,6 @@ from rag_chat.application.ports.llm_judge import LLMJudgePort  # A-001: import p
 from rag_chat.domain.errors import LLMJudgeTimeoutError
 
 if TYPE_CHECKING:
-
     from observability.metrics import MLMetrics  # type: ignore[import-untyped]
     from rag_chat.application.ports.cost_recorder import CostRecorder
 
