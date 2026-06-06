@@ -125,6 +125,10 @@ class Settings(BaseSettings):
     # Leave empty to fall back to GLiNERLocalAdapter (in-process model).
     gliner_base_url: str = ""
 
+    # Minimum word count for an article to enter the NLP pipeline.
+    # Articles below this threshold are skipped (too short for meaningful extraction).
+    min_word_count: int = 50  # NLP_PIPELINE_MIN_WORD_COUNT
+
     # GLiNER thresholds (PRD §6.7 Block 4)
     gliner_threshold: float = 0.35  # for routing/novelty signal
     gliner_resolution_threshold: float = 0.45  # for entity resolution cascade

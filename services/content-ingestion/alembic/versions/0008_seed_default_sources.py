@@ -104,11 +104,23 @@ def upgrade() -> None:
         # was added by migration 0006 and is stable.
         op.execute(
             sa.text(
+                # NOTE: Use CAST(... AS type) instead of ::type shorthand — asyncpg
+                # via SQLAlchemy text() sends parameters as VARCHAR by default, so
+                # uuid/jsonb columns require explicit casts.  Also, :: confuses
+                # SA's bindparams parser (treats it as part of the param name →
+                # KeyError on 'config').  BP-XXX: asyncpg + sa.text() cast pattern.
                 """
                 INSERT INTO sources (id, name, source_type, config, enabled, created_at)
-                VALUES (:id, :name, :source_type, :config::jsonb, :enabled, :created_at)
+                VALUES (
+                    CAST(:id AS uuid),
+                    :name,
+                    :source_type,
+                    CAST(:config AS jsonb),
+                    :enabled,
+                    :created_at
+                )
                 ON CONFLICT ON CONSTRAINT uq_sources_dedup DO NOTHING
-                """
+                """,
             ).bindparams(
                 id=src["id"],
                 name=src["name"],
@@ -116,7 +128,7 @@ def upgrade() -> None:
                 config=src["config"],
                 enabled=src["enabled"],
                 created_at=now,
-            )
+            ),
         )
 
 

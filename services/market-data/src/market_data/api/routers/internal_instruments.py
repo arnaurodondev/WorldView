@@ -1,6 +1,7 @@
 """Internal instruments API router — system-to-system endpoints.
 
 Exposes:
+  GET /internal/v1/instruments?exchange=US&limit=1000&offset=0
   GET /internal/v1/instruments/top-by-market-cap?n=500&offset=0
 
 Mounted under ``/internal/v1`` so the path matches the other internal
@@ -24,8 +25,11 @@ from typing import Annotated
 
 from fastapi import APIRouter, Depends, Query, Request
 
-from market_data.api.dependencies import require_internal_jwt
+from market_data.api.dependencies import get_search_instruments_uc, require_internal_jwt
 from market_data.api.schemas.instruments import (
+    InstrumentFlagsResponse,
+    InstrumentListResponse,
+    InstrumentResponse,
     OhlcvCoveredItem,
     OhlcvCoveredResponse,
     TopByMarketCapItem,
@@ -37,12 +41,82 @@ from market_data.application.use_cases.get_ohlcv_covered import (
 from market_data.application.use_cases.get_top_by_market_cap import (
     query_top_by_market_cap,
 )
+from market_data.application.use_cases.query_instruments import SearchInstrumentsUseCase
+from market_data.domain.entities import Instrument
 
 # IMPORTANT: no prefix here — ``app.include_router(internal_instruments.router,
 # prefix="/internal/v1")`` adds the prefix at wire-up time so the file works
 # the same way whether mounted under /internal/v1 (prod) or under a test
 # prefix (unit tests).
 router = APIRouter(tags=["internal-instruments"])
+
+
+def _instrument_to_response(instrument: Instrument) -> InstrumentResponse:
+    """Convert domain Instrument to API response schema.
+
+    WHY duplicated from instruments.py: cross-importing between routers creates
+    a circular dependency risk. The helper is trivial so a local copy is safer.
+    """
+    return InstrumentResponse(
+        id=instrument.id,
+        security_id=instrument.security_id,
+        symbol=instrument.symbol,
+        exchange=instrument.exchange,
+        is_active=instrument.is_active,
+        flags=InstrumentFlagsResponse(
+            has_ohlcv=instrument.flags.has_ohlcv,
+            has_quotes=instrument.flags.has_quotes,
+            has_fundamentals=instrument.flags.has_fundamentals,
+        ),
+        created_at=instrument.created_at,
+    )
+
+
+@router.get(
+    "/instruments",
+    response_model=InstrumentListResponse,
+)
+async def list_instruments_internal(
+    exchange: Annotated[
+        str | None,
+        Query(description="Filter by exchange code (e.g. 'US', 'CC')."),
+    ] = None,
+    limit: Annotated[
+        int,
+        Query(ge=1, le=5000, description="Page size. Max 5000."),
+    ] = 1000,
+    offset: Annotated[
+        int,
+        Query(ge=0, description="Pagination offset."),
+    ] = 0,
+    _: Annotated[None, Depends(require_internal_jwt)] = None,
+    uc: Annotated[SearchInstrumentsUseCase, Depends(get_search_instruments_uc)] = ...,  # type: ignore[assignment]
+) -> InstrumentListResponse:
+    """List instruments with optional exchange filter — internal service-to-service use only.
+
+    WHY THIS EXISTS (PLAN-0106): InstrumentPolicySyncWorker (S2) and
+    TickerNewsSymbolSyncWorker (S4) need to enumerate active instruments by
+    exchange to create or update per-ticker polling policies and news sources.
+    The public ``GET /api/v1/instruments`` requires a user JWT; this internal
+    variant accepts an ``X-Internal-JWT`` signed by sibling services.
+
+    Auth: ``X-Internal-JWT`` required — enforced by both InternalJWTMiddleware
+    (global) and the explicit ``require_internal_jwt`` dep (unit-test safety).
+    """
+    total, items = await uc.execute(
+        # Empty query string = no symbol/exchange substring filter; we use the
+        # dedicated exchange= kwarg for exact exchange filtering.
+        "",
+        exchange=exchange,
+        limit=limit,
+        offset=offset,
+    )
+    return InstrumentListResponse(
+        items=[_instrument_to_response(i) for i in items],
+        total=total,
+        limit=limit,
+        offset=offset,
+    )
 
 
 @router.get(
