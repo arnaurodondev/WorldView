@@ -62,6 +62,11 @@ async def test_main_constructs_worker_with_usage_logger() -> None:
             "nlp_pipeline.workers.unresolved_resolution_worker_main.configure_logging",
             create=True,
         ),
+        # Avoid binding to METRICS_PORT (9100) across repeated test_main_* runs.
+        patch(
+            "nlp_pipeline.workers.unresolved_resolution_worker_main.start_metrics_server",
+            return_value=MagicMock(),
+        ),
         patch.object(loop, "add_signal_handler", lambda *a, **k: None),
     ):
         # Patch the imports done inside main() — they are local imports so we

@@ -72,30 +72,39 @@ async def test_instrument_lookup_by_symbol(
     e2e_client: AsyncClient,
     seeded_instrument: dict,
 ) -> None:
+    # Canonical lookup endpoint: GET /api/v1/instruments/lookup?symbol=...
+    # The old /instruments/symbol/{symbol} route was removed in favour of
+    # this unified query-param contract (see test_old_symbol_endpoint_removed
+    # in the unit suite, and the lookup route at instruments.py:54).
     symbol = seeded_instrument["symbol"]
-    exchange = seeded_instrument["exchange"]
     resp = await e2e_client.get(
-        f"/api/v1/instruments/symbol/{symbol}",
-        params={"exchange": exchange},
+        "/api/v1/instruments/lookup",
+        params={"symbol": symbol},
     )
     assert resp.status_code == 200, resp.text
     body = resp.json()
     assert body["symbol"] == symbol
-    assert body["exchange"] == exchange
 
 
 async def test_instrument_lookup_by_id(
     e2e_client: AsyncClient,
     seeded_instrument: dict,
 ) -> None:
+    # Canonical lookup: GET /api/v1/instruments/lookup?id={uuid}
     instr_id = seeded_instrument["instrument_id"]
-    resp = await e2e_client.get(f"/api/v1/instruments/{instr_id}")
+    resp = await e2e_client.get(
+        "/api/v1/instruments/lookup",
+        params={"id": instr_id},
+    )
     assert resp.status_code == 200, resp.text
     assert resp.json()["id"] == instr_id
 
 
 async def test_instrument_unknown_id_returns_404(e2e_client: AsyncClient) -> None:
-    resp = await e2e_client.get("/api/v1/instruments/00000000-0000-0000-0000-000000000000")
+    resp = await e2e_client.get(
+        "/api/v1/instruments/lookup",
+        params={"id": "00000000-0000-0000-0000-000000000000"},
+    )
     assert resp.status_code == 404
 
 

@@ -409,6 +409,10 @@ async def test_relevance_scoring_worker_entrypoint_runs_and_stops() -> None:
         patch("nlp_pipeline.config.Settings", return_value=mock_settings),
         patch("observability.configure_logging"),
         patch("observability.get_logger", return_value=MagicMock()),
+        # Avoid binding to METRICS_PORT (9100) — multiple worker-main tests
+        # in the suite each call start_metrics_server; without this patch the
+        # second test in the same CI process hits OSError EADDRINUSE.
+        patch("nlp_pipeline.workers.article_relevance_scoring_worker.start_metrics_server", return_value=MagicMock()),
         patch(
             "nlp_pipeline.infrastructure.nlp_db.session._build_nlp_factories",
             return_value=(mock_nlp_engine, mock_nlp_engine, MagicMock(), MagicMock()),

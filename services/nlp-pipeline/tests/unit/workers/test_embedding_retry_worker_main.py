@@ -240,6 +240,12 @@ def _patch_main_dependencies(
             "nlp_pipeline.workers.embedding_retry_worker_main.get_logger",
             return_value=log_capture,
         ),
+        # Avoid binding to METRICS_PORT (9100): repeated calls across multiple
+        # test_main_* cases in the same CI process trip OSError EADDRINUSE.
+        patch(
+            "nlp_pipeline.workers.embedding_retry_worker_main.start_metrics_server",
+            return_value=MagicMock(),
+        ),
     ]
 
 

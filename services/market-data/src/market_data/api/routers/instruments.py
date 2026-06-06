@@ -158,34 +158,6 @@ async def on_demand_profile(
     )
 
 
-@router.get("/instruments/symbol/{symbol}", response_model=InstrumentLookupResponse)
-async def get_instrument_by_symbol(
-    symbol: str,
-    exchange: Annotated[str | None, Query(description="Optional exchange filter")] = None,
-    uc: Annotated[InstrumentLookupUseCase, Depends(get_lookup_instrument_uc)] = ...,  # type: ignore[assignment]
-) -> InstrumentLookupResponse:
-    """Lookup an instrument by symbol (case-insensitive), with optional ``exchange`` filter.
-
-    The underlying use case resolves by symbol; when ``exchange`` is supplied we
-    validate the resolved instrument matches and 404 otherwise (the symbol may
-    exist on a different exchange).
-    """
-    try:
-        result = await uc.execute(symbol=symbol)
-    except InstrumentNotFoundError as exc:
-        raise HTTPException(status_code=404, detail="Instrument not found") from exc
-
-    inst = result.instrument
-    if exchange is not None and inst.exchange.upper() != exchange.upper():
-        raise HTTPException(status_code=404, detail="Instrument not found for symbol+exchange")
-    return InstrumentLookupResponse(
-        id=inst.id,
-        symbol=inst.symbol,
-        exchange=inst.exchange,
-        is_active=inst.is_active,
-    )
-
-
 @router.get("/instruments", response_model=InstrumentListResponse)
 async def list_instruments(
     query: Annotated[str, Query(description="Symbol/exchange substring search")] = "",
@@ -213,20 +185,3 @@ async def list_instruments(
         limit=limit,
         offset=offset,
     )
-
-
-# IMPORTANT: this path-param route MUST be declared LAST so it does not shadow
-# the literal-string routes above (``/instruments/lookup``,
-# ``/instruments/on-demand-profile``, ``/instruments/symbol/{symbol}``,
-# ``/instruments``). FastAPI matches in declaration order.
-@router.get("/instruments/{instrument_id}", response_model=InstrumentResponse)
-async def get_instrument_by_id(
-    instrument_id: UUID,
-    uc: Annotated[InstrumentLookupUseCase, Depends(get_lookup_instrument_uc)] = ...,  # type: ignore[assignment]
-) -> InstrumentResponse:
-    """Lookup an instrument by UUID. Returns 404 when unknown."""
-    try:
-        result = await uc.execute(id=str(instrument_id))
-    except InstrumentNotFoundError as exc:
-        raise HTTPException(status_code=404, detail="Instrument not found") from exc
-    return _to_response(result.instrument)

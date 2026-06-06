@@ -36,11 +36,15 @@ class TestPostgresContainer:
         See docs/BUG_PATTERNS.md BP-493 (hardcoded migration version literals).
         """
         import asyncpg
+        from pathlib import Path
         from alembic.config import Config
         from alembic.script import ScriptDirectory
 
-        # Resolve the expected head from the on-disk migration chain.
-        alembic_cfg = Config("alembic.ini")
+        # Resolve the expected head from the on-disk migration chain. The CI
+        # cwd is the repo root, so we anchor the alembic.ini path to this test
+        # file's location to make the lookup cwd-independent.
+        alembic_ini = Path(__file__).resolve().parents[2] / "alembic.ini"
+        alembic_cfg = Config(str(alembic_ini))
         expected_head = ScriptDirectory.from_config(alembic_cfg).get_current_head()
 
         dsn = _migrated_db.replace("postgresql+asyncpg://", "postgresql://")

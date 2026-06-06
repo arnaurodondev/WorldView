@@ -199,12 +199,14 @@ async def test_computed_metrics_worker_perf_smoke(_migrated_db: str) -> None:
         # The earlier iteration of this test used the short forms
         # ``distance_52w_high`` / ``distance_52w_low`` and included
         # ``volatility_30d``, none of which the worker actually writes.
+        # NOTE: return_3y excluded — the smoke fixture seeds only ~1y of OHLCV,
+        # so the 3y lookback finds no eligible window and emits no row. The
+        # other 7 names are always emitted on the seeded data shape.
         for metric_name in (
             "return_1m",
             "return_3m",
             "return_6m",
             "return_1y",
-            "return_3y",
             "return_ytd",
             "dist_from_52w_high_pct",
             "dist_from_52w_low_pct",
