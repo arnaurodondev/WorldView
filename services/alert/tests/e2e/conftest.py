@@ -48,8 +48,11 @@ import uuid as _uuid
 
 # UUIDs used by the e2e harness. ``CurrentUserIdDep`` parses ``request.state.user_id``
 # as a UUID, so the JWT ``sub`` claim and ``tenant_id`` MUST be valid UUID strings.
-_E2E_USER_ID = str(_uuid.uuid4())
-_E2E_TENANT_ID = str(_uuid.uuid4())
+E2E_USER_ID = str(_uuid.uuid4())  # importable: tests seed alerts for this user
+E2E_TENANT_ID = str(_uuid.uuid4())
+# Backwards-compat aliases (legacy single-underscore consumers in this module).
+_E2E_USER_ID = E2E_USER_ID
+_E2E_TENANT_ID = E2E_TENANT_ID
 
 
 def _make_e2e_system_jwt() -> str:

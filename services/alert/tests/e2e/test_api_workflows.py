@@ -18,6 +18,10 @@ from typing import TYPE_CHECKING
 import pytest
 from sqlalchemy import text
 
+# PRD-0025: user_id resolves from the JWT, not query params. Seeded test data
+# MUST use the JWT's user_id (E2E_USER_ID) or the GET filters them out.
+from .conftest import E2E_USER_ID  # type: ignore[import]
+
 if TYPE_CHECKING:
     from httpx import AsyncClient
     from sqlalchemy.ext.asyncio import AsyncSession
@@ -129,7 +133,9 @@ async def test_pending_alerts_query_user_id_is_ignored(e2e_client: AsyncClient) 
     """
     resp = await e2e_client.get("/api/v1/alerts/pending")
     assert resp.status_code == 200
-    assert resp.json() == {"alerts": [], "total": 0}
+    body = resp.json()
+    assert body["alerts"] == []
+    assert body["total"] == 0
 
 
 async def test_pending_alerts_query_user_id_value_is_ignored(e2e_client: AsyncClient) -> None:
@@ -157,13 +163,14 @@ async def test_pending_alerts_returns_seeded_alert(
     e2e_db_session: AsyncSession,
 ) -> None:
     """GET /api/v1/alerts/pending returns seeded pending alert for the correct user."""
-    user_id = uuid.uuid4()
+    # PRD-0025: user_id comes from JWT, so seed alerts under the JWT's user.
+    user_id = uuid.UUID(E2E_USER_ID)
     entity_id = uuid.uuid4()
 
     alert_id = await _seed_alert(e2e_db_session, entity_id=entity_id, alert_type="SIGNAL")
     pending_id = await _seed_pending_alert(e2e_db_session, alert_id, user_id)
 
-    resp = await e2e_client.get(f"/api/v1/alerts/pending?user_id={user_id}")
+    resp = await e2e_client.get("/api/v1/alerts/pending")
     assert resp.status_code == 200
     data = resp.json()
     assert data["total"] == 1
@@ -199,7 +206,8 @@ async def test_pending_alerts_pagination_offset_and_limit(
     e2e_db_session: AsyncSession,
 ) -> None:
     """Pagination: limit=1 returns only first alert; offset=1 skips it."""
-    user_id = uuid.uuid4()
+    # PRD-0025: seed under JWT's user_id.
+    user_id = uuid.UUID(E2E_USER_ID)
     entity_id1 = uuid.uuid4()
     entity_id2 = uuid.uuid4()
 
@@ -216,12 +224,12 @@ async def test_pending_alerts_pagination_offset_and_limit(
     await _seed_pending_alert(e2e_db_session, alert_id1, user_id)
     await _seed_pending_alert(e2e_db_session, alert_id2, user_id)
 
-    resp = await e2e_client.get(f"/api/v1/alerts/pending?user_id={user_id}&limit=1")
+    resp = await e2e_client.get("/api/v1/alerts/pending?limit=1")
     assert resp.status_code == 200
     data = resp.json()
     assert len(data["alerts"]) == 1
 
-    resp = await e2e_client.get(f"/api/v1/alerts/pending?user_id={user_id}&limit=1&offset=1")
+    resp = await e2e_client.get("/api/v1/alerts/pending?limit=1&offset=1")
     assert resp.status_code == 200
     data2 = resp.json()
     assert len(data2["alerts"]) == 1
