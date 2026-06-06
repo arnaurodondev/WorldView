@@ -25,6 +25,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 from alert.api import dlq, health, routes
 from alert.infrastructure.db.models import Base
+from alert.infrastructure.middleware.internal_jwt import InternalJWTMiddleware
 from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy import text
@@ -43,6 +44,14 @@ _E2E_DB_URL = os.getenv(
 _E2E_ADMIN_TOKEN = os.getenv("ALERT_E2E_ADMIN_TOKEN", "e2e-admin-token")
 
 
+import uuid as _uuid
+
+# UUIDs used by the e2e harness. ``CurrentUserIdDep`` parses ``request.state.user_id``
+# as a UUID, so the JWT ``sub`` claim and ``tenant_id`` MUST be valid UUID strings.
+_E2E_USER_ID = str(_uuid.uuid4())
+_E2E_TENANT_ID = str(_uuid.uuid4())
+
+
 def _make_e2e_system_jwt() -> str:
     """Generate a HS256 JWT accepted by InternalJWTMiddleware in skip_verification mode."""
     import time
@@ -51,8 +60,8 @@ def _make_e2e_system_jwt() -> str:
 
     payload = {
         "iss": "worldview-gateway",
-        "sub": "e2e-system-user",
-        "tenant_id": "e2e-tenant",
+        "sub": _E2E_USER_ID,
+        "tenant_id": _E2E_TENANT_ID,
         "role": "system",
         "iat": int(time.time()),
         "exp": int(time.time()) + 3600,
@@ -158,6 +167,17 @@ async def e2e_app(e2e_session_factory: async_sessionmaker[AsyncSession]) -> Fast
     app.include_router(health.router)
     app.include_router(routes.router)
     app.include_router(dlq.router)
+
+    # InternalJWTMiddleware populates request.state.user_id / tenant_id from the
+    # ``X-Internal-JWT`` header. CurrentUserIdDep raises 401 without it. Use
+    # ``skip_verification=True`` (PRD-0025 test-only path) so the e2e harness does
+    # not need a real RS256 signing key + JWKS endpoint.
+    app.add_middleware(
+        InternalJWTMiddleware,
+        jwks_url="http://e2e-no-jwks",
+        skip_verification=True,
+        jti_replay_check_enabled=False,
+    )
 
     settings = MagicMock()
     settings.admin_token = _E2E_ADMIN_TOKEN

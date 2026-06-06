@@ -32,16 +32,45 @@ pytestmark = [pytest.mark.e2e, pytest.mark.asyncio]
 _EXECUTED_AT = "2025-06-01T10:00:00Z"
 
 
+def make_e2e_jwt(tenant_id: str, user_id: str, role: str = "system") -> str:
+    """Issue a per-test JWT bound to a seeded (tenant_id, user_id).
+
+    The route handlers read tenant_id / user_id from request.state populated
+    by InternalJWTMiddleware (they ignore X-Tenant-ID / X-Owner-ID after
+    PRD-0025). Each E2E test seeds its own tenant + user UUID, so it MUST
+    pass a JWT whose claims contain those exact UUIDs — otherwise
+    ``UUID(str(request.state.tenant_id))`` raises ValueError → 500
+    INTERNAL_ERROR (the CI failure pattern fixed by this helper).
+    """
+    import time
+
+    import jwt as _jwt
+
+    payload = {
+        "iss": "worldview-gateway",
+        "sub": user_id,
+        "tenant_id": tenant_id,
+        "role": role,
+        "iat": int(time.time()),
+        "exp": int(time.time()) + 3600,
+    }
+    return _jwt.encode(payload, "e2e-test-secret", algorithm="HS256")
+
+
 async def test_full_transaction_flow(e2e_client: AsyncClient, e2e_db_session: AsyncSession) -> None:
     """Happy-path: create tenant/user via DB seed, BUY, SELL, verify holdings and transactions."""
     # 1. Seed tenant + user directly (POST /tenants now requires role=system from S9 JWT)
     tenant_id, user_id = await _seed_tenant_and_user(e2e_db_session, email=f"trader-{uuid.uuid4().hex[:6]}@flowco.com")
+    # The portfolio route extracts tenant_id/user_id from the JWT (not from
+    # X-Tenant-ID / X-Owner-ID headers), so issue a JWT bound to the seeded
+    # tenant + user — anything else fails ``UUID("e2e-tenant")`` → 500.
+    auth_jwt = make_e2e_jwt(tenant_id=tenant_id, user_id=user_id)
 
     # 2. Create portfolio via API (no auth restriction on POST /portfolios)
     resp = await e2e_client.post(
         "/api/v1/portfolios",
         json={"name": f"E2E Portfolio {uuid.uuid4().hex[:6]}", "owner_user_id": user_id, "currency": "USD"},
-        headers={"X-Tenant-ID": tenant_id},
+        headers={"X-Tenant-ID": tenant_id, "X-Internal-JWT": auth_jwt},
     )
     assert resp.status_code == 201, resp.text
     portfolio_id = resp.json()["id"]
@@ -58,7 +87,7 @@ async def test_full_transaction_flow(e2e_client: AsyncClient, e2e_db_session: As
     # 3. Seed instrument directly via DB (no instrument-sync Kafka in test compose)
     instrument_id = await _seed_instrument(e2e_db_session, f"AAPL_{uuid.uuid4().hex[:4]}", "NASDAQ")
 
-    common_headers = {"X-Tenant-ID": tenant_id, "X-Owner-ID": user_id}
+    common_headers = {"X-Tenant-ID": tenant_id, "X-Owner-ID": user_id, "X-Internal-JWT": auth_jwt}
 
     # 4. BUY 10 shares @ $150
     resp = await e2e_client.post(
@@ -164,7 +193,8 @@ async def test_duplicate_portfolio_name_rejected(e2e_client: AsyncClient, e2e_db
     """POST /portfolios with duplicate name for same owner returns 409 or 422."""
     tenant_id, user_id = await _seed_tenant_and_user(e2e_db_session, email=f"dup-{uuid.uuid4().hex[:6]}@dupco.com")
     name = f"DupPortfolio-{uuid.uuid4().hex[:6]}"
-    headers = {"X-Tenant-ID": tenant_id}
+    # JWT bound to seeded tenant — route reads tenant_id from JWT, not header.
+    headers = {"X-Tenant-ID": tenant_id, "X-Internal-JWT": make_e2e_jwt(tenant_id, user_id)}
 
     resp = await e2e_client.post(
         "/api/v1/portfolios",
@@ -184,14 +214,15 @@ async def test_duplicate_portfolio_name_rejected(e2e_client: AsyncClient, e2e_db
 async def test_sell_exceeding_holdings_rejected(e2e_client: AsyncClient, e2e_db_session: AsyncSession) -> None:
     """SELL more than held quantity returns 409 or 422 (InsufficientHoldingsError)."""
     tenant_id, user_id = await _seed_tenant_and_user(e2e_db_session, email=f"sell-{uuid.uuid4().hex[:6]}@sellco.com")
+    auth_jwt = make_e2e_jwt(tenant_id=tenant_id, user_id=user_id)
     resp = await e2e_client.post(
         "/api/v1/portfolios",
         json={"name": f"SellPort-{uuid.uuid4().hex[:6]}", "owner_user_id": user_id, "currency": "USD"},
-        headers={"X-Tenant-ID": tenant_id},
+        headers={"X-Tenant-ID": tenant_id, "X-Internal-JWT": auth_jwt},
     )
     portfolio_id = resp.json()["id"]
     instrument_id = await _seed_instrument(e2e_db_session, f"SELL_{uuid.uuid4().hex[:4]}", "NYSE")
-    headers = {"X-Tenant-ID": tenant_id, "X-Owner-ID": user_id}
+    headers = {"X-Tenant-ID": tenant_id, "X-Owner-ID": user_id, "X-Internal-JWT": auth_jwt}
 
     await e2e_client.post(
         "/api/v1/transactions",
@@ -228,17 +259,18 @@ async def test_sell_exceeding_holdings_rejected(e2e_client: AsyncClient, e2e_db_
 async def test_archive_portfolio(e2e_client: AsyncClient, e2e_db_session: AsyncSession) -> None:
     """DELETE /portfolios/{id} transitions portfolio to ARCHIVED status."""
     tenant_id, user_id = await _seed_tenant_and_user(e2e_db_session, email=f"arch-{uuid.uuid4().hex[:6]}@archco.com")
+    auth_jwt = make_e2e_jwt(tenant_id=tenant_id, user_id=user_id)
     resp = await e2e_client.post(
         "/api/v1/portfolios",
         json={"name": f"ToArchive-{uuid.uuid4().hex[:6]}", "owner_user_id": user_id, "currency": "USD"},
-        headers={"X-Tenant-ID": tenant_id},
+        headers={"X-Tenant-ID": tenant_id, "X-Internal-JWT": auth_jwt},
     )
     assert resp.status_code == 201
     portfolio_id = resp.json()["id"]
 
     resp = await e2e_client.delete(
         f"/api/v1/portfolios/{portfolio_id}",
-        headers={"X-Tenant-ID": tenant_id, "X-Owner-ID": user_id},
+        headers={"X-Tenant-ID": tenant_id, "X-Owner-ID": user_id, "X-Internal-JWT": auth_jwt},
     )
     assert resp.status_code in (200, 204), f"Expected archive success, got {resp.status_code}: {resp.text}"
 

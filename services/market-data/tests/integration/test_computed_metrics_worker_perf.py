@@ -194,15 +194,20 @@ async def test_computed_metrics_worker_perf_smoke(_migrated_db: str) -> None:
     # instruments with < lookback history) but with BP-180 fixed every metric
     # name must have at least one row.
     async with factory() as session:
+        # Canonical metric names emitted by ComputedMetricsBackfillWorker
+        # (see ``_PERIOD_RETURN_LOOKBACKS`` and ``_DISTANCE_52W_SQL`` aliases).
+        # The earlier iteration of this test used the short forms
+        # ``distance_52w_high`` / ``distance_52w_low`` and included
+        # ``volatility_30d``, none of which the worker actually writes.
         for metric_name in (
             "return_1m",
             "return_3m",
             "return_6m",
-            "return_ytd",
             "return_1y",
-            "distance_52w_high",
-            "distance_52w_low",
-            "volatility_30d",
+            "return_3y",
+            "return_ytd",
+            "dist_from_52w_high_pct",
+            "dist_from_52w_low_pct",
         ):
             row = (
                 await session.execute(

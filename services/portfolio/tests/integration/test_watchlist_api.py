@@ -218,7 +218,11 @@ async def test_add_member_returns_201(watchlist_client: AsyncClient) -> None:
     assert data["entity_type"] == "company"
 
 
-async def test_add_member_duplicate_returns_409(watchlist_client: AsyncClient) -> None:
+async def test_add_member_duplicate_returns_200(watchlist_client: AsyncClient) -> None:
+    # REQ-002b (commit e8e31b51): same (watchlist_id, entity_id) twice is
+    # naturally idempotent and returns 200, not 409. 409 is reserved for
+    # Idempotency-Key reuse with a different body or instrument-level
+    # collisions (different entity_id resolves to the same instrument).
     unique_name = f"DupMemberWL {uuid4().hex[:8]}"
     create_resp = await watchlist_client.post("/api/v1/watchlists", json={"name": unique_name})
     assert create_resp.status_code == 201
@@ -234,7 +238,7 @@ async def test_add_member_duplicate_returns_409(watchlist_client: AsyncClient) -
         f"/api/v1/watchlists/{wl_id}/members",
         json={"entity_id": entity_id, "entity_type": "company"},
     )
-    assert resp.status_code == 409
+    assert resp.status_code == 200
 
 
 async def test_remove_member_returns_204(watchlist_client: AsyncClient) -> None:
