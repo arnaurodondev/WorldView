@@ -265,6 +265,7 @@ services:
       timeout: 5s
       start_period: 20s
       retries: 3
+    restart: unless-stopped
 
   # ── Portfolio outbox dispatcher ──────────────────────────────────────────────
   portfolio-dispatcher:
@@ -417,6 +418,7 @@ services:
       timeout: 5s
       start_period: 15s
       retries: 3
+    restart: unless-stopped
 
   # ── Market ingestion scheduler ───────────────────────────────────────────────
   market-ingestion-scheduler:
@@ -697,6 +699,7 @@ services:
       timeout: 5s
       retries: 3
       start_period: 30s
+    restart: unless-stopped
 
   # Scheduler process — evaluates sources and creates tasks
   content-ingestion-scheduler:
@@ -818,6 +821,7 @@ services:
       timeout: 5s
       start_period: 20s
       retries: 3
+    restart: unless-stopped
 
   market-data-dispatcher:
     build:
@@ -1003,6 +1007,7 @@ services:
       timeout: 5s
       start_period: 30s
       retries: 3
+    restart: unless-stopped
 
   content-store-dispatcher:
     build:
@@ -1239,6 +1244,7 @@ services:
       timeout: 5s
       start_period: 45s
       retries: 3
+    restart: unless-stopped
 
   nlp-pipeline-dispatcher:
     build:
@@ -1471,6 +1477,7 @@ services:
       timeout: 5s
       start_period: 45s
       retries: 3
+    restart: unless-stopped
 
   knowledge-graph-dispatcher:
     build:
@@ -1884,6 +1891,7 @@ services:
       timeout: 5s
       start_period: 30s
       retries: 3
+    restart: unless-stopped
 
   alert-dispatcher:
     build:
@@ -2022,6 +2030,7 @@ services:
       timeout: 5s
       start_period: 30s
       retries: 3
+    restart: unless-stopped
 
   # ── API Gateway (S9) — stateless reverse proxy + auth ─────────────────────────
   api-gateway:
@@ -2047,6 +2056,7 @@ services:
       timeout: 5s
       start_period: 20s
       retries: 3
+    restart: unless-stopped
 
   # ── Worldview Web (Next.js 15 frontend) ────────────────────────────────────
   # Canonical production frontend. Talks exclusively to S9 API Gateway via
@@ -2071,6 +2081,7 @@ services:
       timeout: 5s
       start_period: 20s
       retries: 3
+    restart: unless-stopped
 
   # ── Pushgateway — receives metrics pushed by synthetic monitor ─────────────────
   # WHY pushgateway: Prometheus scrapes metrics by polling a /metrics endpoint.
