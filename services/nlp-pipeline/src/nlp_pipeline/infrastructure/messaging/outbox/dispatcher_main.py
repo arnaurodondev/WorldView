@@ -13,10 +13,15 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import os
 import signal
 import sys
 
-from observability import configure_logging, get_logger  # type: ignore[import-untyped]
+from observability import (  # type: ignore[import-untyped]
+    configure_logging,
+    get_logger,
+    start_metrics_server,
+)
 
 logger = get_logger(__name__)  # type: ignore[no-any-return]
 
@@ -61,6 +66,12 @@ async def main() -> None:
     log = get_logger("nlp_pipeline.dispatcher_main")  # type: ignore[no-any-return]
     log.info("dispatcher_starting", service="nlp-pipeline")
 
+    # Phase 2 worker-metrics: expose Prometheus /metrics endpoint.
+    metrics_handle = start_metrics_server(
+        service_name="nlp-pipeline-dispatcher",
+        port=int(os.environ.get("METRICS_PORT", "9100")),
+    )
+
     stop_event = asyncio.Event()
 
     def _handle_signal(sig: int) -> None:
@@ -88,6 +99,7 @@ async def main() -> None:
     else:
         log.info("dispatcher_stopped")
     finally:
+        await metrics_handle.aclose()
         await nlp_engine.dispose()
 
 

@@ -74,6 +74,46 @@ scrape_configs:
       - targets: ["alert:8010"]
     metrics_path: /metrics
 
+  # ── Outbox dispatchers (Phase 2 worker-metrics) ────────────────────────
+  # Each dispatcher runs as an independent process (R22) without a FastAPI
+  # app and exposes prometheus_client counters on :9100 via the shared
+  # ``start_metrics_server`` helper from libs/observability.
+  - job_name: "portfolio-dispatcher"
+    static_configs:
+      - targets: ["portfolio-dispatcher:9100"]
+    metrics_path: /metrics
+    scrape_interval: 15s
+
+  - job_name: "content-ingestion-dispatcher"
+    static_configs:
+      - targets: ["content-ingestion-dispatcher:9100"]
+    metrics_path: /metrics
+    scrape_interval: 15s
+
+  - job_name: "content-store-dispatcher"
+    static_configs:
+      - targets: ["content-store-dispatcher:9100"]
+    metrics_path: /metrics
+    scrape_interval: 15s
+
+  - job_name: "nlp-pipeline-dispatcher"
+    static_configs:
+      - targets: ["nlp-pipeline-dispatcher:9100"]
+    metrics_path: /metrics
+    scrape_interval: 15s
+
+  - job_name: "market-ingestion-dispatcher"
+    static_configs:
+      - targets: ["market-ingestion-dispatcher:9100"]
+    metrics_path: /metrics
+    scrape_interval: 15s
+
+  - job_name: "knowledge-graph-dispatcher"
+    static_configs:
+      - targets: ["knowledge-graph-dispatcher:9100"]
+    metrics_path: /metrics
+    scrape_interval: 15s
+
   # ── Observability stack self-monitoring ────────────────────────────────
   # Without these, Loki/Tempo/AlertManager outages are undetectable — no
   # ServiceDown alert would fire. (F-014, audit finding)

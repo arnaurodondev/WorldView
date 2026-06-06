@@ -13,10 +13,15 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import os
 import signal
 import sys
 
-from observability import configure_logging, get_logger  # type: ignore[import-untyped]
+from observability import (  # type: ignore[import-untyped]
+    configure_logging,
+    get_logger,
+    start_metrics_server,
+)
 
 logger = get_logger(__name__)  # type: ignore[no-any-return]
 
@@ -37,6 +42,12 @@ async def main() -> None:
 
     log = get_logger("content_store.dispatcher_main")  # type: ignore[no-any-return]
     log.info("dispatcher_starting", service="content-store")
+
+    # Phase 2 worker-metrics: expose Prometheus /metrics endpoint.
+    metrics_handle = start_metrics_server(
+        service_name="content-store-dispatcher",
+        port=int(os.environ.get("METRICS_PORT", "9100")),
+    )
 
     stop_event = asyncio.Event()
 
@@ -65,6 +76,7 @@ async def main() -> None:
     else:
         log.info("dispatcher_stopped")
     finally:
+        await metrics_handle.aclose()
         await _engine.dispose()
         if _read_engine is not _engine:
             await _read_engine.dispose()

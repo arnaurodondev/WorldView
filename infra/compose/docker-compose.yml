@@ -284,6 +284,7 @@ services:
     env_file:
       - ../../services/portfolio/configs/docker.env
     command: ["python", "-m", "portfolio.infrastructure.messaging.outbox.dispatcher_main"]
+    expose: ["9100"]
     restart: on-failure
     healthcheck:
       test: ["CMD", "python", "-c", "import os; os.kill(1, 0)"]
@@ -475,6 +476,7 @@ services:
     env_file:
       - ../../services/market-ingestion/configs/docker.env
     command: ["python", "-m", "market_ingestion.infrastructure.messaging.outbox.dispatcher_main"]
+    expose: ["9100"]
     restart: on-failure
     healthcheck:
       test: ["CMD", "python", "-c", "import os; os.kill(1, 0)"]
@@ -742,6 +744,7 @@ services:
       dockerfile: services/content-ingestion/Dockerfile
     profiles: [infra, all]
     command: ["python", "-m", "content_ingestion.infrastructure.messaging.outbox.dispatcher_main"]
+    expose: ["9100"]
     env_file:
       - ../../services/content-ingestion/configs/docker.env
     depends_on:
@@ -1002,6 +1005,7 @@ services:
     env_file:
       - ../../services/content-store/configs/docker.env
     command: ["python", "-m", "content_store.infrastructure.messaging.outbox.dispatcher_main"]
+    expose: ["9100"]
     restart: on-failure
     healthcheck:
       test: ["CMD", "python", "-c", "import os; os.kill(1, 0)"]
@@ -1235,6 +1239,7 @@ services:
     env_file:
       - ../../services/nlp-pipeline/configs/docker.env
     command: ["python", "-m", "nlp_pipeline.infrastructure.messaging.outbox.dispatcher_main"]
+    expose: ["9100"]
     restart: on-failure
     healthcheck:
       test: ["CMD", "python", "-c", "import os; os.kill(1, 0)"]
@@ -1459,6 +1464,7 @@ services:
     env_file:
       - ../../services/knowledge-graph/configs/docker.env
     command: ["python", "-m", "knowledge_graph.infrastructure.messaging.outbox.dispatcher_main"]
+    expose: ["9100"]
     restart: on-failure
     healthcheck:
       test: ["CMD", "python", "-c", "import os; os.kill(1, 0)"]

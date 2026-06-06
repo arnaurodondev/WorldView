@@ -11,6 +11,7 @@ Usage (standalone)::
 from __future__ import annotations
 
 import asyncio
+import os
 import signal
 
 from market_ingestion.config import Settings
@@ -18,6 +19,7 @@ from market_ingestion.infrastructure.db.session import _build_factories
 from market_ingestion.infrastructure.messaging.dispatcher import (
     build_market_ingestion_dispatcher,
 )
+from observability import start_metrics_server  # type: ignore[import-untyped]
 from observability.logging import get_logger  # type: ignore[import-untyped]
 
 logger = get_logger(__name__)
@@ -54,11 +56,20 @@ async def _run_dispatcher() -> None:
     settings = Settings()  # type: ignore[call-arg]
     process = DispatcherProcess(settings=settings)
 
+    # Phase 2 worker-metrics: expose Prometheus /metrics endpoint.
+    metrics_handle = start_metrics_server(
+        service_name="market-ingestion-dispatcher",
+        port=int(os.environ.get("METRICS_PORT", "9100")),
+    )
+
     loop = asyncio.get_running_loop()
     for sig in (signal.SIGINT, signal.SIGTERM):
         loop.add_signal_handler(sig, process.stop)
 
-    await process.run()
+    try:
+        await process.run()
+    finally:
+        await metrics_handle.aclose()
 
 
 def main() -> None:
