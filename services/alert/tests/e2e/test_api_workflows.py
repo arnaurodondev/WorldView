@@ -121,16 +121,22 @@ async def test_pending_alerts_empty_for_new_user(e2e_client: AsyncClient) -> Non
     assert data["total"] == 0
 
 
-async def test_pending_alerts_missing_user_id_returns_422(e2e_client: AsyncClient) -> None:
-    """GET /api/v1/alerts/pending without user_id query param returns 422."""
+async def test_pending_alerts_query_user_id_is_ignored(e2e_client: AsyncClient) -> None:
+    """PRD-0025 update — user_id is read from the X-Internal-JWT claim, not a
+    query param. Passing user_id=... in the URL is harmless (FastAPI just
+    ignores unknown query args) and the endpoint resolves the user from the
+    JWT context. We assert 200 + empty result, not 422.
+    """
     resp = await e2e_client.get("/api/v1/alerts/pending")
-    assert resp.status_code == 422
+    assert resp.status_code == 200
+    assert resp.json() == {"alerts": [], "total": 0}
 
 
-async def test_pending_alerts_invalid_user_id_returns_422(e2e_client: AsyncClient) -> None:
-    """GET /api/v1/alerts/pending with non-UUID user_id returns 422."""
+async def test_pending_alerts_query_user_id_value_is_ignored(e2e_client: AsyncClient) -> None:
+    """Passing a bogus user_id query value does NOT trip 422 because the route
+    does not declare user_id as a query param (it reads from JWT)."""
     resp = await e2e_client.get("/api/v1/alerts/pending?user_id=not-a-uuid")
-    assert resp.status_code == 422
+    assert resp.status_code == 200
 
 
 async def test_pending_alerts_pagination_validation(e2e_client: AsyncClient) -> None:

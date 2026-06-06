@@ -41,10 +41,12 @@ class TestPostgresContainer:
         from alembic.script import ScriptDirectory
 
         # Resolve the expected head from the on-disk migration chain. The CI
-        # cwd is the repo root, so we anchor the alembic.ini path to this test
-        # file's location to make the lookup cwd-independent.
-        alembic_ini = Path(__file__).resolve().parents[2] / "alembic.ini"
-        alembic_cfg = Config(str(alembic_ini))
+        # cwd is the repo root, so we anchor BOTH the alembic.ini path and the
+        # script_location (which is "alembic" — relative — inside the ini) to
+        # this test file's location to make the lookup cwd-independent.
+        service_root = Path(__file__).resolve().parents[2]
+        alembic_cfg = Config(str(service_root / "alembic.ini"))
+        alembic_cfg.set_main_option("script_location", str(service_root / "alembic"))
         expected_head = ScriptDirectory.from_config(alembic_cfg).get_current_head()
 
         dsn = _migrated_db.replace("postgresql+asyncpg://", "postgresql://")

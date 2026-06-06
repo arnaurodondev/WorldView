@@ -98,17 +98,23 @@ async def test_admin_create_source_returns_201(e2e_client, admin_headers):
     uuid.UUID(data["id"])
 
 
-async def test_admin_create_duplicate_source_name_returns_409_or_422(e2e_client, admin_headers):
-    """POST /api/v1/sources with a duplicate name → 409 Conflict or 422 Unprocessable."""
+async def test_admin_create_duplicate_source_name_is_idempotent(e2e_client, admin_headers):
+    """POST /api/v1/sources is idempotent (PLAN-0055 B-1): a duplicate
+    ``(source_type, config_hash)`` returns the existing row with 201, not 409.
+    The route still maps DB IntegrityError → 409 as a defensive backstop, but
+    on the canonical happy path the use case returns ``was_created=False``.
+    """
     unique_name = f"e2e-dup-{uuid.uuid4().hex[:8]}"
     payload = {"name": unique_name, "source_type": "finnhub"}
 
     first = await e2e_client.post("/api/v1/sources", json=payload, headers=admin_headers)
     assert first.status_code == 201
+    first_id = first.json()["id"]
 
     second = await e2e_client.post("/api/v1/sources", json=payload, headers=admin_headers)
-    # DB unique constraint produces 409; validation layer may surface 422
-    assert second.status_code in {409, 422, 500}
+    assert second.status_code == 201
+    # Idempotent: same row returned, not a new one.
+    assert second.json()["id"] == first_id
 
 
 async def test_admin_update_source_returns_200(e2e_client, admin_headers):
