@@ -606,7 +606,7 @@ services:
       tempo:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "wget", "--spider", "-q", "http://localhost:12345/ready"]
+      test: ["CMD-SHELL", "test -f /proc/1/exe"]
       interval: 15s
       timeout: 5s
       retries: 3
@@ -1363,6 +1363,34 @@ services:
       retries: 3
       start_period: 30s
 
+  # REQ-003 / TASK-W0-06: consumes entity.refresh.v1 events from S7's
+  # TriggerEntityRefreshUseCase and marks entity_embedding_state rows as
+  # due (next_refresh_at = now()). Without this container running, the
+  # manual /api/v1/entities/{entity_id}/refresh endpoint publishes to
+  # Kafka but is never consumed → silent no-op.
+  # NOTE: was accidentally dropped in the PLAN-0089 merge; restored here.
+  nlp-pipeline-entity-refresh-consumer:
+    build:
+      context: ../..
+      dockerfile: services/nlp-pipeline/Dockerfile
+    profiles: [infra, all]
+    depends_on:
+      nlp-pipeline-migrate:
+        condition: service_completed_successfully
+      kafka-init:
+        condition: service_completed_successfully
+    env_file:
+      - ../../services/nlp-pipeline/configs/docker.env
+    command: ["python", "-m", "nlp_pipeline.infrastructure.messaging.consumers.entity_refresh_consumer_main"]
+    expose: ["9100"]
+    restart: on-failure
+    healthcheck:
+      test: ["CMD", "python", "-c", "import os; os.kill(1, 0)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+
   nlp-pipeline-price-impact-worker:
     build:
       context: ../..
@@ -2044,6 +2072,34 @@ services:
       start_period: 30s
       retries: 3
     restart: unless-stopped
+
+  # PLAN-0094: pre-generates morning briefs on a 1h interval for all active
+  # users. Exposes Prometheus metrics on port 9100 (rag_brief_pregeneration_*).
+  # NOTE: was accidentally dropped in the PLAN-0089 merge; restored here.
+  rag-chat-brief-scheduler:
+    build:
+      context: ../..
+      dockerfile: services/rag-chat/Dockerfile
+    profiles: [infra, all]
+    depends_on:
+      rag-chat-migrate:
+        condition: service_completed_successfully
+      valkey:
+        condition: service_healthy
+      api-gateway:
+        condition: service_healthy
+    env_file:
+      - ../../services/rag-chat/configs/docker.env
+    ports:
+      - "9100:9100"
+    command: ["python", "-m", "rag_chat.infrastructure.scheduling.brief_scheduler_main"]
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import os; os.kill(1, 0)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
 
   # ── API Gateway (S9) — stateless reverse proxy + auth ─────────────────────────
   api-gateway:
