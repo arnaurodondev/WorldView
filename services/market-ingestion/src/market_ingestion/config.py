@@ -147,6 +147,12 @@ class Settings(BaseSettings):
     worker_batch_size: int = 10
     worker_lease_seconds: int = 300
     worker_concurrency: int = 4
+    # Idle-poll cadence: how long the worker sleeps when ClaimTasksUseCase
+    # returns 0 rows. Defaults to 5 s for production back-pressure. CI/E2E
+    # overrides this to 1 s so manually-triggered tasks are picked up within
+    # the test's 30 s deadline even after the queue has accumulated prior
+    # work from earlier tests (R12 — E2E task-progression fix).
+    worker_idle_sleep_seconds: float = 5.0
     provider_http_timeout_seconds: float = 30.0
 
     # Dispatcher

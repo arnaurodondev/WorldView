@@ -187,14 +187,20 @@ async def test_pending_alerts_tenant_isolation(
     e2e_client: AsyncClient,
     e2e_db_session: AsyncSession,
 ) -> None:
-    """Pending alerts for user A are NOT visible to user B (tenant isolation)."""
+    """Pending alerts for user A are NOT visible to the JWT user (isolation).
+
+    PRD-0025: the GET endpoint resolves user_id from the JWT, not query params.
+    user_a (a random uuid != E2E_USER_ID) seeds an alert; the JWT-authenticated
+    GET (which acts as E2E_USER_ID) must see zero alerts.
+    """
     user_a = uuid.uuid4()
-    user_b = uuid.uuid4()
+    assert str(user_a) != E2E_USER_ID  # sanity — different user than the JWT
 
     alert_id = await _seed_alert(e2e_db_session, alert_type="SIGNAL")
     await _seed_pending_alert(e2e_db_session, alert_id, user_a)
 
-    resp = await e2e_client.get(f"/api/v1/alerts/pending?user_id={user_b}")
+    # JWT user is E2E_USER_ID (different from user_a); query param is ignored.
+    resp = await e2e_client.get("/api/v1/alerts/pending")
     assert resp.status_code == 200
     data = resp.json()
     assert data["total"] == 0
@@ -246,10 +252,15 @@ async def test_acknowledge_unknown_alert_returns_404(e2e_client: AsyncClient) ->
     assert resp.status_code == 404
 
 
-async def test_acknowledge_missing_user_id_returns_422(e2e_client: AsyncClient) -> None:
-    """DELETE /api/v1/alerts/{id}/ack without user_id returns 422."""
+async def test_acknowledge_missing_user_id_query_is_ignored(e2e_client: AsyncClient) -> None:
+    """DELETE /api/v1/alerts/{id}/ack without user_id query is fine.
+
+    PRD-0025: user_id comes from the JWT, not a query param. Omitting it does
+    NOT trip 422 because the route does not declare it as a query parameter.
+    For an unknown alert_id the route returns 404 (alert not found).
+    """
     resp = await e2e_client.delete(f"/api/v1/alerts/{uuid.uuid4()}/ack")
-    assert resp.status_code == 422
+    assert resp.status_code == 404
 
 
 async def test_acknowledge_other_users_alert_returns_404(
@@ -276,18 +287,22 @@ async def test_acknowledge_own_alert_succeeds(
     e2e_client: AsyncClient,
     e2e_db_session: AsyncSession,
 ) -> None:
-    """DELETE /api/v1/alerts/{id}/ack for own pending alert returns 200 and removes it."""
-    user_id = uuid.uuid4()
+    """DELETE /api/v1/alerts/{id}/ack for own pending alert returns 200 and removes it.
+
+    PRD-0025: the route resolves user_id from the JWT (E2E_USER_ID in tests),
+    so the seeded pending row MUST belong to E2E_USER_ID or the route returns 404.
+    """
+    user_id = uuid.UUID(E2E_USER_ID)
 
     alert_id = await _seed_alert(e2e_db_session, dedup_key=f"key:{uuid.uuid4().hex}")
     await _seed_pending_alert(e2e_db_session, alert_id, user_id)
 
-    resp = await e2e_client.delete(f"/api/v1/alerts/{alert_id}/ack?user_id={user_id}")
+    resp = await e2e_client.delete(f"/api/v1/alerts/{alert_id}/ack")
     assert resp.status_code == 200
     assert resp.json()["status"] == "acknowledged"
 
-    # The alert should no longer appear in pending
-    resp2 = await e2e_client.get(f"/api/v1/alerts/pending?user_id={user_id}")
+    # The alert should no longer appear in pending (JWT user_id again).
+    resp2 = await e2e_client.get("/api/v1/alerts/pending")
     data = resp2.json()
     assert data["total"] == 0
 

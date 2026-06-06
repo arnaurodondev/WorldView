@@ -245,7 +245,20 @@ _TABLES_TO_TRUNCATE = [
 
 @pytest.fixture(autouse=True)
 async def _clean_tables(e2e_engine: AsyncEngine) -> AsyncGenerator[None, None]:
-    """Truncate all alert_db tables after each test for isolation."""
+    """Truncate all alert_db tables BEFORE and after each test for isolation.
+
+    Cleanup-before guards against cross-test DB pollution from earlier runs
+    (CI shared DB, stale Docker volume, or a prior crashed test that skipped
+    teardown). Without this, ``test_pending_alerts_tenant_isolation`` flakes
+    when an earlier test left a pending row for E2E_USER_ID, because the
+    JWT-derived GET still sees those leftovers.
+    """
+    try:
+        async with e2e_engine.begin() as conn:
+            for table in _TABLES_TO_TRUNCATE:
+                await conn.execute(text(f"TRUNCATE {table} CASCADE"))
+    except Exception:  # noqa: S110
+        pass
     yield
     try:
         async with e2e_engine.begin() as conn:

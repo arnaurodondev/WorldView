@@ -197,10 +197,16 @@ def e2e_app(e2e_session_factory):
     app.state.scheduler = None
     # storage is optional — only used by /internal/v1/ingest/submit
     app.state.storage = None
-    # bronze_storage is used by /internal/v1/ingest/submit via BronzeStorageDep;
-    # stub with AsyncMock so route dependency resolution does not raise
-    # AttributeError('State' object has no attribute 'bronze_storage').
-    app.state.bronze_storage = AsyncMock()
+    # bronze_storage is used by /internal/v1/ingest/submit via BronzeStorageDep.
+    # The SubmitContentUseCase calls ``put_object(...)`` and embeds the returned
+    # MinIO key inside the outbox payload, which is then JSON-serialized for the
+    # DB write. A bare ``AsyncMock()`` returns another AsyncMock here, which
+    # breaks SQL parameter binding with "Object of type AsyncMock is not JSON
+    # serializable". We therefore wire ``put_object`` to return a deterministic
+    # string so the full happy-path runs end-to-end in tests.
+    _bronze = AsyncMock()
+    _bronze.put_object = AsyncMock(return_value="bronze/e2e/test-key.json")
+    app.state.bronze_storage = _bronze
     # valkey is used by /readyz — stub with an AsyncMock so the probe fails
     # gracefully rather than raising AttributeError on None
     app.state.valkey = AsyncMock()
