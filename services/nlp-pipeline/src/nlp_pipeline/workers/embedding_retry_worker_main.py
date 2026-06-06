@@ -23,11 +23,16 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import os
 import signal
 import sys
 from typing import Any
 
-from observability import configure_logging, get_logger  # type: ignore[import-untyped]
+from observability import (  # type: ignore[import-untyped]
+    configure_logging,
+    get_logger,
+    start_metrics_server,
+)
 
 logger = get_logger(__name__)  # type: ignore[no-any-return]
 
@@ -61,6 +66,12 @@ async def main() -> None:
     )
     log = get_logger("nlp_pipeline.embedding_retry_worker_main")  # type: ignore[no-any-return]
     log.info("embedding_retry_worker_starting")
+
+    # Phase 3 worker-metrics rollout — expose Prometheus /metrics.
+    metrics_handle = start_metrics_server(
+        service_name="nlp-pipeline-embedding-retry-worker",
+        port=int(os.environ.get("METRICS_PORT", "9100")),
+    )
 
     stop_event = asyncio.Event()
 
@@ -113,6 +124,8 @@ async def main() -> None:
         await worker_task
 
     await nlp_engine.dispose()
+    with contextlib.suppress(Exception):
+        await metrics_handle.aclose()
     log.info("embedding_retry_worker_stopped")
 
 

@@ -183,6 +183,137 @@ scrape_configs:
       - targets: ["knowledge-graph-provisional-queued-consumer:9100"]
     metrics_path: /metrics
 
+  # ── Phase 3b worker /metrics endpoints (port 9100) ────────────────────────
+  - job_name: "content-store-consumer"
+    static_configs:
+      - targets: ["content-store-consumer:9100"]
+    metrics_path: /metrics
+
+  - job_name: "content-store-dedup-consumer"
+    static_configs:
+      - targets: ["content-store-dedup-consumer:9100"]
+    metrics_path: /metrics
+
+  - job_name: "nlp-pipeline-article-consumer"
+    static_configs:
+      - targets: ["nlp-pipeline-article-consumer:9100"]
+    metrics_path: /metrics
+
+  - job_name: "nlp-pipeline-watchlist-consumer"
+    static_configs:
+      - targets: ["nlp-pipeline-watchlist-consumer:9100"]
+    metrics_path: /metrics
+
+  - job_name: "nlp-pipeline-document-deletion-consumer"
+    static_configs:
+      - targets: ["nlp-pipeline-document-deletion-consumer:9100"]
+    metrics_path: /metrics
+
+  - job_name: "nlp-pipeline-embedding-retry-worker"
+    static_configs:
+      - targets: ["nlp-pipeline-embedding-retry-worker:9100"]
+    metrics_path: /metrics
+
+  - job_name: "nlp-pipeline-unresolved-resolution-worker"
+    static_configs:
+      - targets: ["nlp-pipeline-unresolved-resolution-worker:9100"]
+    metrics_path: /metrics
+
+  - job_name: "nlp-pipeline-price-impact-worker"
+    static_configs:
+      - targets: ["nlp-pipeline-price-impact-worker:9100"]
+    metrics_path: /metrics
+
+  - job_name: "nlp-pipeline-relevance-scoring"
+    static_configs:
+      - targets: ["nlp-pipeline-relevance-scoring:9100"]
+    metrics_path: /metrics
+
+  - job_name: "knowledge-graph-enriched-consumer"
+    static_configs:
+      - targets: ["knowledge-graph-enriched-consumer:9100"]
+    metrics_path: /metrics
+
+  - job_name: "knowledge-graph-fundamentals-consumer"
+    static_configs:
+      - targets: ["knowledge-graph-fundamentals-consumer:9100"]
+    metrics_path: /metrics
+
+  - job_name: "knowledge-graph-entity-consumer"
+    static_configs:
+      - targets: ["knowledge-graph-entity-consumer:9100"]
+    metrics_path: /metrics
+
+  - job_name: "knowledge-graph-instrument-consumer"
+    static_configs:
+      - targets: ["knowledge-graph-instrument-consumer:9100"]
+    metrics_path: /metrics
+
+  - job_name: "knowledge-graph-temporal-event-consumer"
+    static_configs:
+      - targets: ["knowledge-graph-temporal-event-consumer:9100"]
+    metrics_path: /metrics
+
+  - job_name: "knowledge-graph-economic-events-dataset-consumer"
+    static_configs:
+      - targets: ["knowledge-graph-economic-events-dataset-consumer:9100"]
+    metrics_path: /metrics
+
+  - job_name: "knowledge-graph-earnings-calendar-dataset-consumer"
+    static_configs:
+      - targets: ["knowledge-graph-earnings-calendar-dataset-consumer:9100"]
+    metrics_path: /metrics
+
+  - job_name: "knowledge-graph-macro-indicator-dataset-consumer"
+    static_configs:
+      - targets: ["knowledge-graph-macro-indicator-dataset-consumer:9100"]
+    metrics_path: /metrics
+
+  - job_name: "knowledge-graph-insider-transactions-dataset-consumer"
+    static_configs:
+      - targets: ["knowledge-graph-insider-transactions-dataset-consumer:9100"]
+    metrics_path: /metrics
+
+  - job_name: "market-data-fundamentals-consumer"
+    static_configs:
+      - targets: ["market-data-fundamentals-consumer:9100"]
+    metrics_path: /metrics
+
+  - job_name: "market-data-quotes-consumer"
+    static_configs:
+      - targets: ["market-data-quotes-consumer:9100"]
+    metrics_path: /metrics
+
+  - job_name: "market-data-prediction-market-consumer"
+    static_configs:
+      - targets: ["market-data-prediction-market-consumer:9100"]
+    metrics_path: /metrics
+
+  - job_name: "market-data-intraday-resampling-consumer"
+    static_configs:
+      - targets: ["market-data-intraday-resampling-consumer:9100"]
+    metrics_path: /metrics
+
+  - job_name: "market-ingestion-scheduler"
+    static_configs:
+      - targets: ["market-ingestion-scheduler:9100"]
+    metrics_path: /metrics
+
+  - job_name: "portfolio-snapshot-worker"
+    static_configs:
+      - targets: ["portfolio-snapshot-worker:9100"]
+    metrics_path: /metrics
+
+  - job_name: "alert-watchlist-consumer"
+    static_configs:
+      - targets: ["alert-watchlist-consumer:9100"]
+    metrics_path: /metrics
+
+  - job_name: "alert-email-scheduler"
+    static_configs:
+      - targets: ["alert-email-scheduler:9100"]
+    metrics_path: /metrics
+
   # ── Pushgateway — synthetic monitor probe results ─────────────────────────
   # honor_labels: true preserves the probe_name label set by synthetic_monitor.py
   # so SyntheticProbeDown alert can reference {{ $labels.probe_name }} correctly.

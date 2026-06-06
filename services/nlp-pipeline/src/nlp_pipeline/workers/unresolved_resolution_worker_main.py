@@ -51,6 +51,7 @@ async def main() -> None:
     log = get_logger("nlp_pipeline.unresolved_resolution_worker_main")  # type: ignore[no-any-return]
     log.info("unresolved_resolution_worker_starting")
 
+    # Phase 3 worker-metrics rollout — expose Prometheus /metrics.
     metrics_handle = start_metrics_server(
         service_name="nlp-pipeline-unresolved-resolution-worker",
         port=int(os.environ.get("METRICS_PORT", "9100")),
@@ -120,7 +121,8 @@ async def main() -> None:
     with suppress(asyncio.CancelledError):
         await worker_task
 
-    await metrics_handle.aclose()
+    with suppress(Exception):
+        await metrics_handle.aclose()
     await nlp_engine.dispose()
     await intel_engine.dispose()
     log.info("unresolved_resolution_worker_stopped")

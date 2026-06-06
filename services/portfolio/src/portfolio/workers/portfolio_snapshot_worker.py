@@ -37,6 +37,8 @@ Entry point::
 from __future__ import annotations
 
 import asyncio
+import contextlib
+import os
 import time
 import urllib.parse
 from datetime import UTC, date, datetime, timedelta
@@ -46,7 +48,7 @@ from typing import TYPE_CHECKING
 import httpx
 import jwt as pyjwt
 
-from observability import get_logger  # type: ignore[import-untyped]
+from observability import get_logger, start_metrics_server  # type: ignore[import-untyped]
 from portfolio.application.use_cases.compute_portfolio_value import (
     ComputePortfolioValueCommand,
     ComputePortfolioValueUseCase,
@@ -677,19 +679,29 @@ async def main() -> None:
         json=settings.log_json,
     )
 
+    # Phase 3 worker-metrics rollout — expose Prometheus /metrics.
+    metrics_handle = start_metrics_server(
+        service_name="portfolio-snapshot-worker",
+        port=int(os.environ.get("METRICS_PORT", "9100")),
+    )
+
     _engine, _read_engine, write_factory, _read_factory = _build_factories(settings)
 
-    async with httpx.AsyncClient(timeout=10.0, headers=_system_jwt_headers()) as http_client:
-        price_client = HttpOHLCVPriceClient(
-            http=http_client,
-            market_data_url=settings.market_data_service_url,
-        )
-        worker = PortfolioSnapshotWorker(
-            session_factory=write_factory,
-            price_client=price_client,
-            settings=settings,
-        )
-        await worker.run()
+    try:
+        async with httpx.AsyncClient(timeout=10.0, headers=_system_jwt_headers()) as http_client:
+            price_client = HttpOHLCVPriceClient(
+                http=http_client,
+                market_data_url=settings.market_data_service_url,
+            )
+            worker = PortfolioSnapshotWorker(
+                session_factory=write_factory,
+                price_client=price_client,
+                settings=settings,
+            )
+            await worker.run()
+    finally:
+        with contextlib.suppress(Exception):
+            await metrics_handle.aclose()
 
 
 if __name__ == "__main__":

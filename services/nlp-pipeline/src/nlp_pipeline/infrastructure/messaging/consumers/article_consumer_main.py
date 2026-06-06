@@ -11,11 +11,17 @@ Run with::
 from __future__ import annotations
 
 import asyncio
+import contextlib
+import os
 import signal
 import sys
 from typing import Any
 
-from observability import configure_logging, get_logger  # type: ignore[import-untyped]
+from observability import (  # type: ignore[import-untyped]
+    configure_logging,
+    get_logger,
+    start_metrics_server,
+)
 
 logger = get_logger(__name__)  # type: ignore[no-any-return]
 
@@ -43,6 +49,13 @@ async def main() -> None:
 
     log = get_logger("nlp_pipeline.article_consumer_main")  # type: ignore[no-any-return]
     log.info("article_consumer_starting", service="nlp-pipeline")
+
+    # Phase 3 worker-metrics rollout — expose Prometheus /metrics on a
+    # dedicated port so the worker's counters/gauges become scrape-able.
+    metrics_handle = start_metrics_server(
+        service_name="nlp-pipeline-article-consumer",
+        port=int(os.environ.get("METRICS_PORT", "9100")),
+    )
 
     stop_event = asyncio.Event()
 
@@ -290,6 +303,10 @@ async def main() -> None:
         await valkey.close()
         await nlp_engine.dispose()
         await intel_engine.dispose()
+
+        # Stop the Prometheus metrics HTTP server cleanly.
+        with contextlib.suppress(Exception):
+            await metrics_handle.aclose()
 
 
 if __name__ == "__main__":
