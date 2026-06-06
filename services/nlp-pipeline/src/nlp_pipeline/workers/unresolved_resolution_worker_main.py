@@ -17,12 +17,17 @@ Responsibilities:
 from __future__ import annotations
 
 import asyncio
+import os
 import signal
 import sys
 from contextlib import suppress
 
 from common.retry import retry_on_startup  # type: ignore[import-untyped]
-from observability import configure_logging, get_logger  # type: ignore[import-untyped]
+from observability import (  # type: ignore[import-untyped]
+    configure_logging,
+    get_logger,
+    start_metrics_server,
+)
 
 logger = get_logger(__name__)  # type: ignore[no-any-return]
 
@@ -45,6 +50,11 @@ async def main() -> None:
 
     log = get_logger("nlp_pipeline.unresolved_resolution_worker_main")  # type: ignore[no-any-return]
     log.info("unresolved_resolution_worker_starting")
+
+    metrics_handle = start_metrics_server(
+        service_name="nlp-pipeline-unresolved-resolution-worker",
+        port=int(os.environ.get("METRICS_PORT", "9100")),
+    )
 
     # ── Wire dependencies ─────────────────────────────────────────────────────
     try:
@@ -110,6 +120,7 @@ async def main() -> None:
     with suppress(asyncio.CancelledError):
         await worker_task
 
+    await metrics_handle.aclose()
     await nlp_engine.dispose()
     await intel_engine.dispose()
     log.info("unresolved_resolution_worker_stopped")
