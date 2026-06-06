@@ -155,6 +155,34 @@ scrape_configs:
       - targets: ["redis_exporter:9121"]
     metrics_path: /metrics
 
+  # ── Phase 3 worker /metrics endpoints (port 9100) ─────────────────────────
+  # These are non-HTTP background workers/consumers that now expose Prometheus
+  # /metrics via the `start_metrics_server` helper from libs/observability.
+  - job_name: "alert-intelligence-consumer"
+    static_configs:
+      - targets: ["alert-intelligence-consumer:9100"]
+    metrics_path: /metrics
+
+  - job_name: "market-ingestion-worker"
+    static_configs:
+      - targets: ["market-ingestion-worker:9100"]
+    metrics_path: /metrics
+
+  - job_name: "portfolio-brokerage-sync"
+    static_configs:
+      - targets: ["portfolio-brokerage-sync:9100"]
+    metrics_path: /metrics
+
+  - job_name: "knowledge-graph-path-insight-worker"
+    static_configs:
+      - targets: ["knowledge-graph-path-insight-worker:9100"]
+    metrics_path: /metrics
+
+  - job_name: "knowledge-graph-provisional-queued-consumer"
+    static_configs:
+      - targets: ["knowledge-graph-provisional-queued-consumer:9100"]
+    metrics_path: /metrics
+
   # ── Pushgateway — synthetic monitor probe results ─────────────────────────
   # honor_labels: true preserves the probe_name label set by synthetic_monitor.py
   # so SyntheticProbeDown alert can reference {{ $labels.probe_name }} correctly.

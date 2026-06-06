@@ -362,6 +362,7 @@ services:
       - SNAPTRADE_SECRET_ENCRYPTION_KEY=${SNAPTRADE_SECRET_ENCRYPTION_KEY:-}
       - PORTFOLIO_MARKET_DATA_SERVICE_URL=${PORTFOLIO_MARKET_DATA_SERVICE_URL:-http://market-data:8003}
     command: ["python", "-m", "portfolio.workers.brokerage_sync_worker"]
+    expose: ["9100"]
     restart: on-failure
     healthcheck:
       test: ["CMD", "python", "-c", "import os; os.kill(1, 0)"]
@@ -450,6 +451,7 @@ services:
     env_file:
       - ../../services/market-ingestion/configs/docker.env
     command: ["python", "-m", "market_ingestion.infrastructure.workers.worker_main"]
+    expose: ["9100"]
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "python", "-c", "import os; os.kill(1, 0)"]
@@ -1547,6 +1549,7 @@ services:
     env_file:
       - ../../services/knowledge-graph/configs/docker.env
     command: ["python", "-m", "knowledge_graph.infrastructure.messaging.consumers.provisional_queued_consumer_main"]
+    expose: ["9100"]
     restart: on-failure
     healthcheck:
       test: ["CMD", "python", "-c", "import os; os.kill(1, 0)"]
@@ -1808,6 +1811,7 @@ services:
     env_file:
       - ../../services/knowledge-graph/configs/docker.env
     command: ["python", "-m", "knowledge_graph.infrastructure.workers.path_insight_worker_main"]
+    expose: ["9100"]
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "python", "-c", "import os; os.kill(1, 0)"]
@@ -1897,6 +1901,7 @@ services:
     env_file:
       - ../../services/alert/configs/docker.env
     command: ["python", "-m", "alert.infrastructure.messaging.consumers.intelligence_consumer_main"]
+    expose: ["9100"]
     restart: on-failure
     healthcheck:
       test: ["CMD", "python", "-c", "import os; os.kill(1, 0)"]

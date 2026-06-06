@@ -17,7 +17,9 @@ Security notes:
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import hashlib
+import os
 import time
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
@@ -28,7 +30,7 @@ import httpx
 import jwt as pyjwt
 from sqlalchemy import text
 
-from observability import get_logger  # type: ignore[import-untyped]
+from observability import get_logger, start_metrics_server  # type: ignore[import-untyped]
 from portfolio.application.ports.brokerage_client import SnapTradeUser
 from portfolio.application.use_cases.record_transaction import RecordTransactionCommand, RecordTransactionUseCase
 from portfolio.application.use_cases.upsert_holdings_from_snapshot import (
@@ -671,6 +673,13 @@ async def main() -> None:
         json=settings.log_json,
     )
 
+    # Phase 3 worker-metrics rollout — expose Prometheus /metrics so the
+    # BROKERAGE_SYNC_* counters/gauges become scrape-able.
+    metrics_handle = start_metrics_server(
+        service_name="portfolio-brokerage-sync",
+        port=int(os.environ.get("METRICS_PORT", "9100")),
+    )
+
     # R-001: Build Fernet cipher so encrypted snaptrade_user_secret is decrypted.
     # Without this, when SNAPTRADE_SECRET_ENCRYPTION_KEY is set the worker passes
     # raw ciphertext to SnapTrade — causing all sync operations to fail silently.
@@ -692,7 +701,11 @@ async def main() -> None:
         settings=settings,
         cipher=cipher,
     )
-    await worker.run()
+    try:
+        await worker.run()
+    finally:
+        with contextlib.suppress(Exception):
+            await metrics_handle.aclose()
 
 
 if __name__ == "__main__":
