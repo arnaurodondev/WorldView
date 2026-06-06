@@ -38,6 +38,7 @@ from content_ingestion.infrastructure.db.repositories.prediction_market_fetch_lo
 from content_ingestion.infrastructure.db.repositories.task import TaskRepository
 from content_ingestion.infrastructure.db.session import _build_factories
 from content_ingestion.infrastructure.db.unit_of_work import SqlaUnitOfWork
+from content_ingestion.infrastructure.metrics.poller import _metrics_poller
 from content_ingestion.infrastructure.metrics.prometheus import record_fetch
 from content_ingestion.infrastructure.scheduler.scheduler import ADAPTER_REGISTRY
 from content_ingestion.infrastructure.storage.minio_bronze import MinioBronzeAdapter
@@ -132,6 +133,18 @@ class WorkerProcess:
                 lease_seconds=self._lease_seconds,
                 concurrency=self._settings.worker_concurrency,
             )
+
+            # Start the periodic gauge updater (outbox-pending + DLQ counts).
+            # WHY here (not app.py): R22 — background tasks live in the worker
+            # process, not the FastAPI lifespan. The poller silently swallows
+            # DB errors so a transient blip does not kill the worker loop.
+            metrics_task = asyncio.create_task(
+                _metrics_poller(
+                    self._write_factory,
+                    interval=self._settings.outbox_metrics_poll_seconds,
+                ),
+            )
+
             while not self._stop_event.is_set():
                 # WHY try/except here: an unhandled exception in _claim_batch or
                 # asyncio.gather would silently kill the worker loop — the container
@@ -154,6 +167,12 @@ class WorkerProcess:
                     await asyncio.sleep(5)
 
             logger.info("worker_stopped", worker_id=self._worker_id)
+
+            # Stop the gauge poller. We cancel + await it so any in-flight
+            # DB query gets a chance to unwind before the write-factory closes.
+            metrics_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError, Exception):
+                await metrics_task
 
         # Cleanup
         await self._valkey.close()

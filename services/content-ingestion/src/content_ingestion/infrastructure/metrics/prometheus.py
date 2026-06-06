@@ -46,3 +46,18 @@ def record_fetch(source: str, *, fetched: int, skipped: int, failed: int, durati
     if failed > 0:
         s4_fetches_total.labels(source=source, status="failed").inc(failed)
     s4_fetch_duration_seconds.labels(source=source).observe(duration)
+
+
+def record_fetch_attempt(source: str, status: str, duration: float) -> None:
+    """Record a single HTTP fetch attempt (per-call instrumentation).
+
+    Distinct from :func:`record_fetch` (cycle-level aggregate). This is fired
+    from inside the adapter clients (EODHD / NewsAPI / etc.) on each HTTP call.
+
+    Args:
+        source: Adapter identifier — e.g. ``"eodhd"``, ``"newsapi"``.
+        status: One of ``"success"``, ``"error"``, ``"rate_limited"``.
+        duration: Wall-clock seconds the HTTP call took.
+    """
+    s4_fetches_total.labels(source=source, status=status).inc()
+    s4_fetch_duration_seconds.labels(source=source).observe(duration)
