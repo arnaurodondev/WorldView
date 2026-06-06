@@ -17,6 +17,15 @@ COPY server.py .
 ARG GLINER_MODEL_PATH=urchade/gliner_large-v2.1
 ENV GLINER_MODEL_PATH=${GLINER_MODEL_PATH}
 
+# CI fix: actually pre-download the model into the image layer. The previous
+# version only declared the ARG but never ran the download — so the first
+# request at runtime had to fetch ~1.5 GB from HuggingFace, which on
+# resource-constrained CI runners can OOM-kill uvicorn (exit code 3) or hit
+# rate limits. Pre-fetching to the image (as root, before USER switch) puts
+# the weights into ``/root/.cache/huggingface`` baked into the layer.
+# We then copy them into appuser's cache so the runtime load is a no-op fetch.
+RUN python -c "from gliner import GLiNER; GLiNER.from_pretrained('${GLINER_MODEL_PATH}')"
+
 EXPOSE 8080
 
 HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
@@ -28,6 +37,7 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
 # a new empty volume, preserving permissions).
 RUN useradd --create-home --uid 1001 appuser && \
     mkdir -p /home/appuser/.cache/huggingface && \
+    cp -r /root/.cache/huggingface/* /home/appuser/.cache/huggingface/ 2>/dev/null || true && \
     chown -R appuser:appuser /home/appuser/.cache
 USER appuser
 

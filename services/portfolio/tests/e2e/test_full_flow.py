@@ -106,13 +106,16 @@ async def test_full_transaction_flow(e2e_client: AsyncClient, e2e_db_session: As
     )
     assert resp.status_code == 201, resp.text
 
-    # 5. GET holdings → quantity=10, avg_cost=150
+    # 5. GET holdings → endpoint returns a paginated envelope (F-011);
+    # post-BP-264 the RecordTransaction use case NO LONGER mutates holdings
+    # (snapshot-driven from broker positions instead), so this BUY does not
+    # create a row by itself. We only assert the envelope shape and that the
+    # endpoint succeeds — broker-snapshot ingestion is exercised in its own
+    # use-case test suite.
     resp = await e2e_client.get(f"/api/v1/holdings/{portfolio_id}", headers=common_headers)
     assert resp.status_code == 200, resp.text
-    holdings = resp.json()
-    assert len(holdings) == 1
-    assert holdings[0]["quantity"] == "10.00000000"
-    assert holdings[0]["average_cost"] == "150.00000000"
+    holdings_envelope = resp.json()
+    assert "items" in holdings_envelope and "total" in holdings_envelope, holdings_envelope
 
     # 6. SELL 5 shares @ $160
     resp = await e2e_client.post(
@@ -131,12 +134,12 @@ async def test_full_transaction_flow(e2e_client: AsyncClient, e2e_db_session: As
     )
     assert resp.status_code == 201, resp.text
 
-    # 7. GET holdings → quantity=5
+    # 7. GET holdings → still paginated envelope; see comment above for the
+    # BP-264 rationale (transactions no longer mutate holdings).
     resp = await e2e_client.get(f"/api/v1/holdings/{portfolio_id}", headers=common_headers)
     assert resp.status_code == 200, resp.text
-    holdings = resp.json()
-    assert len(holdings) == 1
-    assert holdings[0]["quantity"] == "5.00000000"
+    holdings_envelope = resp.json()
+    assert "items" in holdings_envelope and "total" in holdings_envelope, holdings_envelope
 
     # 8. GET transactions → paginated payload with 2 records
     resp = await e2e_client.get(
@@ -212,7 +215,15 @@ async def test_duplicate_portfolio_name_rejected(e2e_client: AsyncClient, e2e_db
 
 
 async def test_sell_exceeding_holdings_rejected(e2e_client: AsyncClient, e2e_db_session: AsyncSession) -> None:
-    """SELL more than held quantity returns 409 or 422 (InsufficientHoldingsError)."""
+    """SELL > holdings is now ACCEPTED (post-BP-264).
+
+    Pre-BP-264 the use case enforced ``Holding.apply_delta`` which raised
+    ``InsufficientHoldingsError``. PLAN-0046 made holdings snapshot-driven
+    from broker positions, so transactions are now history-only and do not
+    mutate holdings — therefore over-selling cannot be detected at record
+    time. The test is kept to lock in the new contract; it now asserts the
+    transaction is accepted (201).
+    """
     tenant_id, user_id = await _seed_tenant_and_user(e2e_db_session, email=f"sell-{uuid.uuid4().hex[:6]}@sellco.com")
     auth_jwt = make_e2e_jwt(tenant_id=tenant_id, user_id=user_id)
     resp = await e2e_client.post(
@@ -253,7 +264,8 @@ async def test_sell_exceeding_holdings_rejected(e2e_client: AsyncClient, e2e_db_
         },
         headers=headers,
     )
-    assert resp.status_code in (409, 422), f"Expected business rule rejection, got {resp.status_code}: {resp.text}"
+    # Post-BP-264: history-only transactions, no holdings validation here.
+    assert resp.status_code == 201, f"Expected 201 (history-only), got {resp.status_code}: {resp.text}"
 
 
 async def test_archive_portfolio(e2e_client: AsyncClient, e2e_db_session: AsyncSession) -> None:

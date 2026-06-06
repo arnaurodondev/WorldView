@@ -12,6 +12,7 @@ PRD-0025 §6.5 (InternalJWTMiddleware spec).
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import threading
 import time
 from typing import TYPE_CHECKING, Any, cast
@@ -87,6 +88,12 @@ class InternalJWTMiddleware(BaseHTTPMiddleware):
                     "This MUST NOT be used in production — any forged JWT will be accepted."
                 ),
             )
+            # Mirror portfolio service pattern: surface the skip flag on
+            # app.state so /readyz can distinguish "intentionally absent JWKS"
+            # (test/dev profile with no api-gateway) from "failed to fetch"
+            # (real config issue). Without this, readyz returns 503 degraded.
+            with contextlib.suppress(AttributeError):
+                app.state._internal_jwt_skip_verification = True
 
     async def startup(self) -> None:
         """Fetch JWKS from S9 at startup with up to 3 retries (3-second sleep between attempts)."""
