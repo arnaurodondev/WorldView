@@ -7,6 +7,8 @@ per R22 — see ``dispatcher_main.py`` and ``article_consumer_main.py`` under
 
 from __future__ import annotations
 
+import asyncio
+import contextlib
 import re
 from contextlib import asynccontextmanager
 from typing import TYPE_CHECKING
@@ -130,11 +132,27 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     if jwt_middleware is not None:
         await jwt_middleware.startup()
 
+    # 7. Background gauge updater — polls outbox / DLQ counts every 30 s so
+    # the Grafana content-pipeline panels for backlog depth keep refreshing.
+    # Uses the read-replica factory when available so the periodic COUNT(*)
+    # never contends with write traffic.
+    from content_store.infrastructure.metrics.gauge_updater import gauge_update_loop
+
+    gauge_task = asyncio.create_task(gauge_update_loop(read_factory))
+    app.state.gauge_task = gauge_task
+
     log.info("service_started", service=settings.service_name, port=settings.port)
 
     yield
 
-    # Graceful shutdown — dispose DB engine(s) and Valkey
+    # Graceful shutdown — cancel the gauge task before disposing engines,
+    # otherwise the in-flight query would race the engine teardown.
+    gauge_task.cancel()
+    # Both branches are intentional: CancelledError is the expected exit path,
+    # and any other exception during shutdown should not block engine disposal.
+    with contextlib.suppress(asyncio.CancelledError, Exception):
+        await gauge_task
+
     await engine.dispose()
     if read_engine is not engine:
         await read_engine.dispose()

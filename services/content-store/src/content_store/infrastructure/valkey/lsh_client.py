@@ -22,6 +22,7 @@ from content_store.domain.entities import (
     get_thresholds,
 )
 from content_store.domain.enums import DedupOutcome
+from content_store.infrastructure.metrics.prometheus import s5_minhash_lsh_candidates_total
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
@@ -178,6 +179,11 @@ class ValkeyLSHClient(LSHClientPort):
                         candidate_ids.add(str(m))
                 except Exception:
                     logger.warning("lsh_band_query_failed", band=band_idx, key=key)
+
+        # Record total candidates considered across all bands and source types.
+        # Counter is incremented in bulk to keep query() O(1) extra metric ops.
+        if candidate_ids:
+            s5_minhash_lsh_candidates_total.inc(len(candidate_ids))
 
         if not candidate_ids or fetch_signature is None:
             return DeduplicationDecision(outcome=DedupOutcome.UNIQUE, stage="stage_c")
