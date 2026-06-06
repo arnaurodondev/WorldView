@@ -729,6 +729,12 @@ services:
       minio:
         condition: service_healthy
     restart: unless-stopped
+    # PLAN-0028 worker-metrics phase 1: expose the /metrics + /healthz
+    # endpoint so Prometheus (and any in-network healthcheck) can scrape
+    # this background worker.  ``expose`` keeps the port unreachable from
+    # the host while making it routable inside the compose network.
+    expose:
+      - "9100"
     # Scale: docker compose up --scale content-ingestion-worker=3
     healthcheck:
       test: ["CMD", "python", "-c", "import os; os.kill(1, 0)"]

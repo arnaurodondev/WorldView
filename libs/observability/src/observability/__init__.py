@@ -11,6 +11,7 @@ from observability.metrics import (
     create_metrics,
     create_ml_metrics,
 )
+from observability.metrics_server import MetricsServerHandle, start_metrics_server
 from observability.sentry import SentrySettings, init_sentry
 from observability.startup_assert import assert_app_env_or_die
 from observability.tracing import add_otel_middleware, configure_tracing, get_tracer
@@ -19,6 +20,7 @@ __all__ = [
     "KAFKA_CONSUMER_MESSAGES",
     "InternalJWTMiddleware",
     "MLMetrics",
+    "MetricsServerHandle",
     "SentrySettings",
     "ServiceMetrics",
     "add_otel_middleware",
@@ -32,4 +34,5 @@ __all__ = [
     "get_tracer",
     "init_sentry",
     "register_error_handlers",
+    "start_metrics_server",
 ]

@@ -40,6 +40,15 @@ scrape_configs:
       - targets: ["content-store:8005"]
     metrics_path: /metrics
 
+  # PLAN-0028 worker-metrics rollout phase 1 — pilot worker scrape.
+  # The content-ingestion-worker exposes the shared start_metrics_server
+  # ASGI app on :9100 (no host port, only compose-network reachable).
+  - job_name: "content-ingestion-worker"
+    static_configs:
+      - targets: ["content-ingestion-worker:9100"]
+    metrics_path: /metrics
+    scrape_interval: 15s
+
   - job_name: "api-gateway"
     static_configs:
       - targets: ["api-gateway:8000"]
