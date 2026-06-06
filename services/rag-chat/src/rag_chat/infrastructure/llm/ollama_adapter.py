@@ -22,6 +22,7 @@ if TYPE_CHECKING:
     from tools.types import LLMToolResponse  # type: ignore[import-untyped]
 
     from observability.metrics import MLMetrics  # type: ignore[import-untyped]
+    from rag_chat.application.ports.cost_recorder import CostRecorder
 import structlog
 
 log = structlog.get_logger(__name__)  # type: ignore[no-any-return]
@@ -47,9 +48,11 @@ class OllamaCompletionAdapter:
         http_client: httpx.AsyncClient | None = None,
         timeout: float = 60.0,
         metrics: MLMetrics | None = None,
+        cost_recorder: CostRecorder | None = None,
     ) -> None:
         self._base_url = base_url.rstrip("/")
         self._model = model
+        self.model_id: str = model  # match DeepInfra/OpenRouter — cost code reads model_id
         self._timeout = timeout
         self._client = http_client or httpx.AsyncClient(timeout=timeout)
         # Optional MLMetrics — Ollama doesn't currently surface chat_with_tools
@@ -57,6 +60,11 @@ class OllamaCompletionAdapter:
         # tick unless stream-level instrumentation is added in future.  Stored
         # eagerly so a later patch can flip the switch without re-touching app.py.
         self._metrics = metrics
+        # PLAN-0107 Agent-B: optional CostRecorder. Ollama is local + free so
+        # MODEL_PRICING returns Decimal(0) — but recording still bumps the
+        # llm_usage_log row + threads.estimated_cost_usd (no-op delta) so the
+        # full per-call audit trail remains uniform across providers.
+        self._cost_recorder = cost_recorder
 
     async def stream(
         self,
@@ -72,6 +80,13 @@ class OllamaCompletionAdapter:
             "stream": True,
             "options": {"num_predict": max_tokens, "temperature": temperature},
         }
+        # Ollama returns prompt_eval_count + eval_count on the final chunk
+        # where done=true. We capture them and emit a cost.record() AFTER the
+        # stream completes — Ollama is the local fallback so cost is $0 in the
+        # pricing matrix, but we still want call_site visibility (helps spot
+        # whether the chain is falling through to the local model unexpectedly).
+        usage_tokens_in = 0
+        usage_tokens_out = 0
         async with self._client.stream(
             "POST",
             f"{self._base_url}/api/chat",
@@ -87,9 +102,34 @@ class OllamaCompletionAdapter:
                     if content:
                         yield content
                     if chunk.get("done", False):
+                        # Capture usage off the final frame for the cost emit below.
+                        usage_tokens_in = int(chunk.get("prompt_eval_count", 0) or 0)
+                        usage_tokens_out = int(chunk.get("eval_count", 0) or 0)
                         break
                 except (json.JSONDecodeError, KeyError):
                     continue
+        # Emit cost AFTER the response body closes; this only runs when the
+        # generator was consumed to completion (caller break-out skips it,
+        # which is fine — record() is an observability hint, not load-bearing).
+        await self._record_cost(tokens_in=usage_tokens_in, tokens_out=usage_tokens_out)
+
+    async def _record_cost(self, *, tokens_in: int, tokens_out: int) -> None:
+        """Best-effort cost emit; defence-in-depth no-op on errors."""
+        if self._cost_recorder is None:
+            return
+        try:
+            await self._cost_recorder.record(
+                # Ollama callers are background workers (intent fallback, judge
+                # fallback) — thread_id=None matches the semantics. If we ever
+                # invoke Ollama from a user chat path, plumb thread_id through.
+                thread_id=None,
+                model_id=self._model,
+                tokens_in=tokens_in,
+                tokens_out=tokens_out,
+                call_site="ollama_stream",
+            )
+        except Exception as exc:  # pragma: no cover — defensive
+            log.debug("cost_record_failed", call_site="ollama_stream", error=str(exc))  # type: ignore[no-any-return]
 
     # ------------------------------------------------------------------
     # Structured chat / function calling — NOT SUPPORTED (W11-1)

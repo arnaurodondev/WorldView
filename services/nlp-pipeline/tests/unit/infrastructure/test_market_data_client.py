@@ -247,15 +247,12 @@ class TestMarketDataClientInternalJWT:
     @pytest.mark.asyncio
     async def test_falls_back_to_no_header_when_gateway_unreachable(self, httpx_mock: pytest_httpx.HTTPXMock) -> None:
         """If dev-login fails, fall back to unauthenticated request (preserve 401-and-warn)."""
-        # Two 503 mocks: _get_internal_jwt is called once before ticker-resolve
-        # and once before OHLCV fetch; each failed mint leaves _token=None so the
-        # cache is not populated and both calls hit the endpoint.
-        httpx_mock.add_response(
-            method="POST",
-            url="http://api-gateway:8000/v1/auth/dev-login",
-            status_code=503,
-            text="gateway down",
-        )
+        # _get_internal_jwt is called once before ticker-resolve and once before
+        # OHLCV fetch; each invocation now retries up to len(_TOKEN_MINT_RETRY_DELAYS)
+        # times (4 attempts) before falling back to no header. pytest_httpx 0.30
+        # reuses the LAST registered matcher once all earlier ones are consumed,
+        # so a single 503 registration covers every retry attempt across both
+        # _get_internal_jwt invocations.
         httpx_mock.add_response(
             method="POST",
             url="http://api-gateway:8000/v1/auth/dev-login",

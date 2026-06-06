@@ -20,7 +20,6 @@ if TYPE_CHECKING:
     from uuid import UUID
 
     from observability.metrics import MLMetrics  # type: ignore[import-untyped]
-
     from rag_chat.application.ports.cost_recorder import CostRecorder
 import structlog
 from tools.types import LLMToolResponse, ToolUseBlock  # type: ignore[import-untyped]
@@ -477,6 +476,7 @@ class DeepInfraCompletionAdapter:
         *,
         max_tokens: int = 1024,
         temperature: float = 0.2,
+        thread_id: UUID | None = None,
     ) -> AsyncIterator[str]:
         """Stream the final answer turn from an OpenAI-format messages list.
 
@@ -505,6 +505,10 @@ class DeepInfraCompletionAdapter:
         as the primary stream completes (one extra event-loop tick).
         """
         primary_chunks: list[str] = []
+        # PLAN-0107 Agent-B: usage sink fed by the final SSE chunk. Empty dict
+        # = "stream completed without a usage frame" (still triggers a record()
+        # call with zeros so the call_site is observable).
+        primary_usage: dict = {}
         # PLAN-0104 W46: track whether the primary failed mid-setup (e.g. 429
         # on raise_for_status) vs completed empty (zero-chunk).  Both paths
         # now feed the same in-adapter fallback so the orchestrator never sees
@@ -516,6 +520,7 @@ class DeepInfraCompletionAdapter:
                 model=self._model,
                 max_tokens=max_tokens,
                 temperature=temperature,
+                usage_sink=primary_usage,
             ):
                 primary_chunks.append(chunk)
         except Exception as exc:
@@ -527,6 +532,15 @@ class DeepInfraCompletionAdapter:
             # rewound on the wire (would emit duplicates to the client).
             for chunk in primary_chunks:
                 yield chunk
+            # PLAN-0107 Agent-B: stream successfully completed — record cost
+            # AFTER all chunks are yielded so a recorder hiccup never blocks
+            # the client from receiving tokens.
+            await self._record_cost(
+                thread_id=thread_id,
+                model_id=self._model,
+                usage=primary_usage or None,
+                call_site="synthesis",
+            )
             return
 
         fallback_model = self._stream_chat_fallback_model
@@ -552,13 +566,23 @@ class DeepInfraCompletionAdapter:
             reason=(type(_primary_exc).__name__ if _primary_exc is not None else "zero_chunk_primary"),
             error=(str(_primary_exc) or repr(_primary_exc)) if _primary_exc is not None else "",
         )
+        fallback_usage: dict = {}
         async for chunk in self._stream_chat_one_model(
             messages,
             model=fallback_model,
             max_tokens=max_tokens,
             temperature=temperature,
+            usage_sink=fallback_usage,
         ):
             yield chunk
+        # PLAN-0107 Agent-B: record cost on the fallback model (model_id MUST
+        # reflect the model that actually served the request).
+        await self._record_cost(
+            thread_id=thread_id,
+            model_id=fallback_model,
+            usage=fallback_usage or None,
+            call_site="synthesis",
+        )
 
     async def aclose(self) -> None:
         await self._client.aclose()

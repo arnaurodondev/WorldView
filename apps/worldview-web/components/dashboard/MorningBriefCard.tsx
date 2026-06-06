@@ -313,7 +313,11 @@ export function MorningBriefCard() {
     (brief.entity_mentions ?? []).reduce((acc, mention) => {
       if (!mention.name) return acc;
       const regex = new RegExp(`\\b${escapeRegex(mention.name)}\\b`, "g");
-      return acc.replace(regex, `[${mention.name}](/instruments/${mention.entity_id})`);
+      // PRD-0089 F2 §6.6: prefer ticker-first URLs (`/instruments/AAPL`) when
+      // the mention carries a ticker; fall back to the UUID form for entities
+      // without a ticker (e.g. private companies, macro topics).
+      const slug = (mention as { ticker?: string | null }).ticker ?? mention.entity_id;
+      return acc.replace(regex, `[${mention.name}](/instruments/${slug})`);
     }, text);
 
   // WHY two parallel pipelines: summary is the collapsed-view source and

@@ -17,6 +17,7 @@ Both fall back gracefully to fusion_score sort so the pipeline is never blocked.
 
 from __future__ import annotations
 
+import asyncio
 from typing import TYPE_CHECKING
 
 import httpx
@@ -25,6 +26,9 @@ import structlog
 from rag_chat.application.metrics.prometheus import rag_pipeline_stage_input_size
 
 if TYPE_CHECKING:
+    from uuid import UUID
+
+    from rag_chat.application.ports.cost_recorder import CostRecorder
     from rag_chat.domain.entities.chat import RetrievedItem
 
 log = structlog.get_logger(__name__)  # type: ignore[no-any-return]
@@ -141,13 +145,25 @@ class CohereReranker:
         *,
         http_client: httpx.AsyncClient | None = None,
         timeout: float = _COHERE_DEFAULT_TIMEOUT,
+        cost_recorder: CostRecorder | None = None,
     ) -> None:
         self._api_key = api_key
         self._model = model
         self._client = http_client or httpx.AsyncClient()
         self._timeout = timeout
+        # PLAN-0107 follow-up: per-call USD cost recorder. Cohere Rerank is
+        # billed per search (not per token) — the pricing matrix registers
+        # ``rerank-english-v3.0`` with ``per_call_usd=$0.002`` so callers
+        # can pass tokens_in=1 to signal a successful billable call.
+        self._cost_recorder = cost_recorder
 
-    async def rerank(self, query: str, items: list[RetrievedItem]) -> list[RetrievedItem]:
+    async def rerank(
+        self,
+        query: str,
+        items: list[RetrievedItem],
+        *,
+        thread_id: UUID | None = None,
+    ) -> list[RetrievedItem]:
         """Re-rank *items* by cross-encoder relevance against *query*.
 
         Returns at most 12 items sorted by cross-encoder score DESC.
@@ -177,6 +193,14 @@ class CohereReranker:
             response.raise_for_status()
             data = response.json()
 
+            # PLAN-0107 follow-up: emit per-call USD cost on success. Cohere
+            # bills flat $0.002 per search via the per_call_usd field —
+            # tokens_in=1 signals "successful billable call"; tokens_out=0
+            # (Cohere does not return token usage and reranker output is not
+            # token-billed). Done BEFORE result parsing so the cost is still
+            # recorded if downstream parse logic raises.
+            await self._emit_cost(thread_id=thread_id, tokens_in=1)
+
             # Cohere v2 response: {"results": [{"index": int, "relevance_score": float}, ...]}
             results: list[dict] = data.get("results", [])
             scored: list[tuple[int, float]] = [
@@ -200,6 +224,34 @@ class CohereReranker:
             )
             fallback = sorted(items, key=lambda x: x.fusion_score, reverse=True)
             return fallback[:_TOP_K]
+
+    async def _emit_cost(self, *, thread_id: UUID | None, tokens_in: int) -> None:
+        """Fire-and-forget per-call cost emit. Never raises.
+
+        WHY a helper: keeps the rerank() body readable and centralises the
+        try/except defence. We use ``asyncio.create_task`` rather than
+        awaiting so the rerank caller never blocks on the cost recorder's
+        DB round-trip. ``tokens_in=0`` means a failed call (per-call pricing
+        treats 0/0 tokens as a non-billable failure — see pricing.py).
+        """
+        if self._cost_recorder is None:
+            return
+        try:
+            asyncio.create_task(  # noqa: RUF006
+                self._cost_recorder.record(
+                    thread_id=thread_id,
+                    model_id=self._model,
+                    tokens_in=tokens_in,
+                    tokens_out=0,
+                    call_site="reranker",
+                )
+            )
+        except Exception as exc:  # pragma: no cover — defence in depth
+            log.warning(  # type: ignore[no-any-return]
+                "cohere_reranker_cost_recorder_failed",
+                model=self._model,
+                error=str(exc),
+            )
 
     async def aclose(self) -> None:
         """Close the underlying HTTP client."""

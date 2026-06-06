@@ -64,6 +64,17 @@ class ModelPricing:
     output_per_million: Decimal
     currency: str = "USD"
     notes: str = ""
+    # WHY ``per_call_usd`` (PLAN-0107 follow-up): some providers bill
+    # per-request rather than per-token — most notably Cohere Rerank, which
+    # charges per "search" (≈$2/1000 searches for v3 as of 2026-06). Modelling
+    # this as a token-equivalent (input_per_million=$2000 with tokens_in=1)
+    # works arithmetically but lies semantically and makes the matrix harder
+    # to read. When ``per_call_usd`` is set on an entry, ``compute_cost``
+    # ignores token counts entirely and returns this flat per-call value.
+    # ``None`` (default) preserves the original per-token math for every
+    # existing entry — zero behavioural change for previously-registered
+    # token-billed models.
+    per_call_usd: Decimal | None = None
 
     @classmethod
     def UNKNOWN(cls, model_id: str, *, notes: str = "") -> ModelPricing:  # noqa: N802 — sentinel constructor mirrors typing.Final convention
@@ -168,9 +179,18 @@ MODEL_PRICING: dict[str, ModelPricing] = {
     # Cohere Rerank v3 is billed per search (not per token); we model the
     # call_site for visibility but the cost is approximate — operators using
     # Cohere reranker should override this entry with their negotiated rate.
-    "rerank-english-v3.0": ModelPricing.UNKNOWN(
-        "rerank-english-v3.0",
-        notes="Cohere billed per-search not per-token; operator must override",
+    "rerank-english-v3.0": ModelPricing(
+        # Cohere Rerank v3.0 is billed PER SEARCH, not per token. Public list
+        # price as of 2026-06: $2.00 per 1000 searches → $0.002 per call.
+        # We model this via the ``per_call_usd`` field added in the same
+        # PLAN-0107 follow-up so the per-token columns can stay at 0 and
+        # callers can pass tokens_in=1/tokens_out=0 (or any value — they're
+        # ignored when per_call_usd is set).
+        model_id="rerank-english-v3.0",
+        input_per_million=Decimal("0"),
+        output_per_million=Decimal("0"),
+        per_call_usd=Decimal("0.002"),
+        notes="as of 2026-06; Cohere Rerank billed per-search ($2/1000)",
     ),
     # ── Common providers we may fall back to but have not priced ───────────
     # These are intentional UNKNOWNs so the matrix is *honest* about coverage
@@ -221,7 +241,11 @@ def compute_cost(model_id: str, tokens_in: int, tokens_out: int) -> Decimal:
 
     entry = MODEL_PRICING.get(model_id)
     # Treat both "not present" and "UNKNOWN sentinel" as the same case so
-    # operators get one warning shape regardless of which gap they hit.
+    # operators get one warning shape regardless of which gap they hit. The
+    # UNKNOWN sentinel uses negative per-token sentinels; the per-call branch
+    # has no sentinel state because operators either set the flat price or
+    # leave the entry as UNKNOWN. ``per_call_usd`` (when present) short-
+    # circuits below.
     if entry is None or entry.input_per_million < 0 or entry.output_per_million < 0:
         log.warning(  # type: ignore[no-any-return]
             "model_pricing_unknown",
@@ -232,6 +256,17 @@ def compute_cost(model_id: str, tokens_in: int, tokens_out: int) -> Decimal:
             hint="add an entry to libs/ml-clients/src/ml_clients/pricing.MODEL_PRICING",
         )
         return Decimal("0")
+
+    # Per-call billing short-circuit (Cohere Rerank, etc.). When an entry has
+    # ``per_call_usd`` set the provider charges a flat per-request rate and
+    # token counts are irrelevant — return the flat amount regardless of
+    # tokens_in/tokens_out. We still treat zero/negative token counts as a
+    # FAILED call (no cost charged) so a failed Cohere request doesn't bill —
+    # callers wire token_in=1 on success and token_in=0 on failure.
+    if entry.per_call_usd is not None:
+        if tokens_in == 0 and tokens_out == 0:
+            return Decimal("0")
+        return entry.per_call_usd
 
     # Cost = (tokens / 1,000,000) * price_per_million — use Decimal end-to-end
     # so the final per-thread aggregate is exact (no float-drift over many

@@ -19,11 +19,15 @@ import asyncio
 import json
 import os
 import re
+from typing import TYPE_CHECKING
 
 import structlog
 from prompts.chat.safety_classifier import INJECTION_SAFETY_CLASSIFIER
 
 from rag_chat.application.metrics.prometheus import rag_injection_classifier_indeterminate
+
+if TYPE_CHECKING:
+    from rag_chat.application.ports.cost_recorder import CostRecorder
 
 log = structlog.get_logger(__name__)  # type: ignore[no-any-return]
 
@@ -95,6 +99,8 @@ class LLMInjectionClassifier:
         api_key: str | None,
         model: str | None = None,
         base_url: str = _DEEPINFRA_BASE_URL,
+        *,
+        cost_recorder: CostRecorder | None = None,
     ) -> None:
         # WHY store raw string (not SecretStr): this class lives in the application
         # layer; SecretStr is a pydantic infrastructure concern. The caller
@@ -102,6 +108,10 @@ class LLMInjectionClassifier:
         self._api_key = api_key or ""
         self._model = model or os.environ.get("INJECTION_CLASSIFIER_MODEL", _DEFAULT_CLASSIFIER_MODEL)
         self._base_url = base_url.rstrip("/")
+        # PLAN-0107 follow-up: per-call USD cost recorder. Optional —
+        # ``None`` preserves the pre-PLAN-0107 behaviour (no cost emit).
+        # Production wiring in app.py injects ``app.state.cost_recorder``.
+        self._cost_recorder = cost_recorder
 
     async def classify(self, message: str) -> bool:
         """Classify *message* for injection risk.
@@ -211,6 +221,40 @@ class LLMInjectionClassifier:
             response.raise_for_status()
 
         data = response.json()
+
+        # PLAN-0107 follow-up: per-call USD cost emit. Done BEFORE any parse
+        # work so a downstream parse failure still records the API call we
+        # paid for. ``thread_id=None`` because the safety classifier runs
+        # before any thread context is bound (it gates the user message
+        # at the front door). Tokens are sourced from the DeepInfra usage
+        # block; defensive defaults of 0 cover the case where the provider
+        # omits the field (treated as a failed billable call → $0).
+        if self._cost_recorder is not None:
+            try:
+                _usage = data.get("usage") or {}
+                _tokens_in = int(_usage.get("prompt_tokens", 0) or 0)
+                _tokens_out = int(_usage.get("completion_tokens", 0) or 0)
+                # Fire-and-forget — schedule on the running loop so we don't
+                # block the safety verdict on a DB round-trip. The recorder
+                # itself never raises (production impl is defensive), but we
+                # still wrap create_task in try/except as a second guard
+                # against synchronous construction errors.
+                asyncio.create_task(  # noqa: RUF006
+                    self._cost_recorder.record(
+                        thread_id=None,
+                        model_id=self._model,
+                        tokens_in=_tokens_in,
+                        tokens_out=_tokens_out,
+                        call_site="safety_classifier",
+                    )
+                )
+            except Exception as exc:  # pragma: no cover — defence in depth
+                log.warning(  # type: ignore[no-any-return]
+                    "safety_classifier_cost_recorder_failed",
+                    model=self._model,
+                    error=str(exc),
+                )
+
         message_obj = data["choices"][0]["message"]
         content = message_obj.get("content") or ""
 

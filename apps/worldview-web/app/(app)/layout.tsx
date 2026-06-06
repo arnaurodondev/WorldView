@@ -280,6 +280,15 @@ export default function AppLayout({ children }: AppLayoutProps) {
       <ForceUpdateBanner />
 
       <WorkspaceProvider>
+        {/* PRD-0089 W1 §4.11 / C-27: skip-to-content link is the first focusable
+            child of AppLayout. Sighted users never see it (sr-only) until keyboard
+            focus reveals it. Anchor target is <main id="main"> below. */}
+        <a
+          href="#main"
+          className="sr-only focus:not-sr-only focus:fixed focus:left-2 focus:top-2 focus:z-[10000] focus:rounded-[2px] focus:bg-primary focus:px-3 focus:py-1.5 focus:text-primary-foreground focus:outline-none focus:ring-2 focus:ring-primary focus:ring-offset-2"
+        >
+          Skip to main content
+        </a>
         {/* WHY flex flex-col h-screen: pins the layout to viewport height so the
          * main content area scrolls independently without moving the TopBar/Sidebar */}
         <div className="flex h-screen flex-col bg-background">
@@ -311,7 +320,9 @@ export default function AppLayout({ children }: AppLayoutProps) {
           {/* Main content area — fills remaining width, scrolls vertically */}
           {/* WHY overflow-y-auto not overflow-auto: prevent horizontal scroll on
            * the main content area (horizontal scroll should be per-panel, not global) */}
-          <main className="flex-1 overflow-y-auto">
+          {/* PRD-0089 W1 §4.11 / C-27: id="main" is the skip-link target — must
+              match the href in the skip-to-content anchor mounted below. */}
+          <main id="main" className="flex-1 overflow-y-auto">
             {children}
           </main>
         </div>

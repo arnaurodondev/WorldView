@@ -42,7 +42,12 @@ vi.mock("@/hooks/useAuth", () => ({
 // for seeded alerts). Tests must mock the same method the component actually calls.
 const mockGetAlertHistory = vi.fn();
 vi.mock("@/lib/gateway", () => ({
-  createGateway: vi.fn(() => ({ getAlertHistory: mockGetAlertHistory })),
+  // RecentAlerts calls getPendingAlerts; alias to the same mock so existing
+  // mockResolvedValueOnce setups continue to drive the test.
+  createGateway: vi.fn(() => ({
+    getAlertHistory: mockGetAlertHistory,
+    getPendingAlerts: mockGetAlertHistory,
+  })),
 }));
 
 import { RecentAlerts } from "@/components/dashboard/RecentAlerts";

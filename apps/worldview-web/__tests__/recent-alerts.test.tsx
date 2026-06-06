@@ -52,7 +52,12 @@ vi.mock("@/hooks/useAuth", () => ({
 // empty for seeded/acknowledged alerts. Tests must mirror what the component calls.
 const mockGetAlertHistory = vi.fn();
 vi.mock("@/lib/gateway", () => ({
-  createGateway: vi.fn(() => ({ getAlertHistory: mockGetAlertHistory })),
+  // RecentAlerts calls getPendingAlerts; alias to the same mock so existing
+  // mockResolvedValueOnce setups continue to drive the test.
+  createGateway: vi.fn(() => ({
+    getAlertHistory: mockGetAlertHistory,
+    getPendingAlerts: mockGetAlertHistory,
+  })),
 }));
 
 import { RecentAlerts } from "@/components/dashboard/RecentAlerts";

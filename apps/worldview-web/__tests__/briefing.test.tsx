@@ -154,6 +154,11 @@ describe("MorningBriefCard", () => {
     gw.createGateway = () => ({
       getMorningBrief: async () => ({
         ...mockBriefResponse,
+        // PLAN-0103 W3 (BP-624): the v4.2 contract was renamed from
+        // `summary_paragraph` to `summary` to match BriefingResponse — the
+        // component reads `brief.summary`. Provide both for forward-compat.
+        summary:
+          "Tech-heavy portfolio benefits from sustained AI infrastructure rally.",
         summary_paragraph:
           "Tech-heavy portfolio benefits from sustained AI infrastructure rally.",
       }),

@@ -95,6 +95,45 @@ def test_model_pricing_is_frozen() -> None:
 
 
 @pytest.mark.unit
+def test_compute_cost_per_call_pricing_ignores_token_counts() -> None:
+    """Per-call billed models (Cohere Rerank) return flat per_call_usd.
+
+    PLAN-0107 follow-up: ``rerank-english-v3.0`` is the canonical per-call
+    entry. Cost MUST be the flat per_call_usd (Decimal("0.002")) regardless
+    of how many "tokens" the caller passes — token columns are ignored.
+    """
+    # Any non-zero tokens_in trips the "successful call" branch — value is
+    # always the flat per_call_usd amount.
+    result_1 = compute_cost("rerank-english-v3.0", 1, 0)
+    result_2 = compute_cost("rerank-english-v3.0", 9999, 9999)
+    assert result_1 == Decimal("0.002")
+    assert result_2 == Decimal("0.002")
+
+
+@pytest.mark.unit
+def test_compute_cost_per_call_pricing_zero_tokens_is_failed_call() -> None:
+    """Failed per-call requests (tokens_in == 0 AND tokens_out == 0) cost 0.
+
+    Callers signal a failed Cohere request by passing tokens_in=0 — we
+    must NOT charge them the flat fee. This mirrors the per-token path
+    where 0 tokens = 0 cost.
+    """
+    assert compute_cost("rerank-english-v3.0", 0, 0) == Decimal("0")
+
+
+@pytest.mark.unit
+def test_compute_cost_token_billed_models_unchanged_by_per_call_field() -> None:
+    """Adding ``per_call_usd`` to the dataclass must not affect existing entries.
+
+    The existing per-token Llama-8B entry has ``per_call_usd=None`` so the
+    original (tokens/1M)*price math still applies — guardrail against
+    accidental regression from the dataclass extension.
+    """
+    # Same expectation as the historical ``test_compute_cost_known_model``.
+    assert compute_cost("meta-llama/Meta-Llama-3.1-8B-Instruct", 1_000_000, 1_000_000) == Decimal("0.110")
+
+
+@pytest.mark.unit
 def test_unknown_constructor_marks_entry_with_negative_sentinel() -> None:
     """``ModelPricing.UNKNOWN`` produces a recognisable sentinel."""
     sentinel = ModelPricing.UNKNOWN("some-model", notes="testing")

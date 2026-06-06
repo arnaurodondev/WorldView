@@ -25,6 +25,7 @@ from prompts.classification.intent import INTENT_CLASSIFICATION
 from rag_chat.domain.enums import QueryIntent
 
 if TYPE_CHECKING:
+    from rag_chat.application.ports.cost_recorder import CostRecorder
     from rag_chat.domain.entities.chat import ResolvedEntity
 
 
@@ -215,12 +216,21 @@ class OllamaIntentClassifier:
         *,
         http_client: httpx.AsyncClient | None = None,
         usage_logger: _UsageLogProtocol | None = None,
+        cost_recorder: CostRecorder | None = None,
     ) -> None:
         self._ollama_url = ollama_base_url.rstrip("/")
         self._model = model
         self._client = http_client or httpx.AsyncClient()
         self._fallback = KeywordHeuristicClassifier()
         self._usage_logger = usage_logger
+        # PLAN-0107 follow-up: per-call USD cost recorder. Coexists with the
+        # ``usage_logger`` above — different responsibilities. The usage_logger
+        # writes to ``llm_usage_log`` with cost=0 (legacy DB audit); the cost
+        # recorder writes the SAME table with real Decimal cost + bumps the
+        # Prometheus counter that powers Grafana panel id=6. Both are kept so
+        # the schema-shape of legacy log rows is preserved while the new path
+        # populates the cost column for the first time.
+        self._cost_recorder = cost_recorder
 
     async def classify(
         self,
@@ -292,6 +302,31 @@ class OllamaIntentClassifier:
                         error_code=error_code,
                     )
                 )
+            # PLAN-0107 follow-up: emit per-call USD cost. ``thread_id=None``
+            # because intent classification fires BEFORE the thread context is
+            # resolved in the orchestrator — per-conversation aggregation
+            # happens for tool_loop_iter / synthesis call sites instead.
+            # Defensive try/except: a recorder failure must NEVER prevent
+            # the classifier from returning a result (the recorder itself is
+            # also fire-and-forget, but the create_task wrapper is the second
+            # line of defence in case construction synchronously raises).
+            if self._cost_recorder is not None:
+                try:
+                    asyncio.create_task(  # noqa: RUF006
+                        self._cost_recorder.record(
+                            thread_id=None,
+                            model_id=self._model,
+                            tokens_in=tokens_in,
+                            tokens_out=tokens_out,
+                            call_site="intent_classifier",
+                        )
+                    )
+                except Exception as exc:  # pragma: no cover — defence in depth
+                    log.warning(  # type: ignore[no-any-return]
+                        "intent_classifier_cost_recorder_failed",
+                        model=self._model,
+                        error=str(exc),
+                    )
 
 
 # ── DeepInfra-backed classifier ───────────────────────────────────────────────
@@ -326,6 +361,7 @@ class DeepInfraIntentClassifier:
         http_client: httpx.AsyncClient | None = None,
         timeout: float = 10.0,
         usage_logger: _UsageLogProtocol | None = None,
+        cost_recorder: CostRecorder | None = None,
     ) -> None:
         self._api_key = api_key
         self._model = model
@@ -333,6 +369,9 @@ class DeepInfraIntentClassifier:
         self._timeout = timeout
         self._fallback = KeywordHeuristicClassifier()
         self._usage_logger = usage_logger
+        # PLAN-0107 follow-up: see OllamaIntentClassifier — same dual-write
+        # design. cost_recorder=None preserves the pre-PLAN-0107 behaviour.
+        self._cost_recorder = cost_recorder
 
     async def classify(
         self,
@@ -419,6 +458,27 @@ class DeepInfraIntentClassifier:
                         error_code=error_code,
                     )
                 )
+            # PLAN-0107 follow-up: per-call USD cost. thread_id=None — same
+            # reasoning as the Ollama classifier (classification fires before
+            # the orchestrator binds the thread). Fire-and-forget via
+            # create_task so the classifier returns immediately.
+            if self._cost_recorder is not None:
+                try:
+                    asyncio.create_task(  # noqa: RUF006
+                        self._cost_recorder.record(
+                            thread_id=None,
+                            model_id=self._model,
+                            tokens_in=tokens_in,
+                            tokens_out=tokens_out,
+                            call_site="intent_classifier",
+                        )
+                    )
+                except Exception as exc:  # pragma: no cover — defence in depth
+                    log.warning(  # type: ignore[no-any-return]
+                        "intent_classifier_cost_recorder_failed",
+                        model=self._model,
+                        error=str(exc),
+                    )
 
 
 # ── Response parser ────────────────────────────────────────────────────────────

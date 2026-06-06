@@ -233,6 +233,16 @@ def _wire_orchestrator(app: FastAPI, settings: RagChatSettings, valkey_client: V
     _cohere_api_key = settings.cohere_api_key.get_secret_value() if settings.cohere_api_key else None
     _jina_api_key = settings.jina_api_key.get_secret_value() if settings.jina_api_key else None
 
+    # PLAN-0107 Agent-B + fix-up: instantiate the shared CostRecorder once and
+    # inject it into every LLM adapter. The recorder is fault-tolerant by
+    # construction (record() never raises) so a single instance is safe to
+    # share across adapters + the citation judge.
+    from rag_chat.infrastructure.llm.cost_recorder import PrometheusAndDbCostRecorder
+
+    # Use app.state.write_factory — set during the DB-init lifespan step above.
+    cost_recorder = PrometheusAndDbCostRecorder(write_session_factory=app.state.write_factory)
+    app.state.cost_recorder = cost_recorder
+
     providers: list[Any] = []
     if _deepinfra_api_key:
         from rag_chat.infrastructure.llm.deepinfra_adapter import DeepInfraCompletionAdapter
@@ -253,6 +263,7 @@ def _wire_orchestrator(app: FastAPI, settings: RagChatSettings, valkey_client: V
                 # rag-chat-ml-metrics: feed chat_with_tools latency/requests/
                 # status into ``rag_chat_ml_api_*`` so the Grafana panels light up.
                 metrics=ml_metrics,
+                cost_recorder=cost_recorder,  # PLAN-0107: per-call USD cost
             )
         )
     if _openrouter_api_key:
@@ -263,6 +274,7 @@ def _wire_orchestrator(app: FastAPI, settings: RagChatSettings, valkey_client: V
                 api_key=_openrouter_api_key,
                 model=settings.openrouter_completion_model,  # RAG_CHAT_OPENROUTER_COMPLETION_MODEL
                 metrics=ml_metrics,  # rag-chat-ml-metrics: dashboard wiring
+                cost_recorder=cost_recorder,  # PLAN-0107: per-call USD cost
             )
         )
     # Ollama is always the emergency fallback
@@ -271,6 +283,7 @@ def _wire_orchestrator(app: FastAPI, settings: RagChatSettings, valkey_client: V
             base_url=settings.ollama_base_url,
             model=settings.ollama_completion_model,
             metrics=ml_metrics,  # rag-chat-ml-metrics: dashboard wiring
+            cost_recorder=cost_recorder,  # PLAN-0107: per-call USD cost (≈$0 for local)
         )
     )
 
@@ -785,6 +798,9 @@ def _wire_citation_cron(
         provider_client,
         timeout_s=settings.citation_call_timeout_s,
         metrics=_judge_metrics,
+        # PLAN-0107 follow-up: route judge calls through the shared CostRecorder.
+        # call_site label = "citation_judge"; thread_id=None (batch cron job).
+        cost_recorder=app.state.cost_recorder,
     )
 
     # R23: message repository uses read_factory (read-only session).
