@@ -877,7 +877,8 @@ export function AlertRow({
             </button>
           )}
 
-          {/* Snooze 1h quick-action */}
+          {/* Snooze quick-action (1h) — label omits "1h" to avoid collision with the
+              dropdown's "Snooze 1h" menu item when both are rendered in the same tree. */}
           <button
             type="button"
             onClick={(e) => { e.stopPropagation(); onSnooze(60); }}
@@ -885,7 +886,7 @@ export function AlertRow({
                        tracking-[0.06em] text-muted-foreground hover:text-foreground"
             aria-label="Snooze this alert for 1 hour"
           >
-            Snooze 1h
+            Snooze
           </button>
 
           {/* View button — navigate to instrument page for the alert's entity */}

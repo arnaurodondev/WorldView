@@ -143,14 +143,14 @@ describe.skip("Instrument page loading skeleton — 9-section layout (T-F-6-12)"
     // WHY dynamic import: the instrument page uses useParams (Next.js hook) which
     // requires the next/navigation mock to be active before the module is imported.
     const { default: InstrumentDetailPage } = await import(
-      "@/app/(app)/instruments/[entityId]/page"
+      "@/app/(app)/instruments/[ticker]/page"
     );
 
     // PLAN-0090: page.tsx is now a server component awaiting params; pass a
     // type-satisfying stub. The describe block is .skip()-ed so this never
     // runs — the assignment exists only to keep `tsc --noEmit` happy until
     // Wave E removes the whole block.
-    const params = Promise.resolve({ entityId: "ins-001" });
+    const params = Promise.resolve({ ticker: "AAPL" });
     const { container } = render(<InstrumentDetailPage params={params} />, { wrapper: makeWrapper() });
 
     // WHY count bg-muted elements: after T-D-4-01, Skeleton renders with static
@@ -166,14 +166,14 @@ describe.skip("Instrument page loading skeleton — 9-section layout (T-F-6-12)"
     // section rows (grid grid-cols-2 gap-2). Its presence confirms the layout was
     // updated from the simple stack (3 Skeletons) to the 9-section version.
     const { default: InstrumentDetailPage } = await import(
-      "@/app/(app)/instruments/[entityId]/page"
+      "@/app/(app)/instruments/[ticker]/page"
     );
 
     // PLAN-0090: page.tsx is now a server component awaiting params; pass a
     // type-satisfying stub. The describe block is .skip()-ed so this never
     // runs — the assignment exists only to keep `tsc --noEmit` happy until
     // Wave E removes the whole block.
-    const params = Promise.resolve({ entityId: "ins-001" });
+    const params = Promise.resolve({ ticker: "AAPL" });
     const { container } = render(<InstrumentDetailPage params={params} />, { wrapper: makeWrapper() });
 
     // WHY .grid: the new skeleton has a grid-cols-2 container for the section rows.
@@ -186,14 +186,14 @@ describe.skip("Instrument page loading skeleton — 9-section layout (T-F-6-12)"
     // WHY col-span-2: the Balance Sheet / 52-Week Range section in the skeleton
     // spans both columns. Its presence confirms the 9th section was added.
     const { default: InstrumentDetailPage } = await import(
-      "@/app/(app)/instruments/[entityId]/page"
+      "@/app/(app)/instruments/[ticker]/page"
     );
 
     // PLAN-0090: page.tsx is now a server component awaiting params; pass a
     // type-satisfying stub. The describe block is .skip()-ed so this never
     // runs — the assignment exists only to keep `tsc --noEmit` happy until
     // Wave E removes the whole block.
-    const params = Promise.resolve({ entityId: "ins-001" });
+    const params = Promise.resolve({ ticker: "AAPL" });
     const { container } = render(<InstrumentDetailPage params={params} />, { wrapper: makeWrapper() });
 
     // WHY querySelectorAll: there may be multiple col-span-2 elements (chart, grid section)
