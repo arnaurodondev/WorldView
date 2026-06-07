@@ -89,8 +89,31 @@ export function DashboardBundleHydrator() {
     // Portfolios list — PortfolioSummary widget reads qk.portfolios.list()
     // (PortfolioSummary.tsx:58). Hydrating this lets the portfolio widget
     // skip the initial /v1/portfolios round-trip on cold start.
+    //
+    // WHY transform: the bundle leg calls S1 via the S9 proxy, which returns the
+    // raw paginated envelope {items: [{id, ...}], total, limit, offset}. But
+    // getPortfolios() (lib/api/portfolios.ts) transforms that into Portfolio[]
+    // (renaming `id` → `portfolio_id` and mapping fields). We must apply the same
+    // transform here so the seeded cache is structurally identical to what the
+    // widget's own queryFn would produce — otherwise `.find()` fails on an object
+    // instead of an array ("Y.find is not a function" runtime error, PLAN-0099 W4).
     if (bundle.portfolios !== null) {
-      queryClient.setQueryData(qk.portfolios.list(), bundle.portfolios);
+      const raw = bundle.portfolios as { items?: Array<{
+        id: string; name: string; currency: string; owner_id: string;
+        created_at: string; kind?: "manual" | "brokerage" | "root";
+      }> } | null;
+      const portfolioList = (raw?.items ?? []).map((p) => ({
+        portfolio_id: p.id,
+        name: p.name,
+        currency: p.currency,
+        owner_id: p.owner_id,
+        created_at: p.created_at,
+        updated_at: p.created_at,
+        kind: p.kind,
+      }));
+      if (portfolioList.length > 0) {
+        queryClient.setQueryData(qk.portfolios.list(), portfolioList);
+      }
     }
 
     // workspace: reserved — no upstream endpoint exists yet, always null.

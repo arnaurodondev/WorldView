@@ -186,5 +186,31 @@ export function createSearchApi(t: string | undefined) {
         headers: t ? { Authorization: `Bearer ${t}` } : {},
       });
     },
+
+    /**
+     * resolveTickersBatch — batch-resolve ticker symbols → instrument_id in one request.
+     *
+     * WHY THIS EXISTS (PLAN-0099 W4 performance fix): MarketSnapshotWidget used to
+     * fire 9 parallel searchInstruments() calls to resolve QQQ/SPY/BTC/AAPL/…
+     * Each searchInstruments does ILIKE '%TICKER%' on S3 and takes 2-4s cold.
+     * This calls POST /v1/instruments/resolve-tickers which fans out to
+     * GET /api/v1/instruments/lookup?symbol=X (exact indexed match, ~20ms each)
+     * server-side via asyncio.gather, returning in one ~200ms round-trip.
+     *
+     * RESPONSE: `{ AAPL: "uuid" | null, MSFT: "uuid" | null, ... }`.
+     * null means the ticker wasn't found (not ingested or delisted).
+     */
+    async resolveTickersBatch(
+      tickers: string[],
+    ): Promise<Record<string, string | null>> {
+      return apiFetch<Record<string, string | null>>(
+        `/v1/instruments/resolve-tickers`,
+        {
+          token: t,
+          method: "POST",
+          body: { tickers },
+        },
+      );
+    },
   };
 }

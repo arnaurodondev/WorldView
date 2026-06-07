@@ -301,6 +301,50 @@ async def instruments_lookup(request: Request) -> Any:
     return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
 
 
+# ── Batch ticker → instrument_id resolve (PLAN-0099 W4) ─────────────────────
+
+
+class _TickerResolveBatchRequest(BaseModel):
+    tickers: list[str] = Field(..., min_length=1, max_length=30, description="Ticker symbols to resolve")
+
+
+@router.post("/instruments/resolve-tickers")
+async def resolve_tickers_batch(body: _TickerResolveBatchRequest, request: Request) -> Any:
+    """Batch-resolve ticker symbols → instrument_id in one round-trip.
+
+    WHY THIS EXISTS: MarketSnapshotWidget used to fire N parallel
+    GET /v1/search/instruments?q={ticker} requests (one per ticker) which
+    each take 2-4s on cold start because the search does an ILIKE '%AAPL%'
+    scan. This endpoint fans out to GET /api/v1/instruments/lookup?symbol=X
+    (exact indexed match, ~20ms) for each ticker concurrently and returns
+    a single {ticker: instrument_id | null} map. On a 9-ticker dashboard
+    snapshot this reduces 9 serial-start 2-4s calls to one ~200ms call.
+
+    Requires authentication. Returns null for tickers not found in S3.
+    """
+    if not getattr(request.state, "user", None):
+        raise HTTPException(status_code=401, detail="Authentication required")
+    headers = _auth_headers(request)
+    clients = _clients(request)
+
+    async def _resolve_one(ticker: str) -> tuple[str, str | None]:
+        try:
+            resp = await clients.market_data.get(
+                "/api/v1/instruments/lookup",
+                params={"symbol": ticker},
+                headers=headers,
+            )
+            if resp.status_code == 200:
+                data = resp.json()
+                return ticker, data.get("instrument_id") or data.get("id")
+            return ticker, None
+        except Exception:
+            return ticker, None
+
+    pairs = await asyncio.gather(*[_resolve_one(t) for t in body.tickers])
+    return dict(pairs)
+
+
 # ── Peers (W5-T-S9-01) ───────────────────────────────────────────────────────
 
 

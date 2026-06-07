@@ -81,29 +81,23 @@ export function MarketSnapshotWidget() {
 
   // ── Step 1: Resolve ticker → instrument_id via parallel searches ──────────
   // WHY useQuery with Promise.all: we search for all tickers in a single
-  // concurrent batch rather than serial queries. The query key includes all
-  // tickers so the result is cached as a unit.
+  // single batch round-trip rather than 9 parallel search calls. The query key
+  // includes all tickers so the result is cached as a unit.
+  // WHY resolveTickersBatch (not searchInstruments per ticker): searchInstruments
+  // does ILIKE '%AAPL%' on S3 which takes 2-4s cold per ticker. resolveTickersBatch
+  // calls GET /api/v1/instruments/lookup?symbol=X (exact indexed match, ~20ms) for
+  // each ticker in parallel server-side, returning in one ~200ms round-trip.
   // WHY staleTime 30min: instrument_ids are stable — no need to refetch often.
   const { data: instrumentMap, isLoading: idsLoading } = useQuery({
     queryKey: ["market-snapshot-ids", ...ALL_TICKERS],
-    queryFn: async () => {
-      const gw = createGateway(accessToken);
-      const results = await Promise.all(
-        ALL_TICKERS.map((ticker) =>
-          gw.searchInstruments(ticker, 1).then((resp) => ({
-            ticker,
-            // WHY first-result only: our seeded instruments have unique tickers.
-            // The first result from a single-ticker search is always the canonical match.
-            instrument_id: resp.results?.[0]?.instrument_id ?? null,
-          })),
+    queryFn: () =>
+      createGateway(accessToken)
+        .resolveTickersBatch(ALL_TICKERS)
+        .then((map) =>
+          Object.fromEntries(
+            Object.entries(map).filter(([, id]) => id !== null),
+          ) as Record<string, string>,
         ),
-      );
-      return Object.fromEntries(
-        results
-          .filter((r) => r.instrument_id !== null)
-          .map((r) => [r.ticker, r.instrument_id as string]),
-      ) as Record<string, string>;
-    },
     enabled: !!accessToken,
     staleTime: 30 * 60_000,
   });
