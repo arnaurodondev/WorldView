@@ -4,35 +4,36 @@
  * WHY THIS EXISTS (PRD-0088 §6.7 / PLAN-0090 T-B-04):
  *   The Instrument Detail redesign replaces the legacy `OverviewLayout` blob
  *   with a 3-tab structure (Quote / Financials / Intelligence). The Quote tab
- *   is the trader's first impression: chart on the left (60%), Finviz-density
- *   metrics table on the right (40%). This orchestrator owns ONLY the layout
+ *   is the trader's first impression: chart on the left (flex-1), fixed-width
+ *   metrics table on the right (380px). This orchestrator owns ONLY the layout
  *   wiring — no data fetching, no domain logic. Children own their own
  *   queries via TanStack Query (chart fetches OHLCV; MetricsTable uses
  *   `useMetricsTableData`).
+ *
+ * PLAN-0099 W4 LAYOUT CHANGE:
+ *   Old layout: flex-row, 60% chart / 40% metrics.
+ *   New layout: CSS grid 2-col [1fr 380px]:
+ *     - Left column: flex-col with chart (flex-1) + session strip (22px) +
+ *       2 placeholder strips (22px each) + CompanyAboutCard (110px) +
+ *       BottomTripleStrip (132px).
+ *     - Right column: 380px fixed, overflow-y-auto MetricsTable.
+ *   entityId is now active (underscore prefix removed) for cross-tab nav.
  *
  * WHY THE ORCHESTRATOR IS THIN:
  *   - Children are independently testable (chart, strip, metrics each have
  *     their own props/hooks).
  *   - Re-renders in one half cannot force a re-render of the other half
- *     (React reconciliation stops at the flex boundary because each child
+ *     (React reconciliation stops at the grid boundary because each child
  *     subscribes to its own query).
- *   - The 60/40 split is a single source of truth in this file — future
+ *   - The 380px right-rail width is a single source of truth here — future
  *     A/B experiments can flip widths without touching children.
  *
- * WHY SessionStatsStrip pulls O/H/L/V/VWAP from cache HERE (not inside the
- *   strip itself): the integrated `SessionStatsStrip` from T-B-01 is a pure
- *   display component (props-only, no `useQuery`). To honour PLAN-0090's
- *   "strip reads from cache" pattern WITHOUT duplicating its data contract,
- *   the orchestrator does the cache lookup and feeds the last-bar O/H/L/V
- *   in as props. The lookup uses `enabled: false` so we never trigger a
- *   network fetch — we only read whatever OHLCVChart has already cached
- *   under `qk.instruments.ohlcv(instrumentId, "1D")`.
- *
  * LINE LIMIT: orchestrator exemption per PRD §FR-7 — soft cap 200, hard cap
- *   300. Targeting < 200.
+ *   300. Targeting < 250.
  *
  * DESIGN REFERENCE: docs/specs/0088-instrument-detail-page-ground-up-redesign.md §6.7;
  *                   docs/plans/0090-instrument-detail-page-redesign-plan.md T-B-04.
+ *                   PLAN-0099 W4 layout spec.
  */
 
 "use client";
@@ -47,28 +48,26 @@ import { qk } from "@/lib/query/keys";
 import { OHLCVChart } from "@/components/instrument/chart/OHLCVChart";
 import { SessionStatsStrip } from "@/components/instrument/SessionStatsStrip";
 import { MetricsTable } from "@/components/instrument/quote/metrics/MetricsTable";
-import type { Fundamentals, OHLCVBar, OHLCVResponse, Quote } from "@/types/api";
+import { CompanyAboutCard } from "@/components/instrument/quote/about/CompanyAboutCard";
+import { BottomTripleStrip } from "@/components/instrument/quote/bottom/BottomTripleStrip";
+import type { Fundamentals, Instrument, OHLCVBar, OHLCVResponse, Quote, InstrumentPageBundle } from "@/types/api";
 
 // ── Props ────────────────────────────────────────────────────────────────────
 //
-// WHY these four props specifically:
-//   - `instrumentId`: the S3 instrument_id is the cache key shared by all
-//     four data sources (chart, snapshot, technicals, share-stats).
-//   - `entityId`: reserved for Wave D deep-links (e.g. "Open in Intelligence"
-//     CTA). Not used today; kept so the parent doesn't need a refactor when
-//     we wire the cross-tab navigation in PLAN-0090 Wave D.
-//   - `fundamentals` + `quote`: passed through from the page-bundle so
-//     MetricsTable can render the static rows (market cap, beta, etc.) on
-//     first paint without awaiting its own queries — those queries still
-//     fire to refresh the technicals / share-stats rows after mount.
-//   - `initialBars`: lets OHLCVChart show the last 30d 1D bars instantly on
-//     first paint (from the page-bundle seed), avoiding the chart skeleton
-//     flash for the common case.
+// WHY these props specifically:
+//   - `instrumentId`: S3 instrument_id — cache key for chart + metrics.
+//   - `entityId`: KG entity_id — now active (Wave D). Used for CompanyAboutCard
+//     and BottomTripleStrip so they can deep-link to the Intelligence tab.
+//   - `fundamentals`: static rows (market cap, beta, etc.) for MetricsTable.
+//   - `quote`: live quote snapshot for MetricsTable header row.
+//   - `initialBars`: seed bars for OHLCVChart first-paint (avoids skeleton flash).
+//   - `bundle`: the full page bundle — gives us top_news + overview.instrument
+//     for CompanyAboutCard and BottomTripleStrip with zero extra fetches.
 
 export interface QuoteTabProps {
   /** S3 instrument_id — shared cache key for chart + metrics. */
   readonly instrumentId: string;
-  /** KG entity_id — reserved for cross-tab deep-links (Wave D). */
+  /** KG entity_id — active in Wave D (cross-tab deep-links + about card). */
   readonly entityId: string;
   /** Page-bundle fundamentals header (null → MetricsTable renders "—" rows). */
   readonly fundamentals: Fundamentals | null;
@@ -76,6 +75,12 @@ export interface QuoteTabProps {
   readonly quote: Quote | null;
   /** Last 30d 1D bars from the page-bundle, used to skip the chart skeleton. */
   readonly initialBars?: OHLCVBar[];
+  /**
+   * Full page bundle — used to extract top_news (WhatsMovingStrip) and
+   * overview.instrument (CompanyAboutCard). Optional so existing tests that
+   * don't construct a full bundle still compile.
+   */
+  readonly bundle?: InstrumentPageBundle | null;
 }
 
 // ── Constants ────────────────────────────────────────────────────────────────
@@ -93,10 +98,11 @@ const STRIP_TIMEFRAME = "1D" as const;
 
 export function QuoteTab({
   instrumentId,
-  entityId: _entityId, // Reserved for Wave D; underscore-prefix avoids lint warn.
+  entityId,    // Wave D: underscore prefix removed — now actively used.
   fundamentals,
   quote,
   initialBars,
+  bundle,
 }: QuoteTabProps) {
   // ── Read last OHLCV bar from cache for SessionStatsStrip ───────────────
   // WHY `enabled: false`: we never want this hook to issue a network request.
@@ -133,50 +139,77 @@ export function QuoteTab({
     // `vwap` prop is optional, so leaving it off hides the column cleanly.
   };
 
+  // Instrument for CompanyAboutCard — extracted from bundle.overview.instrument.
+  // WHY separate from `fundamentals`: the Instrument type carries the profile
+  // fields (sector/industry/country/description) that the about card needs.
+  // The `fundamentals` prop carries financial metrics for MetricsTable, not profile.
+  const instrument: Instrument | null = bundle?.overview?.instrument ?? null;
+
+  // Top news for BottomTripleStrip/WhatsMovingStrip.
+  // WHY from bundle: the page-bundle already includes top_news (limit=5).
+  // No extra fetch needed — zero-cost data.
+  const topNews = bundle?.top_news ?? null;
+
   return (
-    // WHY `flex flex-row h-full overflow-hidden`:
-    //   - `h-full`: fill the tab content slot defined by InstrumentPageClient
-    //     (which sets `flex-1 min-h-0 overflow-hidden` on the tab container).
-    //   - `overflow-hidden`: each half owns its own scroll container; the
-    //     orchestrator must never scroll as a unit (would break sticky chart
-    //     and metrics independence).
-    //   - `flex-row`: explicit horizontal layout — even though `flex` defaults
-    //     to row, naming it makes the responsive intent obvious.
-    <div className="flex flex-row h-full overflow-hidden">
-      {/* ── LEFT: chart + session stats (60%) ─────────────────────────────
-       * WHY `flex-1 min-w-0`: `flex-1` gives the chart the remaining space
-       * after the metrics column claims its fixed 40%. `min-w-0` is critical
-       * — without it, flex children default to `min-width: auto` and the
-       * chart canvas would force the parent to overflow on narrow viewports.
-       *
-       * WHY `flex flex-col`: stacks the chart on top of the 22px session
-       * strip. The chart fills the remaining vertical space; the strip
-       * sits at the bottom at its fixed 22px height.
+    // WHY `grid grid-cols-[1fr_380px]`: 2-column CSS grid.
+    //   - Left column gets all remaining horizontal space (1fr).
+    //   - Right column is a fixed 380px — matches the MetricsTable's natural
+    //     density and prevents it from compressing on wide viewports.
+    // WHY `h-full overflow-hidden`: fills the tab pane and clips content;
+    //   each column owns its own scroll container so neither can scroll the page.
+    <div className="grid grid-cols-[1fr_380px] h-full overflow-hidden">
+
+      {/* ── LEFT column: chart stack ──────────────────────────────────────
+       * WHY `flex flex-col min-w-0 overflow-hidden`: stacks all left-column
+       * children vertically. `min-w-0` prevents the flex item from exceeding
+       * its grid cell on narrow viewports (flex items default to min-width:auto).
+       * `overflow-hidden` clips any child that extends past the column edge.
        */}
-      <div className="flex flex-col min-w-0 flex-1">
-        {/* Chart fills remaining vertical space inside the left column. */}
+      <div className="flex flex-col min-w-0 overflow-hidden">
+        {/* Chart: flex-1 so it fills all vertical space not claimed by the strips. */}
         <div className="flex-1 min-h-0 overflow-hidden">
           <OHLCVChart instrumentId={instrumentId} initialBars={initialBars} />
         </div>
-        {/* Session O/H/L/V strip below the chart — 22px tall, fixed. */}
+
+        {/* Session stats strip: 22px, shows today's O/H/L/V from chart cache. */}
         <SessionStatsStrip {...stripProps} />
+
+        {/* Multi-Period Returns placeholder: B-Q-3 backend endpoint pending.
+            WHY inline div (not extracted component): a placeholder this small
+            doesn't warrant its own file. Extracted once B-Q-3 lands. */}
+        <div className="h-[22px] flex items-center px-3 border-t border-border/30 text-[10px] text-muted-foreground/50 font-mono flex-shrink-0">
+          RETURNS · Backend endpoint pending (B-Q-3)
+        </div>
+
+        {/* Intraday Stats placeholder: B-Q-2 backend endpoint pending. */}
+        <div className="h-[22px] flex items-center px-3 border-t border-border/30 text-[10px] text-muted-foreground/50 font-mono flex-shrink-0">
+          INTRADAY STATS · Backend endpoint pending (B-Q-2)
+        </div>
+
+        {/* Company About card: sector/industry/HQ/description, 110px tall. */}
+        <div className="flex-shrink-0">
+          <CompanyAboutCard instrument={instrument} />
+        </div>
+
+        {/* Bottom triple strip: peers / price-levels / what's-moving, 132px tall. */}
+        <div className="flex-shrink-0">
+          <BottomTripleStrip
+            instrumentId={instrumentId}
+            entityId={entityId}
+            topNews={topNews}
+          />
+        </div>
       </div>
 
-      {/* ── RIGHT: metrics table (40%) ────────────────────────────────────
-       * WHY `w-[40%] flex-shrink-0`: exact 40% width per PRD-0088 §6.7. The
-       * `flex-shrink-0` guarantee prevents the column from being squeezed
-       * if the chart canvas asks for more space — the metrics column has
-       * the higher information density, so it must hold its width.
-       *
-       * WHY `border-l border-border`: subtle 1px vertical rule separates
-       * the two halves; matches the divider style used throughout the
-       * Bloomberg-density UI.
-       *
-       * WHY `overflow-y-auto`: the metrics table is taller than the viewport
-       * on smaller laptops — the right column owns its own scroll bar so
-       * the chart and strip stay locked while the user scrolls metrics.
+      {/* ── RIGHT column: 380px metrics rail ──────────────────────────────
+       * WHY `flex-shrink-0 border-l border-border overflow-y-auto`:
+       *   - `flex-shrink-0`: the grid cell is already fixed at 380px; the inner
+       *     div must not shrink further when content overflows.
+       *   - `border-l border-border`: 1px separator between chart and metrics.
+       *   - `overflow-y-auto`: metrics table exceeds viewport height on small
+       *     screens — the right column owns its scroll bar independently.
        */}
-      <div className="w-[40%] flex-shrink-0 border-l border-border overflow-y-auto">
+      <div className="flex-shrink-0 border-l border-border overflow-y-auto">
         <MetricsTable
           instrumentId={instrumentId}
           fundamentals={fundamentals}

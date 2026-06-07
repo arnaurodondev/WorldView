@@ -176,6 +176,37 @@ export const qk = {
     // name_ticker filter. Keeping it under instruments.* lets
     // `qc.invalidateQueries({ queryKey: qk.instruments.all })` cascade.
     browse: (query: string) => ["instruments-browse", query] as const,
+    // PLAN-0099 W4: Quote tab Wave D — new sub-resource keys for pending
+    // backend endpoints. Each nests under ["instruments","detail",id,...] so
+    // qk.instruments.detail(id) invalidation cascades to all of them.
+    // WHY separate keys (not merged into existing fundamentals/technicals):
+    //   peers, intradayStats, multiPeriodReturns, priceLevels are distinct
+    //   endpoints that will be added in separate backend waves. Naming them
+    //   separately prevents cache collisions with the existing endpoints.
+    peers: (instrumentId: string) =>
+      ["instruments", "detail", instrumentId, "peers"] as const,
+    intradayStats: (instrumentId: string) =>
+      ["instruments", "detail", instrumentId, "intraday-stats"] as const,
+    multiPeriodReturns: (instrumentId: string) =>
+      ["instruments", "detail", instrumentId, "multi-period-returns"] as const,
+    priceLevels: (instrumentId: string) =>
+      ["instruments", "detail", instrumentId, "price-levels"] as const,
+  },
+
+  // ── Knowledge Graph domain ────────────────────────────────────────────────
+  // WHY a separate top-level `kg` namespace (not nested under instruments.*):
+  // KG queries use entity_id (not instrument_id) as the key dimension.
+  // A financial_instrument entity in the KG has a different UUID than its
+  // S3 instrument_id. Keeping KG keys in their own namespace prevents
+  // confusion between the two ID spaces and allows targeted invalidation
+  // (e.g. after a KG enrichment job) without touching instrument-level caches.
+  kg: {
+    all: ["kg"] as const,
+    entityDetail: (id: string) => ["kg", "entity", id, "detail"] as const,
+    intelligence: (id: string) => ["kg", "entity", id, "intelligence"] as const,
+    paths: (id: string) => ["kg", "entity", id, "paths"] as const,
+    contradictions: (id: string) => ["kg", "entity", id, "contradictions"] as const,
+    narratives: (id: string) => ["kg", "entity", id, "narratives"] as const,
   },
 
   // ── Quotes (live prices) ─────────────────────────────────────────────────

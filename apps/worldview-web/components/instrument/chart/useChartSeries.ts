@@ -9,7 +9,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import type { IChartApi, ISeriesApi } from "lightweight-charts";
-import { createAllChartSeries } from "@/components/instrument/chart/createChartSeries";
+import { createAllChartSeries, PANE_HEIGHT_ENABLED, PANE_HEIGHT_DISABLED } from "@/components/instrument/chart/createChartSeries";
 
 /**
  * CoordinateConverter — minimal surface needed for price↔pixel mapping.
@@ -157,8 +157,10 @@ export function useChartSeries({
         });
 
         // Delegate all series creation to the factory — keeps this hook concise.
+        // WHY pass `indicators`: the factory needs to know which panes to show
+        // at height 80 vs height 0 on init (PLAN-0099 W4 lazy-pane fix).
         const handles = await createAllChartSeries(
-          chart, LineSeries, HistogramSeries, CandlestickSeries,
+          chart, LineSeries, HistogramSeries, CandlestickSeries, indicators,
         );
 
         // Assign all series handles to refs
@@ -299,29 +301,61 @@ export function useChartSeries({
   }, [data?.bars, isChartReady, onVolumeProfileBuckets]);
 
   // ── Visibility toggle effects ──────────────────────────────────────────────
+  //
+  // WHY pane height toggling alongside series visibility (PLAN-0099 W4):
+  // lightweight-charts v5 has no removePane() API — panes are permanent once
+  // created. Setting series `visible: false` hides the line but leaves the
+  // pane canvas (with its "0.00" axis label) visible. We also toggle the pane
+  // height between PANE_HEIGHT_ENABLED (80px) and PANE_HEIGHT_DISABLED (0px)
+  // so that disabled oscillator panes visually collapse to nothing.
+  //
+  // Each oscillator pane is at a fixed index: RSI=1, MACD=2, ATR=3, STOCH=4, OBV=5.
+  // We cast chart.panes()[N] as `any` because the IChartApi typings don't expose
+  // the pane-level setOptions() method (runtime-only extension in v5).
   useEffect(() => { volumeSeriesRef.current?.applyOptions({ visible: showVolume }); }, [showVolume]);
   useEffect(() => { ma50SeriesRef.current?.applyOptions({ visible: showMA50 }); }, [showMA50]);
   useEffect(() => { ma200SeriesRef.current?.applyOptions({ visible: showMA200 }); }, [showMA200]);
-  useEffect(() => { rsiPaneRef.current?.applyOptions({ visible: indicators.RSI.enabled }); }, [indicators.RSI.enabled]);
+  useEffect(() => {
+    const e = indicators.RSI.enabled;
+    rsiPaneRef.current?.applyOptions({ visible: e });
+    // Collapse / expand the RSI pane so it doesn't show "0.00" when hidden.
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (chartRef.current?.panes?.()[1] as any)?.setOptions?.({ height: e ? PANE_HEIGHT_ENABLED : PANE_HEIGHT_DISABLED });
+  }, [indicators.RSI.enabled]);
   useEffect(() => {
     const e = indicators.MACD.enabled;
     macdLineRef.current?.applyOptions({ visible: e });
     macdSignalRef.current?.applyOptions({ visible: e });
     macdHistRef.current?.applyOptions({ visible: e });
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (chartRef.current?.panes?.()[2] as any)?.setOptions?.({ height: e ? PANE_HEIGHT_ENABLED : PANE_HEIGHT_DISABLED });
   }, [indicators.MACD.enabled]);
   useEffect(() => {
     const e = indicators.BOLLINGER.enabled;
     bbUpperRef.current?.applyOptions({ visible: e });
     bbMiddleRef.current?.applyOptions({ visible: e });
     bbLowerRef.current?.applyOptions({ visible: e });
+    // Bollinger Bands live on pane 0 (price scale) — no pane collapse needed.
   }, [indicators.BOLLINGER.enabled]);
-  useEffect(() => { atrRef.current?.applyOptions({ visible: indicators.ATR.enabled }); }, [indicators.ATR.enabled]);
+  useEffect(() => {
+    const e = indicators.ATR.enabled;
+    atrRef.current?.applyOptions({ visible: e });
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (chartRef.current?.panes?.()[3] as any)?.setOptions?.({ height: e ? PANE_HEIGHT_ENABLED : PANE_HEIGHT_DISABLED });
+  }, [indicators.ATR.enabled]);
   useEffect(() => {
     const e = indicators.STOCHASTIC.enabled;
     stochKRef.current?.applyOptions({ visible: e });
     stochDRef.current?.applyOptions({ visible: e });
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (chartRef.current?.panes?.()[4] as any)?.setOptions?.({ height: e ? PANE_HEIGHT_ENABLED : PANE_HEIGHT_DISABLED });
   }, [indicators.STOCHASTIC.enabled]);
-  useEffect(() => { obvRef.current?.applyOptions({ visible: indicators.OBV.enabled }); }, [indicators.OBV.enabled]);
+  useEffect(() => {
+    const e = indicators.OBV.enabled;
+    obvRef.current?.applyOptions({ visible: e });
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (chartRef.current?.panes?.()[5] as any)?.setOptions?.({ height: e ? PANE_HEIGHT_ENABLED : PANE_HEIGHT_DISABLED });
+  }, [indicators.OBV.enabled]);
   useEffect(() => { vwapRef.current?.applyOptions({ visible: indicators.VWAP.enabled }); }, [indicators.VWAP.enabled]);
   useEffect(() => { volMA20Ref.current?.applyOptions({ visible: showVolMA20 }); }, [showVolMA20]);
   useEffect(() => { vwapLineRef.current?.applyOptions({ visible: showVWAPLine }); }, [showVWAPLine]);

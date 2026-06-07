@@ -177,6 +177,7 @@ export function InstrumentPageClient({ entityId }: InstrumentPageClientProps) {
             fundamentals={bundle?.overview?.fundamentals ?? null}
             quote={bundle?.overview?.quote ?? null}
             initialBars={bundle?.overview?.ohlcv?.bars}
+            bundle={bundle ?? null}
           />
         )}
         {/* Wave C: Financials tab orchestrator (T-C-03). WHY guard on the
