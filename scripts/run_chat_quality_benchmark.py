@@ -545,8 +545,10 @@ def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
 
     questions_path = (_REPO_ROOT / args.questions_file).resolve()
-    if not questions_path.is_file():
-        print(f"ERROR: questions file not found: {questions_path}", file=sys.stderr)
+    # PLAN-0107 follow-up: accept directory (new layout) OR single .yaml file
+    # (legacy). load_questions handles both transparently.
+    if not questions_path.exists() or (not questions_path.is_file() and not questions_path.is_dir()):
+        print(f"ERROR: questions path not found: {questions_path}", file=sys.stderr)
         return 2
 
     # PLAN-0104 W33 — offline re-grade mode. Skip the chat client entirely;
