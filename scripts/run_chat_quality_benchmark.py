@@ -86,12 +86,37 @@ from chat_quality_judge import (  # noqa: E402
 
 
 def load_questions(path: Path) -> list[dict[str, Any]]:
-    """Decode the YAML question catalogue. Lazy-import PyYAML."""
+    """Decode the YAML question catalogue. Lazy-import PyYAML.
+
+    Supports BOTH legacy single-file mode and the new directory layout
+    (PLAN-0107 follow-up): if ``path`` is a directory, load every ``*.yaml``
+    file under it in alpha-sorted order and concatenate the lists. The
+    directory split lets parallel dataset-author agents each own their own
+    file (one for tool coverage, one for safety, etc.) without merge
+    conflicts on a single 1000+ line catalogue.
+
+    Schema is unchanged — each file is a top-level list of question dicts.
+    Filenames are conventional: ``NN_<purpose>.yaml`` where NN is a sort
+    key (00 = legacy, 10/20/30 = new packs) so the load order is stable.
+    """
     try:
         import yaml  # type: ignore[import-untyped]
     except ImportError:
         print("ERROR: PyYAML not installed. Activate .venv312 first.", file=sys.stderr)
         sys.exit(2)
+
+    if path.is_dir():
+        all_qs: list[dict[str, Any]] = []
+        files = sorted(path.glob("*.yaml"))
+        if not files:
+            raise ValueError(f"No *.yaml files found in {path}")
+        for f in files:
+            raw = yaml.safe_load(f.read_text())
+            if not isinstance(raw, list):
+                raise ValueError(f"Expected list at top level of {f}, got {type(raw).__name__}")
+            all_qs.extend(raw)
+        return all_qs
+
     raw = yaml.safe_load(path.read_text())
     if not isinstance(raw, list):
         raise ValueError(f"Expected list at top level of {path}, got {type(raw).__name__}")
@@ -413,8 +438,13 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p.add_argument("--base-url", default="http://localhost:8000", help="S9 gateway base URL")
     p.add_argument(
         "--questions-file",
-        default="tests/validation/chat_quality_benchmark/questions.yaml",
-        help="YAML question catalogue path",
+        default="tests/validation/chat_quality_benchmark/questions",
+        help=(
+            "Path to question catalogue. Accepts either a directory containing "
+            "``*.yaml`` files (default — PLAN-0107 follow-up layout) or a single "
+            ".yaml file (legacy mode). Directory entries are loaded in "
+            "alpha-sorted filename order and concatenated."
+        ),
     )
     p.add_argument("--tags", default="", help="Comma-separated tag filter (OR within tags)")
     p.add_argument("--ids", default="", help="Comma-separated question-id filter")
@@ -468,7 +498,8 @@ def _regrade_existing_run(runs_dir: Path) -> int:
         print(f"ERROR: no q_*.json files in {runs_dir}", file=sys.stderr)
         return 2
 
-    questions_path = (_REPO_ROOT / "tests/validation/chat_quality_benchmark/questions.yaml").resolve()
+    # PLAN-0107 follow-up: catalogue split into questions/*.yaml directory.
+    questions_path = (_REPO_ROOT / "tests/validation/chat_quality_benchmark/questions").resolve()
     by_id = {q.get("id"): q for q in load_questions(questions_path) if q.get("id")}
 
     print(f"=== offline re-grade ===\nruns_dir : {runs_dir}\nfiles    : {len(q_files)}\n")
