@@ -701,15 +701,43 @@ async def get_portfolio_exposure(portfolio_id: str, request: Request) -> Any:
 
     PLAN-0046 Wave 5 / T-46-5-02. S1 itself reaches out to S3 over REST
     to fetch current prices (R9-compliant — no cross-service DB).
+
+    Valkey cache (60s TTL): portfolio exposure changes only when holdings or
+    prices change.  1-minute staleness is acceptable for this view and
+    eliminates the ~3s S1→S3 price fan-out on every page load.
+    Cache key is per-portfolio so different portfolios don't collide.
+    Cache is bypass-on-failure (fail-open) — a Valkey outage degrades to
+    the slow path, not an error.
     """
     if not getattr(request.state, "user", None):
         raise HTTPException(status_code=401, detail="Authentication required")
+
+    # ── Valkey cache check (fail-open) ────────────────────────────────────────
+    valkey = getattr(request.app.state, "valkey", None)
+    _cache_key = f"portfolio:exposure:{portfolio_id}"
+    if valkey is not None:
+        try:
+            cached = await valkey.get(_cache_key)
+            if cached is not None:
+                body = cached.encode() if isinstance(cached, str) else cached
+                return Response(content=body, status_code=200, media_type="application/json")
+        except Exception:
+            logger.debug("exposure_cache_get_failed", portfolio_id=portfolio_id, exc_info=True)
+
     headers = _portfolio_headers(request)
     clients = _clients(request)
     resp = await clients.portfolio.get(
         f"/api/v1/portfolios/{portfolio_id}/exposure",
         headers=headers,
     )
+
+    # ── Populate cache on success (fire-and-forget, fail-open) ───────────────
+    if resp.status_code == 200 and valkey is not None:
+        try:
+            await valkey.set(_cache_key, resp.content.decode(), ex=60)
+        except Exception:
+            logger.debug("exposure_cache_set_failed", portfolio_id=portfolio_id, exc_info=True)
+
     return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
 
 
@@ -974,13 +1002,13 @@ async def get_portfolio_sector_attribution(portfolio_id: str, request: Request) 
 
 @router.get("/portfolios/{portfolio_id}/sector-breakdown", response_model=SectorBreakdownResponse)
 async def get_portfolio_sector_breakdown(portfolio_id: str, request: Request) -> Any:
-    """Optimised sector breakdown — guaranteed < 300ms via 2 downstream HTTP calls.
+    """Optimised sector breakdown — guaranteed < 300ms via Valkey cache (warm) or
+    2+N downstream calls (cold).
 
     Functionally equivalent to /sector-attribution but designed for speed:
-      - 1 call: GET /api/v1/holdings/{id} → S1
-      - 1 call: POST /internal/v1/price/batch → S3  (concurrent with sector lookups)
-      - N concurrent calls: GET /api/v1/instruments/lookup?id=X&extra_info=true → S3
-        (all run in parallel via asyncio.gather, ~5-15ms each)
+      - Warm path: Valkey cache hit → < 5ms (60s TTL)
+      - Cold path: 1 call to S1 + batch price call to S3 + N concurrent sector
+        lookups via instruments/lookup (all parallel via asyncio.gather)
 
     Response shape differs from /sector-attribution:
       - segments[] uses `weight` (0-1 fraction) instead of `sector_weight_pct` (0-100)
@@ -988,11 +1016,31 @@ async def get_portfolio_sector_breakdown(portfolio_id: str, request: Request) ->
       - as_of: server date for display/caching hints
       - covered_pct: fraction of MV with a known sector (same semantics as attribution)
 
+    Valkey cache key: ``portfolio:sector-breakdown:{portfolio_id}`` (60s TTL).
+    Cache is fail-open — a Valkey outage degrades to the N-call path, not an error.
+
     Use this endpoint for any new frontend work — /sector-attribution is kept for
     backward compatibility only.
     """
     if not getattr(request.state, "user", None):
         raise HTTPException(status_code=401, detail="Authentication required")
+
+    # ── Valkey cache check (fail-open) ────────────────────────────────────────
+    valkey = getattr(request.app.state, "valkey", None)
+    _sb_cache_key = f"portfolio:sector-breakdown:{portfolio_id}"
+    if valkey is not None:
+        try:
+            cached = await valkey.get(_sb_cache_key)
+            if cached is not None:
+                # Return raw JSON bytes — avoids re-serialising through Pydantic
+                # (the cached value is already a valid SectorBreakdownResponse JSON).
+                return Response(
+                    content=cached.encode() if isinstance(cached, str) else cached,
+                    status_code=200,
+                    media_type="application/json",
+                )
+        except Exception:
+            logger.debug("sector_breakdown_cache_get_failed", portfolio_id=portfolio_id, exc_info=True)
 
     headers = _portfolio_headers(request)
     s3_headers = _auth_headers(request)
@@ -1080,12 +1128,24 @@ async def get_portfolio_sector_breakdown(portfolio_id: str, request: Request) ->
         for sector, vals in sorted(totals.items(), key=lambda x: -x[1]["mv"])
     ]
 
-    return SectorBreakdownResponse(
+    result = SectorBreakdownResponse(
         portfolio_id=portfolio_id,
         segments=segments,
         covered_pct=round(covered_mv / total_mv, 4) if total_mv > 0 else 0.0,
         as_of=datetime.now(tz=UTC).date(),
     )
+
+    # ── Populate Valkey cache (fire-and-forget, fail-open) ────────────────────
+    # Serialise via model_json() to produce the same wire format the cache-hit
+    # path returns — guarantees the caller always sees the same schema shape
+    # regardless of whether the response came from cache or was freshly computed.
+    if valkey is not None:
+        try:
+            await valkey.set(_sb_cache_key, result.model_dump_json(), ex=60)
+        except Exception:
+            logger.debug("sector_breakdown_cache_set_failed", portfolio_id=portfolio_id, exc_info=True)
+
+    return result
 
 
 @router.get("/transactions")

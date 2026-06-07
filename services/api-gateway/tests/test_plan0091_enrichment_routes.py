@@ -432,6 +432,132 @@ async def test_sector_breakdown_passes_portfolio_404(authed_app, authed_mock_cli
     assert resp.status_code == 404
 
 
+# ── Sector-breakdown Valkey cache (PLAN-0099 W4 perf fix) ────────────────────
+
+
+@pytest.mark.asyncio
+async def test_sector_breakdown_cache_hit_skips_downstream(authed_app, authed_mock_clients) -> None:
+    """Warm cache -> response returned without calling S1 or S3."""
+    # Pre-populate the mock Valkey get() to simulate a cache hit.
+    # The fixture's mock_valkey.get is already an AsyncMock; override its return_value
+    # to return valid JSON so the route short-circuits before any downstream calls.
+    cached_body = '{"portfolio_id":"p-1","segments":[],"covered_pct":0.0,"as_of":"2026-06-07"}'
+    authed_app.state.valkey.get = AsyncMock(return_value=cached_body)
+
+    transport = ASGITransport(app=authed_app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        resp = await client.get(
+            "/v1/portfolios/p-1/sector-breakdown",
+            headers={"Authorization": f"Bearer {_make_jwt()}"},
+        )
+
+    assert resp.status_code == 200
+    # No downstream calls on a cache hit
+    authed_mock_clients.portfolio.get.assert_not_called()
+    authed_mock_clients.market_data.post.assert_not_called()
+    authed_mock_clients.market_data.get.assert_not_called()
+    # The Valkey get was called with the expected cache key
+    authed_app.state.valkey.get.assert_called_once_with("portfolio:sector-breakdown:p-1")
+
+
+@pytest.mark.asyncio
+async def test_sector_breakdown_cache_miss_populates_cache(authed_app, authed_mock_clients) -> None:
+    """Cache miss -> downstream called, result written to Valkey with 60s TTL.
+
+    WHY non-empty holdings: the empty-holdings path returns early before reaching
+    the cache-write code (the write only happens when segments were actually
+    computed), so this test uses a single holding with a known sector.
+    """
+    # Cache miss: get returns None (default in conftest)
+    authed_app.state.valkey.get = AsyncMock(return_value=None)
+
+    iid = str(uuid.uuid4())
+    holdings_payload = json.dumps(
+        {"items": [{"instrument_id": iid, "quantity": "10", "average_cost": "100.00"}]}
+    ).encode()
+    authed_mock_clients.portfolio.get = AsyncMock(return_value=_mock_response(200, holdings_payload))
+    price_payload = json.dumps([{"instrument_id": iid, "price": 100.0}]).encode()
+    authed_mock_clients.market_data.post = AsyncMock(return_value=_mock_response(200, price_payload))
+    authed_mock_clients.market_data.get = AsyncMock(
+        return_value=_mock_response(200, json.dumps({"sector": "Technology"}).encode())
+    )
+
+    transport = ASGITransport(app=authed_app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        resp = await client.get(
+            "/v1/portfolios/p-1/sector-breakdown",
+            headers={"Authorization": f"Bearer {_make_jwt()}"},
+        )
+
+    assert resp.status_code == 200
+    # Cache was populated after a miss
+    authed_app.state.valkey.set.assert_called_once()
+    call_args, call_kwargs = authed_app.state.valkey.set.call_args
+    assert call_args[0] == "portfolio:sector-breakdown:p-1"
+    assert call_kwargs.get("ex") == 60
+
+
+@pytest.mark.asyncio
+async def test_exposure_cache_hit_skips_downstream(authed_app, authed_mock_clients) -> None:
+    """Warm exposure cache -> response returned without calling S1."""
+    cached_body = '{"holdings": [], "total_market_value": 0.0}'
+    authed_app.state.valkey.get = AsyncMock(return_value=cached_body)
+
+    transport = ASGITransport(app=authed_app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        resp = await client.get(
+            "/v1/portfolios/p-1/exposure",
+            headers={"Authorization": f"Bearer {_make_jwt()}"},
+        )
+
+    assert resp.status_code == 200
+    authed_mock_clients.portfolio.get.assert_not_called()
+    authed_app.state.valkey.get.assert_called_once_with("portfolio:exposure:p-1")
+
+
+@pytest.mark.asyncio
+async def test_exposure_cache_miss_populates_cache(authed_app, authed_mock_clients) -> None:
+    """Cache miss -> S1 called, result written to Valkey with 60s TTL."""
+    authed_app.state.valkey.get = AsyncMock(return_value=None)
+    authed_mock_clients.portfolio.get = AsyncMock(
+        return_value=_mock_response(200, b'{"holdings": [], "total_market_value": 0.0}'),
+    )
+
+    transport = ASGITransport(app=authed_app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        resp = await client.get(
+            "/v1/portfolios/p-1/exposure",
+            headers={"Authorization": f"Bearer {_make_jwt()}"},
+        )
+
+    assert resp.status_code == 200
+    authed_mock_clients.portfolio.get.assert_called_once()
+    authed_app.state.valkey.set.assert_called_once()
+    call_args, call_kwargs = authed_app.state.valkey.set.call_args
+    assert call_args[0] == "portfolio:exposure:p-1"
+    assert call_kwargs.get("ex") == 60
+
+
+@pytest.mark.asyncio
+async def test_exposure_valkey_failure_falls_through(authed_app, authed_mock_clients) -> None:
+    """Valkey error during cache check -> fail-open, S1 called normally."""
+    authed_app.state.valkey.get = AsyncMock(side_effect=ConnectionError("valkey down"))
+    authed_mock_clients.portfolio.get = AsyncMock(
+        return_value=_mock_response(200, b'{"holdings": [], "total_market_value": 0.0}'),
+    )
+
+    transport = ASGITransport(app=authed_app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        resp = await client.get(
+            "/v1/portfolios/p-1/exposure",
+            headers={"Authorization": f"Bearer {_make_jwt()}"},
+        )
+
+    # Fail-open: returns 200 despite Valkey being down
+    assert resp.status_code == 200
+    authed_mock_clients.portfolio.get.assert_called_once()
+
+
 # ── T-A-2-04: yield curve ─────────────────────────────────────────────────────
 
 
