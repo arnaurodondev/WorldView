@@ -48,6 +48,44 @@ logger = structlog.get_logger(__name__)
 __all__ = ["MetricsServerHandle", "start_metrics_server"]
 
 
+def _count_families(
+    registry: CollectorRegistry | None = None,
+) -> tuple[int, list[str]]:
+    """Return ``(count, sample)`` of registered metric family names.
+
+    Safe to call multiple times.  Used by both ``start_metrics_server``
+    (to enrich the ``metrics_server_started`` event) and the runtime
+    banner helper (so worker boot logs report the same family count
+    Prometheus will actually scrape).
+
+    Parameters
+    ----------
+    registry:
+        Registry to inspect.  Defaults to the global ``REGISTRY``.
+
+    Returns
+    -------
+    tuple[int, list[str]]
+        ``(unique_family_count, first_five_family_names_sorted)``.
+    """
+    reg = registry if registry is not None else REGISTRY
+    seen: set[str] = set()
+    # Fast path: ``_collector_to_names`` is a private attribute but it's
+    # been stable for years and avoids the cost of calling ``collect()``
+    # which materialises every metric sample just to read the name.
+    collector_to_names = getattr(reg, "_collector_to_names", None)
+    if collector_to_names:
+        for names in collector_to_names.values():
+            seen.update(names)
+    # Fallback for forward-compat in case prometheus_client renames the
+    # private attribute in a future release.
+    if not seen:
+        for metric in reg.collect():
+            seen.add(metric.name)
+    unique = sorted(seen)
+    return len(unique), unique[:5]
+
+
 class MetricsServerHandle:
     """Handle returned by :func:`start_metrics_server`.
 
@@ -262,10 +300,18 @@ def start_metrics_server(
         # in logs and from MetricsServerHandle.bound_port.
         port=int(sock.getsockname()[1]) if port == 0 else port,
     )
+    # Enumerate registered metric families so the boot event tells ops
+    # at-a-glance whether the worker is exposing what they expect.  This
+    # also short-circuits the "metrics endpoint is live but empty" class
+    # of bug — if ``registered_families == 0`` the worker forgot to wire
+    # its module-level Counters before starting the server.
+    registered_families, registered_sample = _count_families(selected_registry)
     logger.info(
         "metrics_server_started",
         service_name=service_name,
         port=handle._requested_port,
         addr=addr,
+        registered_families=registered_families,
+        registered_sample=registered_sample,
     )
     return handle
