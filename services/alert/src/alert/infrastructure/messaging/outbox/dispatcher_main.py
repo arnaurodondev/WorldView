@@ -13,10 +13,15 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import os
 import signal
 import sys
 
-from observability import configure_logging, get_logger  # type: ignore[import-untyped]
+from observability import (  # type: ignore[import-untyped]
+    configure_logging,
+    get_logger,
+    start_metrics_server,
+)
 
 logger = get_logger(__name__)  # type: ignore[no-any-return]
 
@@ -37,6 +42,14 @@ async def main() -> None:
 
     log = get_logger("alert.dispatcher_main")  # type: ignore[no-any-return]
     log.info("dispatcher_starting", service="alert")
+
+    # PLAN-0107 B-3: expose Prometheus /metrics on dedicated port so the
+    # dispatcher is scrape-able alongside FastAPI services.  Defaults to 9100;
+    # compose entry must expose the same port.
+    metrics_handle = start_metrics_server(
+        service_name="alert-dispatcher",
+        port=int(os.environ.get("METRICS_PORT", "9100")),
+    )
 
     stop_event = asyncio.Event()
 
@@ -66,6 +79,9 @@ async def main() -> None:
         log.info("dispatcher_stopped")
     finally:
         await _engine.dispose()
+        # Stop the Prometheus metrics HTTP server cleanly.
+        with contextlib.suppress(Exception):
+            await metrics_handle.aclose()
 
 
 if __name__ == "__main__":

@@ -11,6 +11,8 @@ Usage (standalone)::
 from __future__ import annotations
 
 import asyncio
+import contextlib
+import os
 import signal
 from contextlib import suppress
 
@@ -19,6 +21,7 @@ from content_ingestion.application.use_cases.schedule_sources import ScheduleDue
 from content_ingestion.config import Settings
 from content_ingestion.infrastructure.db.session import _build_factories
 from content_ingestion.infrastructure.db.unit_of_work import SqlaUnitOfWork
+from observability import start_metrics_server  # type: ignore[import-untyped]
 from observability.logging import get_logger  # type: ignore[import-untyped]
 
 logger = get_logger(__name__)
@@ -242,11 +245,21 @@ async def _run_scheduler() -> None:
     settings = Settings()  # type: ignore[call-arg]
     scheduler = SchedulerProcess(settings=settings)
 
+    # PLAN-0107 B-3: expose Prometheus /metrics so this scheduler is scrape-able.
+    metrics_handle = start_metrics_server(
+        service_name="content-ingestion-scheduler",
+        port=int(os.environ.get("METRICS_PORT", "9100")),
+    )
+
     loop = asyncio.get_running_loop()
     for sig in (signal.SIGINT, signal.SIGTERM):
         loop.add_signal_handler(sig, scheduler.stop)
 
-    await scheduler.run()
+    try:
+        await scheduler.run()
+    finally:
+        with contextlib.suppress(Exception):
+            await metrics_handle.aclose()
 
 
 def main() -> None:

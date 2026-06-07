@@ -11,23 +11,23 @@ LOCK_SCRIPT="$REPO_ROOT/scripts/worktree_lock.sh"
 PASS=0
 FAIL=0
 
-assert_eq() {
-    local actual="$1" expected="$2" label="$3"
-    if [ "$actual" = "$expected" ]; then
-        PASS=$((PASS + 1))
-        printf "  PASS  %s (got %s)\n" "$label" "$actual"
-    else
-        FAIL=$((FAIL + 1))
-        printf "  FAIL  %s (expected %s, got %s)\n" "$label" "$expected" "$actual"
-    fi
-}
-
 # Each test runs in a temp dir (isolated worktree) so we don't pollute the real lock.
 new_tmp() {
     local d
     d="$(mktemp -d -t worktree-lock-test.XXXXXX)"
     (cd "$d" && git init -q .)
     echo "$d"
+}
+
+# Portable "now minus N seconds" as ISO-8601 UTC.
+iso_minus() {
+    local sec="$1"
+    if date -u -d "@$(( $(date -u +%s) - sec ))" +%FT%TZ >/dev/null 2>&1; then
+        date -u -d "@$(( $(date -u +%s) - sec ))" +%FT%TZ
+    else
+        # BSD / macOS date
+        date -u -r "$(( $(date -u +%s) - sec ))" +%FT%TZ
+    fi
 }
 
 echo "==> Test 1: clean state — acquire succeeds, lockfile exists, check returns 0"
@@ -39,40 +39,33 @@ T1="$(new_tmp)"
     p=0; f=0
     if [ "$rc_acquire" = "0" ]; then p=$((p+1)); printf "  PASS  acquire exit code (0)\n"; else f=$((f+1)); printf "  FAIL  acquire exit=%s\n" "$rc_acquire"; fi
     if [ -f .worktree-lock ]; then p=$((p+1)); printf "  PASS  lockfile present\n"; else f=$((f+1)); printf "  FAIL  lockfile missing\n"; fi
-    # The lockfile created by `acquire` pinned $$ of a short-lived bash that has
-    # now exited — so a naive `check` would return 2 (stale). To validate the
-    # "alive" path we rewrite the lockfile to point at a long-running sleep.
-    sleep 30 &
-    live_pid=$!
-    cat >.worktree-lock <<EOF
-{"pid": $live_pid, "agent_id": "test-agent", "started_at": "2026-06-06T00:00:00Z", "branch": "main"}
-EOF
+    # `acquire` from the previous subshell wrote $$ of a now-dead bash. The
+    # lockfile's started_at is fresh (well within TTL), so `check` must
+    # still return 0 (held by TTL freshness — the whole point of D-2 fix).
     bash "$LOCK_SCRIPT" check
     rc_check=$?
-    kill "$live_pid" 2>/dev/null || true
-    wait "$live_pid" 2>/dev/null || true
-    if [ "$rc_check" = "0" ]; then p=$((p+1)); printf "  PASS  check exit 0 while alive\n"; else f=$((f+1)); printf "  FAIL  check exit=%s\n" "$rc_check"; fi
+    if [ "$rc_check" = "0" ]; then p=$((p+1)); printf "  PASS  check exit 0 while fresh-by-TTL\n"; else f=$((f+1)); printf "  FAIL  check exit=%s\n" "$rc_check"; fi
     echo "$p $f" >/tmp/wlt_t1
 )
 read P F </tmp/wlt_t1; PASS=$((PASS + P)); FAIL=$((FAIL + F))
 rm -rf "$T1"
 
-echo "==> Test 2: second acquire from a foreign live pid is refused"
+echo "==> Test 2: second acquire is refused when a fresh peer lock exists (no live pid required)"
 T2="$(new_tmp)"
 (
     cd "$T2"
-    # Spawn a long-running peer process and pin its pid into the lockfile.
-    sleep 30 &
-    peer_pid=$!
+    # Write a fresh lock manually with a dead pid — TTL freshness alone
+    # must be enough to refuse. This is the regression test for the D-2
+    # PID-liveness bug: previously this lock would be treated as stale
+    # because pid 999999 is dead.
+    now_iso="$(date -u +%FT%TZ)"
     cat >.worktree-lock <<EOF
-{"pid": $peer_pid, "agent_id": "peer", "started_at": "2026-06-06T00:00:00Z", "branch": "main"}
+{"pid": 999999, "agent_id": "peer", "started_at": "$now_iso", "branch": "main"}
 EOF
     set +e
     bash "$LOCK_SCRIPT" acquire intruder 2>/dev/null
     rc=$?
     set -e
-    kill "$peer_pid" 2>/dev/null || true
-    wait "$peer_pid" 2>/dev/null || true
     if [ "$rc" = "1" ]; then
         echo "1 0" >/tmp/wlt_t2
     else
@@ -81,7 +74,7 @@ EOF
     fi
 )
 read P F </tmp/wlt_t2; PASS=$((PASS + P)); FAIL=$((FAIL + F))
-[ "$F" = "0" ] && printf "  PASS  second acquire refused with exit 1\n"
+[ "$F" = "0" ] && printf "  PASS  fresh-lock refusal works without live pid\n"
 rm -rf "$T2"
 
 echo "==> Test 3: release removes lockfile (and is idempotent)"
@@ -125,17 +118,17 @@ read P F </tmp/wlt_t4; PASS=$((PASS + P)); FAIL=$((FAIL + F))
 [ "$F" = "0" ] && printf "  PASS  opt-out env var bypasses lock\n"
 rm -rf "$T4"
 
-echo "==> Test 5: stale lock (pid not alive) — acquire clobbers and succeeds"
+echo "==> Test 5: stale lock (past TTL + pid dead) — acquire clobbers and succeeds"
 T5="$(new_tmp)"
 (
     cd "$T5"
-    # 999999 is overwhelmingly likely to be a dead pid.
+    # Old started_at (2026-01-01 is ~5 months in the past relative to today)
+    # plus dead pid 999999. Under default TTL (1800s) this must be clobbered.
     cat >.worktree-lock <<'EOF'
 {"pid": 999999, "agent_id": "ghost", "started_at": "2026-01-01T00:00:00Z", "branch": "main"}
 EOF
-    bash "$LOCK_SCRIPT" acquire newcomer
+    bash "$LOCK_SCRIPT" acquire newcomer 2>/dev/null
     rc=$?
-    # Verify our pid replaced the stale one.
     new_pid=$(sed -n 's/.*"pid"[[:space:]]*:[[:space:]]*\([0-9]*\).*/\1/p' .worktree-lock | head -1)
     if [ "$rc" = "0" ] && [ "$new_pid" != "999999" ]; then
         echo "1 0" >/tmp/wlt_t5
@@ -145,10 +138,63 @@ EOF
     fi
 )
 read P F </tmp/wlt_t5; PASS=$((PASS + P)); FAIL=$((FAIL + F))
-[ "$F" = "0" ] && printf "  PASS  stale lock clobbered\n"
+[ "$F" = "0" ] && printf "  PASS  stale lock (past TTL + dead pid) clobbered\n"
 rm -rf "$T5"
 
-rm -f /tmp/wlt_t1 /tmp/wlt_t2 /tmp/wlt_t3a /tmp/wlt_t3b /tmp/wlt_t4 /tmp/wlt_t5
+echo "==> Test 6: TTL expiry — acquire succeeds on past-TTL lock even with a recent-but-old started_at"
+T6="$(new_tmp)"
+(
+    cd "$T6"
+    # 2 hours ago — well past default 1800s TTL.
+    old_iso="$(iso_minus 7200)"
+    cat >.worktree-lock <<EOF
+{"pid": 999999, "agent_id": "yesterday", "started_at": "$old_iso", "branch": "main"}
+EOF
+    bash "$LOCK_SCRIPT" acquire newcomer 2>/dev/null
+    rc=$?
+    new_agent=$(sed -n 's/.*"agent_id"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' .worktree-lock | head -1)
+    if [ "$rc" = "0" ] && [ "$new_agent" = "newcomer" ]; then
+        echo "1 0" >/tmp/wlt_t6
+    else
+        echo "0 1" >/tmp/wlt_t6
+        echo "  FAIL  rc=$rc new_agent=$new_agent"
+    fi
+)
+read P F </tmp/wlt_t6; PASS=$((PASS + P)); FAIL=$((FAIL + F))
+[ "$F" = "0" ] && printf "  PASS  past-TTL lock clobbered by newcomer\n"
+rm -rf "$T6"
+
+echo "==> Test 7: heartbeat refreshes started_at without changing other fields"
+T7="$(new_tmp)"
+(
+    cd "$T7"
+    bash "$LOCK_SCRIPT" acquire t7 >/dev/null
+    before_started=$(sed -n 's/.*"started_at"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' .worktree-lock | head -1)
+    before_agent=$(sed -n 's/.*"agent_id"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' .worktree-lock | head -1)
+    before_pid=$(sed -n 's/.*"pid"[[:space:]]*:[[:space:]]*\([0-9]*\).*/\1/p' .worktree-lock | head -1)
+    # Backdate so the refresh is observable.
+    older_iso="$(iso_minus 600)"
+    sed_in_place() {
+        local tmp; tmp="$(mktemp)"
+        sed "$1" .worktree-lock >"$tmp" && mv "$tmp" .worktree-lock
+    }
+    sed_in_place "s/\"started_at\"[[:space:]]*:[[:space:]]*\"[^\"]*\"/\"started_at\": \"$older_iso\"/"
+    backdated=$(sed -n 's/.*"started_at"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' .worktree-lock | head -1)
+    bash "$LOCK_SCRIPT" heartbeat
+    rc=$?
+    after_started=$(sed -n 's/.*"started_at"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' .worktree-lock | head -1)
+    after_agent=$(sed -n 's/.*"agent_id"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' .worktree-lock | head -1)
+    after_pid=$(sed -n 's/.*"pid"[[:space:]]*:[[:space:]]*\([0-9]*\).*/\1/p' .worktree-lock | head -1)
+    p=0; f=0
+    if [ "$rc" = "0" ]; then p=$((p+1)); printf "  PASS  heartbeat exit 0\n"; else f=$((f+1)); printf "  FAIL  heartbeat exit=%s\n" "$rc"; fi
+    if [ "$after_started" != "$backdated" ]; then p=$((p+1)); printf "  PASS  started_at refreshed (was %s, now %s)\n" "$backdated" "$after_started"; else f=$((f+1)); printf "  FAIL  started_at not refreshed\n"; fi
+    if [ "$after_agent" = "$before_agent" ] && [ "$after_pid" = "$before_pid" ]; then p=$((p+1)); printf "  PASS  agent_id+pid preserved\n"; else f=$((f+1)); printf "  FAIL  agent=%s pid=%s changed\n" "$after_agent" "$after_pid"; fi
+    echo "$p $f" >/tmp/wlt_t7
+)
+read P F </tmp/wlt_t7; PASS=$((PASS + P)); FAIL=$((FAIL + F))
+rm -rf "$T7"
+
+rm -f /tmp/wlt_t1 /tmp/wlt_t2 /tmp/wlt_t3a /tmp/wlt_t3b /tmp/wlt_t4 /tmp/wlt_t5 /tmp/wlt_t6 /tmp/wlt_t7
 
 echo
 echo "==================================="

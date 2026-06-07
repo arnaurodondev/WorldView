@@ -15,10 +15,15 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import os
 import signal
 import sys
 
-from observability import configure_logging, get_logger  # type: ignore[import-untyped]
+from observability import (  # type: ignore[import-untyped]
+    configure_logging,
+    get_logger,
+    start_metrics_server,
+)
 
 logger = get_logger(__name__)  # type: ignore[no-any-return]
 
@@ -41,6 +46,13 @@ async def main() -> None:
 
     log = get_logger("knowledge_graph.instrument_discovered_consumer_main")  # type: ignore[no-any-return]
     log.info("instrument_discovered_consumer_starting", service="knowledge-graph")
+
+    # PLAN-0107 B-3: expose Prometheus /metrics on dedicated port so this
+    # consumer process is scrape-able alongside FastAPI services.
+    metrics_handle = start_metrics_server(
+        service_name="knowledge-graph-instrument-discovered-consumer",
+        port=int(os.environ.get("METRICS_PORT", "9100")),
+    )
 
     stop_event = asyncio.Event()
 
@@ -88,6 +100,8 @@ async def main() -> None:
     finally:
         await valkey.close()
         await engine.dispose()
+        with contextlib.suppress(Exception):
+            await metrics_handle.aclose()
 
 
 if __name__ == "__main__":

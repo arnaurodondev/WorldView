@@ -17,12 +17,17 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import os
 from datetime import timedelta
 from typing import Any
 
 from common.time import utc_now  # type: ignore[import-untyped]
 from messaging.valkey.client import ValkeyClient  # type: ignore[import-untyped]
-from observability import configure_logging, get_logger  # type: ignore[import-untyped]
+from observability import (  # type: ignore[import-untyped]
+    configure_logging,
+    get_logger,
+    start_metrics_server,
+)
 from rag_chat.application.use_cases.briefing_context import BriefingContextGatherer
 from rag_chat.application.use_cases.generate_briefing import GenerateBriefingUseCase
 from rag_chat.application.workers.morning_brief_pregeneration_worker import (
@@ -126,21 +131,13 @@ async def _run_loop(settings: Settings) -> None:
     # ── Prometheus scrape endpoint ────────────────────────────────────────────
     # PLAN-0094 live-QA #2: pre-gen counters live in this process, not in the
     # main rag-chat container, so Prometheus needs its own scrape target here.
-    # Port 9100 follows the worldview convention for non-FastAPI metrics.
-    from prometheus_client import start_http_server as _prom_start_http_server
-
-    _prom_metrics_port = 9100
-    try:
-        _prom_start_http_server(_prom_metrics_port)
-        log.info("brief_scheduler_metrics_endpoint_started", port=_prom_metrics_port)
-    except OSError as exc:
-        # Already bound (test re-import, etc.) — log + continue. The scheduler
-        # itself must keep working even if metrics can't be exposed.
-        log.warning(
-            "brief_scheduler_metrics_endpoint_unavailable",
-            port=_prom_metrics_port,
-            error=str(exc),
-        )
+    # PLAN-0107 B-3: migrated from inline ``prometheus_client.start_http_server``
+    # to the shared ``observability.start_metrics_server`` helper for parity
+    # with the rest of the platform (single shutdown contract via aclose()).
+    metrics_handle = start_metrics_server(
+        service_name="rag-chat-brief-scheduler",
+        port=int(os.environ.get("METRICS_PORT", "9100")),
+    )
 
     # ── Build dependencies ────────────────────────────────────────────────────
     # F-ARCH-003 (IG-MSG-002): use the shared :class:`ValkeyClient` so this
@@ -280,6 +277,9 @@ async def _run_loop(settings: Settings) -> None:
             await jwt_minter_http_client.aclose()
         with contextlib.suppress(Exception):
             await valkey.close()
+        # PLAN-0107 B-3: tear down the shared metrics HTTP server cleanly.
+        with contextlib.suppress(Exception):
+            await metrics_handle.aclose()
         log.info("brief_scheduler_stopped")  # type: ignore[no-any-return]
 
 

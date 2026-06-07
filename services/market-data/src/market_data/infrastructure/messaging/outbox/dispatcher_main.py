@@ -11,11 +11,14 @@ Usage (standalone)::
 from __future__ import annotations
 
 import asyncio
+import contextlib
+import os
 import signal
 
 from market_data.config import Settings
 from market_data.infrastructure.db.session import build_session_factory, build_write_engine
 from market_data.infrastructure.messaging.outbox.dispatcher import create_dispatcher
+from observability import start_metrics_server  # type: ignore[import-untyped]
 from observability.logging import get_logger  # type: ignore[import-untyped]
 
 logger = get_logger(__name__)
@@ -49,11 +52,21 @@ async def _run_dispatcher() -> None:
     settings = Settings()  # type: ignore[call-arg]
     process = DispatcherProcess(settings=settings)
 
+    # PLAN-0107 B-3: expose Prometheus /metrics so this dispatcher is scrape-able.
+    metrics_handle = start_metrics_server(
+        service_name="market-data-dispatcher",
+        port=int(os.environ.get("METRICS_PORT", "9100")),
+    )
+
     loop = asyncio.get_running_loop()
     for sig in (signal.SIGINT, signal.SIGTERM):
         loop.add_signal_handler(sig, process.stop)
 
-    await process.run()
+    try:
+        await process.run()
+    finally:
+        with contextlib.suppress(Exception):
+            await metrics_handle.aclose()
 
 
 def main() -> None:

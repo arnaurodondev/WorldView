@@ -314,6 +314,47 @@ scrape_configs:
       - targets: ["alert-email-scheduler:9100"]
     metrics_path: /metrics
 
+  # ── PLAN-0107 B-3 — OVERSIGHT entrypoints wired with start_metrics_server ──
+  - job_name: "alert-dispatcher"
+    static_configs:
+      - targets: ["alert-dispatcher:9100"]
+    metrics_path: /metrics
+
+  - job_name: "content-ingestion-scheduler"
+    static_configs:
+      - targets: ["content-ingestion-scheduler:9100"]
+    metrics_path: /metrics
+
+  - job_name: "knowledge-graph-instrument-discovered-consumer"
+    static_configs:
+      - targets: ["knowledge-graph-instrument-discovered-consumer:9100"]
+    metrics_path: /metrics
+
+  - job_name: "market-data-ohlcv-consumer"
+    static_configs:
+      - targets: ["market-data-ohlcv-consumer:9100"]
+    metrics_path: /metrics
+
+  - job_name: "market-data-dispatcher"
+    static_configs:
+      - targets: ["market-data-dispatcher:9100"]
+    metrics_path: /metrics
+
+  - job_name: "nlp-pipeline-entity-refresh-consumer"
+    static_configs:
+      - targets: ["nlp-pipeline-entity-refresh-consumer:9100"]
+    metrics_path: /metrics
+
+  - job_name: "portfolio-instrument-consumer"
+    static_configs:
+      - targets: ["portfolio-instrument-consumer:9100"]
+    metrics_path: /metrics
+
+  - job_name: "rag-chat-brief-scheduler"
+    static_configs:
+      - targets: ["rag-chat-brief-scheduler:9100"]
+    metrics_path: /metrics
+
   # ── Pushgateway — synthetic monitor probe results ─────────────────────────
   # honor_labels: true preserves the probe_name label set by synthetic_monitor.py
   # so SyntheticProbeDown alert can reference {{ $labels.probe_name }} correctly.

@@ -324,6 +324,7 @@ services:
     env_file:
       - ../../services/portfolio/configs/docker.env
     command: ["python", "-m", "portfolio.infrastructure.messaging.consumers.instrument_consumer_main"]
+    expose: ["9100"]
     restart: on-failure
     healthcheck:
       test: ["CMD", "python", "-c", "import os; os.kill(1, 0)"]
@@ -721,6 +722,7 @@ services:
       dockerfile: services/content-ingestion/Dockerfile
     profiles: [infra, all]
     command: ["python", "-m", "content_ingestion.infrastructure.scheduler.scheduler_main"]
+    expose: ["9100"]
     env_file:
       - ../../services/content-ingestion/configs/docker.env
     depends_on:
@@ -851,6 +853,7 @@ services:
     env_file:
       - ../../services/market-data/configs/docker.env
     command: ["python", "-m", "market_data.infrastructure.messaging.outbox.dispatcher_main"]
+    expose: ["9100"]
     restart: on-failure
     healthcheck:
       test: ["CMD", "python", "-c", "import os; os.kill(1, 0)"]
@@ -874,6 +877,7 @@ services:
     env_file:
       - ../../services/market-data/configs/docker.env
     command: ["python", "-m", "market_data.infrastructure.messaging.consumers.ohlcv_consumer_main"]
+    expose: ["9100"]
     restart: on-failure
     healthcheck:
       test: ["CMD", "python", "-c", "import os; os.kill(1, 0)"]
@@ -1727,6 +1731,7 @@ services:
     env_file:
       - ../../services/knowledge-graph/configs/docker.env
     command: ["python", "-m", "knowledge_graph.infrastructure.messaging.consumers.instrument_discovered_consumer_main"]
+    expose: ["9100"]
     restart: on-failure
     healthcheck:
       test: ["CMD", "python", "-c", "import os; os.kill(1, 0)"]
@@ -1949,6 +1954,7 @@ services:
     env_file:
       - ../../services/alert/configs/docker.env
     command: ["python", "-m", "alert.infrastructure.messaging.outbox.dispatcher_main"]
+    expose: ["9100"]
     restart: on-failure
     healthcheck:
       test: ["CMD", "python", "-c", "import os; os.kill(1, 0)"]

@@ -142,6 +142,36 @@ All four cases collapse to the same root cause: **two write-capable git operatio
 
 ---
 
+## 6a. D-2 lock semantics — TTL freshness (revised 2026-06-06)
+
+**Initial design used PID-liveness alone** (`kill -0 $$` recorded at acquire time). QA found the flaw: `$$` in bash is the subshell pid, which dies the moment `worktree_lock.sh acquire` exits. Under Claude Code's tool harness every `bash scripts/worktree_lock.sh ...` call is a fresh subshell, so the next call always sees a dead pid and treats every prior lock as stale — the lock effectively never blocks anyone in real use.
+
+**Revised semantics** (current implementation):
+
+- A lock is **HELD** if `now - started_at < LOCK_TTL_SECONDS` (default `1800` = 30 min, override via `WORLDVIEW_WORKTREE_LOCK_TTL`).
+- A lock is **STALE** if older than TTL — safe to clobber.
+- PID-liveness is now a **secondary** safety net: even past TTL, a live recorded pid still wins (catches long-running daemons).
+- Long-running orchestrators call `bash scripts/worktree_lock.sh heartbeat` periodically (every ≤TTL/2 seconds) to refresh `started_at` without touching `agent_id`/`pid`/`branch`.
+
+This fix is the difference between "lock never blocks anyone" and "lock blocks every concurrent agent within a 30-minute window". The two manual smokes that validate the fix:
+
+```bash
+# Smoke 1 — fresh-lock refusal across separate bash invocations:
+bash scripts/worktree_lock.sh release
+bash scripts/worktree_lock.sh acquire session-A
+bash scripts/worktree_lock.sh acquire session-B   # MUST refuse (session-A's pid is dead)
+
+# Smoke 2 — past-TTL clobber:
+bash scripts/worktree_lock.sh release
+bash scripts/worktree_lock.sh acquire session-A
+# backdate started_at to 2020
+bash scripts/worktree_lock.sh acquire session-B   # MUST succeed (TTL expired)
+```
+
+Both are reproduced in `scripts/tests/test_worktree_lock.sh` (Test 2 = smoke 1, Test 6 = smoke 2, Test 7 = heartbeat). All 12 assertions pass.
+
+---
+
 ## 6b. D-2 pre-commit wiring — deferred to main worktree
 
 The plan calls for the lockfile guard to live at the top of `.git/hooks/pre-commit`. In a git **worktree**, `.git/hooks/` is shared with the main checkout — the path is `<main-repo>/.git/hooks/pre-commit`, not `<worktree>/.git/hooks/pre-commit`. From an agent worktree, that path is outside the worktree subtree and our sandbox refuses edits to it (correctly, because every worktree shares the same hook file and one race-condition edit could corrupt it for everyone).
