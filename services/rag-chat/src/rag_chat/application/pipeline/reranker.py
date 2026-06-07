@@ -310,12 +310,18 @@ class DeepInfraReranker:
         http_client: httpx.AsyncClient | None = None,
         timeout: float = _DEEPINFRA_DEFAULT_TIMEOUT,
         max_docs: int = _DEEPINFRA_MAX_DOCS,
+        cost_recorder: "CostRecorder | None" = None,
     ) -> None:
+        # cost_recorder accepted for interface symmetry with CohereReranker (PLAN-0107).
+        # No per-call cost recording yet for DeepInfra rerank — rerank pricing
+        # rolls up into the shared DeepInfra spend; leaving the hook present so
+        # app.py wiring stays uniform across reranker implementations.
         self._api_key = api_key
         self._model = model
         self._client = http_client or httpx.AsyncClient()
         self._timeout = timeout
         self._max_docs = max_docs
+        self._cost_recorder = cost_recorder
 
     async def rerank(self, query: str, items: list[RetrievedItem]) -> list[RetrievedItem]:
         """Re-rank *items* by cross-encoder relevance against *query*."""
