@@ -31,7 +31,8 @@
 // the bearer token, useState for the period selector and the open popover.
 
 import { useMemo, useState } from "react";
-import { useQuery, useQueries } from "@tanstack/react-query";
+import { useQuery } from "@tanstack/react-query";
+import { qk } from "@/lib/query/keys";
 import { useRouter } from "next/navigation";
 import { createGateway } from "@/lib/gateway";
 import { useAuth } from "@/hooks/useAuth";
@@ -165,30 +166,34 @@ export function SectorHeatmapWidget() {
   const movers: Mover[] = useMemo(() => moversData?.movers ?? [], [moversData]);
 
   // ── Per-mover company-overview lookups (sector join) ───────────────────
-  // WHY useQueries (not one query per row in a child): hooks cannot be called
-  // conditionally inside .map(). useQueries fans out N parallel queries and
-  // returns an aligned result array.
-  // WHY staleTime 600_000 (10min): a company's GICS sector changes very
-  // rarely — caching aggressively avoids re-fetching the same overview
-  // payload every time the popover re-renders.
-  const overviewQueries = useQueries({
-    queries: movers.map((m) => ({
-      queryKey: ["company-overview-sector", m.instrument_id],
-      queryFn: () => createGateway(accessToken).getCompanyOverview(m.instrument_id),
-      enabled: !!accessToken && !!m.instrument_id,
-      staleTime: 600_000,
-    })),
+  // FIX F-1 (2026-06-05): previously this widget spawned N parallel useQueries
+  // — one /v1/companies/{id}/overview per mover. With 50 movers in the
+  // popover that's 50 sequential gateway round-trips just to read GICS sector.
+  // The batch endpoint runs the legs in parallel server-side; the FE makes
+  // exactly one HTTP request and gets back a `{ <uuid>: CompanyOverview | null }`
+  // map.
+  // WHY staleTime 10min: sectors change rarely; aggressive caching kills
+  // re-fetches on every popover open.
+  const moverIds = useMemo(
+    () => movers.map((m) => m.instrument_id).filter(Boolean),
+    [movers],
+  );
+  const { data: overviewsMap } = useQuery({
+    queryKey: qk.instruments.overviewsBatch(moverIds),
+    queryFn: () =>
+      createGateway(accessToken).getCompanyOverviewsBatch(moverIds),
+    enabled: !!accessToken && moverIds.length > 0,
+    staleTime: 600_000,
   });
+  const overviewByid = useMemo(() => overviewsMap ?? {}, [overviewsMap]);
 
   // ── Group movers by sector for popover display ──────────────────────────
   // WHY useMemo: the grouping iterates N movers × map look-ups; recomputing
   // on every render (e.g. on each popover open/close) would be wasteful.
-  // The memo cache invalidates only when `movers` or the overview list
-  // changes — which is exactly what we want.
   const moversBySector = useMemo(() => {
     const map = new Map<string, Mover[]>();
-    movers.forEach((mover, i) => {
-      const overview = overviewQueries[i]?.data;
+    movers.forEach((mover) => {
+      const overview = overviewByid[mover.instrument_id];
       const sector = overview?.instrument?.gics_sector;
       if (!sector) return;
       const list = map.get(sector) ?? [];
@@ -196,7 +201,7 @@ export function SectorHeatmapWidget() {
       map.set(sector, list);
     });
     return map;
-  }, [movers, overviewQueries]);
+  }, [movers, overviewByid]);
 
   // ── Compute weight + width for each sector ──────────────────────────────
   // WHY useMemo: the weight calc only changes when `heatmap.sectors` does;

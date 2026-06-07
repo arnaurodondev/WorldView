@@ -35,8 +35,8 @@
 - id: ru_mstr_news
   prompt: "Show me the latest news on MSTR — what should I know?"
   category: news
-  tags: [real_user, smoke, news]
-  expected_tools: [get_entity_news, get_top_news, search_articles]
+  tags: [real_user, smoke, news, aggregate]
+  expected_tools: [get_entity_news, search_documents]
   expected_entities_mentioned: [MicroStrategy, MSTR, Bitcoin]
   expected_numeric_class: mixed
   expected_min_words: 60
@@ -52,7 +52,7 @@
 - id: ru_ai_semi_screener
   prompt: "Screen for AI semiconductor companies with market cap above $50B and positive YoY revenue growth."
   category: screener
-  tags: [real_user, smoke, screener]
+  tags: [real_user, smoke, screener, aggregate]
   expected_tools: [screen_universe]
   expected_entities_mentioned: [NVDA, AVGO]
   expected_numeric_class: currency
@@ -67,7 +67,7 @@
 - id: ru_openai_msft_paths
   prompt: "How is OpenAI connected to Microsoft? Show me the relationship paths."
   category: relationship
-  tags: [real_user, smoke, relationship]
+  tags: [real_user, smoke, relationship, aggregate]
   expected_tools: [traverse_graph, get_entity_paths]
   expected_entities_mentioned: [OpenAI, Microsoft]
   expected_numeric_class: none
@@ -88,7 +88,7 @@
   prompt: "Compare NVDA and AMD on revenue, EPS, and gross margin for the latest reported quarter."
   category: comparison
   tags: [real_user, smoke, comparison, financials]
-  expected_tools: [compare_entities, get_fundamentals_history, get_fundamentals_snapshot]
+  expected_tools: [compare_entities, get_fundamentals_history, query_fundamentals]
   expected_entities_mentioned: [NVIDIA, AMD]
   expected_numeric_class: mixed
   expected_min_words: 120
@@ -132,18 +132,6 @@
   must_not_say: []
   notes: "Must mention ≥2 of {Samsung, Microsoft, Google, Huawei, Xiaomi}."
 
-- id: agg_q2_mstr_news
-  prompt: "Show me the latest news on MSTR — what should I know?"
-  category: news
-  tags: [aggregate]
-  expected_tools: [get_entity_news, get_top_news]
-  expected_entities_mentioned: [MicroStrategy, Bitcoin]
-  expected_numeric_class: mixed
-  expected_min_words: 60
-  expected_max_latency_s: 60
-  must_not_say: []
-  notes: "Duplicate of ru_mstr_news, kept separately for aggregate gate parity."
-
 - id: agg_q3_tim_cook
   prompt: "Give me a brief history of Tim Cook — where did he work before Apple?"
   category: factual_lookup
@@ -156,41 +144,17 @@
   must_not_say: []
   notes: "Should mention Compaq or IBM. No duplicated paragraphs."
 
-- id: agg_q4_nvda_amd_revenue
-  prompt: "Compare the revenue trajectories of NVIDIA and AMD over the last 4 quarters."
-  category: financial_data
-  tags: [aggregate]
-  expected_tools: [get_fundamentals_history]
-  expected_entities_mentioned: [NVIDIA, AMD]
-  expected_numeric_class: currency
-  expected_min_words: 100
-  expected_max_latency_s: 75
-  must_not_say: []
-  notes: "Sister of ru_nvda_amd_revenue_4q."
-
 - id: agg_q5_tsla_macro
   prompt: "What macroeconomic events are likely to affect Tesla in the next 30 days?"
   category: signal
   tags: [aggregate]
-  expected_tools: [get_economic_calendar, get_temporal_events, get_entity_event_exposures]
+  expected_tools: [get_economic_calendar, search_events, get_entity_intelligence]
   expected_entities_mentioned: [Tesla]
   expected_numeric_class: mixed
   expected_min_words: 80
   expected_max_latency_s: 60
   must_not_say: []
   notes: "min_distinct_tools=2."
-
-- id: agg_q6_ai_chip_screener
-  prompt: "Screen for AI semiconductor companies with market cap above $50B and positive YoY revenue growth."
-  category: screener
-  tags: [aggregate]
-  expected_tools: [screen_universe]
-  expected_entities_mentioned: [NVDA]
-  expected_numeric_class: currency
-  expected_min_words: 80
-  expected_max_latency_s: 75
-  must_not_say: []
-  notes: "Sister of ru_ai_semi_screener."
 
 - id: agg_q7_tsla_contradictions
   prompt: "Are there any contradictions in the recent narrative around Tesla?"
@@ -203,19 +167,6 @@
   expected_max_latency_s: 60
   must_not_say: []
   notes: "Empty finding allowed."
-
-- id: agg_q8_openai_msft
-  prompt: "How is OpenAI connected to Microsoft? Show me the relationship paths."
-  category: relationship
-  tags: [aggregate]
-  expected_tools: [traverse_graph, get_entity_paths]
-  expected_entities_mentioned: [OpenAI, Microsoft]
-  expected_numeric_class: none
-  # PLAN-0103 W17: see ru_openai_msft_paths — same rationale.
-  expected_min_words: 40
-  expected_max_latency_s: 75
-  must_not_say: []
-  notes: "Sister of ru_openai_msft_paths."
 
 - id: agg_a10_apple_anthropic_premise
   prompt: "Why did Apple acquire Anthropic last quarter? What was the strategic rationale?"
@@ -241,7 +192,7 @@
   prompt: "What was Apple's exact reported revenue for the most recent fiscal quarter, in billions, to 3 decimal places?"
   category: financial_data
   tags: [iter3, stress]
-  expected_tools: [get_fundamentals_snapshot, get_fundamentals_history]
+  expected_tools: [query_fundamentals, get_fundamentals_history]
   expected_entities_mentioned: [Apple]
   expected_numeric_class: currency
   expected_min_words: 30
@@ -277,7 +228,7 @@
   prompt: "If NVIDIA's P/E ratio is below 50, list three reasons the stock might still be considered expensive. Otherwise say it is not currently below 50 and skip the list."
   category: signal
   tags: [iter3, stress, conditional]
-  expected_tools: [get_fundamentals_snapshot]
+  expected_tools: [query_fundamentals]
   expected_entities_mentioned: [NVIDIA]
   expected_numeric_class: ratio
   expected_min_words: 40
@@ -289,7 +240,7 @@
   prompt: "What was Microsoft's most recent earnings report? Cite the source for each number."
   category: financial_data
   tags: [iter3, stress, citations]
-  expected_tools: [get_fundamentals_snapshot, get_entity_news]
+  expected_tools: [query_fundamentals, get_entity_news]
   expected_entities_mentioned: [Microsoft]
   expected_numeric_class: currency
   expected_min_words: 80
@@ -356,7 +307,7 @@
   # scores tool routing, grounding (does the P/E trace to a tool output?),
   # framing (shallow Q → short answer is fine), and refusal appropriateness.
   rubric:
-    expected_tools: [get_fundamentals_history, get_fundamentals_snapshot, query_fundamentals]
+    expected_tools: [get_fundamentals_history, query_fundamentals]
     required_facts: [pe_ratio_value, as_of_date_or_period]
     forbidden_facts: [fabricated_period, single_quarter_passed_off_as_ttm]
     expected_depth: shallow
@@ -440,7 +391,7 @@
   rubric:
     # PLAN-0104 W38: query_fundamentals is the W32 unified equivalent of
     # both singular get_fundamentals_* tools.
-    expected_tools: [get_fundamentals_history, get_fundamentals_snapshot, query_fundamentals]
+    expected_tools: [get_fundamentals_history, query_fundamentals]
     required_facts: [forward_pe_value_or_honest_unavailable]
     forbidden_facts: [fabricated_forward_pe, blanket_refusal_without_lookup]
     expected_depth: shallow

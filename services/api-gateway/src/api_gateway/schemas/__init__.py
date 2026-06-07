@@ -11,6 +11,7 @@ cause validation errors in production.
 from api_gateway.schemas.alerts import AlertResponse
 from api_gateway.schemas.common import Meta
 from api_gateway.schemas.dashboard import DashboardSnapshotResponse
+from api_gateway.schemas.dashboard_bundle import DashboardBundleResponse
 from api_gateway.schemas.entity_chat import EntityContextChatRequest
 from api_gateway.schemas.fundamentals import (
     EarningsCalendarResponse,
@@ -55,6 +56,7 @@ __all__ = [
     "ArticleImpactHistoryResponse",
     "ConfidenceBreakdownPublic",
     "ConfidenceTrendPoint",
+    "DashboardBundleResponse",
     "DashboardSnapshotResponse",
     "EarningsCalendarResponse",
     "EarningsEvent",

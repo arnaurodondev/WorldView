@@ -106,6 +106,27 @@ make seed
 
 After `make dev` + `make seed`, navigate to `http://localhost:3001`, click **Dev Login**.
 
+### 4.3 Dev Server Protocol (HTTP/1.1 — no HTTP/2)
+
+The Next.js dev server (`next dev`) runs over **HTTP/1.1** only. Next.js 15 has an
+`--experimental-https` flag but **no `--experimental-http2` flag**; the HTTPS dev
+mode still serves H/1.1 underneath. We evaluated two paths to enable H/2 in dev:
+
+| Option | Decision | Rationale |
+| --- | --- | --- |
+| `next dev --experimental-https --experimental-http2` | **Rejected** | No such flag exists in Next.js 15. The closest (`--experimental-https`) is still H/1.1. |
+| Add a Caddy/nginx reverse proxy in front of `worldview-web:3000` serving H/2 to the browser | **Deferred** | Adds infra complexity and a TLS cert dance for a dev-only optimization. Production already runs over H/2 behind the platform's TLS terminator. |
+
+**Mitigation** for the dev-mode H/1.1 connection cap (6 concurrent sockets per
+origin to `/api`): below-fold dashboard widgets defer their TanStack queries by
+two animation frames via [`hooks/useAboveFoldReady.ts`](../../apps/worldview-web/hooks/useAboveFoldReady.ts).
+This lets above-fold widgets enqueue their fetches first so the dev waterfall
+prioritises what the user actually sees.
+
+In **production**, requests fan out through the platform's TLS terminator which
+multiplexes them over a single H/2 connection — the dev cap does not apply.
+See `/investigate` report F-3/F-4 for the full network-waterfall analysis.
+
 ### 4.3 Environment Variables
 
 Copy `apps/worldview-web/.env.example` to `apps/worldview-web/.env.local`:

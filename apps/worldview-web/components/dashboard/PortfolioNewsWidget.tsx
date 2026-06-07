@@ -36,6 +36,7 @@ import { useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { createGateway } from "@/lib/gateway";
 import { useAuth } from "@/hooks/useAuth";
+import { useAboveFoldReady } from "@/hooks/useAboveFoldReady";
 import { Skeleton } from "@/components/ui/skeleton";
 import { InlineEmptyState } from "@/components/data/InlineEmptyState";
 import { AlertTriangle } from "lucide-react";
@@ -59,6 +60,9 @@ const ALL_TICKERS = "__ALL__";
 
 export function PortfolioNewsWidget() {
   const { accessToken } = useAuth();
+  // F-4: Row-4 widget — defer all three queries (news, portfolios, holdings)
+  // by one paint so Row-2 / Row-3 above-fold widgets get socket priority.
+  const aboveFoldReady = useAboveFoldReady();
 
   // Filter/sort state — local to the widget, not URL-bound (no need to
   // bookmark a specific filter state).
@@ -77,7 +81,7 @@ export function PortfolioNewsWidget() {
     // candidate pool deep enough that a tier or ticker filter doesn't
     // empty the widget on most days.
     queryFn: () => createGateway(accessToken).getTopNews({ limit: 20 }),
-    enabled: !!accessToken,
+    enabled: !!accessToken && aboveFoldReady,
     // WHY 5min: S9 now caches /v1/news/top for 120s in Valkey, so cold
     // requests are already fast. 5min frontend staleTime avoids polling
     // the cache more than once per session, reducing server load.
@@ -92,7 +96,7 @@ export function PortfolioNewsWidget() {
   const { data: portfolios } = useQuery({
     queryKey: ["dashboard-portfolio-news-portfolios"],
     queryFn: () => createGateway(accessToken).getPortfolios(),
-    enabled: !!accessToken,
+    enabled: !!accessToken && aboveFoldReady,
     staleTime: 5 * 60_000,
   });
 
@@ -108,7 +112,7 @@ export function PortfolioNewsWidget() {
     queryKey: ["dashboard-portfolio-news-holdings", firstPortfolioId],
     queryFn: () =>
       createGateway(accessToken).getHoldings(firstPortfolioId!),
-    enabled: !!accessToken && !!firstPortfolioId,
+    enabled: !!accessToken && aboveFoldReady && !!firstPortfolioId,
     staleTime: 5 * 60_000,
   });
 

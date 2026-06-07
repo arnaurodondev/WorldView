@@ -103,21 +103,26 @@ export function PortfolioSummary() {
   // already does this; mirror it here so the dashboard widget matches.
   // WHY 5min staleTime: ticker/name/sector are effectively immutable per
   // instrument — refetching them aggressively burns S9 quota for no signal.
+  // FIX F-1 (2026-06-05): replaced N sequential getCompanyOverview calls with
+  // a single POST /v1/companies/overviews:batch. The widget previously fired
+  // Promise.all of N individual /v1/companies/{id}/overview round-trips just
+  // to look up ticker + name fields; now S9 fans out server-side.
+  // WHY 5min staleTime: ticker/name are effectively immutable per instrument —
+  // refetching them aggressively burns S9 quota for no signal.
   const { data: holdingOverviews } = useQuery({
-    queryKey: ["dashboard-holdings-overviews", instrumentIds],
+    queryKey: qk.instruments.overviewsBatch(instrumentIds),
     queryFn: async () => {
       const gw = createGateway(accessToken);
-      const results = await Promise.all(
-        instrumentIds.map((id) =>
-          gw.getCompanyOverview(id).catch(() => null),
-        ),
-      );
+      const map = await gw.getCompanyOverviewsBatch(instrumentIds);
+      // Project to the {ticker, name} shape consumers expect. A failing leg
+      // (null in the map) gracefully degrades to {ticker:null, name:null} —
+      // the original Promise.all pattern did the same via `.catch(() => null)`.
       return Object.fromEntries(
-        instrumentIds.map((id, i) => [
+        instrumentIds.map((id) => [
           id,
           {
-            ticker: results[i]?.instrument?.ticker ?? null,
-            name: results[i]?.instrument?.name ?? null,
+            ticker: map[id]?.instrument?.ticker ?? null,
+            name: map[id]?.instrument?.name ?? null,
           },
         ]),
       ) as Record<string, { ticker: string | null; name: string | null }>;

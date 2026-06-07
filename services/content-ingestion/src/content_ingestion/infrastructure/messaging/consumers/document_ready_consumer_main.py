@@ -74,7 +74,7 @@ async def main() -> None:
     log_runtime_banner(
         "content-ingestion-document-ready-consumer",
         dependencies={
-            "postgres_dsn": str(settings.database_url),
+            "postgres_dsn": str(settings.db_url),
             "kafka_brokers": settings.kafka_bootstrap_servers,
             "valkey_url": getattr(settings, "valkey_url", None),
             "topics_subscribed": ["nlp.document.ready.v1"],

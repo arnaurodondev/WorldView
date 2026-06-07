@@ -55,7 +55,7 @@ async def _run_worker() -> None:
         log_runtime_banner(
             "content-ingestion-worker",
             dependencies={
-                "postgres_dsn": str(settings.database_url),
+                "postgres_dsn": str(settings.db_url),
                 "kafka_brokers": getattr(settings, "kafka_bootstrap_servers", None),
                 "valkey_url": getattr(settings, "valkey_url", None),
             },

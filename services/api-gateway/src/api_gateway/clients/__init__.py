@@ -46,6 +46,7 @@ from api_gateway.clients.base import (
     logger,
 )
 from api_gateway.clients.dashboard import get_dashboard_snapshot
+from api_gateway.clients.dashboard_bundle import get_dashboard_bundle
 from api_gateway.clients.instrument import (
     get_company_overview,
     get_instrument_page_bundle,
@@ -72,6 +73,7 @@ __all__ = [
     "_checked_post",
     "_screener_for_sector",
     "get_company_overview",
+    "get_dashboard_bundle",
     "get_dashboard_snapshot",
     "get_instrument_page_bundle",
     "get_map_layers",

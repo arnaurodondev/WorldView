@@ -68,7 +68,7 @@ async def main() -> None:
     log_runtime_banner(
         "content-ingestion-dispatcher",
         dependencies={
-            "postgres_dsn": str(settings.database_url),
+            "postgres_dsn": str(settings.db_url),
             "kafka_brokers": settings.kafka_bootstrap_servers,
         },
     )

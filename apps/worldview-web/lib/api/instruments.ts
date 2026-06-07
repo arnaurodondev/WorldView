@@ -40,6 +40,37 @@ export function createInstrumentsApi(t: string | undefined) {
     },
 
     /**
+     * getCompanyOverviewsBatch — fan-in N company-overview lookups (FIX F-1).
+     *
+     * WHY THIS EXISTS: Dashboard widgets (PreMarketMoversWidget,
+     * SectorHeatmapWidget, PortfolioSummary) used to spawn N parallel
+     * `useQueries` calls — each one a /v1/companies/{id}/overview HTTP
+     * round-trip. With 10-20 visible rows that's 10-20 sequential auth checks
+     * + downstream fan-outs on the gateway. This batch endpoint POSTs the full
+     * id list in a single request; S9 runs the legs in parallel server-side
+     * and returns an id-keyed map.
+     *
+     * RESPONSE SHAPE: `{ overviews: { "<uuid>": CompanyOverview | null } }`.
+     * `null` means "this leg failed downstream" — the caller should render a
+     * placeholder rather than tripping a global error.
+     *
+     * WHY return a plain map (not the envelope): callers always immediately
+     * `overviewsMap[id]` so unwrapping at the boundary saves boilerplate.
+     */
+    async getCompanyOverviewsBatch(
+      instrumentIds: string[],
+    ): Promise<Record<string, CompanyOverview | null>> {
+      const resp = await apiFetch<{
+        overviews: Record<string, CompanyOverview | null>;
+      }>(`/v1/companies/overviews:batch`, {
+        token: t,
+        method: "POST",
+        body: { instrument_ids: instrumentIds },
+      });
+      return resp.overviews ?? {};
+    },
+
+    /**
      * getInstrumentPageBundle — single-round-trip composite for /instruments/[id].
      *
      * PLAN-0059 I-5: collapses the overview-tab waterfall (overview + fundamentals

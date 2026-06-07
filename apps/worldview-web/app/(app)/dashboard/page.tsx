@@ -75,6 +75,10 @@ import { RecentAlerts } from "@/components/dashboard/RecentAlerts";
 // useDashboardSnapshot() to warm the TanStack Query cache in one round-trip.
 // Returns null — no visible UI. Individual widgets still own their own queries.
 import { DashboardSnapshotPrefetcher } from "@/components/dashboard/DashboardSnapshotPrefetcher";
+// F-2: single composite bundle hydrator — fires GET /v1/dashboard/bundle once
+// and writes the legs into the per-widget TanStack caches via setQueryData so
+// child widgets render WITHOUT firing their own initial fetches. Renders null.
+import { DashboardBundleHydrator } from "@/components/dashboard/DashboardBundleHydrator";
 
 // ── Page ──────────────────────────────────────────────────────────────────────
 
@@ -133,6 +137,9 @@ export default function DashboardPage() {
       {/* PLAN-0070 C-2: fires GET /v1/dashboard/snapshot to warm the TanStack
           Query cache in a single round-trip. Returns null — no visible UI. */}
       <DashboardSnapshotPrefetcher />
+      {/* F-2: fires GET /v1/dashboard/bundle (newer composite) and hydrates
+          per-widget caches so children skip their initial fetches. Returns null. */}
+      <DashboardBundleHydrator />
 
       {/* ── Row 1: Morning Brief — full width ───────────────────────────── */}
       {/* WHY col-span-12: brief always spans all columns — it's the primary

@@ -19,7 +19,8 @@
 // WHY "use client": uses useQuery, useQueries, useAuth, useState for period selector + sector pills, and useRouter for nav.
 
 import { useMemo, useState } from "react";
-import { useQuery, useQueries } from "@tanstack/react-query";
+import { useQuery } from "@tanstack/react-query";
+import { qk } from "@/lib/query/keys";
 import { useRouter } from "next/navigation";
 import { AlertTriangle } from "lucide-react";
 import { createGateway } from "@/lib/gateway";
@@ -142,38 +143,58 @@ export function PreMarketMoversWidget() {
     return merged;
   }, [allGainers, allLosers]);
 
-  const overviewQueries = useQueries({
-    queries: allCandidates.map((m) => ({
-      queryKey: ["mover-overview-sector", m.instrument_id],
-      queryFn: () => createGateway(accessToken).getCompanyOverview(m.instrument_id),
-      enabled: !!accessToken && !!m.instrument_id,
-      staleTime: 600_000,
-    })),
+  // FIX F-1 (2026-06-05): collapse N parallel /v1/companies/{id}/overview calls
+  // into ONE POST /v1/companies/overviews:batch. Previously this widget fired up
+  // to 20 parallel HTTP round-trips via useQueries — now it's a single request.
+  // The batch endpoint returns `{ <uuid>: CompanyOverview | null }` so a single
+  // failing leg degrades to null instead of tanking the whole fan-out.
+  const candidateIds = useMemo(
+    () => allCandidates.map((m) => m.instrument_id).filter(Boolean),
+    [allCandidates],
+  );
+  const { data: overviewsMap } = useQuery({
+    queryKey: qk.instruments.overviewsBatch(candidateIds),
+    queryFn: () =>
+      createGateway(accessToken).getCompanyOverviewsBatch(candidateIds),
+    enabled: !!accessToken && candidateIds.length > 0,
+    // WHY staleTime 10min: a company's GICS sector + last price change very
+    // rarely on this widget's timescale. Aggressive caching avoids round-trip
+    // storms when the user clicks between sector pills.
+    staleTime: 600_000,
   });
+
+  // WHY a stable empty-object fallback: useMemo consumers below depend on
+  // `overviewByid` referentially — `?? {}` inline would mint a new object on
+  // every render and invalidate every downstream memo.
+  const overviewByid = useMemo(() => overviewsMap ?? {}, [overviewsMap]);
 
   // Build instrument_id → sector map for O(1) lookup during filtering.
   const sectorByInstrumentId = useMemo(() => {
     const map = new Map<string, string | null | undefined>();
-    allCandidates.forEach((m, i) => {
-      map.set(m.instrument_id, overviewQueries[i]?.data?.instrument?.gics_sector);
+    allCandidates.forEach((m) => {
+      // WHY `undefined` when the leg failed (null) OR is still loading
+      // (missing key): downstream filter treats `undefined` as "show the row"
+      // — see applyFilter() below.
+      const ov = overviewByid[m.instrument_id];
+      map.set(m.instrument_id, ov?.instrument?.gics_sector);
     });
     return map;
-  }, [allCandidates, overviewQueries]);
+  }, [allCandidates, overviewByid]);
 
   // WHY priceByInstrumentId: the S3 fundamentals screener only returns metrics stored
   // in the fundamentals table (daily_return, pe_ratio, etc.) — price lives in the
   // OHLCV table and is NOT included in screener metrics. Every mover therefore shows
-  // $0.00 from the screener alone. We reuse the overview queries already fired for
-  // sector filtering (same staleTime=10min, zero extra network cost) and extract
-  // quote.price from them so the mover rows show a real last-trade price.
+  // $0.00 from the screener alone. We extract quote.price from the same batched
+  // overview map (zero extra network cost) so the mover rows show a real last-trade
+  // price.
   const priceByInstrumentId = useMemo(() => {
     const map = new Map<string, number>();
-    allCandidates.forEach((m, i) => {
-      const price = overviewQueries[i]?.data?.quote?.price;
+    allCandidates.forEach((m) => {
+      const price = overviewByid[m.instrument_id]?.quote?.price;
       if (typeof price === "number" && price > 0) map.set(m.instrument_id, price);
     });
     return map;
-  }, [allCandidates, overviewQueries]);
+  }, [allCandidates, overviewByid]);
 
   // ── Filter helper ───────────────────────────────────────────────────────
   // WHY graceful "still loading" behaviour: if a row's overview hasn't

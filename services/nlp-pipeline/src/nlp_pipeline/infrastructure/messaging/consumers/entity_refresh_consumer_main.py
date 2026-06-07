@@ -87,7 +87,7 @@ async def main() -> None:
         "nlp-pipeline-entity-refresh-consumer",
         dependencies={
             "kafka_brokers": settings.kafka_bootstrap_servers,
-            "topics_subscribed": [settings.topic_entity_refresh],
+            "topics_subscribed": ["entity.refresh.v1"],
         },
     )
 

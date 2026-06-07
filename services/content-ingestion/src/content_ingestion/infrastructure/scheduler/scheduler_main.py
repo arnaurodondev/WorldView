@@ -259,7 +259,7 @@ async def _run_scheduler() -> None:
     log_runtime_banner(
         "content-ingestion-scheduler",
         dependencies={
-            "postgres_dsn": str(settings.database_url),
+            "postgres_dsn": str(settings.db_url),
         },
     )
 

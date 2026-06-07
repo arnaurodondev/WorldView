@@ -167,6 +167,11 @@ export const qk = {
     // stay correct.
     pageBundle: (entityId: string) =>
       ["instrument-page-bundle", entityId] as const,
+    // FIX F-1 (2026-06-05): batched company-overview lookup used by dashboard
+    // widgets to collapse N parallel useQueries calls into one round-trip.
+    // WHY sorted ids: stable cache key — same set, any order ⇒ same key.
+    overviewsBatch: (instrumentIds: readonly string[]) =>
+      ["instruments", "overviews-batch", [...instrumentIds].sort()] as const,
     // WHY browse: the /instruments list page runs the screener with a simple
     // name_ticker filter. Keeping it under instruments.* lets
     // `qc.invalidateQueries({ queryKey: qk.instruments.all })` cascade.
@@ -278,6 +283,11 @@ export const qk = {
     // limits (news:8, markets:5, earnings:7d, alerts:10). No pagination or
     // filter variation — a single stable key covers all callers.
     snapshot: () => ["dashboard", "snapshot"] as const,
+    // F-2: single composite bundle endpoint used by the dashboard page.
+    // The page hydrates per-widget caches from the bundle legs via
+    // queryClient.setQueryData, so this key is ONLY for the bundle fetch
+    // itself — widget hooks keep their own keys for refresh/invalidation.
+    bundle: () => ["dashboard", "bundle"] as const,
   },
 
   // ── Workspace widgets ────────────────────────────────────────────────────

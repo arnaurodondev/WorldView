@@ -24,6 +24,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { createGateway } from "@/lib/gateway";
 import { useAuth } from "@/hooks/useAuth";
+import { useAboveFoldReady } from "@/hooks/useAboveFoldReady";
 import { Skeleton } from "@/components/ui/skeleton";
 import { AlertTriangle } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -40,6 +41,9 @@ import type { EarningsEvent } from "@/types/api";
  */
 export function EarningsCalendarWidget() {
   const { accessToken } = useAuth();
+  // F-4: Row-4 widget — defer query one paint to free dev-mode connections
+  // for above-fold widgets (network waterfall fix).
+  const aboveFoldReady = useAboveFoldReady();
 
   const { data, isLoading, isError, refetch } = useQuery({
     // WHY "earnings-calendar" queryKey: TanStack Query uses this to cache and
@@ -50,7 +54,7 @@ export function EarningsCalendarWidget() {
     // WHY enabled guard: if the user is not authenticated yet, accessToken is
     // undefined. We must not fire the request — S9 would return 401 which
     // counts as an error state and would show the error banner on first render.
-    enabled: !!accessToken,
+    enabled: !!accessToken && aboveFoldReady,
     // WHY 10min staleTime: earnings dates are announced weeks in advance and
     // only change when companies pre-announce. 10-minute cache is safe and
     // matches EconomicCalendar's staleness budget.

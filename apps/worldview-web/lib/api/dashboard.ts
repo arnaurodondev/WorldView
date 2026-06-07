@@ -14,6 +14,33 @@ import type {
 } from "@/types/api";
 import { apiFetch } from "./_client";
 
+/**
+ * DashboardBundleResponse — F-2 single composite for the dashboard page.
+ *
+ * WHY a NEW shape distinct from DashboardSnapshotResponse:
+ * The older snapshot prefetcher (PLAN-0070 C-2) stored under qk.dashboard.snapshot()
+ * but the per-widget hooks use DIFFERENT keys (qk.dashboard.morningBrief(),
+ * ["alerts-pending"], ["sector-heatmap-widget", "1D"], …). The snapshot
+ * therefore did not eliminate widget wave-serialization on cold start.
+ *
+ * The bundle below is shape-aligned with the per-widget cache keys so the
+ * page hydrates them via queryClient.setQueryData and the widgets render
+ * without firing their own initial fetches.
+ *
+ * All legs are nullable — failed legs degrade to null at the gateway and the
+ * page renders partial UIs (skeletons or "—") for them.
+ */
+export interface DashboardBundleResponse {
+  brief: unknown | null;
+  portfolios: unknown | null;
+  top_gainers: unknown | null;
+  top_losers: unknown | null;
+  sector_heatmap: unknown | null;
+  recent_alerts: unknown | null;
+  workspace: unknown | null;
+  _meta?: { partial: boolean; legs_failed: number };
+}
+
 export function createDashboardApi(t: string | undefined) {
   return {
     /**
@@ -283,6 +310,22 @@ export function createDashboardApi(t: string | undefined) {
      */
     getDashboardSnapshot(): Promise<DashboardSnapshotResponse> {
       return apiFetch<DashboardSnapshotResponse>(`/v1/dashboard/snapshot`, {
+        token: t,
+      });
+    },
+
+    /**
+     * getDashboardBundle — F-2 single composite endpoint for the dashboard page.
+     *
+     * WHY a SECOND dashboard composite: see DashboardBundleResponse JSDoc.
+     * The page calls this ONCE at the top and hydrates per-widget TanStack
+     * caches from the legs via queryClient.setQueryData, eliminating
+     * per-widget wave-serialized initial fetches on cold start.
+     *
+     * Endpoint: GET /v1/dashboard/bundle.
+     */
+    getDashboardBundle(): Promise<DashboardBundleResponse> {
+      return apiFetch<DashboardBundleResponse>(`/v1/dashboard/bundle`, {
         token: t,
       });
     },

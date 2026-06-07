@@ -23,6 +23,7 @@ import { useQuery } from "@tanstack/react-query";
 import Link from "next/link";
 import { createGateway } from "@/lib/gateway";
 import { useAuth } from "@/hooks/useAuth";
+import { useAboveFoldReady } from "@/hooks/useAboveFoldReady";
 import { useAlertStream } from "@/contexts/AlertStreamContext";
 import { severityColor } from "@/lib/utils";
 import { formatAlertTitle } from "@/lib/alerts/format";
@@ -55,13 +56,18 @@ const SEVERITY_ORDER: Record<string, number> = {
 export function RecentAlerts() {
   const { accessToken } = useAuth();
   const { recentAlerts } = useAlertStream();
+  // F-4: Row-4 widget — defer query until above-fold widgets fetch first.
+  // Live alerts still stream over WebSocket (useAlertStream above), so the
+  // user sees critical real-time alerts immediately; only the historical
+  // REST poll is gated.
+  const aboveFoldReady = useAboveFoldReady();
 
   // ── Poll historical alerts from REST endpoint ──────────────────────────────
   // WHY poll: WebSocket gaps could miss alerts. REST is the authoritative source.
   const { data: alertsResp, isLoading, isError } = useQuery({
     queryKey: ["alerts-pending"],
     queryFn: () => createGateway(accessToken).getPendingAlerts({ limit: 10 }),
-    enabled: !!accessToken,
+    enabled: !!accessToken && aboveFoldReady,
     refetchInterval: 30_000, // WHY 30s: balance freshness vs API load
     staleTime: 15_000,
   });

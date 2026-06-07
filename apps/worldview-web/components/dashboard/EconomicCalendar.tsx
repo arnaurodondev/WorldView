@@ -20,6 +20,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { createGateway } from "@/lib/gateway";
 import { useAuth } from "@/hooks/useAuth";
+import { useAboveFoldReady } from "@/hooks/useAboveFoldReady";
 import { Skeleton } from "@/components/ui/skeleton";
 import type { EconomicImpact } from "@/types/api";
 
@@ -27,11 +28,13 @@ import type { EconomicImpact } from "@/types/api";
 
 export function EconomicCalendar() {
   const { accessToken } = useAuth();
+  // F-4: Row-4 widget — gate query until above-fold widgets have enqueued.
+  const aboveFoldReady = useAboveFoldReady();
 
   const { data, isLoading, isError } = useQuery({
     queryKey: ["economic-calendar"],
     queryFn: () => createGateway(accessToken).getEconomicCalendar(),
-    enabled: !!accessToken,
+    enabled: !!accessToken && aboveFoldReady,
     // WHY 10min: economic events don't change frequently; 10min is fine
     staleTime: 10 * 60_000,
     refetchInterval: 10 * 60_000,

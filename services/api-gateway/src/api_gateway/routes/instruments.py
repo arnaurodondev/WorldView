@@ -6,10 +6,12 @@ Split from proxy.py (PLAN-0089 B-3).
 
 from __future__ import annotations
 
+import asyncio
 from typing import Any
 
 import httpx
 from fastapi import APIRouter, HTTPException, Query, Request, Response
+from pydantic import BaseModel, Field
 
 from api_gateway.clients import DownstreamError, get_map_layers, get_relevant_news
 from api_gateway.resolution import (
@@ -82,6 +84,112 @@ async def company_overview(company_id: str, request: Request) -> dict[str, Any]:
         )
     except DownstreamError as e:
         raise HTTPException(status_code=e.status, detail=e.detail) from e
+
+
+# ── Batched company overview (FIX F-1) ──────────────────────────────────────
+#
+# WHY THIS EXISTS: dashboard widgets (PreMarketMoversWidget, SectorHeatmapWidget,
+# PortfolioSummary) previously fired one /v1/companies/{id}/overview per ticker
+# via TanStack `useQueries`. For a default page that meant 10-50+ parallel HTTP
+# round-trips just to look up GICS sector + ticker/name fields. This batch
+# endpoint fans-in to one POST request: the gateway runs the N legs in parallel
+# server-side and returns a `{ uuid: CompanyOverview | null }` map.
+#
+# WHY return_exceptions=True + null per-leg: each individual leg may fail
+# independently (instrument tombstoned, market-data slow, etc). The caller
+# treats `null` as "missing data, render placeholder" rather than failing the
+# whole widget. This mirrors the per-leg degradation policy in
+# `/v1/instruments/{id}/page-bundle`.
+#
+# WHY make_headers PER LEG (not a single header dict): InternalJWTMiddleware on
+# every downstream service enforces JTI replay detection. If we reused one
+# X-Internal-JWT across N parallel legs, all but one would be rejected.
+
+
+_BATCH_OVERVIEW_MAX_IDS = 50
+
+
+class _CompanyOverviewBatchRequest(BaseModel):
+    """Request body for POST /v1/companies/overviews:batch.
+
+    WHY max 50: 50 covers every legitimate use case today (the dashboard
+    widgets call with ≤20 ids) and bounds worst-case fan-out so a single
+    request can never DDoS market-data with hundreds of legs.
+    """
+
+    instrument_ids: list[str] = Field(..., min_length=1, max_length=_BATCH_OVERVIEW_MAX_IDS)
+
+
+@router.post("/companies/overviews:batch")
+async def company_overviews_batch(
+    body: _CompanyOverviewBatchRequest,
+    request: Request,
+) -> dict[str, dict[str, dict[str, Any] | None]]:
+    """Fan-in N company-overview lookups into one round-trip.
+
+    Returns ``{ "overviews": { "<uuid>": CompanyOverview | null, ... } }`` —
+    null for any leg that errored (downstream 404/500/timeout). The shape
+    preserves request mapping via id-keyed map so callers don't need to align
+    indices.
+
+    Auth: same as the single-overview route — 401 when unauthenticated.
+    """
+    if getattr(request.state, "user", None) is None:
+        raise HTTPException(status_code=401, detail="Authentication required")
+
+    # Dedupe in case the caller passes the same id twice (cheap insurance
+    # against burning extra downstream calls). dict.fromkeys preserves order.
+    unique_ids: list[str] = list(dict.fromkeys(body.instrument_ids))
+
+    from api_gateway.application.use_cases.company_overview import CompanyOverviewUseCase
+
+    clients = _clients(request)
+    use_case = CompanyOverviewUseCase(
+        http_client=clients.market_data,
+        settings=request.app.state.settings,
+        service_clients=clients,
+    )
+
+    async def _one(instrument_id: str) -> dict[str, Any]:
+        # WHY resolve per id: callers may pass tickers OR UUIDs (the single-id
+        # route accepts both via PRD-0089 F2). Resolving here keeps batch
+        # behaviour symmetric with the single-id endpoint.
+        try:
+            resolved = await resolve_security_id(
+                instrument_id,
+                clients=clients,
+                headers=_auth_headers(request),
+            )
+        except InstrumentNotFoundError as exc:
+            raise DownstreamError("market-data", 404, f"Not found: {exc.identifier}") from exc
+
+        return await use_case.execute(
+            company_id=str(resolved.instrument_id),
+            # WHY lambda calling _auth_headers afresh: each leg mints a unique
+            # JTI so InternalJWTMiddleware's replay detection accepts the fan-out.
+            make_headers=lambda: _auth_headers(request),
+        )
+
+    # asyncio.gather with return_exceptions=True so a single failure doesn't
+    # tank the whole batch — we map exceptions to null below.
+    results = await asyncio.gather(
+        *(_one(_id) for _id in unique_ids),
+        return_exceptions=True,
+    )
+
+    overviews: dict[str, dict[str, Any] | None] = {}
+    for original_id, result in zip(unique_ids, results, strict=True):
+        if isinstance(result, BaseException):
+            logger.info(
+                "company_overviews_batch_leg_failed",
+                instrument_id=original_id,
+                error=str(result),
+            )
+            overviews[original_id] = None
+        else:
+            overviews[original_id] = result
+
+    return {"overviews": overviews}
 
 
 @router.get("/instruments/{instrument_id}/page-bundle")
