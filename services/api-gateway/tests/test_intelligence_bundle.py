@@ -98,10 +98,11 @@ async def test_bundle_happy_path_returns_all_legs(authed_app, authed_mock_client
     {entity_id, nodes, edges} by _transform_graph_response.
     """
     # WHY one AsyncMock per client with side_effect ordering:
-    # The route fires 4 calls to clients.knowledge_graph.get (detail, graph,
-    # paths, intelligence) in asyncio.gather. asyncio.gather schedules tasks
-    # in order; AsyncMock's call ordering matches the schedule. We map S7
-    # paths to their payloads via side_effect lambda for robustness.
+    # The route fires 5 calls to clients.knowledge_graph.get: detail, graph
+    # (depth=2), paths, intelligence (via asyncio.gather) PLUS a depth=1 merge
+    # fetch for graph_d2 (B-2 fix).  We dispatch by path so both graph calls
+    # (depth=2 + depth=1 merge) receive the same payload — adequate for unit
+    # testing the merge logic without needing distinct fixtures.
 
     async def _kg_get(path: str, *, params: dict | None = None, headers: dict | None = None) -> MagicMock:
         if path == f"/api/v1/entities/{_ENTITY_UUID}":

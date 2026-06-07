@@ -205,8 +205,13 @@ class TestPathInsight:
         )
         assert insight.composite_score == 1.0
 
-    def test_path_insight_composite_score_mismatch_raises(self) -> None:
-        """PathInsight raises ValueError when composite_score doesn't match formula."""
+    def test_path_insight_composite_score_out_of_range_raises(self) -> None:
+        """PathInsight raises ValueError when composite_score is outside [0.0, 1.0].
+
+        B-1 (2026-05-23): the formula cross-check was removed to accommodate
+        DB rows scored before hub_penalty was introduced.  Only the [0, 1]
+        range is enforced at construction time.
+        """
         from knowledge_graph.domain.entities.path_insight import PathInsight
 
         edges = _make_edges(2, confidence=0.8)
@@ -221,9 +226,35 @@ class TestPathInsight:
                 harmonic_score=0.7,
                 diversity_score=0.6,
                 surprise_score=0.5,
-                composite_score=0.999,  # wrong value
+                composite_score=1.5,  # out of [0, 1] — must raise
                 computed_at=_NOW,
             )
+
+    def test_path_insight_legacy_score_accepted(self) -> None:
+        """PathInsight accepts a composite_score that diverges from the formula.
+
+        B-1 regression: rows computed before hub_penalty was introduced store a
+        score rounded without the hub_penalty divisor.  As long as the score is
+        in [0.0, 1.0] it must not raise.
+        """
+        from knowledge_graph.domain.entities.path_insight import PathInsight
+
+        edges = _make_edges(2, confidence=0.8)
+        nodes = _make_nodes(3)
+        # Score that does NOT match the formula (was previously rejected with
+        # composite_score mismatch ValueError), but IS in [0, 1].
+        PathInsight(
+            insight_id=uuid4(),
+            anchor_entity_id=uuid4(),
+            hop_count=2,
+            path_nodes=nodes,
+            path_edges=edges,
+            harmonic_score=0.7,
+            diversity_score=0.6,
+            surprise_score=0.5,
+            composite_score=0.999,  # formula gives ~0.655; must now be accepted
+            computed_at=_NOW,
+        )
 
     def test_path_insight_frozen(self) -> None:
         """PathInsight is immutable (frozen dataclass)."""

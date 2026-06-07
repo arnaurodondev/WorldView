@@ -295,7 +295,7 @@ async def get_intraday_stats(instrument_id: UUID, request: Request) -> Any:
     - 20 daily bars (ATR-14, RSI-14, GAP%)
     - technicals_snapshot (short interest)
 
-    Returns a flat dict with 6 fields:
+    Returns a flat dict with 8 fields:
     - vwap        float | null — volume-weighted average price (intraday 5m bars)
     - atr_14      float | null — 14-bar ATR from daily bars (True Range avg)
     - rsi_14      float | null — 14-bar RSI from daily bars
@@ -304,6 +304,8 @@ async def get_intraday_stats(instrument_id: UUID, request: Request) -> Any:
     - premarket_low   float | null — min(low) from 5m bars before 09:30 ET
     - short_interest_pct  float | null — from technicals_snapshot.ShortPercent
     - short_interest_delta float | null — change from prior snapshot (null if unavailable)
+    - day_open    float | null — today's opening price (first intraday bar open, else daily bar open)
+    - rel_volume  float | null — today cumulative vol / avg_volume_30d (null if no volume data)
 
     All fields are null when insufficient data exists — no 404 is raised.
     Requires authentication.
@@ -437,6 +439,33 @@ async def get_intraday_stats(instrument_id: UUID, request: Request) -> Any:
     # Return null for now — the UI renders "—" for null values.
     short_interest_delta: float | None = None
 
+    # ── day_open (B-Q-2 requirement) ─────────────────────────────────────────
+    # Prefer the first intraday bar's open (most accurate for the current session).
+    # Fall back to the last daily bar's open when intraday data is unavailable.
+    # WHY: BottomTripleStrip needs the open to display day change from open.
+    day_open: float | None = None
+    if intraday_bars:
+        day_open = intraday_bars[0]["open"]
+    elif daily_bars:
+        day_open = daily_bars[-1]["open"]
+
+    # ── rel_volume (B-Q-2 requirement) ───────────────────────────────────────
+    # Relative volume = today's cumulative volume / avg_volume_30d.
+    # avg_volume_30d is derived from the daily bars already fetched (30-day window).
+    # WHY from daily bars: avoids an extra S3 round-trip; the 30 bars we fetch
+    # for ATR/RSI already cover the same rolling window used in the snapshot table.
+    # WHY null guard: division by zero or missing data must not crash the endpoint.
+    rel_volume: float | None = None
+    if intraday_bars and daily_bars:
+        today_volume = sum(b["volume"] for b in intraday_bars)
+        # Exclude the last daily bar (today) from the 30-day average; it is
+        # incomplete intraday and would artificially deflate the baseline.
+        baseline_bars = daily_bars[:-1] if len(daily_bars) > 1 else daily_bars
+        if baseline_bars:
+            avg_volume_30d = sum(b["volume"] for b in baseline_bars) / len(baseline_bars)
+            if avg_volume_30d > 0:
+                rel_volume = today_volume / avg_volume_30d
+
     return JSONResponse(
         content={
             "instrument_id": str(instrument_id),
@@ -448,6 +477,8 @@ async def get_intraday_stats(instrument_id: UUID, request: Request) -> Any:
             "premarket_low": round(premarket_low, 4) if premarket_low is not None else None,
             "short_interest_pct": round(short_interest_pct, 2) if short_interest_pct is not None else None,
             "short_interest_delta": short_interest_delta,
+            "day_open": round(day_open, 4) if day_open is not None else None,
+            "rel_volume": round(rel_volume, 4) if rel_volume is not None else None,
         },
     )
 

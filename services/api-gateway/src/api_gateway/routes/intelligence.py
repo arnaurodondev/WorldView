@@ -866,10 +866,60 @@ async def get_entity_intelligence_bundle(
     # S7 {center, relations, entities} payload to the frontend's EntityGraph
     # {entity_id, nodes, edges}. Same transform the /graph proxy applies, so
     # the hydrated cache slot is byte-for-byte what a direct call would yield.
+    #
+    # B-2 fix (2026-06-06): at depth=2, S7's CypherNeighborhoodUseCase
+    # discovers depth-2 neighbor IDs via AGE Cypher and fills the `entities`
+    # dict with them (up to the limit).  However, `relations` only contains the
+    # center's direct (depth-1) relations.  When the depth-2 nodes consume the
+    # full entity limit, depth-1 neighbors are absent from `entities` — the
+    # orphan-edge filter in _transform_graph_response then removes every edge
+    # (source not in node_id_set) → 0 edges.
+    #
+    # Fix mirrors get_entity_graph: always fetch depth=1 separately and merge
+    # its nodes+edges into the depth=2 result before orphan-filtering so
+    # depth-1 neighbors are always present in the node set.
     graph_d2: dict[str, Any] | None = None
     if graph_t is not None:
         try:
             graph_d2 = _transform_graph_response(graph_t)
+            # Fetch depth=1 (fast SQL path — no AGE) and merge into the depth=2
+            # result.  This guarantees center↔depth-1-neighbor edges are never
+            # orphaned regardless of how S7 paginates depth-2 AGE results.
+            depth1_raw = await _bundle_fetch_json(
+                clients.knowledge_graph,
+                f"/api/v1/entities/{eid}/graph",
+                headers=headers,
+                params={
+                    "limit": _BUNDLE_GRAPH_LIMIT,
+                    "min_confidence": 0.0,
+                    "confidence_breakdown": "true",
+                    # No `depth` param → S7 defaults to depth=1 SQL path.
+                },
+                leg="graph_d2_depth1_merge",
+            )
+            if depth1_raw is not None:
+                t1 = _transform_graph_response(depth1_raw)
+                existing_node_ids = {n["id"] for n in graph_d2["nodes"]}
+                existing_edge_ids = {e["id"] for e in graph_d2["edges"]}
+                for n in t1["nodes"]:
+                    if n["id"] not in existing_node_ids:
+                        graph_d2["nodes"].append(n)
+                        existing_node_ids.add(n["id"])
+                for e in t1["edges"]:
+                    if e["id"] not in existing_edge_ids:
+                        graph_d2["edges"].append(e)
+                        existing_edge_ids.add(e["id"])
+                # Re-apply orphan filter after merge (new edges may validate
+                # previously-orphan nodes; new nodes may validate orphan edges).
+                node_id_set2 = {n["id"] for n in graph_d2["nodes"]}
+                graph_d2["edges"] = [
+                    e for e in graph_d2["edges"] if e["source"] in node_id_set2 and e["target"] in node_id_set2
+                ]
+                edge_eps2: set[str] = set()
+                for e in graph_d2["edges"]:
+                    edge_eps2.add(e["source"])
+                    edge_eps2.add(e["target"])
+                graph_d2["nodes"] = [n for n in graph_d2["nodes"] if n["id"] == eid or n["id"] in edge_eps2]
         except Exception:
             # Defensive: malformed S7 payload should not poison the bundle.
             logger.warning("entity_intelligence_bundle_graph_transform_failed", entity_id=eid)

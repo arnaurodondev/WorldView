@@ -105,22 +105,24 @@ class PathInsight:
             msg = f"PathInsight.hop_count must be between 2 and 5; got {self.hop_count}"
             raise ValueError(msg)
 
-        # Invariant: composite_score is consistent with the formula.
-        # Hub penalty (2026-05-23): formula now divides by (1 + hub_penalty).
-        # hub_penalty defaults to 0.0 so legacy rows and tests without hub_penalty
-        # continue to use the original formula (no change when hub_penalty=0).
-        raw = (
-            self.harmonic_score * 0.4
-            + self.diversity_score * 0.35
-            + self.surprise_score * 0.25
-            + (0.1 if self.template_match else 0.0)
-        )
-        expected = round(min(raw / (1.0 + self.hub_penalty), 1.0), 6)
-        if abs(self.composite_score - expected) > 1e-5:
-            msg = (
-                f"PathInsight.composite_score={self.composite_score!r} does not match "
-                f"expected formula result={expected!r} (tolerance 1e-5)"
-            )
+        # Invariant: composite_score must be in [0.0, 1.0].
+        #
+        # WHY no formula cross-check (B-1, 2026-05-23): the original check
+        # recomputed the score via the PathScorer formula and raised if the
+        # stored value diverged by more than 1e-5.  When hub_penalty was
+        # introduced (2026-05-23), existing DB rows were computed without it.
+        # Loading those rows with hub_penalty defaulting to 0.0 still produced
+        # a rounding difference (the old rows were rounded differently by a
+        # pre-hub_penalty version of PathScorer), causing every deserialization
+        # to raise ValueError → 422 on GET /v1/entities/{id}/paths.
+        #
+        # The formula invariant is a dev-time cross-check, not a runtime
+        # correctness requirement.  PathScorer is the authoritative source of
+        # truth for how the score is computed; this domain model only needs to
+        # guarantee the score is in range.  Future scoring formula changes must
+        # update PathScorer, not this guard.
+        if not (0.0 <= self.composite_score <= 1.0):
+            msg = f"PathInsight.composite_score must be in [0.0, 1.0]; got {self.composite_score!r}"
             raise ValueError(msg)
 
 
