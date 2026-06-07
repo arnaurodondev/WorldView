@@ -90,11 +90,11 @@ export function ExposureCurrencyStrip({
               <span className="text-[10px] text-muted-foreground">·</span>
               <span className="text-[10px] uppercase tracking-[0.06em] text-muted-foreground">CCY</span>
               {topCurrencies.map((c) => (
-                // WHY rounded-[4px]: small radius keeps the chip compact without
+                // WHY rounded: small radius keeps the chip compact without
                 // looking like a card. Matches the "4px rounded" spec in §6.1.
                 <span
                   key={c.code}
-                  className="inline-flex items-center gap-0.5 rounded-[4px] bg-muted/40 px-1 font-mono text-[10px] text-muted-foreground"
+                  className="inline-flex items-center gap-0.5 rounded bg-muted/40 px-1 font-mono text-[10px] text-muted-foreground"
                 >
                   {c.code}
                   {/* WHY formatPercent(c.pct): c.pct is 0-1 fraction, formatPercent × 100. */}
@@ -102,7 +102,7 @@ export function ExposureCurrencyStrip({
                 </span>
               ))}
               {overflowCount > 0 && (
-                <span className="inline-flex items-center rounded-[4px] bg-muted/30 px-1 font-mono text-[10px] text-muted-foreground">
+                <span className="inline-flex items-center rounded bg-muted/30 px-1 font-mono text-[10px] text-muted-foreground">
                   +{overflowCount}
                 </span>
               )}

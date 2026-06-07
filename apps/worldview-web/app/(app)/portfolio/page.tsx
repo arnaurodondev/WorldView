@@ -105,6 +105,11 @@ import { PortfolioPageHeader } from "@/features/portfolio/components/PortfolioPa
 import { PerformanceStrip } from "@/features/portfolio/components/PerformanceStrip";
 import { HoldingsTab } from "@/features/portfolio/components/HoldingsTab";
 import { TransactionsTab } from "@/features/portfolio/components/TransactionsTab";
+// Wave G: AnalyticsTab is the new third tab (Holdings | Transactions | Analytics).
+// WHY static import (not dynamic): AnalyticsTab mounts charts from recharts which
+// is already in the bundle. The lazy-load savings would be minimal and would cause
+// a visible blank flash when the user first clicks Analytics.
+import { AnalyticsTab } from "@/features/portfolio/components/AnalyticsTab";
 import { usePortfolioData } from "@/features/portfolio/hooks/usePortfolioData";
 // PLAN-0070 C-1: fire the bundle endpoint to warm the cache in one round-trip.
 import { usePortfolioBundle } from "@/features/portfolio/hooks/usePortfolioBundle";
@@ -149,9 +154,14 @@ export default function PortfolioPage() {
   // transaction history for AAPL") and expect back/forward to navigate
   // between tabs. WHY clearOnDefault: omitting `?tab=holdings` from the URL
   // when Holdings is active keeps the canonical /portfolio link short.
+  // Wave G: "analytics" added as a third tab. The Watchlist tab moves here
+  // as the fourth; the tab bar now shows Holdings | Transactions | Analytics | Watchlist.
+  // WHY add to the literal union (not a separate state): nuqs parseAsStringLiteral
+  // validates the value at the URL boundary — unknown ?tab= values fall back to
+  // "holdings" automatically, so old bookmarks with ?tab=watchlist still work.
   const [activeTab, setActiveTab] = useQueryState(
     "tab",
-    parseAsStringLiteral(["holdings", "transactions", "watchlist"] as const)
+    parseAsStringLiteral(["holdings", "transactions", "analytics", "watchlist"] as const)
       .withDefault("holdings")
       .withOptions({ clearOnDefault: true }),
   );
@@ -324,7 +334,7 @@ export default function PortfolioPage() {
           // interactive while React mounts the new TabsContent tree.
           // Inside startTransition the cast keeps TS strict-mode happy.
           startTabTransition(() => {
-            void setActiveTab(v as "holdings" | "transactions" | "watchlist");
+            void setActiveTab(v as "holdings" | "transactions" | "analytics" | "watchlist");
           });
         }}
         className="flex flex-col flex-1 min-h-0"
@@ -345,6 +355,15 @@ export default function PortfolioPage() {
             className="h-7 px-3 text-[11px] font-mono data-[state=active]:text-primary data-[state=active]:border-b-2 data-[state=active]:border-primary rounded-none"
           >
             Transactions
+          </TabsTrigger>
+          {/* Wave G: Analytics tab — TWR vs benchmark, drawdown chart, risk metrics,
+              period returns, and contribution-to-return attribution. Added between
+              Transactions and Watchlist per design spec §4.3. */}
+          <TabsTrigger
+            value="analytics"
+            className="h-7 px-3 text-[11px] font-mono data-[state=active]:text-primary data-[state=active]:border-b-2 data-[state=active]:border-primary rounded-none"
+          >
+            Analytics
           </TabsTrigger>
           <TabsTrigger
             value="watchlist"
@@ -387,6 +406,24 @@ export default function PortfolioPage() {
             holdingOverviews={holdingOverviews}
             onConnect={() => setConnectModalOpen(true)}
           />
+        </TabsContent>
+
+        {/* Wave G Analytics tab */}
+        <TabsContent
+          value="analytics"
+          className="flex-1 min-h-0 overflow-y-auto p-0 mt-0 bg-background"
+        >
+          {/* WHY guard on activePortfolioId: AnalyticsTab fires useQuery calls
+              that require a valid portfolioId. Rendering with null would cause
+              the queries to fire enabled=false but the component still mounts
+              its full DOM tree, including chart containers, which wastes paint. */}
+          {activePortfolioId ? (
+            <AnalyticsTab portfolioId={activePortfolioId} />
+          ) : (
+            <div className="p-3 text-[11px] text-muted-foreground font-mono">
+              Select a portfolio to view analytics.
+            </div>
+          )}
         </TabsContent>
 
         <TabsContent
