@@ -18,14 +18,29 @@
 # freshness fixes this: the next call sees a young `started_at` and refuses.
 #
 # Subcommands:
-#   acquire [agent_id]   — create lock; refuse if a fresh peer lock exists
-#   release              — delete lock (idempotent)
-#   check                — exit 0 held, 1 absent, 2 stale (past TTL, pid dead)
-#   heartbeat            — refresh started_at to NOW (keeps lock alive)
+#   acquire [agent_id]    — create lock; refuse if a fresh peer lock exists
+#   release               — delete lock (idempotent)
+#   check                 — exit 0 held, 1 absent, 2 stale (past TTL, pid dead)
+#   heartbeat             — refresh started_at to NOW (keeps lock alive)
+#   check_for_commit      — pre-commit hook entry point (PLAN-0108 Wave C);
+#                           refuses (exit 1) when a fresh foreign-pid lock
+#                           is present; exits 0 otherwise. Designed to be
+#                           wired into `.pre-commit-config.yaml` as a
+#                           `local` hook.
+#   autonomous_heartbeat  — daemon mode (PLAN-0108 Wave D). Loops every
+#                           TTL/3 seconds calling `heartbeat`. Exits when
+#                           the lockfile disappears or a SIGTERM/INT is
+#                           received. Pure bash — safe to background.
 #
 # Env knobs:
 #   WORLDVIEW_DISABLE_WORKTREE_LOCK=1   no-op every subcommand
 #   WORLDVIEW_WORKTREE_LOCK_TTL=<sec>   override TTL (default 1800 = 30 min)
+#
+# Long-running orchestrators (PLAN-0108 Wave D usage):
+#   bash scripts/worktree_lock.sh acquire orchestrator-name
+#   bash scripts/worktree_lock.sh autonomous_heartbeat &
+#   HB_PID=$!
+#   trap "kill $HB_PID 2>/dev/null; bash scripts/worktree_lock.sh release" EXIT
 
 set -euo pipefail
 
@@ -191,23 +206,97 @@ cmd_heartbeat() {
     return 0
 }
 
+cmd_check_for_commit() {
+    # PLAN-0108 Wave C — pre-commit hook integration.
+    # Refuses (exit 1) when a fresh lock owned by a foreign pid is present.
+    # "Foreign" = pid that is NOT the current shell's parent process chain,
+    # detected conservatively by comparing to $PPID. The point is to flag the
+    # case where a SECOND session tries to commit while a different session
+    # already owns the lock — not to block the lock holder from committing.
+    if [ ! -f "$LOCK_FILE" ]; then
+        return 0
+    fi
+    local age existing_pid existing_agent existing_started
+    age="$(lock_age_seconds)"
+    existing_pid="$(read_pid || true)"
+    existing_agent="$(read_field agent_id || true)"
+    existing_started="$(read_field started_at || true)"
+
+    # Stale lock — let the commit through; another `acquire` would clobber it
+    # anyway, and we don't want to block legitimate work on dead-session debris.
+    if [ "$age" -ge "$LOCK_TTL_SECONDS" ] && ! pid_alive "$existing_pid"; then
+        return 0
+    fi
+
+    # If the lock's pid matches the current shell's parent (the pre-commit
+    # framework process), this is the lock holder committing — allow.
+    if [ -n "$existing_pid" ] && [ "$existing_pid" = "$PPID" ]; then
+        return 0
+    fi
+
+    cat >&2 <<EOF
+worktree_lock: REFUSED — commit blocked by foreign lock holder.
+  lockfile:   $(pwd)/$LOCK_FILE
+  holder:     agent=$existing_agent pid=$existing_pid
+  started_at: $existing_started (age=${age}s, ttl=${LOCK_TTL_SECONDS}s)
+A peer session owns this worktree. Wait for it to release or override:
+  bash scripts/worktree_lock.sh release
+Or opt out for this shell:
+  export WORLDVIEW_DISABLE_WORKTREE_LOCK=1
+EOF
+    return 1
+}
+
+cmd_autonomous_heartbeat() {
+    # PLAN-0108 Wave D — daemon-style heartbeat.
+    # Loops every TTL/3 seconds, calling cmd_heartbeat. Exits cleanly when:
+    #   - the lockfile disappears (release happened)
+    #   - SIGTERM / SIGINT received (trap fires)
+    # Interval defaults to TTL/3 so we refresh well before stale-out.
+    local interval=$(( LOCK_TTL_SECONDS / 3 ))
+    [ "$interval" -lt 1 ] && interval=1
+
+    # Clean exit on signals — no message to stderr to keep background usage tidy.
+    trap 'exit 0' TERM INT
+
+    while true; do
+        if [ ! -f "$LOCK_FILE" ]; then
+            # Lock was released — daemon's job is done.
+            return 0
+        fi
+        # Refresh started_at. Suppress "no lockfile" errors that may race
+        # with a concurrent release.
+        cmd_heartbeat 2>/dev/null || true
+        # `sleep` is interrupted by signals and returns ~128+signo; the trap
+        # will fire and exit before the next iteration.
+        sleep "$interval"
+    done
+}
+
 case "$cmd" in
-    acquire)   cmd_acquire ;;
-    release)   cmd_release ;;
-    check)     cmd_check ;;
-    heartbeat) cmd_heartbeat ;;
+    acquire)              cmd_acquire ;;
+    release)              cmd_release ;;
+    check)                cmd_check ;;
+    heartbeat)            cmd_heartbeat ;;
+    check_for_commit)     cmd_check_for_commit ;;
+    autonomous_heartbeat) cmd_autonomous_heartbeat ;;
     *)
         cat >&2 <<EOF
-usage: $0 {acquire [agent_id]|release|check|heartbeat}
+usage: $0 {acquire [agent_id]|release|check|heartbeat|check_for_commit|autonomous_heartbeat}
 
-  acquire [agent_id]   create lock; refuse if a fresh peer lock exists
-                       (freshness = age < \$WORLDVIEW_WORKTREE_LOCK_TTL,
-                        default 1800s). Past-TTL locks are clobbered unless
-                        their pid is still alive.
-  release              delete lockfile (idempotent)
-  check                exit 0 held / 1 absent / 2 stale (past TTL, pid dead)
-  heartbeat            refresh started_at to NOW (keeps a long-running
-                       session's lock fresh past TTL)
+  acquire [agent_id]    create lock; refuse if a fresh peer lock exists
+                        (freshness = age < \$WORLDVIEW_WORKTREE_LOCK_TTL,
+                         default 1800s). Past-TTL locks are clobbered unless
+                         their pid is still alive.
+  release               delete lockfile (idempotent)
+  check                 exit 0 held / 1 absent / 2 stale (past TTL, pid dead)
+  heartbeat             refresh started_at to NOW (keeps a long-running
+                        session's lock fresh past TTL)
+  check_for_commit      PLAN-0108 Wave C pre-commit hook entry point.
+                        Exit 1 when a fresh foreign-pid lock exists; 0 else.
+  autonomous_heartbeat  PLAN-0108 Wave D daemon mode. Loops every TTL/3s,
+                        calling heartbeat. Exits when lockfile is removed
+                        or on SIGTERM/INT.
 
 env:
   WORLDVIEW_DISABLE_WORKTREE_LOCK=1   skip every subcommand

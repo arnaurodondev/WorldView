@@ -194,7 +194,54 @@ T7="$(new_tmp)"
 read P F </tmp/wlt_t7; PASS=$((PASS + P)); FAIL=$((FAIL + F))
 rm -rf "$T7"
 
-rm -f /tmp/wlt_t1 /tmp/wlt_t2 /tmp/wlt_t3a /tmp/wlt_t3b /tmp/wlt_t4 /tmp/wlt_t5 /tmp/wlt_t6 /tmp/wlt_t7
+echo "==> Test 8: autonomous_heartbeat refreshes started_at and exits on lock release (PLAN-0108 Wave D)"
+T8="$(new_tmp)"
+(
+    cd "$T8"
+    # Acquire lock so heartbeat has something to refresh.
+    bash "$LOCK_SCRIPT" acquire t8 >/dev/null
+    # Backdate started_at so the heartbeat refresh is observable.
+    older_iso="$(iso_minus 600)"
+    tmp="$(mktemp)"
+    sed "s/\"started_at\"[[:space:]]*:[[:space:]]*\"[^\"]*\"/\"started_at\": \"$older_iso\"/" .worktree-lock >"$tmp" && mv "$tmp" .worktree-lock
+    backdated=$(sed -n 's/.*"started_at"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' .worktree-lock | head -1)
+    # Run autonomous_heartbeat with a short TTL so interval = TTL/3 = 1s.
+    WORLDVIEW_WORKTREE_LOCK_TTL=3 bash "$LOCK_SCRIPT" autonomous_heartbeat &
+    HB_PID=$!
+    # Give it >1 interval to fire at least once.
+    sleep 2
+    after_started=$(sed -n 's/.*"started_at"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' .worktree-lock | head -1)
+    # Release the lock — daemon should detect missing file and exit cleanly.
+    bash "$LOCK_SCRIPT" release
+    # Wait up to 6s for the daemon to notice and exit. The interval is
+    # TTL/3 = 1s, but the daemon may be in the middle of a sleep when we
+    # release; give it ample room.
+    for _ in 1 2 3 4 5 6; do
+        if ! kill -0 "$HB_PID" 2>/dev/null; then break; fi
+        sleep 1
+    done
+    if kill -0 "$HB_PID" 2>/dev/null; then
+        # Daemon still running — fail (and clean up).
+        kill "$HB_PID" 2>/dev/null
+        wait "$HB_PID" 2>/dev/null
+        echo "0 1" >/tmp/wlt_t8
+        printf "  FAIL  autonomous_heartbeat did not exit after lock release\n"
+    else
+        wait "$HB_PID" 2>/dev/null
+        # Verify started_at was refreshed (i.e. moved away from the backdate).
+        if [ "$after_started" != "$backdated" ]; then
+            echo "1 0" >/tmp/wlt_t8
+            printf "  PASS  autonomous_heartbeat refreshed started_at and exited on release\n"
+        else
+            echo "0 1" >/tmp/wlt_t8
+            printf "  FAIL  started_at was not refreshed (was %s, still %s)\n" "$backdated" "$after_started"
+        fi
+    fi
+)
+read P F </tmp/wlt_t8; PASS=$((PASS + P)); FAIL=$((FAIL + F))
+rm -rf "$T8"
+
+rm -f /tmp/wlt_t1 /tmp/wlt_t2 /tmp/wlt_t3a /tmp/wlt_t3b /tmp/wlt_t4 /tmp/wlt_t5 /tmp/wlt_t6 /tmp/wlt_t7 /tmp/wlt_t8
 
 echo
 echo "==================================="

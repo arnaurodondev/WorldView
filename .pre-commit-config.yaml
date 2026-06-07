@@ -77,3 +77,14 @@ repos:
         # No filenames needed — the hook reads `git diff --cached` itself.
         pass_filenames: false
         always_run: true
+
+      # PLAN-0108 Wave C: worktree-lock check.
+      # Refuses a commit when a fresh peer-session lock is held on this
+      # worktree (foreign pid + age < WORLDVIEW_WORKTREE_LOCK_TTL).
+      # Honors WORLDVIEW_DISABLE_WORKTREE_LOCK=1 escape hatch.
+      - id: worktree-lock-check
+        name: PLAN-0107 D-2 worktree-lock check
+        entry: bash scripts/worktree_lock.sh check_for_commit
+        language: system
+        pass_filenames: false
+        stages: [pre-commit]
