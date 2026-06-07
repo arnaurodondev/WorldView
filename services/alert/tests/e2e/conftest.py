@@ -232,15 +232,30 @@ async def e2e_db_session(e2e_session_factory: async_sessionmaker[AsyncSession]) 
 
 # ── Table truncation ──────────────────────────────────────────────────────────
 
-_TABLES_TO_TRUNCATE = [
-    "outbox_events",
-    "dead_letter_queue",
-    "alert_deliveries",
-    "pending_alerts",
-    "alerts",
-    "alert_dedup",
-    "alert_subscriptions",
-]
+# Tables to truncate between tests. We derive this from ``Base.metadata`` so we
+# only ever issue TRUNCATE against tables that actually exist in the test
+# schema. The prior implementation hard-coded ``alert_dedup`` which is NOT
+# part of ``Base.metadata`` — TRUNCATE against a non-existent table raises,
+# which combined with the silent ``except Exception: pass`` aborted the entire
+# multi-statement cleanup transaction and let rows from prior tests leak into
+# the next. That manifested as the post-PLAN-0104 failures in
+# ``test_pending_alerts_tenant_isolation`` and ``test_acknowledge_own_alert_succeeds``
+# (one or three rows visible to E2E_USER_ID after seeding under a different user).
+
+
+async def _truncate_all(engine: AsyncEngine) -> None:
+    """Truncate every alert_db table in a single atomic statement.
+
+    A single ``TRUNCATE a, b, c CASCADE`` is both faster and removes the
+    failure mode of one bad table name silently aborting the cleanup of all
+    the others.
+    """
+    table_names = [t.name for t in Base.metadata.sorted_tables]
+    if not table_names:
+        return
+    stmt = "TRUNCATE " + ", ".join(table_names) + " RESTART IDENTITY CASCADE"
+    async with engine.begin() as conn:
+        await conn.execute(text(stmt))
 
 
 @pytest.fixture(autouse=True)
@@ -249,20 +264,11 @@ async def _clean_tables(e2e_engine: AsyncEngine) -> AsyncGenerator[None, None]:
 
     Cleanup-before guards against cross-test DB pollution from earlier runs
     (CI shared DB, stale Docker volume, or a prior crashed test that skipped
-    teardown). Without this, ``test_pending_alerts_tenant_isolation`` flakes
-    when an earlier test left a pending row for E2E_USER_ID, because the
-    JWT-derived GET still sees those leftovers.
+    teardown). Exceptions are no longer swallowed: a silent failure here was
+    the exact pattern that caused the post-PLAN-0104 leakage. If TRUNCATE
+    fails, we want it to surface immediately rather than producing a confusing
+    "row count mismatch" assertion error downstream.
     """
-    try:
-        async with e2e_engine.begin() as conn:
-            for table in _TABLES_TO_TRUNCATE:
-                await conn.execute(text(f"TRUNCATE {table} CASCADE"))
-    except Exception:  # noqa: S110
-        pass
+    await _truncate_all(e2e_engine)
     yield
-    try:
-        async with e2e_engine.begin() as conn:
-            for table in _TABLES_TO_TRUNCATE:
-                await conn.execute(text(f"TRUNCATE {table} CASCADE"))
-    except Exception:  # noqa: S110
-        pass
+    await _truncate_all(e2e_engine)

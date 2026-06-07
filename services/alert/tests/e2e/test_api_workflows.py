@@ -311,18 +311,24 @@ async def test_acknowledge_already_acknowledged_returns_404(
     e2e_client: AsyncClient,
     e2e_db_session: AsyncSession,
 ) -> None:
-    """Acknowledging an already-acknowledged alert returns 404 (idempotency via 404)."""
-    user_id = uuid.uuid4()
+    """Acknowledging an already-acknowledged alert returns 404 (idempotency via 404).
+
+    PRD-0025: the ack route resolves user_id from the JWT (E2E_USER_ID), so
+    the seeded pending row MUST belong to E2E_USER_ID for the first ack to
+    succeed. The ``?user_id=...`` query string is a no-op (the route does not
+    declare it as a query parameter).
+    """
+    user_id = uuid.UUID(E2E_USER_ID)
 
     alert_id = await _seed_alert(e2e_db_session, dedup_key=f"key:{uuid.uuid4().hex}")
     await _seed_pending_alert(e2e_db_session, alert_id, user_id)
 
-    # First ack succeeds
-    resp = await e2e_client.delete(f"/api/v1/alerts/{alert_id}/ack?user_id={user_id}")
+    # First ack succeeds (JWT user matches the seeded pending row).
+    resp = await e2e_client.delete(f"/api/v1/alerts/{alert_id}/ack")
     assert resp.status_code == 200
 
-    # Second ack returns 404 (already removed)
-    resp2 = await e2e_client.delete(f"/api/v1/alerts/{alert_id}/ack?user_id={user_id}")
+    # Second ack returns 404 (already removed).
+    resp2 = await e2e_client.delete(f"/api/v1/alerts/{alert_id}/ack")
     assert resp2.status_code == 404
 
 
