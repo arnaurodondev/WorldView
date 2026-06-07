@@ -326,8 +326,16 @@ class DuplicateClusterRepository:
         ).subquery()
 
         # Group by doc_id, take any cluster_id (min for determinism).
+        # WHY cast to text before min(): PostgreSQL has no built-in min() aggregate
+        # for the UUID type — applying func.min() directly raises ProgrammingError:
+        # "function min(uuid) does not exist". Casting to text makes the comparison
+        # lexicographic (same ordering as UUID string form) which is deterministic
+        # within a result set. The outer cast back to UUID restores the return type.
         result = await self._session.execute(
-            select(combined.c.doc_id, func.min(combined.c.cluster_id).label("cluster_id")).group_by(combined.c.doc_id)
+            select(
+                combined.c.doc_id,
+                func.min(combined.c.cluster_id.cast(text("text"))).cast(text("uuid")).label("cluster_id"),
+            ).group_by(combined.c.doc_id)
         )
         return {row.doc_id: row.cluster_id for row in result}
 

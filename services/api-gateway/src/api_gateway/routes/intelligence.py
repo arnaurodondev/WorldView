@@ -847,7 +847,14 @@ async def get_entity_intelligence_bundle(
     # and returns None, so no leg will ever raise into gather. Using False (not
     # True) avoids the isinstance(result, BaseException) checks below and keeps
     # the semantics clear: all results are dict | None.
-    detail_t, brief_t, graph_t, graph_d1_t, paths_t, intel_t = await asyncio.gather(
+    # WHY wait_for(timeout=20): the gather has no outer deadline. If AGE stalls on
+    # a depth=2 Cypher query, all 6 legs complete except graph_t, and the connection
+    # hangs open for the full httpx read timeout (30 s by default on the S9 client).
+    # 20 s is generous: depth=1 SQL ≈ 500ms, depth=2 warm ≈ 2-4s, depth=2 cold ≈ 8s,
+    # depth=3 cold ≈ 12s. Beyond 20 s something is truly stuck. GraphColumn already
+    # shows a per-depth timeout UI (GRAPH_TIMEOUT_MS_BY_DEPTH) so a 504 from S9 maps
+    # gracefully to the "Graph timed out" empty state. (PLAN-0099 W4 investigation)
+    _gather = asyncio.gather(
         _bundle_fetch_json(
             clients.knowledge_graph,
             f"/api/v1/entities/{eid}",
@@ -912,6 +919,11 @@ async def get_entity_intelligence_bundle(
         ),
         return_exceptions=False,
     )
+    try:
+        detail_t, brief_t, graph_t, graph_d1_t, paths_t, intel_t = await asyncio.wait_for(_gather, timeout=20.0)
+    except TimeoutError:
+        logger.warning("intelligence_bundle_outer_timeout", entity_id=eid)
+        raise HTTPException(status_code=504, detail="Intelligence bundle timeout")  # noqa: B904
 
     # WHY transform graph after fetch: _transform_graph_response converts the
     # S7 {center, relations, entities} payload to the frontend's EntityGraph

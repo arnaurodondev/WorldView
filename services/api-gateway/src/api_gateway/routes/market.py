@@ -164,14 +164,17 @@ async def screen_instruments(request: Request) -> Any:
             "/api/v1/fundamentals/screen",
             content=body,
             headers={"Content-Type": "application/json", **_system_headers(request)},
-            # WHY timeout=10.0: the screener runs N correlated subqueries (one per
-            # filter metric) over large tables. Without an explicit timeout the httpx
-            # default (5 s) fires before S3's own 8 s statement_timeout, leaving the
-            # DB query still running server-side. 10 s > 8 s gives S3 time to receive
-            # the DB-level cancellation and return a clean 504 before the gateway
-            # aborts the connection itself. BP-235: always set httpx.Timeout on
-            # latency-sensitive downstream calls (never rely on the httpx 5 s default).
-            timeout=10.0,
+            # WHY timeout=15.0: the screener runs N correlated subqueries over large
+            # tables with a DB-side statement_timeout of 8 s. httpx timeout must be
+            # > 8 s to let S3 receive the DB cancellation and return a clean error
+            # before the gateway aborts. Previous value was 10 s but under concurrent
+            # load httpx starts counting from request dispatch (before TCP handshake +
+            # TLS + S3 connection queue), so the 2 s headroom was insufficient —
+            # httpx fired first, triggering the Starlette BaseHTTPMiddleware
+            # cancellation bug (PLAN-0099 W4 investigation). 15 s gives a 7 s buffer
+            # above the DB deadline, absorbing connection-pool wait + S3 startup lag.
+            # BP-235: always set httpx.Timeout on latency-sensitive downstream calls.
+            timeout=15.0,
         )
     except httpx.TimeoutException:
         logger.warning("screener_upstream_timeout")

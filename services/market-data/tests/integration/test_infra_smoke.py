@@ -35,8 +35,9 @@ class TestPostgresContainer:
         otherwise every new migration silently regresses this assertion.
         See docs/BUG_PATTERNS.md BP-493 (hardcoded migration version literals).
         """
-        import asyncpg
         from pathlib import Path
+
+        import asyncpg
         from alembic.config import Config
         from alembic.script import ScriptDirectory
 
