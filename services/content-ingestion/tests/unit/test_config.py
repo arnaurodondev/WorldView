@@ -162,3 +162,30 @@ class TestSchedulerWorkerDefaults:
         assert s.worker_batch_size == 10
         assert s.worker_concurrency == 4
         assert s.db_url_read.get_secret_value() == "postgresql+asyncpg://read-replica:5432/db"
+
+
+# ---------------------------------------------------------------------------
+# Outbox dispatcher config — BP-612 regression guard
+# ---------------------------------------------------------------------------
+
+
+class TestOutboxMaxAttempts:
+    def test_outbox_max_attempts_default(self) -> None:
+        """outbox_max_attempts default must be 20 (raised from 5 in BP-612).
+
+        5 attempts with 60 s max backoff exhausts in ~5 min - shorter than a
+        typical rolling restart or Kafka blip (30-90 min).  20 attempts gives
+        ~20 min coverage before dead-lettering events.
+        """
+        s = _make_settings()
+        assert s.outbox_max_attempts == 20, (
+            "outbox_max_attempts was lowered - raises BP-612 risk of dead-lettering "
+            "events during short consumer downtime windows. If you need a lower value, "
+            "override via env var CONTENT_INGESTION_OUTBOX_MAX_ATTEMPTS."
+        )
+
+    def test_outbox_max_attempts_env_override(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Operators can override outbox_max_attempts via env var."""
+        monkeypatch.setenv("CONTENT_INGESTION_OUTBOX_MAX_ATTEMPTS", "30")
+        s = _make_settings()
+        assert s.outbox_max_attempts == 30

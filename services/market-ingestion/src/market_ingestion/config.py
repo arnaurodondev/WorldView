@@ -161,7 +161,10 @@ class Settings(BaseSettings):
     # Lease >=30 s — typical Kafka publish <5 s; 6x safety margin prevents
     # concurrent dispatchers from re-claiming a stalled record.
     dispatcher_lease_seconds: int = 60
-    dispatcher_max_attempts: int = 5
+    # Raised from 5->20: 5 attempts with 60 s max backoff exhausts in ~5 min,
+    # far shorter than a typical rolling restart or Kafka blip (30-90 min).
+    # 20 attempts gives ~20 min coverage before dead-lettering.
+    dispatcher_max_attempts: int = 20
 
     # Auth (PRD-0025 Wave D) — S9 api-gateway base URL for JWKS fetch
     api_gateway_url: str = "http://api-gateway:8000"

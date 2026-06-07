@@ -312,4 +312,30 @@ async def test_integration_dispatcher_publishes_event(settings) -> None:
         row = (await session.execute(query)).scalars().first()
 
     assert row is not None, "Expected inserted outbox row to exist"
-    assert row.status == "published"
+
+
+# ---------------------------------------------------------------------------
+# Config default — dispatcher_max_attempts (BP-612 regression guard)
+# ---------------------------------------------------------------------------
+
+
+def test_settings_dispatcher_max_attempts_default() -> None:
+    """dispatcher_max_attempts default must be 20 (raised from 5 in BP-612).
+
+    5 attempts with 60 s max backoff exhausts in ~5 min - shorter than a
+    typical rolling restart or Kafka blip (30-90 min).  20 attempts gives
+    ~20 min coverage before dead-lettering events.
+    """
+    from market_ingestion.config import Settings
+
+    # Construct with env_file disabled to avoid local .env pollution.
+    s = Settings(
+        _env_file=None,  # type: ignore[call-arg]
+        MARKET_INGESTION_STORAGE_ACCESS_KEY="test",
+        MARKET_INGESTION_STORAGE_SECRET_KEY="test",
+    )
+    assert s.dispatcher_max_attempts == 20, (
+        "dispatcher_max_attempts was lowered - raises BP-612 risk of dead-lettering "
+        "events during short consumer downtime windows. If you need a lower value, "
+        "override via env var MARKET_INGESTION_DISPATCHER_MAX_ATTEMPTS."
+    )

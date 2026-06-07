@@ -140,7 +140,10 @@ class Settings(BaseSettings):
     outbox_batch_size: int = 100
     outbox_poll_interval_seconds: float = 5.0
     outbox_lease_seconds: int = 30
-    outbox_max_attempts: int = 5
+    # Raised from 5->20: 5 attempts with 60 s max backoff exhausts in ~5 min,
+    # far shorter than a typical rolling restart or Kafka blip (30-90 min).
+    # 20 attempts gives ~20 min coverage before dead-lettering.
+    outbox_max_attempts: int = 20
     outbox_metrics_poll_seconds: int = 30
 
     # ── Rate limiting ─────────────────────────────────────────────────────────
