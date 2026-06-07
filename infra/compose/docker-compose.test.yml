@@ -383,7 +383,8 @@ services:
       # Fast idle-poll so newly-triggered tasks are claimed within the test's
       # 60 s deadline even when the queue has accumulated retrying tasks from
       # prior tests in the same E2E session (R12 — E2E task-progression fix).
-      # Reduced 1.0s → 0.5s after CI still timed out at 30 s on c3acbf96.
+      # Reduced 1.0s → 0.5s post-PLAN-0104 after CI still timed out at 30 s
+      # on c3acbf96. Test deadline also bumped 30s→60s in the same patch.
       MARKET_INGESTION_WORKER_IDLE_SLEEP_SECONDS: "0.5"
     command: ["python", "-m", "market_ingestion.infrastructure.workers.worker_main"]
     healthcheck:

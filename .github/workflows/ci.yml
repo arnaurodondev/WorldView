@@ -322,84 +322,17 @@ jobs:
         run: pnpm build
 
   # ═══════════════════════════════════════════════════════════════════════════
-  # E2E Network Budget — Playwright regression gate for PLAN-0105 / PRD-0090
+  # E2E Network Budget — DISABLED post-PLAN-0104 hot-fix
   #
-  # WHY THIS EXISTS: Three Playwright specs lock in the slim-read budgets
-  # introduced by PLAN-0105 (portfolio, instrument, dashboard surfaces).
-  # The specs are pure browser-side network counters with all S9 responses
-  # mocked via Playwright route handlers (installStrictApiMocks). They do NOT
-  # require the backend docker stack — only the Next.js server.
-  #
-  # Runs in parallel with test-frontend (no needs:) so vitest failures don't
-  # block this gate and vice-versa. Both surfaces must stay green for a PR.
+  # The previous "e2e-network-budget" job invoked `pnpm test:e2e:budget` and the
+  # three specs `e2e/{portfolio,instrument,dashboard}-network-budget.spec.ts`,
+  # but neither the npm script nor the spec files were ever merged to main —
+  # they are part of in-flight PLAN-0105 (frontend slim-reads). The job failed
+  # every run on main with ERR_PNPM_RECURSIVE_EXEC_FIRST_FAIL (the script
+  # `test:e2e:budget` does not exist in apps/worldview-web/package.json on main).
+  # The job will be re-added together with the scripts/specs when PLAN-0105
+  # merges. Tracking: docs/plans/0105-frontend-slim-reads-plan.md.
   # ═══════════════════════════════════════════════════════════════════════════
-
-  e2e-network-budget:
-    name: E2E Network Budget (Playwright)
-    runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: apps/worldview-web
-    steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
-
-      - name: Set up Node
-        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020  # v4
-        with:
-          node-version: "20"
-
-      - name: Install pnpm
-        # Must match exact version in package.json "packageManager" field
-        # (same pin used in test-frontend job).
-        run: corepack enable && corepack prepare pnpm@10.33.0 --activate
-
-      - name: Cache pnpm store
-        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830  # v4
-        with:
-          path: ~/.local/share/pnpm/store
-          key: pnpm-${{ runner.os }}-${{ hashFiles('apps/worldview-web/pnpm-lock.yaml') }}
-          restore-keys: pnpm-${{ runner.os }}-
-
-      - name: Install dependencies
-        run: pnpm install --frozen-lockfile
-
-      # Cache Playwright browser binaries keyed on the @playwright/test version
-      # locked in pnpm-lock.yaml. A version bump invalidates the cache so the
-      # next "install" step pulls matching browsers.
-      - name: Cache Playwright browsers
-        id: playwright-cache
-        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830  # v4
-        with:
-          path: ~/.cache/ms-playwright
-          key: playwright-${{ runner.os }}-${{ hashFiles('apps/worldview-web/pnpm-lock.yaml') }}
-          restore-keys: playwright-${{ runner.os }}-
-
-      - name: Install Playwright browsers
-        # --with-deps installs OS-level libs (libnss3, libatk, etc.) even when
-        # the browser binary is cache-hit — those are not part of the cache.
-        run: pnpm exec playwright install --with-deps chromium webkit
-
-      # Playwright config has webServer.command="pnpm dev" with reuseExistingServer
-      # disabled when CI=1, so Playwright boots its own Next.js dev server on
-      # port 3001 and tears it down after the test run. No external services
-      # are required: all /api/v1/* responses are mocked via installStrictApiMocks.
-      - name: Run network-budget specs
-        run: pnpm test:e2e:budget --reporter=list
-        env:
-          CI: "1"
-
-      # Always upload the HTML report and any failure traces so a reviewer can
-      # download them from the job summary instead of re-running locally.
-      - name: Upload Playwright report
-        if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4
-        with:
-          name: playwright-network-budget-report
-          path: |
-            apps/worldview-web/playwright-report
-            apps/worldview-web/test-results
-          if-no-files-found: ignore
-          retention-days: 14
 
   # ═══════════════════════════════════════════════════════════════════════════
   # Contract tests — verifies Avro / OpenAPI schema compatibility

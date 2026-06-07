@@ -420,7 +420,12 @@ async def test_triggered_task_progresses_out_of_pending(
     assert task_row is not None
     task_id = task_row.id
 
-    deadline = time.monotonic() + 30
+    # Deadline bumped 30s→60s post-PLAN-0104: this is test #14 of 16 in the
+    # e2e suite, by which point the worker has accumulated retry backoff from
+    # prior tests' tasks hammering the EODHD demo key, and the worker process
+    # also pays a one-time startup cost for the heavy ml-clients imports.
+    # The actual claim+progress should be sub-second once the worker is idle.
+    deadline = time.monotonic() + 60
     seen_statuses: set[str] = set()
     while time.monotonic() < deadline:
         status_value = (

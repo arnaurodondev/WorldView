@@ -7,6 +7,7 @@ import socket
 
 import httpx
 import pytest
+import structlog
 from prometheus_client import CollectorRegistry, Counter
 
 from observability.metrics_server import start_metrics_server
@@ -96,6 +97,36 @@ async def test_aclose_stops_server_within_timeout() -> None:
             s.connect(("127.0.0.1", port))
         finally:
             s.close()
+
+
+@pytest.mark.asyncio
+async def test_started_event_reports_families() -> None:
+    """``metrics_server_started`` event must report the family count + sample (PLAN-0107 B-1)."""
+    registry = CollectorRegistry()
+    # Register one Counter BEFORE start so the boot-time enumeration
+    # sees it.  The exposition format strips the ``_total`` suffix in
+    # the family name, so we assert on the metric base name.
+    Counter("plan0107_b1_demo_total", "demo metric for B-1 test", registry=registry)
+
+    with structlog.testing.capture_logs() as cap:
+        handle = start_metrics_server(
+            service_name="pytest-worker",
+            port=0,
+            registry=registry,
+        )
+    try:
+        port = handle.bound_port
+        await _wait_until_ready(port)
+
+        started = [e for e in cap if e.get("event") == "metrics_server_started"]
+        assert len(started) == 1, f"expected 1 started event, got {len(started)}: {cap}"
+        event = started[0]
+        assert event["registered_families"] >= 1
+        # ``registered_sample`` is a sorted slice of up to 5 family names.
+        # prometheus_client family names drop the ``_total`` suffix.
+        assert any("plan0107_b1_demo" in name for name in event["registered_sample"])
+    finally:
+        await handle.aclose()
 
 
 @pytest.mark.asyncio
