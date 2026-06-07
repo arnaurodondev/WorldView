@@ -2191,7 +2191,18 @@ class ChatOrchestratorUseCase:
                         async for chunk in p.llm_chain.stream_chat(
                             messages,
                             max_tokens=budget.max_tokens_final,
-                            temperature=0.1,
+                            # PLAN-0107 follow-up: forbid function calling on the synthesis turn
+                            # so the model can't emit `<tool_call>` XML as visible text when it
+                            # sees prior tool turns in the history. With reasoning_effort=medium
+                            # on DeepSeek V4 Flash, the model otherwise plans MORE tool calls
+                            # and emits them as JSON text in the answer.
+                            tools=[],
+                            # PLAN-0107 follow-up: temperature=0.0 (was 0.1 overriding env default).
+                            # Reasoning_effort already adds enough variance — don't compound it.
+                            temperature=0.0,
+                            # PLAN-0107 follow-up: forward seed for eval-mode reproducibility
+                            # (benchmark runner passes seed=42 in --judge mode).
+                            seed=request.seed,
                             # PLAN-0107: forward thread_id for cost-capture (Agent B).
                             thread_id=request.thread_id,
                         ):
@@ -2379,6 +2390,9 @@ class ChatOrchestratorUseCase:
                     messages=messages,
                     budget=budget,
                     entity_context=entity_context,
+                    # PLAN-0107 follow-up: forward eval-mode seed to inner
+                    # stream_chat rewrite for reproducibility.
+                    seed=request.seed,
                 )
         elif not grounded:
             # BP-605: never cache a refusal answer — its content is a
@@ -2410,6 +2424,8 @@ class ChatOrchestratorUseCase:
                 # second-pass entity-NAME validator also accepts the LLM's
                 # tool-call ticker bridge (Round 6 TSLA double-refusal fix).
                 prior_tool_calls=_prior_tool_calls,
+                # PLAN-0107 follow-up: forward eval-mode seed.
+                seed=request.seed,
             )
             # If entity grounding failed and even the rewrite + banner
             # produced text, we treat the answer as un-cacheable for the
@@ -2551,6 +2567,7 @@ class ChatOrchestratorUseCase:
         messages: list[dict[str, Any]],
         budget: AgentBudget,
         entity_context: Any = None,
+        seed: int | None = None,
     ) -> tuple[str, bool]:
         """PLAN-0093 E-2 T-E-2-02 — numeric-grounding validation pass.
 
@@ -2712,6 +2729,12 @@ class ChatOrchestratorUseCase:
                 rewrite_messages,
                 max_tokens=budget.max_tokens_final,
                 temperature=0.0,  # deterministic rewrite
+                # PLAN-0107 follow-up: forbid function calling on this rewrite turn
+                # so the model can't emit `<tool_call>` XML when it sees prior tool
+                # turns in the history (same root cause as the synthesis-turn fix).
+                tools=[],
+                # PLAN-0107 follow-up: forward seed for eval-mode reproducibility.
+                seed=seed,
             ):
                 rewritten += chunk
         except Exception as exc:
@@ -2803,6 +2826,7 @@ class ChatOrchestratorUseCase:
         messages: list[dict[str, Any]],
         budget: AgentBudget,
         prior_tool_calls: list[Any] | None = None,
+        seed: int | None = None,
     ) -> tuple[str, bool]:
         """F-LIVE-NEW-002 — entity-name grounding pass.
 
@@ -3005,6 +3029,12 @@ class ChatOrchestratorUseCase:
                 rewrite_messages,
                 max_tokens=budget.max_tokens_final,
                 temperature=0.0,
+                # PLAN-0107 follow-up: forbid function calling on this rewrite turn
+                # so the model can't emit `<tool_call>` XML when it sees prior tool
+                # turns in the history (same root cause as the synthesis-turn fix).
+                tools=[],
+                # PLAN-0107 follow-up: forward seed for eval-mode reproducibility.
+                seed=seed,
             ):
                 buf += chunk
             return buf

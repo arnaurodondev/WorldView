@@ -256,6 +256,8 @@ class OpenRouterCompletionAdapter:
         max_tokens: int = 1024,
         temperature: float = 0.2,
         thread_id: UUID | None = None,
+        tools: list[dict] | None = None,
+        seed: int | None = None,
     ) -> AsyncIterator[str]:
         """Stream the final answer turn from an OpenAI-format messages list."""
         payload: dict[str, object] = {
@@ -269,6 +271,13 @@ class OpenRouterCompletionAdapter:
         # OpenAI / DeepInfra contract for ``stream_options.include_usage``).
         if self._cost_recorder is not None:
             payload["stream_options"] = {"include_usage": True}
+        # PLAN-0107 follow-up: synthesis-turn callers pass ``tools=[]`` to forbid
+        # function calling (prevents `<tool_call>` XML in visible answer).
+        if tools is not None:
+            payload["tools"] = tools
+        # PLAN-0107 follow-up: forward eval-mode reproducibility seed when set.
+        if seed is not None:
+            payload["seed"] = seed
         usage_capture: dict = {}
         async with self._client.stream(
             "POST",

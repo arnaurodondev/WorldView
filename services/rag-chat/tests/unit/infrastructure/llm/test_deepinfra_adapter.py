@@ -459,3 +459,83 @@ async def test_chat_with_tools_no_fallback_when_primary_succeeds() -> None:
     assert resp.text == "primary answer"
     assert [c["model"] for c in calls] == ["primary/ok-model"]
     await client.aclose()
+
+
+# ── PLAN-0107 follow-up: synthesis-turn quality (tools=[], seed pass-through) ──
+# The synthesis-turn stream_chat call must be able to (a) forbid function calling
+# (so the model can't emit `<tool_call>` XML as visible text) and (b) forward an
+# eval-mode seed for reproducibility. These regressions guard the wire payload.
+
+
+@pytest.mark.asyncio
+async def test_stream_chat_includes_tools_when_passed() -> None:
+    """Caller passes ``tools=[]`` → payload must carry ``tools: []`` on the wire.
+
+    Regression for the synthesis-turn quality fix: without ``tools=[]`` the
+    DeepSeek V4 Flash model (reasoning_effort=medium) sees prior tool turns and
+    decides to plan MORE tool calls, emitting `<tool_call>` JSON XML as visible
+    text in the answer.
+    """
+    captured: list[dict] = []
+
+    def _handler(request: httpx.Request) -> httpx.Response:
+        import json as _json
+
+        captured.append(_json.loads(request.content))
+        return httpx.Response(200, content=_sse_with_content("ok"))
+
+    transport = httpx.MockTransport(_handler)
+    client = httpx.AsyncClient(transport=transport)
+    adapter = DeepInfraCompletionAdapter(api_key="x", model="m", http_client=client)
+    async for _ in adapter.stream_chat([{"role": "user", "content": "hi"}], tools=[]):
+        pass
+    assert len(captured) == 1
+    assert captured[0].get("tools") == []
+    await client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_stream_chat_includes_seed_when_passed() -> None:
+    """Caller passes ``seed=42`` → payload must carry ``seed: 42`` on the wire."""
+    captured: list[dict] = []
+
+    def _handler(request: httpx.Request) -> httpx.Response:
+        import json as _json
+
+        captured.append(_json.loads(request.content))
+        return httpx.Response(200, content=_sse_with_content("ok"))
+
+    transport = httpx.MockTransport(_handler)
+    client = httpx.AsyncClient(transport=transport)
+    adapter = DeepInfraCompletionAdapter(api_key="x", model="m", http_client=client)
+    async for _ in adapter.stream_chat([{"role": "user", "content": "hi"}], seed=42):
+        pass
+    assert len(captured) == 1
+    assert captured[0].get("seed") == 42
+    await client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_stream_chat_omits_tools_and_seed_when_not_passed() -> None:
+    """Backward-compat: legacy callers (no tools/seed kwargs) must not get them in the payload.
+
+    Sending ``tools: null`` or ``seed: null`` to DeepInfra could trigger schema
+    validation failures; provider defaults only apply when the keys are absent.
+    """
+    captured: list[dict] = []
+
+    def _handler(request: httpx.Request) -> httpx.Response:
+        import json as _json
+
+        captured.append(_json.loads(request.content))
+        return httpx.Response(200, content=_sse_with_content("ok"))
+
+    transport = httpx.MockTransport(_handler)
+    client = httpx.AsyncClient(transport=transport)
+    adapter = DeepInfraCompletionAdapter(api_key="x", model="m", http_client=client)
+    async for _ in adapter.stream_chat([{"role": "user", "content": "hi"}]):
+        pass
+    assert len(captured) == 1
+    assert "tools" not in captured[0]
+    assert "seed" not in captured[0]
+    await client.aclose()
