@@ -112,9 +112,43 @@ class PgOHLCVRepository(OHLCVRepository):
         timeframe: Timeframe,
         start: date,
         end: date,
+        *,
+        limit: int | None = None,
     ) -> list[OHLCVBar]:
+        """Return bars for the given instrument/timeframe within [start, end].
+
+        WHY limit pushdown: callers that only need the last N bars (e.g. the
+        OHLCV API endpoint with its default limit=200) previously fetched every
+        matching row and sliced in Python.  For a 550-day window (~390 bars)
+        this wastes ~190 rows of I/O and Decimal conversion.  By pushing the
+        LIMIT to the DB with ORDER BY DESC we only materialise the rows we keep.
+
+        The result is reversed back to ASC order before returning so existing
+        callers see no behavioural change — they always receive bars in
+        chronological order.
+        """
         start_dt = datetime(start.year, start.month, start.day, tzinfo=UTC)
         end_dt = datetime(end.year, end.month, end.day, 23, 59, 59, tzinfo=UTC)
+
+        if limit is not None:
+            # Use DESC + LIMIT to materialise only the most-recent N rows, then
+            # reverse in Python.  This avoids fetching the full date-range and
+            # is equivalent to bars[-limit:] on the full ASC result.
+            result = await self._session.execute(
+                select(OHLCVBarModel)
+                .where(
+                    OHLCVBarModel.instrument_id == instrument_id,
+                    OHLCVBarModel.timeframe == str(timeframe),
+                    OHLCVBarModel.bar_date >= start_dt,
+                    OHLCVBarModel.bar_date <= end_dt,
+                )
+                .order_by(OHLCVBarModel.bar_date.desc())
+                .limit(limit)
+            )
+            # Reverse so callers receive bars in chronological (ASC) order.
+            return [self._to_domain(row) for row in reversed(result.scalars().all())]
+
+        # No limit — return all bars ASC (original behaviour).
         result = await self._session.execute(
             select(OHLCVBarModel)
             .where(

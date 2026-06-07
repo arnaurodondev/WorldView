@@ -26,16 +26,19 @@ class GetOHLCVBarsUseCase:
         *,
         limit: int = 200,
     ) -> list[OHLCVBar]:
-        """Fetch bars in [start, end] then return the last ``limit`` bars.
+        """Fetch the most-recent ``limit`` bars in [start, end].
 
-        The repository query fetches all matching bars ordered ASC by bar_date.
-        ``limit`` is applied as a tail-slice so callers always get the most
-        recent N bars rather than the oldest N — matching financial chart
-        conventions (e.g. "show the last 30 trading days").
+        WHY limit pushdown: the repository's ``limit`` parameter causes the DB
+        to use ``ORDER BY bar_date DESC LIMIT N``, materialising only the rows
+        we actually keep.  The previous pattern (fetch all, Python-slice with
+        ``[-limit:]``) wasted I/O and Decimal conversion for every bar beyond
+        the limit — up to 190 extra rows for a 550-day multi-period-returns
+        window.  The repository re-reverses to ASC so callers see no change in
+        order semantics.
         """
-        bars = await self._uow.ohlcv_read.find_by_instrument_timeframe_range(instrument_id, timeframe, start, end)
-        # Slice from the tail: bars are ASC-ordered so [-limit:] gives the newest ones.
-        return bars[-limit:] if len(bars) > limit else bars
+        return await self._uow.ohlcv_read.find_by_instrument_timeframe_range(
+            instrument_id, timeframe, start, end, limit=limit
+        )
 
 
 class GetOHLCVBulkUseCase:

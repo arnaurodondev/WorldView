@@ -355,7 +355,10 @@ async def get_intraday_stats(instrument_id: UUID, request: Request) -> Any:
     )
     daily_resp_fut = clients.market_data.get(
         f"/api/v1/ohlcv/{instrument_id}",
-        params={"timeframe": "1d", "start": daily_start},
+        # WHY limit=30: ATR(14) + RSI(14) need 15 bars minimum; 30 bars covers
+        # the 30-calendar-day window already fetched and is well under the 200
+        # default, so the DB materialises only what is consumed.
+        params={"timeframe": "1d", "start": daily_start, "limit": 30},
         headers=headers,
     )
     tech_resp_fut = clients.market_data.get(
@@ -534,7 +537,11 @@ async def get_multi_period_returns(instrument_id: UUID, request: Request) -> Any
 
     resp = await clients.market_data.get(
         f"/api/v1/ohlcv/{instrument_id}",
-        params={"timeframe": "1d", "start": start_str},
+        # WHY limit=390: 252 trading days (1Y) + ~138 calendar-day buffer for
+        # weekends/holidays within a 550-day window.  Without an explicit limit
+        # the S3 router default (200) silently caps the result, making the 1Y
+        # return always null.  390 is safely below the router's max of 1000.
+        params={"timeframe": "1d", "start": start_str, "limit": 390},
         headers=headers,
     )
 
@@ -615,7 +622,12 @@ async def get_price_levels(instrument_id: UUID, request: Request) -> Any:
 
     resp = await clients.market_data.get(
         f"/api/v1/ohlcv/{instrument_id}",
-        params={"timeframe": "1d", "start": start_str},
+        # WHY limit=210: MA200 needs 200 bars + 1 buffer bar for the pivot
+        # calculation (bars[-2]).  The 310-day calendar window is wide enough to
+        # cover 200 trading days; limit=210 caps the materialised result at the
+        # DB layer rather than fetching up to 220 bars and discarding extras in
+        # the use case's Python slice.
+        params={"timeframe": "1d", "start": start_str, "limit": 210},
         headers=headers,
     )
 

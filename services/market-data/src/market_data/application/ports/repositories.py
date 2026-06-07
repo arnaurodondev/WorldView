@@ -251,8 +251,20 @@ class OHLCVRepository(ABC):
         timeframe: Timeframe,
         start: date,
         end: date,
+        *,
+        limit: int | None = None,
     ) -> list[OHLCVBar]:
-        """Return bars for the given instrument/timeframe within [start, end]."""
+        """Return bars for the given instrument/timeframe within [start, end].
+
+        When ``limit`` is set, the query uses ``ORDER BY bar_date DESC LIMIT N``
+        and reverses the result — so callers always receive the *most-recent* N
+        bars in the window rather than the oldest N (matching financial-chart
+        conventions).  This pushes the cut-off to the database instead of
+        fetching the full window and slicing in Python.
+
+        When ``limit`` is ``None`` (default), all matching bars are returned
+        ordered ascending (original behaviour — backward-compatible).
+        """
 
     @abstractmethod
     async def get_available_timeframes(self, instrument_id: str) -> list[Timeframe]:

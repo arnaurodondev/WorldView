@@ -70,22 +70,22 @@ async def test_get_ohlcv_bars_empty() -> None:
 
 
 @pytest.mark.asyncio
-async def test_get_ohlcv_bars_limit_trims_to_newest() -> None:
-    """limit= returns the last N bars (newest), not the first N."""
-    # Create 5 bars with distinct dates so we can verify tail-slice semantics.
-    from datetime import UTC, datetime
+async def test_get_ohlcv_bars_limit_forwarded_to_repo() -> None:
+    """limit= is forwarded to the repository as a keyword arg (DB-side pushdown).
 
-    bars = [
-        _make_bar("instr-001")._replace(bar_date=datetime(2024, 1, d, tzinfo=UTC))  # type: ignore[call-arg]
-        if hasattr(_make_bar("instr-001"), "_replace")
-        else _make_bar("instr-001")
-        for d in range(1, 6)
-    ]
-    # Rebuild with distinct bar_dates using the OHLCVBar dataclass directly.
+    WHY: the use case no longer slices in Python — it delegates the limit to the
+    repository via ``find_by_instrument_timeframe_range(..., limit=N)``.  The repo
+    performs ``ORDER BY bar_date DESC LIMIT N`` and reverses to ASC.  At this unit
+    test level the mock returns whatever it was configured with, so we only verify
+    that the use case passes ``limit=`` through rather than post-processing the
+    full list.
+    """
+    from datetime import UTC, datetime
     from decimal import Decimal
 
     from market_data.domain.value_objects import ProviderPriority
 
+    # The mock repo returns the last 3 bars (simulating the DB-side limit).
     bars = [
         OHLCVBar(
             instrument_id="instr-001",
@@ -101,26 +101,29 @@ async def test_get_ohlcv_bars_limit_trims_to_newest() -> None:
             provider_priority=ProviderPriority(provider="polygon", priority=100),
             ingested_at=datetime(2024, 1, 16, tzinfo=UTC),
         )
-        for d in range(1, 6)
+        for d in range(3, 6)  # bars 3, 4, 5 — simulating DB returning newest 3
     ]
     uow = _make_uow(bars=bars)
     uc = GetOHLCVBarsUseCase(uow)
-    # Ask for only the last 3 bars — should return bars 3, 4, 5 (newest)
     result = await uc.execute("instr-001", Timeframe.ONE_DAY, date(2024, 1, 1), date(2024, 12, 31), limit=3)
-    assert len(result) == 3
-    # The tail slice must be the chronologically newest bars (indices 2, 3, 4)
-    assert result[0].bar_date == bars[2].bar_date
-    assert result[-1].bar_date == bars[4].bar_date
+    # Use case must return exactly what the repo returned (no extra slicing).
+    assert result == bars
+    # Verify the limit was forwarded to the repo via keyword arg.
+    uow.ohlcv_read.find_by_instrument_timeframe_range.assert_called_once()
+    call_kwargs = uow.ohlcv_read.find_by_instrument_timeframe_range.call_args.kwargs
+    assert call_kwargs.get("limit") == 3
 
 
 @pytest.mark.asyncio
-async def test_get_ohlcv_bars_limit_larger_than_result_returns_all() -> None:
-    """When limit > available bars, all bars are returned (no truncation)."""
+async def test_get_ohlcv_bars_default_limit_forwarded() -> None:
+    """Default limit=200 is forwarded to the repository."""
     bars = [_make_bar()]
     uow = _make_uow(bars=bars)
     uc = GetOHLCVBarsUseCase(uow)
-    result = await uc.execute("instr-001", Timeframe.ONE_DAY, date(2024, 1, 1), date(2024, 12, 31), limit=1000)
+    result = await uc.execute("instr-001", Timeframe.ONE_DAY, date(2024, 1, 1), date(2024, 12, 31))
     assert result == bars
+    call_kwargs = uow.ohlcv_read.find_by_instrument_timeframe_range.call_args.kwargs
+    assert call_kwargs.get("limit") == 200
 
 
 @pytest.mark.asyncio
