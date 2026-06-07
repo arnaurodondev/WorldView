@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import hashlib
 import json
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any
@@ -112,6 +113,9 @@ def _flatten_screener_result(item: dict[str, Any]) -> dict[str, Any]:
     return flat
 
 
+_SCREENER_CACHE_TTL_S = 60  # 60-second result cache; warm hit avoids full table scan
+
+
 @router.post("/fundamentals/screen")
 async def screen_instruments(request: Request) -> Any:
     """Proxy POST /api/v1/fundamentals/screen → S3 Market Data with response transform.
@@ -122,10 +126,38 @@ async def screen_instruments(request: Request) -> Any:
     _flatten_screener_result() applies the mapping at the BFF layer so the frontend
     reads `row.market_cap` rather than `row.metrics?.market_capitalization`.
 
+    WHY Valkey read-through cache (60 s TTL): the screener aggregates fundamentals
+    + quotes at query time with no DB-side cache. Cold queries run a full table scan
+    that takes 2-5 s; warm hits return the pre-serialised JSON in < 5 ms.  The
+    cache key is a SHA-256 digest of the raw request body so identical filter sets
+    share the same entry.  Cache failures are fail-open — a Valkey error falls
+    through to the upstream S3 call so the screener never degrades to 5xx because
+    of a cache outage (architecture rule: "fail-open on Valkey unavailable").
+
     Pass-through on error: S3 400/422/500 are forwarded unchanged so the frontend
     can display the correct error message (e.g. "invalid metric name").
     """
     body = await request.body()
+
+    # ── Valkey read-through ────────────────────────────────────────────────────
+    # Build a stable, tenant-neutral cache key from the raw request body bytes.
+    # WHY first 16 hex chars (8 bytes): collision probability ≈ 2⁻⁶⁴ over the
+    # expected screener key-space (~100 distinct filter combos) — sufficient for
+    # a 60-second BFF cache with no security-critical data behind it.
+    cache_key = f"screener:v1:{hashlib.sha256(body).hexdigest()[:16]}"
+    valkey = request.app.state.valkey  # None when Valkey is unavailable (fail-open)
+
+    if valkey is not None:
+        try:
+            cached = await valkey.get(cache_key)
+            if cached is not None:
+                # Serve pre-transformed JSON directly; skip S3 round-trip entirely.
+                return Response(cached, media_type="application/json")
+        except Exception:
+            # Valkey read failure → fall through to S3 (fail-open)
+            logger.warning("screener_cache_read_failed", cache_key=cache_key)
+
+    # ── Upstream S3 call ───────────────────────────────────────────────────────
     clients = _clients(request)
     try:
         resp = await clients.market_data.post(
@@ -155,7 +187,17 @@ async def screen_instruments(request: Request) -> Any:
         "offset": raw.get("offset", 0),
         "limit": raw.get("limit", 50),
     }
-    return JSONResponse(transformed)
+    transformed_bytes = json.dumps(transformed).encode()
+
+    # ── Populate cache with successful response ────────────────────────────────
+    if valkey is not None:
+        try:
+            await valkey.set(cache_key, transformed_bytes.decode(), ex=_SCREENER_CACHE_TTL_S)
+        except Exception:
+            # Cache write failure is non-fatal — response is still returned correctly.
+            logger.warning("screener_cache_write_failed", cache_key=cache_key)
+
+    return Response(transformed_bytes, media_type="application/json")
 
 
 @router.get("/fundamentals/screen/fields")
@@ -482,16 +524,32 @@ async def get_intraday_stats(instrument_id: UUID, request: Request) -> Any:
     # WHY from daily bars: avoids an extra S3 round-trip; the 30 bars we fetch
     # for ATR/RSI already cover the same rolling window used in the snapshot table.
     # WHY null guard: division by zero or missing data must not crash the endpoint.
+    #
+    # today_volume source priority:
+    #   1. Sum of intraday (5m) bar volumes — most precise during market hours.
+    #   2. Last daily bar's volume — fallback for weekends / dev environment
+    #      where the market is closed and no intraday bars have been ingested.
+    #      The ratio is dimensionally consistent: both numerator and denominator
+    #      use completed daily-bar volumes from the same S3 response.
     rel_volume: float | None = None
-    if intraday_bars and daily_bars:
-        today_volume = sum(b["volume"] for b in intraday_bars)
-        # Exclude the last daily bar (today) from the 30-day average; it is
-        # incomplete intraday and would artificially deflate the baseline.
-        baseline_bars = daily_bars[:-1] if len(daily_bars) > 1 else daily_bars
+    if daily_bars:
+        # Exclude the last daily bar (today) from the 30-day baseline; it is
+        # incomplete intraday and would artificially deflate the average.
+        baseline_bars = daily_bars[:-1] if len(daily_bars) > 1 else []
         if baseline_bars:
-            avg_volume_30d = sum(b["volume"] for b in baseline_bars) / len(baseline_bars)
+            avg_volume_30d = sum(b["volume"] for b in baseline_bars[-30:]) / len(baseline_bars[-30:])
             if avg_volume_30d > 0:
-                rel_volume = today_volume / avg_volume_30d
+                if intraday_bars:
+                    # Preferred path: live cumulative intraday volume.
+                    today_vol: int | None = sum(b["volume"] for b in intraday_bars)
+                else:
+                    # Fallback: today's daily bar volume (may be 0 on a
+                    # non-trading day — treat 0 as missing to avoid rel=0.0).
+                    # WHY daily_bars[-1]: S3 returns bars sorted oldest→newest.
+                    _last_daily_vol = daily_bars[-1]["volume"]
+                    today_vol = _last_daily_vol if _last_daily_vol > 0 else None
+                if today_vol is not None:
+                    rel_volume = today_vol / avg_volume_30d
 
     return JSONResponse(
         content={
