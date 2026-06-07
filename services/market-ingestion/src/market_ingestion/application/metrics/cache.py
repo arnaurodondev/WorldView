@@ -44,8 +44,19 @@ provider_cache_errors_total: Counter = Counter(
     labelnames=("kind",),
 )
 
+# PLAN-0108 Wave E: track operator-initiated cache invalidations. Incremented
+# by InvalidateCacheUseCase on every DELETE /internal/v1/cache/{dataset_type}/{symbol}
+# call by the number of keys actually removed. Useful for auditing 8-K-driven
+# fundamentals refreshes and detecting accidental cache-flush automation.
+provider_cache_invalidated_total: Counter = Counter(
+    "s2_mi_provider_cache_invalidated_total",
+    "Cache keys explicitly invalidated via the admin endpoint.",
+    labelnames=("dataset_type",),
+)
+
 __all__ = [
     "provider_cache_errors_total",
     "provider_cache_hits_total",
+    "provider_cache_invalidated_total",
     "provider_cache_misses_total",
 ]

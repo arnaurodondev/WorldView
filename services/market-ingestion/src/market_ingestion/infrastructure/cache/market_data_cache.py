@@ -146,6 +146,37 @@ class MarketDataCache:
 
         return payload
 
+    async def invalidate(self, dataset_type: DatasetType, symbol: str) -> int:
+        """Delete all cache entries matching the ``(dataset_type, symbol)`` key prefix.
+
+        PLAN-0108 Wave E: admin endpoint for manual cache invalidation. Useful
+        after an out-of-cycle data refresh (e.g. an 8-K filing makes the
+        fundamentals snapshot stale before the 24h TTL expires) so the next
+        provider call repopulates the cache from upstream.
+
+        Pattern: ``market_data:{dataset_type}:{symbol_lower}:*`` — matches every
+        ``period_key`` under the (dataset_type, symbol) coordinate.
+
+        Returns:
+            Count of keys deleted (0 if none existed or on backend failure).
+
+        Failure semantics mirror :meth:`get_or_fetch`: errors are logged at
+        WARNING and swallowed; the operator-facing endpoint should never crash
+        because the cache backend is degraded.
+        """
+        if not isinstance(dataset_type, DatasetType):
+            raise ValueError(f"dataset_type must be a DatasetType member; got {type(dataset_type).__name__}")
+        key_prefix = f"market_data:{dataset_type.value}:{symbol.lower()}:"
+        try:
+            return await self._valkey.delete_pattern(f"{key_prefix}*")  # type: ignore[no-any-return]
+        except Exception as exc:  # -- fail-open
+            logger.warning(
+                "market_data_cache_invalidate_failed",
+                error=str(exc),
+                key_prefix=key_prefix,
+            )
+            return 0
+
     # -- Internal helpers ----------------------------------------------------
 
     async def _safe_get(self, key: str) -> ResultEnvelope | None:

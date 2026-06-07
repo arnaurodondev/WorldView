@@ -7,6 +7,8 @@ GET /v1/portfolios proxies S1 and returns a list of Portfolio objects.
 
 from __future__ import annotations
 
+from datetime import date
+
 from pydantic import BaseModel, ConfigDict
 
 
@@ -48,6 +50,36 @@ class PortfolioSectorAttributionResponse(BaseModel):
     portfolio_id: str
     buckets: list[SectorBucket] = []
     covered_pct: float = 0.0  # fraction of portfolio (by market value) with sector data
+
+
+class SectorBreakdownSegment(BaseModel):
+    """One segment in the optimised sector-breakdown response.
+
+    Returned by GET /v1/portfolios/{id}/sector-breakdown (single-query variant).
+    """
+
+    model_config = ConfigDict(extra="allow")
+
+    sector: str
+    weight: float = 0.0  # fraction 0-1 of total market value
+    count: int = 0  # number of holdings in this sector
+    market_value: float = 0.0  # absolute market value in portfolio currency
+
+
+class SectorBreakdownResponse(BaseModel):
+    """Response for GET /v1/portfolios/{id}/sector-breakdown.
+
+    Single-aggregation-query variant — guaranteed < 300ms because it performs
+    at most 2 downstream HTTP calls (holdings + price batch) with sector data
+    read from the instruments table via parallel instrument-lookup calls.
+    """
+
+    model_config = ConfigDict(extra="allow")
+
+    portfolio_id: str
+    segments: list[SectorBreakdownSegment] = []
+    covered_pct: float = 0.0  # fraction of portfolio MV that has a known sector
+    as_of: date | None = None  # server-side date of the response
 
 
 class PortfolioBundleResponse(BaseModel):

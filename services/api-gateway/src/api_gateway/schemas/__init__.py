@@ -44,6 +44,8 @@ from api_gateway.schemas.portfolios import (
     PortfolioBundleResponse,
     PortfolioResponse,
     PortfolioSectorAttributionResponse,
+    SectorBreakdownResponse,
+    SectorBreakdownSegment,
     SectorBucket,
 )
 from api_gateway.schemas.prediction_markets import (
@@ -93,6 +95,8 @@ __all__ = [
     "QuoteResponse",
     "ScreenerResponse",
     "ScreenerResultItem",
+    "SectorBreakdownResponse",
+    "SectorBreakdownSegment",
     "SectorBucket",
     "SentimentDataPoint",
     "SourceSharePublic",
