@@ -436,8 +436,23 @@ export interface InstrumentPageBundle {
   overview: CompanyOverview | null;
   /** Full all-sections fundamentals (mirrors /v1/fundamentals/{id}). */
   fundamentals: FundamentalsSectionResponse | null;
+  /**
+   * Pre-computed derived-metrics snapshot (eps_ttm, beta, free_cash_flow, etc.).
+   * PLAN-0099 follow-up G: bundled so the Quote-tab MetricsTable hook
+   * (useMetricsTableData) finds it pre-seeded in qk.instruments.fundamentalsSnapshot
+   * cache on first paint, eliminating the dedicated /snapshot RTT. Null when the
+   * downstream leg fails — the MetricsTable renders "—" on null.
+   */
+  fundamentals_snapshot: FundamentalsSnapshot | null;
   /** Technicals snapshot (52-week range etc.). */
   technicals: FundamentalsSectionResponse | null;
+  /**
+   * Share count + insider/institution ownership % records.
+   * PLAN-0099 follow-up G: bundled so the Quote-tab MetricsTable hook finds
+   * it pre-seeded in qk.instruments.shareStatistics cache, eliminating the
+   * dedicated /share-statistics RTT on first paint.
+   */
+  share_statistics: FundamentalsSectionResponse | null;
   /** Insider transactions records. */
   insider: FundamentalsSectionResponse | null;
   /** Top-N entity-scoped news (limit=5). */

@@ -8,6 +8,32 @@
 import type { EntityGraph, ContradictionsResponse, EntityPublic } from "@/types/api";
 import { apiFetch, GatewayError } from "./_client";
 
+/**
+ * EntityIntelligenceBundleResponse — PLAN-0099 H composite for the Intelligence tab.
+ *
+ * WHY a new bundle shape (vs. DashboardBundleResponse):
+ * The Intelligence tab fires 5 independent S9 calls on mount (entity detail,
+ * brief, depth=2 graph, paths, intelligence_summary). This composite collapses
+ * them into a single round-trip server-side via asyncio.gather. The frontend
+ * then hydrates the per-widget TanStack caches via setQueryData so child
+ * components render without firing their own initial fetches.
+ *
+ * All legs are independently nullable — failed legs degrade to null at the
+ * gateway and the page renders skeletons / "—" for them.
+ */
+export interface EntityIntelligenceBundleResponse {
+  /** GET /v1/entities/{id} payload (canonical_name, description, metadata, …). */
+  detail: unknown | null;
+  /** GET /v1/briefings/instrument/{id} payload (AI brief narrative + sections). */
+  brief: unknown | null;
+  /** Depth=2 EntityGraph {entity_id, nodes, edges} — already transformed S7→FE. */
+  graph_d2: unknown | null;
+  /** GET /v1/entities/{id}/paths payload (top-N multi-hop opportunity paths). */
+  paths: unknown | null;
+  /** GET /v1/entities/{id}/intelligence aggregate (health, narrative, confidence). */
+  intelligence_summary: unknown | null;
+}
+
 export function createKnowledgeGraphApi(t: string | undefined) {
   return {
     /**
@@ -160,6 +186,34 @@ export function createKnowledgeGraphApi(t: string | undefined) {
         if (err instanceof GatewayError && err.status === 404) return null;
         throw err;
       }
+    },
+
+    /**
+     * getEntityIntelligenceBundle — PLAN-0099 H Intelligence-tab composite.
+     *
+     * WHY THIS METHOD EXISTS (Agent D audit I1+I2): the Intelligence tab used
+     * to fire 5 independent gateway calls on mount (entity detail, brief,
+     * depth=2 graph, paths, intelligence_summary) plus a redundant depth=1
+     * graph from ContextPanel. Each call is its own TLS handshake — the tab
+     * was wave-serialized by the slowest leg.
+     *
+     * This single call fans out server-side via asyncio.gather and returns
+     * all 5 legs in one round-trip. The caller (useEntityIntelligenceBundle
+     * + IntelligenceTab) hydrates the per-widget TanStack caches via
+     * setQueryData so the child queries see the data as already-fetched.
+     *
+     * 404 is NOT special-cased here: the bundle endpoint always returns 200
+     * with null legs for failures; a 404 would mean the entity_id is malformed
+     * (422 from FastAPI before the route runs) or the route is misregistered —
+     * both should propagate as errors so they're visible in dev.
+     */
+    async getEntityIntelligenceBundle(
+      entityId: string,
+    ): Promise<EntityIntelligenceBundleResponse> {
+      return await apiFetch<EntityIntelligenceBundleResponse>(
+        `/v1/entities/${encodeURIComponent(entityId)}/intelligence-bundle`,
+        { token: t },
+      );
     },
   };
 }

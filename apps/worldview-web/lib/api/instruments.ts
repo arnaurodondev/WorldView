@@ -26,6 +26,31 @@ import type {
 } from "@/types/api";
 import { apiFetch, GatewayError } from "./_client";
 
+/**
+ * FinancialsBundleResponse — structural mirror of the S9
+ * `FinancialsBundleResponse` Pydantic model (PLAN-0099 follow-up E).
+ *
+ * WHY structural (not from `@/types/api`): the generated OpenAPI types
+ * have not been re-rolled since this endpoint landed; defining the shape
+ * here unblocks callers immediately. Each leg is `unknown | null` because
+ * downstream legs preserve their own per-endpoint shapes (`Fundamentals`,
+ * `FundamentalsSnapshot`, section envelopes) — the bundle hook narrows
+ * them when hydrating per-widget caches.
+ *
+ * All fields are nullable: a failed downstream leg degrades to `null` so
+ * the page renders partial UIs rather than failing whole-tab.
+ */
+export interface FinancialsBundleResponse {
+  fundamentals: unknown | null;
+  fundamentals_snapshot: unknown | null;
+  income_statement: unknown | null;
+  earnings_history: unknown | null;
+  share_statistics: unknown | null;
+  splits_dividends: unknown | null;
+  beat_miss_history: unknown | null;
+  fundamentals_timeseries: unknown | null;
+}
+
 export function createInstrumentsApi(t: string | undefined) {
   return {
     /**
@@ -559,6 +584,41 @@ export function createInstrumentsApi(t: string | undefined) {
       return apiFetch<FundamentalsSectionResponse>(
         `/v1/fundamentals/${encodeURIComponent(instrumentId)}/income-statement`,
         { token: t },
+      );
+    },
+
+    /**
+     * getFinancialsBundle — PLAN-0099 follow-up E single-RTT composite for the
+     * Financials tab.
+     *
+     * WHY THIS EXISTS: Opening the Financials tab cold previously fired ~8
+     * unique S9 round-trips (fundamentals, snapshot, income-statement,
+     * earnings history, technicals, share statistics, splits/dividends,
+     * plus per-panel beat-miss-history + fundamentals-timeseries). Each
+     * goes through S9 auth + internal-JWT issuance, so the page was
+     * wave-serialized by the slowest leg.
+     *
+     * The bundle endpoint fans these legs out in parallel server-side and
+     * returns a composite object. The matching `useFinancialsBundle` hook
+     * (see ../../components/instrument/hooks/) pre-warms each per-widget
+     * TanStack cache key via `queryClient.setQueryData(...)` so existing
+     * child components (`BeatMissHistoryPanel`, `IncomeStatementTable`,
+     * etc.) hit warm cache instead of refetching.
+     *
+     * WHY POST (not GET): symmetric with `/v1/companies/overviews:batch`.
+     * The endpoint is resource-composition, not a simple resource fetch.
+     *
+     * WHY response typed as a structural interface (not generated types):
+     * the generated types haven't been re-rolled for this endpoint yet —
+     * keeping the structural interface here lets callers use the bundle
+     * today without waiting for `pnpm generate-types`. Each leg is `unknown`
+     * because the bundle simply forwards the underlying S3 response shapes
+     * which the per-widget hooks already type at hydration time.
+     */
+    getFinancialsBundle(instrumentId: string): Promise<FinancialsBundleResponse> {
+      return apiFetch<FinancialsBundleResponse>(
+        `/v1/fundamentals/${encodeURIComponent(instrumentId)}/financials-bundle`,
+        { token: t, method: "POST" },
       );
     },
   };

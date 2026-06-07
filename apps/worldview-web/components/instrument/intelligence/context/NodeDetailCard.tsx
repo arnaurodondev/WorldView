@@ -24,12 +24,16 @@
  */
 
 "use client";
-// WHY "use client": this component uses an onClick handler (onBack). Server
-// Components cannot bind event listeners, so the whole subtree must be a
-// client island. The cost is minimal — no hooks, no state.
+// WHY "use client": this component uses an onClick handler (onBack) AND
+// a TanStack Query hook (useQuery for entity description). Server Components
+// cannot use either — this must be a client island.
 
+import { useQuery } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
+import { useAuth } from "@/hooks/useAuth";
+import { createGateway } from "@/lib/gateway";
+import { qk } from "@/lib/query/keys";
 import type { GraphNode } from "@/types/api";
 
 /**
@@ -53,6 +57,23 @@ export interface NodeDetailCardProps {
 // ── Component ────────────────────────────────────────────────────────────────
 
 export function NodeDetailCard({ node, onBack, className }: NodeDetailCardProps) {
+  const { accessToken } = useAuth();
+
+  // WHY fetch entity detail here (PLAN-0099 W4 Step 7):
+  // The GraphNode payload carries only label/type/size/ticker — no description.
+  // Rather than showing "No description available." forever, we fetch the enriched
+  // entity record from GET /v1/entities/{id}. staleTime=30min because descriptions
+  // are refreshed nightly by Worker 13J; no need to re-fetch on every node click.
+  // retry=1: 404 means enrichment hasn't run yet (returns null) — one retry covers
+  // transient S9 blips without hammering the backend on a cold entity.
+  const { data: detail } = useQuery({
+    queryKey: qk.kg.entityDetail(node.id),
+    queryFn: () => createGateway(accessToken).getEntityDetail(node.id),
+    enabled: !!accessToken && !!node.id,
+    staleTime: 30 * 60 * 1000,
+    retry: 1,
+  });
+
   // WHY normalise the type label here (not in the parent):
   // KG entity_type strings use snake_case ("financial_instrument"). Displaying
   // the raw value is jarring. We only do this for VIEW; the underlying value
@@ -114,14 +135,20 @@ export function NodeDetailCard({ node, onBack, className }: NodeDetailCardProps)
         </span>
       </div>
 
-      {/* ── Description placeholder ────────────────────────────────────────
-          WHY a placeholder (not a fetched description):
-          GraphNode does NOT carry a description today. Fetching one per click
-          would add latency on every node selection. The spec (§6.9) explicitly
-          permits "No description available." as a stable label until a future
-          wave wires getEntityDetail() here. */}
+      {/* ── Description ───────────────────────────────────────────────────
+          WHY fetched (not hardcoded placeholder): PLAN-0099 W4 Step 7 wires
+          getEntityDetail() here. The KG entity detail endpoint returns a
+          Worker-13J-enriched description. When null (enrichment hasn't run yet
+          or entity too new), we render a muted italic placeholder so the slot
+          height is stable (no layout shift on data arrival). */}
       <p className="text-[11px] leading-relaxed text-foreground/80">
-        No description available.
+        {detail?.description != null ? (
+          detail.description
+        ) : (
+          <span className="italic text-muted-foreground">
+            Description unavailable.
+          </span>
+        )}
       </p>
 
       {/* ── Node weight (importance proxy) ─────────────────────────────────

@@ -13,6 +13,7 @@ from api_gateway.schemas.common import Meta
 from api_gateway.schemas.dashboard import DashboardSnapshotResponse
 from api_gateway.schemas.dashboard_bundle import DashboardBundleResponse
 from api_gateway.schemas.entity_chat import EntityContextChatRequest
+from api_gateway.schemas.financials_bundle import FinancialsBundleResponse
 from api_gateway.schemas.fundamentals import (
     EarningsCalendarResponse,
     EarningsEvent,
@@ -34,6 +35,7 @@ from api_gateway.schemas.intelligence import (
     SentimentDataPoint,
     SourceSharePublic,
 )
+from api_gateway.schemas.intelligence_bundle import EntityIntelligenceBundleResponse
 from api_gateway.schemas.market import YieldCurveResponse, YieldPoint
 from api_gateway.schemas.narratives import NarrativeListResponse, NarrativeTriggerResponse
 from api_gateway.schemas.news import ArticleImpactHistoryResponse, ImpactWindow, NewsArticle, NewsTopResponse
@@ -61,9 +63,11 @@ __all__ = [
     "EarningsCalendarResponse",
     "EarningsEvent",
     "EntityContextChatRequest",
+    "EntityIntelligenceBundleResponse",
     "EntityIntelligencePublic",
     "EntityPathsResponse",
     "EntitySentimentTimeseriesResponse",
+    "FinancialsBundleResponse",
     "FundamentalsRecord",
     "FundamentalsResponse",
     "ImpactWindow",

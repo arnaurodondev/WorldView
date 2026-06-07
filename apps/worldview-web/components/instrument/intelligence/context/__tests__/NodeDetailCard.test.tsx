@@ -24,9 +24,37 @@
 
 import { describe, it, expect, vi } from "vitest";
 import { render, screen, fireEvent } from "@testing-library/react";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import type { ReactNode } from "react";
 
 import { NodeDetailCard } from "@/components/instrument/intelligence/context/NodeDetailCard";
 import type { GraphNode } from "@/types/api";
+
+// WHY mock useAuth: NodeDetailCard calls useAuth() to get an access token for
+// the entity-detail fetch. Without this mock the hook throws because there is
+// no AuthProvider in the test tree.
+vi.mock("@/hooks/useAuth", () => ({
+  useAuth: vi.fn(() => ({
+    accessToken: "test-token",
+    isAuthenticated: true,
+    isLoading: false,
+    user: { user_id: "u1", tenant_id: "t1", email: "a@b.com", name: "A", avatar_url: null },
+    setTokens: vi.fn(),
+    logout: vi.fn(),
+  })),
+}));
+
+// WHY mock gateway: prevents real network calls from entity-detail fetch.
+vi.mock("@/lib/gateway", () => ({
+  createGateway: vi.fn(() => ({
+    getEntityDetail: vi.fn().mockResolvedValue({ description: "Test entity description." }),
+  })),
+}));
+
+function wrapper({ children }: { children: ReactNode }) {
+  const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  return <QueryClientProvider client={qc}>{children}</QueryClientProvider>;
+}
 
 /**
  * baseNode — minimal GraphNode skeleton. Tests override per-scenario.
@@ -42,9 +70,14 @@ function baseNode(overrides: Partial<GraphNode> = {}): GraphNode {
   };
 }
 
+// WHY helper: every render call needs QueryClientProvider because NodeDetailCard
+// now calls useQuery (entity-detail fetch). Using { wrapper } keeps each test
+// isolated — a fresh QueryClient prevents cache bleed between tests.
+const renderCard = (ui: React.ReactElement) => render(ui, { wrapper });
+
 describe("NodeDetailCard", () => {
   it("renders the node label and normalises the type (underscores → spaces)", () => {
-    render(<NodeDetailCard node={baseNode()} onBack={() => {}} />);
+    renderCard(<NodeDetailCard node={baseNode()} onBack={() => {}} />);
     expect(screen.getByText("Apple Inc.")).toBeInTheDocument();
     // WHY "financial instrument" not "financial_instrument": the component
     // does `node.type.replace(/_/g, " ")` for display only.
@@ -53,14 +86,14 @@ describe("NodeDetailCard", () => {
 
   it("fires onBack when the Back button is clicked", () => {
     const onBack = vi.fn();
-    render(<NodeDetailCard node={baseNode()} onBack={onBack} />);
+    renderCard(<NodeDetailCard node={baseNode()} onBack={onBack} />);
     // The button has an explicit aria-label so screen-reader-style query is stable.
     fireEvent.click(screen.getByRole("button", { name: /back to entity overview/i }));
     expect(onBack).toHaveBeenCalledTimes(1);
   });
 
   it("renders the node weight row when node.size is a finite number", () => {
-    render(<NodeDetailCard node={baseNode({ size: 7.13 })} onBack={() => {}} />);
+    renderCard(<NodeDetailCard node={baseNode({ size: 7.13 })} onBack={() => {}} />);
     // WHY uppercase "NODE WEIGHT": the label uses the uppercase-tracking
     // utility but the underlying text is title-cased; it renders as
     // "Node weight" in the DOM.
@@ -74,19 +107,19 @@ describe("NodeDetailCard", () => {
     // the optional metadata row. GraphNode.size is `number | undefined` so
     // we omit it via the spread.
     const noSize: GraphNode = { id: "x", label: "Test", type: "topic" };
-    render(<NodeDetailCard node={noSize} onBack={() => {}} />);
+    renderCard(<NodeDetailCard node={noSize} onBack={() => {}} />);
     expect(screen.queryByText("Node weight")).not.toBeInTheDocument();
   });
 
   it("renders the Ticker row for financial_instrument nodes with a ticker", () => {
-    render(<NodeDetailCard node={baseNode({ ticker: "AAPL" })} onBack={() => {}} />);
+    renderCard(<NodeDetailCard node={baseNode({ ticker: "AAPL" })} onBack={() => {}} />);
     expect(screen.getByText("Ticker")).toBeInTheDocument();
     expect(screen.getByText("AAPL")).toBeInTheDocument();
   });
 
   it("hides the Ticker row when ticker is empty / undefined (non-instrument node)", () => {
     // sectors / people / events come back with ticker === "" or undefined.
-    render(
+    renderCard(
       <NodeDetailCard
         node={{ id: "p-1", label: "Tim Cook", type: "person", size: 1.2 }}
         onBack={() => {}}

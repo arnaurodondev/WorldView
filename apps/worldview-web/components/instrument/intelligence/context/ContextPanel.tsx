@@ -36,6 +36,7 @@ import { useQuery } from "@tanstack/react-query";
 import { useAuth } from "@/hooks/useAuth";
 import { createGateway } from "@/lib/gateway";
 import { useEntityIntelligence } from "@/lib/api/intelligence";
+import { qk } from "@/lib/query/keys";
 import { Skeleton } from "@/components/ui/skeleton";
 import { cn } from "@/lib/utils";
 import { NodeDetailCard } from "./NodeDetailCard";
@@ -130,19 +131,40 @@ export function ContextPanel({
   const intelligenceQuery = useEntityIntelligence(entityId);
 
   // ── Entity graph (nodes + edges for node-detail mode) ────────────────────
-  // WHY also fetch here (vs. accepting graph as a prop):
-  // Decoupling — the parent IntelligenceTab can also fetch the graph for the
-  // visualisation, but TanStack Query de-dupes by key so only ONE network
-  // request fires. Both consumers see the same cached data.
+  // PLAN-0099 H / Agent D audit I1: REMOVED redundant depth=1 fetch.
+  // Previously this component fired its OWN depth=1 graph fetch under the
+  // cache key ["entity-graph", entityId, 1, null] in parallel with
+  // GraphColumn's depth=2 fetch under qk.instruments.entityGraph(entityId, 2)
+  // — two separate AGE queries on the backend for visually-overlapping data.
+  //
+  // FIX: subscribe to the SAME depth=2 cache slot that GraphColumn fills (and
+  // that the H bundle hydrator pre-warms). Then derive depth-1 neighbours
+  // by filtering the depth=2 graph to edges incident on the root entity.
+  // This is purely a cache subscription — no queryFn / no network call:
+  //   - On cold start, the bundle hydrator seeds this key before mount.
+  //   - GraphColumn renders the same cache slot, so when the analyst changes
+  //     the depth slider GraphColumn refetches and ContextPanel re-derives.
+  //   - If for some reason the bundle/GraphColumn have not populated yet,
+  //     `data` is undefined and the component renders its existing
+  //     null-guard / loading UI (no spinner regression).
+  // WHY queryFn: () => null (not a real fetcher): we INTENTIONALLY do not
+  // own the fetch — GraphColumn does. Returning null when the cache is
+  // truly empty matches the previous component's null-graph behaviour
+  // (NodeDetailCard shows no relations until the cache fills).
   const graphQuery = useQuery<EntityGraph | null>({
-    queryKey: ["entity-graph", entityId, 1, null],
-    queryFn: () => createGateway(accessToken).getEntityGraph(entityId, 1),
+    queryKey: qk.instruments.entityGraph(entityId, 2),
+    queryFn: () => null,
     enabled: !!accessToken && !!entityId,
-    // WHY 5 min: graph topology changes after Worker 13C runs (~5 min cadence
-    // on the consumer). Matches the staleTime used by IntelligenceTab.
     staleTime: 5 * 60 * 1000,
-    retry: 1,
+    retry: 0,
   });
+
+  // WHY no depth-1 derivation here (option-A from the audit):
+  // nodesById and incidentEdges below operate over the SAME depth=2 graph
+  // that GraphColumn renders, so when the analyst clicks a 2-hop node the
+  // detail card resolves correctly. If a depth-1-only view is needed in
+  // future, simply filter `graphQuery.data.edges` to edges incident on
+  // `entityId` — no extra fetch required.
 
   // ── Derived: lookups for the selected node ───────────────────────────────
   // WHY useMemo on both:

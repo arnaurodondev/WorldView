@@ -40,6 +40,12 @@ import { useState } from "react";
 import { NewsColumn } from "./news/NewsColumn";
 import { GraphColumn } from "./graph/GraphColumn";
 import { ContextPanel } from "./context/ContextPanel";
+// PLAN-0099 H: single-round-trip composite bundle. Hydrates per-widget
+// TanStack caches (entity-detail, brief, depth=2 graph, paths, intelligence
+// summary) so ContextPanel / GraphColumn / PathInsightsBlock / useEntityIntelligence
+// render from cache without firing their own initial fetches on cold start.
+// See the hook file for the exact-key hydration contract.
+import { useEntityIntelligenceBundle } from "@/features/intelligence/hooks/useEntityIntelligenceBundle";
 
 // ── Props ────────────────────────────────────────────────────────────────────
 //
@@ -60,24 +66,40 @@ export function IntelligenceTab({ entityId }: IntelligenceTabProps) {
   // parent keeps the two children in sync without a context provider.
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
 
+  // PLAN-0099 H: fire the composite bundle ONCE on tab mount. The hook's
+  // useEffect side-effect hydrates per-widget TanStack caches via
+  // setQueryData under the EXACT keys each child reads. Children continue to
+  // call their own useQuery hooks; TanStack returns the seeded data instantly
+  // so the cold-start render skips 4 sequential network round-trips.
+  // WHY we don't read the returned value: the bundle is purely an initial-
+  // load optimisation — children own their own loading / error UI keyed off
+  // their respective queries. If the bundle itself fails entirely (top-level
+  // network error), each child's individual queryFn still fires as a fallback,
+  // so the page still functions.
+  useEntityIntelligenceBundle(entityId);
+
   return (
-    // WHY grid grid-cols-12: PRD-0088 §6.9 specifies a 12-column layout where
-    // the news rail is 3/12 (≈25%), the graph is 6/12 (50%), and the context
-    // rail is 3/12. h-full + overflow-hidden lock the tab to the parent box
+    // WHY grid grid-cols-14 (not 12): PRD-0088 W7 bumps the news rail from
+    // 3/12 → 4/14 (≈28%), the graph from 6/12 → 7/14 (≈50%), and the context
+    // rail stays at 3/14 (≈21%). The extra 2 columns give the graph column
+    // more breathing room for the sigma.js canvas while keeping the news rail
+    // wide enough for a DenseArticleRow (~200 px minimum). tailwind.config.ts
+    // has the custom `gridTemplateColumns: { "14": "repeat(14, ...)" }` entry.
+    // h-full + overflow-hidden lock the tab to the parent box
     // (InstrumentPageClient's `<div className="flex-1 min-h-0 overflow-hidden">`).
     // Each column then owns its own scroll context.
-    <div className="grid grid-cols-12 h-full overflow-hidden">
-      {/* ── LEFT: news rail (3/12) ──────────────────────────────────────────
+    <div className="grid grid-cols-14 h-full overflow-hidden">
+      {/* ── LEFT: news rail (4/14 ≈ 28%) ────────────────────────────────────
           overflow-y-auto so the article list scrolls inside this column
           without lifting the whole tab. border-r separates from the graph. */}
-      <div className="col-span-3 overflow-y-auto border-r border-border">
+      <div className="col-span-4 overflow-y-auto border-r border-border">
         <NewsColumn entityId={entityId} />
       </div>
 
-      {/* ── CENTER: graph + brief (6/12) ────────────────────────────────────
+      {/* ── CENTER: graph + brief (7/14 = 50%) ───────────────────────────────
           GraphColumn manages its own internal layout (brief on top, toolbar,
           graph fills remaining height) so this slot is just `flex flex-col`. */}
-      <div className="col-span-6 flex flex-col">
+      <div className="col-span-7 flex flex-col">
         <GraphColumn
           entityId={entityId}
           selectedNodeId={selectedNodeId}
@@ -85,8 +107,10 @@ export function IntelligenceTab({ entityId }: IntelligenceTabProps) {
         />
       </div>
 
-      {/* ── RIGHT: context panel (3/12) ────────────────────────────────────
-          When selectedNodeId === null → entity-overview mode.
+      {/* ── RIGHT: context panel (3/14 ≈ 22%) ─────────────────────────────────
+          When selectedNodeId === null → entity-overview mode (EntityOverviewBlock
+          + TopRelationsBlock + PathInsightsBlock + ContradictionsBlock +
+          NarrativeHistoryDisclosure).
           When selectedNodeId !== null → node-detail mode + Back to overview.
           The panel does its own data fetching for entity detail and graph,
           keyed by entityId — see components/instrument/intelligence/context/

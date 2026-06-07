@@ -9,6 +9,7 @@ Split from proxy.py (PLAN-0089 B-3).
 
 from __future__ import annotations
 
+import asyncio
 import json
 from typing import Any
 from uuid import UUID
@@ -16,7 +17,11 @@ from uuid import UUID
 from fastapi import APIRouter, HTTPException, Path, Query, Request, Response
 
 from api_gateway.routes.helpers import _auth_headers, _clients
-from api_gateway.schemas import PredictionMarket, PredictionMarketsListResponse
+from api_gateway.schemas import (
+    EntityIntelligenceBundleResponse,
+    PredictionMarket,
+    PredictionMarketsListResponse,
+)
 from observability.logging import get_logger  # type: ignore[import-untyped]
 
 logger = get_logger(__name__)  # type: ignore[no-any-return]
@@ -708,6 +713,175 @@ async def get_entity_paths(
             logger.warning("paths_cache_write_failed", entity_id=str(entity_id))
 
     return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
+
+
+# ── Intelligence-tab bundle (PLAN-0099 H) ────────────────────────────────────
+
+
+# Default graph parameters for the bundle's depth=2 leg. These mirror the
+# frontend's GraphColumn cold-start request so the hydrated cache slot matches
+# the per-widget query key the GraphColumn issues (qk.instruments.entityGraph(id, 2)).
+# WHY limit=40: GraphColumn caps at 40 nodes for sigma.js WebGL comfort
+# (knowledge-graph.ts:70). Lower would force a refetch; higher wastes payload.
+# WHY min_confidence=0.0: Intelligence-tab full view shows all edges.
+_BUNDLE_GRAPH_DEPTH = 2
+_BUNDLE_GRAPH_LIMIT = 40
+# WHY default paths params: match the PathInsightsBlock's `limit=3` default
+# (PathInsightsBlock.tsx:38) and S7's path defaults — these are the values the
+# UI fetches on cold start so the cache hydrates the exact same call signature.
+# Note: useEntityPaths uses an empty PathFilters object by default — calling
+# with no params yields the S9 defaults (limit=10, min_score=0.3, hops 2-5).
+_BUNDLE_PATHS_LIMIT = 10
+_BUNDLE_PATHS_MIN_SCORE = 0.3
+_BUNDLE_PATHS_MIN_HOPS = 2
+_BUNDLE_PATHS_MAX_HOPS = 5
+
+
+async def _bundle_fetch_json(
+    client: Any,
+    path: str,
+    *,
+    headers: dict[str, str],
+    params: dict[str, Any] | None = None,
+    leg: str,
+) -> dict[str, Any] | None:
+    """Fetch one bundle leg; return None on any failure (typed dict or None).
+
+    WHY swallow Exception broadly: per-leg failures must not poison the whole
+    bundle. The frontend renders skeletons / "—" for null legs. Mirrors the
+    fail-soft pattern in clients/dashboard_bundle.py.
+    """
+    try:
+        resp = await client.get(path, params=params, headers=headers)
+        if resp.status_code >= 400:
+            logger.warning(
+                "entity_intelligence_bundle_leg_non2xx",
+                leg=leg,
+                path=path,
+                status=resp.status_code,
+            )
+            return None
+        data: dict[str, Any] = resp.json()
+        return data
+    except Exception:
+        logger.warning("entity_intelligence_bundle_leg_failed", leg=leg, path=path)
+        return None
+
+
+@router.get(
+    "/entities/{entity_id}/intelligence-bundle",
+    response_model=EntityIntelligenceBundleResponse,
+    response_model_exclude_none=False,
+    summary="Entity Intelligence tab composite bundle (PLAN-0099 H)",
+)
+async def get_entity_intelligence_bundle(
+    entity_id: UUID,
+    request: Request,
+) -> dict[str, Any]:
+    """Collapse the 4-5 Intelligence-tab queries into one round-trip.
+
+    See ``EntityIntelligenceBundleResponse`` for the field contract. Each leg
+    is fetched via ``asyncio.gather(return_exceptions=True)`` and degrades
+    independently to None on failure — the page hydrates per-widget caches
+    and renders skeletons for null legs.
+
+    Legs:
+      detail               : S7 GET /api/v1/entities/{id}
+      brief                : S8 GET /api/v1/briefings/instrument/{id}
+      graph_d2             : S7 GET /api/v1/entities/{id}/graph?depth=2 (transformed
+                             via _transform_graph_response so the shape matches the
+                             frontend's getEntityGraph cache slot).
+      paths                : S7 GET /api/v1/entities/{id}/paths
+      intelligence_summary : S7 GET /api/v1/entities/{id}/intelligence
+
+    WHY no Valkey caching here: the underlying leg endpoints already cache
+    (intel:60s, paths:300s). Caching the bundle on top would force a 5-leg
+    re-fetch on the shortest TTL whenever any one expires.
+
+    Requires authentication.
+    """
+    if not getattr(request.state, "user", None):
+        raise HTTPException(status_code=401, detail="Authentication required")
+
+    headers = _auth_headers(request)
+    clients = _clients(request)
+
+    # WHY str(entity_id) once: UUID-to-str repeated under N tasks is cheap but
+    # consistent stringification avoids a future refactor accidentally feeding
+    # the raw UUID object into f-strings (PYC's `repr` would not match).
+    eid = str(entity_id)
+
+    # ── Fan out via asyncio.gather(return_exceptions=True) ───────────────────
+    # WHY return_exceptions=True: a single leg raising must not cancel the
+    # other 4. We coerce exceptions to None below.
+    detail_t, brief_t, graph_t, paths_t, intel_t = await asyncio.gather(
+        _bundle_fetch_json(
+            clients.knowledge_graph,
+            f"/api/v1/entities/{eid}",
+            headers=headers,
+            leg="detail",
+        ),
+        _bundle_fetch_json(
+            clients.rag_chat,
+            f"/api/v1/briefings/instrument/{eid}",
+            headers=headers,
+            leg="brief",
+        ),
+        # graph_d2 — S7 raw. We transform below so the shape matches the
+        # frontend cache slot (EntityGraph {entity_id, nodes, edges}).
+        _bundle_fetch_json(
+            clients.knowledge_graph,
+            f"/api/v1/entities/{eid}/graph",
+            headers=headers,
+            params={
+                "limit": _BUNDLE_GRAPH_LIMIT,
+                "depth": _BUNDLE_GRAPH_DEPTH,
+                "min_confidence": 0.0,
+                "confidence_breakdown": "true",
+            },
+            leg="graph_d2",
+        ),
+        _bundle_fetch_json(
+            clients.knowledge_graph,
+            f"/api/v1/entities/{eid}/paths",
+            headers=headers,
+            params={
+                "limit": _BUNDLE_PATHS_LIMIT,
+                "min_score": _BUNDLE_PATHS_MIN_SCORE,
+                "min_hops": _BUNDLE_PATHS_MIN_HOPS,
+                "max_hops": _BUNDLE_PATHS_MAX_HOPS,
+            },
+            leg="paths",
+        ),
+        _bundle_fetch_json(
+            clients.knowledge_graph,
+            f"/api/v1/entities/{eid}/intelligence",
+            headers=headers,
+            leg="intelligence_summary",
+        ),
+        return_exceptions=False,
+    )
+
+    # WHY transform graph after fetch: _transform_graph_response converts the
+    # S7 {center, relations, entities} payload to the frontend's EntityGraph
+    # {entity_id, nodes, edges}. Same transform the /graph proxy applies, so
+    # the hydrated cache slot is byte-for-byte what a direct call would yield.
+    graph_d2: dict[str, Any] | None = None
+    if graph_t is not None:
+        try:
+            graph_d2 = _transform_graph_response(graph_t)
+        except Exception:
+            # Defensive: malformed S7 payload should not poison the bundle.
+            logger.warning("entity_intelligence_bundle_graph_transform_failed", entity_id=eid)
+            graph_d2 = None
+
+    return {
+        "detail": detail_t,
+        "brief": brief_t,
+        "graph_d2": graph_d2,
+        "paths": paths_t,
+        "intelligence_summary": intel_t,
+    }
 
 
 # ── Prediction Markets (PRD-0019 Wave C-1) ────────────────────────────────────
