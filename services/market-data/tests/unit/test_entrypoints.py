@@ -14,9 +14,15 @@ the entire cleanup path to execute within the test.
 from __future__ import annotations
 
 import asyncio
+import os
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+
+# Force METRICS_PORT=0 so the real start_metrics_server picks an ephemeral
+# port and never collides with the Docker stack's worldview-prometheus on 9100.
+# PLAN-0107 FU — see audit 2026-05-29.
+os.environ["METRICS_PORT"] = "0"
 
 pytestmark = pytest.mark.unit
 
