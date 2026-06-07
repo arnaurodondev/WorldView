@@ -12,6 +12,8 @@ import type {
   GridReadyEvent,
   GetRowIdParams,
   RowClickedEvent,
+  CellMouseOverEvent,
+  CellMouseOutEvent,
   CellContextMenuEvent,
   SortChangedEvent,
 } from "ag-grid-community";
@@ -32,6 +34,20 @@ export interface AgGridBaseProps<TData extends object> {
   onColumnStateChanged?: () => void;
   /** When true, suppresses the browser's native right-click context menu. */
   preventDefaultOnContextMenu?: boolean;
+  /**
+   * Fires when the pointer moves over a cell (once per cell, not per pixel).
+   * Use this for row-hover affordances: the event carries `data` (row) and
+   * `rowIndex` so the caller can compute the row's bounding rect via the
+   * AG Grid API (e.g. `gridApi.getDisplayedRowAtIndex(rowIndex)?.setExpanded()`).
+   *
+   * WHY CellMouseOverEvent (not a custom RowMouseOver):
+   *   AG Grid v35 does not expose onRowMouseOver/onRowMouseOut at the grid
+   *   option level. CellMouseOverEvent fires on every cell entry and reliably
+   *   carries both `data` and the native MouseEvent for bounding rect needs.
+   */
+  onCellMouseOver?: (event: CellMouseOverEvent<TData>) => void;
+  /** Fires when the pointer leaves a cell. Use to hide row-hover overlays. */
+  onCellMouseOut?: (event: CellMouseOutEvent<TData>) => void;
   /**
    * WHY pinnedBottomRowData: AG Grid renders pinned rows inside the grid DOM,
    * keeping them in sync with column widths, pinning, and horizontal scroll
@@ -73,6 +89,8 @@ export function AgGridBase<TData extends object>({
   onColumnStateChanged,
   preventDefaultOnContextMenu,
   pinnedBottomRowData,
+  onCellMouseOver,
+  onCellMouseOut,
 }: AgGridBaseProps<TData>) {
   const colStateHandler = onColumnStateChanged;
 
@@ -103,6 +121,8 @@ export function AgGridBase<TData extends object>({
         }
         onCellContextMenu={onCellContextMenu}
         onSortChanged={onSortChanged}
+        onCellMouseOver={onCellMouseOver}
+        onCellMouseOut={onCellMouseOut}
         onColumnResized={colStateHandler ? () => colStateHandler() : undefined}
         onColumnVisible={colStateHandler ? () => colStateHandler() : undefined}
         onColumnMoved={colStateHandler ? () => colStateHandler() : undefined}

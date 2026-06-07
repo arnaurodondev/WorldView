@@ -38,14 +38,20 @@ function pushIfRange(
 export function buildScreenerFilters(f: FilterState): ScreenerFilter[] {
   const filters: ScreenerFilter[] = [];
 
-  // Cap tier → market_capitalization range
-  let capMin: number | undefined;
-  let capMax: number | undefined;
-  if (f.capTier === "LARGE") capMin = 10_000_000_000;
+  // Cap tier → market_capitalization range.
+  // WHY also check marketCapMin/Max: FilterChipStrip may add exact USD thresholds
+  // that go beyond the tier buckets (e.g. "$50B" = 50_000_000_000). When both are
+  // present we take the more-restrictive of tier vs explicit range by using Math.max
+  // for the lower bound and Math.min for the upper bound.
+  let capMin: number | undefined = f.marketCapMin;
+  let capMax: number | undefined = f.marketCapMax;
+  if (f.capTier === "LARGE") capMin = Math.max(capMin ?? 0, 10_000_000_000) || undefined;
   else if (f.capTier === "MID") {
-    capMin = 2_000_000_000;
-    capMax = 10_000_000_000;
-  } else if (f.capTier === "SMALL") capMax = 2_000_000_000;
+    capMin = Math.max(capMin ?? 0, 2_000_000_000) || undefined;
+    capMax = capMax != null ? Math.min(capMax, 10_000_000_000) : 10_000_000_000;
+  } else if (f.capTier === "SMALL") {
+    capMax = capMax != null ? Math.min(capMax, 2_000_000_000) : 2_000_000_000;
+  }
   pushIfRange(filters, "market_capitalization", capMin, capMax);
 
   // ── Valuation (SERVER_SIDE) ────────────────────────────────────────────────
@@ -53,6 +59,9 @@ export function buildScreenerFilters(f: FilterState): ScreenerFilter[] {
   pushIfRange(filters, "pb_ratio", f.pbMin, f.pbMax);
   pushIfRange(filters, "price_sales_ttm", f.psMin, f.psMax);
   pushIfRange(filters, "dividend_yield", f.divYieldMin, f.divYieldMax);
+  // forward_pe — echoed back by the backend in the ScreenerResult so the column
+  // can render without an extra round-trip (design §3.2 "echo back" pattern).
+  pushIfRange(filters, "forward_pe", f.forwardPeMin, f.forwardPeMax);
 
   // ── Profitability (SERVER_SIDE) ────────────────────────────────────────────
   pushIfRange(filters, "roe_ttm", f.roeMin, f.roeMax);

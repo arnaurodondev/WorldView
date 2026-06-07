@@ -211,14 +211,14 @@ describe("ScreenerPage — structure", () => {
     ).toBeInTheDocument();
   });
 
-  it("renders all 13 column headers with ALL CAPS text", () => {
+  it("renders all 18 column headers with ALL CAPS text", () => {
     render(<ScreenerPage />, { wrapper: makeWrapper() });
     // WHY check columnheader role: ScreenerTable sets role="columnheader" on
     // each header div for screen reader accessibility.
-    // PLAN-0051: a 13th SPARK (sparkline) column was added in parallel by the
-    // mini-chart task; this test count is the canonical authoritative number.
+    // PRD-0089 Wave I: added 5 new RATIOS columns (DIV Y, FWD PE, ROE, REV YoY,
+    // OP MGN) in a new group. Total is now 18 (was 13 before Wave I).
     const headers = screen.getAllByRole("columnheader");
-    expect(headers.length).toBe(13);
+    expect(headers.length).toBe(18);
 
     // WHY spot-check specific headers: verifies no columns were silently dropped
     // or renamed during the rewrite.
@@ -457,9 +457,15 @@ describe("ScreenerPage — Wave B filter sections (PLAN-0051)", () => {
     // Each section's header is rendered as a button (clickable to expand/collapse).
     // We assert every section name is present so a future rename or accidental
     // removal triggers a test failure.
-    expect(screen.getByRole("button", { name: /valuation/i })).toBeInTheDocument();
+    // WHY aria-controls query (not just name): PRD-0089 Wave I added a "Growth"
+    // PresetBar chip which also matches /growth/i. The Section buttons carry
+    // aria-controls="screener-section-<name>" which uniquely identifies them.
+    expect(screen.getByRole("button", { name: /valuation/i, hidden: false })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /profitability/i })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /growth/i })).toBeInTheDocument();
+    // Match the Growth SECTION button (aria-controls set), not the Growth PRESET chip
+    expect(
+      document.querySelector("button[aria-controls='screener-section-growth']")
+    ).not.toBeNull();
     expect(screen.getByRole("button", { name: /leverage/i })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /technical/i })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /news & signals/i })).toBeInTheDocument();

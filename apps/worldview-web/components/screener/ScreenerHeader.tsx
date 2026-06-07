@@ -68,7 +68,7 @@ export function ScreenerHeader({
     <div className="flex h-[36px] shrink-0 items-center border-b border-border px-3 gap-2 bg-background">
       {/* ── Title + count ─────────────────────────────────────────────── */}
       <h1 className="text-[11px] uppercase tracking-[0.08em] text-muted-foreground font-mono shrink-0">
-        Screener
+        Instrument Screener
       </h1>
       <span
         className="font-mono text-[10px] tabular-nums uppercase tracking-[0.06em] text-muted-foreground shrink-0"

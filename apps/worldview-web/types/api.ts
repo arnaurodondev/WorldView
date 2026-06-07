@@ -780,6 +780,8 @@ export interface ScreenerResult {
   dividend_yield?: number | null;      // annual dividend yield (decimal, e.g. 0.015 = 1.5%)
   revenue_growth_yoy?: number | null;  // year-over-year revenue growth (decimal)
   roe?: number | null;                 // return on equity (decimal)
+  // PRD-0089 Wave I new columns — echoed by backend when filter is active (design §3.2)
+  operating_margin?: number | null;    // operating margin TTM (decimal, e.g. 0.281 = 28.1%)
   [key: string]: unknown; // dynamic fields depending on screener config
 }
 

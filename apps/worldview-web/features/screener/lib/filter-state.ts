@@ -75,6 +75,14 @@ export interface FilterState {
   sector: string; // "" = all sectors
   capTier: CapTier;
 
+  // ── Market cap range (SERVER_SIDE) — complements the capTier tier filter ──
+  // WHY separate from capTier: capTier maps to Large/Mid/Small buckets on the
+  // backend. marketCapMin/Max let the user set exact USD thresholds (e.g. "$50B
+  // only") which the tier enum cannot express. Both can be set simultaneously;
+  // the backend AND-combines them.
+  marketCapMin?: number; // market_capitalization in USD (e.g. 10_000_000_000 = $10B)
+  marketCapMax?: number;
+
   // ── Valuation (SERVER_SIDE) ─────────────────────────────────────────
   peMin?: number;
   peMax?: number; // pe_ratio
@@ -84,6 +92,8 @@ export interface FilterState {
   psMax?: number; // price_sales_ttm
   divYieldMin?: number;
   divYieldMax?: number; // dividend_yield (decimal: 0.015 = 1.5%)
+  forwardPeMin?: number;
+  forwardPeMax?: number; // forward_pe (next-twelve-months EPS estimate)
 
   // ── Profitability ───────────────────────────────────────────────────
   roeMin?: number;

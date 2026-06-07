@@ -51,6 +51,12 @@ export const SCREENER_AG_COL_WIDTHS: Record<string, number> = {
   range52w: 100,
   volume: 80,
   sparkline: 70,
+  // PRD-0089 Wave I new columns (design §3.4 mandatory new columns)
+  divYield: 64,
+  forwardPe: 64,
+  roe: 64,
+  revenueGrowth: 76,
+  opMargin: 72,
 };
 
 // ── Cell renderer components ──────────────────────────────────────────────────
@@ -180,6 +186,103 @@ function VolumeCellRenderer() {
       title="Backend pending"
     >
       —
+    </span>
+  );
+}
+
+// ── PRD-0089 Wave I: new fundamental column renderers ─────────────────────────
+// All follow the "10px mono right-aligned, toFixed(1) + % suffix" design spec
+// (docs/designs/0089/08-screener.md §3.4). Show "—" when value is null/undefined.
+
+function DivYieldCellRenderer({ data }: ICellRendererParams<ScreenerResult>) {
+  // dividend_yield stored as decimal (0.015 = 1.5%); display as "1.5%"
+  const v = data?.dividend_yield;
+  if (v == null) {
+    return <span className="font-mono text-[10px] tabular-nums text-muted-foreground">—</span>;
+  }
+  return (
+    <span className="font-mono text-[10px] tabular-nums text-foreground">
+      {(v * 100).toFixed(2)}%
+    </span>
+  );
+}
+
+function ForwardPeCellRenderer({ data }: ICellRendererParams<ScreenerResult>) {
+  const v = data?.forward_pe;
+  if (v == null) {
+    return <span className="font-mono text-[10px] tabular-nums text-muted-foreground">—</span>;
+  }
+  return (
+    <span className="font-mono text-[10px] tabular-nums text-foreground">
+      {v.toFixed(1)}
+    </span>
+  );
+}
+
+function RoeCellRenderer({ data }: ICellRendererParams<ScreenerResult>) {
+  // roe stored as decimal (0.15 = 15%); colour: green > 15%, red < 0%
+  const v = data?.roe;
+  if (v == null) {
+    return <span className="font-mono text-[10px] tabular-nums text-muted-foreground">—</span>;
+  }
+  const pct = v * 100;
+  // WHY color thresholds from design §6.3: ROE > 15 = productive equity use;
+  // ROE < 0 = company is destroying value (losses).
+  const isHigh = pct > 15;
+  const isNeg = pct < 0;
+  return (
+    <span
+      className={cn(
+        "font-mono text-[10px] tabular-nums",
+        isHigh ? "text-positive" : isNeg ? "text-negative" : "text-foreground",
+      )}
+    >
+      {pct.toFixed(1)}%
+    </span>
+  );
+}
+
+function RevenueGrowthCellRenderer({ data }: ICellRendererParams<ScreenerResult>) {
+  // revenue_growth_yoy stored as decimal (0.124 = +12.4%); green > 0, red < 0
+  const v = data?.revenue_growth_yoy;
+  if (v == null) {
+    return <span className="font-mono text-[10px] tabular-nums text-muted-foreground">—</span>;
+  }
+  const pct = v * 100;
+  const isPos = pct > 0;
+  const isNeg = pct < 0;
+  return (
+    <span
+      className={cn(
+        "font-mono text-[10px] tabular-nums",
+        isPos ? "text-positive" : isNeg ? "text-negative" : "text-foreground",
+      )}
+    >
+      {pct >= 0 ? "+" : ""}
+      {pct.toFixed(1)}%
+    </span>
+  );
+}
+
+function OpMarginCellRenderer({ data }: ICellRendererParams<ScreenerResult>) {
+  // operating_margin stored as decimal; green > 20% (design §3.4)
+  const v = data?.operating_margin;
+  if (v == null) {
+    return <span className="font-mono text-[10px] tabular-nums text-muted-foreground">—</span>;
+  }
+  const pct = v * 100;
+  // WHY > 20%: operating margins above 20% signal strong competitive moat
+  // (Apple ~30%, Google ~26%). Below 20% is typical/competitive; below 0 = loss-making.
+  const isHigh = pct > 20;
+  const isNeg = pct < 0;
+  return (
+    <span
+      className={cn(
+        "font-mono text-[10px] tabular-nums",
+        isHigh ? "text-positive" : isNeg ? "text-negative" : "text-foreground",
+      )}
+    >
+      {pct.toFixed(1)}%
     </span>
   );
 }
@@ -335,6 +438,65 @@ export function createAgScreenerColumns(
           sortable: true,
           width: SCREENER_AG_COL_WIDTHS.beta,
           cellRenderer: BetaCellRenderer,
+        },
+      ],
+    } satisfies ColGroupDef<ScreenerResult>,
+
+    // ── PRD-0089 Wave I: new fundamental columns ─────────────────────────────
+    // These columns are in the FUNDAMENTALS group per design §4 wireframe.
+    // They are added as a separate group to maintain the existing group structure.
+    {
+      headerName: "RATIOS",
+      groupId: "ratiosGroup",
+      // WHY a second group (not inline in FUNDAMENTALS): the design spec §4
+      // places DIV Y, FWD PE, ROE, REV YoY, OP MGN in columns 8-12 while
+      // MKT CAP, P/E, BETA stay in the FUNDAMENTALS group (cols 6-7, 11).
+      // Keeping them separate lets ColumnSettingsPopover hide/show each group.
+      children: [
+        {
+          colId: "divYield",
+          headerName: "DIV Y%",
+          headerTooltip: "Annual Dividend Yield",
+          field: "dividend_yield",
+          sortable: true,
+          width: SCREENER_AG_COL_WIDTHS.divYield,
+          cellRenderer: DivYieldCellRenderer,
+        },
+        {
+          colId: "forwardPe",
+          headerName: "FWD PE",
+          headerTooltip: "Forward Price-to-Earnings (NTM)",
+          field: "forward_pe",
+          sortable: true,
+          width: SCREENER_AG_COL_WIDTHS.forwardPe,
+          cellRenderer: ForwardPeCellRenderer,
+        },
+        {
+          colId: "roe",
+          headerName: "ROE%",
+          headerTooltip: "Return on Equity (TTM)",
+          field: "roe",
+          sortable: true,
+          width: SCREENER_AG_COL_WIDTHS.roe,
+          cellRenderer: RoeCellRenderer,
+        },
+        {
+          colId: "revenueGrowth",
+          headerName: "REV YoY",
+          headerTooltip: "Quarterly Revenue Growth Year-over-Year",
+          field: "revenue_growth_yoy",
+          sortable: true,
+          width: SCREENER_AG_COL_WIDTHS.revenueGrowth,
+          cellRenderer: RevenueGrowthCellRenderer,
+        },
+        {
+          colId: "opMargin",
+          headerName: "OP MGN%",
+          headerTooltip: "Operating Margin (TTM)",
+          field: "operating_margin",
+          sortable: true,
+          width: SCREENER_AG_COL_WIDTHS.opMargin,
+          cellRenderer: OpMarginCellRenderer,
         },
       ],
     } satisfies ColGroupDef<ScreenerResult>,

@@ -73,6 +73,12 @@ import { useScreenerSparklines } from "@/hooks/useScreenerSparklines";
 import { buildScreenerFilters } from "@/features/screener/lib/build-filters";
 import { applyClientFilters } from "@/features/screener/lib/apply-client-filters";
 import { qk } from "@/lib/query/keys";
+// PRD-0089 Wave I — new components
+import { FilterChipStrip } from "@/components/screener/FilterChipStrip";
+import { RowHoverToolbar } from "@/components/screener/RowHoverToolbar";
+import { ScreenerHeader } from "@/components/screener/ScreenerHeader";
+import { SCREENER_PRESETS } from "@/lib/screener/presets";
+import { toast } from "sonner";
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
@@ -115,6 +121,35 @@ export default function ScreenerPage() {
   // ── Filter panel, dialogs ─────────────────────────────────────────────────
   const [filtersOpen, setFiltersOpen] = useState(false);
   const [savedDialogOpen, setSavedDialogOpen] = useState(false);
+
+  // ── Active preset detection (for PresetBar highlight) ────────────────────
+  // WHY JSON.stringify comparison: FilterState is a plain object with no
+  // referential identity — deep-comparing stringified versions is the simplest
+  // way to detect which (if any) preset matches the current filter state.
+  const activePresetId = useMemo(() => {
+    for (const preset of SCREENER_PRESETS) {
+      if (JSON.stringify(preset.filters) === JSON.stringify(appliedFilters)) {
+        return preset.id;
+      }
+    }
+    return null;
+  }, [appliedFilters]);
+
+  // ── Row hover toolbar state (PRD-0089 Wave I) ─────────────────────────────
+  // WHY rowRect (not instrumentId only): the RowHoverToolbar is fixed-positioned
+  // to the viewport using the row's bounding rect. We store null when no row is
+  // hovered so the toolbar is unmounted (not just hidden) to avoid stale rects.
+  const [hoveredRow, setHoveredRow] = useState<{
+    rowRect: DOMRect;
+    ticker: string;
+    instrumentId: string;
+  } | null>(null);
+
+  // ── Compare set (PRD-0089 Wave I, max 3 tickers) ─────────────────────────
+  // WHY sessionStorage is deferred: the compare page (`/compare`) is not built
+  // in Wave I. We track tickers in-memory so the badge shows correctly without
+  // needing persistence. A follow-up wave will persist to sessionStorage.
+  const [compareSet, setCompareSet] = useState<string[]>([]);
 
   // ── Column preferences ────────────────────────────────────────────────────
   const [columns, setColumns] = useState<ScreenerColumn[]>(() => loadColumnPrefs());
@@ -213,6 +248,46 @@ export default function ScreenerPage() {
     setOffset((o) => o + PAGE_SIZE);
   }, []);
 
+  // ── Row hover toolbar handlers (PRD-0089 Wave I) ──────────────────────────
+
+  const handleWatch = useCallback((_instrumentId: string) => {
+    // WHY stub: POST /v1/watchlists/{id}/items requires a default watchlist
+    // endpoint not yet shipped (design §10 Q2). We stub with a toast so the
+    // button is functional (visible affordance) while the endpoint is pending.
+    toast.success("Added to watchlist", {
+      description: "This will persist when the watchlist endpoint ships.",
+    });
+  }, []);
+
+  const handleAlert = useCallback((_instrumentId: string) => {
+    // WHY stub: POST /v1/alerts requires a threshold input popover (design §7.3).
+    // The alert popover is deferred to a follow-up wave. Show a toast for now.
+    toast("Alert creation coming soon", {
+      description: "Set a price or % change threshold to trigger an alert.",
+    });
+  }, []);
+
+  const handleCompare = useCallback((ticker: string) => {
+    setCompareSet((prev) => {
+      // WHY max 3: the compare page design limits to 3 tickers for readability.
+      if (prev.includes(ticker)) return prev;
+      if (prev.length >= 3) {
+        toast.error("Compare set full", {
+          description: "Remove one ticker before adding another.",
+        });
+        return prev;
+      }
+      const next = [...prev, ticker];
+      toast(`${ticker} added to compare set (${next.length})`, {
+        description:
+          next.length >= 2
+            ? `Click the Compare badge to open /compare?tickers=${next.join(",")}`
+            : "Add at least 2 tickers to compare.",
+      });
+      return next;
+    });
+  }, []);
+
   // ── Client-side filtering ─────────────────────────────────────────────────
   const filteredRows = useMemo(
     () => applyClientFilters(accumulator, appliedFilters),
@@ -293,41 +368,54 @@ export default function ScreenerPage() {
     // the rest of the terminal regardless of AG Grid mount state.
     <div className="flex flex-col h-full min-h-0 bg-background">
 
-      {/* ── Toolbar ─────────────────────────────────────────────────────── */}
-      <div className="flex h-9 shrink-0 items-center border-b border-border px-3 gap-2 bg-background">
-        {/* Density bundle 2026-05-09: keep at text-[11px] (already at terminal
-            density baseline) — no further reduction without breaking legibility. */}
-        {/* WHY font-mono (not font-sans): all page header labels use IBM Plex Mono
-            per ADR-F-15 — numeric/ticker/label text must be monospace. */}
-        <h1 className="text-[11px] uppercase tracking-[0.08em] text-muted-foreground font-mono">
-          Instrument Screener
-        </h1>
-        {isFetching && !isLoading && (
-          <span className="ml-2 h-1.5 w-1.5 rounded-full bg-primary shrink-0" aria-label="Loading" />
-        )}
-        <div className="ml-auto flex items-center gap-1">
-          <button
-            type="button"
-            aria-label="Saved screens"
-            onClick={() => setSavedDialogOpen(true)}
-            className="flex h-7 items-center gap-1 px-2 text-[10px] font-mono uppercase tracking-[0.06em] bg-background border border-border text-muted-foreground hover:text-foreground hover:border-border/80 rounded-[2px] transition-colors"
-          >
-            Saved Screens
-          </button>
-          <ColumnSettingsPopover
-            columns={columns}
-            onChange={handleColumnsChange}
-            sparklineSuppressed={sparklineSuppressed}
-          />
-          <ExportMenu
-            rows={filteredRows}
-            columns={exportColumns}
-            filenameBase="screener"
-            pdfTitle="Screener Results"
-            disabled={isLoading || filteredRows.length === 0}
-          />
-        </div>
-      </div>
+      {/* ── Toolbar (ScreenerHeader — PRD-0089 Wave I) ──────────────────── */}
+      {/* WHY ScreenerHeader (not inline): extracts the toolbar + preset strip
+          so the page.tsx focuses on data orchestration only. The header renders
+          the title, result count, preset bar, Filters toggle, and tool buttons. */}
+      <ScreenerHeader
+        totalResults={serverTotal}
+        isLoading={isLoading}
+        isFetching={isFetching}
+        filtersOpen={filtersOpen}
+        onToggleFilters={() => setFiltersOpen((v) => !v)}
+        onApplyPreset={handleApply}
+        activePresetId={activePresetId}
+        toolbarActions={
+          <div className="flex items-center gap-1">
+            {/* Compare badge — shown when ≥1 ticker added via RowHoverToolbar */}
+            {compareSet.length > 0 && (
+              <a
+                href={`/compare?tickers=${compareSet.join(",")}`}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="flex h-7 items-center gap-1 px-2 text-[10px] font-mono uppercase tracking-[0.06em] bg-primary/10 border border-primary/60 text-primary rounded-[2px] transition-colors hover:bg-primary/20"
+              >
+                Compare ({compareSet.length})
+              </a>
+            )}
+            <button
+              type="button"
+              aria-label="Saved screens"
+              onClick={() => setSavedDialogOpen(true)}
+              className="flex h-7 items-center gap-1 px-2 text-[10px] font-mono uppercase tracking-[0.06em] bg-background border border-border text-muted-foreground hover:text-foreground hover:border-border/80 rounded-[2px] transition-colors"
+            >
+              Saved Screens
+            </button>
+            <ColumnSettingsPopover
+              columns={columns}
+              onChange={handleColumnsChange}
+              sparklineSuppressed={sparklineSuppressed}
+            />
+            <ExportMenu
+              rows={filteredRows}
+              columns={exportColumns}
+              filenameBase="screener"
+              pdfTitle="Screener Results"
+              disabled={isLoading || filteredRows.length === 0}
+            />
+          </div>
+        }
+      />
 
       <SavedScreensDialog
         open={savedDialogOpen}
@@ -336,6 +424,17 @@ export default function ScreenerPage() {
         onLoad={(filters) => {
           handleApply(filters);
         }}
+      />
+
+      {/* ── Filter chip strip (PRD-0089 Wave I) ────────────────────────── */}
+      {/* WHY FilterChipStrip before ScreenerFilterBar: the chip strip is the
+          always-visible "what's active" summary row. The FilterBar slides in
+          below it only when Filters is toggled — the chip strip stays. */}
+      <FilterChipStrip
+        appliedFilters={appliedFilters}
+        onApply={handleApply}
+        onSave={() => setSavedDialogOpen(true)}
+        onReset={() => handleApply(DEFAULT_FILTERS)}
       />
 
       {/* ── Filter bar ───────────────────────────────────────────────────── */}
@@ -349,7 +448,11 @@ export default function ScreenerPage() {
       />
 
       {/* ── AG Grid table ────────────────────────────────────────────────── */}
-      <div className="flex-1 min-h-0 flex flex-col overflow-hidden">
+      {/* WHY relative: the RowHoverToolbar is fixed-positioned so it doesn't
+          need a relative ancestor, but we still want the overflow:hidden wrapper
+          to clip the grid correctly. The toolbar escapes this container by
+          design (fixed positioning). */}
+      <div className="flex-1 min-h-0 flex flex-col overflow-hidden relative">
         <AgGridBase<ScreenerResult>
           rowData={filteredRows}
           columnDefs={agColumns}
@@ -362,8 +465,62 @@ export default function ScreenerPage() {
             // entity_id is the stable cross-service bridge (ADR-F-12).
             router.push(`/instruments/${row.entity_id}`)
           }
+          // ── Row hover for RowHoverToolbar (PRD-0089 Wave I) ─────────────
+          // WHY CellMouseOver (not RowMouseOver): AG Grid v35 doesn't expose a
+          // row-level mouse-over/out event. CellMouseOverEvent fires reliably for
+          // each cell entry and carries both `data` and the native MouseEvent.
+          // We extract the row element by walking up from the cell target to the
+          // .ag-row element so we get the full row's bounding rect.
+          onCellMouseOver={(e) => {
+            if (!e.data) return;
+            // Walk up from the native event target to find the AG Grid row element.
+            // WHY not e.event.currentTarget: in AG Grid the currentTarget is the
+            // cell wrapper, not the row wrapper. We need the full row height/position.
+            let el = e.event?.target as HTMLElement | null;
+            while (el && !el.classList.contains("ag-row")) {
+              el = el.parentElement;
+            }
+            if (!el) return;
+            setHoveredRow({
+              rowRect: el.getBoundingClientRect(),
+              ticker: e.data.ticker,
+              instrumentId: e.data.instrument_id,
+            });
+          }}
+          onCellMouseOut={(e) => {
+            // Clear on mouse-out only when leaving to outside the row.
+            // WHY check relatedTarget: moving mouse between cells in the same row
+            // fires cellMouseOut on the source cell — we only want to hide the
+            // toolbar when the pointer leaves the row entirely.
+            // WHY cast through MouseEvent: AG Grid's event is typed as base Event;
+            // relatedTarget is only on MouseEvent. We know cell mouse-out fires a
+            // native mouseleave, so the cast is safe.
+            const related = (e.event as MouseEvent | undefined)?.relatedTarget as HTMLElement | null;
+            let inRow = false;
+            let el = related;
+            while (el) {
+              if (el.classList?.contains("ag-row")) {
+                inRow = true;
+                break;
+              }
+              el = el.parentElement;
+            }
+            if (!inRow) setHoveredRow(null);
+          }}
           className="flex-1"
         />
+
+        {/* ── Row hover toolbar (fixed-positioned overlay) ───────────── */}
+        {hoveredRow && (
+          <RowHoverToolbar
+            rowRect={hoveredRow.rowRect}
+            ticker={hoveredRow.ticker}
+            instrumentId={hoveredRow.instrumentId}
+            onWatch={handleWatch}
+            onAlert={handleAlert}
+            onCompare={handleCompare}
+          />
+        )}
 
         {/* Post-load empty state — rendered below the grid so column headers
             stay mounted (preserves sort test assertions). */}
