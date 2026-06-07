@@ -1,0 +1,25 @@
+# PLAN-0107 D-3 — Co-Authored-By enforcement check.
+# Warns on PRs where a commit touches services/ or libs/ but lacks the
+# `Co-Authored-By: Claude ...` trailer. Runs in WARNING mode (exit 0) for
+# the first 2 weeks per §D.9; flip to exit 1 in scripts/check_coauthor.sh after.
+name: coauthor-check
+
+on:
+  pull_request:
+    branches:
+      - main
+  push:
+    branches:
+      - main
+
+jobs:
+  check-coauthor:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # need full history for git show / git log on PR commits
+
+      - name: Run Co-Authored-By check
+        run: bash scripts/check_coauthor.sh ${{ github.sha }}

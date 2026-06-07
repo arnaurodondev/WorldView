@@ -200,3 +200,8 @@ See `.claude/evals/EVAL_FRAMEWORK.md` for details.
 - If you observe commits in `git log` you did not author, an unexpected `HEAD` branch switch, or spontaneous conflict markers in files that were clean a moment ago, **STOP** and report — another agent is mutating this worktree concurrently.
 - Sibling Claude Code sessions MUST run in their own checkout: `git worktree add <path> <branch>` (one worktree per agent). Never share the working tree.
 - Prefer `git commit` over `git stash`; `git stash pop` is a frequent source of cross-session corruption (BP-590) and silent conflict markers.
+
+If you observe spontaneous commits, BEFORE re-cherry-picking run
+`bash scripts/orphan_commit_check.sh` to confirm the rewind and locate orphaned SHAs,
+then `bash scripts/worktree_lock.sh acquire` to block sibling sessions before
+re-applying work.

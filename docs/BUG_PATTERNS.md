@@ -501,4 +501,28 @@
 | BP-483 | Mocked settings page indistinguishable from functional one erodes user trust — Settings sub-pages (security, notifications, data, integrations) built with functional-looking UI but all button handlers call `console.log + toast("Coming soon")`. Users discover the deception on first click. Fix: Apply wire-or-hide pattern: either wire to a real backend endpoint or return `notFound()` and remove from sidebar nav. Never ship a button that pretends to work. Where found: S1 settings sub-pages (5 of 8 mocked) — 2026-05-19 frontend platform hardening (CRIT-004). | Frontend | worldview-web |
 | BP-484 | Missing route `loading.tsx` causes blank flash on every navigation — Next.js App Router routes without `loading.tsx` show a white/black blank screen between route transitions while async components load. For a "terminal-grade" platform, this looks like a crash. Fix: Every route under `app/(app)/` and `app/intelligence/` needs a `loading.tsx` that renders a route-appropriate skeleton. Use `Skeleton` from shadcn/ui. The skeleton should match the first-paint layout to minimize layout shift. Where found: 12 of 13 routes missing loading.tsx — 2026-05-19 frontend platform hardening (CRIT-005). | Frontend | worldview-web |
 | BP-485 | NLP pipeline API server enters unhealthy state after long uptime, causing entity-resolve requests from rag-chat to time out silently → chat returns contextless LLM answers — `worldview-nlp-pipeline-1` (the entity-resolve API server) eventually exhausts its DB connection pool or blocks its asyncio event loop under sustained worker load. Docker health checks start failing; incoming `POST /api/v1/entities/resolve` requests queue and never respond. rag-chat's `RAG_CHAT_UPSTREAM_TIMEOUT_SECONDS=10.0` fires, raising `UpstreamTransportError`; the `entity_resolution` pipeline step returns `[]`; the LLM is called without any ticker/entity grounding. User sees a vague, ungrounded answer with no visible error. Mis-diagnosis risk: probing `POST /api/v1/entities/resolve` on KG (port 8007) returns `405 Method Not Allowed` — KG only has a GET variant (fuzzy alias search) and is NOT the entity-resolve endpoint for rag-chat. The actual endpoint is NLP pipeline (port 8006). Prevention: (1) add `restart: unless-stopped` to `worldview-nlp-pipeline-1` in docker-compose.yml; (2) add Prometheus alert `up{container="worldview-nlp-pipeline-1"} == 0 for 5m`; (3) add circuit breaker or ERROR-level log in rag-chat S6Client when entity resolution fails repeatedly. Status: OPEN (2026-06-06). Reference: `services/rag-chat/src/rag_chat/infrastructure/clients/s6_client.py:28`, `services/nlp-pipeline/src/nlp_pipeline/application/use_cases/query_entity_resolver.py`. | Infrastructure, Workers & Schedulers | rag-chat, nlp-pipeline |
+| BP-590 | Parallel-session worktree corruption — see "Parallel-session reverts" taxonomy below. | Tooling, Workflow | all |
 | BP-459 | Partial unique index `WHERE entity_type != 'financial_instrument'` on `canonical_entities(lower(canonical_name))` allows phantom duplicate entities — a new provisional entity whose LLM-produced canonical name is a variation of an existing `financial_instrument` (e.g., "Amazon Business" vs "Amazon Inc.") is inserted as a fresh row because the conflict detection index excludes all `financial_instrument` rows. Compounded by: the `ProvisionalEnrichmentWorker` LLM extraction step has no pre-insert lookup against existing canonicals, and the `class_aware_canonical_match()` fuzzy matcher (PLAN-0087, used by S8 RAG) is never called during S7 enrichment. Symptom: two nodes for the same company appear in the entity graph; relations may be attached to the phantom node; entity search returns duplicates. Fix: (1) make the unique index unconditional (remove the `WHERE` predicate), handle entity_type coalescing in the `ON CONFLICT DO UPDATE` clause; (2) call `class_aware_canonical_match()` before provisional entity insertion — reuse existing entity if match confidence exceeds threshold; (3) one-off data cleanup: delete phantom rows and re-point their relations. Detection: `SELECT lower(canonical_name), count(*) FROM canonical_entities GROUP BY lower(canonical_name) HAVING count(*) > 1`. Status: OPEN (2026-05-11). Reference: `services/knowledge-graph/src/knowledge_graph/infrastructure/intelligence_db/repositories/canonical_entity.py:create_or_get`, `services/knowledge-graph/src/knowledge_graph/infrastructure/workers/provisional_enrichment_core.py`. | Database & ORM, Knowledge Graph | knowledge-graph |
+
+## Parallel-session reverts — full taxonomy
+
+PLAN-0107 D-5. Detail and recovery guide for BP-590 (parallel-session worktree corruption).
+
+### Pattern 1: Bulk-commit
+**Detection**: unexpected commit author + large file count.
+**Recovery**: `git revert <sha>`; re-stage your work.
+**Prevention**: `bash scripts/worktree_lock.sh acquire` before editing.
+
+### Pattern 2: Branch-rewind
+**Detection**: `git reflog` shows HEAD jump backward (e.g. `reset: moving to origin/main`).
+**Recovery**: `bash scripts/orphan_commit_check.sh` to find orphaned SHAs; `git cherry-pick <sha>` to re-apply.
+**Prevention**: lockfile + post-cherry-pick watchdog.
+
+### Pattern 3: Selective file revert
+**Detection**: `git log -p <file>` shows your change present then absent.
+**Recovery**: re-apply diff; `git cherry-pick` from a worktree branch if available.
+**Prevention**: lockfile blocks during edit window.
+
+### Pattern 4: YAML/JSON revert
+Same as #3 but on config files; often missed because tests still pass.
+**Detection**: explicit diff against expected state in CI.
