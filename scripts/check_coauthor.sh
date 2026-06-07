@@ -12,7 +12,15 @@ set -euo pipefail
 SHA="${1:-HEAD}"
 [[ "$SHA" == "HEAD" && -z "$(git rev-list --no-walk HEAD 2>/dev/null)" ]] && exit 0
 
-CHANGED=$(git diff --cached --name-only 2>/dev/null || git show --name-only --format="" "$SHA")
+# Pick the source explicitly. With an SHA arg we are in CI mode and inspect
+# that commit; without it we are in pre-commit mode and inspect staged files.
+# The previous `git diff --cached || git show` short-circuited in CI mode
+# because git diff exits 0 with empty output, so the fallback never fired.
+if [[ -n "${1:-}" ]]; then
+    CHANGED=$(git show --name-only --format="" "$SHA")
+else
+    CHANGED=$(git diff --cached --name-only)
+fi
 TOUCHES_CODE=$(echo "$CHANGED" | grep -E "^(services|libs)/" || true)
 [[ -z "$TOUCHES_CODE" ]] && exit 0  # no relevant changes
 
