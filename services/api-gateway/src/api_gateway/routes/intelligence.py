@@ -811,10 +811,19 @@ async def get_entity_intelligence_bundle(
     # the raw UUID object into f-strings (PYC's `repr` would not match).
     eid = str(entity_id)
 
-    # ── Fan out via asyncio.gather(return_exceptions=True) ───────────────────
-    # WHY return_exceptions=True: a single leg raising must not cancel the
-    # other 4. We coerce exceptions to None below.
-    detail_t, brief_t, graph_t, paths_t, intel_t = await asyncio.gather(
+    # ── Fan out all 6 legs concurrently via asyncio.gather ───────────────────
+    # WHY 6 legs (not 5): the B-2 fix requires a depth=1 graph fetch to merge
+    # into the depth=2 result so depth-1 neighbors are never orphaned. The
+    # prior implementation fetched this serially AFTER the 5-leg gather, adding
+    # a full KG round-trip (~1-2 s) to the critical path. By including it as a
+    # 6th concurrent leg the merge fetch overlaps with detail / brief / paths /
+    # intelligence — total wall time is bounded by the slowest single leg.
+    #
+    # WHY return_exceptions=False: _bundle_fetch_json already swallows exceptions
+    # and returns None, so no leg will ever raise into gather. Using False (not
+    # True) avoids the isinstance(result, BaseException) checks below and keeps
+    # the semantics clear: all results are dict | None.
+    detail_t, brief_t, graph_t, graph_d1_t, paths_t, intel_t = await asyncio.gather(
         _bundle_fetch_json(
             clients.knowledge_graph,
             f"/api/v1/entities/{eid}",
@@ -840,6 +849,24 @@ async def get_entity_intelligence_bundle(
                 "confidence_breakdown": "true",
             },
             leg="graph_d2",
+        ),
+        # graph_d1 — depth=1 SQL path (no AGE). Fetched concurrently so the
+        # B-2 merge does not add serial latency. No `depth` param → S7 default.
+        # WHY needed: at depth=2 S7 fills the entity LIMIT with depth-2 nodes;
+        # depth-1 neighbors may be absent from `entities`, which causes the
+        # orphan-edge filter to drop every edge → 0 edges. Merging depth=1 first
+        # guarantees center↔neighbor edges survive the orphan filter.
+        _bundle_fetch_json(
+            clients.knowledge_graph,
+            f"/api/v1/entities/{eid}/graph",
+            headers=headers,
+            params={
+                "limit": _BUNDLE_GRAPH_LIMIT,
+                "min_confidence": 0.0,
+                "confidence_breakdown": "true",
+                # No `depth` param → S7 defaults to depth=1 SQL path.
+            },
+            leg="graph_d2_depth1_merge",
         ),
         _bundle_fetch_json(
             clients.knowledge_graph,
@@ -867,38 +894,15 @@ async def get_entity_intelligence_bundle(
     # {entity_id, nodes, edges}. Same transform the /graph proxy applies, so
     # the hydrated cache slot is byte-for-byte what a direct call would yield.
     #
-    # B-2 fix (2026-06-06): at depth=2, S7's CypherNeighborhoodUseCase
-    # discovers depth-2 neighbor IDs via AGE Cypher and fills the `entities`
-    # dict with them (up to the limit).  However, `relations` only contains the
-    # center's direct (depth-1) relations.  When the depth-2 nodes consume the
-    # full entity limit, depth-1 neighbors are absent from `entities` — the
-    # orphan-edge filter in _transform_graph_response then removes every edge
-    # (source not in node_id_set) → 0 edges.
-    #
-    # Fix mirrors get_entity_graph: always fetch depth=1 separately and merge
-    # its nodes+edges into the depth=2 result before orphan-filtering so
-    # depth-1 neighbors are always present in the node set.
+    # B-2 fix: graph_d1_t (fetched concurrently above) is merged into the
+    # depth=2 result here in-memory — zero extra network latency.
     graph_d2: dict[str, Any] | None = None
     if graph_t is not None:
         try:
             graph_d2 = _transform_graph_response(graph_t)
-            # Fetch depth=1 (fast SQL path — no AGE) and merge into the depth=2
-            # result.  This guarantees center↔depth-1-neighbor edges are never
-            # orphaned regardless of how S7 paginates depth-2 AGE results.
-            depth1_raw = await _bundle_fetch_json(
-                clients.knowledge_graph,
-                f"/api/v1/entities/{eid}/graph",
-                headers=headers,
-                params={
-                    "limit": _BUNDLE_GRAPH_LIMIT,
-                    "min_confidence": 0.0,
-                    "confidence_breakdown": "true",
-                    # No `depth` param → S7 defaults to depth=1 SQL path.
-                },
-                leg="graph_d2_depth1_merge",
-            )
-            if depth1_raw is not None:
-                t1 = _transform_graph_response(depth1_raw)
+            # Merge depth=1 result (already fetched concurrently) into depth=2.
+            if graph_d1_t is not None:
+                t1 = _transform_graph_response(graph_d1_t)
                 existing_node_ids = {n["id"] for n in graph_d2["nodes"]}
                 existing_edge_ids = {e["id"] for e in graph_d2["edges"]}
                 for n in t1["nodes"]:

@@ -196,7 +196,19 @@ async def query_screen(
     ``sort_by`` is validated by the caller (router) against a whitelist of
     allowed field names before reaching this function — it is never interpolated
     into raw SQL; column references are resolved via SQLAlchemy ORM attributes.
+
+    WHY statement_timeout: the screener query involves multiple correlated
+    subqueries (one per filter metric) + three LEFT JOINs on potentially large
+    tables. On a cold DB (page cache empty) the planner can choose a nested-loop
+    plan that runs in O(n*m) time. An 8 s ceiling converts a 31 s hang into a
+    clean database-level cancellation; the router maps the resulting
+    ``asyncpg.QueryCanceledError`` → HTTP 504 (handled by FastAPI's exception
+    middleware). SET LOCAL restricts the timeout to this transaction only.
     """
+    # Apply an 8 s statement timeout for the duration of this read transaction.
+    # SET LOCAL is session-safe for pooled connections (reverts at transaction end).
+    await session.execute(text("SET LOCAL statement_timeout = '8000'"))
+
     instr = InstrumentModel
     snap = InstrumentFundamentalsSnapshotModel
 
@@ -366,6 +378,7 @@ async def query_screen(
     # INNER JOIN all filter subqueries then always JOIN instruments for
     # ticker/name/exchange/sector and COUNT(*) OVER() for pagination total.
     base = filter_subqueries[0]
+    q = QuoteModel
 
     filter_select_cols: list[Any] = [
         base.c.instrument_id,
@@ -374,6 +387,10 @@ async def query_screen(
         instr.exchange.label("exchange"),
         instr.sector.label("sector"),
         func.count().over().label("total_count"),
+        # WHY current_price here (mirrors the no-filter branch): quotes.last is a
+        # live value not stored in fundamental_metrics. LEFT JOIN ensures instruments
+        # without a quote row still appear (NULL current_price → "—" in the frontend).
+        q.last.label("current_price"),
     ]
     for metric_name, col in metric_columns:
         filter_select_cols.append(col.label(metric_name))
@@ -388,6 +405,8 @@ async def query_screen(
     # Always JOIN instruments (provides ticker/name/exchange/sector + sector filter)
     stmt = stmt.join(instr, instr.id == base.c.instrument_id)
     stmt = stmt.outerjoin(snap, instr.id == snap.instrument_id)
+    # WHY outerjoin quotes: current_price must not exclude instruments with no quote row.
+    stmt = stmt.outerjoin(q, instr.id == q.instrument_id)
 
     # Sector filter (AND logic across all filter entries that specify a sector)
     for sv in (f.sector for f in filters if f.sector is not None):
@@ -533,6 +552,12 @@ async def query_screen(
             v = getattr(row, f"snap_{sf}", None)
             if v is not None:
                 metrics_dict[sf] = v
+        # WHY current_price here: mirrors the no-filter branch so every
+        # ScreenResult carries the live quote price regardless of which code
+        # path was taken. NULL means no quote row exists → frontend renders "—".
+        cp = getattr(row, "current_price", None)
+        if cp is not None:
+            metrics_dict["current_price"] = float(cp)
         results.append(
             ScreenResult(
                 instrument_id=row.instrument_id,

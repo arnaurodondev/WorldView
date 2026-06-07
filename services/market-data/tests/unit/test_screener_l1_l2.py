@@ -36,10 +36,23 @@ pytestmark = pytest.mark.unit
 
 
 def _make_capture_session() -> tuple[MagicMock, list[Any]]:
-    """Return (session, captured_statements) — every ``execute`` call is recorded."""
+    """Return (session, captured_statements) — every ``execute`` call is recorded.
+
+    WHY filter out SET LOCAL: query_screen now issues ``SET LOCAL
+    statement_timeout = '8000'`` before the real query as a safety guard
+    (PLAN-0099). We skip it here so ``captured`` only contains substantive
+    queries (introspection + screener SELECT). Tests use ``captured[-1]``
+    to reach the screener SELECT regardless of introspection cache state.
+    """
     captured: list[Any] = []
 
     async def _capture(stmt: Any) -> MagicMock:
+        # Skip the statement_timeout SET LOCAL — it is a side-effect, not the
+        # query under test. str(text(...)) includes the raw SQL fragment.
+        if "statement_timeout" in str(stmt):
+            result = MagicMock()
+            result.all = MagicMock(return_value=[])
+            return result
         captured.append(stmt)
         result = MagicMock()
         # WHY return []: empty result-set triggers early return so we never try to
@@ -74,9 +87,13 @@ async def test_query_screen_country_filter_adds_where_clause() -> None:
 
     assert results == []
     assert total == 0
-    assert len(captured) == 1
+    # WHY >= 1 (not == 1): if _AVAILABLE_SNAP_FIELDS is uncached when this test
+    # runs (e.g. after the introspection test suite resets it), query_screen
+    # fires an additional information_schema introspection call. The screen
+    # SELECT is always the LAST captured statement regardless of cache state.
+    assert len(captured) >= 1
 
-    sql = _sql(captured[0])
+    sql = _sql(captured[-1])
     # The country IN(...) predicate must reference the instruments table column.
     assert "country" in sql.lower(), f"country column missing from SQL:\n{sql}"
     assert "USA" in sql, f"country value 'USA' missing from SQL:\n{sql}"
@@ -90,7 +107,7 @@ async def test_query_screen_no_country_filter_omits_clause() -> None:
     filters = [ScreenFilter(metric="pe_ratio", max_value=30.0)]
     await query_screen(session, filters)
 
-    sql = _sql(captured[0])
+    sql = _sql(captured[-1])
     # Must not emit a WHERE instruments.country = ... or IN (...)
     # (the instruments table name appears in FROM/JOIN but not in a WHERE for country).
     assert "country" not in sql.lower() or "instruments.country" not in sql.lower()
@@ -111,7 +128,7 @@ async def test_query_screen_exchange_filter_adds_where_clause() -> None:
     ]
     await query_screen(session, filters)
 
-    sql = _sql(captured[0])
+    sql = _sql(captured[-1])
     assert "NASDAQ" in sql, f"exchange value 'NASDAQ' missing from SQL:\n{sql}"
 
 
@@ -130,7 +147,7 @@ async def test_query_screen_has_ohlcv_true_filter_adds_where_clause() -> None:
     ]
     await query_screen(session, filters)
 
-    sql = _sql(captured[0])
+    sql = _sql(captured[-1])
     # SQLAlchemy renders ``has_ohlcv = true`` (PostgreSQL dialect) or ``= 1``.
     assert "has_ohlcv" in sql.lower(), f"has_ohlcv predicate missing from SQL:\n{sql}"
 
@@ -143,7 +160,7 @@ async def test_query_screen_has_ohlcv_none_omits_clause() -> None:
     filters = [ScreenFilter(metric="pe_ratio", min_value=5.0)]
     await query_screen(session, filters)
 
-    sql = _sql(captured[0])
+    sql = _sql(captured[-1])
     assert "has_ohlcv" not in sql.lower(), f"unexpected has_ohlcv predicate in SQL:\n{sql}"
 
 
@@ -162,7 +179,7 @@ async def test_query_screen_has_fundamentals_true_filter_adds_where_clause() -> 
     ]
     await query_screen(session, filters)
 
-    sql = _sql(captured[0])
+    sql = _sql(captured[-1])
     assert "has_fundamentals" in sql.lower(), f"has_fundamentals predicate missing from SQL:\n{sql}"
 
 
@@ -188,7 +205,7 @@ async def test_query_screen_combined_l1_and_existing_filters() -> None:
     ]
     await query_screen(session, filters)
 
-    sql = _sql(captured[0])
+    sql = _sql(captured[-1])
     assert "Technology" in sql
     assert "Semiconductors" in sql
     assert "USA" in sql
@@ -208,7 +225,7 @@ async def test_query_screen_filter_branch_includes_snapshot_join() -> None:
     filters = [ScreenFilter(metric="pe_ratio", max_value=40.0)]
     await query_screen(session, filters)
 
-    sql = _sql(captured[0])
+    sql = _sql(captured[-1])
     assert "instrument_fundamentals_snapshot" in sql.lower(), f"snapshot table missing from filter-branch SQL:\n{sql}"
 
 
@@ -220,7 +237,7 @@ async def test_query_screen_no_filter_branch_includes_snapshot_join() -> None:
     # Empty filters → no-filter branch
     await query_screen(session, [], limit=10)
 
-    sql = _sql(captured[0])
+    sql = _sql(captured[-1])
     assert (
         "instrument_fundamentals_snapshot" in sql.lower()
     ), f"snapshot table missing from no-filter-branch SQL:\n{sql}"
@@ -234,7 +251,7 @@ async def test_query_screen_filter_branch_selects_snapshot_columns() -> None:
     filters = [ScreenFilter(metric="pe_ratio", max_value=40.0)]
     await query_screen(session, filters)
 
-    sql = _sql(captured[0]).lower()
+    sql = _sql(captured[-1]).lower()
     # All seven snapshot fields must appear as selected columns.
     for field in (
         "avg_volume_30d",
@@ -411,7 +428,7 @@ async def test_query_screen_eps_ttm_min_filter_adds_predicate() -> None:
     filters = [ScreenFilter(metric="pe_ratio", max_value=40.0, eps_ttm_min=2.5)]
     await query_screen(session, filters)
 
-    sql = _sql(captured[0]).lower()
+    sql = _sql(captured[-1]).lower()
     assert "eps_ttm" in sql
     # Numeric value 2.5 must be present after literal_binds substitution.
     assert "2.5" in sql, f"eps_ttm_min value missing from SQL:\n{sql}"
@@ -425,7 +442,7 @@ async def test_query_screen_eps_ttm_max_filter_adds_predicate() -> None:
     filters = [ScreenFilter(metric="pe_ratio", max_value=40.0, eps_ttm_max=15.0)]
     await query_screen(session, filters)
 
-    sql = _sql(captured[0]).lower()
+    sql = _sql(captured[-1]).lower()
     assert "eps_ttm" in sql
     assert "15.0" in sql
 
@@ -445,7 +462,7 @@ async def test_query_screen_avg_volume_30d_range_filter_adds_predicates() -> Non
     ]
     await query_screen(session, filters)
 
-    sql = _sql(captured[0]).lower()
+    sql = _sql(captured[-1]).lower()
     assert "avg_volume_30d" in sql
     assert "1000000" in sql
     assert "500000000" in sql
@@ -459,7 +476,7 @@ async def test_query_screen_free_cash_flow_min_filter_adds_predicate() -> None:
     filters = [ScreenFilter(metric="pe_ratio", max_value=40.0, free_cash_flow_min=1_000_000_000)]
     await query_screen(session, filters)
 
-    sql = _sql(captured[0]).lower()
+    sql = _sql(captured[-1]).lower()
     assert "free_cash_flow" in sql
     assert "1000000000" in sql
 
@@ -472,7 +489,7 @@ async def test_query_screen_fcf_margin_max_filter_adds_predicate() -> None:
     filters = [ScreenFilter(metric="pe_ratio", max_value=40.0, fcf_margin_max=0.5)]
     await query_screen(session, filters)
 
-    sql = _sql(captured[0]).lower()
+    sql = _sql(captured[-1]).lower()
     assert "fcf_margin" in sql
     assert "0.5" in sql
 
@@ -485,7 +502,7 @@ async def test_query_screen_interest_coverage_min_filter_adds_predicate() -> Non
     filters = [ScreenFilter(metric="pe_ratio", max_value=40.0, interest_coverage_min=3.0)]
     await query_screen(session, filters)
 
-    sql = _sql(captured[0]).lower()
+    sql = _sql(captured[-1]).lower()
     assert "interest_coverage" in sql
     assert "3.0" in sql
 
@@ -498,7 +515,7 @@ async def test_query_screen_net_debt_to_ebitda_max_filter_adds_predicate() -> No
     filters = [ScreenFilter(metric="pe_ratio", max_value=40.0, net_debt_to_ebitda_max=2.0)]
     await query_screen(session, filters)
 
-    sql = _sql(captured[0]).lower()
+    sql = _sql(captured[-1]).lower()
     assert "net_debt_to_ebitda" in sql
     assert "2.0" in sql
 
@@ -517,7 +534,7 @@ async def test_query_screen_credit_ratings_in_filter_adds_predicate() -> None:
     ]
     await query_screen(session, filters)
 
-    sql = _sql(captured[0])
+    sql = _sql(captured[-1])
     # Either an IN ('AAA', 'AA+', 'AA') or = ANY(ARRAY[...]) form — both
     # include the literal rating strings.
     assert "credit_rating" in sql.lower()
@@ -537,7 +554,7 @@ async def test_query_screen_no_l2_filters_emits_no_l2_predicates() -> None:
     filters = [ScreenFilter(metric="pe_ratio", max_value=40.0)]
     await query_screen(session, filters)
 
-    sql = _sql(captured[0]).lower()
+    sql = _sql(captured[-1]).lower()
     # SELECT and JOIN reference snapshot table; WHERE clause should not
     # carry a comparison predicate. We assert by checking that the literal
     # operator-value combinations we'd emit for an L-2 filter are absent.
@@ -560,7 +577,7 @@ async def test_query_screen_sort_by_eps_ttm_orders_by_snapshot_column() -> None:
     filters = [ScreenFilter(metric="pe_ratio", max_value=40.0)]
     await query_screen(session, filters, sort_by="eps_ttm", sort_order="desc")
 
-    sql = _sql(captured[0]).lower()
+    sql = _sql(captured[-1]).lower()
     assert "order by" in sql
     # The snapshot column reference appears in the ORDER BY clause
     assert "eps_ttm desc" in sql or "snap_eps_ttm desc" in sql or "eps_ttm" in sql.split("order by", 1)[1]
@@ -574,7 +591,7 @@ async def test_query_screen_sort_by_avg_volume_30d_orders_by_snapshot_column() -
     filters = [ScreenFilter(metric="pe_ratio", max_value=40.0)]
     await query_screen(session, filters, sort_by="avg_volume_30d", sort_order="asc")
 
-    sql = _sql(captured[0]).lower()
+    sql = _sql(captured[-1]).lower()
     assert "order by" in sql
     assert "avg_volume_30d" in sql.split("order by", 1)[1]
 
@@ -597,7 +614,7 @@ async def test_query_screen_combined_l2_filters_with_l1_and_sort() -> None:
     ]
     await query_screen(session, filters, sort_by="free_cash_flow", sort_order="desc")
 
-    sql = _sql(captured[0])
+    sql = _sql(captured[-1])
     sql_l = sql.lower()
     assert "USA" in sql
     assert "NASDAQ" in sql
@@ -634,7 +651,7 @@ async def test_query_screen_analyst_target_price_range_filter_adds_predicates() 
     ]
     await query_screen(session, filters)
 
-    sql = _sql(captured[0]).lower()
+    sql = _sql(captured[-1]).lower()
     assert "analyst_target_price" in sql
     # Literal-bound values appear in the SQL string.
     assert "100.0" in sql
@@ -649,7 +666,7 @@ async def test_query_screen_analyst_consensus_rating_min_filter_adds_predicate()
     filters = [ScreenFilter(metric="pe_ratio", max_value=40.0, analyst_consensus_rating_min=4.0)]
     await query_screen(session, filters)
 
-    sql = _sql(captured[0]).lower()
+    sql = _sql(captured[-1]).lower()
     assert "analyst_consensus_rating" in sql
     assert "4.0" in sql
 
@@ -670,7 +687,7 @@ async def test_query_screen_institutional_ownership_pct_range_filter_adds_predic
     ]
     await query_screen(session, filters)
 
-    sql = _sql(captured[0]).lower()
+    sql = _sql(captured[-1]).lower()
     assert "institutional_ownership_pct" in sql
     assert "0.5" in sql
     assert "0.9" in sql
@@ -685,7 +702,7 @@ async def test_query_screen_short_percent_max_filter_adds_predicate() -> None:
     filters = [ScreenFilter(metric="pe_ratio", max_value=40.0, short_percent_max=0.05)]
     await query_screen(session, filters)
 
-    sql = _sql(captured[0]).lower()
+    sql = _sql(captured[-1]).lower()
     assert "short_percent" in sql
     assert "0.05" in sql
 
@@ -698,7 +715,7 @@ async def test_query_screen_sort_by_analyst_target_price_orders_by_snapshot_colu
     filters = [ScreenFilter(metric="pe_ratio", max_value=40.0)]
     await query_screen(session, filters, sort_by="analyst_target_price", sort_order="desc")
 
-    sql = _sql(captured[0]).lower()
+    sql = _sql(captured[-1]).lower()
     assert "order by" in sql
     assert "analyst_target_price" in sql.split("order by", 1)[1]
 
@@ -711,7 +728,7 @@ async def test_query_screen_sort_by_short_percent_orders_by_snapshot_column() ->
     filters = [ScreenFilter(metric="pe_ratio", max_value=40.0)]
     await query_screen(session, filters, sort_by="short_percent", sort_order="asc")
 
-    sql = _sql(captured[0]).lower()
+    sql = _sql(captured[-1]).lower()
     assert "order by" in sql
     assert "short_percent" in sql.split("order by", 1)[1]
 
@@ -724,7 +741,7 @@ async def test_query_screen_filter_branch_selects_l4a_snapshot_columns() -> None
     filters = [ScreenFilter(metric="pe_ratio", max_value=40.0)]
     await query_screen(session, filters)
 
-    sql = _sql(captured[0]).lower()
+    sql = _sql(captured[-1]).lower()
     for field in (
         "analyst_target_price",
         "analyst_consensus_rating",

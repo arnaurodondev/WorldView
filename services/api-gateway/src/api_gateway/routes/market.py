@@ -127,11 +127,23 @@ async def screen_instruments(request: Request) -> Any:
     """
     body = await request.body()
     clients = _clients(request)
-    resp = await clients.market_data.post(
-        "/api/v1/fundamentals/screen",
-        content=body,
-        headers={"Content-Type": "application/json", **_system_headers(request)},
-    )
+    try:
+        resp = await clients.market_data.post(
+            "/api/v1/fundamentals/screen",
+            content=body,
+            headers={"Content-Type": "application/json", **_system_headers(request)},
+            # WHY timeout=10.0: the screener runs N correlated subqueries (one per
+            # filter metric) over large tables. Without an explicit timeout the httpx
+            # default (5 s) fires before S3's own 8 s statement_timeout, leaving the
+            # DB query still running server-side. 10 s > 8 s gives S3 time to receive
+            # the DB-level cancellation and return a clean 504 before the gateway
+            # aborts the connection itself. BP-235: always set httpx.Timeout on
+            # latency-sensitive downstream calls (never rely on the httpx 5 s default).
+            timeout=10.0,
+        )
+    except httpx.TimeoutException:
+        logger.warning("screener_upstream_timeout")
+        raise HTTPException(status_code=504, detail="Screener upstream timeout")  # noqa: B904
     if resp.status_code >= 400:
         return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
 

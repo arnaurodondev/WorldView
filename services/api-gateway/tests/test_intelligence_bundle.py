@@ -92,17 +92,17 @@ async def test_bundle_requires_auth(app, mock_clients) -> None:
 
 @pytest.mark.asyncio
 async def test_bundle_happy_path_returns_all_legs(authed_app, authed_mock_clients) -> None:
-    """All 5 legs succeed → response has all keys populated.
+    """All 6 legs succeed → response has all keys populated.
 
     The graph leg's S7 raw payload is transformed into EntityGraph shape
     {entity_id, nodes, edges} by _transform_graph_response.
     """
-    # WHY one AsyncMock per client with side_effect ordering:
-    # The route fires 5 calls to clients.knowledge_graph.get: detail, graph
-    # (depth=2), paths, intelligence (via asyncio.gather) PLUS a depth=1 merge
-    # fetch for graph_d2 (B-2 fix).  We dispatch by path so both graph calls
-    # (depth=2 + depth=1 merge) receive the same payload — adequate for unit
-    # testing the merge logic without needing distinct fixtures.
+    # WHY one AsyncMock per client with path-dispatch:
+    # The route fires 6 concurrent calls to clients.knowledge_graph.get via
+    # asyncio.gather: detail, graph (depth=2), graph (depth=1 B-2 merge),
+    # paths, intelligence.  Both graph calls use the same path so the mock
+    # dispatches by path; both receive the same _GRAPH_RAW_PAYLOAD which is
+    # adequate for unit-testing the merge without distinct fixtures.
 
     async def _kg_get(path: str, *, params: dict | None = None, headers: dict | None = None) -> MagicMock:
         if path == f"/api/v1/entities/{_ENTITY_UUID}":

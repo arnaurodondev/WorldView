@@ -89,6 +89,13 @@ async def test_query_screen_skips_missing_calendar_columns() -> None:
     }
 
     async def _execute(stmt: Any) -> MagicMock:
+        # WHY skip SET LOCAL: query_screen now issues a statement_timeout guard
+        # before the real query (PLAN-0099). Filter it from captured so
+        # captured[-1] is always the screener SELECT (index-stable).
+        if "statement_timeout" in str(stmt):
+            result = MagicMock()
+            result.all = MagicMock(return_value=[])
+            return result
         captured.append(stmt)
         result = MagicMock()
         if "information_schema" in str(stmt):
@@ -108,8 +115,8 @@ async def test_query_screen_skips_missing_calendar_columns() -> None:
     # missing calendar columns in its projection.
     await query_screen(session, filters)
 
-    # Second captured statement is the screener query (first is introspection).
-    screen_stmt = captured[1]
+    # Last captured statement is the screener query (first is introspection).
+    screen_stmt = captured[-1]
     sql = _sql(screen_stmt).lower()
     assert "next_earnings_date" not in sql, f"projection leaked missing column:\n{sql}"
     assert "next_dividend_date" not in sql, f"projection leaked missing column:\n{sql}"
@@ -129,6 +136,10 @@ async def test_query_screen_skips_insider_filter_when_column_missing() -> None:
     present: set[str] = set()  # nothing — extreme case
 
     async def _execute(stmt: Any) -> MagicMock:
+        if "statement_timeout" in str(stmt):
+            result = MagicMock()
+            result.all = MagicMock(return_value=[])
+            return result
         captured.append(stmt)
         result = MagicMock()
         if "information_schema" in str(stmt):
@@ -149,7 +160,7 @@ async def test_query_screen_skips_insider_filter_when_column_missing() -> None:
     ]
     await query_screen(session, filters)
 
-    sql = _sql(captured[1]).lower()
+    sql = _sql(captured[-1]).lower()
     assert "insider_net_buy_90d" not in sql
 
 
@@ -164,6 +175,10 @@ async def test_query_screen_projects_all_snap_fields_when_schema_complete() -> N
     present = set(fmq._SNAP_FIELDS)
 
     async def _execute(stmt: Any) -> MagicMock:
+        if "statement_timeout" in str(stmt):
+            result = MagicMock()
+            result.all = MagicMock(return_value=[])
+            return result
         captured.append(stmt)
         result = MagicMock()
         if "information_schema" in str(stmt):
@@ -177,7 +192,7 @@ async def test_query_screen_projects_all_snap_fields_when_schema_complete() -> N
 
     await query_screen(session, [ScreenFilter(metric="pe_ratio", max_value=40.0)])
 
-    sql = _sql(captured[1]).lower()
+    sql = _sql(captured[-1]).lower()
     # Every snap field appears as ``snap_<field>`` alias in the projection.
     for field in fmq._SNAP_FIELDS:
         assert f"snap_{field}" in sql, f"{field} missing from full-schema projection"
@@ -226,6 +241,10 @@ async def test_no_filter_path_includes_extended_key_metrics() -> None:
     present = set(fmq._SNAP_FIELDS)
 
     async def _execute(stmt: Any) -> MagicMock:
+        if "statement_timeout" in str(stmt):
+            result = MagicMock()
+            result.all = MagicMock(return_value=[])
+            return result
         captured.append(stmt)
         result = MagicMock()
         if "information_schema" in str(stmt):
@@ -242,7 +261,7 @@ async def test_no_filter_path_includes_extended_key_metrics() -> None:
 
     # Second call is the screener query; first call is introspection.
     assert len(captured) >= 2, "expected introspection + screener query"
-    sql = _sql(captured[1]).lower()
+    sql = _sql(captured[-1]).lower()
 
     expected_metrics = [
         "revenue_ttm",

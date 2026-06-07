@@ -45,10 +45,20 @@ pytestmark = pytest.mark.unit
 
 
 def _make_capture_session() -> tuple[MagicMock, list[Any]]:
-    """Return (session, captured_statements) — every ``execute`` call is recorded."""
+    """Return (session, captured_statements) — every ``execute`` call is recorded.
+
+    WHY filter out SET LOCAL: query_screen issues ``SET LOCAL statement_timeout``
+    before the screener query (PLAN-0099 timeout guard). We skip it so
+    ``captured[-1]`` is always the screener SELECT regardless of whether the
+    snap-field introspection cache is warm or cold.
+    """
     captured: list[Any] = []
 
     async def _capture(stmt: Any) -> MagicMock:
+        if "statement_timeout" in str(stmt):
+            result = MagicMock()
+            result.all = MagicMock(return_value=[])
+            return result
         captured.append(stmt)
         result = MagicMock()
         result.all = MagicMock(return_value=[])
@@ -90,7 +100,7 @@ async def test_query_screen_next_earnings_within_30_days_adds_where_clause() -> 
     filters = [ScreenFilter(metric="pe_ratio", max_value=40.0, next_earnings_within_days=30)]
     await query_screen(session, filters)
 
-    sql = _sql(captured[0]).lower()
+    sql = _sql(captured[-1]).lower()
     # The next_earnings_date column must appear with both the lower bound
     # (CURRENT_DATE) and the upper bound (CURRENT_DATE + INTERVAL '30 days').
     assert "next_earnings_date" in sql, f"next_earnings_date missing from SQL:\n{sql}"
@@ -107,7 +117,7 @@ async def test_query_screen_next_earnings_within_0_days_still_filters_to_today()
     filters = [ScreenFilter(metric="pe_ratio", max_value=40.0, next_earnings_within_days=0)]
     await query_screen(session, filters)
 
-    sql = _sql(captured[0]).lower()
+    sql = _sql(captured[-1]).lower()
     # Both bounds resolve to CURRENT_DATE — the SQL still contains the BETWEEN
     # predicate (no short-circuit on 0, which would be a bug).
     assert "next_earnings_date" in sql
@@ -123,7 +133,7 @@ async def test_query_screen_next_dividend_within_days_adds_where_clause() -> Non
     filters = [ScreenFilter(metric="pe_ratio", max_value=40.0, next_dividend_within_days=14)]
     await query_screen(session, filters)
 
-    sql = _sql(captured[0]).lower()
+    sql = _sql(captured[-1]).lower()
     assert "next_dividend_date" in sql, f"next_dividend_date missing from SQL:\n{sql}"
     assert "14" in sql, f"14-day window missing from SQL:\n{sql}"
 
@@ -137,7 +147,7 @@ async def test_query_screen_without_calendar_filter_omits_where_clause() -> None
     filters = [ScreenFilter(metric="pe_ratio", max_value=40.0)]
     await query_screen(session, filters)
 
-    sql = _sql(captured[0]).lower()
+    sql = _sql(captured[-1]).lower()
     # The SELECT projects next_earnings_date / next_dividend_date columns, so
     # they always appear in the projection. But the WHERE clause must NOT
     # contain a BETWEEN against them.
@@ -160,7 +170,7 @@ async def test_query_screen_sort_by_next_earnings_date_asc_puts_soonest_first() 
     filters = [ScreenFilter(metric="pe_ratio", max_value=40.0)]
     await query_screen(session, filters, sort_by="next_earnings_date", sort_order="asc")
 
-    sql = _sql(captured[0]).lower()
+    sql = _sql(captured[-1]).lower()
     # The ORDER BY must reference the snapshot column and be ASC.
     assert "order by" in sql
     assert "next_earnings_date" in sql
@@ -175,7 +185,7 @@ async def test_query_screen_sort_by_next_dividend_date_asc() -> None:
     filters = [ScreenFilter(metric="pe_ratio", max_value=40.0)]
     await query_screen(session, filters, sort_by="next_dividend_date", sort_order="asc")
 
-    sql = _sql(captured[0]).lower()
+    sql = _sql(captured[-1]).lower()
     assert "order by" in sql
     assert "next_dividend_date" in sql
     assert "asc" in sql.split("order by", 1)[1]
