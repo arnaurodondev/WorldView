@@ -308,6 +308,13 @@ monitoring-down:
 
 .PHONY: monitoring monitoring-down
 
+## Validate every Grafana dashboard panel against live Prometheus/Loki
+## (writes build/grafana_validation_results.tsv, exit 1 on BROKEN rows)
+grafana-validate:
+	@bash scripts/grafana_validation.sh
+
+.PHONY: grafana-validate
+
 # ── Production stack (Hetzner single-server with Traefik TLS) ───────────────
 #
 # Required env vars: DOMAIN, ACME_EMAIL
