@@ -345,11 +345,36 @@ _METRIC_CATALOG: dict[FundamentalsSection, list[_MetricDef]] = {
         _MetricDef("dividends_paid", ("dividendsPaid", "dividends_paid", "DividendsPaid")),
         _MetricDef("net_borrowings", ("netBorrowings", "net_borrowings", "NetBorrowings")),
         _MetricDef("depreciation", ("depreciation", "Depreciation")),
+        # WHY: The following 6 metrics were silently dropped on every EODHD ingest
+        # cycle despite being present in every fundamentals payload.  They are
+        # high-value inputs for the fundamentals screener and FCF quality analysis:
+        #   stock_based_compensation  — non-cash SBC add-back in OCF reconciliation
+        #   end_period_cash_flow      — end-of-period cash balance (cash waterfall)
+        #   begin_period_cash_flow    — beginning-of-period cash balance (delta check)
+        #   change_in_working_capital — working capital change in OCF (quality signal)
+        #   sale_purchase_of_stock    — net share buybacks / issuances (capital return)
+        #   net_income_cash_flow      — net income OCF reconciliation starting line
+        # No schema change needed: fundamental_metrics is a generic key-value store.
+        # Historical data can be backfilled from cash_flow_statements.data (83 434 rows
+        # present as of 2026-06-06) by re-running the extractor against that JSONB.
+        _MetricDef("stock_based_compensation", ("stockBasedCompensation",)),
+        _MetricDef("end_period_cash_flow", ("endPeriodCashFlow",)),
+        _MetricDef("begin_period_cash_flow", ("beginPeriodCashFlow",)),
+        _MetricDef("change_in_working_capital", ("changeInWorkingCapital",)),
+        _MetricDef("sale_purchase_of_stock", ("salePurchaseOfStock",)),
+        # EODHD field name is changeToNetincome (lowercase 'i') — not a typo.
+        _MetricDef("net_income_cash_flow", ("changeToNetincome",)),
     ],
 }
 
 # Sections in the catalog (for fast membership check)
 _CATALOGUED_SECTIONS: frozenset[FundamentalsSection] = frozenset(_METRIC_CATALOG.keys())
+
+# WHY: EODHD Cash_Flow rows always include these three structural / metadata fields
+# alongside the numeric metrics.  They are not metrics and should never appear in
+# the unmapped_keys warning — excluding them prevents inflating the warning count
+# by 3 (21 → 24) on every ingest cycle and eliminates false noise in monitoring.
+_CASH_FLOW_ADMIN_KEYS: frozenset[str] = frozenset({"date", "filing_date", "currency_symbol"})
 
 
 def extract_metrics(
@@ -408,11 +433,14 @@ def extract_metrics(
                 period_type=period_type,
                 section=section_value,
                 ingested_at=ingested_at,
-            )
+            ),
         )
 
     if data:
-        unmapped_keys = sorted([k for k in data if k not in matched_keys])
+        # Exclude structural / metadata keys that are never metrics.  For Cash_Flow
+        # sections this prevents date, filing_date, and currency_symbol from appearing
+        # in the unmapped_keys warning and inflating the count on every ingest cycle.
+        unmapped_keys = sorted([k for k in data if k not in matched_keys and k not in _CASH_FLOW_ADMIN_KEYS])
         if unmapped_keys:
             payload = {
                 "section": section_value,

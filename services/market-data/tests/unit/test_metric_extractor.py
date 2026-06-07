@@ -512,3 +512,129 @@ def test_logs_unmapped_keys_with_required_fields(monkeypatch: pytest.MonkeyPatch
     assert captured.get("period_type") == _PERIOD_TYPE
     assert captured.get("unmapped_keys_count") == 3
     assert "UnmappedA" in (captured.get("unmapped_keys_sample") or [])
+
+
+# ── New cash flow fields (6 high-value mappings) ──────────────────────────────
+
+
+def test_cash_flow_stock_based_compensation() -> None:
+    """stockBasedCompensation → stock_based_compensation (non-cash SBC add-back in OCF)."""
+    rows = _call(FundamentalsSection.CASH_FLOW, {"stockBasedCompensation": 1_500_000})
+    m = _metrics(rows)
+    assert "stock_based_compensation" in m
+    assert m["stock_based_compensation"].value_numeric == Decimal("1500000")
+
+
+def test_cash_flow_end_period_cash_flow() -> None:
+    """endPeriodCashFlow → end_period_cash_flow (end-of-period cash balance)."""
+    rows = _call(FundamentalsSection.CASH_FLOW, {"endPeriodCashFlow": 8_000_000})
+    m = _metrics(rows)
+    assert "end_period_cash_flow" in m
+    assert m["end_period_cash_flow"].value_numeric == Decimal("8000000")
+
+
+def test_cash_flow_begin_period_cash_flow() -> None:
+    """beginPeriodCashFlow → begin_period_cash_flow (beginning-of-period cash balance)."""
+    rows = _call(FundamentalsSection.CASH_FLOW, {"beginPeriodCashFlow": 6_000_000})
+    m = _metrics(rows)
+    assert "begin_period_cash_flow" in m
+    assert m["begin_period_cash_flow"].value_numeric == Decimal("6000000")
+
+
+def test_cash_flow_change_in_working_capital() -> None:
+    """changeInWorkingCapital → change_in_working_capital (OCF quality signal)."""
+    rows = _call(FundamentalsSection.CASH_FLOW, {"changeInWorkingCapital": -250_000})
+    m = _metrics(rows)
+    assert "change_in_working_capital" in m
+    assert m["change_in_working_capital"].value_numeric == Decimal("-250000")
+
+
+def test_cash_flow_sale_purchase_of_stock() -> None:
+    """salePurchaseOfStock → sale_purchase_of_stock (net share buybacks / issuances)."""
+    rows = _call(FundamentalsSection.CASH_FLOW, {"salePurchaseOfStock": -3_000_000})
+    m = _metrics(rows)
+    assert "sale_purchase_of_stock" in m
+    assert m["sale_purchase_of_stock"].value_numeric == Decimal("-3000000")
+
+
+def test_cash_flow_net_income_cash_flow() -> None:
+    """changeToNetincome (lowercase 'i') → net_income_cash_flow (OCF reconciliation start)."""
+    rows = _call(FundamentalsSection.CASH_FLOW, {"changeToNetincome": 12_000_000})
+    m = _metrics(rows)
+    assert "net_income_cash_flow" in m
+    assert m["net_income_cash_flow"].value_numeric == Decimal("12000000")
+
+
+def test_cash_flow_all_six_new_metrics_extracted_together() -> None:
+    """All 6 new cash flow metrics are extracted when present in the same payload."""
+    rows = _call(
+        FundamentalsSection.CASH_FLOW,
+        {
+            "stockBasedCompensation": 100,
+            "endPeriodCashFlow": 200,
+            "beginPeriodCashFlow": 150,
+            "changeInWorkingCapital": -30,
+            "salePurchaseOfStock": -50,
+            "changeToNetincome": 80,
+        },
+    )
+    metrics = _metrics(rows)
+    assert metrics["stock_based_compensation"].value_numeric == Decimal("100")
+    assert metrics["end_period_cash_flow"].value_numeric == Decimal("200")
+    assert metrics["begin_period_cash_flow"].value_numeric == Decimal("150")
+    assert metrics["change_in_working_capital"].value_numeric == Decimal("-30")
+    assert metrics["sale_purchase_of_stock"].value_numeric == Decimal("-50")
+    assert metrics["net_income_cash_flow"].value_numeric == Decimal("80")
+
+
+# ── Admin key suppression ─────────────────────────────────────────────────────
+
+
+def test_cash_flow_admin_keys_not_in_unmapped_keys(monkeypatch: pytest.MonkeyPatch) -> None:
+    """date, filing_date, and currency_symbol are structural metadata — never metrics.
+
+    They must NOT appear in the unmapped_keys warning payload, and must NOT
+    inflate the unmapped_keys_count on every Cash_Flow ingest cycle.
+    WHY: EODHD always includes these 3 admin fields alongside numeric metrics;
+    without exclusion they appear as false positives in every ingest warning.
+    """
+    from market_data.infrastructure.db import metric_extractor
+
+    captured: dict[str, object] = {}
+
+    class _FakeLogger:
+        def debug(self, event: str, **kwargs: object) -> None:
+            captured["event"] = event
+            captured.update(kwargs)
+
+        def warning(self, event: str, **kwargs: object) -> None:
+            captured["event"] = event
+            captured.update(kwargs)
+
+    monkeypatch.setattr(metric_extractor, "logger", _FakeLogger())
+
+    _call(
+        FundamentalsSection.CASH_FLOW,
+        {
+            # Known metric — should be matched, not in unmapped
+            "depreciation": 500,
+            # Admin / metadata fields — must be silently excluded
+            "date": "2024-09-30",
+            "filing_date": "2024-11-01",
+            "currency_symbol": "USD",
+            # A genuinely unknown field — should appear in unmapped
+            "someUnknownField": 99,
+        },
+    )
+
+    # The genuinely unknown field must be flagged
+    sample = captured.get("unmapped_keys_sample") or []
+    assert "someUnknownField" in sample
+
+    # Admin keys must NOT appear in the warning
+    assert "date" not in sample
+    assert "filing_date" not in sample
+    assert "currency_symbol" not in sample
+
+    # Count must reflect only the genuine unknown, not the 3 admin keys
+    assert captured.get("unmapped_keys_count") == 1
