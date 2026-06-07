@@ -759,6 +759,87 @@ async def test_get_screen_fields_proxies_to_market_data(client, mock_clients) ->
 
 
 @pytest.mark.asyncio
+async def test_screen_instruments_flattens_metric_renames(client, mock_clients) -> None:
+    """_flatten_screener_result renames S3 metric keys to match TS ScreenerResult.
+
+    PRD-0099: verifies the five renaming rules that map S3 canonical metric
+    names to the frontend-facing display names:
+      revenue_ttm        → revenue
+      operating_margin_ttm → operating_margin
+      roe_ttm            → roe
+      market_capitalization → market_cap
+      quarterly_revenue_growth_yoy → revenue_growth_yoy
+    Also checks that unrenamed keys (forward_pe, dividend_yield, current_price)
+    pass through unchanged.
+    """
+    import json
+
+    s3_payload = {
+        "results": [
+            {
+                "instrument_id": "instr-001",
+                "ticker": "AAPL",
+                "name": "Apple Inc.",
+                "exchange": "NASDAQ",
+                "sector": "Technology",
+                "metrics": {
+                    "market_capitalization": 3_000_000_000_000.0,
+                    "pe_ratio": 28.5,
+                    "revenue_ttm": 400_000_000_000.0,
+                    "operating_margin_ttm": 0.31,
+                    "roe_ttm": 0.175,
+                    "quarterly_revenue_growth_yoy": 0.05,
+                    "forward_pe": 26.0,
+                    "dividend_yield": 0.006,
+                    "current_price": 193.5,
+                },
+            }
+        ],
+        "count": 1,
+        "total": 1,
+    }
+    downstream_resp = MagicMock(spec=httpx.Response)
+    downstream_resp.status_code = 200
+    downstream_resp.content = json.dumps(s3_payload).encode()
+
+    mock_clients.market_data.post = AsyncMock(return_value=downstream_resp)
+
+    response = await client.post(
+        "/v1/fundamentals/screen",
+        content=b'{"filters": []}',
+        headers={"Content-Type": "application/json"},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["total"] == 1
+    result = body["results"][0]
+
+    # Renames applied
+    assert result["market_cap"] == 3_000_000_000_000.0, "market_capitalization → market_cap"
+    assert result["revenue"] == 400_000_000_000.0, "revenue_ttm → revenue"
+    assert result["operating_margin"] == pytest.approx(0.31), "operating_margin_ttm → operating_margin"
+    assert result["roe"] == pytest.approx(0.175), "roe_ttm → roe"
+    assert result["revenue_growth_yoy"] == pytest.approx(0.05), "quarterly_revenue_growth_yoy → revenue_growth_yoy"
+
+    # Pass-through (no rename)
+    assert result["forward_pe"] == pytest.approx(26.0), "forward_pe unchanged"
+    assert result["dividend_yield"] == pytest.approx(0.006), "dividend_yield unchanged"
+    assert result["current_price"] == pytest.approx(193.5), "current_price unchanged"
+
+    # Top-level instrument fields
+    assert result["gics_sector"] == "Technology", "sector → gics_sector"
+    assert result["ticker"] == "AAPL"
+
+    # Original S3 names must NOT appear (they were renamed)
+    assert "market_capitalization" not in result
+    assert "revenue_ttm" not in result
+    assert "operating_margin_ttm" not in result
+    assert "roe_ttm" not in result
+    assert "quarterly_revenue_growth_yoy" not in result
+
+
+@pytest.mark.asyncio
 async def test_get_fundamentals_timeseries_proxies_to_market_data(client, mock_clients) -> None:
     """GET /v1/fundamentals/timeseries proxies query params to S3 market-data."""
     downstream_resp = MagicMock(spec=httpx.Response)

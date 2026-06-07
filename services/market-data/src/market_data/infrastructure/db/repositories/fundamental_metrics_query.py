@@ -20,6 +20,7 @@ from market_data.domain.entities import ScreenFieldMetadata
 from market_data.infrastructure.db.models.fundamental_metrics import FundamentalMetricModel
 from market_data.infrastructure.db.models.fundamentals_snapshot import InstrumentFundamentalsSnapshotModel
 from market_data.infrastructure.db.models.instruments import InstrumentModel
+from market_data.infrastructure.db.models.quotes import QuoteModel
 from market_data.infrastructure.db.models.screen_field_metadata import ScreenFieldMetadataModel
 
 # Snapshot metric columns selected from instrument_fundamentals_snapshot (L-2).
@@ -212,12 +213,25 @@ async def query_screen(
         # NULL for missing metrics, which the frontend renders as "—".
         m = FundamentalMetricModel
 
+        # WHY these 10 metrics: these are the columns displayed in the screener
+        # table's default (no-filter) view. Each metric name must match a row
+        # that the metric_extractor actually writes into fundamental_metrics.
+        # NOTE: ``revenue_ttm`` (HIGHLIGHTS section) replaces the old
+        # ``revenue_usd`` placeholder — ``revenue_usd`` was never populated
+        # in the extractor catalog, so the column always returned NULL.
         key_metrics = [
             "market_capitalization",
             "pe_ratio",
             "daily_return",
             "beta",
-            "revenue_usd",
+            "revenue_ttm",
+            # PRD-0099: add the five columns the screener table renders so the
+            # default view shows real values instead of "—".
+            "forward_pe",
+            "dividend_yield",
+            "roe_ttm",
+            "operating_margin_ttm",
+            "quarterly_revenue_growth_yoy",
         ]
 
         def _latest_metric_sq(metric_name: str, alias: str) -> Any:
@@ -248,6 +262,7 @@ async def query_screen(
             )
 
         key_sqs = {name: _latest_metric_sq(name, f"km_{name}") for name in key_metrics}
+        q = QuoteModel
 
         total_col = func.count().over().label("total_count")
         select_cols: list[Any] = [
@@ -257,6 +272,11 @@ async def query_screen(
             instr.exchange.label("exchange"),
             instr.sector.label("sector"),
             total_col,
+            # WHY LEFT JOIN on quotes: current_price (quotes.last) is a live
+            # value not stored in fundamental_metrics. A LEFT JOIN ensures
+            # instruments without a quote row still appear in the result (NULL
+            # current_price renders as "—" in the frontend).
+            q.last.label("current_price"),
         ]
         for metric_name, sq in key_sqs.items():
             select_cols.append(sq.c.value_numeric.label(metric_name))
@@ -267,6 +287,7 @@ async def query_screen(
         for sq in key_sqs.values():
             stmt = stmt.outerjoin(sq, instr.id == sq.c.instrument_id)
         stmt = stmt.outerjoin(snap, instr.id == snap.instrument_id)
+        stmt = stmt.outerjoin(q, instr.id == q.instrument_id)
 
         result: Any = await session.execute(stmt)
         rows = result.all()
@@ -282,6 +303,8 @@ async def query_screen(
                 sector=row.sector,
                 metrics={
                     **{name: getattr(row, name, None) for name in key_metrics if getattr(row, name, None) is not None},
+                    # current_price from quotes LEFT JOIN (None if no quote row)
+                    **({"current_price": float(row.current_price)} if row.current_price is not None else {}),
                     **{
                         sf: getattr(row, f"snap_{sf}")
                         for sf in snap_fields_available

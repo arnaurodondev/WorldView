@@ -207,3 +207,53 @@ async def test_query_screen_caches_introspection_across_calls() -> None:
     await query_screen(session, filters)
 
     assert introspect_calls == 1, f"introspection ran {introspect_calls} times — cache broken"
+
+
+@pytest.mark.asyncio
+async def test_no_filter_path_includes_extended_key_metrics() -> None:
+    """PRD-0099: no-filter screener SQL must reference the 5 new key_metrics.
+
+    Before PRD-0099, only [market_capitalization, pe_ratio, daily_return, beta,
+    revenue_usd] were projected — revenue_usd was also wrong (no rows). The fix
+    replaces revenue_usd with revenue_ttm and adds forward_pe, dividend_yield,
+    roe_ttm, operating_margin_ttm, quarterly_revenue_growth_yoy.
+
+    This test inspects the compiled SQL of the *second* session.execute call
+    (the actual screener query) to confirm every new metric name appears as a
+    subquery alias in the FROM clause, proving it will be projected.
+    """
+    captured: list[Any] = []
+    present = set(fmq._SNAP_FIELDS)
+
+    async def _execute(stmt: Any) -> MagicMock:
+        captured.append(stmt)
+        result = MagicMock()
+        if "information_schema" in str(stmt):
+            result.all = MagicMock(return_value=[(c,) for c in present])
+        else:
+            result.all = MagicMock(return_value=[])
+        return result
+
+    session = MagicMock()
+    session.execute = AsyncMock(side_effect=_execute)
+
+    # Empty filters → no-filter path
+    await query_screen(session, [])
+
+    # Second call is the screener query; first call is introspection.
+    assert len(captured) >= 2, "expected introspection + screener query"
+    sql = _sql(captured[1]).lower()
+
+    expected_metrics = [
+        "revenue_ttm",
+        "forward_pe",
+        "dividend_yield",
+        "roe_ttm",
+        "operating_margin_ttm",
+        "quarterly_revenue_growth_yoy",
+    ]
+    for metric in expected_metrics:
+        assert metric in sql, f"PRD-0099: no-filter screener SQL missing '{metric}'"
+
+    # revenue_usd must NOT appear — it was never in the extractor catalog
+    assert "revenue_usd" not in sql, "stale 'revenue_usd' key_metric still in no-filter path"

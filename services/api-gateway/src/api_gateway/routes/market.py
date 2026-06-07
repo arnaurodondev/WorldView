@@ -59,26 +59,38 @@ def _flatten_screener_result(item: dict[str, Any]) -> dict[str, Any]:
     every frontend component that reads screener data.
 
     Mapping table (S3 metric key → frontend field name):
-      market_capitalization → market_cap
-      pe_ratio              → pe_ratio          (same)
-      daily_return          → daily_return       (same)
-      beta                  → beta               (same)
-      dividend_yield        → dividend_yield     (same)
+      market_capitalization        → market_cap
+      pe_ratio                     → pe_ratio          (same)
+      forward_pe                   → forward_pe         (same)
+      daily_return                 → daily_return       (same)
+      beta                         → beta               (same)
+      dividend_yield               → dividend_yield     (same)
       quarterly_revenue_growth_yoy → revenue_growth_yoy
-      roe_ttm               → roe
-      profit_margin         → net_margin (not in ScreenerResult yet; forwarded raw)
-      sector (top-level)    → gics_sector
+      roe_ttm                      → roe
+      revenue_ttm                  → revenue
+      operating_margin_ttm         → operating_margin
+      current_price                → current_price      (same, from quotes JOIN)
+      profit_margin                → profit_margin      (same; forwarded raw)
+      sector (top-level)           → gics_sector
 
     Any metric key not listed above is forwarded under its original name so new
     S3 metrics are surfaced without a gateway schema change.
     """
     metrics: dict[str, float | None] = item.get("metrics") or {}
 
-    # Rename specific metric keys to match TypeScript ScreenerResult
+    # Rename specific metric keys to match TypeScript ScreenerResult.
+    # WHY these renames: the metric_extractor uses canonical EODHD-derived
+    # names (e.g. ``revenue_ttm``, ``roe_ttm``) while the frontend TS
+    # ScreenerResult interface uses shorter display names (``revenue``, ``roe``).
+    # Applying the mapping here keeps S3 names stable and the TS interface clean.
     _renames: dict[str, str] = {
         "market_capitalization": "market_cap",
         "quarterly_revenue_growth_yoy": "revenue_growth_yoy",
         "roe_ttm": "roe",
+        # PRD-0099: revenue_ttm → revenue (replaces the old revenue_usd placeholder)
+        "revenue_ttm": "revenue",
+        # PRD-0099: operating_margin_ttm → operating_margin (shorter display name)
+        "operating_margin_ttm": "operating_margin",
     }
 
     flat: dict[str, Any] = {
