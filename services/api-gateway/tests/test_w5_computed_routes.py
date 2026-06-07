@@ -319,8 +319,11 @@ async def test_intraday_stats_day_open_fallback_to_daily(authed_app, authed_mock
     payload = resp.json()
     # day_open should be the last daily bar's open (i=15 → open=200.0+15=215.0).
     assert payload["day_open"] == 215.0
-    # rel_volume is null: no intraday bars means no today_volume.
-    assert payload["rel_volume"] is None
+    # rel_volume uses today's daily bar as fallback when no intraday bars exist.
+    # All 15 daily bars have volume=400000; baseline (bars[0..13]) avg = 400000;
+    # today (bar[14]) volume = 400000 → rel_volume = 1.0.
+    assert payload["rel_volume"] is not None
+    assert abs(payload["rel_volume"] - 1.0) < 0.001
 
 
 @pytest.mark.asyncio
@@ -436,6 +439,111 @@ async def test_intraday_stats_rel_volume_null_when_zero_avg(authed_app, authed_m
 
     assert resp.status_code == 200
     payload = resp.json()
+    assert payload["rel_volume"] is None
+
+
+@pytest.mark.asyncio
+async def test_intraday_stats_rel_volume_daily_fallback(authed_app, authed_mock_clients) -> None:
+    """rel_volume uses today's daily bar volume when no intraday bars are available.
+
+    This mirrors the dev/weekend scenario: market is closed so no 5m intraday
+    bars are ingested, but the daily bar for today has a completed volume.
+    """
+    # No intraday bars (market closed / weekend).
+    intraday_body = json.dumps({"bars": []}).encode()
+    # 16 daily bars: first 15 are baseline (avg vol=10000 each), last is today (vol=20000).
+    # Expected rel_volume = 20000 / 10000 = 2.0.
+    daily_bars = [
+        {
+            "timestamp": f"2026-05-{i:02d}T00:00:00",
+            "open": 100.0,
+            "high": 102.0,
+            "low": 98.0,
+            "close": 100.0,
+            "volume": 10000,
+        }
+        for i in range(1, 16)  # 15 baseline bars
+    ] + [
+        {
+            "timestamp": "2026-05-16T00:00:00",
+            "open": 101.0,
+            "high": 103.0,
+            "low": 99.0,
+            "close": 101.0,
+            "volume": 20000,  # today's bar — 2x the average
+        }
+    ]
+    daily_body = json.dumps({"bars": daily_bars}).encode()
+    tech_body = b'{"records": []}'
+
+    authed_mock_clients.market_data.get = AsyncMock(
+        side_effect=[
+            _mock_http_response(200, intraday_body),
+            _mock_http_response(200, daily_body),
+            _mock_http_response(200, tech_body),
+        ]
+    )
+
+    transport = ASGITransport(app=authed_app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        resp = await client.get(
+            f"/v1/fundamentals/{_INSTRUMENT_UUID}/intraday-stats",
+            headers=_auth_headers(),
+        )
+
+    assert resp.status_code == 200
+    payload = resp.json()
+    # Daily fallback: baseline avg = 10000, today = 20000 → rel_volume = 2.0.
+    assert payload["rel_volume"] is not None
+    assert abs(payload["rel_volume"] - 2.0) < 0.001
+
+
+@pytest.mark.asyncio
+async def test_intraday_stats_rel_volume_null_when_today_daily_vol_zero(authed_app, authed_mock_clients) -> None:
+    """rel_volume is null when the daily fallback bar has volume=0 (non-trading day)."""
+    intraday_body = json.dumps({"bars": []}).encode()
+    # 15 baseline bars with non-zero volume + today bar with volume=0.
+    daily_bars = [
+        {
+            "timestamp": f"2026-05-{i:02d}T00:00:00",
+            "open": 100.0,
+            "high": 102.0,
+            "low": 98.0,
+            "close": 100.0,
+            "volume": 5000,
+        }
+        for i in range(1, 16)
+    ] + [
+        {
+            "timestamp": "2026-05-16T00:00:00",
+            "open": 100.0,
+            "high": 100.0,
+            "low": 100.0,
+            "close": 100.0,
+            "volume": 0,  # non-trading day or no data
+        }
+    ]
+    daily_body = json.dumps({"bars": daily_bars}).encode()
+    tech_body = b'{"records": []}'
+
+    authed_mock_clients.market_data.get = AsyncMock(
+        side_effect=[
+            _mock_http_response(200, intraday_body),
+            _mock_http_response(200, daily_body),
+            _mock_http_response(200, tech_body),
+        ]
+    )
+
+    transport = ASGITransport(app=authed_app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        resp = await client.get(
+            f"/v1/fundamentals/{_INSTRUMENT_UUID}/intraday-stats",
+            headers=_auth_headers(),
+        )
+
+    assert resp.status_code == 200
+    payload = resp.json()
+    # volume=0 treated as "no data" to avoid reporting rel_volume=0.0 on non-trading days.
     assert payload["rel_volume"] is None
 
 
