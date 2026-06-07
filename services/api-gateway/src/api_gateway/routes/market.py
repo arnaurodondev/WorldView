@@ -27,6 +27,7 @@ from api_gateway.clients import (
 from api_gateway.routes.helpers import _auth_headers, _clients, _system_headers
 from api_gateway.schemas import (
     EarningsCalendarResponse,
+    FinancialsBundleResponse,
     FundamentalsResponse,
     NLScreenerRequest,
     NLScreenerResponse,
@@ -785,6 +786,147 @@ async def get_income_statement(instrument_id: UUID, request: Request) -> Any:
         headers=headers,
     )
     return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
+
+
+# ── Financials Tab bundle (PLAN-0099 follow-up E) ───────────────────────────
+#
+# WHY THIS EXISTS:
+#   The /instruments/[id] Financials tab fired ~8 unique S9 round-trips on
+#   cold-start (fundamentals, snapshot, income statement, earnings history,
+#   technicals, share statistics, splits/dividends, plus per-panel
+#   beat-miss-history + fundamentals-timeseries). Each is gated by S9 auth
+#   + internal-JWT issuance so the page was wave-serialized by the slowest
+#   leg. This endpoint fans them out in parallel server-side via
+#   asyncio.gather and returns a single composite response. The frontend
+#   then hydrates each per-widget TanStack cache key via
+#   queryClient.setQueryData so existing child components hit warm cache.
+#
+# WHY POST (not GET):
+#   Symmetric with /v1/companies/overviews:batch — the bundle endpoint is
+#   resource-composition (not a simple resource fetch). POST also sidesteps
+#   any chance of FastAPI's path-param matcher confusing "financials-bundle"
+#   with an instrument_id segment.
+#
+# WHY make_headers (factory, not a captured dict): each parallel downstream
+# leg needs a fresh JWT with a unique JTI so InternalJWTMiddleware's replay
+# detection accepts the fan-out (same rationale as /v1/dashboard/bundle and
+# /v1/companies/overviews:batch).
+
+
+@router.post(
+    "/fundamentals/{instrument_id}/financials-bundle",
+    response_model=FinancialsBundleResponse,
+    response_model_exclude_none=False,
+)
+async def get_financials_bundle(instrument_id: UUID, request: Request) -> dict[str, Any]:
+    """Composite endpoint for the Financials tab — collapses 8 RTTs into 1.
+
+    Each leg is fetched in parallel (asyncio.gather with return_exceptions=True).
+    A failed leg degrades to ``None`` rather than failing the whole bundle.
+
+    Auth: standard ``request.state.user`` guard — unauthenticated callers receive
+    401 and no downstream traffic.
+
+    Returns a ``FinancialsBundleResponse``-shaped dict with the legs:
+      - fundamentals             (S3 /fundamentals/{id})
+      - fundamentals_snapshot    (S3 /fundamentals/{id}/snapshot)
+      - income_statement         (S3 /fundamentals/{id}/income-statement)
+      - earnings_history         (S3 /fundamentals/{id}/earnings-annual-trend)
+      - share_statistics         (S3 /fundamentals/{id}/share-statistics)
+      - splits_dividends         (S3 /fundamentals/{id}/splits-dividends)
+      - beat_miss_history        (alias of earnings_history — see schema docstring)
+      - fundamentals_timeseries  (always None today — see schema docstring)
+    """
+    if not getattr(request.state, "user", None):
+        raise HTTPException(status_code=401, detail="Authentication required")
+
+    clients = _clients(request)
+
+    # WHY a fresh make_headers per leg: InternalJWTMiddleware on each downstream
+    # service enforces JTI replay detection. Sharing one JWT across N parallel
+    # legs would cause all but one to be rejected.
+    def _h() -> dict[str, str]:
+        return _auth_headers(request)
+
+    iid = str(instrument_id)
+
+    async def _fetch_json(path: str) -> dict[str, Any] | None:
+        """Fetch ``path`` from S3 market-data; return JSON dict or None on failure.
+
+        Failure modes coalesced to None:
+          - non-2xx status (404 missing, 5xx downstream sick, etc.)
+          - httpx transport error (connect, read, timeout)
+          - JSON parse error (downstream returned non-JSON)
+        """
+        try:
+            resp = await clients.market_data.get(path, headers=_h())
+        except (httpx.HTTPError, OSError) as exc:
+            logger.warning(
+                "financials_bundle_leg_failed",
+                path=path,
+                instrument_id=iid,
+                error=f"{type(exc).__name__}: {exc}",
+            )
+            return None
+        if resp.status_code != 200:
+            logger.warning(
+                "financials_bundle_leg_non_200",
+                path=path,
+                instrument_id=iid,
+                status=resp.status_code,
+            )
+            return None
+        try:
+            data = resp.json()
+        except ValueError as exc:
+            logger.warning(
+                "financials_bundle_leg_decode_failed",
+                path=path,
+                instrument_id=iid,
+                error=str(exc),
+            )
+            return None
+        # Defensive: legs are typed as dict[str, Any] in the schema. If a leg
+        # somehow returned a list or scalar, coerce to None so the response
+        # model validates cleanly.
+        return data if isinstance(data, dict) else None
+
+    (
+        fundamentals_data,
+        snapshot_data,
+        income_statement_data,
+        earnings_history_data,
+        share_statistics_data,
+        splits_dividends_data,
+    ) = await asyncio.gather(
+        _fetch_json(f"/api/v1/fundamentals/{iid}"),
+        _fetch_json(f"/api/v1/fundamentals/{iid}/snapshot"),
+        _fetch_json(f"/api/v1/fundamentals/{iid}/income-statement"),
+        _fetch_json(f"/api/v1/fundamentals/{iid}/earnings-annual-trend"),
+        _fetch_json(f"/api/v1/fundamentals/{iid}/share-statistics"),
+        _fetch_json(f"/api/v1/fundamentals/{iid}/splits-dividends"),
+        return_exceptions=False,
+    )
+
+    return {
+        "fundamentals": fundamentals_data,
+        "fundamentals_snapshot": snapshot_data,
+        "income_statement": income_statement_data,
+        "earnings_history": earnings_history_data,
+        "share_statistics": share_statistics_data,
+        "splits_dividends": splits_dividends_data,
+        # WHY alias: BeatMissHistoryPanel re-uses the earnings-history cache
+        # key already, but the bundle exposes a distinct field so a future
+        # rename of the panel's query key does not silently break the
+        # cold-start path. Today this field is the same object as earnings_history.
+        "beat_miss_history": earnings_history_data,
+        # WHY None: the FundamentalsTimeseriesChart panel has a metric/period
+        # selector — the bundle endpoint cannot prefetch a specific metric+period
+        # because the active selection lives in client state. The panel keeps
+        # its own self-fetch; the bundle reserves the field for a future
+        # default-metric prefetch without breaking the response shape.
+        "fundamentals_timeseries": None,
+    }
 
 
 # NOTE: /snapshot MUST be registered before /{instrument_id} to prevent FastAPI

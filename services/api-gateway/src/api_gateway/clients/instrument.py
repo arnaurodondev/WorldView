@@ -311,15 +311,24 @@ async def get_instrument_page_bundle(
     Composed sub-resources (each returns the same shape the dedicated
     endpoint would return, so the FE can prime its TanStack Query caches):
 
-      - overview         : the existing CompanyOverview composite
-                           (instrument + quote + fundamentals header + ohlcv 90d).
-                           Required-ish — if this fails the page is essentially
-                           empty, but bundle still returns 200 with overview=null
-                           so the FE can render its own "not found" UI.
-      - fundamentals     : full all-sections fundamentals (FundamentalsTab feed)
-      - technicals       : technicals_snapshot section
-      - insider          : insider transactions snapshot
-      - top_news         : entity-scoped top-N news (limit=5, public)
+      - overview            : the existing CompanyOverview composite
+                              (instrument + quote + fundamentals header + ohlcv 90d).
+                              Required-ish — if this fails the page is essentially
+                              empty, but bundle still returns 200 with overview=null
+                              so the FE can render its own "not found" UI.
+      - fundamentals        : full all-sections fundamentals (FundamentalsTab feed)
+      - fundamentals_snapshot: pre-computed derived-metrics snapshot
+                              (eps_ttm, beta, free_cash_flow, etc.). Quote-tab
+                              MetricsTable consumes this — bundling avoids the
+                              dedicated /snapshot RTT on first paint (PLAN-0099
+                              follow-up G / audit Q1).
+      - technicals          : technicals_snapshot section
+      - share_statistics    : share count + ownership % (insiders/institutions);
+                              Quote-tab MetricsTable consumes this — bundling
+                              avoids the dedicated /share-statistics RTT on
+                              first paint (PLAN-0099 follow-up G).
+      - insider             : insider transactions snapshot
+      - top_news            : entity-scoped top-N news (limit=5, public)
 
     QA-iter1 fixes:
       - insider path was wrong (missing -snapshot suffix) → silent 404. Fixed.
@@ -382,10 +391,23 @@ async def get_instrument_page_bundle(
         #
         # All 5 calls now fly in parallel — the prior Phase 1 / Phase 2
         # sequential split was only there to bridge the two id namespaces.
-        overview_data, fundamentals_data, technicals_data, insider_data, news_data = await asyncio.gather(
+        # PLAN-0099 follow-up G: include fundamentals_snapshot + share_statistics
+        # so the Quote-tab MetricsTable hook (useMetricsTableData) finds them
+        # already in TanStack Query cache on first paint, eliminating 2 RTTs.
+        (
+            overview_data,
+            fundamentals_data,
+            fundamentals_snapshot_data,
+            technicals_data,
+            share_statistics_data,
+            insider_data,
+            news_data,
+        ) = await asyncio.gather(
             _safe_overview(),
             _safe_md(f"/api/v1/fundamentals/{instrument_id}"),
+            _safe_md(f"/api/v1/fundamentals/{instrument_id}/snapshot"),
             _safe_md(f"/api/v1/fundamentals/{instrument_id}/technicals-snapshot"),
+            _safe_md(f"/api/v1/fundamentals/{instrument_id}/share-statistics"),
             _safe_md(f"/api/v1/fundamentals/{instrument_id}/insider-transactions-snapshot"),
             _safe_nlp(f"/api/v1/entities/{instrument_id}/briefing-articles", params={"limit": 5}),
         )
@@ -397,7 +419,9 @@ async def get_instrument_page_bundle(
             "entity_id": instrument_id,
             "overview": overview_data,
             "fundamentals": fundamentals_data,
+            "fundamentals_snapshot": fundamentals_snapshot_data,
             "technicals": technicals_data,
+            "share_statistics": share_statistics_data,
             "insider": insider_data,
             "top_news": news_data,
         }
@@ -417,7 +441,9 @@ async def get_instrument_page_bundle(
             "entity_id": instrument_id,
             "overview": None,
             "fundamentals": None,
+            "fundamentals_snapshot": None,
             "technicals": None,
+            "share_statistics": None,
             "insider": None,
             "top_news": None,
         }

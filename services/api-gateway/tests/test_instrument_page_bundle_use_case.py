@@ -73,7 +73,23 @@ _EXPECTED_BUNDLE: dict = {
         "ohlcv": {"bars": [{"timestamp": "2026-01-01", "close": 172.50}]},
     },
     "fundamentals": {"sections": {"Highlights": {"MarketCap": 2_700_000_000_000.0}}},
+    # PLAN-0099 follow-up G: snapshot + share-statistics now bundled to
+    # eliminate Quote-tab MetricsTable RTTs on first paint.
+    "fundamentals_snapshot": {"eps_ttm": 6.42, "beta": 1.28, "free_cash_flow": 99_584_000_000.0},
     "technicals": {"RSI": 58.4, "MACD": 0.42},
+    "share_statistics": {
+        "records": [
+            {
+                "section": "share_statistics",
+                "data": {
+                    "shares_outstanding": 15_204_137_000,
+                    "shares_float": 15_184_460_000,
+                    "percent_insiders": 0.07,
+                    "percent_institutions": 61.91,
+                },
+            }
+        ]
+    },
     "insider": {"transactions": [{"name": "Tim Cook", "shares": -10000}]},
     "top_news": {"articles": [{"title": "Apple reports record earnings"}]},
 }
@@ -83,7 +99,9 @@ _PARTIAL_BUNDLE: dict = {
     "entity_id": _VALID_UUID,
     "overview": None,  # overview leg failed
     "fundamentals": None,
+    "fundamentals_snapshot": None,
     "technicals": None,
+    "share_statistics": None,
     "insider": None,
     "top_news": None,
 }
@@ -114,13 +132,21 @@ async def test_instrument_page_bundle_happy_path() -> None:
     assert "entity_id" in result
     assert "overview" in result
     assert "fundamentals" in result
+    # PLAN-0099 follow-up G: assert the two new bundled legs round-trip.
+    assert "fundamentals_snapshot" in result
     assert "technicals" in result
+    assert "share_statistics" in result
     assert "insider" in result
     assert "top_news" in result
 
     # Values must pass through unchanged.
     assert result["overview"]["instrument"]["ticker"] == "AAPL"
     assert result["instrument_id"] == _VALID_UUID
+    # Verify the new legs forward their inner shape verbatim (frontend uses
+    # these values to seed qk.instruments.fundamentalsSnapshot / shareStatistics
+    # caches; any shape mutation here would silently break MetricsTable).
+    assert result["fundamentals_snapshot"]["eps_ttm"] == 6.42
+    assert result["share_statistics"]["records"][0]["data"]["shares_outstanding"] == 15_204_137_000
 
 
 @pytest.mark.asyncio
@@ -200,6 +226,9 @@ async def test_instrument_page_bundle_partial_bundle_passthrough() -> None:
 
     assert result["overview"] is None
     assert result["fundamentals"] is None
+    # PLAN-0099 follow-up G: new legs degrade to None like all others.
+    assert result["fundamentals_snapshot"] is None
+    assert result["share_statistics"] is None
     assert result["instrument_id"] == _VALID_UUID
 
 

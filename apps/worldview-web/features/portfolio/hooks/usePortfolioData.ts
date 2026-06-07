@@ -309,24 +309,35 @@ export function usePortfolioData(
   // permanent. Avoids redundant requests on tab switches.
   // WHY holdingOverviews(ids): sorted IDs ensure a stable cache bucket even if
   // holdingInstrumentIds is produced in different iteration order after mutations.
+  //
+  // PLAN-0099 F-1 FIX (2026-06-06): collapsed the N parallel
+  // getCompanyOverview() calls into a single POST /v1/companies/overviews:batch
+  // round-trip. Previously a 20-holding portfolio fired 20 sequential HTTP +
+  // auth round-trips; now it's exactly one. The returned shape (HoldingOverviewMap
+  // keyed by instrument_id) is unchanged so all downstream call sites
+  // (enrichedHoldings, computeAllocations) continue to work without edits.
   const { data: holdingOverviews } = useQuery({
     queryKey: qk.portfolios.holdingOverviews(holdingInstrumentIds),
     queryFn: async () => {
-      const results = await Promise.all(
-        holdingInstrumentIds.map((id) =>
-          createGateway(accessToken).getCompanyOverview(id).catch(() => null),
-        ),
-      );
+      // Batch fetch — S9 fans out server-side and returns null per leg on failure.
+      const overviewsMap = await createGateway(accessToken)
+        .getCompanyOverviewsBatch(holdingInstrumentIds)
+        .catch(() => ({}) as Record<string, null>);
       return Object.fromEntries(
-        holdingInstrumentIds.map((id, i) => [
-          id,
-          {
-            sector: results[i]?.instrument?.gics_sector ?? null,
-            ticker: results[i]?.instrument?.ticker ?? null,
-            name: results[i]?.instrument?.name ?? null,
-            entity_id: results[i]?.instrument?.entity_id ?? null,
-          },
-        ]),
+        holdingInstrumentIds.map((id) => {
+          // WHY indirect: overviewsMap may be missing the key if the batch
+          // endpoint returned a partial response — coerce to null safely.
+          const ov = overviewsMap[id] ?? null;
+          return [
+            id,
+            {
+              sector: ov?.instrument?.gics_sector ?? null,
+              ticker: ov?.instrument?.ticker ?? null,
+              name: ov?.instrument?.name ?? null,
+              entity_id: ov?.instrument?.entity_id ?? null,
+            },
+          ];
+        }),
       ) as HoldingOverviewMap;
     },
     enabled: holdingInstrumentIds.length > 0 && !!accessToken,

@@ -123,11 +123,39 @@ export function InstrumentPageClient({ entityId }: InstrumentPageClientProps) {
 
     // WHY NOT fundamentals (BP-379): the bundle's `fundamentals` field is a
     // raw FundamentalsSectionResponse (section-records array). The
-    // qk.instruments.fundamentalsSnapshot cache key is consumed by the
-    // Financials tab which expects the flat `Fundamentals` shape returned by
-    // getFundamentals(). Seeding the wrong shape locks the cache for the
-    // entire staleTime window (~5min) and the Financials tab renders all
-    // "—". The snapshot hook fires its own fetch on tab open instead.
+    // qk.instruments.fundamentals cache key (consumed by getFundamentals()
+    // → useMetricsTableData) expects the flat `Fundamentals` shape produced
+    // by the client-side transformer. Seeding the wrong shape locks the
+    // cache for the entire staleTime window (~1hr) and the Financials/Quote
+    // tabs render all "—". The fundamentals hook fires its own fetch.
+    // PLAN-0099 follow-up G note: we considered flattening here to address
+    // BP-379 but the transformer lives inside getFundamentals() in
+    // lib/api/instruments.ts (highlights + valuation_ratios + analyst_consensus
+    // + technicals_snapshot merge) — duplicating that here would risk
+    // divergence. Skipped per task instructions; keeps BP-379 behaviour intact.
+
+    // PLAN-0099 follow-up G (audit Q1): seed fundamentalsSnapshot +
+    // shareStatistics caches so useMetricsTableData (Quote tab) finds them
+    // pre-warmed on first paint, eliminating 2 RTTs. The cache keys
+    // (qk.instruments.fundamentalsSnapshot / .shareStatistics) MUST match
+    // the keys read by useMetricsTableData.ts:67-89 verbatim — otherwise
+    // the Quote tab fires the network calls anyway.
+    if (bundle.fundamentals_snapshot) {
+      queryClient.setQueryData(
+        qk.instruments.fundamentalsSnapshot(instrumentId),
+        bundle.fundamentals_snapshot,
+      );
+    }
+    // WHY share_statistics: same shape as the dedicated
+    // /v1/fundamentals/{id}/share-statistics endpoint (FundamentalsSectionResponse).
+    // getShareStatistics() returns the response verbatim — no transformer —
+    // so seeding the bundle leg directly is safe.
+    if (bundle.share_statistics) {
+      queryClient.setQueryData(
+        qk.instruments.shareStatistics(instrumentId),
+        bundle.share_statistics,
+      );
+    }
   }, [bundle, entityId, queryClient]);
 
   // ── Layout ────────────────────────────────────────────────────────────────
