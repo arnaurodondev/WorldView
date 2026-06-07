@@ -312,6 +312,7 @@ async def test_integration_dispatcher_publishes_event(settings) -> None:
         row = (await session.execute(query)).scalars().first()
 
     assert row is not None, "Expected inserted outbox row to exist"
+    assert row.status == "published"
 
 
 # ---------------------------------------------------------------------------
