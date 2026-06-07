@@ -381,9 +381,11 @@ services:
       # Short HTTP timeout so the worker fails-fast on EODHD rate-limits in CI
       MARKET_INGESTION_PROVIDER_HTTP_TIMEOUT_SECONDS: "5"
       # Fast idle-poll so newly-triggered tasks are claimed within the test's
-      # 30 s deadline even when the queue has accumulated retrying tasks from
+      # 60 s deadline even when the queue has accumulated retrying tasks from
       # prior tests in the same E2E session (R12 — E2E task-progression fix).
-      MARKET_INGESTION_WORKER_IDLE_SLEEP_SECONDS: "1.0"
+      # Reduced 1.0s → 0.5s post-PLAN-0104 after CI still timed out at 30 s
+      # on c3acbf96. Test deadline also bumped 30s→60s in the same patch.
+      MARKET_INGESTION_WORKER_IDLE_SLEEP_SECONDS: "0.5"
     command: ["python", "-m", "market_ingestion.infrastructure.workers.worker_main"]
     healthcheck:
       test: ["CMD", "python", "-c", "import sys; sys.exit(0)"]
