@@ -214,17 +214,85 @@ function PanelContent({
   }
 }
 
+// ── Panel freshness footer ─────────────────────────────────────────────────────
+
+/**
+ * PanelFreshnessFooter — 18px strip at the bottom of each panel showing:
+ *   "RT 09:32:14 EODHD · 287 ms"
+ *
+ * WHY THIS EXISTS: PRD-0089 DESIGN-09 §A.3 adds per-panel data freshness so
+ * traders know at a glance how stale each panel's data is without hovering
+ * or opening a settings panel. Mirrors Bloomberg's "RT" (real-time) footer.
+ *
+ * WHY 18px (h-[18px]): design spec §A.6 specifies exactly 18px for this strip.
+ * It must be visually subordinate to the 24px panel header.
+ *
+ * WHY format as HH:MM:SS: financial data freshness is time-critical —
+ * "09:32:14" is immediately actionable; "2 minutes ago" is not.
+ */
+function PanelFreshnessFooter({
+  lastUpdatedAt,
+  source = "EODHD",
+  latencyMs,
+}: {
+  lastUpdatedAt: Date;
+  source?: string;
+  latencyMs?: number;
+}) {
+  // WHY format with padStart: HH:MM:SS zero-padding is a financial terminal
+  // convention — "09:32:04" is immediately scannable; "9:32:4" is not.
+  const hh = String(lastUpdatedAt.getHours()).padStart(2, "0");
+  const mm = String(lastUpdatedAt.getMinutes()).padStart(2, "0");
+  const ss = String(lastUpdatedAt.getSeconds()).padStart(2, "0");
+  const timeStr = `${hh}:${mm}:${ss}`;
+
+  return (
+    // WHY border-t border-border/30: half-opacity divider so the footer
+    // is structurally separate from content without dominating it visually.
+    // WHY bg-background (not bg-card): slight contrast shift signals this
+    // is meta-information rather than data content.
+    <div
+      data-testid="panel-freshness-footer"
+      className="flex h-[18px] shrink-0 items-center gap-1 border-t border-border/30 bg-background px-2"
+    >
+      {/* "RT" prefix — Bloomberg shorthand for "Real-Time". Always rendered
+          regardless of actual data source, matching terminal convention. */}
+      <span className="font-mono text-[9px] tabular-nums text-muted-foreground/70">
+        RT {timeStr} {source}
+        {latencyMs !== undefined && (
+          // WHY middot separator: compact separator that doesn't add horizontal
+          // space while keeping the latency visually distinct from the source tag.
+          <> · {latencyMs} ms</>
+        )}
+      </span>
+    </div>
+  );
+}
+
 // ── Main component ─────────────────────────────────────────────────────────────
 
 interface WorkspacePanelContainerProps {
   panel: WorkspacePanel;
   /** The workspace this panel belongs to — needed for the close button */
   workspaceId: string;
+  /**
+   * PRD-0089 Wave J: optional data freshness timestamp for the panel footer.
+   * When provided, renders the 18px "RT HH:MM:SS EODHD · N ms" freshness strip.
+   * When null/undefined, the footer is omitted (backward-compatible).
+   */
+  lastUpdatedAt?: Date | null;
+  /** Data source label for the freshness footer. Defaults to "EODHD". */
+  freshnessSource?: string;
+  /** Last fetch latency in ms for the freshness footer. Optional. */
+  freshnessLatencyMs?: number;
 }
 
 export function WorkspacePanelContainer({
   panel,
   workspaceId,
+  lastUpdatedAt,
+  freshnessSource = "EODHD",
+  freshnessLatencyMs,
 }: WorkspacePanelContainerProps) {
   const { removePanelFromWorkspace } = useWorkspace();
   // WHY useSymbolLink (not useSymbolLinking): we only need this panel's view of the
@@ -328,6 +396,21 @@ export function WorkspacePanelContainer({
           linkedEntityId={isLinked ? entityId : null}
         />
       </div>
+
+      {/* ── Panel freshness footer (PRD-0089 Wave J) ─────────────────────── */}
+      {/*
+       * WHY conditional render (not always visible): the spec §A.3 says the
+       * footer is "optional, rendered only when the panel widget exposes a
+       * lastUpdatedAt prop". Panels without data fetching (e.g. chat) don't
+       * have a meaningful freshness timestamp to show.
+       */}
+      {lastUpdatedAt && (
+        <PanelFreshnessFooter
+          lastUpdatedAt={lastUpdatedAt}
+          source={freshnessSource}
+          latencyMs={freshnessLatencyMs}
+        />
+      )}
     </div>
   );
 }

@@ -45,6 +45,8 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { formatRelativeTime, cn } from "@/lib/utils";
 import { InlineEmptyState } from "@/components/data/InlineEmptyState";
+// WHY sonner toast: consistent toast pattern across the app (SemanticHoldingsTable uses same import).
+import { toast } from "sonner";
 import type { AlertSeverity, Alert } from "@/types/api";
 
 // ── Constants ─────────────────────────────────────────────────────────────────
@@ -97,9 +99,19 @@ function safeJsonGet<T>(key: string, fallback: T): T {
 export interface AlertsListProps {
   /** Alert id selected via the ?selected= URL param, or null when none. */
   selectedId?: string | null;
+  /**
+   * PRD-0089 Wave J: optional severity filter from the keyboard pill strip.
+   * When set, only alerts of this severity are shown in the active groups.
+   * null / undefined = show all severities (no filter).
+   *
+   * WHY prop (not internal state): the parent page owns the pill strip and its
+   * keyboard shortcuts, so the severity filter lives up in the page and is
+   * pushed down here as a controlled prop.
+   */
+  filterSeverity?: AlertSeverity | null;
 }
 
-export function AlertsList({ selectedId = null }: AlertsListProps = {}) {
+export function AlertsList({ selectedId = null, filterSeverity = null }: AlertsListProps = {}) {
   const { accessToken } = useAuth();
   const router = useRouter();
 
@@ -522,6 +534,12 @@ export function AlertsList({ selectedId = null }: AlertsListProps = {}) {
 
       {/* ── Severity groups ────────────────────────────────────────────────── */}
       {SEVERITY_ORDER.map((sev) => {
+        // PRD-0089 Wave J: honour the filterSeverity prop from the pill strip.
+        // WHY filter here (not in activeAlertsBySeverity derivation): the severity
+        // groups already compute all severities. Filtering at render time means we
+        // don't need to recompute the memoized group map when the pill changes.
+        if (filterSeverity && filterSeverity !== sev) return null;
+
         const sevAlerts = activeAlertsBySeverity[sev] ?? [];
         if (sevAlerts.length === 0) return null;
 
@@ -572,6 +590,31 @@ export function AlertsList({ selectedId = null }: AlertsListProps = {}) {
                   onSelect={() => handleSelect(alert.alert_id)}
                   onAck={() => handleAck(alert.alert_id)}
                   onSnooze={(minutes) => handleSnooze(alert.alert_id, minutes)}
+                  // PRD-0089 Wave J: hover dismiss action
+                  // WHY fire-and-forget backend call with toast: the endpoint
+                  // `DELETE /v1/alerts/{id}` may not be deployed yet (§C.3).
+                  // We do an optimistic local ACK + attempt backend delete.
+                  // show a toast regardless so the user gets confirmation.
+                  onDismiss={() => {
+                    // Optimistic: ACK locally so the row disappears immediately.
+                    handleAck(alert.alert_id);
+                    // WHY cast to any: gateway doesn't expose deleteAlert yet (§C.3 backend gap).
+                    // The optional-chain guard prevents a runtime crash; the cast silences TS.
+                    // When the endpoint ships, replace with a properly typed gateway method.
+                    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                    const gw = createGateway(accessToken) as any;
+                    if (typeof gw.deleteAlert === "function") {
+                      void (gw.deleteAlert(alert.alert_id) as Promise<unknown>)
+                        .catch(() => { /* ignore — backend endpoint may be absent */ });
+                    }
+                    toast("Alert dismissed");
+                  }}
+                  // PRD-0089 Wave J: hover View action — navigate to instrument page
+                  // WHY only when entity_id is present: navigating to /instruments/undefined
+                  // would 404. We check entity_id before providing the handler.
+                  onView={alert.entity_id ? () => {
+                    router.push(`/instruments/${alert.entity_id}`);
+                  } : undefined}
                   localOnly={localOnlyIds.has(alert.alert_id)}
                   // PLAN-0053 T-F-6-03: bulk-select wiring. The checkbox is
                   // always rendered so the user can multi-select without a
@@ -662,6 +705,16 @@ export interface AlertRowProps {
   onAck: () => void;
   onSnooze: (minutes: number) => void;
   /**
+   * PRD-0089 Wave J: called when the user clicks "Dismiss" in the hover action strip.
+   * Maps to DELETE /v1/alerts/{id}. Stub (no-op + toast) when the backend is absent.
+   */
+  onDismiss?: () => void;
+  /**
+   * PRD-0089 Wave J: called when the user clicks "View" in the hover action strip.
+   * Navigates to the instrument page for alert.entity_id. No-op when entity_id absent.
+   */
+  onView?: () => void;
+  /**
    * PLAN-0051 T-D-4-03: when true, render a "(local only)" badge next to the
    * alert label so the user knows the ACK/snooze didn't sync to the backend.
    */
@@ -697,6 +750,8 @@ export function AlertRow({
   onSelect,
   onAck,
   onSnooze,
+  onDismiss,
+  onView,
   localOnly,
   dimmed,
   selected = false,
@@ -714,7 +769,9 @@ export function AlertRow({
           remains scannable but visibly de-emphasised. */}
       <div
         className={cn(
-          "flex h-[20px] w-full items-center gap-1.5 border-b border-border/30 px-2 hover:bg-muted/40",
+          // WHY group: Tailwind group enables group-hover:flex on the action strip
+          // children, so Dismiss/Snooze/View appear ONLY on row hover.
+          "group flex h-[22px] w-full items-center gap-1.5 border-b border-border/30 px-2 hover:bg-muted/40",
           dimmed && "opacity-60",
           // PLAN-0053 T-F-6-03: tint selected rows so the bulk set is visible
           // even when the checkbox column scrolls out of view (rare in this
@@ -790,6 +847,60 @@ export function AlertRow({
             local only
           </span>
         )}
+
+        {/* ── PRD-0089 Wave J: hover action strip ─────────────────────────── */}
+        {/*
+         * WHY hidden by default / shown on group-hover: the row is already dense
+         * (22px). Showing action buttons only on hover preserves readability when
+         * scanning the full list — the buttons appear precisely when the user's
+         * pointer indicates intent to act.
+         *
+         * WHY group-hover:flex (not group-hover:block): the strip is a flex row
+         * of three buttons that need to lay out side by side.
+         *
+         * WHY absolute positioning (right-side push via ml-auto): the actions
+         * overlay the rightmost portion of the row rather than pushing content
+         * left, which would cause the row to re-flow on hover.
+         */}
+        <div className="ml-auto hidden shrink-0 items-center gap-1 group-hover:flex">
+
+          {/* Dismiss button — calls onDismiss (DELETE /v1/alerts/{id}) */}
+          {onDismiss && (
+            <button
+              type="button"
+              onClick={(e) => { e.stopPropagation(); onDismiss(); }}
+              className="rounded-[2px] border border-border/40 bg-muted/40 px-1.5 text-[9px] uppercase
+                         tracking-[0.06em] text-muted-foreground hover:border-negative/40 hover:text-negative"
+              aria-label="Dismiss this alert"
+            >
+              Dismiss
+            </button>
+          )}
+
+          {/* Snooze 1h quick-action */}
+          <button
+            type="button"
+            onClick={(e) => { e.stopPropagation(); onSnooze(60); }}
+            className="rounded-[2px] border border-border/40 bg-muted/40 px-1.5 text-[9px] uppercase
+                       tracking-[0.06em] text-muted-foreground hover:text-foreground"
+            aria-label="Snooze this alert for 1 hour"
+          >
+            Snooze 1h
+          </button>
+
+          {/* View button — navigate to instrument page for the alert's entity */}
+          {onView && (
+            <button
+              type="button"
+              onClick={(e) => { e.stopPropagation(); onView(); }}
+              className="rounded-[2px] border border-border/40 bg-muted/40 px-1.5 text-[9px] uppercase
+                         tracking-[0.06em] text-muted-foreground hover:text-foreground"
+              aria-label="View instrument page for this alert"
+            >
+              View
+            </button>
+          )}
+        </div>
 
         {/* ACK / Snooze dropdown.
             PLAN-0051 T-D-4-03: snooze options expanded to 15m/1h/EOD/24h

@@ -42,6 +42,10 @@ import { useEffect, useRef, useState } from "react";
 import { useSearchParams, useRouter } from "next/navigation";
 import { SymbolLinkingProvider } from "@/contexts/SymbolLinkingContext";
 import { WorkspaceSymbolProvider, useWorkspaceSymbol } from "@/contexts/WorkspaceSymbolContext";
+// WHY WorkspaceSyncProvider here (not in layout.tsx): crosshair sync is workspace-scoped
+// state. It should reset when the user navigates away from /workspace and should
+// be separate from global app context.
+import { WorkspaceSyncProvider } from "@/contexts/WorkspaceSyncContext";
 import { WorkspaceTabs } from "@/components/workspace/WorkspaceTabs";
 // PLAN-0059 G-2: WorkspaceGrid stays statically imported. Considered for
 // dynamic-import (it pulls react-resizable-panels + every panel widget) but
@@ -53,6 +57,8 @@ import { WorkspaceTabs } from "@/components/workspace/WorkspaceTabs";
 import { WorkspaceGrid } from "@/components/workspace/WorkspaceGrid";
 import { ShareWorkspaceDialog } from "@/components/workspace/ShareWorkspaceDialog";
 import { NewFromTemplateDialog } from "@/components/workspace/NewFromTemplateDialog";
+// PRD-0089 Wave J: new 24px utility strip with Add panel / Template / Share / CrosshairSync.
+import { WorkspaceUtilityRow } from "@/components/workspace/WorkspaceUtilityRow";
 import {
   useWorkspace,
   type WorkspaceConfig,
@@ -266,6 +272,13 @@ function WorkspacePageInner() {
   const searchParams = useSearchParams();
   const router = useRouter();
 
+  // WHY booleans for dialog open state here (not in WorkspaceUtilityRow):
+  // The NewFromTemplateDialog and ShareWorkspaceDialog are already instantiated
+  // below with state wired to the page-level state. The WorkspaceUtilityRow
+  // just calls the callbacks — it doesn't own the dialog state.
+  const [_templateOpen, _setTemplateOpen] = useState(false);
+  const [_shareOpen, _setShareOpen] = useState(false);
+
   // WHY ref-guarded effect: useEffect runs in StrictMode twice during dev. We
   // must NOT import the same shared workspace twice. The ref ensures only the
   // first run does the import work.
@@ -334,6 +347,10 @@ function WorkspacePageInner() {
     // state resets when the user navigates away from /workspace — correct behaviour.
     // Each workspace tab switch does NOT reset it (they're all inside this one
     // WorkspacePageInner instance); only navigating away from /workspace resets.
+    // WHY WorkspaceSyncProvider wraps WorkspaceSymbolProvider: crosshair sync must
+    // be available to all chart panels inside the grid, which are nested inside both
+    // providers. The sync provider is workspace-scoped (resets on /workspace leave).
+    <WorkspaceSyncProvider>
     <WorkspaceSymbolProvider>
       <div className="flex flex-col h-full min-h-0">
         {/* ── Bloomberg-style workspace symbol bar ─────────────────────── */}
@@ -357,10 +374,67 @@ function WorkspacePageInner() {
          */}
         <WorkspaceTabs />
         {activeWorkspace && (
-          <div className="flex h-6 shrink-0 items-center justify-end gap-1 border-b border-border bg-background px-2">
-            <NewFromTemplateDialog onCreate={handleCreateFromTemplate} />
-            <ShareWorkspaceDialog config={activeWorkspace} />
-          </div>
+          // PRD-0089 Wave J: replaced the old inline button row with WorkspaceUtilityRow.
+          // The dialogs (NewFromTemplateDialog / ShareWorkspaceDialog) use custom trigger
+          // elements so their open state stays inside the dialog components.
+          // WorkspaceUtilityRow's onTemplate/onShare callbacks programmatically open them
+          // via the hidden trigger refs below.
+          <>
+            {/* Hidden trigger refs — allow WorkspaceUtilityRow buttons to open dialogs */}
+            {/*
+             * WHY hidden span with dialog inside: WorkspaceUtilityRow fires onTemplate /
+             * onShare callbacks. We need those callbacks to open the respective dialogs.
+             * The dialogs own their open state internally (not controlled from outside).
+             * Solution: render the dialogs with custom trigger elements that are hidden
+             * (sr-only), and expose a ref-accessible button. Then the utility row callback
+             * simulates a click on that hidden button.
+             *
+             * SIMPLER ALTERNATIVE: pass open/setOpen to dialogs. But the dialog components
+             * only expose `trigger` prop (not `open`). Modifying them is out of scope.
+             * The hidden-trigger pattern is a common workaround for uncontrolled Radix dialogs.
+             */}
+            <span className="sr-only">
+              <NewFromTemplateDialog
+                onCreate={handleCreateFromTemplate}
+                trigger={
+                  <button
+                    id="workspace-template-trigger"
+                    aria-label="Open template dialog"
+                    type="button"
+                  />
+                }
+              />
+              <ShareWorkspaceDialog
+                config={activeWorkspace}
+                trigger={
+                  <button
+                    id="workspace-share-trigger"
+                    aria-label="Open share dialog"
+                    type="button"
+                  />
+                }
+              />
+            </span>
+            <WorkspaceUtilityRow
+              workspace={activeWorkspace}
+              onAddPanel={() => {
+                // WHY dispatch custom event: WorkspaceGrid owns the tray open state
+                // internally. We can signal it to open via a custom DOM event rather
+                // than prop-drilling a setter through the page → grid chain.
+                // This keeps the coupling loose — the grid listens, the page fires.
+                window.dispatchEvent(new CustomEvent("workspace:open-add-panel-tray"));
+              }}
+              onTemplate={() => {
+                // Simulate click on the hidden trigger button that opens the dialog
+                const btn = document.getElementById("workspace-template-trigger");
+                btn?.click();
+              }}
+              onShare={() => {
+                const btn = document.getElementById("workspace-share-trigger");
+                btn?.click();
+              }}
+            />
+          </>
         )}
 
         {/* ── Resizable panel grid ──────────────────────────────────────── */}
@@ -389,6 +463,7 @@ function WorkspacePageInner() {
         )}
       </div>
     </WorkspaceSymbolProvider>
+    </WorkspaceSyncProvider>
   );
 }
 
