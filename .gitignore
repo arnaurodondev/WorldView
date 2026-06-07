@@ -74,6 +74,9 @@ results/boost_sweep_*.json
 .claude/projects/
 .claude/worktrees/
 .claude/scheduled_tasks.lock
+
+# PLAN-0107 D-2: per-checkout parallel-session lockfile (never commit).
+.worktree-lock
 .claire/
 .mcp.json
 
