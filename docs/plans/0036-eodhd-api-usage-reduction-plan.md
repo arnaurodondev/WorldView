@@ -886,16 +886,11 @@ eodhd_monthly_credits_limit = Gauge(
     "s2_eodhd_monthly_credits_limit",
     "Monthly credit hard limit"
 )
-eodhd_cache_hits_total = Counter(
-    "s2_eodhd_cache_hits_total",
-    "Valkey response cache hits",
-    labelnames=["endpoint"]
-)
-eodhd_cache_misses_total = Counter(
-    "s2_eodhd_cache_misses_total",
-    "Valkey response cache misses",
-    labelnames=["endpoint"]
-)
+# NOTE (PLAN-0107 A-5, 2026-06-05): the per-endpoint cache Counters originally
+# proposed here were removed because no cache existed in the request path to
+# emit them. They have been replaced by the provider-agnostic
+# ``s2_mi_provider_cache_{hits,misses,errors}_total`` family declared in
+# ``market_ingestion.application.metrics.cache`` (see PLAN-0107 Wave A-4).
 ```
 
 ### 12.2 Grafana Dashboard — `eodhd-health.json`
