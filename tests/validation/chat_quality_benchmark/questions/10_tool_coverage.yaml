@@ -1,0 +1,426 @@
+# Tool-coverage pack (PLAN-0107 follow-up, Agent D recommendation)
+#
+# Target: 1-2 questions per currently-untested tool (~16-20 questions).
+# Authoring date: 2026-06-06.
+#
+# Background:
+#   The existing 00_real_user_and_aggregate.yaml pack exercises 11 of the 25
+#   tools registered in tool_registry_builder.py. The remaining 14 tools had
+#   ZERO benchmark signal — silent regressions in their schemas, routing, or
+#   handlers would not have surfaced in chat-eval runs. This pack closes that
+#   coverage gap with one to two purposefully-distinct prompts per tool.
+#
+# Rules followed:
+#   - Every question MUST have a `rubric` block with required_facts +
+#     expected_depth (PLAN-0107 LLM-judge v2.0 needs this to score). The judge
+#     scores routing + grounding + framing — NOT length, so we keep prompts
+#     terse and let `required_facts` carry the substance criterion.
+#   - `expected_tools` is a SET — we list multiple acceptable tools whenever
+#     more than one would be a legitimate route. Common pairings:
+#       * get_entity_narrative ≈ get_entity_intelligence (the latter wraps
+#         narrative + paths + health; the LLM may pick either).
+#       * search_events ≈ search_documents for news-shaped event questions.
+#       * get_price_history ≈ query_fundamentals for "what was the high/low".
+#   - Use entity_aliases when the ticker has known aliases (e.g. MicroStrategy
+#     ≡ Strategy ≡ MSTR since the 2025 rebrand; Meta ≡ Facebook ≡ META).
+#   - Phrasing variety: avoid the "Show me ..." monoculture — alternate
+#     conversational ("any chance you can …"), imperative ("Plot …"), and
+#     declarative-question ("When does Apple report next?") forms so the
+#     intent classifier is also exercised.
+#
+# Each question's `notes:` block explains WHY it exists and what failure mode
+# it guards against. When a tool is ambiguous (e.g. macro vs. earnings
+# calendar) we annotate which tools the agent might mistakenly pick.
+
+# ─── create_alert ──────────────────────────────────────────────────────────
+# WRITE-side tool. Test that the agent ROUTES here on an unambiguous "set an
+# alert" request. We don't validate side effects (the benchmark runs in a dev
+# tenant; persistence is exercised by S10 contract tests, not by us).
+- id: tc_create_alert_nvda_below
+  prompt: "Set an alert to notify me when NVDA drops below $400."
+  category: portfolio
+  tags: [tool_coverage, create_alert]
+  expected_max_latency_s: 60
+  must_not_say: []
+  rubric:
+    expected_tools: [create_alert]
+    required_facts: [nvda_ticker_identified, price_below_condition, threshold_400]
+    forbidden_facts: [silently_did_not_create, alert_unsupported_refusal]
+    expected_depth: shallow
+    appropriate_refusal_ok: false
+    entity_aliases:
+      NVDA: [Nvidia, NVIDIA]
+  notes: |
+    WHY this question: tests create_alert end-to-end routing. Without this
+    question the WRITE-side action tool has zero benchmark signal.
+    Watch for: agent may mistakenly call get_alerts (the READ counterpart),
+    or refuse with "I cannot create alerts" — both are routing bugs because
+    the tool description explicitly invites this phrasing.
+
+# ─── get_alerts ────────────────────────────────────────────────────────────
+- id: tc_get_alerts_list_active
+  prompt: "What alerts do I currently have set up?"
+  category: portfolio
+  tags: [tool_coverage, get_alerts]
+  expected_max_latency_s: 30
+  must_not_say: []
+  rubric:
+    expected_tools: [get_alerts]
+    required_facts: [alert_list_or_empty_state]
+    forbidden_facts: [fabricated_alert_thresholds]
+    expected_depth: shallow
+    appropriate_refusal_ok: false
+  notes: |
+    WHY: covers the READ companion to create_alert. Phrased conversationally
+    (not "show me my alerts") to exercise intent classification on the less
+    canonical phrasing.
+    Watch for: empty-list refusal masquerading as "no alerts feature".
+
+# ─── get_earnings_calendar ─────────────────────────────────────────────────
+- id: tc_earnings_apple_next
+  prompt: "When does Apple next report earnings?"
+  category: factual_lookup
+  tags: [tool_coverage, get_earnings_calendar]
+  expected_max_latency_s: 30
+  must_not_say: []
+  rubric:
+    expected_tools: [get_earnings_calendar]
+    required_facts: [apple_identified, next_earnings_date_or_window]
+    forbidden_facts: [fabricated_specific_date]
+    expected_depth: shallow
+    appropriate_refusal_ok: true   # If our calendar window doesn't cover it.
+    entity_aliases:
+      AAPL: [Apple, Apple Inc]
+  notes: |
+    WHY: targets single-entity earnings lookup. The agent might confuse this
+    with get_economic_calendar (FOMC, CPI) — distinct tool, distinct semantics.
+
+- id: tc_earnings_next_week_universe
+  prompt: "Which S&P 500 names report earnings next week?"
+  category: factual_lookup
+  tags: [tool_coverage, get_earnings_calendar]
+  expected_max_latency_s: 60
+  must_not_say: []
+  rubric:
+    expected_tools: [get_earnings_calendar]
+    required_facts: [date_range_next_week, list_of_tickers_or_empty_refusal]
+    forbidden_facts: [fabricated_ticker_list_without_tool_call]
+    expected_depth: medium
+    appropriate_refusal_ok: true
+  notes: |
+    WHY: range-based variant (from_date + to_date) versus the single-entity
+    look-up above. Tests that the agent passes a date window, not a ticker
+    filter (the tool has no ticker arg).
+
+# ─── get_entity_graph ──────────────────────────────────────────────────────
+- id: tc_entity_graph_tesla_neighbors
+  prompt: "What entities is Tesla directly connected to in your knowledge graph?"
+  category: relationship
+  tags: [tool_coverage, get_entity_graph]
+  expected_max_latency_s: 45
+  must_not_say: []
+  rubric:
+    expected_tools: [get_entity_graph]
+    required_facts: [tesla_identified, neighbour_list, relation_types_present]
+    forbidden_facts: [fabricated_relationships_no_tool_call]
+    expected_depth: medium
+    appropriate_refusal_ok: false
+    entity_aliases:
+      TSLA: [Tesla, Tesla Inc, Tesla Motors]
+  notes: |
+    WHY: structural neighbour lookup — distinct from get_entity_paths
+    (ranked multi-hop) and traverse_graph (X-to-Y). Agent often misroutes to
+    get_entity_intelligence; the phrase "directly connected" should disambiguate.
+
+- id: tc_entity_graph_filtered_relations
+  prompt: "Show me companies that are suppliers to Apple."
+  category: relationship
+  tags: [tool_coverage, get_entity_graph]
+  expected_max_latency_s: 45
+  must_not_say: []
+  rubric:
+    expected_tools: [get_entity_graph, search_entity_relations]
+    required_facts: [apple_identified, supplier_relation_type, supplier_list_or_empty]
+    forbidden_facts: [fabricated_supplier_names]
+    expected_depth: medium
+    appropriate_refusal_ok: true
+    entity_aliases:
+      AAPL: [Apple, Apple Inc]
+  notes: |
+    WHY: tests relation_types filter parameter — the agent should pass
+    relation_types=["supplier_of"] (or similar). Acceptable fallback is
+    search_entity_relations which also accepts a relation_type filter.
+
+# ─── get_entity_health ─────────────────────────────────────────────────────
+- id: tc_entity_health_palantir
+  prompt: "How comprehensive is your data coverage for Palantir?"
+  category: factual_lookup
+  tags: [tool_coverage, get_entity_health]
+  expected_max_latency_s: 30
+  must_not_say: []
+  rubric:
+    expected_tools: [get_entity_health]
+    required_facts: [palantir_identified, health_or_coverage_score, source_distribution_or_trend]
+    forbidden_facts: [generic_palantir_summary_no_health_data]
+    expected_depth: shallow
+    appropriate_refusal_ok: false
+    entity_aliases:
+      PLTR: [Palantir, Palantir Technologies]
+  notes: |
+    WHY: meta-question about data quality — only get_entity_health surfaces
+    the coverage/confidence numbers. Agent might wrongly fetch
+    get_entity_narrative (qualitative summary) instead.
+
+# ─── get_entity_narrative ──────────────────────────────────────────────────
+- id: tc_entity_narrative_anthropic
+  prompt: "Give me the narrative profile for Anthropic."
+  category: factual_lookup
+  tags: [tool_coverage, get_entity_narrative]
+  expected_max_latency_s: 45
+  must_not_say: []
+  rubric:
+    expected_tools: [get_entity_narrative, get_entity_intelligence]
+    required_facts: [anthropic_identified, narrative_summary_present]
+    forbidden_facts: [generic_web_knowledge_not_platform_curated]
+    expected_depth: medium
+    appropriate_refusal_ok: false
+  notes: |
+    WHY: explicitly asks for the platform-curated narrative artefact.
+    get_entity_intelligence is an acceptable superset (bundles narrative +
+    paths + health) so we list both as valid routes.
+
+# ─── get_fundamentals_history_batch ────────────────────────────────────────
+- id: tc_batch_fundamentals_mag5
+  prompt: "Compare quarterly fundamentals for MSFT, GOOGL, META, AMZN, and AAPL."
+  category: comparison
+  tags: [tool_coverage, get_fundamentals_history_batch]
+  expected_max_latency_s: 90
+  must_not_say: []
+  rubric:
+    expected_tools: [get_fundamentals_history_batch]
+    required_facts: [all_five_tickers_covered, per_ticker_metrics, quarterly_periods]
+    forbidden_facts: [serial_singleton_calls_loop, missing_tickers_silently]
+    expected_depth: deep
+    appropriate_refusal_ok: false
+  notes: |
+    WHY: explicit anti-pattern guard. The tool's description has a bolded
+    directive — "Use this tool — NOT get_fundamentals_history — when the
+    user mentions 2 or more tickers". This question tests that directive.
+    Watch for: 5 sequential get_fundamentals_history calls (the very bug
+    the batch tool exists to prevent — caught by ITER-9 chat-eval).
+
+# ─── get_market_movers ─────────────────────────────────────────────────────
+- id: tc_movers_today_gainers
+  prompt: "Who were today's biggest gainers?"
+  category: factual_lookup
+  tags: [tool_coverage, get_market_movers]
+  expected_max_latency_s: 30
+  must_not_say: []
+  rubric:
+    expected_tools: [get_market_movers]
+    required_facts: [list_of_tickers, percent_change_or_price_change]
+    forbidden_facts: [yesterdays_data_passed_off_as_today, fabricated_movers_list]
+    expected_depth: shallow
+    appropriate_refusal_ok: true   # OK to refuse if market closed and no movers.
+  notes: |
+    WHY: canonical gainers query — must pass mover_type='gainers' (default
+    anyway), period='1D'. Casual phrasing tests intent robustness.
+
+- id: tc_movers_week_losers
+  prompt: "Show me the biggest losers this week."
+  category: factual_lookup
+  tags: [tool_coverage, get_market_movers]
+  expected_max_latency_s: 30
+  must_not_say: []
+  rubric:
+    expected_tools: [get_market_movers]
+    required_facts: [list_of_tickers, percent_change_or_price_change, weekly_window]
+    forbidden_facts: [fabricated_losers_list]
+    expected_depth: shallow
+    appropriate_refusal_ok: true
+  notes: |
+    WHY: tests the period='1W' + mover_type='losers' parameter combination.
+    The agent often defaults to 1D — the "this week" hint must override.
+
+# ─── get_morning_brief ─────────────────────────────────────────────────────
+- id: tc_morning_brief_today
+  prompt: "What's in my morning brief today?"
+  category: portfolio
+  tags: [tool_coverage, get_morning_brief]
+  expected_max_latency_s: 45
+  must_not_say: []
+  rubric:
+    expected_tools: [get_morning_brief]
+    required_facts: [brief_headline_or_lead, at_least_one_section]
+    forbidden_facts: [generic_market_summary_not_user_specific]
+    expected_depth: medium
+    appropriate_refusal_ok: true   # OK if no brief generated yet today.
+  notes: |
+    WHY: PORTFOLIO-intent tool — keyed on the authenticated user, no inputs.
+    Agent might wrongly route to get_market_movers + get_entity_news to
+    "build a brief"; the dedicated tool must win.
+
+# ─── get_portfolio_context ─────────────────────────────────────────────────
+- id: tc_portfolio_semiconductor_exposure
+  prompt: "How much of my portfolio is in semiconductors?"
+  category: portfolio
+  tags: [tool_coverage, get_portfolio_context]
+  expected_max_latency_s: 45
+  must_not_say: []
+  rubric:
+    expected_tools: [get_portfolio_context]
+    required_facts: [portfolio_holdings_referenced, sector_exposure_or_percent]
+    forbidden_facts: [generic_semiconductor_outlook_no_portfolio_data]
+    expected_depth: medium
+    appropriate_refusal_ok: true   # OK if user has no positions.
+  notes: |
+    WHY: PORTFOLIO intent — phrase "my portfolio" is the explicit trigger
+    the tool description requires. Tests both routing AND sector aggregation
+    in the answer.
+
+- id: tc_portfolio_dividend_yielders
+  prompt: "Which of my holdings pay the highest dividends?"
+  category: portfolio
+  tags: [tool_coverage, get_portfolio_context]
+  expected_max_latency_s: 60
+  must_not_say: []
+  rubric:
+    expected_tools: [get_portfolio_context, query_fundamentals, get_fundamentals_history_batch]
+    required_facts: [portfolio_holdings_referenced, dividend_yield_ranking]
+    forbidden_facts: [generic_dividend_screener_not_portfolio]
+    expected_depth: medium
+    appropriate_refusal_ok: true
+  notes: |
+    WHY: composite query — needs get_portfolio_context FIRST then a
+    fundamentals lookup (singleton or batch) keyed on the resulting tickers.
+    Tests chaining; agent may incorrectly call screen_universe (universe,
+    not portfolio).
+
+# ─── get_price_history ─────────────────────────────────────────────────────
+- id: tc_price_history_nvda_90d
+  prompt: "Plot NVDA's price for the last 90 days."
+  category: financial_data
+  tags: [tool_coverage, get_price_history]
+  expected_max_latency_s: 30
+  must_not_say: []
+  rubric:
+    expected_tools: [get_price_history]
+    required_facts: [nvda_identified, ninety_day_window, price_series_or_summary_stats]
+    forbidden_facts: [fabricated_prices, single_point_quote_only]
+    expected_depth: medium
+    appropriate_refusal_ok: false
+    entity_aliases:
+      NVDA: [Nvidia, NVIDIA]
+  notes: |
+    WHY: time-series fetch — distinct from a single quote. Agent might wrongly
+    call get_entity_news to "summarise price moves"; the tool name should win.
+
+- id: tc_price_history_msft_ytd_range
+  prompt: "What's MSFT's high and low so far this year?"
+  category: financial_data
+  tags: [tool_coverage, get_price_history]
+  expected_max_latency_s: 30
+  must_not_say: []
+  rubric:
+    expected_tools: [get_price_history]
+    required_facts: [msft_identified, ytd_window, high_value, low_value]
+    forbidden_facts: [fabricated_high_low, all_time_high_passed_off_as_ytd]
+    expected_depth: shallow
+    appropriate_refusal_ok: false
+    entity_aliases:
+      MSFT: [Microsoft, Microsoft Corp]
+  notes: |
+    WHY: aggregation over a YTD window. Agent must pass from_date≈Jan-1 of
+    current year, then derive max/min from the returned series.
+
+# ─── search_claims ─────────────────────────────────────────────────────────
+- id: tc_search_claims_tesla_margins
+  prompt: "What claims have analysts made recently about Tesla's margins?"
+  category: signal
+  tags: [tool_coverage, search_claims]
+  expected_max_latency_s: 60
+  must_not_say: []
+  rubric:
+    expected_tools: [search_claims]
+    required_facts: [tesla_identified, at_least_one_claim_with_attribution, margin_topic]
+    forbidden_facts: [unsourced_assertions_no_claim_objects]
+    expected_depth: medium
+    appropriate_refusal_ok: true
+    entity_aliases:
+      TSLA: [Tesla]
+  notes: |
+    WHY: claim-store retrieval — distinct from search_documents (raw articles).
+    Watch for: agent calling search_documents and paraphrasing; the structured
+    claims store has speaker/confidence metadata that search_documents lacks.
+
+- id: tc_search_claims_ai_chip_demand
+  prompt: "Find recent claims about AI semiconductor demand."
+  category: signal
+  tags: [tool_coverage, search_claims]
+  expected_max_latency_s: 60
+  must_not_say: []
+  rubric:
+    expected_tools: [search_claims, search_documents]
+    required_facts: [claim_or_evidence_items, ai_or_semiconductor_topic]
+    forbidden_facts: [generic_market_commentary_no_sources]
+    expected_depth: medium
+    appropriate_refusal_ok: true
+  notes: |
+    WHY: thematic (no entity anchor) claim search — tests that search_claims
+    is callable without entity_name. Fallback to search_documents is OK if
+    claim coverage is sparse.
+
+# ─── search_entity_relations ───────────────────────────────────────────────
+- id: tc_relations_msft_acquisitions
+  prompt: "What companies has Microsoft acquired in the last five years?"
+  category: relationship
+  tags: [tool_coverage, search_entity_relations]
+  expected_max_latency_s: 60
+  must_not_say: []
+  rubric:
+    expected_tools: [search_entity_relations, search_events]
+    required_facts: [microsoft_identified, acquired_company_list, time_window_respected]
+    forbidden_facts: [fabricated_acquisitions, acquisitions_outside_window]
+    expected_depth: medium
+    appropriate_refusal_ok: true
+    entity_aliases:
+      MSFT: [Microsoft]
+  notes: |
+    WHY: typed-relation search ('acquired_by' / 'acquired') with confidence
+    filter. search_events is a reasonable alternative (M&A events are also
+    indexed as events) so both are accepted.
+
+# ─── search_events ─────────────────────────────────────────────────────────
+- id: tc_search_events_healthcare_ma_2024
+  prompt: "Show me M&A events involving healthcare companies in 2024."
+  category: news
+  tags: [tool_coverage, search_events]
+  expected_max_latency_s: 60
+  must_not_say: []
+  rubric:
+    expected_tools: [search_events]
+    required_facts: [event_list_or_empty, ma_event_type, year_2024_window, healthcare_sector]
+    forbidden_facts: [fabricated_events, non_ma_events_returned]
+    expected_depth: medium
+    appropriate_refusal_ok: true
+  notes: |
+    WHY: thematic event query with event_type + date filters. Agent may
+    misroute to search_documents (raw news) or search_claims (analyst
+    opinions); search_events targets the structured event store.
+
+- id: tc_search_events_semi_earnings_beats
+  prompt: "Any recent earnings beats in the semiconductor space?"
+  category: news
+  tags: [tool_coverage, search_events]
+  expected_max_latency_s: 60
+  must_not_say: []
+  rubric:
+    expected_tools: [search_events, search_documents]
+    required_facts: [recent_events_returned, earnings_or_beat_topic]
+    forbidden_facts: [fabricated_eps_numbers, generic_sector_commentary]
+    expected_depth: medium
+    appropriate_refusal_ok: true
+  notes: |
+    WHY: casual phrasing ("any recent ... in the X space") tests intent
+    robustness. Either search_events (event_type='earnings_beat') or
+    search_documents is acceptable — both are real grounding routes.
