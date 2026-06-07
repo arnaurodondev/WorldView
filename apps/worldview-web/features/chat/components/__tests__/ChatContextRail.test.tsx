@@ -1,0 +1,286 @@
+/**
+ * features/chat/components/__tests__/ChatContextRail.test.tsx
+ *
+ * Unit tests for ChatContextRail.
+ *
+ * WHAT THESE GUARD:
+ *   1. Citation deduplication — same article_id across two messages → 1 row.
+ *   2. Top-4 cap — 6 unique citations → only 4 rendered.
+ *   3. Relevance sort — highest-score citation renders first.
+ *   4. Contradiction extraction — ⚠ prefix in message content → warning chip.
+ *   5. Related tickers extraction — $AAPL in content → ticker chip rendered.
+ *   6. onTickerClick callback — clicking a ticker chip fires the callback.
+ *   7. onClose callback — clicking × fires onClose.
+ *   8. Entity section visibility — rendered only when entityId is non-null.
+ *
+ * WHY mock useAuth and useQuery:
+ * EntityCard fires a TanStack useQuery that needs a real QueryClientProvider.
+ * Rather than mounting the full provider, we mock the hooks so the unit tests
+ * are fast and deterministic. Integration tests covering the full query
+ * lifecycle belong in the Playwright E2E suite.
+ */
+
+import { describe, it, expect, vi, beforeEach } from "vitest";
+import { render, screen, fireEvent } from "@testing-library/react";
+
+// ── Mock TanStack Query ───────────────────────────────────────────────────────
+// WHY top-level mock: the EntityCard inside ChatContextRail calls useQuery.
+// Without a provider or mock, the hook throws. We mock the module so useQuery
+// returns an idle (no-data, not-loading) state for all calls in this suite.
+vi.mock("@tanstack/react-query", async () => {
+  const actual = await vi.importActual<typeof import("@tanstack/react-query")>(
+    "@tanstack/react-query",
+  );
+  return {
+    ...actual,
+    useQuery: vi.fn().mockReturnValue({ data: undefined, isLoading: false }),
+  };
+});
+
+// ── Mock useAuth ──────────────────────────────────────────────────────────────
+vi.mock("@/hooks/useAuth", () => ({
+  useAuth: () => ({ accessToken: "test-token" }),
+}));
+
+// ── Mock gateway (not called in these tests but import side-effects require it)
+vi.mock("@/lib/gateway", () => ({
+  createGateway: vi.fn(() => ({
+    getCompanyOverview: vi.fn(),
+  })),
+}));
+
+import { ChatContextRail } from "../ChatContextRail";
+import type { Message } from "@/types/api";
+
+// ── Helpers ───────────────────────────────────────────────────────────────────
+
+function makeMessage(
+  overrides: Partial<Message> & { content: string },
+): Message {
+  return {
+    message_id: crypto.randomUUID(),
+    thread_id: "thread-1",
+    role: "assistant",
+    created_at: new Date().toISOString(),
+    citations: [],
+    ...overrides,
+  };
+}
+
+const DEFAULT_PROPS = {
+  entityId: null,
+  messages: [],
+  isCollapsed: false,
+  onClose: vi.fn(),
+  onTickerClick: vi.fn(),
+};
+
+// ── Tests ─────────────────────────────────────────────────────────────────────
+
+describe("ChatContextRail", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  // ── Render shell ──────────────────────────────────────────────────────────
+
+  it("renders the header with CONTEXT label", () => {
+    render(<ChatContextRail {...DEFAULT_PROPS} />);
+    // WHY uppercase regex: the label is rendered uppercase via CSS class but
+    // the DOM text node is lowercase. The regex covers both without depending
+    // on a specific CSS transform behaviour in the test environment.
+    expect(screen.getByText(/context/i)).toBeInTheDocument();
+  });
+
+  it("fires onClose when × is clicked", () => {
+    const onClose = vi.fn();
+    render(<ChatContextRail {...DEFAULT_PROPS} onClose={onClose} />);
+    fireEvent.click(screen.getByLabelText("Close context rail"));
+    expect(onClose).toHaveBeenCalledOnce();
+  });
+
+  // ── Entity section ────────────────────────────────────────────────────────
+
+  it("does NOT render Entity section header when entityId is null", () => {
+    render(<ChatContextRail {...DEFAULT_PROPS} entityId={null} />);
+    // The "ENTITY" section header is only present when entityId is set.
+    // WHY case-insensitive: CSS text-transform is applied via class, the DOM
+    // may expose the raw string in either case depending on jsdom config.
+    expect(screen.queryByText(/entity/i)).not.toBeInTheDocument();
+  });
+
+  it("renders Entity section header when entityId is provided", () => {
+    render(
+      <ChatContextRail
+        {...DEFAULT_PROPS}
+        entityId="2c8e3a7f-0001-0001-0001-000000000001"
+      />,
+    );
+    expect(screen.getByText(/entity/i)).toBeInTheDocument();
+  });
+
+  // ── Citations ─────────────────────────────────────────────────────────────
+
+  it("shows 'No sources cited yet.' when messages have no citations", () => {
+    const messages = [
+      makeMessage({ content: "Hello world", citations: [] }),
+    ];
+    render(<ChatContextRail {...DEFAULT_PROPS} messages={messages} />);
+    expect(screen.getByText(/no sources cited yet/i)).toBeInTheDocument();
+  });
+
+  it("deduplicates citations with the same article_id", () => {
+    // WHY two messages with the same citation: this simulates the assistant
+    // referencing the same 10-Q in two different turns. The rail should show
+    // it once, not twice.
+    const sharedCitation = {
+      article_id: "art-001",
+      title: "AAPL 10-Q Q2 2026",
+      url: "https://sec.gov/...",
+      source: "sec",
+      relevance_score: 0.95,
+    };
+    const messages = [
+      makeMessage({ content: "First", citations: [sharedCitation] }),
+      makeMessage({ content: "Second", citations: [sharedCitation] }),
+    ];
+    render(<ChatContextRail {...DEFAULT_PROPS} messages={messages} />);
+    // Only one instance of the title should appear.
+    const titles = screen.getAllByText("AAPL 10-Q Q2 2026");
+    expect(titles).toHaveLength(1);
+  });
+
+  it("caps citations at 4 even when more unique ones exist", () => {
+    const messages = [
+      makeMessage({
+        content: "Source dump",
+        citations: [1, 2, 3, 4, 5, 6].map((i) => ({
+          article_id: `art-${i}`,
+          title: `Article ${i}`,
+          url: `https://example.com/${i}`,
+          source: "news",
+          relevance_score: i / 10,
+        })),
+      }),
+    ];
+    render(<ChatContextRail {...DEFAULT_PROPS} messages={messages} />);
+    // Only 4 [N] index markers should appear (rendered as "[1]", "[2]", …).
+    const indices = ["[1]", "[2]", "[3]", "[4]"];
+    for (const idx of indices) {
+      expect(screen.getByText(idx)).toBeInTheDocument();
+    }
+    // "[5]" and "[6]" must not exist.
+    expect(screen.queryByText("[5]")).not.toBeInTheDocument();
+    expect(screen.queryByText("[6]")).not.toBeInTheDocument();
+  });
+
+  it("sorts citations by relevance_score descending", () => {
+    // WHY: highest-confidence source must appear at position [1].
+    const messages = [
+      makeMessage({
+        content: "Multi-source",
+        citations: [
+          {
+            article_id: "low",
+            title: "Low confidence source",
+            url: "",
+            source: "news",
+            relevance_score: 0.3,
+          },
+          {
+            article_id: "high",
+            title: "High confidence source",
+            url: "",
+            source: "sec",
+            relevance_score: 0.95,
+          },
+        ],
+      }),
+    ];
+    render(<ChatContextRail {...DEFAULT_PROPS} messages={messages} />);
+    const items = screen.getAllByText(/\[(1|2)\]/);
+    // "[1]" should be followed by "High confidence source".
+    const firstIndex = items.find((el) => el.textContent === "[1]");
+    // The "[1]" element is a sibling to the title within the same <a> ancestor.
+    expect(firstIndex?.closest("a")?.textContent).toContain(
+      "High confidence source",
+    );
+  });
+
+  // ── Contradictions ────────────────────────────────────────────────────────
+
+  it("does NOT render Contradictions section when no contradictions found", () => {
+    const messages = [makeMessage({ content: "All looks consistent." })];
+    render(<ChatContextRail {...DEFAULT_PROPS} messages={messages} />);
+    // Section header only appears when contradictions > 0.
+    expect(screen.queryByText(/contradictions/i)).not.toBeInTheDocument();
+  });
+
+  it("renders Contradictions section when message content matches pattern", () => {
+    const messages = [
+      makeMessage({
+        content:
+          "⚠ FX impact reported as 60bp in Q1 vs 80-120bp range in Q2 guidance",
+        citations: [],
+      }),
+    ];
+    render(<ChatContextRail {...DEFAULT_PROPS} messages={messages} />);
+    expect(screen.getByText(/contradictions/i)).toBeInTheDocument();
+    // The extracted snippet should appear somewhere in the DOM.
+    expect(
+      screen.getByText(/FX impact reported as 60bp/i),
+    ).toBeInTheDocument();
+  });
+
+  // ── Related tickers ───────────────────────────────────────────────────────
+
+  it("does NOT render Related Tickers section when no $TICKER patterns found", () => {
+    const messages = [
+      makeMessage({ content: "No tickers here, just plain text." }),
+    ];
+    render(<ChatContextRail {...DEFAULT_PROPS} messages={messages} />);
+    expect(screen.queryByText(/related tickers/i)).not.toBeInTheDocument();
+  });
+
+  it("renders ticker chips for $TICKER mentions in messages", () => {
+    const messages = [
+      makeMessage({ content: "Comparing $AAPL and $NVDA performance.", citations: [] }),
+      makeMessage({ role: "user", content: "What about $TSM?", citations: [] }),
+    ];
+    render(<ChatContextRail {...DEFAULT_PROPS} messages={messages} />);
+    expect(screen.getByText(/related tickers/i)).toBeInTheDocument();
+    // WHY getByText with $ prefix: the chip renders "$AAPL", not "AAPL".
+    expect(screen.getByText("$AAPL")).toBeInTheDocument();
+    expect(screen.getByText("$NVDA")).toBeInTheDocument();
+    expect(screen.getByText("$TSM")).toBeInTheDocument();
+  });
+
+  it("deduplicates ticker mentions across multiple messages", () => {
+    const messages = [
+      makeMessage({ content: "$AAPL is up.", citations: [] }),
+      makeMessage({ content: "$AAPL is also relevant here.", citations: [] }),
+    ];
+    render(<ChatContextRail {...DEFAULT_PROPS} messages={messages} />);
+    const chips = screen.getAllByText("$AAPL");
+    expect(chips).toHaveLength(1);
+  });
+
+  it("fires onTickerClick with the ticker when a chip is clicked", () => {
+    const onTickerClick = vi.fn();
+    const messages = [
+      makeMessage({ content: "$NVDA GPU dominance continues.", citations: [] }),
+    ];
+    render(
+      <ChatContextRail
+        {...DEFAULT_PROPS}
+        messages={messages}
+        onTickerClick={onTickerClick}
+      />,
+    );
+    fireEvent.click(screen.getByText("$NVDA"));
+    // WHY "NVDA" (without $): the component calls onTickerClick with the raw
+    // ticker extracted by the regex (captures the group after $). The page
+    // wraps it with " $" before appending to the composer.
+    expect(onTickerClick).toHaveBeenCalledWith("NVDA");
+  });
+});

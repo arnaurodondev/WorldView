@@ -59,6 +59,7 @@ import {
   useRef,
   useState,
 } from "react";
+
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useRouter, useSearchParams } from "next/navigation";
 import {
@@ -111,6 +112,9 @@ import { useChatStream } from "@/features/chat/hooks/useChatStream";
 // `clearPendingAction` values from `useChatStream`. Both live at this page
 // level, so the modal is wired here rather than inside a sub-component.
 import { ActionConfirmModal } from "@/features/chat/components/ActionConfirmModal";
+// PLAN-0099 W4: right-side context rail — entity card, citations, contradictions,
+// related tickers. Collapsed by Cmd+\ keyboard shortcut (wired below).
+import { ChatContextRail } from "@/features/chat/components/ChatContextRail";
 
 // ── Main page component ───────────────────────────────────────────────────────
 
@@ -158,6 +162,12 @@ export default function ChatPage() {
     }
     return entityIdFromUrl;
   }, [entityIdFromUrl, looksLikeUuid, resolvedEntity]);
+
+  // ── Context rail collapse state ───────────────────────────────────────────
+  // WHY default false (open): the rail is the primary added value of this
+  // layout. Analysts who don't want it can collapse with Cmd+\. Starting
+  // collapsed would hide the feature entirely on first load.
+  const [isContextRailCollapsed, setIsContextRailCollapsed] = useState(false);
 
   // ── Thread list state ──────────────────────────────────────────────────────
   const [activeThreadId, setActiveThreadId] = useState<string | null>(null);
@@ -349,6 +359,27 @@ export default function ChatPage() {
       viewport.scrollTop = savedScrollTopRef.current;
     }
   }, [threads]);
+
+  // ── Cmd+\ context rail toggle ─────────────────────────────────────────────
+  //
+  // WHY document-level listener (not a button's onKeyDown):
+  // Cmd+\ is a global shortcut — it fires regardless of which element has
+  // keyboard focus. document.addEventListener is the correct mechanism.
+  // WHY cleanup in return: prevents the listener from accumulating if this
+  // component re-mounts (e.g. hot-reload in dev).
+  // WHY no animation: design spec mandates no transitions; the rail snaps to
+  // 0 width or full width instantly.
+  useEffect(() => {
+    function handleContextRailToggle(e: KeyboardEvent) {
+      // Cmd+\ on macOS (metaKey + Backslash) or Ctrl+\ on Windows/Linux.
+      if ((e.metaKey || e.ctrlKey) && e.key === "\\") {
+        e.preventDefault();
+        setIsContextRailCollapsed((prev) => !prev);
+      }
+    }
+    document.addEventListener("keydown", handleContextRailToggle);
+    return () => document.removeEventListener("keydown", handleContextRailToggle);
+  }, []);
 
   // ── Derived: filtered threads ─────────────────────────────────────────────
 
@@ -754,6 +785,19 @@ export default function ChatPage() {
         onDismiss={clearPendingAction}
       />
 
+      {/* ════════════════ CENTRE + RIGHT — Chat Area + Context Rail ════════════ */}
+      {/*
+       * WHY this wrapper div: we need the message column and the context rail
+       * to sit side-by-side inside the outer flex. The message column is
+       * flex-1 (grows to fill remaining space); the rail is w-[320px] shrink-0.
+       * Without this wrapper div, ActionConfirmModal would separate them in
+       * the outer flex row. The wrapper is purely structural — no visual effect.
+       *
+       * WHY overflow-hidden on wrapper: the rail and message column each have
+       * their own overflow-y-auto / ScrollArea. The wrapper must NOT scroll
+       * itself (overflow-hidden prevents a double-scrollbar).
+       */}
+      <div className="flex flex-1 overflow-hidden">
       {/* ════════════════ RIGHT PANEL — Chat Area ════════════════ */}
       <div className="flex flex-1 flex-col overflow-hidden">
         {/* Welcome / empty state — PLAN-0071 P2C-4: analyst-specific copy
@@ -1058,6 +1102,39 @@ export default function ChatPage() {
           </>
         )}
       </div>
+
+      {/* ════════════════ CONTEXT RAIL — Entity / Citations / Tickers ════════ */}
+      {/*
+       * WHY conditional render (not CSS width=0):
+       * When collapsed we unmount entirely rather than setting w-0 + overflow-hidden.
+       * Unmounting avoids an invisible TanStack Query subscription (the EntityCard
+       * inside fires a useQuery). CSS-only hide keeps the query alive, wastes a
+       * background refetch every staleTime interval, and would require w-0 on the
+       * border-l to avoid a ghost 1px line. Full unmount is simpler and cheaper.
+       *
+       * WHY border-l: the visual separator between the message column and the
+       * context rail. Matches the border-r on the thread list sidebar for
+       * symmetry (both panels separated from the centre by a 1px border).
+       */}
+      {!isContextRailCollapsed && (
+        <div className="w-[320px] shrink-0 border-l border-border overflow-hidden">
+          <ChatContextRail
+            entityId={entityIdFromUrl}
+            messages={localMessages.filter(
+              // WHY filter: localMessages is LogEntry[] (Message | SlashTurn).
+              // ChatContextRail expects Message[] only. Slash turns have
+              // `kind: "slash"` — we drop them here so the prop type is clean.
+              // Messages are always real Message objects (role + citations).
+              (entry): entry is Parameters<typeof ChatContextRail>[0]["messages"][number] =>
+                !("kind" in entry),
+            )}
+            isCollapsed={isContextRailCollapsed}
+            onClose={() => setIsContextRailCollapsed(true)}
+            onTickerClick={(ticker) => appendToInput(` $${ticker}`)}
+          />
+        </div>
+      )}
+      </div>{/* end centre+right wrapper */}
     </div>
   );
 }
