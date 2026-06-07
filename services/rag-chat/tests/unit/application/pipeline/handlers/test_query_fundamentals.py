@@ -244,3 +244,56 @@ async def test_query_fundamentals_flags_missing_metric_in_coverage_line() -> Non
     assert result is not None
     assert "consensus_eps_next_year=missing" in result.text
     assert "forward_pe=ok" in result.text
+
+
+@pytest.mark.asyncio
+async def test_query_fundamentals_synthetic_period_label_when_upstream_null() -> None:
+    """PLAN-0107 follow-up Bug 2 — defensive fallback for null period_label/period_end.
+
+    When the upstream market-data response carries a row with both
+    ``period_label`` and ``period_end`` null (a known gap tracked by the
+    BugFix B agent), the renderer must still emit a meaningful identifier
+    so the LLM does not produce "Period -> Period" prose without a number.
+
+    Expected fallback: ``Period {idx}`` where ``idx`` is the zero-based
+    loop index. The bare word "Period" without a number is the failure
+    mode this test guards against.
+    """
+    s3 = AsyncMock()
+    s3.query_fundamentals = AsyncMock(
+        return_value={
+            "metrics_by_period": [
+                {
+                    # BOTH period_label and period_end are intentionally None
+                    # to simulate the upstream null pair reported in Bug 2.
+                    "period_label": None,
+                    "period_end": None,
+                    "period_type": "QUARTERLY",
+                    "gross_margin": 0.42,
+                },
+                {
+                    "period_label": None,
+                    "period_end": None,
+                    "period_type": "QUARTERLY",
+                    "gross_margin": 0.40,
+                },
+            ],
+            "snapshot": None,
+            "coverage": {"gross_margin": "ok"},
+        }
+    )
+    handler = _make_handler(s3)
+    result = await handler._handle_query_fundamentals(
+        ticker="AAPL",
+        metrics=["gross_margin"],
+        periods=2,
+    )
+    assert result is not None
+    text = result.text
+    # Synthetic labels must appear (one per row, both in the table and the
+    # Per-period metric listing block).
+    assert "Period 0" in text, f"Expected synthetic 'Period 0' label; got:\n{text}"
+    assert "Period 1" in text, f"Expected synthetic 'Period 1' label; got:\n{text}"
+    # Regression guard: a bare row-leading "| ? |" (the old fallback) is
+    # forbidden — it was the source of the "Period -> Period" prose bug.
+    assert "| ? |" not in text, "Old '?' fallback leaked into rendered period table"

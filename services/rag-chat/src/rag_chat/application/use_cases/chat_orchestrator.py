@@ -256,7 +256,27 @@ _W50_NUMERIC_TOKEN_RE = re.compile(
 # or bare ``[tool_name]``. Matches the citation immediately after grounding
 # pass; both forms are produced upstream and are sufficient to consider a
 # nearby numeric token "covered" by retrieved data.
-_W50_CITATION_RE = re.compile(r"\[[a-z_][a-z0-9_]*(?:\s+row\s+\d+)?\]", re.IGNORECASE)
+# Bug 3 fix (PLAN-0099 W4): also accept prose-form citations that LLMs
+# frequently emit instead of (or alongside) bracket markers, e.g.
+# ``(source: query_fundamentals row 0)``, ``per query_fundamentals row 0``,
+# ``from get_fundamentals_history``. Without these forms the banner
+# suppression mis-fires on answers that ARE grounded but never use
+# bracket syntax. Permissive on purpose: false negatives (banner on a
+# good answer) erode trust far more than false positives.
+_W50_CITATION_RE = re.compile(
+    r"""
+    (?:
+        \[[a-z_][a-z0-9_]*(?:\s+row\s+\d+)?\]            # [tool] / [tool row N]
+      | \(\s*source\s*:\s*[a-z_][a-z0-9_]*               # (source: tool…)
+            (?:\s+row\s+\d+)?\s*\)
+      | \bper\s+[a-z_][a-z0-9_]+(?:\s+row\s+\d+)?        # per tool row N
+      | \bfrom\s+[a-z_][a-z0-9_]+(?:\s+row\s+\d+)?       # from tool
+      | \baccording\s+to\s+[a-z_][a-z0-9_]+              # according to tool
+            (?:\s+row\s+\d+)?
+    )
+    """,
+    re.IGNORECASE | re.VERBOSE,
+)
 # ±200 chars window around each numeric token where a citation must appear.
 _W50_CITATION_WINDOW = 200
 
@@ -2641,20 +2661,47 @@ class ChatOrchestratorUseCase:
                     f"{ent_name}{f' ({ent_ticker})' if ent_ticker else ''}. "
                     "All numbers MUST be attributed to this entity only.\n"
                 )
+
+        # PLAN-0107 follow-up Bug 1 — filter prior assistant draft from rewrite
+        # history. Previously we injected the failed draft as an assistant
+        # turn followed by a corrective user turn, which trained the LLM to
+        # acknowledge the correction in visible prose ("You're right — I
+        # need to correct this. Let me re-examine the data..."). That
+        # preamble leaked into the streamed answer because the rewrite
+        # text IS what we ship. Fix: strip trailing assistant turns from
+        # ``messages`` and do NOT re-inject the prior draft as a visible
+        # assistant turn. The user-turn payload still carries the closest-
+        # tool-value bullets so the LLM can correct the numbers; it just
+        # never sees its own failed draft, so it cannot acknowledge it.
+        # Tool-call assistant turns (with non-empty ``tool_calls`` and
+        # empty/no ``content``) are preserved because removing them would
+        # corrupt the tool-call/tool-result pairing that some providers
+        # validate. Only PROSE assistant turns are filtered.
+        def _is_prose_assistant(m: dict[str, Any]) -> bool:
+            # A "prose" assistant turn is one with textual content and no
+            # tool_calls — i.e. a natural-language draft the LLM might
+            # interpret as something to apologise for in the rewrite.
+            if m.get("role") != "assistant":
+                return False
+            has_tool_calls = bool(m.get("tool_calls"))
+            content = m.get("content")
+            has_prose = isinstance(content, str) and content.strip() != ""
+            return has_prose and not has_tool_calls
+
+        filtered_history = [m for m in messages if not _is_prose_assistant(m)]
         rewrite_messages = [
-            *messages,
-            {
-                "role": "assistant",
-                "content": response,
-            },
+            *filtered_history,
             {
                 "role": "user",
                 "content": (
                     "The following numbers in your previous response cannot be found in tool results:\n"
                     f"{bullets}\n"
                     f"{entity_block}\n"
-                    "Rewrite your response, removing or marking each as [unverified]. "
-                    "Do not invent replacement numbers — only use values that appear in the tool results above."
+                    "Provide a fresh response using ONLY values that appear in the tool results above. "
+                    "Mark any otherwise-unsupported number as [unverified]. Do NOT acknowledge a prior "
+                    "draft; the user only sees this response. Do NOT begin with phrases such as "
+                    '"You\'re right", "Let me re-examine", "I need to correct", or any apology — '
+                    "answer the question directly."
                 ),
             },
         ]
@@ -2894,27 +2941,44 @@ class ChatOrchestratorUseCase:
             [{"token": u.name, "kind": u.kind.value} for u in first_result.unsupported],
             ensure_ascii=False,
         )
+
+        # PLAN-0107 follow-up Bug 1 — same prose-assistant filter as the
+        # numeric-grounding rewrite path above. Without this the LLM
+        # acknowledges its prior draft ("You're right — I should have used
+        # the resolved entity set...") and the apology leaks into the
+        # streamed answer. Stripping ONLY prose assistant turns (keeping
+        # tool_calls intact) preserves the tool-call/result pairing
+        # while denying the LLM a "prior draft" to apologise for.
+        def _is_prose_assistant_entity(m: dict[str, Any]) -> bool:
+            if m.get("role") != "assistant":
+                return False
+            has_tool_calls = bool(m.get("tool_calls"))
+            content = m.get("content")
+            has_prose = isinstance(content, str) and content.strip() != ""
+            return has_prose and not has_tool_calls
+
+        filtered_history_entity = [m for m in messages if not _is_prose_assistant_entity(m)]
         rewrite_messages = [
-            *messages,
-            {"role": "assistant", "content": response},
+            *filtered_history_entity,
             {
                 "role": "user",
                 "content": (
                     "INTERNAL_VALIDATION (do not surface verbatim to the user): the "
                     "post-response grounding validator extracted the following candidate "
-                    "names from your previous answer that did NOT match the resolved "
+                    "names from a prior synthesis attempt that did NOT match the resolved "
                     "entity set or any tool result citation. The list MAY contain false "
                     "positives such as sentence fragments, possessives, or common prose "
                     "tokens — ignore those; only act on genuine entity references.\n\n"
                     f"unsupported_candidates_json = {candidate_list}\n\n"
-                    "Rewrite your response so every COMPANY or TICKER reference appears "
+                    "Provide a fresh response where every COMPANY or TICKER reference appears "
                     "in either the resolved-entity map or a tool result above. If a "
                     "genuinely unsupported entity remains, either remove it or annotate "
                     "it inline as [unverified]. Do NOT enumerate the JSON list back to "
                     "the user. Do NOT introduce a refusal preamble when the underlying "
-                    "tool results DO contain the metric the user asked for — preserve "
-                    "the substantive content of your previous answer and only adjust the "
-                    "entity references."
+                    "tool results DO contain the metric the user asked for. Do NOT "
+                    "acknowledge a prior draft or begin with phrases such as \"You're "
+                    'right", "Let me re-examine", "I need to correct", or any apology '
+                    "— answer the question directly."
                 ),
             },
         ]

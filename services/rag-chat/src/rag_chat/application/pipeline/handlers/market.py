@@ -673,8 +673,17 @@ class MarketHandler(ToolHandler):
                 out.append("")
                 out.append(header)
                 out.append(divider)
-                for row in rows:
-                    period = row.get("period_label") or row.get("period_end") or "?"
+                for idx, row in enumerate(rows):
+                    # PLAN-0107 follow-up Bug 2 — defensive fallback for the
+                    # "Period → Period" missing-number rendering. When both
+                    # ``period_label`` and ``period_end`` are null (a
+                    # market-data upstream gap; tracked separately by the
+                    # BugFix B agent) we used to render the literal "?",
+                    # which then encouraged the LLM to write "Period → Period"
+                    # with no number. Emit a synthetic, ordinal-indexed label
+                    # so the row is still identifiable in the table and the
+                    # downstream prose has a concrete identifier to cite.
+                    period = row.get("period_label") or row.get("period_end") or f"Period {idx}"
                     ptype = row.get("period_type") or "QUARTERLY"
                     cells = []
                     for m in displayed:
@@ -713,8 +722,13 @@ class MarketHandler(ToolHandler):
                 # missing.
                 out.append("")
                 out.append(f"### {ticker} — Per-period metric listing")
-                for row in rows:
-                    period = row.get("period_label") or row.get("period_end") or "?"
+                for idx, row in enumerate(rows):
+                    # PLAN-0107 follow-up Bug 2 — see matching fallback in the
+                    # period table above. The Per-period metric listing is the
+                    # explicit "<metric>: <value>" block the grounding-rewrite
+                    # path keys on; emitting "Period {idx}" instead of "?" keeps
+                    # each bullet uniquely addressable when upstream label is null.
+                    period = row.get("period_label") or row.get("period_end") or f"Period {idx}"
                     out.append(f"- {period}:")
                     for m in displayed:
                         v = row.get(m)

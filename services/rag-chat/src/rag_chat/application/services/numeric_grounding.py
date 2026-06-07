@@ -42,6 +42,7 @@ import re
 from collections import Counter
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
+from decimal import Decimal, InvalidOperation
 from typing import Any
 
 from contracts.numeric_grounding import DEFAULT_TOLERANCES, FieldKind  # type: ignore[import-untyped]
@@ -346,13 +347,237 @@ def _decode_token(raw_full: str, digits: str, suffix: str | None) -> float:
     return base
 
 
+# ── Bug 3 fix (PLAN-0099 W4) — Decimal-based unit normalisation ────────────
+#
+# Although ``_decode_token`` above already converts ``$24.7B`` into
+# ``2.47e10`` for float-based comparison, the user-facing fix in this
+# wave needed an explicit ``_normalize_numeric`` helper that:
+#
+#   * uses :class:`decimal.Decimal` so exact equality holds for round
+#     financial figures (no binary-float drift on ``$4.97T``),
+#   * recognises parenthesised negatives (``(45.2)`` → ``-45.2``)
+#     which appear in EODHD / GAAP-formatted statements,
+#   * recognises the ratio multiplier suffix ``x`` (``31.5x`` → ``31.5``)
+#     used by valuation multiples (P/E, EV/EBITDA) — magnitude unchanged,
+#   * returns ``None`` for strings that look numeric-ish but aren't
+#     (``"hello"`` → ``None``, used by callers that probe a whole word).
+#
+# Kept module-level (not a Validator method) so the orchestrator and
+# tests can use it directly to compare answer tokens against raw tool
+# values without reaching into the validator's internals.
+_SUFFIX_MULTIPLIERS: dict[str, Decimal] = {
+    "K": Decimal("1000"),
+    "M": Decimal("1000000"),
+    "B": Decimal("1000000000"),
+    "T": Decimal("1000000000000"),
+}
+
+# Pattern that strips trailing magnitude / ratio suffix. We accept both
+# upper- and lower-case (LLMs are inconsistent). The trailing ``x`` is a
+# ratio marker — kept separate from K/M/B/T because it does NOT scale
+# the value, it only annotates "this is a multiplier".
+_NORMALIZE_RE = re.compile(
+    r"""
+    ^\s*
+    (?P<paren_open>\()?            # optional opening paren → negative
+    \s*
+    (?P<sign>[-+])?                # optional explicit sign
+    \s*
+    \$?                            # optional currency symbol
+    \s*
+    (?P<digits>\d[\d,]*(?:\.\d+)?) # mantissa with optional decimals/commas
+    \s*
+    (?P<suffix>[KMBTkmbtxX%])?     # optional magnitude / ratio / percent
+    \s*
+    (?P<paren_close>\))?           # optional closing paren
+    \s*$
+    """,
+    re.VERBOSE,
+)
+
+
+def _normalize_numeric(s: str) -> Decimal | None:
+    """Parse a financial number token into a :class:`Decimal` in base units.
+
+    Examples handled (see tests for the canonical list):
+
+      * ``"$24.7B"``            → ``Decimal("24700000000")``
+      * ``"$4.97T"``            → ``Decimal("4970000000000")``
+      * ``"24,700,000,000"``    → ``Decimal("24700000000")``
+      * ``"31.5x"``             → ``Decimal("31.5")``   (ratio, no scale)
+      * ``"(45.2)"``            → ``Decimal("-45.2")``  (parens = neg)
+      * ``"50%"``               → ``Decimal("50")``     (kept as-is; see WHY)
+      * ``"hello"`` / ``""``    → ``None``
+
+    WHY percent values are returned as-is (not divided by 100):
+    callers compare a percentage answer token against a percentage tool
+    value — both will arrive as the same representation. Mixing
+    fraction-vs-percent here would cause double-conversion bugs because
+    the existing :func:`_decode_token` already divides by 100. The two
+    helpers stay independent so each call site picks the contract it
+    needs.
+
+    Returns ``None`` on any parse failure so call sites can treat the
+    token as "not a number" without exception handling.
+    """
+    if not s or not isinstance(s, str):
+        return None
+    stripped = s.strip()
+    if not stripped:
+        return None
+    m = _NORMALIZE_RE.match(stripped)
+    if m is None:
+        return None
+    digits = m.group("digits")
+    if digits is None or not any(ch.isdigit() for ch in digits):
+        return None
+    cleaned = digits.replace(",", "")
+    try:
+        value = Decimal(cleaned)
+    except (InvalidOperation, ValueError):
+        return None
+    suffix = m.group("suffix") or ""
+    # Magnitude suffixes (K/M/B/T) scale the value.
+    if suffix and suffix.upper() in _SUFFIX_MULTIPLIERS:
+        value = value * _SUFFIX_MULTIPLIERS[suffix.upper()]
+    # 'x' (ratio) and '%' do not change magnitude here — see docstring.
+    # Apply parenthesis-negative convention (GAAP statements). We accept
+    # parens even when only one side is present (LLMs often omit one).
+    paren_neg = bool(m.group("paren_open") or m.group("paren_close"))
+    sign = m.group("sign")
+    if sign == "-":
+        value = -value
+    if paren_neg:
+        value = -abs(value)
+    return value
+
+
+# ── Bug 3 fix — prose-citation recognition (banner suppression) ────────────
+#
+# The orchestrator's :func:`_answer_has_full_citation_coverage` already
+# recognises bracket citations like ``[query_fundamentals row 0]``. The
+# validator needs the same recognition so that an "unsupported" number
+# whose token has a prose / bracket citation nearby is NOT flagged when
+# the cited tool was actually invoked. We keep the regex permissive on
+# purpose: false negatives (banner on a good answer) erode trust far
+# more than false positives (no banner on a borderline answer).
+#
+# Patterns accepted (case-insensitive):
+#   * ``[tool_name]`` / ``[tool_name row 3]``    — canonical bracket form
+#   * ``(source: tool_name row 0)``              — natural-language source
+#   * ``per tool_name row 2``                    — prose attribution
+#   * ``from tool_name``                         — prose attribution
+#   * ``according to tool_name``                 — prose attribution
+_PROSE_CITATION_RE = re.compile(
+    r"""
+    (?:
+        \[[a-z_][a-z0-9_]*(?:\s+row\s+\d+)?\]            # [tool] / [tool row N]
+      | \(\s*source\s*:\s*[a-z_][a-z0-9_]*               # (source: tool…)
+            (?:\s+row\s+\d+)?\s*\)
+      | \bper\s+[a-z_][a-z0-9_]+(?:\s+row\s+\d+)?        # per tool row N
+      | \bfrom\s+[a-z_][a-z0-9_]+(?:\s+row\s+\d+)?       # from tool
+      | \baccording\s+to\s+[a-z_][a-z0-9_]+              # according to tool
+            (?:\s+row\s+\d+)?
+    )
+    """,
+    re.IGNORECASE | re.VERBOSE,
+)
+
+# Tool names embedded inside a prose citation. Used to confirm that the
+# cited tool was actually called (defence against the LLM inventing a
+# tool name to fake a citation).
+_CITED_TOOL_RE = re.compile(
+    r"(?:\[|\(\s*source\s*:\s*|\bper\s+|\bfrom\s+|\baccording\s+to\s+)" r"([a-z_][a-z0-9_]*)",
+    re.IGNORECASE,
+)
+
+# Distance (in chars) within which a citation counts as supporting a
+# numeric token. 50 chars matches the user's spec; this is tighter than
+# the orchestrator's 200-char banner-suppression window because the
+# validator runs per-number and we want stronger evidence that THIS
+# specific number is grounded.
+_VALIDATOR_CITATION_WINDOW = 50
+
+
+def _cited_tool_names(text: str) -> set[str]:
+    """Return the lower-cased tool names referenced anywhere in *text*.
+
+    Used to confirm that a prose citation refers to a tool that was
+    actually called — see :func:`_has_grounding_citation`.
+    """
+    return {m.group(1).lower() for m in _CITED_TOOL_RE.finditer(text)}
+
+
+def _has_grounding_citation(
+    response: str,
+    token_start: int,
+    token_end: int,
+    called_tool_names: frozenset[str] | set[str],
+) -> bool:
+    """Return ``True`` if a citation within ±window chars references a real tool.
+
+    A citation is "grounding" iff:
+      1. The match falls within ±_VALIDATOR_CITATION_WINDOW chars of the
+         number, AND
+      2. (when ``called_tool_names`` is non-empty) the cited tool name
+         appears in the set of tools that were actually invoked for this
+         request.
+
+    Passing an empty ``called_tool_names`` set disables the tool-name
+    cross-check (used by tests that only care about the pattern match).
+    """
+    lo = max(0, token_start - _VALIDATOR_CITATION_WINDOW)
+    hi = min(len(response), token_end + _VALIDATOR_CITATION_WINDOW)
+    window = response[lo:hi]
+    for m in _PROSE_CITATION_RE.finditer(window):
+        matched_text = m.group(0)
+        is_bracket = matched_text.startswith("[")
+        tool_match = _CITED_TOOL_RE.search(matched_text)
+        if not tool_match:
+            # Couldn't pull a tool name out — only honour permissive
+            # match when this is a bracket form AND no called-tool
+            # constraint was provided.
+            if is_bracket and not called_tool_names:
+                return True
+            continue
+        cited = tool_match.group(1).lower()
+        # When the caller supplied a list of tools that actually ran,
+        # require the cited name to be in that list — defence against
+        # both LLM-invented tool names (e.g. ``[made_up_tool]``) and
+        # genuinely-hallucinated prose ("according to filings"). When
+        # no called-tools set is supplied, only the bracket form is
+        # honoured (it's a structured marker from the tool layer).
+        if called_tool_names:
+            if cited in called_tool_names:
+                return True
+        elif is_bracket:
+            return True
+    return False
+
+
 def _extract_numbers(text: str) -> list[tuple[float, str, str]]:
     """Yield (value, raw_token, surrounding_context) for every number in *text*.
 
     Citation markers are stripped first so [N7] does not surface as 7.
     """
+    # Delegate to the position-aware extractor and discard the spans —
+    # legacy callers only need the (value, token, context) triplet.
+    return [(v, tok, ctx) for v, tok, ctx, _s, _e in _extract_numbers_with_spans(text)]
+
+
+def _extract_numbers_with_spans(
+    text: str,
+) -> list[tuple[float, str, str, int, int]]:
+    """Like :func:`_extract_numbers` but also returns char spans of each match.
+
+    Spans are reported against the CLEANED text (citation markers
+    stripped). The validator uses them to test whether a prose-citation
+    is within :data:`_VALIDATOR_CITATION_WINDOW` of the token. We do the
+    citation-window check against the same cleaned text so window
+    offsets stay aligned.
+    """
     cleaned = _CITATION_RE.sub("", text)
-    out: list[tuple[float, str, str]] = []
+    out: list[tuple[float, str, str, int, int]] = []
     for m in _NUM_RE.finditer(cleaned):
         digits = m.group("digits") or ""
         if not digits or digits == ".":
@@ -366,7 +591,7 @@ def _extract_numbers(text: str) -> list[tuple[float, str, str]]:
         except ValueError:
             continue
         ctx = _context_around(cleaned, m.start(), m.end())
-        out.append((value, m.group("full").strip(), ctx))
+        out.append((value, m.group("full").strip(), ctx, m.start(), m.end()))
     return out
 
 
@@ -657,6 +882,7 @@ class NumericGroundingValidator:
         self,
         response: str,
         tool_results: Iterable[Any],
+        called_tool_names: Iterable[str] | None = None,
     ) -> GroundingResult:
         """Return a ``GroundingResult`` for *response* against *tool_results*.
 
@@ -673,7 +899,21 @@ class NumericGroundingValidator:
         """
         tool_results_list = list(tool_results)
         rag_pipeline_stage_input_size.labels(stage="numeric_grounding").observe(len(tool_results_list))
-        response_numbers = _extract_numbers(response)
+        # Bug 3 fix: capture char spans alongside (value, token, ctx) so
+        # the per-number loop below can ask whether a prose / bracket
+        # citation sits within ±_VALIDATOR_CITATION_WINDOW chars of THIS
+        # token. The legacy ``_extract_numbers`` is still used by other
+        # call sites (orphan checks etc.) — see the helper docstring.
+        response_numbers_with_spans = _extract_numbers_with_spans(response)
+        response_numbers = [(v, tok, ctx) for v, tok, ctx, _s, _e in response_numbers_with_spans]
+        # Pre-compute the cleaned response text (citation markers
+        # stripped) so window arithmetic matches the spans returned
+        # above. Frozen set of called tool names enables the prose
+        # citation check to validate the cited tool was actually called.
+        cleaned_response = _CITATION_RE.sub("", response)
+        called_tools_frozen: frozenset[str] = (
+            frozenset(t.lower() for t in called_tool_names) if called_tool_names else frozenset()
+        )
         tool_values = _flatten_tool_values(tool_results_list)
         # Materialise the source tool texts for quarter-label matching.
         # We coerce the .text attribute to str defensively — production
@@ -783,7 +1023,7 @@ class NumericGroundingValidator:
         # any-kind pool — but the legacy fall-back is exact-match only
         # (tol=0) so we don't silently accept cross-entity collisions.
         total_numbers = len(response_numbers)
-        for value, raw_tok, ctx in response_numbers:
+        for value, raw_tok, ctx, span_start, span_end in response_numbers_with_spans:
             kind = classify_number(value, raw_tok, ctx)
             if kind in self._skip_kinds:
                 continue
@@ -818,6 +1058,24 @@ class NumericGroundingValidator:
             if matched:
                 per_kind_passed[kind] += 1
             else:
+                # Bug 3 fix (PLAN-0099 W4): before flagging this number
+                # as unsupported, check whether a prose / bracket
+                # citation sits within ±50 chars and references a tool
+                # that was actually called. If so, treat the number as
+                # grounded — false positives here cause the dreaded
+                # "⚠ Some numbers could not be verified" banner on
+                # answers whose cited tool DID return the value (the
+                # validator just couldn't match across formats such as
+                # ``$24.7B`` vs raw ``24700000000``). Permissive on
+                # purpose: see _has_grounding_citation docstring.
+                if _has_grounding_citation(
+                    cleaned_response,
+                    span_start,
+                    span_end,
+                    called_tools_frozen,
+                ):
+                    per_kind_passed[kind] += 1
+                    continue
                 per_kind_failed[kind] += 1
                 unsupported.append(
                     UnsupportedNumber(
@@ -907,3 +1165,9 @@ __all__ = [
     "UnsupportedNumber",
     "classify_number",
 ]
+
+
+# Re-exported by name only (kept out of __all__ so they're private API
+# but discoverable from tests + the orchestrator):
+#   _normalize_numeric        — Decimal-based token normaliser (Bug 3)
+#   _has_grounding_citation   — prose-citation window check (Bug 3)

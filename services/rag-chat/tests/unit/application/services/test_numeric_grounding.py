@@ -513,3 +513,172 @@ class TestQueryFundamentalsEnvelopeEndToEnd:
             u for u in result.unsupported if u.field_kind is FieldKind.RATIO and abs(u.value - 37.73) < 0.5
         ]
         assert not ratio_failures, result.unsupported
+
+
+# ── Bug 3 fix (PLAN-0099 W4) — unit normalisation + prose citations ─────────
+
+
+from decimal import Decimal  # (deliberately late import — section-scoped)
+
+from rag_chat.application.services.numeric_grounding import (
+    _has_grounding_citation,
+    _normalize_numeric,
+)
+
+
+class TestNormalizeNumeric:
+    """``_normalize_numeric`` must convert every common financial token shape
+    into a single :class:`Decimal` so cross-format comparisons (``$24.7B``
+    vs raw ``24700000000``) collapse to equality."""
+
+    def test_dollar_with_billion_suffix(self) -> None:
+        assert _normalize_numeric("$24.7B") == Decimal("24700000000.0")
+
+    def test_dollar_with_trillion_suffix(self) -> None:
+        # Mega-cap market cap (Apple etc.) — exact-equality matters.
+        assert _normalize_numeric("$4.97T") == Decimal("4970000000000.00")
+
+    def test_dollar_with_million_suffix(self) -> None:
+        assert _normalize_numeric("$845.2M") == Decimal("845200000.0")
+
+    def test_thousands_separators(self) -> None:
+        assert _normalize_numeric("24,700,000,000") == Decimal("24700000000")
+
+    def test_ratio_x_suffix_unchanged_magnitude(self) -> None:
+        # P/E ratios: 31.5x means "31.5 multiplier", no scaling applied.
+        assert _normalize_numeric("31.5x") == Decimal("31.5")
+
+    def test_parenthesised_negative(self) -> None:
+        # GAAP convention: (45.2) = -45.2.
+        assert _normalize_numeric("(45.2)") == Decimal("-45.2")
+
+    def test_explicit_negative_sign(self) -> None:
+        assert _normalize_numeric("-1.5B") == Decimal("-1500000000.0")
+
+    def test_percent_unchanged(self) -> None:
+        # Tools that emit percents emit them as percents — no /100.
+        assert _normalize_numeric("50%") == Decimal("50")
+
+    def test_non_numeric_returns_none(self) -> None:
+        assert _normalize_numeric("hello") is None
+
+    def test_empty_returns_none(self) -> None:
+        assert _normalize_numeric("") is None
+        assert _normalize_numeric("   ") is None
+
+    def test_none_returns_none(self) -> None:
+        assert _normalize_numeric(None) is None  # type: ignore[arg-type]
+
+    def test_lowercase_suffix(self) -> None:
+        # LLMs are inconsistent — accept lowercase too.
+        assert _normalize_numeric("24.7b") == Decimal("24700000000.0")
+
+    def test_cross_format_equality(self) -> None:
+        # The whole point of the helper: '$24.7B' compares equal to raw.
+        a = _normalize_numeric("$24.7B")
+        b = _normalize_numeric("24,700,000,000")
+        assert a == b
+
+
+class TestProseCitationRecognition:
+    """``_has_grounding_citation`` must accept bracket AND prose forms so
+    answers that cite their tools as ``(source: query_fundamentals row 0)``
+    or ``per get_fundamentals_history`` do not falsely trip the banner."""
+
+    def test_bracket_citation_recognised(self) -> None:
+        text = "Revenue was $24.7B [query_fundamentals row 0]."
+        # Token "$24.7B" starts at position 13, ends at 18.
+        assert _has_grounding_citation(text, 13, 18, frozenset({"query_fundamentals"}))
+
+    def test_source_paren_citation_recognised(self) -> None:
+        text = "Revenue was $24.7B (source: query_fundamentals row 0)."
+        assert _has_grounding_citation(text, 13, 18, frozenset({"query_fundamentals"}))
+
+    def test_per_citation_recognised(self) -> None:
+        text = "Revenue was $24.7B per query_fundamentals row 0."
+        assert _has_grounding_citation(text, 13, 18, frozenset({"query_fundamentals"}))
+
+    def test_according_to_citation_recognised(self) -> None:
+        text = "Revenue was $24.7B according to query_fundamentals."
+        assert _has_grounding_citation(text, 13, 18, frozenset({"query_fundamentals"}))
+
+    def test_citation_outside_window_rejected(self) -> None:
+        # Citation 200 chars away — far outside the 50-char window.
+        filler = "x" * 200
+        text = f"Revenue was $24.7B{filler} [query_fundamentals row 0]."
+        assert not _has_grounding_citation(text, 13, 18, frozenset({"query_fundamentals"}))
+
+    def test_cited_tool_not_called_rejected(self) -> None:
+        # The cited tool wasn't in the called set → reject (defence
+        # against LLM-invented tool names).
+        text = "Revenue was $24.7B [made_up_tool row 0]."
+        assert not _has_grounding_citation(text, 13, 18, frozenset({"query_fundamentals"}))
+
+    def test_empty_called_tools_is_permissive_for_brackets(self) -> None:
+        # Bracket form is unambiguous (emitted by the tool layer), so it
+        # always suppresses even without a called-tools set.
+        text = "Revenue was $24.7B [anything row 0]."
+        assert _has_grounding_citation(text, 13, 18, frozenset())
+
+    def test_empty_called_tools_rejects_prose_form(self) -> None:
+        # Prose form requires cross-validation: ``according to filings``
+        # must NOT suppress when no called-tools context is available,
+        # otherwise the AMD-style hallucination regression returns.
+        text = "Q2 revenue was $34.6B according to filings."
+        assert not _has_grounding_citation(text, 16, 21, frozenset())
+
+
+class TestValidatorIntegrationBug3:
+    """End-to-end validator behaviour after Bug 3 fixes — the high-level
+    contract that closes the user-facing issue."""
+
+    def setup_method(self) -> None:
+        self.v = NumericGroundingValidator()
+
+    def test_unit_suffix_vs_raw_value_matches(self) -> None:
+        """Answer says ``$24.7B``; tool row carries raw ``24700000000``
+        as REVENUE — the validator must accept this (it already does via
+        ``_decode_token``, but this is the regression guard for Bug 3)."""
+        rows = [_row_with_value(24_700_000_000, FieldKind.REVENUE)]
+        result = self.v.validate("Revenue was $24.7B last quarter.", rows)
+        assert result.passed, result.unsupported
+
+    def test_prose_cited_unsupported_number_is_suppressed(self) -> None:
+        """A number the validator can't match against any tool row but
+        with a prose citation to a real tool → NOT flagged. This is the
+        exact false-positive the Bug 3 banner was firing on."""
+        # No matching tool value, but the prose citation points at a tool
+        # that was actually called.
+        rows = [_row_with_value(1_000_000, FieldKind.REVENUE)]
+        result = self.v.validate(
+            "Q3 revenue was $24.7B per query_fundamentals row 0.",
+            rows,
+            called_tool_names=["query_fundamentals"],
+        )
+        # Citation suppression kicks in → no unsupported entry for $24.7B.
+        revenue_failures = [u for u in result.unsupported if u.field_kind is FieldKind.REVENUE]
+        assert not revenue_failures, result.unsupported
+
+    def test_uncited_unsupported_number_still_flagged(self) -> None:
+        """Negative-space check: a fabricated number with NO citation
+        still trips the validator (no false negatives)."""
+        rows = [_row_with_value(10_253_000_000, FieldKind.REVENUE)]
+        result = self.v.validate(
+            "Q2 revenue was $34.6B according to filings.",
+            rows,
+            called_tool_names=["query_fundamentals"],
+        )
+        assert not result.passed
+        assert any(u.field_kind is FieldKind.REVENUE for u in result.unsupported)
+
+    def test_normalisation_plus_citation_together(self) -> None:
+        """Both fixes active: answer uses ``$24.7B`` (normalised form),
+        tool returns raw ``24700000000``, and the answer also has a
+        prose citation. Validator must pass cleanly."""
+        rows = [_row_with_value(24_700_000_000, FieldKind.REVENUE)]
+        result = self.v.validate(
+            "Revenue was $24.7B (source: query_fundamentals row 0).",
+            rows,
+            called_tool_names=["query_fundamentals"],
+        )
+        assert result.passed, result.unsupported

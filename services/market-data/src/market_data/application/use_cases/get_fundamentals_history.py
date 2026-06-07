@@ -273,6 +273,33 @@ class GetFundamentalsHistoryUseCase:
                 ticker=ticker,
             )
 
+            # BugFix B (2026-06-06): defense-in-depth invariant — every row
+            # served to downstream consumers (rag-chat, frontend) MUST have a
+            # non-empty period label. If _period_label ever returns falsy
+            # (e.g. future refactor regression), synthesise a label from the
+            # period_key. The "Period → (empty)" bug in rag-chat (rendering
+            # "Period →  Period" with no value) was caused by an empty label
+            # propagating through; this guard makes that physically impossible.
+            if not period_label or not str(period_label).strip():
+                log.warning(
+                    "period_label_empty_fallback_synthesised",
+                    ticker=ticker,
+                    period_end=period_key,
+                )
+                # Derive a generic calendar-quarter fallback as the absolute
+                # last resort. period_key is the strftime("%Y-%m-%d") of
+                # rec.period_end so it is always parseable here.
+                try:
+                    from datetime import date as _date_fb
+
+                    _dt_fb = _date_fb.fromisoformat(period_key)
+                    _q_fb = (_dt_fb.month - 1) // 3 + 1
+                    period_label = f"Q{_q_fb} {_dt_fb.year}"
+                except (ValueError, TypeError):
+                    # Should be unreachable — period_key originates from
+                    # strftime on a non-null DB timestamp. Belt-and-braces.
+                    period_label = "Unknown Period"
+
             result_periods.append(
                 {
                     "period": period_label,
@@ -393,14 +420,38 @@ def _period_label(
       * AMD  fy_end=12, period 2026-03-31 → Q1 FY2026  (calendar = fiscal here)
       * Unknown fy_end, period 2026-03-31 → "Q1 2026" + warning
 
-    Returns the original input unchanged on any parse failure (forward-compatible).
+    Returns a non-empty placeholder string on parse failure. Previously this
+    returned the raw input unchanged, which let an empty string ("") propagate
+    as ``period_label`` — that was the root cause of the rag-chat "Period →
+    (empty) → Period" rendering bug (BugFix B, 2026-06-06): an empty input
+    would round-trip to an empty label. We now guarantee a syntactically
+    valid non-empty string so every downstream renderer has SOMETHING to show.
     """
+    # WHY default to "Unknown Period" on empty/unparseable input rather than
+    # echoing the raw value: rag-chat's table renderer assumes the label is
+    # always meaningful and uses it as a row header. An empty string collapses
+    # the column entirely (the "Period →  Period" failure mode); a None would
+    # fail Pydantic ``str`` validation on FundamentalsQueryPeriodRow.
+    if not report_date or not isinstance(report_date, str):
+        log.warning(
+            "period_label_unparseable_input",
+            input_value=report_date,
+            ticker=ticker,
+        )
+        return "Unknown Period"
     try:
         from datetime import date as _date
 
         dt = _date.fromisoformat(report_date)
     except (ValueError, TypeError):
-        return report_date
+        log.warning(
+            "period_label_parse_failed",
+            input_value=report_date,
+            ticker=ticker,
+        )
+        # Echo the input if it at least LOOKS like a date string; otherwise
+        # return the safe fallback. Either way, never return empty.
+        return report_date.strip() if report_date.strip() else "Unknown Period"
 
     if fiscal_year_end_month is None or not (1 <= fiscal_year_end_month <= 12):
         # No reliable fiscal calendar — emit an observability hook so coverage

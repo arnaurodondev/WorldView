@@ -249,7 +249,7 @@ class TestToolUsePromptContract:
         detectable in telemetry. Pinning the floor also catches
         accidental downgrades during merges.
         """
-        assert TOOL_USE_SYSTEM_PROMPT_TEMPLATE.version >= "1.8"
+        assert TOOL_USE_SYSTEM_PROMPT_TEMPLATE.version >= "1.9"
 
     def test_financial_data_addendum_contains_partial_data_rule(self) -> None:
         """PLAN-0104 W47 regression — PARTIAL DATA RULE.

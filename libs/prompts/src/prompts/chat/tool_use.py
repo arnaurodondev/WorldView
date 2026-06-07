@@ -87,10 +87,23 @@ TOOL_USE_SYSTEM_PROMPT_TEMPLATE = PromptTemplate(
     #        MISSING-METRIC RULE still applies for the narrow case where
     #        the SPECIFIC requested metric is entirely absent — its
     #        anti-fabrication property is preserved.
-    version="1.8",
+    # 1.9 — PLAN-0107 follow-up Bug 1: add ANSWER PREAMBLE — FORBIDDEN
+    #        clause forbidding self-correction / meta-commentary openings.
+    #        Root cause: the grounding-rewrite path injected the prior
+    #        failed draft as an assistant turn followed by a "fix these
+    #        issues" user turn, which trained the LLM to begin its rewrite
+    #        with "You're right — I need to correct this. Let me re-
+    #        examine..." That preamble is the text we stream to the user,
+    #        NOT a hidden chain-of-thought. Defense-in-depth also lives in
+    #        the orchestrator (the prior assistant turn is now removed
+    #        from the rewrite history); this prompt clause is the belt-
+    #        and-braces companion so the LLM avoids self-correction
+    #        language even when other paths leak the prior draft.
+    version="1.9",
     description=(
         "Strict no-hallucination tool-use system prompt for multi-turn agent loop "
-        "(v1.8 adds PARTIAL DATA RULE per PLAN-0104 W47; v1.7 adds MISSING-METRIC "
+        "(v1.9 adds ANSWER PREAMBLE — FORBIDDEN clause per PLAN-0107 follow-up Bug 1; "
+        "v1.8 adds PARTIAL DATA RULE per PLAN-0104 W47; v1.7 adds MISSING-METRIC "
         "RULE per PLAN-0104 W39; v1.6 adds 4-section ANSWER STRUCTURE + "
         "VALUATION-CONTEXT composition per BP-651; v1.5 adds SNAPSHOT-VS-PERIODS "
         "rule per BP-640; v1.4 adds RATIO-OR-TTM directive per BP-639; v1.3 adds "
@@ -169,6 +182,29 @@ TOOL_USE_SYSTEM_PROMPT_TEMPLATE = PromptTemplate(
         "- Rationalising your own bad numbers ('this may reflect volatility...').\n"
         "- Accepting M&A, partnership, spin-off, leadership, or product-launch claims "
         "from the user's question without tool confirmation.\n\n"
+        # PLAN-0107 follow-up Bug 1: forbid self-correction / meta-commentary
+        # openings in the user-visible answer. The grounding-rewrite path
+        # injects the prior failed draft into the message history, which
+        # trains the LLM to begin its rewrite with "You're right — I need
+        # to correct this. Let me re-examine the data..." That preamble is
+        # the text we stream to the user, NOT a hidden chain-of-thought.
+        # Defense-in-depth is also applied in the orchestrator (the prior
+        # assistant turn is now removed from the rewrite history); this
+        # prompt clause is the belt-and-braces companion.
+        "## ANSWER PREAMBLE — FORBIDDEN\n\n"
+        "Never preface your answer with self-correction or meta-commentary. Forbidden\n"
+        "openings include (but are not limited to):\n"
+        '- "You\'re right —"\n'
+        '- "I need to correct this"\n'
+        '- "Let me re-examine"\n'
+        '- "I should clarify"\n'
+        '- "Apologies for the confusion"\n'
+        '- "Looking again at the tools"\n'
+        '- "Actually, the tools returned..."\n\n'
+        "Answer the question directly. If you are correcting a prior response, do\n"
+        "NOT acknowledge it — simply provide the corrected answer as if it were\n"
+        "the first attempt. The user does not see your prior drafts; they see\n"
+        "ONLY this final response.\n\n"
         "TOOL DATE DISCIPLINE:\n"
         "When you call tools that take dates (price history, earnings calendar, economic "
         "events, news search), use {today_iso} as the reference point — never use dates "

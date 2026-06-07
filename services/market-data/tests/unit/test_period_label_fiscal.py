@@ -265,3 +265,185 @@ def _capturing_structlog_warnings(caplog: pytest.LogCaptureFixture) -> Any:
         yield
     finally:
         structlog.configure(**original)
+
+
+# ── BugFix B (2026-06-06): period_label invariant — never None / never empty ──
+#
+# Bug context: rag-chat was rendering "Period →  Period" with no values
+# because some fundamentals rows reached the renderer with an empty
+# period_label. The schema declares ``period_label: str`` (non-Optional), so
+# the failure mode was an empty STRING, not None — Pydantic would have caught
+# None. Root cause was ``_period_label`` echoing falsy input verbatim. These
+# tests pin the post-fix invariant: every label is a non-empty, meaningful
+# string regardless of input.
+
+
+def test_period_label_empty_input_returns_non_empty_fallback() -> None:
+    """An empty report_date must NOT produce an empty label (BugFix B)."""
+    # The pre-fix bug: _period_label("") returned "" → propagated as
+    # period_label="" → rag-chat rendered nothing between "Period →" and the
+    # next row marker. Guard: always return a non-empty placeholder string.
+    result = _period_label("", fiscal_year_end_month=12, ticker="AAPL")
+    assert result, "period_label must never be empty"
+    assert result == "Unknown Period"
+
+
+def test_period_label_none_input_returns_fallback() -> None:
+    """A None report_date must coerce to the safe fallback (BugFix B)."""
+    # _period_label is typed ``str`` but defense-in-depth: a caller mistake
+    # (e.g. forgetting strftime) should produce a visible fallback, not crash
+    # or emit empty.
+    result = _period_label(None, fiscal_year_end_month=12, ticker="AAPL")  # type: ignore[arg-type]
+    assert result == "Unknown Period"
+
+
+def test_period_label_unparseable_returns_non_empty() -> None:
+    """A garbage non-date string must return a non-empty label (BugFix B)."""
+    # Unparseable but non-empty input — we echo the (stripped) value so
+    # operators can correlate the warning log; what matters is NEVER empty.
+    result = _period_label("not-a-date", fiscal_year_end_month=12, ticker="AAPL")
+    assert result, "period_label must never be empty for any input"
+    # Either the echo or the safe fallback is acceptable as long as it's
+    # non-empty and a string.
+    assert isinstance(result, str)
+    assert len(result.strip()) > 0
+
+
+def test_period_label_whitespace_only_returns_fallback() -> None:
+    """Whitespace-only input must produce the safe fallback (BugFix B)."""
+    # Whitespace-only echo would still collapse the rendered cell, so route
+    # to the explicit fallback.
+    result = _period_label("   ", fiscal_year_end_month=12, ticker="AAPL")
+    assert result == "Unknown Period"
+
+
+def test_query_fundamentals_metrics_row_always_has_period_label(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Every metrics_by_period row must serialise with a non-empty period_label.
+
+    Pins the API-layer invariant: a downstream consumer (rag-chat,
+    frontend) must never see ``period_label=""`` or ``period_label=None``
+    in a FundamentalsQueryPeriodRow. The schema's ``str`` (non-Optional)
+    typing makes None unrepresentable; this test guards the empty-string
+    failure mode too.
+    """
+    import asyncio
+
+    # Build a real FundamentalsRecord with a known period_end so the use
+    # case has something to project. We don't need EODHD-shape data — the
+    # invariant we're testing is purely about the label slot.
+    from datetime import datetime
+
+    from market_data.application.use_cases.query_fundamentals_metrics import QueryFundamentalsUseCase
+    from market_data.domain.entities import Instrument as _Instrument
+    from market_data.domain.value_objects import InstrumentFlags as _Flags
+
+    rec = FundamentalsRecord(
+        id=str(uuid4()),
+        security_id=str(uuid4()),
+        section=FundamentalsSection.INCOME_STATEMENT,
+        period_end=datetime(2026, 3, 31, tzinfo=UTC),
+        period_type=PeriodType.QUARTERLY,
+        data={"totalRevenue": "1.0e9"},
+        source="eodhd",
+        ingested_at=datetime(2026, 4, 1, tzinfo=UTC),
+    )
+    instrument = _Instrument(
+        id=str(uuid4()),
+        symbol="AAPL",
+        exchange="NASDAQ",
+        flags=_Flags(),
+        fiscal_year_end_month=9,
+    )
+
+    # Mock UoW with the read repos the use case touches.
+    uow = MagicMock()
+    uow.instruments_read = MagicMock()
+    uow.instruments_read.find_by_id = AsyncMock(return_value=instrument)
+    uow.fundamentals_read = MagicMock()
+
+    async def _find_by_section(_iid: str, section: FundamentalsSection, **_kw: Any) -> list[FundamentalsRecord]:
+        if section == FundamentalsSection.INCOME_STATEMENT:
+            return [rec]
+        return []
+
+    uow.fundamentals_read.find_by_section = AsyncMock(side_effect=_find_by_section)
+
+    uc = QueryFundamentalsUseCase(uow)
+    result = asyncio.run(
+        uc.execute(
+            instrument_id=uuid4(),
+            metrics=["revenue"],
+            periods=4,
+            period_type="quarterly",
+            include_snapshot=False,
+        )
+    )
+
+    rows = result["metrics_by_period"]
+    assert rows, "use case must produce at least one row for valid input"
+    for row in rows:
+        # Hard invariant: period_label is present, non-empty, a str.
+        assert "period_label" in row
+        assert isinstance(row["period_label"], str)
+        assert row["period_label"].strip(), f"empty period_label in row: {row}"
+        # Sibling invariant: period_end is also present and non-empty.
+        assert row.get("period_end")
+        assert isinstance(row["period_end"], str)
+
+
+def test_get_fundamentals_history_row_always_has_period(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Every periods row from GetFundamentalsHistoryUseCase must have a non-empty ``period``.
+
+    Mirror of the query-use-case invariant for the legacy /history endpoint.
+    Field is named ``period`` (not ``period_label``) per
+    FundamentalsHistoryPeriod schema.
+    """
+    import asyncio
+    from datetime import datetime
+
+    from market_data.domain.value_objects import InstrumentFlags as _Flags
+
+    rec = FundamentalsRecord(
+        id=str(uuid4()),
+        security_id=str(uuid4()),
+        section=FundamentalsSection.EARNINGS_HISTORY,
+        period_end=datetime(2026, 3, 31, tzinfo=UTC),
+        period_type=PeriodType.QUARTERLY,
+        data={"epsActual": "2.01"},
+        source="eodhd",
+        ingested_at=datetime(2026, 4, 1, tzinfo=UTC),
+    )
+    instrument = Instrument(
+        id=str(uuid4()),
+        symbol="AAPL",
+        exchange="NASDAQ",
+        flags=_Flags(),
+        fiscal_year_end_month=9,
+    )
+
+    uow = MagicMock()
+    uow.instruments_read = MagicMock()
+    uow.instruments_read.find_by_id = AsyncMock(return_value=instrument)
+    uow.fundamentals_read = MagicMock()
+
+    async def _find_by_section(_iid: str, section: FundamentalsSection, **_kw: Any) -> list[FundamentalsRecord]:
+        if section == FundamentalsSection.EARNINGS_HISTORY:
+            return [rec]
+        return []
+
+    uow.fundamentals_read.find_by_section = AsyncMock(side_effect=_find_by_section)
+
+    uc = GetFundamentalsHistoryUseCase(uow)
+    result = asyncio.run(uc.execute(instrument_id=uuid4(), periods=4, period_type="quarterly"))
+
+    periods = result["periods"]
+    assert periods, "use case must produce at least one period row"
+    for row in periods:
+        assert row.get("period"), f"empty 'period' label in row: {row}"
+        assert isinstance(row["period"], str)
+        assert row["period"].strip()
+        assert row.get("period_end_date")
