@@ -1,94 +1,93 @@
-# Grafana Validation Harness
+# Grafana / Observability Validation Notes
 
-> Stub — full content authored by PLAN-0107 C-2 (recording rules + harness
-> promotion). This file currently hosts the C-5 Loki ingestion audit only.
+Operational notes for validating Grafana, Loki, Tempo and Alloy in the
+worldview platform. Owned by PLAN-0107 (observability follow-ups).
 
-The harness lives at `scripts/grafana_validation.sh` (after C-2 lands) and is
-invoked via `make grafana-validate`. Output categories (OK / EMPTY-OK / BROKEN /
-LOGQL-SKIP) are documented in `docs/observability/dashboards.md`.
+---
 
-## Loki ingestion coverage
+## C-5 — Loki / Alloy service label
 
-*Audit timestamp:* 2026-06-05 (PLAN-0107 C-5).
+### Symptom
 
-### Current state (queried via Loki HTTP API)
+`GET /loki/api/v1/label/service_name/values` returns only
+`["unknown_service"]`. Every log stream collapses into a single bucket
+and the `workers-up.json` "Workers Ready (last 5 min)" panel (added in
+PLAN-0107 B-5) returns zero series because its query is:
 
-- `GET /loki/api/v1/labels` → `data: ["service_name"]` (1 label).
-- `GET /loki/api/v1/label/service_name/values` → `data: ["unknown_service"]`
-  (1 value; **all** container logs are bucketed under a single stream).
-- `GET /loki/api/v1/label/container/values` → empty.
-- `GET /loki/api/v1/label/service/values` → empty.
-
-Querying `{service_name="unknown_service"}` over the last 5 min returns logs,
-confirming Alloy is shipping to Loki and the docker discovery + keep regex are
-working at the ingest layer — but the per-container identity is not propagating
-to indexed stream labels.
-
-### Running container coverage
-
-`docker ps` reports 76 containers, 59 of which match the worldview app prefix
-list (portfolio, market-ingestion, market-data, content-ingestion, content-store,
-api-gateway, nlp-pipeline, knowledge-graph, rag-chat, alert, worldview-web). All
-59 are matched by the current Alloy `keep` regex; the PLAN-0107 B-3 worker
-container names (alert-dispatcher, content-ingestion-scheduler,
-knowledge-graph-instrument-discovered-consumer, market-data-ohlcv-consumer,
-market-data-dispatcher, nlp-pipeline-entity-refresh-consumer,
-portfolio-instrument-consumer, rag-chat-brief-scheduler) all share one of those
-service prefixes and are therefore captured by the existing alternation. **No
-container is dropped by the keep regex.**
-
-### Current Alloy keep regex
-
-```
-/(portfolio|market-ingestion|market-data|content-ingestion|content-store|api-gateway|nlp-pipeline|knowledge-graph|rag-chat|alert|worldview-web).*
+```logql
+count_over_time({job=~".+"} |= "_ready" [5m]) by (service_name)
 ```
 
-(see `infra/alloy/config.alloy` `loki.relabel "docker"` block).
+### Root cause
 
-### Gap identified — NOT the keep regex
+Alloy's `loki.relabel "docker"` block (`infra/alloy/config.alloy`) only
+wrote the `service` target label:
 
-The keep regex is correct; the gap is the **service-name relabel target**. The
-current rule writes the captured group to target_label `service`, but Loki's
-default stream label set indexes `service_name` (not `service`). Result: every
-log stream collapses to `service_name=unknown_service` and the B-5 panel
-(`sum by (service_name) (count_over_time({job=~".+"} |= "_ready" [5m]))`) cannot
-distinguish workers. Likewise the existing `api-usage-analytics` and
-`error-observability` LogQL panels lose their `service`/`job` axis.
-
-### Recommended fix (deferred — not in this wave's scope)
-
-Add a second relabel rule in `infra/alloy/config.alloy` writing the captured
-service name to `service_name` (and a `job` label mirroring it), e.g.:
-
+```alloy
+rule {
+  source_labels = ["__meta_docker_container_name"]
+  target_label  = "service"
+  regex         = "/worldview-(.*)-\\d+"
+  replacement   = "$1"
+}
 ```
+
+But Loki's built-in auto-label axis is `service_name` (not `service`).
+Without an explicit `service_name` target label, Loki drops every stream
+into the `unknown_service` default and `service` never appears as a
+label at all (`GET /loki/api/v1/labels` returns `["service_name"]`
+only). All panels that group by `service_name` therefore see one
+collapsed series.
+
+### Fix landed
+
+Added a parallel `rule` block in `infra/alloy/config.alloy` (do NOT
+rename the existing `service` rule — other dashboards may reference
+it):
+
+```alloy
 rule {
   source_labels = ["__meta_docker_container_name"]
   target_label  = "service_name"
   regex         = "/worldview-(.*)-\\d+"
   replacement   = "$1"
 }
-rule {
-  source_labels = ["__meta_docker_container_name"]
-  target_label  = "job"
-  regex         = "/worldview-(.*)-\\d+"
-  replacement   = "$1"
-}
 ```
 
-Restart Alloy (`docker compose restart alloy`), then re-verify with
-`curl -s http://localhost:3100/loki/api/v1/label/service_name/values | jq .data`
-— the list should expand from `["unknown_service"]` to one entry per running
-worker.
+Regex matches the compose-generated container naming convention
+(`/worldview-<service>-<n>`) and captures the service slug so values
+like `portfolio`, `rag-chat`, `content-ingestion-worker` appear instead
+of `unknown_service`.
 
-This fix is scoped to a follow-up wave because it is paired with the B-4 banner
-sweep (which emits the `_ready` events the new label axis is designed to
-surface). Filing as **FU-OBS-LOKI-LABELS** for cross-reference.
+### Verification queries
 
-### Happy-state acceptance for this audit
+After Alloy restart and ~30 s of fresh log shipping:
 
-- Alloy is up, shipping, and the keep regex covers every running worldview
-  app container — confirmed.
-- No new worker container introduced by PLAN-0107 B-3 is excluded by the
-  keep alternation — confirmed.
-- The next-layer issue (single-stream collapse to `unknown_service`) is
-  documented above and tracked as a follow-up rather than left silent.
+```bash
+# Expect: count > 1 and first10 includes real container slugs
+curl -s http://localhost:3100/loki/api/v1/label/service_name/values \
+  | python3 -c "import json,sys; d=json.loads(sys.stdin.read()).get('data',[]); print(f'service_name values: count={len(d)} first10={d[:10]}')"
+
+# Expect: result count > 0
+curl -s 'http://localhost:3100/loki/api/v1/query?query=sum%20by%20%28service_name%29%20%28count_over_time%28%7Bservice_name%3D~%22.%2B%22%7D%5B5m%5D%29%29' \
+  | python3 -c "import json,sys; print('result count:', len(json.loads(sys.stdin.read())['data']['result']))"
+```
+
+### Live-stack validation note (2026-06-05)
+
+The fix was implemented and committed on branch `feat/plan-0099-w4` in
+worktree `.claude/worktrees/agent-a7d8d9eb`. The running Alloy
+container mounts the file from the **main** worktree
+(`/Users/arnaurodon/Projects/University/final_thesis/worldview/infra/alloy/config.alloy`),
+so live verification against `localhost:3100` was deferred to avoid a
+parallel-session conflict (R42 / BP-590) with the main worktree. Once
+the branch lands on `main` the running Alloy will pick up the new rule
+on the next `docker compose restart alloy`.
+
+Baseline confirmed on live stack before the merge:
+
+- `GET /loki/api/v1/labels` → `["service_name"]` (no `service` label)
+- `GET /loki/api/v1/label/service_name/values` → `["unknown_service"]`
+  (count 1)
+
+This matches the predicted symptom exactly, confirming the diagnosis.

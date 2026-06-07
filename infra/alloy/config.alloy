@@ -57,6 +57,21 @@ loki.relabel "docker" {
     regex         = "/worldview-(.*)-\\d+"
     replacement   = "$1"
   }
+
+  // FU-OBS-LOKI-LABELS (PLAN-0107 C-5): Loki's auto-label is `service_name`
+  // (not `service`), so without this rule every stream collapsed to the
+  // single bucket `unknown_service` and panels like "Workers Ready
+  // (last 5 min)" returned zero series. Mirror the `service` extraction
+  // into `service_name` so panel queries `count_over_time({service_name=~".+"} [5m])`
+  // get one stream per container. We ADD a parallel rule instead of
+  // renaming `service` because other dashboards/Promtail joins may still
+  // reference it.
+  rule {
+    source_labels = ["__meta_docker_container_name"]
+    target_label  = "service_name"
+    regex         = "/worldview-(.*)-\\d+"
+    replacement   = "$1"
+  }
 }
 
 // ── Push logs to Loki ──
