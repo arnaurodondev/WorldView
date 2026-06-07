@@ -102,11 +102,18 @@ def upgrade() -> None:
         # GENERATED ALWAYS AS column — Postgres rejects it in ON CONFLICT target
         # lists.  The named constraint ``uq_sources_dedup`` (source_type, config_hash)
         # was added by migration 0006 and is stable.
+        # NOTE: use ``CAST(:config AS jsonb)`` rather than the ``:config::jsonb``
+        # shorthand. SQLAlchemy's text() bind-parameter tokenizer interprets the
+        # double colon as a continuation of the parameter name on some versions,
+        # producing at migrate-time:
+        #     ArgumentError: This text() construct doesn't define a bound
+        #     parameter named 'config'
+        # The explicit CAST form is portable and avoids that parser ambiguity.
         op.execute(
             sa.text(
                 """
                 INSERT INTO sources (id, name, source_type, config, enabled, created_at)
-                VALUES (:id, :name, :source_type, :config::jsonb, :enabled, :created_at)
+                VALUES (:id, :name, :source_type, CAST(:config AS jsonb), :enabled, :created_at)
                 ON CONFLICT ON CONSTRAINT uq_sources_dedup DO NOTHING
                 """
             ).bindparams(
