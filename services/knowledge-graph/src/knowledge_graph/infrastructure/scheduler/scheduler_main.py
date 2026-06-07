@@ -21,6 +21,7 @@ from typing import Any
 from observability import (  # type: ignore[import-untyped]
     configure_logging,
     get_logger,
+    log_runtime_banner,
     start_metrics_server,
 )
 
@@ -207,6 +208,17 @@ async def main() -> None:
         gemini_extraction_client=gemini_ext,
     )
     scheduler = KnowledgeGraphScheduler(settings, workers=workers)
+
+    # PLAN-0107 B-4: emit single <service>_ready event after deps are wired.
+    log_runtime_banner(
+        "knowledge-graph-scheduler",
+        dependencies={
+            "postgres_dsn": str(settings.database_url),
+            "valkey_url": getattr(settings, "valkey_url", None),
+            "embedding_provider": settings.embedding_provider,
+            "embedding_model_id": settings.embedding_api_model_id,
+        },
+    )
 
     # Standalone scheduler: no consumer coroutine — use an async no-op
     async def _noop_consumer() -> None:

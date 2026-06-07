@@ -19,7 +19,11 @@ from market_ingestion.config import Settings
 from market_ingestion.infrastructure.db.session import _build_factories
 from market_ingestion.infrastructure.db.unit_of_work import SqlaUnitOfWork
 from market_ingestion.infrastructure.workers.reclaim_worker import PrimaryProviderReclaimWorker
-from observability.logging import get_logger  # type: ignore[import-untyped]
+from observability import (  # type: ignore[import-untyped]
+    configure_logging,
+    get_logger,
+    log_runtime_banner,
+)
 
 logger = get_logger(__name__)
 
@@ -49,13 +53,36 @@ def _create_reclaim_worker(settings: Settings) -> PrimaryProviderReclaimWorker:
 async def _run_reclaim_worker() -> None:
     """Async entry-point; installs signal handlers for graceful shutdown."""
     settings = Settings()  # type: ignore[call-arg]
-    worker = _create_reclaim_worker(settings)
 
-    loop = asyncio.get_running_loop()
-    for sig in (signal.SIGINT, signal.SIGTERM):
-        loop.add_signal_handler(sig, worker.stop)
+    # PLAN-0107 B-4 — full logging lifecycle (worst-6 fix).
+    configure_logging(
+        service_name="market-ingestion-reclaim-worker",
+        level=getattr(settings, "log_level", "INFO"),
+        json=getattr(settings, "log_json", True),
+    )
+    log = get_logger("market_ingestion.reclaim_worker_main")  # type: ignore[no-any-return]
+    log.info("market_ingestion_reclaim_worker_starting")
 
-    await worker.run()
+    try:
+        worker = _create_reclaim_worker(settings)
+
+        log_runtime_banner(
+            "market-ingestion-reclaim-worker",
+            dependencies={
+                "postgres_dsn": str(settings.database_url),
+            },
+        )
+
+        loop = asyncio.get_running_loop()
+        for sig in (signal.SIGINT, signal.SIGTERM):
+            loop.add_signal_handler(sig, worker.stop)
+
+        await worker.run()
+    except Exception:
+        log.exception("market_ingestion_reclaim_worker_startup_failed")
+        raise
+    finally:
+        log.info("market_ingestion_reclaim_worker_stopped")
 
 
 def main() -> None:

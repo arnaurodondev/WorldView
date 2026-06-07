@@ -31,6 +31,7 @@ from typing import Any
 from observability import (  # type: ignore[import-untyped]
     configure_logging,
     get_logger,
+    log_runtime_banner,
     start_metrics_server,
 )
 
@@ -115,6 +116,16 @@ async def main() -> None:
     )
 
     log.info("embedding_retry_worker_ready", provider=settings.embedding_provider)
+
+    # PLAN-0107 B-4: emit single <service>_ready event after deps are wired.
+    log_runtime_banner(
+        "nlp-pipeline-embedding-retry-worker",
+        dependencies={
+            "postgres_dsn": str(settings.database_url),
+            "embedding_provider": settings.embedding_provider,
+            "max_retries": max_retries,
+        },
+    )
 
     worker_task = asyncio.create_task(worker.run_forever(stop_event), name="embedding_retry_worker")
 

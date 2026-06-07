@@ -19,6 +19,7 @@ import sys
 from observability import (  # type: ignore[import-untyped]
     configure_logging,
     get_logger,
+    log_runtime_banner,
     start_metrics_server,
 )
 
@@ -108,6 +109,16 @@ async def main() -> None:
             heartbeat_interval_ms=heartbeat_interval_ms,
         ),
         dedup_client=valkey,
+    )
+
+    # PLAN-0107 B-4: emit single <service>_ready event after deps are wired.
+    log_runtime_banner(
+        "market-data-fundamentals-consumer",
+        dependencies={
+            "kafka_brokers": settings.kafka_bootstrap_servers,
+            "valkey_url": getattr(settings, "valkey_url", None),
+            "topics_subscribed": ["market.dataset.fetched"],
+        },
     )
 
     try:

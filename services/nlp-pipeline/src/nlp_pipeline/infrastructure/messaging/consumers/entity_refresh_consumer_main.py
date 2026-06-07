@@ -23,6 +23,7 @@ import sys
 from observability import (  # type: ignore[import-untyped]
     configure_logging,
     get_logger,
+    log_runtime_banner,
     start_metrics_server,
 )
 
@@ -79,6 +80,15 @@ async def main() -> None:
     consumer = EntityRefreshConsumer(
         config=config,
         intelligence_session_factory=intel_sf,
+    )
+
+    # PLAN-0107 B-4: emit single <service>_ready event after deps are wired.
+    log_runtime_banner(
+        "nlp-pipeline-entity-refresh-consumer",
+        dependencies={
+            "kafka_brokers": settings.kafka_bootstrap_servers,
+            "topics_subscribed": [settings.topic_entity_refresh],
+        },
     )
 
     try:

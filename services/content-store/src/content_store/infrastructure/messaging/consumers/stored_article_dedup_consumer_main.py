@@ -20,6 +20,7 @@ import sys
 from observability import (  # type: ignore[import-untyped]
     configure_logging,
     get_logger,
+    log_runtime_banner,
     start_metrics_server,
 )
 
@@ -69,6 +70,15 @@ async def main() -> None:
         bootstrap_servers=settings.kafka_bootstrap_servers,
         group_id="content-store-dedup-consumer",
         session_factory=write_factory,
+    )
+
+    # PLAN-0107 B-4: emit single <service>_ready event after deps are wired.
+    log_runtime_banner(
+        "content-store-dedup-consumer",
+        dependencies={
+            "postgres_dsn": str(settings.database_url),
+            "kafka_brokers": settings.kafka_bootstrap_servers,
+        },
     )
 
     try:

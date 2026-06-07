@@ -26,6 +26,7 @@ from messaging.valkey.client import ValkeyClient  # type: ignore[import-untyped]
 from observability import (  # type: ignore[import-untyped]
     configure_logging,
     get_logger,
+    log_runtime_banner,
     start_metrics_server,
 )
 from rag_chat.application.use_cases.briefing_context import BriefingContextGatherer
@@ -260,6 +261,17 @@ async def _run_loop(settings: Settings) -> None:
         "brief_scheduler_started",
         interval_hours=settings.brief_pregen_interval_hours,
         window_days=settings.brief_pregen_active_window_days,
+    )
+
+    # PLAN-0107 B-4: emit single <service>_ready event after deps are wired.
+    log_runtime_banner(
+        "rag-chat-brief-scheduler",
+        dependencies={
+            "valkey_url": getattr(settings, "valkey_url", None),
+            "api_gateway_url": settings.api_gateway_url,
+            "interval_hours": settings.brief_pregen_interval_hours,
+            "active_window_days": settings.brief_pregen_active_window_days,
+        },
     )
 
     try:

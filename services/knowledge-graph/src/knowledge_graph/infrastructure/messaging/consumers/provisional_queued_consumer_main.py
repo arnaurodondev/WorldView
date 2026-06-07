@@ -21,6 +21,7 @@ from typing import Any
 from observability import (  # type: ignore[import-untyped]
     configure_logging,
     get_logger,
+    log_runtime_banner,
     start_metrics_server,
 )
 
@@ -172,6 +173,17 @@ async def main() -> None:
         # function defaults (2 / 1440) regardless of ops configuration.
         base_retry_minutes=settings.provisional_enrichment_base_retry_minutes,
         max_retry_minutes=settings.provisional_enrichment_max_retry_minutes,
+    )
+
+    # PLAN-0107 B-4: emit single <service>_ready event after deps are wired.
+    log_runtime_banner(
+        "knowledge-graph-provisional-queued-consumer",
+        dependencies={
+            "postgres_dsn": str(settings.database_url),
+            "kafka_brokers": settings.kafka_bootstrap_servers,
+            "valkey_url": getattr(settings, "valkey_url", None),
+            "topics_subscribed": [settings.kafka_topic_provisional_queued],
+        },
     )
 
     try:

@@ -18,7 +18,7 @@ import signal
 import sys
 from typing import Any
 
-from observability import configure_logging, get_logger  # type: ignore[import-untyped]
+from observability import configure_logging, get_logger, log_runtime_banner  # type: ignore[import-untyped]
 
 logger = get_logger(__name__)  # type: ignore[no-any-return]
 
@@ -119,6 +119,17 @@ async def main() -> None:
         llm_client=llm_client,
         embed_model_id=settings.embedding_model_id,
         dedup_client=valkey,
+    )
+
+    # PLAN-0107 B-4: emit single <service>_ready event after deps are wired.
+    log_runtime_banner(
+        "knowledge-graph-narrative-refresh-consumer",
+        dependencies={
+            "postgres_dsn": str(settings.database_url),
+            "kafka_brokers": settings.kafka_bootstrap_servers,
+            "valkey_url": getattr(settings, "valkey_url", None),
+            "topics_subscribed": [settings.kafka_topic_narrative_generated],
+        },
     )
 
     try:

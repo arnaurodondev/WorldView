@@ -14,6 +14,7 @@ import sys
 from observability import (  # type: ignore[import-untyped]
     configure_logging,
     get_logger,
+    log_runtime_banner,
     start_metrics_server,
 )
 
@@ -67,6 +68,20 @@ async def main() -> None:
         ],
     )
     consumer = InstrumentEventConsumer(consumer_config, write_factory)
+
+    # PLAN-0107 B-4: emit single <service>_ready event after deps are wired.
+    log_runtime_banner(
+        "portfolio-instrument-consumer",
+        dependencies={
+            "postgres_dsn": str(settings.database_url),
+            "kafka_brokers": settings.kafka_bootstrap_servers,
+            "topics_subscribed": [
+                settings.topic_instrument_discovered,
+                settings.topic_instrument_created,
+                settings.topic_instrument_updated,
+            ],
+        },
+    )
 
     try:
         consumer_task = asyncio.create_task(consumer.run())

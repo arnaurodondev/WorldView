@@ -21,7 +21,7 @@ from content_ingestion.application.use_cases.schedule_sources import ScheduleDue
 from content_ingestion.config import Settings
 from content_ingestion.infrastructure.db.session import _build_factories
 from content_ingestion.infrastructure.db.unit_of_work import SqlaUnitOfWork
-from observability import start_metrics_server  # type: ignore[import-untyped]
+from observability import log_runtime_banner, start_metrics_server  # type: ignore[import-untyped]
 from observability.logging import get_logger  # type: ignore[import-untyped]
 
 logger = get_logger(__name__)
@@ -254,6 +254,14 @@ async def _run_scheduler() -> None:
     loop = asyncio.get_running_loop()
     for sig in (signal.SIGINT, signal.SIGTERM):
         loop.add_signal_handler(sig, scheduler.stop)
+
+    # PLAN-0107 B-4: emit single <service>_ready event after deps are wired.
+    log_runtime_banner(
+        "content-ingestion-scheduler",
+        dependencies={
+            "postgres_dsn": str(settings.database_url),
+        },
+    )
 
     try:
         await scheduler.run()

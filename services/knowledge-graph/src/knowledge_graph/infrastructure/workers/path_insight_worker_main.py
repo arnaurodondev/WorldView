@@ -27,6 +27,7 @@ from common.ids import new_uuid7  # type: ignore[import-untyped]
 from observability import (  # type: ignore[import-untyped]
     configure_logging,
     get_logger,
+    log_runtime_banner,
     start_metrics_server,
 )
 
@@ -87,6 +88,15 @@ async def main() -> None:
         scorer=scorer,
         template_matcher=template_matcher,
         instance_uuid=instance_uuid,
+    )
+
+    # PLAN-0107 B-4: emit single <service>_ready event after deps are wired.
+    log_runtime_banner(
+        "knowledge-graph-path-insight-worker",
+        dependencies={
+            "postgres_dsn": str(settings.database_url),
+            "instance_uuid": str(instance_uuid),
+        },
     )
 
     try:

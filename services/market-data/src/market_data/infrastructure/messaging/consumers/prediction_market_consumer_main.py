@@ -19,6 +19,7 @@ import sys
 from observability import (  # type: ignore[import-untyped]
     configure_logging,
     get_logger,
+    log_runtime_banner,
     start_metrics_server,
 )
 
@@ -85,6 +86,15 @@ async def main() -> None:
             # committed offset regardless of this setting.
             auto_offset_reset="latest",
         ),
+    )
+
+    # PLAN-0107 B-4: emit single <service>_ready event after deps are wired.
+    log_runtime_banner(
+        "market-data-prediction-market-consumer",
+        dependencies={
+            "kafka_brokers": settings.kafka_bootstrap_servers,
+            "topics_subscribed": ["market.prediction.v1"],
+        },
     )
 
     try:

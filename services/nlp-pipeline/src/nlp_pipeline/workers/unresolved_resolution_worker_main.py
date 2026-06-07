@@ -26,6 +26,7 @@ from common.retry import retry_on_startup  # type: ignore[import-untyped]
 from observability import (  # type: ignore[import-untyped]
     configure_logging,
     get_logger,
+    log_runtime_banner,
     start_metrics_server,
 )
 
@@ -109,6 +110,17 @@ async def main() -> None:
         "unresolved_resolution_worker_ready",
         interval_s=settings.unresolved_resolution_interval_s,
         batch_size=settings.unresolved_resolution_batch_size,
+    )
+
+    # PLAN-0107 B-4: emit single <service>_ready event after deps are wired.
+    log_runtime_banner(
+        "nlp-pipeline-unresolved-resolution-worker",
+        dependencies={
+            "postgres_dsn": str(settings.database_url),
+            "kafka_brokers": settings.kafka_bootstrap_servers,
+            "interval_s": settings.unresolved_resolution_interval_s,
+            "batch_size": settings.unresolved_resolution_batch_size,
+        },
     )
 
     # ── Run loop with graceful shutdown ───────────────────────────────────────

@@ -20,6 +20,7 @@ from typing import Any
 from observability import (  # type: ignore[import-untyped]
     configure_logging,
     get_logger,
+    log_runtime_banner,
     start_metrics_server,
 )
 
@@ -262,6 +263,16 @@ async def main() -> None:
         log.info("valkey_connection_warmed_up")
     except Exception:
         log.warning("valkey_warmup_failed", exc_info=True)
+
+    # PLAN-0107 B-4: emit single <service>_ready event after deps are wired.
+    log_runtime_banner(
+        "nlp-pipeline-article-consumer",
+        dependencies={
+            "kafka_brokers": settings.kafka_bootstrap_servers,
+            "valkey_url": getattr(settings, "valkey_url", None),
+            "topics_subscribed": [settings.topic_article_stored],
+        },
+    )
 
     try:
         consumer_task = asyncio.create_task(consumer.run())
