@@ -94,6 +94,14 @@ export const qk = {
       ["holdings-overviews", [...ids].sort()] as const,
     watchlistQuotes: (ids: readonly string[]) =>
       ["watchlist-quotes", [...ids].sort()] as const,
+    // PLAN-0099 W4: fast sector-breakdown endpoint (31–86ms + 60s Valkey cache).
+    // WHY a dedicated key (not nested under detail(id)): the sector-breakdown
+    // cache is invalidated separately from the holdings/transactions cascade —
+    // it is a server-side computed snapshot, not derived from the raw holdings
+    // the client holds. A flat key matches the pattern of `performance` and
+    // `holdingsByPortfolio` above.
+    sectorBreakdown: (portfolioId: string) =>
+      ["portfolio-sector-breakdown", portfolioId] as const,
   },
 
   // ── Watchlists ───────────────────────────────────────────────────────────

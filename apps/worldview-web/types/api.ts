@@ -2120,6 +2120,40 @@ export interface TopPositionItem {
 }
 
 /**
+ * SectorBreakdownSegment — single row from the fast sector-breakdown endpoint.
+ *
+ * WHY market_value as a number (not string): the sector-breakdown endpoint
+ * returns float JSON (not Decimal-as-string), so no parseFloat() is needed.
+ * `weight` is a 0-1 fraction (e.g. 0.42 = 42% of portfolio).
+ */
+export interface SectorBreakdownSegment {
+  /** GICS sector name (e.g. "Technology", "Healthcare"). */
+  sector: string;
+  /** Fraction of portfolio market value in this sector [0, 1]. */
+  weight: number;
+  /** Number of holdings in this sector. */
+  count: number;
+  /** Total market value in portfolio currency. */
+  market_value: number;
+}
+
+/**
+ * SectorBreakdownResponse — payload of GET /v1/portfolios/{id}/sector-breakdown.
+ *
+ * Returned in 31–86ms with a 60s Valkey cache (vs 640ms for sector-attribution).
+ * `covered_pct` is the fraction of holdings that had price data when computed;
+ * `as_of` is the ISO-8601 date of the snapshot ("YYYY-MM-DD").
+ */
+export interface SectorBreakdownResponse {
+  portfolio_id: string;
+  segments: SectorBreakdownSegment[];
+  /** Fraction of holdings with price coverage [0, 1]. */
+  covered_pct: number;
+  /** ISO date of the snapshot (YYYY-MM-DD). */
+  as_of: string;
+}
+
+/**
  * ConcentrationResponse — payload of GET /v1/portfolios/{id}/concentration.
  *
  * `hhi` is the Herfindahl-Hirschman index in the standard 0-10,000 scale;

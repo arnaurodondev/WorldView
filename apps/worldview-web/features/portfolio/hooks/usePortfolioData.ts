@@ -62,6 +62,7 @@ import {
   computeScopeHint,
   type PortfolioKPI,
   type PortfolioAllocations,
+  type AllocationSlice,
   type HoldingOverviewMap,
 } from "@/features/portfolio/lib/kpi";
 
@@ -344,6 +345,29 @@ export function usePortfolioData(
     staleTime: 300_000,
   });
 
+  // ── Query 10: server-side sector breakdown (fast cached endpoint) ─────
+  // WHY this replaces client-side computeAllocations() for the sector dim:
+  //   The new GET /v1/portfolios/{id}/sector-breakdown endpoint returns a
+  //   pre-computed sector snapshot in 31–86ms (60s Valkey cache), vs the
+  //   ~640ms it took the old sector-attribution endpoint. Client-side
+  //   computation was a further fallback when overviews hadn't resolved yet.
+  //
+  // WHY staleTime = 60_000: matches the Valkey TTL on the S9/S1 side —
+  // fetching more often would still hit the cache, so there is no benefit
+  // to a shorter window.
+  //
+  // WHY enabled guard on activePortfolioId (not holdingInstrumentIds.length):
+  //   The breakdown is per-portfolio, not per-holding. An empty portfolio
+  //   should still fire the request (server returns an empty segments array),
+  //   consistent with how `getConcentration` behaves.
+  const { data: sectorBreakdownData } = useQuery({
+    queryKey: qk.portfolios.sectorBreakdown(activePortfolioId ?? ""),
+    queryFn: () =>
+      createGateway(accessToken).getSectorBreakdown(activePortfolioId!),
+    enabled: !!accessToken && !!activePortfolioId,
+    staleTime: 60_000,
+  });
+
   // ── Stable derived values ──────────────────────────────────────────────
   const holdingsQuotes = useMemo(
     () => holdingsQuotesData?.quotes ?? {},
@@ -392,10 +416,38 @@ export function usePortfolioData(
   // its own memo means the KPI strip updates immediately when quotes
   // arrive, while SectorAllocationPanel fills in asynchronously without
   // blocking the KPI strip.
-  const { bySector, byType } = useMemo(
+  const { bySector: bySectorClientSide, byType } = useMemo(
     () => computeAllocations(enrichedHoldings, holdingOverviews, holdingsQuotes),
     [enrichedHoldings, holdingOverviews, holdingsQuotes],
   );
+
+  // ── bySector: prefer server snapshot, fall back to client-side ────────
+  // WHY prefer server: the sector-breakdown endpoint is pre-computed with full
+  // market-data access and is 7–20× faster. Client-side computation uses only
+  // the batch-quote subset, so holdings with missing quotes fall back to cost
+  // basis — less accurate than what the server computes.
+  //
+  // WHY fall back to bySectorClientSide (not []): during cold-start the server
+  // query is in-flight while the overviews query may already have resolved.
+  // Keeping the client-side data visible prevents a blank SectorAllocationBar
+  // flash as the server query settles.
+  //
+  // WHY multiply weight by totalPortfolioValue for `value`: AllocationSlice.value
+  // is the market value in portfolio currency. SectorBreakdownSegment already
+  // carries market_value directly so we use that field.
+  const bySector: AllocationSlice[] = useMemo(() => {
+    if (sectorBreakdownData?.segments?.length) {
+      // Map SectorBreakdownSegment → AllocationSlice.
+      // `weight` is a 0-1 fraction; `pct` on AllocationSlice is also 0-1.
+      return sectorBreakdownData.segments.map((seg) => ({
+        label: seg.sector,
+        value: seg.market_value,
+        pct: seg.weight,
+      }));
+    }
+    // Server data not yet available — use client-side computation.
+    return bySectorClientSide;
+  }, [sectorBreakdownData, bySectorClientSide]);
 
   // F-021 scope hint — rendered under the portfolio selector.
   const scopeHint = useMemo(
