@@ -55,12 +55,12 @@ from dataclasses import dataclass, field
 from typing import Any, Protocol
 
 # Import the canonical judge prompt from libs/prompts. The prompt has no
-# parameters, but we now use .render() (not .template) because v1.1 escapes
-# the literal JSON braces in the OUTPUT example block as ``{{`` / ``}}`` to
-# satisfy the brace guard (MN-5). .render() with no kwargs collapses them
-# back to single braces, producing text byte-identical to the v1.0 inlined
-# _SYSTEM_PROMPT. The PromptTemplate wrapper still gives us versioning,
-# content_hash, and identifier() for artefact persistence.
+# parameters; we use .render() (not .template) because the source escapes
+# literal JSON braces in the OUTPUT example block as ``{{`` / ``}}`` for the
+# brace guard (MN-5). .render() with no kwargs collapses them back to single
+# braces. v2.0 (2026-06-08) BREAKING: per-dim key ``reason``→``feedback`` and
+# top-level ``notes``→``reviewer_summary``; this script reads BOTH for one
+# release of back-compat.
 from prompts.evaluation import CHAT_QUALITY_JUDGE
 
 # Default judge model — Llama 3.1 8B Instruct is cheap, fast, and good enough
@@ -199,13 +199,11 @@ def _build_default_llm(*, api_key: str | None, model: str, base_url: str) -> Jud
 # --------------------------------------------------------------------------
 
 
-# Use the canonical PromptTemplate from libs/prompts. v1.1 of the prompt
-# escapes the literal JSON braces in the OUTPUT example as ``{{`` / ``}}``,
-# so we now go through .render() — str.format_map collapses them back to
-# single braces and the rendered text is byte-identical to the v1.0 inlined
-# _SYSTEM_PROMPT. The PromptTemplate wrapper still gives us version +
-# content_hash + identifier() for artefact persistence
-# (judge_prompt_id in q_<id>.json + _judge_summary.json).
+# Use the canonical PromptTemplate from libs/prompts. The source escapes the
+# literal JSON braces in the OUTPUT example as ``{{`` / ``}}`` so we go
+# through .render() — str.format_map collapses them back to single braces.
+# The PromptTemplate wrapper gives us version + content_hash + identifier()
+# for artefact persistence (judge_prompt_id in q_<id>.json + _judge_summary).
 _SYSTEM_PROMPT = CHAT_QUALITY_JUDGE.render()
 
 
@@ -279,11 +277,13 @@ def judge_answer(
     if llm is None:
         # No API key + no injected LLM → return a sentinel so the report
         # can clearly show "judge was not run" rather than a fake 0.
+        _skipped_note = "Judge LLM not configured (set DEEPINFRA_API_KEY)."
         return {
             "verdict": "SKIPPED",
             "score": None,
             "dimensions": {k: None for k in DIMENSION_KEYS},
-            "notes": "Judge LLM not configured (set DEEPINFRA_API_KEY).",
+            "reviewer_summary": _skipped_note,
+            "notes": _skipped_note,  # v1.x back-compat mirror
             "raw_response": None,
             "judge_prompt_id": judge_prompt_id,
         }
@@ -292,11 +292,13 @@ def judge_answer(
     try:
         raw = llm(system=_SYSTEM_PROMPT, user=user_prompt)
     except Exception as exc:  # network error, rate-limit, model 5xx
+        _err_note = f"Judge call failed: {exc!r}"
         return {
             "verdict": "ERROR",
             "score": None,
             "dimensions": {k: None for k in DIMENSION_KEYS},
-            "notes": f"Judge call failed: {exc!r}",
+            "reviewer_summary": _err_note,
+            "notes": _err_note,  # v1.x back-compat mirror
             "raw_response": None,
             "judge_prompt_id": judge_prompt_id,
         }
@@ -336,16 +338,23 @@ def _finalise_verdict(parsed: dict[str, Any], *, raw_response: str, judge_prompt
         entry = parsed.get(key)
         if isinstance(entry, dict):
             raw_score = entry.get("score")
-            reason = str(entry.get("reason", ""))[:300]
+            # v2.0 canonical key is ``feedback``; fall back to v1.x ``reason``
+            # for one release of back-compat while in-flight judge calls
+            # transition. We emit BOTH keys downstream so older readers keep
+            # working too.
+            feedback = str(entry.get("feedback") or entry.get("reason", ""))[:300]
         else:
             raw_score = entry  # tolerate a bare number
-            reason = ""
+            feedback = ""
         try:
             score = int(raw_score) if raw_score is not None else 0
         except (TypeError, ValueError):
             score = 0
         score = max(0, min(_MAX_PER_DIMENSION, score))
-        dimensions[key] = {"score": score, "reason": reason}
+        # Emit both keys so downstream consumers (artefact readers, dashboards)
+        # can migrate at their own pace. ``feedback`` is canonical; ``reason``
+        # mirrors it for one release.
+        dimensions[key] = {"score": score, "feedback": feedback, "reason": feedback}
         total += score
 
     if total >= _PASS_THRESHOLD:
@@ -355,11 +364,17 @@ def _finalise_verdict(parsed: dict[str, Any], *, raw_response: str, judge_prompt
     else:
         verdict = "FAIL"
 
+    # v2.0: canonical top-level summary key is ``reviewer_summary`` (≤800
+    # chars, written as a PR-review note). v1.x used ``notes`` (≤400 chars).
+    # Dual-read + dual-emit for one release.
+    reviewer_summary = str(parsed.get("reviewer_summary") or parsed.get("notes", ""))[:800]
+
     return {
         "verdict": verdict,
         "score": total,
         "dimensions": dimensions,
-        "notes": str(parsed.get("notes", ""))[:600],
+        "reviewer_summary": reviewer_summary,
+        "notes": reviewer_summary,  # back-compat mirror — drop in next release
         "raw_response": raw_response,
         "judge_prompt_id": judge_prompt_id,
     }

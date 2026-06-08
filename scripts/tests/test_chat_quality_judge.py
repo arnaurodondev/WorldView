@@ -96,12 +96,15 @@ def test_judge_answer_error_when_injected_llm_raises() -> None:
 
 
 def test_judge_answer_success_returns_score_and_judge_prompt_id() -> None:
-    """A valid-JSON LLM response → PASS/WARN/FAIL verdict + dimensions + id."""
+    """A valid-JSON LLM response (v2.0 schema) → PASS verdict + dims + id."""
 
-    # Build a fake LLM that returns a known-good JSON object scoring 22 on
-    # each dimension (total = 88, which sits in the PASS band ≥85).
-    fake_payload = {k: {"score": 22, "reason": f"deterministic test stub for {k}"} for k in DIMENSION_KEYS}
-    fake_payload["notes"] = "stub notes"
+    # v2.0 canonical payload — per-dim uses ``feedback``, top-level uses
+    # ``reviewer_summary``. The judge MUST emit BOTH new + legacy keys for
+    # one release of back-compat.
+    fake_payload: dict[str, object] = {
+        k: {"score": 22, "feedback": f"deterministic test stub for {k}"} for k in DIMENSION_KEYS
+    }
+    fake_payload["reviewer_summary"] = "stub reviewer summary"
 
     def _ok_llm(*, system: str, user: str) -> str:
         # The judge expects raw JSON (no markdown fences).
@@ -114,8 +117,35 @@ def test_judge_answer_success_returns_score_and_judge_prompt_id() -> None:
     assert out["score"] == 88
     for k in DIMENSION_KEYS:
         assert out["dimensions"][k]["score"] == 22
-        assert "deterministic test stub" in out["dimensions"][k]["reason"]
-    # Notes are preserved up to the 600-char cap.
-    assert out["notes"] == "stub notes"
+        # v2.0 canonical key.
+        assert "deterministic test stub" in out["dimensions"][k]["feedback"]
+        # Back-compat mirror — must equal the canonical value for one release.
+        assert out["dimensions"][k]["reason"] == out["dimensions"][k]["feedback"]
+    # v2.0 canonical top-level field.
+    assert out["reviewer_summary"] == "stub reviewer summary"
+    # Back-compat mirror.
+    assert out["notes"] == "stub reviewer summary"
     # Traceability invariant — judge_prompt_id present on success too.
     assert out["judge_prompt_id"].startswith("chat_quality_judge@")
+
+
+def test_judge_answer_back_compat_reads_v1_keys() -> None:
+    """A v1.x-shaped payload (``reason`` + ``notes``) MUST still parse OK
+    during the one-release back-compat window. This guards against an in-
+    flight judge call from a stale prompt cache silently producing 0 scores.
+    """
+    v1_payload: dict[str, object] = {k: {"score": 20, "reason": f"v1 reason for {k}"} for k in DIMENSION_KEYS}
+    v1_payload["notes"] = "v1 notes"
+
+    def _ok_llm(*, system: str, user: str) -> str:
+        return json.dumps(v1_payload)
+
+    out = judge_answer(_make_input(), llm=_ok_llm)
+    assert out["score"] == 80  # 20 * 4
+    # Parser reads ``reason`` as fallback and promotes it to ``feedback``.
+    for k in DIMENSION_KEYS:
+        assert out["dimensions"][k]["feedback"] == f"v1 reason for {k}"
+        assert out["dimensions"][k]["reason"] == f"v1 reason for {k}"
+    # Top-level ``notes`` is promoted into the new ``reviewer_summary`` slot.
+    assert out["reviewer_summary"] == "v1 notes"
+    assert out["notes"] == "v1 notes"

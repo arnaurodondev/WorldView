@@ -146,23 +146,28 @@ def filter_questions(
 
 
 def compute_heuristics(q: dict[str, Any], result: ChatRunResult) -> dict[str, Any]:
-    """Return a dict of advisory quality flags. No pass/fail decision here."""
+    """Return a dict of advisory quality flags. No pass/fail decision here.
+
+    PLAN-0099-W4: legacy heuristic fields (expected_entities_mentioned,
+    expected_min_words, must_not_say) were removed from the question
+    schema — the v2.0 judge ignored them and they generated false WARNs.
+    expected_tools moved into ``rubric.expected_tools`` and
+    expected_max_latency_s into ``budgets.max_latency_s``. We read from
+    the new locations here; the heuristic-bucket fields they fed into
+    (entities_mentioned/missing, must_not_say_hits, answer_meets_min_words)
+    are no longer emitted.
+    """
     answer = result.answer_text or ""
-    answer_lower = answer.lower()
     words = answer.split()
 
-    expected_tools = set(q.get("expected_tools") or [])
+    # v2 schema: expected_tools lives inside the ``rubric:`` block (the only
+    # piece of the question the LLM judge actually reads). We keep the
+    # heuristic ``tool_overlap`` diagnostic so the artefact still shows which
+    # of the suggested tools were actually called — it's an advisory signal
+    # the operator scans, NOT a gate.
+    rubric_block = q.get("rubric") if isinstance(q.get("rubric"), dict) else {}
+    expected_tools = set(rubric_block.get("expected_tools") or [])
     called_tools = set(result.tools_called())
-    expected_entities = q.get("expected_entities_mentioned") or []
-    must_not_say = q.get("must_not_say") or []
-
-    # entity-mention check is substring + case-insensitive (entity tickers /
-    # multi-word company names often render in mixed case from the LLM).
-    mentioned = [e for e in expected_entities if e.lower() in answer_lower]
-    missing = [e for e in expected_entities if e.lower() not in answer_lower]
-
-    # forbidden-phrase scan; case-insensitive.
-    forbidden_hits = [phrase for phrase in must_not_say if phrase.lower() in answer_lower]
 
     # tool-call summary for the artifact
     tool_summary = [
@@ -179,15 +184,24 @@ def compute_heuristics(q: dict[str, Any], result: ChatRunResult) -> dict[str, An
         for tr in result.tool_results
     ]
 
-    expected_max_latency = float(q.get("expected_max_latency_s") or 0.0) or None
-    expected_min_words = int(q.get("expected_min_words") or 0)
+    # Advisory latency budget — read from the new ``budgets:`` block. None
+    # when the question doesn't declare a budget (no flag).
+    budgets_block = q.get("budgets") if isinstance(q.get("budgets"), dict) else {}
+    raw_budget = budgets_block.get("max_latency_s")
+    try:
+        expected_max_latency = float(raw_budget) if raw_budget is not None else None
+    except (TypeError, ValueError):
+        expected_max_latency = None
 
     return {
         "is_empty": not answer.strip(),
         "is_refusal": is_refusal(answer),
         "word_count": len(words),
         "char_count": len(answer),
-        "answer_meets_min_words": len(words) >= expected_min_words if expected_min_words else None,
+        # NOTE: ``answer_meets_min_words`` was removed in PLAN-0099-W4 — the
+        # word-count gate produced false WARNs on correctly-concise factual
+        # answers and the v2.0 judge replaced it with the LENGTH-AGNOSTIC
+        # ``framing`` dimension.
         "latency_within_budget": (result.latency_s <= expected_max_latency) if expected_max_latency else None,
         "ttft_s": None if (result.ttft_s != result.ttft_s) else round(result.ttft_s, 3),  # NaN-safe
         "latency_s": round(result.latency_s, 3),
@@ -201,9 +215,12 @@ def compute_heuristics(q: dict[str, Any], result: ChatRunResult) -> dict[str, An
         "expected_tools": sorted(expected_tools),
         "tool_overlap_with_expected": sorted(called_tools & expected_tools),
         "missing_expected_tools": sorted(expected_tools - called_tools),
-        "entities_mentioned": mentioned,
-        "entities_missing": missing,
-        "must_not_say_hits": forbidden_hits,
+        # NOTE: ``entities_mentioned`` / ``entities_missing`` /
+        # ``must_not_say_hits`` were removed in PLAN-0099-W4 — substring
+        # matching of entity names / forbidden phrases was the source of
+        # false WARNs (e.g. "missing NVDA" when the answer said "NVIDIA").
+        # The v2.0 judge handles these checks semantically via rubric
+        # ``required_facts`` / ``forbidden_facts``.
         "citation_count": len(result.citations),
         "contradiction_count": len(result.contradictions),
         "error": result.error,
@@ -227,22 +244,19 @@ def derive_pass_fail(heur: dict[str, Any]) -> tuple[str, list[str]]:
     if heur["is_empty"]:
         reasons.append("empty_answer")
         return "FAIL", reasons
-    if heur["must_not_say_hits"]:
-        reasons.append(f"forbidden_phrases={heur['must_not_say_hits']}")
-        bucket = "FAIL"
+    # PLAN-0099-W4: removed ``must_not_say_hits``, ``entities_missing``, and
+    # ``answer_meets_min_words`` from the bucket logic — the underlying
+    # heuristic fields were dropped because they generated false WARNs and
+    # the v2.0 judge handles these checks semantically (via rubric
+    # required_facts / forbidden_facts + the LENGTH-AGNOSTIC framing
+    # dimension). What remains here are the still-meaningful infrastructure
+    # signals (empty answer, refusal classifier, latency-budget breach,
+    # zero-tools-called).
     if heur["is_refusal"]:
         reasons.append("answer_classified_as_refusal")
         # refusal might be CORRECT (e.g. agg_a10 false-premise); leave at WARN
-        # and let the human reader judge.
+        # and let the human reader (or the LLM judge) make the final call.
         if bucket != "FAIL":
-            bucket = "WARN"
-    if heur["entities_missing"]:
-        reasons.append(f"missing_entities={heur['entities_missing']}")
-        if bucket == "PASS":
-            bucket = "WARN"
-    if heur["answer_meets_min_words"] is False:
-        reasons.append(f"short_answer words={heur['word_count']}")
-        if bucket == "PASS":
             bucket = "WARN"
     if heur["latency_within_budget"] is False:
         reasons.append(f"slow latency_s={heur['latency_s']}")
@@ -290,18 +304,20 @@ def write_question_artifacts(
     json_path = out_dir / f"{slot}.json"
     log_path = out_dir / f"{slot}.log"
 
+    # v2 schema (PLAN-0099-W4): legacy top-level expected_* fields were
+    # collapsed into rubric.* / budgets.* — we serialise from the new
+    # locations so the artefact accurately reflects what the judge saw.
+    rubric_block = q.get("rubric") if isinstance(q.get("rubric"), dict) else {}
+    budgets_block = q.get("budgets") if isinstance(q.get("budgets"), dict) else {}
     payload = {
         "id": q.get("id"),
         "prompt": q.get("prompt"),
         "category": q.get("category"),
         "tags": q.get("tags") or [],
         "expected": {
-            "tools": q.get("expected_tools") or [],
-            "entities": q.get("expected_entities_mentioned") or [],
-            "numeric_class": q.get("expected_numeric_class"),
-            "min_words": q.get("expected_min_words"),
-            "max_latency_s": q.get("expected_max_latency_s"),
-            "must_not_say": q.get("must_not_say") or [],
+            # ``expected.tools`` was a top-level hint; now sourced from rubric.
+            "tools": list(rubric_block.get("expected_tools") or []),
+            "max_latency_s": budgets_block.get("max_latency_s"),
         },
         # Legacy heuristic verdict — kept for backward compat (PLAN-0104 W33).
         "bucket": bucket,
@@ -638,6 +654,10 @@ def main(argv: list[str] | None = None) -> int:
                     bucket_counts[bucket] = bucket_counts.get(bucket, 0) + 1
                     cb = category_buckets.setdefault(category, {"PASS": 0, "WARN": 0, "FAIL": 0, "EXCEPTION": 0})
                     cb[bucket] = cb.get(bucket, 0) + 1
+                    # PLAN-0099-W4: removed legacy heuristic fields
+                    # (entities_mentioned, entities_missing, must_not_say_hits)
+                    # from the per-Q summary — they no longer exist in the
+                    # computed heuristics. The LLM judge replaces these checks.
                     per_q_records.append(
                         {
                             "id": q_id,
@@ -650,9 +670,6 @@ def main(argv: list[str] | None = None) -> int:
                             "word_count": heur["word_count"],
                             "tool_overlap_with_expected": heur["tool_overlap_with_expected"],
                             "missing_expected_tools": heur["missing_expected_tools"],
-                            "entities_mentioned": heur["entities_mentioned"],
-                            "entities_missing": heur["entities_missing"],
-                            "must_not_say_hits": heur["must_not_say_hits"],
                             "is_refusal": heur["is_refusal"],
                             "is_empty": heur["is_empty"],
                         }
