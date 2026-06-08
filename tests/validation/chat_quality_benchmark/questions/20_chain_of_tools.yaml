@@ -1,3 +1,4 @@
+# Schema v2 (PLAN-0099-W4): rubric{} is the judge contract; budgets{} is advisory.
 # Chain-of-tools pack (PLAN-0107 follow-up, Agent D recommendation)
 #
 # Target: 8 questions requiring multi-step tool reasoning where iter-N
@@ -35,341 +36,223 @@
 # --------------------------------------------------------------------------
 
 - id: chain_portfolio_upcoming_earnings
-  prompt: "Which of my portfolio holdings have earnings reports coming up in the next two weeks?"
+  prompt: Which of my portfolio holdings have earnings reports coming up in the next two weeks?
   category: portfolio
   tags: [chain_of_tools, multi_step, portfolio]
-  expected_max_latency_s: 120
-  must_not_say:
-    - "I don't have access to your portfolio"
-    - "Please provide your holdings"
   rubric:
     expected_tools: [get_portfolio_context, get_earnings_calendar]
-    required_facts:
-      - "Names at least one ticker that is BOTH in the user's portfolio AND has an upcoming earnings date"
-      - "Cites a concrete earnings date (ISO or natural-language) for at least one named ticker"
-    forbidden_facts:
-      - "Lists earnings for tickers the user does not hold (fabricated or wrong-portfolio)"
+    required_facts: [Names at least one ticker that is BOTH in the user's portfolio AND has an upcoming
+        earnings date, Cites a concrete earnings date (ISO or natural-language) for at least one named
+        ticker]
+    forbidden_facts: [Lists earnings for tickers the user does not hold (fabricated or wrong-portfolio)]
     expected_depth: medium
     appropriate_refusal_ok: false
     must_not_call: []
     entity_aliases: {}
-  notes: |
-    CHAIN STRUCTURE:
-      Step 1: get_portfolio_context → list of {symbol, quantity, ...}
-      Step 2: get_earnings_calendar(tickers=<symbols from Step 1>, days_ahead=14)
-              — the `tickers` arg is ENTIRELY derived from Step 1's output.
-      Synthesis: intersect by symbol, render a small table or bullet list.
-
-    WHY this question: it is the textbook "personalised context + external
-    lookup" shape. The agent cannot guess the user's holdings, so iter-2
-    is impossible without iter-1's data. This is also the chain users
-    request most often in feedback (per memory note: portfolio overview
-    bugs 2026-05-21).
-
-    FAILURE MODES TO CATCH:
-      - Agent skips get_portfolio_context and asks the user to list
-        holdings (premature refusal, breaks the "use the tools you have"
-        contract).
-      - Agent calls get_earnings_calendar with a hardcoded mega-cap list
-        (AAPL/MSFT/GOOGL) instead of the actual portfolio (no chaining).
-      - Agent calls only get_portfolio_context and answers "your holdings
-        are X, Y, Z" without ever fetching the calendar (gives up at
-        iter-1).
+  budgets:
+    max_latency_s: 120
+  notes: "CHAIN STRUCTURE:\n  Step 1: get_portfolio_context → list of {symbol, quantity, ...}\n  Step\
+    \ 2: get_earnings_calendar(tickers=<symbols from Step 1>, days_ahead=14)\n          — the `tickers`\
+    \ arg is ENTIRELY derived from Step 1's output.\n  Synthesis: intersect by symbol, render a small\
+    \ table or bullet list.\n\nWHY this question: it is the textbook \"personalised context + external\n\
+    lookup\" shape. The agent cannot guess the user's holdings, so iter-2\nis impossible without iter-1's\
+    \ data. This is also the chain users\nrequest most often in feedback (per memory note: portfolio overview\n\
+    bugs 2026-05-21).\n\nFAILURE MODES TO CATCH:\n  - Agent skips get_portfolio_context and asks the user\
+    \ to list\n    holdings (premature refusal, breaks the \"use the tools you have\"\n    contract).\n\
+    \  - Agent calls get_earnings_calendar with a hardcoded mega-cap list\n    (AAPL/MSFT/GOOGL) instead\
+    \ of the actual portfolio (no chaining).\n  - Agent calls only get_portfolio_context and answers \"\
+    your holdings\n    are X, Y, Z\" without ever fetching the calendar (gives up at\n    iter-1).\n"
 
 - id: chain_portfolio_worst_fundamentals
-  prompt: "Of my current holdings, which one has the weakest profitability based on its most recent fundamentals?"
+  prompt: Of my current holdings, which one has the weakest profitability based on its most recent fundamentals?
   category: portfolio
   tags: [chain_of_tools, multi_step, portfolio, financial_data]
-  expected_max_latency_s: 120
-  must_not_say:
-    - "I cannot evaluate fundamentals"
-    - "Please specify which holding you mean"
   rubric:
     expected_tools: [get_portfolio_context, query_fundamentals, get_fundamentals_history_batch, compare_entities]
-    required_facts:
-      - "Identifies a specific ticker FROM the user's portfolio as the weakest"
-      - "Cites at least one profitability metric value (net margin, ROE, operating margin, or similar) for the named ticker"
-    forbidden_facts:
-      - "Names a ticker not in the user's holdings as the answer"
+    required_facts: [Identifies a specific ticker FROM the user's portfolio as the weakest, 'Cites at
+        least one profitability metric value (net margin, ROE, operating margin, or similar) for the named
+        ticker']
+    forbidden_facts: [Names a ticker not in the user's holdings as the answer]
     expected_depth: deep
     appropriate_refusal_ok: false
     must_not_call: []
     entity_aliases: {}
-  notes: |
-    CHAIN STRUCTURE:
-      Step 1: get_portfolio_context → list of held symbols.
-      Step 2: query_fundamentals OR get_fundamentals_history_batch over the
-              symbols from Step 1, asking for net_margin / ROE / operating_margin.
-      Step 3 (optional): compare_entities to format the ranking.
-      Synthesis: rank by profitability metric, name the worst.
-
-    WHY this question: tests N-way fan-out from iter-1. The agent must
-    issue ONE batched fundamentals call (or N parallel calls) using the
-    full symbol list from Step 1. Distinguishes batched-tool awareness
-    (get_fundamentals_history_batch) from naive N-call patterns. Either
-    is acceptable — `expected_tools` lists both.
-
-    FAILURE MODES TO CATCH:
-      - Agent picks the "worst" from memory (training-data leakage:
-        e.g. always returning a famously-low-margin name regardless of
-        whether it's in the portfolio).
-      - Agent does Step 1 then asks the user to pick which holding to
-        analyse (premature off-ramp).
-
-# --------------------------------------------------------------------------
-# Graph chains — exercise traverse_graph / get_entity_paths feeding either
-# the screener or fundamentals. These are the chains that motivate the
-# KG existing in the first place.
-# --------------------------------------------------------------------------
+  budgets:
+    max_latency_s: 120
+  notes: "CHAIN STRUCTURE:\n  Step 1: get_portfolio_context → list of held symbols.\n  Step 2: query_fundamentals\
+    \ OR get_fundamentals_history_batch over the\n          symbols from Step 1, asking for net_margin\
+    \ / ROE / operating_margin.\n  Step 3 (optional): compare_entities to format the ranking.\n  Synthesis:\
+    \ rank by profitability metric, name the worst.\n\nWHY this question: tests N-way fan-out from iter-1.\
+    \ The agent must\nissue ONE batched fundamentals call (or N parallel calls) using the\nfull symbol\
+    \ list from Step 1. Distinguishes batched-tool awareness\n(get_fundamentals_history_batch) from naive\
+    \ N-call patterns. Either\nis acceptable — `expected_tools` lists both.\n\nFAILURE MODES TO CATCH:\n\
+    \  - Agent picks the \"worst\" from memory (training-data leakage:\n    e.g. always returning a famously-low-margin\
+    \ name regardless of\n    whether it's in the portfolio).\n  - Agent does Step 1 then asks the user\
+    \ to pick which holding to\n    analyse (premature off-ramp).\n"
 
 - id: chain_apple_suppliers_high_margin
-  prompt: "Find a supplier in Apple's value chain that has a gross margin above 40%."
+  prompt: Find a supplier in Apple's value chain that has a gross margin above 40%.
   category: relationship
   tags: [chain_of_tools, multi_step, relationship, screener]
-  expected_max_latency_s: 120
-  must_not_say:
-    - "I cannot identify Apple's suppliers"
   rubric:
     expected_tools: [traverse_graph, search_entity_relations, screen_universe, query_fundamentals]
-    required_facts:
-      - "Names a specific supplier entity (company name or ticker) linked to Apple"
-      - "Cites a gross margin value above 40% for the named supplier"
-    forbidden_facts:
-      - "Claims Apple has no suppliers in the graph"
+    required_facts: [Names a specific supplier entity (company name or ticker) linked to Apple, Cites
+        a gross margin value above 40% for the named supplier]
+    forbidden_facts: [Claims Apple has no suppliers in the graph]
     expected_depth: deep
     appropriate_refusal_ok: false
     must_not_call: []
     entity_aliases:
       Apple: [AAPL, Apple Inc., Apple Inc]
-  notes: |
-    CHAIN STRUCTURE:
-      Step 1: traverse_graph(entity=AAPL, edge_type=supplier) OR
-              search_entity_relations(AAPL, relation=supplies) → supplier list.
-      Step 2: screen_universe(tickers=<from Step 1>, filter: gross_margin>40)
-              OR query_fundamentals per supplier and filter client-side.
-      Synthesis: pick one that passes the gate, cite the margin.
-
-    WHY this question: this is the canonical "graph + screener" chain
-    cited in PRD-0017 and frequently used in demos. It exercises the
-    KG-to-fundamentals join that's the platform's actual differentiator.
-
-    FAILURE MODES TO CATCH:
-      - Agent calls screen_universe with `sector=Technology AND gross_margin>40`
-        and never touches the graph — answer happens to look right (TSMC,
-        say) but it's not actually grounded in Apple's relationship graph
-        (cheats the chain).
-      - Agent traverses the graph but never checks margin and just lists
-        suppliers, hoping one of them has high margin.
+  budgets:
+    max_latency_s: 120
+  notes: "CHAIN STRUCTURE:\n  Step 1: traverse_graph(entity=AAPL, edge_type=supplier) OR\n          search_entity_relations(AAPL,\
+    \ relation=supplies) → supplier list.\n  Step 2: screen_universe(tickers=<from Step 1>, filter: gross_margin>40)\n\
+    \          OR query_fundamentals per supplier and filter client-side.\n  Synthesis: pick one that\
+    \ passes the gate, cite the margin.\n\nWHY this question: this is the canonical \"graph + screener\"\
+    \ chain\ncited in PRD-0017 and frequently used in demos. It exercises the\nKG-to-fundamentals join\
+    \ that's the platform's actual differentiator.\n\nFAILURE MODES TO CATCH:\n  - Agent calls screen_universe\
+    \ with `sector=Technology AND gross_margin>40`\n    and never touches the graph — answer happens to\
+    \ look right (TSMC,\n    say) but it's not actually grounded in Apple's relationship graph\n    (cheats\
+    \ the chain).\n  - Agent traverses the graph but never checks margin and just lists\n    suppliers,\
+    \ hoping one of them has high margin.\n"
 
 - id: chain_nvda_competitor_growth_rank
-  prompt: "Among NVIDIA's main competitors, which one has had the best revenue growth over the past four quarters?"
+  prompt: Among NVIDIA's main competitors, which one has had the best revenue growth over the past four
+    quarters?
   category: comparison
   tags: [chain_of_tools, multi_step, comparison, relationship]
-  expected_max_latency_s: 120
-  must_not_say:
-    - "NVIDIA has no listed competitors"
   rubric:
-    expected_tools: [get_entity_intelligence, traverse_graph, search_entity_relations, get_fundamentals_history_batch, compare_entities]
-    required_facts:
-      - "Names at least two competitors of NVIDIA"
-      - "Reports a revenue-growth figure (YoY% or QoQ%) for the winning competitor"
-    forbidden_facts:
-      - "Includes NVIDIA itself in the competitor ranking"
+    expected_tools: [get_entity_intelligence, traverse_graph, search_entity_relations, get_fundamentals_history_batch,
+      compare_entities]
+    required_facts: [Names at least two competitors of NVIDIA, Reports a revenue-growth figure (YoY% or
+        QoQ%) for the winning competitor]
+    forbidden_facts: [Includes NVIDIA itself in the competitor ranking]
     expected_depth: deep
     appropriate_refusal_ok: false
     must_not_call: []
     entity_aliases:
       NVIDIA: [NVDA, NVIDIA Corporation, Nvidia]
-  notes: |
-    CHAIN STRUCTURE:
-      Step 1: get_entity_intelligence(NVDA) OR traverse_graph(competitor edge)
-              → competitor list (likely AMD, INTC, AVGO, etc.).
-      Step 2: get_fundamentals_history_batch(tickers=<competitors>, periods=4q,
-              metrics=[revenue]) — uses Step 1's tickers verbatim.
-      Step 3 (optional): compare_entities to render the ranking.
-      Synthesis: compute YoY revenue growth, rank, name the winner.
-
-    WHY this question: tests that the orchestrator recognises
-    "main competitors" as an entity-relation query (not a screener) and
-    chains into a batched fundamentals call. The batched call is
-    important — N separate query_fundamentals calls work but waste
-    iterations; we accept either pattern but document the preference.
-
-    FAILURE MODES TO CATCH:
-      - Agent assumes the competitor list from training data (e.g. only
-        AMD + INTC) instead of querying — chain skipped.
-      - Agent fetches fundamentals for NVDA itself and reports NVDA's
-        growth as "the answer".
-
-# --------------------------------------------------------------------------
-# Event/news chains — these chains test temporal reasoning: pull a date
-# from one tool, then use it as the search window for another.
-# --------------------------------------------------------------------------
+  budgets:
+    max_latency_s: 120
+  notes: "CHAIN STRUCTURE:\n  Step 1: get_entity_intelligence(NVDA) OR traverse_graph(competitor edge)\n\
+    \          → competitor list (likely AMD, INTC, AVGO, etc.).\n  Step 2: get_fundamentals_history_batch(tickers=<competitors>,\
+    \ periods=4q,\n          metrics=[revenue]) — uses Step 1's tickers verbatim.\n  Step 3 (optional):\
+    \ compare_entities to render the ranking.\n  Synthesis: compute YoY revenue growth, rank, name the\
+    \ winner.\n\nWHY this question: tests that the orchestrator recognises\n\"main competitors\" as an\
+    \ entity-relation query (not a screener) and\nchains into a batched fundamentals call. The batched\
+    \ call is\nimportant — N separate query_fundamentals calls work but waste\niterations; we accept either\
+    \ pattern but document the preference.\n\nFAILURE MODES TO CATCH:\n  - Agent assumes the competitor\
+    \ list from training data (e.g. only\n    AMD + INTC) instead of querying — chain skipped.\n  - Agent\
+    \ fetches fundamentals for NVDA itself and reports NVDA's\n    growth as \"the answer\".\n"
 
 - id: chain_tsla_post_earnings_news
-  prompt: "What did the news say about Tesla in the week after their most recent earnings report?"
+  prompt: What did the news say about Tesla in the week after their most recent earnings report?
   category: news
   tags: [chain_of_tools, multi_step, news, signal]
-  expected_max_latency_s: 120
-  must_not_say:
-    - "I don't have news data"
-    - "I cannot find Tesla's earnings date"
   rubric:
     expected_tools: [get_earnings_calendar, search_documents, get_entity_news]
-    required_facts:
-      - "Cites Tesla's most recent earnings date (ISO or month-day form)"
-      - "Summarises at least one news theme from the post-earnings window"
-    forbidden_facts:
-      - "Discusses news from a window unrelated to earnings (e.g. random date)"
+    required_facts: [Cites Tesla's most recent earnings date (ISO or month-day form), Summarises at least
+        one news theme from the post-earnings window]
+    forbidden_facts: [Discusses news from a window unrelated to earnings (e.g. random date)]
     expected_depth: deep
     appropriate_refusal_ok: false
     must_not_call: []
     entity_aliases:
       Tesla: [TSLA, Tesla, Inc.]
-  notes: |
-    CHAIN STRUCTURE:
-      Step 1: get_earnings_calendar(tickers=[TSLA], past=true) → most recent
-              earnings date D.
-      Step 2: search_documents(entity=TSLA, since=D, until=D+7d) OR
-              get_entity_news(TSLA, date_range=...) — date window is the
-              chain dependency.
-      Synthesis: thematic summary of articles in that window.
-
-    WHY this question: temporal-dependency chain. The agent CANNOT
-    pre-compute the window without iter-1; the date is live data. This
-    is also the kind of question equity analysts ask constantly
-    ("how did the print land?").
-
-    FAILURE MODES TO CATCH:
-      - Agent calls get_entity_news with no date filter and dumps the
-        latest 10 articles regardless of relation to earnings.
-      - Agent fabricates an earnings date instead of fetching it.
-      - Agent asks the user "when was Tesla's last earnings?" — that's
-        the whole point of the calendar tool.
+  budgets:
+    max_latency_s: 120
+  notes: "CHAIN STRUCTURE:\n  Step 1: get_earnings_calendar(tickers=[TSLA], past=true) → most recent\n\
+    \          earnings date D.\n  Step 2: search_documents(entity=TSLA, since=D, until=D+7d) OR\n   \
+    \       get_entity_news(TSLA, date_range=...) — date window is the\n          chain dependency.\n\
+    \  Synthesis: thematic summary of articles in that window.\n\nWHY this question: temporal-dependency\
+    \ chain. The agent CANNOT\npre-compute the window without iter-1; the date is live data. This\nis\
+    \ also the kind of question equity analysts ask constantly\n(\"how did the print land?\").\n\nFAILURE\
+    \ MODES TO CATCH:\n  - Agent calls get_entity_news with no date filter and dumps the\n    latest 10\
+    \ articles regardless of relation to earnings.\n  - Agent fabricates an earnings date instead of fetching\
+    \ it.\n  - Agent asks the user \"when was Tesla's last earnings?\" — that's\n    the whole point of\
+    \ the calendar tool.\n"
 
 - id: chain_macro_event_market_reaction
-  prompt: "Find the most recent FOMC or ECB rate decision and tell me what the news coverage said about it."
+  prompt: Find the most recent FOMC or ECB rate decision and tell me what the news coverage said about
+    it.
   category: news
   tags: [chain_of_tools, multi_step, news, signal, macro]
-  expected_max_latency_s: 120
-  must_not_say:
-    - "I don't track macro events"
   rubric:
     expected_tools: [get_economic_calendar, search_events, search_documents]
-    required_facts:
-      - "Names the specific event (FOMC meeting, ECB decision, or similar) and its date"
-      - "Summarises at least one news angle on the decision (hawkish/dovish/surprise/expected/etc.)"
-    forbidden_facts:
-      - "Cites a rate decision date in the future as if it already happened"
+    required_facts: ['Names the specific event (FOMC meeting, ECB decision, or similar) and its date',
+      Summarises at least one news angle on the decision (hawkish/dovish/surprise/expected/etc.)]
+    forbidden_facts: [Cites a rate decision date in the future as if it already happened]
     expected_depth: deep
     appropriate_refusal_ok: false
     must_not_call: []
     entity_aliases: {}
-  notes: |
-    CHAIN STRUCTURE:
-      Step 1: get_economic_calendar(event_type=rate_decision, past=true)
-              OR search_events(type=macro, since=...) → event {date, central_bank,
-              actual, expected}.
-      Step 2: search_documents(query=<event name>, since=event_date,
-              until=event_date+3d) → news coverage.
-      Synthesis: cite the decision + market reaction theme.
-
-    WHY this question: stresses the MACRO branch (get_economic_calendar
-    is one of the least-exercised tools per audit). Also tests the same
-    "date from tool A → filter for tool B" pattern as the TSLA chain
-    but with a non-equity event source.
-
-    FAILURE MODES TO CATCH:
-      - Agent goes straight to search_documents("FOMC") without anchoring
-        to the actual most-recent decision — gets stale articles.
-      - Agent uses LLM training-data knowledge of the last rate decision
-        (frequently wrong by 1-2 meetings due to cutoff).
-
-# --------------------------------------------------------------------------
-# Movers chain — one tool generates the universe, the next analyses it.
-# --------------------------------------------------------------------------
+  budgets:
+    max_latency_s: 120
+  notes: "CHAIN STRUCTURE:\n  Step 1: get_economic_calendar(event_type=rate_decision, past=true)\n   \
+    \       OR search_events(type=macro, since=...) → event {date, central_bank,\n          actual, expected}.\n\
+    \  Step 2: search_documents(query=<event name>, since=event_date,\n          until=event_date+3d)\
+    \ → news coverage.\n  Synthesis: cite the decision + market reaction theme.\n\nWHY this question:\
+    \ stresses the MACRO branch (get_economic_calendar\nis one of the least-exercised tools per audit).\
+    \ Also tests the same\n\"date from tool A → filter for tool B\" pattern as the TSLA chain\nbut with\
+    \ a non-equity event source.\n\nFAILURE MODES TO CATCH:\n  - Agent goes straight to search_documents(\"\
+    FOMC\") without anchoring\n    to the actual most-recent decision — gets stale articles.\n  - Agent\
+    \ uses LLM training-data knowledge of the last rate decision\n    (frequently wrong by 1-2 meetings\
+    \ due to cutoff).\n"
 
 - id: chain_top_mover_fundamentals
-  prompt: "What's today's top market mover, and does its fundamentals justify the move?"
+  prompt: What's today's top market mover, and does its fundamentals justify the move?
   category: signal
   tags: [chain_of_tools, multi_step, signal, financial_data]
-  expected_max_latency_s: 120
-  must_not_say:
-    - "I don't have market data"
   rubric:
     expected_tools: [get_market_movers, query_fundamentals, get_entity_news]
-    required_facts:
-      - "Names the top mover (ticker and % move)"
-      - "Cites at least one fundamental metric (P/E, revenue growth, margin, etc.) for that mover"
-      - "Offers a reasoned verdict on whether the move is fundamentally supported"
-    forbidden_facts:
-      - "Picks a different stock than the actual top mover returned by the tool"
+    required_facts: [Names the top mover (ticker and % move), 'Cites at least one fundamental metric (P/E,
+        revenue growth, margin, etc.) for that mover', Offers a reasoned verdict on whether the move is
+        fundamentally supported]
+    forbidden_facts: [Picks a different stock than the actual top mover returned by the tool]
     expected_depth: deep
     appropriate_refusal_ok: false
     must_not_call: []
     entity_aliases: {}
-  notes: |
-    CHAIN STRUCTURE:
-      Step 1: get_market_movers(direction=gainers, limit=1) → {symbol, pct_change}.
-      Step 2: query_fundamentals(ticker=<symbol from Step 1>) →
-              key ratios. The ticker is impossible to pre-fill.
-      Step 3 (optional): get_entity_news(<symbol>) for narrative context.
-      Synthesis: a small write-up combining price action + fundamentals.
-
-    WHY this question: tests dynamic-entity routing — the entity isn't
-    in the prompt at all, it emerges from Step 1. Also exercises the
-    "and" connective that frequently trips up single-call planners
-    ("what is X AND is Y true about it?" often becomes just X).
-
-    FAILURE MODES TO CATCH:
-      - Agent calls get_market_movers, lists the top 10, and stops
-        (declined to chain into fundamentals).
-      - Agent calls query_fundamentals for a stock from training-data
-        memory of "high movers" (e.g. GME, NVDA) — completely ungrounded.
-
-# --------------------------------------------------------------------------
-# Health/gap chain — start with a meta-quality view, then drill in.
-# --------------------------------------------------------------------------
+  budgets:
+    max_latency_s: 120
+  notes: "CHAIN STRUCTURE:\n  Step 1: get_market_movers(direction=gainers, limit=1) → {symbol, pct_change}.\n\
+    \  Step 2: query_fundamentals(ticker=<symbol from Step 1>) →\n          key ratios. The ticker is\
+    \ impossible to pre-fill.\n  Step 3 (optional): get_entity_news(<symbol>) for narrative context.\n\
+    \  Synthesis: a small write-up combining price action + fundamentals.\n\nWHY this question: tests\
+    \ dynamic-entity routing — the entity isn't\nin the prompt at all, it emerges from Step 1. Also exercises\
+    \ the\n\"and\" connective that frequently trips up single-call planners\n(\"what is X AND is Y true\
+    \ about it?\" often becomes just X).\n\nFAILURE MODES TO CATCH:\n  - Agent calls get_market_movers,\
+    \ lists the top 10, and stops\n    (declined to chain into fundamentals).\n  - Agent calls query_fundamentals\
+    \ for a stock from training-data\n    memory of \"high movers\" (e.g. GME, NVDA) — completely ungrounded.\n"
 
 - id: chain_unhealthy_entity_investigation
-  prompt: "Pick a company in our coverage that has poor data quality scores, and tell me what we actually know about it."
+  prompt: Pick a company in our coverage that has poor data quality scores, and tell me what we actually
+    know about it.
   category: reasoning
   tags: [chain_of_tools, multi_step, reasoning, signal]
-  expected_max_latency_s: 120
-  must_not_say:
-    - "All companies have good data quality"
   rubric:
     expected_tools: [get_entity_health, get_entity_narrative, get_entity_intelligence, query_fundamentals]
-    required_facts:
-      - "Names a specific entity flagged with a health concern (low score, missing field, stale data, etc.)"
-      - "Summarises whatever data IS available for that entity (description, recent metric, recent news)"
-    forbidden_facts:
-      - "Claims every entity in coverage is fully healthy"
+    required_facts: ['Names a specific entity flagged with a health concern (low score, missing field,
+        stale data, etc.)', 'Summarises whatever data IS available for that entity (description, recent
+        metric, recent news)']
+    forbidden_facts: [Claims every entity in coverage is fully healthy]
     expected_depth: deep
     appropriate_refusal_ok: false
     must_not_call: []
     entity_aliases: {}
-  notes: |
-    CHAIN STRUCTURE:
-      Step 1: get_entity_health (no entity filter, or summary mode) →
-              entities with health issues + the specific gap.
-      Step 2: get_entity_narrative(<picked entity>) OR
-              get_entity_intelligence / query_fundamentals — whichever
-              fields ARE populated for the picked entity.
-      Synthesis: "We know X about this entity but lack Y."
-
-    WHY this question: this is the only meta/introspective chain in the
-    pack. It tests that the agent can use the platform's own data-quality
-    tools to scope an answer, and that it doesn't refuse just because the
-    target entity has gaps. Also catches the failure mode where the agent
-    interprets get_entity_health as a hard error and aborts.
-
-    FAILURE MODES TO CATCH:
-      - Agent calls get_entity_health and reports "no issues found"
-        without ever inspecting the response payload (the tool typically
-        returns warnings even on green entities).
-      - Agent picks an entity from Step 1 but then doesn't drill in,
-        leaving the user with a quality report instead of an answer about
-        the entity.
-      - Agent refuses on the grounds of "data quality is internal" — the
-        question explicitly asks for transparency.
+  budgets:
+    max_latency_s: 120
+  notes: "CHAIN STRUCTURE:\n  Step 1: get_entity_health (no entity filter, or summary mode) →\n      \
+    \    entities with health issues + the specific gap.\n  Step 2: get_entity_narrative(<picked entity>)\
+    \ OR\n          get_entity_intelligence / query_fundamentals — whichever\n          fields ARE populated\
+    \ for the picked entity.\n  Synthesis: \"We know X about this entity but lack Y.\"\n\nWHY this question:\
+    \ this is the only meta/introspective chain in the\npack. It tests that the agent can use the platform's\
+    \ own data-quality\ntools to scope an answer, and that it doesn't refuse just because the\ntarget\
+    \ entity has gaps. Also catches the failure mode where the agent\ninterprets get_entity_health as\
+    \ a hard error and aborts.\n\nFAILURE MODES TO CATCH:\n  - Agent calls get_entity_health and reports\
+    \ \"no issues found\"\n    without ever inspecting the response payload (the tool typically\n    returns\
+    \ warnings even on green entities).\n  - Agent picks an entity from Step 1 but then doesn't drill\
+    \ in,\n    leaving the user with a quality report instead of an answer about\n    the entity.\n  -\
+    \ Agent refuses on the grounds of \"data quality is internal\" — the\n    question explicitly asks\
+    \ for transparency.\n"

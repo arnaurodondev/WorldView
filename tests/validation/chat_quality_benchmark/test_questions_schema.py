@@ -32,6 +32,9 @@ import yaml
 # Resolve the path even when pytest is invoked from a different CWD —
 # the file lives next to this test module.
 _HERE = Path(__file__).resolve().parent
+# Catalogue is sharded into `questions/*.yaml` pack files (post-W4 layout).
+# We still tolerate a legacy single-file `questions.yaml` for older branches.
+_QUESTIONS_DIR = _HERE / "questions"
 _QUESTIONS_PATH = _HERE / "questions.yaml"
 
 # Pull the deprecated-fields tuple from the migration script so the lint
@@ -55,10 +58,24 @@ pytestmark = pytest.mark.unit
 
 
 def _load_questions() -> list[dict[str, Any]]:
-    """Decode the YAML catalogue once; helper avoids duplicate parsing."""
-    raw = yaml.safe_load(_QUESTIONS_PATH.read_text())
-    assert isinstance(raw, list), f"Expected top-level list in {_QUESTIONS_PATH}"
-    return [q for q in raw if isinstance(q, dict)]
+    """Decode the YAML catalogue once; helper avoids duplicate parsing.
+
+    Supports both the post-W4 sharded layout (`questions/*.yaml`) and the
+    legacy single-file `questions.yaml`. Each pack file is a top-level list.
+    """
+    questions: list[dict[str, Any]] = []
+    if _QUESTIONS_DIR.is_dir():
+        for path in sorted(_QUESTIONS_DIR.glob("*.yaml")):
+            raw = yaml.safe_load(path.read_text())
+            assert isinstance(raw, list), f"Expected top-level list in {path}"
+            questions.extend(q for q in raw if isinstance(q, dict))
+    elif _QUESTIONS_PATH.is_file():
+        raw = yaml.safe_load(_QUESTIONS_PATH.read_text())
+        assert isinstance(raw, list), f"Expected top-level list in {_QUESTIONS_PATH}"
+        questions = [q for q in raw if isinstance(q, dict)]
+    else:
+        raise FileNotFoundError(f"No catalogue found at {_QUESTIONS_DIR} or {_QUESTIONS_PATH}")
+    return questions
 
 
 def test_rubric_coverage_is_one_hundred_percent() -> None:

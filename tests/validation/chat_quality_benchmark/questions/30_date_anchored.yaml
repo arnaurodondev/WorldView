@@ -1,3 +1,4 @@
+# Schema v2 (PLAN-0099-W4): rubric{} is the judge contract; budgets{} is advisory.
 # Date-anchored pack (PLAN-0107 follow-up, Agent D recommendation)
 #
 # Mirrors of time-sensitive ("latest") questions in 00_real_user_and_aggregate.yaml
@@ -13,214 +14,235 @@
 # tool-routing regression.
 
 - id: da_mstr_news_dec2024
-  prompt: "Show me news on MSTR from the week of December 9-15, 2024 — what should I know?"
+  prompt: Show me news on MSTR from the week of December 9-15, 2024 — what should I know?
   category: news
   tags: [date_anchored, regression_stable, news]
-  expected_max_latency_s: 60
-  must_not_say:
-    - "as of today"
-    - "latest"
-    - "current news"
-    - "this week"
   rubric:
     expected_tools: [get_entity_news, search_documents]
-    required_facts: ["news_items_from_dec_2024", "microstrategy_or_mstr_referenced"]
-    forbidden_facts: ["news_dated_after_2024_12_15", "blanket_no_data_when_corpus_has_period"]
+    required_facts: [news_items_from_dec_2024, microstrategy_or_mstr_referenced]
+    forbidden_facts: [news_dated_after_2024_12_15, blanket_no_data_when_corpus_has_period]
     expected_depth: medium
     appropriate_refusal_ok: false
     must_not_call: []
     entity_aliases: {}
-  notes: |
-    MIRROR OF: ru_mstr_news (in 00_real_user_and_aggregate.yaml)
+  budgets:
+    max_latency_s: 60
+  notes: 'MIRROR OF: ru_mstr_news (in 00_real_user_and_aggregate.yaml)
+
     ANCHOR: week of 2024-12-09 to 2024-12-15 (MicroStrategy was added to the
+
     Nasdaq-100 on 2024-12-13, a well-documented event; news corpus should
+
     have material coverage from this window).
 
+
     WHY: the original asks for "latest" news, so the answer drifts as the
+
     corpus grows and stories age out. This mirror pins a historical week
+
     where a verifiable corporate event happened (Nasdaq-100 inclusion);
+
     if news ingestion has historical coverage at all, this window should
+
     score consistently. Tool semantics matter: get_entity_news must accept
+
     a date range, otherwise this becomes a partial test (still useful as
+
     a routing check).
 
+    '
+
 - id: da_nvda_amd_compare_fy2024q3
-  prompt: "Compare NVDA and AMD on revenue, EPS, and gross margin for fiscal Q3 2024 (calendar quarter ending September 2024 for AMD; NVIDIA's fiscal Q3 FY2025, quarter ending October 27, 2024)."
+  prompt: Compare NVDA and AMD on revenue, EPS, and gross margin for fiscal Q3 2024 (calendar quarter
+    ending September 2024 for AMD; NVIDIA's fiscal Q3 FY2025, quarter ending October 27, 2024).
   category: comparison
   tags: [date_anchored, regression_stable, comparison, financials]
-  expected_max_latency_s: 75
-  must_not_say:
-    - "as of today"
-    - "latest"
-    - "most recent quarter"
-    - "current quarter"
   rubric:
     expected_tools: [compare_entities, get_fundamentals_history, query_fundamentals]
-    required_facts:
-      - "nvda_revenue_for_quarter_ending_2024_10"
-      - "amd_revenue_for_quarter_ending_2024_09"
-      - "eps_both_companies"
-      - "gross_margin_both_companies"
-    forbidden_facts:
-      - "fundamentals_from_2025_or_later"
-      - "single_company_only_when_both_requested"
+    required_facts: [nvda_revenue_for_quarter_ending_2024_10, amd_revenue_for_quarter_ending_2024_09,
+      eps_both_companies, gross_margin_both_companies]
+    forbidden_facts: [fundamentals_from_2025_or_later, single_company_only_when_both_requested]
     expected_depth: deep
     appropriate_refusal_ok: false
     must_not_call: []
-    entity_aliases: {NVDA: NVIDIA, AMD: "Advanced Micro Devices"}
-  notes: |
-    MIRROR OF: ru_nvda_amd_compare_qtr (in 00_real_user_and_aggregate.yaml)
+    entity_aliases:
+      NVDA: NVIDIA
+      AMD: Advanced Micro Devices
+  budgets:
+    max_latency_s: 75
+  notes: 'MIRROR OF: ru_nvda_amd_compare_qtr (in 00_real_user_and_aggregate.yaml)
+
     ANCHOR: AMD calendar Q3 2024 (quarter end 2024-09-28) and NVIDIA fiscal
+
     Q3 FY2025 (quarter end 2024-10-27). Both reported by early Nov 2024.
 
+
     WHY: the original asks for the "latest reported quarter" which shifts
-    every ~13 weeks as new earnings drop. Pinning to NVDA's Q3 FY2025 +
-    AMD's Q3 CY2024 gives a stable comparable that historical fundamentals
+
+    every ~13 weeks as new earnings drop. Pinning to NVDA''s Q3 FY2025 +
+
+    AMD''s Q3 CY2024 gives a stable comparable that historical fundamentals
+
     tools should always return. Also tests handling of misaligned fiscal
+
     calendars — this is the same skill the original needs but the anchor
+
     is reproducible.
 
+    '
+
 - id: da_apple_revenue_fy2024q4_precision
-  prompt: "What was Apple's reported revenue for fiscal Q4 2024 (quarter ending September 28, 2024), in billions, to 3 decimal places?"
+  prompt: What was Apple's reported revenue for fiscal Q4 2024 (quarter ending September 28, 2024), in
+    billions, to 3 decimal places?
   category: financial_data
   tags: [date_anchored, regression_stable, financials, precision]
-  expected_max_latency_s: 60
-  must_not_say:
-    - "as of today"
-    - "most recent quarter"
-    - "latest"
-    - "current fiscal quarter"
   rubric:
     expected_tools: [query_fundamentals, get_fundamentals_history]
-    required_facts:
-      - "apple_revenue_fy2024_q4_value"
-      - "three_decimal_precision_or_explicit_unavailability"
-    forbidden_facts:
-      - "hallucinated_decimal_padding"
-      - "value_from_unanchored_quarter"
+    required_facts: [apple_revenue_fy2024_q4_value, three_decimal_precision_or_explicit_unavailability]
+    forbidden_facts: [hallucinated_decimal_padding, value_from_unanchored_quarter]
     expected_depth: shallow
     appropriate_refusal_ok: false
     must_not_call: []
-    entity_aliases: {Apple: AAPL}
-  notes: |
-    MIRROR OF: iter3_apple_revenue_precision (in 00_real_user_and_aggregate.yaml)
-    ANCHOR: Apple fiscal Q4 2024, quarter ending 2024-09-28. Apple's fiscal
+    entity_aliases:
+      Apple: AAPL
+  budgets:
+    max_latency_s: 60
+  notes: 'MIRROR OF: iter3_apple_revenue_precision (in 00_real_user_and_aggregate.yaml)
+
+    ANCHOR: Apple fiscal Q4 2024, quarter ending 2024-09-28. Apple''s fiscal
+
     year ends in late September; FY2024-Q4 is a closed, audited period.
 
+
     WHY: the original asks for "most recent fiscal quarter" so the truth
+
     value rotates each quarter. Anchoring to FY2024-Q4 gives a single
-    audited 10-K-backed number (~$94.93B per public reporting; we don't
+
+    audited 10-K-backed number (~$94.93B per public reporting; we don''t
+
     enforce the exact decimal value here — the rubric only requires that
+
     the agent return SOMETHING for the anchored quarter, not for a
+
     drifting "latest"). Three-decimal precision stress is preserved.
 
+
     HUMAN REVIEW FLAG: the exact decimal value (e.g. 94.930 vs 94.928)
-    depends on Apple's reported figure, not on us. The judge should not
+
+    depends on Apple''s reported figure, not on us. The judge should not
+
     grade exact decimals; only that the period is honored.
 
+    '
+
 - id: da_aapl_pe_dec2024
-  prompt: "What was AAPL's P/E ratio as of December 31, 2024?"
+  prompt: What was AAPL's P/E ratio as of December 31, 2024?
   category: financial_data
   tags: [date_anchored, regression_stable, ratio]
-  expected_max_latency_s: 30
-  must_not_say:
-    - "as of today"
-    - "current P/E"
-    - "latest"
-    - "right now"
   rubric:
     expected_tools: [query_fundamentals, get_fundamentals_history]
-    required_facts:
-      - "pe_value_as_of_2024_12_31"
-      - "period_anchor_acknowledged"
-    forbidden_facts:
-      - "pe_from_2025_or_2026"
-      - "single_quarter_passed_off_as_ttm"
-      - "unanchored_pe_value"
+    required_facts: [pe_value_as_of_2024_12_31, period_anchor_acknowledged]
+    forbidden_facts: [pe_from_2025_or_2026, single_quarter_passed_off_as_ttm, unanchored_pe_value]
     expected_depth: shallow
     appropriate_refusal_ok: false
     must_not_call: []
-    entity_aliases: {AAPL: Apple}
-  notes: |
-    MIRROR OF: ru_aapl_pe_simple (in 00_real_user_and_aggregate.yaml)
+    entity_aliases:
+      AAPL: Apple
+  budgets:
+    max_latency_s: 30
+  notes: 'MIRROR OF: ru_aapl_pe_simple (in 00_real_user_and_aggregate.yaml)
+
     ANCHOR: 2024-12-31 — calendar year-end, a natural reporting anchor.
+
     AAPL fiscal Q1 2025 ends late December, so TTM EPS as of 2024-12-31
+
     should be computable from fundamentals_history.
 
-    WHY: the original "What's AAPL's P/E ratio?" drifts daily with price
+
+    WHY: the original "What''s AAPL''s P/E ratio?" drifts daily with price
+
     AND quarterly with EPS revisions. Pinning to 2024-12-31 gives a
-    stable answer because both AAPL's price on 2024-12-31 and the TTM
+
+    stable answer because both AAPL''s price on 2024-12-31 and the TTM
+
     EPS as of that date are historical facts.
 
+    '
+
 - id: da_tsla_revenue_2024_full_year
-  prompt: "Show Tesla's quarterly revenue for each quarter of calendar year 2024 (Q1 through Q4 2024)."
+  prompt: Show Tesla's quarterly revenue for each quarter of calendar year 2024 (Q1 through Q4 2024).
   category: financial_data
   tags: [date_anchored, regression_stable, financials, trend]
-  expected_max_latency_s: 75
-  must_not_say:
-    - "as of today"
-    - "latest"
-    - "most recent quarters"
-    - "current trajectory"
   rubric:
     expected_tools: [get_fundamentals_history, query_fundamentals]
-    required_facts:
-      - "four_quarters_of_2024"
-      - "revenue_value_per_quarter"
-      - "tesla_or_tsla_referenced"
-    forbidden_facts:
-      - "quarters_outside_2024"
-      - "fewer_than_4_quarters_returned_without_explanation"
+    required_facts: [four_quarters_of_2024, revenue_value_per_quarter, tesla_or_tsla_referenced]
+    forbidden_facts: [quarters_outside_2024, fewer_than_4_quarters_returned_without_explanation]
     expected_depth: medium
     appropriate_refusal_ok: false
     must_not_call: []
-    entity_aliases: {Tesla: TSLA}
-  notes: |
-    MIRROR OF: iter3_tesla_revenue_since_2023 (and partially ru_nvda_amd_revenue_4q)
+    entity_aliases:
+      Tesla: TSLA
+  budgets:
+    max_latency_s: 75
+  notes: 'MIRROR OF: iter3_tesla_revenue_since_2023 (and partially ru_nvda_amd_revenue_4q)
+
     ANCHOR: calendar year 2024 — Q1 ending 2024-03-31, Q2 ending 2024-06-30,
+
     Q3 ending 2024-09-30, Q4 ending 2024-12-31. All four quarters were
+
     reported by early 2025.
 
+
     WHY: the original asks for "since 2023" which expands the window every
+
     quarter, making the answer length and expected content drift. Pinning
-    to calendar 2024 fixes a known set of 4 quarters; the agent's job is
+
+    to calendar 2024 fixes a known set of 4 quarters; the agent''s job is
+
     to return all 4 with revenue values. This is a stable trend test.
 
+    '
+
 - id: da_msft_fy2024q4_earnings_citations
-  prompt: "What did Microsoft report in its fiscal Q4 2024 earnings (quarter ending June 30, 2024)? Cite the source for each number."
+  prompt: What did Microsoft report in its fiscal Q4 2024 earnings (quarter ending June 30, 2024)? Cite
+    the source for each number.
   category: financial_data
   tags: [date_anchored, regression_stable, financials, citations]
-  expected_max_latency_s: 60
-  must_not_say:
-    - "as of today"
-    - "most recent"
-    - "latest earnings"
-    - "current earnings"
   rubric:
     expected_tools: [query_fundamentals, get_entity_news, get_fundamentals_history]
-    required_facts:
-      - "msft_fy2024_q4_revenue"
-      - "msft_fy2024_q4_eps_or_net_income"
-      - "citation_marker_per_number"
-    forbidden_facts:
-      - "earnings_data_from_a_different_quarter"
-      - "uncited_numbers"
+    required_facts: [msft_fy2024_q4_revenue, msft_fy2024_q4_eps_or_net_income, citation_marker_per_number]
+    forbidden_facts: [earnings_data_from_a_different_quarter, uncited_numbers]
     expected_depth: medium
     appropriate_refusal_ok: false
     must_not_call: []
-    entity_aliases: {Microsoft: MSFT}
-  notes: |
-    MIRROR OF: iter3_msft_earnings_citations (in 00_real_user_and_aggregate.yaml)
+    entity_aliases:
+      Microsoft: MSFT
+  budgets:
+    max_latency_s: 60
+  notes: 'MIRROR OF: iter3_msft_earnings_citations (in 00_real_user_and_aggregate.yaml)
+
     ANCHOR: Microsoft fiscal Q4 2024, quarter ending 2024-06-30, reported
-    on or around 2024-07-30. Microsoft's fiscal year ends June 30.
+
+    on or around 2024-07-30. Microsoft''s fiscal year ends June 30.
+
 
     WHY: the original asks for "most recent earnings report" which rotates
+
     quarterly. Pinning to FY2024-Q4 fixes the underlying numbers (revenue,
+
     EPS, segment splits) AND preserves the citation-discipline test.
+
     Two failure modes the judge should distinguish: (a) agent returns the
+
     wrong quarter (anchor not honored), (b) agent returns right quarter
+
     but without [Nk] citation markers (citation discipline regression).
 
+
     HUMAN REVIEW FLAG: the exact reported figures are public record but
-    we deliberately don't pin specific numerical values here — the judge
+
+    we deliberately don''t pin specific numerical values here — the judge
+
     checks that the period is honored and citations are attached.
+
+    '

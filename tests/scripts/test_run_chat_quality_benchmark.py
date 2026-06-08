@@ -35,7 +35,8 @@ def test_parse_args_defaults(script_mod) -> None:
     assert ns.base_url == "http://localhost:8000"
     assert ns.tags == ""
     assert ns.ids == ""
-    assert ns.max_runs_per_q == 1
+    # Eval-v2 default: 3 runs per question for variance/stddev metrics.
+    assert ns.max_runs_per_q == 3
 
 
 def test_filter_questions_by_tag(script_mod) -> None:
