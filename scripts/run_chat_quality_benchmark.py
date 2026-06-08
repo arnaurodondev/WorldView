@@ -44,6 +44,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import statistics
 import sys
 import time
 import traceback
@@ -357,6 +358,340 @@ def write_error_file(out_dir: Path, slot: str, exc: BaseException) -> None:
     """Persist a full traceback so failures are diagnosable post-mortem."""
     err_path = out_dir / f"{slot}.error.txt"
     err_path.write_text("".join(traceback.format_exception(type(exc), exc, exc.__traceback__)))
+
+
+# --------------------------------------------------------------------------
+# Human-readable Markdown report (PLAN-0099 W4)
+# --------------------------------------------------------------------------
+#
+# Existing per-Q JSON artefacts are great for tooling but require dot-walking
+# through several levels of nesting to read by hand. The Markdown report below
+# gives the operator a single file with prompt → answer → tools → judge
+# feedback per question, plus a cross-question variance table — so a session
+# can be reviewed in one pass without opening 15 JSON files.
+#
+# The renderer is intentionally a pure function: it takes already-loaded dicts
+# and returns a string. That keeps it trivially testable and means the runner
+# can call it after every run without any file-system side effects beyond the
+# final ``_report.md`` write.
+
+_ANSWER_MAX_CHARS = 1500
+
+
+def _fmt_duration(seconds: float) -> str:
+    """Format ``seconds`` as ``Xm Ys`` (or ``Ys`` if under a minute)."""
+    if seconds < 60:
+        return f"{seconds:.0f}s"
+    m, s = divmod(int(seconds), 60)
+    return f"{m}m {s}s"
+
+
+def _parse_iso(ts: str | None) -> datetime | None:
+    """Parse an ISO-8601 timestamp; return None if the field is missing/garbled."""
+    if not ts:
+        return None
+    try:
+        # ``datetime.fromisoformat`` handles the ``+00:00`` suffix we write.
+        return datetime.fromisoformat(ts)
+    except (TypeError, ValueError):
+        return None
+
+
+def _truncate_answer(text: str, q_id: str) -> str:
+    """Truncate answer to ``_ANSWER_MAX_CHARS`` with an explicit pointer.
+
+    Long answers blow up the markdown report — 1500 chars is enough to judge
+    quality at a glance while keeping the file scannable. The pointer to the
+    full JSON keeps the artefact discoverable.
+    """
+    if not text:
+        return "*(empty answer)*"
+    if len(text) <= _ANSWER_MAX_CHARS:
+        return text
+    return text[:_ANSWER_MAX_CHARS] + f"\n\n*[truncated, see q_{q_id}.json for full]*"
+
+
+def _dim_field(dim_payload: dict[str, Any], *names: str) -> str:
+    """Return the first non-empty string field — back-compat across judge schema versions.
+
+    v2.0 uses ``feedback`` (per-dim) and ``reviewer_summary`` (top-level); v1.x
+    used ``reason`` / ``notes``. We fall back gracefully so old artefacts still
+    render rather than throwing KeyError.
+    """
+    for n in names:
+        v = dim_payload.get(n)
+        if isinstance(v, str) and v.strip():
+            return v
+    return ""
+
+
+def _group_by_question(artifacts: list[dict[str, Any]]) -> dict[str, list[dict[str, Any]]]:
+    """Bucket per-run artefacts by question id; preserves load order within a bucket."""
+    by_q: dict[str, list[dict[str, Any]]] = {}
+    for art in artifacts:
+        q_id = art.get("id") or "unknown"
+        by_q.setdefault(q_id, []).append(art)
+    return by_q
+
+
+def _safe_stdev(values: list[float]) -> float:
+    """statistics.stdev requires N>=2; return 0.0 otherwise so the column always renders."""
+    if len(values) < 2:
+        return 0.0
+    return statistics.stdev(values)
+
+
+def _render_run_block(art: dict[str, Any], run_idx: int) -> list[str]:
+    """Render a single Run section (## Run N) inside a per-question block."""
+    result = art.get("result") or {}
+    heur = art.get("heuristics") or {}
+    judge = art.get("judge") or {}
+    q_id = art.get("id") or "unknown"
+    bucket = art.get("bucket") or "?"
+    latency = float(result.get("latency_s") or heur.get("latency_s") or 0.0)
+    words = int(heur.get("word_count") or 0)
+    answer_text = str(result.get("answer_text") or "")
+    tool_calls = result.get("tool_calls") or []
+    tools = sorted({(tc.get("name") or "") for tc in tool_calls if isinstance(tc, dict)})
+
+    # Headline: prefer judge verdict when present, else fall back to heuristic bucket.
+    if judge:
+        verdict = judge.get("verdict") or "?"
+        score = judge.get("score")
+        header = f"#### Run {run_idx} ({verdict}, {score}) — latency {latency:.1f}s, {words} words"
+    else:
+        header = f"#### Run {run_idx} ({bucket}) — latency {latency:.1f}s, {words} words"
+
+    lines: list[str] = [header, ""]
+
+    if tools:
+        lines.append(f"**Tools called ({len(tools)}):** {', '.join(tools)}")
+    else:
+        lines.append("**Tools called:** *(none)*")
+    lines.append("")
+
+    lines.append("**Answer:**")
+    lines.append("")
+    # Use blockquote for readability; truncate long answers.
+    truncated = _truncate_answer(answer_text, q_id)
+    for line in truncated.splitlines() or [""]:
+        lines.append(f"> {line}")
+    lines.append("")
+
+    if judge:
+        v = judge.get("verdict") or "?"
+        s = judge.get("score")
+        lines.append(f"**Judge verdict:** {v} ({s}/100)")
+        dims = judge.get("dimensions") or {}
+        for k, payload in dims.items():
+            if not isinstance(payload, dict):
+                continue
+            d_score = payload.get("score")
+            d_feedback = _dim_field(payload, "feedback", "reason")
+            tail = f" — {d_feedback}" if d_feedback else ""
+            lines.append(f"- {k} {d_score}{tail}")
+        # v2.0 reviewer_summary lives at the judge top level; v1.x used ``notes``.
+        reviewer_summary = _dim_field(judge, "reviewer_summary", "notes")
+        if reviewer_summary:
+            lines.append("")
+            lines.append(f"**Reviewer summary:** {reviewer_summary}")
+    else:
+        # No judge — surface the heuristic reasons so the run is still informative.
+        reasons = art.get("reasons") or []
+        if reasons:
+            lines.append(f"**Heuristic reasons:** {'; '.join(reasons)}")
+
+    lines.append("")
+    return lines
+
+
+def _render_question_block(q_id: str, artifacts: list[dict[str, Any]]) -> list[str]:
+    """Render the per-question section (### Q<n>) with all its runs."""
+    first = artifacts[0]
+    category = first.get("category") or "uncategorized"
+    prompt = first.get("prompt") or "(no prompt recorded)"
+
+    # Aggregate stats across runs.
+    judge_scores = [
+        a["judge"].get("score")
+        for a in artifacts
+        if isinstance(a.get("judge"), dict) and isinstance(a["judge"].get("score"), int | float)
+    ]
+    verdicts = [a["judge"].get("verdict") for a in artifacts if isinstance(a.get("judge"), dict)]
+
+    lines: list[str] = [f"### `{q_id}` ({category})", ""]
+    lines.append("**Prompt:**")
+    lines.append("")
+    for line in prompt.splitlines():
+        lines.append(f"> {line}")
+    lines.append("")
+
+    n = len(artifacts)
+    if judge_scores:
+        mean = statistics.mean(judge_scores)
+        sd = _safe_stdev([float(s) for s in judge_scores])
+        verdict_str = " ".join(verdicts) if verdicts else "?"
+        lines.append(f"**Runs:** {n} — mean score **{mean:.1f}** (stddev {sd:.1f}); {verdict_str}")
+    else:
+        # No judge data — fall back to bucket roll-up.
+        buckets = [a.get("bucket") or "?" for a in artifacts]
+        lines.append(f"**Runs:** {n} — buckets: {' '.join(buckets)}")
+    lines.append("")
+
+    for i, art in enumerate(artifacts, start=1):
+        lines.extend(_render_run_block(art, i))
+
+    lines.append("---")
+    lines.append("")
+    return lines
+
+
+def _render_variance_table(by_q: dict[str, list[dict[str, Any]]]) -> list[str]:
+    """Render the cross-question variance table."""
+    lines: list[str] = ["## Cross-question variance", ""]
+    lines.append("| Question | N | Mean | Stddev | Verdicts | Mean latency |")
+    lines.append("|----------|---|------|--------|----------|--------------|")
+    for q_id in sorted(by_q.keys()):
+        arts = by_q[q_id]
+        n = len(arts)
+        scores = [
+            a["judge"]["score"]
+            for a in arts
+            if isinstance(a.get("judge"), dict) and isinstance(a["judge"].get("score"), int | float)
+        ]
+        latencies = [
+            float((a.get("result") or {}).get("latency_s") or (a.get("heuristics") or {}).get("latency_s") or 0.0)
+            for a in arts
+        ]
+        if scores:
+            mean = f"{statistics.mean(scores):.1f}"
+            sd = f"{_safe_stdev([float(s) for s in scores]):.1f}"
+        else:
+            mean = "-"
+            sd = "-"
+        # Verdict roll-up: PASSx3 / WARNx1 etc.
+        verdicts_counter: dict[str, int] = {}
+        for a in arts:
+            v = (a.get("judge") or {}).get("verdict") or a.get("bucket") or "?"
+            verdicts_counter[v] = verdicts_counter.get(v, 0) + 1
+        v_str = " ".join(f"{k}x{c}" for k, c in sorted(verdicts_counter.items()))
+        mean_lat = f"{statistics.mean(latencies):.0f}s" if latencies else "-"
+        lines.append(f"| {q_id} | {n} | {mean} | {sd} | {v_str} | {mean_lat} |")
+    lines.append("")
+    return lines
+
+
+def _render_errors_section(artifacts: list[dict[str, Any]]) -> list[str]:
+    """List any EXCEPTION / FAIL runs so they aren't buried."""
+    bad = [a for a in artifacts if (a.get("bucket") == "EXCEPTION") or (a.get("result") or {}).get("error")]
+    lines: list[str] = ["## Errors and exceptions", ""]
+    if not bad:
+        lines.append("*(none)*")
+        lines.append("")
+        return lines
+    for a in bad:
+        q_id = a.get("id") or "?"
+        err = (a.get("result") or {}).get("error") or a.get("reasons")
+        lines.append(f"- `{q_id}`: {err}")
+    lines.append("")
+    return lines
+
+
+def _render_report_md(
+    *,
+    meta: dict[str, Any],
+    summary: dict[str, Any],
+    judge_summary: dict[str, Any] | None,
+    per_question_artifacts: list[dict[str, Any]],
+) -> str:
+    """Render a human-readable Markdown report for a benchmark run.
+
+    Inputs are the in-memory dicts already produced by the runner — no I/O.
+    ``per_question_artifacts`` is the list of ``q_<id>[_runN].json`` payloads
+    (the runner passes them directly to avoid re-reading from disk).
+
+    The report has four sections:
+      1. Run header (timing, base URL, judge model, filters)
+      2. Headline numbers (judge avg, verdict counts, dimension averages,
+         legacy heuristic buckets)
+      3. Per-question detail (one ### per question, then #### per run with
+         answer + tools + judge feedback)
+      4. Cross-question variance table + Errors section
+
+    Supports both v2.0 judge schema (``feedback`` / ``reviewer_summary``) and
+    v1.x (``reason`` / ``notes``) — falls back gracefully so old artefacts
+    still render without crashing.
+    """
+    started = _parse_iso(meta.get("started_at"))
+    ended = _parse_iso(meta.get("ended_at"))
+    duration_s = (ended - started).total_seconds() if (started and ended) else 0.0
+    out_dir_label = meta.get("out_dir_label") or "run"
+    base_url = meta.get("base_url") or "?"
+    tags = meta.get("tags_filter")
+    tags_str = ", ".join(tags) if tags else "*(none)*"
+    n_questions = meta.get("total_questions") or 0
+    n_runs = meta.get("total_runs") or 0
+    max_runs = meta.get("max_runs_per_q") or 1
+
+    lines: list[str] = []
+    lines.append(f"# Chat Quality Benchmark — {out_dir_label}")
+    lines.append("")
+
+    # --- Header block ---------------------------------------------------
+    started_str = started.strftime("%Y-%m-%d %H:%M:%S UTC") if started else "(unknown)"
+    ended_str = ended.strftime("%Y-%m-%d %H:%M:%S UTC") if ended else "(unknown)"
+    lines.append(f"**Started:** {started_str}")
+    lines.append(f"**Ended:** {ended_str} ({_fmt_duration(duration_s)})")
+    lines.append(f"**Base URL:** {base_url}")
+    lines.append(f"**Tags filter:** {tags_str}")
+    lines.append(f"**Questions:** {n_questions} (x {max_runs} runs each = {n_runs} total)")
+    if judge_summary:
+        judge_model = judge_summary.get("model") or meta.get("judge_model") or "(default)"
+        lines.append(f"**Judge:** {judge_model}")
+    lines.append("")
+
+    # --- Headline numbers ----------------------------------------------
+    lines.append("## Headline numbers")
+    lines.append("")
+    lines.append("| Metric | Value |")
+    lines.append("|--------|-------|")
+    if judge_summary:
+        score_avg = judge_summary.get("score_avg")
+        score_avg_str = f"{score_avg:.2f} / 100" if isinstance(score_avg, int | float) else "-"
+        lines.append(f"| Judge avg score | {score_avg_str} |")
+        verdict_counts = judge_summary.get("verdict_counts") or {}
+        verdict_str = " · ".join(f"{c} {v}" for v, c in verdict_counts.items() if c) or "(none)"
+        lines.append(f"| Verdicts | {verdict_str} |")
+        dim_avg = judge_summary.get("dimension_avg") or {}
+
+        def _fmt_dim(v: Any) -> str:
+            return f"{v:.1f}" if isinstance(v, int | float) else "-"
+
+        dims_str = " · ".join(f"{k} {_fmt_dim(v)}" for k, v in dim_avg.items()) or "(none)"
+        lines.append(f"| Dimensions | {dims_str} |")
+    bucket_counts = (summary or {}).get("bucket_counts") or {}
+    bucket_str = " · ".join(f"{c} {v}" for v, c in bucket_counts.items() if c) or "(none)"
+    lines.append(f"| Heuristic buckets (legacy) | {bucket_str} |")
+    lines.append("")
+
+    # --- Per-question detail -------------------------------------------
+    lines.append("## Per-question detail")
+    lines.append("")
+    if not per_question_artifacts:
+        lines.append("*(no runs to report — the benchmark produced zero per-question artefacts.)*")
+        lines.append("")
+    else:
+        by_q = _group_by_question(per_question_artifacts)
+        for q_id in sorted(by_q.keys()):
+            lines.extend(_render_question_block(q_id, by_q[q_id]))
+
+        # --- Variance table --------------------------------------------
+        lines.extend(_render_variance_table(by_q))
+
+    # --- Errors -------------------------------------------------------
+    lines.extend(_render_errors_section(per_question_artifacts))
+
+    return "\n".join(lines)
 
 
 # --------------------------------------------------------------------------
@@ -717,6 +1052,8 @@ def main(argv: list[str] | None = None) -> int:
         "total_questions": len(filtered),
         "max_runs_per_q": args.max_runs_per_q,
         "total_runs": len(per_q_records),
+        # Used by the Markdown renderer for the H1 heading.
+        "out_dir_label": out_dir.name,
     }
     (out_dir / "_meta.json").write_text(json.dumps(meta, indent=2, sort_keys=True))
 
@@ -728,6 +1065,7 @@ def main(argv: list[str] | None = None) -> int:
     (out_dir / "_summary.json").write_text(json.dumps(summary, indent=2, sort_keys=True))
 
     # PLAN-0104 W33 — emit the judge aggregate when --judge was used.
+    judge_summary: dict[str, Any] | None = None
     if args.judge:
         judge_summary = {
             "schema_version": 1,
@@ -735,6 +1073,27 @@ def main(argv: list[str] | None = None) -> int:
             **summarise_judge_records(judge_records),
         }
         (out_dir / "_judge_summary.json").write_text(json.dumps(judge_summary, indent=2, sort_keys=True))
+
+    # PLAN-0099 W4 — write the human-readable report alongside the JSON
+    # summaries. We re-read the q_*.json artefacts from disk (rather than
+    # threading per-Q payloads through main()) so the renderer sees the same
+    # structure the offline regrade mode produces. This is one disk pass at
+    # the end of a long-running benchmark — well worth the simplicity.
+    per_q_artifacts: list[dict[str, Any]] = []
+    for q_file in sorted(out_dir.glob("q_*.json")):
+        try:
+            per_q_artifacts.append(json.loads(q_file.read_text()))
+        except json.JSONDecodeError:
+            # A malformed JSON would have been caught earlier; skip rather
+            # than crashing report generation.
+            continue
+    report_md = _render_report_md(
+        meta=meta,
+        summary=summary,
+        judge_summary=judge_summary,
+        per_question_artifacts=per_q_artifacts,
+    )
+    (out_dir / "_report.md").write_text(report_md)
 
     print()
     print("=== summary ===")
@@ -746,6 +1105,7 @@ def main(argv: list[str] | None = None) -> int:
         print(f"judge     : verdicts={agg['verdict_counts']} score_avg={agg['score_avg']}")
         print(f"            dimension_avg={agg['dimension_avg']}")
     print(f"artifacts : {out_dir}")
+    print(f"report    : {out_dir / '_report.md'}")
     return 0
 
 
