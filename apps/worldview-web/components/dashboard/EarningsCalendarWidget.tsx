@@ -17,18 +17,29 @@
  */
 
 "use client";
-// WHY "use client": this component uses useQuery (TanStack Query hook) which
+// WHY "use client": this component uses useInfiniteQuery (TanStack Query hook) which
 // requires client-side rendering. Next.js App Router runs Server Components
 // by default — "use client" opts this subtree into the React client bundle.
 
-import { useQuery } from "@tanstack/react-query";
+import { useInfiniteQuery, type InfiniteData } from "@tanstack/react-query";
 import { createGateway } from "@/lib/gateway";
 import { useAuth } from "@/hooks/useAuth";
-import { useAboveFoldReady } from "@/hooks/useAboveFoldReady";
 import { Skeleton } from "@/components/ui/skeleton";
 import { AlertTriangle } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import type { EarningsEvent } from "@/types/api";
+import type { EarningsCalendarResponse, EarningsEvent } from "@/types/api";
+
+// ── Constants ─────────────────────────────────────────────────────────────────
+
+/**
+ * PAGE_SIZE — earnings events per page.
+ *
+ * WHY 10: matches the original visible row count (the prior version did
+ * `.slice(0, 8)` which silently dropped further events). 10 keeps the panel
+ * compact on first load while letting the user page through the full window
+ * via "Load more".
+ */
+const PAGE_SIZE = 10;
 
 // ── Component ─────────────────────────────────────────────────────────────────
 
@@ -41,30 +52,50 @@ import type { EarningsEvent } from "@/types/api";
  */
 export function EarningsCalendarWidget() {
   const { accessToken } = useAuth();
-  // F-4: Row-4 widget — defer query one paint to free dev-mode connections
-  // for above-fold widgets (network waterfall fix).
-  const aboveFoldReady = useAboveFoldReady();
 
-  const { data, isLoading, isError, refetch } = useQuery({
-    // WHY "earnings-calendar" queryKey: TanStack Query uses this to cache and
-    // deduplicate fetches across components. Using the same key as the route
-    // name keeps it easy to invalidate when real-time earnings data arrives.
-    queryKey: ["earnings-calendar"],
-    queryFn: () => createGateway(accessToken).getEarningsCalendar(),
-    // WHY enabled guard: if the user is not authenticated yet, accessToken is
-    // undefined. We must not fire the request — S9 would return 401 which
-    // counts as an error state and would show the error banner on first render.
-    enabled: !!accessToken && aboveFoldReady,
-    // WHY 10min staleTime: earnings dates are announced weeks in advance and
-    // only change when companies pre-announce. 10-minute cache is safe and
-    // matches EconomicCalendar's staleness budget.
-    staleTime: 10 * 60_000,
-    refetchInterval: 10 * 60_000,
-  });
+  // WHY useInfiniteQuery: drives a "Load more" button at the bottom of the
+  // list. The previous useQuery + .slice(0, 8) approach silently dropped any
+  // events beyond the 8th row even when the user wanted to see more
+  // (Dashboard Regression #3). Offset-based pagination lets the user page
+  // through every event in the 7-day window without re-fetching seen rows.
+  const { data, isLoading, isError, refetch, fetchNextPage, hasNextPage, isFetchingNextPage } =
+    useInfiniteQuery<
+      EarningsCalendarResponse,
+      Error,
+      InfiniteData<EarningsCalendarResponse>,
+      readonly unknown[],
+      number
+    >({
+      queryKey: ["earnings-calendar-infinite"],
+      queryFn: ({ pageParam }) =>
+        createGateway(accessToken).getEarningsCalendar({ limit: PAGE_SIZE, offset: pageParam }),
+      initialPageParam: 0,
+      getNextPageParam: (lastPage, allPages) => {
+        // WHY total-based check: backend always returns `total` (S7 earnings
+        // calendar endpoint). Stop paging once we've fetched all rows.
+        const loaded = allPages.reduce((n, p) => n + p.events.length, 0);
+        const total = lastPage.total;
+        if (total != null) return loaded < total ? loaded : undefined;
+        // Fallback: stop when a partial page is returned.
+        return lastPage.events.length === PAGE_SIZE ? loaded : undefined;
+      },
+      // WHY enabled guard: if the user is not authenticated yet, accessToken is
+      // undefined. We must not fire the request — S9 would return 401 which
+      // counts as an error state and would show the error banner on first render.
+      enabled: !!accessToken,
+      // WHY 10min staleTime: earnings dates are announced weeks in advance and
+      // only change when companies pre-announce. 10-minute cache is safe and
+      // matches EconomicCalendar's staleness budget.
+      staleTime: 10 * 60_000,
+      refetchInterval: 10 * 60_000,
+    });
 
-  // WHY ?? []: TanStack Query `data` is undefined while loading/error.
-  // Defaulting to [] ensures the empty-state branch renders cleanly.
-  const events = data?.events ?? [];
+  // WHY flatMap across pages: each page is a slice of the leaderboard; we
+  // render the concatenation as a single scrollable list.
+  const events = data?.pages.flatMap((p) => p.events) ?? [];
+  // WHY total fallback to events.length: when backend omits total we can still
+  // hide the "Load more" button once we hit the end.
+  const total = data?.pages[0]?.total ?? events.length;
 
   // WHY single outer wrapper for all render paths:
   // All states (loading, error, empty, data) live inside the same bg-background
@@ -134,13 +165,35 @@ export function EarningsCalendarWidget() {
       )}
 
       {/* ── Event rows ──────────────────────────────────────────────────── */}
+      {/* WHY no .slice(): we now render every event the server returned across
+          all loaded pages. The "Load more" button at the bottom drives the
+          next page fetch via useInfiniteQuery.fetchNextPage(). */}
       {!isLoading && !isError && events.length > 0 && (
         // WHY divide-y: hairline separators between rows without explicit border classes
         // on each row — same pattern as EconomicCalendar.
         <div className="flex-1 divide-y divide-border/30 overflow-auto">
-          {events.slice(0, 8).map((event) => (
+          {events.map((event) => (
             <EarningsRow key={event.event_id} event={event} />
           ))}
+
+          {/* ── Load more button ──────────────────────────────────────── */}
+          {/* WHY render at the bottom of the scrollable list: discoverability —
+              user scrolls to the bottom and sees the action. Only rendered when
+              hasNextPage is true so the panel stays clean at end-of-list. */}
+          {hasNextPage && (
+            <div className="flex items-center justify-center border-t border-border/30 px-2 py-1">
+              <button
+                type="button"
+                onClick={() => fetchNextPage()}
+                disabled={isFetchingNextPage}
+                className="text-[10px] uppercase tracking-[0.08em] text-muted-foreground hover:text-foreground disabled:opacity-50"
+              >
+                {isFetchingNextPage
+                  ? "Loading…"
+                  : `Load more (${events.length}/${total})`}
+              </button>
+            </div>
+          )}
         </div>
       )}
 

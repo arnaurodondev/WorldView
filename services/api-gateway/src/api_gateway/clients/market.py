@@ -204,6 +204,7 @@ async def get_top_movers(
     mover_type: str = "gainers",
     limit: int = 10,
     period: str = "1D",
+    offset: int = 0,
     *,
     headers: dict[str, str] | None = None,
     make_headers: Callable[[], dict[str, str]] | None = None,
@@ -234,7 +235,7 @@ async def get_top_movers(
     # fundamental_metrics.daily_return which is only populated for ~8 instruments.
     # The OHLCV LATERAL JOIN in period-movers yields 500+ instruments for all periods.
     resp = await clients.market_data.get(
-        f"/api/v1/market/period-movers?period={period}&type={mover_type}&limit={limit}",
+        f"/api/v1/market/period-movers?period={period}&type={mover_type}&limit={limit}&offset={offset}",
         headers=_h(),
     )
     if resp.status_code >= 400:

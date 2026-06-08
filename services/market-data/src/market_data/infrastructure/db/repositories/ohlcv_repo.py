@@ -328,10 +328,12 @@ class PgOHLCVRepository(OHLCVRepository):
         lookback_days: int,
         mover_type: str,
         limit: int,
+        offset: int = 0,
     ) -> list[dict]:
         """Return top gainers or losers by period return from daily OHLCV bars.
 
         WHY daily bars + calendar lookback: see get_sector_period_returns docstring.
+        offset: SQL OFFSET for paginating through the sorted leaderboard.
         """
         order = "DESC" if mover_type == "gainers" else "ASC"
         sql = text(
@@ -355,10 +357,13 @@ class PgOHLCVRepository(OHLCVRepository):
             ) prev ON true
             WHERE i.sector IS NOT NULL
             ORDER BY period_return_pct {order} NULLS LAST
-            LIMIT :lim
+            LIMIT :lim OFFSET :off
             """
         )
-        result = await self._session.execute(sql, {"lookback_days": lookback_days, "lim": limit})
+        result = await self._session.execute(
+            sql,
+            {"lookback_days": lookback_days, "lim": limit, "off": offset},
+        )
         rows = result.mappings().all()
         return [
             {

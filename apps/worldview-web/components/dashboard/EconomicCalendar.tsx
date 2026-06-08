@@ -15,32 +15,70 @@
  */
 
 "use client";
-// WHY "use client": uses useQuery.
+// WHY "use client": uses useInfiniteQuery + interactive "Load more" button.
 
-import { useQuery } from "@tanstack/react-query";
+import { useInfiniteQuery, type InfiniteData } from "@tanstack/react-query";
 import { createGateway } from "@/lib/gateway";
 import { useAuth } from "@/hooks/useAuth";
-import { useAboveFoldReady } from "@/hooks/useAboveFoldReady";
 import { Skeleton } from "@/components/ui/skeleton";
-import type { EconomicImpact } from "@/types/api";
+import type { EconomicCalendarResponse, EconomicImpact } from "@/types/api";
+
+// ── Constants ─────────────────────────────────────────────────────────────────
+
+/**
+ * PAGE_SIZE — events fetched per page.
+ *
+ * WHY 10: matches the original visible row count (the previous version did
+ * `.slice(0, 8)` which silently capped the list). 10 gives one extra row of
+ * context per fetch while keeping the panel compact on first load.
+ */
+const PAGE_SIZE = 10;
 
 // ── Component ─────────────────────────────────────────────────────────────────
 
 export function EconomicCalendar() {
   const { accessToken } = useAuth();
-  // F-4: Row-4 widget — gate query until above-fold widgets have enqueued.
-  const aboveFoldReady = useAboveFoldReady();
 
-  const { data, isLoading, isError } = useQuery({
-    queryKey: ["economic-calendar"],
-    queryFn: () => createGateway(accessToken).getEconomicCalendar(),
-    enabled: !!accessToken && aboveFoldReady,
-    // WHY 10min: economic events don't change frequently; 10min is fine
-    staleTime: 10 * 60_000,
-    refetchInterval: 10 * 60_000,
-  });
+  // WHY useInfiniteQuery: drives a "Load more" button that fetches the next
+  // PAGE_SIZE events using offset-based pagination. The previous version used
+  // .slice(0, 8) which silently dropped any further events the API returned
+  // (Dashboard Regression #3). Now the user can page through the full window.
+  const { data, isLoading, isError, fetchNextPage, hasNextPage, isFetchingNextPage } =
+    useInfiniteQuery<
+      EconomicCalendarResponse,
+      Error,
+      InfiniteData<EconomicCalendarResponse>,
+      readonly unknown[],
+      number
+    >({
+      queryKey: ["economic-calendar-infinite"],
+      queryFn: ({ pageParam }) =>
+        createGateway(accessToken).getEconomicCalendar({ limit: PAGE_SIZE, offset: pageParam }),
+      // WHY 0 as initialPageParam: first page starts at offset=0.
+      initialPageParam: 0,
+      getNextPageParam: (lastPage, allPages) => {
+        // WHY combine page-size signal + total count: if the server returned
+        // a full page AND we've not yet seen all `total` events, there are
+        // more pages. Otherwise we've reached the end.
+        const loaded = allPages.reduce((n, p) => n + p.events.length, 0);
+        const total = lastPage.total;
+        if (total != null) return loaded < total ? loaded : undefined;
+        // Fallback when backend doesn't return `total`: stop when we get a
+        // partial page (server returned fewer rows than the page size).
+        return lastPage.events.length === PAGE_SIZE ? loaded : undefined;
+      },
+      enabled: !!accessToken,
+      // WHY 10min: economic events don't change frequently; 10min is fine
+      staleTime: 10 * 60_000,
+      refetchInterval: 10 * 60_000,
+    });
 
-  const events = data?.events ?? [];
+  // WHY flatten across pages: each page is a slice of the leaderboard; we
+  // render the concatenation as a single scrollable list.
+  const events = data?.pages.flatMap((p) => p.events) ?? [];
+  // WHY total fallback to events.length: when backend omits total we can still
+  // hide the "Load more" button once we hit the end.
+  const total = data?.pages[0]?.total ?? events.length;
 
   // WHY single outer wrapper for all render paths:
   // All states (loading, error, empty, data) live inside the same bg-background
@@ -102,9 +140,12 @@ export function EconomicCalendar() {
       )}
 
       {/* ── Event rows ──────────────────────────────────────────────────── */}
+      {/* WHY no .slice(): we now render every event the server returned across
+          all loaded pages. The "Load more" button at the bottom drives the
+          next page fetch via useInfiniteQuery.fetchNextPage(). */}
       {!isLoading && !isError && events.length > 0 && (
         <div className="flex-1 divide-y divide-border/30 overflow-auto">
-          {events.slice(0, 8).map((event) => {
+          {events.map((event) => {
             const date = new Date(event.event_date);
             const dateStr = date.toISOString().slice(5, 10); // "MM-DD"
             const timeStr = date.toISOString().slice(11, 16); // "HH:MM"
@@ -151,6 +192,25 @@ export function EconomicCalendar() {
               </div>
             );
           })}
+
+          {/* ── Load more button ──────────────────────────────────────── */}
+          {/* WHY render at the bottom of the scrollable list: discoverability
+              — user scrolls to the bottom and sees the action. We only render
+              when hasNextPage is true so the panel stays clean at end-of-list. */}
+          {hasNextPage && (
+            <div className="flex items-center justify-center border-t border-border/30 px-2 py-1">
+              <button
+                type="button"
+                onClick={() => fetchNextPage()}
+                disabled={isFetchingNextPage}
+                className="text-[10px] uppercase tracking-[0.08em] text-muted-foreground hover:text-foreground disabled:opacity-50"
+              >
+                {isFetchingNextPage
+                  ? "Loading…"
+                  : `Load more (${events.length}/${total})`}
+              </button>
+            </div>
+          )}
         </div>
       )}
 

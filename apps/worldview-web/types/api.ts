@@ -1350,6 +1350,10 @@ export interface EconomicEvent {
 
 export interface EconomicCalendarResponse {
   events: EconomicEvent[];
+  // WHY total?: backend (S7) returns the total count of matching events for the
+  // window; the frontend uses this to drive a "Load more" button when more events
+  // exist beyond the currently-fetched page. Optional for backward compatibility.
+  total?: number;
 }
 
 // ── Earnings Calendar ──────────────────────────────────────────────────────

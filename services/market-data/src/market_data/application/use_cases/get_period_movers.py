@@ -35,10 +35,12 @@ class GetPeriodMoversUseCase:
         period: str,
         mover_type: str = "gainers",
         limit: int = 10,
+        offset: int = 0,
     ) -> list[dict]:
         """Return [{instrument_id, ticker, name, period_return_pct}] sorted by return.
 
         mover_type: "gainers" (DESC by period_return_pct) or "losers" (ASC).
+        offset: pagination offset into the sorted universe (forwarded to SQL OFFSET).
         """
         if period not in _PERIOD_TO_LOOKBACK_DAYS:
             msg = f"Unsupported period '{period}' for period movers. Use 1W or 1M."
@@ -46,5 +48,8 @@ class GetPeriodMoversUseCase:
         if mover_type not in ("gainers", "losers"):
             msg = f"mover_type must be 'gainers' or 'losers', got '{mover_type}'"
             raise ValueError(msg)
+        if offset < 0:
+            msg = f"offset must be >= 0, got {offset}"
+            raise ValueError(msg)
         lookback_days = _PERIOD_TO_LOOKBACK_DAYS[period]
-        return await self._uow.ohlcv_read.get_period_movers(lookback_days, mover_type, limit)
+        return await self._uow.ohlcv_read.get_period_movers(lookback_days, mover_type, limit, offset)

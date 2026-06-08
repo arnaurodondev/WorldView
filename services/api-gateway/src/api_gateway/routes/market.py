@@ -1547,7 +1547,8 @@ async def market_heatmap(
 async def top_movers(
     request: Request,
     mover_type: str = Query("gainers", alias="type", description="gainers or losers"),
-    limit: int = Query(10, ge=1, le=20),
+    limit: int = Query(10, ge=1, le=50),
+    offset: int = Query(0, ge=0, le=500, description="Pagination offset"),
     period: str = Query("1D", description="Period: 1D, 1W, or 1M"),
 ) -> dict[str, Any]:
     """Top gainers or losers — screener sorted by daily_return (1D) or OHLCV bars (1W/1M).
@@ -1555,6 +1556,7 @@ async def top_movers(
     For 1D: single S3 screener call with sort_by=daily_return.
     For 1W/1M: delegates to S3 /api/v1/market/period-movers (OHLCV-based).
     Auth required. Forwards X-Internal-JWT to the downstream call.
+    Supports ``offset`` for paginating through the universe leaderboard.
     """
     if not getattr(request.state, "user", None):
         raise HTTPException(status_code=401, detail="Authentication required")
@@ -1568,6 +1570,7 @@ async def top_movers(
             mover_type=mover_type,
             limit=limit,
             period=period,
+            offset=offset,
             # T-A-1-02: pass factory so each downstream call issues a fresh JWT.
             make_headers=lambda: _auth_headers(request),
         )

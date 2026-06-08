@@ -20,7 +20,11 @@ export function createPredictionMarketsApi(t: string | undefined) {
      * `{markets: PredictionMarket[], total}` with the simpler yes/no probability model.
      */
     async getPredictionMarkets(
-      params: { status?: string; limit?: number } = {},
+      // WHY offset added: PRD-0103 dashboard regression #3 — the standalone
+      // /prediction-markets page now paginates through the universe. The
+      // dashboard widget continues to pass only {status, limit:3} so it
+      // shows a tight top-3 view + "View all" link.
+      params: { status?: string; limit?: number; offset?: number; category?: string } = {},
     ): Promise<PredictionMarketsResponse> {
       const qs = new URLSearchParams(
         Object.entries(params)

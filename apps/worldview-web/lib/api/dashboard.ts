@@ -75,6 +75,11 @@ export function createDashboardApi(t: string | undefined) {
       // S9 which routes 1D → screener and 1W/1M → S3 OHLCV period-movers endpoint.
       // Default 1D keeps backward compatibility.
       period: "1D" | "1W" | "1M" = "1D",
+      // WHY offset param: backend S3 /market/period-movers now accepts an `offset`
+      // for paginating through the universe-wide leaderboard (Dashboard Regression
+      // #3). Default 0 keeps the dashboard widget behaviour unchanged; a future
+      // standalone /markets/movers page can call with offset>0 to load further pages.
+      offset = 0,
     ): Promise<TopMoversResponse> {
       // S9 composed endpoint returns raw screener results from S3.
       // S3's ScreenInstrumentResponse uses field name `ticker` (not `symbol`).
@@ -110,7 +115,10 @@ export function createDashboardApi(t: string | undefined) {
         type?: string;
         total?: number;
       }>(
-        `/v1/market/top-movers?type=${moverType}&limit=${limit}&period=${period}`,
+        // WHY include offset: backend supports pagination through the sorted
+        // universe; the dashboard always passes 0 today but future leaderboard
+        // pages will use offset to fetch subsequent pages.
+        `/v1/market/top-movers?type=${moverType}&limit=${limit}&period=${period}&offset=${offset}`,
         { token: t },
       );
 
@@ -192,7 +200,16 @@ export function createDashboardApi(t: string | undefined) {
      * `new Date(event.event_date)` throws RangeError: Invalid time value (BP-370)
      * because `event.event_date` is undefined — crashing the panel silently.
      */
-    async getEconomicCalendar(): Promise<EconomicCalendarResponse> {
+    async getEconomicCalendar(params?: {
+      limit?: number;
+      offset?: number;
+    }): Promise<EconomicCalendarResponse> {
+      // WHY URLSearchParams: only forward params the caller actually set so we
+      // don't send "?limit=undefined" which some FastAPI validators reject.
+      const qs = new URLSearchParams();
+      if (params?.limit != null) qs.set("limit", String(params.limit));
+      if (params?.offset != null) qs.set("offset", String(params.offset));
+      const query = qs.toString();
       const raw = await apiFetch<{
         events: Array<{
           event_id: string;
@@ -203,7 +220,7 @@ export function createDashboardApi(t: string | undefined) {
           confidence?: number;
         }>;
         total?: number;
-      }>("/v1/fundamentals/economic-calendar", { token: t });
+      }>(`/v1/fundamentals/economic-calendar${query ? `?${query}` : ""}`, { token: t });
 
       // Parse "Actual: X, Previous: Y, Forecast: Z" from S7 description text
       const parseDesc = (desc?: string) => {
@@ -234,7 +251,9 @@ export function createDashboardApi(t: string | undefined) {
         };
       });
 
-      return { events };
+      // WHY pass through `total`: lets the EconomicCalendar widget render a
+      // "Load more" button when more events exist beyond the current page.
+      return { events, total: raw.total };
     },
 
     /**
@@ -256,6 +275,7 @@ export function createDashboardApi(t: string | undefined) {
       from_date?: string;
       to_date?: string;
       limit?: number;
+      offset?: number;
     }): Promise<EarningsCalendarResponse> {
       // Build query string from optional params — only include keys with values
       // so we never send ?from_date=undefined which confuses some FastAPI validators.
@@ -263,6 +283,9 @@ export function createDashboardApi(t: string | undefined) {
       if (params?.from_date) qs.set("from_date", params.from_date);
       if (params?.to_date) qs.set("to_date", params.to_date);
       if (params?.limit != null) qs.set("limit", String(params.limit));
+      // WHY include offset: backend supports paginating through the earnings
+      // window via `offset`; the widget uses it to drive a "Load more" button.
+      if (params?.offset != null) qs.set("offset", String(params.offset));
       const query = qs.toString();
       return apiFetch<EarningsCalendarResponse>(
         `/v1/fundamentals/earnings-calendar${query ? `?${query}` : ""}`,

@@ -14,9 +14,9 @@
  */
 
 "use client";
-// WHY "use client": uses useQuery for paginated market data + useState for filters.
+// WHY "use client": uses useInfiniteQuery for paginated market data + useState for filters.
 
-import { useQuery } from "@tanstack/react-query";
+import { useInfiniteQuery, type InfiniteData } from "@tanstack/react-query";
 import { useState, useMemo } from "react";
 import { createGateway } from "@/lib/gateway";
 import { useAuth } from "@/hooks/useAuth";
@@ -27,7 +27,19 @@ import { cn } from "@/lib/utils";
 // HF-10: shared compact-currency formatter for "$1.2M" / "$42.5K" output.
 import { formatCompactCurrency } from "@/lib/format";
 import { TrendingUp, Search, AlertCircle } from "lucide-react";
-import type { PredictionMarket } from "@/types/api";
+import type { PredictionMarket, PredictionMarketsResponse } from "@/types/api";
+
+// ── Pagination constants ──────────────────────────────────────────────────────
+
+/**
+ * PAGE_SIZE — markets fetched per useInfiniteQuery page.
+ *
+ * WHY 25: terminal-density rows are ~22px tall; 25 fits a screenful on a
+ * typical 1080p monitor, giving the user a meaningful chunk per "Load more"
+ * click. Previously the page eagerly fetched limit=200 markets up-front which
+ * wasted bandwidth when users only inspected the top few.
+ */
+const PAGE_SIZE = 25;
 
 // ── Probability sparkline ─────────────────────────────────────────────────────
 
@@ -275,19 +287,50 @@ export default function PredictionMarketsPage() {
   const [search, setSearch] = useState("");
   const [category, setCategory] = useState<Category>("all");
 
-  // WHY limit=200: load a large set of open markets once; client-side filter is
-  // fast at this scale (~200 records). Avoids re-fetching on each category switch.
-  const { data, isLoading, isError } = useQuery({
-    queryKey: ["prediction-markets-page"],
-    queryFn: () =>
-      createGateway(accessToken).getPredictionMarkets({ status: "open", limit: 200 }),
-    enabled: !!accessToken,
-    staleTime: 60_000,
-  });
+  // WHY useInfiniteQuery: PRD-0103 dashboard regression #3 — paginate the
+  // prediction markets browser using offset+limit pages instead of the prior
+  // limit=200 eager fetch. Users now scroll/click through the universe at
+  // their own pace; bandwidth is proportional to how many pages they view.
+  const { data, isLoading, isError, fetchNextPage, hasNextPage, isFetchingNextPage } =
+    useInfiniteQuery<
+      PredictionMarketsResponse,
+      Error,
+      InfiniteData<PredictionMarketsResponse>,
+      readonly unknown[],
+      number
+    >({
+      queryKey: ["prediction-markets-page-infinite"],
+      queryFn: ({ pageParam }) =>
+        createGateway(accessToken).getPredictionMarkets({
+          status: "open",
+          limit: PAGE_SIZE,
+          offset: pageParam,
+        }),
+      initialPageParam: 0,
+      getNextPageParam: (lastPage, allPages) => {
+        // WHY total-based: backend always returns total open markets; stop
+        // when we've fetched every row. Fallback: partial page = end.
+        const loaded = allPages.reduce((n, p) => n + p.markets.length, 0);
+        if (lastPage.total != null) return loaded < lastPage.total ? loaded : undefined;
+        return lastPage.markets.length === PAGE_SIZE ? loaded : undefined;
+      },
+      enabled: !!accessToken,
+      staleTime: 60_000,
+    });
+
+  // WHY flatMap: collapse paginated pages into a single array for the filter
+  // pipeline below. The client-side category + search filters operate on the
+  // currently-loaded universe (subsequent pages widen the searched set).
+  const allLoadedMarkets = useMemo(
+    () => data?.pages.flatMap((p) => p.markets) ?? [],
+    [data],
+  );
+  // WHY total fallback to loaded count: hides the "Load more" button cleanly
+  // when backend omits total.
+  const total = data?.pages[0]?.total ?? allLoadedMarkets.length;
 
   const markets: PredictionMarket[] = useMemo(() => {
-    if (!data?.markets) return [];
-    let result = data.markets;
+    let result = allLoadedMarkets;
 
     // Density bundle 2026-05-09 — fix non-working category filter.
     //
@@ -329,7 +372,7 @@ export default function PredictionMarketsPage() {
     }
 
     return result;
-  }, [data, category, search]);
+  }, [allLoadedMarkets, category, search]);
 
   return (
     <div className="flex min-h-0 flex-1 flex-col overflow-hidden bg-background">
@@ -342,9 +385,9 @@ export default function PredictionMarketsPage() {
           <h1 className="text-[11px] font-medium uppercase tracking-[0.1em] text-foreground">
             Prediction Markets
           </h1>
-          {data?.total != null && (
+          {total > 0 && (
             <Badge variant="outline" className="ml-auto font-mono text-[9px]">
-              {data.total.toLocaleString()} open
+              {total.toLocaleString()} open
             </Badge>
           )}
         </div>
@@ -443,6 +486,27 @@ export default function PredictionMarketsPage() {
           // The row renders gracefully when these fields are absent.
           <MarketRow key={m.market_id} market={m as PredictionMarketExtended} />
         ))}
+
+        {/* ── Load more button ─────────────────────────────────────────────── */}
+        {/* WHY render below the rows (not pinned): a "scroll-to-discover"
+            action that integrates naturally with the list. Hidden when no more
+            pages or while filters are active in a way that already exhausts
+            the loaded set. We always show if backend has more rows so users
+            can pull more rows in even when their filter currently matches few. */}
+        {!isLoading && !isError && hasNextPage && (
+          <div className="flex items-center justify-center border-b border-border/30 px-3 py-2">
+            <button
+              type="button"
+              onClick={() => fetchNextPage()}
+              disabled={isFetchingNextPage}
+              className="font-mono text-[10px] uppercase tracking-wider text-muted-foreground hover:text-foreground disabled:opacity-50"
+            >
+              {isFetchingNextPage
+                ? "Loading…"
+                : `Load more (${allLoadedMarkets.length}/${total})`}
+            </button>
+          </div>
+        )}
       </div>
     </div>
   );

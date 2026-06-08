@@ -330,6 +330,7 @@ class OHLCVRepository(ABC):
         lookback_days: int,
         mover_type: str,
         limit: int,
+        offset: int = 0,
     ) -> list[dict]:
         """Return top gainers or losers sorted by period return using daily OHLCV bars.
 
@@ -337,6 +338,7 @@ class OHLCVRepository(ABC):
 
         lookback_days: 7 for 1W, 30 for 1M
         mover_type: "gainers" (DESC) or "losers" (ASC)
+        offset: SQL OFFSET for paginating through the universe leaderboard
         Returns list of dicts: {instrument_id, ticker, name, period_return_pct}
         """
 
