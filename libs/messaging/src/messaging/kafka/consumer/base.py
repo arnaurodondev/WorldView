@@ -40,6 +40,30 @@ if TYPE_CHECKING:
 logger = get_logger(__name__)
 
 
+# BP-NEW asyncpg pool resilience (Final-QA-3-deep):
+# Tuple of exception classes that signal the underlying asyncpg connection
+# was killed out from under SQLAlchemy (typical after a Postgres restart).
+# Import lazily and guard with try/except — ``libs/messaging`` does not
+# hard-depend on asyncpg, but every consumer in worldview happens to use it.
+# When asyncpg is not installed (tests, alternate drivers) we still want the
+# consumer to be importable; the empty tuple makes the ``except`` clause a
+# no-op which is the correct fallback.
+try:
+    from asyncpg.exceptions import (  # type: ignore[import-not-found]
+        ConnectionDoesNotExistError as _AsyncpgConnDoesNotExist,
+    )
+    from asyncpg.exceptions import (
+        InterfaceError as _AsyncpgInterfaceError,
+    )
+
+    _ASYNCPG_CONN_ERRORS: tuple[type[BaseException], ...] = (
+        _AsyncpgConnDoesNotExist,
+        _AsyncpgInterfaceError,
+    )
+except ImportError:  # pragma: no cover - defensive
+    _ASYNCPG_CONN_ERRORS = ()
+
+
 # ── LIB-002 / TASK-W2-06: dead-letter topic emission ──────────────────────────
 #
 # Suffix appended to the original topic name to derive the canonical DLQ
@@ -1104,7 +1128,38 @@ class BaseKafkaConsumer(ABC, Generic[TFailure]):
                     continue
 
                 try:
-                    await self._handle_message(msg)
+                    # BP-NEW asyncpg pool resilience (Final-QA-3-deep):
+                    # When Postgres restarts (operator-initiated or otherwise),
+                    # every connection in SQLAlchemy's pool becomes stale.
+                    # ``pool_pre_ping=True`` covers most cases by re-validating
+                    # checked-out connections, but the pre-ping itself can
+                    # raise ``asyncpg.ConnectionDoesNotExistError`` /
+                    # ``InterfaceError`` on the very first attempt after the
+                    # restart (the underlying socket is half-closed; the next
+                    # ROUND-TRIP is what surfaces the failure).  Without this
+                    # wrapper the message handler exception path dead-letters
+                    # the message and the consumer can crash before the pool
+                    # has a chance to recycle.  One retry with a brief sleep
+                    # gives the pool a chance to discard the stale connection
+                    # and hand out a fresh one — the second attempt either
+                    # succeeds or falls through to the normal error path.
+                    try:
+                        await self._handle_message(msg)
+                    except _ASYNCPG_CONN_ERRORS as conn_exc:
+                        logger.warning(
+                            "consumer_db_connection_lost_retrying",
+                            error=str(conn_exc),
+                            error_type=type(conn_exc).__name__,
+                            topic=msg.topic(),
+                            partition=msg.partition(),
+                            offset=msg.offset(),
+                        )
+                        # Give the pool a moment to evict the dead connection
+                        # before the second attempt — `pool_pre_ping` will
+                        # validate the next checkout and the pool will refill
+                        # with a live socket on demand.
+                        await asyncio.sleep(1.0)
+                        await self._handle_message(msg)
                     # Commit after successful processing (manual offset management)
                     if not self._config.enable_auto_commit:
                         await loop.run_in_executor(None, self._consumer.commit, msg)
