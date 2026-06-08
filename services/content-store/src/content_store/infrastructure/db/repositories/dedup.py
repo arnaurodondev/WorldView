@@ -11,7 +11,6 @@ compare against.
 
 from __future__ import annotations
 
-from collections import Counter
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 from uuid import UUID
@@ -270,7 +269,15 @@ class DuplicateClusterRepository:
 
         # Count all rows where the doc appears as either side of the pair,
         # then add 1 (the document itself is always counted in the cluster).
-        # union_all from sqlalchemy merges the primary and duplicate sides.
+        # union_all merges the primary and duplicate sides.
+        #
+        # WHY .subquery() + GROUP BY (not bare union_all execute): executing a
+        # bare CompoundSelect with labeled UUID columns causes SQLAlchemy to
+        # emit ``min(doc_id)`` when wrapping the union for result-row dedup,
+        # but Postgres has no ``min(uuid)`` aggregate → 500. Wrapping the
+        # union_all in an explicit subquery and aggregating with ``func.count()``
+        # in the outer SELECT avoids the implicit ``min(uuid)`` wrap and lets
+        # the database do the counting (also faster — no python-side Counter).
         combined = union_all(
             select(
                 DuplicateClusterModel.primary_doc_id.label("doc_id"),
@@ -278,10 +285,11 @@ class DuplicateClusterRepository:
             select(
                 DuplicateClusterModel.duplicate_doc_id.label("doc_id"),
             ).where(DuplicateClusterModel.duplicate_doc_id.in_(doc_ids)),
+        ).subquery()
+        result = await self._session.execute(
+            select(combined.c.doc_id, func.count().label("cnt")).group_by(combined.c.doc_id)
         )
-        result = await self._session.execute(combined)
-        # Count appearances per doc_id.
-        counts: Counter[UUID] = Counter(row.doc_id for row in result)
+        counts: dict[UUID, int] = {row.doc_id: row.cnt for row in result}
         # cluster_size = number of *other* docs detected as near-duplicates + 1 (self)
         return {doc_id: counts.get(doc_id, 0) + 1 for doc_id in doc_ids}
 
