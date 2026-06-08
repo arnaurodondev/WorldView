@@ -618,19 +618,19 @@
     {"symbol": "AAVE-USD", "exchange": "CC", "name": "Aave",             "sector": "Crypto", "asset_type": "crypto"},
     {"symbol": "INJ-USD",  "exchange": "CC", "name": "Injective",        "sector": "Crypto", "asset_type": "crypto"},
 
-    {"symbol": "GSPC", "exchange": "INDX", "name": "S&P 500 Index",        "sector": "Macro", "asset_type": "index"},
-    {"symbol": "IXIC", "exchange": "INDX", "name": "Nasdaq Composite",     "sector": "Macro", "asset_type": "index"},
-    {"symbol": "DJI",  "exchange": "INDX", "name": "Dow Jones Industrial Average","sector": "Macro","asset_type": "index"},
-    {"symbol": "VIX",  "exchange": "INDX", "name": "CBOE Volatility Index (VIX)","sector": "Macro","asset_type": "index"},
-    {"symbol": "TNX",  "exchange": "INDX", "name": "10-Year US Treasury Yield","sector": "Macro","asset_type": "index"},
-    {"symbol": "TYX",  "exchange": "INDX", "name": "30-Year US Treasury Yield","sector": "Macro","asset_type": "index"},
-    {"symbol": "IRX",  "exchange": "INDX", "name": "13-Week T-Bill Yield",  "sector": "Macro", "asset_type": "index"},
+    {"symbol": "GSPC", "exchange": "INDX", "name": "S&P 500 Index",        "sector": null, "asset_type": "index"},
+    {"symbol": "IXIC", "exchange": "INDX", "name": "Nasdaq Composite",     "sector": null, "asset_type": "index"},
+    {"symbol": "DJI",  "exchange": "INDX", "name": "Dow Jones Industrial Average","sector": null,"asset_type": "index"},
+    {"symbol": "VIX",  "exchange": "INDX", "name": "CBOE Volatility Index (VIX)","sector": null,"asset_type": "index"},
+    {"symbol": "TNX",  "exchange": "INDX", "name": "10-Year US Treasury Yield","sector": null,"asset_type": "index"},
+    {"symbol": "TYX",  "exchange": "INDX", "name": "30-Year US Treasury Yield","sector": null,"asset_type": "index"},
+    {"symbol": "IRX",  "exchange": "INDX", "name": "13-Week T-Bill Yield",  "sector": null, "asset_type": "index"},
 
-    {"symbol": "EURUSD","exchange": "FOREX", "name": "EUR/USD",           "sector": "Macro", "asset_type": "forex"},
-    {"symbol": "GBPUSD","exchange": "FOREX", "name": "GBP/USD",           "sector": "Macro", "asset_type": "forex"},
-    {"symbol": "USDJPY","exchange": "FOREX", "name": "USD/JPY",           "sector": "Macro", "asset_type": "forex"},
-    {"symbol": "USDCNY","exchange": "FOREX", "name": "USD/CNY",           "sector": "Macro", "asset_type": "forex"},
-    {"symbol": "XAUUSD","exchange": "FOREX", "name": "Gold Spot (XAU/USD)","sector": "Macro", "asset_type": "forex"},
-    {"symbol": "XAGUSD","exchange": "FOREX", "name": "Silver Spot (XAG/USD)","sector": "Macro","asset_type": "forex"}
+    {"symbol": "EURUSD","exchange": "FOREX", "name": "EUR/USD",           "sector": null, "asset_type": "forex"},
+    {"symbol": "GBPUSD","exchange": "FOREX", "name": "GBP/USD",           "sector": null, "asset_type": "forex"},
+    {"symbol": "USDJPY","exchange": "FOREX", "name": "USD/JPY",           "sector": null, "asset_type": "forex"},
+    {"symbol": "USDCNY","exchange": "FOREX", "name": "USD/CNY",           "sector": null, "asset_type": "forex"},
+    {"symbol": "XAUUSD","exchange": "FOREX", "name": "Gold Spot (XAU/USD)","sector": null, "asset_type": "forex"},
+    {"symbol": "XAGUSD","exchange": "FOREX", "name": "Silver Spot (XAG/USD)","sector": null,"asset_type": "forex"}
   ]
 }
