@@ -11,7 +11,7 @@ from uuid import UUID
 
 from fastapi import APIRouter, HTTPException, Request, status
 
-from portfolio.api.dependencies import UoWDep
+from portfolio.api.dependencies import ReadUoWDep, UoWDep
 from portfolio.api.schemas import TenantCreateRequest, TenantResponse
 from portfolio.application.use_cases.tenant import CreateTenantCommand, CreateTenantUseCase, GetTenantUseCase
 
@@ -34,7 +34,7 @@ async def create_tenant(request: Request, body: TenantCreateRequest, uow: UoWDep
 
 
 @router.get("/tenants/{tenant_id}", response_model=TenantResponse)
-async def get_tenant(tenant_id: UUID, uow: UoWDep) -> TenantResponse:
+async def get_tenant(tenant_id: UUID, uow: ReadUoWDep) -> TenantResponse:
     uc = GetTenantUseCase()
     tenant = await uc.execute(tenant_id, uow)
     return TenantResponse(

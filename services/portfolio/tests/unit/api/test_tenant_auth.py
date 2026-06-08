@@ -14,7 +14,7 @@ from uuid import uuid4
 import pytest
 from fastapi import FastAPI, Request
 from httpx import ASGITransport, AsyncClient
-from portfolio.api.dependencies import get_uow
+from portfolio.api.dependencies import get_read_uow, get_uow
 from portfolio.api.routes.tenant import router as tenant_router
 from starlette.middleware.base import BaseHTTPMiddleware
 
@@ -52,6 +52,9 @@ def _make_app(uow: FakeUnitOfWork, inject_role: str | None = None) -> FastAPI:
         yield uow
 
     app.dependency_overrides[get_uow] = override_uow
+    # GET /tenants/{id} uses ReadUoWDep (R27) — override read dep too so the
+    # test app doesn't try to open a real DB session via read_factory.
+    app.dependency_overrides[get_read_uow] = override_uow
     app.add_exception_handler(DomainError, domain_error_handler)  # type: ignore[arg-type]
     app.include_router(tenant_router, prefix="/api/v1")
     return app

@@ -15,7 +15,7 @@ from uuid import UUID
 from fastapi import APIRouter, HTTPException, Request
 
 from observability.logging import get_logger  # type: ignore[import-untyped]  # type: ignore[import-untyped]
-from portfolio.api.dependencies import ReadUoWDep, UoWDep
+from portfolio.api.dependencies import ReadUoWDep
 from portfolio.api.schemas import (
     BatchEntityLookupRequest,
     BatchEntityLookupResponse,
@@ -57,7 +57,7 @@ async def internal_health() -> dict[str, str]:
 @internal_router.get("/watchlists/by-entity/{entity_id}")
 async def get_watchers_by_entity(
     entity_id: UUID,
-    uow: UoWDep,
+    uow: ReadUoWDep,
 ) -> WatchersByEntityResponse:
     """Return all users watching a specific entity."""
     dtos = await uow.watchlist_members.get_watchers_by_entity(entity_id)
@@ -68,7 +68,7 @@ async def get_watchers_by_entity(
 @internal_router.post("/watchlists/by-entities")
 async def get_watchers_by_entities(
     body: BatchEntityLookupRequest,
-    uow: UoWDep,
+    uow: ReadUoWDep,
 ) -> BatchEntityLookupResponse:
     """Batch lookup: given entity_ids, return watcher map."""
     if len(body.entity_ids) > 100:
@@ -87,7 +87,7 @@ async def get_watchers_by_entities(
 @internal_router.get("/watchlists/{watchlist_id}/entities")
 async def get_watchlist_entities(
     watchlist_id: UUID,
-    uow: UoWDep,
+    uow: ReadUoWDep,
 ) -> WatchlistEntitiesResponse:
     """List all entity_ids in a specific watchlist."""
     members = await uow.watchlist_members.list_by_watchlist(watchlist_id)
