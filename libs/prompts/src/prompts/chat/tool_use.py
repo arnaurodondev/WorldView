@@ -73,6 +73,13 @@ TOOL_USE_SYSTEM_PROMPT_TEMPLATE = PromptTemplate(
     #        saw the LLM fabricate "17.24% / 21.08%" period values when
     #        the underlying tool returned different periods.  Both
     #        failure modes are addressed by an explicit refusal contract.
+    # 1.9 — PLAN-0107 follow-up Fix #3: anti-narration clause. Even on the
+    #        planning turns (where this prompt is still used), the model has
+    #        been observed leaking visible "I'll fetch ..." preambles and
+    #        <function_calls> XML imitations into assistant text alongside the
+    #        actual structured tool_calls. Belt-and-braces — the synthesis
+    #        turn now uses chat/synthesis.py (Fix #1) which strips tool-use
+    #        guidance entirely; this clause covers the planning turns.
     # 1.8 — PLAN-0104 W47: FINANCIAL_DATA addendum gains a mandatory
     #        PARTIAL DATA RULE that REBALANCES the MISSING-METRIC RULE.
     #        Round 7 v2 Q5 (GOOGL "expensive vs history?") refused with
@@ -87,22 +94,10 @@ TOOL_USE_SYSTEM_PROMPT_TEMPLATE = PromptTemplate(
     #        MISSING-METRIC RULE still applies for the narrow case where
     #        the SPECIFIC requested metric is entirely absent — its
     #        anti-fabrication property is preserved.
-    # 1.9 — PLAN-0107 follow-up Bug 1: add ANSWER PREAMBLE — FORBIDDEN
-    #        clause forbidding self-correction / meta-commentary openings.
-    #        Root cause: the grounding-rewrite path injected the prior
-    #        failed draft as an assistant turn followed by a "fix these
-    #        issues" user turn, which trained the LLM to begin its rewrite
-    #        with "You're right — I need to correct this. Let me re-
-    #        examine..." That preamble is the text we stream to the user,
-    #        NOT a hidden chain-of-thought. Defense-in-depth also lives in
-    #        the orchestrator (the prior assistant turn is now removed
-    #        from the rewrite history); this prompt clause is the belt-
-    #        and-braces companion so the LLM avoids self-correction
-    #        language even when other paths leak the prior draft.
     version="1.9",
     description=(
         "Strict no-hallucination tool-use system prompt for multi-turn agent loop "
-        "(v1.9 adds ANSWER PREAMBLE — FORBIDDEN clause per PLAN-0107 follow-up Bug 1; "
+        "(v1.9 adds NO-NARRATION clause per PLAN-0107 follow-up Fix #3; "
         "v1.8 adds PARTIAL DATA RULE per PLAN-0104 W47; v1.7 adds MISSING-METRIC "
         "RULE per PLAN-0104 W39; v1.6 adds 4-section ANSWER STRUCTURE + "
         "VALUATION-CONTEXT composition per BP-651; v1.5 adds SNAPSHOT-VS-PERIODS "
@@ -182,29 +177,23 @@ TOOL_USE_SYSTEM_PROMPT_TEMPLATE = PromptTemplate(
         "- Rationalising your own bad numbers ('this may reflect volatility...').\n"
         "- Accepting M&A, partnership, spin-off, leadership, or product-launch claims "
         "from the user's question without tool confirmation.\n\n"
-        # PLAN-0107 follow-up Bug 1: forbid self-correction / meta-commentary
-        # openings in the user-visible answer. The grounding-rewrite path
-        # injects the prior failed draft into the message history, which
-        # trains the LLM to begin its rewrite with "You're right — I need
-        # to correct this. Let me re-examine the data..." That preamble is
-        # the text we stream to the user, NOT a hidden chain-of-thought.
-        # Defense-in-depth is also applied in the orchestrator (the prior
-        # assistant turn is now removed from the rewrite history); this
-        # prompt clause is the belt-and-braces companion.
-        "## ANSWER PREAMBLE — FORBIDDEN\n\n"
-        "Never preface your answer with self-correction or meta-commentary. Forbidden\n"
-        "openings include (but are not limited to):\n"
-        '- "You\'re right —"\n'
-        '- "I need to correct this"\n'
-        '- "Let me re-examine"\n'
-        '- "I should clarify"\n'
-        '- "Apologies for the confusion"\n'
-        '- "Looking again at the tools"\n'
-        '- "Actually, the tools returned..."\n\n'
-        "Answer the question directly. If you are correcting a prior response, do\n"
-        "NOT acknowledge it — simply provide the corrected answer as if it were\n"
-        "the first attempt. The user does not see your prior drafts; they see\n"
-        "ONLY this final response.\n\n"
+        # PLAN-0107 follow-up Fix #3 (v1.9): NO-NARRATION clause.
+        # The model has been observed leaking visible planning preambles +
+        # tool-call XML imitations into the assistant text channel alongside
+        # the structured tool_calls block. The synthesis turn uses a separate
+        # prompt (chat/synthesis.py) that strips all tool-use guidance; this
+        # clause provides belt-and-braces coverage on the planning turns.
+        "NO NARRATION (mandatory):\n"
+        "Do NOT write any of the following into your visible assistant text:\n"
+        "- Planning verbs: 'I will fetch / pull / retrieve / call / use', 'Let me fetch / pull',\n"
+        "  \"I'll fetch / pull\", \"I'm fetching / pulling\", 'First/Now/Next I'll ...'.\n"
+        "- Tool-call XML/JSON imitations: <function_calls>, <function_call>,\n"
+        "  <invoke ...>, <parameter ...>, <tool_call>, <tool_name>, or any\n"
+        "  XML-style tag that looks like a tool invocation.\n"
+        "- Planning markdown: '**Tool calls:**' / '**Function calls:**' headers,\n"
+        "  'Step 1: Call X' enumerations, 'Approach:' / 'Methodology:' sections.\n"
+        "Tool calls go in the structured tool_calls block ONLY — never in\n"
+        "the visible answer text. The user must never see your tool plan.\n\n"
         "TOOL DATE DISCIPLINE:\n"
         "When you call tools that take dates (price history, earnings calendar, economic "
         "events, news search), use {today_iso} as the reference point — never use dates "

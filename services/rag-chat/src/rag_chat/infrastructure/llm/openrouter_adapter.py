@@ -257,7 +257,6 @@ class OpenRouterCompletionAdapter:
         temperature: float = 0.2,
         thread_id: UUID | None = None,
         tools: list[dict] | None = None,
-        seed: int | None = None,
     ) -> AsyncIterator[str]:
         """Stream the final answer turn from an OpenAI-format messages list."""
         payload: dict[str, object] = {
@@ -271,13 +270,14 @@ class OpenRouterCompletionAdapter:
         # OpenAI / DeepInfra contract for ``stream_options.include_usage``).
         if self._cost_recorder is not None:
             payload["stream_options"] = {"include_usage": True}
-        # PLAN-0107 follow-up: synthesis-turn callers pass ``tools=[]`` to forbid
-        # function calling (prevents `<tool_call>` XML in visible answer).
+        # PLAN-0107 follow-up Fix #2: mirror the deepinfra contract — when the
+        # caller passes an explicit empty tools list (synthesis turn), set
+        # tool_choice="none" so the provider unambiguously forbids tool calls
+        # in the response. tools=[] alone is ambiguous on some backends.
         if tools is not None:
             payload["tools"] = tools
-        # PLAN-0107 follow-up: forward eval-mode reproducibility seed when set.
-        if seed is not None:
-            payload["seed"] = seed
+            if not tools:
+                payload["tool_choice"] = "none"
         usage_capture: dict = {}
         async with self._client.stream(
             "POST",

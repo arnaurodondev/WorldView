@@ -158,6 +158,75 @@ _CITATION_MARKER_RE = re.compile(r"\[N(\d+)\]")
 _STREAM_WORDS_PER_CHUNK = 8
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# PLAN-0107 follow-up Fix #4 — post-stream narration scrubbing (last resort)
+# ─────────────────────────────────────────────────────────────────────────────
+# Fixes #1 (synthesis-specific system prompt), #2 (tool_choice="none"), and #3
+# (anti-narration clause in planning prompt) SHOULD prevent any of the
+# following leak patterns from ever reaching synthesis output. This filter is
+# defense-in-depth: if a model still slips through, the PERSISTED answer +
+# the inputs to grounding/citation validation are cleaned. Streaming chunks
+# are NOT filtered live (the user may see a brief flash) — filtering tokens
+# mid-stream would either require complete rewinds (impossible on SSE) or a
+# buffering window long enough to introduce noticeable lag. Accepting the
+# brief visual flicker keeps the streaming UX snappy while guaranteeing the
+# saved artefact is clean.
+#
+# Each regex targets one well-attested leak shape (sources: live QA reports
+# 2026-06-05 with MSTR question, internal narration test fixtures). When all
+# patterns miss, the function is a no-op — safe to call unconditionally.
+
+_TOOL_NARRATION_LEAD_RE = re.compile(
+    r"^("
+    # "I will fetch...", "I'll fetch..." — note 'll attaches without whitespace.
+    r"I(?:\s+will|'ll)\s+(?:fetch|pull|retrieve|call|use|check|look\s*up|search|find)"
+    # "I'm fetching..."
+    r"|I'm\s+(?:fetching|pulling|retrieving|calling|searching|looking\s*up)"
+    # "Let me fetch..."
+    r"|Let\s+me\s+(?:fetch|pull|retrieve|call|use|check|look\s*up|search|find)"
+    # "First, I'll ..." / "Now I'll ..." / "Next, I'll ..."
+    r"|First[,\s]+I(?:\s+will|'ll)"
+    r"|Now\s+I(?:\s+will|'ll)"
+    r"|Next[,\s]+I(?:\s+will|'ll)"
+    r")\b[^.\n]*[.\n]+\s*",
+    re.IGNORECASE,
+)
+_TOOL_PLAN_BLOCK_RE = re.compile(
+    r"(\*\*(?:Tool|Function)\s+calls?:?\*\*\s*\n(?:[-*]\s+.+\n?)+)\n*",
+    re.IGNORECASE,
+)
+_TOOL_XML_RE = re.compile(
+    r"</?(?:function_calls?|function_router|invoke|tool_call|tool_name|parameter)\b[^>]*>",
+    re.IGNORECASE,
+)
+
+
+def _strip_tool_narration(text: str) -> str:
+    """Last-resort scrub of tool-call narration leaks from synthesis output.
+
+    Three independent passes, each safe to run on a clean answer (no-op when
+    the pattern is absent):
+
+    1. Strip a single leading "I will fetch ..." sentence if the answer opens
+       with one. We only strip the FIRST occurrence — repeated mid-answer
+       phrasings of "I'll check" can be legitimate prose in some contexts and
+       we'd rather under-strip than mangle valid English.
+    2. Remove ``**Tool calls:**`` / ``**Function calls:**`` markdown headers
+       and the bullet list that follows them. These are pure planning blocks
+       that should never reach the user.
+    3. Strip any tool-call-like XML tags (open + close + self-closing).
+
+    See module-level comment block above for streaming-chunk caveat.
+    """
+    # 1. Strip leading "I will fetch..." sentence if it opens the answer.
+    text = _TOOL_NARRATION_LEAD_RE.sub("", text, count=1)
+    # 2. Strip **Tool calls:** markdown blocks (keep them out of final answer).
+    text = _TOOL_PLAN_BLOCK_RE.sub("", text)
+    # 3. Strip any tool-call-like XML tags.
+    text = _TOOL_XML_RE.sub("", text)
+    return text.strip()
+
+
 def _chunk_text_for_streaming(text: str, words_per_chunk: int = _STREAM_WORDS_PER_CHUNK) -> list[str]:
     """Split ``text`` into word groups suitable for per-chunk SSE emission.
 
@@ -2202,12 +2271,34 @@ class ChatOrchestratorUseCase:
             # bounded (~1.5 s extra worst case).
             _stream_attempts = 0
             _last_exc: Exception | None = None
+            # ── Synthesis-turn system-prompt swap (PLAN-0107 follow-up, Fix #1) ──
+            # The planning-turn system prompt (TOOL_USE_SYSTEM_PROMPT) teaches
+            # the model HOW to plan + call tools. Reusing it on the synthesis
+            # turn (where tools are no longer available) caused the model to
+            # narrate "I'll pull..." and emit <function_calls> XML as visible
+            # answer text. The minimal SYNTHESIS_SYSTEM_PROMPT strips all
+            # tool-use guidance + adds a FORBIDDEN list for known leak patterns.
+            #
+            # We build a SHALLOW COPY of the messages list with index 0 swapped
+            # so the assistant + tool messages accumulated during the loop
+            # (which carry the actual data the answer needs) are reused
+            # verbatim. Building the synthesis prompt here (not at the top of
+            # _execute) means failed-loop branches above never pay the
+            # render() cost.
+            from prompts._safety import SAFETY_FOOTER  # type: ignore[import-untyped]
+            from prompts.chat.synthesis import SYNTHESIS_SYSTEM_PROMPT  # type: ignore[import-untyped]
+
+            _synthesis_system = SYNTHESIS_SYSTEM_PROMPT.render(safety=SAFETY_FOOTER)
+            _synthesis_messages: list[dict[str, Any]] = [
+                {"role": "system", "content": _synthesis_system},
+                *messages[1:],
+            ]
             try:
                 while _stream_attempts < 2:
                     _stream_attempts += 1
                     try:
                         async for chunk in p.llm_chain.stream_chat(
-                            messages,
+                            _synthesis_messages,
                             max_tokens=budget.max_tokens_final,
                             # PLAN-0107 follow-up: forbid function calling on the synthesis turn
                             # so the model can't emit `<tool_call>` XML as visible text when it
@@ -2223,6 +2314,10 @@ class ChatOrchestratorUseCase:
                             seed=request.seed,
                             # PLAN-0107: forward thread_id for cost-capture (Agent B).
                             thread_id=request.thread_id,
+                            # Note: tools=[] above (Fix #1 + Fix #2 combined) —
+                            # the adapter translates the empty list into
+                            # tool_choice="none" so the provider unambiguously
+                            # forbids tool calling on this synthesis turn.
                         ):
                             full_text += chunk
                             if chunk:
@@ -2342,6 +2437,26 @@ class ChatOrchestratorUseCase:
                 )
                 for _chunk in _chunk_text_for_streaming(full_text):
                     yield p.emitter.emit_token(_chunk)
+
+        # ── PLAN-0107 follow-up Fix #4: post-stream narration scrub ──────────
+        # Last-resort cleanup of any tool-call narration that slipped past
+        # Fixes #1-#3 (synthesis prompt, tool_choice="none", anti-narration
+        # planning clause). Runs on the FULLY-ASSEMBLED ``full_text`` only,
+        # so the live SSE stream above is unaffected (mid-stream filtering
+        # would require rewinds we cannot do over the wire — user may see a
+        # brief flicker, but the persisted artefact is clean). All downstream
+        # consumers (grounding validation, persistence, final_answer event)
+        # read the scrubbed text.
+        if full_text:
+            _pre_scrub_len = len(full_text)
+            full_text = _strip_tool_narration(full_text)
+            if len(full_text) != _pre_scrub_len:
+                log.warning(  # type: ignore[no-any-return]
+                    "synthesis_narration_scrubbed",
+                    pre_len=_pre_scrub_len,
+                    post_len=len(full_text),
+                    delta_chars=_pre_scrub_len - len(full_text),
+                )
 
         # ── BP-605 (PLAN-0100 W1 T-W1-03): entity-grounding refusal ───────────
         # Before any other synthesis check, confirm that AT LEAST ONE

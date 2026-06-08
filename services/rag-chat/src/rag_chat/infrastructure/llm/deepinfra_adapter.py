@@ -415,7 +415,6 @@ class DeepInfraCompletionAdapter:
         temperature: float,
         usage_sink: dict | None = None,
         tools: list[dict] | None = None,
-        seed: int | None = None,
     ) -> AsyncIterator[str]:
         """Run a single stream_chat call against a specific model.
 
@@ -443,14 +442,16 @@ class DeepInfraCompletionAdapter:
         # carry token counts and the cost recorder would always log zeros.
         if usage_sink is not None:
             payload["stream_options"] = {"include_usage": True}
-        # PLAN-0107 follow-up: synthesis-turn callers pass ``tools=[]`` to forbid
-        # function calling (prevents `<tool_call>` XML leaking into visible text).
-        # ``None`` means "omit the field entirely" so provider defaults apply.
+        # PLAN-0107 follow-up Fix #2: forward tools list verbatim AND, when the
+        # caller passed an explicit empty list (synthesis turn), set
+        # tool_choice="none" so the provider unambiguously knows tool calls
+        # are forbidden in the response. Without this, some providers treat
+        # tools=[] as "any tool allowed", which keeps the model in
+        # planning-mode and produces <function_calls> XML in the answer.
         if tools is not None:
             payload["tools"] = tools
-        # PLAN-0107 follow-up: forward eval-mode reproducibility seed when set.
-        if seed is not None:
-            payload["seed"] = seed
+            if not tools:
+                payload["tool_choice"] = "none"
         async with self._client.stream(
             "POST",
             f"{_BASE_URL}/chat/completions",
@@ -488,7 +489,6 @@ class DeepInfraCompletionAdapter:
         temperature: float = 0.2,
         thread_id: UUID | None = None,
         tools: list[dict] | None = None,
-        seed: int | None = None,
     ) -> AsyncIterator[str]:
         """Stream the final answer turn from an OpenAI-format messages list.
 
@@ -534,7 +534,6 @@ class DeepInfraCompletionAdapter:
                 temperature=temperature,
                 usage_sink=primary_usage,
                 tools=tools,
-                seed=seed,
             ):
                 primary_chunks.append(chunk)
         except Exception as exc:
@@ -588,7 +587,6 @@ class DeepInfraCompletionAdapter:
             temperature=temperature,
             usage_sink=fallback_usage,
             tools=tools,
-            seed=seed,
         ):
             yield chunk
         # PLAN-0107 Agent-B: record cost on the fallback model (model_id MUST
