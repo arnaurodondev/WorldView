@@ -1492,6 +1492,12 @@ export interface BriefingResponse {
   // The MorningBriefCard falls back to clamp-3 of the narrative when null —
   // never break rendering when summary is missing.
   summary?: string | null;
+  // WHY summary_paragraph (PLAN-0103 W3 / BP-624 recovery): the v4.2 backend
+  // emits a landscape paragraph in `summary_paragraph` that is preferred over
+  // `summary` for the collapsed dashboard view. Optional + nullable for
+  // legacy cached briefs and instrument briefs. Frontend uses a 3-tier
+  // fallback: summary_paragraph → summary → narrative.
+  summary_paragraph?: string | null;
   risk_summary: {
     concentration_score: number;
     top_risk_signals: Array<{ signal_id: string; description: string }>;

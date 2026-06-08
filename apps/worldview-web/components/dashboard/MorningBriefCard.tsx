@@ -282,7 +282,10 @@ export function MorningBriefCard() {
 
   const safeNarrative = stripStaleMetadata(brief?.narrative?.trim() ?? "");
   const safeSummary = stripStaleMetadata(brief?.summary?.trim() ?? "");
-  if (!brief || (!safeNarrative && !safeSummary)) {
+  const safeSummaryParagraph = stripStaleMetadata(
+    brief?.summary_paragraph?.trim() ?? "",
+  );
+  if (!brief || (!safeNarrative && !safeSummary && !safeSummaryParagraph)) {
     return (
       <div className="flex h-full flex-col">
         <MetaHeader />
@@ -324,17 +327,21 @@ export function MorningBriefCard() {
   // narrative is the expanded-view source. Both must be linkified separately
   // so each view has working entity links. We compute both eagerly because
   // the work is cheap (string replace) and React rerenders on expand.
+  const summaryParagraphWithLinks = linkifyEntities(safeSummaryParagraph);
   const summaryWithLinks = linkifyEntities(safeSummary);
   const narrativeWithLinks = linkifyEntities(safeNarrative);
 
-  // WHY fallback for collapsed view: when the v2.2 prompt's two-tier output
-  // wasn't honored (legacy cached briefs, instrument briefs, or LLM ignored
-  // the format directive), summary is null. We fall back to the narrative so
-  // the collapsed card still shows *something*. The line-clamp-3 only applies
-  // in this fallback branch — when summary IS present it's already short
-  // enough (1-2 sentences) and clamping is unnecessary.
-  const collapsedSource = summaryWithLinks || narrativeWithLinks;
-  const usingSummaryFallback = !summaryWithLinks;
+  // WHY 3-tier fallback for collapsed view (PLAN-0103 W3 / BP-624 recovery):
+  // The v4.2 backend emits a landscape `summary_paragraph` that is the
+  // preferred collapsed-view source. When absent (legacy cached briefs,
+  // instrument briefs, or v2.2-format briefs), fall back to `summary`, then
+  // to `narrative` so the card always renders *something*. The clamp-3 only
+  // applies in the narrative-fallback branch — when summary_paragraph or
+  // summary is present it's already short enough.
+  const collapsedSource =
+    summaryParagraphWithLinks || summaryWithLinks || narrativeWithLinks;
+  const usingSummaryFallback =
+    !summaryParagraphWithLinks && !summaryWithLinks;
 
   // WHY isLong on narrative (not summary): the "Read more" affordance only
   // makes sense if there's substantially more content to reveal when expanded.
