@@ -27,7 +27,7 @@ import { cn } from "@/lib/utils";
 import { useAuth } from "@/hooks/useAuth";
 import { createGateway } from "@/lib/gateway";
 import { useEntityIntelligence } from "@/lib/api/intelligence";
-import { qk } from "@/lib/query/keys";
+
 
 export interface EntityOverviewBlockProps {
   /** The primary KG entity_id for the instrument page (UUIDv7). */

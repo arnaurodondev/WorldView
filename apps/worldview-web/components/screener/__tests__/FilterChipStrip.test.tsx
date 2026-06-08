@@ -24,7 +24,6 @@
 
 import { describe, expect, it, vi, afterEach } from "vitest";
 import { render, screen, fireEvent, act } from "@testing-library/react";
-import userEvent from "@testing-library/user-event";
 import { FilterChipStrip } from "@/components/screener/FilterChipStrip";
 import { DEFAULT_FILTERS, type FilterState } from "@/features/screener/lib/filter-state";
 

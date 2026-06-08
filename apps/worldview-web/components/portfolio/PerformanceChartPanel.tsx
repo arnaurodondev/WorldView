@@ -27,7 +27,7 @@
 // WHY "use client": useRef for the chart DOM container, useState for
 // collapsed/period, useEffect to mount/destroy the chart, useQuery for data.
 
-import { useEffect, useRef, useState, useCallback } from "react";
+import { useEffect, useRef, useCallback } from "react";
 import { useQuery } from "@tanstack/react-query";
 
 import { createGateway } from "@/lib/gateway";
@@ -54,8 +54,8 @@ const PERIOD_DAYS: Record<PerfPeriod, number | null> = {
 // WHY constants (not CSS vars): lightweight-charts uses JS colour strings, not
 // CSS classes. We pull from the Midnight Pro palette used in the design system.
 const CHART_PORTFOLIO_LINE = "#FFD60A";   // text-primary gold
-const CHART_PORTFOLIO_AREA_TOP = "rgba(255,214,10,0.18)";
-const CHART_PORTFOLIO_AREA_BOTTOM = "rgba(255,214,10,0.00)";
+const _CHART_PORTFOLIO_AREA_TOP = "rgba(255,214,10,0.18)";
+const _CHART_PORTFOLIO_AREA_BOTTOM = "rgba(255,214,10,0.00)";
 const CHART_BG = "#09090B";              // bg-background
 const CHART_GRID = "#1C1C1E";           // border-border at low opacity
 const CHART_TEXT = "#71717A";           // text-muted-foreground

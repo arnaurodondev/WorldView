@@ -39,7 +39,6 @@
 import { useState, useMemo } from "react";
 import { ChevronUp, ChevronDown, ChevronsUpDown } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { formatDateTime } from "@/lib/utils";
 import type { Transaction } from "@/types/api";
 
 // ── Constants ─────────────────────────────────────────────────────────────────
