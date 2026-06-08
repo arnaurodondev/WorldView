@@ -138,13 +138,15 @@ export function DayPnLDistribution({ portfolioId }: DayPnLDistributionProps) {
           )}
         </svg>
         {/* Average + range — quick numeric summary so the row is informative
-            even when the chart isn't being scanned. */}
+            even when the chart isn't being scanned. WHY "—" when span==0:
+            all-zero deltas mean no priced snapshots exist yet (SnapshotWorker
+            hasn't run, or portfolio uses cost-basis rows). Show "—" rather
+            than "+0 range 0" which looks like corrupted data. */}
         <span className="text-[10px] text-muted-foreground tabular-nums">
-          avg {avg >= 0 ? "+" : ""}
-          {Math.round(avg)}
+          avg {deltas.length === 0 || span === 0 ? "—" : `${avg >= 0 ? "+" : ""}${Math.round(avg)}`}
         </span>
         <span className="text-[10px] text-muted-foreground tabular-nums">
-          range {Math.round(span)}
+          range {deltas.length === 0 || span === 0 ? "—" : Math.round(span)}
         </span>
       </div>
     </div>

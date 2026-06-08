@@ -20,6 +20,10 @@
  *   - staleTime: 5 minutes (equity-curve refreshes daily at 21:30 UTC).
  *   - 404 / error: collapses itself and shows "Performance data not available yet."
  *
+ * SPY OVERLAY: both series are normalised to 100 at the first shared date so the
+ * chart shows *relative return* — the gap between the lines is alpha. DISCUSS-10
+ * locked the benchmark to SPY-only for v1.
+ *
  * WHO USES IT: portfolio overview page, between ConcentrationSectorTeaseStrip and SectorAllocationBar.
  * DESIGN REFERENCE: PRD-0089 §4.1 (layout strip), §6.1 (pixel spec), §7.1 hotkey "0"
  */
@@ -53,12 +57,14 @@ const PERIOD_DAYS: Record<PerfPeriod, number | null> = {
 // ── Chart colour tokens ───────────────────────────────────────────────────────
 // WHY constants (not CSS vars): lightweight-charts uses JS colour strings, not
 // CSS classes. We pull from the Midnight Pro palette used in the design system.
-const CHART_PORTFOLIO_LINE = "#FFD60A";   // text-primary gold
-const _CHART_PORTFOLIO_AREA_TOP = "rgba(255,214,10,0.18)";
-const _CHART_PORTFOLIO_AREA_BOTTOM = "rgba(255,214,10,0.00)";
-const CHART_BG = "#09090B";              // bg-background
+const CHART_PORTFOLIO_LINE = "#FFD60A";  // text-primary gold — portfolio line
+const CHART_SPY_LINE = "#52525B";        // zinc-600 — SPY benchmark (muted, not competing)
+const CHART_BG = "#09090B";             // bg-background
 const CHART_GRID = "#1C1C1E";           // border-border at low opacity
 const CHART_TEXT = "#71717A";           // text-muted-foreground
+
+// Ticker used for the benchmark overlay (DISCUSS-10: locked to SPY for v1).
+const BENCHMARK_TICKER = "SPY";
 
 // ── Props ─────────────────────────────────────────────────────────────────────
 
@@ -103,25 +109,53 @@ export function PerformanceChartPanel({
   // ── Data fetch: portfolio value-history ────────────────────────────────────
   // staleTime 5 min — equity-curve data is stable between daily snapshots.
   const days = PERIOD_DAYS[period];
+  // Compute `from` once so both portfolio and SPY fetches use the same window.
+  const fromDate =
+    days != null
+      ? (() => {
+          const d = new Date();
+          d.setDate(d.getDate() - days);
+          return d.toISOString().slice(0, 10);
+        })()
+      : undefined;
+
   const { data: historyData, isError } = useQuery({
     enabled: Boolean(portfolioId && accessToken),
     queryKey: qk.portfolios.valueHistory(portfolioId ?? "", period),
-    queryFn: async () => {
-      // WHY compute `from` here (not in gateway): the gateway accepts a raw from
-      // date string; different call sites need different from-date semantics.
-      const from =
-        days != null
-          ? (() => {
-              const d = new Date();
-              d.setDate(d.getDate() - days);
-              return d.toISOString().slice(0, 10);
-            })()
-          : undefined;
-      return createGateway(accessToken!).getValueHistory(portfolioId!, { from });
-    },
+    queryFn: () =>
+      createGateway(accessToken!).getValueHistory(portfolioId!, { from: fromDate }),
     staleTime: 5 * 60 * 1000,
     // WHY retry: false — a 404 means "no snapshots yet". Retrying wastes quota;
     // the error state shows a friendly "not available" message instead.
+    retry: false,
+  });
+
+  // ── Data fetch: resolve SPY instrument_id once ─────────────────────────────
+  // WHY resolveTickersBatch (not a hardcoded UUID): the instrument_id for SPY
+  // is environment-specific (dev seed uses a deterministic UUID, prod differs).
+  // Resolving at runtime means the same code works in all environments.
+  // staleTime=24h — SPY's instrument_id never changes in a session.
+  const { data: spyIdMap } = useQuery({
+    enabled: Boolean(accessToken),
+    queryKey: ["benchmark-resolve", BENCHMARK_TICKER],
+    queryFn: () => createGateway(accessToken!).resolveTickersBatch([BENCHMARK_TICKER]),
+    staleTime: 24 * 60 * 60 * 1000,
+    retry: false,
+  });
+  const spyInstrumentId = spyIdMap?.[BENCHMARK_TICKER] ?? null;
+
+  // ── Data fetch: SPY daily OHLCV for overlay ────────────────────────────────
+  // We use daily close prices and normalise to 100 at the first portfolio date.
+  // staleTime 5 min — same window as portfolio history.
+  const { data: spyOhlcv } = useQuery({
+    enabled: Boolean(accessToken && spyInstrumentId),
+    queryKey: ["perf-panel-spy", spyInstrumentId, period],
+    queryFn: () =>
+      createGateway(accessToken!).getOHLCV(spyInstrumentId!, {
+        timeframe: "1D",
+        ...(fromDate ? { start: fromDate } : {}),
+      }),
+    staleTime: 5 * 60 * 1000,
     retry: false,
   });
 
@@ -188,24 +222,12 @@ export function PerformanceChartPanel({
 
     chartRef.current = chart;
 
-    // ── Portfolio area series ─────────────────────────────────────────────
-    // addAreaSeries gives us a filled area with a top line — matches the
-    // equity-curve visual in every finance terminal (Bloomberg PORT, TradingView).
-    const portfolioSeries = chart.addSeries(LineSeries, {
-      color: CHART_PORTFOLIO_LINE,
-      lineWidth: 1,
-      // WHY topColor/bottomColor for area fill: area series takes topColor +
-      // bottomColor for the gradient fill, plus lineColor for the trend line.
-      // Using primary/70 → transparent mimics the EquityCurveChart style.
-      lastValueVisible: false,
-      priceLineVisible: false,
-    });
-
-    // Map S1 ValueHistory points → lightweight-charts time series format.
-    // WHY Date.parse: S1 returns "YYYY-MM-DD" ISO strings; lightweight-charts
-    // expects { time: UTCTimestamp } where UTCTimestamp is seconds since epoch.
-    // We divide by 1000 to convert ms to seconds.
-    const portfolioData = historyData.points
+    // ── Build normalised portfolio series (base-100 return) ───────────────
+    // WHY normalise to 100: portfolio NAV ($) and SPY price ($) have very
+    // different magnitudes. Normalising both to 100 at the period's first
+    // shared point lets the lines share one price scale and shows pure
+    // relative-return divergence — i.e. alpha — directly as the gap.
+    const rawPortfolio = historyData.points
       .filter((p: ValueHistoryPoint) => p.value != null)
       .map((p: ValueHistoryPoint) => ({
         time: (Date.parse(p.date) / 1000) as import("lightweight-charts").UTCTimestamp,
@@ -213,13 +235,59 @@ export function PerformanceChartPanel({
       }))
       .sort((a: { time: number }, b: { time: number }) => a.time - b.time);
 
+    const firstPortfolioValue = rawPortfolio[0]?.value ?? 1;
+    const portfolioData = rawPortfolio.map((pt) => ({
+      time: pt.time,
+      value: (pt.value / firstPortfolioValue) * 100,
+    }));
+
+    const portfolioSeries = chart.addSeries(LineSeries, {
+      color: CHART_PORTFOLIO_LINE,
+      lineWidth: 1,
+      lastValueVisible: false,
+      priceLineVisible: false,
+    });
+
     if (portfolioData.length > 0) {
       portfolioSeries.setData(portfolioData);
     }
 
+    // ── SPY overlay series ────────────────────────────────────────────────
+    // Normalise SPY closes to 100 at the same start so both curves are
+    // directly comparable. Only render when we have SPY bars.
+    const spyBars = spyOhlcv?.bars ?? [];
+    if (spyBars.length > 0) {
+      const rawSpy = spyBars
+        .map((bar) => ({
+          time: (Date.parse(bar.timestamp) / 1000) as import("lightweight-charts").UTCTimestamp,
+          value: bar.close,
+        }))
+        .sort((a: { time: number }, b: { time: number }) => a.time - b.time);
+
+      const firstSpyClose = rawSpy[0]?.value ?? 1;
+      const spyData = rawSpy.map((pt) => ({
+        time: pt.time,
+        value: (pt.value / firstSpyClose) * 100,
+      }));
+
+      const spySeries = chart.addSeries(LineSeries, {
+        color: CHART_SPY_LINE,
+        lineWidth: 1,
+        lineStyle: 1, // WHY dashed: visually separates SPY (benchmark) from portfolio
+        lastValueVisible: false,
+        priceLineVisible: false,
+      });
+      spySeries.setData(spyData);
+    }
+
     // Fit all data in view (no panning needed for a 120px strip).
     chart.timeScale().fitContent();
-  }, [collapsed, historyData, period]);
+  // WHY period excluded: historyData and spyOhlcv already key on period via
+  // their useQuery queryKeys — when period changes, those queries re-fetch and
+  // the new data triggers mountChart. Including period would cause a double
+  // render (once for period change, once for data arrival).
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [collapsed, historyData, spyOhlcv]);
 
   useEffect(() => {
     void mountChart();
