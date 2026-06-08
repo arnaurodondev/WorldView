@@ -126,17 +126,23 @@ RETURNING summary_id
         ``summary_last_embedded_at`` (migration 0027) so the ANN index can be
         audited for mixed-model drift and re-embedded selectively.
         """
+        # pgvector binding: asyncpg cannot bind a Python list to a ``vector``
+        # column directly (raises ``DataError: expected str, got list``).
+        # Format as pgvector text literal ``[v1,v2,...]`` and CAST in SQL —
+        # matches the canonical pattern used in ``entity_embedding_state``
+        # (see FQA-2 / BP for pgvector binding regression).
+        embedding_str = "[" + ",".join(str(x) for x in embedding) + "]"
         await self._session.execute(
             text("""
 UPDATE relation_summaries
-SET summary_embedding             = :embedding,
+SET summary_embedding             = CAST(:embedding AS vector),
     summary_embedding_model_id    = :model_id,
     summary_last_embedded_at      = :embedded_at
 WHERE summary_id = :summary_id
 """),
             {
                 "summary_id": str(summary_id),
-                "embedding": embedding,
+                "embedding": embedding_str,
                 "model_id": model_id,
                 "embedded_at": embedded_at,
             },
