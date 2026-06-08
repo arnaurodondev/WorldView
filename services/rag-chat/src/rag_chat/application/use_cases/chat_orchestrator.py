@@ -252,29 +252,47 @@ def _scrub_unseen_refs(text: str, seen_ids: set[str]) -> tuple[str, int]:
 _W50_NUMERIC_TOKEN_RE = re.compile(
     r"(?:\$)?-?\d[\d,]*(?:\.\d+)?\s*(?:%|[bBmMkKtT])?\b",
 )
-# Citation marker shape used by the orchestrator/tool layer: ``[tool_name row N]``
-# or bare ``[tool_name]``. Matches the citation immediately after grounding
-# pass; both forms are produced upstream and are sufficient to consider a
-# nearby numeric token "covered" by retrieved data.
-# Bug 3 fix (PLAN-0099 W4): also accept prose-form citations that LLMs
-# frequently emit instead of (or alongside) bracket markers, e.g.
-# ``(source: query_fundamentals row 0)``, ``per query_fundamentals row 0``,
-# ``from get_fundamentals_history``. Without these forms the banner
-# suppression mis-fires on answers that ARE grounded but never use
-# bracket syntax. Permissive on purpose: false negatives (banner on a
-# good answer) erode trust far more than false positives.
+# Citation marker shape used by the orchestrator/tool layer.
+#
+# Merged from two parallel fix paths (PLAN-0099 W4 prose-form variants +
+# PLAN-0107 v2.0 LOW fix #1 italic-Source variants). Keeps ALL alternations
+# from both — permissive on purpose: false negatives (banner on a good
+# answer) erode trust far more than false positives.
+#
+# Recognised forms:
+#   - [tool] / [tool row N]                        — canonical bracket
+#   - (source: tool…)                              — parenthesised
+#   - per/from/according to tool row N             — unbracketed prose
+#   - per/from/according to tool [row N]           — bracketed row only
+#   - *Source: tool for X, rows 0-3 (notes)*       — italic markdown
+#   - _source: tool row N_                         — underscore italic
+#   - Source: tool for X, rows N-M                 — plain markdown prose
+#
+# This alternation mirrors ``_PROSE_CITATION_RE`` in
+# ``services/numeric_grounding`` — keep the two in sync when adding shapes.
 _W50_CITATION_RE = re.compile(
     r"""
     (?:
-        \[[a-z_][a-z0-9_]*(?:\s+row\s+\d+)?\]            # [tool] / [tool row N]
-      | \(\s*source\s*:\s*[a-z_][a-z0-9_]*               # (source: tool…)
-            (?:\s+row\s+\d+)?\s*\)
-      | \bper\s+[a-z_][a-z0-9_]+(?:\s+row\s+\d+)?        # per tool row N
-      | \bfrom\s+[a-z_][a-z0-9_]+(?:\s+row\s+\d+)?       # from tool
-      | \baccording\s+to\s+[a-z_][a-z0-9_]+              # according to tool
-            (?:\s+row\s+\d+)?
+        \[\s*[a-z_][a-z0-9_]*(?:\s+row\s+\d+)?\s*\]
+      | \(\s*source\s*:\s*[a-z_][a-z0-9_]*(?:\s+row\s+\d+)?\s*\)
+      | \bper\s+[a-z_][a-z0-9_]+(?:\s+row\s+\d+)?
+      | \bfrom\s+[a-z_][a-z0-9_]+(?:\s+row\s+\d+)?
+      | \baccording\s+to\s+[a-z_][a-z0-9_]+(?:\s+row\s+\d+)?
+      | (?:per|from|according\s+to)\s+[a-z_][a-z0-9_]*\s*\[\s*row\s+\d+\s*\]
+      | \*\s*source\s*:\s*[a-z_][a-z0-9_]*
+            (?:\s+for\s+\w+)?
+            (?:[,\s]+rows?\s+\d+[\d–—\-]*\s*(?:\([^)]*\))?)?
+        \s*\*
+      | _\s*source\s*:\s*[a-z_][a-z0-9_]*
+            (?:\s+for\s+\w+)?
+            (?:[,\s]+rows?\s+\d+[\d–—\-]*\s*(?:\([^)]*\))?)?
+        \s*_
+      | (?<![\w*])source\s*:\s*[a-z_][a-z0-9_]*
+            (?:\s+for\s+\w+)?
+            (?:[,\s]+rows?\s+\d+[\d–—\-]*)?
+        (?![\w*])
     )
-    """,
+    """,  # noqa: RUF001
     re.IGNORECASE | re.VERBOSE,
 )
 # ±200 chars window around each numeric token where a citation must appear.

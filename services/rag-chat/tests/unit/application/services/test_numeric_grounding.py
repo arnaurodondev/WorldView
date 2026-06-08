@@ -682,3 +682,64 @@ class TestValidatorIntegrationBug3:
             called_tool_names=["query_fundamentals"],
         )
         assert result.passed, result.unsupported
+
+
+# ── PLAN-0107 v2.0 LOW fix #1: _PROSE_CITATION_RE alternation coverage ──────
+#
+# Pure regex tests — keep them in this module so future drift between the
+# orchestrator's ``_W50_CITATION_RE`` and this regex is caught locally.
+# Both regexes share the same alternation list; if a new shape is added in
+# one, mirror it in the other and add a row here.
+class TestProseCitationRegex:
+    """Coverage for ``_PROSE_CITATION_RE`` (mirrors orchestrator W50 regex)."""
+
+    @pytest.fixture(autouse=True)
+    def _load_regex(self) -> None:
+        # Import lazily so a stray import-time error surfaces as a test
+        # failure (not a collection error) — easier to diagnose in CI.
+        from rag_chat.application.services.numeric_grounding import _PROSE_CITATION_RE
+
+        self.regex = _PROSE_CITATION_RE
+
+    # ── Legacy shapes (must continue to match) ───────────────────────────
+    @pytest.mark.parametrize(
+        "text",
+        [
+            "[get_fundamentals]",
+            "[get_fundamentals row 0]",
+            "(source: query_fundamentals row 1)",
+            "per query_fundamentals [row 3]",
+            "from query_fundamentals [row 3]",
+            "according to query_fundamentals [row 3]",
+        ],
+    )
+    def test_legacy_bracket_and_paren_patterns_match(self, text: str) -> None:
+        """Regression: v2.0 original shapes still match after italic extension."""
+        assert self.regex.search(text) is not None, f"legacy pattern not matched: {text!r}"
+
+    # ── New italic/underscore/prose shapes (the actual smoke failures) ───
+    @pytest.mark.parametrize(
+        "text",
+        [
+            "*Source: get_fundamentals_history for NVDA, rows 0–3 (most recent quarters)*",  # noqa: RUF001
+            "*Source: query_fundamentals row 0*",
+            "_source: tool_name row 5_",
+            "Body sentence with Source: query_fundamentals row 0 referenced inline.",
+        ],
+    )
+    def test_italic_and_prose_source_patterns_match(self, text: str) -> None:
+        """PLAN-0107 v2.0 LOW #1: the actual benchmark citation shapes match."""
+        assert self.regex.search(text) is not None, f"new pattern not matched: {text!r}"
+
+    # ── Negative cases (must NOT match — guards against over-eager regex) ─
+    @pytest.mark.parametrize(
+        "text",
+        [
+            "random sentence with no citation at all",
+            "the source of the data is unclear",  # bare "source" word, no colon+tool
+            "[]",  # empty bracket
+        ],
+    )
+    def test_non_citations_do_not_match(self, text: str) -> None:
+        """Regex stays conservative — bare ``source`` word is not enough."""
+        assert self.regex.search(text) is None, f"false positive on: {text!r}"

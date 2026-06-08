@@ -454,7 +454,19 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="Parent directory; the script appends a run_<ts> subdirectory.",
     )
     p.add_argument("--concurrency", type=int, default=1, help="Currently sequential (>=1 reserved for future).")
-    p.add_argument("--max-runs-per-q", type=int, default=1, help="Repeat each question N times for flakiness check.")
+    p.add_argument(
+        "--max-runs-per-q",
+        type=int,
+        default=3,
+        help=(
+            "Repeat each question N times to measure variance (PLAN-0107 v2.0). "
+            "Default is 3 because mean+stddev are only meaningful with N>=2; a "
+            "single run hides nondeterminism in LLM responses and routing. "
+            "Set to 1 for a fast smoke run when you only care about pass/fail. "
+            "This default has been reverted by parallel-session activity multiple "
+            "times — keep at 3 unless you know what you are giving up."
+        ),
+    )
     p.add_argument("--timeout-s", type=float, default=120.0, help="Per-request HTTP timeout.")
     # PLAN-0104 W33 — LLM-judge integration.
     p.add_argument(

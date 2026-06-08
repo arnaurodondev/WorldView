@@ -89,6 +89,62 @@ _SUFFIX_MULT: dict[str, float] = {
 # Citation markers we must ignore so [N7] does not count as the number 7.
 _CITATION_RE = re.compile(r"\[N\d+\]")
 
+# ── PLAN-0107 v2.0 — prose citation patterns (banner-suppression helper) ─────
+#
+# The numeric-grounding validator and the orchestrator banner-suppression
+# helper share a notion of "is this answer prose-cited?". The v2.0 fix
+# initially only recognised bracketed forms (``[tool_name row N]``) and the
+# parenthesised ``(source: ...)``. Smoke benchmarks (PLAN-0107) revealed the
+# DeepSeek/Qwen models actually favour **italic markdown Source: markers**
+# in their generated prose (e.g. ``*Source: get_fundamentals_history for
+# NVDA, rows 0-3 (most recent quarters)*`` or ``_source: tool_name row N_``)
+# — so the banner kept firing on answers whose numbers were, in fact,
+# attributable to a retrieved tool result.
+#
+# This regex is the canonical citation-shape detector used by the
+# orchestrator (see ``_W50_CITATION_RE`` in ``chat_orchestrator``, which
+# mirrors this alternation list) and is exported here so application-layer
+# code can share a single definition.
+#
+# Alternations (each is independently anchored):
+#   1. ``[tool_name]`` or ``[tool_name row N]`` — bare-bracket form
+#   2. ``(source: tool_name [row N])`` — parenthesised form
+#   3. ``per|from|according to tool_name [row N]`` — preposition form
+#   4. ``*Source: tool_name [for ENTITY] [, rows 0-3 (...)]*`` — italic form
+#   5. ``_source: tool_name [for ENTITY] [, rows 0-3]_`` — underscore-italic
+#   6. ``Source: tool_name [for ENTITY] [, rows 0-3]`` — bare prose form
+#      (must not be flanked by ``*``/``_`` to avoid double-matching #4/#5)
+#
+# Dashes inside the row-range char class: the LLM emits ASCII hyphen,
+# EN DASH (U+2013), and EM DASH (U+2014). We accept all three; the
+# literal unicode characters live inside the regex string itself. Per-line
+# suppresses RUF001/RUF003 (intentional unicode dashes, not typos).
+_PROSE_CITATION_RE = re.compile(
+    r"""
+    (?:
+        \[\s*[a-z_][a-z0-9_]*(?:\s+row\s+\d+)?\s*\]
+      | \(\s*source\s*:\s*[a-z_][a-z0-9_]*(?:\s+row\s+\d+)?\s*\)
+      | (?:per|from|according\s+to)\s+[a-z_][a-z0-9_]*\s*\[\s*row\s+\d+\s*\]
+      | \bper\s+[a-z_][a-z0-9_]+(?:\s+row\s+\d+)?
+      | \bfrom\s+[a-z_][a-z0-9_]+(?:\s+row\s+\d+)?
+      | \baccording\s+to\s+[a-z_][a-z0-9_]+(?:\s+row\s+\d+)?
+      | \*\s*source\s*:\s*[a-z_][a-z0-9_]*
+            (?:\s+for\s+\w+)?
+            (?:[,\s]+rows?\s+\d+[\d–—\-]*\s*(?:\([^)]*\))?)?
+        \s*\*
+      | _\s*source\s*:\s*[a-z_][a-z0-9_]*
+            (?:\s+for\s+\w+)?
+            (?:[,\s]+rows?\s+\d+[\d–—\-]*\s*(?:\([^)]*\))?)?
+        \s*_
+      | (?<![\w*])source\s*:\s*[a-z_][a-z0-9_]*
+            (?:\s+for\s+\w+)?
+            (?:[,\s]+rows?\s+\d+[\d–—\-]*)?
+        (?![\w*])
+    )
+    """,  # noqa: RUF001
+    re.IGNORECASE | re.VERBOSE,
+)
+
 # Year token recognition — used by the classifier ONLY (the number
 # extractor already captured the digits; this is a CONTEXT check).
 _YEAR_RANGE = range(1900, 2100)
@@ -468,21 +524,6 @@ def _normalize_numeric(s: str) -> Decimal | None:
 #   * ``per tool_name row 2``                    — prose attribution
 #   * ``from tool_name``                         — prose attribution
 #   * ``according to tool_name``                 — prose attribution
-_PROSE_CITATION_RE = re.compile(
-    r"""
-    (?:
-        \[[a-z_][a-z0-9_]*(?:\s+row\s+\d+)?\]            # [tool] / [tool row N]
-      | \(\s*source\s*:\s*[a-z_][a-z0-9_]*               # (source: tool…)
-            (?:\s+row\s+\d+)?\s*\)
-      | \bper\s+[a-z_][a-z0-9_]+(?:\s+row\s+\d+)?        # per tool row N
-      | \bfrom\s+[a-z_][a-z0-9_]+(?:\s+row\s+\d+)?       # from tool
-      | \baccording\s+to\s+[a-z_][a-z0-9_]+              # according to tool
-            (?:\s+row\s+\d+)?
-    )
-    """,
-    re.IGNORECASE | re.VERBOSE,
-)
-
 # Tool names embedded inside a prose citation. Used to confirm that the
 # cited tool was actually called (defence against the LLM inventing a
 # tool name to fake a citation).
