@@ -182,8 +182,60 @@ class FundamentalsConsumer(ValkeyDedupMixin, BaseKafkaConsumer[dict]):
         self._current_uow: UnitOfWork | None = None
         self._dedup_client = dedup_client
         self._dedup_prefix = f"market_data:dedup:{_GROUP_ID}"
+        # S3 prefetch scratch-pad: bytes downloaded BEFORE the UoW is entered so
+        # the DB connection is not held during S3 network I/O (100-500 ms).
+        # Set by _handle_message, consumed and cleared by _process_message_inner.
+        self._prefetched_bytes: bytes | None = None
 
     # ── abstract implementations ──────────────────────────────────────────────
+
+    async def _handle_message(self, msg: Any) -> None:  # type: ignore[override]
+        """Pre-fetch S3 object BEFORE acquiring the UoW so the DB connection is
+        not held during S3 network I/O (100-500 ms per message).
+
+        Strategy:
+        1. Deserialize the raw Kafka value (duplicate of what the base class
+           does, but cheap — it is a JSON/Avro parse, not a network call).
+        2. If this is a fundamentals dataset message, download the S3 object
+           and store the raw bytes in ``_prefetched_bytes``.
+        3. Delegate to the base-class ``_handle_message`` which opens the UoW,
+           runs dedup, and calls ``process_message``.
+        4. ``_process_message_inner`` reads ``_prefetched_bytes`` and skips the
+           ``get_bytes`` call that would otherwise hold the connection.
+        5. Clear ``_prefetched_bytes`` after use (or on any exit path).
+        """
+        topic: str = msg.topic()
+        schema_path = self.get_schema_path(topic)
+        raw_value: bytes = msg.value()
+        self._prefetched_bytes = None  # reset for every message
+
+        try:
+            value: dict[str, Any] = self.deserialize_value(raw_value, schema_path)
+        except Exception:
+            # Let the base class handle the deserialization error on its own
+            # re-parse; we just fall through without pre-fetching.
+            await super()._handle_message(msg)
+            return
+
+        if value.get("dataset_type") == _DATASET_TYPE and self._object_storage is not None:
+            bucket = value.get("canonical_ref_bucket", "")
+            object_key = value.get("canonical_ref_key", "")
+            if bucket and object_key:
+                try:
+                    self._prefetched_bytes = await self._object_storage.get_bytes(bucket, object_key)
+                    logger.debug(
+                        "fundamentals_consumer.s3_prefetched",
+                        bucket=bucket,
+                        key=object_key,
+                        size=len(self._prefetched_bytes),
+                    )
+                except Exception as exc:
+                    raise StorageUnavailableError(f"S3 prefetch failed: {exc}") from exc
+
+        try:
+            await super()._handle_message(msg)
+        finally:
+            self._prefetched_bytes = None
 
     async def get_unit_of_work(self) -> Any:  # type: ignore[override]
         uow = self._uow_factory()
@@ -302,13 +354,19 @@ class FundamentalsConsumer(ValkeyDedupMixin, BaseKafkaConsumer[dict]):
         exchange = value.get("exchange") or ""
         provider_str = value.get("provider", "unknown")
 
-        # Download from object storage
-        if self._object_storage is None:
-            raise StorageUnavailableError("Object storage is not configured")
-        try:
-            raw = await self._object_storage.get_bytes(bucket, object_key)
-        except Exception as exc:
-            raise StorageUnavailableError(f"S3 download failed: {exc}") from exc
+        # Use pre-fetched S3 bytes (downloaded before the UoW was opened by
+        # _handle_message so the DB connection was not held during S3 I/O).
+        # Fall back to a direct download only when the prefetch was skipped
+        # (e.g. tests that call _process_message_inner directly).
+        if self._prefetched_bytes is not None:
+            raw = self._prefetched_bytes
+        else:
+            if self._object_storage is None:
+                raise StorageUnavailableError("Object storage is not configured")
+            try:
+                raw = await self._object_storage.get_bytes(bucket, object_key)
+            except Exception as exc:
+                raise StorageUnavailableError(f"S3 download failed: {exc}") from exc
 
         # Parse as raw dict (multi-section fundamentals payload)
         try:

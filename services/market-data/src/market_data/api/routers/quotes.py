@@ -23,7 +23,7 @@ logger = get_logger(__name__)
 
 router = APIRouter(tags=["quotes"])
 
-_CACHE_TTL = 5  # seconds
+_CACHE_TTL = 60  # seconds
 
 # PLAN-0088 fix P1-A (2026-05-10):
 # Guard path parameters with a UUID pattern to prevent asyncpg DataError when
