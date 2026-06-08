@@ -17,6 +17,27 @@ completions, NLP processing.
 
 ---
 
+## Database state
+
+api-gateway is **stateless**: the service holds no schema and writes no rows.
+
+- The `gateway_db` PostgreSQL database is provisioned by `infra/postgres/init.sql`
+  for legacy / forward-compatibility reasons (e.g. potential future rate-limit
+  state, audit log, idempotency keys) but is intentionally **empty** and contains
+  **no `alembic_version` table**.
+- The `services/api-gateway/alembic/` directory exists as a scaffold (env.py and
+  empty `versions/` folder) but has **zero migrations**. There are no SQLAlchemy
+  models, sessions, or engines instantiated anywhere in `src/api_gateway/`.
+- All caching state lives in Valkey (response cache, JWT/JWKS cache, rate-limit
+  buckets, PKCE state). All persistent state is owned by the downstream services
+  (S1 portfolio, S5 content-store, etc.) and accessed via REST.
+- The QA finding "`gateway_db` missing `alembic_version`" is **expected** — it
+  is not an oversight or a missing migration. If api-gateway ever needs durable
+  state, add the first migration under `services/api-gateway/alembic/versions/`
+  and `ALEMBIC_ENABLED=true` will be opt-in at that point.
+
+---
+
 ## API Surface — Full Endpoint Reference
 
 All routes are prefixed with `/v1` (main), `/v1/auth` (auth), or `/internal`.

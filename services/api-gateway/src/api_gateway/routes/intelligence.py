@@ -750,9 +750,18 @@ async def _bundle_fetch_json(
     WHY swallow Exception broadly: per-leg failures must not poison the whole
     bundle. The frontend renders skeletons / "—" for null legs. Mirrors the
     fail-soft pattern in clients/dashboard_bundle.py.
+
+    WHY timeout=15.0 here (PLAN-0099 W4 perf fix): the outer asyncio.wait_for
+    wrapping the gather uses timeout=20s. The httpx global client default is 30s.
+    If wait_for cancels at 20s but httpx is still in its read phase, the cancelled
+    coroutine holds the connection pool slot open for 10 more seconds (30-20).
+    With 6 concurrent legs this exhausts the shared connection pool and causes
+    ALL other endpoints to queue for 30s (BP-XXX). Setting per-request timeout
+    to 15s ensures httpx closes the TCP connection cleanly BEFORE the asyncio
+    outer cap fires — no zombie connections, pool stays healthy.
     """
     try:
-        resp = await client.get(path, params=params, headers=headers)
+        resp = await client.get(path, params=params, headers=headers, timeout=15.0)
         if resp.status_code >= 400:
             logger.warning(
                 "entity_intelligence_bundle_leg_non2xx",
