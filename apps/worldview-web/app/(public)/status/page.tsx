@@ -27,6 +27,14 @@
  * PLAN-0065 T-E-02, PRD-0034 §3 FR-T3-1
  */
 
+// WHY force-dynamic: this page calls fetch("http://localhost:3000/status/api/uptime")
+// during Next.js static prerender (build time). At Docker build time there is no
+// server running on port 3000, so the fetch hangs indefinitely — causing `pnpm build`
+// to never complete. force-dynamic opts this route out of static prerender entirely;
+// the page is rendered on-demand at request time instead, when the server IS running.
+// The status page shows live uptime data anyway — SSG would be wrong here.
+export const dynamic = "force-dynamic";
+
 // Server Component — runs on the server, no "use client" directive
 import { CheckCircle2, AlertTriangle, XCircle, PauseCircle } from "lucide-react";
 import type { MonitorSummary, Incident, UptimePayload, MonitorStatus } from "./components";
