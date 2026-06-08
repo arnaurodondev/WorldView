@@ -55,11 +55,28 @@ _BAD_SOURCE_ID = _ulid_from_seed("source:finnhub:news")
 
 def upgrade() -> None:
     """Delete finnhub sources missing a valid symbol, and their tasks."""
-    # Step 1 — delete orphaned tasks first (avoids FK violation if cascade is not set).
+    # Step 1a — delete orphaned tasks first (avoids FK violation if cascade is not set).
     op.execute(
         sa.text(
             """
             DELETE FROM content_ingestion_tasks
+            WHERE source_id IN (
+                SELECT id FROM sources
+                WHERE source_type = 'finnhub'
+                  AND (
+                      config->>'symbol' IS NULL
+                      OR TRIM(config->>'symbol') = ''
+                  )
+            )
+            """,
+        )
+    )
+
+    # Step 1b — delete source_adapter_state rows (FK on sources.id).
+    op.execute(
+        sa.text(
+            """
+            DELETE FROM source_adapter_state
             WHERE source_id IN (
                 SELECT id FROM sources
                 WHERE source_type = 'finnhub'
