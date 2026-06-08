@@ -15,6 +15,18 @@ async def healthz() -> dict:
     return {"status": "ok"}
 
 
+@router.get("/v1/healthz")
+async def healthz_v1() -> dict:
+    """Versioned alias for /healthz.
+
+    Dashboard Regression #5 follow-up (2026-06-05): the strip middleware
+    rewrites ``/api/v1/healthz`` → ``/v1/healthz``. Without this route the
+    rewritten path 404'd. Kept as an explicit alias so existing health-check
+    configs that target ``/healthz`` continue to work.
+    """
+    return await healthz()
+
+
 @router.get("/v1/health")
 async def health_v1() -> dict:
     """External uptime monitor probe — alias for /healthz.

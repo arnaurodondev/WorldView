@@ -45,3 +45,25 @@ def test_api_v1_health_resolves_same_as_v1_health(app) -> None:
     assert r1.status_code == 200
     assert r2.status_code == r1.status_code
     assert r2.json() == r1.json()
+
+
+def test_v1_healthz_and_api_v1_healthz_resolve(app) -> None:
+    """`/v1/healthz` and `/api/v1/healthz` must both return 200.
+
+    Dashboard Regression #5 follow-up (2026-06-05): the strip middleware
+    rewrites `/api/v1/healthz` → `/v1/healthz`. Previously only `/healthz`
+    was mounted at the root, so the rewritten path 404'd. The health router
+    now exposes both `/healthz` (legacy) and `/v1/healthz` (versioned alias).
+    """
+    client = TestClient(app)
+
+    r1 = client.get("/healthz")
+    r2 = client.get("/api/healthz")
+    r3 = client.get("/v1/healthz")
+    r4 = client.get("/api/v1/healthz")
+
+    assert r1.status_code == 200
+    assert r2.status_code == 200
+    assert r3.status_code == 200
+    assert r4.status_code == 200
+    assert r1.json() == r3.json() == r4.json()

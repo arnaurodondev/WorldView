@@ -84,6 +84,7 @@ _AUTH_SKIP_PATHS: frozenset[str] = frozenset(
         "/v1/auth/refresh",
         "/v1/auth/logout",
         "/healthz",
+        "/v1/healthz",
         "/readyz",
         "/v1/health",
         "/metrics",

@@ -174,6 +174,7 @@ def test_auth_skip_paths_contains_expected_entries() -> None:
         "/v1/auth/refresh",
         "/v1/auth/logout",
         "/healthz",
+        "/v1/healthz",  # Dashboard Regression #5 followup: versioned alias
         "/readyz",
         "/v1/health",  # PLAN-0088 P2-D: external uptime monitor alias
         "/metrics",
