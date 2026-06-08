@@ -33,6 +33,7 @@ async def get_company_overview(
     headers: dict[str, str] | None = None,
     make_headers: Callable[[], dict[str, str]] | None = None,
     overall_timeout_s: float = 15.0,
+    include_ohlcv: bool = False,
 ) -> dict[str, Any]:
     """Compose CompanyOverview from Market Data.
 
@@ -46,10 +47,17 @@ async def get_company_overview(
     ``headers`` is kept for backwards compatibility (tests, single calls).  If both
     are provided ``make_headers`` takes precedence.
 
+    ``include_ohlcv``: when False (the default) the OHLCV gather leg is skipped
+    entirely and ``ohlcv`` is set to None in the response.  Set True only when the
+    caller renders a chart (e.g. the instruments-detail page-bundle).  The dashboard
+    overview batch passes False to avoid paying 1-3 s per instrument for chart data
+    that is never displayed.
+
     Parallel calls:
       - /api/v1/instruments/{id}                       → instrument metadata (required)
       - /api/v1/fundamentals/{id}/company-profile       → name / currency / GICS (optional)
-      - /api/v1/ohlcv/{id}?timeframe=1d&start=<90d ago> → ~90 trading days chart (optional)
+      - /api/v1/ohlcv/{id}?timeframe=1d&start=<90d ago> → ~90 trading days chart (optional,
+                                                           only when include_ohlcv=True)
       - /api/v1/quotes/{id}                              → latest quote snapshot (optional)
 
     WHY start= instead of limit=: S3's OHLCV route accepts date-range parameters
@@ -122,9 +130,24 @@ async def get_company_overview(
         # (market_cap, pe_ratio) and technicals gives us the 52w range without
         # an extra round-trip after render. The general fundamentals endpoint
         # returns all sections in one call; we filter by section name below.
+        #
+        # WHY conditional OHLCV gather: the dashboard shows only a price quote —
+        # no chart — so fetching 90 days of OHLCV bars per instrument wastes 1-3 s.
+        # When ``include_ohlcv=False`` (the default, used by the batch endpoint)
+        # we substitute a resolved coroutine returning an empty dict so asyncio.gather
+        # keeps its fixed 4-element unpacking contract without issuing the HTTP call.
+        async def _noop() -> dict[str, Any]:
+            return {}
+
+        ohlcv_coro = (
+            _safe(f"/api/v1/ohlcv/{resolved_md_id}", params={"timeframe": "1d", "start": start_90d_ago})
+            if include_ohlcv
+            else _noop()
+        )
+
         profile_raw, ohlcv_raw, quote_raw, all_fundamentals_raw = await asyncio.gather(
             _safe(f"/api/v1/fundamentals/{resolved_md_id}/company-profile"),
-            _safe(f"/api/v1/ohlcv/{resolved_md_id}", params={"timeframe": "1d", "start": start_90d_ago}),
+            ohlcv_coro,
             _safe(f"/api/v1/quotes/{resolved_md_id}"),
             _safe(f"/api/v1/fundamentals/{resolved_md_id}"),
         )
@@ -369,11 +392,16 @@ async def get_instrument_page_bundle(
 
     async def _safe_overview() -> dict[str, Any] | None:
         try:
+            # WHY include_ohlcv=True: the instruments page has a chart, so we
+            # need the full 90-day OHLCV history in the overview bundle.  The
+            # dashboard batch passes include_ohlcv=False (the default) to skip
+            # this leg entirely and save 1-3 s per instrument.
             return await get_company_overview(
                 clients,
                 instrument_id,
                 make_headers=make_headers,
                 headers=headers,
+                include_ohlcv=True,
             )
         except Exception:
             logger.warning("instrument_bundle_leg_failed", leg="overview", exc_info=True)

@@ -62,6 +62,7 @@ class CompanyOverviewUseCase(GatewayUseCase):
         make_headers: Callable[[], dict[str, str]] | None = None,
         headers: dict[str, str] | None = None,
         overall_timeout_s: float = 15.0,
+        include_ohlcv: bool = False,
     ) -> dict[str, Any]:
         """Fetch and compose the company overview bundle.
 
@@ -74,6 +75,9 @@ class CompanyOverviewUseCase(GatewayUseCase):
             headers: static headers dict used when make_headers is None (test/simple
                 use).
             overall_timeout_s: asyncio.wait_for budget for the whole composition.
+            include_ohlcv: when False (default) the OHLCV leg is skipped entirely
+                and ``ohlcv`` is None in the response.  The dashboard batch
+                endpoint passes False; the instruments page bundle passes True.
 
         Returns:
             dict with keys: instrument, quote, fundamentals, ohlcv.
@@ -87,4 +91,5 @@ class CompanyOverviewUseCase(GatewayUseCase):
             make_headers=make_headers,
             headers=headers,
             overall_timeout_s=overall_timeout_s,
+            include_ohlcv=include_ohlcv,
         )

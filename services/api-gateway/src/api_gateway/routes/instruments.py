@@ -7,6 +7,7 @@ Split from proxy.py (PLAN-0089 B-3).
 from __future__ import annotations
 
 import asyncio
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import httpx
@@ -78,9 +79,14 @@ async def company_overview(company_id: str, request: Request) -> dict[str, Any]:
         # Downstream now always receives a canonical instrument_id UUID
         # string (no ticker, no entity_id). The translation dance in
         # clients.get_company_overview has been deleted.
+        # WHY include_ohlcv=True: the single-instrument overview is requested
+        # by the instruments detail page which renders a chart.  The dashboard
+        # batch endpoint (overviews:batch) passes include_ohlcv=False instead
+        # to skip the OHLCV leg and save 1-3 s per instrument on page load.
         return await use_case.execute(
             company_id=str(resolved.instrument_id),
             make_headers=lambda: _auth_headers(request),
+            include_ohlcv=True,
         )
     except DownstreamError as e:
         raise HTTPException(status_code=e.status, detail=e.detail) from e
@@ -243,6 +249,154 @@ async def instrument_page_bundle(instrument_id: str, request: Request) -> dict[s
         instrument_id=str(resolved.instrument_id),
         make_headers=lambda: _auth_headers(request),
     )
+
+
+# ── Paginated OHLCV (PLAN-0099 W4-I) ─────────────────────────────────────────
+#
+# WHY this endpoint exists: the instruments page currently fetches 60/90 days of
+# bars via the page-bundle and has no way to scroll into the past.  This endpoint
+# adds cursor-based backwards pagination so the chart can lazy-load more history
+# without re-fetching recent bars.
+#
+# Cursor design: ``before`` is an exclusive ISO-date upper bound.  The caller
+# receives ``cursor`` in the response pointing at the oldest bar returned; the
+# next page is fetched as ``?before=<cursor>``.  This mirrors the "load older"
+# UX pattern used by most financial chart libraries.
+#
+# WHY ``limit`` cap at 500: 300 bars is ~1 year of daily data — more than enough
+# for a single chart view.  Capping at 500 prevents accidentally returning the
+# entire multi-year dataset in one call.
+
+
+@router.get("/instruments/{instrument_id}/ohlcv")
+async def instrument_ohlcv_paginated(
+    instrument_id: str,
+    request: Request,
+    timeframe: str = Query("1d", pattern=r"^(1m|5m|15m|30m|1h|4h|1d|1w|1M)$"),
+    limit: int = Query(300, ge=1, le=500, description="Number of bars to return"),
+    before: str | None = Query(
+        None,
+        description="ISO date cursor (exclusive upper bound). "
+        "Omit to get the most recent `limit` bars. "
+        "Pass the `cursor` from a previous response to page backwards.",
+    ),
+) -> Any:
+    """Paginated OHLCV bars for a single instrument (PLAN-0099 W4-I).
+
+    Returns ``{ "bars": [...], "cursor": "<oldest_bar_date>" }`` so the frontend
+    can call ``?before=<cursor>`` to load older history without re-fetching
+    recent bars.
+
+    Query params:
+      - ``timeframe``: bar resolution (default ``1d``).
+      - ``limit``: number of bars (default 300, max 500).
+      - ``before``: exclusive ISO-date upper bound.  Omit to get the most
+        recent ``limit`` bars.
+
+    WHY resolve_security_id: PRD-0089 F2 — the URL slug may be a ticker
+    (e.g. "AAPL").  market-data OHLCV only accepts UUIDs.
+
+    Requires authentication.
+    """
+    if not getattr(request.state, "user", None):
+        raise HTTPException(status_code=401, detail="Authentication required")
+
+    try:
+        resolved = await resolve_security_id(
+            instrument_id,
+            clients=_clients(request),
+            headers=_auth_headers(request),
+        )
+    except InstrumentNotFoundError as e:
+        raise HTTPException(status_code=404, detail=f"Instrument not found: {e.identifier}") from e
+
+    # Build S3 query params.
+    # WHY compute start from limit when before is set: S3 accepts start/end
+    # date-range params, not a bare row count.  When the caller supplies a
+    # ``before`` cursor we compute a start date far enough back to cover
+    # ``limit`` trading days (using 1.5x calendar-day multiplier to account
+    # for weekends + holidays) and use before as the exclusive end date.
+    # When no cursor is given, we compute start relative to today instead.
+    #
+    # The S3 ``limit`` param (default 200, no declared upper cap) is forwarded
+    # to ensure no silent truncation below our requested bar count.
+    params: dict[str, Any] = {"timeframe": timeframe, "limit": limit}
+
+    if timeframe in ("1m", "5m", "15m", "30m"):
+        # Intraday: 1 calendar day ≈ 1 trading day of bars
+        cal_days_per_bar = 1
+    elif timeframe == "1h":
+        cal_days_per_bar = 1
+    else:
+        # Daily / weekly / monthly: use 1.5 calendar-day factor to cover
+        # weekends and public holidays so we don't under-fetch.
+        cal_days_per_bar = 2  # conservative: 2 calendar days per trading day
+
+    lookback_days = limit * cal_days_per_bar
+
+    if before is not None:
+        # Cursor-based page: [start, before) window sized to cover ``limit`` bars.
+        # WHY fromisoformat: before is user-supplied; parse strictly to validate
+        # the date format before forwarding to S3.
+        try:
+            before_date = datetime.fromisoformat(before).date()
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=422,
+                detail=f"Invalid `before` date format: {before!r}. Use ISO format YYYY-MM-DD.",
+            ) from exc
+        start_date = before_date - timedelta(days=lookback_days)
+        params["start"] = start_date.isoformat()
+        params["end"] = before_date.isoformat()
+    else:
+        # Most-recent page: look back far enough from today to cover ``limit`` bars.
+        params["start"] = (datetime.now(tz=UTC) - timedelta(days=lookback_days)).date().isoformat()
+
+    clients = _clients(request)
+    resp = await clients.market_data.get(
+        f"/api/v1/ohlcv/{resolved.instrument_id}",
+        params=params,
+        headers=_auth_headers(request),
+    )
+
+    if resp.status_code >= 400:
+        return Response(
+            content=resp.content,
+            status_code=resp.status_code,
+            media_type="application/json",
+        )
+
+    raw = resp.json()
+    items: list[dict[str, Any]] = raw.get("items") or []
+
+    # Normalise S3 OHLCV bar shape → frontend-friendly float-typed bars.
+    # WHY normalise here (not in the frontend): keeps the TypeScript types
+    # simple (all numeric fields are number, not string | number).
+    bars: list[dict[str, Any]] = [
+        {
+            "timestamp": item.get("bar_date", ""),
+            "open": float(item["open"]) if item.get("open") else 0.0,
+            "high": float(item["high"]) if item.get("high") else 0.0,
+            "low": float(item["low"]) if item.get("low") else 0.0,
+            "close": float(item["close"]) if item.get("close") else 0.0,
+            "volume": item.get("volume") or 0,
+        }
+        for item in items
+    ]
+
+    # Cursor: the timestamp of the oldest (first) bar in the sorted result.
+    # WHY oldest bar: the frontend pages backwards (loads older history), so
+    # passing the oldest returned date as ``before`` on the next call yields
+    # the next earlier page without overlap.
+    cursor: str | None = bars[0]["timestamp"] if bars else None
+
+    return {
+        "instrument_id": str(resolved.instrument_id),
+        "timeframe": timeframe,
+        "bars": bars,
+        # ``cursor`` is None when there are no bars (exhausted history).
+        "cursor": cursor,
+    }
 
 
 # ── News (public) ─────────────────────────────────────────
