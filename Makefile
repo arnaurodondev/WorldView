@@ -1,4 +1,18 @@
-.PHONY: help lint typecheck test-unit test-e2e test-all test-arch infra-up infra-down schema-set-compat qa qa-exhaustive qa-exhaustive-backend qa-exhaustive-frontend qa-live-stack qa-contract dev dev-down dev-reset dev-logs dev-ps dev-rebuild dev-clean seed prod prod-down prod-rebuild test test-down test-rebuild seed-eval eval
+.PHONY: help lint typecheck test-unit test-e2e test-all test-arch infra-up infra-down schema-set-compat qa qa-exhaustive qa-exhaustive-backend qa-exhaustive-frontend qa-live-stack qa-contract dev dev-down dev-reset dev-logs dev-ps dev-rebuild dev-clean seed prod prod-down prod-rebuild test test-down test-rebuild seed-eval eval python-base build-bases
+
+# ── Docker base images ────────────────────────────────────────────────────────
+# `python-base` must be built before any service image that derives from it.
+# This bakes the 8 shared libs into /wheels/ inside worldview-python-base:latest.
+# Service Dockerfiles then `FROM worldview-python-base:latest` and `uv pip
+# install --find-links /wheels` only what they need.
+
+python-base:
+	DOCKER_BUILDKIT=1 docker build \
+	  -f infra/docker/python-base/Dockerfile \
+	  -t worldview-python-base:latest \
+	  .
+
+build-bases: python-base
 
 # ── Default target ────────────────────────────────────────────────────────────
 

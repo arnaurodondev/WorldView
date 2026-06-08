@@ -338,3 +338,89 @@ apps/
 | **P2** | F-3: Separate dependency layer caching | Part of P1 template | Saves 30–90s on code-only rebuilds |
 | **P3** | F-5: Selective COPY in builder (exclude tests/caches) | 10 min per service | Faster COPY in builder |
 | **P4** | F-6: Align Python versions | 5 min | Minor — base layer sharing |
+
+---
+
+## Appendix A — `worldview-python-base` shared base image (2026-06-08)
+
+Resolves Open Question #2 (§8) and supersedes the per-service template in §6
+for the lib-install layer. The base image is built once and provides:
+
+- `python:3.12-slim-bookworm` (unifies F-6)
+- `uv==0.4.29`
+- System packages: `build-essential`, `libpq-dev`, `libpq5`,
+  `postgresql-client`, `curl`, `ca-certificates`, `git`
+- Non-root user `worldview` (uid 1000)
+- All 8 shared libs pre-built as wheels in `/wheels/`
+  (`common`, `contracts`, `messaging`, `observability`, `storage`,
+  `ml-clients`, `prompts`, `tools`)
+
+Build:
+```
+make python-base    # or: make build-bases
+```
+
+Then each service Dockerfile reduces to ~20 LOC:
+```dockerfile
+FROM worldview-python-base:latest
+USER root
+WORKDIR /app
+RUN --mount=type=cache,target=/root/.cache/uv \
+    uv pip install --system --find-links /wheels \
+      <lib subset for this service>
+COPY services/<svc>/pyproject.toml /app/pyproject.toml
+RUN mkdir -p /app/src/<svc_pkg> && touch /app/src/<svc_pkg>/__init__.py
+RUN --mount=type=cache,target=/root/.cache/uv \
+    uv pip install --system --find-links /wheels /app
+COPY --chown=worldview:worldview services/<svc>/src /app/src
+# COPY <alembic / scripts / kafka schemas> as needed
+ENV PYTHONPATH=/app/src PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1
+USER worldview
+EXPOSE <port>
+HEALTHCHECK ...
+CMD ["uvicorn", "<svc_pkg>.app:create_app", "--factory", "--host", "0.0.0.0", "--port", "<port>"]
+```
+
+### Migration order + per-service lib subset
+
+Listed in recommended migration order (lowest-risk → highest-risk).
+
+| # | Service | Port | Lib subset (`uv pip install`) | Extra COPY | Notes |
+|---|---------|------|-------------------------------|------------|-------|
+| 0 | **api-gateway** *(pilot — DONE)* | 8000 | common contracts messaging observability | — | Stateless; no Alembic. |
+| 1 | content-store | 8005 | common contracts messaging observability storage | alembic/ alembic.ini infra/kafka/schemas | Standard CRUD service. |
+| 2 | content-ingestion | varies | common contracts messaging observability storage | alembic/ alembic.ini infra/kafka/schemas | Mirrors content-store deps. |
+| 3 | market-data | varies | common contracts messaging observability storage | alembic/ alembic.ini infra/kafka/schemas | Standard. |
+| 4 | market-ingestion | 8002 | common contracts messaging observability storage | alembic/ alembic.ini infra/kafka/schemas | Standard. |
+| 5 | portfolio | 8000 | common contracts messaging observability storage | alembic/ alembic.ini infra/kafka/schemas + **services/portfolio/scripts** | F-502 op-scripts COPY. |
+| 6 | alert | varies | common contracts messaging observability storage | alembic/ alembic.ini infra/kafka/schemas | Standard. |
+| 7 | knowledge-graph | varies | common contracts messaging observability storage prompts | alembic/ alembic.ini infra/kafka/schemas | Adds `prompts` lib for LLM templates. |
+| 8 | nlp-pipeline | 8006 | common contracts messaging observability storage `ml-clients[openai]` prompts | alembic/ alembic.ini infra/kafka/schemas | Needs `ml-clients[openai]` extra. |
+| 9 | rag-chat | 8008 | common contracts messaging observability ml-clients prompts tools | alembic/ alembic.ini | All 7 non-storage libs. |
+| 10 | intelligence-migrations | n/a | (none — requirements.txt only) | alembic/ alembic.ini seeds/ scripts/ entrypoint.sh | Currently uses `requirements.txt`+`pip`. Can adopt base image just for the system deps + Python 3.12 unification; keep `pip install -r requirements.txt`. |
+
+### Validation per service
+
+After migrating each service:
+```
+make python-base
+DOCKER_BUILDKIT=1 docker compose -f infra/compose/docker-compose.yml build --no-cache <service>
+docker compose up -d --no-deps --force-recreate <service>
+sleep 8 && curl -s http://localhost:<port>/healthz
+```
+
+### Known caveats
+
+- **Image size up, build time down**: the base image is 715 MB (vs 396 MB
+  legacy api-gateway runtime). However, the 715 MB layer is **shared across
+  all 10 service images** on disk (Docker deduplicates layers), so total disk
+  footprint drops once ≥2 services have migrated.
+- **`ml-clients` optional extras**: services that need `[openai]` etc. must
+  install the extra explicitly via PyPI in their service Dockerfile (the
+  wheel in /wheels is the bare `ml-clients` package; extras pull from PyPI).
+- **Python 3.11 → 3.12**: all services declare `requires-python = ">=3.11,<3.13"`
+  in pyproject.toml so 3.12 is in-range. Watch for any third-party deps that
+  pin to 3.11 at install time.
+- **`make python-base` must run before `docker compose build`** for any
+  migrated service. Add to CI build job before image builds.
+

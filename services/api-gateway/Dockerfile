@@ -1,51 +1,50 @@
 # syntax=docker/dockerfile:1
-# ── Build stage ───────────────────────────────────────────────────────────────
-FROM python:3.11-slim AS builder
+# ─────────────────────────────────────────────────────────────────────────────
+# api-gateway (S9) — pilot for worldview-python-base migration
+#
+# Builds on top of worldview-python-base:latest which already provides:
+#   - Python 3.12-slim-bookworm
+#   - uv 0.4.29
+#   - System deps (build-essential, libpq, postgresql-client, curl, ...)
+#   - Non-root `worldview` user (uid 1000)
+#   - Shared lib wheels in /wheels/ (common, contracts, messaging,
+#     observability, storage, ml-clients, prompts, tools)
+#
+# Build prereq:  `make python-base`  (or `make build-bases`).
+# ─────────────────────────────────────────────────────────────────────────────
+FROM worldview-python-base:latest AS runtime
 
-WORKDIR /build
-
-RUN pip install --no-cache-dir uv==0.4.29
-
-# Copy only pyproject.toml + src from each lib (no tests, caches, venvs)
-COPY libs/common/pyproject.toml /build/libs/common/pyproject.toml
-COPY libs/common/src /build/libs/common/src
-COPY libs/messaging/pyproject.toml /build/libs/messaging/pyproject.toml
-COPY libs/messaging/src /build/libs/messaging/src
-COPY libs/observability/pyproject.toml /build/libs/observability/pyproject.toml
-COPY libs/observability/src /build/libs/observability/src
-
-COPY services/api-gateway/pyproject.toml /build/services/api-gateway/pyproject.toml
-COPY services/api-gateway/src /build/services/api-gateway/src
-
-# Non-editable install with uv cache mount for faster rebuilds
-RUN --mount=type=cache,target=/root/.cache/uv \
-    uv venv /app/.venv && \
-    uv pip install --python /app/.venv \
-        /build/libs/common \
-        /build/libs/messaging \
-        /build/libs/observability \
-        /build/services/api-gateway
-
-# ── Runtime stage ─────────────────────────────────────────────────────────────
-FROM python:3.11-slim AS runtime
-
+USER root
 WORKDIR /app
 
-RUN useradd --create-home --shell /bin/bash --uid 1001 appuser
+# ── 1) Install shared libs we need from the pre-built wheel cache ─────────────
+# Direct deps (pyproject.toml): `messaging`, `observability`.
+# Transitive deps consumed at runtime: `common` (UUIDv7, time helpers) and
+# `contracts` (canonical Pydantic models). uv resolves these via --find-links.
+# Third-party deps (confluent-kafka, structlog, OTEL, ...) are pulled from PyPI.
+RUN --mount=type=cache,target=/root/.cache/uv \
+    uv pip install --system --find-links /wheels \
+      common contracts messaging observability
 
-# Only the venv (self-contained) + service source + alembic
-COPY --from=builder /app/.venv /app/.venv
-COPY --from=builder /build/services/api-gateway/src /app/src
-COPY services/api-gateway/alembic /app/alembic
-COPY services/api-gateway/alembic.ini /app/alembic.ini
+# ── 2) Install service-local deps before source (maximises layer caching) ─────
+COPY services/api-gateway/pyproject.toml /app/pyproject.toml
 
-ENV PATH="/app/.venv/bin:$PATH"
-ENV PYTHONPATH="/app/src"
-ENV PYTHONDONTWRITEBYTECODE=1
-ENV PYTHONUNBUFFERED=1
+# Scaffold minimal package layout so hatchling can resolve sources at install
+# time. Real source is copied in step 3.
+RUN mkdir -p /app/src/api_gateway && touch /app/src/api_gateway/__init__.py
 
-USER appuser
+RUN --mount=type=cache,target=/root/.cache/uv \
+    uv pip install --system --find-links /wheels /app
 
+# ── 3) Copy real service source on top of the scaffold ────────────────────────
+COPY --chown=worldview:worldview services/api-gateway/src /app/src
+
+# ── Environment ────────────────────────────────────────────────────────────────
+ENV PYTHONPATH="/app/src" \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1
+
+USER worldview
 EXPOSE 8000
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
