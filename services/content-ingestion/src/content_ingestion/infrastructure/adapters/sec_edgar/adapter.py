@@ -148,9 +148,7 @@ class SECEdgarAdapter(SourceAdapter):
             #   CIK 320193, adsh "0001477932-26-002885"
             #   → https://www.sec.gov/Archives/edgar/data/320193/000147793226002885/0001477932-26-002885-index.htm
             acc_no_no_dashes = accession_no.replace("-", "")
-            filing_url = (
-                f"https://www.sec.gov/Archives/edgar/data/{cik}" f"/{acc_no_no_dashes}/{accession_no}-index.htm"
-            )
+            filing_url = f"https://www.sec.gov/Archives/edgar/data/{cik}/{acc_no_no_dashes}/{accession_no}-index.htm"
 
             try:
                 # Fetch the index page for this filing as the raw document bytes.

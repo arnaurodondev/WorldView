@@ -212,52 +212,61 @@ class TestUpdateStatus:
         session.execute.assert_called_once()
 
 
-class TestRecoverExpiredLeases:
-    async def test_recover_expired_leases_returns_count(self) -> None:
-        """Returns the number of tasks recovered."""
+class TestRecoverStaleTasks:
+    """Tests for the 3-pass watchdog ``recover_stale_tasks``."""
+
+    def _make_session_with_pass_counts(
+        self,
+        leases: int,
+        orphans: int,
+        dlq: int,
+    ) -> MagicMock:
+        """Return a mock session whose execute() cycles through 3 results."""
         session = _mock_session()
-        mock_result = MagicMock()
-        # fetchall() returns one row per recovered task
-        mock_result.fetchall.return_value = [
-            (common.ids.new_uuid7(),),
-            (common.ids.new_uuid7(),),
-        ]
-        session.execute.return_value = mock_result
+        results = []
+        for count in (leases, orphans, dlq):
+            r = MagicMock()
+            r.fetchall.return_value = [(common.ids.new_uuid7(),)] * count
+            results.append(r)
+        session.execute.side_effect = results
+        return session
+
+    async def test_recover_stale_tasks_returns_counts(self) -> None:
+        """Returns correct per-pass counts in a dict."""
+        session = self._make_session_with_pass_counts(leases=2, orphans=3, dlq=1)
         repo = TaskRepository(session)  # type: ignore[arg-type]
 
         now = common.time.utc_now()
-        recovered = await repo.recover_expired_leases(now, lease_timeout_seconds=0)
+        result = await repo.recover_stale_tasks(now, lease_timeout_seconds=0)
 
-        assert recovered == 2
-        session.execute.assert_called_once()
+        assert result == {"leases_recovered": 2, "orphans_reset": 3, "dlq_moved": 1}
+        assert session.execute.call_count == 3
 
-    async def test_recover_expired_leases_none_expired(self) -> None:
-        """Returns 0 when no leases are expired."""
-        session = _mock_session()
-        mock_result = MagicMock()
-        mock_result.fetchall.return_value = []
-        session.execute.return_value = mock_result
+    async def test_recover_stale_tasks_nothing_to_recover(self) -> None:
+        """Returns zeros when all passes find no rows."""
+        session = self._make_session_with_pass_counts(leases=0, orphans=0, dlq=0)
         repo = TaskRepository(session)  # type: ignore[arg-type]
 
         now = common.time.utc_now()
-        recovered = await repo.recover_expired_leases(now, lease_timeout_seconds=300)
+        result = await repo.recover_stale_tasks(now, lease_timeout_seconds=300)
 
-        assert recovered == 0
+        assert result == {"leases_recovered": 0, "orphans_reset": 0, "dlq_moved": 0}
 
-    async def test_recover_expired_leases_grace_period(self) -> None:
-        """Grace period delays recovery — cutoff = now - lease_timeout."""
-        session = _mock_session()
-        mock_result = MagicMock()
-        mock_result.fetchall.return_value = []
-        session.execute.return_value = mock_result
+    async def test_recover_stale_tasks_issues_three_updates(self) -> None:
+        """All three UPDATE passes are always executed."""
+        session = self._make_session_with_pass_counts(leases=0, orphans=0, dlq=0)
         repo = TaskRepository(session)  # type: ignore[arg-type]
 
         now = common.time.utc_now()
-        # 3600s grace period — should produce a WHERE clause with cutoff 1 hour ago
-        await repo.recover_expired_leases(now, lease_timeout_seconds=3600)
+        await repo.recover_stale_tasks(
+            now,
+            lease_timeout_seconds=3600,
+            pending_max_age_seconds=3600,
+            dlq_max_age_seconds=21600,
+        )
 
-        # Confirm the UPDATE statement was issued (cutoff logic is in SQL)
-        session.execute.assert_called_once()
+        # Confirm all three UPDATE statements were issued.
+        assert session.execute.call_count == 3
 
 
 class TestCountByStatus:

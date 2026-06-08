@@ -134,3 +134,40 @@ class TestFinnhubAdapterFetch:
         results = await adapter.fetch(_make_source(), is_backfill=True)
         assert len(results) == 1
         assert results[0].is_backfill is True
+
+    # ------------------------------------------------------------------
+    # Regression tests for the empty-symbol guard (BP-XXX)
+    # A source seeded without a "symbol" key must return [] immediately
+    # without making any HTTP call, so we do not waste API quota or
+    # produce HTTP 422 retry noise on every scheduler tick.
+    # ------------------------------------------------------------------
+
+    async def test_empty_symbol_returns_empty_without_http_call(self) -> None:
+        """fetch() must bail out early when config has no symbol key."""
+        mock_client = AsyncMock(spec=FinnhubClient)
+
+        adapter = FinnhubAdapter(
+            client=mock_client,
+            rate_limiter=_make_bucket(),
+            retry_config=RetryConfig(max_retries=1, backoff_factors=(0.0,)),
+        )
+        results = await adapter.fetch(_make_source(config={}))
+
+        assert results == []
+        mock_client.fetch_company_news.assert_not_called()
+        mock_client.fetch_transcript_list.assert_not_called()
+
+    async def test_whitespace_only_symbol_returns_empty_without_http_call(self) -> None:
+        """fetch() must bail out early when symbol is whitespace-only."""
+        mock_client = AsyncMock(spec=FinnhubClient)
+
+        adapter = FinnhubAdapter(
+            client=mock_client,
+            rate_limiter=_make_bucket(),
+            retry_config=RetryConfig(max_retries=1, backoff_factors=(0.0,)),
+        )
+        results = await adapter.fetch(_make_source(config={"symbol": "   "}))
+
+        assert results == []
+        mock_client.fetch_company_news.assert_not_called()
+        mock_client.fetch_transcript_list.assert_not_called()

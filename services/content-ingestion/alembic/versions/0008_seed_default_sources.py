@@ -64,13 +64,6 @@ _DEFAULT_SOURCES = [
         "enabled": True,
     },
     {
-        "id": _ulid_from_seed("source:finnhub:news"),
-        "name": "finnhub-news",
-        "source_type": "finnhub",
-        "config": json.dumps({}),
-        "enabled": True,
-    },
-    {
         "id": _ulid_from_seed("source:newsapi:news"),
         "name": "newsapi-news",
         "source_type": "newsapi",

@@ -156,6 +156,35 @@ class TestEODHDTickerNewsAdapterHappyPath:
         assert results[0].is_backfill is True
 
 
+class TestEODHDTickerNewsAdapterURL:
+    """Regression tests for BP-XXX: /api/v1/news vs /api/news URL bug."""
+
+    async def test_request_url_has_no_v1_segment(self) -> None:
+        """Requests must go to /api/news, NOT /api/v1/news (returns 404)."""
+        adapter = EODHDTickerNewsAdapter(settings=_make_settings())
+        source = _make_source()
+
+        with patch("httpx.AsyncClient") as mock_client_cls:
+            mock_client = AsyncMock()
+            mock_client_cls.return_value.__aenter__.return_value = mock_client
+            mock_client.get.return_value = _make_httpx_response([])
+
+            await adapter.fetch(source)
+
+        called_url: str = mock_client.get.call_args.args[0]
+        assert "/api/v1/" not in called_url, f"URL must not contain /api/v1/ — got {called_url!r}"
+        assert called_url == "https://eodhd.com/api/news", f"Expected 'https://eodhd.com/api/news', got {called_url!r}"
+
+    async def test_request_url_correct_path(self) -> None:
+        """Exact URL sent to httpx is https://eodhd.com/api/news."""
+        from content_ingestion.infrastructure.adapters.eodhd_ticker_news import adapter as adapter_module
+
+        assert adapter_module._EODHD_TICKER_NEWS_BASE_URL == "https://eodhd.com/api/news", (
+            "Module constant _EODHD_TICKER_NEWS_BASE_URL must be 'https://eodhd.com/api/news' — "
+            "'/api/v1/news' is a non-existent EODHD endpoint that returns HTTP 404"
+        )
+
+
 class TestEODHDTickerNewsAdapterWatermark:
     async def test_from_date_sent_as_from_param(self) -> None:
         adapter = EODHDTickerNewsAdapter(settings=_make_settings())

@@ -24,7 +24,7 @@ async def healthz_v1() -> dict:
     rewritten path 404'd. Kept as an explicit alias so existing health-check
     configs that target ``/healthz`` continue to work.
     """
-    return await healthz()
+    return await healthz()  # type: ignore[no-any-return]
 
 
 @router.get("/v1/health")

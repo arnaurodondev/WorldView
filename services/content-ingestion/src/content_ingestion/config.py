@@ -125,6 +125,13 @@ class Settings(BaseSettings):
     scheduler_tick_interval_seconds: float = 60.0
     scheduler_max_tasks_per_tick: int = 100
 
+    # ── Watchdog (3-pass stale-task recovery) ────────────────────────────────
+    # Pass 2: PENDING/RETRY orphans (no lease) stuck longer than this are
+    #   re-armed as PENDING so the scheduler can pick them up again.
+    # Pass 3: anything still stuck past dlq_max_age is moved to FAILED.
+    watchdog_pending_max_age_seconds: int = 3600  # 1 h
+    watchdog_dlq_max_age_seconds: int = 21600  # 6 h
+
     # ── Worker (process — R22) ─────────────────────────────────────────────
     worker_batch_size: int = 5
     worker_lease_seconds: int = 300

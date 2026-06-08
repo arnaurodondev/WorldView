@@ -1,6 +1,6 @@
 """EODHD per-ticker news adapter for content-ingestion (PLAN-0106 Wave C-1).
 
-Fetches news articles for a specific equity ticker from EODHD's /api/v1/news
+Fetches news articles for a specific equity ticker from EODHD's /api/news
 endpoint, routing them into the content.article.raw.v1 pipeline (not
 market.dataset.fetched — this is article content, not financial data).
 
@@ -39,7 +39,10 @@ logger = get_logger(__name__)  # type: ignore[no-any-return]
 # EODHD per-ticker news endpoint — separate from the global news feed
 # (https://eodhd.com/api/news) to allow symbol-scoped fetching without
 # consuming the credits/quota of the general news cycle.
-_EODHD_TICKER_NEWS_BASE_URL = "https://eodhd.com/api/v1/news"
+# BP-XXX: EODHD has no /api/v1/ namespace; /api/v1/news returns HTTP 404
+# (marketing HTML).  Correct path is /api/news (same as global feed but with
+# ?s= param for per-ticker scoping).
+_EODHD_TICKER_NEWS_BASE_URL = "https://eodhd.com/api/news"
 # 50 articles per request keeps credit usage low; a separate scheduled job
 # (TickerNewsSymbolSyncWorker) re-enqueues each ticker every 6 hours so
 # freshness is preserved without hammering the API.
@@ -62,7 +65,7 @@ class ProviderRateLimited(AdapterError):  # noqa: N818
 
 
 class EODHDTickerNewsAdapter(SourceAdapter):
-    """Fetch news articles for a single equity ticker from EODHD /api/v1/news.
+    """Fetch news articles for a single equity ticker from EODHD /api/news.
 
     Source config keys:
         ``symbol``   (str): Equity ticker, e.g. ``"AAPL"``.
@@ -70,7 +73,7 @@ class EODHDTickerNewsAdapter(SourceAdapter):
 
     The constructed URL is::
 
-        https://eodhd.com/api/v1/news?s={symbol}.{exchange}&api_token={key}&limit=50&fmt=json
+        https://eodhd.com/api/news?s={symbol}.{exchange}&api_token={key}&limit=50&fmt=json
 
     An optional ``from`` query parameter is included when the adapter
     receives a non-empty ``from_date`` watermark from the scheduler — this
@@ -131,7 +134,7 @@ class EODHDTickerNewsAdapter(SourceAdapter):
             )
             return []
 
-        # Build query parameters for the EODHD /api/v1/news endpoint.
+        # Build query parameters for the EODHD /api/news endpoint.
         # ``fmt=json`` is mandatory — without it EODHD returns CSV.
         params: dict[str, str | int] = {
             "s": f"{symbol}.{exchange}",

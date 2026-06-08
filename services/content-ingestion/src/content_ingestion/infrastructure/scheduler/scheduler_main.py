@@ -135,20 +135,37 @@ class SchedulerProcess:
         """
         now = common.time.utc_now()
 
-        # 1. Recover tasks whose worker lease has expired (crashed/killed workers).
+        # 1. Three-pass watchdog: recover expired leases, unblock orphan pending
+        #    rows, and hard-DLQ anything stuck past the configured hard cap.
+        #    Replaces the single-pass ``recover_expired_leases`` call (which
+        #    completely missed the 626 orphan PENDING rows with no lease).
         try:
             uow_recover = SqlaUnitOfWork(self._write_factory, self._read_factory)
             async with uow_recover:
-                recovered = await uow_recover.tasks.recover_expired_leases(
+                sweep = await uow_recover.tasks.recover_stale_tasks(
                     now,
                     lease_timeout_seconds=self._settings.worker_lease_seconds,
+                    pending_max_age_seconds=self._settings.watchdog_pending_max_age_seconds,
+                    dlq_max_age_seconds=self._settings.watchdog_dlq_max_age_seconds,
                 )
                 await uow_recover.commit()
-            if recovered:
+            if sweep["leases_recovered"]:
                 logger.warning(
                     "scheduler_leases_recovered",
-                    count=recovered,
+                    count=sweep["leases_recovered"],
                     lease_timeout_seconds=self._settings.worker_lease_seconds,
+                )
+            if sweep["orphans_reset"]:
+                logger.warning(
+                    "scheduler_orphans_reset",
+                    count=sweep["orphans_reset"],
+                    pending_max_age_seconds=self._settings.watchdog_pending_max_age_seconds,
+                )
+            if sweep["dlq_moved"]:
+                logger.warning(
+                    "scheduler_watchdog_dlq",
+                    count=sweep["dlq_moved"],
+                    dlq_max_age_seconds=self._settings.watchdog_dlq_max_age_seconds,
                 )
         except Exception as exc:
             logger.error("scheduler_lease_recovery_error", error=str(exc))

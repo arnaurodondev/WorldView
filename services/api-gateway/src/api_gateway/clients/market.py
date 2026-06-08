@@ -204,6 +204,7 @@ async def get_top_movers(
     mover_type: str = "gainers",
     limit: int = 10,
     period: str = "1D",
+    offset: int = 0,
     *,
     headers: dict[str, str] | None = None,
     make_headers: Callable[[], dict[str, str]] | None = None,
