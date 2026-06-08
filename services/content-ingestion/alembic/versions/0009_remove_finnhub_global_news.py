@@ -59,7 +59,7 @@ def upgrade() -> None:
     op.execute(
         sa.text(
             """
-            DELETE FROM ingestion_tasks
+            DELETE FROM content_ingestion_tasks
             WHERE source_id IN (
                 SELECT id FROM sources
                 WHERE source_type = 'finnhub'
