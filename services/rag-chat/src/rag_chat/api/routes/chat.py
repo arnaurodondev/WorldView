@@ -179,7 +179,21 @@ async def chat_stream(
                 )
                 yield emitter.emit_error("INTERNAL_ERROR", "An internal error occurred")
 
-    return EventSourceResponse(event_generator())
+    return EventSourceResponse(
+        event_generator(),
+        # Explicit SSE cache headers (PLAN-0099 W4) — prevent the response body
+        # from being buffered by middleware (Prometheus, RequestId) or by
+        # intermediate proxies. Without these, the client receives the full
+        # answer in a single chunk instead of token-by-token streaming.
+        # - Cache-Control: no-cache → prevents browser/proxy caching of SSE.
+        # - X-Accel-Buffering: no → Nginx-specific opt-out (harmless elsewhere).
+        # - Connection: keep-alive → multi-minute synthesis turns need this.
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+            "Connection": "keep-alive",
+        },
+    )
 
 
 @router.post("/chat/entity-context", status_code=200)
@@ -297,4 +311,18 @@ async def entity_context_chat_stream(
                 log.error("entity_context_stream_internal_error", error=type(e).__name__)  # type: ignore[no-any-return]
                 yield emitter.emit_error("INTERNAL_ERROR", "An internal error occurred")
 
-    return EventSourceResponse(event_generator())
+    return EventSourceResponse(
+        event_generator(),
+        # Explicit SSE cache headers (PLAN-0099 W4) — prevent the response body
+        # from being buffered by middleware (Prometheus, RequestId) or by
+        # intermediate proxies. Without these, the client receives the full
+        # answer in a single chunk instead of token-by-token streaming.
+        # - Cache-Control: no-cache → prevents browser/proxy caching of SSE.
+        # - X-Accel-Buffering: no → Nginx-specific opt-out (harmless elsewhere).
+        # - Connection: keep-alive → multi-minute synthesis turns need this.
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+            "Connection": "keep-alive",
+        },
+    )

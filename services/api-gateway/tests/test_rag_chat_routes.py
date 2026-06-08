@@ -93,6 +93,44 @@ async def test_s9_chat_stream_not_buffered(authed_app, authed_mock_clients) -> N
     assert "text/event-stream" in resp.headers.get("content-type", "")
 
 
+@pytest.mark.asyncio
+async def test_s9_chat_stream_sse_cache_headers(authed_app, authed_mock_clients) -> None:
+    """POST /v1/chat/stream sets explicit no-cache headers (PLAN-0099 W4).
+
+    Without these headers, gateway middleware (Prometheus / RequestId) or
+    intermediate proxies buffer the SSE body and the frontend receives the full
+    answer in a single chunk instead of token-by-token streaming.
+    """
+    sse_lines = [b'event: token\ndata: {"text": "Apple"}\n\n']
+
+    class _FakeStream:
+        async def __aenter__(self) -> _FakeStream:
+            return self
+
+        async def __aexit__(self, *_: object) -> None:
+            pass
+
+        async def aiter_bytes(self):  # type: ignore[return]
+            for chunk in sse_lines:
+                yield chunk
+
+    authed_mock_clients.rag_chat.stream = MagicMock(return_value=_FakeStream())
+
+    transport = ASGITransport(app=authed_app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        resp = await client.post(
+            "/v1/chat/stream",
+            json={"message": "Latest Apple news?"},
+            headers={"Authorization": f"Bearer {_make_jwt()}"},
+        )
+
+    assert resp.status_code == 200
+    # Header names are case-insensitive per RFC 7230 — httpx lowercases them.
+    assert resp.headers.get("cache-control") == "no-cache"
+    assert resp.headers.get("x-accel-buffering") == "no"
+    assert resp.headers.get("connection") == "keep-alive"
+
+
 # ── F-04: Chat auth guards ────────────────────────────────────────────────────
 
 

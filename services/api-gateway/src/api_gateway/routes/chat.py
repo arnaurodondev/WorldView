@@ -71,7 +71,22 @@ async def chat_stream(request: Request) -> Any:
             async for chunk in resp.aiter_bytes():
                 yield chunk
 
-    return StreamingResponse(_stream_body(), media_type="text/event-stream")
+    return StreamingResponse(
+        _stream_body(),
+        media_type="text/event-stream",
+        # Explicit SSE cache headers (PLAN-0099 W4) — mirror the rag-chat
+        # service so the gateway middleware stack (Prometheus, RequestId) does
+        # not buffer the upstream chunks. Without these, the frontend receives
+        # the entire answer in a single chunk instead of token-by-token.
+        # - Cache-Control: no-cache → prevents browser/proxy caching of SSE.
+        # - X-Accel-Buffering: no → Nginx-specific opt-out (harmless elsewhere).
+        # - Connection: keep-alive → multi-minute synthesis turns need this.
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+            "Connection": "keep-alive",
+        },
+    )
 
 
 @router.post("/chat/entity-context", summary="Entity-context chat (PLAN-0074 Wave G)")
@@ -197,7 +212,22 @@ async def chat_entity_context_stream(request: Request) -> Any:
             async for chunk in resp.aiter_bytes():
                 yield chunk
 
-    return StreamingResponse(_stream_body(), media_type="text/event-stream")
+    return StreamingResponse(
+        _stream_body(),
+        media_type="text/event-stream",
+        # Explicit SSE cache headers (PLAN-0099 W4) — mirror the rag-chat
+        # service so the gateway middleware stack (Prometheus, RequestId) does
+        # not buffer the upstream chunks. Without these, the frontend receives
+        # the entire answer in a single chunk instead of token-by-token.
+        # - Cache-Control: no-cache → prevents browser/proxy caching of SSE.
+        # - X-Accel-Buffering: no → Nginx-specific opt-out (harmless elsewhere).
+        # - Connection: keep-alive → multi-minute synthesis turns need this.
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+            "Connection": "keep-alive",
+        },
+    )
 
 
 # ── Proposal confirmation (PLAN-0082 Wave B) ─────────────────────────────────
@@ -228,7 +258,22 @@ async def confirm_proposal(proposal_id: str, request: Request) -> Any:
             async for chunk in resp.aiter_bytes():
                 yield chunk
 
-    return StreamingResponse(_stream_body(), media_type="text/event-stream")
+    return StreamingResponse(
+        _stream_body(),
+        media_type="text/event-stream",
+        # Explicit SSE cache headers (PLAN-0099 W4) — mirror the rag-chat
+        # service so the gateway middleware stack (Prometheus, RequestId) does
+        # not buffer the upstream chunks. Without these, the frontend receives
+        # the entire answer in a single chunk instead of token-by-token.
+        # - Cache-Control: no-cache → prevents browser/proxy caching of SSE.
+        # - X-Accel-Buffering: no → Nginx-specific opt-out (harmless elsewhere).
+        # - Connection: keep-alive → multi-minute synthesis turns need this.
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+            "Connection": "keep-alive",
+        },
+    )
 
 
 # ── Threads ───────────────────────────────────────────────
