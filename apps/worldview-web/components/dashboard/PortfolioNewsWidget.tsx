@@ -80,7 +80,11 @@ export function PortfolioNewsWidget() {
     // PLAN-0050 T-F-6-02 / PLAN-0053 T-D-4-01: limit=20 keeps the filter
     // candidate pool deep enough that a tier or ticker filter doesn't
     // empty the widget on most days.
-    queryFn: () => createGateway(accessToken).getTopNews({ limit: 20 }),
+    // WHY hours=72: extend lookback to 72h so a brief ingestion hiccup
+    // (S4→S5 stalls observed in QA-7) doesn't blank the widget. The
+    // ranking layer still surfaces the freshest items first; older items
+    // only appear if recent ones are sparse.
+    queryFn: () => createGateway(accessToken).getTopNews({ limit: 20, hours: 72 }),
     enabled: !!accessToken && aboveFoldReady,
     // WHY 5min: S9 now caches /v1/news/top for 120s in Valkey, so cold
     // requests are already fast. 5min frontend staleTime avoids polling
