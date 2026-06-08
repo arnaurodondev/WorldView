@@ -109,9 +109,16 @@ WHERE rer.entity_provisional = false
             AND rer2.canonical_type    = rer.canonical_type
       ) / NULLIF(
           (
-              SELECT COUNT(DISTINCT em.source_document_id)
-              FROM entity_mentions em
-              WHERE em.resolved_entity_id IN (rer.subject_entity_id, rer.object_entity_id)
+              -- Density denominator: distinct documents that mention either
+              -- entity anywhere in the relation-extraction corpus. We use
+              -- relation_evidence_raw itself (intelligence_db) as the
+              -- mention proxy because entity_mentions lives in nlp_db; the
+              -- previous query reached cross-DB (violates R9) and crashed
+              -- every 5 min with UndefinedTableError (Final-QA-1).
+              SELECT COUNT(DISTINCT rer3.source_document_id)
+              FROM relation_evidence_raw rer3
+              WHERE rer3.subject_entity_id IN (rer.subject_entity_id, rer.object_entity_id)
+                 OR rer3.object_entity_id  IN (rer.subject_entity_id, rer.object_entity_id)
           ), 0
       ) >= :density_threshold
   )
@@ -174,9 +181,12 @@ WHERE rer.entity_provisional = false
         AND rer2.canonical_type    = rer.canonical_type
   ) / NULLIF(
       (
-          SELECT COUNT(DISTINCT em.source_document_id)
-          FROM entity_mentions em
-          WHERE em.resolved_entity_id IN (rer.subject_entity_id, rer.object_entity_id)
+          -- Same intelligence_db-only density denominator as _FETCH_SQL.
+          -- See note there for the cross-DB rationale (Final-QA-1).
+          SELECT COUNT(DISTINCT rer3.source_document_id)
+          FROM relation_evidence_raw rer3
+          WHERE rer3.subject_entity_id IN (rer.subject_entity_id, rer.object_entity_id)
+             OR rer3.object_entity_id  IN (rer.subject_entity_id, rer.object_entity_id)
       ), 0
   ) < :density_threshold
 """
