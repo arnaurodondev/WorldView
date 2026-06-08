@@ -457,6 +457,51 @@ async def test_top_movers_downstream_500(authed_app, authed_mock_clients) -> Non
 
 
 @pytest.mark.asyncio
+async def test_top_movers_downstream_read_timeout_returns_504(authed_app, authed_mock_clients) -> None:
+    """Cold-start regression (Open issue #3): httpx.ReadTimeout on market-data
+    must be wrapped into DownstreamError(504), NOT propagate as a raw 500.
+
+    Pre-fix: client raised httpx.ReadTimeout, route handler only caught
+    DownstreamError → FastAPI defaulted to 500. Post-fix: clients.market.get_top_movers
+    catches the timeout and re-raises DownstreamError(status=504), which the
+    handler maps to HTTPException(504, "Gateway Timeout").
+    """
+    # AsyncMock side_effect raises when awaited — simulates downstream timeout.
+    authed_mock_clients.market_data.get = AsyncMock(side_effect=httpx.ReadTimeout("simulated cold start"))
+
+    transport = ASGITransport(app=authed_app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        resp = await client.get(
+            "/v1/market/top-movers",
+            params={"type": "gainers"},
+            headers={"Authorization": f"Bearer {_make_jwt()}"},
+        )
+
+    assert resp.status_code == 504
+    body = resp.json()
+    # Detail should mention the underlying timeout class so on-call can grep logs.
+    assert "timeout" in body["detail"].lower()
+    authed_mock_clients.market_data.get.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_top_movers_downstream_connect_timeout_returns_504(authed_app, authed_mock_clients) -> None:
+    """Same as ReadTimeout case but for ConnectTimeout — both must yield 504."""
+    authed_mock_clients.market_data.get = AsyncMock(side_effect=httpx.ConnectTimeout("simulated connect timeout"))
+
+    transport = ASGITransport(app=authed_app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        resp = await client.get(
+            "/v1/market/top-movers",
+            params={"type": "gainers"},
+            headers={"Authorization": f"Bearer {_make_jwt()}"},
+        )
+
+    assert resp.status_code == 504
+    authed_mock_clients.market_data.get.assert_called_once()
+
+
+@pytest.mark.asyncio
 async def test_economic_calendar_downstream_error(authed_app, authed_mock_clients) -> None:
     """GET /v1/fundamentals/economic-calendar when S7 returns 503 → 503 forwarded."""
     authed_mock_clients.knowledge_graph.get = AsyncMock(
