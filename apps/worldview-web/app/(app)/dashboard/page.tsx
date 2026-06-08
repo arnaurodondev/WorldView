@@ -131,7 +131,7 @@ export default function DashboardPage() {
         // the fixed template only at lg via CSS variable + media query? Easier:
         // omit the constraint here and rely on per-cell h-full/min-h-0 at lg.
         gridTemplateRows:
-          "var(--dashboard-grid-rows, auto 130px minmax(220px, 1fr) minmax(200px, 1fr))",
+          "var(--dashboard-grid-rows, auto minmax(130px, max-content) minmax(220px, 1fr) minmax(200px, 1fr))",
       }}
     >
       {/* PLAN-0070 C-2: fires GET /v1/dashboard/snapshot to warm the TanStack
