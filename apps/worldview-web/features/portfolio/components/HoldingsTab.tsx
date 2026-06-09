@@ -57,6 +57,9 @@ import { HoldingsTableChrome } from "@/components/portfolio/HoldingsTableChrome"
 import { SemanticHoldingsTable } from "@/components/portfolio/SemanticHoldingsTable";
 // ── PRD-0108 W3 SPARK column data hook ────────────────────────────────────────
 import { useHoldingsSeries } from "@/features/portfolio/hooks/useHoldingsSeries";
+// ── PRD-0108 W4 bottom strip cluster ──────────────────────────────────────────
+import { BottomStripCluster } from "@/components/portfolio/BottomStripCluster";
+import { useTopMovers } from "@/features/portfolio/hooks/useTopMovers";
 // ── Wave G: Holding detail slide-over (preserved from PLAN-0088) ──────────────
 // WHY keep slide-over: the ticker-pill row + slide-over is orthogonal to the
 // strip layout change. It enriches the SemanticHoldingsTable experience and
@@ -190,6 +193,13 @@ export function HoldingsTab({
   // the SPARK column's SparklineCellRenderer via the AG Grid context object.
   const { series: holdingsSeries } = useHoldingsSeries(instrumentIds, !!holdingsResp);
 
+  // ── useTopMovers — top contributors and detractors for BottomStripCluster ──
+  // WHY called here (not inside BottomStripCluster): BottomStripCluster is a
+  // pure layout wrapper with no hooks. Deriving top movers in HoldingsTab keeps
+  // all data-fetching/derivation in one place and avoids threading enrichedHoldings
+  // + holdingsQuotes down through an additional component boundary.
+  const topMovers = useTopMovers(enrichedHoldings, holdingsQuotes);
+
   // ── Wave G: Holding detail slide-over state ────────────────────────────────
   // WHY null (not undefined): null is the explicit "no holding selected" signal.
   const [selectedHolding, setSelectedHolding] = useState<Holding | null>(null);
@@ -311,15 +321,20 @@ export function HoldingsTab({
         />
       </div>
 
-      {/* ══ 7. BottomStripCluster (h-24) — W4 placeholder ════════════════════
-          WHY placeholder now: PRD-0108 W3 scope is the above-fold strip assembly
-          only. W4 (T-4-01) will replace this div with:
-            ContributorsStrip (contributors + detractors) | RecentActivityStrip
-          Using a visible placeholder (not null) means the page has the correct
-          final height budget during W3 QA, so W4 integration is a drop-in swap. */}
-      <div className="h-24 bg-muted/20 flex items-center justify-center text-xs text-muted-foreground shrink-0">
-        Bottom strips (W4)
-      </div>
+      {/* ══ 7. BottomStripCluster (h-24) — wired in W4-T405 ════════════════════
+          WHY guard on activePortfolioId: BottomStripCluster requires a non-null
+          string portfolioId (RecentActivityStrip uses it for its transaction query).
+          When no portfolio is selected the cluster is simply absent — the slot
+          collapses to zero height, which is fine because the table above (flex-1)
+          absorbs the space. topMovers derives contributors/detractors client-side
+          from enrichedHoldings + holdingsQuotes (computed above by useTopMovers). */}
+      {activePortfolioId && (
+        <BottomStripCluster
+          portfolioId={activePortfolioId}
+          contributors={topMovers.contributors}
+          detractors={topMovers.detractors}
+        />
+      )}
 
       {/* ══ Wave G: Ticker-pill row + HoldingDetailSlideOver ═════════════════
           WHY preserve from PLAN-0088: the slide-over is orthogonal to the strip

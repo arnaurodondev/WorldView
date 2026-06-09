@@ -112,6 +112,30 @@ vi.mock("@/features/portfolio/hooks/useHoldingsSeries", () => ({
   })),
 }));
 
+// ── useTopMovers mock ─────────────────────────────────────────────────────────
+// WHY: useTopMovers is a pure memoised computation with no side effects.
+// Mocking it here keeps the test focused on the layout contract (does
+// BottomStripCluster mount?) rather than the ranking algorithm (tested in
+// its own suite at features/portfolio/hooks/__tests__/useTopMovers.test.ts).
+vi.mock("@/features/portfolio/hooks/useTopMovers", () => ({
+  useTopMovers: vi.fn(() => ({
+    contributors: [],
+    detractors: [],
+  })),
+}));
+
+// ── BottomStripCluster mock ───────────────────────────────────────────────────
+// WHY: BottomStripCluster composes ContributorsStrip + RecentActivityStrip,
+// both of which fire TanStack Query fetches. Mocking the cluster at module
+// boundary keeps this suite free of network stubs specific to those sub-components
+// — those are covered in their own test suites. The stub renders a testid so
+// assertions can confirm the cluster mounts in the correct slot.
+vi.mock("@/components/portfolio/BottomStripCluster", () => ({
+  BottomStripCluster: vi.fn(({ portfolioId }: { portfolioId: string }) => (
+    <div data-testid="bottom-strip-cluster" data-portfolio-id={portfolioId} />
+  )),
+}));
+
 // ── lightweight-charts mock ───────────────────────────────────────────────────
 // WHY: PerformanceChartPanel mounts a lightweight-charts canvas chart via
 // useEffect + a DOM ref. In jsdom (no Canvas API) this throws. The mock
@@ -288,13 +312,23 @@ describe("HoldingsTab — PLAN-0108 W3 anchored layout", () => {
     expect(threeMonthButtons.length).toBeGreaterThan(0);
   });
 
-  it("Holdings tab renders the bottom W4 placeholder", () => {
-    // WHY: the placeholder div acts as a height budget for W4 strips.
-    // Asserting its text confirms the layout closes correctly (no render crash
-    // before reaching the bottom of the component tree).
+  it("Holdings tab renders BottomStripCluster (W4-T405)", () => {
+    // WHY: W4-T405 replaces the W4 placeholder div with the real BottomStripCluster.
+    // Asserting the testid confirms the cluster is mounted in the correct layout
+    // slot (below SemanticHoldingsTable) without the placeholder text being present.
+    // The cluster is mocked at module boundary so sub-component fetches are not
+    // triggered — the assertion verifies the layout wire-up only.
     render(wrap(<HoldingsTab {...defaultProps()} />));
 
-    expect(screen.getByText("Bottom strips (W4)")).toBeInTheDocument();
+    // BottomStripCluster renders data-testid="bottom-strip-cluster" via the mock.
+    expect(screen.getByTestId("bottom-strip-cluster")).toBeInTheDocument();
+    // Confirm the portfolioId prop is threaded through correctly.
+    expect(screen.getByTestId("bottom-strip-cluster")).toHaveAttribute(
+      "data-portfolio-id",
+      "port-1",
+    );
+    // Confirm the old W3 placeholder text is gone — layout has been upgraded.
+    expect(screen.queryByText("Bottom strips (W4)")).toBeNull();
   });
 
   it("Holdings tab does NOT render PositionBarHeat", () => {
