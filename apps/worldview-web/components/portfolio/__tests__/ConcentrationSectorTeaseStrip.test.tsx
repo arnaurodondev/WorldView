@@ -112,7 +112,7 @@ describe("ConcentrationSectorTeaseStrip renders low HHI badge", () => {
     // WHY check class string: the badge's visual meaning is encoded in its
     // Tailwind classes; a wrong class would render the correct text in the
     // wrong color, which is a silent UX regression.
-    expect(badge.className).toMatch(/emerald/);
+    expect(badge.className).toMatch(/positive/);
 
     // Sanity: raw HHI number is visible alongside the badge.
     expect(screen.getByText(/HHI 800/)).toBeDefined();
@@ -132,7 +132,7 @@ describe("ConcentrationSectorTeaseStrip renders moderate HHI badge", () => {
 
     const badge = await waitFor(() => screen.getByTestId("hhi-badge"));
     expect(badge.textContent?.toLowerCase()).toBe("moderate");
-    expect(badge.className).toMatch(/amber/);
+    expect(badge.className).toMatch(/warning/);
     expect(screen.getByText(/HHI 1500/)).toBeDefined();
   });
 });
@@ -149,7 +149,7 @@ describe("ConcentrationSectorTeaseStrip renders high HHI badge", () => {
 
     const badge = await waitFor(() => screen.getByTestId("hhi-badge"));
     expect(badge.textContent?.toLowerCase()).toBe("high");
-    expect(badge.className).toMatch(/rose/);
+    expect(badge.className).toMatch(/negative/);
     expect(screen.getByText(/HHI 3000/)).toBeDefined();
   });
 });
