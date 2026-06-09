@@ -43,6 +43,10 @@ export interface SectionActiveCounts {
   growth: number;
   leverage: number;
   technical: number;
+  // IB-L3 — Returns + 52W distance (SERVER_SIDE, backend shipped)
+  performance: number;
+  // IB-L4 — Analyst / Insider / Ownership (SERVER_SIDE, backend shipped)
+  ownership: number;
   news: number;
 }
 
@@ -85,6 +89,27 @@ export function countActiveFiltersByGroup(
       (isSet(form.volumeRatioMin) ? 1 : 0) +
       (isSet(form.distFrom52wHighMax) ? 1 : 0) +
       (isSet(form.distFrom52wLowMin) ? 1 : 0),
+
+    // IB-L3 — Returns + 52W distance (8 range pairs)
+    performance:
+      rangeCount(form.dist52wHighPctMin, form.dist52wHighPctMax) +
+      rangeCount(form.dist52wLowPctMin, form.dist52wLowPctMax) +
+      rangeCount(form.return1mMin, form.return1mMax) +
+      rangeCount(form.return3mMin, form.return3mMax) +
+      rangeCount(form.return6mMin, form.return6mMax) +
+      rangeCount(form.returnYtdMin, form.returnYtdMax) +
+      rangeCount(form.return1yMin, form.return1yMax) +
+      rangeCount(form.return3yMin, form.return3yMax),
+
+    // IB-L4 — Analyst / Insider / Ownership (5 range pairs)
+    // WHY no ANALYST UPSIDE filter: it is client-side derived (target/price − 1);
+    // v1 ships no server-side filter for it per spec §IB-L4 T-IB4-02 note.
+    ownership:
+      rangeCount(form.analystTargetPriceMin, form.analystTargetPriceMax) +
+      rangeCount(form.analystConsensusMin, form.analystConsensusMax) +
+      rangeCount(form.insiderNetBuy90dMin, form.insiderNetBuy90dMax) +
+      rangeCount(form.instOwnPctMin, form.instOwnPctMax) +
+      rangeCount(form.shortPctMin, form.shortPctMax),
 
     news:
       (isSet(form.newsVelocity7dMin) ? 1 : 0) +

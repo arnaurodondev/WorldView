@@ -125,6 +125,42 @@ export interface FilterState {
   distFrom52wHighMax?: number; // CLIENT_FILTER (% — "within 5% of 52W high" → max=5)
   distFrom52wLowMin?: number; // CLIENT_FILTER (% — "at least X% above 52W low")
 
+  // ── Performance / Returns (SERVER_SIDE — IB-L3) ──────────────────────
+  // WHY these 8 fields: backend computes them nightly via ComputedMetricsBackfillWorker
+  // and stores them in instrument_fundamentals_snapshot. All stored as decimals
+  // (0.124 = +12.4%); backend filters expect the same decimal scale.
+  dist52wHighPctMin?: number; // dist_from_52w_high_pct (SERVER_SIDE)
+  dist52wHighPctMax?: number;
+  dist52wLowPctMin?: number;  // dist_from_52w_low_pct (SERVER_SIDE)
+  dist52wLowPctMax?: number;
+  return1mMin?: number;       // return_1m (SERVER_SIDE)
+  return1mMax?: number;
+  return3mMin?: number;       // return_3m (SERVER_SIDE)
+  return3mMax?: number;
+  return6mMin?: number;       // return_6m (SERVER_SIDE)
+  return6mMax?: number;
+  returnYtdMin?: number;      // return_ytd (SERVER_SIDE)
+  returnYtdMax?: number;
+  return1yMin?: number;       // return_1y (SERVER_SIDE)
+  return1yMax?: number;
+  return3yMin?: number;       // return_3y (SERVER_SIDE)
+  return3yMax?: number;
+
+  // ── Analyst / Insider / Ownership (SERVER_SIDE — IB-L4) ─────────────
+  // WHY these 5 server-side fields: L-4a shipped 4 analyst columns (target price,
+  // consensus rating, institutional ownership pct, short percent) and L-4b shipped
+  // insider_net_buy_90d. All are stored in instrument_fundamentals_snapshot.
+  analystTargetPriceMin?: number; // analyst_target_price (SERVER_SIDE, absolute USD)
+  analystTargetPriceMax?: number;
+  analystConsensusMin?: number;   // analyst_consensus_rating (SERVER_SIDE, 1–5 scale)
+  analystConsensusMax?: number;
+  insiderNetBuy90dMin?: number;   // insider_net_buy_90d (SERVER_SIDE, USD; null ≠ 0)
+  insiderNetBuy90dMax?: number;
+  instOwnPctMin?: number;         // institutional_ownership_pct (SERVER_SIDE, decimal)
+  instOwnPctMax?: number;
+  shortPctMin?: number;           // short_percent (SERVER_SIDE, decimal)
+  shortPctMax?: number;
+
   // ── News & Signals (CLIENT_FILTER TODO — fields not on response) ────
   newsVelocity7dMin?: number; // CLIENT_FILTER TODO (S6 signals)
   controversyMin?: number; // CLIENT_FILTER TODO

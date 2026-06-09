@@ -127,6 +127,8 @@ export function ScreenerFilterBar({
     growth: growthCount,
     leverage: leverageCount,
     technical: technicalCount,
+    performance: performanceCount,
+    ownership: ownershipCount,
     news: newsCount,
   } = counts;
 
@@ -559,6 +561,159 @@ export function ScreenerFilterBar({
                   client-side
                 </span>
               </div>
+            </div>
+          </Section>
+
+          {/* ── PERFORMANCE SECTION (IB-L3) ──────────────────────────────── */}
+          {/*
+           * All 8 filters are SERVER_SIDE — the backend computes them nightly
+           * via ComputedMetricsBackfillWorker and stores them in
+           * instrument_fundamentals_snapshot. Values are decimals (0.124 = +12.4%).
+           */}
+          <Section title="Performance" activeCount={performanceCount}>
+            <div className="flex flex-col gap-1.5">
+              <RangeInput
+                label="52W% from High"
+                hint="decimal"
+                tooltip="Distance from 52-week high as a fraction. Negative = below high (e.g. −0.05 = 5% below). Filter '−0.05 to 0' = within 5% of yearly peak."
+                min={form.dist52wHighPctMin} max={form.dist52wHighPctMax}
+                minPlaceholder="e.g. −0.2"
+                maxPlaceholder="e.g. 0"
+                onMin={(v) => patch({ dist52wHighPctMin: v })}
+                onMax={(v) => patch({ dist52wHighPctMax: v })}
+              />
+              <RangeInput
+                label="52W% from Low"
+                hint="decimal"
+                tooltip="Distance from 52-week low as a fraction. Positive = above low (e.g. 0.30 = 30% above low). Filter '0.20 to …' = at least 20% above yearly trough."
+                min={form.dist52wLowPctMin} max={form.dist52wLowPctMax}
+                minPlaceholder="e.g. 0.10"
+                maxPlaceholder="e.g. 0.50"
+                onMin={(v) => patch({ dist52wLowPctMin: v })}
+                onMax={(v) => patch({ dist52wLowPctMax: v })}
+              />
+              <RangeInput
+                label="1M Return"
+                hint="decimal"
+                tooltip="1-month total return (0.05 = +5%). Positive = up over last month."
+                min={form.return1mMin} max={form.return1mMax}
+                minPlaceholder="e.g. 0.05"
+                maxPlaceholder="e.g. 0.20"
+                onMin={(v) => patch({ return1mMin: v })}
+                onMax={(v) => patch({ return1mMax: v })}
+              />
+              <RangeInput
+                label="3M Return"
+                hint="decimal"
+                tooltip="3-month total return."
+                min={form.return3mMin} max={form.return3mMax}
+                minPlaceholder="e.g. 0.10"
+                maxPlaceholder="e.g. 0.40"
+                onMin={(v) => patch({ return3mMin: v })}
+                onMax={(v) => patch({ return3mMax: v })}
+              />
+              <RangeInput
+                label="6M Return"
+                hint="decimal"
+                tooltip="6-month total return."
+                min={form.return6mMin} max={form.return6mMax}
+                minPlaceholder="e.g. 0.10"
+                maxPlaceholder="e.g. 0.60"
+                onMin={(v) => patch({ return6mMin: v })}
+                onMax={(v) => patch({ return6mMax: v })}
+              />
+              <RangeInput
+                label="YTD Return"
+                hint="decimal"
+                tooltip="Year-to-date return from 1 Jan to today."
+                min={form.returnYtdMin} max={form.returnYtdMax}
+                minPlaceholder="e.g. 0.05"
+                maxPlaceholder="e.g. 0.50"
+                onMin={(v) => patch({ returnYtdMin: v })}
+                onMax={(v) => patch({ returnYtdMax: v })}
+              />
+              <RangeInput
+                label="1Y Return"
+                hint="decimal"
+                tooltip="1-year total return."
+                min={form.return1yMin} max={form.return1yMax}
+                minPlaceholder="e.g. 0.10"
+                maxPlaceholder="e.g. 0.80"
+                onMin={(v) => patch({ return1yMin: v })}
+                onMax={(v) => patch({ return1yMax: v })}
+              />
+              <RangeInput
+                label="3Y Return"
+                hint="decimal"
+                tooltip="3-year total return. Captures a full bull/bear cycle."
+                min={form.return3yMin} max={form.return3yMax}
+                minPlaceholder="e.g. 0.20"
+                maxPlaceholder="e.g. 1.50"
+                onMin={(v) => patch({ return3yMin: v })}
+                onMax={(v) => patch({ return3yMax: v })}
+              />
+            </div>
+          </Section>
+
+          {/* ── OWNERSHIP SECTION (IB-L4) ────────────────────────────────── */}
+          {/*
+           * 5 server-side filters for analyst, insider, and institutional data.
+           * Note: no filter for ANALYST UPSIDE — it is a derived column (client-
+           * side: target/price − 1). v1 spec §IB-L4 T-IB4-02 explicitly defers
+           * a server-side upside filter to v2.
+           */}
+          <Section title="Ownership" activeCount={ownershipCount}>
+            <div className="flex flex-col gap-1.5">
+              <RangeInput
+                label="Analyst Target"
+                hint="USD"
+                tooltip="Analyst consensus price target (absolute USD). Filter '> current price' to find undervalued names per Street consensus."
+                min={form.analystTargetPriceMin} max={form.analystTargetPriceMax}
+                minPlaceholder="e.g. 100"
+                maxPlaceholder="e.g. 500"
+                onMin={(v) => patch({ analystTargetPriceMin: v })}
+                onMax={(v) => patch({ analystTargetPriceMax: v })}
+              />
+              <RangeInput
+                label="Consensus Rating"
+                hint="1–5"
+                tooltip="Analyst consensus rating: 1=Strong Sell, 2=Sell, 3=Hold, 4=Buy, 5=Strong Buy. Filter '≥ 4' to see Street favourites."
+                min={form.analystConsensusMin} max={form.analystConsensusMax}
+                minPlaceholder="e.g. 3.5"
+                maxPlaceholder="e.g. 5"
+                onMin={(v) => patch({ analystConsensusMin: v })}
+                onMax={(v) => patch({ analystConsensusMax: v })}
+              />
+              <RangeInput
+                label="Insider 90d"
+                hint="USD"
+                tooltip="Net insider buy/sell (USD) over past 90 days. Positive = net buying; negative = net selling. null rows are excluded — only instruments with filing data appear."
+                min={form.insiderNetBuy90dMin} max={form.insiderNetBuy90dMax}
+                minPlaceholder="e.g. 100000"
+                maxPlaceholder="e.g. 5000000"
+                onMin={(v) => patch({ insiderNetBuy90dMin: v })}
+                onMax={(v) => patch({ insiderNetBuy90dMax: v })}
+              />
+              <RangeInput
+                label="Inst. Ownership"
+                hint="decimal"
+                tooltip="Institutional ownership as fraction of float (0.65 = 65%). High institutional ownership signals wide coverage; very low may mean less liquidity."
+                min={form.instOwnPctMin} max={form.instOwnPctMax}
+                minPlaceholder="e.g. 0.40"
+                maxPlaceholder="e.g. 0.90"
+                onMin={(v) => patch({ instOwnPctMin: v })}
+                onMax={(v) => patch({ instOwnPctMax: v })}
+              />
+              <RangeInput
+                label="Short %"
+                hint="decimal"
+                tooltip="Short interest as fraction of float (0.10 = 10%). >10% = elevated; may signal squeeze risk or institutional skepticism."
+                min={form.shortPctMin} max={form.shortPctMax}
+                minPlaceholder="e.g. 0.02"
+                maxPlaceholder="e.g. 0.15"
+                onMin={(v) => patch({ shortPctMin: v })}
+                onMax={(v) => patch({ shortPctMax: v })}
+              />
             </div>
           </Section>
 

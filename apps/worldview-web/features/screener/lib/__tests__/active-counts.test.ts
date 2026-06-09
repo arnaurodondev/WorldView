@@ -82,12 +82,17 @@ describe("rangeCount", () => {
 describe("countActiveFiltersByGroup", () => {
   it("returns all zeros for DEFAULT_FILTERS", () => {
     const c = countActiveFiltersByGroup(DEFAULT_FILTERS);
+    // WHY include performance + ownership: IB-L3 and IB-L4 added two new
+    // sections; the equality check must list all 8 keys or the shape contract
+    // will silently drift next time a section is added.
     expect(c).toEqual({
       valuation: 0,
       profitability: 0,
       growth: 0,
       leverage: 0,
       technical: 0,
+      performance: 0,
+      ownership: 0,
       news: 0,
     });
   });
@@ -151,6 +156,8 @@ describe("countActiveFiltersByGroup", () => {
     expect(c.growth).toBe(0);
     expect(c.leverage).toBe(0);
     expect(c.technical).toBe(0);
+    expect(c.performance).toBe(0);
+    expect(c.ownership).toBe(0);
     expect(c.news).toBe(0);
   });
 
@@ -163,6 +170,10 @@ describe("countActiveFiltersByGroup", () => {
       capTier: "LARGE",
     };
     const c = countActiveFiltersByGroup(form);
-    expect(c.valuation + c.profitability + c.growth + c.leverage + c.technical + c.news).toBe(0);
+    // Include performance + ownership in the sum (IB-L3 / IB-L4 new sections).
+    expect(
+      c.valuation + c.profitability + c.growth + c.leverage + c.technical +
+      c.performance + c.ownership + c.news
+    ).toBe(0);
   });
 });

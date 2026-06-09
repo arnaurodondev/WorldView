@@ -29,6 +29,43 @@ import { cn } from "@/lib/utils";
 // HF-10: formatPrice for locale-grouped USD output ("$4,892.11" not "$4892.11").
 import { formatCompact, formatPrice } from "@/lib/format";
 
+// ── IB-L3/L4 format helpers ───────────────────────────────────────────────────
+
+/**
+ * formatReturnPct — renders a decimal return (0.124 = +12.4%) as a signed
+ * percent string with 1 decimal place.
+ *
+ * WHY this helper (not inline): eight return columns share the same format
+ * rule. Centralising avoids eight copy-pastes and makes the threshold easy
+ * to adjust. Returns "—" for null/undefined, which is consistent with every
+ * other screener column (never shows "0%" for missing data).
+ */
+export function formatReturnPct(v: number | null | undefined): string {
+  if (v == null) return "—";
+  const pct = v * 100;
+  const sign = pct >= 0 ? "+" : "";
+  return `${sign}${pct.toFixed(1)}%`;
+}
+
+/**
+ * formatInsiderCompact — renders an insider net buy/sell (USD) in compact
+ * form with sign prefix.
+ *
+ * WHY null → "—" not "$0": only 3 instruments have insider data; null means
+ * "no data" NOT "no transactions". Rendering "$0" for null would mislead
+ * users into thinking there was zero net activity when it is simply unknown.
+ *
+ * Examples: 1_200_000 → "+$1.2M", -340_000 → "−$340K", null → "—"
+ */
+export function formatInsiderCompact(v: number | null | undefined): string {
+  if (v == null) return "—";
+  const abs = Math.abs(v);
+  const compact = formatCompact(abs, { adaptive: true, maxDecimals: 1 });
+  // WHY Unicode minus (−) not hyphen: typographic convention for financial
+  // negative values (matches Bloomberg terminal display).
+  return v >= 0 ? `+$${compact}` : `−$${compact}`;
+}
+
 // ── Internal helper ───────────────────────────────────────────────────────────
 
 function formatCap(val: number | null | undefined): string {
@@ -57,6 +94,22 @@ export const SCREENER_AG_COL_WIDTHS: Record<string, number> = {
   roe: 64,
   revenueGrowth: 76,
   opMargin: 72,
+  // IB-L3 — Returns + 52W distance (opt-in, not default visible)
+  dist52wHigh: 68,
+  dist52wLow: 68,
+  return1m: 64,
+  return3m: 64,
+  return6m: 64,
+  returnYtd: 64,
+  return1y: 64,
+  return3y: 64,
+  // IB-L4 — Analyst / Insider / Ownership (opt-in)
+  analystTarget: 76,
+  analystUpside: 72,
+  analystConsensus: 72,
+  insiderNet90d: 76,
+  instOwn: 68,
+  shortPct: 64,
 };
 
 // ── Cell renderer components ──────────────────────────────────────────────────
@@ -287,6 +340,188 @@ function OpMarginCellRenderer({ data }: ICellRendererParams<ScreenerResult>) {
   );
 }
 
+// ── IB-L3 — Returns + 52W distance renderers ─────────────────────────────────
+// All 8 follow the same "signed percent, +12.4% / −3.4% / —" pattern.
+// Positive → text-positive (bull green), negative → text-negative (bear red).
+// WHY text-[11px] (not text-[10px] as in IB-L2): the signed % glyphs are
+// narrower than basis-point numbers; 11px keeps the column readable at 20px row height.
+
+function ReturnPctCellRenderer({
+  value,
+}: {
+  value: number | null | undefined;
+}) {
+  // WHY early-return for null: the backend may omit the field for instruments
+  // computed before the nightly refresh. Show "—" to distinguish from 0%.
+  if (value == null) {
+    return <span className="font-mono text-[11px] tabular-nums text-muted-foreground">—</span>;
+  }
+  const pct = value * 100;
+  const isPos = pct > 0;
+  const isNeg = pct < 0;
+  return (
+    <span
+      className={cn(
+        "font-mono text-[11px] tabular-nums",
+        isPos ? "text-positive" : isNeg ? "text-negative" : "text-foreground",
+      )}
+    >
+      {formatReturnPct(value)}
+    </span>
+  );
+}
+
+// Individual wrappers read from the named AG Grid field prop. AG Grid passes
+// `value` (the `field` accessor result) as a prop to cellRenderer functions.
+function Dist52wHighCellRenderer(p: ICellRendererParams<ScreenerResult>) {
+  return <ReturnPctCellRenderer value={p.data?.dist_from_52w_high_pct} />;
+}
+function Dist52wLowCellRenderer(p: ICellRendererParams<ScreenerResult>) {
+  return <ReturnPctCellRenderer value={p.data?.dist_from_52w_low_pct} />;
+}
+function Return1mCellRenderer(p: ICellRendererParams<ScreenerResult>) {
+  return <ReturnPctCellRenderer value={p.data?.return_1m} />;
+}
+function Return3mCellRenderer(p: ICellRendererParams<ScreenerResult>) {
+  return <ReturnPctCellRenderer value={p.data?.return_3m} />;
+}
+function Return6mCellRenderer(p: ICellRendererParams<ScreenerResult>) {
+  return <ReturnPctCellRenderer value={p.data?.return_6m} />;
+}
+function ReturnYtdCellRenderer(p: ICellRendererParams<ScreenerResult>) {
+  return <ReturnPctCellRenderer value={p.data?.return_ytd} />;
+}
+function Return1yCellRenderer(p: ICellRendererParams<ScreenerResult>) {
+  return <ReturnPctCellRenderer value={p.data?.return_1y} />;
+}
+function Return3yCellRenderer(p: ICellRendererParams<ScreenerResult>) {
+  return <ReturnPctCellRenderer value={p.data?.return_3y} />;
+}
+
+// ── IB-L4 — Analyst / Insider / Ownership renderers ──────────────────────────
+
+function AnalystTargetCellRenderer({ data }: ICellRendererParams<ScreenerResult>) {
+  const v = data?.analyst_target_price;
+  if (v == null) {
+    return <span className="font-mono text-[11px] tabular-nums text-muted-foreground">—</span>;
+  }
+  return (
+    <span className="font-mono text-[11px] tabular-nums text-foreground">
+      {formatPrice(v)}
+    </span>
+  );
+}
+
+/**
+ * AnalystUpsideCellRenderer — ANALYST UPSIDE is derived client-side.
+ *
+ * WHY client-side: the backend does NOT expose a pre-computed upside field.
+ * The formula is (analyst_target_price / current_price) - 1. We need both
+ * fields to be non-null; if either is missing we show "—".
+ */
+function AnalystUpsideCellRenderer({ data }: ICellRendererParams<ScreenerResult>) {
+  const target = data?.analyst_target_price;
+  const price = data?.current_price;
+  if (target == null || price == null || price === 0) {
+    return <span className="font-mono text-[11px] tabular-nums text-muted-foreground">—</span>;
+  }
+  const upside = (target / price) - 1;
+  const pct = upside * 100;
+  const isPos = pct > 0;
+  const isNeg = pct < 0;
+  return (
+    <span
+      className={cn(
+        "font-mono text-[11px] tabular-nums",
+        isPos ? "text-positive" : isNeg ? "text-negative" : "text-foreground",
+      )}
+    >
+      {formatReturnPct(upside)}
+    </span>
+  );
+}
+
+/**
+ * AnalystConsensusCellRenderer — 1–5 scale colour logic.
+ *
+ * WHY colour thresholds ≥4 / ≤2 (not a binary midpoint): the 1–5 analyst
+ * scale maps to: 1=Strong Sell, 2=Sell, 3=Hold, 4=Buy, 5=Strong Buy.
+ * ≥4 signals active Buy conviction; ≤2 signals active Sell conviction.
+ * Hold (2.5–3.5) is left muted to avoid false signals on neutral ratings.
+ */
+function AnalystConsensusCellRenderer({ data }: ICellRendererParams<ScreenerResult>) {
+  const v = data?.analyst_consensus_rating;
+  if (v == null) {
+    return <span className="font-mono text-[11px] tabular-nums text-muted-foreground">—</span>;
+  }
+  const isBull = v >= 4;
+  const isBear = v <= 2;
+  return (
+    <span
+      className={cn(
+        "font-mono text-[11px] tabular-nums",
+        isBull ? "text-positive" : isBear ? "text-negative" : "text-muted-foreground",
+      )}
+    >
+      {v.toFixed(2)}
+    </span>
+  );
+}
+
+function InsiderNet90dCellRenderer({ data }: ICellRendererParams<ScreenerResult>) {
+  const v = data?.insider_net_buy_90d;
+  // WHY null check before zero check: null means "no insider data" (only 3
+  // instruments have coverage); 0 means "equal buy + sell in the 90d window".
+  // They must render differently — "—" vs "$0" — to avoid misleading users.
+  return (
+    <span
+      className={cn(
+        "font-mono text-[11px] tabular-nums",
+        v != null && v > 0 ? "text-positive"
+          : v != null && v < 0 ? "text-negative"
+          : "text-muted-foreground",
+      )}
+    >
+      {formatInsiderCompact(v)}
+    </span>
+  );
+}
+
+function InstOwnCellRenderer({ data }: ICellRendererParams<ScreenerResult>) {
+  // institutional_ownership_pct stored as fraction (0.65 = 65%)
+  const v = data?.institutional_ownership_pct;
+  if (v == null) {
+    return <span className="font-mono text-[11px] tabular-nums text-muted-foreground">—</span>;
+  }
+  return (
+    <span className="font-mono text-[11px] tabular-nums text-foreground">
+      {(v * 100).toFixed(1)}%
+    </span>
+  );
+}
+
+function ShortPctCellRenderer({ data }: ICellRendererParams<ScreenerResult>) {
+  // short_percent stored as fraction (0.05 = 5%)
+  const v = data?.short_percent;
+  if (v == null) {
+    return <span className="font-mono text-[11px] tabular-nums text-muted-foreground">—</span>;
+  }
+  // WHY warning tint above 10%: elevated short interest (>10%) can signal
+  // institutional skepticism OR a squeeze setup — flagging it without hiding
+  // lets the user decide. Below 5% is standard (muted); 5–10% is elevated.
+  const isHigh = v > 0.1;
+  return (
+    <span
+      className={cn(
+        "font-mono text-[11px] tabular-nums",
+        isHigh ? "text-warning" : "text-foreground",
+      )}
+    >
+      {(v * 100).toFixed(1)}%
+    </span>
+  );
+}
+
 // Sparkline needs the sparklines map and a suppressed flag — built via factory
 // closure so callers don't have to thread them through cellRendererParams.
 //
@@ -497,6 +732,175 @@ export function createAgScreenerColumns(
           sortable: true,
           width: SCREENER_AG_COL_WIDTHS.opMargin,
           cellRenderer: OpMarginCellRenderer,
+        },
+      ],
+    } satisfies ColGroupDef<ScreenerResult>,
+
+    // ── PERFORMANCE / TECHNICAL group (IB-L3) ───────────────────────────────
+    // All 8 columns are opt-in (not default visible). They live in a separate
+    // group so ColumnSettingsPopover can show/hide them as a block.
+    // WHY "Performance / Technical": the group name mirrors Bloomberg's
+    // "PERF" section, covering both absolute returns and 52W position metrics.
+    {
+      headerName: "PERFORMANCE",
+      groupId: "performanceGroup",
+      children: [
+        {
+          colId: "dist52wHigh",
+          headerName: "52W%↑",
+          headerTooltip: "% distance from 52-week high (negative = below high)",
+          field: "dist_from_52w_high_pct",
+          sortable: true,
+          // WHY hide: opt-in column — showing all 8 by default would exceed the
+          // 14-column horizontal-scroll limit at 1440px (DS-013 guard).
+          hide: true,
+          width: SCREENER_AG_COL_WIDTHS.dist52wHigh,
+          cellRenderer: Dist52wHighCellRenderer,
+        },
+        {
+          colId: "dist52wLow",
+          headerName: "52W%↓",
+          headerTooltip: "% distance from 52-week low (positive = above low)",
+          field: "dist_from_52w_low_pct",
+          sortable: true,
+          hide: true,
+          width: SCREENER_AG_COL_WIDTHS.dist52wLow,
+          cellRenderer: Dist52wLowCellRenderer,
+        },
+        {
+          colId: "return1m",
+          headerName: "1M RTN",
+          headerTooltip: "1-month total return",
+          field: "return_1m",
+          sortable: true,
+          hide: true,
+          width: SCREENER_AG_COL_WIDTHS.return1m,
+          cellRenderer: Return1mCellRenderer,
+        },
+        {
+          colId: "return3m",
+          headerName: "3M RTN",
+          headerTooltip: "3-month total return",
+          field: "return_3m",
+          sortable: true,
+          hide: true,
+          width: SCREENER_AG_COL_WIDTHS.return3m,
+          cellRenderer: Return3mCellRenderer,
+        },
+        {
+          colId: "return6m",
+          headerName: "6M RTN",
+          headerTooltip: "6-month total return",
+          field: "return_6m",
+          sortable: true,
+          hide: true,
+          width: SCREENER_AG_COL_WIDTHS.return6m,
+          cellRenderer: Return6mCellRenderer,
+        },
+        {
+          colId: "returnYtd",
+          headerName: "YTD RTN",
+          headerTooltip: "Year-to-date total return",
+          field: "return_ytd",
+          sortable: true,
+          hide: true,
+          width: SCREENER_AG_COL_WIDTHS.returnYtd,
+          cellRenderer: ReturnYtdCellRenderer,
+        },
+        {
+          colId: "return1y",
+          headerName: "1Y RTN",
+          headerTooltip: "1-year total return",
+          field: "return_1y",
+          sortable: true,
+          hide: true,
+          width: SCREENER_AG_COL_WIDTHS.return1y,
+          cellRenderer: Return1yCellRenderer,
+        },
+        {
+          colId: "return3y",
+          headerName: "3Y RTN",
+          headerTooltip: "3-year total return",
+          field: "return_3y",
+          sortable: true,
+          hide: true,
+          width: SCREENER_AG_COL_WIDTHS.return3y,
+          cellRenderer: Return3yCellRenderer,
+        },
+      ],
+    } satisfies ColGroupDef<ScreenerResult>,
+
+    // ── ANALYST / INSIDER / OWNERSHIP group (IB-L4) ─────────────────────────
+    // 5 backend fields + 1 client-side derived (ANALYST UPSIDE). All opt-in.
+    // WHY ANALYST UPSIDE in the same group: it depends on analyst_target_price
+    // and current_price (both available in the row payload); co-locating it
+    // with the target column makes the relationship clear.
+    {
+      headerName: "OWNERSHIP",
+      groupId: "ownershipGroup",
+      children: [
+        {
+          colId: "analystTarget",
+          headerName: "ANALYST TGT",
+          headerTooltip: "Analyst consensus target price (USD)",
+          field: "analyst_target_price",
+          sortable: true,
+          hide: true,
+          width: SCREENER_AG_COL_WIDTHS.analystTarget,
+          cellRenderer: AnalystTargetCellRenderer,
+        },
+        {
+          colId: "analystUpside",
+          headerName: "ANALYST UPSIDE",
+          headerTooltip: "Analyst upside: (target / price) - 1. Derived client-side.",
+          // WHY no `field`: ANALYST UPSIDE is computed from two fields in the
+          // cell renderer (target / price - 1). Leaving `field` undefined means
+          // AG Grid won't try to sort on it (which would sort on undefined —
+          // no-op), consistent with the design spec "no filter in v1".
+          sortable: false,
+          hide: true,
+          width: SCREENER_AG_COL_WIDTHS.analystUpside,
+          cellRenderer: AnalystUpsideCellRenderer,
+        },
+        {
+          colId: "analystConsensus",
+          headerName: "CONSENSUS",
+          headerTooltip: "Analyst consensus rating (1=Strong Sell → 5=Strong Buy)",
+          field: "analyst_consensus_rating",
+          sortable: true,
+          hide: true,
+          width: SCREENER_AG_COL_WIDTHS.analystConsensus,
+          cellRenderer: AnalystConsensusCellRenderer,
+        },
+        {
+          colId: "insiderNet90d",
+          headerName: "INSIDER 90D",
+          headerTooltip: "Net insider buy/sell (USD) over past 90 days. — = no data.",
+          field: "insider_net_buy_90d",
+          sortable: true,
+          hide: true,
+          width: SCREENER_AG_COL_WIDTHS.insiderNet90d,
+          cellRenderer: InsiderNet90dCellRenderer,
+        },
+        {
+          colId: "instOwn",
+          headerName: "INST OWN%",
+          headerTooltip: "Institutional ownership as % of float",
+          field: "institutional_ownership_pct",
+          sortable: true,
+          hide: true,
+          width: SCREENER_AG_COL_WIDTHS.instOwn,
+          cellRenderer: InstOwnCellRenderer,
+        },
+        {
+          colId: "shortPct",
+          headerName: "SHORT %",
+          headerTooltip: "Short interest as % of float. >10% = elevated (warning tint).",
+          field: "short_percent",
+          sortable: true,
+          hide: true,
+          width: SCREENER_AG_COL_WIDTHS.shortPct,
+          cellRenderer: ShortPctCellRenderer,
         },
       ],
     } satisfies ColGroupDef<ScreenerResult>,

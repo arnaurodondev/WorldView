@@ -72,6 +72,28 @@ export function buildScreenerFilters(f: FilterState): ScreenerFilter[] {
   pushIfRange(filters, "quarterly_revenue_growth_yoy", f.revGrowthMin, f.revGrowthMax);
   pushIfRange(filters, "quarterly_earnings_growth_yoy", f.earningsGrowthMin, f.earningsGrowthMax);
 
+  // ── Performance / Returns (SERVER_SIDE — IB-L3) ────────────────────────────
+  // WHY field names must match backend BYTE-FOR-BYTE: mismatches silently drop
+  // filters (backend ignores unknown metric names). Names from:
+  // services/market-data/src/market_data/api/schemas/fundamental_metrics.py
+  pushIfRange(filters, "dist_from_52w_high_pct", f.dist52wHighPctMin, f.dist52wHighPctMax);
+  pushIfRange(filters, "dist_from_52w_low_pct", f.dist52wLowPctMin, f.dist52wLowPctMax);
+  pushIfRange(filters, "return_1m", f.return1mMin, f.return1mMax);
+  pushIfRange(filters, "return_3m", f.return3mMin, f.return3mMax);
+  pushIfRange(filters, "return_6m", f.return6mMin, f.return6mMax);
+  pushIfRange(filters, "return_ytd", f.returnYtdMin, f.returnYtdMax);
+  pushIfRange(filters, "return_1y", f.return1yMin, f.return1yMax);
+  pushIfRange(filters, "return_3y", f.return3yMin, f.return3yMax);
+
+  // ── Analyst / Insider / Ownership (SERVER_SIDE — IB-L4) ──────────────────
+  // WHY analyst_target_price (not analyst_target): matches the exact column name
+  // in instrument_fundamentals_snapshot.
+  pushIfRange(filters, "analyst_target_price", f.analystTargetPriceMin, f.analystTargetPriceMax);
+  pushIfRange(filters, "analyst_consensus_rating", f.analystConsensusMin, f.analystConsensusMax);
+  pushIfRange(filters, "insider_net_buy_90d", f.insiderNetBuy90dMin, f.insiderNetBuy90dMax);
+  pushIfRange(filters, "institutional_ownership_pct", f.instOwnPctMin, f.instOwnPctMax);
+  pushIfRange(filters, "short_percent", f.shortPctMin, f.shortPctMax);
+
   // Sector filter: when sector is selected but no other metric filters are active
   // we still need to communicate the sector restriction. S3's sector field lives on
   // ScreenFilterRequest, so we attach it to the first filter or add a synthetic one.

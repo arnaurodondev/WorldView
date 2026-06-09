@@ -473,6 +473,18 @@ export interface GraphNode {
    *  Empty string for non-instrument entities (sectors, people, events).
    *  WHY needed: KG entity_id ≠ S3 instrument_id; ticker is the stable bridge. */
   ticker?: string;
+  // B-01 (Block I): enrichment fields forwarded from S7 EntitySummary.
+  // Used by EdgeDetailCard breadcrumb + node hover tooltip (acceptance checks 26/28).
+  /** Short description from S7 enrichment (Worker 13J). Null when not yet enriched. */
+  description?: string | null;
+  /** GICS sector string, e.g. "Technology", "Energy". Null for non-company entities. */
+  sector?: string | null;
+  /** Primary exchange code, e.g. "NASDAQ", "NYSE". Null for non-instrument entities. */
+  exchange?: string | null;
+  /** GICS industry sub-classification (finer than sector). */
+  industry?: string | null;
+  /** Market capitalisation in USD (raw number from S3/EODHD). */
+  market_cap?: number | null;
 }
 
 export interface GraphEdge {
@@ -488,6 +500,22 @@ export interface GraphEdge {
   relation_summary?: string | null;
   /** Top evidence text snippets (max 3, from relation_evidence_raw). */
   evidence_snippets?: string[];
+  // B-02 (Block I): decay_class drives edge opacity in the sigma edgeReducer.
+  // PERMANENT/DURABLE=1.0, SLOW/MEDIUM=0.7, FAST/EPHEMERAL=0.4.
+  /** Temporal decay class. Null when S7 omits it — frontend defaults to MEDIUM opacity. */
+  decay_class?: string | null;
+  /** Edge directionality relative to the center node: outbound | inbound | lateral. */
+  direction?: string;
+  /** ISO timestamp of the most recent evidence document for this relation. */
+  latest_evidence_at?: string | null;
+  /** Total count of evidence documents supporting this relation. */
+  evidence_count?: number | null;
+  /** ISO timestamp of when this relation was first established. */
+  valid_from?: string | null;
+  /** ISO timestamp of when this relation expired (null = still active). */
+  valid_to?: string | null;
+  /** True when the confidence score is older than 7 days and may be stale. */
+  confidence_stale?: boolean;
 }
 
 export interface EntityGraph {
@@ -782,6 +810,24 @@ export interface ScreenerResult {
   roe?: number | null;                 // return on equity (decimal)
   // PRD-0089 Wave I new columns — echoed by backend when filter is active (design §3.2)
   operating_margin?: number | null;    // operating margin TTM (decimal, e.g. 0.281 = 28.1%)
+  // IB-L3 — Returns + 52W distance (computed nightly at 02:00 UTC, stored as decimals)
+  // WHY decimals: backend stores 0.124 = +12.4%; multiply ×100 to display as percent
+  dist_from_52w_high_pct?: number | null; // distance from 52-week high (negative = below high)
+  dist_from_52w_low_pct?: number | null;  // distance from 52-week low (positive = above low)
+  return_1m?: number | null;    // 1-month total return (decimal)
+  return_3m?: number | null;    // 3-month total return (decimal)
+  return_6m?: number | null;    // 6-month total return (decimal)
+  return_ytd?: number | null;   // year-to-date return (decimal)
+  return_1y?: number | null;    // 1-year total return (decimal)
+  return_3y?: number | null;    // 3-year total return (decimal)
+  // IB-L4 — Analyst / Insider / Ownership
+  // WHY analyst_target_price separate from ANALYST UPSIDE: upside is derived
+  // client-side as (target / price) - 1; backend never exposes a pre-computed upside field.
+  analyst_target_price?: number | null;      // analyst consensus target price (USD)
+  analyst_consensus_rating?: number | null;  // 1-5 scale (5=strong buy, 1=strong sell)
+  insider_net_buy_90d?: number | null;       // net insider buy/sell in USD over 90 days (null ≠ $0)
+  institutional_ownership_pct?: number | null; // fraction 0–1 (multiply ×100 for display)
+  short_percent?: number | null;             // fraction 0–1 (multiply ×100 for display)
   [key: string]: unknown; // dynamic fields depending on screener config
 }
 
