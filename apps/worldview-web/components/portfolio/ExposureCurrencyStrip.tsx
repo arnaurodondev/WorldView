@@ -5,6 +5,17 @@
  * one compact row. Previous layout used a 120px ExposureStrip + separate card.
  * This 22px strip delivers the same information at 5× less vertical cost.
  *
+ * CELLS (PRD-0108 W3-T302 spec — exactly 5):
+ *  1. INV %  — net_exposure_pct (invested as % of total equity)
+ *  2. CASH $ — cash balance in portfolio currency
+ *  3. LEV ×  — leverage ratio (>1.0x = margin use)
+ *  4. β-ADJ  — beta-adjusted exposure: Σ(pos_value × beta) / total_value
+ *              Default beta=1.0 per position when not available → equals net_exposure_pct.
+ *              Accepted as optional prop because S1 /exposure endpoint does not
+ *              compute it server-side yet. The parent derives it from holdings when
+ *              instrument-level beta is available (EODHD Technicals).
+ *  5. CCY    — top-2 currency chips (optional, same pattern as β-ADJ)
+ *
  * CURRENCY EXPOSURE: accepts an optional `currencies` prop (array of
  * { code, pct } pairs sorted by weight desc) so the parent can surface the
  * book's currency mix inline. When not provided, the CCY section is omitted.
@@ -13,11 +24,13 @@
  * Keeping it optional lets the strip render correctly for portfolios where the
  * parent cannot yet derive this breakdown.
  *
- * WHO USES IT: app/(app)/portfolio/page.tsx directly above ConcentrationSectorTeaseStrip.
+ * WHO USES IT: features/portfolio/components/HoldingsTab.tsx directly above
+ * ConcentrationSectorTeaseStrip.
  * DATA SOURCE:
  *   - Exposure: GET /v1/portfolios/{id}/exposure → ExposureResponse (via useExposure hook)
+ *   - betaAdjExposure: optional prop from parent (computed from holdings × beta)
  *   - Currencies: optional prop from parent (derived from holdings if available)
- * DESIGN REFERENCE: PRD-0089 W2 §4.3, §6.1
+ * DESIGN REFERENCE: PRD-0089 W2 §4.3, §6.1; PRD-0108 W3-T302
  */
 "use client";
 // WHY "use client": uses TanStack Query hook (useExposure) which requires React context.
@@ -35,6 +48,19 @@ export interface CurrencyChip {
 interface ExposureCurrencyStripProps {
   portfolioId: string | null;
   /**
+   * Optional beta-adjusted exposure (0-1 fraction).
+   *
+   * Computed by the parent as: Σ(position_value × beta) / total_value
+   * where beta defaults to 1.0 for positions without an instrument-level beta.
+   *
+   * WHY optional (not self-fetching): S1 /exposure does not return a
+   * beta-adjusted figure. The parent must JOIN holdings with EODHD Technicals
+   * data (instrument beta) to derive this number. Keeping it optional ensures
+   * the strip renders correctly even when the parent has not computed it yet.
+   * When absent the cell shows "—" rather than a misleading placeholder.
+   */
+  betaAdjExposure?: number | null;
+  /**
    * Optional currency exposure breakdown, sorted by weight desc.
    * When provided, top 2 currencies are shown inline with a "+N more" chip
    * if there are more than 2. When absent, the CCY section is not rendered.
@@ -45,6 +71,7 @@ interface ExposureCurrencyStripProps {
 
 export function ExposureCurrencyStrip({
   portfolioId,
+  betaAdjExposure,
   currencies,
 }: ExposureCurrencyStripProps) {
   // useExposure calls useAuth() internally — no need to pass the token here.
@@ -65,25 +92,57 @@ export function ExposureCurrencyStrip({
         <span className="text-[11px] font-mono text-muted-foreground">—</span>
       ) : exposure ? (
         <>
-          {/* INV = invested amount; WHY show absolute + pct: traders need both the
-              $ amount to size new trades and the % for allocation math. net_exposure_pct
-              is a 0-1 fraction from the API — formatPercent multiplies by 100 internally. */}
+          {/* ── Cell 1: INV % ────────────────────────────────────────────────
+              Shows net_exposure_pct as the primary figure (PRD-0108 W3 spec:
+              "INV % — invested percentage = portfolio value / total equity").
+              net_exposure_pct is a 0-1 fraction from the API; formatPercent
+              multiplies by 100 internally.
+              WHY pct as primary (not $): the PRD-0108 redesign prioritises
+              allocation math — traders need to know what fraction of equity is
+              deployed at a glance, not the absolute dollar amount. */}
           <span className="font-mono text-[11px] tabular-nums text-foreground">
-            INV {formatPrice(exposure.invested)}
-            <span className="ml-1 text-muted-foreground">({formatPercent(exposure.net_exposure_pct)})</span>
+            INV {formatPercent(exposure.net_exposure_pct)}
           </span>
           <span className="text-[10px] text-muted-foreground">·</span>
+
+          {/* ── Cell 2: CASH $ ───────────────────────────────────────────────
+              Cash balance in portfolio currency. formatPrice formats with
+              currency symbol and thousands separator. */}
           <span className="font-mono text-[11px] tabular-nums text-foreground">
             CASH {formatPrice(exposure.cash)}
           </span>
           <span className="text-[10px] text-muted-foreground">·</span>
-          {/* LEV = leverage ratio; >1.0x indicates margin use (rare for cash accounts) */}
+
+          {/* ── Cell 3: LEV × ────────────────────────────────────────────────
+              Leverage ratio; >1.0x indicates margin use (rare for cash accounts).
+              toFixed(2) gives "1.00×" for unleveraged portfolios — matches
+              Bloomberg's LEV column convention. */}
           <span className="font-mono text-[11px] tabular-nums text-foreground">
             LEV {exposure.leverage.toFixed(2)}×
           </span>
+          <span className="text-[10px] text-muted-foreground">·</span>
 
-          {/* ── Currency chips — only rendered when parent supplies data ──── */}
-          {/* WHY gated on topCurrencies.length > 0: avoids an orphaned "CCY"
+          {/* ── Cell 4: β-ADJ ────────────────────────────────────────────────
+              Beta-adjusted exposure: Σ(position_value × beta) / total_value.
+              When betaAdjExposure prop is absent (parent hasn't computed it),
+              we render "—" rather than falling back to net_exposure_pct because
+              silently substituting a different metric would mislead traders into
+              thinking they're reading a beta-adjusted number when they're not.
+              WHY the label is "β-ADJ" not "BETA": the cell shows a portfolio-level
+              exposure figure (unitless ratio), not a per-stock beta coefficient. */}
+          <span className="font-mono text-[11px] tabular-nums text-foreground">
+            {/* Using data-testid for reliable test targeting (label text is
+                non-ASCII β which can have encoding issues in test matchers) */}
+            <span data-testid="cell-beta-adj">
+              β-ADJ{" "}
+              {betaAdjExposure != null
+                ? formatPercent(betaAdjExposure)
+                : "—"}
+            </span>
+          </span>
+
+          {/* ── Cell 5: CCY top-2 — only rendered when parent supplies data ──
+              WHY gated on topCurrencies.length > 0: avoids an orphaned "CCY"
               label when the parent hasn't computed the breakdown yet. */}
           {topCurrencies.length > 0 && (
             <>
