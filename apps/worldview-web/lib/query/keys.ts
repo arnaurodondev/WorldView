@@ -199,6 +199,16 @@ export const qk = {
       ["instruments", "detail", instrumentId, "multi-period-returns"] as const,
     priceLevels: (instrumentId: string) =>
       ["instruments", "detail", instrumentId, "price-levels"] as const,
+    // T-03 W3: institutional + fund holders for Financials tab tables.
+    // WHY nested under "instruments","detail",id: the standard cascade lets
+    // qk.instruments.detail(id) invalidation clear these together with the
+    // main fundamentals when a background refresh runs.
+    // WHY NOT `insiderTxns`: Δ21 — reuse qk.instruments.ownership(id) which
+    // is already seeded by the page bundle (no new key = no cache split).
+    institutionalHolders: (instrumentId: string) =>
+      ["instruments", "detail", instrumentId, "institutional-holders"] as const,
+    fundHolders: (instrumentId: string) =>
+      ["instruments", "detail", instrumentId, "fund-holders"] as const,
   },
 
   // ── Knowledge Graph domain ────────────────────────────────────────────────
@@ -409,6 +419,19 @@ export const qk = {
     all: ["user"] as const,
     profile: () => ["user", "profile"] as const,
     notificationPrefs: () => ["user", "notification-prefs"] as const,
+  },
+
+  // ── Shell (TopBar IndexStrip) ─────────────────────────────────────────────
+  // WHY a dedicated shell.* namespace (not nested under instruments.*):
+  // The IndexStrip fetches a fixed 10-ticker manifest — the cache should be
+  // invalidated independently of per-instrument instrument-detail queries.
+  // Using a top-level namespace also makes it easy to pause/invalidate all
+  // shell data on idle-lock without touching the full instruments cache.
+  shell: {
+    // Resolved entity IDs for the 10 IndexStrip tickers (stable; 30min stale).
+    indexResolveIds: () => ["shell", "index", "resolve"] as const,
+    // Live batch quotes for the 10 IndexStrip tickers (0ms stale; 15s refetch).
+    indexQuotes: () => ["shell", "index", "quotes"] as const,
   },
 } as const;
 

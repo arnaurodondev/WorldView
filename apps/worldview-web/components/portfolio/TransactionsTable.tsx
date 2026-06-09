@@ -633,7 +633,7 @@ export function TransactionsTable({
                     <tr
                       key={tx.transaction_id}
                       className={cn(
-                        "h-[22px] border-b border-white/[0.06]",
+                        "h-[22px] border-b border-border",
                         isPlaceholder && "text-muted-foreground/50",
                       )}
                     >

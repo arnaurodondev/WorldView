@@ -13,8 +13,9 @@
  *
  * WHO USES IT: components/shell/CollapsibleSidebar.tsx (expanded state only)
  * DATA SOURCE: S9 GET /v1/watchlists → first watchlist members →
- *              POST /v1/quotes/batch (entity IDs)
- * DESIGN REFERENCE: PRD-0031 §4.3 Sidebar WatchlistPanel
+ *              POST /v1/quotes/batch (entity IDs) +
+ *              POST /v1/ohlcv/batch (Sparkline data per FU-4.1 / C-13)
+ * DESIGN REFERENCE: PRD-0089 W1 §4.5 WatchlistPanel updates
  */
 
 "use client";
@@ -27,6 +28,8 @@ import { useRouter } from "next/navigation";
 import { createGateway } from "@/lib/gateway";
 import { useAuth } from "@/hooks/useAuth";
 import { priceChangeClass, formatPercentDirect, cn } from "@/lib/utils";
+// PRD-0089 W1 §4.5 — Sparkline column uses the F1 primitive (3-state trend per FU-5.6).
+import { Sparkline } from "@/components/primitives/Sparkline";
 import type { WatchlistMember } from "@/types/api";
 
 // ── Constants ─────────────────────────────────────────────────────────────────
@@ -140,6 +143,40 @@ export function WatchlistPanel() {
   const displayMembers = members.slice(0, MAX_ROWS);
   const extraCount = Math.max(0, members.length - MAX_ROWS);
 
+  // ── Sparkline data (PRD-0089 W1 §4.5 / C-13 / FU-4.1) ──────────────────
+  // WHY POST /v1/ohlcv/batch (not intraday): the intraday endpoint was an
+  // interim design choice. C-13 locks the sparkline source to getBatchOhlcvBars
+  // with 5m timeframe and 78 bars (≈ 6.5h = one trading session). This gives
+  // accurate intraday trend without a separate dedicated endpoint.
+  // WHY instrument_id (not ticker): ohlcv/batch requires instrument UUIDs.
+  // WHY 60s staleTime + 60s refetch: sparkline trend direction doesn't need
+  // 30s price refresh granularity; 60s keeps server load reasonable for a
+  // sidebar widget that's always visible during market hours.
+  const { data: ohlcvData } = useQuery({
+    // WHY inline key (not qk.instruments.ohlcvBatch): the plan says to share
+    // qk.instruments.ohlcvBatch once it exists in the key factory. We define
+    // the watchlist-scoped key here for now so the query is easily identifiable
+    // in DevTools without conflicting with other batch queries.
+    queryKey: ["watchlist-sidebar-sparklines", [...memberIds].sort()],
+    queryFn: () =>
+      createGateway(accessToken).getBatchOhlcvBars({
+        instrument_ids: memberIds,
+        timeframe: "5m",
+        limit: 78, // 78 × 5m = 390 min ≈ 6.5h (one full trading session)
+      }),
+    enabled: memberIds.length > 0 && !!accessToken,
+    staleTime: 60_000,
+    refetchInterval: 60_000,
+  });
+
+  // Build a map from instrument_id → close price array for Sparkline primitive.
+  // WHY close prices: sparkline represents intraday trend; close-of-period is
+  // the canonical value for each 5-minute bar.
+  const sparklineData: Record<string, number[]> = {};
+  for (const result of ohlcvData?.results ?? []) {
+    sparklineData[result.instrument_id] = result.bars.map((b) => b.close);
+  }
+
   return (
     <div className="flex flex-col overflow-hidden">
       {/* ── Section header ────────────────────────────────────────────────── */}
@@ -198,9 +235,10 @@ export function WatchlistPanel() {
                     {wl.name}
                   </button>
                 ))}
-                {/* Manage link — navigates to full watchlist management in Portfolio */}
+                {/* Manage link — navigates to the new first-class /watchlists page (C-09).
+                    WHY /watchlists (not /portfolio?tab=watchlists): FU-4.2 lock. */}
                 <button
-                  onClick={() => { setDropdownOpen(false); router.push("/portfolio?tab=watchlists"); }}
+                  onClick={() => { setDropdownOpen(false); router.push("/watchlists"); }}
                   className="w-full border-t border-border px-2 py-1 text-left text-[10px] text-muted-foreground hover:text-foreground transition-colors duration-0"
                 >
                   Manage watchlists →
@@ -212,37 +250,70 @@ export function WatchlistPanel() {
       </div>
 
       {/* ── Symbol rows ───────────────────────────────────────────────────── */}
-      {/* WHY divide-y divide-border/30: lightweight row separation without the
+      {/*
+       * WHY data-table-grid: the F1 `data-table-grid` attribute triggers the
+       * `--row-h: 20px` CSS custom property from globals.css, locking every
+       * descendant row to exactly 20px. Without this attribute, custom h-[22px]
+       * classes drift from the F1 row-height token (C-01 fix).
+       * WHY divide-y divide-border/30: lightweight row separation without the
        * visual weight of a full border-border row divider. /30 keeps the separator
-       * nearly invisible but still provides the row boundary cue. */}
-      <div className="overflow-y-auto divide-y divide-border/30">
+       * nearly invisible but still provides the row boundary cue.
+       */}
+      <div data-table-grid className="overflow-y-auto divide-y divide-border/30">
         {displayMembers.length === 0 ? (
           // ── Empty state: short inline text per §0.5 ────────────────────────
+          // WHY updated link target (/watchlists not /portfolio?tab=watchlists):
+          // C-09 / FU-4.2 — the watchlists route is now a first-class page.
           <p className="px-2 py-1 text-[11px] text-muted-foreground">
-            Add symbols in Portfolio → Watchlists
+            Add symbols in{" "}
+            <button
+              onClick={() => router.push("/watchlists")}
+              className="text-primary hover:underline"
+            >
+              Watchlists
+            </button>
           </p>
         ) : (
           displayMembers.map((member) => {
             const quote = quotes[member.instrument_id ?? ""];
+            // WHY sparklinePoints from sparklineData: the Sparkline primitive needs
+            // a number[] of close prices. Empty array → Sparkline renders a flat
+            // dashed line (the "no data" state defined in the primitive).
+            const sparklinePoints = sparklineData[member.instrument_id ?? ""] ?? [];
+
             return (
-              // WHY h-[22px]: §0.2 data table row height — 22px compact row standard.
-              // WHY cursor-pointer + hover:bg-muted/40: row is clickable — navigates
-              // to the instrument detail page.
+              /*
+               * WHY h-[20px] (was h-[22px]):
+               * The data-table-grid attribute sets --row-h=20px; we must keep
+               * explicit h-[20px] here to match the token. F1 C-01 locks watchlist
+               * rows to 20px (same as data table rows) for visual consistency with
+               * the Holdings table and screener rows elsewhere.
+               *
+               * WHY click to /instruments/${member.ticker}:
+               * C-08 / F2 lock — all instrument navigation uses ticker symbols, not
+               * entity_ids. entity_id is a knowledge-graph concept; the instrument
+               * detail page routes by ticker (e.g. /instruments/AAPL).
+               */
               <div
                 key={member.entity_id}
-                className="flex h-[22px] items-center cursor-pointer px-2 hover:bg-muted/40"
-                onClick={() => router.push(`/instruments/${member.entity_id}`)}
+                className="flex h-[20px] items-center cursor-pointer px-2 hover:bg-muted/40"
+                onClick={() => {
+                  // WHY ?? member.entity_id: graceful fallback when ticker is missing.
+                  // In practice all watchlist members have tickers, but the type
+                  // allows null for imported entities without a market ticker.
+                  router.push(`/instruments/${member.ticker ?? member.entity_id}`);
+                }}
                 aria-label={`${member.ticker ?? member.entity_id} — view instrument detail`}
               >
-                {/* Ticker — 40px fixed, mono for column alignment */}
-                <span className="w-[40px] shrink-0 font-mono text-[11px] tabular-nums text-foreground truncate">
+                {/* Ticker — 44px fixed, mono for column alignment (plan §4.5) */}
+                <span className="w-[44px] shrink-0 font-mono text-[11px] tabular-nums text-foreground truncate">
                   {member.ticker ?? member.entity_id.slice(0, 6)}
                 </span>
-                {/* Price — right-aligned, mono; "—" when quote not yet loaded */}
+                {/* Price — flex-1 right-aligned, mono; "—" when quote not yet loaded */}
                 <span className="flex-1 text-right font-mono text-[11px] tabular-nums text-foreground">
                   {quote != null ? quote.price.toFixed(2) : "—"}
                 </span>
-                {/* Change% — colored by sign per §0.4 Color Discipline */}
+                {/* Change% — 44px, colored by sign per design token §0.4 */}
                 <span
                   className={`w-[44px] shrink-0 text-right font-mono text-[11px] tabular-nums ${
                     quote != null
@@ -252,15 +323,33 @@ export function WatchlistPanel() {
                 >
                   {quote != null ? formatPercentDirect(quote.change_pct) : "—"}
                 </span>
+                {/*
+                 * Sparkline column — 40×16 trend-tinted SVG (F1 primitive).
+                 * WHY trend="auto": the Sparkline primitive computes direction from
+                 * first-vs-last delta with a ±0.1% deadband. This is the FU-5.6
+                 * 3-state (positive/negative/flat) locked decision.
+                 * WHY 40×16: plan §4.5 fixed dimensions for all watchlist sparklines.
+                 * WHY no aria-label here: the parent div already has a full aria-label.
+                 */}
+                <div className="ml-1 shrink-0 flex items-center">
+                  <Sparkline
+                    data={sparklinePoints}
+                    width={40}
+                    height={16}
+                    trend="auto"
+                  />
+                </div>
               </div>
             );
           })
         )}
 
-        {/* ── Overflow link — "+N more →" ───────────────────────────────── */}
+        {/* ── Overflow link — "+N more →" ─────────────────────────────────
+            WHY /watchlists (not /portfolio?tab=watchlists): C-09 / FU-4.2 lock.
+            The watchlists management page is now a first-class route. */}
         {extraCount > 0 && (
           <button
-            onClick={() => router.push("/portfolio?tab=watchlists")}
+            onClick={() => router.push("/watchlists")}
             className="w-full px-2 py-0.5 text-left text-[10px] text-muted-foreground hover:text-foreground transition-colors duration-0"
           >
             +{extraCount} more →
