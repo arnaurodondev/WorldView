@@ -596,6 +596,18 @@ function EquityCurveCanvas({
 
   return (
     <div className="relative flex-1 min-h-[180px]">
+      {/* Y-axis label overlaid on the canvas corner — lightweight-charts owns
+          the canvas element and cannot render HTML natively, so we position
+          this span absolutely over the chart container. aria-hidden because
+          the chart's own aria-label already describes the data; this label is
+          a purely visual aid for sighted users. pointer-events-none so the
+          chart's crosshair/pan interactions aren't interrupted. */}
+      <span
+        className="absolute top-0.5 left-1 z-10 text-[9px] text-muted-foreground pointer-events-none"
+        aria-hidden="true"
+      >
+        Value ($)
+      </span>
       <div
         ref={containerRef}
         className="h-full w-full"
