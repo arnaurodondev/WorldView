@@ -41,19 +41,23 @@ vi.mock("@/hooks/useAuth", () => ({
 }));
 
 // ── Gateway mock ───────────────────────────────────────────────────────────────
-// WHY searchInstruments returns id === ticker: the test fixtures key quotes by
-// ticker symbol so using ticker-as-id keeps the lookup consistent across tests.
+// WHY resolveTickersBatch returns ticker === id: the component (post-PLAN-0099-W4
+// refactor) uses resolveTickersBatch (not searchInstruments) for one-shot batch
+// resolution. The test fixtures key quotes by ticker symbol, so returning the
+// ticker itself as the instrument_id keeps the two-step lookup consistent.
 const mockGetBatchQuotes = vi.fn();
-const mockSearchInstruments = vi.fn().mockImplementation((ticker: string) =>
-  Promise.resolve({
-    results: [{ instrument_id: ticker, ticker, name: ticker, exchange: "US", entity_id: ticker }],
-  })
-);
+const mockResolveTickersBatch = vi.fn().mockImplementation((tickers: string[]) => {
+  // Return each ticker mapped to itself — the test fixtures use ticker symbols
+  // as quote keys, so ticker-as-id keeps the quotes[instrumentId] lookup correct.
+  const map: Record<string, string | null> = {};
+  tickers.forEach((t) => { map[t] = t; });
+  return Promise.resolve(map);
+});
 
 vi.mock("@/lib/gateway", () => ({
   createGateway: vi.fn(() => ({
     getBatchQuotes: mockGetBatchQuotes,
-    searchInstruments: mockSearchInstruments,
+    resolveTickersBatch: mockResolveTickersBatch,
     refreshToken: vi.fn().mockResolvedValue({
       access_token: "test-token",
       user: { user_id: "u1", tenant_id: "t1", email: "t@e.com", name: "T", avatar_url: null },
@@ -116,6 +120,12 @@ const { TopBarMarquee } = await import("@/components/shell/TopBarMarquee");
 describe("TopBarMarquee", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    // Re-apply default implementation after clearAllMocks resets it.
+    mockResolveTickersBatch.mockImplementation((tickers: string[]) => {
+      const map: Record<string, string | null> = {};
+      tickers.forEach((t) => { map[t] = t; });
+      return Promise.resolve(map);
+    });
   });
 
   it("renders ticker symbols and prices after data loads", async () => {
