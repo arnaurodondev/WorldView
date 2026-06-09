@@ -51,15 +51,18 @@ function hhiClass(hhi: number): HhiClass {
 /**
  * hhiBadgeClasses — maps HHI class to Tailwind color tokens.
  * WHY inline map (not switch): readability + exhaustiveness at call site.
- * WHY these colors:
- *   - low     → emerald (positive / safe) consistent with gain color tokens
- *   - moderate → amber  (caution) consistent with alert WARNING tokens
- *   - high    → rose    (danger)  consistent with alert CRITICAL tokens
+ * WHY design-system tokens (positive/warning/negative) not bare color names:
+ *   The no-off-palette-colors architecture test forbids bare Tailwind palette
+ *   names (emerald/amber/rose). Design tokens are theme-aware and survive
+ *   dark-mode changes without code changes (ADR-F-15).
+ *   - low      → positive (safe / gain green)
+ *   - moderate → warning  (caution amber)
+ *   - high     → negative (danger red)
  */
 const HHI_BADGE_CLASSES: Record<HhiClass, string> = {
-  low: "bg-emerald-500/15 text-emerald-400 border border-emerald-500/30",
-  moderate: "bg-amber-500/15 text-amber-400 border border-amber-500/30",
-  high: "bg-rose-500/15 text-rose-400 border border-rose-500/30",
+  low: "bg-positive/15 text-positive border border-positive/30",
+  moderate: "bg-warning/15 text-warning border border-warning/30",
+  high: "bg-negative/15 text-negative border border-negative/30",
 };
 
 export function ConcentrationSectorTeaseStrip({
@@ -109,7 +112,7 @@ export function ConcentrationSectorTeaseStrip({
                   Bloomberg-style data-dense look; a slight corner radius is softer
                   than square but less playful than full-pill. */}
               <span
-                className={`inline-flex items-center rounded-[3px] px-1 py-[1px] text-[9px] font-semibold uppercase leading-none ${HHI_BADGE_CLASSES[hhiClass(conc.hhi)]}`}
+                className={`inline-flex items-center rounded-[2px] px-1 py-[1px] text-[9px] font-semibold uppercase leading-none ${HHI_BADGE_CLASSES[hhiClass(conc.hhi)]}`}
                 // WHY data-testid: Vitest tests select by this attribute to avoid
                 // coupling to presentation text that might be internationalized.
                 data-testid="hhi-badge"
