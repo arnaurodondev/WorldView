@@ -33,6 +33,13 @@ vi.mock("@/contexts/AlertStreamContext", () => ({
   AlertStreamProvider: ({ children }: { children: ReactNode }) => children,
 }));
 
+// ── useAboveFoldReady mock — return true immediately so the query is enabled ──
+// WHY: useAboveFoldReady uses requestAnimationFrame which never fires in jsdom.
+// Without this mock the query stays disabled and waitFor times out (1s).
+vi.mock("@/hooks/useAboveFoldReady", () => ({
+  useAboveFoldReady: vi.fn(() => true),
+}));
+
 // ── Auth mock ─────────────────────────────────────────────────────────────────
 vi.mock("@/hooks/useAuth", () => ({
   useAuth: vi.fn(() => ({
