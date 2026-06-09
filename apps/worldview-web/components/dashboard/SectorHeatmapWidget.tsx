@@ -64,11 +64,10 @@ type SectorPeriod = "1D" | "1W" | "1M";
 const MIN_WEIGHT = 0.05;
 
 /**
- * TILE_HEIGHT_PX — fixed tile height. Locked at 56px so wrap rows are
- * predictable and the widget fits within Row 2's 130px allowance even when
- * 11 sectors wrap into 2 rows.
+ * TILE_HEIGHT_PX — fixed tile height. 40px keeps tiles compact while still
+ * fitting both label and % change on two lines at 10px/9px font sizes.
  */
-const TILE_HEIGHT_PX = 56;
+const TILE_HEIGHT_PX = 40;
 
 /**
  * GAP_PX — flex gap between tiles. We subtract this from `flex-basis` below
@@ -276,7 +275,7 @@ export function SectorHeatmapWidget() {
               // Equal-width skeletons (1/8 ≈ 12.5%) approximate the loaded
               // layout closely enough that there is no visible jump when
               // real tiles render.
-              className="min-h-[56px]"
+              className="min-h-[40px]"
               style={{
                 height: `${TILE_HEIGHT_PX}px`,
                 flexBasis: `calc(${100 / 8}% - ${GAP_PX}px)`,
@@ -386,7 +385,7 @@ function SectorTile({
           className={cn(
             // Base layout: vertical stack, centred horizontally, vertically
             // centred on a fixed-height tile.
-            "flex min-h-[56px] flex-col items-center justify-center px-1",
+            "flex min-h-[40px] flex-col items-center justify-center gap-0 px-1",
             // Color encoding: bg-positive/N or bg-negative/N at 4 magnitude steps.
             colorClassFor(changePct),
             // Foreground colour: kept neutral so the *background* tint carries
@@ -408,13 +407,13 @@ function SectorTile({
           {/* WHY font-semibold (was font-bold): 700-weight at 11px causes blotchy subpixel
               rendering on dark themes — 600-weight is the maximum for terminal chrome text
               at small sizes (Bloomberg density rule) */}
-          <span className="w-full truncate text-center font-mono text-[11px] font-semibold uppercase tabular-nums">
+          <span className="w-full truncate text-center font-mono text-[10px] font-semibold uppercase tabular-nums">
             {abbreviation}
           </span>
-          {/* Bottom line — % change. text-[10px] keeps it secondary to the
+          {/* Bottom line — % change. text-[9px] keeps it secondary to the
               sector identifier, but font-mono + tabular-nums ensure the digits
               align across tiles (the trader's eye scans these as a column). */}
-          <span className="font-mono text-[10px] tabular-nums">
+          <span className="font-mono text-[9px] tabular-nums">
             {changePct === null
               ? "—"
               : `${changePct >= 0 ? "+" : ""}${changePct.toFixed(2)}%`}
