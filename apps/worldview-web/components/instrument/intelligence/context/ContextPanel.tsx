@@ -41,6 +41,9 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { cn } from "@/lib/utils";
 import { NodeDetailCard } from "./NodeDetailCard";
 import { RelationsList } from "./RelationsList";
+import { EdgeDetailCard } from "./EdgeDetailCard";
+import { ContradictionsBlock } from "./ContradictionsBlock";
+import { NarrativeHistoryDisclosure } from "./NarrativeHistoryDisclosure";
 import type { EntityGraph, GraphEdge, GraphNode } from "@/types/api";
 
 /**
@@ -62,6 +65,15 @@ export interface ContextPanelProps {
   /** Clears the selection (sets selectedNodeId back to null), returning the
    *  panel to entity-overview mode. Called by NodeDetailCard's Back button. */
   onClearSelection: () => void;
+  /** The edge id that was clicked in the graph (T-27, Block I).
+   *  When set, the panel renders EdgeDetailCard (third mode) instead of the
+   *  entity-overview or node-detail views. */
+  selectedEdgeId?: string | null;
+  /** Clears the edge selection, returning to entity-overview mode. */
+  onClearEdgeSelection?: () => void;
+  /** Currently active graph depth — used by EdgeDetailCard to locate the
+   *  correct TanStack Query cache slot. Defaults to 2. */
+  graphDepth?: number;
   /** Optional class override (used by parent layout for width / borders). */
   className?: string;
 }
@@ -106,6 +118,9 @@ export function ContextPanel({
   entityId,
   selectedNodeId,
   onClearSelection,
+  selectedEdgeId = null,
+  onClearEdgeSelection,
+  graphDepth = 2,
   className,
 }: ContextPanelProps) {
   const { accessToken } = useAuth();
@@ -219,6 +234,29 @@ export function ContextPanel({
     );
   }
 
+  // ── Edge-detail mode (Block I T-26/T-27) ────────────────────────────────
+  // WHY check selectedEdgeId before selectedNodeId: clicking an edge fires
+  // onEdgeSelect which also clears selectedNodeId. If we checked node first,
+  // the edge-detail mode would never render (nodeId is already null).
+  if (selectedEdgeId) {
+    return (
+      <section
+        className={cn("flex flex-col h-full overflow-y-auto", className)}
+        aria-label="Edge detail"
+      >
+        <EdgeDetailCard
+          edgeId={selectedEdgeId}
+          entityId={entityId}
+          graphDepth={graphDepth}
+          onClose={() => {
+            if (onClearEdgeSelection) onClearEdgeSelection();
+            onClearSelection();
+          }}
+        />
+      </section>
+    );
+  }
+
   // ── Node-detail mode ─────────────────────────────────────────────────────
   // WHY check selectedNode (not selectedNodeId): if the user clicked a node
   // that has since been removed from the graph (rare, but possible after a
@@ -305,6 +343,22 @@ export function ContextPanel({
       <p className="text-[11px] text-foreground/80 leading-relaxed">
         {entity.description ?? "No description available."}
       </p>
+
+      {/* ── Contradictions (Block I, T-12) ──────────────────────────────────
+          WHY here (not a separate panel): the right rail is vertically
+          stacked; contradictions follow the entity overview per W7 §1 check 12. */}
+      <div className="border-t border-border/40 pt-2">
+        <p className="text-[9px] font-mono uppercase tracking-wider text-muted-foreground mb-1.5">
+          Contradictions
+        </p>
+        <ContradictionsBlock entityId={entityId} limit={5} />
+      </div>
+
+      {/* ── Narrative history (Block I, T-13) ──────────────────────────────
+          Collapsed accordion — satisfies W7 §1 check 13. */}
+      <div className="border-t border-border/40 pt-1">
+        <NarrativeHistoryDisclosure entityId={entityId} />
+      </div>
     </section>
   );
 }

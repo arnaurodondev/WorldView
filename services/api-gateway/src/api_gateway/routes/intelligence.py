@@ -66,11 +66,12 @@ def _transform_graph_response(raw: dict[str, Any]) -> dict[str, Any]:
                 # WHY ticker: PeerComparisonPanel needs ticker to look up S3
                 # fundamentals (entity_id ≠ instrument_id; resolved by ticker).
                 "ticker": center.get("ticker") or "",
-                # B-01 (Block I T-25): description and sector are optional fields
-                # from S7 EntitySummary. Included here so the frontend type contract
-                # is stable — InlineSelectionPanel may render them if present.
+                # B-01 (Block I T-25): description, sector, and exchange are optional
+                # fields from S7 EntitySummary. Included here so the frontend type
+                # contract is stable — NodeHoverTooltip and EdgeDetailCard use them.
                 "description": center.get("description") or None,
                 "sector": center.get("sector") or None,
+                "exchange": center.get("exchange") or None,
                 # T-A-1-03 (PLAN-0091): from canonical_entities.metadata JSONB via S7.
                 "industry": center.get("industry") or None,
                 "market_cap": center.get("market_cap") or None,
@@ -88,9 +89,10 @@ def _transform_graph_response(raw: dict[str, Any]) -> dict[str, Any]:
                 "type": entity_data.get("entity_type") or "unknown",
                 "size": 1,
                 "ticker": entity_data.get("ticker") or "",
-                # B-01: description and sector forwarded if S7 provides them.
+                # B-01: description, sector, and exchange forwarded if S7 provides them.
                 "description": entity_data.get("description") or None,
                 "sector": entity_data.get("sector") or None,
+                "exchange": entity_data.get("exchange") or None,
                 # T-A-1-03 (PLAN-0091): industry + market_cap from S7 EntitySummary.
                 "industry": entity_data.get("industry") or None,
                 "market_cap": entity_data.get("market_cap") or None,

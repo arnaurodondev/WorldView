@@ -59,9 +59,13 @@ export interface GraphColumnProps {
   entityId: string;
   selectedNodeId: string | null;
   onNodeSelect: (nodeId: string | null) => void;
+  /** Optional callback for edge-click events (Block I T-27).
+   *  When provided, a clicked edge fires onEdgeSelect(edgeId) and the parent
+   *  IntelligenceTab switches the right panel to EdgeDetailCard mode. */
+  onEdgeSelect?: (edgeId: string) => void;
 }
 
-export function GraphColumn({ entityId, selectedNodeId, onNodeSelect }: GraphColumnProps) {
+export function GraphColumn({ entityId, selectedNodeId, onNodeSelect, onEdgeSelect }: GraphColumnProps) {
   const { accessToken } = useAuth();
   const [depth, setDepth] = useState<number>(2);
   const [typeFilters, setTypeFilters] = useState<string[]>([]);
@@ -217,7 +221,12 @@ export function GraphColumn({ entityId, selectedNodeId, onNodeSelect }: GraphCol
         {/* Normal graph render */}
         {!graphLoading && !isTimeout && hasGraph && (
           <EntityGraphErrorBoundary>
-            <EntityGraph data={filteredGraph} centerEntityId={entityId} onNodeClick={handleNodeClick} />
+            <EntityGraph
+              data={filteredGraph}
+              centerEntityId={entityId}
+              onNodeClick={handleNodeClick}
+              onEdgeClick={onEdgeSelect}
+            />
           </EntityGraphErrorBoundary>
         )}
       </div>

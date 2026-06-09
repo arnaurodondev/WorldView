@@ -83,9 +83,13 @@ interface GraphEventsProps {
   onEdgeHover: (tooltip: EdgeTooltip | null) => void;
   onNodeClick?: (nodeId: string, label: string, nodeType: string, degree: number,
     edges: Array<{label: string; weight: number; neighborId: string; neighborLabel: string}>) => void;
+  /** Block I T-27: fires when the user clicks a graph edge.
+   *  edgeId is the graphology internal edge key (same as GraphEdge.id from the
+   *  API response — GraphLoader sets it via graph.addEdgeWithKey(edge.id, …)). */
+  onEdgeClick?: (edgeId: string) => void;
 }
 
-export function GraphEvents({ centerEntityId, onNodeHover, onEdgeHover, onNodeClick }: GraphEventsProps) {
+export function GraphEvents({ centerEntityId, onNodeHover, onEdgeHover, onNodeClick, onEdgeClick }: GraphEventsProps) {
   const sigma = useSigma();
   const registerEvents = useRegisterEvents();
   const router = useRouter();
@@ -122,8 +126,16 @@ export function GraphEvents({ centerEntityId, onNodeHover, onEdgeHover, onNodeCl
           router.push(`/instruments/${node}`);
         }
       },
+      // WHY clickEdge (Block I T-27): edge clicks open EdgeDetailCard in the
+      // right rail. The edge key in graphology is set to edge.id from the API
+      // payload (see GraphLoader.addEdgeWithKey), so sigma's edge key == API edge id.
+      clickEdge: ({ edge }) => {
+        if (onEdgeClick) {
+          onEdgeClick(edge);
+        }
+      },
     });
-  }, [registerEvents, sigma, router, centerEntityId, onNodeHover, onEdgeHover, onNodeClick]);
+  }, [registerEvents, sigma, router, centerEntityId, onNodeHover, onEdgeHover, onNodeClick, onEdgeClick]);
 
   return null;
 }

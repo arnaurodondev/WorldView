@@ -113,9 +113,12 @@ export interface EntityGraphProps {
     degree: number,
     edges: Array<{ label: string; weight: number; neighborId: string; neighborLabel: string }>,
   ) => void;
+  /** Block I T-27: optional edge-click callback. When provided, clicking a graph
+   *  edge fires this handler with the API-level edge id (GraphEdge.id). */
+  onEdgeClick?: (edgeId: string) => void;
 }
 
-export function EntityGraph({ data, centerEntityId, onNodeClick }: EntityGraphProps) {
+export function EntityGraph({ data, centerEntityId, onNodeClick, onEdgeClick }: EntityGraphProps) {
   const [nodeTooltip, setNodeTooltip] = useState<NodeTooltip | null>(null);
   const [edgeTooltip, setEdgeTooltip] = useState<EdgeTooltip | null>(null);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -220,6 +223,7 @@ export function EntityGraph({ data, centerEntityId, onNodeClick }: EntityGraphPr
             onNodeHover={handleNodeHover}
             onEdgeHover={handleEdgeHover}
             onNodeClick={onNodeClick}
+            onEdgeClick={onEdgeClick}
           />
           <FilterController
             activeRelFilter={activeRelFilter}

@@ -65,6 +65,14 @@ export function IntelligenceTab({ entityId }: IntelligenceTabProps) {
   // and "node detail" modes. Lifting selection up to the smallest common
   // parent keeps the two children in sync without a context provider.
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
+  // ── selectedEdgeId (Block I T-27) ────────────────────────────────────────
+  // WHY lifted here (not in ContextPanel or GraphColumn): the edge selection
+  // must be visible to both the graph (to highlight the clicked edge) and the
+  // right panel (to render EdgeDetailCard). IntelligenceTab is the smallest
+  // common parent for both children.
+  // Clicking an edge also clears the node selection so the panel switches to
+  // edge-detail mode (not node-detail + edge-detail simultaneously).
+  const [selectedEdgeId, setSelectedEdgeId] = useState<string | null>(null);
 
   // PLAN-0099 H: fire the composite bundle ONCE on tab mount. The hook's
   // useEffect side-effect hydrates per-widget TanStack caches via
@@ -103,7 +111,19 @@ export function IntelligenceTab({ entityId }: IntelligenceTabProps) {
         <GraphColumn
           entityId={entityId}
           selectedNodeId={selectedNodeId}
-          onNodeSelect={setSelectedNodeId}
+          onNodeSelect={(nodeId) => {
+            setSelectedNodeId(nodeId);
+            // WHY clear edge when a node is selected: the two selection modes
+            // are mutually exclusive. Clicking a node should dismiss any open
+            // EdgeDetailCard and show NodeDetailCard instead.
+            setSelectedEdgeId(null);
+          }}
+          onEdgeSelect={(edgeId) => {
+            setSelectedEdgeId(edgeId);
+            // WHY clear node: edge-detail mode and node-detail mode are mutually
+            // exclusive. Clicking an edge dismisses the open NodeDetailCard.
+            setSelectedNodeId(null);
+          }}
         />
       </div>
 
@@ -119,7 +139,12 @@ export function IntelligenceTab({ entityId }: IntelligenceTabProps) {
         <ContextPanel
           entityId={entityId}
           selectedNodeId={selectedNodeId}
-          onClearSelection={() => setSelectedNodeId(null)}
+          onClearSelection={() => {
+            setSelectedNodeId(null);
+            setSelectedEdgeId(null);
+          }}
+          selectedEdgeId={selectedEdgeId}
+          onClearEdgeSelection={() => setSelectedEdgeId(null)}
         />
       </div>
     </div>
