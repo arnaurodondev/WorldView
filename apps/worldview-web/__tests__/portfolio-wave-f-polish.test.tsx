@@ -330,9 +330,11 @@ describe("Wave F · F-P-025 · Sort persisted to URL", () => {
     );
 
     // After mount the active sort should be PNL (visible as the column with
-    // text-primary class). We assert by verifying the P&L $ header renders
+    // text-primary class). We assert by verifying the UNREAL $ header renders
     // the sort indicator (▲ for asc).
-    const pnlHeader = screen.getByText("P&L $").parentElement;
+    // WHY "UNREAL $" (not "P&L $"): the column was renamed in PLAN-0108 W4 to
+    // "UNREAL $" to make it clear this is unrealised P&L (colId stays "pnl").
+    const pnlHeader = screen.getByText("UNREAL $").parentElement;
     // The indicator span carries " ▲" — assert that text is present in the
     // header cell when the URL drives PNL/ASC.
     expect(pnlHeader?.textContent).toContain("▲");
