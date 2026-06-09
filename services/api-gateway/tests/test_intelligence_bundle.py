@@ -106,7 +106,9 @@ async def test_bundle_happy_path_returns_all_legs(authed_app, authed_mock_client
     # dispatches by path; both receive the same _GRAPH_RAW_PAYLOAD which is
     # adequate for unit-testing the merge without distinct fixtures.
 
-    async def _kg_get(path: str, *, params: dict | None = None, headers: dict | None = None) -> MagicMock:
+    async def _kg_get(
+        path: str, *, params: dict | None = None, headers: dict | None = None, timeout: float | None = None
+    ) -> MagicMock:
         if path == f"/api/v1/entities/{_ENTITY_UUID}":
             return _mock_response(200, _DETAIL_PAYLOAD)
         if path == f"/api/v1/entities/{_ENTITY_UUID}/graph":
@@ -117,7 +119,9 @@ async def test_bundle_happy_path_returns_all_legs(authed_app, authed_mock_client
             return _mock_response(200, _INTEL_PAYLOAD)
         return _mock_response(404)
 
-    async def _rag_get(path: str, *, params: dict | None = None, headers: dict | None = None) -> MagicMock:
+    async def _rag_get(
+        path: str, *, params: dict | None = None, headers: dict | None = None, timeout: float | None = None
+    ) -> MagicMock:
         if path == f"/api/v1/briefings/instrument/{_ENTITY_UUID}":
             return _mock_response(200, _BRIEF_PAYLOAD)
         return _mock_response(404)
@@ -159,7 +163,9 @@ async def test_bundle_happy_path_returns_all_legs(authed_app, authed_mock_client
 async def test_bundle_per_leg_failure_degrades_to_none(authed_app, authed_mock_clients) -> None:
     """When individual legs raise / 5xx, those legs → None; others succeed."""
 
-    async def _kg_get(path: str, *, params: dict | None = None, headers: dict | None = None) -> MagicMock:
+    async def _kg_get(
+        path: str, *, params: dict | None = None, headers: dict | None = None, timeout: float | None = None
+    ) -> MagicMock:
         # detail succeeds
         if path == f"/api/v1/entities/{_ENTITY_UUID}":
             return _mock_response(200, _DETAIL_PAYLOAD)
@@ -174,7 +180,9 @@ async def test_bundle_per_leg_failure_degrades_to_none(authed_app, authed_mock_c
             return _mock_response(200, _INTEL_PAYLOAD)
         return _mock_response(404)
 
-    async def _rag_get(path: str, *, params: dict | None = None, headers: dict | None = None) -> MagicMock:
+    async def _rag_get(
+        path: str, *, params: dict | None = None, headers: dict | None = None, timeout: float | None = None
+    ) -> MagicMock:
         # brief fails with timeout-like exception
         raise httpx.TimeoutException("timeout")
 
@@ -249,7 +257,9 @@ async def test_bundle_cache_miss_stores_result(authed_app, authed_mock_clients) 
     authed_app.state.valkey.get = AsyncMock(return_value=None)
     authed_app.state.valkey.set = AsyncMock(return_value=True)
 
-    async def _kg_get(path: str, *, params: dict | None = None, headers: dict | None = None) -> MagicMock:
+    async def _kg_get(
+        path: str, *, params: dict | None = None, headers: dict | None = None, timeout: float | None = None
+    ) -> MagicMock:
         if path == f"/api/v1/entities/{_ENTITY_UUID}":
             return _mock_response(200, _DETAIL_PAYLOAD)
         if path == f"/api/v1/entities/{_ENTITY_UUID}/graph":
@@ -260,7 +270,9 @@ async def test_bundle_cache_miss_stores_result(authed_app, authed_mock_clients) 
             return _mock_response(200, _INTEL_PAYLOAD)
         return _mock_response(404)
 
-    async def _rag_get(path: str, *, params: dict | None = None, headers: dict | None = None) -> MagicMock:
+    async def _rag_get(
+        path: str, *, params: dict | None = None, headers: dict | None = None, timeout: float | None = None
+    ) -> MagicMock:
         if path == f"/api/v1/briefings/instrument/{_ENTITY_UUID}":
             return _mock_response(200, _BRIEF_PAYLOAD)
         return _mock_response(404)

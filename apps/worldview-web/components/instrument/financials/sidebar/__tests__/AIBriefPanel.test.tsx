@@ -21,7 +21,7 @@
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, fireEvent } from "@testing-library/react";
-import type { InstrumentBrief } from "@/types/api";
+import type { BriefingResponse as InstrumentBrief } from "@/types/api";
 
 // WHY mock the hook: useInstrumentBrief polls the S9 briefings endpoint with
 // async state transitions. Mocking lets us exercise each status branch

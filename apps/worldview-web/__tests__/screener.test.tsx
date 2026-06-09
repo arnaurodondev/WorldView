@@ -211,14 +211,17 @@ describe("ScreenerPage — structure", () => {
     ).toBeInTheDocument();
   });
 
-  it("renders all 18 column headers with ALL CAPS text", () => {
+  it("renders all 32 column headers with ALL CAPS text", () => {
     render(<ScreenerPage />, { wrapper: makeWrapper() });
-    // WHY check columnheader role: ScreenerTable sets role="columnheader" on
-    // each header div for screen reader accessibility.
-    // PRD-0089 Wave I: added 5 new RATIOS columns (DIV Y, FWD PE, ROE, REV YoY,
-    // OP MGN) in a new group. Total is now 18 (was 13 before Wave I).
+    // WHY check columnheader role: AG Grid sets role="columnheader" on each
+    // header cell for screen reader accessibility.
+    // IB-L3/L4: added PERFORMANCE group (52W%↑, 52W%↓, 1M/3M/6M/YTD/1Y/3Y RTN)
+    // and OWNERSHIP group (ANALYST TGT, ANALYST UPSIDE, CONSENSUS, INSIDER 90D,
+    // INST OWN%, SHORT %) on top of the existing FUNDAMENTALS and RATIOS groups.
+    // Total is now 32 rendered columnheader roles (group headers + leaf columns
+    // both receive role="columnheader" in AG Grid).
     const headers = screen.getAllByRole("columnheader");
-    expect(headers.length).toBe(18);
+    expect(headers.length).toBe(32);
 
     // WHY spot-check specific headers: verifies no columns were silently dropped
     // or renamed during the rewrite.
