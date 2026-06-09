@@ -153,17 +153,23 @@ vi.mock("@/lib/gateway", () => ({
       offset: 0,
       limit: 10,
     }),
-    // WHY searchInstruments: MarketSnapshotWidget resolves ticker → instrument_id
-    // for all 9 tickers (3 index + 6 equities). Return a single result with the
-    // searched ticker so all group rows get instrument IDs and the LIVE badge appears.
+    // WHY searchInstruments: legacy fallback kept in mock for other call-sites.
     searchInstruments: vi.fn().mockImplementation((ticker: string) =>
       Promise.resolve({
         results: [{ instrument_id: `ins-${ticker.toLowerCase()}`, entity_id: `ins-${ticker.toLowerCase()}`, ticker, name: `${ticker} Inc`, exchange: "US", type: "equity" }],
         query: ticker,
       }),
     ),
-    // WHY getBatchQuotes: MarketSnapshotWidget batch-fetches live quotes.
-    // Return non-zero prices so the truthfulness guard (hasPrice) passes for equities.
+    // WHY resolveTickersBatch: MarketSnapshotWidget (PLAN-0099 W4 refactor) now uses
+    // POST /v1/instruments/resolve-tickers (exact indexed match) instead of 9 parallel
+    // searchInstruments calls. The mock returns a ticker → instrument_id map for all
+    // 9 snapshot tickers so idsQuery resolves and the LIVE badge + footer appear.
+    resolveTickersBatch: vi.fn().mockImplementation((tickers: string[]) =>
+      Promise.resolve(
+        Object.fromEntries(tickers.map((t) => [t, `ins-${t.toLowerCase()}`])),
+      ),
+    ),
+    // WHY getBatchQuotes: kept for other widgets that still use it.
     getBatchQuotes: vi.fn().mockResolvedValue({
       quotes: {
         "ins-aapl": { price: 185.5, change: 2.3, change_pct: 1.25 },
