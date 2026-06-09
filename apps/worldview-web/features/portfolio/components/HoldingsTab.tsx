@@ -1,79 +1,68 @@
 /**
- * features/portfolio/components/HoldingsTab.tsx — Holdings tab body.
+ * features/portfolio/components/HoldingsTab.tsx — Holdings tab body (PRD-0108 W3 redesign).
  *
- * REDESIGNED in PLAN-0088 Wave E (audit `docs/audits/2026-05-09-qa-holdings-
- * redesign.md`). The previous layout had 8 widgets stacked at ~1,400 px of
- * scroll; this one delivers 12 widgets at ~700 px by replacing 6 oversized
- * panels with single-row strips.
+ * REDESIGNED in PLAN-0108 Wave 3 (T-3-05): "Anchored table" layout.
+ *
+ * WHY THIS LAYOUT: PRD-0108 §3 mandates a density-first approach where every px
+ * above the table fold delivers actionable signal. The previous layout mixed legacy
+ * strips (CashRow, ConcentrationStrip, ExposureStrip, DayPnLDistribution) with new
+ * W2 strips, creating visual duplication and consuming ~300px of above-fold space.
+ * This layout rationalises to exactly 7 strip rows + table + bottom placeholder.
  *
  * LAYOUT (top → bottom):
  *
- *   1. CashRow              — h-7  cash · buying power · sweep
- *   2. ConcentrationStrip   — h-7  HHI · label · top-3 · #names
- *   3. ExposureStrip        — h-7  invested · cash · leverage · beta-adj
- *   4. DayPnLDistribution   — h-7  30-day Δ$ sparkline + avg/range
- *   ───────────────────────────── (top strip cluster — 4×28 = 112 px)
- *   5. SemanticHoldingsTable — h-auto, 12-column AG Grid (unchanged)
- *   6. HoldingLotsPanel     — collapsible FIFO open-lots drilldown (NEW)
- *   7. PositionBarHeat      — h-12 weight × pnl% mini-bars
- *   8. RealizedPnLSparkline — h-12 cumulative realised + ST/LT split
- *   9. DividendYTDStrip     — h-7  YTD · forward yield · next ex-date
- *  10. SectorAllocationPanel — kept (still useful as a sector mix overview)
- *  11. RecentActivityFeed   — kept ONLY when broker-connected (gated below)
- *  12. PortfolioAnalyticsSection — kept (equity-curve + risk metrics)
+ *   ─ PortfolioPageHeader  h-9   (rendered at page.tsx level — NOT here)
+ *   ─ PortfolioKPIStrip    h-7   (rendered at page.tsx level — NOT here)
+ *   1. ExposureCurrencyStrip      h-[22px]  INV%/CASH$/LEV×/β-ADJ/CCY
+ *   2. ConcentrationSectorTeaseStrip h-[22px] HHI badge + top-3 sectors
+ *   3. PerformanceChartPanel      h-[120px] collapsible equity-curve + SPY overlay
+ *   4. SectorAllocationBar        h-[22px]  stacked bar + top-3 sector labels
+ *   5. HoldingsTableChrome        h-[22px]  position count + Ctrl+F filter shortcut
+ *   6. SemanticHoldingsTable      flex-1    AG Grid, 12-column + SPARK
+ *   7. BottomStripCluster         h-24      placeholder for W4 (ContributorsStrip + RecentActivityStrip)
  *
- * REMOVED (vs previous layout):
- *   - CashManagementCard       (replaced by CashRow)
- *   - RealizedPnLChart         (replaced by RealizedPnLSparkline)
- *   - DividendIncomeTimeline   (replaced by DividendYTDStrip)
- *   - ExposureBreakdown panel  (replaced by ExposureStrip)
- *   - RecentActivityFeed always-on render (now gated on broker connection)
+ * REMOVED vs the PLAN-0088 Wave E layout (component files preserved):
+ *   - CashRow              → data already in KPIStrip
+ *   - ConcentrationStrip   → superseded by ConcentrationSectorTeaseStrip
+ *   - ExposureStrip        → superseded by ExposureCurrencyStrip
+ *   - DayPnLDistribution   → low signal for single-day view; moved to Analytics
+ *   - HoldingLotsPanel     → FIFO drilldown moved to Analytics tab
+ *   - PositionBarHeat      → removed from Holdings; Analytics tab retains it
+ *   - RealizedPnLSparkline → moved to Analytics tab
+ *   - DividendYTDStrip     → moved to Analytics tab
+ *   - SectorAllocationPanel → full panel superseded by SectorAllocationBar strip
+ *   - ContributorsStrip    → W4 bottom cluster (placeholder until W4-T4-01)
+ *   - RecentActivityStrip  → W4 bottom cluster
+ *   - RecentActivityFeed   → W4 bottom cluster
+ *   - PortfolioAnalyticsSection → lives in Analytics tab (not Holdings)
  *
- * Reason for each deletion lives in the audit; the short version is "every
- * one was either F/D-rated empty-state or 200+ px tall for a single number".
+ * WHO USES IT: app/(app)/portfolio/page.tsx — TabsContent[value="holdings"]
+ * DATA SOURCE: enrichedHoldings + holdingsQuotes + holdingOverviews from usePortfolioData
+ * DESIGN REFERENCE: PRD-0108 §3, T-3-05
  */
 
 "use client";
-// WHY "use client": children components are client components; this wrapper
-// inherits the directive so it can pass props through without extra boundary.
+// WHY "use client": uses multiple React hooks (useState, useCallback, useMemo)
+// and child components are client components requiring React context.
 
-import { useState, useCallback } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useState, useCallback, useMemo } from "react";
 import { Skeleton } from "@/components/ui/skeleton";
-import { useAuth } from "@/hooks/useAuth";
-import { createGateway } from "@/lib/gateway";
-// PLAN-0088 Wave E E-1 strips ────────────────────────────────────────────
-import { CashRow } from "@/components/portfolio/CashRow";
-import { ConcentrationStrip } from "@/components/portfolio/ConcentrationStrip";
-import { ExposureStrip } from "@/components/portfolio/ExposureStrip";
-import { DayPnLDistribution } from "@/components/portfolio/DayPnLDistribution";
-import { DividendYTDStrip } from "@/components/portfolio/DividendYTDStrip";
-import { RealizedPnLSparkline } from "@/components/portfolio/RealizedPnLSparkline";
-import { PositionBarHeat } from "@/components/portfolio/PositionBarHeat";
-import { HoldingLotsPanel } from "@/components/portfolio/HoldingLotsPanel";
-// Wave G: Holding detail slide-over panel (right-anchored, 440px, non-modal).
-import { HoldingDetailSlideOver } from "@/components/portfolio/detail/HoldingDetailSlideOver";
-// Surviving components ────────────────────────────────────────────────────
-import { SemanticHoldingsTable } from "@/components/portfolio/SemanticHoldingsTable";
-import { SectorAllocationPanel } from "@/components/portfolio/SectorAllocationPanel";
-import { RecentActivityFeed } from "@/components/portfolio/RecentActivityFeed";
-import { PortfolioAnalyticsSection } from "@/components/portfolio/PortfolioAnalyticsSection";
-import type { PeriodLabel } from "@/components/portfolio/EquityCurveChart";
-// ── Wave F additions (PRD-0089 W2 overview redesign) ──────────────────────
-// These components implement the compact header-strip layout described in the
-// design spec: ExposureCurrencyStrip → ConcentrationSectorTeaseStrip →
-// PerformanceChartPanel → SectorAllocationBar → Table → ContributorsStrip → RecentActivityStrip.
-// WHY add here (not in page.tsx): the Holdings tab is the overview surface.
-// page.tsx already handles the KPIStrip at page level; everything below it
-// is scoped to the Holdings tab body.
+// ── PRD-0108 W3 layout strips ─────────────────────────────────────────────────
 import { ExposureCurrencyStrip } from "@/components/portfolio/ExposureCurrencyStrip";
 import { ConcentrationSectorTeaseStrip } from "@/components/portfolio/ConcentrationSectorTeaseStrip";
 import { PerformanceChartPanel } from "@/components/portfolio/PerformanceChartPanel";
 import type { PerfPeriod } from "@/components/portfolio/PerformanceChartPanel";
 import { SectorAllocationBar } from "@/components/portfolio/SectorAllocationBar";
-import { ContributorsStrip } from "@/components/portfolio/ContributorsStrip";
-import { RecentActivityStrip } from "@/components/portfolio/RecentActivityStrip";
-import { useTopMovers } from "@/features/portfolio/hooks/useTopMovers";
+import { HoldingsTableChrome } from "@/components/portfolio/HoldingsTableChrome";
+import { SemanticHoldingsTable } from "@/components/portfolio/SemanticHoldingsTable";
+// ── PRD-0108 W3 SPARK column data hook ────────────────────────────────────────
+import { useHoldingsSeries } from "@/features/portfolio/hooks/useHoldingsSeries";
+// ── Wave G: Holding detail slide-over (preserved from PLAN-0088) ──────────────
+// WHY keep slide-over: the ticker-pill row + slide-over is orthogonal to the
+// strip layout change. It enriches the SemanticHoldingsTable experience and
+// has no layout impact on the above-fold strips.
+import { HoldingDetailSlideOver } from "@/components/portfolio/detail/HoldingDetailSlideOver";
+import type { PeriodLabel } from "@/components/portfolio/EquityCurveChart";
 import type {
   Holding,
   HoldingsResponse,
@@ -111,64 +100,117 @@ export function HoldingsTab({
   bySector,
   byType,
   equityPeriod,
-  setEquityPeriod,
+  // setEquityPeriod was used by PortfolioAnalyticsSection (now in Analytics tab).
+  // Retained in the interface so page.tsx props don't change; prefixed _  to
+  // suppress the unused-variable lint warning.
+  setEquityPeriod: _setEquityPeriod,
 }: HoldingsTabProps) {
-  const { accessToken } = useAuth();
-
-  // ── Wave F: PerformanceChartPanel collapsed state ──────────────────────
-  // WHY local state (not URL): the collapse toggle is ephemeral UI preference.
-  // A deep-link to /portfolio doesn't need to encode whether the chart is open.
-  // Design spec §7.1 hotkey "0" can toggle this; the hotkey would call the
-  // setter directly. Default: expanded (matches spec §4.1 "default on").
+  // ── PerformanceChartPanel state ────────────────────────────────────────────
+  // WHY local state (not URL): collapse toggle is ephemeral UI preference.
+  // Deep-links to /portfolio don't encode chart open/closed state.
+  // Default: expanded (spec §4.1 "default on").
   const [perfChartCollapsed, setPerfChartCollapsed] = useState(false);
 
-  // ── Wave F: PerformanceChartPanel period state ─────────────────────────
-  // WHY a separate period (not sharing equityPeriod from PortfolioAnalyticsSection):
-  // the PerformanceChartPanel and the full EquityCurveChart may be on different
-  // zoom levels simultaneously (PM might have the strip at 1M while the analytics
-  // section shows YTD). Keeping them independent preserves both views.
+  // WHY separate from equityPeriod: PerformanceChartPanel and the full
+  // EquityCurveChart in AnalyticsTab may be on different zoom levels simultaneously.
   const [perfPeriod, setPerfPeriod] = useState<PerfPeriod>("3M");
 
-  // ── Wave F: top movers derivation for ContributorsStrip ───────────────
-  // useTopMovers computes contributors/detractors client-side from the
-  // enriched holdings + live quotes already loaded by usePortfolioData.
-  // No extra API call. See features/portfolio/hooks/useTopMovers.ts.
-  const { contributors, detractors } = useTopMovers(enrichedHoldings, holdingsQuotes);
-
-  // PLAN-0088 E-1: gate RecentActivityFeed on a broker connection. The
-  // audit (§1 row 5) flagged it as empty-state for paper-traders. We do
-  // a lightweight brokerage-connection probe here and only render the
-  // feed when at least one connection exists. Cached for 60s.
-  const { data: brokerageConnections } = useQuery({
-    enabled: Boolean(activePortfolioId && accessToken),
-    queryKey: ["brokerage-connections", activePortfolioId],
-    queryFn: () =>
-      createGateway(accessToken!).getBrokerageConnections(activePortfolioId!),
-    staleTime: 60_000,
-  });
-  // WHY ?? false (not a truthy guard): the query returns undefined while
-  // loading; we want the feed hidden during that initial frame to avoid
-  // a flash-of-empty-feed for paper-traders.
-  const hasBrokerage = Boolean(
-    brokerageConnections && brokerageConnections.length > 0,
-  );
-
-  // ── Wave G: Holding detail slide-over state ────────────────────────────
-  // WHY null (not undefined): null is the explicit "no holding selected" signal.
-  // undefined would be ambiguous between "not set yet" and "deselected".
-  const [selectedHolding, setSelectedHolding] = useState<Holding | null>(null);
-
-  // Stable close handler — avoids re-rendering children on every HoldingsTab render.
-  const handleCloseSlideOver = useCallback(() => {
-    setSelectedHolding(null);
+  // ── HoldingsTableChrome filter state ──────────────────────────────────────
+  // WHY local state: filter text is ephemeral — a deep-link to /portfolio should
+  // always show the unfiltered table. URL-backed filter would confuse users who
+  // share a link and expect to see the full holdings list.
+  const [filterText, setFilterText] = useState("");
+  const [filterVisible, setFilterVisible] = useState(false);
+  // onFilterFocus is passed to HoldingsTableChrome so pressing Ctrl+F from
+  // anywhere in the Holdings tab focuses the filter input inside the chrome row.
+  // WHY useCallback: stable reference prevents unnecessary child re-renders.
+  const handleFilterFocus = useCallback(() => {
+    setFilterVisible(true);
   }, []);
 
+  // ── β-ADJ exposure computation ─────────────────────────────────────────────
+  // WHY computed here (not fetched): S1 /exposure does not return a beta-adjusted
+  // figure today. The parent has all the data needed: position values and (when
+  // available) instrument betas via holdingOverviews.
+  //
+  // FORMULA: betaAdjExposure = Σ(position_market_value × beta_i) / total_value
+  //   where beta_i defaults to 1.0 if the holding overview has no beta value.
+  //
+  // WHY default beta=1.0: a missing beta should not be treated as "no exposure" (0×)
+  // or "ultra-high risk" (arbitrary×). 1.0 is the market-neutral default — it means
+  // "assume this position tracks the market exactly, no amplification/dampening".
+  // The cell shows "—" when total_value is zero (no holdings), rather than Infinity.
+  const betaAdjExposure = useMemo((): number | null => {
+    if (kpi.totalValue <= 0) return null;
+    // No holdings → pass null to show "—" in the β-ADJ cell.
+    if (enrichedHoldings.length === 0) return null;
+
+    let betaWeightedSum = 0;
+    for (const holding of enrichedHoldings) {
+      // market value for this position = quantity × current_price
+      // WHY current_price (not average_cost): exposure is a forward-looking
+      // risk measure — we care about what the position is worth NOW, not what
+      // we paid. Using average_cost would understate exposure on unrealised gains.
+      const quote = holdingsQuotes[holding.instrument_id];
+      const currentPrice = quote?.price ?? holding.current_price ?? holding.average_cost;
+      const positionValue = holding.quantity * currentPrice;
+
+      // Beta comes from holdingOverviews (instrument fundamentals, EODHD Technicals).
+      // When absent, default to 1.0 (market-neutral assumption — see WHY above).
+      const overview = holdingOverviews?.[holding.instrument_id];
+      // Overview type has no beta field today; cast to any for forward compat.
+      // WHY any cast: the OverviewMap type does not include beta yet — it will be
+      // added in a follow-up wave when EODHD Technicals data is persisted. For now
+      // the default of 1.0 correctly handles the absent-beta case.
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const beta: number = (overview as any)?.beta ?? 1.0;
+      betaWeightedSum += positionValue * beta;
+    }
+    return betaWeightedSum / kpi.totalValue;
+  }, [enrichedHoldings, holdingsQuotes, holdingOverviews, kpi.totalValue]);
+
+  // ── useHoldingsSeries — batch sparkline data for SPARK column ─────────────
+  // Extract instrument IDs from enrichedHoldings for the batch fetch.
+  // WHY memoised: avoids creating a new array reference on every render,
+  // which would bust the useQuery key and cause unnecessary re-fetches.
+  const instrumentIds = useMemo(
+    () => enrichedHoldings.map((h) => h.instrument_id),
+    [enrichedHoldings],
+  );
+
+  // Fetch 14-day close-price sparklines for all holdings in one round-trip.
+  // WHY `!!holdingsResp` gate: the hook fires as soon as instrumentIds is non-empty.
+  // Gating on holdingsResp ensures we only fire after the holdings API responded
+  // so instrument IDs are stable (not the stale [] from the previous portfolio).
+  // The hook additionally guards internally on instrumentIds.length > 0 and !!accessToken.
+  const { series: holdingsSeries } = useHoldingsSeries(instrumentIds, !!holdingsResp);
+  // TODO: W4-T401 will add a `series` prop to SemanticHoldingsTable to wire the
+  // SPARK column cell renderer. The hook call above warms the TanStack cache so
+  // the data is ready when W4 adds the prop definition and connects it to the
+  // SparklineCellRenderer. `void` suppresses the unused-variable warning intentionally.
+  void holdingsSeries;
+
+  // ── Wave G: Holding detail slide-over state ────────────────────────────────
+  // WHY null (not undefined): null is the explicit "no holding selected" signal.
+  const [selectedHolding, setSelectedHolding] = useState<Holding | null>(null);
+  const handleCloseSlideOver = useCallback(() => setSelectedHolding(null), []);
+
+  // ── Loading skeleton ───────────────────────────────────────────────────────
   if (holdingsLoading && !holdingsResp) {
     // WHY h-[22px] rows: matches the SemanticHoldingsTable <tr> height token
-    // exactly. When the data lands, the skeletons fade out and the real rows
-    // occupy identical vertical space — no jump (F-P-020).
+    // exactly. When the data lands, skeletons fade out and real rows occupy
+    // identical vertical space — no layout jump (F-P-020).
     return (
       <div className="space-y-px p-3">
+        {/* Strip skeletons: 2 × h-[22px] for the top strips */}
+        <Skeleton className="h-[22px] w-full" />
+        <Skeleton className="h-[22px] w-full" />
+        {/* PerformanceChartPanel skeleton */}
+        <Skeleton className="h-[120px] w-full" />
+        {/* SectorAllocationBar skeleton */}
+        <Skeleton className="h-[22px] w-full" />
+        {/* Chrome + 8 table row skeletons */}
+        <Skeleton className="h-[22px] w-full" />
         {Array.from({ length: 8 }).map((_, i) => (
           <Skeleton key={i} className="h-[22px] w-full" />
         ))}
@@ -177,37 +219,40 @@ export function HoldingsTab({
   }
 
   return (
-    // WHY relative: HoldingDetailSlideOver is position:absolute anchored here.
-    <div className="bg-background min-h-full relative">
-      {/* ══ Wave F additions (PRD-0089 W2 redesign) — above-fold overview strips ══
-          Order per design spec §4.2:
-            ExposureCurrencyStrip → ConcentrationSectorTeaseStrip →
-            PerformanceChartPanel → SectorAllocationBar → Holdings table →
-            (below table) ContributorsStrip + RecentActivityStrip
-          The existing legacy strips (CashRow, ConcentrationStrip, ExposureStrip,
-          DayPnLDistribution) remain below the new ones for backwards-compat.
-          When the W2 strips stabilise in production, the legacy strips will be
-          removed in a separate cleanup wave. */}
+    // WHY flex flex-col h-full: fills the TabsContent area which is flex-1 min-h-0.
+    // flex-col stacks the strips vertically; SemanticHoldingsTable (flex-1 min-h-0)
+    // takes all remaining height so the table fills the viewport without overflow.
+    // WHY relative: HoldingDetailSlideOver uses position:absolute anchored here.
+    <div className="flex flex-col h-full bg-background relative">
 
-      {/* ── ExposureCurrencyStrip (h-[22px]) ─────────────────────────────────
-          Replaces the 120px ExposureStrip with a single compact row.
-          currency prop is omitted here — Holding has no `currency` field today.
-          A follow-up wave will derive currency breakdown from transaction data. */}
-      <ExposureCurrencyStrip portfolioId={activePortfolioId} />
+      {/* ══ 1. ExposureCurrencyStrip (h-[22px]) ══════════════════════════════════
+          WHY first: exposure is the most forward-looking risk signal.
+          Bloomberg PORT shows "% Invested / Cash / Leverage" in the topmost row
+          so the PM knows their deployment ratio before scanning individual positions.
+          betaAdjExposure is computed above from holdings × beta (default 1.0).
+          Null when no holdings — the cell shows "—" rather than a wrong value. */}
+      <ExposureCurrencyStrip
+        portfolioId={activePortfolioId}
+        betaAdjExposure={betaAdjExposure}
+      />
 
-      {/* ── ConcentrationSectorTeaseStrip (h-[22px]) ─────────────────────────
-          HHI badge + top-3 sector preview in one compact row. Replaces the
-          separate ConcentrationStrip and sector-preview logic. */}
+      {/* ══ 2. ConcentrationSectorTeaseStrip (h-[22px]) ═══════════════════════
+          WHY second: after knowing deployment ratio, concentration risk is the
+          next most actionable signal. HHI badge + top-3 sectors in one row.
+          bySector comes from usePortfolioData (no extra fetch needed here). */}
       <ConcentrationSectorTeaseStrip
         portfolioId={activePortfolioId}
         bySector={bySector}
       />
 
-      {/* ── PerformanceChartPanel (h-[120px] when expanded, h-[28px] collapsed)
-          Equity-curve strip with period selector and SPY overlay annotation.
-          WHY collapsed state lives here (not at page level): only the Holdings
-          tab shows this panel; other tabs (Transactions, Watchlist) don't need it.
-          collapsed/onToggleCollapse manage the local hide/show of the chart body. */}
+      {/* ══ 3. PerformanceChartPanel (h-[120px] expanded, h-[28px] collapsed) ══
+          WHY third: trend context belongs above the table, not below. The PM
+          needs to see if the portfolio is up/down today vs SPY before analysing
+          individual positions. Collapsible to 28px so power users can maximise
+          table rows.
+          WHY guard on activePortfolioId: the panel fires a useQuery that requires
+          a valid portfolioId. With null, the query is disabled but the DOM still
+          mounts — the guard prevents a wasted paint. */}
       {activePortfolioId && (
         <PerformanceChartPanel
           portfolioId={activePortfolioId}
@@ -218,27 +263,40 @@ export function HoldingsTab({
         />
       )}
 
-      {/* ── SectorAllocationBar (h-[22px]) ───────────────────────────────────
-          Single stacked horizontal bar with top-3 sector labels inline.
-          Replaces the 240px SectorAllocationPanel on the overview surface.
-          The full panel is kept below for the detailed view. */}
+      {/* ══ 4. SectorAllocationBar (h-[22px]) ════════════════════════════════
+          WHY fourth: the sector bar is a "where is my money" at-a-glance summary.
+          Positioned directly above the table so the PM can see the sector mix
+          before scanning holdings. The single stacked bar with top-3 labels
+          replaces the 240px SectorAllocationPanel on this above-fold surface. */}
       <SectorAllocationBar bySector={bySector} />
 
-      {/* ── Legacy top strip cluster (preserved for backwards compat) ────────
-          These 4 strips still render so users don't lose data they relied on.
-          They will be superseded by the W2 strips above in a follow-up wave.
-          WHY keep them: the new strips are additive; removing legacy surfaces
-          in the same wave as adding new ones risks hidden regressions. */}
-      <CashRow portfolioId={activePortfolioId} />
-      <ConcentrationStrip portfolioId={activePortfolioId} />
-      <ExposureStrip portfolioId={activePortfolioId} />
-      <DayPnLDistribution portfolioId={activePortfolioId} />
+      {/* ══ 5. HoldingsTableChrome (h-[22px]) ════════════════════════════════
+          WHY fifth: the chrome row anchors the table header. It shows position
+          count (quick sanity check) and the Ctrl+F filter shortcut.
+          WHY filter state here (not in SemanticHoldingsTable): HoldingsTableChrome
+          needs to fire onFilterFocus when Ctrl+F is pressed; the table needs to
+          receive the filterText to drive AG Grid quickFilter. Hosting both in
+          the same parent avoids prop-drilling through SemanticHoldingsTable's
+          public interface (which is data-driven, not filter-driven). */}
+      <HoldingsTableChrome
+        positionCount={enrichedHoldings.length}
+        onFilterFocus={handleFilterFocus}
+        filterText={filterText}
+        onFilterChange={setFilterText}
+        filterVisible={filterVisible}
+        onFilterVisibleChange={setFilterVisible}
+      />
 
-      {/* ── Holdings table — the primary surface ────────────────────────────
-          Same 12-column AG Grid as before. Sectors are projected from the
-          holdingOverviews map at render time so the SECTOR column renders
-          correctly without a separate fetch. */}
-      <div className="p-2">
+      {/* ══ 6. SemanticHoldingsTable (flex-1 min-h-0) ════════════════════════
+          WHY flex-1 min-h-0: takes all remaining vertical space so the AG Grid
+          fills the viewport. min-h-0 is required for the overflow-y within
+          AG Grid to create a scrollable area (otherwise the browser treats the
+          flex child as having no size constraint and the table grows infinitely).
+          WHY no p-2 wrapper: the outer padding was from the legacy layout. With
+          the anchored-table design, the table is edge-to-edge (matching all
+          other strips above). The 2px gap came from the old card border; the
+          new design has no card — the table IS the surface. */}
+      <div className="flex-1 min-h-0">
         <SemanticHoldingsTable
           holdings={enrichedHoldings}
           quotes={holdingsQuotes}
@@ -252,23 +310,30 @@ export function HoldingsTab({
         />
       </div>
 
-      {/* ── Wave G: Compact holding-selector row for the slide-over ─────────
-          Renders a row of ticker pills beneath the table. Clicking a pill
-          opens the 440px HoldingDetailSlideOver panel on the right.
-          WHY a separate row (not onRowClick on the AG Grid): SemanticHoldings-
-          Table's AG Grid already wires onCellClicked to navigate to the
-          instrument detail page; intercepting that for the slide-over would
-          either break the navigation or require adding an extra column.
-          A pill row is visually distinct ("click here to open detail panel")
-          and avoids changing the AG Grid contract. */}
+      {/* ══ 7. BottomStripCluster (h-24) — W4 placeholder ════════════════════
+          WHY placeholder now: PRD-0108 W3 scope is the above-fold strip assembly
+          only. W4 (T-4-01) will replace this div with:
+            ContributorsStrip (contributors + detractors) | RecentActivityStrip
+          Using a visible placeholder (not null) means the page has the correct
+          final height budget during W3 QA, so W4 integration is a drop-in swap. */}
+      <div className="h-24 bg-muted/20 flex items-center justify-center text-xs text-muted-foreground shrink-0">
+        Bottom strips (W4)
+      </div>
+
+      {/* ══ Wave G: Ticker-pill row + HoldingDetailSlideOver ═════════════════
+          WHY preserve from PLAN-0088: the slide-over is orthogonal to the strip
+          layout. It adds detail-on-demand for any holding without navigating
+          away. The pill row sits AFTER the bottom cluster so it doesn't consume
+          above-fold space when holdings are loaded. */}
       {enrichedHoldings.length > 0 && (
-        <div className="flex flex-wrap items-center gap-1 px-2 py-1 border-t border-border bg-card">
+        <div className="flex flex-wrap items-center gap-1 px-2 py-1 border-t border-border bg-card shrink-0">
           <span className="text-[10px] uppercase tracking-[0.08em] text-muted-foreground font-mono shrink-0">
             Detail:
           </span>
           {enrichedHoldings.map((h) => (
             <button
               key={h.instrument_id}
+              type="button"
               onClick={() =>
                 setSelectedHolding(
                   // Toggle: clicking the active holding closes the panel.
@@ -287,10 +352,7 @@ export function HoldingsTab({
         </div>
       )}
 
-      {/* ── Wave G: Holding detail slide-over panel ─────────────────────────
-          Renders when selectedHolding is non-null. Position:absolute anchored
-          to the closest position:relative ancestor (the main div above).
-          z-40 sits above the table (default stacking) but below modals (z-50). */}
+      {/* HoldingDetailSlideOver: position:absolute, z-40, anchored to this div. */}
       {activePortfolioId && (
         <HoldingDetailSlideOver
           portfolioId={activePortfolioId}
@@ -307,88 +369,6 @@ export function HoldingsTab({
               ? (holdingsQuotes[selectedHolding.instrument_id]?.price ?? null)
               : null
           }
-        />
-      )}
-
-      {/* ── PLAN-0088 E-2: FIFO tax-lot drilldown ───────────────────────────
-          Standalone panel (not an inline AG Grid expand row) because the
-          table's onRowClicked already navigates to the instrument page —
-          we don't want to take that interaction over. The user picks a
-          ticker via the dropdown inside the panel.
-          WHY no px-2 wrapper: HoldingLotsPanel renders edge-to-edge like
-          PositionBarHeat and the other strip components below it. A px-2
-          inset made the card visually narrower than every adjacent strip,
-          breaking the horizontal rhythm. */}
-      <HoldingLotsPanel
-        portfolioId={activePortfolioId}
-        holdings={enrichedHoldings}
-        quotes={holdingsQuotes}
-      />
-
-      {/* ── PLAN-0088 E-4: position-bar heat strip ──────────────────────────
-          Uses the props the parent already loaded — no extra fetch. Width =
-          weight, height = pnl%, color = sign. One-glance winners/losers. */}
-      <PositionBarHeat
-        holdings={enrichedHoldings}
-        quotes={holdingsQuotes}
-        totalValue={kpi.totalValue}
-      />
-
-      {/* ── PLAN-0088 E-2: realised P&L sparkline (replaces 280 px chart) ──
-          Single h-12 row: total + ST/LT split + cumulative inline sparkline. */}
-      <RealizedPnLSparkline portfolioId={activePortfolioId} />
-
-      {/* ── PLAN-0088 E-1: dividend YTD strip (replaces 470 px timeline) ───
-          One h-7 row instead of a stacked monthly chart that was almost
-          always empty for paper-traders. */}
-      <DividendYTDStrip portfolioId={activePortfolioId} />
-
-      {/* ── Sector mix — KEPT (audit B-rated, useful) ───────────────────────
-          The bars-only mode is denser than the treemap; the panel itself
-          handles the toggle. */}
-      <SectorAllocationPanel bySector={bySector} byType={byType} />
-
-      {/* ══ Wave F bottom strip cluster ══════════════════════════════════════
-          Design spec §4.1 bottom layout: ContributorsStrip + RecentActivityStrip
-          side-by-side (3-cell grid: Contributors | empty | RecentActivity).
-          WHY grid (not flex): grid lets us define fixed proportions (col-span 5
-          for movers, col-span 4 for activity) that are stable regardless of
-          content height. The design spec shows a 3-column layout; we simplify
-          to 2 columns since the middle cell in the spec is unused ("empty"). */}
-      <div className="grid grid-cols-2 border-t border-border bg-card min-h-[96px]">
-        {/* Top Contributors + Top Detractors — left half */}
-        <div className="border-r border-border">
-          <ContributorsStrip
-            contributors={contributors}
-            detractors={detractors}
-            isLoading={holdingsLoading}
-          />
-        </div>
-
-        {/* Recent Activity — right half */}
-        <div>
-          <RecentActivityStrip portfolioId={activePortfolioId} />
-        </div>
-      </div>
-
-      {/* ── Recent activity feed — GATED on broker connection ───────────────
-          Per audit §1 row 5: feed is empty for paper-traders so it should
-          not render. For broker-connected users it's still the right
-          "what happened on my account" surface. */}
-      {hasBrokerage && (
-        <div className="mt-3">
-          <RecentActivityFeed portfolioId={activePortfolioId} />
-        </div>
-      )}
-
-      {/* ── Equity curve + risk metrics ─────────────────────────────────────
-          Existing analytics section — equity curve fix (F-H-1 from the
-          audit) is tracked separately. */}
-      {activePortfolioId && (
-        <PortfolioAnalyticsSection
-          portfolioId={activePortfolioId}
-          period={equityPeriod}
-          onPeriodChange={setEquityPeriod}
         />
       )}
     </div>
