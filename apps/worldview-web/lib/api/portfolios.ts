@@ -551,11 +551,11 @@ export function createPortfoliosApi(t: string | undefined) {
       const s1Body = {
         portfolio_id: portfolioId,
         instrument_id: instrumentId,
-        // WHY TRADE + BUY: S1 uses two separate fields for what the frontend combines as "type".
+        // WHY TRADE + trade_side: S1 uses two separate fields for what the frontend combines as "type".
         // transaction_type=TRADE covers manual equity purchases (vs DIVIDEND, FEE, TRANSFER).
-        // direction=BUY increases the holding; direction=SELL decreases it.
+        // trade_side=BUY increases the holding (W1 renamed `direction` → `trade_side` in PLAN-0108).
         transaction_type: "TRADE",
-        direction: "BUY",
+        trade_side: "BUY",
         quantity,
         price: averageCost,
         fees: 0, // manual entry has no brokerage fee
