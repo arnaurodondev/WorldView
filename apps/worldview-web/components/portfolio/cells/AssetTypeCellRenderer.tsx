@@ -35,15 +35,19 @@ interface AssetTypeContext {
 }
 
 // ── Badge colour map ───────────────────────────────────────────────────────────
-// Mirrors assetClassBadgeClass() in transaction-columns.tsx so EQ always
-// means the same colour whether the user is reading holdings or transactions.
 // WHY Tailwind classes (not hex inline styles): the design system tokens live in
 // the CSS variables; inline style would break in CSS-variable dark/light theming.
+// WHY "fund" gets its own case (not merged with "etf"): the backend data model
+// uses "fund" for mutual funds / ETFs in PRD-0108; "etf" is kept as an alias so
+// existing rows built before the rename still render correctly.
 function badgeClass(assetClass: string | null | undefined): string {
   switch ((assetClass ?? "").toLowerCase()) {
     case "equity":
       return "bg-positive/15 text-positive border border-positive/30";
+    case "fund":
     case "etf":
+      // WHY same colour as primary: funds/ETFs are the default "basket" type —
+      // blue primary signals "diversified" to align with industry convention.
       return "bg-primary/15 text-primary border border-primary/30";
     case "option":
       return "bg-negative/15 text-negative border border-negative/30";
@@ -59,25 +63,34 @@ function badgeClass(assetClass: string | null | undefined): string {
 }
 
 // ── Label map ──────────────────────────────────────────────────────────────────
-// WHY 3-char codes (not single letters E/F/B/C): a scan of the design spec shows
-// "E=equity, F=fund, B=bond, C=crypto" is the suggested single-letter set, but
-// "FUND" and "FUTURE" both start with F, causing a collision. 3-char codes
-// (EQ / ETF / OPT / FUT / BND / CRY) are unambiguous and still fit in the 48px
-// column at 8px mono font. Matches assetClassAbbrev() in transaction-columns.tsx.
+// WHY single-letter codes (E/F/B/C per PRD-0108 §T-4-03): the ASSET column is
+// only 48px wide; single-letter chips are more scannable than 2-3 char codes.
+// "FUND" and "FUTURE" both start with F — resolved by the fact that "future"
+// is not a first-class type in PRD-0108 holdings (futures live in a separate
+// instrument type enum); if futures are ever added they will need a separate
+// column, not this renderer.
+// WHY "etf" falls through to "fund": legacy rows from before the PRD-0108 rename
+// still have assetClass="etf"; we map both to "F" so the UI is consistent.
 function assetLabel(assetClass: string | null | undefined): string {
   switch ((assetClass ?? "").toLowerCase()) {
     case "equity":
-      return "EQ";
+      // E — the canonical single-letter code for equities (PRD-0108 §T-4-03)
+      return "E";
+    case "fund":
     case "etf":
-      return "ETF";
+      // F — funds and ETFs are both "basket" instruments; single label keeps
+      // the column unambiguous at a glance.
+      return "F";
+    case "bond":
+      // B — fixed-income instruments
+      return "B";
+    case "crypto":
+      // C — digital assets
+      return "C";
     case "option":
       return "OPT";
     case "future":
       return "FUT";
-    case "bond":
-      return "BND";
-    case "crypto":
-      return "CRY";
     default:
       // Render muted em-dash for unknown/null to signal "unclassified"
       // without implying anything. Same pattern as transaction table cells.
