@@ -621,5 +621,119 @@ export function createInstrumentsApi(t: string | undefined) {
         { token: t, method: "POST" },
       );
     },
+
+    // ── T-02 W3 additions ─────────────────────────────────────────────────
+
+    /**
+     * getInstitutionalHolders — top 10 institutional holders from S3
+     *
+     * WHY T-02: PLAN-0089 W3 adds an InstitutionalHoldersTable to the Financials
+     * tab. The data lives in EODHD's InstitutionHolders section — Vanguard,
+     * BlackRock, State Street etc. Analysts use this to gauge passive-vs-active
+     * ownership concentration and predict sell-off behaviour (passive holders
+     * can't exit quickly; concentrated hedge fund ownership amplifies moves).
+     *
+     * Returns FundamentalsSection with section="institutional_holders_snapshot".
+     * The `data` dict is {"0": {name, currentShares, currentValue, ...}, "1": ...}.
+     * S9 route added in T-S9-01 (PLAN-0089 W3).
+     */
+    getInstitutionalHolders(instrumentId: string): Promise<FundamentalsSectionResponse> {
+      return apiFetch<FundamentalsSectionResponse>(
+        `/v1/fundamentals/${encodeURIComponent(instrumentId)}/institutional-holders`,
+        { token: t },
+      );
+    },
+
+    /**
+     * getFundHolders — top 10 mutual/ETF fund holders from S3
+     *
+     * WHY T-02: Mirrors getInstitutionalHolders but for fund-level holders
+     * (e.g. Fidelity 500 Index Fund). Fund holders often indicate passive ETF
+     * inflow; institutional holders are more likely to be active managers.
+     * Knowing the split helps analysts model price-insensitive vs price-sensitive
+     * flows (important for estimating liquidity around rebalancing dates).
+     *
+     * Returns FundamentalsSection with section="fund_holders_snapshot".
+     * S9 route added in T-S9-02 (PLAN-0089 W3).
+     */
+    getFundHolders(instrumentId: string): Promise<FundamentalsSectionResponse> {
+      return apiFetch<FundamentalsSectionResponse>(
+        `/v1/fundamentals/${encodeURIComponent(instrumentId)}/fund-holders`,
+        { token: t },
+      );
+    },
+
+    /**
+     * getPeers — 5 closest peers by market cap in the same GICS industry
+     *
+     * WHY T-02: PeerComparisonTable (T-12) lets analysts benchmark valuation
+     * ratios (P/E, P/B, EV/EBITDA) against same-industry peers in one row.
+     * This is the primary workflow for relative-value equity analysis:
+     * "AAPL at 28× P/E vs MSFT at 35×; who is cheap?"
+     *
+     * WHY /v1/instruments/{id}/peers (not /v1/fundamentals): peers are derived
+     * from the instruments table (gics_sector + market_cap ranking) not from
+     * EODHD fundamentals. The S2 market-data service owns this query.
+     *
+     * Returns { instrument_id, peers: PeerInstrument[] } with 1Y return included.
+     * S9 route T-S9-03 was shipped in W5 (feat(w5): T-S9-01).
+     */
+    getPeers(instrumentId: string, n = 5): Promise<PeersResponse> {
+      return apiFetch<PeersResponse>(
+        `/v1/instruments/${encodeURIComponent(instrumentId)}/peers?n=${n}`,
+        { token: t },
+      );
+    },
+
+    /**
+     * triggerInstrumentBriefingGeneration — lazy-generate POST for AIBriefPanel
+     *
+     * WHY T-02: The AIBriefPanel (T-22) uses a GET→404→POST→poll flow (Δ16 / Δ19):
+     * on 404 (brief not yet generated), fire this POST to queue generation.
+     * The backend is idempotent (one brief per instrument per 60-min window).
+     * After POST, the hook polls GET every 30s up to 5 times until the brief appears.
+     *
+     * WHY separate from getInstrumentBrief: the POST is not a read — it mutates
+     * backend state (enqueues a generation job). Keeping it separate makes it
+     * clear at the call site that this is a lazy mutation, not a standard query.
+     *
+     * S9 + S8 route shipped in W5 (T-S8-05).
+     */
+    triggerInstrumentBriefingGeneration(entityId: string): Promise<void> {
+      return apiFetch<void>(
+        `/v1/briefings/instrument/${encodeURIComponent(entityId)}/generate`,
+        { token: t, method: "POST" },
+      );
+    },
   };
+}
+
+// ── W3 type additions ─────────────────────────────────────────────────────────
+
+/**
+ * PeerInstrument — one row in the peers response.
+ *
+ * WHY separate type (not in types/api.ts): peers are a new W3 shape; adding
+ * to the generated-types file would require re-rolling the generation script.
+ * This structural interface unblocks callers immediately and can be moved to
+ * types/api.ts in a future cleanup pass.
+ *
+ * WHY return_1y optional: the S2 query computes it from OHLCV; if no bars
+ * exist for a peer (newly listed, delisted) the field is omitted.
+ */
+export interface PeerInstrument {
+  instrument_id: string;
+  ticker: string;
+  name: string;
+  /** Trailing 12-month P/E; null = no earnings / not computed. */
+  pe_ratio: number | null;
+  market_cap: number | null;
+  /** 1-year price return as a decimal (0.18 = +18%). null = insufficient history. */
+  return_1y: number | null;
+  gics_sector: string | null;
+}
+
+export interface PeersResponse {
+  instrument_id: string;
+  peers: PeerInstrument[];
 }

@@ -21,7 +21,7 @@
  */
 
 import { describe, it, expect } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { render } from "@testing-library/react";
 import { formatReturnPct } from "@/components/screener/ag-screener-columns";
 
 // ── formatReturnPct ───────────────────────────────────────────────────────────
@@ -69,7 +69,9 @@ describe("formatReturnPct — pure formatter", () => {
 // (AG Grid allows this — cell renderers are just React components).
 
 // Minimal mock of ICellRendererParams — only `data` is needed.
-function makeParams(value: number | null | undefined) {
+// WHY _makeParams prefix: function is defined for future cell renderer tests
+// (ICellRendererParams mock). Unused at the moment; prefix suppresses lint.
+function _makeParams(value: number | null | undefined) {
   return {
     data: {
       // dist_from_52w_high_pct is one of the 8 L3 fields; using it as a proxy

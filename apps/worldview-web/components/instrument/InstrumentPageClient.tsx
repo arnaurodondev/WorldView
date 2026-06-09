@@ -214,8 +214,17 @@ export function InstrumentPageClient({ entityId }: InstrumentPageClientProps) {
             /v1/fundamentals/*). Until the page-bundle resolves, no fetches
             should fire — pass undefined-coerced empty string makes useQuery's
             enabled flag false. */}
+        {/* PLAN-0089 W3 T-25: FinancialsTab now receives instrument + entityId
+            for the 7-panel sidebar (CompanySnapshotPanel needs Instrument fields;
+            AIBriefPanel needs entityId for the briefing endpoint). Post-F2,
+            entityId === instrumentId for all new instruments. */}
         {activeTab === "financials" && (
-          <FinancialsTab instrumentId={bundle?.instrument_id ?? ""} />
+          <FinancialsTab
+            instrumentId={bundle?.instrument_id ?? ""}
+            entityId={entityId}
+            instrument={bundle?.overview?.instrument ?? null}
+            quote={bundle?.overview?.quote ?? null}
+          />
         )}
         {/* Wave D: Intelligence tab (T-D-04) — 3-column orchestrator
             (NewsColumn | GraphColumn | ContextPanel). All data fetching lives

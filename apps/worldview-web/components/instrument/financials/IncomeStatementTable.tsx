@@ -1,40 +1,52 @@
 /**
- * components/instrument/financials/IncomeStatementTable.tsx
+ * components/instrument/financials/IncomeStatementTable.tsx — P&L table (T-10)
  *
- * WHY THIS EXISTS (PLAN-0090 T-C-02): Finviz-style P&L block showing the last
- * 4 fiscal years side-by-side. Ratios (margins/PE) compress the trajectory
- * analysts want — a 5-row × 4-FY table answers the multi-year story at a glance.
+ * WHY THIS EXISTS (PLAN-0090 T-C-02 + PLAN-0089 W3 T-10): Finviz-style P&L
+ * block showing the last 4–8 fiscal periods side-by-side. The `p`/`P` chord
+ * (Δ12) toggles between Annual (5 cols) and Quarterly (8 cols). Analysts use
+ * the quarterly view to see earnings momentum between fiscal years.
  *
- * WHY 4 FY COLUMNS: enough to see a trend; six would wrap the 1fr left column
- * at 11px monospace. WHY ROWS = Revenue / Gross Profit / EBIT / Net Income /
- * EPS: the standard P&L ladder — scale, efficiency, op leverage, bottom line,
- * per-share. Bloomberg DES "IS" uses the same ordering.
+ * WHY 4 FY COLUMNS (annual): enough to see a trend; 6 would wrap the 1fr
+ * left column at 11px monospace. WHY 8 QTR COLUMNS: 2 years of quarterly
+ * data lets analysts see seasonal patterns (Apple's Q1 peak).
  *
- * DATA: S9 GET /v1/fundamentals/{id}/income-statement → ANNUAL records.
- * data dict uses EODHD PascalCase (totalRevenue, grossProfit, operatingIncome,
- * netIncome, eps); some metric-extractor paths normalize to snake_case so we
- * try both. DESIGN: PRD-0088 §6.8, PLAN-0090 §T-C-02.
+ * WHY Sparkline column at right edge (Δ3): revenue trend sparkline gives a
+ * "trajectory at a glance" so analysts scanning quickly can see slope without
+ * reading individual numbers. Uses F1 Sparkline primitive (no fork).
+ *
+ * DATA: S9 GET /v1/fundamentals/{id}/income-statement → ANNUAL + QUARTERLY records.
+ * DESIGN: PRD-0088 §6.8, PLAN-0090 §T-C-02, PLAN-0089 W3 T-10.
  */
 
 "use client";
-// WHY "use client": useQuery requires React context (TanStack Query provider).
+// WHY "use client": useQuery + useState (period toggle) require browser runtime.
 
 import { useQuery } from "@tanstack/react-query";
 import { createGateway } from "@/lib/gateway";
 import { useAuth } from "@/hooks/useAuth";
 import { Skeleton } from "@/components/ui/skeleton";
+import { Sparkline } from "@/components/primitives/Sparkline";
 import { formatMarketCap, formatPrice } from "@/lib/utils";
+
+// ── Props ─────────────────────────────────────────────────────────────────────
 
 interface IncomeStatementTableProps {
   instrumentId: string;
+  // WHY controlled prop (not local state): the parent FinancialsTab owns the
+  // `p` chord handler. Receiving periodType + onPeriodToggle as props keeps
+  // this component purely controlled — easier to test and reuse.
+  periodType?: "ANNUAL" | "QUARTERLY";
+  onPeriodToggle?: () => void;
 }
+
+// ── Data shapes ───────────────────────────────────────────────────────────────
 
 // WHY typed (not Record<string, unknown>): records.data is JSONB; typing the
 // cast prevents typos from silently rendering "—" in every cell.
 interface IncomeStatementData {
   totalRevenue?: number | string | null;
   grossProfit?: number | string | null;
-  operatingIncome?: number | string | null;  // EODHD's EBIT field
+  operatingIncome?: number | string | null;
   netIncome?: number | string | null;
   eps?: number | string | null;
   total_revenue?: number | string | null;
@@ -43,8 +55,8 @@ interface IncomeStatementData {
   net_income?: number | string | null;
 }
 
-// WHY co-located row config: label and accessor key are tightly coupled — a
-// separate constants file would invite mismatch when either changes.
+// ── Row config ────────────────────────────────────────────────────────────────
+
 const ROWS = [
   { key: "revenue",      label: "Revenue" },
   { key: "gross_profit", label: "Gross Profit" },
@@ -54,7 +66,8 @@ const ROWS = [
 ] as const;
 type RowKey = typeof ROWS[number]["key"];
 
-// EODHD returns some fields as string-encoded numbers ("391036000000").
+// ── Helpers ───────────────────────────────────────────────────────────────────
+
 function safeNum(v: unknown): number | null {
   if (v == null || v === "" || v === "None") return null;
   const n = typeof v === "number" ? v : Number(v);
@@ -62,7 +75,6 @@ function safeNum(v: unknown): number | null {
 }
 
 function extractValue(data: IncomeStatementData, key: RowKey): number | null {
-  // EBIT === operatingIncome in EODHD's income-statement section.
   switch (key) {
     case "revenue":      return safeNum(data.totalRevenue    ?? data.total_revenue);
     case "gross_profit": return safeNum(data.grossProfit     ?? data.gross_profit);
@@ -72,27 +84,36 @@ function extractValue(data: IncomeStatementData, key: RowKey): number | null {
   }
 }
 
-// WHY UTC parse: avoids off-by-one-day in western timezones at midnight UTC.
-function formatFY(dateStr: string): string {
+function formatFY(dateStr: string, quarterly: boolean): string {
   try {
-    return `FY${String(new Date(dateStr + "T00:00:00Z").getUTCFullYear()).slice(2)}`;
+    const d = new Date(dateStr + "T00:00:00Z");
+    const year = String(d.getUTCFullYear()).slice(2);
+    if (!quarterly) return `FY${year}`;
+    // WHY quarter from month: EODHD period_end dates are the fiscal quarter end.
+    // Q1=Jan-Mar (month 3), Q2=Apr-Jun (month 6), Q3=Jul-Sep (month 9), Q4=Oct-Dec (month 12).
+    const month = d.getUTCMonth() + 1;
+    const q = month <= 3 ? 1 : month <= 6 ? 2 : month <= 9 ? 3 : 4;
+    return `Q${q}'${year}`;
   } catch {
     return dateStr.slice(0, 4);
   }
 }
 
-// WHY split EPS from money: formatMarketCap renders "$0.00" for EPS under $1M
-// (wrong scale). EPS is per-share — use Intl currency formatter via formatPrice.
 function formatCell(v: number | null, key: RowKey): string {
   if (v == null) return "—";
   return key === "eps" ? formatPrice(v) : formatMarketCap(v);
 }
 
-export function IncomeStatementTable({ instrumentId }: IncomeStatementTableProps) {
-  const { accessToken } = useAuth();
+// ── Component ─────────────────────────────────────────────────────────────────
 
-  // WHY staleTime 24h: annual P&L changes only on new fiscal-year 10-K filings.
-  // Matches the T-A-03 useFinancialsTabData policy → TanStack dedupes shared keys.
+export function IncomeStatementTable({
+  instrumentId,
+  periodType = "ANNUAL",
+  onPeriodToggle,
+}: IncomeStatementTableProps) {
+  const { accessToken } = useAuth();
+  const isQuarterly = periodType === "QUARTERLY";
+
   const { data, isLoading } = useQuery({
     queryKey: ["income-statement", instrumentId],
     queryFn: () => createGateway(accessToken).getIncomeStatement(instrumentId),
@@ -100,52 +121,97 @@ export function IncomeStatementTable({ instrumentId }: IncomeStatementTableProps
     staleTime: 24 * 60 * 60 * 1000,
   });
 
-  // WHY ANNUAL only: quarterly columns (12+ narrow cells) would overflow 1fr.
-  // Sort ascending then slice last 4 for newest-on-right Finviz convention.
+  // WHY filter by period_type: the endpoint returns both ANNUAL and QUARTERLY
+  // records. We show only the selected period. Quarterly view shows last 8 quarters.
   const cols = (data?.records ?? [])
-    .filter((r) => r.period_type === "ANNUAL")
+    .filter((r) => r.period_type === (isQuarterly ? "QUARTERLY" : "ANNUAL"))
     .sort((a, b) => a.period_end.localeCompare(b.period_end))
-    .slice(-4);
+    .slice(isQuarterly ? -8 : -4);
 
   if (isLoading) return <Skeleton className="h-[140px] rounded-[2px]" />;
+
   if (cols.length === 0) {
-    return <div className="text-[11px] text-muted-foreground px-2 py-2">Income statement not available.</div>;
+    return (
+      <div className="text-[11px] text-muted-foreground px-2 py-2 font-mono">
+        Income statement not available.
+      </div>
+    );
   }
 
   return (
-    <table className="w-full text-[11px] font-mono" role="table" aria-label="Annual income statement">
-      <thead>
-        <tr>
-          {/* Blank header over row labels; min-w-[80px] keeps "Gross Profit" un-truncated at 11px. */}
-          <th scope="col" className="py-1 px-2 text-left text-[10px] uppercase tracking-[0.08em] text-muted-foreground font-normal min-w-[80px]" />
-          {cols.map((r) => (
-            <th key={r.id} scope="col" className="py-1 px-2 text-right text-[10px] uppercase tracking-[0.08em] text-muted-foreground font-mono font-normal tabular-nums whitespace-nowrap">
-              {formatFY(r.period_end)}
+    // WHY data-table-grid (default 20px): income table rows are 20px, not 18px
+    // (dense variant is reserved for DenseMetricsGrid only per Δ5).
+    <div data-table-grid className="w-full">
+      {/* Section header with period toggle */}
+      <div className="flex h-6 items-center justify-between border-b border-border px-2">
+        <span className="text-[10px] uppercase tracking-[0.08em] text-muted-foreground font-mono">
+          INCOME STATEMENT
+        </span>
+        <button
+          onClick={onPeriodToggle}
+          className="text-[9px] font-mono text-primary hover:text-primary/80 transition-colors"
+          aria-label={`Switch to ${isQuarterly ? "annual" : "quarterly"} view (p)`}
+          title="Toggle Annual / Quarterly (p)"
+        >
+          {isQuarterly ? "ANNUAL" : "QUARTERLY"} ↔
+        </button>
+      </div>
+
+      <table className="w-full text-[11px] font-mono" role="table" aria-label={`${isQuarterly ? "Quarterly" : "Annual"} income statement`}>
+        <thead>
+          <tr>
+            <th scope="col" className="py-1 px-2 text-left text-[10px] uppercase tracking-[0.08em] text-muted-foreground font-normal min-w-[80px]" />
+            {cols.map((r) => (
+              <th key={r.id} scope="col" className="py-1 px-2 text-right text-[10px] uppercase tracking-[0.08em] text-muted-foreground font-mono font-normal tabular-nums whitespace-nowrap">
+                {formatFY(r.period_end, isQuarterly)}
+              </th>
+            ))}
+            {/* WHY Sparkline header: signals to the analyst that the last column
+                is a trend sparkline, not a period label. */}
+            <th scope="col" className="py-1 px-2 text-right text-[10px] text-muted-foreground font-normal">
+              <span className="sr-only">Trend</span>
+              <span aria-hidden>↗</span>
             </th>
-          ))}
-        </tr>
-      </thead>
-      <tbody className="divide-y divide-border/30">
-        {ROWS.map((row) => (
-          <tr key={row.key} className="hover:bg-muted/20 transition-colors">
-            <td className="py-1 px-2 text-[10px] uppercase tracking-[0.06em] text-muted-foreground whitespace-nowrap">{row.label}</td>
-            {cols.map((r) => {
-              const v = extractValue(r.data as IncomeStatementData, row.key);
-              // WHY color only net_income: revenue/gross/EBIT being "positive
-              // green" adds no information beyond the number; net-income sign
-              // coloring flags loss-years immediately (the actionable signal).
-              const color = row.key === "net_income" && v != null
-                ? v >= 0 ? "text-positive" : "text-negative"
-                : "text-foreground";
-              return (
-                <td key={r.id} className={`py-1 px-2 text-right tabular-nums whitespace-nowrap ${v == null ? "text-muted-foreground/40" : color}`}>
-                  {formatCell(v, row.key)}
-                </td>
-              );
-            })}
           </tr>
-        ))}
-      </tbody>
-    </table>
+        </thead>
+        <tbody className="divide-y divide-border/30">
+          {ROWS.map((row) => {
+            // Extract values for this row across all columns (for the sparkline).
+            const values = cols.map((r) => extractValue(r.data as IncomeStatementData, row.key));
+            // WHY filter nulls for sparkline: Sparkline expects a dense array.
+            const sparkValues = values.filter((v): v is number => v != null);
+
+            return (
+              <tr key={row.key} className="hover:bg-muted/20 transition-colors">
+                <td className="py-1 px-2 text-[10px] uppercase tracking-[0.06em] text-muted-foreground whitespace-nowrap">
+                  {row.label}
+                </td>
+                {cols.map((r) => {
+                  const v = extractValue(r.data as IncomeStatementData, row.key);
+                  const color = row.key === "net_income" && v != null
+                    ? v >= 0 ? "text-positive" : "text-negative"
+                    : "text-foreground";
+                  return (
+                    <td key={r.id} className={`py-1 px-2 text-right tabular-nums whitespace-nowrap ${v == null ? "text-muted-foreground/40" : color}`}>
+                      {formatCell(v, row.key)}
+                    </td>
+                  );
+                })}
+                {/* WHY F1 Sparkline (not an inline SVG): the F1 Sparkline primitive
+                    owns the color-trend logic and zero-line handling. Using it here
+                    keeps the Income table consistent with the BeatMissHistoryPanel. */}
+                <td className="py-1 px-2 text-right">
+                  {sparkValues.length >= 2 ? (
+                    <Sparkline data={sparkValues} width={40} height={12} trend="auto" />
+                  ) : (
+                    <span className="text-muted-foreground/30">—</span>
+                  )}
+                </td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+    </div>
   );
 }

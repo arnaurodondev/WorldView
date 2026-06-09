@@ -1,99 +1,110 @@
 /**
- * components/instrument/financials/AnalystSidebar.tsx — Right-rail analyst panel
+ * components/instrument/financials/AnalystSidebar.tsx — 7-panel composition shell (T-24)
  *
- * WHY THIS EXISTS: PRD-0088 §6.8 specifies a fixed 280px right column on the
- * Financials tab that surfaces the most decision-relevant artefact: Wall-Street
- * recommendation consensus + 12-month price target (Bloomberg BEST/EE; Finviz
- * "Recom" pill). Sits side-by-side with the metrics grid so the analyst can
- * compare company truth (10-K numbers, left) against market opinion (right)
- * without scrolling.
+ * WHY THIS EXISTS (T-24 rewrite): PLAN-0089 W3 replaces the original 2-field
+ * sidebar (consensus bar + 12-mo target) with a full 7-panel vertical stack.
+ * The rewrite converts this file into a thin composition shell: each panel is
+ * its own component with its own logic. The sidebar shell just orders them and
+ * the border-b on each panel provides visual separation.
  *
- * COMPOSITION (top → bottom): "ANALYST CONSENSUS" header → <AnalystMiniBar/>
- * (T-B-02 reuse) → consensus 12-mo target (font-mono, large) → updated-at
- * timestamp pinned to bottom.
+ * WHY 240px width (was 280px): per §9.3 of the design spec. 240px gives the
+ * left column ~60px more space at 1440px viewport — enough for an extra column
+ * in PeerComparisonTable without truncating ticker symbols.
  *
- * WHY REUSE AnalystMiniBar (do not duplicate): T-B-02 already owns the 5-bucket
- * stacked recommendation bar with the Bloomberg palette + null-handling logic.
- * Duplicating it would fragment the design system and double the test surface.
+ * PANEL ORDER (T-24 spec):
+ *   1. CompanySnapshotPanel   — who/what the company is
+ *   2. AnalystConsensusPanel  — consensus bucket bar
+ *   3. TargetPricePanel       — 12-mo target + upside delta
+ *   4. RevisionsPanel         — estimate revisions (shell only, v1.1 content)
+ *   5. TargetsByAnalystPanel  — per-analyst targets (shell only, v1.1 content)
+ *   6. BeatMissHistoryPanel   — historical EPS beat/miss sparkline
+ *   7. AIBriefPanel           — AI-generated instrument brief (lazy-generate)
  *
- * WHO USES IT: FinancialsTab.tsx (right column).
- * DATA SOURCE: Props from useFinancialsTabData (T-A-03).
+ * WHY `w-full` (not `w-[240px]`): parent (FinancialsTab) controls the
+ * fixed 240px width. The sidebar fills its container — keeps sizing concerns
+ * at the layout level, not inside the sidebar.
+ *
+ * WHO USES IT: FinancialsTab.tsx (T-25) — rendered in the right column.
+ * DATA SOURCE: All panels receive props or fetch independently via hooks.
  */
 
-// WHY no "use client": pure presentational — no hooks, no browser APIs.
+// WHY no "use client": this shell is purely compositional.
+// Individual panels declare "use client" when they need browser APIs.
 
-import { AnalystMiniBar } from "@/components/instrument/quote/metrics/AnalystMiniBar";
-import { formatPrice } from "@/lib/utils";
+import { AnalystConsensusPanel } from "./sidebar/AnalystConsensusPanel";
+import { TargetPricePanel } from "./sidebar/TargetPricePanel";
+import { RevisionsPanel } from "./sidebar/RevisionsPanel";
+import { TargetsByAnalystPanel } from "./sidebar/TargetsByAnalystPanel";
+import { BeatMissHistoryPanel } from "./sidebar/BeatMissHistoryPanel";
+import { AIBriefPanel } from "./sidebar/AIBriefPanel";
+import { CompanySnapshotPanel } from "./sidebar/CompanySnapshotPanel";
+import type { Instrument, Fundamentals } from "@/types/api";
+
+// ── Props ─────────────────────────────────────────────────────────────────────
 
 export interface AnalystSidebarProps {
-  // 5 bucket counts — null = EODHD never returned a value (no coverage).
-  // Passed verbatim to AnalystMiniBar which owns the null/empty rendering.
-  readonly strongBuy: number | null;
-  readonly buy: number | null;
-  readonly hold: number | null;
-  readonly sell: number | null;
-  readonly strongSell: number | null;
-  // Consensus 12-mo target (USD); null → "—" so layout height stays stable.
-  readonly targetPrice: number | null;
-  // ISO-8601 UTC; rendered date-only at the bottom for data-freshness signal.
-  readonly updatedAt: string | null;
+  // Instrument identity for CompanySnapshotPanel (sector, industry, HQ, description).
+  readonly instrument: Instrument | null | undefined;
+  // WHY Fundamentals (not individual fields): passing the full Fundamentals
+  // object avoids prop drilling 10+ fields through the sidebar shell. Each
+  // panel reads only what it needs.
+  readonly fundamentals: Fundamentals | null | undefined;
+  // Current quote price for TargetPricePanel upside % calculation.
+  readonly currentPrice: number | null | undefined;
+  // entityId for AIBriefPanel (KG entity ID = instrumentId post-F2, Δ8).
+  readonly entityId: string;
+  // instrumentId for BeatMissHistoryPanel (S9 fundamentals endpoint key).
+  readonly instrumentId: string;
 }
 
+// ── Component ─────────────────────────────────────────────────────────────────
+
 export function AnalystSidebar({
-  strongBuy,
-  buy,
-  hold,
-  sell,
-  strongSell,
-  targetPrice,
-  updatedAt,
+  instrument,
+  fundamentals,
+  currentPrice,
+  entityId,
+  instrumentId,
 }: AnalystSidebarProps) {
-  // WHY `flex flex-col h-full`: parent gives us w-[280px] + full tab height.
-  // Filling vertically lets the timestamp pin to the bottom (mt-auto) even
-  // when the bar + target take <50% of the column — keeps the section anchored.
   return (
+    // WHY `overflow-y-auto h-full`: the sidebar must scroll independently from
+    // the left column. Setting h-full matches the parent flex container height;
+    // overflow-y-auto allows scroll when the 7 panels overflow.
     <aside
-      className="flex h-full w-full flex-col border-l border-border bg-background"
-      aria-label="Analyst consensus"
+      className="flex h-full w-full flex-col overflow-y-auto border-l border-border bg-background"
+      aria-label="Instrument analysis sidebar"
     >
-      {/* Section header — 24px terminal-row baseline used across the app */}
-      <div className="flex h-6 shrink-0 items-center border-b border-border px-2">
-        <span className="text-[10px] uppercase tracking-[0.08em] text-muted-foreground">
-          ANALYST CONSENSUS
-        </span>
-      </div>
+      {/* 1. Company identity — always first so the analyst knows what they're
+          looking at before reading any numbers. */}
+      <CompanySnapshotPanel instrument={instrument} />
 
-      <div className="flex flex-1 flex-col gap-3 p-2">
-        {/* Reuse T-B-02. AnalystMiniBar handles null counts + empty-state. */}
-        <AnalystMiniBar
-          strongBuy={strongBuy}
-          buy={buy}
-          hold={hold}
-          sell={sell}
-          strongSell={strongSell}
-        />
+      {/* 2. Analyst consensus bar — primary sentiment signal. */}
+      <AnalystConsensusPanel
+        strongBuy={fundamentals?.analyst_strong_buy_count ?? null}
+        buy={fundamentals?.analyst_buy_count ?? null}
+        hold={fundamentals?.analyst_hold_count ?? null}
+        sell={fundamentals?.analyst_sell_count ?? null}
+        strongSell={fundamentals?.analyst_strong_sell_count ?? null}
+      />
 
-        {/* WHY a dedicated block (not inline in the bar): the target price is
-            the most-cited number on the page. Caption + big mono digit makes
-            it scannable in <200ms — the "first glance" budget on a terminal. */}
-        <div className="flex flex-col gap-0.5">
-          <span className="text-[10px] uppercase tracking-[0.06em] text-muted-foreground">
-            12-MO Target
-          </span>
-          <span className="font-mono text-[18px] leading-tight text-foreground tabular-nums">
-            {targetPrice != null ? formatPrice(targetPrice) : "—"}
-          </span>
-        </div>
+      {/* 3. 12-month price target + upside/downside delta. */}
+      <TargetPricePanel
+        targetPrice={fundamentals?.analyst_target_price ?? null}
+        currentPrice={currentPrice ?? null}
+        updatedAt={fundamentals?.updated_at ?? null}
+      />
 
-        {/* WHY mt-auto: pins the timestamp to the bottom regardless of upper
-            block heights. WHY date-only slice (not full ISO): minute precision
-            adds no decision value at this density. */}
-        {updatedAt && (
-          <div className="mt-auto pt-2 text-[10px] text-muted-foreground/70">
-            <span>Updated {updatedAt.slice(0, 10)}</span>
-          </div>
-        )}
-      </div>
+      {/* 4. Estimate revisions — v1.1 content, shell ships now (Δ18). */}
+      <RevisionsPanel />
+
+      {/* 5. Per-analyst price targets — v1.1 content, shell ships now (Δ17). */}
+      <TargetsByAnalystPanel />
+
+      {/* 6. Beat/miss history sparkline — self-fetching via earnings-history key. */}
+      <BeatMissHistoryPanel instrumentId={instrumentId} />
+
+      {/* 7. AI brief panel — lazy-generate flow (GET→POST→poll per Δ19). */}
+      <AIBriefPanel entityId={entityId} />
     </aside>
   );
 }
