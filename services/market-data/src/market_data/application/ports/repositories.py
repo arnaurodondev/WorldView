@@ -116,6 +116,22 @@ class ScreenFilter:
     # Wave L-4b: insider 90d rollup range filter — negatives are valid.
     insider_net_buy_90d_min: float | None = None
     insider_net_buy_90d_max: float | None = None
+    # ── Wave L-5b: intelligence rollup column filters (PLAN-0089) ────────────
+    # Numeric min/max ranges for the 4 numeric intelligence fields; boolean
+    # equality for the 2 flag fields. All default to None for R11 forward-compat.
+    # NULL-safe semantics: instruments without a snapshot row (or with NULL
+    # intelligence columns) are excluded when any L-5b predicate is active
+    # (``NULL >= :v`` → UNKNOWN). The sync worker fills them nightly.
+    news_count_7d_min: int | None = None
+    news_count_7d_max: int | None = None
+    llm_relevance_7d_max_min: float | None = None
+    llm_relevance_7d_max_max: float | None = None
+    display_relevance_7d_weighted_min: float | None = None
+    display_relevance_7d_weighted_max: float | None = None
+    recent_contradiction_count_min: int | None = None
+    recent_contradiction_count_max: int | None = None
+    has_active_alert: bool | None = None
+    has_ai_brief: bool | None = None
 
 
 @dataclass(frozen=True, slots=True)

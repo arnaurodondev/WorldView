@@ -48,6 +48,16 @@ _SNAP_FIELDS: tuple[str, ...] = (
     "next_dividend_date",
     # Wave L-4b: trailing-90d insider net dollar flow.
     "insider_net_buy_90d",
+    # ── Wave L-5b: intelligence rollup columns (PLAN-0089, migration 035) ────
+    # Projected in every screener result so the IB-L5 columns can render
+    # without an active filter. Boolean columns (has_active_alert, has_ai_brief)
+    # are nullable — NULL means "sync has not yet run for this instrument".
+    "news_count_7d",
+    "llm_relevance_7d_max",
+    "display_relevance_7d_weighted",
+    "recent_contradiction_count",
+    "has_active_alert",
+    "has_ai_brief",
 )
 
 if TYPE_CHECKING:
@@ -451,6 +461,11 @@ async def query_screen(
         "short_percent",
         # Wave L-4b: trailing-90d insider net dollar flow (sortable + filterable).
         "insider_net_buy_90d",
+        # ── Wave L-5b: intelligence rollup numeric fields (PLAN-0089) ─────────
+        "news_count_7d",
+        "llm_relevance_7d_max",
+        "display_relevance_7d_weighted",
+        "recent_contradiction_count",
     )
     for snap_field in numeric_snap_filters:
         # PLAN-0103 W16 (BP-635): skip predicates against columns the deployed
@@ -505,6 +520,19 @@ async def query_screen(
                 <= func.current_date() + text(":n_days * INTERVAL '1 day'").bindparams(n_days=days)
             )
 
+    # ── Wave L-5b: boolean equality filters (has_active_alert, has_ai_brief) ──
+    # Boolean columns use equality (=) rather than range predicates.
+    # PLAN-0103 W16 guard: skip if the column is missing from the deployed schema.
+    for bool_field in ("has_active_alert", "has_ai_brief"):
+        if bool_field not in snap_fields_available:
+            continue
+        val = next(
+            (getattr(f, bool_field) for f in filters if getattr(f, bool_field, None) is not None),
+            None,
+        )
+        if val is not None:
+            stmt = stmt.where(getattr(snap, bool_field) == val)
+
     # Sorting — column resolved from ORM attributes (no raw SQL interpolation)
     sort_col: Any
     if sort_by == "ticker":
@@ -521,6 +549,16 @@ async def query_screen(
         # Wave L-5c: ORDER BY snapshot calendar columns (ASC = soonest first).
         # Reuses the same nullslast policy below — instruments with NULL
         # calendar values sort last regardless of direction.
+        sort_col = getattr(snap, sort_by) if sort_by in snap_fields_available else None
+    elif sort_by in {
+        # Wave L-5b: intelligence rollup snapshot columns (sortable).
+        "news_count_7d",
+        "llm_relevance_7d_max",
+        "display_relevance_7d_weighted",
+        "recent_contradiction_count",
+        "has_active_alert",
+        "has_ai_brief",
+    }:
         sort_col = getattr(snap, sort_by) if sort_by in snap_fields_available else None
     elif sort_by is not None:
         # metric sort: find the column from the metric subqueries

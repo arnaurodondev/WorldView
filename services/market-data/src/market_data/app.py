@@ -454,6 +454,72 @@ def _get_static_screen_fields() -> list:
             observed_max=None,
             null_fraction=0.0,
         ),
+        # ── Wave L-5b: intelligence rollup columns ────────────────────────────
+        # LOCK-STEP with migration 035's seed rows — divergence makes the 6h
+        # refresh loop silently overwrite the seeded values on first tick.
+        # field_type='numeric' for all 6 (has_active_alert / has_ai_brief
+        # are boolean in the DB but the CHECK constraint admits only
+        # 'numeric'/'text'/'date'; same workaround as has_fundamentals / has_ohlcv).
+        ScreenFieldMetadata(
+            name="news_count_7d",
+            label="NEWS 7D",
+            field_type="numeric",
+            unit="count",
+            description="Number of news articles mentioning this instrument in the past 7 days",
+            observed_min=None,
+            observed_max=None,
+            null_fraction=0.0,
+        ),
+        ScreenFieldMetadata(
+            name="llm_relevance_7d_max",
+            label="LLM REL MAX",
+            field_type="numeric",
+            unit="score_1",
+            description="Maximum LLM relevance score across all news articles in the past 7 days (0-1)",
+            observed_min=None,
+            observed_max=None,
+            null_fraction=0.0,
+        ),
+        ScreenFieldMetadata(
+            name="display_relevance_7d_weighted",
+            label="DISP REL 7D",
+            field_type="numeric",
+            unit="score_1",
+            description="Weighted display relevance score across all news articles in the past 7 days (0-1)",
+            observed_min=None,
+            observed_max=None,
+            null_fraction=0.0,
+        ),
+        ScreenFieldMetadata(
+            name="recent_contradiction_count",
+            label="CONTRADICTIONS",
+            field_type="numeric",
+            unit="count",
+            description="Number of intelligence contradictions detected in the past 7 days",
+            observed_min=None,
+            observed_max=None,
+            null_fraction=0.0,
+        ),
+        ScreenFieldMetadata(
+            name="has_active_alert",
+            label="HAS ALERT",
+            field_type="numeric",
+            unit=None,
+            description="Instrument has at least one active flash alert",
+            observed_min=None,
+            observed_max=None,
+            null_fraction=0.0,
+        ),
+        ScreenFieldMetadata(
+            name="has_ai_brief",
+            label="HAS BRIEF",
+            field_type="numeric",
+            unit=None,
+            description="Instrument has a current AI-generated intelligence brief",
+            observed_min=None,
+            observed_max=None,
+            null_fraction=0.0,
+        ),
     ]
 
 
@@ -505,6 +571,110 @@ async def _screen_fields_refresh_loop(
         except Exception as exc:
             log.error("screen_fields_refresh_error", error=str(exc))  # type: ignore[attr-defined]
             await asyncio.sleep(_SCREEN_FIELDS_REFRESH_RETRY_SECONDS)
+
+
+# ── PLAN-0089 Wave L-5b: IntelligenceRollupSync scheduler ────────────────────
+# Cadence: daily at INTELLIGENCE_ROLLUP_HOUR_UTC (default 04:00 UTC) — one
+# hour after L-4b's 03:00. Pulls 6 intelligence fields from S6/S7/S10/S8 and
+# materialises them into ``instrument_fundamentals_snapshot``.
+# The 20-hour skip-guard (handled inside ``SyncIntelligenceRollupUseCase``)
+# prevents duplicate runs after container restarts. On failure, backs off 5 min.
+_INTELLIGENCE_ROLLUP_RETRY_SECONDS = 300  # 5-min back-off on failure
+_INTELLIGENCE_ROLLUP_DEFAULT_HOUR_UTC = 4
+
+
+async def _intelligence_rollup_loop(
+    write_factory: async_sessionmaker,
+    log: object,
+    settings: object,
+) -> None:
+    """Background task: run intelligence rollup sync daily at 04:00 UTC.
+
+    WHY scheduled: the 6 intelligence fields are aggregates over a 7-day
+    trailing window and have no natural per-event trigger — a once-a-day
+    sweep is the simplest correct cadence.
+
+    The hour is configurable via ``MARKET_DATA_INTELLIGENCE_ROLLUP_HOUR_UTC``
+    (0-23, default 4). Mirror of ``_computed_metrics_refresh_loop``.
+    """
+    from common.time import utc_now  # type: ignore[import-untyped]
+    from market_data.application.use_cases.sync_intelligence_rollup import (
+        SyncIntelligenceRollupOptions,
+        run_intelligence_rollup,
+    )
+
+    try:
+        target_hour = int(getattr(settings, "intelligence_rollup_hour_utc", _INTELLIGENCE_ROLLUP_DEFAULT_HOUR_UTC))
+        if not (0 <= target_hour <= 23):
+            raise ValueError("hour must be 0-23")
+    except (ValueError, TypeError) as exc:
+        log.warning(  # type: ignore[attr-defined]
+            "intelligence_rollup_invalid_hour_using_default",
+            error=str(exc),
+            default=_INTELLIGENCE_ROLLUP_DEFAULT_HOUR_UTC,
+        )
+        target_hour = _INTELLIGENCE_ROLLUP_DEFAULT_HOUR_UTC
+
+    last_success_at: object | None = None
+
+    while True:
+        try:
+            now = utc_now()
+            sleep_seconds = _seconds_until_next_hour_utc(target_hour, now)
+            await asyncio.sleep(sleep_seconds)
+
+            now_after_sleep = utc_now()
+            if last_success_at is not None:
+                from datetime import datetime as _dt
+
+                assert isinstance(last_success_at, _dt)
+                delta = (now_after_sleep - last_success_at).total_seconds()
+                if delta < 20 * 3600:  # 20-hour minimum-interval guard
+                    log.info(  # type: ignore[attr-defined]
+                        "intelligence_rollup_skip_too_recent",
+                        last_success_at=last_success_at.isoformat(),
+                        seconds_since=delta,
+                    )
+                    continue
+
+            s6_url = getattr(settings, "content_store_url", "http://content-store:8006")
+            s7_url = getattr(settings, "knowledge_graph_url", "http://knowledge-graph:8007")
+            s10_url = getattr(settings, "alert_service_url", "http://alert-service:8010")
+            s8_url = getattr(settings, "rag_chat_url", "http://rag-chat:8008")
+            pk_raw = getattr(settings, "internal_jwt_private_key", "")
+            if hasattr(pk_raw, "get_secret_value"):
+                private_key_pem: str = pk_raw.get_secret_value()
+            else:
+                private_key_pem = str(pk_raw or "")
+
+            summary = await run_intelligence_rollup(
+                write_factory=write_factory,
+                s6_base_url=s6_url,
+                s7_base_url=s7_url,
+                s10_base_url=s10_url,
+                s8_base_url=s8_url,
+                private_key_pem=private_key_pem,
+                options=SyncIntelligenceRollupOptions(),
+            )
+            last_success_at = utc_now()
+            log.info(  # type: ignore[attr-defined]
+                "intelligence_rollup_completed",
+                instruments_processed=summary.instruments_processed,
+                instruments_skipped_fresh=summary.instruments_skipped_fresh,
+                s6_success=summary.s6_success,
+                s6_failure=summary.s6_failure,
+                s7_success=summary.s7_success,
+                s7_failure=summary.s7_failure,
+                s10_success=summary.s10_success,
+                s10_failure=summary.s10_failure,
+                s8_success=summary.s8_success,
+                s8_failure=summary.s8_failure,
+                runtime_seconds=summary.runtime_seconds,
+                all_failed_count=len(summary.all_failed),
+            )
+        except Exception as exc:
+            log.error("intelligence_rollup_error", error=str(exc))  # type: ignore[attr-defined]
+            await asyncio.sleep(_INTELLIGENCE_ROLLUP_RETRY_SECONDS)
 
 
 # ── PLAN-0089 Wave L-3: ComputedMetricsBackfillWorker scheduler ──────────────
@@ -736,18 +906,28 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     insider_rollup_hour = getattr(settings, "insider_rollup_hour_utc", 3)
     insider_task = asyncio.create_task(insider_rollup_loop(write_factory, log, target_hour_utc=insider_rollup_hour))
 
+    # 8c. PLAN-0089 Wave L-5b: daily 04:00 UTC intelligence rollup sync. Pulls
+    # 6 intelligence fields from S6/S7/S10/S8 (news count, LLM relevance,
+    # display relevance, contradictions, alert flag, AI brief flag) and
+    # materialises them into ``instrument_fundamentals_snapshot``. One hour
+    # after L-4b's 03:00 so three nightly analytical writes are spread evenly.
+    intelligence_rollup_task = asyncio.create_task(_intelligence_rollup_loop(write_factory, log, settings))
+
     log.info("service_started", service=settings.service_name)
     yield
 
     refresh_task.cancel()
     computed_metrics_task.cancel()
     insider_task.cancel()
+    intelligence_rollup_task.cancel()
     with contextlib.suppress(asyncio.CancelledError):
         await refresh_task
     with contextlib.suppress(asyncio.CancelledError):
         await computed_metrics_task
     with contextlib.suppress(asyncio.CancelledError):
         await insider_task
+    with contextlib.suppress(asyncio.CancelledError):
+        await intelligence_rollup_task
 
     eodhd_client = getattr(app.state, "eodhd_client", None)
     if eodhd_client is not None:

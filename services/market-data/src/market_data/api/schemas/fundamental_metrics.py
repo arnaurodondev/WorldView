@@ -108,6 +108,20 @@ class ScreenFilterRequest(BaseModel):
     # Defaults to None for R11 forward-compat — existing callers unaffected.
     insider_net_buy_90d_min: float | None = None
     insider_net_buy_90d_max: float | None = None
+    # ── Wave L-5b: intelligence rollup column filters (PLAN-0089) ────────────
+    # Numeric min/max pairs for the 4 quantitative intelligence fields; boolean
+    # equality for the 2 flag fields. All default to None for R11 forward-compat.
+    # Populated by the nightly ``SyncIntelligenceRollupUseCase`` (04:00 UTC).
+    news_count_7d_min: int | None = None
+    news_count_7d_max: int | None = None
+    llm_relevance_7d_max_min: float | None = None
+    llm_relevance_7d_max_max: float | None = None
+    display_relevance_7d_weighted_min: float | None = None
+    display_relevance_7d_weighted_max: float | None = None
+    recent_contradiction_count_min: int | None = None
+    recent_contradiction_count_max: int | None = None
+    has_active_alert: bool | None = None
+    has_ai_brief: bool | None = None
 
 
 class ScreenRequest(BaseModel):

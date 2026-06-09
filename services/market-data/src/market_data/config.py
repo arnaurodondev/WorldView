@@ -78,6 +78,27 @@ class Settings(BaseSettings):
     # the two big analytical writes do not pile up.
     insider_rollup_hour_utc: int = 3
 
+    # PLAN-0089 Wave L-5b — hour of UTC day at which the intelligence rollup
+    # sync worker fires. Default 04:00 places it one hour after L-4b's 03:00
+    # and two hours after L-3's 02:00 so three large nightly writes are evenly
+    # spread across the 02:00-04:00 UTC window. Configurable via env var
+    # ``MARKET_DATA_INTELLIGENCE_ROLLUP_HOUR_UTC``.
+    intelligence_rollup_hour_utc: int = 4
+
+    # URLs for the 4 upstream intelligence services called by the L-5b worker.
+    # Default to Docker-Compose service names so the out-of-box local dev stack
+    # works without any extra configuration.
+    content_store_url: str = "http://content-store:8006"
+    knowledge_graph_url: str = "http://knowledge-graph:8007"
+    alert_service_url: str = "http://alert-service:8010"
+    rag_chat_url: str = "http://rag-chat:8008"
+
+    # RS256 private key for signing internal JWTs sent to upstream services.
+    # Mirrors the pattern used by ``FundamentalsRefreshWorker``. Empty string
+    # triggers the dev HS256 fallback (acceptable when
+    # ``internal_jwt_skip_verification=True`` on the upstream services).
+    internal_jwt_private_key: str = ""
+
     # PLAN-0102 T-W6-02 / BP-617 — per-message processing timeout (seconds)
     # for the fundamentals consumer's `market.dataset.fetched` topic. The
     # default 90 s replaces the previous library-wide 45 s default after a

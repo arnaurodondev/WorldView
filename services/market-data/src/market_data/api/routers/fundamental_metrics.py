@@ -189,6 +189,13 @@ async def screen_instruments(
         "next_dividend_date",
         # Wave L-4b: insider 90d sortable column.
         "insider_net_buy_90d",
+        # ── Wave L-5b: intelligence rollup sortable columns (PLAN-0089) ──────
+        "news_count_7d",
+        "llm_relevance_7d_max",
+        "display_relevance_7d_weighted",
+        "recent_contradiction_count",
+        "has_active_alert",
+        "has_ai_brief",
     }
     # Wave L-3: computed OHLCV-derived metrics are addressable as sort targets too.
     # They are stored as fundamental_metrics rows (period_type=SNAPSHOT,
@@ -259,6 +266,17 @@ async def screen_instruments(
             # Wave L-4b: insider 90d range.
             insider_net_buy_90d_min=f.insider_net_buy_90d_min,
             insider_net_buy_90d_max=f.insider_net_buy_90d_max,
+            # ── Wave L-5b: intelligence rollup filters (PLAN-0089) ────────────
+            news_count_7d_min=f.news_count_7d_min,
+            news_count_7d_max=f.news_count_7d_max,
+            llm_relevance_7d_max_min=f.llm_relevance_7d_max_min,
+            llm_relevance_7d_max_max=f.llm_relevance_7d_max_max,
+            display_relevance_7d_weighted_min=f.display_relevance_7d_weighted_min,
+            display_relevance_7d_weighted_max=f.display_relevance_7d_weighted_max,
+            recent_contradiction_count_min=f.recent_contradiction_count_min,
+            recent_contradiction_count_max=f.recent_contradiction_count_max,
+            has_active_alert=f.has_active_alert,
+            has_ai_brief=f.has_ai_brief,
         )
         for f in body.filters
     ]
