@@ -94,6 +94,24 @@ export function buildScreenerFilters(f: FilterState): ScreenerFilter[] {
   pushIfRange(filters, "institutional_ownership_pct", f.instOwnPctMin, f.instOwnPctMax);
   pushIfRange(filters, "short_percent", f.shortPctMin, f.shortPctMax);
 
+  // ── Intelligence rollup (SERVER_SIDE — IB-L5) ────────────────────────────
+  // WHY field names byte-for-byte: the backend screener ignores unknown metric
+  // names silently (INNER JOIN miss). Names must match the exact column names
+  // in instrument_fundamentals_snapshot as populated by the L-5b rollup worker.
+  pushIfRange(filters, "news_count_7d", f.newsCount7dMin, f.newsCount7dMax);
+  pushIfRange(filters, "llm_relevance_7d_max", f.llmRelevance7dMin, f.llmRelevance7dMax);
+  pushIfRange(filters, "display_relevance_7d_weighted", f.displayRelevance7dMin, f.displayRelevance7dMax);
+  pushIfRange(filters, "recent_contradiction_count", f.contradictionsMin, f.contradictionsMax);
+  // Boolean filters: represented as range [1, undefined] so the INNER JOIN path
+  // can apply them as WHERE col = true. A min_value of 1 on a BOOLEAN column
+  // is interpreted as "must be true" by the S3 screener backend.
+  if (f.hasAiBrief === true) {
+    filters.push({ metric: "has_ai_brief", min_value: 1 });
+  }
+  if (f.hasActiveAlert === true) {
+    filters.push({ metric: "has_active_alert", min_value: 1 });
+  }
+
   // Sector filter: when sector is selected but no other metric filters are active
   // we still need to communicate the sector restriction. S3's sector field lives on
   // ScreenFilterRequest, so we attach it to the first filter or add a synthetic one.

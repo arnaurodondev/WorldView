@@ -167,6 +167,21 @@ export interface FilterState {
   controversyMax?: number; // CLIENT_FILTER TODO
   recentEarningsDays?: 7 | 30; // CLIENT_FILTER TODO (S3 earnings calendar)
   insiderActivity?: "BUYING" | "SELLING" | "BOTH"; // CLIENT_FILTER TODO (S4 insider)
+
+  // ── Intelligence rollup (SERVER_SIDE — IB-L5) ───────────────────────
+  // WHY these 7 fields: the S7→S3 nightly rollup (L-5b worker) populates
+  // instrument_fundamentals_snapshot with intelligence signals from S6/S7/S8/S10.
+  // Backend metric names match the exact column names in that table.
+  newsCount7dMin?: number;              // news_count_7d ≥ (INTEGER, count of articles last 7d)
+  newsCount7dMax?: number;
+  llmRelevance7dMin?: number;           // llm_relevance_7d_max (FLOAT 0–1, max per-article score)
+  llmRelevance7dMax?: number;
+  displayRelevance7dMin?: number;       // display_relevance_7d_weighted (FLOAT 0–1, weighted avg)
+  displayRelevance7dMax?: number;
+  contradictionsMin?: number;           // recent_contradiction_count (INTEGER, KG contradictions)
+  contradictionsMax?: number;
+  hasAiBrief?: boolean;                 // has_ai_brief (BOOLEAN, TRUE = brief exists in S8)
+  hasActiveAlert?: boolean;             // has_active_alert (BOOLEAN, TRUE = live alert in S10)
 }
 
 /** DEFAULT_FILTERS — used by the page initial state and the Reset button. */

@@ -48,6 +48,8 @@ export interface SectionActiveCounts {
   // IB-L4 — Analyst / Insider / Ownership (SERVER_SIDE, backend shipped)
   ownership: number;
   news: number;
+  // IB-L5 — Intelligence rollup (SERVER_SIDE, backend shipped)
+  intelligence: number;
 }
 
 /**
@@ -116,5 +118,16 @@ export function countActiveFiltersByGroup(
       rangeCount(form.controversyMin, form.controversyMax) +
       (isSet(form.recentEarningsDays) ? 1 : 0) +
       (isSet(form.insiderActivity) ? 1 : 0),
+
+    // IB-L5 — Intelligence rollup (6 range sides + 2 boolean toggles)
+    // WHY boolean flags counted as 1 each: a single boolean "has active alert"
+    // is a meaningful constraint worth showing in the section badge.
+    intelligence:
+      rangeCount(form.newsCount7dMin, form.newsCount7dMax) +
+      rangeCount(form.llmRelevance7dMin, form.llmRelevance7dMax) +
+      rangeCount(form.displayRelevance7dMin, form.displayRelevance7dMax) +
+      rangeCount(form.contradictionsMin, form.contradictionsMax) +
+      (form.hasAiBrief === true ? 1 : 0) +
+      (form.hasActiveAlert === true ? 1 : 0),
   };
 }

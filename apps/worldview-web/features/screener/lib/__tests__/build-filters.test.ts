@@ -231,3 +231,91 @@ describe("buildScreenerFilters — empty filter list (S3 v2 BP-368 fix)", () => 
     expect(hasDailyReturn).toBe(false);
   });
 });
+
+// ── IB-L5 — Intelligence rollup filters ──────────────────────────────────────
+
+describe("buildScreenerFilters — IB-L5 intelligence rollup metric names", () => {
+  it("newsCount7d maps to 'news_count_7d'", () => {
+    // WHY: metric name must match the exact column name in
+    // instrument_fundamentals_snapshot; mismatches are silently dropped.
+    const filters = buildScreenerFilters(makeFilters({ newsCount7dMin: 3 }));
+    const f = findFilter(filters, "news_count_7d");
+    expect(f?.min_value).toBe(3);
+    expect(f?.max_value).toBeUndefined();
+  });
+
+  it("newsCount7d max is also mapped", () => {
+    const filters = buildScreenerFilters(makeFilters({ newsCount7dMin: 2, newsCount7dMax: 50 }));
+    const f = findFilter(filters, "news_count_7d");
+    expect(f?.min_value).toBe(2);
+    expect(f?.max_value).toBe(50);
+  });
+
+  it("llmRelevance7d maps to 'llm_relevance_7d_max'", () => {
+    const filters = buildScreenerFilters(makeFilters({ llmRelevance7dMin: 0.6 }));
+    const f = findFilter(filters, "llm_relevance_7d_max");
+    expect(f?.min_value).toBe(0.6);
+  });
+
+  it("displayRelevance7d maps to 'display_relevance_7d_weighted'", () => {
+    const filters = buildScreenerFilters(makeFilters({ displayRelevance7dMin: 0.5, displayRelevance7dMax: 1 }));
+    const f = findFilter(filters, "display_relevance_7d_weighted");
+    expect(f?.min_value).toBe(0.5);
+    expect(f?.max_value).toBe(1);
+  });
+
+  it("contradictions maps to 'recent_contradiction_count'", () => {
+    const filters = buildScreenerFilters(makeFilters({ contradictionsMin: 1 }));
+    const f = findFilter(filters, "recent_contradiction_count");
+    expect(f?.min_value).toBe(1);
+  });
+
+  it("hasAiBrief=true adds has_ai_brief filter with min_value=1", () => {
+    // WHY min_value=1: boolean columns in S3 are filtered via a range check
+    // WHERE col >= 1, which is equivalent to WHERE col = TRUE for booleans.
+    const filters = buildScreenerFilters(makeFilters({ hasAiBrief: true }));
+    const f = findFilter(filters, "has_ai_brief");
+    expect(f).toBeDefined();
+    expect(f?.min_value).toBe(1);
+  });
+
+  it("hasAiBrief=false does NOT add a has_ai_brief filter", () => {
+    // WHY: false means "no filter" (show all), not "must NOT have brief".
+    const filters = buildScreenerFilters(makeFilters({ hasAiBrief: false }));
+    expect(findFilter(filters, "has_ai_brief")).toBeUndefined();
+  });
+
+  it("hasAiBrief=undefined does NOT add a has_ai_brief filter", () => {
+    const filters = buildScreenerFilters(makeFilters());
+    expect(findFilter(filters, "has_ai_brief")).toBeUndefined();
+  });
+
+  it("hasActiveAlert=true adds has_active_alert filter with min_value=1", () => {
+    const filters = buildScreenerFilters(makeFilters({ hasActiveAlert: true }));
+    const f = findFilter(filters, "has_active_alert");
+    expect(f).toBeDefined();
+    expect(f?.min_value).toBe(1);
+  });
+
+  it("hasActiveAlert=false does NOT add a has_active_alert filter", () => {
+    const filters = buildScreenerFilters(makeFilters({ hasActiveAlert: false }));
+    expect(findFilter(filters, "has_active_alert")).toBeUndefined();
+  });
+
+  it("no intelligence filters are emitted when all IB-L5 fields are at defaults", () => {
+    // WHY: ensures the default screener (no filters set) doesn't silently add
+    // intelligence constraints that would narrow the universe unexpectedly.
+    const filters = buildScreenerFilters(makeFilters());
+    const intelligenceMetrics = [
+      "news_count_7d",
+      "llm_relevance_7d_max",
+      "display_relevance_7d_weighted",
+      "recent_contradiction_count",
+      "has_ai_brief",
+      "has_active_alert",
+    ];
+    for (const metric of intelligenceMetrics) {
+      expect(findFilter(filters, metric)).toBeUndefined();
+    }
+  });
+});

@@ -828,6 +828,16 @@ export interface ScreenerResult {
   insider_net_buy_90d?: number | null;       // net insider buy/sell in USD over 90 days (null ≠ $0)
   institutional_ownership_pct?: number | null; // fraction 0–1 (multiply ×100 for display)
   short_percent?: number | null;             // fraction 0–1 (multiply ×100 for display)
+  // IB-L5 — Intelligence rollup (nightly S7→S3 sync via L-5b worker)
+  // WHY optional (not null): pre-L-5 payloads won't include these keys; optional vs null
+  // lets the renderer show "—" for missing rather than "0" for explicitly null.
+  news_count_7d?: number | null;               // article count last 7 days (INTEGER)
+  llm_relevance_7d_max?: number | null;        // max LLM relevance score last 7d (FLOAT 0–1)
+  display_relevance_7d_weighted?: number | null; // weighted avg display relevance 7d (FLOAT 0–1)
+  recent_contradiction_count?: number | null;  // KG contradiction events (INTEGER)
+  has_ai_brief?: boolean | null;               // TRUE = S8 brief exists for this instrument
+  has_active_alert?: boolean | null;           // TRUE = live S10 alert for this instrument
+  intelligence_rollup_synced_at?: string | null; // ISO-8601 UTC, last L-5b sync timestamp
   [key: string]: unknown; // dynamic fields depending on screener config
 }
 

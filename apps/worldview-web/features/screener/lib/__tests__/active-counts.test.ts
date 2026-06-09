@@ -82,9 +82,9 @@ describe("rangeCount", () => {
 describe("countActiveFiltersByGroup", () => {
   it("returns all zeros for DEFAULT_FILTERS", () => {
     const c = countActiveFiltersByGroup(DEFAULT_FILTERS);
-    // WHY include performance + ownership: IB-L3 and IB-L4 added two new
-    // sections; the equality check must list all 8 keys or the shape contract
-    // will silently drift next time a section is added.
+    // WHY include all sections: IB-L3/L4/L5 each added a new section key.
+    // An exhaustive equality check here means adding a new section without
+    // updating both the helper AND this test will cause a visible failure.
     expect(c).toEqual({
       valuation: 0,
       profitability: 0,
@@ -94,6 +94,7 @@ describe("countActiveFiltersByGroup", () => {
       performance: 0,
       ownership: 0,
       news: 0,
+      intelligence: 0,
     });
   });
 
@@ -159,6 +160,7 @@ describe("countActiveFiltersByGroup", () => {
     expect(c.performance).toBe(0);
     expect(c.ownership).toBe(0);
     expect(c.news).toBe(0);
+    expect(c.intelligence).toBe(0);
   });
 
   it("does not count the search/sector/capTier top-row fields against any section", () => {
@@ -170,10 +172,57 @@ describe("countActiveFiltersByGroup", () => {
       capTier: "LARGE",
     };
     const c = countActiveFiltersByGroup(form);
-    // Include performance + ownership in the sum (IB-L3 / IB-L4 new sections).
+    // Include performance + ownership + intelligence in the sum (IB-L3/L4/L5).
     expect(
       c.valuation + c.profitability + c.growth + c.leverage + c.technical +
-      c.performance + c.ownership + c.news
+      c.performance + c.ownership + c.news + c.intelligence
     ).toBe(0);
+  });
+
+  // ── IB-L5 intelligence section ───────────────────────────────────────────
+
+  it("intelligence: counts newsCount7d range sides independently", () => {
+    const form: FilterState = { ...DEFAULT_FILTERS, newsCount7dMin: 3 };
+    expect(countActiveFiltersByGroup(form).intelligence).toBe(1);
+
+    const form2: FilterState = { ...DEFAULT_FILTERS, newsCount7dMin: 3, newsCount7dMax: 20 };
+    expect(countActiveFiltersByGroup(form2).intelligence).toBe(2);
+  });
+
+  it("intelligence: counts hasAiBrief boolean as 1 (true only)", () => {
+    const formTrue: FilterState = { ...DEFAULT_FILTERS, hasAiBrief: true };
+    expect(countActiveFiltersByGroup(formTrue).intelligence).toBe(1);
+
+    const formFalse: FilterState = { ...DEFAULT_FILTERS, hasAiBrief: false };
+    expect(countActiveFiltersByGroup(formFalse).intelligence).toBe(0);
+
+    const formUndef: FilterState = { ...DEFAULT_FILTERS };
+    expect(countActiveFiltersByGroup(formUndef).intelligence).toBe(0);
+  });
+
+  it("intelligence: counts hasActiveAlert boolean as 1 (true only)", () => {
+    const form: FilterState = { ...DEFAULT_FILTERS, hasActiveAlert: true };
+    expect(countActiveFiltersByGroup(form).intelligence).toBe(1);
+  });
+
+  it("intelligence: aggregates all 6 active intelligence fields", () => {
+    const form: FilterState = {
+      ...DEFAULT_FILTERS,
+      newsCount7dMin: 2,        // +1
+      newsCount7dMax: 50,       // +1
+      contradictionsMin: 1,     // +1
+      displayRelevance7dMin: 0.5, // +1
+      hasAiBrief: true,         // +1
+      hasActiveAlert: true,     // +1
+    };
+    expect(countActiveFiltersByGroup(form).intelligence).toBe(6);
+  });
+
+  it("intelligence: does not bleed into other section counts", () => {
+    const form: FilterState = { ...DEFAULT_FILTERS, newsCount7dMin: 3, hasAiBrief: true };
+    const c = countActiveFiltersByGroup(form);
+    expect(c.intelligence).toBe(2);
+    expect(c.news).toBe(0);
+    expect(c.valuation).toBe(0);
   });
 });

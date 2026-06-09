@@ -211,17 +211,18 @@ describe("ScreenerPage — structure", () => {
     ).toBeInTheDocument();
   });
 
-  it("renders all 32 column headers with ALL CAPS text", () => {
+  it("renders all 34 column headers with ALL CAPS text", () => {
     render(<ScreenerPage />, { wrapper: makeWrapper() });
     // WHY check columnheader role: AG Grid sets role="columnheader" on each
     // header cell for screen reader accessibility.
     // IB-L3/L4: added PERFORMANCE group (52W%↑, 52W%↓, 1M/3M/6M/YTD/1Y/3Y RTN)
     // and OWNERSHIP group (ANALYST TGT, ANALYST UPSIDE, CONSENSUS, INSIDER 90D,
     // INST OWN%, SHORT %) on top of the existing FUNDAMENTALS and RATIOS groups.
-    // Total is now 32 rendered columnheader roles (group headers + leaf columns
+    // IB-L5: added INTELLIGENCE group (NEWS 7D, BRIEF SCORE) — default-visible.
+    // Total is now 34 rendered columnheader roles (group headers + leaf columns
     // both receive role="columnheader" in AG Grid).
     const headers = screen.getAllByRole("columnheader");
-    expect(headers.length).toBe(32);
+    expect(headers.length).toBe(34);
 
     // WHY spot-check specific headers: verifies no columns were silently dropped
     // or renamed during the rewrite.
@@ -234,7 +235,8 @@ describe("ScreenerPage — structure", () => {
     expect(screen.getByRole("columnheader", { name: /p\/e/i })).toBeInTheDocument();
     expect(screen.getByRole("columnheader", { name: /revenue/i })).toBeInTheDocument();
     expect(screen.getByRole("columnheader", { name: /beta/i })).toBeInTheDocument();
-    expect(screen.getByRole("columnheader", { name: /score/i })).toBeInTheDocument();
+    // WHY getAllByRole: IB-L5 added BRIEF SCORE so two headers match /score/i now.
+    expect(screen.getAllByRole("columnheader", { name: /score/i }).length).toBeGreaterThanOrEqual(1);
     expect(screen.getByRole("columnheader", { name: /52w range/i })).toBeInTheDocument();
     expect(screen.getByRole("columnheader", { name: /volume/i })).toBeInTheDocument();
   });

@@ -110,6 +110,9 @@ export const SCREENER_AG_COL_WIDTHS: Record<string, number> = {
   insiderNet90d: 76,
   instOwn: 68,
   shortPct: 64,
+  // IB-L5 — Intelligence rollup (default visible: news7d + briefScore)
+  news7d: 64,
+  briefScore: 68,
 };
 
 // ── Cell renderer components ──────────────────────────────────────────────────
@@ -522,6 +525,69 @@ function ShortPctCellRenderer({ data }: ICellRendererParams<ScreenerResult>) {
   );
 }
 
+// ── IB-L5 — Intelligence rollup renderers ────────────────────────────────────
+// These two columns are DEFAULT VISIBLE (no `hide: true`). The rest of the
+// IB-L5 fields (llm_relevance_7d_max, recent_contradiction_count, has_*)
+// are filterable but have no dedicated column — the user can sort by them
+// once the filter is active. Adding columns for all 7 would exceed DS-013's
+// 14-column horizontal-scroll limit at 1440 px.
+
+/**
+ * News7dCellRenderer — displays `news_count_7d` (integer article count).
+ *
+ * WHY colour thresholds: ≥5 articles in 7 days is "active coverage" (positive
+ * signal for liquidity / analyst attention). 0 articles = no coverage (muted).
+ * The exact thresholds mirror the S6 "high-velocity" bucket definition.
+ */
+function News7dCellRenderer({ data }: ICellRendererParams<ScreenerResult>) {
+  const v = data?.news_count_7d;
+  if (v == null) {
+    return <span className="font-mono text-[11px] tabular-nums text-muted-foreground">—</span>;
+  }
+  // ≥5 = active coverage (positive); 0 = dark (muted); 1–4 = normal
+  const isActive = v >= 5;
+  const isDark = v === 0;
+  return (
+    <span
+      className={cn(
+        "font-mono text-[11px] tabular-nums",
+        isActive ? "text-positive" : isDark ? "text-muted-foreground/50" : "text-foreground",
+      )}
+    >
+      {v}
+    </span>
+  );
+}
+
+/**
+ * BriefScoreCellRenderer — displays `display_relevance_7d_weighted` (0–1 float).
+ *
+ * WHY 2 decimals: the score is a weighted blend of market impact + LLM relevance
+ * + routing score (PRD-0026 §4.2). Two decimal places gives sufficient resolution
+ * (0.85 vs 0.86) without implying false precision. Rendered as a plain decimal,
+ * NOT as a percent — users already know it's a 0–1 score from the column header.
+ *
+ * Colour thresholds: ≥0.70 = high relevance (positive tint); <0.30 = low (muted).
+ */
+function BriefScoreCellRenderer({ data }: ICellRendererParams<ScreenerResult>) {
+  const v = data?.display_relevance_7d_weighted;
+  if (v == null) {
+    return <span className="font-mono text-[11px] tabular-nums text-muted-foreground">—</span>;
+  }
+  const isHigh = v >= 0.7;
+  const isLow = v < 0.3;
+  return (
+    <span
+      className={cn(
+        "font-mono text-[11px] tabular-nums",
+        isHigh ? "text-positive" : isLow ? "text-muted-foreground/60" : "text-foreground",
+      )}
+    >
+      {v.toFixed(2)}
+    </span>
+  );
+}
+
 // Sparkline needs the sparklines map and a suppressed flag — built via factory
 // closure so callers don't have to thread them through cellRendererParams.
 //
@@ -901,6 +967,42 @@ export function createAgScreenerColumns(
           hide: true,
           width: SCREENER_AG_COL_WIDTHS.shortPct,
           cellRenderer: ShortPctCellRenderer,
+        },
+      ],
+    } satisfies ColGroupDef<ScreenerResult>,
+
+    // ── INTELLIGENCE group (IB-L5) ───────────────────────────────────────────
+    // WHY 2 columns default-visible (no `hide: true`): NEWS 7D and BRIEF SCORE
+    // are the highest-signal outputs of the intelligence rollup — surfacing them
+    // by default shows the value of IB-L5 without overwhelming the 14-column
+    // horizontal-scroll limit (DS-013). The remaining IB-L5 fields are available
+    // as filter constraints (see build-filters.ts) but have no dedicated column.
+    {
+      headerName: "INTELLIGENCE",
+      groupId: "intelligenceGroup",
+      children: [
+        {
+          colId: "news7d",
+          headerName: "NEWS 7D",
+          headerTooltip: "Article count in the past 7 days (from S6 content-store rollup)",
+          field: "news_count_7d",
+          sortable: true,
+          // WHY no `hide`: default-visible per IB-L5 spec. Shows coverage signal
+          // immediately without requiring the user to enable a column first.
+          width: SCREENER_AG_COL_WIDTHS.news7d,
+          cellRenderer: News7dCellRenderer,
+        },
+        {
+          colId: "briefScore",
+          headerName: "BRIEF SCORE",
+          headerTooltip:
+            "Weighted display relevance (0–1): blend of market impact + LLM relevance + routing score (PRD-0026 §4.2). Higher = more relevant to active market narratives.",
+          field: "display_relevance_7d_weighted",
+          sortable: true,
+          // WHY no `hide`: default-visible — this is the primary intelligence
+          // quality signal the L-5b rollup produces, worth showing by default.
+          width: SCREENER_AG_COL_WIDTHS.briefScore,
+          cellRenderer: BriefScoreCellRenderer,
         },
       ],
     } satisfies ColGroupDef<ScreenerResult>,

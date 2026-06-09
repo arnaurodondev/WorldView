@@ -78,6 +78,7 @@ import {
 import { countActiveFiltersByGroup } from "@/features/screener/lib/active-counts";
 import { Section } from "@/features/screener/components/Section";
 import { RangeInput } from "@/features/screener/components/RangeInput";
+import { IntelligenceFilterGroup } from "@/components/screener/IntelligenceFilterGroup";
 
 // Re-export FilterState + DEFAULT_FILTERS so existing call sites that import
 // from `@/components/screener/ScreenerFilterBar` keep compiling unchanged.
@@ -847,6 +848,9 @@ export function ScreenerFilterBar({
               </div>
             </div>
           </Section>
+
+          {/* ── INTELLIGENCE FILTERS (IB-L5 ✓) ─────────────────────────── */}
+          <IntelligenceFilterGroup value={form} onChange={setForm} />
 
           {/* ── BOTTOM TOOLBAR ──────────────────────────────────────────── */}
           <div className="flex h-9 items-center gap-2 px-2 bg-background">
