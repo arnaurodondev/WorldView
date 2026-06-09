@@ -184,7 +184,8 @@ All paginated endpoints (`GET /portfolios`, `GET /instruments`, `GET /transactio
 {
     "portfolio_id": UUID,
     "instrument_id": UUID,
-    "transaction_type": "BUY" | "SELL" | "DIVIDEND",
+    "transaction_type": "BUY" | "SELL" | "DIVIDEND" | "DEPOSIT" | "WITHDRAWAL" | "FEE" | "INTEREST" | "TRADE",
+    "trade_side": "BUY" | "SELL" | None,  # required when transaction_type="TRADE"; null otherwise
     "direction": "INFLOW" | "OUTFLOW",
     "quantity": Decimal,
     "price": Decimal,
@@ -202,6 +203,9 @@ All paginated endpoints (`GET /portfolios`, `GET /instruments`, `GET /transactio
     "average_cost": Decimal,
     "currency": str
 }
+
+# TradeSide enum — only applies when transaction_type = "TRADE"
+TradeSide: "BUY" | "SELL"
 
 # WatchlistMemberCreateRequest
 { "entity_id": UUID, "entity_type": str = "company" }
@@ -291,7 +295,8 @@ CREATE TABLE transactions (
     tenant_id UUID NOT NULL,
     portfolio_id UUID NOT NULL REFERENCES portfolios(id),
     instrument_id UUID NOT NULL,
-    transaction_type VARCHAR(20) NOT NULL,
+    transaction_type VARCHAR(20) NOT NULL,  -- BUY|SELL|DIVIDEND|DEPOSIT|WITHDRAWAL|FEE|INTEREST|TRADE
+    trade_side VARCHAR(10),                 -- BUY|SELL; only set when transaction_type='TRADE' (migration 0021)
     direction VARCHAR(10) NOT NULL,
     quantity NUMERIC(18,8) NOT NULL,
     price NUMERIC(18,8) NOT NULL,
@@ -671,7 +676,7 @@ docker compose exec portfolio python /app/scripts/<script_name>.py [--dry-run]
 
 ### Day-1 Deploy Checklist
 
-1. Apply migrations (`alembic upgrade head`)
+1. Apply migrations (`alembic upgrade head`) — current head: **0021** (adds `transactions.trade_side`, `TRADE` to `TransactionType` enum)
 2. `repair_holdings_after_replay_drift --dry-run` → review
 3. `repair_holdings_after_replay_drift` (live)
 4. `backfill_root_portfolios`

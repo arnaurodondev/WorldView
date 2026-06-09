@@ -115,6 +115,7 @@ To register a new service caller:
 | GET | `/v1/instruments/{id}/page-bundle` | Composes overview + fundamentals + technicals + insider + top-news in one round-trip (PLAN-0059 I-5) | Yes |
 | GET | `/v1/market/heatmap` | S3 (11 parallel sector-average screener calls) | Yes |
 | GET | `/v1/market/top-movers` | S3 (sorted by daily_return) | Yes |
+| GET | `/v1/market/sparklines` | S3 OHLCV fan-out — batch 14-day close arrays for sparkline rendering. Query: `instrument_ids` (comma-separated UUIDs, max 50), `days` (int, default 14). Valkey TTL 900 s. Response: `{"data": {"<id>": [<close>, ...]}, "meta": {"days_requested": int, "fetched_at": ISO8601, "missing": [<id>]}}` | Yes |
 | GET | `/v1/map/layers` | S3 (GeoJSON overlays) | No |
 
 #### `/v1/instruments/{id}/page-bundle` — initial-load composite (PLAN-0059 I-5)
