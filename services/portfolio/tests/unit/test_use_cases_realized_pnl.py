@@ -179,16 +179,16 @@ class TestGetRealizedPnLUseCase:
         )
 
         # 10 * (120-100) + 5 * (120-110) = 200 + 50 = 250
-        assert result.total_realized == Decimal("250")
+        assert result.total_realized == Decimal(250)
         # All within ≤365 days → all short-term.
-        assert result.realized_short_term == Decimal("250")
-        assert result.realized_long_term == Decimal("0")
+        assert result.realized_short_term == Decimal(250)
+        assert result.realized_long_term == Decimal(0)
         assert result.count == 1
         assert len(result.breakdown_by_instrument) == 1
         row = result.breakdown_by_instrument[0]
         assert row.instrument_id == inst.id
         assert row.ticker == "AAPL"
-        assert row.realized == Decimal("250")
+        assert row.realized == Decimal(250)
         assert result.currency == "USD"
 
     async def test_realized_pnl_includes_fees(self) -> None:
@@ -242,7 +242,7 @@ class TestGetRealizedPnLUseCase:
             ),
             uow,
         )
-        assert result.total_realized == Decimal("188")
+        assert result.total_realized == Decimal(188)
         assert result.count == 1
 
     async def test_realized_pnl_long_short_term_split(self) -> None:
@@ -319,9 +319,9 @@ class TestGetRealizedPnLUseCase:
             ),
             uow,
         )
-        assert result.realized_long_term == Decimal("200")
-        assert result.realized_short_term == Decimal("100")
-        assert result.total_realized == Decimal("300")
+        assert result.realized_long_term == Decimal(200)
+        assert result.realized_short_term == Decimal(100)
+        assert result.total_realized == Decimal(300)
         assert result.count == 2  # two disposals counted
 
     async def test_realized_pnl_skips_dividends(self) -> None:
@@ -387,7 +387,7 @@ class TestGetRealizedPnLUseCase:
         # 10 * (110 - 100) = 100. If the dividend leaked into the FIFO
         # queue, the cost basis would have shifted and total_realized
         # would NOT equal exactly 100.
-        assert result.total_realized == Decimal("100")
+        assert result.total_realized == Decimal(100)
 
     async def test_realized_pnl_date_range_filter(self) -> None:
         """Disposal outside ``[from, to]`` is excluded, but the BUY that
@@ -467,7 +467,7 @@ class TestGetRealizedPnLUseCase:
         #   - 5 from lot 1 (cost 100): realised = 5 * (250 - 100) = 750
         # Lot 2 is never touched in this scenario because lot 1 still
         # has 5 shares from the original 10 - 5 (out-of-window sale).
-        assert result.total_realized == Decimal("750")
+        assert result.total_realized == Decimal(750)
         assert result.count == 1
 
     async def test_realized_pnl_short_position_handled_with_warning(
@@ -510,7 +510,7 @@ class TestGetRealizedPnLUseCase:
             uow,
         )
         # Nothing matched → totals are zero (NOT NaN, NOT negative-cost).
-        assert result.total_realized == Decimal("0")
+        assert result.total_realized == Decimal(0)
         assert result.count == 0
 
     async def test_realized_pnl_empty_portfolio_returns_zero(self) -> None:
@@ -532,9 +532,9 @@ class TestGetRealizedPnLUseCase:
             ),
             uow,
         )
-        assert result.total_realized == Decimal("0")
-        assert result.realized_long_term == Decimal("0")
-        assert result.realized_short_term == Decimal("0")
+        assert result.total_realized == Decimal(0)
+        assert result.realized_long_term == Decimal(0)
+        assert result.realized_short_term == Decimal(0)
         assert result.count == 0
         assert result.breakdown_by_instrument == []
         assert result.currency == "USD"
@@ -694,7 +694,7 @@ class TestGetRealizedPnLNegativeQuantitySell:
             uow,
         )
         # Pre-fix: this was Decimal(0) and count=0. Post-fix: 100 / count=1.
-        assert result.total_realized == Decimal("100")
+        assert result.total_realized == Decimal(100)
         assert result.count == 1
-        assert result.realized_short_term == Decimal("100")
-        assert result.realized_long_term == Decimal("0")
+        assert result.realized_short_term == Decimal(100)
+        assert result.realized_long_term == Decimal(0)

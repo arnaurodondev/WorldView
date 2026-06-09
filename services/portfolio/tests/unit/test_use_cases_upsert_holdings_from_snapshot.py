@@ -49,10 +49,16 @@ async def test_creates_holdings_from_snapshot(uow, tenant_id, portfolio_id) -> N
         portfolio_id=portfolio_id,
         positions=[
             ResolvedSnapshotPosition(
-                instrument_id=inst_a, quantity=Decimal(10), average_cost=Decimal(150), currency="USD"
+                instrument_id=inst_a,
+                quantity=Decimal(10),
+                average_cost=Decimal(150),
+                currency="USD",
             ),
             ResolvedSnapshotPosition(
-                instrument_id=inst_b, quantity=Decimal(5), average_cost=Decimal(200), currency="USD"
+                instrument_id=inst_b,
+                quantity=Decimal(5),
+                average_cost=Decimal(200),
+                currency="USD",
             ),
         ],
     )
@@ -92,7 +98,10 @@ async def test_overwrite_replaces_inflated_quantity(uow, tenant_id, portfolio_id
         # Broker says the truth is 100 shares.
         positions=[
             ResolvedSnapshotPosition(
-                instrument_id=inst, quantity=Decimal(100), average_cost=Decimal(150), currency="USD"
+                instrument_id=inst,
+                quantity=Decimal(100),
+                average_cost=Decimal(150),
+                currency="USD",
             ),
         ],
     )
@@ -157,10 +166,16 @@ async def test_multi_account_aggregation(uow, tenant_id, portfolio_id) -> None:
         portfolio_id=portfolio_id,
         positions=[
             ResolvedSnapshotPosition(
-                instrument_id=inst, quantity=Decimal(10), average_cost=Decimal(100), currency="USD"
+                instrument_id=inst,
+                quantity=Decimal(10),
+                average_cost=Decimal(100),
+                currency="USD",
             ),
             ResolvedSnapshotPosition(
-                instrument_id=inst, quantity=Decimal(10), average_cost=Decimal(200), currency="USD"
+                instrument_id=inst,
+                quantity=Decimal(10),
+                average_cost=Decimal(200),
+                currency="USD",
             ),
         ],
     )

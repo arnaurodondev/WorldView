@@ -4,10 +4,10 @@ from __future__ import annotations
 
 from datetime import date, datetime
 from decimal import Decimal
-from typing import Annotated, Generic, TypeVar
+from typing import Annotated, Generic, Literal, TypeVar
 from uuid import UUID
 
-from pydantic import BaseModel, EmailStr, Field, StringConstraints, field_serializer, field_validator
+from pydantic import BaseModel, EmailStr, Field, StringConstraints, field_serializer, field_validator, model_validator
 
 T = TypeVar("T")
 
@@ -100,14 +100,32 @@ class PortfolioRenameRequest(BaseModel):
 class RecordTransactionRequest(BaseModel):
     portfolio_id: UUID
     instrument_id: UUID
-    transaction_type: str
-    direction: str
+    # PLAN-0108: tightened from bare str to an exhaustive Literal so unknown
+    # types yield 422 (Pydantic validation) instead of 500 (ValueError inside
+    # the use case after the enum lookup fails with a KeyError/ValueError).
+    transaction_type: Literal["BUY", "SELL", "DIVIDEND", "DEPOSIT", "WITHDRAWAL", "FEE", "INTEREST", "TRADE"]
+    # PLAN-0108: direction is INFLOW/OUTFLOW; reject anything else at the
+    # schema layer before it reaches the domain enum constructor.
+    direction: Literal["INFLOW", "OUTFLOW"] | None = None
+    # PLAN-0108: BUY/SELL side only for transaction_type=TRADE. The model
+    # validator below enforces the coupling: TRADE requires trade_side,
+    # non-TRADE must omit it (or pass null).
+    trade_side: Literal["BUY", "SELL"] | None = None
     quantity: Decimal
     price: Decimal
     fees: Decimal = Decimal(0)
     currency: str
     executed_at: datetime
     external_ref: str | None = None
+
+    @model_validator(mode="after")
+    def validate_trade_side(self) -> RecordTransactionRequest:
+        # WHY: TRADE transactions use trade_side to derive direction server-side
+        # (BUY → INFLOW, SELL → OUTFLOW). Requiring trade_side here avoids a
+        # silent 500 in the route handler when direction is None for TRADE rows.
+        if self.transaction_type == "TRADE" and self.trade_side is None:
+            raise ValueError("trade_side is required when transaction_type is TRADE")
+        return self
 
     @field_validator("currency")
     @classmethod
@@ -141,6 +159,9 @@ class RecordTransactionResponse(BaseModel):
     currency: str
     executed_at: datetime
     created_at: datetime
+    # PLAN-0108: echoed back so the frontend can display BUY/SELL without
+    # needing to infer it from direction (which is INFLOW/OUTFLOW).
+    trade_side: str | None = None
 
     @field_serializer("quantity", "price", "fees")
     def serialize_decimal(self, v: Decimal) -> str:

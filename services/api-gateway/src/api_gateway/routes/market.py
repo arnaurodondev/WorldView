@@ -37,6 +37,7 @@ from api_gateway.schemas import (
     YieldCurveResponse,
     YieldPoint,
 )
+from common.time import utc_now  # type: ignore[import-untyped]
 from observability.logging import get_logger  # type: ignore[import-untyped]
 
 if TYPE_CHECKING:
@@ -1865,6 +1866,207 @@ async def get_yield_curve(request: Request) -> YieldCurveResponse:
         spread_2s10s_inverted=inverted,
         source=source,
     )
+
+
+# ── Sparklines batch endpoint (PLAN-0108 Wave 2 / T-2-01) ────────────────────
+#
+# WHY: SemanticHoldingsTable needs a 14-day closing-price sparkline per holding
+# row. Per-row OHLCV fetches would be O(N) serial calls each hitting S3. This
+# endpoint fans out in parallel via asyncio.gather (same pattern as /ohlcv/batch)
+# and caches the full batch in Valkey so repeat callers (e.g. re-renders, tab
+# switches) pay for cold fetch only once every 15 minutes.
+#
+# Key design decisions:
+# - instrument_ids are UUIDs passed directly to S3 /api/v1/ohlcv/{id} — no
+#   ticker resolution step required; the S3 OHLCV endpoint accepts UUIDs.
+# - max 50 instruments per call prevents gateway abuse (mirrors /ohlcv/batch cap).
+# - fail-open on Valkey errors so a cache outage never breaks the endpoint.
+# - return_exceptions=True on gather so one slow/failing S3 call never blocks
+#   the rest; missing instruments are reported in meta.missing.
+
+_SPARKLINES_CACHE_TTL_S = 900  # 15 minutes — sparklines rarely change intraday
+_SPARKLINES_MAX_IDS = 50
+
+
+async def _fetch_sparkline_closes(
+    market_data_client: Any,
+    instrument_id: str,
+    days: int,
+    headers: dict[str, str],
+) -> tuple[str, list[float]]:
+    """Fetch closing prices for one instrument from S3 OHLCV.
+
+    Returns (instrument_id, closes_list). On any failure returns an empty list
+    so the caller can classify the instrument as missing rather than propagating
+    an exception through the gather fan-out.
+
+    WHY tuple return: asyncio.gather collects results in order but we need to
+    map each result back to its instrument_id. A tuple is cheapest here — no
+    extra dataclass allocation, easy to destructure at the call-site.
+    """
+    try:
+        start = (datetime.now(tz=UTC) - timedelta(days=days)).date().isoformat()
+        resp = await market_data_client.get(
+            f"/api/v1/ohlcv/{instrument_id}",
+            params={"timeframe": "1d", "start": start, "limit": days + 5},
+            headers=headers,
+        )
+        if resp.status_code != 200:
+            return instrument_id, []
+        body = resp.json()
+        # S3 returns {"items": [...]} or {"bars": [...]} depending on endpoint version.
+        # Each bar has a "close" field (string or float) — cast to float defensively.
+        raw_items: list[dict[str, Any]] = body.get("items") or body.get("bars") or []
+        closes: list[float] = []
+        for bar in raw_items:
+            if not isinstance(bar, dict):
+                continue
+            raw_close = bar.get("close")
+            if raw_close is not None:
+                with contextlib.suppress(TypeError, ValueError):
+                    closes.append(float(raw_close))
+    except Exception:
+        return instrument_id, []
+    else:
+        return instrument_id, closes
+    return instrument_id, []  # unreachable; satisfies mypy
+
+
+@router.get("/market/sparklines")
+async def get_market_sparklines(
+    request: Request,
+    instrument_ids: str = Query(..., description="Comma-separated UUID instrument IDs (max 50)"),
+    days: int = Query(default=14, ge=1, le=90),
+) -> Response:
+    """Batch 14-day closing-price arrays for the SPARK column.
+
+    WHY: SemanticHoldingsTable needs a sparkline per holding row. Per-row OHLCV
+    fetches would be O(N) serial calls. This endpoint fans out in parallel and
+    caches the full batch in Valkey (TTL 900s) so repeat callers get a fast hit.
+    Max 50 instruments prevents gateway abuse.
+
+    Auth: required (OIDCAuthMiddleware validates the token upstream).
+    Valkey: fail-open — a cache outage degrades to a cold S3 fan-out, not a 5xx.
+
+    Response shape::
+
+        {
+          "data": {"<instrument_id>": [<close>, ...], ...},
+          "meta": {
+            "days_requested": 14,
+            "fetched_at": "2026-06-08T12:34:56+00:00",
+            "missing": ["<instrument_id>", ...]
+          }
+        }
+
+    ``meta.missing`` lists IDs whose S3 fetch returned an error or empty bars
+    (no data yet seeded, invalid ID, etc.) — the frontend renders those rows
+    without a sparkline rather than erroring the whole request.
+    """
+    if not getattr(request.state, "user", None):
+        raise HTTPException(status_code=401, detail="Authentication required")
+
+    # 1. Parse and deduplicate IDs (preserve insertion order via dict.fromkeys).
+    raw_ids = [i.strip() for i in instrument_ids.split(",") if i.strip()]
+    ids = list(dict.fromkeys(raw_ids))  # deduplicate while preserving order
+
+    if not ids:
+        raise HTTPException(status_code=400, detail="instrument_ids required")
+    if len(ids) > _SPARKLINES_MAX_IDS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"max {_SPARKLINES_MAX_IDS} instrument_ids per request",
+        )
+
+    # 2. Validate each ID is a well-formed UUID (prevents injection into S3 path).
+    for iid in ids:
+        try:
+            UUID(iid)
+        except ValueError:
+            raise HTTPException(status_code=422, detail=f"invalid UUID: {iid}")  # noqa: B904
+
+    # 3. Valkey read-through — fail-open: any Valkey error falls through to S3.
+    # WHY sorted(ids) in cache key: ensures the same logical set always maps to
+    # the same key regardless of request ordering (e.g. ["A","B"] == ["B","A"]).
+    cache_key = f"sparklines:v1:{':'.join(sorted(ids))}:{days}"
+    valkey = getattr(request.app.state, "valkey", None)
+    if valkey is not None:
+        try:
+            cached = await valkey.get(cache_key)
+            if cached is not None:
+                # Return the pre-serialised JSON blob directly (bytes or str).
+                content = cached if isinstance(cached, bytes) else cached.encode()
+                logger.info(
+                    "sparklines_cache_hit",
+                    instrument_count=len(ids),
+                    days=days,
+                )
+                return Response(content=content, media_type="application/json")
+        except Exception:  # noqa: S110 — fail-open: Valkey unavailable → cold path
+            pass
+
+    # 4. Fan-out to S3 OHLCV in parallel — one call per instrument_id.
+    # WHY _auth_headers (not _system_headers): OHLCV data is tenant-agnostic but
+    # the InternalJWTMiddleware on S3 requires a valid JWT. User headers work
+    # here because the requesting user is already authenticated; this also avoids
+    # minting an extra system JWT per batch call.
+    headers = _auth_headers(request)
+    clients = _clients(request)
+
+    gather_results: list[tuple[str, list[float]] | BaseException] = list(
+        await asyncio.gather(
+            *[_fetch_sparkline_closes(clients.market_data, iid, days, headers) for iid in ids],
+            return_exceptions=True,
+        ),
+    )
+
+    # 5. Build response maps.
+    data_map: dict[str, list[float]] = {}
+    missing: list[str] = []
+    for result in gather_results:
+        if isinstance(result, BaseException):
+            # Unexpected exception escaped _fetch_sparkline_closes — shouldn't happen
+            # because that function catches broadly, but be safe.
+            # We can't directly identify which instrument_id this corresponds to since
+            # gather results are positional; log and skip.
+            logger.warning("sparklines_gather_unexpected_exception", exc_info=result)
+            continue
+        iid, closes = result
+        if closes:
+            data_map[iid] = closes
+        else:
+            missing.append(iid)
+
+    # Any IDs not in data_map AND not yet in missing (edge case: gather returned
+    # fewer results than inputs due to an unhandled exception) go to missing too.
+    accounted = set(data_map) | set(missing)
+    missing.extend(iid for iid in ids if iid not in accounted)
+
+    payload: dict[str, Any] = {
+        "data": data_map,
+        "meta": {
+            "days_requested": days,
+            "fetched_at": utc_now().isoformat(),
+            "missing": missing,
+        },
+    }
+    json_bytes = json.dumps(payload).encode()
+
+    # 6. Populate Valkey cache — fail-open.
+    if valkey is not None:
+        try:  # noqa: SIM105 — await inside try/except; contextlib.suppress() cannot wrap an await
+            await valkey.set(cache_key, json_bytes, ex=_SPARKLINES_CACHE_TTL_S)
+        except Exception:  # noqa: S110 — fail-open: cache write error is non-fatal
+            pass
+
+    logger.info(
+        "sparklines_fetched",
+        instrument_count=len(ids),
+        missing_count=len(missing),
+        days=days,
+        cache_hit=False,
+    )
+    return Response(content=json_bytes, media_type="application/json")
 
 
 # ── NL Screener Translation (PLAN-0091 Wave E-1, T-E-1-01) ───────────────────

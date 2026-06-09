@@ -163,7 +163,7 @@ def _seed_two_holdings(
         portfolio_id=portfolio.id,
         instrument_id=aapl.id,
         tenant_id=tenant_id,
-        quantity=Decimal("100"),
+        quantity=Decimal(100),
         currency="USD",
     )
     h_msft = Holding(
@@ -171,7 +171,7 @@ def _seed_two_holdings(
         portfolio_id=portfolio.id,
         instrument_id=msft.id,
         tenant_id=tenant_id,
-        quantity=Decimal("50"),
+        quantity=Decimal(50),
         currency="USD",
     )
     uow._holdings._store[(h_aapl.portfolio_id, h_aapl.instrument_id)] = h_aapl

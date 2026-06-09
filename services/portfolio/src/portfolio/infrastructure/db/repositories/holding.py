@@ -69,7 +69,7 @@ class SqlAlchemyHoldingRepository(HoldingRepository):
                     ticker=symbol,
                     name=name,
                     entity_id=entity_id,
-                )
+                ),
             )
         return enriched
 

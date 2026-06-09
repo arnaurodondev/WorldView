@@ -57,6 +57,21 @@ class TransactionType(StrEnum):
     # Not a security transaction — no instrument_id required (recorded
     # against a portfolio-level cash holding, direction=INFLOW).
     INTEREST = "INTEREST"
+    # PLAN-0108: Manual "Add Position" flow sends TRADE + trade_side=BUY/SELL
+    # so the frontend doesn't need to know the INFLOW/OUTFLOW convention.
+    # Direction is derived server-side: BUY → INFLOW, SELL → OUTFLOW.
+    TRADE = "TRADE"
+
+
+class TradeSide(StrEnum):
+    """Buy or sell side for TRADE-type transactions.
+
+    Only populated when ``transaction_type == TRADE``. NULL (None) for all
+    other types (BUY, SELL, DIVIDEND, DEPOSIT, WITHDRAWAL, FEE, INTEREST).
+    """
+
+    BUY = "BUY"
+    SELL = "SELL"
 
 
 class TransactionDirection(StrEnum):

@@ -29,7 +29,7 @@ from portfolio.domain.events import TransactionRecorded
 
 if TYPE_CHECKING:
     from portfolio.application.ports.unit_of_work import UnitOfWork
-    from portfolio.domain.enums import TransactionDirection, TransactionType
+    from portfolio.domain.enums import TradeSide, TransactionDirection, TransactionType
 
 # Imported eagerly (not under TYPE_CHECKING) because PortfolioKind is referenced
 # at runtime in the ROOT-rejection guard below.
@@ -61,6 +61,10 @@ class RecordTransactionCommand:
     # P2-E: broker-supplied description and settlement date (optional, SnapTrade-sourced).
     description: str | None = None
     settlement_date: date | None = None
+    # PLAN-0108: BUY or SELL side for TRADE-type transactions. Derived from the
+    # frontend "Add Position" dialog — route handler sets this from body.trade_side
+    # and also derives direction (BUY → INFLOW, SELL → OUTFLOW). None for non-TRADE.
+    trade_side: TradeSide | None = None
 
 
 @dataclass
@@ -169,6 +173,8 @@ class RecordTransactionUseCase:
             # P2-E: pass through broker description and settlement_date when provided.
             description=cmd.description,
             settlement_date=cmd.settlement_date,
+            # PLAN-0108: BUY/SELL side for TRADE-type rows; None for all others.
+            trade_side=cmd.trade_side,
         )
 
         # ── BP-264 (PLAN-0046 T-46-1-03) ─────────────────────────────────────

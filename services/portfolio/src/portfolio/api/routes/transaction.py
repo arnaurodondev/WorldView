@@ -19,6 +19,7 @@ from portfolio.api.schemas import (
 )
 from portfolio.application.use_cases.read_models import ListTransactionsUseCase
 from portfolio.application.use_cases.record_transaction import RecordTransactionCommand, RecordTransactionUseCase
+from portfolio.domain.enums import TradeSide, TransactionDirection, TransactionType
 
 router = APIRouter(tags=["transactions"])
 
@@ -52,7 +53,19 @@ async def record_transaction(
 ) -> RecordTransactionResponse:
     x_tenant_id = _extract_tenant_id(request)
     x_owner_id = _extract_owner_id(request)
-    from portfolio.domain.enums import TransactionDirection, TransactionType
+
+    # PLAN-0108: TRADE transactions derive direction from trade_side so the
+    # frontend doesn't need to know the INFLOW/OUTFLOW convention.
+    # All other transaction types still require an explicit direction field.
+    if body.transaction_type == "TRADE":
+        direction = TransactionDirection.INFLOW if body.trade_side == "BUY" else TransactionDirection.OUTFLOW
+        trade_side = TradeSide(body.trade_side)  # type: ignore[arg-type]
+    else:
+        # The schema validator already ensures direction is non-None for non-TRADE,
+        # but we provide a fallback to avoid a runtime AttributeError if direction
+        # is absent from older clients (results in 422 via Pydantic before this point).
+        direction = TransactionDirection(body.direction or "INFLOW")
+        trade_side = None
 
     uc = RecordTransactionUseCase()
     result = await uc.execute(
@@ -62,7 +75,8 @@ async def record_transaction(
             owner_id=x_owner_id,
             instrument_id=body.instrument_id,
             transaction_type=TransactionType(body.transaction_type),
-            direction=TransactionDirection(body.direction),
+            direction=direction,
+            trade_side=trade_side,
             quantity=body.quantity,
             price=body.price,
             fees=body.fees,
@@ -86,6 +100,7 @@ async def record_transaction(
         currency=t.currency,
         executed_at=t.executed_at,
         created_at=t.created_at,
+        trade_side=str(t.trade_side) if t.trade_side else None,
     )
 
 

@@ -164,7 +164,7 @@ class Settings(BaseSettings):
         if self.internal_jwt_skip_verification and os.getenv("APP_ENV", "").lower() == "production":
             raise ValueError(
                 "internal_jwt_skip_verification MUST NOT be enabled in production. "
-                "Set APP_ENV != 'production' or remove the flag."
+                "Set APP_ENV != 'production' or remove the flag.",
             )
         if "postgres:postgres" in self.database_url.get_secret_value():
             structlog.get_logger(__name__).warning(  # type: ignore[no-untyped-call]

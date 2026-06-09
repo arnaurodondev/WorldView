@@ -96,7 +96,7 @@ class PortfolioPnLDTO:
     user_id: UUID
     as_of: datetime
     holdings: list[PnLHoldingItem] = field(default_factory=list)
-    total_overnight_pnl_usd: Decimal = Decimal("0")
+    total_overnight_pnl_usd: Decimal = Decimal(0)
     total_overnight_pnl_pct: float = 0.0
     generated_at: datetime = field(default_factory=lambda: datetime.now(tz=UTC))
 
@@ -146,11 +146,11 @@ class GetPortfolioPnLUseCase:
 
         # ── 4. Compute per-row P&L + accumulate totals ──────────────────────────
         items: list[PnLHoldingItem] = []
-        total_pnl = Decimal("0")
+        total_pnl = Decimal(0)
         # For weighted-average percent we accumulate (sum of last_close * qty)
         # as the denominator — this equals the portfolio's overnight cost basis
         # so the percent is "portfolio value % change from yesterday's close".
-        total_cost_basis = Decimal("0")
+        total_cost_basis = Decimal(0)
         for instrument_id, symbol, entity_id, qty in holdings_raw:
             quote = prices.get(instrument_id, PnLPriceQuote(current_price=None, last_close=None))
             current = quote.current_price
@@ -160,7 +160,7 @@ class GetPortfolioPnLUseCase:
                 pct = float((current - last_close) / last_close) if last_close > 0 else 0.0
                 total_cost_basis += last_close * qty
             else:
-                pnl_dollar = Decimal("0")
+                pnl_dollar = Decimal(0)
                 pct = 0.0
             items.append(
                 PnLHoldingItem(

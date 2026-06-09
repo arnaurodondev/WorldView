@@ -104,13 +104,12 @@ class UpsertHoldingsFromSnapshotUseCase:
                 new_avg = pos.average_cost
             elif pos.average_cost is None:
                 new_avg = prev_avg
+            # Guard against division-by-zero: if both quantities sum to zero
+            # the weighted-avg is meaningless — fall back to the latest value.
+            elif new_qty == 0:
+                new_avg = pos.average_cost
             else:
-                # Guard against division-by-zero: if both quantities sum to zero
-                # the weighted-avg is meaningless — fall back to the latest value.
-                if new_qty == 0:
-                    new_avg = pos.average_cost
-                else:
-                    new_avg = (prev_qty * prev_avg + pos.quantity * pos.average_cost) / new_qty
+                new_avg = (prev_qty * prev_avg + pos.quantity * pos.average_cost) / new_qty
             aggregated[pos.instrument_id] = (new_qty, new_avg, prev_ccy)
 
         # ── 2. Diff against existing holdings ──

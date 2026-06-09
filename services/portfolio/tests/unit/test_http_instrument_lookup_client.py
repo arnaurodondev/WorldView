@@ -32,7 +32,7 @@ async def test_lookup_uses_query_param_not_path_param() -> None:
     with respx.mock(base_url=base_url, assert_all_called=False) as mock:
         # Old (wrong) path — must NOT be called.
         old_route = mock.get("/api/v1/instruments/symbol/AAPL").mock(
-            return_value=httpx.Response(200, json={"id": "old-route-id"})
+            return_value=httpx.Response(200, json={"id": "old-route-id"}),
         )
         # New (correct) path with query param.
         new_route = mock.get("/api/v1/instruments/lookup").mock(
@@ -44,7 +44,7 @@ async def test_lookup_uses_query_param_not_path_param() -> None:
                     "exchange": "US",
                     "is_active": True,
                 },
-            )
+            ),
         )
 
         async with httpx.AsyncClient() as http:

@@ -190,7 +190,7 @@ class ListTransactionsUseCase:
                     ticker=ticker,
                     name=name,
                     asset_class=asset_class,
-                )
+                ),
             )
 
         return enriched, total
