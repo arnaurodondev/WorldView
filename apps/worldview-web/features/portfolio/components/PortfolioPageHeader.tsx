@@ -173,7 +173,7 @@ export function PortfolioPageHeader({
                 "h-6 px-2 text-[10px] font-mono uppercase tracking-[0.06em] border rounded-[2px] flex items-center gap-1 transition-colors",
                 activeIsRoot
                   ? "border-border/40 text-muted-foreground/40 cursor-not-allowed"
-                  : "border-border text-muted-foreground hover:border-primary/60 hover:text-primary",
+                  : "border-border text-muted-foreground hover:border-primary/60 hover:text-primary hover:bg-primary/5",
               )}
             >
               {/* WHY strokeWidth={1.5}: Lucide default 2 reads as too heavy in terminal chrome */}
@@ -228,6 +228,17 @@ export function PortfolioPageHeader({
           )}
         </div>
       </div>
+
+      {/* ── ROOT read-only hint ─────────────────────────────────────────── */}
+      {/* WHY: the Add Position button is silently disabled for root portfolios.
+          Without explanation, users may think it's a bug. This one-liner makes
+          the constraint explicit (T-5-01 / PLAN-0108 W5). Only shown when the
+          active portfolio is the aggregate root. */}
+      {activeIsRoot && (
+        <p className="text-[10px] text-muted-foreground mt-0.5">
+          Select a portfolio to add positions. ALL is read-only.
+        </p>
+      )}
 
       {/* ── F-021: scope hint sub-line ──────────────────────────────────── */}
       {/* WHY h-6 (24px): a thin secondary row below the main header keeps
