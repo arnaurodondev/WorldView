@@ -95,17 +95,17 @@ def upgrade() -> None:
         op.execute(
             f"""
             INSERT INTO screen_field_metadata
-                (field_name, label, field_type, unit, description, observed_min, observed_max, null_fraction, updated_at)
+                (field_name, label, field_type, unit, description, observed_min, observed_max, null_fraction, last_computed_at)
             VALUES
                 ('{field_name}', '{label}', '{field_type}',
                  {'NULL' if unit is None else f"'{unit}'"}, '{description}',
                  NULL, NULL, 0.0, now())
             ON CONFLICT (field_name) DO UPDATE
-                SET label        = EXCLUDED.label,
-                    field_type   = EXCLUDED.field_type,
-                    unit         = EXCLUDED.unit,
-                    description  = EXCLUDED.description,
-                    updated_at   = now()
+                SET label           = EXCLUDED.label,
+                    field_type      = EXCLUDED.field_type,
+                    unit            = EXCLUDED.unit,
+                    description     = EXCLUDED.description,
+                    last_computed_at = now()
             """
         )
 

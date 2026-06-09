@@ -90,7 +90,7 @@ class Settings(BaseSettings):
     # works without any extra configuration.
     content_store_url: str = "http://content-store:8006"
     knowledge_graph_url: str = "http://knowledge-graph:8007"
-    alert_service_url: str = "http://alert-service:8010"
+    alert_service_url: str = "http://alert:8010"
     rag_chat_url: str = "http://rag-chat:8008"
 
     # RS256 private key for signing internal JWTs sent to upstream services.
