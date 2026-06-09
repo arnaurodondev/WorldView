@@ -302,9 +302,14 @@ export function PerformanceChartPanel({
   }, [mountChart]);
 
   // ── Panel height ───────────────────────────────────────────────────────────
-  // WHY collapsed → h-[28px]: the header row is 28px; collapsing hides the chart
-  // area without any layout shift because everything below just moves up by 92px.
-  const panelHeight = collapsed ? "h-[28px]" : "h-[120px]";
+  // WHY collapsed → h-[22px] (not h-[28px]): PRD-0108 §6.1 specifies 22px for
+  // the collapsed strip height. 22px is tight enough that the panel looks like
+  // a thin divider bar, preserving vertical space for the holdings table below.
+  // The header row is therefore also constrained to 22px when collapsed — font
+  // size 10px renders comfortably within that.
+  // WHY expanded → h-[120px]: 120px gives enough vertical range for trend shape
+  // without dominating the viewport. Chart area = 120 − 22 = 98px.
+  const panelHeight = collapsed ? "h-[22px]" : "h-[120px]";
 
   // ── Error / no-data state ──────────────────────────────────────────────────
   // When the endpoint 404s or has no data, show a short inline message instead
@@ -362,7 +367,7 @@ export function PerformanceChartPanel({
           {showUnavailable ? (
             // Design spec §7.5: show inline muted message on error/no-data.
             // WHY items-center justify-center: vertically centres the text in
-            // the 92px chart area so it doesn't hug the top.
+            // the chart area so it doesn't hug the top.
             <div className="flex h-full items-center justify-center px-3">
               <span className="text-[11px] font-mono text-muted-foreground">
                 Performance data not available yet.
@@ -377,7 +382,23 @@ export function PerformanceChartPanel({
               ref={containerRef}
               className="absolute inset-0 w-full h-full"
               aria-label="Portfolio performance chart"
-            />
+            >
+              {/* "Value ($)" y-axis label — PRD-0108 §6.1 spec.
+                  WHY absolute top-0.5 left-1: lightweight-charts owns the canvas
+                  and cannot render HTML labels. We overlay a positioned <span>
+                  at the top-left corner where the y-axis price scale lives, so
+                  the user can read the axis dimension without it overlapping the
+                  chart content. z-10 lifts it above the canvas element.
+                  WHY 9px / text-muted-foreground: matches the chart's own
+                  fontSize:9 setting and uses the same muted colour token so the
+                  label reads as metadata, not data. */}
+              <span
+                className="absolute top-0.5 left-1 z-10 text-[9px] text-muted-foreground pointer-events-none select-none"
+                aria-hidden
+              >
+                Value ($)
+              </span>
+            </div>
           )}
         </div>
       )}
