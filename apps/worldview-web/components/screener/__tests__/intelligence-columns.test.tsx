@@ -25,7 +25,6 @@
  */
 
 import { describe, it, expect } from "vitest";
-import { render, screen } from "@testing-library/react";
 import { createAgScreenerColumns, SCREENER_AG_COL_WIDTHS } from "@/components/screener/ag-screener-columns";
 import type { ColDef, ColGroupDef } from "ag-grid-community";
 import type { ScreenerResult } from "@/types/api";

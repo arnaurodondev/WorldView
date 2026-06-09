@@ -35,7 +35,7 @@ import { cn } from "@/lib/utils";
 import { Section } from "@/features/screener/components/Section";
 import { BackendPendingBadge } from "@/components/ui/backend-pending-badge";
 import type { FilterState } from "@/features/screener/lib/filter-state";
-import { isSet, rangeCount } from "@/features/screener/lib/active-counts";
+import { rangeCount } from "@/features/screener/lib/active-counts";
 
 // ── Props ────────────────────────────────────────────────────────────────────
 
