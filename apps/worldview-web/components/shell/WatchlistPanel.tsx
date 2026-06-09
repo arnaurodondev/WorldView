@@ -103,10 +103,29 @@ export function WatchlistPanel() {
   const activeWatchlist =
     watchlistsData?.find((wl) => wl.watchlist_id === selectedWatchlistId) ??
     watchlistsData?.[0];
-  const members: WatchlistMember[] = activeWatchlist?.members ?? [];
-  const memberIds = members.map((m) => m.entity_id);
 
-  // Fetch live batch quotes for watchlist member entity IDs
+  // WHY separate members query: getWatchlists() intentionally returns members:[]
+  // for performance (list endpoint skips member fetch). We must call the dedicated
+  // /watchlists/{id}/members endpoint to get the actual ticker list. Without this,
+  // the quotes query is always disabled (memberIds=[]) and all prices show "—".
+  const { data: membersData } = useQuery({
+    queryKey: ["watchlist-sidebar-members", activeWatchlist?.watchlist_id],
+    queryFn: () =>
+      createGateway(accessToken).getWatchlistMembers(
+        activeWatchlist!.watchlist_id,
+      ),
+    enabled: !!accessToken && !!activeWatchlist?.watchlist_id,
+    staleTime: 30_000,
+  });
+  const members: WatchlistMember[] = membersData ?? [];
+
+  // WHY instrument_id (not entity_id): POST /v1/quotes/batch accepts instrument_ids;
+  // entity_id maps to the knowledge-graph node which is a different UUID space.
+  const memberIds = members
+    .map((m) => m.instrument_id)
+    .filter((id): id is string => id !== null);
+
+  // Fetch live batch quotes for watchlist member instrument IDs
   // WHY refetchInterval 30_000 + staleTime 0: prices should always be fresh
   // (no cache aging), but we cap the network cost at one call per 30 seconds.
   const { data: quotesData } = useQuery({
@@ -204,7 +223,7 @@ export function WatchlistPanel() {
           </p>
         ) : (
           displayMembers.map((member) => {
-            const quote = quotes[member.entity_id];
+            const quote = quotes[member.instrument_id ?? ""];
             return (
               // WHY h-[22px]: §0.2 data table row height — 22px compact row standard.
               // WHY cursor-pointer + hover:bg-muted/40: row is clickable — navigates

@@ -54,7 +54,7 @@ export function AiSignalsWidget() {
 
   const { data, isLoading, isError } = useQuery({
     queryKey: ["dashboard-ai-signals"],
-    queryFn: () => createGateway(accessToken).getAiSignals(6),
+    queryFn: () => createGateway(accessToken).getAiSignals(20),
     enabled: !!accessToken,
     // WHY 120_000 (2 min): signals arrive continuously as articles are processed.
     // 2 min is fast enough to feel live without generating excessive S9 → S6 traffic.

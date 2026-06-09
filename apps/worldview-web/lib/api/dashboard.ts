@@ -171,7 +171,13 @@ export function createDashboardApi(t: string | undefined) {
           // WHY * 100: S3 daily_return is a decimal fraction (0.031 = 3.1%).
           // The Mover.change_pct field is treated as a percentage by MoverRow
           // (mover.change_pct.toFixed(2) → "3.11"). Multiply to convert.
-          change_pct: (r.metrics?.daily_return ?? 0) * 100,
+          // WHY period_return_pct first: the /top-movers endpoint returns
+          // period_return_pct at the top level (not nested under metrics).
+          // Fall back to metrics.daily_return for any legacy screener responses.
+          change_pct:
+            typeof (r as Record<string, unknown>).period_return_pct === "number"
+              ? ((r as Record<string, unknown>).period_return_pct as number)
+              : (r.metrics?.daily_return ?? 0) * 100,
           volume: null as number | null,
         };
       });

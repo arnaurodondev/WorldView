@@ -85,24 +85,20 @@ export function TopBarMarquee() {
   const { accessToken } = useAuth();
 
   // ── Step 1: Resolve ticker symbols → instrument_id UUIDs ─────────────────
-  // WHY separate query: instrument_ids are stable (never change for a ticker).
-  // Caching 30 min avoids repeated search API calls on every render.
-  // WHY Promise.allSettled: a single failed search must not block all tickers.
+  // WHY resolveTickersBatch (not searchInstruments per ticker):
+  // searchInstruments uses ILIKE '%TLT%' which returns CTLT first (alphabetic
+  // substring match), mapping TLT → CTLT's UUID → $0 price. resolveTickersBatch
+  // does an exact-match lookup and returns null for truly unknown tickers (DXY).
+  // One batch call vs. 10 serial calls also reduces latency ~8×.
   const { data: tickerToId } = useQuery({
     queryKey: ["marquee-ticker-ids"],
     queryFn: async () => {
       const gw = createGateway(accessToken);
-      const searches = await Promise.allSettled(
-        MARQUEE_TICKERS.map((t) =>
-          gw.searchInstruments(t.id, 1).then((r) => ({
-            ticker: t.id,
-            instrumentId: r.results?.[0]?.instrument_id ?? null,
-          }))
-        )
-      );
+      const tickers = MARQUEE_TICKERS.map((t) => t.id);
+      const result = await gw.resolveTickersBatch(tickers);
       const map: Record<string, string | null> = {};
-      searches.forEach((r) => {
-        if (r.status === "fulfilled") map[r.value.ticker] = r.value.instrumentId;
+      tickers.forEach((t) => {
+        map[t] = result[t] ?? null;
       });
       return map;
     },
