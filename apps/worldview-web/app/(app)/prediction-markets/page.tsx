@@ -499,7 +499,7 @@ export default function PredictionMarketsPage() {
               type="button"
               onClick={() => fetchNextPage()}
               disabled={isFetchingNextPage}
-              className="font-mono text-[10px] uppercase tracking-wider text-muted-foreground hover:text-foreground disabled:opacity-50"
+              className="font-mono text-[10px] uppercase tracking-wider text-muted-foreground hover:text-foreground disabled:pointer-events-none"
             >
               {isFetchingNextPage
                 ? "Loading…"

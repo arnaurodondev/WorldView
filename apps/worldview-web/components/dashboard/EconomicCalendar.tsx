@@ -203,7 +203,7 @@ export function EconomicCalendar() {
                 type="button"
                 onClick={() => fetchNextPage()}
                 disabled={isFetchingNextPage}
-                className="text-[10px] uppercase tracking-[0.08em] text-muted-foreground hover:text-foreground disabled:opacity-50"
+                className="text-[10px] uppercase tracking-[0.08em] text-muted-foreground hover:text-foreground disabled:pointer-events-none"
               >
                 {isFetchingNextPage
                   ? "Loading…"
