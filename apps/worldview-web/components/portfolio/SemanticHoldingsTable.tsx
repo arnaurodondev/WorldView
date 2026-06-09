@@ -74,6 +74,23 @@ export interface SemanticHoldingsTableProps {
   sectors?: Record<string, string | null>;
   /** Total portfolio market value — used to compute Weight column */
   totalValue: number;
+  /**
+   * 14-day close-price series keyed by ticker — drives the SPARK column
+   * (PLAN-0108 W4-T401).
+   *
+   * WHY keyed by ticker (not instrument_id): SparklineCellRenderer looks up
+   * data via params.data.h.ticker from inside the AG Grid cell. The series
+   * source (useHoldingsSeries) returns a Record<ticker, number[]> because the
+   * S9 batch endpoint groups bars by ticker symbol. Re-keying by instrument_id
+   * here would add a mapping step with no benefit — the renderer already has
+   * the ticker available and uses it to index into the context map.
+   *
+   * WHY optional: the series loads asynchronously after the holdings table
+   * renders. When undefined or empty, SparklineCellRenderer renders "—"
+   * placeholders instead of crashing. This matches the lazy-load pattern used
+   * by the `sectors` prop.
+   */
+  series?: Record<string, number[]>;
 }
 
 // ── Context menu overlay ──────────────────────────────────────────────────────
@@ -91,6 +108,7 @@ export function SemanticHoldingsTable({
   quotes,
   sectors,
   totalValue,
+  series,
 }: SemanticHoldingsTableProps) {
   const router = useRouter();
   const searchParams = useSearchParams();
@@ -349,6 +367,28 @@ export function SemanticHoldingsTable({
       {/* WHY pinnedBottomRowData: renders totals as a proper AG Grid pinned row,
           which tracks column widths/pinning/scroll automatically. Replaces the
           former hardcoded-pixel-width <div> footer (BP-455). */}
+      {/*
+       * WHY context object: AG Grid's `context` prop is the canonical way to
+       * pass arbitrary data into cell renderers without encoding it in ColDef
+       * values (which AG Grid deep-clones on every render cycle). Both
+       * SparklineCellRenderer and AssetTypeCellRenderer read from context:
+       *
+       *   - holdingsSeries: Record<ticker, number[]>  → SPARK column
+       *   - assetClasses:   Record<instrument_id, string | null>  → ASSET column
+       *
+       * WHY `series ?? {}` default: the prop is optional (async load). The
+       * renderers already guard against empty series with a "—" placeholder,
+       * but passing undefined would cause a runtime TypeError in the null-check
+       * inside SparklineCellRenderer's context cast.
+       *
+       * WHY assetClasses is not yet populated here: the HoldingOverviewMap
+       * that carries asset_class data is available in HoldingsTab but is not
+       * currently threaded into SemanticHoldingsTable props. This is intentional
+       * for W4-T401 scope — T-4-03 (ASSET column data wiring) will add the
+       * assetClasses prop and populate it from holdingOverviews. For now the
+       * ASSET column renders "—" for all rows via the renderer's null-guard,
+       * which is the correct graceful-degradation behaviour.
+       */}
       <AgGridBase<EnrichedHoldingRow>
         rowData={enrichedRows}
         columnDefs={holdingsAgColumns}
@@ -363,6 +403,13 @@ export function SemanticHoldingsTable({
         preventDefaultOnContextMenu={true}
         pinnedBottomRowData={[pinnedBottomRow]}
         className="flex-1"
+        context={{
+          // Keyed by ticker — matches SparklineCellRenderer's lookup key.
+          holdingsSeries: series ?? {},
+          // Keyed by instrument_id — matches AssetTypeCellRenderer's lookup key.
+          // Populated by T-4-03; empty map here causes renderer to show "—".
+          assetClasses: {} as Record<string, string | null>,
+        }}
       />
 
       {/* ── Floating context menu ─────────────────────────────────────────── */}

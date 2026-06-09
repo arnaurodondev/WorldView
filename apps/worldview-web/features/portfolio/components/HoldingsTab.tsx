@@ -183,12 +183,12 @@ export function HoldingsTab({
   // Gating on holdingsResp ensures we only fire after the holdings API responded
   // so instrument IDs are stable (not the stale [] from the previous portfolio).
   // The hook additionally guards internally on instrumentIds.length > 0 and !!accessToken.
+  // WHY holdingsSeries is now passed to SemanticHoldingsTable (W4-T401):
+  // The hook was added in W3 to pre-warm the TanStack Query cache. Now that
+  // SemanticHoldingsTable exposes a `series` prop (added in W4-T401), we wire
+  // the data directly instead of discarding it with `void`. The series drives
+  // the SPARK column's SparklineCellRenderer via the AG Grid context object.
   const { series: holdingsSeries } = useHoldingsSeries(instrumentIds, !!holdingsResp);
-  // TODO: W4-T401 will add a `series` prop to SemanticHoldingsTable to wire the
-  // SPARK column cell renderer. The hook call above warms the TanStack cache so
-  // the data is ready when W4 adds the prop definition and connects it to the
-  // SparklineCellRenderer. `void` suppresses the unused-variable warning intentionally.
-  void holdingsSeries;
 
   // ── Wave G: Holding detail slide-over state ────────────────────────────────
   // WHY null (not undefined): null is the explicit "no holding selected" signal.
@@ -307,6 +307,7 @@ export function HoldingsTab({
             ]),
           )}
           totalValue={kpi.totalValue}
+          series={holdingsSeries}
         />
       </div>
 

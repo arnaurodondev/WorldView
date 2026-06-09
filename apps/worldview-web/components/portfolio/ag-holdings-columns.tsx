@@ -1,6 +1,6 @@
 /**
  * components/portfolio/ag-holdings-columns.tsx — AG Grid ColDef array for the
- * portfolio holdings table (PLAN-0071 Phase 6).
+ * portfolio holdings table (PLAN-0071 Phase 6, extended PLAN-0108 W4-T401).
  *
  * WHY PARALLEL FILE (not replacing holdings-columns.tsx): holdings-columns.tsx
  * drives the legacy DataTable and its unit tests. Keeping both lets the AG Grid
@@ -12,9 +12,24 @@
  * on EnrichedHoldingRow, not on a flat field path. valueGetter extracts it; the
  * cellRenderer formats it for display. Same contract as TanStack's accessorFn.
  *
- * COLUMN ORDER:
- *   TICKER (pinned-left) | NAME | QTY | AVG COST | CURRENT |
- *   DAY $ | DAY % | P&L $ | P&L % | VALUE | WEIGHT | SECTOR
+ * COLUMN ORDER (14-col spec, PLAN-0108 §6):
+ *   1. TICKER (pinned-left) | 2. NAME | 3. QTY | 4. AVG COST | 5. LAST |
+ *   6. DAY Δ$ | 7. DAY Δ% | 8. SPARK | 9. MKT VALUE |
+ *   10. UNREAL $ | 11. UNREAL % | 12. WEIGHT | 13. SECTOR | 14. ASSET
+ *
+ * WHY SPARK at column 8 (between DAY Δ% and MKT VALUE):
+ *   The sparkline belongs in the "intraday signal" cluster (DAY Δ$ and DAY Δ%).
+ *   Placing it between DAY% and MKT VALUE means the eye flows naturally:
+ *   "how big was today's move → what does the trend look like → what is the
+ *   position worth now." It answers the question "is today's move a blip or
+ *   a continuation?" before the trader looks at the absolute value.
+ *
+ * WHY ASSET at column 14 (last):
+ *   Asset class is a stable, rarely-changing attribute — not an actionable
+ *   signal most sessions. Placing it last means it doesn't interrupt the
+ *   financial flow: Ticker→Name→Size→Cost→Price→Day→Trend→Value→PnL→
+ *   Weight→Sector→Type. Wide-screen users see it; narrow-screen users scroll
+ *   or use AG Grid's column hide.
  *
  * WHO USES IT: components/portfolio/SemanticHoldingsTable.tsx
  */
@@ -24,6 +39,13 @@ import type { EnrichedHoldingRow } from "./holdings-columns";
 import { cn } from "@/lib/utils";
 import { formatPrice, formatPercent, formatPercentUnsigned } from "@/lib/utils";
 import { formatStalenessAwarePrice, fmtPnl } from "./holdings-columns";
+// WHY separate imports for cell renderers: SparklineCellRenderer and
+// AssetTypeCellRenderer are self-contained modules that read their data from
+// the AG Grid `context` object (not from ColDef values). Importing them here
+// keeps ag-holdings-columns.tsx as the single source of truth for column
+// registration while the renderers remain independently testable.
+import { SparklineCellRenderer } from "./cells/SparklineCellRenderer";
+import { AssetTypeCellRenderer } from "./cells/AssetTypeCellRenderer";
 
 // ── Pinned-row detection helper ───────────────────────────────────────────────
 // WHY: AG Grid passes `node.rowPinned === 'bottom'` for pinnedBottomRowData rows.
@@ -36,20 +58,26 @@ function isPinnedBottom(params: ICellRendererParams<EnrichedHoldingRow>): boolea
 }
 
 // ── Column pixel widths ───────────────────────────────────────────────────────
-
+// Source: PLAN-0108 §6 14-column density spec.
+// WHY these exact values: the sum (76+168+78+86+86+82+70+76+96+90+70+70+80+44 = 1172px)
+// fits comfortably on a 1280px viewport with TICKER pinned left at 76px.
+// Narrower breakpoints rely on AG Grid's column drag-to-hide or the existing
+// localStorage-persisted column state (HOLDINGS_COLS_KEY).
 export const HOLDINGS_AG_COL_WIDTHS: Record<string, number> = {
-  ticker: 80,
-  name: 130,
-  qty: 80,
-  avgCost: 90,
-  current: 90,
-  dayChange: 90,
-  dayChangePct: 80,
-  pnl: 100,
-  pnlPct: 80,
-  value: 100,
-  weight: 110,
-  sector: 110,
+  ticker: 76,
+  name: 168,
+  qty: 78,
+  avgCost: 86,
+  current: 86,      // header label: LAST
+  dayChange: 82,    // header label: DAY Δ$
+  dayChangePct: 70, // header label: DAY Δ%
+  spark: 76,        // new (W4-T401): SPARK column (SparklineCellRenderer)
+  value: 96,        // header label: MKT VALUE
+  pnl: 90,          // header label: UNREAL $
+  pnlPct: 70,       // header label: UNREAL %
+  weight: 70,
+  sector: 80,
+  asset: 44,        // new (W4-T401): ASSET column (AssetTypeCellRenderer)
 };
 
 // ── Cell renderers ────────────────────────────────────────────────────────────
@@ -239,7 +267,7 @@ function SectorCellRenderer(params: ICellRendererParams<EnrichedHoldingRow>) {
 // ── Column definitions ────────────────────────────────────────────────────────
 
 export const holdingsAgColumns: ColDef<EnrichedHoldingRow>[] = [
-  // ── TICKER — pinned left, not movable ──────────────────────────────────────
+  // ── 1. TICKER — pinned left, not movable ───────────────────────────────────
   {
     colId: "ticker",
     headerName: "TICKER",
@@ -252,7 +280,7 @@ export const holdingsAgColumns: ColDef<EnrichedHoldingRow>[] = [
     cellRenderer: TickerCellRenderer,
   },
 
-  // ── NAME ───────────────────────────────────────────────────────────────────
+  // ── 2. NAME ────────────────────────────────────────────────────────────────
   {
     colId: "name",
     headerName: "NAME",
@@ -261,7 +289,7 @@ export const holdingsAgColumns: ColDef<EnrichedHoldingRow>[] = [
     cellRenderer: NameCellRenderer,
   },
 
-  // ── QTY — sortable ─────────────────────────────────────────────────────────
+  // ── 3. QTY — sortable ──────────────────────────────────────────────────────
   {
     colId: "qty",
     headerName: "QTY",
@@ -271,7 +299,7 @@ export const holdingsAgColumns: ColDef<EnrichedHoldingRow>[] = [
     cellRenderer: QtyCellRenderer,
   },
 
-  // ── AVG COST ───────────────────────────────────────────────────────────────
+  // ── 4. AVG COST ────────────────────────────────────────────────────────────
   {
     colId: "avg_cost",
     headerName: "AVG COST",
@@ -280,66 +308,105 @@ export const holdingsAgColumns: ColDef<EnrichedHoldingRow>[] = [
     cellRenderer: AvgCostCellRenderer,
   },
 
-  // ── CURRENT ───────────────────────────────────────────────────────────────
+  // ── 5. LAST (was CURRENT) ─────────────────────────────────────────────────
+  // WHY renamed to LAST: "LAST" is standard Bloomberg/Reuters terminal vocabulary
+  // for the most recent trade price. "CURRENT" is ambiguous (current as of when?).
+  // The colId stays "current" (not "last") to preserve existing localStorage
+  // column-state persistence — changing the colId would cause a one-time layout
+  // reset for users who have saved column state (HOLDINGS_COLS_KEY).
   {
     colId: "current",
-    headerName: "CURRENT",
+    headerName: "LAST",
     sortable: false,
     width: HOLDINGS_AG_COL_WIDTHS.current,
     cellRenderer: CurrentCellRenderer,
   },
 
-  // ── DAY $ — sortable ────────────────────────────────────────────────────────
+  // ── 6. DAY Δ$ — sortable ──────────────────────────────────────────────────
+  // WHY Δ prefix: the delta symbol is the standard shorthand for "change"
+  // in financial terminals. More compact than "CHG" and universally understood
+  // in an equity context (Δ price today vs yesterday's close).
   {
     colId: "dayChange",
-    headerName: "DAY $",
+    headerName: "DAY Δ$",
     sortable: true,
     width: HOLDINGS_AG_COL_WIDTHS.dayChange,
     valueGetter: (params) => params.data?.dayChangeValue ?? 0,
     cellRenderer: DayChangeCellRenderer,
   },
 
-  // ── DAY % — sortable ────────────────────────────────────────────────────────
+  // ── 7. DAY Δ% — sortable ──────────────────────────────────────────────────
   {
     colId: "dayChangePct",
-    headerName: "DAY %",
+    headerName: "DAY Δ%",
     sortable: true,
     width: HOLDINGS_AG_COL_WIDTHS.dayChangePct,
     valueGetter: (params) => params.data?.dayChangePct ?? 0,
     cellRenderer: DayChangePctCellRenderer,
   },
 
-  // ── P&L $ — sortable ────────────────────────────────────────────────────────
+  // ── 8. SPARK — 14-day sparkline (PLAN-0108 W4-T401) ──────────────────────
+  // WHY not sortable: a sparkline has no meaningful scalar sort key. The closest
+  // proxy (momentum slope) doesn't exist in the current data model; adding a
+  // derived slope column is a separate concern (future Analytics enhancement).
+  //
+  // WHY no valueGetter: SparklineCellRenderer reads holdingsSeries from AG Grid
+  // context (context.holdingsSeries keyed by ticker). Putting large number arrays
+  // into the value pipeline would force AG Grid to deep-clone them on every render
+  // cycle — context access is O(1) pointer lookup, no cloning.
+  //
+  // WHY headerClass "!text-center": centres the "SPARK" header text to align
+  // visually with the centred sparkline SVG below it. The ! Tailwind prefix
+  // overrides AG Grid's default left-align header class.
   {
-    colId: "pnl",
-    headerName: "P&L $",
-    sortable: true,
-    width: HOLDINGS_AG_COL_WIDTHS.pnl,
-    valueGetter: (params) => params.data?.pnl ?? 0,
-    cellRenderer: PnlCellRenderer,
+    colId: "spark",
+    headerName: "SPARK",
+    sortable: false,
+    width: HOLDINGS_AG_COL_WIDTHS.spark,
+    headerClass: "!text-center",
+    cellRenderer: SparklineCellRenderer,
   },
 
-  // ── P&L % — sortable ────────────────────────────────────────────────────────
-  {
-    colId: "pnlPct",
-    headerName: "P&L %",
-    sortable: true,
-    width: HOLDINGS_AG_COL_WIDTHS.pnlPct,
-    valueGetter: (params) => params.data?.pnlPct ?? 0,
-    cellRenderer: PnlPctCellRenderer,
-  },
-
-  // ── VALUE — sortable ────────────────────────────────────────────────────────
+  // ── 9. MKT VALUE — sortable (was VALUE) ───────────────────────────────────
+  // WHY renamed to MKT VALUE: "VALUE" alone is ambiguous (book value? NAV?).
+  // "MKT VALUE" explicitly means the current market value of the position
+  // (quantity × last price), matching prime-brokerage statement terminology.
+  // colId stays "value" to preserve localStorage column state.
   {
     colId: "value",
-    headerName: "VALUE",
+    headerName: "MKT VALUE",
     sortable: true,
     width: HOLDINGS_AG_COL_WIDTHS.value,
     valueGetter: (params) => params.data?.value ?? 0,
     cellRenderer: ValueCellRenderer,
   },
 
-  // ── WEIGHT — sortable ───────────────────────────────────────────────────────
+  // ── 10. UNREAL $ — sortable (was P&L $) ───────────────────────────────────
+  // WHY renamed to UNREAL $: "P&L" is ambiguous — it encompasses both realised
+  // and unrealised gains. "UNREAL $" makes it immediately clear this is the
+  // open, not-yet-realised unrealised P&L. Bloomberg PORT uses "UNRL $".
+  // colId stays "pnl" to preserve localStorage column state.
+  {
+    colId: "pnl",
+    headerName: "UNREAL $",
+    sortable: true,
+    width: HOLDINGS_AG_COL_WIDTHS.pnl,
+    valueGetter: (params) => params.data?.pnl ?? 0,
+    cellRenderer: PnlCellRenderer,
+  },
+
+  // ── 11. UNREAL % — sortable (was P&L %) ───────────────────────────────────
+  // colId stays "pnlPct" to preserve localStorage column state.
+  {
+    colId: "pnlPct",
+    headerName: "UNREAL %",
+    sortable: true,
+    width: HOLDINGS_AG_COL_WIDTHS.pnlPct,
+    valueGetter: (params) => params.data?.pnlPct ?? 0,
+    cellRenderer: PnlPctCellRenderer,
+  },
+
+  // ── 12. WEIGHT — sortable ──────────────────────────────────────────────────
   {
     colId: "weight",
     headerName: "WEIGHT",
@@ -349,12 +416,38 @@ export const holdingsAgColumns: ColDef<EnrichedHoldingRow>[] = [
     cellRenderer: WeightCellRenderer,
   },
 
-  // ── SECTOR ─────────────────────────────────────────────────────────────────
+  // ── 13. SECTOR ─────────────────────────────────────────────────────────────
   {
     colId: "sector",
     headerName: "SECTOR",
     sortable: false,
     width: HOLDINGS_AG_COL_WIDTHS.sector,
     cellRenderer: SectorCellRenderer,
+  },
+
+  // ── 14. ASSET — asset-class badge (PLAN-0108 W4-T401) ────────────────────
+  // WHY 44px: the widest badge is "ETF" (3 chars × ~7px mono + 4px padding each
+  // side) ≈ 29px. 44px gives ~7.5px whitespace per side for breathing room while
+  // keeping the column as narrow as possible.
+  //
+  // WHY center-aligned header + cell: small chips look unanchored when
+  // left-aligned — the badge floats away from the column label. Center alignment
+  // bins the chip visually with the "ASSET" header text.
+  //
+  // WHY no valueGetter: AssetTypeCellRenderer reads context.assetClasses keyed
+  // by instrument_id. Same no-clone context-read pattern as SPARK.
+  //
+  // WHY cellStyle object (not className): AG Grid applies cellStyle as an inline
+  // style on the cell wrapper div, which controls the flex layout of the content
+  // container. Without this, the AssetTypeCellRenderer's inner flex div doesn't
+  // have a flex parent to centre against, and the chip drifts to the top.
+  {
+    colId: "asset",
+    headerName: "ASSET",
+    sortable: false,
+    width: HOLDINGS_AG_COL_WIDTHS.asset,
+    headerClass: "!text-center",
+    cellStyle: { display: "flex", alignItems: "center", justifyContent: "center" },
+    cellRenderer: AssetTypeCellRenderer,
   },
 ];

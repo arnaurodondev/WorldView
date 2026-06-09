@@ -56,6 +56,21 @@ export interface AgGridBaseProps<TData extends object> {
    * the TICKER column is pinned left.
    */
   pinnedBottomRowData?: TData[];
+  /**
+   * Arbitrary data object passed to all cell renderers via `params.context`.
+   *
+   * WHY context (not cellRendererParams): `context` is the AG Grid-idiomatic
+   * channel for passing cross-column, shared state to renderers (e.g. a
+   * Record<ticker, series[]> map used by the SPARK column, or a
+   * Record<instrument_id, assetClass> map for the ASSET column). Using
+   * cellRendererParams would require duplicating the data on every ColDef;
+   * context is a single reference shared across all columns' renderers.
+   *
+   * Type is `unknown` here because the context shape varies per use-site.
+   * Each cell renderer casts `params.context` to its own interface — this is
+   * the documented AG Grid pattern for typed context consumption.
+   */
+  context?: unknown;
 }
 
 /**
@@ -91,6 +106,7 @@ export function AgGridBase<TData extends object>({
   pinnedBottomRowData,
   onCellMouseOver,
   onCellMouseOut,
+  context,
 }: AgGridBaseProps<TData>) {
   const colStateHandler = onColumnStateChanged;
 
@@ -107,6 +123,7 @@ export function AgGridBase<TData extends object>({
         rowData={rowData}
         columnDefs={columnDefs}
         pinnedBottomRowData={pinnedBottomRowData}
+        context={context}
         rowHeight={28}
         headerHeight={28}
         groupHeaderHeight={22}
