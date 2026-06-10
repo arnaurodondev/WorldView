@@ -560,9 +560,35 @@ Sub-Plan D-1 will:
 - Disable redundant EODHD daily/weekly/monthly for Alpaca-covered instruments (see H-3).
 - On Alpaca HTTP failure or `row_count=0` for a specific symbol, fall back that symbol to EODHD daily within the same tick (cheap, resilient).
 
-## H-2: Relevance worker — architecture (pending deep-dive, agent running 2026-06-10)
+## H-2: Relevance worker — architecture ✓ RESOLVED 2026-06-10 — Path 1 selected
 
-Awaiting agent's quantitative cost + quality comparison (token counts, $/article, coverage matrix, sliding-window aggregation analysis). Decision will be updated here once the report lands; default remains Path 1 (3-layer fix in Sub-Plan B).
+**Path 1 — Dedicated worker + 3-layer fix (Sub-Plan B)**
+- Architecture: title-only LLM call on every MEDIUM+DEEP article, single prompt, 8B model (Llama-3.1-8B-Instruct or Qwen3.5-9B-no-thinking).
+- Token cost: ~280 in / ~40 out per article.
+- $/month at 13k articles: **~$0.14**. At 100k: **~$1.08**.
+- Coverage: **97.9%** of routed articles (564/576).
+
+**Path 2 — Fold into 235B DEEP extraction**
+- Architecture: extend DEEP_EXTRACTION prompt JSON to emit `relevance` + `sentiment` fields. Aggregate across sliding windows.
+- Token cost: $0 marginal (235B call already runs for entity extraction).
+- $/month savings vs Path 1: **~$0.14** (yes, ~14 cents).
+- Coverage: **65.1%** of routed articles (MEDIUM tier of 32.8% is silently dropped).
+
+**Decision: Path 1**. The entire promise of Path 2 — "save tokens by piggybacking" — buys $0.14/month while:
+1. Dropping 33% of relevance coverage (all MEDIUM-tier).
+2. Breaking PRD-0026 formula for those articles (`display_relevance` becomes undefined for 1/3 of news).
+3. Distorting the L-5b `llm_relevance_7d_max` rollup (biased high — only DEEP-routed pre-filtered as high-impact).
+4. Breaking append-only ledger semantics (sliding-window inputs produce N hashes per article, no canonical row).
+5. Coupling failure domains (a 235B rate-limit blocks both extraction AND relevance/sentiment).
+6. 3-5 days of implementation + ≥1 week shadow mode vs Path 1's 1-day fix.
+
+**Caveat / future enhancement (separate plan if pursued)**: Path 1 leaves title-only sentiment as a quality limitation. A future small enhancement could add a `body_snippet` (first 500 chars) field to the worker prompt — costs ~$0.50/month at full volume, stays in the dedicated-worker architecture.
+
+**Conditions under which we'd reconsider Path 2**: all of these must hold simultaneously:
+1. Product decision to downgrade PRD-0026 to "DEEP-only relevance".
+2. L-5b redefined as "max among DEEP".
+3. Clean per-article aggregation rule specced and validated.
+4. Routing recalibration so DEEP captures ≥90% of market-moving news (currently 65%).
 
 ## H-3: EODHD coverage decision ✓ RESOLVED 2026-06-10
 
