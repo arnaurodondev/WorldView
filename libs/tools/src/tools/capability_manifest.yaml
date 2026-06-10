@@ -2,9 +2,14 @@ version: "4"
 tools:
   - name: get_price_history
     description: >
-      Fetches OHLCV (open/high/low/close/volume) bar history for a stock ticker
-      over a specified date range. Use when the user asks about price movement,
-      trend, range, or performance over a time period.
+      Fetches OHLCV (open/high/low/close/volume) bar history for a stock ticker.
+      Only `ticker` is required. Provide ONE of these temporal patterns:
+      `last_n_bars=1, interval="1m"` for "what is X trading at?" (24/7 current
+      price); `last_n_bars=7, interval="day"` for "last week of daily prices";
+      `lookback_days=30, interval="hour"` for "last 30 days of hourly bars"; or
+      a `from_date`+`to_date` pair for an explicit calendar window. Defaults to
+      `last_n_bars=20` when no temporal parameter is supplied.
+      PLAN-0109 B-3 (2026-06-10) — replaces the implicit 7d/1m fallback.
     parameters:
       - name: ticker
         type: string
@@ -12,23 +17,40 @@ tools:
         required: true
       - name: from_date
         type: date
-        description: Start of date range (YYYY-MM-DD)
-        required: true
+        description: >
+          Start of explicit date range (YYYY-MM-DD). Pair with `to_date`.
+          Ignored if `last_n_bars` or `lookback_days` is supplied.
+        required: false
       - name: to_date
         type: date
-        description: End of date range (YYYY-MM-DD)
-        required: true
+        description: >
+          End of explicit date range (YYYY-MM-DD). Pair with `from_date`.
+          Ignored if `last_n_bars` or `lookback_days` is supplied.
+        required: false
+      - name: last_n_bars
+        type: integer
+        description: >
+          Return the N most-recent bars of the requested interval. Use
+          `last_n_bars=1, interval="1m"` for current-price queries.
+        required: false
+      - name: lookback_days
+        type: integer
+        description: >
+          Return bars from the last N calendar days ending today.
+        required: false
       - name: interval
         type: string
-        enum: [day, week, month]
+        enum: [1m, hour, day, week, month]
         description: Bar granularity. Default "week".
         required: false
     source_type: ohlcv  # used by TrustScorer — trust_weight NOT stored here (PLAN-0067 §0 A-2)
     since: "v1"
     deprecated_at: null
     example_queries:
+      - "What is AAPL trading at?"
+      - "Show me the last week of daily prices for NVDA"
+      - "Plot the last 30 days of hourly bars for TSLA"
       - "How has AAPL performed over the last 3 months?"
-      - "What was NVDA's price range in Q1 2026?"
 
   - name: get_fundamentals_history
     description: >

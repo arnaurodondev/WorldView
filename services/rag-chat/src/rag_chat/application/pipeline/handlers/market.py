@@ -34,6 +34,26 @@ log = structlog.get_logger(__name__)  # type: ignore[no-any-return]
 # beyond most context windows. Cap at 4000 to stay within budget.
 _TOOL_RESULT_MAX_CHARS = 4000
 
+# Interval -> seconds-per-bar lookup. Used by _handle_get_price_history's
+# last_n_bars/lookback_days computation to size the backward window. Values
+# match the canonical intervals exposed by the market-data /ohlcv/bars
+# endpoint; unknown intervals fall through to "day" (86400).
+_INTERVAL_SECONDS_MAP: dict[str, int] = {
+    "1m": 60,
+    "5m": 300,
+    "15m": 900,
+    "30m": 1800,
+    "hour": 3600,
+    "1h": 3600,
+    "4h": 14400,
+    "day": 86400,
+    "1d": 86400,
+    "week": 604800,
+    "1w": 604800,
+    "month": 2_592_000,
+    "1M": 2_592_000,
+}
+
 
 # FIX-LIVE-DD (2026-05-25): Q6 ("AI semiconductors above $50B") graded USELESS
 # because the LLM fabricated market caps ($5.23T for NVDA, $742B for AMD,
@@ -254,35 +274,74 @@ class MarketHandler(ToolHandler):
     async def _handle_get_price_history(
         self,
         ticker: str,
-        from_date: str,
-        to_date: str,
+        from_date: str | None = None,
+        to_date: str | None = None,
         interval: str = "week",
+        last_n_bars: int | None = None,
+        lookback_days: int | None = None,
     ) -> RetrievedItem | None:
         """Fetch OHLCV bars and format as a markdown table RetrievedItem.
 
-        After-hours / weekend / pre-market fallback: when the requested
-        date range yields zero bars (typical for "what is X trading at?"
-        questions outside RTH, where the LLM asks for today→tomorrow
-        with interval=day before today's daily bar has landed), retry
-        with interval='1m' over the last 7 days and surface the most
-        recent 1-minute bar as a single "last known price" row. This
-        keeps the tool useful 24/7 without needing a live quote feed
-        (quotes are intentionally disabled to cap third-party costs).
-        """
-        # Parse and validate date strings before hitting S3
-        try:
-            _from = date.fromisoformat(from_date)
-            _to = date.fromisoformat(to_date)
-        except ValueError:
-            log.warning(
-                "tool_invalid_dates",
-                tool="get_price_history",
-                from_date=from_date,
-                to_date=to_date,
-            )
-            return None
+        Parameter resolution (B-3, 2026-06-10):
+          1. If ``from_date`` AND ``to_date`` are both provided, use them
+             verbatim (explicit-window mode, the original behavior).
+          2. Else if ``last_n_bars`` is provided, request the most recent N
+             bars of the given ``interval`` by computing a backward window
+             of ``N x interval_seconds + buffer``, then slicing to the last
+             N rows post-fetch.
+          3. Else if ``lookback_days`` is provided, fetch
+             ``today - lookback_days`` -> ``today`` at the given interval.
+          4. Else default to ``last_n_bars=20`` (one screen of bars).
 
-        # BP-025: wrap S3 call with timeout to prevent long tail latency
+        Replaces the implicit 7-day 1m fallback shipped in 9a8bb6244:
+        the LLM now expresses "what is X trading at?" explicitly as
+        ``last_n_bars=1, interval="1m"`` — single retrieved bar, no
+        guessing on the handler side. Quotes are intentionally disabled
+        to cap third-party costs; the most-recent 1m bar fills the gap.
+        """
+        from datetime import datetime as _dt
+        from datetime import timedelta as _td
+
+        # ── Step 1: resolve the date window from inputs ──────────────────
+        explicit_window = bool(from_date and to_date)
+        n: int | None = None
+
+        if explicit_window:
+            try:
+                _from = date.fromisoformat(from_date)  # type: ignore[arg-type]
+                _to = date.fromisoformat(to_date)  # type: ignore[arg-type]
+            except ValueError:
+                log.warning(
+                    "tool_invalid_dates",
+                    tool="get_price_history",
+                    from_date=from_date,
+                    to_date=to_date,
+                )
+                return None
+        elif last_n_bars is not None and last_n_bars > 0:
+            # Compute a backward window with enough headroom for weekends /
+            # off-hours / non-trading days. Buffer = 2x the implied span,
+            # bounded to a sane ceiling so 1m x 60 doesn't pull years.
+            n = int(last_n_bars)
+            interval_seconds = _INTERVAL_SECONDS_MAP.get(interval, 86400)
+            implied_seconds = n * interval_seconds
+            buffer_seconds = max(implied_seconds * 2, 86400)  # >= 1 day
+            buffer_seconds = min(buffer_seconds, 365 * 86400)  # cap at 1y
+            _to = _dt.now(tz=UTC).date()
+            _from = _to - _td(seconds=buffer_seconds)
+        elif lookback_days is not None and lookback_days > 0:
+            _to = _dt.now(tz=UTC).date()
+            _from = _to - _td(days=int(lookback_days))
+        else:
+            # Default: most recent 20 bars at requested interval.
+            n = 20
+            interval_seconds = _INTERVAL_SECONDS_MAP.get(interval, 86400)
+            buffer_seconds = max(n * interval_seconds * 2, 86400)
+            _to = _dt.now(tz=UTC).date()
+            _from = _to - _td(seconds=buffer_seconds)
+
+        # ── Step 2: fetch ────────────────────────────────────────────────
+        # BP-025: wrap S3 call with timeout to prevent long tail latency.
         bars = await asyncio.wait_for(
             self._s3.get_ohlcv_range(
                 ticker=ticker,
@@ -293,71 +352,37 @@ class MarketHandler(ToolHandler):
             timeout=self._timeout,
         )
         if not bars:
-            # Fallback path: caller likely wanted "current price" but the
-            # requested window has no bars yet (markets closed, weekend, or
-            # the daily bar for today hasn't landed). Try the most recent
-            # 1-minute bar over the last 7 days. We deliberately scope this
-            # to the no-data branch only — when the original window DOES
-            # return bars we never trigger the fallback, so history queries
-            # are unaffected.
-            from datetime import datetime as _dt
-            from datetime import timedelta as _td
-
-            _fb_to = _dt.now(tz=UTC).date()
-            _fb_from = _fb_to - _td(days=7)
-            fallback_bars = await asyncio.wait_for(
-                self._s3.get_ohlcv_range(
-                    ticker=ticker,
-                    from_date=_fb_from,
-                    to_date=_fb_to,
-                    interval="1m",
-                ),
-                timeout=self._timeout,
-            )
-            if not fallback_bars:
-                log.warning("tool_no_data", tool="get_price_history", ticker=ticker)
-                return None
-
-            # Take the most recent bar. The market-data /ohlcv/bars endpoint
-            # returns ascending order; the LAST entry is the freshest. If a
-            # future change flips ordering we'll still pick the max-by-ts.
-            latest = max(
-                fallback_bars,
-                key=lambda b: b.get("ts") or b.get("bar_date") or "",
-            )
-            log.info(
-                "get_price_history_1m_fallback",
+            log.warning(
+                "tool_no_data",
+                tool="get_price_history",
                 ticker=ticker,
-                latest_ts=latest.get("ts") or latest.get("bar_date"),
-                bars_in_window=len(fallback_bars),
+                interval=interval,
+                last_n_bars=last_n_bars,
+                lookback_days=lookback_days,
             )
-            # Reuse the existing formatter but flag it as a 1m fallback so
-            # the LLM presents it as a "last known price" rather than a
-            # full bar history. We pass the single bar in a list to match
-            # the formatter's contract.
-            table = self._format_price_table(
-                ticker,
-                str(_fb_from),
-                str(_fb_to),
-                "1m (most recent — markets closed for requested window)",
-                [latest],
-            )
-            return RetrievedItem.create(
-                item_id=f"tool:price_history:{ticker}:latest_1m",
-                item_type=ItemType.financial,
-                text=table[:_TOOL_RESULT_MAX_CHARS],
-                score=0.80,
-                trust_weight=0.85,
-            )
+            return None
 
-        table = self._format_price_table(ticker, from_date, to_date, interval, bars)
-        # CRITICAL: field is `text` NOT `content` (N-7); use .create() factory
-        # (never direct construction — fusion_score invariant enforced in __post_init__)
+        # ── Step 3: slice when last_n_bars mode ──────────────────────────
+        if n is not None and len(bars) > n:
+            # /ohlcv/bars returns ascending; take the trailing N.
+            bars = sorted(
+                bars,
+                key=lambda b: b.get("ts") or b.get("bar_date") or "",
+            )[-n:]
+
+        # ── Step 4: format ──────────────────────────────────────────────
+        table = self._format_price_table(ticker, str(_from), str(_to), interval, bars)
+        # Distinguish "single most-recent bar" responses in the citation
+        # so the LLM/UI can present them as "last known price" rather
+        # than full history. Only n==1 paths get the latest_1m suffix.
+        item_id = (
+            f"tool:price_history:{ticker}:latest_1m" if n == 1 and interval == "1m" else f"tool:price_history:{ticker}"
+        )
         return RetrievedItem.create(
-            item_id=f"tool:price_history:{ticker}",
+            item_id=item_id,
             item_type=ItemType.financial,
             text=table[:_TOOL_RESULT_MAX_CHARS],
-            score=0.88,
+            score=0.88 if explicit_window else 0.84,
             trust_weight=0.90,
         )
 

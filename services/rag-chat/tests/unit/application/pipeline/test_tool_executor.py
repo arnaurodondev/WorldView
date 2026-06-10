@@ -135,64 +135,129 @@ class TestGetPriceHistory:
         assert "AAPL" in result.text
 
     async def test_executor_returns_none_on_empty_bars(self) -> None:
-        """execute() must return None when BOTH the requested window AND the
-        1-minute fallback return empty bars. Empty mock here means S3 returns
-        [] for both calls — the fallback path is exercised but also gets [].
+        """B-3: execute() must return None when S3 yields no bars for the
+        requested window. The implicit 7-day 1m fallback shipped in 9a8bb6244
+        has been removed in favor of explicit LLM control via
+        ``last_n_bars=1, interval='1m'`` (see
+        test_executor_explicit_last_n_bars_1_1m_returns_recent_bar below).
         """
         executor = _make_executor(bars=[])
-        tc = _make_tool_use_block("get_price_history", ticker="TSLA", from_date="2026-01-01", to_date="2026-04-01")
+        tc = _make_tool_use_block(
+            "get_price_history",
+            ticker="TSLA",
+            from_date="2026-01-01",
+            to_date="2026-04-01",
+        )
 
         result = await executor.execute(tc)
 
         assert result is None
 
-    async def test_executor_price_history_falls_back_to_latest_1m_bar(self) -> None:
-        """When the requested date range has no bars, the handler must retry
-        with interval='1m' over the last 7 days and surface the most recent
-        bar as a "last known price" RetrievedItem. Covers the after-hours /
-        weekend "what is X trading at?" path that previously returned 503.
+    async def test_executor_explicit_last_n_bars_1_1m_returns_recent_bar(self) -> None:
+        """B-3: LLM expresses "what is X trading at?" as last_n_bars=1
+        with interval="1m". The handler computes a backward window, fetches,
+        slices to the last bar, and tags item_id with ":latest_1m" so
+        downstream rendering shows it as "last known price".
         """
         from rag_chat.application.pipeline.tool_executor import ToolExecutor
 
-        # S3 mock: first call (requested window) returns []; second call (1m
-        # fallback) returns a single most-recent bar.
+        # Mock returns 5 minute-bars; handler should slice to the most recent 1.
+        five_bars = [
+            {"ts": f"2026-06-09T20:0{i}:00Z", "open": 200.0, "high": 201.0, "low": 199.5, "close": 200.5, "volume": 100}
+            for i in range(5)
+        ]
         s3 = _make_s3_port()
-        s3.get_ohlcv_range = AsyncMock(
-            side_effect=[
-                [],  # original interval='day' over user-supplied range → no bars
-                [
-                    {
-                        "ts": "2026-06-09T20:00:00Z",
-                        "date": "2026-06-09",
-                        "open": 200.0,
-                        "high": 201.5,
-                        "low": 199.8,
-                        "close": 200.9,
-                        "volume": 1234,
-                    }
-                ],
-            ]
-        )
+        s3.get_ohlcv_range = AsyncMock(return_value=five_bars)
         executor = ToolExecutor(registry=_make_registry_with_tools(), s3=s3)
         tc = _make_tool_use_block(
             "get_price_history",
             ticker="AAPL",
-            from_date="2026-06-09",
-            to_date="2026-06-10",
+            interval="1m",
+            last_n_bars=1,
         )
 
         result = await executor.execute(tc)
 
         assert result is not None
-        # Two calls: original + 1m fallback.
-        assert s3.get_ohlcv_range.call_count == 2
-        # Second call uses interval='1m' regardless of what the LLM asked for.
-        second_call_kwargs = s3.get_ohlcv_range.call_args_list[1].kwargs
-        assert second_call_kwargs["interval"] == "1m"
-        # The RetrievedItem.item_id ends with ':latest_1m' so downstream
-        # citation rendering can distinguish "last known" from full history.
+        # Single call (no fallback chain anymore).
+        assert s3.get_ohlcv_range.call_count == 1
+        # Handler passed interval="1m" explicitly as the LLM requested.
+        call_kwargs = s3.get_ohlcv_range.call_args.kwargs
+        assert call_kwargs["interval"] == "1m"
+        # Latest-1m semantic marker preserved for downstream rendering.
         assert result.item_id.endswith(":latest_1m")
         assert "AAPL" in result.text
+
+    async def test_executor_last_n_bars_returns_n_most_recent(self) -> None:
+        """B-3: last_n_bars=3 with 10 bars in response → result contains
+        only the 3 most-recent rows in the formatted table.
+        """
+        from rag_chat.application.pipeline.tool_executor import ToolExecutor
+
+        ten_bars = [
+            {
+                "ts": f"2026-06-{i + 1:02d}",
+                "open": 100 + i,
+                "high": 101 + i,
+                "low": 99 + i,
+                "close": 100 + i,
+                "volume": 1000,
+            }
+            for i in range(10)
+        ]
+        s3 = _make_s3_port()
+        s3.get_ohlcv_range = AsyncMock(return_value=ten_bars)
+        executor = ToolExecutor(registry=_make_registry_with_tools(), s3=s3)
+        tc = _make_tool_use_block(
+            "get_price_history",
+            ticker="AAPL",
+            interval="day",
+            last_n_bars=3,
+        )
+
+        result = await executor.execute(tc)
+
+        assert result is not None
+        # Last 3 bars by ts ascending sort: i=7,8,9 -> close values 107/108/109.
+        # (Using unique close values for assertions because the formatter
+        # renders dates from the "date" field which we don't set in the mock.)
+        assert "$107.00" in result.text
+        assert "$108.00" in result.text
+        assert "$109.00" in result.text
+        # Bars before the trailing-3 window should NOT appear.
+        assert "$100.00" not in result.text
+        assert "$106.00" not in result.text
+
+    async def test_executor_explicit_from_to_overrides_other_params(self) -> None:
+        """B-3: when from_date+to_date are both provided, last_n_bars and
+        lookback_days are ignored. Explicit window wins (priority 1 in plan).
+        """
+        from datetime import date as _d
+
+        from rag_chat.application.pipeline.tool_executor import ToolExecutor
+
+        s3 = _make_s3_port()
+        s3.get_ohlcv_range = AsyncMock(return_value=_sample_bars())
+        executor = ToolExecutor(registry=_make_registry_with_tools(), s3=s3)
+        tc = _make_tool_use_block(
+            "get_price_history",
+            ticker="AAPL",
+            from_date="2026-02-01",
+            to_date="2026-05-01",
+            interval="day",
+            last_n_bars=999,  # should be ignored
+            lookback_days=999,  # should be ignored
+        )
+
+        result = await executor.execute(tc)
+
+        assert result is not None
+        call_kwargs = s3.get_ohlcv_range.call_args.kwargs
+        # Handler honored the explicit from/to verbatim.
+        assert call_kwargs["from_date"] == _d(2026, 2, 1)
+        assert call_kwargs["to_date"] == _d(2026, 5, 1)
+        # No ":latest_1m" suffix on explicit-window paths.
+        assert not result.item_id.endswith(":latest_1m")
 
     async def test_executor_returns_none_on_s3_error(self) -> None:
         """execute() must return None when S3 raises, not propagate the exception."""

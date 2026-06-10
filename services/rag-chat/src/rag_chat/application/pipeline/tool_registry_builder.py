@@ -76,9 +76,20 @@ def build_default_registry() -> ToolRegistry:
         ToolSpec(
             name="get_price_history",
             description=(
-                "Fetches OHLCV (open/high/low/close/volume) bar history for a stock ticker "
-                "over a specified date range. Use when the user asks about price movement, "
-                "trend, range, or performance over a time period."
+                # PLAN-0109 B-3: teach the LLM the new flexible parameter
+                # shape. The implicit 7d/1m fallback was removed in favour
+                # of explicit ``last_n_bars`` / ``lookback_days`` knobs the
+                # LLM can pick deliberately based on the user's question.
+                "Fetches OHLCV (open/high/low/close/volume) bar history for a stock ticker. "
+                "Only ``ticker`` is required. Provide ONE of the temporal patterns below:\n"
+                "  - ``last_n_bars=1, interval='1m'`` for \"what is AAPL trading at?\" "
+                "(works 24/7 — returns the most recent 1-minute bar).\n"
+                "  - ``last_n_bars=7, interval='day'`` for \"the last week of daily prices\".\n"
+                "  - ``lookback_days=30, interval='hour'`` for \"the last 30 days of hourly bars\".\n"
+                "  - ``from_date`` + ``to_date`` (both required as a pair) for an explicit "
+                'calendar window such as "Q1 2026".\n'
+                "When no temporal parameter is supplied, defaults to ``last_n_bars=20`` "
+                "(one screen of bars at the requested interval)."
             ),
             parameters=[
                 ParameterSpec(
@@ -90,27 +101,55 @@ def build_default_registry() -> ToolRegistry:
                 ParameterSpec(
                     name="from_date",
                     type="date",
-                    description="Start of date range (YYYY-MM-DD)",
-                    required=True,
+                    description=(
+                        "Start of explicit date range (YYYY-MM-DD). Optional — pair with "
+                        "``to_date`` for a calendar window. Ignored when ``last_n_bars`` or "
+                        "``lookback_days`` is supplied."
+                    ),
+                    required=False,
                 ),
                 ParameterSpec(
                     name="to_date",
                     type="date",
-                    description="End of date range (YYYY-MM-DD)",
-                    required=True,
+                    description=(
+                        "End of explicit date range (YYYY-MM-DD). Optional — pair with "
+                        "``from_date``. Ignored when ``last_n_bars`` or ``lookback_days`` "
+                        "is supplied."
+                    ),
+                    required=False,
+                ),
+                ParameterSpec(
+                    name="last_n_bars",
+                    type="integer",
+                    description=(
+                        "Return the N most-recent bars of the requested interval. "
+                        "Use ``last_n_bars=1, interval='1m'`` for current-price queries."
+                    ),
+                    required=False,
+                ),
+                ParameterSpec(
+                    name="lookback_days",
+                    type="integer",
+                    description=(
+                        "Return bars from the last N calendar days ending today. "
+                        "Pairs naturally with intra-day intervals (hour/1m)."
+                    ),
+                    required=False,
                 ),
                 ParameterSpec(
                     name="interval",
                     type="string",
-                    description="Bar granularity: day/week/month. Default 'week'.",
+                    description="Bar granularity: 1m/hour/day/week/month. Default 'week'.",
                     required=False,
-                    enum=["day", "week", "month"],
+                    enum=["1m", "hour", "day", "week", "month"],
                 ),
             ],
             source_type="ohlcv",
             example_queries=[
+                "What is AAPL trading at?",
+                "Show me the last week of daily prices for NVDA",
+                "Plot the last 30 days of hourly bars for TSLA",
                 "How has AAPL performed over the last 3 months?",
-                "What was NVDA's price range in Q1 2026?",
             ],
         ),
         handler=lambda **_: None,  # dispatch happens inside ToolExecutor.execute()
