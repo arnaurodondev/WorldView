@@ -572,21 +572,24 @@ Sequential 4-PR plan (already scoped in detail by audit agent):
 
 # Sub-Plan G — `holding.changed` Gating {#sub-plan-g}
 
+**Status**: ✅ Complete (2026-06-10) — see commit on `feat/plan-0099-w4`.
+
 **Goal**: per user decision — keep the event but gate emission behind a default-`false` settings flag until a real consumer ships.
 
-### T-G-1-01: Add settings flag
+### T-G-1-01: Add settings flag ✅
 - **Target**: `services/portfolio/src/portfolio/config.py`
-- **Add**: `emit_holding_changed_events: bool = False` (env var `PORTFOLIO_EMIT_HOLDING_CHANGED`).
+- **Added**: `emit_holding_changed_events: bool = False` (env var `PORTFOLIO_EMIT_HOLDING_CHANGED`).
 
-### T-G-1-02: Gate emission at the producer
-- **Target**: `services/portfolio/src/portfolio/application/use_cases/upsert_holdings_from_snapshot.py:159-167`.
-- **Change**: wrap the `HoldingChanged` event emission in `if settings.emit_holding_changed_events:`.
+### T-G-1-02: Gate emission at the producer ✅
+- **Target**: `services/portfolio/src/portfolio/application/use_cases/upsert_holdings_from_snapshot.py`.
+- **Change**: `UpsertHoldingsFromSnapshotUseCase` now takes `emit_holding_changed_events` constructor kwarg (default `False`). Step-5 outbox emission is short-circuited when the flag is off. `brokerage_sync_worker` passes `self._settings.emit_holding_changed_events`.
 
-### T-G-1-03: Doc + ADR
-- **Update**: `docs/services/portfolio.md`; add a one-paragraph ADR note in `docs/architecture/decisions/` saying "deprecated emission gated; re-enable when alert position-closure rule lands".
+### T-G-1-03: Doc + ADR ✅
+- **Created**: `docs/architecture/decisions/0007-holding-changed-emission-gated.md`.
+- **Updated**: `docs/services/portfolio.md` — new "`holding.changed` emission (gated)" section under Kafka Topics.
 
-### T-G-1-04: Replay or drop the 14 dead-letter rows
-- **Option chosen**: drop (per audit — holdings table is canonical source of truth; no consumer; replay would be pointless work).
+### T-G-1-04: Drop the 14 dead-letter rows ✅
+- `DELETE FROM outbox_events WHERE status='dead_letter' AND event_type='holding.changed'` returned exactly 14 rows on `portfolio_db` (2026-06-10).
 
 **Validation gate**: portfolio outbox `holding.changed` count stays at 0 in 24-hour observation.
 

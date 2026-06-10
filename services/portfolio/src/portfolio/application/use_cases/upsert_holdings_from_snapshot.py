@@ -78,6 +78,16 @@ class UpsertHoldingsFromSnapshotResult:
 class UpsertHoldingsFromSnapshotUseCase:
     """Overwrite the holdings table for a portfolio from a broker snapshot."""
 
+    def __init__(self, *, emit_holding_changed_events: bool = False) -> None:
+        # PLAN-0109 Sub-Plan G — emission gating. Default False because no
+        # consumer currently subscribes to ``portfolio.holding.changed.v1``
+        # (audit 2026-06-09). The brokerage_sync_worker constructs this use
+        # case with ``Settings.emit_holding_changed_events`` so flipping the
+        # env var ``PORTFOLIO_EMIT_HOLDING_CHANGED=true`` re-enables emission
+        # without touching code. The domain event, Avro schema, serializer
+        # registration and topic constant are intentionally retained.
+        self._emit_holding_changed_events = emit_holding_changed_events
+
     async def execute(
         self,
         cmd: UpsertHoldingsFromSnapshotCommand,
@@ -167,6 +177,15 @@ class UpsertHoldingsFromSnapshotUseCase:
             outbox_events.append((holding.id, instrument_id, "0", "0", holding.currency))
 
         # ── 5. Persist outbox events ──
+        # PLAN-0109 Sub-Plan G: emission gated behind settings flag. When the
+        # flag is False (default) the use case still computes the upsert/delete
+        # diff and writes the holdings table — only the outbox row is skipped.
+        # This keeps the canonical state (holdings table) intact while
+        # avoiding pointless dead-letter rows from a topic that has no
+        # consumer. Flip ``PORTFOLIO_EMIT_HOLDING_CHANGED=true`` to re-enable
+        # (e.g. when the alert position-closure rule lands).
+        if not self._emit_holding_changed_events:
+            outbox_events = []
         for holding_id, inst_id, qty_str, avg_str, currency in outbox_events:
             event = HoldingChanged(
                 tenant_id=cmd.tenant_id,

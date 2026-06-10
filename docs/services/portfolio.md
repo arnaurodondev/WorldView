@@ -255,6 +255,25 @@ Response:
 | `market.instrument.created` | `portfolio-instrument-sync` | Full fundamentals available — populates ISIN/FIGI/LEI |
 | `market.instrument.updated` | `portfolio-instrument-sync` | Updates local instrument cache |
 
+### `holding.changed` emission (gated)
+
+PLAN-0109 Sub-Plan G (ADR-0007) — `portfolio.holding.changed.v1` emission is
+**off by default** as of 2026-06-10. The 2026-06-09 platform audit confirmed
+that no downstream service consumes the topic; the `holdings` table is the
+canonical source of truth for holding state. Emission was disabled to stop
+producing dead-letter outbox rows for an unread topic.
+
+- Settings flag: `Settings.emit_holding_changed_events` (bool, default `False`).
+- Env var: `PORTFOLIO_EMIT_HOLDING_CHANGED` (set to `true` to re-enable).
+- Scope: only the outbox-row write in `UpsertHoldingsFromSnapshotUseCase` is
+  gated. The use case still mutates the `holdings` table for every insert /
+  quantity change / delete.
+- Infrastructure retained: domain event (`HoldingChanged`), Avro schema,
+  serializer registration, and `EVENT_TOPIC_MAP` entry stay in place so that
+  flipping the flag re-enables emission without a code change.
+- Re-enable when: the alert service's position-closure rule (or any other real
+  consumer) lands and a 24-h shadow observation confirms expected throughput.
+
 ---
 
 ## Database Schema (`portfolio_db`)

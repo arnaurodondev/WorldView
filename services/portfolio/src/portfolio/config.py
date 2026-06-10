@@ -105,6 +105,17 @@ class Settings(BaseSettings):
     )
     brokerage_sync_cycle_seconds: int = 14400  # 4 hours
     brokerage_sync_history_days: int = 730  # 2 years initial import
+
+    # PLAN-0109 Sub-Plan G — holding.changed emission gating
+    # WHY: per audit 2026-06-09, no downstream consumer subscribes to
+    # ``portfolio.holding.changed.v1``; 14 historical events sat in the outbox
+    # dead-letter table for weeks with zero impact (the holdings table is the
+    # canonical source of truth for downstream queries). Until the alert
+    # service's position-closure rule lands, emission stays off by default.
+    # The domain event class, Avro schema, serializer registration and topic
+    # constant are intentionally kept so flipping this flag to True
+    # re-enables emission without a code change. See ADR-0007.
+    emit_holding_changed_events: bool = False
     # S3 (market-data) URL for instrument resolution fallback in BrokerageTransactionSyncWorker
     market_data_service_url: str = "http://market-data:8003"
     # WHY SecretStr: the HS256 signing key for internal dev-mode JWTs must not
