@@ -230,6 +230,17 @@ worldview-web · api-gateway · market-data · market-ingestion · content-inges
   - `test_last_run_at_set_when_fetched_zero`
   - `test_last_watermark_unchanged_when_fetched_zero`
 
+### T-C-1-04: Per-source API call budget audit + optimization
+- **Type**: investigation + report (not impl)
+- **Goal**: quantify how fast each source is burning its API quota under steady-state operation. Surface optimization opportunities (pagination depth, dedup before request, batching).
+- **Method**:
+  - For each of the 5 sources (newsapi, finnhub, eodhd-general, eodhd-ticker-news, sec_edgar), compute over the last 14 days: HTTP calls/day, pages-per-call, articles-per-page, articles-saved-after-dedup, articles-saved-after-routing-LIGHT-suppression.
+  - Cross-reference with the documented free/paid tier quota for each source.
+  - Quantify "wasted" calls: requests that returned 0 new articles after dedup; requests that drove only LIGHT-suppressed docs.
+  - Identify optimization opportunities: (a) increase cursor watermark precision so we don't re-fetch known articles, (b) widen poll cadence on consistently-quiet sources (e.g. sec_edgar evening hours), (c) pre-filter by symbol watchlist before fetching where the API supports it.
+- **Deliverable**: `docs/audits/2026-06-10-news-ingestion-api-budget.md` with the table + 3-5 concrete optimization recommendations sized S/M/L.
+- **Acceptance**: report committed; follow-up tasks filed in TRACKING.md if any optimization is recommended at L size.
+
 ### T-C-1-03: EODHD-ticker-news transaction hygiene (R27 compliance)
 - **Type**: impl
 - **Target**: `services/content-ingestion/src/content_ingestion/application/use_cases/execute_task.py:159-164` and `:274-282`.
@@ -538,33 +549,37 @@ Sequential 4-PR plan (already scoped in detail by audit agent):
 
 These items have multiple viable approaches; user must decide before tasks above are written in implementation detail.
 
-## H-1: Alpaca scheduling — fair-share strategy
-Choose one (Sub-Plan D-1):
-- (a) Reserve a dedicated worker slot for Alpaca 1m
-- (b) Round-robin/fair-share at scheduler level
-- (c) Raise Alpaca-1m `priority` above other ingest types
+## H-1: Alpaca scheduling — fair-share strategy ✓ RESOLVED 2026-06-10
 
-## H-2: Relevance worker — architecture
-Two viable paths discussed in this session:
-- **Path 1 (selected via this plan)**: Keep dedicated worker; ship 3-layer fix (Sub-Plan B).
-  - PROS: minimal change, fast to ship, preserves MEDIUM-tier coverage, decouples failure domains, ledger semantics intact, ~30× cheaper 8B vs 235B per call.
-  - CONS: two LLM calls on DEEP-tier articles instead of one.
-- **Path 2 (deferred — separate plan)**: Fold relevance + sentiment into the big extraction call (DEEP only).
-  - PROS: ~50% token savings on DEEP path, single source of truth for relevance per article, eliminates title-only vs body-context inconsistency.
-  - CONS: loses MEDIUM-tier relevance coverage entirely (~60% of articles), couples extraction+relevance failure domains, breaks the append-only ledger semantics for relevance (window-of-chunks vs single title), uses a 235B model for what an 8B handles fine.
+**Decision**: raise Alpaca-1m priority above all other ingest types AND wire EODHD as a per-symbol fallback when Alpaca fails or returns 0 bars.
 
-**Recommendation**: go with **Path 1 now** (Sub-Plan B). If MEDIUM-tier scoring is decided to be expendable later, file a separate PRD to migrate to Path 2.
+**Verified mechanically**: `AlpacaProviderAdapter._BATCH_SIZE = 1000` (services/market-ingestion/.../adapters/providers/alpaca.py:85) + `fetch_ohlcv_batch()` already implements multi-symbol CSV batching. `worker.py:274+` already takes the batch path when `supports_batch=True`. So Alpaca-1m ingestion of 649 symbols **costs ~1-2 HTTP calls per minute**, not 649.
 
-User to confirm.
+Sub-Plan D-1 will:
+- Raise Alpaca-1m policy `priority` to e.g. `100` (was `20`), other providers stay at `20`.
+- Disable redundant EODHD daily/weekly/monthly for Alpaca-covered instruments (see H-3).
+- On Alpaca HTTP failure or `row_count=0` for a specific symbol, fall back that symbol to EODHD daily within the same tick (cheap, resilient).
 
-## H-3: EODHD coverage decision (Sub-Plan D-3)
-Once Alpaca-derived multi-timeframe rebuild is in place, which instruments stay on EODHD for daily/weekly/monthly? Likely: all non-US instruments + ETFs Alpaca doesn't quote + crypto on venues Alpaca doesn't cover. Need to define the exact universe split.
+## H-2: Relevance worker — architecture (pending deep-dive, agent running 2026-06-10)
 
-## H-4: get_price_history fallback `interval='1m'` lookback window
-Currently shipped (commit `9a8bb6244`) as a 7-day backward window. Confirm whether 7 days is the right ceiling, or whether we should:
-- (a) Try 1 day first, then 7 days if empty (cheaper for the common case).
-- (b) Configure via env var.
-- (c) Use `date.today() - timedelta(days=1)` and accept staleness on weekend → Monday morning.
+Awaiting agent's quantitative cost + quality comparison (token counts, $/article, coverage matrix, sliding-window aggregation analysis). Decision will be updated here once the report lands; default remains Path 1 (3-layer fix in Sub-Plan B).
+
+## H-3: EODHD coverage decision ✓ RESOLVED 2026-06-10
+
+**Decision**: EODHD daily/weekly/monthly enabled ONLY for instruments NOT queryable from Alpaca (Alpaca is significantly cheaper). For Alpaca-covered instruments, all higher timeframes are recomputed from 1m bars via `intraday_resampling_consumer`.
+
+Universe split to be implemented in Sub-Plan D-3:
+- **Alpaca-covered** (default): US equities, US ETFs, crypto on Alpaca-supported venues (BTC-USD, ETH-USD, …). 1m bars only; higher TF computed.
+- **EODHD-only** (fallback): non-US instruments (UK ADRs, .L tickers, .HK, …), US ETFs Alpaca doesn't quote, crypto on venues Alpaca doesn't cover. EODHD daily/weekly/monthly + on-demand intraday.
+- Detection: try Alpaca first per-instrument in a one-shot probe (e.g. fetch last 1 bar); on `not found` flip the policy to EODHD-only.
+
+## H-4: get_price_history fallback window ✓ RESOLVED 2026-06-10
+
+**Decision**: try last 24h first, fall back to 7-day window only if 24h is empty. Cheaper for the common case (crypto + Friday-after-close), still resilient on long weekends.
+
+Implementation: amend `services/rag-chat/src/rag_chat/application/pipeline/handlers/market.py` to attempt two fallbacks in order. ~10 LOC change. Will land as part of Sub-Plan B (small enough to ride along) or as its own micro-commit.
+
+(Context: `get_price_history` is the rag-chat LLM agent's tool. The orchestrator's planner picks it when a chat user asks about price/history/trend/range. The fallback handles after-hours queries like "what is AAPL trading at?".)
 
 ---
 
