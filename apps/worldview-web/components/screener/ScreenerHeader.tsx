@@ -102,7 +102,9 @@ export function ScreenerHeader({
           aria-expanded={filtersOpen}
           onClick={onToggleFilters}
           className={cn(
-            "flex h-7 items-center gap-1 px-2 text-[10px] font-mono uppercase tracking-[0.06em] border rounded-[2px] transition-colors",
+            // ROUND-3 item 6: focus-visible ring (shared --ring yellow) so the
+            // keyboard path to the filter panel is as visible as the hover one.
+            "flex h-7 items-center gap-1 px-2 text-[10px] font-mono uppercase tracking-[0.06em] border rounded-[2px] transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring",
             filtersOpen
               ? "bg-primary/10 border-primary/60 text-primary"
               : "bg-background border-border text-muted-foreground hover:text-foreground hover:border-border/80",

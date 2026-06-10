@@ -81,9 +81,16 @@ function MiniChartInner({
   // WHY useMemo: path computation runs on every parent re-render. The screener
   // re-renders frequently (TanStack Query fetches, sort changes). Memoising on
   // bars reference keeps render cost effectively zero across renders.
+  // ROUND-3 color-token fix (DESIGN_SYSTEM.md §15.11): the strokes previously
+  // used raw `var(--positive)` / `var(--negative)` / `var(--muted-foreground)`.
+  // Those tokens are HSL TRIPLETS ("150 100% 41%"), not colors — so the SVG
+  // stroke resolved to an invalid value and silently fell back to the browser
+  // default. This is the exact "no-paint" bug class §15.11 documents (it hit
+  // the portfolio sparkline in R1). Canonical consumption for SVG/chart code
+  // is `hsl(var(--chart-*))`.
   const { path, color, valid } = useMemo(() => {
     if (!bars || bars.length < 2) {
-      return { path: "", color: "var(--muted-foreground)", valid: false };
+      return { path: "", color: "hsl(var(--chart-neutral))", valid: false };
     }
 
     const closes = bars.map((b) => b.close);
@@ -115,9 +122,9 @@ function MiniChartInner({
     const first = closes[0];
     const last = closes[closes.length - 1];
     let strokeColor: string;
-    if (last > first) strokeColor = "var(--positive)";
-    else if (last < first) strokeColor = "var(--negative)";
-    else strokeColor = "var(--muted-foreground)";
+    if (last > first) strokeColor = "hsl(var(--chart-positive))";
+    else if (last < first) strokeColor = "hsl(var(--chart-negative))";
+    else strokeColor = "hsl(var(--chart-neutral))";
 
     return { path: d, color: strokeColor, valid: true };
   }, [bars, width, height]);
@@ -140,7 +147,9 @@ function MiniChartInner({
           x2={width - 1}
           y1={height / 2}
           y2={height / 2}
-          stroke="var(--muted-foreground)"
+          // §15.11: hsl(var(--chart-*)) is the canonical SVG consumption —
+          // the bare triplet var was an invalid color (see WHY above).
+          stroke="hsl(var(--chart-neutral))"
           strokeOpacity={0.3}
           strokeWidth={1}
           strokeDasharray="2 2"
@@ -161,7 +170,11 @@ function MiniChartInner({
       data-direction={
         // Expose the trend direction as a data attribute so tests can assert
         // colour without parsing inline SVG styles.
-        color === "var(--positive)" ? "positive" : color === "var(--negative)" ? "negative" : "flat"
+        color === "hsl(var(--chart-positive))"
+          ? "positive"
+          : color === "hsl(var(--chart-negative))"
+            ? "negative"
+            : "flat"
       }
     >
       <path

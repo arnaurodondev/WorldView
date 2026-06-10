@@ -59,8 +59,12 @@ function HeatCellInner({ score }: HeatCellProps) {
       // those hex codes were retired-palette Bloomberg Dark values. Switching
       // to the design tokens lets the cell automatically pick up any future
       // palette adjustment via CSS variables (no source edits required).
+      // WHY h-[18px] (ROUND-3 item 1, was h-6/24px): the screener grid adopted
+      // rowHeight={20}; a 24px pill CLIPPED inside a 20px row. 18px leaves 1px
+      // of breathing room top+bottom — same fit ratio as MiniChart (18px SVG
+      // in the same 20px row).
       <span
-        className="inline-flex h-6 w-12 items-center justify-center rounded-[2px] bg-muted text-[11px] font-mono font-medium tabular-nums text-muted-foreground"
+        className="inline-flex h-[18px] w-12 items-center justify-center rounded-[2px] bg-muted text-[11px] font-mono font-medium tabular-nums text-muted-foreground"
         title="No score available"
         aria-label="Score unavailable"
       >
@@ -80,8 +84,9 @@ function HeatCellInner({ score }: HeatCellProps) {
   const displayScore = Math.round(score * 100);
 
   return (
+    // h-[18px]: fits the 20px screener row — see the null-case WHY above.
     <span
-      className="inline-flex h-6 w-12 items-center justify-center rounded-[2px] text-[11px] font-mono font-medium tabular-nums"
+      className="inline-flex h-[18px] w-12 items-center justify-center rounded-[2px] text-[11px] font-mono font-medium tabular-nums"
       style={{ backgroundColor: background, color }}
       title={`Signal score: ${displayScore}/100`}
       aria-label={`Signal score ${displayScore} out of 100`}

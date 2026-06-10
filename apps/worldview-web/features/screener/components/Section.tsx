@@ -51,11 +51,18 @@ export function Section({
         aria-expanded={open}
         aria-controls={sectionId}
         onClick={() => setOpen((v) => !v)}
-        className="flex w-full h-7 items-center justify-between px-2 hover:bg-white/[0.03] transition-colors"
+        // ROUND-3 item 6: focus-visible ring (inset so it isn't clipped by the
+        // parent's overflow-hidden) — the section headers are the primary
+        // keyboard path through the filter panel.
+        className="flex w-full h-7 items-center justify-between px-2 hover:bg-white/[0.03] transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-ring"
       >
         <div className="flex items-center gap-2">
-          {/* WHY 10px ALL CAPS: matches DESIGN_SYSTEM.md §section labels exactly */}
-          <span className="text-[10px] uppercase tracking-[0.08em] text-muted-foreground font-sans">
+          {/* WHY 10px ALL CAPS font-mono: ROUND-3 typography audit (item 2) —
+              this was the ONE section-label in the screener set in font-sans;
+              every sibling header (the "SCREENER" bar label, ScreenerHeader's
+              h1, preset chips) uses IBM Plex Mono per the filter bar's own
+              "section labels use IBM Plex Mono" rule. Aligned for consistency. */}
+          <span className="text-[10px] uppercase tracking-[0.08em] text-muted-foreground font-mono">
             {title}
           </span>
           {activeCount > 0 && (
@@ -84,7 +91,9 @@ export function Section({
         id={sectionId}
         role="region"
         aria-label={title}
-        className="grid overflow-hidden transition-[grid-template-rows] duration-200 ease-out"
+        // ROUND-3 item 7: duration 200→150ms — collapse/expand capped at
+        // ≤150ms ease-out per the polish spec (matches the outer panel).
+        className="grid overflow-hidden transition-[grid-template-rows] duration-150 ease-out"
         style={{ gridTemplateRows: open ? "1fr" : "0fr" }}
       >
         <div className="overflow-hidden min-h-0">

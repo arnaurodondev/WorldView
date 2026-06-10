@@ -40,8 +40,12 @@ export function RowHoverToolbar({
   onAlert,
   onCompare,
 }: RowHoverToolbarProps) {
-  // Vertically centre the 24px toolbar inside the 28px row.
-  const top = rowRect.top + (rowRect.height - 24) / 2;
+  // Vertically centre the 20px toolbar inside the hovered row.
+  // ROUND-3 item 1: buttons shrunk h-6 (24px) → h-5 (20px) because the grid
+  // adopted rowHeight={20} — a 24px overlay visually bled onto the rows above
+  // and below the hovered one. rowRect.height keeps this correct if the row
+  // height ever changes again.
+  const top = rowRect.top + (rowRect.height - 20) / 2;
 
   return (
     <div
@@ -54,7 +58,10 @@ export function RowHoverToolbar({
         type="button"
         aria-label={`Add ${ticker} to watchlist`}
         onClick={() => onWatch(instrumentId)}
-        className="h-6 px-1.5 flex items-center gap-0.5 text-[10px] font-mono text-muted-foreground hover:text-foreground bg-card/90 border border-border/60 rounded-[2px] hover:border-border transition-colors backdrop-blur-sm"
+        // ROUND-3 item 6: focus-visible ring added — the toolbar buttons are
+        // keyboard-reachable via Tab once visible, so they need the shared
+        // --ring treatment like every other screener control.
+        className="h-5 px-1.5 flex items-center gap-0.5 text-[10px] font-mono text-muted-foreground hover:text-foreground bg-card/90 border border-border/60 rounded-[2px] hover:border-border transition-colors backdrop-blur-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
       >
         <BookmarkPlus className="h-2.5 w-2.5 shrink-0" aria-hidden strokeWidth={1.5} />
         Watch
@@ -64,7 +71,10 @@ export function RowHoverToolbar({
         type="button"
         aria-label={`Create alert for ${ticker}`}
         onClick={() => onAlert(instrumentId)}
-        className="h-6 px-1.5 flex items-center gap-0.5 text-[10px] font-mono text-muted-foreground hover:text-foreground bg-card/90 border border-border/60 rounded-[2px] hover:border-border transition-colors backdrop-blur-sm"
+        // ROUND-3 item 6: focus-visible ring added — the toolbar buttons are
+        // keyboard-reachable via Tab once visible, so they need the shared
+        // --ring treatment like every other screener control.
+        className="h-5 px-1.5 flex items-center gap-0.5 text-[10px] font-mono text-muted-foreground hover:text-foreground bg-card/90 border border-border/60 rounded-[2px] hover:border-border transition-colors backdrop-blur-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
       >
         <Bell className="h-2.5 w-2.5 shrink-0" aria-hidden strokeWidth={1.5} />
         Alert
@@ -74,7 +84,10 @@ export function RowHoverToolbar({
         type="button"
         aria-label={`Add ${ticker} to compare set`}
         onClick={() => onCompare(ticker)}
-        className="h-6 px-1.5 flex items-center gap-0.5 text-[10px] font-mono text-muted-foreground hover:text-foreground bg-card/90 border border-border/60 rounded-[2px] hover:border-border transition-colors backdrop-blur-sm"
+        // ROUND-3 item 6: focus-visible ring added — the toolbar buttons are
+        // keyboard-reachable via Tab once visible, so they need the shared
+        // --ring treatment like every other screener control.
+        className="h-5 px-1.5 flex items-center gap-0.5 text-[10px] font-mono text-muted-foreground hover:text-foreground bg-card/90 border border-border/60 rounded-[2px] hover:border-border transition-colors backdrop-blur-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
       >
         <GitCompare className="h-2.5 w-2.5 shrink-0" aria-hidden strokeWidth={1.5} />
         Compare

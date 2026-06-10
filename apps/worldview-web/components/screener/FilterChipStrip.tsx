@@ -360,7 +360,9 @@ export function FilterChipStrip({
             type="button"
             aria-label={`Remove filter: ${chip.label}`}
             onClick={() => handleRemoveChip(chip)}
-            className="text-muted-foreground hover:text-foreground transition-colors ml-0.5"
+            // ROUND-3 item 6: rounded-[1px] + focus-visible ring so keyboard
+            // users can SEE which chip's × currently has focus before Enter.
+            className="rounded-[1px] text-muted-foreground hover:text-foreground transition-colors ml-0.5 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
           >
             {/* WHY inline SVG (not lucide X): avoids a 16px icon in a 10px label.
                 Hand-sized 8px cross is proportional to the chip height. */}
@@ -379,6 +381,8 @@ export function FilterChipStrip({
               "inline-flex items-center gap-1 h-[20px] px-2 text-[10px] font-mono",
               "rounded-[2px] border border-dashed border-border/60 text-muted-foreground",
               "hover:text-foreground hover:border-border transition-colors shrink-0",
+              // ROUND-3 item 6: shared focus-visible ring.
+              "focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring",
             )}
           >
             <Plus className="h-2.5 w-2.5" strokeWidth={2} />
@@ -434,7 +438,7 @@ export function FilterChipStrip({
                 <button
                   type="button"
                   onClick={() => setSelectedField(null)}
-                  className="text-[9px] font-mono text-muted-foreground hover:text-foreground transition-colors"
+                  className="rounded-[1px] text-[9px] font-mono text-muted-foreground hover:text-foreground transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
                 >
                   ← back
                 </button>
@@ -449,6 +453,7 @@ export function FilterChipStrip({
                     onClick={() => setOperator(op)}
                     className={cn(
                       "h-6 flex-1 text-[10px] font-mono rounded-[2px] border transition-colors",
+                      "focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring",
                       operator === op
                         ? "bg-primary/10 border-primary text-primary"
                         : "border-border text-muted-foreground hover:text-foreground",
@@ -489,6 +494,7 @@ export function FilterChipStrip({
                   "h-6 w-full text-[10px] font-mono uppercase tracking-[0.06em]",
                   "rounded-[2px] border border-primary/60 bg-primary/10 text-primary",
                   "hover:bg-primary/20 transition-colors",
+                  "focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring",
                   "disabled:opacity-40 disabled:cursor-not-allowed",
                 )}
               >
@@ -506,7 +512,7 @@ export function FilterChipStrip({
             <button
               type="button"
               onClick={onSave}
-              className="h-[20px] px-2 text-[10px] font-mono rounded-[2px] border border-border text-muted-foreground hover:text-foreground hover:border-border/80 transition-colors shrink-0"
+              className="h-[20px] px-2 text-[10px] font-mono rounded-[2px] border border-border text-muted-foreground hover:text-foreground hover:border-border/80 transition-colors shrink-0 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
             >
               Save…
             </button>
@@ -515,7 +521,7 @@ export function FilterChipStrip({
             <button
               type="button"
               onClick={onReset}
-              className="h-[20px] px-2 text-[10px] font-mono rounded-[2px] border border-border text-muted-foreground hover:text-negative hover:border-negative/40 transition-colors shrink-0"
+              className="h-[20px] px-2 text-[10px] font-mono rounded-[2px] border border-border text-muted-foreground hover:text-negative hover:border-negative/40 transition-colors shrink-0 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
             >
               Reset
             </button>

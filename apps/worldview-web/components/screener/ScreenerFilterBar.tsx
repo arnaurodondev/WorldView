@@ -220,7 +220,9 @@ export function ScreenerFilterBar({
             aria-label="Collapse screener filter panel"
             aria-expanded={isOpen}
             aria-controls="screener-filter-panel"
-            className="flex items-center gap-0.5 text-[10px] text-muted-foreground hover:text-foreground font-mono uppercase tracking-[0.06em]"
+            // ROUND-3 item 6: rounded-[1px] + focus-visible ring so the
+            // text-only toggle has a visible keyboard-focus state.
+            className="flex items-center gap-0.5 rounded-[1px] text-[10px] text-muted-foreground hover:text-foreground font-mono uppercase tracking-[0.06em] focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
             onClick={onToggle}
           >
             Filters
@@ -236,7 +238,7 @@ export function ScreenerFilterBar({
           {/* Reset — visible in header for quick reset without opening the panel */}
           <button
             aria-label="Reset all filters"
-            className="text-[10px] text-muted-foreground hover:text-foreground font-mono uppercase tracking-[0.06em]"
+            className="rounded-[1px] text-[10px] text-muted-foreground hover:text-foreground font-mono uppercase tracking-[0.06em] focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
             onClick={handleReset}
           >
             Reset
@@ -254,7 +256,9 @@ export function ScreenerFilterBar({
         id="screener-filter-panel"
         role="region"
         aria-label="Screener filters"
-        className="grid overflow-hidden border-b border-border transition-[grid-template-rows] duration-200 ease-out"
+        // ROUND-3 item 7: duration 200→150ms — the polish spec caps panel
+        // collapse/expand at ≤150ms ease-out (snappier, terminal-grade feel).
+        className="grid overflow-hidden border-b border-border transition-[grid-template-rows] duration-150 ease-out"
         style={{ gridTemplateRows: isOpen ? "1fr" : "0fr" }}
       >
         <div className="overflow-hidden min-h-0">
@@ -305,6 +309,8 @@ export function ScreenerFilterBar({
                   aria-pressed={form.capTier === value}
                   className={cn(
                     "h-7 px-2 text-[10px] font-mono uppercase tracking-[0.06em] border rounded-[2px] transition-colors",
+                    // ROUND-3 item 6: shared focus-visible ring on the tier chips.
+                    "focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring",
                     form.capTier === value
                       ? "bg-primary/10 border-primary text-primary"
                       : "bg-background border-border text-muted-foreground hover:text-foreground hover:border-border/80",
@@ -939,14 +945,14 @@ export function ScreenerFilterBar({
           <div className="flex h-9 items-center gap-2 px-2 bg-background">
             <button
               aria-label="Apply filters"
-              className="h-7 px-3 text-[10px] font-mono uppercase tracking-[0.06em] bg-primary/10 border border-primary/60 text-primary rounded-[2px] hover:bg-primary/20 transition-colors"
+              className="h-7 px-3 text-[10px] font-mono uppercase tracking-[0.06em] bg-primary/10 border border-primary/60 text-primary rounded-[2px] hover:bg-primary/20 transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
               onClick={handleApply}
             >
               Apply
             </button>
             <button
               aria-label="Reset filters"
-              className="h-7 px-3 text-[10px] font-mono uppercase tracking-[0.06em] bg-background border border-border text-muted-foreground rounded-[2px] hover:text-foreground hover:border-border/80 transition-colors"
+              className="h-7 px-3 text-[10px] font-mono uppercase tracking-[0.06em] bg-background border border-border text-muted-foreground rounded-[2px] hover:text-foreground hover:border-border/80 transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
               onClick={handleReset}
             >
               Reset
@@ -959,7 +965,7 @@ export function ScreenerFilterBar({
             {onSaveScreen && (
               <button
                 aria-label="Save current screen"
-                className="h-7 px-3 text-[10px] font-mono uppercase tracking-[0.06em] bg-background border border-border text-muted-foreground rounded-[2px] hover:text-foreground hover:border-border/80 transition-colors ml-auto"
+                className="h-7 px-3 text-[10px] font-mono uppercase tracking-[0.06em] bg-background border border-border text-muted-foreground rounded-[2px] hover:text-foreground hover:border-border/80 transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring ml-auto"
                 onClick={() => onSaveScreen(form)}
               >
                 Save Screen…

@@ -150,7 +150,10 @@ export function ColumnSettingsPopover({
         <button
           type="button"
           aria-label="Configure columns"
-          className="flex h-7 w-7 items-center justify-center rounded-[2px] text-muted-foreground hover:text-foreground hover:bg-white/[0.04] transition-colors"
+          // ROUND-3 item 6: gear trigger gets the shared focus-visible ring —
+          // it's an icon-only button, so without a ring the keyboard focus
+          // position was completely invisible.
+          className="flex h-7 w-7 items-center justify-center rounded-[2px] text-muted-foreground hover:text-foreground hover:bg-white/[0.04] transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
           title="Show / hide / reorder columns"
         >
           <Settings2 className="h-3.5 w-3.5" aria-hidden strokeWidth={1.5} />
@@ -176,7 +179,7 @@ export function ColumnSettingsPopover({
           <button
             type="button"
             onClick={handleReset}
-            className="flex items-center gap-1 text-[10px] uppercase tracking-[0.06em] font-mono text-muted-foreground hover:text-foreground"
+            className="flex items-center gap-1 rounded-[2px] text-[10px] uppercase tracking-[0.06em] font-mono text-muted-foreground hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
             aria-label="Reset columns to default"
           >
             <RotateCcw className="h-3 w-3" aria-hidden strokeWidth={1.5} />

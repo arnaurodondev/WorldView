@@ -57,9 +57,35 @@ const ScreenerFilterBar = dynamic(
     import("@/components/screener/ScreenerFilterBar").then(
       (m) => ({ default: m.ScreenerFilterBar }),
     ),
-  { ssr: false },
+  {
+    ssr: false,
+    // ROUND-3 (item 4): the filter bar is a client-only async chunk — while it
+    // downloads, render a shape-matched stub of its collapsed state (a 36px
+    // header band) instead of nothing. WHY: with no fallback the chip strip
+    // and grid visibly jumped up ~36px when the chunk arrived; the stub
+    // reserves the exact height so the swap-in is invisible.
+    loading: () => (
+      <div
+        data-testid="screener-filterbar-skeleton"
+        className="flex h-9 shrink-0 items-center gap-2 border-b border-border px-2"
+        aria-hidden
+      >
+        <div className="h-2 w-16 animate-pulse rounded-[1px] bg-muted" />
+        <div className="h-2 w-10 animate-pulse rounded-[1px] bg-muted" />
+      </div>
+    ),
+  },
 );
-import { DashboardEmptyState } from "@/components/ui/dashboard-empty-state";
+// ROUND-3 (item 5): DashboardEmptyState replaced by the shared primitives
+// EmptyState (icon + action props shipped in Round 2 — DS §15.12). Copy now
+// resolves through lib/copy/empty-states.ts (screener.* keys).
+import { EmptyState } from "@/components/primitives/EmptyState";
+// Icons for the two distinct zero-states: Inbox = cold start (universe empty),
+// SearchX = filters excluded everything (actionable — reset/widen filters).
+import { Inbox, SearchX } from "lucide-react";
+// ROUND-3 (item 4): shape-matched 20px-pitch skeleton shown while the first
+// screener query is in flight (replaces the blank grid body).
+import { ScreenerTableSkeleton } from "@/components/screener/ScreenerTableSkeleton";
 import type { ScreenerResult, ScreenerRequest } from "@/types/api";
 import { SavedScreensDialog } from "@/components/screener/SavedScreensDialog";
 import { ColumnSettingsPopover } from "@/components/screener/ColumnSettingsPopover";
@@ -134,6 +160,18 @@ export default function ScreenerPage() {
     }
     return null;
   }, [appliedFilters]);
+
+  // ── Default-filter detection (ROUND-3 item 5 — distinct zero-states) ──────
+  // WHY: an empty result with DEFAULT filters means the instrument UNIVERSE is
+  // empty (cold start — resetting filters cannot help), while an empty result
+  // with ACTIVE filters means the user filtered everything out (actionable —
+  // show the Reset CTA). The two situations need different copy + affordances.
+  // WHY JSON.stringify: same plain-object deep-compare idiom as activePresetId
+  // above — FilterState has no referential identity to lean on.
+  const isDefaultFilters = useMemo(
+    () => JSON.stringify(appliedFilters) === JSON.stringify(DEFAULT_FILTERS),
+    [appliedFilters],
+  );
 
   // ── Row hover toolbar state (PRD-0089 Wave I) ─────────────────────────────
   // WHY rowRect (not instrumentId only): the RowHoverToolbar is fixed-positioned
@@ -418,7 +456,10 @@ export default function ScreenerPage() {
                 href={`/compare?tickers=${compareSet.join(",")}`}
                 target="_blank"
                 rel="noopener noreferrer"
-                className="flex h-7 items-center gap-1 px-2 text-[10px] font-mono uppercase tracking-[0.06em] bg-primary/10 border border-primary/60 text-primary rounded-[2px] transition-colors hover:bg-primary/20"
+                // ROUND-3 item 6: every toolbar control gets the shared
+                // keyboard-focus treatment (focus-visible ring in --ring
+                // yellow) on top of its existing hover affordance.
+                className="flex h-7 items-center gap-1 px-2 text-[10px] font-mono uppercase tracking-[0.06em] bg-primary/10 border border-primary/60 text-primary rounded-[2px] transition-colors hover:bg-primary/20 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
               >
                 Compare ({compareSet.length})
               </a>
@@ -427,7 +468,7 @@ export default function ScreenerPage() {
               type="button"
               aria-label="Saved screens"
               onClick={() => setSavedDialogOpen(true)}
-              className="flex h-7 items-center gap-1 px-2 text-[10px] font-mono uppercase tracking-[0.06em] bg-background border border-border text-muted-foreground hover:text-foreground hover:border-border/80 rounded-[2px] transition-colors"
+              className="flex h-7 items-center gap-1 px-2 text-[10px] font-mono uppercase tracking-[0.06em] bg-background border border-border text-muted-foreground hover:text-foreground hover:border-border/80 rounded-[2px] transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
             >
               Saved Screens
             </button>
@@ -498,6 +539,24 @@ export default function ScreenerPage() {
         <AgGridBase<ScreenerResult>
           rowData={filteredRows}
           columnDefs={agColumns}
+          // ── Density adoption (ROUND-3 item 1) ───────────────────────────
+          // 20px rows + 20px header via AgGridBase's Round-2 props (§15.10).
+          // WHY 20 and NOT the 22px token: the screener is the ONE surface
+          // locked to 20px by the T-IA-14 architecture guard
+          // (__tests__/architecture/screener-row-height.test.ts) — 22px rows
+          // drop it below the "≥240 body cells above the fold at 1440×900"
+          // acceptance gate (see lib/screener-columns.ts density math:
+          // 20 rows × 14 cols). The guard literally forbids `rowHeight={22}`
+          // in this folder, so do not "fix" this to 22.
+          // WHY headerHeight matches rowHeight: §15.10 rule 3 — Bloomberg
+          // keeps header and data rows equal; a taller header over denser
+          // rows reads as misalignment.
+          // Renderer audit for 20px (per §15.10 rule 1, done Round 3):
+          //   HeatCell shrunk h-6→h-[18px]; MiniChart is 18px (fits);
+          //   RowHoverToolbar overlay shrunk to 20px; CHG% chip is unsized
+          //   inline-flex (fits); 52W bar is h-1 (fits).
+          rowHeight={20}
+          headerHeight={20}
           getRowId={(p) => p.data.instrument_id}
           onGridReady={handleGridReady}
           onRowClicked={(row) =>
@@ -570,40 +629,76 @@ export default function ScreenerPage() {
           />
         )}
 
+        {/* ── Initial-load skeleton (ROUND-3 item 4) ───────────────────── */}
+        {/* WHY an OVERLAY (absolute, on top of the grid) rather than swapping
+            the grid out: __tests__/screener.test.tsx asserts the 34 column
+            headers synchronously (before the first query resolves), so
+            AgGridBase must stay mounted during isLoading. The skeleton covers
+            the grid visually (z-10 + opaque bg) while keeping it in the DOM.
+            WHY only while accumulator is empty: a background REFETCH
+            (isFetching) over existing rows must never blank the table —
+            Bloomberg never flashes; data updates in place. */}
+        {isLoading && accumulator.length === 0 && (
+          <div className="absolute inset-0 z-10 bg-background">
+            <ScreenerTableSkeleton rows={20} />
+          </div>
+        )}
+
         {/* Post-load empty state — rendered below the grid so column headers
             stay mounted (preserves sort test assertions).
-            ROUND-1 item 8: title standardised to "No results match your filters"
-            plus an explicit "Reset filters" CTA. WHY a sibling button (not the
-            DashboardEmptyState `cta` prop): that prop renders a <Link href>,
-            but resetting filters is a state mutation (handleApply), not a
-            navigation — so we render our own button below the shared block. */}
+            ROUND-3 item 5: migrated from DashboardEmptyState onto the shared
+            primitives EmptyState (icon + action props, DS §15.12), with TWO
+            distinct zero-states:
+              cold start        — default filters + empty universe (no Reset
+                                  CTA: there is nothing to widen)
+              filtered-to-zero  — "No results match your filters" + Reset CTA
+                                  (headline pinned by __tests__/screener.test.tsx) */}
         {!isLoading && !error && lastMergedOffset.current !== null && filteredRows.length === 0 && (
-          <div className="flex flex-col items-center">
-            <DashboardEmptyState
-              title="No results match your filters"
-              message={
+          isDefaultFilters && accumulator.length === 0 ? (
+            // Cold start: nothing ingested yet. Inbox icon = "awaiting data".
+            <EmptyState
+              condition="empty-cold-start"
+              copyKey="screener.cold-start"
+              icon={Inbox}
+            />
+          ) : (
+            // Filtered-to-zero: actionable — offer the Reset CTA via the
+            // primitive's `action` slot. WHY a real <button> (not the legacy
+            // `cta` Link): resetting filters is a state mutation
+            // (handleApply), not a navigation.
+            <EmptyState
+              condition="empty-no-data"
+              // Server returned zero rows vs client-side filters excluded the
+              // loaded page — same headline, different actionable body copy.
+              // (Both keys are registered literally in lib/copy/empty-states.ts;
+              // the dictionary arch test scans literal copyKey strings, so the
+              // computed expression here is additive-safe.)
+              copyKey={
                 accumulator.length === 0
-                  ? "No instruments match the current filters. Adjust filters and apply."
-                  : "The technical / search filters excluded all rows in the loaded page. Try widening them or loading more."
+                  ? "screener.no-filter-matches"
+                  : "screener.no-loaded-matches"
+              }
+              icon={SearchX}
+              action={
+                <button
+                  type="button"
+                  // WHY a unique aria-label (visible text stays "Reset filters"):
+                  // ScreenerFilterBar's bottom toolbar already has a button with
+                  // aria-label "Reset filters". Duplicated accessible names are an
+                  // a11y smell (screen readers can't disambiguate) and break
+                  // getByRole queries in tests.
+                  aria-label="Reset filters and show all instruments"
+                  // WHY handleApply(DEFAULT_FILTERS) (same as the chip strip's
+                  // Reset): clears every applied filter AND re-fires the query at
+                  // offset 0 so the full instrument universe reloads immediately.
+                  onClick={() => handleApply(DEFAULT_FILTERS)}
+                  className="h-7 px-3 text-[10px] font-mono uppercase tracking-[0.06em] bg-primary/10 border border-primary/60 text-primary rounded-[2px] hover:bg-primary/20 transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                >
+                  Reset filters
+                </button>
               }
             />
-            <button
-              type="button"
-              // WHY a unique aria-label (visible text stays "Reset filters"):
-              // ScreenerFilterBar's bottom toolbar already has a button with
-              // aria-label "Reset filters". Duplicated accessible names are an
-              // a11y smell (screen readers can't disambiguate) and break
-              // getByRole queries in tests.
-              aria-label="Reset filters and show all instruments"
-              // WHY handleApply(DEFAULT_FILTERS) (same as the chip strip's
-              // Reset): clears every applied filter AND re-fires the query at
-              // offset 0 so the full instrument universe reloads immediately.
-              onClick={() => handleApply(DEFAULT_FILTERS)}
-              className="h-7 px-3 text-[10px] font-mono uppercase tracking-[0.06em] bg-primary/10 border border-primary/60 text-primary rounded-[2px] hover:bg-primary/20 transition-colors"
-            >
-              Reset filters
-            </button>
-          </div>
+          )
         )}
 
         {/* ── Load More ────────────────────────────────────────────────── */}
@@ -617,7 +712,7 @@ export default function ScreenerPage() {
               aria-busy={isFetching}
               onClick={handleLoadMore}
               disabled={isFetching}
-              className="h-7 px-3 text-[10px] font-mono uppercase tracking-[0.06em] bg-background border border-border text-muted-foreground rounded-[2px] hover:text-foreground hover:border-primary/60 transition-colors disabled:cursor-not-allowed disabled:opacity-60"
+              className="h-7 px-3 text-[10px] font-mono uppercase tracking-[0.06em] bg-background border border-border text-muted-foreground rounded-[2px] hover:text-foreground hover:border-primary/60 transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-60"
             >
               {isFetching ? "Loading…" : `Load ${nextBatch} more`}
             </button>
