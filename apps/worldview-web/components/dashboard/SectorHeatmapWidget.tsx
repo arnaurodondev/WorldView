@@ -268,7 +268,7 @@ export function SectorHeatmapWidget() {
       {/* ── Loading state — shimmer of 8 grey tiles in a flex row ────────── */}
       {isHeatmapLoading && (
         // Match the loaded-state padding/gap so there is no visible jump.
-        <div className="flex flex-1 flex-wrap gap-0.5 px-0.5 py-0">
+        <div className="flex flex-wrap gap-0.5 px-0.5 py-0">
           {Array.from({ length: 8 }).map((_, i) => (
             <Skeleton
               key={i}
@@ -305,20 +305,14 @@ export function SectorHeatmapWidget() {
 
       {/* ── Treemap tile container ───────────────────────────────────────── */}
       {!isHeatmapLoading && sectorTiles.length > 0 && (
-        // FR-1.7 MED-005: replace flex-wrap with CSS grid auto-fit so tiles
-        // reflow cleanly at any viewport width without the sub-pixel overflow
-        // that occasionally pushed the last column past the container edge at
-        // 1280px (B-2-03). `auto-fit` + `minmax(120px, 1fr)` means:
-        //   - Each tile is at least 120px wide (enough for "HEALTH" + "+1.23%").
-        //   - Tiles grow to fill remaining space equally (1fr).
-        //   - The browser auto-computes the column count from the container
-        //     width — no hardcoded "11 columns" that breaks at non-standard
-        //     resolutions or when the number of GICS sectors changes.
-        // WHY gap-0.5 (2px): matches the previous flex gap; tight enough for
-        // the Bloomberg "dense grid" aesthetic without hairline-seam ambiguity.
+        // `auto-fit` + `minmax(48px, 1fr)`: at ~344px widget width, this fits
+        // ~7 tiles per row → 2 rows for 13 sectors (staying within the 130px
+        // Row 2 height budget). Previously 120px forced 2 tiles/row → 7 rows →
+        // widget height expanded to 312px, bloating the entire Row 2.
+        // WHY gap-0.5 (2px): tight enough for the Bloomberg dense-grid look.
         <div
-          className="grid gap-0.5 flex-1 px-0.5 py-0"
-          style={{ gridTemplateColumns: "repeat(auto-fit, minmax(120px, 1fr))" }}
+          className="grid gap-0.5 content-start px-0.5 py-0"
+          style={{ gridTemplateColumns: "repeat(auto-fit, minmax(48px, 1fr))" }}
         >
           {sectorTiles.map(({ sector, weight }) => (
             <SectorTile

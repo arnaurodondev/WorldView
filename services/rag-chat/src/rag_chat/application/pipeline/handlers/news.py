@@ -142,14 +142,15 @@ class NewsHandler(ToolHandler):
         if self._entity_context is not None:
             _entity_ids.append(self._entity_context.entity_id)
         if entity_tickers:
-            for ticker in entity_tickers:
-                if not isinstance(ticker, str) or not ticker.strip():
-                    continue
-                resolved = await self._s6.resolve_entity_by_ticker(ticker)
-                if resolved is not None and resolved not in _entity_ids:
-                    _entity_ids.append(resolved)
-                elif resolved is None:
-                    log.warning("entity_ticker_unresolved", tool="search_documents", ticker=ticker)
+            valid_tickers = [t for t in entity_tickers if isinstance(t, str) and t.strip()]
+            if valid_tickers:
+                # Resolve all tickers concurrently (one NLP call per ticker, fanned out).
+                resolved_ids = await asyncio.gather(*[self._s6.resolve_entity_by_ticker(t) for t in valid_tickers])
+                for ticker, resolved in zip(valid_tickers, resolved_ids, strict=False):
+                    if resolved is not None and resolved not in _entity_ids:
+                        _entity_ids.append(resolved)
+                    elif resolved is None:
+                        log.warning("entity_ticker_unresolved", tool="search_documents", ticker=ticker)
 
         request = ChunkSearchRequest(
             query_text=query,

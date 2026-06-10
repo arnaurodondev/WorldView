@@ -442,7 +442,13 @@ def _safe_stdev(values: list[float]) -> float:
 
 
 def _render_run_block(art: dict[str, Any], run_idx: int) -> list[str]:
-    """Render a single Run section (## Run N) inside a per-question block."""
+    """Render a single Run section inside a per-question block.
+
+    Layout (three clearly-labelled sections):
+      1. Run header line with verdict / score / latency
+      2. LLM Answer — tools called, then the answer text
+      3. Judge Evaluation — dimension table + reviewer summary
+    """
     result = art.get("result") or {}
     heur = art.get("heuristics") or {}
     judge = art.get("judge") or {}
@@ -452,64 +458,93 @@ def _render_run_block(art: dict[str, Any], run_idx: int) -> list[str]:
     words = int(heur.get("word_count") or 0)
     answer_text = str(result.get("answer_text") or "")
     tool_calls = result.get("tool_calls") or []
-    tools = sorted({(tc.get("name") or "") for tc in tool_calls if isinstance(tc, dict)})
+    tools_called = sorted({(tc.get("name") or "") for tc in tool_calls if isinstance(tc, dict)})
 
-    # Headline: prefer judge verdict when present, else fall back to heuristic bucket.
+    # ── Run header ──────────────────────────────────────────────────────────
     if judge:
         verdict = judge.get("verdict") or "?"
         score = judge.get("score")
-        header = f"#### Run {run_idx} ({verdict}, {score}) — latency {latency:.1f}s, {words} words"
+        badge = "✅" if verdict == "PASS" else ("⚠️" if verdict == "WARN" else "❌")
+        header = f"#### Run {run_idx} — {badge} {verdict} · {score}/100 · {latency:.1f}s · {words} words"
     else:
-        header = f"#### Run {run_idx} ({bucket}) — latency {latency:.1f}s, {words} words"
+        header = f"#### Run {run_idx} — {bucket} · {latency:.1f}s · {words} words"
 
     lines: list[str] = [header, ""]
 
-    if tools:
-        lines.append(f"**Tools called ({len(tools)}):** {', '.join(tools)}")
+    # ── Section 1: LLM Answer ───────────────────────────────────────────────
+    lines.append("**🤖 LLM Answer**")
+    lines.append("")
+    if tools_called:
+        tools_str = ", ".join(f"`{t}`" for t in tools_called)
+        lines.append(f"*Tools called ({len(tools_called)}):* {tools_str}")
     else:
-        lines.append("**Tools called:** *(none)*")
+        lines.append("*Tools called:* *(none)*")
     lines.append("")
-
-    lines.append("**Answer:**")
-    lines.append("")
-    # Use blockquote for readability; truncate long answers.
+    # Answer text in blockquote; truncate very long responses.
     truncated = _truncate_answer(answer_text, q_id)
     for line in truncated.splitlines() or [""]:
         lines.append(f"> {line}")
     lines.append("")
 
+    # ── Section 2: Judge Evaluation ─────────────────────────────────────────
     if judge:
         v = judge.get("verdict") or "?"
         s = judge.get("score")
-        lines.append(f"**Judge verdict:** {v} ({s}/100)")
+        lines.append(f"**⚖️ Judge Evaluation — {v} ({s}/100)**")
+        lines.append("")
         dims = judge.get("dimensions") or {}
-        for k, payload in dims.items():
-            if not isinstance(payload, dict):
-                continue
-            d_score = payload.get("score")
-            d_feedback = _dim_field(payload, "feedback", "reason")
-            tail = f" — {d_feedback}" if d_feedback else ""
-            lines.append(f"- {k} {d_score}{tail}")
+        if dims:
+            # Dimension scores as a table for easy scanning.
+            lines.append("| Dimension | Score | Feedback |")
+            lines.append("|-----------|------:|---------|")
+            for k, payload in dims.items():
+                if not isinstance(payload, dict):
+                    continue
+                d_score = payload.get("score", "?")
+                d_feedback = _dim_field(payload, "feedback", "reason") or ""
+                lines.append(f"| {k} | {d_score}/25 | {d_feedback} |")
+            lines.append("")
         # v2.0 reviewer_summary lives at the judge top level; v1.x used ``notes``.
         reviewer_summary = _dim_field(judge, "reviewer_summary", "notes")
         if reviewer_summary:
+            lines.append(f"**Reviewer:** {reviewer_summary}")
             lines.append("")
-            lines.append(f"**Reviewer summary:** {reviewer_summary}")
+        # Surface latency budget miss if present.
+        if not heur.get("latency_within_budget", True):
+            budget = (art.get("rubric") or {}).get("budgets", {}).get("max_latency_s") or (
+                art.get("expected") or {}
+            ).get("max_latency_s")
+            lines.append(f"> ⏱ Latency budget exceeded — {latency:.1f}s vs {budget}s limit")
+            lines.append("")
     else:
         # No judge — surface the heuristic reasons so the run is still informative.
         reasons = art.get("reasons") or []
+        lines.append("**⚖️ Judge Evaluation**")
+        lines.append("")
+        lines.append("*(judge not run for this benchmark execution)*")
         if reasons:
+            lines.append("")
             lines.append(f"**Heuristic reasons:** {'; '.join(reasons)}")
+        lines.append("")
 
-    lines.append("")
     return lines
 
 
 def _render_question_block(q_id: str, artifacts: list[dict[str, Any]]) -> list[str]:
-    """Render the per-question section (### Q<n>) with all its runs."""
+    """Render the per-question section with all its runs.
+
+    Layout:
+      1. Question header (ID, category, tags)
+      2. Question text in blockquote
+      3. Rubric summary (expected depth, tools, required/forbidden facts)
+      4. Run-level stats summary
+      5. One _render_run_block per run
+    """
     first = artifacts[0]
     category = first.get("category") or "uncategorized"
+    tags = first.get("tags") or []
     prompt = first.get("prompt") or "(no prompt recorded)"
+    rubric = first.get("rubric") or {}
 
     # Aggregate stats across runs.
     judge_scores = [
@@ -519,23 +554,46 @@ def _render_question_block(q_id: str, artifacts: list[dict[str, Any]]) -> list[s
     ]
     verdicts = [a["judge"].get("verdict") for a in artifacts if isinstance(a.get("judge"), dict)]
 
-    lines: list[str] = [f"### `{q_id}` ({category})", ""]
-    lines.append("**Prompt:**")
+    # ── Question header ──────────────────────────────────────────────────────
+    tags_inline = f" `{'` `'.join(tags)}`" if tags else ""
+    lines: list[str] = [f"### ❓ `{q_id}` — {category}{tags_inline}", ""]
+
+    # ── Question text ────────────────────────────────────────────────────────
+    lines.append("**Question asked:**")
     lines.append("")
     for line in prompt.splitlines():
         lines.append(f"> {line}")
     lines.append("")
 
+    # ── Rubric summary ───────────────────────────────────────────────────────
+    rubric_parts: list[str] = []
+    if rubric.get("expected_depth"):
+        rubric_parts.append(f"depth=`{rubric['expected_depth']}`")
+    exp_tools = rubric.get("expected_tools") or (first.get("expected") or {}).get("tools") or []
+    if exp_tools:
+        rubric_parts.append(f"expected tools: {', '.join(f'`{t}`' for t in exp_tools)}")
+    req_facts = rubric.get("required_facts") or []
+    if req_facts:
+        rubric_parts.append(f"must mention: {'; '.join(req_facts)}")
+    forb_facts = rubric.get("forbidden_facts") or []
+    if forb_facts:
+        rubric_parts.append(f"must not say: {'; '.join(forb_facts)}")
+    if rubric_parts:
+        lines.append(f"**Rubric:** {' · '.join(rubric_parts)}")
+        lines.append("")
+
+    # ── Run stats ────────────────────────────────────────────────────────────
     n = len(artifacts)
     if judge_scores:
         mean = statistics.mean(judge_scores)
         sd = _safe_stdev([float(s) for s in judge_scores])
-        verdict_str = " ".join(verdicts) if verdicts else "?"
-        lines.append(f"**Runs:** {n} — mean score **{mean:.1f}** (stddev {sd:.1f}); {verdict_str}")
+        verdict_badges = " ".join(("✅" if v == "PASS" else ("⚠️" if v == "WARN" else "❌")) for v in verdicts)
+        lines.append(
+            f"**{n} run{'s' if n != 1 else ''}** — mean score **{mean:.1f}/100** " f"(σ={sd:.1f}) — {verdict_badges}"  # noqa: RUF001
+        )
     else:
-        # No judge data — fall back to bucket roll-up.
         buckets = [a.get("bucket") or "?" for a in artifacts]
-        lines.append(f"**Runs:** {n} — buckets: {' '.join(buckets)}")
+        lines.append(f"**{n} run{'s' if n != 1 else ''}** — buckets: {' '.join(buckets)}")
     lines.append("")
 
     for i, art in enumerate(artifacts, start=1):

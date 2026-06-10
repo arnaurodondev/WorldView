@@ -130,21 +130,78 @@ function extractContradictions(messages: Message[]): string[] {
 }
 
 // ── Related ticker extraction ─────────────────────────────────────────────────
-// WHY $TICKER pattern (not bare uppercase words):
-// The $ prefix is the explicit intent signal — analysts type "$AAPL" when they
-// mean the stock. Bare uppercase words in assistant messages are too noisy
-// (acronyms, country codes, macros like "GDP", "CPI"). The $ prefix makes
-// deduplication safe without an allowlist.
+// WHY two patterns ($TICKER and **BOLD** uppercase):
+//
+// 1. $TICKER: the $ prefix is the explicit intent signal — analysts type
+//    "$AAPL" when they mean the stock.  Applies to all messages (user and
+//    assistant).
+//
+// 2. **BOLD** uppercase 2-5 char words from ASSISTANT messages only:
+//    LLM responses frequently bold company tickers/names without a $ prefix,
+//    e.g. "**NVIDIA** reported…" or "comparing **AMD** and **NVDA**…".
+//    We restrict to assistant messages to avoid catching user-typed bold
+//    (rare) or markdown headers the user pasted in.
+//    Minimum 2 chars prevents single-letter false positives (I, A, …).
+//    Maximum 5 chars matches NYSE/NASDAQ ticker length convention.
+//    We skip a tight allowlist of common non-ticker all-caps words to reduce
+//    noise.  False positives in the RELATED section are low-stakes (an extra
+//    chip the analyst can ignore); false negatives (missing a real ticker)
+//    are worse because the analyst can't one-click pivot to that entity.
+//
+// WHY merge then deduplicate: both patterns feed the same Set<string> so a
+// ticker appearing both as $AMD and **AMD** shows exactly one chip.
 const DOLLAR_TICKER_RE = /\$([A-Z]{1,5})\b/g;
+// Matches **WORD** where WORD is 2-5 uppercase ASCII letters only.
+// WHY exclude digits: tickers like "BRK" (without the .B) are captured
+// correctly; the dot-variants never appear in markdown bold because the
+// dot breaks the pattern — acceptable trade-off for simplicity.
+const BOLD_TICKER_RE = /\*\*([A-Z]{2,5})\*\*/g;
 
-/** Extract all $TICKER mentions from all messages, deduplicated, sorted. */
+/**
+ * Common English uppercase abbreviations that are NOT tickers.  These appear
+ * frequently in LLM financial analysis and would produce noisy chips if kept.
+ * The list is deliberately conservative — a few extra noise entries are
+ * acceptable, but silently dropping a real ticker would be worse.
+ */
+const NON_TICKER_BOLD = new Set([
+  "CEO", "CFO", "COO", "CTO", "IPO", "SEC", "FED", "GDP", "CPI",
+  "PPI", "YOY", "QOQ", "TTM", "EPS", "FCF", "ROE", "ROA", "EBIT",
+  "EBITDA", "DCF", "NPV", "IRR", "ETF", "SPAC", "ESG", "AI", "ML",
+  "US", "EU", "UK", "FX", "VC", "PE", "RD", "OR", "AND", "FOR",
+  "NOT", "THE", "BUT", "ARE", "ITS", "HAS", "WAS", "HAD",
+]);
+
+/**
+ * Extract all $TICKER and **BOLD** ticker mentions from all messages,
+ * deduplicated and sorted alphabetically.
+ *
+ * Bold extraction is assistant-only to reduce false positives from
+ * user-typed content.
+ */
 function extractRelatedTickers(messages: Message[]): string[] {
   const seen = new Set<string>();
   for (const msg of messages) {
-    let m: RegExpExecArray | null;
-    const re = new RegExp(DOLLAR_TICKER_RE.source, "g");
-    while ((m = re.exec(msg.content)) !== null) {
-      seen.add(m[1]);
+    // ── $TICKER pattern — all messages ──────────────────────────────────
+    {
+      let m: RegExpExecArray | null;
+      const re = new RegExp(DOLLAR_TICKER_RE.source, "g");
+      while ((m = re.exec(msg.content)) !== null) {
+        seen.add(m[1]);
+      }
+    }
+    // ── **BOLD** uppercase pattern — assistant messages only ─────────────
+    // WHY assistant-only: user messages can have intentional bold for
+    // non-ticker reasons; the LLM consistently bolds entity names.
+    if (msg.role === "assistant") {
+      let m: RegExpExecArray | null;
+      const re = new RegExp(BOLD_TICKER_RE.source, "g");
+      while ((m = re.exec(msg.content)) !== null) {
+        const word = m[1];
+        // Skip common non-ticker abbreviations to reduce chip noise.
+        if (!NON_TICKER_BOLD.has(word)) {
+          seen.add(word);
+        }
+      }
     }
   }
   return [...seen].sort();
@@ -272,6 +329,135 @@ function EntityCard({ entityId }: EntityCardProps) {
         <div className="mt-0.5 flex gap-2 font-mono text-[9px] text-muted-foreground">
           {mktCap !== null && <span>Mkt cap {formatMarketCap(mktCap)}</span>}
           {vol !== null && <span>Vol {formatMarketCap(vol)}</span>}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── Entity mini-card (per-ticker compact overview) ───────────────────────────
+//
+// WHY EntityMiniCard (distinct from EntityCard above):
+// EntityCard is for the _primary_ entity set via ?entity_id= URL param — it
+// shows the full card with volume row. EntityMiniCard is for the RELATED
+// tickers detected in the conversation; each one gets a compact one-liner:
+// ticker + name + price + %chg + P/E.  Keeping them separate avoids
+// entangling the "primary entity" display semantics with the "ambient
+// context" semantics for chat-detected entities.
+//
+// WHY two-step resolution (searchInstruments then getCompanyOverview):
+// The related tickers in the conversation are bare strings ("NVDA", "AMD")
+// not UUIDs.  S9's company-overview endpoint accepts instrument_id (UUID),
+// not a ticker string.  searchInstruments(ticker, 1) returns the best-match
+// instrument row which contains `instrument_id`; we then pass that to
+// getCompanyOverview to get price + fundamentals.  The result is cached under
+// qk.chat.tickerMini(ticker) so repeated renders for the same ticker within a
+// session are served from cache without extra network calls.
+//
+// WHY staleTime 5min: same as EntityCard — price data is best-effort ambient
+// context in the sidebar; we don't need sub-minute freshness here.
+
+interface EntityMiniCardProps {
+  /** Uppercase ticker string, e.g. "NVDA". Not a UUID. */
+  ticker: string;
+}
+
+function EntityMiniCard({ ticker }: EntityMiniCardProps) {
+  const { accessToken } = useAuth();
+
+  // Step 1 + Step 2 combined into one query using queryFn chaining:
+  // searchInstruments(ticker, 1) → instrument_id → getCompanyOverview(id).
+  // WHY queryFn does both: avoids a second useQuery dependency and keeps the
+  // loading/error state in a single place.  The two sequential awaits are
+  // cheap — the second call may hit the TanStack cache if EntityCard already
+  // resolved the same instrument.
+  const { data, isLoading } = useQuery({
+    queryKey: qk.chat.tickerMini(ticker),
+    queryFn: async () => {
+      const gw = createGateway(accessToken);
+      // Search for the ticker to get the canonical instrument_id.
+      const searchResult = await gw.searchInstruments(ticker, 1);
+      const first = searchResult.results[0];
+      // If search returns nothing, abort gracefully — the mini card won't render.
+      if (!first?.instrument_id) return null;
+      // Fetch the full overview so we have price + fundamentals.
+      return gw.getCompanyOverview(first.instrument_id);
+    },
+    enabled: !!accessToken && !!ticker,
+    staleTime: 5 * 60_000,
+  });
+
+  if (isLoading) {
+    // WHY compact skeleton: the mini card is inside a tight flex grid; a
+    // full-height block skeleton would cause layout shift.  Two small lines
+    // match the text layout of the populated state.
+    return (
+      <div className="space-y-1 rounded-[2px] border border-border/20 bg-card px-2 py-1.5">
+        <Skeleton className="h-2.5 w-16 rounded-[2px]" />
+        <Skeleton className="h-2 w-24 rounded-[2px]" />
+      </div>
+    );
+  }
+
+  // Null result means search found nothing — skip silently.
+  if (!data) return null;
+
+  const { instrument, quote, fundamentals } = data;
+  const displayTicker = instrument?.ticker ?? ticker;
+  const name = instrument?.name ?? "";
+  const price = quote?.price ?? null;
+  const changePct = quote?.change_pct ?? null;
+  const pe = fundamentals?.pe_ratio ?? null;
+  const mktCap = fundamentals?.market_cap ?? null;
+
+  return (
+    // WHY border-border/20 bg-card: same subtle card background as EntityCard
+    // so the two card types feel visually consistent despite different density.
+    <div className="rounded-[2px] border border-border/20 bg-card px-2 py-1.5">
+      {/* Ticker + name (truncated) */}
+      <div className="flex items-baseline justify-between gap-1">
+        <span className="font-mono text-[10px] font-bold text-foreground">
+          {displayTicker}
+        </span>
+        {name && (
+          <span className="max-w-[110px] truncate text-right font-mono text-[8px] text-muted-foreground">
+            {name}
+          </span>
+        )}
+      </div>
+
+      {/* Price + change */}
+      {price !== null && (
+        <div className="mt-0.5 flex items-baseline gap-1">
+          <span className="font-mono text-[10px] font-semibold text-foreground">
+            {formatPrice(price)}
+          </span>
+          {changePct !== null && (
+            <span
+              className={cn(
+                "font-mono text-[9px]",
+                // WHY same colour pattern as EntityCard: positive = green,
+                // negative = red, neutral = muted.  Visual consistency means
+                // the analyst doesn't re-learn the colour code between cards.
+                changePct > 0
+                  ? "text-positive"
+                  : changePct < 0
+                    ? "text-negative"
+                    : "text-muted-foreground",
+              )}
+            >
+              {changePct > 0 ? "+" : ""}
+              {formatPercent(changePct / 100)}
+            </span>
+          )}
+        </div>
+      )}
+
+      {/* P/E + Mkt Cap — one compact row */}
+      {(pe !== null || mktCap !== null) && (
+        <div className="mt-0.5 flex gap-1.5 font-mono text-[8px] text-muted-foreground">
+          {pe !== null && <span>P/E {formatRatio(pe, "")}</span>}
+          {mktCap !== null && <span>Cap {formatMarketCap(mktCap)}</span>}
         </div>
       )}
     </div>
@@ -467,6 +653,47 @@ export function ChatContextRail({
                 >
                   ${ticker}
                 </button>
+              ))}
+            </div>
+          </>
+        )}
+
+        {/* ── Entity overview mini-cards ──────────────────────────────── */}
+        {/*
+         * WHY only when relatedTickers exist (and we cap at 3):
+         * Each EntityMiniCard fires two network requests (searchInstruments +
+         * getCompanyOverview) on first render.  Showing cards for all detected
+         * tickers would hammer the API on busy threads (10+ tickers).  We cap
+         * at the first 3 — the analyst sees the most prominent entities without
+         * overwhelming the rail or the backend.  The chips section above still
+         * shows all tickers for reference; the mini-cards just surface the top
+         * ones with live data.
+         *
+         * WHY NOT show mini-cards when entityId is set and no relatedTickers:
+         * If there's only one entity (the primary entity_id), the full
+         * EntityCard already shows all the data the analyst needs.  The mini-
+         * cards section adds value specifically when multiple entities appear
+         * in the conversation without a single primary entity.
+         *
+         * WHY this section appears AFTER Related Tickers (not before):
+         * The chips are a quick-action surface (one click → composer); the
+         * mini-cards are a data surface.  Quick-actions first, data below —
+         * mirrors Bloomberg's RELATED/DETAILS panel ordering convention.
+         */}
+        {relatedTickers.length > 0 && (
+          <>
+            <SectionHeader label="Entity Overview" />
+            {/* WHY gap-1.5 px-3: tighter than the EntityCard mx-3 my-2 to fit
+                3 cards in the available rail height without excessive whitespace. */}
+            <div className="flex flex-col gap-1.5 px-3 py-1.5">
+              {relatedTickers.slice(0, 3).map((ticker) => (
+                // WHY not wrapping in <button>: the mini-card is informational,
+                // not an action target.  If the analyst wants to navigate to the
+                // instrument page they can use the ticker chip above (one click
+                // appends to composer), or click the entity from the full details
+                // page.  Adding a click handler here would require entity_id
+                // resolution which adds another async dependency.
+                <EntityMiniCard key={ticker} ticker={ticker} />
               ))}
             </div>
           </>

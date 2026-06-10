@@ -2288,10 +2288,51 @@ class ChatOrchestratorUseCase:
             from prompts._safety import SAFETY_FOOTER  # type: ignore[import-untyped]
             from prompts.chat.synthesis import SYNTHESIS_SYSTEM_PROMPT  # type: ignore[import-untyped]
 
-            _synthesis_system = SYNTHESIS_SYSTEM_PROMPT.render(safety=SAFETY_FOOTER)
+            # ── Sparse-data guard (Fix: pre-synthesis fabrication prevention) ──
+            # When total retrieved items are below threshold, inject an explicit
+            # instruction forbidding fabrication. The grounding validator fires
+            # AFTER synthesis, so without this guard the LLM pads thin results
+            # with parametric knowledge (e.g. MSTR run 2: 1 news item → 20+
+            # invented numbers). Thresholds: 5 items for comparisons (need both
+            # entities' data), 3 for numeric questions, 2 otherwise.
+            _total_items = len(non_none_items)
+            _msg_lower = request.message.lower()
+            _is_comparison = any(kw in _msg_lower for kw in ("vs", " and ", "compare", "versus", "both"))
+            _wants_numbers = any(
+                kw in _msg_lower
+                for kw in ("revenue", "earnings", "price", "market cap", "pe ratio", "eps", "margin", "growth")
+            )
+            _sparse_threshold = 5 if _is_comparison else (3 if _wants_numbers else 2)
+            _sparse_guard = ""
+            if _total_items < _sparse_threshold:
+                _sparse_guard = (
+                    f"\n\n## SPARSE DATA INSTRUCTION\n"
+                    f"Only {_total_items} item(s) were retrieved from the knowledge base. "
+                    "If specific numbers are not present in the data above, say so explicitly. "
+                    "Do NOT invent figures from memory. Answer qualitatively when data is insufficient."
+                )
+
+            _synthesis_system = SYNTHESIS_SYSTEM_PROMPT.render(safety=SAFETY_FOOTER + _sparse_guard)
+
+            # ── Strip planning narration from prior assistant messages ──────────
+            # Planning-turn assistant messages carry a .content field with
+            # narration ("I will fetch...", "Step 1: Calling..."). When passed
+            # verbatim to the synthesis turn the LLM mirrors that pattern and
+            # leaks tool-call stubs into the final answer. The messages' purpose
+            # here is only to carry the tool_calls blocks (so the model sees
+            # what was executed); strip .content from them before synthesis.
+            _clean_prior: list[dict[str, Any]] = []
+            for _msg in messages[1:]:
+                if _msg.get("role") == "assistant" and _msg.get("tool_calls"):
+                    _c = dict(_msg)
+                    _c.pop("content", None)
+                    _clean_prior.append(_c)
+                else:
+                    _clean_prior.append(_msg)
+
             _synthesis_messages: list[dict[str, Any]] = [
                 {"role": "system", "content": _synthesis_system},
-                *messages[1:],
+                *_clean_prior,
             ]
             try:
                 while _stream_attempts < 2:
@@ -2333,15 +2374,15 @@ class ChatOrchestratorUseCase:
                             raise
                         # Only retry on transient signatures. Anything else
                         # (e.g. validation errors) propagates immediately.
-                        _msg = str(inner_exc).lower()
+                        _exc_msg = str(inner_exc).lower()
                         _is_transient = (
-                            "429" in _msg
-                            or "too many requests" in _msg
-                            or "all llm providers failed" in _msg
-                            or "timeout" in _msg
-                            or "503" in _msg
-                            or "502" in _msg
-                            or "504" in _msg
+                            "429" in _exc_msg
+                            or "too many requests" in _exc_msg
+                            or "all llm providers failed" in _exc_msg
+                            or "timeout" in _exc_msg
+                            or "503" in _exc_msg
+                            or "502" in _exc_msg
+                            or "504" in _exc_msg
                         )
                         if not _is_transient or _stream_attempts >= 2:
                             raise

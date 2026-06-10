@@ -822,6 +822,7 @@ export interface ScreenerResult {
   current_price?: number | null;       // live quote price (from quote enrichment)
   revenue?: number | null;             // trailing 12-month revenue (USD)
   beta?: number | null;                // market beta vs S&P 500
+  avg_volume_30d?: number | null;      // 30-day average daily volume (from snapshot)
   forward_pe?: number | null;          // forward P/E ratio (next-twelve-months EPS)
   dividend_yield?: number | null;      // annual dividend yield (decimal, e.g. 0.015 = 1.5%)
   revenue_growth_yoy?: number | null;  // year-over-year revenue growth (decimal)

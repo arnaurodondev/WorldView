@@ -209,8 +209,8 @@ def test_report_computes_variance() -> None:
         per_question_artifacts=arts,
     )
     # The per-question header shows mean+stddev.
-    assert "mean score **95.0**" in md
-    assert "stddev 5.0" in md
+    assert "mean score **95.0/100**" in md
+    assert "σ=5.0" in md  # noqa: RUF001
     # Variance table renders one row for the single question with N=3.
     assert "## Cross-question variance" in md
     # Row format: | ru_mstr_news | 3 | 95.0 | 5.0 | ... |

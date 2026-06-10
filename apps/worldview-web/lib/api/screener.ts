@@ -98,19 +98,103 @@ export function createScreenerApi(t: string | undefined) {
             (row["gics_sector"] as string | undefined) ??
             (row["sector"] as string | undefined) ??
             null,
+          // ── Core quote / price fields ────────────────────────────────────────
+          // current_price is emitted as metrics["current_price"] (LEFT JOIN on
+          // instrument_quotes in the backend). AAPL shows price because its quote
+          // row exists; most others don't have a quote row yet → null → "—".
           current_price: num(row["current_price"] ?? metrics["current_price"]),
+          // ── Core fundamental metrics ─────────────────────────────────────────
+          // These come from the `metrics` dict keyed by fundamental_metrics.metric
+          // names. Backend key → frontend field mapping documented per-field.
           market_cap: num(
             row["market_cap"] ?? metrics["market_cap"] ?? metrics["market_capitalization"],
           ),
           pe_ratio: num(row["pe_ratio"] ?? metrics["pe_ratio"]),
           daily_return: num(row["daily_return"] ?? metrics["daily_return"]),
-          // BP-331: backend emits revenue as `revenue_usd` inside the metrics dict.
-          // Try revenue_usd first, then fall back to the generic `revenue` key
-          // (used by older screener API versions) and the top-level row field.
-          revenue: num(metrics["revenue_usd"] ?? metrics["revenue"] ?? row["revenue"]),
+          // BP-331: backend emits revenue as `revenue_ttm` (the corrected metric name
+          // used since the PRD-0099 fix) inside the metrics dict. `revenue_usd` was
+          // the old key that was never populated; fall through to generic `revenue`.
+          revenue: num(
+            metrics["revenue_ttm"] ?? metrics["revenue_usd"] ?? metrics["revenue"] ?? row["revenue"],
+          ),
           beta: num(row["beta"] ?? metrics["beta"]),
           market_impact_score: num(
             row["market_impact_score"] ?? metrics["market_impact_score"],
+          ),
+          avg_volume_30d: num(metrics["avg_volume_30d"] ?? row["avg_volume_30d"]),
+          // ── PRD-0099 Wave I: new fundamental columns ─────────────────────────
+          // Backend stores these metrics with suffixed names in fundamental_metrics
+          // table (e.g. roe_ttm), but the frontend ScreenerResult type uses shorter
+          // names (roe). Map here to avoid "—" on all rows in the new columns.
+          //
+          // WHY suffix normalization here (not in the column renderer): the AG Grid
+          // `field` accessor (e.g. field: "roe") reads directly from the flat row
+          // object — if the key is missing entirely, AG Grid passes undefined to the
+          // renderer, which shows "—". Normalizing in this single place keeps all
+          // renderers and column definitions using the clean short name.
+          forward_pe: num(metrics["forward_pe"] ?? row["forward_pe"]),
+          dividend_yield: num(metrics["dividend_yield"] ?? row["dividend_yield"]),
+          // Backend key: roe_ttm → frontend key: roe
+          roe: num(metrics["roe"] ?? metrics["roe_ttm"] ?? row["roe"]),
+          // Backend key: operating_margin_ttm → frontend key: operating_margin
+          operating_margin: num(
+            metrics["operating_margin"] ?? metrics["operating_margin_ttm"] ?? row["operating_margin"],
+          ),
+          // Backend key: quarterly_revenue_growth_yoy → frontend key: revenue_growth_yoy
+          revenue_growth_yoy: num(
+            metrics["revenue_growth_yoy"] ??
+            metrics["quarterly_revenue_growth_yoy"] ??
+            row["revenue_growth_yoy"],
+          ),
+          // ── IB-L3: computed OHLCV-derived returns (period_type=SNAPSHOT) ─────
+          // Stored as fundamental_metrics rows with section=computed_returns.
+          // The backend's no-filter path does NOT project these via key_metrics
+          // (they would add 8 more LEFT JOINs to the already-expensive query).
+          // They appear in metrics[] only when an explicit filter references them.
+          dist_from_52w_high_pct: num(
+            metrics["dist_from_52w_high_pct"] ?? row["dist_from_52w_high_pct"],
+          ),
+          dist_from_52w_low_pct: num(
+            metrics["dist_from_52w_low_pct"] ?? row["dist_from_52w_low_pct"],
+          ),
+          return_1m: num(metrics["return_1m"] ?? row["return_1m"]),
+          return_3m: num(metrics["return_3m"] ?? row["return_3m"]),
+          return_6m: num(metrics["return_6m"] ?? row["return_6m"]),
+          return_ytd: num(metrics["return_ytd"] ?? row["return_ytd"]),
+          return_1y: num(metrics["return_1y"] ?? row["return_1y"]),
+          return_3y: num(metrics["return_3y"] ?? row["return_3y"]),
+          // ── IB-L4: snapshot fields (LEFT JOINed on instrument_fundamentals_snapshot) ──
+          // These come from the snap_fields_available projection in the backend.
+          // They land in the metrics dict as e.g. metrics["analyst_target_price"],
+          // metrics["institutional_ownership_pct"], etc. — no key rename needed.
+          analyst_target_price: num(
+            metrics["analyst_target_price"] ?? row["analyst_target_price"],
+          ),
+          analyst_consensus_rating: num(
+            metrics["analyst_consensus_rating"] ?? row["analyst_consensus_rating"],
+          ),
+          insider_net_buy_90d: num(
+            metrics["insider_net_buy_90d"] ?? row["insider_net_buy_90d"],
+          ),
+          institutional_ownership_pct: num(
+            metrics["institutional_ownership_pct"] ?? row["institutional_ownership_pct"],
+          ),
+          short_percent: num(metrics["short_percent"] ?? row["short_percent"]),
+          // ── IB-L5: intelligence rollup (L-5b worker, nightly 04:00 UTC) ──────
+          // Integer / float / bool fields from instrument_fundamentals_snapshot.
+          // WHY num() for booleans: has_active_alert / has_ai_brief are booleans
+          // in DB but the ScreenerResult type is typed as boolean | null. We keep
+          // num() for consistency — the column renderers don't use these directly,
+          // they are filter-only fields per the design spec (IB-L5 §5).
+          news_count_7d: num(metrics["news_count_7d"] ?? row["news_count_7d"]),
+          llm_relevance_7d_max: num(
+            metrics["llm_relevance_7d_max"] ?? row["llm_relevance_7d_max"],
+          ),
+          display_relevance_7d_weighted: num(
+            metrics["display_relevance_7d_weighted"] ?? row["display_relevance_7d_weighted"],
+          ),
+          recent_contradiction_count: num(
+            metrics["recent_contradiction_count"] ?? row["recent_contradiction_count"],
           ),
         } as unknown as ScreenerResult;
       });

@@ -645,16 +645,20 @@ class IntelligenceHandler(ToolHandler):
         # BP-459-A FIX: resolve source + target independently via alias search so
         # two-entity queries (e.g. "Apple → Anthropic") each get their own UUID.
         # entity_context is used only when start_entity name fuzzy-matches it.
-        source_entity_id = await self._resolve_entity_by_name("traverse_graph", start_entity)
+        # Resolve both concurrently when target is present (saves one NLP round-trip).
+        if target_entity:
+            source_entity_id, target_entity_id = await asyncio.gather(
+                self._resolve_entity_by_name("traverse_graph", start_entity),
+                self._resolve_entity_by_name("traverse_graph", target_entity),
+            )
+        else:
+            source_entity_id = await self._resolve_entity_by_name("traverse_graph", start_entity)
+            target_entity_id = None
+
         if source_entity_id is None:
             return []
-
-        # target_entity is always resolved via alias search (context holds ONE entity).
-        target_entity_id: UUID | None = None
-        if target_entity:
-            target_entity_id = await self._resolve_entity_by_name("traverse_graph", target_entity)
-            if target_entity_id is None:
-                return []
+        if target_entity and target_entity_id is None:
+            return []
 
         # BP-459-B FIX: source_id/target_id keys route to /graph/cypher/path or /neighborhood.
         params: dict[str, Any] = {

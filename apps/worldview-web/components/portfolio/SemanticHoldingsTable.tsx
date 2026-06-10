@@ -362,7 +362,16 @@ export function SemanticHoldingsTable({
   };
 
   return (
-    <div className="flex flex-col overflow-auto relative">
+    // WHY h-full: SemanticHoldingsTable is placed inside a `flex-1 min-h-0` div
+    // in HoldingsTab. Without h-full here, this div collapses to 0px height because
+    // it has no intrinsic content height — the AG Grid inside (which uses h-full
+    // internally) cannot expand to fill a parent that itself has no height.
+    // overflow-auto is removed here because the height must be explicit for the
+    // AG Grid viewport's own overflow-y scroll to function correctly (the grid
+    // manages its own scroll container; a wrapping overflow-auto on a 0px div
+    // created the black void). min-h-0 is kept so the flex child can shrink below
+    // its content size inside the outer flex column.
+    <div className="flex flex-col h-full relative">
       {/* ── AG Grid table ─────────────────────────────────────────────────── */}
       {/* WHY pinnedBottomRowData: renders totals as a proper AG Grid pinned row,
           which tracks column widths/pinning/scroll automatically. Replaces the

@@ -224,24 +224,81 @@ function ScoreCellRenderer({ data }: ICellRendererParams<ScreenerResult>) {
   return <HeatCell score={data?.market_impact_score ?? null} />;
 }
 
-function Range52wCellRenderer() {
+/**
+ * Range52wCellRenderer — visual position bar showing where the current price
+ * sits between the 52-week low and 52-week high.
+ *
+ * WHY percent bar (not min/max values): the screener column is only 100px wide;
+ * showing two prices would be unreadable. A proportional bar communicates the
+ * relative position (near high vs near low) at a glance — same idiom as
+ * Finviz's 52W column.
+ *
+ * DERIVATION: the backend stores `dist_from_52w_low_pct` (positive = % above
+ * 52w low) and `dist_from_52w_high_pct` (negative = % below 52w high). The
+ * bar fill is calculated as:
+ *   fill% = dist_low / (dist_low + |dist_high|)
+ * which equals 100% when price == 52w high, 0% when price == 52w low.
+ * If both distances are zero (at the high), fill% = 100%.
+ */
+function Range52wCellRenderer({ data }: ICellRendererParams<ScreenerResult>) {
+  const distLow = data?.dist_from_52w_low_pct;
+  const distHigh = data?.dist_from_52w_high_pct;
+
+  // Both fields must be non-null to calculate a meaningful position.
+  if (distLow == null || distHigh == null) {
+    return (
+      <div className="h-1 bg-border rounded-none overflow-hidden w-full" title="No 52W range data">
+        <div className="h-full bg-muted-foreground/20 w-0" />
+      </div>
+    );
+  }
+
+  // distLow >= 0 (above low), distHigh <= 0 (below high, stored as negative fraction).
+  // Total range = dist from low + dist from high (in absolute terms).
+  const range = distLow + Math.abs(distHigh);
+  // When price == 52w high both distances are 0; show 100%.
+  const fillPct = range === 0 ? 100 : Math.min(100, Math.max(0, (distLow / range) * 100));
+
+  // Colour: green when near high (>= 70%), amber in the middle, red near low (<= 30%).
+  const fillClass =
+    fillPct >= 70
+      ? "bg-positive/70"
+      : fillPct <= 30
+      ? "bg-negative/70"
+      // WHY bg-warning/70 (not bg-amber-*): design system enforces palette
+      // tokens; bg-warning maps to Bloomberg amber (#FFB000) — appropriate
+      // for a "mid-range" position signal (not bullish/bearish).
+      : "bg-warning/70";
+
+  const tooltipText = `52W position: ${fillPct.toFixed(0)}% from low (${(distLow * 100).toFixed(1)}% above 52W low, ${(Math.abs(distHigh) * 100).toFixed(1)}% below 52W high)`;
+
   return (
-    <div
-      className="h-1 bg-border rounded-none overflow-hidden w-full"
-      title="Backend pending"
-    >
-      <div className="h-full bg-muted-foreground/20 w-0" />
+    <div className="h-1 bg-border rounded-none overflow-hidden w-full" title={tooltipText}>
+      <div className={`h-full ${fillClass}`} style={{ width: `${fillPct}%` }} />
     </div>
   );
 }
 
-function VolumeCellRenderer() {
+/**
+ * VolumeCellRenderer — displays `avg_volume_30d` (30-day average daily volume)
+ * from the `instrument_fundamentals_snapshot` table.
+ *
+ * WHY avg_volume_30d (not today's volume): today's volume is not stored in the
+ * screener's fundamental_metrics projection. The 30-day average is a better
+ * signal for liquidity screening anyway — single-day volume is noisy. The
+ * backend already projects avg_volume_30d via the snapshot LEFT JOIN.
+ */
+function VolumeCellRenderer({ data }: ICellRendererParams<ScreenerResult>) {
+  const v = data?.avg_volume_30d;
+  if (v == null) {
+    return (
+      <span className="font-mono text-[11px] tabular-nums text-muted-foreground">—</span>
+    );
+  }
+  // Compact format: 1_200_000 → "1.2M", 340_000 → "340K"
   return (
-    <span
-      className="font-mono text-[11px] tabular-nums text-muted-foreground"
-      title="Backend pending"
-    >
-      —
+    <span className="font-mono text-[11px] tabular-nums text-foreground">
+      {formatCompact(v, { adaptive: true, maxDecimals: 1 })}
     </span>
   );
 }
@@ -1022,7 +1079,10 @@ export function createAgScreenerColumns(
     {
       colId: "range52w",
       headerName: "52W RANGE",
-      headerTooltip: "52-Week Price Range (backend pending)",
+      headerTooltip: "52-Week Price Range — proportional bar showing position between 52W low (left) and 52W high (right). Data from nightly OHLCV-derived snapshot.",
+      // WHY no field: cell renderer reads two fields (dist_from_52w_low_pct and
+      // dist_from_52w_high_pct) to draw the bar. AG Grid field accessor is
+      // single-field; we let the renderer access data directly instead.
       sortable: false,
       resizable: false,
       width: SCREENER_AG_COL_WIDTHS.range52w,
@@ -1033,8 +1093,9 @@ export function createAgScreenerColumns(
     {
       colId: "volume",
       headerName: "VOLUME",
-      headerTooltip: "Average Volume (backend pending)",
-      sortable: false,
+      headerTooltip: "30-day average daily volume (from instrument_fundamentals_snapshot)",
+      field: "avg_volume_30d",
+      sortable: true,
       width: SCREENER_AG_COL_WIDTHS.volume,
       cellRenderer: VolumeCellRenderer,
     } satisfies ColDef<ScreenerResult>,

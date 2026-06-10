@@ -117,13 +117,21 @@ async def screen_instruments_get(
     Convenience GET endpoint mirroring POST /fundamentals/screen with no
     filters. Useful for frontend sanity checks and the screener default state.
     """
-    results, total = await uc.execute(
-        [],
-        limit=limit,
-        offset=offset,
-        sort_by=None,
-        sort_order="asc",
-    )
+    try:
+        results, total = await uc.execute(
+            [],
+            limit=limit,
+            offset=offset,
+            sort_by=None,
+            sort_order="asc",
+        )
+    except Exception as exc:
+        exc_name = type(exc).__name__
+        if exc_name == "QueryCanceledError" or "QueryCanceled" in exc_name:
+            raise HTTPException(
+                status_code=504, detail="Screener query timed out — try narrowing your filters."
+            ) from None
+        raise
     return ScreenResponse(
         results=[
             ScreenInstrumentResponse(
@@ -327,13 +335,25 @@ async def screen_instruments(
             )
         )
 
-    results, total = await uc.execute(
-        screen_filters,
-        limit=body.limit,
-        offset=body.offset,
-        sort_by=body.sort_by,
-        sort_order=body.sort_order,
-    )
+    # asyncpg.QueryCanceledError fires when the 8s SET LOCAL statement_timeout
+    # in query_screen is hit. Without this handler it surfaces as a 500 and
+    # corrupts the connection pool (MissingGreenlet during cleanup). Map it to
+    # 504 so callers can distinguish a timeout from a server error.
+    try:
+        results, total = await uc.execute(
+            screen_filters,
+            limit=body.limit,
+            offset=body.offset,
+            sort_by=body.sort_by,
+            sort_order=body.sort_order,
+        )
+    except Exception as exc:
+        exc_name = type(exc).__name__
+        if exc_name == "QueryCanceledError" or "QueryCanceled" in exc_name:
+            raise HTTPException(
+                status_code=504, detail="Screener query timed out — try narrowing your filters."
+            ) from None
+        raise
     return ScreenResponse(
         results=[
             ScreenInstrumentResponse(

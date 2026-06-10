@@ -283,4 +283,79 @@ describe("ChatContextRail", () => {
     // wraps it with " $" before appending to the composer.
     expect(onTickerClick).toHaveBeenCalledWith("NVDA");
   });
+
+  // ── Bold markdown ticker extraction ──────────────────────────────────────
+  // These tests guard the second extraction path added for Issue 1: assistant
+  // messages that use **BOLD** formatting for entity names without a $ prefix.
+
+  it("extracts **BOLD** uppercase words from assistant messages as tickers", () => {
+    // WHY role:"assistant": bold extraction only applies to assistant messages.
+    const messages = [
+      makeMessage({
+        role: "assistant",
+        content: "Comparing **NVDA** and **AMD** performance year-to-date.",
+        citations: [],
+      }),
+    ];
+    render(<ChatContextRail {...DEFAULT_PROPS} messages={messages} />);
+    // Both bold tokens should appear as chips.
+    expect(screen.getByText("$NVDA")).toBeInTheDocument();
+    expect(screen.getByText("$AMD")).toBeInTheDocument();
+  });
+
+  it("does NOT extract **BOLD** uppercase words from user messages", () => {
+    // WHY: user-typed bold is not a reliable ticker signal — analysts sometimes
+    // bold words for emphasis without meaning a stock symbol.
+    const messages = [
+      makeMessage({
+        role: "user",
+        content: "I am **VERY** interested in comparing them.",
+        citations: [],
+      }),
+    ];
+    render(<ChatContextRail {...DEFAULT_PROPS} messages={messages} />);
+    // "VERY" is bold and all-caps but in a user message — should not appear.
+    expect(screen.queryByText("$VERY")).not.toBeInTheDocument();
+  });
+
+  it("filters out common non-ticker bold abbreviations (CEO, GDP, etc.)", () => {
+    // WHY: the allowlist prevents common financial abbreviations from
+    // appearing as spurious chips in the Related Tickers section.
+    const messages = [
+      makeMessage({
+        role: "assistant",
+        content:
+          "The **CEO** commented on **GDP** trends and **EPS** beats. **NVDA** led gains.",
+        citations: [],
+      }),
+    ];
+    render(<ChatContextRail {...DEFAULT_PROPS} messages={messages} />);
+    // CEO / GDP / EPS are in the NON_TICKER_BOLD allowlist — must be filtered out.
+    expect(screen.queryByText("$CEO")).not.toBeInTheDocument();
+    expect(screen.queryByText("$GDP")).not.toBeInTheDocument();
+    expect(screen.queryByText("$EPS")).not.toBeInTheDocument();
+    // NVDA is a real ticker — must appear.
+    expect(screen.getByText("$NVDA")).toBeInTheDocument();
+  });
+
+  it("deduplicates when same ticker appears as both $TICKER and **BOLD**", () => {
+    // WHY: both extraction paths feed the same Set — double-counting must not
+    // happen even when the same entity appears via both patterns in one thread.
+    const messages = [
+      makeMessage({
+        role: "user",
+        content: "What about $NVDA?",
+        citations: [],
+      }),
+      makeMessage({
+        role: "assistant",
+        content: "**NVDA** has strong momentum in AI infrastructure.",
+        citations: [],
+      }),
+    ];
+    render(<ChatContextRail {...DEFAULT_PROPS} messages={messages} />);
+    // Only one "$NVDA" chip should exist.
+    const chips = screen.getAllByText("$NVDA");
+    expect(chips).toHaveLength(1);
+  });
 });

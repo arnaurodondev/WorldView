@@ -307,6 +307,14 @@ export const qk = {
     // `qc.invalidateQueries({ queryKey: qk.chat.all })` cascade to it on logout.
     entityResolve: (entityId: string) =>
       ["chat", "entity-resolve", entityId] as const,
+    // WHY tickerMini: the context rail resolves bare ticker symbols (extracted
+    // from $TICKER and **BOLD** patterns) to instrument_id via searchInstruments,
+    // then fetches a compact overview for the EntityMiniCard.  Keeping it under
+    // chat.* means logout invalidation cascades here too.  The key uses the
+    // uppercase ticker string as the identifier so two cards for the same ticker
+    // (across tabs / threads) share the same cache entry.
+    tickerMini: (ticker: string) =>
+      ["chat", "ticker-mini", ticker.toUpperCase()] as const,
   },
 
   // ── Dashboard widgets ────────────────────────────────────────────────────
