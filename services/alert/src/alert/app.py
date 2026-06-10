@@ -141,8 +141,19 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             "bootstrap.servers": settings.kafka_bootstrap_servers,
             # Larger socket timeout so the background connect thread succeeds before
             # list_topics(timeout=8) fires on the first /readyz call (BP-350).
-            "socket.timeout.ms": "10000",
-            "message.timeout.ms": "10000",
+            "socket.timeout.ms": "30000",
+            "message.timeout.ms": "30000",
+            # BP-350 follow-up (2026-06-09): under broker contention the
+            # ApiVersionRequest handshake exceeds the 10s rdkafka default and
+            # logs `ApiVersionRequest failed: Local: Timed out` every few
+            # minutes (alert-service only; other services produce far more
+            # rarely and never hit this). Raising the handshake budget to 30s
+            # gives the broker enough slack without affecting the steady-state
+            # produce path. The setting is scoped to this single health-check
+            # producer — the BaseKafkaProducer used by the outbox keeps its
+            # own (faster) defaults.
+            "socket.connection.setup.timeout.ms": "30000",
+            "api.version.request.timeout.ms": "30000",
         }
     )
     app.state.kafka_health_producer = kafka_health_producer
