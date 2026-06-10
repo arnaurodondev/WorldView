@@ -97,7 +97,7 @@ const ReactMarkdown = dynamic(() => import("react-markdown"), {
   ssr: false,
   loading: () => <BriefMarkdownSkeleton />,
 });
-import { ChevronRight, ChevronUp, RefreshCw } from "lucide-react";
+import { ChevronRight, ChevronUp, FileText, RefreshCw } from "lucide-react";
 import { createGateway } from "@/lib/gateway";
 import { useAuth } from "@/hooks/useAuth";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -153,6 +153,12 @@ export function MorningBriefCard() {
     error,
     refetch,
     isFetching,
+    // Round 1 foundation: the named empty state shows a "last attempt"
+    // timestamp. TanStack exposes both — dataUpdatedAt is the last SUCCESSFUL
+    // fetch (which may still carry an empty brief body), errorUpdatedAt the
+    // last FAILED one. The max of the two is "when we last heard from S8".
+    dataUpdatedAt,
+    errorUpdatedAt,
   } = useQuery<BriefingResponse>({
     queryKey: ["morning-brief"],
     queryFn: () => createGateway(accessToken).getMorningBrief(),
@@ -286,13 +292,71 @@ export function MorningBriefCard() {
     brief?.summary_paragraph?.trim() ?? "",
   );
   if (!brief || (!safeNarrative && !safeSummary && !safeSummaryParagraph)) {
+    // Round 1 foundation: NAMED empty state — icon + headline + last-attempt
+    // timestamp + Regenerate action — replaces the bare one-liner.
+    //
+    // WHY "last attempt" from query timestamps (not brief.generated_at): in
+    // this branch there IS no usable brief — the only truthful timestamps we
+    // have are when the frontend last asked S8 for one. dataUpdatedAt covers
+    // "S8 answered but the brief body was empty"; errorUpdatedAt covers
+    // "the request failed". 0 means "never attempted in this session".
+    const lastAttemptMs = Math.max(dataUpdatedAt ?? 0, errorUpdatedAt ?? 0);
+    // Same compact "YYYY-MM-DD HH:MM" format as the loaded-state header so
+    // timestamps read consistently across card states.
+    const lastAttempt =
+      lastAttemptMs > 0
+        ? new Date(lastAttemptMs).toISOString().slice(0, 16).replace("T", " ")
+        : null;
+
     return (
       <div className="flex h-full flex-col">
         <MetaHeader />
-        <div className="flex flex-1 items-center px-1">
-          <p className="text-[10px] text-muted-foreground">
-            AI brief unavailable — system initializing
+        {/* WHY role="status": assistive tech announces the empty state when
+            the card settles, matching the DashboardEmptyState convention. */}
+        <div
+          className="flex flex-1 flex-col items-center justify-center gap-1 px-1 py-3 text-center"
+          role="status"
+        >
+          {/* Icon — muted document glyph signals "content slot, nothing in it".
+              WHY strokeWidth 1.5: terminal icon convention (thin strokes). */}
+          <FileText
+            className="h-4 w-4 text-muted-foreground/50"
+            strokeWidth={1.5}
+            aria-hidden
+          />
+          {/* Headline — keeps the exact "AI brief unavailable" phrase the
+              regression tests pin (R19: update layout, never weaken copy). */}
+          <p className="font-mono text-[11px] uppercase tracking-[0.08em] text-foreground">
+            AI brief unavailable
           </p>
+          <p className="text-[10px] text-muted-foreground">
+            No morning brief has been generated yet.
+          </p>
+          {/* Last-attempt timestamp — only when we actually attempted. */}
+          {lastAttempt && (
+            <p className="font-mono text-[9px] tabular-nums text-muted-foreground/60">
+              Last attempt {lastAttempt} UTC
+            </p>
+          )}
+          {/* Regenerate — WHY refetch() (GET /v1/briefings/morning) and not a
+              dedicated POST: S9/S8 expose no explicit morning-brief regenerate
+              endpoint (backend gap — only instrument briefs have
+              POST /briefings/instrument/{id}/generate). The morning GET itself
+              triggers S8's background regeneration when the cached brief is
+              stale/absent, so a refetch IS the closest available "regenerate"
+              action today. */}
+          <button
+            onClick={() => void refetch()}
+            disabled={isFetching}
+            className="mt-1 inline-flex items-center gap-1 font-mono text-[10px] uppercase tracking-[0.06em] text-primary transition-colors hover:text-primary/80 disabled:text-[hsl(var(--disabled-foreground))]"
+            aria-label="Regenerate morning brief"
+          >
+            <RefreshCw
+              className={`h-3 w-3 ${isFetching ? "animate-spin" : ""}`}
+              strokeWidth={1.5}
+            />
+            {isFetching ? "Regenerating…" : "Regenerate"}
+          </button>
         </div>
       </div>
     );

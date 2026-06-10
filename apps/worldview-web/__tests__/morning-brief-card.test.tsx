@@ -268,3 +268,55 @@ describe("MorningBriefCard — PLAN-0049 T-D-4-01 contract", () => {
     });
   });
 });
+
+// ── Round 1 foundation (2026-06-10): named empty state ───────────────────────
+// The bare "system initializing" one-liner became a structured empty state:
+// icon + headline + last-attempt timestamp + Regenerate action. These tests
+// pin the NEW contract; the headline copy test above is untouched (R19).
+
+describe("MorningBriefCard — Round 1 named empty state", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("shows the last-attempt timestamp and a Regenerate action", async () => {
+    mockGetMorningBrief.mockResolvedValue(emptyBrief());
+
+    render(<MorningBriefCard />, { wrapper: makeWrapper() });
+
+    await waitFor(() => {
+      expect(screen.getByText(/AI brief unavailable/i)).toBeInTheDocument();
+    });
+    // dataUpdatedAt is set by the successful (but empty) fetch — the empty
+    // state must surface WHEN we last heard from S8.
+    expect(screen.getByText(/Last attempt \d{4}-\d{2}-\d{2} \d{2}:\d{2} UTC/)).toBeInTheDocument();
+    // Regenerate is the named CTA (wired to a refetch of the morning-brief
+    // endpoint — S8 background-regenerates when the cached brief is stale).
+    expect(
+      screen.getByRole("button", { name: /Regenerate morning brief/i }),
+    ).toBeInTheDocument();
+    // role=status so assistive tech announces the empty state.
+    expect(screen.getByRole("status")).toBeInTheDocument();
+  });
+
+  it("clicking Regenerate refetches the morning brief", async () => {
+    mockGetMorningBrief.mockResolvedValue(emptyBrief());
+
+    const user = userEvent.setup();
+    render(<MorningBriefCard />, { wrapper: makeWrapper() });
+
+    await waitFor(() => {
+      expect(screen.getByText(/AI brief unavailable/i)).toBeInTheDocument();
+    });
+    const callsBefore = mockGetMorningBrief.mock.calls.length;
+
+    await user.click(
+      screen.getByRole("button", { name: /Regenerate morning brief/i }),
+    );
+
+    // The button triggers refetch() — the gateway method must be hit again.
+    await waitFor(() => {
+      expect(mockGetMorningBrief.mock.calls.length).toBeGreaterThan(callsBefore);
+    });
+  });
+});

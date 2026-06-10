@@ -49,14 +49,19 @@ import { formatPrice } from "@/lib/format";
  * SNAPSHOT_GROUPS — ordered row groups for the snapshot widget.
  *
  * WHY groups:
- *   "INDICES" — market-level context. QQQ = tech ETF (daily benchmark),
- *               BTC = crypto risk-on signal. SPY is present as a slot but
- *               may show "—" until OHLCV data is ingested for that instrument.
+ *   "INDICES" — market-level context. Round 1 foundation spec requires the
+ *               4 core index proxies a US-equity analyst scans every morning:
+ *               SPY (S&P 500), QQQ (Nasdaq-100), IWM (Russell 2000 small-caps),
+ *               VIX (CBOE volatility — the "fear gauge"). BTC is retained as a
+ *               5th row because crypto risk-appetite was already shipped here
+ *               (SA-2 PLAN-0088) and removing working data is a regression.
  *   "EQUITIES" — core large-cap US equities the analyst likely owns/watches.
  *
- * WHY BTC in "INDICES" group: BTC has become a macro risk-on/risk-off signal
- * that institutional traders check alongside equity indices. Its daily change
- * correlates with growth/tech sentiment at market open.
+ * WHY IWM + VIX added (Round 1, 2026-06-10): the previous QQQ/SPY/BTC list
+ * had no small-cap breadth signal and no volatility signal — both are part
+ * of the standard "4-index" morning scan (SPY/QQQ/IWM/VIX). If VIX has no
+ * instrument row in S3 (specialized index feed not yet ingested), the row
+ * truthfully renders "—" rather than $0.00 — see the hasPrice guard below.
  *
  * The group separator is a thin muted label row, same pattern as Bloomberg's
  * "SECTORS / INDICES" dividers in the monitor panel.
@@ -67,7 +72,7 @@ interface SnapshotGroup {
 }
 
 const SNAPSHOT_GROUPS: SnapshotGroup[] = [
-  { label: "INDICES", tickers: ["QQQ", "SPY", "BTC"] },
+  { label: "INDICES", tickers: ["SPY", "QQQ", "IWM", "VIX", "BTC"] },
   { label: "EQUITIES", tickers: ["AAPL", "MSFT", "NVDA", "AMZN", "GOOGL", "JPM"] },
 ];
 
@@ -186,7 +191,9 @@ export function MarketSnapshotWidget() {
         {isLoading ? (
           // Loading skeletons — 2 groups × (1 label + N rows)
           <div className="divide-y divide-border/30">
-            {Array.from({ length: 9 }).map((_, i) => (
+            {/* WHY length 11: 5 INDICES + 6 EQUITIES rows — skeleton count must
+                match the loaded row count so there is no layout jump on load. */}
+            {Array.from({ length: 11 }).map((_, i) => (
               <div key={i} className="flex h-[22px] items-center justify-between px-2">
                 <Skeleton className="h-3 w-[48px]" />
                 <Skeleton className="h-3 w-[64px]" />
@@ -301,24 +308,49 @@ function SnapshotRow({ ticker, instrumentId, quote }: SnapshotRowProps) {
         {ticker}
       </span>
 
-      {/* Price — center, muted (context); change% is the primary signal.
+      {/* Price — center, muted (context); change is the primary signal.
           WHY "—" when hasPrice is false: truthfulness principle — show
           a dash when we have no real price rather than $0.00. */}
       <span className="flex-1 text-right font-mono text-[10px] tabular-nums text-muted-foreground">
         {hasPrice ? formatPrice(quote?.price) : "—"}
       </span>
 
-      {/* Change % — right-aligned, colored by direction */}
+      {/* Day change $ — Round 1 foundation: the spec requires BOTH the dollar
+          move and the percent move (a 1% move on SPY ≈ $5; on BTC ≈ $800 —
+          the $ figure carries magnitude the % alone hides).
+          WHY w-[52px] fixed: keeps the $/% columns aligned across rows so the
+          eye can scan them as columns (ADR-F-15 numeric column convention).
+          WHY toFixed(2) with explicit sign (not formatPrice): formatPrice
+          renders "$5.12" without a sign — for a CHANGE value the +/- sign IS
+          the signal, so we format manually. */}
       <span
         className={cn(
-          "w-[56px] shrink-0 text-right font-mono text-[11px] tabular-nums",
+          "w-[52px] shrink-0 text-right font-mono text-[10px] tabular-nums",
+          isPositive && "text-positive",
+          isNegative && "text-negative",
+          !hasPrice && "text-muted-foreground",
+        )}
+      >
+        {hasPrice && quote?.change != null
+          ? `${quote.change >= 0 ? "+" : ""}${quote.change.toFixed(2)}`
+          : "—"}
+      </span>
+
+      {/* Change % with directional arrow — right-aligned, colored by direction.
+          WHY ▲/▼ glyphs (not lucide icons): a text glyph inherits the row's
+          font-mono metrics and color for free, costs no extra DOM nodes per
+          row (11 rows render in this widget), and reads identically in
+          screen-reader output via the aria-label on the row container. */}
+      <span
+        className={cn(
+          "w-[64px] shrink-0 text-right font-mono text-[11px] tabular-nums",
           isPositive && "text-positive",
           isNegative && "text-negative",
           !hasPrice && "text-muted-foreground",
         )}
       >
         {hasPrice && changePct != null
-          ? `${changePct >= 0 ? "+" : ""}${changePct.toFixed(2)}%`
+          ? `${isPositive ? "▲" : "▼"} ${changePct >= 0 ? "+" : ""}${changePct.toFixed(2)}%`
           : "—"}
       </span>
     </div>

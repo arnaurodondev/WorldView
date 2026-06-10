@@ -32,6 +32,16 @@ import { useEffect } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { qk } from "@/lib/query/keys";
 import { useDashboardBundle } from "@/features/dashboard/hooks/useDashboardBundle";
+// Round 1 foundation: the bundle's top_gainers/top_losers legs carry the RAW
+// S9/S3 envelope ({results: [...]}), but every widget cache expects the
+// TRANSFORMED {movers: Mover[]} shape produced by getTopMovers(). Seeding the
+// raw shape made widgets read `undefined.movers` → empty lists on cold start.
+// The shared transform keeps the hydrated cache byte-compatible with what the
+// widget's own queryFn would produce.
+import {
+  transformTopMoversResponse,
+  type RawTopMoversResponse,
+} from "@/lib/api/dashboard";
 
 export function DashboardBundleHydrator() {
   const { data: bundle } = useDashboardBundle();
@@ -69,21 +79,40 @@ export function DashboardBundleHydrator() {
       queryClient.setQueryData(qk.dashboard.marketHeatmap(), bundle.sector_heatmap);
     }
 
-    // Top movers (gainers/losers) — qk.dashboard.topMovers takes optional
-    // params. The dashboard PreMarketMovers widget calls with params
-    // matching {type, limit, period}; we hydrate the two 1D variants the
-    // bundle covers.
+    // Top movers (gainers/losers) — Round 1 foundation fix.
+    //
+    // TWO bugs lived here before:
+    //   1. SHAPE: the legs are the RAW S9 envelope ({results: [{instrument_id,
+    //      ticker, name, period_return_pct}]}) while the consumers expect the
+    //      TRANSFORMED {movers: Mover[], type} from getTopMovers(). We now run
+    //      the exact same transform the queryFn applies.
+    //   2. KEYS: only qk.dashboard.topMovers(...) was hydrated, but the legacy
+    //      PreMarketMoversWidget reads ["dashboard-top-movers-<type>", "1D"].
+    //      We seed BOTH key families so whichever movers widget is mounted
+    //      renders from cache. (TopMovers — the Round 1 MARKET tab widget —
+    //      reads the qk key; the legacy flat keys keep PreMarketMoversWidget
+    //      working anywhere it is still mounted.)
     if (bundle.top_gainers !== null) {
+      const gainers = transformTopMoversResponse(
+        bundle.top_gainers as RawTopMoversResponse,
+        "gainers",
+      );
       queryClient.setQueryData(
         qk.dashboard.topMovers({ type: "gainers", limit: 10, period: "1D" }),
-        bundle.top_gainers,
+        gainers,
       );
+      queryClient.setQueryData(["dashboard-top-movers-gainers", "1D"], gainers);
     }
     if (bundle.top_losers !== null) {
+      const losers = transformTopMoversResponse(
+        bundle.top_losers as RawTopMoversResponse,
+        "losers",
+      );
       queryClient.setQueryData(
         qk.dashboard.topMovers({ type: "losers", limit: 10, period: "1D" }),
-        bundle.top_losers,
+        losers,
       );
+      queryClient.setQueryData(["dashboard-top-movers-losers", "1D"], losers);
     }
 
     // Portfolios list — PortfolioSummary widget reads qk.portfolios.list()

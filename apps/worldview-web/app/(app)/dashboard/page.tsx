@@ -216,8 +216,10 @@ export default function DashboardPage() {
           minmax(220px, 1fr) height budget (vs the fixed 130px in Row 2).
           This gives all three tab panes (MARKET / HOLDINGS / WATCHLIST)
           enough vertical space to show ≥8 movers without crowding.
-          The standalone PreMarketMoversWidget is removed — MARKET tab covers
-          the same universe-wide view. */}
+          Round 1 foundation (2026-06-10): the MARKET tab now hosts the
+          redesigned TopMovers (Gainers/Losers shadcn Tabs; rows with ticker ·
+          name · 5-day sparkline · price · %chg) — PreMarketMoversWidget is
+          fully unmounted. */}
       <div className="col-span-1 md:col-span-6 lg:col-span-4 h-full min-h-0 min-w-0 overflow-hidden border border-border/40">
         <MoversWidgetTabs />
       </div>

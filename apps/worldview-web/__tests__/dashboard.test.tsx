@@ -230,7 +230,17 @@ vi.mock("@/lib/gateway", () => ({
         name: "Apple Inc",
         gics_sector: "Information Technology",
       },
+      // Round 1: MarketSnapshotWidget rows render price + day-change $ + arrow
+      // from quote — included so snapshot rows render data (not "—") in tests.
+      quote: { price: 185.5, change: 2.3, change_pct: 1.25 },
     }),
+    // Round 1: TopMovers + SectorHeatmapWidget + PreMarketMoversWidget batch
+    // their per-row overview lookups through ONE POST /v1/companies/overviews:batch.
+    // Empty map = "no overview resolved" — rows degrade gracefully ("—" price).
+    getCompanyOverviewsBatch: vi.fn().mockResolvedValue({}),
+    // Round 1: TopMovers fetches 5-day close arrays for row sparklines in one
+    // batch call. Empty map = dashed placeholder sparkline per row.
+    getMarketSparklines: vi.fn().mockResolvedValue({}),
     getHoldings: vi.fn().mockResolvedValue({
       portfolio_id: "p1",
       holdings: [],

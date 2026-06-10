@@ -80,28 +80,42 @@ const TILE_HEIGHT_PX = 40;
 const GAP_PX = 2;
 
 /**
- * colorClassFor — map an absolute % change to a Tailwind opacity-step utility
- * class. Steps are chosen so a routine ±0.3% change is barely tinted, while
- * ±4%+ moves saturate to a strong fill — matching the "intensity ≈ magnitude"
- * intuition users expect from heat tiles.
+ * colorClassFor — map a % change to a Tailwind opacity-step utility class
+ * using a PROPORTIONAL scale derived from the current payload's data range.
  *
- * Steps (mirrors PRD-0031 HeatCell 7-step scale, simplified):
- *   |x| < 0.5 → /10
- *   |x| < 1.0 → /20
- *   |x| < 2.0 → /30
- *   |x| ≥ 2.0 → /40   (also catches |x| ≥ 4 — saturated tier)
+ * WHY proportional (Round 1 foundation fix, replaces the fixed ±0.5/1/2%
+ * thresholds): on a quiet session where every sector moves <0.5%, the fixed
+ * scale rendered ALL tiles at the faintest /10 tint — the heatmap conveyed
+ * zero relative information. Conversely on a violent day (±4% everywhere)
+ * every tile saturated at /40. Normalising each tile's magnitude against the
+ * session's MAX |change| guarantees the strongest sector always renders at
+ * full intensity and the rest scale relative to it — "intensity ≈ relative
+ * magnitude *today*", which is what sector-rotation scanning actually needs.
  *
- * Why explicit class strings (not template literals): Tailwind's JIT scans
- * source for full class names. `bg-positive/${n}` would not be detected at
- * build time and the class would be purged from the final CSS bundle.
+ * Steps (ratio = |x| / maxAbs of the current payload):
+ *   ratio < 0.25 → /10
+ *   ratio < 0.50 → /20
+ *   ratio < 0.75 → /30
+ *   ratio ≥ 0.75 → /40   (saturated tier — the day's leaders)
+ *
+ * WHY still 4 discrete steps (not a continuous opacity style): Tailwind's JIT
+ * scans source for full class names. `bg-positive/${n}` would not be detected
+ * at build time and the class would be purged from the final CSS bundle —
+ * the explicit string literals below are load-bearing.
+ *
+ * @param changePct  the sector's % change (null = no data → muted tile)
+ * @param maxAbs     max |change_pct| across the CURRENT payload (≤0 treated
+ *                   as "no range" → faintest tint, avoids divide-by-zero)
  */
-function colorClassFor(changePct: number | null): string {
+function colorClassFor(changePct: number | null, maxAbs: number): string {
   if (changePct === null) return "bg-muted/30";
-  const m = Math.abs(changePct);
   const positive = changePct >= 0;
-  if (m < 0.5) return positive ? "bg-positive/10" : "bg-negative/10";
-  if (m < 1.0) return positive ? "bg-positive/20" : "bg-negative/20";
-  if (m < 2.0) return positive ? "bg-positive/30" : "bg-negative/30";
+  // WHY guard maxAbs <= 0: an all-zero payload (every sector flat) has no
+  // range to normalise against — everything gets the faintest tint.
+  const ratio = maxAbs > 0 ? Math.abs(changePct) / maxAbs : 0;
+  if (ratio < 0.25) return positive ? "bg-positive/10" : "bg-negative/10";
+  if (ratio < 0.5) return positive ? "bg-positive/20" : "bg-negative/20";
+  if (ratio < 0.75) return positive ? "bg-positive/30" : "bg-negative/30";
   return positive ? "bg-positive/40" : "bg-negative/40";
 }
 
@@ -222,6 +236,20 @@ export function SectorHeatmapWidget() {
     }));
   }, [heatmap]);
 
+  // ── Data range for the proportional color scale ──────────────────────────
+  // Round 1 foundation fix: tile color intensity is normalised against the
+  // CURRENT payload's max |change| (see colorClassFor). Computed once per
+  // payload here (not per tile) so all tiles share the same reference range.
+  // WHY useMemo: a scan over ≤13 sectors is cheap, but recomputing on every
+  // popover open/close re-render is pointless churn.
+  const maxAbsChange = useMemo(() => {
+    const sectors = heatmap?.sectors ?? [];
+    return sectors.reduce(
+      (acc, s) => Math.max(acc, Math.abs(s.change_pct ?? 0)),
+      0,
+    );
+  }, [heatmap]);
+
   return (
     // WHY flex flex-col h-full: fills the grid cell so the wrap container can
     // expand to multiple tile rows when many sectors are present.
@@ -320,6 +348,9 @@ export function SectorHeatmapWidget() {
               sector={sector}
               weight={weight}
               relatedMovers={moversBySector.get(sector.name) ?? []}
+              // Round 1: the payload-wide max |change| drives the proportional
+              // color scale — every tile normalises against the same range.
+              maxAbsChange={maxAbsChange}
             />
           ))}
         </div>
@@ -345,10 +376,13 @@ function SectorTile({
   sector,
   weight: _weight,
   relatedMovers,
+  maxAbsChange,
 }: {
   sector: HeatmapSector;
   weight: number;
   relatedMovers: Mover[];
+  /** Max |change_pct| across the whole payload — drives the proportional color scale. */
+  maxAbsChange: number;
 }) {
   const router = useRouter();
   const changePct = sector.change_pct;
@@ -363,6 +397,26 @@ function SectorTile({
   // gives the strongest movers first.
   const topMovers = relatedMovers.slice(0, 3);
 
+  // ── Hover tooltip (Round 1 foundation) ────────────────────────────────────
+  // WHY native title= (not shadcn <Tooltip>): the tile button is already the
+  // PopoverTrigger (click drill-down). Nesting a Radix Tooltip trigger inside
+  // a Radix Popover trigger on the same node requires ref-merging gymnastics
+  // and double asChild composition for marginal visual gain — the native
+  // browser tooltip carries the same information with zero extra DOM.
+  // WHY top mover may be absent: the heatmap API itself does NOT return a
+  // per-sector top mover (backend gap) — we derive it client-side by joining
+  // the top-movers list against per-instrument GICS sectors. While those
+  // queries resolve (or when no mover in the top-20 belongs to this sector),
+  // the tooltip truthfully shows sector + % only.
+  const fmtPct =
+    changePct === null
+      ? "no data"
+      : `${changePct >= 0 ? "+" : ""}${changePct.toFixed(2)}%`;
+  const tooltip =
+    topMovers.length > 0
+      ? `${sector.name} ${fmtPct} · Top: ${topMovers[0].ticker}`
+      : `${sector.name} ${fmtPct}`;
+
   return (
     <Popover>
       <PopoverTrigger asChild>
@@ -376,12 +430,16 @@ function SectorTile({
           style={{
             height: `${TILE_HEIGHT_PX}px`,
           }}
+          // Round 1: hover tooltip — sector name, % change, top mover ticker
+          // (when the client-side sector join has resolved; see WHY above).
+          title={tooltip}
           className={cn(
             // Base layout: vertical stack, centred horizontally, vertically
             // centred on a fixed-height tile.
             "flex min-h-[40px] flex-col items-center justify-center gap-0 px-1",
-            // Color encoding: bg-positive/N or bg-negative/N at 4 magnitude steps.
-            colorClassFor(changePct),
+            // Color encoding: bg-positive/N or bg-negative/N at 4 PROPORTIONAL
+            // steps normalised against the payload's max |change| (Round 1).
+            colorClassFor(changePct, maxAbsChange),
             // Foreground colour: kept neutral so the *background* tint carries
             // the direction signal — readable on every magnitude step.
             "text-foreground",
