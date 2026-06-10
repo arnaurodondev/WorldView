@@ -85,6 +85,13 @@ import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { ScrollArea } from "@/components/ui/scroll-area";
+// Round 3 Polish: shared empty-state primitive (DS §15.12) for the
+// no-history sidebar + the empty-conversation welcome. Copy lives in
+// lib/copy/empty-states.ts under the chat.* keys.
+import { EmptyState } from "@/components/primitives/EmptyState";
+// Round 3 Polish: canonical focus-ring class strings (PRD-0089 F1 §3.2) —
+// Tier-2 input ring for the search box + composer textarea.
+import { FocusRing } from "@/components/primitives/FocusRing";
 import { SlashCommandAutocomplete } from "@/components/chat/SlashCommandAutocomplete";
 import { downloadThread } from "@/lib/chat/export-thread";
 import type { Thread, Message } from "@/types/api";
@@ -104,7 +111,6 @@ import { ThreadItem } from "@/features/chat/components/ThreadItem";
 import {
   PLACEHOLDER_THREAD_TITLE,
   STARTER_QUESTIONS,
-  PORTFOLIO_STARTER_QUESTIONS,
   entityStarters,
 } from "@/features/chat/lib/starters";
 import { MarketContextBanner } from "@/components/chat/MarketContextBanner";
@@ -127,7 +133,13 @@ import { groupThreadsByDate } from "@/features/chat/lib/group-threads";
 // useChatStream's demux — so the client synthesises them from the turn's
 // detected tickers, citation titles, and tool usage).
 import { FollowUpChips } from "@/features/chat/components/FollowUpChips";
-import { generateFollowUps } from "@/features/chat/lib/follow-ups";
+// Round 3 Polish: welcomeStarterPrompts draws the empty-conversation welcome
+// chips from the SAME generic pool generateFollowUps pads with, so pre-first-
+// message suggestions and post-answer suggestions speak one language.
+import {
+  generateFollowUps,
+  welcomeStarterPrompts,
+} from "@/features/chat/lib/follow-ups";
 // Round 2 Enhancement: shared conversation ticker extractor — the same
 // detection the ChatContextRail uses, so the chips' entity substitutions
 // always agree with the cards the analyst sees in the rail.
@@ -387,9 +399,20 @@ export default function ChatPage() {
   }, [threads, ephemeralThreadIds]);
 
   // Auto-scroll to bottom on new tokens / messages.
+  //
+  // Round 3 transition polish: behaviour is INSTANT ("auto") while a stream
+  // is in flight and SMOOTH only for settled-message changes. WHY: smooth
+  // scrolling is an ~300ms animated glide — SSE tokens arrive every ~20-50ms,
+  // so each new token kicked off a fresh glide before the previous one
+  // finished. The animations fought each other, producing a rubber-banding
+  // viewport that lagged behind the text. Instant keeps the cursor pinned
+  // frame-perfect during streams; the smooth glide remains for the rarer,
+  // discrete events (user bubble appended, thread history loaded).
   useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [localMessages, streaming?.text]);
+    messagesEndRef.current?.scrollIntoView({
+      behavior: streaming ? "auto" : "smooth",
+    });
+  }, [localMessages, streaming?.text, streaming]);
 
   // Debounce searchInput → searchQuery (200ms per task spec).
   useEffect(() => {
@@ -533,6 +556,33 @@ export default function ChatPage() {
     setInput("");
     setTimeout(() => textareaRef.current?.focus(), 50);
   }, [resetForThread]);
+
+  // ── Round 3: welcome-state starter prompts ────────────────────────────────
+  //
+  // Drawn from the follow-ups generator's GENERIC pool (welcomeStarterPrompts)
+  // so the "what can I ask?" chips an analyst sees before their first message
+  // use the exact same phrasing as the post-answer follow-up chips — one
+  // suggestion vocabulary across the whole surface. Deterministic slice (no
+  // hash), so the welcome never reshuffles between visits.
+  const welcomeStarters = useMemo(() => welcomeStarterPrompts(4), []);
+
+  /**
+   * handlePickWelcomeStarter — welcome chip click → new thread + pre-filled
+   * composer.
+   *
+   * ORDER MATTERS (Round 3 bug fix): the previous welcome cards called
+   * `setInput(prompt)` BEFORE `handleNewChat()` — but handleNewChat ends with
+   * `setInput("")`, so React applied prompt-then-empty in the same commit and
+   * the composer always came up BLANK. Calling handleNewChat first makes the
+   * clear happen before the pre-fill, so the prompt survives.
+   */
+  const handlePickWelcomeStarter = useCallback(
+    (prompt: string) => {
+      handleNewChat();
+      setInput(prompt);
+    },
+    [handleNewChat],
+  );
 
   const handleSelectThread = useCallback(
     (threadId: string) => {
@@ -808,16 +858,33 @@ export default function ChatPage() {
           instead of unmounting: zero-width removal makes the history feel
           "gone" and the only way back would be a floating button over the
           messages — the rail preserves the spatial anchor. */}
+      {/* Round 3 transition polish: ONE <aside> whose WIDTH animates between
+          the expanded 224px panel and the slim 36px rail (150ms ease-out per
+          the sprint spec — the only sanctioned structural transition on this
+          surface; motion-reduce disables it). The previous implementation
+          swapped two separate <aside> elements, which snapped instantly and
+          yanked the message column sideways. The inner content still swaps
+          per-state (the slim rail shows only icons), but the container width
+          interpolates so the layout reflow reads as a deliberate slide.
+          overflow-hidden clips the expanded content during the shrink. */}
+      <aside
+        className={cn(
+          "flex shrink-0 flex-col overflow-hidden border-r border-border bg-background",
+          "transition-[width] duration-150 ease-out motion-reduce:transition-none",
+          isSidebarCollapsed ? "w-9" : "w-[224px]",
+        )}
+        aria-label={
+          isSidebarCollapsed ? "Chat thread list (collapsed)" : "Chat thread list"
+        }
+      >
       {isSidebarCollapsed ? (
-        <aside
-          className="flex w-9 shrink-0 flex-col items-center gap-1 border-r border-border bg-background py-2"
-          aria-label="Chat thread list (collapsed)"
-        >
+        <div className="flex flex-col items-center gap-1 py-2">
           <button
             type="button"
             onClick={() => setIsSidebarCollapsed(false)}
             aria-label="Expand thread list"
-            className="rounded-[2px] p-1 text-muted-foreground hover:bg-muted hover:text-foreground"
+            // Round 3 focus polish: chrome icon buttons get a keyboard ring.
+            className="rounded-[2px] p-1 text-muted-foreground hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-primary"
           >
             <PanelLeftOpen className="h-4 w-4" strokeWidth={1.5} />
           </button>
@@ -826,16 +893,13 @@ export default function ChatPage() {
             onClick={handleNewChat}
             aria-label="Start new chat"
             title="New chat"
-            className="rounded-[2px] p-1 text-primary hover:bg-primary/10"
+            className="rounded-[2px] p-1 text-primary hover:bg-primary/10 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-primary"
           >
             <Plus className="h-4 w-4" strokeWidth={1.5} />
           </button>
-        </aside>
+        </div>
       ) : (
-      <aside
-        className="flex w-[224px] shrink-0 flex-col border-r border-border bg-background"
-        aria-label="Chat thread list"
-      >
+      <>
         {/* PLAN-0071 P2C-1: market session status strip — grounds the
             intelligence panel in real market context so analysts know
             at a glance whether they're in live-session or planning mode. */}
@@ -853,12 +917,17 @@ export default function ChatPage() {
               type="button"
               onClick={() => setIsSidebarCollapsed(true)}
               aria-label="Collapse thread list"
-              className="rounded-[2px] p-0.5 text-muted-foreground hover:bg-muted hover:text-foreground"
+              // Round 3 focus polish: keyboard ring on the chrome button.
+              className="rounded-[2px] p-0.5 text-muted-foreground hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-primary"
             >
               <PanelLeftClose className="h-3.5 w-3.5" strokeWidth={1.5} />
             </button>
             <MessageSquare className="h-3.5 w-3.5 text-primary" strokeWidth={1.5} />
-            <span className="text-[11px] font-semibold uppercase tracking-[0.08em] text-foreground">
+            {/* Round 3 typography: panel heading aligned to the app-wide
+                widget-header pattern (10px sans uppercase tracking-[0.08em]
+                muted — cf. dashboard widgets + the context rail's "Context"
+                header) so the two chat side panels share one heading scale. */}
+            <span className="text-[10px] font-semibold uppercase tracking-[0.08em] text-muted-foreground">
               Threads
             </span>
           </div>
@@ -888,7 +957,10 @@ export default function ChatPage() {
                 "w-full rounded-[2px] border border-border bg-muted",
                 "pl-7 pr-2 py-1.5 text-xs text-foreground",
                 "placeholder:text-muted-foreground",
-                "focus:outline-none focus:ring-1 focus:ring-primary",
+                // Round 3 focus polish: canonical Tier-2 input ring (adds the
+                // :focus-visible variant the inline classes were missing).
+                "focus:outline-none",
+                FocusRing.T2_INPUT,
               )}
             />
           </div>
@@ -904,9 +976,27 @@ export default function ChatPage() {
         <ScrollArea className="flex-1">
           <div ref={sidebarScrollRef} className="space-y-0.5 p-2">
             {threadsLoading && (
-              <div className="space-y-1.5 p-1" aria-label="Loading threads">
+              // Round 3 skeleton polish: each placeholder mirrors the real
+              // ThreadItem anatomy (11px title line + 10px mono timestamp
+              // line, px-2 py-1.5 row padding) instead of a featureless h-8
+              // block — the list "develops" in place rather than morphing
+              // from grey slabs into two-line rows. Title widths alternate
+              // so the column doesn't look like a barcode.
+              <div className="space-y-0.5" aria-label="Loading threads">
                 {[...Array(5)].map((_, i) => (
-                  <Skeleton key={i} className="h-8 w-full rounded-[2px]" />
+                  <div
+                    key={i}
+                    data-testid="thread-skeleton-row"
+                    className="space-y-1 rounded-[2px] px-2 py-1.5"
+                  >
+                    <Skeleton
+                      className={cn(
+                        "h-3 rounded-[2px]",
+                        i % 2 === 0 ? "w-3/4" : "w-1/2",
+                      )}
+                    />
+                    <Skeleton className="h-2.5 w-2/5 rounded-[2px]" />
+                  </div>
                 ))}
               </div>
             )}
@@ -933,7 +1023,9 @@ export default function ChatPage() {
                       <button
                         type="button"
                         onClick={() => router.push("/login?redirect_to=/chat")}
-                        className="mt-2 rounded-[2px] border border-destructive/40 px-2 py-1 text-[11px] font-medium hover:bg-destructive/20"
+                        // Round 3 focus polish: destructive-context ring (a
+                        // primary/amber ring inside a red banner would clash).
+                        className="mt-2 rounded-[2px] border border-destructive/40 px-2 py-1 text-[11px] font-medium hover:bg-destructive/20 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-destructive"
                       >
                         Sign in
                       </button>
@@ -944,7 +1036,8 @@ export default function ChatPage() {
                       <button
                         type="button"
                         onClick={() => void refetchThreads()}
-                        className="mt-2 rounded-[2px] border border-destructive/40 px-2 py-1 text-[11px] font-medium hover:bg-destructive/20"
+                        // Round 3 focus polish: destructive-context ring.
+                        className="mt-2 rounded-[2px] border border-destructive/40 px-2 py-1 text-[11px] font-medium hover:bg-destructive/20 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-destructive"
                       >
                         Retry
                       </button>
@@ -954,10 +1047,18 @@ export default function ChatPage() {
               </div>
             )}
 
+            {/* Round 3 empty-state migration: the bare <p> becomes the shared
+                EmptyState primitive (DS §15.12) so the no-history sidebar
+                renders identically to every other cold-start surface. Copy
+                key chat.no-threads keeps the "No conversations yet" title the
+                existing test pins. condition=empty-cold-start: the user has
+                an account but hasn't produced data yet (FU-10.11 taxonomy). */}
             {!threadsLoading && !threadsError && (!threads || threads.length === 0) && (
-              <p className="px-3 py-3 text-xs text-muted-foreground">
-                No conversations yet. Click &ldquo;New chat&rdquo; to begin.
-              </p>
+              <EmptyState
+                condition="empty-cold-start"
+                copyKey="chat.no-threads"
+                icon={MessageSquare}
+              />
             )}
 
             {/* WHY filteredThreads (was threads): the search box narrows the
@@ -975,7 +1076,13 @@ export default function ChatPage() {
             {groupedThreads?.map((group) => (
               <div key={group.label}>
                 <p
-                  className="px-2 pb-0.5 pt-2 font-mono text-[9px] font-semibold uppercase tracking-[0.10em] text-muted-foreground/70"
+                  // Round 3 typography: date-bucket headers join the app-wide
+                  // widget-header pattern (sans, tracking-[0.08em]) — they are
+                  // category labels, not numeric data, so ADR-F-15's mono rule
+                  // doesn't apply. 9px is sanctioned for list-section labels
+                  // (§15.9 metadata exception); /70 keeps them sub-ordinate to
+                  // the 10px "Threads" panel heading above.
+                  className="px-2 pb-0.5 pt-2 text-[9px] font-semibold uppercase tracking-[0.08em] text-muted-foreground/70"
                   // WHY role=heading: lets screen-reader users jump between
                   // date buckets the same way sighted users scan the headers.
                   role="heading"
@@ -997,8 +1104,9 @@ export default function ChatPage() {
             ))}
           </div>
         </ScrollArea>
-      </aside>
+      </>
       )}
+      </aside>
 
       {/* ════════════════ PLAN-0082 Wave B — Action Confirm Modal ════════════ */}
       {/* WHY outside the right panel div: Radix Dialog uses a Portal to render
@@ -1027,57 +1135,48 @@ export default function ChatPage() {
       <div className="flex flex-1 overflow-hidden">
       {/* ════════════════ RIGHT PANEL — Chat Area ════════════════ */}
       <div className="flex flex-1 flex-col overflow-hidden">
-        {/* Welcome / empty state — PLAN-0071 P2C-4: analyst-specific copy
-            replaces the generic chatbot welcome. The two-line hierarchy
-            (label + description) mirrors Bloomberg COMMAND BAR prompt
-            style — short imperative, then scope clarification. */}
+        {/* Welcome / empty-conversation state — Round 3 polish.
+            Migrated onto the shared EmptyState primitive (DS §15.12): icon
+            category signal (MessageSquare), one-line value prop from the
+            chat.welcome copy key, then a single action slot stacking the
+            starter chips + the New-conversation CTA. WHY the primitive now
+            (Wave K's ChatEmptyState deliberately skipped it): the Round-2
+            icon/action API additions cover exactly what the welcome needs,
+            so a hand-rolled layout is no longer justified.
+            The 6-card portfolio starter grid is replaced by 3-4 chips drawn
+            from the follow-ups generator's generic pool (sprint spec §4) —
+            the richer entity/portfolio starter cards still appear INSIDE a
+            new empty thread (STARTER_QUESTIONS grid below), so discovery is
+            deferred one click, not lost. */}
         {!activeThreadId && (
-          // WHY p-3 (was p-4): the empty-state welcome is rendered inside an
-          // already-bounded panel; 12px padding keeps the welcome text close
-          // to the surrounding panel chrome instead of floating in 16px ports.
-          <div className="flex flex-1 flex-col items-center justify-center gap-3 bg-background p-3 text-center">
-            <div className="space-y-1">
-              <p className="font-mono text-[10px] font-semibold uppercase tracking-[0.10em] text-muted-foreground">
-                Analyst Intelligence
-              </p>
-              <p className="max-w-[280px] text-[11px] leading-relaxed text-muted-foreground">
-                Research-grade Q&A on earnings, SEC filings, macro, and your
-                portfolio — grounded in real source documents, not hallucination.
-              </p>
-            </div>
-
-            {/* PLAN-0071 P2C-2: portfolio-scoped starter questions shown in
-                the no-thread-selected panel. Analysts landing here have no
-                active entity context — portfolio-level questions surface the
-                most immediately useful research directions. */}
-            <div className="mt-1 grid w-full max-w-[440px] grid-cols-2 gap-1.5">
-              {PORTFOLIO_STARTER_QUESTIONS.map((q, i) => (
-                <button
-                  key={i}
-                  type="button"
-                  onClick={() => {
-                    // Pre-fill the input state first — the textarea is not
-                    // mounted yet (activeThreadId is null), but setInput just
-                    // sets React state. When handleNewChat() sets activeThreadId
-                    // and the input area mounts, it will read the already-set value.
-                    setInput(q);
-                    handleNewChat();
-                  }}
-                  className="rounded-[2px] border border-border bg-card p-2.5 text-left text-[10px] leading-relaxed text-foreground hover:border-primary/40 hover:bg-muted/40 transition-colors duration-0"
-                >
-                  {q}
-                </button>
-              ))}
-            </div>
-
-            <Button
-              size="sm"
-              onClick={handleNewChat}
-              className="gap-1.5 bg-primary text-primary-foreground hover:bg-primary/90"
-            >
-              <Plus className="h-3.5 w-3.5" strokeWidth={1.5} />
-              New conversation
-            </Button>
+          <div className="flex flex-1 flex-col items-center justify-center bg-background p-3">
+            <EmptyState
+              condition="empty-cold-start"
+              copyKey="chat.welcome"
+              icon={MessageSquare}
+              action={
+                <div className="mt-1 flex max-w-[440px] flex-col items-center gap-3">
+                  {/* Reusing the FollowUpChips presenter keeps welcome chips
+                      pixel-identical to post-answer follow-up chips (same
+                      mono 10px chrome, hover, focus ring). ariaLabel swaps
+                      so screen readers announce "Starter prompts", not
+                      follow-ups to a nonexistent answer. */}
+                  <FollowUpChips
+                    suggestions={welcomeStarters}
+                    onPick={handlePickWelcomeStarter}
+                    ariaLabel="Starter prompts"
+                  />
+                  <Button
+                    size="sm"
+                    onClick={handleNewChat}
+                    className="gap-1.5 bg-primary text-primary-foreground hover:bg-primary/90"
+                  >
+                    <Plus className="h-3.5 w-3.5" strokeWidth={1.5} />
+                    New conversation
+                  </Button>
+                </div>
+              }
+            />
           </div>
         )}
 
@@ -1122,15 +1221,39 @@ export default function ChatPage() {
                 {/* WHY p-3 (was p-4): terminal-density reading area; matches
                     the post-F3 chat empty-state padding. Pass-2 defect 1G. */}
                 {threadLoading && (
-                  <div className="space-y-4" aria-label="Loading messages">
-                    {[...Array(3)].map((_, i) => (
-                      <Skeleton
-                        key={i}
-                        className={`h-16 w-2/3 rounded-[2px] ${
-                          i % 2 === 0 ? "self-end" : "self-start"
-                        }`}
-                      />
-                    ))}
+                  // Round 3 skeleton polish: bubble-SHAPED placeholders for
+                  // the thread-switch loading window. Two fixes over the old
+                  // version: (1) the wrapper was `space-y-4` (block layout),
+                  // so the `self-end`/`self-start` alternation NEVER applied
+                  // — flex-col makes the user/assistant alternation real;
+                  // (2) assistant-side rows now carry the 28px avatar square
+                  // so the silhouette matches MessageBubble exactly and the
+                  // real conversation materialises without a layout pop.
+                  <div
+                    className="flex flex-col gap-3"
+                    aria-label="Loading messages"
+                  >
+                    {[...Array(3)].map((_, i) =>
+                      i % 2 === 0 ? (
+                        // Even rows: user bubble silhouette (right-aligned).
+                        <Skeleton
+                          key={i}
+                          data-testid="message-skeleton-user"
+                          className="h-12 w-1/2 self-end rounded-[2px]"
+                        />
+                      ) : (
+                        // Odd rows: assistant silhouette — avatar square +
+                        // wider bubble, left-aligned like MessageBubble.
+                        <div
+                          key={i}
+                          data-testid="message-skeleton-assistant"
+                          className="flex items-end gap-2 self-start"
+                        >
+                          <Skeleton className="h-7 w-7 shrink-0 rounded-[2px]" />
+                          <Skeleton className="h-16 w-[260px] rounded-[2px]" />
+                        </div>
+                      ),
+                    )}
                   </div>
                 )}
 
@@ -1160,7 +1283,10 @@ export default function ChatPage() {
                             className={cn(
                               "rounded-[2px] border border-border bg-card",
                               "cursor-pointer p-3 text-left",
-                              "hover:border-primary/40 hover:bg-muted/40",
+                              // Round 3 hover/focus polish: hover bg-muted
+                              // (sprint-canonical) + keyboard focus ring.
+                              "hover:border-primary/40 hover:bg-muted",
+                              "focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-primary",
                               "text-[11px] leading-relaxed text-foreground",
                               "transition-colors duration-0",
                             )}
@@ -1191,8 +1317,13 @@ export default function ChatPage() {
                     WHY pl-9: indents the chips to align with the assistant
                     bubble text (28px avatar + 8px gap), reading as "options
                     attached to this answer" rather than a free-floating row. */}
+                {/* Round 3 transition polish: min-h matches the spacer
+                    reserved below the StreamingBubble while the answer is in
+                    flight — when the stream settles, the chips slot replaces
+                    the spacer 1:1 so the column's bottom edge doesn't move
+                    (no layout jump, no scroll fight). */}
                 {followUpSuggestions.length > 0 && (
-                  <div className="pl-9">
+                  <div className="min-h-[26px] pl-9">
                     <FollowUpChips
                       suggestions={followUpSuggestions}
                       onPick={handlePickFollowUp}
@@ -1224,6 +1355,18 @@ export default function ChatPage() {
                   />
                 ) : null}
 
+                {/* Round 3 transition polish: reserve the follow-up chips'
+                    row height (26px ≈ chip 22px + mt-1) while the answer is
+                    streaming. When the stream settles, the StreamingBubble is
+                    replaced by the final MessageBubble AND the chips render —
+                    in the SAME commit (the chips memo derives synchronously
+                    from localMessages). With this spacer the chips occupy
+                    already-reserved space instead of growing the column,
+                    so the settled answer doesn't "jump" down a line. */}
+                {streaming ? (
+                  <div className="min-h-[26px]" aria-hidden="true" />
+                ) : null}
+
                 {chatError && (
                   // Round 1 Foundation: failed sends now surface a Retry CTA.
                   // WHY role=alert: error text must be announced by screen
@@ -1240,7 +1383,10 @@ export default function ChatPage() {
                       // hook) and clears this banner eagerly so the user sees
                       // the new attempt start immediately.
                       onClick={() => void retry()}
-                      className="mt-2 inline-flex items-center gap-1 rounded-[2px] border border-destructive/40 px-2 py-1 text-[11px] font-medium hover:bg-destructive/20"
+                      // Round 3 focus polish: keyboard-visible ring on the
+                      // Retry CTA — destructive-context ring colour so the
+                      // focus visual stays inside the banner's palette.
+                      className="mt-2 inline-flex items-center gap-1 rounded-[2px] border border-destructive/40 px-2 py-1 text-[11px] font-medium hover:bg-destructive/20 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-destructive"
                     >
                       <RotateCcw className="h-3 w-3" strokeWidth={1.5} />
                       Retry
@@ -1306,7 +1452,9 @@ export default function ChatPage() {
                       // WHY tabular-nums: ticker characters are numbers/letters at
                       // a uniform width — tabular-nums prevents layout shift when
                       // the chip content changes (e.g. on thread switch).
-                      className="rounded-[2px] border border-border/70 bg-muted/30 px-1.5 py-0.5 font-mono text-[10px] tabular-nums text-foreground transition-colors hover:border-primary/50 hover:text-primary"
+                      // Round 3 focus polish: keyboard ring matching the
+                      // context rail's ticker chips (same chip species).
+                      className="rounded-[2px] border border-border/70 bg-muted/30 px-1.5 py-0.5 font-mono text-[10px] tabular-nums text-foreground transition-colors hover:border-primary/50 hover:text-primary focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-primary"
                     >
                       {ticker}
                     </button>
@@ -1334,14 +1482,39 @@ export default function ChatPage() {
                   value={input}
                   onChange={(e) => setInput(e.target.value)}
                   onKeyDown={handleKeyDown}
-                  placeholder="Ask about markets, companies, news…  Type / for commands. (Enter to send, Shift+Enter for newline)"
+                  // Round 3 input polish: lead with WHAT to ask (the sprint's
+                  // canonical helpful prompt), keep the / discovery hint, and
+                  // drop the Enter/Shift+Enter legend — key behaviour is
+                  // muscle-memory by now and the legend made the placeholder
+                  // a wall of text. While streaming, the placeholder explains
+                  // WHY the input is disabled instead of going silent —
+                  // "visually clear but not jarring": the user reads intent,
+                  // not just greyed-out chrome.
+                  placeholder={
+                    isStreaming
+                      ? "Generating — use Stop to interrupt…"
+                      : "Ask about any company, sector, or your portfolio…  Type / for commands."
+                  }
                   rows={2}
                   disabled={isStreaming}
+                  // Round 3: aria-busy tells assistive tech the input is
+                  // temporarily unavailable (not broken) during the stream.
+                  aria-busy={isStreaming}
                   maxLength={2000}
                   // Density bundle 2026-05-09: textarea text-sm (14px) →
                   // text-[12px] to align with the rest of the chat surface
                   // density. The 14px size felt like a consumer-app input.
-                  className="flex-1 resize-none rounded-[2px] border border-border bg-muted px-3 py-2 text-[12px] text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-primary disabled:cursor-not-allowed disabled:bg-[hsl(var(--disabled-bg))] disabled:text-[hsl(var(--disabled-foreground))] disabled:border-[hsl(var(--disabled-border))]"
+                  // Round 3 focus polish: FocusRing.T2_INPUT adds the
+                  // :focus-visible variant alongside the existing :focus ring
+                  // (the composer keeps its ring on plain click-focus too —
+                  // sprint spec §5). Disabled state keeps the platform's
+                  // disabled-* tokens (consistent with every other input).
+                  className={cn(
+                    "flex-1 resize-none rounded-[2px] border border-border bg-muted px-3 py-2 text-[12px] text-foreground placeholder:text-muted-foreground",
+                    "focus:outline-none",
+                    FocusRing.T2_INPUT,
+                    "disabled:cursor-not-allowed disabled:bg-[hsl(var(--disabled-bg))] disabled:text-[hsl(var(--disabled-foreground))] disabled:border-[hsl(var(--disabled-border))]",
+                  )}
                   aria-label="Chat message input"
                 />
 

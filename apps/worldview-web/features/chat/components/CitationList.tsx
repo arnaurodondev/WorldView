@@ -123,7 +123,11 @@ export function CitationList({ citations }: { citations: Citation[] }) {
             href={safeExternalUrl(cite.url)}
             target="_blank"
             rel="noopener noreferrer"
-            className={`${badgeClass} hover:border-primary/50 hover:text-primary`}
+            // Round 3 focus polish: linked badges are tab stops — give them a
+            // visible :focus-visible ring (Tier-2 input ring weight) so
+            // keyboard users can tell WHICH citation Enter will open. Outline
+            // suppressed only for the focus-visible case we restyle.
+            className={`${badgeClass} hover:border-primary/50 hover:text-primary focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-primary`}
             title={tooltip}
           >
             {inner}

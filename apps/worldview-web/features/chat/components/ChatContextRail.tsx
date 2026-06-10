@@ -186,7 +186,12 @@ function SectionHeader({ label, count }: SectionHeaderProps) {
     // rail content from bleeding together. border-border/30 is subtle — the
     // section label carries most of the visual weight.
     <div className="flex items-center justify-between border-t border-border/30 px-3 py-1.5">
-      <span className="font-mono text-[9px] font-semibold uppercase tracking-[0.10em] text-muted-foreground">
+      {/* Round 3 typography: section labels now match the app-wide
+          widget-header pattern (sans `text-[9px] uppercase tracking-[0.08em]
+          text-muted-foreground`, cf. dashboard widgets). The old font-mono
+          treatment was a misread of ADR-F-15 — mono is for NUMERIC DATA, not
+          headings; headers across the platform are IBM Plex Sans. */}
+      <span className="text-[9px] font-semibold uppercase tracking-[0.08em] text-muted-foreground">
         {label}
       </span>
       {count !== undefined && (
@@ -225,8 +230,17 @@ function EntityCard({ entityId }: EntityCardProps) {
   });
 
   if (isLoading) {
+    // Round 3 skeleton polish: the loading state now wears the SAME card
+    // chrome (mx-3 my-2 border bg-card) as the populated card below, so the
+    // card doesn't "materialise" with a border+background pop when data
+    // lands — only the inner bars swap for real text. Bar widths echo the
+    // populated layout: ticker+name row, price row, mktcap/vol row.
     return (
-      <div className="space-y-1.5 px-3 py-2">
+      <div
+        className="mx-3 my-2 space-y-1.5 rounded-[2px] border border-border/20 bg-card px-3 py-2"
+        data-testid="entity-card-skeleton"
+        aria-label="Loading entity overview"
+      >
         <Skeleton className="h-3 w-24 rounded-[2px]" />
         <Skeleton className="h-3 w-32 rounded-[2px]" />
         <Skeleton className="h-3 w-20 rounded-[2px]" />
@@ -254,7 +268,9 @@ function EntityCard({ entityId }: EntityCardProps) {
         <span className="font-mono text-[11px] font-bold text-foreground">
           {ticker}
         </span>
-        <span className="max-w-[140px] truncate text-right font-mono text-[9px] text-muted-foreground">
+        {/* Round 3 typography: company name is prose, not a numeric — sans
+            (ADR-F-15 mono is for numbers; the mini-card name matches). */}
+        <span className="max-w-[140px] truncate text-right text-[9px] text-muted-foreground">
           {instrument?.name ?? ""}
         </span>
       </div>
@@ -283,7 +299,9 @@ function EntityCard({ entityId }: EntityCardProps) {
             </span>
           )}
           {pe !== null && (
-            <span className="font-mono text-[9px] text-muted-foreground">
+            // Round 3 (ADR-F-15 §15.9 amendment): P/E is a FINANCIAL VALUE —
+            // 10px minimum applies; 9px is reserved for non-data metadata.
+            <span className="font-mono text-[10px] text-muted-foreground">
               · P/E {formatRatio(pe, "")}
             </span>
           )}
@@ -291,8 +309,10 @@ function EntityCard({ entityId }: EntityCardProps) {
       )}
 
       {/* Market cap + volume row */}
+      {/* Round 3 (ADR-F-15 §15.9 amendment): market cap + volume are
+          financial values → text-[9px] bumped to the 10px data minimum. */}
       {(mktCap !== null || vol !== null) && (
-        <div className="mt-0.5 flex gap-2 font-mono text-[9px] text-muted-foreground">
+        <div className="mt-0.5 flex gap-2 font-mono text-[10px] text-muted-foreground">
           {mktCap !== null && <span>Mkt cap {formatMarketCap(mktCap)}</span>}
           {vol !== null && <span>Vol {formatMarketCap(vol)}</span>}
         </div>
@@ -407,7 +427,11 @@ function EntityMiniCard({ ticker, onClick }: EntityMiniCardProps) {
         // Hover affordance only when clickable; transition-colors duration-0
         // honours the no-animation terminal mandate while keeping the class
         // structure consistent with the chips above.
-        onClick && "transition-colors duration-0 hover:border-primary/40 hover:bg-muted/40",
+        // Round 3 hover/focus polish: hover bg → bg-muted (sprint-canonical
+        // interactive-surface hover) + a :focus-visible ring so keyboard
+        // users tabbing through the card stack see the focused card.
+        onClick &&
+          "transition-colors duration-0 hover:border-primary/40 hover:bg-muted focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-primary",
       )}
     >
       {/* Ticker + name (truncated) */}
@@ -416,7 +440,10 @@ function EntityMiniCard({ ticker, onClick }: EntityMiniCardProps) {
           {displayTicker}
         </span>
         {name && (
-          <span className="max-w-[110px] truncate text-right font-mono text-[8px] text-muted-foreground">
+          // Round 3 typography: 8px was below even the §15.9 metadata floor
+          // (9px). Company name is non-data metadata → 9px, and sans (names
+          // are prose, not numerics — ADR-F-15 mono is for numbers).
+          <span className="max-w-[110px] truncate text-right text-[9px] text-muted-foreground">
             {name}
           </span>
         )}
@@ -431,7 +458,9 @@ function EntityMiniCard({ ticker, onClick }: EntityMiniCardProps) {
           {changePct !== null && (
             <span
               className={cn(
-                "font-mono text-[9px]",
+                // Round 3 (ADR-F-15 §15.9 amendment): %chg is a financial
+                // value → 10px minimum (was 9px). Matches EntityCard's %chg.
+                "font-mono text-[10px]",
                 // WHY same colour pattern as EntityCard: positive = green,
                 // negative = red, neutral = muted.  Visual consistency means
                 // the analyst doesn't re-learn the colour code between cards.
@@ -450,8 +479,11 @@ function EntityMiniCard({ ticker, onClick }: EntityMiniCardProps) {
       )}
 
       {/* P/E + Mkt Cap — one compact row */}
+      {/* Round 3 (ADR-F-15 §15.9 amendment): P/E + market cap are FINANCIAL
+          VALUES — 8px violated the hard 10px data floor ("using 9px for a
+          price or P&L percentage is a typography error", and 8px doubly so). */}
       {(pe !== null || mktCap !== null) && (
-        <div className="mt-0.5 flex gap-1.5 font-mono text-[8px] text-muted-foreground">
+        <div className="mt-0.5 flex gap-1.5 font-mono text-[10px] text-muted-foreground">
           {pe !== null && <span>P/E {formatRatio(pe, "")}</span>}
           {mktCap !== null && <span>Cap {formatMarketCap(mktCap)}</span>}
         </div>
@@ -536,7 +568,11 @@ export function ChatContextRail({
     <div className="flex h-full flex-col bg-background">
       {/* Rail header — 28px, border-b */}
       <div className="flex h-7 shrink-0 items-center justify-between border-b border-border px-3">
-        <span className="font-mono text-[9px] font-semibold uppercase tracking-[0.10em] text-muted-foreground">
+        {/* Round 3 typography: panel header aligned to the widget-header
+            pattern (10px sans uppercase, tracking 0.08em) — one step above
+            the 9px section labels below, mirroring the dashboard widgets'
+            header → sub-label hierarchy. Mono dropped (headers ≠ data). */}
+        <span className="text-[10px] font-semibold uppercase tracking-[0.08em] text-muted-foreground">
           Context
         </span>
         {/* WHY X button: Cmd+\ is keyboard-only. Analysts using mouse need a
@@ -545,7 +581,9 @@ export function ChatContextRail({
         <button
           type="button"
           onClick={onClose}
-          className="flex h-5 w-5 items-center justify-center rounded-[2px] text-muted-foreground hover:bg-muted/50 hover:text-foreground"
+          // Round 3 hover/focus polish: hover → bg-muted (sprint-canonical)
+          // + visible keyboard focus ring on the chrome button.
+          className="flex h-5 w-5 items-center justify-center rounded-[2px] text-muted-foreground hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-primary"
           aria-label="Close context rail"
         >
           <X className="h-3 w-3" strokeWidth={1.5} />
@@ -588,7 +626,9 @@ export function ChatContextRail({
                   // affordance only; the href="#" is a no-op placeholder.
                   onClick={(e) => e.preventDefault()}
                   title={cit.title}
-                  className="flex items-start gap-1.5 py-1 text-foreground hover:text-primary"
+                  // Round 3 focus polish: rows are tab stops — Tier-1 inset
+                  // hairline outline (data-row treatment, no chrome ring).
+                  className="flex items-start gap-1.5 py-1 text-foreground hover:text-primary focus-visible:outline-1 focus-visible:outline-primary focus-visible:outline-offset-[-1px]"
                 >
                   {/* Citation index */}
                   <span className="shrink-0 font-mono text-[9px] text-muted-foreground">
@@ -660,6 +700,8 @@ export function ChatContextRail({
                     // WHY hover:border-primary/50: matches the entity chips in
                     // the composer footer — visual language consistency.
                     "transition-colors hover:border-primary/50 hover:bg-primary/10",
+                    // Round 3 focus polish: keyboard-visible ring on chips.
+                    "focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-primary",
                   )}
                 >
                   ${ticker}

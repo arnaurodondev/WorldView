@@ -36,6 +36,14 @@ interface FollowUpChipsProps {
    * pattern) but the chip stays neutral about that policy.
    */
   readonly onPick: (suggestion: string) => void;
+  /**
+   * Accessible name for the chip list (Round 3). Default keeps the original
+   * "Follow-up suggestions" so existing call sites + tests are unchanged;
+   * the empty-conversation welcome re-uses this presenter with
+   * "Starter prompts" so screen readers don't announce starters as
+   * follow-ups to an answer that doesn't exist yet.
+   */
+  readonly ariaLabel?: string;
 }
 
 // Lower / upper bounds per design §5. Under 2 we render null; over 4 we
@@ -50,7 +58,11 @@ const MAX_CHIPS = 4;
  * Each chip carries `data-cell` so the Wave K density e2e (T-23) counts
  * them toward the above-fold cell budget.
  */
-export function FollowUpChips({ suggestions, onPick }: FollowUpChipsProps) {
+export function FollowUpChips({
+  suggestions,
+  onPick,
+  ariaLabel = "Follow-up suggestions",
+}: FollowUpChipsProps) {
   if (suggestions.length < MIN_CHIPS) return null;
   // slice() is safe with `n > length` — returns the whole array.
   const visible = suggestions.slice(0, MAX_CHIPS);
@@ -59,7 +71,7 @@ export function FollowUpChips({ suggestions, onPick }: FollowUpChipsProps) {
     <div
       className="mt-1 flex flex-wrap gap-1"
       role="list"
-      aria-label="Follow-up suggestions"
+      aria-label={ariaLabel}
     >
       {visible.map((suggestion, idx) => (
         <button
@@ -69,7 +81,11 @@ export function FollowUpChips({ suggestions, onPick }: FollowUpChipsProps) {
           // tabular-nums is mostly cosmetic here (the chip text is
           // English) but it keeps any numbers inside a suggestion
           // (e.g. "P/E ratio of 24") aligned with the rest of the chat.
-          className="border border-border bg-card px-2 py-0.5 text-[10px] font-mono tabular-nums text-foreground hover:bg-muted/40 hover:text-primary transition-color-only duration-75"
+          // Round 3 polish: hover → bg-muted (the sprint's canonical chip
+          // hover, was bg-muted/40) and an explicit :focus-visible ring so
+          // keyboard users tabbing through chips see exactly where they are
+          // (native button outline is suppressed for the custom ring).
+          className="border border-border bg-card px-2 py-0.5 text-[10px] font-mono tabular-nums text-foreground hover:bg-muted hover:text-primary focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-primary transition-color-only duration-75"
           onClick={() => onPick(suggestion)}
           title={suggestion}
         >

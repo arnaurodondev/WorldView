@@ -770,3 +770,103 @@ describe("Chat page — error state with Retry (Round 1 Foundation)", () => {
     vi.unstubAllGlobals();
   });
 });
+
+// ── Tests: Round 3 Polish — welcome state, skeletons, starter chips ──────────
+
+describe("Chat page — Round 3 polish (welcome + skeletons)", () => {
+  beforeEach(() => {
+    uuidCounter = 0;
+    vi.clearAllMocks();
+  });
+
+  it("welcome state shows the EmptyState copy + 4 starter chips from the generic follow-up pool", async () => {
+    // welcomeStarterPrompts is the SAME pool generateFollowUps pads from —
+    // importing it here pins the "one suggestion vocabulary" contract: if
+    // the pool and the welcome ever diverge, this assertion breaks.
+    const { welcomeStarterPrompts } = await import(
+      "@/features/chat/lib/follow-ups"
+    );
+
+    await renderChatPage();
+
+    // EmptyState title (chat.welcome copy key) — the pinned welcome label.
+    await waitFor(() => {
+      expect(screen.getByText("Analyst Intelligence")).toBeInTheDocument();
+    });
+
+    // Exactly 4 starter chips, in pool order, under the dedicated
+    // accessible name (NOT "Follow-up suggestions" — no answer exists yet).
+    const list = screen.getByRole("list", { name: "Starter prompts" });
+    const chips = Array.from(list.querySelectorAll("button"));
+    expect(chips.length).toBe(4);
+    expect(chips.map((c) => c.textContent)).toEqual(welcomeStarterPrompts(4));
+  });
+
+  it("clicking a welcome starter chip starts a new chat with the prompt pre-filled", async () => {
+    // REGRESSION (Round 3 fix): the old welcome cards called setInput(q)
+    // BEFORE handleNewChat() — whose trailing setInput("") clobbered the
+    // prompt in the same commit, so the composer always came up blank.
+    await renderChatPage();
+
+    const list = await screen.findByRole("list", { name: "Starter prompts" });
+    const firstChip = list.querySelectorAll("button")[0];
+    const promptText = firstChip.textContent ?? "";
+    expect(promptText.length).toBeGreaterThan(0);
+
+    fireEvent.click(firstChip);
+
+    // A new (ephemeral) thread mounts the composer with the prompt intact.
+    await waitFor(() => {
+      const textarea = screen.getByRole("textbox", {
+        name: /chat message input/i,
+      }) as HTMLTextAreaElement;
+      expect(textarea.value).toBe(promptText);
+    });
+  });
+
+  it("shows row-shaped thread skeletons (not blank) while the thread list loads", async () => {
+    const { createGateway } = await import("@/lib/gateway");
+    // Never-resolving getThreads pins the loading state for the assertion
+    // window. mockReturnValueOnce: only the threads queryFn's createGateway
+    // call (the first on mount — every other query is disabled) is hijacked.
+    vi.mocked(createGateway).mockReturnValueOnce({
+      getThreads: vi.fn().mockReturnValue(new Promise(() => {})),
+      getThread: vi.fn(),
+      deleteThread: vi.fn(),
+    } as unknown as ReturnType<typeof createGateway>);
+
+    await renderChatPage();
+
+    // Skeleton container + exactly 5 two-line row placeholders.
+    expect(await screen.findByLabelText("Loading threads")).toBeInTheDocument();
+    expect(screen.getAllByTestId("thread-skeleton-row").length).toBe(5);
+  });
+
+  it("shows bubble-shaped message skeletons while switching to a thread whose history is loading", async () => {
+    const { createGateway } = await import("@/lib/gateway");
+    // Threads list resolves (so a row is clickable); the per-thread history
+    // fetch never resolves (pins the message-skeleton state). The page calls
+    // createGateway once per queryFn invocation: mount (threads) + thread
+    // select (history) — hijack both calls with the same partial mock.
+    const gw = {
+      getThreads: vi.fn().mockResolvedValue(SAMPLE_THREADS),
+      getThread: vi.fn().mockReturnValue(new Promise(() => {})),
+      deleteThread: vi.fn(),
+    } as unknown as ReturnType<typeof createGateway>;
+    vi.mocked(createGateway).mockReturnValueOnce(gw).mockReturnValueOnce(gw);
+
+    await renderChatPage();
+
+    // Select the first server thread → history query fires and hangs.
+    await waitFor(() => {
+      expect(screen.getByText("NVDA Q4 earnings analysis")).toBeInTheDocument();
+    });
+    fireEvent.click(screen.getByText("NVDA Q4 earnings analysis"));
+
+    // Bubble placeholders: alternating user (right) / assistant (left,
+    // avatar square + bubble) silhouettes — never a blank pane.
+    expect(await screen.findByLabelText("Loading messages")).toBeInTheDocument();
+    expect(screen.getAllByTestId("message-skeleton-user").length).toBe(2);
+    expect(screen.getAllByTestId("message-skeleton-assistant").length).toBe(1);
+  });
+});

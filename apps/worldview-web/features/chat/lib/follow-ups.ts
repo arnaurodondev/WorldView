@@ -142,6 +142,21 @@ const GENERIC_TEMPLATES: readonly string[] = [
 ];
 
 /**
+ * welcomeStarterPrompts — the chat page's empty-conversation welcome chips
+ * (Round 3 polish) draw from the SAME generic pool as the post-answer
+ * follow-up chips, so the "what can I ask?" language an analyst sees before
+ * the first message matches the suggestions they see after every answer.
+ *
+ * WHY no hash rotation (unlike generateFollowUps): the welcome has no answer
+ * text to seed from — a stable, deterministic slice keeps the welcome
+ * identical across reloads (a reshuffling welcome reads as a glitch) and
+ * keeps the Vitest assertions exact.
+ */
+export function welcomeStarterPrompts(count = 4): string[] {
+  return GENERIC_TEMPLATES.slice(0, count);
+}
+
+/**
  * Citation titles can be long ("Apple Reports Record Q2 2026 Results Amid…").
  * Chips must stay scannable, so we hard-truncate with an ellipsis.
  */

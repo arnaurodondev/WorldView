@@ -111,7 +111,9 @@ export function ToolTraceDrawer({ trace, onClose }: ToolTraceDrawerProps) {
           type="button"
           onClick={onClose}
           aria-label="Close tool trace"
-          className="rounded-[2px] p-0.5 text-muted-foreground hover:text-foreground"
+          // Round 3 hover/focus polish: hover bg-muted + keyboard focus ring
+          // (matches the context-rail close button treatment).
+          className="rounded-[2px] p-0.5 text-muted-foreground hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-primary"
         >
           <X className="h-3.5 w-3.5" strokeWidth={1.5} />
         </button>

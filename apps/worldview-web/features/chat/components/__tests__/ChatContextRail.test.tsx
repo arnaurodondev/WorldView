@@ -504,3 +504,26 @@ describe("ChatContextRail — Entity Overview mini-cards (Round 2)", () => {
     expect(screen.queryByTestId("entity-mini-card")).not.toBeInTheDocument();
   });
 });
+
+// ── Round 3 Polish — skeleton presence ────────────────────────────────────────
+
+describe("ChatContextRail — loading skeletons (Round 3)", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("renders a card-SHAPED skeleton for the primary entity card while the overview loads", () => {
+    // Pin the loading state: every useQuery in the rail reports in-flight.
+    vi.mocked(useQuery).mockReturnValue({
+      data: undefined,
+      isLoading: true,
+    } as unknown as ReturnType<typeof useQuery>);
+
+    render(<ChatContextRail {...DEFAULT_PROPS} entityId="entity-uuid-1" />);
+
+    // The skeleton wears the SAME card chrome as the populated EntityCard
+    // (border + bg-card) so data landing doesn't pop a border into view —
+    // the testid pins that the card-shaped variant (not bare bars) renders.
+    expect(screen.getByTestId("entity-card-skeleton")).toBeInTheDocument();
+  });
+});

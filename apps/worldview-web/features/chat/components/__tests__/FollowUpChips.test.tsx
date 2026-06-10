@@ -39,6 +39,34 @@ describe("FollowUpChips (Wave K T-13)", () => {
     expect(chips.length).toBe(4);
   });
 
+  it("defaults the list aria-label to 'Follow-up suggestions' and honours an override (Round 3)", () => {
+    // Default: existing call sites + the thread-param page test rely on the
+    // original accessible name — the new prop must not change it.
+    const { rerender } = render(
+      <FollowUpChips suggestions={["a", "b"]} onPick={vi.fn()} />,
+    );
+    expect(
+      screen.getByRole("list", { name: "Follow-up suggestions" }),
+    ).toBeInTheDocument();
+
+    // Override: the empty-conversation welcome reuses this presenter with
+    // "Starter prompts" so screen readers don't announce starters as
+    // follow-ups to an answer that doesn't exist yet.
+    rerender(
+      <FollowUpChips
+        suggestions={["a", "b"]}
+        onPick={vi.fn()}
+        ariaLabel="Starter prompts"
+      />,
+    );
+    expect(
+      screen.getByRole("list", { name: "Starter prompts" }),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByRole("list", { name: "Follow-up suggestions" }),
+    ).not.toBeInTheDocument();
+  });
+
   it("invokes onPick with the suggestion text on click", () => {
     // WHY exact string match: the caller (chat page) sends the chip text
     // as a chat message. A truncation here would mean the LLM sees a
