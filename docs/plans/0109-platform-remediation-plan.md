@@ -203,6 +203,53 @@ worldview-web · api-gateway · market-data · market-ingestion · content-inges
 **Break impact**: none (additive behavior). Existing tests for the worker still pass.
 **Regression guardrails**: feedback_audit_returned_value_persistence (worker returning diagnostics without persisting them); feedback_prompt_input_mismatch (silent drop on parse failure).
 
+## Wave B-3 — get_price_history flexibility (H-4 fix, rides along)
+
+**Why in Sub-Plan B**: small (~30 LOC + 3 tests), unrelated to relevance worker but cheaper to ship in the same PR as B-1 since both touch rag-chat. Replaces today's implicit 7-day fallback (shipped in commit `9a8bb6244`) with explicit LLM-controllable parameters.
+
+### T-B-3-01: Extend `get_price_history` tool spec with `last_n_bars` + `lookback_days`
+- **Type**: impl
+- **Target**:
+  - `services/rag-chat/src/rag_chat/application/pipeline/tool_registry_builder.py` — add two optional `ParameterSpec`s.
+  - `libs/prompts/.../capability_manifest.yaml` — sync schema (R29 parity check enforces this).
+- **New parameters**:
+  - `last_n_bars: int | None` — "give me the most recent N bars of the specified interval".
+  - `lookback_days: int | None` — "give me bars from the last N days".
+- **Existing parameters retained**: `ticker`, `interval`, `from_date`, `to_date` (now all optional except `ticker`).
+
+### T-B-3-02: Handler param routing
+- **Type**: impl
+- **Target**: `services/rag-chat/src/rag_chat/application/pipeline/handlers/market.py` `_handle_get_price_history` (lines ~254-345).
+- **Priority order** (explicit > implicit):
+  1. If `from_date` AND `to_date` provided → use them verbatim (existing behavior preserved).
+  2. Else if `last_n_bars` provided → compute `from_date = today - max(N × interval_seconds + buffer, 1 day)`, `to_date = today`. Post-fetch, take last `N` rows from result.
+  3. Else if `lookback_days` provided → compute `from_date = today - lookback_days`, `to_date = today`.
+  4. Else (no temporal args) → default to `last_n_bars=20` (one screen of bars).
+- **Remove** the implicit 7-day 1m fallback shipped today — the LLM now expresses "give me the most recent 1m bar" explicitly as `last_n_bars: 1, interval: "1m"`.
+
+### T-B-3-03: Tool description update
+- **Type**: impl
+- **Change**: tool description in `tool_registry_builder.py` explicitly states the new patterns, with examples like:
+  > Use `last_n_bars: 1, interval: "1m"` for "what is X trading at?" (works 24/7, returns the most recent minute bar).
+  > Use `last_n_bars: 7, interval: "day"` for "the last week of daily prices".
+  > Use `lookback_days: 30, interval: "hour"` for "the last 30 days of hourly bars".
+
+### T-B-3-04: Tests
+- **Type**: test
+- **Cases**:
+  - `test_last_n_bars_returns_n_most_recent` (e.g. request 3 daily bars, mock returns 10, assert result contains the 3 latest).
+  - `test_lookback_days_computes_correct_window` (e.g. `lookback_days=7` → from=`today-7d`, to=`today`).
+  - `test_explicit_from_to_overrides_other_params` (precedence test).
+  - `test_after_hours_current_price_via_last_n_bars_1_1m` (the user-visible "what is AAPL at" case — replaces today's implicit fallback test).
+  - Update existing 5 TestGetPriceHistory tests for the new param surface.
+
+**Validation gate**:
+- [ ] All TestGetPriceHistory tests pass (≥9 total)
+- [ ] R29 capability_manifest parity check passes
+- [ ] Manual rag-chat smoke: "What is AAPL trading at?" returns a fresh quote 24/7
+
+**Break impact**: tool param schema is purely additive (new fields optional); existing call sites unaffected. Update the `intelligence-columns` test if it asserts on tool definitions.
+
 ---
 
 # Sub-Plan C — News Ingestion Per-Source Remediation {#sub-plan-c}
