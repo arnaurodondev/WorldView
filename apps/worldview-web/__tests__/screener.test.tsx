@@ -25,7 +25,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { render, screen, waitFor, act } from "@testing-library/react";
+import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 // PLAN-0059 C-6: ScreenerPage uses nuqs URL state (sector + capTier).
@@ -58,9 +58,14 @@ vi.mock("react", async (importOriginal) => {
 });
 
 // ── Next.js router mock ───────────────────────────────────────────────────────
+// WHY vi.hoisted: vi.mock factories are hoisted above imports, so a plain
+// `const pushMock` defined here would not exist yet when the factory runs.
+// vi.hoisted lifts the declaration alongside the mock so tests can assert
+// against the SAME push spy the component receives (row-click navigation).
+const { pushMock } = vi.hoisted(() => ({ pushMock: vi.fn() }));
 vi.mock("next/navigation", () => ({
   useRouter: vi.fn(() => ({
-    push: vi.fn(),
+    push: pushMock,
     replace: vi.fn(),
     prefetch: vi.fn(),
   })),
@@ -364,6 +369,69 @@ describe("ScreenerPage — data rows", () => {
     await waitFor(() => {
       expect(screen.getByText("3.0T")).toBeInTheDocument();
     });
+  });
+});
+
+// ── ScreenerPage — row click navigation (ROUND-1 item 6) ─────────────────────
+
+describe("ScreenerPage — row click navigation", () => {
+  beforeEach(() => {
+    pushMock.mockClear();
+  });
+
+  it("navigates to /instruments/<TICKER> when a row is clicked", async () => {
+    const user = userEvent.setup();
+    render(<ScreenerPage />, { wrapper: makeWrapper() });
+
+    // Wait for the grid to render the mocked rows.
+    const aaplCell = await screen.findByText("AAPL");
+
+    // Clicking any cell bubbles to AG Grid's rowClicked handler.
+    await user.click(aaplCell);
+
+    // ROUND-1 fix: the canonical instrument route is the TICKER slug
+    // (app/(app)/instruments/[ticker]) — NOT the entity_id UUID. The mock row
+    // has entity_id "ent-1"; asserting the ticker URL pins the fix.
+    expect(pushMock).toHaveBeenCalledWith("/instruments/AAPL");
+  });
+});
+
+// ── ScreenerPage — empty state + Reset filters CTA (ROUND-1 item 8) ──────────
+
+describe("ScreenerPage — empty state with Reset filters CTA", () => {
+  it("shows 'No results match your filters' + Reset CTA when filters exclude all rows, and reset restores them", async () => {
+    const user = userEvent.setup();
+    render(<ScreenerPage />, { wrapper: makeWrapper() });
+
+    // Wait for data, then apply a search filter that matches nothing.
+    // The search filter is client-side (applyClientFilters), so the mocked
+    // gateway keeps returning both rows — they are filtered out locally.
+    await screen.findByText("AAPL");
+    await user.click(screen.getByRole("button", { name: /toggle screener filters/i }));
+    await user.type(
+      screen.getByLabelText(/search instruments by name or ticker/i),
+      "ZZZZNOMATCH",
+    );
+    await user.click(screen.getByRole("button", { name: /apply filters/i }));
+
+    // Empty state appears with the standardized title + CTA.
+    await waitFor(() => {
+      expect(screen.getByText("No results match your filters")).toBeInTheDocument();
+    });
+    // WHY the long accessible name: the filter bar's own bottom-toolbar Reset
+    // button is also in the DOM (aria-label "Reset filters"); the CTA carries
+    // a unique label so role queries are unambiguous.
+    const resetCta = screen.getByRole("button", {
+      name: /reset filters and show all instruments/i,
+    });
+    expect(resetCta).toBeInTheDocument();
+
+    // Clicking Reset filters clears the search filter → rows come back.
+    await user.click(resetCta);
+    await waitFor(() => {
+      expect(screen.getByText("AAPL")).toBeInTheDocument();
+    });
+    expect(screen.queryByText("No results match your filters")).not.toBeInTheDocument();
   });
 });
 

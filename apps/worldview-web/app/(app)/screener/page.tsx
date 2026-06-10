@@ -341,8 +341,18 @@ export default function ScreenerPage() {
             case "revenue":   return row.revenue ?? null;
             case "beta":      return row.beta ?? null;
             case "score":     return row.market_impact_score != null ? Math.round(row.market_impact_score * 100) : null;
-            case "range52w":  return "";
-            case "volume":    return "";
+            // ROUND-1 fix: range52w and volume used to export "" even when data
+            // existed. range52w exports the position-in-range percent (0 = at
+            // 52W low, 100 = at 52W high) — the same number the bar visualises.
+            case "range52w": {
+              const lo = row.dist_from_52w_low_pct;
+              const hi = row.dist_from_52w_high_pct;
+              if (lo == null || hi == null) return null;
+              const span = lo + Math.abs(hi);
+              return span === 0 ? 100 : Math.round(Math.min(100, Math.max(0, (lo / span) * 100)));
+            }
+            // volume column displays avg_volume_30d — export the same field.
+            case "volume":    return row.avg_volume_30d ?? null;
             case "sparkline": return "";
             default:          return "";
           }
@@ -453,17 +463,32 @@ export default function ScreenerPage() {
           to clip the grid correctly. The toolbar escapes this container by
           design (fixed positioning). */}
       <div className="flex-1 min-h-0 flex flex-col overflow-hidden relative">
+        {/* ── Sorting (ROUND-1 item 5) ─────────────────────────────────────
+            Single-column sort: click any header (all numeric columns set
+            sortable: true in ag-screener-columns.tsx).
+            Multi-column sort: Shift+Click additional headers — this is AG
+            Grid's NATIVE default (gridOptions.suppressMultiSort defaults to
+            false and the default multi-sort modifier key is Shift; only
+            setting multiSortKey="ctrl" would change it). AgGridBase does not
+            override either option, so no extra config is required here —
+            this comment exists so nobody "adds" multi-sort again. */}
         <AgGridBase<ScreenerResult>
           rowData={filteredRows}
           columnDefs={agColumns}
           getRowId={(p) => p.data.instrument_id}
           onGridReady={handleGridReady}
           onRowClicked={(row) =>
-            // FR-4.1: entity_id is always present and non-null (ScreenerResult guarantees
-            // both fields as string). Navigate via entity_id — the canonical KG identifier
-            // that the instrument detail page expects. instrument_id is the S3 data ID;
-            // entity_id is the stable cross-service bridge (ADR-F-12).
-            router.push(`/instruments/${row.entity_id}`)
+            // ROUND-1 fix (2026-06-10): navigate by TICKER, not entity_id.
+            // PRD-0089 F2 unified the instrument detail route on the
+            // human-readable ticker slug — the live route is
+            // app/(app)/instruments/[ticker]/page.tsx and /instruments/AAPL
+            // is the canonical URL (the middleware uppercases the slug).
+            // The previous entity_id navigation only worked because the S9
+            // resolve_security_id resolver tolerates UUIDs; it produced ugly
+            // non-canonical /instruments/<uuid> URLs that broke link sharing
+            // conventions. Every row has a ticker (it is the screener's
+            // primary key column), so this is always safe.
+            router.push(`/instruments/${row.ticker}`)
           }
           // ── Row hover for RowHoverToolbar (PRD-0089 Wave I) ─────────────
           // WHY CellMouseOver (not RowMouseOver): AG Grid v35 doesn't expose a
@@ -523,16 +548,39 @@ export default function ScreenerPage() {
         )}
 
         {/* Post-load empty state — rendered below the grid so column headers
-            stay mounted (preserves sort test assertions). */}
+            stay mounted (preserves sort test assertions).
+            ROUND-1 item 8: title standardised to "No results match your filters"
+            plus an explicit "Reset filters" CTA. WHY a sibling button (not the
+            DashboardEmptyState `cta` prop): that prop renders a <Link href>,
+            but resetting filters is a state mutation (handleApply), not a
+            navigation — so we render our own button below the shared block. */}
         {!isLoading && !error && lastMergedOffset.current !== null && filteredRows.length === 0 && (
-          <DashboardEmptyState
-            title={accumulator.length === 0 ? "No matches" : "No matches after client filters"}
-            message={
-              accumulator.length === 0
-                ? "No instruments match the current filters. Adjust filters and apply."
-                : "The technical / search filters excluded all rows in the loaded page. Try widening them or loading more."
-            }
-          />
+          <div className="flex flex-col items-center">
+            <DashboardEmptyState
+              title="No results match your filters"
+              message={
+                accumulator.length === 0
+                  ? "No instruments match the current filters. Adjust filters and apply."
+                  : "The technical / search filters excluded all rows in the loaded page. Try widening them or loading more."
+              }
+            />
+            <button
+              type="button"
+              // WHY a unique aria-label (visible text stays "Reset filters"):
+              // ScreenerFilterBar's bottom toolbar already has a button with
+              // aria-label "Reset filters". Duplicated accessible names are an
+              // a11y smell (screen readers can't disambiguate) and break
+              // getByRole queries in tests.
+              aria-label="Reset filters and show all instruments"
+              // WHY handleApply(DEFAULT_FILTERS) (same as the chip strip's
+              // Reset): clears every applied filter AND re-fires the query at
+              // offset 0 so the full instrument universe reloads immediately.
+              onClick={() => handleApply(DEFAULT_FILTERS)}
+              className="h-7 px-3 text-[10px] font-mono uppercase tracking-[0.06em] bg-primary/10 border border-primary/60 text-primary rounded-[2px] hover:bg-primary/20 transition-colors"
+            >
+              Reset filters
+            </button>
+          </div>
         )}
 
         {/* ── Load More ────────────────────────────────────────────────── */}

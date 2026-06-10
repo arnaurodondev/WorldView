@@ -245,11 +245,27 @@ function Range52wCellRenderer({ data }: ICellRendererParams<ScreenerResult>) {
   const distHigh = data?.dist_from_52w_high_pct;
 
   // Both fields must be non-null to calculate a meaningful position.
+  //
+  // ROUND-1 FIX (2026-06-10): the null case used to render an EMPTY grey bar
+  // track, which looks like "price is at the 52W low" — actively misleading.
+  // Every other screener column renders an explicit "—" for missing data; the
+  // 52W RANGE column now follows the same convention so the user can tell
+  // "no data" apart from "at the low" at a glance.
+  //
+  // WHY this is usually null today (backend gap): dist_from_52w_low_pct /
+  // dist_from_52w_high_pct are fundamental_metrics rows (section=
+  // computed_returns), but the backend's no-filter `key_metrics` projection
+  // in fundamental_metrics_query.py does NOT include them — they only appear
+  // when the user actively filters on them. Until the backend adds them to
+  // key_metrics this column shows "—" in the default view.
   if (distLow == null || distHigh == null) {
     return (
-      <div className="h-1 bg-border rounded-none overflow-hidden w-full" title="No 52W range data">
-        <div className="h-full bg-muted-foreground/20 w-0" />
-      </div>
+      <span
+        className="font-mono text-[11px] tabular-nums text-muted-foreground"
+        title="No 52W range data"
+      >
+        —
+      </span>
     );
   }
 
@@ -260,6 +276,8 @@ function Range52wCellRenderer({ data }: ICellRendererParams<ScreenerResult>) {
   const fillPct = range === 0 ? 100 : Math.min(100, Math.max(0, (distLow / range) * 100));
 
   // Colour: green when near high (>= 70%), amber in the middle, red near low (<= 30%).
+  // All three are semantic design-system tokens (NEVER hardcoded hex) so the
+  // bar follows the Terminal Dark palette automatically.
   const fillClass =
     fillPct >= 70
       ? "bg-positive/70"
@@ -270,9 +288,30 @@ function Range52wCellRenderer({ data }: ICellRendererParams<ScreenerResult>) {
       // for a "mid-range" position signal (not bullish/bearish).
       : "bg-warning/70";
 
-  const tooltipText = `52W position: ${fillPct.toFixed(0)}% from low (${(distLow * 100).toFixed(1)}% above 52W low, ${(Math.abs(distHigh) * 100).toFixed(1)}% below 52W high)`;
+  // ── Tooltip: exact 52W low / high prices (ROUND-1 item 2) ─────────────────
+  // The backend does NOT ship the absolute 52W low/high prices — only the
+  // relative distances. When the live price is available we can derive them:
+  //   dist_low  = (price - low)  / low   →  low  = price / (1 + dist_low)
+  //   dist_high = (price - high) / high  →  high = price / (1 + dist_high)
+  // (dist_high is stored as a negative fraction, so 1 + dist_high < 1 and the
+  // derived high is correctly ABOVE the current price.)
+  // WHY guard against division by ~0: if dist_high were exactly -1 (price at
+  // $0 relative to high) the formula would divide by zero — clamp to "n/a".
+  const price = data?.current_price;
+  let exactRange = "";
+  if (price != null && 1 + distLow > 0 && 1 + distHigh > 0) {
+    const low52w = price / (1 + distLow);
+    const high52w = price / (1 + distHigh);
+    exactRange = ` | 52W low ${formatPrice(low52w)} — high ${formatPrice(high52w)}`;
+  }
+
+  const tooltipText = `52W position: ${fillPct.toFixed(0)}% of range (${(distLow * 100).toFixed(1)}% above low, ${(Math.abs(distHigh) * 100).toFixed(1)}% below high)${exactRange}`;
 
   return (
+    // WHY a wrapper with title (not AG Grid tooltipField): tooltipField only
+    // supports a single raw field; our tooltip is derived from three fields.
+    // The native `title` attribute gives a browser hover tooltip with zero
+    // extra dependencies — same idiom as the old implementation.
     <div className="h-1 bg-border rounded-none overflow-hidden w-full" title={tooltipText}>
       <div className={`h-full ${fillClass}`} style={{ width: `${fillPct}%` }} />
     </div>
@@ -677,6 +716,92 @@ function createSparklineCellRenderer(
   return SparklineCellRenderer;
 }
 
+// ── Numeric column alignment (ROUND-1 item 4) ─────────────────────────────────
+
+/**
+ * NUMERIC_COL_IDS — every leaf column whose cell content is a number.
+ *
+ * WHY a Set + post-processing pass (not `type: "rightAligned"` repeated on 27
+ * ColDefs): a single source of truth makes "is this column numeric?" auditable
+ * at a glance and impossible to forget on one column. The post-processing pass
+ * in `withNumericAlignment` applies AG Grid's built-in `rightAligned` column
+ * type — which adds the `ag-right-aligned-cell` / `ag-right-aligned-header`
+ * classes shipped in ag-grid.css — to each member.
+ *
+ * WHY right-aligned at all (finance convention): numbers in a column must share
+ * a decimal axis so magnitudes compare vertically ("$1,234.56" vs "$12.34").
+ * Left-aligned numerics make the leading digits line up instead, which hides
+ * order-of-magnitude differences. Every terminal (Bloomberg, Finviz, Koyfin)
+ * right-aligns numerics for this reason. ADR-F-15 additionally mandates
+ * font-mono — already applied per-renderer via the `font-mono tabular-nums`
+ * classes.
+ *
+ * Deliberately NOT in this set:
+ *   ticker / name / sector — text, left-aligned
+ *   score                  — HeatCell visual badge (centred by its own layout)
+ *   range52w               — proportional bar fills the full cell width
+ *   sparkline              — chart fills the full cell width
+ */
+export const NUMERIC_COL_IDS: ReadonlySet<string> = new Set([
+  "price",
+  "change",
+  "marketCap",
+  "pe",
+  "revenue",
+  "beta",
+  "divYield",
+  "forwardPe",
+  "roe",
+  "revenueGrowth",
+  "opMargin",
+  "dist52wHigh",
+  "dist52wLow",
+  "return1m",
+  "return3m",
+  "return6m",
+  "returnYtd",
+  "return1y",
+  "return3y",
+  "analystTarget",
+  "analystUpside",
+  "analystConsensus",
+  "insiderNet90d",
+  "instOwn",
+  "shortPct",
+  "news7d",
+  "briefScore",
+  "volume",
+]);
+
+/**
+ * withNumericAlignment — apply `type: "rightAligned"` to every leaf ColDef
+ * whose colId is in NUMERIC_COL_IDS. Recurses one level into column groups
+ * (the screener has no nested groups beyond depth 1).
+ *
+ * WHY mutate copies (spread) instead of in-place: the input array is built
+ * fresh on every factory call, but copying keeps this function pure so tests
+ * can call it with fixture ColDefs without surprising shared-state effects.
+ */
+function withNumericAlignment(
+  defs: (ColDef<ScreenerResult> | ColGroupDef<ScreenerResult>)[],
+): (ColDef<ScreenerResult> | ColGroupDef<ScreenerResult>)[] {
+  const alignLeaf = (col: ColDef<ScreenerResult>): ColDef<ScreenerResult> =>
+    col.colId && NUMERIC_COL_IDS.has(col.colId)
+      ? { ...col, type: "rightAligned" }
+      : col;
+
+  return defs.map((def) => {
+    // ColGroupDef is distinguished by the presence of `children`.
+    if ("children" in def) {
+      return {
+        ...def,
+        children: def.children.map((child) => alignLeaf(child as ColDef<ScreenerResult>)),
+      };
+    }
+    return alignLeaf(def);
+  });
+}
+
 // ── Column factory ────────────────────────────────────────────────────────────
 
 /**
@@ -699,7 +824,10 @@ export function createAgScreenerColumns(
   sparklines: Record<string, OHLCVBar[]>,
   suppressed = false,
 ): (ColDef<ScreenerResult> | ColGroupDef<ScreenerResult>)[] {
-  return [
+  // WHY withNumericAlignment wrapper: applies AG Grid's built-in
+  // `rightAligned` column type to every numeric column in one auditable pass
+  // (ROUND-1 item 4 — see NUMERIC_COL_IDS above for the rationale).
+  return withNumericAlignment([
     // ── TICKER — pinned left, not movable ────────────────────────────────────
     {
       colId: "ticker",
@@ -976,11 +1104,21 @@ export function createAgScreenerColumns(
           colId: "analystUpside",
           headerName: "ANALYST UPSIDE",
           headerTooltip: "Analyst upside: (target / price) - 1. Derived client-side.",
-          // WHY no `field`: ANALYST UPSIDE is computed from two fields in the
-          // cell renderer (target / price - 1). Leaving `field` undefined means
-          // AG Grid won't try to sort on it (which would sort on undefined —
-          // no-op), consistent with the design spec "no filter in v1".
-          sortable: false,
+          // ROUND-1 item 5 (2026-06-10): previously `sortable: false` because
+          // there is no single backend field to sort on. AG Grid's valueGetter
+          // solves this — it computes the derived value per row, and the grid
+          // sorts on the computed result. This makes EVERY numeric column
+          // sortable, as the round spec requires. (Filtering on upside is
+          // still deferred to v2 per the design spec — only sort is enabled.)
+          valueGetter: (p) => {
+            const target = p.data?.analyst_target_price;
+            const price = p.data?.current_price;
+            // null (not 0) when underivable so AG Grid sorts missing values
+            // together rather than interleaving them with real 0% upsides.
+            if (target == null || price == null || price === 0) return null;
+            return target / price - 1;
+          },
+          sortable: true,
           hide: true,
           width: SCREENER_AG_COL_WIDTHS.analystUpside,
           cellRenderer: AnalystUpsideCellRenderer,
@@ -1082,8 +1220,18 @@ export function createAgScreenerColumns(
       headerTooltip: "52-Week Price Range — proportional bar showing position between 52W low (left) and 52W high (right). Data from nightly OHLCV-derived snapshot.",
       // WHY no field: cell renderer reads two fields (dist_from_52w_low_pct and
       // dist_from_52w_high_pct) to draw the bar. AG Grid field accessor is
-      // single-field; we let the renderer access data directly instead.
-      sortable: false,
+      // single-field; a valueGetter computes the derived position instead.
+      // ROUND-1 item 5: valueGetter returns the position-in-range fraction
+      // (0 = at 52W low, 1 = at 52W high) so the column is sortable — sorting
+      // ranks instruments by how close they trade to their yearly high.
+      valueGetter: (p) => {
+        const lo = p.data?.dist_from_52w_low_pct;
+        const hi = p.data?.dist_from_52w_high_pct;
+        if (lo == null || hi == null) return null;
+        const span = lo + Math.abs(hi);
+        return span === 0 ? 1 : Math.min(1, Math.max(0, lo / span));
+      },
+      sortable: true,
       resizable: false,
       width: SCREENER_AG_COL_WIDTHS.range52w,
       cellRenderer: Range52wCellRenderer,
@@ -1112,5 +1260,5 @@ export function createAgScreenerColumns(
       // line when >200 rows are loaded (FR-4.5 / DS-013).
       cellRenderer: createSparklineCellRenderer(sparklines, suppressed),
     } satisfies ColDef<ScreenerResult>,
-  ];
+  ]);
 }
