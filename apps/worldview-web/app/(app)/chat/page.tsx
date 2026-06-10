@@ -65,7 +65,10 @@ import { useRouter, useSearchParams } from "next/navigation";
 import {
   Download,
   MessageSquare,
+  PanelLeftClose,
+  PanelLeftOpen,
   Plus,
+  RotateCcw,
   Search,
   Send,
 } from "lucide-react";
@@ -115,6 +118,14 @@ import { ActionConfirmModal } from "@/features/chat/components/ActionConfirmModa
 // PLAN-0099 W4: right-side context rail — entity card, citations, contradictions,
 // related tickers. Collapsed by Cmd+\ keyboard shortcut (wired below).
 import { ChatContextRail } from "@/features/chat/components/ChatContextRail";
+// Round 1 Foundation: date-bucketed sidebar groups (Today / Yesterday / …).
+import { groupThreadsByDate } from "@/features/chat/lib/group-threads";
+// Round 1 Foundation (PRD-0089 Q-8): debug-only tool trace drawer. The
+// useDebugFlag gate means the drawer code path is completely inert (no
+// listeners, no render) unless ?debug=1 is in the URL.
+import { ToolTraceDrawer } from "@/features/chat/components/ToolTraceDrawer";
+import { useDebugFlag } from "@/features/chat/hooks/useDebugFlag";
+import { useToolTraceChord } from "@/features/chat/hooks/useToolTraceChord";
 
 // ── Main page component ───────────────────────────────────────────────────────
 
@@ -172,6 +183,18 @@ export default function ChatPage() {
   // ── Thread list state ──────────────────────────────────────────────────────
   const [activeThreadId, setActiveThreadId] = useState<string | null>(null);
   const [input, setInput] = useState("");
+
+  // Round 1 Foundation: collapsible history sidebar. Default OPEN — history
+  // is core navigation; collapsing is an opt-in to maximise the message
+  // column on small screens. When collapsed we render a slim 36px rail with
+  // just the expand affordance (full unmount would lose the user's mental
+  // anchor of "the history lives on the left").
+  const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
+
+  // Round 1 Foundation (PRD-0089 Q-8): ?debug=1 gate + ⌘D chord for the
+  // ToolTraceDrawer. With debug off the chord hook registers nothing.
+  const isDebug = useDebugFlag();
+  const { isOpen: isTraceOpen, close: closeTrace } = useToolTraceChord(isDebug);
 
   // PLAN-0103 W3: ephemeral thread ids — client-minted UUIDs that don't yet
   // exist on the backend. When the user clicks "New chat" we mint a UUID for
@@ -264,7 +287,13 @@ export default function ChatPage() {
     // AgentIterationProgress strip inside the StreamingBubble. Eliminates the
     // perceived hang between tool batches on multi-iteration research queries.
     iterationEvent,
+    // Round 1 Foundation: per-turn debug tool trace (args/result/latency)
+    // for the ?debug=1 ToolTraceDrawer below.
+    toolTrace,
     send,
+    // Round 1 Foundation: resubmits the last failed question without
+    // duplicating its user bubble — wired to the error banner's Retry button.
+    retry,
     cancel: handleCancelStream,
     resetForThread,
   } = useChatStream({
@@ -381,6 +410,28 @@ export default function ChatPage() {
     return () => document.removeEventListener("keydown", handleContextRailToggle);
   }, []);
 
+  // ── Round 1 Foundation: restore composer focus when a stream ends ─────────
+  //
+  // WHY: the textarea is disabled while streaming (prevents double-send).
+  // Disabling a focused element BLURS it, so after every answer the analyst
+  // had to click back into the input before typing the follow-up — a
+  // terminal-grade chat must keep the keyboard flow unbroken. When
+  // isStreaming transitions true→false we re-focus the textarea.
+  //
+  // WHY track the previous value in a ref: focusing on EVERY render where
+  // isStreaming === false would steal focus from the search box / rename
+  // input every time anything re-renders. We only act on the transition.
+  const wasStreamingRef = useRef(false);
+  useEffect(() => {
+    if (wasStreamingRef.current && !isStreaming) {
+      // requestAnimationFrame: the textarea re-enables in the SAME commit
+      // that flips isStreaming — focusing immediately can race the disabled
+      // attribute removal in some browsers. One frame later is always safe.
+      requestAnimationFrame(() => textareaRef.current?.focus());
+    }
+    wasStreamingRef.current = isStreaming;
+  }, [isStreaming]);
+
   // ── Derived: filtered threads ─────────────────────────────────────────────
 
   /**
@@ -406,6 +457,17 @@ export default function ChatPage() {
       return title.includes(needle) || msgText.includes(needle);
     });
   }, [threads, searchQuery]);
+
+  /**
+   * groupedThreads — date buckets (Today / Yesterday / Previous 7 days /
+   * Older) over the SEARCH-FILTERED list, so searching narrows within the
+   * same grouped layout instead of switching to a different flat view.
+   * Round 1 Foundation — chat history sidebar.
+   */
+  const groupedThreads = useMemo(
+    () => (filteredThreads ? groupThreadsByDate(filteredThreads) : undefined),
+    [filteredThreads],
+  );
 
   // ── Handlers ───────────────────────────────────────────────────────────────
 
@@ -541,6 +603,17 @@ export default function ChatPage() {
   }, [input, send]);
 
   function handleKeyDown(e: React.KeyboardEvent<HTMLTextAreaElement>) {
+    // Round 1 Foundation: ⌘+Enter / Ctrl+Enter is an EXPLICIT submit chord —
+    // the power-user convention shared with code editors and Slack. Checked
+    // FIRST (before the plain-Enter branch) so the modifier path is
+    // guaranteed even if the plain-Enter behaviour ever changes.
+    if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
+      e.preventDefault();
+      void handleSend();
+      return;
+    }
+    // Plain Enter submits; Shift+Enter inserts a newline (legacy behaviour,
+    // documented in the placeholder text).
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
       void handleSend();
@@ -633,6 +706,35 @@ export default function ChatPage() {
           deserves the extra 56px of horizontal real estate. 224px still fits
           the "New chat" button + search box + 11px thread title without
           truncating the dev seed titles. */}
+      {/* Round 1 Foundation: collapsed variant — a slim 36px rail keeping the
+          expand affordance (and a quick New-chat) visible. WHY render a rail
+          instead of unmounting: zero-width removal makes the history feel
+          "gone" and the only way back would be a floating button over the
+          messages — the rail preserves the spatial anchor. */}
+      {isSidebarCollapsed ? (
+        <aside
+          className="flex w-9 shrink-0 flex-col items-center gap-1 border-r border-border bg-background py-2"
+          aria-label="Chat thread list (collapsed)"
+        >
+          <button
+            type="button"
+            onClick={() => setIsSidebarCollapsed(false)}
+            aria-label="Expand thread list"
+            className="rounded-[2px] p-1 text-muted-foreground hover:bg-muted hover:text-foreground"
+          >
+            <PanelLeftOpen className="h-4 w-4" strokeWidth={1.5} />
+          </button>
+          <button
+            type="button"
+            onClick={handleNewChat}
+            aria-label="Start new chat"
+            title="New chat"
+            className="rounded-[2px] p-1 text-primary hover:bg-primary/10"
+          >
+            <Plus className="h-4 w-4" strokeWidth={1.5} />
+          </button>
+        </aside>
+      ) : (
       <aside
         className="flex w-[224px] shrink-0 flex-col border-r border-border bg-background"
         aria-label="Chat thread list"
@@ -648,6 +750,16 @@ export default function ChatPage() {
             the platform's terminal section labels (e.g. WatchlistPanel, Alerts). */}
         <div className="flex items-center justify-between border-b border-border px-3 py-2">
           <div className="flex items-center gap-1.5">
+            {/* Round 1 Foundation: collapse toggle lives where the user's eye
+                already rests (panel header) — same pattern as IDE side panels. */}
+            <button
+              type="button"
+              onClick={() => setIsSidebarCollapsed(true)}
+              aria-label="Collapse thread list"
+              className="rounded-[2px] p-0.5 text-muted-foreground hover:bg-muted hover:text-foreground"
+            >
+              <PanelLeftClose className="h-3.5 w-3.5" strokeWidth={1.5} />
+            </button>
             <MessageSquare className="h-3.5 w-3.5 text-primary" strokeWidth={1.5} />
             <span className="text-[11px] font-semibold uppercase tracking-[0.08em] text-foreground">
               Threads
@@ -759,19 +871,37 @@ export default function ChatPage() {
               </p>
             )}
 
-            {filteredThreads?.map((thread) => (
-              <ThreadItem
-                key={thread.thread_id}
-                thread={thread}
-                isActive={thread.thread_id === activeThreadId}
-                onSelect={handleSelectThread}
-                onDelete={handleDeleteThread}
-                onRename={handleRenameThread}
-              />
+            {/* Round 1 Foundation: date-bucketed history. Each group renders a
+                sticky-feeling section header (Today / Yesterday / …) above its
+                rows. Empty groups are omitted by groupThreadsByDate, so a new
+                user with 2 threads sees at most 2 headers — no scaffolding. */}
+            {groupedThreads?.map((group) => (
+              <div key={group.label}>
+                <p
+                  className="px-2 pb-0.5 pt-2 font-mono text-[9px] font-semibold uppercase tracking-[0.10em] text-muted-foreground/70"
+                  // WHY role=heading: lets screen-reader users jump between
+                  // date buckets the same way sighted users scan the headers.
+                  role="heading"
+                  aria-level={3}
+                >
+                  {group.label}
+                </p>
+                {group.threads.map((thread) => (
+                  <ThreadItem
+                    key={thread.thread_id}
+                    thread={thread}
+                    isActive={thread.thread_id === activeThreadId}
+                    onSelect={handleSelectThread}
+                    onDelete={handleDeleteThread}
+                    onRename={handleRenameThread}
+                  />
+                ))}
+              </div>
             ))}
           </div>
         </ScrollArea>
       </aside>
+      )}
 
       {/* ════════════════ PLAN-0082 Wave B — Action Confirm Modal ════════════ */}
       {/* WHY outside the right panel div: Radix Dialog uses a Portal to render
@@ -981,8 +1111,26 @@ export default function ChatPage() {
                 ) : null}
 
                 {chatError && (
-                  <div className="rounded-[2px] border border-destructive/30 bg-destructive/10 p-3 text-xs text-destructive">
-                    {chatError}
+                  // Round 1 Foundation: failed sends now surface a Retry CTA.
+                  // WHY role=alert: error text must be announced by screen
+                  // readers the moment it appears, not on next focus.
+                  <div
+                    role="alert"
+                    className="rounded-[2px] border border-destructive/30 bg-destructive/10 p-3 text-xs text-destructive"
+                  >
+                    <p>{chatError}</p>
+                    <button
+                      type="button"
+                      // retry() resends the last failed question WITHOUT
+                      // duplicating its user bubble (skipUserEcho inside the
+                      // hook) and clears this banner eagerly so the user sees
+                      // the new attempt start immediately.
+                      onClick={() => void retry()}
+                      className="mt-2 inline-flex items-center gap-1 rounded-[2px] border border-destructive/40 px-2 py-1 text-[11px] font-medium hover:bg-destructive/20"
+                    >
+                      <RotateCcw className="h-3 w-3" strokeWidth={1.5} />
+                      Retry
+                    </button>
                   </div>
                 )}
 
@@ -1093,8 +1241,18 @@ export default function ChatPage() {
                 </Button>
               </div>
 
-              {input.length > 1500 && (
-                <p className="mt-1 font-mono text-[10px] text-muted-foreground">
+              {/* Round 1 Foundation: counter now appears from 800 chars (was
+                  1500). WHY 800: at 1500 the user was 75% of the way to the
+                  2000 hard cap before getting ANY feedback — long research
+                  prompts hit the maxLength wall by surprise. 800 gives the
+                  warning at 40%, early enough to restructure the question.
+                  WHY font-mono: numeric — ADR-F-15 mandates mono for all
+                  numerics. aria-live so screen readers hear the count appear. */}
+              {input.length >= 800 && (
+                <p
+                  aria-live="polite"
+                  className="mt-1 font-mono text-[10px] text-muted-foreground"
+                >
                   {input.length} / 2000
                 </p>
               )}
@@ -1135,6 +1293,15 @@ export default function ChatPage() {
         </div>
       )}
       </div>{/* end centre+right wrapper */}
+
+      {/* ════════════════ DEBUG — Tool Trace Drawer (?debug=1 + ⌘D) ═══════════ */}
+      {/* WHY double gate (isDebug && isTraceOpen): isTraceOpen can only become
+          true while isDebug is set (the chord hook is inert otherwise), but the
+          explicit isDebug check makes the security invariant local and obvious:
+          this surface NEVER renders without ?debug=1 (PRD-0089 Q-8). */}
+      {isDebug && isTraceOpen && (
+        <ToolTraceDrawer trace={toolTrace} onClose={closeTrace} />
+      )}
     </div>
   );
 }

@@ -246,10 +246,42 @@ export function StreamingBubble({
            */}
           <AgentIterationProgress event={iterationEvent} />
           <ToolCallIndicator tools={activeTools} />
-          <LazyMarkdownContent size="compact">{streaming.text}</LazyMarkdownContent>
-          {streaming.active && (
-            // WHY no animate-pulse: terminal mandate — static cursor still reads as "streaming".
-            <span className="ml-0.5 inline-block h-4 w-0.5 bg-primary align-middle" />
+          {/*
+           * Round 1 Foundation (no-empty-bubble fix): before the first token
+           * arrives `streaming.text` is "" and the old render emitted an empty
+           * MarkdownContent + a bare cursor — a flash of blank assistant
+           * bubble between "Send" and the first chunk. We now branch:
+           *   - no text yet AND no tool/iteration chrome → three-dot typing
+           *     indicator INSIDE the bubble (the user sees "working" feedback
+           *     from the very first frame, never an empty box);
+           *   - no text yet BUT tools/iteration strip visible → render nothing
+           *     extra (the tool spinners already communicate progress; dots
+           *     would duplicate the signal);
+           *   - text present → markdown + cursor as before.
+           */}
+          {streaming.text === "" ? (
+            activeTools.length === 0 && !iterationEvent ? (
+              <div
+                className="flex gap-1 py-0.5"
+                // WHY aria-label (not visible text): screen readers announce
+                // "generating" while sighted users get the conventional dots.
+                aria-label="AI is generating a response"
+              >
+                {/* WHY static dots (no animate-bounce): Bloomberg-terminal
+                    mandate — no bounce/pulse animations on data surfaces. */}
+                <span className="h-1.5 w-1.5 rounded-[2px] bg-muted-foreground" />
+                <span className="h-1.5 w-1.5 rounded-[2px] bg-muted-foreground" />
+                <span className="h-1.5 w-1.5 rounded-[2px] bg-muted-foreground" />
+              </div>
+            ) : null
+          ) : (
+            <>
+              <LazyMarkdownContent size="compact">{streaming.text}</LazyMarkdownContent>
+              {streaming.active && (
+                // WHY no animate-pulse: terminal mandate — static cursor still reads as "streaming".
+                <span className="ml-0.5 inline-block h-4 w-0.5 bg-primary align-middle" />
+              )}
+            </>
           )}
         </div>
       </div>

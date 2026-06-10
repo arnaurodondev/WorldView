@@ -97,6 +97,49 @@ export interface AgentIterationEvent {
   elapsed_ms: number;
 }
 
+/**
+ * ToolTraceEntry — one tool invocation captured for the debug ToolTraceDrawer
+ * (PRD-0089 Q-8, completed in Round 1 Foundation).
+ *
+ * WHY A SEPARATE TYPE FROM ToolCallState:
+ * ToolCallState is the *user-facing* progress view-model (label + status) shown
+ * in the streaming bubble and cleared the moment the stream ends. The trace is
+ * the *debug* record: it keeps the raw tool name, the JSON arguments the LLM
+ * passed, the raw result metadata, and a latency measurement — and it survives
+ * past the end of the stream so an engineer can open the drawer AFTER the
+ * answer settles and inspect what happened.
+ *
+ * LATENCY IS CLIENT-MEASURED: the SSE `tool_result` event does not carry a
+ * server-side duration today (backend gap — S8 SSEEmitter would need a
+ * `duration_ms` field). We approximate by timestamping the `tool_call` event
+ * receipt and the matching `tool_result` receipt with `performance.now()`.
+ * This includes network jitter but is accurate enough for "which tool was
+ * slow" debugging. If S8 ever emits `duration_ms` we prefer it (see
+ * useChatStream's tool_result handler).
+ */
+export interface ToolTraceEntry {
+  /** Internal tool name from the SSE event, e.g. "search_documents". */
+  tool: string;
+  /** User-friendly label, e.g. "Searching documents..." */
+  label: string;
+  /** JSON arguments the LLM passed to the tool (from the tool_call event). */
+  args: Record<string, unknown>;
+  /** Terminal status once tool_result arrives; "running" until then. */
+  status: "running" | "ok" | "empty" | "error";
+  /**
+   * Raw result metadata from the tool_result event (item_count, error info,
+   * any future fields) — everything except the demux keys (type/tool/status).
+   * Null until the tool_result event arrives.
+   */
+  result: Record<string, unknown> | null;
+  /**
+   * Client-measured wall-clock latency in ms (tool_call → tool_result).
+   * Null while the tool is still running. Prefer the server-side
+   * `duration_ms` when the backend emits one (currently it does not).
+   */
+  latencyMs: number | null;
+}
+
 export interface PendingActionEvent {
   /** Server-generated UUID — sent back as the path param on confirm. */
   proposal_id: string;

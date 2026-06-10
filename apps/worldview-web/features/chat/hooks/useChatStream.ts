@@ -51,6 +51,7 @@ import type {
   PendingActionEvent,
   SlashTurn,
   StreamingMessage,
+  ToolTraceEntry,
 } from "@/features/chat/lib/types";
 // WHY import from ToolCallIndicator (not defined here):
 // ToolCallState is the view-model type for tool progress — it lives in the
@@ -156,8 +157,30 @@ export interface UseChatStreamResult {
    * on long research queries and matches the at-a-glance UX the strip needs.
    */
   iterationEvent: AgentIterationEvent | null;
+  /**
+   * Debug tool trace for the LAST turn (Round 1 Foundation — ToolTraceDrawer).
+   *
+   * Unlike `activeTools` (cleared the instant the stream ends so no spinner
+   * outlives the response), the trace is deliberately KEPT after completion —
+   * the whole point of the ?debug=1 drawer is post-hoc inspection of which
+   * tools ran, with what JSON arguments, what they returned, and how long
+   * each took. Reset at the start of the next send and on thread switch.
+   */
+  toolTrace: ToolTraceEntry[];
   /** Trigger the slash-command branch or the SSE LLM call for `question`. */
   send: (question: string) => Promise<void>;
+  /**
+   * Resubmit the last question after a failure (Round 1 Foundation — Retry).
+   *
+   * WHY a dedicated method (not "page calls send(lastQuestion) itself"):
+   * the failed user message is already in `localMessages` (we append it
+   * optimistically BEFORE the request fires). A naive re-send would echo the
+   * same user bubble twice. retry() re-uses the existing bubble: it resends
+   * the question over the wire but skips the optimistic append when the last
+   * log entry is already that exact user message. No-op when there is nothing
+   * to retry or a stream is already in flight.
+   */
+  retry: () => Promise<void>;
   /** Abort an in-flight stream. Safe to call when nothing is streaming. */
   cancel: () => void;
   /**
@@ -204,6 +227,13 @@ export function useChatStream(args: UseChatStreamArgs): UseChatStreamResult {
   // values change. A ref would not trigger that re-render and the strip would
   // appear frozen — defeating the entire "no perceived hang" goal.
   const [iterationEvent, setIterationEvent] = useState<AgentIterationEvent | null>(null);
+  // `toolTrace` — debug record of every tool invocation in the CURRENT/LAST
+  // turn (args + result + latency). Survives stream completion on purpose:
+  // the ?debug=1 ToolTraceDrawer is opened AFTER the answer settles. Reset at
+  // the start of each send and on resetForThread.
+  // WHY state (not ref): the drawer renders from it — React must re-render as
+  // tool_call/tool_result events land so an open drawer updates live.
+  const [toolTrace, setToolTrace] = useState<ToolTraceEntry[]>([]);
 
   // ── Refs ────────────────────────────────────────────────────────────────
   // `abortRef` holds the AbortController for the in-flight request so that
@@ -217,6 +247,18 @@ export function useChatStream(args: UseChatStreamArgs): UseChatStreamResult {
   // passes the guard twice, orphaning the first AbortController. The ref is
   // always current so the guard is race-free regardless of batching semantics.
   const isStreamingRef = useRef(false);
+
+  // `lastQuestionRef` — the most recent question that FAILED (used by retry()).
+  // WHY a ref (not state): only read inside the retry() callback — no render
+  // depends on it, so a state setter would just cause useless re-renders.
+  // Set on every error exit path; cleared on successful completion so a
+  // stale question can never be resubmitted after a later success.
+  const lastQuestionRef = useRef<string | null>(null);
+
+  // `toolStartRef` — performance.now() timestamp per tool name for the
+  // in-flight turn, used to compute client-measured latency when the matching
+  // tool_result event arrives. A ref because timestamps never drive a render.
+  const toolStartRef = useRef<Map<string, number>>(new Map());
 
   // Cancel any in-flight stream on unmount. Without this, a fast nav-away
   // would leak a half-read fetch + a setState that fires after unmount,
@@ -288,6 +330,13 @@ export function useChatStream(args: UseChatStreamArgs): UseChatStreamResult {
     // PLAN-0099 W4: agent-iteration progress is scoped to a single turn; a
     // thread switch must reset it so the new thread starts with a clean strip.
     setIterationEvent(null);
+    // Round 1 Foundation: the debug trace + retry context are scoped to a
+    // single thread's last turn — both must not leak across a thread switch
+    // (the drawer would show another conversation's tools; retry would
+    // resubmit a question into the wrong thread).
+    setToolTrace([]);
+    toolStartRef.current.clear();
+    lastQuestionRef.current = null;
   }, []);
 
   /**
@@ -309,7 +358,12 @@ export function useChatStream(args: UseChatStreamArgs): UseChatStreamResult {
    * thread server-side on first chat send if it doesn't exist.
    */
   const send = useCallback(
-    async (rawInput: string): Promise<void> => {
+    // WHY the optional `opts` param: retry() resends a question whose user
+    // bubble is ALREADY in the log (appended optimistically by the failed
+    // attempt). `skipUserEcho` suppresses the duplicate echo in that case.
+    // Regular callers (page, EntityChatPanel) pass only the question — the
+    // public `send: (question) => Promise<void>` contract is unchanged.
+    async (rawInput: string, opts?: { skipUserEcho?: boolean }): Promise<void> => {
       const question = rawInput.trim();
       // Same guards the page used to enforce: empty input, mid-stream,
       // or unauthenticated → silent no-op.
@@ -364,8 +418,37 @@ export function useChatStream(args: UseChatStreamArgs): UseChatStreamResult {
         created_at: new Date().toISOString(),
         citations: [],
       };
-      setLocalMessages((prev) => [...prev, userMessage]);
+      setLocalMessages((prev) => {
+        // Retry path: the failed attempt already appended this exact user
+        // bubble — appending again would render the question twice. We only
+        // skip when the LAST entry is a user message with identical content
+        // (defensive: if the log changed in between, fall through and append).
+        if (opts?.skipUserEcho) {
+          const last = prev[prev.length - 1];
+          if (
+            last &&
+            !("kind" in last) &&
+            last.role === "user" &&
+            last.content === question
+          ) {
+            return prev;
+          }
+        }
+        return [...prev, userMessage];
+      });
       setChatError(null);
+      // Round 1 Foundation (orphaned-spinner fix): activeTools was previously
+      // only cleared on the `done`/[DONE]/`error`-event/cancel paths. When a
+      // stream ended via reader exhaustion (server closed early) or a thrown
+      // fetch error, stale tool entries survived in state and FLASHED inside
+      // the next turn's StreamingBubble before that turn's own tool events
+      // arrived. Clearing here guarantees every turn starts with a clean
+      // tool slate regardless of how the previous turn ended.
+      setActiveTools([]);
+      // The debug trace is per-turn: a new send replaces the previous turn's
+      // trace (the drawer always shows the latest turn).
+      setToolTrace([]);
+      toolStartRef.current.clear();
       // PLAN-0099 W4: clear any previous iteration event from the prior turn
       // BEFORE the new request fires. Without this, the strip would briefly
       // show the previous turn's stage (e.g. "Writing answer…") until the
@@ -444,6 +527,11 @@ export function useChatStream(args: UseChatStreamArgs): UseChatStreamResult {
             };
             setLocalMessages((prev) => [...prev, assistantMessage]);
           }
+          // Round 1 Foundation: a finalized stream (even an interrupted one
+          // that rendered partial content) is not a failure — clear the retry
+          // context so a stale question can't be resubmitted later from the
+          // error banner of an unrelated failure.
+          lastQuestionRef.current = null;
           refetchThreads();
         };
 
@@ -571,7 +659,12 @@ export function useChatStream(args: UseChatStreamArgs): UseChatStreamResult {
                 // from S8 SSEEmitter (W11-3):
                 //   { type: "tool_call", tool: string, label: string, input: {}, status: "running" }
                 // We only use `tool`, `label`, and `status` for rendering.
-                const tc = data as { tool?: string; label?: string; status?: string };
+                const tc = data as {
+                  tool?: string;
+                  label?: string;
+                  status?: string;
+                  input?: Record<string, unknown>;
+                };
                 if (tc.tool && tc.label) {
                   setActiveTools((prev) => [
                     // Replace any existing entry for the same tool name (idempotent).
@@ -582,6 +675,24 @@ export function useChatStream(args: UseChatStreamArgs): UseChatStreamResult {
                       name: tc.tool as string,
                       label: tc.label as string,
                       status: "running",
+                    },
+                  ]);
+                  // Round 1 Foundation: record the debug trace entry + the
+                  // wall-clock start so the matching tool_result can compute a
+                  // client-side latency. Same idempotency rule as activeTools.
+                  toolStartRef.current.set(tc.tool, performance.now());
+                  setToolTrace((prev) => [
+                    ...prev.filter((t) => t.tool !== tc.tool),
+                    {
+                      tool: tc.tool as string,
+                      label: tc.label as string,
+                      // `input` carries the JSON arguments the LLM passed to the
+                      // tool (S8 SSEEmitter W11-3 shape). Default to {} so the
+                      // drawer can always JSON.stringify without null checks.
+                      args: tc.input ?? {},
+                      status: "running",
+                      result: null,
+                      latencyMs: null,
                     },
                   ]);
                 }
@@ -596,6 +707,36 @@ export function useChatStream(args: UseChatStreamArgs): UseChatStreamResult {
                     prev.map((t) =>
                       t.name === tr.tool
                         ? { ...t, status: resultStatus }
+                        : t,
+                    ),
+                  );
+                  // Round 1 Foundation: close out the trace entry.
+                  // Latency: prefer a server-emitted duration_ms (S8 does not
+                  // send one today — backend gap), else client wall-clock from
+                  // the tool_call receipt timestamp.
+                  const startedAt = toolStartRef.current.get(tr.tool);
+                  const serverDuration =
+                    typeof (data as { duration_ms?: unknown }).duration_ms === "number"
+                      ? ((data as { duration_ms: number }).duration_ms)
+                      : null;
+                  const latencyMs =
+                    serverDuration ??
+                    (startedAt !== undefined
+                      ? Math.round(performance.now() - startedAt)
+                      : null);
+                  // Keep everything except the demux keys as the raw result
+                  // payload (today: item_count; future fields flow through
+                  // automatically — forward-compatible by construction).
+                  const resultPayload: Record<string, unknown> = {};
+                  for (const [k, v] of Object.entries(data)) {
+                    if (k !== "type" && k !== "tool" && k !== "status") {
+                      resultPayload[k] = v;
+                    }
+                  }
+                  setToolTrace((prev) =>
+                    prev.map((t) =>
+                      t.tool === tr.tool
+                        ? { ...t, status: resultStatus, result: resultPayload, latencyMs }
                         : t,
                     ),
                   );
@@ -699,6 +840,9 @@ export function useChatStream(args: UseChatStreamArgs): UseChatStreamResult {
                 // above the error banner.
                 setIterationEvent(null);
                 setActiveTools([]);
+                // Round 1 Foundation: remember the question so the error
+                // banner's Retry button can resubmit it.
+                lastQuestionRef.current = question;
                 return;
               }
               // status, contradictions, metadata — no UI action needed yet;
@@ -727,6 +871,11 @@ export function useChatStream(args: UseChatStreamArgs): UseChatStreamResult {
         setStreaming(null);
         // PLAN-0099 W4: clear strip on the error fallback path too.
         setIterationEvent(null);
+        // Round 1 Foundation: thrown-error path (network failure, non-2xx,
+        // null body) — clear any tool spinners that were mid-flight and arm
+        // the Retry button with the failed question.
+        setActiveTools([]);
+        lastQuestionRef.current = question;
         // WHY map to generic message: raw err.message can contain internal
         // hostnames, HTTP response bodies, or status text leaked by reverse
         // proxies. These would surface in error-monitoring SDKs (Sentry, Datadog)
@@ -763,6 +912,22 @@ export function useChatStream(args: UseChatStreamArgs): UseChatStreamResult {
     [accessToken, activeThreadId, refetchThreads, setActiveThreadId, entityId],
   );
 
+  /**
+   * `retry` — resubmit the last FAILED question (Round 1 Foundation).
+   *
+   * Guards: no-op when there is no failed question (lastQuestionRef is only
+   * set on error exit paths and cleared on success/thread-switch) or while a
+   * stream is in flight. Clears the error banner eagerly so the user sees the
+   * retry start immediately, then delegates to send() with skipUserEcho —
+   * the failed user bubble is already in the log.
+   */
+  const retry = useCallback(async (): Promise<void> => {
+    const question = lastQuestionRef.current;
+    if (!question || isStreamingRef.current) return;
+    setChatError(null);
+    await send(question, { skipUserEcho: true });
+  }, [send]);
+
   return {
     localMessages,
     setLocalMessages,
@@ -779,7 +944,11 @@ export function useChatStream(args: UseChatStreamArgs): UseChatStreamResult {
     clearPendingAction,
     // PLAN-0099 W4: latest agent_iteration event for the AgentIterationProgress strip.
     iterationEvent,
+    // Round 1 Foundation: debug tool trace (args/result/latency) for ToolTraceDrawer.
+    toolTrace,
     send,
+    // Round 1 Foundation: resubmit the last failed question (error-banner Retry).
+    retry,
     cancel,
     resetForThread,
   };

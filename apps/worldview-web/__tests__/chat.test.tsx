@@ -567,3 +567,206 @@ describe("Chat page — ephemeral thread 404 guard", () => {
     expect(screen.queryByText(/server error/i)).not.toBeInTheDocument();
   });
 });
+
+// ── Tests: Round 1 Foundation — sidebar collapse + date groups ───────────────
+
+describe("Chat page — history sidebar (Round 1 Foundation)", () => {
+  beforeEach(() => {
+    uuidCounter = 0;
+    vi.clearAllMocks();
+  });
+
+  it("collapses to a slim rail and expands back", async () => {
+    await renderChatPage();
+
+    // Default: expanded — full sidebar with the "Threads" label.
+    expect(screen.getByText("Threads")).toBeInTheDocument();
+
+    // Collapse: the full panel is replaced by the slim rail.
+    fireEvent.click(screen.getByRole("button", { name: /collapse thread list/i }));
+    expect(screen.queryByText("Threads")).not.toBeInTheDocument();
+    // The rail keeps the expand affordance AND a quick "new chat" icon.
+    expect(screen.getByRole("button", { name: /expand thread list/i })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /start new chat/i })).toBeInTheDocument();
+
+    // Expand: the full panel returns.
+    fireEvent.click(screen.getByRole("button", { name: /expand thread list/i }));
+    expect(screen.getByText("Threads")).toBeInTheDocument();
+  });
+
+  it("groups threads under date headers (fixtures from 2026-04 land in Older)", async () => {
+    await renderChatPage();
+
+    // SAMPLE_THREADS timestamps are 2026-04-10/11 — months before any
+    // plausible "today" — so a single "Older" group header must render.
+    await waitFor(() => {
+      expect(screen.getByText("NVDA Q4 earnings analysis")).toBeInTheDocument();
+    });
+    expect(screen.getByRole("heading", { name: "Older" })).toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "Today" })).not.toBeInTheDocument();
+  });
+
+  it("puts a thread updated today under the Today header", async () => {
+    const { createGateway } = await import("@/lib/gateway");
+    vi.mocked(createGateway).mockReturnValue({
+      getThreads: vi.fn().mockResolvedValue([
+        {
+          thread_id: "thread-now",
+          title: "Fresh thread",
+          owner_id: "user-1",
+          messages: [],
+          created_at: new Date().toISOString(),
+          updated_at: new Date().toISOString(),
+        },
+        ...SAMPLE_THREADS,
+      ]),
+      getThread: vi.fn(),
+      deleteThread: vi.fn(),
+    } as unknown as ReturnType<typeof createGateway>);
+
+    await renderChatPage();
+
+    await waitFor(() => {
+      expect(screen.getByText("Fresh thread")).toBeInTheDocument();
+    });
+    // Both buckets render: the fresh thread under Today, fixtures under Older.
+    expect(screen.getByRole("heading", { name: "Today" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Older" })).toBeInTheDocument();
+  });
+});
+
+// ── Tests: Round 1 Foundation — input ergonomics ─────────────────────────────
+
+describe("Chat page — input ergonomics (Round 1 Foundation)", () => {
+  beforeEach(() => {
+    uuidCounter = 0;
+    vi.clearAllMocks();
+  });
+
+  async function openComposer() {
+    await renderChatPage();
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: /start new chat/i })).toBeInTheDocument();
+    });
+    fireEvent.click(screen.getByRole("button", { name: /start new chat/i }));
+    await waitFor(() => {
+      expect(screen.getByRole("textbox", { name: /chat message input/i })).toBeInTheDocument();
+    });
+    return screen.getByRole("textbox", { name: /chat message input/i }) as HTMLTextAreaElement;
+  }
+
+  it("shows the character count from 800 characters", async () => {
+    const textarea = await openComposer();
+
+    // 799 chars: no counter yet.
+    fireEvent.change(textarea, { target: { value: "x".repeat(799) } });
+    expect(screen.queryByText(/\/ 2000/)).not.toBeInTheDocument();
+
+    // 800 chars: counter appears with the exact "N / 2000" copy.
+    fireEvent.change(textarea, { target: { value: "x".repeat(800) } });
+    expect(screen.getByText("800 / 2000")).toBeInTheDocument();
+  });
+
+  it("submits on Cmd+Enter (and Ctrl+Enter)", async () => {
+    // Stub fetch so the submit path doesn't hit the network. A rejected
+    // promise is fine — we only assert the submit FIRED (input cleared +
+    // fetch called), not the streaming outcome.
+    const fetchMock = vi.fn().mockRejectedValue(new Error("offline"));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const textarea = await openComposer();
+    fireEvent.change(textarea, { target: { value: "What moved NVDA today?" } });
+    fireEvent.keyDown(textarea, { key: "Enter", metaKey: true });
+
+    // The submit clears the input synchronously (UX expectation) and the
+    // stream request goes out.
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+    });
+    expect(textarea.value).toBe("");
+
+    vi.unstubAllGlobals();
+  });
+
+  it("does NOT submit on Shift+Enter (newline stays local)", async () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+
+    const textarea = await openComposer();
+    fireEvent.change(textarea, { target: { value: "line one" } });
+    fireEvent.keyDown(textarea, { key: "Enter", shiftKey: true });
+
+    expect(fetchMock).not.toHaveBeenCalled();
+    // Input untouched — the browser default (newline insertion) proceeds.
+    expect(textarea.value).toBe("line one");
+
+    vi.unstubAllGlobals();
+  });
+});
+
+// ── Tests: Round 1 Foundation — failed message Retry ─────────────────────────
+
+describe("Chat page — error state with Retry (Round 1 Foundation)", () => {
+  beforeEach(() => {
+    uuidCounter = 0;
+    vi.clearAllMocks();
+  });
+
+  it("failed send surfaces an error banner with a Retry button that resubmits", async () => {
+    // First attempt fails at the network level; the retry succeeds with a
+    // minimal one-token SSE stream.
+    const encoder = new TextEncoder();
+    let read = 0;
+    const goodReader = {
+      read: () => {
+        const frames = ['data: {"text":"ok"}\n', "data: [DONE]\n"];
+        if (read >= frames.length) return Promise.resolve({ done: true, value: undefined });
+        return Promise.resolve({ done: false, value: encoder.encode(frames[read++]) });
+      },
+      cancel: vi.fn().mockResolvedValue(undefined),
+    };
+    const fetchMock = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("network down"))
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        statusText: "OK",
+        body: { getReader: () => goodReader },
+      });
+    vi.stubGlobal("fetch", fetchMock);
+
+    await renderChatPage();
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: /start new chat/i })).toBeInTheDocument();
+    });
+    fireEvent.click(screen.getByRole("button", { name: /start new chat/i }));
+    const textarea = await waitFor(() =>
+      screen.getByRole("textbox", { name: /chat message input/i }),
+    );
+
+    fireEvent.change(textarea, { target: { value: "doomed question" } });
+    fireEvent.keyDown(textarea, { key: "Enter" });
+
+    // Error banner (role=alert) with a Retry button — never a frozen spinner.
+    const alert = await screen.findByRole("alert");
+    expect(alert.textContent).toMatch(/failed|try again/i);
+    const retryBtn = screen.getByRole("button", { name: /retry/i });
+
+    // Retry resubmits the SAME question.
+    fireEvent.click(retryBtn);
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+    });
+    expect(JSON.parse(fetchMock.mock.calls[1][1].body as string).message).toBe(
+      "doomed question",
+    );
+
+    // Banner clears once the retry starts/succeeds.
+    await waitFor(() => {
+      expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    });
+
+    vi.unstubAllGlobals();
+  });
+});

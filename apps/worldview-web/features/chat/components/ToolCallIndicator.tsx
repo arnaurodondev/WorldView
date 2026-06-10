@@ -94,6 +94,12 @@ export function ToolCallIndicator({ tools }: ToolCallIndicatorProps) {
            */}
           <Loader2 className="h-3 w-3 shrink-0" aria-hidden="true" />
           <span>{t.label}</span>
+          {/* Round 1 Foundation: surface the RAW tool name next to the friendly
+              label. WHY: the label ("Searching documents...") is ambiguous when
+              several search-flavoured tools exist; the mono name
+              ("search_documents") is the precise identifier an analyst can
+              quote in a bug report. Muted + smaller so it reads as metadata. */}
+          <span className="text-[9px] text-muted-foreground/60">{t.name}</span>
         </div>
       ))}
 

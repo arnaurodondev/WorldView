@@ -74,3 +74,37 @@ describe("StreamingBubble", () => {
     expect(screen.getByText("Querying timeline")).toBeDefined();
   });
 });
+
+// ── Round 1 Foundation — no flash of empty assistant bubble ──────────────────
+
+describe("StreamingBubble — pre-first-token state", () => {
+  it("shows a typing indicator inside the bubble when no text and no tools yet", () => {
+    // The instant after Send (before the first SSE event) streaming.text is ""
+    // and activeTools is empty — the old render produced an EMPTY bubble.
+    render(<StreamingBubble streaming={{ text: "", active: true }} activeTools={[]} />);
+
+    // Typing dots present…
+    expect(screen.getByLabelText("AI is generating a response")).toBeDefined();
+    // …and no empty markdown container is mounted (the flash).
+    expect(screen.queryByTestId("markdown")).toBeNull();
+  });
+
+  it("hides the typing dots once tools are active (spinners already signal progress)", () => {
+    const tools: ToolCallState[] = [
+      { name: "search_documents", label: "Searching documents...", status: "running" },
+    ];
+    render(<StreamingBubble streaming={{ text: "", active: true }} activeTools={tools} />);
+
+    // Tool indicator visible, dots gone — one progress signal at a time.
+    expect(screen.getByText("Searching documents...")).toBeDefined();
+    expect(screen.queryByLabelText("AI is generating a response")).toBeNull();
+  });
+
+  it("replaces the dots with markdown text when the first token arrives", () => {
+    render(
+      <StreamingBubble streaming={{ text: "First tok", active: true }} activeTools={[]} />,
+    );
+    expect(screen.getByTestId("markdown").textContent).toBe("First tok");
+    expect(screen.queryByLabelText("AI is generating a response")).toBeNull();
+  });
+});

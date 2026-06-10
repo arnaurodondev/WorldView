@@ -913,3 +913,237 @@ describe("useChatStream", () => {
     expect(result.current.localMessages).toHaveLength(2);
   });
 });
+
+// ── Round 1 Foundation — tool trace, orphaned-tool clearing, retry ───────────
+
+describe("useChatStream — toolTrace (debug drawer data)", () => {
+  it("captures args, result payload, status and a latency for each tool call", async () => {
+    const frames = [
+      'event: tool_call\ndata: {"type":"tool_call","tool":"search_documents","label":"Searching documents...","input":{"query":"NVDA margin"},"status":"running"}\n',
+      'event: tool_result\ndata: {"type":"tool_result","tool":"search_documents","status":"ok","item_count":4}\n',
+      'data: {"text":"answer"}\n',
+      "data: [DONE]\n",
+    ];
+    const { reader } = makeReader(frames);
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({
+        ok: true,
+        status: 200,
+        statusText: "OK",
+        body: { getReader: () => reader },
+      }),
+    );
+
+    const { args } = makeArgs();
+    const { result } = renderHook(() => useChatStream(args));
+
+    await act(async () => {
+      await result.current.send("What's NVDA's margin?");
+    });
+
+    // The trace SURVIVES stream completion (unlike activeTools) — that is the
+    // entire point: the ?debug=1 drawer is opened after the answer settles.
+    expect(result.current.activeTools).toEqual([]);
+    expect(result.current.toolTrace).toHaveLength(1);
+    const entry = result.current.toolTrace[0];
+    expect(entry.tool).toBe("search_documents");
+    expect(entry.label).toBe("Searching documents...");
+    expect(entry.args).toEqual({ query: "NVDA margin" });
+    expect(entry.status).toBe("ok");
+    // Result payload keeps everything except the demux keys (type/tool/status).
+    expect(entry.result).toEqual({ item_count: 4 });
+    // Client-measured latency: a number ≥ 0 (jsdom performance.now monotonic).
+    expect(typeof entry.latencyMs).toBe("number");
+    expect(entry.latencyMs).toBeGreaterThanOrEqual(0);
+  });
+
+  it("clears the previous turn's trace and stale activeTools at the start of a new send", async () => {
+    // Turn 1: stream ends via READER EXHAUSTION (no done event) — the path
+    // that previously leaked activeTools into the next turn (orphaned-spinner
+    // bug): the server closed early so the tool_result/done cleanup never ran.
+    const frames1 = [
+      'event: tool_call\ndata: {"type":"tool_call","tool":"get_quote","label":"Fetching quote...","input":{},"status":"running"}\n',
+      'data: {"text":"partial"}\n',
+      // NO [DONE] — reader exhausts.
+    ];
+    const r1 = makeReader(frames1);
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      statusText: "OK",
+      body: { getReader: () => r1.reader },
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { args } = makeArgs();
+    const { result } = renderHook(() => useChatStream(args));
+
+    await act(async () => {
+      await result.current.send("first question");
+    });
+
+    // Turn 1 left a running entry in the trace (no tool_result ever arrived).
+    expect(result.current.toolTrace).toHaveLength(1);
+    expect(result.current.toolTrace[0].status).toBe("running");
+
+    // Turn 2: a plain no-tool stream. Before its first event arrives the
+    // stale tool state from turn 1 must already be gone.
+    const r2 = makeReader(['data: {"text":"clean"}\n', "data: [DONE]\n"]);
+    fetchMock.mockResolvedValue({
+      ok: true,
+      status: 200,
+      statusText: "OK",
+      body: { getReader: () => r2.reader },
+    });
+
+    await act(async () => {
+      await result.current.send("second question");
+    });
+
+    // No tools ran in turn 2 → both views are empty; nothing leaked.
+    expect(result.current.activeTools).toEqual([]);
+    expect(result.current.toolTrace).toEqual([]);
+  });
+
+  it("resetForThread clears the trace (no cross-thread leakage)", async () => {
+    const frames = [
+      'event: tool_call\ndata: {"type":"tool_call","tool":"search_documents","label":"Searching...","input":{},"status":"running"}\n',
+      'event: tool_result\ndata: {"type":"tool_result","tool":"search_documents","status":"ok","item_count":1}\n',
+      "data: [DONE]\n",
+    ];
+    const { reader } = makeReader(frames);
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({
+        ok: true,
+        status: 200,
+        statusText: "OK",
+        body: { getReader: () => reader },
+      }),
+    );
+
+    const { args } = makeArgs();
+    const { result } = renderHook(() => useChatStream(args));
+
+    await act(async () => {
+      await result.current.send("q");
+    });
+    expect(result.current.toolTrace).toHaveLength(1);
+
+    act(() => {
+      result.current.resetForThread();
+    });
+    expect(result.current.toolTrace).toEqual([]);
+  });
+});
+
+describe("useChatStream — retry()", () => {
+  it("resubmits the failed question without duplicating the user bubble", async () => {
+    // First attempt: network-level failure (fetch rejects).
+    const fetchMock = vi.fn().mockRejectedValue(new Error("network down"));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { args } = makeArgs();
+    const { result } = renderHook(() => useChatStream(args));
+
+    await act(async () => {
+      await result.current.send("flaky question");
+    });
+
+    // Failure state: user bubble in the log + error banner armed.
+    expect(result.current.chatError).not.toBeNull();
+    expect(result.current.localMessages).toHaveLength(1);
+
+    // Second attempt succeeds.
+    const { reader } = makeReader(['data: {"text":"recovered"}\n', "data: [DONE]\n"]);
+    fetchMock.mockResolvedValue({
+      ok: true,
+      status: 200,
+      statusText: "OK",
+      body: { getReader: () => reader },
+    });
+
+    await act(async () => {
+      await result.current.retry();
+    });
+
+    // Same question went over the wire again…
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    const secondBody = JSON.parse(fetchMock.mock.calls[1][1].body as string);
+    expect(secondBody.message).toBe("flaky question");
+
+    // …but the user bubble was NOT echoed twice: exactly one user message
+    // followed by the recovered assistant message. Error banner cleared.
+    expect(result.current.chatError).toBeNull();
+    const roles = (result.current.localMessages as Array<{ role: string }>).map(
+      (m) => m.role,
+    );
+    expect(roles).toEqual(["user", "assistant"]);
+  });
+
+  it("is a no-op when nothing failed (no accidental resubmits)", async () => {
+    // Successful turn first — finalize() must clear the retry context.
+    const { reader } = makeReader(['data: {"text":"ok"}\n', "data: [DONE]\n"]);
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      statusText: "OK",
+      body: { getReader: () => reader },
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { args } = makeArgs();
+    const { result } = renderHook(() => useChatStream(args));
+
+    await act(async () => {
+      await result.current.send("fine question");
+    });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+
+    // retry() after success: no second request, no state churn.
+    await act(async () => {
+      await result.current.retry();
+    });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(result.current.localMessages).toHaveLength(2);
+  });
+
+  it("arms retry on a server-emitted error event too", async () => {
+    const frames = [
+      'event: error\ndata: {"message":"model overloaded"}\n',
+    ];
+    const { reader } = makeReader(frames);
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      statusText: "OK",
+      body: { getReader: () => reader },
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { args } = makeArgs();
+    const { result } = renderHook(() => useChatStream(args));
+
+    await act(async () => {
+      await result.current.send("doomed question");
+    });
+    expect(result.current.chatError).toBe("model overloaded");
+
+    // Retry goes over the wire with the same question.
+    const r2 = makeReader(['data: {"text":"better"}\n', "data: [DONE]\n"]);
+    fetchMock.mockResolvedValue({
+      ok: true,
+      status: 200,
+      statusText: "OK",
+      body: { getReader: () => r2.reader },
+    });
+    await act(async () => {
+      await result.current.retry();
+    });
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(
+      JSON.parse(fetchMock.mock.calls[1][1].body as string).message,
+    ).toBe("doomed question");
+  });
+});
