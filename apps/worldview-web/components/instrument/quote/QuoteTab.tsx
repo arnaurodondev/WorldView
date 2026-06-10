@@ -46,6 +46,7 @@ import { useQuery } from "@tanstack/react-query";
 
 import { qk } from "@/lib/query/keys";
 import { OHLCVChart } from "@/components/instrument/chart/OHLCVChart";
+import { KeyStatsBar } from "@/components/instrument/quote/stats/KeyStatsBar";
 import { SessionStatsStrip } from "@/components/instrument/SessionStatsStrip";
 import { MetricsTable } from "@/components/instrument/quote/metrics/MetricsTable";
 import { CompanyAboutCard } from "@/components/instrument/quote/about/CompanyAboutCard";
@@ -175,6 +176,16 @@ export function QuoteTab({
         <div className="flex-1 min-h-0 overflow-hidden">
           <OHLCVChart instrumentId={instrumentId} initialBars={initialBars} />
         </div>
+
+        {/* Key Stats bar (Round-2 item 1): 22px, MKT CAP / P/E / EPS / DIV YLD /
+            BETA directly under the chart. Reads the SAME cache slots
+            MetricsTable fills (passive subscriptions — zero extra fetches);
+            the slim bundle fundamentals + snapshot props cover first paint. */}
+        <KeyStatsBar
+          instrumentId={instrumentId}
+          fundamentals={fundamentals}
+          snapshot={bundle?.fundamentals_snapshot ?? null}
+        />
 
         {/* Session stats strip: 22px, shows today's O/H/L/V from chart cache. */}
         <SessionStatsStrip {...stripProps} />

@@ -145,6 +145,13 @@ export function IntelligenceTab({ entityId }: IntelligenceTabProps) {
           }}
           selectedEdgeId={selectedEdgeId}
           onClearEdgeSelection={() => setSelectedEdgeId(null)}
+          // Round-2 item 3: RelatedEntitiesPanel chips (inside ContextPanel)
+          // select ticker-less nodes in-panel. Same mutual-exclusion rule as
+          // the graph canvas: selecting a node dismisses any open edge detail.
+          onNodeSelect={(nodeId) => {
+            setSelectedNodeId(nodeId);
+            setSelectedEdgeId(null);
+          }}
         />
       </div>
     </div>

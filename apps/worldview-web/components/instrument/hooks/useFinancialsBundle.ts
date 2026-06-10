@@ -40,9 +40,12 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { createGateway } from "@/lib/gateway";
 import { useAccessToken } from "@/lib/api-client";
 import { qk } from "@/lib/query/keys";
-import type { FinancialsBundleResponse } from "@/lib/api/instruments";
+import {
+  transformFundamentalsSections,
+  type FinancialsBundleResponse,
+  type RawFundamentalsSections,
+} from "@/lib/api/instruments";
 import type {
-  Fundamentals,
   FundamentalsSnapshot,
   FundamentalsSectionResponse,
 } from "@/types/api";
@@ -109,14 +112,22 @@ export function useFinancialsBundle(instrumentId: string) {
     if (!bundle || !instrumentId) return;
 
     if (bundle.fundamentals != null) {
+      // ROUND-2 FIX (2026-06-10, BP-379 recurrence): the bundle's
+      // `fundamentals` leg is the RAW S3 all-sections payload
+      // ({security_id, records:[…]}), NOT the flat `Fundamentals` shape the
+      // qk.instruments.fundamentals consumers (MetricsTable, DenseMetricsGrid,
+      // KeyStatsBar) expect. Seeding the raw object verbatim locked the cache
+      // with a wrong-shaped value for the full 1-hour staleTime — every flat
+      // field read `undefined` and the grids rendered "—" across the board.
+      // We now run the SAME transformer getFundamentals() uses (exported from
+      // lib/api/instruments.ts) so the seeded value is shape-identical to a
+      // direct endpoint fetch.
       queryClient.setQueryData(
         qk.instruments.fundamentals(instrumentId),
-        // WHY cast: the legs are typed as `unknown` in FinancialsBundleResponse
-        // (the structural mirror — see lib/api/instruments.ts) because the
-        // generated OpenAPI types have not yet been re-rolled. The per-widget
-        // hooks already typed their data shapes, so the cast just re-asserts
-        // what the gateway documents.
-        bundle.fundamentals as Fundamentals,
+        transformFundamentalsSections(
+          bundle.fundamentals as RawFundamentalsSections,
+          instrumentId,
+        ),
       );
     }
     if (bundle.fundamentals_snapshot != null) {
@@ -128,6 +139,16 @@ export function useFinancialsBundle(instrumentId: string) {
     if (bundle.income_statement != null) {
       queryClient.setQueryData(
         qk.instruments.incomeStatement(instrumentId),
+        bundle.income_statement as FundamentalsSectionResponse,
+      );
+      // ROUND-2 FIX (2026-06-10): IncomeStatementTable reads the legacy
+      // inline key ["income-statement", id] (predates the qk factory), so
+      // hydrating ONLY qk.instruments.incomeStatement left the table
+      // refetching the endpoint on every cold start despite the bundle
+      // already carrying the data. Dual-hydrate both keys — exactly the
+      // pattern earnings_history below already uses for its legacy key.
+      queryClient.setQueryData(
+        ["income-statement", instrumentId],
         bundle.income_statement as FundamentalsSectionResponse,
       );
     }

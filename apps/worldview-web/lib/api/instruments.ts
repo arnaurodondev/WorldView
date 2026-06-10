@@ -51,6 +51,107 @@ export interface FinancialsBundleResponse {
   fundamentals_timeseries: unknown | null;
 }
 
+/**
+ * RawFundamentalsSections — minimal structural type for the S3 all-sections
+ * payload ({security_id, records:[{section, data, ingested_at}, …]}).
+ *
+ * WHY structural (not FundamentalsSectionResponse from types/api): the
+ * transformer only touches these three fields; accepting the loosest shape
+ * lets the financials-bundle hydrator (whose legs are typed `unknown`) call
+ * it without lying through a cast to the full generated type.
+ */
+export interface RawFundamentalsSections {
+  security_id?: string;
+  records?: Array<Record<string, unknown>>;
+}
+
+/**
+ * transformFundamentalsSections — S3 all-sections payload → flat Fundamentals.
+ *
+ * WHY EXPORTED (Round-2 fix, 2026-06-10): this transform used to live inline
+ * in getFundamentals(). useFinancialsBundle then hydrated the
+ * qk.instruments.fundamentals cache with the bundle's RAW all-sections leg
+ * cast to `Fundamentals` — the exact BP-379 wrong-shape-seeding failure: every
+ * consumer of that key (DenseMetricsGrid, MetricsTable, KeyStatsBar) read
+ * `undefined` for all flat fields until the 1-hour staleTime expired.
+ * Exporting the transformer lets the hydrator seed the CORRECT shape from the
+ * same single source of truth (no duplicated mapping to drift).
+ *
+ * Mapping notes (unchanged from the original inline implementation):
+ *   - extracts the singleton "highlights", "valuation_ratios",
+ *     "technicals_snapshot" and "analyst_consensus" sections;
+ *   - derives gross margin (GrossProfitTTM / RevenueTTM) and payout ratio
+ *     (DividendShare / EarningsShare) when the inputs are positive;
+ *   - balance-sheet ratios stay null (require the snapshot endpoint — BP-369).
+ */
+export function transformFundamentalsSections(
+  raw: RawFundamentalsSections,
+  instrumentId: string,
+): Fundamentals {
+  const num = (v: unknown): number | null => {
+    if (v == null || v === "") return null;
+    const n = typeof v === "number" ? v : Number(v);
+    return Number.isFinite(n) ? n : null;
+  };
+  // Extract singleton sections (one record each)
+  let hi: Record<string, unknown> = {};
+  let vr: Record<string, unknown> = {};
+  let ts: Record<string, unknown> = {};
+  // Audit 2026-05-09: also extract analyst_consensus (Buy/Hold/Sell/StrongBuy/StrongSell/Rating/TargetPrice)
+  // — previously dropped which forced AnalystConsensusStrip to render a hardcoded placeholder.
+  let ac: Record<string, unknown> = {};
+  let updatedAt: string | null = null;
+  for (const rec of raw.records ?? []) {
+    const data = (rec["data"] ?? {}) as Record<string, unknown>;
+    const section = rec["section"] as string | undefined;
+    if (section === "highlights" && !Object.keys(hi).length) { hi = data; updatedAt = rec["ingested_at"] as string ?? null; }
+    else if (section === "valuation_ratios" && !Object.keys(vr).length) vr = data;
+    else if (section === "technicals_snapshot" && !Object.keys(ts).length) ts = data;
+    else if (section === "analyst_consensus" && !Object.keys(ac).length) ac = data;
+  }
+  const grossMarginTTM = (num(hi["GrossProfitTTM"]) != null && num(hi["RevenueTTM"]) != null && num(hi["RevenueTTM"])! > 0)
+    ? num(hi["GrossProfitTTM"])! / num(hi["RevenueTTM"])!
+    : null;
+  const eps = num(hi["EarningsShare"]);
+  const div = num(hi["DividendShare"]);
+  const payoutRatio = eps != null && eps > 0 && div != null ? div / eps : null;
+  return {
+    instrument_id: raw.security_id ?? instrumentId,
+    ticker: "",  // populated by overview; FundamentalsTab doesn't render this
+    name: "",    // populated by overview
+    market_cap:           num(hi["MarketCapitalization"]),
+    pe_ratio:             num(hi["PERatio"]),
+    forward_pe:           num(vr["ForwardPE"]),
+    price_to_book:        num(vr["PriceBookMRQ"]),
+    price_to_sales:       num(vr["PriceSalesTTM"]),
+    ev_to_ebitda:         num(vr["EnterpriseValueEbitda"]),
+    gross_margin:         grossMarginTTM,
+    operating_margin:     num(hi["OperatingMarginTTM"]),
+    net_margin:           num(hi["ProfitMargin"]),
+    roe:                  num(hi["ReturnOnEquityTTM"]),
+    roa:                  num(hi["ReturnOnAssetsTTM"]),
+    revenue_growth_yoy:   num(hi["QuarterlyRevenueGrowthYOY"]),
+    earnings_growth_yoy:  num(hi["QuarterlyEarningsGrowthYOY"]),
+    dividend_yield:       num(hi["DividendYield"]),
+    payout_ratio:         payoutRatio,
+    debt_to_equity:       null, // requires balance-sheet join; populated by snapshot
+    current_ratio:        null, // requires balance-sheet join; populated by snapshot
+    quick_ratio:          null, // requires balance-sheet join; populated by snapshot
+    week_52_high:         num(ts["52WeekHigh"]),
+    week_52_low:          num(ts["52WeekLow"]),
+    daily_return:         null, // derived from OHLCV; available in overview.fundamentals
+    // Analyst consensus — see audit 2026-05-09. Field names match EODHD exactly.
+    analyst_strong_buy_count:   num(ac["StrongBuy"]),
+    analyst_buy_count:          num(ac["Buy"]),
+    analyst_hold_count:         num(ac["Hold"]),
+    analyst_sell_count:         num(ac["Sell"]),
+    analyst_strong_sell_count:  num(ac["StrongSell"]),
+    analyst_rating:             num(ac["Rating"]),
+    analyst_target_price:       num(ac["TargetPrice"]),
+    updated_at:           updatedAt,
+  };
+}
+
 export function createInstrumentsApi(t: string | undefined) {
   return {
     /**
@@ -354,68 +455,10 @@ export function createInstrumentsApi(t: string | undefined) {
         `/v1/fundamentals/${encodeURIComponent(instrumentId)}`,
         { token: t },
       );
-      const num = (v: unknown): number | null => {
-        if (v == null || v === "") return null;
-        const n = typeof v === "number" ? v : Number(v);
-        return Number.isFinite(n) ? n : null;
-      };
-      // Extract singleton sections (one record each)
-      let hi: Record<string, unknown> = {};
-      let vr: Record<string, unknown> = {};
-      let ts: Record<string, unknown> = {};
-      // Audit 2026-05-09: also extract analyst_consensus (Buy/Hold/Sell/StrongBuy/StrongSell/Rating/TargetPrice)
-      // — previously dropped which forced AnalystConsensusStrip to render a hardcoded placeholder.
-      let ac: Record<string, unknown> = {};
-      let updatedAt: string | null = null;
-      for (const rec of raw.records ?? []) {
-        const data = (rec["data"] ?? {}) as Record<string, unknown>;
-        const section = rec["section"] as string | undefined;
-        if (section === "highlights" && !Object.keys(hi).length) { hi = data; updatedAt = rec["ingested_at"] as string ?? null; }
-        else if (section === "valuation_ratios" && !Object.keys(vr).length) vr = data;
-        else if (section === "technicals_snapshot" && !Object.keys(ts).length) ts = data;
-        else if (section === "analyst_consensus" && !Object.keys(ac).length) ac = data;
-      }
-      const grossMarginTTM = (num(hi["GrossProfitTTM"]) != null && num(hi["RevenueTTM"]) != null && num(hi["RevenueTTM"])! > 0)
-        ? num(hi["GrossProfitTTM"])! / num(hi["RevenueTTM"])!
-        : null;
-      const eps = num(hi["EarningsShare"]);
-      const div = num(hi["DividendShare"]);
-      const payoutRatio = eps != null && eps > 0 && div != null ? div / eps : null;
-      return {
-        instrument_id: raw.security_id ?? instrumentId,
-        ticker: "",  // populated by overview; FundamentalsTab doesn't render this
-        name: "",    // populated by overview
-        market_cap:           num(hi["MarketCapitalization"]),
-        pe_ratio:             num(hi["PERatio"]),
-        forward_pe:           num(vr["ForwardPE"]),
-        price_to_book:        num(vr["PriceBookMRQ"]),
-        price_to_sales:       num(vr["PriceSalesTTM"]),
-        ev_to_ebitda:         num(vr["EnterpriseValueEbitda"]),
-        gross_margin:         grossMarginTTM,
-        operating_margin:     num(hi["OperatingMarginTTM"]),
-        net_margin:           num(hi["ProfitMargin"]),
-        roe:                  num(hi["ReturnOnEquityTTM"]),
-        roa:                  num(hi["ReturnOnAssetsTTM"]),
-        revenue_growth_yoy:   num(hi["QuarterlyRevenueGrowthYOY"]),
-        earnings_growth_yoy:  num(hi["QuarterlyEarningsGrowthYOY"]),
-        dividend_yield:       num(hi["DividendYield"]),
-        payout_ratio:         payoutRatio,
-        debt_to_equity:       null, // requires balance-sheet join; populated by snapshot
-        current_ratio:        null, // requires balance-sheet join; populated by snapshot
-        quick_ratio:          null, // requires balance-sheet join; populated by snapshot
-        week_52_high:         num(ts["52WeekHigh"]),
-        week_52_low:          num(ts["52WeekLow"]),
-        daily_return:         null, // derived from OHLCV; available in overview.fundamentals
-        // Analyst consensus — see audit 2026-05-09. Field names match EODHD exactly.
-        analyst_strong_buy_count:   num(ac["StrongBuy"]),
-        analyst_buy_count:          num(ac["Buy"]),
-        analyst_hold_count:         num(ac["Hold"]),
-        analyst_sell_count:         num(ac["Sell"]),
-        analyst_strong_sell_count:  num(ac["StrongSell"]),
-        analyst_rating:             num(ac["Rating"]),
-        analyst_target_price:       num(ac["TargetPrice"]),
-        updated_at:           updatedAt,
-      };
+      // WHY delegate: the section→flat mapping is shared with the
+      // financials-bundle cache hydrator (useFinancialsBundle) — see
+      // transformFundamentalsSections above for the full mapping rationale.
+      return transformFundamentalsSections(raw, instrumentId);
     },
 
     /**

@@ -31,6 +31,9 @@ import {
 } from "@/components/ui/accordion";
 import { Skeleton } from "@/components/ui/skeleton";
 import type { NarrativeVersionPublic } from "@/types/intelligence";
+// Round-2 item 4: timeline rendering (date + headline + marker column,
+// most recent at top) replaces the old flat VersionRow list.
+import { NarrativeTimeline, type NarrativeTimelineEntry } from "./NarrativeTimeline";
 // WHY iqk is not exported from intelligence.ts: we re-derive the same key shape
 // used by useEntityNarrativeHistory (["entity-narratives", entityId]) for targeted
 // invalidation during the post-202 polling cycle. TanStack Query uses deep-equality
@@ -47,55 +50,36 @@ const MAX_POLLS = 10;
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 /**
- * formatGeneratedAt — ISO datetime → "12 Jun 2026 · 14:32" display string.
- * WHY not Intl.DateTimeFormat with locale: this component renders server-side
- * during hydration; a locale-sensitive format causes a server/client mismatch
- * (React hydration warning). Fixed format avoids the inconsistency.
+ * headlineOf — derive a one-line headline from the full narrative text
+ * (Round-2 item 4). The narrative has no dedicated title field, so the first
+ * sentence IS the headline (KG narratives open with a thesis sentence, e.g.
+ * "Apple Inc. is a leading technology company that competes with…").
+ * Capped at 110 chars with an ellipsis so a run-on opener can't wrap the
+ * timeline row into a paragraph.
  */
-function formatGeneratedAt(iso: string): string {
-  try {
-    const d = new Date(iso);
-    const months = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
-    const h = String(d.getUTCHours()).padStart(2, "0");
-    const m = String(d.getUTCMinutes()).padStart(2, "0");
-    return `${d.getUTCDate()} ${months[d.getUTCMonth()]} ${d.getUTCFullYear()} · ${h}:${m}`;
-  } catch {
-    return iso;
-  }
+function headlineOf(narrativeText: string): string {
+  const firstSentence = narrativeText.split(/(?<=\.)\s+/, 1)[0] ?? narrativeText;
+  const trimmed = firstSentence.trim();
+  return trimmed.length > 110 ? `${trimmed.slice(0, 110).trimEnd()}…` : trimmed;
 }
 
-// ── Sub-component: version row ────────────────────────────────────────────────
-
-interface VersionRowProps {
-  version: NarrativeVersionPublic;
-}
-
-function VersionRow({ version }: VersionRowProps) {
-  // WHY details element: progressive disclosure without a second state layer.
-  // Keeping each row's expand-state local avoids lifting to the parent (which
-  // would require N useState slots for N versions).
-  return (
-    <details className="group py-1 border-b border-border/40 last:border-0">
-      <summary className="flex items-center gap-2 cursor-pointer list-none">
-        <span className="text-[10px] font-mono text-muted-foreground tabular-nums">
-          {formatGeneratedAt(version.generated_at)}
-        </span>
-        <span className="text-[9px] bg-muted text-muted-foreground px-1 py-0.5 rounded-[2px] font-mono truncate max-w-[80px]">
-          {version.model_id.split("/").pop()}
-        </span>
-        {/* First 80 chars of narrative as a one-liner preview */}
-        <span className="text-[10px] text-foreground/70 truncate flex-1">
-          {version.narrative_text.slice(0, 80)}…
-        </span>
-      </summary>
-      {/* Expanded: full narrative_text, max 400px, scrollable */}
-      <div className="mt-1 max-h-[400px] overflow-y-auto">
-        <p className="text-[10px] text-foreground/80 leading-relaxed whitespace-pre-wrap">
-          {version.narrative_text}
-        </p>
-      </div>
-    </details>
-  );
+/**
+ * toTimelineEntries — NarrativeVersionPublic[] → NarrativeTimelineEntry[].
+ *
+ * WHY sentiment is NEVER set here: the S9 payload carries no per-version
+ * sentiment field (verified live 2026-06-10 — keys are version_id,
+ * narrative_text, model_id, generation_reason, generated_at, word_count,
+ * quality_score). The timeline renders a hollow marker for undefined
+ * sentiment; fabricating "neutral" client-side would misrepresent unscored
+ * data as scored. When the backend adds the field, map it through here.
+ */
+function toTimelineEntries(versions: NarrativeVersionPublic[]): NarrativeTimelineEntry[] {
+  return versions.map((v) => ({
+    id: v.version_id,
+    date: v.generated_at,
+    headline: headlineOf(v.narrative_text),
+    fullText: v.narrative_text,
+  }));
 }
 
 // ── Main component ────────────────────────────────────────────────────────────
@@ -173,18 +157,11 @@ export function NarrativeHistoryDisclosure({ entityId }: NarrativeHistoryDisclos
             </button>
           </div>
 
-          {/* ── Version list ────────────────────────────────────────────────── */}
-          {allVersions.length === 0 ? (
-            <p className="text-[10px] text-muted-foreground italic">
-              Only the current version exists.
-            </p>
-          ) : (
-            <div className="space-y-0">
-              {allVersions.map((v) => (
-                <VersionRow key={v.version_id} version={v} />
-              ))}
-            </div>
-          )}
+          {/* ── Version timeline (Round-2 item 4) ──────────────────────────────
+              Most recent at top; each entry = date + first-sentence headline,
+              expandable to the full narrative. The timeline itself owns the
+              zero-entries named empty state, so no branch is needed here. */}
+          <NarrativeTimeline entries={toTimelineEntries(allVersions)} />
         </AccordionContent>
       </AccordionItem>
     </Accordion>

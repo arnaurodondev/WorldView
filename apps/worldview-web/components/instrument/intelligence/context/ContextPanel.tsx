@@ -46,6 +46,7 @@ import { RelationsList } from "./RelationsList";
 import { EdgeDetailCard } from "./EdgeDetailCard";
 import { ContradictionsBlock } from "./ContradictionsBlock";
 import { NarrativeHistoryDisclosure } from "./NarrativeHistoryDisclosure";
+import { RelatedEntitiesPanel } from "./RelatedEntitiesPanel";
 import type { EntityGraph, GraphEdge, GraphNode } from "@/types/api";
 
 /**
@@ -73,6 +74,13 @@ export interface ContextPanelProps {
   selectedEdgeId?: string | null;
   /** Clears the edge selection, returning to entity-overview mode. */
   onClearEdgeSelection?: () => void;
+  /**
+   * Selects a node from WITHIN the panel (Round-2 item 3): the
+   * RelatedEntitiesPanel chips for ticker-less entities flip the rail into
+   * node-detail mode, mirroring a graph-canvas node click. Optional so
+   * existing callers/tests that never select via chips keep compiling.
+   */
+  onNodeSelect?: (nodeId: string) => void;
   /** Currently active graph depth — used by EdgeDetailCard to locate the
    *  correct TanStack Query cache slot. Defaults to 2. */
   graphDepth?: number;
@@ -122,6 +130,7 @@ export function ContextPanel({
   onClearSelection,
   selectedEdgeId = null,
   onClearEdgeSelection,
+  onNodeSelect,
   graphDepth = 2,
   className,
 }: ContextPanelProps) {
@@ -363,6 +372,21 @@ export function ContextPanel({
           {entity.enriched_at ? formatDate(entity.enriched_at) : "—"}
         </span>
       </p>
+
+      {/* ── Related entities (Round-2 item 3) ──────────────────────────────
+          Chips for the depth=2 graph neighbours, grouped Companies / People /
+          Topics & Other. Purely derived from the SAME graphQuery cache slot
+          this panel already subscribes to — zero extra fetches. Company chips
+          with a ticker navigate to /instruments/{ticker}; everything else
+          flips this rail into node-detail mode via onNodeSelect (no-op
+          select-fallback when the parent did not wire the callback). */}
+      <div className="border-t border-border/40 pt-2">
+        <RelatedEntitiesPanel
+          entityId={entityId}
+          nodes={graphQuery.data?.nodes}
+          onNodeSelect={onNodeSelect ?? (() => undefined)}
+        />
+      </div>
 
       {/* ── Contradictions (Block I, T-12) ──────────────────────────────────
           WHY here (not a separate panel): the right rail is vertically

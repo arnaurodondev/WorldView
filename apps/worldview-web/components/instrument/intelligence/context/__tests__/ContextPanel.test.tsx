@@ -14,6 +14,12 @@ import React, { type ReactNode } from "react";
 import { render, screen, waitFor, cleanup } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 
+// Round-2 item 3: the RelatedEntitiesPanel child navigates company chips via
+// useRouter — jsdom has no Next router context, so stub it (push is not
+// asserted in this suite; the chip-navigation contract is pinned in
+// RelatedEntitiesPanel.test.tsx).
+vi.mock("next/navigation", () => ({ useRouter: () => ({ push: vi.fn() }) }));
+
 vi.mock("@/hooks/useAuth", () => ({
   useAuth: vi.fn(() => ({
     accessToken: "test-token",

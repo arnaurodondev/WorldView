@@ -38,6 +38,7 @@ import { useFinancialsTabData } from "@/components/instrument/hooks/useFinancial
 import { useFinancialsSidebarData } from "@/components/instrument/hooks/useFinancialsSidebarData";
 import { DenseMetricsGrid } from "@/components/instrument/financials/DenseMetricsGrid";
 import { IncomeStatementTable } from "@/components/instrument/financials/IncomeStatementTable";
+import { FinancialStatementsPanel } from "@/components/instrument/financials/statements/FinancialStatementsPanel";
 import { EarningsBarChart } from "@/components/instrument/financials/EarningsBarChart";
 import { PeerComparisonTable } from "@/components/instrument/financials/PeerComparisonTable";
 import { InsiderTransactionsTable } from "@/components/instrument/financials/InsiderTransactionsTable";
@@ -146,6 +147,14 @@ export function FinancialsTab({ instrumentId, entityId, instrument, quote }: Fin
           periodType={periodType}
           onPeriodToggle={togglePeriod}
         />
+
+        {/* Block 2b (Round-2 item 2): FinancialStatementsPanel — Income /
+            Balance Sheet / Cash Flow mini-tables with Annual/TTM toggle and a
+            YoY delta column. Reads the raw all-sections leg from the SAME
+            financials-bundle response the hooks above already fetched (the
+            useFinancialsBundle call inside the panel dedupes by query key) —
+            zero additional round-trips. */}
+        <FinancialStatementsPanel instrumentId={instrumentId} />
 
         {/* Block 3: EarningsBarChart — 64px height, EPS surprise chip */}
         <EarningsBarChart instrumentId={instrumentId} />
