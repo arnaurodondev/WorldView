@@ -64,14 +64,18 @@ const ScreenerFilterBar = dynamic(
     // header band) instead of nothing. WHY: with no fallback the chip strip
     // and grid visibly jumped up ~36px when the chunk arrived; the stub
     // reserves the exact height so the swap-in is invisible.
+    // ROUND-4 (item 4 — §6.2 sweep): the stub bars are now STATIC bg-muted.
+    // Tailwind's raw `animate-pulse` is BANNED for skeletons (DS §6.2 table) —
+    // a chunk download is a sub-second load, nowhere near the >2s threshold
+    // that would justify the opt-in `animate-skeleton-pulse`.
     loading: () => (
       <div
         data-testid="screener-filterbar-skeleton"
         className="flex h-9 shrink-0 items-center gap-2 border-b border-border px-2"
         aria-hidden
       >
-        <div className="h-2 w-16 animate-pulse rounded-[1px] bg-muted" />
-        <div className="h-2 w-10 animate-pulse rounded-[1px] bg-muted" />
+        <div className="h-2 w-16 rounded-[1px] bg-muted" />
+        <div className="h-2 w-10 rounded-[1px] bg-muted" />
       </div>
     ),
   },
@@ -82,11 +86,12 @@ const ScreenerFilterBar = dynamic(
 import { EmptyState } from "@/components/primitives/EmptyState";
 // Icons for the two distinct zero-states: Inbox = cold start (universe empty),
 // SearchX = filters excluded everything (actionable — reset/widen filters).
-import { Inbox, SearchX } from "lucide-react";
+// ROUND-4 (item 1): AlertTriangle = query-failure error state (with Retry).
+import { AlertTriangle, Inbox, SearchX } from "lucide-react";
 // ROUND-3 (item 4): shape-matched 20px-pitch skeleton shown while the first
 // screener query is in flight (replaces the blank grid body).
 import { ScreenerTableSkeleton } from "@/components/screener/ScreenerTableSkeleton";
-import type { ScreenerResult, ScreenerRequest } from "@/types/api";
+import type { ScreenerResult, ScreenerRequest, OHLCVBar } from "@/types/api";
 import { SavedScreensDialog } from "@/components/screener/SavedScreensDialog";
 import { ColumnSettingsPopover } from "@/components/screener/ColumnSettingsPopover";
 import { ExportMenu, type ExportColumn } from "@/components/screener/ExportMenu";
@@ -109,6 +114,23 @@ import { toast } from "sonner";
 // ── Constants ─────────────────────────────────────────────────────────────────
 
 const PAGE_SIZE = 50;
+
+// ROUND-4 (item 3a — columnDefs identity stability): module-level frozen empty
+// map used as the sparklines fallback.
+//
+// WHY THIS EXISTS: useScreenerSparklines returns `query.data ?? {}` — a FRESH
+// `{}` object literal on every render whenever sparkline data is absent
+// (column hidden, query suppressed at >200 rows, query still in flight, or
+// query errored). That fresh identity flows into the `agColumns` useMemo dep
+// array, so `createAgScreenerColumns` re-ran — and AG Grid received brand-new
+// columnDefs — on EVERY page render, including completely unrelated state
+// changes (filter-panel toggle, row hover, dialog open). AG Grid diffs
+// columnDefs by reference, so each re-creation forces an expensive column
+// reconciliation pass. Substituting one module-level constant whenever the map
+// is empty restores referential stability; when data IS present, TanStack
+// Query's own caching keeps `query.data` stable across renders, so no extra
+// handling is needed on that side.
+const EMPTY_SPARKLINES: Record<string, OHLCVBar[]> = Object.freeze({});
 
 // ── ScreenerPage ──────────────────────────────────────────────────────────────
 
@@ -218,7 +240,10 @@ export default function ScreenerPage() {
   );
 
   // ── S9 screener query ─────────────────────────────────────────────────────
-  const { data, isLoading, isFetching, error } = useQuery({
+  // ROUND-4 (item 1): `refetch` is destructured so the error state can offer a
+  // real Retry (re-fires the SAME query — filters + offset preserved) instead
+  // of forcing the user to reload the page or wiggle a filter to recover.
+  const { data, isLoading, isFetching, error, refetch } = useQuery({
     queryKey: qk.screener.page(filterSerialized, offset),
     queryFn: () => createGateway(accessToken).runScreener(request),
     enabled: !!accessToken,
@@ -344,11 +369,18 @@ export default function ScreenerPage() {
     () => filteredRows.map((r) => r.instrument_id),
     [filteredRows],
   );
-  const { sparklines } = useScreenerSparklines(visibleInstrumentIds, {
+  const { sparklines: sparklinesRaw } = useScreenerSparklines(visibleInstrumentIds, {
     timeframe: "1d",
     limit: 30,
     enabled: sparklineEnabled,
   });
+  // ROUND-4 (item 3a): identity-stabilise the empty case. The hook's `?? {}`
+  // fallback allocates a new object per render, which would invalidate the
+  // agColumns useMemo below on every render — see EMPTY_SPARKLINES above for
+  // the full rationale. Non-empty maps keep the hook's (TanStack-stable)
+  // `query.data` reference untouched.
+  const sparklines =
+    Object.keys(sparklinesRaw).length > 0 ? sparklinesRaw : EMPTY_SPARKLINES;
 
   // ── AG Grid column definitions ────────────────────────────────────────────
   // FR-4.5: pass sparklineSuppressed so the TREND column renders "—" (not an
@@ -421,7 +453,11 @@ export default function ScreenerPage() {
 
   // ── Load More state ───────────────────────────────────────────────────────
   const remaining = Math.max(0, serverTotal - accumulator.length);
-  const canLoadMore = remaining > 0 && !isFetching;
+  // ROUND-4 (item 1): `!error` guard — when a Load More page fails, the Load
+  // More button is replaced by the inline error strip below (which owns the
+  // Retry affordance). Showing BOTH would offer two competing recovery paths
+  // for the same failed request.
+  const canLoadMore = remaining > 0 && !isFetching && !error;
   const nextBatch = Math.min(PAGE_SIZE, remaining);
 
   const loadedDisplayed = filteredRows.length;
@@ -526,7 +562,17 @@ export default function ScreenerPage() {
           need a relative ancestor, but we still want the overflow:hidden wrapper
           to clip the grid correctly. The toolbar escapes this container by
           design (fixed positioning). */}
-      <div className="flex-1 min-h-0 flex flex-col overflow-hidden relative">
+      {/* ROUND-4 (item 2): role="region" + aria-label on the grid container.
+          AgGridBase is a shared component (not owned by this surface) and does
+          not forward an aria-label to AG Grid's internal role="grid" element,
+          so screen-reader users previously hit an unlabeled grid landmark.
+          Labelling the wrapping region gives the table a navigable, named
+          landmark without touching the shared wrapper. */}
+      <div
+        role="region"
+        aria-label="Screener results"
+        className="flex-1 min-h-0 flex flex-col overflow-hidden relative"
+      >
         {/* ── Sorting (ROUND-1 item 5) ─────────────────────────────────────
             Single-column sort: click any header (all numeric columns set
             sortable: true in ag-screener-columns.tsx).
@@ -641,6 +687,80 @@ export default function ScreenerPage() {
         {isLoading && accumulator.length === 0 && (
           <div className="absolute inset-0 z-10 bg-background">
             <ScreenerTableSkeleton rows={20} />
+          </div>
+        )}
+
+        {/* ── Query-failure error state (ROUND-4 item 1) ───────────────── */}
+        {/* WHY THIS EXISTS: before Round 4 a failed screener query rendered a
+            BLANK grid — `error` was destructured but never rendered, and the
+            zero-state below is guarded by `!error`, so the user saw 34 column
+            headers over nothing, with no way to recover except a full reload.
+            DS §6.1 mandates error + retry for every data fetch.
+            WHY an OVERLAY (same absolute/z-10 treatment as the skeleton): the
+            grid must stay mounted (header assertions in screener.test.tsx run
+            synchronously), and an opaque cover reads as "the table is down",
+            which is the truth.
+            WHY only when accumulator is empty: if the user already has rows
+            loaded and a Load More page fails, blanking 200 loaded rows to
+            show an error card would destroy their work — the inline strip
+            below handles that case instead.
+            WHY not a stuck skeleton: TanStack settles `isLoading` to false
+            once retries are exhausted, so the skeleton overlay above
+            unmounts and this card takes over — verified by
+            __tests__/screener-error-state.test.tsx. */}
+        {!isLoading && !!error && accumulator.length === 0 && (
+          <div className="absolute inset-0 z-10 bg-background flex items-center justify-center">
+            <EmptyState
+              condition="error"
+              // WHY generic.error (not a screener.* key): the copy dictionary
+              // (lib/copy/empty-states.ts) is a SHARED file outside this
+              // surface's ownership; generic.error already carries the right
+              // "Couldn't load / Retry" copy, so no new key is needed.
+              copyKey="generic.error"
+              icon={AlertTriangle}
+              action={
+                <button
+                  type="button"
+                  aria-label="Retry screener query"
+                  // WHY disabled while isFetching: refetch() is already in
+                  // flight — double-firing would just queue a duplicate POST.
+                  disabled={isFetching}
+                  // WHY refetch (not handleApply): Retry must re-run the SAME
+                  // query (same filters, same offset). handleApply would reset
+                  // pagination and clear the accumulator — wrong semantics for
+                  // "try that again".
+                  onClick={() => void refetch()}
+                  className="h-7 px-3 text-[10px] font-mono uppercase tracking-[0.06em] bg-primary/10 border border-primary/60 text-primary rounded-[2px] hover:bg-primary/20 transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:opacity-60 disabled:cursor-not-allowed"
+                >
+                  {isFetching ? "Retrying…" : "Retry"}
+                </button>
+              }
+            />
+          </div>
+        )}
+
+        {/* ── Load More failure strip (ROUND-4 item 1, partial-data case) ── */}
+        {/* Rendered in the Load More bar's slot (same height/border) so the
+            pagination chrome doesn't jump — the failed "load 50 more" action
+            is replaced in place by its own retry affordance while the already
+            loaded rows stay fully usable above. */}
+        {!!error && accumulator.length > 0 && (
+          <div
+            role="alert"
+            className="shrink-0 border-t border-border flex items-center justify-center gap-3 px-3 py-1.5 bg-card"
+          >
+            <span className="font-mono text-[10px] uppercase tracking-[0.06em] text-negative">
+              Couldn&apos;t load more results
+            </span>
+            <button
+              type="button"
+              aria-label="Retry loading more results"
+              disabled={isFetching}
+              onClick={() => void refetch()}
+              className="h-7 px-3 text-[10px] font-mono uppercase tracking-[0.06em] bg-background border border-border text-muted-foreground rounded-[2px] hover:text-foreground hover:border-primary/60 transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-60"
+            >
+              {isFetching ? "Retrying…" : "Retry"}
+            </button>
           </div>
         )}
 

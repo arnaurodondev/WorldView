@@ -89,11 +89,21 @@ export function ScreenerTableSkeleton({ rows = 16, className }: ScreenerTableSke
       role="status"
       aria-label="Loading screener results"
       data-testid="screener-table-skeleton"
-      // WHY animate-pulse on the WRAPPER (not per bar): one composited opacity
-      // animation instead of (15 cols × 17 rows) independent ones — same visual,
-      // far cheaper. overflow-hidden clips the fixed-width column row on
-      // narrow viewports exactly like the real grid's horizontal overflow.
-      className={cn("animate-pulse overflow-hidden bg-background", className)}
+      // ROUND-4 (item 4 — DS §6.2 sweep): the wrapper previously carried
+      // Tailwind's raw `animate-pulse`, which §6.2 BANS for skeletons
+      // (fast consumer-app pulse + bypasses the reduced-motion semantics
+      // maintained in globals.css). The skeleton is now STATIC, the §6.2
+      // default tier — Bloomberg-style terminals use static loading bars;
+      // finance users read animation as "something is streaming".
+      // WHY NOT the `animate-skeleton-pulse` opt-in: that tier is reserved
+      // for loads expected to exceed 2s (e.g. AI generation). The screener's
+      // cold query is a paginated 50-row fundamentals scan that returns in
+      // well under a second on the live stack (p95 FTS-era measurements put
+      // comparable S9 reads <100ms) — nowhere near the 2s bar, so the
+      // static default applies. Decision documented per the Round-4 spec.
+      // overflow-hidden clips the fixed-width column row on narrow viewports
+      // exactly like the real grid's horizontal overflow.
+      className={cn("overflow-hidden bg-background", className)}
     >
       {/* ── Header band — mirrors headerHeight={20} + --ag-header-background ── */}
       <div

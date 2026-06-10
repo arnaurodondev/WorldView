@@ -10,8 +10,12 @@
  *   addition either replaces an existing default or is shipped as opt-in.
  */
 
-import { describe, expect, it } from "vitest";
-import { DEFAULT_COLUMNS } from "@/lib/screener-columns";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import {
+  DEFAULT_COLUMNS,
+  loadColumnPrefs,
+  SCREENER_COLUMNS_KEY,
+} from "@/lib/screener-columns";
 
 describe("screener-columns DEFAULT_COLUMNS", () => {
   // ── §6.3 14-cap regression guard ───────────────────────────────────────────
@@ -42,5 +46,74 @@ describe("screener-columns DEFAULT_COLUMNS", () => {
   it("has unique column keys", () => {
     const keys = DEFAULT_COLUMNS.map((c) => c.key);
     expect(new Set(keys).size).toBe(keys.length);
+  });
+});
+
+// ── Round-4 item 1: corrupted localStorage prefs heal on read ────────────────
+//
+// WHY THIS BLOCK: loadColumnPrefs() has always healed corrupt storage (try/
+// catch + Array guard + per-entry shape checks + ESSENTIAL coercion), but
+// none of that was pinned by tests — a refactor could silently drop a guard
+// and the screener would crash at mount for any user with a stale/corrupt
+// "worldview:screenerColumns:v1" key. These tests verify each healing path.
+
+describe("loadColumnPrefs — corrupted localStorage healing (Round 4)", () => {
+  beforeEach(() => {
+    window.localStorage.clear();
+  });
+  afterEach(() => {
+    window.localStorage.clear();
+  });
+
+  /** The full default catalogue, as loadColumnPrefs returns it with no storage. */
+  function defaults() {
+    window.localStorage.removeItem(SCREENER_COLUMNS_KEY);
+    return loadColumnPrefs();
+  }
+
+  it("returns defaults (no throw) for syntactically invalid JSON", () => {
+    window.localStorage.setItem(SCREENER_COLUMNS_KEY, "{not valid json!!");
+    expect(loadColumnPrefs()).toEqual(defaults());
+  });
+
+  it("returns defaults for valid JSON that is not an array", () => {
+    window.localStorage.setItem(SCREENER_COLUMNS_KEY, JSON.stringify({ key: "ticker" }));
+    expect(loadColumnPrefs()).toEqual(defaults());
+  });
+
+  it("skips garbage entries (null / non-object / numeric key) but keeps valid ones", () => {
+    window.localStorage.setItem(
+      SCREENER_COLUMNS_KEY,
+      JSON.stringify([
+        null,                       // garbage: null entry
+        42,                         // garbage: primitive entry
+        { key: 123 },               // garbage: non-string key
+        { key: "ghostColumn" },     // dropped: key no longer in DEFAULT_COLUMNS
+        { key: "pe", visible: false }, // valid: user hid P/E
+      ]),
+    );
+    const cols = loadColumnPrefs();
+    // No garbage leaked into the result…
+    expect(cols.every((c) => typeof c.key === "string")).toBe(true);
+    expect(cols.find((c) => c.key === "ghostColumn")).toBeUndefined();
+    // …the valid user choice survived…
+    expect(cols.find((c) => c.key === "pe")?.visible).toBe(false);
+    // …and every default column is still present (merge-with-defaults).
+    expect(cols.length).toBe(DEFAULT_COLUMNS.length);
+  });
+
+  it("coerces ESSENTIAL columns (ticker/name) back to visible from stale prefs", () => {
+    // Prefs written BEFORE the Round-2 non-hideable rule could carry
+    // visible:false for ticker — healing on READ means no migration needed.
+    window.localStorage.setItem(
+      SCREENER_COLUMNS_KEY,
+      JSON.stringify([
+        { key: "ticker", visible: false },
+        { key: "name", visible: false },
+      ]),
+    );
+    const cols = loadColumnPrefs();
+    expect(cols.find((c) => c.key === "ticker")?.visible).toBe(true);
+    expect(cols.find((c) => c.key === "name")?.visible).toBe(true);
   });
 });

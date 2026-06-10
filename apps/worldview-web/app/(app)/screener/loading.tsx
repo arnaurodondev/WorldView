@@ -22,21 +22,25 @@ export default function Loading() {
   return (
     <div className="flex h-full flex-col bg-background">
       {/* Toolbar placeholder — mirrors ScreenerHeader's 36px band so the real
-          toolbar replaces it 1:1 without vertical shift. */}
+          toolbar replaces it 1:1 without vertical shift.
+          ROUND-4 (item 4 — DS §6.2 sweep): all stub bars are STATIC bg-muted.
+          Raw `animate-pulse` is banned for skeletons (§6.2); the route shell
+          streams in well under the 2s threshold that would justify the
+          `animate-skeleton-pulse` opt-in. */}
       <div className="flex h-[36px] shrink-0 items-center gap-2 border-b border-border px-3">
-        <div className="h-2 w-32 animate-pulse rounded-[1px] bg-muted" />
-        <div className="h-2 w-10 animate-pulse rounded-[1px] bg-muted" />
+        <div className="h-2 w-32 rounded-[1px] bg-muted" />
+        <div className="h-2 w-10 rounded-[1px] bg-muted" />
         <div className="ml-auto flex items-center gap-1">
           {/* Three 28px button stubs ≈ Filters / Saved Screens / Export. */}
-          <div className="h-7 w-16 animate-pulse rounded-[2px] bg-muted" />
-          <div className="h-7 w-20 animate-pulse rounded-[2px] bg-muted" />
-          <div className="h-7 w-16 animate-pulse rounded-[2px] bg-muted" />
+          <div className="h-7 w-16 rounded-[2px] bg-muted" />
+          <div className="h-7 w-20 rounded-[2px] bg-muted" />
+          <div className="h-7 w-16 rounded-[2px] bg-muted" />
         </div>
       </div>
 
       {/* Chip-strip placeholder — mirrors FilterChipStrip's reserved 28px row. */}
       <div className="flex min-h-[28px] shrink-0 items-center border-b border-border bg-card px-3">
-        <div className="h-2 w-20 animate-pulse rounded-[1px] bg-muted" />
+        <div className="h-2 w-20 rounded-[1px] bg-muted" />
       </div>
 
       {/* Header + 20px-pitch column-shaped rows. */}

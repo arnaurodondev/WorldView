@@ -58,3 +58,24 @@ describe("ScreenerTableSkeleton", () => {
     }
   });
 });
+
+// ── Round-4 item 4: DS §6.2 — skeletons are STATIC ───────────────────────────
+
+describe("ScreenerTableSkeleton — §6.2 static-skeleton rule (Round 4)", () => {
+  it("contains NO raw animate-pulse anywhere (banned by DS §6.2)", () => {
+    // WHY scan the whole subtree (not just the wrapper): the rule bans the
+    // class on every skeleton element; a per-bar regression would be just as
+    // wrong as the old wrapper-level one.
+    const { container } = render(<ScreenerTableSkeleton rows={3} />);
+    expect(container.innerHTML).not.toContain("animate-pulse");
+  });
+
+  it("does not opt into animate-skeleton-pulse either (cold query is <2s)", () => {
+    // The 2s-plus opt-in tier is documented as NOT applying to the screener
+    // (sub-second fundamentals scan) — see the WHY block in the component.
+    // If the query ever genuinely slows past 2s, flip this assertion together
+    // with the class, citing the measurement.
+    const { container } = render(<ScreenerTableSkeleton rows={3} />);
+    expect(container.innerHTML).not.toContain("animate-skeleton-pulse");
+  });
+});

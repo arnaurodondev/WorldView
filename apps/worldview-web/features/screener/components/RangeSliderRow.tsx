@@ -147,12 +147,24 @@ export function RangeSliderRow({
               them with loose regexes (/p\/e .*ttm.*minimum/i). Reusing the
               word would make those queries ambiguous (two matches) — distinct
               wording keeps both controls uniquely addressable. */}
+          {/* ROUND-4 (item 2 — slider a11y): each thumb carries aria-valuetext
+              with the HUMAN-READABLE domain value. Radix announces the raw
+              integer track POSITION via aria-valuenow (0…steps, e.g. 0–300 on
+              the Market Cap log track) — meaningless to a screen-reader user
+              ("142" instead of "$7.1B"). aria-valuetext overrides what AT
+              reads aloud; Radix does not set it itself, so the prop passes
+              straight through to the role="slider" element. The unset side
+              announces its real meaning ("Any (no lower bound)") rather than
+              a phantom value at the track end. formatValue is the same
+              formatter the visual readout uses, so eyes and ears agree. */}
           <SliderPrimitive.Thumb
             aria-label={`${label} lower bound slider thumb`}
+            aria-valuetext={min === undefined ? "Any (no lower bound)" : formatValue(min)}
             className="block h-3.5 w-3.5 rounded-full border border-primary/50 bg-background shadow transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:pointer-events-none disabled:bg-[hsl(var(--disabled-bg))] disabled:border-[hsl(var(--disabled-border))]"
           />
           <SliderPrimitive.Thumb
             aria-label={`${label} upper bound slider thumb`}
+            aria-valuetext={max === undefined ? "Any (no upper bound)" : formatValue(max)}
             className="block h-3.5 w-3.5 rounded-full border border-primary/50 bg-background shadow transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:pointer-events-none disabled:bg-[hsl(var(--disabled-bg))] disabled:border-[hsl(var(--disabled-border))]"
           />
         </SliderPrimitive.Root>

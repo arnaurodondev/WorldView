@@ -143,3 +143,65 @@ describe("ExportMenu", () => {
     expect(arg.filenameStem).toMatch(/^screener-\d{8}-\d{4}$/);
   });
 });
+
+// ── Round-4 item 1: zero-row export is a graceful no-op ──────────────────────
+//
+// WHY: the screener page disables the trigger at 0 rows, but ExportMenu is a
+// generic component — other call sites may not, and a background refetch can
+// empty the grid while the menu is open. Exporting zero rows would produce a
+// header-only CSV (user-reported as "broken export") or crash exporters that
+// assume ≥1 row. Round 4 adds a toast + no-op guard; these tests pin it.
+
+// WHY vi.mock here is safe: vitest hoists vi.mock factories to the top of the
+// module, so this applies to the ExportMenu import above as well.
+vi.mock("sonner", () => ({
+  toast: { info: vi.fn(), success: vi.fn(), error: vi.fn() },
+}));
+
+describe("ExportMenu — zero-row guard (Round 4)", () => {
+  it("clicking CSV with zero rows exports nothing and shows an informational toast", async () => {
+    const { toast } = await import("sonner");
+    const user = userEvent.setup();
+    // Trigger NOT disabled — simulates a call site without the disabled wiring
+    // (or the open-menu race where rows empty after the menu opened).
+    render(<ExportMenu rows={[] as Row[]} columns={COLS} filenameBase="screener" />);
+
+    await user.click(screen.getByRole("button", { name: /export results/i }));
+    await user.click(await screen.findByRole("menuitem", { name: /export as csv/i }));
+
+    expect(exportToCsv).not.toHaveBeenCalled();
+    expect(toast.info).toHaveBeenCalledTimes(1);
+    expect((toast.info as ReturnType<typeof vi.fn>).mock.calls[0][0]).toMatch(/nothing to export/i);
+  });
+
+  it("zero rows from BOTH getRows and the rows prop no-ops for Excel and PDF too", async () => {
+    const { toast } = await import("sonner");
+    const user = userEvent.setup();
+    const getRows = vi.fn(() => [] as Row[]);
+    render(
+      <ExportMenu rows={[] as Row[]} getRows={getRows} columns={COLS} filenameBase="screener" pdfTitle="T" />,
+    );
+
+    await user.click(screen.getByRole("button", { name: /export results/i }));
+    await user.click(await screen.findByRole("menuitem", { name: /export as excel/i }));
+    expect(exportToXlsx).not.toHaveBeenCalled();
+
+    await user.click(screen.getByRole("button", { name: /export results/i }));
+    await user.click(await screen.findByRole("menuitem", { name: /export as pdf/i }));
+    expect(exportToPdf).not.toHaveBeenCalled();
+
+    expect(toast.info).toHaveBeenCalledTimes(2);
+  });
+
+  it("non-empty rows still export normally with the guard in place (no false no-op)", async () => {
+    const { toast } = await import("sonner");
+    const user = userEvent.setup();
+    render(<ExportMenu rows={ROWS} columns={COLS} filenameBase="screener" />);
+
+    await user.click(screen.getByRole("button", { name: /export results/i }));
+    await user.click(await screen.findByRole("menuitem", { name: /export as csv/i }));
+
+    expect(exportToCsv).toHaveBeenCalledTimes(1);
+    expect(toast.info).not.toHaveBeenCalled();
+  });
+});

@@ -46,6 +46,9 @@ import {
 import { exportToCsv, type CsvColumn } from "@/lib/csv-export";
 import type { XlsxColumn } from "@/lib/xlsx-export";
 import type { PdfColumn } from "@/lib/pdf-export";
+// ROUND-4 (item 1 — zero-row export hardening): toast for the graceful no-op
+// path. Same sonner instance the screener page already uses (watch/alert stubs).
+import { toast } from "sonner";
 
 // ── Public types ─────────────────────────────────────────────────────────────
 
@@ -134,15 +137,48 @@ export function ExportMenu<T>({
     return rows;
   }
 
+  /**
+   * resolveRowsOrNotify — ROUND-4 (item 1): zero-row export hardening.
+   *
+   * The screener page already disables the trigger at `rows.length === 0`,
+   * but this guard is DEFENSE-IN-DEPTH for two real gaps:
+   *   1. Other call sites may forget the `disabled` wiring — ExportMenu is a
+   *      generic component, not screener-private.
+   *   2. A race: the menu can be open while a background refetch empties the
+   *      grid (e.g. filters applied from another control) — the click then
+   *      resolves zero rows even though the trigger was enabled at open time.
+   * Exporting an empty set would produce a header-only CSV / corrupt-looking
+   * XLSX — confusing artifacts users report as bugs. A toast + no-op tells
+   * them WHY nothing downloaded instead of failing silently (or crashing in
+   * the exporters, which assume ≥1 row for column-width measurement).
+   * Returns null when there is nothing to export.
+   */
+  function resolveRowsOrNotify(): readonly T[] | null {
+    const resolved = resolveRows();
+    if (resolved.length === 0) {
+      toast.info("Nothing to export", {
+        description: "The table has no rows — adjust filters and try again.",
+      });
+      return null;
+    }
+    return resolved;
+  }
+
   function handleCsv() {
+    const exportRows = resolveRowsOrNotify();
+    if (!exportRows) return; // zero rows — graceful no-op (toast already shown)
     const csvColumns: CsvColumn<T>[] = columns.map((c) => ({
       header: c.header,
       accessor: c.accessor,
     }));
-    exportToCsv({ rows: resolveRows(), columns: csvColumns, filenameStem: stem });
+    exportToCsv({ rows: exportRows, columns: csvColumns, filenameStem: stem });
   }
 
   async function handleXlsx() {
+    // WHY guard BEFORE the dynamic import: no point downloading the ~120KB
+    // write-excel-file chunk just to export nothing.
+    const exportRows = resolveRowsOrNotify();
+    if (!exportRows) return;
     // QA-iter1 MIN-3: dynamic-import write-excel-file only when the user
     // actually clicks Excel — keeps the eager bundle CSV-only.
     const { exportToXlsx } = await import("@/lib/xlsx-export");
@@ -150,10 +186,13 @@ export function ExportMenu<T>({
       header: c.header,
       accessor: c.accessor,
     }));
-    await exportToXlsx({ rows: resolveRows(), columns: xlsxColumns, filenameStem: stem });
+    await exportToXlsx({ rows: exportRows, columns: xlsxColumns, filenameStem: stem });
   }
 
   async function handlePdf() {
+    // WHY guard BEFORE the dynamic import: see handleXlsx — jspdf is ~600KB.
+    const exportRows = resolveRowsOrNotify();
+    if (!exportRows) return;
     // QA-iter1 MIN-3: jspdf + autotable is the largest export dep (~600KB).
     // Dynamic-import on click means CSV-only users never download it.
     const { exportToPdf } = await import("@/lib/pdf-export");
@@ -163,7 +202,7 @@ export function ExportMenu<T>({
     }));
     // WHY await: exportToPdf is now async (it dynamic-imports jspdf + autotable
     // inside the function body so those heavy deps form a separate chunk).
-    await exportToPdf({ rows: resolveRows(), columns: pdfColumns, filenameStem: stem, title: pdfTitle });
+    await exportToPdf({ rows: exportRows, columns: pdfColumns, filenameStem: stem, title: pdfTitle });
   }
 
   return (

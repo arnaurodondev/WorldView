@@ -109,3 +109,36 @@ describe("RangeSliderRow", () => {
     expect(onMin).not.toHaveBeenCalled();
   });
 });
+
+// ── Round-4 item 2: slider thumb aria-valuetext ───────────────────────────────
+//
+// WHY: Radix announces the raw integer TRACK POSITION via aria-valuenow
+// (0…steps) — meaningless to screen-reader users ("142" instead of "$7.1B").
+// Round 4 adds aria-valuetext with the human-readable domain value, using the
+// SAME formatter as the visual readout so eyes and ears agree.
+
+describe("RangeSliderRow — aria-valuetext (Round 4 a11y)", () => {
+  it("announces human-readable formatted values on set thumbs", () => {
+    renderRow({ min: 10, max: 50, formatValue: (v) => `$${v}M` });
+    const [lowThumb, highThumb] = screen.getAllByRole("slider");
+    // The formatted DOMAIN value, not the raw slider position integer.
+    expect(lowThumb).toHaveAttribute("aria-valuetext", "$10M");
+    expect(highThumb).toHaveAttribute("aria-valuetext", "$50M");
+  });
+
+  it('announces "Any (no … bound)" on unset thumbs instead of a phantom end value', () => {
+    // Unset thumbs park at the track ends; without valuetext AT would read
+    // "0" / "100" — implying a constraint that does not exist.
+    renderRow({ min: undefined, max: undefined });
+    const [lowThumb, highThumb] = screen.getAllByRole("slider");
+    expect(lowThumb).toHaveAttribute("aria-valuetext", "Any (no lower bound)");
+    expect(highThumb).toHaveAttribute("aria-valuetext", "Any (no upper bound)");
+  });
+
+  it("aria-valuetext tracks one-sided ranges independently", () => {
+    renderRow({ min: 25, max: undefined, formatValue: (v) => `${v}%` });
+    const [lowThumb, highThumb] = screen.getAllByRole("slider");
+    expect(lowThumb).toHaveAttribute("aria-valuetext", "25%");
+    expect(highThumb).toHaveAttribute("aria-valuetext", "Any (no upper bound)");
+  });
+});
