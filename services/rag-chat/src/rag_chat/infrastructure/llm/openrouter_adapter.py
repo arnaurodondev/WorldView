@@ -257,6 +257,7 @@ class OpenRouterCompletionAdapter:
         temperature: float = 0.2,
         thread_id: UUID | None = None,
         tools: list[dict] | None = None,
+        seed: int | None = None,
     ) -> AsyncIterator[str]:
         """Stream the final answer turn from an OpenAI-format messages list."""
         payload: dict[str, object] = {
@@ -278,6 +279,11 @@ class OpenRouterCompletionAdapter:
             payload["tools"] = tools
             if not tools:
                 payload["tool_choice"] = "none"
+        # PLAN-0107 follow-up (eval framework v2 2026-06-06): forward an optional
+        # ``seed`` to OpenRouter's OpenAI-compatible endpoint. Omit when None so
+        # provider schema validators don't reject ``"seed": null``.
+        if seed is not None:
+            payload["seed"] = seed
         usage_capture: dict = {}
         async with self._client.stream(
             "POST",

@@ -66,6 +66,7 @@ class LlmChatProvider(Protocol):
         *,
         max_tokens: int = 1024,
         temperature: float = 0.2,
+        seed: int | None = None,
     ) -> AsyncIterator[str]:
         """Streaming chat for the final LLM turn after tools have been executed.
 

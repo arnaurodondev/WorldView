@@ -415,6 +415,7 @@ class DeepInfraCompletionAdapter:
         temperature: float,
         usage_sink: dict | None = None,
         tools: list[dict] | None = None,
+        seed: int | None = None,
     ) -> AsyncIterator[str]:
         """Run a single stream_chat call against a specific model.
 
@@ -452,6 +453,13 @@ class DeepInfraCompletionAdapter:
             payload["tools"] = tools
             if not tools:
                 payload["tool_choice"] = "none"
+        # PLAN-0107 follow-up (eval framework v2 2026-06-06): forward an optional
+        # `seed` to DeepInfra's OpenAI-compatible endpoint so the benchmark
+        # harness (--judge mode) gets reproducible generations. We OMIT the key
+        # when seed is None — sending `"seed": null` triggers schema validation
+        # errors on some provider builds.
+        if seed is not None:
+            payload["seed"] = seed
         async with self._client.stream(
             "POST",
             f"{_BASE_URL}/chat/completions",
@@ -489,6 +497,7 @@ class DeepInfraCompletionAdapter:
         temperature: float = 0.2,
         thread_id: UUID | None = None,
         tools: list[dict] | None = None,
+        seed: int | None = None,
     ) -> AsyncIterator[str]:
         """Stream the final answer turn from an OpenAI-format messages list.
 
@@ -534,6 +543,7 @@ class DeepInfraCompletionAdapter:
                 temperature=temperature,
                 usage_sink=primary_usage,
                 tools=tools,
+                seed=seed,
             ):
                 primary_chunks.append(chunk)
         except Exception as exc:
@@ -587,6 +597,7 @@ class DeepInfraCompletionAdapter:
             temperature=temperature,
             usage_sink=fallback_usage,
             tools=tools,
+            seed=seed,
         ):
             yield chunk
         # PLAN-0107 Agent-B: record cost on the fallback model (model_id MUST
