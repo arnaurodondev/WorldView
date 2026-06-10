@@ -13,7 +13,7 @@ import { type DialogProps } from "@radix-ui/react-dialog";
 import { Command as CommandPrimitive } from "cmdk";
 import { Search } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { Dialog, DialogContent } from "@/components/ui/dialog";
+import { Dialog, DialogContent, DialogDescription, DialogTitle } from "@/components/ui/dialog";
 
 const Command = React.forwardRef<
   React.ElementRef<typeof CommandPrimitive>,
@@ -31,16 +31,67 @@ const Command = React.forwardRef<
 Command.displayName = CommandPrimitive.displayName;
 
 // WHY CommandDialog: Some designs use a full-screen dialog for search (like ⌘K palettes).
-// GlobalSearch uses inline Command (not this), but providing the Dialog variant lets
-// future waves (Workspace, Settings) reuse it.
-// WHY type alias not interface: ESLint's no-empty-object-type rule disallows empty interfaces
-type CommandDialogProps = DialogProps;
+// GlobalSearch uses inline Command (not this); the global CommandPalette
+// (components/shell/CommandPalette.tsx) is the canonical consumer of this variant.
+// WHY interface extends DialogProps: we add a11y + styling knobs on top of the
+// underlying Radix Dialog props (open / onOpenChange / etc. pass straight through).
+interface CommandDialogProps extends DialogProps {
+  /**
+   * Accessible dialog name. Radix Dialog REQUIRES a DialogTitle — without one
+   * screen readers announce an unnamed dialog and Radix logs a console error in
+   * dev/tests. We render it sr-only because the palette's visual affordance is
+   * the search input itself, not a heading (Linear/Raycast do the same).
+   */
+  title?: string;
+  /** Accessible description announced after the title (also sr-only). */
+  description?: string;
+  /**
+   * Extra classes for the DialogContent wrapper. The palette uses this to
+   * widen beyond the default sm:max-w-lg and pin near the top of the viewport
+   * (command palettes anchor high so the result list grows downward).
+   */
+  contentClassName?: string;
+  /**
+   * Extra classes for the inner <Command>. The default cmdk styling below is
+   * comfortable/consumer-scale (h-12 input, py-3 items); terminal-density
+   * consumers override with 11px/py-1 classes via this prop. tailwind-merge
+   * resolves conflicts in favour of the caller (later class wins per group).
+   */
+  commandClassName?: string;
+  /**
+   * Forwarded to cmdk's <Command>. Pass `false` when the consumer does its own
+   * filtering (e.g. CommandPalette: server-side instrument search + custom nav
+   * ranking). Leaving cmdk's default fuzzy filter ON in that case would
+   * re-filter already-filtered items against their internal `value` strings
+   * (namespaced ids like "inst:<uuid>") and hide every result the moment the
+   * user types — the same trap GlobalSearch avoids with shouldFilter={false}.
+   */
+  shouldFilter?: boolean;
+}
 
-function CommandDialog({ children, ...props }: CommandDialogProps) {
+function CommandDialog({
+  children,
+  title = "Command palette",
+  description,
+  contentClassName,
+  commandClassName,
+  shouldFilter,
+  ...props
+}: CommandDialogProps) {
   return (
     <Dialog {...props}>
-      <DialogContent className="overflow-hidden p-0">
-        <Command className="[&_[cmdk-group-heading]]:px-2 [&_[cmdk-group-heading]]:font-medium [&_[cmdk-group-heading]]:text-muted-foreground [&_[cmdk-group]:not([hidden])_~[cmdk-group]]:pt-0 [&_[cmdk-group]]:px-2 [&_[cmdk-input-wrapper]_svg]:h-5 [&_[cmdk-input-wrapper]_svg]:w-5 [&_[cmdk-input]]:h-12 [&_[cmdk-item]]:px-2 [&_[cmdk-item]]:py-3 [&_[cmdk-item]_svg]:h-5 [&_[cmdk-item]_svg]:w-5">
+      <DialogContent className={cn("overflow-hidden p-0", contentClassName)}>
+        {/* sr-only title/description: required by Radix for accessible naming,
+            visually redundant with the always-focused search input. */}
+        <DialogTitle className="sr-only">{title}</DialogTitle>
+        {description && <DialogDescription className="sr-only">{description}</DialogDescription>}
+        <Command
+          shouldFilter={shouldFilter}
+          className={cn(
+            "[&_[cmdk-group-heading]]:px-2 [&_[cmdk-group-heading]]:font-medium [&_[cmdk-group-heading]]:text-muted-foreground [&_[cmdk-group]:not([hidden])_~[cmdk-group]]:pt-0 [&_[cmdk-group]]:px-2 [&_[cmdk-input-wrapper]_svg]:h-5 [&_[cmdk-input-wrapper]_svg]:w-5 [&_[cmdk-input]]:h-12 [&_[cmdk-item]]:px-2 [&_[cmdk-item]]:py-3 [&_[cmdk-item]_svg]:h-5 [&_[cmdk-item]_svg]:w-5",
+            commandClassName,
+          )}
+        >
           {children}
         </Command>
       </DialogContent>

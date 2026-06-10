@@ -49,6 +49,12 @@ import { AskAiPanel } from "@/components/shell/AskAiPanel";
 import { HotkeyProvider } from "@/contexts/HotkeyContext";
 import { GlobalHotkeyBindings } from "@/components/shell/GlobalHotkeyBindings";
 import { HotkeyCheatSheet } from "@/components/shell/HotkeyCheatSheet";
+// Round-1 Command Palette (2026-06-10) — global ⌘K dialog covering route
+// navigation, instrument search, and recent conversations. Owns its own
+// document-level ⌘K listener (NOT registered in the hotkey registry — it must
+// fire even while an input has focus) and listens for the
+// `worldview:open-command-palette` CustomEvent dispatched by the TopBar chip.
+import { CommandPalette } from "@/components/shell/CommandPalette";
 // PLAN-0059 B-6 — fixed-position banner that detects new build deploys and
 // prompts the user to reload. Polls /api/version every 60s; user-driven reload.
 import { ForceUpdateBanner } from "@/components/shell/ForceUpdateBanner";
@@ -329,6 +335,13 @@ export default function AppLayout({ children }: AppLayoutProps) {
 
       {/* HotkeyCheatSheet — `?` overlay; auto-derives content from the registry. */}
       <HotkeyCheatSheet />
+
+      {/* CommandPalette — global ⌘K dialog (Navigate / Instruments / Recent
+          Conversations). Mounted once at the shell so it is reachable from
+          every authenticated route. It renders nothing until opened, so the
+          mount itself costs no layout space and no network calls (its queries
+          are gated on `open`). */}
+      <CommandPalette />
 
       {/* B-6: ForceUpdateBanner is a fixed-position overlay; mounting it
           alongside other globals avoids layout-tree pollution. */}

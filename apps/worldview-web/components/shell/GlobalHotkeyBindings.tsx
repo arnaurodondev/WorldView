@@ -22,10 +22,13 @@
  *     mod+\ →  toggle StatusBar / full-width (placeholder — Wave 5)
  *
  *   Search / palette:
- *     mod+k  →  intentionally NOT registered here — cmdk's Dialog handles ⌘K via
- *               its own keydown listener. Registering it would call e.stopPropagation()
- *               (via useChordHotkeys on match) and silently break the command palette.
- *               The `?` overlay lists all real shortcuts; ⌘K is discoverable there.
+ *     mod+k  →  intentionally NOT registered here — the global CommandPalette
+ *               (components/shell/CommandPalette.tsx) owns its own document-level
+ *               ⌘K listener. The registry's chord listener suspends while focus
+ *               is in an input, but ⌘K must fire even mid-typing (e.g. in the
+ *               chat composer), so it cannot go through useChordHotkeys.
+ *               The `?` overlay lists all real shortcuts; the TopBar also shows
+ *               a visible ⌘K hint chip.
  *     /      →  focus GlobalSearch input
  *
  *   Help:

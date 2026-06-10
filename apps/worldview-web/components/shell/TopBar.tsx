@@ -31,6 +31,11 @@ import { IndexStrip } from "@/components/shell/IndexStrip";
 import { PortfolioSwitcher } from "@/components/shell/PortfolioSwitcher";
 import { MarketStatusPill } from "@/components/shell/MarketStatusPill";
 import { GlobalSearch } from "@/components/shell/GlobalSearch";
+// ⌘K hint chip dispatches this event; the CommandPalette (mounted in
+// app/(app)/layout.tsx) listens for it. Event-based so TopBar needs no
+// open-state prop drilled through the layout (same pattern as
+// worldview:open-ai-panel / worldview:open-feedback).
+import { OPEN_COMMAND_PALETTE_EVENT } from "@/components/shell/CommandPalette";
 import { AskAiButton } from "@/components/shell/AskAiButton";
 import { RefreshAllButton } from "@/components/shell/RefreshAllButton";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
@@ -187,6 +192,30 @@ export function TopBar({
         </button>
 
         <GlobalSearch />
+
+        {/* ── ⌘K command-palette hint (Round-1 Command Palette) ────────────
+            WHY a visible chip: the palette is keyboard-first, but a purely
+            invisible shortcut is undiscoverable — Linear/Raycast/Slack all
+            show a muted "⌘K" affordance in their chrome. Clicking it opens
+            the palette for mouse users; the label teaches the chord.
+            WHY a CustomEvent (not a prop): the palette owns its open state
+            and is mounted in the layout, not here — dispatching the event
+            avoids threading an opener callback through TopBarProps.
+            WHY hard-coded "⌘K" (not formatChordForDisplay): platform
+            detection differs between SSR (always non-mac) and the client,
+            which would cause a hydration text mismatch. The hard-coded mac
+            glyph matches the pre-existing convention (GlobalSearch's old
+            placeholder, StatusBar copy). Ctrl+K still works — the listener
+            accepts both modifiers. */}
+        <button
+          type="button"
+          onClick={() => window.dispatchEvent(new CustomEvent(OPEN_COMMAND_PALETTE_EVENT))}
+          aria-label="Open command palette (Cmd+K or Ctrl+K)"
+          title="Open command palette (⌘K / Ctrl+K)"
+          className="flex h-5 shrink-0 items-center rounded-[2px] border border-border/50 bg-muted/20 px-1.5 font-mono text-[10px] text-muted-foreground/70 hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+        >
+          ⌘K
+        </button>
       </div>
 
       {/* ── Slot 3: PortfolioSwitcher ─────────────────────────────────── */}

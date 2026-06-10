@@ -240,6 +240,7 @@ These are the **only** pre-built components allowed. Install via `pnpm dlx shadc
 | `ScrollArea` | Bounded-height scrollable regions |
 | `Alert` | Non-critical notifications, warnings |
 | `Avatar` | User avatar in TopBar |
+| `Command`, `CommandDialog`, `CommandInput`, `CommandList`, `CommandGroup`, `CommandItem` | cmdk keyboard-navigable search/palette surfaces (GlobalSearch inline, CommandPalette dialog — see §6.15) |
 
 ### 5.2 Custom Domain Components
 
@@ -277,8 +278,9 @@ Purpose-built components for financial data. Implement these consistently:
 | Component | File path | Notes |
 |-----------|-----------|-------|
 | `Sidebar` | `components/shell/Sidebar.tsx` | 56px icon-only nav rail, watchlist prices, keyboard hint strip |
-| `TopBar` | `components/shell/TopBar.tsx` | Logo + GlobalSearch + IndexTicker + alerts badge + avatar |
-| `GlobalSearch` | `components/shell/GlobalSearch.tsx` | ⌘K command palette overlay (cmdk) |
+| `TopBar` | `components/shell/TopBar.tsx` | Logo + GlobalSearch + ⌘K hint chip + IndexTicker + alerts badge + avatar |
+| `GlobalSearch` | `components/shell/GlobalSearch.tsx` | Inline instrument search dropdown (cmdk); click/focus-driven — ⌘K now opens CommandPalette |
+| `CommandPalette` | `components/shell/CommandPalette.tsx` | Global ⌘K dialog: Navigate / Instruments / Recent Conversations (§6.15) |
 | `UtcClock` | `components/shell/UtcClock.tsx` | Live UTC clock display |
 | `IndexTicker` | `components/shell/IndexTicker.tsx` | Center-bar market index prices |
 | `MarketStatusPill` | `components/shell/MarketStatusPill.tsx` | OPEN/CLOSED/PRE status badge |
@@ -555,23 +557,82 @@ Live examples:
 
 WHY this matters: ~8% of male users have a form of colour-vision deficiency (deuteranopia / protanopia / achromatopsia). A finance terminal that hides positions behind colour alone is hostile to those users. The pattern + label approach is also robust against future theme switches and printing (greyscale).
 
-### 6.12 Keyboard Navigation (NEW)
+### 6.12 Keyboard Navigation
 
-Global shortcut registration via `react-hotkeys-hook` in root layout:
+> **Updated 2026-06-10** — table synced to the actual `GlobalHotkeyBindings` registrations.
+> Chords are registered in `lib/hotkey-registry.ts` (custom scope-stack registry, NOT
+> react-hotkeys-hook) and dispatched by `hooks/useChordHotkeys`. The StatusBar and the
+> `?` cheat sheet render hints FROM the registry, so they cannot advertise an unwired chord.
 
 | Shortcut | Action | Notes |
 |----------|--------|-------|
-| `g d` | Navigate /dashboard | Sequence: press g, then d within 500ms |
-| `g w` | Navigate /workspace | |
-| `g c` | Navigate /companies | |
-| `g p` | Navigate /portfolio | |
-| `g n` | Navigate /news | |
+| `g d` | Navigate /dashboard | Sequence: press g, then the letter |
 | `g s` | Navigate /screener | |
-| `g h` | Navigate /chat | |
-| `Cmd+K` / `Ctrl+K` | Open CommandPalette | |
+| `g i` | Navigate /instruments | |
+| `g p` | Navigate /portfolio | |
+| `g w` | Navigate /workspace | |
+| `g a` | Navigate /alerts | |
+| `g n` | Navigate /news | |
+| `g c` | Navigate /chat | |
+| `g ,` | Navigate /settings | |
+| `g h` | Open keyboard cheat sheet | Alias for `?` |
+| `⌘B` / `Ctrl+B` | Toggle sidebar | |
+| `⌘K` / `Ctrl+K` | Open CommandPalette | NOT in the registry — see §6.15 |
+| `?` | Toggle cheat-sheet overlay | Registered by `HotkeyCheatSheet` |
 | `Escape` | Close active modal/overlay | |
 
-Display in AppSidebar bottom strip: `g+d Dashboard  g+w Workspace  ⌘K Search` (text-[10px] muted).
+### 6.15 Command Palette Pattern (NEW — 2026-06-10)
+
+**Component**: `components/shell/CommandPalette.tsx`, mounted ONCE in `app/(app)/layout.tsx`
+(available on every authenticated route). Built on the shadcn `CommandDialog`
+(`components/ui/command.tsx`, cmdk under the hood).
+
+**Trigger** (three paths, one open state):
+1. `⌘K` / `Ctrl+K` — document-level keydown listener owned by the palette itself.
+   Intentionally NOT registered in `lib/hotkey-registry`: the chord listener suspends
+   while an `<input>` has focus, but ⌘K must fire even mid-typing (chat composer).
+   GlobalSearch's old ⌘K listener was removed — exactly ONE listener owns the chord.
+2. `worldview:open-command-palette` CustomEvent — dispatched by the TopBar "⌘K" hint chip
+   (exported constant `OPEN_COMMAND_PALETTE_EVENT`). Same decoupling pattern as
+   `worldview:open-ai-panel`.
+3. `Escape` / overlay click closes (Radix Dialog); closing resets the query.
+
+**Groups** (in render order):
+
+| Group | Source | Behaviour |
+|-------|--------|-----------|
+| Navigate | static `NAV_ITEMS` (enumerated from `app/(app)/`) | substring filter on label + keywords; chord hints rendered via `formatChordForDisplay` (no-lying invariant) |
+| Recent Instruments | `lib/recent-instruments.ts` localStorage stack | shown only while the query is empty (Bloomberg "last 5 visited") |
+| Instruments | S9 `GET /v1/search/instruments` (debounced 250ms, shared `["instrument-search", q]` cache key with GlobalSearch) | shown only while a query is typed |
+| Recent Conversations | S9 `GET /v1/threads` via `qk.chat.threads()` (read-only, shared cache with /chat) | top-5 newest by `updated_at`; title substring filter |
+
+**Ranking** (pure functions in `lib/command-palette.ts`, unit-tested):
+exact ticker match → ticker-prefix match → server order; recently-visited instruments
+float within each tier. Conversations sort newest-first.
+
+**Styling tokens** (Terminal Dark):
+- `CommandDialog` props: `contentClassName="top-[20%] max-w-xl translate-y-0 rounded-[2px] …"`
+  (top-anchored so the list grows downward; 2px radius rule; built-in X button hidden via
+  `[&>button]:hidden` — Escape is the close affordance)
+- `commandClassName` overrides cmdk's consumer-scale defaults to terminal density:
+  36px input @ 12px, `py-1.5` items, 14px icons, 10px uppercase group headings
+- Rows: 11px primary text, 10px muted secondary, `font-mono tabular-nums` tickers,
+  `ml-auto` muted hints (chord / exchange / "recent")
+- Footer hint strip: `↑↓ Navigate · ↵ Open · ⎋ Close` at 9px (same as GlobalSearch dropdown)
+
+**Selection**: every `CommandItem` wires BOTH `onSelect` (keyboard Enter) and `onClick`
+(mouse) — the SEARCH-001 dual-handler rule. Instrument selection persists to the shared
+recents stack (`saveRecentInstrument`) before `router.push(/instruments/<entity_id>)`
+(ADR-F-12: route by entity_id). Conversations push `/chat?thread=<id>` — the chat page
+does not consume the param yet (forward-compatible contract; chat surface wires it).
+
+**A11y**: sr-only `DialogTitle`/`DialogDescription` (Radix requirement), sr-only
+`aria-live` region announcing instrument result counts, `aria-hidden` icons.
+
+**Reuse rule**: any future palette-like surface MUST use `CommandDialog` with
+`shouldFilter={false}` when it performs its own filtering — cmdk's built-in fuzzy filter
+matches against item `value` strings (namespaced ids like `inst:<uuid>`) and silently
+hides everything otherwise.
 
 ### 6.6 Empty State Pattern
 
@@ -1574,4 +1635,3 @@ above while reaffirming that financial data values are excluded.
 > states `36px` (PRD-0031). This discrepancy should be resolved in W3 (Dashboard fixes).
 > W0 adds the chart/entity tokens without touching the topbar value to avoid
 > unintended layout breakage.
-
