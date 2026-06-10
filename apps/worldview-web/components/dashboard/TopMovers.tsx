@@ -48,6 +48,10 @@ import { Sparkline } from "@/components/primitives/Sparkline";
 // Round 3 (item 4): panel-level empty state uses the shared EmptyState
 // primitive (§15.12) with the named dashboard.no-movers copy key.
 import { EmptyState } from "@/components/primitives/EmptyState";
+// Round 4 (item 1): the bespoke muted error TEXT becomes a named error state
+// with a Retry action — the old copy ("data will appear when market data is
+// ingested") also misdiagnosed a fetch failure as a data gap.
+import { WidgetErrorState } from "@/components/dashboard/WidgetErrorState";
 import { TrendingUp } from "lucide-react";
 // HF-10: locale-grouped USD price ("$4,892.11").
 import { formatPrice } from "@/lib/format";
@@ -76,7 +80,8 @@ export function TopMovers() {
   // doubles network cost for a view the user may never open. The hydrator
   // seeds BOTH sides from the bundle anyway, so in practice the first tab
   // switch is usually a cache hit.
-  const { data, isLoading, isError } = useQuery({
+  // Round 4 (item 1): refetch + isFetching destructured for the Retry action.
+  const { data, isLoading, isError, refetch, isFetching } = useQuery({
     // WHY this exact key shape: must match DashboardBundleHydrator's
     // setQueryData key so the bundle-seeded cache is actually read here.
     queryKey: qk.dashboard.topMovers({ type, limit: MOVERS_LIMIT, period: "1D" }),
@@ -198,13 +203,20 @@ export function TopMovers() {
               </div>
             )}
 
-            {/* Error — WHY muted (not destructive red): "unavailable" is a
-                transient backend issue, not a user error. Red alarming text
-                makes the dashboard look broken; muted text is professional. */}
+            {/* Error — Round 4 (item 1): named error state + Retry replaces
+                the bespoke muted text. The old copy claimed "data will appear
+                when market data is ingested" for what is a FETCH failure —
+                wrong triage signal. WHY flex h-full wrapper: centres the
+                state in the tab panel the same way the empty state below is. */}
             {!isLoading && isError && (
-              <p className="px-2 py-2 text-xs text-muted-foreground">
-                Market movers unavailable — data will appear when market data is ingested.
-              </p>
+              <div className="flex h-full flex-col">
+                <WidgetErrorState
+                  copyKey="dashboard.movers-error"
+                  icon={TrendingUp}
+                  onRetry={() => void refetch()}
+                  retrying={isFetching}
+                />
+              </div>
             )}
 
             {/* Empty — only when the fetch succeeded but the side is empty

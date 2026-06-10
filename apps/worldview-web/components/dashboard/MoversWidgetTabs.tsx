@@ -47,11 +47,22 @@ export function MoversWidgetTabs() {
   return (
     // WHY h-full + flex-col: the parent grid cell already manages the
     // height — we fill it and stack the tab strip above the active widget.
-    <div className="flex h-full min-h-0 flex-col bg-background">
+    // Round 4 (item 2): role="region" + aria-label — ONE landmark for the
+    // whole tabbed movers panel (the child widgets are alternates inside it,
+    // so nesting a region per tab pane would be landmark noise).
+    <div className="flex h-full min-h-0 flex-col bg-background" role="region" aria-label="Movers">
       {/* Tab strip — same h-6 / 10px text rhythm as other widget headers.
           Three equal-width tabs using flex-1 on each button so the strip
           fills the full header row without leaving gaps. */}
-      <div className="flex h-6 shrink-0 border-b border-border bg-card">
+      {/* Round 4 (item 2): role="tablist" — the children carry role="tab" +
+          aria-selected, and WAI-ARIA requires tabs to be owned by a tablist
+          (a bare tab is an orphaned role and axe flags it). aria-label names
+          the control for SR users ("Movers source, tab list"). */}
+      <div
+        className="flex h-6 shrink-0 border-b border-border bg-card"
+        role="tablist"
+        aria-label="Movers source"
+      >
         <TabButton
           active={tab === "market"}
           onClick={() => setTab("market")}

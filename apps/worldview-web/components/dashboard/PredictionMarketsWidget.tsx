@@ -224,7 +224,8 @@ export function PredictionMarketsWidget() {
   return (
     // WHY bg-background: consistent with all other dashboard widgets — the
     // gap-px grid already provides panel separation via background bleed.
-    <div className="flex h-full flex-col bg-background">
+    // Round 4 (item 2): role="region" + aria-label landmark for SR panel nav.
+    <div className="flex h-full flex-col bg-background" role="region" aria-label="Prediction markets">
 
       {/* ── Section header §0.9 pattern + ECON toggle ───────────────────── */}
       {/* WHY justify-between: section label on the left, ECON toggle on the right —

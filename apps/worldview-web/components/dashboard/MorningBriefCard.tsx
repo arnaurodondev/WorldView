@@ -206,7 +206,9 @@ export function MorningBriefCard() {
     return (
       // WHY flex flex-col h-full: component must fill its grid cell height so
       // Row 1 height is driven by the cell, not by the brief content length.
-      <div className="flex h-full flex-col">
+      // Round 4 (item 2): role="region" + aria-label on every return branch —
+      // the landmark must exist from first paint for SR panel navigation.
+      <div className="flex h-full flex-col" role="region" aria-label="Morning briefing">
         {/* Placeholder header so height matches the loaded state.
             Round 3 (item 3): h-6 — the LOADED header grew to 24px in the
             2026-05-09 density bundle but this placeholder stayed at 20px,
@@ -237,7 +239,7 @@ export function MorningBriefCard() {
       (error.message.includes("503") || error.message.includes("unavailable"));
 
     return (
-      <div className="flex h-full flex-col">
+      <div className="flex h-full flex-col" role="region" aria-label="Morning briefing">
         <MetaHeader />
         <div className="flex flex-1 items-center gap-2 px-1">
           <p className="text-[10px] text-muted-foreground">
@@ -316,7 +318,7 @@ export function MorningBriefCard() {
         : null;
 
     return (
-      <div className="flex h-full flex-col">
+      <div className="flex h-full flex-col" role="region" aria-label="Morning briefing">
         <MetaHeader />
         {/* Round 3 (item 4): shared EmptyState primitive — it owns the icon
             treatment, role="status" announcement and title/body layout that
@@ -435,7 +437,7 @@ export function MorningBriefCard() {
   return (
     // WHY flex flex-col h-full: fills Row 1 grid cell; header is fixed h-5,
     // text area fills the rest with overflow-auto for long briefs.
-    <div className="flex h-full flex-col">
+    <div className="flex h-full flex-col" role="region" aria-label="Morning briefing">
 
       {/* ── Header row: date (left) | "Morning Briefing" (center) | CTA (right) ── */}
       {/* WHY single-line header with all three elements: the user wants the brief

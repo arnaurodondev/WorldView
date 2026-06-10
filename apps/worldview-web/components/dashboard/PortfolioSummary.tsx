@@ -31,6 +31,11 @@ import { Skeleton } from "@/components/ui/skeleton";
 // Round 3 (item 4): shared EmptyState primitive (§15.12) replaces the
 // bespoke "No portfolio yet" two-liner — named copy key + icon + action CTA.
 import { EmptyState } from "@/components/primitives/EmptyState";
+// Round 4 (item 1): named error state + Retry. Pre-Round-4 this widget had
+// NO error branch — a failed /v1/portfolios or /v1/holdings fetch fell
+// through to the "No portfolio yet" empty state, telling the trader their
+// portfolio doesn't exist when the request simply failed.
+import { WidgetErrorState } from "@/components/dashboard/WidgetErrorState";
 import { cn, formatPrice, formatPercent, priceChangeClass } from "@/lib/utils";
 import { QUOTE_REFETCH_MS } from "@/hooks/usePortfolioMetrics";
 // QA A-F-001/F-002 (2026-05-21): central query-key factory + shared
@@ -57,7 +62,16 @@ export function PortfolioSummary() {
   const [period, setPeriod] = useState<Period>("1D");
 
   // ── Query 1: portfolio list ────────────────────────────────────────────────
-  const { data: portfolios, isLoading: portfoliosLoading } = useQuery({
+  // Round 4 (item 1): isError/refetch/isFetching destructured so a failed
+  // list fetch renders a NAMED error state with Retry instead of the
+  // misleading "No portfolio yet" empty state.
+  const {
+    data: portfolios,
+    isLoading: portfoliosLoading,
+    isError: portfoliosError,
+    refetch: refetchPortfolios,
+    isFetching: portfoliosFetching,
+  } = useQuery({
     queryKey: qk.portfolios.list(),
     queryFn: () => createGateway(accessToken).getPortfolios(),
     enabled: !!accessToken,
@@ -74,7 +88,14 @@ export function PortfolioSummary() {
   );
 
   // ── Query 2: holdings for first portfolio ─────────────────────────────────
-  const { data: holdingsResp, isLoading: holdingsLoading } = useQuery({
+  // Round 4 (item 1): error flags destructured (same rationale as Query 1).
+  const {
+    data: holdingsResp,
+    isLoading: holdingsLoading,
+    isError: holdingsError,
+    refetch: refetchHoldings,
+    isFetching: holdingsFetching,
+  } = useQuery({
     queryKey: ["holdings", firstPortfolio?.portfolio_id],
     queryFn: () =>
       createGateway(accessToken).getHoldings(firstPortfolio!.portfolio_id),
@@ -161,7 +182,9 @@ export function PortfolioSummary() {
   // container shape so Row 3 grid cell doesn't collapse/expand on data arrival.
   if (isLoading && !holdingsResp) {
     return (
-      <div className="flex h-full flex-col bg-background">
+      // Round 4 (item 2): role="region" + aria-label on every return branch —
+      // the landmark must exist from first paint for SR panel navigation.
+      <div className="flex h-full flex-col bg-background" role="region" aria-label="Portfolio summary">
         {/* Section header placeholder (matches the real h-6 header) */}
         <div className="flex h-6 shrink-0 items-center border-b border-border px-2">
           <Skeleton className="h-3 w-28" />
@@ -199,13 +222,40 @@ export function PortfolioSummary() {
     );
   }
 
+  // ── Error state (Round 4, item 1) ──────────────────────────────────────────
+  // MUST come BEFORE the empty-state check: a failed fetch leaves
+  // portfolios/holdingsResp undefined, which the empty branch would
+  // misread as "user has no portfolio". Retry targets ONLY the failed
+  // query — retrying the holdings query when the LIST failed would call
+  // its queryFn with `firstPortfolio!` still undefined (refetch ignores
+  // `enabled`), crashing on the non-null assertion.
+  if (portfoliosError || holdingsError) {
+    return (
+      <div className="flex h-full flex-col bg-background" role="region" aria-label="Portfolio summary">
+        <div className="flex h-6 shrink-0 items-center border-b border-border px-2">
+          <span className="text-[10px] uppercase tracking-[0.08em] text-muted-foreground">
+            PORTFOLIO
+          </span>
+        </div>
+        <WidgetErrorState
+          copyKey="dashboard.portfolio-error"
+          icon={Briefcase}
+          onRetry={() =>
+            void (portfoliosError ? refetchPortfolios() : refetchHoldings())
+          }
+          retrying={portfoliosFetching || holdingsFetching}
+        />
+      </div>
+    );
+  }
+
   // ── Empty state ────────────────────────────────────────────────────────────
   if (!firstPortfolio || !holdingsResp) {
     // WHY panel wrapper: the empty state must fill the Row-3 grid cell the same
     // way the loaded widget does — prevents layout shift / height collapse when
     // no portfolio exists.
     return (
-      <div className="flex h-full flex-col bg-background">
+      <div className="flex h-full flex-col bg-background" role="region" aria-label="Portfolio summary">
         <div className="flex h-6 shrink-0 items-center border-b border-border px-2">
           <span className="text-[10px] uppercase tracking-[0.08em] text-muted-foreground">
             PORTFOLIO
@@ -296,7 +346,7 @@ export function PortfolioSummary() {
     // "slightly raised card" vs "flat background" mismatch that was visible before.
     // WHY flex-col h-full: fills the grid cell height so the section header and
     // period selector pattern is consistent across Row 3.
-    <div className="flex h-full flex-col bg-background">
+    <div className="flex h-full flex-col bg-background" role="region" aria-label="Portfolio summary">
       {/* ── Section header §0.9 pattern ──────────────────────────────────── */}
       {/* WHY period buttons restored (C-3): the previous code disabled them
           because no period-based S9 endpoint existed; getPortfolioPerformance

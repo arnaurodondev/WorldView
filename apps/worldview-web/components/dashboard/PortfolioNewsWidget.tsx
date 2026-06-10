@@ -34,6 +34,9 @@
 
 import { useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
+// Round 4 (item 3b): central query-key factory — the portfolios list query
+// below shares qk.portfolios.list() with PortfolioSummary / the hydrator.
+import { qk } from "@/lib/query/keys";
 import { createGateway } from "@/lib/gateway";
 import { useAuth } from "@/hooks/useAuth";
 import { useAboveFoldReady } from "@/hooks/useAboveFoldReady";
@@ -100,8 +103,15 @@ export function PortfolioNewsWidget() {
   // We only need ticker strings, so we don't refetch this often. WHY pull
   // from holdings vs watchlists: this widget is "Portfolio News" — the
   // filter universe should match the portfolio universe.
+  // Round 4 (item 3b, query-key drift): key aligned from the widget-private
+  // ["dashboard-portfolio-news-portfolios"] to the shared qk.portfolios.list().
+  // The queryFn is byte-identical to PortfolioSummary's (getPortfolios() →
+  // Portfolio[]), so the private key was a pure duplicate of a fetch that
+  // PortfolioSummary fires on the SAME page — one extra /v1/portfolios
+  // round-trip per dashboard load for the same payload. Sharing the key also
+  // means the F-2 bundle hydrator's seeded list is read here for free.
   const { data: portfolios } = useQuery({
-    queryKey: ["dashboard-portfolio-news-portfolios"],
+    queryKey: qk.portfolios.list(),
     queryFn: () => createGateway(accessToken).getPortfolios(),
     enabled: !!accessToken && aboveFoldReady,
     staleTime: 5 * 60_000,
@@ -115,8 +125,13 @@ export function PortfolioNewsWidget() {
     return sorted[0]?.portfolio_id ?? null;
   }, [portfolios]);
 
+  // Round 4 (item 3b): holdings key aligned to the shared ["holdings", id]
+  // family (PortfolioSummary + WatchlistQuickViewWidget). Identical queryFn
+  // and response shape — when this widget's portfolio pick matches the
+  // resolved one (the common single-portfolio case) the fetch dedupes to
+  // zero extra requests instead of a third /holdings round-trip.
   const { data: holdingsResp } = useQuery({
-    queryKey: ["dashboard-portfolio-news-holdings", firstPortfolioId],
+    queryKey: ["holdings", firstPortfolioId],
     queryFn: () =>
       createGateway(accessToken).getHoldings(firstPortfolioId!),
     enabled: !!accessToken && aboveFoldReady && !!firstPortfolioId,
@@ -199,7 +214,8 @@ export function PortfolioNewsWidget() {
   }
 
   return (
-    <div className="flex h-full flex-col bg-background">
+    // Round 4 (item 2): role="region" + aria-label landmark for SR panel nav.
+    <div className="flex h-full flex-col bg-background" role="region" aria-label="Portfolio news">
       {/* ── Section header ──────────────────────────────────────────────── */}
       <div className="flex h-6 shrink-0 items-center justify-between border-b border-border px-2">
         <span className="text-[10px] uppercase tracking-[0.08em] text-muted-foreground">

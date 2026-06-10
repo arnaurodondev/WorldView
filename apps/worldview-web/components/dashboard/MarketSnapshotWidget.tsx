@@ -39,6 +39,11 @@ import { useRouter } from "next/navigation";
 import { createGateway } from "@/lib/gateway";
 import { useAuth } from "@/hooks/useAuth";
 import { Skeleton } from "@/components/ui/skeleton";
+// Round 4 (item 1): named error state + Retry — a failed ticker-resolution
+// fetch previously fell through to "instruments not yet ingested" (a lie:
+// the data exists, the REQUEST failed) with no recovery path.
+import { WidgetErrorState } from "@/components/dashboard/WidgetErrorState";
+import { Activity } from "lucide-react";
 import { cn } from "@/lib/utils";
 // HF-10: locale-grouped USD price ("$4,892.11").
 import { formatPrice } from "@/lib/format";
@@ -96,7 +101,19 @@ export function MarketSnapshotWidget() {
   // calls GET /api/v1/instruments/lookup?symbol=X (exact indexed match, ~20ms) for
   // each ticker in parallel server-side, returning in one ~200ms round-trip.
   // WHY staleTime 30min: instrument_ids are stable — no need to refetch often.
-  const { data: instrumentMap, isLoading: idsLoading } = useQuery({
+  // Round 4 (item 1): isError + refetch destructured so the widget can render
+  // a named error state with a working Retry instead of silently degrading.
+  // The ids query is the LOAD-BEARING one — if it fails, no overview query
+  // ever fires (all are gated on a resolved instrument id), so the whole
+  // panel has nothing to show. Overview-leg failures, by contrast, degrade
+  // per-row to "—" (acceptable partial data, no panel-level error).
+  const {
+    data: instrumentMap,
+    isLoading: idsLoading,
+    isError: idsError,
+    refetch: refetchIds,
+    isFetching: idsFetching,
+  } = useQuery({
     queryKey: ["market-snapshot-ids", ...ALL_TICKERS],
     queryFn: () =>
       createGateway(accessToken)
@@ -172,7 +189,14 @@ export function MarketSnapshotWidget() {
     // WHY bg-background (not bg-card): consistent with all other dashboard widgets.
     // bg-card (#18181b) while neighbours use bg-background (#09090b) creates a
     // "raised card" visual inconsistency that breaks the flat Bloomberg aesthetic.
-    <div className="flex h-full flex-col bg-background">
+    // Round 4 (item 2): role="region" + aria-label — landmark per widget so
+    // SR users can jump between dashboard panels by name instead of crawling
+    // the whole grid row by row.
+    <div
+      className="flex h-full flex-col bg-background"
+      role="region"
+      aria-label="Market snapshot"
+    >
 
       {/* ── Section header §0.9 pattern ──────────────────────────────────── */}
       {/* WHY h-5: Row 2 is capped at 130px; compact header frees rows for data. */}
@@ -190,8 +214,20 @@ export function MarketSnapshotWidget() {
       </div>
 
       {/* ── Grouped instrument rows ───────────────────────────────────────── */}
-      <div className="flex-1 overflow-auto">
-        {isLoading ? (
+      {/* Round 4 (item 1): error branch FIRST — when the ticker-resolution
+          query fails there are no rows to render and the previous fallthrough
+          ("—" rows + "instruments not yet ingested" footer) misdiagnosed a
+          network failure as a data gap. Retry re-runs the ids query; on
+          success the overview queries un-gate automatically (enabled flips). */}
+      <div className="flex flex-1 flex-col overflow-auto">
+        {idsError ? (
+          <WidgetErrorState
+            copyKey="dashboard.snapshot-error"
+            icon={Activity}
+            onRetry={() => void refetchIds()}
+            retrying={idsFetching}
+          />
+        ) : isLoading ? (
           // Loading skeletons — 2 groups × (1 label + N rows)
           // Round 3 (item 3): the skeleton mirrors the loaded layout EXACTLY —
           // including the two 18px group-label separator rows and the loaded
@@ -261,11 +297,16 @@ export function MarketSnapshotWidget() {
       {/* ── Footer ────────────────────────────────────────────────────────── */}
       <div className="shrink-0 border-t border-border/30 px-2 py-0.5">
         <span className="text-[10px] text-muted-foreground/60">
-          {isLoading
-            ? "loading..."
-            : Object.keys(instrumentMap ?? {}).length === 0
-              ? "instruments not yet ingested"
-              : "indices · equities · prior session"}
+          {/* Round 4 (item 1): the error branch gets its own truthful caption —
+              "instruments not yet ingested" claimed a DATA gap when the
+              REQUEST failed, sending the trader to the wrong triage path. */}
+          {idsError
+            ? "snapshot feed error"
+            : isLoading
+              ? "loading..."
+              : Object.keys(instrumentMap ?? {}).length === 0
+                ? "instruments not yet ingested"
+                : "indices · equities · prior session"}
         </span>
       </div>
 

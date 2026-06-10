@@ -104,11 +104,14 @@ export function MarketClockWidget() {
     // WHY the widget owns its border (the page cell for this widget passes
     // no border class): the border COLOR is the session indicator and is only
     // known client-side after mount — a server-rendered page cell can't set it.
+    // Round 4 (item 2): role="region" + aria-label landmark for SR panel nav.
     <div
       className={cn(
         "flex h-full flex-col border bg-background transition-colors",
         session ? BORDER_BY_STATE[state] : "border-border/40",
       )}
+      role="region"
+      aria-label="Market clock"
     >
       {/* ── Section header §0.9 pattern (h-5 like MarketSnapshot — Row 2's
              130px budget demands the compact header variant) ─────────────── */}

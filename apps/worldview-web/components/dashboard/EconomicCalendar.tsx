@@ -24,6 +24,10 @@ import { Skeleton } from "@/components/ui/skeleton";
 // Round 3 (item 4): shared EmptyState primitive (§15.12) — copy key keeps
 // the previously rendered strings verbatim.
 import { EmptyState } from "@/components/primitives/EmptyState";
+// Round 4 (item 1): the bespoke muted error TEXT becomes a named error state
+// with a Retry action wired to refetch() (parity with the sister
+// EarningsCalendarWidget, which already shipped error+Retry).
+import { WidgetErrorState } from "@/components/dashboard/WidgetErrorState";
 import { CalendarClock } from "lucide-react";
 import type { EconomicCalendarResponse, EconomicImpact } from "@/types/api";
 
@@ -47,7 +51,8 @@ export function EconomicCalendar() {
   // PAGE_SIZE events using offset-based pagination. The previous version used
   // .slice(0, 8) which silently dropped any further events the API returned
   // (Dashboard Regression #3). Now the user can page through the full window.
-  const { data, isLoading, isError, fetchNextPage, hasNextPage, isFetchingNextPage } =
+  // Round 4 (item 1): refetch + isFetching destructured for the Retry action.
+  const { data, isLoading, isError, refetch, isFetching, fetchNextPage, hasNextPage, isFetchingNextPage } =
     useInfiniteQuery<
       EconomicCalendarResponse,
       Error,
@@ -92,7 +97,8 @@ export function EconomicCalendar() {
     // WHY bg-background + h-full flex-col: consistent with EarningsCalendarWidget,
     // PortfolioNewsWidget, and PredictionMarketsWidget — all Row-4 panels use this
     // outer container pattern so the gap-px hairline separators look uniform.
-    <div className="flex h-full flex-col bg-background">
+    // Round 4 (item 2): role="region" + aria-label landmark for SR panel nav.
+    <div className="flex h-full flex-col bg-background" role="region" aria-label="Economic calendar">
 
       {/* ── Section header §0.9 pattern ──────────────────────────────────── */}
       <div className="flex h-6 shrink-0 items-center border-b border-border px-2">
@@ -123,15 +129,18 @@ export function EconomicCalendar() {
       )}
 
       {/* ── Error state ─────────────────────────────────────────────────── */}
-      {/* WHY muted (not destructive red): backend service offline is not a user error.
-          Muted text avoids making the dashboard look broken. */}
+      {/* Round 4 (item 1): named error state + Retry replaces the bespoke
+          muted text. The old copy ("events will appear once macro data is
+          ingested") misdiagnosed a FETCH failure as a data-pipeline gap —
+          the dashboard.no-economic-events empty state already owns the
+          truthful data-gap message; this branch owns the failure message. */}
       {isError && (
-        // T-F-6-03: standardised inner content padding px-3 py-2 (was px-2 pt-1)
-        // WHY text-xs (was text-sm): dashboard tile error copy → 12px Bloomberg
-        // standard. PLAN-0087 F-DENSITY-001.
-        <p className="flex-1 px-3 py-2 text-xs text-muted-foreground">
-          Economic calendar unavailable — events will appear once macro data is ingested.
-        </p>
+        <WidgetErrorState
+          copyKey="dashboard.economic-error"
+          icon={CalendarClock}
+          onRetry={() => void refetch()}
+          retrying={isFetching}
+        />
       )}
 
       {/* ── Empty state ─────────────────────────────────────────────────── */}

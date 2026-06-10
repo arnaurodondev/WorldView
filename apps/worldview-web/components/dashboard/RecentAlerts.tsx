@@ -31,6 +31,9 @@ import { Skeleton } from "@/components/ui/skeleton";
 // Round 3 (item 4): shared EmptyState primitive (§15.12) for the named
 // no-alerts state; the action Link keeps the create-rules CTA.
 import { EmptyState } from "@/components/primitives/EmptyState";
+// Round 4 (item 1): the bespoke one-line "Failed to load alerts" text becomes
+// a named error state with a Retry action wired to refetch().
+import { WidgetErrorState } from "@/components/dashboard/WidgetErrorState";
 import { BellOff } from "lucide-react";
 import type { AlertPayload } from "@/types/alerts";
 
@@ -68,7 +71,8 @@ export function RecentAlerts() {
 
   // ── Poll historical alerts from REST endpoint ──────────────────────────────
   // WHY poll: WebSocket gaps could miss alerts. REST is the authoritative source.
-  const { data: alertsResp, isLoading, isError } = useQuery({
+  // Round 4 (item 1): refetch + isFetching destructured for the Retry action.
+  const { data: alertsResp, isLoading, isError, refetch, isFetching } = useQuery({
     queryKey: ["alerts-pending"],
     queryFn: () => createGateway(accessToken).getPendingAlerts({ limit: 10 }),
     enabled: !!accessToken && aboveFoldReady,
@@ -131,7 +135,8 @@ export function RecentAlerts() {
   // WHY single outer wrapper for all render paths: consistent bg-background + h-full
   // across all Row-4 panels regardless of data state. See EconomicCalendar for rationale.
   return (
-    <div className="flex h-full flex-col bg-background">
+    // Round 4 (item 2): role="region" + aria-label landmark for SR panel nav.
+    <div className="flex h-full flex-col bg-background" role="region" aria-label="Recent alerts">
 
       {/* ── Section header §0.9 pattern ──────────────────────────────────── */}
       <div className="flex h-6 shrink-0 items-center border-b border-border px-2">
@@ -159,10 +164,18 @@ export function RecentAlerts() {
       )}
 
       {/* ── Error state ─────────────────────────────────────────────────── */}
+      {/* Round 4 (item 1): named error state + Retry replaces the bare
+          destructive one-liner (which had no recovery path and collapsed the
+          panel to a 22px sliver). WHY merged.length === 0 stays: live
+          WebSocket alerts can still populate the list while the REST poll is
+          down — in that case showing the (partial) data beats an error. */}
       {isError && merged.length === 0 && (
-        <div className="flex h-[22px] items-center gap-1.5 px-1">
-          <span className="text-[11px] text-destructive">Failed to load alerts</span>
-        </div>
+        <WidgetErrorState
+          copyKey="dashboard.alerts-error"
+          icon={BellOff}
+          onRetry={() => void refetch()}
+          retrying={isFetching}
+        />
       )}
 
       {/* ── Empty state ─────────────────────────────────────────────────── */}

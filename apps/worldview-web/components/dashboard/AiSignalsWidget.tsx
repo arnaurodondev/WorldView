@@ -36,6 +36,9 @@ import { Skeleton } from "@/components/ui/skeleton";
 // EmptyState primitive (DESIGN_SYSTEM §15.12) with named dashboard.* copy
 // keys; InlineEmptyState remains the tool for in-list messages only.
 import { EmptyState } from "@/components/primitives/EmptyState";
+// Round 4 (item 1): error state gains a Retry action wired to refetch() —
+// Round 3 named the state but offered no recovery path.
+import { WidgetErrorState } from "@/components/dashboard/WidgetErrorState";
 import { Radar } from "lucide-react";
 import { cn } from "@/lib/utils";
 import type { AiSignal } from "@/types/api";
@@ -56,7 +59,8 @@ export function AiSignalsWidget() {
   const { accessToken } = useAuth();
   const router = useRouter();
 
-  const { data, isLoading, isError } = useQuery({
+  // Round 4 (item 1): refetch + isFetching destructured for the Retry action.
+  const { data, isLoading, isError, refetch, isFetching } = useQuery({
     queryKey: ["dashboard-ai-signals"],
     queryFn: () => createGateway(accessToken).getAiSignals(20),
     enabled: !!accessToken,
@@ -67,9 +71,12 @@ export function AiSignalsWidget() {
   });
 
   // ── Loading state ───────────────────────────────────────────────────────────
+  // Round 4 (item 2): every return branch carries the same role="region" +
+  // aria-label so the landmark exists from first paint (SR users can target
+  // the panel even while it loads).
   if (isLoading) {
     return (
-      <div className="flex h-full flex-col bg-background">
+      <div className="flex h-full flex-col bg-background" role="region" aria-label="AI signals">
         <div className="flex h-5 shrink-0 items-center border-b border-border px-2">
           <span className="text-[10px] uppercase tracking-[0.08em] text-muted-foreground">
             AI SIGNALS
@@ -97,11 +104,16 @@ export function AiSignalsWidget() {
   // not an in-list message. Copy lives in lib/copy/empty-states.ts.
   if (isError) {
     return (
-      <div className="flex h-full flex-col bg-background">
+      <div className="flex h-full flex-col bg-background" role="region" aria-label="AI signals">
         <WidgetHeader />
-        <div className="flex flex-1 items-center justify-center">
-          <EmptyState condition="error" copyKey="dashboard.signals-error" icon={Radar} />
-        </div>
+        {/* Round 4 (item 1): WidgetErrorState = same named copy key + icon as
+            the Round-3 EmptyState, plus the Retry → refetch() recovery path. */}
+        <WidgetErrorState
+          copyKey="dashboard.signals-error"
+          icon={Radar}
+          onRetry={() => void refetch()}
+          retrying={isFetching}
+        />
       </div>
     );
   }
@@ -113,7 +125,7 @@ export function AiSignalsWidget() {
   // signals" category cue; copy key dashboard.no-signals.
   if (signals.length === 0) {
     return (
-      <div className="flex h-full flex-col bg-background">
+      <div className="flex h-full flex-col bg-background" role="region" aria-label="AI signals">
         <WidgetHeader />
         <div className="flex flex-1 items-center justify-center">
           <EmptyState
@@ -131,7 +143,7 @@ export function AiSignalsWidget() {
     // WHY bg-background (not bg-card): consistent with all other dashboard widgets.
     // All cells sit on the same surface level; bg-card creates an unwanted "raised"
     // appearance against the gap-px grid background.
-    <div className="flex h-full flex-col bg-background">
+    <div className="flex h-full flex-col bg-background" role="region" aria-label="AI signals">
       <WidgetHeader signalCount={signals.length} />
 
       {/* Signal rows — one row per signal, each 22px tall (§0 terminal rule) */}

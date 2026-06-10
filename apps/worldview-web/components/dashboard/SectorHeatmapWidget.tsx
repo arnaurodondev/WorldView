@@ -40,6 +40,9 @@ import { Skeleton } from "@/components/ui/skeleton";
 // Round 3 (item 4): panel-level empty/error states use the shared EmptyState
 // primitive (§15.12) with named dashboard.* copy keys.
 import { EmptyState } from "@/components/primitives/EmptyState";
+// Round 4 (item 1): error state gains a Retry action wired to refetch() —
+// Round 3 named the state but left the trader with no recovery path.
+import { WidgetErrorState } from "@/components/dashboard/WidgetErrorState";
 import { LayoutGrid } from "lucide-react";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { cn } from "@/lib/utils";
@@ -138,6 +141,10 @@ export function SectorHeatmapWidget() {
     data: heatmap,
     isLoading: isHeatmapLoading,
     isError: isHeatmapError,
+    // Round 4 (item 1): refetch + isFetching drive the error-state Retry
+    // button (label flips to "Retrying…" while the re-fetch is in flight).
+    refetch: refetchHeatmap,
+    isFetching: isHeatmapFetching,
   } = useQuery({
     // WHY period in queryKey: TanStack identifies cached entries by key. Adding
     // `period` ensures each period switch hits a fresh fetch (or a fresh cache
@@ -253,7 +260,13 @@ export function SectorHeatmapWidget() {
     // WHY overflow-hidden: any sub-pixel rounding from `flex-basis: calc(...)`
     // on the inner tiles is clipped at the widget border instead of bleeding
     // into adjacent grid cells (B-2-03 fix).
-    <div className="flex h-full flex-col overflow-hidden bg-background">
+    // Round 4 (item 2): role="region" + aria-label landmark — see
+    // MarketSnapshotWidget for the SR-navigation rationale.
+    <div
+      className="flex h-full flex-col overflow-hidden bg-background"
+      role="region"
+      aria-label="Sector performance"
+    >
 
       {/* ── Section header (matches §0.9 panel-header pattern) ──────────── */}
       {/* WHY h-5 (20px): Row 2 cap is 130px. Saving 4px vs h-6 keeps two tile
@@ -324,10 +337,16 @@ export function SectorHeatmapWidget() {
           trader needs to triage these differently — a feed outage requires
           ops attention; an empty list might be expected pre-market.
           Round 3 (item 4): shared EmptyState primitive + named copy key. */}
+      {/* Round 4 (item 1): WidgetErrorState adds the Retry → refetch() wiring
+          the Round-3 EmptyState lacked. Same copy key + icon, so the named
+          state (and any text-matching tests) are unchanged. */}
       {isHeatmapError && (
-        <div className="flex flex-1 items-center justify-center">
-          <EmptyState condition="error" copyKey="dashboard.sector-error" icon={LayoutGrid} />
-        </div>
+        <WidgetErrorState
+          copyKey="dashboard.sector-error"
+          icon={LayoutGrid}
+          onRetry={() => void refetchHeatmap()}
+          retrying={isHeatmapFetching}
+        />
       )}
 
       {/* ── Empty state ──────────────────────────────────────────────────── */}

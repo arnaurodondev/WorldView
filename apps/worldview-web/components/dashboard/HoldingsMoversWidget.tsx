@@ -40,6 +40,8 @@ import { useRouter } from "next/navigation";
 import { AlertTriangle, Briefcase } from "lucide-react";
 
 import { createGateway } from "@/lib/gateway";
+// Round 4 (item 3b): central query-key factory for the shared portfolios key.
+import { qk } from "@/lib/query/keys";
 import { useAuth } from "@/hooks/useAuth";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -84,8 +86,13 @@ export function HoldingsMoversWidget() {
   // WHY first by created_at: matches the WatchlistMovers "default
   // watchlist" heuristic — there is no `is_default` flag, so the oldest
   // portfolio approximates the user's main book.
+  // Round 4 (item 3b, query-key drift): key aligned from the widget-private
+  // ["dashboard-holdings-movers-portfolios"] to the shared qk.portfolios.list()
+  // — identical queryFn/shape to PortfolioSummary's list query, so the private
+  // key duplicated a fetch already in the cache whenever the user opened the
+  // HOLDINGS tab. Sharing the key makes the tab switch a cache hit.
   const { data: portfolios, isLoading: portfoliosLoading, isError: portfoliosError, refetch: refetchPortfolios } = useQuery({
-    queryKey: ["dashboard-holdings-movers-portfolios"],
+    queryKey: qk.portfolios.list(),
     queryFn: () => createGateway(accessToken).getPortfolios(),
     enabled: !!accessToken,
     staleTime: 60_000,
@@ -100,8 +107,11 @@ export function HoldingsMoversWidget() {
   }, [portfolios]);
 
   // ── 2. Holdings ────────────────────────────────────────────────────────
+  // Round 4 (item 3b): aligned to the shared ["holdings", id] key family
+  // (PortfolioSummary / WatchlistQuickViewWidget) — same queryFn + shape,
+  // so when this widget resolves the same portfolio the cache is reused.
   const { data: holdingsResp, isLoading: holdingsLoading } = useQuery({
-    queryKey: ["dashboard-holdings-movers-holdings", firstPortfolio?.portfolio_id],
+    queryKey: ["holdings", firstPortfolio?.portfolio_id],
     queryFn: () =>
       createGateway(accessToken).getHoldings(firstPortfolio!.portfolio_id),
     enabled: !!accessToken && !!firstPortfolio,
@@ -115,8 +125,13 @@ export function HoldingsMoversWidget() {
   );
 
   // ── 3. 1D path: batch quotes ───────────────────────────────────────────
+  // Round 4 (item 3b): aligned to the shared ["holdings-quotes", ids] key
+  // family — instrumentIds derives from the SAME holdings response in the
+  // same order as PortfolioSummary's, so the array (and therefore the key)
+  // matches and the 1D quotes fetch dedupes against the always-mounted
+  // PortfolioSummary observer instead of firing its own.
   const { data: quotes, isLoading: quotesLoading } = useQuery({
-    queryKey: ["dashboard-holdings-movers-batch-quotes", instrumentIds.join(",")],
+    queryKey: ["holdings-quotes", instrumentIds],
     queryFn: () => createGateway(accessToken).getBatchQuotes(instrumentIds),
     enabled: !!accessToken && period === "1D" && instrumentIds.length > 0,
     // 60s refresh — same cadence as WatchlistMovers (matches typical

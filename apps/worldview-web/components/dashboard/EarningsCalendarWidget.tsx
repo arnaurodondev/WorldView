@@ -108,7 +108,8 @@ export function EarningsCalendarWidget() {
     // WHY bg-background + h-full flex-col: consistent with EconomicCalendar —
     // all Row-4 dashboard panels use this outer container pattern so the gap-px
     // hairline separators look uniform.
-    <div className="flex h-full flex-col bg-background">
+    // Round 4 (item 2): role="region" + aria-label landmark for SR panel nav.
+    <div className="flex h-full flex-col bg-background" role="region" aria-label="Earnings calendar">
 
       {/* ── Section header §0.9 pattern ──────────────────────────────────── */}
       {/* WHY uppercase tracking: terminal-style section label per DESIGN_SYSTEM.md §0.9 */}

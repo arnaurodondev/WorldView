@@ -101,6 +101,17 @@ export const EMPTY_COPY: Record<string, EmptyCopy> = {
     title: "Not enough history",
     body: "Analytics need at least two daily snapshots — check back after the next market close.",
   },
+  // Portfolio Round-4 hardening: page-level load failure (the deferred R3
+  // item). WHY the title is exactly "Failed to load portfolio data": the e2e
+  // suite (qa-exhaustive.spec.ts "Portfolio shows error state with retry
+  // option") pins that text via page.locator — keeping it verbatim means the
+  // R4 migration from InlineEmptyState to the named EmptyState + Retry action
+  // changes structure without breaking the pinned copy (R19).
+  "portfolio.load-error": {
+    title: "Failed to load portfolio data",
+    body: "The portfolio list could not be fetched. Check your connection, then retry.",
+    ctaLabel: "Retry",
+  },
 
   // Screener surface keys.
   "screener.no-matches": {
@@ -288,6 +299,35 @@ export const EMPTY_COPY: Record<string, EmptyCopy> = {
   "dashboard.brief-unavailable": {
     title: "AI brief unavailable",
     body: "No morning brief has been generated yet.",
+  },
+
+  // Round-4 hardening (2026-06-10): NAMED error states for the widgets that
+  // previously rendered bespoke error text (or worse, fell through to a
+  // misleading empty state on fetch failure — e.g. PortfolioSummary showed
+  // "No portfolio yet" when /v1/portfolios 500'd). Each error key pairs with
+  // a Retry action wired to the failing query's refetch() via
+  // components/dashboard/WidgetErrorState. Copy follows the established
+  // "<thing> unavailable" + "failed to load — check the connection" voice
+  // set by dashboard.signals-error / dashboard.sector-error above.
+  "dashboard.snapshot-error": {
+    title: "Snapshot unavailable",
+    body: "The market snapshot failed to load — check the connection.",
+  },
+  "dashboard.portfolio-error": {
+    title: "Portfolio unavailable",
+    body: "Portfolio data failed to load — check the connection.",
+  },
+  "dashboard.movers-error": {
+    title: "Movers unavailable",
+    body: "The market movers feed failed to load — check the connection.",
+  },
+  "dashboard.economic-error": {
+    title: "Economic calendar unavailable",
+    body: "Macro events failed to load — check the connection.",
+  },
+  "dashboard.alerts-error": {
+    title: "Alerts unavailable",
+    body: "The alert feed failed to load — check the connection.",
   },
 };
 

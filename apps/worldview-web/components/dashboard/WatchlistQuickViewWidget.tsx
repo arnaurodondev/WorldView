@@ -50,6 +50,10 @@ import { Skeleton } from "@/components/ui/skeleton";
 // Round 3 (item 4): shared EmptyState primitive (§15.12) for the named
 // no-positions state — copy key keeps the test-pinned title string.
 import { EmptyState } from "@/components/primitives/EmptyState";
+// Round 4 (item 1): named error state + Retry. Pre-Round-4 a failed
+// portfolios/holdings fetch fell through to the "Track your top positions
+// here" cold-start state — misleading for users who DO have positions.
+import { WidgetErrorState } from "@/components/dashboard/WidgetErrorState";
 import { Wallet } from "lucide-react";
 import { Sparkline } from "@/components/primitives/Sparkline";
 import { cn } from "@/lib/utils";
@@ -71,7 +75,14 @@ export function WatchlistQuickViewWidget() {
   const { accessToken } = useAuth();
 
   // ── Query 1: portfolio list (shared cache with PortfolioSummary) ──────────
-  const { data: portfolios, isLoading: portfoliosLoading } = useQuery({
+  // Round 4 (item 1): error flags destructured for the named error + Retry.
+  const {
+    data: portfolios,
+    isLoading: portfoliosLoading,
+    isError: portfoliosError,
+    refetch: refetchPortfolios,
+    isFetching: portfoliosFetching,
+  } = useQuery({
     queryKey: qk.portfolios.list(),
     queryFn: () => createGateway(accessToken).getPortfolios(),
     enabled: !!accessToken,
@@ -84,7 +95,14 @@ export function WatchlistQuickViewWidget() {
   const portfolioId = useResolvedPortfolioId(portfolios);
 
   // ── Query 2: holdings (IDENTICAL key to PortfolioSummary → one fetch) ─────
-  const { data: holdingsResp, isLoading: holdingsLoading } = useQuery({
+  // Round 4 (item 1): error flags destructured (same rationale as Query 1).
+  const {
+    data: holdingsResp,
+    isLoading: holdingsLoading,
+    isError: holdingsError,
+    refetch: refetchHoldings,
+    isFetching: holdingsFetching,
+  } = useQuery({
     queryKey: ["holdings", portfolioId],
     queryFn: () => createGateway(accessToken).getHoldings(portfolioId!),
     enabled: !!accessToken && !!portfolioId,
@@ -193,10 +211,33 @@ export function WatchlistQuickViewWidget() {
     </div>
   );
 
+  // ── Error state (Round 4, item 1) ──────────────────────────────────────────
+  // BEFORE the loading/empty checks: a failed fetch leaves the data
+  // undefined, which the empty branch would misread as "no positions yet".
+  // Retry targets only the FAILED query — refetch() ignores `enabled`, so
+  // retrying the holdings query while portfolioId is null would crash on
+  // the `portfolioId!` assertion (see PortfolioSummary for the same guard).
+  if (portfoliosError || holdingsError) {
+    return (
+      <div className="flex h-full flex-col bg-background" role="region" aria-label="Top positions">
+        {header}
+        <WidgetErrorState
+          copyKey="dashboard.portfolio-error"
+          icon={Wallet}
+          onRetry={() =>
+            void (portfoliosError ? refetchPortfolios() : refetchHoldings())
+          }
+          retrying={portfoliosFetching || holdingsFetching}
+        />
+      </div>
+    );
+  }
+
   // ── Loading state — fixed-height skeleton rows prevent layout jump ────────
   if (isLoading && !holdingsResp) {
     return (
-      <div className="flex h-full flex-col bg-background">
+      // Round 4 (item 2): role="region" + aria-label on every return branch.
+      <div className="flex h-full flex-col bg-background" role="region" aria-label="Top positions">
         {header}
         {/* Round 3 (item 3): skeleton cells mirror the loaded QuickViewRow's
             exact column slots (ticker 44 · sparkline 48×14 · price flex ·
@@ -225,7 +266,7 @@ export function WatchlistQuickViewWidget() {
     // (PINNED by __tests__/dashboard-round2.test.tsx) and the action Link
     // keeps the accessible name /Add holdings in Portfolio/ (also pinned).
     return (
-      <div className="flex h-full flex-col bg-background">
+      <div className="flex h-full flex-col bg-background" role="region" aria-label="Top positions">
         {header}
         <div className="flex flex-1 items-center justify-center">
           <EmptyState
@@ -247,7 +288,7 @@ export function WatchlistQuickViewWidget() {
   }
 
   return (
-    <div className="flex h-full flex-col bg-background">
+    <div className="flex h-full flex-col bg-background" role="region" aria-label="Top positions">
       {header}
       {/* WHY overflow-y-auto: Row-3 cells are overflow-hidden with a bounded
           minmax height — the row list scrolls independently if the cell ever
