@@ -22,13 +22,12 @@
  *     mod+\ →  toggle StatusBar / full-width (placeholder — Wave 5)
  *
  *   Search / palette:
- *     mod+k  →  intentionally NOT registered here — the global CommandPalette
- *               (components/shell/CommandPalette.tsx) owns its own document-level
- *               ⌘K listener. The registry's chord listener suspends while focus
- *               is in an input, but ⌘K must fire even mid-typing (e.g. in the
- *               chat composer), so it cannot go through useChordHotkeys.
- *               The `?` overlay lists all real shortcuts; the TopBar also shows
- *               a visible ⌘K hint chip.
+ *     mod+k  →  registered by CommandPalette itself (id shell.command.palette,
+ *               Round-3 2026-06-10) — the palette owns its open state, so it
+ *               co-locates the registration like HotkeyCheatSheet does for `?`.
+ *               Modifier-bearing chords pass through the input-suspension rule,
+ *               so ⌘K fires even mid-typing (chat composer). Being in the
+ *               registry means the `?` overlay lists it automatically.
  *     /      →  focus GlobalSearch input
  *
  *   Help:

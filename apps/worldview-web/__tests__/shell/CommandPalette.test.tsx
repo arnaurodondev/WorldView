@@ -3,6 +3,14 @@
  *
  * Pins:
  *   - opens on Cmd+K AND Ctrl+K, toggles closed on a second press
+ *   - Round-3: ⌘K is dispatched through lib/hotkey-registry (id
+ *     `shell.command.palette`) by the useChordHotkeys document listener —
+ *     the test harness mounts HotkeyProvider + the listener exactly like the
+ *     production (app) layout does (GlobalHotkeyBindings mounts the listener)
+ *   - ⌘K still fires while focus is in a text input (modifier chords bypass
+ *     the input-suspension rule)
+ *   - the mod+k binding is visible in registry.all() → the `?` cheat sheet
+ *     lists it automatically (single-source-of-truth contract)
  *   - closes on Escape (Radix Dialog dismissal path resets the query)
  *   - opens on the `worldview:open-command-palette` CustomEvent (TopBar chip)
  *   - Navigate group enumerates routes with registry chord hints
@@ -23,6 +31,8 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 const mockPush = vi.fn();
 vi.mock("next/navigation", () => ({
   useRouter: () => ({ push: mockPush, replace: vi.fn(), prefetch: vi.fn() }),
+  // usePathname is consumed by useChordHotkeys (page-scoped binding matching).
+  usePathname: () => "/dashboard",
 }));
 
 vi.mock("@/hooks/useAuth", () => ({
@@ -43,8 +53,23 @@ vi.mock("@/lib/gateway", () => ({
 }));
 
 import { CommandPalette, OPEN_COMMAND_PALETTE_EVENT } from "@/components/shell/CommandPalette";
+import { HotkeyProvider } from "@/contexts/HotkeyContext";
+import { HotkeyRegistry } from "@/lib/hotkey-registry";
+import { useChordHotkeys } from "@/hooks/useChordHotkeys";
 
 // ── Helpers ────────────────────────────────────────────────────────────────────
+
+/**
+ * Round-3: the palette's ⌘K chord goes through the hotkey registry. In the
+ * production layout the document-level chord listener is mounted by
+ * GlobalHotkeyBindings; tests mount it via this minimal host so the keydown →
+ * registry → handler dispatch path is exercised end-to-end (same pattern as
+ * __tests__/hotkey-cheat-sheet.test.tsx).
+ */
+function ListenerHost() {
+  useChordHotkeys();
+  return null;
+}
 
 function renderPalette() {
   // retry:false → a failing queryFn surfaces immediately instead of retrying
@@ -52,14 +77,23 @@ function renderPalette() {
   const client = new QueryClient({
     defaultOptions: { queries: { retry: false } },
   });
-  return render(
-    <QueryClientProvider client={client}>
-      <CommandPalette />
-    </QueryClientProvider>,
-  );
+  // Fresh registry per render — isolates chord registrations between tests
+  // (the default singleton would leak `shell.command.palette` across cases).
+  const registry = new HotkeyRegistry();
+  return {
+    registry,
+    ...render(
+      <QueryClientProvider client={client}>
+        <HotkeyProvider registry={registry}>
+          <ListenerHost />
+          <CommandPalette />
+        </HotkeyProvider>
+      </QueryClientProvider>,
+    ),
+  };
 }
 
-/** Simulate the global chord. The palette listens on `document`. */
+/** Simulate the global chord. The chord listener is attached to `document`. */
 function pressCmdK(opts: { ctrl?: boolean } = {}) {
   fireEvent.keyDown(document, {
     key: "k",
@@ -109,6 +143,42 @@ describe("CommandPalette open/close", () => {
     await waitFor(() => {
       expect(screen.queryByPlaceholderText(INPUT_PLACEHOLDER)).not.toBeInTheDocument();
     });
+  });
+
+  it("registers mod+k in the hotkey registry (cheat-sheet single-source contract)", () => {
+    // The `?` overlay (HotkeyCheatSheet) renders registry.all() verbatim —
+    // this binding existing IS what makes ⌘K appear there. If this assertion
+    // fails, the cheat sheet stops listing the command palette.
+    const { registry } = renderPalette();
+    const binding = registry.all().find((b) => b.id === "shell.command.palette");
+    expect(binding).toBeDefined();
+    expect(binding?.chord).toBe("mod+k");
+    expect(binding?.group).toBe("Symbol");
+    expect(binding?.label).toBe("Open command palette");
+  });
+
+  it("⌘K still fires while focus is in a text input (modifier chords bypass suspension)", () => {
+    // This pins the property that justified moving ⌘K into the registry:
+    // useChordHotkeys only suspends modifier-LESS chords inside text inputs,
+    // so ⌘K from the chat composer / search box still opens the palette.
+    renderPalette();
+    const input = document.createElement("input");
+    input.type = "text";
+    document.body.appendChild(input);
+    input.focus();
+    try {
+      fireEvent.keyDown(input, { key: "k", metaKey: true });
+      expect(screen.getByPlaceholderText(INPUT_PLACEHOLDER)).toBeInTheDocument();
+    } finally {
+      input.remove();
+    }
+  });
+
+  it("unregisters mod+k on unmount (no stale chord after the layout tears down)", () => {
+    const { registry, unmount } = renderPalette();
+    expect(registry.all().some((b) => b.id === "shell.command.palette")).toBe(true);
+    unmount();
+    expect(registry.all().some((b) => b.id === "shell.command.palette")).toBe(false);
   });
 
   it("opens when the TopBar hint dispatches the CustomEvent", () => {

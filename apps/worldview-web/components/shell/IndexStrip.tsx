@@ -181,7 +181,12 @@ export function IndexStrip() {
         {INDEX_STRIP_TICKERS.map((t) => (
           <div
             key={t.canonicalTicker}
-            className="h-[22px] w-[60px] shrink-0 bg-muted/30 animate-pulse"
+            // WHY static (no animate-pulse): Terminal Dark skeletons are STATIC
+            // muted blocks — Bloomberg-style. Round-3 polish removed the
+            // animate-pulse that slipped in here; see DESIGN_SYSTEM.md §6.2
+            // (only the slow opt-in `animate-skeleton-pulse` is permitted, and
+            // never raw Tailwind `animate-pulse`).
+            className="h-[22px] w-[60px] shrink-0 rounded-[2px] bg-muted/30"
             aria-hidden
           />
         ))}

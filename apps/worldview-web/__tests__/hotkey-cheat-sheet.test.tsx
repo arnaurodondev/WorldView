@@ -156,6 +156,57 @@ describe("HotkeyCheatSheet", () => {
     expect(await screen.findByText("Go to News")).toBeInTheDocument();
   });
 
+  it("`?` does NOT open the cheat sheet while a text input has focus", async () => {
+    // Round-3 polish pin: `?` is a modifier-less chord, so useChordHotkeys
+    // must suspend it while the user is typing (input/textarea/contenteditable)
+    // — otherwise typing a literal question mark in the search box would pop
+    // the overlay. The suspension rule lives in isTextInputActive(); this test
+    // pins it specifically for the cheat-sheet chord.
+    render(
+      <HotkeyProvider registry={registry}>
+        <ListenerHost />
+        <HotkeyCheatSheet />
+      </HotkeyProvider>,
+    );
+
+    const input = document.createElement("input");
+    input.type = "text";
+    document.body.appendChild(input);
+    input.focus();
+    try {
+      // userEvent.keyboard types into the focused element — exactly the
+      // "user typing a question mark" scenario.
+      await userEvent.keyboard("?");
+      expect(screen.queryByRole("dialog")).toBeNull();
+    } finally {
+      input.remove();
+    }
+  });
+
+  it("`?` is suppressed inside a contenteditable region (chat composer)", async () => {
+    render(
+      <HotkeyProvider registry={registry}>
+        <ListenerHost />
+        <HotkeyCheatSheet />
+      </HotkeyProvider>,
+    );
+
+    const editable = document.createElement("div");
+    editable.setAttribute("contenteditable", "true");
+    // jsdom does not compute isContentEditable from the attribute — define it
+    // explicitly so isTextInputActive() sees what a real browser reports.
+    Object.defineProperty(editable, "isContentEditable", { value: true });
+    editable.tabIndex = 0; // make focusable in jsdom
+    document.body.appendChild(editable);
+    editable.focus();
+    try {
+      fireEvent.keyDown(editable, { key: "?" });
+      expect(screen.queryByRole("dialog")).toBeNull();
+    } finally {
+      editable.remove();
+    }
+  });
+
   it("cannot advertise an unregistered chord (auto-derivation guarantee)", async () => {
     // Render the cheat sheet with NO bindings registered. The dialog body must
     // contain zero binding rows. This is the structural anti-fraud guarantee

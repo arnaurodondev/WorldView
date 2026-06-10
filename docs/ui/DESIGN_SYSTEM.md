@@ -297,7 +297,7 @@ Every component that fetches data MUST implement all three states:
 function DataPanel({ id }: { id: string }) {
   const { data, isLoading, error, refetch } = useMyData(id)
 
-  if (isLoading) return <DataPanelSkeleton />           // skeleton shimmer
+  if (isLoading) return <DataPanelSkeleton />           // static skeleton (see §6.2)
   if (error)    return <ErrorCard message="..." onRetry={refetch} /> // error + retry
   if (!data)    return <EmptyState message="..." />     // empty with guidance
 
@@ -309,19 +309,54 @@ function DataPanel({ id }: { id: string }) {
 
 ### 6.2 Skeleton Pattern
 
-Skeletons must match the shape of the loaded content:
+> **Updated 2026-06-10 (Round-3 polish)** — codified the no-animation rule and the
+> shape-matching convention.
+
+**Animation rule — skeletons are STATIC by default.** `components/ui/skeleton.tsx`
+renders a static `bg-muted` block with NO `animate-pulse` — Bloomberg-style terminals
+use static loading bars; finance users read animation as "something is happening"
+(streaming, thinking), so an animated skeleton reads as broken streaming. Two tiers:
+
+| Tier | Class | When |
+|------|-------|------|
+| Default | `<Skeleton />` (static `bg-muted`, no animation) | All loading states |
+| Opt-in | `animate-skeleton-pulse` (slow 2s opacity 1→0.4 fade, `tailwind.config.ts`) | Long loads (>2s expected, e.g. AI generation) where "still working" feedback matters |
+| **Banned** | Tailwind's raw `animate-pulse` | Never for skeletons — fast consumer-app pulse, and it bypasses the reduced-motion override in `globals.css` semantics we maintain |
+
+**Shape-matching convention.** A skeleton must pre-allocate the same geometry the
+loaded content will occupy — same heights, widths, column structure, and count —
+so hydration causes zero layout shift and the user's eye already knows where the
+data will land.
+
 ```tsx
-// Use shadcn Skeleton — same layout as content, grey shimmer
+// DO — mirror the loaded layout: 5 rows × row height, table rhythm preserved
 function DataTableSkeleton() {
   return (
     <div className="space-y-2">
       {Array.from({ length: 5 }).map((_, i) => (
-        <Skeleton key={i} className="h-10 w-full rounded" />
+        <Skeleton key={i} className="h-10 w-full rounded-[2px]" />
       ))}
     </div>
   )
 }
+
+// DO — match exact cell dimensions when the real content has fixed geometry
+// (e.g. IndexStrip pre-allocates ten 22×60px cells so the TopBar never shifts)
+<div className="h-[22px] w-[60px] shrink-0 rounded-[2px] bg-muted/30" aria-hidden />
+
+// DON'T — one amorphous blob where a table will appear (layout shifts on load,
+// user can't anticipate the structure)
+<Skeleton className="h-64 w-full" />
+
+// DON'T — animate-pulse (banned), rounded/rounded-md (violates 2px-radius rule)
+<Skeleton className="h-10 w-full rounded-md animate-pulse" />
 ```
+
+Rules of thumb:
+- **Count matches reality**: if the panel shows ~10 rows, render ~10 skeleton rows (cap at one viewport's worth — never render 200 skeleton rows).
+- **Text skeletons are shorter than their container**: `w-3/4` / `w-1/2` varied widths read as "text loading"; full-width bars read as "table loading".
+- **`rounded-[2px]` always** (Terminal Sharp radius rule, §13.3).
+- **`aria-hidden` on decorative cells + `aria-busy="true"` on the container** so screen readers announce one loading state, not N divs.
 
 ### 6.3 Financial Number Formatting
 
@@ -577,9 +612,32 @@ WHY this matters: ~8% of male users have a form of colour-vision deficiency (deu
 | `g ,` | Navigate /settings | |
 | `g h` | Open keyboard cheat sheet | Alias for `?` |
 | `⌘B` / `Ctrl+B` | Toggle sidebar | |
-| `⌘K` / `Ctrl+K` | Open CommandPalette | NOT in the registry — see §6.15 |
+| `⌘K` / `Ctrl+K` | Toggle CommandPalette | Registered as `shell.command.palette` (Round-3, 2026-06-10) — see §6.15 |
+| `/` | Focus global search | Registered only when the layout supplies the handler |
 | `?` | Toggle cheat-sheet overlay | Registered by `HotkeyCheatSheet` |
 | `Escape` | Close active modal/overlay | |
+
+**Spec conformance (Round-3 audit, 2026-06-10)**: the product-spec chords
+`G→D /dashboard`, `G→S /screener`, `G→P /portfolio`, `G→C /chat` were all already
+registered — no remaps were needed; the table above is the live registration list
+(pinned by `__tests__/global-hotkey-bindings.test.tsx`).
+
+**Input suspension rule**: modifier-less chords (`g d`, `?`, `/`) are suspended while
+focus is in an `<input>`, `<textarea>`, or `[contenteditable]` — typing a literal `?`
+never opens the cheat sheet. Modifier-bearing chords (`⌘K`, `⌘B`) bypass suspension and
+fire even mid-typing (e.g. ⌘K from the chat composer). Both behaviors are pinned in
+`__tests__/use-chord-hotkeys.test.tsx` and `__tests__/hotkey-cheat-sheet.test.tsx`.
+
+**`?` cheat-sheet overlay** (`components/shell/HotkeyCheatSheet.tsx`, mounted once in
+`app/(app)/layout.tsx`): renders `registry.all()` verbatim, grouped by the binding's
+`group` field (Navigation → Symbol → Action → View → Editing) with a filter input.
+Esc, `?` again, `g h`, or backdrop click closes. Page-scoped bindings (e.g. instrument
+D/F/N/I mnemonics) are shown only on their route. Because the rendered list IS the
+binding list, it is structurally impossible for the overlay to advertise an unwired
+shortcut (the no-lying invariant). Known gap: the chat tool-trace debug chord
+(`features/chat/hooks/useToolTraceChord`) still uses a raw document listener and is
+therefore invisible to the overlay — migrating it into the registry is chat-surface
+work (Round-4).
 
 ### 6.15 Command Palette Pattern (NEW — 2026-06-10)
 
@@ -588,10 +646,14 @@ WHY this matters: ~8% of male users have a form of colour-vision deficiency (deu
 (`components/ui/command.tsx`, cmdk under the hood).
 
 **Trigger** (three paths, one open state):
-1. `⌘K` / `Ctrl+K` — document-level keydown listener owned by the palette itself.
-   Intentionally NOT registered in `lib/hotkey-registry`: the chord listener suspends
-   while an `<input>` has focus, but ⌘K must fire even mid-typing (chat composer).
-   GlobalSearch's old ⌘K listener was removed — exactly ONE listener owns the chord.
+1. `⌘K` / `Ctrl+K` — registered in `lib/hotkey-registry` as `shell.command.palette`
+   (group `Symbol`) by the palette itself; dispatched by the single `useChordHotkeys`
+   document listener. **Round-3 change (2026-06-10)**: the previous raw document
+   listener was removed — its "registry suspends chords in inputs" rationale was wrong
+   (only modifier-LESS chords are suspended; `mod+k` always passes through). Registry
+   routing makes ⌘K appear in the `?` cheat sheet automatically and keeps exactly one
+   keydown listener dispatching every chord. Toggle goes through `handleOpenChange`
+   so closing via ⌘K resets the query like Escape does.
 2. `worldview:open-command-palette` CustomEvent — dispatched by the TopBar "⌘K" hint chip
    (exported constant `OPEN_COMMAND_PALETTE_EVENT`). Same decoupling pattern as
    `worldview:open-ai-panel`.
@@ -633,6 +695,34 @@ does not consume the param yet (forward-compatible contract; chat surface wires 
 `shouldFilter={false}` when it performs its own filtering — cmdk's built-in fuzzy filter
 matches against item `value` strings (namespaced ids like `inst:<uuid>`) and silently
 hides everything otherwise.
+
+### 6.16 Toast Pattern (Round-3 polish — 2026-06-10)
+
+**One library, one mount, one config.** All transient notifications use **sonner**
+(`import { toast } from "sonner"`). The single `<Toaster>` is mounted in
+`app/providers.tsx` — never mount a second one (every toast would render twice).
+Pinned by the source-contract test `__tests__/toast-config.test.ts`.
+
+**Locked configuration** (set once on the Toaster, NOT per call):
+
+| Setting | Value | Why |
+|---------|-------|-----|
+| `position` | `top-right` | FU-10.3 locked decision; above shell chrome (z-60), below FlashOverlay |
+| `visibleToasts` | `3` | More overlapped the TopBar content row on 768px laptops; older toasts collapse into the stack |
+| `duration` | `4000` ms | Auto-dismiss 4s — explicit, so a sonner upgrade can't silently change UX |
+| `theme` / styling | `dark`, `richColors`, `font-mono text-[11px] tabular-nums` | Terminal Dark density — toasts match StatusBar/row rhythm |
+| `closeButton` + `expand` | on | Manual dismiss affordance; hover expands the stack |
+
+**Call-site rules**:
+- Use the semantic helpers: `toast.success(msg)` / `toast.error(msg)` / `toast.info(msg)` /
+  bare `toast(msg)` for neutral notices. Optional `{ description }` for a second line,
+  `{ action: { label, onClick } }` for one inline action.
+- **Never** pass `duration`, `position`, `className`, or style overrides at the call
+  site — behavior is centralized on the provider. Sole sanctioned exception:
+  `hooks/useConfirmable.tsx` sets `duration: undoWindowMs` because the toast lifetime
+  IS the undo window (a functional timer, not styling).
+- Errors that block a workflow belong in inline `<ErrorCard>` / form errors, not toasts;
+  toasts are for fire-and-forget outcomes (saved, queued, dismissed, undone).
 
 ### 6.6 Empty State Pattern
 
@@ -1158,6 +1248,17 @@ For full implementation from a design, use `/scaffold-frontend`.
 - [ ] Form inputs have associated `<label>` elements (shadcn handles this via Radix)
 - [ ] Error messages announced to screen readers (use `role="alert"` or `aria-live="polite"`)
 - [ ] Loading states communicated (`aria-busy="true"`, `aria-label` on spinners)
+
+**Focus-ring audit (Round-3, 2026-06-10)** — all `components/ui/` interactive primitives
+show the `--ring` (yellow) focus indicator: Button, Tabs (trigger + content), Checkbox,
+Switch, Input (`ring-1`), Slider thumb (`ring-1`), Select trigger (`focus:ring-1`),
+Dialog close button (`focus:ring-2`). Intentional exceptions (do NOT "fix" these):
+- `command.tsx` input (`outline-none`) — inside `CommandDialog` the input is the only
+  focusable element and is always focused; the dialog border is the focus indicator
+  (cmdk/Linear/Raycast convention). List items are highlighted via `aria-selected`,
+  not DOM focus.
+- `popover.tsx` / `select.tsx` content panels (`outline-none`) — non-interactive
+  containers; the interactive children inside carry their own rings.
 
 ---
 

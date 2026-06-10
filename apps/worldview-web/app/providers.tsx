@@ -147,18 +147,35 @@ export function Providers({ children }: ProvidersProps) {
        * bottom-right position collided visually with the floating
        * ForceUpdateBanner before that banner moved to the top in W1.
        */}
+      {/*
+       * Round-3 polish (2026-06-10) — toast behavior is centralized HERE and
+       * only here (DESIGN_SYSTEM.md §6.16). Call sites use the bare sonner
+       * API (toast.success/error/info/…) and must NOT pass duration/position
+       * overrides; the one sanctioned exception is useConfirmable's Undo
+       * toast, whose duration IS the undo window (a functional timer, not
+       * styling). A source-contract test (__tests__/toast-config.test.ts)
+       * pins the single-Toaster rule and this config.
+       */}
       <Toaster
         position="top-right"
         richColors
         theme="dark"
         closeButton
         expand
-        visibleToasts={5}
+        // WHY 3 (was 5): with 5 stacked toasts the top-right column overlapped
+        // the IndexStrip/TopBar content row on 768px-tall laptops. Three is
+        // enough for any realistic burst (mutation result + WS alert + undo);
+        // older toasts collapse into the stack and re-expand on hover.
+        visibleToasts={3}
         // WHY style + className: Sonner attaches className to each toast
         // (mono font for terminal density) and style to the viewport root.
         // z:60 belongs on the viewport, not the per-toast element.
         style={{ zIndex: 60 } as React.CSSProperties}
         toastOptions={{
+          // WHY explicit 4000ms (sonner's default, pinned): the auto-dismiss
+          // window is a design-system contract — relying on the library
+          // default means a sonner upgrade could silently change UX.
+          duration: 4000,
           className: "font-mono text-[11px] tabular-nums",
         }}
       />

@@ -11,13 +11,24 @@
  *   2. Instruments           — debounced type-ahead against S9 /v1/search/instruments
  *   3. Recent Conversations  — newest rag-chat threads via S9 /v1/threads
  *
- * OWNERSHIP OF ⌘K: This component owns the document-level ⌘K/Ctrl+K listener.
- * GlobalSearch's old listener was REMOVED in the same change (two listeners on
- * one chord would open both surfaces at once). The chord is intentionally NOT
- * routed through lib/hotkey-registry: useChordHotkeys suspends chords while an
- * <input> has focus, but ⌘K must work everywhere — including while typing in
- * the chat composer (same reasoning as the original GlobalSearch listener, see
- * GlobalHotkeyBindings.tsx header).
+ * OWNERSHIP OF ⌘K: This component registers the `mod+k` chord in
+ * lib/hotkey-registry (id `shell.command.palette`) — it no longer owns a raw
+ * document-level listener. GlobalSearch's old listener was REMOVED earlier
+ * (two listeners on one chord would open both surfaces at once).
+ *
+ * WHY the registry (Round-3 polish, 2026-06-10): the original rationale for a
+ * raw listener was "useChordHotkeys suspends chords while an <input> has
+ * focus, but ⌘K must work everywhere — including while typing in the chat
+ * composer". That rationale was WRONG: useChordHotkeys only suspends
+ * modifier-LESS chords inside text inputs (`isTextInputActive() && !hasModifier`);
+ * modifier-bearing chords like mod+k always pass through (pinned by the
+ * "does NOT suspend modifier chords inside inputs" test in
+ * __tests__/use-chord-hotkeys.test.tsx). Going through the registry buys us:
+ *   1. The `?` cheat sheet (HotkeyCheatSheet) lists ⌘K automatically —
+ *      single source of truth, no hardcoded duplicate hint anywhere.
+ *   2. The no-lying invariant extends to ⌘K: the hint shown in the TopBar
+ *      chip / cheat sheet IS the registered chord.
+ *   3. Exactly one document keydown listener dispatches every chord.
  *
  * DECOUPLED OPEN TRIGGER: The TopBar's "⌘K" hint button dispatches the
  * `worldview:open-command-palette` CustomEvent instead of prop-drilling an
@@ -69,6 +80,10 @@ import {
 } from "@/components/ui/command";
 import { useAuth } from "@/hooks/useAuth";
 import { useDebounce } from "@/hooks/useDebounce";
+// Round-3 polish: ⌘K is registered in the central hotkey registry (via the
+// provider's contextual registry) instead of a raw document listener — see
+// the "OWNERSHIP OF ⌘K" header block for the full rationale.
+import { useHotkeyScope } from "@/contexts/HotkeyContext";
 import { createGateway } from "@/lib/gateway";
 import { qk } from "@/lib/query/keys";
 import { formatChordForDisplay } from "@/lib/hotkey-registry";
@@ -150,22 +165,6 @@ export function CommandPalette() {
   // an in-memory filter over 14 rows, so debouncing it would only add lag.
   const debouncedQuery = useDebounce(query, 250);
 
-  // ── ⌘K / Ctrl+K global listener ──────────────────────────────────────────
-  // WHY document-level (not hotkey-registry): see file header — the registry's
-  // chord listener suspends while focus is in an input, but ⌘K must fire even
-  // mid-typing in the chat composer. preventDefault stops Ctrl+K from focusing
-  // the browser location bar on Firefox/Chrome-Linux.
-  useEffect(() => {
-    function onKeyDown(e: KeyboardEvent) {
-      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") {
-        e.preventDefault();
-        setOpen((prev) => !prev);
-      }
-    }
-    document.addEventListener("keydown", onKeyDown);
-    return () => document.removeEventListener("keydown", onKeyDown);
-  }, []);
-
   // ── CustomEvent open trigger (TopBar ⌘K hint button) ─────────────────────
   useEffect(() => {
     function onOpenEvent() {
@@ -183,6 +182,33 @@ export function CommandPalette() {
     setOpen(next);
     if (!next) setQuery("");
   }, []);
+
+  // ── ⌘K / Ctrl+K chord — registered in the central hotkey registry ─────────
+  // WHY registry (not a raw document listener): see the "OWNERSHIP OF ⌘K"
+  // header block. The registry's chord listener (useChordHotkeys, mounted by
+  // GlobalHotkeyBindings in the same layout) lets modifier-bearing chords fire
+  // even while a text input has focus, calls preventDefault on match (stops
+  // Ctrl+K from focusing the browser location bar on Firefox/Chrome-Linux),
+  // and feeds the `?` cheat sheet so ⌘K is listed without a hardcoded hint.
+  //
+  // WHY `open` in deps: register() is last-wins by id, so re-registering on
+  // every open/close flip is cheap and keeps the handler's `!open` toggle
+  // fresh. Routing the toggle through handleOpenChange (not bare setOpen)
+  // guarantees the close path ALWAYS resets the query — same contract as
+  // Escape/overlay-click (Radix onOpenChange).
+  const { registry } = useHotkeyScope();
+  useEffect(() => {
+    return registry.register({
+      id: "shell.command.palette",
+      chord: "mod+k",
+      scope: "global",
+      // "Symbol" — the cheat-sheet group for search/symbol-lookup surfaces
+      // (the HotkeyGroup taxonomy comment has reserved ⌘K here since W1).
+      group: "Symbol",
+      label: "Open command palette",
+      handler: () => handleOpenChange(!open),
+    });
+  }, [registry, open, handleOpenChange]);
 
   // ── Instruments: debounced S9 search ─────────────────────────────────────
   // WHY the same queryKey as GlobalSearch ("instrument-search"): both surfaces
