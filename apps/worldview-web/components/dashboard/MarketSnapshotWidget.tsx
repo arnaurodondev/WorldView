@@ -42,6 +42,9 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { cn } from "@/lib/utils";
 // HF-10: locale-grouped USD price ("$4,892.11").
 import { formatPrice } from "@/lib/format";
+// Round 3 (item 6): transient tint on price change — discrete state, no
+// keyframe animation (NFR-6 compliant), disabled under prefers-reduced-motion.
+import { usePriceFlash } from "@/features/dashboard/hooks/usePriceFlash";
 
 // ── Snapshot instrument groups ────────────────────────────────────────────────
 
@@ -190,13 +193,35 @@ export function MarketSnapshotWidget() {
       <div className="flex-1 overflow-auto">
         {isLoading ? (
           // Loading skeletons — 2 groups × (1 label + N rows)
-          <div className="divide-y divide-border/30">
-            {/* WHY length 11: 5 INDICES + 6 EQUITIES rows — skeleton count must
-                match the loaded row count so there is no layout jump on load. */}
-            {Array.from({ length: 11 }).map((_, i) => (
-              <div key={i} className="flex h-[22px] items-center justify-between px-2">
-                <Skeleton className="h-3 w-[48px]" />
-                <Skeleton className="h-3 w-[64px]" />
+          // Round 3 (item 3): the skeleton mirrors the loaded layout EXACTLY —
+          // including the two 18px group-label separator rows and the loaded
+          // row's 4 column slots (ticker 40px · price flex · change-$ 52px ·
+          // change-% 64px) — so data arrival causes zero layout shift.
+          <div>
+            {SNAPSHOT_GROUPS.map((group, gIdx) => (
+              <div key={group.label}>
+                {/* Group-label slot — same h-[18px] chrome as the loaded view. */}
+                <div
+                  className={cn(
+                    "flex h-[18px] items-center border-b border-border/20 px-2",
+                    gIdx > 0 && "border-t border-border/30",
+                  )}
+                >
+                  <Skeleton className="h-2 w-[44px]" />
+                </div>
+                <div className="divide-y divide-border/30">
+                  {/* WHY group.tickers.length: skeleton row count must match the
+                      loaded row count per group (5 INDICES + 6 EQUITIES). */}
+                  {group.tickers.map((ticker) => (
+                    <div key={ticker} className="flex h-[22px] items-center gap-1 px-2">
+                      <Skeleton className="h-3 w-[40px] shrink-0" />
+                      <span className="flex-1" />
+                      <Skeleton className="h-3 w-[48px] shrink-0" />
+                      <Skeleton className="h-3 w-[52px] shrink-0" />
+                      <Skeleton className="h-3 w-[64px] shrink-0" />
+                    </div>
+                  ))}
+                </div>
               </div>
             ))}
           </div>
@@ -269,6 +294,15 @@ function SnapshotRow({ ticker, instrumentId, quote }: SnapshotRowProps) {
   // case so the trader sees "no data" rather than "$0.00 +0.00%".
   const hasPrice = quote != null && (quote.price ?? 0) > 0;
 
+  // ── Round 3 (item 6): price-tick flash ────────────────────────────────────
+  // Returns "up" / "down" for ~900ms after the refetched price differs from
+  // the previous one, null otherwise. DESIGN_SYSTEM/NFR-6 bans animations on
+  // data surfaces, so this is a DISCRETE background-tint state (no keyframes,
+  // no movement) that the row's existing Tier-1 `transition-colors` softens.
+  // The hook itself returns null under prefers-reduced-motion — see
+  // features/dashboard/hooks/usePriceFlash.ts for the full rationale.
+  const flash = usePriceFlash(hasPrice ? quote.price : null);
+
   // WHY only navigate when instrumentId is resolved: if the search step hasn't
   // returned yet, clicking would navigate to /instruments/null — a broken URL.
   const canNavigate = !!instrumentId;
@@ -277,20 +311,36 @@ function SnapshotRow({ ticker, instrumentId, quote }: SnapshotRowProps) {
   // Rows with a meaningful move (|change%| ≥ 0.5) get a faint directional
   // tint so the trader can scan direction at a glance without reading numbers.
   // /5 opacity is subtle — the ticker label and change% are still primary.
+  // WHY suppressed while flashing: the flash tint (/10) and the heat tint (/5)
+  // are different bg-* utility classes whose CSS-cascade order is not
+  // guaranteed — applying both would make the winner unpredictable. The flash
+  // is the stronger, more transient signal, so it takes the slot for 900ms.
   const heatClass =
-    hasPrice && changePct != null && Math.abs(changePct) >= 0.5
+    !flash && hasPrice && changePct != null && Math.abs(changePct) >= 0.5
       ? isPositive
         ? "bg-positive/5"
         : "bg-negative/5"
       : "";
+
+  // Flash tint — direction-coloured at /10 (one step above the resting heat
+  // tint, still terminal-subtle). Cleared back to heat/none after 900ms.
+  const flashClass =
+    flash === "up" ? "bg-positive/10" : flash === "down" ? "bg-negative/10" : "";
 
   return (
     <div
       className={cn(
         "flex h-[22px] items-center justify-between px-2",
         heatClass,
+        flashClass,
         // WHY cursor-pointer + hover:bg-muted/30 only when navigable.
         canNavigate && "cursor-pointer transition-colors hover:bg-muted/20",
+        // Round 3 (item 5): keyboard affordance — rows are tabbable buttons,
+        // so they need a visible :focus-visible ring. ring-inset because the
+        // row is flush inside an overflow-auto strip (an outset ring would be
+        // clipped by the container edge). ring-ring = --ring token (yellow).
+        canNavigate &&
+          "focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-ring",
       )}
       onClick={() => {
         if (canNavigate) router.push(`/instruments/${instrumentId}`);

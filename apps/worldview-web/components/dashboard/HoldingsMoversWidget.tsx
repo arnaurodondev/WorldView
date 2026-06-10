@@ -37,14 +37,20 @@
 import { useMemo, useState } from "react";
 import { useQuery, useQueries } from "@tanstack/react-query";
 import { useRouter } from "next/navigation";
-import { AlertTriangle } from "lucide-react";
+import { AlertTriangle, Briefcase } from "lucide-react";
 
 import { createGateway } from "@/lib/gateway";
 import { useAuth } from "@/hooks/useAuth";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { InlineEmptyState } from "@/components/data/InlineEmptyState";
-import { DashboardEmptyState } from "@/components/ui/dashboard-empty-state";
+// Round 3 (item 4): the panel-level no-portfolio / no-holdings states migrate
+// from the legacy DashboardEmptyState (components/ui — now consumed only by
+// workspace/screener surfaces) onto the shared EmptyState primitive (§15.12).
+// InlineEmptyState stays for the in-column "No gainers"/"No losers" lines —
+// that's exactly the in-list use case it documents.
+import { EmptyState } from "@/components/primitives/EmptyState";
+import Link from "next/link";
 import { cn } from "@/lib/utils";
 // HF-10: locale-grouped USD price ("$4,892.11").
 import { formatPrice } from "@/lib/format";
@@ -225,11 +231,13 @@ export function HoldingsMoversWidget() {
             <button
               key={p}
               onClick={() => setPeriod(p)}
+              // Round 3 (item 5): bg-muted hover convention + keyboard ring.
               className={cn(
                 "px-1.5 text-[9px] font-mono uppercase transition-colors",
+                "focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring",
                 period === p
                   ? "bg-primary/20 text-primary"
-                  : "text-muted-foreground hover:text-foreground",
+                  : "text-muted-foreground hover:bg-muted hover:text-foreground",
               )}
               aria-pressed={period === p}
             >
@@ -270,23 +278,42 @@ export function HoldingsMoversWidget() {
           </div>
         )}
 
-        {/* No-portfolio empty state — primary CTA is brokerage connection. */}
+        {/* No-portfolio empty state — primary CTA is brokerage connection.
+            Round 3 (item 4): shared EmptyState primitive — same copy key as
+            PortfolioSummary's no-portfolio state so both "my money" panels
+            speak with one voice; the action Link keeps the brokerage CTA. */}
         {!isError && noPortfolio && (
           <div className="flex flex-1 items-center justify-center">
-            <DashboardEmptyState
-              title="No portfolio yet"
-              message="Connect a brokerage to see your top movers."
-              cta={{ label: "Connect brokerage →", href: "/portfolio" }}
+            <EmptyState
+              condition="empty-cold-start"
+              copyKey="dashboard.no-portfolio"
+              icon={Briefcase}
+              action={
+                <Link
+                  href="/portfolio"
+                  className="font-mono text-[10px] uppercase tracking-[0.06em] text-primary transition-colors hover:text-primary/80 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                >
+                  Connect brokerage →
+                </Link>
+              }
             />
           </div>
         )}
 
         {!isError && !noPortfolio && noHoldings && (
           <div className="flex flex-1 items-center justify-center">
-            <DashboardEmptyState
-              title="No holdings"
-              message="Add holdings or sync a brokerage to see daily movers here."
-              cta={{ label: "Open portfolio →", href: "/portfolio" }}
+            <EmptyState
+              condition="empty-cold-start"
+              copyKey="dashboard.no-holdings-movers"
+              icon={Briefcase}
+              action={
+                <Link
+                  href="/portfolio"
+                  className="font-mono text-[10px] uppercase tracking-[0.06em] text-primary transition-colors hover:text-primary/80 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                >
+                  Open portfolio →
+                </Link>
+              }
             />
           </div>
         )}
@@ -299,9 +326,12 @@ export function HoldingsMoversWidget() {
                   key={`g-skel-${i}`}
                   className="flex h-[22px] items-center gap-2 px-2"
                 >
-                  <Skeleton className="h-3 w-[40px]" />
-                  <Skeleton className="h-3 w-[60px]" />
-                  <Skeleton className="ml-auto h-3 w-[40px]" />
+                  {/* Round 3 (item 3): 4 cells mirror MoverRow's columns
+                      (ticker 40 · name flex · price 52 · %chg 52). */}
+                  <Skeleton className="h-3 w-[40px] shrink-0" />
+                  <Skeleton className="h-3 min-w-0 flex-1" />
+                  <Skeleton className="h-3 w-[52px] shrink-0" />
+                  <Skeleton className="h-3 w-[52px] shrink-0" />
                 </div>
               ))}
             </div>
@@ -311,9 +341,12 @@ export function HoldingsMoversWidget() {
                   key={`l-skel-${i}`}
                   className="flex h-[22px] items-center gap-2 px-2"
                 >
-                  <Skeleton className="h-3 w-[40px]" />
-                  <Skeleton className="h-3 w-[60px]" />
-                  <Skeleton className="ml-auto h-3 w-[40px]" />
+                  {/* Round 3 (item 3): 4 cells mirror MoverRow's columns
+                      (ticker 40 · name flex · price 52 · %chg 52). */}
+                  <Skeleton className="h-3 w-[40px] shrink-0" />
+                  <Skeleton className="h-3 min-w-0 flex-1" />
+                  <Skeleton className="h-3 w-[52px] shrink-0" />
+                  <Skeleton className="h-3 w-[52px] shrink-0" />
                 </div>
               ))}
             </div>
@@ -396,7 +429,8 @@ interface MoverRowProps {
 function MoverRow({ mover, side, onClick }: MoverRowProps) {
   return (
     <div
-      className="flex h-[22px] cursor-pointer items-center gap-1.5 px-2 transition-colors hover:bg-muted/30"
+      // Round 3 (item 5): inset focus-visible ring for keyboard tabbing.
+      className="flex h-[22px] cursor-pointer items-center gap-1.5 px-2 transition-colors hover:bg-muted/30 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-ring"
       onClick={onClick}
       onKeyDown={(e) => {
         if (e.key === "Enter") onClick();

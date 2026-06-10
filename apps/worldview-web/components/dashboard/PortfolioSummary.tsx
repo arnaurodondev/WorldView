@@ -24,10 +24,13 @@
 import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import Link from "next/link";
-import { TrendingUp, TrendingDown } from "lucide-react";
+import { TrendingUp, TrendingDown, Briefcase } from "lucide-react";
 import { createGateway } from "@/lib/gateway";
 import { useAuth } from "@/hooks/useAuth";
 import { Skeleton } from "@/components/ui/skeleton";
+// Round 3 (item 4): shared EmptyState primitive (§15.12) replaces the
+// bespoke "No portfolio yet" two-liner — named copy key + icon + action CTA.
+import { EmptyState } from "@/components/primitives/EmptyState";
 import { cn, formatPrice, formatPercent, priceChangeClass } from "@/lib/utils";
 import { QUOTE_REFETCH_MS } from "@/hooks/usePortfolioMetrics";
 // QA A-F-001/F-002 (2026-05-21): central query-key factory + shared
@@ -163,20 +166,34 @@ export function PortfolioSummary() {
         <div className="flex h-6 shrink-0 items-center border-b border-border px-2">
           <Skeleton className="h-3 w-28" />
         </div>
-        <div className="flex-1 space-y-2 px-2 py-1">
-        <div className="flex justify-between">
-          <Skeleton className="h-8 w-32" />
-          <Skeleton className="h-6 w-20" />
-        </div>
-        <div className="grid grid-cols-2 gap-2">
-          <Skeleton className="h-14" />
-          <Skeleton className="h-14" />
-        </div>
-        <div className="space-y-1">
-          {Array.from({ length: 4 }).map((_, i) => (
-            <Skeleton key={i} className="h-6 w-full" style={{ animationDelay: `${i * 50}ms` }} />
-          ))}
-        </div>
+        {/* Round 3 (item 3): the skeleton now mirrors the LOADED layout —
+            portfolio-name line, value+P&L baseline row, then 22px holding
+            rows with the real column slots (ticker 40 · name flex · qty ·
+            price 48 · value 80 · pnl 40). The previous grid-cols-2 "stat
+            card" placeholders matched nothing in the loaded view and caused
+            a visible re-layout when data arrived. */}
+        <div className="flex-1 overflow-hidden px-2 py-1">
+          {/* Portfolio-name sub-header slot (mb-2 matches loaded view) */}
+          <div className="mb-2 pt-0.5">
+            <Skeleton className="h-3 w-24" />
+          </div>
+          {/* Total value (20px line) + P&L cluster on one baseline row */}
+          <div className="mb-3 flex items-baseline justify-between gap-2">
+            <Skeleton className="h-5 w-32" />
+            <Skeleton className="h-4 w-28" />
+          </div>
+          {/* Holding rows — 22px tall, column widths mirror the loaded row */}
+          <div className="space-y-1">
+            {Array.from({ length: 5 }).map((_, i) => (
+              <div key={i} className="flex h-[22px] items-center gap-1 px-1">
+                <Skeleton className="h-3 w-[40px] shrink-0" style={{ animationDelay: `${i * 50}ms` }} />
+                <Skeleton className="h-3 min-w-0 flex-1" style={{ animationDelay: `${i * 50}ms` }} />
+                <Skeleton className="h-3 w-[48px] shrink-0" style={{ animationDelay: `${i * 50}ms` }} />
+                <Skeleton className="h-3 w-[80px] shrink-0" style={{ animationDelay: `${i * 50}ms` }} />
+                <Skeleton className="h-3 w-[40px] shrink-0" style={{ animationDelay: `${i * 50}ms` }} />
+              </div>
+            ))}
+          </div>
         </div>
       </div>
     );
@@ -194,12 +211,24 @@ export function PortfolioSummary() {
             PORTFOLIO
           </span>
         </div>
-        <div className="flex flex-1 flex-col gap-0.5 px-3 py-2">
-          <p className="text-[10px] text-muted-foreground">No portfolio yet.</p>
-          <p className="text-[10px] text-muted-foreground/60">
-            <Link href="/portfolio" className="text-primary">Create a portfolio</Link>
-            {" "}to track your holdings here.
-          </p>
+        {/* Round 3 (item 4): shared EmptyState primitive — icon gives the
+            "my money" category cue; action slot carries the create-CTA Link
+            (real navigation, so a Link, not a Button). Copy key
+            dashboard.no-portfolio keeps the "No portfolio yet" title. */}
+        <div className="flex flex-1 items-center justify-center">
+          <EmptyState
+            condition="empty-cold-start"
+            copyKey="dashboard.no-portfolio"
+            icon={Briefcase}
+            action={
+              <Link
+                href="/portfolio"
+                className="font-mono text-[10px] uppercase tracking-[0.06em] text-primary transition-colors hover:text-primary/80 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+              >
+                Create a portfolio →
+              </Link>
+            }
+          />
         </div>
       </div>
     );
@@ -285,11 +314,15 @@ export function PortfolioSummary() {
               key={p}
               onClick={() => setPeriod(p)}
               aria-pressed={period === p}
+              // Round 3 (item 5): bg-muted hover convention + keyboard
+              // focus-visible ring (the text-color-only hover was invisible
+              // in peripheral vision on the dark panel).
               className={cn(
                 "px-1.5 text-[9px] font-mono uppercase transition-colors",
+                "focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring",
                 period === p
                   ? "bg-primary/20 text-primary"
-                  : "text-muted-foreground hover:text-foreground",
+                  : "text-muted-foreground hover:bg-muted hover:text-foreground",
               )}
             >
               {p}
@@ -309,7 +342,12 @@ export function PortfolioSummary() {
           this line shows the ACTUAL portfolio name (e.g. "Tech Growth") so the trader
           knows which portfolio they're looking at without navigating to the portfolio page. */}
       <div className="mb-2">
-        <span className="text-xs font-medium uppercase tracking-wider text-muted-foreground">
+        {/* Round 3 (item 1): aligned to the dominant widget-label treatment —
+            text-[10px] uppercase tracking-[0.08em] (was the outlier
+            text-xs/tracking-wider, the only 12px tracked label on the
+            dashboard). Same size/tracking as every section header keeps the
+            chrome rhythm consistent across all 13 widgets. */}
+        <span className="text-[10px] font-medium uppercase tracking-[0.08em] text-muted-foreground">
           {firstPortfolio.name}
         </span>
       </div>
@@ -473,7 +511,9 @@ export function PortfolioSummary() {
       {/* Link to full portfolio page */}
       <Link
         href="/portfolio"
-        className="mt-2 block truncate px-2 text-center text-[10px] text-muted-foreground/60 hover:text-foreground"
+        // Round 3 (item 5): focus-visible ring so the footer link is
+        // keyboard-discoverable; transition-colors keeps the hover ≤150ms.
+        className="mt-2 block truncate px-2 text-center text-[10px] text-muted-foreground/60 transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-ring"
       >
         View portfolio →
       </Link>

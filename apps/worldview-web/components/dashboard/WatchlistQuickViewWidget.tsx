@@ -47,6 +47,10 @@ import { useAuth } from "@/hooks/useAuth";
 import { useResolvedPortfolioId } from "@/hooks/useResolvedPortfolioId";
 import { qk } from "@/lib/query/keys";
 import { Skeleton } from "@/components/ui/skeleton";
+// Round 3 (item 4): shared EmptyState primitive (§15.12) for the named
+// no-positions state — copy key keeps the test-pinned title string.
+import { EmptyState } from "@/components/primitives/EmptyState";
+import { Wallet } from "lucide-react";
 import { Sparkline } from "@/components/primitives/Sparkline";
 import { cn } from "@/lib/utils";
 import { formatPrice } from "@/lib/format";
@@ -181,7 +185,8 @@ export function WatchlistQuickViewWidget() {
       </span>
       <Link
         href="/portfolio"
-        className="text-[10px] text-muted-foreground/60 transition-colors hover:text-foreground"
+        // Round 3 (item 5): keyboard focus ring on the header's primary action.
+        className="text-[10px] text-muted-foreground/60 transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
       >
         Portfolio →
       </Link>
@@ -193,12 +198,17 @@ export function WatchlistQuickViewWidget() {
     return (
       <div className="flex h-full flex-col bg-background">
         {header}
+        {/* Round 3 (item 3): skeleton cells mirror the loaded QuickViewRow's
+            exact column slots (ticker 44 · sparkline 48×14 · price flex ·
+            day-P&L 64) so data arrival swaps content without any column
+            shift. Previously the sparkline slot was missing entirely. */}
         <div className="divide-y divide-border/30">
           {Array.from({ length: TOP_N }).map((_, i) => (
             <div key={i} className="flex h-[24px] items-center gap-2 px-2">
-              <Skeleton className="h-3 w-[40px]" style={{ animationDelay: `${i * 50}ms` }} />
-              <Skeleton className="h-3 flex-1" />
-              <Skeleton className="h-3 w-[56px]" />
+              <Skeleton className="h-3 w-[44px] shrink-0" style={{ animationDelay: `${i * 50}ms` }} />
+              <Skeleton className="h-[14px] w-[48px] shrink-0" style={{ animationDelay: `${i * 50}ms` }} />
+              <Skeleton className="h-3 min-w-0 flex-1" style={{ animationDelay: `${i * 50}ms` }} />
+              <Skeleton className="h-3 w-[64px] shrink-0" style={{ animationDelay: `${i * 50}ms` }} />
             </div>
           ))}
         </div>
@@ -210,19 +220,27 @@ export function WatchlistQuickViewWidget() {
   // WHY one shared message: from the user's POV both mean "nothing to show
   // yet, go add positions" — splitting copy would add nuance nobody needs.
   if (!portfolioId || holdings.length === 0) {
+    // Round 3 (item 4): shared EmptyState primitive. Copy key
+    // dashboard.no-positions keeps the title "Track your top positions here"
+    // (PINNED by __tests__/dashboard-round2.test.tsx) and the action Link
+    // keeps the accessible name /Add holdings in Portfolio/ (also pinned).
     return (
       <div className="flex h-full flex-col bg-background">
         {header}
-        <div className="flex flex-1 flex-col justify-center gap-0.5 px-3 py-2">
-          <p className="text-[11px] text-muted-foreground">
-            Track your top positions here
-          </p>
-          <p className="text-[10px] text-muted-foreground/60">
-            <Link href="/portfolio" className="text-primary hover:underline">
-              Add holdings in Portfolio
-            </Link>{" "}
-            to see live P&amp;L and trends.
-          </p>
+        <div className="flex flex-1 items-center justify-center">
+          <EmptyState
+            condition="empty-cold-start"
+            copyKey="dashboard.no-positions"
+            icon={Wallet}
+            action={
+              <Link
+                href="/portfolio"
+                className="font-mono text-[10px] uppercase tracking-[0.06em] text-primary transition-colors hover:text-primary/80 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+              >
+                Add holdings in Portfolio →
+              </Link>
+            }
+          />
         </div>
       </div>
     );
@@ -297,7 +315,8 @@ function QuickViewRow({ holding, quote, displayTicker, sparkline }: QuickViewRow
     <div
       // WHY 24px rows (vs the 22px Row-2 strips): Row 3 has more vertical
       // budget and the sparkline needs 16px + breathing room.
-      className="flex h-[24px] cursor-pointer items-center gap-2 px-2 transition-colors hover:bg-muted/20"
+      // Round 3 (item 5): inset focus-visible ring for keyboard tabbing.
+      className="flex h-[24px] cursor-pointer items-center gap-2 px-2 transition-colors hover:bg-muted/20 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-ring"
       onClick={() => router.push(`/instruments/${navId}`)}
       onKeyDown={(e) => {
         if (e.key === "Enter") router.push(`/instruments/${navId}`);

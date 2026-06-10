@@ -37,7 +37,10 @@ import { useRouter } from "next/navigation";
 import { createGateway } from "@/lib/gateway";
 import { useAuth } from "@/hooks/useAuth";
 import { Skeleton } from "@/components/ui/skeleton";
-import { InlineEmptyState } from "@/components/data/InlineEmptyState";
+// Round 3 (item 4): panel-level empty/error states use the shared EmptyState
+// primitive (§15.12) with named dashboard.* copy keys.
+import { EmptyState } from "@/components/primitives/EmptyState";
+import { LayoutGrid } from "lucide-react";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { cn } from "@/lib/utils";
 import type { HeatmapSector, Mover } from "@/types/api";
@@ -69,15 +72,9 @@ const MIN_WEIGHT = 0.05;
  */
 const TILE_HEIGHT_PX = 40;
 
-/**
- * GAP_PX — flex gap between tiles. We subtract this from `flex-basis` below
- * so wrap rows never overflow due to gap accumulation.
- *
- * WHY 2 (was 4): at 11 sectors with 4px gaps, sub-pixel rounding pushed the
- * last column past the widget border at 1280px viewports (B-2-03). 2px gives
- * the same visual "card margin" feel without overflow risk.
- */
-const GAP_PX = 2;
+// NOTE (Round 3): the old GAP_PX flex-basis constant was removed — both the
+// loaded treemap (FR-1.7) and the loading skeleton now use the same CSS-grid
+// container (`gap-0.5` = 2px), so no manual gap subtraction is needed.
 
 /**
  * colorClassFor — map a % change to a Tailwind opacity-step utility class
@@ -278,11 +275,16 @@ export function SectorHeatmapWidget() {
               <button
                 key={p}
                 onClick={() => setPeriod(p)}
+                // Round 3 (item 5): hover gets a bg (not just text-color) per
+                // the bg-muted hover convention, and keyboard focus shows the
+                // ring token. text-[9px] is allowed here — period toggles are
+                // chrome labels, not financial data values (§15.9).
                 className={cn(
                   "px-1.5 font-mono text-[9px] uppercase transition-colors",
+                  "focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring",
                   period === p
                     ? "bg-primary/20 text-primary"
-                    : "text-muted-foreground hover:text-foreground",
+                    : "text-muted-foreground hover:bg-muted hover:text-foreground",
                 )}
                 aria-pressed={period === p}
               >
@@ -293,20 +295,23 @@ export function SectorHeatmapWidget() {
         </div>
       </div>
 
-      {/* ── Loading state — shimmer of 8 grey tiles in a flex row ────────── */}
+      {/* ── Loading state — shape-matched grid of grey tiles ─────────────── */}
+      {/* Round 3 (item 3): the skeleton now uses the SAME CSS-grid container
+          (auto-fit / minmax(48px, 1fr) / gap-0.5) as the loaded treemap — the
+          previous flex-wrap + flexBasis approximation wrapped differently at
+          some widths, producing a visible re-layout when tiles arrived.
+          11 placeholders ≈ the typical GICS sector count (matches 2 rows). */}
       {isHeatmapLoading && (
-        // Match the loaded-state padding/gap so there is no visible jump.
-        <div className="flex flex-wrap gap-0.5 px-0.5 py-0">
-          {Array.from({ length: 8 }).map((_, i) => (
+        <div
+          className="grid gap-0.5 content-start px-0.5 py-0"
+          style={{ gridTemplateColumns: "repeat(auto-fit, minmax(48px, 1fr))" }}
+        >
+          {Array.from({ length: 11 }).map((_, i) => (
             <Skeleton
               key={i}
-              // Equal-width skeletons (1/8 ≈ 12.5%) approximate the loaded
-              // layout closely enough that there is no visible jump when
-              // real tiles render.
               className="min-h-[40px]"
               style={{
                 height: `${TILE_HEIGHT_PX}px`,
-                flexBasis: `calc(${100 / 8}% - ${GAP_PX}px)`,
                 animationDelay: `${i * 40}ms`,
               }}
             />
@@ -317,17 +322,22 @@ export function SectorHeatmapWidget() {
       {/* ── Error state ──────────────────────────────────────────────────── */}
       {/* WHY separate from "no data": API/network failure ≠ empty result. A
           trader needs to triage these differently — a feed outage requires
-          ops attention; an empty list might be expected pre-market. */}
+          ops attention; an empty list might be expected pre-market.
+          Round 3 (item 4): shared EmptyState primitive + named copy key. */}
       {isHeatmapError && (
-        <div className="flex-1 px-2">
-          <InlineEmptyState message="Sector data failed to load — check connection" />
+        <div className="flex flex-1 items-center justify-center">
+          <EmptyState condition="error" copyKey="dashboard.sector-error" icon={LayoutGrid} />
         </div>
       )}
 
       {/* ── Empty state ──────────────────────────────────────────────────── */}
       {!isHeatmapLoading && !isHeatmapError && sectorTiles.length === 0 && (
-        <div className="flex-1 px-2">
-          <InlineEmptyState message="No sector data available" />
+        <div className="flex flex-1 items-center justify-center">
+          <EmptyState
+            condition="empty-no-data"
+            copyKey="dashboard.no-sector-data"
+            icon={LayoutGrid}
+          />
         </div>
       )}
 
@@ -446,8 +456,11 @@ function SectorTile({
             // Border + hover: faint outline to separate adjacent same-colour
             // tiles; brighter ring on hover signals the tile is interactive.
             "rounded-[2px] border border-border/40 transition-colors hover:border-border",
-            // Focus state for keyboard nav.
-            "focus:outline-none focus:ring-1 focus:ring-primary/60",
+            // Round 3 (item 5): focus → focus-visible so the ring only shows
+            // for keyboard navigation (mouse clicks don't leave a lingering
+            // ring on the tile that just opened a popover). ring-ring is the
+            // canonical --ring token (focus rings match primary by design).
+            "focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-ring",
           )}
           aria-label={`${sector.name} sector, ${
             changePct === null ? "no data" : `${changePct >= 0 ? "+" : ""}${changePct.toFixed(2)} percent`
@@ -462,10 +475,12 @@ function SectorTile({
           <span className="w-full truncate text-center font-mono text-[10px] font-semibold uppercase tabular-nums">
             {abbreviation}
           </span>
-          {/* Bottom line — % change. text-[9px] keeps it secondary to the
-              sector identifier, but font-mono + tabular-nums ensure the digits
-              align across tiles (the trader's eye scans these as a column). */}
-          <span className="font-mono text-[9px] tabular-nums">
+          {/* Bottom line — % change. Round 3 (item 1, §15.9): bumped from 9px
+              to 10px — a sector % change is a FINANCIAL DATA VALUE and the
+              design system sets a hard 10px floor for those (9px is reserved
+              for timestamps/counts/category labels). Hierarchy vs the 10px
+              semibold label above is preserved via weight, not size. */}
+          <span className="font-mono text-[10px] tabular-nums">
             {changePct === null
               ? "—"
               : `${changePct >= 0 ? "+" : ""}${changePct.toFixed(2)}%`}
@@ -516,7 +531,9 @@ function SectorTile({
                 <button
                   key={mover.instrument_id}
                   onClick={() => router.push(`/instruments/${navId}`)}
-                  className="flex w-full items-center gap-2 px-1 py-1 text-left transition-colors hover:bg-muted/30"
+                  // Round 3 (item 5): focus-visible ring for keyboard nav
+                  // inside the drill-down popover (inset — rows are flush).
+                  className="flex w-full items-center gap-2 px-1 py-1 text-left transition-colors hover:bg-muted/30 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-ring"
                   aria-label={`Navigate to ${mover.ticker}`}
                 >
                   <span className="w-[44px] shrink-0 font-mono text-[11px] tabular-nums text-foreground">

@@ -205,7 +205,7 @@ describe.skip("Instrument page loading skeleton — 9-section layout (T-F-6-12)"
 // ── T-F-6-03: Widget inner padding standardization ────────────────────────────
 
 describe("Dashboard widget inner padding — px-3 standard (T-F-6-03)", () => {
-  it("EarningsCalendarWidget loading skeleton uses px-3 (horizontal padding preserved)", async () => {
+  it("EarningsCalendarWidget loading skeleton matches the loaded row geometry (px-2 / h-[22px])", async () => {
     // WHY EarningsCalendarWidget: The widget was converted from a static placeholder
     // to a live useQuery component in PLAN-0068 Wave B-1. It now requires a
     // QueryClientProvider wrapper and the gateway mock (both set at file scope).
@@ -213,11 +213,15 @@ describe("Dashboard widget inner padding — px-3 standard (T-F-6-03)", () => {
     // component stays in loading/skeleton state.
     //
     // SA-2 PLAN-0088 density pass: vertical padding was tightened from py-2 to
-    // py-1.5 (conservative 1-unit reduction) to better match the actual 22px row
-    // height when data renders. We preserve the test but update it to assert the
-    // current py-1.5 (not the previous py-2) so the test stays accurate per R19
-    // ("fix implementation, never delete/weaken tests" — test still verifies
-    // padding behaviour, just with the updated density spec).
+    // py-1.5; this test was updated then to assert py-1.5.
+    //
+    // Round 3 polish (2026-06-10, item 3 — shape-matched skeletons): the
+    // skeleton was re-aligned AGAIN, this time to the LOADED EarningsRow
+    // geometry: h-[22px] divide-y rows at px-2 (the spaced px-3/py-1.5 bars
+    // never matched the real rows, so data arrival visibly re-laid-out the
+    // panel). Per the same R19 precedent as the SA-2 update, the assertion
+    // tracks the new spec — the test still verifies skeleton padding/geometry,
+    // just against the current shape-match contract.
     const { EarningsCalendarWidget } = await import(
       "@/components/dashboard/EarningsCalendarWidget"
     );
@@ -225,11 +229,12 @@ describe("Dashboard widget inner padding — px-3 standard (T-F-6-03)", () => {
     // WHY wrapper: EarningsCalendarWidget uses useQuery which requires QueryClientProvider.
     const { container } = render(<EarningsCalendarWidget />, { wrapper: makeWrapper() });
 
-    // WHY check for px-3 with py-1.5: horizontal padding (px-3) is from T-F-6-03
-    // (unchanged); vertical padding was tightened to py-1.5 in SA-2 PLAN-0088.
-    // [class*='px-3']: attribute-contains selector works with Tailwind's JIT.
-    const paddedContent = container.querySelector("[class*='px-3'][class*='py-1']");
-    expect(paddedContent).not.toBeNull();
+    // Skeleton rows mirror the loaded EarningsRow: px-2 horizontal padding +
+    // the 22px terminal row height (§0 Terminal Quality data-row standard).
+    const skeletonRow = container.querySelector("[class*='px-2'][class*='h-[22px]']");
+    expect(skeletonRow).not.toBeNull();
+    // And the placeholders themselves are present inside those rows.
+    expect(skeletonRow!.querySelector('[data-slot="skeleton"]')).not.toBeNull();
   });
 
   it("EarningsCalendarWidget still renders the section header at px-2", async () => {

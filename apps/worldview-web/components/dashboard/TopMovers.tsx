@@ -45,7 +45,10 @@ import { useAuth } from "@/hooks/useAuth";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { Sparkline } from "@/components/primitives/Sparkline";
-import { InlineEmptyState } from "@/components/data/InlineEmptyState";
+// Round 3 (item 4): panel-level empty state uses the shared EmptyState
+// primitive (§15.12) with the named dashboard.no-movers copy key.
+import { EmptyState } from "@/components/primitives/EmptyState";
+import { TrendingUp } from "lucide-react";
 // HF-10: locale-grouped USD price ("$4,892.11").
 import { formatPrice } from "@/lib/format";
 import { cn } from "@/lib/utils";
@@ -176,14 +179,20 @@ export function TopMovers() {
             value={side}
             className="mt-0 min-h-0 flex-1 overflow-y-auto"
           >
-            {/* Loading: fixed-height skeleton rows prevent layout jump. */}
+            {/* Loading: fixed-height skeleton rows prevent layout jump.
+                Round 3 (item 3): cells mirror the loaded MoverRow's 5 column
+                slots (ticker 44 · name flex · sparkline 40×14 · price 60 ·
+                %chg 52) — the previous 3-cell version visibly re-laid-out
+                when the sparkline/price columns appeared. */}
             {isLoading && (
               <div className="divide-y divide-border/30">
                 {Array.from({ length: 6 }).map((_, i) => (
-                  <div key={i} className="flex h-[22px] items-center gap-2 px-2">
-                    <Skeleton className="h-3 w-[40px]" style={{ animationDelay: `${i * 50}ms` }} />
-                    <Skeleton className="h-3 flex-1" />
-                    <Skeleton className="h-3 w-[56px]" />
+                  <div key={i} className="flex h-[22px] items-center gap-1.5 px-2">
+                    <Skeleton className="h-3 w-[44px] shrink-0" style={{ animationDelay: `${i * 50}ms` }} />
+                    <Skeleton className="h-3 min-w-0 flex-1" style={{ animationDelay: `${i * 50}ms` }} />
+                    <Skeleton className="h-[14px] w-[40px] shrink-0" style={{ animationDelay: `${i * 50}ms` }} />
+                    <Skeleton className="h-3 w-[60px] shrink-0" style={{ animationDelay: `${i * 50}ms` }} />
+                    <Skeleton className="h-3 w-[52px] shrink-0" style={{ animationDelay: `${i * 50}ms` }} />
                   </div>
                 ))}
               </div>
@@ -199,10 +208,17 @@ export function TopMovers() {
             )}
 
             {/* Empty — only when the fetch succeeded but the side is empty
-                (e.g. pre-market with no negative movers yet). */}
+                (e.g. pre-market with no negative movers yet).
+                Round 3 (item 4): shared EmptyState primitive + named copy key
+                (the side has zero rows → panel-level condition, not an
+                in-table message). */}
             {!isLoading && !isError && movers.length === 0 && (
-              <div className="px-2">
-                <InlineEmptyState message="No data available" />
+              <div className="flex h-full items-center justify-center">
+                <EmptyState
+                  condition="empty-no-data"
+                  copyKey="dashboard.no-movers"
+                  icon={TrendingUp}
+                />
               </div>
             )}
 
@@ -263,7 +279,9 @@ function MoverRow({ mover, sparkline }: MoverRowProps) {
     // WHY h-[22px]: §0 Terminal Quality Rules mandate 22px data rows.
     // WHY role="button" + tabIndex: keyboard nav — Tab + Enter navigates.
     <div
-      className="flex h-[22px] cursor-pointer items-center gap-1.5 px-2 transition-colors hover:bg-muted/30"
+      // Round 3 (item 5): inset focus-visible ring — rows are tabbable
+      // (tabIndex=0) and need a visible keyboard-focus affordance.
+      className="flex h-[22px] cursor-pointer items-center gap-1.5 px-2 transition-colors hover:bg-muted/30 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-ring"
       onClick={() => router.push(`/instruments/${navId}`)}
       onKeyDown={(e) => {
         if (e.key === "Enter") router.push(`/instruments/${navId}`);

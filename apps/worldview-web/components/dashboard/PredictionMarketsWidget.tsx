@@ -24,7 +24,11 @@ import { useQuery, useQueries } from "@tanstack/react-query";
 import { createGateway } from "@/lib/gateway";
 import { useAuth } from "@/hooks/useAuth";
 import { Skeleton } from "@/components/ui/skeleton";
-import { AlertTriangle } from "lucide-react";
+// Round 3 (item 4): shared EmptyState primitive (§15.12) for the named
+// no-open-markets state (the previous copy said "data loading…" which was
+// untruthful — the query had finished with zero rows).
+import { EmptyState } from "@/components/primitives/EmptyState";
+import { AlertTriangle, Dices } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 // HF-10: shared compact-currency formatter for "$1.2M" / "$42.5K" output.
@@ -281,11 +285,13 @@ export function PredictionMarketsWidget() {
                 type="button"
                 onClick={() => setCategoryFilter(value)}
                 aria-pressed={active}
+                // Round 3 (item 5): bg-muted hover convention + keyboard ring.
                 className={cn(
                   "px-1.5 text-[9px] font-mono uppercase transition-colors",
+                  "focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring",
                   active
                     ? "bg-primary/20 text-primary"
-                    : "text-muted-foreground hover:text-foreground",
+                    : "text-muted-foreground hover:bg-muted hover:text-foreground",
                 )}
               >
                 {label}
@@ -300,12 +306,26 @@ export function PredictionMarketsWidget() {
       </div>
 
       {/* ── Loading state ─────────────────────────────────────────────────── */}
+      {/* Round 3 (item 3): the skeleton mirrors the loaded 2-row-per-market
+          layout (22px title row + 22px pills/volume row, 3 markets) — the
+          previous single-row placeholders made the panel visibly grow when
+          the real 44px market blocks rendered. */}
       {isLoading && (
         <div className="flex-1 divide-y divide-border/30">
           {Array.from({ length: 3 }).map((_, i) => (
-            <div key={i} className="flex h-[22px] items-center gap-2 px-2">
-              <Skeleton className="h-3 flex-1" style={{ animationDelay: `${i * 40}ms` }} />
-              <Skeleton className="h-3 w-[40px]" />
+            <div key={i} className="px-2">
+              {/* Title row: full-width title + category chip slot */}
+              <div className="flex h-[22px] items-center gap-1.5">
+                <Skeleton className="h-3 min-w-0 flex-1" style={{ animationDelay: `${i * 40}ms` }} />
+                <Skeleton className="h-3 w-[40px] shrink-0" style={{ animationDelay: `${i * 40}ms` }} />
+              </div>
+              {/* Data row: Y/N pills + countdown left, sparkline + volume right */}
+              <div className="flex h-[22px] items-center gap-1.5">
+                <Skeleton className="h-3 w-[40px] shrink-0" style={{ animationDelay: `${i * 40 + 20}ms` }} />
+                <Skeleton className="h-3 w-[40px] shrink-0" style={{ animationDelay: `${i * 40 + 20}ms` }} />
+                <span className="flex-1" />
+                <Skeleton className="h-3 w-[60px] shrink-0" style={{ animationDelay: `${i * 40 + 20}ms` }} />
+              </div>
             </div>
           ))}
         </div>
@@ -355,9 +375,16 @@ export function PredictionMarketsWidget() {
               );
             })()
           ) : (
-            <span className="text-[10px] text-muted-foreground">
-              Prediction market data loading…
-            </span>
+            // Round 3 (item 4): named empty state via the shared primitive —
+            // the old "data loading…" line rendered AFTER loading finished
+            // with zero rows, which read as a permanently stuck widget. The
+            // filter branch above keeps its inline copy because it
+            // interpolates the live bucket count (registry copy is static).
+            <EmptyState
+              condition="empty-no-data"
+              copyKey="dashboard.no-markets"
+              icon={Dices}
+            />
           )}
         </div>
       )}
@@ -450,7 +477,8 @@ export function PredictionMarketsWidget() {
               // WHY cursor-pointer + hover:bg-muted/30: standard terminal row interactivity.
               <div
                 key={market.market_id}
-                className="cursor-pointer px-2 transition-colors hover:bg-muted/30"
+                // Round 3 (item 5): inset focus-visible ring for keyboard nav.
+                className="cursor-pointer px-2 transition-colors hover:bg-muted/30 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-ring"
                 onClick={handleMarketClick}
                 role="button"
                 tabIndex={0}
@@ -488,8 +516,11 @@ export function PredictionMarketsWidget() {
                     (market activity). Each piece earns its place. */}
                 <div className="flex h-[22px] items-center gap-1.5">
                   {/* YES probability pill */}
+                  {/* Round 3 (item 1, §15.9): 9px → 10px — probabilities are
+                      financial data values; the design system sets a hard
+                      10px floor for those (9px is timestamps/labels only). */}
                   <span className={cn(
-                    "rounded-[2px] px-1 font-mono text-[9px] tabular-nums",
+                    "rounded-[2px] px-1 font-mono text-[10px] tabular-nums",
                     "bg-positive/10",
                     yesProbColor,
                   )}>
@@ -498,7 +529,7 @@ export function PredictionMarketsWidget() {
 
                   {/* NO probability pill */}
                   <span className={cn(
-                    "rounded-[2px] px-1 font-mono text-[9px] tabular-nums",
+                    "rounded-[2px] px-1 font-mono text-[10px] tabular-nums",
                     "bg-negative/10",
                     noProbColor,
                   )}>
@@ -514,8 +545,10 @@ export function PredictionMarketsWidget() {
                       without flickering on every minor poll. */}
                   {deltaPp !== null && (
                     <span
+                      // Round 3 (item 1, §15.9): 9px → 10px — the 24h delta
+                      // is a financial data value (pp change).
                       className={cn(
-                        "font-mono text-[9px] tabular-nums",
+                        "font-mono text-[10px] tabular-nums",
                         deltaPp > 0
                           ? "text-positive"
                           : deltaPp < 0
@@ -568,7 +601,7 @@ export function PredictionMarketsWidget() {
         <div className="shrink-0 border-t border-border/30 px-2 py-0.5">
           <Link
             href="/prediction-markets"
-            className="font-mono text-[10px] tabular-nums text-primary/70 hover:text-primary"
+            className="font-mono text-[10px] tabular-nums text-primary/70 transition-colors hover:text-primary focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
             aria-label={`View all ${totalMarkets} prediction markets`}
           >
             → View all ({totalMarkets})

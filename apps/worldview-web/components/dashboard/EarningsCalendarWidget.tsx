@@ -25,7 +25,10 @@ import { useInfiniteQuery, type InfiniteData } from "@tanstack/react-query";
 import { createGateway } from "@/lib/gateway";
 import { useAuth } from "@/hooks/useAuth";
 import { Skeleton } from "@/components/ui/skeleton";
-import { AlertTriangle } from "lucide-react";
+// Round 3 (item 4): shared EmptyState primitive (§15.12) — the copy key
+// carries the exact strings pinned by __tests__/earnings-calendar-widget.
+import { EmptyState } from "@/components/primitives/EmptyState";
+import { AlertTriangle, CalendarClock } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import type { EarningsCalendarResponse, EarningsEvent } from "@/types/api";
 
@@ -119,18 +122,19 @@ export function EarningsCalendarWidget() {
       {/* WHY 4 skeleton rows: matches the visible row count when data is present.
           animationDelay staggers the pulse so it doesn't look like a single block. */}
       {isLoading && (
-        // SA-2 PLAN-0088 density: space-y-1.5 (was space-y-2) + py-1.5 (was py-2)
-        // — conservative 1-unit reduction in skeleton spacing to match the
-        // actual 22px row height when data renders. Readability is unchanged.
-        <div className="flex-1 space-y-1.5 px-3 py-1.5">
-          {Array.from({ length: 4 }).map((_, i) => (
+        // Round 3 (item 3): skeleton rows mirror the loaded EarningsRow
+        // geometry — h-[22px] divide-y at px-2 with the real column slots
+        // (date+time 72 · ticker 48 · title flex · EPS snippet) — replacing
+        // the previous taller spaced bars that re-laid-out on data arrival.
+        <div className="flex-1 divide-y divide-border/30">
+          {Array.from({ length: 6 }).map((_, i) => (
             // WHY key={i}: index-keyed skeleton rows are safe — they have no
             // identity beyond "placeholder slot N" and never reorder.
-            <div key={i} className="flex gap-2">
-              <Skeleton className="h-5 w-10" style={{ animationDelay: `${i * 50}ms` }} />
-              <Skeleton className="h-5 w-10" style={{ animationDelay: `${i * 50}ms` }} />
-              <Skeleton className="h-5 flex-1" style={{ animationDelay: `${i * 50}ms` }} />
-              <Skeleton className="h-5 w-16" style={{ animationDelay: `${i * 50}ms` }} />
+            <div key={i} className="flex h-[22px] items-center gap-2 px-2">
+              <Skeleton className="h-3 w-[72px] shrink-0" style={{ animationDelay: `${i * 50}ms` }} />
+              <Skeleton className="h-3 w-12 shrink-0" style={{ animationDelay: `${i * 50}ms` }} />
+              <Skeleton className="h-3 min-w-0 flex-1" style={{ animationDelay: `${i * 50}ms` }} />
+              <Skeleton className="h-3 w-[88px] shrink-0" style={{ animationDelay: `${i * 50}ms` }} />
             </div>
           ))}
         </div>
@@ -153,14 +157,18 @@ export function EarningsCalendarWidget() {
       {/* WHY two-line message: first line tells what is missing; second line tells
           WHY it is missing (no earnings in the default 7-day window). This avoids
           confusion where traders might think the widget is broken. */}
+      {/* Round 3 (item 4): shared EmptyState primitive — copy key
+          dashboard.no-earnings carries the EXACT strings pinned by
+          __tests__/earnings-calendar-widget.test.tsx ("No upcoming earnings
+          events scheduled." + "Earnings calendar data populates as company
+          reporting…"), so the migration changes layout, not copy (R19). */}
       {!isLoading && !isError && events.length === 0 && (
-        // WHY px-3 py-2: T-F-6-03 standardised inner content padding
-        <div className="flex flex-1 flex-col gap-0.5 px-3 py-2">
-          {/* WHY text-[10px]: terminal labels/metadata use 10px density — text-xs (12px) is consumer app scale (Bloomberg convention) */}
-          <p className="text-[10px] text-muted-foreground">No upcoming earnings events scheduled.</p>
-          <p className="text-[10px] text-muted-foreground/60">
-            Earnings calendar data populates as company reporting schedules are ingested.
-          </p>
+        <div className="flex flex-1 items-center justify-center">
+          <EmptyState
+            condition="empty-no-data"
+            copyKey="dashboard.no-earnings"
+            icon={CalendarClock}
+          />
         </div>
       )}
 
@@ -186,7 +194,8 @@ export function EarningsCalendarWidget() {
                 type="button"
                 onClick={() => fetchNextPage()}
                 disabled={isFetchingNextPage}
-                className="text-[10px] uppercase tracking-[0.08em] text-muted-foreground hover:text-foreground disabled:pointer-events-none"
+                // Round 3 (item 5): hover bg + keyboard focus ring on the pager.
+                className="px-1.5 text-[10px] uppercase tracking-[0.08em] text-muted-foreground transition-colors hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:pointer-events-none"
               >
                 {isFetchingNextPage
                   ? "Loading…"

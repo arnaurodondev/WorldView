@@ -101,6 +101,10 @@ import { ChevronRight, ChevronUp, FileText, RefreshCw } from "lucide-react";
 import { createGateway } from "@/lib/gateway";
 import { useAuth } from "@/hooks/useAuth";
 import { Skeleton } from "@/components/ui/skeleton";
+// Round 3 (item 4): the no-brief named empty state migrates onto the shared
+// EmptyState primitive (§15.12) — icon + action props landed in Round 2, so
+// the bespoke icon/headline/CTA block here became a duplicate of it.
+import { EmptyState } from "@/components/primitives/EmptyState";
 // WHY import BriefingResponse (not MorningBrief): PLAN-0034 unified the briefing
 // response type — both morning and instrument briefs now return BriefingResponse
 // which includes citations, risk_summary, and cached flag.
@@ -203,8 +207,11 @@ export function MorningBriefCard() {
       // WHY flex flex-col h-full: component must fill its grid cell height so
       // Row 1 height is driven by the cell, not by the brief content length.
       <div className="flex h-full flex-col">
-        {/* Placeholder header so height matches the loaded state */}
-        <div className="flex h-5 shrink-0 items-center border-b border-border/40 px-1">
+        {/* Placeholder header so height matches the loaded state.
+            Round 3 (item 3): h-6 — the LOADED header grew to 24px in the
+            2026-05-09 density bundle but this placeholder stayed at 20px,
+            so the whole Row-1 card shifted 4px when the brief arrived. */}
+        <div className="flex h-6 shrink-0 items-center border-b border-border/40 px-1">
           <Skeleton className="h-2.5 w-[160px]" />
         </div>
         {/* 5-line skeleton matching typical brief length in the text area */}
@@ -241,7 +248,7 @@ export function MorningBriefCard() {
           <button
             onClick={() => void refetch()}
             disabled={isFetching}
-            className="ml-auto text-muted-foreground hover:text-foreground disabled:bg-[hsl(var(--disabled-bg))] disabled:text-[hsl(var(--disabled-foreground))] disabled:border-[hsl(var(--disabled-border))]"
+            className="ml-auto text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:bg-[hsl(var(--disabled-bg))] disabled:text-[hsl(var(--disabled-foreground))] disabled:border-[hsl(var(--disabled-border))]"
             title="Retry"
             aria-label="Retry loading brief"
           >
@@ -311,52 +318,51 @@ export function MorningBriefCard() {
     return (
       <div className="flex h-full flex-col">
         <MetaHeader />
-        {/* WHY role="status": assistive tech announces the empty state when
-            the card settles, matching the DashboardEmptyState convention. */}
-        <div
-          className="flex flex-1 flex-col items-center justify-center gap-1 px-1 py-3 text-center"
-          role="status"
-        >
-          {/* Icon — muted document glyph signals "content slot, nothing in it".
-              WHY strokeWidth 1.5: terminal icon convention (thin strokes). */}
-          <FileText
-            className="h-4 w-4 text-muted-foreground/50"
-            strokeWidth={1.5}
-            aria-hidden
+        {/* Round 3 (item 4): shared EmptyState primitive — it owns the icon
+            treatment, role="status" announcement and title/body layout that
+            this card previously hand-rolled. Copy key dashboard.brief-
+            unavailable keeps the exact "AI brief unavailable" headline the
+            regression tests pin (R19). The action slot carries BOTH the
+            last-attempt timestamp and the Regenerate button (it accepts any
+            ReactNode — position below the body is all the primitive owns). */}
+        <div className="flex flex-1 items-center justify-center">
+          <EmptyState
+            condition="empty-no-data"
+            copyKey="dashboard.brief-unavailable"
+            icon={FileText}
+            action={
+              <div className="flex flex-col items-center gap-1">
+                {/* Last-attempt timestamp — only when we actually attempted.
+                    9px is allowed here: it is a timestamp, not a data value
+                    (§15.9 exception list). */}
+                {lastAttempt && (
+                  <p className="font-mono text-[9px] tabular-nums text-muted-foreground/60">
+                    Last attempt {lastAttempt} UTC
+                  </p>
+                )}
+                {/* Regenerate — WHY refetch() (GET /v1/briefings/morning) and
+                    not a dedicated POST: S9/S8 expose no explicit morning-brief
+                    regenerate endpoint (backend gap — only instrument briefs
+                    have POST /briefings/instrument/{id}/generate). The morning
+                    GET itself triggers S8's background regeneration when the
+                    cached brief is stale/absent, so a refetch IS the closest
+                    available "regenerate" action today.
+                    Round 3 (item 5): hover bg + keyboard focus ring added. */}
+                <button
+                  onClick={() => void refetch()}
+                  disabled={isFetching}
+                  className="mt-0.5 inline-flex items-center gap-1 px-1.5 font-mono text-[10px] uppercase tracking-[0.06em] text-primary transition-colors hover:bg-muted hover:text-primary/80 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:text-[hsl(var(--disabled-foreground))]"
+                  aria-label="Regenerate morning brief"
+                >
+                  <RefreshCw
+                    className={`h-3 w-3 ${isFetching ? "animate-spin" : ""}`}
+                    strokeWidth={1.5}
+                  />
+                  {isFetching ? "Regenerating…" : "Regenerate"}
+                </button>
+              </div>
+            }
           />
-          {/* Headline — keeps the exact "AI brief unavailable" phrase the
-              regression tests pin (R19: update layout, never weaken copy). */}
-          <p className="font-mono text-[11px] uppercase tracking-[0.08em] text-foreground">
-            AI brief unavailable
-          </p>
-          <p className="text-[10px] text-muted-foreground">
-            No morning brief has been generated yet.
-          </p>
-          {/* Last-attempt timestamp — only when we actually attempted. */}
-          {lastAttempt && (
-            <p className="font-mono text-[9px] tabular-nums text-muted-foreground/60">
-              Last attempt {lastAttempt} UTC
-            </p>
-          )}
-          {/* Regenerate — WHY refetch() (GET /v1/briefings/morning) and not a
-              dedicated POST: S9/S8 expose no explicit morning-brief regenerate
-              endpoint (backend gap — only instrument briefs have
-              POST /briefings/instrument/{id}/generate). The morning GET itself
-              triggers S8's background regeneration when the cached brief is
-              stale/absent, so a refetch IS the closest available "regenerate"
-              action today. */}
-          <button
-            onClick={() => void refetch()}
-            disabled={isFetching}
-            className="mt-1 inline-flex items-center gap-1 font-mono text-[10px] uppercase tracking-[0.06em] text-primary transition-colors hover:text-primary/80 disabled:text-[hsl(var(--disabled-foreground))]"
-            aria-label="Regenerate morning brief"
-          >
-            <RefreshCw
-              className={`h-3 w-3 ${isFetching ? "animate-spin" : ""}`}
-              strokeWidth={1.5}
-            />
-            {isFetching ? "Regenerating…" : "Regenerate"}
-          </button>
         </div>
       </div>
     );
@@ -457,7 +463,9 @@ export function MorningBriefCard() {
         </span>
 
         {/* "Morning Briefing" title — centered in the remaining space */}
-        <span className="flex-1 text-center text-[9px] font-medium uppercase tracking-[0.08em] text-muted-foreground">
+        {/* Round 3 (item 1): 9px → 10px — aligns the card title with the
+            dashboard-wide widget-header treatment (10px tracked uppercase). */}
+        <span className="flex-1 text-center text-[10px] font-medium uppercase tracking-[0.08em] text-muted-foreground">
           Morning Briefing
         </span>
 
@@ -485,7 +493,7 @@ export function MorningBriefCard() {
             disabled={discussLoading}
             title={discussError ?? "Open a chat thread seeded with this brief"}
             aria-label="Discuss this brief in chat"
-            className="whitespace-nowrap text-[9px] text-primary transition-colors hover:text-primary/80 disabled:text-[hsl(var(--disabled-foreground))]"
+            className="whitespace-nowrap text-[9px] text-primary transition-colors hover:text-primary/80 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:text-[hsl(var(--disabled-foreground))]"
           >
             {discussLoading ? "Opening…" : "Discuss"}
           </button>
@@ -499,7 +507,7 @@ export function MorningBriefCard() {
               <button
                 onClick={() => void refetch()}
                 disabled={isFetching}
-                className="inline-flex items-center text-muted-foreground transition-colors hover:text-foreground disabled:text-[hsl(var(--disabled-foreground))]"
+                className="inline-flex items-center text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:text-[hsl(var(--disabled-foreground))]"
                 title="Refresh morning brief"
                 aria-label="Refresh morning brief"
               >
@@ -517,7 +525,7 @@ export function MorningBriefCard() {
           {isLong && !expanded && (
             <button
               onClick={() => setExpanded(true)}
-              className="inline-flex items-center gap-0.5 whitespace-nowrap text-[9px] text-primary transition-colors hover:text-primary/80"
+              className="inline-flex items-center gap-0.5 whitespace-nowrap text-[9px] text-primary transition-colors hover:text-primary/80 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
               aria-label="Expand morning brief"
             >
               Read more <ChevronRight className="h-3 w-3 shrink-0" strokeWidth={1.5} />
@@ -526,7 +534,7 @@ export function MorningBriefCard() {
           {isLong && expanded && (
             <button
               onClick={() => setExpanded(false)}
-              className="inline-flex items-center gap-0.5 whitespace-nowrap text-[9px] text-muted-foreground transition-colors hover:text-foreground"
+              className="inline-flex items-center gap-0.5 whitespace-nowrap text-[9px] text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
               aria-label="Collapse morning brief"
             >
               show less <ChevronUp className="h-3 w-3 shrink-0" strokeWidth={1.5} />
@@ -701,7 +709,7 @@ export function MorningBriefCard() {
                   // visible while the trader reads the full story.
                   target="_blank"
                   rel="noopener noreferrer"
-                  className="inline-flex max-w-[260px] items-center gap-1 rounded-[2px] border border-border bg-muted px-2 py-1 text-[11px] text-muted-foreground hover:bg-muted/70 hover:text-foreground"
+                  className="inline-flex max-w-[260px] items-center gap-1 rounded-[2px] border border-border bg-muted px-2 py-1 text-[11px] text-muted-foreground transition-colors hover:bg-muted/70 hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
                   title={story.title}
                 >
                   {/* Source domain — small uppercase label so the user can
@@ -733,8 +741,13 @@ export function MorningBriefCard() {
  */
 function MetaHeader() {
   return (
-    <div className="flex h-5 shrink-0 items-center border-b border-border/40 px-1">
-      <span className="text-[9px] uppercase tracking-[0.08em] text-muted-foreground/40">
+    // Round 3 (items 1+3): h-6 — must match the loaded-state header height
+    // (24px since the 2026-05-09 density bundle) so the card never shifts
+    // 4px when transitioning loading/error/empty → loaded. Label bumped
+    // 9px → 10px to match the dominant widget-header treatment
+    // (text-[10px] uppercase tracking-[0.08em]) used by every other panel.
+    <div className="flex h-6 shrink-0 items-center border-b border-border/40 px-1">
+      <span className="text-[10px] uppercase tracking-[0.08em] text-muted-foreground/40">
         MORNING BRIEF
       </span>
     </div>

@@ -32,7 +32,11 @@ import { useRouter } from "next/navigation";
 import { createGateway } from "@/lib/gateway";
 import { useAuth } from "@/hooks/useAuth";
 import { Skeleton } from "@/components/ui/skeleton";
-import { InlineEmptyState } from "@/components/data/InlineEmptyState";
+// Round 3 (item 4): panel-level empty/error states migrate to the shared
+// EmptyState primitive (DESIGN_SYSTEM §15.12) with named dashboard.* copy
+// keys; InlineEmptyState remains the tool for in-list messages only.
+import { EmptyState } from "@/components/primitives/EmptyState";
+import { Radar } from "lucide-react";
 import { cn } from "@/lib/utils";
 import type { AiSignal } from "@/types/api";
 
@@ -78,7 +82,8 @@ export function AiSignalsWidget() {
             <div key={i} className="flex h-[22px] items-center gap-1.5 px-2">
               <Skeleton className="h-3 w-[36px]" style={{ animationDelay: `${i * 40}ms` }} />
               <Skeleton className="h-[4px] flex-1" style={{ animationDelay: `${i * 40 + 20}ms` }} />
-              <Skeleton className="h-3 w-[28px]" style={{ animationDelay: `${i * 40 + 40}ms` }} />
+              {/* w-[30px] mirrors the loaded score column (Round 3: 10px floor). */}
+              <Skeleton className="h-3 w-[30px]" style={{ animationDelay: `${i * 40 + 40}ms` }} />
             </div>
           ))}
         </div>
@@ -87,13 +92,15 @@ export function AiSignalsWidget() {
   }
 
   // ── Error state ─────────────────────────────────────────────────────────────
+  // Round 3 (item 4): shared EmptyState primitive replaces InlineEmptyState —
+  // a failed feed is a PANEL-level condition (the whole widget has no data),
+  // not an in-list message. Copy lives in lib/copy/empty-states.ts.
   if (isError) {
     return (
       <div className="flex h-full flex-col bg-background">
         <WidgetHeader />
-        {/* T-F-6-03: standardised inner content padding px-3 py-2 (was px-2) */}
-        <div className="flex-1 px-3 py-2">
-          <InlineEmptyState message="Signals failed to load — check connection" />
+        <div className="flex flex-1 items-center justify-center">
+          <EmptyState condition="error" copyKey="dashboard.signals-error" icon={Radar} />
         </div>
       </div>
     );
@@ -102,13 +109,18 @@ export function AiSignalsWidget() {
   const signals = data?.signals ?? [];
 
   // ── Empty state ─────────────────────────────────────────────────────────────
+  // Named empty state (Round 3 item 4) — Radar icon gives the "scanning for
+  // signals" category cue; copy key dashboard.no-signals.
   if (signals.length === 0) {
     return (
       <div className="flex h-full flex-col bg-background">
         <WidgetHeader />
-        {/* T-F-6-03: standardised inner content padding px-3 py-2 (was px-2) */}
-        <div className="flex-1 px-3 py-2">
-          <InlineEmptyState message="No signals yet — processing articles…" />
+        <div className="flex flex-1 items-center justify-center">
+          <EmptyState
+            condition="empty-no-data"
+            copyKey="dashboard.no-signals"
+            icon={Radar}
+          />
         </div>
       </div>
     );
@@ -193,23 +205,29 @@ function SignalRow({ signal, onClick }: SignalRowProps) {
   //  NEGATIVE → text-negative / bg-negative: muted red (--negative = #EF5350)
   //  NEUTRAL  → text-muted-foreground / bg-muted-foreground/50: grey, secondary
   // These match TradingView's up/down color convention used throughout the app.
+  // Round 3 (item 2): semantic Tailwind utilities (text-positive / bg-positive)
+  // replace the arbitrary-value text-[hsl(var(--positive))] forms — §15.11
+  // mandates the semantic utilities for JSX text/background contexts (the
+  // hsl(var()) form is reserved for canvas/SVG/raw-CSS contexts only).
   const colorText =
     signal.label === "POSITIVE"
-      ? "text-[hsl(var(--positive))]"
+      ? "text-positive"
       : signal.label === "NEGATIVE"
-        ? "text-[hsl(var(--negative))]"
+        ? "text-negative"
         : "text-muted-foreground";
 
   const colorBar =
     signal.label === "POSITIVE"
-      ? "bg-[hsl(var(--positive))]"
+      ? "bg-positive"
       : signal.label === "NEGATIVE"
-        ? "bg-[hsl(var(--negative))]"
+        ? "bg-negative"
         : "bg-muted-foreground/50";
 
   return (
     <div
-      className="flex h-[22px] cursor-pointer items-center gap-1.5 px-2 transition-colors hover:bg-muted/30"
+      // Round 3 (item 5): focus-visible ring (inset — flush row inside an
+      // overflow container) so keyboard tabbing shows where focus is.
+      className="flex h-[22px] cursor-pointer items-center gap-1.5 px-2 transition-colors hover:bg-muted/30 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-ring"
       onClick={onClick}
       onKeyDown={(e) => e.key === "Enter" && onClick()}
       role="button"
@@ -236,11 +254,13 @@ function SignalRow({ signal, onClick }: SignalRowProps) {
       </div>
 
       {/* Score percentage — right-aligned, monospace, colored by label */}
-      {/* WHY w-[28px]: "100%" is the longest value (4 chars at ~7px each = 28px).
-          Fixed width ensures the bar flex container always has the same right boundary. */}
+      {/* Round 3 (item 1, ADR-F-15 / §15.9): bumped 9px → 10px. The score IS a
+          financial data value (signal confidence %) and the design system sets
+          a hard 10px floor for data values — 9px is reserved for timestamps /
+          counts / category labels only. w-[30px] fits "100%" at 10px mono. */}
       <span
         className={cn(
-          "w-[28px] shrink-0 text-right font-mono text-[9px] tabular-nums",
+          "w-[30px] shrink-0 text-right font-mono text-[10px] tabular-nums",
           colorText,
         )}
       >

@@ -65,10 +65,71 @@ export const EMPTY_COPY: Record<string, EmptyCopy> = {
     body: "Transactions appear here after the first brokerage sync.",
   },
 
+  // Portfolio Round-3 polish keys (EmptyState migration, DS §15.12).
+  // WHY new keys instead of editing the two above: the existing keys are
+  // pinned verbatim by components/primitives/__tests__/EmptyState.test.tsx,
+  // while the portfolio call sites have THEIR copy pinned by older tests
+  // (e.g. /No transactions yet\./ in portfolio-wave-f-polish). Distinct keys
+  // let both sets of pinned strings coexist without weakening any test (R19).
+  "portfolio.no-portfolio": {
+    // Title matches the heading pinned by empty-portfolio.test.tsx exactly.
+    title: "Select or create a portfolio",
+    body:
+      "Your portfolio is the P&L centre of Worldview — holdings, live quotes, " +
+      "transactions and analytics all hang off it. Create your first portfolio " +
+      "to start tracking positions.",
+  },
+  "portfolio.no-holdings-table": {
+    // Trailing period intentional — older tests pin /No holdings yet\./.
+    title: "No holdings yet.",
+    body: "Connect a brokerage or use Add Position to start tracking your book.",
+  },
+  "portfolio.no-transactions-yet": {
+    // Trailing period intentional — older tests pin /No transactions yet\./.
+    title: "No transactions yet.",
+    body: "Connect a brokerage to import activity, or use Add Position to record a trade manually.",
+  },
+  "portfolio.no-watchlists": {
+    title: "No watchlists yet.",
+    body: "Group tickers by thesis — earnings plays, long ideas, shorts — and track live quotes per list.",
+  },
+  "portfolio.watchlist-no-tickers": {
+    title: "No tickers in this watchlist.",
+    body: "Search above to add your first symbol — live quotes refresh every 30 seconds.",
+  },
+  "portfolio.analytics-insufficient": {
+    title: "Not enough history",
+    body: "Analytics need at least two daily snapshots — check back after the next market close.",
+  },
+
   // Screener surface keys.
   "screener.no-matches": {
     title: "No matches",
     body: "Try widening the criteria or removing a filter.",
+  },
+  // Round-3 screener empty-state migration (item 5): the page distinguishes
+  // THREE zero-row situations that used to share one DashboardEmptyState:
+  //   cold-start          — default filters AND the server universe is empty
+  //                         (nothing ingested yet; resetting filters is useless)
+  //   no-filter-matches   — the SERVER returned zero rows for active filters
+  //   no-loaded-matches   — the server returned rows but the CLIENT-side
+  //                         technical/search filters excluded every loaded one
+  // WHY both *-matches titles are identical: __tests__/screener.test.tsx pins
+  // the user-facing headline "No results match your filters" for any
+  // filtered-to-zero outcome; the BODY carries the actionable difference.
+  // ("screener.no-matches" above stays untouched — its copy is pinned by
+  // components/primitives/__tests__/EmptyState.test.tsx.)
+  "screener.cold-start": {
+    title: "No instruments yet",
+    body: "The instrument universe is empty — instruments appear after the first market-data ingestion run.",
+  },
+  "screener.no-filter-matches": {
+    title: "No results match your filters",
+    body: "No instruments match the current filters. Adjust filters and apply.",
+  },
+  "screener.no-loaded-matches": {
+    title: "No results match your filters",
+    body: "The technical / search filters excluded all rows in the loaded page. Try widening them or loading more.",
   },
 
   // Watchlist surface keys.
@@ -121,6 +182,112 @@ export const EMPTY_COPY: Record<string, EmptyCopy> = {
   "instrument.no-entity-context": {
     title: "No entity context",
     body: "This entity has not been enriched yet — the overnight enrichment worker populates name, type and description.",
+  },
+  // Round-3 additions (instrument surface agent): two call sites of the
+  // retired components/instrument/shared/EmptyState.tsx fell OUTSIDE the six
+  // Round-2 reserved keys (the reservation list mirrored the four
+  // NewsColumn/GraphColumn/ContextPanel/ContradictionsBlock sites; these two
+  // were Round-2 additions that also adopted the local component). Copy is
+  // lifted verbatim from the previously hardcoded headline/hint strings so
+  // the consolidation stays a zero-copy-change swap.
+  "instrument.no-narrative-history": {
+    title: "No narrative history",
+    body: "Versions appear after the KG narrative worker (or a manual Refresh) generates a new interpretation of this entity.",
+  },
+  "instrument.no-financial-statements": {
+    title: "No financial statements",
+    body: "Statement records have not been ingested for this instrument — ETFs and newly listed tickers have none until the fundamentals backfill runs.",
+  },
+
+  // Chat surface keys — Round-3 polish sprint. The welcome title "Analyst
+  // Intelligence" is PINNED by __tests__/chat.test.tsx ("shows welcome state")
+  // and the no-threads title by the "/no conversations yet/i" assertion — do
+  // not reword without updating both tests.
+  "chat.welcome": {
+    title: "Analyst Intelligence",
+    body: "Research-grade Q&A on earnings, SEC filings, macro, and your portfolio — grounded in cited source documents.",
+  },
+  "chat.no-threads": {
+    title: "No conversations yet",
+    body: "Click “New chat” to begin your first research thread.",
+  },
+
+  // Dashboard surface keys — Round-3 polish sprint (2026-06-10).
+  // WHY these exist: the Round-3 dashboard pass migrates every widget's
+  // bespoke empty-state JSX onto the shared <EmptyState> primitive (§15.12),
+  // which resolves copy through this registry. Titles intentionally mirror
+  // the strings the pre-migration widgets rendered, because several are
+  // pinned by existing tests (R19: never weaken tests — e.g.
+  // "No upcoming earnings events scheduled." in earnings-calendar-widget,
+  // "No watchlist yet" in WatchlistMoversWidget.insights, "AI brief
+  // unavailable" in morning-brief-card, "No movers" greps in
+  // e2e/qa-live-stack). Keys are namespaced `dashboard.*` and appended
+  // additively — this file is the documented extension point for per-page
+  // agents (see header) and the empty-copy-dictionary arch test requires
+  // every literal copyKey to resolve here.
+  "dashboard.no-signals": {
+    title: "No signals yet",
+    body: "AI price-impact signals appear here as new articles are processed.",
+  },
+  "dashboard.signals-error": {
+    title: "Signals unavailable",
+    body: "The signals feed failed to load — check the connection.",
+  },
+  "dashboard.no-sector-data": {
+    title: "No sector data available",
+    body: "Sector performance appears once market data is ingested.",
+  },
+  "dashboard.sector-error": {
+    title: "Sector data unavailable",
+    body: "The heatmap failed to load — check the connection.",
+  },
+  "dashboard.no-portfolio": {
+    title: "No portfolio yet",
+    body: "Create a portfolio to track totals, P&L and top holdings here.",
+  },
+  "dashboard.no-positions": {
+    title: "Track your top positions here",
+    body: "Live prices, day P&L and 5-day trends for your largest positions.",
+  },
+  "dashboard.no-holdings-movers": {
+    title: "No holdings",
+    body: "Add holdings or sync a brokerage to see daily movers here.",
+  },
+  "dashboard.no-watchlist": {
+    title: "No watchlist yet",
+    body: "Add instruments to your watchlist to see daily movers here.",
+  },
+  "dashboard.no-movers": {
+    title: "No movers",
+    body: "No price movement recorded for this view in the selected period.",
+  },
+  "dashboard.no-markets": {
+    title: "No open prediction markets",
+    body: "Prediction markets appear here once Polymarket data is ingested.",
+  },
+  "dashboard.no-economic-events": {
+    title: "No upcoming economic events scheduled.",
+    body: "Economic events populate as market calendar data is ingested.",
+  },
+  "dashboard.no-earnings": {
+    title: "No upcoming earnings events scheduled.",
+    body: "Earnings calendar data populates as company reporting schedules are ingested.",
+  },
+  "dashboard.no-news": {
+    title: "No recent news",
+    body: "Ranked portfolio news appears here as the pipeline ingests articles.",
+  },
+  "dashboard.news-filter-no-match": {
+    title: "No articles match these filters.",
+    body: "Clear the tier or ticker filter to see all ranked articles.",
+  },
+  "dashboard.no-alerts": {
+    title: "No recent alerts.",
+    body: "Create alert rules on the Alerts page to receive notifications here.",
+  },
+  "dashboard.brief-unavailable": {
+    title: "AI brief unavailable",
+    body: "No morning brief has been generated yet.",
   },
 };
 

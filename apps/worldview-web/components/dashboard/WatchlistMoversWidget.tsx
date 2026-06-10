@@ -45,13 +45,18 @@
 import { useMemo, useState } from "react";
 import { useQuery, useQueries } from "@tanstack/react-query";
 import { useRouter } from "next/navigation";
-import { AlertTriangle } from "lucide-react";
+import { AlertTriangle, Eye } from "lucide-react";
 import { createGateway } from "@/lib/gateway";
 import { useAuth } from "@/hooks/useAuth";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { InlineEmptyState } from "@/components/data/InlineEmptyState";
-import { DashboardEmptyState } from "@/components/ui/dashboard-empty-state";
+// Round 3 (item 4): the panel-level no-watchlist state migrates from the
+// legacy DashboardEmptyState (components/ui — still used by workspace and
+// screener surfaces) onto the shared EmptyState primitive (§15.12).
+// InlineEmptyState stays for the in-column "No gainers"/"No losers" lines.
+import { EmptyState } from "@/components/primitives/EmptyState";
+import Link from "next/link";
 import { cn } from "@/lib/utils";
 
 // ── PLAN-0059 E-5 — extracted sub-components + ranking logic ─────────────
@@ -241,11 +246,13 @@ export function WatchlistMoversWidget() {
             <button
               key={p}
               onClick={() => setPeriod(p)}
+              // Round 3 (item 5): bg-muted hover convention + keyboard ring.
               className={cn(
                 "px-1.5 text-[9px] font-mono uppercase transition-colors",
+                "focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring",
                 period === p
                   ? "bg-primary/20 text-primary"
-                  : "text-muted-foreground hover:text-foreground",
+                  : "text-muted-foreground hover:bg-muted hover:text-foreground",
               )}
               // WHY aria-pressed: these are toggle buttons — aria-pressed
               // communicates the selected state to assistive tech.
@@ -279,7 +286,9 @@ export function WatchlistMoversWidget() {
                 onClick={() => setSelectedSector(pill.value)}
                 className={cn(
                   // WHY rounded-[2px]: design system mandates 2px radius; bare `rounded` = 4px default
+                  // Round 3 (item 5): keyboard focus ring on the pill toggles.
                   "shrink-0 rounded-[2px] border border-border px-2 py-0.5 font-mono text-[10px] uppercase tracking-wider transition-colors",
+                  "focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring",
                   isSelected
                     ? "bg-primary text-primary-foreground"
                     : "bg-muted text-muted-foreground hover:bg-muted/70",
@@ -362,10 +371,21 @@ export function WatchlistMoversWidget() {
             empty-state pattern after this. */}
         {!isError && noWatchlist && (
           <div className="flex flex-1 items-center justify-center">
-            <DashboardEmptyState
-              title="No watchlist yet"
-              message="Add instruments to your watchlist to see daily movers here."
-              cta={{ label: "Browse Screener →", href: "/screener" }}
+            {/* Round 3 (item 4): shared EmptyState primitive — copy key keeps
+                the test-pinned "No watchlist yet" title; the action Link keeps
+                the Browse-Screener CTA with a keyboard focus ring. */}
+            <EmptyState
+              condition="empty-cold-start"
+              copyKey="dashboard.no-watchlist"
+              icon={Eye}
+              action={
+                <Link
+                  href="/screener"
+                  className="font-mono text-[10px] uppercase tracking-[0.06em] text-primary transition-colors hover:text-primary/80 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                >
+                  Browse Screener →
+                </Link>
+              }
             />
           </div>
         )}
@@ -374,20 +394,27 @@ export function WatchlistMoversWidget() {
         {!isError && !noWatchlist && isLoading && (
           <div className="flex flex-1 gap-0">
             <div className="flex-1 divide-y divide-border/30">
+              {/* Round 3 (item 3): h-7 matches the loaded WatchlistMoverRow
+                  height (28px — NOT the dashboard's usual 22px, see the row
+                  component's WHY) and the 4 cells mirror its column slots
+                  (ticker 40 · name flex · price 52 · %chg 52) so rows swap
+                  in without any height or column shift. */}
               {Array.from({ length: 5 }).map((_, i) => (
-                <div key={`g-skel-${i}`} className="flex h-[22px] items-center gap-2 px-2">
-                  <Skeleton className="h-3 w-[40px]" />
-                  <Skeleton className="h-3 w-[60px]" />
-                  <Skeleton className="ml-auto h-3 w-[40px]" />
+                <div key={`g-skel-${i}`} className="flex h-7 items-center gap-1.5 px-2">
+                  <Skeleton className="h-3 w-[40px] shrink-0" />
+                  <Skeleton className="h-3 min-w-0 flex-1" />
+                  <Skeleton className="h-3 w-[52px] shrink-0" />
+                  <Skeleton className="h-3 w-[52px] shrink-0" />
                 </div>
               ))}
             </div>
             <div className="flex-1 divide-y divide-border/30 border-l border-border/30">
               {Array.from({ length: 5 }).map((_, i) => (
-                <div key={`l-skel-${i}`} className="flex h-[22px] items-center gap-2 px-2">
-                  <Skeleton className="h-3 w-[40px]" />
-                  <Skeleton className="h-3 w-[60px]" />
-                  <Skeleton className="ml-auto h-3 w-[40px]" />
+                <div key={`l-skel-${i}`} className="flex h-7 items-center gap-1.5 px-2">
+                  <Skeleton className="h-3 w-[40px] shrink-0" />
+                  <Skeleton className="h-3 min-w-0 flex-1" />
+                  <Skeleton className="h-3 w-[52px] shrink-0" />
+                  <Skeleton className="h-3 w-[52px] shrink-0" />
                 </div>
               ))}
             </div>

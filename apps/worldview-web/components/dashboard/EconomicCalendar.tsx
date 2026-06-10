@@ -21,6 +21,10 @@ import { useInfiniteQuery, type InfiniteData } from "@tanstack/react-query";
 import { createGateway } from "@/lib/gateway";
 import { useAuth } from "@/hooks/useAuth";
 import { Skeleton } from "@/components/ui/skeleton";
+// Round 3 (item 4): shared EmptyState primitive (§15.12) — copy key keeps
+// the previously rendered strings verbatim.
+import { EmptyState } from "@/components/primitives/EmptyState";
+import { CalendarClock } from "lucide-react";
 import type { EconomicCalendarResponse, EconomicImpact } from "@/types/api";
 
 // ── Constants ─────────────────────────────────────────────────────────────────
@@ -100,13 +104,19 @@ export function EconomicCalendar() {
       {/* ── Loading state ──────────────────────────────────────────────── */}
       {/* SA-2 PLAN-0088 density: space-y-1.5 + py-1.5 (was space-y-2 + py-2).
           T-F-6-03: standardised inner content padding px-3 (unchanged). */}
+      {/* Round 3 (item 3): skeleton rows now use the loaded list's exact
+          geometry — h-[22px] divide-y rows at px-2 with the real column
+          slots (date+time · title flex · forecast/previous · impact letter)
+          instead of the previous taller spaced bars, so the event rows swap
+          in with zero layout shift. 6 rows ≈ a typical first page fold. */}
       {isLoading && (
-        <div className="flex-1 space-y-1.5 px-3 py-1.5">
-          {Array.from({ length: 4 }).map((_, i) => (
-            <div key={i} className="flex gap-2">
-              <Skeleton className="h-5 w-12" style={{ animationDelay: `${i * 50}ms` }} />
-              <Skeleton className="h-5 flex-1" style={{ animationDelay: `${i * 50}ms` }} />
-              <Skeleton className="h-5 w-8" style={{ animationDelay: `${i * 50}ms` }} />
+        <div className="flex-1 divide-y divide-border/30">
+          {Array.from({ length: 6 }).map((_, i) => (
+            <div key={i} className="flex h-[22px] items-center gap-2 px-2">
+              <Skeleton className="h-3 w-[72px] shrink-0" style={{ animationDelay: `${i * 50}ms` }} />
+              <Skeleton className="h-3 min-w-0 flex-1" style={{ animationDelay: `${i * 50}ms` }} />
+              <Skeleton className="h-3 w-[64px] shrink-0" style={{ animationDelay: `${i * 50}ms` }} />
+              <Skeleton className="h-3 w-3 shrink-0" style={{ animationDelay: `${i * 50}ms` }} />
             </div>
           ))}
         </div>
@@ -130,12 +140,17 @@ export function EconomicCalendar() {
           A clear message sets correct expectations: the API is functional but the
           economic event data stream hasn't populated yet. */}
       {/* T-F-6-03: standardised inner content padding px-3 py-2 (was px-2 pt-2) */}
+      {/* Round 3 (item 4): shared EmptyState primitive — copy key
+          dashboard.no-economic-events carries the exact strings that were
+          hardcoded here, so the rationale (data-not-ingested, not "broken")
+          and any text-matching tests are preserved. */}
       {!isLoading && !isError && events.length === 0 && (
-        <div className="flex-1 flex flex-col gap-0.5 px-3 py-2">
-          <p className="text-xs text-muted-foreground">No upcoming economic events scheduled.</p>
-          <p className="text-[10px] text-muted-foreground/60">
-            Economic events populate as market calendar data is ingested.
-          </p>
+        <div className="flex flex-1 items-center justify-center">
+          <EmptyState
+            condition="empty-no-data"
+            copyKey="dashboard.no-economic-events"
+            icon={CalendarClock}
+          />
         </div>
       )}
 
@@ -203,7 +218,8 @@ export function EconomicCalendar() {
                 type="button"
                 onClick={() => fetchNextPage()}
                 disabled={isFetchingNextPage}
-                className="text-[10px] uppercase tracking-[0.08em] text-muted-foreground hover:text-foreground disabled:pointer-events-none"
+                // Round 3 (item 5): hover bg + keyboard focus ring on the pager.
+                className="px-1.5 text-[10px] uppercase tracking-[0.08em] text-muted-foreground transition-colors hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:pointer-events-none"
               >
                 {isFetchingNextPage
                   ? "Loading…"

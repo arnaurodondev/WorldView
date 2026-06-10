@@ -110,11 +110,15 @@ function TabButton({ active, onClick, label }: TabButtonProps) {
   return (
     <button
       onClick={onClick}
+      // Round 3 (item 5): bg-muted hover convention + keyboard focus ring
+      // (inset — the tab strip is flush against the panel border, an outset
+      // ring would be clipped). Tier-1 transition-colors stays ≤150ms.
       className={cn(
         "flex-1 px-2 font-mono text-[10px] uppercase tracking-[0.08em] transition-colors",
+        "focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-ring",
         active
           ? "border-b-2 border-primary text-primary"
-          : "text-muted-foreground hover:text-foreground",
+          : "text-muted-foreground hover:bg-muted hover:text-foreground",
       )}
       // role=tab uses aria-selected (not aria-pressed) per WAI-ARIA. This
       // matches the rest of the codebase's tab-button pattern.

@@ -38,8 +38,11 @@ import { createGateway } from "@/lib/gateway";
 import { useAuth } from "@/hooks/useAuth";
 import { useAboveFoldReady } from "@/hooks/useAboveFoldReady";
 import { Skeleton } from "@/components/ui/skeleton";
-import { InlineEmptyState } from "@/components/data/InlineEmptyState";
-import { AlertTriangle } from "lucide-react";
+// Round 3 (item 4): panel-level empty states use the shared EmptyState
+// primitive (§15.12). Two named keys distinguish "feed is empty" from
+// "filters excluded everything" — different user actions follow each.
+import { EmptyState } from "@/components/primitives/EmptyState";
+import { AlertTriangle, Newspaper } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { formatRelativeTime, cn } from "@/lib/utils";
 import { getNewsLinkTarget, isSafeNewsUrl } from "@/hooks/useNewsLinkTarget";
@@ -228,7 +231,8 @@ export function PortfolioNewsWidget() {
         <select
           value={tickerFilter}
           onChange={(e) => setTickerFilter(e.target.value)}
-          className="h-5 shrink-0 rounded-[2px] border border-border bg-card px-1 font-mono text-[10px] uppercase tabular-nums text-foreground"
+          // Round 3 (item 5): keyboard focus ring on the native select.
+          className="h-5 shrink-0 rounded-[2px] border border-border bg-card px-1 font-mono text-[10px] uppercase tabular-nums text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
           aria-label="Filter by ticker"
         >
           <option value={ALL_TICKERS}>ALL</option>
@@ -247,11 +251,13 @@ export function PortfolioNewsWidget() {
               key={t}
               onClick={() => toggleTier(t)}
               aria-pressed={active}
+              // Round 3 (item 5): bg-muted hover + keyboard focus ring.
               className={cn(
                 "h-5 shrink-0 rounded-[2px] border px-1.5 font-mono text-[9px] uppercase tracking-wider transition-colors",
+                "focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring",
                 active
                   ? "border-primary bg-primary/20 text-primary"
-                  : "border-border bg-card text-muted-foreground hover:text-foreground",
+                  : "border-border bg-card text-muted-foreground hover:bg-muted hover:text-foreground",
               )}
             >
               {t}
@@ -289,13 +295,18 @@ export function PortfolioNewsWidget() {
       )}
 
       {!isLoading && !isError && articles.length === 0 && (
-        <div className="flex-1 px-3 py-2">
-          <InlineEmptyState
-            message={
+        <div className="flex flex-1 items-center justify-center">
+          {/* Round 3 (item 4): filtered-to-zero vs genuinely-empty get
+              DIFFERENT named copy keys — the first tells the user to clear
+              filters, the second that the pipeline hasn't produced news. */}
+          <EmptyState
+            condition="empty-no-data"
+            copyKey={
               activeTiers.size > 0 || tickerFilter !== ALL_TICKERS
-                ? "No articles match these filters."
-                : "No recent news"
+                ? "dashboard.news-filter-no-match"
+                : "dashboard.no-news"
             }
+            icon={Newspaper}
           />
         </div>
       )}
@@ -325,11 +336,13 @@ function SortButton({ active, onClick, label, arrow }: SortButtonProps) {
   return (
     <button
       onClick={onClick}
+      // Round 3 (item 5): bg-muted hover convention + keyboard focus ring.
       className={cn(
         "px-1.5 text-[9px] font-mono uppercase transition-colors",
+        "focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring",
         active
           ? "bg-primary/20 text-primary"
-          : "text-muted-foreground hover:text-foreground",
+          : "text-muted-foreground hover:bg-muted hover:text-foreground",
       )}
       aria-pressed={active}
     >
@@ -388,7 +401,9 @@ function ArticleRow({ article }: { article: RankedArticle }) {
 
   return (
     <div
-      className={`flex h-[22px] items-center gap-1.5 px-2 transition-colors ${
+      // Round 3 (item 5): inset focus-visible ring — harmless on
+      // non-interactive rows (they're not tabbable so it never triggers).
+      className={`flex h-[22px] items-center gap-1.5 px-2 transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-ring ${
         isInteractive ? "cursor-pointer hover:bg-muted/30" : ""
       }`}
       onClick={isInteractive ? handleClick : undefined}

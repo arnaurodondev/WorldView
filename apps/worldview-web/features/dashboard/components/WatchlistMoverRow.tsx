@@ -65,7 +65,9 @@ export function WatchlistMoverRow({
     // elements (so we can layout-as-a-flex row with full bleed). Adding the
     // role + tab makes them accessible to keyboard + screen-reader users.
     <div
-      className="flex h-7 cursor-pointer items-center gap-1.5 px-2 transition-colors hover:bg-muted/30"
+      // Round 3 (item 5): inset focus-visible ring — the row is tabbable
+      // (tabIndex=0 below) so keyboard users need a visible focus affordance.
+      className="flex h-7 cursor-pointer items-center gap-1.5 px-2 transition-colors hover:bg-muted/30 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-ring"
       onClick={onClick}
       onKeyDown={(e) => {
         if (e.key === "Enter") onClick();
