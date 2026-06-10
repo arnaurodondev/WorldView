@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import asyncio
 import time
-from datetime import date
+from datetime import UTC, date
 from typing import TYPE_CHECKING, Any
 
 import structlog
@@ -258,7 +258,17 @@ class MarketHandler(ToolHandler):
         to_date: str,
         interval: str = "week",
     ) -> RetrievedItem | None:
-        """Fetch OHLCV bars and format as a markdown table RetrievedItem."""
+        """Fetch OHLCV bars and format as a markdown table RetrievedItem.
+
+        After-hours / weekend / pre-market fallback: when the requested
+        date range yields zero bars (typical for "what is X trading at?"
+        questions outside RTH, where the LLM asks for today→tomorrow
+        with interval=day before today's daily bar has landed), retry
+        with interval='1m' over the last 7 days and surface the most
+        recent 1-minute bar as a single "last known price" row. This
+        keeps the tool useful 24/7 without needing a live quote feed
+        (quotes are intentionally disabled to cap third-party costs).
+        """
         # Parse and validate date strings before hitting S3
         try:
             _from = date.fromisoformat(from_date)
@@ -283,8 +293,62 @@ class MarketHandler(ToolHandler):
             timeout=self._timeout,
         )
         if not bars:
-            log.warning("tool_no_data", tool="get_price_history", ticker=ticker)
-            return None
+            # Fallback path: caller likely wanted "current price" but the
+            # requested window has no bars yet (markets closed, weekend, or
+            # the daily bar for today hasn't landed). Try the most recent
+            # 1-minute bar over the last 7 days. We deliberately scope this
+            # to the no-data branch only — when the original window DOES
+            # return bars we never trigger the fallback, so history queries
+            # are unaffected.
+            from datetime import datetime as _dt
+            from datetime import timedelta as _td
+
+            _fb_to = _dt.now(tz=UTC).date()
+            _fb_from = _fb_to - _td(days=7)
+            fallback_bars = await asyncio.wait_for(
+                self._s3.get_ohlcv_range(
+                    ticker=ticker,
+                    from_date=_fb_from,
+                    to_date=_fb_to,
+                    interval="1m",
+                ),
+                timeout=self._timeout,
+            )
+            if not fallback_bars:
+                log.warning("tool_no_data", tool="get_price_history", ticker=ticker)
+                return None
+
+            # Take the most recent bar. The market-data /ohlcv/bars endpoint
+            # returns ascending order; the LAST entry is the freshest. If a
+            # future change flips ordering we'll still pick the max-by-ts.
+            latest = max(
+                fallback_bars,
+                key=lambda b: b.get("ts") or b.get("bar_date") or "",
+            )
+            log.info(
+                "get_price_history_1m_fallback",
+                ticker=ticker,
+                latest_ts=latest.get("ts") or latest.get("bar_date"),
+                bars_in_window=len(fallback_bars),
+            )
+            # Reuse the existing formatter but flag it as a 1m fallback so
+            # the LLM presents it as a "last known price" rather than a
+            # full bar history. We pass the single bar in a list to match
+            # the formatter's contract.
+            table = self._format_price_table(
+                ticker,
+                str(_fb_from),
+                str(_fb_to),
+                "1m (most recent — markets closed for requested window)",
+                [latest],
+            )
+            return RetrievedItem.create(
+                item_id=f"tool:price_history:{ticker}:latest_1m",
+                item_type=ItemType.financial,
+                text=table[:_TOOL_RESULT_MAX_CHARS],
+                score=0.80,
+                trust_weight=0.85,
+            )
 
         table = self._format_price_table(ticker, from_date, to_date, interval, bars)
         # CRITICAL: field is `text` NOT `content` (N-7); use .create() factory

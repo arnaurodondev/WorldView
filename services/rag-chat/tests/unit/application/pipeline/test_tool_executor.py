@@ -135,13 +135,64 @@ class TestGetPriceHistory:
         assert "AAPL" in result.text
 
     async def test_executor_returns_none_on_empty_bars(self) -> None:
-        """execute() must return None when S3 returns empty bars, not raise."""
+        """execute() must return None when BOTH the requested window AND the
+        1-minute fallback return empty bars. Empty mock here means S3 returns
+        [] for both calls — the fallback path is exercised but also gets [].
+        """
         executor = _make_executor(bars=[])
         tc = _make_tool_use_block("get_price_history", ticker="TSLA", from_date="2026-01-01", to_date="2026-04-01")
 
         result = await executor.execute(tc)
 
         assert result is None
+
+    async def test_executor_price_history_falls_back_to_latest_1m_bar(self) -> None:
+        """When the requested date range has no bars, the handler must retry
+        with interval='1m' over the last 7 days and surface the most recent
+        bar as a "last known price" RetrievedItem. Covers the after-hours /
+        weekend "what is X trading at?" path that previously returned 503.
+        """
+        from rag_chat.application.pipeline.tool_executor import ToolExecutor
+
+        # S3 mock: first call (requested window) returns []; second call (1m
+        # fallback) returns a single most-recent bar.
+        s3 = _make_s3_port()
+        s3.get_ohlcv_range = AsyncMock(
+            side_effect=[
+                [],  # original interval='day' over user-supplied range → no bars
+                [
+                    {
+                        "ts": "2026-06-09T20:00:00Z",
+                        "date": "2026-06-09",
+                        "open": 200.0,
+                        "high": 201.5,
+                        "low": 199.8,
+                        "close": 200.9,
+                        "volume": 1234,
+                    }
+                ],
+            ]
+        )
+        executor = ToolExecutor(registry=_make_registry_with_tools(), s3=s3)
+        tc = _make_tool_use_block(
+            "get_price_history",
+            ticker="AAPL",
+            from_date="2026-06-09",
+            to_date="2026-06-10",
+        )
+
+        result = await executor.execute(tc)
+
+        assert result is not None
+        # Two calls: original + 1m fallback.
+        assert s3.get_ohlcv_range.call_count == 2
+        # Second call uses interval='1m' regardless of what the LLM asked for.
+        second_call_kwargs = s3.get_ohlcv_range.call_args_list[1].kwargs
+        assert second_call_kwargs["interval"] == "1m"
+        # The RetrievedItem.item_id ends with ':latest_1m' so downstream
+        # citation rendering can distinguish "last known" from full history.
+        assert result.item_id.endswith(":latest_1m")
+        assert "AAPL" in result.text
 
     async def test_executor_returns_none_on_s3_error(self) -> None:
         """execute() must return None when S3 raises, not propagate the exception."""
