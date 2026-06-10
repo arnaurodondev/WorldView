@@ -5,18 +5,21 @@
  * inline SVG). The tests lock in:
  *   - SVG rendering when a valid series is available.
  *   - Em-dash fallback when the series is empty or absent.
- *   - Trend colour logic: var(--color-positive) for uptrends, var(--color-negative)
- *     for downtrends.
+ *   - Trend colour logic: hsl(var(--chart-positive)) for uptrends,
+ *     hsl(var(--chart-negative)) for downtrends, hsl(var(--chart-neutral))
+ *     for flat windows (R1 sprint: the old var(--color-*) tokens were never
+ *     defined in globals.css — the stroke silently failed to paint).
  *
  * WHY params are built by hand (not via AgGridReact): the renderer is a plain
  * function — it receives an ICellRendererParams-shaped object and returns JSX.
  * We construct a minimal params stub so AG Grid itself is never instantiated,
  * keeping the test fast and free of DOM environment issues.
  *
- * WHY ticker-based lookup (not instrument_id): SemanticHoldingsTable passes
- * holdingsSeries keyed by ticker symbol (see inline comment in SemanticHoldingsTable
- * ~line 81). The renderer reads params.data.h.ticker and indexes the context map
- * with that string. Tests must mirror this key convention.
+ * KEYING (R1 sprint fix): the S9 sparklines endpoint returns the series map
+ * keyed by INSTRUMENT_ID — the renderer now looks up by instrument_id first
+ * and falls back to ticker for legacy callers. The default buildParams keys
+ * the context by instrument_id (the production path); a dedicated test pins
+ * the ticker fallback.
  */
 
 import { describe, it, expect } from "vitest";
@@ -28,6 +31,7 @@ import type { EnrichedHoldingRow } from "@/components/portfolio/holdings-columns
 // ── Helpers ────────────────────────────────────────────────────────────────────
 
 const TICKER = "AAPL";
+const INSTRUMENT_ID = "0190a1b2-aaaa-bbbb-cccc-0123456789ab";
 
 /**
  * buildParams — constructs a minimal ICellRendererParams stub for
@@ -38,18 +42,27 @@ const TICKER = "AAPL";
  * renderer never touches. Casting a partial object avoids hundreds of lines of
  * boilerplate while still satisfying TypeScript for the fields the renderer reads.
  *
- * @param series  The number[] to store in context.holdingsSeries[TICKER].
+ * @param series  The number[] to store in the context series map.
  *                Pass undefined to omit the context entry (simulates missing data).
  * @param pinned  When "bottom" the renderer should return null (footer row guard).
+ * @param keyBy   Which key the context map uses. "instrument_id" (default) is
+ *                the production keying (S9 response shape); "ticker" exercises
+ *                the legacy fallback path kept for backward compatibility.
  */
 function buildParams(
   series: number[] | undefined,
   pinned?: "bottom",
+  keyBy: "instrument_id" | "ticker" = "instrument_id",
 ): ICellRendererParams<EnrichedHoldingRow> {
+  const mapKey = keyBy === "instrument_id" ? INSTRUMENT_ID : TICKER;
   return {
-    // data: EnrichedHoldingRow — renderer reads data.h.ticker for the context lookup.
+    // data: EnrichedHoldingRow — renderer reads data.h.instrument_id (primary)
+    // and data.h.ticker (fallback) for the context lookup.
     data: {
-      h: { ticker: TICKER } as EnrichedHoldingRow["h"],
+      h: {
+        ticker: TICKER,
+        instrument_id: INSTRUMENT_ID,
+      } as EnrichedHoldingRow["h"],
     } as EnrichedHoldingRow,
 
     // node: IRowNode — renderer reads node.rowPinned for the footer guard.
@@ -62,7 +75,7 @@ function buildParams(
     // which mirrors "instrument not yet loaded" state.
     context:
       series !== undefined
-        ? { holdingsSeries: { [TICKER]: series } }
+        ? { holdingsSeries: { [mapKey]: series } }
         : { holdingsSeries: {} },
   } as unknown as ICellRendererParams<EnrichedHoldingRow>;
 }
@@ -111,10 +124,36 @@ describe("SparklineCellRenderer", () => {
     expect(document.querySelector("svg")).toBeNull();
   });
 
+  it("resolves the series via instrument_id (S9 response keying — R1 fix)", () => {
+    // WHY: the S9 /v1/market/sparklines response is keyed by instrument_id.
+    // The pre-R1 renderer looked the map up by ticker, so every cell rendered
+    // "—" in production. This test pins the instrument_id-first lookup.
+    render(
+      <SparklineCellRenderer
+        {...buildParams([10, 11, 12], undefined, "instrument_id")}
+      />,
+    );
+
+    expect(document.querySelector("svg")).not.toBeNull();
+    expect(screen.queryByText("—")).not.toBeInTheDocument();
+  });
+
+  it("falls back to ticker keying for legacy callers", () => {
+    // WHY: callers that re-keyed the series map by ticker (the documented
+    // pre-R1 contract) must keep rendering — the fallback prevents a silent
+    // blank column if any older call site still uses ticker keys.
+    render(
+      <SparklineCellRenderer {...buildParams([10, 11, 12], undefined, "ticker")} />,
+    );
+
+    expect(document.querySelector("svg")).not.toBeNull();
+  });
+
   it("uses positive color for uptrend (last > first)", () => {
     // WHY: a rising series [10, 11, 12] means last (12) > first (10), so the
-    // stroke must use var(--color-positive) to signal a bullish trend. The test
-    // reads the SVG <path> stroke attribute directly from the DOM.
+    // stroke must use hsl(var(--chart-positive)) to signal a bullish trend.
+    // (R1 fix: --chart-positive is the real globals.css token; the old
+    // var(--color-positive) was undefined and never painted.)
     render(<SparklineCellRenderer {...buildParams([10, 11, 12])} />);
 
     const path = document.querySelector("svg path");
@@ -123,28 +162,28 @@ describe("SparklineCellRenderer", () => {
     // attribute directly with a CSS var() string. getComputedStyle would resolve
     // to an empty string in jsdom (no real CSS runtime). The attribute assertion
     // is the correct approach here.
-    expect(path?.getAttribute("stroke")).toBe("var(--color-positive)");
+    expect(path?.getAttribute("stroke")).toBe("hsl(var(--chart-positive))");
   });
 
   it("uses negative color for downtrend (last < first)", () => {
     // WHY: a falling series [12, 11, 10] means last (10) < first (12), so the
-    // stroke must use var(--color-negative) to signal a bearish trend.
+    // stroke must use hsl(var(--chart-negative)) to signal a bearish trend.
     render(<SparklineCellRenderer {...buildParams([12, 11, 10])} />);
 
     const path = document.querySelector("svg path");
     expect(path).not.toBeNull();
-    expect(path?.getAttribute("stroke")).toBe("var(--color-negative)");
+    expect(path?.getAttribute("stroke")).toBe("hsl(var(--chart-negative))");
   });
 
-  it("uses negative color for flat trend (last === first)", () => {
-    // WHY: a flat series [10, 10, 10] means last === first. The condition is
-    // `last > first` (strictly greater), so flat maps to the negative (red)
-    // colour. This is intentional: "no gain" is not a bullish signal.
+  it("uses neutral color for flat trend (last === first)", () => {
+    // WHY (R1 sprint): per DESIGN_SYSTEM.md §sparklines, a flat window is
+    // neither bullish nor bearish — painting it red (the pre-R1 behaviour)
+    // mis-signalled a downtrend. Flat now maps to the grey chart-neutral token.
     render(<SparklineCellRenderer {...buildParams([10, 10, 10])} />);
 
     const path = document.querySelector("svg path");
     expect(path).not.toBeNull();
-    expect(path?.getAttribute("stroke")).toBe("var(--color-negative)");
+    expect(path?.getAttribute("stroke")).toBe("hsl(var(--chart-neutral))");
   });
 
   it("returns null for pinned bottom row (TOTAL footer)", () => {

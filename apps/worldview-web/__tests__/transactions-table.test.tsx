@@ -123,6 +123,42 @@ describe("TransactionsTable — base rendering", () => {
 
 // ─────────────────────────────────────────────────────────────────────────────
 
+describe("TransactionsTable — empty-state CTA (R1 sprint)", () => {
+  it("renders the 'Add your first transaction' CTA when onAddFirst is provided", async () => {
+    // WHY: a brand-new user with zero transactions needs an in-context action,
+    // not just a message pointing at a header button on a different surface.
+    const user = userEvent.setup();
+    const onAddFirst = vi.fn();
+    render(<TransactionsTable transactions={[]} onAddFirst={onAddFirst} />);
+
+    const cta = screen.getByRole("button", { name: "Add your first transaction" });
+    expect(cta).toBeInTheDocument();
+
+    await user.click(cta);
+    expect(onAddFirst).toHaveBeenCalledTimes(1);
+  });
+
+  it("hides the CTA when onAddFirst is not provided (read-only contexts)", () => {
+    // WHY: the ROOT aggregate portfolio rejects manual transactions on S1 —
+    // the parent passes undefined and the empty state stays message-only.
+    render(<TransactionsTable transactions={[]} />);
+    expect(
+      screen.queryByRole("button", { name: "Add your first transaction" }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("does NOT render the CTA when transactions exist", () => {
+    // WHY: the CTA is an empty-state affordance only; with data present the
+    // header "Add Position" button is the canonical entry point.
+    render(<TransactionsTable transactions={sampleData} onAddFirst={vi.fn()} />);
+    expect(
+      screen.queryByRole("button", { name: "Add your first transaction" }),
+    ).not.toBeInTheDocument();
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+
 describe("TransactionsTable — filters", () => {
   it("date range filter excludes rows outside the window", async () => {
     const user = userEvent.setup();

@@ -154,15 +154,18 @@ function CurrentCellRenderer(params: ICellRendererParams<EnrichedHoldingRow>) {
 }
 
 function DayChangeCellRenderer(params: ICellRendererParams<EnrichedHoldingRow>) {
-  if (isPinnedBottom(params)) {
-    return <span className="font-mono text-[11px] tabular-nums text-muted-foreground text-right w-full block">—</span>;
-  }
+  // R1 sprint: the pinned TOTAL row now carries the book-level day change in
+  // dayChangeValue (computed by SemanticHoldingsTable). The renderer no longer
+  // special-cases pinned to "—" — it renders whatever value is present, adding
+  // font-semibold so the totals line reads heavier, matching the UNREAL $ and
+  // MKT VALUE totals treatment. A null value (no quotes yet) still renders "—".
   const v = params.data?.dayChangeValue;
   return (
     <span
       className={cn(
         "font-mono text-[11px] tabular-nums text-right w-full block",
         v == null ? "text-muted-foreground" : v >= 0 ? "text-positive" : "text-negative",
+        isPinnedBottom(params) && "font-semibold",
       )}
     >
       {v == null ? "—" : fmtPnl(v)}
@@ -171,15 +174,15 @@ function DayChangeCellRenderer(params: ICellRendererParams<EnrichedHoldingRow>) 
 }
 
 function DayChangePctCellRenderer(params: ICellRendererParams<EnrichedHoldingRow>) {
-  if (isPinnedBottom(params)) {
-    return <span className="font-mono text-[11px] tabular-nums text-muted-foreground text-right w-full block">—</span>;
-  }
+  // R1 sprint: same pinned-row treatment as DayChangeCellRenderer — the TOTAL
+  // row carries the portfolio-level day % (day change ÷ yesterday's value).
   const v = params.data?.dayChangePct;
   return (
     <span
       className={cn(
         "font-mono text-[11px] tabular-nums text-right w-full block",
         v == null ? "text-muted-foreground" : v >= 0 ? "text-positive" : "text-negative",
+        isPinnedBottom(params) && "font-semibold",
       )}
     >
       {v == null ? "—" : formatPercent(v / 100)}
@@ -234,7 +237,17 @@ function ValueCellRenderer(params: ICellRendererParams<EnrichedHoldingRow>) {
 
 function WeightCellRenderer(params: ICellRendererParams<EnrichedHoldingRow>) {
   if (isPinnedBottom(params)) {
-    return <span className="font-mono text-[11px] tabular-nums text-muted-foreground text-right w-full block">—</span>;
+    // R1 sprint: the TOTAL row shows the weight-column sum (≈100.00% whenever
+    // every position has a price) instead of "—". This is the trader's sanity
+    // check that the Weight column is internally consistent — a total that
+    // drifts from 100% signals missing quotes upstream. No bar is drawn: a
+    // full-width bar would just be chart noise on the totals line.
+    const w = params.data?.weight ?? 0;
+    return (
+      <span className="font-mono text-[11px] tabular-nums text-foreground font-semibold text-right w-full block">
+        {w > 0 ? formatPercentUnsigned(w / 100) : "—"}
+      </span>
+    );
   }
   const weight = params.data?.weight ?? 0;
   return (

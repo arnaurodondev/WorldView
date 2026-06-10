@@ -35,6 +35,21 @@ interface TransactionsTabProps {
   holdingOverviews: HoldingOverviewMap | undefined;
   /** Open the Connect Brokerage modal (lives at page level for OAuth survival). */
   onConnect: () => void;
+  /**
+   * R1 sprint: opens the AddPositionDialog so a user with zero transactions
+   * can record their first trade from the empty state. Optional — pass
+   * undefined for read-only contexts (e.g. the ROOT aggregate portfolio,
+   * which rejects POST /v1/transactions) and the CTA button is hidden.
+   */
+  onAddPosition?: () => void;
+  /**
+   * R1 sprint: server-side pagination callback. When provided AND
+   * `transactionsResp.total > transactionsResp.limit`, a Prev/Next pager
+   * strip renders below the table. The new offset flows back into
+   * usePortfolioData's transactions query (the offset is part of its
+   * queryKey, so each page is its own cache entry).
+   */
+  onTxOffsetChange?: (offset: number) => void;
 }
 
 export function TransactionsTab({
@@ -43,6 +58,8 @@ export function TransactionsTab({
   transactionsResp,
   holdingOverviews,
   onConnect,
+  onAddPosition,
+  onTxOffsetChange,
 }: TransactionsTabProps) {
   // WHY brokeragesSectionExpanded default false: the primary use of the
   // Transactions tab is reviewing transaction history — the brokerage
@@ -50,6 +67,20 @@ export function TransactionsTab({
   // transaction table immediately visible.
   const [brokeragesSectionExpanded, setBrokeragesSectionExpanded] =
     useState(false);
+
+  // ── R1 sprint: pager derivation ──────────────────────────────────────────
+  // All values come straight from the server response so the pager always
+  // reflects what S1 actually applied (defensive against limit clamping).
+  // WHY `limit > 0` guard: a malformed response with limit=0 would make the
+  // pager divide by zero / loop — degrade to "no pager" instead.
+  const total = transactionsResp?.total ?? 0;
+  const offset = transactionsResp?.offset ?? 0;
+  const limit = transactionsResp?.limit ?? 0;
+  const showPager =
+    onTxOffsetChange != null && limit > 0 && total > limit;
+  // 1-based human-readable row range: "1–100 of 250".
+  const rangeStart = total === 0 ? 0 : offset + 1;
+  const rangeEnd = Math.min(offset + limit, total);
 
   return (
     // WHY flex flex-col: the brokerage section sits above the transactions
@@ -123,9 +154,49 @@ export function TransactionsTab({
                 ov?.ticker,
               ]),
             )}
+            // R1 sprint: empty-state CTA — record the first trade without
+            // hunting for the header button. Undefined hides the CTA (e.g.
+            // for the read-only ROOT aggregate).
+            onAddFirst={onAddPosition}
           />
         )}
       </div>
+
+      {/* ── R1 sprint: server-side pagination strip ─────────────────────── */}
+      {/* WHY below the table (not in the filter bar): the filter bar operates
+          on the CURRENT page client-side; the pager swaps the page itself.
+          Mixing them would suggest filters span all pages — they don't (the
+          per-page scope is reported by the "X / Y" counter in the bar). */}
+      {showPager && (
+        <div
+          data-testid="transactions-pager"
+          className="flex h-7 shrink-0 items-center gap-2 border-t border-border bg-card px-2"
+        >
+          <button
+            type="button"
+            aria-label="Previous transactions page"
+            disabled={offset === 0}
+            onClick={() => onTxOffsetChange(Math.max(0, offset - limit))}
+            className="h-5 px-2 font-mono text-[10px] uppercase tracking-[0.06em] border border-border rounded-[2px] text-muted-foreground transition-colors enabled:hover:text-foreground enabled:hover:border-foreground disabled:opacity-40 disabled:cursor-not-allowed"
+          >
+            ‹ Prev
+          </button>
+          <button
+            type="button"
+            aria-label="Next transactions page"
+            disabled={rangeEnd >= total}
+            onClick={() => onTxOffsetChange(offset + limit)}
+            className="h-5 px-2 font-mono text-[10px] uppercase tracking-[0.06em] border border-border rounded-[2px] text-muted-foreground transition-colors enabled:hover:text-foreground enabled:hover:border-foreground disabled:opacity-40 disabled:cursor-not-allowed"
+          >
+            Next ›
+          </button>
+          {/* Row-range counter — tabular-nums keeps digits aligned as the
+              range changes (1–100 → 101–200). */}
+          <span className="ml-auto font-mono text-[10px] tabular-nums text-muted-foreground">
+            {rangeStart}–{rangeEnd} of {total}
+          </span>
+        </div>
+      )}
     </>
   );
 }

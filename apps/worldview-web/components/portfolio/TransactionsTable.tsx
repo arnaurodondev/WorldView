@@ -62,6 +62,14 @@ export interface TransactionsTableProps {
    * always empty. The server-side enrichment supersedes it.
    */
   tickerByInstrumentId?: Record<string, string | null | undefined>;
+  /**
+   * R1 sprint: when provided, the empty state renders an "Add your first
+   * transaction" CTA button that invokes this callback (the parent opens the
+   * AddPositionDialog). When undefined the empty state is message-only —
+   * used for read-only contexts like the ROOT aggregate portfolio where
+   * S1 rejects manual transactions.
+   */
+  onAddFirst?: () => void;
 }
 
 // WHY "ALL" exists as a literal value: avoids special-casing null in filter
@@ -246,6 +254,7 @@ const INPUT_CLS =
 export function TransactionsTable({
   transactions,
   tickerByInstrumentId,
+  onAddFirst,
 }: TransactionsTableProps) {
   // ── Filter state ──────────────────────────────────────────────────────────
   const [activeFilter, setActiveFilter] = useState<FilterType>("ALL");
@@ -305,8 +314,25 @@ export function TransactionsTable({
   // matches the spacing of empty states elsewhere (Alerts, Watchlists).
   if (transactions.length === 0) {
     return (
-      <div className="flex flex-1 items-center justify-center px-4 py-4">
+      // R1 sprint: flex-col so the CTA stacks under the message. The copy is
+      // unchanged (tests pin the "No transactions yet." prefix) — only the
+      // CTA button is new, and only when the parent supplied a handler.
+      <div className="flex flex-1 flex-col items-center justify-center gap-2 px-4 py-4">
         <InlineEmptyState message="No transactions yet. Connect a brokerage to import activity, or use Add Position to record a trade manually." />
+        {onAddFirst && (
+          <button
+            type="button"
+            aria-label="Add your first transaction"
+            onClick={onAddFirst}
+            // WHY primary-bordered (matches the "New Portfolio" header CTA):
+            // this is the single most useful next step for an empty book, so
+            // it gets the accent treatment rather than the muted border the
+            // secondary filter buttons use.
+            className="h-6 px-2 text-[10px] font-mono uppercase tracking-[0.06em] border border-primary/60 text-primary rounded-[2px] hover:bg-primary/10 transition-colors"
+          >
+            + Add your first transaction
+          </button>
+        )}
       </div>
     );
   }

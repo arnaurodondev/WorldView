@@ -84,6 +84,13 @@ interface HoldingsTabProps {
   enrichedHoldings: Holding[];
   holdingsQuotes: BatchQuoteResponse["quotes"];
   holdingOverviews: HoldingOverviewMap | undefined;
+  /**
+   * R1 sprint: asset-class lookup keyed by instrument_id (derived from the
+   * transactions response in usePortfolioData). Threaded through to
+   * SemanticHoldingsTable to feed the ASSET column badge. Optional so older
+   * call sites / tests render unchanged (column degrades to "—").
+   */
+  assetClasses?: Record<string, string | null>;
   kpi: PortfolioKPI;
   bySector: PortfolioAllocations["bySector"];
   byType: PortfolioAllocations["byType"];
@@ -99,9 +106,14 @@ export function HoldingsTab({
   enrichedHoldings,
   holdingsQuotes,
   holdingOverviews,
+  assetClasses,
   kpi,
   bySector,
-  byType,
+  // byType was consumed by the legacy allocation panel (now in Analytics).
+  // Kept in the interface so page.tsx props don't change; `_` prefix
+  // suppresses the unused-variable lint error (same pattern as
+  // _setEquityPeriod below).
+  byType: _byType,
   equityPeriod,
   // setEquityPeriod was used by PortfolioAnalyticsSection (now in Analytics tab).
   // Retained in the interface so page.tsx props don't change; prefixed _  to
@@ -318,6 +330,9 @@ export function HoldingsTab({
           )}
           totalValue={kpi.totalValue}
           series={holdingsSeries}
+          // R1 sprint: ASSET column data (was a hardcoded empty map inside
+          // SemanticHoldingsTable, so every row showed "—").
+          assetClasses={assetClasses}
         />
       </div>
 

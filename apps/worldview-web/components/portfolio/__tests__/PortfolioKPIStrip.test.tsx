@@ -138,6 +138,37 @@ describe("PortfolioKPIStrip renders dash for missing cash", () => {
   });
 });
 
+describe("PortfolioKPIStrip explicit P&L signs (R1 sprint)", () => {
+  it("prefixes positive Day P&L with '+'", () => {
+    // WHY: colour alone is insufficient to read direction (colour-blind users,
+    // quick scans). Positive P&L dollars must carry an explicit "+" prefix,
+    // matching formatPercent's long-standing behaviour for percentages.
+    renderStrip({ dayPnl: 500 });
+    expect(screen.getByTestId("kpi-day-pnl")).toHaveTextContent("+$500.00");
+  });
+
+  it("renders negative Day P&L with '-' (formatPrice native sign)", () => {
+    renderStrip({ dayPnl: -250 });
+    expect(screen.getByTestId("kpi-day-pnl")).toHaveTextContent("-$250.00");
+  });
+
+  it("renders zero Day P&L unsigned (flat market is not a gain)", () => {
+    // WHY: "+$0.00" would falsely imply direction; a genuinely flat day reads
+    // as a plain "$0.00" with neutral colour.
+    renderStrip({ dayPnl: 0 });
+    const tile = screen.getByTestId("kpi-day-pnl");
+    expect(tile).toHaveTextContent("$0.00");
+    expect(tile.textContent).not.toContain("+");
+  });
+
+  it("prefixes positive Unrealised P&L with '+'", () => {
+    // unrealisedPnl 2500 / 2.5% — the dollar amount AND the percentage must
+    // both be signed so the tile doesn't mix conventions.
+    renderStrip({ unrealisedPnl: 2500, unrealisedPnlPct: 0.025 });
+    expect(screen.getByText("+$2,500.00 (+2.50%)")).toBeInTheDocument();
+  });
+});
+
 describe("PortfolioKPIStrip Day P&L skeleton", () => {
   it("renders skeleton when dayPnl is null (quotes not yet loaded)", () => {
     // WHY: F-P-012 — a missing $0 for an unknown day P&L misleads traders.

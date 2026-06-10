@@ -75,15 +75,14 @@ export interface SemanticHoldingsTableProps {
   /** Total portfolio market value — used to compute Weight column */
   totalValue: number;
   /**
-   * 14-day close-price series keyed by ticker — drives the SPARK column
-   * (PLAN-0108 W4-T401).
+   * 14-day close-price series — drives the SPARK column (PLAN-0108 W4-T401).
    *
-   * WHY keyed by ticker (not instrument_id): SparklineCellRenderer looks up
-   * data via params.data.h.ticker from inside the AG Grid cell. The series
-   * source (useHoldingsSeries) returns a Record<ticker, number[]> because the
-   * S9 batch endpoint groups bars by ticker symbol. Re-keying by instrument_id
-   * here would add a mapping step with no benefit — the renderer already has
-   * the ticker available and uses it to index into the context map.
+   * KEYING (corrected in the R1 sprint): the map is keyed by INSTRUMENT_ID —
+   * that is the key the S9 GET /v1/market/sparklines response uses and what
+   * useHoldingsSeries passes through. SparklineCellRenderer looks up by
+   * instrument_id first with a ticker fallback for legacy callers. (The
+   * previous doc claimed ticker keying, which is why the column rendered "—"
+   * for every row.)
    *
    * WHY optional: the series loads asynchronously after the holdings table
    * renders. When undefined or empty, SparklineCellRenderer renders "—"
@@ -91,6 +90,14 @@ export interface SemanticHoldingsTableProps {
    * by the `sectors` prop.
    */
   series?: Record<string, number[]>;
+  /**
+   * Asset-class lookup keyed by instrument_id — drives the ASSET column badge
+   * (R1 sprint, completes the W4-T401 "T-4-03" TODO). Derived by
+   * usePortfolioData from the transactions response (S1 enriches transactions
+   * with asset_class via an instruments JOIN). Missing entries render the
+   * AssetTypeCellRenderer "—" placeholder.
+   */
+  assetClasses?: Record<string, string | null>;
 }
 
 // ── Context menu overlay ──────────────────────────────────────────────────────
@@ -109,6 +116,7 @@ export function SemanticHoldingsTable({
   sectors,
   totalValue,
   series,
+  assetClasses,
 }: SemanticHoldingsTableProps) {
   const router = useRouter();
   const searchParams = useSearchParams();
@@ -301,6 +309,15 @@ export function SemanticHoldingsTable({
   // ── Enrich rows ───────────────────────────────────────────────────────────
   let totalPnl = 0;
   let totalPnlCost = 0;
+  // R1 sprint: totals for the pinned bottom row. dayChangeSeen distinguishes
+  // "no quote has a change yet" (render "—") from a genuine $0.00 flat day.
+  let totalDayChange = 0;
+  let dayChangeSeen = false;
+  // Sum of per-row weights — by construction this is 100% whenever totalValue
+  // equals the sum of row values, but we sum the actual rendered weights so
+  // the TOTAL row never contradicts the column above it (e.g. when the KPI
+  // totalValue used a slightly different live-price fallback for one row).
+  let totalWeight = 0;
 
   const enrichedRows: EnrichedHoldingRow[] = holdings.map((h) => {
     const quote = quotes[h.instrument_id];
@@ -320,11 +337,27 @@ export function SemanticHoldingsTable({
 
     totalPnl += pnl;
     totalPnlCost += h.average_cost * h.quantity;
+    // R1 sprint: accumulate the TOTAL row's day change + weight.
+    if (dayChangeValue != null) {
+      totalDayChange += dayChangeValue;
+      dayChangeSeen = true;
+    }
+    totalWeight += weight;
 
     return { h, livePrice, freshness, value, pnl, pnlPct, weight, sector, dayChange, dayChangePct, dayChangeValue };
   });
 
   const totalPnlPct = totalPnlCost > 0 ? (totalPnl / totalPnlCost) * 100 : 0;
+
+  // R1 sprint: portfolio-level day-change percentage for the TOTAL row.
+  // Yesterday's close value = today's value − today's change; guard against a
+  // zero/negative denominator (e.g. a brand-new position whose entire value IS
+  // today's change) — null renders "—" instead of a nonsense percentage.
+  const totalDayBase = totalValue - totalDayChange;
+  const totalDayChangePct =
+    dayChangeSeen && totalDayBase > 0
+      ? (totalDayChange / totalDayBase) * 100
+      : null;
 
   // ── Pinned bottom row (AG Grid totals) ──────────────────────────────────────
   // WHY pinnedBottomRowData instead of a sibling <div>: AG Grid renders pinned
@@ -354,11 +387,14 @@ export function SemanticHoldingsTable({
     value: totalValue,
     pnl: totalPnl,
     pnlPct: totalPnlPct,
-    weight: 0,
+    // R1 sprint: real totals instead of the previous "—" placeholders.
+    // weight sums the per-row weights (≈100% by construction); day change is
+    // the book-level day P&L; the pct is computed off yesterday's close base.
+    weight: totalWeight,
     sector: null,
     dayChange: null,
-    dayChangePct: null,
-    dayChangeValue: null,
+    dayChangePct: totalDayChangePct,
+    dayChangeValue: dayChangeSeen ? totalDayChange : null,
   };
 
   return (
@@ -390,13 +426,10 @@ export function SemanticHoldingsTable({
        * but passing undefined would cause a runtime TypeError in the null-check
        * inside SparklineCellRenderer's context cast.
        *
-       * WHY assetClasses is not yet populated here: the HoldingOverviewMap
-       * that carries asset_class data is available in HoldingsTab but is not
-       * currently threaded into SemanticHoldingsTable props. This is intentional
-       * for W4-T401 scope — T-4-03 (ASSET column data wiring) will add the
-       * assetClasses prop and populate it from holdingOverviews. For now the
-       * ASSET column renders "—" for all rows via the renderer's null-guard,
-       * which is the correct graceful-degradation behaviour.
+       * assetClasses (R1 sprint — closes the T-4-03 TODO): keyed by
+       * instrument_id, derived from the transactions response in
+       * usePortfolioData. Holdings without a matching key fall back to the
+       * renderer's "—" placeholder (graceful degradation preserved).
        */}
       <AgGridBase<EnrichedHoldingRow>
         rowData={enrichedRows}
@@ -413,11 +446,12 @@ export function SemanticHoldingsTable({
         pinnedBottomRowData={[pinnedBottomRow]}
         className="flex-1"
         context={{
-          // Keyed by ticker — matches SparklineCellRenderer's lookup key.
+          // Keyed by instrument_id (S9 sparklines response keying — R1 fix;
+          // SparklineCellRenderer also accepts ticker keys as a fallback).
           holdingsSeries: series ?? {},
-          // Keyed by instrument_id — matches AssetTypeCellRenderer's lookup key.
-          // Populated by T-4-03; empty map here causes renderer to show "—".
-          assetClasses: {} as Record<string, string | null>,
+          // Keyed by instrument_id — matches AssetTypeCellRenderer's lookup
+          // key. Empty map (no transactions yet) → renderer shows "—".
+          assetClasses: assetClasses ?? {},
         }}
       />
 

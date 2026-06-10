@@ -47,7 +47,10 @@ export function WatchlistTable({
     // optical center of the empty area.
     return (
       <div className="flex flex-1 items-center justify-center py-8">
-        <InlineEmptyState message="Search above to add your first symbol." />
+        {/* R1 sprint copy: leads with the value proposition ("track them
+            here") and keeps the actionable hint pointing at the AddSymbolBar
+            rendered directly above this table. */}
+        <InlineEmptyState message="Add tickers to track them here — search above to add your first symbol." />
       </div>
     );
   }

@@ -10,14 +10,18 @@
  * WHO USES IT: ag-holdings-columns.tsx SPARK column cellRenderer.
  *
  * DATA SOURCE: holdingsSeries prop passed via AG Grid context
- * (params.context.holdingsSeries — keyed by ticker). When no context is
- * provided (e.g. in tests or before the series loads), renders "—" placeholder.
+ * (params.context.holdingsSeries). When no context is provided (e.g. in tests
+ * or before the series loads), renders "—" placeholder.
  *
- * WHY KEYED BY TICKER (not instrument_id): useHoldingsSeries returns
- * Record<ticker, number[]> because the S9 batch OHLCV endpoint groups bars by
- * ticker symbol. Re-keying by instrument_id inside SemanticHoldingsTable would
- * add a mapping step with no benefit — the renderer already has the ticker
- * available via params.data.h.ticker and uses it to index the context map.
+ * KEYING (R1 sprint fix — every SPARK cell rendered "—" before this):
+ * The S9 endpoint GET /v1/market/sparklines returns
+ * `{"data": {"<instrument_id>": [closes…]}}` — keyed by INSTRUMENT_ID (see
+ * services/api-gateway routes/market.py `get_market_sparklines`), and
+ * useHoldingsSeries passes that map through untouched. The original renderer
+ * looked the map up by TICKER, so the lookup always missed and the column was
+ * permanently blank. We now look up by instrument_id FIRST and fall back to
+ * ticker so any caller that re-keyed the map by ticker (older tests, future
+ * batch endpoints) keeps working.
  *
  * DESIGN REFERENCE: PRD-0089 W2 §4.11, V7; PLAN-0108 W4-T402
  */
@@ -29,8 +33,10 @@ import type { EnrichedHoldingRow } from "@/components/portfolio/holdings-columns
 
 interface SparklineCellContext {
   /**
-   * Keyed by ticker symbol; values are close-price series (typically 14 bars
-   * of 1D OHLCV). Provided by SemanticHoldingsTable via AG Grid context.
+   * Close-price series (typically 14 bars of 1D OHLCV). Keyed by
+   * instrument_id (the S9 sparklines response key) with a legacy ticker-key
+   * fallback — see the file-header KEYING note. Provided by
+   * SemanticHoldingsTable via AG Grid context.
    */
   holdingsSeries: Record<string, number[]>;
 }
@@ -127,20 +133,25 @@ export function SparklineCellRenderer(params: ICellRendererParams<EnrichedHoldin
   // null collapses the cell to empty, which is cleaner than a dash here.
   if (params.node?.rowPinned === "bottom") return null;
 
-  // WHY access ticker from params.data.h.ticker rather than params.value:
-  // the SPARK colDef field points to the whole row (not a scalar field), so
-  // params.value is the full EnrichedHoldingRow. We need the ticker string to
-  // look up the series in the context map.
+  // WHY read from params.data.h rather than params.value: the SPARK colDef
+  // has no valueGetter (the whole row flows through), so we pull the lookup
+  // keys straight off the row's Holding.
+  const instrumentId = params.data?.h.instrument_id;
   const ticker = params.data?.h.ticker;
 
   // Cast context to our typed shape; guard against undefined (e.g. in tests
   // that don't inject context, or before SemanticHoldingsTable mounts).
   const context = params.context as SparklineCellContext | undefined;
+  const seriesMap = context?.holdingsSeries;
 
-  // Resolve the series for this ticker from the AG Grid context map.
+  // Resolve the series: instrument_id first (the S9 response key — R1 fix),
+  // then ticker (legacy keying kept for backward compatibility).
   // WHY fallback to []: an empty array triggers the "—" placeholder below;
   // this is safer than a null-check pyramid and matches the lazy-load contract.
-  const data: number[] = ticker ? (context?.holdingsSeries?.[ticker] ?? []) : [];
+  const data: number[] =
+    (instrumentId ? seriesMap?.[instrumentId] : undefined) ??
+    (ticker ? seriesMap?.[ticker] : undefined) ??
+    [];
 
   // ── Fallback: "—" when there is no usable series ──────────────────────────
   if (data.length < 2) {
@@ -161,15 +172,22 @@ export function SparklineCellRenderer(params: ICellRendererParams<EnrichedHoldin
   const first = data[0];
   const last = data[data.length - 1];
 
-  // WHY CSS custom properties (var(--color-positive/negative)): the design
-  // system uses Tailwind CSS variables for the bullish/bearish palette tokens.
-  // Hardcoding hex values would break when the theme toggles or the palette
-  // is updated. Using var() means the SVG stroke automatically respects the
-  // user's active theme without any JS theme-switching logic here.
+  // WHY hsl(var(--chart-*)) (R1 sprint fix): this codebase is Tailwind 3.4 —
+  // design tokens are HSL TRIPLETS (e.g. `--chart-positive: 150 100% 41%`)
+  // that must be wrapped in hsl(). The previous `var(--color-positive)` token
+  // does not exist anywhere in globals.css, so the SVG stroke resolved to an
+  // invalid value and the line never painted. `--chart-positive/negative/
+  // neutral` are the chart-specific sentiment tokens introduced by W0 FR-10.1
+  // exactly for sparklines — they track --positive/--negative but can diverge
+  // for chart fills without touching text colours.
+  // WHY three-way (not two-way): per DESIGN_SYSTEM.md §sparklines a flat
+  // window is NOT a downtrend; painting it red mis-signals direction.
   const strokeColor =
     last > first
-      ? "var(--color-positive)"   // uptrend → green (bull)
-      : "var(--color-negative)";  // flat or downtrend → red (bear)
+      ? "hsl(var(--chart-positive))"   // uptrend → green (bull)
+      : last < first
+        ? "hsl(var(--chart-negative))" // downtrend → red (bear)
+        : "hsl(var(--chart-neutral))"; // flat → neutral grey
 
   // ── SVG path ─────────────────────────────────────────────────────────────
 

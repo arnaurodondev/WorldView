@@ -46,6 +46,11 @@ import { useState, useTransition } from "react";
 // unknown URL value falls back to the default instead of crashing.
 import { useQueryState, parseAsStringLiteral } from "nuqs";
 import dynamic from "next/dynamic";
+// R1 sprint: Link is used by the Analytics tab "FULL VIEW" affordance that
+// wires the standalone /portfolio/analytics route into the portfolio nav.
+import Link from "next/link";
+// R1 sprint: Plus icon for the prominent empty-portfolio CTA.
+import { Plus } from "lucide-react";
 
 import { useAuth } from "@/hooks/useAuth";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
@@ -197,6 +202,9 @@ export default function PortfolioPage() {
     holdingsQuotes,
     holdingOverviews,
     transactionsResp,
+    setTxOffset,
+    exposure,
+    assetClassByInstrument,
     watchlists,
     watchlistQuotes,
     performanceData,
@@ -261,6 +269,62 @@ export default function PortfolioPage() {
     );
   }
 
+  // ── Empty-portfolio state (R1 sprint) ──────────────────────────────────
+  // WHY a dedicated branch: with zero portfolios the previous code fell
+  // through to the full tab layout — holdings showed "Connect a brokerage…"
+  // which presumes a portfolio already exists, and the page read as broken.
+  // A user with no portfolios needs exactly one action: create one. We show
+  // a named state with a prominent CTA and mount only the CreatePortfolioDialog
+  // (the other dialogs require an active portfolio).
+  // WHY check `sortedPortfolios` resolved (not just length): undefined means
+  // the query hasn't settled — that case is handled by the loading skeleton
+  // above, never by this branch.
+  if (sortedPortfolios && sortedPortfolios.length === 0) {
+    return (
+      <div
+        className="flex h-full min-h-0 flex-col items-center justify-center gap-3 bg-background p-3"
+        data-testid="empty-portfolio-state"
+      >
+        {/* Named heading — terminal-style ALL CAPS label + readable title. */}
+        <span className="font-mono text-[10px] uppercase tracking-[0.08em] text-muted-foreground">
+          Portfolio
+        </span>
+        <h2 className="text-[14px] font-medium text-foreground">
+          Select or create a portfolio
+        </h2>
+        <p className="max-w-md text-center text-[11px] text-muted-foreground">
+          Your portfolio is the P&amp;L centre of Worldview — holdings, live
+          quotes, transactions and analytics all hang off it. Create your
+          first portfolio to start tracking positions.
+        </p>
+        {/* Prominent CTA — primary-bordered, larger than the header buttons
+            because it is the ONLY meaningful action on this screen. */}
+        <button
+          aria-label="Create your first portfolio"
+          onClick={() => setCreatePortfolioOpen(true)}
+          className="mt-1 flex h-8 items-center gap-1.5 rounded-[2px] border border-primary bg-primary/10 px-4 font-mono text-[11px] uppercase tracking-[0.06em] text-primary transition-colors hover:bg-primary/20"
+        >
+          <Plus className="h-3.5 w-3.5" strokeWidth={1.5} />
+          Create portfolio
+        </button>
+
+        {/* The create dialog must be mounted inside this early-return branch —
+            the main render path below is never reached while the portfolio
+            list is empty. onSuccess routes through the same hook callback so
+            the new portfolio is auto-selected once the list refetches. */}
+        <CreatePortfolioDialog
+          open={createPortfolioOpen}
+          onOpenChange={setCreatePortfolioOpen}
+          onSuccess={(p) => {
+            setCreatePortfolioOpen(false);
+            handlePortfolioCreated(p);
+          }}
+          accessToken={accessToken}
+        />
+      </div>
+    );
+  }
+
   // ── Render ─────────────────────────────────────────────────────────────
   // WHY h-full flex-col: fills the shell's main content area.
   // WHY bg-background (not bg-card): the page is the lowest level of the
@@ -319,6 +383,14 @@ export default function PortfolioPage() {
               realizedPnlApprox={!useFifo}
               realizedPnlLongTerm={useFifo ? fifo!.realized_long_term : null}
               realizedPnlShortTerm={useFifo ? fifo!.realized_short_term : null}
+              // R1 sprint (BP-517-class fix): cash/buyingPower were never
+              // passed here, so the CASH and BUYING PWR tiles permanently
+              // rendered "—". The exposure snapshot now flows from
+              // usePortfolioData (GET /v1/portfolios/{id}/exposure).
+              // BUYING PWR = cash for v1 cash accounts; margin is v2 (see
+              // the PortfolioKPIStrip prop docs).
+              cash={exposure?.cash ?? null}
+              buyingPower={exposure?.cash ?? null}
             />
           );
         })()}
@@ -387,6 +459,10 @@ export default function PortfolioPage() {
             enrichedHoldings={enrichedHoldings}
             holdingsQuotes={holdingsQuotes}
             holdingOverviews={holdingOverviews}
+            // R1 sprint: asset-class lookup (derived from transactions in the
+            // hook) feeds the holdings table ASSET column, which previously
+            // rendered "—" for every row because the context map was empty.
+            assetClasses={assetClassByInstrument}
             kpi={kpi}
             bySector={bySector}
             byType={byType}
@@ -405,6 +481,15 @@ export default function PortfolioPage() {
             transactionsResp={transactionsResp}
             holdingOverviews={holdingOverviews}
             onConnect={() => setConnectModalOpen(true)}
+            // R1 sprint: empty-state CTA. Root portfolios are read-only on S1
+            // (CANNOT_RECORD_TRANSACTION_ON_ROOT), so we only offer the
+            // "add first transaction" affordance on concrete portfolios.
+            onAddPosition={
+              activeIsRoot ? undefined : () => setAddPositionOpen(true)
+            }
+            // R1 sprint: server-side pager. Offset changes flow back into the
+            // usePortfolioData transactions query (key includes the offset).
+            onTxOffsetChange={setTxOffset}
           />
         </TabsContent>
 
@@ -418,7 +503,21 @@ export default function PortfolioPage() {
               the queries to fire enabled=false but the component still mounts
               its full DOM tree, including chart containers, which wastes paint. */}
           {activePortfolioId ? (
-            <AnalyticsTab portfolioId={activePortfolioId} />
+            <>
+              {/* R1 sprint: wire the standalone /portfolio/analytics route
+                  into the portfolio nav. The route existed but was reachable
+                  only via the "A" hotkey — this visible affordance makes the
+                  full-height analytics view discoverable with a mouse. */}
+              <div className="flex h-[24px] shrink-0 items-center justify-end border-b border-border/60 bg-card px-3">
+                <Link
+                  href="/portfolio/analytics"
+                  className="font-mono text-[10px] uppercase tracking-[0.06em] text-muted-foreground transition-colors hover:text-primary"
+                >
+                  Full view ↗
+                </Link>
+              </div>
+              <AnalyticsTab portfolioId={activePortfolioId} />
+            </>
           ) : (
             <div className="p-3 text-[11px] text-muted-foreground font-mono">
               Select a portfolio to view analytics.

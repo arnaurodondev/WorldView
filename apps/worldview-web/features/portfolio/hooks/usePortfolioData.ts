@@ -47,6 +47,14 @@ import {
   useRealizedPnL,
   defaultRealizedPnLRange,
 } from "@/hooks/useRealizedPnL";
+// PLAN sprint R1 (2026-06-10): the KPI strip's CASH / BUYING PWR tiles need the
+// exposure endpoint. useExposure is the shared hook already used by
+// ExposureBreakdown / ExposureCurrencyStrip — reusing it (same queryKey
+// ["exposure", id]) means TanStack deduplicates: one network call feeds the KPI
+// strip AND the exposure strips. This closes the BP-517-class regression where
+// cash/buyingPower props were never passed to PortfolioKPIStrip and the tiles
+// permanently rendered "—".
+import { useExposure } from "@/hooks/useExposure";
 import type {
   Portfolio,
   Holding,
@@ -54,6 +62,7 @@ import type {
   HoldingsResponse,
   TransactionsResponse,
   BatchQuoteResponse,
+  ExposureResponse,
 } from "@/types/api";
 
 import {
@@ -114,6 +123,40 @@ export interface UsePortfolioDataResult {
 
   // ── Transactions ──────────────────────────────────────────────────────
   transactionsResp: TransactionsResponse | undefined;
+  /**
+   * Server-side pagination offset for the transactions query (R1 sprint).
+   * WHY exposed: the Transactions tab renders a Prev/Next pager when
+   * `transactionsResp.total > limit`. The offset lives here (not in the tab)
+   * so BOTH /portfolio?tab=transactions and /portfolio/transactions drive the
+   * same cache entries and the offset resets when the portfolio changes.
+   */
+  txOffset: number;
+  /** Move to another transactions page. Pass `offset + limit` / `offset - limit`. */
+  setTxOffset: (offset: number) => void;
+  /** Page size used by the transactions query (constant — 100 rows/page). */
+  txPageSize: number;
+
+  // ── Exposure (cash / buying power) ────────────────────────────────────
+  /**
+   * Exposure snapshot from GET /v1/portfolios/{id}/exposure.
+   * `cash` feeds the CASH tile; BUYING PWR = cash for v1 cash accounts
+   * (margin is v2 — see PortfolioKPIStrip prop docs).
+   * undefined while loading / on error → tiles render "—" (never a fake $0).
+   */
+  exposure: ExposureResponse | undefined;
+
+  /**
+   * Best-effort asset-class lookup keyed by instrument_id, derived from the
+   * transactions response (S1 enriches each transaction with asset_class via
+   * an instruments JOIN — PLAN-0053 T-D-4-02). Drives the holdings table
+   * ASSET column. Holdings with no transaction on the current page resolve
+   * to undefined → the AssetTypeCellRenderer renders its "—" placeholder.
+   *
+   * WHY derived client-side (not fetched): neither the holdings payload nor
+   * the company-overview batch carries asset_class today (backend gap), but
+   * transactions already do — zero extra round-trips for real data.
+   */
+  assetClassByInstrument: Record<string, string | null>;
 
   // ── Watchlists ─────────────────────────────────────────────────────────
   watchlists: Watchlist[] | undefined;
@@ -153,6 +196,14 @@ export interface UsePortfolioDataResult {
 
 // ── Implementation ────────────────────────────────────────────────────────────
 
+/**
+ * TX_PAGE_SIZE — server-side page size for the transactions query.
+ * WHY 100 (the legacy `limit: 100`): preserves the previous request shape so
+ * the S1 query plan / Valkey cache behaviour is unchanged; the R1 sprint only
+ * adds the `offset` dimension on top.
+ */
+const TX_PAGE_SIZE = 100;
+
 export function usePortfolioData(
   args: UsePortfolioDataArgs,
 ): UsePortfolioDataResult {
@@ -162,9 +213,24 @@ export function usePortfolioData(
   // WHY selectedPortfolioId in state (not URL): switching portfolios is
   // ephemeral. The URL always shows /portfolio regardless of which portfolio
   // is active.
-  const [selectedPortfolioId, setSelectedPortfolioId] = useState<string | null>(
-    null,
-  );
+  const [selectedPortfolioId, setSelectedPortfolioIdRaw] = useState<
+    string | null
+  >(null);
+
+  // ── Transactions pagination state (R1 sprint) ─────────────────────────
+  // WHY useState (not URL): the transactions page index is ephemeral browsing
+  // state — sharing a deep link to "page 3 of my transactions" has no value
+  // and would go stale as new fills arrive (newest-first ordering shifts rows
+  // across pages).
+  const [txOffset, setTxOffset] = useState(0);
+
+  // WHY wrap the portfolio setter: switching portfolios must reset the
+  // transactions pager to page 1 — portfolio B may have fewer transactions
+  // than the current offset, which would render a confusing empty page.
+  const setSelectedPortfolioId = useCallback((id: string | null) => {
+    setTxOffset(0);
+    setSelectedPortfolioIdRaw(id);
+  }, []);
 
   // ── Query 1: portfolio list ────────────────────────────────────────────
   // WHY qk.portfolios.all: the root ["portfolios"] key; invalidating it
@@ -238,14 +304,28 @@ export function usePortfolioData(
   // WHY transactionsByPortfolio: uses the flat ["transactions", id] shape to
   // match the legacy cache entry — different from qk.portfolios.transactions()
   // which nests under the detail path.
+  // R1 sprint: txOffset appended to the key so each page gets its own cache
+  // entry. Invalidations that target the ["transactions", id] PREFIX (e.g.
+  // handlePositionAdded below) still match every page — TanStack invalidation
+  // is prefix-based.
   const { data: transactionsResp, isLoading: txLoading } = useQuery({
-    queryKey: qk.portfolios.transactionsByPortfolio(activePortfolioId ?? ""),
+    queryKey: [
+      ...qk.portfolios.transactionsByPortfolio(activePortfolioId ?? ""),
+      txOffset,
+    ],
     queryFn: () =>
       createGateway(accessToken).getTransactions(activePortfolioId!, {
-        limit: 100,
+        limit: TX_PAGE_SIZE,
+        offset: txOffset,
       }),
     enabled: !!accessToken && !!activePortfolioId,
     staleTime: 30_000,
+    // WHY placeholderData keeps the previous page: without it, clicking
+    // "Next" unmounts the table into the 6-row skeleton for the duration of
+    // the fetch — a jarring flash for what is usually a <100ms cached hop.
+    // Keeping the old rows visible until the new page lands matches the
+    // behaviour of every terminal blotter pager.
+    placeholderData: (prev) => prev,
   });
 
   // ── Query 5: watchlists ────────────────────────────────────────────────
@@ -276,6 +356,14 @@ export function usePortfolioData(
     refetchInterval: 30_000,
     staleTime: 0,
   });
+
+  // ── Query 6b: exposure — cash / buying power for the KPI strip ─────────
+  // WHY useExposure (not an inline useQuery): the shared hook owns the
+  // ["exposure", id] key that ExposureBreakdown and ExposureCurrencyStrip
+  // already subscribe to — one network round-trip feeds all three surfaces.
+  // The hook internally disables itself when portfolioId/token are null, so
+  // no extra `enabled` plumbing is needed here.
+  const exposureQuery = useExposure(activePortfolioId);
 
   // ── Query 7: realized P&L FIFO (PLAN-0051 T-A-1-05) ───────────────────
   // WHY default range = current calendar year: matches 1099-B statements;
@@ -404,6 +492,20 @@ export function usePortfolioData(
     [holdings, holdingOverviews],
   );
 
+  // ── Asset-class lookup for the holdings ASSET column (R1 sprint) ──────
+  // First-write-wins per instrument: every transaction for the same
+  // instrument carries the same asset_class (it's an instruments-table JOIN
+  // value, not per-trade data), so any row is authoritative.
+  const assetClassByInstrument = useMemo(() => {
+    const map: Record<string, string | null> = {};
+    for (const tx of transactionsResp?.transactions ?? []) {
+      if (tx.asset_class != null && map[tx.instrument_id] == null) {
+        map[tx.instrument_id] = tx.asset_class;
+      }
+    }
+    return map;
+  }, [transactionsResp]);
+
   // ── KPI / allocation / scope-hint (pure functions, unit-tested) ───────
   const kpi = useMemo(
     () =>
@@ -476,7 +578,10 @@ export function usePortfolioData(
       void queryClient.invalidateQueries({ queryKey: qk.portfolios.all });
       setSelectedPortfolioId(newPortfolio.portfolio_id);
     },
-    [queryClient],
+    // setSelectedPortfolioId is itself a stable useCallback([]) wrapper (R1
+    // sprint — it resets the tx pager), so including it satisfies
+    // exhaustive-deps without ever re-creating this callback.
+    [queryClient, setSelectedPortfolioId],
   );
 
   /**
@@ -577,6 +682,11 @@ export function usePortfolioData(
     holdingsQuotes,
     holdingOverviews,
     transactionsResp,
+    txOffset,
+    setTxOffset,
+    txPageSize: TX_PAGE_SIZE,
+    exposure: exposureQuery.data,
+    assetClassByInstrument,
     watchlists,
     watchlistQuotes,
     performanceData,

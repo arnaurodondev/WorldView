@@ -1,0 +1,158 @@
+/**
+ * components/portfolio/__tests__/ag-holdings-columns-pinned.test.tsx
+ *
+ * WHY THIS EXISTS (R1 sprint): the pinned TOTAL row previously rendered "—"
+ * for DAY Δ$, DAY Δ% and WEIGHT. SemanticHoldingsTable now feeds real totals
+ * into the pinned row (book-level day change, day %, weight sum) and the
+ * renderers display them. These tests pin that behaviour at the renderer
+ * level so a future "restore the em-dash" refactor cannot silently regress
+ * the totals line.
+ *
+ * WHY render the cellRenderer functions directly (not a mounted AG Grid):
+ * AG Grid needs ResizeObserver + real layout — unavailable in jsdom. The
+ * renderers are plain function components reachable via
+ * holdingsAgColumns[].cellRenderer, so we drive them with hand-built
+ * ICellRendererParams stubs exactly like SparklineCellRenderer.test.tsx does.
+ */
+
+import { describe, it, expect } from "vitest";
+import { render } from "@testing-library/react";
+import { createElement, type ComponentType } from "react";
+import type { ICellRendererParams } from "ag-grid-community";
+import { holdingsAgColumns } from "../ag-holdings-columns";
+import type { EnrichedHoldingRow } from "../holdings-columns";
+
+// ── Helpers ───────────────────────────────────────────────────────────────────
+
+/**
+ * rendererFor — pulls the cellRenderer component off a column definition.
+ * Throws loudly if the column or renderer is missing so a column rename
+ * fails the suite with a readable message instead of a cryptic null render.
+ */
+function rendererFor(colId: string): ComponentType<ICellRendererParams<EnrichedHoldingRow>> {
+  const col = holdingsAgColumns.find((c) => c.colId === colId);
+  if (!col?.cellRenderer) throw new Error(`No cellRenderer for colId="${colId}"`);
+  return col.cellRenderer as ComponentType<ICellRendererParams<EnrichedHoldingRow>>;
+}
+
+/**
+ * buildPinnedParams — minimal params stub for a pinned-bottom (TOTAL) row.
+ * Mirrors the synthetic pinnedBottomRow object SemanticHoldingsTable builds:
+ * a zero-value placeholder Holding plus the aggregate fields under test.
+ */
+function buildPinnedParams(
+  rowOverrides: Partial<EnrichedHoldingRow> = {},
+): ICellRendererParams<EnrichedHoldingRow> {
+  const row: EnrichedHoldingRow = {
+    h: {
+      holding_id: "__totals__",
+      portfolio_id: "",
+      instrument_id: "",
+      entity_id: "",
+      ticker: "",
+      name: "",
+      quantity: 0,
+      average_cost: 0,
+    } as EnrichedHoldingRow["h"],
+    livePrice: 0,
+    freshness: undefined,
+    value: 10_000,
+    pnl: 0,
+    pnlPct: 0,
+    weight: 0,
+    sector: null,
+    dayChange: null,
+    dayChangePct: null,
+    dayChangeValue: null,
+    ...rowOverrides,
+  };
+  return {
+    data: row,
+    node: { rowPinned: "bottom" },
+  } as unknown as ICellRendererParams<EnrichedHoldingRow>;
+}
+
+// ── DAY Δ$ totals ─────────────────────────────────────────────────────────────
+
+describe("DAY Δ$ pinned TOTAL cell (R1 sprint)", () => {
+  it("renders the signed book-level day change with positive colour", () => {
+    const DayChange = rendererFor("dayChange");
+    const { container } = render(
+      createElement(DayChange, buildPinnedParams({ dayChangeValue: 123.45 })),
+    );
+    const span = container.querySelector("span");
+    // fmtPnl prefixes "+" on gains — the totals line must read direction
+    // without relying on colour alone.
+    expect(span?.textContent).toBe("+$123.45");
+    expect(span?.className).toContain("text-positive");
+    // Totals line renders heavier than data rows (matches UNREAL $ total).
+    expect(span?.className).toContain("font-semibold");
+  });
+
+  it("renders a negative day change with negative colour", () => {
+    const DayChange = rendererFor("dayChange");
+    const { container } = render(
+      createElement(DayChange, buildPinnedParams({ dayChangeValue: -42 })),
+    );
+    const span = container.querySelector("span");
+    expect(span?.textContent).toBe("-$42.00");
+    expect(span?.className).toContain("text-negative");
+  });
+
+  it("renders an em-dash when no quotes have arrived (dayChangeValue null)", () => {
+    // WHY: null means "unknown", not $0 — the totals row must not fabricate
+    // a flat day while the batch-quote query is still in flight.
+    const DayChange = rendererFor("dayChange");
+    const { container } = render(createElement(DayChange, buildPinnedParams()));
+    expect(container.textContent).toBe("—");
+  });
+});
+
+// ── DAY Δ% totals ─────────────────────────────────────────────────────────────
+
+describe("DAY Δ% pinned TOTAL cell (R1 sprint)", () => {
+  it("renders the signed portfolio-level day percentage", () => {
+    const DayChangePct = rendererFor("dayChangePct");
+    const { container } = render(
+      createElement(DayChangePct, buildPinnedParams({ dayChangePct: 1.25 })),
+    );
+    const span = container.querySelector("span");
+    // dayChangePct is stored as a percentage value (1.25 = +1.25%); the
+    // renderer divides by 100 before formatPercent re-scales it.
+    expect(span?.textContent).toBe("+1.25%");
+    expect(span?.className).toContain("text-positive");
+    expect(span?.className).toContain("font-semibold");
+  });
+
+  it("renders an em-dash when the percentage is unknown", () => {
+    const DayChangePct = rendererFor("dayChangePct");
+    const { container } = render(createElement(DayChangePct, buildPinnedParams()));
+    expect(container.textContent).toBe("—");
+  });
+});
+
+// ── WEIGHT totals ─────────────────────────────────────────────────────────────
+
+describe("WEIGHT pinned TOTAL cell (R1 sprint)", () => {
+  it("renders the weight-column sum (sanity-check that weights ≈ 100%)", () => {
+    const Weight = rendererFor("weight");
+    const { container } = render(
+      createElement(Weight, buildPinnedParams({ weight: 100 })),
+    );
+    const span = container.querySelector("span");
+    expect(span?.textContent).toBe("100.00%");
+    expect(span?.className).toContain("font-semibold");
+    // No leading "+": weight is an allocation, not a directional gain.
+    expect(span?.textContent).not.toContain("+");
+  });
+
+  it("renders an em-dash for an empty book (weight 0)", () => {
+    // WHY: a zero total weight means no priced positions — showing "0.00%"
+    // would imply the column was computed when it genuinely has no data.
+    const Weight = rendererFor("weight");
+    const { container } = render(
+      createElement(Weight, buildPinnedParams({ weight: 0 })),
+    );
+    expect(container.textContent).toBe("—");
+  });
+});

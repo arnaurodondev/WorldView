@@ -204,6 +204,20 @@ vi.mock("@/lib/gateway", () => ({
       },
     ]),
 
+    // Query 6b (R1 sprint): exposure — feeds the CASH / BUYING PWR KPI tiles.
+    // Decimal fields arrive pre-parsed because lib/api/portfolios.ts
+    // transforms at the gateway boundary; the mock returns the post-transform
+    // ExposureResponse shape (numbers).
+    getExposure: vi.fn().mockResolvedValue({
+      invested: 95_000,
+      cash: 12_345.67,
+      gross_exposure_pct: 0.95,
+      net_exposure_pct: 0.95,
+      leverage: 1,
+      prices_stale: false,
+      prices_as_of: null,
+    }),
+
     // Auth plumbing (required by AuthContext refresh logic)
     refreshToken: vi.fn().mockResolvedValue({
       access_token: "test-token",
@@ -302,6 +316,20 @@ describe("PortfolioPage — Holdings tab", () => {
       // The PnlSummaryRow component renders this as a KPI tile header.
       expect(screen.getByText("Total Value")).toBeInTheDocument();
     });
+  });
+
+  it("renders Cash and Buying Pwr KPI tiles from the exposure endpoint (R1 sprint)", async () => {
+    // WHY: BP-517-class regression guard — the cash/buyingPower props were
+    // never wired from the page to PortfolioKPIStrip, so both tiles rendered
+    // a permanent "—" even though GET /exposure returned real numbers. This
+    // test pins the full data path: usePortfolioData → exposure → page props.
+    render(<PortfolioPage />, { wrapper });
+
+    await waitFor(() => {
+      expect(screen.getByTestId("kpi-cash")).toHaveTextContent("12,345.67");
+    });
+    // Buying power = cash for v1 cash accounts (margin is v2).
+    expect(screen.getByTestId("kpi-buying-pwr")).toHaveTextContent("12,345.67");
   });
 });
 
