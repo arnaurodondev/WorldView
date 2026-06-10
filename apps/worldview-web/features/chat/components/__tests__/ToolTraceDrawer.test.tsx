@@ -75,6 +75,34 @@ describe("ToolTraceDrawer", () => {
     expect(onClose).toHaveBeenCalledTimes(1);
   });
 
+  // ── Round 4 a11y — dialog focus management (WCAG 2.4.3) ────────────────────
+  // The drawer opens via a keyboard chord (⌘D) — focus must move INTO the
+  // dialog so the keyboard user who just opened it can operate it, and must
+  // RETURN to wherever they were when it closes.
+
+  it("moves focus into the drawer on open and returns it on close", () => {
+    // Simulate the real opening context: the user's focus is on a control
+    // (the chat composer / a chip) when they hit ⌘D.
+    const trigger = document.createElement("button");
+    trigger.textContent = "outside control";
+    document.body.appendChild(trigger);
+    trigger.focus();
+    expect(document.activeElement).toBe(trigger);
+
+    const { unmount } = render(<ToolTraceDrawer trace={TRACE} onClose={() => {}} />);
+
+    // Open: focus lands on the labelled dialog container (tabIndex=-1 —
+    // programmatic focus only, not a Tab stop).
+    expect(document.activeElement).toBe(screen.getByTestId("tool-trace-drawer"));
+
+    // Close (chord toggle / X — both unmount the drawer): focus returns to
+    // the original control so the keyboard flow is unbroken.
+    unmount();
+    expect(document.activeElement).toBe(trigger);
+
+    trigger.remove();
+  });
+
   it("auto-expands errored calls and keeps healthy calls collapsed", () => {
     const trace: ToolTraceEntry[] = [
       { ...TRACE[0], tool: "ok_tool", status: "ok" },

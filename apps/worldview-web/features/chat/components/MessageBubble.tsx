@@ -58,6 +58,13 @@ import { ToolCallIndicator, type ToolCallState } from "./ToolCallIndicator";
 // tells the user what the AGENT is doing right now; the indicators tell them
 // what TOOLS have run. Both can be visible simultaneously.
 import { AgentIterationProgress } from "./AgentIterationProgress";
+// Round 4 Hardening (perf 4a): ThrottledMarkdown caps the markdown re-parse
+// rate at ~30fps for the IN-FLIGHT stream only. react-markdown re-parses the
+// full accumulated text on every prop change — at SSE token cadence
+// (20-50ms) that meant a complete parse per token, with cost growing as the
+// answer lengthens. Settled messages (MessageBubble below) keep the direct
+// LazyMarkdownContent — they parse once, so throttling them is pure loss.
+import { ThrottledMarkdown } from "./ThrottledMarkdown";
 import type { AgentIterationEvent } from "@/features/chat/lib/types";
 
 /**
@@ -276,7 +283,10 @@ export function StreamingBubble({
             ) : null
           ) : (
             <>
-              <LazyMarkdownContent size="compact">{streaming.text}</LazyMarkdownContent>
+              {/* Round 4 perf: ThrottledMarkdown (not LazyMarkdownContent
+                  directly) — coalesces per-token re-parses into ~33ms frames.
+                  See ThrottledMarkdown.tsx for the full hot-spot analysis. */}
+              <ThrottledMarkdown>{streaming.text}</ThrottledMarkdown>
               {streaming.active && (
                 // WHY no animate-pulse: terminal mandate — static cursor still reads as "streaming".
                 <span className="ml-0.5 inline-block h-4 w-0.5 bg-primary align-middle" />

@@ -527,3 +527,56 @@ describe("ChatContextRail — loading skeletons (Round 3)", () => {
     expect(screen.getByTestId("entity-card-skeleton")).toBeInTheDocument();
   });
 });
+
+// ── Round 4 Hardening — entity-card lookups are FAIL-SILENT (1d) ─────────────
+//
+// The rail's cards are ambient background context, not user-requested data.
+// When their lookups fail (S9 down, search 500, overview 404) the card must
+// simply be ABSENT — no error banner, no destructive chrome, nothing that
+// makes a background fetch failure look like a conversation problem.
+
+describe("ChatContextRail — failed card lookups stay silent (Round 4)", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("a failed primary entity-card query renders NO card and NO error UI", () => {
+    // TanStack error state: data undefined, isError true. The rail reads only
+    // data/isLoading — the error must not leak into the DOM.
+    vi.mocked(useQuery).mockReturnValue({
+      data: undefined,
+      isLoading: false,
+      isError: true,
+      error: new Error("overview fetch failed"),
+    } as unknown as ReturnType<typeof useQuery>);
+
+    render(<ChatContextRail {...DEFAULT_PROPS} entityId="entity-uuid-1" />);
+
+    // Card absent…
+    expect(screen.queryByTestId("entity-card-skeleton")).not.toBeInTheDocument();
+    // …and no error copy / alert role anywhere in the rail.
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    expect(screen.queryByText(/error|failed|retry/i)).not.toBeInTheDocument();
+    // The rest of the rail keeps rendering normally (section labels intact).
+    expect(screen.getByText("Recent Citations")).toBeInTheDocument();
+  });
+
+  it("a failed mini-card lookup renders NO card and NO error UI (chip survives)", () => {
+    vi.mocked(useQuery).mockReturnValue({
+      data: undefined,
+      isLoading: false,
+      isError: true,
+      error: new Error("search 500"),
+    } as unknown as ReturnType<typeof useQuery>);
+
+    const messages = [makeMessage({ content: "Look at $NVDA", citations: [] })];
+    render(<ChatContextRail {...DEFAULT_PROPS} messages={messages} />);
+
+    // Detection still surfaces the quick-action chip…
+    expect(screen.getByText("$NVDA")).toBeInTheDocument();
+    // …but the failed lookup contributes no card and no error chrome.
+    expect(screen.queryByTestId("entity-mini-card")).not.toBeInTheDocument();
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    expect(screen.queryByText(/error|failed|retry/i)).not.toBeInTheDocument();
+  });
+});

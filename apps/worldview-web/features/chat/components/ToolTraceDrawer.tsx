@@ -33,6 +33,7 @@
  * or thread switch).
  */
 
+import { useEffect, useRef } from "react";
 import { X } from "lucide-react";
 
 import type { ToolTraceEntry } from "@/features/chat/lib/types";
@@ -86,6 +87,39 @@ function statusClass(status: ToolTraceEntry["status"]): string {
 // ── Component ─────────────────────────────────────────────────────────────────
 
 export function ToolTraceDrawer({ trace, onClose }: ToolTraceDrawerProps) {
+  // ── Round 4 a11y: focus management ────────────────────────────────────────
+  // The drawer is toggled by a keyboard chord (⌘D) — the user's focus is
+  // typically in the composer or on a chip when it opens. role="dialog"
+  // promises assistive tech that focus moves INTO the dialog on open and
+  // RETURNS to the trigger context on close; a dialog you can't reach with
+  // the keyboard you just used to open it is a WCAG 2.4.3 failure.
+  const drawerRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    // Remember where focus was so we can give it back. document.activeElement
+    // is captured at MOUNT (before we steal focus below).
+    const previouslyFocused =
+      document.activeElement instanceof HTMLElement
+        ? document.activeElement
+        : null;
+
+    // Focus the drawer container itself (tabIndex={-1} makes it focusable
+    // without joining the tab order). WHY the container, not the close
+    // button: focusing the labelled dialog announces "Tool call trace,
+    // dialog" — the context first; focusing the X button would announce
+    // "Close tool trace, button" with no indication of WHAT opened.
+    drawerRef.current?.focus();
+
+    return () => {
+      // On unmount (chord toggle, X button, debug-gate removal) return focus
+      // to wherever the user was. The element may itself have unmounted in
+      // the meantime (e.g. thread switch) — isConnected guards the no-op.
+      if (previouslyFocused && previouslyFocused.isConnected) {
+        previouslyFocused.focus();
+      }
+    };
+  }, []);
+
   return (
     <div
       // data-testid is the contract with e2e/chat-polish.spec.ts ("?debug=1
@@ -93,9 +127,17 @@ export function ToolTraceDrawer({ trace, onClose }: ToolTraceDrawerProps) {
       data-testid="tool-trace-drawer"
       role="dialog"
       aria-label="Tool call trace"
+      ref={drawerRef}
+      // tabIndex={-1}: programmatically focusable (focus lands here on open)
+      // without inserting the container into the user's Tab order.
+      tabIndex={-1}
       // WHY fixed + z-40: floats above the chat columns but below modal
       // dialogs (Radix portals default to z-50). top-12 clears the TopBar.
-      className="fixed bottom-0 right-0 top-12 z-40 flex w-[380px] flex-col border-l border-border bg-card shadow-lg"
+      // WHY focus:outline-none: the container focus on open is programmatic
+      // context-setting, not a user-navigated stop — a full-height focus ring
+      // around the panel would be visual noise (the inner controls keep their
+      // own focus-visible rings for real keyboard navigation).
+      className="fixed bottom-0 right-0 top-12 z-40 flex w-[380px] flex-col border-l border-border bg-card shadow-lg focus:outline-none"
     >
       {/* Header */}
       <div className="flex items-center justify-between border-b border-border px-3 py-2">

@@ -33,6 +33,11 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, waitFor, fireEvent } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+
+// Round 4: HotkeyProvider is required by the page's useToolTraceChord (it
+// registers the ⌘D debug chord in the central hotkey registry via context).
+import { HotkeyProvider } from "@/contexts/HotkeyContext";
+import { HotkeyRegistry } from "@/lib/hotkey-registry";
 import type { Thread } from "@/types/api";
 
 // ── Next.js mocks ─────────────────────────────────────────────────────────────
@@ -143,7 +148,14 @@ function makeQueryClient() {
  */
 function Wrapper({ children }: { children: React.ReactNode }) {
   const qc = makeQueryClient();
-  return <QueryClientProvider client={qc}>{children}</QueryClientProvider>;
+  return (
+    <QueryClientProvider client={qc}>
+      {/* Round 4: the page's useToolTraceChord registers through the central
+          hotkey registry (useHotkeyScope throws without a provider). A fresh
+          registry per render avoids cross-test binding pollution. */}
+      <HotkeyProvider registry={new HotkeyRegistry()}>{children}</HotkeyProvider>
+    </QueryClientProvider>
+  );
 }
 
 // Lazy-import the page to avoid issues with module mock hoisting

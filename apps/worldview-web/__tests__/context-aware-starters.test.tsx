@@ -11,6 +11,11 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 
+// Round 4: HotkeyProvider is required by the page's useToolTraceChord (it
+// registers the ⌘D debug chord in the central hotkey registry via context).
+import { HotkeyProvider } from "@/contexts/HotkeyContext";
+import { HotkeyRegistry } from "@/lib/hotkey-registry";
+
 vi.mock("next/navigation", () => ({
   useRouter: vi.fn(() => ({ push: vi.fn(), replace: vi.fn(), prefetch: vi.fn() })),
   usePathname: vi.fn(() => "/chat"),
@@ -52,7 +57,13 @@ vi.stubGlobal("crypto", { randomUUID: () => `uuid-${++uuidCounter}` });
 
 function Wrapper({ children }: { children: React.ReactNode }) {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-  return <QueryClientProvider client={qc}>{children}</QueryClientProvider>;
+  return (
+    <QueryClientProvider client={qc}>
+      {/* Round 4: useToolTraceChord registers via the hotkey registry —
+          the page needs HotkeyProvider, same as app/(app)/layout.tsx. */}
+      <HotkeyProvider registry={new HotkeyRegistry()}>{children}</HotkeyProvider>
+    </QueryClientProvider>
+  );
 }
 
 async function renderChat() {

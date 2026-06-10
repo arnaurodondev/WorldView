@@ -254,7 +254,10 @@ export default function ChatPage() {
   // sidebar springs back to the top — disorienting when the user has
   // scrolled to find an older thread. We capture scrollTop just before
   // the refetch invalidation and restore it once the new list is mounted.
-  const sidebarScrollRef = useRef<HTMLDivElement>(null);
+  // Round 4 a11y: typed HTMLElement (was HTMLDivElement) — the scroll
+  // container is now a <nav> landmark so screen-reader users can jump to
+  // the thread history with landmark navigation.
+  const sidebarScrollRef = useRef<HTMLElement>(null);
   const savedScrollTopRef = useRef<number>(0);
 
   // ── Data fetching ──────────────────────────────────────────────────────────
@@ -280,6 +283,16 @@ export default function ChatPage() {
   const {
     data: activeThread,
     isLoading: threadLoading,
+    // Round 4 hardening (error recovery 1c): a failed thread load previously
+    // fell through to the EMPTY-conversation render (starter-question grid) —
+    // the user clicked a thread (or followed a ?thread= deep link), the GET
+    // 404'd/500'd, and the page silently presented a blank "new" conversation
+    // as if the history never existed. We now read the error + refetch handle
+    // and render an explicit error state with a Retry CTA (see the message
+    // area below). The composer stays usable throughout — sending a message
+    // into the thread is still valid even when history retrieval failed.
+    error: threadLoadError,
+    refetch: refetchActiveThread,
   } = useQuery<Thread>({
     // WHY qk.chat.thread(id) (was ["thread", id, accessToken]):
     // Same accessToken-in-key anti-pattern as above. Also: staleTime was 0,
@@ -837,6 +850,53 @@ export default function ChatPage() {
     [send],
   );
 
+  // ── Round 4 perf: isolate per-token re-renders from the settled log ──────
+  //
+  // Every SSE token fires setStreaming() in useChatStream → this whole page
+  // re-renders at token cadence (~20-50ms). Two derived values were being
+  // rebuilt inside that hot loop even though they depend ONLY on the settled
+  // localMessages array (which changes per MESSAGE, not per token):
+  //
+  //   1. messageNodes — the rendered MessageBubble/SlashTurnBlock elements.
+  //      Re-creating the element array per token forced React to reconcile
+  //      every settled bubble (and its markdown tree) on every token. Memoising
+  //      on localMessages keeps the ELEMENT IDENTITIES stable across token
+  //      renders, so React bails out of the entire settled list (same-element
+  //      fast path) and only the StreamingBubble subtree updates per token.
+  //
+  //   2. railMessages — the Message[] passed to ChatContextRail. The previous
+  //      inline `.filter()` minted a NEW array identity on every render, which
+  //      thrashed the rail's useMemo deps (extractTickers + citation dedup +
+  //      contradiction regex re-ran per token — pure waste, since tickers can
+  //      only change when a message settles). A stable identity means the
+  //      rail's derivations now run on settled-message changes only.
+  //
+  // The EntityMiniCard queries inside the rail were already dedup-safe (stable
+  // qk.chat.tickerMini(ticker) keys → TanStack collapses re-renders into one
+  // cache entry), but the memo also stops their subscription churn per token.
+  const messageNodes = useMemo(
+    () =>
+      localMessages.map((entry) => {
+        if ("kind" in entry && entry.kind === "slash") {
+          return <SlashTurnBlock key={entry.message_id} turn={entry} />;
+        }
+        const msg = entry as Message;
+        return <MessageBubble key={msg.message_id} message={msg} />;
+      }),
+    [localMessages],
+  );
+
+  const railMessages = useMemo(
+    () =>
+      localMessages.filter(
+        // WHY filter: localMessages is LogEntry[] (Message | SlashTurn).
+        // ChatContextRail expects Message[] only. Slash turns have
+        // `kind: "slash"` — we drop them here so the prop type is clean.
+        (entry): entry is Message => !("kind" in entry),
+      ),
+    [localMessages],
+  );
+
   // ── Derived state ──────────────────────────────────────────────────────────
 
   const isSendDisabled = !input.trim() || isStreaming || !accessToken;
@@ -974,7 +1034,17 @@ export default function ChatPage() {
             ref on the content gives a stable handle without forking
             scroll-area.tsx. */}
         <ScrollArea className="flex-1">
-          <div ref={sidebarScrollRef} className="space-y-0.5 p-2">
+          {/* Round 4 a11y: the thread list is a <nav> LANDMARK (was a plain
+              div) — "Chat history" appears in the screen-reader landmark
+              rotor, so keyboard users can jump straight to their threads
+              without tabbing through the whole sidebar chrome. The scroll
+              capture/restore refs work unchanged (closest() walks up to the
+              Radix viewport from any HTMLElement). */}
+          <nav
+            ref={sidebarScrollRef}
+            aria-label="Chat history"
+            className="space-y-0.5 p-2"
+          >
             {threadsLoading && (
               // Round 3 skeleton polish: each placeholder mirrors the real
               // ThreadItem anatomy (11px title line + 10px mono timestamp
@@ -1102,7 +1172,7 @@ export default function ChatPage() {
                 ))}
               </div>
             ))}
-          </div>
+          </nav>
         </ScrollArea>
       </>
       )}
@@ -1257,8 +1327,45 @@ export default function ChatPage() {
                   </div>
                 )}
 
-                {/* Starter questions — entity-aware (T-E-5-05) */}
-                {!threadLoading && localMessages.length === 0 && !streaming && (
+                {/* Round 4 hardening (1c): thread-load failure state. Renders
+                    INSTEAD of the starter grid (the starter grid's condition
+                    below excludes the error case) so a failed history fetch
+                    never masquerades as a fresh empty conversation. role=alert
+                    announces the failure immediately to screen readers; the
+                    Retry button re-fires the TanStack query. The composer
+                    below stays fully usable — error recovery must not lock
+                    the user out of sending into the thread. */}
+                {!!threadLoadError && !threadLoading && (
+                  <div
+                    role="alert"
+                    data-testid="thread-load-error"
+                    className="rounded-[2px] border border-destructive/30 bg-destructive/10 p-3 text-xs text-destructive"
+                  >
+                    <p className="font-medium">
+                      Couldn&rsquo;t load this conversation.
+                    </p>
+                    <p className="mt-1">
+                      The thread history failed to load. You can retry, or send
+                      a new message below.
+                    </p>
+                    <button
+                      type="button"
+                      onClick={() => void refetchActiveThread()}
+                      // Destructive-context ring — same treatment as the
+                      // sidebar thread-list error and the stream error banner.
+                      className="mt-2 inline-flex items-center gap-1 rounded-[2px] border border-destructive/40 px-2 py-1 text-[11px] font-medium hover:bg-destructive/20 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-destructive"
+                    >
+                      <RotateCcw className="h-3 w-3" strokeWidth={1.5} />
+                      Retry
+                    </button>
+                  </div>
+                )}
+
+                {/* Starter questions — entity-aware (T-E-5-05).
+                    Round 4: also gated on !threadLoadError — when the history
+                    fetch failed we show the error state above, NOT a grid that
+                    implies "this is a brand-new conversation". */}
+                {!threadLoading && !threadLoadError && localMessages.length === 0 && !streaming && (
                   <div
                     className={cn(
                       "grid gap-2 p-3",
@@ -1300,14 +1407,31 @@ export default function ChatPage() {
                   </div>
                 )}
 
-                {/* Render messages + slash turns */}
-                {localMessages.map((entry) => {
-                  if ("kind" in entry && entry.kind === "slash") {
-                    return <SlashTurnBlock key={entry.message_id} turn={entry} />;
-                  }
-                  const msg = entry as Message;
-                  return <MessageBubble key={msg.message_id} message={msg} />;
-                })}
+                {/* Render messages + slash turns.
+                    Round 4 a11y: the SETTLED conversation is a live log region.
+                    - role="log" + aria-live="polite": new entries are announced
+                      when they are APPENDED to this container. The in-flight
+                      StreamingBubble deliberately lives OUTSIDE this region
+                      (below), so SSE tokens are NOT announced one-by-one —
+                      the assistant turn is announced exactly once, when the
+                      stream finalises and the complete message lands here.
+                      This is the announce-on-completion live-region strategy:
+                      per-token announcements would make a 400-token answer
+                      unusable under a screen reader.
+                    - aria-relevant defaults to "additions text" which is what
+                      we want (messages are only ever appended or back-filled).
+                    Round 4 perf: messageNodes is memoised on localMessages —
+                    element identities are stable across per-token re-renders,
+                    so React skips reconciling every settled bubble while the
+                    StreamingBubble updates (see the messageNodes memo above). */}
+                <div
+                  role="log"
+                  aria-live="polite"
+                  aria-label="Conversation messages"
+                  className="flex flex-col gap-2"
+                >
+                  {messageNodes}
+                </div>
 
                 {/* Round 2: suggested follow-ups under the latest settled
                     assistant answer. followUpSuggestions is [] while
@@ -1565,14 +1689,13 @@ export default function ChatPage() {
         <div className="w-[320px] shrink-0 border-l border-border overflow-hidden">
           <ChatContextRail
             entityId={entityIdFromUrl}
-            messages={localMessages.filter(
-              // WHY filter: localMessages is LogEntry[] (Message | SlashTurn).
-              // ChatContextRail expects Message[] only. Slash turns have
-              // `kind: "slash"` — we drop them here so the prop type is clean.
-              // Messages are always real Message objects (role + citations).
-              (entry): entry is Parameters<typeof ChatContextRail>[0]["messages"][number] =>
-                !("kind" in entry),
-            )}
+            // Round 4 perf: railMessages is memoised on localMessages (see the
+            // memo above) — the previous inline .filter() minted a fresh array
+            // identity on EVERY render, so each streaming token invalidated
+            // the rail's useMemo derivations (ticker extraction, citation
+            // dedup, contradiction regex). Now they recompute only when a
+            // message actually settles.
+            messages={railMessages}
             isCollapsed={isContextRailCollapsed}
             onClose={() => setIsContextRailCollapsed(true)}
             onTickerClick={(ticker) => appendToInput(` $${ticker}`)}

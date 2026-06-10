@@ -1147,3 +1147,209 @@ describe("useChatStream — retry()", () => {
     ).toBe("doomed question");
   });
 });
+
+// ── Round 4 Hardening — interrupted streams + pre-stream failures ────────────
+//
+// A mid-response network blip surfaces as READER EXHAUSTION WITHOUT a `done`
+// event. Round 1 made sure that path cleared the spinners; Round 4 makes the
+// interruption VISIBLE: partial content is preserved verbatim, chatError
+// carries an explicit "interrupted" notice (rendered as the inline banner
+// with Retry), and retry() is armed. Pre-Round-4 the stream silently
+// completed as if the truncated text were the whole answer.
+
+describe("useChatStream — interrupted stream (Round 4)", () => {
+  it("reader exhaustion mid-answer: preserves partial content verbatim, surfaces an interruption notice, arms retry", async () => {
+    // Two token frames, then the connection dies — NO done/[DONE].
+    const frames = [
+      'data: {"text":"NVDA margins are"}\n',
+      'data: {"text":" expanding"}\n',
+    ];
+    const { reader } = makeReader(frames);
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      statusText: "OK",
+      body: { getReader: () => reader },
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { args, spies } = makeArgs();
+    const { result } = renderHook(() => useChatStream(args));
+
+    await act(async () => {
+      await result.current.send("What about NVDA margins?");
+    });
+
+    // Partial content preserved as its own assistant message — VERBATIM:
+    // no synthetic "[Response interrupted]" text spliced into model output.
+    expect(result.current.localMessages).toHaveLength(2);
+    const assistant = result.current.localMessages[1] as {
+      role: string;
+      content: string;
+    };
+    expect(assistant.role).toBe("assistant");
+    expect(assistant.content).toBe("NVDA margins are expanding");
+
+    // The interruption is VISIBLE — never silently truncate-as-complete.
+    expect(result.current.chatError).toMatch(/interrupted/i);
+
+    // Streaming chrome fully reset (no orphaned bubble/spinners/strip).
+    expect(result.current.streaming).toBeNull();
+    expect(result.current.activeTools).toEqual([]);
+    expect(result.current.iterationEvent).toBeNull();
+
+    // The sidebar still refreshes — the server may have persisted the user
+    // message before the stream died.
+    expect(spies.refetchThreads).toHaveBeenCalledTimes(1);
+
+    // Retry is armed: it resends the SAME question WITHOUT re-echoing the
+    // user bubble, even though the partial assistant message now sits
+    // between the user bubble and the end of the log (the backward-scan
+    // skipUserEcho contract).
+    const r2 = makeReader(['data: {"text":"full answer"}\n', "data: [DONE]\n"]);
+    fetchMock.mockResolvedValue({
+      ok: true,
+      status: 200,
+      statusText: "OK",
+      body: { getReader: () => r2.reader },
+    });
+    await act(async () => {
+      await result.current.retry();
+    });
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(
+      JSON.parse(fetchMock.mock.calls[1][1].body as string).message,
+    ).toBe("What about NVDA margins?");
+    expect(result.current.chatError).toBeNull();
+    const roles = (result.current.localMessages as Array<{ role: string }>).map(
+      (m) => m.role,
+    );
+    // user question (once!), interrupted partial, recovered full answer.
+    expect(roles).toEqual(["user", "assistant", "assistant"]);
+  });
+
+  it("reader exhaustion with ZERO content: visible error + retry armed, no empty assistant message", async () => {
+    // The server accepted the request, then closed without emitting anything
+    // — previously this path ended completely silently (spinner cleared,
+    // nothing else): the worst "did it even work?" UX.
+    const { reader } = makeReader([]); // immediate EOF, no frames
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      statusText: "OK",
+      body: { getReader: () => reader },
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { args } = makeArgs();
+    const { result } = renderHook(() => useChatStream(args));
+
+    await act(async () => {
+      await result.current.send("hello?");
+    });
+
+    // Only the user bubble — no phantom empty assistant message.
+    expect(result.current.localMessages).toHaveLength(1);
+    expect(result.current.chatError).toMatch(/interrupted/i);
+
+    // Retry resubmits without a duplicate echo (user bubble is the last entry).
+    const r2 = makeReader(['data: {"text":"hi"}\n', "data: [DONE]\n"]);
+    fetchMock.mockResolvedValue({
+      ok: true,
+      status: 200,
+      statusText: "OK",
+      body: { getReader: () => r2.reader },
+    });
+    await act(async () => {
+      await result.current.retry();
+    });
+    const roles = (result.current.localMessages as Array<{ role: string }>).map(
+      (m) => m.role,
+    );
+    expect(roles).toEqual(["user", "assistant"]);
+  });
+
+  it("a CLEAN done event still completes without any interruption notice (no false positives)", async () => {
+    // Guard: the interruption path must trigger ONLY on reader exhaustion —
+    // a normal done-terminated stream must stay error-free.
+    const frames = ['data: {"text":"complete"}\n', "data: [DONE]\n"];
+    const { reader } = makeReader(frames);
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({
+        ok: true,
+        status: 200,
+        statusText: "OK",
+        body: { getReader: () => reader },
+      }),
+    );
+
+    const { args } = makeArgs();
+    const { result } = renderHook(() => useChatStream(args));
+
+    await act(async () => {
+      await result.current.send("q");
+    });
+
+    expect(result.current.chatError).toBeNull();
+    const assistant = result.current.localMessages[1] as { content: string };
+    expect(assistant.content).toBe("complete");
+  });
+});
+
+describe("useChatStream — pre-stream failure (Round 4)", () => {
+  it("fetch rejecting BEFORE any stream starts surfaces an immediate error with retry armed", async () => {
+    // Network fully down: fetch() rejects with a TypeError before any byte
+    // of the response exists — the pre-stream path, distinct from mid-stream
+    // reader exhaustion.
+    const fetchMock = vi
+      .fn()
+      .mockRejectedValue(new TypeError("Failed to fetch"));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { args } = makeArgs();
+    const { result } = renderHook(() => useChatStream(args));
+
+    await act(async () => {
+      await result.current.send("offline question");
+    });
+
+    // Immediate, visible failure: error banner copy set, bubble cleared,
+    // no orphaned tool/iteration chrome.
+    expect(result.current.chatError).toBe(
+      "Chat request failed. Please try again.",
+    );
+    expect(result.current.streaming).toBeNull();
+    expect(result.current.activeTools).toEqual([]);
+    expect(result.current.iterationEvent).toBeNull();
+
+    // The optimistic user bubble is preserved (the user must not lose their
+    // typed question to a network blip).
+    expect(result.current.localMessages).toHaveLength(1);
+    const user = result.current.localMessages[0] as {
+      role: string;
+      content: string;
+    };
+    expect(user.role).toBe("user");
+    expect(user.content).toBe("offline question");
+
+    // Retry is armed and resends the same question once the network is back.
+    const { reader } = makeReader(['data: {"text":"back online"}\n', "data: [DONE]\n"]);
+    fetchMock.mockResolvedValue({
+      ok: true,
+      status: 200,
+      statusText: "OK",
+      body: { getReader: () => reader },
+    });
+    await act(async () => {
+      await result.current.retry();
+    });
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(result.current.chatError).toBeNull();
+    const roles = (result.current.localMessages as Array<{ role: string }>).map(
+      (m) => m.role,
+    );
+    expect(roles).toEqual(["user", "assistant"]);
+  });
+});

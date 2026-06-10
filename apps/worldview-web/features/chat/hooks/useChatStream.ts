@@ -19,10 +19,19 @@
  *
  * BEHAVIOUR PARITY GUARANTEE: every observable behaviour from the inline
  * page implementation is preserved verbatim — same wire request, same
- * abort-error swallowing, same "[Response interrupted]" suffix on early
- * EOF, same `crypto.randomUUID()` thread auto-creation, same
- * `refetchThreads()` invalidation after [DONE]. See the chat page git
+ * abort-error swallowing, same `crypto.randomUUID()` thread auto-creation,
+ * same `refetchThreads()` invalidation after [DONE]. See the chat page git
  * history for the original block.
+ *
+ * ROUND 4 HARDENING — one deliberate divergence from the original block:
+ * reader exhaustion WITHOUT a `done`/[DONE] event (server or network closed
+ * the stream early) used to splice a "[Response interrupted]" suffix into the
+ * assistant message content and otherwise complete silently. That made a
+ * truncated answer read like model output and gave the user no recovery
+ * affordance. It now (a) preserves the partial content VERBATIM as its own
+ * message, (b) surfaces an explicit interruption notice through `chatError`
+ * (rendered as the inline banner under the messages), and (c) arms `retry()`
+ * — see the post-read-loop block in send().
  *
  * WHY NOT EventSource: the SSE endpoint is `POST /api/v1/chat/stream` with a
  * JSON body. EventSource only supports GET, so we hand-roll the SSE parser
@@ -424,14 +433,27 @@ export function useChatStream(args: UseChatStreamArgs): UseChatStreamResult {
         // skip when the LAST entry is a user message with identical content
         // (defensive: if the log changed in between, fall through and append).
         if (opts?.skipUserEcho) {
-          const last = prev[prev.length - 1];
-          if (
-            last &&
-            !("kind" in last) &&
-            last.role === "user" &&
-            last.content === question
-          ) {
-            return prev;
+          // Round 4 hardening: scan BACKWARDS for the most recent user
+          // message instead of only checking the last entry. WHY: an
+          // interrupted stream now appends the PARTIAL assistant message to
+          // the log before arming retry — so on retry the failed question is
+          // no longer the last entry (the partial answer is). Looking only at
+          // prev[len-1] would re-echo the question. Scanning past assistant
+          // messages and slash turns to the latest user bubble restores the
+          // "no duplicate echo" contract for every failure shape. The scan is
+          // safe because skipUserEcho is only set by retry(), and retry()'s
+          // lastQuestionRef was armed by the failure of EXACTLY this question
+          // — the most recent user message is always that question's bubble.
+          for (let i = prev.length - 1; i >= 0; i--) {
+            const entry = prev[i];
+            if ("kind" in entry) continue; // slash turn — keep scanning
+            if (entry.role === "user") {
+              if (entry.content === question) return prev;
+              // Most recent user message differs (log changed in between) —
+              // fall through and append defensively, as before.
+              break;
+            }
+            // assistant message (e.g. an interrupted partial) — keep scanning
           }
         }
         return [...prev, userMessage];
@@ -511,26 +533,27 @@ export function useChatStream(args: UseChatStreamArgs): UseChatStreamResult {
         // final assistant message once the stream ends.
         let pendingCitations: Message["citations"] = [];
 
-        // Helper: finalise the stream and promote the bubble to a message.
-        const finalize = (interrupted = false) => {
+        // Helper: finalise a CLEAN stream end (done event / [DONE] sentinel)
+        // and promote the bubble to a message. Interrupted ends (reader
+        // exhaustion without done) take the dedicated path after the read
+        // loop below — Round 4 hardening split the two so an interruption can
+        // never masquerade as a complete answer.
+        const finalize = () => {
           setStreaming(null);
           if (finalContent || pendingCitations.length > 0) {
             const assistantMessage: Message = {
               message_id: crypto.randomUUID(),
               thread_id: threadId,
               role: "assistant",
-              content: interrupted
-                ? finalContent + "\n\n[Response interrupted]"
-                : finalContent,
+              content: finalContent,
               created_at: new Date().toISOString(),
               citations: pendingCitations,
             };
             setLocalMessages((prev) => [...prev, assistantMessage]);
           }
-          // Round 1 Foundation: a finalized stream (even an interrupted one
-          // that rendered partial content) is not a failure — clear the retry
-          // context so a stale question can't be resubmitted later from the
-          // error banner of an unrelated failure.
+          // Round 1 Foundation: a finalized stream is not a failure — clear
+          // the retry context so a stale question can't be resubmitted later
+          // from the error banner of an unrelated failure.
           lastQuestionRef.current = null;
           refetchThreads();
         };
@@ -853,9 +876,50 @@ export function useChatStream(args: UseChatStreamArgs): UseChatStreamResult {
           }
         }
 
-        // Reader exhausted without a `done` event — server closed early.
-        // Preserve whatever tokens we did receive but flag the truncation.
-        finalize(/* interrupted */ finalContent.length > 0);
+        // ── Reader exhausted WITHOUT a `done`/[DONE] event ─────────────────
+        // The server (or a proxy / the network path) closed the stream early
+        // — a mid-response network blip, an S8 worker crash, an LB idle
+        // timeout. Round 1 made sure this path cleared the spinners; Round 4
+        // makes the interruption VISIBLE instead of silently presenting the
+        // truncated text as a complete answer:
+        //
+        //   1. Partial content is preserved VERBATIM as its own assistant
+        //      message (nothing the user already read is thrown away, and no
+        //      synthetic "[Response interrupted]" text is spliced into the
+        //      model's words — pre-Round-4 behaviour).
+        //   2. chatError carries an explicit interruption notice — the page
+        //      renders it as the inline role="alert" banner directly under
+        //      the partial message, WITH the Retry button.
+        //   3. lastQuestionRef is armed so Retry resends the question without
+        //      re-echoing the user bubble (see the skipUserEcho backward scan).
+        setStreaming(null);
+        // Same chrome-reset trio as every other end-of-stream path: spinners
+        // and the iteration strip must never hover next to the error banner.
+        setActiveTools([]);
+        setIterationEvent(null);
+        if (finalContent || pendingCitations.length > 0) {
+          const partialMessage: Message = {
+            message_id: crypto.randomUUID(),
+            thread_id: threadId,
+            role: "assistant",
+            content: finalContent,
+            created_at: new Date().toISOString(),
+            citations: pendingCitations,
+          };
+          setLocalMessages((prev) => [...prev, partialMessage]);
+        }
+        lastQuestionRef.current = question;
+        // Distinct copy for the two shapes: "you saw part of the answer" vs
+        // "nothing arrived at all" — the recovery action (Retry) is the same.
+        setChatError(
+          finalContent
+            ? "Response interrupted — the connection dropped mid-answer. The partial response is shown above."
+            : "Response interrupted before any content arrived. Check your connection and retry.",
+        );
+        // Still refetch: the server may have persisted the user message (and
+        // created the thread) before the stream died — the sidebar should
+        // reflect whatever made it through.
+        refetchThreads();
       } catch (err) {
         // AbortError is the EXPECTED outcome of cancel() / unmount — it is
         // not an error condition, so we swallow it and only clear the
