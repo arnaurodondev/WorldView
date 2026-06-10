@@ -24,14 +24,22 @@
 // WHY no "use client": this is a pure presentation component — no hooks or browser
 // APIs needed. The parent OHLCVChart (which is "use client") renders it.
 
-import type { Timeframe } from "@/lib/chart-adapter";
+import { PeriodSelector } from "@/components/ui/period-selector";
+import { CHART_PERIODS, type ChartPeriod } from "@/components/instrument/chart/chartPeriods";
 
 // ── Props ──────────────────────────────────────────────────────────────────────
 
 export interface TimeframeToolbarProps {
-  /** Currently selected timeframe — drives the active button highlight */
-  timeframe: Timeframe;
-  onTimeframeChange: (tf: Timeframe) => void;
+  /**
+   * Currently selected PERIOD — drives the active pill highlight.
+   *
+   * ROUND-1 FOUNDATION CHANGE: the toolbar used to expose raw bar RESOLUTIONS
+   * (5M/1H/1D/1W/1M). Analysts think in look-back periods, not bar sizes, so
+   * the buttons now select a period (1D/1W/1M/3M/1Y/5Y) and OHLCVChart derives
+   * the bar resolution + fetch window from CHART_PERIOD_PRESETS.
+   */
+  period: ChartPeriod;
+  onPeriodChange: (p: ChartPeriod) => void;
 
   /** Whether log-scale is active on the right price axis */
   logScale: boolean;
@@ -55,8 +63,8 @@ export interface TimeframeToolbarProps {
 // ── Component ──────────────────────────────────────────────────────────────────
 
 export function TimeframeToolbar({
-  timeframe,
-  onTimeframeChange,
+  period,
+  onPeriodChange,
   logScale,
   onToggleLogScale,
   showCompareInput,
@@ -68,23 +76,20 @@ export function TimeframeToolbar({
 }: TimeframeToolbarProps) {
   return (
     <>
-      {/* Timeframe tabs — left side of toolbar */}
-      {/* WHY this exact order: intraday (5M, 1H) → daily → weekly → monthly.
-          1W/1M are added because S3 ingests weekly/monthly EODHD bars as
-          first-class timeframes. */}
-      {(["5M", "1H", "1D", "1W", "1M"] as Timeframe[]).map((tf) => (
-        <button
-          key={tf}
-          onClick={() => onTimeframeChange(tf)}
-          className={`rounded-[2px] px-2 py-0.5 text-[11px] font-medium transition-colors ${
-            timeframe === tf
-              ? "bg-primary/20 text-primary"
-              : "text-muted-foreground hover:text-foreground"
-          }`}
-        >
-          {tf}
-        </button>
-      ))}
+      {/* Period pills — left side of toolbar.
+          WHY PeriodSelector (components/ui): the shared pill-row primitive
+          already used by dashboard widgets — reusing it keeps active-state
+          styling (bg-primary/20) consistent app-wide and gives us the
+          role="group" + aria-pressed semantics for free. */}
+      <PeriodSelector
+        periods={CHART_PERIODS}
+        selected={period}
+        onSelect={onPeriodChange}
+        ariaLabel="Chart period"
+        // WHY text-[11px] override via className on wrapper is NOT possible —
+        // PeriodSelector owns its 9px pill styling. The 9px pills match the
+        // 24px-tall chart toolbar density, so we keep the default styling.
+      />
 
       {/* QA iter-1: 1px hairline separator marks the visual class break
           between timeframe selection (high-frequency) and view-mode

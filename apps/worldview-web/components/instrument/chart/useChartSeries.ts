@@ -366,9 +366,19 @@ export function useChartSeries({
   }, [logScale]);
   useEffect(() => {
     if (!chartRef.current || !containerRef.current) return;
+    // WHY clientHeight || CHART_HEIGHT on fullscreen EXIT (Round-1 fix):
+    // restoring to the hard-coded CHART_HEIGHT (280px) shrank the canvas to
+    // ~1/3 of its flex slot after leaving fullscreen. The ResizeObserver does
+    // NOT bail us out here — the container div's own size never changed (only
+    // the canvas was resized), so no resize event fires and the chart stayed
+    // stuck at 280px until a window resize. Mirror the init-path logic and
+    // read the live container height instead.
     chartRef.current.applyOptions(isFullscreen
       ? { width: window.innerWidth, height: window.innerHeight - 60 }
-      : { width: containerRef.current.clientWidth, height: CHART_HEIGHT });
+      : {
+          width: containerRef.current.clientWidth,
+          height: containerRef.current.clientHeight || CHART_HEIGHT,
+        });
   }, [isFullscreen, containerRef]);
 
   return { chartRef, seriesRef, volumeSeriesRef, compareSeriesRef, converters, isChartReady, chartError };

@@ -33,12 +33,14 @@
 
 import { useMemo } from "react";
 import { useQuery } from "@tanstack/react-query";
+import { FileQuestion } from "lucide-react";
 import { useAuth } from "@/hooks/useAuth";
 import { createGateway } from "@/lib/gateway";
 import { useEntityIntelligence } from "@/lib/api/intelligence";
 import { qk } from "@/lib/query/keys";
 import { Skeleton } from "@/components/ui/skeleton";
-import { cn } from "@/lib/utils";
+import { EmptyState } from "@/components/instrument/shared/EmptyState";
+import { cn, formatDate } from "@/lib/utils";
 import { NodeDetailCard } from "./NodeDetailCard";
 import { RelationsList } from "./RelationsList";
 import { EdgeDetailCard } from "./EdgeDetailCard";
@@ -291,9 +293,13 @@ export function ContextPanel({
         className={cn("p-3", className)}
         aria-label="No entity context available"
       >
-        <p className="text-[11px] text-muted-foreground italic">
-          No entity context available.
-        </p>
+        {/* Round-1 requirement 4: NAMED empty state (icon + headline) — the
+            old italic one-liner was indistinguishable from a failed render. */}
+        <EmptyState
+          icon={FileQuestion}
+          headline="No entity context"
+          hint="This entity has not been enriched yet — the overnight enrichment worker populates name, type and description."
+        />
       </section>
     );
   }
@@ -344,14 +350,28 @@ export function ContextPanel({
         {entity.description ?? "No description available."}
       </p>
 
+      {/* ── Last updated (Round-1 requirement 4) ─────────────────────────────
+          Freshness anchor for the entity summary. enriched_at is set by the
+          enrichment worker (Worker 13J) every time it rewrites the
+          description/metadata — the most honest "last updated" the KG offers.
+          WHY always render (incl. the null case): a missing timestamp IS
+          information ("never enriched") and hiding the row would shift the
+          blocks below when it later appears. */}
+      <p className="font-mono text-[9px] uppercase tracking-wider text-muted-foreground/70">
+        Updated{" "}
+        <span className="tabular-nums text-muted-foreground">
+          {entity.enriched_at ? formatDate(entity.enriched_at) : "—"}
+        </span>
+      </p>
+
       {/* ── Contradictions (Block I, T-12) ──────────────────────────────────
           WHY here (not a separate panel): the right rail is vertically
-          stacked; contradictions follow the entity overview per W7 §1 check 12. */}
+          stacked; contradictions follow the entity overview per W7 §1 check 12.
+          WHY showHeader (Round-1): the count badge needs the query result,
+          which lives inside ContradictionsBlock — it now owns its own
+          "CONTRADICTIONS [N]" header instead of a dumb label here. */}
       <div className="border-t border-border/40 pt-2">
-        <p className="text-[9px] font-mono uppercase tracking-wider text-muted-foreground mb-1.5">
-          Contradictions
-        </p>
-        <ContradictionsBlock entityId={entityId} limit={5} />
+        <ContradictionsBlock entityId={entityId} limit={5} showHeader />
       </div>
 
       {/* ── Narrative history (Block I, T-13) ──────────────────────────────

@@ -18,9 +18,10 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import dynamic from "next/dynamic";
-import { RefreshCw } from "lucide-react";
+import { Clock, Filter, RefreshCw, Share2 } from "lucide-react";
 import { useAuth } from "@/hooks/useAuth";
 import { createGateway } from "@/lib/gateway";
+import { EmptyState } from "@/components/instrument/shared/EmptyState";
 import { qk } from "@/lib/query/keys";
 import { GraphToolbar } from "@/components/instrument/graph/GraphToolbar";
 import { EntityGraphErrorBoundary } from "@/components/instrument/EntityGraphErrorBoundary";
@@ -191,30 +192,40 @@ export function GraphColumn({ entityId, selectedNodeId, onNodeSelect, onEdgeSele
           </div>
         )}
 
-        {/* Depth-adaptive timeout message */}
+        {/* Depth-adaptive timeout — NAMED state (Round-1 requirement 4).
+            WHY the headline keeps the "timed out at depth N" phrasing: the
+            GraphColumn.test.tsx contract pins /timed out at depth 2/i. */}
         {isTimeout && (
-          <div className="flex h-full items-center justify-center px-6 text-center text-[11px] text-muted-foreground">
-            Graph timed out at depth {depth}. Try depth 1 or 2.
+          <div className="flex h-full items-center justify-center">
+            <EmptyState
+              icon={Clock}
+              headline={`Graph timed out at depth ${depth}`}
+              hint="Deeper traversals are expensive. Try depth 1 or 2."
+            />
           </div>
         )}
 
-        {/* Type filter left nothing to show */}
+        {/* Type filter left nothing to show — named state with the obvious fix. */}
         {!graphLoading && !isTimeout && hasTypeFilterMatch && (
-          <div className="flex h-full items-center justify-center px-6 text-center text-[11px] text-muted-foreground">
-            No entities match the current type filter.
+          <div className="flex h-full items-center justify-center">
+            <EmptyState
+              icon={Filter}
+              headline="No entities match the type filter"
+              hint="Clear or widen the entity-type filter in the toolbar above."
+            />
           </div>
         )}
 
         {/* BUG FIX 2: single-node (no edges) — knowledge graph hasn't ingested
             any connections for this entity yet. This is normal for cold instruments
-            with few news articles. Show an informative message instead of a dot. */}
+            with few news articles. Named state instead of a solitary dot. */}
         {!graphLoading && !isTimeout && hasNoConnections && (
-          <div className="flex h-full items-center justify-center px-6 text-center">
-            <p className="text-[11px] text-muted-foreground leading-[1.6]">
-              No connections found for this entity.
-              The knowledge graph builds connections as news articles are ingested
-              — check back later.
-            </p>
+          <div className="flex h-full items-center justify-center">
+            <EmptyState
+              icon={Share2}
+              headline="No connections found"
+              hint="The knowledge graph builds connections as news articles are ingested — check back later."
+            />
           </div>
         )}
 

@@ -100,8 +100,13 @@ function SectionHeader({ label }: { label: string }) {
     // WHY col-span-6: section header spans all 6 columns. Border-b matches the
     // default data-table-grid row divider but uses the stronger border-border
     // (not /30) so the section break is unmistakably visible when scanning.
+    // WHY border-l-2 border-l-primary (Round-1): a 2px yellow accent bar on
+    // the left edge makes section starts scannable in peripheral vision —
+    // text-only headers at 9px blur into the data rows when skimming a
+    // 39-cell grid. border-l-primary resolves through the --primary CSS var
+    // (Terminal Dark trading yellow), never a hardcoded hex (DESIGN_SYSTEM §2).
     <div
-      className="col-span-6 flex items-center border-b border-border bg-muted/20 h-[var(--row-h,18px)] px-[var(--cell-px,6px)]"
+      className="col-span-6 flex items-center border-b border-border border-l-2 border-l-primary bg-muted/20 h-[var(--row-h,18px)] px-[var(--cell-px,6px)]"
       data-metric-section={label}
     >
       <span className="text-[9px] uppercase tracking-widest text-muted-foreground/70 font-medium">

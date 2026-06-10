@@ -12,7 +12,9 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import { Newspaper } from "lucide-react";
 import { useEntityNewsInfinite } from "@/components/instrument/hooks/useEntityNewsInfinite";
+import { EmptyState } from "@/components/instrument/shared/EmptyState";
 import { CompactArticleRow } from "./CompactArticleRow";
 import { NewsFilters, type NewsSentiment, type NewsTimeRange } from "./NewsFilters";
 
@@ -80,9 +82,19 @@ export function NewsColumn({ entityId }: NewsColumnProps) {
       {filterStrip}
       <div className="flex-1 overflow-y-auto">
         {articles.length === 0 ? (
-          <div className="text-[11px] text-muted-foreground text-center py-8">
-            No articles for this entity.
-          </div>
+          // Round-1 requirement 4: NAMED empty state (icon + headline) — a
+          // bare sentence reads like a failed fetch; this reads like a state.
+          // WHY filter-aware hint: with an active sentiment/time filter the
+          // most likely cause is the filter, not a pipeline gap.
+          <EmptyState
+            icon={Newspaper}
+            headline="No articles for this entity"
+            hint={
+              sentiment != null || timeRange !== "all"
+                ? "Try clearing the sentiment or time filters above."
+                : "Articles appear here as the news pipeline links coverage to this entity."
+            }
+          />
         ) : (
           <>
             {articles.map((a) => (

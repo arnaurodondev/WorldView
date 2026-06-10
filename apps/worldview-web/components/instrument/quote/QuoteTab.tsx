@@ -106,10 +106,15 @@ export function QuoteTab({
 }: QuoteTabProps) {
   // ── Read last OHLCV bar from cache for SessionStatsStrip ───────────────
   // WHY `enabled: false`: we never want this hook to issue a network request.
-  // It is a passive subscriber. OHLCVChart owns the active fetch under the
-  // same queryKey, so whatever it has loaded (initialBars first, then a
-  // freshened fetch) is what we read here. The strip therefore always
-  // reflects the chart's freshest data without duplicating the fetch.
+  // It is a passive subscriber. OHLCVChart owns the active fetch and (Round-1
+  // fix) now keys it through the SAME qk.instruments.ohlcv factory — the old
+  // ad-hoc ["ohlcv", ...] key meant this subscription never matched and the
+  // strip silently never upgraded past the bundle's seed bars.
+  // NOTE: the chart fills this "1D" slot whenever a daily-bar period is
+  // active (1M/3M/1Y). For intraday periods (1D/1W) the chart writes the
+  // "5M"/"1H" slots instead — the strip then falls back to `initialBars`
+  // below, whose last bar is still today's daily candle (correct session
+  // O/H/L/V semantics; a 5-minute candle would NOT be).
   //
   // WHY fall back to `initialBars`: on the very first render before the
   // chart has hydrated the query cache, `cachedOhlcv` is undefined. The

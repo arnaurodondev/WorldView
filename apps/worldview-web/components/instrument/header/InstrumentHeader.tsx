@@ -38,9 +38,32 @@ interface InstrumentHeaderProps {
   readonly instrument: Instrument | null;
   readonly quote: Quote | null;
   readonly fundamentals: Fundamentals | null;
+  /**
+   * 30-day average daily volume from the page-bundle's fundamentals snapshot
+   * (snapshot.avg_volume_30d). Round-1 requirement: the header shows today's
+   * volume AGAINST its 30-day average so unusual activity is scannable.
+   * Null while the bundle loads or when the backfill hasn't run.
+   */
+  readonly avgVolume30d?: number | null;
+  /**
+   * Best bid / best ask. EXPLICIT BACKEND GAP: the S9 quote payload
+   * (QuoteResponse) does not carry bid/ask today — the legacy S3 quote
+   * endpoint has them but the PriceSnapshot chain S9 uses does not. These
+   * props exist so the header lights up the moment S9 adds the fields;
+   * until then the cell renders a named "—×—" placeholder (never blank).
+   */
+  readonly bid?: number | null;
+  readonly ask?: number | null;
 }
 
-export function InstrumentHeader({ instrument, quote, fundamentals }: InstrumentHeaderProps) {
+export function InstrumentHeader({
+  instrument,
+  quote,
+  fundamentals,
+  avgVolume30d = null,
+  bid = null,
+  ask = null,
+}: InstrumentHeaderProps) {
   const router = useRouter();
 
   // WHY destructure with fallbacks: any sub-resource may be null while
@@ -50,6 +73,29 @@ export function InstrumentHeader({ instrument, quote, fundamentals }: Instrument
   const price = quote?.price ?? null;
   const change = quote?.change ?? null;
   const changePct = quote?.change_pct ?? null;
+  // Round-1 fix: real session volume from the quote. The previous build
+  // rendered fundamentals.daily_return through formatVolume as a "VOL proxy"
+  // — a RETURN PERCENTAGE formatted as share count, i.e. always wrong.
+  const volume = quote?.volume ?? null;
+
+  // "VOL 52.3M / 30D 48.1M" — today's volume against its 30-day average.
+  // WHY a ratio in the tooltip (not inline): the 36px header is too dense for
+  // a third number; hover reveals "109% of 30-day average" for the curious.
+  const volRatioTitle =
+    volume != null && avgVolume30d != null && avgVolume30d > 0
+      ? `${Math.round((volume / avgVolume30d) * 100)}% of 30-day average volume`
+      : "Today's volume vs 30-day average";
+
+  // Bid/ask spread — see the props doc: S9 does not provide these yet, so the
+  // cell is a NAMED placeholder ("—×—"), not a silently-missing area.
+  const bidAskText =
+    bid != null && ask != null
+      ? `${formatPrice(bid)}×${formatPrice(ask)}`
+      : "—×—";
+  const bidAskTitle =
+    bid != null && ask != null
+      ? `Spread ${formatPrice(Math.max(0, ask - bid))}`
+      : "Bid/ask not yet exposed by the S9 quote payload";
 
   // WHY change_pct is already a percent (e.g. 1.42 means 1.42%):
   // S9 Quote returns it that way — see types/api.ts line 168. Use
@@ -102,12 +148,20 @@ export function InstrumentHeader({ instrument, quote, fundamentals }: Instrument
             block from the secondary CAP/VOL/PE cluster. */}
         <span aria-hidden="true" className="text-muted-foreground/30">|</span>
 
+        {/* Bid×ask cell — named placeholder until S9 exposes bid/ask (see
+            props doc). title explains WHY it's empty so the dash is a state,
+            not a mystery. */}
+        <MetricCell label="B×A" value={bidAskText} title={bidAskTitle} />
+
         <MetricCell label="CAP" value={formatMarketCap(fundamentals?.market_cap ?? null)} />
-        {/* WHY daily_return as VOL proxy: spec §6.4 explicitly substitutes
-            fundamentals.daily_return where a true intraday volume is not
-            yet wired through the bundle. Once S2 surfaces real intraday
-            volume on every quote we will switch the source. */}
-        <MetricCell label="VOL" value={formatVolume(fundamentals?.daily_return ?? null)} />
+        {/* Round-1 fix: VOL now reads quote.volume (real session volume).
+            The old code formatted fundamentals.daily_return (a percentage!)
+            through formatVolume — a nonsense number whenever it rendered. */}
+        <MetricCell label="VOL" value={formatVolume(volume)} title={volRatioTitle} />
+        {/* 30-day average volume — the comparison anchor for VOL. Data path:
+            bundle.fundamentals_snapshot.avg_volume_30d → InstrumentPageClient
+            → this prop. */}
+        <MetricCell label="30D" value={formatVolume(avgVolume30d)} title={volRatioTitle} />
         <MetricCell label="P/E" value={formatRatio(fundamentals?.pe_ratio ?? null)} />
 
         <WeekRangeMini
@@ -129,12 +183,18 @@ export function InstrumentHeader({ instrument, quote, fundamentals }: Instrument
   );
 }
 
-// WHY a tiny internal helper: the CAP/VOL/PE rows all share the same
-// (10px muted label + 11px mono value) shape. Inlining the JSX 3x would
+// WHY a tiny internal helper: the B×A/CAP/VOL/30D/PE cells all share the same
+// (10px muted label + 11px mono value) shape. Inlining the JSX 5x would
 // add visual noise without saving any complexity.
-function MetricCell({ label, value }: { readonly label: string; readonly value: string }) {
+// WHY optional `title`: VOL/30D expose the volume-vs-average ratio on hover
+// and B×A explains its placeholder — native tooltips cost zero layout.
+function MetricCell({ label, value, title }: {
+  readonly label: string;
+  readonly value: string;
+  readonly title?: string;
+}) {
   return (
-    <span className="flex items-baseline gap-1">
+    <span className="flex items-baseline gap-1" title={title}>
       <span className="text-[10px] text-muted-foreground">{label}</span>
       <span className="text-[11px] font-mono tabular-nums">{value}</span>
     </span>

@@ -16,14 +16,18 @@
  */
 
 "use client";
-// WHY "use client": useQuery + useAuth require browser runtime.
+// WHY "use client": useQuery + useAuth + the expand/collapse useState require
+// the browser runtime.
 
+import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
+import { Scale } from "lucide-react";
 import { useAuth } from "@/hooks/useAuth";
 import { createKnowledgeGraphApi } from "@/lib/api/knowledge-graph";
 import { qk } from "@/lib/query/keys";
 import { Skeleton } from "@/components/ui/skeleton";
-import { cn } from "@/lib/utils";
+import { EmptyState } from "@/components/instrument/shared/EmptyState";
+import { cn, formatDate } from "@/lib/utils";
 import type { Contradiction } from "@/types/api";
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -88,12 +92,27 @@ function ContradictionCard({ contradiction }: ContradictionCardProps) {
         >
           {severity}
         </span>
+        {/* Detected date — right-aligned in the header row (Round-1 req 4).
+            WHY ml-auto: keeps the pills left-clustered and the date scannable
+            at the row's end, matching the platform's "timestamps trail" rule. */}
+        <span className="ml-auto text-[9px] font-mono tabular-nums text-muted-foreground/70">
+          {formatDate(contradiction.detected_at)}
+        </span>
       </div>
 
-      {/* ── Claims: claim_a vs claim_b ───────────────────────────────────────── */}
-      <p className="text-[10px] text-foreground/90 leading-snug">{contradiction.claim_a}</p>
+      {/* ── Claims: source A's claim vs source B's claim ─────────────────────
+          Round-1 requirement 4: each side is attributed to its SOURCE so the
+          analyst can judge credibility (Reuters vs a blog) without opening
+          the underlying articles. Source renders as a 9px mono prefix. */}
+      <p className="text-[10px] text-foreground/90 leading-snug">
+        <span className="font-mono text-[9px] text-muted-foreground">{contradiction.source_a || "Source A"}: </span>
+        {contradiction.claim_a}
+      </p>
       <p className="text-[9px] text-muted-foreground font-mono uppercase">vs</p>
-      <p className="text-[10px] text-foreground/90 leading-snug">{contradiction.claim_b}</p>
+      <p className="text-[10px] text-foreground/90 leading-snug">
+        <span className="font-mono text-[9px] text-muted-foreground">{contradiction.source_b || "Source B"}: </span>
+        {contradiction.claim_b}
+      </p>
     </div>
   );
 }
@@ -102,12 +121,27 @@ function ContradictionCard({ contradiction }: ContradictionCardProps) {
 
 export interface ContradictionsBlockProps {
   readonly entityId: string;
-  /** Maximum number of contradiction cards to show. Default: 5. */
+  /** Number of contradiction cards visible while COLLAPSED. Default: 5. */
   readonly limit?: number;
+  /**
+   * Render the block's own "CONTRADICTIONS [N]" header with the count badge
+   * (Round-1 requirement 4). The count lives inside this component's query,
+   * so the parent (ContextPanel) cannot render an accurate badge itself —
+   * it sets showHeader instead of drawing its own label.
+   */
+  readonly showHeader?: boolean;
 }
 
-export function ContradictionsBlock({ entityId, limit = 5 }: ContradictionsBlockProps) {
+export function ContradictionsBlock({
+  entityId,
+  limit = 5,
+  showHeader = false,
+}: ContradictionsBlockProps) {
   const { accessToken } = useAuth();
+  // Round-1 requirement 4: the list is EXPANDABLE — collapsed shows `limit`
+  // cards, "Show all (N)" reveals the rest. Local state because expansion is
+  // a transient view preference (not shareable/bookmarkable).
+  const [expanded, setExpanded] = useState(false);
 
   // WHY useQuery (not useEntityContradictions hook): the hook pattern is only
   // warranted when multiple components share the same query. ContradictionsBlock
@@ -129,32 +163,83 @@ export function ContradictionsBlock({ entityId, limit = 5 }: ContradictionsBlock
     );
   }
 
+  const all = data?.contradictions ?? [];
+
+  // WHY the header renders for error/empty too: the count badge ("0") IS the
+  // named state's headline number — hiding the header on empty would make the
+  // section disappear entirely, violating the no-blank-areas rule.
+  const header = showHeader ? (
+    <div className="mb-1.5 flex items-center gap-1.5">
+      <p className="text-[9px] font-mono uppercase tracking-wider text-muted-foreground">
+        Contradictions
+      </p>
+      {/* Count badge — total detected (not just the visible slice). Tinted
+          negative when any exist: contradictions are a data-quality warning. */}
+      <span
+        data-testid="contradictions-count"
+        className={cn(
+          "rounded-[2px] px-1 font-mono text-[9px] tabular-nums",
+          all.length > 0 ? "bg-negative/15 text-negative" : "bg-muted text-muted-foreground",
+        )}
+      >
+        {all.length}
+      </span>
+    </div>
+  ) : null;
+
   // ── Error state ──────────────────────────────────────────────────────────────
   if (isError) {
     return (
-      <p className="text-[10px] text-muted-foreground italic">
-        Contradictions unavailable.
-      </p>
+      <div>
+        {header}
+        <p className="text-[10px] text-muted-foreground italic">
+          Contradictions unavailable.
+        </p>
+      </div>
     );
   }
 
-  const items = (data?.contradictions ?? []).slice(0, limit);
-
-  // ── Empty state ──────────────────────────────────────────────────────────────
-  if (items.length === 0) {
+  // ── Empty state (named: icon + headline — Round-1 requirement 4) ────────────
+  if (all.length === 0) {
     return (
-      <p className="text-[10px] text-muted-foreground italic">
-        No contradictions detected.
-      </p>
+      <div>
+        {header}
+        <EmptyState
+          icon={Scale}
+          headline="No contradictions detected"
+          hint="Conflicting claims between sources surface here when the KG pipeline flags them."
+          variant="inline"
+        />
+      </div>
     );
   }
 
   // ── Populated state ──────────────────────────────────────────────────────────
+  // Collapsed → first `limit` cards; expanded → everything.
+  const visible = expanded ? all : all.slice(0, limit);
+  const hiddenCount = all.length - limit;
+
   return (
-    <section className="space-y-1.5" aria-label="Contradictions">
-      {items.map((c) => (
-        <ContradictionCard key={c.contradiction_id} contradiction={c} />
-      ))}
-    </section>
+    <div>
+      {header}
+      <section className="space-y-1.5" aria-label="Contradictions">
+        {visible.map((c) => (
+          <ContradictionCard key={c.contradiction_id} contradiction={c} />
+        ))}
+        {/* Expand/collapse toggle — only when there is something to reveal.
+            WHY a text button (not an accordion): one extra row at 9px mono
+            keeps the rail dense; an accordion header would cost 24px. */}
+        {hiddenCount > 0 && (
+          <button
+            type="button"
+            onClick={() => setExpanded((v) => !v)}
+            aria-expanded={expanded}
+            className="font-mono text-[9px] uppercase tracking-wider text-primary hover:underline"
+          >
+            {expanded ? "Show less" : `Show all (${all.length})`}
+          </button>
+        )}
+      </section>
+    </div>
   );
 }

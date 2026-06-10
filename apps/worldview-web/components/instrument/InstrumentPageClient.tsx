@@ -178,6 +178,9 @@ export function InstrumentPageClient({ entityId }: InstrumentPageClientProps) {
         instrument={bundle?.overview?.instrument ?? null}
         quote={bundle?.overview?.quote ?? null}
         fundamentals={bundle?.overview?.fundamentals ?? null}
+        // Round-1: 30-day average volume for the header's VOL-vs-30D pair.
+        // Comes straight from the bundle's snapshot leg — no extra fetch.
+        avgVolume30d={bundle?.fundamentals_snapshot?.avg_volume_30d ?? null}
       />
 
       {/* AI brief banner: returns null when no brief is available, so the
