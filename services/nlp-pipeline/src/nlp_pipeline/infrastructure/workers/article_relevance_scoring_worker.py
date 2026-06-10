@@ -321,7 +321,7 @@ class ArticleRelevanceScoringWorker:
             score = float(parsed["score"])  # type: ignore[arg-type]
             # F-Q1-07: extract sentiment — default to None if missing or not a valid enum.
             raw_sentiment = parsed.get("sentiment", "")
-            sentiment: str | None = raw_sentiment if raw_sentiment in _VALID_SENTIMENTS else None
+            sentiment: str | None = str(raw_sentiment) if raw_sentiment in _VALID_SENTIMENTS else None
             await self._record_usage(
                 provider="ollama",
                 model_id=self._model,
@@ -426,12 +426,8 @@ class ArticleRelevanceScoringWorker:
                 raise KeyError("score")
             score = float(parsed["score"])  # type: ignore[arg-type]
             # F-Q1-07: extract sentiment — default to None if missing or invalid enum.
-            # ``parsed`` is dict[str, object] (from _extract_relevance_json) so
-            # ``raw_sentiment`` is statically ``object`` — narrow to str|None
-            # via an explicit isinstance check before the enum membership test.
-            raw_sentiment_obj = parsed.get("sentiment", "")
-            raw_sentiment = raw_sentiment_obj if isinstance(raw_sentiment_obj, str) else ""
-            sentiment: str | None = raw_sentiment if raw_sentiment in _VALID_SENTIMENTS else None
+            raw_sentiment = parsed.get("sentiment", "")
+            sentiment: str | None = str(raw_sentiment) if raw_sentiment in _VALID_SENTIMENTS else None
             await self._record_usage(
                 provider="deepinfra",
                 model_id=self._api_model_id,

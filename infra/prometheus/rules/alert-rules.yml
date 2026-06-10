@@ -237,3 +237,17 @@ groups:
         annotations:
           summary: "Synthetic probe {{ $labels.probe_name }} failing for 5m"
           runbook: "Check synthetic monitor logs: docker compose logs synthetic-monitor"
+
+      # PLAN-0109 B-1: relevance-scoring worker provider degradation.
+      # nlp_pipeline_relevance_scoring_empty_response_total increments whenever
+      # the LLM returns empty content, fails JSON parse, or omits the score key.
+      # A sustained burst (>20 in 15min) usually means the model has reverted
+      # to <think>-only output or the provider is throttling — see PLAN-0109.
+      - alert: RelevanceScoringDegraded
+        expr: increase(nlp_pipeline_relevance_scoring_empty_response_total[15m]) > 20
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Relevance scoring worker producing empty responses"
+          description: "More than 20 empty/failed-parse LLM responses in 15min. Check model config (chat_template_kwargs, max_tokens) and DeepInfra status."

@@ -566,3 +566,176 @@ class TestProviderSelectionContract:
         call_url = client_mock.post.call_args[0][0]
         assert "api/generate" in call_url
         assert "chat/completions" not in call_url
+
+
+# ── PLAN-0109 B-1: Qwen3 thinking + parse hardening + degraded detection ──
+
+
+class TestRelevanceWorkerHardeningB1:
+    """PLAN-0109 B-1 regression tests.
+
+    Cover the four ways the DeepInfra/Qwen3 path can fail and the new degraded
+    fail-fast mechanism in the scoring loop. Each test pins one promise of the
+    hardening contract so a future regression surfaces in unit tests, not in
+    a 6-hour stall on the live pipeline.
+    """
+
+    def _make_worker_with_api(self, factory: MagicMock, batch_size: int = 10) -> ArticleRelevanceScoringWorker:
+        return ArticleRelevanceScoringWorker(
+            nlp_session_factory=factory,
+            ollama_url="http://ollama:11434",
+            model="qwen3:0.6b",
+            batch_size=batch_size,
+            timeout_seconds=5,
+            cycle_seconds=1,
+            api_key="test-deepinfra-key",
+            api_base_url="https://api.deepinfra.com/v1/openai",
+            api_model_id="Qwen/Qwen3-0.6B",
+        )
+
+    @pytest.mark.asyncio
+    async def test_external_api_includes_chat_template_kwargs(self) -> None:
+        """Payload must carry ``chat_template_kwargs.enable_thinking=False``
+        AND ``max_tokens=512`` — the two knobs that together stop Qwen3 from
+        truncating its response mid-think.
+        """
+        articles = [(_DOC_ID, "Apple reports earnings", "NEWS")]
+        factory, _ = _make_session_factory(articles)
+
+        openai_resp = {"choices": [{"message": {"content": json.dumps({"score": 0.8, "reason": "earnings"})}}]}
+        resp_mock = MagicMock()
+        resp_mock.json.return_value = openai_resp
+        resp_mock.raise_for_status = MagicMock()
+
+        with patch(_PATCH_HTTPX) as mock_cls:
+            client_mock = AsyncMock()
+            client_mock.post = AsyncMock(return_value=resp_mock)
+            ctx = MagicMock()
+            ctx.__aenter__ = AsyncMock(return_value=client_mock)
+            ctx.__aexit__ = AsyncMock(return_value=False)
+            mock_cls.return_value = ctx
+
+            worker = self._make_worker_with_api(factory)
+            await worker.scoring_cycle()
+
+        body = client_mock.post.call_args[1]["json"]
+        assert body.get("chat_template_kwargs") == {"enable_thinking": False}
+        assert body.get("max_tokens") == 512
+
+    @pytest.mark.asyncio
+    async def test_external_api_empty_content_raises_and_increments_metric(self) -> None:
+        """Empty content from provider -> article skipped + metric incremented
+        with reason='empty_content'."""
+        from nlp_pipeline.infrastructure.workers.article_relevance_scoring_worker import (
+            RELEVANCE_SCORING_EMPTY_RESPONSE_COUNTER,
+        )
+
+        articles = [(_DOC_ID, "Apple Q4", "NEWS")]
+        factory, _ = _make_session_factory(articles)
+
+        # Snapshot the counter for the label combo BEFORE the call so we can
+        # assert a delta independently of test ordering / earlier increments.
+        labels = RELEVANCE_SCORING_EMPTY_RESPONSE_COUNTER.labels(model_id="Qwen/Qwen3-0.6B", reason="empty_content")
+        before = labels._value.get()
+
+        resp_mock = MagicMock()
+        resp_mock.json.return_value = {"choices": [{"message": {"content": ""}}]}
+        resp_mock.raise_for_status = MagicMock()
+
+        with patch(_PATCH_HTTPX) as mock_cls:
+            client_mock = AsyncMock()
+            client_mock.post = AsyncMock(return_value=resp_mock)
+            ctx = MagicMock()
+            ctx.__aenter__ = AsyncMock(return_value=client_mock)
+            ctx.__aexit__ = AsyncMock(return_value=False)
+            mock_cls.return_value = ctx
+
+            worker = self._make_worker_with_api(factory)
+            count = await worker.scoring_cycle()
+
+        assert count == 0  # article skipped
+        after = labels._value.get()
+        assert after - before == 1
+
+    @pytest.mark.asyncio
+    async def test_external_api_markdown_fenced_response_parses(self) -> None:
+        """Content wrapped in ```json``` fences -> parsed correctly."""
+        articles = [(_DOC_ID, "MSFT cloud growth", "NEWS")]
+        factory, session = _make_session_factory(articles)
+
+        fenced = '```json\n{"score":0.7,"sentiment":"positive"}\n```'
+        resp_mock = MagicMock()
+        resp_mock.json.return_value = {"choices": [{"message": {"content": fenced}}]}
+        resp_mock.raise_for_status = MagicMock()
+
+        with patch(_PATCH_HTTPX) as mock_cls:
+            client_mock = AsyncMock()
+            client_mock.post = AsyncMock(return_value=resp_mock)
+            ctx = MagicMock()
+            ctx.__aenter__ = AsyncMock(return_value=client_mock)
+            ctx.__aexit__ = AsyncMock(return_value=False)
+            mock_cls.return_value = ctx
+
+            worker = self._make_worker_with_api(factory)
+            count = await worker.scoring_cycle()
+
+        assert count == 1
+        params = _find_score_call(session)
+        assert abs(params["score"] - 0.7) < 1e-9
+        assert params["sentiment"] == "positive"
+
+    @pytest.mark.asyncio
+    async def test_external_api_qwen_think_prefix_stripped(self) -> None:
+        """Qwen3 <think>…</think> prefix -> stripped, JSON parsed."""
+        articles = [(_DOC_ID, "Crash news", "NEWS")]
+        factory, session = _make_session_factory(articles)
+
+        thinky = '<think>Let me consider...this is negative news</think>\n{"score":0.9,"sentiment":"negative"}'
+        resp_mock = MagicMock()
+        resp_mock.json.return_value = {"choices": [{"message": {"content": thinky}}]}
+        resp_mock.raise_for_status = MagicMock()
+
+        with patch(_PATCH_HTTPX) as mock_cls:
+            client_mock = AsyncMock()
+            client_mock.post = AsyncMock(return_value=resp_mock)
+            ctx = MagicMock()
+            ctx.__aenter__ = AsyncMock(return_value=client_mock)
+            ctx.__aexit__ = AsyncMock(return_value=False)
+            mock_cls.return_value = ctx
+
+            worker = self._make_worker_with_api(factory)
+            count = await worker.scoring_cycle()
+
+        assert count == 1
+        params = _find_score_call(session)
+        assert abs(params["score"] - 0.9) < 1e-9
+        assert params["sentiment"] == "negative"
+
+    @pytest.mark.asyncio
+    async def test_consecutive_empty_responses_aborts_cycle(self) -> None:
+        """26 consecutive empty responses in a batch_size=50 cycle -> RuntimeError.
+
+        The fail-fast guard prevents the worker from burning the whole batch on
+        a degraded provider; the upstream ``run_forever`` swallows the
+        exception, logs it, and waits for the next cycle.
+        """
+        articles = [(uuid.uuid4(), f"art-{i}", "NEWS") for i in range(50)]
+        factory, _ = _make_session_factory(articles)
+
+        # All responses are empty -> after 25 consecutive empties (50 // 2) the
+        # 26th increment trips the guard and raises.
+        resp_mock = MagicMock()
+        resp_mock.json.return_value = {"choices": [{"message": {"content": ""}}]}
+        resp_mock.raise_for_status = MagicMock()
+
+        with patch(_PATCH_HTTPX) as mock_cls:
+            client_mock = AsyncMock()
+            client_mock.post = AsyncMock(return_value=resp_mock)
+            ctx = MagicMock()
+            ctx.__aenter__ = AsyncMock(return_value=client_mock)
+            ctx.__aexit__ = AsyncMock(return_value=False)
+            mock_cls.return_value = ctx
+
+            worker = self._make_worker_with_api(factory, batch_size=50)
+            with pytest.raises(RuntimeError, match="relevance_scoring_provider_degraded"):
+                await worker.scoring_cycle()
