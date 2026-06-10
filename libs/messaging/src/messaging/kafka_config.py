@@ -37,8 +37,26 @@ from typing import Any
 _BASE_RDKAFKA_CONFIG: dict[str, Any] = {
     # Re-resolve broker DNS every 30 s.  See module docstring for rationale.
     "broker.address.ttl": 30_000,
-    # Force IPv4 — avoid IPv6-only resolution surprises in container networks.
+    # Force IPv4 -- avoid IPv6-only resolution surprises in container networks.
     "broker.address.family": "v4",
+    # ── PLAN-0109 F-1-03: keepalive + reconnect tuning ──────────────────────
+    # Root cause: macOS host-sleep silently breaks TCP connections without
+    # sending FIN/RST.  librdkafka then sits on a stale socket until the next
+    # message attempt fails, which (with default 5-minute delivery timeout and
+    # exponential broker backoff) caused the 2026-05-20 14-hour dispatcher
+    # stall.  These keys force the kernel to probe the connection, cap the
+    # reconnect backoff, and refresh metadata regularly so a stale leader is
+    # noticed in <= 3 minutes instead of hours.  Filed as BP-661.
+    "socket.keepalive.enable": True,
+    "socket.timeout.ms": 30_000,
+    "socket.connection.setup.timeout.ms": 30_000,
+    "reconnect.backoff.ms": 500,
+    "reconnect.backoff.max.ms": 10_000,
+    "metadata.max.age.ms": 180_000,
+    "metadata.request.timeout.ms": 30_000,
+    # Note: ``delivery.timeout.ms`` is producer-only and is set on the
+    # ``KafkaProducerConfig`` dataclass (raised to 120_000 in F-1-03) rather
+    # than here so consumers don't pick up an irrelevant key.
 }
 
 

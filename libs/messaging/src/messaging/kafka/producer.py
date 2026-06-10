@@ -39,7 +39,11 @@ class KafkaProducerConfig:
     linger_ms: int = 5
     batch_size: int = 16_384
     retries: int = 5
-    delivery_timeout_ms: int = 30_000
+    # PLAN-0109 F-1-03: raised from 30_000 to 120_000 so retries actually
+    # complete after a macOS host-sleep TCP-stale event (BP-661).  See
+    # ``libs/messaging/src/messaging/kafka_config.py`` for the full keep-alive
+    # tuning rationale.
+    delivery_timeout_ms: int = 120_000
 
     def to_dict(self) -> dict[str, Any]:
         """Return Confluent-compatible config dict.
