@@ -88,6 +88,40 @@ export const EMPTY_COPY: Record<string, EmptyCopy> = {
     body: "Re-run the brief generator from the action menu.",
     ctaLabel: "Regenerate",
   },
+
+  // Instrument surface keys — Round-2 reservation (cross-surface request,
+  // item 4). Copy mirrors the headline/hint strings currently hardcoded in
+  // components/instrument/shared/EmptyState.tsx call sites (NewsColumn,
+  // GraphColumn, ContextPanel, ContradictionsBlock) so the Round-3
+  // consolidation onto components/primitives/EmptyState.tsx is a pure
+  // mechanical swap with zero copy changes. Dynamic fragments (the depth
+  // number in the graph-timeout headline) are generalised — registry copy
+  // must be static; surfaces needing interpolation keep a local string.
+  "instrument.no-articles": {
+    title: "No articles for this entity",
+    body: "Articles appear here as the ingestion pipeline links coverage to this entity.",
+  },
+  "instrument.no-contradictions": {
+    title: "No contradictions detected",
+    body: "Conflicting claims between sources surface here when the KG pipeline flags them.",
+  },
+  "instrument.graph-timeout": {
+    title: "Graph query timed out",
+    body: "Deeper traversals are expensive. Try depth 1 or 2.",
+    ctaLabel: "Reduce depth",
+  },
+  "instrument.graph-no-filter-matches": {
+    title: "No entities match the type filter",
+    body: "Clear or widen the entity-type filter in the toolbar above.",
+  },
+  "instrument.no-connections": {
+    title: "No connections found",
+    body: "The knowledge graph builds connections as news articles are ingested — check back later.",
+  },
+  "instrument.no-entity-context": {
+    title: "No entity context",
+    body: "This entity has not been enriched yet — the overnight enrichment worker populates name, type and description.",
+  },
 };
 
 export type EmptyCopyKey = keyof typeof EMPTY_COPY;

@@ -93,19 +93,30 @@ function extractBullets(
     }));
 }
 
-/** kindChipClass — design token color for each bullet kind. */
+/** kindChipClass — design token color for each bullet kind.
+ *
+ * WHY text-positive / bg-positive/10 etc. (Round-2 token fix, DS §15.11):
+ * the previous classes referenced `var(--color-positive)` / `--color-negative`
+ * / `--color-warning` — CSS variables that are NEVER DEFINED in globals.css
+ * (the silent no-paint bug class that bit the portfolio sparkline). The chips
+ * rendered with no tint at all. The canonical consumption path for sentiment
+ * colors in text/background context is the Tailwind semantic utilities
+ * (`text-positive`, `bg-warning/10`, …) mapped in tailwind.config.ts to
+ * hsl(var(--positive)) etc. — same pattern as FormattedNumber and badge.tsx.
+ */
 function kindChipClass(kind: string | null): string {
-  if (kind === "bull") return "text-[color:var(--color-positive)] bg-[color:var(--color-positive)]/10";
-  if (kind === "bear") return "text-[color:var(--color-negative)] bg-[color:var(--color-negative)]/10";
-  if (kind === "risk") return "text-[color:var(--color-warning)] bg-[color:var(--color-warning)]/10";
+  if (kind === "bull") return "text-positive bg-positive/10";
+  if (kind === "bear") return "text-negative bg-negative/10";
+  if (kind === "risk") return "text-warning bg-warning/10";
   return "text-muted-foreground bg-muted/30";
 }
 
-/** riskLevelClass — color token for risk_summary.concentration_score bucket. */
+/** riskLevelClass — color token for risk_summary.concentration_score bucket.
+ * Same Round-2 token fix as kindChipClass: `--color-*` vars were undefined. */
 function riskLevelClass(score: number): string {
-  if (score >= 0.7) return "text-[color:var(--color-negative)]";
-  if (score >= 0.4) return "text-[color:var(--color-warning)]";
-  return "text-[color:var(--color-positive)]";
+  if (score >= 0.7) return "text-negative";
+  if (score >= 0.4) return "text-warning";
+  return "text-positive";
 }
 
 function riskLabel(score: number): string {
@@ -220,7 +231,8 @@ export function AIBriefPanel({ entityId }: AIBriefPanelProps) {
 
       {status === "error" && (
         <div className="flex flex-col gap-2 px-2 py-2">
-          <span className="text-[10px] font-mono text-[color:var(--color-negative)]">
+          {/* text-negative: Round-2 token fix — var(--color-negative) was undefined (DS §15.11). */}
+          <span className="text-[10px] font-mono text-negative">
             {errorMessage ?? "Brief unavailable"}
           </span>
           <button

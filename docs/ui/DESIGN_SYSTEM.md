@@ -1635,3 +1635,92 @@ above while reaffirming that financial data values are excluded.
 > states `36px` (PRD-0031). This discrepancy should be resolved in W3 (Dashboard fixes).
 > W0 adds the chart/entity tokens without touching the topbar value to avoid
 > unintended layout breakage.
+
+### 15.10 AG Grid 22px row-height adoption path (Round-2 enhancement sprint)
+
+**Path**: `components/ui/ag-grid/AgGridBase.tsx`
+
+`AgGridBase` accepts optional `rowHeight` / `headerHeight` props (both default
+**28** — the previously hardcoded value), so grids can adopt the
+`--data-row-height: 22px` token (§2.1, PRD-0031) per surface:
+
+```tsx
+<AgGridBase rowData={rows} columnDefs={cols} rowHeight={22} headerHeight={22} />
+```
+
+Rules of adoption:
+
+1. **Opt-in per call site** — the default stays 28, so no grid reflows until
+   its owning surface adopts deliberately. Audit row content first: cell
+   renderers with sparklines, badges, or 2-line layouts may clip at 22px.
+2. **Numbers, not the CSS var** — AG Grid virtualises rows with JS math and
+   needs a concrete px value at construction; it cannot read
+   `var(--data-row-height)`. The token's value (22) is mirrored in the prop.
+   If PRD-0031 ever changes the token, grep `rowHeight={22}` call sites.
+3. **Header matches rows** — pass `headerHeight={22}` together with
+   `rowHeight={22}` (Bloomberg keeps them equal; a 28px header over 22px rows
+   reads as misalignment).
+
+Prop passthrough + defaults are pinned by
+`components/ui/ag-grid/__tests__/AgGridBase.test.tsx`.
+
+### 15.11 Sentiment color tokens — canonical consumption (Round-2 decision)
+
+**Decision (Round-2 enhancement sprint)**: the platform does **NOT** define
+`--color-positive` / `--color-negative` / `--color-warning` CSS variables, and
+they must never be referenced. That `--color-*` prefix is Tailwind **v4**'s
+`@theme` convention; we are on Tailwind v3 with HSL-triplet tokens
+(`--positive: 150 100% 41%`) consumed through `tailwind.config.ts` mappings.
+Referencing an undefined variable (`text-[color:var(--color-positive)]`)
+compiles silently and **paints nothing** — the no-paint bug class that hit the
+portfolio sparkline (R1 sprint) and the instrument AI-brief chips/peer table
+(fixed Round 2). Option (b) — fix usages — was chosen over option (a) —
+aliasing — to avoid a second, parallel full-color token convention.
+
+Canonical consumption per context:
+
+| Context | Use | Example |
+|---------|-----|---------|
+| Text / background / border in JSX | Semantic Tailwind utilities | `text-positive`, `text-negative`, `text-warning`, `bg-positive/10` |
+| Canvas / SVG / chart JS constants | `hsl(var(--chart-*))` | `hsl(var(--chart-positive))` (sparklines, OHLCV) |
+| Raw CSS files | `hsl(var(--positive))` | ag-grid-theme.css overrides |
+
+A naming-guard comment now sits next to the financial-domain tokens in
+`app/globals.css`. The lint rule banning raw `text-green-*`-style classes
+(`.eslintrc.json`, PLAN-0071 P1-4) already points at the same utilities.
+
+### 15.12 `EmptyState` primitive API (Round-2 enhancement sprint)
+
+**Path**: `components/primitives/EmptyState.tsx`
+**Copy registry**: `lib/copy/empty-states.ts`
+
+```tsx
+<EmptyState
+  condition="empty-no-data"          // loading | empty-cold-start | empty-no-data | error | permission | coming-soon
+  copyKey="instrument.no-articles"   // resolves via lib/copy/empty-states.ts; falls back to generic.<condition>
+  icon={Newspaper}                   // NEW (optional) — lucide COMPONENT, rendered muted 16px above the title
+  action={<Button onClick={retry}>Retry</Button>}  // NEW (optional) — interactive CTA slot
+/>
+```
+
+- **`icon`** — pass the lucide component (not an element); the primitive owns
+  size/color (`size-4 text-muted-foreground/60`, strokeWidth 1.5, aria-hidden)
+  so every surface renders identically. Matches the treatment of
+  `components/instrument/shared/EmptyState.tsx`, which becomes a thin wrapper
+  (or is deleted) in the Round-3 consolidation.
+- **`action`** — ReactNode CTA slot below the body; supports real onClick
+  buttons (retry/regenerate), not just href Links. Supersedes the legacy
+  `cta` prop (kept, `@deprecated`); when both are passed, `action` wins —
+  single-slot invariant, never two stacked CTAs.
+- **Copy keys** — Round 2 reserved the `instrument.*` keys
+  (`no-articles`, `no-contradictions`, `graph-timeout`,
+  `graph-no-filter-matches`, `no-connections`, `no-entity-context`) mirroring
+  the strings hardcoded in the instrument intelligence tab, so the Round-3
+  call-site migration is a mechanical swap.
+- **Round-3 deferrals**: (1) migrate `components/instrument/shared/EmptyState.tsx`
+  call sites (NewsColumn, GraphColumn, ContextPanel, ContradictionsBlock) onto
+  this primitive; (2) `components/ui/dashboard-empty-state.tsx`
+  (DashboardEmptyState) consolidation — skipped in Round 2 because
+  `components/dashboard` was owned by the dashboard surface agent.
+
+API contracts pinned by `components/primitives/__tests__/EmptyState.test.tsx`.

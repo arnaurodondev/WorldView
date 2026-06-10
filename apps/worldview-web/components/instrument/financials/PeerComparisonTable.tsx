@@ -217,8 +217,16 @@ export function PeerComparisonTable({
                 row.return_1y == null
                   ? "text-muted-foreground"
                   : row.return_1y >= 0
-                  ? "text-[color:var(--color-positive)]"
-                  : "text-[color:var(--color-negative)]"
+                  ? // WHY text-positive/text-negative (Round-2 token fix, DS §15.11):
+                    // the previous `text-[color:var(--color-positive)]` referenced a
+                    // CSS variable that is NEVER DEFINED in globals.css (the silent
+                    // no-paint bug class that bit the portfolio sparkline) — the text
+                    // fell back to inherited color and gains/losses rendered
+                    // indistinguishable. `text-positive`/`text-negative` are the
+                    // canonical semantic utilities mapped in tailwind.config.ts to
+                    // hsl(var(--positive))/hsl(var(--negative)).
+                    "text-positive"
+                  : "text-negative"
               }`}
             >
               {row.isSelf ? "—" : formatReturn(row.return_1y)}

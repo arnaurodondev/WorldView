@@ -1349,12 +1349,63 @@ export interface Message {
   citations: Citation[];
 }
 
+/**
+ * Citation — LEGACY chat citation shape (PRD-0028 era).
+ *
+ * @deprecated Use `CitationV2` for all new code. This is the field naming the
+ * original chat components were built against; rag-chat (S8) now emits the
+ * canonical `CitationV2` names (`id`/`source_name`/`confidence`/`item_type`)
+ * and `lib/api/chat.ts#normalizeCitation` writes BOTH shapes onto every
+ * citation object so pre-migration call sites keep working. Kept exported
+ * (NOT removed/renamed — forward-compat only, R11) until the atomic rename in
+ * PLAN-0089-K-FU; the `no-legacy-citation` architecture test blocks NEW bare
+ * `Citation` imports in `features/chat/**` and `components/chat/**`.
+ */
 export interface Citation {
   article_id: string;
   title: string;
   url: string;
   source: string;
   relevance_score: number;
+}
+
+/**
+ * CitationV2 — canonical chat citation shape (PLAN-0089 Wave K, Q-10).
+ *
+ * WHY V2: rag-chat's ThreadDetailResponse + SSE `citations` events emit this
+ * shape natively (PLAN-0107 added `Citation.id` + structured fields on the
+ * backend). The legacy `Citation` names (`article_id`/`source`/
+ * `relevance_score`) were a frontend-only contract that forced a lossy
+ * mapping; V2 mirrors the server payload 1:1 so no information is dropped.
+ *
+ * DATA SOURCE: S8 rag-chat `Citation` Pydantic model, proxied verbatim by S9.
+ * The chat surface's normalizers emit objects satisfying BOTH `Citation` and
+ * `CitationV2` during the staged migration — components should type against
+ * this interface and ignore the legacy fields.
+ */
+export interface CitationV2 {
+  /** Stable citation id (UUIDv7) — dedup key is (message_id, citation.id). */
+  id: string;
+  /** Human-readable source, e.g. "Reuters" — replaces legacy `source`. */
+  source_name: string;
+  /** Retrieval confidence 0.0–1.0 — replaces legacy `relevance_score`. */
+  confidence: number;
+  /**
+   * What kind of KG/RAG item backs the citation (e.g. "article", "entity",
+   * "relation") — drives per-type rendering in CitationStrip/ToolTraceDrawer.
+   */
+  item_type: string;
+  /**
+   * Primary entity the citation is about, when the backing item is
+   * entity-scoped. Null for entity-less items (e.g. macro articles) —
+   * render a fallback, never `undefined`-keyed lookups (the "NaN%" bug
+   * class Wave K fixed).
+   */
+  entity_name: string | null;
+  /** Document/item title. Empty string when the source has no title. */
+  title: string;
+  /** Canonical source URL. Empty string when not resolvable (internal KG items). */
+  url: string;
 }
 
 export interface Thread {

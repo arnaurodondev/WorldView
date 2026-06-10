@@ -123,6 +123,16 @@
      *     Color-blind delta-luminance vs proposed --positive: 96 (deuteranope).
      *   - --warning kept (Bloomberg amber) but bumped to #FFB000 for distinctness
      *     from --primary yellow (so alert severities don't collide visually). */
+    /* ⚠ NAMING GUARD (Round-2 token decision, DESIGN_SYSTEM.md §15.11):
+     * There are NO `--color-positive` / `--color-negative` / `--color-warning`
+     * variables in this file — that `--color-*` prefix is Tailwind v4's @theme
+     * convention and we are on Tailwind v3. Writing
+     * `text-[color:var(--color-positive)]` compiles fine but paints NOTHING
+     * (undefined var → inherited color); this silent no-paint bug already bit
+     * the portfolio sparkline and the instrument AI brief chips.
+     * Consume sentiment colors via the semantic utilities mapped in
+     * tailwind.config.ts: `text-positive`, `bg-negative/10`, `text-warning` —
+     * or `hsl(var(--chart-positive))` for canvas/SVG chart code. */
     --positive: 150 100% 41%;       /* #00D26A — institutional green (was #26A69A teal) */
     --positive-fill: 145 100% 32%;  /* #00A352 — fill backgrounds (badges) */
     --negative: 350 100% 62%;       /* #FF3B5C — urgent institutional red (was #EF5350) */

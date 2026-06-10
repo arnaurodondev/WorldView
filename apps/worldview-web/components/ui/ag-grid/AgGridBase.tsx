@@ -57,6 +57,29 @@ export interface AgGridBaseProps<TData extends object> {
    */
   pinnedBottomRowData?: TData[];
   /**
+   * Data-row height in px. Default 28 (the historical hardcoded value).
+   *
+   * WHY THIS PROP EXISTS (Round-2 cross-surface request): DESIGN_SYSTEM.md §2.1
+   * defines `--data-row-height: 22px` (PRD-0031 density pass), but every AG Grid
+   * instance was pinned to the hardcoded 28px inside this wrapper, so tables
+   * could not adopt the token. Surfaces opt in per call site with
+   * `rowHeight={22}` — the default stays 28 so existing grids do not reflow
+   * until their owning agent adopts the denser row deliberately (column
+   * content like sparklines/badges may need a height audit first).
+   *
+   * WHY a number prop (not reading the CSS var here): AG Grid virtualises rows
+   * with JS math — it needs a concrete px number at construction, not a CSS
+   * variable. The token's value (22) is mirrored here by the caller; see
+   * DESIGN_SYSTEM.md §15.10 for the adoption path.
+   */
+  rowHeight?: number;
+  /**
+   * Header-row height in px. Default 28 (matches the historical value).
+   * Usually adopted together with `rowHeight` so the header does not look
+   * taller than the data rows it labels (Bloomberg keeps them equal).
+   */
+  headerHeight?: number;
+  /**
    * Arbitrary data object passed to all cell renderers via `params.context`.
    *
    * WHY context (not cellRendererParams): `context` is the AG Grid-idiomatic
@@ -88,9 +111,11 @@ export interface AgGridBaseProps<TData extends object> {
  * legacy theme API (still shipped in v35 Community) and gives us full control
  * with one CSS file.
  *
- * WHY rowHeight=28, headerHeight=28: Bloomberg terminal row height is ~24–28px.
- * 28px gives one row per ~11px font line + comfortable padding without wasting
- * vertical space the way Alpine's default 42px does.
+ * WHY DEFAULT rowHeight=28, headerHeight=28: Bloomberg terminal row height is
+ * ~24–28px. 28px gives one row per ~11px font line + comfortable padding
+ * without wasting vertical space the way Alpine's default 42px does. Surfaces
+ * targeting the denser `--data-row-height: 22px` token (DESIGN_SYSTEM.md §2.1)
+ * pass `rowHeight={22} headerHeight={22}` explicitly — see §15.10.
  */
 export function AgGridBase<TData extends object>({
   rowData,
@@ -107,6 +132,11 @@ export function AgGridBase<TData extends object>({
   onCellMouseOver,
   onCellMouseOut,
   context,
+  // WHY defaults here (not inside the JSX): destructuring defaults keep the
+  // props genuinely optional for every existing call site — zero visual change
+  // until a surface opts in. 28 is the exact value previously hardcoded below.
+  rowHeight = 28,
+  headerHeight = 28,
 }: AgGridBaseProps<TData>) {
   const colStateHandler = onColumnStateChanged;
 
@@ -124,8 +154,8 @@ export function AgGridBase<TData extends object>({
         columnDefs={columnDefs}
         pinnedBottomRowData={pinnedBottomRowData}
         context={context}
-        rowHeight={28}
-        headerHeight={28}
+        rowHeight={rowHeight}
+        headerHeight={headerHeight}
         groupHeaderHeight={22}
         getRowId={getRowId}
         onGridReady={onGridReady}
