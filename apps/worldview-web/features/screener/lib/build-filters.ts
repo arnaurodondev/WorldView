@@ -95,21 +95,34 @@ export function buildScreenerFilters(f: FilterState): ScreenerFilter[] {
   pushIfRange(filters, "short_percent", f.shortPctMin, f.shortPctMax);
 
   // ── Intelligence rollup (SERVER_SIDE — IB-L5) ────────────────────────────
-  // WHY field names byte-for-byte: the backend screener ignores unknown metric
-  // names silently (INNER JOIN miss). Names must match the exact column names
-  // in instrument_fundamentals_snapshot as populated by the L-5b rollup worker.
-  pushIfRange(filters, "news_count_7d", f.newsCount7dMin, f.newsCount7dMax);
-  pushIfRange(filters, "llm_relevance_7d_max", f.llmRelevance7dMin, f.llmRelevance7dMax);
-  pushIfRange(filters, "display_relevance_7d_weighted", f.displayRelevance7dMin, f.displayRelevance7dMax);
-  pushIfRange(filters, "recent_contradiction_count", f.contradictionsMin, f.contradictionsMax);
-  // Boolean filters: represented as range [1, undefined] so the INNER JOIN path
-  // can apply them as WHERE col = true. A min_value of 1 on a BOOLEAN column
-  // is interpreted as "must be true" by the S3 screener backend.
-  if (f.hasAiBrief === true) {
-    filters.push({ metric: "has_ai_brief", min_value: 1 });
-  }
-  if (f.hasActiveAlert === true) {
-    filters.push({ metric: "has_active_alert", min_value: 1 });
+  // WHY merged into ONE filter object (not pushed as separate filters[]
+  // entries): the backend ScreenFilterRequest exposes the 6 intelligence fields
+  // as PER-FILTER named siblings of min_value/max_value. Pushing them as
+  // `{metric: "news_count_7d", min_value: 1}` silently returns 0 rows because
+  // `news_count_7d` is not a known computed metric — the INNER JOIN path drops
+  // unmatched rows. Same merge pattern used for `sector` below.
+  // Reference: services/market-data/.../api/schemas/fundamental_metrics.py:115-124.
+  const intel: Partial<ScreenerFilter> = {};
+  if (f.newsCount7dMin !== undefined) intel.news_count_7d_min = f.newsCount7dMin;
+  if (f.newsCount7dMax !== undefined) intel.news_count_7d_max = f.newsCount7dMax;
+  if (f.llmRelevance7dMin !== undefined) intel.llm_relevance_7d_max_min = f.llmRelevance7dMin;
+  if (f.llmRelevance7dMax !== undefined) intel.llm_relevance_7d_max_max = f.llmRelevance7dMax;
+  if (f.displayRelevance7dMin !== undefined) intel.display_relevance_7d_weighted_min = f.displayRelevance7dMin;
+  if (f.displayRelevance7dMax !== undefined) intel.display_relevance_7d_weighted_max = f.displayRelevance7dMax;
+  if (f.contradictionsMin !== undefined) intel.recent_contradiction_count_min = f.contradictionsMin;
+  if (f.contradictionsMax !== undefined) intel.recent_contradiction_count_max = f.contradictionsMax;
+  if (f.hasAiBrief === true) intel.has_ai_brief = true;
+  if (f.hasActiveAlert === true) intel.has_active_alert = true;
+  if (Object.keys(intel).length > 0) {
+    if (filters.length > 0) {
+      filters[0] = { ...filters[0], ...intel };
+    } else {
+      // WHY synthetic filter: ScreenFilterRequest requires `metric` (regex-validated).
+      // market_capitalization is the canonical "always-present" metric with no
+      // numeric bounds — the backend's INNER JOIN handles the snapshot columns
+      // directly without needing a min/max on the metric itself.
+      filters.push({ metric: "market_capitalization", ...intel });
+    }
   }
 
   // Sector filter: when sector is selected but no other metric filters are active

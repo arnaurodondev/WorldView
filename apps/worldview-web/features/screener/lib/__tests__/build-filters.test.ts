@@ -232,90 +232,142 @@ describe("buildScreenerFilters — empty filter list (S3 v2 BP-368 fix)", () => 
   });
 });
 
-// ── IB-L5 — Intelligence rollup filters ──────────────────────────────────────
+// ── IB-L5 — Intelligence rollup filters (per-filter named fields) ────────────
+//
+// WHY the wire format changed (2026-06-09 hotfix): the original IB-L5 ship
+// pushed each intelligence field as its own filter entry
+// (`{metric: "news_count_7d", min_value: 1}`). That silently dropped every
+// IB-L5 filter at the backend INNER JOIN because the metric strings aren't in
+// the computed-metrics catalogue. The corrected wire format places the
+// intelligence fields as NAMED siblings of `min_value`/`max_value` on a single
+// filter object — matching the ScreenFilterRequest schema in
+// services/market-data/src/market_data/api/schemas/fundamental_metrics.py.
+//
+// Tests below verify the *fixed* shape: one filter object carries all live
+// intelligence fields plus a synthetic `metric` ("market_capitalization") to
+// satisfy the backend's required-metric regex.
 
-describe("buildScreenerFilters — IB-L5 intelligence rollup metric names", () => {
-  it("newsCount7d maps to 'news_count_7d'", () => {
-    // WHY: metric name must match the exact column name in
-    // instrument_fundamentals_snapshot; mismatches are silently dropped.
+describe("buildScreenerFilters — IB-L5 intelligence rollup (per-filter fields)", () => {
+  it("newsCount7dMin lands on filter.news_count_7d_min, not as its own filter entry", () => {
     const filters = buildScreenerFilters(makeFilters({ newsCount7dMin: 3 }));
-    const f = findFilter(filters, "news_count_7d");
-    expect(f?.min_value).toBe(3);
-    expect(f?.max_value).toBeUndefined();
+    // No filter entry has metric=news_count_7d (the old broken shape):
+    expect(findFilter(filters, "news_count_7d")).toBeUndefined();
+    // Instead, ONE filter carries the intelligence field as a named sibling.
+    const intelHolder = filters.find((x) => x.news_count_7d_min !== undefined);
+    expect(intelHolder?.news_count_7d_min).toBe(3);
+    expect(intelHolder?.news_count_7d_max).toBeUndefined();
   });
 
-  it("newsCount7d max is also mapped", () => {
+  it("newsCount7d max also maps to news_count_7d_max named field", () => {
     const filters = buildScreenerFilters(makeFilters({ newsCount7dMin: 2, newsCount7dMax: 50 }));
-    const f = findFilter(filters, "news_count_7d");
-    expect(f?.min_value).toBe(2);
-    expect(f?.max_value).toBe(50);
+    const h = filters.find((x) => x.news_count_7d_min !== undefined);
+    expect(h?.news_count_7d_min).toBe(2);
+    expect(h?.news_count_7d_max).toBe(50);
   });
 
-  it("llmRelevance7d maps to 'llm_relevance_7d_max'", () => {
+  it("llmRelevance7d maps to llm_relevance_7d_max_min named field", () => {
     const filters = buildScreenerFilters(makeFilters({ llmRelevance7dMin: 0.6 }));
-    const f = findFilter(filters, "llm_relevance_7d_max");
-    expect(f?.min_value).toBe(0.6);
+    const h = filters.find((x) => x.llm_relevance_7d_max_min !== undefined);
+    expect(h?.llm_relevance_7d_max_min).toBe(0.6);
   });
 
-  it("displayRelevance7d maps to 'display_relevance_7d_weighted'", () => {
+  it("displayRelevance7d maps to display_relevance_7d_weighted_{min,max}", () => {
     const filters = buildScreenerFilters(makeFilters({ displayRelevance7dMin: 0.5, displayRelevance7dMax: 1 }));
-    const f = findFilter(filters, "display_relevance_7d_weighted");
-    expect(f?.min_value).toBe(0.5);
-    expect(f?.max_value).toBe(1);
+    const h = filters.find((x) => x.display_relevance_7d_weighted_min !== undefined);
+    expect(h?.display_relevance_7d_weighted_min).toBe(0.5);
+    expect(h?.display_relevance_7d_weighted_max).toBe(1);
   });
 
-  it("contradictions maps to 'recent_contradiction_count'", () => {
+  it("contradictions maps to recent_contradiction_count_min", () => {
     const filters = buildScreenerFilters(makeFilters({ contradictionsMin: 1 }));
-    const f = findFilter(filters, "recent_contradiction_count");
-    expect(f?.min_value).toBe(1);
+    const h = filters.find((x) => x.recent_contradiction_count_min !== undefined);
+    expect(h?.recent_contradiction_count_min).toBe(1);
   });
 
-  it("hasAiBrief=true adds has_ai_brief filter with min_value=1", () => {
-    // WHY min_value=1: boolean columns in S3 are filtered via a range check
-    // WHERE col >= 1, which is equivalent to WHERE col = TRUE for booleans.
+  it("hasAiBrief=true sets has_ai_brief: true on a filter (not a min_value=1 entry)", () => {
     const filters = buildScreenerFilters(makeFilters({ hasAiBrief: true }));
-    const f = findFilter(filters, "has_ai_brief");
-    expect(f).toBeDefined();
-    expect(f?.min_value).toBe(1);
+    expect(findFilter(filters, "has_ai_brief")).toBeUndefined(); // old broken shape gone
+    const h = filters.find((x) => x.has_ai_brief !== undefined);
+    expect(h?.has_ai_brief).toBe(true);
   });
 
-  it("hasAiBrief=false does NOT add a has_ai_brief filter", () => {
-    // WHY: false means "no filter" (show all), not "must NOT have brief".
+  it("hasAiBrief=false does NOT set has_ai_brief", () => {
     const filters = buildScreenerFilters(makeFilters({ hasAiBrief: false }));
-    expect(findFilter(filters, "has_ai_brief")).toBeUndefined();
+    expect(filters.some((x) => x.has_ai_brief !== undefined)).toBe(false);
   });
 
-  it("hasAiBrief=undefined does NOT add a has_ai_brief filter", () => {
+  it("hasAiBrief=undefined does NOT set has_ai_brief", () => {
     const filters = buildScreenerFilters(makeFilters());
-    expect(findFilter(filters, "has_ai_brief")).toBeUndefined();
+    expect(filters.some((x) => x.has_ai_brief !== undefined)).toBe(false);
   });
 
-  it("hasActiveAlert=true adds has_active_alert filter with min_value=1", () => {
+  it("hasActiveAlert=true sets has_active_alert: true", () => {
     const filters = buildScreenerFilters(makeFilters({ hasActiveAlert: true }));
-    const f = findFilter(filters, "has_active_alert");
-    expect(f).toBeDefined();
-    expect(f?.min_value).toBe(1);
+    const h = filters.find((x) => x.has_active_alert !== undefined);
+    expect(h?.has_active_alert).toBe(true);
   });
 
-  it("hasActiveAlert=false does NOT add a has_active_alert filter", () => {
+  it("hasActiveAlert=false does NOT set has_active_alert", () => {
     const filters = buildScreenerFilters(makeFilters({ hasActiveAlert: false }));
-    expect(findFilter(filters, "has_active_alert")).toBeUndefined();
+    expect(filters.some((x) => x.has_active_alert !== undefined)).toBe(false);
   });
 
-  it("no intelligence filters are emitted when all IB-L5 fields are at defaults", () => {
-    // WHY: ensures the default screener (no filters set) doesn't silently add
-    // intelligence constraints that would narrow the universe unexpectedly.
+  it("no intelligence fields are emitted when all IB-L5 inputs are at defaults", () => {
     const filters = buildScreenerFilters(makeFilters());
-    const intelligenceMetrics = [
-      "news_count_7d",
-      "llm_relevance_7d_max",
-      "display_relevance_7d_weighted",
-      "recent_contradiction_count",
+    const intelKeys: (keyof import("@/types/api").ScreenerFilter)[] = [
+      "news_count_7d_min",
+      "news_count_7d_max",
+      "llm_relevance_7d_max_min",
+      "llm_relevance_7d_max_max",
+      "display_relevance_7d_weighted_min",
+      "display_relevance_7d_weighted_max",
+      "recent_contradiction_count_min",
       "has_ai_brief",
       "has_active_alert",
     ];
-    for (const metric of intelligenceMetrics) {
-      expect(findFilter(filters, metric)).toBeUndefined();
+    for (const k of intelKeys) {
+      expect(filters.some((x) => x[k] !== undefined)).toBe(false);
     }
+  });
+
+  it("multiple intelligence fields merge onto a SINGLE filter object", () => {
+    // Regression guard: each intelligence field must NOT spawn its own filter
+    // entry (the original IB-L5 bug). They all merge onto one object.
+    const filters = buildScreenerFilters(
+      makeFilters({
+        newsCount7dMin: 5,
+        contradictionsMin: 1,
+        hasAiBrief: true,
+        hasActiveAlert: true,
+        displayRelevance7dMin: 0.7,
+      }),
+    );
+    const intelHolders = filters.filter(
+      (x) =>
+        x.news_count_7d_min !== undefined ||
+        x.recent_contradiction_count_min !== undefined ||
+        x.has_ai_brief !== undefined ||
+        x.has_active_alert !== undefined ||
+        x.display_relevance_7d_weighted_min !== undefined,
+    );
+    expect(intelHolders).toHaveLength(1);
+    const h = intelHolders[0];
+    expect(h.news_count_7d_min).toBe(5);
+    expect(h.recent_contradiction_count_min).toBe(1);
+    expect(h.has_ai_brief).toBe(true);
+    expect(h.has_active_alert).toBe(true);
+    expect(h.display_relevance_7d_weighted_min).toBe(0.7);
+  });
+
+  it("intelligence-only request creates a synthetic market_capitalization filter (required by backend regex)", () => {
+    // When no other range filter is active, the intelligence fields still need
+    // a `metric` field — backend regex requires it. Synthetic market_capitalization
+    // has no min/max so it carries no extra constraint.
+    const filters = buildScreenerFilters(makeFilters({ hasAiBrief: true }));
+    expect(filters).toHaveLength(1);
+    expect(filters[0].metric).toBe("market_capitalization");
+    expect(filters[0].min_value).toBeUndefined();
+    expect(filters[0].max_value).toBeUndefined();
+    expect(filters[0].has_ai_brief).toBe(true);
   });
 });

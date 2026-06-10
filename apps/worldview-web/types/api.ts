@@ -775,6 +775,24 @@ export interface ScreenerFilter {
   min_value?: number;
   max_value?: number;
   sector?: string;
+  // ── PLAN-0089 IB-L5 — intelligence rollup per-filter named fields ──────────
+  // WHY these live as siblings of min_value/max_value (not in a parallel filters
+  // array): the backend ScreenFilterRequest exposes them as PER-FILTER fields —
+  // see services/market-data/.../api/schemas/fundamental_metrics.py:115-124.
+  // Sending them as `{metric: "has_ai_brief", min_value: 1}` silently fails
+  // because `has_ai_brief` is not a known computed metric and the INNER JOIN
+  // drops the row. Sending them by name on the filter object hits the column
+  // directly on instrument_fundamentals_snapshot.
+  news_count_7d_min?: number;
+  news_count_7d_max?: number;
+  llm_relevance_7d_max_min?: number;
+  llm_relevance_7d_max_max?: number;
+  display_relevance_7d_weighted_min?: number;
+  display_relevance_7d_weighted_max?: number;
+  recent_contradiction_count_min?: number;
+  recent_contradiction_count_max?: number;
+  has_active_alert?: boolean;
+  has_ai_brief?: boolean;
 }
 
 export interface ScreenerRequest {
