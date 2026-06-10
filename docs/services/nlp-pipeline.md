@@ -232,6 +232,7 @@ Runs on MEDIUM and DEEP tier only. Uses `Qwen/Qwen3-235B-A22B-Instruct-2507` via
 | POST | `/api/v1/vector-search` | — | Semantic section/chunk search (legacy) |
 | GET | `/api/v1/search/documents` | X-Internal-JWT | Full-text search across articles + EDGAR with entity facets. Params: `q`, `entity_id` (multi), `scope`, `source_type`, `date_from`, `date_to`, `date_preset`, `page`, `page_size` |
 | GET | `/internal/v1/llm-costs` | X-Internal-JWT (system) | LLM cost aggregates. Params: `period` (YYYY-MM), `provider`, `breakdown` |
+| GET | `/internal/v1/instruments/{instrument_id}/news-rollup-7d` | X-Internal-JWT (system) | 7-day news rollup (`news_count_7d`, `llm_relevance_7d_max`, `display_relevance_7d_weighted`) consumed by market-data's nightly `SyncIntelligenceRollupUseCase` (PLAN-0089 L-5b). |
 | POST | `/api/v1/reprocess/{article_id}` | X-Admin-Token | Re-enqueue article for reprocessing |
 | GET | `/admin/dlq` | X-Admin-Token | List open DLQ entries |
 | GET | `/admin/dlq/{id}` | X-Admin-Token | Get single DLQ entry |

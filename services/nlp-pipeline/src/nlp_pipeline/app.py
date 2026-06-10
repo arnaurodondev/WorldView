@@ -22,7 +22,18 @@ from fastapi import FastAPI, Request, Response
 from fastapi.responses import JSONResponse
 from starlette.middleware.base import BaseHTTPMiddleware
 
-from nlp_pipeline.api.routes import admin, dlq, embed, entities, health, internal_costs, news, search, signals
+from nlp_pipeline.api.routes import (
+    admin,
+    dlq,
+    embed,
+    entities,
+    health,
+    internal_costs,
+    internal_news_rollup,
+    news,
+    search,
+    signals,
+)
 from nlp_pipeline.api.routes.search_documents import router as search_documents_router
 from nlp_pipeline.config import Settings
 from nlp_pipeline.infrastructure.intelligence_db.session import (
@@ -285,6 +296,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(news.router)
     app.include_router(dlq.router)
     app.include_router(internal_costs.router)
+    # PLAN-0089 L-5a — 7-day news rollup endpoint consumed by market-data's
+    # nightly SyncIntelligenceRollupUseCase (L-5b). Previously this router was
+    # implemented but never registered, causing the S6NewsRollupClient to 404
+    # on every call and leaving news_count_7d / llm_relevance_7d_max /
+    # display_relevance_7d_weighted columns NULL across all 664 instruments.
+    app.include_router(internal_news_rollup.router)
     # PLAN-0055 C-4: admin LLM replay endpoint.
     app.include_router(admin.router)
     # PLAN-0064 W6: full-text document search (stub in Wave 1, wired in Wave 3).
