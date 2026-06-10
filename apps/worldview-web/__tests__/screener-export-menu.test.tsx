@@ -88,6 +88,51 @@ describe("ExportMenu", () => {
     expect(arg.title).toBe("Screener Results");
   });
 
+  // ── Round 2: sort-aware export via getRows ────────────────────────────────
+
+  it("prefers getRows (grid-sorted snapshot) over the rows prop when provided", async () => {
+    // WHY: the rows prop is the parent's PRE-sort base array; getRows pulls
+    // the AG Grid display order at click time. The export must use the latter
+    // so the file matches what the user sees on screen.
+    const user = userEvent.setup();
+    const SORTED = [...ROWS].reverse();
+    const getRows = vi.fn(() => SORTED);
+    render(<ExportMenu rows={ROWS} getRows={getRows} columns={COLS} filenameBase="screener" />);
+    await user.click(screen.getByRole("button", { name: /export results/i }));
+    await user.click(await screen.findByRole("menuitem", { name: /export as csv/i }));
+    expect(getRows).toHaveBeenCalledTimes(1);
+    const arg = (exportToCsv as ReturnType<typeof vi.fn>).mock.calls[0][0];
+    expect(arg.rows).toBe(SORTED);
+  });
+
+  it("falls back to the rows prop when getRows returns an empty array", async () => {
+    // WHY: grid-not-mounted edge — an export click must never silently
+    // produce an empty file while rows are visibly on screen.
+    const user = userEvent.setup();
+    const getRows = vi.fn(() => [] as Row[]);
+    render(<ExportMenu rows={ROWS} getRows={getRows} columns={COLS} filenameBase="screener" />);
+    await user.click(screen.getByRole("button", { name: /export results/i }));
+    await user.click(await screen.findByRole("menuitem", { name: /export as csv/i }));
+    const arg = (exportToCsv as ReturnType<typeof vi.fn>).mock.calls[0][0];
+    expect(arg.rows).toBe(ROWS);
+  });
+
+  it("uses getRows for Excel and PDF exports too", async () => {
+    const user = userEvent.setup();
+    const SORTED = [...ROWS].reverse();
+    const getRows = vi.fn(() => SORTED);
+    render(
+      <ExportMenu rows={ROWS} getRows={getRows} columns={COLS} filenameBase="screener" pdfTitle="T" />,
+    );
+    await user.click(screen.getByRole("button", { name: /export results/i }));
+    await user.click(await screen.findByRole("menuitem", { name: /export as excel/i }));
+    expect(((exportToXlsx as ReturnType<typeof vi.fn>).mock.calls[0][0] as { rows: Row[] }).rows).toBe(SORTED);
+
+    await user.click(screen.getByRole("button", { name: /export results/i }));
+    await user.click(await screen.findByRole("menuitem", { name: /export as pdf/i }));
+    expect(((exportToPdf as ReturnType<typeof vi.fn>).mock.calls[0][0] as { rows: Row[] }).rows).toBe(SORTED);
+  });
+
   it("filename pattern includes a YYYYMMDD-HHmm timestamp", async () => {
     const user = userEvent.setup();
     render(<ExportMenu rows={ROWS} columns={COLS} filenameBase="screener" />);

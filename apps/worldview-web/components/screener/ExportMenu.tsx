@@ -64,6 +64,19 @@ export interface ExportColumn<T> {
 export interface ExportMenuProps<T> {
   /** Already-filtered, already-sorted rows. We export verbatim. */
   rows: readonly T[];
+  /**
+   * Round 2 — sort-aware export: when provided, called AT CLICK TIME to fetch
+   * the rows, taking precedence over `rows`.
+   *
+   * WHY a function (not just better `rows`): AG Grid owns its sort state
+   * internally — the parent's `rows` prop is the PRE-sort base array and goes
+   * stale the moment the user clicks a header. A getter lets the parent pull
+   * the grid's post-filter-post-sort row order (via
+   * api.forEachNodeAfterFilterAndSort) at the moment of export, so the file
+   * matches exactly what the user sees on screen. `rows` remains as the
+   * fallback (and powers the disabled state, which needs a render-time count).
+   */
+  getRows?: () => readonly T[];
   /** Visible columns only — see file-level WHY. */
   columns: ReadonlyArray<ExportColumn<T>>;
   /** Filename stem WITHOUT extension or timestamp. We append both. */
@@ -96,6 +109,7 @@ function timestampStem(now: Date = new Date()): string {
 
 export function ExportMenu<T>({
   rows,
+  getRows,
   columns,
   filenameBase,
   pdfTitle,
@@ -105,12 +119,27 @@ export function ExportMenu<T>({
   // recognisable as siblings on disk (".csv", ".xlsx", ".pdf" of "screener-...").
   const stem = `${filenameBase}-${timestampStem()}`;
 
+  /**
+   * resolveRows — pick the export row source AT CLICK TIME.
+   * getRows (grid-sorted snapshot) wins over the render-time rows prop —
+   * see the getRows prop doc for why. Falls back to `rows` if the getter
+   * returns an empty array (e.g. grid not mounted yet) so an export click
+   * never silently produces an empty file when data is visibly on screen.
+   */
+  function resolveRows(): readonly T[] {
+    if (getRows) {
+      const fresh = getRows();
+      if (fresh.length > 0) return fresh;
+    }
+    return rows;
+  }
+
   function handleCsv() {
     const csvColumns: CsvColumn<T>[] = columns.map((c) => ({
       header: c.header,
       accessor: c.accessor,
     }));
-    exportToCsv({ rows, columns: csvColumns, filenameStem: stem });
+    exportToCsv({ rows: resolveRows(), columns: csvColumns, filenameStem: stem });
   }
 
   async function handleXlsx() {
@@ -121,7 +150,7 @@ export function ExportMenu<T>({
       header: c.header,
       accessor: c.accessor,
     }));
-    await exportToXlsx({ rows, columns: xlsxColumns, filenameStem: stem });
+    await exportToXlsx({ rows: resolveRows(), columns: xlsxColumns, filenameStem: stem });
   }
 
   async function handlePdf() {
@@ -134,7 +163,7 @@ export function ExportMenu<T>({
     }));
     // WHY await: exportToPdf is now async (it dynamic-imports jspdf + autotable
     // inside the function body so those heavy deps form a separate chunk).
-    await exportToPdf({ rows, columns: pdfColumns, filenameStem: stem, title: pdfTitle });
+    await exportToPdf({ rows: resolveRows(), columns: pdfColumns, filenameStem: stem, title: pdfTitle });
   }
 
   return (

@@ -125,6 +125,40 @@ export function buildScreenerFilters(f: FilterState): ScreenerFilter[] {
     }
   }
 
+  // ── 30d average volume (SERVER_SIDE — Round 2) ───────────────────────────
+  // WHY merged as PER-FILTER NAMED FIELDS (not a `{metric: "avg_volume_30d"}`
+  // entry): avg_volume_30d is NOT a fundamental_metrics row — it is a COLUMN
+  // on instrument_fundamentals_snapshot, exposed by the backend as the
+  // `avg_volume_30d_min` / `avg_volume_30d_max` siblings of min_value/max_value
+  // on ScreenFilterRequest (services/market-data/.../api/schemas/
+  // fundamental_metrics.py:48-49, Wave L-2). Sending it as a metric filter
+  // would silently return 0 rows via the INNER JOIN path — exactly the trap
+  // documented for the intelligence rollup fields above.
+  //
+  // WHY a local interface (not fields on types/api.ts ScreenerFilter): Round 2
+  // runs six surface agents concurrently and types/api.ts is shared; an
+  // additive intersection type here keeps the change inside the screener
+  // surface. The fields serialise identically — JSON.stringify doesn't care
+  // about the nominal type.
+  interface SnapshotVolumeFields {
+    avg_volume_30d_min?: number;
+    avg_volume_30d_max?: number;
+  }
+  const snap: SnapshotVolumeFields = {};
+  if (f.avgVolume30dMin !== undefined) snap.avg_volume_30d_min = f.avgVolume30dMin;
+  if (f.avgVolume30dMax !== undefined) snap.avg_volume_30d_max = f.avgVolume30dMax;
+  if (Object.keys(snap).length > 0) {
+    if (filters.length > 0) {
+      filters[0] = { ...filters[0], ...snap };
+    } else {
+      // Same synthetic-filter pattern as the intelligence block: the request
+      // schema requires a `metric`, and market_capitalization with no bounds
+      // is the canonical no-op carrier (backend LEFT JOINs handle the
+      // snapshot column directly).
+      filters.push({ metric: "market_capitalization", ...snap });
+    }
+  }
+
   // Sector filter: when sector is selected but no other metric filters are active
   // we still need to communicate the sector restriction. S3's sector field lives on
   // ScreenFilterRequest, so we attach it to the first filter or add a synthetic one.

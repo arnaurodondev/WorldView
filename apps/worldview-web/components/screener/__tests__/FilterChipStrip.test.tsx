@@ -228,4 +228,38 @@ describe("FilterChipStrip", () => {
     );
     expect(screen.getByText(/FWD P\/E < 20/i)).toBeInTheDocument();
   });
+
+  // ── Round 2: avg-volume chips (slider-set filters surface as chips) ──────
+
+  it("renders compact chips for the avg-volume 30d range (slider-set values)", () => {
+    // The Technical-section volume slider writes avgVolume30dMin/Max; the
+    // chip strip must surface them like every other filter so they are
+    // dismissible without reopening the filter panel.
+    render(
+      <FilterChipStrip
+        appliedFilters={makeFilters({ avgVolume30dMin: 1_500_000, avgVolume30dMax: 50_000_000 })}
+        onApply={() => {}}
+      />,
+    );
+    expect(screen.getByText(/AVG VOL > 1\.5M/i)).toBeInTheDocument();
+    expect(screen.getByText(/AVG VOL < 50M/i)).toBeInTheDocument();
+  });
+
+  it("removing the avg-volume chip deletes the FilterState key (debounced)", () => {
+    const onApply = vi.fn();
+    vi.useFakeTimers();
+    render(
+      <FilterChipStrip
+        appliedFilters={makeFilters({ avgVolume30dMin: 1_000_000 })}
+        onApply={onApply}
+      />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: /remove filter.*AVG VOL > 1M/i }));
+    act(() => {
+      vi.advanceTimersByTime(300);
+    });
+    expect(onApply).toHaveBeenCalledTimes(1);
+    const calledWith = onApply.mock.calls[0][0] as FilterState;
+    expect("avgVolume30dMin" in calledWith).toBe(false);
+  });
 });

@@ -226,3 +226,27 @@ describe("countActiveFiltersByGroup", () => {
     expect(c.valuation).toBe(0);
   });
 });
+
+// ── Round 2: slider-backed filters feed the section badges ───────────────────
+
+describe("countActiveFiltersByGroup — Round 2 slider fields", () => {
+  it("technical: counts each side of the avg-volume 30d range", () => {
+    const form: FilterState = {
+      ...DEFAULT_FILTERS,
+      avgVolume30dMin: 500_000,
+      avgVolume30dMax: 50_000_000,
+    };
+    expect(countActiveFiltersByGroup(form).technical).toBe(2);
+  });
+
+  it("valuation: counts the market-cap range (previously a latent badge gap)", () => {
+    // marketCapMin/Max existed on FilterState (chip-strip entry) but were
+    // never badge-counted; the Round 2 Market Cap slider in the Valuation
+    // section makes the badge mandatory.
+    const form: FilterState = {
+      ...DEFAULT_FILTERS,
+      marketCapMin: 1_000_000_000,
+    };
+    expect(countActiveFiltersByGroup(form).valuation).toBe(1);
+  });
+});

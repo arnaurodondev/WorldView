@@ -43,8 +43,15 @@ import {
   PopoverContent,
   PopoverTrigger,
 } from "@/components/ui/popover";
+// Round 2: native <input type=checkbox> replaced with the shadcn/ui Checkbox
+// (Radix). WHY: design-system consistency (every other checkbox surface —
+// Technical section, settings pages — uses the Radix primitive with the
+// shared disabled-contrast tokens), and the disabled state for essential
+// columns needs the AA-compliant disabled styling baked into ui/checkbox.tsx.
+import { Checkbox } from "@/components/ui/checkbox";
 import {
   type ScreenerColumn,
+  ESSENTIAL_COLUMN_KEYS,
   saveColumnPrefs,
   resetColumnPrefs,
 } from "@/lib/screener-columns";
@@ -91,6 +98,11 @@ export function ColumnSettingsPopover({
   }, [savedTick]);
 
   function handleToggle(idx: number) {
+    // Essential columns (ticker, name) are non-hideable — the checkbox is
+    // rendered disabled, but we ALSO guard here because Radix can still fire
+    // onCheckedChange through keyboard activation paths in some versions, and
+    // a state-level guard is the invariant we actually care about.
+    if (ESSENTIAL_COLUMN_KEYS.includes(columns[idx]?.key)) return;
     const next = columns.map((c, i) => (i === idx ? { ...c, visible: !c.visible } : c));
     onChange(next);
     saveColumnPrefs(next);
@@ -185,33 +197,59 @@ export function ColumnSettingsPopover({
           </p>
         )}
         <ul role="list" aria-label="Column visibility and order">
-          {columns.map((col, idx) => (
-            <li
-              key={col.key}
-              draggable
-              onDragStart={(e) => handleDragStart(idx, e)}
-              onDragOver={handleDragOver}
-              onDrop={() => handleDrop(idx)}
-              className={cn(
-                "flex items-center gap-1 px-1 py-1 rounded-[2px] cursor-move text-[11px]",
-                "hover:bg-white/[0.04]",
-                dragIdx === idx && "opacity-50",
-              )}
-            >
-              <GripVertical className="h-3 w-3 text-muted-foreground shrink-0" aria-hidden strokeWidth={1.5} />
-              {/* WHY <label> wrapping checkbox + text: bigger click target */}
-              <label className="flex flex-1 items-center gap-2 cursor-pointer min-w-0">
-                <input
-                  type="checkbox"
+          {columns.map((col, idx) => {
+            // Essential columns (ticker, name) are pinned-on: checkbox renders
+            // checked + disabled so users SEE the column exists in the list
+            // (omitting the row entirely would read as a bug) but can't hide it.
+            const essential = ESSENTIAL_COLUMN_KEYS.includes(col.key);
+            return (
+              <li
+                key={col.key}
+                draggable
+                onDragStart={(e) => handleDragStart(idx, e)}
+                onDragOver={handleDragOver}
+                onDrop={() => handleDrop(idx)}
+                className={cn(
+                  "flex items-center gap-1 px-1 py-1 rounded-[2px] cursor-move text-[11px]",
+                  "hover:bg-white/[0.04]",
+                  dragIdx === idx && "opacity-50",
+                )}
+              >
+                <GripVertical className="h-3 w-3 text-muted-foreground shrink-0" aria-hidden strokeWidth={1.5} />
+                {/* WHY <label htmlFor>: Radix Checkbox renders a <button>
+                    (a labelable element), so clicking the text still toggles —
+                    preserving the big-click-target behaviour of the previous
+                    <label>-wrapped native input. */}
+                <Checkbox
+                  id={`col-toggle-${col.key}`}
                   checked={col.visible}
-                  onChange={() => handleToggle(idx)}
-                  className="h-3 w-3 accent-primary shrink-0"
+                  disabled={essential}
+                  onCheckedChange={() => handleToggle(idx)}
+                  // WHY h-3 w-3 override: the shared Checkbox defaults to 16px;
+                  // this popover is a dense 11px-text list — 12px boxes match
+                  // the previous native-input footprint so the layout is stable.
+                  className="h-3 w-3 shrink-0 [&_svg]:h-2.5 [&_svg]:w-2.5"
                   aria-label={`Toggle ${col.label} column visibility`}
                 />
-                <span className="truncate text-foreground">{col.label}</span>
-              </label>
-            </li>
-          ))}
+                <label
+                  htmlFor={`col-toggle-${col.key}`}
+                  className={cn(
+                    "flex flex-1 items-center gap-2 min-w-0",
+                    essential ? "cursor-default" : "cursor-pointer",
+                  )}
+                >
+                  <span className="truncate text-foreground">{col.label}</span>
+                  {/* "pinned" tag explains WHY the checkbox is disabled —
+                      a disabled control with no explanation reads as broken. */}
+                  {essential && (
+                    <span className="ml-auto text-[9px] font-mono uppercase tracking-[0.06em] text-muted-foreground/60">
+                      pinned
+                    </span>
+                  )}
+                </label>
+              </li>
+            );
+          })}
         </ul>
       </PopoverContent>
     </Popover>

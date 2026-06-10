@@ -371,3 +371,72 @@ describe("buildScreenerFilters — IB-L5 intelligence rollup (per-filter fields)
     expect(filters[0].has_ai_brief).toBe(true);
   });
 });
+
+// ── Round 2: avg_volume_30d named-field range (SERVER_SIDE) ──────────────────
+//
+// WHY THESE TESTS: avg_volume_30d is a snapshot COLUMN (not a
+// fundamental_metrics row), so it must travel as the avg_volume_30d_min/max
+// per-filter named fields — the exact same silent-zero-rows trap as the
+// intelligence rollup fields above. These tests pin the request shape the
+// backend actually parses (ScreenFilterRequest, fundamental_metrics.py:48-49).
+
+describe("buildScreenerFilters — avg volume 30d range (Round 2)", () => {
+  it("merges avgVolume30dMin/Max onto an existing filter as named fields (NOT a metric entry)", () => {
+    const filters = buildScreenerFilters(
+      makeFilters({ peMin: 10, avgVolume30dMin: 500_000, avgVolume30dMax: 50_000_000 }),
+    );
+    // No `{metric: "avg_volume_30d"}` entry may exist — that shape silently
+    // returns 0 rows via the backend's INNER JOIN on unknown metrics.
+    expect(findFilter(filters, "avg_volume_30d")).toBeUndefined();
+    // The named fields ride on the first filter object.
+    const holder = filters.find(
+      (f) =>
+        (f as Record<string, unknown>).avg_volume_30d_min !== undefined ||
+        (f as Record<string, unknown>).avg_volume_30d_max !== undefined,
+    ) as Record<string, unknown> | undefined;
+    expect(holder).toBeDefined();
+    expect(holder?.avg_volume_30d_min).toBe(500_000);
+    expect(holder?.avg_volume_30d_max).toBe(50_000_000);
+    // And it merged onto the existing pe_ratio filter, not a new entry.
+    expect(holder?.metric).toBe("pe_ratio");
+  });
+
+  it("volume-only request creates the synthetic market_capitalization carrier filter", () => {
+    const filters = buildScreenerFilters(makeFilters({ avgVolume30dMin: 1_000_000 }));
+    expect(filters).toHaveLength(1);
+    expect(filters[0].metric).toBe("market_capitalization");
+    expect(filters[0].min_value).toBeUndefined();
+    expect(filters[0].max_value).toBeUndefined();
+    expect((filters[0] as Record<string, unknown>).avg_volume_30d_min).toBe(1_000_000);
+  });
+
+  it("sends only the side that is set (min-only / max-only)", () => {
+    const minOnly = buildScreenerFilters(makeFilters({ avgVolume30dMin: 250_000 }));
+    expect((minOnly[0] as Record<string, unknown>).avg_volume_30d_min).toBe(250_000);
+    expect((minOnly[0] as Record<string, unknown>).avg_volume_30d_max).toBeUndefined();
+
+    const maxOnly = buildScreenerFilters(makeFilters({ avgVolume30dMax: 10_000_000 }));
+    expect((maxOnly[0] as Record<string, unknown>).avg_volume_30d_max).toBe(10_000_000);
+    expect((maxOnly[0] as Record<string, unknown>).avg_volume_30d_min).toBeUndefined();
+  });
+
+  it("emits nothing volume-related when both sides are unset", () => {
+    const filters = buildScreenerFilters(makeFilters());
+    for (const f of filters) {
+      expect((f as Record<string, unknown>).avg_volume_30d_min).toBeUndefined();
+      expect((f as Record<string, unknown>).avg_volume_30d_max).toBeUndefined();
+    }
+  });
+
+  it("coexists with the intelligence named fields on the same carrier filter", () => {
+    // Both blocks use the merge-onto-filters[0] pattern; they must compose,
+    // not overwrite each other.
+    const filters = buildScreenerFilters(
+      makeFilters({ hasAiBrief: true, avgVolume30dMin: 2_000_000 }),
+    );
+    expect(filters).toHaveLength(1);
+    const f = filters[0] as Record<string, unknown>;
+    expect(f.has_ai_brief).toBe(true);
+    expect(f.avg_volume_30d_min).toBe(2_000_000);
+  });
+});

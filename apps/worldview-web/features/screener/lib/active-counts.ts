@@ -66,6 +66,10 @@ export function countActiveFiltersByGroup(
 ): SectionActiveCounts {
   return {
     valuation:
+      // marketCapMin/Max counted here since Round 2 added a Market Cap log
+      // slider to the Valuation section (previously only settable via the
+      // chip strip, so it was never badge-counted — a latent gap).
+      rangeCount(form.marketCapMin, form.marketCapMax) +
       rangeCount(form.peMin, form.peMax) +
       rangeCount(form.pbMin, form.pbMax) +
       rangeCount(form.psMin, form.psMax) +
@@ -89,6 +93,9 @@ export function countActiveFiltersByGroup(
       (form.above50dMa ? 1 : 0) +
       rangeCount(form.rsiMin, form.rsiMax) +
       (isSet(form.volumeRatioMin) ? 1 : 0) +
+      // Round 2: absolute 30d-avg-volume range (SERVER_SIDE) lives in the
+      // Technical section next to the relative volume-ratio select.
+      rangeCount(form.avgVolume30dMin, form.avgVolume30dMax) +
       (isSet(form.distFrom52wHighMax) ? 1 : 0) +
       (isSet(form.distFrom52wLowMin) ? 1 : 0),
 

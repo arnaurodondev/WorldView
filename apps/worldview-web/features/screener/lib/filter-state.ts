@@ -122,6 +122,15 @@ export interface FilterState {
   rsiMin?: number; // CLIENT_FILTER
   rsiMax?: number; // CLIENT_FILTER
   volumeRatioMin?: number; // CLIENT_FILTER (1, 1.5, 2 — vs 30d avg)
+  // ── 30-day average volume, ABSOLUTE shares (SERVER_SIDE — Round 2) ──
+  // WHY separate from volumeRatioMin: the ratio select is a relative,
+  // client-side spike detector ("trading at 2× normal volume"). These are
+  // absolute liquidity bounds ("avg ≥ 1M shares/day") that S3 filters
+  // server-side via the per-filter `avg_volume_30d_min/max` named fields on
+  // ScreenFilterRequest (instrument_fundamentals_snapshot.avg_volume_30d) —
+  // a Round-1 gap: the backend supported this but the UI never exposed it.
+  avgVolume30dMin?: number; // avg_volume_30d_min (SERVER_SIDE, shares)
+  avgVolume30dMax?: number; // avg_volume_30d_max (SERVER_SIDE, shares)
   distFrom52wHighMax?: number; // CLIENT_FILTER (% — "within 5% of 52W high" → max=5)
   distFrom52wLowMin?: number; // CLIENT_FILTER (% — "at least X% above 52W low")
 

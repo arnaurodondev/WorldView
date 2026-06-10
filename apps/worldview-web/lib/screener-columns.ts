@@ -48,6 +48,20 @@
  */
 export const SCREENER_COLUMNS_KEY = "worldview:screenerColumns:v1";
 
+/**
+ * ESSENTIAL_COLUMN_KEYS — columns that can NEVER be hidden (Round 2).
+ *
+ * WHY: ticker is the row's identity (and the row-click navigation key); name
+ * is the only human-readable disambiguator (three tickers can look alike).
+ * A table where the user hid both is unusable — every cell becomes context-
+ * free numbers — and "why is my screener empty-looking" is a support ticket
+ * we can avoid structurally. The popover renders these rows with a disabled
+ * checkbox, and loadColumnPrefs() coerces them visible on read so stale
+ * localStorage written BEFORE this rule existed can't resurrect a hidden
+ * ticker column.
+ */
+export const ESSENTIAL_COLUMN_KEYS: readonly string[] = Object.freeze(["ticker", "name"]);
+
 // ── Public type ──────────────────────────────────────────────────────────────
 
 /**
@@ -231,7 +245,10 @@ export function loadColumnPrefs(): ScreenerColumn[] {
         ...def,
         // WHY `!== false`: missing visible field defaults to true, matches the
         // user's likely intent (they had it visible before the bug that wiped it).
-        visible: entry.visible !== false,
+        // WHY the ESSENTIAL override: ticker/name are non-hideable (Round 2);
+        // prefs saved before that rule existed may carry visible:false for
+        // them — coercing on READ heals stale storage without a migration.
+        visible: ESSENTIAL_COLUMN_KEYS.includes(entry.key) || entry.visible !== false,
       });
       seen.add(entry.key);
     }

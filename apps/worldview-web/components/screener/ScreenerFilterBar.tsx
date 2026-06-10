@@ -78,11 +78,43 @@ import {
 import { countActiveFiltersByGroup } from "@/features/screener/lib/active-counts";
 import { Section } from "@/features/screener/components/Section";
 import { RangeInput } from "@/features/screener/components/RangeInput";
+import { RangeSliderRow } from "@/features/screener/components/RangeSliderRow";
+import {
+  createLinearScale,
+  createLogScale,
+  formatCompactNumber,
+} from "@/features/screener/lib/slider-scale";
 import { IntelligenceFilterGroup } from "@/components/screener/IntelligenceFilterGroup";
 
 // Re-export FilterState + DEFAULT_FILTERS so existing call sites that import
 // from `@/components/screener/ScreenerFilterBar` keep compiling unchanged.
 export { DEFAULT_FILTERS, type FilterState } from "@/features/screener/lib/filter-state";
+
+// ── Slider scales (Round 2 — dual-thumb range sliders) ───────────────────────
+// Module-level constants: the mappings are pure/stateless, so building them
+// once avoids re-allocating closures on every keystroke re-render of the bar.
+//
+// MARKET CAP — LOG scale, $10M → $5T (≈5.7 decades). See createLogScale's
+// docstring for the full math; the headline: position is linear in ln(value),
+// so each 10× band ($100M–$1B, $1B–$10B, …) gets equal track width. A linear
+// scale would compress every company below $500B into the first 10% of the
+// track. Midpoint of this track = √(1e7 × 5e12) ≈ $7.1B — the small/large
+// cap divide, which is exactly where users expect "the middle" to be.
+const MARKET_CAP_SCALE = createLogScale(10_000_000, 5_000_000_000_000, 300);
+// P/E — linear 0–100: covers value (<15) through hyper-growth (>60). Values
+// beyond 100 are typeable in the numeric inputs; the thumb just pins at the end.
+const PE_SCALE = createLinearScale(0, 100, 200);
+// DIV YIELD — linear 0–0.10 decimal (0–10%); yields above 10% are pathological
+// (distressed payers) and remain reachable via the numeric inputs.
+const DIV_YIELD_SCALE = createLinearScale(0, 0.1, 100);
+// ROE — linear −0.5–1.0 decimal (−50%…+100%): negative ROE (loss-makers) is a
+// legitimate screen target, so the domain crosses zero (which also rules out
+// a log scale — ln(x≤0) is undefined).
+const ROE_SCALE = createLinearScale(-0.5, 1.0, 150);
+// AVG VOLUME 30D — LOG scale, 10K → 1B shares/day (5 decades): liquidity
+// spans micro-caps trading 20K shares to SPY-likes trading 80M+. Same
+// rationale as market cap.
+const AVG_VOLUME_SCALE = createLogScale(10_000, 1_000_000_000, 300);
 
 interface ScreenerFilterBarProps {
   /** Current open/collapsed state of the OUTER panel — parent-controlled to allow external toggle */
@@ -289,9 +321,30 @@ export function ScreenerFilterBar({
           {/* Default open — most users start here. */}
           <Section title="Valuation" activeCount={valuationCount} defaultOpen>
             <div className="flex flex-col gap-1.5">
-              <RangeInput
+              {/* Market Cap — Round 2: LOG-scale dual-thumb slider, NO numeric
+                  inputs (showInputs=false). WHY slider-only: typing raw USD
+                  ("10000000000") is hostile; the log slider + compact readout
+                  ($10B) is strictly better, and exact-value entry remains
+                  available via the chip strip's "$NB" input. Writes the same
+                  marketCapMin/Max keys the chip strip + capTier merge use, so
+                  build-filters.ts AND-combines it with the tier buttons. */}
+              <RangeSliderRow
+                label="Mkt Cap"
+                tooltip="Total market value of shares outstanding. Log-scale slider: each step left/right multiplies, not adds — $10M micro-caps to $5T mega-caps on one track."
+                scale={MARKET_CAP_SCALE}
+                showInputs={false}
+                formatValue={(v) => `$${formatCompactNumber(v)}`}
+                min={form.marketCapMin} max={form.marketCapMax}
+                onMin={(v) => patch({ marketCapMin: v })}
+                onMax={(v) => patch({ marketCapMax: v })}
+              />
+              {/* P/E — Round 2: slider IN ADDITION to the numeric inputs.
+                  Same FilterState keys; the inputs stay the precise/out-of-
+                  domain entry path (P/E > 100 is typeable, not draggable). */}
+              <RangeSliderRow
                 label="P/E (TTM)"
                 tooltip="Price ÷ Earnings (TTM). S&P 500 avg ≈ 20–25×. Below 15 may be undervalued; above 40 = high growth priced in."
+                scale={PE_SCALE}
                 min={form.peMin} max={form.peMax}
                 minPlaceholder="e.g. 10"
                 maxPlaceholder="e.g. 50"
@@ -317,11 +370,15 @@ export function ScreenerFilterBar({
                 onMax={(v) => patch({ psMax: v })}
               />
               {/* WHY hint "decimal": dividend_yield is stored as decimal 0.015 = 1.5%.
-               *  Showing the hint avoids the common error of typing 1.5 expecting %. */}
-              <RangeInput
+               *  Showing the hint avoids the common error of typing 1.5 expecting %.
+               *  Round 2: slider added (linear 0–10%); readout formats the decimal
+               *  as a percent so the slider teaches the unit convention. */}
+              <RangeSliderRow
                 label="Dividend Yield"
                 hint="decimal"
                 tooltip="Annual dividends ÷ price %. 0% = growth stock; 3–5% = income stock; above 6% may signal risk."
+                scale={DIV_YIELD_SCALE}
+                formatValue={(v) => `${(v * 100).toFixed(1)}%`}
                 min={form.divYieldMin} max={form.divYieldMax}
                 minPlaceholder="e.g. 0.01"
                 maxPlaceholder="e.g. 0.06"
@@ -334,10 +391,15 @@ export function ScreenerFilterBar({
           {/* ── PROFITABILITY SECTION ────────────────────────────────────── */}
           <Section title="Profitability" activeCount={profitabilityCount}>
             <div className="flex flex-col gap-1.5">
-              <RangeInput
+              {/* ROE — Round 2: slider added (linear −50%…+100% decimal). The
+                  domain crosses zero (loss-makers are a legit screen), which
+                  is also why this one can't use a log scale. */}
+              <RangeSliderRow
                 label="ROE (TTM)"
                 hint="decimal"
                 tooltip="Net income ÷ avg equity. Above 15% = strong capital efficiency. Buffett target: sustained above 20%."
+                scale={ROE_SCALE}
+                formatValue={(v) => `${(v * 100).toFixed(0)}%`}
                 min={form.roeMin} max={form.roeMax}
                 minPlaceholder="e.g. 0.05"
                 maxPlaceholder="e.g. 0.30"
@@ -501,6 +563,27 @@ export function ScreenerFilterBar({
                   client-side
                 </span>
               </div>
+
+              {/* Avg Vol 30d — Round 2: ABSOLUTE 30-day-average-volume range
+                  (shares/day). SERVER_SIDE — S3 filters on the
+                  instrument_fundamentals_snapshot.avg_volume_30d column via the
+                  avg_volume_30d_min/max named fields (Wave L-2 backend, never
+                  exposed in the UI until now — the section previously only had
+                  the relative client-side ratio select above). LOG slider:
+                  liquidity spans 5 decades (10K micro-caps → 1B mega-caps).
+                  No "client-side" badge — this one really hits the backend. */}
+              <RangeSliderRow
+                label="Avg Vol 30d"
+                hint="shares"
+                tooltip="30-day average daily volume (absolute shares). Liquidity filter: ≥1M shares/day keeps spreads tight for retail-size orders. Server-side."
+                scale={AVG_VOLUME_SCALE}
+                formatValue={formatCompactNumber}
+                min={form.avgVolume30dMin} max={form.avgVolume30dMax}
+                minPlaceholder="e.g. 500000"
+                maxPlaceholder="e.g. 50000000"
+                onMin={(v) => patch({ avgVolume30dMin: v })}
+                onMax={(v) => patch({ avgVolume30dMax: v })}
+              />
 
               {/*
                * Distance from 52W high — a single "max" input. "Within 5% of 52W high"

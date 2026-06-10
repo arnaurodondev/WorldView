@@ -141,6 +141,29 @@ const FILTER_FIELDS = [
     toStore: (v: number) => v / 100,
     toForm: (v: number) => v * 100,
   },
+  {
+    // Round 2 — absolute 30d-avg-volume (SERVER_SIDE). Registering the field
+    // here is what makes slider-set volume filters appear as dismissible
+    // chips: deriveChips() walks FILTER_FIELDS, so any FilterState key pair
+    // listed here gets chips for free (this is also true for the slider-set
+    // marketCap/pe/divYield/roe values — those fields were already listed).
+    id: "avgVol",
+    label: "AVG VOL",
+    unit: "M shares",
+    minKey: "avgVolume30dMin" as const,
+    maxKey: "avgVolume30dMax" as const,
+    // Stored as raw shares; the chip shows compact notation ("1.5M") and the
+    // "+ Add filter" input accepts millions (typing "1.5" = 1.5M shares) to
+    // match the unit hint above.
+    toDisplay: (v: number) =>
+      v >= 1_000_000_000
+        ? `${(v / 1_000_000_000).toFixed(1).replace(/\.0$/, "")}B`
+        : v >= 1_000_000
+          ? `${(v / 1_000_000).toFixed(1).replace(/\.0$/, "")}M`
+          : `${(v / 1_000).toFixed(0)}K`,
+    toStore: (v: number) => v * 1_000_000,
+    toForm: (v: number) => v / 1_000_000,
+  },
 ] as const;
 
 // Key union for type safety when reading/writing FilterState

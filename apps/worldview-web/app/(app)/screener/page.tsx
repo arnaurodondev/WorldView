@@ -320,11 +320,31 @@ export default function ScreenerPage() {
     [sparklines, sparklineSuppressed],
   );
 
+  // ── Export rows (Round 2 — sort-aware) ────────────────────────────────────
+  // WHY a getter (not a memo): AG Grid owns its sort state internally and
+  // doesn't notify React on header clicks, so any render-time snapshot would
+  // go stale the moment the user sorts. Reading the grid at CLICK TIME via
+  // forEachNodeAfterFilterAndSort yields the rows in exactly the order
+  // rendered on screen — "what you see is what you export". Falls back to
+  // filteredRows (the pre-sort base) when the grid isn't ready, which is also
+  // ExportMenu's own fallback if this getter returns [].
+  const getExportRows = useCallback((): readonly ScreenerResult[] => {
+    const api = gridApiRef.current;
+    if (!api) return filteredRows;
+    const out: ScreenerResult[] = [];
+    // forEachNodeAfterFilterAndSort iterates the client-side row model in
+    // display order (post grid-filter, post grid-sort) — the canonical
+    // "as rendered" traversal in AG Grid Community.
+    api.forEachNodeAfterFilterAndSort((node) => {
+      if (node.data) out.push(node.data);
+    });
+    return out;
+  }, [filteredRows]);
+
   // ── Export columns ────────────────────────────────────────────────────────
-  // WHY filteredRows (not grid-sorted rows): AG Grid manages its own sort state
-  // internally. Extracting the sort order from the grid API for the export is
-  // deferred to Phase 8. filteredRows is the pre-sort base and is the correct
-  // set to export (all matches, not just what fits on screen).
+  // Visible columns only ("what you see is what you export") — hidden columns
+  // are excluded because the user hid them deliberately; row ORDER comes from
+  // getExportRows above (grid-sorted), so the file mirrors the on-screen view.
   const exportColumns = useMemo<ExportColumn<ScreenerResult>[]>(() => {
     return columns
       .filter((c) => c.visible)
@@ -418,6 +438,9 @@ export default function ScreenerPage() {
             />
             <ExportMenu
               rows={filteredRows}
+              // Round 2: sort-aware export — rows are pulled from the AG Grid
+              // API at click time so the file order matches the on-screen sort.
+              getRows={getExportRows}
               columns={exportColumns}
               filenameBase="screener"
               pdfTitle="Screener Results"
