@@ -76,13 +76,16 @@ function StatCell({ label, value, pending }: { label: string; value: string; pen
         {label}
       </span>
       {/* Round-3 item 4 (shape-matched skeletons): while the SHARED cache
-          fetch is in flight and this cell has no value yet, render a pulsing
+          fetch is in flight and this cell has no value yet, render a STATIC
           value-width bar instead of an em-dash — "—" reads as "no data
           exists" (a final state), which is a lie during the ~300ms before
           MetricsTable's fetch lands. w-10 ≈ a 5-char mono value, so the strip
-          doesn't reflow when the real number replaces the bar. */}
+          doesn't reflow when the real number replaces the bar.
+          Round-4 item 4: raw animate-pulse removed per DS §6.2 — skeletons
+          are static by default (the fast consumer-app pulse is banned; this
+          ~300ms load doesn't qualify for the slow opt-in variant either). */}
       {pending ? (
-        <span aria-hidden className="h-[11px] w-10 animate-pulse rounded-[1px] bg-muted/40 self-center" />
+        <span aria-hidden className="h-[11px] w-10 rounded-[1px] bg-muted/40 self-center" />
       ) : (
         // WHY font-mono tabular-nums: ADR-F-15 — every numeric in the app is
         // monospaced so columns/strips don't jitter as live values update.

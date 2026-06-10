@@ -52,6 +52,13 @@ function Cell({ label, value, valueClass = "text-foreground" }: {
   );
 }
 
+// Round-4 hardening (item 1d/1e): the OHLCVBar type promises `number`, but a
+// degraded wire row can carry null/NaN — `(null).toFixed(2)` throws and NaN
+// renders as the literal "NaN". One guard covers every cell.
+function fmtPx(v: number): string {
+  return Number.isFinite(v) ? v.toFixed(2) : "—";
+}
+
 export function CrosshairLegend({ bar }: CrosshairLegendProps) {
   // WHY return null (not a hidden div): when nothing is hovered the chart
   // canvas should be completely unobstructed — reserved-but-empty chrome over
@@ -68,17 +75,22 @@ export function CrosshairLegend({ bar }: CrosshairLegendProps) {
     // the moment the pointer enters the legend).
     // WHY bg-card/90: semi-opaque panel token keeps candles faintly visible
     // underneath without compromising legibility.
+    // WHY aria-hidden (Round-4 hardening, item 2): the legend re-renders at
+    // pointer-move frequency — the previous role="status" + aria-live="polite"
+    // made screen readers announce EVERY hovered candle, drowning out all
+    // other output. The same OHLC information is exposed statically (and
+    // calmly) via the chart wrapper's aria-label in OHLCVChart, so hiding
+    // this mouse-only affordance from the accessibility tree loses nothing.
     <div
       data-testid="crosshair-legend"
       className="pointer-events-none absolute left-2 top-2 z-10 flex items-center gap-2 rounded-[2px] border border-border/50 bg-card/90 px-2 py-0.5"
-      role="status"
-      aria-live="polite"
+      aria-hidden="true"
     >
       <span className="text-[9px] font-mono text-muted-foreground">{fmtBarTime(bar.timestamp)}</span>
-      <Cell label="O" value={bar.open.toFixed(2)} />
-      <Cell label="H" value={bar.high.toFixed(2)} valueClass="text-positive" />
-      <Cell label="L" value={bar.low.toFixed(2)} valueClass="text-negative" />
-      <Cell label="C" value={bar.close.toFixed(2)} valueClass={closeClass} />
+      <Cell label="O" value={fmtPx(bar.open)} />
+      <Cell label="H" value={fmtPx(bar.high)} valueClass="text-positive" />
+      <Cell label="L" value={fmtPx(bar.low)} valueClass="text-negative" />
+      <Cell label="C" value={fmtPx(bar.close)} valueClass={closeClass} />
       <Cell label="V" value={formatVolume(bar.volume)} />
     </div>
   );

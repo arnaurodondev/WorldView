@@ -179,9 +179,10 @@ export function useFinancialsBundle(instrumentId: string) {
         bundle.splits_dividends as FundamentalsSectionResponse,
       );
     }
-    // fundamentals_timeseries is intentionally NOT hydrated — the chart panel
-    // owns a metric/period selector, so the bundle endpoint cannot prefetch
-    // a specific (metric, period) pair. The panel keeps its self-fetch.
+    // fundamentals_timeseries is intentionally NOT hydrated — its only
+    // consumer (FundamentalsTimeseriesChart) was deleted as dead code in the
+    // Round-4 hardening pass (zero importers); the gateway method remains
+    // for future sparkline consumers but nothing reads the cache key today.
   }, [query.data, instrumentId, queryClient]);
 
   return query;

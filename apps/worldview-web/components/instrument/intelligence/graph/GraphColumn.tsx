@@ -58,7 +58,9 @@ function GraphSkeleton() {
       role="status"
       aria-label="Loading entity graph"
       data-testid="graph-skeleton"
-      className="relative h-full w-full animate-pulse bg-muted/10"
+      // Round-4 item 4: animation removed per DS §6.2 — skeletons are STATIC
+      // by default; the faux node-dot geometry alone signals "graph loading".
+      className="relative h-full w-full bg-muted/10"
     >
       <div aria-hidden className="absolute left-1/2 top-1/2 h-3 w-3 -translate-x-1/2 -translate-y-1/2 rounded-full bg-muted/60" />
       <div aria-hidden className="absolute left-[30%] top-[32%] h-2 w-2 rounded-full bg-muted/40" />
@@ -122,7 +124,10 @@ export function GraphColumn({ entityId, selectedNodeId, onNodeSelect, onEdgeSele
   // a depth-adaptive deadline. Abort is translated to a typed Error for the UI.
   // WHY performance.now(): measures wall-clock time for the fetch so GraphStats
   // can surface it. Using performance.now() (not Date.now()) avoids clock drift.
-  const { data: graphData, isLoading: graphLoading, isError, error: graphErr } = useQuery<EntityGraphData | null>({
+  // Round-4 hardening (item 1b): refetch consumed by the new generic-error
+  // branch below (non-timeout failures previously fell through every render
+  // branch and left an empty bordered box).
+  const { data: graphData, isLoading: graphLoading, isError, error: graphErr, refetch } = useQuery<EntityGraphData | null>({
     queryKey: qk.instruments.entityGraph(entityId, depth),
     queryFn: async ({ signal }) => {
       const ctrl = new AbortController();
@@ -172,6 +177,11 @@ export function GraphColumn({ entityId, selectedNodeId, onNodeSelect, onEdgeSele
   // WHY adapter: collapse EntityGraph's 5-tuple to (id). Click-same deselects.
   const handleNodeClick = (id: string) => onNodeSelect(selectedNodeId === id ? null : id);
   const isTimeout = isError && graphErr instanceof Error && graphErr.message === "GRAPH_TIMEOUT";
+  // Round-4 hardening (item 1b): non-timeout failures (S9 5xx, network drop,
+  // auth hiccup) previously matched NO render branch — graphLoading=false,
+  // isTimeout=false, filteredGraph=null — so the canvas slot rendered an
+  // empty bordered box indistinguishable from a rendering bug.
+  const isGenericError = isError && !isTimeout;
 
   // WHY two separate empty-state branches:
   //   1. nodes.length === 0: type filter excluded everything → "No entities match filter."
@@ -250,6 +260,30 @@ export function GraphColumn({ entityId, selectedNodeId, onNodeSelect, onEdgeSele
                 ) : undefined
               }
             />
+          </div>
+        )}
+
+        {/* Generic (non-timeout) graph failure — NAMED per-section error with
+            Retry (Round-4 item 1b). Scoped to the canvas slot only: the news
+            rail and context panel keep working. Inline copy (not a registry
+            key): the empty-state registry is a shared file owned by the
+            platform agent; per-section error strings stay local. */}
+        {isGenericError && (
+          <div
+            data-testid="graph-fetch-error"
+            className="flex h-full flex-col items-center justify-center gap-1 px-3 text-center"
+          >
+            <p className="text-[12px] text-foreground">Couldn&apos;t load the entity graph</p>
+            <p className="text-[11px] text-muted-foreground">
+              The graph query failed — news and context are unaffected.
+            </p>
+            <button
+              type="button"
+              onClick={() => void refetch()}
+              className="mt-1 font-mono text-[9px] uppercase tracking-wider text-primary hover:underline focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring rounded-[2px]"
+            >
+              Retry
+            </button>
           </div>
         )}
 

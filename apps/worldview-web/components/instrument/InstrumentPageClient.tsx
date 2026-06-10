@@ -32,6 +32,14 @@ import { useRouter } from "next/navigation";
 import { useQueryClient } from "@tanstack/react-query";
 
 import { qk } from "@/lib/query/keys";
+// Round-4 hardening (item 1c): GatewayError carries the HTTP status so we can
+// distinguish "ticker does not exist" (404 → InstrumentNotFound) from
+// "platform hiccup" (5xx/network → retryable page error).
+import { GatewayError } from "@/lib/gateway";
+// Round-4 hardening (item 1c): the F2-step-10 primitive existed but was never
+// wired — a bogus ticker previously left the page on an infinite "—" header
+// with empty tabs. This is the named 404 surface (ticker + screener CTA).
+import { InstrumentNotFound } from "@/components/primitives/InstrumentNotFound";
 import { useInstrumentBundle } from "@/components/instrument/hooks/useInstrumentBundle";
 import { InstrumentHeader } from "@/components/instrument/header/InstrumentHeader";
 import { AiBriefBanner } from "@/components/instrument/brief/AiBriefBanner";
@@ -90,7 +98,11 @@ export function InstrumentPageClient({ entityId }: InstrumentPageClientProps) {
   // The hook owns the queryKey (qk.instruments.pageBundle), staleTime, and
   // gateway wiring. We only consume its data here; tab components handle
   // their own loading UI via the per-section query hooks.
-  const { data: bundle } = useInstrumentBundle(entityId);
+  // Round-4 hardening (items 1a/1c): we now also consume the error channel —
+  // previously `isError` was discarded and a failed bundle left the page in a
+  // permanent skeleton (the children's `enabled` guards never fired because
+  // instrumentId stayed empty). See the two early-return branches below.
+  const { data: bundle, isError, error, refetch } = useInstrumentBundle(entityId);
 
   // ── Cache priming (PRD-0088 §6.3) ─────────────────────────────────────────
   // We seed the per-section query caches so when a tab content component
@@ -157,6 +169,52 @@ export function InstrumentPageClient({ entityId }: InstrumentPageClientProps) {
       );
     }
   }, [bundle, entityId, queryClient]);
+
+  // ── Error recovery (Round-4 hardening, items 1a + 1c) ────────────────────
+  // WHY AFTER all hooks: React's rules-of-hooks — the early returns must not
+  // change the hook call order between renders, so they sit below the last
+  // useEffect. WHY full-page replacement (not chrome + inline error): every
+  // element of this page (header price, tabs, brief) derives from the bundle;
+  // rendering dead chrome around an error message reads as a half-broken
+  // page, while one clear named state reads as a deliberate terminal screen.
+  if (isError) {
+    // 404 = the ticker genuinely doesn't exist (S9 resolve_security_id miss).
+    // Render the dedicated not-found surface with its screener escape hatch —
+    // the canonical "where do I find tickers?" CTA (PRD-0089 F2 step 10).
+    if (error instanceof GatewayError && error.status === 404) {
+      return (
+        <div className="flex h-screen items-start justify-center bg-background pt-[15vh] px-4">
+          <div className="w-full max-w-md">
+            <InstrumentNotFound attemptedTicker={entityId} />
+          </div>
+        </div>
+      );
+    }
+    // Anything else (5xx, network failure, status 0 fail-fast) is transient:
+    // a NAMED page error with a real Retry that refires the bundle query —
+    // never a white page or an infinite skeleton (DS §6.1).
+    return (
+      <div
+        data-testid="instrument-page-error"
+        className="flex h-screen flex-col items-center justify-center gap-2 bg-background px-4"
+      >
+        <p className="text-[12px] text-foreground">Couldn&apos;t load this instrument</p>
+        <p className="max-w-[360px] text-center text-[11px] text-muted-foreground">
+          The page bundle failed to load. This is usually transient — retry, or
+          check the platform status.
+        </p>
+        <button
+          type="button"
+          // WHY void refetch(): TanStack's refetch returns a promise we don't
+          // need to await — the query state transition re-renders this shell.
+          onClick={() => void refetch()}
+          className="mt-1 h-7 rounded-[2px] border border-border px-3 text-[11px] text-muted-foreground hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+        >
+          Retry
+        </button>
+      </div>
+    );
+  }
 
   // ── Layout ────────────────────────────────────────────────────────────────
   // WHY flex column + h-screen: the page must fill the viewport so the active

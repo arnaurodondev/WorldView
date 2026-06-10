@@ -155,4 +155,25 @@ describe("FinancialStatementsPanel", () => {
     expect(screen.getByTestId("statements-skeleton")).toBeInTheDocument();
     expect(screen.queryByText("FINANCIAL STATEMENTS")).not.toBeInTheDocument();
   });
+
+  // ── Round-4 hardening (item 1b): error ≠ empty ─────────────────────────────
+
+  it("renders a named error with Retry when the bundle request fails (NOT the empty state)", () => {
+    const refetch = vi.fn();
+    // WHY the never-cast: the hook mock's state literal only declares the
+    // fields the panel destructures; isError/refetch are Round-4 additions.
+    mockBundle.state = {
+      data: undefined,
+      isLoading: false,
+      isError: true,
+      refetch,
+    } as never;
+    render(<FinancialStatementsPanel instrumentId="i-1" />);
+    // A failed FETCH must not claim the instrument "has no statements" —
+    // that's a data statement the client cannot honestly make here.
+    expect(screen.getByTestId("statements-fetch-error")).toBeInTheDocument();
+    expect(screen.queryByText("No financial statements")).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: /retry/i }));
+    expect(refetch).toHaveBeenCalled();
+  });
 });

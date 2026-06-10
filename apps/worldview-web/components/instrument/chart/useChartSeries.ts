@@ -240,11 +240,30 @@ export function useChartSeries({
   useEffect(() => {
     if (!seriesRef.current || !data?.bars) return;
 
-    const formattedBars: FormattedBar[] = data.bars.map((bar) => ({
-      time: toTime(Math.floor(new Date(bar.timestamp).getTime() / 1000)),
-      open: bar.open, high: bar.high, low: bar.low, close: bar.close,
-      volume: bar.volume ?? 0,
-    }));
+    // Round-4 hardening (item 1d): drop bars whose OHLC legs are not finite
+    // numbers BEFORE they reach lightweight-charts. The OHLCVBar type claims
+    // `number`, but the wire format doesn't enforce it — a degraded ingest
+    // row carrying null/NaN crashes the candlestick renderer's autoscale
+    // (NaN min/max → blank canvas) and poisons every derived indicator
+    // (computeRSI/computeMACD propagate NaN through their whole window).
+    // Filtering here protects ALL series in one place; OHLCVChart separately
+    // renders a named "not enough data" state when <2 bars survive.
+    const formattedBars: FormattedBar[] = data.bars
+      .filter(
+        (bar) =>
+          Number.isFinite(bar.open) && Number.isFinite(bar.high) &&
+          Number.isFinite(bar.low) && Number.isFinite(bar.close) &&
+          // A bar with an unparseable timestamp would produce a NaN time key,
+          // which lightweight-charts rejects with a hard throw.
+          Number.isFinite(new Date(bar.timestamp).getTime()),
+      )
+      .map((bar) => ({
+        time: toTime(Math.floor(new Date(bar.timestamp).getTime() / 1000)),
+        open: bar.open, high: bar.high, low: bar.low, close: bar.close,
+        // WHY ?? 0 + finite guard: volume is the one leg that may be honestly
+        // null (some venues omit it); zero renders as "no volume bar".
+        volume: Number.isFinite(bar.volume) ? bar.volume : 0,
+      }));
 
     setSeriesData(seriesRef.current, formattedBars);
     // Volume: per-bar color (up=transparent green, down=transparent red)

@@ -80,8 +80,11 @@ describe("AIBriefPanel (T-30 rendering contract)", () => {
       brief: null, status: "loading", errorMessage: null, retry: vi.fn(),
     });
     const { container } = render(<AIBriefPanel entityId="test-entity" />);
-    // WHY querySelector on div.animate-pulse: skeleton divs have animate-pulse.
-    const skeletons = container.querySelectorAll("div.animate-pulse");
+    // Round-4 item 4: skeletons are STATIC per DS §6.2 (raw animate-pulse is
+    // banned) — target the stable testid instead of an animation class, and
+    // pin the ban itself so the fast pulse can't sneak back in.
+    const skeletons = container.querySelectorAll("[data-testid='brief-skeleton-row']");
+    expect(container.querySelectorAll(".animate-pulse").length).toBe(0);
     expect(skeletons.length).toBe(3);
   });
 

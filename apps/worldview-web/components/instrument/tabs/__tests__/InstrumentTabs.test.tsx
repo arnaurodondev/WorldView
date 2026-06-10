@@ -134,6 +134,65 @@ describe("InstrumentTabs", () => {
     expect(onTabChange).not.toHaveBeenCalled();
   });
 
+  // ── Round-4 hardening (item 2): roving tabindex + arrow-key navigation ────
+
+  it("gives only the active tab tabIndex=0 (roving tabindex)", () => {
+    render(
+      <HotkeyProvider registry={registry} initialScopes={["global", "page"]}>
+        <InstrumentTabs activeTab="financials" onTabChange={vi.fn()} />
+      </HotkeyProvider>,
+    );
+    // One Tab-stop for the whole strip: the active tab is focusable, the
+    // others are reached with arrows (WAI-ARIA composite-widget contract).
+    expect(screen.getByRole("button", { name: "FINANCIALS" })).toHaveAttribute("tabindex", "0");
+    expect(screen.getByRole("button", { name: "QUOTE" })).toHaveAttribute("tabindex", "-1");
+    expect(screen.getByRole("button", { name: "INTELLIGENCE" })).toHaveAttribute("tabindex", "-1");
+  });
+
+  it.each([
+    // [start tab, key, expected target]
+    ["quote", "ArrowRight", "financials"],
+    ["financials", "ArrowRight", "intelligence"],
+    ["intelligence", "ArrowRight", "quote"], // wrap-around
+    ["quote", "ArrowLeft", "intelligence"], // wrap-around
+    ["intelligence", "Home", "quote"],
+    ["quote", "End", "intelligence"],
+  ] as const)(
+    "from %s, %s selects %s and moves focus there",
+    (startTab, key, expectedTab) => {
+      const onTabChange = vi.fn();
+      render(
+        <HotkeyProvider registry={registry} initialScopes={["global", "page"]}>
+          <InstrumentTabs activeTab={startTab} onTabChange={onTabChange} />
+        </HotkeyProvider>,
+      );
+      const labels: Record<string, string> = {
+        quote: "QUOTE",
+        financials: "FINANCIALS",
+        intelligence: "INTELLIGENCE",
+      };
+      const startBtn = screen.getByRole("button", { name: labels[startTab] });
+      startBtn.focus();
+      fireEvent.keyDown(startBtn, { key });
+      expect(onTabChange).toHaveBeenCalledWith(expectedTab);
+      // Focus follows selection — the focus ring must land on the new tab.
+      expect(screen.getByRole("button", { name: labels[expectedTab] })).toHaveFocus();
+    },
+  );
+
+  it("ignores unrelated keys (no accidental tab switches)", () => {
+    const onTabChange = vi.fn();
+    render(
+      <HotkeyProvider registry={registry} initialScopes={["global", "page"]}>
+        <InstrumentTabs activeTab="quote" onTabChange={onTabChange} />
+      </HotkeyProvider>,
+    );
+    const btn = screen.getByRole("button", { name: "QUOTE" });
+    fireEvent.keyDown(btn, { key: "ArrowDown" });
+    fireEvent.keyDown(btn, { key: "a" });
+    expect(onTabChange).not.toHaveBeenCalled();
+  });
+
   it("clicking a tab button calls onTabChange with the correct key", () => {
     const onTabChange = vi.fn();
     render(

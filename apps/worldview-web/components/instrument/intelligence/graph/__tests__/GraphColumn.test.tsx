@@ -171,3 +171,38 @@ describe("GraphColumn timeout fallback", () => {
     expect(screen.getByTestId("graph-skeleton")).toBeInTheDocument();
   });
 });
+
+// ── Round-4 hardening (item 1b): generic (non-timeout) failure branch ─────────
+
+describe("GraphColumn generic error fallback", () => {
+  it("renders a named error with Retry for non-timeout failures (was an empty box)", async () => {
+    // A 5xx/network error is NOT the typed GRAPH_TIMEOUT — before Round-4 it
+    // matched no render branch and left an empty bordered canvas slot.
+    mockGateway.getEntityGraph.mockRejectedValue(new Error("S9 unavailable"));
+    render(
+      <Wrapper>
+        <GraphColumn entityId="ent-001" selectedNodeId={null} onNodeSelect={() => {}} />
+      </Wrapper>,
+    );
+    const errBox = await screen.findByTestId("graph-fetch-error");
+    expect(errBox).toBeInTheDocument();
+    // It must NOT masquerade as the timeout state (different remedies:
+    // retry vs reduce depth).
+    expect(screen.queryByText(/timed out/i)).toBeNull();
+
+    // Retry refires the SAME query (same depth) and clears the error.
+    mockGateway.getEntityGraph.mockResolvedValue({
+      entity_id: "ent-001",
+      nodes: [
+        { id: "ent-001", label: "Root", type: "financial_instrument" },
+        { id: "ent-002", label: "Peer", type: "financial_instrument" },
+      ],
+      edges: [{ id: "e1", source: "ent-001", target: "ent-002", label: "peer_of" }],
+    });
+    fireEvent.click(screen.getByRole("button", { name: /retry/i }));
+    await waitFor(() => {
+      expect(screen.getByTestId("entity-graph-stub")).toBeInTheDocument();
+    });
+    expect(screen.queryByTestId("graph-fetch-error")).toBeNull();
+  });
+});

@@ -30,7 +30,11 @@ export function NewsColumn({ entityId }: NewsColumnProps) {
   const [sentiment, setSentiment] = useState<NewsSentiment>(null);
 
   // Filters flow into the hook so the query key changes when they do.
-  const { data, fetchNextPage, hasNextPage, isFetchingNextPage, isLoading } =
+  // Round-4 hardening (item 1b): isError/refetch consumed — a failed news
+  // fetch previously rendered the "no articles" empty state (data undefined →
+  // articles []), telling the analyst "no coverage exists" when the truth was
+  // "the request failed". Errors and emptiness are different states.
+  const { data, fetchNextPage, hasNextPage, isFetchingNextPage, isLoading, isError, refetch } =
     useEntityNewsInfinite(entityId, {
       sentiment: sentiment ?? undefined,
       timeRange,
@@ -67,14 +71,46 @@ export function NewsColumn({ entityId }: NewsColumnProps) {
   );
 
   // Skeleton at 28px row height keeps layout stable while fetching.
+  // Round-4 item 4: STATIC bars per DS §6.2 — raw animate-pulse is banned for
+  // skeletons. data-testid lets tests target "loading" without coupling to
+  // the (now animation-free) class list.
   if (isLoading) {
     return (
       <div className="flex flex-col h-full">
         {filterStrip}
-        <div className="flex-1 overflow-y-auto">
+        <div className="flex-1 overflow-y-auto" aria-busy="true">
           {Array.from({ length: 5 }).map((_, i) => (
-            <div key={i} className="h-7 mx-3 my-1 rounded-sm bg-muted/20 animate-pulse" />
+            <div key={i} data-testid="news-skeleton-row" aria-hidden className="h-7 mx-3 my-1 rounded-sm bg-muted/20" />
           ))}
+        </div>
+      </div>
+    );
+  }
+
+  // ── Per-section error (Round-4 hardening, item 1b) ─────────────────────────
+  // NAMED error + Retry, scoped to this column only — the graph and context
+  // rail keep working. WHY isError && !data: if any page already loaded, the
+  // stale list stays visible (stale articles beat an error screen); this
+  // branch only covers the cold fetch failing outright.
+  if (isError && !data) {
+    return (
+      <div className="flex flex-col h-full">
+        {filterStrip}
+        <div
+          data-testid="news-fetch-error"
+          className="flex flex-1 flex-col items-center justify-center gap-1 px-3 text-center"
+        >
+          <p className="text-[12px] text-foreground">Couldn&apos;t load news</p>
+          <p className="text-[11px] text-muted-foreground">
+            The article feed failed to load — the graph and context rail are unaffected.
+          </p>
+          <button
+            type="button"
+            onClick={() => void refetch()}
+            className="mt-1 font-mono text-[9px] uppercase tracking-wider text-primary hover:underline focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring rounded-[2px]"
+          >
+            Retry
+          </button>
         </div>
       </div>
     );

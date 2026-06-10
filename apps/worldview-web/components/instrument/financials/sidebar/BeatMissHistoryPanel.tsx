@@ -83,12 +83,13 @@ export function BeatMissHistoryPanel({ instrumentId }: BeatMissHistoryPanelProps
         EPS BEAT / MISS
       </span>
 
-      {/* Round-3 item 4: shape-matched skeleton — a sparkline-height pulsing
-          bar (was a lone "—", which reads as the FINAL "no data" state while
-          the fetch is still in flight). */}
+      {/* Round-3 item 4: shape-matched skeleton — a sparkline-height bar
+          (was a lone "—", which reads as the FINAL "no data" state while
+          the fetch is still in flight).
+          Round-4 item 4: static per DS §6.2 — raw animate-pulse is banned. */}
       {isLoading && (
         <div role="status" aria-label="Loading EPS history" className="h-[20px] flex items-center">
-          <span aria-hidden className="h-3 w-full animate-pulse rounded-[1px] bg-muted/30" />
+          <span aria-hidden className="h-3 w-full rounded-[1px] bg-muted/30" />
         </div>
       )}
 

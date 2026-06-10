@@ -27,6 +27,12 @@ const h = vi.hoisted(() => {
   const subscribeCrosshairMove = vi.fn();
   const setVisibleRange = vi.fn();
   const scrollToRealTime = vi.fn();
+  // Round-4 hardening (item 3e): track remove() so the dispose test can
+  // assert the chart instance is torn down on unmount (no leaked instance).
+  const remove = vi.fn();
+  // Round-4 hardening (item 1d): capture every setData payload so the
+  // null-OHLC filter test can assert non-finite bars never reach the library.
+  const setDataCalls: unknown[][] = [];
   const timeScale = vi.fn(() => ({
     fitContent: vi.fn(),
     scrollToRealTime,
@@ -35,7 +41,10 @@ const h = vi.hoisted(() => {
     coordinateToTime: vi.fn(() => null),
     setVisibleLogicalRange: vi.fn(),
   }));
-  const addSeries = vi.fn(() => ({ setData: vi.fn(), applyOptions: vi.fn() }));
+  const addSeries = vi.fn(() => ({
+    setData: vi.fn((d: unknown[]) => setDataCalls.push(d)),
+    applyOptions: vi.fn(),
+  }));
   const createChart = vi.fn(() => ({
     addSeries,
     addPane: vi.fn(() => ({ setOptions: vi.fn() })),
@@ -45,10 +54,10 @@ const h = vi.hoisted(() => {
     timeScale,
     subscribeCrosshairMove,
     unsubscribeCrosshairMove: vi.fn(),
-    remove: vi.fn(),
+    remove,
     removeSeries: vi.fn(),
   }));
-  return { createChart, addSeries, subscribeCrosshairMove, setVisibleRange, scrollToRealTime };
+  return { createChart, addSeries, subscribeCrosshairMove, setVisibleRange, scrollToRealTime, remove, setDataCalls };
 });
 
 vi.mock("lightweight-charts", () => ({
@@ -116,6 +125,9 @@ function makeClient() {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  // Round-4: reset the captured setData payloads between tests (the array is
+  // a shared hoisted handle, so clearAllMocks doesn't empty it).
+  h.setDataCalls.length = 0;
   mockGetOHLCV.mockImplementation((id: string, params: { timeframe?: string }) =>
     Promise.resolve({
       instrument_id: id,
@@ -215,5 +227,114 @@ describe("OHLCVChart crosshair legend", () => {
     // Pointer leaves the pane → param.time undefined → legend unmounts.
     await act(async () => { handler({ time: undefined }); });
     expect(screen.queryByTestId("crosshair-legend")).not.toBeInTheDocument();
+  });
+});
+
+// ── Round-4 hardening tests ───────────────────────────────────────────────────
+
+describe("OHLCVChart lifecycle (Round-4 item 3a/3e)", () => {
+  it("creates exactly ONE chart instance across period switches in the shared slot", async () => {
+    // 1M / 3M / 1Y share the daily-bar fetch and differ only by visible
+    // range — switching among them must be a pure client-side re-window,
+    // never a chart teardown/rebuild (which would flash + reset the GL ctx).
+    await act(async () => { renderChart(makeClient()); });
+    await waitFor(() => expect(h.createChart).toHaveBeenCalledTimes(1));
+    // Sequential explicit clicks (not a loop) — keeps the await chain flat
+    // and silences no-await-in-loop without weakening the assertion.
+    await act(async () => { fireEvent.click(screen.getByRole("button", { name: "1M" })); });
+    await act(async () => { fireEvent.click(screen.getByRole("button", { name: "3M" })); });
+    await act(async () => { fireEvent.click(screen.getByRole("button", { name: "1Y" })); });
+    expect(h.createChart).toHaveBeenCalledTimes(1);
+    expect(h.remove).not.toHaveBeenCalled();
+  });
+
+  it("disposes the chart instance on unmount (no leaked lightweight-charts instance)", async () => {
+    let view: ReturnType<typeof renderChart>;
+    await act(async () => { view = renderChart(makeClient()); });
+    await waitFor(() => expect(h.createChart).toHaveBeenCalledTimes(1));
+    await act(async () => { view!.unmount(); });
+    // chart.remove() is the library's dispose — it also detaches the
+    // internal listeners; the ResizeObserver is disconnected in the same
+    // cleanup (see useChartSeries init-effect return).
+    expect(h.remove).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("OHLCVChart error recovery (Round-4 item 1b)", () => {
+  it("renders a named per-section error with Retry when the OHLCV fetch fails", async () => {
+    mockGetOHLCV.mockRejectedValue(new Error("S9 unavailable"));
+    await act(async () => { renderChart(makeClient()); });
+    // NAMED state — previously a failed fetch fell through every branch and
+    // left a blank canvas surrounded by live toolbars.
+    const errBox = await screen.findByTestId("chart-fetch-error");
+    expect(errBox).toBeInTheDocument();
+    // Retry refires the query: flip the gateway to success and click.
+    mockGetOHLCV.mockImplementation((id: string) =>
+      Promise.resolve({ instrument_id: id, ticker: "", timeframe: "5M", bars: makeBars(30) }),
+    );
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: /retry/i }));
+    });
+    await waitFor(() => {
+      expect(screen.queryByTestId("chart-fetch-error")).not.toBeInTheDocument();
+    });
+  });
+});
+
+describe("OHLCVChart degraded-bars guards (Round-4 item 1d)", () => {
+  it("renders the insufficient-data state when only one bar is plottable", async () => {
+    // 1 valid bar + 2 all-null bars: length>0 so the legacy zero-bar state
+    // does NOT apply, but <2 plottable bars cannot form price action.
+    // WHY the unknown-cast: OHLCVBar TYPES the legs as number, but the wire
+    // can deliver null — that type/wire gap is exactly what this test pins.
+    const nul = null as unknown as number;
+    const bars = makeBars(3).map((b, i) =>
+      i === 0 ? b : { ...b, open: nul, high: nul, low: nul, close: nul },
+    );
+    mockGetOHLCV.mockResolvedValue({ instrument_id: "ins-001", ticker: "", timeframe: "5M", bars });
+    await act(async () => { renderChart(makeClient()); });
+    expect(await screen.findByTestId("chart-insufficient-data")).toBeInTheDocument();
+  });
+
+  it("filters non-finite OHLC bars before they reach lightweight-charts (no NaN crash)", async () => {
+    // 30 valid bars with 2 poisoned rows interleaved — the candle series must
+    // receive ONLY the 30 finite bars (NaN autoscale → blank canvas class).
+    const good = makeBars(30);
+    const nul = null as unknown as number; // wire null vs typed number — see above
+    const poisoned = [
+      ...good.slice(0, 10),
+      { ...good[10], open: nul, high: nul, low: nul, close: nul },
+      ...good.slice(10, 20),
+      { ...good[20], close: Number.NaN },
+      ...good.slice(20),
+    ];
+    mockGetOHLCV.mockResolvedValue({ instrument_id: "ins-001", ticker: "", timeframe: "5M", bars: poisoned });
+    await act(async () => { renderChart(makeClient()); });
+    await waitFor(() => expect(h.setDataCalls.length).toBeGreaterThan(0));
+    // Every payload handed to ANY series must be NaN-free in its value legs.
+    for (const payload of h.setDataCalls) {
+      for (const point of payload as Array<Record<string, unknown>>) {
+        for (const key of ["open", "high", "low", "close", "value"]) {
+          if (key in point) {
+            expect(Number.isFinite(point[key] as number)).toBe(true);
+          }
+        }
+      }
+    }
+    // The candlestick payloads specifically must carry the 30 valid bars.
+    const candles = h.setDataCalls.find((d) => (d[0] as Record<string, unknown> | undefined)?.open !== undefined);
+    expect((candles ?? []).length).toBe(30);
+  });
+});
+
+describe("OHLCVChart canvas a11y (Round-4 item 2)", () => {
+  it("labels the chart wrapper with a latest-OHLC summary (role=img)", async () => {
+    await act(async () => { renderChart(makeClient()); });
+    const wrapper = await screen.findByTestId("chart-wrapper");
+    expect(wrapper).toHaveAttribute("role", "img");
+    await waitFor(() => {
+      // Last synthetic bar: open 129, high 130, low 128, close 129.50.
+      expect(wrapper.getAttribute("aria-label")).toContain("close 129.50");
+    });
   });
 });

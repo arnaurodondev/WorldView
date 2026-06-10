@@ -95,6 +95,64 @@ describe("NewsColumn named empty state (Round-3 consolidation)", () => {
     render(<NewsColumn entityId="ent-001" />);
     // Round-3 item 4: shape-matched skeleton — h-7 bars matching the 28px
     // CompactArticleRow height; no role=status spinner chrome.
-    expect(document.querySelectorAll(".animate-pulse").length).toBeGreaterThan(0);
+    // Round-4 item 4: skeletons are STATIC per DS §6.2 (raw animate-pulse is
+    // banned) — assert via the stable testid, and pin the ban itself.
+    expect(screen.getAllByTestId("news-skeleton-row").length).toBeGreaterThan(0);
+    expect(document.querySelectorAll(".animate-pulse").length).toBe(0);
+  });
+});
+
+// ── Round-4 hardening (item 1b): per-section error isolation ─────────────────
+
+describe("NewsColumn per-section error state", () => {
+  it("renders a named error with Retry when the cold fetch fails (NOT the empty state)", () => {
+    const refetch = vi.fn();
+    // WHY cast via never: the hook mock's state literal doesn't declare the
+    // full UseInfiniteQueryResult surface — only the fields the component
+    // destructures matter for the contract.
+    mockNewsHook.state = {
+      ...mockNewsHook.state,
+      data: undefined,
+      isLoading: false,
+      isError: true,
+      refetch,
+    } as never;
+    render(<NewsColumn entityId="ent-001" />);
+    // NAMED error — the "no articles" empty state would tell the analyst no
+    // coverage exists when the truth is the request failed.
+    expect(screen.getByTestId("news-fetch-error")).toBeInTheDocument();
+    expect(screen.queryByText("No articles for this entity")).toBeNull();
+    // Retry refires the query.
+    fireEvent.click(screen.getByRole("button", { name: /retry/i }));
+    expect(refetch).toHaveBeenCalled();
+  });
+
+  it("keeps loaded articles visible when a background refetch errors (stale beats error)", () => {
+    mockNewsHook.state = {
+      ...mockNewsHook.state,
+      data: {
+        pages: [
+          {
+            articles: [
+              {
+                article_id: "a1",
+                title: "Loaded headline survives the failed refetch",
+                source: "wire",
+                published_at: "2026-06-10T00:00:00Z",
+                sentiment: null,
+                url: "https://example.com/a1",
+              },
+            ],
+          },
+        ],
+      },
+      isLoading: false,
+      isError: true,
+      refetch: vi.fn(),
+    } as never;
+    render(<NewsColumn entityId="ent-001" />);
+    // The error branch is gated on `!data` — already-loaded content wins.
+    expect(screen.queryByTestId("news-fetch-error")).toBeNull();
+    expect(screen.getByText("Loaded headline survives the failed refetch")).toBeInTheDocument();
   });
 });

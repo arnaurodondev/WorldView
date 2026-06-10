@@ -36,7 +36,7 @@
 "use client";
 // WHY "use client": useState (mode toggle) + the TanStack bundle hook.
 
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { FileSpreadsheet } from "lucide-react";
 
 import { useFinancialsBundle } from "@/components/instrument/hooks/useFinancialsBundle";
@@ -75,9 +75,20 @@ export function FinancialStatementsPanel({ instrumentId }: FinancialStatementsPa
   const sections = (bundleQuery.data?.fundamentals ?? null) as FundamentalsSectionResponse | null;
   const records = sections?.records;
 
-  const income = buildStatementView(records, "income_statement", mode);
-  const balance = buildStatementView(records, "balance_sheet", mode);
-  const cashFlow = buildStatementView(records, "cash_flow", mode);
+  // Round-4 hardening (item 3b): memoise the three derivations. AAPL's
+  // all-sections leg carries ~470 records; each buildStatementView call
+  // filters + sorts + TTM-sums that array, so re-deriving on EVERY parent
+  // re-render (FinancialsTab re-renders on each of its 6+ query updates)
+  // was ~3 full passes per render for identical inputs. The views only
+  // change when the records array identity or the Annual/TTM mode changes.
+  const { income, balance, cashFlow } = useMemo(
+    () => ({
+      income: buildStatementView(records, "income_statement", mode),
+      balance: buildStatementView(records, "balance_sheet", mode),
+      cashFlow: buildStatementView(records, "cash_flow", mode),
+    }),
+    [records, mode],
+  );
   const hasAny = !!(income || balance || cashFlow);
 
   // ── Loading: only on the bundle's cold first fetch (cache-warm renders skip
@@ -140,13 +151,32 @@ export function FinancialStatementsPanel({ instrumentId }: FinancialStatementsPa
         </Tabs>
       </div>
 
-      {/* ── Empty: section records absent (bundle leg failed OR instrument has
-          no ingested statements, e.g. ETFs). Named state per Round-1 rule.
-          Round-3: copy moved verbatim to the registry (new instrument.* key —
-          this call site was outside the six-key Round-2 reservation). The
-          primitive owns its own padding, so the old px-2/pb-2 wrapper classes
-          are no longer needed. ── */}
-      {!hasAny ? (
+      {/* ── Error: the WHOLE bundle request failed (Round-4 item 1b). Before
+          this branch, a failed bundle fell into the "no financial statements"
+          empty state below — telling the analyst the instrument HAS no
+          statements when the truth was a failed fetch. Distinct named error +
+          Retry keeps the two states honest. Note: a failed `fundamentals` LEG
+          inside a successful bundle still degrades to the empty state — the
+          composite endpoint nulls failed legs and we cannot distinguish
+          "leg errored" from "no records" client-side. ── */}
+      {bundleQuery.isError ? (
+        <div
+          data-testid="statements-fetch-error"
+          className="flex flex-col items-center justify-center gap-1 px-3 py-4 text-center"
+        >
+          <p className="text-[12px] text-foreground">Couldn&apos;t load financial statements</p>
+          <p className="text-[11px] text-muted-foreground">
+            The financials bundle failed to load — the rest of the tab is unaffected.
+          </p>
+          <button
+            type="button"
+            onClick={() => void bundleQuery.refetch()}
+            className="mt-1 font-mono text-[9px] uppercase tracking-wider text-primary hover:underline focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring rounded-[2px]"
+          >
+            Retry
+          </button>
+        </div>
+      ) : !hasAny ? (
         <EmptyState
           condition="empty-no-data"
           copyKey="instrument.no-financial-statements"

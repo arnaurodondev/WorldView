@@ -130,10 +130,12 @@ function riskLabel(score: number): string {
 function LoadingState() {
   return (
     <div className="flex flex-col gap-1.5 px-2 py-2">
-      {/* WHY animate-pulse on divs (not Skeleton): the sidebar is too narrow for
-          Skeleton's default height; custom divs match the actual bullet height. */}
+      {/* WHY custom divs (not Skeleton): the sidebar is too narrow for
+          Skeleton's default height; custom divs match the actual bullet height.
+          Round-4 item 4: STATIC bars per DS §6.2 — raw animate-pulse is banned
+          for skeletons (Bloomberg-style terminals use static loading bars). */}
       {[1, 2, 3].map((i) => (
-        <div key={i} className="h-[28px] rounded-[2px] bg-muted/30 animate-pulse" />
+        <div key={i} data-testid="brief-skeleton-row" className="h-[28px] rounded-[2px] bg-muted/30" />
       ))}
     </div>
   );
@@ -142,7 +144,11 @@ function LoadingState() {
 function TriggeringState() {
   return (
     <div className="flex items-center gap-2 px-2 py-3">
-      <div className="h-[8px] w-[8px] rounded-full bg-primary animate-pulse" />
+      {/* Round-4 item 4: animate-skeleton-pulse (sanctioned 2s opacity fade,
+          DS §6.2 opt-in tier) replaces raw animate-pulse — brief generation
+          is a genuine >2s LLM call where "still working" feedback matters,
+          but the fast consumer-app pulse reads as broken streaming. */}
+      <div className="h-[8px] w-[8px] rounded-full bg-primary animate-skeleton-pulse" />
       <span className="text-[10px] font-mono text-muted-foreground">Generating brief…</span>
     </div>
   );
@@ -152,7 +158,9 @@ function PollingState({ attempt, max }: { attempt?: number; max?: number }) {
   return (
     <div className="flex flex-col gap-1 px-2 py-2">
       <div className="flex items-center gap-2">
-        <div className="h-[8px] w-[8px] rounded-full bg-primary animate-pulse" />
+        {/* Round-4 item 4: same sanctioned slow-pulse rationale as
+            TriggeringState — polling an in-flight LLM generation. */}
+        <div className="h-[8px] w-[8px] rounded-full bg-primary animate-skeleton-pulse" />
         <span className="text-[10px] font-mono text-muted-foreground">Generating…</span>
       </div>
       {attempt != null && max != null && (

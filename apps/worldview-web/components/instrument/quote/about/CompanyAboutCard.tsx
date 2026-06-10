@@ -55,7 +55,9 @@ export function CompanyAboutCard({ instrument, isLoading = false }: CompanyAbout
         {Array.from({ length: 5 }).map((_, i) => (
           <div
             key={i}
-            className="h-[18px] w-full mb-[1px] animate-pulse bg-muted rounded-[2px]"
+            // Round-4 item 4: static skeleton bars per DS §6.2 — raw
+            // animate-pulse is banned (terminal skeletons don't animate).
+            className="h-[18px] w-full mb-[1px] bg-muted rounded-[2px]"
           />
         ))}
       </div>

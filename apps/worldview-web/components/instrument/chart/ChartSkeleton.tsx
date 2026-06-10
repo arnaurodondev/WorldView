@@ -43,7 +43,10 @@ export function ChartSkeleton() {
       role="status"
       aria-label="Loading price chart"
       data-testid="chart-skeleton"
-      className="pointer-events-none absolute inset-0 flex animate-pulse"
+      // Round-4 item 4: animation removed per DS §6.2 — skeletons are STATIC
+      // by default (raw animate-pulse is banned; the geometry alone carries
+      // the "chart loading" signal).
+      className="pointer-events-none absolute inset-0 flex"
     >
       {/* ── Plot surface ──────────────────────────────────────────────────
           Faint fill bounded above/below like a real candle series (price

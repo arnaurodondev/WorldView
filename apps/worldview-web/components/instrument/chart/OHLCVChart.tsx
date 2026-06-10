@@ -95,7 +95,12 @@ export function OHLCVChart({ instrumentId, initialBars }: OHLCVChartProps) {
     return undefined;
   }, [initialBars, timeframe, instrumentId]);
 
-  const { data, isLoading } = useQuery({
+  // Round-4 hardening (item 1b): isError/refetch are consumed below — a
+  // failed OHLCV fetch previously fell through every render branch
+  // (isLoading=false, data=undefined) and left a blank canvas with live
+  // toolbars around it. Now it renders a named per-section error + Retry
+  // while the rest of the page (header, metrics rail) keeps working.
+  const { data, isLoading, isError, refetch } = useQuery({
     // WHY qk.instruments.ohlcv (Round-1 fix — was a bare ["ohlcv", ...] key):
     // QuoteTab's SessionStatsStrip passively subscribes (enabled:false) to
     // qk.instruments.ohlcv(instrumentId, "1D") to mirror the chart's freshest
@@ -193,6 +198,51 @@ export function OHLCVChart({ instrumentId, initialBars }: OHLCVChartProps) {
   const barsByTimeRef = useRef(barsByTime);
   useEffect(() => { barsByTimeRef.current = barsByTime; }, [barsByTime]);
 
+  // ── Plottable-bar count (Round-4 hardening, item 1d) ───────────────────────
+  // A bar is "plottable" only when all four OHLC legs are finite numbers.
+  // WHY this exists: a degraded ingest row can carry null/NaN OHLC (the API
+  // type says `number` but the wire doesn't enforce it); lightweight-charts
+  // renders such bars as gaps and a single surviving bar as an apparently
+  // empty canvas. <2 plottable bars cannot form price action, so we render a
+  // named state instead of a blank chart (the candle-level filtering itself
+  // lives in useChartSeries so the library never sees a non-finite value).
+  const plottableBarCount = useMemo(() => {
+    let count = 0;
+    for (const b of data?.bars ?? []) {
+      if (
+        Number.isFinite(b.open) && Number.isFinite(b.high) &&
+        Number.isFinite(b.low) && Number.isFinite(b.close)
+      ) {
+        count += 1;
+      }
+    }
+    return count;
+  }, [data?.bars]);
+
+  // ── Canvas a11y summary (Round-4 hardening, item 2) ────────────────────────
+  // The lightweight-charts canvas is pure pixels — invisible to screen
+  // readers. We expose the latest session's OHLC as an aria-label on the
+  // wrapper (role="img": the chart is a single graphic, not a widget tree).
+  // WHY latest PLOTTABLE bar (not bars[-1]): a trailing degraded bar with
+  // null OHLC would read "NaN" to assistive tech.
+  const chartAriaLabel = useMemo(() => {
+    const bars = data?.bars ?? [];
+    for (let i = bars.length - 1; i >= 0; i--) {
+      const b = bars[i];
+      if (
+        Number.isFinite(b.open) && Number.isFinite(b.high) &&
+        Number.isFinite(b.low) && Number.isFinite(b.close)
+      ) {
+        return (
+          `Price chart, ${period} period. Latest bar: ` +
+          `open ${b.open.toFixed(2)}, high ${b.high.toFixed(2)}, ` +
+          `low ${b.low.toFixed(2)}, close ${b.close.toFixed(2)}.`
+        );
+      }
+    }
+    return `Price chart, ${period} period. No price data loaded.`;
+  }, [data?.bars, period]);
+
   useEffect(() => {
     const chart = chartRef.current;
     if (!chart || !isChartReady) return;
@@ -262,7 +312,33 @@ export function OHLCVChart({ instrumentId, initialBars }: OHLCVChartProps) {
         </div>
       )}
 
-      {!chartError && (
+      {/* ── Per-section fetch error (Round-4 hardening, item 1b) ──────────────
+          Distinct from `chartError` above (library failed to LOAD): this is
+          the OHLCV QUERY failing while the chart library is fine. NAMED state
+          with a real Retry — the header/metrics keep working, only the chart
+          slot reports. WHY isError && !data: placeholder/cached bars beat an
+          error from a background refetch (stale data > error screen). */}
+      {!chartError && isError && !data && (
+        <div
+          data-testid="chart-fetch-error"
+          className="flex flex-col items-center justify-center gap-1"
+          style={{ height: CHART_HEIGHT }}
+        >
+          <p className="text-[12px] text-muted-foreground">Couldn&apos;t load price data</p>
+          <p className="text-[10px] text-muted-foreground/60">
+            The OHLCV request failed — the rest of the page is unaffected.
+          </p>
+          <button
+            type="button"
+            onClick={() => void refetch()}
+            className="mt-1 h-6 rounded-[2px] border border-border px-2.5 text-[10px] text-muted-foreground hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+          >
+            Retry
+          </button>
+        </div>
+      )}
+
+      {!chartError && !(isError && !data) && (
         // WHY containerRef stays mounted: removing it destroys the WebGL
         // context (visible flash + re-init). No left-gutter padding now that
         // the drawing palette is gone.
@@ -272,7 +348,14 @@ export function OHLCVChart({ instrumentId, initialBars }: OHLCVChartProps) {
         // sized from clientHeight=0 → fallback 280px, leaving 70% empty).
         // h-full propagates the flex slot's height down to the lightweight-
         // charts container ref so chart.height = full slot height.
-        <div className="relative w-full h-full" data-testid="chart-wrapper">
+        // Round-4 hardening (item 2): role="img" + aria-label expose the
+        // latest OHLC to screen readers — the canvas itself is opaque pixels.
+        <div
+          className="relative w-full h-full"
+          data-testid="chart-wrapper"
+          role="img"
+          aria-label={chartAriaLabel}
+        >
           <div ref={containerRef} className={`w-full h-full ${isFullscreen ? "flex-1" : ""}`} />
           {/* Crosshair legend — O/H/L/C/V of the hovered candle (requirement 2c).
               Rendered as an overlay INSIDE the wrapper so it tracks fullscreen.
@@ -290,6 +373,24 @@ export function OHLCVChart({ instrumentId, initialBars }: OHLCVChartProps) {
             <div className="pointer-events-none absolute inset-x-0 top-0 flex flex-col items-center justify-center" style={{ height: CHART_HEIGHT }}>
               <p className="text-[12px] text-muted-foreground">No price data for the {period} period</p>
               <p className="mt-1 text-[10px] text-muted-foreground/60">Try a longer period — 1M, 3M or 1Y use daily bars</p>
+            </div>
+          )}
+          {/* Round-4 hardening (item 1d): bars exist but fewer than 2 are
+              plottable (finite OHLC) — a single candle or all-null series
+              renders as an apparently empty canvas. NAMED state so the
+              analyst knows the data, not the chart, is the problem. */}
+          {!isLoading && data && data.bars.length > 0 && plottableBarCount < 2 && (
+            <div
+              data-testid="chart-insufficient-data"
+              className="pointer-events-none absolute inset-x-0 top-0 flex flex-col items-center justify-center"
+              style={{ height: CHART_HEIGHT }}
+            >
+              <p className="text-[12px] text-muted-foreground">Not enough price data to draw a chart</p>
+              <p className="mt-1 text-[10px] text-muted-foreground/60">
+                {plottableBarCount === 1
+                  ? "Only one valid bar in this window — try a longer period"
+                  : "The bars in this window have no valid OHLC values"}
+              </p>
             </div>
           )}
           {isLoading && data && (
