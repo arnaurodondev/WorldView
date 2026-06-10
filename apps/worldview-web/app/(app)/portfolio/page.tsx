@@ -51,7 +51,9 @@ import dynamic from "next/dynamic";
 import Link from "next/link";
 // R1 sprint: Plus icon for the prominent empty-portfolio CTA.
 // R3 polish: FolderPlus is the category icon for the no-portfolio EmptyState.
-import { Plus, FolderPlus } from "lucide-react";
+// R4 hardening: AlertTriangle categorises the page-level load-error state;
+// RotateCw decorates its Retry action (the deferred R3 retry item).
+import { Plus, FolderPlus, AlertTriangle, RotateCw } from "lucide-react";
 
 import { useAuth } from "@/hooks/useAuth";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
@@ -72,9 +74,11 @@ import type { PeriodLabel } from "@/components/portfolio/EquityCurveChart";
 import { ConnectBrokerageModal } from "@/components/brokerage/ConnectBrokerageModal";
 
 // ── Terminal primitives ─────────────────────────────────────────────────────
-import { InlineEmptyState } from "@/components/data/InlineEmptyState";
 // R3 polish (DS §15.12): shared EmptyState primitive — the no-portfolio
 // branch renders through it (copy: portfolio.no-portfolio in the registry).
+// R4 hardening: the page-level error branch ALSO renders through it now
+// (copy: portfolio.load-error) — the legacy InlineEmptyState import is gone
+// with its last call site (it offered no retry path; users had to reload).
 import { EmptyState } from "@/components/primitives/EmptyState";
 
 // ── Lazy-loaded portfolio dialogs ───────────────────────────────────────────
@@ -209,6 +213,8 @@ export default function PortfolioPage() {
     activeIsRoot,
     portfoliosLoading,
     portfoliosError,
+    // R4 hardening: in-place retry for the page-level error state below.
+    refetchPortfolios,
     holdingsLoading,
     txLoading,
     watchlistsLoading,
@@ -300,10 +306,37 @@ export default function PortfolioPage() {
   }
 
   // ── Error state ────────────────────────────────────────────────────────
+  // R4 hardening (the deferred R3 item): the portfolio-list failure is now a
+  // NAMED error state with an in-place Retry instead of the dead-end
+  // InlineEmptyState that told the user to reload the whole app. The title
+  // string stays "Failed to load portfolio data" — pinned by the e2e suite
+  // (qa-exhaustive "Portfolio shows error state with retry option").
+  // WHY refetchPortfolios (not router.refresh / location.reload): only the
+  // portfolio-list query failed; refetching just that query preserves every
+  // other warm cache entry and recovers in one round-trip.
   if (portfoliosError) {
     return (
-      <div className="p-3">
-        <InlineEmptyState message="Failed to load portfolio data. Check your connection and reload." />
+      <div className="p-3" data-testid="portfolio-error-state">
+        <EmptyState
+          condition="error"
+          copyKey="portfolio.load-error"
+          icon={AlertTriangle}
+          action={
+            // Terminal-style bordered action, same affordance family as the
+            // empty-portfolio "Create portfolio" CTA below — one visual
+            // language for "the page needs exactly one action from you".
+            <button
+              type="button"
+              data-testid="portfolio-error-retry"
+              aria-label="Retry loading portfolio data"
+              onClick={refetchPortfolios}
+              className="mt-1 flex h-7 items-center gap-1.5 rounded-[2px] border border-primary/60 px-3 font-mono text-[11px] uppercase tracking-[0.06em] text-primary transition-colors hover:bg-primary/10 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+            >
+              <RotateCw className="h-3 w-3" strokeWidth={1.5} />
+              Retry
+            </button>
+          }
+        />
       </div>
     );
   }

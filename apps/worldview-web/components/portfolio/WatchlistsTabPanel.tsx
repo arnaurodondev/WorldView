@@ -35,6 +35,11 @@ import { useState, useMemo } from "react";
 import { useRouter } from "next/navigation";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Plus } from "lucide-react";
+// R4 hardening (DS §6.16): watchlist mutations previously failed SILENTLY —
+// a failed remove left the row on screen with zero feedback, reading as a
+// broken click. Fire-and-forget outcomes get an error toast; the inline
+// inputs (create/rename) additionally stay open so typed input is preserved.
+import { toast } from "sonner";
 import { createGateway } from "@/lib/gateway";
 import { useAuth } from "@/hooks/useAuth";
 // R3 polish (DS §15.12): shared EmptyState primitive for the no-watchlists
@@ -104,6 +109,14 @@ export function WatchlistsTabPanel({
         queryKey: ["watchlist-members", vars.watchlistId],
       });
     },
+    // R4 hardening: a failed remove is a fire-and-forget outcome → toast
+    // (DS §6.16). The row never left the table (invalidation only runs on
+    // success) so the user can simply click the × again — no state to repair.
+    onError: () => {
+      toast.error("Couldn't remove ticker from watchlist", {
+        description: "The row is unchanged — try removing it again.",
+      });
+    },
   });
 
   // ── Create watchlist mutation ──────────────────────────────────────────────
@@ -114,6 +127,15 @@ export function WatchlistsTabPanel({
       // Switch to the newly created watchlist immediately
       setActiveWatchlistId(newWatchlist.watchlist_id);
       setCreating(false);
+    },
+    // R4 hardening: toast on failure. CRITICALLY, `creating` is NOT reset —
+    // setCreating(false) only runs in onSuccess, so the inline name input
+    // stays mounted with the user's typed name intact and they can hit
+    // Enter again (the "form stays usable, input preserved" contract).
+    onError: () => {
+      toast.error("Couldn't create watchlist", {
+        description: "Your typed name is preserved — try again.",
+      });
     },
   });
 
@@ -128,6 +150,14 @@ export function WatchlistsTabPanel({
         setActiveWatchlistId(remaining[0]?.watchlist_id ?? null);
       }
     },
+    // R4 hardening: silent delete failure previously left the tab on screen
+    // with no explanation (the user already confirmed the destructive
+    // intent — silence reads as "it worked" until the refetch resurrects it).
+    onError: () => {
+      toast.error("Couldn't delete watchlist", {
+        description: "The watchlist is unchanged — try again.",
+      });
+    },
   });
 
   // ── Rename watchlist mutation ──────────────────────────────────────────────
@@ -139,7 +169,12 @@ export function WatchlistsTabPanel({
       setRenamingWatchlistId(null);
     },
     onError: () => {
-      // Keep the input visible so the user can retry or cancel
+      // Keep the input visible so the user can retry or cancel — the typed
+      // name is preserved. R4 hardening: the failure is now also ANNOUNCED
+      // (it was a comment-only no-op before, i.e. a silent failure).
+      toast.error("Couldn't rename watchlist", {
+        description: "Your typed name is preserved — try again or cancel.",
+      });
     },
   });
 

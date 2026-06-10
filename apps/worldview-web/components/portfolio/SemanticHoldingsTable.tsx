@@ -285,6 +285,118 @@ export function SemanticHoldingsTable({
     [],
   );
 
+  // ── Enrich rows (R4: memoised) ────────────────────────────────────────────
+  // R4 hardening: this block ran inline in the render body, producing a FRESH
+  // enrichedRows array (and pinned-row object) on every render — including
+  // renders where neither holdings nor quotes changed (e.g. the page-level
+  // sector-filter chip toggling, context-menu open/close, parent hover
+  // state). AG Grid diffs rowData by reference first; a fresh array forces
+  // its change-detection pass each time. Memoising on the four real inputs
+  // restores identity stability: toggling the sector filter OFF hands AG
+  // Grid the exact same array it had before (holdings is reference-stable on
+  // the unfiltered path — filterHoldingsBySector returns the same ref).
+  // WHY above the early returns: rules-of-hooks — the hook must run on every
+  // render, including the empty/zero-qty renders that return early below.
+  const { enrichedRows, pinnedBottomRow } = useMemo(() => {
+    let totalPnl = 0;
+    let totalPnlCost = 0;
+    // R1 sprint: totals for the pinned bottom row. dayChangeSeen
+    // distinguishes "no quote has a change yet" (render "—") from a genuine
+    // $0.00 flat day.
+    let totalDayChange = 0;
+    let dayChangeSeen = false;
+    // Sum of per-row weights — by construction this is 100% whenever
+    // totalValue equals the sum of row values, but we sum the actual
+    // rendered weights so the TOTAL row never contradicts the column above
+    // it (e.g. when the KPI totalValue used a slightly different live-price
+    // fallback for one row).
+    let totalWeight = 0;
+
+    const rows: EnrichedHoldingRow[] = holdings.map((h) => {
+      const quote = quotes[h.instrument_id];
+      const livePrice = quote?.price ?? h.current_price ?? h.average_cost;
+      const freshness = quote?.freshness_status;
+      const value = livePrice * h.quantity;
+      const pnl = (livePrice - h.average_cost) * h.quantity;
+      const pnlPct =
+        h.average_cost > 0
+          ? ((livePrice - h.average_cost) / h.average_cost) * 100
+          : 0;
+      const weight = totalValue > 0 ? (value / totalValue) * 100 : 0;
+      const sector = sectors?.[h.instrument_id] ?? null;
+      const dayChange = quote?.change ?? null;
+      const dayChangePct = quote?.change_pct ?? null;
+      const dayChangeValue = dayChange != null ? dayChange * h.quantity : null;
+
+      totalPnl += pnl;
+      totalPnlCost += h.average_cost * h.quantity;
+      // R1 sprint: accumulate the TOTAL row's day change + weight.
+      if (dayChangeValue != null) {
+        totalDayChange += dayChangeValue;
+        dayChangeSeen = true;
+      }
+      totalWeight += weight;
+
+      return { h, livePrice, freshness, value, pnl, pnlPct, weight, sector, dayChange, dayChangePct, dayChangeValue };
+    });
+
+    const totalPnlPct = totalPnlCost > 0 ? (totalPnl / totalPnlCost) * 100 : 0;
+
+    // R1 sprint: portfolio-level day-change percentage for the TOTAL row.
+    // Yesterday's close value = today's value − today's change; guard
+    // against a zero/negative denominator (e.g. a brand-new position whose
+    // entire value IS today's change) — null renders "—" instead of a
+    // nonsense percentage.
+    const totalDayBase = totalValue - totalDayChange;
+    const totalDayChangePct =
+      dayChangeSeen && totalDayBase > 0
+        ? (totalDayChange / totalDayBase) * 100
+        : null;
+
+    // ── Pinned bottom row (AG Grid totals) ──────────────────────────────────
+    // WHY pinnedBottomRowData instead of a sibling <div>: AG Grid renders
+    // pinned rows inside the grid DOM so they stay in sync with column
+    // widths, pinning, and horizontal scroll automatically. A sibling <div>
+    // with hardcoded pixel widths misaligns as soon as the user resizes a
+    // column or the TICKER pinned-left column separates from the scrollable
+    // viewport. See BP-455.
+    //
+    // WHY synthetic `h` object: EnrichedHoldingRow requires an `h: Holding`
+    // field (the cell renderers access it). The totals row doesn't correspond
+    // to a real Holding, so we supply a zero-value placeholder. The
+    // TickerCellRenderer checks `node.rowPinned === 'bottom'` and renders
+    // "TOTAL" instead of `h.ticker`, so the placeholder values are never
+    // surfaced to the user.
+    const pinned: EnrichedHoldingRow = {
+      h: {
+        holding_id: "__totals__",
+        portfolio_id: "",
+        instrument_id: "",
+        entity_id: "",
+        ticker: "",
+        name: "",
+        quantity: 0,
+        average_cost: 0,
+      },
+      livePrice: 0,
+      freshness: undefined,
+      value: totalValue,
+      pnl: totalPnl,
+      pnlPct: totalPnlPct,
+      // R1 sprint: real totals instead of the previous "—" placeholders.
+      // weight sums the per-row weights (≈100% by construction); day change
+      // is the book-level day P&L; the pct is computed off yesterday's close
+      // base.
+      weight: totalWeight,
+      sector: null,
+      dayChange: null,
+      dayChangePct: totalDayChangePct,
+      dayChangeValue: dayChangeSeen ? totalDayChange : null,
+    };
+
+    return { enrichedRows: rows, pinnedBottomRow: pinned };
+  }, [holdings, quotes, sectors, totalValue]);
+
   // ── Empty state guards ────────────────────────────────────────────────────
 
   if (holdings.length === 0) {
@@ -319,96 +431,9 @@ export function SemanticHoldingsTable({
     );
   }
 
-  // ── Enrich rows ───────────────────────────────────────────────────────────
-  let totalPnl = 0;
-  let totalPnlCost = 0;
-  // R1 sprint: totals for the pinned bottom row. dayChangeSeen distinguishes
-  // "no quote has a change yet" (render "—") from a genuine $0.00 flat day.
-  let totalDayChange = 0;
-  let dayChangeSeen = false;
-  // Sum of per-row weights — by construction this is 100% whenever totalValue
-  // equals the sum of row values, but we sum the actual rendered weights so
-  // the TOTAL row never contradicts the column above it (e.g. when the KPI
-  // totalValue used a slightly different live-price fallback for one row).
-  let totalWeight = 0;
-
-  const enrichedRows: EnrichedHoldingRow[] = holdings.map((h) => {
-    const quote = quotes[h.instrument_id];
-    const livePrice = quote?.price ?? h.current_price ?? h.average_cost;
-    const freshness = quote?.freshness_status;
-    const value = livePrice * h.quantity;
-    const pnl = (livePrice - h.average_cost) * h.quantity;
-    const pnlPct =
-      h.average_cost > 0
-        ? ((livePrice - h.average_cost) / h.average_cost) * 100
-        : 0;
-    const weight = totalValue > 0 ? (value / totalValue) * 100 : 0;
-    const sector = sectors?.[h.instrument_id] ?? null;
-    const dayChange = quote?.change ?? null;
-    const dayChangePct = quote?.change_pct ?? null;
-    const dayChangeValue = dayChange != null ? dayChange * h.quantity : null;
-
-    totalPnl += pnl;
-    totalPnlCost += h.average_cost * h.quantity;
-    // R1 sprint: accumulate the TOTAL row's day change + weight.
-    if (dayChangeValue != null) {
-      totalDayChange += dayChangeValue;
-      dayChangeSeen = true;
-    }
-    totalWeight += weight;
-
-    return { h, livePrice, freshness, value, pnl, pnlPct, weight, sector, dayChange, dayChangePct, dayChangeValue };
-  });
-
-  const totalPnlPct = totalPnlCost > 0 ? (totalPnl / totalPnlCost) * 100 : 0;
-
-  // R1 sprint: portfolio-level day-change percentage for the TOTAL row.
-  // Yesterday's close value = today's value − today's change; guard against a
-  // zero/negative denominator (e.g. a brand-new position whose entire value IS
-  // today's change) — null renders "—" instead of a nonsense percentage.
-  const totalDayBase = totalValue - totalDayChange;
-  const totalDayChangePct =
-    dayChangeSeen && totalDayBase > 0
-      ? (totalDayChange / totalDayBase) * 100
-      : null;
-
-  // ── Pinned bottom row (AG Grid totals) ──────────────────────────────────────
-  // WHY pinnedBottomRowData instead of a sibling <div>: AG Grid renders pinned
-  // rows inside the grid DOM so they stay in sync with column widths, pinning,
-  // and horizontal scroll automatically. A sibling <div> with hardcoded pixel
-  // widths misaligns as soon as the user resizes a column or the TICKER pinned-
-  // left column separates from the scrollable viewport. See BP-455.
-  //
-  // WHY synthetic `h` object: EnrichedHoldingRow requires an `h: Holding` field
-  // (the cell renderers access it). The totals row doesn't correspond to a real
-  // Holding, so we supply a zero-value placeholder. The TickerCellRenderer
-  // checks `node.rowPinned === 'bottom'` and renders "TOTAL" instead of
-  // `h.ticker`, so the placeholder values are never surfaced to the user.
-  const pinnedBottomRow: EnrichedHoldingRow = {
-    h: {
-      holding_id: "__totals__",
-      portfolio_id: "",
-      instrument_id: "",
-      entity_id: "",
-      ticker: "",
-      name: "",
-      quantity: 0,
-      average_cost: 0,
-    },
-    livePrice: 0,
-    freshness: undefined,
-    value: totalValue,
-    pnl: totalPnl,
-    pnlPct: totalPnlPct,
-    // R1 sprint: real totals instead of the previous "—" placeholders.
-    // weight sums the per-row weights (≈100% by construction); day change is
-    // the book-level day P&L; the pct is computed off yesterday's close base.
-    weight: totalWeight,
-    sector: null,
-    dayChange: null,
-    dayChangePct: totalDayChangePct,
-    dayChangeValue: dayChangeSeen ? totalDayChange : null,
-  };
+  // (Row enrichment + pinned TOTAL row live in the useMemo above the empty-
+  // state guards — R4 hardening moved them there for rowData identity
+  // stability across unrelated re-renders. See that block's comments.)
 
   return (
     // WHY h-full: SemanticHoldingsTable is placed inside a `flex-1 min-h-0` div
@@ -420,7 +445,17 @@ export function SemanticHoldingsTable({
     // manages its own scroll container; a wrapping overflow-auto on a 0px div
     // created the black void). min-h-0 is kept so the flex child can shrink below
     // its content size inside the outer flex column.
-    <div className="flex flex-col h-full relative">
+    // R4 hardening (a11y): role="region" + aria-label name the grid surface.
+    // AgGridBase (shared component — not editable from this surface) exposes
+    // no aria-label passthrough, and AG Grid's internal role="grid" element
+    // is otherwise anonymous: a screen-reader rotor listed an unnamed grid
+    // among the page's landmarks. The labelled region wrapper gives AT users
+    // a navigable, named entry point to the holdings table.
+    <div
+      className="flex flex-col h-full relative"
+      role="region"
+      aria-label="Portfolio holdings table"
+    >
       {/* ── AG Grid table ─────────────────────────────────────────────────── */}
       {/* WHY pinnedBottomRowData: renders totals as a proper AG Grid pinned row,
           which tracks column widths/pinning/scroll automatically. Replaces the

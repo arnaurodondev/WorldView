@@ -81,6 +81,14 @@ export function TransactionsTab({
   // 1-based human-readable row range: "1–100 of 250".
   const rangeStart = total === 0 ? 0 : offset + 1;
   const rangeEnd = Math.min(offset + limit, total);
+  // R4 hardening (a11y): 1-based page position for the pager button labels.
+  // "Previous transactions page" alone told a screen-reader user nothing
+  // about WHERE they are — sighted users get that from the row-range counter
+  // on the right, which is visually adjacent but not programmatically
+  // associated with the buttons. Both derivations are guarded by showPager's
+  // `limit > 0` check before render, so no division-by-zero can surface.
+  const pageNum = limit > 0 ? Math.floor(offset / limit) + 1 : 1;
+  const pageCount = limit > 0 ? Math.max(1, Math.ceil(total / limit)) : 1;
 
   return (
     // WHY flex flex-col: the brokerage section sits above the transactions
@@ -175,7 +183,11 @@ export function TransactionsTab({
         >
           <button
             type="button"
-            aria-label="Previous transactions page"
+            // R4 hardening: page context in the accessible name (see the
+            // pageNum/pageCount derivation above). The label keeps the
+            // original "Previous transactions page" prefix — tests and any
+            // AT user scripts matching on it keep working.
+            aria-label={`Previous transactions page (currently page ${pageNum} of ${pageCount})`}
             disabled={offset === 0}
             onClick={() => onTxOffsetChange(Math.max(0, offset - limit))}
             // R3 polish: focus-visible ring — pager buttons are prime
@@ -186,7 +198,8 @@ export function TransactionsTab({
           </button>
           <button
             type="button"
-            aria-label="Next transactions page"
+            // R4 hardening: page context (see Prev button above).
+            aria-label={`Next transactions page (currently page ${pageNum} of ${pageCount})`}
             disabled={rangeEnd >= total}
             onClick={() => onTxOffsetChange(offset + limit)}
             // R3 polish: focus-visible ring (see Prev button above).

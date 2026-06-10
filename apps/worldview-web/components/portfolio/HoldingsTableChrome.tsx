@@ -98,6 +98,10 @@ export function HoldingsTableChrome({
                 onFilterChange("");
                 inputRef.current?.focus();
               }}
+              // R4 hardening (a11y): the bare "×" glyph gave this button the
+              // accessible name "×" — meaningless to a screen reader. The
+              // explicit label names the action; the glyph stays the visual.
+              aria-label="Clear holdings filter"
               className="text-[10px] text-muted-foreground hover:text-foreground"
             >
               ×

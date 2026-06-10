@@ -40,7 +40,11 @@
 // WHY "use client": useQuery, useQueryState (period URL state), recharts chart
 // components require a browser DOM.
 
-import { useState } from "react";
+// R4 hardening: useMemo added — the drawdown / attribution derivations were
+// pure functions invoked directly in render, recomputing on every unrelated
+// parent re-render (benchmark toggles, hover state). Memoising on the series
+// identity keeps the O(n) passes scoped to genuine data changes.
+import { useState, useMemo } from "react";
 import { useQuery } from "@tanstack/react-query";
 import {
   AreaChart,
@@ -375,6 +379,22 @@ function DrawdownChart({ portfolioId, period }: DrawdownChartProps) {
     placeholderData: (prev) => prev,
   });
 
+  // R2 sprint: same formula as before, now sourced from the pure unit-tested
+  // lib (dd_t = V_t / max(V_0..t) − 1). Map value-history points into the
+  // lib's DatedValue shape first.
+  // R4 hardening: memoised on the query data's identity — the chart
+  // re-renders on every AnalyticsTab state change (benchmark toggles etc.)
+  // and the O(n) running-max pass should only re-run when the series itself
+  // changes. MUST sit ABOVE the early returns (rules-of-hooks: identical
+  // hook order on every render).
+  const ddSeries = useMemo(
+    () =>
+      drawdownSeries(
+        (data?.points ?? []).map((p) => ({ date: p.date, value: p.value })),
+      ),
+    [data],
+  );
+
   // isLoading is only true on the very FIRST fetch (placeholderData supplies
   // data on subsequent period switches) — so the skeleton renders exactly
   // once per portfolio, never on period changes.
@@ -391,13 +411,6 @@ function DrawdownChart({ portfolioId, period }: DrawdownChartProps) {
       </div>
     );
   }
-
-  // R2 sprint: same formula as before, now sourced from the pure unit-tested
-  // lib (dd_t = V_t / max(V_0..t) − 1). Map value-history points into the
-  // lib's DatedValue shape first.
-  const ddSeries = drawdownSeries(
-    (data?.points ?? []).map((p) => ({ date: p.date, value: p.value })),
-  );
 
   if (ddSeries.length === 0) {
     return (
@@ -537,21 +550,31 @@ function AttributionTable({ portfolioId, period }: AttributionTableProps) {
   const isLoading = holdingsLoading || historyLoading;
 
   // Compute portfolio period return from value-history.
-  const portfolioPeriodReturn = (() => {
+  // R4 hardening: was an IIFE re-running on every render — now memoised on
+  // the history data's identity (recomputes only when the series changes).
+  const portfolioPeriodReturn = useMemo(() => {
     const pts = historyData?.points ?? [];
     if (pts.length < 2) return null;
     const first = pts[0].value;
     const last = pts[pts.length - 1].value;
     return first > 0 ? (last - first) / first : null;
-  })();
+  }, [historyData]);
 
   // Compute per-holding contribution = weight × portfolio_period_return.
   // WHY proxy with portfolio return (not holding return): we don't have per-
   // holding price history. This approximation matches the HoldingContributionStat
   // formula already used in the holdings tab.
-  const rows = (() => {
+  // R4 hardening: memoised — the map+sort over holdings ran on every render
+  // (this component re-renders whenever AnalyticsTab's benchmark/hover state
+  // changes); keying on (holdingsData, portfolioPeriodReturn) scopes it to
+  // genuine input changes.
+  const rows = useMemo(() => {
     const holdings = holdingsData?.holdings ?? [];
-    if (holdings.length === 0 || portfolioPeriodReturn == null) return [];
+    if (holdings.length === 0 || portfolioPeriodReturn == null) {
+      // WHY a literal [] is fine here: useMemo caches it, so the empty
+      // result keeps a stable identity until the inputs actually change.
+      return [];
+    }
 
     const totalCost = holdings.reduce(
       (s, h) => s + h.quantity * h.average_cost,
@@ -569,7 +592,7 @@ function AttributionTable({ portfolioId, period }: AttributionTableProps) {
         };
       })
       .sort((a, b) => b.contribBps - a.contribBps);
-  })();
+  }, [holdingsData, portfolioPeriodReturn]);
 
   if (isLoading) {
     return (
@@ -712,11 +735,22 @@ export function AnalyticsTab({ portfolioId }: AnalyticsTabProps) {
   // SPY closes are ALWAYS fetched (not just when the overlay is on) because
   // the client risk panel needs them for beta regardless of the toggle.
   // QQQ closes only load when its overlay is toggled on.
-  const { closesByTicker } = useBenchmarkSeries({
+  // R4 hardening: failedTickers feeds the inline "unavailable" notice below —
+  // a benchmark failure must NEVER block the portfolio line (the chart
+  // renders without the overlay), but it must also never fail silently
+  // (a toggled-on overlay that simply never draws reads as a broken toggle).
+  const { closesByTicker, failedTickers } = useBenchmarkSeries({
     tickers: benchmarks.QQQ ? ["SPY", "QQQ"] : ["SPY"],
     fromDate: benchmarkFromDate,
     enabled: Boolean(portfolioId),
   });
+
+  // Toggled-ON benchmarks whose fetch chain failed. Toggle-off failures stay
+  // quiet (SPY is always fetched for beta; if its toggle is off the user
+  // isn't owed an overlay — the risk panel already explains a missing beta).
+  const failedActiveBenchmarks = (["SPY", "QQQ"] as const).filter(
+    (t) => benchmarks[t] && failedTickers.includes(t),
+  );
 
   // ── Risk metrics for the sidebar's DataFreshnessPill ─────────────────────
   const { data: risk } = useQuery<RiskMetricsResponse>({
@@ -749,6 +783,20 @@ export function AnalyticsTab({ portfolioId }: AnalyticsTabProps) {
             aria-pressed exposes the on/off state to AT + tests; the active
             style mirrors the period pills so the affordance is recognisable. */}
         <div className="ml-auto flex items-center gap-1.5">
+          {/* R4 hardening: small inline notice when a toggled-on benchmark's
+              fetch failed. The portfolio line is untouched — this only
+              explains why the dashed overlay is absent. role="status" so AT
+              announces the degradation without an interrupting alert. */}
+          {failedActiveBenchmarks.length > 0 && (
+            <span
+              role="status"
+              data-testid="benchmark-unavailable-notice"
+              title="Benchmark price history could not be loaded. The portfolio line is unaffected — the overlay will appear when benchmark data is available again."
+              className="font-mono text-[9px] uppercase tracking-[0.04em] text-muted-foreground"
+            >
+              {failedActiveBenchmarks.join(" · ")} data unavailable
+            </span>
+          )}
           <span className="text-[10px] uppercase tracking-[0.06em] text-muted-foreground font-mono">
             Benchmark
           </span>

@@ -36,7 +36,9 @@
 "use client";
 // WHY "use client": useQuery, recharts (browser SVG), hover state.
 
-import { useState } from "react";
+// R4 hardening: useMemo — the segments derivation (slice/aggregate/reduce)
+// re-ran on every render, including pure hover-state renders; see below.
+import { useState, useMemo } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { PieChart, Pie, Cell } from "recharts";
 
@@ -148,25 +150,45 @@ export function SectorAllocationDonut({
 
   // ── Build display segments: top-8 individually + aggregated "Other" ──────
   // Segments arrive sorted largest-first from S9, so a simple slice works.
-  const rawSegments: SectorBreakdownSegment[] = data?.segments ?? [];
-  const top = rawSegments.slice(0, MAX_SEGMENTS);
-  const tail = rawSegments.slice(MAX_SEGMENTS);
-  const segments =
-    tail.length > 0
-      ? [
-          ...top,
-          // Aggregate the tail — NOT clickable as a filter (it spans several
-          // real sectors; filtering by "Other" would be ambiguous).
-          {
-            sector: OTHER_LABEL,
-            weight: tail.reduce((s, t) => s + t.weight, 0),
-            count: tail.reduce((s, t) => s + t.count, 0),
-            market_value: tail.reduce((s, t) => s + t.market_value, 0),
-          },
-        ]
-      : top;
+  // R4 hardening: memoised on the query data. This component re-renders on
+  // EVERY hover (setHovered state) — rebuilding the segments array each time
+  // both wasted the reduces AND handed recharts' <Pie data={…}> a fresh
+  // array identity per hover, defeating its internal change detection.
+  const { segments, tail, totalValue } = useMemo(() => {
+    const rawSegments: SectorBreakdownSegment[] = data?.segments ?? [];
+    const top = rawSegments.slice(0, MAX_SEGMENTS);
+    const tailSegs = rawSegments.slice(MAX_SEGMENTS);
+    return {
+      segments:
+        tailSegs.length > 0
+          ? [
+              ...top,
+              // Aggregate the tail — NOT clickable as a filter (it spans
+              // several real sectors; filtering by "Other" would be
+              // ambiguous).
+              {
+                sector: OTHER_LABEL,
+                weight: tailSegs.reduce((s, t) => s + t.weight, 0),
+                count: tailSegs.reduce((s, t) => s + t.count, 0),
+                market_value: tailSegs.reduce((s, t) => s + t.market_value, 0),
+              },
+            ]
+          : top,
+      tail: tailSegs,
+      totalValue: rawSegments.reduce((s, seg) => s + seg.market_value, 0),
+    };
+  }, [data]);
 
-  const totalValue = rawSegments.reduce((s, seg) => s + seg.market_value, 0);
+  // ── R4 hardening (a11y): descriptive panel label ──────────────────────────
+  // WHY dynamic: a static "Sector allocation" told a screen-reader user the
+  // panel EXISTS but nothing about the book. Leading with the top sector +
+  // sector count delivers the donut's primary at-a-glance answer ("where is
+  // my money") in one announcement. Falls back to the static label while
+  // empty/loading so the name never lies about absent data.
+  const panelAriaLabel =
+    segments.length > 0
+      ? `Sector allocation: ${segments[0].sector} is the largest sector at ${fmtWeight(segments[0].weight)} across ${segments[0].count} position${segments[0].count === 1 ? "" : "s"}; ${segments.length} sectors shown`
+      : "Sector allocation";
 
   /** Toggle handler shared by slices and legend rows. */
   const handleSelect = (sector: string) => {
@@ -192,7 +214,10 @@ export function SectorAllocationDonut({
         "flex items-center gap-2 bg-card px-2 py-1 overflow-hidden",
         className,
       )}
-      aria-label="Sector allocation"
+      // role="group" so the aria-label is actually exposed by AT — a bare
+      // <div aria-label> has no role and most screen readers ignore the name.
+      role="group"
+      aria-label={panelAriaLabel}
     >
       {isLoading ? (
         // Skeleton mirrors the populated layout (circle + legend block) so

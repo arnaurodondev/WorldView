@@ -11,6 +11,12 @@
  * MOCKED: ConnectedBrokeragesList — it fires its own useQuery against the
  * gateway; irrelevant to pager behaviour and would require a QueryClient +
  * gateway mock. A stub keeps the test focused and provider-free.
+ *
+ * R4 hardening: the pager buttons' accessible names gained page context
+ * ("… (currently page 1 of 3)"). The role queries below use ANCHORED PREFIX
+ * regexes — they still REQUIRE the original "Previous/Next transactions
+ * page" phrase (so the assertions are not weakened, R19) while tolerating
+ * the appended context, which is itself pinned by Round4Hardening.test.tsx.
  */
 
 import { describe, it, expect, vi } from "vitest";
@@ -102,7 +108,7 @@ describe("TransactionsTab — server-side pager (R1 sprint)", () => {
     renderTab(resp(250, 0), onOffsetChange);
 
     await user.click(
-      screen.getByRole("button", { name: "Next transactions page" }),
+      screen.getByRole("button", { name: /^Next transactions page/ }),
     );
     expect(onOffsetChange).toHaveBeenCalledWith(100);
   });
@@ -116,7 +122,7 @@ describe("TransactionsTab — server-side pager (R1 sprint)", () => {
       "101–200 of 250",
     );
     await user.click(
-      screen.getByRole("button", { name: "Previous transactions page" }),
+      screen.getByRole("button", { name: /^Previous transactions page/ }),
     );
     expect(onOffsetChange).toHaveBeenCalledWith(0);
   });
@@ -125,10 +131,10 @@ describe("TransactionsTab — server-side pager (R1 sprint)", () => {
     // First page: Prev must be disabled (no page -1).
     const { unmount } = renderTab(resp(250, 0), vi.fn());
     expect(
-      screen.getByRole("button", { name: "Previous transactions page" }),
+      screen.getByRole("button", { name: /^Previous transactions page/ }),
     ).toBeDisabled();
     expect(
-      screen.getByRole("button", { name: "Next transactions page" }),
+      screen.getByRole("button", { name: /^Next transactions page/ }),
     ).toBeEnabled();
     unmount();
 
@@ -138,10 +144,10 @@ describe("TransactionsTab — server-side pager (R1 sprint)", () => {
       screen.getByTestId("transactions-pager"),
     ).toHaveTextContent("201–250 of 250");
     expect(
-      screen.getByRole("button", { name: "Next transactions page" }),
+      screen.getByRole("button", { name: /^Next transactions page/ }),
     ).toBeDisabled();
     expect(
-      screen.getByRole("button", { name: "Previous transactions page" }),
+      screen.getByRole("button", { name: /^Previous transactions page/ }),
     ).toBeEnabled();
   });
 });

@@ -23,6 +23,10 @@
 
 "use client";
 
+// R4 hardening: useMemo/useCallback stabilise the hook's outputs — see the
+// closesByTicker assembly below for why identity now matters (memoized
+// chart-row derivations in AnalyticsTwrChart depend on it).
+import { useCallback, useMemo } from "react";
 import { useQuery, useQueries } from "@tanstack/react-query";
 
 import { useApiClient } from "@/lib/api-client";
@@ -48,10 +52,25 @@ export interface BenchmarkSeriesResult {
    * ticker → ascending-by-date daily closes. A ticker is ABSENT (undefined)
    * while loading, on error, or when it could not be resolved — consumers
    * render the overlay/beta only when data genuinely exists (never fake).
+   *
+   * R4 hardening: this object is now REFERENTIALLY STABLE across unrelated
+   * re-renders (memoized via useQueries' `combine`). AnalyticsTwrChart's
+   * chart-row derivation is a useMemo keyed on it — a fresh object every
+   * render would silently defeat that memo.
    */
   closesByTicker: Record<string, DatedValue[]>;
   /** True while any requested ticker is resolving/fetching. */
   isLoading: boolean;
+  /**
+   * R4 hardening: requested tickers whose series FAILED (resolve call
+   * errored, ticker resolved to no instrument, or the OHLCV fetch errored)
+   * — as opposed to merely still loading. Consumers use this to render a
+   * small "benchmark unavailable" notice instead of an overlay that just
+   * never appears (a silent failure the user reads as a broken toggle).
+   * Empty array while loading — a ticker is only declared failed once its
+   * fetch chain has actually failed.
+   */
+  failedTickers: string[];
 }
 
 // ── Hook ──────────────────────────────────────────────────────────────────────
@@ -65,10 +84,23 @@ export function useBenchmarkSeries({
 
   // Sort for a stable query key — ["SPY","QQQ"] and ["QQQ","SPY"] must hit
   // the same cache entry (the resolve response covers both regardless).
-  const sortedTickers = [...tickers].sort();
+  // R4 hardening: memoised on the JOINED string because callers pass a fresh
+  // array literal every render — a fresh sortedTickers each render would
+  // re-create the `combine` callback below and defeat its memoisation.
+  const tickersKey = [...tickers].sort().join(",");
+  const sortedTickers = useMemo(
+    () => (tickersKey === "" ? [] : tickersKey.split(",")),
+    [tickersKey],
+  );
 
   // ── Step 1: ticker → instrument_id (one batch round-trip) ────────────────
-  const { data: idMap, isLoading: resolveLoading } = useQuery({
+  // R4: isError captured — a failed resolve means EVERY requested ticker's
+  // chain is dead (the OHLCV queries below never enable without an id).
+  const {
+    data: idMap,
+    isLoading: resolveLoading,
+    isError: resolveError,
+  } = useQuery({
     queryKey: ["benchmark-resolve-batch", sortedTickers],
     queryFn: () => apiClient.resolveTickersBatch(sortedTickers),
     // WHY 24h: an instrument_id never changes within a session; refetching
@@ -82,7 +114,17 @@ export function useBenchmarkSeries({
   // WHY useQueries (not one combined fetch): each ticker gets its own cache
   // entry keyed by (ticker, fromDate), so toggling QQQ on doesn't refetch
   // SPY, and switching periods only refetches the changed window.
-  const ohlcvResults = useQueries({
+  //
+  // R4 hardening — WHY `combine` (not a plain post-hook loop): the previous
+  // implementation rebuilt closesByTicker as a fresh object on EVERY render,
+  // so any consumer memo keyed on it recomputed every render (silent memo
+  // defeat). `combine` is TanStack's documented memoisation channel: the
+  // combined value keeps its identity until the underlying query results —
+  // or the combine callback itself — actually change. The callback is a
+  // useCallback keyed on the inputs it closes over (sortedTickers / idMap /
+  // resolveError) so a ticker-set or resolve-state change recomputes exactly
+  // once.
+  const combined = useQueries({
     queries: sortedTickers.map((ticker) => {
       const instrumentId = idMap?.[ticker] ?? null;
       return {
@@ -103,31 +145,62 @@ export function useBenchmarkSeries({
         retry: false,
       };
     }),
-  });
-
-  // ── Assemble ticker → DatedValue[] map ───────────────────────────────────
-  const closesByTicker: Record<string, DatedValue[]> = {};
-  sortedTickers.forEach((ticker, i) => {
-    const bars = ohlcvResults[i]?.data?.bars;
-    if (bars && bars.length > 0) {
-      closesByTicker[ticker] = bars
-        .map((b) => ({
-          // S3 bar timestamps are "YYYY-MM-DD" (bar_date) — slice defends
-          // against a full ISO datetime ever appearing so date-string
-          // comparisons in alignBenchmarkToDates stay valid.
-          date: b.timestamp.slice(0, 10),
-          value: b.close,
-        }))
-        // Ascending by date — alignBenchmarkToDates requires sorted input.
-        // ISO date strings sort lexicographically = chronologically.
-        .sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0));
-    }
+    combine: useCallback(
+      (
+        results: Array<{
+          data?: { bars?: Array<{ timestamp: string; close: number }> };
+          isError: boolean;
+          isLoading: boolean;
+          fetchStatus: string;
+        }>,
+      ) => {
+        // ── Assemble ticker → DatedValue[] map ───────────────────────────
+        const closesByTicker: Record<string, DatedValue[]> = {};
+        // R4: tickers whose chain has definitively FAILED (vs still loading).
+        const failedTickers: string[] = [];
+        sortedTickers.forEach((ticker, i) => {
+          const result = results[i];
+          const bars = result?.data?.bars;
+          if (bars && bars.length > 0) {
+            closesByTicker[ticker] = bars
+              .map((b) => ({
+                // S3 bar timestamps are "YYYY-MM-DD" (bar_date) — slice
+                // defends against a full ISO datetime ever appearing so
+                // date-string comparisons in alignBenchmarkToDates stay valid.
+                date: b.timestamp.slice(0, 10),
+                value: b.close,
+              }))
+              // Ascending by date — alignBenchmarkToDates requires sorted
+              // input. ISO date strings sort lexicographically =
+              // chronologically.
+              .sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0));
+          } else if (
+            // Resolve call errored → no ticker can ever fetch.
+            resolveError ||
+            // OHLCV fetch for this ticker errored.
+            result?.isError ||
+            // Resolve SUCCEEDED but this ticker has no instrument — its
+            // OHLCV query is permanently disabled, so "loading" never ends.
+            (idMap != null && !idMap[ticker])
+          ) {
+            failedTickers.push(ticker);
+          }
+        });
+        return {
+          closesByTicker,
+          failedTickers,
+          anyOhlcvLoading: results.some(
+            (r) => r.isLoading && r.fetchStatus !== "idle",
+          ),
+        };
+      },
+      [sortedTickers, idMap, resolveError],
+    ),
   });
 
   return {
-    closesByTicker,
-    isLoading:
-      enabled &&
-      (resolveLoading || ohlcvResults.some((r) => r.isLoading && r.fetchStatus !== "idle")),
+    closesByTicker: combined.closesByTicker,
+    failedTickers: combined.failedTickers,
+    isLoading: enabled && (resolveLoading || combined.anyOhlcvLoading),
   };
 }

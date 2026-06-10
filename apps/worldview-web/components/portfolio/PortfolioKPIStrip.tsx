@@ -195,6 +195,15 @@ function KPITile({
       className="flex flex-col px-3 py-1.5 flex-1 min-w-0"
       title={hoverTitle}
       data-testid={dataTestId}
+      // R4 hardening (a11y): role="group" + aria-label NAME the tile so the
+      // value below is announced under its label ("Day P&L, group, +$120").
+      // Visually the 10px caps label sits above the value, but with no
+      // programmatic association a screen reader linearising the strip heard
+      // 8 labels and 8 values as 16 disconnected strings. role="group" is
+      // required for the aria-label to be exposed at all (a bare div with
+      // aria-label has no role and most AT ignores the name).
+      role="group"
+      aria-label={label}
     >
       {/* Label: 10px ALL CAPS muted — consistent with table header style */}
       <span className="text-[10px] uppercase tracking-[0.08em] text-muted-foreground truncate">

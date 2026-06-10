@@ -34,6 +34,9 @@
 "use client";
 // WHY "use client": useQuery + recharts SVG rendering need a browser DOM.
 
+// R4 hardening: useMemo — buildChartRows (rebase + benchmark alignment) ran
+// directly in render on every parent re-render; see the rows memo below.
+import { useMemo } from "react";
 import { useQuery } from "@tanstack/react-query";
 import {
   LineChart,
@@ -184,6 +187,22 @@ export function AnalyticsTwrChart({
     placeholderData: (prev) => prev,
   });
 
+  // R4 hardening: the rebase + benchmark-alignment pass (buildChartRows) is
+  // O(n·dates) and was invoked directly in render — every unrelated parent
+  // re-render (hover state, period-pill focus) recomputed it. Memoised on
+  // SERIES IDENTITY: `data` (the query result), the toggle flags object
+  // (AnalyticsTab useState — stable until actually toggled), and
+  // benchmarkCloses (now referentially stable via useBenchmarkSeries'
+  // combine memoisation — see that hook's R4 note).
+  // MUST live above the early returns (rules-of-hooks).
+  const rows = useMemo(() => {
+    const points: DatedValue[] = (data?.points ?? []).map((p) => ({
+      date: p.date,
+      value: p.value,
+    }));
+    return buildChartRows(points, benchmarks, benchmarkCloses);
+  }, [data, benchmarks, benchmarkCloses]);
+
   // First-ever fetch only — period switches keep the previous chart drawn
   // (placeholderData above), so this skeleton can never flash mid-session.
   if (isLoading) {
@@ -199,12 +218,6 @@ export function AnalyticsTwrChart({
       </div>
     );
   }
-
-  const points: DatedValue[] = (data.points ?? []).map((p) => ({
-    date: p.date,
-    value: p.value,
-  }));
-  const rows = buildChartRows(points, benchmarks, benchmarkCloses);
 
   if (rows.length === 0) {
     // Named empty state — value-history needs snapshots before a return

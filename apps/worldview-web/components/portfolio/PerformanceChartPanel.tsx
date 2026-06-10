@@ -135,7 +135,13 @@ export function PerformanceChartPanel({
   // is environment-specific (dev seed uses a deterministic UUID, prod differs).
   // Resolving at runtime means the same code works in all environments.
   // staleTime=24h — SPY's instrument_id never changes in a session.
-  const { data: spyIdMap } = useQuery({
+  // R4 hardening: isError captured so a dead benchmark chain surfaces as a
+  // small inline "(unavailable)" annotation instead of failing silently —
+  // the header permanently says "vs SPY", so a missing overlay with no
+  // explanation reads as a chart bug. The PORTFOLIO line is never blocked:
+  // mountChart below draws it regardless and only adds the SPY series when
+  // bars genuinely exist.
+  const { data: spyIdMap, isError: spyResolveError } = useQuery({
     enabled: Boolean(accessToken),
     queryKey: ["benchmark-resolve", BENCHMARK_TICKER],
     queryFn: () => createGateway(accessToken!).resolveTickersBatch([BENCHMARK_TICKER]),
@@ -147,7 +153,7 @@ export function PerformanceChartPanel({
   // ── Data fetch: SPY daily OHLCV for overlay ────────────────────────────────
   // We use daily close prices and normalise to 100 at the first portfolio date.
   // staleTime 5 min — same window as portfolio history.
-  const { data: spyOhlcv } = useQuery({
+  const { data: spyOhlcv, isError: spyOhlcvError } = useQuery({
     enabled: Boolean(accessToken && spyInstrumentId),
     queryKey: ["perf-panel-spy", spyInstrumentId, period],
     queryFn: () =>
@@ -158,6 +164,14 @@ export function PerformanceChartPanel({
     staleTime: 5 * 60 * 1000,
     retry: false,
   });
+
+  // R4 hardening: the SPY chain is definitively dead when (a) the resolve
+  // call errored, (b) the resolve SUCCEEDED but SPY mapped to no instrument
+  // (the OHLCV query is then permanently disabled — "loading" never ends),
+  // or (c) the OHLCV fetch errored. Still-loading states are NOT flagged —
+  // the annotation must mean "won't appear", never "hasn't appeared yet".
+  const spyUnavailable =
+    spyResolveError || spyOhlcvError || (spyIdMap != null && !spyInstrumentId);
 
   // ── Chart mount / data update ──────────────────────────────────────────────
   // WHY single useEffect (not two): the chart must exist before we set data,
@@ -340,6 +354,20 @@ export function PerformanceChartPanel({
 
         {/* "vs SPY" label — benchmark annotation. Locked to SPY per DISCUSS-10. */}
         <span className="ml-1 text-[10px] text-muted-foreground">vs SPY</span>
+        {/* R4 hardening: when the SPY chain failed, annotate the promise the
+            label makes. The portfolio line renders regardless — this only
+            explains the absent dashed overlay. role="status" announces the
+            degradation to AT without an interrupting alert. */}
+        {spyUnavailable && (
+          <span
+            role="status"
+            data-testid="spy-unavailable-notice"
+            title="SPY price history could not be loaded — the benchmark overlay is hidden. Your portfolio line is unaffected."
+            className="text-[9px] font-mono text-muted-foreground/70"
+          >
+            (unavailable)
+          </span>
+        )}
 
         {/* Period buttons — right-aligned, same style as EquityCurveChart */}
         <div className="ml-auto flex items-center gap-0">

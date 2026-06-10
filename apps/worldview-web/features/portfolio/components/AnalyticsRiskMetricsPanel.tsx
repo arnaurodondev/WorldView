@@ -30,6 +30,9 @@
 "use client";
 // WHY "use client": useQuery; rendered inside the client AnalyticsTab tree.
 
+// R4 hardening: useMemo — computeRiskMetrics (stdev/cov/var passes) was
+// invoked directly in render; see the metrics memo below.
+import { useMemo } from "react";
 import { useQuery } from "@tanstack/react-query";
 
 import { useApiClient } from "@/lib/api-client";
@@ -97,16 +100,23 @@ export function AnalyticsRiskMetricsPanel({
     placeholderData: (prev) => prev,
   });
 
-  const points: DatedValue[] = (data?.points ?? []).map((p) => ({
-    date: p.date,
-    value: p.value,
-  }));
-
   // Pure computation — beta only when SPY closes are genuinely available.
-  const metrics = computeRiskMetrics(
-    points,
-    spyCloses && spyCloses.length > 0 ? spyCloses : undefined,
-  );
+  // R4 hardening: memoised on SERIES IDENTITY (the query result + the SPY
+  // closes array). The maths (daily returns, sample stdev, running-max
+  // drawdown, cov/var beta) ran on EVERY render before — including renders
+  // triggered by the parent's hover/toggle state that change neither series.
+  // spyCloses is referentially stable now (useBenchmarkSeries combine memo),
+  // so this memo only recomputes when a fetch actually lands.
+  const metrics = useMemo(() => {
+    const points: DatedValue[] = (data?.points ?? []).map((p) => ({
+      date: p.date,
+      value: p.value,
+    }));
+    return computeRiskMetrics(
+      points,
+      spyCloses && spyCloses.length > 0 ? spyCloses : undefined,
+    );
+  }, [data, spyCloses]);
 
   // Distinguish WHY beta is null: missing benchmark data vs short series.
   // Two different user messages — one says "toggle won't help, backend gap",

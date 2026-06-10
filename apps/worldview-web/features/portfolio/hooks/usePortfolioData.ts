@@ -108,6 +108,17 @@ export interface UsePortfolioDataResult {
   // ── Loading + error flags ─────────────────────────────────────────────
   portfoliosLoading: boolean;
   portfoliosError: boolean;
+  /**
+   * R4 hardening: re-runs the portfolio-list query (Query 1). Wired to the
+   * Retry action on the page-level "Failed to load portfolio data" state so
+   * a transient network failure is recoverable IN PLACE — the previous
+   * InlineEmptyState forced a full browser reload, throwing away every other
+   * warm cache entry (quotes, watchlists) that may have loaded fine.
+   * WHY refetch (not invalidateQueries): refetch re-runs even while the
+   * query is in error state and returns a promise the button can void;
+   * invalidate alone would not refire a query with no active observers.
+   */
+  refetchPortfolios: () => void;
   holdingsLoading: boolean;
   txLoading: boolean;
   watchlistsLoading: boolean;
@@ -239,6 +250,9 @@ export function usePortfolioData(
     data: portfolios,
     isLoading: portfoliosLoading,
     isError: portfoliosError,
+    // R4 hardening: surfaced to the page so the named error state can offer
+    // an in-place Retry (see the result-interface doc comment).
+    refetch: refetchPortfolios,
   } = useQuery({
     queryKey: qk.portfolios.all,
     queryFn: () => createGateway(accessToken).getPortfolios(),
@@ -672,6 +686,9 @@ export function usePortfolioData(
     activeIsRoot,
     portfoliosLoading,
     portfoliosError,
+    // R4: TanStack's refetch returns a promise + takes optional options; the
+    // exposed contract is a plain thunk so callers can't depend on either.
+    refetchPortfolios: () => void refetchPortfolios(),
     holdingsLoading,
     txLoading,
     watchlistsLoading,

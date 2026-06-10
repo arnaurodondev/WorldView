@@ -27,6 +27,11 @@ import { useQuery } from "@tanstack/react-query";
 import { useApiClient } from "@/lib/api-client";
 import { qk } from "@/lib/query/keys";
 import { cn } from "@/lib/utils";
+// R4 hardening (DS §6.2): loading pills use the shared Skeleton primitive —
+// raw `animate-pulse` is BANNED for skeletons (fast consumer-app pulse that
+// also bypasses the reduced-motion semantics maintained in globals.css);
+// terminal skeletons are static bg-muted blocks.
+import { Skeleton } from "@/components/ui/skeleton";
 
 // ── Props ─────────────────────────────────────────────────────────────────────
 
@@ -101,9 +106,12 @@ export function HoldingRealizedRow({
         <span className="text-[10px] uppercase tracking-[0.08em] text-muted-foreground">
           Realized
         </span>
-        {/* Two skeleton pills — one for ST, one for LT */}
-        <div className="h-[16px] w-16 animate-pulse rounded bg-muted" />
-        <div className="h-[16px] w-16 animate-pulse rounded bg-muted" />
+        {/* Two skeleton pills — one for ST, one for LT. Same 16×64px
+            geometry as the rendered "ST: +$X" / "LT: +$X" spans (shape-
+            matching convention, DS §6.2) — only the banned animate-pulse
+            divs were swapped for the static Skeleton primitive (R4). */}
+        <Skeleton className="h-[16px] w-16" />
+        <Skeleton className="h-[16px] w-16" />
       </div>
     );
   }
