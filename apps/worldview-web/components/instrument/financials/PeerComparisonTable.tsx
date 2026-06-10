@@ -94,9 +94,15 @@ export function PeerComparisonTable({
 
   if (isLoading) {
     return (
-      // WHY fixed height on skeleton: matches the expected table height (6 rows ×
-      // 20px + header) so the layout doesn't jump when data loads.
-      <Skeleton className="h-[160px] w-full rounded-[2px]" />
+      // Round-3 item 4: shape-matched skeleton — header band + 6 row bars
+      // (self + 5 peers) at the 20px data-table-grid rhythm, replacing the
+      // previous flat 160px rectangle. Same total height → no layout jump.
+      <div role="status" aria-label="Loading peer comparison" className="w-full space-y-1 px-2 py-1">
+        <Skeleton className="h-5 w-1/3 rounded-[2px]" />
+        {[0, 1, 2, 3, 4, 5].map((row) => (
+          <Skeleton key={row} className="h-4 w-full rounded-[1px]" />
+        ))}
+      </div>
     );
   }
 
@@ -124,8 +130,10 @@ export function PeerComparisonTable({
     // height (default variant) to accommodate multi-word company names. The
     // dense variant (18px) is reserved for the DenseMetricsGrid snapshot only.
     <div data-table-grid className="w-full">
-      {/* Section header — matches the convention used across all table blocks */}
-      <div className="flex h-6 shrink-0 items-center border-b border-border px-2">
+      {/* Section header — Round-3 item 2: uniform accent-bar treatment
+          (border-l-2 border-l-primary + bg-muted/20, the Round-1 pattern from
+          DenseMetricsGrid) so every block header on this tab scans the same. */}
+      <div className="flex h-6 shrink-0 items-center border-b border-border border-l-2 border-l-primary bg-muted/20 px-2">
         <span className="text-[10px] uppercase tracking-[0.08em] text-muted-foreground font-mono">
           PEER COMPARISON
         </span>

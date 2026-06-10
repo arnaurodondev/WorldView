@@ -40,7 +40,9 @@ import { useState } from "react";
 import { FileSpreadsheet } from "lucide-react";
 
 import { useFinancialsBundle } from "@/components/instrument/hooks/useFinancialsBundle";
-import { EmptyState } from "@/components/instrument/shared/EmptyState";
+// Round-3 consolidation (DS §15.12): shared primitive + registry copy key
+// replace the local components/instrument/shared/EmptyState.tsx fork.
+import { EmptyState } from "@/components/primitives/EmptyState";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import type { FundamentalsSectionResponse } from "@/types/api";
@@ -79,15 +81,40 @@ export function FinancialStatementsPanel({ instrumentId }: FinancialStatementsPa
   const hasAny = !!(income || balance || cashFlow);
 
   // ── Loading: only on the bundle's cold first fetch (cache-warm renders skip
-  // this entirely — tab switches paint instantly from the shared cache). ──
+  // this entirely — tab switches paint instantly from the shared cache).
+  // Round-3 item 4: shape-matched skeleton — a 3-up grid of ROW bars (caption
+  // bar + 5 row bars per statement) mirroring the eventual mini-table layout,
+  // instead of the previous single flat 180px rectangle. Same xl:grid-cols-3
+  // breakpoint as the real grid → zero layout shift on load. ──
   if (bundleQuery.isLoading) {
-    return <Skeleton className="mx-2 my-2 h-[180px] rounded-[2px]" data-testid="statements-skeleton" />;
+    return (
+      <div
+        role="status"
+        aria-label="Loading financial statements"
+        data-testid="statements-skeleton"
+        className="grid grid-cols-1 gap-x-4 gap-y-2 px-2 py-2 xl:grid-cols-3"
+      >
+        {[0, 1, 2].map((table) => (
+          <div key={table} aria-hidden className="space-y-1.5">
+            {/* Caption bar — matches the h-6 mini-table header band. */}
+            <Skeleton className="h-5 w-2/5 rounded-[2px]" />
+            {/* Row bars — 20px rhythm matching data-table-grid rows. */}
+            {[0, 1, 2, 3, 4].map((row) => (
+              <Skeleton key={row} className="h-4 w-full rounded-[1px]" />
+            ))}
+          </div>
+        ))}
+      </div>
+    );
   }
 
   return (
     <div className="border-t border-border/40">
-      {/* ── Header row: caption + Annual/TTM toggle ─────────────────────── */}
-      <div className="flex h-7 items-center justify-between px-2">
+      {/* ── Header row: caption + Annual/TTM toggle ───────────────────────
+          Round-3 item 2: uniform accent-bar header (border-l-2 border-l-primary
+          + bg-muted/20) — the Round-1 DenseMetricsGrid treatment applied to
+          every Financials/Intelligence block header. */}
+      <div className="flex h-7 items-center justify-between border-b border-border border-l-2 border-l-primary bg-muted/20 px-2">
         <span className="text-[10px] uppercase tracking-[0.08em] text-muted-foreground font-mono">
           FINANCIAL STATEMENTS
         </span>
@@ -114,14 +141,16 @@ export function FinancialStatementsPanel({ instrumentId }: FinancialStatementsPa
       </div>
 
       {/* ── Empty: section records absent (bundle leg failed OR instrument has
-          no ingested statements, e.g. ETFs). Named state per Round-1 rule. ── */}
+          no ingested statements, e.g. ETFs). Named state per Round-1 rule.
+          Round-3: copy moved verbatim to the registry (new instrument.* key —
+          this call site was outside the six-key Round-2 reservation). The
+          primitive owns its own padding, so the old px-2/pb-2 wrapper classes
+          are no longer needed. ── */}
       {!hasAny ? (
         <EmptyState
+          condition="empty-no-data"
+          copyKey="instrument.no-financial-statements"
           icon={FileSpreadsheet}
-          headline="No financial statements"
-          hint="Statement records have not been ingested for this instrument — ETFs and newly listed tickers have none until the fundamentals backfill runs."
-          variant="inline"
-          className="px-2 pb-2"
         />
       ) : (
         // WHY a responsive 3-up grid: at full width the three statements sit

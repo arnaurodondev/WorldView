@@ -172,14 +172,17 @@ export function InsiderTransactionsTable({
 
   return (
     <div data-table-grid className="border-t border-border">
-      {/* Section header with "View all" stub link. */}
-      <div className="flex items-center justify-between h-[var(--row-h,20px)] px-2 border-b border-border bg-muted/20">
+      {/* Section header with "View all" stub link.
+          Round-3 item 2: border-l-2 border-l-primary completes the uniform
+          accent-bar header treatment (Round-1 DenseMetricsGrid pattern). */}
+      <div className="flex items-center justify-between h-[var(--row-h,20px)] px-2 border-b border-border border-l-2 border-l-primary bg-muted/20">
         <span className="text-[9px] uppercase tracking-widest text-muted-foreground/70">
           INSIDER TRANSACTIONS
         </span>
         {ticker && (
           <button
-            className="text-[9px] text-muted-foreground/50 hover:text-muted-foreground transition-colors cursor-pointer"
+            // Round-3 item 5: focus-visible ring for keyboard reachability.
+            className="text-[9px] text-muted-foreground/50 hover:text-muted-foreground transition-colors cursor-pointer rounded-[2px] focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
             onClick={() => router.push(`/instruments/${ticker}/insiders`)}
           >
             View all →

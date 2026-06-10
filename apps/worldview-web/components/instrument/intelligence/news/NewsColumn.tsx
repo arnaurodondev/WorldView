@@ -14,7 +14,10 @@
 import { useEffect, useRef, useState } from "react";
 import { Newspaper } from "lucide-react";
 import { useEntityNewsInfinite } from "@/components/instrument/hooks/useEntityNewsInfinite";
-import { EmptyState } from "@/components/instrument/shared/EmptyState";
+// Round-3 consolidation (DS §15.12): the shared primitive replaced the local
+// components/instrument/shared/EmptyState.tsx — copy now resolves through the
+// reserved "instrument.no-articles" key in lib/copy/empty-states.ts.
+import { EmptyState } from "@/components/primitives/EmptyState";
 import { CompactArticleRow } from "./CompactArticleRow";
 import { NewsFilters, type NewsSentiment, type NewsTimeRange } from "./NewsFilters";
 
@@ -84,15 +87,33 @@ export function NewsColumn({ entityId }: NewsColumnProps) {
         {articles.length === 0 ? (
           // Round-1 requirement 4: NAMED empty state (icon + headline) — a
           // bare sentence reads like a failed fetch; this reads like a state.
-          // WHY filter-aware hint: with an active sentiment/time filter the
-          // most likely cause is the filter, not a pipeline gap.
+          // Round-3 consolidation: copy comes from the registry key; the
+          // registry must stay STATIC (DS §15.12), so the old filter-aware
+          // hint became a filter-aware ACTION — when a sentiment/time filter
+          // is active the most likely cause is the filter, and a one-click
+          // "Clear filters" reset is strictly more useful than a hint asking
+          // the user to do the same thing manually.
           <EmptyState
+            condition="empty-no-data"
+            copyKey="instrument.no-articles"
             icon={Newspaper}
-            headline="No articles for this entity"
-            hint={
-              sentiment != null || timeRange !== "all"
-                ? "Try clearing the sentiment or time filters above."
-                : "Articles appear here as the news pipeline links coverage to this entity."
+            action={
+              sentiment != null || timeRange !== "all" ? (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setSentiment(null);
+                    setTimeRange("all");
+                  }}
+                  // 9px mono uppercase — same register as the other inline
+                  // text-actions on this surface (ContradictionsBlock "Show
+                  // all", RelatedEntitiesPanel "+N more"). focus-visible ring
+                  // per the Round-3 keyboard-reachability pass.
+                  className="font-mono text-[9px] uppercase tracking-wider text-primary hover:underline focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring rounded-[2px]"
+                >
+                  Clear filters
+                </button>
+              ) : undefined
             }
           />
         ) : (

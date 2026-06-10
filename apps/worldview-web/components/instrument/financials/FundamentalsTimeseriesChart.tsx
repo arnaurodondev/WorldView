@@ -232,7 +232,9 @@ function LineChart({ points, pct }: LineChartProps) {
               y={VIEW_H - 2}
               textAnchor="middle"
               fontSize="9"
-              fill="#888"
+              // Round-3 item 3 (DS §15.11): SVG attrs use hsl(var(--token)) —
+              // #888 drifted from --muted-foreground (#83838A).
+              fill="hsl(var(--muted-foreground))"
             >
               {toYearLabel(pt.date)}
             </text>
@@ -247,7 +249,8 @@ function LineChart({ points, pct }: LineChartProps) {
               y1={yZero}
               x2={M_LEFT + PLOT_W}
               y2={yZero}
-              stroke="#444"
+              // Round-3 item 3 (DS §15.11): zero-line uses the border token.
+              stroke="hsl(var(--border))"
               strokeWidth="0.5"
               strokeDasharray="3,3"
             />
@@ -309,8 +312,12 @@ export function FundamentalsTimeseriesChart({ instrumentId }: FundamentalsTimese
             onClick={() => setActiveMetric(m.key)}
             className={[
               "rounded px-2 py-0.5 text-[10px] font-medium transition-colors",
+              // Round-3 item 3 (DS §15.11): JSX classes must use semantic
+              // utilities — the raw hex bg-[#26A69A] was the no-paint bug
+              // class waiting to drift from --positive on the next retune.
+              // text-background = near-black on the teal active chip.
               activeMetric === m.key
-                ? "bg-[#26A69A] text-black"
+                ? "bg-positive text-background"
                 : "bg-muted text-muted-foreground hover:bg-muted/70",
             ].join(" ")}
           >

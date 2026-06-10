@@ -129,6 +129,14 @@ describe("ContextPanel named no-entity state (Round-1)", () => {
     await waitFor(() => {
       expect(screen.getByText("No entity context")).toBeInTheDocument();
     });
-    expect(screen.getByTestId("empty-state")).toBeInTheDocument();
+    // Round-3 consolidation: shared primitive announces via role="status" and
+    // renders the icon as an inline <svg> (both ported from the retired local
+    // EmptyState contract test) + registry body copy (ported hint coverage).
+    const status = screen.getByRole("status");
+    expect(status).toBeInTheDocument();
+    expect(status.querySelector("svg")).not.toBeNull();
+    expect(
+      screen.getByText(/has not been enriched yet/i),
+    ).toBeInTheDocument();
   });
 });

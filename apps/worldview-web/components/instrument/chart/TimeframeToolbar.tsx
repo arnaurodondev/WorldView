@@ -101,7 +101,9 @@ export function TimeframeToolbar({
           is a rare-toggle view mode, not a timeframe sibling. */}
       <button
         onClick={onToggleLogScale}
-        className={`rounded-[2px] px-2 py-0.5 font-mono text-[10px] uppercase tracking-wider transition-colors ${
+        // Round-3 item 5: focus-visible ring (button.tsx convention) so the
+        // keyboard position is visible while tabbing across the toolbar.
+        className={`rounded-[2px] px-2 py-0.5 font-mono text-[10px] uppercase tracking-wider transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring ${
           logScale
             ? "text-foreground ring-1 ring-border bg-transparent"
             : "text-muted-foreground/70 hover:text-foreground"
@@ -120,7 +122,8 @@ export function TimeframeToolbar({
         <button
           data-testid="toolbar-compare"
           onClick={onToggleCompareInput}
-          className={`rounded-[2px] px-2 py-0.5 font-mono text-[10px] uppercase tracking-wider transition-colors ${
+          // Round-3 item 5: focus-visible ring — same treatment as `log`.
+          className={`rounded-[2px] px-2 py-0.5 font-mono text-[10px] uppercase tracking-wider transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring ${
             showCompareInput || compareActive
               ? "text-foreground ring-1 ring-border bg-transparent"
               : "text-muted-foreground/70 hover:text-foreground"
@@ -150,7 +153,8 @@ export function TimeframeToolbar({
             />
             <button
               onClick={onCompareSubmit}
-              className="h-5 rounded-[2px] bg-primary/20 px-2 font-mono text-[10px] text-primary hover:bg-primary/30"
+              // Round-3 item 5: focus-visible ring for keyboard reachability.
+              className="h-5 rounded-[2px] bg-primary/20 px-2 font-mono text-[10px] text-primary hover:bg-primary/30 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
             >
               Go
             </button>

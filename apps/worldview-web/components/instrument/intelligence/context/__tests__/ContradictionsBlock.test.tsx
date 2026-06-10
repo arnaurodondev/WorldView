@@ -143,7 +143,15 @@ describe("ContradictionsBlock named empty state (Round-1)", () => {
       expect(screen.getByText("No contradictions detected")).toBeInTheDocument();
     });
     // Named state semantics + zero badge — the section is a state, not a gap.
-    expect(screen.getByTestId("empty-state")).toBeInTheDocument();
+    // Round-3 consolidation: the shared primitive announces via role="status"
+    // and renders the icon as an inline <svg> (both ported from the retired
+    // local EmptyState contract test) + registry body (ported hint coverage).
+    const status = screen.getByRole("status");
+    expect(status).toBeInTheDocument();
+    expect(status.querySelector("svg")).not.toBeNull();
+    expect(
+      screen.getByText("Conflicting claims between sources surface here when the KG pipeline flags them."),
+    ).toBeInTheDocument();
     expect(screen.getByTestId("contradictions-count")).toHaveTextContent("0");
   });
 

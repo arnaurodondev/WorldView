@@ -26,7 +26,9 @@ import { useAuth } from "@/hooks/useAuth";
 import { createKnowledgeGraphApi } from "@/lib/api/knowledge-graph";
 import { qk } from "@/lib/query/keys";
 import { Skeleton } from "@/components/ui/skeleton";
-import { EmptyState } from "@/components/instrument/shared/EmptyState";
+// Round-3 consolidation (DS §15.12): shared primitive + reserved copy key
+// replace the local components/instrument/shared/EmptyState.tsx fork.
+import { EmptyState } from "@/components/primitives/EmptyState";
 import { cn, formatDate } from "@/lib/utils";
 import type { Contradiction } from "@/types/api";
 
@@ -170,7 +172,10 @@ export function ContradictionsBlock({
   // section disappear entirely, violating the no-blank-areas rule.
   const header = showHeader ? (
     <div className="mb-1.5 flex items-center gap-1.5">
-      <p className="text-[9px] font-mono uppercase tracking-wider text-muted-foreground">
+      {/* Round-3 item 2: label-level accent bar (border-l-2 border-l-primary)
+          — the Round-1 section-start marker applied uniformly across the
+          Financials AND Intelligence tabs (DenseMetricsGrid is the reference). */}
+      <p className="border-l-2 border-l-primary pl-1.5 text-[9px] font-mono uppercase tracking-wider text-muted-foreground">
         Contradictions
       </p>
       {/* Count badge — total detected (not just the visible slice). Tinted
@@ -200,15 +205,18 @@ export function ContradictionsBlock({
   }
 
   // ── Empty state (named: icon + headline — Round-1 requirement 4) ────────────
+  // Round-3: copy resolves via the reserved registry key (identical strings).
+  // The local component's "inline" variant is gone — the primitive owns a
+  // single centred layout so this state renders pixel-identical to every
+  // other empty state on the platform (the consolidation's whole point).
   if (all.length === 0) {
     return (
       <div>
         {header}
         <EmptyState
+          condition="empty-no-data"
+          copyKey="instrument.no-contradictions"
           icon={Scale}
-          headline="No contradictions detected"
-          hint="Conflicting claims between sources surface here when the KG pipeline flags them."
-          variant="inline"
         />
       </div>
     );
@@ -234,7 +242,8 @@ export function ContradictionsBlock({
             type="button"
             onClick={() => setExpanded((v) => !v)}
             aria-expanded={expanded}
-            className="font-mono text-[9px] uppercase tracking-wider text-primary hover:underline"
+            // Round-3 item 5: focus-visible ring for keyboard reachability.
+            className="font-mono text-[9px] uppercase tracking-wider text-primary hover:underline rounded-[2px] focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
           >
             {expanded ? "Show less" : `Show all (${all.length})`}
           </button>

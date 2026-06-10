@@ -99,5 +99,12 @@ describe("NarrativeTimeline", () => {
   it("renders the named empty state for zero entries", () => {
     render(<NarrativeTimeline entries={[]} />);
     expect(screen.getByText("No narrative history")).toBeInTheDocument();
+    // Round-3 consolidation: ported from the retired local EmptyState
+    // contract test — role="status" + inline <svg> icon + hint body (now
+    // resolved via the "instrument.no-narrative-history" registry key).
+    const status = screen.getByRole("status");
+    expect(status).toBeInTheDocument();
+    expect(status.querySelector("svg")).not.toBeNull();
+    expect(screen.getByText(/Versions appear after the KG narrative worker/i)).toBeInTheDocument();
   });
 });

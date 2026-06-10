@@ -95,8 +95,10 @@ export function WhatsMovingStrip({ data, isLoading = false }: WhatsMovingStripPr
             <span className="text-[10px] text-foreground truncate flex-1 min-w-0">
               {article.title ?? "Untitled"}
             </span>
-            {/* Relative time */}
-            <span className="text-[9px] text-muted-foreground/50 shrink-0">
+            {/* Relative time — Round-3 item 2 (ADR-F-15): timestamps are
+                numerics → font-mono tabular-nums so the right-aligned column
+                of "2h/3d" labels doesn't jitter across rows. */}
+            <span className="font-mono tabular-nums text-[9px] text-muted-foreground/50 shrink-0">
               {relTime(article.published_at)}
             </span>
           </div>

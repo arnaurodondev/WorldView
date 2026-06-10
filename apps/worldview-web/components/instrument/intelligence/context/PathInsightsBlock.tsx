@@ -48,8 +48,11 @@ export function PathInsightsBlock({ entityId, limit = 3 }: PathInsightsBlockProp
     return (pathsData?.paths ?? []).slice(0, limit);
   }, [pathsData, limit]);
 
+  // Round-3 item 2: label-level accent bar — uniform Round-1 section marker.
+  // WHY mx-3 + pl-1.5 (was px-3): the 2px accent replaces the left padding's
+  // first pixels so the bar aligns with the rail's other section markers.
   const sectionLabel = (
-    <span className="text-[9px] font-mono uppercase tracking-[0.1em] text-muted-foreground px-3 py-1 block">
+    <span className="mx-3 my-1 block border-l-2 border-l-primary pl-1.5 text-[9px] font-mono uppercase tracking-[0.1em] text-muted-foreground">
       PATH INSIGHTS
     </span>
   );

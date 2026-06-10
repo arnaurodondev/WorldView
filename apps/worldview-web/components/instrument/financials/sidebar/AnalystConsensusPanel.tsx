@@ -38,7 +38,9 @@ export function AnalystConsensusPanel({
 
   return (
     <div className="flex flex-col gap-2 px-2 py-2 border-b border-border">
-      <span className="text-[9px] uppercase tracking-widest text-muted-foreground/70">
+      {/* Round-3 item 2: label-level accent bar — uniform Round-1 section
+          marker (see RevisionsPanel for the full rationale). */}
+      <span className="border-l-2 border-l-primary pl-1.5 text-[9px] uppercase tracking-widest text-muted-foreground/70">
         ANALYST CONSENSUS
       </span>
       <AnalystMiniBar

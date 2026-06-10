@@ -127,13 +127,19 @@ export function NarrativeHistoryDisclosure({ entityId }: NarrativeHistoryDisclos
     // collapsed by default).
     <Accordion type="single" collapsible className="w-full">
       <AccordionItem value="narrative-history" className="border-border/40">
-        <AccordionTrigger className="text-[10px] font-mono uppercase tracking-wider py-1.5 hover:no-underline">
-          <span>Narrative History</span>
+        <AccordionTrigger className="text-[10px] font-mono uppercase tracking-wider py-1.5 hover:no-underline focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring rounded-[2px]">
+          {/* Round-3 item 2: label-level accent bar — uniform Round-1 section
+              marker, matching the other Intelligence-rail section headers. */}
+          <span className="border-l-2 border-l-primary pl-1.5">Narrative History</span>
           <span className="ml-auto mr-2 text-[9px] text-muted-foreground tabular-nums">
             {allVersions.length} version{allVersions.length !== 1 ? "s" : ""}
           </span>
         </AccordionTrigger>
-        <AccordionContent>
+        {/* Round-3 item 6: expandables open in ≤150ms ease-out. The shadcn
+            accordion's global keyframe runs 200ms; an inline style override
+            is deterministic (beats any utility-class ordering) and stays
+            scoped to this disclosure — components/ui is not ours to edit. */}
+        <AccordionContent style={{ animationDuration: "150ms" }}>
           {/* ── Refresh button ─────────────────────────────────────────────── */}
           <div className="flex items-center justify-between mb-2">
             <span className="text-[9px] text-muted-foreground">
@@ -151,7 +157,8 @@ export function NarrativeHistoryDisclosure({ entityId }: NarrativeHistoryDisclos
                 });
               }}
               disabled={triggerMutation.isPending || polling}
-              className="text-[9px] font-mono uppercase tracking-wider px-2 py-0.5 border border-border/60 hover:bg-muted disabled:opacity-40"
+              // Round-3 item 5: focus-visible ring for keyboard reachability.
+              className="text-[9px] font-mono uppercase tracking-wider px-2 py-0.5 border border-border/60 hover:bg-muted disabled:opacity-40 rounded-[2px] focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
             >
               {triggerMutation.isPending ? "Queuing…" : "Refresh"}
             </button>

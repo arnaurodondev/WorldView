@@ -18,10 +18,12 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import dynamic from "next/dynamic";
-import { Clock, Filter, RefreshCw, Share2 } from "lucide-react";
+import { Clock, Filter, Share2 } from "lucide-react";
 import { useAuth } from "@/hooks/useAuth";
 import { createGateway } from "@/lib/gateway";
-import { EmptyState } from "@/components/instrument/shared/EmptyState";
+// Round-3 consolidation (DS §15.12): shared primitive + reserved copy keys
+// replace the local components/instrument/shared/EmptyState.tsx fork.
+import { EmptyState } from "@/components/primitives/EmptyState";
 import { qk } from "@/lib/query/keys";
 import { GraphToolbar } from "@/components/instrument/graph/GraphToolbar";
 import { EntityGraphErrorBoundary } from "@/components/instrument/EntityGraphErrorBoundary";
@@ -38,10 +40,42 @@ function isGraphEmpty(g: EntityGraphData | null): boolean {
   return g.nodes.length === 1 && (g.edges?.length ?? 0) === 0;
 }
 
+/**
+ * GraphSkeleton — shape-matched placeholder for the sigma.js canvas slot.
+ *
+ * WHY a skeleton instead of the previous RefreshCw spinner (Round-3 item 4):
+ * the polish-sprint rule is "no spinners, no blank areas, no layout shift" —
+ * a centred 16px spinner reads as indeterminate chrome, while a full-bleed
+ * pulsing surface with faux node dots tells the analyst exactly WHAT is
+ * loading (a node-link canvas) and reserves its final footprint, so the
+ * graph paints in-place with zero shift. The three dots echo the eventual
+ * centre-entity + neighbours layout — pure decoration, hence aria-hidden
+ * inside a role="status" wrapper that still announces loading politely.
+ */
+function GraphSkeleton() {
+  return (
+    <div
+      role="status"
+      aria-label="Loading entity graph"
+      data-testid="graph-skeleton"
+      className="relative h-full w-full animate-pulse bg-muted/10"
+    >
+      <div aria-hidden className="absolute left-1/2 top-1/2 h-3 w-3 -translate-x-1/2 -translate-y-1/2 rounded-full bg-muted/60" />
+      <div aria-hidden className="absolute left-[30%] top-[32%] h-2 w-2 rounded-full bg-muted/40" />
+      <div aria-hidden className="absolute left-[68%] top-[64%] h-2 w-2 rounded-full bg-muted/40" />
+      <div aria-hidden className="absolute left-[62%] top-[28%] h-1.5 w-1.5 rounded-full bg-muted/30" />
+      <div aria-hidden className="absolute left-[26%] top-[68%] h-1.5 w-1.5 rounded-full bg-muted/30" />
+    </div>
+  );
+}
+
 // WHY ssr:false: EntityGraph uses sigma.js (WebGL) which needs a browser.
+// WHY the loading slot reuses GraphSkeleton: the dynamic-import gap and the
+// query-loading gap must be visually indistinguishable (no spinner→skeleton
+// flicker when both happen back-to-back on cold start).
 const EntityGraph = dynamic(
   () => import("@/components/instrument/EntityGraph").then((m) => ({ default: m.EntityGraph })),
-  { ssr: false, loading: () => <div className="flex h-full items-center justify-center"><RefreshCw className="h-4 w-4 animate-spin text-muted-foreground" strokeWidth={1.5} /></div> },
+  { ssr: false, loading: () => <GraphSkeleton /> },
 );
 
 const BRIEF_STALE_MS = 10 * 60 * 1000;
@@ -185,22 +219,36 @@ export function GraphColumn({ entityId, selectedNodeId, onNodeSelect, onEdgeSele
         </div>
       )}
       <div className="flex-1 min-h-0 mx-3 mb-3 mt-2 border border-border/40 rounded-[2px] overflow-hidden">
-        {/* Loading spinner */}
-        {graphLoading && (
-          <div className="flex h-full items-center justify-center">
-            <RefreshCw className="h-4 w-4 animate-spin text-muted-foreground" strokeWidth={1.5} />
-          </div>
-        )}
+        {/* Loading — shape-matched skeleton (Round-3 item 4: no spinners).
+            Fills the exact canvas slot so the graph paints with zero shift. */}
+        {graphLoading && <GraphSkeleton />}
 
         {/* Depth-adaptive timeout — NAMED state (Round-1 requirement 4).
-            WHY the headline keeps the "timed out at depth N" phrasing: the
-            GraphColumn.test.tsx contract pins /timed out at depth 2/i. */}
+            Round-3 consolidation: copy now comes from the static registry key
+            ("Graph query timed out" — the per-depth interpolation was
+            generalised per DS §15.12; the active depth is already visible in
+            the GraphToolbar + GraphStats directly above this slot). The
+            registry's ctaLabel ("Reduce depth") is rendered as a REAL action:
+            one click drops to the next-cheaper depth and refires the query —
+            strictly better than the old hint that asked the user to find the
+            depth control themselves. Hidden at depth 1 (nothing cheaper). */}
         {isTimeout && (
           <div className="flex h-full items-center justify-center">
             <EmptyState
+              condition="error"
+              copyKey="instrument.graph-timeout"
               icon={Clock}
-              headline={`Graph timed out at depth ${depth}`}
-              hint="Deeper traversals are expensive. Try depth 1 or 2."
+              action={
+                depth > 1 ? (
+                  <button
+                    type="button"
+                    onClick={() => setDepth(depth - 1)}
+                    className="font-mono text-[9px] uppercase tracking-wider text-primary hover:underline focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring rounded-[2px]"
+                  >
+                    Reduce depth
+                  </button>
+                ) : undefined
+              }
             />
           </div>
         )}
@@ -209,9 +257,9 @@ export function GraphColumn({ entityId, selectedNodeId, onNodeSelect, onEdgeSele
         {!graphLoading && !isTimeout && hasTypeFilterMatch && (
           <div className="flex h-full items-center justify-center">
             <EmptyState
+              condition="empty-no-data"
+              copyKey="instrument.graph-no-filter-matches"
               icon={Filter}
-              headline="No entities match the type filter"
-              hint="Clear or widen the entity-type filter in the toolbar above."
             />
           </div>
         )}
@@ -222,9 +270,9 @@ export function GraphColumn({ entityId, selectedNodeId, onNodeSelect, onEdgeSele
         {!graphLoading && !isTimeout && hasNoConnections && (
           <div className="flex h-full items-center justify-center">
             <EmptyState
+              condition="empty-no-data"
+              copyKey="instrument.no-connections"
               icon={Share2}
-              headline="No connections found"
-              hint="The knowledge graph builds connections as news articles are ingested — check back later."
             />
           </div>
         )}

@@ -18,7 +18,9 @@ import { useQuery } from "@tanstack/react-query";
 import { createGateway } from "@/lib/gateway";
 import { useAuth } from "@/hooks/useAuth";
 import { qk } from "@/lib/query/keys";
-import { Skeleton } from "@/components/ui/skeleton";
+// Round-3 item 4: shape-matched skeleton (axis hints) replaces the flat
+// <Skeleton> rectangle for the chart's cold first load.
+import { ChartSkeleton } from "@/components/instrument/chart/ChartSkeleton";
 import { ChartToolbar } from "@/components/instrument/ChartToolbar";
 import { TimeframeToolbar } from "@/components/instrument/chart/TimeframeToolbar";
 import { useChartSeries } from "@/components/instrument/chart/useChartSeries";
@@ -276,9 +278,10 @@ export function OHLCVChart({ instrumentId, initialBars }: OHLCVChartProps) {
               Rendered as an overlay INSIDE the wrapper so it tracks fullscreen.
               CrosshairLegend returns null when nothing is hovered. */}
           <CrosshairLegend bar={hoveredBar} />
-          {isLoading && !data && (
-            <Skeleton className="pointer-events-none absolute inset-0 w-full" style={{ height: CHART_HEIGHT }} />
-          )}
+          {/* Round-3 item 4: shape-matched skeleton — full-bleed plot surface
+              + right price-axis and bottom time-axis hints, so the canvas
+              paints in-place with zero shift (ChartSkeleton owns inset-0). */}
+          {isLoading && !data && <ChartSkeleton />}
           {/* Empty-state for explicit 0-bar success response (CHART-001).
               WHY period-aware copy: the default 1D period needs intraday (5-min)
               bars which sparse instruments may not have — pointing the analyst

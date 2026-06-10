@@ -64,7 +64,10 @@ export function InstrumentTabs({ activeTab, onTabChange }: InstrumentTabsProps) 
             key={t.key}
             type="button"
             onClick={() => onTabChange(t.key)}
-            className={`pb-1.5 text-[11px] font-medium uppercase tracking-wide transition-colors ${cls}`}
+            // Round-3 item 5: focus-visible ring so keyboard users can see
+            // which tab button holds focus (the Q/F/I chords cover power
+            // users, but plain Tab navigation must work too).
+            className={`pb-1.5 text-[11px] font-medium uppercase tracking-wide transition-colors rounded-[2px] focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring ${cls}`}
             aria-current={isActive ? "page" : undefined}
           >
             {t.label}

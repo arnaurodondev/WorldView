@@ -69,17 +69,27 @@ export interface KeyStatsBarProps {
  * mono tabular. Mirrors SessionStatsStrip's `Stat` for visual continuity
  * (the two strips stack directly on top of each other).
  */
-function StatCell({ label, value }: { label: string; value: string }) {
+function StatCell({ label, value, pending }: { label: string; value: string; pending?: boolean }) {
   return (
     <span className="flex items-baseline gap-1 shrink-0">
       <span className="text-[10px] uppercase text-muted-foreground font-mono">
         {label}
       </span>
-      {/* WHY font-mono tabular-nums: ADR-F-15 — every numeric in the app is
-          monospaced so columns/strips don't jitter as live values update. */}
-      <span className="text-[11px] font-mono tabular-nums text-foreground">
-        {value}
-      </span>
+      {/* Round-3 item 4 (shape-matched skeletons): while the SHARED cache
+          fetch is in flight and this cell has no value yet, render a pulsing
+          value-width bar instead of an em-dash — "—" reads as "no data
+          exists" (a final state), which is a lie during the ~300ms before
+          MetricsTable's fetch lands. w-10 ≈ a 5-char mono value, so the strip
+          doesn't reflow when the real number replaces the bar. */}
+      {pending ? (
+        <span aria-hidden className="h-[11px] w-10 animate-pulse rounded-[1px] bg-muted/40 self-center" />
+      ) : (
+        // WHY font-mono tabular-nums: ADR-F-15 — every numeric in the app is
+        // monospaced so columns/strips don't jitter as live values update.
+        <span className="text-[11px] font-mono tabular-nums text-foreground">
+          {value}
+        </span>
+      )}
     </span>
   );
 }
@@ -104,14 +114,21 @@ export function KeyStatsBar({
   // useMetricsTableData actively fetches. `enabled: false` → this observer
   // NEVER issues a network request; it only re-renders when the shared cache
   // slot fills/refreshes. (Same pattern as QuoteTab's OHLCV cache peek.)
-  const { data: cachedFundamentals } = useQuery<Fundamentals>({
+  // WHY also read isFetching (Round-3 item 4): fetchStatus is QUERY-level
+  // state shared across all observers of the key — even with enabled:false,
+  // this passive observer reports isFetching=true while MetricsTable's ACTIVE
+  // observer has the request in flight. That gives us an honest "loading vs
+  // genuinely-no-data" signal without issuing any request ourselves: skeleton
+  // bars only ever pulse while a real fetch is pending, so instruments with
+  // no fundamentals settle on "—" instead of pulsing forever.
+  const { data: cachedFundamentals, isFetching: fundamentalsFetching } = useQuery<Fundamentals>({
     queryKey: qk.instruments.fundamentals(instrumentId),
     enabled: false,
   });
 
   // Snapshot slot — pre-seeded from the page bundle by InstrumentPageClient,
   // then kept fresh by useMetricsTableData's active query. Passive here too.
-  const { data: cachedSnapshot } = useQuery<FundamentalsSnapshot>({
+  const { data: cachedSnapshot, isFetching: snapshotFetching } = useQuery<FundamentalsSnapshot>({
     queryKey: qk.instruments.fundamentalsSnapshot(instrumentId),
     enabled: false,
   });
@@ -123,6 +140,13 @@ export function KeyStatsBar({
   const f: Fundamentals | null = cachedFundamentals ?? fundamentalsProp ?? null;
   const s: FundamentalsSnapshot | null = cachedSnapshot ?? snapshotProp ?? null;
 
+  // Per-source pending flags: a cell is "pending" only while its backing
+  // query is actually in flight AND no value (cache or bundle seed) exists
+  // yet. Once any value is present we show it immediately — the background
+  // refetch must never regress a real number back to a skeleton bar.
+  const fPending = fundamentalsFetching && f == null;
+  const sPending = snapshotFetching && s == null;
+
   return (
     // WHY h-[22px] + border-t: stacks flush under the chart at the same
     // density unit as SessionStatsStrip below it. overflow-x-auto keeps the
@@ -132,28 +156,28 @@ export function KeyStatsBar({
       aria-label="Key statistics"
     >
       {/* Market Cap — compact currency ($4.31T). Null → "—" via formatter. */}
-      <StatCell label="MKT CAP" value={formatMarketCap(f?.market_cap)} />
+      <StatCell label="MKT CAP" value={formatMarketCap(f?.market_cap)} pending={fPending} />
       <Rule />
 
       {/* P/E (trailing) — ratio with no suffix; "35.47" reads cleaner than
           "35.47x" in a strip this dense (the label already says P/E). */}
-      <StatCell label="P/E" value={formatRatio(f?.pe_ratio, "")} />
+      <StatCell label="P/E" value={formatRatio(f?.pe_ratio, "")} pending={fPending} />
       <Rule />
 
       {/* EPS TTM — currency-precision price format ($8.27). Sourced from the
           snapshot leg (the flat Fundamentals shape has no EPS field). */}
-      <StatCell label="EPS" value={formatPrice(s?.eps_ttm)} />
+      <StatCell label="EPS" value={formatPrice(s?.eps_ttm)} pending={sPending} />
       <Rule />
 
       {/* Dividend Yield — stored as a decimal (0.004 = 0.4%); the formatter
           multiplies by 100. WHY unsigned: a yield is an allocation-style
           percentage — a "+" prefix would mis-read as a price change. Null for
           non-payers → "—" (honest: no dividend data ≠ 0% yield). */}
-      <StatCell label="DIV YLD" value={formatPercentUnsigned(f?.dividend_yield)} />
+      <StatCell label="DIV YLD" value={formatPercentUnsigned(f?.dividend_yield)} pending={fPending} />
       <Rule />
 
       {/* Beta — plain 2-dp ratio (1.09). From the snapshot leg. */}
-      <StatCell label="BETA" value={formatRatio(s?.beta, "")} />
+      <StatCell label="BETA" value={formatRatio(s?.beta, "")} pending={sPending} />
     </div>
   );
 }

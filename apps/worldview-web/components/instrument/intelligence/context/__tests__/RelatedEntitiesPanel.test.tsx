@@ -112,6 +112,10 @@ describe("RelatedEntitiesPanel", () => {
 
   it("renders the named empty state when there are no neighbours", () => {
     // Only the root node → zero related entities.
+    // Round-3 consolidation: this panel reuses the reserved
+    // "instrument.no-connections" registry key (the chip list and the graph
+    // canvas surface the SAME depth-2 data state), so the headline changed
+    // from the local component's "No related entities" to the registry title.
     render(
       <RelatedEntitiesPanel
         entityId={ROOT_ID}
@@ -119,11 +123,16 @@ describe("RelatedEntitiesPanel", () => {
         onNodeSelect={vi.fn()}
       />,
     );
-    expect(screen.getByText("No related entities")).toBeInTheDocument();
+    expect(screen.getByText("No connections found")).toBeInTheDocument();
+    // Ported from the retired local EmptyState contract test: role="status"
+    // semantics + inline <svg> icon keep the state announceable + scannable.
+    const status = screen.getByRole("status");
+    expect(status).toBeInTheDocument();
+    expect(status.querySelector("svg")).not.toBeNull();
   });
 
   it("renders the empty state while the graph cache is still cold (undefined nodes)", () => {
     render(<RelatedEntitiesPanel entityId={ROOT_ID} nodes={undefined} onNodeSelect={vi.fn()} />);
-    expect(screen.getByText("No related entities")).toBeInTheDocument();
+    expect(screen.getByText("No connections found")).toBeInTheDocument();
   });
 });

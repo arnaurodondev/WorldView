@@ -128,7 +128,19 @@ export function IncomeStatementTable({
     .sort((a, b) => a.period_end.localeCompare(b.period_end))
     .slice(isQuarterly ? -8 : -4);
 
-  if (isLoading) return <Skeleton className="h-[140px] rounded-[2px]" />;
+  // Round-3 item 4: shape-matched skeleton — header band + 5 row bars at the
+  // 20px data-table-grid rhythm (was a single flat 140px rectangle). Total
+  // height matches the eventual table → zero layout shift on load.
+  if (isLoading) {
+    return (
+      <div role="status" aria-label="Loading income statement" className="space-y-1 px-2 py-1">
+        <Skeleton className="h-5 w-1/3 rounded-[2px]" />
+        {[0, 1, 2, 3, 4].map((row) => (
+          <Skeleton key={row} className="h-4 w-full rounded-[1px]" />
+        ))}
+      </div>
+    );
+  }
 
   if (cols.length === 0) {
     return (
@@ -142,14 +154,21 @@ export function IncomeStatementTable({
     // WHY data-table-grid (default 20px): income table rows are 20px, not 18px
     // (dense variant is reserved for DenseMetricsGrid only per Δ5).
     <div data-table-grid className="w-full">
-      {/* Section header with period toggle */}
-      <div className="flex h-6 items-center justify-between border-b border-border px-2">
+      {/* Section header with period toggle.
+          WHY border-l-2 border-l-primary + bg-muted/20 (Round-3 item 2): the
+          Round-1 accent-bar treatment from DenseMetricsGrid's SectionHeader,
+          applied uniformly to every block header on the Financials +
+          Intelligence tabs so section starts are scannable in peripheral
+          vision while skimming the long left column. */}
+      <div className="flex h-6 items-center justify-between border-b border-border border-l-2 border-l-primary bg-muted/20 px-2">
         <span className="text-[10px] uppercase tracking-[0.08em] text-muted-foreground font-mono">
           INCOME STATEMENT
         </span>
         <button
           onClick={onPeriodToggle}
-          className="text-[9px] font-mono text-primary hover:text-primary/80 transition-colors"
+          // Round-3 item 5: keyboard-reachability — focus-visible ring matches
+          // the button.tsx convention (ring-ring after outline-none).
+          className="text-[9px] font-mono text-primary hover:text-primary/80 transition-colors rounded-[2px] focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
           aria-label={`Switch to ${isQuarterly ? "annual" : "quarterly"} view (p)`}
           title="Toggle Annual / Quarterly (p)"
         >

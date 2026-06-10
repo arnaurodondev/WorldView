@@ -56,11 +56,26 @@ export function CompactArticleRow({ article }: CompactArticleRowProps) {
   return (
     <div
       onClick={handleClick}
+      // Round-3 item 5 (keyboard reachability): the row already advertised
+      // role="link" + tabIndex=0 but NEVER responded to the keyboard — a
+      // focusable "link" that ignores Enter is an a11y trap. Enter now
+      // activates exactly like click (Space is reserved for page scroll on
+      // link-role elements, matching native <a> behaviour).
+      onKeyDown={
+        handleClick
+          ? (e) => {
+              if (e.key === "Enter") handleClick();
+            }
+          : undefined
+      }
       role={article.url ? "link" : undefined}
       tabIndex={article.url ? 0 : undefined}
       className={cn(
         "h-7 flex items-center gap-2 px-3 border-b border-border/20",
-        article.url && "hover:bg-muted/20 cursor-pointer",
+        // Round-3 item 5: focus-visible ring (inset so the 28px row's ring
+        // isn't clipped by the column's overflow-y-auto scroll container).
+        article.url &&
+          "hover:bg-muted/20 cursor-pointer focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring focus-visible:ring-inset",
       )}
     >
       <div className={cn("w-1.5 h-1.5 rounded-full flex-shrink-0", dotClass)} />

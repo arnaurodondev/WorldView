@@ -34,7 +34,9 @@
 
 import { History } from "lucide-react";
 
-import { EmptyState } from "@/components/instrument/shared/EmptyState";
+// Round-3 consolidation (DS §15.12): shared primitive + registry copy key
+// replace the local components/instrument/shared/EmptyState.tsx fork.
+import { EmptyState } from "@/components/primitives/EmptyState";
 import { cn } from "@/lib/utils";
 
 // ── Types ────────────────────────────────────────────────────────────────────
@@ -108,12 +110,14 @@ export function NarrativeTimeline({ entries }: NarrativeTimelineProps) {
   const sorted = [...entries].sort((a, b) => b.date.localeCompare(a.date));
 
   if (sorted.length === 0) {
+    // Round-3: copy moved verbatim into the registry under a new
+    // instrument.* key (this Round-2 call site was outside the original
+    // six-key reservation — see lib/copy/empty-states.ts comment).
     return (
       <EmptyState
+        condition="empty-no-data"
+        copyKey="instrument.no-narrative-history"
         icon={History}
-        headline="No narrative history"
-        hint="Versions appear after the KG narrative worker (or a manual Refresh) generates a new interpretation of this entity."
-        variant="inline"
       />
     );
   }
@@ -153,7 +157,12 @@ export function NarrativeTimeline({ entries }: NarrativeTimelineProps) {
               // slots — same pattern the old VersionRow used. The headline is
               // the summary; the body reveals the complete narrative.
               <details className="group">
-                <summary className="cursor-pointer list-none text-[10px] leading-snug text-foreground/85 hover:text-foreground">
+                {/* Round-3 item 5: hover bg + focus-visible ring — <summary>
+                    is natively focusable/toggleable (Enter/Space), so adding
+                    the visual affordances makes the existing keyboard path
+                    VISIBLE. -mx-1 px-1 widens the hover hit-strip without
+                    shifting the text column. */}
+                <summary className="cursor-pointer list-none rounded-[2px] -mx-1 px-1 text-[10px] leading-snug text-foreground/85 hover:bg-muted/40 hover:text-foreground transition-colors duration-150 ease-out focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring">
                   {entry.headline}
                 </summary>
                 <p className="mt-1 max-h-[300px] overflow-y-auto whitespace-pre-wrap text-[10px] leading-relaxed text-foreground/70">

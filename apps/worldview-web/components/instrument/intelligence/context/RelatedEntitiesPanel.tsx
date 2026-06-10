@@ -41,7 +41,9 @@ import { useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { Share2 } from "lucide-react";
 
-import { EmptyState } from "@/components/instrument/shared/EmptyState";
+// Round-3 consolidation (DS §15.12): shared primitive + registry copy key
+// replace the local components/instrument/shared/EmptyState.tsx fork.
+import { EmptyState } from "@/components/primitives/EmptyState";
 import { entityTypeToken } from "@/lib/entity-types";
 import type { GraphNode } from "@/types/api";
 
@@ -118,7 +120,10 @@ function EntityChip({
       // label + tells the user what the click does (nav vs in-panel detail).
       title={navigable ? `Open ${node.label} (${node.ticker})` : `${node.label} — show details`}
       aria-label={navigable ? `Open instrument page for ${node.label}` : `Show details for ${node.label}`}
-      className="flex h-[18px] max-w-[140px] items-center gap-1 rounded-[2px] border border-border/60 bg-muted/20 px-1.5 hover:bg-muted/50 transition-colors"
+      // Round-3 item 5: hover bg + :focus-visible ring (button.tsx convention)
+      // — chips are real <button>s, so Tab reaches them; the ring makes the
+      // keyboard position visible against the dark rail.
+      className="flex h-[18px] max-w-[140px] items-center gap-1 rounded-[2px] border border-border/60 bg-muted/20 px-1.5 hover:bg-muted/50 transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
     >
       {/* Type dot — raw hex from the shared entity-type token map (the same
           palette sigma.js paints the canvas nodes with), so chip ↔ canvas
@@ -183,26 +188,31 @@ export function RelatedEntitiesPanel({
   const hiddenCount = total - (visible.companies.length + visible.people.length + visible.other.length);
 
   // Section caption — same 9px mono uppercase convention as TopRelationsBlock.
+  // Round-3 item 2: label-level accent bar (border-l-2 border-l-primary) —
+  // the Round-1 section-start marker applied uniformly across both tabs.
   const sectionLabel = (
     <div className="flex h-[20px] items-center">
-      <span className="text-[9px] font-mono uppercase tracking-[0.1em] text-muted-foreground">
+      <span className="border-l-2 border-l-primary pl-1.5 text-[9px] font-mono uppercase tracking-[0.1em] text-muted-foreground">
         Related Entities{total > 0 ? ` · (${total})` : ""}
       </span>
     </div>
   );
 
   // ── Named empty state (Round-1 rule: every section is data OR a named
-  // state). Covers both "graph cache cold" and "entity genuinely isolated";
-  // the hint explains what fills the section. ───────────────────────────────
+  // state). Covers both "graph cache cold" and "entity genuinely isolated".
+  // Round-3 consolidation: reuses the reserved "instrument.no-connections"
+  // key — this panel is a chip view over the SAME depth-2 graph the canvas
+  // renders, so an empty neighbour list IS the "no connections" condition;
+  // a separate "no related entities" key would be two copy strings for one
+  // data state (exactly the drift the central registry exists to prevent). ──
   if (total === 0) {
     return (
       <div>
         {sectionLabel}
         <EmptyState
+          condition="empty-no-data"
+          copyKey="instrument.no-connections"
           icon={Share2}
-          headline="No related entities"
-          hint="Connections appear once the knowledge graph links this entity to companies, people or topics from ingested news."
-          variant="inline"
         />
       </div>
     );
@@ -257,7 +267,8 @@ export function RelatedEntitiesPanel({
         <button
           type="button"
           onClick={() => setExpanded((e) => !e)}
-          className="text-[9px] font-mono uppercase tracking-wider text-primary hover:text-primary/80 transition-colors"
+          // Round-3 item 5: focus-visible ring for keyboard reachability.
+          className="text-[9px] font-mono uppercase tracking-wider text-primary hover:text-primary/80 transition-colors rounded-[2px] focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
           aria-expanded={expanded}
         >
           {expanded ? "Show less" : `+${hiddenCount} more`}

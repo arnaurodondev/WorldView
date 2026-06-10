@@ -4,7 +4,8 @@
  * WHY THIS EXISTS (PLAN-0090 T-E-02): the Intelligence tab's center column
  * owns the AGE-graph query that has a 3-second deadline. When the deadline
  * fires the queryFn throws `Error("GRAPH_TIMEOUT")` and the component must
- * render a "Graph timed out at depth N. Try depth 1 or 2." fallback instead
+ * render the "Graph query timed out" fallback (registry key
+ * "instrument.graph-timeout" + a "Reduce depth" action since Round-3) instead
  * of leaving the analyst on a blank canvas.
  *
  * This test pins the timeout-fallback contract by mocking the gateway's
@@ -25,7 +26,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, fireEvent } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { ReactNode } from "react";
 
@@ -108,14 +109,65 @@ describe("GraphColumn timeout fallback", () => {
         <GraphColumn entityId="ent-001" selectedNodeId={null} onNodeSelect={() => {}} />
       </Wrapper>,
     );
-    // The fallback copy is "Graph timed out at depth 2. Try depth 1 or 2."
-    // (depth defaults to 2 in the component). We match substring so a future
-    // wording tweak that keeps "timed out" still passes.
+    // Round-3 consolidation: the fallback copy now resolves through the
+    // "instrument.graph-timeout" registry key (static, depth-free per DS
+    // §15.12 — the active depth is visible in the toolbar/stats above). We
+    // match substring so a wording tweak that keeps "timed out" still passes.
     await waitFor(() => {
-      expect(screen.getByText(/timed out at depth 2/i)).toBeInTheDocument();
+      expect(screen.getByText(/timed out/i)).toBeInTheDocument();
     });
+    // Registry body copy renders too — ported hint coverage from the retired
+    // local EmptyState (it used to render this exact line as `hint`).
+    expect(screen.getByText(/Deeper traversals are expensive/i)).toBeInTheDocument();
+    // Ported from the local EmptyState contract test: the state announces via
+    // role="status" and stays scannable via an inline <svg> icon.
+    const status = screen.getByRole("status");
+    expect(status.querySelector("svg")).not.toBeNull();
     // The graph stub must NOT have rendered — fallback is the only thing on
     // screen besides the brief block and toolbar.
     expect(screen.queryByTestId("entity-graph-stub")).not.toBeInTheDocument();
+  });
+
+  it("offers a 'Reduce depth' action that refires the graph query one depth cheaper", async () => {
+    // First fetch (depth 2, the default) times out; the action click must
+    // drop to depth 1 and refire — the registry ctaLabel rendered as a REAL
+    // onClick action (Round-3 item 1), not a passive hint.
+    mockGateway.getEntityGraph.mockRejectedValue(new Error("GRAPH_TIMEOUT"));
+    render(
+      <Wrapper>
+        <GraphColumn entityId="ent-001" selectedNodeId={null} onNodeSelect={() => {}} />
+      </Wrapper>,
+    );
+    const reduce = await screen.findByRole("button", { name: /reduce depth/i });
+    // Next fetch succeeds with a minimal 2-node graph so we can observe the
+    // depth-1 call going out (and the fallback clearing).
+    mockGateway.getEntityGraph.mockResolvedValue({
+      entity_id: "ent-001",
+      nodes: [
+        { id: "ent-001", label: "Root", type: "financial_instrument" },
+        { id: "ent-002", label: "Peer", type: "financial_instrument" },
+      ],
+      edges: [{ id: "e1", source: "ent-001", target: "ent-002", label: "peer_of" }],
+    });
+    fireEvent.click(reduce);
+    await waitFor(() => {
+      // Second call carries the reduced depth (2 → 1).
+      expect(mockGateway.getEntityGraph).toHaveBeenLastCalledWith("ent-001", 1);
+    });
+    await waitFor(() => {
+      expect(screen.getByTestId("entity-graph-stub")).toBeInTheDocument();
+    });
+  });
+
+  it("renders the shape-matched skeleton (not a spinner) while the graph query is in flight", () => {
+    // A never-resolving promise pins the query in `isLoading`.
+    mockGateway.getEntityGraph.mockReturnValue(new Promise(() => {}));
+    render(
+      <Wrapper>
+        <GraphColumn entityId="ent-001" selectedNodeId={null} onNodeSelect={() => {}} />
+      </Wrapper>,
+    );
+    // Round-3 item 4: async blocks get shape-matched skeletons — no spinners.
+    expect(screen.getByTestId("graph-skeleton")).toBeInTheDocument();
   });
 });

@@ -77,7 +77,9 @@ export function TopRelationsBlock({
     // convention (PathInsightsBlock, RelationsList, etc.) — 9-10px mono uppercase
     // is the "data section label" style throughout the Intelligence rail.
     <div className="px-3 h-[20px] flex items-center">
-      <span className="text-[9px] font-mono uppercase tracking-[0.1em] text-muted-foreground">
+      {/* Round-3 item 2: label-level accent bar — uniform Round-1 section
+          marker (see ContradictionsBlock header for the full rationale). */}
+      <span className="border-l-2 border-l-primary pl-1.5 text-[9px] font-mono uppercase tracking-[0.1em] text-muted-foreground">
         Top Relations{topEdges.length > 0 ? ` · (${topEdges.length})` : ""}
       </span>
     </div>

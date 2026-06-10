@@ -93,7 +93,9 @@ export function FundHoldersTable({
 
   return (
     <div data-table-grid className="border-t border-border">
-      <div className="flex items-center h-[var(--row-h,20px)] px-2 border-b border-border bg-muted/20">
+      {/* Round-3 item 2: border-l-2 border-l-primary completes the uniform
+          accent-bar header treatment (Round-1 DenseMetricsGrid pattern). */}
+      <div className="flex items-center h-[var(--row-h,20px)] px-2 border-b border-border border-l-2 border-l-primary bg-muted/20">
         <span className="text-[9px] uppercase tracking-widest text-muted-foreground/70">
           FUND HOLDERS
         </span>

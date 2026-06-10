@@ -39,7 +39,9 @@ import { createGateway } from "@/lib/gateway";
 import { useEntityIntelligence } from "@/lib/api/intelligence";
 import { qk } from "@/lib/query/keys";
 import { Skeleton } from "@/components/ui/skeleton";
-import { EmptyState } from "@/components/instrument/shared/EmptyState";
+// Round-3 consolidation (DS §15.12): shared primitive + reserved copy key
+// replace the local components/instrument/shared/EmptyState.tsx fork.
+import { EmptyState } from "@/components/primitives/EmptyState";
 import { cn, formatDate } from "@/lib/utils";
 import { NodeDetailCard } from "./NodeDetailCard";
 import { RelationsList } from "./RelationsList";
@@ -303,11 +305,13 @@ export function ContextPanel({
         aria-label="No entity context available"
       >
         {/* Round-1 requirement 4: NAMED empty state (icon + headline) — the
-            old italic one-liner was indistinguishable from a failed render. */}
+            old italic one-liner was indistinguishable from a failed render.
+            Round-3: copy resolves via the reserved registry key (identical
+            strings — the Round-2 reservation mirrored this call site). */}
         <EmptyState
+          condition="empty-no-data"
+          copyKey="instrument.no-entity-context"
           icon={FileQuestion}
-          headline="No entity context"
-          hint="This entity has not been enriched yet — the overnight enrichment worker populates name, type and description."
         />
       </section>
     );

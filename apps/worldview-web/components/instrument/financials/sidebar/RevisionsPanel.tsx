@@ -17,7 +17,11 @@
 export function RevisionsPanel() {
   return (
     <div className="flex flex-col gap-1 px-2 py-2 border-b border-border">
-      <span className="text-[9px] uppercase tracking-widest text-muted-foreground/70">
+      {/* Round-3 item 2: label-level accent bar (border-l-2 border-l-primary)
+          — the Round-1 section-start marker, applied uniformly. Label-level
+          (not a full bg band) because these padded sidebar panels have no
+          dedicated header row to tint. */}
+      <span className="border-l-2 border-l-primary pl-1.5 text-[9px] uppercase tracking-widest text-muted-foreground/70">
         ESTIMATE REVISIONS
       </span>
 
