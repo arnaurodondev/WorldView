@@ -33,7 +33,12 @@
  *                    (The backend doesn't yet embed a structured contradictions
  *                    field on Message; this extracts text patterns emitted by
  *                    S8 when it detects conflicting claims.)
- *   Related tickers — regex scan of all message content for $TICKER patterns.
+ *   Related tickers — shared `extractTickers` lib (Round 2): $TICKER always
+ *                    counts; bare TICKER tokens pass a generous noise
+ *                    blocklist. Deduped, most-recent-first, capped at 8 with
+ *                    an overflow count. Mini-cards only render for tickers
+ *                    that RESOLVE via the instrument-search endpoint, so a
+ *                    blocklist escape can never paint a phantom card.
  *
  * WHO USES IT: app/(app)/chat/page.tsx
  * DESIGN REFERENCE: Task spec §2 (context rail design block)
@@ -54,6 +59,11 @@ import { cn } from "@/lib/utils";
 import { formatPrice, formatPercent, formatMarketCap, formatRatio } from "@/lib/utils";
 import { Skeleton } from "@/components/ui/skeleton";
 import type { Message } from "@/types/api";
+// Round 2 Enhancement: single source of truth for ticker detection. Replaces
+// the two inline regex passes ($TICKER + **BOLD**) this file used to carry —
+// the lib adds bare-token detection behind a generous noise blocklist and
+// returns a recency-ordered, capped result with an overflow count.
+import { extractTickers } from "@/features/chat/lib/ticker-extract";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -78,6 +88,20 @@ export interface ChatContextRailProps {
    * Intended to append " $TICKER" to the chat composer.
    */
   onTickerClick: (ticker: string) => void;
+  /**
+   * Called when the user clicks an Entity Overview mini-card (Round 2).
+   * The page wires this to `router.push("/instruments/<ticker>")` so a card
+   * click pivots straight to the instrument detail page.
+   *
+   * WHY a callback (not a router.push inside this component): keeps the rail
+   * free of next/navigation so it stays trivially unit-testable, and lets a
+   * future embedding surface (e.g. a workspace widget) decide its own
+   * navigation policy (new tab, panel swap, …).
+   *
+   * Optional: when omitted, cards render as static info surfaces (the
+   * pre-Round-2 behaviour) — keeps other compositions compiling unchanged.
+   */
+  onCardClick?: (ticker: string) => void;
 }
 
 // ── Source type badge labels ──────────────────────────────────────────────────
@@ -130,82 +154,24 @@ function extractContradictions(messages: Message[]): string[] {
 }
 
 // ── Related ticker extraction ─────────────────────────────────────────────────
-// WHY two patterns ($TICKER and **BOLD** uppercase):
+// Round 2 Enhancement: extraction moved to the shared, table-tested
+// `features/chat/lib/ticker-extract.ts`. WHY the move:
 //
-// 1. $TICKER: the $ prefix is the explicit intent signal — analysts type
-//    "$AAPL" when they mean the stock.  Applies to all messages (user and
-//    assistant).
+//   - The old inline pass detected only $TICKER and **BOLD** assistant
+//     tokens, so "compare NVDA with AMD" (bare, un-bolded — how analysts
+//     actually type) produced ZERO detections. The lib detects bare 2–5
+//     letter uppercase tokens behind a generous noise blocklist (CEO, GDP,
+//     EPS, VERY, …) so plain prose mentions count too.
+//   - The lib returns tickers ordered MOST-RECENT-FIRST and capped (8),
+//     with an overflow count — exactly what the Entity Overview mini-card
+//     section needs ("8 most recent + N more").
+//   - Bold (**NVDA**) is a strict subset of the bare pattern (asterisks are
+//     non-word chars, so \b matches at the token edges) — no detection was
+//     lost in the consolidation.
 //
-// 2. **BOLD** uppercase 2-5 char words from ASSISTANT messages only:
-//    LLM responses frequently bold company tickers/names without a $ prefix,
-//    e.g. "**NVIDIA** reported…" or "comparing **AMD** and **NVDA**…".
-//    We restrict to assistant messages to avoid catching user-typed bold
-//    (rare) or markdown headers the user pasted in.
-//    Minimum 2 chars prevents single-letter false positives (I, A, …).
-//    Maximum 5 chars matches NYSE/NASDAQ ticker length convention.
-//    We skip a tight allowlist of common non-ticker all-caps words to reduce
-//    noise.  False positives in the RELATED section are low-stakes (an extra
-//    chip the analyst can ignore); false negatives (missing a real ticker)
-//    are worse because the analyst can't one-click pivot to that entity.
-//
-// WHY merge then deduplicate: both patterns feed the same Set<string> so a
-// ticker appearing both as $AMD and **AMD** shows exactly one chip.
-const DOLLAR_TICKER_RE = /\$([A-Z]{1,5})\b/g;
-// Matches **WORD** where WORD is 2-5 uppercase ASCII letters only.
-// WHY exclude digits: tickers like "BRK" (without the .B) are captured
-// correctly; the dot-variants never appear in markdown bold because the
-// dot breaks the pattern — acceptable trade-off for simplicity.
-const BOLD_TICKER_RE = /\*\*([A-Z]{2,5})\*\*/g;
-
-/**
- * Common English uppercase abbreviations that are NOT tickers.  These appear
- * frequently in LLM financial analysis and would produce noisy chips if kept.
- * The list is deliberately conservative — a few extra noise entries are
- * acceptable, but silently dropping a real ticker would be worse.
- */
-const NON_TICKER_BOLD = new Set([
-  "CEO", "CFO", "COO", "CTO", "IPO", "SEC", "FED", "GDP", "CPI",
-  "PPI", "YOY", "QOQ", "TTM", "EPS", "FCF", "ROE", "ROA", "EBIT",
-  "EBITDA", "DCF", "NPV", "IRR", "ETF", "SPAC", "ESG", "AI", "ML",
-  "US", "EU", "UK", "FX", "VC", "PE", "RD", "OR", "AND", "FOR",
-  "NOT", "THE", "BUT", "ARE", "ITS", "HAS", "WAS", "HAD",
-]);
-
-/**
- * Extract all $TICKER and **BOLD** ticker mentions from all messages,
- * deduplicated and sorted alphabetically.
- *
- * Bold extraction is assistant-only to reduce false positives from
- * user-typed content.
- */
-function extractRelatedTickers(messages: Message[]): string[] {
-  const seen = new Set<string>();
-  for (const msg of messages) {
-    // ── $TICKER pattern — all messages ──────────────────────────────────
-    {
-      let m: RegExpExecArray | null;
-      const re = new RegExp(DOLLAR_TICKER_RE.source, "g");
-      while ((m = re.exec(msg.content)) !== null) {
-        seen.add(m[1]);
-      }
-    }
-    // ── **BOLD** uppercase pattern — assistant messages only ─────────────
-    // WHY assistant-only: user messages can have intentional bold for
-    // non-ticker reasons; the LLM consistently bolds entity names.
-    if (msg.role === "assistant") {
-      let m: RegExpExecArray | null;
-      const re = new RegExp(BOLD_TICKER_RE.source, "g");
-      while ((m = re.exec(msg.content)) !== null) {
-        const word = m[1];
-        // Skip common non-ticker abbreviations to reduce chip noise.
-        if (!NON_TICKER_BOLD.has(word)) {
-          seen.add(word);
-        }
-      }
-    }
-  }
-  return [...seen].sort();
-}
+// The blocklist keeps the old guarantees: a user typing "**VERY**" or an
+// assistant bolding "**CEO**" never produces a chip (pinned by this file's
+// existing test suite), while explicit "$F" / "$ALL" always do.
 
 // ── Section header sub-component ─────────────────────────────────────────────
 
@@ -360,9 +326,16 @@ function EntityCard({ entityId }: EntityCardProps) {
 interface EntityMiniCardProps {
   /** Uppercase ticker string, e.g. "NVDA". Not a UUID. */
   ticker: string;
+  /**
+   * Round 2: card click → instrument page pivot. Receives the RESOLVED
+   * ticker (the canonical symbol from the search result, not the raw
+   * detected token) so `/instruments/[ticker]` always gets a real symbol.
+   * Optional — undefined renders a non-interactive card (legacy behaviour).
+   */
+  onClick?: (ticker: string) => void;
 }
 
-function EntityMiniCard({ ticker }: EntityMiniCardProps) {
+function EntityMiniCard({ ticker, onClick }: EntityMiniCardProps) {
   const { accessToken } = useAuth();
 
   // Step 1 + Step 2 combined into one query using queryFn chaining:
@@ -411,9 +384,32 @@ function EntityMiniCard({ ticker }: EntityMiniCardProps) {
   const mktCap = fundamentals?.market_cap ?? null;
 
   return (
+    // Round 2: the mini-card is now a <button> — clicking it pivots to
+    // /instruments/[ticker] (via the onClick callback the page wires to
+    // router.push). WHY button (not <a href>): the destination is wired by
+    // the parent, and a button keeps keyboard/focus semantics correct
+    // without this component knowing about Next.js routing.
+    // WHY w-full text-left: buttons default to centred inline sizing —
+    // the card must fill the rail column and keep its left-aligned layout.
     // WHY border-border/20 bg-card: same subtle card background as EntityCard
     // so the two card types feel visually consistent despite different density.
-    <div className="rounded-[2px] border border-border/20 bg-card px-2 py-1.5">
+    <button
+      type="button"
+      data-testid="entity-mini-card"
+      onClick={() => onClick?.(displayTicker)}
+      // Disable interactive affordances when no handler is wired — a focus
+      // ring + pointer cursor on an inert card would be a lying affordance.
+      disabled={!onClick}
+      aria-label={`Open ${displayTicker} instrument page`}
+      title={onClick ? `Open /instruments/${displayTicker}` : undefined}
+      className={cn(
+        "w-full rounded-[2px] border border-border/20 bg-card px-2 py-1.5 text-left",
+        // Hover affordance only when clickable; transition-colors duration-0
+        // honours the no-animation terminal mandate while keeping the class
+        // structure consistent with the chips above.
+        onClick && "transition-colors duration-0 hover:border-primary/40 hover:bg-muted/40",
+      )}
+    >
       {/* Ticker + name (truncated) */}
       <div className="flex items-baseline justify-between gap-1">
         <span className="font-mono text-[10px] font-bold text-foreground">
@@ -460,7 +456,7 @@ function EntityMiniCard({ ticker }: EntityMiniCardProps) {
           {mktCap !== null && <span>Cap {formatMarketCap(mktCap)}</span>}
         </div>
       )}
-    </div>
+    </button>
   );
 }
 
@@ -472,6 +468,7 @@ export function ChatContextRail({
   isCollapsed: _isCollapsed,
   onClose,
   onTickerClick,
+  onCardClick,
 }: ChatContextRailProps) {
   // ── Derived: citations aggregated across all assistant turns ────────────
   //
@@ -510,9 +507,23 @@ export function ChatContextRail({
     [messages],
   );
 
-  // ── Derived: related tickers from $TICKER mentions ──────────────────────
-  const relatedTickers = useMemo(
-    () => extractRelatedTickers(messages),
+  // ── Derived: related tickers via the shared extractor (Round 2) ─────────
+  //
+  // WHY recompute on every `messages` identity change: tickers must
+  // appear/update AS the conversation evolves — a follow-up question that
+  // introduces $TSM must surface a TSM card without a refresh. useMemo on
+  // the messages array gives exactly that (the page replaces the array on
+  // every new message).
+  //
+  // `tickers` is deduped, most-recent-first, capped at 8; `overflow` is how
+  // many additional distinct tickers were detected beyond the cap.
+  const { tickers: relatedTickers, overflow: tickerOverflow } = useMemo(
+    () =>
+      extractTickers(
+        // Message is structurally a TickerSourceMessage (role + content) —
+        // no mapping needed; annotate for readers.
+        messages,
+      ),
     [messages],
   );
 
@@ -660,20 +671,22 @@ export function ChatContextRail({
 
         {/* ── Entity overview mini-cards ──────────────────────────────── */}
         {/*
-         * WHY only when relatedTickers exist (and we cap at 3):
-         * Each EntityMiniCard fires two network requests (searchInstruments +
-         * getCompanyOverview) on first render.  Showing cards for all detected
-         * tickers would hammer the API on busy threads (10+ tickers).  We cap
-         * at the first 3 — the analyst sees the most prominent entities without
-         * overwhelming the rail or the backend.  The chips section above still
-         * shows all tickers for reference; the mini-cards just surface the top
-         * ones with live data.
+         * Round 2 contract: render a mini-card for the 8 MOST RECENT distinct
+         * tickers detected in the conversation (the extractor orders by
+         * recency and caps at 8). Tickers beyond the cap surface as a muted
+         * "+N more mentioned" line — the analyst knows detection happened
+         * without the rail (or the backend) paying for more cards.
          *
-         * WHY NOT show mini-cards when entityId is set and no relatedTickers:
-         * If there's only one entity (the primary entity_id), the full
-         * EntityCard already shows all the data the analyst needs.  The mini-
-         * cards section adds value specifically when multiple entities appear
-         * in the conversation without a single primary entity.
+         * WHY 8 (was 3): each EntityMiniCard fires at most two cached network
+         * requests (searchInstruments + getCompanyOverview, 5-min staleTime,
+         * per-ticker query keys), so 8 cards cost ≤16 requests ONCE per
+         * session per ticker — acceptable for the primary added value of the
+         * rail. The extractor's cap (not a slice here) is the single knob.
+         *
+         * VALIDATION: EntityMiniCard returns null when the ticker fails to
+         * resolve via instrument search — cards only render for REAL
+         * instruments, so bare-token false positives that slip past the
+         * blocklist (e.g. an uncommon acronym) cost a request, not a card.
          *
          * WHY this section appears AFTER Related Tickers (not before):
          * The chips are a quick-action surface (one click → composer); the
@@ -682,19 +695,24 @@ export function ChatContextRail({
          */}
         {relatedTickers.length > 0 && (
           <>
-            <SectionHeader label="Entity Overview" />
+            <SectionHeader label="Entity Overview" count={relatedTickers.length} />
             {/* WHY gap-1.5 px-3: tighter than the EntityCard mx-3 my-2 to fit
-                3 cards in the available rail height without excessive whitespace. */}
+                the cards in the available rail height without excessive whitespace. */}
             <div className="flex flex-col gap-1.5 px-3 py-1.5">
-              {relatedTickers.slice(0, 3).map((ticker) => (
-                // WHY not wrapping in <button>: the mini-card is informational,
-                // not an action target.  If the analyst wants to navigate to the
-                // instrument page they can use the ticker chip above (one click
-                // appends to composer), or click the entity from the full details
-                // page.  Adding a click handler here would require entity_id
-                // resolution which adds another async dependency.
-                <EntityMiniCard key={ticker} ticker={ticker} />
+              {relatedTickers.map((ticker) => (
+                // Round 2: cards are clickable — onCardClick pivots to the
+                // instrument page (wired by the chat page to router.push).
+                <EntityMiniCard key={ticker} ticker={ticker} onClick={onCardClick} />
               ))}
+              {/* Overflow indicator — detected-but-not-carded ticker count.
+                  WHY aria-live OFF (plain text): this updates as a side
+                  effect of the conversation; announcing every change would
+                  be screen-reader noise. */}
+              {tickerOverflow > 0 && (
+                <p className="px-1 font-mono text-[9px] text-muted-foreground/60">
+                  +{tickerOverflow} more mentioned
+                </p>
+              )}
             </div>
           </>
         )}

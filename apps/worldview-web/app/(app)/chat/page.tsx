@@ -120,6 +120,18 @@ import { ActionConfirmModal } from "@/features/chat/components/ActionConfirmModa
 import { ChatContextRail } from "@/features/chat/components/ChatContextRail";
 // Round 1 Foundation: date-bucketed sidebar groups (Today / Yesterday / …).
 import { groupThreadsByDate } from "@/features/chat/lib/group-threads";
+// Round 2 Enhancement: suggested follow-up chips under the latest completed
+// assistant answer. FollowUpChips is the (pre-existing, Wave-K) pure
+// presenter; generateFollowUps is the new deterministic client-side
+// generator (S8's SSE stream emits no suggestions event today — verified in
+// useChatStream's demux — so the client synthesises them from the turn's
+// detected tickers, citation titles, and tool usage).
+import { FollowUpChips } from "@/features/chat/components/FollowUpChips";
+import { generateFollowUps } from "@/features/chat/lib/follow-ups";
+// Round 2 Enhancement: shared conversation ticker extractor — the same
+// detection the ChatContextRail uses, so the chips' entity substitutions
+// always agree with the cards the analyst sees in the rail.
+import { extractTickers } from "@/features/chat/lib/ticker-extract";
 // Round 1 Foundation (PRD-0089 Q-8): debug-only tool trace drawer. The
 // useDebugFlag gate means the drawer code path is completely inert (no
 // listeners, no render) unless ?debug=1 is in the URL.
@@ -138,6 +150,13 @@ export default function ChatPage() {
   // PLAN-0052 platform-QA round 5: router for the 401 re-auth CTA below.
   const router = useRouter();
   const entityIdFromUrl = searchParams.get("entity_id");
+  // Round 2 Enhancement: ?thread=<id> deep-link support. The command palette
+  // (Round 1) navigates to /chat?thread=<id> when the user picks a recent
+  // conversation — until now the param was silently ignored and the page
+  // landed on the empty state. Consumed by the effect below (after the
+  // useChatStream hook is initialised, because applying the param must abort
+  // any in-flight stream via resetForThread).
+  const threadIdFromUrl = searchParams.get("thread");
 
   // QA-iter1 MAJ-5: ?entity_id= carries a UUID, not a ticker. The earlier
   // draft displayed it verbatim, producing strings like "What's the latest
@@ -306,6 +325,33 @@ export default function ChatPage() {
   });
 
   // ── Effects ────────────────────────────────────────────────────────────────
+
+  // Round 2 Enhancement: consume the ?thread=<id> URL param.
+  //
+  // WHY a "last applied" ref (not a one-shot mount flag): the command palette
+  // can fire /chat?thread=B while the user is ALREADY on /chat?thread=A — the
+  // page doesn't remount, only searchParams changes, so the effect must
+  // re-apply for every NEW param value. But it must apply each value exactly
+  // ONCE: after the user manually selects a different thread in the sidebar,
+  // the stale ?thread= param is still in the URL, and re-applying it on the
+  // next render would yank the user back to the deep-linked thread (a
+  // fight-the-user loop). The ref records which param value was already
+  // honoured so subsequent renders leave the user's manual selection alone.
+  const appliedThreadParamRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (!threadIdFromUrl) return;
+    if (appliedThreadParamRef.current === threadIdFromUrl) return;
+    appliedThreadParamRef.current = threadIdFromUrl;
+    // No-op when the deep-linked thread is already active (e.g. the user
+    // refreshed the page and React re-ran the effect after hydration).
+    if (threadIdFromUrl === activeThreadId) return;
+    // Same sequence as handleSelectThread: abort any in-flight stream first
+    // so its tokens can't bleed into the deep-linked thread's log, then
+    // activate. The per-thread useQuery (keyed on activeThreadId) fetches the
+    // full message history automatically once the id is set.
+    resetForThread();
+    setActiveThreadId(threadIdFromUrl);
+  }, [threadIdFromUrl, activeThreadId, resetForThread]);
 
   // Sync activeThread messages into localMessages when the thread query succeeds.
   // STAYS AT PAGE LEVEL: this depends on TanStack Query data (`activeThread`)
@@ -689,6 +735,57 @@ export default function ChatPage() {
     // clicking a chip — avoids a two-step click-then-click-textarea flow.
     setTimeout(() => textareaRef.current?.focus(), 0);
   }, []);
+
+  // ── Round 2: suggested follow-up chips ────────────────────────────────────
+  //
+  // Shown under the LATEST assistant answer only, and only while the
+  // conversation is at rest. The "disappear once the next message is sent"
+  // requirement falls out of the derivation for free: the moment the user
+  // sends anything, the optimistic user bubble becomes the last log entry,
+  // the `last.role === "assistant"` guard fails, and the chips vanish — no
+  // separate dismissed-state bookkeeping to leak across threads.
+  //
+  // WHY client-side generation: S8's SSE stream has no suggestions event
+  // (verified against useChatStream's demux: token/citations/tool_call/
+  // tool_result/agent_iteration/pending_action/error/done). When the backend
+  // grows one, prefer it and keep generateFollowUps as the fallback.
+  const followUpSuggestions = useMemo<string[]>(() => {
+    // At-rest guards: never show "what next?" chips while an answer is still
+    // streaming (they'd suggest follow-ups to an answer the user can't read
+    // yet) or under an error banner (Retry is the only sensible next action).
+    if (isStreaming || chatError) return [];
+    const last = localMessages[localMessages.length - 1];
+    // Slash turns ("kind" in entry) render structured cards, not prose —
+    // template follow-ups make no sense under a /quote table.
+    if (!last || "kind" in last || last.role !== "assistant" || !last.content) {
+      return [];
+    }
+    return generateFollowUps({
+      answerText: last.content,
+      // Same extractor (and therefore the same blocklist + recency order) as
+      // the context rail, so chip entities always match the rail's cards.
+      tickers: extractTickers(
+        localMessages.filter((e) => !("kind" in e)) as Message[],
+      ).tickers,
+      citationTitles: (last.citations ?? []).map((c) => c.title),
+      // toolTrace survives stream completion precisely so post-hoc consumers
+      // like this one can see WHICH tools produced the settled answer.
+      toolsUsed: toolTrace.map((t) => t.tool),
+    });
+  }, [localMessages, isStreaming, chatError, toolTrace]);
+
+  /**
+   * handlePickFollowUp — chip click submits the suggestion as the next user
+   * message immediately (TradingView/Perplexity pattern: click = send, no
+   * intermediate "fill the composer and wait" step — the chip text is
+   * already a complete question).
+   */
+  const handlePickFollowUp = useCallback(
+    (suggestion: string) => {
+      void send(suggestion);
+    },
+    [send],
+  );
 
   // ── Derived state ──────────────────────────────────────────────────────────
 
@@ -1086,6 +1183,23 @@ export default function ChatPage() {
                   return <MessageBubble key={msg.message_id} message={msg} />;
                 })}
 
+                {/* Round 2: suggested follow-ups under the latest settled
+                    assistant answer. followUpSuggestions is [] while
+                    streaming / on error / when the last entry isn't an
+                    assistant message, so this renders nothing in all those
+                    states (FollowUpChips additionally requires >=2 chips).
+                    WHY pl-9: indents the chips to align with the assistant
+                    bubble text (28px avatar + 8px gap), reading as "options
+                    attached to this answer" rather than a free-floating row. */}
+                {followUpSuggestions.length > 0 && (
+                  <div className="pl-9">
+                    <FollowUpChips
+                      suggestions={followUpSuggestions}
+                      onPick={handlePickFollowUp}
+                    />
+                  </div>
+                )}
+
                 {/* In-flight SSE stream */}
                 {/* FR-5.5 (MED-012): always render StreamingBubble when streaming is
                     non-null. StreamingBubble already handles the "no text yet" case
@@ -1289,6 +1403,12 @@ export default function ChatPage() {
             isCollapsed={isContextRailCollapsed}
             onClose={() => setIsContextRailCollapsed(true)}
             onTickerClick={(ticker) => appendToInput(` $${ticker}`)}
+            // Round 2: clicking an Entity Overview mini-card pivots straight
+            // to the instrument detail page. The rail passes the RESOLVED
+            // ticker (canonical symbol from instrument search), and the
+            // /instruments/[ticker] route accepts raw tickers (same pattern
+            // as the screener's row click).
+            onCardClick={(ticker) => router.push(`/instruments/${ticker}`)}
           />
         </div>
       )}

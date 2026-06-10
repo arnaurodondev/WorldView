@@ -51,6 +51,10 @@ vi.mock("@/lib/gateway", () => ({
 
 import { ChatContextRail } from "../ChatContextRail";
 import type { Message } from "@/types/api";
+// WHY import useQuery here: the module is mocked above; importing the mocked
+// binding lets the Round-2 mini-card tests override its return value with
+// resolved overview data (vi.mocked(useQuery).mockReturnValue(...)).
+import { useQuery } from "@tanstack/react-query";
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -357,5 +361,146 @@ describe("ChatContextRail", () => {
     // Only one "$NVDA" chip should exist.
     const chips = screen.getAllByText("$NVDA");
     expect(chips).toHaveLength(1);
+  });
+
+  // ── Round 2: bare-token detection via the shared extractor ───────────────
+
+  it("detects bare (un-prefixed, un-bolded) tickers in plain prose", () => {
+    // WHY this matters: analysts type "compare NVDA with AMD", not "$NVDA".
+    // The pre-Round-2 inline regex only caught $-prefixed and **bold** tokens,
+    // so this everyday phrasing produced zero detections.
+    const messages = [
+      makeMessage({
+        role: "user",
+        content: "compare NVDA with AMD on margins",
+        citations: [],
+      }),
+    ];
+    render(<ChatContextRail {...DEFAULT_PROPS} messages={messages} />);
+    expect(screen.getByText("$NVDA")).toBeInTheDocument();
+    expect(screen.getByText("$AMD")).toBeInTheDocument();
+  });
+
+  it("blocklists noisy bare tokens (CEO, GDP) while keeping $-forced ones", () => {
+    const messages = [
+      makeMessage({
+        role: "user",
+        // "GDP" bare → blocked; "$GDP" explicit → counts ($ bypasses the list).
+        content: "the CEO talked GDP — but track $GDP futures",
+        citations: [],
+      }),
+    ];
+    render(<ChatContextRail {...DEFAULT_PROPS} messages={messages} />);
+    expect(screen.queryByText("$CEO")).not.toBeInTheDocument();
+    // Exactly one GDP chip — from the $-prefixed mention.
+    expect(screen.getAllByText("$GDP")).toHaveLength(1);
+  });
+});
+
+// ── Round 2: Entity Overview mini-cards (resolved overview data) ─────────────
+//
+// These tests override the module-level useQuery mock with RESOLVED overview
+// data so the mini-cards actually render their ticker / name / price / %chg /
+// P/E / market-cap cells. Overriding inside this block (which runs after the
+// suites above) cannot retro-affect the earlier tests — vi.clearAllMocks()
+// in beforeEach clears call history but each test here re-arms the value it
+// needs explicitly.
+
+const MOCK_OVERVIEW = {
+  instrument: {
+    instrument_id: "inst-1",
+    ticker: "AAPL",
+    name: "Apple Inc.",
+  },
+  quote: { price: 189.84, change_pct: 1.23, volume: 52_000_000 },
+  fundamentals: { pe_ratio: 29.4, market_cap: 2_900_000_000_000 },
+};
+
+describe("ChatContextRail — Entity Overview mini-cards (Round 2)", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    // All useQuery calls in this block resolve to the same overview — fine
+    // for assertions on card STRUCTURE (count, fields, click) where per-card
+    // identity is irrelevant.
+    vi.mocked(useQuery).mockReturnValue({
+      data: MOCK_OVERVIEW,
+      isLoading: false,
+    } as unknown as ReturnType<typeof useQuery>);
+  });
+
+  it("renders a mini-card with ticker, name, price, %chg and P/E from overview data", () => {
+    const messages = [
+      makeMessage({ content: "What's going on with $AAPL?", citations: [] }),
+    ];
+    render(<ChatContextRail {...DEFAULT_PROPS} messages={messages} />);
+    // Section header (count badge renders separately).
+    expect(screen.getByText(/entity overview/i)).toBeInTheDocument();
+    const card = screen.getByTestId("entity-mini-card");
+    // Resolved fields — ticker, company name, P/E ratio label, price digits.
+    expect(card.textContent).toContain("AAPL");
+    expect(card.textContent).toContain("Apple Inc.");
+    expect(card.textContent).toContain("P/E");
+    expect(card.textContent).toContain("189.84");
+    // Positive change renders with an explicit "+" sign (colour-coding is a
+    // CSS class — we assert the class hook rather than computed colour).
+    expect(card.querySelector(".text-positive")).not.toBeNull();
+  });
+
+  it("caps mini-cards at 8 most recent tickers and shows the overflow count", () => {
+    // 10 distinct $-tickers in one message → 8 cards + "+2 more mentioned".
+    const tickers = ["AAPL", "NVDA", "AMD", "TSM", "MSFT", "GOOG", "AMZN", "META", "TSLA", "INTC"];
+    const messages = [
+      makeMessage({
+        content: tickers.map((t) => `$${t}`).join(" "),
+        citations: [],
+      }),
+    ];
+    render(<ChatContextRail {...DEFAULT_PROPS} messages={messages} />);
+    expect(screen.getAllByTestId("entity-mini-card")).toHaveLength(8);
+    expect(screen.getByText("+2 more mentioned")).toBeInTheDocument();
+  });
+
+  it("fires onCardClick with the RESOLVED ticker when a card is clicked", () => {
+    const onCardClick = vi.fn();
+    const messages = [
+      // Detected token is "$NVDA" but the (mocked) resolver returns AAPL —
+      // the callback must receive the RESOLVED symbol, because that is what
+      // /instruments/[ticker] navigates with.
+      makeMessage({ content: "Look at $NVDA", citations: [] }),
+    ];
+    render(
+      <ChatContextRail
+        {...DEFAULT_PROPS}
+        messages={messages}
+        onCardClick={onCardClick}
+      />,
+    );
+    fireEvent.click(screen.getByTestId("entity-mini-card"));
+    expect(onCardClick).toHaveBeenCalledWith("AAPL");
+  });
+
+  it("renders cards as disabled (non-interactive) when onCardClick is absent", () => {
+    const messages = [
+      makeMessage({ content: "Look at $NVDA", citations: [] }),
+    ];
+    render(<ChatContextRail {...DEFAULT_PROPS} messages={messages} />);
+    // WHY disabled: a focusable button with no handler is a lying affordance.
+    expect(screen.getByTestId("entity-mini-card")).toBeDisabled();
+  });
+
+  it("does NOT render a card for tickers that fail to resolve", () => {
+    // Simulate the search-miss path: queryFn resolved to null (no instrument).
+    vi.mocked(useQuery).mockReturnValue({
+      data: null,
+      isLoading: false,
+    } as unknown as ReturnType<typeof useQuery>);
+    const messages = [
+      makeMessage({ content: "Look at $ZZZZZ", citations: [] }),
+    ];
+    render(<ChatContextRail {...DEFAULT_PROPS} messages={messages} />);
+    // The chip still shows (detection happened) …
+    expect(screen.getByText("$ZZZZZ")).toBeInTheDocument();
+    // … but no card renders — validation against the search endpoint failed.
+    expect(screen.queryByTestId("entity-mini-card")).not.toBeInTheDocument();
   });
 });
