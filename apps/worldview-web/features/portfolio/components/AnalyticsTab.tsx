@@ -52,10 +52,17 @@ import {
   ReferenceLine,
 } from "recharts";
 
+// R3 polish: BarChart3 is the category icon for the "insufficient analytics
+// data" EmptyState (attribution table) — gives an instant visual category.
+import { BarChart3 } from "lucide-react";
+
 import { cn } from "@/lib/utils";
 import { useApiClient } from "@/lib/api-client";
 import { qk } from "@/lib/query/keys";
 import { Skeleton } from "@/components/ui/skeleton";
+// R3 polish (DS §15.12): shared EmptyState primitive replaces the ad-hoc
+// bordered <div> empty states so every surface renders identically.
+import { EmptyState } from "@/components/primitives/EmptyState";
 import { AnalyticsPeriodSelector } from "./AnalyticsPeriodSelector";
 import { AnalyticsPeriodReturnsTable } from "./AnalyticsPeriodReturnsTable";
 // R2 sprint: the TWR chart replaces the old inline $-NAV PerformanceChart
@@ -115,7 +122,10 @@ function riskLookbackDays(period: string): number {
 function fmtPct(val: number | null | undefined, fractions = 2): string {
   if (val == null || Number.isNaN(val)) return "—";
   const pct = (val * 100).toFixed(fractions);
-  return val >= 0 ? `+${pct}%` : `${pct}%`;
+  // R3 polish: strictly-positive gets "+"; ZERO stays unsigned — same
+  // convention as signedPrice (PortfolioKPIStrip, R1): a flat value has no
+  // direction, so "+0.00%" would falsely imply a gain.
+  return val > 0 ? `+${pct}%` : `${pct}%`;
 }
 
 function fmtNum(val: number | null | undefined, fractions = 2): string {
@@ -146,7 +156,11 @@ interface RiskSidebarProps {
 function RiskSidebar({ portfolioId, period }: RiskSidebarProps) {
   const apiClient = useApiClient();
 
-  const { data: risk, isLoading: riskLoading } = useQuery<RiskMetricsResponse>({
+  const {
+    data: risk,
+    isLoading: riskLoading,
+    isPlaceholderData: riskIsStale,
+  } = useQuery<RiskMetricsResponse>({
     // R2 sprint (bug fix): the key previously omitted `period`, so changing
     // the period pill recomputed `lookback_days` in the queryFn but NEVER
     // refetched — the sidebar silently showed metrics for the previous
@@ -157,6 +171,13 @@ function RiskSidebar({ portfolioId, period }: RiskSidebarProps) {
       apiClient.getRiskMetrics(portfolioId, riskLookbackDays(period)),
     staleTime: 5 * 60_000,
     enabled: Boolean(portfolioId),
+    // R3 polish (transition quality): switching period changes the queryKey,
+    // which without placeholderData would unmount every populated tile back
+    // to a skeleton — a jarring flash for a 200ms refetch. Carrying the
+    // previous period's data forward keeps the tiles populated; the
+    // isPlaceholderData flag dims them (opacity below) so the user can see
+    // the numbers are momentarily from the prior window.
+    placeholderData: (prev) => prev,
   });
 
   // WHY perfLoading = false: no dedicated performance query for Calmar/WinRate yet.
@@ -263,7 +284,16 @@ function RiskSidebar({ portfolioId, period }: RiskSidebarProps) {
   return (
     // WHY border border-border rounded-[2px]: consistent with every panel in
     // the analytics tab — no shadows, no elevation cards (design spec §6).
-    <div className="border border-border rounded-[2px] h-full overflow-hidden">
+    // R3 polish: opacity-60 while isPlaceholderData — previous-period values
+    // stay visible (no skeleton flash) but visibly dimmed until the new
+    // period's metrics land. transition-opacity makes the swap subtle.
+    <div
+      data-stale={riskIsStale || undefined}
+      className={cn(
+        "border border-border rounded-[2px] h-full overflow-hidden transition-opacity",
+        riskIsStale && "opacity-60",
+      )}
+    >
       {tiles.map((tile) => (
         <div
           key={tile.label}
@@ -325,7 +355,7 @@ interface DrawdownChartProps {
 function DrawdownChart({ portfolioId, period }: DrawdownChartProps) {
   const apiClient = useApiClient();
 
-  const { data, isLoading, isError } = useQuery({
+  const { data, isLoading, isError, isPlaceholderData } = useQuery({
     queryKey: qk.portfolios.valueHistory(portfolioId, period),
     queryFn: () =>
       apiClient.getValueHistory(portfolioId, {
@@ -338,10 +368,18 @@ function DrawdownChart({ portfolioId, period }: DrawdownChartProps) {
       }),
     staleTime: 60_000,
     enabled: Boolean(portfolioId),
+    // R3 polish (transition quality): the queryKey is period-scoped, so a
+    // period change would otherwise unmount the populated chart back to a
+    // skeleton. Carrying the previous period's series forward keeps the
+    // chart drawn; isPlaceholderData dims it until the new window lands.
+    placeholderData: (prev) => prev,
   });
 
+  // isLoading is only true on the very FIRST fetch (placeholderData supplies
+  // data on subsequent period switches) — so the skeleton renders exactly
+  // once per portfolio, never on period changes.
   if (isLoading) {
-    return <Skeleton className="h-[100px] w-full" />;
+    return <Skeleton className="h-[100px] w-full" data-testid="drawdown-chart-skeleton" />;
   }
 
   if (isError) {
@@ -391,11 +429,25 @@ function DrawdownChart({ portfolioId, period }: DrawdownChartProps) {
     );
   };
 
+  // R3 polish (DS §15.11 color-token fix): this chart previously used
+  // `var(--negative, #ef4444)` / `var(--border, #333)` / `var(--muted-foreground, #888)`.
+  // Our tokens hold SPACE-SEPARATED HSL TRIPLES ("0 63% 62%"), which are
+  // INVALID as a bare color value — and because the variable IS defined, the
+  // hex fallback never applied either, so SVG fills silently mis-painted
+  // (the no-paint bug class from the R1 sparkline / instrument chips).
+  // hsl(var(--token)) is the canonical composition form for SVG/chart JS.
+  // WHY tickFontFamily: ADR-F-15 — axis tick labels are numeric data and
+  // must render in IBM Plex Mono like every other number on the surface.
   return (
     <div
       role="img"
       aria-label={`Portfolio drawdown chart for ${period} period`}
-      className="h-[100px] border border-border rounded-[2px]"
+      data-stale={isPlaceholderData || undefined}
+      className={cn(
+        "h-[100px] border border-border rounded-[2px] transition-opacity",
+        // Dim the stale (previous-period) series while the new one loads.
+        isPlaceholderData && "opacity-60",
+      )}
     >
       <ResponsiveContainer width="100%" height="100%">
         <AreaChart
@@ -404,14 +456,14 @@ function DrawdownChart({ portfolioId, period }: DrawdownChartProps) {
         >
           <XAxis
             dataKey="date"
-            tick={{ fontSize: 9, fill: "var(--muted-foreground, #888)" }}
+            tick={{ fontSize: 9, fill: "hsl(var(--muted-foreground))", fontFamily: "var(--font-mono)" }}
             tickLine={false}
             axisLine={false}
             interval={Math.max(0, Math.floor(ddSeries.length / 5) - 1)}
             tickFormatter={(v: string) => (typeof v === "string" ? v.slice(5) : v)}
           />
           <YAxis
-            tick={{ fontSize: 9, fill: "var(--muted-foreground, #888)" }}
+            tick={{ fontSize: 9, fill: "hsl(var(--muted-foreground))", fontFamily: "var(--font-mono)" }}
             tickLine={false}
             axisLine={false}
             width={40}
@@ -419,14 +471,14 @@ function DrawdownChart({ portfolioId, period }: DrawdownChartProps) {
           />
           <Tooltip content={<CustomTooltip />} />
           {/* Zero reference line — the "waterline" */}
-          <ReferenceLine y={0} stroke="var(--border, #333)" strokeWidth={1} />
+          <ReferenceLine y={0} stroke="hsl(var(--border))" strokeWidth={1} />
           {/* Drawdown area — red fill at 20% opacity (design spec §6) */}
           <Area
             type="monotone"
             dataKey="drawdown"
-            stroke="var(--negative, #ef4444)"
+            stroke="hsl(var(--negative))"
             strokeWidth={1.5}
-            fill="var(--negative, #ef4444)"
+            fill="hsl(var(--negative))"
             fillOpacity={0.2}
           />
         </AreaChart>
@@ -476,6 +528,10 @@ function AttributionTable({ portfolioId, period }: AttributionTableProps) {
       }),
     staleTime: 60_000,
     enabled: Boolean(portfolioId),
+    // R3 polish: keep the previous period's rows during a period switch
+    // instead of flashing back to the skeleton (same rationale as the
+    // charts above — the key is period-scoped).
+    placeholderData: (prev) => prev,
   });
 
   const isLoading = holdingsLoading || historyLoading;
@@ -526,9 +582,19 @@ function AttributionTable({ portfolioId, period }: AttributionTableProps) {
   }
 
   if (rows.length === 0) {
+    // R3 polish (DS §15.12): named "insufficient analytics data" state via
+    // the shared EmptyState primitive — copy lives in lib/copy/empty-states.ts
+    // so the attribution table and TWR chart speak with one voice.
     return (
-      <div className="border border-border rounded-[2px] p-3 text-[11px] text-muted-foreground font-mono">
-        Attribution requires ≥30 days of history.
+      <div
+        data-testid="attribution-empty"
+        className="border border-border rounded-[2px]"
+      >
+        <EmptyState
+          condition="empty-no-data"
+          copyKey="portfolio.analytics-insufficient"
+          icon={BarChart3}
+        />
       </div>
     );
   }
@@ -569,7 +635,8 @@ function AttributionTable({ portfolioId, period }: AttributionTableProps) {
                   row.contribBps >= 0 ? "text-positive" : "text-negative",
                 )}
               >
-                {row.contribBps >= 0 ? "+" : ""}
+                {/* R3 polish: zero stays unsigned (signedPrice convention). */}
+                {row.contribBps > 0 ? "+" : ""}
                 {row.contribBps.toFixed(0)}bps
               </td>
             </tr>
@@ -660,6 +727,10 @@ export function AnalyticsTab({ portfolioId }: AnalyticsTabProps) {
       apiClient.getRiskMetrics(portfolioId, riskLookbackDays(period)),
     staleTime: 5 * 60_000,
     enabled: Boolean(portfolioId),
+    // R3 polish: keep the previous as_of so the DataFreshnessPill doesn't
+    // blink out of existence on every period switch (the pill is layout-
+    // conditional — unmounting it shifts the controls row).
+    placeholderData: (prev) => prev,
   });
 
   return (
@@ -694,6 +765,9 @@ export function AnalyticsTab({ portfolioId }: AnalyticsTabProps) {
                 }
                 className={cn(
                   "text-[10px] font-mono px-1.5 py-0.5 rounded-[2px] border transition-colors",
+                  // R3 polish: keyboard parity with hover — focus-visible ring
+                  // (--ring = primary) so tabbing reaches the toggles visibly.
+                  "focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring",
                   active
                     ? "border-primary text-primary bg-primary/10"
                     : "border-border/60 text-muted-foreground hover:text-foreground hover:border-border",

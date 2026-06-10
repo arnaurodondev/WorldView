@@ -260,7 +260,10 @@ export function SectorAllocationDonut({
             <span
               data-testid="donut-total"
               title={`Total allocated value: $${totalValue.toLocaleString("en-US", { maximumFractionDigits: 0 })}`}
-              className="pointer-events-none absolute inset-0 flex items-center justify-center font-mono text-[9px] tabular-nums text-foreground"
+              // R3 polish (DS §15.9): the center total is a FINANCIAL VALUE —
+              // 10px minimum applies even in the most compact contexts (9px is
+              // reserved for non-data metadata like category labels/counts).
+              className="pointer-events-none absolute inset-0 flex items-center justify-center font-mono text-[10px] tabular-nums text-foreground"
             >
               {fmtCompactUsd(totalValue)}
             </span>
@@ -291,6 +294,13 @@ export function SectorAllocationDonut({
                   className={cn(
                     "flex h-[15px] min-w-0 items-center gap-1 rounded-[2px] px-0.5 text-left",
                     !isOther && "hover:bg-muted/40",
+                    // R3 polish (focus parity): the donut SLICES are SVG paths
+                    // recharts does not make focusable — the legend buttons
+                    // ARE the keyboard path to the sector filter, so they get
+                    // an explicit ring + the same bg tint hover applies.
+                    // ring-inset because the 15px rows sit flush in the grid.
+                    !isOther &&
+                      "focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-ring focus-visible:bg-muted/40",
                     isSelected && "bg-primary/10",
                   )}
                   style={{ opacity: emphasisFor(seg.sector) }}
@@ -313,11 +323,15 @@ export function SectorAllocationDonut({
                   >
                     {isOther ? `+${tail.length} more` : seg.sector}
                   </span>
-                  {/* ADR-F-15: all numerics font-mono tabular-nums. */}
-                  <span className="shrink-0 font-mono text-[9px] leading-none tabular-nums text-foreground">
+                  {/* ADR-F-15: all numerics font-mono tabular-nums.
+                      R3 polish (DS §15.9): weight% and $ value are FINANCIAL
+                      VALUES → 10px minimum. The sector NAME above stays 9px —
+                      category labels in chart legends are the documented
+                      exception. */}
+                  <span className="shrink-0 font-mono text-[10px] leading-none tabular-nums text-foreground">
                     {fmtWeight(seg.weight)}
                   </span>
-                  <span className="shrink-0 font-mono text-[9px] leading-none tabular-nums text-muted-foreground">
+                  <span className="shrink-0 font-mono text-[10px] leading-none tabular-nums text-muted-foreground">
                     {fmtCompactUsd(seg.market_value)}
                   </span>
                 </button>

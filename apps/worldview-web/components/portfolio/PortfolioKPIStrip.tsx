@@ -117,8 +117,13 @@ export interface PortfolioKPIStripProps {
  *
  * WHY zero stays unsigned ("$0.00", not "+$0.00"): a flat day has no
  * direction — signing it would falsely imply a gain.
+ *
+ * R3 polish: EXPORTED so every other portfolio surface that renders a
+ * dollar P&L (e.g. the watchlist CHG$ column) uses the exact same sign
+ * convention instead of re-implementing `v >= 0 ? "+" : ""` (which wrongly
+ * signs zero). Single source of truth for the signed-dollar display.
  */
-function signedPrice(value: number): string {
+export function signedPrice(value: number): string {
   return value > 0 ? `+${formatPrice(value)}` : formatPrice(value);
 }
 

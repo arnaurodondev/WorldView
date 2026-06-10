@@ -38,7 +38,11 @@ import { FixedSizeList } from "react-window";
 import { cn } from "@/lib/utils";
 import { formatPrice } from "@/lib/utils";
 import { exportToCsv, todayDateStamp } from "@/lib/csv-export";
-import { InlineEmptyState } from "@/components/data/InlineEmptyState";
+// R3 polish (DS §15.12): shared EmptyState primitive replaces InlineEmptyState
+// for the no-transactions state — icon + action slot match every surface.
+import { EmptyState } from "@/components/primitives/EmptyState";
+// ReceiptText = "trade ledger" category icon for the empty state.
+import { ReceiptText } from "lucide-react";
 import {
   rowTotal,
   typeBadgeClass,
@@ -313,26 +317,35 @@ export function TransactionsTable({
   // container keeps the message visually anchored to the panel chrome and
   // matches the spacing of empty states elsewhere (Alerts, Watchlists).
   if (transactions.length === 0) {
+    // R3 polish (DS §15.12): migrated onto the shared EmptyState primitive.
+    // Copy moved verbatim into lib/copy/empty-states.ts
+    // (portfolio.no-transactions-yet) — title keeps the exact
+    // "No transactions yet." string the older tests pin. The R1 CTA button
+    // is preserved through the `action` slot, still conditional on
+    // onAddFirst (hidden for the read-only ROOT aggregate).
     return (
-      // R1 sprint: flex-col so the CTA stacks under the message. The copy is
-      // unchanged (tests pin the "No transactions yet." prefix) — only the
-      // CTA button is new, and only when the parent supplied a handler.
-      <div className="flex flex-1 flex-col items-center justify-center gap-2 px-4 py-4">
-        <InlineEmptyState message="No transactions yet. Connect a brokerage to import activity, or use Add Position to record a trade manually." />
-        {onAddFirst && (
-          <button
-            type="button"
-            aria-label="Add your first transaction"
-            onClick={onAddFirst}
-            // WHY primary-bordered (matches the "New Portfolio" header CTA):
-            // this is the single most useful next step for an empty book, so
-            // it gets the accent treatment rather than the muted border the
-            // secondary filter buttons use.
-            className="h-6 px-2 text-[10px] font-mono uppercase tracking-[0.06em] border border-primary/60 text-primary rounded-[2px] hover:bg-primary/10 transition-colors"
-          >
-            + Add your first transaction
-          </button>
-        )}
+      <div className="flex flex-1 flex-col items-center justify-center px-4 py-4">
+        <EmptyState
+          condition="empty-cold-start"
+          copyKey="portfolio.no-transactions-yet"
+          icon={ReceiptText}
+          action={
+            onAddFirst ? (
+              <button
+                type="button"
+                aria-label="Add your first transaction"
+                onClick={onAddFirst}
+                // WHY primary-bordered (matches the "New Portfolio" header
+                // CTA): this is the single most useful next step for an empty
+                // book, so it gets the accent treatment. R3: focus-visible
+                // ring added for keyboard parity with hover.
+                className="mt-1 h-6 px-2 text-[10px] font-mono uppercase tracking-[0.06em] border border-primary/60 text-primary rounded-[2px] hover:bg-primary/10 transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+              >
+                + Add your first transaction
+              </button>
+            ) : undefined
+          }
+        />
       </div>
     );
   }

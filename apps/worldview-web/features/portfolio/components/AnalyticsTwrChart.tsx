@@ -45,9 +45,16 @@ import {
   ReferenceLine,
 } from "recharts";
 
+// R3 polish: LineChartIcon categorises the "insufficient data" EmptyState.
+import { LineChart as LineChartIcon } from "lucide-react";
+
+import { cn } from "@/lib/utils";
 import { useApiClient } from "@/lib/api-client";
 import { qk } from "@/lib/query/keys";
 import { Skeleton } from "@/components/ui/skeleton";
+// R3 polish (DS §15.12): shared EmptyState primitive for the named
+// "insufficient analytics data" state (was a hand-rolled bordered div).
+import { EmptyState } from "@/components/primitives/EmptyState";
 import {
   cumulativeReturnSeries,
   alignBenchmarkToDates,
@@ -93,11 +100,13 @@ interface ChartRow {
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
-/** "+4.21%" / "-1.30%" with sign — fraction in, display string out. */
+/** "+4.21%" / "-1.30%" with sign — fraction in, display string out.
+ *  R3 polish: ZERO stays unsigned ("0.00%") — signedPrice convention (R1):
+ *  a flat return has no direction, "+0.00%" would falsely imply a gain. */
 function fmtPct(v: number | null | undefined): string {
   if (v == null || Number.isNaN(v)) return "—";
   const pct = (v * 100).toFixed(2);
-  return v >= 0 ? `+${pct}%` : `${pct}%`;
+  return v > 0 ? `+${pct}%` : `${pct}%`;
 }
 
 /**
@@ -156,7 +165,7 @@ export function AnalyticsTwrChart({
   const apiClient = useApiClient();
 
   // Same query key as DrawdownChart / risk panel → one fetch, three readers.
-  const { data, isLoading, isError } = useQuery({
+  const { data, isLoading, isError, isPlaceholderData } = useQuery({
     queryKey: qk.portfolios.valueHistory(portfolioId, period),
     queryFn: () =>
       apiClient.getValueHistory(portfolioId, {
@@ -167,8 +176,16 @@ export function AnalyticsTwrChart({
       }),
     staleTime: 60_000,
     enabled: Boolean(portfolioId),
+    // R3 polish (transition quality): the queryKey is period-scoped, so
+    // without this a period-pill click would unmount the populated chart
+    // back to a skeleton for the duration of the refetch (a visible flash).
+    // placeholderData carries the previous period's series forward; the
+    // isPlaceholderData flag drives the subtle stale-dim below.
+    placeholderData: (prev) => prev,
   });
 
+  // First-ever fetch only — period switches keep the previous chart drawn
+  // (placeholderData above), so this skeleton can never flash mid-session.
   if (isLoading) {
     return <Skeleton className="h-[180px] w-full" data-testid="twr-chart-skeleton" />;
   }
@@ -192,14 +209,19 @@ export function AnalyticsTwrChart({
   if (rows.length === 0) {
     // Named empty state — value-history needs snapshots before a return
     // series exists. NEVER draw a fabricated flat line.
+    // R3 polish (DS §15.12): migrated onto the shared EmptyState primitive;
+    // copy lives in lib/copy/empty-states.ts (portfolio.analytics-insufficient)
+    // so this chart + the attribution table share one audited message.
     return (
       <div
         data-testid="twr-chart-empty"
         className="h-[180px] flex items-center justify-center border border-border rounded-[2px]"
       >
-        <p className="text-[11px] text-muted-foreground font-mono">
-          Not enough data — returns appear after ~2 daily snapshots.
-        </p>
+        <EmptyState
+          condition="empty-no-data"
+          copyKey="portfolio.analytics-insufficient"
+          icon={LineChartIcon}
+        />
       </div>
     );
   }
@@ -240,14 +262,25 @@ export function AnalyticsTwrChart({
     <div
       role="img"
       aria-label={`Portfolio cumulative return for ${period} period${benchmarks.SPY ? " with SPY overlay" : ""}${benchmarks.QQQ ? " with QQQ overlay" : ""}`}
-      className="h-[180px] border border-border rounded-[2px]"
+      // R3 polish: while placeholderData shows the PREVIOUS period's series,
+      // dim the chart (opacity-60 + transition) as the subtle "updating"
+      // affordance — stale data beats an unmount flash, but it must be
+      // visually distinguishable from settled data.
+      data-stale={isPlaceholderData || undefined}
+      className={cn(
+        "h-[180px] border border-border rounded-[2px] transition-opacity",
+        isPlaceholderData && "opacity-60",
+      )}
       data-testid="twr-chart"
     >
       <ResponsiveContainer width="100%" height="100%">
         <LineChart data={rows} margin={{ top: 8, right: 8, bottom: 8, left: 8 }}>
           <XAxis
             dataKey="date"
-            tick={{ fontSize: 9, fill: "hsl(var(--muted-foreground))" }}
+            // R3 polish (ADR-F-15): axis tick labels are numeric data —
+            // font-mono via the CSS variable so they match every other
+            // number on the page (recharts inlines tick style as SVG attrs).
+            tick={{ fontSize: 9, fill: "hsl(var(--muted-foreground))", fontFamily: "var(--font-mono)" }}
             tickLine={false}
             axisLine={false}
             // ≤5 x-ticks (design spec §4.3) — same density as the old chart.
@@ -256,7 +289,7 @@ export function AnalyticsTwrChart({
             tickFormatter={(v: string) => (typeof v === "string" ? v.slice(5) : v)}
           />
           <YAxis
-            tick={{ fontSize: 9, fill: "hsl(var(--muted-foreground))" }}
+            tick={{ fontSize: 9, fill: "hsl(var(--muted-foreground))", fontFamily: "var(--font-mono)" }}
             tickLine={false}
             axisLine={false}
             width={44}

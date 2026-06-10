@@ -70,7 +70,9 @@ const PERIODS = [
 function fmtReturn(v: number | null): string {
   if (v == null) return "—";
   const pct = (v * 100).toFixed(2);
-  return v >= 0 ? `+${pct}%` : `${pct}%`;
+  // R3 polish: ZERO stays unsigned ("0.00%") — signedPrice convention (R1);
+  // a flat period has no direction so "+0.00%" would mislead.
+  return v > 0 ? `+${pct}%` : `${pct}%`;
 }
 
 function returnColorClass(v: number | null): string {

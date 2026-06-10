@@ -15,7 +15,11 @@
 "use client";
 // WHY "use client": renders WatchlistMemberRow which uses client-side useState.
 
-import { InlineEmptyState } from "@/components/data/InlineEmptyState";
+// R3 polish (DS §15.12): shared EmptyState primitive replaces
+// InlineEmptyState for the no-tickers state — icon gives instant category.
+import { EmptyState } from "@/components/primitives/EmptyState";
+// ListPlus = "add to a list" category icon — points at the AddSymbolBar above.
+import { ListPlus } from "lucide-react";
 import type { Watchlist } from "@/types/api";
 import { WatchlistMemberRow } from "./WatchlistMemberRow";
 
@@ -41,16 +45,24 @@ export function WatchlistTable({
   const members = watchlist.members;
 
   if (members.length === 0) {
-    // WHY centered wrapper (B-5): InlineEmptyState rendered raw collapsed to a
-    // tiny inline element at the top of a tall container, leaving most of the
+    // WHY centered wrapper (B-5): an inline empty state rendered raw collapsed
+    // to a tiny element at the top of a tall container, leaving most of the
     // tab pane visually empty. py-8 + flex-centering puts the message in the
     // optical center of the empty area.
+    // R3 polish (DS §15.12): migrated onto the shared EmptyState primitive —
+    // named "no watchlist tickers" state; copy lives in
+    // lib/copy/empty-states.ts (portfolio.watchlist-no-tickers) and still
+    // points at the AddSymbolBar rendered directly above this table.
     return (
-      <div className="flex flex-1 items-center justify-center py-8">
-        {/* R1 sprint copy: leads with the value proposition ("track them
-            here") and keeps the actionable hint pointing at the AddSymbolBar
-            rendered directly above this table. */}
-        <InlineEmptyState message="Add tickers to track them here — search above to add your first symbol." />
+      <div
+        data-testid="watchlist-empty-state"
+        className="flex flex-1 items-center justify-center py-8"
+      >
+        <EmptyState
+          condition="empty-cold-start"
+          copyKey="portfolio.watchlist-no-tickers"
+          icon={ListPlus}
+        />
       </div>
     );
   }

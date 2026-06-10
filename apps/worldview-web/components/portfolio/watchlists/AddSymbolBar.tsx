@@ -166,7 +166,9 @@ export function AddSymbolBar({ watchlistId, onAdded }: AddSymbolBarProps) {
           <button
             onClick={handleClear}
             aria-label="Clear search"
-            className="shrink-0 text-muted-foreground hover:text-foreground"
+            // R3 polish: focus-visible ring — keyboard parity with hover
+            // (the clear affordance was mouse-only discoverable before).
+            className="shrink-0 rounded-[2px] text-muted-foreground hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
           >
             <X className="h-3 w-3" />
           </button>
@@ -200,7 +202,11 @@ export function AddSymbolBar({ watchlistId, onAdded }: AddSymbolBarProps) {
                 onClick={() => addMutation.mutate(result.entity_id)}
                 className={cn(
                   "flex w-full items-center gap-2 px-2 py-1.5 text-left transition-colors",
+                  // R3 polish: focus-visible ring-inset added on top of the
+                  // existing focus bg-tint so keyboard users see a crisp
+                  // outline on the focused option, not just a subtle tint.
                   "hover:bg-muted/50 focus:bg-muted/50 focus:outline-none",
+                  "focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-ring",
                   addMutation.isPending && "opacity-50 cursor-not-allowed",
                 )}
               >

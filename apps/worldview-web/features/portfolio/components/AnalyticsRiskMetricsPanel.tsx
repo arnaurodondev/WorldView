@@ -62,10 +62,11 @@ export interface AnalyticsRiskMetricsPanelProps {
 
 const INSUFFICIENT_TOOLTIP = `Insufficient data — needs ≥ ${MIN_OBSERVATIONS} daily observations in the selected period.`;
 
-/** Signed percent for fractions ("-12.34%"). */
+/** Signed percent for fractions ("-12.34%").
+ *  R3 polish: ZERO stays unsigned — signedPrice convention (R1). */
 function fmtPct(v: number): string {
   const pct = (v * 100).toFixed(2);
-  return v >= 0 ? `+${pct}%` : `${pct}%`;
+  return v > 0 ? `+${pct}%` : `${pct}%`;
 }
 
 // ── Component ─────────────────────────────────────────────────────────────────
@@ -80,7 +81,7 @@ export function AnalyticsRiskMetricsPanel({
 
   // Identical query key to AnalyticsTwrChart/DrawdownChart — cache hit, no
   // extra network round-trip for this panel.
-  const { data, isLoading } = useQuery({
+  const { data, isLoading, isPlaceholderData } = useQuery({
     queryKey: qk.portfolios.valueHistory(portfolioId, period),
     queryFn: () =>
       apiClient.getValueHistory(portfolioId, {
@@ -89,6 +90,11 @@ export function AnalyticsRiskMetricsPanel({
       }),
     staleTime: 60_000,
     enabled: Boolean(portfolioId),
+    // R3 polish (transition quality): period switches keep the previous
+    // window's metrics rendered (dimmed below) instead of flashing each
+    // tile back to a skeleton — matches the TWR/drawdown chart behaviour
+    // so the whole analytics column transitions as one.
+    placeholderData: (prev) => prev,
   });
 
   const points: DatedValue[] = (data?.points ?? []).map((p) => ({
@@ -176,7 +182,12 @@ export function AnalyticsRiskMetricsPanel({
   return (
     <div
       data-testid="client-risk-panel"
-      className="border border-border rounded-[2px] overflow-hidden"
+      data-stale={isPlaceholderData || undefined}
+      className={cn(
+        "border border-border rounded-[2px] overflow-hidden transition-opacity",
+        // R3 polish: dim while showing the previous period's numbers.
+        isPlaceholderData && "opacity-60",
+      )}
     >
       {/* Header — names the window + the rf=0 assumption explicitly so the
           panel can never be mistaken for the lookback-window RiskSidebar. */}

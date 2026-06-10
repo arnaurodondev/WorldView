@@ -217,4 +217,13 @@ describe("HoldingsTab sector filter (R2)", () => {
     // The chip row is still present so the user can clear the filter.
     expect(screen.getByTestId("sector-filter-chip")).toBeInTheDocument();
   });
+
+  // R3 polish: the no-match state gained an inline "Clear filter" action so
+  // the exit path is one keyboard-reachable click inside the state itself
+  // (EmptyState action-slot parity — DS §15.12), not only the chip above.
+  it("no-match state exposes a Clear filter action wired to the page callback", () => {
+    const { onClearSectorFilter } = renderTab("Utilities");
+    fireEvent.click(screen.getByTestId("sector-filter-no-match-clear"));
+    expect(onClearSectorFilter).toHaveBeenCalledOnce();
+  });
 });

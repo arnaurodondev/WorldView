@@ -37,7 +37,12 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Plus } from "lucide-react";
 import { createGateway } from "@/lib/gateway";
 import { useAuth } from "@/hooks/useAuth";
-import { InlineEmptyState } from "@/components/data/InlineEmptyState";
+// R3 polish (DS §15.12): shared EmptyState primitive for the no-watchlists
+// state (was InlineEmptyState + a detached Button below it).
+import { EmptyState } from "@/components/primitives/EmptyState";
+// R3 polish: shape-matched loading skeletons replace the bare
+// "Loading watchlists…" text line (no blank panes / text-only loaders).
+import { Skeleton } from "@/components/ui/skeleton";
 import { Button } from "@/components/ui/button";
 import type { Watchlist, WatchlistMember } from "@/types/api";
 import { WatchlistTabBar } from "./watchlists/WatchlistTabBar";
@@ -229,9 +234,33 @@ export function WatchlistsTabPanel({
 
   // ── Early returns AFTER all hooks ────────────────────────────────────────
   if (isLoading) {
+    // R3 polish: shape-matched skeleton mirroring the populated layout —
+    // tab bar (h-8 pills), AddSymbolBar (h-7 input row), table header +
+    // 22px data rows. The previous "Loading watchlists…" text line caused a
+    // visible layout jump when the real chrome mounted; matching the shapes
+    // keeps the panel height stable while data resolves.
     return (
-      <div className="flex items-center justify-center h-24 text-[11px] text-muted-foreground">
-        Loading watchlists…
+      <div
+        data-testid="watchlists-skeleton"
+        className="flex flex-col bg-background"
+      >
+        {/* Tab bar: two tab-shaped pills + the "+" affordance slot. */}
+        <div className="flex h-8 items-center gap-1 border-b border-border px-2">
+          <Skeleton className="h-5 w-24" />
+          <Skeleton className="h-5 w-20" />
+          <Skeleton className="h-5 w-5" />
+        </div>
+        {/* AddSymbolBar: single full-width input row. */}
+        <div className="border-b border-border px-2 py-1.5">
+          <Skeleton className="h-7 w-full" />
+        </div>
+        {/* Table: header row + 6 × 22px data-row bars (matches the
+            WatchlistMemberRow h-[22px] height token — F-P-020 rationale). */}
+        <div className="space-y-px p-0">
+          {Array.from({ length: 7 }).map((_, i) => (
+            <Skeleton key={i} className="h-[22px] w-full" />
+          ))}
+        </div>
       </div>
     );
   }
@@ -239,22 +268,34 @@ export function WatchlistsTabPanel({
   if (watchlists.length === 0 && !creating) {
     // T-B-2-05: empty-state guard rendered BEFORE the tab bar so the panel
     // doesn't show a bare set of tab chrome with no content underneath
-    // (the "void above tabs" bug, F-P-008). Centred flex column keeps the
-    // message + CTA visually balanced inside the panel.
+    // (the "void above tabs" bug, F-P-008).
+    // R3 polish (DS §15.12): migrated onto the shared EmptyState primitive —
+    // the create CTA moves into the `action` slot so message + button render
+    // as one unit (copy: portfolio.no-watchlists in lib/copy/empty-states.ts;
+    // title keeps the "No watchlists yet." string).
     return (
-      <div className="flex flex-col items-center justify-center gap-2 py-4">
-        <InlineEmptyState message="No watchlists yet." />
-        {/* WHY shadcn Button (not raw <button>): matches the rest of the app
-            so size + spacing + focus ring stay consistent with portfolio CTAs. */}
-        <Button
-          size="sm"
-          variant="outline"
-          onClick={() => setCreating(true)}
-          className="gap-1"
-        >
-          <Plus className="h-3 w-3" aria-hidden="true" />
-          Create watchlist
-        </Button>
+      <div
+        data-testid="watchlists-empty-state"
+        className="flex flex-col items-center justify-center py-4"
+      >
+        <EmptyState
+          condition="empty-cold-start"
+          copyKey="portfolio.no-watchlists"
+          icon={Plus}
+          action={
+            // WHY shadcn Button (not raw <button>): matches the rest of the
+            // app so size + spacing + focus ring stay consistent.
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => setCreating(true)}
+              className="mt-1 gap-1"
+            >
+              <Plus className="h-3 w-3" aria-hidden="true" />
+              Create watchlist
+            </Button>
+          }
+        />
       </div>
     );
   }
@@ -299,8 +340,13 @@ export function WatchlistsTabPanel({
           and the table would flash the "Search above…" empty state. Showing a
           subtle loading row instead avoids the misleading flicker. */}
       {activeWatchlist && membersLoading && !activeMembers ? (
-        <div className="flex items-center justify-center h-12 text-[11px] text-muted-foreground">
-          Loading members…
+        // R3 polish: 22px row-bar skeletons (matching WatchlistMemberRow's
+        // h-[22px]) instead of the "Loading members…" text line — no layout
+        // shift when the real rows land.
+        <div data-testid="watchlist-members-skeleton" className="space-y-px">
+          {Array.from({ length: 4 }).map((_, i) => (
+            <Skeleton key={i} className="h-[22px] w-full" />
+          ))}
         </div>
       ) : (
         activeWatchlist && (

@@ -50,7 +50,8 @@ import dynamic from "next/dynamic";
 // wires the standalone /portfolio/analytics route into the portfolio nav.
 import Link from "next/link";
 // R1 sprint: Plus icon for the prominent empty-portfolio CTA.
-import { Plus } from "lucide-react";
+// R3 polish: FolderPlus is the category icon for the no-portfolio EmptyState.
+import { Plus, FolderPlus } from "lucide-react";
 
 import { useAuth } from "@/hooks/useAuth";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
@@ -72,6 +73,9 @@ import { ConnectBrokerageModal } from "@/components/brokerage/ConnectBrokerageMo
 
 // ── Terminal primitives ─────────────────────────────────────────────────────
 import { InlineEmptyState } from "@/components/data/InlineEmptyState";
+// R3 polish (DS §15.12): shared EmptyState primitive — the no-portfolio
+// branch renders through it (copy: portfolio.no-portfolio in the registry).
+import { EmptyState } from "@/components/primitives/EmptyState";
 
 // ── Lazy-loaded portfolio dialogs ───────────────────────────────────────────
 // WHY next/dynamic for dialogs: the three dialogs each pull in react-hook-form,
@@ -248,16 +252,40 @@ export default function PortfolioPage() {
           <Skeleton className="h-7 w-36" />
         </div>
         {/* F-P-020 (PLAN-0051 W6): KPI strip skeleton mirrors the populated
-            strip's shape exactly — same 7 tiles, same `divide-x` separator,
-            same px-3/py-1.5 padding. Any mismatch causes layout shift when
-            the data resolves. */}
-        <div className="flex divide-x divide-border border-b border-border">
-          {Array.from({ length: 7 }).map((_, i) => (
-            <div key={i} className="flex-1 px-3 py-1.5">
-              <Skeleton className="h-3 w-16 mb-1" />
-              <Skeleton className="h-4 w-20" />
+            strip's shape exactly — same `divide-x` separator, same
+            px-3/py-1.5 padding. Any mismatch causes layout shift when
+            the data resolves.
+            R3 polish: tile count corrected 7 → 8 (PRD-0089 W2 §4.2 added
+            CASH + BUYING PWR and removed # Positions — the skeleton had
+            drifted one tile short of the real strip, so the 8th tile popped
+            in on data arrival). The donut placeholder beside it mirrors the
+            R2 header band (hidden below xl, exactly like the real donut). */}
+        <div className="flex items-stretch">
+          <div
+            data-testid="kpi-strip-skeleton"
+            className="flex min-w-0 flex-1 divide-x divide-border border-b border-border"
+          >
+            {Array.from({ length: 8 }).map((_, i) => (
+              <div key={i} className="flex-1 px-3 py-1.5">
+                <Skeleton className="h-3 w-16 mb-1" />
+                <Skeleton className="h-4 w-20" />
+              </div>
+            ))}
+          </div>
+          {/* Donut skeleton: circle + 3 legend lines — same shape the
+              populated SectorAllocationDonut renders while its own query
+              loads, so the whole header band paints consistently. */}
+          <div
+            data-testid="donut-skeleton"
+            className="hidden xl:flex w-[400px] shrink-0 items-center gap-2 border-l border-b border-border px-2 py-1"
+          >
+            <Skeleton className="size-[56px] rounded-full shrink-0" />
+            <div className="flex-1 space-y-1">
+              <Skeleton className="h-3 w-full" />
+              <Skeleton className="h-3 w-3/4" />
+              <Skeleton className="h-3 w-2/3" />
             </div>
-          ))}
+          </div>
         </div>
         <Skeleton className="h-9 w-80" />
         {/* F-P-020: row skeletons use h-[22px] to match the real holdings
@@ -296,28 +324,35 @@ export default function PortfolioPage() {
         className="flex h-full min-h-0 flex-col items-center justify-center gap-3 bg-background p-3"
         data-testid="empty-portfolio-state"
       >
-        {/* Named heading — terminal-style ALL CAPS label + readable title. */}
+        {/* Named heading — terminal-style ALL CAPS eyebrow above the shared
+            EmptyState. R3 polish (DS §15.12): the title/body now resolve from
+            lib/copy/empty-states.ts (portfolio.no-portfolio — title is the
+            exact "Select or create a portfolio" string the tests pin) and the
+            prominent CTA rides the primitive's `action` slot, so this state
+            renders structurally identically to every other empty surface. */}
         <span className="font-mono text-[10px] uppercase tracking-[0.08em] text-muted-foreground">
           Portfolio
         </span>
-        <h2 className="text-[14px] font-medium text-foreground">
-          Select or create a portfolio
-        </h2>
-        <p className="max-w-md text-center text-[11px] text-muted-foreground">
-          Your portfolio is the P&amp;L centre of Worldview — holdings, live
-          quotes, transactions and analytics all hang off it. Create your
-          first portfolio to start tracking positions.
-        </p>
-        {/* Prominent CTA — primary-bordered, larger than the header buttons
-            because it is the ONLY meaningful action on this screen. */}
-        <button
-          aria-label="Create your first portfolio"
-          onClick={() => setCreatePortfolioOpen(true)}
-          className="mt-1 flex h-8 items-center gap-1.5 rounded-[2px] border border-primary bg-primary/10 px-4 font-mono text-[11px] uppercase tracking-[0.06em] text-primary transition-colors hover:bg-primary/20"
-        >
-          <Plus className="h-3.5 w-3.5" strokeWidth={1.5} />
-          Create portfolio
-        </button>
+        <div className="max-w-md">
+          <EmptyState
+            condition="empty-cold-start"
+            copyKey="portfolio.no-portfolio"
+            icon={FolderPlus}
+            action={
+              // Prominent CTA — primary-bordered, larger than the header
+              // buttons because it is the ONLY meaningful action here.
+              // R3: focus-visible ring for keyboard parity with hover.
+              <button
+                aria-label="Create your first portfolio"
+                onClick={() => setCreatePortfolioOpen(true)}
+                className="mt-1 flex h-8 items-center gap-1.5 rounded-[2px] border border-primary bg-primary/10 px-4 font-mono text-[11px] uppercase tracking-[0.06em] text-primary transition-colors hover:bg-primary/20 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+              >
+                <Plus className="h-3.5 w-3.5" strokeWidth={1.5} />
+                Create portfolio
+              </button>
+            }
+          />
+        </div>
 
         {/* The create dialog must be mounted inside this early-return branch —
             the main render path below is never reached while the portfolio

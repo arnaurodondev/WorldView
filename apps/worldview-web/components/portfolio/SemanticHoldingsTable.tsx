@@ -35,7 +35,11 @@ import { useState, useEffect, useMemo, useCallback, useRef } from "react";
 import { useRouter, useSearchParams, usePathname } from "next/navigation";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
-import { InlineEmptyState } from "@/components/data/InlineEmptyState";
+// R3 polish (DS §15.12): shared EmptyState primitive replaces InlineEmptyState
+// for the no-holdings state — icon + centred layout match every other surface.
+import { EmptyState } from "@/components/primitives/EmptyState";
+// Wallet = "your book" category icon for the no-holdings empty state.
+import { Wallet } from "lucide-react";
 import { AgGridBase } from "@/components/ui/ag-grid/AgGridBase";
 import { holdingsAgColumns } from "./ag-holdings-columns";
 import { useContextMenuActions } from "@/hooks/useContextMenuActions";
@@ -284,8 +288,17 @@ export function SemanticHoldingsTable({
   // ── Empty state guards ────────────────────────────────────────────────────
 
   if (holdings.length === 0) {
+    // R3 polish (DS §15.12): named "no holdings" state via the shared
+    // EmptyState primitive. Copy lives in lib/copy/empty-states.ts
+    // (portfolio.no-holdings-table) — title keeps the exact "No holdings
+    // yet." string older tests pin, so this is a layout/registry migration
+    // with zero copy drift.
     return (
-      <InlineEmptyState message="No holdings yet. Connect a brokerage or use Add Position to start tracking your book." />
+      <EmptyState
+        condition="empty-cold-start"
+        copyKey="portfolio.no-holdings-table"
+        icon={Wallet}
+      />
     );
   }
 

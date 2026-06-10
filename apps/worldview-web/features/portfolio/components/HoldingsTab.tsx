@@ -373,7 +373,9 @@ export function HoldingsTab({
             onClick={() => onClearSectorFilter?.()}
             title={`Showing only ${sectorFilter} holdings — click to clear`}
             aria-label={`Clear ${sectorFilter} sector filter`}
-            className="flex items-center gap-1 rounded-[2px] border border-primary bg-primary/10 px-1.5 py-0 font-mono text-[10px] text-primary hover:bg-primary/20"
+            // R3 polish: focus-visible ring — the chip is the primary
+            // keyboard path to clearing the filter.
+            className="flex items-center gap-1 rounded-[2px] border border-primary bg-primary/10 px-1.5 py-0 font-mono text-[10px] text-primary hover:bg-primary/20 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
           >
             {sectorFilter}
             <X className="h-2.5 w-2.5" strokeWidth={1.5} />
@@ -410,14 +412,34 @@ export function HoldingsTab({
             empty state (the user HAS holdings; the filter excluded them).
             Named state + the chip row above give the user the exit path. */}
         {sectorFilter && visibleHoldings.length === 0 && enrichedHoldings.length > 0 ? (
+          // R3 polish: this stays a LOCAL named state (not the shared
+          // EmptyState primitive) because the copy interpolates the live
+          // sector name — registry copy must be static (DS §15.12: "surfaces
+          // needing interpolation keep a local string"). The layout mirrors
+          // the primitive (centred column, title-ish line + action) and an
+          // explicit "Clear filter" action button is added so the exit path
+          // is one keyboard-reachable click, not just the chip row above.
           <div
             data-testid="sector-filter-no-match"
-            className="flex h-full items-center justify-center"
+            role="status"
+            className="flex h-full flex-col items-center justify-center gap-2"
           >
             <span className="font-mono text-[11px] text-muted-foreground">
               No holdings in &ldquo;{sectorFilter}&rdquo; — clear the sector
               filter above to see all positions.
             </span>
+            {onClearSectorFilter && (
+              <button
+                type="button"
+                data-testid="sector-filter-no-match-clear"
+                onClick={onClearSectorFilter}
+                aria-label="Clear sector filter"
+                className="flex h-6 items-center gap-1 rounded-[2px] border border-primary/60 px-2 font-mono text-[10px] uppercase tracking-[0.06em] text-primary transition-colors hover:bg-primary/10 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+              >
+                <X className="h-2.5 w-2.5" strokeWidth={1.5} />
+                Clear filter
+              </button>
+            )}
           </div>
         ) : (
         <SemanticHoldingsTable
@@ -475,7 +497,9 @@ export function HoldingsTab({
                   selectedHolding?.instrument_id === h.instrument_id ? null : h,
                 )
               }
-              className={`text-[10px] font-mono px-1.5 py-0.5 rounded-[2px] border transition-colors ${
+              // R3 polish: focus-visible ring appended so the detail pills
+              // are keyboard-discoverable (hover-only affordance before).
+              className={`text-[10px] font-mono px-1.5 py-0.5 rounded-[2px] border transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring ${
                 selectedHolding?.instrument_id === h.instrument_id
                   ? "border-primary text-primary bg-primary/10"
                   : "border-border/60 text-muted-foreground hover:text-foreground hover:border-border"

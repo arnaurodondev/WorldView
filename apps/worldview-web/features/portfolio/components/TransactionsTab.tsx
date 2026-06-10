@@ -116,7 +116,8 @@ export function TransactionsTab({
             <button
               aria-label="Connect a new brokerage"
               onClick={onConnect}
-              className="h-6 px-2 text-[10px] font-mono uppercase tracking-[0.06em] border border-primary/60 text-primary rounded-[2px] hover:bg-primary/10 transition-colors shrink-0"
+              // R3 polish: focus-visible ring for keyboard parity with hover.
+              className="h-6 px-2 text-[10px] font-mono uppercase tracking-[0.06em] border border-primary/60 text-primary rounded-[2px] hover:bg-primary/10 transition-colors shrink-0 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
             >
               + Connect
             </button>
@@ -177,7 +178,9 @@ export function TransactionsTab({
             aria-label="Previous transactions page"
             disabled={offset === 0}
             onClick={() => onTxOffsetChange(Math.max(0, offset - limit))}
-            className="h-5 px-2 font-mono text-[10px] uppercase tracking-[0.06em] border border-border rounded-[2px] text-muted-foreground transition-colors enabled:hover:text-foreground enabled:hover:border-foreground disabled:opacity-40 disabled:cursor-not-allowed"
+            // R3 polish: focus-visible ring — pager buttons are prime
+            // keyboard targets (page through history without the mouse).
+            className="h-5 px-2 font-mono text-[10px] uppercase tracking-[0.06em] border border-border rounded-[2px] text-muted-foreground transition-colors enabled:hover:text-foreground enabled:hover:border-foreground disabled:opacity-40 disabled:cursor-not-allowed focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
           >
             ‹ Prev
           </button>
@@ -186,7 +189,8 @@ export function TransactionsTab({
             aria-label="Next transactions page"
             disabled={rangeEnd >= total}
             onClick={() => onTxOffsetChange(offset + limit)}
-            className="h-5 px-2 font-mono text-[10px] uppercase tracking-[0.06em] border border-border rounded-[2px] text-muted-foreground transition-colors enabled:hover:text-foreground enabled:hover:border-foreground disabled:opacity-40 disabled:cursor-not-allowed"
+            // R3 polish: focus-visible ring (see Prev button above).
+            className="h-5 px-2 font-mono text-[10px] uppercase tracking-[0.06em] border border-border rounded-[2px] text-muted-foreground transition-colors enabled:hover:text-foreground enabled:hover:border-foreground disabled:opacity-40 disabled:cursor-not-allowed focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
           >
             Next ›
           </button>

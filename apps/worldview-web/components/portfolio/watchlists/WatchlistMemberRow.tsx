@@ -19,6 +19,10 @@ import { useState, useEffect } from "react";
 import { Loader2, Trash2 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { formatPrice, formatPercent, priceChangeClass } from "@/lib/utils";
+// R3 polish: shared signed-dollar formatter (R1 convention — "+" only for
+// strictly-positive values; zero stays unsigned). Replaces the local
+// `change >= 0 ? "+" : ""` which wrongly rendered "+$0.00" on a flat day.
+import { signedPrice } from "@/components/portfolio/PortfolioKPIStrip";
 import type { WatchlistMember } from "@/types/api";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
@@ -69,7 +73,12 @@ export function WatchlistMemberRow({
     // WHY group/row: enables the delete button to be hidden by default and revealed
     // only on row hover, keeping the table uncluttered during the primary read flow.
     <tr
-      className="h-[22px] hover:bg-muted/40 cursor-pointer transition-colors group/row"
+      // R3 polish: the row is keyboard-focusable (tabIndex=0 below) but had
+      // no visible focus affordance — keyboard users couldn't see which row
+      // Enter/Space would open. focus-visible ring-inset keeps the ring
+      // inside the 22px row so adjacent rows don't clip it; bg-muted/40
+      // mirrors the hover tint for hover/focus parity.
+      className="h-[22px] hover:bg-muted/40 cursor-pointer transition-colors group/row focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-ring focus-visible:bg-muted/40"
       onClick={() => onRowClick(member.instrument_id ?? member.entity_id)}
       tabIndex={0}
       onKeyDown={(e) => {
@@ -151,7 +160,7 @@ export function WatchlistMemberRow({
           quote ? priceChangeClass(quote.change) : "text-muted-foreground",
         )}
       >
-        {quote ? (quote.change >= 0 ? "+" : "") + formatPrice(quote.change) : "—"}
+        {quote ? signedPrice(quote.change) : "—"}
       </td>
 
       {/* Delete button — hidden at rest, revealed on row hover.
@@ -173,6 +182,11 @@ export function WatchlistMemberRow({
             "opacity-30 group-hover/row:opacity-100 transition-opacity",
             "h-5 w-5 flex items-center justify-center rounded-[2px]",
             "text-muted-foreground hover:text-negative hover:bg-negative/10",
+            // R3 polish: keyboard parity with the hover reveal — when the
+            // button itself is focused it must surface to full opacity and
+            // show a ring, otherwise a Tab-navigating user is pressing an
+            // invisible destructive button.
+            "focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring",
             isDeleting && "opacity-50 cursor-not-allowed",
           )}
         >
