@@ -256,14 +256,49 @@ async def query_screen(
             "quarterly_revenue_growth_yoy",
         ]
 
+        # ── PERFORMANCE FIX (2026-06-09, BP-screener500) ─────────────────────
+        # Original implementation joined 10 LATERAL "latest per metric"
+        # subqueries against the full instruments table BEFORE the LIMIT was
+        # applied — `count(*) OVER ()` + ORDER BY symbol forced each subquery
+        # to scan its full ~23k-row partition of fundamental_metrics (26M rows
+        # total). The query consistently hit the 8 s statement_timeout.
+        #
+        # Fix: 3-step query plan
+        #   1. SELECT paged instrument IDs (uses (instruments) PK index, cheap).
+        #   2. SELECT COUNT(*) FROM instruments separately (replaces the
+        #      window-COUNT — also indexed and fast).
+        #   3. Build the metric LEFT JOINs scoped to `instrument_id IN (page_ids)`
+        #      so each LATERAL subquery scans 20 rows x 10 metrics instead of
+        #      660 x 10. Index ix_fundamental_metrics_instrument_metric
+        #      (instrument_id, metric, as_of_date) makes this a 200-row index
+        #      seek instead of a 230k-row scan.
+        page_q = (
+            select(instr.id, instr.symbol, instr.name, instr.exchange, instr.sector)
+            .order_by(instr.symbol.asc())
+            .offset(offset)
+            .limit(limit)
+        )
+        page_rows = (await session.execute(page_q)).all()
+        if not page_rows:
+            return [], 0
+        page_ids = [r.id for r in page_rows]
+
+        total_row = await session.execute(select(func.count()).select_from(instr))
+        total = int(total_row.scalar_one())
+
         def _latest_metric_sq(metric_name: str, alias: str) -> Any:
-            """Subquery: latest value for metric_name per instrument."""
+            """Subquery: latest value for metric_name per paged instrument.
+
+            Scoped to `instrument_id IN page_ids` so we hit
+            ix_fundamental_metrics_instrument_metric and read ~20 index pages
+            instead of scanning the full metric partition.
+            """
             latest_sq = (
                 select(
                     m.instrument_id,
                     func.max(m.as_of_date).label("max_date"),
                 )
-                .where(m.metric == metric_name)
+                .where(m.metric == metric_name, m.instrument_id.in_(page_ids))
                 .group_by(m.instrument_id)
                 .subquery(name=f"{alias}_latest")
             )
@@ -280,20 +315,19 @@ async def query_screen(
                         m.metric == metric_name,
                     ),
                 )
+                .where(m.instrument_id.in_(page_ids))
                 .subquery(name=alias)
             )
 
         key_sqs = {name: _latest_metric_sq(name, f"km_{name}") for name in key_metrics}
         q = QuoteModel
 
-        total_col = func.count().over().label("total_count")
         select_cols: list[Any] = [
             instr.id.label("instrument_id"),
             instr.symbol.label("ticker"),
             instr.name.label("name"),
             instr.exchange.label("exchange"),
             instr.sector.label("sector"),
-            total_col,
             # WHY LEFT JOIN on quotes: current_price (quotes.last) is a live
             # value not stored in fundamental_metrics. A LEFT JOIN ensures
             # instruments without a quote row still appear in the result (NULL
@@ -305,7 +339,7 @@ async def query_screen(
         for sf in snap_fields_available:
             select_cols.append(getattr(snap, sf).label(f"snap_{sf}"))
 
-        stmt = select(*select_cols).order_by(instr.symbol.asc()).offset(offset).limit(limit)
+        stmt = select(*select_cols).where(instr.id.in_(page_ids)).order_by(instr.symbol.asc())
         for sq in key_sqs.values():
             stmt = stmt.outerjoin(sq, instr.id == sq.c.instrument_id)
         stmt = stmt.outerjoin(snap, instr.id == snap.instrument_id)
@@ -314,8 +348,7 @@ async def query_screen(
         result: Any = await session.execute(stmt)
         rows = result.all()
         if not rows:
-            return [], 0
-        total = int(rows[0].total_count)
+            return [], total
         return [
             ScreenResult(
                 instrument_id=str(row.instrument_id),
