@@ -1,18 +1,20 @@
 /**
  * AnalyticsPeriodSelector tests (F-009 from 2026-05-23 QA report).
  *
- * WHY: Verifies all 7 period pills render, the active pill is highlighted,
+ * WHY: Verifies all 8 period pills render, the active pill is highlighted,
  * and onChange fires with the correct period string.
+ * R2 sprint: "1W" pill added for the TWR chart period selector — the
+ * exhaustive period list below was extended (assertions unchanged in kind).
  */
 import { render, screen, fireEvent } from "@testing-library/react";
 import { describe, it, expect, vi } from "vitest";
 
 import { AnalyticsPeriodSelector } from "../AnalyticsPeriodSelector";
 
-const ALL_PERIODS = ["1M", "3M", "6M", "YTD", "1Y", "2Y", "ALL"] as const;
+const ALL_PERIODS = ["1W", "1M", "3M", "6M", "YTD", "1Y", "2Y", "ALL"] as const;
 
 describe("AnalyticsPeriodSelector", () => {
-  it("renders all 7 period pills", () => {
+  it("renders all 8 period pills", () => {
     render(<AnalyticsPeriodSelector value="YTD" onChange={vi.fn()} />);
     for (const p of ALL_PERIODS) {
       expect(screen.getByRole("tab", { name: p })).toBeInTheDocument();

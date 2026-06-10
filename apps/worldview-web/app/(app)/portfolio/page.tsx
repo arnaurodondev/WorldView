@@ -58,6 +58,9 @@ import { Skeleton } from "@/components/ui/skeleton";
 
 // ── Portfolio chrome ────────────────────────────────────────────────────────
 import { PortfolioKPIStrip } from "@/components/portfolio/PortfolioKPIStrip";
+// R2 sprint: interactive sector-allocation donut beside the KPI strip.
+// Clicking a slice/legend row filters the holdings table to that sector.
+import { SectorAllocationDonut } from "@/components/portfolio/SectorAllocationDonut";
 import { WatchlistsTabPanel } from "@/components/portfolio/WatchlistsTabPanel";
 // F-P-003 (PLAN-0051 W6): the equity-curve period state is hoisted to this
 // page so future panels can react to the same period. The type comes from
@@ -170,6 +173,14 @@ export default function PortfolioPage() {
       .withDefault("holdings")
       .withOptions({ clearOnDefault: true }),
   );
+
+  // ── R2 sprint: sector filter (donut → holdings table) ──────────────────
+  // WHY URL state (nuqs, not useState): a filtered holdings view is a
+  // shareable artifact ("look at my Tech exposure") and back/forward should
+  // step through filter changes — exactly the rationale for ?tab= above.
+  // null = no filter. The default string parser keeps any sector name
+  // round-trippable without an enum (sector labels come from live data).
+  const [sectorFilter, setSectorFilter] = useQueryState("sector");
 
   // PLAN-0059 G-3: tab switches mount/unmount whole panel trees (Holdings
   // alone renders ~7 child surfaces — equity-curve chart, holdings table,
@@ -349,51 +360,79 @@ export default function PortfolioPage() {
         onDeletePortfolio={() => setDeletePortfolioOpen(true)}
       />
 
-      <PerformanceStrip
-        period={selectedPeriod}
-        performanceData={performanceData}
-        performanceLoading={performanceLoading}
-      />
+      {/* ── R2 sprint: header band — performance + KPI strip beside the
+          allocation donut. items-stretch equalizes heights so the donut's
+          border-b lines up with the KPI strip's own bottom border. */}
+      <div className="flex items-stretch">
+        <div className="flex min-w-0 flex-1 flex-col">
+          <PerformanceStrip
+            period={selectedPeriod}
+            performanceData={performanceData}
+            performanceLoading={performanceLoading}
+          />
 
-      {/* ── KPI Strip ───────────────────────────────────────────────────── */}
-      {/* WHY conditional on holdingsResp (not isLoading): the strip makes no
-          sense before holdings load. We still render the page shell so the
-          tabs are visible immediately (preventing layout shift on data
-          arrival). */}
-      {/* PLAN-0051 T-A-1-05 — prefer the FIFO endpoint when it succeeds;
-          fall back to the legacy client-side approximation (kpi.realizedPnl)
-          and surface "(approx)" so traders know the value is not the FIFO
-          ground truth. */}
-      {holdingsResp &&
-        (() => {
-          const fifo = realizedPnLQuery.data;
-          const useFifo = !realizedPnLQuery.isError && fifo != null;
-          const realizedPnl = useFifo ? fifo!.total_realized : kpi.realizedPnl;
-          return (
-            <PortfolioKPIStrip
-              portfolioId={activePortfolioId}
-              totalValue={kpi.totalValue}
-              dayPnl={kpi.dayPnl}
-              unrealisedPnl={kpi.unrealisedPnl}
-              unrealisedPnlPct={kpi.unrealisedPnlPct}
-              topGainer={kpi.topGainer}
-              topLoser={kpi.topLoser}
-              positionCount={kpi.positionCount}
-              realizedPnl={realizedPnl}
-              realizedPnlApprox={!useFifo}
-              realizedPnlLongTerm={useFifo ? fifo!.realized_long_term : null}
-              realizedPnlShortTerm={useFifo ? fifo!.realized_short_term : null}
-              // R1 sprint (BP-517-class fix): cash/buyingPower were never
-              // passed here, so the CASH and BUYING PWR tiles permanently
-              // rendered "—". The exposure snapshot now flows from
-              // usePortfolioData (GET /v1/portfolios/{id}/exposure).
-              // BUYING PWR = cash for v1 cash accounts; margin is v2 (see
-              // the PortfolioKPIStrip prop docs).
-              cash={exposure?.cash ?? null}
-              buyingPower={exposure?.cash ?? null}
-            />
-          );
-        })()}
+          {/* ── KPI Strip ─────────────────────────────────────────────────── */}
+          {/* WHY conditional on holdingsResp (not isLoading): the strip makes no
+              sense before holdings load. We still render the page shell so the
+              tabs are visible immediately (preventing layout shift on data
+              arrival). */}
+          {/* PLAN-0051 T-A-1-05 — prefer the FIFO endpoint when it succeeds;
+              fall back to the legacy client-side approximation (kpi.realizedPnl)
+              and surface "(approx)" so traders know the value is not the FIFO
+              ground truth. */}
+          {holdingsResp &&
+            (() => {
+              const fifo = realizedPnLQuery.data;
+              const useFifo = !realizedPnLQuery.isError && fifo != null;
+              const realizedPnl = useFifo ? fifo!.total_realized : kpi.realizedPnl;
+              return (
+                <PortfolioKPIStrip
+                  portfolioId={activePortfolioId}
+                  totalValue={kpi.totalValue}
+                  dayPnl={kpi.dayPnl}
+                  unrealisedPnl={kpi.unrealisedPnl}
+                  unrealisedPnlPct={kpi.unrealisedPnlPct}
+                  topGainer={kpi.topGainer}
+                  topLoser={kpi.topLoser}
+                  positionCount={kpi.positionCount}
+                  realizedPnl={realizedPnl}
+                  realizedPnlApprox={!useFifo}
+                  realizedPnlLongTerm={useFifo ? fifo!.realized_long_term : null}
+                  realizedPnlShortTerm={useFifo ? fifo!.realized_short_term : null}
+                  // R1 sprint (BP-517-class fix): cash/buyingPower were never
+                  // passed here, so the CASH and BUYING PWR tiles permanently
+                  // rendered "—". The exposure snapshot now flows from
+                  // usePortfolioData (GET /v1/portfolios/{id}/exposure).
+                  // BUYING PWR = cash for v1 cash accounts; margin is v2 (see
+                  // the PortfolioKPIStrip prop docs).
+                  cash={exposure?.cash ?? null}
+                  buyingPower={exposure?.cash ?? null}
+                />
+              );
+            })()}
+        </div>
+
+        {/* R2 sprint: allocation donut — server-side sector breakdown
+            (GET /v1/portfolios/{id}/sector-breakdown). Clicking a slice or
+            legend row filters the holdings table; clicking again (or the
+            chip in the Holdings tab) clears.
+            WHY gated on holdingsResp: same rationale as the KPI strip — no
+            allocation exists before holdings load, and gating keeps the
+            header band collapsed to the PerformanceStrip height while
+            loading (no layout jump).
+            WHY hidden xl:flex: below 1280px the 8 KPI tiles already consume
+            the full width; squeezing a 400px donut in would crush both. The
+            sector filter remains clearable on small screens via the chip in
+            the Holdings tab (which is always visible when a filter is set). */}
+        {holdingsResp && (
+          <SectorAllocationDonut
+            portfolioId={activePortfolioId}
+            selectedSector={sectorFilter}
+            onSelectSector={(s) => void setSectorFilter(s)}
+            className="hidden xl:flex w-[400px] shrink-0 border-l border-b border-border"
+          />
+        )}
+      </div>
 
       {/* ── Tabs ────────────────────────────────────────────────────────── */}
       {/* WHY flex-1 min-h-0: tabs must fill the remaining space below the
@@ -468,6 +507,11 @@ export default function PortfolioPage() {
             byType={byType}
             equityPeriod={equityPeriod}
             setEquityPeriod={setEquityPeriod}
+            // R2 sprint: donut-driven sector filter. HoldingsTab filters the
+            // table rows and renders the dismissible chip; clearing routes
+            // back through the same URL state the donut writes.
+            sectorFilter={sectorFilter}
+            onClearSectorFilter={() => void setSectorFilter(null)}
           />
         </TabsContent>
 

@@ -43,8 +43,6 @@
 import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import {
-  LineChart,
-  Line,
   AreaChart,
   Area,
   XAxis,
@@ -60,7 +58,17 @@ import { qk } from "@/lib/query/keys";
 import { Skeleton } from "@/components/ui/skeleton";
 import { AnalyticsPeriodSelector } from "./AnalyticsPeriodSelector";
 import { AnalyticsPeriodReturnsTable } from "./AnalyticsPeriodReturnsTable";
-import type { RiskMetricsResponse, ValueHistoryPoint } from "@/types/api";
+// R2 sprint: the TWR chart replaces the old inline $-NAV PerformanceChart
+// (raw NAV cannot be overlaid against a benchmark — see AnalyticsTwrChart).
+import { AnalyticsTwrChart } from "./AnalyticsTwrChart";
+// R2 sprint: client-computed period-aligned risk panel (Sharpe/MaxDD/Vol/Beta).
+import { AnalyticsRiskMetricsPanel } from "./AnalyticsRiskMetricsPanel";
+// R2 sprint: SPY/QQQ daily closes shared by the TWR overlay + beta.
+import { useBenchmarkSeries } from "@/features/portfolio/hooks/useBenchmarkSeries";
+// R2 sprint: drawdown math moved to the pure, unit-tested risk-metrics lib
+// (formula unchanged: dd_t = V_t / max(V_0..t) − 1).
+import { drawdownSeries } from "@/features/portfolio/lib/risk-metrics";
+import type { RiskMetricsResponse } from "@/types/api";
 
 // ── Props ─────────────────────────────────────────────────────────────────────
 
@@ -71,15 +79,36 @@ export interface AnalyticsTabProps {
 
 // ── Period → days map ─────────────────────────────────────────────────────────
 
-const PERIOD_DAYS: Record<string, number> = {
+// R2 sprint: "1W" added (brief requires a 1W/1M/3M/1Y/ALL selector; the
+// extra 6M/YTD/2Y pills predate R2 and are kept — removing them would
+// regress existing functionality and tests).
+// WHY "ALL": undefined — omitting `days` makes S1 return the FULL snapshot
+// history, instead of the previous hardcoded 1825-day approximation that
+// silently truncated portfolios older than 5 years.
+const PERIOD_DAYS: Record<string, number | undefined> = {
+  "1W": 7,
   "1M": 30,
   "3M": 90,
   "6M": 180,
   "YTD": 365, // server handles real YTD
   "1Y": 365,
   "2Y": 730,
-  "ALL": 1825,
+  "ALL": undefined,
 };
+
+/**
+ * riskLookbackDays — lookback for the BACKEND risk-metrics endpoint.
+ * The endpoint requires a concrete `lookback_days` in 10–3650:
+ *   - "ALL" maps to 1825 (5y) — widest window well inside the range.
+ *   - "1W" (7) clamps UP to 10 — VERIFIED LIVE (2026-06-10): the endpoint
+ *     422s on lookback_days=7 ("Input should be ≥ 10"). The sidebar hint
+ *     shows the clamped value so the user sees the real window used.
+ * Distinct from PERIOD_DAYS, which may be undefined to request full
+ * value-history (the value-history endpoint has no such floor).
+ */
+function riskLookbackDays(period: string): number {
+  return Math.max(PERIOD_DAYS[period] ?? 1825, 10);
+}
 
 // ── Format helpers ────────────────────────────────────────────────────────────
 
@@ -94,18 +123,10 @@ function fmtNum(val: number | null | undefined, fractions = 2): string {
   return val.toFixed(fractions);
 }
 
-/** Compute drawdown series from value-history points. */
-function computeDrawdownSeries(
-  points: ValueHistoryPoint[],
-): Array<{ date: string; drawdown: number }> {
-  if (points.length === 0) return [];
-  let peak = points[0].value;
-  return points.map((p) => {
-    if (p.value > peak) peak = p.value;
-    const dd = peak > 0 ? (p.value - peak) / peak : 0;
-    return { date: p.date, drawdown: dd };
-  });
-}
+// R2 sprint: the drawdown computation moved to the pure risk-metrics lib
+// (drawdownSeries) so the same unit-tested formula backs the chart AND the
+// MAX DD tile in the client risk panel. Behavior is identical:
+// dd_t = V_t / max(V_0..t) − 1.
 
 // ── Risk sidebar ──────────────────────────────────────────────────────────────
 
@@ -126,9 +147,14 @@ function RiskSidebar({ portfolioId, period }: RiskSidebarProps) {
   const apiClient = useApiClient();
 
   const { data: risk, isLoading: riskLoading } = useQuery<RiskMetricsResponse>({
-    queryKey: qk.portfolios.riskMetrics(portfolioId),
+    // R2 sprint (bug fix): the key previously omitted `period`, so changing
+    // the period pill recomputed `lookback_days` in the queryFn but NEVER
+    // refetched — the sidebar silently showed metrics for the previous
+    // period. Appending period to the canonical key makes the cache entry
+    // period-scoped (spread keeps qk.* as the cascade-invalidation prefix).
+    queryKey: [...qk.portfolios.riskMetrics(portfolioId), period],
     queryFn: () =>
-      apiClient.getRiskMetrics(portfolioId, PERIOD_DAYS[period] ?? 90),
+      apiClient.getRiskMetrics(portfolioId, riskLookbackDays(period)),
     staleTime: 5 * 60_000,
     enabled: Boolean(portfolioId),
   });
@@ -156,7 +182,7 @@ function RiskSidebar({ portfolioId, period }: RiskSidebarProps) {
           ? "text-negative"
           : "text-foreground",
       ariaLabel: `Max drawdown: ${fmtPct(risk?.drawdown_max)}`,
-      hint: `${PERIOD_DAYS[period] ?? 90}D`,
+      hint: `${riskLookbackDays(period)}D`,
     },
     {
       label: "CURR DD",
@@ -188,7 +214,7 @@ function RiskSidebar({ portfolioId, period }: RiskSidebarProps) {
           ? "text-negative"
           : "text-foreground",
       ariaLabel: `Sharpe ratio: ${fmtNum(risk?.sharpe)}`,
-      hint: `${PERIOD_DAYS[period] ?? 90}D`,
+      hint: `${riskLookbackDays(period)}D`,
     },
     {
       label: "SORTINO",
@@ -273,135 +299,11 @@ function RiskSidebar({ portfolioId, period }: RiskSidebarProps) {
 }
 
 // ── Performance chart ─────────────────────────────────────────────────────────
-
-interface PerformanceChartProps {
-  portfolioId: string;
-  period: string;
-}
-
-/**
- * PerformanceChart — portfolio equity curve with recharts LineChart.
- *
- * WHY recharts (not lightweight-charts): the codebase already uses recharts
- * extensively (EquityCurveChart.tsx). Adding lightweight-charts as a second
- * chart library would double the charting bundle. The spec allows either.
- *
- * WHY no benchmark series yet: the backend risk-metrics endpoint is hard-coded
- * to SPY but doesn't return a daily SPY series. Until `GET /v1/portfolios/{id}/twr`
- * ships, the benchmark line is omitted (Decision 2, spec §9.2).
- */
-function PerformanceChart({ portfolioId, period }: PerformanceChartProps) {
-  const apiClient = useApiClient();
-
-  const { data, isLoading, isError } = useQuery({
-    queryKey: qk.portfolios.valueHistory(portfolioId, period),
-    queryFn: () =>
-      apiClient.getValueHistory(portfolioId, {
-        days: PERIOD_DAYS[period] ?? 90,
-        granularity: "1d" as const,
-      }),
-    staleTime: 60_000,
-    enabled: Boolean(portfolioId),
-  });
-
-  if (isLoading) {
-    return <Skeleton className="h-[180px] w-full" />;
-  }
-
-  if (isError || !data) {
-    return (
-      <div className="h-[180px] flex items-center justify-center border border-border rounded-[2px]">
-        <p className="text-[11px] text-negative font-mono">
-          Couldn&apos;t load performance series.
-        </p>
-      </div>
-    );
-  }
-
-  const points = data.points ?? [];
-
-  if (points.length === 0) {
-    return (
-      <div className="h-[180px] flex items-center justify-center border border-border rounded-[2px]">
-        <p className="text-[11px] text-muted-foreground font-mono">
-          Performance metrics will appear after ~10 trading days of snapshots.
-        </p>
-      </div>
-    );
-  }
-
-  // ── Custom tooltip ─────────────────────────────────────────────────────
-  const CustomTooltip = ({
-    active,
-    payload,
-    label,
-  }: {
-    active?: boolean;
-    payload?: Array<{ value: number }>;
-    label?: string;
-  }) => {
-    if (!active || !payload?.length) return null;
-    return (
-      <div className="bg-card border border-border rounded-[2px] px-2 py-1.5">
-        <p className="text-[10px] text-muted-foreground">{label}</p>
-        <p className="text-[11px] font-mono tabular-nums text-foreground">
-          ${payload[0].value.toLocaleString("en-US", { maximumFractionDigits: 0 })}
-        </p>
-      </div>
-    );
-  };
-
-  return (
-    <div
-      role="img"
-      aria-label={`Portfolio equity curve for ${period} period`}
-      className="h-[180px] border border-border rounded-[2px]"
-    >
-      <ResponsiveContainer width="100%" height="100%">
-        <LineChart data={points} margin={{ top: 8, right: 8, bottom: 8, left: 8 }}>
-          <XAxis
-            dataKey="date"
-            tick={{ fontSize: 9, fill: "var(--muted-foreground, #888)" }}
-            tickLine={false}
-            axisLine={false}
-            // Show max 5 x-ticks as per design spec §4.3
-            interval={Math.max(0, Math.floor(points.length / 5) - 1)}
-            // WHY slice(5,10): convert "YYYY-MM-DD" to "MM-DD" for compact labels
-            tickFormatter={(v: string) => (typeof v === "string" ? v.slice(5) : v)}
-          />
-          <YAxis
-            tick={{ fontSize: 9, fill: "var(--muted-foreground, #888)" }}
-            tickLine={false}
-            axisLine={false}
-            width={50}
-            tickFormatter={(v: number) =>
-              `$${v >= 1000 ? `${(v / 1000).toFixed(0)}k` : v.toFixed(0)}`
-            }
-          />
-          <Tooltip content={<CustomTooltip />} />
-          {/* Portfolio equity line — 1.5px solid primary (design spec §6) */}
-          <Line
-            type="monotone"
-            dataKey="value"
-            stroke="var(--primary, #3b82f6)"
-            strokeWidth={1.5}
-            dot={false}
-            activeDot={{ r: 3 }}
-          />
-          {/* Cost-basis line — dashed muted (helps visualise unrealised gain area) */}
-          <Line
-            type="monotone"
-            dataKey="cost_basis"
-            stroke="var(--muted-foreground, #888)"
-            strokeWidth={1}
-            strokeDasharray="4 2"
-            dot={false}
-          />
-        </LineChart>
-      </ResponsiveContainer>
-    </div>
-  );
-}
+// R2 sprint: the inline $-NAV PerformanceChart was replaced by
+// AnalyticsTwrChart (separate file) — a cumulative-return chart rebased to
+// 0% at period start with toggleable SPY/QQQ benchmark overlays. Raw $ NAV
+// cannot share an axis with a benchmark price; the $ view still lives in
+// the Holdings tab's PerformanceChartPanel.
 
 // ── Drawdown chart ────────────────────────────────────────────────────────────
 
@@ -427,7 +329,11 @@ function DrawdownChart({ portfolioId, period }: DrawdownChartProps) {
     queryKey: qk.portfolios.valueHistory(portfolioId, period),
     queryFn: () =>
       apiClient.getValueHistory(portfolioId, {
-        days: PERIOD_DAYS[period] ?? 90,
+        // R2 sprint: "ALL" omits days (full history). The conditional spread
+        // MUST stay identical to AnalyticsTwrChart / AnalyticsRiskMetricsPanel
+        // — all three share this query key, so divergent fetch params would
+        // make the cached window depend on which component fetched first.
+        ...(PERIOD_DAYS[period] != null ? { days: PERIOD_DAYS[period] } : {}),
         granularity: "1d" as const,
       }),
     staleTime: 60_000,
@@ -448,9 +354,14 @@ function DrawdownChart({ portfolioId, period }: DrawdownChartProps) {
     );
   }
 
-  const drawdownSeries = computeDrawdownSeries(data?.points ?? []);
+  // R2 sprint: same formula as before, now sourced from the pure unit-tested
+  // lib (dd_t = V_t / max(V_0..t) − 1). Map value-history points into the
+  // lib's DatedValue shape first.
+  const ddSeries = drawdownSeries(
+    (data?.points ?? []).map((p) => ({ date: p.date, value: p.value })),
+  );
 
-  if (drawdownSeries.length === 0) {
+  if (ddSeries.length === 0) {
     return (
       <div className="h-[100px] flex items-center justify-center border border-border rounded-[2px]">
         <p className="text-[11px] text-muted-foreground font-mono">
@@ -488,7 +399,7 @@ function DrawdownChart({ portfolioId, period }: DrawdownChartProps) {
     >
       <ResponsiveContainer width="100%" height="100%">
         <AreaChart
-          data={drawdownSeries}
+          data={ddSeries}
           margin={{ top: 4, right: 8, bottom: 4, left: 8 }}
         >
           <XAxis
@@ -496,7 +407,7 @@ function DrawdownChart({ portfolioId, period }: DrawdownChartProps) {
             tick={{ fontSize: 9, fill: "var(--muted-foreground, #888)" }}
             tickLine={false}
             axisLine={false}
-            interval={Math.max(0, Math.floor(drawdownSeries.length / 5) - 1)}
+            interval={Math.max(0, Math.floor(ddSeries.length / 5) - 1)}
             tickFormatter={(v: string) => (typeof v === "string" ? v.slice(5) : v)}
           />
           <YAxis
@@ -558,7 +469,9 @@ function AttributionTable({ portfolioId, period }: AttributionTableProps) {
     queryKey: qk.portfolios.valueHistory(portfolioId, period),
     queryFn: () =>
       apiClient.getValueHistory(portfolioId, {
-        days: PERIOD_DAYS[period] ?? 90,
+        // R2 sprint: identical params to AnalyticsTwrChart / DrawdownChart —
+        // shared query key requires identical fetch params (see DrawdownChart).
+        ...(PERIOD_DAYS[period] != null ? { days: PERIOD_DAYS[period] } : {}),
         granularity: "1d" as const,
       }),
     staleTime: 60_000,
@@ -707,11 +620,44 @@ export function AnalyticsTab({ portfolioId }: AnalyticsTabProps) {
   //    spec ASCII art which shows "YTD·" as the active pill.
   const [period, setPeriod] = useState("YTD");
 
+  // ── R2 sprint: benchmark overlay toggles ─────────────────────────────────
+  // WHY SPY on by default: pre-R2 the chart header showed a static "SPY"
+  // badge promising a benchmark; defaulting the overlay ON delivers it.
+  // QQQ defaults off — a second dashed line is opt-in noise.
+  const [benchmarks, setBenchmarks] = useState<{ SPY: boolean; QQQ: boolean }>({
+    SPY: true,
+    QQQ: false,
+  });
+
+  // Window start for benchmark OHLCV — derived from the SAME day count the
+  // value-history queries use so the overlay covers the chart's window.
+  // "ALL" → undefined → full available OHLCV history.
+  const periodDays = PERIOD_DAYS[period];
+  const benchmarkFromDate =
+    periodDays != null
+      ? (() => {
+          const d = new Date();
+          d.setDate(d.getDate() - periodDays);
+          return d.toISOString().slice(0, 10);
+        })()
+      : undefined;
+
+  // SPY closes are ALWAYS fetched (not just when the overlay is on) because
+  // the client risk panel needs them for beta regardless of the toggle.
+  // QQQ closes only load when its overlay is toggled on.
+  const { closesByTicker } = useBenchmarkSeries({
+    tickers: benchmarks.QQQ ? ["SPY", "QQQ"] : ["SPY"],
+    fromDate: benchmarkFromDate,
+    enabled: Boolean(portfolioId),
+  });
+
   // ── Risk metrics for the sidebar's DataFreshnessPill ─────────────────────
   const { data: risk } = useQuery<RiskMetricsResponse>({
-    queryKey: qk.portfolios.riskMetrics(portfolioId),
+    // R2 sprint: period-scoped key — same fix as RiskSidebar (the key
+    // previously ignored period, pinning the freshness pill to stale data).
+    queryKey: [...qk.portfolios.riskMetrics(portfolioId), period],
     queryFn: () =>
-      apiClient.getRiskMetrics(portfolioId, PERIOD_DAYS[period] ?? 90),
+      apiClient.getRiskMetrics(portfolioId, riskLookbackDays(period)),
     staleTime: 5 * 60_000,
     enabled: Boolean(portfolioId),
   });
@@ -728,14 +674,35 @@ export function AnalyticsTab({ portfolioId }: AnalyticsTabProps) {
           onChange={setPeriod}
           lastUpdated={risk?.as_of}
         />
-        {/* Benchmark indicator — static SPY for v1 (Decision 1, spec §OQ-1) */}
+        {/* R2 sprint: benchmark TOGGLES replace the static SPY badge.
+            aria-pressed exposes the on/off state to AT + tests; the active
+            style mirrors the period pills so the affordance is recognisable. */}
         <div className="ml-auto flex items-center gap-1.5">
           <span className="text-[10px] uppercase tracking-[0.06em] text-muted-foreground font-mono">
             Benchmark
           </span>
-          <span className="text-[10px] font-mono text-foreground border border-border/60 px-1.5 py-0.5 rounded-[2px]">
-            SPY
-          </span>
+          {(["SPY", "QQQ"] as const).map((ticker) => {
+            const active = benchmarks[ticker];
+            return (
+              <button
+                key={ticker}
+                type="button"
+                aria-pressed={active}
+                title={`${active ? "Hide" : "Show"} ${ticker} overlay (both series rebased to 0% at period start)`}
+                onClick={() =>
+                  setBenchmarks((b) => ({ ...b, [ticker]: !b[ticker] }))
+                }
+                className={cn(
+                  "text-[10px] font-mono px-1.5 py-0.5 rounded-[2px] border transition-colors",
+                  active
+                    ? "border-primary text-primary bg-primary/10"
+                    : "border-border/60 text-muted-foreground hover:text-foreground hover:border-border",
+                )}
+              >
+                {ticker}
+              </button>
+            );
+          })}
         </div>
       </div>
 
@@ -744,15 +711,33 @@ export function AnalyticsTab({ portfolioId }: AnalyticsTabProps) {
 
         {/* Charts column — col-span-9 */}
         <div className="col-span-12 lg:col-span-9 space-y-2">
-          {/* Performance equity curve */}
-          <PerformanceChart portfolioId={portfolioId} period={period} />
+          {/* R2 sprint: cumulative-return (TWR-style) chart with benchmark
+              overlays — every series rebased to 0% at period start so the
+              vertical gap IS the excess return. */}
+          <AnalyticsTwrChart
+            portfolioId={portfolioId}
+            period={period}
+            periodDays={periodDays}
+            benchmarks={benchmarks}
+            benchmarkCloses={closesByTicker}
+          />
           {/* Drawdown chart — shares x-axis with performance chart above */}
           <DrawdownChart portfolioId={portfolioId} period={period} />
         </div>
 
         {/* Risk sidebar — col-span-3 */}
-        <div className="col-span-12 lg:col-span-3">
+        <div className="col-span-12 lg:col-span-3 space-y-2">
           <RiskSidebar portfolioId={portfolioId} period={period} />
+          {/* R2 sprint: client-computed, PERIOD-ALIGNED risk metrics
+              (Sharpe rf=0 / MaxDD / Vol / Beta·SPY) from the same daily
+              series the charts above draw — see AnalyticsRiskMetricsPanel
+              for why this coexists with the lookback-window RiskSidebar. */}
+          <AnalyticsRiskMetricsPanel
+            portfolioId={portfolioId}
+            period={period}
+            periodDays={periodDays}
+            spyCloses={closesByTicker["SPY"]}
+          />
         </div>
       </div>
 

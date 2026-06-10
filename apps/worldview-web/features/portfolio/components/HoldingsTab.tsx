@@ -46,7 +46,11 @@
 // and child components are client components requiring React context.
 
 import { useState, useCallback, useMemo } from "react";
+// R2 sprint: X icon for the dismissible sector-filter chip.
+import { X } from "lucide-react";
 import { Skeleton } from "@/components/ui/skeleton";
+// R2 sprint: pure, unit-tested sector matching for the donut-driven filter.
+import { filterHoldingsBySector } from "@/features/portfolio/lib/sector-filter";
 // ── PRD-0108 W3 layout strips ─────────────────────────────────────────────────
 import { ExposureCurrencyStrip } from "@/components/portfolio/ExposureCurrencyStrip";
 import { ConcentrationSectorTeaseStrip } from "@/components/portfolio/ConcentrationSectorTeaseStrip";
@@ -97,6 +101,15 @@ interface HoldingsTabProps {
   /** F-P-003: equity-curve period state hoisted to the page. */
   equityPeriod: PeriodLabel;
   setEquityPeriod: (period: PeriodLabel) => void;
+  /**
+   * R2 sprint: active sector filter from the allocation donut (page-level
+   * nuqs ?sector= state). When set, the holdings table shows only rows in
+   * that sector and a dismissible chip appears above the table chrome.
+   * Optional so older call sites/tests render unchanged (no filter).
+   */
+  sectorFilter?: string | null;
+  /** R2 sprint: clears the sector filter (chip × / keyboard). */
+  onClearSectorFilter?: () => void;
 }
 
 export function HoldingsTab({
@@ -119,6 +132,8 @@ export function HoldingsTab({
   // Retained in the interface so page.tsx props don't change; prefixed _  to
   // suppress the unused-variable lint warning.
   setEquityPeriod: _setEquityPeriod,
+  sectorFilter = null,
+  onClearSectorFilter,
 }: HoldingsTabProps) {
   // ── PerformanceChartPanel state ────────────────────────────────────────────
   // WHY local state (not URL): collapse toggle is ephemeral UI preference.
@@ -212,6 +227,44 @@ export function HoldingsTab({
   // + holdingsQuotes down through an additional component boundary.
   const topMovers = useTopMovers(enrichedHoldings, holdingsQuotes);
 
+  // ── R2 sprint: sector map + donut-driven filtering ─────────────────────────
+  // The instrument_id → sector map was previously built inline in the
+  // SemanticHoldingsTable JSX; lifted to a useMemo because the filter below
+  // needs the same map and rebuilding it twice per render is waste.
+  const sectorsByInstrument = useMemo(
+    () =>
+      Object.fromEntries(
+        Object.entries(holdingOverviews ?? {}).map(([id, ov]) => [
+          id,
+          ov?.sector ?? null,
+        ]),
+      ) as Record<string, string | null>,
+    [holdingOverviews],
+  );
+
+  // Rows actually shown in the table. filterHoldingsBySector returns the
+  // SAME array reference when no filter is active, so the unfiltered path
+  // keeps referential stability for AG Grid row identity.
+  const visibleHoldings = useMemo(
+    () => filterHoldingsBySector(enrichedHoldings, sectorsByInstrument, sectorFilter),
+    [enrichedHoldings, sectorsByInstrument, sectorFilter],
+  );
+
+  // R2 sprint: when a sector filter is active the pinned TOTAL row must
+  // describe the VISIBLE rows, not the whole book — otherwise the TOTAL
+  // "value" column (whole portfolio) would contradict the rows above it
+  // and the summed weights. Same live-price fallback chain the table's own
+  // row enrichment uses (quote → stored current_price → average_cost), so
+  // the filtered total equals the sum of the rendered VALUE cells exactly.
+  const visibleTotalValue = useMemo(() => {
+    if (!sectorFilter) return kpi.totalValue;
+    return visibleHoldings.reduce((sum, h) => {
+      const quote = holdingsQuotes[h.instrument_id];
+      const livePrice = quote?.price ?? h.current_price ?? h.average_cost;
+      return sum + livePrice * h.quantity;
+    }, 0);
+  }, [sectorFilter, visibleHoldings, holdingsQuotes, kpi.totalValue]);
+
   // ── Wave G: Holding detail slide-over state ────────────────────────────────
   // WHY null (not undefined): null is the explicit "no holding selected" signal.
   const [selectedHolding, setSelectedHolding] = useState<Holding | null>(null);
@@ -300,8 +353,41 @@ export function HoldingsTab({
           receive the filterText to drive AG Grid quickFilter. Hosting both in
           the same parent avoids prop-drilling through SemanticHoldingsTable's
           public interface (which is data-driven, not filter-driven). */}
+      {/* ══ R2 sprint: sector-filter chip strip (only when a filter is active) ══
+          WHY its own 22px strip (not inside HoldingsTableChrome): the chrome
+          row is a shared component used by older layouts; injecting filter
+          chrome there would change its contract. A conditional strip keeps
+          the unfiltered layout byte-identical. Dismiss via the × button or
+          by re-clicking the donut slice (page-level toggle). */}
+      {sectorFilter && (
+        <div
+          data-testid="sector-filter-chip-row"
+          className="flex h-[22px] shrink-0 items-center gap-2 border-b border-border bg-card px-3"
+        >
+          <span className="text-[10px] uppercase tracking-[0.06em] text-muted-foreground shrink-0">
+            Sector filter
+          </span>
+          <button
+            type="button"
+            data-testid="sector-filter-chip"
+            onClick={() => onClearSectorFilter?.()}
+            title={`Showing only ${sectorFilter} holdings — click to clear`}
+            aria-label={`Clear ${sectorFilter} sector filter`}
+            className="flex items-center gap-1 rounded-[2px] border border-primary bg-primary/10 px-1.5 py-0 font-mono text-[10px] text-primary hover:bg-primary/20"
+          >
+            {sectorFilter}
+            <X className="h-2.5 w-2.5" strokeWidth={1.5} />
+          </button>
+          {/* "n of m" — quantifies how much of the book is hidden so a
+              filtered view can never be mistaken for the whole portfolio. */}
+          <span className="font-mono text-[10px] tabular-nums text-muted-foreground">
+            {visibleHoldings.length} of {enrichedHoldings.length} positions
+          </span>
+        </div>
+      )}
+
       <HoldingsTableChrome
-        positionCount={enrichedHoldings.length}
+        positionCount={visibleHoldings.length}
         onFilterFocus={handleFilterFocus}
         filterText={filterText}
         onFilterChange={setFilterText}
@@ -319,21 +405,39 @@ export function HoldingsTab({
           other strips above). The 2px gap came from the old card border; the
           new design has no card — the table IS the surface. */}
       <div className="flex-1 min-h-0">
+        {/* R2 sprint: a filter that matches nothing must NOT fall through to
+            SemanticHoldingsTable's "No holdings yet — connect a brokerage"
+            empty state (the user HAS holdings; the filter excluded them).
+            Named state + the chip row above give the user the exit path. */}
+        {sectorFilter && visibleHoldings.length === 0 && enrichedHoldings.length > 0 ? (
+          <div
+            data-testid="sector-filter-no-match"
+            className="flex h-full items-center justify-center"
+          >
+            <span className="font-mono text-[11px] text-muted-foreground">
+              No holdings in &ldquo;{sectorFilter}&rdquo; — clear the sector
+              filter above to see all positions.
+            </span>
+          </div>
+        ) : (
         <SemanticHoldingsTable
-          holdings={enrichedHoldings}
+          // R2 sprint: visibleHoldings = enrichedHoldings when no sector
+          // filter (same reference), or the sector subset when filtered.
+          holdings={visibleHoldings}
           quotes={holdingsQuotes}
-          sectors={Object.fromEntries(
-            Object.entries(holdingOverviews ?? {}).map(([id, ov]) => [
-              id,
-              ov?.sector ?? null,
-            ]),
-          )}
-          totalValue={kpi.totalValue}
+          // R2 sprint: map lifted to the sectorsByInstrument useMemo above
+          // (shared with the filter) — content unchanged.
+          sectors={sectorsByInstrument}
+          // R2 sprint: filtered total so the pinned TOTAL row + WEIGHT
+          // column describe the visible rows (weights sum to 100% within
+          // the filtered view). Equals kpi.totalValue when unfiltered.
+          totalValue={visibleTotalValue}
           series={holdingsSeries}
           // R1 sprint: ASSET column data (was a hardcoded empty map inside
           // SemanticHoldingsTable, so every row showed "—").
           assetClasses={assetClasses}
         />
+        )}
       </div>
 
       {/* ══ 7. BottomStripCluster (h-24) — wired in W4-T405 ════════════════════

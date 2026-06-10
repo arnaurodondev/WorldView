@@ -434,6 +434,12 @@ export function SemanticHoldingsTable({
       <AgGridBase<EnrichedHoldingRow>
         rowData={enrichedRows}
         columnDefs={holdingsAgColumns}
+        // R2 sprint: 22px rows/header — the terminal density target every
+        // other strip on this page already uses (h-[22px] strips, 22px
+        // skeleton rows). AgGridBase defaults to 28; the optional overrides
+        // landed this round (design-system agent).
+        rowHeight={22}
+        headerHeight={22}
         getRowId={(p) => p.data.h.holding_id}
         onGridReady={handleGridReady}
         onRowClicked={(row) =>

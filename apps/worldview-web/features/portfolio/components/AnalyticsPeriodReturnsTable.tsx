@@ -24,9 +24,10 @@
  * rendering in one component. This exposes data-testid="period-row-{PERIOD}"
  * which the test suite requires.
  *
- * WHY 7 rows (not the 9 IBKR shows): We use the same 7 periods as
- * AnalyticsPeriodSelector. "3Y" and "ITD" are deferred until the backend
- * provides a reliable long-horizon snapshot history.
+ * WHY 8 rows (not the 9 IBKR shows): We use the same 8 periods as
+ * AnalyticsPeriodSelector (1W added in the R2 sprint). "3Y" and "ITD" are
+ * deferred until the backend provides a reliable long-horizon snapshot
+ * history.
  *
  * DESIGN REFERENCE: docs/designs/0089/04-portfolio-detail.md §4.3 "PERIOD RETURNS"
  */
@@ -51,7 +52,10 @@ export interface AnalyticsPeriodReturnsTableProps {
 // in a fixed display order; the selector provides the interactive state.
 // Having an independent definition means we can add "3Y" to the table without
 // touching the interactive selector's period list.
+// R2 sprint: "1W" row added — keeps the table in lock-step with the
+// AnalyticsPeriodSelector pills (which gained 1W for the TWR chart).
 const PERIODS = [
+  { label: "1W",  days: 7 },
   { label: "1M",  days: 30 },
   { label: "3M",  days: 90 },
   { label: "6M",  days: 180 },

@@ -76,6 +76,17 @@ describe("formatCompactCurrency — multi-currency", () => {
   it("handles negative billions with sign before symbol", () => {
     expect(formatCompactCurrency(-2_450_000_000)).toBe("-$2.45B");
   });
+
+  it("keeps the legacy $1M boundary by default (sub-million → full price)", () => {
+    expect(formatCompactCurrency(100_000)).toBe("$100,000.00");
+  });
+
+  it("compacts from $1K when compactThreshold is lowered (tight-space callers)", () => {
+    expect(formatCompactCurrency(100_000, "USD", { compactThreshold: 1_000, maxDecimals: 1 })).toBe("$100.0K");
+    expect(formatCompactCurrency(50_000, "USD", { compactThreshold: 1_000, maxDecimals: 1 })).toBe("$50.0K");
+    // Below the lowered threshold still renders as a full grouped price.
+    expect(formatCompactCurrency(842, "USD", { compactThreshold: 1_000 })).toBe("$842.00");
+  });
 });
 
 describe("formatPrice — locale grouping", () => {

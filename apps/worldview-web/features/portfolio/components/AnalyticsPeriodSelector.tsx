@@ -42,10 +42,13 @@ export interface AnalyticsPeriodSelectorProps {
 // ── Period list ───────────────────────────────────────────────────────────────
 
 // WHY these specific periods: match the analytics design spec §4.3 which
-// mirrors IBKR's "Time Period Analyzer" — 7 breakpoints from 1M through ALL
+// mirrors IBKR's "Time Period Analyzer" — breakpoints from 1W through ALL
 // give enough granularity to distinguish short-term volatility from long-term
 // trend without overcrowding the pill row.
-const PERIODS = ["1M", "3M", "6M", "YTD", "1Y", "2Y", "ALL"] as const;
+// R2 sprint: "1W" added at the front — the R2 brief requires a
+// 1W/1M/3M/1Y/ALL selector for the TWR chart; the pre-existing 6M/YTD/2Y
+// pills are KEPT (removing them would regress shipped behavior + tests).
+const PERIODS = ["1W", "1M", "3M", "6M", "YTD", "1Y", "2Y", "ALL"] as const;
 
 export type AnalyticsPeriod = (typeof PERIODS)[number];
 

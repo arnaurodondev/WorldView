@@ -123,6 +123,14 @@ interface CompactOptions {
   adaptive?: boolean;
   /** maxDecimals — upper bound on decimal places. Default 2. */
   maxDecimals?: number;
+  /**
+   * compactThreshold — |value| at which currency rendering switches from a
+   * full locale-grouped price ("$4,892.11") to SI-suffix compact ("$4.89K").
+   * Default 1_000_000 (legacy formatPriceCompact contract). Tight spaces
+   * (donut center labels, KPI chips) pass 1_000 so five-figure values fit.
+   * Only consumed by formatCompactCurrency.
+   */
+  compactThreshold?: number;
 }
 
 /**
@@ -185,10 +193,11 @@ export function formatCompactCurrency(
     return `${value < 0 ? "-" : ""}${symbol}${Math.abs(value).toFixed(4)}`;
   }
 
-  // 1 ≤ |x| < 1M → render as a full price with locale grouping. The legacy
-  // formatPriceCompact only switched to compact at the M boundary; tests
-  // assert "$4,892.11" for sub-million values.
-  if (abs < 1_000_000) {
+  // 1 ≤ |x| < threshold → render as a full price with locale grouping. The
+  // legacy formatPriceCompact only switched to compact at the M boundary;
+  // tests assert "$4,892.11" for sub-million values. Callers in tight spaces
+  // can lower the boundary via options.compactThreshold (e.g. 1_000).
+  if (abs < (options.compactThreshold ?? 1_000_000)) {
     return formatPrice(value, currency);
   }
 

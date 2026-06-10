@@ -50,9 +50,10 @@ import { AnalyticsPeriodReturnsTable } from "../AnalyticsPeriodReturnsTable";
 
 // ── Fixtures ──────────────────────────────────────────────────────────────────
 
-const ALL_PERIODS = ["1M", "3M", "6M", "YTD", "1Y", "2Y", "ALL"] as const;
+// R2 sprint: "1W" row added to the table — list extended to stay exhaustive.
+const ALL_PERIODS = ["1W", "1M", "3M", "6M", "YTD", "1Y", "2Y", "ALL"] as const;
 
-/** 7 history responses — all with +20% returns so we can assert the "+" prefix. */
+/** 8 history responses — all with +20% returns so we can assert the "+" prefix. */
 function makeHistory(_portfolioId: string): ValueHistoryResponse {
   return {
     points: [
@@ -76,7 +77,7 @@ describe("AnalyticsPeriodReturnsTable", () => {
     vi.clearAllMocks();
   });
 
-  it("renders all 7 period rows via data-testid", async () => {
+  it("renders all 8 period rows via data-testid", async () => {
     // WHY use data-testid: the rows are <tr data-testid="period-row-{PERIOD}">
     // inserted by the D-002 useQueries refactor. This is the canonical selector
     // that confirms each period rendered.
@@ -97,9 +98,10 @@ describe("AnalyticsPeriodReturnsTable", () => {
     render(wrap(<AnalyticsPeriodReturnsTable portfolioId="p-001" />));
 
     await waitFor(() => {
-      // +20% return → "+20.00%". At least one row must show a positive return.
+      // +20% return → "+20.00%". Every period row shows a positive return.
+      // R2 sprint: 8 rows now that 1W joined the table.
       const positiveReturns = screen.getAllByText(/^\+\d/);
-      expect(positiveReturns.length).toBe(7);
+      expect(positiveReturns.length).toBe(8);
     });
   });
 
@@ -115,8 +117,9 @@ describe("AnalyticsPeriodReturnsTable", () => {
     await waitFor(() => {
       // At least the RETURN cells should show "—" when all periods lack enough points.
       const dashes = screen.getAllByText("—");
-      // WHY ≥7: each of the 7 rows contributes at least one "—" in the RETURN column.
-      expect(dashes.length).toBeGreaterThanOrEqual(7);
+      // WHY ≥8: each of the 8 rows contributes at least one "—" in the RETURN
+      // column (R2 sprint: 1W row added).
+      expect(dashes.length).toBeGreaterThanOrEqual(8);
     });
   });
 });
