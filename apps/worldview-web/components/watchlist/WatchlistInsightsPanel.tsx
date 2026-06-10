@@ -94,11 +94,22 @@ export function WatchlistInsightsPanel({ watchlistId }: WatchlistInsightsPanelPr
       </div>
 
       {/* ── Loading state ────────────────────────────────────────────────────
-          WHY h-[66px]: 3 data rows × 22px = 66px. The skeleton matches the
-          exact height of the content it replaces so there is no layout shift
-          (CLS) when the data arrives. */}
+          WHY 3 rows × h-[18px] + two 6px gaps = 66px: the panel renders 3 data
+          rows at 22px pitch (66px total). Shape-matching (§6.2) — the skeleton
+          pre-allocates the SAME geometry as the loaded content (three distinct
+          rows, not one amorphous blob) so there is no layout shift (CLS) and
+          the eye already knows where each row will land.
+          WHY static (no animate-pulse): §6.2 bans raw animate-pulse — Terminal
+          Dark skeletons are STATIC bg-muted bars (Bloomberg convention).
+          WHY aria-busy + aria-hidden: one loading announcement on the
+          container for screen readers; the bars themselves are decorative. */}
       {isLoading && (
-        <div className="h-[66px] bg-muted/20 animate-pulse rounded" />
+        <div className="h-[66px] space-y-[6px]" aria-busy="true">
+          {/* Varied widths read as "label + value" text loading (§6.2). */}
+          <div className="h-[18px] w-full rounded-[2px] bg-muted/20" aria-hidden />
+          <div className="h-[18px] w-3/4 rounded-[2px] bg-muted/20" aria-hidden />
+          <div className="h-[18px] w-5/6 rounded-[2px] bg-muted/20" aria-hidden />
+        </div>
       )}
 
       {/* ── Error state ──────────────────────────────────────────────────────

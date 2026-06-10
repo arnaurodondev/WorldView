@@ -129,6 +129,35 @@ Page (--background / #09090B)
               └── Input fields, tooltips, borders (--surface-3 / #27272A)
 ```
 
+### 2.4 Core Token Contrast Ratios (Round-4 hardening audit, 2026-06-10)
+
+WCAG 2.1 contrast ratios computed from the **live HSL tokens** in
+`app/globals.css` (not the approximate hex comments next to them). The
+platform's text-size floor is **10px** (§3.2 lists the narrow 9px exceptions);
+WCAG's relaxed "large text" threshold (3:1) only applies at ≥24px / ≥18.66px
+bold — nothing at our densities qualifies, so **4.5:1 (AA normal text) is the
+bar for every text size we ship**.
+
+| Foreground token | On `--background` #09090B | On `--card` #111113 | AA (4.5:1) | Approved down to |
+|---|---|---|---|---|
+| `--foreground` (240 5% 90%, ≈#E4E4E7) | **15.7 : 1** | **14.9 : 1** | PASS | 9px (the §3.2 exception floor) |
+| `--primary` (48 100% 52%, ≈#FFD60A) | **13.3 : 1** | **12.6 : 1** | PASS | 9px |
+| `--muted-foreground` (240 4% 55%, ≈#888891) | **5.7 : 1** | **5.4 : 1** | PASS | 10px floor (and the 9px §3.2 label exceptions) |
+
+Notes:
+
+- **`--muted-foreground` passes AA only because of the F-VISUAL-NEW-M sync**
+  that lifted `.dark --muted-foreground` from 46% → 55% lightness. The old
+  46% value (zinc-500 #71717A) measures **4.1:1 on background / 3.9:1 on
+  card — an AA FAILURE for normal text**. Do not "restore" 46% for aesthetic
+  dimming: if a surface needs dimmer-than-muted text, it must be
+  non-essential/decorative content (e.g. `text-muted-foreground/50` digest
+  lines, watermarks) that carries no information a user must read.
+- Opacity modifiers (`text-muted-foreground/60` etc.) drop below AA by
+  construction — reserve them for decorative/redundant text only.
+- Methodology: WCAG 2.1 relative-luminance formula over the HSL→sRGB
+  conversion of each token; ratios rounded to one decimal.
+
 ---
 
 ## 3. Typography — IBM Plex Sans + IBM Plex Mono (ADR-F-15)
@@ -490,15 +519,24 @@ Use in: StrategyCards (5-day portfolio trend), Holdings rows (5-day price), Top 
 
 ### 6.11 LivePriceBadge Pattern (NEW)
 
+> **Sample corrected (Round-4 hardening, 2026-06-10)**: the original snippet
+> used `animate-pulse` on the freshness dot and raw `bg-green-500`-style
+> classes. Both are banned: status dots are STATIC (Bloomberg terminal
+> convention — see `components/shell/MarketStatusPill.tsx`, the canonical
+> implementation), and raw Tailwind palette colors violate the semantic-token
+> rule (§15.11 + the `.eslintrc.json` lint ban). Freshness is encoded by
+> COLOR alone, never by motion.
+
 ```tsx
 function LivePriceBadge({ price, updatedAt }: { price: string; updatedAt: Date }) {
   const ageMs = Date.now() - updatedAt.getTime()
-  const dotColor = ageMs < 30_000 ? 'bg-green-500 animate-pulse'
-                 : ageMs < 300_000 ? 'bg-amber-500'
-                 : 'bg-red-500'
+  // Static dot — color encodes freshness; no animation (status dots never pulse).
+  const dotColor = ageMs < 30_000 ? 'bg-positive'
+                 : ageMs < 300_000 ? 'bg-warning'
+                 : 'bg-negative'
   return (
     <span className="flex items-center gap-1.5">
-      <span className={cn('inline-block w-1.5 h-1.5 rounded-full', dotColor)} />
+      <span className={cn('inline-block w-1.5 h-1.5 rounded-full', dotColor)} aria-hidden />
       <span className="font-mono tabular-nums">{price}</span>
     </span>
   )
@@ -751,6 +789,57 @@ function ErrorCard({ message, onRetry }: { message: string; onRetry: () => void 
   )
 }
 ```
+
+#### 6.7.1 Route Error Boundaries (`error.tsx`) — Round-4 hardening, 2026-06-10
+
+The ErrorCard above handles **query-level** failures (a panel's fetch failed).
+**Render-level** failures (a component threw during render) are handled by the
+App Router `error.tsx` boundary chain. Nearest boundary wins:
+
+```
+per-route error.tsx (e.g. app/(app)/news/error.tsx)
+  → app/(app)/error.tsx          # group fallback — keeps the shell chrome
+    → app/error.tsx              # root — renders OUTSIDE the shell
+      → app/global-error.tsx     # last resort — replaces <html>/<body> itself
+        → Sentry.ErrorBoundary   # app/providers.tsx (also reports to Sentry)
+```
+
+**The shared body is `components/primitives/RouteErrorFallback.tsx`.** Every
+NEW per-route `error.tsx` must be a thin wrapper around it (don't hand-roll a
+variant — that's how the pre-Round-4 drift happened):
+
+```tsx
+"use client";                                   // mandatory for error.tsx
+import { RouteErrorFallback } from "@/components/primitives/RouteErrorFallback";
+
+export default function NewsError({ error, reset }: {
+  error: Error & { digest?: string };
+  reset: () => void;
+}) {
+  return <RouteErrorFallback error={error} reset={reset} routeLabel="News" />;
+}
+```
+
+The primitive's contract (pinned by
+`components/primitives/__tests__/RouteErrorFallback.test.tsx`):
+
+1. **Named state** — `routeLabel` renders as the uppercase mono micro-label so
+   the broken surface is identifiable in a screenshot.
+2. **Icon** — `AlertTriangle` in warning tone (route errors are recoverable;
+   the red `XCircle` is reserved for the fatal `app/error.tsx` /
+   `global-error.tsx` tiers).
+3. **"Try again"** — `<button>` wired to the Next.js `reset()` callback
+   (segment re-render, NOT navigation).
+4. **Digest, small** — `error.digest` in 9px mono at 50% opacity when present
+   (debug correlation handle); **`error.message` is never rendered** —
+   generic copy only, real error goes to `console.error` (Sentry capture
+   happens upstream in `Sentry.ErrorBoundary`; don't double-report).
+5. **Escape hatch** — "Back to dashboard" link for the reset-keeps-failing case.
+
+`app/global-error.tsx` intentionally does NOT use the primitive: the
+last-resort path keeps its dependency graph minimal (plain elements, inline
+SVG, `<a href>` full reload) because the crash may have come from a shared
+module — importing one back would crash the boundary too.
 
 ### 6.8 Real-Time UI Patterns
 
@@ -1180,6 +1269,29 @@ The sanctioned cautionary colour is **`text-warning`** — period.
 ---
 
 ## 9. TanStack Query Conventions
+
+### Global QueryClient Defaults (Round-4 hardening, 2026-06-10)
+
+The platform-wide cache policy lives in `makeQueryClient()` in
+`app/providers.tsx` and is pinned by `__tests__/query-client-defaults.test.ts`
+(source-contract test — see the file docstring for why it greps instead of
+importing the provider tree):
+
+| Option | Value | Why |
+|---|---|---|
+| `queries.staleTime` | `30_000` | No refetch storm on every mount; per-hook overrides below handle hot/cold data |
+| `queries.retry` | `1` | Fail fast — TanStack's default 3 exponential retries hides an outage for 3+ seconds, unacceptable for a terminal |
+| `queries.refetchOnWindowFocus` | `true` | Prices refresh when the user returns to the tab |
+| `queries.gcTime` | library default (5 min, deliberate) | Unmounted data survives tab-switching; don't raise globally (quote-data memory footprint) |
+| `mutations.retry` | `0` (explicit) | **Writes are never auto-retried** — a retried mutation that partially succeeded can duplicate orders/alerts/watchlist entries. Pinned explicitly so a library default change can't silently introduce write retries. Per-call override allowed only for provably idempotent mutations |
+
+All data fetching MUST go through TanStack Query (`lib/api/*` + hooks).
+Sanctioned raw-`fetch()` exceptions: SSE/streaming consumers
+(`features/chat/hooks/useChatStream.ts`, `components/shell/AskAiPanel.tsx`),
+the pre-auth login POST (`app/login/page.tsx`), server-side route handlers
+(`app/(public)/status/api/uptime/route.ts`), and the deploy-detection poll
+(`components/shell/ForceUpdateBanner.tsx`, `cache: "no-store"` by design).
+Anything else bypassing the cache is a defect.
 
 ### staleTime Per Data Type (set at hook level, not globally)
 
@@ -1764,6 +1876,23 @@ Rules of adoption:
 
 Prop passthrough + defaults are pinned by
 `components/ui/ag-grid/__tests__/AgGridBase.test.tsx`.
+
+> **Round-4 note — reconciling the screener's 20px exception with this 22px
+> path.** The screener grid runs `rowHeight={20}` / `headerHeight={20}` —
+> tighter than the `--data-row-height: 22px` token — as a deliberate
+> PRD-0089 Wave I-A density decision, **locked by the T-IA-14 architecture
+> guard** (`__tests__/architecture/screener-row-height.test.ts` +
+> `__tests__/screener-density.test.tsx`; the skeleton pitch is pinned in
+> `components/screener/__tests__/ScreenerTableSkeleton.test.tsx`). Its cell
+> renderers are tuned to that pitch (18px HeatCell pills, RowHoverToolbar
+> sizing), so "migrating the screener to 22" is a regression, not a cleanup —
+> the guard tests will fail any such attempt by design. Precedence when
+> adopting density on a grid: **(1)** a surface-specific guarded value
+> (screener 20px) wins; **(2)** otherwise adopt the 22px token via the rules
+> above; **(3)** the 28px default remains for grids whose row content hasn't
+> been audited for clipping. The 22px token is the generic adoption target;
+> T-IA-14 is the only sanctioned tighter exception — adding another requires
+> its own architecture guard + an entry here.
 
 ### 15.11 Sentiment color tokens — canonical consumption (Round-2 decision)
 

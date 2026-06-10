@@ -21,6 +21,9 @@ export { LoadingSkeleton } from "./LoadingSkeleton";
 export { MetricCell } from "./MetricCell";
 export { MetricLabel } from "./MetricLabel";
 export { MetricValue } from "./MetricValue";
+// Round-4 hardening: shared error.tsx body — see DESIGN_SYSTEM.md §6.7.1.
+export { RouteErrorFallback } from "./RouteErrorFallback";
+export type { RouteErrorFallbackProps } from "./RouteErrorFallback";
 export { SectionDivider } from "./SectionDivider";
 export { SeverityCharBadge } from "./SeverityCharBadge";
 export { Sparkline } from "./Sparkline";

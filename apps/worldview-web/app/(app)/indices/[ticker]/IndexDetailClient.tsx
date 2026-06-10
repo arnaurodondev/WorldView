@@ -213,7 +213,16 @@ export function IndexDetailClient({ ticker }: IndexDetailClientProps) {
 
       {/* ── Chart placeholder ──────────────────────────────────────────── */}
       {ohlcvLoading ? (
-        <div className="h-[240px] bg-muted/10 border border-border animate-pulse" />
+        // WHY static (no animate-pulse): DESIGN_SYSTEM.md §6.2 bans raw
+        // animate-pulse on skeletons — Terminal Dark skeletons are STATIC
+        // bg-muted blocks (Bloomberg-style loading bars). The fixed 240px
+        // height matches the loaded chart container so hydration causes zero
+        // layout shift. aria-hidden: decorative placeholder — screen readers
+        // get the loading announcement from the page, not from this div.
+        <div
+          className="h-[240px] border border-border bg-muted/10"
+          aria-hidden
+        />
       ) : (
         <div className="h-[240px] border border-border bg-card p-4">
           {/* WHY text only (not lightweight-charts): the full chart integration

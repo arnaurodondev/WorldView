@@ -10,13 +10,18 @@
  * GlobalHotkeyBindings) calls a global toggle function exposed via React
  * context — keeping open/close state in this component.
  *
- * WHY native <dialog>: gives accessible focus-trap, Esc-to-close, and inert
- * backdrop semantics for free. Radix Dialog also works but we don't need its
- * portaling/animation here; the cheat sheet is a single short-lived overlay.
+ * WHY a custom overlay (not Radix Dialog / native <dialog>): the cheat sheet
+ * is a single short-lived overlay — we don't need Radix's portaling/animation
+ * machinery. The trade-off is that we must implement the modal a11y contract
+ * ourselves: Esc-to-close (effect below), aria-modal, AND a focus trap.
+ * Round-4 hardening added the trap — before it, Tab walked out of the overlay
+ * into the inert page behind the backdrop, which violates the WAI-ARIA dialog
+ * pattern (focus must cycle within an aria-modal dialog).
  *
  * KEYBOARD:
  *   - Open:  `?` (registered by GlobalHotkeyBindings)
  *   - Close: Esc, click outside, or `?` again
+ *   - Tab / Shift+Tab: cycles focus WITHIN the dialog (trap, wraps at edges)
  */
 
 "use client";
@@ -72,17 +77,77 @@ export function HotkeyCheatSheet() {
 
   // Esc closes when open. The keydown chord listener already handles the
   // Esc-clears-buffer case, but it doesn't toggle this component, so we add
-  // a local listener while open.
+  // a local listener while open. The same listener implements the FOCUS TRAP
+  // (Round-4 hardening): this is a hand-rolled aria-modal overlay (no Radix,
+  // no native <dialog>), so without manual Tab handling, focus walks out of
+  // the dialog into the backdropped page — a WAI-ARIA dialog-pattern
+  // violation. Minimal trap: intercept Tab/Shift+Tab, compute the focusable
+  // set inside the dialog, and wrap at the edges.
   useEffect(() => {
     if (!open) return;
+
     function onKey(e: KeyboardEvent) {
       if (e.key === "Escape") {
         e.preventDefault();
         setOpen(false);
+        return;
       }
+      if (e.key !== "Tab") return;
+
+      const dialog = dialogRef.current;
+      if (!dialog) return;
+
+      // WHY query on every keydown (not memoised): the focusable set changes
+      // as the user filters (sections unmount); querying live is cheap for a
+      // dialog this small and can never go stale.
+      // WHY this selector: the only focusables we render are the filter
+      // input, the close button, and (defensively) any link/kbd-wrapper a
+      // future revision adds. [tabindex="-1"] is excluded — programmatically
+      // focusable but not tab-reachable.
+      const focusables = Array.from(
+        dialog.querySelectorAll<HTMLElement>(
+          'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])',
+        ),
+      );
+      if (focusables.length === 0) return;
+
+      const first = focusables[0]!;
+      const last = focusables[focusables.length - 1]!;
+      const active = document.activeElement;
+
+      // Three wrap cases:
+      //  1. Tab on the last element        → wrap to first
+      //  2. Shift+Tab on the first element → wrap to last
+      //  3. Focus escaped the dialog somehow (e.g. backdrop click target) —
+      //     pull it back to the first element so the trap re-engages.
+      if (!e.shiftKey && (active === last || !dialog.contains(active))) {
+        e.preventDefault();
+        first.focus();
+      } else if (e.shiftKey && (active === first || !dialog.contains(active))) {
+        e.preventDefault();
+        last.focus();
+      }
+      // Otherwise: let the browser move focus naturally — the next stop is
+      // still inside the dialog.
     }
+
     document.addEventListener("keydown", onKey);
     return () => document.removeEventListener("keydown", onKey);
+  }, [open]);
+
+  // Focus RESTORE (companion to the trap): remember what had focus when the
+  // dialog opened and give it back on close — per the WAI-ARIA dialog
+  // pattern, so a keyboard user who pressed `?` mid-task resumes where they
+  // left off instead of being dumped at document <body>.
+  useEffect(() => {
+    if (!open) return;
+    const previouslyFocused = document.activeElement as HTMLElement | null;
+    return () => {
+      // WHY the isConnected check: the opener may have unmounted while the
+      // dialog was up (e.g. route change); focusing a detached node throws
+      // away the user's focus silently — better to leave it alone.
+      if (previouslyFocused?.isConnected) previouslyFocused.focus();
+    };
   }, [open]);
 
   // Focus the filter input on open. requestAnimationFrame defers focus until

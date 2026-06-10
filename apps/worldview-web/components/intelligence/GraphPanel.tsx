@@ -248,7 +248,13 @@ export function GraphPanel({ entityId }: GraphPanelProps) {
             slider to depth 3+, so the most contextually relevant feedback is right
             next to the slider they touched, not at the bottom of the panel. */}
         {isExtendedLoading && (
-          <span className="text-[9px] font-mono text-muted-foreground animate-pulse shrink-0">
+          // WHY animate-skeleton-pulse (not raw animate-pulse): §6.2 bans the
+          // fast consumer-app pulse; the sanctioned opt-in is the slow 2s
+          // opacity fade (tailwind.config.ts "skeleton-pulse") reserved for
+          // long loads where "still working" feedback matters. Depth-3 AGE
+          // traversals routinely take multiple seconds (O(degree³)), so this
+          // status line qualifies for the slow tier rather than going static.
+          <span className="text-[9px] font-mono text-muted-foreground animate-skeleton-pulse shrink-0">
             loading extended graph…
           </span>
         )}

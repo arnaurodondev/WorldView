@@ -224,4 +224,105 @@ describe("HotkeyCheatSheet", () => {
     expect(dialog.textContent).not.toMatch(/Go to Dashboard/);
     expect(dialog.textContent).not.toMatch(/Go to Portfolio/);
   });
+
+  // ── Focus trap (Round-4 hardening) ──────────────────────────────────────────
+  // The cheat sheet is a hand-rolled aria-modal overlay (no Radix), so it must
+  // implement the WAI-ARIA dialog focus contract itself: Tab cycles within the
+  // dialog (wrapping at the edges) and focus returns to the opener on close.
+  // Focusable order in the dialog DOM: [close button] → [filter input].
+
+  /** Wait for the rAF-deferred autofocus of the filter input after opening. */
+  async function openAndWaitForFocus(): Promise<HTMLElement> {
+    await userEvent.keyboard("?");
+    const filter = await screen.findByPlaceholderText(/filter shortcuts/i);
+    // The component focuses the input inside requestAnimationFrame — poll
+    // until that lands so the trap assertions start from a known state.
+    await vi.waitFor(() => expect(filter).toHaveFocus());
+    return filter;
+  }
+
+  it("Tab on the last focusable wraps to the first (focus stays trapped)", async () => {
+    render(
+      <HotkeyProvider registry={registry}>
+        <ListenerHost />
+        <HotkeyCheatSheet />
+      </HotkeyProvider>,
+    );
+
+    const filter = await openAndWaitForFocus();
+    const closeBtn = screen.getByRole("button", {
+      name: /close keyboard shortcuts/i,
+    });
+
+    // Filter input is the LAST focusable; Tab must wrap to the close button
+    // (the first), never escape into the page behind the backdrop.
+    expect(filter).toHaveFocus();
+    fireEvent.keyDown(document, { key: "Tab" });
+    expect(closeBtn).toHaveFocus();
+  });
+
+  it("Shift+Tab on the first focusable wraps to the last", async () => {
+    render(
+      <HotkeyProvider registry={registry}>
+        <ListenerHost />
+        <HotkeyCheatSheet />
+      </HotkeyProvider>,
+    );
+
+    const filter = await openAndWaitForFocus();
+    const closeBtn = screen.getByRole("button", {
+      name: /close keyboard shortcuts/i,
+    });
+
+    // Move to the first focusable, then Shift+Tab must wrap back to the last.
+    closeBtn.focus();
+    fireEvent.keyDown(document, { key: "Tab", shiftKey: true });
+    expect(filter).toHaveFocus();
+  });
+
+  it("pulls focus back into the dialog if it escaped (e.g. to <body>)", async () => {
+    render(
+      <HotkeyProvider registry={registry}>
+        <ListenerHost />
+        <HotkeyCheatSheet />
+      </HotkeyProvider>,
+    );
+
+    await openAndWaitForFocus();
+
+    // Simulate focus having escaped the dialog entirely (backdrop click puts
+    // activeElement on <body> in some browsers). The next Tab must re-engage
+    // the trap by focusing the first dialog focusable.
+    (document.activeElement as HTMLElement | null)?.blur();
+    expect(document.body).toHaveFocus();
+    fireEvent.keyDown(document, { key: "Tab" });
+    const closeBtn = screen.getByRole("button", {
+      name: /close keyboard shortcuts/i,
+    });
+    expect(closeBtn).toHaveFocus();
+  });
+
+  it("restores focus to the previously focused element on close", async () => {
+    render(
+      <HotkeyProvider registry={registry}>
+        <ListenerHost />
+        <HotkeyCheatSheet />
+      </HotkeyProvider>,
+    );
+
+    // Give some page element focus BEFORE opening — this is the "opener" the
+    // dialog must hand focus back to (WAI-ARIA dialog pattern).
+    const opener = document.createElement("button");
+    opener.textContent = "opener";
+    document.body.appendChild(opener);
+    opener.focus();
+    try {
+      await openAndWaitForFocus();
+      fireEvent.keyDown(document, { key: "Escape" });
+      expect(screen.queryByRole("dialog")).toBeNull();
+      expect(opener).toHaveFocus();
+    } finally {
+      opener.remove();
+    }
+  });
 });

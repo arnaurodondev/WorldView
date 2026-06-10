@@ -49,6 +49,11 @@ import { GlobalErrorFallback } from "@/components/sentry/GlobalErrorFallback";
 // In Next.js App Router, module-level singletons are shared across ALL requests
 // on the server. A QueryClient per-request (via useState) ensures cache isolation
 // between different users. useState initializes once per component instance.
+//
+// The defaults below are the platform-wide cache policy — documented in
+// DESIGN_SYSTEM.md §9 and pinned by __tests__/query-client-defaults.test.ts
+// (a source-contract test — rendering/importing the full provider tree in a
+// unit test would drag in the Sentry SDK and every context provider).
 function makeQueryClient(): QueryClient {
   return new QueryClient({
     defaultOptions: {
@@ -68,6 +73,20 @@ function makeQueryClient(): QueryClient {
         // Useful for finance: re-fetching prices when user switches back to tab.
         // Individual queries can override to false for cached/slow data.
         refetchOnWindowFocus: true,
+
+        // gcTime intentionally left at the TanStack default (5 min): unmounted
+        // query data survives 5 minutes so tab-switching within the terminal
+        // re-renders instantly from cache. Don't raise it globally — quote
+        // data has a 22ms-row × thousands-of-instruments footprint.
+      },
+      mutations: {
+        // WHY retry 0 (explicit, Round-4 hardening): mutations are writes —
+        // auto-retrying a write that may have partially succeeded risks
+        // duplicate orders/alerts/watchlist entries. 0 is TanStack's default,
+        // but we pin it explicitly so a library default change can never
+        // silently introduce write retries. Surfaces that KNOW a mutation is
+        // idempotent may override per-call.
+        retry: 0,
       },
     },
   });

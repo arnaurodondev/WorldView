@@ -403,8 +403,12 @@
    * to instant. State changes still apply, just without the animation.
    * PLAN-0052 Wave A QA: animate-ping added — used 4× on landing (Hero
    * kicker, LIVE pill, LiveDataStrip, Footer status). Without an explicit
-   * override the universal 0.01ms duration produces a faint initial flash. */
-  .tick-flash, .animate-pulse, .animate-ping, .animate-spin, .animate-in, .animate-out {
+   * override the universal 0.01ms duration produces a faint initial flash.
+   * Round-4 hardening: animate-skeleton-pulse added — the §6.2 sanctioned
+   * slow-fade tier must also go fully static under reduced motion (same
+   * faint-initial-flash rationale as animate-ping). */
+  .tick-flash, .animate-pulse, .animate-ping, .animate-spin, .animate-in, .animate-out,
+  .animate-skeleton-pulse {
     animation: none !important;
   }
 }
