@@ -637,7 +637,15 @@ async def _intelligence_rollup_loop(
                     )
                     continue
 
-            s6_url = getattr(settings, "content_store_url", "http://content-store:8006")
+            # Prefer the explicit ``nlp_pipeline_url`` (correct service that owns
+            # the 7-day news-rollup endpoint). Fall back to the legacy
+            # ``content_store_url`` setting so existing env-var overrides keep
+            # working, and finally to the in-cluster default.
+            s6_url = getattr(
+                settings,
+                "nlp_pipeline_url",
+                getattr(settings, "content_store_url", "http://nlp-pipeline:8006"),
+            )
             s7_url = getattr(settings, "knowledge_graph_url", "http://knowledge-graph:8007")
             s10_url = getattr(settings, "alert_service_url", "http://alert-service:8010")
             s8_url = getattr(settings, "rag_chat_url", "http://rag-chat:8008")

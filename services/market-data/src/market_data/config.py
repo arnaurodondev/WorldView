@@ -88,7 +88,15 @@ class Settings(BaseSettings):
     # URLs for the 4 upstream intelligence services called by the L-5b worker.
     # Default to Docker-Compose service names so the out-of-box local dev stack
     # works without any extra configuration.
-    content_store_url: str = "http://content-store:8006"
+    # NOTE: the S6 news-rollup endpoint lives in nlp-pipeline (nlp_db owns
+    # routing_decisions / document_source_metadata / article_impact_windows),
+    # NOT in content-store. The previous default (``http://content-store:8006``)
+    # was doubly wrong — wrong service AND wrong port — so every nightly call
+    # silently 404'd, leaving news_count_7d/llm_relevance_7d_max/
+    # display_relevance_7d_weighted NULL across all instruments.
+    # ``content_store_url`` is kept as an alias for backward env-var compat.
+    nlp_pipeline_url: str = "http://nlp-pipeline:8006"
+    content_store_url: str = "http://nlp-pipeline:8006"
     knowledge_graph_url: str = "http://knowledge-graph:8007"
     alert_service_url: str = "http://alert:8010"
     rag_chat_url: str = "http://rag-chat:8008"
