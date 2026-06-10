@@ -6,7 +6,7 @@ import httpx
 import pytest
 from content_ingestion.config import NewsAPIProviderSettings
 from content_ingestion.domain.exceptions import AdapterError
-from content_ingestion.infrastructure.adapters.newsapi.client import NewsAPIClient
+from content_ingestion.infrastructure.adapters.newsapi.client import NewsAPIClient, NewsAPIServerError
 
 pytestmark = pytest.mark.unit
 
@@ -129,6 +129,74 @@ class TestNewsAPIClient:
             await client.fetch_articles(query="test")
 
         assert recorded_ttl == 3600
+
+
+class TestNewsAPIServerErrorDetection:
+    """PLAN-0109 / T-C-1-01 / BP-658 — NewsAPI returns HTTP 200 with
+    ``{"status":"error",...}`` on quota and parameter failures; the client
+    must raise ``NewsAPIServerError`` rather than letting the caller mistake
+    it for a legitimate empty 200 response (and silently advance the
+    watermark).
+    """
+
+    async def test_client_raises_on_status_error_rate_limited(self) -> None:
+        """status=error + code=rateLimited → NewsAPIServerError with code/message."""
+
+        def handler(_request: httpx.Request) -> httpx.Response:
+            return httpx.Response(
+                200,
+                json={
+                    "status": "error",
+                    "code": "rateLimited",
+                    "message": "You have made too many requests recently.",
+                },
+            )
+
+        async with httpx.AsyncClient(transport=_mock_transport(handler)) as http:
+            client = _make_client(http)
+            with pytest.raises(NewsAPIServerError) as exc_info:
+                await client.fetch_articles(query="AI")
+
+        assert exc_info.value.code == "rateLimited"
+        assert exc_info.value.message is not None
+        assert "too many requests" in exc_info.value.message
+
+    async def test_client_raises_on_status_error_parameter_invalid(self) -> None:
+        """status=error + code=parameterInvalid → NewsAPIServerError."""
+
+        def handler(_request: httpx.Request) -> httpx.Response:
+            return httpx.Response(
+                200,
+                json={
+                    "status": "error",
+                    "code": "parameterInvalid",
+                    "message": "The 'from' parameter is invalid.",
+                },
+            )
+
+        async with httpx.AsyncClient(transport=_mock_transport(handler)) as http:
+            client = _make_client(http)
+            with pytest.raises(NewsAPIServerError) as exc_info:
+                await client.fetch_articles(query="AI", from_date="1900-01-01")
+
+        assert exc_info.value.code == "parameterInvalid"
+
+    async def test_client_succeeds_on_status_ok_empty_articles(self) -> None:
+        """A legitimate "no news today" 200 response (status=ok, articles=[])
+        must NOT raise — only ``status=error`` triggers the new typed error."""
+
+        def handler(_request: httpx.Request) -> httpx.Response:
+            return httpx.Response(
+                200,
+                json={"status": "ok", "totalResults": 0, "articles": []},
+            )
+
+        async with httpx.AsyncClient(transport=_mock_transport(handler)) as http:
+            client = _make_client(http)
+            # No exception — returns the parsed dict with empty articles.
+            result = await client.fetch_articles(query="AI")
+            assert result["status"] == "ok"
+            assert result["articles"] == []
 
 
 class _FakeValkey:

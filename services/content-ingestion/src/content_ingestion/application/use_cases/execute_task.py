@@ -155,18 +155,47 @@ class ExecuteContentTaskUseCase:
         """Inner pipeline: read watermark → fetch → write → update watermark."""
         import common.time as ct_mod
 
-        # 2. Read watermark (separate short session — BP-016: released before I/O)
+        # 2. Read watermark (separate short session — BP-016: released before I/O).
+        #
+        # PLAN-0109 / BP-659: wrap the read in ``try/finally: rollback`` so a
+        # pooled connection never returns to the pool with state
+        # ``idle in transaction (aborted)``.  Without the rollback an asyncpg
+        # exception surfaces as "Can't reconnect" on the next acquirer because
+        # the implicit transaction stayed open.
         watermark_date = ""
         async with self._write_factory() as ro_session:
-            state_repo = self._adapter_state_factory(ro_session)
-            state = await state_repo.get(task.source_id)
-            if state and state.last_watermark:
-                watermark_date = state.last_watermark.strftime("%Y-%m-%d")
+            try:
+                state_repo = self._adapter_state_factory(ro_session)
+                state = await state_repo.get(task.source_id)
+                if state and state.last_watermark:
+                    watermark_date = state.last_watermark.strftime("%Y-%m-%d")
+            finally:
+                # Read-only, but rollback is still required to release the
+                # implicit transaction and reset the pooled connection.
+                await ro_session.rollback()
 
         # 3. Build adapter and fetch (no session held — R24)
         fetch_output = await self._fetch_from_source(task, watermark_date)
 
         if not fetch_output.results:
+            # PLAN-0109 / T-C-1-02: empty-but-successful poll — advance
+            # ``last_run_at`` so dashboards can distinguish a healthy
+            # "no news today" cycle from a silently failing worker.
+            # ``last_watermark`` is intentionally NOT touched so backfills
+            # remain anchored at the most recent article we actually saw.
+            async with self._write_factory() as empty_session:
+                try:
+                    adapter_state_repo = self._adapter_state_factory(empty_session)
+                    config_hash = getattr(fetch_output.source, "config_hash", None)
+                    await adapter_state_repo.upsert(
+                        task.source_id,
+                        last_run_at=ct_mod.utc_now(),
+                        last_run_config_hash=config_hash,
+                    )
+                    await empty_session.commit()
+                except Exception:
+                    await empty_session.rollback()
+                    raise
             task.succeed()
             await task_repo.update_status(task.id, task.status)
             return None
@@ -214,13 +243,29 @@ class ExecuteContentTaskUseCase:
             # Update watermark after successful writes.
             # PLAN-0055 B-1: also snapshot the live ``sources.config_hash`` so the
             # startup drift detector can flag operator config edits since this run.
+            #
+            # PLAN-0109 / T-C-1-02: ``last_run_at`` must advance UNCONDITIONALLY
+            # on every successful poll — even when ``summary.fetched == 0`` — so
+            # operational dashboards (and the polling-staleness alert) can tell
+            # a healthy "no news today" run apart from a hung/silent worker.
+            # ``last_watermark`` keeps its existing semantics (only advances when
+            # we actually persisted new articles) so backfills remain correct.
+            adapter_state_repo = self._adapter_state_factory(session)
+            now = ct_mod.utc_now()
+            config_hash = getattr(fetch_output.source, "config_hash", None)
             if summary.fetched > 0:
-                adapter_state_repo = self._adapter_state_factory(session)
-                now = ct_mod.utc_now()
-                config_hash = getattr(fetch_output.source, "config_hash", None)
                 await adapter_state_repo.upsert(
                     task.source_id,
                     last_watermark=now,
+                    last_run_at=now,
+                    last_run_config_hash=config_hash,
+                )
+            else:
+                # Empty-but-successful poll: bump ``last_run_at`` only.
+                # We deliberately omit ``last_watermark`` so the existing
+                # watermark (or NULL) is preserved by the upsert.
+                await adapter_state_repo.upsert(
+                    task.source_id,
                     last_run_at=now,
                     last_run_config_hash=config_hash,
                 )
@@ -270,16 +315,28 @@ class ExecuteContentTaskUseCase:
             config=task.source_config,
         )
 
-        # Build adapter with dedup check via a short-lived session
+        # Build adapter with dedup check via a short-lived session.
+        #
+        # PLAN-0109 / BP-659: this session lives across the external HTTP fetch
+        # (adapter.fetch) — if the fetch raises and the session exits without an
+        # explicit rollback, the asyncpg connection returns to the pool with
+        # ``idle in transaction (aborted)`` state and surfaces as "Can't
+        # reconnect" on the next acquirer.  Wrap in ``try/finally: rollback`` to
+        # reset the connection on every exit path (success or failure).
         async with self._write_factory() as dedup_session:
-            dedup_repo = self._fetch_log_factory(dedup_session)
-            adapter = self._adapter_builder(task.source_type, dedup_repo.exists_by_url_hash)
+            try:
+                dedup_repo = self._fetch_log_factory(dedup_session)
+                adapter = self._adapter_builder(task.source_type, dedup_repo.exists_by_url_hash)
 
-            results = await adapter.fetch(
-                source,
-                is_backfill=task.is_backfill or self._settings.backfill_enabled,
-                from_date=watermark_date,
-            )
+                results = await adapter.fetch(
+                    source,
+                    is_backfill=task.is_backfill or self._settings.backfill_enabled,
+                    from_date=watermark_date,
+                )
+            finally:
+                # Read-only session over network I/O — rollback the implicit
+                # transaction so the connection returns clean to the pool.
+                await dedup_session.rollback()
 
         return _FetchOutput(
             results=results,  # type: ignore[arg-type]

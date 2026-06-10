@@ -22,6 +22,27 @@ if TYPE_CHECKING:
 logger = get_logger(__name__)  # type: ignore[no-any-return]
 
 
+class NewsAPIServerError(Exception):
+    """Raised when NewsAPI returns HTTP 200 with ``{"status":"error", ...}``.
+
+    NewsAPI's free tier surfaces quota exhaustion, parameter validation,
+    and other upstream issues as HTTP 200 responses with a JSON body of the
+    form ``{"status":"error","code":"...","message":"..."}``.  Without an
+    explicit check (PLAN-0109 / BP-658) callers parse ``articles`` as an
+    empty list and silently advance their watermark.
+
+    Attributes:
+        code:    NewsAPI ``code`` field (e.g. ``"rateLimited"``,
+                 ``"parameterInvalid"``, ``"maximumResultsReached"``).
+        message: Human-readable upstream error message.
+    """
+
+    def __init__(self, *, code: str | None, message: str | None) -> None:
+        self.code = code
+        self.message = message
+        super().__init__(f"NewsAPI upstream error: code={code!r} message={message!r}")
+
+
 class NewsAPIClient:
     """Low-level HTTP client for the NewsAPI.org endpoint.
 
@@ -143,6 +164,24 @@ class NewsAPIClient:
         data = response.json()
         if not isinstance(data, dict):
             return {"status": "error", "articles": []}
+
+        # NewsAPI free tier surfaces upstream errors (rateLimited,
+        # parameterInvalid, maximumResultsReached, etc.) as HTTP 200 with a
+        # JSON body of the form ``{"status":"error","code":"...","message":"..."}``.
+        # The previous implementation parsed this as ``{"articles": []}`` and
+        # let the caller mistake an upstream error for a legitimate
+        # "no news today" 200 — silently advancing the watermark (BP-658).
+        # Log with structured fields BEFORE raising so the worker's
+        # log-correlation pipeline always captures the upstream code.
+        if data.get("status") == "error":
+            code = data.get("code") if isinstance(data.get("code"), str) else None
+            message = data.get("message") if isinstance(data.get("message"), str) else None
+            logger.warning(
+                "newsapi_upstream_error",
+                code=code,
+                message=message,
+            )
+            raise NewsAPIServerError(code=code, message=message)
         return data  # type: ignore[no-any-return]
 
     async def fetch_all_pages(

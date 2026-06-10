@@ -284,6 +284,114 @@ class TestMetricsNotCalledInUseCase:
         assert not hasattr(uc, "_metrics")
 
 
+# ---------------------------------------------------------------------------
+# PLAN-0109 / T-C-1-02 — Watermark always advances ``last_run_at`` on success
+# ---------------------------------------------------------------------------
+
+
+class TestWatermarkLastRunAtAlwaysAdvances:
+    """When a poll completes successfully with zero fetched articles, the
+    ``last_run_at`` field MUST advance so the polling-staleness alert can
+    distinguish a healthy "no news today" cycle from a silently hung worker.
+    ``last_watermark`` must remain unchanged so backfills stay anchored on
+    the most recent article we actually saw (BP-658)."""
+
+    @patch("content_ingestion.application.use_cases.execute_task.ExecuteContentTaskUseCase._fetch_from_source")
+    async def test_last_run_at_set_when_fetched_zero(self, mock_fetch: AsyncMock) -> None:
+        """Adapter returns empty list → ``adapter_state_repo.upsert`` is called
+        with ``last_run_at`` set (and ``last_watermark`` NOT passed)."""
+        task = _make_claimed_task()
+        mock_fetch.return_value = _make_fetch_output(task, results=[])
+
+        adapter_state_factory, repo = _make_adapter_state_factory()
+        write_factory, _session = _make_write_factory()
+
+        uc = _make_use_case(
+            write_factory=write_factory,
+            adapter_state_factory=adapter_state_factory,
+        )
+        task_repo = _mock_task_repo()
+
+        await uc.execute(task, task_repo)
+
+        # adapter_state_repo.upsert must have been called at least once
+        # (once for the empty-results path).  Verify last_run_at is present.
+        assert repo.upsert.await_count >= 1
+        last_call = repo.upsert.await_args
+        assert last_call is not None
+        # kwargs should carry last_run_at but NOT last_watermark
+        assert last_call.kwargs.get("last_run_at") is not None
+
+    @patch("content_ingestion.application.use_cases.execute_task.ExecuteContentTaskUseCase._fetch_from_source")
+    async def test_last_watermark_unchanged_when_fetched_zero(self, mock_fetch: AsyncMock) -> None:
+        """Empty-but-successful poll must NOT pass ``last_watermark`` to the
+        upsert so the existing watermark is preserved (backfill anchor)."""
+        task = _make_claimed_task()
+        mock_fetch.return_value = _make_fetch_output(task, results=[])
+
+        adapter_state_factory, repo = _make_adapter_state_factory()
+        write_factory, _session = _make_write_factory()
+
+        uc = _make_use_case(
+            write_factory=write_factory,
+            adapter_state_factory=adapter_state_factory,
+        )
+        task_repo = _mock_task_repo()
+
+        await uc.execute(task, task_repo)
+
+        assert repo.upsert.await_count >= 1
+        # No call should have advanced last_watermark on the empty path.
+        for call in repo.upsert.await_args_list:
+            assert (
+                "last_watermark" not in call.kwargs
+            ), "last_watermark must not be touched on an empty-but-successful poll"
+
+
+# ---------------------------------------------------------------------------
+# PLAN-0109 / T-C-1-03 — Transaction hygiene: rollback short-lived sessions
+# ---------------------------------------------------------------------------
+
+
+class TestFetchSessionRollback:
+    """The dedup-check session in ``_fetch_from_source`` spans the external
+    HTTP fetch.  On every exit path (success or failure) the session MUST be
+    rolled back so the pooled asyncpg connection does not return with state
+    ``idle in transaction (aborted)`` (BP-659)."""
+
+    async def test_fetch_session_rollback_called_on_exit(self) -> None:
+        """``_fetch_from_source`` must call ``session.rollback()`` even on
+        a successful path (read-only session over network I/O)."""
+        task = _make_claimed_task()
+
+        # Adapter returns empty results — clean success path
+        mock_adapter = MagicMock()
+        mock_adapter.fetch = AsyncMock(return_value=[])
+        adapter_builder = MagicMock(return_value=mock_adapter)
+
+        mock_dedup_repo = AsyncMock()
+        fetch_log_factory = MagicMock(return_value=mock_dedup_repo)
+
+        # Session whose rollback is recorded
+        mock_session = AsyncMock()
+        mock_session.rollback = AsyncMock()
+        mock_session_cm = AsyncMock()
+        mock_session_cm.__aenter__ = AsyncMock(return_value=mock_session)
+        mock_session_cm.__aexit__ = AsyncMock(return_value=None)
+        write_factory = MagicMock(return_value=mock_session_cm)
+
+        uc = _make_use_case(
+            write_factory=write_factory,
+            adapter_builder=adapter_builder,
+            fetch_log_factory=fetch_log_factory,
+        )
+
+        await uc._fetch_from_source(task, "")
+
+        # rollback must have been invoked exactly once on the dedup session
+        mock_session.rollback.assert_awaited()
+
+
 class TestAdapterBuilderInjection:
     """Verify the adapter_builder is called correctly in _fetch_from_source."""
 
