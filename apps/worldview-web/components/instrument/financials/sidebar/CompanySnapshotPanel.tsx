@@ -65,7 +65,7 @@ export function CompanySnapshotPanel({ instrument }: CompanySnapshotPanelProps) 
         {/* Round-3 item 2: uniform accent-bar header (border-l-2 border-l-primary
           + bg-muted/20 — Round-1 DenseMetricsGrid pattern, applied tab-wide). */}
       <div className="flex h-6 items-center border-b border-border border-l-2 border-l-primary bg-muted/20 px-2">
-          <span className="text-[9px] uppercase tracking-widest text-muted-foreground/70">
+          <span className="font-mono text-[10px] uppercase tracking-[0.08em] text-muted-foreground">
             COMPANY
           </span>
         </div>
@@ -91,7 +91,7 @@ export function CompanySnapshotPanel({ instrument }: CompanySnapshotPanelProps) 
       {/* Round-3 item 2: uniform accent-bar header (border-l-2 border-l-primary
           + bg-muted/20 — Round-1 DenseMetricsGrid pattern, applied tab-wide). */}
       <div className="flex h-6 items-center border-b border-border border-l-2 border-l-primary bg-muted/20 px-2">
-        <span className="text-[9px] uppercase tracking-widest text-muted-foreground/70">
+        <span className="font-mono text-[10px] uppercase tracking-[0.08em] text-muted-foreground">
           COMPANY
         </span>
       </div>

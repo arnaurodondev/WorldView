@@ -1,85 +1,109 @@
 /**
- * components/instrument/financials/PeerComparisonTable.tsx — Peer comparison grid (T-12)
+ * components/instrument/financials/PeerComparisonTable.tsx — peer relative-value panel
+ * (Wave-2 Financials redesign, scope item 4 — first-class peer comparison).
  *
- * WHY THIS EXISTS: PLAN-0089 W3 §4.5 — the peer comparison block is the primary
- * relative-value analysis surface on the Financials tab. Analysts benchmark
- * the subject instrument's P/E, P/B, market cap, and 1Y return against 5 same-
- * industry peers in a single compact table. The Bloomberg "RV" (relative value)
- * equivalent for equity analysts who need to answer "cheap vs peers?" in < 5s.
+ * WHY THIS REWRITE: the previous table consumed the legacy n=5 peers slice
+ * (prop-drilled from useFinancialsSidebarData) and burned two of its six
+ * columns on low-information fields: NAME (truncated anyway) + SECTOR (the
+ * same string on every row — the endpoint selects peers WITHIN one
+ * industry). The Wave-1 backend upgrade returns 8 peers with `last_price` +
+ * `change_pct`, which turns this into a real relative-value board: price
+ * action (LAST / DAY %) next to valuation (MCAP / P/E) next to momentum
+ * (1Y RET) — the Bloomberg "RV" scan in one glance.
  *
- * WHY self-row highlight (bg-muted/30): traders need to locate the subject
- * instrument instantly when scanning a 6-row table. The muted background
- * mirrors Finviz's "current ticker" row pattern.
+ * WHAT CHANGED vs the old table:
+ *   - self-fetches via usePeers (n=8, upgraded shape) — see usePeers.ts for
+ *     why the fetcher lives here and not in lib/api/instruments.ts;
+ *   - columns: TICKER | NAME | LAST | DAY % | MKT CAP | P/E | 1Y RET
+ *     (SECTOR dropped — constant per the module note above; the shared
+ *     industry now renders once in the header meta where it belongs);
+ *   - the subject row now shows REAL last/day% (from the page quote prop)
+ *     instead of the old triple of em-dashes;
+ *   - 22px rows (DESIGN_SYSTEM --data-row-height) + uniform PanelHeader.
  *
- * WHY peer row click → router.push (not <Link>): the row is a <tr> element,
- * not an <a> element. Next.js App Router's router.push navigates programmatically.
- * F2 TickerLink exists at components/portfolio/cells/TickerLink.tsx but is
- * portfolio-scoped; here we navigate directly with F2-style URLs.
+ * WHAT WAS KEPT: self-row-first ordering, bg-muted/30 self highlight + ◆
+ * marker, row click → router.push (rows are divs, not anchors), the
+ * "{n} peers · click row to navigate" footer, shape-matched skeleton.
  *
- * WHO USES IT: FinancialsTab.tsx — Block 4 of the left column (T-25).
- * DATA SOURCE: peersData from useFinancialsSidebarData → qk.instruments.peers(id)
- *   → S9 GET /v1/instruments/{id}/peers (T-S9-03, shipped in W5).
- * DESIGN REFERENCE: docs/designs/0089/06-instrument-financials.md §4.5
+ * WHO USES IT: FinancialsTab.tsx — left column, after the earnings panel.
+ * DATA SOURCE: usePeers → S9 GET /v1/instruments/{id}/peers?n=8 (Wave-1).
  */
 
 "use client";
-// WHY "use client": router.push (useRouter) is a browser API. Row click
-// handlers use the Next.js App Router client-side navigation.
+// WHY "use client": useRouter + the usePeers TanStack hook are browser-only.
 
 import { useRouter } from "next/navigation";
+
+import { PanelHeader } from "./PanelHeader";
+import { usePeers, type PeerRowV2 } from "./usePeers";
 import { Skeleton } from "@/components/ui/skeleton";
-import { formatPercent, formatMarketCap } from "@/lib/utils";
-import type { PeersResponse, PeerInstrument } from "@/lib/api/instruments";
-import type { Fundamentals } from "@/types/api";
+import { formatMarketCap, formatPercent, formatPercentDirect, formatPrice } from "@/lib/utils";
+import type { Fundamentals, Quote } from "@/types/api";
 
 // ── Props ─────────────────────────────────────────────────────────────────────
 
-interface PeerComparisonTableProps {
-  /** The instrument being viewed — rendered as the self-row. */
-  fundamentals: Fundamentals | null | undefined;
-  /** Peers data from useFinancialsSidebarData. */
-  peersData: PeersResponse | undefined;
-  /** True while useFinancialsSidebarData is still fetching peers. */
-  isLoading?: boolean;
+export interface PeerComparisonTableProps {
+  /** Subject instrument fundamentals — identity + MCAP/P-E for the self row. */
+  readonly fundamentals: Fundamentals | null | undefined;
+  /** Live quote — supplies the self row's LAST + DAY % (peers carry their own). */
+  readonly quote: Quote | null | undefined;
+  /** Keys the peers fetch. Empty string disables it (page bundle not resolved). */
+  readonly instrumentId: string;
 }
+
+// ── Layout ────────────────────────────────────────────────────────────────────
+// One shared template so the header row and data rows can never drift out of
+// alignment (the old table repeated the template string twice already; with
+// 7 columns the single-constant discipline matters even more).
+// Widths: ticker 64 / name flexible / last 72 / day% 64 / mcap 80 / pe 56 / 1y 64.
+const GRID_TEMPLATE = "grid-cols-[64px_minmax(80px,1fr)_72px_64px_80px_56px_64px]";
+
+const COLS = [
+  { key: "ticker", label: "TICKER", align: "left" as const },
+  { key: "name", label: "NAME", align: "left" as const },
+  { key: "last", label: "LAST", align: "right" as const },
+  { key: "day", label: "DAY %", align: "right" as const },
+  { key: "mcap", label: "MKT CAP", align: "right" as const },
+  { key: "pe", label: "P/E", align: "right" as const },
+  { key: "ret1y", label: "1Y RET", align: "right" as const },
+];
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
-/** formatReturn — converts decimal return to a ±% string. */
-function formatReturn(v: number | null): string {
-  if (v == null) return "—";
-  // WHY multiply by 100: the backend returns 0.18 for +18%. formatPercent
-  // expects a decimal (0–1 range) for percentages, so 0.18 → "18.0%".
-  return formatPercent(v);
+/** Signed colour class for a percentage value; muted dash styling when null. */
+function pctClass(v: number | null): string {
+  if (v == null) return "text-muted-foreground/40";
+  return v >= 0 ? "text-positive" : "text-negative";
 }
 
-// ── Column definitions ────────────────────────────────────────────────────────
-// WHY co-located: column headers and alignment are tightly coupled with their
-// cell rendering logic. A separate constants file would invite drift.
+/** 1Y return arrives as a DECIMAL (0.57 = +57%) → formatPercent handles ×100. */
+function fmtReturn1y(v: number | null): string {
+  return v == null ? "—" : formatPercent(v);
+}
 
-const COLS = [
-  { key: "ticker",     label: "TICKER",    align: "left"  as const },
-  { key: "name",       label: "NAME",      align: "left"  as const },
-  { key: "market_cap", label: "MCAP",      align: "right" as const },
-  { key: "pe_ratio",   label: "P/E",       align: "right" as const },
-  { key: "return_1y",  label: "1Y RET",    align: "right" as const },
-  { key: "sector",     label: "SECTOR",    align: "left"  as const },
-];
+/** Day change arrives ALREADY-PERCENT (1.61 = +1.61%) → formatPercentDirect. */
+function fmtDayPct(v: number | null): string {
+  return v == null ? "—" : formatPercentDirect(v, 2);
+}
 
 // ── Self-row builder ──────────────────────────────────────────────────────────
 
-function buildSelfRow(fundamentals: Fundamentals): PeerInstrument {
+/**
+ * The subject instrument rendered in the same PeerRowV2 shape as the peers.
+ * LAST/DAY% come from the live page quote (the peers endpoint doesn't echo
+ * the subject); 1Y RET stays null — it would need an extra OHLCV fetch and
+ * is one click away on the Quote tab.
+ */
+function buildSelfRow(fundamentals: Fundamentals, quote: Quote | null | undefined): PeerRowV2 {
   return {
     instrument_id: fundamentals.instrument_id,
     ticker: fundamentals.ticker,
     name: fundamentals.name,
-    pe_ratio: fundamentals.pe_ratio ?? null,
     market_cap: fundamentals.market_cap ?? null,
-    // WHY null for self return_1y: the self-row return would require a separate
-    // OHLCV fetch. The peers endpoint returns 1Y return for peers; the
-    // instrument's own 1Y return is visible on the Quote tab.
+    pe_ratio: fundamentals.pe_ratio ?? null,
     return_1y: null,
-    gics_sector: null,
+    change_pct: quote?.change_pct ?? null,
+    last_price: quote?.price ?? null,
   };
 }
 
@@ -87,69 +111,63 @@ function buildSelfRow(fundamentals: Fundamentals): PeerInstrument {
 
 export function PeerComparisonTable({
   fundamentals,
-  peersData,
-  isLoading = false,
+  quote,
+  instrumentId,
 }: PeerComparisonTableProps) {
   const router = useRouter();
+  const peersQuery = usePeers(instrumentId);
 
-  if (isLoading) {
+  // Cold first fetch → shape-matched skeleton: header band + 9 row bars
+  // (self + 8 peers) at the 22px row rhythm so the panel doesn't jump when
+  // data lands (DESIGN_SYSTEM §6.2 — skeletons mirror the final layout).
+  if (peersQuery.isLoading) {
     return (
-      // Round-3 item 4: shape-matched skeleton — header band + 6 row bars
-      // (self + 5 peers) at the 20px data-table-grid rhythm, replacing the
-      // previous flat 160px rectangle. Same total height → no layout jump.
-      <div role="status" aria-label="Loading peer comparison" className="w-full space-y-1 px-2 py-1">
+      <div role="status" aria-label="Loading peer comparison" className="space-y-1 border-t border-border px-2 py-1">
         <Skeleton className="h-5 w-1/3 rounded-[2px]" />
-        {[0, 1, 2, 3, 4, 5].map((row) => (
+        {[0, 1, 2, 3, 4, 5, 6, 7, 8].map((row) => (
           <Skeleton key={row} className="h-4 w-full rounded-[1px]" />
         ))}
       </div>
     );
   }
 
-  // Build combined rows: self first, then peers.
-  const selfRow = fundamentals ? buildSelfRow(fundamentals) : null;
-  const peerRows = peersData?.peers ?? [];
-  const allRows: Array<PeerInstrument & { isSelf: boolean }> = [
+  const selfRow = fundamentals ? buildSelfRow(fundamentals, quote) : null;
+  const peerRows = peersQuery.data?.peers ?? [];
+  const allRows: Array<PeerRowV2 & { isSelf: boolean }> = [
     ...(selfRow ? [{ ...selfRow, isSelf: true }] : []),
     ...peerRows.map((p) => ({ ...p, isSelf: false })),
   ];
 
   if (allRows.length === 0) {
     return (
-      <div
-        className="flex items-center justify-center border border-border bg-background py-4"
-        data-table-grid
-      >
-        <span className="text-[11px] text-muted-foreground font-mono">No peer data available</span>
+      <div className="border-t border-border">
+        <PanelHeader label="PEER COMPARISON" />
+        <div className="flex items-center justify-center py-4">
+          <span className="font-mono text-[11px] text-muted-foreground">No peer data available</span>
+        </div>
       </div>
     );
   }
 
   return (
-    // WHY data-table-grid (no "dense" variant): peer table rows need 20px
-    // height (default variant) to accommodate multi-word company names. The
-    // dense variant (18px) is reserved for the DenseMetricsGrid snapshot only.
-    <div data-table-grid className="w-full">
-      {/* Section header — Round-3 item 2: uniform accent-bar treatment
-          (border-l-2 border-l-primary + bg-muted/20, the Round-1 pattern from
-          DenseMetricsGrid) so every block header on this tab scans the same. */}
-      <div className="flex h-6 shrink-0 items-center border-b border-border border-l-2 border-l-primary bg-muted/20 px-2">
-        <span className="text-[10px] uppercase tracking-[0.08em] text-muted-foreground font-mono">
-          PEER COMPARISON
-        </span>
-        {peerRows.length > 0 && (
-          <span className="ml-2 text-[9px] text-muted-foreground/60 font-mono">
-            same GICS industry · by market cap
-          </span>
-        )}
-      </div>
+    <div data-table-grid className="w-full border-t border-border">
+      {/* Header — the shared industry renders ONCE here (it used to repeat
+          in every row's SECTOR cell, which carried zero information). */}
+      <PanelHeader
+        label="PEER COMPARISON"
+        meta={
+          peerRows.length > 0
+            ? `${peersQuery.data?.industry ?? "same industry"} · by market cap`
+            : undefined
+        }
+      />
 
-      {/* Column headers */}
-      <div className="grid grid-cols-[80px_1fr_90px_60px_70px_120px] border-b border-border bg-background/60">
+      {/* Column headers — same grid template as data rows (alignment lock). */}
+      <div className={`grid ${GRID_TEMPLATE} border-b border-border bg-background/60`}>
         {COLS.map((col) => (
           <div
             key={col.key}
-            className={`flex items-center px-2 h-[var(--row-h)] text-[9px] uppercase tracking-[0.08em] text-muted-foreground/70 font-mono ${
+            className={`flex h-[22px] items-center px-2 font-mono text-[9px] uppercase tracking-[0.08em] text-muted-foreground/70 ${
               col.align === "right" ? "justify-end" : ""
             }`}
           >
@@ -158,101 +176,96 @@ export function PeerComparisonTable({
         ))}
       </div>
 
-      {/* Data rows */}
+      {/* Data rows — 22px (--data-row-height), self first then 8 peers. */}
       {allRows.map((row) => (
         <div
           key={row.instrument_id}
-          // WHY bg-muted/30 for self row: the self-row identifies the current
-          // instrument so analysts can locate it at a glance in the 6-row table.
-          className={`grid grid-cols-[80px_1fr_90px_60px_70px_120px] border-b border-border last:border-b-0 ${
+          className={`grid ${GRID_TEMPLATE} border-b border-border/40 last:border-b-0 ${
             row.isSelf
-              ? "bg-muted/30"
-              : "cursor-pointer hover:bg-muted/10 transition-colors"
+              ? // Self highlight: locate the subject instantly in a 9-row scan.
+                "bg-muted/30"
+              : "cursor-pointer transition-colors hover:bg-muted/10"
           }`}
-          // WHY onClick only on peer rows (not self): clicking self would
-          // navigate to the same page the user is already on.
+          // Click only on peer rows — clicking self would reload the same page.
           onClick={
             row.isSelf
               ? undefined
               : () => router.push(`/instruments/${encodeURIComponent(row.ticker)}`)
           }
-          // WHY role="row": improves accessibility and aligns with the
-          // data-table-grid semantic model used across the design system.
+          // Keyboard path for the click affordance (rows are divs, not links).
+          onKeyDown={
+            row.isSelf
+              ? undefined
+              : (e) => {
+                  if (e.key === "Enter") {
+                    router.push(`/instruments/${encodeURIComponent(row.ticker)}`);
+                  }
+                }
+          }
+          tabIndex={row.isSelf ? undefined : 0}
           role="row"
           aria-label={row.isSelf ? `${row.ticker} (current)` : `Navigate to ${row.ticker}`}
           data-testid={`peer-row-${row.ticker}`}
         >
-          {/* TICKER column */}
-          <div className="flex items-center px-2 h-[var(--row-h)]">
+          {/* TICKER — primary-tinted for navigable peers, plain for self. */}
+          <div className="flex h-[22px] items-center px-2">
             <span
-              className={`text-[11px] font-mono tabular-nums font-semibold ${
+              className={`font-mono text-[11px] font-semibold tabular-nums ${
                 row.isSelf ? "text-foreground" : "text-primary"
               }`}
             >
               {row.ticker}
             </span>
             {row.isSelf && (
-              // Visual indicator that this is the subject instrument.
-              <span className="ml-1 text-[8px] text-muted-foreground/60 font-mono">◆</span>
+              <span className="ml-1 font-mono text-[8px] text-muted-foreground/60">◆</span>
             )}
           </div>
 
-          {/* NAME column — truncate to single line */}
-          <div className="flex items-center px-2 h-[var(--row-h)] min-w-0">
-            <span className="text-[10px] font-mono text-muted-foreground truncate">
-              {row.name}
+          {/* NAME — single line, truncates under pressure (min-w-0 enables it). */}
+          <div className="flex h-[22px] min-w-0 items-center px-2">
+            <span className="truncate font-mono text-[10px] text-muted-foreground">{row.name}</span>
+          </div>
+
+          {/* LAST — live price (peers: from endpoint; self: page quote). */}
+          <div className="flex h-[22px] items-center justify-end px-2">
+            <span className="font-mono text-[11px] tabular-nums text-foreground">
+              {row.last_price != null ? formatPrice(row.last_price) : "—"}
             </span>
           </div>
 
-          {/* MCAP column */}
-          <div className="flex items-center justify-end px-2 h-[var(--row-h)]">
-            <span className="text-[11px] font-mono tabular-nums text-foreground">
+          {/* DAY % — signed + colour-coded (already-percent input). */}
+          <div className="flex h-[22px] items-center justify-end px-2">
+            <span className={`font-mono text-[11px] tabular-nums ${pctClass(row.change_pct)}`}>
+              {fmtDayPct(row.change_pct)}
+            </span>
+          </div>
+
+          {/* MKT CAP */}
+          <div className="flex h-[22px] items-center justify-end px-2">
+            <span className="font-mono text-[11px] tabular-nums text-foreground">
               {formatMarketCap(row.market_cap)}
             </span>
           </div>
 
-          {/* P/E column */}
-          <div className="flex items-center justify-end px-2 h-[var(--row-h)]">
-            <span className="text-[11px] font-mono tabular-nums text-foreground">
+          {/* P/E */}
+          <div className="flex h-[22px] items-center justify-end px-2">
+            <span className="font-mono text-[11px] tabular-nums text-foreground">
               {row.pe_ratio != null ? row.pe_ratio.toFixed(1) : "—"}
             </span>
           </div>
 
-          {/* 1Y RETURN column */}
-          <div className="flex items-center justify-end px-2 h-[var(--row-h)]">
-            <span
-              className={`text-[11px] font-mono tabular-nums ${
-                row.return_1y == null
-                  ? "text-muted-foreground"
-                  : row.return_1y >= 0
-                  ? // WHY text-positive/text-negative (Round-2 token fix, DS §15.11):
-                    // the previous `text-[color:var(--color-positive)]` referenced a
-                    // CSS variable that is NEVER DEFINED in globals.css (the silent
-                    // no-paint bug class that bit the portfolio sparkline) — the text
-                    // fell back to inherited color and gains/losses rendered
-                    // indistinguishable. `text-positive`/`text-negative` are the
-                    // canonical semantic utilities mapped in tailwind.config.ts to
-                    // hsl(var(--positive))/hsl(var(--negative)).
-                    "text-positive"
-                  : "text-negative"
-              }`}
-            >
-              {row.isSelf ? "—" : formatReturn(row.return_1y)}
-            </span>
-          </div>
-
-          {/* SECTOR column */}
-          <div className="flex items-center px-2 h-[var(--row-h)] min-w-0">
-            <span className="text-[10px] font-mono text-muted-foreground truncate">
-              {row.gics_sector ?? "—"}
+          {/* 1Y RET — decimal input, colour-coded. Self renders "—" by design. */}
+          <div className="flex h-[22px] items-center justify-end px-2">
+            <span className={`font-mono text-[11px] tabular-nums ${pctClass(row.return_1y)}`}>
+              {fmtReturn1y(row.return_1y)}
             </span>
           </div>
         </div>
       ))}
 
-      {/* Footer with row count */}
-      <div className="flex items-center px-2 py-1 border-t border-border bg-background/40">
-        <span className="text-[9px] font-mono text-muted-foreground/50">
+      {/* Footer — row count + interaction hint (kept from the old table). */}
+      <div className="flex items-center border-t border-border bg-background/40 px-2 py-1">
+        <span className="font-mono text-[9px] text-muted-foreground/50">
           {peerRows.length} peer{peerRows.length !== 1 ? "s" : ""} · click row to navigate
         </span>
       </div>

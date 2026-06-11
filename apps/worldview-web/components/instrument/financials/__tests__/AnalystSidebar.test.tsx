@@ -124,4 +124,59 @@ describe("AnalystSidebar (T-24 composition shell)", () => {
     // Sidebar shell still renders without error.
     expect(screen.getByRole("complementary")).toBeInTheDocument();
   });
+
+  // ── Wave-2 redesign (scope item 5): the two permanent stubs are GONE ───────
+  // PORTED from the deleted RevisionsPanel.test.tsx / TargetsByAnalystPanel
+  // .test.tsx suites: those tests pinned that the stub headers + "pending
+  // data source" footnotes rendered. The Wave-2 contract is the inverse —
+  // the sidebar must NOT ship blocks of em-dashes for data that does not
+  // exist in this dataset. If a real data source lands, the panel returns
+  // WITH data and these assertions flip back (deliberately loud).
+
+  it("does NOT render the dropped stub panels (ESTIMATE REVISIONS / TARGETS BY ANALYST)", () => {
+    render(
+      <AnalystSidebar
+        instrument={INSTRUMENT as Instrument}
+        fundamentals={FUNDAMENTALS as Fundamentals}
+        currentPrice={180.0}
+        entityId="test-entity-id"
+        instrumentId="test-instrument-id"
+      />,
+    );
+
+    expect(screen.queryByText("ESTIMATE REVISIONS")).not.toBeInTheDocument();
+    expect(screen.queryByText("TARGETS BY ANALYST")).not.toBeInTheDocument();
+    // The stub footnote copy must be gone with them.
+    expect(screen.queryByText(/pending data source/i)).not.toBeInTheDocument();
+  });
+
+  it("renders exactly the 5 real panels in order (company → consensus → target → beat/miss → AI brief)", () => {
+    const { container } = render(
+      <AnalystSidebar
+        instrument={INSTRUMENT as Instrument}
+        fundamentals={FUNDAMENTALS as Fundamentals}
+        currentPrice={180.0}
+        entityId="test-entity-id"
+        instrumentId="test-instrument-id"
+      />,
+    );
+
+    // Panel-order contract: collect the recognisable marker of each panel in
+    // DOM order and compare. Mocked panels expose data-testids; real panels
+    // expose their header labels.
+    const text = container.textContent ?? "";
+    const order = [
+      text.indexOf("COMPANY"),
+      text.indexOf("ANALYST CONSENSUS"),
+      text.indexOf("12-MO TARGET"),
+      text.indexOf("Beat/Miss"), // mocked BeatMissHistoryPanel
+      text.indexOf("AI Brief"), // mocked AIBriefPanel
+    ];
+    // Every marker present…
+    for (const idx of order) expect(idx).toBeGreaterThanOrEqual(0);
+    // …and strictly ascending (the composition order).
+    for (let i = 1; i < order.length; i++) {
+      expect(order[i]).toBeGreaterThan(order[i - 1]!);
+    }
+  });
 });

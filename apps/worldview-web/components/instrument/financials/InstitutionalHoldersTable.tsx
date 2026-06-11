@@ -18,6 +18,7 @@
 
 // WHY no "use client": pure presentational — no hooks, no browser APIs.
 
+import { PanelHeader } from "./PanelHeader";
 import { formatMarketCap, formatPercent } from "@/lib/utils";
 import { isDictOfDicts } from "@/lib/eohdUtils";
 import type { FundamentalsSectionResponse } from "@/types/api";
@@ -96,13 +97,9 @@ export function InstitutionalHoldersTable({
 
   return (
     <div data-table-grid className="border-t border-border">
-      {/* Round-3 item 2: border-l-2 border-l-primary completes the uniform
-          accent-bar header treatment (Round-1 DenseMetricsGrid pattern). */}
-      <div className="flex items-center h-[var(--row-h,20px)] px-2 border-b border-border border-l-2 border-l-primary bg-muted/20">
-        <span className="text-[9px] uppercase tracking-widest text-muted-foreground/70">
-          INSTITUTIONAL HOLDERS
-        </span>
-      </div>
+      {/* Wave-2 redesign: shared PanelHeader (24px accent-bar band) — every
+          Financials panel carries identical chrome now (scope item 1). */}
+      <PanelHeader label="INSTITUTIONAL HOLDERS" meta="top 10 by shares held" />
 
       {holders.length === 0 ? (
         <div className="text-[11px] text-muted-foreground px-2 py-2">
@@ -111,7 +108,7 @@ export function InstitutionalHoldersTable({
       ) : (
         <table className="w-full text-[11px] font-mono" role="table" aria-label="Institutional holders">
           <thead>
-            <tr className="h-[var(--row-h,20px)]">
+            <tr className="h-[22px]">
               <th scope="col" className="px-2 text-left text-[10px] uppercase tracking-[0.08em] text-muted-foreground font-normal">Holder</th>
               <th scope="col" className="px-2 text-right text-[10px] uppercase tracking-[0.08em] text-muted-foreground font-normal">Shares</th>
               <th scope="col" className="px-2 text-right text-[10px] uppercase tracking-[0.08em] text-muted-foreground font-normal whitespace-nowrap">% Held</th>
@@ -121,7 +118,7 @@ export function InstitutionalHoldersTable({
           </thead>
           <tbody className="divide-y divide-border/30">
             {holders.map((h, i) => (
-              <tr key={i} className="h-[var(--row-h,20px)] hover:bg-muted/20 transition-colors">
+              <tr key={i} className="h-[22px] hover:bg-muted/20 transition-colors">
                 <td className="px-2 text-[11px] text-foreground truncate max-w-[140px]">
                   {h.name ?? "—"}
                 </td>

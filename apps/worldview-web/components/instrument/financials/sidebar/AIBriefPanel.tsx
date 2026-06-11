@@ -183,7 +183,7 @@ export function AIBriefPanel({ entityId }: AIBriefPanelProps) {
       {/* Panel header — Round-3 item 2: uniform accent-bar treatment
           (border-l-2 border-l-primary + bg-muted/20, Round-1 pattern). */}
       <div className="flex h-6 shrink-0 items-center justify-between border-b border-border border-l-2 border-l-primary bg-muted/20 px-2">
-        <span className="text-[9px] uppercase tracking-widest text-muted-foreground/70">
+        <span className="font-mono text-[10px] uppercase tracking-[0.08em] text-muted-foreground">
           AI BRIEF
         </span>
         {brief && (

@@ -25,6 +25,7 @@
 // WHY "use client": useRouter for the "View all" link navigation.
 
 import { useRouter } from "next/navigation";
+import { PanelHeader } from "./PanelHeader";
 import { formatMarketCap, formatPrice } from "@/lib/utils";
 import { isDictOfDicts } from "@/lib/eohdUtils";
 import type { FundamentalsSectionResponse } from "@/types/api";
@@ -172,23 +173,20 @@ export function InsiderTransactionsTable({
 
   return (
     <div data-table-grid className="border-t border-border">
-      {/* Section header with "View all" stub link.
-          Round-3 item 2: border-l-2 border-l-primary completes the uniform
-          accent-bar header treatment (Round-1 DenseMetricsGrid pattern). */}
-      <div className="flex items-center justify-between h-[var(--row-h,20px)] px-2 border-b border-border border-l-2 border-l-primary bg-muted/20">
-        <span className="text-[9px] uppercase tracking-widest text-muted-foreground/70">
-          INSIDER TRANSACTIONS
-        </span>
+      {/* Wave-2 redesign: shared PanelHeader (24px accent-bar band) replaces
+          the hand-rolled 20px header — every Financials panel now carries
+          identical chrome. The "View all" link rides the header's right slot. */}
+      <PanelHeader label="INSIDER TRANSACTIONS" meta="last 8 Form 4 filings">
         {ticker && (
           <button
             // Round-3 item 5: focus-visible ring for keyboard reachability.
-            className="text-[9px] text-muted-foreground/50 hover:text-muted-foreground transition-colors cursor-pointer rounded-[2px] focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+            className="cursor-pointer rounded-[2px] font-mono text-[9px] text-muted-foreground/50 transition-colors hover:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
             onClick={() => router.push(`/instruments/${ticker}/insiders`)}
           >
             View all →
           </button>
         )}
-      </div>
+      </PanelHeader>
 
       {transactions.length === 0 ? (
         <div className="text-[11px] text-muted-foreground px-2 py-2">
@@ -197,7 +195,7 @@ export function InsiderTransactionsTable({
       ) : (
         <table className="w-full text-[11px] font-mono" role="table" aria-label="Insider transactions">
           <thead>
-            <tr className="h-[var(--row-h,20px)]">
+            <tr className="h-[22px]">
               <th scope="col" className="px-2 text-left text-[10px] uppercase tracking-[0.08em] text-muted-foreground font-normal whitespace-nowrap">Date</th>
               <th scope="col" className="px-2 text-left text-[10px] uppercase tracking-[0.08em] text-muted-foreground font-normal">Insider</th>
               <th scope="col" className="px-2 text-right text-[10px] uppercase tracking-[0.08em] text-muted-foreground font-normal">Type</th>
@@ -209,7 +207,7 @@ export function InsiderTransactionsTable({
           </thead>
           <tbody className="divide-y divide-border/30">
             {transactions.map((tx, i) => (
-              <tr key={i} className="h-[var(--row-h,20px)] hover:bg-muted/20 transition-colors">
+              <tr key={i} className="h-[22px] hover:bg-muted/20 transition-colors">
                 <td className="px-2 text-[10px] text-muted-foreground whitespace-nowrap tabular-nums">
                   {fmtDate(tx.date)}
                 </td>

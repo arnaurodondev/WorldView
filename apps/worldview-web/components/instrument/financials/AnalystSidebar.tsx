@@ -11,14 +11,19 @@
  * left column ~60px more space at 1440px viewport — enough for an extra column
  * in PeerComparisonTable without truncating ticker symbols.
  *
- * PANEL ORDER (T-24 spec):
+ * PANEL ORDER (Wave-2 redesign — 5 real panels, stubs dropped):
  *   1. CompanySnapshotPanel   — who/what the company is
  *   2. AnalystConsensusPanel  — consensus bucket bar
  *   3. TargetPricePanel       — 12-mo target + upside delta
- *   4. RevisionsPanel         — estimate revisions (shell only, v1.1 content)
- *   5. TargetsByAnalystPanel  — per-analyst targets (shell only, v1.1 content)
- *   6. BeatMissHistoryPanel   — historical EPS beat/miss sparkline
- *   7. AIBriefPanel           — AI-generated instrument brief (lazy-generate)
+ *   4. BeatMissHistoryPanel   — historical EPS beat/miss sparkline
+ *   5. AIBriefPanel           — AI-generated instrument brief (lazy-generate)
+ *
+ * WHY RevisionsPanel + TargetsByAnalystPanel WERE DROPPED (Wave-2, scope
+ * item 5): both were permanent stubs — no data source exists in this
+ * dataset (EODHD standard tier has no per-firm targets; revisions were
+ * never scoped). Two blocks of em-dashes + "pending data source" footnotes
+ * read as broken UI, not as roadmap. When a data source lands, the panel
+ * comes back WITH its data (git history keeps the shells).
  *
  * WHY `w-full` (not `w-[240px]`): parent (FinancialsTab) controls the
  * fixed 240px width. The sidebar fills its container — keeps sizing concerns
@@ -33,8 +38,6 @@
 
 import { AnalystConsensusPanel } from "./sidebar/AnalystConsensusPanel";
 import { TargetPricePanel } from "./sidebar/TargetPricePanel";
-import { RevisionsPanel } from "./sidebar/RevisionsPanel";
-import { TargetsByAnalystPanel } from "./sidebar/TargetsByAnalystPanel";
 import { BeatMissHistoryPanel } from "./sidebar/BeatMissHistoryPanel";
 import { AIBriefPanel } from "./sidebar/AIBriefPanel";
 import { CompanySnapshotPanel } from "./sidebar/CompanySnapshotPanel";
@@ -94,16 +97,10 @@ export function AnalystSidebar({
         updatedAt={fundamentals?.updated_at ?? null}
       />
 
-      {/* 4. Estimate revisions — v1.1 content, shell ships now (Δ18). */}
-      <RevisionsPanel />
-
-      {/* 5. Per-analyst price targets — v1.1 content, shell ships now (Δ17). */}
-      <TargetsByAnalystPanel />
-
-      {/* 6. Beat/miss history sparkline — self-fetching via earnings-history key. */}
+      {/* 4. Beat/miss history sparkline — self-fetching via earnings-history key. */}
       <BeatMissHistoryPanel instrumentId={instrumentId} />
 
-      {/* 7. AI brief panel — lazy-generate flow (GET→POST→poll per Δ19). */}
+      {/* 5. AI brief panel — lazy-generate flow (GET→POST→poll per Δ19). */}
       <AIBriefPanel entityId={entityId} />
     </aside>
   );

@@ -28,6 +28,7 @@ import { useQuery } from "@tanstack/react-query";
 import { createGateway } from "@/lib/gateway";
 import { useAuth } from "@/hooks/useAuth";
 import { Skeleton } from "@/components/ui/skeleton";
+import { PanelHeader } from "./PanelHeader";
 
 interface EarningsBarChartProps {
   instrumentId: string;
@@ -104,7 +105,19 @@ export function EarningsBarChart({ instrumentId }: EarningsBarChartProps) {
       surprisePercent: d.surprisePercent,
     }));
 
-  if (isLoading) return <Skeleton className="h-[64px] rounded-[2px]" />;
+  // Wave-2 redesign: the chart was an ORPHAN SVG — no header band, so it
+  // floated between two table panels with nothing naming it (a key "sloppy"
+  // signal). The skeleton now mirrors the final header+chart shape.
+  if (isLoading) {
+    return (
+      <div role="status" aria-label="Loading earnings history" className="space-y-1 border-t border-border px-2 py-1">
+        <Skeleton className="h-5 w-1/3 rounded-[2px]" />
+        <Skeleton className="h-[64px] rounded-[2px]" />
+      </div>
+    );
+  }
+  // Zero records → the WHOLE panel (header included) stays hidden: an empty
+  // chart band would be chrome with no information (kept behaviour).
   if (chartData.length === 0) return null;
 
   // WHY check all-null: hide the entire chip row if no period has surprise data.
@@ -125,6 +138,28 @@ export function EarningsBarChart({ instrumentId }: EarningsBarChartProps) {
   const yFor = (v: number) => M_TOP + PLOT_H - ((v - dataMin) / range) * PLOT_H;
 
   return (
+    // Wave-2 redesign: uniform 24px accent-bar header (PanelHeader) + a
+    // compact legend so the dual-bar encoding (filled actual vs dashed
+    // estimate outline) is named instead of guessed.
+    <div data-testid="earnings-panel" className="border-t border-border">
+      <PanelHeader label="EARNINGS" meta="annual EPS · actual vs estimate">
+        {/* Legend — mono 9px, mirrors the SVG's exact fill/stroke treatment.
+            aria-hidden: the header meta already names the encoding for SRs. */}
+        <span aria-hidden className="flex items-center gap-2 font-mono text-[9px] text-muted-foreground/60">
+          <span className="flex items-center gap-1">
+            {/* Filled swatch = actual EPS bar (teal when beat). */}
+            <span className="inline-block h-[7px] w-[7px] border border-positive bg-positive/25" />
+            ACT
+          </span>
+          <span className="flex items-center gap-1">
+            {/* Dashed swatch = estimate outline bar. */}
+            <span className="inline-block h-[7px] w-[7px] border border-dashed border-foreground/35" />
+            EST
+          </span>
+        </span>
+      </PanelHeader>
+
+      <div className="px-2 py-1">
     <svg
       viewBox={`0 0 ${VIEW_W} ${VIEW_H}`}
       width="100%"
@@ -222,5 +257,7 @@ export function EarningsBarChart({ instrumentId }: EarningsBarChartProps) {
         />
       )}
     </svg>
+      </div>
+    </div>
   );
 }

@@ -82,8 +82,9 @@ export function TargetPricePanel({
   return (
     <div className="flex flex-col gap-1 px-2 py-2 border-b border-border">
       {/* Round-3 item 2: label-level accent bar — uniform Round-1 section
-          marker (see RevisionsPanel for the full rationale). */}
-      <span className="border-l-2 border-l-primary pl-1.5 text-[9px] uppercase tracking-widest text-muted-foreground/70">
+          marker (label-level because padded sidebar
+          panels have no dedicated header row to tint). */}
+      <span className="border-l-2 border-l-primary pl-1.5 font-mono text-[10px] uppercase tracking-[0.08em] text-muted-foreground">
         12-MO TARGET
       </span>
 
