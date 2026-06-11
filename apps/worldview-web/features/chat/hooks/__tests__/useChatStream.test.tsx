@@ -1353,3 +1353,204 @@ describe("useChatStream — pre-stream failure (Round 4)", () => {
     expect(roles).toEqual(["user", "assistant"]);
   });
 });
+
+// ── Wave 2 (frontend-rework sprint) — suggestions, server latency, metadata,
+// conversation-level tool usage ───────────────────────────────────────────────
+
+describe("useChatStream — Wave 2 stream additions", () => {
+  /** Standard ok-response fetch stub around a frame list. */
+  function stubFetch(frames: string[]): ReturnType<typeof vi.fn> {
+    const { reader } = makeReader(frames);
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      statusText: "OK",
+      body: { getReader: () => reader },
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    return fetchMock;
+  }
+
+  it("suggestions SSE event (bare string array) populates serverSuggestions", async () => {
+    // Live wire shape (verified 2026-06-11 against the running gateway):
+    //   event: suggestions
+    //   data: ["What's the latest news on Apple Inc.?", …]
+    stubFetch([
+      'data: {"text":"answer"}\n',
+      'event: suggestions\ndata: ["What moved AAPL today?","Compare AAPL and MSFT","Show AAPL fundamentals"]\n',
+      'event: done\ndata: {"type":"done"}\n',
+    ]);
+
+    const { args } = makeArgs();
+    const { result } = renderHook(() => useChatStream(args));
+
+    await act(async () => {
+      await result.current.send("In one short sentence, what is AAPL?");
+    });
+
+    expect(result.current.serverSuggestions).toEqual([
+      "What moved AAPL today?",
+      "Compare AAPL and MSFT",
+      "Show AAPL fundamentals",
+    ]);
+  });
+
+  it("malformed suggestion entries are filtered, not crashed on", async () => {
+    stubFetch([
+      'data: {"text":"answer"}\n',
+      // One real string, one empty, one non-string — only the real one lands.
+      'event: suggestions\ndata: ["Real question?","",42]\n',
+      'event: done\ndata: {"type":"done"}\n',
+    ]);
+
+    const { args } = makeArgs();
+    const { result } = renderHook(() => useChatStream(args));
+    await act(async () => {
+      await result.current.send("q");
+    });
+    expect(result.current.serverSuggestions).toEqual(["Real question?"]);
+  });
+
+  it("a new send clears the previous turn's serverSuggestions", async () => {
+    const fetchMock = stubFetch([
+      'data: {"text":"a1"}\n',
+      'event: suggestions\ndata: ["Old suggestion"]\n',
+      'event: done\ndata: {"type":"done"}\n',
+    ]);
+
+    const { args } = makeArgs();
+    const { result } = renderHook(() => useChatStream(args));
+    await act(async () => {
+      await result.current.send("first");
+    });
+    expect(result.current.serverSuggestions).toEqual(["Old suggestion"]);
+
+    // Turn 2 emits NO suggestions event — the old ones must not survive.
+    const r2 = makeReader(['data: {"text":"a2"}\n', 'event: done\ndata: {"type":"done"}\n']);
+    fetchMock.mockResolvedValue({
+      ok: true,
+      status: 200,
+      statusText: "OK",
+      body: { getReader: () => r2.reader },
+    });
+    await act(async () => {
+      await result.current.send("second");
+    });
+    expect(result.current.serverSuggestions).toEqual([]);
+  });
+
+  it("tool_result duration_ms is preferred as latency and marked server-sourced; result_preview flows into the trace", async () => {
+    stubFetch([
+      'event: tool_call\ndata: {"type":"tool_call","tool":"get_entity_narrative","label":"Loading narrative...","input":{"entity_id":"AAPL"},"status":"running"}\n',
+      // Live wire shape: duration_ms + result_preview [{id,title}].
+      'event: tool_result\ndata: {"type":"tool_result","tool":"get_entity_narrative","status":"ok","item_count":1,"duration_ms":146,"result_preview":[{"id":"tool:narrative:x","title":"Narrative: Apple Inc."}]}\n',
+      'data: {"text":"answer"}\n',
+      'event: done\ndata: {"type":"done"}\n',
+    ]);
+
+    const { args } = makeArgs();
+    const { result } = renderHook(() => useChatStream(args));
+    await act(async () => {
+      await result.current.send("what is AAPL?");
+    });
+
+    const entry = result.current.toolTrace[0];
+    // EXACT server value — not a client wall-clock approximation.
+    expect(entry.latencyMs).toBe(146);
+    expect(entry.latencySource).toBe("server");
+    // result_preview survives in the raw result payload for the drawer.
+    expect(entry.result?.result_preview).toEqual([
+      { id: "tool:narrative:x", title: "Narrative: Apple Inc." },
+    ]);
+  });
+
+  it("falls back to client wall-clock latency (marked client-sourced) when duration_ms is absent", async () => {
+    stubFetch([
+      'event: tool_call\ndata: {"type":"tool_call","tool":"get_quote","label":"Fetching quote...","input":{},"status":"running"}\n',
+      // Legacy backend shape — no duration_ms.
+      'event: tool_result\ndata: {"type":"tool_result","tool":"get_quote","status":"ok","item_count":1}\n',
+      'event: done\ndata: {"type":"done"}\n',
+    ]);
+
+    const { args } = makeArgs();
+    const { result } = renderHook(() => useChatStream(args));
+    await act(async () => {
+      await result.current.send("quote NVDA");
+    });
+
+    const entry = result.current.toolTrace[0];
+    expect(typeof entry.latencyMs).toBe("number");
+    expect(entry.latencySource).toBe("client");
+  });
+
+  it("toolUsage accumulates ACROSS sends and resets only on resetForThread", async () => {
+    const fetchMock = stubFetch([
+      'event: tool_call\ndata: {"type":"tool_call","tool":"search_documents","label":"Searching...","input":{},"status":"running"}\n',
+      'event: tool_result\ndata: {"type":"tool_result","tool":"search_documents","status":"ok","item_count":2,"duration_ms":100}\n',
+      'event: done\ndata: {"type":"done"}\n',
+    ]);
+
+    const { args } = makeArgs();
+    const { result } = renderHook(() => useChatStream(args));
+    await act(async () => {
+      await result.current.send("first");
+    });
+    expect(result.current.toolUsage).toEqual([
+      { tool: "search_documents", latencyMs: 100 },
+    ]);
+
+    // Turn 2 uses the same tool again — the sample APPENDS (unlike toolTrace,
+    // which is per-turn and was reset at the start of this send).
+    const r2 = makeReader([
+      'event: tool_call\ndata: {"type":"tool_call","tool":"search_documents","label":"Searching...","input":{},"status":"running"}\n',
+      'event: tool_result\ndata: {"type":"tool_result","tool":"search_documents","status":"ok","item_count":1,"duration_ms":300}\n',
+      'event: done\ndata: {"type":"done"}\n',
+    ]);
+    fetchMock.mockResolvedValue({
+      ok: true,
+      status: 200,
+      statusText: "OK",
+      body: { getReader: () => r2.reader },
+    });
+    await act(async () => {
+      await result.current.send("second");
+    });
+    expect(result.current.toolUsage).toEqual([
+      { tool: "search_documents", latencyMs: 100 },
+      { tool: "search_documents", latencyMs: 300 },
+    ]);
+
+    // Thread switch — the conversation-scoped accumulator resets.
+    act(() => {
+      result.current.resetForThread();
+    });
+    expect(result.current.toolUsage).toEqual([]);
+  });
+
+  it("metadata SSE event fields land on the finalized assistant message", async () => {
+    stubFetch([
+      'data: {"text":"Apple Inc. is a technology company."}\n',
+      'event: metadata\ndata: {"thread_id":"thread-abc","message_id":"m-1","intent":"RELATIONSHIP","provider":"deepinfra","latency_ms":9526}\n',
+      'event: done\ndata: {"type":"done"}\n',
+    ]);
+
+    const { args } = makeArgs();
+    const { result } = renderHook(() => useChatStream(args));
+    await act(async () => {
+      await result.current.send("what is AAPL?");
+    });
+
+    const assistant = result.current.localMessages[1] as {
+      role: string;
+      intent?: string | null;
+      provider?: string | null;
+      latency_ms?: number | null;
+    };
+    expect(assistant.role).toBe("assistant");
+    // The meta strip reads these straight off the optimistic message —
+    // no thread refetch needed to show intent/provider/latency.
+    expect(assistant.intent).toBe("RELATIONSHIP");
+    expect(assistant.provider).toBe("deepinfra");
+    expect(assistant.latency_ms).toBe(9526);
+  });
+});

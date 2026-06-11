@@ -36,7 +36,10 @@
 import { useEffect, useRef } from "react";
 import { X } from "lucide-react";
 
-import type { ToolTraceEntry } from "@/features/chat/lib/types";
+import type {
+  ResultPreviewItem,
+  ToolTraceEntry,
+} from "@/features/chat/lib/types";
 
 // ── Props ─────────────────────────────────────────────────────────────────────
 
@@ -68,6 +71,44 @@ function formatJson(value: unknown): string {
   }
   const MAX = 4096;
   return text.length > MAX ? `${text.slice(0, MAX)}\n… (truncated)` : text;
+}
+
+/**
+ * extractResultPreview — pull the Wave-1 `result_preview` array out of a raw
+ * tool result payload, validating each item's shape.
+ *
+ * WHY validate per item (not a blanket cast): the payload crosses the SSE
+ * boundary from S8 — a partial deploy could send strings or items missing
+ * `title`. A malformed item degrades to "not previewed" (it stays visible in
+ * the raw Result JSON below), never to a crashed debug drawer.
+ */
+function extractResultPreview(
+  result: Record<string, unknown> | null,
+): ResultPreviewItem[] {
+  const raw = result?.result_preview;
+  if (!Array.isArray(raw)) return [];
+  return raw.filter(
+    (item): item is ResultPreviewItem =>
+      typeof item === "object" &&
+      item !== null &&
+      typeof (item as Record<string, unknown>).id === "string" &&
+      typeof (item as Record<string, unknown>).title === "string",
+  );
+}
+
+/**
+ * formatLatency — "123 ms" for server-measured durations (Wave-1 backend
+ * truth), "~123 ms" for client wall-clock approximations (legacy backends —
+ * includes network jitter, hence the qualifier), "—" while running.
+ *
+ * WHY the ~ prefix (instead of a "client-measured" caveat note): the old
+ * caveat lived in a doc comment nobody rendered; a one-glyph qualifier on
+ * the number itself is honest AND scannable in a 6-tool list.
+ */
+function formatLatency(entry: ToolTraceEntry): string {
+  if (entry.latencyMs === null) return "—";
+  const prefix = entry.latencySource === "client" ? "~" : "";
+  return `${prefix}${entry.latencyMs} ms`;
 }
 
 /** Status → token-based colour class (never hardcoded hex — Terminal Dark rule). */
@@ -189,9 +230,20 @@ export function ToolTraceDrawer({ trace, onClose }: ToolTraceDrawerProps) {
                     {entry.status}
                   </span>
                   {/* Latency — numeric, therefore font-mono (ADR-F-15).
+                      Server-measured duration_ms renders bare ("146 ms");
+                      client wall-clock fallback carries a ~ qualifier;
                       "—" while running / when the result never arrived. */}
-                  <span className="ml-auto font-mono text-[10px] text-muted-foreground">
-                    {entry.latencyMs !== null ? `${entry.latencyMs} ms` : "—"}
+                  <span
+                    className="ml-auto font-mono text-[10px] text-muted-foreground"
+                    title={
+                      entry.latencySource === "client"
+                        ? "Client-measured (includes network jitter)"
+                        : entry.latencySource === "server"
+                          ? "Server-measured duration"
+                          : undefined
+                    }
+                  >
+                    {formatLatency(entry)}
                   </span>
                 </summary>
                 <div className="space-y-1.5 border-t border-border/60 px-2 py-1.5">
@@ -206,6 +258,36 @@ export function ToolTraceDrawer({ trace, onClose }: ToolTraceDrawerProps) {
                       {formatJson(entry.args)}
                     </pre>
                   </div>
+                  {/* Wave 2: result_preview — the curated {id, title} items
+                      the tool returned (Wave-1 backend addition). Rendered
+                      as a titled list ABOVE the raw JSON because "WHAT came
+                      back" (titles) answers most debugging questions before
+                      the engineer needs the raw payload. */}
+                  {(() => {
+                    const preview = extractResultPreview(entry.result);
+                    if (preview.length === 0) return null;
+                    return (
+                      <div data-testid="tool-result-preview">
+                        <p className="font-mono text-[9px] uppercase tracking-[0.08em] text-muted-foreground">
+                          Returned items
+                        </p>
+                        <ul className="mt-0.5 space-y-0.5">
+                          {preview.map((item) => (
+                            <li
+                              key={item.id}
+                              // WHY title attr = id: the id is the log-
+                              // correlation handle; hover reveals it without
+                              // spending row space on an opaque UUID string.
+                              title={item.id}
+                              className="truncate rounded-[2px] bg-muted px-1.5 py-0.5 font-mono text-[10px] text-foreground"
+                            >
+                              {item.title}
+                            </li>
+                          ))}
+                        </ul>
+                      </div>
+                    );
+                  })()}
                   <div>
                     <p className="font-mono text-[9px] uppercase tracking-[0.08em] text-muted-foreground">
                       Result

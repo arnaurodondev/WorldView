@@ -109,13 +109,14 @@ export interface AgentIterationEvent {
  * past the end of the stream so an engineer can open the drawer AFTER the
  * answer settles and inspect what happened.
  *
- * LATENCY IS CLIENT-MEASURED: the SSE `tool_result` event does not carry a
- * server-side duration today (backend gap — S8 SSEEmitter would need a
- * `duration_ms` field). We approximate by timestamping the `tool_call` event
- * receipt and the matching `tool_result` receipt with `performance.now()`.
- * This includes network jitter but is accurate enough for "which tool was
- * slow" debugging. If S8 ever emits `duration_ms` we prefer it (see
- * useChatStream's tool_result handler).
+ * LATENCY SOURCE (frontend-rework Wave 2): the SSE `tool_result` event now
+ * carries a SERVER-MEASURED `duration_ms` (Wave-1 backend change) — when
+ * present it is the authoritative latency and `latencySource` is "server".
+ * For older backends (or a missing field) we fall back to the client
+ * wall-clock approximation (tool_call receipt → tool_result receipt via
+ * `performance.now()`, includes network jitter) and mark it "client" so the
+ * drawer can qualify the number (`~123 ms`) instead of presenting an
+ * estimate as truth.
  */
 export interface ToolTraceEntry {
   /** Internal tool name from the SSE event, e.g. "search_documents". */
@@ -133,12 +134,75 @@ export interface ToolTraceEntry {
    */
   result: Record<string, unknown> | null;
   /**
-   * Client-measured wall-clock latency in ms (tool_call → tool_result).
-   * Null while the tool is still running. Prefer the server-side
-   * `duration_ms` when the backend emits one (currently it does not).
+   * Tool latency in ms. Server-measured (`duration_ms` from the tool_result
+   * event) when available, else client wall-clock (tool_call → tool_result).
+   * Null while the tool is still running. See `latencySource` for which.
    */
   latencyMs: number | null;
+  /**
+   * Where `latencyMs` came from — "server" (authoritative `duration_ms`
+   * from S8) or "client" (wall-clock approximation incl. network jitter).
+   * Null while the tool is still running. The ToolTraceDrawer prefixes
+   * client-measured values with "~" and drops the qualifier for server ones.
+   */
+  latencySource: "server" | "client" | null;
 }
+
+/**
+ * ResultPreviewItem — one item from the `result_preview` array on a
+ * tool_result SSE event (Wave-1 backend addition).
+ *
+ * WHY {id, title}: the preview answers "WHAT did this tool actually return?"
+ * at a glance — titles are the human-meaningful part; ids let an engineer
+ * correlate with backend logs. The full payload never travels over SSE
+ * (could be megabytes for a screener call); the preview is the curated
+ * top-N summary S8 considers representative.
+ */
+export interface ResultPreviewItem {
+  id: string;
+  title: string;
+}
+
+/**
+ * ToolUsageSample — one completed tool invocation, accumulated across the
+ * WHOLE conversation (unlike ToolTraceEntry, which is per-turn).
+ *
+ * WHY A SEPARATE ACCUMULATOR (frontend-rework Wave 2 — context-rail "Tools
+ * Used" section): toolTrace is deliberately reset at the start of every send
+ * so the ?debug=1 drawer always shows the LATEST turn. The rail's Tools Used
+ * section answers a different question — "which platform tools produced the
+ * answers in this conversation, how often, and how fast on average" — which
+ * requires samples to survive across turns. Cleared only on thread switch
+ * (resetForThread), mirroring how localMessages is scoped.
+ */
+export interface ToolUsageSample {
+  /** Internal tool name from the SSE event, e.g. "get_entity_narrative". */
+  tool: string;
+  /** Server-measured duration_ms when emitted; client wall-clock fallback; null when neither was available. */
+  latencyMs: number | null;
+}
+
+/**
+ * AssistantTurnMeta — end-of-stream `metadata` SSE fields attached to the
+ * finalized assistant message (frontend-rework Wave 2 — message meta strip).
+ *
+ * WHY AN INTERSECTION TYPE (not editing types/api.ts Message): the server's
+ * ThreadDetailResponse already returns intent/provider/model/latency_ms per
+ * message — the canonical Message type just never declared them. Declaring
+ * the optional extension HERE (chat-owned file) lets the meta strip read the
+ * fields from both historical messages (server-supplied) and just-streamed
+ * ones (captured from the `metadata` SSE event) without touching the shared
+ * types/api.ts surface owned by another workstream.
+ */
+export interface AssistantTurnMeta {
+  intent?: string | null;
+  provider?: string | null;
+  model?: string | null;
+  latency_ms?: number | null;
+}
+
+/** Message possibly carrying the assistant-turn metadata extension. */
+export type MessageWithMeta = Message & AssistantTurnMeta;
 
 export interface PendingActionEvent {
   /** Server-generated UUID — sent back as the path param on confirm. */

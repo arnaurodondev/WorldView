@@ -882,3 +882,60 @@ describe("Chat page — Round 3 polish (welcome + skeletons)", () => {
     expect(screen.getAllByTestId("message-skeleton-assistant").length).toBe(1);
   });
 });
+
+// ── Tests: Wave 2 (frontend-rework sprint) — layout contracts ────────────────
+
+describe("Chat page — Wave 2 layout contracts", () => {
+  beforeEach(() => {
+    uuidCounter = 0;
+    vi.clearAllMocks();
+  });
+
+  it("the context rail container is xl-gated but ALWAYS in the tree (≥1280px always visible)", async () => {
+    await renderChatPage();
+
+    // The rail renders even with NO active thread — it is the page's
+    // third pane, not a per-conversation accessory.
+    const rail = await screen.findByTestId("chat-context-rail-container");
+    // hidden + xl:block = invisible below 1280px, always visible at ≥1280px.
+    // (jsdom doesn't evaluate media queries — the class contract IS the test.)
+    expect(rail.className).toContain("hidden");
+    expect(rail.className).toContain("xl:block");
+    expect(rail.className).toContain("w-[320px]");
+  });
+
+  it("the rail shows the cold state ('Context appears as you chat') before any conversation", async () => {
+    await renderChatPage();
+    await waitFor(() => {
+      expect(screen.getByTestId("rail-cold-state")).toBeInTheDocument();
+    });
+    expect(screen.getByText("Context appears as you chat")).toBeInTheDocument();
+  });
+
+  it("the conversation column is capped at a readable measure (max-w-[860px], centred)", async () => {
+    await renderChatPage();
+
+    // Select a thread so the message column mounts.
+    await waitFor(() => {
+      expect(screen.getByText("NVDA Q4 earnings analysis")).toBeInTheDocument();
+    });
+    fireEvent.click(screen.getByText("NVDA Q4 earnings analysis"));
+
+    const column = await screen.findByTestId("chat-message-column");
+    expect(column.className).toContain("max-w-[860px]");
+    expect(column.className).toContain("mx-auto");
+  });
+
+  it("welcome copy sells capability (chat.welcome body — Wave 2 tune)", async () => {
+    await renderChatPage();
+    await waitFor(() => {
+      expect(screen.getByText("Analyst Intelligence")).toBeInTheDocument();
+    });
+    // The Wave-2 body: capability first ("Ask about any company…"), trust
+    // signal second ("answers cite…"). Pinned so a future copy edit is a
+    // deliberate decision, not drift.
+    expect(
+      screen.getByText(/Ask about any company, your portfolio, or market events/),
+    ).toBeInTheDocument();
+  });
+});

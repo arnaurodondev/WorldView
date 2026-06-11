@@ -22,6 +22,8 @@ const TRACE: ToolTraceEntry[] = [
     status: "ok",
     result: { item_count: 4 },
     latencyMs: 231,
+    // Wave 2: server-measured duration_ms — renders WITHOUT the ~ qualifier.
+    latencySource: "server",
   },
   {
     tool: "get_quote",
@@ -30,6 +32,7 @@ const TRACE: ToolTraceEntry[] = [
     status: "running",
     result: null,
     latencyMs: null,
+    latencySource: null,
   },
 ];
 
@@ -103,6 +106,65 @@ describe("ToolTraceDrawer", () => {
     trigger.remove();
   });
 
+  // ── Wave 2 — server-truth latency + result_preview rendering ───────────────
+
+  it("prefixes client-measured latency with ~ and renders server latency bare", () => {
+    const trace: ToolTraceEntry[] = [
+      { ...TRACE[0], tool: "server_timed", latencyMs: 146, latencySource: "server" },
+      {
+        ...TRACE[0],
+        tool: "client_timed",
+        latencyMs: 512,
+        // Legacy-backend path: no duration_ms on the event → wall-clock.
+        latencySource: "client",
+      },
+    ];
+    render(<ToolTraceDrawer trace={trace} onClose={() => {}} />);
+
+    // Server-measured: bare number — duration_ms is authoritative, no caveat.
+    expect(screen.getByText("146 ms")).toBeDefined();
+    // Client-measured: ~ qualifier marks the approximation honestly.
+    expect(screen.getByText("~512 ms")).toBeDefined();
+  });
+
+  it("renders result_preview items as a titled list per call", () => {
+    const trace: ToolTraceEntry[] = [
+      {
+        ...TRACE[0],
+        tool: "get_entity_narrative",
+        result: {
+          item_count: 2,
+          // Live wire shape (verified 2026-06-11): array of {id, title}.
+          result_preview: [
+            { id: "tool:narrative:abc", title: "Narrative: Apple Inc." },
+            { id: "tool:doc:def", title: "AAPL 10-Q Q2 2026" },
+          ],
+        },
+      },
+    ];
+    render(<ToolTraceDrawer trace={trace} onClose={() => {}} />);
+
+    const preview = screen.getByTestId("tool-result-preview");
+    expect(preview.textContent).toContain("Returned items");
+    expect(preview.textContent).toContain("Narrative: Apple Inc.");
+    expect(preview.textContent).toContain("AAPL 10-Q Q2 2026");
+  });
+
+  it("skips the preview block (no crash) when result_preview is absent or malformed", () => {
+    const trace: ToolTraceEntry[] = [
+      // Absent — the pre-Wave-1 backend shape.
+      { ...TRACE[0], tool: "no_preview" },
+      // Malformed — items missing title must be filtered, not thrown on.
+      {
+        ...TRACE[0],
+        tool: "bad_preview",
+        result: { result_preview: ["not-an-object", { id: "x" }] },
+      },
+    ];
+    render(<ToolTraceDrawer trace={trace} onClose={() => {}} />);
+    expect(screen.queryByTestId("tool-result-preview")).toBeNull();
+  });
+
   it("auto-expands errored calls and keeps healthy calls collapsed", () => {
     const trace: ToolTraceEntry[] = [
       { ...TRACE[0], tool: "ok_tool", status: "ok" },
@@ -113,6 +175,7 @@ describe("ToolTraceDrawer", () => {
         status: "error",
         result: { error: "timeout" },
         latencyMs: 5000,
+        latencySource: "server",
       },
     ];
     render(<ToolTraceDrawer trace={trace} onClose={() => {}} />);

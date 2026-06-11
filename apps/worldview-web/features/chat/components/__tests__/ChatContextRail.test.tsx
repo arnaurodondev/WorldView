@@ -3,15 +3,20 @@
  *
  * Unit tests for ChatContextRail.
  *
- * WHAT THESE GUARD:
- *   1. Citation deduplication — same article_id across two messages → 1 row.
- *   2. Top-4 cap — 6 unique citations → only 4 rendered.
- *   3. Relevance sort — highest-score citation renders first.
+ * WHAT THESE GUARD (Wave-2 rework — sections renamed/upgraded, assertions
+ * PORTED from the pre-rework suite, never dropped):
+ *   1. Source deduplication — same source doc across two messages → 1 row
+ *      with a ×N reference count (was: citation dedup by article_id).
+ *   2. Row cap — sources beyond DEFAULT_SOURCE_CAP collapse into a
+ *      "+N more sources" line (was: hard top-4 cap).
+ *   3. Ordering — count desc then relevance desc (was: relevance only).
  *   4. Contradiction extraction — ⚠ prefix in message content → warning chip.
  *   5. Related tickers extraction — $AAPL in content → ticker chip rendered.
  *   6. onTickerClick callback — clicking a ticker chip fires the callback.
  *   7. onClose callback — clicking × fires onClose.
  *   8. Entity section visibility — rendered only when entityId is non-null.
+ *   9. (Wave 2) Cold state, Tools Used summary, source rows as external
+ *      links, one-request by-ticker mini-card fetch, 5-day sparkline.
  *
  * WHY mock useAuth and useQuery:
  * EntityCard fires a TanStack useQuery that needs a real QueryClientProvider.
@@ -42,10 +47,15 @@ vi.mock("@/hooks/useAuth", () => ({
   useAuth: () => ({ accessToken: "test-token" }),
 }));
 
-// ── Mock gateway (not called in these tests but import side-effects require it)
+// ── Mock gateway (mostly not called — useQuery is mocked — but the Wave-2
+// fetch-path test invokes a captured queryFn against these spies).
+const mockGetCompanyOverviewByTicker = vi.fn();
+const mockSearchInstruments = vi.fn();
 vi.mock("@/lib/gateway", () => ({
   createGateway: vi.fn(() => ({
     getCompanyOverview: vi.fn(),
+    getCompanyOverviewByTicker: mockGetCompanyOverviewByTicker,
+    searchInstruments: mockSearchInstruments,
   })),
 }));
 
@@ -90,10 +100,33 @@ describe("ChatContextRail", () => {
 
   it("renders the header with CONTEXT label", () => {
     render(<ChatContextRail {...DEFAULT_PROPS} />);
-    // WHY uppercase regex: the label is rendered uppercase via CSS class but
-    // the DOM text node is lowercase. The regex covers both without depending
-    // on a specific CSS transform behaviour in the test environment.
-    expect(screen.getByText(/context/i)).toBeInTheDocument();
+    // WHY exact string (Wave-2 port): the cold-state title ("Context appears
+    // as you chat") also matches a /context/i regex; the exact node text
+    // pins the PANEL HEADER specifically (CSS uppercases it visually).
+    expect(screen.getByText("Context")).toBeInTheDocument();
+  });
+
+  // ── Wave 2: cold state ────────────────────────────────────────────────────
+
+  it("shows the 'Context appears as you chat' cold state for an empty conversation", () => {
+    render(<ChatContextRail {...DEFAULT_PROPS} messages={[]} entityId={null} />);
+    expect(screen.getByTestId("rail-cold-state")).toBeInTheDocument();
+    expect(
+      screen.getByText("Context appears as you chat"),
+    ).toBeInTheDocument();
+    // The empty section scaffolding must NOT render alongside the cold state.
+    expect(screen.queryByText("Conversation Sources")).not.toBeInTheDocument();
+  });
+
+  it("does NOT show the cold state once the conversation has messages", () => {
+    render(
+      <ChatContextRail
+        {...DEFAULT_PROPS}
+        messages={[makeMessage({ content: "hello" })]}
+      />,
+    );
+    expect(screen.queryByTestId("rail-cold-state")).not.toBeInTheDocument();
+    expect(screen.getByText("Conversation Sources")).toBeInTheDocument();
   });
 
   it("fires onClose when × is clicked", () => {
@@ -106,11 +139,17 @@ describe("ChatContextRail", () => {
   // ── Entity section ────────────────────────────────────────────────────────
 
   it("does NOT render Entity section header when entityId is null", () => {
-    render(<ChatContextRail {...DEFAULT_PROPS} entityId={null} />);
-    // The "ENTITY" section header is only present when entityId is set.
-    // WHY case-insensitive: CSS text-transform is applied via class, the DOM
-    // may expose the raw string in either case depending on jsdom config.
-    expect(screen.queryByText(/entity/i)).not.toBeInTheDocument();
+    render(
+      <ChatContextRail
+        {...DEFAULT_PROPS}
+        entityId={null}
+        // A message keeps the rail OUT of the cold state so this pins the
+        // section's absence specifically (Wave-2 port: the cold-state body
+        // mentions "Entity cards", which a loose /entity/i would match).
+        messages={[makeMessage({ content: "plain text" })]}
+      />,
+    );
+    expect(screen.queryByText("Entity")).not.toBeInTheDocument();
   });
 
   it("renders Entity section header when entityId is provided", () => {
@@ -120,7 +159,7 @@ describe("ChatContextRail", () => {
         entityId="2c8e3a7f-0001-0001-0001-000000000001"
       />,
     );
-    expect(screen.getByText(/entity/i)).toBeInTheDocument();
+    expect(screen.getByText("Entity")).toBeInTheDocument();
   });
 
   // ── Citations ─────────────────────────────────────────────────────────────
@@ -133,14 +172,15 @@ describe("ChatContextRail", () => {
     expect(screen.getByText(/no sources cited yet/i)).toBeInTheDocument();
   });
 
-  it("deduplicates citations with the same article_id", () => {
-    // WHY two messages with the same citation: this simulates the assistant
-    // referencing the same 10-Q in two different turns. The rail should show
-    // it once, not twice.
+  it("deduplicates citations of the same source doc and shows the reference count", () => {
+    // WHY two messages with the same citation (ported): the assistant
+    // references the same 10-Q in two different turns. The rail shows ONE
+    // row — now (Wave 2) with a ×2 reference count instead of losing the
+    // second occurrence silently.
     const sharedCitation = {
       article_id: "art-001",
       title: "AAPL 10-Q Q2 2026",
-      url: "https://sec.gov/...",
+      url: "https://sec.gov/Archives/aapl-10q",
       source: "sec",
       relevance_score: 0.95,
     };
@@ -149,16 +189,59 @@ describe("ChatContextRail", () => {
       makeMessage({ content: "Second", citations: [sharedCitation] }),
     ];
     render(<ChatContextRail {...DEFAULT_PROPS} messages={messages} />);
-    // Only one instance of the title should appear.
+    // Only one instance of the title should appear…
     const titles = screen.getAllByText("AAPL 10-Q Q2 2026");
     expect(titles).toHaveLength(1);
+    // …carrying the aggregated reference count.
+    expect(screen.getByText("×2 references")).toBeInTheDocument();
   });
 
-  it("caps citations at 4 even when more unique ones exist", () => {
+  it("source rows with a URL open in a new tab; URL-less (KG) rows are not links", () => {
+    const messages = [
+      makeMessage({
+        content: "Mixed sources",
+        citations: [
+          {
+            article_id: "ext-1",
+            title: "External article",
+            url: "https://news.example.com/a",
+            source: "news",
+            relevance_score: 0.8,
+          },
+          {
+            article_id: "kg-1",
+            title: "Knowledge graph claim",
+            url: "", // normalizer writes "" for KG citations — must not link
+            source: "kg",
+            relevance_score: 0.7,
+          },
+        ],
+      }),
+    ];
+    render(<ChatContextRail {...DEFAULT_PROPS} messages={messages} />);
+
+    const rows = screen.getAllByTestId("conversation-source-row");
+    expect(rows).toHaveLength(2);
+
+    const link = screen.getByText("External article").closest("a");
+    expect(link).not.toBeNull();
+    expect(link).toHaveAttribute("href", "https://news.example.com/a");
+    // New tab + reverse-tabnabbing protection — research gesture must never
+    // navigate the chat away.
+    expect(link).toHaveAttribute("target", "_blank");
+    expect(link).toHaveAttribute("rel", "noopener noreferrer");
+
+    // KG row renders as a plain div — a dead <a href="#"> would be a lie.
+    expect(screen.getByText("Knowledge graph claim").closest("a")).toBeNull();
+  });
+
+  it("caps rendered sources at 6 and shows the '+N more sources' overflow", () => {
+    // Ported from the old top-4 cap test: the cap is now DEFAULT_SOURCE_CAP
+    // (6) with an explicit overflow line instead of silent truncation.
     const messages = [
       makeMessage({
         content: "Source dump",
-        citations: [1, 2, 3, 4, 5, 6].map((i) => ({
+        citations: [1, 2, 3, 4, 5, 6, 7, 8].map((i) => ({
           article_id: `art-${i}`,
           title: `Article ${i}`,
           url: `https://example.com/${i}`,
@@ -168,18 +251,21 @@ describe("ChatContextRail", () => {
       }),
     ];
     render(<ChatContextRail {...DEFAULT_PROPS} messages={messages} />);
-    // Only 4 [N] index markers should appear (rendered as "[1]", "[2]", …).
-    const indices = ["[1]", "[2]", "[3]", "[4]"];
-    for (const idx of indices) {
+    // Six [N] rank markers render…
+    for (const idx of ["[1]", "[2]", "[3]", "[4]", "[5]", "[6]"]) {
       expect(screen.getByText(idx)).toBeInTheDocument();
     }
-    // "[5]" and "[6]" must not exist.
-    expect(screen.queryByText("[5]")).not.toBeInTheDocument();
-    expect(screen.queryByText("[6]")).not.toBeInTheDocument();
+    // …[7]/[8] do not — they collapse into the overflow line.
+    expect(screen.queryByText("[7]")).not.toBeInTheDocument();
+    expect(screen.queryByText("[8]")).not.toBeInTheDocument();
+    expect(screen.getByText("+2 more sources")).toBeInTheDocument();
+    // The section count badge still reports ALL distinct sources.
+    expect(screen.getByText("8")).toBeInTheDocument();
   });
 
-  it("sorts citations by relevance_score descending", () => {
-    // WHY: highest-confidence source must appear at position [1].
+  it("sorts equally-referenced sources by relevance_score descending", () => {
+    // Ported: highest-confidence source must appear at position [1] when
+    // reference counts tie (count is the primary key — Wave 2).
     const messages = [
       makeMessage({
         content: "Multi-source",
@@ -203,12 +289,44 @@ describe("ChatContextRail", () => {
     ];
     render(<ChatContextRail {...DEFAULT_PROPS} messages={messages} />);
     const items = screen.getAllByText(/\[(1|2)\]/);
-    // "[1]" should be followed by "High confidence source".
     const firstIndex = items.find((el) => el.textContent === "[1]");
-    // The "[1]" element is a sibling to the title within the same <a> ancestor.
-    expect(firstIndex?.closest("a")?.textContent).toContain(
-      "High confidence source",
-    );
+    // The "[1]" marker shares a row container with its title (url-less rows
+    // render as divs, so we anchor on the row testid, not <a>).
+    expect(
+      firstIndex?.closest('[data-testid="conversation-source-row"]')
+        ?.textContent,
+    ).toContain("High confidence source");
+  });
+
+  it("a source referenced MORE OFTEN outranks a higher-relevance one-off", () => {
+    const repeat = {
+      article_id: "rep",
+      title: "Repeated source",
+      url: "https://example.com/rep",
+      source: "news",
+      relevance_score: 0.2,
+    };
+    const messages = [
+      makeMessage({
+        content: "a",
+        citations: [
+          repeat,
+          {
+            article_id: "one",
+            title: "One-off high confidence",
+            url: "https://example.com/one",
+            source: "sec",
+            relevance_score: 0.99,
+          },
+        ],
+      }),
+      makeMessage({ content: "b", citations: [repeat] }),
+    ];
+    render(<ChatContextRail {...DEFAULT_PROPS} messages={messages} />);
+    const first = screen.getByText("[1]");
+    expect(
+      first.closest('[data-testid="conversation-source-row"]')?.textContent,
+    ).toContain("Repeated source");
   });
 
   // ── Contradictions ────────────────────────────────────────────────────────
@@ -557,8 +675,9 @@ describe("ChatContextRail — failed card lookups stay silent (Round 4)", () => 
     // …and no error copy / alert role anywhere in the rail.
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
     expect(screen.queryByText(/error|failed|retry/i)).not.toBeInTheDocument();
-    // The rest of the rail keeps rendering normally (section labels intact).
-    expect(screen.getByText("Recent Citations")).toBeInTheDocument();
+    // The rest of the rail keeps rendering normally (section labels intact —
+    // Wave 2: "Recent Citations" became "Conversation Sources").
+    expect(screen.getByText("Conversation Sources")).toBeInTheDocument();
   });
 
   it("a failed mini-card lookup renders NO card and NO error UI (chip survives)", () => {
@@ -578,5 +697,163 @@ describe("ChatContextRail — failed card lookups stay silent (Round 4)", () => 
     expect(screen.queryByTestId("entity-mini-card")).not.toBeInTheDocument();
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
     expect(screen.queryByText(/error|failed|retry/i)).not.toBeInTheDocument();
+  });
+});
+
+// ── Wave 2 — one-request by-ticker fetch + 5-day sparkline ───────────────────
+
+describe("ChatContextRail — by-ticker mini-card fetch (Wave 2)", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("mini-card queryFn resolves via getCompanyOverviewByTicker in ONE call (no search step)", async () => {
+    // useQuery is module-mocked, so the queryFn never runs in render — we
+    // CAPTURE the options the mini-card passes and invoke the queryFn
+    // directly against the gateway spies. This pins the Wave-2 contract:
+    // one by-ticker request, zero searchInstruments round-trips.
+    vi.mocked(useQuery).mockReturnValue({
+      data: undefined,
+      isLoading: true,
+    } as unknown as ReturnType<typeof useQuery>);
+
+    const messages = [makeMessage({ content: "Look at $NVDA", citations: [] })];
+    render(<ChatContextRail {...DEFAULT_PROPS} messages={messages} />);
+
+    // Find the mini-card's query options by its cache key shape
+    // (["chat", "ticker-mini", "NVDA"] — qk.chat.tickerMini).
+    const call = vi
+      .mocked(useQuery)
+      .mock.calls.map((c) => c[0] as { queryKey?: unknown; queryFn?: () => unknown })
+      .find(
+        (opts) =>
+          Array.isArray(opts.queryKey) && opts.queryKey[1] === "ticker-mini",
+      );
+    expect(call).toBeDefined();
+    expect(Array.isArray(call!.queryKey) && (call!.queryKey as string[])[2]).toBe(
+      "NVDA",
+    );
+
+    mockGetCompanyOverviewByTicker.mockResolvedValue(MOCK_OVERVIEW);
+    await call!.queryFn!();
+
+    expect(mockGetCompanyOverviewByTicker).toHaveBeenCalledWith("NVDA");
+    // The old two-step dance is GONE — no instrument search round-trip.
+    expect(mockSearchInstruments).not.toHaveBeenCalled();
+  });
+
+  it("renders a 5-day sparkline from the ohlcv bars the overview already carries", () => {
+    vi.mocked(useQuery).mockReturnValue({
+      data: {
+        ...MOCK_OVERVIEW,
+        ohlcv: {
+          bars: [248.1, 250.4, 249.9, 252.8, 254.2, 255.0, 256.3].map(
+            (close, i) => ({
+              timestamp: `2026-06-0${i + 1}T00:00:00Z`,
+              open: close,
+              high: close,
+              low: close,
+              close,
+              volume: 1000,
+            }),
+          ),
+        },
+      },
+      isLoading: false,
+    } as unknown as ReturnType<typeof useQuery>);
+
+    const messages = [makeMessage({ content: "Look at $AAPL", citations: [] })];
+    render(<ChatContextRail {...DEFAULT_PROPS} messages={messages} />);
+
+    // The sparkline wrapper renders inside the card — zero extra requests
+    // (the closes come from the overview payload itself).
+    expect(screen.getByTestId("mini-card-sparkline")).toBeInTheDocument();
+  });
+
+  it("renders NO sparkline when the overview has fewer than 2 bars", () => {
+    vi.mocked(useQuery).mockReturnValue({
+      data: { ...MOCK_OVERVIEW, ohlcv: { bars: [] } },
+      isLoading: false,
+    } as unknown as ReturnType<typeof useQuery>);
+
+    const messages = [makeMessage({ content: "Look at $AAPL", citations: [] })];
+    render(<ChatContextRail {...DEFAULT_PROPS} messages={messages} />);
+    expect(screen.getByTestId("entity-mini-card")).toBeInTheDocument();
+    expect(screen.queryByTestId("mini-card-sparkline")).not.toBeInTheDocument();
+  });
+});
+
+// ── Wave 2 — Tools Used section ───────────────────────────────────────────────
+
+describe("ChatContextRail — Tools Used (Wave 2)", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(useQuery).mockReturnValue({
+      data: undefined,
+      isLoading: false,
+    } as unknown as ReturnType<typeof useQuery>);
+  });
+
+  const SAMPLES = [
+    { tool: "get_price_history", latencyMs: 100 },
+    { tool: "get_price_history", latencyMs: 200 },
+    { tool: "search_documents", latencyMs: 950 },
+  ];
+
+  it("renders one row per tool with count and average latency", () => {
+    const messages = [makeMessage({ content: "tool-using answer" })];
+    render(
+      <ChatContextRail
+        {...DEFAULT_PROPS}
+        messages={messages}
+        toolUsage={SAMPLES}
+      />,
+    );
+
+    expect(screen.getByText("Tools Used")).toBeInTheDocument();
+    const rows = screen.getAllByTestId("tool-usage-row");
+    expect(rows).toHaveLength(2);
+    // Count-desc ordering: price_history (×2) above search_documents (×1).
+    expect(rows[0].textContent).toContain("get_price_history");
+    expect(rows[0].textContent).toContain("×2");
+    expect(rows[0].textContent).toContain("150 ms"); // (100+200)/2
+    expect(rows[1].textContent).toContain("search_documents");
+    expect(rows[1].textContent).toContain("×1");
+    expect(rows[1].textContent).toContain("950 ms");
+  });
+
+  it("omits the section entirely when no tools have completed", () => {
+    const messages = [makeMessage({ content: "pure LLM answer" })];
+    render(
+      <ChatContextRail {...DEFAULT_PROPS} messages={messages} toolUsage={[]} />,
+    );
+    expect(screen.queryByText("Tools Used")).not.toBeInTheDocument();
+  });
+
+  it("links to ?debug=1 when debug is off, and shows the ⌘D hint when on", () => {
+    const messages = [makeMessage({ content: "tool-using answer" })];
+    const { rerender } = render(
+      <ChatContextRail
+        {...DEFAULT_PROPS}
+        messages={messages}
+        toolUsage={SAMPLES}
+        isDebug={false}
+        debugHref="/chat?thread=t-1&debug=1"
+      />,
+    );
+    const link = screen.getByTestId("tools-debug-link");
+    expect(link).toHaveAttribute("href", "/chat?thread=t-1&debug=1");
+
+    rerender(
+      <ChatContextRail
+        {...DEFAULT_PROPS}
+        messages={messages}
+        toolUsage={SAMPLES}
+        isDebug
+        debugHref="/chat?thread=t-1&debug=1"
+      />,
+    );
+    expect(screen.queryByTestId("tools-debug-link")).not.toBeInTheDocument();
+    expect(screen.getByText(/⌘D opens the per-call trace/)).toBeInTheDocument();
   });
 });

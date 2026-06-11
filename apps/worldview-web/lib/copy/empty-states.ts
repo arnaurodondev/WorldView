@@ -216,11 +216,21 @@ export const EMPTY_COPY: Record<string, EmptyCopy> = {
   // not reword without updating both tests.
   "chat.welcome": {
     title: "Analyst Intelligence",
-    body: "Research-grade Q&A on earnings, SEC filings, macro, and your portfolio — grounded in cited source documents.",
+    // Wave-2 copy tune (frontend-rework sprint): lead with WHAT the analyst
+    // can ask, close with the trust signal — capability first, grounding
+    // second. Body assertion updated in __tests__/chat.test.tsx.
+    body: "Ask about any company, your portfolio, or market events — answers cite the platform's market intelligence.",
   },
   "chat.no-threads": {
     title: "No conversations yet",
     body: "Click “New chat” to begin your first research thread.",
+  },
+  // Wave-2 (frontend-rework sprint): context-rail cold state. Shown in the
+  // right rail while the conversation has no messages yet — names what the
+  // rail WILL do so the empty panel reads as "waiting", not "broken".
+  "chat.rail-empty": {
+    title: "Context appears as you chat",
+    body: "Entity cards, cited sources, and the tools behind each answer collect here as the conversation develops.",
   },
 
   // Dashboard surface keys — Round-3 polish sprint (2026-06-10).

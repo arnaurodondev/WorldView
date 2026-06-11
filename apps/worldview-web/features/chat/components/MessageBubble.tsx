@@ -40,14 +40,13 @@ import { LazyMarkdownContent } from "./LazyMarkdownContent";
 import { CitationBar } from "@/components/chat/CitationBar";
 import type { Message } from "@/types/api";
 import { CitationList } from "./CitationList";
-import type { StreamingMessage } from "../lib/types";
-// POLISH PASS 2026-05-09: shared "Invalid Date"-safe wall-clock formatter.
-// WHY: a `new Date(undefined).toLocaleTimeString(...)` previously rendered the
-// literal string "Invalid Date" inside the timestamp footer of optimistic
-// messages (where `created_at` hasn't been server-stamped yet) and inside
-// pre-PRD-0028 cached messages whose `created_at` was empty. The helper
-// centralizes the NaN guard so we don't leak that string anywhere.
-import { safeFormatClockTime } from "@/lib/utils";
+import type { MessageWithMeta, StreamingMessage } from "../lib/types";
+// Wave 2 (frontend-rework sprint): per-message terminal meta strip — a 24px
+// row under every bubble carrying timestamp + (assistant) intent/provider/
+// latency/citation count. Replaces the old timestamp <p> INSIDE the bubble:
+// metadata belongs in chrome, not in the reading measure, and the strip
+// finally surfaces the latency_ms/provider fields S8 persists per message.
+import { MessageMetaStrip } from "./MessageMetaStrip";
 // PLAN-0067 W11-5: ToolCallIndicator shows per-tool progress spinners during
 // the tool-use phase (before token chunks arrive). Imported here because
 // StreamingBubble owns the "in-flight assistant response" visual region.
@@ -100,6 +99,12 @@ export function MessageBubble({ message }: { message: Message }) {
   // we inject into the rendered message via `id` attributes. Use the
   // message_id to namespace anchors per message.
   const anchorPrefix = `cite-${message.message_id}`;
+  // Wave 2: the server's thread responses (and the optimistic message built
+  // by useChatStream from the `metadata` SSE event) carry intent/provider/
+  // model/latency_ms — fields the canonical Message type never declared.
+  // MessageWithMeta is the chat-owned optional extension; the cast is safe
+  // because every field is read defensively (undefined → fragment absent).
+  const meta = message as MessageWithMeta;
 
   return (
     <div className={`flex flex-col gap-1 ${isUser ? "items-end" : "items-start"}`}>
@@ -157,14 +162,31 @@ export function MessageBubble({ message }: { message: Message }) {
             </div>
           )}
 
-          <p className="mt-1 font-mono text-[10px] text-muted-foreground">
-            {/* POLISH PASS 2026-05-09: route through safeFormatClockTime to
-                avoid leaking "Invalid Date" when message.created_at is null
-                (optimistic stream not yet stamped) or a non-ISO string
-                (legacy cached threads). Falls through to "—". */}
-            {safeFormatClockTime(message.created_at)}
-          </p>
         </div>
+      </div>
+
+      {/* Wave 2: 24px terminal meta strip per message — timestamp for user
+          turns; timestamp + intent/provider/model/latency/citation count for
+          assistant turns (fields persisted per message by S8; attached to
+          optimistic messages from the `metadata` SSE event).
+          WHY h-6 + items-center: the spec fixes the strip at a 24px row so
+          the conversation's vertical rhythm is uniform regardless of which
+          fragments a given turn has.
+          WHY ml-9 on assistant strips: aligns under the bubble text (28px
+          avatar + 8px gap), reading as "metadata OF this answer"; user
+          strips right-align under their right-aligned bubble. */}
+      <div
+        className={`flex h-6 items-center ${isUser ? "justify-end" : "ml-9"}`}
+      >
+        <MessageMetaStrip
+          role={message.role}
+          intent={meta.intent}
+          provider={meta.provider}
+          model={meta.model}
+          latencyMs={meta.latency_ms}
+          createdAt={message.created_at}
+          citationCount={message.citations?.length ?? 0}
+        />
       </div>
 
       {/* Citation bar + pill list — assistant messages only */}

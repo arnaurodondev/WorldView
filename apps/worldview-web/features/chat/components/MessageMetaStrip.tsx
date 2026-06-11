@@ -39,7 +39,11 @@ import { cn } from "@/lib/utils";
 import { safeFormatClockTime } from "@/lib/utils";
 
 interface MessageMetaStripProps {
-  /** Role of the parent turn. User turns currently render `null`. */
+  /**
+   * Role of the parent turn. Assistant turns render the full fragment set;
+   * user turns render ONLY the timestamp fragment (Wave 2 — every message
+   * gets a meta strip so the conversation reads as a uniform terminal log).
+   */
   readonly role: "user" | "assistant";
   /** Intent label from streaming metadata SSE event. */
   readonly intent?: string | null;
@@ -55,6 +59,13 @@ interface MessageMetaStripProps {
   readonly isFallback?: boolean;
   /** True for the in-flight streaming turn (controls "streaming…" fragment). */
   readonly isStreaming?: boolean;
+  /**
+   * Number of citations attached to the turn (Wave 2 — meta strip carries
+   * timestamp/latency/citation count per the rework spec). 0/undefined
+   * renders no fragment — "0 sources" would imply an ungrounded answer is
+   * an anomaly, but plenty of valid answers (greetings, math) cite nothing.
+   */
+  readonly citationCount?: number;
 }
 
 /**
@@ -94,18 +105,22 @@ export function MessageMetaStrip({
   createdAt,
   isFallback,
   isStreaming,
+  citationCount,
 }: MessageMetaStripProps) {
-  // User turns currently have no metadata to show. We return null so the
-  // grid row collapses to nothing visible (the timestamp lives in the
-  // gutter, not here).
-  if (role === "user") return null;
+  // Wave 2: user turns now render a strip too (timestamp only) so every
+  // message in the log carries the same terminal meta chrome. The
+  // assistant-only fragments (intent/provider/model/latency/citations/
+  // fallback) stay gated on role — user turns have none of them, and the
+  // empty-guard below still collapses a user turn with no createdAt to null
+  // (pinned by the existing "renders nothing for user turns" test).
+  const isAssistant = role === "assistant";
 
   // Collect renderable fragments in display order. Each entry is the JSX
   // for the fragment value (without separators). We add separators at
   // render time so adjacent absent fragments don't produce double dots.
   const fragments: React.ReactNode[] = [];
 
-  if (intent && intent.length > 0) {
+  if (isAssistant && intent && intent.length > 0) {
     fragments.push(
       <span key="intent" className="uppercase text-foreground">
         {intent}
@@ -113,7 +128,7 @@ export function MessageMetaStrip({
     );
   }
 
-  if (provider && provider.length > 0) {
+  if (isAssistant && provider && provider.length > 0) {
     fragments.push(
       <span key="provider">
         via <span className="text-foreground">{provider}</span>
@@ -121,7 +136,7 @@ export function MessageMetaStrip({
     );
   }
 
-  if (model && model.length > 0) {
+  if (isAssistant && model && model.length > 0) {
     fragments.push(
       <span key="model" className="tabular-nums text-foreground">
         {model}
@@ -132,16 +147,33 @@ export function MessageMetaStrip({
   // Latency vs streaming label. If we have a latency value we always show
   // it (covers history-reloaded turns). If we don't AND we are streaming,
   // we show "streaming…" so the analyst sees the turn is still active.
-  if (latencyMs !== null && latencyMs !== undefined && !Number.isNaN(latencyMs)) {
+  if (
+    isAssistant &&
+    latencyMs !== null &&
+    latencyMs !== undefined &&
+    !Number.isNaN(latencyMs)
+  ) {
     fragments.push(
       <span key="latency" className="tabular-nums text-foreground">
         {formatLatency(latencyMs)}
       </span>,
     );
-  } else if (isStreaming) {
+  } else if (isAssistant && isStreaming) {
     fragments.push(
       <span key="streaming" className="italic text-muted-foreground">
         streaming…
+      </span>,
+    );
+  }
+
+  // Wave 2: citation count fragment — "how grounded is this answer" at a
+  // glance, mirroring the rail's Conversation Sources counts. Singular /
+  // plural handled inline; mono digits per ADR-F-15.
+  if (isAssistant && typeof citationCount === "number" && citationCount > 0) {
+    fragments.push(
+      <span key="citations" className="tabular-nums">
+        <span className="text-foreground">{citationCount}</span>{" "}
+        {citationCount === 1 ? "source" : "sources"}
       </span>,
     );
   }
@@ -164,7 +196,7 @@ export function MessageMetaStrip({
   // the chip looks like a tag, not a fragment.
   // WHY a separate spacer span: keeps the chip from butting against the
   // last fragment when both are present.
-  const showFallback = isFallback === true;
+  const showFallback = isAssistant && isFallback === true;
 
   if (fragments.length === 0 && !showFallback) return null;
 

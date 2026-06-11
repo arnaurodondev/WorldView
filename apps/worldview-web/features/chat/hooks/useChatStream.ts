@@ -56,11 +56,14 @@ import { parseSSELine } from "@/lib/sse-parser";
 import type { Message } from "@/types/api";
 import type {
   AgentIterationEvent,
+  AssistantTurnMeta,
   LogEntry,
+  MessageWithMeta,
   PendingActionEvent,
   SlashTurn,
   StreamingMessage,
   ToolTraceEntry,
+  ToolUsageSample,
 } from "@/features/chat/lib/types";
 // WHY import from ToolCallIndicator (not defined here):
 // ToolCallState is the view-model type for tool progress — it lives in the
@@ -176,6 +179,28 @@ export interface UseChatStreamResult {
    * each took. Reset at the start of the next send and on thread switch.
    */
   toolTrace: ToolTraceEntry[];
+  /**
+   * Server-generated follow-up suggestions for the LAST settled turn
+   * (frontend-rework Wave 2 — `suggestions` SSE event, Wave-1 backend).
+   *
+   * Wire shape: a bare JSON string array emitted AFTER the final token
+   * (verified live: `event: suggestions` / `data: ["…", "…", "…"]`).
+   *
+   * - [] in the initial state and whenever the backend emitted none —
+   *   callers fall back to the client-side generateFollowUps() generator.
+   * - Replaced per turn (cleared at the start of every send so a new
+   *   question never shows the previous answer's suggestions).
+   * - Cleared on thread switch (resetForThread) — suggestions are scoped
+   *   to the conversation that produced them.
+   */
+  serverSuggestions: string[];
+  /**
+   * Conversation-level tool usage samples (frontend-rework Wave 2 — drives
+   * the context rail's "Tools Used" section). One entry per COMPLETED tool
+   * invocation across ALL turns in the active thread; unlike toolTrace this
+   * survives subsequent sends and is cleared only on thread switch.
+   */
+  toolUsage: ToolUsageSample[];
   /** Trigger the slash-command branch or the SSE LLM call for `question`. */
   send: (question: string) => Promise<void>;
   /**
@@ -243,6 +268,17 @@ export function useChatStream(args: UseChatStreamArgs): UseChatStreamResult {
   // WHY state (not ref): the drawer renders from it — React must re-render as
   // tool_call/tool_result events land so an open drawer updates live.
   const [toolTrace, setToolTrace] = useState<ToolTraceEntry[]>([]);
+  // `serverSuggestions` — follow-up strings from the `suggestions` SSE event
+  // (Wave-1 backend addition). Replaced per turn, cleared on thread switch.
+  // WHY state (not ref): the page derives the chips row from it — React must
+  // re-render when the suggestions land (they arrive AFTER the final token,
+  // typically in the same flush as the `done` event).
+  const [serverSuggestions, setServerSuggestions] = useState<string[]>([]);
+  // `toolUsage` — conversation-level accumulator of completed tool calls
+  // (tool name + latency). Feeds the context rail's "Tools Used" section.
+  // Deliberately NOT cleared per send (unlike toolTrace) — the section
+  // aggregates across the whole conversation; see resetForThread.
+  const [toolUsage, setToolUsage] = useState<ToolUsageSample[]>([]);
 
   // ── Refs ────────────────────────────────────────────────────────────────
   // `abortRef` holds the AbortController for the in-flight request so that
@@ -346,6 +382,11 @@ export function useChatStream(args: UseChatStreamArgs): UseChatStreamResult {
     setToolTrace([]);
     toolStartRef.current.clear();
     lastQuestionRef.current = null;
+    // Wave 2: suggestions + tool-usage stats are conversation-scoped — both
+    // must reset on thread switch or the new thread's rail/chips would show
+    // another conversation's tools and follow-ups.
+    setServerSuggestions([]);
+    setToolUsage([]);
   }, []);
 
   /**
@@ -471,6 +512,11 @@ export function useChatStream(args: UseChatStreamArgs): UseChatStreamResult {
       // trace (the drawer always shows the latest turn).
       setToolTrace([]);
       toolStartRef.current.clear();
+      // Wave 2: clear the previous turn's server suggestions the moment a new
+      // question fires — chips must never suggest follow-ups to an answer the
+      // user has already moved past. (toolUsage is NOT cleared here — it is
+      // the conversation-level accumulator; see resetForThread.)
+      setServerSuggestions([]);
       // PLAN-0099 W4: clear any previous iteration event from the prior turn
       // BEFORE the new request fires. Without this, the strip would briefly
       // show the previous turn's stage (e.g. "Writing answer…") until the
@@ -532,6 +578,12 @@ export function useChatStream(args: UseChatStreamArgs): UseChatStreamResult {
         // Citations received via the `citations` SSE event, applied to the
         // final assistant message once the stream ends.
         let pendingCitations: Message["citations"] = [];
+        // Wave 2: end-of-stream `metadata` fields (intent/provider/model/
+        // latency_ms) — attached to the finalized assistant message so the
+        // per-message meta strip can render them WITHOUT waiting for the
+        // thread refetch (the server persists the same fields; this just
+        // closes the gap for the optimistic local message).
+        let pendingMeta: AssistantTurnMeta | null = null;
 
         // Helper: finalise a CLEAN stream end (done event / [DONE] sentinel)
         // and promote the bubble to a message. Interrupted ends (reader
@@ -541,13 +593,18 @@ export function useChatStream(args: UseChatStreamArgs): UseChatStreamResult {
         const finalize = () => {
           setStreaming(null);
           if (finalContent || pendingCitations.length > 0) {
-            const assistantMessage: Message = {
+            // Wave 2: MessageWithMeta — spread the metadata-event fields onto
+            // the optimistic message so MessageBubble's meta strip shows
+            // intent/provider/latency immediately (the server-persisted copy
+            // carries the same fields when the thread is later refetched).
+            const assistantMessage: MessageWithMeta = {
               message_id: crypto.randomUUID(),
               thread_id: threadId,
               role: "assistant",
               content: finalContent,
               created_at: new Date().toISOString(),
               citations: pendingCitations,
+              ...(pendingMeta ?? {}),
             };
             setLocalMessages((prev) => [...prev, assistantMessage]);
           }
@@ -716,6 +773,7 @@ export function useChatStream(args: UseChatStreamArgs): UseChatStreamResult {
                       status: "running",
                       result: null,
                       latencyMs: null,
+                      latencySource: null,
                     },
                   ]);
                 }
@@ -734,9 +792,9 @@ export function useChatStream(args: UseChatStreamArgs): UseChatStreamResult {
                     ),
                   );
                   // Round 1 Foundation: close out the trace entry.
-                  // Latency: prefer a server-emitted duration_ms (S8 does not
-                  // send one today — backend gap), else client wall-clock from
-                  // the tool_call receipt timestamp.
+                  // Latency: prefer the server-emitted duration_ms (Wave-1
+                  // backend addition — server-measured, authoritative), else
+                  // client wall-clock from the tool_call receipt timestamp.
                   const startedAt = toolStartRef.current.get(tr.tool);
                   const serverDuration =
                     typeof (data as { duration_ms?: unknown }).duration_ms === "number"
@@ -747,6 +805,14 @@ export function useChatStream(args: UseChatStreamArgs): UseChatStreamResult {
                     (startedAt !== undefined
                       ? Math.round(performance.now() - startedAt)
                       : null);
+                  // Wave 2: record WHERE the number came from so the drawer
+                  // can drop the "client-measured" qualifier for server truth.
+                  const latencySource: ToolTraceEntry["latencySource"] =
+                    serverDuration !== null
+                      ? "server"
+                      : latencyMs !== null
+                        ? "client"
+                        : null;
                   // Keep everything except the demux keys as the raw result
                   // payload (today: item_count; future fields flow through
                   // automatically — forward-compatible by construction).
@@ -759,10 +825,24 @@ export function useChatStream(args: UseChatStreamArgs): UseChatStreamResult {
                   setToolTrace((prev) =>
                     prev.map((t) =>
                       t.tool === tr.tool
-                        ? { ...t, status: resultStatus, result: resultPayload, latencyMs }
+                        ? {
+                            ...t,
+                            status: resultStatus,
+                            result: resultPayload,
+                            latencyMs,
+                            latencySource,
+                          }
                         : t,
                     ),
                   );
+                  // Wave 2: conversation-level accumulation for the rail's
+                  // "Tools Used" section. Append-only (one sample per
+                  // completed invocation) so count + average latency can be
+                  // derived; cleared only on thread switch.
+                  setToolUsage((prev) => [
+                    ...prev,
+                    { tool: tr.tool as string, latencyMs },
+                  ]);
                 }
               } else if (eventName === "pending_action") {
                 // PLAN-0082 Wave B: write-action tool requires user confirmation.
@@ -851,6 +931,42 @@ export function useChatStream(args: UseChatStreamArgs): UseChatStreamResult {
                     },
                   );
                 }
+              } else if (eventName === "suggestions") {
+                // Wave 2 (Wave-1 backend): server-generated follow-up
+                // suggestions, emitted AFTER the final token. Wire shape is a
+                // bare JSON string array (verified live):
+                //   event: suggestions
+                //   data: ["What's the latest news on Apple Inc.?", …]
+                // WHY filter to non-empty strings: defensive — a malformed
+                // entry must degrade to "one fewer chip", never to a chip
+                // rendering "undefined". The page PREFERS these over the
+                // client-templated generateFollowUps() output and falls back
+                // when this array is empty.
+                if (Array.isArray(data)) {
+                  setServerSuggestions(
+                    data.filter(
+                      (s): s is string =>
+                        typeof s === "string" && s.trim().length > 0,
+                    ),
+                  );
+                }
+              } else if (eventName === "metadata") {
+                // Wave 2: end-of-stream turn metadata — captured into
+                // pendingMeta so finalize() can attach it to the optimistic
+                // assistant message (the per-message meta strip renders
+                // intent/provider/model/latency from these fields).
+                // Type-narrow each field individually: a missing/odd-typed
+                // field degrades to "fragment absent" in the strip, never to
+                // a thrown error that would kill the stream.
+                const md = data as Record<string, unknown>;
+                pendingMeta = {
+                  intent: typeof md.intent === "string" ? md.intent : null,
+                  provider:
+                    typeof md.provider === "string" ? md.provider : null,
+                  model: typeof md.model === "string" ? md.model : null,
+                  latency_ms:
+                    typeof md.latency_ms === "number" ? md.latency_ms : null,
+                };
               } else if (eventName === "error") {
                 const msg =
                   typeof data.message === "string"
@@ -868,8 +984,8 @@ export function useChatStream(args: UseChatStreamArgs): UseChatStreamResult {
                 lastQuestionRef.current = question;
                 return;
               }
-              // status, contradictions, metadata — no UI action needed yet;
-              // accepted silently so the parser never throws on them.
+              // status, contradictions, final_answer — no UI action needed
+              // yet; accepted silently so the parser never throws on them.
             } catch {
               // Non-JSON line — keep-alive comment, blank line, etc. Skip.
             }
@@ -1010,6 +1126,10 @@ export function useChatStream(args: UseChatStreamArgs): UseChatStreamResult {
     iterationEvent,
     // Round 1 Foundation: debug tool trace (args/result/latency) for ToolTraceDrawer.
     toolTrace,
+    // Wave 2: server follow-up suggestions (preferred over the client
+    // generator) + conversation-level tool usage for the rail.
+    serverSuggestions,
+    toolUsage,
     send,
     // Round 1 Foundation: resubmit the last failed question (error-banner Retry).
     retry,

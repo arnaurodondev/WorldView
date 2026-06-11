@@ -126,12 +126,12 @@ import { ActionConfirmModal } from "@/features/chat/components/ActionConfirmModa
 import { ChatContextRail } from "@/features/chat/components/ChatContextRail";
 // Round 1 Foundation: date-bucketed sidebar groups (Today / Yesterday / …).
 import { groupThreadsByDate } from "@/features/chat/lib/group-threads";
-// Round 2 Enhancement: suggested follow-up chips under the latest completed
-// assistant answer. FollowUpChips is the (pre-existing, Wave-K) pure
-// presenter; generateFollowUps is the new deterministic client-side
-// generator (S8's SSE stream emits no suggestions event today — verified in
-// useChatStream's demux — so the client synthesises them from the turn's
-// detected tickers, citation titles, and tool usage).
+// Round 2 Enhancement / Wave 2 update: suggested follow-up chips under the
+// latest completed assistant answer. FollowUpChips is the pure presenter.
+// The backend NOW emits a `suggestions` SSE event after the final token
+// (Wave-1 backend change) — useChatStream surfaces it as serverSuggestions
+// and the memo below PREFERS it; generateFollowUps remains the deterministic
+// client-side fallback (legacy backends + history-reloaded turns).
 import { FollowUpChips } from "@/features/chat/components/FollowUpChips";
 // Round 3 Polish: welcomeStarterPrompts draws the empty-conversation welcome
 // chips from the SAME generic pool generateFollowUps pads with, so pre-first-
@@ -226,6 +226,15 @@ export default function ChatPage() {
   // ToolTraceDrawer. With debug off the chord hook registers nothing.
   const isDebug = useDebugFlag();
   const { isOpen: isTraceOpen, close: closeTrace } = useToolTraceChord(isDebug);
+
+  // Wave 2: href for the context rail's "Inspect per-call trace" link when
+  // debug mode is OFF. Built HERE (the page owns next/navigation concerns;
+  // the rail stays router-free) and carries the active thread id so the
+  // full-page navigation to ?debug=1 re-lands on the same conversation via
+  // the existing ?thread= deep-link effect above.
+  const debugHref = activeThreadId
+    ? `/chat?thread=${encodeURIComponent(activeThreadId)}&debug=1`
+    : "/chat?debug=1";
 
   // PLAN-0103 W3: ephemeral thread ids — client-minted UUIDs that don't yet
   // exist on the backend. When the user clicks "New chat" we mint a UUID for
@@ -334,6 +343,13 @@ export default function ChatPage() {
     // Round 1 Foundation: per-turn debug tool trace (args/result/latency)
     // for the ?debug=1 ToolTraceDrawer below.
     toolTrace,
+    // Wave 2 (frontend-rework sprint): server-generated follow-up
+    // suggestions from the `suggestions` SSE event — PREFERRED over the
+    // client-side generateFollowUps fallback (see followUpSuggestions memo).
+    serverSuggestions,
+    // Wave 2: conversation-level tool usage samples — feeds the context
+    // rail's "Tools Used" section (count + avg server latency per tool).
+    toolUsage,
     send,
     // Round 1 Foundation: resubmits the last failed question without
     // duplicating its user bubble — wired to the error banner's Retry button.
@@ -808,10 +824,13 @@ export default function ChatPage() {
   // the `last.role === "assistant"` guard fails, and the chips vanish — no
   // separate dismissed-state bookkeeping to leak across threads.
   //
-  // WHY client-side generation: S8's SSE stream has no suggestions event
-  // (verified against useChatStream's demux: token/citations/tool_call/
-  // tool_result/agent_iteration/pending_action/error/done). When the backend
-  // grows one, prefer it and keep generateFollowUps as the fallback.
+  // Wave 2 (frontend-rework sprint): the backend NOW emits a `suggestions`
+  // SSE event after the final token (verified live — bare string array).
+  // We PREFER those: the server sees the retrieval context and entity
+  // resolution the client can't, so its follow-ups are better targeted.
+  // generateFollowUps stays as the fallback for empty/absent server
+  // suggestions (legacy backends, suggestion-generation failures) and for
+  // HISTORICAL turns reloaded from the thread (the event is stream-only).
   const followUpSuggestions = useMemo<string[]>(() => {
     // At-rest guards: never show "what next?" chips while an answer is still
     // streaming (they'd suggest follow-ups to an answer the user can't read
@@ -823,6 +842,10 @@ export default function ChatPage() {
     if (!last || "kind" in last || last.role !== "assistant" || !last.content) {
       return [];
     }
+    // Server suggestions win when present. They are per-turn state in the
+    // hook (cleared at every send + thread switch), so they can only ever
+    // describe THIS settled answer — no staleness check needed here.
+    if (serverSuggestions.length > 0) return serverSuggestions;
     return generateFollowUps({
       answerText: last.content,
       // Same extractor (and therefore the same blocklist + recency order) as
@@ -835,7 +858,7 @@ export default function ChatPage() {
       // like this one can see WHICH tools produced the settled answer.
       toolsUsed: toolTrace.map((t) => t.tool),
     });
-  }, [localMessages, isStreaming, chatError, toolTrace]);
+  }, [localMessages, isStreaming, chatError, toolTrace, serverSuggestions]);
 
   /**
    * handlePickFollowUp — chip click submits the suggestion as the next user
@@ -1287,7 +1310,18 @@ export default function ChatPage() {
                 without losing message-boundary clarity (each bubble has its
                 own bg + rounded corners). */}
             <ScrollArea className="flex-1 bg-background">
-              <div className="flex flex-col gap-2 p-3">
+              {/* Wave 2 layout contract: the conversation column is capped at
+                  a readable measure (max-w-[860px], centred). On a 1920px+
+                  display the previous full-bleed layout stretched 70%-width
+                  bubbles to ~900px line lengths — far beyond the ~75ch
+                  readable ceiling — and made the page read as empty space
+                  with text pushed to the left edge. The cap centres the
+                  conversation between the thread sidebar and the context
+                  rail; below ~1460px viewport width it is a no-op. */}
+              <div
+                data-testid="chat-message-column"
+                className="mx-auto flex w-full max-w-[860px] flex-col gap-2 p-3"
+              >
                 {/* WHY p-3 (was p-4): terminal-density reading area; matches
                     the post-F3 chat empty-state padding. Pass-2 defect 1G. */}
                 {threadLoading && (
@@ -1524,6 +1558,12 @@ export default function ChatPage() {
 
             {/* ── Input area ─────────────────────────────────────────────── */}
             <div className="border-t border-border bg-background p-3">
+              {/* Wave 2: composer shares the message column's max-w-[860px]
+                  centred measure so the textarea sits flush under the
+                  conversation instead of stretching wall-to-wall while the
+                  messages above are capped — a misalignment that read as a
+                  layout bug on wide displays. */}
+              <div className="mx-auto w-full max-w-[860px]">
               {entityIdFromUrl && (
                 <div className="mb-2 flex items-center gap-2 border-b border-border/40 pb-2">
                   <span className="rounded-[2px] bg-primary/10 px-2 py-0.5 font-mono text-[11px] text-primary">
@@ -1667,6 +1707,7 @@ export default function ChatPage() {
                   {input.length} / 2000
                 </p>
               )}
+              </div>{/* end composer max-width wrapper (Wave 2) */}
             </div>
           </>
         )}
@@ -1686,7 +1727,17 @@ export default function ChatPage() {
        * symmetry (both panels separated from the centre by a 1px border).
        */}
       {!isContextRailCollapsed && (
-        <div className="w-[320px] shrink-0 border-l border-border overflow-hidden">
+        // Wave 2 layout contract: the rail is ALWAYS visible at ≥1280px
+        // (Tailwind xl) — it is the surface that answers the user's explicit
+        // ask ("show me what the conversation is about"). Below 1280px the
+        // three-pane layout can't give the message column its minimum
+        // readable width, so the rail yields via CSS (hidden xl:block)
+        // rather than crushing the conversation. Cmd+\ / the × button stay
+        // available as the explicit power-user opt-out at any width.
+        <div
+          data-testid="chat-context-rail-container"
+          className="hidden w-[320px] shrink-0 overflow-hidden border-l border-border xl:block"
+        >
           <ChatContextRail
             entityId={entityIdFromUrl}
             // Round 4 perf: railMessages is memoised on localMessages (see the
@@ -1696,6 +1747,15 @@ export default function ChatPage() {
             // dedup, contradiction regex). Now they recompute only when a
             // message actually settles.
             messages={railMessages}
+            // Wave 2: conversation-level tool usage (count + avg latency per
+            // tool) for the rail's TOOLS USED section — accumulated by
+            // useChatStream across turns, reset on thread switch.
+            toolUsage={toolUsage}
+            // Wave 2: tools-used footer routing — with debug ON the rail
+            // shows the ⌘D hint; with it OFF it links to debugHref (same
+            // thread, ?debug=1 appended) to enable the trace surface.
+            isDebug={isDebug}
+            debugHref={debugHref}
             isCollapsed={isContextRailCollapsed}
             onClose={() => setIsContextRailCollapsed(true)}
             onTickerClick={(ticker) => appendToInput(` $${ticker}`)}

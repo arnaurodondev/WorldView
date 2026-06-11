@@ -11,9 +11,10 @@
  *     in-flight state alongside the accent rail.
  *   - Latency formatting: <1000ms renders as "Xms"; ≥1000ms as "X.Xs".
  *
- * WHY a single user-role test: user turns always return null today. If
- * future work attaches metadata to user turns this test forces the change
- * to be explicit.
+ * WAVE-2 UPDATE (frontend-rework sprint): user turns now render a strip too
+ * — but ONLY the timestamp fragment (the empty-guard still collapses a
+ * prop-less user turn to null, preserving the original contract below).
+ * New citationCount prop renders an "N sources" fragment on assistant turns.
  */
 
 import { describe, it, expect } from "vitest";
@@ -79,5 +80,52 @@ describe("MessageMetaStrip (Wave K T-09)", () => {
       <MessageMetaStrip role="assistant" intent="REASONING" isFallback />,
     );
     expect(container.textContent).toContain("fallback");
+  });
+
+  // ── Wave 2 (frontend-rework sprint) — per-message strip additions ──────────
+
+  it("renders ONLY the timestamp for user turns (no assistant fragments)", () => {
+    const { container } = render(
+      <MessageMetaStrip
+        role="user"
+        createdAt="2026-06-11T14:01:24Z"
+        // Assistant-only props supplied on a user turn must be IGNORED —
+        // a user bubble claiming a provider/latency would be nonsense.
+        intent="REASONING"
+        provider="DeepInfra"
+        latencyMs={420}
+        citationCount={3}
+      />,
+    );
+    expect(container.firstChild).not.toBeNull();
+    expect(container.textContent).not.toContain("REASONING");
+    expect(container.textContent).not.toContain("DeepInfra");
+    expect(container.textContent).not.toContain("420ms");
+    expect(container.textContent).not.toContain("sources");
+    // The clock fragment is present (exact rendering is locale-dependent —
+    // we assert the strip is non-empty and free of assistant fragments).
+    expect((container.textContent ?? "").trim().length).toBeGreaterThan(0);
+  });
+
+  it("renders the citation count fragment on assistant turns", () => {
+    const { container } = render(
+      <MessageMetaStrip role="assistant" citationCount={3} />,
+    );
+    expect(container.textContent).toContain("3 sources");
+  });
+
+  it("uses the singular 'source' for exactly one citation", () => {
+    const { container } = render(
+      <MessageMetaStrip role="assistant" citationCount={1} />,
+    );
+    expect(container.textContent).toContain("1 source");
+    expect(container.textContent).not.toContain("1 sources");
+  });
+
+  it("renders NO citation fragment for zero citations (ungrounded ≠ anomaly)", () => {
+    const { container } = render(
+      <MessageMetaStrip role="assistant" intent="CHITCHAT" citationCount={0} />,
+    );
+    expect(container.textContent).not.toContain("source");
   });
 });

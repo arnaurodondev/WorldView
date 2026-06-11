@@ -6,7 +6,7 @@
  * legacy frontend Citation contract).
  */
 
-import type { Thread, ChatStreamRequest } from "@/types/api";
+import type { Thread, ChatStreamRequest, CompanyOverview } from "@/types/api";
 import { BASE, GatewayError, apiFetch } from "./_client";
 
 /**
@@ -149,6 +149,41 @@ export function createChatApi(t: string | undefined) {
         { method: "PATCH", body: patch, token: t },
       );
       return normalizeThread(raw);
+    },
+
+    /**
+     * getCompanyOverviewByTicker — ONE-request entity overview for chat cards.
+     *
+     * WHY THIS EXISTS (frontend-rework Wave 2, backed by the Wave-1 S9
+     * endpoint GET /v1/companies/by-ticker/{ticker}/overview): the chat
+     * context rail's entity mini-cards previously did a two-step dance —
+     * searchInstruments(ticker) → instrument_id → getCompanyOverview(id) —
+     * i.e. TWO round-trips per detected ticker. The by-ticker endpoint
+     * resolves the ticker server-side (S3 lookup + KG alias fallback) and
+     * returns the SAME composed CompanyOverview shape in one call.
+     *
+     * WHY return null on 404 (instead of throwing): the rail's cards are
+     * ambient background context — a ticker that fails to resolve (bare-token
+     * false positive that slipped the blocklist, delisted symbol) must simply
+     * produce NO card, never an error banner. Mapping the 404 to null at the
+     * API boundary keeps every caller's "no data → no card" branch trivial
+     * and mirrors the old searchInstruments-miss behaviour exactly.
+     * Non-404 failures still throw — a 500/timeout is a real error TanStack
+     * Query should record (the rail renders nothing for error states too,
+     * but retry/backoff semantics stay intact).
+     */
+    async getCompanyOverviewByTicker(
+      ticker: string,
+    ): Promise<CompanyOverview | null> {
+      try {
+        return await apiFetch<CompanyOverview>(
+          `/v1/companies/by-ticker/${encodeURIComponent(ticker)}/overview`,
+          { token: t },
+        );
+      } catch (err) {
+        if (err instanceof GatewayError && err.status === 404) return null;
+        throw err;
+      }
     },
 
     /**
