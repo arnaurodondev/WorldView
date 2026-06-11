@@ -36,6 +36,13 @@ import { qk } from "@/lib/query/keys";
 // distinguish "ticker does not exist" (404 → InstrumentNotFound) from
 // "platform hiccup" (5xx/network → retryable page error).
 import { GatewayError } from "@/lib/gateway";
+// Wave-2 sidebar fix: the SAME transformer getFundamentals() uses, exported so
+// the page can seed qk.instruments.fundamentals with the correct FLAT shape
+// from the bundle's raw all-sections leg (see the seeding effect below).
+import {
+  transformFundamentalsSections,
+  type RawFundamentalsSections,
+} from "@/lib/api/instruments";
 // Round-4 hardening (item 1c): the F2-step-10 primitive existed but was never
 // wired — a bogus ticker previously left the page on an infinite "—" header
 // with empty tabs. This is the named 404 surface (ticker + screener CTA).
@@ -133,18 +140,36 @@ export function InstrumentPageClient({ entityId }: InstrumentPageClientProps) {
       queryClient.setQueryData(qk.instruments.ownership(instrumentId), bundle.insider);
     }
 
-    // WHY NOT fundamentals (BP-379): the bundle's `fundamentals` field is a
-    // raw FundamentalsSectionResponse (section-records array). The
-    // qk.instruments.fundamentals cache key (consumed by getFundamentals()
-    // → useMetricsTableData) expects the flat `Fundamentals` shape produced
-    // by the client-side transformer. Seeding the wrong shape locks the
-    // cache for the entire staleTime window (~1hr) and the Financials/Quote
-    // tabs render all "—". The fundamentals hook fires its own fetch.
-    // PLAN-0099 follow-up G note: we considered flattening here to address
-    // BP-379 but the transformer lives inside getFundamentals() in
-    // lib/api/instruments.ts (highlights + valuation_ratios + analyst_consensus
-    // + technicals_snapshot merge) — duplicating that here would risk
-    // divergence. Skipped per task instructions; keeps BP-379 behaviour intact.
+    // ── Fundamentals seed (Wave-2 sidebar fix, 2026-06-10) ──────────────────
+    // The bundle's `fundamentals` leg is the RAW S3 all-sections payload
+    // ({security_id, records:[…]}) — NOT the flat `Fundamentals` shape that
+    // qk.instruments.fundamentals consumers (MetricsTable, KeyStatsBar,
+    // DenseMetricsGrid) read. Seeding it verbatim was BP-379 (wrong-shape
+    // cache poisoning), so historically this seed was SKIPPED — which left
+    // the Quote tab's Statistics rail dependent on a separate
+    // /v1/fundamentals/{id} fetch that raced the auth token and could settle
+    // into a permanent 401 error (every VALUATION/MARGIN row "—" while the
+    // bundle-seeded snapshot/technicals rows rendered fine).
+    // The transformer was since EXPORTED from lib/api/instruments.ts
+    // (transformFundamentalsSections — the exact function getFundamentals()
+    // uses), so we can now seed the CORRECT flat shape with zero divergence
+    // risk and zero extra round-trips: market cap, P/E, margins, analyst
+    // consensus and 52w range all paint on first render straight from the
+    // bundle. Live-verified against AAPL: market_cap=$4.31T, 47 analysts,
+    // target $303.38 all present after the transform.
+    if (bundle.fundamentals) {
+      queryClient.setQueryData(
+        qk.instruments.fundamentals(instrumentId),
+        // WHY the double cast: FundamentalsSectionResponse types each record
+        // as a structured FundamentalsRecord (no string index signature), while
+        // the transformer accepts the loosest Record<string,unknown> shape —
+        // structurally identical at runtime, but TS requires the unknown hop.
+        transformFundamentalsSections(
+          bundle.fundamentals as unknown as RawFundamentalsSections,
+          instrumentId,
+        ),
+      );
+    }
 
     // PLAN-0099 follow-up G (audit Q1): seed fundamentalsSnapshot +
     // shareStatistics caches so useMetricsTableData (Quote tab) finds them
@@ -239,6 +264,11 @@ export function InstrumentPageClient({ entityId }: InstrumentPageClientProps) {
         // Round-1: 30-day average volume for the header's VOL-vs-30D pair.
         // Comes straight from the bundle's snapshot leg — no extra fetch.
         avgVolume30d={bundle?.fundamentals_snapshot?.avg_volume_30d ?? null}
+        // Wave-2: S9 QuoteResponse now carries bid/ask (nullable — most dev
+        // price sources are close snapshots with no order book). The header
+        // renders real values when present and an explained "—×—" when null.
+        bid={bundle?.overview?.quote?.bid ?? null}
+        ask={bundle?.overview?.quote?.ask ?? null}
       />
 
       {/* AI brief banner: returns null when no brief is available, so the

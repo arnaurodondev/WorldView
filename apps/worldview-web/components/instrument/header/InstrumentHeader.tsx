@@ -46,11 +46,12 @@ interface InstrumentHeaderProps {
    */
   readonly avgVolume30d?: number | null;
   /**
-   * Best bid / best ask. EXPLICIT BACKEND GAP: the S9 quote payload
-   * (QuoteResponse) does not carry bid/ask today — the legacy S3 quote
-   * endpoint has them but the PriceSnapshot chain S9 uses does not. These
-   * props exist so the header lights up the moment S9 adds the fields;
-   * until then the cell renders a named "—×—" placeholder (never blank).
+   * Best bid / best ask from the S9 quote payload (Wave-1 2026-06 backend).
+   * NULLABLE BY DESIGN: most dev-data price sources are close snapshots
+   * (intraday_1h_close / daily_close) that have no order book — the fields
+   * are only populated when a fresh order-book quote backs the price. When
+   * null the cell renders an honest "—×—" with a tooltip explaining why
+   * (never a fake spread, never a blank).
    */
   readonly bid?: number | null;
   readonly ask?: number | null;
@@ -86,8 +87,9 @@ export function InstrumentHeader({
       ? `${Math.round((volume / avgVolume30d) * 100)}% of 30-day average volume`
       : "Today's volume vs 30-day average";
 
-  // Bid/ask spread — see the props doc: S9 does not provide these yet, so the
-  // cell is a NAMED placeholder ("—×—"), not a silently-missing area.
+  // Bid/ask spread — real values when the quote source carries an order book;
+  // a NAMED "—×—" placeholder (with the reason in the tooltip) when it
+  // doesn't. See the props doc: null is an honest state, not a bug.
   const bidAskText =
     bid != null && ask != null
       ? `${formatPrice(bid)}×${formatPrice(ask)}`
@@ -95,7 +97,7 @@ export function InstrumentHeader({
   const bidAskTitle =
     bid != null && ask != null
       ? `Spread ${formatPrice(Math.max(0, ask - bid))}`
-      : "Bid/ask not yet exposed by the S9 quote payload";
+      : "No live bid/ask — the current price source is a close snapshot without an order book";
 
   // WHY change_pct is already a percent (e.g. 1.42 means 1.42%):
   // S9 Quote returns it that way — see types/api.ts line 168. Use

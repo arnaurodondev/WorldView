@@ -168,6 +168,12 @@ export interface Quote {
   change_pct: number;   // percentage change
   timestamp: string;    // ISO 8601 UTC
   volume: number | null;
+  // WHY optional + nullable (Wave-1 2026-06 backend): S9 QuoteResponse now
+  // carries best bid/ask, but most dev-data price sources (daily/intraday
+  // close snapshots) have no order book and return null. The header renders
+  // "—×—" with an explanatory tooltip when null — never a fake spread.
+  bid?: number | null;
+  ask?: number | null;
   // WHY optional: freshness fields added in PLAN-0036 Wave 1 — backward compatible
   // during rollout. Once all S9 quote routes call the new PriceSnapshot endpoint,
   // these will be populated on every response.
@@ -901,6 +907,16 @@ export interface Holding {
   unrealised_pnl?: number | null; // computed: (current_price - avg_cost) * qty
   unrealised_pnl_pct?: number | null;
   portfolio_weight?: number | null; // % of total portfolio value
+  /**
+   * 2026-06-10 sprint gap #1: instrument asset class surfaced directly on
+   * the holdings payload (instruments LEFT JOIN server-side). Same open
+   * vocabulary as Transaction.asset_class (``equity | etf | fund | option |
+   * future | bond | crypto | …``). Nullable when the instrument row hasn't
+   * synced — the ASSET column renders "—" rather than a fabricated default.
+   * Optional in the type so older S9 builds (and existing test fixtures)
+   * that omit the field keep compiling.
+   */
+  asset_class?: string | null;
 }
 
 export interface Transaction {
@@ -1031,6 +1047,13 @@ export interface ExposureResponse {
   // ``prices_as_of`` is reserved for v2 (currently always null on the wire).
   prices_stale?: boolean;
   prices_as_of?: string | null;
+  /**
+   * 2026-06-10 sprint gap #5: explicit buying power from S1. v1 semantics:
+   * equals ``cash`` (margin is not modelled). Nullable/optional so older
+   * S9 builds that omit the field degrade to the previous "BUYING PWR =
+   * cash" client-side fallback instead of breaking the parse.
+   */
+  buying_power?: number | null;
 }
 
 /**
@@ -1049,6 +1072,25 @@ export interface RiskMetricsResponse {
   sharpe: number | null;
   sortino: number | null;
   beta_vs_spy: number | null;
+  /**
+   * 2026-06-10 sprint: the risk-metrics endpoint now also returns Calmar,
+   * win rate, alpha, VaR(95), period return, and CAGR (VERIFIED LIVE
+   * 2026-06-11 against the dev gateway). All optional + nullable —
+   * older S9 builds omit them entirely; null means "undefined for the
+   * series" (e.g. insufficient data / benchmark unavailable). The UI
+   * renders "—" for both absent and null, never a fabricated number.
+   */
+  calmar?: number | null;
+  /** Fraction of positive daily returns in the window [0, 1]. */
+  win_rate?: number | null;
+  /** Jensen's alpha vs SPY — null while benchmark data is unavailable. */
+  alpha?: number | null;
+  /** 1-day 95% historical Value-at-Risk as a (negative) fraction. */
+  var_95?: number | null;
+  /** Simple window return ((last/first) − 1) — computes from 2+ points. */
+  period_return?: number | null;
+  /** Annualised growth rate — wildly unstable on short windows; gate on data_quality. */
+  cagr?: number | null;
   n_returns: number;
   // F-014 / F-015 (QA 2026-04-28): context fields so the UI can render
   // a meaningful hint when metrics are null. ``as_of`` is the UTC ISO-8601
@@ -2271,6 +2313,13 @@ export interface SectorBreakdownSegment {
   count: number;
   /** Total market value in portfolio currency. */
   market_value: number;
+  /**
+   * 2026-06-10 sprint gap #2: instrument UUIDs that make up this segment
+   * (VERIFIED LIVE 2026-06-11). Lets the frontend join sector filters to
+   * holdings rows by exact ID instead of the EODHD↔GICS name-alias table.
+   * Optional so older S9 builds keep parsing; absent → alias fallback.
+   */
+  instrument_ids?: string[];
 }
 
 /**
@@ -2287,6 +2336,45 @@ export interface SectorBreakdownResponse {
   covered_pct: number;
   /** ISO date of the snapshot (YYYY-MM-DD). */
   as_of: string;
+}
+
+// ── Flow-adjusted TWR (2026-06-10 sprint gap #3) ──────────────────────────
+
+/**
+ * One point on the flow-adjusted time-weighted-return series.
+ *
+ * `twr_cum_pct` is in PERCENT units on the wire (e.g. 4.21 = +4.21%) —
+ * VERIFIED LIVE 2026-06-11. The gateway client converts it to the
+ * codebase-wide FRACTION convention (0.0421) before handing it to
+ * consumers, so chart/format helpers (`fmtPct`, `formatPercent`) work
+ * unmodified. `nav` arrives as an 8-dp Decimal string and is parsed to a
+ * number at the same boundary.
+ */
+export interface TwrPoint {
+  /** ISO date "YYYY-MM-DD". */
+  date: string;
+  /** Cumulative flow-adjusted TWR since window start, as a FRACTION (0.05 = +5%). */
+  twr_cum: number;
+  /** End-of-day NAV in portfolio currency. */
+  nav: number;
+}
+
+/**
+ * GET /v1/portfolios/{id}/twr response (S9 → S1 proxy).
+ *
+ * True time-weighted return: sub-period returns between external cash
+ * flows, geometrically linked — replaces the NAV-relative approximation
+ * the Analytics chart used before this endpoint existed. `flow_days` is
+ * the number of days inside the window that had external cash flows
+ * (deposits/withdrawals) — surfaced so the UI can explain why TWR and
+ * raw NAV return diverge.
+ */
+export interface TwrResponse {
+  portfolio_id: string;
+  from_date: string;
+  to_date: string;
+  points: TwrPoint[];
+  flow_days: number;
 }
 
 /**

@@ -47,7 +47,19 @@ export interface MetricsTableData {
 //   until all three resolve (every row mixes fields from multiple sources).
 export function useMetricsTableData(instrumentId: string): MetricsTableData {
   const token = useAccessToken();
-  const enabled = !!instrumentId;
+  // WHY the token gate (Wave-2 sidebar fix, 2026-06-10): with only
+  // `!!instrumentId` the four queries fired on the first render BEFORE the
+  // access token had hydrated. The three bundle-seeded keys (snapshot /
+  // technicals / share-statistics) never fetched (fresh cache), but the
+  // UN-seeded fundamentals query went out with `Authorization: undefined`,
+  // got a 401, and settled into a permanent error state — TanStack does not
+  // re-run a settled query when a closure variable (the token) changes, only
+  // when `enabled` flips or the key changes. Net effect: every fundamentals-
+  // backed row in the Statistics rail rendered "—" while the seeded rows
+  // (EPS/BETA/MA50/…) rendered fine — the exact split seen in the 2026-06-10
+  // screenshot. Gating on the token makes the query START only when it can
+  // succeed, and the enabled-flip re-fires it the moment the token lands.
+  const enabled = !!instrumentId && !!token;
 
   // DEFAULT_STALE.fundamentals (1hr): full Fundamentals (highlights + valuation_ratios +
   // analyst_consensus + technicals_snapshot merged into the flat Fundamentals shape).

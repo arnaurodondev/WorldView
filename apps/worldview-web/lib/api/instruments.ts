@@ -728,6 +728,57 @@ export function createInstrumentsApi(t: string | undefined) {
       );
     },
 
+    // ── Quote-tab Wave-1 endpoints (2026-06 backend; live-verified shapes) ──
+
+    /**
+     * getIntradayStats — current session O / H / L / VWAP / volume from the
+     * intraday bar store (richer than the last OHLCV bar: includes prev_close,
+     * VWAP with its source resolution, and volume vs 30-day-average ratio).
+     *
+     * UNITS: volume_vs_30d_ratio is a plain ratio (1.0 = exactly the 30-day
+     * average partial-day volume). vwap_source tags the bar resolution VWAP
+     * was computed from ("1m" / "5m" / "1h") — surfaced as a tooltip so the
+     * analyst knows the precision of the number.
+     */
+    getIntradayStats(instrumentId: string): Promise<IntradayStatsResponse> {
+      return apiFetch<IntradayStatsResponse>(
+        `/v1/instruments/${encodeURIComponent(instrumentId)}/intraday-stats`,
+        { token: t },
+      );
+    },
+
+    /**
+     * getMultiPeriodReturns — trailing returns for 1D…5Y in ONE round-trip.
+     *
+     * UNITS (live-verified 2026-06-10): values are PERCENT-FORM numbers
+     * (-7.9289 means -7.93%), NOT decimals — render with formatPercentDirect.
+     * Horizons with insufficient price history (e.g. 3Y/5Y for dev data that
+     * only has ~1.5y of bars) come back null → the strip renders "—".
+     */
+    getMultiPeriodReturns(instrumentId: string): Promise<MultiPeriodReturnsResponse> {
+      return apiFetch<MultiPeriodReturnsResponse>(
+        `/v1/instruments/${encodeURIComponent(instrumentId)}/returns`,
+        { token: t },
+      );
+    },
+
+    /**
+     * getPriceLevels — 52-week range position, MA50/MA200, prior-session
+     * high/low and fractal swing-point support/resistance levels.
+     *
+     * UNITS: pct_from_52w_high / pct_from_52w_low are percent-form
+     * (-7.93 = 7.93% below the high). support[]/resistance[] are price
+     * arrays nearest-first; sr_method is a human-readable description of the
+     * algorithm — surfaced as a tooltip on the S/R chips so the levels are
+     * auditable rather than magic numbers.
+     */
+    getPriceLevels(instrumentId: string): Promise<PriceLevelsResponse> {
+      return apiFetch<PriceLevelsResponse>(
+        `/v1/instruments/${encodeURIComponent(instrumentId)}/price-levels`,
+        { token: t },
+      );
+    },
+
     /**
      * triggerInstrumentBriefingGeneration — lazy-generate POST for AIBriefPanel
      *
@@ -771,12 +822,79 @@ export interface PeerInstrument {
   /** Trailing 12-month P/E; null = no earnings / not computed. */
   pe_ratio: number | null;
   market_cap: number | null;
-  /** 1-year price return as a decimal (0.18 = +18%). null = insufficient history. */
+  /** 1-year price return as a DECIMAL (0.18 = +18%). null = insufficient history. */
   return_1y: number | null;
-  gics_sector: string | null;
+  /**
+   * Day change in PERCENT FORM (1.61 = +1.61%) — note the unit mismatch with
+   * return_1y (decimal). Live-verified 2026-06-10; render with
+   * formatPercentDirect, NOT formatPercent.
+   */
+  change_pct?: number | null;
+  /** Last traded/close price in USD. */
+  last_price?: number | null;
+  gics_sector?: string | null;
 }
 
 export interface PeersResponse {
   instrument_id: string;
+  /** GICS industry label the peer set was drawn from (e.g. "Technology"). */
+  industry?: string | null;
   peers: PeerInstrument[];
+}
+
+// ── Quote-tab Wave-1 response shapes (structural; live-verified 2026-06-10) ──
+//
+// WHY structural interfaces here (not types/api.ts): same rationale as
+// PeerInstrument above — these endpoints are new and the generated-types file
+// hasn't been re-rolled. Keeping them next to their fetchers also documents
+// the unit quirks (percent-form vs decimal) at the point of use.
+
+/** GET /v1/instruments/{id}/intraday-stats */
+export interface IntradayStatsResponse {
+  instrument_id: string;
+  session_date: string;            // ISO date of the session the stats cover
+  open: number | null;
+  prev_close: number | null;
+  day_high: number | null;
+  day_low: number | null;
+  vwap: number | null;
+  /** Bar resolution VWAP was computed from ("1m" / "5m" / "1h"). */
+  vwap_source: string | null;
+  volume: number | null;
+  /** Session volume ÷ 30-day average (1.0 = average). */
+  volume_vs_30d_ratio: number | null;
+}
+
+/** The 9 return horizons the backend computes, in display order. */
+export const RETURN_HORIZONS = ["1D", "1W", "1M", "3M", "6M", "YTD", "1Y", "3Y", "5Y"] as const;
+export type ReturnHorizon = (typeof RETURN_HORIZONS)[number];
+
+/** GET /v1/instruments/{id}/returns — values are PERCENT-FORM, null = insufficient history. */
+export interface MultiPeriodReturnsResponse {
+  instrument_id: string;
+  as_of: string;
+  returns: Partial<Record<ReturnHorizon, number | null>>;
+}
+
+/** GET /v1/instruments/{id}/price-levels */
+export interface PriceLevelsResponse {
+  instrument_id: string;
+  as_of: string;
+  last_close: number | null;
+  high_52w: number | null;
+  low_52w: number | null;
+  /** Percent-form distance from the 52w high (negative = below). */
+  pct_from_52w_high: number | null;
+  /** Percent-form distance from the 52w low (positive = above). */
+  pct_from_52w_low: number | null;
+  ma_50: number | null;
+  ma_200: number | null;
+  prior_session_high: number | null;
+  prior_session_low: number | null;
+  /** Nearest swing-low prices below last close (nearest first). */
+  support: number[];
+  /** Nearest swing-high prices above last close (nearest first). */
+  resistance: number[];
+  /** Human-readable description of the S/R algorithm — chip tooltip. */
+  sr_method: string | null;
 }

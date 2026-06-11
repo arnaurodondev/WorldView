@@ -61,6 +61,9 @@ vi.mock("graphology", () => ({
   default: class MockGraph {
     addNode = vi.fn();
     addEdge = vi.fn();
+    // GraphLoader switched addEdge -> addEdgeWithKey so sigma edge keys equal
+    // KG relation ids (edge-click fix, Wave 2) — the mock must mirror it.
+    addEdgeWithKey = vi.fn();
     hasNode = () => true;
     hasEdge = () => false;
     order = 0;

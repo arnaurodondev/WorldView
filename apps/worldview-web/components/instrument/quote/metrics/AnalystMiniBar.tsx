@@ -1,18 +1,23 @@
 /**
  * components/instrument/quote/metrics/AnalystMiniBar.tsx — compact analyst breakdown
  *
- * WHY: PRD-0088 §6.7.2 wants a one-row analyst-rating summary in the Stats
- * rail. AnalystConsensusStrip is too tall for a 22px row, so this mini
- * variant compresses Strong-Buy / Buy / Hold / Sell / Strong-Sell into a
- * 4px tri-segment bar plus a "{B}B · {H}H · {S}S" textual breakdown.
+ * WHY: PRD-0088 §6.7.2 wants a one-glance analyst-rating summary in the Stats
+ * rail. This mini variant compresses Strong-Buy / Buy / Hold / Sell /
+ * Strong-Sell into a 4px tri-segment bar plus a colour-coded textual
+ * breakdown.
  *
  * WHY collapse 5 buckets → 3 (Buy / Hold / Sell): 5 segments in a 4px-tall
  * bar would render sub-pixel slivers for low-coverage tickers. Three colours
  * (positive/amber/negative) match our threshold-colour vocabulary.
  *
- * WHY total === 0 guard: all-null OR all-zero counts would divide by zero
- * and produce NaN%. Guard renders an empty bar shell — preserves layout,
- * no console errors. Below-bar text reads "0B · 0H · 0S" in that case.
+ * ── WAVE-2 REDESIGN (2026-06-10) ─────────────────────────────────────────────
+ * The old readout was the cryptic "0B · 0H · 0S" — meaningless noise when a
+ * ticker has no coverage and hard to parse even when populated. Now:
+ *   - total === 0 → the bar is HIDDEN and a single muted "No analyst
+ *     coverage" line renders instead (honest empty state, no fake bar);
+ *   - total > 0  → "{B} Buy · {H} Hold · {S} Sell" with each count coloured
+ *     by its bucket, plus the total analyst count right-aligned so the
+ *     sample size is never hidden ("31 Buy" from 47 analysts ≠ from 5).
  *
  * WHY font-mono: tabular numerals column-align across stacked instances.
  *
@@ -46,9 +51,22 @@ export function AnalystMiniBar({ strongBuy, buy, hold, sell, strongSell }: Analy
   const sellCount = n(sell) + n(strongSell);
   const total = buyCount + holdCount + sellCount;
 
-  // WHY closes over `total` and short-circuits on 0: never divide by zero.
-  // Returning "0%" yields a valid CSS width that simply collapses the segment.
-  const pct = (count: number): string => (total === 0 ? "0%" : `${(count / total) * 100}%`);
+  // ── Empty state: no coverage → no bar, one honest line ─────────────────────
+  // WHY hide the bar entirely (Wave-2): an all-grey empty bar + "0B · 0H · 0S"
+  // read as broken data. "No analyst coverage" is a real market fact for
+  // small caps — name it.
+  if (total === 0) {
+    return (
+      <div className="flex items-center h-[22px] px-3">
+        <span className="text-[10px] font-mono text-muted-foreground/50 italic">
+          No analyst coverage
+        </span>
+      </div>
+    );
+  }
+
+  // Segment width helper — total > 0 is guaranteed here (guard above).
+  const pct = (count: number): string => `${(count / total) * 100}%`;
 
   return (
     <div className="flex flex-col gap-0.5 px-3 py-1">
@@ -60,9 +78,18 @@ export function AnalystMiniBar({ strongBuy, buy, hold, sell, strongSell }: Analy
         <div style={{ width: pct(holdCount) }} className="h-full bg-warning" />
         <div style={{ width: pct(sellCount) }} className="h-full bg-negative" />
       </div>
-      {/* WHY "{B}B · {H}H · {S}S": short for 22px row; mono dots centre cleanly. */}
-      <span className="text-[10px] font-mono text-muted-foreground">
-        {`${buyCount}B · ${holdCount}H · ${sellCount}S`}
+      {/* Colour-coded textual breakdown + right-aligned sample size.
+          WHY per-bucket colour spans: the eye maps text → bar segment without
+          a legend; the total ("47 analysts") qualifies the consensus. */}
+      <span className="flex items-baseline justify-between text-[10px] font-mono tabular-nums">
+        <span>
+          <span className="text-positive">{buyCount} Buy</span>
+          <span className="text-muted-foreground/50"> · </span>
+          <span className="text-warning">{holdCount} Hold</span>
+          <span className="text-muted-foreground/50"> · </span>
+          <span className="text-negative">{sellCount} Sell</span>
+        </span>
+        <span className="text-muted-foreground/60">{total} analysts</span>
       </span>
     </div>
   );
