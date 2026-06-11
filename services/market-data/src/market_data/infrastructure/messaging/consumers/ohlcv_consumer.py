@@ -37,6 +37,14 @@ _TOPIC = "market.dataset.fetched"
 _DATASET_TYPE = "ohlcv"  # market-ingestion publishes lowercase DatasetType StrEnum values
 _GROUP_ID = "market-data-ohlcv"
 
+# Option B write-through freshness gate: only 1m batches whose latest bar is
+# at most this old refresh the `quotes` row.  Historical replays (true
+# backfills) carry old bar_dates and are excluded; live scheduler windows
+# (which are mislabeled is_backfill=true by the range_start dedupe heuristic)
+# pass.  30 min comfortably covers scheduler jitter + consumer lag while still
+# rejecting anything that is not "current market" data.
+_QUOTE_WRITE_THROUGH_MAX_AGE_SEC = 30 * 60
+
 
 def _parse_ohlcv_bytes(raw: bytes) -> list[CanonicalOHLCVBar]:
     """Parse JSONL-encoded OHLCV bytes into a list of CanonicalOHLCVBar."""
@@ -296,13 +304,34 @@ class OHLCVConsumer(ValkeyDedupMixin, BaseKafkaConsumer[dict]):
         # so the screener JOIN, S9 and the frontend keep reading fresh prices
         # without any contract change.  Skipped for:
         # - non-1m timeframes (1d closes are stale relative to live quotes)
-        # - backfills (historical replays must never overwrite the live quote
-        #   row or touch the live caches — BUG-009 / BP-492)
+        # - stale batches (historical replays must never overwrite the live
+        #   quote row or touch the live caches — BUG-009 / BP-492)
+        #
+        # NOTE on is_backfill: the producer derives it as
+        # ``task.range_start is not None`` (pipeline.py), and the intraday
+        # scheduler sets range_start on EVERY incremental 1m task as a dedupe
+        # bucket (FIX-INTRADAY-DEDUP) — verified live: 1895/1895 1m tasks are
+        # flagged backfill.  The flag therefore cannot distinguish live ticks
+        # from replays here, so the gate is the recency of the bars themselves:
+        # genuinely historical batches carry old bar_dates and are skipped,
+        # while live windows pass regardless of the mislabeled flag.  The
+        # ``upsert_if_newer`` timestamp guard is the second line of defence.
         is_backfill = bool(value.get("is_backfill", False))
-        if tf == Timeframe.ONE_MIN and domain_bars and not is_backfill:
-            # Use the most recent bar of the batch; `upsert_if_newer` guards
-            # against out-of-order batches at the DB level as well.
-            latest_bar = max(domain_bars, key=lambda b: b.bar_date)
+        # Use the most recent bar of the batch; `upsert_if_newer` guards
+        # against out-of-order batches at the DB level as well.
+        latest_bar = max(domain_bars, key=lambda b: b.bar_date) if domain_bars else None
+        is_fresh = (
+            latest_bar is not None
+            and (datetime.now(tz=UTC) - latest_bar.bar_date).total_seconds() <= _QUOTE_WRITE_THROUGH_MAX_AGE_SEC
+        )
+        if tf == Timeframe.ONE_MIN and latest_bar is not None and not is_fresh:
+            logger.debug(
+                "ohlcv_consumer.skip_quote_write_through_stale",
+                symbol=symbol,
+                latest_bar_date=latest_bar.bar_date.isoformat(),
+                is_backfill=is_backfill,
+            )
+        if tf == Timeframe.ONE_MIN and latest_bar is not None and is_fresh:
             quote = Quote(
                 instrument_id=instrument.id,
                 bid=None,  # 1m bars carry no bid/ask — preserve NULL (D-004)

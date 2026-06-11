@@ -96,7 +96,9 @@ class PgQuoteRepository(QuoteRepository):
                 "timestamp": quote.timestamp,
                 "updated_at": quote.updated_at,
             },
-            where=QuoteModel.timestamp < insert_stmt.excluded.timestamp,
+            # NULL-safe: quotes.timestamp is nullable; a NULL row must always
+            # accept the incoming quote (NULL < x is NULL, which would skip).
+            where=QuoteModel.timestamp.is_(None) | (QuoteModel.timestamp < insert_stmt.excluded.timestamp),
         ).returning(QuoteModel.instrument_id)
         result = await self._session.execute(stmt)
         # RETURNING yields a row only when the INSERT or the conditional

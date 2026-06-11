@@ -9,7 +9,7 @@ consumer.  Backfills and non-1m timeframes must leave quotes untouched.
 from __future__ import annotations
 
 import json
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from unittest.mock import AsyncMock, MagicMock
 
@@ -21,14 +21,20 @@ from market_data.infrastructure.messaging.consumers.ohlcv_consumer import OHLCVC
 pytestmark = pytest.mark.unit
 
 
-def _make_1m_jsonl(n: int = 3) -> bytes:
-    """Build a JSONL payload with n 1-minute bars (ascending timestamps)."""
+def _make_1m_jsonl(n: int = 3, *, end: datetime | None = None) -> bytes:
+    """Build a JSONL payload with n 1-minute bars ending at ``end`` (default: now).
+
+    Bars ascend chronologically; the last bar is the freshest.  Pass an old
+    ``end`` to simulate a historical (true backfill) batch.
+    """
+    end = end or datetime.now(tz=UTC).replace(second=0, microsecond=0)
     bars = []
     for i in range(n):
+        bar_date = end - timedelta(minutes=(n - 1 - i))
         bar = {
             "symbol": "BTC-USD",
             "exchange": "CC",
-            "date": f"2026-06-11T14:{i:02d}:00+00:00",
+            "date": bar_date.isoformat(),
             "open": 100.0 + i,
             "high": 105.0 + i,
             "low": 99.0 + i,
@@ -102,18 +108,19 @@ async def test_1m_batch_upserts_quote_with_latest_bar() -> None:
     instrument = _make_instrument()
     mock_uow = _base_uow(instrument)
     mock_storage = AsyncMock()
-    mock_storage.get_bytes = AsyncMock(return_value=_make_1m_jsonl(3))
+    end = datetime.now(tz=UTC).replace(second=0, microsecond=0)
+    mock_storage.get_bytes = AsyncMock(return_value=_make_1m_jsonl(3, end=end))
 
     consumer = _make_consumer(mock_uow, mock_storage)
     await consumer.process_message(None, _make_message("1m"), {})
 
     mock_uow.quotes.upsert_if_newer.assert_awaited_once()
     quote: Quote = mock_uow.quotes.upsert_if_newer.call_args[0][0]
-    # Latest bar (i=2): close=104.0, volume=1002, date=14:02
+    # Latest bar (i=2): close=104.0, volume=1002, freshest bar_date of batch
     assert quote.instrument_id == "instr-1m"
     assert quote.last == Decimal("104.0")
     assert quote.volume == 1002
-    assert quote.timestamp == datetime(2026, 6, 11, 14, 2, tzinfo=UTC)
+    assert quote.timestamp == end
     assert quote.bid is None
     assert quote.ask is None
 
@@ -138,12 +145,20 @@ async def test_older_bar_no_fanout_when_guard_skips() -> None:
 
 
 @pytest.mark.asyncio
-async def test_backfill_skips_quote_write_through() -> None:
-    """Backfill replays must not touch the quotes row or the live caches."""
+async def test_historical_backfill_batch_skips_quote_write_through() -> None:
+    """True backfill replays (old bar_dates) never touch quotes or live caches.
+
+    The gate is bar recency, NOT the is_backfill flag: the producer derives
+    is_backfill from ``range_start is not None`` and the intraday scheduler
+    sets range_start on every live 1m task (dedupe bucket), so the flag is
+    true for live ticks too.  Historical batches are identified by their
+    actual bar_dates (BUG-009 / BP-492 protection preserved).
+    """
     instrument = _make_instrument()
     mock_uow = _base_uow(instrument)
     mock_storage = AsyncMock()
-    mock_storage.get_bytes = AsyncMock(return_value=_make_1m_jsonl(2))
+    old_end = datetime.now(tz=UTC) - timedelta(days=30)
+    mock_storage.get_bytes = AsyncMock(return_value=_make_1m_jsonl(2, end=old_end))
 
     consumer = _make_consumer(mock_uow, mock_storage)
     await consumer.process_message(None, _make_message("1m", is_backfill=True), {})
@@ -152,6 +167,21 @@ async def test_backfill_skips_quote_write_through() -> None:
     mock_uow.ohlcv.bulk_upsert_with_priority.assert_awaited_once()
     mock_uow.quotes.upsert_if_newer.assert_not_called()
     assert mock_uow._captured_hooks == []
+
+
+@pytest.mark.asyncio
+async def test_mislabeled_backfill_flag_with_fresh_bars_writes_through() -> None:
+    """Live 1m windows arrive with is_backfill=true (range_start dedupe
+    heuristic) — fresh bars must still write through despite the flag."""
+    instrument = _make_instrument()
+    mock_uow = _base_uow(instrument)
+    mock_storage = AsyncMock()
+    mock_storage.get_bytes = AsyncMock(return_value=_make_1m_jsonl(2))
+
+    consumer = _make_consumer(mock_uow, mock_storage)
+    await consumer.process_message(None, _make_message("1m", is_backfill=True), {})
+
+    mock_uow.quotes.upsert_if_newer.assert_awaited_once()
 
 
 @pytest.mark.asyncio
