@@ -9,10 +9,11 @@ from typing import TYPE_CHECKING, Any, cast
 
 from contracts.canonical.ohlcv import CanonicalOHLCVBar  # type: ignore[import-untyped]
 from market_data.domain._ticker_normalize import _normalize_ticker
-from market_data.domain.entities import Instrument, OHLCVBar, Security
+from market_data.domain.entities import Instrument, OHLCVBar, Quote, Security
 from market_data.domain.enums import Provider, Timeframe
 from market_data.domain.events import InstrumentDiscovered, InstrumentUpdated
 from market_data.domain.value_objects import InstrumentFlags, ProviderPriority
+from market_data.infrastructure.messaging.consumers.quote_cache_fanout import schedule_quote_cache_fanout
 from market_data.infrastructure.messaging.outbox.dispatcher import EVENT_TOPIC_MAP, event_to_outbox_payload
 from messaging.kafka.consumer.base import BaseKafkaConsumer, ConsumerConfig, FailureInfo  # type: ignore[import-untyped]
 from messaging.kafka.consumer.dedup import ValkeyDedupMixin  # type: ignore[import-untyped]
@@ -58,6 +59,7 @@ class OHLCVConsumer(ValkeyDedupMixin, BaseKafkaConsumer[dict]):
         config: ConsumerConfig | None = None,
         metrics: Any = None,
         dedup_client: ValkeyClient | None = None,
+        price_snapshot_cache: Any = None,  # PriceSnapshotCache | None
     ) -> None:
         if config is None:
             config = ConsumerConfig(group_id=_GROUP_ID, topics=[_TOPIC])
@@ -67,6 +69,15 @@ class OHLCVConsumer(ValkeyDedupMixin, BaseKafkaConsumer[dict]):
         self._current_uow: UnitOfWork | None = None
         self._dedup_client = dedup_client
         self._dedup_prefix = f"market_data:dedup:{_GROUP_ID}"
+        self._price_snapshot_cache = price_snapshot_cache
+        # Option B write-through: 1m bars also refresh the quotes table, so
+        # this consumer needs the same QuoteCache invalidation hot-path as the
+        # quotes consumer.  Built lazily from the (Valkey) dedup client.
+        self._quote_cache: Any = None  # QuoteCache | None
+        if dedup_client is not None:
+            from market_data.infrastructure.cache.quote_cache import QuoteCache
+
+            self._quote_cache = QuoteCache(dedup_client)
 
     # ── abstract implementations ──────────────────────────────────────────────
 
@@ -277,6 +288,50 @@ class OHLCVConsumer(ValkeyDedupMixin, BaseKafkaConsumer[dict]):
 
         # Bulk upsert
         await uow.ohlcv.bulk_upsert_with_priority(domain_bars)
+
+        # ── Option B write-through: 1m bars → quotes table ────────────────────
+        # The Alpaca scheduler delivers 1m bars every ~60s (crypto 24/7,
+        # equities during RTH), so the latest 1m close is the freshest price we
+        # have.  Mirror it into the `quotes` table (last=close, bid/ask=None)
+        # so the screener JOIN, S9 and the frontend keep reading fresh prices
+        # without any contract change.  Skipped for:
+        # - non-1m timeframes (1d closes are stale relative to live quotes)
+        # - backfills (historical replays must never overwrite the live quote
+        #   row or touch the live caches — BUG-009 / BP-492)
+        is_backfill = bool(value.get("is_backfill", False))
+        if tf == Timeframe.ONE_MIN and domain_bars and not is_backfill:
+            # Use the most recent bar of the batch; `upsert_if_newer` guards
+            # against out-of-order batches at the DB level as well.
+            latest_bar = max(domain_bars, key=lambda b: b.bar_date)
+            quote = Quote(
+                instrument_id=instrument.id,
+                bid=None,  # 1m bars carry no bid/ask — preserve NULL (D-004)
+                ask=None,
+                last=latest_bar.close,
+                volume=latest_bar.volume,
+                timestamp=latest_bar.bar_date,
+                updated_at=datetime.now(tz=UTC),
+            )
+            applied = await uow.quotes.upsert_if_newer(quote)
+            if applied:
+                # Same post-commit cache fan-out as the quotes consumer:
+                # invalidate QuoteCache + warm PriceSnapshotCache (M-005).
+                schedule_quote_cache_fanout(
+                    uow,
+                    instrument_id=instrument.id,
+                    symbol=symbol,
+                    exchange=exchange,
+                    quote=quote,
+                    quote_cache=self._quote_cache,
+                    price_snapshot_cache=self._price_snapshot_cache,
+                )
+                logger.info(
+                    "ohlcv_consumer.quote_write_through",
+                    symbol=symbol,
+                    exchange=exchange,
+                    instrument_id=instrument.id,
+                    bar_date=latest_bar.bar_date.isoformat(),
+                )
 
         logger.info(
             "ohlcv_consumer.materialized",

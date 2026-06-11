@@ -82,6 +82,10 @@ async def main() -> None:
 
     valkey = create_valkey_client_from_url(settings.valkey_url)
 
+    # Option B write-through: 1m bars refresh the quotes row, so this consumer
+    # also warms the PriceSnapshot cache (same fan-out as the quotes consumer).
+    from market_data.infrastructure.cache.price_snapshot_cache import PriceSnapshotCache
+
     consumer = OHLCVConsumer(
         uow_factory=uow_factory,
         object_storage=object_storage,
@@ -91,6 +95,7 @@ async def main() -> None:
             topics=["market.dataset.fetched"],
         ),
         dedup_client=valkey,
+        price_snapshot_cache=PriceSnapshotCache(valkey),
     )
 
     # PLAN-0107 B-4: emit single <service>_ready event after deps are wired.

@@ -371,6 +371,15 @@ class QuoteRepository(ABC):
         """Insert or replace the latest quote for the instrument."""
 
     @abstractmethod
+    async def upsert_if_newer(self, quote: Quote) -> bool:
+        """Upsert only if the incoming quote timestamp is newer than the stored row.
+
+        Out-of-order / batch-replay protection for the OHLCV 1m write-through
+        (Option B).  Returns True if a row was inserted or updated, False when
+        the existing row was newer (no-op).
+        """
+
+    @abstractmethod
     async def find_by_instrument(self, instrument_id: str) -> Quote | None:
         """Return the latest quote for the instrument, or ``None``."""
 

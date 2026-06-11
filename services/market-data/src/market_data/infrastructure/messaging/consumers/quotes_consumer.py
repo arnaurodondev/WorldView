@@ -12,6 +12,7 @@ from market_data.domain._ticker_normalize import _normalize_ticker
 from market_data.domain.entities import Instrument, Quote, Security
 from market_data.domain.events import InstrumentDiscovered, InstrumentUpdated
 from market_data.domain.value_objects import InstrumentFlags
+from market_data.infrastructure.messaging.consumers.quote_cache_fanout import schedule_quote_cache_fanout
 from market_data.infrastructure.messaging.outbox.dispatcher import EVENT_TOPIC_MAP, event_to_outbox_payload
 from messaging.kafka.consumer.base import BaseKafkaConsumer, ConsumerConfig, FailureInfo  # type: ignore[import-untyped]
 from messaging.kafka.consumer.errors import MalformedDataError, StorageUnavailableError  # type: ignore[import-untyped]
@@ -300,32 +301,18 @@ class QuotesConsumer(BaseKafkaConsumer[dict]):
                 event_id=str(event_id)[:8],
             )
         else:
-            # Schedule cache invalidation to run AFTER the transaction commits (M-005).
-            # Invalidating before commit risks a read between invalidation and commit
-            # caching stale data into Valkey until TTL expiry.
-            if self._quote_cache is not None:
-                uow.schedule_post_commit(self._quote_cache.invalidate(instrument.id))
-
-            # After DB commit: resolve a PriceSnapshot from the fresh quote and write
-            # it to Valkey.  This hot-caches the snapshot so the first API read is
-            # served from cache (O(1)) rather than triggering a full DB resolution.
-            # We pass ohlcv_bars=[] here because OHLCV bars arrive via a separate
-            # consumer topic — the quote is the only source available at this stage.
-            # The full fallback chain (including OHLCV) is exercised in the API router.
-            if self._price_snapshot_cache is not None:
-                from market_data.domain.price_snapshot import PriceSnapshotResolver
-
-                resolved_at = datetime.now(tz=UTC)
-                resolver = PriceSnapshotResolver()
-                snapshot = resolver.resolve(
-                    instrument_id=instrument.id,
-                    symbol=symbol,
-                    exchange=exchange,
-                    quote=quote,
-                    ohlcv_bars=[],  # OHLCV not available at consumer stage (see above)
-                    resolved_at=resolved_at,
-                )
-                uow.schedule_post_commit(self._price_snapshot_cache.set(instrument.id, snapshot))
+            # Shared post-commit fan-out (M-005): QuoteCache invalidation +
+            # PriceSnapshotCache warm.  Extracted to quote_cache_fanout so the
+            # OHLCV 1m write-through schedules the identical side effects.
+            schedule_quote_cache_fanout(
+                uow,
+                instrument_id=instrument.id,
+                symbol=symbol,
+                exchange=exchange,
+                quote=quote,
+                quote_cache=self._quote_cache,
+                price_snapshot_cache=self._price_snapshot_cache,
+            )
 
         logger.info(
             "quotes_consumer.materialized",

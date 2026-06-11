@@ -102,16 +102,46 @@ def canonicalize_task(
 # ---------------------------------------------------------------------------
 
 
+def _num(value: object) -> float | None:
+    """Coerce a provider numeric field to float, or None when unparseable.
+
+    EODHD returns the literal string ``"NA"`` for fields it has no data for
+    (e.g. delisted or unsupported tickers).  ``"NA"`` is truthy, so a bare
+    ``raw.get("last") or raw.get("close")`` would happily pass it downstream
+    and crash CanonicalQuote/Decimal parsing.  Treat "NA", "", and None — and
+    anything else float() rejects — as "no data" (None).
+    """
+    if value is None:
+        return None
+    try:
+        return float(value)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return None
+
+
+def _int_or_none(value: object) -> int | None:
+    """Coerce a provider integer field (e.g. volume) to int, or None.
+
+    Goes through float() first so "1234.0" (EODHD sometimes sends floats for
+    volume) still parses; "NA"/""/garbage → None.
+    """
+    parsed = _num(value)
+    return int(parsed) if parsed is not None else None
+
+
 def _remap_quote(raw: dict, symbol: str, exchange: str, source: str) -> dict:
     """Normalise a provider quote dict to CanonicalQuote field names.
 
     EODHD real-time response uses ``close`` for the last price and carries a
     Unix epoch ``timestamp``.  CanonicalQuote requires ``last`` and an ISO-8601
     ``timestamp`` string, plus ``bid`` / ``ask`` which EODHD does not supply
-    (we fall back to ``close``).
+    (we fall back to ``close``).  All numeric fields go through ``_num`` first
+    because EODHD reports missing data as the truthy string ``"NA"``.
     """
-    # Resolve last price: prefer explicit "last", fall back to "close"
-    last = raw.get("last") or raw.get("close", 0.0)
+    # Resolve last price: prefer explicit "last", fall back to "close".
+    # _num() must run BEFORE the `or` fallback: "NA" is truthy and would
+    # otherwise short-circuit past a valid "close".
+    last = _num(raw.get("last")) or _num(raw.get("close")) or 0.0
 
     if not last:
         # FIX-Q1: Log — do not raise; data may be legitimately halted
@@ -125,28 +155,35 @@ def _remap_quote(raw: dict, symbol: str, exchange: str, source: str) -> dict:
         )
         last = 0.0
 
-    # Convert Unix epoch timestamp to ISO-8601 if necessary
+    # Convert Unix epoch timestamp to ISO-8601 if necessary.
+    # EODHD can also report timestamp as "NA" — fall back to now() so the
+    # canonical record stays parseable (a literal "NA" string would crash
+    # CanonicalQuote.from_dict downstream).
     ts_raw = raw.get("timestamp")
-    if isinstance(ts_raw, int | float):
+    if isinstance(ts_raw, int | float) and not isinstance(ts_raw, bool):
         timestamp = datetime.fromtimestamp(ts_raw, tz=UTC).isoformat()
+    elif isinstance(ts_raw, str) and ts_raw.strip() and ts_raw != "NA":
+        # Either an epoch-as-string or an ISO-8601 string from the provider.
+        epoch = _num(ts_raw)
+        timestamp = datetime.fromtimestamp(epoch, tz=UTC).isoformat() if epoch is not None else ts_raw
     else:
-        timestamp = str(ts_raw) if ts_raw is not None else datetime.now(tz=UTC).isoformat()
+        timestamp = datetime.now(tz=UTC).isoformat()
 
     return {
         "symbol": symbol,
         "exchange": exchange,
         "source": source,
-        "bid": raw.get("bid") or last,
-        "ask": raw.get("ask") or last,
+        "bid": _num(raw.get("bid")) or last,
+        "ask": _num(raw.get("ask")) or last,
         "last": last,
-        "volume": raw.get("volume", 0),
+        "volume": _int_or_none(raw.get("volume", 0)),
         "timestamp": timestamp,
         "bid_size": raw.get("bid_size"),
         "ask_size": raw.get("ask_size"),
-        "high": raw.get("high"),
-        "low": raw.get("low"),
-        "open": raw.get("open"),
-        "prev_close": raw.get("prev_close") or raw.get("previousClose"),
+        "high": _num(raw.get("high")),
+        "low": _num(raw.get("low")),
+        "open": _num(raw.get("open")),
+        "prev_close": _num(raw.get("prev_close")) or _num(raw.get("previousClose")),
     }
 
 
