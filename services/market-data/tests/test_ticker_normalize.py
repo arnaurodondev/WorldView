@@ -51,6 +51,20 @@ class TestNormalizeTicker:
             # Multiple separators in one symbol — every "-" and "/" becomes
             # ".".  This is not a realistic input but documents the invariant.
             ("BF-B/C", "BF.B.C"),
+            # Crypto exemption: canonical -USD pairs keep their hyphen.
+            # (Alpaca detects crypto via endswith("-USD"); EODHD uses
+            # -USD.CC — the hyphenated pair IS the canonical symbol.)
+            ("BTC-USD", "BTC-USD"),
+            ("btc-usd", "BTC-USD"),
+            ("  eth-usd  ", "ETH-USD"),
+            ("SHIB-USD", "SHIB-USD"),
+            # Numeric component still matches the crypto pattern.
+            ("1INCH-USD", "1INCH-USD"),
+            # NOT a crypto pair (extra suffix / separator) — normal rewrite.
+            ("BTC-USD.CC", "BTC.USD.CC"),
+            ("BTC-USD-X", "BTC.USD.X"),
+            # Multi-class equity hyphen rewrite is unaffected by the exemption.
+            ("BRK-A", "BRK.A"),
         ],
     )
     def test_normalize_table(self, raw: str, expected: str) -> None:

@@ -274,7 +274,10 @@ class IntradayResamplingConsumer(ValkeyDedupMixin, BaseKafkaConsumer[dict]):
         logger.info(
             "intraday_resampling.processed",
             symbol=symbol,
-            instrument_id=instrument_id[:8] if instrument_id else "",
+            # Full UUID, not [:8] — UUIDv7's leading bytes are a timestamp, so
+            # batch-created instruments shared the same 8-char prefix and the
+            # truncated logs were indistinguishable across instruments.
+            instrument_id=str(instrument_id) if instrument_id else "",
             source_timeframe=self._source_timeframe_str,
             source_bars=len(domain_bars),
             derived_bars=total_derived,
