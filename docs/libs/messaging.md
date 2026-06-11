@@ -147,7 +147,7 @@ from messaging import OutboxStatus
 | `mark_processed(event_id)` | After successful processing | Insert into dedup store (inside same UoW). |
 | `store_failure(failure)` | First failure | Persist `FailureInfo` to retry table. Return saved record. |
 | `update_failure(failure)` | Subsequent retries | Update attempt count and last error. |
-| `dead_letter(failure)` | Fatal error or max retries exceeded | Move to dead-letter store; alert. |
+| `dead_letter(failure, reason=None)` | Fatal error or max retries exceeded | Move to dead-letter store; alert; increments `kafka_messages_dead_lettered_total{reason}`. |
 | `get_pending_retries()` | Background retry loop | Return all `FailureInfo` records eligible for retry. |
 | `process_message_from_failure(failure)` | Retry | Re-run business logic from `failure.record` (stored payload). |
 | `get_unit_of_work()` | Each message | Return a fresh async UoW context manager. |
@@ -208,6 +208,58 @@ Opt-in AIMD-style per-partition pause/resume. Reads four settings attributes:
 | `BusinessRuleViolationError` | Permanent | ↑ |
 
 When `max_retries` is exceeded for a `RetryableError`, the message is dead-lettered.
+
+### Opt-in persistent retry counter (`ConsumerConfig.enable_persistent_retry`)
+
+> Added 2026-06-11 (F-2 / Fix-3). **Default: `False` → zero behaviour change.**
+
+Two latent defects existed in `_handle_failure` with the flag OFF (the historical
+default, preserved exactly):
+
+1. **Attempt count was hardcoded to `1`** — the `attempt >= max_retries`
+   dead-letter clause was unreachable, so a `RetryableError` could *only* be
+   dead-lettered via a `FatalError`, never via retry exhaustion.
+2. **Silent skip on failure** — a failed message left its offset *uncommitted*,
+   but librdkafka's in-memory position had already advanced. The next message
+   that succeeded committed *past* the failed offset, silently dropping it.
+
+Setting `enable_persistent_retry=True` fixes both, but **requires the consumer
+to also provide a durable attempt store** by overriding two hooks (default
+no-ops, so non-opted consumers are unaffected):
+
+| Hook | Default | Override to |
+|------|---------|-------------|
+| `async _get_attempt_count(event_id) -> int` | returns `0` | read prior-failure count from a durable `failed_events(consumer_group, event_id, attempt, last_error, last_error_at)` table |
+| `async _record_attempt(event_id, attempt, error) -> None` | no-op | upsert the latest attempt + error |
+
+With the flag ON:
+
+- `attempt = _get_attempt_count(event_id) + 1` (the **real** count).
+- On `FatalError` or `attempt >= max_retries`: `dead_letter(..., reason=...)`
+  **and commit the offset** so the consumer advances past the poison message.
+- Otherwise: `_record_attempt(...)`, then **seek back** to the failed offset
+  (`_seek_back`, exponential full-jitter backoff bounded by
+  `max_backoff_seconds`) so the message is redelivered instead of skipped.
+  The offset is **not** committed.
+
+**Metric:** `kafka_messages_dead_lettered_total{service, topic, reason}` is a
+global cross-service counter incremented on **every** dead-letter (both the
+FatalError and retry-exhaustion paths), so it fires for non-opted consumers too.
+
+**Rollout (per-consumer, deliberately separate from the library change):**
+
+1. Add a `failed_events(consumer_group, event_id, attempt, last_error,
+   last_error_at, PRIMARY KEY (consumer_group, event_id))` table via an Alembic
+   migration in the opting-in service.
+2. Override `_get_attempt_count` / `_record_attempt` to read/write that table
+   (reuse the service's existing session factory and dedup-table pattern).
+3. Set `enable_persistent_retry=True` in that consumer's `ConsumerConfig`.
+4. Deploy and watch `kafka_messages_dead_lettered_total` + the
+   `failed_events` table.
+
+Do **not** flip the flag without steps 1–2: without a durable store the attempt
+count resets to `0` on every redelivery and the message loops until
+`dead_letter_cap` trips.
 
 ### Kafka Producer (`messaging.kafka.producer`)
 

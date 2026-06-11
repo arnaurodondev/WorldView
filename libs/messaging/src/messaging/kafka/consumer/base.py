@@ -73,6 +73,50 @@ except ImportError:  # pragma: no cover - defensive
 DLQ_TOPIC_SUFFIX: str = ".dead-letter.v1"
 
 
+# ── F-2 / Fix-3 (2026-06-11): cross-service dead-letter metric ────────────────
+#
+# A single global Prometheus counter so operators can alert on dead-letter
+# bursts across every consumer in one expression:
+#
+#   rate(kafka_messages_dead_lettered_total[5m]) > 0
+#
+# Registered on the default global REGISTRY at import time with the same
+# duplicate-registration guard used for ``KAFKA_CONSUMER_MESSAGES`` in
+# ``observability.metrics`` (a test may re-import this module under a reloaded
+# registry).  ``prometheus_client`` is imported guardedly: ``libs/messaging``
+# pulls it in transitively via ``observability``, but the guard keeps the
+# module importable (metric becomes a no-op) in any stripped-down environment
+# so the dead-letter counting never crashes a consumer.
+try:
+    from prometheus_client import REGISTRY as _PROM_REGISTRY
+    from prometheus_client import Counter as _PromCounter
+
+    try:
+        KAFKA_MESSAGES_DEAD_LETTERED = _PromCounter(
+            "kafka_messages_dead_lettered_total",
+            "Total Kafka messages dead-lettered by this client (cross-service rollup).",
+            labelnames=("service", "topic", "reason"),
+        )
+    except ValueError:
+        # Already registered (re-import / test reload) — fetch the existing one.
+        _existing_dl = _PROM_REGISTRY._names_to_collectors.get("kafka_messages_dead_lettered_total")
+        if _existing_dl is None:
+            raise
+        KAFKA_MESSAGES_DEAD_LETTERED = _existing_dl  # type: ignore[assignment]
+except Exception:  # pragma: no cover - defensive (prometheus_client absent)
+
+    class _NoOpDeadLetterMetric:
+        """Fallback so dead-letter counting never raises when prometheus is absent."""
+
+        def labels(self, **_kwargs: str) -> _NoOpDeadLetterMetric:
+            return self
+
+        def inc(self, _amount: float = 1.0) -> None:
+            pass
+
+    KAFKA_MESSAGES_DEAD_LETTERED = _NoOpDeadLetterMetric()  # type: ignore[assignment]
+
+
 @runtime_checkable
 class DLQEmitterProtocol(Protocol):
     """Port for publishing a single dead-letter envelope to a Kafka topic.
@@ -182,6 +226,29 @@ class ConsumerConfig:
     # Reference: KIP-429 (incremental cooperative rebalancing) and
     # librdkafka >=1.6 cooperative-sticky support.
     partition_assignment_strategy: str = "cooperative-sticky"
+    # F-2 / Fix-3 (2026-06-11): opt-in persistent retry counter.
+    #
+    # When False (the DEFAULT) the consumer behaves EXACTLY as it did before
+    # this flag existed — ``_handle_failure`` uses a hardcoded attempt=1, never
+    # seeks back, and only ``FatalError`` ever dead-letters (the historical,
+    # known-broken-but-stable behaviour).  This guarantees byte-for-byte
+    # behaviour-equivalence for the 30 consumers that do NOT opt in.
+    #
+    # When True the consumer:
+    #   * reads a PERSISTED attempt count keyed by (group_id, event_id) via
+    #     :meth:`_get_attempt_count` (subclass-provided; default returns 0),
+    #   * dead-letters AND commits the offset once attempts are exhausted (so
+    #     the offset advances past the now-dead-lettered poison message),
+    #   * otherwise records the attempt, does NOT commit, and SEEKS BACK to the
+    #     failed offset so librdkafka redelivers it (with exponential backoff)
+    #     instead of silently skipping it on the next successful message.
+    #
+    # Rollout is per-consumer and deliberately separate from this commit — a
+    # consumer must also provide a durable ``failed_events`` table + override
+    # :meth:`_get_attempt_count` / :meth:`_record_attempt` before flipping this
+    # to True, otherwise attempt counts reset to 0 every redelivery and the
+    # message loops until ``dead_letter_cap`` trips.  See docs/libs/messaging.md.
+    enable_persistent_retry: bool = False
 
     def to_dict(self) -> dict[str, Any]:
         """Return Confluent-compatible consumer config dict.
@@ -475,10 +542,11 @@ class BaseKafkaConsumer(ABC, Generic[TFailure]):
         """
         return json.dumps(envelope, separators=(",", ":"), default=str).encode("utf-8")
 
-    async def dead_letter(self, failure: FailureInfo[TFailure]) -> None:
+    async def dead_letter(self, failure: FailureInfo[TFailure], reason: str | None = None) -> None:
         """Move a failure record to the dead-letter store with cap enforcement.
 
-        Increments the internal dead-letter counter and delegates to
+        Increments the internal dead-letter counter, emits the cross-service
+        ``kafka_messages_dead_lettered_total`` metric, and delegates to
         :meth:`_dead_letter_impl`.  If the counter exceeds
         ``config.dead_letter_cap``, a :exc:`RuntimeError` is raised to crash
         the consumer and trigger a container restart — preventing a runaway
@@ -486,11 +554,29 @@ class BaseKafkaConsumer(ABC, Generic[TFailure]):
 
         Args:
             failure: :class:`FailureInfo` that exceeded max retries.
+            reason: Optional dead-letter reason for the metric ``reason`` label
+                (e.g. ``"fatal"``, ``"max_retries"``, ``"timeout"``).  When
+                ``None`` it is derived from the failure's error type so every
+                call site — including the historical FatalError path that never
+                opted into persistent retry — produces a sensible label.
 
         Raises:
             RuntimeError: When the dead-letter count exceeds the configured cap.
         """
         self._dead_letter_count += 1
+        # Emit the metric BEFORE the cap check so the message that trips the cap
+        # is still counted as dead-lettered (it WAS routed here as a DLQ event).
+        # This path fires for EVERY dead-letter — including the FatalError path
+        # that already dead-letters today — so non-opted consumers also gain the
+        # metric without any behaviour change.
+        metric_reason = reason or (
+            "fatal" if isinstance(failure.last_error, FatalError) else type(failure.last_error).__name__
+        )
+        KAFKA_MESSAGES_DEAD_LETTERED.labels(
+            service=(self._metrics.service_name if self._metrics is not None else self._config.group_id),
+            topic=failure.topic,
+            reason=metric_reason,
+        ).inc()
         if self._dead_letter_count > self._config.dead_letter_cap:
             logger.critical(
                 "dead_letter_cap_exceeded",
@@ -712,12 +798,105 @@ class BaseKafkaConsumer(ABC, Generic[TFailure]):
             consumer_group=self._config.group_id,
         ).inc()
 
+    # ── F-2 / Fix-3: persistent attempt-count hooks (opt-in) ──────────────────
+    #
+    # These default to no-ops so the 30 existing consumers are completely
+    # unaffected.  A consumer opts in by (a) setting
+    # ``ConsumerConfig.enable_persistent_retry=True`` AND (b) overriding both
+    # methods to read/write a durable ``failed_events`` table keyed by
+    # ``(group_id, event_id)``.  Without a durable store the attempt count
+    # resets to 0 on every redelivery and the message loops until the
+    # ``dead_letter_cap`` trips — hence rollout requires the table first.
+
+    async def _get_attempt_count(self, event_id: str) -> int:
+        """Return the number of FAILED attempts already recorded for *event_id*.
+
+        Default implementation returns 0 (no persistence).  Override in a
+        consumer that opts into ``enable_persistent_retry`` to read the count
+        from a durable ``failed_events(consumer_group, event_id, attempt, ...)``
+        table.  The returned value is the count of PRIOR failures; the current
+        attempt is therefore ``returned_count + 1``.
+
+        Args:
+            event_id: The idempotency event id of the failing message.
+        """
+        return 0
+
+    async def _record_attempt(self, event_id: str, attempt: int, error: BaseException) -> None:
+        """Persist (upsert) the latest *attempt* count + *error* for *event_id*.
+
+        Default implementation is a no-op.  Override alongside
+        :meth:`_get_attempt_count` to upsert a row into the durable
+        ``failed_events`` table so the count survives redelivery.
+
+        Args:
+            event_id: The idempotency event id of the failing message.
+            attempt: The 1-based attempt number that just failed.
+            error: The exception raised on this attempt.
+        """
+        return None
+
+    def _seek_back(self, msg: Any, attempt: int) -> None:
+        """Seek the consumer back to *msg*'s offset so it is redelivered.
+
+        Used only on the opted-in retryable path.  Without this seek, the
+        failed message's offset is NOT committed but librdkafka's in-memory
+        position has already advanced past it — the next successful message
+        would then commit PAST the failed offset, silently skipping it.
+        Seeking back to ``msg.offset()`` resets the in-memory position so the
+        very next ``poll()`` redelivers the SAME message.
+
+        A bounded blocking ``sleep`` provides exponential backoff between
+        redeliveries to avoid a hot loop.  The backoff is capped by
+        ``max_backoff_seconds`` via :meth:`_compute_backoff`.
+
+        Args:
+            msg: The raw Confluent Kafka message that failed.
+            attempt: The 1-based attempt number that just failed (drives backoff).
+        """
+        from confluent_kafka import TopicPartition
+
+        tp = TopicPartition(msg.topic(), msg.partition(), msg.offset())
+        try:
+            self._consumer.seek(tp)
+        except Exception as exc:
+            # Seek can fail if the partition was just revoked in a rebalance.
+            # That is acceptable: on reassignment the uncommitted offset is
+            # redelivered anyway.  Log and continue — never crash the loop.
+            logger.warning(
+                "consumer.retry.seek_back_failed",
+                topic=msg.topic(),
+                partition=msg.partition(),
+                offset=msg.offset(),
+                error=str(exc),
+            )
+            return
+        # Exponential backoff with full jitter before the next redelivery so a
+        # persistently-failing message does not spin the CPU.  Bounded by
+        # max_backoff_seconds (full-jitter handled by _compute_backoff).
+        backoff = self._compute_backoff(attempt)
+        time.sleep(backoff)
+
     async def _handle_failure(
         self,
         msg: Any,
         exc: BaseException,
     ) -> None:
         """Handle a failed message — retry or dead-letter.
+
+        Two code paths, selected by ``ConsumerConfig.enable_persistent_retry``:
+
+        * **OFF (default)** — historical behaviour, byte-for-byte: attempt is
+          hardcoded to 1, the offset is never committed and never seeked, and
+          only ``FatalError`` ever dead-letters (the ``attempt >= max_retries``
+          clause is unreachable with a constant attempt of 1).
+
+        * **ON (opt-in)** — the real attempt count is read from the durable
+          store (``_get_attempt_count`` + 1).  On exhaustion or a FatalError the
+          message is dead-lettered AND its offset committed so it advances past
+          the poison message.  Otherwise the attempt is recorded and the
+          consumer SEEKS BACK to the failed offset (with backoff) so the message
+          is redelivered instead of silently skipped.
 
         Args:
             msg: Raw Confluent Kafka message.
@@ -734,32 +913,86 @@ class BaseKafkaConsumer(ABC, Generic[TFailure]):
         except Exception:
             event_id = f"{topic}/{partition}/{offset}"
 
-        failure: FailureInfo[TFailure] = FailureInfo(
+        # ── OFF path: exactly the historical behaviour (no seek, no commit) ───
+        if not self._config.enable_persistent_retry:
+            failure: FailureInfo[TFailure] = FailureInfo(
+                event_id=event_id,
+                topic=topic,
+                partition=partition,
+                offset=offset,
+                attempt=1,
+                last_error=exc,
+            )
+            if isinstance(exc, FatalError) or failure.attempt >= self._config.max_retries:
+                await self.dead_letter(failure)
+                logger.error(
+                    "kafka_message_dead_lettered",
+                    event_id=event_id,
+                    error=str(exc),
+                    topic=topic,
+                )
+            else:
+                failure.record = await self.store_failure(failure)
+                logger.warning(
+                    "kafka_message_failed_retryable",
+                    event_id=event_id,
+                    attempt=failure.attempt,
+                    error=str(exc),
+                    topic=topic,
+                )
+            return
+
+        # ── ON path: persisted attempt count + seek-back / commit-on-DLQ ──────
+        attempt = await self._get_attempt_count(event_id) + 1
+        failure = FailureInfo(
             event_id=event_id,
             topic=topic,
             partition=partition,
             offset=offset,
-            attempt=1,
+            attempt=attempt,
             last_error=exc,
         )
 
-        if isinstance(exc, FatalError) or failure.attempt >= self._config.max_retries:
-            await self.dead_letter(failure)
+        if isinstance(exc, FatalError) or attempt >= self._config.max_retries:
+            reason = "fatal" if isinstance(exc, FatalError) else "max_retries"
+            await self.dead_letter(failure, reason=reason)
+            # Commit the offset so the consumer advances PAST the now-dead-
+            # lettered poison message instead of redelivering it forever.
+            if not self._config.enable_auto_commit and self._consumer is not None:
+                try:
+                    loop = asyncio.get_running_loop()
+                    await loop.run_in_executor(None, self._consumer.commit, msg)
+                except Exception as commit_exc:
+                    # If the commit fails the message will be redelivered and
+                    # dead-lettered again (idempotent via the dedup table) —
+                    # never crash the loop on a commit error.
+                    logger.warning(
+                        "consumer.retry.dead_letter_commit_failed",
+                        event_id=event_id,
+                        topic=topic,
+                        error=str(commit_exc),
+                    )
             logger.error(
                 "kafka_message_dead_lettered",
                 event_id=event_id,
                 error=str(exc),
                 topic=topic,
+                attempt=attempt,
             )
         else:
-            failure.record = await self.store_failure(failure)
+            # Record the attempt durably so the NEXT redelivery sees attempt+1.
+            await self._record_attempt(event_id, attempt, exc)
             logger.warning(
                 "kafka_message_failed_retryable",
                 event_id=event_id,
-                attempt=failure.attempt,
+                attempt=attempt,
                 error=str(exc),
                 topic=topic,
             )
+            # Seek back so the message is redelivered (with backoff) instead of
+            # being silently skipped by the next successful commit.  Do NOT
+            # commit here — the offset must stay uncommitted.
+            self._seek_back(msg, attempt)
 
     async def _retry_failure(self, failure: FailureInfo[TFailure]) -> None:
         """Attempt to re-process a single *failure*.
