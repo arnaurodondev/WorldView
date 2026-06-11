@@ -108,3 +108,57 @@ describe("filterHoldingsBySector", () => {
     expect(filterHoldingsBySector(HOLDINGS, SECTORS, "Utilities")).toEqual([]);
   });
 });
+
+// ── Exact-ID matching (2026-06-10 sprint gap #2) ─────────────────────────────
+
+describe("filterHoldingsBySector — exact instrument-ID join", () => {
+  // Segment IDs as the server now emits them. Note the deliberate CONFLICT:
+  // the name path says i-aapl is "Information Technology", but the server
+  // claims it under "Financial Services" — rule 0 must trust the IDs.
+  const SECTOR_ID_MAP: Record<string, string[]> = {
+    "Technology": ["i-xom"], // server says XOM is Technology (IDs win)
+    "Financial Services": ["i-aapl"],
+  };
+
+  it("matches by exact instrument ID when the clicked segment has an ID list", () => {
+    const out = filterHoldingsBySector(
+      HOLDINGS,
+      SECTORS,
+      "Financial Services",
+      SECTOR_ID_MAP,
+    );
+    // i-aapl is in the segment's IDs even though its overview sector says
+    // "Information Technology" — exact-ID wins over name aliasing.
+    expect(out.map((h) => h.ticker)).toEqual(["AAPL"]);
+  });
+
+  it("does NOT resurrect rows the server classified into ANOTHER segment", () => {
+    const out = filterHoldingsBySector(HOLDINGS, SECTORS, "Technology", SECTOR_ID_MAP);
+    // i-aapl alias-matches "Technology" by name, but the server put it in
+    // "Financial Services" — it must stay out of the Technology view.
+    expect(out.map((h) => h.ticker)).toEqual(["XOM"]);
+  });
+
+  it("falls back to alias matching for holdings absent from EVERY segment", () => {
+    // i-new was bought after the cached breakdown snapshot — no segment
+    // claims it, so the legacy alias rule decides.
+    const fresh = { ...HOLDINGS[0], instrument_id: "i-new", ticker: "NEW" };
+    const out = filterHoldingsBySector(
+      [...HOLDINGS, fresh],
+      { ...SECTORS, "i-new": "Information Technology" },
+      "Technology",
+      SECTOR_ID_MAP,
+    );
+    expect(out.map((h) => h.ticker)).toEqual(["XOM", "NEW"]);
+  });
+
+  it("keeps pure alias behaviour when the clicked sector published no IDs", () => {
+    const out = filterHoldingsBySector(HOLDINGS, SECTORS, "Energy", SECTOR_ID_MAP);
+    expect(out.map((h) => h.ticker)).toEqual(["XOM"]);
+  });
+
+  it("keeps pure alias behaviour when no map is supplied (legacy call sites)", () => {
+    const out = filterHoldingsBySector(HOLDINGS, SECTORS, "Technology");
+    expect(out.map((h) => h.ticker)).toEqual(["AAPL"]);
+  });
+});

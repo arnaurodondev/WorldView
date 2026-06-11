@@ -16,23 +16,43 @@
 // WHY "use client": uses useState + useEffect for the pending-resolution timeout badge.
 
 import { useState, useEffect } from "react";
-import { Loader2, Trash2 } from "lucide-react";
+import { ExternalLink, Loader2, Trash2 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { formatPrice, formatPercent, priceChangeClass } from "@/lib/utils";
 // R3 polish: shared signed-dollar formatter (R1 convention — "+" only for
 // strictly-positive values; zero stays unsigned). Replaces the local
 // `change >= 0 ? "+" : ""` which wrongly rendered "+$0.00" on a flat day.
 import { signedPrice } from "@/components/portfolio/PortfolioKPIStrip";
+// 2026-06-10 density pass: shared 40×16 sparkline primitive (one rendering
+// for watchlist/holdings/screener rows — PRD-0089 F1 §3.2).
+import { Sparkline } from "@/components/primitives/Sparkline";
 import type { WatchlistMember } from "@/types/api";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
 export interface WatchlistMemberRowProps {
   member: WatchlistMember;
-  quote?: { price: number; change: number; change_pct: number };
+  /** Live quote — volume optional (nullable on the dev feed → "—"). */
+  quote?: { price: number; change: number; change_pct: number; volume?: number | null };
+  /** 5-day closes for the SPARK cell. undefined → dotted no-data line. */
+  sparkline?: number[];
   onRowClick: (entityId: string) => void;
   onDelete: (entityId: string) => void;
   isDeleting: boolean;
+}
+
+// ── Volume formatter ──────────────────────────────────────────────────────────
+// WHY compact notation ("1.2M", "847K"): raw share counts overflow an 11px
+// cell and the magnitude is what a trader scans for, not the exact figure.
+// WHY local (not lib/utils): formatPriceCompact is currency-specific; volume
+// is a bare count. Kept here until a second consumer needs it.
+const VOLUME_FMT = new Intl.NumberFormat("en-US", {
+  notation: "compact",
+  maximumFractionDigits: 1,
+});
+function formatVolume(v: number | null | undefined): string {
+  if (v == null || !Number.isFinite(v)) return "—";
+  return VOLUME_FMT.format(v);
 }
 
 // ── Component ─────────────────────────────────────────────────────────────────
@@ -40,6 +60,7 @@ export interface WatchlistMemberRowProps {
 export function WatchlistMemberRow({
   member,
   quote,
+  sparkline,
   onRowClick,
   onDelete,
   isDeleting,
@@ -133,8 +154,15 @@ export function WatchlistMemberRow({
         )}
       </td>
 
-      {/* Name */}
-      <td className="px-2 text-[11px] text-foreground max-w-[180px] truncate">
+      {/* Name — 2026-06-10 truncation fix: the max-w-[180px] hard cap is
+          gone (it clipped names even when the row had free width at 1440px+).
+          The cell is the table's flex column now; max-w-0 + w-full forces the
+          table-cell to respect available width so truncate engages only at
+          the REAL boundary, with the full name in the native tooltip. */}
+      <td
+        className="w-full max-w-0 truncate px-2 text-[11px] text-foreground"
+        title={member.name}
+      >
         {member.name}
       </td>
 
@@ -163,10 +191,48 @@ export function WatchlistMemberRow({
         {quote ? signedPrice(quote.change) : "—"}
       </td>
 
-      {/* Delete button — hidden at rest, revealed on row hover.
-          WHY stopPropagation: prevent the delete click from also navigating to
-          the instrument detail page (the row's onClick handler). */}
-      <td className="w-8 px-1 text-right">
+      {/* SPARK — 5-day close mini-trend (2026-06-10 density pass).
+          The Sparkline primitive renders a dotted line for <2 points (never
+          a blank cell) and color-codes trend from the data itself. */}
+      <td className="px-2 text-center">
+        <span className="inline-flex items-center align-middle">
+          <Sparkline
+            data={sparkline ?? []}
+            label={`${member.ticker ?? member.name} 5-day trend`}
+          />
+        </span>
+      </td>
+
+      {/* VOL — latest session volume (compact). The dev quote feed returns
+          volume=null → "—"; we never fabricate a count. */}
+      <td className="px-2 font-mono text-[11px] tabular-nums text-muted-foreground text-right">
+        {formatVolume(quote?.volume)}
+      </td>
+
+      {/* Actions — open-instrument affordance + delete, both hover-revealed.
+          WHY stopPropagation on both: prevent the click from also firing the
+          row's navigate handler (double navigation / navigate-then-delete). */}
+      <td className="w-14 px-1 text-right whitespace-nowrap">
+        {/* Open instrument — explicit ↗ affordance (the whole row navigates,
+            but an invisible affordance is undiscoverable; the icon names it).
+            Reuses onRowClick so the navigation path is identical to a row
+            click — one routing rule, no drift. */}
+        <button
+          aria-label={`Open ${member.ticker ?? member.name} instrument page`}
+          onClick={(e) => {
+            e.stopPropagation();
+            onRowClick(member.instrument_id ?? member.entity_id);
+          }}
+          title="Open instrument page"
+          className={cn(
+            "opacity-30 group-hover/row:opacity-100 transition-opacity",
+            "h-5 w-5 inline-flex items-center justify-center rounded-[2px]",
+            "text-muted-foreground hover:text-primary hover:bg-primary/10",
+            "focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring",
+          )}
+        >
+          <ExternalLink className="h-3 w-3" />
+        </button>
         <button
           aria-label={`Remove ${member.ticker ?? member.name} from watchlist`}
           disabled={isDeleting}
@@ -180,7 +246,7 @@ export function WatchlistMemberRow({
             // discover it without random hovering. Surface at low opacity so it's
             // visible but not visually loud; raise to full on row hover.
             "opacity-30 group-hover/row:opacity-100 transition-opacity",
-            "h-5 w-5 flex items-center justify-center rounded-[2px]",
+            "h-5 w-5 inline-flex items-center justify-center rounded-[2px]",
             "text-muted-foreground hover:text-negative hover:bg-negative/10",
             // R3 polish: keyboard parity with the hover reveal — when the
             // button itself is focused it must surface to full opacity and

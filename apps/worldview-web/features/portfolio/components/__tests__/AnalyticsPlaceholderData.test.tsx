@@ -26,12 +26,23 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, waitFor, act } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { ReactNode } from "react";
-import type { ValueHistoryResponse } from "@/types/api";
+import type { ValueHistoryResponse, TwrResponse } from "@/types/api";
 
 // ── Gateway mock ─────────────────────────────────────────────────────────────
 const mockGetValueHistory = vi.fn();
+// 2026-06-10 sprint gap #3: AnalyticsTwrChart now reads the flow-adjusted
+// TWR endpoint (useTwrSeries → createGateway + useAuth); the risk panel
+// still reads value-history through useApiClient. Both layers are mocked.
+const mockGetTwr = vi.fn();
 vi.mock("@/lib/api-client", () => ({
   useApiClient: vi.fn(() => ({ getValueHistory: mockGetValueHistory })),
+}));
+vi.mock("@/lib/gateway", () => ({
+  createGateway: vi.fn(() => ({ getTwr: mockGetTwr })),
+  GatewayError: class GatewayError extends Error {},
+}));
+vi.mock("@/hooks/useAuth", () => ({
+  useAuth: vi.fn(() => ({ accessToken: "test-token" })),
 }));
 
 // ── SUT imports (after mocks) ────────────────────────────────────────────────
@@ -48,12 +59,38 @@ const HISTORY_1M: ValueHistoryResponse = {
   ],
 } as ValueHistoryResponse;
 
+// Still used by the AnalyticsRiskMetricsPanel suite below (the panel keeps
+// reading value-history through useApiClient).
 const HISTORY_3M: ValueHistoryResponse = {
   points: [
     { date: "2026-03-01", value: 95_000, cost_basis: 90_000, cash: 0 },
     { date: "2026-06-03", value: 102_000, cost_basis: 90_000, cash: 0 },
   ],
 } as ValueHistoryResponse;
+
+// TWR fixtures for the chart (now fed by the flow-adjusted endpoint).
+const TWR_1M: TwrResponse = {
+  portfolio_id: "p1",
+  from_date: "2026-06-01",
+  to_date: "2026-06-03",
+  points: [
+    { date: "2026-06-01", twr_cum: 0, nav: 100_000 },
+    { date: "2026-06-02", twr_cum: 0.01, nav: 101_000 },
+    { date: "2026-06-03", twr_cum: 0.02, nav: 102_000 },
+  ],
+  flow_days: 0,
+};
+
+const TWR_3M: TwrResponse = {
+  portfolio_id: "p1",
+  from_date: "2026-03-01",
+  to_date: "2026-06-03",
+  points: [
+    { date: "2026-03-01", twr_cum: 0, nav: 95_000 },
+    { date: "2026-06-03", twr_cum: 0.0737, nav: 102_000 },
+  ],
+  flow_days: 1,
+};
 
 /** Deferred promise so the test controls exactly when a fetch resolves. */
 function deferred<T>() {
@@ -87,12 +124,13 @@ function twrProps(period: string, periodDays: number) {
 
 beforeEach(() => {
   mockGetValueHistory.mockReset();
+  mockGetTwr.mockReset();
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
 describe("Round 3 · AnalyticsTwrChart placeholderData", () => {
   it("first load shows the skeleton (nothing to keep yet)", () => {
-    mockGetValueHistory.mockReturnValue(new Promise(() => {})); // never resolves
+    mockGetTwr.mockReturnValue(new Promise(() => {})); // never resolves
     render(<AnalyticsTwrChart {...twrProps("1M", 30)} />, {
       wrapper: makeWrapper(),
     });
@@ -103,7 +141,7 @@ describe("Round 3 · AnalyticsTwrChart placeholderData", () => {
     const Wrapper = makeWrapper();
 
     // Resolve the 1M fetch immediately.
-    mockGetValueHistory.mockResolvedValueOnce(HISTORY_1M);
+    mockGetTwr.mockResolvedValueOnce(TWR_1M);
     const { rerender } = render(<AnalyticsTwrChart {...twrProps("1M", 30)} />, {
       wrapper: Wrapper,
     });
@@ -115,8 +153,8 @@ describe("Round 3 · AnalyticsTwrChart placeholderData", () => {
 
     // Switch to 3M — leave the fetch IN FLIGHT so we can observe the
     // placeholder window.
-    const pending = deferred<ValueHistoryResponse>();
-    mockGetValueHistory.mockReturnValueOnce(pending.promise);
+    const pending = deferred<TwrResponse>();
+    mockGetTwr.mockReturnValueOnce(pending.promise);
     rerender(<AnalyticsTwrChart {...twrProps("3M", 90)} />);
 
     // THE contract: the chart stays mounted with the 1M series (dimmed via
@@ -131,7 +169,7 @@ describe("Round 3 · AnalyticsTwrChart placeholderData", () => {
 
     // New data lands → the stale flag clears.
     await act(async () => {
-      pending.resolve(HISTORY_3M);
+      pending.resolve(TWR_3M);
     });
     await waitFor(() =>
       expect(screen.getByTestId("twr-chart")).not.toHaveAttribute("data-stale"),

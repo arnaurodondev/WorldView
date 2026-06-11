@@ -37,8 +37,18 @@ vi.mock("@/components/portfolio/SemanticHoldingsTable", () => ({
     </div>
   ),
 }));
-vi.mock("@/components/portfolio/ExposureCurrencyStrip", () => ({
-  ExposureCurrencyStrip: () => <div />,
+// 2026-06-10 sprint Wave 2: the overview band panels replaced the
+// ExposureCurrencyStrip call site. Stubbed at the component boundary (same
+// pattern as the strips below) — they fire useAuth/useQuery internally and
+// this suite tests ONLY the sector-filter wiring.
+vi.mock("@/components/portfolio/MarketExposurePanel", () => ({
+  MarketExposurePanel: () => <div />,
+}));
+vi.mock("@/components/portfolio/SectorExposurePanel", () => ({
+  SectorExposurePanel: () => <div />,
+}));
+vi.mock("@/components/portfolio/PerformancePeriodsPanel", () => ({
+  PerformancePeriodsPanel: () => <div />,
 }));
 vi.mock("@/components/portfolio/ConcentrationSectorTeaseStrip", () => ({
   ConcentrationSectorTeaseStrip: () => <div />,

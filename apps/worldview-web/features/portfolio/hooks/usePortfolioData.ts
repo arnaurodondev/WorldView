@@ -63,7 +63,10 @@ import type {
   TransactionsResponse,
   BatchQuoteResponse,
   ExposureResponse,
+  SectorBreakdownResponse,
 } from "@/types/api";
+// 2026-06-10 sprint gap #2: sector → instrument_ids derivation (pure lib).
+import { sectorIdMapFromSegments } from "@/features/portfolio/lib/sector-stats";
 
 import {
   computePortfolioKPI,
@@ -157,17 +160,34 @@ export interface UsePortfolioDataResult {
   exposure: ExposureResponse | undefined;
 
   /**
-   * Best-effort asset-class lookup keyed by instrument_id, derived from the
-   * transactions response (S1 enriches each transaction with asset_class via
-   * an instruments JOIN — PLAN-0053 T-D-4-02). Drives the holdings table
-   * ASSET column. Holdings with no transaction on the current page resolve
-   * to undefined → the AssetTypeCellRenderer renders its "—" placeholder.
-   *
-   * WHY derived client-side (not fetched): neither the holdings payload nor
-   * the company-overview batch carries asset_class today (backend gap), but
-   * transactions already do — zero extra round-trips for real data.
+   * Asset-class lookup keyed by instrument_id. PRIMARY source (2026-06-10
+   * sprint gap #1): the holdings payload itself — S1 now LEFT JOINs
+   * instruments and returns `asset_class` per holding, so every row gets a
+   * real value in the same round-trip that fetched it. The old
+   * transactions-page derivation (PLAN-0053 T-D-4-02) is kept ONLY as a
+   * per-instrument fallback for rows where the holdings JOIN produced null
+   * (instrument not yet synced) but a transaction on the current page
+   * carries the value — both sources are the same instruments-table truth.
+   * Still-null entries → AssetTypeCellRenderer renders its "—" placeholder.
    */
   assetClassByInstrument: Record<string, string | null>;
+
+  /**
+   * Server sector-breakdown segments (2026-06-10 sprint gap #2: each
+   * segment now carries `instrument_ids`). Exposed raw — bySector strips
+   * the IDs into AllocationSlice for legacy consumers; the new
+   * SectorExposurePanel + exact-ID sector filter need the full segments.
+   * undefined while loading / on error.
+   */
+  sectorSegments: SectorBreakdownResponse["segments"] | undefined;
+
+  /**
+   * sector label → instrument_ids lookup derived from sectorSegments.
+   * Drives the donut-driven holdings filter's exact-ID join (rule 0 in
+   * sector-filter.ts). Empty object when segments are absent or an older
+   * S9 build omitted instrument_ids → the filter falls back to aliases.
+   */
+  sectorIdMap: Record<string, string[]>;
 
   // ── Watchlists ─────────────────────────────────────────────────────────
   watchlists: Watchlist[] | undefined;
@@ -506,19 +526,38 @@ export function usePortfolioData(
     [holdings, holdingOverviews],
   );
 
-  // ── Asset-class lookup for the holdings ASSET column (R1 sprint) ──────
-  // First-write-wins per instrument: every transaction for the same
-  // instrument carries the same asset_class (it's an instruments-table JOIN
-  // value, not per-trade data), so any row is authoritative.
+  // ── Asset-class lookup for the holdings ASSET column ───────────────────
+  // 2026-06-10 sprint gap #1: holdings now carry asset_class server-side
+  // (instruments LEFT JOIN) — this is the primary source and covers EVERY
+  // row in one round-trip. The transactions-derived map (R1 sprint
+  // workaround) survives only as a fallback for holdings whose JOIN
+  // produced null but whose transaction page carries the value (both read
+  // the same instruments column, so the fallback is never contradictory).
   const assetClassByInstrument = useMemo(() => {
     const map: Record<string, string | null> = {};
+    // Primary: server-side holdings field.
+    for (const h of holdings) {
+      if (h.asset_class != null) {
+        map[h.instrument_id] = h.asset_class;
+      }
+    }
+    // Fallback: transactions JOIN (first-write-wins per instrument — every
+    // transaction for the same instrument carries the same value).
     for (const tx of transactionsResp?.transactions ?? []) {
       if (tx.asset_class != null && map[tx.instrument_id] == null) {
         map[tx.instrument_id] = tx.asset_class;
       }
     }
     return map;
-  }, [transactionsResp]);
+  }, [holdings, transactionsResp]);
+
+  // ── Sector label → instrument_ids (sprint gap #2, exact-ID filter) ────
+  // Pure derivation, memoised on the breakdown response identity so the
+  // map is referentially stable across quote-poll re-renders.
+  const sectorIdMap = useMemo(
+    () => sectorIdMapFromSegments(sectorBreakdownData?.segments),
+    [sectorBreakdownData],
+  );
 
   // ── KPI / allocation / scope-hint (pure functions, unit-tested) ───────
   const kpi = useMemo(
@@ -704,6 +743,8 @@ export function usePortfolioData(
     txPageSize: TX_PAGE_SIZE,
     exposure: exposureQuery.data,
     assetClassByInstrument,
+    sectorSegments: sectorBreakdownData?.segments,
+    sectorIdMap,
     watchlists,
     watchlistQuotes,
     performanceData,

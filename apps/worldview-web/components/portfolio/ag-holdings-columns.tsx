@@ -102,10 +102,26 @@ function TickerCellRenderer(params: ICellRendererParams<EnrichedHoldingRow>) {
 
 function NameCellRenderer(params: ICellRendererParams<EnrichedHoldingRow>) {
   if (isPinnedBottom(params)) {
-    return <span className="text-[11px] text-muted-foreground">—</span>;
+    // 2026-06-10 "—" cleanup: the TOTAL row's NAME slot now reports the
+    // position count (SemanticHoldingsTable stuffs "N positions" into the
+    // synthetic holding's name) instead of a dead dash — a real, cheap
+    // sanity figure in otherwise-unusable space.
+    return (
+      <span className="text-[10px] text-muted-foreground">
+        {params.data?.h.name || "—"}
+      </span>
+    );
   }
+  // 2026-06-10 truncation fix: the previous max-w-[120px] hard cap clipped
+  // names ("JPMorgan Chase & …") even when the column had free width. The
+  // cap is gone — the column is now flex-sized (see the NAME ColDef) and
+  // the span truncates only at the real cell boundary, with the FULL name
+  // in the native tooltip for the cases where truncation genuinely remains.
   return (
-    <span className="text-[11px] text-foreground truncate block max-w-[120px]">
+    <span
+      className="text-[11px] text-foreground truncate block"
+      title={params.data?.h.name}
+    >
       {params.data?.h.name}
     </span>
   );
@@ -270,8 +286,14 @@ function SectorCellRenderer(params: ICellRendererParams<EnrichedHoldingRow>) {
   if (isPinnedBottom(params)) {
     return <span className="text-[11px] text-muted-foreground">—</span>;
   }
+  // 2026-06-10 truncation fix: sector names genuinely exceed the 80px column
+  // ("Communication Services") — truncation here is unavoidable, so the full
+  // label rides the native tooltip (house rule: never clip without a tooltip).
   return (
-    <span className="text-[11px] text-muted-foreground truncate block max-w-[100px]">
+    <span
+      className="text-[11px] text-muted-foreground truncate block"
+      title={params.data?.sector ?? undefined}
+    >
       {params.data?.sector ?? "—"}
     </span>
   );
@@ -294,11 +316,18 @@ export const holdingsAgColumns: ColDef<EnrichedHoldingRow>[] = [
   },
 
   // ── 2. NAME ────────────────────────────────────────────────────────────────
+  // 2026-06-10 truncation fix: NAME is now the table's flex column — it
+  // absorbs whatever width the fixed numeric columns leave over, so at
+  // 1440px+ full company names render without the arbitrary "Microsoft
+  // Corpora…" cap. minWidth keeps it readable at 1280px (where it falls
+  // back to roughly the old 168px footprint); the cell renderer adds a
+  // full-name tooltip for the residual narrow-viewport truncation.
   {
     colId: "name",
     headerName: "NAME",
     sortable: false,
-    width: HOLDINGS_AG_COL_WIDTHS.name,
+    flex: 1,
+    minWidth: HOLDINGS_AG_COL_WIDTHS.name,
     cellRenderer: NameCellRenderer,
   },
 

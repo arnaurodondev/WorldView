@@ -156,14 +156,25 @@ export function RecentActivityStrip({ portfolioId }: RecentActivityStripProps) {
             // should navigate to the full transactions tab (with that transaction
             // visible), not to the instrument page. The overview strip is a "quick
             // look" surface; deep investigation belongs in the Transactions tab.
+            //
+            // 2026-06-10 alignment fix: the old layout used a flex row where the
+            // QTY cell was OMITTED for dividends, so DIV rows' tickers shifted
+            // left and nothing lined up vertically; the 36px time cell also
+            // clipped "Yest"-style labels. A fixed-template grid renders every
+            // cell in every row (em-dash when N/A) so all five columns align
+            // column-perfect across BUY/SELL/DIV rows.
             return (
               <Link
                 key={tx.transaction_id}
                 href={`/portfolio?tab=transactions`}
-                className="flex h-5 items-center gap-1 px-2 hover:bg-muted/30"
+                // Grid template: time(42) badge(28) qty(1fr right) ticker(44) price(64 right)
+                className="grid h-5 grid-cols-[42px_28px_minmax(0,1fr)_44px_64px] items-center gap-1 px-2 hover:bg-muted/30"
               >
-                {/* Date — relative time (e.g. "2h", "Yest") */}
-                <span className="w-[36px] shrink-0 font-mono text-[9px] tabular-nums text-muted-foreground">
+                {/* Date — relative time (e.g. "2h", "Yest").
+                    WHY w-42px + nowrap: the previous 36px cell clipped longer
+                    relative labels (screenshot bug). whitespace-nowrap stops
+                    the label wrapping inside the 20px row. */}
+                <span className="whitespace-nowrap font-mono text-[9px] tabular-nums text-muted-foreground">
                   {/* WHY formatRelativeTime: a trader cares about "how recent?" not
                       the exact ISO timestamp. "2h" and "Yest" answer the question
                       in 2-4 chars, leaving more room for ticker + price. */}
@@ -173,20 +184,20 @@ export function RecentActivityStrip({ portfolioId }: RecentActivityStripProps) {
                 {/* BUY / SELL / DIV badge */}
                 <SideBadge type={tx.type} />
 
-                {/* Quantity */}
-                {tx.type !== "DIVIDEND" && (
-                  <span className="font-mono text-[10px] tabular-nums text-foreground shrink-0">
-                    {tx.quantity.toLocaleString("en-US")}
-                  </span>
-                )}
+                {/* Quantity — ALWAYS rendered (em-dash for dividends, which
+                    report qty≈0) so the ticker column never drifts. Right-
+                    aligned: quantities are numbers (ADR-F-15 scan rule). */}
+                <span className="text-right font-mono text-[10px] tabular-nums text-foreground truncate">
+                  {tx.type === "DIVIDEND" ? "—" : tx.quantity.toLocaleString("en-US")}
+                </span>
 
                 {/* Ticker — primary colour for quick scan, same as the holdings table */}
-                <span className="font-mono text-[10px] text-primary font-medium shrink-0">
+                <span className="font-mono text-[10px] text-primary font-medium truncate">
                   {tx.ticker || "—"}
                 </span>
 
-                {/* Price or dividend amount — right-aligned in remaining space */}
-                <span className="ml-auto font-mono text-[10px] tabular-nums text-muted-foreground">
+                {/* Price or dividend amount — fixed right-aligned column */}
+                <span className="text-right font-mono text-[10px] tabular-nums text-muted-foreground">
                   {tx.type === "DIVIDEND"
                     ? formatPrice(tx.amount ?? 0)
                     : formatPrice(tx.price)}

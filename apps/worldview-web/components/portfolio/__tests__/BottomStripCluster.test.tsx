@@ -43,6 +43,8 @@ import { render, screen } from "@testing-library/react";
 const mockContributorsStripCalls: Array<{
   contributorsCount: number;
   detractorsCount: number;
+  // 2026-06-10 clipping fix: each cell must request its single-section mode.
+  mode?: string;
 }> = [];
 
 vi.mock("@/components/portfolio/ContributorsStrip", () => ({
@@ -50,20 +52,24 @@ vi.mock("@/components/portfolio/ContributorsStrip", () => ({
     ({
       contributors,
       detractors,
+      mode,
     }: {
       contributors: { ticker: string; pnlPct: number }[];
       detractors: { ticker: string; pnlPct: number }[];
+      mode?: string;
     }) => {
       // Record call order so tests can assert which side came first.
       mockContributorsStripCalls.push({
         contributorsCount: contributors.length,
         detractorsCount: detractors.length,
+        mode,
       });
       return (
         <div
           data-testid="contributors-strip-mock"
           data-contributors={contributors.length}
           data-detractors={detractors.length}
+          data-mode={mode ?? ""}
         />
       );
     },
@@ -229,6 +235,44 @@ describe("BottomStripCluster passes detractors to second ContributorsStrip", () 
     // recent activity" permanently — a silent data regression.
     const activityStrip = screen.getByTestId("recent-activity-strip-mock");
     expect(activityStrip.getAttribute("data-portfolio-id")).toBe(PORTFOLIO_ID);
+  });
+});
+
+describe("BottomStripCluster single-section modes (2026-06-10 clipping fix)", () => {
+  it("Cell 1 requests mode='contributors' and Cell 2 mode='detractors'", () => {
+    // WHY this matters: the cells live in a fixed-height overflow-hidden
+    // slot. Without the mode, ContributorsStrip rendered its full
+    // two-section layout and the detractors cell's REAL rows sat below the
+    // clipped fold (the "second Top Movers column shows only dashes" bug).
+    render(
+      <BottomStripCluster
+        portfolioId={PORTFOLIO_ID}
+        contributors={CONTRIBUTORS}
+        detractors={DETRACTORS}
+      />,
+    );
+
+    expect(mockContributorsStripCalls[0].mode).toBe("contributors");
+    expect(mockContributorsStripCalls[1].mode).toBe("detractors");
+
+    const strips = screen.getAllByTestId("contributors-strip-mock");
+    expect(strips[0].getAttribute("data-mode")).toBe("contributors");
+    expect(strips[1].getAttribute("data-mode")).toBe("detractors");
+  });
+
+  it("slot height fits the tallest cell (h-[124px], not the clipping h-24)", () => {
+    render(
+      <BottomStripCluster
+        portfolioId={PORTFOLIO_ID}
+        contributors={CONTRIBUTORS}
+        detractors={DETRACTORS}
+      />,
+    );
+    const cluster = screen.getByTestId("bottom-strip-cluster");
+    // The 96px slot (h-24) clipped both movers (110px) and recent activity
+    // (122px). Pin the corrected utility class.
+    expect(cluster.className).toContain("h-[124px]");
+    expect(cluster.className).not.toContain("h-24");
   });
 });
 

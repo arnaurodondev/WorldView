@@ -11,8 +11,9 @@
 
 import { describe, it, expect } from "vitest";
 
-import { buildChartRows } from "../AnalyticsTwrChart";
+import { buildChartRows, buildTwrChartRows } from "../AnalyticsTwrChart";
 import type { DatedValue } from "@/features/portfolio/lib/risk-metrics";
+import type { TwrPoint } from "@/types/api";
 
 // ── Fixtures ──────────────────────────────────────────────────────────────────
 
@@ -82,5 +83,47 @@ describe("buildChartRows", () => {
         { SPY },
       ),
     ).toEqual([]);
+  });
+});
+
+// ── buildTwrChartRows (2026-06-10 sprint gap #3 — flow-adjusted upgrade) ─────
+
+describe("buildTwrChartRows", () => {
+  // Server TWR series: already rebased (first point 0) — fractions.
+  const TWR: TwrPoint[] = [
+    { date: "2026-01-01", twr_cum: 0, nav: 100_000 },
+    { date: "2026-01-02", twr_cum: 0.05, nav: 110_000 },
+    { date: "2026-01-03", twr_cum: 0.05, nav: 121_000 }, // NAV moved on a flow day, TWR flat
+  ];
+
+  it("plots twr_cum AS-IS (no client-side re-rebase of an already-rebased series)", () => {
+    const rows = buildTwrChartRows(TWR, false, { SPY: false, QQQ: false }, {});
+    expect(rows.map((r) => r.portfolio)).toEqual([0, 0.05, 0.05]);
+  });
+
+  it("NAV toggle OFF → nav is null on every row (no hidden series in tooltips)", () => {
+    const rows = buildTwrChartRows(TWR, false, { SPY: false, QQQ: false }, {});
+    expect(rows.every((r) => r.nav === null)).toBe(true);
+  });
+
+  it("NAV toggle ON → nav line is the legacy V_t/V_0−1 approximation", () => {
+    const rows = buildTwrChartRows(TWR, true, { SPY: false, QQQ: false }, {});
+    expect(rows[0].nav).toBe(0);
+    expect(rows[1].nav).toBeCloseTo(0.1, 12); // 110/100 − 1
+    expect(rows[2].nav).toBeCloseTo(0.21, 12); // 121/100 − 1 — diverges from TWR (flows)
+    // The divergence IS the point: TWR stays 0.05 while NAV says 0.21.
+    expect(rows[2].portfolio).toBeCloseTo(0.05, 12);
+  });
+
+  it("benchmark overlays rebase on the TWR date grid (same rules as the legacy builder)", () => {
+    const rows = buildTwrChartRows(TWR, false, { SPY: true, QQQ: false }, { SPY });
+    expect(rows[0].spy).toBe(0);
+    expect(rows[1].spy).toBeCloseTo(0.02, 12);
+    expect(rows[2].spy).toBeCloseTo(0.04, 12);
+    expect(rows.every((r) => r.qqq === null)).toBe(true);
+  });
+
+  it("returns [] for an empty TWR series (named empty state upstream)", () => {
+    expect(buildTwrChartRows([], true, { SPY: true, QQQ: false }, { SPY })).toEqual([]);
   });
 });

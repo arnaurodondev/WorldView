@@ -32,6 +32,9 @@ const mockGetRiskMetrics = vi.fn();
 const mockGetHoldings = vi.fn();
 const mockResolveTickersBatch = vi.fn();
 const mockGetOHLCV = vi.fn();
+// 2026-06-10 sprint gap #3: AnalyticsTwrChart reads the flow-adjusted TWR
+// endpoint via useTwrSeries (createGateway + useAuth pattern, not useApiClient).
+const mockGetTwr = vi.fn();
 
 vi.mock("@/lib/api-client", () => ({
   useApiClient: vi.fn(() => ({
@@ -41,6 +44,14 @@ vi.mock("@/lib/api-client", () => ({
     resolveTickersBatch: mockResolveTickersBatch,
     getOHLCV: mockGetOHLCV,
   })),
+}));
+
+vi.mock("@/lib/gateway", () => ({
+  createGateway: vi.fn(() => ({ getTwr: mockGetTwr })),
+  GatewayError: class GatewayError extends Error {},
+}));
+vi.mock("@/hooks/useAuth", () => ({
+  useAuth: vi.fn(() => ({ accessToken: "test-token" })),
 }));
 
 // ── SUT imports (after mocks) ────────────────────────────────────────────────
@@ -71,6 +82,18 @@ function wrap(children: ReactNode) {
 beforeEach(() => {
   vi.clearAllMocks();
   mockGetValueHistory.mockResolvedValue(HISTORY);
+  // TWR fixture mirroring HISTORY (fractions; first point 0 per the
+  // endpoint's window-rebase contract).
+  mockGetTwr.mockResolvedValue({
+    portfolio_id: "p-1",
+    from_date: "2026-06-01",
+    to_date: "2026-06-02",
+    points: [
+      { date: "2026-06-01", twr_cum: 0, nav: 100_000 },
+      { date: "2026-06-02", twr_cum: 0.01, nav: 101_000 },
+    ],
+    flow_days: 0,
+  });
   mockGetRiskMetrics.mockResolvedValue({
     portfolio_id: "p-1",
     lookback_days: 365,

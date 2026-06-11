@@ -429,8 +429,12 @@ describe("PortfolioPage — Watchlist tab", () => {
     await user.click(screen.getByRole("tab", { name: "Watchlist" }));
 
     await waitFor(() => {
-      // "Tech Watch" is the mock watchlist name shown in CardTitle
-      expect(screen.getByText("Tech Watch")).toBeInTheDocument();
+      // "Tech Watch" is the mock watchlist name. Since the 2026-06-10
+      // watchlist density pass it legitimately appears TWICE: in the
+      // watchlist tab bar AND in the new group-header row above the table
+      // ("Tech Watch · N tickers") — getAllByText keeps the original
+      // assertion (the name renders) while accepting the second surface.
+      expect(screen.getAllByText("Tech Watch").length).toBeGreaterThanOrEqual(1);
     });
   });
 });

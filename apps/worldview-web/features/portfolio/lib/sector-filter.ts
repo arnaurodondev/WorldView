@@ -26,10 +26,13 @@
  *      emits for holdings it couldn't classify. This keeps "click the
  *      Unknown slice" working: it shows exactly the unclassified rows.
  *
- * BACKEND GAP (flagged in the R2 report): the exact fix is for
- * /sector-breakdown segments to include their instrument_ids so the
- * frontend can join by ID instead of by name. Until then this alias table
- * is the honest best-effort, and unmapped names fall back to rule 1.
+ * EXACT-ID MATCHING (2026-06-10 sprint gap #2 — RESOLVED): /sector-breakdown
+ * segments now carry `instrument_ids`, so the filter joins holdings to the
+ * clicked segment by exact instrument UUID (rule 0, below) whenever the ID
+ * list is available. The name-alias rules above are KEPT as the fallback
+ * for (a) older S9 builds that don't emit instrument_ids yet, and (b)
+ * holdings that appear in NO segment ID list (e.g. a position bought after
+ * the 60s-cached breakdown snapshot was computed).
  *
  * WHO USES IT: HoldingsTab (table filtering), SectorAllocationDonut tests.
  */
@@ -97,20 +100,53 @@ export function holdingMatchesSector(
 /**
  * filterHoldingsBySector — filter a holdings array by the active sector.
  *
- * @param holdings  enriched holdings from usePortfolioData
- * @param sectors   instrument_id → sector map (from holdingOverviews)
- * @param filter    active sector filter; null/"" = no filter (all rows)
+ * @param holdings        enriched holdings from usePortfolioData
+ * @param sectors         instrument_id → sector map (from holdingOverviews)
+ * @param filter          active sector filter; null/"" = no filter (all rows)
+ * @param sectorIdMap     OPTIONAL sector label → instrument_ids from the
+ *                        sector-breakdown segments (sprint gap #2). When the
+ *                        clicked sector has an ID list, membership is decided
+ *                        by exact instrument UUID (rule 0). Holdings present
+ *                        in NO segment's ID list (bought after the cached
+ *                        snapshot) fall back to the alias rules so a fresh
+ *                        position is never silently hidden from its sector.
  *
  * WHY return the SAME array reference when no filter: avoids breaking
  * referential equality for memoized consumers (AG Grid row identity,
  * useMemo deps) on the overwhelmingly common unfiltered path.
+ *
+ * WHY the param is optional (default undefined): older call sites and the
+ * existing unit tests pass three args and keep the pure alias behaviour —
+ * the ID join is strictly additive.
  */
 export function filterHoldingsBySector(
   holdings: Holding[],
   sectors: Record<string, string | null>,
   filter: string | null,
+  sectorIdMap?: Record<string, string[]>,
 ): Holding[] {
   if (!filter || filter.trim() === "") return holdings;
+
+  // ── Rule 0: exact-ID join when the clicked segment published its IDs ──
+  const segmentIds = sectorIdMap?.[filter];
+  if (segmentIds && segmentIds.length > 0) {
+    const inSegment = new Set(segmentIds);
+    // Every ID claimed by ANY segment. A holding inside this universe but
+    // not in the clicked segment is DEFINITIVELY another sector (the server
+    // classified it) — alias fallback must not resurrect it. A holding
+    // OUTSIDE the universe is unknown to the snapshot → alias fallback.
+    const allSegmentIds = new Set(
+      Object.values(sectorIdMap ?? {}).flat(),
+    );
+    return holdings.filter((h) => {
+      if (inSegment.has(h.instrument_id)) return true;
+      if (allSegmentIds.has(h.instrument_id)) return false;
+      // ID-less row (not in the snapshot at all) → legacy alias match.
+      return holdingMatchesSector(sectors[h.instrument_id] ?? null, filter);
+    });
+  }
+
+  // ── Rules 1-3: legacy case-insensitive + alias matching ──
   return holdings.filter((h) =>
     holdingMatchesSector(sectors[h.instrument_id] ?? null, filter),
   );

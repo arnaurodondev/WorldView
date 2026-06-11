@@ -11,23 +11,25 @@
  *   The existing ContributorsStrip renders BOTH contributors AND detractors in
  *   a single column (redesigned in PRD-0089 W2 for density). For the bottom
  *   strip, the spec (PLAN-0108 W4-T404) requires three visually distinct equal-
- *   width columns separated by vertical dividers. Splitting contributors and
- *   detractors into their own ContributorsStrip instances (each receiving only
- *   one side) achieves this without modifying ContributorsStrip itself.
+ *   width columns separated by vertical dividers. The 2026-06-10 sprint added
+ *   a `mode` prop to ContributorsStrip ("contributors" | "detractors") so each
+ *   cell renders ONLY its own section — see the clipping-fix note below.
  *
- * WHY h-24 (96px): The bottom strip slot height is fixed in the Holdings tab
- * layout. 96px accommodates a header row (22px) + up to 3-4 compact data rows
- * at ~18-20px each before the fold. Fixing the height prevents the strip from
- * collapsing when the table above uses flex-1 to fill the remaining viewport.
+ * WHY h-[124px] (was h-24/96px — 2026-06-10 clipping fix): each movers cell is
+ * a 22px header + 4×22px rows = 110px; the recent-activity cell is 22px header
+ * + 5×20px rows = 122px. The old 96px slot + overflow-hidden clipped real data
+ * — most visibly the detractors column, which (in the old "both" layout)
+ * rendered the contributors section first and pushed every real detractor row
+ * below the fold, so the column showed only dashes.
  *
  * WHY divide-x divide-border: shadcn/ui divide utilities produce a single 1px
  * vertical separator between each flex child. Using divide-x is more correct
  * than adding border-r to individual cells because it avoids a trailing border
  * on the last cell — which would double up with the parent container's border.
  *
- * Layout: h-24 flex flex-row divide-x divide-border
- *   ├── Cell 1 (flex-1) — ContributorsStrip: contributors only, detractors=[]
- *   ├── Cell 2 (flex-1) — ContributorsStrip: detractors only, contributors=[]
+ * Layout: h-[124px] flex flex-row divide-x divide-border
+ *   ├── Cell 1 (flex-1) — ContributorsStrip mode="contributors"
+ *   ├── Cell 2 (flex-1) — ContributorsStrip mode="detractors"
  *   └── Cell 3 (flex-1) — RecentActivityStrip
  *
  * WHO USES IT: T-4-05 will wire this into HoldingsTab below SemanticHoldingsTable.
@@ -87,44 +89,51 @@ export function BottomStripCluster({
      * WHY w-full: the strip must span the full width of SemanticHoldingsTable
      * above it. Without w-full the flex container collapses to its content width.
      *
-     * WHY overflow-hidden: ContributorsStrip uses h-full which, if the inner
-     * content overflows at certain viewport sizes, could push past the 96px
-     * boundary and shift the layout below. overflow-hidden clips any surplus.
+     * WHY h-[124px] (was h-24 / 96px — 2026-06-10 clipping fix): the cell
+     * content is 110px (movers: 22px header + 4×22px rows) / 122px (recent
+     * activity: 22px header + 5×20px rows). The old 96px slot clipped BOTH —
+     * and combined with ContributorsStrip rendering the contributors section
+     * first, the detractors cell showed only dash rows (the real data sat
+     * below the fold). 124px fits the tallest cell with a 2px margin.
+     *
+     * WHY keep overflow-hidden: defensive — if a future child grows past the
+     * slot, clipping is still better than shifting the layout below. The
+     * mode-scoped cells (below) guarantee real data is never in the clipped
+     * region anymore.
      *
      * WHY border-b border-border: a bottom border visually closes the strip and
      * separates it from whatever comes after (e.g. a footer or a tab panel edge).
      */
     <div
-      className="flex h-24 w-full flex-row divide-x divide-border overflow-hidden border-b border-border"
+      className="flex h-[124px] w-full flex-row divide-x divide-border overflow-hidden border-b border-border"
       data-testid="bottom-strip-cluster"
     >
       {/*
        * Cell 1 — Contributors (winners only).
        *
-       * WHY detractors={[]}: ContributorsStrip renders both sections (Contributors
-       * sub-header + Detractors sub-header) in one column. Passing an empty array
-       * for detractors renders dash rows in the detractors section — effectively
-       * hiding the detractors section content while keeping the component's fixed
-       * height contract. Cell 1 acts as a "contributors-only" panel this way.
-       *
-       * WHY NOT a custom "mode" prop on ContributorsStrip: adding a mode prop
-       * would require modifying ContributorsStrip (violating T-4-04 scope) and
-       * would still need dash-row padding for the unused section.
+       * 2026-06-10 clipping fix: mode="contributors" renders ONLY the
+       * contributors section (own header + 4 rows, 110px). The previous
+       * workaround passed detractors=[] but ContributorsStrip still rendered
+       * the full two-section "TOP MOVERS" layout (~220px) — the unused
+       * detractors dash-section consumed slot height for nothing.
+       * detractors=[] is still passed because the prop is required; mode
+       * makes it inert.
        */}
       <div className="flex-1 overflow-hidden" data-testid="cell-contributors">
-        <ContributorsStrip contributors={contributors} detractors={[]} />
+        <ContributorsStrip mode="contributors" contributors={contributors} detractors={[]} />
       </div>
 
       {/*
        * Cell 2 — Detractors (losers only).
        *
-       * WHY contributors={[]}: mirror of Cell 1. The contributors section shows
-       * dash rows while the detractors section shows real data. The header still
-       * reads "Top Movers" — which is intentionally generic to avoid adding a
-       * "Top Detractors Only" header variant to ContributorsStrip.
+       * 2026-06-10 clipping fix (the root-caused render bug): in "both" mode
+       * the contributors section rendered FIRST (~128px of header + sub-header
+       * + dash rows), pushing the REAL detractor rows below the clipped fold —
+       * the column showed only dashes. mode="detractors" renders the
+       * detractors section alone at the top of the cell: nothing to clip.
        */}
       <div className="flex-1 overflow-hidden" data-testid="cell-detractors">
-        <ContributorsStrip contributors={[]} detractors={detractors} />
+        <ContributorsStrip mode="detractors" contributors={[]} detractors={detractors} />
       </div>
 
       {/*

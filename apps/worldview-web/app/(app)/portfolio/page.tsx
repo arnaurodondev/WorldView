@@ -226,6 +226,8 @@ export default function PortfolioPage() {
     setTxOffset,
     exposure,
     assetClassByInstrument,
+    sectorSegments,
+    sectorIdMap,
     watchlists,
     watchlistQuotes,
     performanceData,
@@ -471,10 +473,11 @@ export default function PortfolioPage() {
                   // passed here, so the CASH and BUYING PWR tiles permanently
                   // rendered "—". The exposure snapshot now flows from
                   // usePortfolioData (GET /v1/portfolios/{id}/exposure).
-                  // BUYING PWR = cash for v1 cash accounts; margin is v2 (see
-                  // the PortfolioKPIStrip prop docs).
+                  // 2026-06-10 sprint gap #5: buying_power is now an explicit
+                  // server field (v1: equals cash). Prefer it; fall back to
+                  // cash for older S9 builds that omit it.
                   cash={exposure?.cash ?? null}
-                  buyingPower={exposure?.cash ?? null}
+                  buyingPower={exposure?.buying_power ?? exposure?.cash ?? null}
                 />
               );
             })()}
@@ -580,6 +583,11 @@ export default function PortfolioPage() {
             // back through the same URL state the donut writes.
             sectorFilter={sectorFilter}
             onClearSectorFilter={() => void setSectorFilter(null)}
+            // 2026-06-10 sprint gap #2: raw sector segments (with
+            // instrument_ids) for the SectorExposurePanel rows + the
+            // exact-ID sector-filter join.
+            sectorSegments={sectorSegments}
+            sectorIdMap={sectorIdMap}
           />
         </TabsContent>
 

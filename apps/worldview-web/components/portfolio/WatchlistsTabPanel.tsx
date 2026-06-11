@@ -58,8 +58,16 @@ import { WatchlistTable } from "./watchlists/WatchlistTable";
 
 export interface WatchlistsTabPanelProps {
   watchlists: Watchlist[];
-  /** Live quotes keyed by instrument_id (from getBatchQuotes for all watchlist members) */
-  quotes: Record<string, { price: number; change: number; change_pct: number }>;
+  /**
+   * Live quotes keyed by instrument_id (from getBatchQuotes for all
+   * watchlist members). `volume` is optional — the full Quote shape carries
+   * it (2026-06-10 watchlist density pass adds a VOL column); older callers
+   * passing the narrow 3-field shape keep compiling and the column shows "—".
+   */
+  quotes: Record<
+    string,
+    { price: number; change: number; change_pct: number; volume?: number | null }
+  >;
   isLoading: boolean;
 }
 
@@ -267,6 +275,26 @@ export function WatchlistsTabPanel({
     [quotes, localQuotesResp],
   );
 
+  // ── 5-day sparklines for the active watchlist (2026-06-10 density pass) ──
+  // WHY the batch endpoint (GET /v1/market/sparklines): one round-trip for
+  // every member vs N OHLCV calls — the same primitive the holdings SPARK
+  // column uses (useHoldingsSeries) at days=14; the watchlist row spec asks
+  // for a 5-day mini-trend.
+  // WHY a separate cache key from holdings-series: different day window —
+  // sharing a key would serve 14-day arrays to a 5-day consumer.
+  // WHY staleTime 15min: sparkline closes are end-of-day bars (same
+  // rationale documented in useHoldingsSeries).
+  const { data: sparkSeries } = useQuery({
+    queryKey: ["watchlist-sparklines", [...activeInstrumentIds].sort()],
+    queryFn: () =>
+      createGateway(accessToken).getMarketSparklines(activeInstrumentIds, 5),
+    enabled: activeInstrumentIds.length > 0 && !!accessToken,
+    staleTime: 15 * 60 * 1000,
+    // Sparklines are decorative — degrade silently to the dotted "no data"
+    // line rather than burning retries (same retry budget as useHoldingsSeries).
+    retry: 1,
+  });
+
   // ── Early returns AFTER all hooks ────────────────────────────────────────
   if (isLoading) {
     // R3 polish: shape-matched skeleton mirroring the populated layout —
@@ -388,6 +416,10 @@ export function WatchlistsTabPanel({
           <WatchlistTable
             watchlist={activeWatchlist}
             quotes={mergedQuotes}
+            // 2026-06-10 density pass: 5-day close arrays keyed by
+            // instrument_id (batch sparklines endpoint). undefined while
+            // loading → rows render the dotted no-data line.
+            series={sparkSeries}
             onRowClick={handleRowClick}
             onDeleteMember={handleDeleteMember}
             deletingEntityId={deletingEntityId}

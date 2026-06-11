@@ -13,13 +13,16 @@
  *
  *   ─ PortfolioPageHeader  h-9   (rendered at page.tsx level — NOT here)
  *   ─ PortfolioKPIStrip    h-7   (rendered at page.tsx level — NOT here)
- *   1. ExposureCurrencyStrip      h-[22px]  INV%/CASH$/LEV×/β-ADJ/CCY
+ *   1. Overview panel band        h-[128px] 3-col: MarketExposurePanel |
+ *      (2026-06-10 sprint W2)               SectorExposurePanel |
+ *                                           PerformancePeriodsPanel
+ *      — supersedes ExposureCurrencyStrip (file preserved, call site moved)
  *   2. ConcentrationSectorTeaseStrip h-[22px] HHI badge + top-3 sectors
  *   3. PerformanceChartPanel      h-[120px] collapsible equity-curve + SPY overlay
  *   4. SectorAllocationBar        h-[22px]  stacked bar + top-3 sector labels
  *   5. HoldingsTableChrome        h-[22px]  position count + Ctrl+F filter shortcut
- *   6. SemanticHoldingsTable      flex-1    AG Grid, 12-column + SPARK
- *   7. BottomStripCluster         h-24      placeholder for W4 (ContributorsStrip + RecentActivityStrip)
+ *   6. SemanticHoldingsTable      flex-1    AG Grid, 14-column + SPARK
+ *   7. BottomStripCluster         h-[124px] contributors | detractors | recent activity
  *
  * REMOVED vs the PLAN-0088 Wave E layout (component files preserved):
  *   - CashRow              → data already in KPIStrip
@@ -51,8 +54,13 @@ import { X } from "lucide-react";
 import { Skeleton } from "@/components/ui/skeleton";
 // R2 sprint: pure, unit-tested sector matching for the donut-driven filter.
 import { filterHoldingsBySector } from "@/features/portfolio/lib/sector-filter";
+// ── 2026-06-10 sprint Wave 2: specialized overview panels ─────────────────────
+// MarketExposurePanel supersedes the single-line ExposureCurrencyStrip (the
+// component file is preserved; only this call site moved to the richer panel).
+import { MarketExposurePanel } from "@/components/portfolio/MarketExposurePanel";
+import { SectorExposurePanel } from "@/components/portfolio/SectorExposurePanel";
+import { PerformancePeriodsPanel } from "@/components/portfolio/PerformancePeriodsPanel";
 // ── PRD-0108 W3 layout strips ─────────────────────────────────────────────────
-import { ExposureCurrencyStrip } from "@/components/portfolio/ExposureCurrencyStrip";
 import { ConcentrationSectorTeaseStrip } from "@/components/portfolio/ConcentrationSectorTeaseStrip";
 import { PerformanceChartPanel } from "@/components/portfolio/PerformanceChartPanel";
 import type { PerfPeriod } from "@/components/portfolio/PerformanceChartPanel";
@@ -74,6 +82,7 @@ import type {
   Holding,
   HoldingsResponse,
   BatchQuoteResponse,
+  SectorBreakdownSegment,
 } from "@/types/api";
 import type {
   PortfolioKPI,
@@ -110,6 +119,15 @@ interface HoldingsTabProps {
   sectorFilter?: string | null;
   /** R2 sprint: clears the sector filter (chip × / keyboard). */
   onClearSectorFilter?: () => void;
+  /**
+   * 2026-06-10 sprint gap #2: raw sector-breakdown segments (with
+   * instrument_ids) from usePortfolioData. Feeds the SectorExposurePanel
+   * rows and the exact-ID sector filter. Optional — older call sites/tests
+   * degrade to alias filtering + the panel's loading state.
+   */
+  sectorSegments?: SectorBreakdownSegment[];
+  /** sector label → instrument_ids (exact-ID filter join, sprint gap #2). */
+  sectorIdMap?: Record<string, string[]>;
 }
 
 export function HoldingsTab({
@@ -134,6 +152,8 @@ export function HoldingsTab({
   setEquityPeriod: _setEquityPeriod,
   sectorFilter = null,
   onClearSectorFilter,
+  sectorSegments,
+  sectorIdMap,
 }: HoldingsTabProps) {
   // ── PerformanceChartPanel state ────────────────────────────────────────────
   // WHY local state (not URL): collapse toggle is ephemeral UI preference.
@@ -245,9 +265,18 @@ export function HoldingsTab({
   // Rows actually shown in the table. filterHoldingsBySector returns the
   // SAME array reference when no filter is active, so the unfiltered path
   // keeps referential stability for AG Grid row identity.
+  // 2026-06-10 sprint gap #2: sectorIdMap routes the filter through the
+  // exact instrument-ID join when the breakdown segments published IDs;
+  // ID-less rows keep the legacy alias fallback (see sector-filter.ts).
   const visibleHoldings = useMemo(
-    () => filterHoldingsBySector(enrichedHoldings, sectorsByInstrument, sectorFilter),
-    [enrichedHoldings, sectorsByInstrument, sectorFilter],
+    () =>
+      filterHoldingsBySector(
+        enrichedHoldings,
+        sectorsByInstrument,
+        sectorFilter,
+        sectorIdMap,
+      ),
+    [enrichedHoldings, sectorsByInstrument, sectorFilter, sectorIdMap],
   );
 
   // R2 sprint: when a sector filter is active the pinned TOTAL row must
@@ -300,16 +329,41 @@ export function HoldingsTab({
     // WHY relative: HoldingDetailSlideOver uses position:absolute anchored here.
     <div className="flex flex-col h-full bg-background relative">
 
-      {/* ══ 1. ExposureCurrencyStrip (h-[22px]) ══════════════════════════════════
-          WHY first: exposure is the most forward-looking risk signal.
-          Bloomberg PORT shows "% Invested / Cash / Leverage" in the topmost row
-          so the PM knows their deployment ratio before scanning individual positions.
-          betaAdjExposure is computed above from holdings × beta (default 1.0).
-          Null when no holdings — the cell shows "—" rather than a wrong value. */}
-      <ExposureCurrencyStrip
-        portfolioId={activePortfolioId}
-        betaAdjExposure={betaAdjExposure}
-      />
+      {/* ══ 1. Specialized overview band (2026-06-10 sprint Wave 2) ═══════════
+          Three equal-width panels replace the single-line ExposureCurrencyStrip
+          (user verdict: the overview "seems a bit empty" while exposure was an
+          unreadable one-liner). Left → right mirrors the trader's question
+          order: how am I deployed? → where is the money? → how am I doing?
+
+            1. MarketExposurePanel    — invested/cash/buying-power, gross/net,
+                                        leverage, β-adj (real /exposure endpoint)
+            2. SectorExposurePanel    — per-sector weight bars + live day Δ$
+                                        (server sector-breakdown + quotes join)
+            3. PerformancePeriodsPanel— 1D/1W/1M/3M flow-adjusted TWR vs SPY
+                                        (new /twr endpoint + SPY closes)
+
+          WHY divide-x + border-b: same separator language as the bottom strip
+          cluster — panels read as one band, not three floating cards.
+          WHY xl:grid-cols-3 (stacked below xl): each panel needs ~420px to
+          keep its value columns readable; squeezing three side-by-side under
+          1280px would truncate every number. */}
+      {activePortfolioId && (
+        <div
+          data-testid="overview-panel-band"
+          className="grid shrink-0 grid-cols-1 xl:grid-cols-3 divide-y xl:divide-y-0 xl:divide-x divide-border border-b border-border"
+        >
+          <MarketExposurePanel
+            portfolioId={activePortfolioId}
+            betaAdjExposure={betaAdjExposure}
+          />
+          <SectorExposurePanel
+            segments={sectorSegments}
+            holdings={enrichedHoldings}
+            quotes={holdingsQuotes}
+          />
+          <PerformancePeriodsPanel portfolioId={activePortfolioId} />
+        </div>
+      )}
 
       {/* ══ 2. ConcentrationSectorTeaseStrip (h-[22px]) ═══════════════════════
           WHY second: after knowing deployment ratio, concentration risk is the

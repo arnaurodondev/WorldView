@@ -275,13 +275,24 @@ describe("HoldingsTab — PLAN-0108 W3 anchored layout", () => {
     vi.clearAllMocks();
   });
 
-  it("Holdings tab renders ExposureCurrencyStrip", () => {
-    // WHY: ExposureCurrencyStrip is the first strip in the PRD-0108 layout.
-    // Asserting its INV label confirms the strip renders (label is data-invariant).
+  it("Holdings tab renders MarketExposurePanel (2026-06-10 overview band)", () => {
+    // PORTED from "renders ExposureCurrencyStrip": the single-line strip was
+    // superseded by MarketExposurePanel inside the new 3-panel overview band
+    // (2026-06-10 sprint Wave 2). Same semantic contract — the exposure
+    // surface renders with real data from the (mocked) useExposure hook —
+    // asserted against the panel's data-invariant labels instead of the old
+    // "INV" cell text.
     render(wrap(<HoldingsTab {...defaultProps()} />));
 
-    // ExposureCurrencyStrip always shows the "INV" label when exposure data is present.
-    expect(screen.getByText(/\bINV\b/)).toBeInTheDocument();
+    expect(screen.getByTestId("market-exposure-panel")).toBeInTheDocument();
+    expect(screen.getByText("Market Exposure")).toBeInTheDocument();
+    expect(screen.getByText("Invested")).toBeInTheDocument();
+    expect(screen.getByText("Leverage")).toBeInTheDocument();
+    // Value from the mocked useExposure fixture (leverage 1.05 → "1.05×").
+    expect(screen.getByText("1.05×")).toBeInTheDocument();
+    // The other two band panels mount alongside (sector block + TWR-vs-SPY).
+    expect(screen.getByTestId("sector-exposure-panel")).toBeInTheDocument();
+    expect(screen.getByTestId("performance-periods-panel")).toBeInTheDocument();
   });
 
   it("Holdings tab renders ConcentrationSectorTeaseStrip", () => {

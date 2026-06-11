@@ -374,7 +374,10 @@ export function SemanticHoldingsTable({
         instrument_id: "",
         entity_id: "",
         ticker: "",
-        name: "",
+        // 2026-06-10 "—" cleanup: the TOTAL row's NAME cell renders this
+        // string (NameCellRenderer pinned branch) — a real position count
+        // instead of a dead dash in the widest cell of the totals line.
+        name: `${holdings.length} position${holdings.length === 1 ? "" : "s"}`,
         quantity: 0,
         average_cost: 0,
       },

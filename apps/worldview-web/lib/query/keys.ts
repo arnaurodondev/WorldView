@@ -102,6 +102,15 @@ export const qk = {
     // `holdingsByPortfolio` above.
     sectorBreakdown: (portfolioId: string) =>
       ["portfolio-sector-breakdown", portfolioId] as const,
+    // 2026-06-10 sprint gap #3: flow-adjusted TWR series. WHY days in the
+    // key: each lookback window is a distinct server computation (the series
+    // is rebased to 0 at window start) — caching by (id, days) means period
+    // pills hit warm cache entries instead of refetching on every toggle.
+    // WHY "ALL" sentinel for undefined: TanStack drops undefined segments
+    // from the key hash, which would collide "full history" with whatever
+    // window was fetched first.
+    twr: (portfolioId: string, days?: number) =>
+      ["portfolio-twr", portfolioId, days ?? "ALL"] as const,
   },
 
   // ── Watchlists ───────────────────────────────────────────────────────────

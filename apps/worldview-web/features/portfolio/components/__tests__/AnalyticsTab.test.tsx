@@ -25,6 +25,9 @@ const mockGetRiskMetrics = vi.fn();
 const mockGetHoldings = vi.fn();
 const mockResolveTickersBatch = vi.fn();
 const mockGetOHLCV = vi.fn();
+// 2026-06-10 sprint gap #3: the TWR chart now reads the flow-adjusted
+// series endpoint (via useTwrSeries → createGateway, not useApiClient).
+const mockGetTwr = vi.fn();
 
 const gatewayStub = {
   getValueHistory: mockGetValueHistory,
@@ -32,10 +35,21 @@ const gatewayStub = {
   getHoldings: mockGetHoldings,
   resolveTickersBatch: mockResolveTickersBatch,
   getOHLCV: mockGetOHLCV,
+  getTwr: mockGetTwr,
 };
 
 vi.mock("@/lib/api-client", () => ({
   useApiClient: vi.fn(() => gatewayStub),
+}));
+
+// useTwrSeries goes through createGateway + useAuth (the overview-surface
+// client pattern) — mock both so the chart's TWR query resolves in tests.
+vi.mock("@/lib/gateway", () => ({
+  createGateway: vi.fn(() => gatewayStub),
+  GatewayError: class GatewayError extends Error {},
+}));
+vi.mock("@/hooks/useAuth", () => ({
+  useAuth: vi.fn(() => ({ accessToken: "test-token" })),
 }));
 
 // ── SUT import (after mocks) ─────────────────────────────────────────────────
@@ -56,10 +70,23 @@ function wrap(children: ReactNode) {
   return <QueryClientProvider client={qc}>{children}</QueryClientProvider>;
 }
 
+/** Matching short TWR fixture for the chart (fractions; first point 0). */
+const SHORT_TWR = {
+  portfolio_id: "p-1",
+  from_date: "2026-06-01",
+  to_date: "2026-06-02",
+  points: [
+    { date: "2026-06-01", twr_cum: 0, nav: 100_000 },
+    { date: "2026-06-02", twr_cum: 0.01, nav: 101_000 },
+  ],
+  flow_days: 0,
+};
+
 describe("AnalyticsTab (R2 wiring)", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockGetValueHistory.mockResolvedValue(SHORT_HISTORY);
+    mockGetTwr.mockResolvedValue(SHORT_TWR);
     mockGetRiskMetrics.mockResolvedValue({
       portfolio_id: "p-1",
       lookback_days: 365,
@@ -88,17 +115,18 @@ describe("AnalyticsTab (R2 wiring)", () => {
     });
   });
 
-  it("clicking 1W re-fetches risk metrics with the clamped 10-day lookback; ALL → 1825", async () => {
+  it("clicking 1W re-fetches risk metrics with the real 7-day lookback; ALL → 1825", async () => {
     render(wrap(<AnalyticsTab portfolioId="p-1" />));
     await waitFor(() => expect(mockGetRiskMetrics).toHaveBeenCalled());
 
     // Period pills are role=tab (AnalyticsPeriodSelector a11y contract).
-    // 1W maps to 7 days for value-history, but the BACKEND risk endpoint
-    // validates lookback_days ≥ 10 (verified live: 7 → 422). The clamp in
-    // riskLookbackDays keeps the request valid.
+    // 2026-06-10 sprint gap #4: the endpoint floor dropped 10 → 5 (short
+    // windows now return 200 + insufficient_data instead of a 422), so 1W
+    // passes through UNCLAMPED as 7 — the sidebar hint finally shows the
+    // window the user actually selected.
     fireEvent.click(screen.getByRole("tab", { name: "1W" }));
     await waitFor(() => {
-      expect(mockGetRiskMetrics).toHaveBeenCalledWith("p-1", 10);
+      expect(mockGetRiskMetrics).toHaveBeenCalledWith("p-1", 7);
     });
 
     fireEvent.click(screen.getByRole("tab", { name: "ALL" }));

@@ -27,6 +27,7 @@ import type {
   HoldingLotsResponse,
   ConcentrationResponse,
   SectorBreakdownResponse,
+  TwrResponse,
 } from "@/types/api";
 import { apiFetch } from "./_client";
 
@@ -103,6 +104,10 @@ export function createPortfoliosApi(t: string | undefined) {
         ticker: string | null; // from instruments table (null if not synced yet)
         name: string | null; // from instruments table
         entity_id: string | null; // from instruments table
+        // 2026-06-10 sprint gap #1: asset_class now arrives server-side via
+        // the instruments LEFT JOIN (VERIFIED LIVE 2026-06-11: "equity" for
+        // every demo holding). Optional + nullable — older S9 builds omit it.
+        asset_class?: string | null;
       };
       const raw = await apiFetch<
         RawHolding[] | { items: RawHolding[]; total: number; limit: number; offset: number }
@@ -128,6 +133,10 @@ export function createPortfoliosApi(t: string | undefined) {
         // field_serializer for Numeric(18,8)). The frontend expects numbers for arithmetic.
         quantity: parseFloat(h.quantity) || 0,
         average_cost: parseFloat(h.average_cost) || 0,
+        // 2026-06-10 sprint gap #1: forward the server-side asset class.
+        // Strict null preservation — null/absent on the wire stays null so
+        // the ASSET column renders "—" instead of a fabricated default.
+        asset_class: h.asset_class ?? null,
         // WHY null: These fields are computed client-side from live quote data, not stored in S1.
         current_price: null,
         unrealised_pnl: null,
@@ -274,6 +283,10 @@ export function createPortfoliosApi(t: string | undefined) {
         // "not stale" so the UI renders no badge.
         prices_stale?: boolean;
         prices_as_of?: string | null;
+        // 2026-06-10 sprint gap #5: explicit buying power (Decimal string).
+        // v1 semantics: equals cash (margin not modelled). Optional on the
+        // wire — older S1 builds omit it.
+        buying_power?: string | null;
       }>(`/v1/portfolios/${encodeURIComponent(portfolioId)}/exposure`, { token: t });
       return {
         invested: parseFloat(raw.invested),
@@ -283,6 +296,59 @@ export function createPortfoliosApi(t: string | undefined) {
         leverage: parseFloat(raw.leverage),
         prices_stale: raw.prices_stale ?? false,
         prices_as_of: raw.prices_as_of ?? null,
+        // Strict null preservation: absent/null on the wire → null, so the
+        // KPI strip can fall back to cash explicitly (never a forged $0).
+        buying_power: raw.buying_power != null ? parseFloat(raw.buying_power) : null,
+      };
+    },
+
+    /**
+     * getTwr — flow-adjusted time-weighted return series.
+     * (2026-06-10 sprint gap #3 — GET /v1/portfolios/{id}/twr?days=N)
+     *
+     * WHY this replaces the NAV-rebase approximation: S1 computes sub-period
+     * returns BETWEEN external cash flows and geometrically links them, so a
+     * $10k deposit no longer reads as a +20% "return" on the analytics chart.
+     * The first point of the window is always 0 (VERIFIED LIVE 2026-06-11),
+     * so consumers never need to re-rebase.
+     *
+     * UNIT CONVERSION AT THE BOUNDARY: the wire carries `twr_cum_pct` in
+     * percent units (4.21 = +4.21%) and `nav` as an 8-dp Decimal string.
+     * We convert to fraction + number here so every consumer can use the
+     * codebase-wide fraction convention (formatPercent/fmtPct multiply by
+     * 100 themselves) without remembering a one-off unit.
+     *
+     * @param portfolioId  portfolio UUID
+     * @param days         lookback window, 1–3650 (server default 90)
+     */
+    async getTwr(portfolioId: string, days?: number): Promise<TwrResponse> {
+      const qs = days != null ? `?days=${days}` : "";
+      const raw = await apiFetch<{
+        portfolio_id: string;
+        from_date: string;
+        to_date: string;
+        points: Array<{
+          date: string;
+          twr_cum_pct: number;
+          nav: string; // Decimal serialised as 8-dp string
+        }>;
+        flow_days: number;
+      }>(`/v1/portfolios/${encodeURIComponent(portfolioId)}/twr${qs}`, { token: t });
+
+      return {
+        portfolio_id: raw.portfolio_id,
+        from_date: raw.from_date,
+        to_date: raw.to_date,
+        // BP-265 awareness: only default to [] when the server genuinely
+        // omitted the field — otherwise pass through what we got, parsed.
+        points: (raw.points ?? []).map((p) => ({
+          date: p.date,
+          // percent → fraction (see docstring). NOT `|| 0`: 0 is a real value
+          // here and twr_cum_pct is a JSON number, no parse can fail.
+          twr_cum: p.twr_cum_pct / 100,
+          nav: parseFloat(p.nav) || 0,
+        })),
+        flow_days: raw.flow_days ?? 0,
       };
     },
 

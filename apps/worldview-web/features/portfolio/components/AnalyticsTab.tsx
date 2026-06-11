@@ -109,16 +109,20 @@ const PERIOD_DAYS: Record<string, number | undefined> = {
 
 /**
  * riskLookbackDays — lookback for the BACKEND risk-metrics endpoint.
- * The endpoint requires a concrete `lookback_days` in 10–3650:
+ * The endpoint requires a concrete `lookback_days` in 5–3650:
  *   - "ALL" maps to 1825 (5y) — widest window well inside the range.
- *   - "1W" (7) clamps UP to 10 — VERIFIED LIVE (2026-06-10): the endpoint
- *     422s on lookback_days=7 ("Input should be ≥ 10"). The sidebar hint
- *     shows the clamped value so the user sees the real window used.
+ *   - Floor lowered 10 → 5 (2026-06-10 sprint gap #4, VERIFIED LIVE
+ *     2026-06-11): short windows now return 200 with nulled return-based
+ *     metrics + data_quality.status="insufficient_data" instead of a 422.
+ *     "1W" (7 days) therefore passes through UNCLAMPED — the sidebar hint
+ *     finally shows the real selected window, and the endpoint's own
+ *     insufficient-data discipline nulls anything statistically meaningless
+ *     (period_return/cagr still compute from 2+ points).
  * Distinct from PERIOD_DAYS, which may be undefined to request full
  * value-history (the value-history endpoint has no such floor).
  */
 function riskLookbackDays(period: string): number {
-  return Math.max(PERIOD_DAYS[period] ?? 1825, 10);
+  return Math.max(PERIOD_DAYS[period] ?? 1825, 5);
 }
 
 // ── Format helpers ────────────────────────────────────────────────────────────
@@ -184,11 +188,9 @@ function RiskSidebar({ portfolioId, period }: RiskSidebarProps) {
     placeholderData: (prev) => prev,
   });
 
-  // WHY perfLoading = false: no dedicated performance query for Calmar/WinRate yet.
-  // Once the analytics endpoint ships, replace this with a real useQuery.
-  // Keeping perfLoading as a constant false keeps the isLoading gate below
-  // correct without triggering the ESLint "unused variable" rule on `perf`.
-  const perfLoading = false;
+  // 2026-06-10 sprint: Calmar / Win Rate / Alpha / VaR(95) now arrive on the
+  // SAME risk-metrics response (VERIFIED LIVE 2026-06-11) — no separate
+  // performance query is needed, so the old perfLoading placeholder is gone.
 
   const tiles: Array<{
     label: string;
@@ -261,29 +263,65 @@ function RiskSidebar({ portfolioId, period }: RiskSidebarProps) {
       ariaLabel: `Beta vs SPY: ${fmtNum(risk?.beta_vs_spy)}`,
       hint: "vs SPY",
     },
-    // Performance tiles — Calmar and Win Rate are backend-pending (—) until
-    // GET /v1/portfolios/{id}/analytics ships. Slots are pre-wired so they
-    // auto-populate when data becomes available.
+    // 2026-06-10 sprint: CALMAR / WIN RATE / ALPHA / VaR are REAL now — the
+    // risk-metrics endpoint returns them on the same response (the previous
+    // hardcoded "—" placeholders are gone). All independently nullable;
+    // fmtNum/fmtPct render null as "—" so insufficient-data windows stay
+    // honest without special-casing.
     {
       label: "CALMAR",
-      // WHY "—": S9 does not yet expose a Calmar endpoint. Placeholder per spec.
-      value: "—",
-      colorClass: "text-muted-foreground",
-      ariaLabel: "Calmar ratio: unavailable",
+      value: fmtNum(risk?.calmar),
+      colorClass:
+        risk?.calmar == null
+          ? "text-muted-foreground"
+          : risk.calmar > 1
+          ? "text-positive"
+          : risk.calmar < 0
+          ? "text-negative"
+          : "text-foreground",
+      ariaLabel: `Calmar ratio: ${fmtNum(risk?.calmar)}`,
+      hint: `${riskLookbackDays(period)}D`,
     },
     {
       label: "WIN RATE",
-      // WHY "—": same rationale as CALMAR — backend-pending.
-      value: "—",
-      colorClass: "text-muted-foreground",
-      ariaLabel: "Win rate: unavailable",
+      // win_rate is a 0-1 fraction of positive daily returns. UNSIGNED
+      // render — a rate is a magnitude, "+39.3%" would be a category error
+      // (same convention as weights/allocations).
+      value:
+        risk?.win_rate == null ? "—" : `${(risk.win_rate * 100).toFixed(1)}%`,
+      colorClass:
+        risk?.win_rate == null
+          ? "text-muted-foreground"
+          : risk.win_rate >= 0.5
+          ? "text-positive"
+          : "text-foreground",
+      ariaLabel: `Win rate: ${risk?.win_rate == null ? "unavailable" : `${(risk.win_rate * 100).toFixed(1)}%`}`,
+    },
+    {
+      label: "ALPHA·SPY",
+      // null while the benchmark leg is unavailable (data_quality.degradation
+      // .benchmark="no_data" on the dev stack) — "—" is the honest render.
+      value: fmtPct(risk?.alpha),
+      colorClass:
+        risk?.alpha == null
+          ? "text-muted-foreground"
+          : risk.alpha > 0
+          ? "text-positive"
+          : "text-negative",
+      ariaLabel: `Alpha vs SPY: ${fmtPct(risk?.alpha)}`,
+      hint: "vs SPY",
+    },
+    {
+      label: "VaR 95",
+      value: fmtPct(risk?.var_95),
+      colorClass:
+        risk?.var_95 == null ? "text-muted-foreground" : "text-negative",
+      ariaLabel: `1-day 95% value at risk: ${fmtPct(risk?.var_95)}`,
+      hint: "1D hist.",
     },
   ];
 
-  // WHY include perfLoading: the tile list includes performance tiles that will
-  // populate once the backend analytics endpoint ships. Keep the loading gate
-  // consistent so all tiles show skeletons simultaneously.
-  const isLoading = riskLoading || perfLoading;
+  const isLoading = riskLoading;
 
   return (
     // WHY border border-border rounded-[2px]: consistent with every panel in
